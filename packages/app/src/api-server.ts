@@ -33,7 +33,7 @@
  *   POST   /api/workflows/:id/restart
  *   POST   /api/workflows/:id/recreate-with-rebase
  *   POST   /api/workflows/:id/cancel
- *   POST   /api/workflows/:id/merge-mode  body: { mode }
+ *   POST   /api/workflows/:id/review-mode body: { mode }
  *   DELETE /api/workflows/:id
  */
 
@@ -594,10 +594,13 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         return;
       }
 
-      // POST /api/workflows/:id/merge-mode
+      // POST /api/workflows/:id/review-mode  (canonical)
+      // POST /api/workflows/:id/merge-mode   (deprecated alias)
+      const wfReviewModeMatch = path.match(/^\/api\/workflows\/([^/]+)\/review-mode$/);
       const wfMergeModeMatch = path.match(/^\/api\/workflows\/([^/]+)\/merge-mode$/);
-      if (method === 'POST' && wfMergeModeMatch) {
-        const workflowId = decodeURIComponent(wfMergeModeMatch[1]);
+      if (method === 'POST' && (wfReviewModeMatch || wfMergeModeMatch)) {
+        const isLegacy = !!wfMergeModeMatch;
+        const workflowId = decodeURIComponent((wfReviewModeMatch ?? wfMergeModeMatch)![1]);
         try {
           const body = await readBody(req);
           const { mode } = JSON.parse(body);
@@ -605,8 +608,20 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
             json(res, 400, { error: 'Missing "mode" in request body' });
             return;
           }
-          await mutations.setWorkflowMergeMode(workflowId, mode);
-          json(res, 200, { ok: true, workflowId, action: 'merge_mode_set', mode });
+          if (isLegacy) {
+            res.setHeader(
+              'Deprecation',
+              'true; reason="Use /api/workflows/:id/review-mode"',
+            );
+          }
+          await mutations.setWorkflowReviewMode(workflowId, mode);
+          json(res, 200, {
+            ok: true,
+            workflowId,
+            action: isLegacy ? 'merge_mode_set' : 'review_mode_set',
+            mode,
+            ...(isLegacy ? { deprecated: true, replacement: '/api/workflows/:id/review-mode' } : {}),
+          });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });
         }

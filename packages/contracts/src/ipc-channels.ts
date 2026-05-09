@@ -338,7 +338,7 @@ export const IpcChannels = {
     request: [workflowId: string, baseBranch: string];
     response: void;
   },
-  'invoker:set-merge-mode': {} as {
+  'invoker:set-review-mode': {} as {
     request: [workflowId: string, mergeMode: string];
     response: void;
   },

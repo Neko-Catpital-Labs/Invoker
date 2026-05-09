@@ -41,7 +41,7 @@ import {
   recreateWorkflow as sharedRecreateWorkflow,
   recreateTask as sharedRecreateTask,
   forkWorkflow as sharedForkWorkflow,
-  setWorkflowMergeMode,
+  setWorkflowReviewMode,
 } from './workflow-actions.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
@@ -589,7 +589,7 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
 async function headlessSet(args: string[], deps: HeadlessDeps): Promise<void> {
   const subCommand = args[0];
   if (!subCommand) {
-    throw new Error('Missing set sub-command. Usage: --headless set <command|executor|agent|merge-mode|gate-policy>');
+    throw new Error('Missing set sub-command. Usage: --headless set <command|executor|agent|review-mode|gate-policy>');
   }
 
   switch (subCommand) {
@@ -605,8 +605,12 @@ async function headlessSet(args: string[], deps: HeadlessDeps): Promise<void> {
     case 'agent':
       await headlessEditAgent(args[1], args[2], deps);
       break;
+    case 'review-mode':
+      await headlessSetReviewMode(args[1], args[2], deps);
+      break;
     case 'merge-mode':
-      await headlessSetMergeMode(args[1], args[2], deps);
+      warnDeprecated('set merge-mode', 'set review-mode');
+      await headlessSetReviewMode(args[1], args[2], deps);
       break;
     case 'fix-prompt':
       await headlessSetFixContext(args[1], { fixPrompt: args.slice(2).join(' ') }, deps);
@@ -618,7 +622,7 @@ async function headlessSet(args: string[], deps: HeadlessDeps): Promise<void> {
       await headlessSetGatePolicy(args.slice(1), deps);
       break;
     default:
-      throw new Error(`Unknown set sub-command: "${subCommand}". Use: command, prompt, executor, agent, merge-mode, fix-prompt, fix-context, gate-policy`);
+      throw new Error(`Unknown set sub-command: "${subCommand}". Use: command, prompt, executor, agent, review-mode, fix-prompt, fix-context, gate-policy`);
   }
 }
 
@@ -816,8 +820,8 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       await headlessSet(['agent', ...args.slice(1)], deps);
       break;
     case 'set-merge-mode':
-      warnDeprecated('set-merge-mode', 'set merge-mode');
-      await headlessSet(['merge-mode', ...args.slice(1)], deps);
+      warnDeprecated('set-merge-mode', 'set review-mode');
+      await headlessSet(['review-mode', ...args.slice(1)], deps);
       break;
 
     case '--help':
@@ -893,7 +897,7 @@ ${BOLD}Configure:${RESET}
   set prompt <taskId> <text>                          Edit task prompt and re-run
   set executor <taskId> <type> [remoteTargetId]       Change executor type (worktree|docker|ssh)
   set agent <taskId> <agent>                          Change execution agent (claude|codex)
-  set merge-mode <workflowId> <mode>                  manual | automatic | external_review
+  set review-mode <workflowId> <mode>                  manual | automatic | external_review
   set fix-prompt <taskId> <text>                      Update fix-session prompt and retry
   set fix-context <taskId> <text>                     Update fix-session context and retry
   set gate-policy <taskId> <wfId> [depTaskId] <policy>
@@ -912,7 +916,7 @@ ${BOLD}Deprecated${RESET} (use new names above):
   list → query workflows       status → query tasks       task-status → query task
   queue → query queue           audit → query audit         session → query session
   edit → set command            edit-executor → set executor
-  edit-agent → set agent        set-merge-mode → set merge-mode
+  edit-agent → set agent        set-merge-mode → set review-mode
   delete-workflow → delete
   rebase-and-retry → rebase (task) or recreate-with-rebase (workflow)
 
@@ -2147,9 +2151,9 @@ async function headlessDetachWorkflow(
 }
 
 /**
- * Headless `set merge-mode` — **retry-class** invalidation route per
+ * Headless `set review-mode` — **retry-class** invalidation route per
  * Step 9 of `docs/architecture/task-invalidation-roadmap.md` (chart
- * Decision Table row "Change merge mode";
+ * Decision Table row "Change review mode";
  * `MUTATION_POLICIES.mergeMode` → `retryTask` / task scope, scoped
  * to the merge node). Mirrors the Step 5 `set type` headless pattern
  * (retry-class, preserves branch / workspacePath lineage) rather
@@ -2165,25 +2169,23 @@ async function headlessDetachWorkflow(
  * `retryTask` compatibility wire — see `MUTATION_POLICIES.mergeMode`
  * and `buildInvalidationDeps`).
  *
- * The CLI argument is still a workflow id (matches the legacy
- * `set-merge-mode <workflowId> <mode>` surface and the
- * `invoker:set-merge-mode` IPC). `mergeMode` is normalized at the
- * app boundary because that concerns UI/CLI input parsing, not the
- * chart's invalidation routing. The merge-task-id translation
- * (`workflowId → __merge__<workflowId>`) happens here because the
- * orchestrator seam speaks merge-node task ids. When the workflow
- * has no merge node (degenerate workflows that opted out of a merge
- * gate) we persist the new mode directly via the shared
- * `setWorkflowMergeMode` action — there is nothing to retry.
+ * The CLI argument is a workflow id. The `mergeMode` value is
+ * normalized at the app boundary because that concerns UI/CLI input
+ * parsing, not the chart's invalidation routing. The merge-task-id
+ * translation (`workflowId → __merge__<workflowId>`) happens here
+ * because the orchestrator seam speaks merge-node task ids. When the
+ * workflow has no merge node (degenerate workflows that opted out of
+ * a merge gate) we persist the new mode directly via the shared
+ * `setWorkflowReviewMode` action — there is nothing to retry.
  */
-async function headlessSetMergeMode(
+async function headlessSetReviewMode(
   workflowId: string,
   mergeMode: string,
   deps: HeadlessDeps,
 ): Promise<void> {
   if (!workflowId || !mergeMode) {
     throw new Error(
-      'Missing arguments. Usage: --headless set-merge-mode <workflowId> <manual|automatic|external_review>',
+      'Missing arguments. Usage: --headless set review-mode <workflowId> <manual|automatic|external_review>',
     );
   }
   const normalized = normalizeMergeModeForPersistence(mergeMode);
@@ -2192,13 +2194,13 @@ async function headlessSetMergeMode(
   const mergeTask = tasks.find((t) => t.config.isMergeNode);
   if (!mergeTask) {
     const taskExecutor = createHeadlessExecutor(deps);
-    await setWorkflowMergeMode(workflowId, normalized, {
+    await setWorkflowReviewMode(workflowId, normalized, {
       orchestrator: deps.orchestrator,
       persistence: deps.persistence,
       taskExecutor,
     });
     const wf = deps.persistence.loadWorkflow(workflowId);
-    process.stdout.write(`Merge mode updated for ${workflowId}: ${wf?.mergeMode ?? '?'}\n`);
+    process.stdout.write(`Review mode updated for ${workflowId}: ${wf?.mergeMode ?? '?'}\n`);
     return;
   }
 
@@ -2217,7 +2219,7 @@ async function headlessSetMergeMode(
     await taskExecutor.executeTasks(runnable);
   }
   const wf = deps.persistence.loadWorkflow(workflowId);
-  process.stdout.write(`Merge mode updated for ${workflowId}: ${wf?.mergeMode ?? '?'}\n`);
+  process.stdout.write(`Review mode updated for ${workflowId}: ${wf?.mergeMode ?? '?'}\n`);
 }
 
 /**

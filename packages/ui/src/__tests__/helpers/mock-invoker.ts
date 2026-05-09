@@ -139,7 +139,7 @@ export function createMockInvoker(
     approveMerge: vi.fn(async () => {}),
     resolveConflict: vi.fn(async () => {}),
     fixWithAgent: vi.fn(async () => {}),
-    setMergeMode: vi.fn(async () => {}),
+    setReviewMode: vi.fn(async () => {}),
     checkPrStatuses: vi.fn(async () => {}),
     cancelTask: vi.fn(async () => ({ cancelled: [], runningCancelled: [] })),
     cancelWorkflow: vi.fn(async () => ({ cancelled: [], runningCancelled: [] })),

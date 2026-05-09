@@ -428,6 +428,20 @@ tasks:
     expect(() => parsePlan(yaml)).toThrow('Plan-level "autoFixRetries" is no longer supported');
   });
 
+  it('rejects legacy mergeGateProvider key', () => {
+    const yaml = `
+name: Legacy Provider
+repoUrl: git@github.com:test/repo.git
+mergeGateProvider: github
+tasks:
+  - id: t1
+    description: "Task"
+    command: "echo hi"
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow('"mergeGateProvider" is no longer supported');
+  });
+
   it('rejects task-level autoFix', () => {
     const yaml = `
 name: AutoFix Task Level

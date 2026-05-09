@@ -491,10 +491,10 @@ export async function selectExperiments(
  * Same sequence as GUI `invoker:resolve-conflict` and headless `resolve-conflict`.
  */
 /**
- * Persist merge mode and re-run the merge node — **retry-class**
+ * Persist review mode and re-run the merge node — **retry-class**
  * invalidation route per Step 9 of
  * `docs/architecture/task-invalidation-roadmap.md` and the Decision
- * Table row "Change merge mode" in
+ * Table row "Change review mode" in
  * `docs/architecture/task-invalidation-chart.md`
  * (`MUTATION_POLICIES.mergeMode` → `retryTask` / task scope, scoped
  * to the merge node).
@@ -525,8 +525,8 @@ export async function selectExperiments(
  *
  * This wrapper deliberately stays a thin async delegate to keep the
  * public surface (`(workflowId, mergeMode, deps)` returning `void`)
- * backward compatible for IPC handlers (`invoker:set-merge-mode`),
- * the api-server (`POST /api/workflows/:id/merge-mode`), and Slack
+ * backward compatible for IPC handlers (`invoker:set-review-mode`),
+ * the api-server (`POST /api/workflows/:id/review-mode`), and Slack
  * surfaces. The merge-task-id translation (`workflowId → mergeNodeId`)
  * happens here because callers speak workflow ids; the orchestrator
  * speaks merge-node task ids. When the workflow has no merge node
@@ -539,7 +539,7 @@ export async function selectExperiments(
  * Cancel-first is enforced inside the orchestrator method — this
  * wrapper MUST NOT add a parallel cancel call.
  */
-export async function setWorkflowMergeMode(
+export async function setWorkflowReviewMode(
   workflowId: string,
   mergeMode: string,
   deps: Pick<ActionDeps, 'orchestrator' | 'persistence'> & { taskExecutor: TaskRunner },

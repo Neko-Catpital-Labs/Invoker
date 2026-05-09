@@ -25,7 +25,7 @@ import {
   editTaskPrompt,
   editTaskType,
   selectExperiment,
-  setWorkflowMergeMode,
+  setWorkflowReviewMode,
   fixWithAgentAction,
   finalizeAppliedFix,
   autoFixOnFailure,
@@ -1431,7 +1431,7 @@ describe('selectExperiment', () => {
   });
 });
 
-describe('setWorkflowMergeMode', () => {
+describe('setWorkflowReviewMode', () => {
   // These tests pin the wrapper's two branches:
   //   - merge node present  -> `orchestrator.editTaskMergeMode`
   //   - merge node absent   -> direct `persistence.updateWorkflow`
@@ -1459,7 +1459,7 @@ describe('setWorkflowMergeMode', () => {
   });
 
   it('routes through orchestrator.editTaskMergeMode with the canonical mode when a merge node exists', async () => {
-    await setWorkflowMergeMode('wf-1', 'external_review', {
+    await setWorkflowReviewMode('wf-1', 'external_review', {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
@@ -1472,7 +1472,7 @@ describe('setWorkflowMergeMode', () => {
   });
 
   it('executes runnable tasks returned by the orchestrator', async () => {
-    await setWorkflowMergeMode('wf-1', 'automatic', {
+    await setWorkflowReviewMode('wf-1', 'automatic', {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
@@ -1485,7 +1485,7 @@ describe('setWorkflowMergeMode', () => {
   it('does not execute when the orchestrator returns no runnable tasks (e.g. same-mode no-op)', async () => {
     orchestrator.editTaskMergeMode.mockReturnValueOnce([]);
 
-    await setWorkflowMergeMode('wf-1', 'manual', {
+    await setWorkflowReviewMode('wf-1', 'manual', {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
@@ -1498,7 +1498,7 @@ describe('setWorkflowMergeMode', () => {
   it('falls back to a direct persistence write when no merge node exists (no-merge-gate workflow)', async () => {
     persistence.loadTasks.mockReturnValue([makeTask({ id: 'task-a', status: 'completed' })]);
 
-    await setWorkflowMergeMode('wf-1', 'manual', {
+    await setWorkflowReviewMode('wf-1', 'manual', {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
@@ -1511,7 +1511,7 @@ describe('setWorkflowMergeMode', () => {
 
   it('throws on invalid merge mode', async () => {
     await expect(
-      setWorkflowMergeMode('wf-1', 'invalid', {
+      setWorkflowReviewMode('wf-1', 'invalid', {
         orchestrator: orchestrator as unknown as Orchestrator,
         persistence: persistence as unknown as SQLiteAdapter,
         taskExecutor: taskExecutor as unknown as TaskRunner,

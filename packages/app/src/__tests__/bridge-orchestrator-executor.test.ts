@@ -10,7 +10,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createTestHarness, type TestHarness, InMemoryBus, InMemoryPersistence, MockGit } from '@invoker/test-kit';
 import { Orchestrator, type PlanDefinition, type TaskState } from '@invoker/workflow-core';
 import { TaskRunner, ExecutorRegistry, ReviewProviderRegistry, type MergeGateProvider } from '@invoker/execution-engine';
-import { setWorkflowMergeMode } from '../workflow-actions.js';
+import { setWorkflowReviewMode } from '../workflow-actions.js';
 import { executeGlobalTopup } from '../global-topup.js';
 
 // ── Shared Plans ────────────────────────────────────────────
@@ -1160,7 +1160,7 @@ const MANUAL_MERGE_ONFINISH_NONE_PLAN: PlanDefinition = {
 
 // ── Flow 9c: UI external_review merge mode ───────────────────
 
-describe('Flow 9c: set-merge-mode external_review', () => {
+describe('Flow 9c: set-review-mode external_review', () => {
   const mockMergeGate: MergeGateProvider = {
     name: 'github',
     createReview: async () => ({
@@ -1191,7 +1191,7 @@ describe('Flow 9c: set-merge-mode external_review', () => {
     await h.executor.executeTasks([h.getTask(mergeId)!]);
     expect(h.getTask(mergeId)!.status).toBe('review_ready');
 
-    await setWorkflowMergeMode(wfId, 'external_review', {
+    await setWorkflowReviewMode(wfId, 'external_review', {
       orchestrator: h.orchestrator,
       persistence: h.persistence,
       taskExecutor: h.executor,

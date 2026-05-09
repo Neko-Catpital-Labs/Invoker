@@ -682,7 +682,7 @@ export function App() {
               onEditAgent={handleEditAgent}
               onSetExternalGatePolicies={handleSetExternalGatePolicies}
               onSetMergeBranch={invoker?.setMergeBranch}
-              onSetMergeMode={invoker?.setMergeMode}
+              onSetMergeMode={invoker?.setReviewMode}
             />
           </div>
         </div>

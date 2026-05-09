@@ -231,6 +231,13 @@ export function parsePlan(yamlContent: string): PlanDefinition {
     );
   }
 
+  // Reject legacy "mergeGateProvider" key — replaced by "reviewProvider" + "publicationStrategy".
+  if (hasOwn(raw as object, 'mergeGateProvider')) {
+    throw new PlanParseError(
+      '"mergeGateProvider" is no longer supported. Use "reviewProvider" (e.g. "github") and "publicationStrategy" (e.g. "github_pr" or "mergify_stack") instead.',
+    );
+  }
+
   // Validate onFinish
   const validOnFinishValues = ['none', 'merge', 'pull_request'] as const;
   if (raw.onFinish !== undefined && !validOnFinishValues.includes(raw.onFinish as any)) {

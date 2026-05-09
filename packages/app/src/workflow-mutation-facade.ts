@@ -37,7 +37,7 @@ import {
   editTaskType as sharedEditTaskType,
   editTaskAgent as sharedEditTaskAgent,
   setTaskExternalGatePolicies as sharedSetTaskExternalGatePolicies,
-  setWorkflowMergeMode as sharedSetWorkflowMergeMode,
+  setWorkflowReviewMode as sharedSetWorkflowReviewMode,
   selectExperiment as sharedSelectExperiment,
   selectExperiments as sharedSelectExperiments,
   resolveConflictAction as sharedResolveConflictAction,
@@ -310,8 +310,8 @@ export class WorkflowMutationFacade {
     };
   }
 
-  async setWorkflowMergeMode(workflowId: string, mergeMode: string): Promise<void> {
-    await sharedSetWorkflowMergeMode(workflowId, mergeMode, {
+  async setWorkflowReviewMode(workflowId: string, mergeMode: string): Promise<void> {
+    await sharedSetWorkflowReviewMode(workflowId, mergeMode, {
       orchestrator: this.deps.orchestrator,
       persistence: this.deps.persistence,
       taskExecutor: this.deps.taskExecutor,

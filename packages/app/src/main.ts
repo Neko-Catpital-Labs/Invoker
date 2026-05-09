@@ -22,7 +22,7 @@
  *   electron dist/main.js --headless edit-executor <taskId> <executorType>
  *   electron dist/main.js --headless edit-agent <taskId> <claude|codex>
  *   electron dist/main.js --headless cancel <taskId>
- *   electron dist/main.js --headless set-merge-mode <workflowId> <mode>
+ *   electron dist/main.js --headless set review-mode <workflowId> <mode>
  *   electron dist/main.js --headless queue
  *   electron dist/main.js --headless audit <taskId>
  *   electron dist/main.js --headless install-skills
@@ -127,7 +127,7 @@ import {
   resolveConflictAction,
   selectFailureRecoveryRoute,
   selectExperiments as sharedSelectExperiments,
-  setWorkflowMergeMode,
+  setWorkflowReviewMode,
 } from './workflow-actions.js';
 import { spawn, execSync } from 'node:child_process';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
@@ -1898,8 +1898,8 @@ if (isHeadless) {
         return { channel: 'headless.exec', request: { args: ['rebase', String(arg0)] } };
       case 'invoker:recreate-with-rebase':
         return { channel: 'headless.exec', request: { args: ['recreate-with-rebase', String(arg0)] } };
-      case 'invoker:set-merge-mode':
-        return { channel: 'headless.exec', request: { args: ['set', 'merge-mode', String(arg0), String(arg1)] } };
+      case 'invoker:set-review-mode':
+        return { channel: 'headless.exec', request: { args: ['set', 'review-mode', String(arg0), String(arg1)] } };
       case 'invoker:approve-merge': {
         const workflowId = String(arg0);
         const mergeTask = persistence.loadTasks(workflowId).find((task) => task.config.isMergeNode);
@@ -3306,18 +3306,18 @@ if (isHeadless) {
       }
     });
 
-    registerGuiMutationHandler('invoker:set-merge-mode', async (workflowIdArg: unknown, mergeModeArg: unknown) => {
+    registerGuiMutationHandler('invoker:set-review-mode', async (workflowIdArg: unknown, mergeModeArg: unknown) => {
       const workflowId = String(workflowIdArg);
       const mergeMode = String(mergeModeArg);
-      logger.info(`set-merge-mode: workflow="${workflowId}" → "${mergeMode}"`, { module: 'ipc' });
+      logger.info(`set-review-mode: workflow="${workflowId}" → "${mergeMode}"`, { module: 'ipc' });
       try {
-        await setWorkflowMergeMode(workflowId, mergeMode, {
+        await setWorkflowReviewMode(workflowId, mergeMode, {
           orchestrator,
           persistence,
           taskExecutor: requireTaskExecutor(),
         });
       } catch (err) {
-        logger.error(`set-merge-mode failed: ${err}`, { module: 'ipc' });
+        logger.error(`set-review-mode failed: ${err}`, { module: 'ipc' });
         throw err;
       }
       const workflows = persistence.listWorkflows();
