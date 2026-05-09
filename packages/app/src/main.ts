@@ -147,6 +147,7 @@ import { computeDeferredLaunchTiming } from './deferred-runnable.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import { relaunchOrphansAndStartReady } from './orphan-relaunch.js';
 import { listOpenFixIntentsForTask } from './auto-fix-intents.js';
+import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
 
 declare const __BUILD_SHA__: string | undefined;
 declare const __BUILD_VERSION__: string | undefined;
@@ -1093,6 +1094,7 @@ if (isHeadless) {
       if (ownsHeadlessShutdown && orchestrator) {
         for (const task of orchestrator.getAllTasks()) {
           if (task.status === 'running' || task.status === 'fixing_with_ai') {
+            if (persistence) persistShutdownDiagnostic(task, persistence);
             orchestrator.handleWorkerResponse({
               requestId: `quit-${task.id}`,
               actionId: task.id,
@@ -3692,6 +3694,11 @@ if (isHeadless) {
       if (orchestrator) {
         for (const task of orchestrator.getAllTasks()) {
           if (task.status === 'running' || task.status === 'fixing_with_ai') {
+            if (persistence) {
+              persistShutdownDiagnostic(task, persistence, {
+                flushPendingOutput: flushTaskOutput,
+              });
+            }
             orchestrator.handleWorkerResponse({
               requestId: `quit-${task.id}`,
               actionId: task.id,
