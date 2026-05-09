@@ -8,7 +8,7 @@ description: |
   Demonstrates an implementation workflow that incorrectly ends with a
   package-scoped test command instead of the required full-suite gate.
 onFinish: pull_request
-mergeMode: github
+mergeMode: external_review
 repoUrl: git@github.com:example-org/acme-repo.git
 baseBranch: master
 featureBranch: plan/anti-pattern-final-regression-not-test-all

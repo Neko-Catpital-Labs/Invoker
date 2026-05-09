@@ -23,17 +23,17 @@ describe('MergeGateNode', () => {
     expect(screen.getByTestId('merge-gate-primary-label')).toHaveTextContent('Pull request');
   });
 
-  it('shows Review primary label when mergeMode is external_review', () => {
-    renderNode({ status: 'pending', label: 'My plan', gateKind: 'merge', mergeMode: 'external_review' });
+  it('shows Review primary label when reviewMode is external_review', () => {
+    renderNode({ status: 'pending', label: 'My plan', gateKind: 'merge', reviewMode: 'external_review' });
     expect(screen.getByTestId('merge-gate-primary-label')).toHaveTextContent('Review');
   });
 
-  it('does not render branch, merge mode, or summary rows in DAG node', () => {
+  it('does not render branch, review mode, or summary rows in DAG node', () => {
     renderNode({
       status: 'awaiting_approval',
       label: 'Plan',
       gateKind: 'pull_request',
-      mergeMode: 'manual',
+      reviewMode: 'manual',
       summary: 'summary text',
       baseBranch: 'master',
       featureBranch: 'feature/x',
@@ -50,7 +50,7 @@ describe('MergeGateNode', () => {
       status: 'awaiting_approval',
       label: 'Plan',
       gateKind: 'merge',
-      mergeMode: 'manual',
+      reviewMode: 'manual',
       workflowId: 'wf-123',
     });
     expect(screen.getByTestId('approve-merge-button')).toBeInTheDocument();
@@ -62,7 +62,7 @@ describe('MergeGateNode', () => {
       status: 'awaiting_approval',
       label: 'Plan',
       gateKind: 'pull_request',
-      mergeMode: 'manual',
+      reviewMode: 'manual',
       workflowId: 'wf-123',
     });
     expect(screen.getByTestId('approve-merge-button')).toHaveTextContent('Approve & Create PR');
@@ -73,7 +73,7 @@ describe('MergeGateNode', () => {
       status: 'awaiting_approval',
       label: 'Plan',
       gateKind: 'pull_request',
-      mergeMode: 'manual',
+      reviewMode: 'manual',
       workflowId: 'wf-123',
       pendingFixError: 'merge conflict',
     });
@@ -85,7 +85,7 @@ describe('MergeGateNode', () => {
       status: 'awaiting_approval',
       label: 'Plan',
       gateKind: 'workflow',
-      mergeMode: 'manual',
+      reviewMode: 'manual',
       workflowId: 'wf-123',
     });
     expect(screen.getByTestId('approve-merge-button')).toHaveTextContent('Approve');
@@ -96,7 +96,7 @@ describe('MergeGateNode', () => {
       status: 'awaiting_approval',
       label: 'Plan',
       gateKind: 'external_review',
-      mergeMode: 'external_review',
+      reviewMode: 'external_review',
       workflowId: 'wf-123',
     });
     expect(screen.queryByTestId('approve-merge-button')).not.toBeInTheDocument();

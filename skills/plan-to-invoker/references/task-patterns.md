@@ -208,7 +208,7 @@ description: |
   Constrains ApprovalModal height to 90vh and adds internal scroll.
   Architecture: uses flex-col + overflow-y-auto pattern.
 onFinish: pull_request
-mergeMode: github
+mergeMode: external_review
 visualProof: true
 tasks:
   - id: add-visual-proof-test

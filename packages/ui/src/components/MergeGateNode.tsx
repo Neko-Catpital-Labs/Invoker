@@ -17,7 +17,7 @@ interface MergeGateNodeData {
   /** Plan title only (no "… gate for" prefix). */
   label: string;
   gateKind: MergeGateKind;
-  mergeMode?: 'manual' | 'automatic' | 'external_review';
+  reviewMode?: 'manual' | 'automatic' | 'external_review';
   workflowId?: string;
   /** Set when merge gate was fixed with Claude — first approve clears this (orchestrator). */
   pendingFixError?: string;
@@ -42,7 +42,7 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
     status,
     label,
     gateKind,
-    mergeMode = 'manual',
+    reviewMode = 'manual',
     workflowId,
     pendingFixError,
     dimmed: dataDimmed,
@@ -57,8 +57,8 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
   const colors = getStatusColor(visualStatus);
   const [error, setError] = useState<string | null>(null);
 
-  /** mergeMode wins over gateKind so we never show "Pull request" + "Review" when workflow is external_review mode. */
-  const effectiveGateKind: MergeGateKind = mergeMode === 'external_review' ? 'external_review' : gateKind;
+  /** reviewMode wins over gateKind so we never show "Pull request" + "Review" when workflow is external_review mode. */
+  const effectiveGateKind: MergeGateKind = reviewMode === 'external_review' ? 'external_review' : gateKind;
 
   const handleApproveMerge = () => {
     if (workflowId && window.invoker?.approveMerge) {
@@ -129,7 +129,7 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
         <span className={`text-sm uppercase tracking-wide ${colors.text}`}>{statusLabel}</span>
       </div>
 
-      {mergeMode === 'manual' && (status === 'review_ready' || status === 'awaiting_approval') && (
+      {reviewMode === 'manual' && (status === 'review_ready' || status === 'awaiting_approval') && (
         <button
           onClick={handleApproveMerge}
           data-testid="approve-merge-button"

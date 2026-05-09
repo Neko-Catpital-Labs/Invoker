@@ -151,7 +151,7 @@ describe('mergeGateKindFromDescription / mergeGatePlanTitle / resolveMergeGateKi
 describe('mergeGatePanelHeading', () => {
   const mergeTask = (desc: string, extras?: Partial<TaskState['execution']>): TaskState => makeMergeTask(desc, 'wf-1', extras);
 
-  it('rewrites Pull request gate to Review gate when mergeMode is external_review', () => {
+  it('rewrites Pull request gate to Review gate when reviewMode is external_review', () => {
     const task = mergeTask('Pull request gate for Plan A');
     expect(mergeGatePanelHeading(task, 'external_review')).toBe('Review gate for Plan A');
   });
@@ -161,17 +161,17 @@ describe('mergeGatePanelHeading', () => {
     expect(mergeGatePanelHeading(task, 'external_review')).toBe('Review gate for Plan A');
   });
 
-  it('rewrites other prefixed gates to Review gate when mergeMode is external_review', () => {
+  it('rewrites other prefixed gates to Review gate when reviewMode is external_review', () => {
     const task = mergeTask('Merge gate for Plan B');
     expect(mergeGatePanelHeading(task, 'external_review')).toBe('Review gate for Plan B');
   });
 
-  it('does not rewrite when mergeMode is manual', () => {
+  it('does not rewrite when reviewMode is manual', () => {
     const task = mergeTask('Pull request gate for Plan A');
     expect(mergeGatePanelHeading(task, 'manual')).toBe('Pull request gate for Plan A');
   });
 
-  it('rewrites when reviewUrl is set even if mergeMode is unset', () => {
+  it('rewrites when reviewUrl is set even if reviewMode is unset', () => {
     const task = mergeTask('Pull request gate for Plan A', {
       reviewUrl: 'https://github.com/o/r/pull/1',
     });

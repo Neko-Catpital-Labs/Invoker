@@ -155,7 +155,6 @@ export interface WorkflowMeta {
   featureBranch?: string;
   onFinish?: string;
   mergeMode?: string;
-  reviewProvider?: string;
 }
 
 // ── Workflow Status ─────────────────────────────────────────

@@ -277,7 +277,7 @@ test_lint_valid_final_test_all() {
 name: "Valid final test-all gate"
 description: "Implementation plan with terminal full-suite regression"
 onFinish: pull_request
-mergeMode: github
+mergeMode: external_review
 repoUrl: git@github.com:example-org/acme-repo.git
 tasks:
   - id: implement-surface
@@ -364,7 +364,7 @@ test_lint_rejects_non_test_all_final_gate() {
 name: "Invalid final gate command"
 description: "Implementation plan with old package-scoped final regression"
 onFinish: pull_request
-mergeMode: github
+mergeMode: external_review
 repoUrl: git@github.com:example-org/acme-repo.git
 tasks:
   - id: implement-surface
@@ -438,7 +438,7 @@ test_lint_rejects_final_gate_missing_dependencies() {
 name: "Invalid final gate dependencies"
 description: "Implementation plan whose final regression does not depend on every earlier task"
 onFinish: pull_request
-mergeMode: github
+mergeMode: external_review
 repoUrl: git@github.com:example-org/acme-repo.git
 tasks:
   - id: implement-surface

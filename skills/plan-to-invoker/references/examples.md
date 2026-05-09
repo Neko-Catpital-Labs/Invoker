@@ -92,7 +92,7 @@ The execution engine resolves the publication provider through a **strategy rout
 When the target repo is Invoker itself, keep the plan shape normal:
 
 - `onFinish: pull_request`
-- `mergeMode: github`
+- `mergeMode: external_review`
 
 The workflow's `publicationStrategy` is set to `mergify_stack` at the persistence level. Once the branch's commit stack is ready, the engine publishes via `mergify stack push`.
 

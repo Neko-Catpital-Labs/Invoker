@@ -20,7 +20,7 @@ interface ValidationError {
 }
 
 const VALID_ON_FINISH = ['none', 'merge', 'pull_request'] as const;
-const VALID_MERGE_MODE = ['manual', 'automatic', 'github', 'external_review'] as const;
+const VALID_MERGE_MODE = ['manual', 'automatic', 'external_review'] as const;
 const VALID_EXECUTOR_TYPE = ['worktree', 'docker', 'ssh'] as const;
 const VALID_REQUIRED_STATUS = ['completed', 'review_ready'] as const;
 const VALID_GATE_POLICY = ['completed', 'review_ready'] as const;

@@ -54,7 +54,7 @@ description: |
   Tradeoffs: Adds a cross-package dependency (core -> graph) but reduces core
   complexity by ~300 lines. All existing tests must pass unchanged.
 onFinish: pull_request
-mergeMode: github
+mergeMode: external_review
 repoUrl: git@github.com:example-org/acme-repo.git
 baseBranch: master
 featureBranch: refactor/extract-graph-package

@@ -21,7 +21,7 @@ description: |
   management changes. All existing sidebar unit tests must continue to pass.
 visualProof: true
 onFinish: pull_request
-mergeMode: github
+mergeMode: external_review
 repoUrl: git@github.com:example-org/acme-repo.git
 baseBranch: main
 featureBranch: fix/sidebar-collapse-animation

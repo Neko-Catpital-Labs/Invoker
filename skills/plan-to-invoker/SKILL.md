@@ -42,7 +42,7 @@ Grep-only checks are Phase 1a only; behavioral claims require executed Phase 1b 
 - `github_pr` (default): `GitHubMergeGateProvider` creates a standard GitHub PR and polls review approval. Use for all repos unless they opt into Mergify Stacks.
 - `mergify_stack` (explicit opt-in): `MergifyStackProvider` runs `mergify stack push`, resolves the stacked PR, and polls approval. Use for Invoker-on-Invoker dogfooding (`EdbertChan/Invoker` or `Neko-Catpital-Labs/Invoker`) or repos that independently adopt Mergify Stacks.
 
-When the target repo uses `mergify_stack`: keep `onFinish: pull_request` + `mergeMode: github`, then publish/update the resulting commit stack with `mergify stack push`. Do **not** set `mergify_stack` on workflows targeting repos that do not use Mergify Stacks; for example, `EdbertChan/test-playground` should keep the `github_pr` default. For the actual PR authoring/publication step after implementation work is ready, use the `make-pr` skill.
+When the target repo uses `mergify_stack`: keep `onFinish: pull_request` + `mergeMode: external_review`, then publish/update the resulting commit stack with `mergify stack push`. Do **not** set `mergify_stack` on workflows targeting repos that do not use Mergify Stacks; for example, `EdbertChan/test-playground` should keep the `github_pr` default. For the actual PR authoring/publication step after implementation work is ready, use the `make-pr` skill.
 
 **Known `mergify_stack` limitations** (lifecycle PoC: `docs/mergify-stack-lifecycle-poc.md`): mid-stack rewrites recreate PRs (losing review comments), and re-push after mid-stack cancel fails with HTTP 422 (adapter must close downstream PRs first).
 

@@ -42,12 +42,12 @@ export function mergeGatePlanTitleInsensitive(description: string): string {
 
 /**
  * Task panel heading for merge nodes: when the workflow finishes via GitHub PR, always show
- * `GitHub PR gate for …` if the description uses any known gate prefix — avoids "Pull request …"
- * in the title alongside Merge mode "GitHub PR" (stale DB or onFinish vs mergeMode skew).
+ * `Review gate for …` if the description uses any known gate prefix — avoids "Pull request …"
+ * in the title alongside review mode "External review" (stale DB or onFinish vs reviewMode skew).
  */
-export function mergeGatePanelHeading(task: TaskState, mergeMode?: string): string {
+export function mergeGatePanelHeading(task: TaskState, reviewMode?: string): string {
   if (!task.config.isMergeNode) return task.description;
-  const externalReviewUi = mergeMode === 'external_review' || Boolean(task.execution?.reviewUrl);
+  const externalReviewUi = reviewMode === 'external_review' || Boolean(task.execution?.reviewUrl);
   if (!externalReviewUi) return task.description;
   const lower = task.description.toLowerCase();
   const hadPrefix = MERGE_DESC_PREFIXES.some(p => lower.startsWith(p.prefix.toLowerCase()));

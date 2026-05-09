@@ -47,7 +47,7 @@ const yamlPath = resolveYamlModulePath(__dirname);
 const { parse: parseYaml } = await import(yamlPath);
 
 const VALID_ON_FINISH = ['none', 'merge', 'pull_request'];
-const VALID_MERGE_MODE = ['manual', 'automatic', 'github', 'external_review'];
+const VALID_MERGE_MODE = ['manual', 'automatic', 'external_review'];
 const VALID_EXECUTOR_TYPE = ['worktree', 'docker', 'ssh'];
 const VALID_REQUIRED_STATUS = ['completed', 'review_ready'];
 const VALID_GATE_POLICY = ['completed', 'review_ready'];
