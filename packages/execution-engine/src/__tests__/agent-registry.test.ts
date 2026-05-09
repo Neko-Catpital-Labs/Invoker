@@ -125,7 +125,6 @@ describe('AgentRegistry', () => {
       reversed.registerExecution(prClaude);
       expect(reversed.getWithCapability('make-pr')).toBe(prCodex);
     });
-
     it('listWithCapability preserves stable insertion order for fallback chains', () => {
       // The PR-authoring pipeline builds a fallback chain from this list.
       // Order must be deterministic and match registration order.
