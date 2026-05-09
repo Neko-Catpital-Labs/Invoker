@@ -1,0 +1,247 @@
+name: "Harden fix intent cancellation and stale SSH metadata writes"
+description: |
+  Hardens the final-regression failure path proven by the shared repro: a
+  superseded `invoker:fix-with-agent` mutation can keep running its async side
+  effect after `recreate-task`, and a stale SSH startup failure can write old
+  `workspacePath` / `branch` metadata back onto the live task row after the
+  selected attempt has already advanced.
+
+  The workflow fixes both races as a linked lineage/cancellation problem rather
+  than a one-off recreate patch. It also preserves concrete startup and
+  synthetic shutdown diagnostics in durable task output so later investigation
+  does not collapse to `Application quit`.
+
+  Publication intent: publish intermediate/helper branches to the fork and
+  target the final PR gate at the parent repo.
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker
+intermediateRepoUrl: https://github.com/EdbertChan/Invoker
+baseBranch: master
+featureBranch: plan/fix-intent-cancellation-stale-ssh-metadata
+
+tasks:
+  - id: harden-workflow-mutation-cancellation
+    description: |
+      Goal:
+      Make workflow-mutation invalidation cancellation-aware so recreate/delete fences stop superseded async fix work instead of only marking the persisted intent failed.
+      Motivation:
+      The shared repro proved the old `invoker:fix-with-agent` mutation still runs its side effect after `invoker:recreate-task` completes, which leaves stale writes possible even when the queue correctly transfers authority.
+      Alternative considerations:
+      Special-casing only `recreate-task` would leave the same late-write bug class on other hard-preempt fences such as recreate-with-rebase and delete workflows.
+      Implementation details:
+      Extend the workflow-mutation dispatch contract to include cancellation context, propagate invalidation through PersistedWorkflowMutationCoordinator, and preserve existing queue semantics for non-preempted mutations.
+      Layer: app_bridge
+      Feature state: active
+      Files:
+      - packages/app/src/persisted-workflow-mutation-coordinator.ts
+      - packages/app/src/workflow-mutation-coordinator.ts
+      - packages/app/src/workflow-preemption.ts
+      - packages/app/src/__tests__/persisted-workflow-mutation-coordinator.test.ts
+      Change types:
+      - modify
+      Acceptance criteria:
+      - Coordinator coverage proves superseded fix mutations are aborted when recreate/delete fences preempt them.
+    prompt: |
+      Goal:
+      Make workflow-mutation invalidation cancellation-aware so recreate/delete fences stop superseded async fix work instead of only marking the persisted intent failed.
+      Motivation:
+      The shared repro proved the old `invoker:fix-with-agent` mutation still runs its side effect after `invoker:recreate-task` completes, which leaves stale writes possible even when the queue correctly transfers authority.
+      Alternative considerations:
+      Special-casing only `recreate-task` would leave the same late-write bug class on other hard-preempt fences such as recreate-with-rebase and delete workflows.
+      Implementation details:
+      Modify packages/app/src/persisted-workflow-mutation-coordinator.ts, packages/app/src/workflow-mutation-coordinator.ts, packages/app/src/workflow-preemption.ts, and related tests. Extend the internal dispatch contract so running mutations receive cancellation context with an AbortSignal plus identifying metadata. When the coordinator invalidates a running fix-like mutation because a recreate/delete-class fence takes authority, abort the running context immediately while keeping the persisted intent failure reason and queue ordering intact for non-preempted mutations. Add targeted tests proving recreate/delete fences abort superseded fix work and do not regress non-preempted queue behavior.
+      Acceptance criteria:
+      - Ensure coordinator tests prove superseded fix mutations are aborted when recreate/delete fences preempt them.
+    dependencies: []
+
+  - id: guard-fix-with-agent-late-writes
+    description: |
+      Goal:
+      Make fix-with-agent and conflict-resolution flows discard late results once the task lineage or cancellation state is stale.
+      Motivation:
+      Even with coordinator aborts, correctness still requires every late fix result to no-op when the task has moved to a newer selected attempt or generation.
+      Alternative considerations:
+      Relying on best-effort process termination alone is insufficient because remote or agent work can still return after invalidation.
+      Implementation details:
+      Capture the starting lineage for fix/resolve flows, add explicit stale/aborted checkpoints around async fix and persistence boundaries, and prevent awaiting-approval or revert side effects from writing onto a newer lineage.
+      Layer: owner_delegation
+      Feature state: active
+      Files:
+      - packages/app/src/workflow-actions.ts
+      - packages/app/src/main.ts
+      - packages/workflow-core/src/orchestrator.ts
+      - packages/app/src/__tests__/workflow-actions.test.ts
+      Change types:
+      - modify
+      Acceptance criteria:
+      - Stale or aborted fix results do not update task output, fix approval state, branch metadata, or conflict-resolution cleanup on a newer attempt lineage.
+    prompt: |
+      Goal:
+      Make fix-with-agent and conflict-resolution flows discard late results once the task lineage or cancellation state is stale.
+      Motivation:
+      Even with coordinator aborts, correctness still requires every late fix result to no-op when the task has moved to a newer selected attempt or generation.
+      Alternative considerations:
+      Relying on best-effort process termination alone is insufficient because remote or agent work can still return after invalidation.
+      Implementation details:
+      Modify packages/app/src/workflow-actions.ts, packages/app/src/main.ts, packages/workflow-core/src/orchestrator.ts, and related tests. At mutation entry, capture taskId, selectedAttemptId, and execution generation. Add lineage/cancellation checkpoints before conflict-resolution start, after async fix returns, before persistence updates, before awaiting-approval transitions, and before revert cleanup. If the mutation is aborted or the current task lineage no longer matches the starting lineage, exit without changing task state, output, agent-session metadata, branch/workspace metadata, or approval state. Cover both the normal fix-with-agent path and representative resolve-conflict cleanup paths in tests.
+      Acceptance criteria:
+      - Ensure stale or aborted fix results do not update task output, fix approval state, branch metadata, or conflict-resolution cleanup on a newer attempt lineage.
+    dependencies: [harden-workflow-mutation-cancellation]
+
+  - id: guard-stale-startup-failure-metadata
+    description: |
+      Goal:
+      Prevent stale SSH startup failures from reattaching old workspace and branch metadata to a task after the selected attempt has advanced.
+      Motivation:
+      The repro proved TaskRunner can write old `workspacePath` / `branch` metadata and a failed response from attempt-1 after the task already moved to attempt-2.
+      Alternative considerations:
+      Keeping the stale metadata write and only cleaning it later would still allow the next SSH launch to collide on the wrong worktree owner path.
+      Implementation details:
+      Make executor startup-failure persistence attempt-aware, scope stale diagnostics away from the live task row, and add coverage for stale failure-response suppression on newer lineages.
+      Layer: owner_delegation
+      Feature state: active
+      Files:
+      - packages/execution-engine/src/task-runner.ts
+      - packages/execution-engine/src/__tests__/task-runner.test.ts
+      - packages/execution-engine/src/__tests__/ssh-worktree-metadata-repro.test.ts
+      Change types:
+      - modify
+      Acceptance criteria:
+      - Stale SSH startup failures do not overwrite live task execution metadata or emit a failed response against a newer selected attempt.
+    prompt: |
+      Goal:
+      Prevent stale SSH startup failures from reattaching old workspace and branch metadata to a task after the selected attempt has advanced.
+      Motivation:
+      The repro proved TaskRunner can write old `workspacePath` / `branch` metadata and a failed response from attempt-1 after the task already moved to attempt-2.
+      Alternative considerations:
+      Keeping the stale metadata write and only cleaning it later would still allow the next SSH launch to collide on the wrong worktree owner path.
+      Implementation details:
+      Modify packages/execution-engine/src/task-runner.ts and the adjacent tests. Add a current-lineage guard around executor startup-failure persistence so stale launches cannot write old branch/workspace metadata or emit a failed worker response against the newer selected attempt. Preserve useful diagnostics for the stale launch through an append-only or attempt-scoped path rather than mutating the live task row. Update or extend targeted task-runner and SSH repro coverage to prove the stale metadata write is blocked.
+      Acceptance criteria:
+      - Ensure stale SSH startup failures do not overwrite live task execution metadata or emit a failed response against a newer selected attempt.
+    dependencies: [guard-fix-with-agent-late-writes]
+
+  - id: persist-concrete-failure-diagnostics
+    description: |
+      Goal:
+      Preserve concrete startup and synthetic shutdown failure details in durable task output instead of collapsing later inspection to `Application quit`.
+      Motivation:
+      The original final-regression investigation lost the actual failing test/startup details because durable output did not retain the concrete failure context.
+      Alternative considerations:
+      Leaving diagnostics only in transient executor buffers would keep the same observability gap even after the lineage bugs are fixed.
+      Implementation details:
+      Route startup-failure and owner-shutdown diagnostic tails through the durable output append path used by the UI and API, while keeping task status semantics unchanged.
+      Layer: app_bridge
+      Feature state: active
+      Layer exception: allowed
+      Layer exception rationale:
+      This observability hardening intentionally depends on the owner-delegation stale-lineage guard so durable diagnostics reflect the post-fix failure path rather than the pre-fix stale metadata write behavior.
+      Files:
+      - packages/app/src/main.ts
+      - packages/data-store/src/sqlite-adapter.ts
+      - packages/app/src/__tests__/main*.test.ts
+      Change types:
+      - modify
+      Acceptance criteria:
+      - Durable task output retains concrete startup/shutdown diagnostics alongside the coarse terminal error state.
+    prompt: |
+      Goal:
+      Preserve concrete startup and synthetic shutdown failure details in durable task output instead of collapsing later inspection to `Application quit`.
+      Motivation:
+      The original final-regression investigation lost the actual failing test/startup details because durable output did not retain the concrete failure context.
+      Alternative considerations:
+      Leaving diagnostics only in transient executor buffers would keep the same observability gap even after the lineage bugs are fixed.
+      Implementation details:
+      Modify packages/app/src/main.ts, packages/data-store/src/sqlite-adapter.ts, and the closest relevant tests. Ensure synthetic owner-shutdown failures and executor startup failures append a compact diagnostic block to the durable task output path used for persisted retrieval, including recent output tail or concrete startup stderr/message where available. Keep the task status model unchanged; this task is an observability hardening change, not a new lifecycle state.
+    dependencies: [guard-stale-startup-failure-metadata]
+
+  - id: verify-shared-repro-fixed
+    description: |
+      Goal:
+      Re-run the shared repro in fixed mode to prove the specific stale-fix and stale-SSH race conditions are closed end to end.
+      Motivation:
+      Full-suite green alone would not prove the exact races demonstrated by the proof artifacts are gone.
+      Alternative considerations:
+      Relying only on newly added broad tests without the shared repro would weaken continuity with the investigation evidence already captured.
+      Implementation details:
+      Execute the shared repro in fixed mode after all implementation tasks complete.
+      Layer: app_regression
+      Feature state: active
+      Files:
+      - scripts/repro/repro-fix-intent-cancellation-and-stale-ssh-metadata.sh
+      Change types:
+      - none
+      Acceptance criteria:
+      - Shared repro exits 0 with `--expect fixed`.
+    command: "bash scripts/repro/repro-fix-intent-cancellation-and-stale-ssh-metadata.sh --expect fixed"
+    dependencies: [harden-workflow-mutation-cancellation, guard-fix-with-agent-late-writes, guard-stale-startup-failure-metadata, persist-concrete-failure-diagnostics]
+
+  - id: verify-app-coordinator-regression
+    description: |
+      Goal:
+      Re-run the focused app-layer coordinator regression covering workflow-mutation invalidation after the fix lands.
+      Motivation:
+      The shared repro proves the end-to-end bug class, but the app-layer coordinator test provides tighter regression coverage around the invalidation path being hardened.
+      Alternative considerations:
+      Relying only on the shared repro would make it harder to localize future regressions to the coordinator layer.
+      Implementation details:
+      Run the focused app package test that covers persisted workflow-mutation invalidation after the implementation tasks and shared repro succeed.
+      Layer: app_regression
+      Feature state: active
+      Files:
+      - packages/app/src/__tests__/persisted-workflow-mutation-coordinator.test.ts
+      Change types:
+      - none
+      Acceptance criteria:
+      - Focused app coordinator regression exits 0.
+    command: "cd packages/app && pnpm test -- src/__tests__/persisted-workflow-mutation-coordinator.test.ts"
+    executorType: ssh
+    remoteTargetId: remote_digital_ocean_1
+    dependencies: [verify-shared-repro-fixed]
+
+  - id: verify-execution-engine-ssh-repro
+    description: |
+      Goal:
+      Re-run the focused execution-engine SSH worktree metadata regression after the fix lands.
+      Motivation:
+      The shared repro proves the end-to-end bug class, but the execution-engine repro test provides tighter regression coverage around the TaskRunner and SSH metadata path being hardened.
+      Alternative considerations:
+      Relying only on the shared repro would make it harder to localize future regressions to the execution-engine lineage guard.
+      Implementation details:
+      Run the focused execution-engine package test that covers the SSH worktree metadata repro after the implementation tasks and shared repro succeed.
+      Layer: app_regression
+      Feature state: active
+      Files:
+      - packages/execution-engine/src/__tests__/ssh-worktree-metadata-repro.test.ts
+      Change types:
+      - none
+      Acceptance criteria:
+      - Focused execution-engine SSH metadata repro exits 0.
+    command: "cd packages/execution-engine && pnpm test -- src/__tests__/ssh-worktree-metadata-repro.test.ts"
+    executorType: ssh
+    remoteTargetId: remote_digital_ocean_1
+    dependencies: [verify-shared-repro-fixed]
+
+  - id: final-regression
+    description: |
+      Goal:
+      Run the full repository test suite as the terminal regression gate after the hardening and focused repro checks land.
+      Motivation:
+      This workflow is changing coordinator, app, persistence, and execution-engine behavior, so the submitted plan must end with the repo-wide gate rather than only package-local verification.
+      Alternative considerations:
+      Stopping at focused regression tests would leave cross-package integration and final-regression behavior unverified.
+      Implementation details:
+      Run the repository-wide `pnpm run test:all` suite after every earlier implementation and focused verification task has completed successfully.
+      Layer: e2e_regression
+      Feature state: active
+      Files:
+      - none
+      Change types:
+      - none
+      Acceptance criteria:
+      - `pnpm run test:all` exits 0 after all earlier workflow tasks complete.
+    command: "pnpm run test:all"
+    executorType: ssh
+    remoteTargetId: remote_digital_ocean_1
+    dependencies: [harden-workflow-mutation-cancellation, guard-fix-with-agent-late-writes, guard-stale-startup-failure-metadata, persist-concrete-failure-diagnostics, verify-shared-repro-fixed, verify-app-coordinator-regression, verify-execution-engine-ssh-repro]
