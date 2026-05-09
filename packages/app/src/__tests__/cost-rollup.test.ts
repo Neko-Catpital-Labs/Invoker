@@ -408,6 +408,30 @@ describe('buildAttributionContext', () => {
     const ctx = buildAttributionContext(task);
     expect(ctx?.executorType).toBe('worktree');
   });
+
+  it('uses caller-supplied attemptId when provided', () => {
+    const task: CostTaskInfo = {
+      id: 'wf-1/task-a',
+      workflowId: 'wf-1',
+      executorType: 'worktree',
+      agentSessionId: 'sess-123',
+      agentName: 'claude',
+      attemptId: 'wf-1/task-a-abc123',
+    };
+    const ctx = buildAttributionContext(task);
+    expect(ctx?.attemptId).toBe('wf-1/task-a-abc123');
+  });
+
+  it('falls back to ${task.id}-latest when attemptId is not provided', () => {
+    const task: CostTaskInfo = {
+      id: 'wf-1/task-a',
+      workflowId: 'wf-1',
+      executorType: 'worktree',
+      agentSessionId: 'sess-123',
+    };
+    const ctx = buildAttributionContext(task);
+    expect(ctx?.attemptId).toBe('wf-1/task-a-latest');
+  });
 });
 
 // ── serializeGroupedRollup ─────────────────────────────────
