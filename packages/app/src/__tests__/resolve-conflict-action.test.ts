@@ -12,6 +12,7 @@ import { resolveConflictAction } from '../workflow-actions.js';
 
 describe('resolveConflictAction', () => {
   let orchestrator: {
+    getTask: ReturnType<typeof vi.fn>;
     beginConflictResolution: ReturnType<typeof vi.fn>;
     setFixAwaitingApproval: ReturnType<typeof vi.fn>;
     revertConflictResolution: ReturnType<typeof vi.fn>;
@@ -26,6 +27,11 @@ describe('resolveConflictAction', () => {
 
   beforeEach(() => {
     orchestrator = {
+      getTask: vi.fn(() => ({
+        id: 'task-a',
+        status: 'fixing_with_ai',
+        execution: { selectedAttemptId: 'att-1', generation: 1 },
+      })),
       beginConflictResolution: vi.fn(() => ({ savedError: 'saved-err' })),
       setFixAwaitingApproval: vi.fn(),
       revertConflictResolution: vi.fn(),
@@ -52,8 +58,10 @@ describe('resolveConflictAction', () => {
 
   it('auto-approves after conflict resolution when configured', async () => {
     const approve = vi.fn(async () => [{ id: 'task-a', status: 'completed', config: {}, execution: {} }]);
+    const getTask = orchestrator.getTask;
     orchestrator = {
       ...orchestrator,
+      getTask,
       approve,
     };
     const taskExecutorWithApprove = {
