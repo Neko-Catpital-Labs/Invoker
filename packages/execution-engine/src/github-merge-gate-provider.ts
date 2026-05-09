@@ -85,14 +85,14 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       url: string;
     };
 
-    const approved = data.reviewDecision === 'APPROVED' || data.state === 'MERGED';
+    const approved = data.state === 'MERGED';
     const rejected = data.state === 'CLOSED' || data.reviewDecision === 'CHANGES_REQUESTED';
 
     let statusText: string;
     if (data.state === 'MERGED') {
       statusText = 'Merged';
     } else if (data.reviewDecision === 'APPROVED') {
-      statusText = 'Approved';
+      statusText = 'Approved, awaiting merge';
     } else if (data.reviewDecision === 'CHANGES_REQUESTED') {
       statusText = 'Changes requested';
     } else if (data.state === 'CLOSED') {
