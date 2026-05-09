@@ -45,10 +45,12 @@ import {
 } from './conflict-resolver.js';
 import { DEFAULT_EXECUTION_AGENT } from './agent.js';
 import {
+  buildCanonicalPrBody,
   buildMakePrPrompt,
-  resolveInstalledSkillPathForAgent,
+  resolveSkillPathViaAgent,
   spawnAgentPrAuthorViaRegistry,
   validateCanonicalPrBody,
+  type PrAuthoringContext,
 } from './pr-authoring.js';
 
 /** Keeps `lastHeartbeatAt` fresh while `executor.start()` is awaited (SSH remote setup/provision can take minutes). Matches BaseExecutor default heartbeat cadence. */
@@ -1578,40 +1580,102 @@ export class TaskRunner {
     baseBranch: string;
     featureBranch: string;
     workflowSummary: string;
+    structuredContext?: PrAuthoringContext;
     cwd: string;
   }): Promise<{ body: string; sessionId: string; agentName: string }> {
     if (!this.executionAgentRegistry) {
-      throw new Error('executionAgentRegistry is required for authorPrBodyWithSkill');
-    }
-
-    const agentName = this.resolvePrAuthoringAgentName(args.workflowId, args.mergeNodeTaskId);
-    const skillPath = resolveInstalledSkillPathForAgent(agentName, 'make-pr');
-    if (!skillPath) {
-      throw new Error(
-        `Required bundled skill "invoker-make-pr" is not installed for agent "${agentName}".`,
+      this.logger.warn(
+        '[pr-authoring] executionAgentRegistry missing, using canonical fallback PR body.',
       );
+      const canonicalBody = buildCanonicalPrBody({
+        title: args.title,
+        workflowSummary: args.workflowSummary,
+        structuredContext: args.structuredContext,
+      });
+      return { body: canonicalBody, sessionId: 'canonical-fallback', agentName: 'canonical' };
     }
 
-    const agent = this.executionAgentRegistry.getOrThrow(agentName);
-    const driver = this.executionAgentRegistry.getSessionDriver(agentName);
-    const prompt = buildMakePrPrompt({
-      skillPath,
+    // Build the ordered agent fallback chain:
+    // 1. Preferred agent from workflow tasks
+    // 2. Remaining PR-capable agents in stable registry order
+    const preferredName = this.resolvePrAuthoringAgentName(args.workflowId, args.mergeNodeTaskId);
+    const prCapableAgents = this.executionAgentRegistry.listWithCapability('make-pr');
+    const orderedAgents = this.buildAgentFallbackOrder(preferredName, prCapableAgents);
+
+    const errors: string[] = [];
+    for (const agent of orderedAgents) {
+      const skillPath = resolveSkillPathViaAgent(agent, 'make-pr');
+      if (!skillPath) {
+        errors.push(`${agent.name}: skill "invoker-make-pr" not installed`);
+        continue;
+      }
+
+      const driver = this.executionAgentRegistry.getSessionDriver(agent.name);
+      const prompt = buildMakePrPrompt({
+        skillPath,
+        title: args.title,
+        baseBranch: args.baseBranch,
+        featureBranch: args.featureBranch,
+        workflowSummary: args.workflowSummary,
+        structuredContext: args.structuredContext,
+      });
+
+      try {
+        const result = await spawnAgentPrAuthorViaRegistry(prompt, args.cwd, agent, driver);
+        const validationErrors = validateCanonicalPrBody(result.body);
+        if (validationErrors.length > 0) {
+          errors.push(
+            `${agent.name}: invalid PR body — ${validationErrors.join('; ')}`,
+          );
+          continue;
+        }
+        return { body: result.body, sessionId: result.sessionId, agentName: agent.name };
+      } catch (err) {
+        errors.push(
+          `${agent.name}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    // No AI agent succeeded — emit deterministic canonical PR body
+    this.logger.warn(
+      `[pr-authoring] All AI agents failed for PR authoring, using canonical fallback. Errors: ${errors.join(' | ')}`,
+    );
+    const canonicalBody = buildCanonicalPrBody({
       title: args.title,
-      baseBranch: args.baseBranch,
-      featureBranch: args.featureBranch,
       workflowSummary: args.workflowSummary,
+      structuredContext: args.structuredContext,
     });
-    const result = await spawnAgentPrAuthorViaRegistry(prompt, args.cwd, agent, driver);
-    const validationErrors = validateCanonicalPrBody(result.body);
-    if (validationErrors.length > 0) {
-      throw new Error(
-        [
-          `PR body authored via invoker-make-pr is invalid for agent "${agentName}".`,
-          ...validationErrors.map((error) => `- ${error}`),
-        ].join('\n'),
-      );
+    return { body: canonicalBody, sessionId: 'canonical-fallback', agentName: 'canonical' };
+  }
+
+  /**
+   * Build the ordered fallback list: preferred agent first, then remaining
+   * PR-capable agents in stable registry order, deduplicated.
+   */
+  private buildAgentFallbackOrder(
+    preferredName: string,
+    prCapableAgents: import('./agent.js').ExecutionAgent[],
+  ): import('./agent.js').ExecutionAgent[] {
+    const seen = new Set<string>();
+    const ordered: import('./agent.js').ExecutionAgent[] = [];
+
+    // Preferred agent first (may or may not be in prCapableAgents)
+    const preferred = this.executionAgentRegistry?.get(preferredName);
+    if (preferred) {
+      seen.add(preferred.name);
+      ordered.push(preferred);
     }
-    return { body: result.body, sessionId: result.sessionId, agentName };
+
+    // Remaining PR-capable agents in registration order
+    for (const agent of prCapableAgents) {
+      if (!seen.has(agent.name)) {
+        seen.add(agent.name);
+        ordered.push(agent);
+      }
+    }
+
+    return ordered;
   }
 
   private resolvePrAuthoringAgentName(workflowId?: string, mergeNodeTaskId?: string): string {
