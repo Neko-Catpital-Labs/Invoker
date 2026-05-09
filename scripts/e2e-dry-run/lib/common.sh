@@ -182,6 +182,9 @@ invoker_e2e_cleanup() {
 invoker_e2e_ensure_app_built() {
   local app_dist="$INVOKER_E2E_REPO_ROOT/packages/app/dist/main.js"
   local ui_dist="$INVOKER_E2E_REPO_ROOT/packages/ui/dist/index.html"
+  # Containerized CI steps can lose checkout's temporary safe.directory config
+  # before this helper runs, so re-establish it before the first git call.
+  invoker_e2e_allow_repo_git_ops
   local git_dir
   git_dir="$(git -C "$INVOKER_E2E_REPO_ROOT" rev-parse --git-dir)"
   local build_lock_dir="$git_dir/invoker-e2e-build.lock"
