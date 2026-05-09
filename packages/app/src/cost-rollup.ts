@@ -158,6 +158,8 @@ export interface CostTaskInfo {
   readonly lastAgentSessionId?: string;
   readonly agentName?: string;
   readonly lastAgentName?: string;
+  /** Caller-resolved attempt ID; bypasses the `${task.id}-latest` fallback. */
+  readonly attemptId?: string;
 }
 
 /**
@@ -195,6 +197,9 @@ export function deriveSource(agentName: string): string {
 /**
  * Build an AttributionContext from a task info record.
  * Returns undefined if no session ID is available.
+ *
+ * When `task.attemptId` is provided the attribution uses that real
+ * persisted ID.  Otherwise falls back to `${task.id}-latest`.
  */
 export function buildAttributionContext(task: CostTaskInfo): AttributionContext | undefined {
   const sessionId = resolveSessionId(task);
@@ -204,7 +209,7 @@ export function buildAttributionContext(task: CostTaskInfo): AttributionContext 
   return {
     workflowId: task.workflowId,
     taskId: task.id,
-    attemptId: `${task.id}-latest`,
+    attemptId: task.attemptId ?? `${task.id}-latest`,
     executorType: task.executorType || 'worktree',
     agentSessionId: sessionId,
     agentName,
