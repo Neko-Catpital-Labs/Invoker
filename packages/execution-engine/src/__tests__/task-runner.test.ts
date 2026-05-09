@@ -6253,6 +6253,44 @@ describe('TaskRunner', () => {
       }
     });
 
+    it('authorPrBodyWithSkill emits canonical body when no execution agent registry is configured', async () => {
+      const logger = createMockLogger();
+      const executor = new TaskRunner({
+        orchestrator: {
+          getTask: () => null,
+          getAllTasks: () => [],
+        } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        logger,
+      });
+
+      const result = await (executor as any).authorPrBodyWithSkill({
+        workflowId: 'wf-1',
+        title: 'Canonical Test',
+        baseBranch: 'master',
+        featureBranch: 'plan/canonical',
+        workflowSummary: 'Canonical summary content.',
+        structuredContext: {
+          tasks: [
+            { taskId: 't1', description: 'Run tests', status: 'completed', command: 'pnpm test' },
+          ],
+        },
+        cwd: '/tmp',
+      });
+
+      expect(result.agentName).toBe('canonical');
+      expect(result.sessionId).toBe('canonical-fallback');
+      expect(result.body).toContain('## Summary');
+      expect(result.body).toContain('## Test Plan');
+      expect(result.body).toContain('## Revert Plan');
+      expect(result.body).toContain('pnpm test');
+      expect(logger.warn).toHaveBeenCalledWith(
+        '[pr-authoring] executionAgentRegistry missing, using canonical fallback PR body.',
+      );
+    });
+
     it('authorPrBodyWithSkill deduplicates preferred agent in fallback chain', async () => {
       const tempHome = createTempWorkspace();
       const originalHome = process.env.HOME;

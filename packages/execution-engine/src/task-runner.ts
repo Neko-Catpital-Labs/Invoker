@@ -1584,7 +1584,15 @@ export class TaskRunner {
     cwd: string;
   }): Promise<{ body: string; sessionId: string; agentName: string }> {
     if (!this.executionAgentRegistry) {
-      throw new Error('executionAgentRegistry is required for authorPrBodyWithSkill');
+      this.logger.warn(
+        '[pr-authoring] executionAgentRegistry missing, using canonical fallback PR body.',
+      );
+      const canonicalBody = buildCanonicalPrBody({
+        title: args.title,
+        workflowSummary: args.workflowSummary,
+        structuredContext: args.structuredContext,
+      });
+      return { body: canonicalBody, sessionId: 'canonical-fallback', agentName: 'canonical' };
     }
 
     // Build the ordered agent fallback chain:
