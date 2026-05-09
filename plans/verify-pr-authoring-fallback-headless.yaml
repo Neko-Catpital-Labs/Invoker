@@ -1,0 +1,32 @@
+# Run: bash scripts/verify-pr-authoring-fallback-headless.sh
+#
+# Headless verification harness for the PR-authoring external-review path.
+# Exercises the full fallback chain: preferred agent → remaining PR-capable
+# agents → canonical no-AI fallback.
+#
+# Because stub agent binaries are injected into PATH (claude-marker.sh,
+# codex-marker.sh), agent-based PR authoring will fail, forcing the canonical
+# fallback. The script asserts that:
+#   1. All command tasks reach "completed".
+#   2. The merge gate reaches "awaiting_approval" or "review_ready".
+#   3. The gh stub was invoked with a PR creation API call.
+#   4. The canonical PR body contains required sections (Summary, Test Plan,
+#      Revert Plan).
+#
+# repoUrl below is overwritten by the script with file://<this checkout>.
+name: "Verify PR-authoring fallback (headless)"
+repoUrl: git@github.com:example-org/acme-repo.git
+onFinish: none
+mergeMode: external_review
+featureBranch: experiment/verify-pr-authoring-fallback
+baseBranch: HEAD
+
+tasks:
+  - id: verify-pr-fallback-taskA
+    description: "First verification task — echoes marker for test-plan evidence"
+    command: echo verify-pr-fallback-ok-a
+    dependencies: []
+  - id: verify-pr-fallback-taskB
+    description: "Second verification task — confirms multi-task PR body generation"
+    command: echo verify-pr-fallback-ok-b
+    dependencies: []
