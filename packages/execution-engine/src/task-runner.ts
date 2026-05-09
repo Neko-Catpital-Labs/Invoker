@@ -305,11 +305,35 @@ export class TaskRunner {
    * 5. Wire output/completion callbacks
    * 6. On completion → feed response to orchestrator → auto-execute newly ready tasks
    */
+  /**
+   * Check whether the task lineage has moved past the attempt that was
+   * captured at launch time.  Returns `true` when the current
+   * `selectedAttemptId` or `generation` no longer matches, meaning any
+   * persistence from this launch would overwrite a newer attempt's data.
+   */
+  private isLaunchStale(
+    taskId: string,
+    attemptId: string,
+    startGeneration: number,
+  ): boolean {
+    const current = this.orchestrator.getTask(taskId);
+    // If the task is no longer visible to the orchestrator we cannot
+    // confirm the lineage advanced — fall through to the normal failure
+    // path rather than silently suppressing the error.
+    if (!current) return false;
+    const currentAttempt = current.execution.selectedAttemptId;
+    const currentGeneration = current.execution.generation ?? 0;
+    if (currentAttempt !== undefined && currentAttempt !== attemptId) return true;
+    if (currentGeneration !== startGeneration) return true;
+    return false;
+  }
+
   async executeTask(task: TaskState): Promise<void> {
     traceExecution(
       `${RESTART_TO_BRANCH_TRACE} TaskRunner.executeTask BEGIN taskId=${task.id} isMergeNode=${Boolean(task.config.isMergeNode)} status=${task.status}`,
     );
     const attemptId = this.resolveAttemptIdForStart(task);
+    const startGeneration = task.execution.generation ?? 0;
     if (this.launchingAttemptIds.has(attemptId) || this.activeExecutions.has(attemptId)) {
       traceExecution(
         `[TaskRunner] executeTask skipping duplicate launch for task=${task.id} attempt=${attemptId}`,
@@ -325,6 +349,18 @@ export class TaskRunner {
       if (cause instanceof ResourceLimitError) {
         traceExecution(`[TaskRunner] executeTask deferred for task=${task.id}: ${cause.message}`);
         this.orchestrator.deferTask(task.id);
+        return;
+      }
+
+      // Guard: if the task lineage has advanced past this attempt, the
+      // startup failure belongs to a superseded launch.  Drop the
+      // metadata write and the failed WorkResponse so we don't clobber
+      // the live attempt's state.
+      if (this.isLaunchStale(task.id, attemptId, startGeneration)) {
+        this.logger.warn(
+          `[TaskRunner] suppressing stale startup-failure metadata/response for task=${task.id} attemptId=${attemptId}`,
+        );
+        await this.cleanupPerTaskDockerExecutor(task);
         return;
       }
 
@@ -451,8 +487,11 @@ export class TaskRunner {
     // on the attempt row. Reconciliation paths can then observe the branch
     // even if the executor crashes mid-startup.
     let branchPersistedEarly = false;
+    const startGeneration = task.execution.generation ?? 0;
     const onBranchResolved = (branch: string): void => {
       if (!branch || branchPersistedEarly) return;
+      // Skip if the task has moved to a newer attempt/generation.
+      if (this.isLaunchStale(task.id, attemptId, startGeneration)) return;
       branchPersistedEarly = true;
       try {
         this.persistence.updateAttempt?.(attemptId, { branch } as any);
@@ -538,7 +577,14 @@ export class TaskRunner {
       } catch {
         // Preserve the original startup failure if output persistence also fails.
       }
-      if (meta.workspacePath || meta.branch || meta.agentSessionId || meta.containerId) {
+      // Only persist startup-failure metadata when the launch is still
+      // current.  If the task has moved to a newer attempt or generation
+      // (e.g. via recreate-task), writing old workspace/branch metadata
+      // would corrupt the live attempt's state.
+      if (
+        (meta.workspacePath || meta.branch || meta.agentSessionId || meta.containerId)
+        && !this.isLaunchStale(task.id, attemptId, task.execution.generation ?? 0)
+      ) {
         const execution: Record<string, string> = {};
         if (meta.workspacePath) execution.workspacePath = meta.workspacePath;
         if (meta.branch) execution.branch = meta.branch;
