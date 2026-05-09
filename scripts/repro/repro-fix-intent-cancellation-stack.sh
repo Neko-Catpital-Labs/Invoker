@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+EXPECTATION=""
+KEEP_ARTIFACTS=0
+
+usage() {
+  cat <<'EOF'
+Usage:
+  bash scripts/repro/repro-fix-intent-cancellation-stack.sh --expect bug|fixed [--keep-artifacts]
+
+What it proves:
+  Scenario 1 — Recreate-task queue authority:
+    A higher-priority `recreate-task` must preempt an older running workflow
+    mutation instead of remaining queued behind it.
+
+  Scenario 2 — Fix-intent cancellation + stale SSH metadata:
+    The focused shared repro proves the running fix mutation is aborted when
+    preempted and stale SSH startup-failure metadata is suppressed on newer
+    lineages.
+
+This wrapper runs both committed repros:
+  - scripts/repro/repro-recreate-task-blocked-by-running-workflow-mutation.sh
+  - scripts/repro/repro-fix-intent-cancellation-and-stale-ssh-metadata.sh
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --expect)
+      EXPECTATION="${2:-}"
+      shift 2
+      ;;
+    --keep-artifacts)
+      KEEP_ARTIFACTS=1
+      shift
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "repro: unknown arg: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ "$EXPECTATION" != "bug" && "$EXPECTATION" != "fixed" ]]; then
+  echo "repro: --expect requires bug|fixed" >&2
+  usage >&2
+  exit 2
+fi
+
+cd "$ROOT_DIR"
+
+queue_args=()
+shared_args=(--expect "$EXPECTATION")
+if [[ "$EXPECTATION" == "bug" ]]; then
+  queue_args+=(--expect-bug)
+else
+  queue_args+=(--expect-fixed)
+fi
+if [[ "$KEEP_ARTIFACTS" == "1" ]]; then
+  queue_args+=(--keep-temp)
+  shared_args+=(--keep-artifacts)
+fi
+
+echo "==> stack repro: Scenario 1 — recreate-task queue authority"
+bash scripts/repro/repro-recreate-task-blocked-by-running-workflow-mutation.sh "${queue_args[@]}"
+
+echo
+echo "==> stack repro: Scenario 2 — fix-intent cancellation and stale SSH metadata"
+bash scripts/repro/repro-fix-intent-cancellation-and-stale-ssh-metadata.sh "${shared_args[@]}"
+
+echo
+echo "==> stack repro matched expectation"
