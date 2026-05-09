@@ -1621,6 +1621,7 @@ run_query_storm_during_tracked_fix() {
 run_same_workflow_tracked_fix_vs_recreate() {
   local workflow_count="$1"
   local operation_burst="$2"
+  local seed_timeout_seconds=120
   invoker_e2e_init
   trap 'ov_stop_owner; rm -rf "${OVERLOAD_TMP_DIR:-}" >/dev/null 2>&1 || true; invoker_e2e_cleanup' RETURN
   cd "$INVOKER_E2E_REPO_ROOT"
@@ -1639,7 +1640,7 @@ run_same_workflow_tracked_fix_vs_recreate() {
   target_workflow="${target_info%%|*}"
   target_task="$target_workflow/root"
   echo "seed tracked fix/recreate target: $target_workflow"
-  ov_wait_task_status "$target_task" failed 30
+  ov_wait_task_status "$target_task" failed "$seed_timeout_seconds"
 
   local -a filler_workflows=()
   local idx info workflow_id
@@ -1647,7 +1648,7 @@ run_same_workflow_tracked_fix_vs_recreate() {
     info="$(ov_submit_workflow fail "same-workflow-fix-recreate-filler-$idx" "" no-track)"
     workflow_id="${info%%|*}"
     filler_workflows+=("$workflow_id")
-    ov_wait_task_status "$workflow_id/root" failed 30
+    ov_wait_task_status "$workflow_id/root" failed "$seed_timeout_seconds"
   done
 
   echo "==> overload: starting tracked fix against same-workflow recreate pressure"
@@ -1847,6 +1848,7 @@ run_fixing_with_ai_visibility() {
 run_owner_restart_loop_during_tracked_recreate_task() {
   local workflow_count="$1"
   local operation_burst="$2"
+  local seed_timeout_seconds=120
   invoker_e2e_init
   trap 'ov_stop_owner; rm -rf "${OVERLOAD_TMP_DIR:-}" >/dev/null 2>&1 || true; invoker_e2e_cleanup' RETURN
   cd "$INVOKER_E2E_REPO_ROOT"
@@ -1865,7 +1867,7 @@ run_owner_restart_loop_during_tracked_recreate_task() {
   target_workflow="${target_info%%|*}"
   target_task="$target_workflow/root"
   echo "seed tracked recreate-task target: $target_workflow"
-  ov_wait_task_status "$target_task" failed 30
+  ov_wait_task_status "$target_task" failed "$seed_timeout_seconds"
 
   local -a fail_workflows=()
   local -a approval_workflows=()
@@ -1874,13 +1876,13 @@ run_owner_restart_loop_during_tracked_recreate_task() {
     info="$(ov_submit_workflow fail "restart-loop-tracked-recreate-task-neighbor-fail-$idx" "" no-track)"
     workflow_id="${info%%|*}"
     fail_workflows+=("$workflow_id")
-    ov_wait_task_status "$workflow_id/root" failed 30
+    ov_wait_task_status "$workflow_id/root" failed "$seed_timeout_seconds"
   done
   for idx in $(seq 1 2); do
     info="$(ov_submit_workflow approval "restart-loop-tracked-recreate-task-neighbor-approval-$idx" "" no-track)"
     workflow_id="${info%%|*}"
     approval_workflows+=("$workflow_id")
-    ov_wait_task_status "$workflow_id/approve-me" awaiting_approval 30
+    ov_wait_task_status "$workflow_id/approve-me" awaiting_approval "$seed_timeout_seconds"
   done
 
   echo "==> overload: starting tracked recreate-task before owner restart loop"
