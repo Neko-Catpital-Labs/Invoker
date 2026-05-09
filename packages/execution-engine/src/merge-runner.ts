@@ -18,6 +18,7 @@ import type { TaskRunnerCallbacks } from './task-runner.js';
 import type { MergeGateProvider } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
+import type { PrAuthoringContext, PrAuthoringTaskEntry } from './pr-authoring.js';
 
 // ── Trace logging ────────────────────────────────────────
 
@@ -157,6 +158,7 @@ export interface MergeRunnerHost {
     baseBranch: string;
     featureBranch: string;
     workflowSummary: string;
+    structuredContext?: PrAuthoringContext;
     cwd: string;
   }): Promise<{ body: string; sessionId: string; agentName: string }>;
   detectDefaultBranch(): Promise<string>;
@@ -191,6 +193,7 @@ async function authorPrBodyForMerge(
     baseBranch: string;
     featureBranch: string;
     workflowSummary: string;
+    structuredContext?: PrAuthoringContext;
     cwd: string;
   },
 ): Promise<string> {
@@ -202,6 +205,62 @@ async function authorPrBodyForMerge(
     `[merge] Authored PR body via ${authored.agentName} skill session=${authored.sessionId}`,
   );
   return authored.body;
+}
+
+/**
+ * Build structured PR-authoring context from workflow tasks.
+ * This carries per-task evidence (verification commands, file-change summaries)
+ * alongside the free-form summary string for richer PR bodies.
+ */
+export async function buildPrAuthoringContext(
+  host: MergeRunnerHost,
+  workflowId: string,
+  visualProofMarkdown?: string,
+): Promise<PrAuthoringContext> {
+  const allTasks = host.orchestrator.getAllTasks();
+  const workflowTasks = allTasks.filter(
+    (t) => t.config.workflowId === workflowId && !t.config.isMergeNode,
+  );
+
+  const workflow = host.persistence.loadWorkflow(workflowId);
+
+  // Resolve pool mirror path so gitDiffStat runs against the correct repo
+  const mirrorCwd = workflow?.repoUrl && host.ensureRepoMirrorPath
+    ? await host.ensureRepoMirrorPath(workflow.repoUrl)
+    : undefined;
+
+  const tasks: PrAuthoringTaskEntry[] = [];
+  for (const t of workflowTasks) {
+    const status: PrAuthoringTaskEntry['status'] =
+      t.status === 'completed' ? 'completed'
+        : t.status === 'failed' ? 'failed'
+          : 'skipped';
+
+    let fileChangeSummary: string | undefined;
+    if (t.status === 'completed' && t.execution.branch) {
+      try {
+        const stat = await host.gitDiffStat(t.execution.branch, mirrorCwd ?? undefined);
+        if (stat) fileChangeSummary = stat;
+      } catch {
+        // Silently skip if git diff fails
+      }
+    }
+
+    tasks.push({
+      taskId: t.id,
+      description: t.description,
+      status,
+      command: t.config.command ?? undefined,
+      fileChangeSummary,
+    });
+  }
+
+  return {
+    workflowName: workflow?.name,
+    workflowDescription: workflow?.description,
+    tasks,
+    visualProofMarkdown,
+  };
 }
 
 /**
@@ -436,10 +495,12 @@ export async function executeMergeNodeImpl(
         }
 
         let fullSummary = summary;
+        let vpMarkdownCapture: string | undefined;
         if (visualProof && host.runVisualProofCapture) {
           const slug = (featureBranch ?? 'workflow').replace(/\//g, '-');
           const vpMarkdown = await host.runVisualProofCapture(baseBranch, featureBranch!, slug, workflow?.repoUrl);
           if (vpMarkdown) {
+            vpMarkdownCapture = vpMarkdown;
             fullSummary = (summary ?? '') + '\n\n' + vpMarkdown;
           }
         }
@@ -451,6 +512,21 @@ export async function executeMergeNodeImpl(
           gateWorkspacePath!,
         );
 
+        // Route through shared PR-authoring helper for consistent PR bodies.
+        const structuredCtx = workflowId
+          ? await buildPrAuthoringContext(host, workflowId, vpMarkdownCapture)
+          : undefined;
+        const prBody = await authorPrBodyForMerge(host, {
+          workflowId,
+          mergeNodeTaskId: task.id,
+          title: workflow?.name ?? 'Workflow',
+          baseBranch,
+          featureBranch: featureBranch!,
+          workflowSummary: fullSummary ?? '',
+          structuredContext: structuredCtx,
+          cwd: gateWorkspacePath!,
+        });
+
         // Create PR via provider (consolidation already done above).
         // Use the gate clone dir so gh CLI resolves the correct GitHub remote.
         const result = await host.mergeGateProvider.createReview({
@@ -458,7 +534,7 @@ export async function executeMergeNodeImpl(
           featureBranch,
           title: workflow?.name ?? 'Workflow',
           cwd: gateWorkspacePath!,
-          body: fullSummary,
+          body: prBody,
         });
         console.log(`[merge] Created GitHub PR: ${result.url}`);
 
@@ -615,13 +691,16 @@ export async function approveMergeImpl(
   const summary = await host.buildMergeSummary(workflowId);
   let fullSummary = summary;
   const visualProof = workflow.visualProof ?? false;
+  let vpMarkdownCapture: string | undefined;
   if (visualProof && host.runVisualProofCapture) {
     const slug = (featureBranch ?? 'workflow').replace(/\//g, '-');
     const vpMarkdown = await host.runVisualProofCapture(baseBranch, featureBranch!, slug, workflow.repoUrl);
     if (vpMarkdown) {
+      vpMarkdownCapture = vpMarkdown;
       fullSummary = summary + '\n\n' + vpMarkdown;
     }
   }
+  const structuredContext = await buildPrAuthoringContext(host, workflowId, vpMarkdownCapture);
   const mergeMessage = workflow.name ?? 'Workflow';
 
   // Clean up the persistent gate worktree created by executeMergeNodeImpl
@@ -673,6 +752,7 @@ export async function approveMergeImpl(
         baseBranch,
         featureBranch,
         workflowSummary: fullSummary ?? '',
+        structuredContext,
         cwd: worktreeDir,
       });
       const reviewUrl = await host.execPr(baseBranch, featureBranch, mergeMessage, prBody, worktreeDir);
@@ -923,10 +1003,12 @@ export async function publishAfterFixImpl(
     await execGitInMergeSafe(host, ['push', '--force', '-u', 'origin', featureBranch], consolidateDir);
 
     let fullSummary = summary;
+    let vpMarkdownCapture2: string | undefined;
     if (visualProof && host.runVisualProofCapture) {
       const slug = featureBranch.replace(/\//g, '-');
       const vpMarkdown = await host.runVisualProofCapture(baseBranch, featureBranch, slug, workflow?.repoUrl);
       if (vpMarkdown) {
+        vpMarkdownCapture2 = vpMarkdown;
         fullSummary = (summary ?? '') + '\n\n' + vpMarkdown;
       }
     }
@@ -936,12 +1018,27 @@ export async function publishAfterFixImpl(
         throw new Error('mergeMode is "external_review" but no review provider configured');
       }
 
+      // Route through shared PR-authoring helper for consistent PR bodies.
+      const structuredCtxReview = workflowId
+        ? await buildPrAuthoringContext(host, workflowId, vpMarkdownCapture2)
+        : undefined;
+      const prBodyReview = await authorPrBodyForMerge(host, {
+        workflowId,
+        mergeNodeTaskId: task.id,
+        title: workflow?.name ?? 'Workflow',
+        baseBranch,
+        featureBranch,
+        workflowSummary: fullSummary ?? '',
+        structuredContext: structuredCtxReview,
+        cwd: consolidateDir,
+      });
+
       const result = await host.mergeGateProvider.createReview({
         baseBranch,
         featureBranch,
         title: workflow?.name ?? 'Workflow',
         cwd: consolidateDir,
-        body: fullSummary,
+        body: prBodyReview,
       });
       console.log(`[merge] Post-fix: created/updated GitHub PR: ${result.url}`);
 
@@ -967,6 +1064,9 @@ export async function publishAfterFixImpl(
 
     // manual mode with pull_request onFinish
     if (onFinish === 'pull_request') {
+      const structuredCtx = workflowId
+        ? await buildPrAuthoringContext(host, workflowId, vpMarkdownCapture2)
+        : undefined;
       const prBody = await authorPrBodyForMerge(host, {
         workflowId,
         mergeNodeTaskId: task.id,
@@ -974,6 +1074,7 @@ export async function publishAfterFixImpl(
         baseBranch,
         featureBranch,
         workflowSummary: fullSummary ?? '',
+        structuredContext: structuredCtx,
         cwd: consolidateDir,
       });
       const reviewUrl = await host.execPr(baseBranch, featureBranch, workflow?.name ?? 'Workflow', prBody, consolidateDir);
@@ -1300,6 +1401,9 @@ export async function consolidateAndMergeImpl(
     } else if (onFinish === 'pull_request') {
       // Push feature branch directly to origin (GitHub) from the clone
       await execGitInMergeSafe(host, ['push', '--force', '-u', 'origin', featureBranch], worktreeDir);
+      const structuredCtx3 = workflowId
+        ? await buildPrAuthoringContext(host, workflowId)
+        : undefined;
       const prBody = await authorPrBodyForMerge(host, {
         workflowId,
         mergeNodeTaskId,
@@ -1307,6 +1411,7 @@ export async function consolidateAndMergeImpl(
         baseBranch,
         featureBranch,
         workflowSummary: body ?? '',
+        structuredContext: structuredCtx3,
         cwd: worktreeDir,
       });
       const reviewUrl = await host.execPr(baseBranch, featureBranch, workflowName ?? 'Workflow', prBody, worktreeDir);
