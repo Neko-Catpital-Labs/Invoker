@@ -33,6 +33,10 @@ import {
   buildInvalidationDeps,
   selectFailureRecoveryRoute,
   deleteAllWorkflows,
+  resolveConflictAction,
+  StaleLineageError,
+  captureTaskLineage,
+  assertLineageCurrent,
 } from '../workflow-actions.js';
 
 vi.mock('../delete-all-snapshot.js', () => ({
@@ -935,44 +939,39 @@ describe('autoFixOnFailure', () => {
     const started = [
       makeRunningTask({ id: 'merge-a', config: { workflowId: 'wf-1', isMergeNode: true } }),
     ];
-    const getTask = vi
-      .fn()
-      .mockReturnValueOnce(makeTask({
+    // The getTask mock is driven by a state machine that tracks which
+    // phase the auto-fix flow is in.  Each phase may call getTask
+    // multiple times (entry check, lineage capture, lineage assert,
+    // approveTask, post-finalize).  We use a phase counter that
+    // advances at known transition points (beginConflictResolution
+    // and setFixAwaitingApproval) to keep return values consistent.
+    let phase = 0;
+    const phases: Record<string, unknown>[] = [
+      // Phase 0: entry check + lineage capture (cycle 1)
+      { status: 'failed', execution: { autoFixAttempts: 0, workspacePath: '/tmp/merge-a', selectedAttemptId: 'att-1', generation: 1 } },
+      // Phase 1: after fix returns, lineage check + finalize + approveTask (cycle 1)
+      { status: 'awaiting_approval', execution: { autoFixAttempts: 1, workspacePath: '/tmp/merge-a', pendingFixError: 'boom', selectedAttemptId: 'att-1', generation: 1 } },
+      // Phase 2: post-finalize check — task re-failed after publish
+      { status: 'failed', execution: { autoFixAttempts: 1, workspacePath: '/tmp/merge-a', error: 'Post-fix PR prep failed: conflict', selectedAttemptId: 'att-1', generation: 1 } },
+      // Phase 3: inline retry entry + lineage capture (cycle 2)
+      { status: 'failed', execution: { autoFixAttempts: 1, workspacePath: '/tmp/merge-a', selectedAttemptId: 'att-3', generation: 3 } },
+      // Phase 4: after fix returns, lineage check + finalize + approveTask (cycle 2)
+      { status: 'awaiting_approval', execution: { autoFixAttempts: 2, workspacePath: '/tmp/merge-a', pendingFixError: 'boom', selectedAttemptId: 'att-3', generation: 3 } },
+    ];
+    const getTask = vi.fn(() => {
+      const idx = Math.min(phase, phases.length - 1);
+      return makeTask({
         id: 'merge-a',
-        status: 'failed',
         config: { workflowId: 'wf-1', isMergeNode: true },
-        execution: { autoFixAttempts: 0, workspacePath: '/tmp/merge-a' },
-      }))
-      .mockReturnValueOnce(makeTask({
-        id: 'merge-a',
-        status: 'awaiting_approval',
-        config: { workflowId: 'wf-1', isMergeNode: true },
-        execution: { autoFixAttempts: 1, workspacePath: '/tmp/merge-a', pendingFixError: 'boom' },
-      }))
-      .mockReturnValueOnce(makeTask({
-        id: 'merge-a',
-        status: 'failed',
-        config: { workflowId: 'wf-1', isMergeNode: true },
-        execution: { autoFixAttempts: 1, workspacePath: '/tmp/merge-a', error: 'Post-fix PR prep failed: conflict' },
-      }))
-      .mockReturnValueOnce(makeTask({
-        id: 'merge-a',
-        status: 'failed',
-        config: { workflowId: 'wf-1', isMergeNode: true },
-        execution: { autoFixAttempts: 1, workspacePath: '/tmp/merge-a' },
-      }))
-      .mockReturnValueOnce(makeTask({
-        id: 'merge-a',
-        status: 'awaiting_approval',
-        config: { workflowId: 'wf-1', isMergeNode: true },
-        execution: { autoFixAttempts: 2, workspacePath: '/tmp/merge-a', pendingFixError: 'boom' },
-      }))
-      .mockReturnValue(makeTask({
-        id: 'merge-a',
-        status: 'awaiting_approval',
-        config: { workflowId: 'wf-1', isMergeNode: true },
-        execution: { autoFixAttempts: 2, workspacePath: '/tmp/merge-a', pendingFixError: 'boom' },
-      }));
+        ...phases[idx],
+      });
+    });
+    // Advance phase at key transition points
+    const origBeginConflictResolution = vi.fn(() => {
+      phase++;
+      return { savedError: 'boom' };
+    });
+    const origSetFixAwaitingApproval = vi.fn(() => { phase++; });
     const shouldAutoFix = vi
       .fn()
       .mockReturnValueOnce(true)
@@ -983,9 +982,9 @@ describe('autoFixOnFailure', () => {
       shouldAutoFix,
       getTask,
       getAutoFixRetryBudget: vi.fn(() => 3),
-      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      beginConflictResolution: origBeginConflictResolution,
       retryTask: vi.fn(() => []),
-      setFixAwaitingApproval: vi.fn(),
+      setFixAwaitingApproval: origSetFixAwaitingApproval,
       approve: vi.fn().mockResolvedValue(started),
       resumeTaskAfterFixApproval: vi.fn().mockResolvedValue(started),
       revertConflictResolution: vi.fn(),
@@ -2006,5 +2005,495 @@ describe('deleteAllWorkflows', () => {
     });
 
     expect(result.snapshotPath).toBe('/tmp/fake-snapshot');
+  });
+});
+
+// ── Lineage guard unit tests ──────────────────────────────────
+
+describe('captureTaskLineage', () => {
+  it('captures selectedAttemptId and generation from task', () => {
+    const orchestrator = {
+      getTask: vi.fn(() => makeTask({
+        execution: { selectedAttemptId: 'att-1', generation: 3 },
+      })),
+    };
+    const snapshot = captureTaskLineage('task-a', orchestrator as unknown as Orchestrator);
+    expect(snapshot).toEqual({
+      taskId: 'task-a',
+      selectedAttemptId: 'att-1',
+      generation: 3,
+    });
+  });
+
+  it('defaults generation to 0 when task has no generation', () => {
+    const orchestrator = {
+      getTask: vi.fn(() => makeTask({ execution: {} })),
+    };
+    const snapshot = captureTaskLineage('task-a', orchestrator as unknown as Orchestrator);
+    expect(snapshot.generation).toBe(0);
+    expect(snapshot.selectedAttemptId).toBeUndefined();
+  });
+});
+
+describe('assertLineageCurrent', () => {
+  it('does nothing when lineage matches and signal is not aborted', () => {
+    const snapshot = { taskId: 'task-a', selectedAttemptId: 'att-1', generation: 3 };
+    const orchestrator = {
+      getTask: vi.fn(() => makeTask({
+        execution: { selectedAttemptId: 'att-1', generation: 3 },
+      })),
+    };
+    expect(() => {
+      assertLineageCurrent(snapshot, orchestrator as unknown as Orchestrator);
+    }).not.toThrow();
+  });
+
+  it('throws StaleLineageError when selectedAttemptId changes', () => {
+    const snapshot = { taskId: 'task-a', selectedAttemptId: 'att-1', generation: 3 };
+    const orchestrator = {
+      getTask: vi.fn(() => makeTask({
+        execution: { selectedAttemptId: 'att-2', generation: 3 },
+      })),
+    };
+    expect(() => {
+      assertLineageCurrent(snapshot, orchestrator as unknown as Orchestrator);
+    }).toThrow(StaleLineageError);
+  });
+
+  it('throws StaleLineageError when generation changes', () => {
+    const snapshot = { taskId: 'task-a', selectedAttemptId: 'att-1', generation: 3 };
+    const orchestrator = {
+      getTask: vi.fn(() => makeTask({
+        execution: { selectedAttemptId: 'att-1', generation: 4 },
+      })),
+    };
+    expect(() => {
+      assertLineageCurrent(snapshot, orchestrator as unknown as Orchestrator);
+    }).toThrow(StaleLineageError);
+  });
+
+  it('throws StaleLineageError when signal is aborted', () => {
+    const snapshot = { taskId: 'task-a', selectedAttemptId: 'att-1', generation: 3 };
+    const orchestrator = {
+      getTask: vi.fn(() => makeTask({
+        execution: { selectedAttemptId: 'att-1', generation: 3 },
+      })),
+    };
+    const ac = new AbortController();
+    ac.abort(new Error('superseded'));
+    expect(() => {
+      assertLineageCurrent(snapshot, orchestrator as unknown as Orchestrator, ac.signal);
+    }).toThrow(StaleLineageError);
+  });
+});
+
+describe('fixWithAgentAction lineage guard', () => {
+  it('throws StaleLineageError when lineage changes during async fix', async () => {
+    let fixCallCount = 0;
+    const orchestrator = {
+      getTask: vi.fn(() => {
+        fixCallCount++;
+        // First call: entry point reads task
+        // Second call: lineage capture after beginConflictResolution
+        // Third call: lineage check after async fix returns (lineage changed)
+        if (fixCallCount <= 2) {
+          return makeTask({
+            status: 'failed',
+            config: { workflowId: 'wf-1' },
+            execution: { error: 'boom', selectedAttemptId: 'att-1', generation: 5 },
+          });
+        }
+        // After fix returns, lineage has advanced
+        return makeTask({
+          status: 'pending',
+          config: { workflowId: 'wf-1' },
+          execution: { selectedAttemptId: 'att-2', generation: 6 },
+        });
+      }),
+      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      setFixAwaitingApproval: vi.fn(),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn(),
+    };
+
+    await expect(fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    })).rejects.toThrow(StaleLineageError);
+
+    // Should NOT have called setFixAwaitingApproval (the late write)
+    expect(orchestrator.setFixAwaitingApproval).not.toHaveBeenCalled();
+    // Should NOT have called revertConflictResolution either
+    expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
+  });
+
+  it('throws StaleLineageError when signal is aborted during async fix', async () => {
+    const ac = new AbortController();
+    const orchestrator = {
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        config: { workflowId: 'wf-1' },
+        execution: { error: 'boom', selectedAttemptId: 'att-1', generation: 5 },
+      })),
+      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      setFixAwaitingApproval: vi.fn(),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn(async () => {
+        // Abort happens during the fix
+        ac.abort(new Error('Superseded by recreate'));
+      }),
+      resolveConflict: vi.fn(),
+    };
+
+    await expect(fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    }, {
+      signal: ac.signal,
+    })).rejects.toThrow(StaleLineageError);
+
+    expect(orchestrator.setFixAwaitingApproval).not.toHaveBeenCalled();
+    expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
+  });
+
+  it('skips revertConflictResolution when lineage changed and fix threw', async () => {
+    let getTaskCallCount = 0;
+    const orchestrator = {
+      getTask: vi.fn(() => {
+        getTaskCallCount++;
+        if (getTaskCallCount <= 2) {
+          return makeTask({
+            status: 'failed',
+            config: { workflowId: 'wf-1' },
+            execution: { error: 'boom', selectedAttemptId: 'att-1', generation: 5 },
+          });
+        }
+        // Lineage changed during fix
+        return makeTask({
+          status: 'pending',
+          config: { workflowId: 'wf-1' },
+          execution: { selectedAttemptId: 'att-2', generation: 6 },
+        });
+      }),
+      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      setFixAwaitingApproval: vi.fn(),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockRejectedValue(new Error('agent crashed')),
+      resolveConflict: vi.fn(),
+    };
+
+    await expect(fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    })).rejects.toThrow('agent crashed');
+
+    // revertConflictResolution must NOT be called when lineage is stale
+    expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
+  });
+
+  it('proceeds normally when lineage is current', async () => {
+    const orchestrator = {
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        config: { workflowId: 'wf-1' },
+        execution: { error: 'boom', selectedAttemptId: 'att-1', generation: 5 },
+      })),
+      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      setFixAwaitingApproval: vi.fn(),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn(),
+    };
+
+    const result = await fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    });
+
+    // Normal path should proceed
+    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'boom');
+    expect(result).toEqual({ kind: 'fixWithAgent', autoApproved: false, started: [] });
+  });
+});
+
+describe('resolveConflictAction lineage guard', () => {
+  it('throws StaleLineageError when lineage changes during conflict resolution', async () => {
+    let getTaskCallCount = 0;
+    const mergeError = JSON.stringify({
+      type: 'merge_conflict',
+      failedBranch: 'experiment/foo',
+      conflictFiles: ['src/foo.ts'],
+    });
+    const orchestrator = {
+      getTask: vi.fn(() => {
+        getTaskCallCount++;
+        if (getTaskCallCount <= 1) {
+          return makeTask({
+            status: 'fixing_with_ai',
+            config: { workflowId: 'wf-1' },
+            execution: { error: mergeError, selectedAttemptId: 'att-1', generation: 5 },
+          });
+        }
+        // Lineage changed
+        return makeTask({
+          status: 'pending',
+          config: { workflowId: 'wf-1' },
+          execution: { selectedAttemptId: 'att-2', generation: 6 },
+        });
+      }),
+      beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
+      setFixAwaitingApproval: vi.fn(),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      appendTaskOutput: vi.fn(),
+    };
+    const taskExecutor = {
+      resolveConflict: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await expect(resolveConflictAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    })).rejects.toThrow(StaleLineageError);
+
+    expect(orchestrator.setFixAwaitingApproval).not.toHaveBeenCalled();
+    expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
+  });
+
+  it('skips revertConflictResolution when lineage changed and resolution threw', async () => {
+    let getTaskCallCount = 0;
+    const orchestrator = {
+      getTask: vi.fn(() => {
+        getTaskCallCount++;
+        if (getTaskCallCount <= 1) {
+          return makeTask({
+            status: 'fixing_with_ai',
+            config: { workflowId: 'wf-1' },
+            execution: { selectedAttemptId: 'att-1', generation: 5 },
+          });
+        }
+        return makeTask({
+          status: 'pending',
+          config: { workflowId: 'wf-1' },
+          execution: { selectedAttemptId: 'att-2', generation: 6 },
+        });
+      }),
+      beginConflictResolution: vi.fn(() => ({ savedError: 'merge err' })),
+      setFixAwaitingApproval: vi.fn(),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      appendTaskOutput: vi.fn(),
+    };
+    const taskExecutor = {
+      resolveConflict: vi.fn().mockRejectedValue(new Error('resolution failed')),
+    };
+
+    await expect(resolveConflictAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    })).rejects.toThrow('resolution failed');
+
+    expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
+  });
+});
+
+describe('autoFixOnFailure lineage guard', () => {
+  it('throws StaleLineageError when lineage changes after async fix', async () => {
+    let getTaskCallCount = 0;
+    const orchestrator = {
+      shouldAutoFix: vi.fn(() => true),
+      getTask: vi.fn(() => {
+        getTaskCallCount++;
+        if (getTaskCallCount <= 2) {
+          return makeTask({
+            status: 'failed',
+            config: { workflowId: 'wf-1' },
+            execution: { autoFixAttempts: 0, error: 'boom', selectedAttemptId: 'att-1', generation: 5 },
+          });
+        }
+        // Lineage advanced after fix returned
+        return makeTask({
+          status: 'pending',
+          config: { workflowId: 'wf-1' },
+          execution: { selectedAttemptId: 'att-2', generation: 6 },
+        });
+      }),
+      getAutoFixRetryBudget: vi.fn(() => 3),
+      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      setFixAwaitingApproval: vi.fn(),
+      retryTask: vi.fn(() => []),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      updateTask: vi.fn(),
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+      logEvent: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn(),
+      executeTasks: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await expect(autoFixOnFailure('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    })).rejects.toThrow(StaleLineageError);
+
+    expect(orchestrator.setFixAwaitingApproval).not.toHaveBeenCalled();
+    expect(orchestrator.retryTask).not.toHaveBeenCalled();
+  });
+
+  it('skips revertConflictResolution on failure when lineage changed', async () => {
+    let getTaskCallCount = 0;
+    const orchestrator = {
+      shouldAutoFix: vi.fn(() => true),
+      getTask: vi.fn(() => {
+        getTaskCallCount++;
+        if (getTaskCallCount <= 2) {
+          return makeTask({
+            status: 'failed',
+            config: { workflowId: 'wf-1' },
+            execution: { autoFixAttempts: 0, error: 'boom', selectedAttemptId: 'att-1', generation: 5 },
+          });
+        }
+        return makeTask({
+          status: 'pending',
+          config: { workflowId: 'wf-1' },
+          execution: { selectedAttemptId: 'att-2', generation: 6 },
+        });
+      }),
+      getAutoFixRetryBudget: vi.fn(() => 3),
+      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      setFixAwaitingApproval: vi.fn(),
+      retryTask: vi.fn(() => []),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      updateTask: vi.fn(),
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+      logEvent: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockRejectedValue(new Error('agent crashed')),
+      resolveConflict: vi.fn(),
+      executeTasks: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await expect(autoFixOnFailure('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    })).rejects.toThrow('agent crashed');
+
+    expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
+  });
+
+  it('throws StaleLineageError when signal is aborted during auto-fix', async () => {
+    const ac = new AbortController();
+    const orchestrator = {
+      shouldAutoFix: vi.fn(() => true),
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        config: { workflowId: 'wf-1' },
+        execution: { autoFixAttempts: 0, error: 'boom', selectedAttemptId: 'att-1', generation: 5 },
+      })),
+      getAutoFixRetryBudget: vi.fn(() => 3),
+      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      setFixAwaitingApproval: vi.fn(),
+      retryTask: vi.fn(() => []),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      updateTask: vi.fn(),
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+      logEvent: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn(async () => {
+        ac.abort(new Error('Superseded by recreate'));
+      }),
+      resolveConflict: vi.fn(),
+      executeTasks: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await expect(autoFixOnFailure('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+      signal: ac.signal,
+    })).rejects.toThrow(StaleLineageError);
+
+    expect(orchestrator.setFixAwaitingApproval).not.toHaveBeenCalled();
+    expect(orchestrator.retryTask).not.toHaveBeenCalled();
+  });
+});
+
+describe('finalizeAppliedFix lineage guard', () => {
+  it('throws StaleLineageError when signal is aborted before finalize', async () => {
+    const ac = new AbortController();
+    ac.abort(new Error('superseded'));
+    const orchestrator = {
+      setFixAwaitingApproval: vi.fn(),
+    };
+
+    await expect(finalizeAppliedFix('task-a', 'saved-error', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      taskExecutor: {} as TaskRunner,
+    }, ac.signal)).rejects.toThrow(StaleLineageError);
+
+    expect(orchestrator.setFixAwaitingApproval).not.toHaveBeenCalled();
+  });
+
+  it('proceeds normally when signal is not aborted', async () => {
+    const ac = new AbortController();
+    const orchestrator = {
+      setFixAwaitingApproval: vi.fn(),
+    };
+
+    const result = await finalizeAppliedFix('task-a', 'saved-error', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      taskExecutor: {} as TaskRunner,
+    }, ac.signal);
+
+    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'saved-error');
+    expect(result).toEqual({ autoApproved: false, started: [] });
   });
 });
