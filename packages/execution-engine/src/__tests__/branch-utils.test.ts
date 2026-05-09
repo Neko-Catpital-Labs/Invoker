@@ -7,6 +7,7 @@ import {
   computeContentHash,
   formatLifecycleTag,
   buildExperimentBranchName,
+  extractAttemptSuffix,
   bashPreserveOrReset,
   bashMergeUpstreams,
   bashEnsureRef,
@@ -147,6 +148,49 @@ describe('formatLifecycleTag', () => {
   it('clamps negative or non-finite generations to 0', () => {
     expect(formatLifecycleTag({ wfGen: -3, taskGen: NaN as unknown as number, attemptShort: 'x' }))
       .toBe('g0.t0.ax');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// extractAttemptSuffix
+// ---------------------------------------------------------------------------
+
+describe('extractAttemptSuffix', () => {
+  it('strips the actionId prefix from a standard attempt ID', () => {
+    // createAttempt produces `${nodeId}-a${shortId}`
+    const actionId = 'wf-1778194314264-16/add-competing-design-proof-tests';
+    const attemptId = `${actionId}-adaf096c1`;
+    expect(extractAttemptSuffix(attemptId, actionId)).toBe('-adaf096c1');
+  });
+
+  it('returns the full string when attemptId does not start with actionId', () => {
+    // Fallback case: selectedAttemptId doesn't match task.id prefix
+    expect(extractAttemptSuffix('attempt-abc', 'task-salt-1')).toBe('attempt-abc');
+  });
+
+  it('returns the full string when actionId is empty', () => {
+    expect(extractAttemptSuffix('attempt-xyz', '')).toBe('attempt-xyz');
+  });
+
+  it('produces shorter lifecycle tags that avoid path-length issues', () => {
+    const actionId = 'wf-1778194314264-16/add-competing-design-proof-tests';
+    const attemptId = `${actionId}-adaf096c1`;
+
+    const shortSuffix = extractAttemptSuffix(attemptId, actionId);
+    const longTag = formatLifecycleTag({ wfGen: 1, taskGen: 1, attemptShort: attemptId });
+    const shortTag = formatLifecycleTag({ wfGen: 1, taskGen: 1, attemptShort: shortSuffix });
+
+    // Short tag must be meaningfully shorter
+    expect(shortTag.length).toBeLessThan(longTag.length);
+    // Short tag still contains the unique suffix
+    expect(shortTag).toContain('daf096c1');
+  });
+
+  it('preserves uniqueness when two attempts share the same actionId', () => {
+    const actionId = 'wf-99/my-task';
+    const a = extractAttemptSuffix(`${actionId}-a11111111`, actionId);
+    const b = extractAttemptSuffix(`${actionId}-a22222222`, actionId);
+    expect(a).not.toBe(b);
   });
 });
 

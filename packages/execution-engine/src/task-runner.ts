@@ -26,7 +26,7 @@ import type { ReviewProviderRegistry } from './review-provider-registry.js';
 import { DockerExecutor } from './docker-executor.js';
 import { WorktreeExecutor } from './worktree-executor.js';
 import { isInvokerManagedPoolBranch } from './plan-base-remote.js';
-import { formatLifecycleTag } from './branch-utils.js';
+import { formatLifecycleTag, extractAttemptSuffix } from './branch-utils.js';
 import { SshExecutor } from './ssh-executor.js';
 import {
   executeMergeNodeImpl,
@@ -438,7 +438,7 @@ export class TaskRunner {
     const lifecycleTag = formatLifecycleTag({
       wfGen: workflowGeneration,
       taskGen: taskExecutionGeneration,
-      attemptShort: attemptId,
+      attemptShort: extractAttemptSuffix(attemptId, task.id),
     });
     const baseBranch = workflow?.baseBranch ?? this.defaultBranch;
     const repoUrl = workflow?.repoUrl;
