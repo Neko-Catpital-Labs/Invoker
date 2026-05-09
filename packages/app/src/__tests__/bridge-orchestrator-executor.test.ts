@@ -9,7 +9,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createTestHarness, type TestHarness, InMemoryBus, InMemoryPersistence, MockGit } from '@invoker/test-kit';
 import { Orchestrator, type PlanDefinition, type TaskState } from '@invoker/workflow-core';
-import { TaskRunner, ExecutorRegistry, type MergeGateProvider } from '@invoker/execution-engine';
+import { TaskRunner, ExecutorRegistry, ReviewProviderRegistry, type MergeGateProvider } from '@invoker/execution-engine';
 import { setWorkflowMergeMode } from '../workflow-actions.js';
 import { executeGlobalTopup } from '../global-topup.js';
 
@@ -1162,7 +1162,7 @@ const MANUAL_MERGE_ONFINISH_NONE_PLAN: PlanDefinition = {
 
 describe('Flow 9c: set-merge-mode external_review', () => {
   const mockMergeGate: MergeGateProvider = {
-    name: 'mock',
+    name: 'github',
     createReview: async () => ({
       url: 'https://github.com/owner/repo/pull/99',
       identifier: 'owner/repo#99',
@@ -1175,8 +1175,14 @@ describe('Flow 9c: set-merge-mode external_review', () => {
     }),
   };
 
+  function mockRegistry(): ReviewProviderRegistry {
+    const registry = new ReviewProviderRegistry();
+    registry.register(mockMergeGate);
+    return registry;
+  }
+
   it('switching manual gate to external_review creates PR metadata and persists external_review', async () => {
-    const h = createTestHarness({ mergeGateProvider: mockMergeGate });
+    const h = createTestHarness({ reviewProviderRegistry: mockRegistry() });
     h.loadAndStart(MANUAL_MERGE_ONFINISH_NONE_PLAN);
     h.completeTask('A');
 

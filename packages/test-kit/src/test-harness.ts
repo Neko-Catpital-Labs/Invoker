@@ -1,5 +1,5 @@
 import { Orchestrator, type PlanDefinition, type TaskState } from '@invoker/workflow-core';
-import { TaskRunner, ExecutorRegistry, type MergeGateProvider } from '@invoker/execution-engine';
+import { TaskRunner, ExecutorRegistry, type ReviewProviderRegistry } from '@invoker/execution-engine';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
 import type { Executor, ExecutorHandle, PersistedTaskMeta, TerminalSpec } from '@invoker/execution-engine';
 import { InMemoryPersistence } from './in-memory-persistence.js';
@@ -84,7 +84,7 @@ export interface TestHarness {
  */
 export function createTestHarness(opts?: {
   maxConcurrency?: number;
-  mergeGateProvider?: MergeGateProvider;
+  reviewProviderRegistry?: ReviewProviderRegistry;
 }): TestHarness {
   const persistence = new InMemoryPersistence();
   const bus = new InMemoryBus();
@@ -102,7 +102,7 @@ export function createTestHarness(opts?: {
     persistence: persistence as any,
     executorRegistry,
     cwd: '/tmp/test-harness',
-    mergeGateProvider: opts?.mergeGateProvider,
+    reviewProviderRegistry: opts?.reviewProviderRegistry,
   });
 
   const git = new MockGit();

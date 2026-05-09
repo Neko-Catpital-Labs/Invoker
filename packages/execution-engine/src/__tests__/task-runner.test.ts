@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TaskRunner } from '../task-runner.js';
 import { collectTransitiveNonMergeTaskIds } from '../merge-runner.js';
 import { SshExecutor } from '../ssh-executor.js';
+import { ReviewProviderRegistry } from '../review-provider-registry.js';
 import type { TaskState } from '@invoker/workflow-core';
 import type { WorkResponse, Logger } from '@invoker/contracts';
 import { EventEmitter } from 'events';
@@ -93,6 +94,13 @@ function createMockLogger(): Logger {
   };
   (logger.child as any).mockReturnValue(logger);
   return logger;
+}
+
+/** Wraps a mock merge-gate provider in a ReviewProviderRegistry for TaskRunner. */
+function wrapInRegistry(provider: Record<string, any>): ReviewProviderRegistry {
+  const registry = new ReviewProviderRegistry();
+  registry.register({ name: 'github', ...provider } as any);
+  return registry;
 }
 
 const tempWorkspaces: string[] = [];
@@ -2444,7 +2452,7 @@ describe('TaskRunner', () => {
         executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
         callbacks: { onComplete },
-        mergeGateProvider: mergeGateProvider as any,
+        reviewProviderRegistry: wrapInRegistry(mergeGateProvider),
       });
 
       const gitCalls: string[][] = [];
@@ -2483,7 +2491,7 @@ describe('TaskRunner', () => {
       const commitCall = gitCalls.find(c => c[0] === 'commit');
       expect(commitCall).toBeUndefined();
 
-      // Should create a PR via mergeGateProvider (using the gate clone dir, not host.cwd)
+      // Should create a PR via review provider (using the gate clone dir, not host.cwd)
       expect(mergeGateProvider.createReview).toHaveBeenCalledWith(
         expect.objectContaining({
           baseBranch: 'master',
@@ -2628,7 +2636,7 @@ describe('TaskRunner', () => {
         executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
         callbacks: { onComplete },
-        mergeGateProvider: mergeGateProvider as any,
+        reviewProviderRegistry: wrapInRegistry(mergeGateProvider),
       });
 
       (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
@@ -2652,7 +2660,7 @@ describe('TaskRunner', () => {
 
       await (executor as any).executeMergeNode(mergeTask);
 
-      // Should create a PR via mergeGateProvider
+      // Should create a PR via review provider
       expect(mergeGateProvider.createReview).toHaveBeenCalledWith(
         expect.objectContaining({
           baseBranch: 'master',
@@ -2709,7 +2717,7 @@ describe('TaskRunner', () => {
         persistence: persistence as any,
         executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
-        mergeGateProvider: mergeGateProvider as any,
+        reviewProviderRegistry: wrapInRegistry(mergeGateProvider),
       });
 
       (executor as any).execGitReadonly = async (args: string[]) => {
@@ -2772,7 +2780,7 @@ describe('TaskRunner', () => {
         executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
         callbacks: { onComplete },
-        mergeGateProvider: mergeGateProvider as any,
+        reviewProviderRegistry: wrapInRegistry(mergeGateProvider),
       });
 
       (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
@@ -2942,7 +2950,7 @@ describe('TaskRunner', () => {
         persistence: persistence as any,
         executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
-        mergeGateProvider: mergeGateProvider as any,
+        reviewProviderRegistry: wrapInRegistry(mergeGateProvider),
       });
 
       (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
@@ -3007,7 +3015,7 @@ describe('TaskRunner', () => {
         persistence: persistence as any,
         executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
-        mergeGateProvider: mergeGateProvider as any,
+        reviewProviderRegistry: wrapInRegistry(mergeGateProvider),
       });
 
       (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
@@ -3219,7 +3227,7 @@ describe('TaskRunner', () => {
         persistence: persistence as any,
         executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
-        mergeGateProvider: mergeGateProvider as any,
+        reviewProviderRegistry: wrapInRegistry(mergeGateProvider),
       });
 
       (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
@@ -3397,7 +3405,7 @@ describe('TaskRunner', () => {
         persistence: persistence as any,
         executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
-        mergeGateProvider: mergeGateProvider as any,
+        reviewProviderRegistry: wrapInRegistry(mergeGateProvider),
       });
 
       // Simulate active poller by adding to activePrPollers map
@@ -3449,7 +3457,7 @@ describe('TaskRunner', () => {
         persistence: persistence as any,
         executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
-        mergeGateProvider: mergeGateProvider as any,
+        reviewProviderRegistry: wrapInRegistry(mergeGateProvider),
       });
 
       // Simulate active poller
@@ -3484,7 +3492,7 @@ describe('TaskRunner', () => {
         persistence: persistence as any,
         executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
-        mergeGateProvider: mergeGateProvider as any,
+        reviewProviderRegistry: wrapInRegistry(mergeGateProvider),
       });
 
       await executor.checkPrApprovalNow('task-with-no-poller');
@@ -3493,7 +3501,7 @@ describe('TaskRunner', () => {
       expect(persistence.updateTask).not.toHaveBeenCalled();
     });
 
-    it('is no-op when no mergeGateProvider and no registry', async () => {
+    it('is no-op when no registry', async () => {
       const orchestrator = {
         getTask: vi.fn((id: string) => ({
           id,
@@ -3561,7 +3569,7 @@ describe('TaskRunner', () => {
           persistence: persistence as any,
           executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
           cwd: '/runner-base-cwd',
-          mergeGateProvider: mergeGateProvider as any,
+          reviewProviderRegistry: wrapInRegistry(mergeGateProvider),
         });
 
         (executor as any).activePrPollers.set('task-ws', setInterval(() => {}, 1000));
@@ -3601,7 +3609,7 @@ describe('TaskRunner', () => {
           persistence: persistence as any,
           executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
           cwd: '/runner-base-cwd',
-          mergeGateProvider: mergeGateProvider as any,
+          reviewProviderRegistry: wrapInRegistry(mergeGateProvider),
         });
 
         (executor as any).activePrPollers.set('task-no-ws', setInterval(() => {}, 1000));
@@ -3644,7 +3652,7 @@ describe('TaskRunner', () => {
           persistence: persistence as any,
           executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
           cwd: '/runner-base-cwd',
-          mergeGateProvider: mergeGateProvider as any,
+          reviewProviderRegistry: wrapInRegistry(mergeGateProvider),
         });
 
         const interval = setInterval(() => {}, 1000);
@@ -3696,7 +3704,7 @@ describe('TaskRunner', () => {
           persistence: persistence as any,
           executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
           cwd: '/runner-base-cwd',
-          mergeGateProvider: mergeGateProvider as any,
+          reviewProviderRegistry: wrapInRegistry(mergeGateProvider),
         });
 
         await executor.checkMergeGateStatuses();
@@ -3735,7 +3743,7 @@ describe('TaskRunner', () => {
           persistence: persistence as any,
           executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
           cwd: '/runner-base-cwd',
-          mergeGateProvider: mergeGateProvider as any,
+          reviewProviderRegistry: wrapInRegistry(mergeGateProvider),
         });
 
         await executor.checkMergeGateStatuses();
@@ -3777,7 +3785,7 @@ describe('TaskRunner', () => {
           persistence: persistence as any,
           executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
           cwd: '/runner-base-cwd',
-          mergeGateProvider: mergeGateProvider as any,
+          reviewProviderRegistry: wrapInRegistry(mergeGateProvider),
         });
 
         await executor.checkMergeGateStatuses();
@@ -3822,7 +3830,7 @@ describe('TaskRunner', () => {
             persistence: persistence as any,
             executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
             cwd: '/runner-base-cwd',
-            mergeGateProvider: mergeGateProvider as any,
+            reviewProviderRegistry: wrapInRegistry(mergeGateProvider),
           });
 
           (executor as any).startPrPolling('poll-task', 'owner/repo#300', 'wf-1');
@@ -3866,7 +3874,7 @@ describe('TaskRunner', () => {
             persistence: persistence as any,
             executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
             cwd: '/runner-base-cwd',
-            mergeGateProvider: mergeGateProvider as any,
+            reviewProviderRegistry: wrapInRegistry(mergeGateProvider),
           });
 
           (executor as any).startPrPolling('poll-task-no-ws', 'owner/repo#301', 'wf-1');
@@ -3913,7 +3921,7 @@ describe('TaskRunner', () => {
             persistence: persistence as any,
             executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
             cwd: '/runner-base-cwd',
-            mergeGateProvider: mergeGateProvider as any,
+            reviewProviderRegistry: wrapInRegistry(mergeGateProvider),
           });
 
           (executor as any).startPrPolling('poll-approved', 'owner/repo#302', 'wf-1');
@@ -6267,7 +6275,7 @@ describe('TaskRunner', () => {
         persistence: persistence as any,
         executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp/host',
-        mergeGateProvider: mergeGateProvider as any,
+        reviewProviderRegistry: wrapInRegistry(mergeGateProvider),
       });
 
       (executor as any).execGitReadonly = async (args: string[]) => {
@@ -6338,7 +6346,7 @@ describe('TaskRunner', () => {
       const hostCalls = gitCalls.filter((c) => c.dir === '/tmp/host');
       expect(hostCalls).toHaveLength(0);
 
-      // PR created via mergeGateProvider (using gate clone dir, not host.cwd)
+      // PR created via review provider (using gate clone dir, not host.cwd)
       expect(mergeGateProvider.createReview).toHaveBeenCalledWith(
         expect.objectContaining({
           baseBranch: 'master',

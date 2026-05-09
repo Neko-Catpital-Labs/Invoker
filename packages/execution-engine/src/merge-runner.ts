@@ -15,7 +15,6 @@ import { OrchestratorError, OrchestratorErrorCode } from '@invoker/workflow-core
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { WorkResponse } from '@invoker/contracts';
 import type { TaskRunnerCallbacks } from './task-runner.js';
-import type { MergeGateProvider } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 import { resolvePublicationProvider } from './publication-strategy-router.js';
@@ -142,7 +141,6 @@ export interface MergeRunnerHost {
   readonly defaultBranch: string | undefined;
   readonly callbacks: TaskRunnerCallbacks;
   readonly cwd: string;
-  readonly mergeGateProvider?: MergeGateProvider;
   readonly reviewProviderRegistry?: ReviewProviderRegistry;
 
   execGitReadonly(args: string[], cwd?: string): Promise<string>;
@@ -436,7 +434,6 @@ export async function executeMergeNodeImpl(
         const reviewProvider = resolvePublicationProvider(
           publicationStrategy,
           host.reviewProviderRegistry,
-          host.mergeGateProvider,
         );
 
         let fullSummary = summary;
@@ -940,7 +937,6 @@ export async function publishAfterFixImpl(
       const reviewProvider = resolvePublicationProvider(
         publicationStrategy,
         host.reviewProviderRegistry,
-        host.mergeGateProvider,
       );
 
       const result = await reviewProvider.createReview({

@@ -34,15 +34,12 @@ export type PublicationStrategyKey = 'github_pr' | 'mergify_stack';
  *
  * @param strategy    The workflow-level strategy key (defaults to `'github_pr'`).
  * @param registry    Provider registry to look up the concrete implementation.
- * @param fallback    Optional provider to use when the registry has no match
- *                    (e.g. the legacy `mergeGateProvider` singleton on TaskRunner).
  * @returns           The resolved provider.
  * @throws            When no provider can be resolved for the strategy.
  */
 export function resolvePublicationProvider(
   strategy: string | undefined,
   registry: ReviewProviderRegistry | undefined,
-  fallback?: MergeGateProvider,
 ): MergeGateProvider {
   const effectiveStrategy = strategy ?? 'github_pr';
   const providerName = STRATEGY_TO_PROVIDER[effectiveStrategy];
@@ -54,24 +51,9 @@ export function resolvePublicationProvider(
     );
   }
 
-  // Try registry first.
   if (registry) {
     const provider = registry.get(providerName);
     if (provider) return provider;
-  }
-
-  // Fall back to the legacy singleton when the registry has no match
-  // and the strategy maps to the same provider the fallback represents.
-  if (fallback && fallback.name === providerName) {
-    return fallback;
-  }
-
-  // When the fallback is a different provider (or absent) and the strategy
-  // is the default `github_pr`, still accept the fallback. This preserves
-  // backward compatibility for callers that only set `mergeGateProvider`
-  // without populating the registry.
-  if (fallback && effectiveStrategy === 'github_pr') {
-    return fallback;
   }
 
   throw new Error(

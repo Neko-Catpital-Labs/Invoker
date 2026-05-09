@@ -1470,7 +1470,6 @@ if (isHeadless) {
         secretsFile: resolveSecretsFilePath(invokerConfig),
       },
       remoteTargetsProvider: () => loadConfig().remoteTargets ?? {},
-      mergeGateProvider: new GitHubMergeGateProvider(),
       reviewProviderRegistry: (() => {
         const registry = new ReviewProviderRegistry();
         registry.register(new GitHubMergeGateProvider());
