@@ -353,8 +353,53 @@ describe('headless-client', () => {
     expect(firstExecCalls).toBe(1);
   }, 15_000);
 
-  it('falls back to the host runtime for non-mutating commands', async () => {
+  it('falls back to the host runtime for read-only commands that are not owner-delegated', async () => {
     const runElectronHeadless = vi.fn(async () => 0);
+    const exitCode = await runHeadlessClientCommand(['query', 'audit', 'wf-1/task-1'], {
+      messageBus: new LocalBus(),
+      ensureStandaloneOwner: vi.fn(async () => {}),
+      runElectronHeadless,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(runElectronHeadless).toHaveBeenCalledWith(['query', 'audit', 'wf-1/task-1']);
+  });
+
+  it('delegates query workflows to a reachable owner endpoint', async () => {
+    const bus = new LocalBus();
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
+    bus.onRequest('headless.query', async () => ({
+      workflows: [
+        {
+          id: 'wf-1',
+          name: 'example',
+          status: 'running',
+          createdAt: '2026-05-08T00:00:00.000Z',
+          updatedAt: '2026-05-08T00:00:00.000Z',
+        },
+      ],
+    }));
+
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const runElectronHeadless = vi.fn(async () => 0);
+
+    const exitCode = await runHeadlessClientCommand(['query', 'workflows', '--output', 'json'], {
+      messageBus: bus,
+      ensureStandaloneOwner: vi.fn(async () => {}),
+      runElectronHeadless,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(runElectronHeadless).not.toHaveBeenCalled();
+    expect(stdout).toHaveBeenCalledWith(
+      '[{"id":"wf-1","name":"example","status":"running","createdAt":"2026-05-08T00:00:00.000Z","updatedAt":"2026-05-08T00:00:00.000Z"}]\n',
+    );
+    stdout.mockRestore();
+  });
+
+  it('falls back to the host runtime for query workflows when no owner is reachable', async () => {
+    const runElectronHeadless = vi.fn(async () => 0);
+
     const exitCode = await runHeadlessClientCommand(['query', 'workflows'], {
       messageBus: new LocalBus(),
       ensureStandaloneOwner: vi.fn(async () => {}),

@@ -1006,7 +1006,7 @@ if (isHeadless) {
         });
         messageBus.onRequest('headless.query', async (req: unknown) => {
           noteStandaloneOwnerActivity();
-          const { kind, reset } = req as { kind?: string; reset?: boolean };
+          const { kind, reset, status } = req as { kind?: string; reset?: boolean; status?: string };
           if (kind === 'ui-perf') {
             if (reset) {
               headlessDeps.resetUiPerfStats?.();
@@ -1018,6 +1018,13 @@ if (isHeadless) {
           }
           if (kind === 'queue') {
             return orchestrator.getQueueStatus() as unknown as Record<string, unknown>;
+          }
+          if (kind === 'workflows') {
+            let workflows = persistence.listWorkflows();
+            if (status) {
+              workflows = workflows.filter((workflow) => workflow.status === status);
+            }
+            return { workflows };
           }
           throw new Error(`Unsupported headless query: ${String(kind)}`);
         });
@@ -2502,7 +2509,7 @@ if (isHeadless) {
         mode: 'gui',
       }));
       messageBus.onRequest('headless.query', async (req: unknown) => {
-        const { kind, reset } = req as { kind?: string; reset?: boolean };
+        const { kind, reset, status } = req as { kind?: string; reset?: boolean; status?: string };
         if (kind === 'ui-perf') {
           if (reset) {
             resetUiPerfStats();
@@ -2514,6 +2521,13 @@ if (isHeadless) {
         }
         if (kind === 'queue') {
           return orchestrator.getQueueStatus() as unknown as Record<string, unknown>;
+        }
+        if (kind === 'workflows') {
+          let workflows = persistence.listWorkflows();
+          if (status) {
+            workflows = workflows.filter((workflow) => workflow.status === status);
+          }
+          return { workflows };
         }
         throw new Error(`Unsupported headless query: ${String(kind)}`);
       });

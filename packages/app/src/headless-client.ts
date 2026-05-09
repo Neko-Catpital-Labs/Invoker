@@ -136,7 +136,8 @@ async function delegateReadOnlyQuery(
 ): Promise<boolean> {
   const isUiPerf = args[0] === 'query' && args[1] === 'ui-perf';
   const isQueue = (args[0] === 'query' && args[1] === 'queue') || args[0] === 'queue';
-  if (!isUiPerf && !isQueue) {
+  const isWorkflows = args[0] === 'query' && args[1] === 'workflows';
+  if (!isUiPerf && !isQueue && !isWorkflows) {
     return false;
   }
 
@@ -145,20 +146,34 @@ async function delegateReadOnlyQuery(
     { messageBus: bus, refreshMessageBus, ensureStandaloneOwner: async () => {} },
     { discoveryTimeoutMs: 2_000 },
   );
-  const ownerResult = await resolver.waitForAny(READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS);
+  const ownerReadyTimeoutMs = isWorkflows ? 2_000 : READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS;
+  const ownerResult = await resolver.waitForAny(ownerReadyTimeoutMs);
   if (!ownerResult.resolved) {
-    throw new Error(isUiPerf
-      ? 'query ui-perf requires a running shared owner process'
-      : 'query queue requires a running shared owner process');
+    if (isWorkflows) {
+      return false;
+    }
+    throw new Error(
+      isUiPerf
+        ? 'query ui-perf requires a running shared owner process'
+        : 'query queue requires a running shared owner process',
+    );
   }
 
   let messageBus = ownerResult.bus;
-  const deadline = Date.now() + READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS;
+  const deadline = Date.now() + ownerReadyTimeoutMs;
   let response: Record<string, unknown> | null = null;
   while (Date.now() < deadline) {
     if (isUiPerf) {
       const reset = args.includes('--reset');
       response = await tryDelegateQueryUiPerf(messageBus, reset, READ_ONLY_QUERY_REQUEST_TIMEOUT_MS);
+    } else if (isWorkflows) {
+      const statusIndex = args.indexOf('--status');
+      const status = statusIndex >= 0 ? args[statusIndex + 1] : undefined;
+      response = await tryDelegateQuery(
+        messageBus,
+        { kind: 'workflows', status },
+        READ_ONLY_QUERY_REQUEST_TIMEOUT_MS,
+      );
     } else {
       response = await tryDelegateQuery(messageBus, { kind: 'queue' }, READ_ONLY_QUERY_REQUEST_TIMEOUT_MS);
     }
@@ -169,12 +184,35 @@ async function delegateReadOnlyQuery(
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   if (!response) {
-    throw new Error(isUiPerf
-      ? 'Live owner is present but did not serve ui-perf query'
-      : 'Live owner is present but did not serve queue query');
+    if (isWorkflows) {
+      return false;
+    }
+    throw new Error(
+      isUiPerf
+        ? 'Live owner is present but did not serve ui-perf query'
+        : 'Live owner is present but did not serve queue query',
+    );
   }
   if (isUiPerf) {
     process.stdout.write(`${JSON.stringify(response)}\n`);
+    return true;
+  }
+  if (isWorkflows) {
+    const outputIndex = args.indexOf('--output');
+    const output = outputIndex >= 0 ? args[outputIndex + 1] : undefined;
+    const workflows = Array.isArray(response.workflows)
+      ? response.workflows as Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string }>
+      : [];
+    const { formatAsJson, formatAsJsonl, formatAsLabel, formatWorkflowList } = await import('./formatter.js');
+    if (output === 'json') {
+      process.stdout.write(`${formatAsJson(workflows)}\n`);
+    } else if (output === 'jsonl') {
+      process.stdout.write(`${formatAsJsonl(workflows)}\n`);
+    } else if (output === 'label') {
+      process.stdout.write(`${formatAsLabel(workflows)}\n`);
+    } else {
+      process.stdout.write(`${formatWorkflowList(workflows)}\n`);
+    }
     return true;
   }
   const outputIndex = args.indexOf('--output');
