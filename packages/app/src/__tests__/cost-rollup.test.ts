@@ -408,6 +408,77 @@ describe('buildAttributionContext', () => {
     const ctx = buildAttributionContext(task);
     expect(ctx?.executorType).toBe('worktree');
   });
+
+  it('uses caller-supplied attemptId when provided', () => {
+    const task: CostTaskInfo = {
+      id: 'wf-1/task-a',
+      workflowId: 'wf-1',
+      executorType: 'worktree',
+      agentSessionId: 'sess-123',
+      agentName: 'claude',
+      attemptId: 'wf-1/task-a-abc123',
+    };
+    const ctx = buildAttributionContext(task);
+    expect(ctx?.attemptId).toBe('wf-1/task-a-abc123');
+  });
+
+  it('falls back to ${task.id}-latest when attemptId is not provided', () => {
+    const task: CostTaskInfo = {
+      id: 'wf-1/task-a',
+      workflowId: 'wf-1',
+      executorType: 'worktree',
+      agentSessionId: 'sess-123',
+    };
+    const ctx = buildAttributionContext(task);
+    expect(ctx?.attemptId).toBe('wf-1/task-a-latest');
+  });
+
+  it('persisted attemptId propagates through attribution into normalized events', () => {
+    const task: CostTaskInfo = {
+      id: 'wf-1/task-a',
+      workflowId: 'wf-1',
+      executorType: 'worktree',
+      agentSessionId: 'sess-123',
+      agentName: 'codex',
+      attemptId: 'att-persisted-abc',
+    };
+    const ctx = buildAttributionContext(task)!;
+    const events = attributeSessionUsage(
+      [makeUsageEvent({ eventId: 'evt-1' })],
+      ctx,
+    );
+
+    expect(events[0].attribution.attemptId).toBe('att-persisted-abc');
+    // Ensure the attempt ID is NOT the placeholder
+    expect(events[0].attribution.attemptId).not.toBe('wf-1/task-a-latest');
+  });
+
+  it('deterministic serialized output contains the resolved attempt ID', () => {
+    const task: CostTaskInfo = {
+      id: 'wf-1/task-a',
+      workflowId: 'wf-1',
+      executorType: 'worktree',
+      agentSessionId: 'sess-123',
+      agentName: 'claude',
+      attemptId: 'att-real-42',
+    };
+    const ctx = buildAttributionContext(task)!;
+    const events = attributeSessionUsage(
+      [makeUsageEvent({ eventId: 'evt-x' })],
+      ctx,
+    );
+
+    const groups = groupCostEvents(events, ['task']);
+    const serialized = JSON.stringify(groups.map(serializeGroupedRollup));
+
+    // The serialized output must not contain the placeholder pattern
+    expect(serialized).not.toContain('wf-1/task-a-latest');
+
+    // Run again to verify determinism
+    const groups2 = groupCostEvents(events, ['task']);
+    const serialized2 = JSON.stringify(groups2.map(serializeGroupedRollup));
+    expect(serialized).toBe(serialized2);
+  });
 });
 
 // ── serializeGroupedRollup ─────────────────────────────────

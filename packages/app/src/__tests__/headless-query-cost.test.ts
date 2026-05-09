@@ -96,6 +96,7 @@ describe('headless query cost', () => {
         readOnly: false,
         listWorkflows: vi.fn(() => [makeWorkflow('wf-1', 'completed')]),
         loadTasks: vi.fn(() => []),
+        loadAttempts: vi.fn(() => []),
       } as unknown as SQLiteAdapter,
       commandService: {} as CommandService,
       executorRegistry: {} as any,
@@ -204,6 +205,40 @@ describe('headless query cost', () => {
 
     expect(output1).toBe(output2);
   });
+
+  it('calls loadAttempts for each task during cost query', async () => {
+    const loadAttemptsSpy = vi.fn(() => []);
+    (mockDeps.persistence as any).loadAttempts = loadAttemptsSpy;
+
+    await runHeadless(['query', 'cost', '--output', 'json'], mockDeps);
+
+    // loadAttempts should be called once per task
+    expect(loadAttemptsSpy).toHaveBeenCalledWith('wf-1/task-a');
+    expect(loadAttemptsSpy).toHaveBeenCalledWith('wf-1/task-b');
+  });
+
+  it('resolves attempt ID by agentSessionId match for cost query', async () => {
+    (mockDeps.persistence as any).loadAttempts = vi.fn((nodeId: string) => {
+      if (nodeId === 'wf-1/task-a') {
+        return [
+          { id: 'attempt-old', agentSessionId: 'sess-other' },
+          { id: 'attempt-exact', agentSessionId: 'sess-wf-1-task-a' },
+        ];
+      }
+      return [];
+    });
+
+    // Use cost-events to see the attempt IDs in the serialized output
+    await runHeadless(['query', 'cost-events', '--output', 'json'], mockDeps);
+    const output = stdoutSpy.mock.calls[0][0] as string;
+    const parsed = JSON.parse(output);
+
+    const taskAEvents = parsed.filter((e: any) => e.taskId === 'wf-1/task-a');
+    expect(taskAEvents.length).toBeGreaterThan(0);
+    for (const e of taskAEvents) {
+      expect(e.attemptId).toBe('attempt-exact');
+    }
+  });
 });
 
 describe('headless query cost-events', () => {
@@ -252,6 +287,7 @@ describe('headless query cost-events', () => {
         readOnly: false,
         listWorkflows: vi.fn(() => [makeWorkflow('wf-1', 'completed')]),
         loadTasks: vi.fn(() => []),
+        loadAttempts: vi.fn(() => []),
       } as unknown as SQLiteAdapter,
       commandService: {} as CommandService,
       executorRegistry: {} as any,
@@ -381,5 +417,68 @@ describe('headless query cost-events', () => {
     await expect(
       runHeadless(['query', 'cost-events', '--foo'], mockDeps),
     ).rejects.toThrow('Unknown query flag');
+  });
+
+  it('cost-events uses persisted attempt ID matched by agentSessionId', async () => {
+    (mockDeps.persistence as any).loadAttempts = vi.fn((nodeId: string) => {
+      if (nodeId === 'wf-1/task-a') {
+        return [{ id: 'att-session-match', agentSessionId: 'sess-wf-1-task-a' }];
+      }
+      return [];
+    });
+
+    await runHeadless(['query', 'cost-events', '--output', 'json'], mockDeps);
+    const output = stdoutSpy.mock.calls[0][0] as string;
+    const parsed = JSON.parse(output);
+
+    const taskAEvents = parsed.filter((e: any) => e.taskId === 'wf-1/task-a');
+    expect(taskAEvents.length).toBeGreaterThan(0);
+    for (const e of taskAEvents) {
+      expect(e.attemptId).toBe('att-session-match');
+    }
+  });
+
+  it('cost-events falls back to selectedAttemptId', async () => {
+    const tasksWithSelected = [
+      makeTask('wf-1', 'task-a', {
+        execution: {
+          agentSessionId: 'sess-wf-1-task-a',
+          agentName: 'codex',
+          selectedAttemptId: 'att-selected-99',
+        } as any,
+      }),
+    ];
+    mockDeps.orchestrator.getAllTasks = vi.fn(() => tasksWithSelected as any);
+    (mockDeps.persistence as any).loadAttempts = vi.fn(() => [
+      { id: 'att-no-match', agentSessionId: 'sess-unrelated' },
+    ]);
+
+    await runHeadless(['query', 'cost-events', '--output', 'json'], mockDeps);
+    const output = stdoutSpy.mock.calls[0][0] as string;
+    const parsed = JSON.parse(output);
+
+    expect(parsed.length).toBeGreaterThan(0);
+    for (const e of parsed) {
+      expect(e.attemptId).toBe('att-selected-99');
+    }
+  });
+
+  it('cost-events falls back to latest persisted attempt', async () => {
+    (mockDeps.persistence as any).loadAttempts = vi.fn(() => [
+      { id: 'att-oldest', agentSessionId: 'sess-x' },
+      { id: 'att-newest', agentSessionId: 'sess-y' },
+    ]);
+
+    await runHeadless(['query', 'cost-events', '--output', 'json'], mockDeps);
+    const output = stdoutSpy.mock.calls[0][0] as string;
+    const parsed = JSON.parse(output);
+
+    // No session match (task sessions don't match attempt sessions),
+    // no selectedAttemptId, so falls back to latest = last element
+    const taskAEvents = parsed.filter((e: any) => e.taskId === 'wf-1/task-a');
+    expect(taskAEvents.length).toBeGreaterThan(0);
+    for (const e of taskAEvents) {
+      expect(e.attemptId).toBe('att-newest');
+    }
   });
 });

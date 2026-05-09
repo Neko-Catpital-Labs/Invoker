@@ -653,6 +653,7 @@ async function headlessCosts(
         lastAgentSessionId: task.execution.lastAgentSessionId,
         agentName: task.execution.agentName,
         lastAgentName: task.execution.lastAgentName,
+        attemptId: resolveAttemptIdFromPersistence(task, deps.persistence),
       });
       if (!ctx) continue;
 
@@ -707,6 +708,39 @@ async function headlessCosts(
 
 type CostQueryDeps = Pick<HeadlessDeps, 'orchestrator' | 'persistence' | 'executionAgentRegistry'>;
 
+/**
+ * Resolve the best attempt ID for a task from persistence.
+ *
+ * Priority:
+ * 1. Persisted attempt whose `agentSessionId` matches the task's current session
+ * 2. `task.execution.selectedAttemptId`
+ * 3. Latest persisted attempt (last element from `loadAttempts`)
+ *
+ * Returns `undefined` when no persisted attempt can be found.
+ */
+function resolveAttemptIdFromPersistence(
+  task: { id: string; execution: { agentSessionId?: string; selectedAttemptId?: string } },
+  persistence: { loadAttempts(nodeId: string): { id: string; agentSessionId?: string }[] },
+): string | undefined {
+  const attempts = persistence.loadAttempts(task.id);
+
+  // 1. Exact agentSessionId match
+  const sessionId = task.execution.agentSessionId;
+  if (sessionId) {
+    const match = attempts.find(a => a.agentSessionId === sessionId);
+    if (match) return match.id;
+  }
+
+  // 2. selectedAttemptId from task execution state
+  const selected = task.execution.selectedAttemptId;
+  if (selected) return selected;
+
+  // 3. Latest persisted attempt (loadAttempts returns chronological order)
+  if (attempts.length > 0) return attempts[attempts.length - 1].id;
+
+  return undefined;
+}
+
 async function collectCostEvents(
   flags: QueryFlags,
   deps: CostQueryDeps,
@@ -742,6 +776,7 @@ async function collectCostEvents(
         lastAgentSessionId: task.execution.lastAgentSessionId,
         agentName: task.execution.agentName,
         lastAgentName: task.execution.lastAgentName,
+        attemptId: resolveAttemptIdFromPersistence(task, deps.persistence),
       });
       if (!ctx) continue;
 
