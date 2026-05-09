@@ -915,6 +915,87 @@ describe('TaskPanel double-click editing', () => {
     });
   });
 
+  describe('PR target repo display for pending merge gates', () => {
+    it('renders normalized repo text for pending merge gate with SSH workflow repo URL', () => {
+      const task = makeTask({
+        status: 'pending',
+        config: { isMergeNode: true, workflowId: 'wf-1' } as TaskState['config'],
+      });
+      render(
+        <TaskPanel
+          task={task}
+          workflowRepoUrl="git@github.com:owner/repo.git"
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+        />,
+      );
+
+      expect(screen.getByTestId('pr-target-repo')).toBeInTheDocument();
+      expect(screen.getByText('github.com/owner/repo')).toBeInTheDocument();
+    });
+
+    it('renders normalized repo text for pending merge gate with HTTPS workflow repo URL', () => {
+      const task = makeTask({
+        status: 'pending',
+        config: { isMergeNode: true, workflowId: 'wf-1' } as TaskState['config'],
+      });
+      render(
+        <TaskPanel
+          task={task}
+          workflowRepoUrl="https://github.com/owner/repo.git"
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+        />,
+      );
+
+      expect(screen.getByTestId('pr-target-repo')).toBeInTheDocument();
+      expect(screen.getByText('github.com/owner/repo')).toBeInTheDocument();
+    });
+
+    it('does not render PR target repo when reviewUrl already exists', () => {
+      const task = makeTask({
+        status: 'pending',
+        config: { isMergeNode: true, workflowId: 'wf-1' } as TaskState['config'],
+        execution: { reviewUrl: 'https://github.com/owner/repo/pull/42' } as TaskState['execution'],
+      });
+      render(
+        <TaskPanel
+          task={task}
+          workflowRepoUrl="git@github.com:owner/repo.git"
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+        />,
+      );
+
+      expect(screen.queryByTestId('pr-target-repo')).not.toBeInTheDocument();
+    });
+
+    it('does not render PR target repo when merge gate is not pending', () => {
+      const task = makeTask({
+        status: 'awaiting_approval',
+        config: { isMergeNode: true, workflowId: 'wf-1' } as TaskState['config'],
+      });
+      render(
+        <TaskPanel
+          task={task}
+          workflowRepoUrl="git@github.com:owner/repo.git"
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+        />,
+      );
+
+      expect(screen.queryByTestId('pr-target-repo')).not.toBeInTheDocument();
+    });
+  });
+
   describe('Execution agent selector', () => {
     const mockOnEditAgent = vi.fn();
 

@@ -33,6 +33,8 @@ export interface WorkflowMeta {
   featureBranch?: string;
   onFinish?: string;
   mergeMode?: string;
+  repoUrl?: string;
+  intermediateRepoUrl?: string;
 }
 
 export interface WorkflowStatus {

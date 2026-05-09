@@ -156,6 +156,8 @@ export interface WorkflowMeta {
   featureBranch?: string;
   onFinish?: string;
   mergeMode?: string;
+  repoUrl?: string;
+  intermediateRepoUrl?: string;
   reviewProvider?: string;
 }
 
