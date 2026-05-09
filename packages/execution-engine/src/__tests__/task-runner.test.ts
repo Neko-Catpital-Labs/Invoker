@@ -2460,6 +2460,11 @@ describe('TaskRunner', () => {
       };
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: '## Summary\n\nAuthored body',
+        sessionId: 'sess-pr-ext',
+        agentName: 'codex',
+      });
 
       const mergeTask = makeTask({
         id: '__merge__wf-1',
@@ -2483,13 +2488,22 @@ describe('TaskRunner', () => {
       const commitCall = gitCalls.find(c => c[0] === 'commit');
       expect(commitCall).toBeUndefined();
 
-      // Should create a PR via mergeGateProvider (using the gate clone dir, not host.cwd)
+      // Should route through shared PR-authoring helper
+      expect((executor as any).authorPrBodyWithSkill).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'Test Workflow',
+        baseBranch: 'master',
+        featureBranch: 'plan/feature',
+        cwd: '/tmp/mock-wt',
+      }));
+
+      // Should create a PR via mergeGateProvider with authored body
       expect(mergeGateProvider.createReview).toHaveBeenCalledWith(
         expect.objectContaining({
           baseBranch: 'master',
           featureBranch: 'plan/feature',
           title: 'Test Workflow',
           cwd: '/tmp/mock-wt',
+          body: '## Summary\n\nAuthored body',
         }),
       );
 
@@ -2642,6 +2656,11 @@ describe('TaskRunner', () => {
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
       (executor as any).startPrPolling = vi.fn();
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: '## Summary\n\nAuthored body',
+        sessionId: 'sess-pr-ext2',
+        agentName: 'codex',
+      });
 
       const mergeTask = makeTask({
         id: '__merge__wf-1',
@@ -2651,6 +2670,9 @@ describe('TaskRunner', () => {
       });
 
       await (executor as any).executeMergeNode(mergeTask);
+
+      // Should route through shared PR-authoring helper
+      expect((executor as any).authorPrBodyWithSkill).toHaveBeenCalled();
 
       // Should create a PR via mergeGateProvider
       expect(mergeGateProvider.createReview).toHaveBeenCalledWith(
@@ -2721,6 +2743,11 @@ describe('TaskRunner', () => {
       (executor as any).createMergeWorktree = createMergeWorktreeSpy;
       (executor as any).removeMergeWorktree = async () => {};
       (executor as any).startPrPolling = vi.fn();
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: '## Summary\n\nAuthored body',
+        sessionId: 'sess-pr-ext3',
+        agentName: 'codex',
+      });
 
       const mergeTask = makeTask({
         id: '__merge__wf-1',
@@ -2786,6 +2813,11 @@ describe('TaskRunner', () => {
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
       (executor as any).startPrPolling = vi.fn();
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: '## Summary\n\nAuthored body',
+        sessionId: 'sess-pr-ext4',
+        agentName: 'codex',
+      });
 
       const mergeTask = makeTask({
         id: '__merge__wf-1',
@@ -2956,6 +2988,11 @@ describe('TaskRunner', () => {
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
       (executor as any).startPrPolling = vi.fn();
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: '## Summary\n\nAuthored body',
+        sessionId: 'sess-pr-ext5',
+        agentName: 'codex',
+      });
 
       const mergeTask = makeTask({
         id: '__merge__wf-1',
@@ -3021,6 +3058,11 @@ describe('TaskRunner', () => {
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
       (executor as any).startPrPolling = vi.fn();
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: '## Summary\n\nAuthored body',
+        sessionId: 'sess-pr-ext6',
+        agentName: 'codex',
+      });
 
       const consolidateSpy = vi.spyOn(executor as any, 'consolidateAndMerge');
 
@@ -3187,7 +3229,7 @@ describe('TaskRunner', () => {
       );
     });
 
-    it('executeMergeNode passes summary body to createReview in external_review mode', async () => {
+    it('executeMergeNode passes authored body to createReview in external_review mode', async () => {
       const allTasks = [
         makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
       ];
@@ -3234,6 +3276,11 @@ describe('TaskRunner', () => {
       (executor as any).removeMergeWorktree = async () => {};
       (executor as any).startPrPolling = vi.fn();
       (executor as any).buildMergeSummary = vi.fn().mockResolvedValue('## Summary\nTest summary');
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: '## Summary\n\nAuthored PR body from summary',
+        sessionId: 'sess-pr-ext7',
+        agentName: 'codex',
+      });
 
       const mergeTask = makeTask({
         id: '__merge__wf-1',
@@ -3244,8 +3291,17 @@ describe('TaskRunner', () => {
 
       await (executor as any).executeMergeNode(mergeTask);
 
+      // Should route through shared PR-authoring helper with the summary as input
+      expect((executor as any).authorPrBodyWithSkill).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workflowSummary: '## Summary\nTest summary',
+          cwd: '/tmp/mock-wt',
+        }),
+      );
+
+      // createReview receives the authored body, not the raw summary
       expect(mergeGateProvider.createReview).toHaveBeenCalledWith(
-        expect.objectContaining({ body: '## Summary\nTest summary' }),
+        expect.objectContaining({ body: '## Summary\n\nAuthored PR body from summary' }),
       );
       expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith(
         '__merge__wf-1',
@@ -6102,6 +6158,19 @@ describe('TaskRunner', () => {
       writeFileSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr', 'SKILL.md'), '# make-pr\n');
 
       try {
+        const codexAgent = {
+          name: 'codex',
+          stdinMode: 'ignore',
+          linuxTerminalTail: 'exec_bash',
+          bundledSkillRoot: join(tempHome, '.codex', 'skills'),
+          bundledSkills: ['make-pr'],
+          buildCommand: () => ({
+            cmd: 'node',
+            args: ['-e', 'process.stdout.write("## Summary\\n\\nAuthored\\n\\n## Test Plan\\n\\n- [x] `pnpm test`\\n\\n## Revert Plan\\n\\n- Safe to revert? Yes\\n- Revert command: `git revert <sha>`\\n- Post-revert steps: None\\n- Data migration? No\\n")'],
+            sessionId: 'sess-pr-body',
+          }),
+          buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+        };
         const executor = new TaskRunner({
           orchestrator: {
             getTask: () => null,
@@ -6110,18 +6179,10 @@ describe('TaskRunner', () => {
           persistence: {} as any,
           executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
           executionAgentRegistry: {
-            getOrThrow: vi.fn().mockReturnValue({
-              name: 'codex',
-              stdinMode: 'ignore',
-              linuxTerminalTail: 'exec_bash',
-              buildCommand: () => ({
-                cmd: 'node',
-                args: ['-e', 'process.stdout.write("## Summary\\n\\nAuthored\\n\\n## Test Plan\\n\\n- [x] `pnpm test`\\n\\n## Revert Plan\\n\\n- Safe to revert? Yes\\n- Revert command: `git revert <sha>`\\n- Post-revert steps: None\\n- Data migration? No\\n")'],
-                sessionId: 'sess-pr-body',
-              }),
-              buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
-            }),
+            get: (name: string) => name === 'codex' ? codexAgent : undefined,
+            getOrThrow: vi.fn().mockReturnValue(codexAgent),
             getSessionDriver: vi.fn().mockReturnValue(undefined),
+            listWithCapability: vi.fn().mockReturnValue([codexAgent]),
           } as any,
           cwd: '/tmp',
         });
@@ -6145,7 +6206,7 @@ describe('TaskRunner', () => {
       }
     });
 
-    it('authorPrBodyWithSkill fails closed when the authored body is invalid', async () => {
+    it('authorPrBodyWithSkill falls back to canonical body when authored body is invalid and no other agents available', async () => {
       const tempHome = createTempWorkspace();
       const originalHome = process.env.HOME;
       process.env.HOME = tempHome;
@@ -6153,6 +6214,19 @@ describe('TaskRunner', () => {
       writeFileSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr', 'SKILL.md'), '# make-pr\n');
 
       try {
+        const codexAgent = {
+          name: 'codex',
+          stdinMode: 'ignore',
+          linuxTerminalTail: 'exec_bash',
+          bundledSkillRoot: join(tempHome, '.codex', 'skills'),
+          bundledSkills: ['make-pr'],
+          buildCommand: () => ({
+            cmd: 'node',
+            args: ['-e', 'process.stdout.write("## Summary\\n\\nOnly summary")'],
+            sessionId: 'sess-invalid-pr',
+          }),
+          buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+        };
         const executor = new TaskRunner({
           orchestrator: {
             getTask: () => null,
@@ -6161,30 +6235,261 @@ describe('TaskRunner', () => {
           persistence: {} as any,
           executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
           executionAgentRegistry: {
-            getOrThrow: vi.fn().mockReturnValue({
-              name: 'codex',
-              stdinMode: 'ignore',
-              linuxTerminalTail: 'exec_bash',
-              buildCommand: () => ({
-                cmd: 'node',
-                args: ['-e', 'process.stdout.write("## Summary\\n\\nOnly summary")'],
-                sessionId: 'sess-invalid-pr',
-              }),
-              buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
-            }),
+            get: (name: string) => name === 'codex' ? codexAgent : undefined,
+            getOrThrow: vi.fn().mockReturnValue(codexAgent),
             getSessionDriver: vi.fn().mockReturnValue(undefined),
+            listWithCapability: vi.fn().mockReturnValue([codexAgent]),
           } as any,
           cwd: '/tmp',
+          logger: createMockLogger(),
         });
 
-        await expect((executor as any).authorPrBodyWithSkill({
+        // With fallback, invalid AI body triggers canonical fallback instead of throwing
+        const result = await (executor as any).authorPrBodyWithSkill({
           workflowId: 'wf-1',
           title: 'Test Workflow',
           baseBranch: 'master',
           featureBranch: 'plan/feature',
           workflowSummary: '## Summary\nSource summary',
           cwd: '/tmp',
-        })).rejects.toThrow('PR body authored via invoker-make-pr is invalid');
+        });
+
+        expect(result.agentName).toBe('canonical');
+        expect(result.sessionId).toBe('canonical-fallback');
+        expect(result.body).toContain('## Summary');
+        expect(result.body).toContain('## Test Plan');
+        expect(result.body).toContain('## Revert Plan');
+      } finally {
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+      }
+    });
+
+    it('authorPrBodyWithSkill falls back to second agent when first fails', async () => {
+      const tempHome = createTempWorkspace();
+      const originalHome = process.env.HOME;
+      process.env.HOME = tempHome;
+
+      // Only set up codex skill (not claude) — so claude fails skill resolution
+      mkdirSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr'), { recursive: true });
+      writeFileSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr', 'SKILL.md'), '# make-pr\n');
+
+      try {
+        const claudeAgent = {
+          name: 'claude',
+          stdinMode: 'ignore',
+          bundledSkillRoot: join(tempHome, '.claude', 'skills'), // no SKILL.md here
+          bundledSkills: ['make-pr'],
+          buildCommand: () => ({
+            cmd: 'node',
+            args: ['-e', 'process.exit(1)'],
+            sessionId: 'sess-claude-fail',
+          }),
+          buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+        };
+        const codexAgent = {
+          name: 'codex',
+          stdinMode: 'ignore',
+          bundledSkillRoot: join(tempHome, '.codex', 'skills'),
+          bundledSkills: ['make-pr'],
+          buildCommand: () => ({
+            cmd: 'node',
+            args: ['-e', 'process.stdout.write("## Summary\\n\\nFallback body\\n\\n## Test Plan\\n\\n- [x] `pnpm test`\\n\\n## Revert Plan\\n\\n- Safe to revert? Yes\\n- Revert command: `git revert <sha>`\\n- Post-revert steps: None\\n- Data migration? No\\n")'],
+            sessionId: 'sess-codex-ok',
+          }),
+          buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+        };
+
+        const executor = new TaskRunner({
+          orchestrator: {
+            getTask: () => null,
+            getAllTasks: () => [makeTask({ id: 't1', config: { workflowId: 'wf-1', executionAgent: 'claude' } })],
+          } as any,
+          persistence: {} as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          executionAgentRegistry: {
+            get: (name: string) => name === 'claude' ? claudeAgent : name === 'codex' ? codexAgent : undefined,
+            getOrThrow: (name: string) => {
+              if (name === 'claude') return claudeAgent;
+              if (name === 'codex') return codexAgent;
+              throw new Error(`Unknown agent: ${name}`);
+            },
+            getSessionDriver: vi.fn().mockReturnValue(undefined),
+            listWithCapability: vi.fn().mockReturnValue([claudeAgent, codexAgent]),
+          } as any,
+          cwd: '/tmp',
+          logger: createMockLogger(),
+        });
+
+        const result = await (executor as any).authorPrBodyWithSkill({
+          workflowId: 'wf-1',
+          title: 'Fallback Test',
+          baseBranch: 'master',
+          featureBranch: 'plan/fallback',
+          workflowSummary: '## Summary\nFallback test',
+          cwd: '/tmp',
+        });
+
+        expect(result.agentName).toBe('codex');
+        expect(result.body).toContain('## Summary');
+        expect(result.body).toContain('## Test Plan');
+        expect(result.body).toContain('## Revert Plan');
+      } finally {
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+      }
+    });
+
+    it('authorPrBodyWithSkill emits canonical body when all agents fail', async () => {
+      const tempHome = createTempWorkspace();
+      const originalHome = process.env.HOME;
+      process.env.HOME = tempHome;
+
+      // No skill directories at all
+      try {
+        const claudeAgent = {
+          name: 'claude',
+          stdinMode: 'ignore',
+          bundledSkills: ['make-pr'],
+          buildCommand: () => ({ cmd: 'node', args: ['-e', 'process.exit(1)'], sessionId: 'x' }),
+          buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+        };
+
+        const executor = new TaskRunner({
+          orchestrator: {
+            getTask: () => null,
+            getAllTasks: () => [makeTask({ id: 't1', config: { workflowId: 'wf-1', executionAgent: 'claude' } })],
+          } as any,
+          persistence: {} as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          executionAgentRegistry: {
+            get: (name: string) => name === 'claude' ? claudeAgent : undefined,
+            getOrThrow: vi.fn().mockReturnValue(claudeAgent),
+            getSessionDriver: vi.fn().mockReturnValue(undefined),
+            listWithCapability: vi.fn().mockReturnValue([claudeAgent]),
+          } as any,
+          cwd: '/tmp',
+          logger: createMockLogger(),
+        });
+
+        const result = await (executor as any).authorPrBodyWithSkill({
+          workflowId: 'wf-1',
+          title: 'Canonical Test',
+          baseBranch: 'master',
+          featureBranch: 'plan/canonical',
+          workflowSummary: 'Canonical summary content.',
+          structuredContext: {
+            tasks: [
+              { taskId: 't1', description: 'Run tests', status: 'completed', command: 'pnpm test' },
+            ],
+            visualProofMarkdown: '## Visual Proof\nscreenshots here',
+          },
+          cwd: '/tmp',
+        });
+
+        expect(result.agentName).toBe('canonical');
+        expect(result.sessionId).toBe('canonical-fallback');
+        expect(result.body).toContain('## Summary');
+        expect(result.body).toContain('## Test Plan');
+        expect(result.body).toContain('## Revert Plan');
+        expect(result.body).toContain('pnpm test');
+        expect(result.body).toContain('## Visual Proof');
+      } finally {
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+      }
+    });
+
+    it('authorPrBodyWithSkill emits canonical body when no execution agent registry is configured', async () => {
+      const logger = createMockLogger();
+      const executor = new TaskRunner({
+        orchestrator: {
+          getTask: () => null,
+          getAllTasks: () => [],
+        } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        logger,
+      });
+
+      const result = await (executor as any).authorPrBodyWithSkill({
+        workflowId: 'wf-1',
+        title: 'Canonical Test',
+        baseBranch: 'master',
+        featureBranch: 'plan/canonical',
+        workflowSummary: 'Canonical summary content.',
+        structuredContext: {
+          tasks: [
+            { taskId: 't1', description: 'Run tests', status: 'completed', command: 'pnpm test' },
+          ],
+        },
+        cwd: '/tmp',
+      });
+
+      expect(result.agentName).toBe('canonical');
+      expect(result.sessionId).toBe('canonical-fallback');
+      expect(result.body).toContain('## Summary');
+      expect(result.body).toContain('## Test Plan');
+      expect(result.body).toContain('## Revert Plan');
+      expect(result.body).toContain('pnpm test');
+      expect(logger.warn).toHaveBeenCalledWith(
+        '[pr-authoring] executionAgentRegistry missing, using canonical fallback PR body.',
+      );
+    });
+
+    it('authorPrBodyWithSkill deduplicates preferred agent in fallback chain', async () => {
+      const tempHome = createTempWorkspace();
+      const originalHome = process.env.HOME;
+      process.env.HOME = tempHome;
+      mkdirSync(join(tempHome, '.claude', 'skills', 'invoker-make-pr'), { recursive: true });
+      writeFileSync(join(tempHome, '.claude', 'skills', 'invoker-make-pr', 'SKILL.md'), '# make-pr\n');
+
+      try {
+        const claudeAgent = {
+          name: 'claude',
+          stdinMode: 'ignore',
+          bundledSkillRoot: join(tempHome, '.claude', 'skills'),
+          bundledSkills: ['make-pr'],
+          buildCommand: () => ({
+            cmd: 'node',
+            args: ['-e', 'process.stdout.write("## Summary\\n\\nOK\\n\\n## Test Plan\\n\\n- [x] `pnpm test`\\n\\n## Revert Plan\\n\\n- Safe to revert? Yes\\n- Revert command: `git revert <sha>`\\n- Post-revert steps: None\\n- Data migration? No\\n")'],
+            sessionId: 'sess-dedup',
+          }),
+          buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+        };
+
+        const getOrThrow = vi.fn().mockReturnValue(claudeAgent);
+
+        const executor = new TaskRunner({
+          orchestrator: {
+            getTask: () => null,
+            getAllTasks: () => [makeTask({ id: 't1', config: { workflowId: 'wf-1', executionAgent: 'claude' } })],
+          } as any,
+          persistence: {} as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          executionAgentRegistry: {
+            get: () => claudeAgent,
+            getOrThrow,
+            getSessionDriver: vi.fn().mockReturnValue(undefined),
+            listWithCapability: vi.fn().mockReturnValue([claudeAgent]),
+          } as any,
+          cwd: '/tmp',
+          logger: createMockLogger(),
+        });
+
+        const result = await (executor as any).authorPrBodyWithSkill({
+          workflowId: 'wf-1',
+          title: 'Dedup Test',
+          baseBranch: 'master',
+          featureBranch: 'plan/dedup',
+          workflowSummary: '## Summary\nDedup test',
+          cwd: '/tmp',
+        });
+
+        // Claude should succeed on first try — no duplicate attempts
+        expect(result.agentName).toBe('claude');
+        expect(result.body).toContain('## Summary');
       } finally {
         if (originalHome === undefined) delete process.env.HOME;
         else process.env.HOME = originalHome;
@@ -6475,13 +6780,22 @@ describe('TaskRunner', () => {
       const hostCalls = gitCalls.filter((c) => c.dir === '/tmp/host');
       expect(hostCalls).toHaveLength(0);
 
-      // PR created via mergeGateProvider (using gate clone dir, not host.cwd)
+      // Should route through shared PR-authoring helper
+      expect((executor as any).authorPrBodyWithSkill).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'Test Workflow',
+        baseBranch: 'master',
+        featureBranch: 'plan/feature',
+        cwd: '/tmp/gate-clone',
+      }));
+
+      // PR created via mergeGateProvider with authored body (not raw summary)
       expect(mergeGateProvider.createReview).toHaveBeenCalledWith(
         expect.objectContaining({
           baseBranch: 'master',
           featureBranch: 'plan/feature',
           title: 'Test Workflow',
           cwd: '/tmp/gate-clone',
+          body: '## Summary\n\nPublished body',
         }),
       );
 

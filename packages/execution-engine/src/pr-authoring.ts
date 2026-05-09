@@ -8,6 +8,36 @@ import type { ExecutionAgent } from './agent.js';
 import type { SessionDriver } from './session-driver.js';
 import { cleanElectronEnv } from './process-utils.js';
 
+// ── Structured PR-authoring context ──────────────────────
+
+/** Per-task evidence carried through PR authoring. */
+export interface PrAuthoringTaskEntry {
+  taskId: string;
+  description: string;
+  status: 'completed' | 'failed' | 'skipped';
+  /** Shell command executed for command-type tasks. */
+  command?: string;
+  /** Per-task file-change summary (e.g. `git diff --stat` output). */
+  fileChangeSummary?: string;
+}
+
+/**
+ * Structured context that supplements the free-form `workflowSummary` string
+ * with machine-readable evidence for PR body authoring.
+ *
+ * Both AI-authored and deterministic-fallback paths can consume this.
+ */
+export interface PrAuthoringContext {
+  /** Workflow name (human-readable). */
+  workflowName?: string;
+  /** Workflow description from plan YAML. */
+  workflowDescription?: string;
+  /** Per-task entries with verification evidence. */
+  tasks: PrAuthoringTaskEntry[];
+  /** Visual-proof markdown block (screenshots / video walkthrough). */
+  visualProofMarkdown?: string;
+}
+
 const REQUIRED_SECTIONS = ['## Summary', '## Test Plan', '## Revert Plan'] as const;
 const DISCOURAGED_HEADINGS = ['## Testing', '## Notes'] as const;
 const DEFAULT_MAX_INLINE_PROMPT_BYTES = 64 * 1024;
@@ -110,14 +140,80 @@ export function resolveInstalledSkillPathForAgent(agentName: string, skillName: 
   return existsSync(join(skillDir, 'SKILL.md')) ? skillDir : null;
 }
 
+/**
+ * Resolve skill path using the agent's own `bundledSkillRoot` metadata.
+ * Falls back to `resolveInstalledSkillPathForAgent` for agents without metadata.
+ */
+export function resolveSkillPathViaAgent(agent: ExecutionAgent, skillName: string): string | null {
+  if (agent.bundledSkillRoot) {
+    const skillDir = join(agent.bundledSkillRoot, `invoker-${skillName}`);
+    if (existsSync(join(skillDir, 'SKILL.md'))) return skillDir;
+  }
+  return resolveInstalledSkillPathForAgent(agent.name, skillName);
+}
+
+/**
+ * Build a deterministic canonical PR body from structured context.
+ * Used as the no-AI escape hatch when all agent-authored attempts fail.
+ */
+export function buildCanonicalPrBody(args: {
+  title: string;
+  workflowSummary: string;
+  structuredContext?: PrAuthoringContext;
+}): string {
+  const lines: string[] = [];
+
+  // ## Summary
+  lines.push('## Summary');
+  lines.push('');
+  if (args.structuredContext?.workflowDescription) {
+    lines.push(args.structuredContext.workflowDescription);
+  } else {
+    lines.push(args.workflowSummary.trim());
+  }
+  lines.push('');
+
+  // ## Test Plan
+  lines.push('## Test Plan');
+  lines.push('');
+  const ctx = args.structuredContext;
+  const commandTasks = ctx?.tasks.filter((t) => t.command && t.status === 'completed') ?? [];
+  if (commandTasks.length > 0) {
+    for (const t of commandTasks) {
+      lines.push(`- [x] \`${t.command}\` — ${t.description}`);
+    }
+  } else {
+    lines.push('- [ ] Manual verification required');
+  }
+  lines.push('');
+
+  // ## Revert Plan
+  lines.push('## Revert Plan');
+  lines.push('');
+  lines.push('- Safe to revert? Yes');
+  lines.push('- Revert command: `git revert <sha>`');
+  lines.push('- Post-revert steps: None');
+  lines.push('- Data migration? No');
+  lines.push('');
+
+  // Visual proof (preserve verbatim if present)
+  if (ctx?.visualProofMarkdown) {
+    lines.push(ctx.visualProofMarkdown);
+    lines.push('');
+  }
+
+  return lines.join('\n').trimEnd();
+}
+
 export function buildMakePrPrompt(args: {
   skillPath: string;
   title: string;
   baseBranch: string;
   featureBranch: string;
   workflowSummary: string;
+  structuredContext?: PrAuthoringContext;
 }): string {
-  return [
+  const lines = [
     `You are authoring the GitHub PR body for the branch "${args.featureBranch}" targeting "${args.baseBranch}".`,
     '',
     `Use the installed skill "invoker-make-pr" at: ${args.skillPath}`,
@@ -137,7 +233,41 @@ export function buildMakePrPrompt(args: {
     '```md',
     args.workflowSummary.trim(),
     '```',
-  ].join('\n');
+  ];
+
+  const ctx = args.structuredContext;
+  if (ctx) {
+    lines.push('');
+    lines.push('Structured workflow evidence (use to enrich your PR body):');
+    lines.push('');
+
+    const commandTasks = ctx.tasks.filter((t) => t.command && t.status === 'completed');
+    if (commandTasks.length > 0) {
+      lines.push('Executed verification commands:');
+      for (const t of commandTasks) {
+        lines.push(`- \`${t.command}\` — ${t.description} (${t.status})`);
+      }
+      lines.push('');
+    }
+
+    const withFiles = ctx.tasks.filter((t) => t.fileChangeSummary);
+    if (withFiles.length > 0) {
+      lines.push('File-change summaries:');
+      for (const t of withFiles) {
+        lines.push(`### ${t.taskId} — ${t.description}`);
+        lines.push(t.fileChangeSummary!);
+        lines.push('');
+      }
+    }
+
+    if (ctx.visualProofMarkdown) {
+      lines.push('Visual proof (include verbatim in PR body if present):');
+      lines.push(ctx.visualProofMarkdown);
+      lines.push('');
+    }
+  }
+
+  return lines.join('\n');
 }
 
 export function spawnAgentPrAuthorViaRegistry(
