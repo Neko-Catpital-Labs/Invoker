@@ -212,6 +212,13 @@ function dispatchStartedTasks(tasks: TaskState[]): void {
 }
 let workflowMutationCoordinator: PersistedWorkflowMutationCoordinator | null = null;
 const workflowMutationDispatcher = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+/**
+ * The mutation context for the currently executing workflow mutation.
+ * Set by the coordinator dispatch callback before invoking the handler,
+ * cleared afterward. Allows fix-with-agent and conflict-resolution
+ * handlers to read the AbortSignal without changing every handler signature.
+ */
+let activeMutationContext: import('./persisted-workflow-mutation-coordinator.js').WorkflowMutationContext | undefined;
 let hourlyBackupInterval: ReturnType<typeof setInterval> | null = null;
 let writerLock: DbWriterLockResult | null = null;
 const workflowMutationOwnerId = `owner-${process.pid}-${Date.now()}`;
@@ -1068,6 +1075,7 @@ if (isHeadless) {
               ...headlessDeps,
               waitForApproval: delegatedWait,
               noTrack: delegatedNoTrack,
+              signal: activeMutationContext?.signal,
             });
           });
           return { ok: true };
@@ -1384,6 +1392,7 @@ if (isHeadless) {
         recoveryRoute,
         recreateOutputLabel: source === 'auto-fix' ? 'Auto-fix' : 'Fix with AI',
         failureOutputLabel: source === 'auto-fix' ? 'Auto-fix' : `Fix with ${agentName ?? 'Claude'}`,
+        signal: activeMutationContext?.signal,
       },
     );
     return result.started;
@@ -1696,6 +1705,7 @@ if (isHeadless) {
       orchestrator, persistence, executorRegistry, messageBus,
       commandService,
       repoRoot, invokerConfig, initServices, wireSlackBot,
+      signal: activeMutationContext?.signal,
       setTaskDispatcherExecutor: setDispatcherTaskExecutor,
       cancelTask: (taskId: string) => performCancelTask(taskId),
       cancelWorkflow: (workflowId: string) => performCancelWorkflow(workflowId),
@@ -2462,12 +2472,17 @@ if (isHeadless) {
       workflowMutationCoordinator = new PersistedWorkflowMutationCoordinator(
         persistence,
         workflowMutationOwnerId,
-        async (channel: string, args: unknown[], _context) => {
+        async (channel: string, args: unknown[], context) => {
           const handler = workflowMutationDispatcher.get(channel);
           if (!handler) {
             throw new Error(`No workflow mutation dispatcher registered for ${channel}`);
           }
-          return handler(...args);
+          activeMutationContext = context;
+          try {
+            return await handler(...args);
+          } finally {
+            activeMutationContext = undefined;
+          }
         },
         { maxConcurrentWorkflowDrains },
       );
@@ -3399,7 +3414,7 @@ if (isHeadless) {
           persistence,
           taskExecutor: requireTaskExecutor(),
           autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
-        }, agentName);
+        }, agentName, activeMutationContext?.signal);
         await finalizeMutationWithGlobalTopup({
           orchestrator,
           taskExecutor: requireTaskExecutor(),

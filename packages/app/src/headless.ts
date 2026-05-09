@@ -97,6 +97,8 @@ export interface HeadlessDeps {
   isStandaloneOwnerIdle?: () => boolean;
   getBundledSkillsStatus?: () => BundledSkillsStatus;
   installBundledSkills?: (mode?: BundledSkillsInstallMode) => BundledSkillsStatus;
+  /** Abort signal from the workflow mutation coordinator, if running inside a coordinated mutation. */
+  signal?: AbortSignal;
   runtimeServices?: RuntimeServices;
 }
 
@@ -1543,6 +1545,7 @@ async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string
       agentName: agent,
       recreateOutputLabel: 'Fix with AI',
       failureOutputLabel: 'Fix with AI',
+      signal: deps.signal,
     });
     await finalizeMutationWithGlobalTopup({
       orchestrator: deps.orchestrator,
@@ -1589,7 +1592,7 @@ async function headlessResolveConflict(taskId: string, deps: HeadlessDeps, agent
       ...deps,
       taskExecutor: te,
       autoApproveAIFixes: deps.invokerConfig.autoApproveAIFixes,
-    }, agent);
+    }, agent, deps.signal);
     await finalizeMutationWithGlobalTopup({
       orchestrator: deps.orchestrator,
       taskExecutor: te,
