@@ -9,6 +9,8 @@ import { SshExecutor } from '../ssh-executor.js';
 import type { TaskState } from '@invoker/workflow-core';
 import type { WorkResponse, Logger } from '@invoker/contracts';
 import { EventEmitter } from 'events';
+import { buildCanonicalPrBody, validateCanonicalPrBody } from '../pr-authoring.js';
+import type { PrAuthoringContext } from '../pr-authoring.js';
 
 /**
  * Creates a mock executor that auto-completes on start().
@@ -6496,6 +6498,369 @@ describe('TaskRunner', () => {
       }
     });
 
+    it('authorPrBodyWithSkill tries preferred agent first, then falls back in registration order across 3 agents', async () => {
+      const tempHome = createTempWorkspace();
+      const originalHome = process.env.HOME;
+      process.env.HOME = tempHome;
+
+      // Only set up gemini skill — claude and codex will fail skill resolution
+      mkdirSync(join(tempHome, '.gemini', 'skills', 'invoker-make-pr'), { recursive: true });
+      writeFileSync(join(tempHome, '.gemini', 'skills', 'invoker-make-pr', 'SKILL.md'), '# make-pr\n');
+
+      try {
+        const claudeAgent = {
+          name: 'claude',
+          stdinMode: 'ignore' as const,
+          bundledSkillRoot: join(tempHome, '.claude', 'skills'), // no SKILL.md
+          bundledSkills: ['make-pr'],
+          buildCommand: () => ({ cmd: 'node', args: ['-e', 'process.exit(1)'], sessionId: 'sess-claude' }),
+          buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+        };
+        const codexAgent = {
+          name: 'codex',
+          stdinMode: 'ignore' as const,
+          bundledSkillRoot: join(tempHome, '.codex', 'skills'), // no SKILL.md
+          bundledSkills: ['make-pr'],
+          buildCommand: () => ({ cmd: 'node', args: ['-e', 'process.exit(1)'], sessionId: 'sess-codex' }),
+          buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+        };
+        const geminiAgent = {
+          name: 'gemini',
+          stdinMode: 'ignore' as const,
+          bundledSkillRoot: join(tempHome, '.gemini', 'skills'),
+          bundledSkills: ['make-pr'],
+          buildCommand: () => ({
+            cmd: 'node',
+            args: ['-e', 'process.stdout.write("## Summary\\n\\nGemini authored\\n\\n## Test Plan\\n\\n- [x] `pnpm test`\\n\\n## Revert Plan\\n\\n- Safe to revert? Yes\\n- Revert command: `git revert <sha>`\\n- Post-revert steps: None\\n- Data migration? No\\n")'],
+            sessionId: 'sess-gemini',
+          }),
+          buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+        };
+
+        const executor = new TaskRunner({
+          orchestrator: {
+            getTask: () => null,
+            getAllTasks: () => [makeTask({ id: 't1', config: { workflowId: 'wf-1', executionAgent: 'claude' } })],
+          } as any,
+          persistence: {} as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          executionAgentRegistry: {
+            get: (name: string) => ({ claude: claudeAgent, codex: codexAgent, gemini: geminiAgent }[name]),
+            getOrThrow: (name: string) => {
+              const a = ({ claude: claudeAgent, codex: codexAgent, gemini: geminiAgent } as any)[name];
+              if (!a) throw new Error(`Unknown agent: ${name}`);
+              return a;
+            },
+            getSessionDriver: vi.fn().mockReturnValue(undefined),
+            listWithCapability: vi.fn().mockReturnValue([claudeAgent, codexAgent, geminiAgent]),
+          } as any,
+          cwd: '/tmp',
+          logger: createMockLogger(),
+        });
+
+        const result = await (executor as any).authorPrBodyWithSkill({
+          workflowId: 'wf-1',
+          title: 'Three-Agent Fallback',
+          baseBranch: 'master',
+          featureBranch: 'plan/three-agent',
+          workflowSummary: 'Three-agent test',
+          cwd: '/tmp',
+        });
+
+        // Preferred agent (claude) fails skill resolution, codex also fails,
+        // gemini succeeds as the third agent in the chain
+        expect(result.agentName).toBe('gemini');
+        expect(result.body).toContain('## Summary');
+        expect(result.body).toContain('Gemini authored');
+        expect(result.body).toContain('## Test Plan');
+        expect(result.body).toContain('## Revert Plan');
+      } finally {
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+      }
+    });
+
+    it('authorPrBodyWithSkill emits canonical body when zero agents have make-pr capability', async () => {
+      const logger = createMockLogger();
+      const noCapsAgent = {
+        name: 'claude',
+        stdinMode: 'ignore' as const,
+        // No bundledSkills — not PR-capable
+        buildCommand: () => ({ cmd: 'node', args: ['-e', ''], sessionId: 'x' }),
+        buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+      };
+
+      const executor = new TaskRunner({
+        orchestrator: {
+          getTask: () => null,
+          getAllTasks: () => [makeTask({ id: 't1', config: { workflowId: 'wf-1', executionAgent: 'claude' } })],
+        } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        executionAgentRegistry: {
+          get: () => noCapsAgent,
+          getOrThrow: vi.fn().mockReturnValue(noCapsAgent),
+          getSessionDriver: vi.fn().mockReturnValue(undefined),
+          listWithCapability: vi.fn().mockReturnValue([]), // no PR-capable agents
+        } as any,
+        cwd: '/tmp',
+        logger,
+      });
+
+      const result = await (executor as any).authorPrBodyWithSkill({
+        workflowId: 'wf-1',
+        title: 'No Capable Agents',
+        baseBranch: 'master',
+        featureBranch: 'plan/no-capable',
+        workflowSummary: 'Summary for no-capable test.',
+        structuredContext: {
+          tasks: [
+            { taskId: 't1', description: 'Build check', status: 'completed', command: 'pnpm run build' },
+          ],
+        },
+        cwd: '/tmp',
+      });
+
+      expect(result.agentName).toBe('canonical');
+      expect(result.sessionId).toBe('canonical-fallback');
+      expect(result.body).toContain('## Summary');
+      expect(result.body).toContain('## Test Plan');
+      expect(result.body).toContain('## Revert Plan');
+      expect(result.body).toContain('pnpm run build');
+    });
+
+    it('external_review propagates authored PR body to createReview, not raw summary', async () => {
+      const completedTask = makeTask({
+        id: 't1',
+        status: 'completed',
+        config: { workflowId: 'wf-pub' },
+        execution: { branch: 'invoker/t1' },
+        description: 'Implement feature',
+      });
+
+      const mergeTaskId = '__merge__wf-pub';
+      const mergeTask = makeTask({
+        id: mergeTaskId,
+        status: 'running',
+        dependencies: ['t1'],
+        config: { isMergeNode: true, workflowId: 'wf-pub' },
+        execution: { pendingFixError: undefined },
+      });
+
+      const allTasks = [mergeTask, completedTask];
+
+      const mergeGateProvider = {
+        createReview: vi.fn().mockResolvedValue({
+          url: 'https://github.com/owner/repo/pull/42',
+          identifier: 'owner/repo#42',
+        }),
+      };
+
+      const orchestrator = {
+        getTask: (id: string) => allTasks.find((t) => t.id === id),
+        getAllTasks: () => allTasks,
+        handleWorkerResponse: vi.fn(),
+        setTaskAwaitingApproval: vi.fn(),
+      };
+
+      const persistence = {
+        loadWorkflow: () => ({
+          id: 'wf-pub',
+          onFinish: 'none',
+          mergeMode: 'external_review',
+          baseBranch: 'master',
+          featureBranch: 'plan/ext-review',
+          name: 'External Review Workflow',
+        }),
+        updateTask: vi.fn(),
+        getWorkspacePath: () => '/tmp/gate-ws',
+      };
+
+      const gitCalls: { args: string[]; dir: string }[] = [];
+      const executor = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp/host',
+        mergeGateProvider: mergeGateProvider as any,
+      });
+
+      (executor as any).execGitReadonly = async (args: string[]) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).execGitIn = async (args: string[], dir: string) => {
+        gitCalls.push({ args: [...args], dir });
+        if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'deadbeef';
+        if (args[0] === 'rev-parse' && args[1] === '--verify') return '';
+        if (args[0] === 'merge-base' && args[1] === '--is-ancestor') throw new Error('not ancestor');
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
+      (executor as any).startPrPolling = vi.fn();
+      (executor as any).buildMergeSummary = vi.fn().mockResolvedValue('Raw summary text only');
+
+      const authoredBody = '## Summary\n\nRich authored body with details\n\n## Test Plan\n\n- [x] `pnpm test`\n\n## Revert Plan\n\n- Safe to revert? Yes';
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: authoredBody,
+        sessionId: 'sess-ext',
+        agentName: 'claude',
+      });
+      (executor as any).execPr = vi.fn().mockResolvedValue('https://github.com/owner/repo/pull/42');
+
+      await executor.publishAfterFix(mergeTask);
+
+      // createReview must receive the authored body, NOT the raw summary
+      expect(mergeGateProvider.createReview).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: authoredBody,
+        }),
+      );
+      // Verify the raw summary was NOT passed as the body
+      const createReviewCall = mergeGateProvider.createReview.mock.calls[0][0];
+      expect(createReviewCall.body).not.toBe('Raw summary text only');
+    });
+
+    it('canonical body retains executed UI verification commands in Test Plan', () => {
+      // Import buildCanonicalPrBody inline to test directly
+      // buildCanonicalPrBody already imported at top of file
+
+      const body = buildCanonicalPrBody({
+        title: 'UI Feature',
+        workflowSummary: 'Added dark mode toggle',
+        structuredContext: {
+          workflowDescription: 'Implement dark mode toggle with visual verification',
+          tasks: [
+            { taskId: 't1', description: 'Run unit tests', status: 'completed', command: 'pnpm test' },
+            { taskId: 't2', description: 'Capture screenshot of toggle', status: 'completed', command: 'node scripts/capture-screenshot.js --component=toggle' },
+            { taskId: 't3', description: 'Verify accessibility contrast', status: 'completed', command: 'pnpm run a11y:check' },
+            { taskId: 't4', description: 'Build failed task', status: 'failed', command: 'pnpm run build:broken' },
+            { taskId: 't5', description: 'Manual review', status: 'completed' }, // no command
+          ],
+        },
+      });
+
+      // All completed command tasks must appear in the Test Plan
+      expect(body).toContain('`pnpm test` — Run unit tests');
+      expect(body).toContain('`node scripts/capture-screenshot.js --component=toggle` — Capture screenshot of toggle');
+      expect(body).toContain('`pnpm run a11y:check` — Verify accessibility contrast');
+
+      // Failed tasks must NOT appear (only completed commands)
+      expect(body).not.toContain('pnpm run build:broken');
+
+      // Tasks without commands must NOT appear as checklist items
+      expect(body).not.toContain('Manual review');
+
+      // Must NOT contain "Manual verification required" since we have completed commands
+      expect(body).not.toContain('Manual verification required');
+    });
+
+    it('canonical body preserves visual-proof markdown verbatim when capture content exists', () => {
+      // buildCanonicalPrBody already imported at top of file
+
+      const visualProof = [
+        '## Visual Proof',
+        '',
+        '<details>',
+        '<summary>State transitions</summary>',
+        '',
+        '| Before | After |',
+        '|--------|-------|',
+        '| ![before](./screenshots/before.png) | ![after](./screenshots/after.png) |',
+        '',
+        '</details>',
+        '',
+        '<details>',
+        '<summary>Video walkthrough</summary>',
+        '',
+        '![walkthrough](./recordings/demo.mp4)',
+        '',
+        '</details>',
+      ].join('\n');
+
+      const body = buildCanonicalPrBody({
+        title: 'Visual Change',
+        workflowSummary: 'Updated button styles',
+        structuredContext: {
+          tasks: [
+            { taskId: 't1', description: 'Run tests', status: 'completed', command: 'pnpm test' },
+          ],
+          visualProofMarkdown: visualProof,
+        },
+      });
+
+      // Visual proof must be preserved verbatim
+      expect(body).toContain('## Visual Proof');
+      expect(body).toContain('<details>');
+      expect(body).toContain('State transitions');
+      expect(body).toContain('![before](./screenshots/before.png)');
+      expect(body).toContain('![after](./screenshots/after.png)');
+      expect(body).toContain('Video walkthrough');
+      expect(body).toContain('![walkthrough](./recordings/demo.mp4)');
+      expect(body).toContain('</details>');
+    });
+
+    it('canonical body drops visual-proof section when no capture content exists', () => {
+      // buildCanonicalPrBody already imported at top of file
+
+      const body = buildCanonicalPrBody({
+        title: 'No Visual',
+        workflowSummary: 'Backend-only change',
+        structuredContext: {
+          tasks: [
+            { taskId: 't1', description: 'Run tests', status: 'completed', command: 'pnpm test' },
+          ],
+          // No visualProofMarkdown
+        },
+      });
+
+      // Required sections present
+      expect(body).toContain('## Summary');
+      expect(body).toContain('## Test Plan');
+      expect(body).toContain('## Revert Plan');
+
+      // Visual proof must NOT appear
+      expect(body).not.toContain('## Visual Proof');
+      expect(body).not.toContain('Visual Proof');
+    });
+
+    it('canonical body shows manual verification when no completed command tasks exist', () => {
+      // buildCanonicalPrBody already imported at top of file
+
+      const body = buildCanonicalPrBody({
+        title: 'No Commands',
+        workflowSummary: 'Documentation update',
+        structuredContext: {
+          tasks: [
+            { taskId: 't1', description: 'Write docs', status: 'completed' }, // no command
+            { taskId: 't2', description: 'Build failed', status: 'failed', command: 'pnpm run build' },
+          ],
+        },
+      });
+
+      // No completed command tasks → must show manual verification
+      expect(body).toContain('Manual verification required');
+      // Failed command task must NOT appear
+      expect(body).not.toContain('pnpm run build');
+    });
+
+    it('canonical body uses workflowDescription over workflowSummary in Summary section', () => {
+      // buildCanonicalPrBody already imported at top of file
+
+      const body = buildCanonicalPrBody({
+        title: 'Description Priority',
+        workflowSummary: 'This is the raw summary',
+        structuredContext: {
+          workflowDescription: 'This is the structured description from the plan YAML.',
+          tasks: [],
+        },
+      });
+
+      expect(body).toContain('This is the structured description from the plan YAML.');
+      expect(body).not.toContain('This is the raw summary');
+    });
+
     it('resolveConflict includes dep description in merge -m', async () => {
       const workspacePath = createTempWorkspace();
       const tasks = new Map<string, TaskState>();
@@ -7948,6 +8313,602 @@ describe('TaskRunner', () => {
       expect(onCompleteCb).toHaveBeenCalledWith('task-err-2', expect.objectContaining({ status: 'completed' }));
       // handleWorkerResponse called 3 times: 1st (throws), 2nd (catch re-submit for task-1), 3rd (task-2 normal)
       expect(handleWorkerResponse).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  // ── PR-authoring regression coverage ──────────────────────
+
+  describe('PR-authoring fallback order', () => {
+    it('preferred agent is tried first, then remaining PR-capable agents in registration order', async () => {
+      const tempHome = createTempWorkspace();
+      const originalHome = process.env.HOME;
+      process.env.HOME = tempHome;
+
+      // Set up skill directories for both agents
+      mkdirSync(join(tempHome, '.claude', 'skills', 'invoker-make-pr'), { recursive: true });
+      writeFileSync(join(tempHome, '.claude', 'skills', 'invoker-make-pr', 'SKILL.md'), '# make-pr\n');
+      mkdirSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr'), { recursive: true });
+      writeFileSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr', 'SKILL.md'), '# make-pr\n');
+
+      try {
+        const attemptOrder: string[] = [];
+        const claudeAgent = {
+          name: 'claude',
+          stdinMode: 'ignore' as const,
+          bundledSkillRoot: join(tempHome, '.claude', 'skills'),
+          bundledSkills: ['make-pr'],
+          buildCommand: () => {
+            attemptOrder.push('claude');
+            return {
+              cmd: 'node',
+              args: ['-e', 'process.exit(1)'], // Fail so fallback continues
+              sessionId: 'sess-claude',
+            };
+          },
+          buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+        };
+        const codexAgent = {
+          name: 'codex',
+          stdinMode: 'ignore' as const,
+          bundledSkillRoot: join(tempHome, '.codex', 'skills'),
+          bundledSkills: ['make-pr'],
+          buildCommand: () => {
+            attemptOrder.push('codex');
+            return {
+              cmd: 'node',
+              // Emit invalid PR body (missing Test Plan and Revert Plan) so validation fails
+              args: ['-e', 'process.stdout.write("## Summary\\n\\nOnly summary, no other sections")'],
+              sessionId: 'sess-codex',
+            };
+          },
+          buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+        };
+
+        // Tasks use codex — codex is the preferred agent
+        const executor = new TaskRunner({
+          orchestrator: {
+            getTask: () => null,
+            getAllTasks: () => [
+              makeTask({ id: 't1', config: { workflowId: 'wf-1', executionAgent: 'codex' } }),
+            ],
+          } as any,
+          persistence: {} as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          executionAgentRegistry: {
+            get: (name: string) => name === 'claude' ? claudeAgent : name === 'codex' ? codexAgent : undefined,
+            getSessionDriver: vi.fn().mockReturnValue(undefined),
+            // Registration order: claude first, codex second
+            listWithCapability: vi.fn().mockReturnValue([claudeAgent, codexAgent]),
+          } as any,
+          cwd: '/tmp',
+          logger: createMockLogger(),
+        });
+
+        const result = await (executor as any).authorPrBodyWithSkill({
+          workflowId: 'wf-1',
+          title: 'Fallback Order Test',
+          baseBranch: 'master',
+          featureBranch: 'plan/order',
+          workflowSummary: 'Summary text',
+          cwd: '/tmp',
+        });
+
+        // Preferred agent (codex) should be tried first even though claude was registered first
+        expect(attemptOrder[0]).toBe('codex');
+        // Claude should be tried second as fallback (codex body failed validation)
+        expect(attemptOrder[1]).toBe('claude');
+        // Both agents failed, so canonical fallback
+        expect(result.agentName).toBe('canonical');
+      } finally {
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+      }
+    });
+
+    it('preferred agent succeeds without trying fallback agents', async () => {
+      const tempHome = createTempWorkspace();
+      const originalHome = process.env.HOME;
+      process.env.HOME = tempHome;
+
+      mkdirSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr'), { recursive: true });
+      writeFileSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr', 'SKILL.md'), '# make-pr\n');
+
+      try {
+        const claudeAttempted = vi.fn();
+        const codexAgent = {
+          name: 'codex',
+          stdinMode: 'ignore' as const,
+          bundledSkillRoot: join(tempHome, '.codex', 'skills'),
+          bundledSkills: ['make-pr'],
+          buildCommand: () => ({
+            cmd: 'node',
+            args: ['-e', 'process.stdout.write("## Summary\\n\\nOK\\n\\n## Test Plan\\n\\n- [x] tests\\n\\n## Revert Plan\\n\\n- Safe to revert? Yes\\n- Revert command: `git revert <sha>`\\n- Post-revert steps: None\\n- Data migration? No\\n")'],
+            sessionId: 'sess-codex-ok',
+          }),
+          buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+        };
+        const claudeAgent = {
+          name: 'claude',
+          stdinMode: 'ignore' as const,
+          bundledSkills: ['make-pr'],
+          buildCommand: () => { claudeAttempted(); return { cmd: 'false', args: [] }; },
+          buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+        };
+
+        const executor = new TaskRunner({
+          orchestrator: {
+            getTask: () => null,
+            getAllTasks: () => [makeTask({ id: 't1', config: { workflowId: 'wf-1', executionAgent: 'codex' } })],
+          } as any,
+          persistence: {} as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          executionAgentRegistry: {
+            get: (name: string) => name === 'codex' ? codexAgent : name === 'claude' ? claudeAgent : undefined,
+            getSessionDriver: vi.fn().mockReturnValue(undefined),
+            listWithCapability: vi.fn().mockReturnValue([claudeAgent, codexAgent]),
+          } as any,
+          cwd: '/tmp',
+          logger: createMockLogger(),
+        });
+
+        const result = await (executor as any).authorPrBodyWithSkill({
+          workflowId: 'wf-1',
+          title: 'Success Test',
+          baseBranch: 'master',
+          featureBranch: 'plan/success',
+          workflowSummary: 'Summary',
+          cwd: '/tmp',
+        });
+
+        expect(result.agentName).toBe('codex');
+        expect(claudeAttempted).not.toHaveBeenCalled();
+      } finally {
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+      }
+    });
+  });
+
+  describe('no-capable-agent deterministic PR-body fallback', () => {
+    it('canonical fallback includes all required sections', () => {
+      const body = buildCanonicalPrBody({
+        title: 'Test PR',
+        workflowSummary: 'Implemented feature X.',
+      });
+
+      expect(body).toContain('## Summary');
+      expect(body).toContain('## Test Plan');
+      expect(body).toContain('## Revert Plan');
+      expect(validateCanonicalPrBody(body)).toEqual([]);
+    });
+
+    it('canonical fallback uses workflowDescription over workflowSummary when available', () => {
+      const body = buildCanonicalPrBody({
+        title: 'Test PR',
+        workflowSummary: 'Raw summary that should not appear.',
+        structuredContext: {
+          workflowDescription: 'Preferred description from YAML.',
+          tasks: [],
+        },
+      });
+
+      expect(body).toContain('Preferred description from YAML.');
+      expect(body).not.toContain('Raw summary that should not appear.');
+    });
+
+    it('canonical fallback lists completed command tasks as checked items in Test Plan', () => {
+      const body = buildCanonicalPrBody({
+        title: 'Test PR',
+        workflowSummary: 'Summary',
+        structuredContext: {
+          tasks: [
+            { taskId: 't1', description: 'Run unit tests', status: 'completed', command: 'pnpm test' },
+            { taskId: 't2', description: 'Run lint', status: 'completed', command: 'pnpm lint' },
+            { taskId: 't3', description: 'Implement feature', status: 'completed' }, // no command
+            { taskId: 't4', description: 'Deploy check', status: 'failed', command: 'pnpm deploy' },
+          ],
+        },
+      });
+
+      // Completed command tasks appear as checked items
+      expect(body).toContain('- [x] `pnpm test` — Run unit tests');
+      expect(body).toContain('- [x] `pnpm lint` — Run lint');
+      // Non-command task excluded from Test Plan command list
+      expect(body).not.toContain('Implement feature');
+      // Failed command task excluded
+      expect(body).not.toContain('pnpm deploy');
+    });
+
+    it('canonical fallback shows manual verification when no completed command tasks exist', () => {
+      const body = buildCanonicalPrBody({
+        title: 'Test PR',
+        workflowSummary: 'Summary',
+        structuredContext: {
+          tasks: [
+            { taskId: 't1', description: 'Code change', status: 'completed' }, // no command
+          ],
+        },
+      });
+
+      expect(body).toContain('Manual verification required');
+    });
+
+    it('authorPrBodyWithSkill returns canonical fallback when no agents have make-pr capability', async () => {
+      const logger = createMockLogger();
+      const bareAgent = {
+        name: 'claude',
+        stdinMode: 'ignore' as const,
+        buildCommand: () => ({ cmd: 'false', args: [] }),
+        buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+      };
+
+      const executor = new TaskRunner({
+        orchestrator: {
+          getTask: () => null,
+          getAllTasks: () => [makeTask({ id: 't1', config: { workflowId: 'wf-1', executionAgent: 'claude' } })],
+        } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        executionAgentRegistry: {
+          get: () => bareAgent,
+          getSessionDriver: vi.fn().mockReturnValue(undefined),
+          listWithCapability: vi.fn().mockReturnValue([]), // No agents with make-pr
+        } as any,
+        cwd: '/tmp',
+        logger,
+      });
+
+      const result = await (executor as any).authorPrBodyWithSkill({
+        workflowId: 'wf-1',
+        title: 'No Capable Agent',
+        baseBranch: 'master',
+        featureBranch: 'plan/no-capable',
+        workflowSummary: 'Summary without agents.',
+        structuredContext: {
+          tasks: [
+            { taskId: 't1', description: 'Run tests', status: 'completed', command: 'pnpm test' },
+          ],
+        },
+        cwd: '/tmp',
+      });
+
+      expect(result.agentName).toBe('canonical');
+      expect(result.sessionId).toBe('canonical-fallback');
+      // Canonical body still contains the verification command
+      expect(result.body).toContain('pnpm test');
+      expect(result.body).toContain('## Test Plan');
+      expect(validateCanonicalPrBody(result.body)).toEqual([]);
+    });
+  });
+
+  describe('external_review propagation of authored PR body', () => {
+    it('createReview receives the authored body, not the raw workflowSummary', async () => {
+      const allTasks = [
+        makeTask({
+          id: 't1',
+          config: { workflowId: 'wf-1' },
+          status: 'completed',
+          execution: { branch: 'experiment/t1' },
+        }),
+      ];
+      const orchestrator = {
+        getTask: (id: string) => allTasks.find(t => t.id === id),
+        getAllTasks: () => allTasks,
+        handleWorkerResponse: vi.fn(() => []),
+        setTaskAwaitingApproval: vi.fn(),
+      };
+      const persistence = {
+        loadWorkflow: () => ({
+          id: 'wf-1',
+          onFinish: 'merge',
+          mergeMode: 'external_review',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          name: 'Test Workflow',
+        }),
+        updateTask: vi.fn(),
+      };
+      const mergeGateProvider = {
+        createReview: vi.fn().mockResolvedValue({
+          url: 'https://github.com/owner/repo/pull/99',
+          identifier: '99',
+        }),
+      };
+      const executor = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        mergeGateProvider: mergeGateProvider as any,
+      });
+
+      const rawSummary = '## Summary\nRaw workflow summary — should not appear in PR body';
+      const authoredBody = '## Summary\n\nAuthored PR body with enriched content\n\n## Test Plan\n\n- [x] verified\n\n## Revert Plan\n\n- Safe to revert';
+      (executor as any).execGitReadonly = async (args: string[]) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).execGitIn = async () => '';
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
+      (executor as any).startPrPolling = vi.fn();
+      (executor as any).buildMergeSummary = vi.fn().mockResolvedValue(rawSummary);
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: authoredBody,
+        sessionId: 'sess-ext-propagation',
+        agentName: 'claude',
+      });
+
+      const mergeTask = makeTask({
+        id: '__merge__wf-1',
+        status: 'running',
+        dependencies: ['t1'],
+        config: { isMergeNode: true, workflowId: 'wf-1' },
+      });
+
+      await (executor as any).executeMergeNode(mergeTask);
+
+      // The authored body must be passed to createReview, not the raw summary
+      expect(mergeGateProvider.createReview).toHaveBeenCalledWith(
+        expect.objectContaining({ body: authoredBody }),
+      );
+      // Raw summary must not leak into the PR body
+      const prBodyArg = mergeGateProvider.createReview.mock.calls[0][0].body;
+      expect(prBodyArg).not.toContain('Raw workflow summary — should not appear in PR body');
+    });
+
+    it('authorPrBodyWithSkill receives workflowSummary and structuredContext in external_review', async () => {
+      const allTasks = [
+        makeTask({
+          id: 't1',
+          config: { workflowId: 'wf-1', command: 'pnpm test' },
+          description: 'Run unit tests',
+          status: 'completed',
+          execution: { branch: 'experiment/t1' },
+        }),
+      ];
+      const orchestrator = {
+        getTask: (id: string) => allTasks.find(t => t.id === id),
+        getAllTasks: () => allTasks,
+        handleWorkerResponse: vi.fn(() => []),
+        setTaskAwaitingApproval: vi.fn(),
+      };
+      const persistence = {
+        loadWorkflow: () => ({
+          id: 'wf-1',
+          onFinish: 'merge',
+          mergeMode: 'external_review',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          name: 'Test Workflow',
+          description: 'Workflow description from YAML',
+        }),
+        updateTask: vi.fn(),
+      };
+      const mergeGateProvider = {
+        createReview: vi.fn().mockResolvedValue({ url: 'https://example.com/pr/1', identifier: '1' }),
+      };
+      const authorPrSpy = vi.fn().mockResolvedValue({
+        body: '## Summary\n\nOK\n\n## Test Plan\n\n- [x] pnpm test\n\n## Revert Plan\n\n- Safe',
+        sessionId: 'sess-ctx',
+        agentName: 'claude',
+      });
+      const executor = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        mergeGateProvider: mergeGateProvider as any,
+      });
+
+      (executor as any).execGitReadonly = async () => '';
+      (executor as any).execGitIn = async () => '';
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
+      (executor as any).startPrPolling = vi.fn();
+      (executor as any).buildMergeSummary = vi.fn().mockResolvedValue('## Summary\nWorkflow summary');
+      (executor as any).authorPrBodyWithSkill = authorPrSpy;
+
+      const mergeTask = makeTask({
+        id: '__merge__wf-1',
+        status: 'running',
+        dependencies: ['t1'],
+        config: { isMergeNode: true, workflowId: 'wf-1' },
+      });
+
+      await (executor as any).executeMergeNode(mergeTask);
+
+      // authorPrBodyWithSkill should receive structuredContext with task entries
+      expect(authorPrSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workflowSummary: expect.any(String),
+          structuredContext: expect.objectContaining({
+            tasks: expect.arrayContaining([
+              expect.objectContaining({
+                taskId: 't1',
+                description: 'Run unit tests',
+                status: 'completed',
+              }),
+            ]),
+          }),
+        }),
+      );
+    });
+  });
+
+  describe('UI-workflow Test Plan retention', () => {
+    it('canonical PR body retains executed UI verification commands in Test Plan', () => {
+      const ctx: PrAuthoringContext = {
+        workflowDescription: 'Add dark mode toggle',
+        tasks: [
+          { taskId: 't1', description: 'Implement dark mode CSS', status: 'completed' },
+          { taskId: 't2', description: 'Run visual regression', status: 'completed', command: 'pnpm test:visual' },
+          { taskId: 't3', description: 'Run accessibility check', status: 'completed', command: 'pnpm test:a11y' },
+          { taskId: 't4', description: 'Manual UI review', status: 'completed' },
+        ],
+      };
+
+      const body = buildCanonicalPrBody({
+        title: 'Dark Mode',
+        workflowSummary: 'Summary',
+        structuredContext: ctx,
+      });
+
+      // UI verification commands must appear in the Test Plan
+      expect(body).toContain('`pnpm test:visual`');
+      expect(body).toContain('`pnpm test:a11y`');
+      // Commands are checked (completed)
+      expect(body).toContain('- [x] `pnpm test:visual` — Run visual regression');
+      expect(body).toContain('- [x] `pnpm test:a11y` — Run accessibility check');
+      // Must not fall back to manual verification since command tasks exist
+      expect(body).not.toContain('Manual verification required');
+    });
+
+    it('UI verification commands are not dropped when mixed with non-command tasks', () => {
+      const ctx: PrAuthoringContext = {
+        tasks: [
+          { taskId: 't1', description: 'Write component', status: 'completed' },
+          { taskId: 't2', description: 'Screenshot check', status: 'completed', command: 'bash scripts/ui-visual-proof.sh' },
+        ],
+      };
+
+      const body = buildCanonicalPrBody({
+        title: 'UI Feature',
+        workflowSummary: 'Added UI feature',
+        structuredContext: ctx,
+      });
+
+      // The UI command must survive into the final body
+      expect(body).toContain('`bash scripts/ui-visual-proof.sh`');
+      expect(body).toContain('Screenshot check');
+    });
+  });
+
+  describe('visual-proof markdown preservation', () => {
+    it('canonical PR body includes visual proof markdown verbatim', () => {
+      const visualProof = [
+        '## Visual Proof',
+        '',
+        '| Before | After |',
+        '|--------|-------|',
+        '| ![before](https://img.example.com/before.png) | ![after](https://img.example.com/after.png) |',
+      ].join('\n');
+
+      const ctx: PrAuthoringContext = {
+        tasks: [
+          { taskId: 't1', description: 'Update UI', status: 'completed', command: 'pnpm test' },
+        ],
+        visualProofMarkdown: visualProof,
+      };
+
+      const body = buildCanonicalPrBody({
+        title: 'UI Update',
+        workflowSummary: 'Updated UI components',
+        structuredContext: ctx,
+      });
+
+      // Visual proof must appear in the body verbatim
+      expect(body).toContain('## Visual Proof');
+      expect(body).toContain('![before](https://img.example.com/before.png)');
+      expect(body).toContain('![after](https://img.example.com/after.png)');
+      // The whole visual proof block must be preserved
+      expect(body).toContain(visualProof);
+    });
+
+    it('canonical PR body omits visual proof section when no capture content exists', () => {
+      const body = buildCanonicalPrBody({
+        title: 'No Proof',
+        workflowSummary: 'Summary',
+        structuredContext: {
+          tasks: [{ taskId: 't1', description: 'Task', status: 'completed', command: 'echo ok' }],
+          // visualProofMarkdown is undefined
+        },
+      });
+
+      expect(body).not.toContain('Visual Proof');
+    });
+
+    it('visual proof is preserved through the full authorPrBodyWithSkill fallback path', async () => {
+      const logger = createMockLogger();
+      const bareAgent = {
+        name: 'claude',
+        stdinMode: 'ignore' as const,
+        bundledSkills: ['make-pr'],
+        buildCommand: () => ({ cmd: 'false', args: [], sessionId: 'x' }),
+        buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+      };
+
+      const executor = new TaskRunner({
+        orchestrator: {
+          getTask: () => null,
+          getAllTasks: () => [makeTask({ id: 't1', config: { workflowId: 'wf-1', executionAgent: 'claude' } })],
+        } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        executionAgentRegistry: {
+          get: () => bareAgent,
+          getSessionDriver: vi.fn().mockReturnValue(undefined),
+          listWithCapability: vi.fn().mockReturnValue([bareAgent]),
+        } as any,
+        cwd: '/tmp',
+        logger,
+      });
+
+      const visualProof = '## Visual Proof\n\n![screenshot](https://img.example.com/proof.png)\n\nVideo walkthrough: [link](https://example.com/video)';
+
+      const result = await (executor as any).authorPrBodyWithSkill({
+        workflowId: 'wf-1',
+        title: 'Visual Proof Preservation',
+        baseBranch: 'master',
+        featureBranch: 'plan/visual',
+        workflowSummary: 'Summary',
+        structuredContext: {
+          tasks: [
+            { taskId: 't1', description: 'Build UI', status: 'completed', command: 'pnpm build' },
+          ],
+          visualProofMarkdown: visualProof,
+        },
+        cwd: '/tmp',
+      });
+
+      // All agents fail (no skill installed) → canonical fallback must preserve visual proof
+      expect(result.agentName).toBe('canonical');
+      expect(result.body).toContain('## Visual Proof');
+      expect(result.body).toContain('![screenshot](https://img.example.com/proof.png)');
+      expect(result.body).toContain('Video walkthrough: [link](https://example.com/video)');
+      expect(result.body).toContain('pnpm build');
+    });
+
+    it('visual proof content is not dropped when structuredContext has both tasks and visual proof', () => {
+      const ctx: PrAuthoringContext = {
+        workflowName: 'UI Workflow',
+        workflowDescription: 'Add responsive layout',
+        tasks: [
+          { taskId: 't1', description: 'Implement CSS grid', status: 'completed' },
+          { taskId: 't2', description: 'Run responsive tests', status: 'completed', command: 'pnpm test:responsive' },
+          { taskId: 't3', description: 'Capture screenshots', status: 'completed', command: 'bash scripts/ui-visual-proof.sh' },
+        ],
+        visualProofMarkdown: '## Visual Proof\n\n### Desktop\n![desktop](https://img.example.com/desktop.png)\n\n### Mobile\n![mobile](https://img.example.com/mobile.png)',
+      };
+
+      const body = buildCanonicalPrBody({
+        title: 'Responsive Layout',
+        workflowSummary: 'Summary',
+        structuredContext: ctx,
+      });
+
+      // All sections must coexist
+      expect(body).toContain('## Summary');
+      expect(body).toContain('Add responsive layout');
+      expect(body).toContain('## Test Plan');
+      expect(body).toContain('`pnpm test:responsive`');
+      expect(body).toContain('`bash scripts/ui-visual-proof.sh`');
+      expect(body).toContain('## Revert Plan');
+      expect(body).toContain('## Visual Proof');
+      expect(body).toContain('![desktop](https://img.example.com/desktop.png)');
+      expect(body).toContain('![mobile](https://img.example.com/mobile.png)');
+      // Validate the body passes canonical schema validation
+      expect(validateCanonicalPrBody(body)).toEqual([]);
     });
   });
 });
