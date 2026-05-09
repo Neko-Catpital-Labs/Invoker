@@ -63,6 +63,7 @@ interface TaskPanelProps {
   task: TaskState | null;
   allTasks?: Map<string, TaskState>;
   baseBranch?: string;
+  workflowRepoUrl?: string;
   remoteTargets?: string[];
   executionAgents?: string[];
   onProvideInput: (task: TaskState) => void;
@@ -96,6 +97,25 @@ function effectiveExecutorSelectValue(task: TaskState): string {
   }
   if (task.config.executorType) return task.config.executorType;
   return 'worktree';
+}
+
+/**
+ * Format a repo URL for display. Handles GitHub HTTPS and SSH patterns,
+ * falling back to host/path for other URLs.
+ */
+function formatRepoUrl(url: string): string {
+  // SSH: git@github.com:org/repo.git
+  const sshMatch = url.match(/^git@([^:]+):(.+?)(?:\.git)?$/);
+  if (sshMatch) return `${sshMatch[1]}/${sshMatch[2]}`;
+
+  // HTTPS: https://github.com/org/repo.git or https://github.com/org/repo
+  try {
+    const parsed = new URL(url);
+    const path = parsed.pathname.replace(/^\//, '').replace(/\.git$/, '');
+    return `${parsed.host}/${path}`;
+  } catch {
+    return url;
+  }
 }
 
 function HeartbeatTimingSection({ task, formatDate: fmtDate }: { task: TaskState; formatDate: (d?: Date | string) => string }) {
@@ -164,6 +184,7 @@ export function TaskPanel({
   task,
   allTasks,
   baseBranch,
+  workflowRepoUrl,
   remoteTargets,
   executionAgents,
   onProvideInput,
@@ -371,7 +392,7 @@ export function TaskPanel({
             href={task.execution.reviewUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-xs font-mono text-blue-400 hover:text-blue-300 underline truncate max-w-[200px]"
+            className="text-xs font-mono text-blue-400 hover:text-blue-300 underline break-all whitespace-normal text-right max-w-[260px]"
             title={task.execution.reviewUrl}
             data-testid="pr-url-link"
           >
@@ -384,6 +405,16 @@ export function TaskPanel({
           <span className="text-sm text-gray-400">Review Status</span>
           <span className="text-xs text-gray-200" data-testid="pr-status-text">
             {task.execution.reviewStatus}
+          </span>
+        </div>
+      )}
+
+      {/* PR target repo (pending merge gates without a review URL yet) */}
+      {task.config.isMergeNode && task.status === 'pending' && !task.execution?.reviewUrl && workflowRepoUrl && (
+        <div className="flex items-center justify-between" data-testid="pr-target-repo">
+          <span className="text-sm text-gray-400">PR target repo</span>
+          <span className="text-xs font-mono text-gray-200 break-all whitespace-normal text-right max-w-[260px]" title={workflowRepoUrl}>
+            {formatRepoUrl(workflowRepoUrl)}
           </span>
         </div>
       )}
