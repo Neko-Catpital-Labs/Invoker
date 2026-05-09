@@ -2462,7 +2462,7 @@ if (isHeadless) {
       workflowMutationCoordinator = new PersistedWorkflowMutationCoordinator(
         persistence,
         workflowMutationOwnerId,
-        async (channel: string, args: unknown[]) => {
+        async (channel: string, args: unknown[], _context) => {
           const handler = workflowMutationDispatcher.get(channel);
           if (!handler) {
             throw new Error(`No workflow mutation dispatcher registered for ${channel}`);

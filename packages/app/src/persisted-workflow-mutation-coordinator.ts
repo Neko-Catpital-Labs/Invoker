@@ -13,6 +13,13 @@ type Deferred<T> = {
 type InvalidationSignal = {
   promise: Promise<never>;
   reject: (error: unknown) => void;
+  abortController: AbortController;
+};
+
+export type WorkflowMutationContext = {
+  signal: AbortSignal;
+  intentId: number;
+  workflowId: string;
 };
 
 function envMs(name: string, fallback: number): number {
@@ -53,7 +60,7 @@ export class PersistedWorkflowMutationCoordinator {
   constructor(
     private readonly persistence: SQLiteAdapter,
     private readonly ownerId: string,
-    private readonly dispatch: (channel: string, args: unknown[]) => Promise<unknown>,
+    private readonly dispatch: (channel: string, args: unknown[], context: WorkflowMutationContext) => Promise<unknown>,
     options?: { maxConcurrentWorkflowDrains?: number },
   ) {
     this.maxConcurrentWorkflowDrains = Math.max(1, options?.maxConcurrentWorkflowDrains ?? 1);
@@ -208,7 +215,12 @@ export class PersistedWorkflowMutationCoordinator {
     }, this.leaseHeartbeatMs);
     try {
       this.evictQueuedWorkflowIntentsForFence(workflowId, intent);
-      const dispatchPromise = Promise.resolve(this.dispatch(intent.channel, intent.args));
+      const mutationContext: WorkflowMutationContext = {
+        signal: invalidation.abortController.signal,
+        intentId: intent.id,
+        workflowId,
+      };
+      const dispatchPromise = Promise.resolve(this.dispatch(intent.channel, intent.args, mutationContext));
       void dispatchPromise.catch(() => {});
       const result = await Promise.race([
         dispatchPromise,
@@ -228,6 +240,7 @@ export class PersistedWorkflowMutationCoordinator {
       deferred?.reject(error);
     } finally {
       clearInterval(leaseHeartbeat);
+      invalidation.abortController.abort();
       this.runningIntentInvalidations.delete(intent.id);
       this.persistence.renewWorkflowMutationLease(workflowId, this.ownerId, {
         minHeartbeatIntervalMs: this.leaseRenewMinIntervalMs,
@@ -284,9 +297,11 @@ export class PersistedWorkflowMutationCoordinator {
     const promise = new Promise<never>((_, r) => {
       reject = r;
     });
+    const abortController = new AbortController();
     const entry: InvalidationSignal = {
       reject,
       promise,
+      abortController,
     };
     this.runningIntentInvalidations.set(intentId, entry);
     return entry;
@@ -315,6 +330,7 @@ export class PersistedWorkflowMutationCoordinator {
     const reason = `Superseded by ${fenceKind} intent #${newIntentId}`;
     this.persistence.failWorkflowMutationIntent(activeIntentId, reason);
     const invalidation = this.runningIntentInvalidations.get(activeIntentId);
+    invalidation?.abortController.abort(new WorkflowMutationInvalidatedError(reason));
     invalidation?.reject(new WorkflowMutationInvalidatedError(reason));
     process.stderr.write(
       `[workflow-mutation-coordinator] invalidated running intent ${activeIntentId} for ${workflowId} via ${fenceKind}#${newIntentId}\n`,
