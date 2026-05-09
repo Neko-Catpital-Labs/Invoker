@@ -922,6 +922,225 @@ describe('TaskRunner', () => {
     });
   });
 
+  describe('stale startup-failure lineage guard', () => {
+    it('suppresses metadata write and failed response when selectedAttemptId has advanced', async () => {
+      const handleWorkerResponse = vi.fn();
+      const updateTask = vi.fn();
+      // Orchestrator returns a task whose selectedAttemptId has moved forward
+      const orchestrator = {
+        getTask: () => makeTask({
+          id: 'stale-1',
+          status: 'running',
+          execution: { selectedAttemptId: 'attempt-2', generation: 0 },
+        }),
+        handleWorkerResponse,
+      };
+      const startupErr: any = new Error('SSH connection refused');
+      startupErr.workspacePath = '/tmp/stale-worktree';
+      startupErr.branch = 'experiment/stale-branch';
+      const throwingExecutor = {
+        type: 'ssh',
+        start: async () => { throw startupErr; },
+        onOutput: () => () => {},
+        onComplete: () => () => {},
+      };
+      const registry = {
+        getDefault: () => throwingExecutor,
+        get: () => throwingExecutor,
+        getAll: () => [throwingExecutor],
+      };
+
+      const runner = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: { updateTask } as any,
+        executorRegistry: registry as any,
+        cwd: '/tmp',
+      });
+
+      // Task was launched with attempt-1 but orchestrator now shows attempt-2
+      const task = makeTask({
+        id: 'stale-1',
+        status: 'running',
+        config: { command: 'echo hi', executorType: 'ssh' as any },
+        execution: { selectedAttemptId: 'attempt-1', generation: 0 },
+      });
+      await runner.executeTask(task);
+
+      // Startup-failure metadata must NOT be persisted
+      expect(updateTask).not.toHaveBeenCalledWith(
+        'stale-1',
+        expect.objectContaining({
+          execution: expect.objectContaining({ workspacePath: '/tmp/stale-worktree' }),
+        }),
+      );
+      // Failed WorkResponse must NOT be emitted
+      expect(handleWorkerResponse).not.toHaveBeenCalled();
+    });
+
+    it('suppresses metadata write and failed response when generation has advanced', async () => {
+      const handleWorkerResponse = vi.fn();
+      const updateTask = vi.fn();
+      // Orchestrator returns a task whose generation has bumped
+      const orchestrator = {
+        getTask: () => makeTask({
+          id: 'stale-gen',
+          status: 'running',
+          execution: { generation: 2 },
+        }),
+        handleWorkerResponse,
+      };
+      const startupErr: any = new Error('provision failed');
+      startupErr.workspacePath = '/tmp/old-worktree';
+      startupErr.branch = 'experiment/old-branch';
+      const throwingExecutor = {
+        type: 'ssh',
+        start: async () => { throw startupErr; },
+        onOutput: () => () => {},
+        onComplete: () => () => {},
+      };
+      const registry = {
+        getDefault: () => throwingExecutor,
+        get: () => throwingExecutor,
+        getAll: () => [throwingExecutor],
+      };
+
+      const runner = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: { updateTask } as any,
+        executorRegistry: registry as any,
+        cwd: '/tmp',
+      });
+
+      const task = makeTask({
+        id: 'stale-gen',
+        status: 'running',
+        config: { command: 'echo hi', executorType: 'ssh' as any },
+        execution: { generation: 1 },
+      });
+      await runner.executeTask(task);
+
+      // Metadata must not be written for the old generation
+      expect(updateTask).not.toHaveBeenCalledWith(
+        'stale-gen',
+        expect.objectContaining({
+          execution: expect.objectContaining({ workspacePath: '/tmp/old-worktree' }),
+        }),
+      );
+      expect(handleWorkerResponse).not.toHaveBeenCalled();
+    });
+
+    it('still persists metadata and emits response when lineage is current', async () => {
+      const handleWorkerResponse = vi.fn();
+      const updateTask = vi.fn();
+      // Orchestrator returns a task with matching lineage
+      const orchestrator = {
+        getTask: () => makeTask({
+          id: 'current-1',
+          status: 'running',
+          execution: { selectedAttemptId: 'attempt-1', generation: 0 },
+        }),
+        handleWorkerResponse,
+      };
+      const startupErr: any = new Error('git clone failed');
+      startupErr.workspacePath = '/tmp/current-worktree';
+      startupErr.branch = 'experiment/current-branch';
+      const throwingExecutor = {
+        type: 'ssh',
+        start: async () => { throw startupErr; },
+        onOutput: () => () => {},
+        onComplete: () => () => {},
+      };
+      const registry = {
+        getDefault: () => throwingExecutor,
+        get: () => throwingExecutor,
+        getAll: () => [throwingExecutor],
+      };
+
+      const runner = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: { updateTask } as any,
+        executorRegistry: registry as any,
+        cwd: '/tmp',
+      });
+
+      const task = makeTask({
+        id: 'current-1',
+        status: 'running',
+        config: { command: 'echo hi', executorType: 'ssh' as any },
+        execution: { selectedAttemptId: 'attempt-1', generation: 0 },
+      });
+      await runner.executeTask(task);
+
+      // Metadata SHOULD be persisted when lineage is current
+      expect(updateTask).toHaveBeenCalledWith('current-1', {
+        config: { executorType: 'ssh' },
+        execution: {
+          workspacePath: '/tmp/current-worktree',
+          branch: 'experiment/current-branch',
+        },
+      });
+      // Failed WorkResponse SHOULD be emitted
+      expect(handleWorkerResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actionId: 'current-1',
+          status: 'failed',
+        }),
+      );
+    });
+
+    it('suppresses both inner metadata and outer response when lineage is stale throughout', async () => {
+      const handleWorkerResponse = vi.fn();
+      const updateTask = vi.fn();
+      const orchestrator = {
+        getTask: () => makeTask({
+          id: 'inner-stale',
+          status: 'running',
+          execution: { selectedAttemptId: 'attempt-new', generation: 0 },
+        }),
+        handleWorkerResponse,
+      };
+      const startupErr: any = new Error('timeout');
+      startupErr.workspacePath = '/tmp/inner-stale-ws';
+      startupErr.branch = 'experiment/inner-stale';
+      startupErr.agentSessionId = 'sess-old';
+      const throwingExecutor = {
+        type: 'ssh',
+        start: async () => { throw startupErr; },
+        onOutput: () => () => {},
+        onComplete: () => () => {},
+      };
+      const registry = {
+        getDefault: () => throwingExecutor,
+        get: () => throwingExecutor,
+        getAll: () => [throwingExecutor],
+      };
+
+      const runner = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: { updateTask } as any,
+        executorRegistry: registry as any,
+        cwd: '/tmp',
+      });
+
+      const task = makeTask({
+        id: 'inner-stale',
+        status: 'running',
+        config: { command: 'echo hi', executorType: 'ssh' as any },
+        execution: { selectedAttemptId: 'attempt-old', generation: 0 },
+      });
+      await runner.executeTask(task);
+
+      // Neither inner metadata nor outer response should be written
+      expect(updateTask).not.toHaveBeenCalledWith(
+        'inner-stale',
+        expect.objectContaining({
+          execution: expect.objectContaining({ workspacePath: '/tmp/inner-stale-ws' }),
+        }),
+      );
+      expect(handleWorkerResponse).not.toHaveBeenCalled();
+    });
+  });
+
   describe('upstream branch metadata guard', () => {
     it('fails task when a completed worktree dep has no branch', async () => {
       const tasks = new Map<string, TaskState>();
