@@ -413,7 +413,7 @@ export function TaskPanel({
       {task.config.isMergeNode && task.status === 'pending' && !task.execution?.reviewUrl && workflowRepoUrl && (
         <div className="flex items-center justify-between" data-testid="pr-target-repo">
           <span className="text-sm text-gray-400">PR target repo</span>
-          <span className="text-xs font-mono text-gray-200 truncate max-w-[200px]" title={workflowRepoUrl}>
+          <span className="text-xs font-mono text-gray-200 break-all whitespace-normal text-right max-w-[260px]" title={workflowRepoUrl}>
             {formatRepoUrl(workflowRepoUrl)}
           </span>
         </div>
