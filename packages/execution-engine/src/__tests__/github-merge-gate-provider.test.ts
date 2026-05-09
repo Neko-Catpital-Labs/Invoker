@@ -238,4 +238,75 @@ describe('GitHubMergeGateProvider', () => {
       })).rejects.toThrow('parseable origin GitHub remote');
     });
   });
+
+  describe('checkApproval', () => {
+    it('treats a merged PR as approved with statusText "Merged"', async () => {
+      process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      spawnMock.mockImplementation(((cmd: string) => {
+        if (cmd === 'gh') {
+          return mockSpawnResult(JSON.stringify({
+            state: 'MERGED',
+            reviewDecision: 'APPROVED',
+            url: 'https://github.com/owner/repo/pull/1',
+          }), 0);
+        }
+        return mockSpawnResult('', 0);
+      }) as any);
+
+      const result = await provider.checkApproval({ identifier: '1', cwd: '/tmp/repo' });
+
+      expect(result.approved).toBe(true);
+      expect(result.rejected).toBe(false);
+      expect(result.statusText).toBe('Merged');
+    });
+
+    it('treats an open approved PR as non-terminal with statusText "Approved, awaiting merge"', async () => {
+      process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      spawnMock.mockImplementation(((cmd: string) => {
+        if (cmd === 'gh') {
+          return mockSpawnResult(JSON.stringify({
+            state: 'OPEN',
+            reviewDecision: 'APPROVED',
+            url: 'https://github.com/owner/repo/pull/2',
+          }), 0);
+        }
+        return mockSpawnResult('', 0);
+      }) as any);
+
+      const result = await provider.checkApproval({ identifier: '2', cwd: '/tmp/repo' });
+
+      expect(result.approved).toBe(false);
+      expect(result.rejected).toBe(false);
+      expect(result.statusText).toBe('Approved, awaiting merge');
+    });
+
+    it('treats a closed non-merged PR as terminal with statusText "Closed"', async () => {
+      process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      spawnMock.mockImplementation(((cmd: string) => {
+        if (cmd === 'gh') {
+          return mockSpawnResult(JSON.stringify({
+            state: 'CLOSED',
+            reviewDecision: null,
+            url: 'https://github.com/owner/repo/pull/3',
+          }), 0);
+        }
+        return mockSpawnResult('', 0);
+      }) as any);
+
+      const result = await provider.checkApproval({ identifier: '3', cwd: '/tmp/repo' });
+
+      expect(result.approved).toBe(false);
+      expect(result.rejected).toBe(true);
+      expect(result.statusText).toBe('Closed');
+    });
+  });
 });
