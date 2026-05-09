@@ -20,9 +20,23 @@ What it proves:
     preempted and stale SSH startup-failure metadata is suppressed on newer
     lineages.
 
-This wrapper runs both committed repros:
+  Scenario 3 — Stale late completion after reset:
+    A stale task completion must be rejected after `recreate` or `retry-task`
+    resets the workflow lineage.
+
+  Scenario 4 — Same-workflow tracked-fix vs recreate:
+    A tracked fix must not retain authority over a same-workflow recreate
+    request under overload churn.
+
+  Scenario 5 — Owner restart loop during tracked recreate-task:
+    Recreate-task authority must survive repeated owner restart churn.
+
+This wrapper runs the committed repros for that stack:
   - scripts/repro/repro-recreate-task-blocked-by-running-workflow-mutation.sh
   - scripts/repro/repro-fix-intent-cancellation-and-stale-ssh-metadata.sh
+  - scripts/repro/repro-stale-late-completion-after-reset.sh
+  - scripts/repro/repro-same-workflow-tracked-fix-vs-recreate.sh
+  - scripts/repro/repro-owner-restart-loop-during-tracked-recreate-task.sh
 EOF
 }
 
@@ -58,14 +72,18 @@ cd "$ROOT_DIR"
 
 queue_args=()
 shared_args=(--expect "$EXPECTATION")
+late_completion_args=()
 if [[ "$EXPECTATION" == "bug" ]]; then
   queue_args+=(--expect-bug)
+  late_completion_args+=(--expect-bug)
 else
   queue_args+=(--expect-fixed)
+  late_completion_args+=(--expect-fixed)
 fi
 if [[ "$KEEP_ARTIFACTS" == "1" ]]; then
   queue_args+=(--keep-temp)
   shared_args+=(--keep-artifacts)
+  late_completion_args+=(--keep-temp)
 fi
 
 echo "==> stack repro: Scenario 1 — recreate-task queue authority"
@@ -76,4 +94,24 @@ echo "==> stack repro: Scenario 2 — fix-intent cancellation and stale SSH meta
 bash scripts/repro/repro-fix-intent-cancellation-and-stale-ssh-metadata.sh "${shared_args[@]}"
 
 echo
+echo "==> stack repro: Scenario 3 — stale late completion after reset"
+bash scripts/repro/repro-stale-late-completion-after-reset.sh --mode=both "${late_completion_args[@]}"
+
+echo
+if [[ "$EXPECTATION" == "fixed" ]]; then
+  echo "==> stack repro: Scenario 4 — same-workflow tracked-fix vs recreate"
+  bash scripts/repro/repro-same-workflow-tracked-fix-vs-recreate.sh
+
+  echo
+  echo "==> stack repro: Scenario 5 — owner restart loop during tracked recreate-task"
+  bash scripts/repro/repro-owner-restart-loop-during-tracked-recreate-task.sh
+
+  echo
+else
+  echo "==> stack repro: skipping fixed-only overload scenarios for --expect bug"
+  echo "skipped: repro-same-workflow-tracked-fix-vs-recreate.sh"
+  echo "skipped: repro-owner-restart-loop-during-tracked-recreate-task.sh"
+  echo
+fi
+
 echo "==> stack repro matched expectation"
