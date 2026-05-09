@@ -27,6 +27,8 @@ export class ClaudeExecutionAgent implements ExecutionAgent {
   readonly name = 'claude';
   readonly stdinMode = 'ignore' as const;
   readonly linuxTerminalTail = 'exec_bash' as const;
+  readonly bundledSkillRoot: string;
+  readonly bundledSkills = ['make-pr'] as const;
 
   private readonly command: string;
   private readonly fixCommand: string;
@@ -40,6 +42,7 @@ export class ClaudeExecutionAgent implements ExecutionAgent {
     this.configDir = config.configDir ?? join(homedir(), '.claude');
     this.containerHomePath = config.containerHomePath ?? '/home/invoker';
     this.apiKey = config.apiKey ?? process.env.ANTHROPIC_API_KEY ?? '';
+    this.bundledSkillRoot = join(this.configDir, 'skills');
   }
 
   buildCommand(fullPrompt: string): AgentCommandSpec {
