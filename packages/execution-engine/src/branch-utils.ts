@@ -86,6 +86,29 @@ export function buildExperimentBranchName(
 }
 
 /**
+ * Extract the unique suffix from a full attempt ID.
+ *
+ * Attempt IDs are formatted as `${nodeId}-a${shortId}` (see `createAttempt`
+ * in workflow-graph). Since `nodeId` equals the action ID that already appears
+ * in the branch path, including it again in the lifecycle tag doubles the
+ * path length and can exceed filesystem limits.
+ *
+ * When the attempt ID starts with the known action ID prefix, this strips the
+ * prefix and returns only the unique `-a<shortId>` tail. Falls back to the
+ * full attempt ID when the prefix doesn't match (e.g. the attempt ID *is*
+ * the task ID itself, used as a fallback in `resolveAttemptIdForStart`).
+ */
+export function extractAttemptSuffix(attemptId: string | undefined, actionId: string): string {
+  if (!attemptId) return '';
+  if (actionId && attemptId.startsWith(actionId)) {
+    const suffix = attemptId.slice(actionId.length);
+    // Expect something like "-a<hex>" — at minimum a non-empty string.
+    if (suffix.length > 0) return suffix;
+  }
+  return attemptId;
+}
+
+/**
  * Restrict the attempt-short component to filesystem- and git-safe characters.
  * Keeps a-z, 0-9, dash, underscore.
  *
