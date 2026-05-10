@@ -21,9 +21,9 @@ Source of truth: `packages/app/src/plan-parser.ts` (interfaces + validation, lin
 | Field | Type | Default | When to set |
 |-------|------|---------|-------------|
 | `id` | string | *required* | Always. Kebab-case, descriptive: `implement-auth-middleware`, `test-auth-middleware`. |
-| `description` | string | *required* | Always. What the task does and why. May include **optional** multi-line sections for handoff: `Files:`, `Change types:`, `Acceptance criteria:` (best-effort hints; see `references/task-patterns.md`). Not validated by `plan-parser.ts`. |
+| `description` | string | *required* | Always. What the task does and why. For implementation plans (`onFinish != none`), prompt tasks must include `Files:`, `Change types:`, and `Acceptance criteria:` headings for zero-context execution handoff. |
 | `command` | string | — | Task runs a shell command. Mutually exclusive with `prompt`. |
-| `prompt` | string | — | Task needs LLM reasoning. Include file paths, line numbers, specific instructions. Mutually exclusive with `command`. |
+| `prompt` | string | — | Task needs LLM reasoning. Include file paths, line numbers, specific instructions, zero-context execution framing ("assume no prior context"), and deterministic pass/fail expectations (`exit code 0`, expected output, or explicit pass condition). Mutually exclusive with `command`. |
 | `dependencies` | string[] | `[]` | Always include, even if empty. List task IDs that must complete first. |
 | `executorType` | `worktree` \| `docker` \| `ssh` | `worktree` | `worktree` for tasks that run in a git worktree (default). `docker` for isolated environments. `ssh` for remote execution via SSH targets. |
 | `remoteTargetId` | string | — | Required when `executorType: ssh`. Must match a key in `~/.invoker/config.json` `remoteTargets`. |

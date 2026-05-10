@@ -1,0 +1,47 @@
+name: "Anti-pattern J: prompt lacks zero-context metadata contract"
+description: "Implementation plan where prompt task omits strict zero-context handoff fields."
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: git@github.com:example-org/acme-repo.git
+tasks:
+  - id: implement-runtime-flow
+    description: |
+      Goal:
+      - Implement deterministic runtime flow updates.
+      Motivation:
+      - Keep remote execution instructions explicit and reproducible.
+      Alternative considerations:
+      - Option A (chosen): targeted transport-layer update.
+      - Option B: broad refactor across unrelated modules.
+      Implementation details:
+      - Apply runtime-flow edits and preserve existing behavior contracts.
+      Layer: transport
+      Feature state: active
+    prompt: |
+      Goal:
+      - Implement deterministic runtime flow updates in task-runner.
+      Motivation:
+      - Keep execution behavior stable under delegation.
+      Alternative considerations:
+      - Option A (chosen): targeted update.
+      - Option B: broad refactor.
+      Implementation details:
+      - Update packages/execution-engine/src/task-runner.ts.
+      Acceptance criteria:
+      - Tests should pass.
+    dependencies: []
+  - id: final-regression
+    description: |
+      Goal:
+      - Run final full-suite regression gate.
+      Motivation:
+      - Ensure implementation updates remain stable.
+      Alternative considerations:
+      - Option A (chosen): full repository regression.
+      - Option B: package-only checks.
+      Implementation details:
+      - Execute root-level test gate after implementation task.
+      Layer: app_regression
+      Feature state: active
+    command: "pnpm run test:all"
+    dependencies: [implement-runtime-flow]

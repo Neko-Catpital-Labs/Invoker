@@ -113,6 +113,8 @@ When writing `prompt` fields for LLM tasks:
 3. **State acceptance criteria**: `"The function should return a PlanDefinition object with..."`
 4. **Mention related files**: `"See packages/core/src/orchestrator.ts:102-124 for the PlanDefinition interface"`
 5. **Keep scope narrow**: one logical change per task, not "implement the entire feature"
+6. **Assume zero context**: include explicit phrasing such as "assume no prior context" or "zero-context execution".
+7. **Include deterministic pass/fail expectations**: require explicit outcomes like `exit code 0`, `exits 0`, or expected output text.
 
 ## Experiment artifact handoff templates (required when experiments are planned)
 
@@ -152,21 +154,21 @@ Example cleanup command:
   dependencies: [experiment-inv-123, implement-inv-123, verify-inv-123]
 ```
 
-## Delegated execution hints (best effort; not validated by default)
+## Delegated execution hints
 
-Planning often **misses files** or **adds scope** later. These headings in a task `description` are **recommended**, **revisable**, and **not** required for `skill-doctor` or `lint-task-atomicity.sh` to pass. Optional advisory output: `bash skills/plan-to-invoker/scripts/lint-task-atomicity.sh --warn-delegation <plan.yaml>`.
+Planning often **misses files** or **adds scope** later. For implementation plans (`onFinish != none`), prompt tasks are hard-gated and must include structured handoff metadata. For verify-only plans (`onFinish: none`), these headings stay advisory. Optional extra hints: `bash skills/plan-to-invoker/scripts/lint-task-atomicity.sh --warn-delegation <plan.yaml>`.
 
 File-count guidance (for example, aiming around 10 touched files in a task) is a **soft heuristic** for reviewability, not a hard limit. If correctness or shared wiring requires broader edits, allow the task to exceed that target and capture the rationale in `description`.
 
-**Suggested blocks** (in `description`, when helpful):
+For implementation plans (`onFinish != none`), prompt tasks are hard-gated by `skill-doctor`/atomicity lint and must include these blocks in `description`:
 
-1. **`Files:`** — Repo-relative paths known when the task was written; use `TBD` or "may grow" if unsure. **Not** an exhaustive contract—implementation may touch additional files; amend the plan or add tasks if so.
-2. **`Change types:`** — Per listed path: `create`, `modify`, `delete`, `rename`, `move`, `config-only`, `test-only`, `docs-only`, `generated`, or `none`—as **hints** only.
-3. **`Acceptance criteria:`** — Objective checks where possible (`cd … && pnpm test`, `grep -q`, exit codes). Vague text is acceptable when you cannot yet define a command; tighten in a follow-up plan revision.
+1. **`Files:`** — Repo-relative paths the executor must inspect/modify. Keep this synchronized with prompt instructions.
+2. **`Change types:`** — Per listed path: `create`, `modify`, `delete`, `rename`, `move`, `config-only`, `test-only`, `docs-only`, `generated`, or `none`.
+3. **`Acceptance criteria:`** — Objective deterministic checks with concrete pass/fail language.
 
-**`prompt` tasks:** The multiline `prompt` still carries the real instructions; the three blocks in `description` are a **skimmable summary** for handoff.
+**`prompt` tasks:** The multiline `prompt` must be self-contained for remote execution with no chat context. Include zero-context framing and deterministic expected outcomes directly in the prompt body.
 
-**`command` tasks:** Same optional pattern—helps executors see scope before running the shell line.
+**`command` tasks:** The same headings are still recommended; for verify-only plans they remain advisory.
 
 **Anti-patterns (soft):** Pretending the first draft file list is complete; skipping verification entirely; "manually test in the app" with no scripted or Playwright hook when automation is feasible.
 

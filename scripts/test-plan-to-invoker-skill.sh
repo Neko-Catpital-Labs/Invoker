@@ -7,6 +7,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SKILL_DIR="$REPO_ROOT/.claude/skills/plan-to-invoker"
 SKILL_MD="$SKILL_DIR/SKILL.md"
 PLAYBOOK="$SKILL_DIR/playbooks/verify-then-build.md"
+TASK_PATTERNS="$SKILL_DIR/references/task-patterns.md"
 CURSOR_LINK="$REPO_ROOT/.cursor/skills/plan-to-invoker"
 CODEX_LINK="$HOME/.codex/skills/plan-to-invoker"
 
@@ -26,6 +27,7 @@ must_contain() {
 
 [[ -f "$SKILL_MD" ]] || fail "expected $SKILL_MD"
 [[ -f "$PLAYBOOK" ]] || fail "expected $PLAYBOOK"
+[[ -f "$TASK_PATTERNS" ]] || fail "expected $TASK_PATTERNS"
 
 # Cursor skill symlink points at canonical copy (optional but catches drift)
 if [[ -e "$CURSOR_LINK" ]]; then
@@ -62,6 +64,7 @@ must_contain "$SKILL_MD" "see playbook" "SKILL Execution must reference the play
 must_contain "$SKILL_MD" "Phase 1b" "SKILL must reference Phase 1b"
 must_contain "$SKILL_MD" "Policy-matrix documents" "SKILL must document policy-matrix coverage mode"
 must_contain "$SKILL_MD" "verify-noop" "SKILL must explain policy-matrix degradation checks"
+must_contain "$SKILL_MD" "zero-context executable" "SKILL must require zero-context executable prompt instructions"
 
 # Playbook — Phase 1a / 1b (three lanes) and anti-patterns
 must_contain "$PLAYBOOK" "### Phase 1a — Static analysis" "Playbook must define Phase 1a"
@@ -71,6 +74,11 @@ must_contain "$PLAYBOOK" "pnpm test" "Playbook must document pnpm test for behav
 must_contain "$PLAYBOOK" "pnpm run test:all" "Playbook must document the final full-suite regression gate"
 must_contain "$PLAYBOOK" "Invoker is mandatory" "Playbook must warn when Invoker verification is mandatory"
 must_contain "$PLAYBOOK" "coverageItems" "Playbook must document row-level coverage for policy-matrix sources"
+must_contain "$PLAYBOOK" "assume no prior context" "Playbook must require zero-context prompt framing for implementation tasks"
+
+# Task patterns — strict prompt handoff requirements
+must_contain "$TASK_PATTERNS" "Assume zero context" "Task patterns must define zero-context prompt requirement"
+must_contain "$TASK_PATTERNS" "deterministic pass/fail expectations" "Task patterns must require deterministic prompt outcomes"
 
 echo "OK: plan-to-invoker skill contract checks passed"
 

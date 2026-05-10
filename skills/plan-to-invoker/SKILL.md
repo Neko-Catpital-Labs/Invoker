@@ -23,7 +23,7 @@ Grep-only checks are Phase 1a only; behavioral claims require executed Phase 1b 
 
 **Policy-matrix documents:** When the source is an architecture or policy document with a decision table, exception rules, or cross-cutting invariants, you must preserve row-level coverage before authoring workflows. Do not stop at files/functions/packages; every required policy row must map to a workflow step or an explicit waiver.
 
-**Delegated task hints (best effort):** When authoring tasks, consider adding `Files:`, `Change types:`, and `Acceptance criteria:` blocks in each task `description` to help handoff to another agent—lists reflect what you know **at planning time** and can be updated (`TBD`, follow-on tasks) as scope grows. **Not** required for `skill-doctor` to pass. See `references/task-patterns.md` § *Delegated execution hints*.
+**Delegated task hints (hard requirement for implementation plans):** For plans with `onFinish != none`, every prompt task must include `Files:`, `Change types:`, and `Acceptance criteria:` sections in `description`. Prompt text must be zero-context executable: assume no prior chat knowledge, include deterministic pass/fail expectations, and keep instructions self-contained. Verify-only plans (`onFinish: none`) keep delegation hints advisory.
 
 **File-count sizing guidance (soft):** Treat any "about 10 files" guidance as a reviewability heuristic, not a hard constraint. Prefer smaller slices when practical, but allow broader edits when correctness, shared wiring, or coupled refactors require it.
 
@@ -61,7 +61,7 @@ bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>
 - `--source-file FILE` — run assumption and coverage checks against a separate source document
 - `--coverage-map FILE` — require row-to-workflow traceability for policy-matrix sources
 - `--stack-manifest FILE` — require coverage-map workflow labels to match a real authored workflow stack
-- `--warn-delegation` — pass advisory delegation-hint warnings from atomicity lint (no additional failures)
+- `--warn-delegation` — print extra advisory delegation-hint warnings from atomicity lint
 - `--verbose` — show detailed output from each sub-check
 - `--help` — show usage information
 
@@ -80,7 +80,7 @@ If `skill-doctor.sh` fails, run individual checks to isolate the problem:
    `bash skills/plan-to-invoker/scripts/validate-plan.sh <plan-file>`
 4. `step-lint-atomicity`
    `bash skills/plan-to-invoker/scripts/lint-task-atomicity.sh <plan-file>`  
-  Optional (warnings only, exit 0): append `--warn-delegation` for **best-effort** hints if `Files:` / `Change types:` / `Acceptance criteria:` are missing in descriptions. For implementation plans (`onFinish != none`), this step hard-fails missing/invalid `Layer:` and `Feature state:` metadata, missing required rationale headings in `description` on any task (`Goal`, `Motivation`, `Alternative considerations`/`Alternatives`, `Implementation details`/`Implementation`), missing required rationale headings in `prompt` for prompt tasks, invalid cross-layer dependency direction without `Layer exception: allowed`, and missing experiment-artifact handoff/cleanup contract when experiment tasks are present.
+  Optional: append `--warn-delegation` to print additional advisory hints. Atomicity lint always runs `--strict-delegation` inside `skill-doctor` and, for implementation plans (`onFinish != none`), hard-fails missing/invalid `Layer:` and `Feature state:` metadata, missing required rationale headings in `description` on any task (`Goal`, `Motivation`, `Alternative considerations`/`Alternatives`, `Implementation details`/`Implementation`), missing required rationale headings in `prompt` for prompt tasks, prompt tasks without `Files:`/`Change types:`/`Acceptance criteria:` description blocks, prompts missing zero-context execution framing, prompts missing deterministic pass/fail expectations, invalid cross-layer dependency direction without `Layer exception: allowed`, and missing experiment-artifact handoff/cleanup contract when experiment tasks are present.
 5. `step-parse-verify-results`
    `bash skills/plan-to-invoker/scripts/parse-results.sh < /tmp/invoker-verify.txt`
 
