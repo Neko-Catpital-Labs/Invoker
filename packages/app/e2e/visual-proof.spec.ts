@@ -80,6 +80,22 @@ const MERGE_GATE_TEXT_VISUAL_PLAN = {
   ],
 };
 
+/** Manual-merge plan: inline approve button would render here on legacy builds. */
+const MERGE_GATE_NO_INLINE_APPROVE_PLAN = {
+  name: 'Merge gate no inline approve',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'merge' as const,
+  mergeMode: 'manual',
+  tasks: [
+    {
+      id: 'mg-no-inline-work',
+      description: 'Sole task before merge gate',
+      command: 'echo ok',
+      dependencies: [] as string[],
+    },
+  ],
+};
+
 /** Plan for queue-action-surface hardening: combines canonical states, dependency relationships, and destructive actions. */
 const QUEUE_HARDENING_PLAN = {
   name: 'Queue Hardening Visual Proof',
@@ -231,6 +247,44 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByTestId('merge-gate-primary-label')).toBeVisible();
     await captureScreenshot(page, 'merge-gate-node-text-black');
     await assertPageScreenshot(page, 'merge-gate-node-text-black');
+  });
+
+  test('merge-gate-no-inline-approve — approval moves from chip to TaskPanel', async ({ page }) => {
+    await page.evaluate((yaml) => window.invoker.loadPlan(yaml), yamlStringify(MERGE_GATE_NO_INLINE_APPROVE_PLAN));
+    await page
+      .locator('.react-flow__node[data-testid$="mg-no-inline-work"]')
+      .first()
+      .waitFor({ state: 'visible', timeout: 15000 });
+
+    const mergeGateTaskId = await page.evaluate(async () => {
+      const result = await window.invoker.getTasks();
+      const tasks = Array.isArray(result) ? result : result.tasks;
+      const mergeTask = tasks.find((task: { id: string }) => task.id.includes('__merge__'));
+      return mergeTask?.id ?? null;
+    });
+    expect(mergeGateTaskId).toBeTruthy();
+
+    await injectTaskStates(page, [
+      {
+        taskId: mergeGateTaskId!,
+        changes: { status: 'awaiting_approval', execution: { startedAt: new Date() } },
+      },
+    ]);
+
+    const mergeGateNode = page
+      .locator(`.react-flow__node[data-testid="${mergeGateTaskId}"], .react-flow__node[data-testid$="${mergeGateTaskId}"]`)
+      .first();
+    await expect(mergeGateNode).toBeVisible({ timeout: 15000 });
+    await expect(mergeGateNode.getByText('APPROVE')).toBeVisible();
+
+    // Inline chip button must be gone — approval lives in the TaskPanel now.
+    await expect(mergeGateNode.locator('[data-testid="approve-merge-button"]')).toHaveCount(0);
+
+    await mergeGateNode.click();
+    await expect(page.getByRole('heading', { name: /Merge gate for/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Approve Merge' })).toBeVisible();
+
+    await captureScreenshot(page, 'merge-gate-no-inline-approve');
   });
 
   test('interactive-status-hues — fixing-with-ai, needs-input, awaiting-approval', async ({ page }) => {
