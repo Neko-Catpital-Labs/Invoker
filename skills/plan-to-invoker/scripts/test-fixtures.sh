@@ -21,6 +21,7 @@ DOCTOR_NEGATIVE_FIXTURES=(
   "anti-pattern-g-monolithic-prompt-edit-bridge.yaml"
   "anti-pattern-h-layer-order-violation.yaml"
   "anti-pattern-i-final-regression-not-test-all.yaml"
+  "anti-pattern-j-zero-context-missing-metadata.yaml"
 )
 
 is_doctor_negative_fixture() {
@@ -714,6 +715,144 @@ EOF
   fi
 }
 
+test_lint_strict_accepts_zero_context_prompt_contract() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: "Strict prompt contract pass"
+description: "Implementation plan with zero-context prompt contract"
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: git@github.com:example-org/acme-repo.git
+tasks:
+  - id: implement-runtime-flow
+    description: |
+      Goal:
+      - Implement deterministic runtime flow updates.
+      Motivation:
+      - Keep remote execution instructions explicit and reproducible.
+      Alternative considerations:
+      - Option A (chosen): apply targeted runtime updates.
+      - Option B: delay updates until a later refactor.
+      Implementation details:
+      - Apply runtime-flow edits and preserve current behavior contracts.
+      Layer: transport
+      Feature state: active
+      Files:
+      - packages/execution-engine/src/task-runner.ts
+      Change types:
+      - modify
+      Acceptance criteria:
+      - `cd packages/execution-engine && pnpm test` exits 0.
+    prompt: |
+      Goal:
+      - Implement deterministic runtime flow updates in task-runner.
+      Motivation:
+      - Ensure execution can succeed when delegated to a remote runner.
+      Alternative considerations:
+      - Option A (chosen): targeted updates in task-runner.
+      - Option B: broad refactor across unrelated modules.
+      Implementation details:
+      - Assume no prior context; read packages/execution-engine/src/task-runner.ts and apply the scoped runtime changes.
+      - Keep behavior deterministic and document expected output in task notes.
+      Acceptance criteria:
+      - Verify `cd packages/execution-engine && pnpm test` exits 0.
+      - Use exit code 0 as the pass condition.
+    dependencies: []
+  - id: final-regression
+    description: |
+      Goal:
+      - Run final full-suite regression gate.
+      Motivation:
+      - Ensure implementation updates remain stable.
+      Alternative considerations:
+      - Option A (chosen): full repository regression.
+      - Option B: package-only checks.
+      Implementation details:
+      - Execute root-level test gate after implementation task.
+      Layer: app_regression
+      Feature state: active
+    command: "pnpm run test:all"
+    dependencies: [implement-runtime-flow]
+EOF
+
+  bash "$LINT_SCRIPT" --strict-delegation "$temp_plan" >/dev/null
+}
+
+test_lint_strict_rejects_missing_zero_context_contract() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: "Strict prompt contract fail"
+description: "Implementation plan missing strict zero-context requirements"
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: git@github.com:example-org/acme-repo.git
+tasks:
+  - id: implement-runtime-flow
+    description: |
+      Goal:
+      - Implement deterministic runtime flow updates.
+      Motivation:
+      - Keep remote execution instructions explicit and reproducible.
+      Alternative considerations:
+      - Option A (chosen): apply targeted runtime updates.
+      - Option B: delay updates until a later refactor.
+      Implementation details:
+      - Apply runtime-flow edits and preserve current behavior contracts.
+      Layer: transport
+      Feature state: active
+    prompt: |
+      Goal:
+      - Implement deterministic runtime flow updates in task-runner.
+      Motivation:
+      - Ensure execution can succeed when delegated to a remote runner.
+      Alternative considerations:
+      - Option A (chosen): targeted updates in task-runner.
+      - Option B: broad refactor across unrelated modules.
+      Implementation details:
+      - Read packages/execution-engine/src/task-runner.ts and apply scoped changes.
+      Acceptance criteria:
+      - Verify tests pass.
+    dependencies: []
+  - id: final-regression
+    description: |
+      Goal:
+      - Run final full-suite regression gate.
+      Motivation:
+      - Ensure implementation updates remain stable.
+      Alternative considerations:
+      - Option A (chosen): full repository regression.
+      - Option B: package-only checks.
+      Implementation details:
+      - Execute root-level test gate after implementation task.
+      Layer: app_regression
+      Feature state: active
+    command: "pnpm run test:all"
+    dependencies: [implement-runtime-flow]
+EOF
+
+  local output
+  set +e
+  output=$(bash "$LINT_SCRIPT" --strict-delegation "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected strict lint to reject missing zero-context prompt contract" >&2
+    return 1
+  fi
+
+  if ! grep -q 'requires a "Files:" section in description for zero-context remote runners' <<<"$output"; then
+    echo "Expected strict Files heading error, got: $output" >&2
+    return 1
+  fi
+}
+
 # Check dependencies
 if ! command -v jq &>/dev/null; then
   fail "jq is required for JSON parsing tests"
@@ -782,6 +921,8 @@ run_test "Lint: reject final gate missing dependencies" test_lint_rejects_final_
 run_test "Lint: reject missing design sections for prompt tasks" test_lint_requires_design_sections_for_prompt_tasks
 run_test "Lint: accept prompt tasks with design sections" test_lint_accepts_design_sections_for_prompt_tasks
 run_test "Lint: reject missing design sections for command tasks" test_lint_requires_design_sections_for_command_tasks
+run_test "Lint strict: accept zero-context prompt contract" test_lint_strict_accepts_zero_context_prompt_contract
+run_test "Lint strict: reject missing zero-context prompt contract" test_lint_strict_rejects_missing_zero_context_contract
 
 echo ""
 echo "========================================="

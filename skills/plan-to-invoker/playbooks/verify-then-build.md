@@ -147,6 +147,12 @@ Use verified facts + `references/task-patterns.md` to generate the implementatio
 
 Set `mergeMode: github` (GitHub PR / **GithubPR** merge gate) on the implementation YAML unless the user explicitly asked for `manual` or `automatic`.
 
+For prompt tasks in implementation plans, write instructions as if the remote executor has no chat history:
+
+- Include explicit zero-context framing (for example: "assume no prior context").
+- Include deterministic pass/fail expectations (`exit code 0`, expected output text, or explicit pass condition).
+- Keep `Files:`, `Change types:`, and `Acceptance criteria:` in each prompt-task description aligned with prompt instructions.
+
 For each failed verification:
 
 - Missing file → add a task to create it before tasks that reference it

@@ -1,26 +1,40 @@
 #!/usr/bin/env bash
 # Enforce atomic + detailed task quality constraints for Invoker plans.
-# Usage: bash lint-task-atomicity.sh [--warn-delegation] <plan.yaml>
+# Usage: bash lint-task-atomicity.sh [--warn-delegation] [--strict-delegation] <plan.yaml>
 #
 # --warn-delegation  Print advisory warnings if task descriptions omit best-effort
 #                    delegation headings (Files: / Change types: / Acceptance criteria:).
 #                    Does not change exit code (still 0 if no hard errors). Optional.
+# --strict-delegation  For implementation plans (onFinish != none), fail prompt tasks
+#                    that are not self-contained for zero-context remote execution.
 set -euo pipefail
 
 warn_delegation=0
-if [[ "${1:-}" == "--warn-delegation" ]]; then
-  warn_delegation=1
-  shift
-fi
+strict_delegation=0
+while [[ $# -gt 0 ]]; do
+  case "${1:-}" in
+    --warn-delegation)
+      warn_delegation=1
+      shift
+      ;;
+    --strict-delegation)
+      strict_delegation=1
+      shift
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
 
-file="${1:?Usage: lint-task-atomicity.sh [--warn-delegation] <plan.yaml>}"
+file="${1:?Usage: lint-task-atomicity.sh [--warn-delegation] [--strict-delegation] <plan.yaml>}"
 
 if [[ ! -f "$file" ]]; then
   echo "ERROR: File not found: $file" >&2
   exit 1
 fi
 
-awk -v warnDelegation="$warn_delegation" '
+awk -v warnDelegation="$warn_delegation" -v strictDelegation="$strict_delegation" '
 function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
 function strip_quotes(s) { gsub(/["'\''"]/, "", s); return s }
 function normalize_command(s) {
@@ -189,6 +203,23 @@ function flush_task(    wc, and_count, valid_id, d, desc_lower, idx) {
       }
       if (prompt_lower !~ /(^|[ \t])(implementation details|implementation):/) {
         errors[++errn] = "Task \"" id "\" prompt missing required \"Implementation details:\" (or \"Implementation:\") section for AI implementation tasks"
+      }
+      if (strictDelegation == 1) {
+        if (desc_lower !~ /(^|\n)[ \t]*files:/) {
+          errors[++errn] = "Task \"" id "\" prompt execution requires a \"Files:\" section in description for zero-context remote runners"
+        }
+        if (desc_lower !~ /(^|\n)[ \t]*change types:/) {
+          errors[++errn] = "Task \"" id "\" prompt execution requires a \"Change types:\" section in description for zero-context remote runners"
+        }
+        if (desc_lower !~ /(^|\n)[ \t]*acceptance criteria:/) {
+          errors[++errn] = "Task \"" id "\" prompt execution requires an \"Acceptance criteria:\" section in description for zero-context remote runners"
+        }
+        if (prompt_lower !~ /(assume no prior context|zero-context|zero context|no prior context)/) {
+          errors[++errn] = "Task \"" id "\" prompt must state zero-context execution expectations (for example: assume no prior context)"
+        }
+        if (prompt_lower !~ /(exit code 0|exits 0|pass condition|expected output)/) {
+          errors[++errn] = "Task \"" id "\" prompt must include deterministic pass/fail expectations (exit code 0, pass condition, or expected output)"
+        }
       }
     }
   }

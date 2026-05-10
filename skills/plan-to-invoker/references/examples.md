@@ -56,16 +56,15 @@ Complex plan with diamond dependencies. Uses `onFinish: pull_request` for manual
 - `fixtures/negative/anti-pattern-g-monolithic-prompt-edit-bridge.yaml` — Monolithic `wf-1777929074509-8`-style workflow missing dependency-first layered decomposition metadata
 - `fixtures/negative/anti-pattern-h-layer-order-violation.yaml` — Lower layer depends on higher layer without `Layer exception: allowed`
 - `fixtures/negative/anti-pattern-i-final-regression-not-test-all.yaml` — Implementation plan ends without a terminal `pnpm run test:all` gate
+- `fixtures/negative/anti-pattern-j-zero-context-missing-metadata.yaml` — Prompt task omits strict zero-context handoff metadata required for implementation plans
 
 All anti-patterns are validated by `scripts/test-fixtures.sh` with deterministic error detection.
 
 ---
 
-## 6. Delegation hints and bugfix repro (documentation only)
+## 6. Delegation hints and bugfix repro
 
-**Not fixture-backed** — patterns for human-authored plans.
-
-**Delegation (best effort):** Tasks may include in `description`:
+**Delegation for implementation plans (`onFinish != none`) is required for prompt tasks.** Include in `description`:
 
 ```yaml
 description: |
@@ -74,7 +73,7 @@ description: |
   Acceptance criteria: cd packages/foo && pnpm test exits 0.
 ```
 
-Omit or use `TBD` under `Files:` when scope is unknown; revise tasks as the plan evolves. `skill-doctor` does **not** require these headings.
+`Files:`, `Change types:`, and `Acceptance criteria:` are strict gates for implementation-plan prompt tasks under `skill-doctor`. Verify-only plans (`onFinish: none`) keep these headings advisory.
 
 **Bugfix repro:** Prefer `bash scripts/repro-my-bug.sh` early (expect fail) and the **same** script in the final verify task when still valid—not required for validation to pass. See `references/task-patterns.md` § *Bugfix repro*.
 
@@ -149,6 +148,7 @@ Use this pattern when a change is too large for a single reviewable workflow. Fo
 - Dependencies field required (even if empty)
 - No dangerous commands without manual approval
 - For implementation plans: `Layer:` + `Feature state:` headings, allowed values, and layer-consistent dependency direction
+- For implementation-plan prompt tasks: `Files:` / `Change types:` / `Acceptance criteria:` headings in `description`, zero-context prompt framing, and deterministic pass/fail expectations
 
 **References**:
 - Fixture tests: `scripts/test-fixtures.sh`
