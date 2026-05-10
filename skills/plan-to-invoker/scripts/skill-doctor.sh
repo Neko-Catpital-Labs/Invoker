@@ -11,7 +11,7 @@
 #   --coverage-map FILE Validate row-to-workflow traceability for policy-matrix inputs
 #   --stack-manifest FILE Validate coverage-map workflow labels against a real authored stack manifest
 #   --verbose           Show detailed output from each sub-check
-#   --warn-delegation  Pass through to atomicity lint (advisory delegation-hint warnings only; no extra failures)
+#   --warn-delegation  Pass through to atomicity lint (prints advisory delegation-hint warnings)
 #
 # Exit codes:
 #   0 = all checks passed
@@ -302,16 +302,18 @@ fi
 
 # Check 4: Task atomicity linting (if not skipped)
 if [[ "$SKIP_ATOMICITY" == "false" ]]; then
+  atomicity_args=(--strict-delegation)
   if [[ "$WARN_DELEGATION" == "true" ]]; then
+    atomicity_args+=(--warn-delegation)
     run_check \
       "lint-task-atomicity" \
-      "Lint task atomicity and detail requirements (with delegation hints advisory)" \
-      bash "$SCRIPT_DIR/lint-task-atomicity.sh" --warn-delegation "$PLAN_FILE"
+      "Lint task atomicity and detail requirements (strict zero-context prompt gating + delegation warnings)" \
+      bash "$SCRIPT_DIR/lint-task-atomicity.sh" "${atomicity_args[@]}" "$PLAN_FILE"
   else
     run_check \
       "lint-task-atomicity" \
-      "Lint task atomicity and detail requirements" \
-      bash "$SCRIPT_DIR/lint-task-atomicity.sh" "$PLAN_FILE"
+      "Lint task atomicity and detail requirements (strict zero-context prompt gating)" \
+      bash "$SCRIPT_DIR/lint-task-atomicity.sh" "${atomicity_args[@]}" "$PLAN_FILE"
   fi
 fi
 

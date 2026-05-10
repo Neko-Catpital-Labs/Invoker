@@ -1,18 +1,19 @@
 # Plan-to-invoker efficacy — soft rubric
 
-Use this to judge whether skill and repo guidance are helping. **Scores are qualitative** unless you explicitly turn warnings into gates (not the default).
+Use this to judge whether skill and repo guidance are helping. Implementation-plan prompt self-containment is now enforced as a hard gate; this rubric focuses on efficacy and ergonomics beyond pass/fail.
 
 ## Tier A — Mechanical (CI)
 
 - `bash scripts/test-plan-to-invoker-skill.sh` exits 0.
 - `bash skills/plan-to-invoker/scripts/test-fixtures.sh` exits 0 (existing fixture contract unchanged).
 - `bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan.yaml>` for representative plans.
-Reporting-only: `bash skills/plan-to-invoker/scripts/skill-doctor.sh --warn-delegation <plan.yaml>` then inspect stderr for delegation-hint warnings; **do not** require zero warnings to merge.
+- For implementation plans (`onFinish != none`), `skill-doctor` should fail prompt tasks missing `Files:`/`Change types:`/`Acceptance criteria:` blocks, zero-context prompt framing, or deterministic pass/fail expectations.
+- Optional advisory run: `bash skills/plan-to-invoker/scripts/skill-doctor.sh --warn-delegation <plan.yaml>` to surface non-blocking hint improvements.
 
-## Tier B — Hint coverage (sampled)
+## Tier B — Hint quality (sampled)
 
-- On **N** plans, note how many tasks include `Files:` / `Change types:` / `Acceptance criteria:` in `description`.
-- **Aspirational targets only** — not merge blockers.
+- On **N** plans, score whether `Files:` / `Change types:` / `Acceptance criteria:` blocks are accurate and useful (not just present).
+- Track false positives/negatives from strict lint to tune prompt quality without weakening hard constraints.
 
 ## Tier C — Golden prompts (before / after)
 
@@ -33,10 +34,10 @@ Checklist examples (binary where obvious, soft otherwise):
 ## Tier D — Second-agent stress
 
 - Execute from YAML alone; count clarifying questions and edits outside any listed paths.
-- Treat results as **signal to improve prompts**, not proof of lint violations (lists are best effort).
+- Treat results as **signal to improve prompts and lint heuristics**, not an excuse to remove strict zero-context safety rails.
 
 ## Related docs
 
 - `../SKILL.md`
 - `task-patterns.md` § *Delegated execution hints*, § *Bugfix repro*
-- `../scripts/lint-task-atomicity.sh --warn-delegation`
+- `../scripts/lint-task-atomicity.sh --strict-delegation --warn-delegation`
