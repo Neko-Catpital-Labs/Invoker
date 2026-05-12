@@ -793,7 +793,7 @@ async function headlessCost(
 ): Promise<void> {
   const {
     formatGroupedCostRollups, formatCostRollup,
-    formatAsJson,
+    formatAsJson, serializeCostEvent,
   } = await import('./formatter.js');
   const { groupCostEvents, serializeGroupedRollup } = await import('./cost-rollup.js');
   const { rollUpCostEvents } = await import('@invoker/contracts');
@@ -834,6 +834,7 @@ async function headlessCost(
         groupBy,
         totals,
         groups: grouped.map(serializeGroupedRollup),
+        events: allEvents.map(serializeCostEvent),
         metadata: { eventCount: allEvents.length },
       }) + '\n');
       break;

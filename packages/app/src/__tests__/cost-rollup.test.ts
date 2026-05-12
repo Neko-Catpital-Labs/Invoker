@@ -111,6 +111,17 @@ describe('attributeSessionUsage', () => {
     expect(result[1].usage.inputTokens).toBe(200);
   });
 
+  it('preserves the caller-provided persisted attempt ID', () => {
+    const taskId = 'wf-1/task-a';
+    const result = attributeSessionUsage(
+      [makeUsageEvent()],
+      makeContext({ taskId, attemptId: 'attempt-task-a' }),
+    );
+
+    expect(result[0].attribution.attemptId).toBe('attempt-task-a');
+    expect(result[0].attribution.attemptId).not.toBe(`${taskId}-latest`);
+  });
+
   it('returns empty array for empty input', () => {
     expect(attributeSessionUsage([], makeContext())).toEqual([]);
   });
@@ -374,6 +385,22 @@ describe('buildAttributionContext', () => {
       agentName: 'codex',
       source: 'openai',
     });
+  });
+
+  it('requires callers to provide the resolved attempt identity', () => {
+    const task: CostTaskInfo = {
+      id: 'wf-1/task-a',
+      workflowId: 'wf-1',
+      attemptId: 'persisted-attempt-task-a',
+      executorType: 'worktree',
+      agentSessionId: 'sess-123',
+      agentName: 'codex',
+    };
+
+    const ctx = buildAttributionContext(task);
+
+    expect(ctx?.attemptId).toBe('persisted-attempt-task-a');
+    expect(ctx?.attemptId).not.toBe('wf-1/task-a-latest');
   });
 
   it('returns undefined when no session ID is available', () => {

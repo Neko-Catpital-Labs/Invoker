@@ -158,6 +158,8 @@ describe('headless query cost', () => {
       'attempt-task-a',
       'attempt-task-b',
     ]);
+    expect(output).not.toContain('wf-1/task-a-latest');
+    expect(output).not.toContain('wf-1/task-b-latest');
   });
 
   it('falls back to selectedAttemptId before latest persisted attempt', async () => {
@@ -182,6 +184,7 @@ describe('headless query cost', () => {
       'selected-task-a',
       'selected-task-a',
     ]);
+    expect(output).not.toContain('wf-1/task-a-latest');
   });
 
   it('falls back to the latest persisted attempt when no session match or selected attempt exists', async () => {
@@ -200,6 +203,27 @@ describe('headless query cost', () => {
       'latest-task-a',
       'latest-task-a',
     ]);
+    expect(output).not.toContain('wf-1/task-a-latest');
+  });
+
+  it('serializes resolved attempt IDs in deterministic query cost JSON output', async () => {
+    await runHeadless(['query', 'cost', '--output', 'json'], mockDeps);
+    const output1 = stdoutSpy.mock.calls[0][0] as string;
+    const parsed1 = JSON.parse(output1);
+
+    expect(parsed1.events.map((event: any) => event.attemptId)).toEqual([
+      'attempt-task-a',
+      'attempt-task-a',
+      'attempt-task-b',
+    ]);
+    expect(output1).not.toContain('wf-1/task-a-latest');
+    expect(output1).not.toContain('wf-1/task-b-latest');
+
+    stdoutSpy.mockClear();
+    await runHeadless(['query', 'cost', '--output', 'json'], mockDeps);
+    const output2 = stdoutSpy.mock.calls[0][0] as string;
+
+    expect(output2).toBe(output1);
   });
 
   it('scopes JSON output to workflow filter', async () => {
