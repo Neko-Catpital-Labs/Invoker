@@ -1043,56 +1043,78 @@ export class TaskRunner {
         await this.removeMergeWorktree(wtDir);
       }
 
-      // Upload and build markdown
-      const states = ['empty-state', 'dag-loaded', 'task-running', 'task-complete', 'task-panel'];
+      // Upload and build markdown from files that exist in both before/after captures.
+      const beforeDir = resolve(outputDir, 'before');
+      const afterDir = resolve(outputDir, 'after');
+      const beforePngs = new Set(readdirSync(beforeDir).filter((f) => f.endsWith('.png')));
+      const afterPngs = new Set(readdirSync(afterDir).filter((f) => f.endsWith('.png')));
+      const states = [...beforePngs].filter((f) => afterPngs.has(f)).sort();
+
       mkdirSync(resolve(homedir(), '.invoker'), { recursive: true });
       const tmpDir = mkdtempSync(resolve(homedir(), '.invoker', 'vp-'));
-      for (const mode of ['before', 'after']) {
-        for (const f of readdirSync(resolve(outputDir, mode))) {
-          copyFileSync(resolve(outputDir, mode, f), resolve(tmpDir, `${mode}--${f}`));
+      try {
+        for (const mode of ['before', 'after']) {
+          for (const f of readdirSync(resolve(outputDir, mode))) {
+            copyFileSync(resolve(outputDir, mode, f), resolve(tmpDir, `${mode}--${f}`));
+          }
         }
-      }
 
-      const uploadResult = await new Promise<string>((resolveP, reject) => {
-        const files = readdirSync(tmpDir).map(f => resolve(tmpDir, f));
-        const child = spawn('node', [resolve(this.cwd, 'scripts/upload-pr-images.mjs'), ...files], {
-          cwd: this.cwd,
-          stdio: ['ignore', 'pipe', 'pipe'],
+        const uploadResult = await new Promise<string>((resolveP, reject) => {
+          const files = readdirSync(tmpDir).map(f => resolve(tmpDir, f));
+          const child = spawn('node', [resolve(this.cwd, 'scripts/upload-pr-images.mjs'), ...files], {
+            cwd: this.cwd,
+            stdio: ['ignore', 'pipe', 'pipe'],
+          });
+          let stdout = '';
+          let stderr = '';
+          child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+          child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+          child.on('error', (err) => reject(err));
+          child.on('close', (code) => {
+            if (code !== 0) reject(new Error(`Upload failed (exit ${code}): ${stderr}`));
+            else resolveP(stdout.trim());
+          });
         });
-        let stdout = '';
-        child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
-        child.on('error', (err) => reject(err));
-        child.on('close', (code) => {
-          if (code !== 0) reject(new Error(`Upload failed (exit ${code})`));
-          else resolveP(stdout.trim());
-        });
-      });
 
-      rmSync(tmpDir, { recursive: true, force: true });
+        const urlMap = JSON.parse(uploadResult);
+        const lines: string[] = ['## Visual Proof', ''];
+        if (states.length === 0) {
+          lines.push('> Warning: visual proof capture completed, but no matching before/after PNG pairs were found.', '');
+        }
+        for (const filename of states) {
+          const stateName = filename
+            .replace(/\.png$/i, '')
+            .replace(/-/g, ' ')
+            .replace(/\b\w/g, c => c.toUpperCase());
+          const beforeUrl = urlMap[`before--${filename}`] ?? '';
+          const afterUrl = urlMap[`after--${filename}`] ?? '';
+          lines.push(`<details open>`, `<summary>${stateName}</summary>`, '',
+            '| Before | After |', '|--------|-------|',
+            `| ![before](${beforeUrl}) | ![after](${afterUrl}) |`, '', '</details>', '');
+        }
+        const beforeVideo = urlMap['before--walkthrough.webm'] ?? '';
+        const afterVideo = urlMap['after--walkthrough.webm'] ?? '';
+        if (beforeVideo || afterVideo) {
+          lines.push('<details>', '<summary>Video Walkthroughs</summary>', '',
+            `- [Before walkthrough](${beforeVideo})`, `- [After walkthrough](${afterVideo})`,
+            '', '</details>');
+        }
 
-      const urlMap = JSON.parse(uploadResult);
-      const lines: string[] = ['## Visual Proof', ''];
-      for (const state of states) {
-        const stateName = state.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-        const beforeUrl = urlMap[`before--${state}.png`] ?? '';
-        const afterUrl = urlMap[`after--${state}.png`] ?? '';
-        lines.push(`<details open>`, `<summary>${stateName}</summary>`, '',
-          '| Before | After |', '|--------|-------|',
-          `| ![before](${beforeUrl}) | ![after](${afterUrl}) |`, '', '</details>', '');
+        return lines.join('\n');
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
       }
-      const beforeVideo = urlMap['before--walkthrough.webm'] ?? '';
-      const afterVideo = urlMap['after--walkthrough.webm'] ?? '';
-      lines.push('<details>', '<summary>Video Walkthroughs</summary>', '',
-        `- [Before walkthrough](${beforeVideo})`, `- [After walkthrough](${afterVideo})`,
-        '', '</details>');
-
-      return lines.join('\n');
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       this.logger.warn('[visual-proof] Capture failed (non-blocking)', {
-        error: err instanceof Error ? err.message : String(err),
+        error: message,
         err,
       });
-      return undefined;
+      return [
+        '## Visual Proof',
+        '',
+        `> Warning: visual proof capture failed and screenshots could not be attached. ${message}`,
+      ].join('\n');
     }
   }
 

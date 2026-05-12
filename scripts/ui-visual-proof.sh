@@ -17,6 +17,7 @@ set -euo pipefail
 #   compare           Generate diff images and video (requires ffmpeg)
 #   embed             Generate markdown with embedded base64 images
 #   --spec <file>     Playwright spec file for capture-before/after (default: visual-proof.spec.ts)
+#   --output-dir <dir> Output root for visual proof artifacts (default: packages/app/e2e/visual-proof)
 #
 # Subcommand details:
 #   capture-before:
@@ -48,12 +49,13 @@ set -euo pipefail
 #     └── walkthrough.webm
 
 SPEC="visual-proof.spec.ts"
+OUTPUT_DIR="packages/app/e2e/visual-proof"
 RESULTS_DIR="packages/app/e2e/test-results"
 SUBCOMMAND=""
 
 usage() {
   sed -n '3,/^$/p' "$0" | sed 's/^# \?//'
-  exit 1
+  exit "${1:-1}"
 }
 
 check_prerequisite_ffmpeg() {
@@ -138,21 +140,21 @@ run_capture() {
 
 subcommand_capture_before() {
   echo "[visual-proof] Running capture-before..." >&2
-  run_capture "before" "packages/app/e2e/visual-proof" "${SPEC}" false
+  run_capture "before" "${OUTPUT_DIR}" "${SPEC}" false
 }
 
 subcommand_capture_after() {
   echo "[visual-proof] Running capture-after..." >&2
-  run_capture "after" "packages/app/e2e/visual-proof" "${SPEC}" false
+  run_capture "after" "${OUTPUT_DIR}" "${SPEC}" false
 }
 
 subcommand_compare() {
   echo "[visual-proof] Running compare..." >&2
   check_prerequisite_ffmpeg
 
-  local before_dir="packages/app/e2e/visual-proof/before"
-  local after_dir="packages/app/e2e/visual-proof/after"
-  local diff_dir="packages/app/e2e/visual-proof/diff"
+  local before_dir="${OUTPUT_DIR}/before"
+  local after_dir="${OUTPUT_DIR}/after"
+  local diff_dir="${OUTPUT_DIR}/diff"
 
   check_artifacts "$before_dir" || exit 1
   check_artifacts "$after_dir" || exit 1
@@ -205,9 +207,9 @@ subcommand_compare() {
 subcommand_embed() {
   echo "[visual-proof] Running embed..." >&2
 
-  local before_dir="packages/app/e2e/visual-proof/before"
-  local after_dir="packages/app/e2e/visual-proof/after"
-  local output_md="packages/app/e2e/visual-proof/EMBED.md"
+  local before_dir="${OUTPUT_DIR}/before"
+  local after_dir="${OUTPUT_DIR}/after"
+  local output_md="${OUTPUT_DIR}/EMBED.md"
 
   check_artifacts "$before_dir" || exit 1
   check_artifacts "$after_dir" || exit 1
@@ -250,9 +252,10 @@ fi
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --spec)       SPEC="$2"; shift 2 ;;
+    --output-dir) OUTPUT_DIR="$2"; shift 2 ;;
     --label)      SUBCOMMAND="capture-$2"; shift 2 ;;
-    --help|-h)    usage ;;
-    *)            echo "Unknown option: $1" >&2; usage ;;
+    --help|-h)    usage 0 ;;
+    *)            echo "Unknown option: $1" >&2; usage 1 ;;
   esac
 done
 
@@ -276,10 +279,10 @@ case "$SUBCOMMAND" in
     ;;
   "")
     echo "[visual-proof] ERROR: Missing subcommand. Use one of: capture-before, capture-after, validate, compare, embed" >&2
-    usage
+    usage 1
     ;;
   *)
     echo "[visual-proof] ERROR: Unknown subcommand: $SUBCOMMAND" >&2
-    usage
+    usage 1
     ;;
 esac
