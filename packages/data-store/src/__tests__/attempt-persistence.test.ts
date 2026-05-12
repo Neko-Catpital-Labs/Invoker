@@ -89,6 +89,35 @@ describe('Attempt persistence', () => {
     expect(loaded.commit).toBe('def456');
   });
 
+  it('claimAttemptForLaunch only claims pending or expired attempts', () => {
+    const pending = createAttempt('taskA', { status: 'pending' });
+    adapter.saveAttempt(pending);
+
+    const now = new Date('2026-05-12T00:00:00Z');
+    const leaseExpiresAt = new Date('2026-05-12T00:05:00Z');
+    expect(adapter.claimAttemptForLaunch(pending.id, {
+      status: 'claimed',
+      claimedAt: now,
+      lastHeartbeatAt: now,
+      leaseExpiresAt,
+    }, now)).toBe(true);
+    expect(adapter.loadAttempt(pending.id)?.status).toBe('claimed');
+
+    expect(adapter.claimAttemptForLaunch(pending.id, {
+      status: 'claimed',
+      claimedAt: new Date('2026-05-12T00:01:00Z'),
+      lastHeartbeatAt: new Date('2026-05-12T00:01:00Z'),
+      leaseExpiresAt: new Date('2026-05-12T00:06:00Z'),
+    }, new Date('2026-05-12T00:01:00Z'))).toBe(false);
+
+    expect(adapter.claimAttemptForLaunch(pending.id, {
+      status: 'claimed',
+      claimedAt: new Date('2026-05-12T00:06:00Z'),
+      lastHeartbeatAt: new Date('2026-05-12T00:06:00Z'),
+      leaseExpiresAt: new Date('2026-05-12T00:11:00Z'),
+    }, new Date('2026-05-12T00:06:00Z'))).toBe(true);
+  });
+
   it('merge conflict JSON round-trip', () => {
     const attempt = createAttempt('taskA', {
       mergeConflict: {
