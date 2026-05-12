@@ -55,7 +55,7 @@ SUBCOMMAND=""
 
 usage() {
   sed -n '3,/^$/p' "$0" | sed 's/^# \?//'
-  exit 1
+  exit "${1:-1}"
 }
 
 check_prerequisite_ffmpeg() {
@@ -254,8 +254,8 @@ while [[ $# -gt 0 ]]; do
     --spec)       SPEC="$2"; shift 2 ;;
     --output-dir) OUTPUT_DIR="$2"; shift 2 ;;
     --label)      SUBCOMMAND="capture-$2"; shift 2 ;;
-    --help|-h)    usage ;;
-    *)            echo "Unknown option: $1" >&2; usage ;;
+    --help|-h)    usage 0 ;;
+    *)            echo "Unknown option: $1" >&2; usage 1 ;;
   esac
 done
 
@@ -279,10 +279,10 @@ case "$SUBCOMMAND" in
     ;;
   "")
     echo "[visual-proof] ERROR: Missing subcommand. Use one of: capture-before, capture-after, validate, compare, embed" >&2
-    usage
+    usage 1
     ;;
   *)
     echo "[visual-proof] ERROR: Unknown subcommand: $SUBCOMMAND" >&2
-    usage
+    usage 1
     ;;
 esac
