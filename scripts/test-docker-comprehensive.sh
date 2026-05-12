@@ -202,11 +202,51 @@ task_container_id() {
   sqlite3 "$DB_PATH" "SELECT container_id FROM tasks WHERE id = '$1' OR id LIKE '%/' || '$1' ORDER BY id DESC LIMIT 1;" 2>/dev/null || echo ""
 }
 
+wait_for_task_terminal() {
+  local task_id="$1"
+  local timeout_secs="${2:-300}"
+  local start_ts now elapsed status
+  start_ts=$(date +%s)
+
+  while true; do
+    status=$(task_status "$task_id")
+    case "$status" in
+      completed|failed|needs_input|awaiting_approval|review_ready|blocked|stale|cancelled)
+        return 0
+        ;;
+    esac
+
+    now=$(date +%s)
+    elapsed=$((now - start_ts))
+    if [ "$elapsed" -ge "$timeout_secs" ]; then
+      fail "$task_id did not reach terminal status within ${timeout_secs}s (last status=$status)"
+      return 1
+    fi
+    sleep 1
+  done
+}
+
 # ── Step 4: Validate each task ──────────────────────────────
 
 echo -e "${BOLD}========================================${NC}"
 echo -e "${BOLD}  Task Results${NC}"
 echo -e "${BOLD}========================================${NC}"
+
+echo ""
+echo "==> Waiting for all docker test tasks to settle"
+ALL_TASKS=(
+  docker-no-image
+  docker-cmd-exit-1
+  docker-cmd-crash
+  docker-cmd-ok
+  docker-cmd-output
+  docker-concurrent-a
+  docker-concurrent-b
+  docker-concurrent-c
+)
+for TASK_ID in "${ALL_TASKS[@]}"; do
+  wait_for_task_terminal "$TASK_ID"
+done
 
 # --- docker-no-image: should fail with "No such image" ---
 echo ""
