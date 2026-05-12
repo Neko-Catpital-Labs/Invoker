@@ -958,45 +958,93 @@ export class TaskRunner {
     });
   }
 
-  async runVisualProofCapture(baseBranch: string, featureBranch: string, slug: string, repoUrl?: string): Promise<string | undefined> {
-    try {
-      const scriptPath = resolve(this.cwd, 'scripts/ui-visual-proof.sh');
-      const outputDir = resolve(this.cwd, 'packages/app/e2e/visual-proof');
+  /**
+   * @internal Spawn `scripts/ui-visual-proof.sh --label <label> --output-dir <dir>`
+   * in the visual-proof worktree. Extracted so tests can stub spawn behaviour
+   * without mocking node:child_process globally.
+   */
+  /** @internal */ async spawnVisualProofScript(
+    scriptPath: string,
+    label: string,
+    outputDir: string,
+    cwd: string,
+  ): Promise<void> {
+    return new Promise<void>((resolveP, reject) => {
+      const child = spawn('bash', [scriptPath, '--label', label, '--output-dir', outputDir], {
+        cwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stderr = '';
+      child.stdout?.on('data', () => { /* drain */ });
+      child.stderr?.on('data', (d: Buffer) => {
+        stderr += d.toString();
+        this.logger.info(`[visual-proof] ${d.toString().trimEnd()}`);
+      });
+      child.on('error', (err) => reject(err));
+      child.on('close', (code) => {
+        if (code !== 0) reject(new Error(`Visual proof capture failed (exit ${code}): ${stderr}`));
+        else resolveP();
+      });
+    });
+  }
 
+  /**
+   * @internal Spawn `node scripts/upload-pr-images.mjs <files...>` and parse
+   * the stdout JSON map. Extracted for the same reason as
+   * {@link spawnVisualProofScript}.
+   */
+  /** @internal */ async uploadVisualProofFiles(files: string[]): Promise<Record<string, string>> {
+    const stdout = await new Promise<string>((resolveP, reject) => {
+      const child = spawn('node', [resolve(this.cwd, 'scripts/upload-pr-images.mjs'), ...files], {
+        cwd: this.cwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let buf = '';
+      child.stdout?.on('data', (d: Buffer) => { buf += d.toString(); });
+      child.on('error', (err) => reject(err));
+      child.on('close', (code) => {
+        if (code !== 0) reject(new Error(`Upload failed (exit ${code})`));
+        else resolveP(buf.trim());
+      });
+    });
+    return JSON.parse(stdout) as Record<string, string>;
+  }
+
+  async runVisualProofCapture(baseBranch: string, featureBranch: string, slug: string, repoUrl?: string): Promise<string | undefined> {
+    const scriptPath = resolve(this.cwd, 'scripts/ui-visual-proof.sh');
+    const outputDir = resolve(this.cwd, 'packages/app/e2e/visual-proof');
+    try {
       const wtDir = await this.createMergeWorktree(baseBranch, 'vp-' + slug, repoUrl);
 
-      const runCapture = (label: string): Promise<string> => {
-        return new Promise((resolveP, reject) => {
-          const child = spawn('bash', [scriptPath, '--label', label, '--output-dir', outputDir], {
-            cwd: wtDir,
-            stdio: ['ignore', 'pipe', 'pipe'],
-          });
-          let stdout = '';
-          let stderr = '';
-          child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
-          child.stderr?.on('data', (d: Buffer) => {
-            stderr += d.toString();
-            this.logger.info(`[visual-proof] ${d.toString().trimEnd()}`);
-          });
-          child.on('error', (err) => reject(err));
-          child.on('close', (code) => {
-            if (code !== 0) reject(new Error(`Visual proof capture failed (exit ${code}): ${stderr}`));
-            else resolveP(stdout.trim());
-          });
-        });
-      };
-
       try {
-        await runCapture('before');
+        await this.spawnVisualProofScript(scriptPath, 'before', outputDir, wtDir);
         const featureSha = (await this.execGitIn(['rev-parse', featureBranch], wtDir)).trim();
         await this.execGitIn(['checkout', '-f', '--detach', featureSha], wtDir);
-        await runCapture('after');
+        await this.spawnVisualProofScript(scriptPath, 'after', outputDir, wtDir);
       } finally {
         await this.removeMergeWorktree(wtDir);
       }
 
-      // Upload and build markdown
-      const states = ['empty-state', 'dag-loaded', 'task-running', 'task-complete', 'task-panel'];
+      // Discover captured states from filenames present in BOTH before/ and after/.
+      // Previously the renderer iterated a hard-coded list (`empty-state`,
+      // `dag-loaded`, …), so newly added screenshots like
+      // `merge-gate-no-inline-approve.png` were silently dropped from the PR
+      // summary even when the script wrote them.
+      const listPngStems = (dir: string): Set<string> => {
+        try {
+          return new Set(
+            readdirSync(dir)
+              .filter((f) => f.endsWith('.png'))
+              .map((f) => f.slice(0, -'.png'.length)),
+          );
+        } catch {
+          return new Set<string>();
+        }
+      };
+      const beforeStems = listPngStems(resolve(outputDir, 'before'));
+      const afterStems = listPngStems(resolve(outputDir, 'after'));
+      const states = [...beforeStems].filter((s) => afterStems.has(s)).sort();
+
       mkdirSync(resolve(homedir(), '.invoker'), { recursive: true });
       const tmpDir = mkdtempSync(resolve(homedir(), '.invoker', 'vp-'));
       for (const mode of ['before', 'after']) {
@@ -1005,27 +1053,14 @@ export class TaskRunner {
         }
       }
 
-      const uploadResult = await new Promise<string>((resolveP, reject) => {
-        const files = readdirSync(tmpDir).map(f => resolve(tmpDir, f));
-        const child = spawn('node', [resolve(this.cwd, 'scripts/upload-pr-images.mjs'), ...files], {
-          cwd: this.cwd,
-          stdio: ['ignore', 'pipe', 'pipe'],
-        });
-        let stdout = '';
-        child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
-        child.on('error', (err) => reject(err));
-        child.on('close', (code) => {
-          if (code !== 0) reject(new Error(`Upload failed (exit ${code})`));
-          else resolveP(stdout.trim());
-        });
-      });
+      const files = readdirSync(tmpDir).map((f) => resolve(tmpDir, f));
+      const urlMap = await this.uploadVisualProofFiles(files);
 
       rmSync(tmpDir, { recursive: true, force: true });
 
-      const urlMap = JSON.parse(uploadResult);
       const lines: string[] = ['## Visual Proof', ''];
       for (const state of states) {
-        const stateName = state.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        const stateName = state.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
         const beforeUrl = urlMap[`before--${state}.png`] ?? '';
         const afterUrl = urlMap[`after--${state}.png`] ?? '';
         lines.push(`<details open>`, `<summary>${stateName}</summary>`, '',
@@ -1040,10 +1075,17 @@ export class TaskRunner {
 
       return lines.join('\n');
     } catch (err) {
-      this.logger.warn('[visual-proof] Capture failed (non-blocking)', {
-        error: err instanceof Error ? err.message : String(err),
-        err,
-      });
+      this.logger.warn(
+        `[visual-proof] Capture failed (non-blocking) — PR summary will omit "## Visual Proof". ` +
+          `Check that scripts/ui-visual-proof.sh accepts --output-dir <dir> and that ` +
+          `${outputDir}/{before,after}/*.png exist after capture.`,
+        {
+          error: err instanceof Error ? err.message : String(err),
+          scriptPath,
+          outputDir,
+          err,
+        },
+      );
       return undefined;
     }
   }
