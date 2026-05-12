@@ -106,6 +106,12 @@ export interface TaskRepository {
   updateAttempt(attemptId: string, changes: AttemptChanges): void;
 
   /**
+   * Atomically claim an attempt for launch. Returns false when another
+   * dispatcher already owns an active claim for the same attempt.
+   */
+  claimAttemptForLaunch?(attemptId: string, changes: AttemptChanges, now: Date): boolean;
+
+  /**
    * Atomically fail a task and its latest attempt in a single
    * transaction. Implementations that lack transactional support may
    * fall back to sequential `updateTask` + `updateAttempt` calls.

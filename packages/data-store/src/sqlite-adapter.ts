@@ -1554,6 +1554,47 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.execRun(`UPDATE attempts SET ${setClauses.join(', ')} WHERE id = ?`, values);
   }
 
+  claimAttemptForLaunch(
+    attemptId: string,
+    changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'queuePriority'>>,
+    now: Date,
+  ): boolean {
+    const setClauses: string[] = [];
+    const values: any[] = [];
+
+    if (changes.status !== undefined) { setClauses.push('status = ?'); values.push(changes.status); }
+    if (changes.claimedAt !== undefined) { setClauses.push('claimed_at = ?'); values.push(changes.claimedAt instanceof Date ? changes.claimedAt.toISOString() : changes.claimedAt ?? null); }
+    if (changes.startedAt !== undefined) { setClauses.push('started_at = ?'); values.push(changes.startedAt instanceof Date ? changes.startedAt.toISOString() : changes.startedAt ?? null); }
+    if (changes.lastHeartbeatAt !== undefined) { setClauses.push('last_heartbeat_at = ?'); values.push(changes.lastHeartbeatAt instanceof Date ? changes.lastHeartbeatAt.toISOString() : changes.lastHeartbeatAt ?? null); }
+    if (changes.leaseExpiresAt !== undefined) { setClauses.push('lease_expires_at = ?'); values.push(changes.leaseExpiresAt instanceof Date ? changes.leaseExpiresAt.toISOString() : changes.leaseExpiresAt ?? null); }
+    if (changes.queuePriority !== undefined) { setClauses.push('queue_priority = ?'); values.push(changes.queuePriority); }
+
+    if (setClauses.length === 0) return false;
+    values.push(attemptId, now.toISOString());
+    this.ensureWritable();
+    this.db.run(
+      `UPDATE attempts SET ${setClauses.join(', ')}
+       WHERE id = ?
+         AND (
+           status = 'pending'
+           OR (
+             status IN ('claimed', 'running')
+             AND lease_expires_at IS NOT NULL
+             AND lease_expires_at <= ?
+           )
+         )`,
+      values,
+    );
+    const claimed = this.db.getRowsModified() > 0;
+    if (claimed) {
+      this.dirty = true;
+      if (this.writeTransactionDepth === 0) {
+        this.scheduleFlush();
+      }
+    }
+    return claimed;
+  }
+
   failTaskAndAttempt(
     taskId: string,
     taskChanges: TaskStateChanges,

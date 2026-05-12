@@ -37,7 +37,6 @@ describe('relaunchOrphansAndStartReady', () => {
     return new Orchestrator({
       persistence,
       messageBus: new InMemoryBus(),
-      taskDispatcher: () => {},
     });
   }
 

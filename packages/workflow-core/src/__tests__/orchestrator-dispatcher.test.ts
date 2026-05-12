@@ -21,9 +21,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
 
   updateWorkflow(workflowId: string, changes: { status?: string }): void {
     const existing = this.workflows.get(workflowId);
-    if (existing && changes.status !== undefined) {
-      existing.status = changes.status;
-    }
+    if (existing && changes.status !== undefined) existing.status = changes.status;
   }
 
   saveTask(workflowId: string, task: TaskState): void {
@@ -70,10 +68,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
     return undefined;
   }
 
-  updateAttempt(
-    attemptId: string,
-    changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>,
-  ): void {
+  updateAttempt(attemptId: string, changes: Partial<Attempt>): void {
     for (const attempts of this.attempts.values()) {
       const idx = attempts.findIndex((attempt) => attempt.id === attemptId);
       if (idx >= 0) {
@@ -108,15 +103,11 @@ function makeResponse(
   };
 }
 
-function makeOrchestrator(taskDispatcher?: (tasks: TaskState[]) => void): {
-  orchestrator: Orchestrator;
-  persistence: InMemoryPersistence;
-} {
+function makeOrchestrator(): { orchestrator: Orchestrator; persistence: InMemoryPersistence } {
   const persistence = new InMemoryPersistence();
   const orchestrator = new Orchestrator({
     persistence,
     messageBus: new InMemoryBus(),
-    taskDispatcher,
     maxConcurrency: 4,
   });
   return { orchestrator, persistence };
@@ -124,9 +115,7 @@ function makeOrchestrator(taskDispatcher?: (tasks: TaskState[]) => void): {
 
 function taskIdBySuffix(orchestrator: Orchestrator, suffix: string): string {
   const task = orchestrator.getAllTasks().find((item) => item.id.endsWith(`/${suffix}`));
-  if (!task) {
-    throw new Error(`Task with suffix "${suffix}" not found`);
-  }
+  if (!task) throw new Error(`Task with suffix "${suffix}" not found`);
   return task.id;
 }
 
@@ -135,17 +124,16 @@ function respondForTask(
   taskId: string,
   status: WorkResponse['status'],
   exitCode = 0,
-): void {
+): TaskState[] {
   const generation = orchestrator.getTask(taskId)?.execution.generation ?? 0;
-  orchestrator.handleWorkerResponse(makeResponse(taskId, status, generation, exitCode));
+  return orchestrator.handleWorkerResponse(makeResponse(taskId, status, generation, exitCode));
 }
 
-describe('Orchestrator taskDispatcher', () => {
-  it('startExecution dispatches each started task exactly once', () => {
-    const dispatched: string[] = [];
-    const { orchestrator } = makeOrchestrator((tasks) => tasks.forEach((task) => dispatched.push(task.id)));
+describe('Orchestrator launch claims', () => {
+  it('startExecution returns each started task exactly once', () => {
+    const { orchestrator } = makeOrchestrator();
     const plan: PlanDefinition = {
-      name: 'dispatcher-start',
+      name: 'claim-start',
       onFinish: 'none',
       tasks: [
         { id: 't1', description: 'first', command: 'echo one' },
@@ -153,22 +141,44 @@ describe('Orchestrator taskDispatcher', () => {
       ],
     };
 
-    const started = orchestrator.startExecution();
-    expect(started).toHaveLength(0);
+    expect(orchestrator.startExecution()).toHaveLength(0);
 
     orchestrator.loadPlan(plan);
-    const startedAfterLoad = orchestrator.startExecution();
+    const started = orchestrator.startExecution();
 
-    expect(startedAfterLoad).toHaveLength(2);
-    expect(dispatched).toHaveLength(2);
-    expect(new Set(dispatched).size).toBe(2);
+    expect(started).toHaveLength(2);
+    expect(new Set(started.map((task) => task.id)).size).toBe(2);
   });
 
-  it('dispatches tasks for restart/retry/recreate entrypoints', () => {
-    const dispatched: string[] = [];
-    const { orchestrator } = makeOrchestrator((tasks) => tasks.forEach((task) => dispatched.push(task.id)));
+  it('does not supersede an active launch claim when scheduling repeats', () => {
+    const { orchestrator, persistence } = makeOrchestrator();
     orchestrator.loadPlan({
-      name: 'dispatcher-retry-paths',
+      name: 'claim-repeat',
+      onFinish: 'none',
+      tasks: [{ id: 't1', description: 'first', command: 'echo one' }],
+    });
+
+    const [started] = orchestrator.startExecution();
+    const attemptId = started!.execution.selectedAttemptId!;
+    const leaseExpiresAt = new Date(Date.now() + 60_000);
+    persistence.updateAttempt(attemptId, {
+      status: 'claimed',
+      claimedAt: new Date(),
+      lastHeartbeatAt: new Date(),
+      leaseExpiresAt,
+    });
+    persistence.updateTask(started!.id, { status: 'pending' });
+    orchestrator.syncAllFromDb();
+
+    expect(orchestrator.startExecution()).toHaveLength(0);
+    expect(persistence.loadAttempt(attemptId)?.status).toBe('claimed');
+    expect(persistence.loadAttempt(attemptId)?.leaseExpiresAt).toEqual(leaseExpiresAt);
+  });
+
+  it('returns launch claims for restart/retry/recreate entrypoints', () => {
+    const { orchestrator } = makeOrchestrator();
+    orchestrator.loadPlan({
+      name: 'claim-retry-paths',
       onFinish: 'none',
       tasks: [{ id: 't1', description: 'one', command: 'exit 1' }],
     });
@@ -179,47 +189,40 @@ describe('Orchestrator taskDispatcher', () => {
     orchestrator.startExecution();
     respondForTask(orchestrator, taskId, 'failed', 1);
 
-    dispatched.length = 0;
-    orchestrator.retryTask(taskId);
-    expect(dispatched).toEqual([taskId]);
+    let started = orchestrator.retryTask(taskId);
+    expect(started.map((task) => task.id)).toEqual([taskId]);
 
     respondForTask(orchestrator, taskId, 'failed', 1);
-    dispatched.length = 0;
-    orchestrator.retryWorkflow(workflowId);
-    expect(dispatched).toEqual([taskId]);
+    started = orchestrator.retryWorkflow(workflowId);
+    expect(started.map((task) => task.id)).toEqual([taskId]);
 
     respondForTask(orchestrator, taskId, 'failed', 1);
-    dispatched.length = 0;
-    orchestrator.recreateTask(taskId);
-    expect(dispatched).toEqual([taskId]);
+    started = orchestrator.recreateTask(taskId);
+    expect(started.map((task) => task.id)).toEqual([taskId]);
 
     respondForTask(orchestrator, taskId, 'failed', 1);
-    dispatched.length = 0;
-    orchestrator.recreateWorkflow(workflowId);
-    expect(dispatched).toEqual([taskId]);
-
+    started = orchestrator.recreateWorkflow(workflowId);
+    expect(started.map((task) => task.id)).toEqual([taskId]);
   });
 
-  it('resumeWorkflow dispatches persisted pending tasks', () => {
-    const dispatched: string[] = [];
-    const { orchestrator } = makeOrchestrator((tasks) => tasks.forEach((task) => dispatched.push(task.id)));
+  it('resumeWorkflow returns persisted pending launch claims', () => {
+    const { orchestrator } = makeOrchestrator();
     orchestrator.loadPlan({
-      name: 'dispatcher-resume',
+      name: 'claim-resume',
       onFinish: 'none',
       tasks: [{ id: 't1', description: 'one', command: 'echo one' }],
     });
     const workflowId = orchestrator.getWorkflowIds()[0]!;
     const taskId = taskIdBySuffix(orchestrator, 't1');
 
-    orchestrator.resumeWorkflow(workflowId);
-    expect(dispatched).toEqual([taskId]);
+    const started = orchestrator.resumeWorkflow(workflowId);
+    expect(started.map((task) => task.id)).toEqual([taskId]);
   });
 
-  it('dispatches downstream tasks from handleWorkerResponse and approval cascades', async () => {
-    const dispatched: string[] = [];
-    const { orchestrator, persistence } = makeOrchestrator((tasks) => tasks.forEach((task) => dispatched.push(task.id)));
+  it('returns downstream launch claims from worker completion and approval cascades', async () => {
+    const { orchestrator, persistence } = makeOrchestrator();
     orchestrator.loadPlan({
-      name: 'dispatcher-cascade',
+      name: 'claim-cascade',
       onFinish: 'none',
       tasks: [
         { id: 'prepare', description: 'prepare', command: 'echo prepare' },
@@ -235,28 +238,12 @@ describe('Orchestrator taskDispatcher', () => {
     const approvalDownstreamId = taskIdBySuffix(orchestrator, 'approval-downstream');
 
     orchestrator.startExecution();
-    dispatched.length = 0;
-    respondForTask(orchestrator, prepareId, 'completed', 0);
-    expect(dispatched).toContain(downstreamId);
+    const startedAfterPrepare = respondForTask(orchestrator, prepareId, 'completed', 0);
+    expect(startedAfterPrepare.map((task) => task.id)).toContain(downstreamId);
 
     persistence.updateTask(approvalRootId, { status: 'awaiting_approval' });
     orchestrator.syncAllFromDb();
-    dispatched.length = 0;
-    await orchestrator.approve(approvalRootId);
-    expect(dispatched).toContain(approvalDownstreamId);
-  });
-
-  it('keeps behavior unchanged when taskDispatcher is not configured', () => {
-    const { orchestrator } = makeOrchestrator();
-    orchestrator.loadPlan({
-      name: 'dispatcher-optional',
-      onFinish: 'none',
-      tasks: [{ id: 't1', description: 'one', command: 'echo one' }],
-    });
-
-    const started = orchestrator.startExecution();
-    expect(started).toHaveLength(1);
-    expect(started[0]?.status).toBe('running');
-    expect(started[0]?.execution.phase).toBe('launching');
+    const startedAfterApprove = await orchestrator.approve(approvalRootId);
+    expect(startedAfterApprove.map((task) => task.id)).toContain(approvalDownstreamId);
   });
 });
