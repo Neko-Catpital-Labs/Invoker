@@ -6,6 +6,15 @@ cd "$ROOT"
 # shellcheck disable=SC1091
 source "$ROOT/scripts/e2e-dry-run/lib/common.sh"
 
+# Headless chaos polls for terminal task states within tight windows (often 120s).
+# Product default for network git is 15 minutes; a stalled fetch/push would keep
+# tasks in `running` for longer than those pollers. Unless the caller already set
+# `INVOKER_GIT_NETWORK_TIMEOUT_MS` (including `0` for unbounded), use a 120s cap
+# so failures surface quickly and repros stay deterministic on slow networks.
+if [ -z "${INVOKER_GIT_NETWORK_TIMEOUT_MS:-}" ]; then
+  export INVOKER_GIT_NETWORK_TIMEOUT_MS=120000
+fi
+
 MODE="${INVOKER_CHAOS_OVERLOAD_MODE:-deterministic}"
 SCENARIO_FILTER="${INVOKER_CHAOS_OVERLOAD_SCENARIO:-}"
 CASE_TIMEOUT_SECONDS="${INVOKER_CHAOS_OVERLOAD_TIMEOUT_SECONDS:-1200}"
@@ -420,8 +429,8 @@ ov_submit_workflow() {
   local submit_mode="${4:-no-track}"
   local plan_path
   local log_path
-  plan_path="$(mktemp "${TMPDIR:-/tmp}/invoker-overload-plan.XXXXXX.yaml")"
-  log_path="$(mktemp "${TMPDIR:-/tmp}/invoker-overload-submit.XXXXXX.log")"
+  plan_path="$(mktemp "${TMPDIR:-/tmp}/invoker-overload-plan.XXXXXX")"
+  log_path="$(mktemp "${TMPDIR:-/tmp}/invoker-overload-submit.XXXXXX")"
   ov_generate_plan "$plan_path" "$kind" "$label" "$marker_path"
   if [ "$submit_mode" = "track" ]; then
     invoker_e2e_submit_plan_capture "$plan_path" "$log_path" >/dev/null
@@ -477,6 +486,7 @@ ov_start_owner() {
     setsid env \
       INVOKER_HEADLESS_STANDALONE=1 \
       INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS=600000 \
+      INVOKER_GIT_NETWORK_TIMEOUT_MS="${INVOKER_GIT_NETWORK_TIMEOUT_MS:-120000}" \
       LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}" \
       "$electron_bin" $sandbox_flag "$main_js" --headless owner-serve \
       >"${OVERLOAD_TMP_DIR}/owner-serve.log" 2>&1 &
@@ -484,6 +494,7 @@ ov_start_owner() {
     env \
       INVOKER_HEADLESS_STANDALONE=1 \
       INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS=600000 \
+      INVOKER_GIT_NETWORK_TIMEOUT_MS="${INVOKER_GIT_NETWORK_TIMEOUT_MS:-120000}" \
       LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}" \
       "$electron_bin" $sandbox_flag "$main_js" --headless owner-serve \
       >"${OVERLOAD_TMP_DIR}/owner-serve.log" 2>&1 &
