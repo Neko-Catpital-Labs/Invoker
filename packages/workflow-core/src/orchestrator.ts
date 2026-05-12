@@ -1052,7 +1052,7 @@ export class Orchestrator {
     now: number = Date.now(),
   ): boolean {
     if (attempt && this.isAttemptLeaseActive(attempt, now)) {
-      return task.status === 'pending' || task.status === 'running' || task.status === 'fixing_with_ai';
+      return task.status === 'running' || task.status === 'fixing_with_ai';
     }
 
     return task.status === 'running' || task.status === 'fixing_with_ai';
@@ -4177,7 +4177,7 @@ export class Orchestrator {
 
   private autoStartReadyTasks(taskIds: string[], priority: number = 0): TaskState[] {
     for (const taskId of taskIds) {
-      const task = this.stateGetTask(taskId);
+      let task = this.stateGetTask(taskId);
       if (!task) continue;
       if (this.getExternalDependencyBlocker(task) !== undefined) continue;
 
@@ -4186,7 +4186,21 @@ export class Orchestrator {
         this.logger.info('[orchestrator] autoStartReadyTasks: unblocking blocked task', {
           taskId,
         });
-        this.writeAndSync(taskId, { status: 'pending' });
+        this.replaceSelectedAttempt(task, { status: 'pending' });
+        this.writeAndSync(taskId, {
+          status: 'pending',
+          execution: {
+            startedAt: undefined,
+            completedAt: undefined,
+            lastHeartbeatAt: undefined,
+            leaseExpiresAt: undefined,
+            launchStartedAt: undefined,
+            launchCompletedAt: undefined,
+            phase: undefined,
+          },
+        });
+        task = this.stateGetTask(taskId);
+        if (!task) continue;
       }
 
       this.enqueueIfNotScheduled(taskId, priority);
@@ -4204,7 +4218,14 @@ export class Orchestrator {
     if ((currentAttempt?.queuePriority ?? 0) !== priority) {
       this.taskRepository.updateAttempt(attemptId, { queuePriority: priority });
     }
-    if (task.execution.selectedAttemptId === attemptId && this.isAttemptLeaseActive(currentAttempt)) {
+    // A task can be force-set back to blocked/pending by recovery logic while
+    // still carrying a stale selectedAttemptId from an older run. Only skip
+    // re-enqueue when the task is actually active.
+    if (
+      (task.status === 'running' || task.status === 'fixing_with_ai') &&
+      task.execution.selectedAttemptId === attemptId &&
+      this.isAttemptLeaseActive(currentAttempt)
+    ) {
       return;
     }
     const queuedJob = this.scheduler
@@ -4256,7 +4277,19 @@ export class Orchestrator {
       if (!this.areLocalDependenciesSatisfied(task)) continue;
       if (this.getExternalDependencyBlocker(task) !== undefined) continue;
 
-      this.writeAndSync(task.id, { status: 'pending' });
+      this.replaceSelectedAttempt(task, { status: 'pending' });
+      this.writeAndSync(task.id, {
+        status: 'pending',
+        execution: {
+          startedAt: undefined,
+          completedAt: undefined,
+          lastHeartbeatAt: undefined,
+          leaseExpiresAt: undefined,
+          launchStartedAt: undefined,
+          launchCompletedAt: undefined,
+          phase: undefined,
+        },
+      });
       this.enqueueIfNotScheduled(task.id);
     }
     return this.drainScheduler();
