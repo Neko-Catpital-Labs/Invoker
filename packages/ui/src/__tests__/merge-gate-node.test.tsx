@@ -45,7 +45,7 @@ describe('MergeGateNode', () => {
     expect(screen.queryByTestId('merge-summary-preview')).not.toBeInTheDocument();
   });
 
-  it('shows approve button for manual merge gate with awaiting_approval status', () => {
+  it('does not render an inline approve button for manual merge gate with awaiting_approval status', () => {
     renderNode({
       status: 'awaiting_approval',
       label: 'Plan',
@@ -53,22 +53,21 @@ describe('MergeGateNode', () => {
       mergeMode: 'manual',
       workflowId: 'wf-123',
     });
-    expect(screen.getByTestId('approve-merge-button')).toBeInTheDocument();
-    expect(screen.getByTestId('approve-merge-button')).toHaveTextContent('Approve & Merge');
+    expect(screen.queryByTestId('approve-merge-button')).not.toBeInTheDocument();
   });
 
-  it('shows "Approve & Create PR" for pull_request gate kind', () => {
+  it('does not render an inline approve button for manual pull_request gate with review_ready status', () => {
     renderNode({
-      status: 'awaiting_approval',
+      status: 'review_ready',
       label: 'Plan',
       gateKind: 'pull_request',
       mergeMode: 'manual',
       workflowId: 'wf-123',
     });
-    expect(screen.getByTestId('approve-merge-button')).toHaveTextContent('Approve & Create PR');
+    expect(screen.queryByTestId('approve-merge-button')).not.toBeInTheDocument();
   });
 
-  it('shows "Approve Fix" when pendingFixError is set', () => {
+  it('does not render an inline approve button when pendingFixError is set', () => {
     renderNode({
       status: 'awaiting_approval',
       label: 'Plan',
@@ -77,21 +76,10 @@ describe('MergeGateNode', () => {
       workflowId: 'wf-123',
       pendingFixError: 'merge conflict',
     });
-    expect(screen.getByTestId('approve-merge-button')).toHaveTextContent('Approve Fix');
+    expect(screen.queryByTestId('approve-merge-button')).not.toBeInTheDocument();
   });
 
-  it('shows "Approve" for workflow gate kind', () => {
-    renderNode({
-      status: 'awaiting_approval',
-      label: 'Plan',
-      gateKind: 'workflow',
-      mergeMode: 'manual',
-      workflowId: 'wf-123',
-    });
-    expect(screen.getByTestId('approve-merge-button')).toHaveTextContent('Approve');
-  });
-
-  it('does not show approve button in external_review mode', () => {
+  it('does not render an inline approve button in external_review mode', () => {
     renderNode({
       status: 'awaiting_approval',
       label: 'Plan',
