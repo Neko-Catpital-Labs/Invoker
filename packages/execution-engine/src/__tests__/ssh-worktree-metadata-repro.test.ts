@@ -145,4 +145,104 @@ describe('SSH worktree metadata repro', () => {
       }),
     }));
   });
+
+  it('blocks stale SSH startup-failure writes when the selected attempt has advanced', async () => {
+    const oldOwnerPath =
+      '/home/invoker/.invoker/worktrees/049de5b865cc/experiment-wf-1-test-execution-engine-bc7a0b71';
+    const oldBranch = 'experiment/wf-1/test-execution-engine-b68b146f';
+    const oldAttemptId = 'attempt-old-stale';
+    const newAttemptId = 'attempt-new-live';
+
+    const failingExecutor = {
+      type: 'ssh',
+      start: vi.fn().mockRejectedValue(Object.assign(
+        new Error(
+          'SSH remote script failed (exit=128)\n' +
+            `STDERR:\nPreparing worktree (checking out '${oldBranch}')\n` +
+            `fatal: '${oldBranch}' is already used by worktree at '${oldOwnerPath}'\n`,
+        ),
+        {
+          workspacePath: oldOwnerPath,
+          branch: oldBranch,
+        },
+      )),
+      onComplete: vi.fn(),
+      onOutput: vi.fn(),
+      onHeartbeat: vi.fn(),
+      kill: vi.fn(),
+      destroyAll: vi.fn(),
+    };
+
+    // Task as it was when the SSH launch started.
+    const startingTask = makeTask({
+      id: 'wf-1/test-execution-engine',
+      config: { command: 'pnpm test', executorType: 'ssh' },
+      execution: { selectedAttemptId: oldAttemptId, generation: 0 },
+    });
+
+    // Task as it appears to the orchestrator after the lineage advanced.
+    const liveTask = makeTask({
+      id: 'wf-1/test-execution-engine',
+      config: { command: 'pnpm test', executorType: 'ssh' },
+      execution: { selectedAttemptId: newAttemptId, generation: 1 },
+    });
+
+    const updateSpy = vi.fn();
+    const appendTaskOutputSpy = vi.fn();
+    const updateAttemptSpy = vi.fn();
+    const handleResponseSpy = vi.fn();
+    const onOutputSpy = vi.fn();
+    const onLaunchFailedSpy = vi.fn();
+
+    const runner = new TaskRunner({
+      orchestrator: {
+        getTask: () => liveTask,
+        getAllTasks: () => [liveTask],
+        handleWorkerResponse: handleResponseSpy,
+      } as any,
+      persistence: {
+        updateTask: updateSpy,
+        appendTaskOutput: appendTaskOutputSpy,
+        updateAttempt: updateAttemptSpy,
+      } as any,
+      executorRegistry: {
+        getDefault: () => failingExecutor,
+        get: () => failingExecutor,
+        getAll: () => [failingExecutor],
+      } as any,
+      cwd: '/tmp',
+      callbacks: { onOutput: onOutputSpy, onLaunchFailed: onLaunchFailedSpy },
+    });
+
+    await runner.executeTask(startingTask);
+
+    // Live task row must NOT be mutated with the old attempt's workspace/branch
+    expect(updateSpy).not.toHaveBeenCalledWith(
+      'wf-1/test-execution-engine',
+      expect.objectContaining({
+        execution: expect.objectContaining({ workspacePath: oldOwnerPath }),
+      }),
+    );
+    expect(updateSpy).not.toHaveBeenCalledWith(
+      'wf-1/test-execution-engine',
+      expect.objectContaining({
+        execution: expect.objectContaining({ branch: oldBranch }),
+      }),
+    );
+    // Live output stream is left alone so the new attempt's UI is not polluted
+    expect(appendTaskOutputSpy).not.toHaveBeenCalled();
+    expect(onOutputSpy).not.toHaveBeenCalled();
+    // onLaunchFailed must not clear the new launch's launching state
+    expect(onLaunchFailedSpy).not.toHaveBeenCalled();
+    // No failed WorkResponse is emitted against the newer attempt
+    expect(handleResponseSpy).not.toHaveBeenCalled();
+    // Diagnostics survive on the old attempt row for post-mortem
+    expect(updateAttemptSpy).toHaveBeenCalledWith(
+      oldAttemptId,
+      expect.objectContaining({
+        status: 'failed',
+        error: expect.stringContaining('Executor startup failed (ssh)'),
+      }),
+    );
+  });
 });
