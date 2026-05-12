@@ -5,7 +5,6 @@
  * Keeps dashed border to distinguish gate semantics.
  */
 
-import { useState } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import type { TaskStatus } from '../types.js';
 import { getStatusColor, getEffectiveVisualStatus } from '../lib/colors.js';
@@ -18,7 +17,6 @@ interface MergeGateNodeData {
   label: string;
   gateKind: MergeGateKind;
   mergeMode?: 'manual' | 'automatic' | 'external_review';
-  workflowId?: string;
   /** Set when merge gate was fixed with Claude — first approve clears this (orchestrator). */
   pendingFixError?: string;
   dimmed?: boolean;
@@ -43,7 +41,6 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
     label,
     gateKind,
     mergeMode = 'manual',
-    workflowId,
     pendingFixError,
     dimmed: dataDimmed,
     selected: dataSelected,
@@ -55,21 +52,9 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
     pendingFixError ? { pendingFixError } : undefined,
   );
   const colors = getStatusColor(visualStatus);
-  const [error, setError] = useState<string | null>(null);
 
   /** mergeMode wins over gateKind so we never show "Pull request" + "Review" when workflow is external_review mode. */
   const effectiveGateKind: MergeGateKind = mergeMode === 'external_review' ? 'external_review' : gateKind;
-
-  const handleApproveMerge = () => {
-    if (workflowId && window.invoker?.approveMerge) {
-      setError(null);
-      window.invoker.approveMerge(workflowId).catch((err) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        setError(msg);
-        console.error('Failed to approve merge:', err);
-      });
-    }
-  };
 
   const usePrIcon = effectiveGateKind === 'external_review' || effectiveGateKind === 'pull_request';
   const icon = usePrIcon ? (
@@ -90,10 +75,6 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
     visualStatus === 'running' ? 'RUNNING' :
     visualStatus === 'failed' ? 'BLOCKED' :
     'PENDING';
-
-  const mergeApproveLabel = effectiveGateKind === 'pull_request' ? 'Approve & Create PR'
-    : effectiveGateKind === 'merge' ? 'Approve & Merge' : 'Approve';
-  const approveLabel = pendingFixError ? 'Approve Fix' : mergeApproveLabel;
 
   return (
     <div
@@ -128,26 +109,6 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
         />
         <span className={`text-sm uppercase tracking-wide ${colors.text}`}>{statusLabel}</span>
       </div>
-
-      {mergeMode === 'manual' && (status === 'review_ready' || status === 'awaiting_approval') && (
-        <button
-          onClick={handleApproveMerge}
-          data-testid="approve-merge-button"
-          className="mt-2 w-full px-2 py-1 text-xs font-semibold text-white bg-green-600 hover:bg-green-700 rounded transition-colors"
-        >
-          {approveLabel}
-        </button>
-      )}
-
-      {error && (
-        <div
-          data-testid="merge-error"
-          className="mt-1 px-2 py-1 text-xs text-red-400 bg-red-900/30 rounded break-words"
-          title={error}
-        >
-          {error}
-        </div>
-      )}
 
       <Handle
         type="source"
