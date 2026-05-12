@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
 import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from './executor.js';
 import { BaseExecutor, type BaseEntry } from './base-executor.js';
@@ -111,8 +112,16 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
   /** Lazily-resolved dockerode instance. Null until first use. */
   private dockerInstance: any | null = null;
 
-  /** Container ID for the current task (set after container.start()). */
-  private activeContainerId: string | null = null;
+  /**
+   * Container ID bound to the current async task lifecycle.
+   *
+   * DockerExecutor can run multiple tasks concurrently. A single mutable
+   * "active container" field makes BaseExecutor git/finalization helpers race:
+   * task A can start git work, task B overwrites the field, then task A's next
+   * git command runs in task B's container. AsyncLocalStorage keeps each
+   * overlapping start/finalize path pinned to its own container.
+   */
+  private readonly containerContext = new AsyncLocalStorage<string>();
 
   constructor(config: DockerExecutorConfig) {
     super();
@@ -136,25 +145,26 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
     cwd: string,
     opts?: { signal?: AbortSignal },
   ): Promise<string> {
-    if (!this.activeContainerId) return super.execGitSimple(args, cwd, opts);
+    const containerId = this.containerContext.getStore();
+    if (!containerId) return super.execGitSimple(args, cwd, opts);
     const escapedArgs = args.map(a => shellEscape(a)).join(' ');
     const script = `cd ${shellEscape(cwd)} && git ${escapedArgs}`;
-    return this.execRemoteCapture(script, opts);
+    return this.execRemoteCapture(containerId, script, opts);
   }
 
   protected override runBash(script: string, _cwd: string): Promise<string> {
-    return this.execRemoteCapture(script);
+    const containerId = this.containerContext.getStore();
+    if (!containerId) {
+      return Promise.reject(new Error('runBash called with no active Docker container context'));
+    }
+    return this.execRemoteCapture(containerId, script);
   }
 
   /**
    * Run a bash script inside the active container via CLI. Inherits the
    * image's declared user.
    */
-  private execRemoteCapture(script: string, opts?: { signal?: AbortSignal }): Promise<string> {
-    const containerId = this.activeContainerId;
-    if (!containerId) {
-      return Promise.reject(new Error('execRemoteCapture called with no active container'));
-    }
+  private execRemoteCapture(containerId: string, script: string, opts?: { signal?: AbortSignal }): Promise<string> {
     return new Promise((resolve, reject) => {
       const child = spawn('docker', [
         'exec', '-i', containerId, 'bash', '-s',
@@ -351,114 +361,115 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
       emit(`${TAG} Container failed to start: ${errMsg}`);
       throw new Error(`Docker container failed to start: ${errMsg}`);
     }
-    this.activeContainerId = container.id;
     emit(`${TAG} Container started`);
 
-    // -- Git setup (reuses BaseExecutor methods via overridden execGitSimple + runBash) --
-    await this.syncFromRemote(CONTAINER_CWD, executionId);
+    return await this.containerContext.run(container.id, async () => {
+      // -- Git setup (reuses BaseExecutor methods via overridden execGitSimple + runBash) --
+      await this.syncFromRemote(CONTAINER_CWD, executionId);
 
-    const baseRef = request.inputs.baseBranch ?? 'HEAD';
-    const baseHead = (await this.execGitSimple(['rev-parse', baseRef], CONTAINER_CWD)).trim();
-    const upstreamCommits = (request.inputs.upstreamContext ?? [])
-      .map(c => c.commitHash)
-      .filter((h): h is string => !!h);
-    const contentHash = computeContentHash(
-      request.actionId,
-      request.inputs.command,
-      request.inputs.prompt,
-      upstreamCommits,
-      baseHead,
-    );
-    const branchName = buildExperimentBranchName(
-      request.actionId,
-      request.inputs.lifecycleTag ?? '',
-      contentHash,
-    );
-    // Persist the branch on the attempt row before any branch-creating git
-    // operation runs. If the container or git step crashes mid-startup, the
-    // attempt still records which branch it was about to use so leftover
-    // state can be reconciled.
-    try {
-      request.onBranchResolved?.(branchName);
-    } catch {
-      // Best-effort early persistence; the post-start path persists the
-      // same value again.
-    }
-    const baseBranch = request.inputs.upstreamBranches?.[0]
-      ?? request.inputs.baseBranch
-      ?? 'HEAD';
+      const baseRef = request.inputs.baseBranch ?? 'HEAD';
+      const baseHead = (await this.execGitSimple(['rev-parse', baseRef], CONTAINER_CWD)).trim();
+      const upstreamCommits = (request.inputs.upstreamContext ?? [])
+        .map(c => c.commitHash)
+        .filter((h): h is string => !!h);
+      const contentHash = computeContentHash(
+        request.actionId,
+        request.inputs.command,
+        request.inputs.prompt,
+        upstreamCommits,
+        baseHead,
+      );
+      const branchName = buildExperimentBranchName(
+        request.actionId,
+        request.inputs.lifecycleTag ?? '',
+        contentHash,
+      );
+      // Persist the branch on the attempt row before any branch-creating git
+      // operation runs. If the container or git step crashes mid-startup, the
+      // attempt still records which branch it was about to use so leftover
+      // state can be reconciled.
+      try {
+        request.onBranchResolved?.(branchName);
+      } catch {
+        // Best-effort early persistence; the post-start path persists the
+        // same value again.
+      }
+      const baseBranch = request.inputs.upstreamBranches?.[0]
+        ?? request.inputs.baseBranch
+        ?? 'HEAD';
 
-    await this.setupTaskBranch(CONTAINER_CWD, request, handle, {
-      branchName,
-      base: baseBranch,
-    });
-    entry.branch = handle.branch;
-
-    // -- No-command tasks: complete immediately after branch setup --
-    if (!request.inputs.command && !request.inputs.prompt) {
-      await this.handleProcessExit(executionId, request, CONTAINER_CWD, 0, {
-        branch: handle.branch,
+      await this.setupTaskBranch(CONTAINER_CWD, request, handle, {
+        branchName,
+        base: baseBranch,
       });
-      return handle;
-    }
+      entry.branch = handle.branch;
 
-    // -- Spawn task command via docker exec CLI --
-    const taskCmd = `cd ${shellEscape(CONTAINER_CWD)} && exec ${cmd} ${cmdArgs.map(a => shellEscape(a)).join(' ')}`;
-    const child = spawn('docker', [
-      'exec', '-i', container.id, 'bash', '-c', taskCmd,
-    ], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      detached: true,
-      env: cleanElectronEnv(),
-    });
-
-    entry.process = child;
-
-    child.on('error', (err) => {
-      emit(`${TAG} task process spawn error: ${err.message}`);
-      const response: WorkResponse = {
-        requestId: request.requestId,
-        actionId: request.actionId,
-        executionGeneration: request.executionGeneration,
-        status: 'failed',
-        outputs: {
-          exitCode: 1,
-          error: `Failed to spawn docker exec: ${err.message}`,
-        },
-      };
-      this.emitComplete(executionId, response);
-    });
-
-    child.stdout?.on('data', (chunk: Buffer) => {
-      this.emitOutput(executionId, chunk.toString());
-    });
-
-    child.stderr?.on('data', (chunk: Buffer) => {
-      this.emitOutput(executionId, chunk.toString());
-    });
-
-    child.on('close', (code, signal) => {
-      void (async () => {
-        const exitCode = code ?? (signal ? 1 : 0);
-
-        await this.handleProcessExit(executionId, request, CONTAINER_CWD, exitCode, {
-          signal,
+      // -- No-command tasks: complete immediately after branch setup --
+      if (!request.inputs.command && !request.inputs.prompt) {
+        await this.handleProcessExit(executionId, request, CONTAINER_CWD, 0, {
           branch: handle.branch,
-          agentSessionId: entry.agentSessionId,
         });
+        return handle;
+      }
 
-        // Stop the idle container after git finalize completes
-        try {
-          const c = docker.getContainer(container.id);
-          await c.stop({ t: CONTAINER_STOP_TIMEOUT_S });
-        } catch {
-          // Container may already be stopped
-        }
-      })();
+      // -- Spawn task command via docker exec CLI --
+      const taskCmd = `cd ${shellEscape(CONTAINER_CWD)} && exec ${cmd} ${cmdArgs.map(a => shellEscape(a)).join(' ')}`;
+      const child = spawn('docker', [
+        'exec', '-i', container.id, 'bash', '-c', taskCmd,
+      ], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        detached: true,
+        env: cleanElectronEnv(),
+      });
+
+      entry.process = child;
+
+      child.on('error', (err) => {
+        emit(`${TAG} task process spawn error: ${err.message}`);
+        const response: WorkResponse = {
+          requestId: request.requestId,
+          actionId: request.actionId,
+          executionGeneration: request.executionGeneration,
+          status: 'failed',
+          outputs: {
+            exitCode: 1,
+            error: `Failed to spawn docker exec: ${err.message}`,
+          },
+        };
+        this.emitComplete(executionId, response);
+      });
+
+      child.stdout?.on('data', (chunk: Buffer) => {
+        this.emitOutput(executionId, chunk.toString());
+      });
+
+      child.stderr?.on('data', (chunk: Buffer) => {
+        this.emitOutput(executionId, chunk.toString());
+      });
+
+      child.on('close', (code, signal) => {
+        void this.containerContext.run(container.id, async () => {
+          const exitCode = code ?? (signal ? 1 : 0);
+
+          await this.handleProcessExit(executionId, request, CONTAINER_CWD, exitCode, {
+            signal,
+            branch: handle.branch,
+            agentSessionId: entry.agentSessionId,
+          });
+
+          // Stop the idle container after git finalize completes
+          try {
+            const c = docker.getContainer(container.id);
+            await c.stop({ t: CONTAINER_STOP_TIMEOUT_S });
+          } catch {
+            // Container may already be stopped
+          }
+        });
+      });
+
+      this.startHeartbeat(executionId, child);
+      return handle;
     });
-
-    this.startHeartbeat(executionId, child);
-    return handle;
   }
 
   async kill(handle: ExecutorHandle): Promise<void> {
