@@ -12,6 +12,8 @@ const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_MAX_DURATION_MS = 4 * 60 * 60 * 1000; // 4 hours
 const DEFAULT_MAX_BUFFER_CHUNKS = 1000;
 const DEFAULT_MAX_BUFFER_BYTES = 5 * 1024 * 1024; // 5MB
+/** Default cap for `git fetch` / `git push` (network-bound). Override via INVOKER_GIT_NETWORK_TIMEOUT_MS; use 0 for unbounded. */
+const DEFAULT_GIT_NETWORK_TIMEOUT_MS = 15 * 60 * 1000;
 
 export interface BaseEntry {
   request: WorkRequest;
@@ -363,12 +365,63 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     }
   }
 
-  protected execGitSimple(args: string[], cwd: string): Promise<string> {
+  /**
+   * Milliseconds for network-bound git (`git fetch`, `git push`).
+   * `INVOKER_GIT_NETWORK_TIMEOUT_MS=0` disables the cap (unbounded).
+   */
+  protected getGitNetworkTimeoutMs(): number {
+    const raw = process.env.INVOKER_GIT_NETWORK_TIMEOUT_MS?.trim();
+    if (raw === '0') return 0;
+    if (raw === undefined || raw === '') return DEFAULT_GIT_NETWORK_TIMEOUT_MS;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) return DEFAULT_GIT_NETWORK_TIMEOUT_MS;
+    return n;
+  }
+
+  /**
+   * Like {@link execGitSimple} but aborts after {@link getGitNetworkTimeoutMs} (unless disabled via env).
+   */
+  protected async execGitSimpleWithNetworkTimeout(args: string[], cwd: string): Promise<string> {
+    const timeoutMs = this.getGitNetworkTimeoutMs();
+    if (timeoutMs <= 0) {
+      return this.execGitSimple(args, cwd);
+    }
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    try {
+      return await this.execGitSimple(args, cwd, { signal: ac.signal });
+    } catch (err) {
+      const baseMsg = err instanceof Error ? err.message : String(err);
+      if (ac.signal.aborted) {
+        throw new Error(
+          `git ${args.join(' ')} exceeded network timeout (${timeoutMs}ms). ` +
+            `Set INVOKER_GIT_NETWORK_TIMEOUT_MS to adjust (0 = unbounded). Underlying: ${baseMsg}`,
+        );
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  protected execGitSimple(
+    args: string[],
+    cwd: string,
+    opts?: { signal?: AbortSignal },
+  ): Promise<string> {
     const stack = new Error().stack;
     const callerFrames = stack?.split('\n').slice(1, 5).map(l => l.trim()).join('\n    ') ?? '(no stack)';
     traceExecution(`[git-trace] git ${args.join(' ')}  cwd=${cwd}\n    ${callerFrames}`);
     return new Promise((resolve, reject) => {
-      const child = spawn('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+      if (opts?.signal?.aborted) {
+        reject(new Error(`git ${args.join(' ')} aborted before start`));
+        return;
+      }
+      const child = spawn('git', args, {
+        cwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        signal: opts?.signal,
+      });
       let stdout = '';
       let stderr = '';
       child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
@@ -643,7 +696,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     const fetchStartTime = Date.now();
 
     try {
-      await this.execGitSimple(['fetch', 'origin'], cwd);
+      await this.execGitSimpleWithNetworkTimeout(['fetch', 'origin'], cwd);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       const msg = `[Git Fetch] Status: FAILED | Error: ${errorMsg} | Aborting task\n`;
@@ -731,12 +784,12 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
             cwd,
           );
         }
-        await this.execGitSimple(
+        await this.execGitSimpleWithNetworkTimeout(
           ['push', '--force-with-lease', '-u', BaseExecutor.INTERMEDIATE_REMOTE_NAME, branch],
           cwd,
         );
       } else {
-        await this.execGitSimple(['push', '--force-with-lease', '-u', 'origin', branch], cwd);
+        await this.execGitSimpleWithNetworkTimeout(['push', '--force-with-lease', '-u', 'origin', branch], cwd);
       }
       return undefined;
     } catch (err) {

@@ -401,24 +401,51 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
 
     child.on('close', async (code, signal) => {
       const exitCode = code ?? (signal ? 1 : 0);
-      if (driver && entry.rawStdout) {
-        // Extract real backend session/thread ID BEFORE writing the file,
-        // so processOutput stores under the real ID (not the local UUID).
-        const realId = driver.extractSessionId?.(entry.rawStdout);
-        if (realId) {
-          entry.agentSessionId = realId;
+      try {
+        if (driver && entry.rawStdout) {
+          // Extract real backend session/thread ID BEFORE writing the file,
+          // so processOutput stores under the real ID (not the local UUID).
+          const realId = driver.extractSessionId?.(entry.rawStdout);
+          if (realId) {
+            entry.agentSessionId = realId;
+          }
+          const readable = driver.processOutput(entry.agentSessionId ?? '', entry.rawStdout);
+          if (readable) this.emitOutput(executionId, readable);
         }
-        const readable = driver.processOutput(entry.agentSessionId ?? '', entry.rawStdout);
-        if (readable) this.emitOutput(executionId, readable);
+        await this.handleProcessExit(executionId, request, acquired.worktreePath, exitCode, {
+          signal,
+          branch,
+          agentSessionId: entry.agentSessionId,
+        });
+      } catch (err) {
+        const ent = this.entries.get(executionId);
+        if (ent && !ent.completionResponse) {
+          const reason = err instanceof Error ? err.stack ?? err.message : String(err);
+          this.emitOutput(
+            executionId,
+            `[worktree] Finalization failed after agent exited: ${reason}\n`,
+          );
+          this.emitComplete(executionId, {
+            requestId: request.requestId,
+            actionId: request.actionId,
+            executionGeneration: request.executionGeneration,
+            status: 'failed',
+            outputs: {
+              exitCode: exitCode === 0 ? 1 : exitCode,
+              error: `Invoker finalization failed after agent exited: ${reason}`,
+              agentSessionId: entry.agentSessionId,
+              branch,
+            },
+          });
+        }
+      } finally {
+        const ent = this.entries.get(executionId);
+        if (ent) {
+          ent.process = null;
+          ent.phase = 'completed';
+          this.softReleasePoolSlot(ent);
+        }
       }
-      await this.handleProcessExit(executionId, request, acquired.worktreePath, exitCode, {
-        signal,
-        branch,
-        agentSessionId: entry.agentSessionId,
-      });
-      entry.process = null;
-      entry.phase = 'completed';
-      this.softReleasePoolSlot(entry);
     });
 
     this.startHeartbeat(executionId, child);
