@@ -12,6 +12,7 @@ import {
   type AttributionContext,
   type CostTaskInfo,
 } from '../cost-rollup.js';
+import { serializeCostEvent } from '../formatter.js';
 
 // ── Fixture Helpers ────────────────────────────────────────
 
@@ -419,6 +420,130 @@ describe('buildAttributionContext', () => {
     };
     const ctx = buildAttributionContext(task, 'attempt-1');
     expect(ctx?.executorType).toBe('worktree');
+  });
+});
+
+// ── Attempt attribution regression ─────────────────────────
+
+describe('attempt attribution preserves caller-resolved IDs', () => {
+  const SESSION_MATCH_ATTEMPT = 'wf-1/task-a-aSESSMATCH';
+  const SELECTED_ATTEMPT = 'wf-1/task-a-aSELECTED';
+  const LATEST_ATTEMPT = 'wf-1/task-a-aLATEST00';
+  const PLACEHOLDER = 'wf-1/task-a-latest';
+
+  const usageEvents: SessionUsageEvent[] = [
+    {
+      eventId: 'turn-0',
+      timestamp: '2025-01-15T10:00:00Z',
+      model: 'gpt-4o',
+      inputTokens: 100,
+      outputTokens: 50,
+      cachedTokens: 0,
+      totalTokens: 150,
+      confidence: 'exact',
+    },
+    {
+      eventId: 'turn-1',
+      timestamp: '2025-01-15T10:05:00Z',
+      model: 'gpt-4o',
+      inputTokens: 200,
+      outputTokens: 80,
+      cachedTokens: 10,
+      totalTokens: 280,
+      confidence: 'exact',
+    },
+  ];
+
+  const taskInfo: CostTaskInfo = {
+    id: 'wf-1/task-a',
+    workflowId: 'wf-1',
+    executorType: 'worktree',
+    agentSessionId: 'sess-current',
+    agentName: 'codex',
+  };
+
+  it('propagates a session-matched attempt ID through attributeSessionUsage', () => {
+    const ctx = buildAttributionContext(taskInfo, SESSION_MATCH_ATTEMPT);
+    expect(ctx).toBeDefined();
+    const attributed = attributeSessionUsage(usageEvents, ctx!);
+    expect(attributed).toHaveLength(2);
+    for (const event of attributed) {
+      expect(event.attribution.attemptId).toBe(SESSION_MATCH_ATTEMPT);
+      expect(event.attribution.attemptId).not.toBe(PLACEHOLDER);
+    }
+  });
+
+  it('propagates a selectedAttemptId fallback through attributeSessionUsage', () => {
+    const ctx = buildAttributionContext(taskInfo, SELECTED_ATTEMPT);
+    const attributed = attributeSessionUsage(usageEvents, ctx!);
+    for (const event of attributed) {
+      expect(event.attribution.attemptId).toBe(SELECTED_ATTEMPT);
+      expect(event.attribution.attemptId).not.toBe(PLACEHOLDER);
+    }
+  });
+
+  it('propagates a latest-persisted attempt fallback through attributeSessionUsage', () => {
+    const ctx = buildAttributionContext(taskInfo, LATEST_ATTEMPT);
+    const attributed = attributeSessionUsage(usageEvents, ctx!);
+    for (const event of attributed) {
+      expect(event.attribution.attemptId).toBe(LATEST_ATTEMPT);
+      expect(event.attribution.attemptId).not.toBe(PLACEHOLDER);
+    }
+  });
+
+  it('preserves distinct attempt IDs across multiple tasks in serialized output', () => {
+    const taskA: CostTaskInfo = {
+      id: 'wf-1/task-a',
+      workflowId: 'wf-1',
+      executorType: 'worktree',
+      agentSessionId: 'sess-a',
+      agentName: 'codex',
+    };
+    const taskB: CostTaskInfo = {
+      id: 'wf-1/task-b',
+      workflowId: 'wf-1',
+      executorType: 'worktree',
+      agentSessionId: 'sess-b',
+      agentName: 'claude',
+    };
+
+    const ctxA = buildAttributionContext(taskA, 'wf-1/task-a-aSESSMATCH')!;
+    const ctxB = buildAttributionContext(taskB, 'wf-1/task-b-aLATEST00')!;
+
+    const eventsA = attributeSessionUsage([usageEvents[0]], ctxA);
+    const eventsB = attributeSessionUsage([usageEvents[1]], ctxB);
+    const all = [...eventsA, ...eventsB];
+
+    const serialized = all.map(serializeCostEvent);
+    const ids = serialized.map(s => s.attemptId);
+    expect(ids).toEqual(['wf-1/task-a-aSESSMATCH', 'wf-1/task-b-aLATEST00']);
+    for (const id of ids) {
+      expect(id).not.toMatch(/-latest$/);
+    }
+  });
+
+  it('produces deterministic serialized output containing the resolved attempt IDs', () => {
+    const ctx = buildAttributionContext(taskInfo, SESSION_MATCH_ATTEMPT)!;
+    const run1 = attributeSessionUsage(usageEvents, ctx).map(serializeCostEvent);
+    const run2 = attributeSessionUsage(usageEvents, ctx).map(serializeCostEvent);
+    expect(JSON.stringify(run1)).toBe(JSON.stringify(run2));
+    // The serialized output must mention the resolved attempt ID.
+    expect(JSON.stringify(run1)).toContain(SESSION_MATCH_ATTEMPT);
+    expect(JSON.stringify(run1)).not.toContain(PLACEHOLDER);
+  });
+
+  it('never emits a "${task.id}-latest" placeholder when callers supply real IDs', () => {
+    const ctxs = [SESSION_MATCH_ATTEMPT, SELECTED_ATTEMPT, LATEST_ATTEMPT].map(
+      id => buildAttributionContext(taskInfo, id)!,
+    );
+    for (const ctx of ctxs) {
+      expect(ctx.attemptId).not.toBe(PLACEHOLDER);
+      const events = attributeSessionUsage(usageEvents, ctx);
+      for (const e of events) {
+        expect(e.attribution.attemptId).not.toBe(PLACEHOLDER);
+        expect(e.attribution.attemptId).toBe(ctx.attemptId);
+      }
+    }
   });
 });
 
