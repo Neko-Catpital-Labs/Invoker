@@ -50,7 +50,25 @@ headless_query() {
 
 # Helper: mutating command (stderr preserved for debugging real failures)
 headless_mutation() {
-  node "$IPC_HELPER" exec -- "$@"
+  local ipc_args=()
+  local headless_args=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --no-track|--wait-for-approval)
+        ipc_args+=("$1")
+        shift
+        ;;
+      --timeout-ms)
+        ipc_args+=("$1" "$2")
+        shift 2
+        ;;
+      *)
+        headless_args+=("$1")
+        shift
+        ;;
+    esac
+  done
+  node "$IPC_HELPER" exec "${ipc_args[@]}" -- "${headless_args[@]}"
 }
 
 # Helper: extract workflow IDs (filter Electron init noise)
