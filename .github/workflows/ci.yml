@@ -4,6 +4,8 @@ on:
   push:
     branches: [master, main]
   pull_request:
+  schedule:
+    - cron: '17 9 * * *'
   workflow_dispatch:
 
 concurrency:
@@ -108,8 +110,6 @@ jobs:
             command: bash scripts/test-suites/required/10-vitest-workspace.sh
           - name: Submit Workflow Chain
             command: bash scripts/test-suites/required/15-submit-workflow-chain.sh
-          - name: Fix Intent Repros
-            command: bash scripts/test-suites/required/23-fix-intent-repros.sh
 
     name: required-fast / ${{ matrix.name }}
 
@@ -154,6 +154,55 @@ jobs:
 
       - name: Run suite group
         run: ${{ matrix.command }}
+
+  scheduled-repros:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: build-artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    name: scheduled / Fix Intent Repros
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: app-build-dist
+          path: /tmp/invoker-build-artifacts
+
+      - name: Extract build artifacts
+        run: tar -xzf /tmp/invoker-build-artifacts/app-build-dist.tgz -C .
+
+      - name: Configure git identity and HTTPS auth
+        run: |
+          git config --global user.name "CI Bot"
+          git config --global user.email "ci@invoker.dev"
+          git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "git@github.com:"
+          git config --global --add url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
+          git update-ref refs/heads/main refs/remotes/origin/master || true
+          git update-ref refs/remotes/origin/main refs/remotes/origin/master || true
+
+      - name: Install Playwright system dependencies
+        run: pnpm --filter @invoker/app exec playwright install --with-deps
+
+      - name: Run fix-intent repro bundle
+        run: bash scripts/test-suites/required/23-fix-intent-repros.sh
 
   dry-run:
     needs: build-artifacts
@@ -399,6 +448,7 @@ jobs:
         run: ${{ matrix.command }}
 
   docker:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     needs: build-artifacts
     runs-on: ubuntu-latest
     timeout-minutes: 60
