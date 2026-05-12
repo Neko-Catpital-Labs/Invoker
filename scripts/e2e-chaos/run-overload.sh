@@ -1621,7 +1621,10 @@ run_query_storm_during_tracked_fix() {
 run_same_workflow_tracked_fix_vs_recreate() {
   local workflow_count="$1"
   local operation_burst="$2"
-  local seed_timeout_seconds=120
+  # Under CI chaos, post-exit `git push` can contend with many concurrent clones/fetches
+  # and occasionally approach SSH-level stalls before succeeding or erroring out.
+  # Keep this above the worst-case `INVOKER_GIT_NETWORK_TIMEOUT_MS` budget plus agent/setup slack.
+  local seed_timeout_seconds=240
   invoker_e2e_init
   trap 'ov_stop_owner; rm -rf "${OVERLOAD_TMP_DIR:-}" >/dev/null 2>&1 || true; invoker_e2e_cleanup' RETURN
   cd "$INVOKER_E2E_REPO_ROOT"
