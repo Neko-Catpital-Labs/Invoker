@@ -2745,6 +2745,125 @@ describe('TaskRunner', () => {
       );
     });
 
+    it('reproduces wf-1778431030512-12 visual-proof markdown in the merge-gate PR body', async () => {
+      const cwd = createTempWorkspace();
+      mkdirSync(join(cwd, 'scripts'), { recursive: true });
+      mkdirSync(join(cwd, 'mock-wt'), { recursive: true });
+      writeFileSync(join(cwd, 'scripts', 'ui-visual-proof.sh'), `#!/usr/bin/env bash
+set -euo pipefail
+label=""
+output_dir=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --label) label="$2"; shift 2 ;;
+    --output-dir) output_dir="$2"; shift 2 ;;
+    *) echo "Unknown option: $1" >&2; exit 64 ;;
+  esac
+done
+if [[ -z "$label" || -z "$output_dir" ]]; then
+  echo "missing visual proof args" >&2
+  exit 64
+fi
+mkdir -p "$output_dir/$label"
+printf 'png' > "$output_dir/$label/merge-gate-no-inline-approve.png"
+printf 'png' > "$output_dir/$label/task-panel.png"
+printf 'video' > "$output_dir/$label/walkthrough.webm"
+echo "$output_dir/$label"
+`);
+      writeFileSync(join(cwd, 'scripts', 'upload-pr-images.mjs'), `const out = {};
+for (const file of process.argv.slice(2)) {
+  const name = file.split('/').pop();
+  out[name] = 'https://img.example.test/' + name;
+}
+console.log(JSON.stringify(out));
+`);
+
+      const workflowId = 'wf-1778431030512-12';
+      const taskId = 'fix-visual-proof-pr-summary-repro';
+      const mergeTaskId = `__merge__${workflowId}`;
+      const allTasks = [
+        makeTask({
+          id: taskId,
+          description: 'Add regression repro for failed visual-proof PR summary path',
+          status: 'completed',
+          config: { workflowId },
+          execution: { branch: 'experiment-wf-1778431030512-12-fix-visual-proof-pr-summary-repro' },
+        }),
+      ];
+      const mergeTask = makeTask({
+        id: mergeTaskId,
+        status: 'running',
+        dependencies: [taskId],
+        config: { isMergeNode: true, workflowId },
+      });
+      const orchestrator = {
+        getTask: (id: string) => id === mergeTaskId ? mergeTask : allTasks.find(t => t.id === id),
+        getAllTasks: () => [...allTasks, mergeTask],
+        handleWorkerResponse: vi.fn(() => []),
+        setTaskAwaitingApproval: vi.fn(),
+      };
+      const persistence = {
+        loadWorkflow: () => ({
+          id: workflowId,
+          name: 'Fix visual-proof PR summary repro',
+          description: 'Regression workflow for PR #276 missing visual-proof markdown',
+          onFinish: 'merge',
+          mergeMode: 'external_review',
+          baseBranch: 'master',
+          featureBranch: 'experiment/wf-1778431030512-12-visual-proof-pr-summary',
+          visualProof: true,
+        }),
+        updateTask: vi.fn(),
+      };
+      const mergeGateProvider = {
+        createReview: vi.fn().mockResolvedValue({
+          url: 'https://github.com/invoker/invoker/pull/276',
+          identifier: 'invoker/invoker#276',
+        }),
+      };
+      const executor = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd,
+        callbacks: { onComplete: vi.fn() },
+        mergeGateProvider: mergeGateProvider as any,
+      });
+
+      const gitCalls: string[][] = [];
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        gitCalls.push([...args]);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'abc123';
+        if (args[0] === 'rev-parse') return 'feature-sha';
+        if (args[0] === 'merge-base' && args[1] === '--is-ancestor') throw new Error('not ancestor');
+        return '';
+      };
+      (executor as any).execGitReadonly = async (args: string[]) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).createMergeWorktree = vi.fn().mockResolvedValue(join(cwd, 'mock-wt'));
+      (executor as any).removeMergeWorktree = vi.fn();
+      (executor as any).gitDiffStat = vi.fn().mockResolvedValue(' packages/execution-engine/src/task-runner.ts | 20 +++++');
+      (executor as any).startPrPolling = vi.fn();
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockImplementation(async (args: any) => ({
+        body: `## Summary\n\n${args.workflowSummary}\n\n${args.structuredContext?.visualProofMarkdown ?? ''}`,
+        sessionId: 'sess-wf-1778431030512-12',
+        agentName: 'codex',
+      }));
+
+      await (executor as any).executeMergeNode(mergeTask);
+
+      expect(gitCalls.some(c => c[0] === 'push')).toBe(true);
+      expect(mergeGateProvider.createReview).toHaveBeenCalledTimes(1);
+      const providerBody = mergeGateProvider.createReview.mock.calls[0][0].body;
+      expect(providerBody).toContain('## Visual Proof');
+      expect(providerBody).toContain('merge-gate-no-inline-approve.png');
+      expect(providerBody).toContain('![before](https://img.example.test/before--merge-gate-no-inline-approve.png)');
+      expect(providerBody).toContain('![after](https://img.example.test/after--merge-gate-no-inline-approve.png)');
+    });
+
     it('executeMergeNode goes to awaiting_approval when mergeMode=manual and onFinish=none', async () => {
       const orchestrator = {
         getTask: () => null,
