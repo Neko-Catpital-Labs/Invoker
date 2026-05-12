@@ -101,28 +101,41 @@ function setupSpawnMock(): {
   const taskProcess = createMockProcess();
   let taskProcessReturned = false;
 
-  mockedSpawn.mockImplementation((cmd: string, args?: readonly string[], _options?: any) => {
+  mockedSpawn.mockImplementation((cmd: string, args?: readonly string[], options?: { signal?: AbortSignal }) => {
     if (cmd === 'git') {
       const gitProc = createMockProcess();
       gitProcesses.push(gitProc);
+      let settled = false;
+      const finish = (code: number, sig: NodeJS.Signals | null = null) => {
+        if (settled) return;
+        settled = true;
+        gitProc.emit('close', code, sig);
+      };
 
-      // Auto-succeed git commands after a microtask
+      if (options?.signal) {
+        if (options.signal.aborted) {
+          Promise.resolve().then(() => finish(1, 'SIGTERM'));
+        } else {
+          options.signal.addEventListener('abort', () => finish(1, 'SIGTERM'), { once: true });
+        }
+      }
+
       Promise.resolve().then(() => {
+        if (settled || options?.signal?.aborted) return;
         const argsArr = args as string[];
         if (argsArr?.[0] === 'remote' && argsArr?.[1] === 'get-url' && argsArr?.[2] === 'upstream') {
           gitProc.stderr!.emit('data', Buffer.from("fatal: No such remote 'upstream'\n"));
-          gitProc.emit('close', 2, null);
+          finish(2, null);
           return;
         }
         if (argsArr?.includes('rev-parse')) {
           gitProc.stdout!.emit('data', Buffer.from('abc123def456\n'));
         }
-        // merge-base --is-ancestor should fail (not ancestor) so merges proceed
         if (argsArr?.[0] === 'merge-base' && argsArr?.[1] === '--is-ancestor') {
-          gitProc.emit('close', 1, null);
+          finish(1, null);
           return;
         }
-        gitProc.emit('close', 0, null);
+        finish(0, null);
       });
 
       return gitProc as any;
@@ -1040,6 +1053,45 @@ describe('WorktreeExecutor', () => {
       const response = await responsePromise;
 
       expect(response.outputs.agentSessionId).toBe(handle.agentSessionId);
+    });
+
+    /**
+     * Regression: emitComplete runs only after handleProcessExit, which awaits
+     * pushBranchToRemote. An unbounded hang there means the agent child can exit
+     * while the task never completes (documented in repro plan).
+     */
+    it('does not emitComplete while pushBranchToRemote is pending (hung push blocks completion)', async () => {
+      const pushSpy = vi
+        .spyOn(BaseExecutor.prototype as any, 'pushBranchToRemote')
+        .mockImplementation(() => new Promise<string | undefined>(() => { /* never resolves */ }));
+
+      try {
+        const claudeExecutor = new WorktreeExecutor({
+          cacheDir: '/fake/cache',
+          worktreeBaseDir: '/fake/worktrees',
+          claudeCommand: '/bin/echo',
+        });
+        mockPool(claudeExecutor);
+        const { taskProcess } = setupSpawnMock();
+
+        const request = makeRequest({
+          actionType: 'ai_task',
+          inputs: { prompt: 'test' },
+        });
+        const handle = await claudeExecutor.start(request);
+
+        let completed = false;
+        claudeExecutor.onComplete(handle, () => {
+          completed = true;
+        });
+
+        taskProcess.emit('close', 0, null);
+
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        expect(completed).toBe(false);
+      } finally {
+        pushSpy.mockRestore();
+      }
     });
 
     it('getTerminalSpec returns claude --resume for claude tasks', async () => {
