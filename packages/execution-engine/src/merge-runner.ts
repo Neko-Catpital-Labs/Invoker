@@ -370,16 +370,18 @@ export function collectTransitiveNonMergeTaskIds(
   return out;
 }
 
-/** Leaf tasks in a workflow (same semantics as reconcileMergeLeaves / findLeafTaskIds). */
-function findLeafTaskIdsInWorkflow(allTasks: TaskState[], workflowId: string): string[] {
-  const wf = allTasks.filter(
-    (t) => t.config.workflowId === workflowId && !t.config.isMergeNode && t.status !== 'stale',
-  );
-  const dependedOn = new Set<string>();
-  for (const t of wf) {
-    for (const d of t.dependencies) dependedOn.add(d);
+/** Direct non-merge dependencies of a merge node (no transitive expansion). */
+export function collectDirectNonMergeTaskIds(
+  mergeTask: TaskState,
+  getTask: (id: string) => TaskState | undefined,
+): Set<string> {
+  const out = new Set<string>();
+  for (const id of mergeTask.dependencies) {
+    const t = getTask(id);
+    if (!t || t.config.isMergeNode) continue;
+    out.add(id);
   }
-  return wf.filter((t) => !dependedOn.has(t.id)).map((t) => t.id);
+  return out;
 }
 
 // ── Extracted functions ──────────────────────────────────
@@ -912,10 +914,7 @@ export async function publishAfterFixImpl(
     if (task.id && workflowId) {
       const mergeT = allTasks.find((x) => x.id === task.id && x.config.isMergeNode);
       if (mergeT) {
-        allowedTaskIds = collectTransitiveNonMergeTaskIds(mergeT, (id) => host.orchestrator.getTask(id));
-        for (const lid of findLeafTaskIdsInWorkflow(allTasks, workflowId)) {
-          allowedTaskIds.add(lid);
-        }
+        allowedTaskIds = collectDirectNonMergeTaskIds(mergeT, (id) => host.orchestrator.getTask(id));
       }
     }
     const taskBranches = allTasks
@@ -1300,10 +1299,7 @@ export async function consolidateAndMergeImpl(
     if (mergeNodeTaskId && workflowId) {
       const mergeT = allTasks.find((x) => x.id === mergeNodeTaskId && x.config.isMergeNode);
       if (mergeT) {
-        allowedTaskIds = collectTransitiveNonMergeTaskIds(mergeT, (id) => host.orchestrator.getTask(id));
-        for (const lid of findLeafTaskIdsInWorkflow(allTasks, workflowId)) {
-          allowedTaskIds.add(lid);
-        }
+        allowedTaskIds = collectDirectNonMergeTaskIds(mergeT, (id) => host.orchestrator.getTask(id));
         console.log(
           `[merge] consolidation task set (${allowedTaskIds.size} ids): ${[...allowedTaskIds].sort().join(', ')}`,
         );
@@ -1311,7 +1307,6 @@ export async function consolidateAndMergeImpl(
           workflowId,
           mergeNodeTaskId,
           ids: [...allowedTaskIds].sort(),
-          leafIds: findLeafTaskIdsInWorkflow(allTasks, workflowId),
         });
       }
     }
