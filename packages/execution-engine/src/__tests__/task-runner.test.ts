@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TaskRunner } from '../task-runner.js';
-import { collectTransitiveNonMergeTaskIds } from '../merge-runner.js';
+import { collectDirectNonMergeTaskIds } from '../merge-runner.js';
 import { SshExecutor } from '../ssh-executor.js';
 import type { TaskState } from '@invoker/workflow-core';
 import type { WorkResponse, Logger } from '@invoker/contracts';
@@ -491,8 +491,8 @@ describe('TaskRunner', () => {
     await done;
   });
 
-  describe('collectTransitiveNonMergeTaskIds', () => {
-    it('walks backwards from merge deps to include intermediate tasks', () => {
+  describe('collectDirectNonMergeTaskIds', () => {
+    it('returns only direct non-merge dependencies', () => {
       const tasks = new Map<string, TaskState>();
       tasks.set('verify-ui-tests', makeTask({ id: 'verify-ui-tests', dependencies: [] }));
       tasks.set('distinguish', makeTask({ id: 'distinguish', dependencies: ['verify-ui-tests'] }));
@@ -501,11 +501,11 @@ describe('TaskRunner', () => {
         dependencies: ['distinguish'],
         config: { isMergeNode: true },
       });
-      const ids = collectTransitiveNonMergeTaskIds(merge, (id) => tasks.get(id));
-      expect([...ids].sort()).toEqual(['distinguish', 'verify-ui-tests']);
+      const ids = collectDirectNonMergeTaskIds(merge, (id) => tasks.get(id));
+      expect([...ids].sort()).toEqual(['distinguish']);
     });
 
-    it('stops at merge nodes in the dependency chain', () => {
+    it('excludes direct dependencies that are merge nodes', () => {
       const tasks = new Map<string, TaskState>();
       tasks.set('a', makeTask({ id: 'a', dependencies: [] }));
       const innerMerge = makeTask({ id: '__merge__inner', dependencies: ['a'], config: { isMergeNode: true } });
@@ -516,7 +516,7 @@ describe('TaskRunner', () => {
         dependencies: ['b'],
         config: { isMergeNode: true },
       });
-      const ids = collectTransitiveNonMergeTaskIds(rootMerge, (id) => tasks.get(id));
+      const ids = collectDirectNonMergeTaskIds(rootMerge, (id) => tasks.get(id));
       expect([...ids].sort()).toEqual(['b']);
     });
   });
@@ -4948,7 +4948,7 @@ describe('TaskRunner', () => {
       await expect(executor.executeTask(tasks.get('__merge__wf-1')!)).resolves.toBeUndefined();
     });
 
-    it('merges the full linear chain when merge gate depends only on the tip task', async () => {
+    it('merges only direct dependency branches when merge gate depends on the tip task', async () => {
       const tasks = new Map<string, TaskState>();
       tasks.set('A', makeTask({ id: 'A', status: 'completed', config: { workflowId: 'wf-1' }, execution: { branch: 'invoker/A' } }));
       tasks.set('B', makeTask({ id: 'B', status: 'completed', dependencies: ['A'], config: { workflowId: 'wf-1' }, execution: { branch: 'invoker/B' } }));
@@ -5002,10 +5002,10 @@ describe('TaskRunner', () => {
 
       await executor.executeTask(tasks.get('__merge__wf-1')!);
 
-      expect(mergedBranches.sort()).toEqual(['invoker/A', 'invoker/B', 'invoker/C', 'invoker/D']);
+      expect(mergedBranches.sort()).toEqual(['invoker/D']);
     });
 
-    it('includes parallel workflow leaves even when merge.dependencies omits one leaf', async () => {
+    it('does not include sibling leaves omitted from merge.dependencies', async () => {
       const tasks = new Map<string, TaskState>();
       tasks.set('verify-ui-tests', makeTask({
         id: 'verify-ui-tests',
@@ -5076,10 +5076,10 @@ describe('TaskRunner', () => {
 
       await executor.executeTask(tasks.get('__merge__wf-par')!);
 
-      expect(mergedBranches.sort()).toEqual(['experiment/distinguish-par', 'experiment/verify-par']);
+      expect(mergedBranches.sort()).toEqual(['experiment/distinguish-par']);
     });
 
-    it('merges transitive upstream branches when merge gate depends only on the final leaf', async () => {
+    it('does not merge transitive upstream branches when merge gate depends on final leaf', async () => {
       const tasks = new Map<string, TaskState>();
       tasks.set('verify-ui-tests', makeTask({
         id: 'verify-ui-tests',
@@ -5152,10 +5152,10 @@ describe('TaskRunner', () => {
       await executor.executeTask(tasks.get('__merge__wf-chain')!);
 
       expect(mergedBranches).toContain('experiment/distinguish-aa');
-      expect(mergedBranches).toContain('experiment/verify-ce05');
+      expect(mergedBranches).not.toContain('experiment/verify-ce05');
     });
 
-    it('forked leaves: merges only leaf branches from merge gate deps', async () => {
+    it('forked graph: merges only direct merge gate dependencies', async () => {
       const tasks = new Map<string, TaskState>();
       // A -> B -> D, A -> C -> E. Merge gate depends on [D, E]
       tasks.set('A', makeTask({ id: 'A', status: 'completed', config: { workflowId: 'wf-2' }, execution: { branch: 'invoker/A' } }));
@@ -5210,11 +5210,7 @@ describe('TaskRunner', () => {
 
       await executor.executeTask(tasks.get('__merge__wf-2')!);
 
-      // Transitive closure from leaves D,E includes fork ancestors A,B,C
       expect(mergedBranches.sort()).toEqual([
-        'invoker/A',
-        'invoker/B',
-        'invoker/C',
         'invoker/D',
         'invoker/E',
       ]);
