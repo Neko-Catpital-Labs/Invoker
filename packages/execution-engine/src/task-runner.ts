@@ -395,7 +395,10 @@ export class TaskRunner {
         },
       };
       this.callbacks.onComplete?.(task.id, response);
-      this.orchestrator.handleWorkerResponse(response);
+      const newlyStarted = this.orchestrator.handleWorkerResponse(response) ?? [];
+      if (newlyStarted.length > 0) {
+        this.executeTasks(newlyStarted);
+      }
     } finally {
       this.launchingAttemptIds.delete(attemptId);
     }
