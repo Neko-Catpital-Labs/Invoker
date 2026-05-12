@@ -78,7 +78,6 @@ export interface HeadlessDeps {
   invokerConfig: InvokerConfig;
   initServices: () => Promise<void>;
   executionAgentRegistry?: AgentRegistry;
-  setTaskDispatcherExecutor?: (executor: Pick<TaskRunner, 'executeTasks'> | null) => void;
   wireSlackBot: (deps: {
     executor: TaskRunner;
     logFn: (source: string, level: string, message: string) => void;
@@ -210,7 +209,6 @@ export function createHeadlessExecutor(
       ...callbackOverrides,
     },
   });
-  deps.setTaskDispatcherExecutor?.(executor);
   return executor;
 }
 
@@ -1308,12 +1306,25 @@ async function headlessRun(
   if (currentWorkflowId) process.stdout.write(`Workflow ID: ${currentWorkflowId}\n`);
 
   const started = orchestrator.startExecution();
-  void started;
 
   if (noTrack) {
+    if (started.length > 0) {
+      void Promise.resolve()
+        .then(() => taskExecutor.executeTasks(started))
+        .catch((err) => {
+          deps.logger.error(
+            `background no-track run failed for ${currentWorkflowId ?? 'unknown'}: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
+            { module: 'headless' },
+          );
+        });
+    }
     process.stdout.write('[headless] --no-track enabled: submission accepted; exiting without tracking.\n');
     await api.close().catch(() => {});
     return;
+  }
+
+  if (started.length > 0) {
+    await taskExecutor.executeTasks(started);
   }
 
   if (currentWorkflowId) {

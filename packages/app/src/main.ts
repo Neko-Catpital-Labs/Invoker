@@ -197,20 +197,6 @@ let executorRegistry: ExecutorRegistry;
 let orchestrator: Orchestrator;
 let commandService: CommandService;
 let runtimeServices: RuntimeServices;
-let dispatcherTaskExecutor: Pick<TaskRunner, 'executeTasks'> | null = null;
-
-function setDispatcherTaskExecutor(executor: Pick<TaskRunner, 'executeTasks'> | null): void {
-  dispatcherTaskExecutor = executor;
-}
-
-function dispatchStartedTasks(tasks: TaskState[]): void {
-  if (tasks.length === 0 || !dispatcherTaskExecutor) return;
-  void dispatcherTaskExecutor.executeTasks(tasks).catch((err) => {
-    logger.error(`[dispatcher] executeTasks failed: ${err instanceof Error ? err.stack ?? err.message : String(err)}`, {
-      module: 'dispatch',
-    });
-  });
-}
 let workflowMutationCoordinator: PersistedWorkflowMutationCoordinator | null = null;
 const workflowMutationDispatcher = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 /**
@@ -436,7 +422,6 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     defaultAutoFixRetries: invokerConfig.autoFixRetries,
     executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
     deferRunningUntilLaunch: true,
-    taskDispatcher: dispatchStartedTasks,
   });
   commandService = new CommandService(orchestrator);
 
@@ -587,6 +572,7 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
         orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
         const started = orchestrator.startExecution();
         deps.logFn('trace', 'info', `slackBot: startExecution returned ${started.length} tasks: [${started.map((t: any) => t.id).join(', ')}]`);
+        await deps.executor.executeTasks(started);
         break;
       }
     }
@@ -735,7 +721,6 @@ if (isHeadless) {
         orchestrator, persistence, executorRegistry, messageBus,
         repoRoot, invokerConfig, initServices, wireSlackBot,
         commandService,
-        setTaskDispatcherExecutor: setDispatcherTaskExecutor,
         getUiPerfStats: () => ({
           ts: new Date().toISOString(),
           mainDeltaToUi: 0,
@@ -757,7 +742,6 @@ if (isHeadless) {
 
       const createStandaloneTaskExecutor = (): TaskRunner => {
         const executor = createHeadlessExecutor(headlessDeps);
-        setDispatcherTaskExecutor(executor);
         wireHeadlessApproveHook(headlessDeps, executor);
         return executor;
       };
@@ -766,7 +750,6 @@ if (isHeadless) {
         const { parsePlanFile } = await import('./plan-parser.js');
         const plan = await parsePlanFile(payload.planPath);
         const executor = createStandaloneTaskExecutor();
-        void executor;
         backupPlan(plan, undefined, logger);
         const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
         orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
@@ -775,6 +758,7 @@ if (isHeadless) {
           throw new Error(`Failed to resolve workflow id for delegated plan: ${payload.planPath}`);
         }
         const started = orchestrator.startExecution();
+        await executor.executeTasks(started);
         logger.info(`standalone started ${started.length} tasks for workflow "${workflowId}"`, { module: 'ipc-delegate' });
         const tasks = orchestrator.getAllTasks().filter((task) => task.config.workflowId === workflowId);
         return { workflowId, tasks };
@@ -782,9 +766,10 @@ if (isHeadless) {
 
       const executeStandaloneHeadlessResume = async (payload: HeadlessResumeMutationPayload): Promise<unknown> => {
         const { workflowId } = payload;
-        createStandaloneTaskExecutor();
+        const executor = createStandaloneTaskExecutor();
         orchestrator.syncFromDb(workflowId);
         const started = relaunchOrphansAndStartReady(orchestrator, logger, 'standalone-ipc-delegate', workflowId);
+        await executor.executeTasks(started);
         logger.info(`standalone resumed ${started.length} tasks for workflow "${workflowId}"`, { module: 'ipc-delegate' });
         const tasks = orchestrator.getAllTasks().filter((task) => task.config.workflowId === workflowId);
         return { workflowId, tasks };
@@ -967,6 +952,7 @@ if (isHeadless) {
           orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
           const workflowId = orchestrator.getWorkflowIds().find(id => !wfIdsBefore.has(id))!;
           const started = orchestrator.startExecution();
+          await createStandaloneTaskExecutor().executeTasks(started);
           logger.info(`started ${started.length} tasks for workflow "${workflowId}"`, { module: 'ipc-delegate' });
           const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
           return { workflowId, tasks };
@@ -1138,7 +1124,6 @@ if (isHeadless) {
   const agentRegistry = registerBuiltinAgents();
   let mainWindow: BrowserWindow | null = null;
   let taskExecutor: TaskRunner | null = null;
-  setDispatcherTaskExecutor(null);
   let apiServer: ApiServer | null = null;
   let ownerMode = true;
   const taskHandles = new Map<string, { handle: ExecutorHandle; executor: Executor }>();
@@ -1541,7 +1526,6 @@ if (isHeadless) {
         },
       },
     });
-    setDispatcherTaskExecutor(taskExecutor);
     wireApproveHook();
   }
 
@@ -1669,6 +1653,7 @@ if (isHeadless) {
     orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
     const workflowId = orchestrator.getWorkflowIds().find(id => !wfIdsBefore.has(id))!;
     const started = orchestrator.startExecution();
+    await requireTaskExecutor().executeTasks(started);
     logger.info(`started ${started.length} tasks for workflow "${workflowId}"`, { module: 'ipc-delegate' });
     const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
     return { workflowId, tasks };
@@ -1708,7 +1693,6 @@ if (isHeadless) {
       commandService,
       repoRoot, invokerConfig, initServices, wireSlackBot,
       signal: activeMutationContext?.signal,
-      setTaskDispatcherExecutor: setDispatcherTaskExecutor,
       cancelTask: (taskId: string) => performCancelTask(taskId),
       cancelWorkflow: (workflowId: string) => performCancelWorkflow(workflowId),
       waitForApproval: payload.waitForApproval,
@@ -2407,7 +2391,9 @@ if (isHeadless) {
                         `[launch-stall] dispatching ${runnableAfterFailure.length} task(s) started after failing "${task.id}"`,
                         { module: 'db-poll' },
                       );
-                      dispatchStartedTasks(runnableAfterFailure);
+                      void requireTaskExecutor().executeTasks(runnableAfterFailure).catch((err) => {
+                        logger.error(`[launch-stall] executeTasks failed after failing "${task.id}": ${err instanceof Error ? err.stack ?? err.message : String(err)}`, { module: 'db-poll' });
+                      });
                     }
                     continue;
                   }
@@ -2800,7 +2786,6 @@ if (isHeadless) {
         defaultAutoFixRetries: invokerConfig.autoFixRetries,
         executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
         deferRunningUntilLaunch: true,
-        taskDispatcher: dispatchStartedTasks,
       });
       commandService = new CommandService(orchestrator);
       rebuildTaskRunner();

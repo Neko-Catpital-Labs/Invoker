@@ -152,12 +152,6 @@ export async function approveTask(
     for (const task of postFixMerge) {
       await deps.taskExecutor.publishAfterFix(task);
     }
-    const runnable = started.filter(
-      (t) => t.status === 'running' && !(t.config.isMergeNode && t.id === taskId),
-    );
-    if (runnable.length > 0) {
-      await deps.taskExecutor.executeTasks(runnable);
-    }
   }
   return { approvedTask: task, started, fixedTask };
 }
