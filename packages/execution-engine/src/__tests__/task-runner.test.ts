@@ -183,6 +183,64 @@ describe('TaskRunner', () => {
     );
   });
 
+  it('dispatches newly ready tasks after executor startup failure', async () => {
+    const failedTask = makeTask({
+      id: 'docker-no-image',
+      status: 'running',
+      config: { command: 'echo never', executorType: 'docker' },
+      execution: { selectedAttemptId: 'docker-no-image-a1' },
+    });
+    const newlyReady = makeTask({
+      id: 'docker-concurrent-b',
+      status: 'running',
+      config: { command: 'sleep 2 && echo done', executorType: 'docker' },
+      execution: { selectedAttemptId: 'docker-concurrent-b-a1' },
+    });
+
+    const handleWorkerResponse = vi.fn(() => [newlyReady]);
+    const failingExecutor = {
+      type: 'docker',
+      start: vi.fn(async () => {
+        throw new Error('No such image: invoker-nonexistent-image:v999');
+      }),
+      onComplete: vi.fn(),
+      onOutput: vi.fn(),
+      onHeartbeat: vi.fn(),
+      kill: vi.fn(),
+      destroyAll: vi.fn(),
+    };
+
+    const runner = new TaskRunner({
+      orchestrator: {
+        getTask: (id: string) => id === failedTask.id ? failedTask : newlyReady,
+        handleWorkerResponse,
+      } as any,
+      persistence: {
+        updateTask: vi.fn(),
+        updateAttempt: vi.fn(),
+        appendTaskOutput: vi.fn(),
+      } as any,
+      executorRegistry: {
+        getDefault: () => failingExecutor,
+        get: () => failingExecutor,
+        getAll: () => [failingExecutor],
+        deregister: vi.fn(),
+      } as any,
+      cwd: '/tmp',
+    });
+    const executeTasksSpy = vi.spyOn(runner, 'executeTasks').mockResolvedValue(undefined);
+
+    await runner.executeTask(failedTask);
+
+    expect(handleWorkerResponse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionId: 'docker-no-image',
+        status: 'failed',
+      }),
+    );
+    expect(executeTasksSpy).toHaveBeenCalledWith([newlyReady]);
+  });
+
   it('deduplicates concurrent launches for the same attempt', async () => {
     let completeCallback: ((response: WorkResponse) => void) | undefined;
     const start = vi.fn().mockImplementation(async (request: any) => ({
