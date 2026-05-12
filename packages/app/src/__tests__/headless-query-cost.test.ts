@@ -405,3 +405,192 @@ describe('headless query cost-events', () => {
     ).rejects.toThrow('Unknown query flag');
   });
 });
+
+// ── Attempt attribution regression ─────────────────────────
+
+describe('headless query cost-events — persisted attempt attribution', () => {
+  let mockDeps: HeadlessDeps;
+  let stdoutSpy: any;
+
+  const TASK_ID = 'wf-1/task-a';
+  const PLACEHOLDER = `${TASK_ID}-latest`;
+  const SESSION_MATCH_ID = 'wf-1/task-a-aSESSMATCH';
+  const OTHER_ATTEMPT_ID = 'wf-1/task-a-aOTHEROLD';
+  const SELECTED_ID = 'wf-1/task-a-aSELECTED';
+  const LATEST_ID = 'wf-1/task-a-aLATEST00';
+  const OLDEST_ID = 'wf-1/task-a-aOLDEST00';
+  const MIDDLE_ID = 'wf-1/task-a-aMIDDLE00';
+
+  const driverSession = makeSessionRaw([{ input: 10, output: 5 }, { input: 20, output: 7 }]);
+
+  const mockDriver = {
+    processOutput: vi.fn(),
+    loadSession: vi.fn(() => driverSession),
+    parseSession: vi.fn(() => []),
+    inspectSession: vi.fn(() => ({ state: 'finished' as const })),
+    extractUsage: vi.fn((raw: string) => {
+      const lines = raw.split('\n').filter(Boolean);
+      return lines.map((line, i) => {
+        const entry = JSON.parse(line);
+        const u = entry.usage;
+        return {
+          eventId: `codex-turn-${i}`,
+          timestamp: '2025-01-01T00:00:00Z',
+          model: 'gpt-4o',
+          inputTokens: u.input_tokens ?? 0,
+          outputTokens: u.output_tokens ?? 0,
+          cachedTokens: u.cache_read_input_tokens ?? 0,
+          totalTokens: u.total_tokens ?? 0,
+          confidence: 'exact' as const,
+        };
+      });
+    }),
+  };
+
+  function setup(opts: {
+    attempts: Array<{ id: string; agentSessionId?: string; createdAt: Date }>;
+    execution: Partial<{
+      agentSessionId: string;
+      lastAgentSessionId: string;
+      selectedAttemptId: string;
+      agentName: string;
+    }>;
+  }) {
+    const task = makeTask('wf-1', 'task-a', {
+      execution: opts.execution as any,
+    });
+    mockDeps = {
+      logger: noopLogger as any,
+      orchestrator: {} as Orchestrator,
+      persistence: {
+        readOnly: false,
+        listWorkflows: vi.fn(() => [makeWorkflow('wf-1', 'completed')]),
+        loadTasks: vi.fn(() => []),
+        loadAttempts: vi.fn((nodeId: string) =>
+          opts.attempts.map(a => ({
+            id: a.id,
+            nodeId,
+            agentSessionId: a.agentSessionId,
+            createdAt: a.createdAt,
+            upstreamAttemptIds: [],
+            status: 'completed',
+            queuePriority: 0,
+          })),
+        ),
+      } as unknown as SQLiteAdapter,
+      commandService: {} as CommandService,
+      executorRegistry: {} as any,
+      executionAgentRegistry: {
+        getSessionDriver: vi.fn(() => mockDriver),
+      } as unknown as AgentRegistry,
+      messageBus: new LocalBus() as MessageBus,
+      repoRoot: '/fake/repo',
+      invokerConfig: {} as any,
+      initServices: vi.fn(async () => {}),
+      wireSlackBot: vi.fn(async () => ({})),
+    };
+    mockDeps.orchestrator.syncFromDb = vi.fn();
+    mockDeps.orchestrator.getAllTasks = vi.fn(() => [task] as any);
+  }
+
+  beforeEach(() => {
+    stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+  });
+
+  afterEach(() => {
+    stdoutSpy.mockRestore();
+  });
+
+  it('uses the persisted attempt whose agentSessionId matches the current session', async () => {
+    setup({
+      attempts: [
+        { id: OTHER_ATTEMPT_ID, agentSessionId: 'sess-different', createdAt: new Date('2025-01-03T00:00:00Z') },
+        { id: SESSION_MATCH_ID, agentSessionId: 'sess-target', createdAt: new Date('2025-01-01T00:00:00Z') },
+        { id: LATEST_ID, agentSessionId: 'sess-other-newer', createdAt: new Date('2025-01-05T00:00:00Z') },
+      ],
+      execution: { agentSessionId: 'sess-target', agentName: 'codex' },
+    });
+
+    await runHeadless(['query', 'cost-events', '--output', 'json'], mockDeps);
+    const output = stdoutSpy.mock.calls[0][0] as string;
+    const events = JSON.parse(output) as Array<Record<string, unknown>>;
+
+    expect(events.length).toBeGreaterThan(0);
+    for (const event of events) {
+      expect(event.taskId).toBe(TASK_ID);
+      expect(event.attemptId).toBe(SESSION_MATCH_ID);
+      expect(event.attemptId).not.toBe(PLACEHOLDER);
+      expect(event.attemptId).not.toBe(LATEST_ID);
+    }
+  });
+
+  it('falls back to selectedAttemptId when no persisted attempt matches the session', async () => {
+    setup({
+      attempts: [
+        { id: OTHER_ATTEMPT_ID, agentSessionId: 'sess-other', createdAt: new Date('2025-01-01T00:00:00Z') },
+        { id: SELECTED_ID, agentSessionId: 'sess-stale', createdAt: new Date('2025-01-02T00:00:00Z') },
+        { id: LATEST_ID, agentSessionId: 'sess-newest', createdAt: new Date('2025-01-09T00:00:00Z') },
+      ],
+      execution: {
+        agentSessionId: 'sess-no-match',
+        selectedAttemptId: SELECTED_ID,
+        agentName: 'codex',
+      },
+    });
+
+    await runHeadless(['query', 'cost-events', '--output', 'json'], mockDeps);
+    const output = stdoutSpy.mock.calls[0][0] as string;
+    const events = JSON.parse(output) as Array<Record<string, unknown>>;
+
+    expect(events.length).toBeGreaterThan(0);
+    for (const event of events) {
+      expect(event.attemptId).toBe(SELECTED_ID);
+      expect(event.attemptId).not.toBe(PLACEHOLDER);
+      expect(event.attemptId).not.toBe(LATEST_ID);
+    }
+  });
+
+  it('falls back to the latest persisted attempt when no selected attempt exists and no session matches', async () => {
+    setup({
+      attempts: [
+        { id: OLDEST_ID, agentSessionId: 'sess-x', createdAt: new Date('2025-01-01T00:00:00Z') },
+        { id: MIDDLE_ID, agentSessionId: 'sess-y', createdAt: new Date('2025-01-05T00:00:00Z') },
+        { id: LATEST_ID, agentSessionId: 'sess-z', createdAt: new Date('2025-01-09T00:00:00Z') },
+      ],
+      execution: { agentSessionId: 'sess-not-in-attempts', agentName: 'codex' },
+    });
+
+    await runHeadless(['query', 'cost-events', '--output', 'json'], mockDeps);
+    const output = stdoutSpy.mock.calls[0][0] as string;
+    const events = JSON.parse(output) as Array<Record<string, unknown>>;
+
+    expect(events.length).toBeGreaterThan(0);
+    for (const event of events) {
+      expect(event.attemptId).toBe(LATEST_ID);
+      expect(event.attemptId).not.toBe(PLACEHOLDER);
+      expect(event.attemptId).not.toBe(OLDEST_ID);
+      expect(event.attemptId).not.toBe(MIDDLE_ID);
+    }
+  });
+
+  it('produces deterministic JSON containing the resolved attempt IDs', async () => {
+    setup({
+      attempts: [
+        { id: OTHER_ATTEMPT_ID, agentSessionId: 'sess-different', createdAt: new Date('2025-01-03T00:00:00Z') },
+        { id: SESSION_MATCH_ID, agentSessionId: 'sess-target', createdAt: new Date('2025-01-01T00:00:00Z') },
+      ],
+      execution: { agentSessionId: 'sess-target', agentName: 'codex' },
+    });
+
+    await runHeadless(['query', 'cost-events', '--output', 'json'], mockDeps);
+    const output1 = stdoutSpy.mock.calls[0][0] as string;
+
+    stdoutSpy.mockClear();
+    await runHeadless(['query', 'cost-events', '--output', 'json'], mockDeps);
+    const output2 = stdoutSpy.mock.calls[0][0] as string;
+
+    expect(output1).toBe(output2);
+    expect(output1).toContain(SESSION_MATCH_ID);
+    expect(output1).not.toContain(PLACEHOLDER);
+  });
+});
