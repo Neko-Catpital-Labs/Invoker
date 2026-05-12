@@ -193,10 +193,16 @@ export function deriveSource(agentName: string): string {
 }
 
 /**
- * Build an AttributionContext from a task info record.
+ * Build an AttributionContext from a task info record and a caller-resolved attempt ID.
  * Returns undefined if no session ID is available.
+ *
+ * The caller is responsible for resolving `attemptId` from persistence — this function
+ * does not synthesize placeholder IDs.
  */
-export function buildAttributionContext(task: CostTaskInfo): AttributionContext | undefined {
+export function buildAttributionContext(
+  task: CostTaskInfo,
+  attemptId: string,
+): AttributionContext | undefined {
   const sessionId = resolveSessionId(task);
   if (!sessionId) return undefined;
 
@@ -204,7 +210,7 @@ export function buildAttributionContext(task: CostTaskInfo): AttributionContext 
   return {
     workflowId: task.workflowId,
     taskId: task.id,
-    attemptId: `${task.id}-latest`,
+    attemptId,
     executorType: task.executorType || 'worktree',
     agentSessionId: sessionId,
     agentName,

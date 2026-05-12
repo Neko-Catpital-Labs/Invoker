@@ -606,6 +606,40 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
 
 // ── Cost Query ──────────────────────────────────────────────
 
+/**
+ * Resolve the best attempt ID for a task's cost attribution.
+ *
+ * Preference order:
+ *   1. Persisted attempt whose `agentSessionId` matches the task's current
+ *      (or last) session — guarantees the cost events line up with a real
+ *      attempt record.
+ *   2. `task.execution.selectedAttemptId` — the attempt the task currently
+ *      points at, even if it pre-dates the latest session.
+ *   3. The most recently created persisted attempt for the task.
+ *
+ * Returns undefined when persistence has no attempts for the task and the
+ * task carries no selected attempt — callers should skip attribution.
+ */
+function resolveAttemptIdForTask(
+  task: TaskState,
+  persistence: Pick<SQLiteAdapter, 'loadAttempts'>,
+): string | undefined {
+  const attempts = persistence.loadAttempts(task.id);
+  const sessionId = task.execution.agentSessionId ?? task.execution.lastAgentSessionId;
+  if (sessionId) {
+    const bySession = attempts.find((a) => a.agentSessionId === sessionId);
+    if (bySession) return bySession.id;
+  }
+  const selected = task.execution.selectedAttemptId?.trim();
+  if (selected) return selected;
+  if (attempts.length === 0) return undefined;
+  let latest = attempts[0];
+  for (let i = 1; i < attempts.length; i++) {
+    if (attempts[i].createdAt.getTime() > latest.createdAt.getTime()) latest = attempts[i];
+  }
+  return latest.id;
+}
+
 async function headlessCosts(
   flags: QueryFlags,
   deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence' | 'executionAgentRegistry'>,
@@ -647,6 +681,8 @@ async function headlessCosts(
     );
 
     for (const task of tasks) {
+      const attemptId = resolveAttemptIdForTask(task, deps.persistence);
+      if (!attemptId) continue;
       const ctx = buildAttributionContext({
         id: task.id,
         workflowId: wf.id,
@@ -655,7 +691,7 @@ async function headlessCosts(
         lastAgentSessionId: task.execution.lastAgentSessionId,
         agentName: task.execution.agentName,
         lastAgentName: task.execution.lastAgentName,
-      });
+      }, attemptId);
       if (!ctx) continue;
 
       // Extract usage from session driver
@@ -736,6 +772,8 @@ async function collectCostEvents(
     );
 
     for (const task of tasks) {
+      const attemptId = resolveAttemptIdForTask(task, deps.persistence);
+      if (!attemptId) continue;
       const ctx = buildAttributionContext({
         id: task.id,
         workflowId: wf.id,
@@ -744,7 +782,7 @@ async function collectCostEvents(
         lastAgentSessionId: task.execution.lastAgentSessionId,
         agentName: task.execution.agentName,
         lastAgentName: task.execution.lastAgentName,
-      });
+      }, attemptId);
       if (!ctx) continue;
 
       const agentName = ctx.agentName;
