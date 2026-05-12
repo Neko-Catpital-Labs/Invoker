@@ -571,38 +571,56 @@ export class TaskRunner {
     } catch (err) {
       const meta = err as StartupFailureMetadata;
       const startupErrorMessage = `Executor startup failed (${executor.type}): ${err instanceof Error ? err.message : String(err)}\n`;
-      this.callbacks.onOutput?.(task.id, startupErrorMessage);
-      try {
-        this.persistence.appendTaskOutput(task.id, startupErrorMessage);
-      } catch {
-        // Preserve the original startup failure if output persistence also fails.
-      }
-      // Only persist startup-failure metadata when the launch is still
-      // current.  If the task has moved to a newer attempt or generation
-      // (e.g. via recreate-task), writing old workspace/branch metadata
-      // would corrupt the live attempt's state.
-      if (
-        (meta.workspacePath || meta.branch || meta.agentSessionId || meta.containerId)
-        && !this.isLaunchStale(task.id, attemptId, task.execution.generation ?? 0)
-      ) {
-        const execution: Record<string, string> = {};
-        if (meta.workspacePath) execution.workspacePath = meta.workspacePath;
-        if (meta.branch) execution.branch = meta.branch;
-        if (meta.agentSessionId) {
-          execution.agentSessionId = meta.agentSessionId;
-          execution.lastAgentSessionId = meta.agentSessionId;
+      // Compute staleness once: if the task has advanced past this attempt
+      // (e.g. via recreate-task), every live-task write below would clobber
+      // the newer attempt's state.  Stale diagnostics are instead routed
+      // to the attempt row, which is attempt-scoped and append-only from
+      // the perspective of the new attempt.
+      const launchStale = this.isLaunchStale(task.id, attemptId, startGeneration);
+      if (launchStale) {
+        this.logger.warn(
+          `[TaskRunner] stale executor startup-failure for task=${task.id} attemptId=${attemptId}; routing diagnostics to attempt row`,
+        );
+        try {
+          this.persistence.updateAttempt?.(attemptId, {
+            status: 'failed',
+            error: startupErrorMessage.trimEnd(),
+            completedAt: new Date(),
+          } as any);
+        } catch (attemptErr) {
+          traceExecution(
+            `${RESTART_TO_BRANCH_TRACE} task=${task.id} attempt=${attemptId} stale startup error attempt persist failed: ${attemptErr instanceof Error ? attemptErr.message : String(attemptErr)}`,
+          );
         }
-        if (meta.containerId) execution.containerId = meta.containerId;
-        this.persistence.updateTask(task.id, {
-          config: { executorType: executor.type as ExecutorType },
-          execution: execution as any,
-        });
+      } else {
+        this.callbacks.onOutput?.(task.id, startupErrorMessage);
+        try {
+          this.persistence.appendTaskOutput(task.id, startupErrorMessage);
+        } catch {
+          // Preserve the original startup failure if output persistence also fails.
+        }
+        if (meta.workspacePath || meta.branch || meta.agentSessionId || meta.containerId) {
+          const execution: Record<string, string> = {};
+          if (meta.workspacePath) execution.workspacePath = meta.workspacePath;
+          if (meta.branch) execution.branch = meta.branch;
+          if (meta.agentSessionId) {
+            execution.agentSessionId = meta.agentSessionId;
+            execution.lastAgentSessionId = meta.agentSessionId;
+          }
+          if (meta.containerId) execution.containerId = meta.containerId;
+          this.persistence.updateTask(task.id, {
+            config: { executorType: executor.type as ExecutorType },
+            execution: execution as any,
+          });
+        }
       }
       const wrapped = new Error(
         `Executor startup failed (${executor.type}): ${err instanceof Error ? err.message : String(err)}`,
         { cause: err },
       );
-      this.callbacks.onLaunchFailed?.(task.id, wrapped, executor);
+      if (!launchStale) {
+        this.callbacks.onLaunchFailed?.(task.id, wrapped, executor);
+      }
       throw wrapped;
     } finally {
       clearInterval(preStartHeartbeatTimer);
