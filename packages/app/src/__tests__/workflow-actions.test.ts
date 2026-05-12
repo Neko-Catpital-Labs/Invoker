@@ -769,7 +769,7 @@ describe('autoFixOnFailure', () => {
       shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => makeTask({
         status: 'failed',
-        execution: { autoFixAttempts: 0, error: 'boom' },
+        execution: { autoFixAttempts: 0, error: 'boom', workspacePath: '/tmp/task-a' },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
@@ -798,6 +798,55 @@ describe('autoFixOnFailure', () => {
     expect(taskExecutor.resolveConflict).not.toHaveBeenCalled();
     expect(orchestrator.retryTask).toHaveBeenCalledWith('task-a');
     expect(taskExecutor.executeTasks).toHaveBeenCalledWith(started);
+  });
+
+  it('skips auto-fix when workspacePath is missing for non-recreate routes', async () => {
+    const orchestrator = {
+      shouldAutoFix: vi.fn(() => true),
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        execution: { autoFixAttempts: 0, error: 'boom' },
+      })),
+      getAutoFixRetryBudget: vi.fn(() => 3),
+      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      retryTask: vi.fn(() => []),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      updateTask: vi.fn(),
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+      logEvent: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn().mockResolvedValue(undefined),
+      executeTasks: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await autoFixOnFailure('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    });
+
+    expect(orchestrator.beginConflictResolution).not.toHaveBeenCalled();
+    expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
+    expect(taskExecutor.resolveConflict).not.toHaveBeenCalled();
+    expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
+    expect(orchestrator.retryTask).not.toHaveBeenCalled();
+    expect(persistence.logEvent).toHaveBeenCalledWith(
+      'task-a',
+      'debug.auto-fix',
+      expect.objectContaining({
+        phase: 'auto-fix-skip-no-workspace',
+        route: 'fixWithAgent',
+      }),
+    );
+    expect(persistence.appendTaskOutput).toHaveBeenCalledWith(
+      'task-a',
+      expect.stringContaining('[Auto-fix] Auto-fix skipped: task "task-a" has no valid workspacePath'),
+    );
   });
 
   it('uses resolveConflict for merge-conflict errors and restarts the task directly', async () => {
@@ -1036,7 +1085,7 @@ describe('autoFixOnFailure', () => {
       getTask: vi.fn(() => makeTask({
         status: 'failed',
         config: { workflowId: 'wf-1', executionAgent: 'claude' },
-        execution: { autoFixAttempts: 0 },
+        execution: { autoFixAttempts: 0, workspacePath: '/tmp/task-a' },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
@@ -1086,7 +1135,7 @@ describe('autoFixOnFailure', () => {
       getTask: vi.fn(() => makeTask({
         status: 'failed',
         config: { workflowId: 'wf-1', executionAgent: 'codex' },
-        execution: { autoFixAttempts: 0 },
+        execution: { autoFixAttempts: 0, workspacePath: '/tmp/task-a' },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
@@ -2341,7 +2390,13 @@ describe('autoFixOnFailure lineage guard', () => {
           return makeTask({
             status: 'failed',
             config: { workflowId: 'wf-1' },
-            execution: { autoFixAttempts: 0, error: 'boom', selectedAttemptId: 'att-1', generation: 5 },
+            execution: {
+              autoFixAttempts: 0,
+              error: 'boom',
+              selectedAttemptId: 'att-1',
+              generation: 5,
+              workspacePath: '/tmp/task-a',
+            },
           });
         }
         // Lineage advanced after fix returned
@@ -2389,7 +2444,13 @@ describe('autoFixOnFailure lineage guard', () => {
           return makeTask({
             status: 'failed',
             config: { workflowId: 'wf-1' },
-            execution: { autoFixAttempts: 0, error: 'boom', selectedAttemptId: 'att-1', generation: 5 },
+            execution: {
+              autoFixAttempts: 0,
+              error: 'boom',
+              selectedAttemptId: 'att-1',
+              generation: 5,
+              workspacePath: '/tmp/task-a',
+            },
           });
         }
         return makeTask({
@@ -2432,7 +2493,13 @@ describe('autoFixOnFailure lineage guard', () => {
       getTask: vi.fn(() => makeTask({
         status: 'failed',
         config: { workflowId: 'wf-1' },
-        execution: { autoFixAttempts: 0, error: 'boom', selectedAttemptId: 'att-1', generation: 5 },
+        execution: {
+          autoFixAttempts: 0,
+          error: 'boom',
+          selectedAttemptId: 'att-1',
+          generation: 5,
+          workspacePath: '/tmp/task-a',
+        },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
