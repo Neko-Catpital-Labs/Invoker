@@ -486,7 +486,7 @@ describe('approveTask', () => {
     expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
   });
 
-  it('commits approved fixes before completing non-merge approvals', async () => {
+  it('commits approved fixes and returns non-merge launch claims for the caller to dispatch', async () => {
     const started = [makeRunningTask({ id: 'task-a', config: { workflowId: 'wf-1' } })];
     const approvedTask = makeTask({
       id: 'task-a',
@@ -505,18 +505,19 @@ describe('approveTask', () => {
       executeTasks: vi.fn(),
     };
 
-    await approveTask('task-a', {
+    const result = await approveTask('task-a', {
       orchestrator: orchestrator as unknown as Orchestrator,
       taskExecutor: taskExecutor as unknown as TaskRunner,
     });
 
+    expect(result.started).toBe(started);
     expect(taskExecutor.commitApprovedFix).toHaveBeenCalledWith(approvedTask);
     expect(orchestrator.approve).toHaveBeenCalledWith('task-a');
-    expect(taskExecutor.executeTasks).toHaveBeenCalledWith(started);
+    expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
     expect(taskExecutor.publishAfterFix).not.toHaveBeenCalled();
   });
 
-  it('commits then resumes merge-conflict fixed tasks', async () => {
+  it('commits then returns resumed merge-conflict launch claims for the caller to dispatch', async () => {
     const started = [makeRunningTask({ id: 'task-a', config: { workflowId: 'wf-1' } })];
     const approvedTask = makeTask({
       id: 'task-a',
@@ -539,15 +540,16 @@ describe('approveTask', () => {
       executeTasks: vi.fn(),
     };
 
-    await approveTask('task-a', {
+    const result = await approveTask('task-a', {
       orchestrator: orchestrator as unknown as Orchestrator,
       taskExecutor: taskExecutor as unknown as TaskRunner,
     });
 
+    expect(result.started).toBe(started);
     expect(taskExecutor.commitApprovedFix).toHaveBeenCalledWith(approvedTask);
     expect(orchestrator.resumeTaskAfterFixApproval).toHaveBeenCalledWith('task-a');
     expect(orchestrator.approve).not.toHaveBeenCalled();
-    expect(taskExecutor.executeTasks).toHaveBeenCalledWith(started);
+    expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
   });
 });
 
@@ -626,7 +628,7 @@ describe('finalizeAppliedFix', () => {
     expect(orchestrator.approve).not.toHaveBeenCalled();
   });
 
-  it('auto-approves and executes runnable tasks when enabled', async () => {
+  it('auto-approves and returns runnable tasks when enabled', async () => {
     const started = [
       makeRunningTask({ id: 'task-a', config: { workflowId: 'wf-1' } }),
     ];
@@ -657,7 +659,7 @@ describe('finalizeAppliedFix', () => {
     expect(taskExecutor.commitApprovedFix).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'task-a' }),
     );
-    expect(taskExecutor.executeTasks).toHaveBeenCalledWith(started);
+    expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
     expect(taskExecutor.publishAfterFix).not.toHaveBeenCalled();
   });
 
