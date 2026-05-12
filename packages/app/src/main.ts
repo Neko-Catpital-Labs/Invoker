@@ -2400,7 +2400,15 @@ if (isHeadless) {
                       },
                     };
                     logger.error(`[launch-stall] forcing failure for "${task.id}": ${launchError}`, { module: 'db-poll' });
-                    orchestrator.handleWorkerResponse(failedResponse);
+                    const startedAfterFailure = orchestrator.handleWorkerResponse(failedResponse);
+                    const runnableAfterFailure = startedAfterFailure.filter((candidate) => candidate.status === 'running');
+                    if (runnableAfterFailure.length > 0) {
+                      logger.info(
+                        `[launch-stall] dispatching ${runnableAfterFailure.length} task(s) started after failing "${task.id}"`,
+                        { module: 'db-poll' },
+                      );
+                      dispatchStartedTasks(runnableAfterFailure);
+                    }
                     continue;
                   }
                 }
