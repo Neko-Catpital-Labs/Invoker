@@ -97,6 +97,17 @@ describe('headless query costs', () => {
         readOnly: false,
         listWorkflows: vi.fn(() => [makeWorkflow('wf-1', 'completed')]),
         loadTasks: vi.fn(() => []),
+        loadAttempts: vi.fn((nodeId: string) => [
+          {
+            id: `${nodeId}-a00000001`,
+            nodeId,
+            agentSessionId: `sess-${nodeId}`,
+            createdAt: new Date('2025-01-01T00:00:00Z'),
+            upstreamAttemptIds: [],
+            status: 'completed',
+            queuePriority: 0,
+          },
+        ]),
       } as unknown as SQLiteAdapter,
       commandService: {} as CommandService,
       executorRegistry: {} as any,

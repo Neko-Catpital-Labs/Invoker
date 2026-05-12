@@ -355,7 +355,7 @@ describe('deriveSource', () => {
 // ── buildAttributionContext ────────────────────────────────
 
 describe('buildAttributionContext', () => {
-  it('builds context from task info with agentSessionId', () => {
+  it('uses the caller-supplied attempt ID verbatim', () => {
     const task: CostTaskInfo = {
       id: 'wf-1/task-a',
       workflowId: 'wf-1',
@@ -363,16 +363,28 @@ describe('buildAttributionContext', () => {
       agentSessionId: 'sess-123',
       agentName: 'codex',
     };
-    const ctx = buildAttributionContext(task);
+    const ctx = buildAttributionContext(task, 'wf-1/task-a-a3f1c0e2');
     expect(ctx).toEqual({
       workflowId: 'wf-1',
       taskId: 'wf-1/task-a',
-      attemptId: 'wf-1/task-a-latest',
+      attemptId: 'wf-1/task-a-a3f1c0e2',
       executorType: 'worktree',
       agentSessionId: 'sess-123',
       agentName: 'codex',
       source: 'openai',
     });
+  });
+
+  it('does not synthesize a "${task.id}-latest" attempt ID', () => {
+    const task: CostTaskInfo = {
+      id: 'wf-1/task-a',
+      workflowId: 'wf-1',
+      executorType: 'worktree',
+      agentSessionId: 'sess-123',
+    };
+    const ctx = buildAttributionContext(task, 'real-attempt-id');
+    expect(ctx?.attemptId).not.toBe('wf-1/task-a-latest');
+    expect(ctx?.attemptId).toBe('real-attempt-id');
   });
 
   it('returns undefined when no session ID is available', () => {
@@ -381,7 +393,7 @@ describe('buildAttributionContext', () => {
       workflowId: 'wf-1',
       executorType: 'worktree',
     };
-    expect(buildAttributionContext(task)).toBeUndefined();
+    expect(buildAttributionContext(task, 'attempt-1')).toBeUndefined();
   });
 
   it('falls back to lastAgentSessionId and lastAgentName', () => {
@@ -392,7 +404,7 @@ describe('buildAttributionContext', () => {
       lastAgentSessionId: 'sess-old',
       lastAgentName: 'claude',
     };
-    const ctx = buildAttributionContext(task);
+    const ctx = buildAttributionContext(task, 'attempt-1');
     expect(ctx?.agentSessionId).toBe('sess-old');
     expect(ctx?.agentName).toBe('claude');
     expect(ctx?.source).toBe('anthropic');
@@ -405,7 +417,7 @@ describe('buildAttributionContext', () => {
       executorType: '',
       agentSessionId: 'sess-123',
     };
-    const ctx = buildAttributionContext(task);
+    const ctx = buildAttributionContext(task, 'attempt-1');
     expect(ctx?.executorType).toBe('worktree');
   });
 });
