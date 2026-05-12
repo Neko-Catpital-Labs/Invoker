@@ -1067,6 +1067,21 @@ export async function autoFixOnFailure(
       return;
     }
 
+    const workspacePath = task.execution.workspacePath?.trim();
+    if (!workspacePath) {
+      const skipReason =
+        `Auto-fix skipped: task "${taskId}" has no valid workspacePath; `
+        + `run recreate-task or recreate-workflow first.`;
+      persistence.logEvent?.(taskId, 'debug.auto-fix', {
+        phase: 'auto-fix-skip-no-workspace',
+        route: recoveryRoute.kind,
+        attempts,
+        maxRetries: max,
+      });
+      persistence.appendTaskOutput(taskId, `\n[Auto-fix] ${skipReason}`);
+      return;
+    }
+
     ({ savedError: persistedSavedError } = orchestrator.beginConflictResolution(taskId));
     lineage = captureTaskLineage(taskId, orchestrator);
     persistence.logEvent?.(taskId, 'debug.auto-fix', {
