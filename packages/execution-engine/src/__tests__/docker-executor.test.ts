@@ -240,6 +240,51 @@ describe('DockerExecutor', () => {
     expect(handle.branch).toMatch(/^experiment\/action-1\/g\d+\.t\d+\.a[a-z0-9_-]*-[0-9a-f]{8}$/);
   });
 
+  it('keeps docker exec routing scoped per overlapping async task', async () => {
+    const execRemoteCaptureMock = (executor as any).execRemoteCapture as ReturnType<typeof vi.fn>;
+    const routedCalls: Array<{ containerId: string; script: string }> = [];
+
+    execRemoteCaptureMock.mockImplementation(async (containerId: string, script: string) => {
+      routedCalls.push({ containerId, script });
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      return '';
+    });
+
+    const runScopedGitAndShell = async (
+      containerId: string,
+      marker: string,
+      delayMs: number,
+    ) => (executor as any).containerContext.run(containerId, async () => {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await (executor as any).execGitSimple(['status', '--short'], '/app');
+      await (executor as any).runBash(`echo ${marker}`, '/app');
+    });
+
+    await Promise.all([
+      runScopedGitAndShell('container-a', 'from-a', 10),
+      runScopedGitAndShell('container-b', 'from-b', 0),
+    ]);
+
+    expect(routedCalls).toEqual([
+      expect.objectContaining({
+        containerId: 'container-b',
+        script: expect.stringContaining('git \'status\' \'--short\''),
+      }),
+      expect.objectContaining({
+        containerId: 'container-b',
+        script: 'echo from-b',
+      }),
+      expect.objectContaining({
+        containerId: 'container-a',
+        script: expect.stringContaining('git \'status\' \'--short\''),
+      }),
+      expect.objectContaining({
+        containerId: 'container-a',
+        script: 'echo from-a',
+      }),
+    ]);
+  });
+
   // -------------------------------------------------------------------------
   // Task execution via docker exec CLI
   // -------------------------------------------------------------------------
