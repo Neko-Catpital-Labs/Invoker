@@ -46,6 +46,7 @@ export interface WorktreeExecutorConfig {
 }
 
 const DEFAULT_WORKTREE_PROVISION_TIMEOUT_MS = 15 * 60 * 1000;
+const MAX_PROVISION_OUTPUT_CHARS = 6_000;
 
 function resolveWorktreeProvisionTimeoutMs(): number {
   const raw = process.env.INVOKER_WORKTREE_PROVISION_TIMEOUT_MS?.trim();
@@ -55,6 +56,25 @@ function resolveWorktreeProvisionTimeoutMs(): number {
     return DEFAULT_WORKTREE_PROVISION_TIMEOUT_MS;
   }
   return parsed;
+}
+
+function trimProvisionOutput(text: string): string {
+  const normalized = text.trim();
+  if (normalized.length <= MAX_PROVISION_OUTPUT_CHARS) return normalized;
+  return `...${normalized.slice(-MAX_PROVISION_OUTPUT_CHARS)}`;
+}
+
+function buildProvisionNodeEngineHint(output: string): string | null {
+  if (!output.includes('ERR_PNPM_UNSUPPORTED_ENGINE')) return null;
+  const expected = output.match(/Expected version:\s*([^\n\r]+)/)?.[1]?.trim() ?? '>=22 <23';
+  const got = output.match(/Got:\s*([^\n\r]+)/)?.[1]?.trim() ?? process.version;
+  return [
+    'Node.js version mismatch while provisioning this worktree.',
+    `Expected Node version: ${expected}`,
+    `Current Node version: ${got}`,
+    'Machine fix: run Invoker under Node 22, then retry the workflow.',
+    'Example: `nvm install 22 && nvm use 22`',
+  ].join('\n');
 }
 
 interface WorktreeEntry extends BaseEntry {
@@ -685,7 +705,12 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         else {
           const exitCode = code ?? (signal ? 1 : 0);
           const combined = [stderr.trim(), stdout.trim()].filter(Boolean).join('\n');
-          reject(new Error(`Worktree provisioning failed in ${dir} (exit ${exitCode}): ${combined}`));
+          const trimmedCombined = trimProvisionOutput(combined);
+          const hint = buildProvisionNodeEngineHint(trimmedCombined);
+          const message = hint
+            ? `Worktree provisioning failed in ${dir} (exit ${exitCode}).\n${hint}\n\nRaw provisioning output:\n${trimmedCombined}`
+            : `Worktree provisioning failed in ${dir} (exit ${exitCode}): ${trimmedCombined}`;
+          reject(new Error(message));
         }
       });
     });
