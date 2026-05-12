@@ -926,6 +926,10 @@ describe('TaskRunner', () => {
     it('suppresses metadata write and failed response when selectedAttemptId has advanced', async () => {
       const handleWorkerResponse = vi.fn();
       const updateTask = vi.fn();
+      const appendTaskOutput = vi.fn();
+      const updateAttempt = vi.fn();
+      const onOutput = vi.fn();
+      const onLaunchFailed = vi.fn();
       // Orchestrator returns a task whose selectedAttemptId has moved forward
       const orchestrator = {
         getTask: () => makeTask({
@@ -952,9 +956,10 @@ describe('TaskRunner', () => {
 
       const runner = new TaskRunner({
         orchestrator: orchestrator as any,
-        persistence: { updateTask } as any,
+        persistence: { updateTask, appendTaskOutput, updateAttempt } as any,
         executorRegistry: registry as any,
         cwd: '/tmp',
+        callbacks: { onOutput, onLaunchFailed },
       });
 
       // Task was launched with attempt-1 but orchestrator now shows attempt-2
@@ -975,17 +980,32 @@ describe('TaskRunner', () => {
       );
       // Failed WorkResponse must NOT be emitted
       expect(handleWorkerResponse).not.toHaveBeenCalled();
+      // Live task output must NOT be mutated by the stale launch
+      expect(appendTaskOutput).not.toHaveBeenCalled();
+      expect(onOutput).not.toHaveBeenCalled();
+      // onLaunchFailed must NOT clear the new attempt's launching state
+      expect(onLaunchFailed).not.toHaveBeenCalled();
+      // Diagnostics are routed to the attempt row (attempt-scoped)
+      expect(updateAttempt).toHaveBeenCalledWith(
+        'attempt-1',
+        expect.objectContaining({
+          status: 'failed',
+          error: expect.stringContaining('SSH connection refused'),
+        }),
+      );
     });
 
     it('suppresses metadata write and failed response when generation has advanced', async () => {
       const handleWorkerResponse = vi.fn();
       const updateTask = vi.fn();
+      const appendTaskOutput = vi.fn();
+      const updateAttempt = vi.fn();
       // Orchestrator returns a task whose generation has bumped
       const orchestrator = {
         getTask: () => makeTask({
           id: 'stale-gen',
           status: 'running',
-          execution: { generation: 2 },
+          execution: { selectedAttemptId: 'attempt-gen', generation: 2 },
         }),
         handleWorkerResponse,
       };
@@ -1006,7 +1026,7 @@ describe('TaskRunner', () => {
 
       const runner = new TaskRunner({
         orchestrator: orchestrator as any,
-        persistence: { updateTask } as any,
+        persistence: { updateTask, appendTaskOutput, updateAttempt } as any,
         executorRegistry: registry as any,
         cwd: '/tmp',
       });
@@ -1015,7 +1035,7 @@ describe('TaskRunner', () => {
         id: 'stale-gen',
         status: 'running',
         config: { command: 'echo hi', executorType: 'ssh' as any },
-        execution: { generation: 1 },
+        execution: { selectedAttemptId: 'attempt-gen', generation: 1 },
       });
       await runner.executeTask(task);
 
@@ -1027,6 +1047,16 @@ describe('TaskRunner', () => {
         }),
       );
       expect(handleWorkerResponse).not.toHaveBeenCalled();
+      // Live task output must NOT receive the stale launch's error message
+      expect(appendTaskOutput).not.toHaveBeenCalled();
+      // Diagnostics get persisted to the attempt row instead
+      expect(updateAttempt).toHaveBeenCalledWith(
+        'attempt-gen',
+        expect.objectContaining({
+          status: 'failed',
+          error: expect.stringContaining('provision failed'),
+        }),
+      );
     });
 
     it('still persists metadata and emits response when lineage is current', async () => {
@@ -1091,6 +1121,8 @@ describe('TaskRunner', () => {
     it('suppresses both inner metadata and outer response when lineage is stale throughout', async () => {
       const handleWorkerResponse = vi.fn();
       const updateTask = vi.fn();
+      const appendTaskOutput = vi.fn();
+      const updateAttempt = vi.fn();
       const orchestrator = {
         getTask: () => makeTask({
           id: 'inner-stale',
@@ -1117,7 +1149,7 @@ describe('TaskRunner', () => {
 
       const runner = new TaskRunner({
         orchestrator: orchestrator as any,
-        persistence: { updateTask } as any,
+        persistence: { updateTask, appendTaskOutput, updateAttempt } as any,
         executorRegistry: registry as any,
         cwd: '/tmp',
       });
@@ -1138,6 +1170,16 @@ describe('TaskRunner', () => {
         }),
       );
       expect(handleWorkerResponse).not.toHaveBeenCalled();
+      // No live-task output mutation when stale
+      expect(appendTaskOutput).not.toHaveBeenCalled();
+      // Diagnostics still preserved on the old attempt row
+      expect(updateAttempt).toHaveBeenCalledWith(
+        'attempt-old',
+        expect.objectContaining({
+          status: 'failed',
+          error: expect.stringContaining('timeout'),
+        }),
+      );
     });
   });
 
