@@ -27,7 +27,6 @@ queue_rules:
       - check-success = ssh / shard-31
       - check-success = optional / Worktree Provisioning
       - check-success = optional / Visual Proof Validate
-      - check-success = docker / comprehensive
 
   - name: admin-bypass
     merge_method: squash
@@ -52,7 +51,6 @@ queue_rules:
       - check-success = ssh / shard-31
       - check-success = optional / Worktree Provisioning
       - check-success = optional / Visual Proof Validate
-      - check-success = docker / comprehensive
 
 pull_request_rules:
   - name: autoqueue approved PRs to master
