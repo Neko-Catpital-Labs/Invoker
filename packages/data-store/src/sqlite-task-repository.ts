@@ -66,6 +66,10 @@ export class SqliteTaskRepository implements TaskRepository {
     this.adapter.updateAttempt(attemptId, changes);
   }
 
+  claimAttemptForLaunch(attemptId: string, changes: AttemptChanges, now: Date): boolean {
+    return this.adapter.claimAttemptForLaunch(attemptId, changes, now);
+  }
+
   failTaskAndAttempt(
     taskId: string,
     taskChanges: TaskStateChanges,
