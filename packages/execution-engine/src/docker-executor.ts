@@ -131,11 +131,15 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
    * running as the image's declared user. Falls back to local git for
    * pre-container operations (e.g. resolveRepoUrl on the host).
    */
-  protected override execGitSimple(args: string[], cwd: string): Promise<string> {
-    if (!this.activeContainerId) return super.execGitSimple(args, cwd);
+  protected override execGitSimple(
+    args: string[],
+    cwd: string,
+    opts?: { signal?: AbortSignal },
+  ): Promise<string> {
+    if (!this.activeContainerId) return super.execGitSimple(args, cwd, opts);
     const escapedArgs = args.map(a => shellEscape(a)).join(' ');
     const script = `cd ${shellEscape(cwd)} && git ${escapedArgs}`;
-    return this.execRemoteCapture(script);
+    return this.execRemoteCapture(script, opts);
   }
 
   protected override runBash(script: string, _cwd: string): Promise<string> {
@@ -146,7 +150,7 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
    * Run a bash script inside the active container via CLI. Inherits the
    * image's declared user.
    */
-  private execRemoteCapture(script: string): Promise<string> {
+  private execRemoteCapture(script: string, opts?: { signal?: AbortSignal }): Promise<string> {
     const containerId = this.activeContainerId;
     if (!containerId) {
       return Promise.reject(new Error('execRemoteCapture called with no active container'));
@@ -154,7 +158,7 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
     return new Promise((resolve, reject) => {
       const child = spawn('docker', [
         'exec', '-i', containerId, 'bash', '-s',
-      ], { stdio: ['pipe', 'pipe', 'pipe'] });
+      ], { stdio: ['pipe', 'pipe', 'pipe'], signal: opts?.signal });
       child.stdin!.write(script);
       child.stdin!.end();
       let stdout = '';

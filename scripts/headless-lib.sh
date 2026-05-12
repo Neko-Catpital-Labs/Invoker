@@ -146,8 +146,15 @@ batch_dispatch() {
   else
     local output_jsonl
     output_jsonl="$(mktemp -t batch-output.XXXXXX)"
-    node "$IPC_HELPER" batch-exec --no-track --parallel "$parallelism" \
-      "${extra_batch_args[@]}" < "$commands_file" > "$output_jsonl"
+    # With `set -u`, `"${extra_batch_args[@]}"` errors when the array is empty
+    # (no optional batch-exec args). Branch avoids unbound expansion.
+    if [[ ${#extra_batch_args[@]} -gt 0 ]]; then
+      node "$IPC_HELPER" batch-exec --no-track --parallel "$parallelism" \
+        "${extra_batch_args[@]}" < "$commands_file" > "$output_jsonl"
+    else
+      node "$IPC_HELPER" batch-exec --no-track --parallel "$parallelism" \
+        < "$commands_file" > "$output_jsonl"
+    fi
     parse_batch_results "$output_jsonl" "$result_file" "$log_dir"
     rm -f "$output_jsonl"
   fi
