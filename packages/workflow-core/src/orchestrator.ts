@@ -3553,6 +3553,25 @@ export class Orchestrator {
     return this.stateGetTask(taskId);
   }
 
+  /**
+   * Snapshot of a task's lineage identity (selected attempt id +
+   * execution generation). Used by fix-with-agent / conflict-resolution
+   * flows to detect late writes when async fix work returns after the
+   * task has moved to a new attempt or generation. Returns `undefined`
+   * when the task is not known to the orchestrator.
+   */
+  getTaskLineage(
+    taskId: string,
+  ): { taskId: string; selectedAttemptId: string | undefined; generation: number } | undefined {
+    const task = this.stateGetTask(taskId);
+    if (!task) return undefined;
+    return {
+      taskId,
+      selectedAttemptId: task.execution.selectedAttemptId,
+      generation: task.execution.generation ?? 0,
+    };
+  }
+
   getAutoFixRetryBudget(taskId: string): number {
     return this.defaultAutoFixRetries;
   }

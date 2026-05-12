@@ -729,6 +729,25 @@ describe('Orchestrator', () => {
 
   // ── loadPlan ────────────────────────────────────────────
 
+  describe('getTaskLineage', () => {
+    it('returns selectedAttemptId and generation for an existing task', () => {
+      orchestrator.loadPlan({
+        name: 'lineage-test',
+        tasks: [{ id: 't1', description: 'First task' }],
+      });
+      const t1 = orchestrator.getTask('t1')!;
+      const lineage = orchestrator.getTaskLineage(t1.id);
+      expect(lineage).toBeDefined();
+      expect(lineage!.taskId).toBe(t1.id);
+      expect(lineage!.selectedAttemptId).toBe(t1.execution.selectedAttemptId);
+      expect(lineage!.generation).toBe(t1.execution.generation ?? 0);
+    });
+
+    it('returns undefined for an unknown task id', () => {
+      expect(orchestrator.getTaskLineage('does-not-exist')).toBeUndefined();
+    });
+  });
+
   describe('loadPlan', () => {
     it('creates tasks with correct dependencies', () => {
       const plan: PlanDefinition = {
