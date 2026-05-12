@@ -1,12 +1,17 @@
 import type { TaskState } from '@invoker/workflow-core';
-
-export interface ShutdownDiagnosticDb {
-  getOutputTail(taskId: string): Array<{ data: string }>;
-  appendTaskOutput(taskId: string, data: string): void;
-}
+import type { TaskFailureDiagnosticOptions } from '@invoker/data-store';
 
 /** Max characters of recent output tail included in shutdown diagnostics. */
 export const SHUTDOWN_DIAGNOSTIC_TAIL_CHARS = 4_000;
+
+/**
+ * Minimal slice of the persistence adapter used by the shutdown-diagnostic
+ * helper. Declared as a structural interface so tests can pass a lightweight
+ * mock without instantiating SQLiteAdapter.
+ */
+export interface ShutdownDiagnosticDb {
+  appendFailureDiagnostic(taskId: string, opts: TaskFailureDiagnosticOptions): void;
+}
 
 /**
  * Persist a compact diagnostic block into durable task output so that
@@ -19,32 +24,35 @@ export const SHUTDOWN_DIAGNOSTIC_TAIL_CHARS = 4_000;
 export function persistShutdownDiagnostic(
   task: TaskState,
   db: ShutdownDiagnosticDb,
-  opts?: { flushPendingOutput?: (taskId: string) => void },
+  opts?: {
+    flushPendingOutput?: (taskId: string) => void;
+    /**
+     * Short identifier for the diagnostic reason — defaults to "app-shutdown".
+     * Headless and GUI shutdown paths use the same default so durable output
+     * keeps a single recognizable marker for synthetic shutdown failures.
+     */
+    reason?: string;
+    /**
+     * Concrete supplementary message to embed verbatim. The synthetic
+     * shutdown handler sets this to the user-visible reason
+     * (e.g. "Application quit") so the diagnostic block records why the
+     * task was collapsed even when {@link TaskState.execution.error} is
+     * empty.
+     */
+    message?: string;
+  },
 ): void {
   try {
-    // Flush any buffered output so the spool is up-to-date.
     opts?.flushPendingOutput?.(task.id);
-
-    // Gather the most recent output tail from the output spool.
-    const tailChunks = db.getOutputTail(task.id);
-    let tail = tailChunks.map(c => c.data).join('');
-    if (tail.length > SHUTDOWN_DIAGNOSTIC_TAIL_CHARS) {
-      tail = '...' + tail.slice(tail.length - SHUTDOWN_DIAGNOSTIC_TAIL_CHARS);
-    }
-
-    const parts: string[] = ['\n[Shutdown Diagnostic]'];
-    parts.push(`status=${task.status}`);
-    if (task.execution.error) {
-      parts.push(`error=${task.execution.error}`);
-    }
-    if (task.execution.exitCode !== undefined && task.execution.exitCode !== null) {
-      parts.push(`exitCode=${task.execution.exitCode}`);
-    }
-    if (tail) {
-      parts.push(`--- recent output tail ---\n${tail}`);
-    }
-    parts.push('--- end shutdown diagnostic ---\n');
-    db.appendTaskOutput(task.id, parts.join('\n'));
+    db.appendFailureDiagnostic(task.id, {
+      reason: opts?.reason ?? 'app-shutdown',
+      status: task.status,
+      error: task.execution.error,
+      exitCode: task.execution.exitCode ?? undefined,
+      message: opts?.message,
+      includeOutputTail: true,
+      tailCharLimit: SHUTDOWN_DIAGNOSTIC_TAIL_CHARS,
+    });
   } catch {
     // Best-effort: don't let diagnostic persistence block shutdown.
   }

@@ -915,6 +915,132 @@ describe('SQLiteAdapter', () => {
     });
   });
 
+  // ── Failure Diagnostic Block ────────────────────────────
+
+  describe('appendFailureDiagnostic', () => {
+    function seedTask(): void {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1', { status: 'running' }));
+    }
+
+    it('appends a compact diagnostic block to durable task output', () => {
+      seedTask();
+
+      adapter.appendFailureDiagnostic('t1', {
+        reason: 'app-shutdown',
+        status: 'running',
+        error: 'npm test failed with exit code 1',
+        exitCode: 1,
+        message: 'Application quit',
+      });
+
+      const output = adapter.getTaskOutput('t1');
+      expect(output).toContain('[Failure Diagnostic]');
+      expect(output).toContain('reason=app-shutdown');
+      expect(output).toContain('status=running');
+      expect(output).toContain('error=npm test failed with exit code 1');
+      expect(output).toContain('exitCode=1');
+      expect(output).toContain('message=Application quit');
+      expect(output).toContain('--- end failure diagnostic ---');
+    });
+
+    it('preserves the synthetic shutdown message even when execution.error is empty', () => {
+      seedTask();
+
+      adapter.appendFailureDiagnostic('t1', {
+        reason: 'app-shutdown',
+        status: 'running',
+        message: 'Application quit',
+      });
+
+      const output = adapter.getTaskOutput('t1');
+      expect(output).toContain('reason=app-shutdown');
+      expect(output).toContain('message=Application quit');
+      expect(output).not.toContain('error=');
+      expect(output).not.toContain('exitCode=');
+    });
+
+    it('inlines the recent output tail from the spool when available', () => {
+      seedTask();
+      adapter.appendOutputChunk('t1', 'pre-failure log line\n');
+      adapter.appendOutputChunk('t1', 'FAIL src/foo.test.ts > does the thing\n');
+
+      adapter.appendFailureDiagnostic('t1', {
+        reason: 'executor-startup',
+        status: 'running',
+        error: 'Executor startup failed (worktree): provision failed',
+      });
+
+      const output = adapter.getTaskOutput('t1');
+      expect(output).toContain('--- recent output tail ---');
+      expect(output).toContain('pre-failure log line');
+      expect(output).toContain('FAIL src/foo.test.ts');
+    });
+
+    it('truncates the tail to the configured character limit with a leading ellipsis', () => {
+      seedTask();
+      const longChunk = 'x'.repeat(5_000);
+      adapter.appendOutputChunk('t1', longChunk);
+
+      adapter.appendFailureDiagnostic('t1', {
+        reason: 'app-shutdown',
+        status: 'running',
+        tailCharLimit: 1_000,
+      });
+
+      const output = adapter.getTaskOutput('t1');
+      const start = output.indexOf('--- recent output tail ---');
+      const end = output.indexOf('--- end failure diagnostic ---');
+      expect(start).toBeGreaterThanOrEqual(0);
+      expect(end).toBeGreaterThan(start);
+      const tailSection = output.slice(start, end);
+      expect(tailSection).toContain('...');
+      // tail header + 3-char ellipsis + truncated tail + trailing newline
+      expect(tailSection.length).toBeLessThan(1_000 + 200);
+    });
+
+    it('omits the tail section when includeOutputTail is false', () => {
+      seedTask();
+      adapter.appendOutputChunk('t1', 'spool content that should be ignored\n');
+
+      adapter.appendFailureDiagnostic('t1', {
+        reason: 'app-shutdown',
+        status: 'running',
+        includeOutputTail: false,
+      });
+
+      const output = adapter.getTaskOutput('t1');
+      expect(output).toContain('[Failure Diagnostic]');
+      expect(output).not.toContain('--- recent output tail ---');
+      expect(output).not.toContain('spool content that should be ignored');
+    });
+
+    it('coexists with the coarse terminal error written by the task row', () => {
+      // Simulate the real shutdown sequence: diagnostic block first, then the
+      // synthetic terminal error written via the task-state path.
+      seedTask();
+      adapter.appendFailureDiagnostic('t1', {
+        reason: 'app-shutdown',
+        status: 'running',
+        error: 'npm test failed with exit code 1',
+        message: 'Application quit',
+      });
+      adapter.updateTask('t1', {
+        status: 'failed',
+        execution: { error: 'Application quit', exitCode: 1 },
+      });
+
+      // Coarse terminal error is recorded on the task row…
+      const row = adapter.loadTask('t1');
+      expect(row?.status).toBe('failed');
+      expect(row?.execution.error).toBe('Application quit');
+      // …but durable output retains the concrete pre-shutdown context.
+      const output = adapter.getTaskOutput('t1');
+      expect(output).toContain('error=npm test failed with exit code 1');
+      expect(output).toContain('message=Application quit');
+    });
+  });
+
   // ── Conversations ──────────────────────────────────────
 
   function makeConversation(threadTs: string, overrides: Partial<Conversation> = {}): Conversation {

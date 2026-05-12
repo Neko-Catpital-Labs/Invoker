@@ -10,7 +10,15 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from '
 import { dirname } from 'node:path';
 import type { TaskState, TaskStateChanges, Attempt, TaskStatus } from '@invoker/workflow-core';
 import { normalizeExecutorType } from '@invoker/workflow-core';
-import type { PersistenceAdapter, Workflow, TaskEvent, ActivityLogEntry, Conversation, ConversationMessage } from './adapter.js';
+import type {
+  PersistenceAdapter,
+  Workflow,
+  TaskEvent,
+  ActivityLogEntry,
+  Conversation,
+  ConversationMessage,
+  TaskFailureDiagnosticOptions,
+} from './adapter.js';
 
 /**
  * Rewrite `pnpm test packages/<pkg>/...` (incorrect root-level invocation)
@@ -1386,6 +1394,31 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return rows.map((r) => r.data).join('');
   }
 
+  /**
+   * Append a compact failure-diagnostic block to durable task output so
+   * post-mortem readers see concrete details next to the coarse terminal
+   * error state on the task row. Best-effort: read/write errors are
+   * swallowed so a diagnostic-write failure never blocks the shutdown or
+   * failure-handling flow that called us.
+   */
+  appendFailureDiagnostic(taskId: string, opts: TaskFailureDiagnosticOptions): void {
+    try {
+      const block = formatFailureDiagnosticBlock({
+        reason: opts.reason,
+        status: opts.status,
+        error: opts.error,
+        exitCode: opts.exitCode ?? undefined,
+        message: opts.message,
+        tail: opts.includeOutputTail === false
+          ? ''
+          : readTrimmedSpoolTail(this, taskId, opts.tailCharLimit ?? DEFAULT_DIAGNOSTIC_TAIL_CHARS),
+      });
+      this.appendTaskOutput(taskId, block);
+    } catch {
+      // Diagnostics are advisory; never propagate a write failure.
+    }
+  }
+
   // ── Output Spool ────────────────────────────────────────
 
   appendOutputChunk(taskId: string, data: string): void {
@@ -2126,5 +2159,51 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'DELETE FROM workflow_mutation_leases WHERE workflow_id = ?',
       [workflowId],
     );
+  }
+}
+
+/** Default char cap for the recent-output tail inlined into a diagnostic block. */
+export const DEFAULT_DIAGNOSTIC_TAIL_CHARS = 4_000;
+
+interface FormatFailureDiagnosticInput {
+  reason: string;
+  status?: string;
+  error?: string;
+  exitCode?: number;
+  message?: string;
+  tail: string;
+}
+
+/**
+ * Build a compact, human-readable failure-diagnostic block. Exported so
+ * other callers (e.g. helpers wrapping different failure paths) can share
+ * the same format without depending on the SQLiteAdapter instance.
+ */
+export function formatFailureDiagnosticBlock(input: FormatFailureDiagnosticInput): string {
+  const parts: string[] = ['\n[Failure Diagnostic]'];
+  parts.push(`reason=${input.reason}`);
+  if (input.status) parts.push(`status=${input.status}`);
+  if (input.error) parts.push(`error=${input.error}`);
+  if (input.exitCode !== undefined && input.exitCode !== null) {
+    parts.push(`exitCode=${input.exitCode}`);
+  }
+  if (input.message) parts.push(`message=${input.message}`);
+  if (input.tail) {
+    parts.push(`--- recent output tail ---\n${input.tail}`);
+  }
+  parts.push('--- end failure diagnostic ---\n');
+  return parts.join('\n');
+}
+
+function readTrimmedSpoolTail(adapter: SQLiteAdapter, taskId: string, charLimit: number): string {
+  try {
+    const chunks = adapter.getOutputTail(taskId);
+    let tail = chunks.map(c => c.data).join('');
+    if (tail.length > charLimit) {
+      tail = '...' + tail.slice(tail.length - charLimit);
+    }
+    return tail;
+  } catch {
+    return '';
   }
 }

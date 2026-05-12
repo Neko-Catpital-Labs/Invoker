@@ -66,6 +66,38 @@ export interface ActivityLogEntry {
   message: string;
 }
 
+/**
+ * Structured options for a failure-diagnostic block appended to task_output.
+ *
+ * The block is intentionally human-readable and append-only: it does not
+ * mutate the task row, so post-mortem inspection always sees the coarse
+ * terminal error state (e.g. "Application quit") next to the concrete
+ * diagnostics captured at the moment the failure was synthesized.
+ */
+export interface TaskFailureDiagnosticOptions {
+  /** Short identifier for the failure path — e.g. "app-shutdown" or "executor-startup". */
+  reason: string;
+  /** Task status observed at the moment the diagnostic was captured. */
+  status?: string;
+  /** Concrete error/stderr message captured from the executor or task state. */
+  error?: string;
+  /** Optional executor exit code, if known. */
+  exitCode?: number | null;
+  /**
+   * Concrete supplementary message (e.g. the synthetic shutdown reason
+   * "Application quit") to include verbatim so future readers know what
+   * collapsed the task to its terminal state.
+   */
+  message?: string;
+  /**
+   * Whether to read the recent spool tail and inline it into the block.
+   * Defaults to true. The tail is truncated to {@link tailCharLimit} chars.
+   */
+  includeOutputTail?: boolean;
+  /** Maximum tail size in characters. Defaults to 4_000. */
+  tailCharLimit?: number;
+}
+
 export interface PersistenceAdapter {
   // Workflows
   saveWorkflow(workflow: Workflow): void;
@@ -106,6 +138,15 @@ export interface PersistenceAdapter {
   // Task output (stdout/stderr persistence)
   appendTaskOutput(taskId: string, data: string): void;
   getTaskOutput(taskId: string): string;
+
+  /**
+   * Append a compact failure-diagnostic block to durable task output.
+   * Used by synthetic owner-shutdown and executor startup-failure paths so
+   * post-mortem retrieval keeps concrete details (status, error, exit code,
+   * recent output tail) alongside the coarse terminal error state recorded
+   * on the task row.
+   */
+  appendFailureDiagnostic(taskId: string, opts: TaskFailureDiagnosticOptions): void;
 
   // Attempts
   saveAttempt(attempt: Attempt): void;

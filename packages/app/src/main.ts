@@ -1094,7 +1094,12 @@ if (isHeadless) {
       if (ownsHeadlessShutdown && orchestrator) {
         for (const task of orchestrator.getAllTasks()) {
           if (task.status === 'running' || task.status === 'fixing_with_ai') {
-            if (persistence) persistShutdownDiagnostic(task, persistence);
+            if (persistence) {
+              persistShutdownDiagnostic(task, persistence, {
+                reason: 'app-shutdown',
+                message: 'Application quit',
+              });
+            }
             orchestrator.handleWorkerResponse({
               requestId: `quit-${task.id}`,
               actionId: task.id,
@@ -3705,6 +3710,8 @@ if (isHeadless) {
             if (persistence) {
               persistShutdownDiagnostic(task, persistence, {
                 flushPendingOutput: flushTaskOutput,
+                reason: 'app-shutdown',
+                message: 'Application quit',
               });
             }
             orchestrator.handleWorkerResponse({
