@@ -50,6 +50,14 @@ function makeSessionRaw(turns: Array<{ input: number; output: number; cached?: n
   })).join('\n');
 }
 
+function makeAttemptsForTask(taskId: string) {
+  const suffix = taskId.split('/').at(-1) ?? taskId;
+  return [
+    { id: `attempt-old-${suffix}`, nodeId: taskId, agentSessionId: `sess-old-${suffix}`, createdAt: new Date('2025-01-01T00:00:00Z') },
+    { id: `attempt-${suffix}`, nodeId: taskId, agentSessionId: `sess-wf-1-${suffix}`, createdAt: new Date('2025-01-01T00:01:00Z') },
+  ];
+}
+
 describe('headless query cost', () => {
   let mockDeps: HeadlessDeps;
   let stdoutSpy: any;
@@ -96,6 +104,7 @@ describe('headless query cost', () => {
         readOnly: false,
         listWorkflows: vi.fn(() => [makeWorkflow('wf-1', 'completed')]),
         loadTasks: vi.fn(() => []),
+        loadAttempts: vi.fn((taskId: string) => makeAttemptsForTask(taskId)),
       } as unknown as SQLiteAdapter,
       commandService: {} as CommandService,
       executorRegistry: {} as any,
@@ -137,6 +146,60 @@ describe('headless query cost', () => {
     expect(parsed.totals.inputTokens).toBe(600);
     expect(parsed.totals.outputTokens).toBe(250);
     expect(parsed.metadata.eventCount).toBe(3);
+  });
+
+  it('attributes events to the persisted attempt matching agentSessionId', async () => {
+    await runHeadless(['query', 'cost-events', '--output', 'json'], mockDeps);
+    const output = stdoutSpy.mock.calls[0][0] as string;
+    const parsed = JSON.parse(output);
+
+    expect(parsed.map((event: any) => event.attemptId)).toEqual([
+      'attempt-task-a',
+      'attempt-task-a',
+      'attempt-task-b',
+    ]);
+  });
+
+  it('falls back to selectedAttemptId before latest persisted attempt', async () => {
+    mockDeps.orchestrator.getAllTasks = vi.fn(() => [
+      makeTask('wf-1', 'task-a', {
+        execution: {
+          agentSessionId: 'sess-wf-1-task-a',
+          selectedAttemptId: 'selected-task-a',
+          agentName: 'codex',
+        },
+      }),
+    ] as any);
+    (mockDeps.persistence as any).loadAttempts = vi.fn(() => [
+      { id: 'older-task-a', nodeId: 'wf-1/task-a', createdAt: new Date('2025-01-01T00:00:00Z') },
+      { id: 'latest-task-a', nodeId: 'wf-1/task-a', createdAt: new Date('2025-01-01T00:01:00Z') },
+    ]);
+
+    await runHeadless(['query', 'cost-events', '--output', 'json'], mockDeps);
+    const output = stdoutSpy.mock.calls[0][0] as string;
+    const parsed = JSON.parse(output);
+    expect(parsed.map((event: any) => event.attemptId)).toEqual([
+      'selected-task-a',
+      'selected-task-a',
+    ]);
+  });
+
+  it('falls back to the latest persisted attempt when no session match or selected attempt exists', async () => {
+    mockDeps.orchestrator.getAllTasks = vi.fn(() => [
+      makeTask('wf-1', 'task-a'),
+    ] as any);
+    (mockDeps.persistence as any).loadAttempts = vi.fn(() => [
+      { id: 'older-task-a', nodeId: 'wf-1/task-a', createdAt: new Date('2025-01-01T00:00:00Z') },
+      { id: 'latest-task-a', nodeId: 'wf-1/task-a', createdAt: new Date('2025-01-01T00:01:00Z') },
+    ]);
+
+    await runHeadless(['query', 'cost-events', '--output', 'json'], mockDeps);
+    const output = stdoutSpy.mock.calls[0][0] as string;
+    const parsed = JSON.parse(output);
+    expect(parsed.map((event: any) => event.attemptId)).toEqual([
+      'latest-task-a',
+      'latest-task-a',
+    ]);
   });
 
   it('scopes JSON output to workflow filter', async () => {
@@ -252,6 +315,7 @@ describe('headless query cost-events', () => {
         readOnly: false,
         listWorkflows: vi.fn(() => [makeWorkflow('wf-1', 'completed')]),
         loadTasks: vi.fn(() => []),
+        loadAttempts: vi.fn((taskId: string) => makeAttemptsForTask(taskId)),
       } as unknown as SQLiteAdapter,
       commandService: {} as CommandService,
       executorRegistry: {} as any,

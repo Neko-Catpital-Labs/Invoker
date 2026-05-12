@@ -51,6 +51,14 @@ function makeSessionRaw(turns: Array<{ input: number; output: number; cached?: n
   })).join('\n');
 }
 
+function makeAttemptsForTask(taskId: string) {
+  const suffix = taskId.split('/').at(-1) ?? taskId;
+  return [
+    { id: `attempt-old-${suffix}`, nodeId: taskId, agentSessionId: `sess-old-${suffix}`, createdAt: new Date('2025-01-01T00:00:00Z') },
+    { id: `attempt-${suffix}`, nodeId: taskId, agentSessionId: `sess-wf-1-${suffix}`, createdAt: new Date('2025-01-01T00:01:00Z') },
+  ];
+}
+
 describe('headless query costs', () => {
   let mockDeps: HeadlessDeps;
   let stdoutSpy: any;
@@ -97,6 +105,7 @@ describe('headless query costs', () => {
         readOnly: false,
         listWorkflows: vi.fn(() => [makeWorkflow('wf-1', 'completed')]),
         loadTasks: vi.fn(() => []),
+        loadAttempts: vi.fn((taskId: string) => makeAttemptsForTask(taskId)),
       } as unknown as SQLiteAdapter,
       commandService: {} as CommandService,
       executorRegistry: {} as any,
@@ -133,6 +142,18 @@ describe('headless query costs', () => {
     expect(parsed.total.eventCount).toBe(3); // 2 turns from task-a + 1 from task-b
     expect(parsed.total.inputTokens).toBe(600); // 100 + 200 + 300
     expect(parsed.total.outputTokens).toBe(250); // 50 + 80 + 120
+  });
+
+  it('attributes exported events to persisted attempts', async () => {
+    await runHeadless(['query', 'costs', '--output', 'json'], mockDeps);
+    const output = stdoutSpy.mock.calls[0][0] as string;
+    const parsed = JSON.parse(output);
+
+    expect(parsed.events.map((event: any) => event.attemptId)).toEqual([
+      'attempt-task-a',
+      'attempt-task-a',
+      'attempt-task-b',
+    ]);
   });
 
   it('outputs events in JSONL format', async () => {
