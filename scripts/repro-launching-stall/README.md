@@ -19,7 +19,7 @@ In `packages/app/src/main.ts` there is only **one** mechanism that marks a
 task `status=running, launch_phase=launching`:
 
 ```
-packages/workflow-core/src/orchestrator.ts:3116-3138   // drainScheduler
+packages/workflow-core/src/orchestrator.ts:4453+   // drainScheduler
 ```
 
 Every consumer of `drainScheduler`'s return (`restartTask`, `retryWorkflow`,
@@ -33,13 +33,13 @@ active process. Nothing in the runtime clears that state except the
 launch-stall watchdog in `main.ts`:
 
 ```
-packages/app/src/main.ts:1952-1976   // launch-stall watchdog
+packages/app/src/main.ts:2378-2403   // launch-stall watchdog
 ```
 
 The watchdog fires once `now - launch_started_at >= INVOKER_LAUNCHING_STALL_TIMEOUT_MS`
-(default `600_000`) and posts a synthetic failed `WorkResponse` through
+(default `60_000`) and posts a synthetic failed `WorkResponse` through
 `orchestrator.handleWorkerResponse(...)` — whose return value is then
-**discarded** on line 1975 of `main.ts`, which is itself a second-order
+**discarded** on line 2403 of `main.ts`, which is itself a second-order
 dispatch gap.
 
 ## What `repro.sh` proves
@@ -57,7 +57,7 @@ dispatch gap.
      `relaunchOrphansAndStartReady`, so the watchdog is the **only** code
      path that can move the task out of `launching`.
    - `INVOKER_LAUNCHING_STALL_TIMEOUT_MS=5000` — 5-second watchdog instead
-     of the default 10 minutes.
+     of the default 60 seconds.
 5. Polls the DB every 500 ms and reports:
    - Whether the task transitioned to `failed`.
    - Whether the `error` column matches the expected regex
@@ -91,10 +91,10 @@ To truly fix the bug (not just shorten the watchdog), we need to either:
 2. Audit every caller of `autoStartReadyTasks` / `drainScheduler` to
    confirm it passes the return value to `TaskRunner.executeTasks(...)`.
    In particular:
-   - `packages/app/src/main.ts:1975` — `orchestrator.handleWorkerResponse(
+   - `packages/app/src/main.ts:2403` — `orchestrator.handleWorkerResponse(
      failedResponse)` inside the watchdog itself discards the return,
      which can cascade the stall into any newly-unblocked tasks.
-   - `packages/app/src/main.ts:2272` — the `invoker:stop` handler also
+   - `packages/app/src/main.ts:2763` — the `invoker:stop` handler also
      discards the return of `handleWorkerResponse`.
 3. Shorten / make adaptive `INVOKER_LAUNCHING_STALL_TIMEOUT_MS`, since
-   600 s is a long floor for what is effectively a dispatch bug.
+   even 60 s can still be long for what is effectively a dispatch bug.
