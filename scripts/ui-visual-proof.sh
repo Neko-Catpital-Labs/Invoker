@@ -16,15 +16,17 @@ set -euo pipefail
 #   validate          Run DOM snapshot tests (fast, no Electron needed)
 #   compare           Generate diff images and video (requires ffmpeg)
 #   embed             Generate markdown with embedded base64 images
-#   --spec <file>     Playwright spec file for capture-before/after (default: visual-proof.spec.ts)
+#   --spec <file>         Playwright spec file for capture-before/after (default: visual-proof.spec.ts)
+#   --output-dir <dir>    Output root for capture-before/capture-after (default: packages/app/e2e/visual-proof)
+#   --label <before|after> Equivalent to capture-before / capture-after.
 #
 # Subcommand details:
 #   capture-before:
-#     Captures to packages/app/e2e/visual-proof/before/
+#     Captures to <output-dir>/before/ (default packages/app/e2e/visual-proof/before/).
 #     Fails fast if Electron app cannot be built.
 #
 #   capture-after:
-#     Captures to packages/app/e2e/visual-proof/after/
+#     Captures to <output-dir>/after/ (default packages/app/e2e/visual-proof/after/).
 #     Fails fast if Electron app cannot be built.
 #
 #   compare:
@@ -49,6 +51,7 @@ set -euo pipefail
 
 SPEC="visual-proof.spec.ts"
 RESULTS_DIR="packages/app/e2e/test-results"
+OUTPUT_DIR="packages/app/e2e/visual-proof"
 SUBCOMMAND=""
 
 usage() {
@@ -138,12 +141,12 @@ run_capture() {
 
 subcommand_capture_before() {
   echo "[visual-proof] Running capture-before..." >&2
-  run_capture "before" "packages/app/e2e/visual-proof" "${SPEC}" false
+  run_capture "before" "${OUTPUT_DIR}" "${SPEC}" false
 }
 
 subcommand_capture_after() {
   echo "[visual-proof] Running capture-after..." >&2
-  run_capture "after" "packages/app/e2e/visual-proof" "${SPEC}" false
+  run_capture "after" "${OUTPUT_DIR}" "${SPEC}" false
 }
 
 subcommand_compare() {
@@ -251,6 +254,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --spec)       SPEC="$2"; shift 2 ;;
     --label)      SUBCOMMAND="capture-$2"; shift 2 ;;
+    --output-dir) OUTPUT_DIR="$2"; shift 2 ;;
     --help|-h)    usage ;;
     *)            echo "Unknown option: $1" >&2; usage ;;
   esac
