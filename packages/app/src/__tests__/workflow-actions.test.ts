@@ -802,6 +802,57 @@ describe('autoFixOnFailure', () => {
     expect(taskExecutor.executeTasks).toHaveBeenCalledWith(started);
   });
 
+  it('skips auto-fix for infra provisioning failures with native failure info', async () => {
+    const orchestrator = {
+      shouldAutoFix: vi.fn(() => true),
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        execution: {
+          autoFixAttempts: 0,
+          error: 'Worktree provisioning failed',
+          failureInfo: { category: 'infra', stage: 'provisioning', retryable: true },
+        },
+      })),
+      getAutoFixRetryBudget: vi.fn(() => 3),
+      beginConflictResolution: vi.fn(),
+      retryTask: vi.fn(() => []),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      updateTask: vi.fn(),
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+      logEvent: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn().mockResolvedValue(undefined),
+      executeTasks: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await autoFixOnFailure('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    });
+
+    expect(orchestrator.beginConflictResolution).not.toHaveBeenCalled();
+    expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
+    expect(taskExecutor.resolveConflict).not.toHaveBeenCalled();
+    expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
+    expect(persistence.logEvent).toHaveBeenCalledWith(
+      'task-a',
+      'debug.auto-fix',
+      expect.objectContaining({
+        phase: 'auto-fix-skip-infra-failure',
+      }),
+    );
+    expect(persistence.appendTaskOutput).toHaveBeenCalledWith(
+      'task-a',
+      expect.stringContaining('infrastructure provisioning/setup failure'),
+    );
+  });
+
   it('skips auto-fix when workspacePath is missing for non-recreate routes', async () => {
     const orchestrator = {
       shouldAutoFix: vi.fn(() => true),

@@ -47,6 +47,7 @@ import { normalizeMergeModeForPersistence } from './merge-mode.js';
 import type { CostGroupDimension } from './cost-rollup.js';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
 import { dispatchStartedTasksWithGlobalTopup, executeGlobalTopup, finalizeMutationWithGlobalTopup } from './global-topup.js';
+import { shouldSkipAutoFixForFailure } from './auto-fix-gating.js';
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
 import { trackWorkflow } from './headless-watch.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
@@ -253,12 +254,19 @@ export function wireHeadlessAutoFix(
 
   const unsubscribe = deps.messageBus.subscribe<TaskDelta>(Channels.TASK_DELTA, (delta) => {
     if (delta.type !== 'updated' || delta.changes.status !== 'failed') return;
+    const latestTask = deps.orchestrator.getTask(delta.taskId);
+    const shouldSkip = shouldSkipAutoFixForFailure({
+      error: delta.changes.execution?.error ?? latestTask?.execution.error,
+      failureInfo: delta.changes.execution?.failureInfo ?? latestTask?.execution.failureInfo,
+    });
     const inProgress = autoFixInProgress.has(delta.taskId);
     const shouldAutoFix = deps.orchestrator.shouldAutoFix(delta.taskId);
-    logHeadlessAutoFixDebug(delta.taskId, 'delta-failed', { shouldAutoFix, inProgress });
-    if (inProgress || !shouldAutoFix) {
+    logHeadlessAutoFixDebug(delta.taskId, 'delta-failed', { shouldAutoFix, inProgress, shouldSkip });
+    if (inProgress || !shouldAutoFix || shouldSkip) {
       logHeadlessAutoFixDebug(delta.taskId, 'schedule-skip', {
-        reason: !shouldAutoFix ? 'shouldAutoFix-false' : 'already-in-progress',
+        reason: shouldSkip
+          ? 'skip-by-failure-classification'
+          : (!shouldAutoFix ? 'shouldAutoFix-false' : 'already-in-progress'),
       });
       return;
     }

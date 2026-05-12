@@ -336,6 +336,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
         error TEXT,
         protocol_error_code TEXT,
         protocol_error_message TEXT,
+        failure_category TEXT,
+        failure_stage TEXT,
+        failure_retryable INTEGER,
+        failure_reason_code TEXT,
         input_prompt TEXT,
         external_dependencies TEXT,
 
@@ -582,6 +586,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN fixed_integration_sha TEXT',
       'ALTER TABLE tasks ADD COLUMN fixed_integration_recorded_at TEXT',
       'ALTER TABLE tasks ADD COLUMN fixed_integration_source TEXT',
+      'ALTER TABLE tasks ADD COLUMN failure_category TEXT',
+      'ALTER TABLE tasks ADD COLUMN failure_stage TEXT',
+      'ALTER TABLE tasks ADD COLUMN failure_retryable INTEGER',
+      'ALTER TABLE tasks ADD COLUMN failure_reason_code TEXT',
       'ALTER TABLE attempts ADD COLUMN queue_priority INTEGER NOT NULL DEFAULT 0',
       'ALTER TABLE attempts ADD COLUMN claimed_at TEXT',
       'ALTER TABLE attempts ADD COLUMN lease_expires_at TEXT',
@@ -739,7 +747,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.execRun(`
       INSERT OR REPLACE INTO tasks (
         id, workflow_id, description, status, blocked_by, dependencies,
-        command, prompt, experiment_prompt, exit_code, error, protocol_error_code, protocol_error_message, input_prompt, external_dependencies,
+        command, prompt, experiment_prompt, exit_code, error, protocol_error_code, protocol_error_message, failure_category, failure_stage, failure_retryable, failure_reason_code, input_prompt, external_dependencies,
         summary, problem, approach, test_plan, repro_command,
         branch, commit_hash, fixed_integration_sha, fixed_integration_recorded_at, fixed_integration_source, parent_task,
         pivot, experiment_variants, is_reconciliation, selected_experiment,
@@ -761,7 +769,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         task_state_version
       ) VALUES (
         ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
@@ -787,7 +795,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
       exec.blockedBy ?? null,
       JSON.stringify(task.dependencies),
       cfg.command ?? null, cfg.prompt ?? null, cfg.experimentPrompt ?? null,
-      exec.exitCode ?? null, exec.error ?? null, exec.protocolErrorCode ?? null, exec.protocolErrorMessage ?? null, exec.inputPrompt ?? null,
+      exec.exitCode ?? null, exec.error ?? null, exec.protocolErrorCode ?? null, exec.protocolErrorMessage ?? null,
+      exec.failureInfo?.category ?? null, exec.failureInfo?.stage ?? null,
+      exec.failureInfo?.retryable === undefined ? null : (exec.failureInfo.retryable ? 1 : 0),
+      exec.failureInfo?.reasonCode ?? null,
+      exec.inputPrompt ?? null,
       cfg.externalDependencies ? JSON.stringify(cfg.externalDependencies) : null,
       cfg.summary ?? null, cfg.problem ?? null, cfg.approach ?? null,
       cfg.testPlan ?? null, cfg.reproCommand ?? null,
@@ -970,6 +982,22 @@ export class SQLiteAdapter implements PersistenceAdapter {
           setClauses.push(`${col} = ?`);
           values.push((changes.execution as any)[key] ? 1 : 0);
         }
+      }
+      if ('failureInfo' in changes.execution) {
+        const failureInfo = (changes.execution as any).failureInfo as {
+          category?: string;
+          stage?: string;
+          retryable?: boolean;
+          reasonCode?: string;
+        } | undefined;
+        setClauses.push('failure_category = ?');
+        values.push(failureInfo?.category ?? null);
+        setClauses.push('failure_stage = ?');
+        values.push(failureInfo?.stage ?? null);
+        setClauses.push('failure_retryable = ?');
+        values.push(failureInfo?.retryable === undefined ? null : (failureInfo.retryable ? 1 : 0));
+        setClauses.push('failure_reason_code = ?');
+        values.push(failureInfo?.reasonCode ?? null);
       }
     }
 
@@ -1715,6 +1743,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
         error: row.error ?? undefined,
         protocolErrorCode: row.protocol_error_code ?? undefined,
         protocolErrorMessage: row.protocol_error_message ?? undefined,
+        failureInfo: row.failure_category || row.failure_stage || row.failure_reason_code || (row.failure_retryable !== null && row.failure_retryable !== undefined)
+          ? {
+              category: row.failure_category ?? 'unknown',
+              stage: row.failure_stage ?? 'unknown',
+              retryable: row.failure_retryable === null || row.failure_retryable === undefined ? undefined : row.failure_retryable === 1,
+              reasonCode: row.failure_reason_code ?? undefined,
+            }
+          : undefined,
         startedAt: row.started_at ? new Date(row.started_at) : undefined,
         completedAt: row.completed_at ? new Date(row.completed_at) : undefined,
         lastHeartbeatAt: row.last_heartbeat_at ? new Date(row.last_heartbeat_at) : undefined,

@@ -19,6 +19,7 @@ import type { SQLiteAdapter } from '@invoker/data-store';
 import type { TaskRunner } from '@invoker/execution-engine';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 import { createDeleteAllSnapshot } from './delete-all-snapshot.js';
+import { shouldSkipAutoFixForFailure } from './auto-fix-gating.js';
 
 // ── Lineage guard ─────────────────────────────────────────────
 
@@ -990,6 +991,20 @@ export async function autoFixOnFailure(
 
   const task = orchestrator.getTask(taskId);
   if (!task || task.status !== 'failed') return;
+  if (shouldSkipAutoFixForFailure({
+    error: task.execution.error,
+    failureInfo: task.execution.failureInfo,
+  })) {
+    persistence.logEvent?.(taskId, 'debug.auto-fix', {
+      phase: 'auto-fix-skip-infra-failure',
+      failureInfo: task.execution.failureInfo ?? null,
+    });
+    persistence.appendTaskOutput(
+      taskId,
+      '\n[Auto-fix] Auto-fix skipped: infrastructure provisioning/setup failure requires manual retry or recreate.',
+    );
+    return;
+  }
 
   const attempts = (task.execution.autoFixAttempts ?? 0) + 1;
   const max = orchestrator.getAutoFixRetryBudget(taskId);

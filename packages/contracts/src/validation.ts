@@ -80,6 +80,27 @@ export function validateWorkResponse(res: unknown): ValidationResult {
   if (!r.outputs || typeof r.outputs !== 'object' || Array.isArray(r.outputs)) {
     return { valid: false, error: 'outputs is required and must be an object' };
   }
+  const outputs = r.outputs as Record<string, unknown>;
+  if (outputs.failureInfo !== undefined) {
+    if (!outputs.failureInfo || typeof outputs.failureInfo !== 'object' || Array.isArray(outputs.failureInfo)) {
+      return { valid: false, error: 'outputs.failureInfo, if provided, must be an object' };
+    }
+    const failureInfo = outputs.failureInfo as Record<string, unknown>;
+    const validFailureCategories = ['infra', 'task', 'agent', 'unknown'];
+    if (!validFailureCategories.includes(failureInfo.category as string)) {
+      return { valid: false, error: `outputs.failureInfo.category must be one of: ${validFailureCategories.join(', ')}` };
+    }
+    const validFailureStages = ['provisioning', 'setup_branch', 'execution', 'unknown'];
+    if (!validFailureStages.includes(failureInfo.stage as string)) {
+      return { valid: false, error: `outputs.failureInfo.stage must be one of: ${validFailureStages.join(', ')}` };
+    }
+    if (failureInfo.retryable !== undefined && typeof failureInfo.retryable !== 'boolean') {
+      return { valid: false, error: 'outputs.failureInfo.retryable, if provided, must be a boolean' };
+    }
+    if (failureInfo.reasonCode !== undefined && typeof failureInfo.reasonCode !== 'string') {
+      return { valid: false, error: 'outputs.failureInfo.reasonCode, if provided, must be a string' };
+    }
+  }
 
   // spawn_experiments requires dagMutation.spawnExperiments
   if (r.status === 'spawn_experiments') {

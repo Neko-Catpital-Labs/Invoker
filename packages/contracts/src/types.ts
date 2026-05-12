@@ -90,9 +90,20 @@ export type ResponseStatus =
   | 'spawn_experiments'
   | 'select_experiment';
 
+export type FailureCategory = 'infra' | 'task' | 'agent' | 'unknown';
+export type FailureStage = 'provisioning' | 'setup_branch' | 'execution' | 'unknown';
+
+export interface FailureInfo {
+  category: FailureCategory;
+  stage: FailureStage;
+  retryable?: boolean;
+  reasonCode?: string;
+}
+
 export interface WorkResponseOutputs {
   exitCode?: number;
   error?: string;
+  failureInfo?: FailureInfo;
   summary?: string;
   commitHash?: string;
   agentSessionId?: string;

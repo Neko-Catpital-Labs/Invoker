@@ -14,7 +14,7 @@ import { homedir } from 'node:os';
 import { scopePlanTaskId } from '@invoker/workflow-core';
 import type { Orchestrator, TaskState, ExperimentVariant, ExecutorType } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import type { WorkRequest, WorkResponse, ActionType, Logger } from '@invoker/contracts';
+import type { FailureInfo, WorkRequest, WorkResponse, ActionType, Logger } from '@invoker/contracts';
 import type { Executor, ExecutorHandle } from './executor.js';
 import { BaseExecutor } from './base-executor.js';
 import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
@@ -64,6 +64,20 @@ type StartupFailureMetadata = {
   agentSessionId?: string;
   containerId?: string;
 };
+
+function classifyFailureInfoFromError(err: unknown): FailureInfo {
+  const phaseRaw = (err as { phase?: unknown })?.phase;
+  const phase = typeof phaseRaw === 'string' ? phaseRaw : undefined;
+  const stage: FailureInfo['stage'] = phase === 'provisioning' || phase === 'setup_branch'
+    ? phase
+    : 'unknown';
+  return {
+    category: 'infra',
+    stage,
+    retryable: true,
+    reasonCode: stage === 'provisioning' ? 'PROVISIONING_FAILED' : stage === 'setup_branch' ? 'SETUP_BRANCH_FAILED' : 'EXECUTOR_STARTUP_FAILED',
+  };
+}
 
 type ActiveExecutionHandle = ExecutorHandle & { attemptId?: string };
 type ActiveExecutionEntry = {
@@ -392,6 +406,7 @@ export class TaskRunner {
         outputs: {
           exitCode: 1,
           error: err instanceof Error ? (err.stack ?? err.message) : String(err),
+          failureInfo: classifyFailureInfoFromError(err),
         },
       };
       this.callbacks.onComplete?.(task.id, response);

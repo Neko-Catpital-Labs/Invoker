@@ -3936,6 +3936,7 @@ export class Orchestrator {
       error?: string;
       protocolErrorCode?: string;
       protocolErrorMessage?: string;
+      failureInfo?: TaskExecution['failureInfo'];
       mergeConflict?: { failedBranch: string; conflictFiles: string[] };
     },
     eventName: string,
@@ -4014,6 +4015,7 @@ export class Orchestrator {
       {
         exitCode: parsed.exitCode,
         error: parsed.error,
+        failureInfo: parsed.failureInfo,
         mergeConflict,
       },
       'task.failed',

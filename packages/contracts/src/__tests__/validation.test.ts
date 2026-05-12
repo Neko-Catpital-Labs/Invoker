@@ -50,6 +50,24 @@ describe('validateWorkResponse', () => {
     expect(result.valid).toBe(true);
   });
 
+  it('accepts a valid failureInfo payload', () => {
+    const result = validateWorkResponse({
+      ...baseResponse,
+      status: 'failed',
+      outputs: {
+        exitCode: 1,
+        error: 'provision failed',
+        failureInfo: {
+          category: 'infra',
+          stage: 'provisioning',
+          retryable: true,
+          reasonCode: 'WORKTREE_PROVISION_FAILED',
+        },
+      },
+    });
+    expect(result.valid).toBe(true);
+  });
+
   it('accepts an optional attemptId on WorkResponse', () => {
     const result = validateWorkResponse({ ...baseResponse, attemptId: 'task-1-a1' });
     expect(result.valid).toBe(true);
@@ -183,6 +201,42 @@ describe('validateWorkResponse', () => {
       const result = validateWorkResponse({ requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'completed', outputs: [] });
       expect(result.valid).toBe(false);
       expect(result.error).toBe('outputs is required and must be an object');
+    });
+
+    it('rejects non-object outputs.failureInfo', () => {
+      const result = validateWorkResponse({
+        requestId: 'r',
+        actionId: 'a',
+        executionGeneration: 0,
+        status: 'failed',
+        outputs: { error: 'boom', failureInfo: 'infra' },
+      });
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe('outputs.failureInfo, if provided, must be an object');
+    });
+
+    it('rejects unknown outputs.failureInfo.category', () => {
+      const result = validateWorkResponse({
+        requestId: 'r',
+        actionId: 'a',
+        executionGeneration: 0,
+        status: 'failed',
+        outputs: { error: 'boom', failureInfo: { category: 'network', stage: 'provisioning' } },
+      });
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('outputs.failureInfo.category must be one of');
+    });
+
+    it('rejects unknown outputs.failureInfo.stage', () => {
+      const result = validateWorkResponse({
+        requestId: 'r',
+        actionId: 'a',
+        executionGeneration: 0,
+        status: 'failed',
+        outputs: { error: 'boom', failureInfo: { category: 'infra', stage: 'bootstrap' } },
+      });
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('outputs.failureInfo.stage must be one of');
     });
 
     it('rejects spawn_experiments with missing dagMutation', () => {

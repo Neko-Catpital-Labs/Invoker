@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { shouldSkipAutoFixForError } from '../auto-fix-gating.js';
+import { shouldSkipAutoFixForError, shouldSkipAutoFixForFailure } from '../auto-fix-gating.js';
 
 describe('auto-fix-gating', () => {
   it('does not skip auto-fix for non-string errors', () => {
@@ -32,5 +32,19 @@ describe('auto-fix-gating', () => {
     expect(shouldSkipAutoFixForError('cancelled by user')).toBe(false);
     expect(shouldSkipAutoFixForError('Cancel')).toBe(false);
     expect(shouldSkipAutoFixForError('Not Cancelled: warning only')).toBe(false);
+  });
+
+  it('skips auto-fix for infra provisioning failures via native failure info', () => {
+    expect(shouldSkipAutoFixForFailure({
+      error: 'Worktree provisioning failed',
+      failureInfo: { category: 'infra', stage: 'provisioning' },
+    })).toBe(true);
+  });
+
+  it('does not skip auto-fix for task-execution failures with failure info', () => {
+    expect(shouldSkipAutoFixForFailure({
+      error: 'tests failed',
+      failureInfo: { category: 'task', stage: 'execution' },
+    })).toBe(false);
   });
 });

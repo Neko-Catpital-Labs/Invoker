@@ -6,7 +6,7 @@
  * the Orchestrator what writes to make.
  */
 
-import type { WorkResponse } from '@invoker/contracts';
+import type { FailureInfo, WorkResponse } from '@invoker/contracts';
 import { validateWorkResponse } from '@invoker/contracts';
 
 /** Plan-local id segment for experiment id prefixing (strip `${workflowId}/` when present). */
@@ -42,6 +42,7 @@ export type ParsedResponse =
       taskId: string;
       exitCode: number;
       error?: string;
+      failureInfo?: FailureInfo;
     }
   | {
       type: 'needs_input';
@@ -92,6 +93,7 @@ export class ResponseHandler {
           taskId: actionId,
           exitCode: outputs.exitCode ?? 1,
           error: outputs.error,
+          failureInfo: outputs.failureInfo,
         };
 
       case 'needs_input':

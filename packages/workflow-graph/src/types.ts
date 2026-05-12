@@ -97,6 +97,15 @@ export interface ExternalDependency {
 // Never copied when cloning. Reset on restart.
 
 export type TaskRunPhase = 'launching' | 'executing';
+export type TaskFailureCategory = 'infra' | 'task' | 'agent' | 'unknown';
+export type TaskFailureStage = 'provisioning' | 'setup_branch' | 'execution' | 'unknown';
+
+export interface TaskFailureInfo {
+  readonly category: TaskFailureCategory;
+  readonly stage: TaskFailureStage;
+  readonly retryable?: boolean;
+  readonly reasonCode?: string;
+}
 
 export interface TaskExecution {
   readonly generation?: number;
@@ -106,6 +115,7 @@ export interface TaskExecution {
   readonly error?: string;
   readonly protocolErrorCode?: string;
   readonly protocolErrorMessage?: string;
+  readonly failureInfo?: TaskFailureInfo;
   readonly startedAt?: Date;
   readonly completedAt?: Date;
   readonly lastHeartbeatAt?: Date;

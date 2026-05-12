@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { accessSync, constants } from 'node:fs';
 import { normalize } from 'node:path';
-import type { WorkRequest, WorkResponse } from '@invoker/contracts';
+import type { FailureInfo, WorkRequest, WorkResponse } from '@invoker/contracts';
 import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from './executor.js';
 import { BaseExecutor, type BaseEntry } from './base-executor.js';
 import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
@@ -452,7 +452,10 @@ elif [[ "\${WT:0:2}" == '~/' ]]; then
 fi
 cd "$WT"
 echo "[SshExecutor] Provisioning remote worktree with: ${this.provisionCommand.slice(0, 50)}..."
-eval "$(echo ${provB64} | base64 -d)"
+if ! eval "$(echo ${provB64} | base64 -d)"; then
+  echo "__INVOKER_FAILURE_STAGE=provisioning"
+  exit 239
+fi
 echo "[SshExecutor] Running task payload..."
 echo ${payloadB64} | base64 -d | bash -se
 `;
@@ -589,6 +592,7 @@ echo ${payloadB64} | base64 -d | bash -se
 
         let status: 'completed' | 'failed' = exitCode === 0 ? 'completed' : 'failed';
         let mappedError: string | undefined;
+        let failureInfo: FailureInfo | undefined;
         if (exitCode === 30) {
           mappedError = 'Upstream branch missing on remote clone';
         } else if (exitCode === 31) {
@@ -598,6 +602,14 @@ echo ${payloadB64} | base64 -d | bash -se
           const branch = branchMatch?.[1]?.trim() ?? 'unknown';
           const files = filesSection?.[1]?.trim() ?? '(see task output)';
           mappedError = `Merge conflict merging upstream branch "${branch}" on remote.\nConflicting files:\n${files}`;
+        } else if (exitCode === 239) {
+          mappedError = 'Remote worktree provisioning failed';
+          failureInfo = {
+            category: 'infra',
+            stage: 'provisioning',
+            retryable: true,
+            reasonCode: 'SSH_PROVISION_FAILED',
+          };
         }
 
         let commitHash: string | undefined;
@@ -656,6 +668,7 @@ echo ${payloadB64} | base64 -d | bash -se
             commitHash,
             agentSessionId: entry.agentSessionId,
             ...(mappedError ? { error: mappedError } : {}),
+            ...(failureInfo ? { failureInfo } : {}),
             ...(finalizeRemote && commitHash
               ? { summary: `branch=${finalizeRemote.branch} commit=${commitHash}` }
               : {}),

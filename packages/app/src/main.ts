@@ -137,7 +137,7 @@ import { installBundledSkills, resolveBundledSkillsStatus } from './bundled-skil
 import { createRequire } from 'node:module';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
 import { applyDelta, resolveQuarantine, TaskSnapshotCache } from './delta-merge.js';
-import { shouldSkipAutoFixForError } from './auto-fix-gating.js';
+import { shouldSkipAutoFixForFailure } from './auto-fix-gating.js';
 import { ensureSqliteFlushDebounceForOwner } from './sqlite-flush-policy.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
@@ -2625,13 +2625,17 @@ if (isHeadless) {
         ? d.taskId
         : undefined;
       if (d.type === 'updated' && d.changes.status === 'failed') {
-        const cancellationError = shouldSkipAutoFixForError(d.changes.execution?.error);
+        const latestTask = orchestrator.getTask(d.taskId);
+        const skipAutoFix = shouldSkipAutoFixForFailure({
+          error: d.changes.execution?.error ?? latestTask?.execution.error,
+          failureInfo: d.changes.execution?.failureInfo ?? latestTask?.execution.failureInfo,
+        });
         const shouldAutoFixFromOrchestrator = orchestrator.shouldAutoFix(d.taskId);
         logAutoFixDebug(d.taskId, 'delta-failed', {
-          shouldSkipForCancellation: cancellationError,
+          shouldSkipForCancellation: skipAutoFix,
           shouldAutoFixFromOrchestrator,
         });
-        if (!cancellationError && shouldAutoFixFromOrchestrator && deltaTaskId) {
+        if (!skipAutoFix && shouldAutoFixFromOrchestrator && deltaTaskId) {
           logAutoFixDebug(deltaTaskId, 'delta-trigger-schedule');
           scheduleAutoFix(deltaTaskId);
         }

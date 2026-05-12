@@ -355,6 +355,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       const startupErr = err instanceof Error ? err : new Error(String(err));
       (startupErr as Error & { workspacePath?: string; branch?: string }).workspacePath = acquired.worktreePath;
       (startupErr as Error & { workspacePath?: string; branch?: string }).branch = acquired.branch;
+      (startupErr as Error & { phase?: string }).phase = 'provisioning';
       throw startupErr;
     }
 

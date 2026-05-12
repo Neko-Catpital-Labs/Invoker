@@ -14,7 +14,7 @@ describe('wireHeadlessAutoFix', () => {
     wireHeadlessAutoFix(
       {
         messageBus,
-        orchestrator: { shouldAutoFix } as any,
+        orchestrator: { shouldAutoFix, getTask: vi.fn(() => undefined) } as any,
         persistence: {} as any,
       },
       {} as any,
