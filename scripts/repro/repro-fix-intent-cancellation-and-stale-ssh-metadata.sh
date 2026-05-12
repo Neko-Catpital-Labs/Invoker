@@ -78,7 +78,20 @@ require_cmd() {
 }
 
 require_cmd pnpm
-require_cmd timeout
+
+# `timeout` is GNU coreutils and not present on stock macOS; on macOS it is
+# typically installed as `gtimeout` via Homebrew's coreutils. Pick whichever is
+# available, and fall back to no external timeout (the test command itself
+# still has internal timeouts) if neither exists so the repro can run on a
+# minimal macOS host.
+TIMEOUT_CMD=()
+if command -v timeout >/dev/null 2>&1; then
+  TIMEOUT_CMD=(timeout "$TIMEOUT_SECONDS")
+elif command -v gtimeout >/dev/null 2>&1; then
+  TIMEOUT_CMD=(gtimeout "$TIMEOUT_SECONDS")
+else
+  echo "repro: warning: neither 'timeout' nor 'gtimeout' available; running without external timeout" >&2
+fi
 
 cd "$ROOT_DIR"
 
@@ -87,7 +100,7 @@ cd "$ROOT_DIR"
 echo "==> repro: Race 1 — fix-intent cancellation"
 
 set +e
-timeout "$TIMEOUT_SECONDS" \
+${TIMEOUT_CMD[@]+"${TIMEOUT_CMD[@]}"} \
   pnpm --filter @invoker/app exec vitest run \
     --reporter verbose \
     -t "aborts the dispatch AbortSignal when recreate-task preempts a running fix mutation" \
@@ -111,7 +124,7 @@ echo "fix_intent_observed : $FIX_INTENT_OBSERVED"
 echo "==> repro: Race 2 — stale SSH startup-failure metadata"
 
 set +e
-timeout "$TIMEOUT_SECONDS" \
+${TIMEOUT_CMD[@]+"${TIMEOUT_CMD[@]}"} \
   pnpm --filter @invoker/execution-engine exec vitest run \
     --reporter verbose \
     -t "suppresses metadata write and failed response when selectedAttemptId has advanced" \
