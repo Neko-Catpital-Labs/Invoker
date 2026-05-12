@@ -1,8 +1,8 @@
 /**
  * Integration test: Merge gate approval flow through full <App />.
  *
- * Verifies the complete chain: MergeGateNode inline buttons → TaskPanel →
- * ApprovalModal with context-specific labels based on workflow onFinish.
+ * Verifies the chain: select MergeGateNode → TaskPanel → ApprovalModal
+ * with context-specific labels based on workflow onFinish.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -74,33 +74,6 @@ const wfB: WorkflowMeta = {
   mergeMode: 'manual',
 };
 
-// ── Scenario C: workflow (no onFinish) ─────────────────────
-
-const taskC = makeUITask({
-  id: 'task-c1',
-  description: 'Regular task C',
-  status: 'completed',
-  workflowId: 'wf-workflow',
-  command: 'echo hello',
-});
-
-const gateC = makeUITask({
-  id: 'gate-c',
-  description: 'Workflow gate for test plan',
-  status: 'awaiting_approval',
-  workflowId: 'wf-workflow',
-  isMergeNode: true,
-  dependencies: ['task-c1'],
-});
-
-const wfC: WorkflowMeta = {
-  id: 'wf-workflow',
-  name: 'Workflow',
-  status: 'running',
-  baseBranch: 'main',
-  mergeMode: 'manual',
-};
-
 describe('Merge gate approval flow (integration)', () => {
   let mock: MockInvoker;
 
@@ -111,36 +84,6 @@ describe('Merge gate approval flow (integration)', () => {
 
   afterEach(() => {
     mock.cleanup();
-  });
-
-  // ── Inline button labels ─────────────────────────────────
-
-  it('gate node shows "Approve & Merge" for onFinish=merge', async () => {
-    render(<App />);
-    act(() => mock.setTasks([taskA, gateA], [wfA]));
-
-    await waitFor(() => {
-      expect(screen.getByText('Approve & Merge')).toBeInTheDocument();
-    });
-  });
-
-  it('gate node shows "Approve & Create PR" for onFinish=pull_request', async () => {
-    render(<App />);
-    act(() => mock.setTasks([taskB, gateB], [wfB]));
-
-    await waitFor(() => {
-      expect(screen.getByText('Approve & Create PR')).toBeInTheDocument();
-    });
-  });
-
-  it('gate node shows "Approve" for workflow gate (no onFinish)', async () => {
-    render(<App />);
-    act(() => mock.setTasks([taskC, gateC], [wfC]));
-
-    await waitFor(() => {
-      const btn = screen.getByTestId('approve-merge-button');
-      expect(btn).toHaveTextContent('Approve');
-    });
   });
 
   // ── Full App flow: TaskPanel → Modal ──────────────────────
@@ -253,18 +196,14 @@ describe('Merge gate approval flow (integration)', () => {
     });
   });
 
-  it('clicking inline approve button on node calls invoker.approveMerge(workflowId)', async () => {
+  it('does not render an inline approve button on the merge gate node', async () => {
     render(<App />);
     act(() => mock.setTasks([taskA, gateA], [wfA]));
 
     await waitFor(() => {
-      expect(screen.getByTestId('approve-merge-button')).toBeInTheDocument();
+      expect(screen.getByTestId('rf__node-gate-a')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByTestId('approve-merge-button'));
-
-    await waitFor(() => {
-      expect(mock.api.approveMerge).toHaveBeenCalledWith('wf-merge');
-    });
+    expect(screen.queryByTestId('approve-merge-button')).not.toBeInTheDocument();
   });
 });
