@@ -488,6 +488,60 @@ describe('WorktreeExecutor', () => {
     vi.mocked(process.kill).mockRestore();
   });
 
+  it('fails provisioning when timeout elapses and kills the process group', async () => {
+    vi.useFakeTimers();
+    const previousTimeout = process.env.INVOKER_WORKTREE_PROVISION_TIMEOUT_MS;
+    process.env.INVOKER_WORKTREE_PROVISION_TIMEOUT_MS = '5';
+    try {
+      const handle = { executionId: 'exec-provision-timeout', taskId: 'action-timeout' };
+      vi.spyOn(executor as any, 'createHandle').mockReturnValue(handle);
+
+      const installProc = createMockProcess();
+      mockedSpawn.mockImplementation((cmd: string, args?: readonly string[]) => {
+        if (cmd === 'git') {
+          const gitProc = createMockProcess();
+          Promise.resolve().then(() => {
+            const argsArr = args as string[];
+            if (argsArr?.includes('rev-parse')) {
+              gitProc.stdout!.emit('data', Buffer.from('abc123\n'));
+            }
+            gitProc.emit('close', 0, null);
+          });
+          return gitProc as any;
+        }
+
+        const argsArr = args as string[] | undefined;
+        if (cmd === '/bin/bash' && argsArr?.[1]?.includes('pnpm install')) {
+          return installProc as any;
+        }
+
+        throw new Error(`unexpected spawn: ${cmd}`);
+      });
+
+      const killSpy = vi.spyOn(process, 'kill').mockReturnValue(true as any);
+      const startPromise = executor.start(makeRequest({ inputs: { command: 'sleep 60' } }));
+      const startResult = startPromise.then(
+        () => ({ ok: true as const }),
+        (error) => ({ ok: false as const, error }),
+      );
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(10);
+
+      const startOutcome = await startResult;
+      expect(startOutcome.ok).toBe(false);
+      expect(String((startOutcome as { error: Error }).error)).toMatch(/Worktree provisioning timed out after 5ms/);
+      expect(killSpy).toHaveBeenCalled();
+      killSpy.mockRestore();
+    } finally {
+      if (previousTimeout === undefined) {
+        delete process.env.INVOKER_WORKTREE_PROVISION_TIMEOUT_MS;
+      } else {
+        process.env.INVOKER_WORKTREE_PROVISION_TIMEOUT_MS = previousTimeout;
+      }
+      vi.useRealTimers();
+    }
+  });
+
   it('destroyAll terminates provisioning processes without removing worktrees', async () => {
     const handles = [
       { executionId: 'exec-provision-1', taskId: 'action-1' },

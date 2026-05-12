@@ -45,6 +45,18 @@ export interface WorktreeExecutorConfig {
   maxDurationMs?: number;
 }
 
+const DEFAULT_WORKTREE_PROVISION_TIMEOUT_MS = 15 * 60 * 1000;
+
+function resolveWorktreeProvisionTimeoutMs(): number {
+  const raw = process.env.INVOKER_WORKTREE_PROVISION_TIMEOUT_MS?.trim();
+  if (!raw) return DEFAULT_WORKTREE_PROVISION_TIMEOUT_MS;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_WORKTREE_PROVISION_TIMEOUT_MS;
+  }
+  return parsed;
+}
+
 interface WorktreeEntry extends BaseEntry {
   process: ChildProcess | null;
   worktreeDir: string;
@@ -635,8 +647,18 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     });
     traceExecution(`[WorktreeExecutor] provisionWorktree spawned pid=${child.pid}`);
     const completion = new Promise<void>((resolve, reject) => {
+      const timeoutMs = resolveWorktreeProvisionTimeoutMs();
+      let timedOut = false;
       let stdout = '';
       let stderr = '';
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        if (typeof child.pid === 'number') {
+          killProcessGroup(child, 'SIGTERM');
+        }
+        reject(new Error(`Worktree provisioning timed out after ${timeoutMs}ms in ${dir}`));
+      }, timeoutMs);
+      timeout.unref?.();
       child.stdout?.on('data', (d: Buffer) => {
         const text = d.toString();
         stdout += text;
@@ -650,10 +672,14 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         if (executionId) this.emitOutput(executionId, text);
       });
       child.on('error', (err) => {
+        clearTimeout(timeout);
+        if (timedOut) return;
         traceExecution(`[WorktreeExecutor] provisionWorktree error: ${err.message}`);
         reject(new Error(`Failed to spawn provisioning process: ${err.message}`));
       });
       child.on('close', (code, signal) => {
+        clearTimeout(timeout);
+        if (timedOut) return;
         traceExecution(`[WorktreeExecutor] provisionWorktree finished dir=${dir} code=${code} signal=${signal ?? 'none'} elapsed=${Date.now() - t0}ms`);
         if (code === 0) resolve();
         else {
