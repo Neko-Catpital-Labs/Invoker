@@ -5041,12 +5041,6 @@ describe('TaskRunner', () => {
     });
   });
 
-  // Regression for wf-1778431030512-12: PR #276 was created without the
-  // `## Visual Proof` section because (a) `scripts/ui-visual-proof.sh` rejected
-  // the `--output-dir` flag the runtime started passing, and (b) the markdown
-  // renderer iterated a hard-coded list of state names that did not include the
-  // newly added `merge-gate-no-inline-approve` screenshot. Both gaps are tested
-  // here against the real merge-gate external_review path.
   describe('visual-proof PR summary regression (wf-1778431030512-12)', () => {
     it('scripts/ui-visual-proof.sh accepts --output-dir without "Unknown option"', () => {
       const here = dirname(fileURLToPath(import.meta.url));
@@ -5054,9 +5048,6 @@ describe('TaskRunner', () => {
       const scriptPath = pathResolve(repoRoot, 'scripts/ui-visual-proof.sh');
       const tmp = mkdtempSync(join(tmpdir(), 'invoker-vp-script-'));
       try {
-        // We don't want the script to actually run Playwright; --help short-
-        // circuits after argument parsing, which is exactly what we need to
-        // assert that --output-dir is now a recognised option.
         const result = spawnSync(
           'bash',
           [scriptPath, '--label', 'after', '--output-dir', tmp, '--help'],
@@ -5074,12 +5065,9 @@ describe('TaskRunner', () => {
       const featureBranch = `experiment/${workflowId}/feature`;
       const mergeNodeId = `__merge__${workflowId}`;
 
-      // Stand in for the repo working tree so runVisualProofCapture has a real
-      // directory to write into (`<cwd>/packages/app/e2e/visual-proof/...`).
       const repoTmp = mkdtempSync(join(tmpdir(), 'invoker-vp-regression-'));
       tempWorkspaces.push(repoTmp);
 
-      // Task names match the merge-gate cleanup plan that produced PR #276.
       const allTasks = [
         makeTask({
           id: 'add-merge-gate-no-inline-approve-visual-proof',
@@ -5129,21 +5117,14 @@ describe('TaskRunner', () => {
         mergeGateProvider: mergeGateProvider as any,
       });
 
-      // Stub git so nothing reaches a real repo. Returning '' for every read
-      // mirrors what the production mocks in this file do.
       (executor as any).execGitReadonly = async () => '';
       (executor as any).execGitIn = async () => '';
       (executor as any).gitDiffStat = async () => '';
       (executor as any).createMergeWorktree = async () => repoTmp;
       (executor as any).removeMergeWorktree = async () => {};
-      // Consolidation is exercised by other tests; this one focuses on the
-      // visual-proof + PR provider hand-off, so short-circuit it.
       (executor as any).consolidateAndMerge = vi.fn().mockResolvedValue(undefined);
       (executor as any).startPrPolling = vi.fn();
 
-      // Simulate the shell script: write the screenshots that the plan
-      // produces into <output-dir>/{before,after}, including the new
-      // `merge-gate-no-inline-approve.png`.
       const screenshotStates = [
         'empty-state',
         'dag-loaded',
@@ -5161,8 +5142,6 @@ describe('TaskRunner', () => {
         }
       };
 
-      // Bypass the real R2 upload but return plausible public URLs so the
-      // markdown body actually contains image links per state.
       (executor as any).uploadVisualProofFiles = async (files: string[]) => {
         const map: Record<string, string> = {};
         for (const f of files) {
@@ -5186,8 +5165,6 @@ describe('TaskRunner', () => {
       expect(reviewArgs.body).toBeDefined();
       const body = reviewArgs.body!;
       expect(body).toContain('## Visual Proof');
-      // The new screenshot state must appear in the rendered markdown, not
-      // be silently dropped by a hard-coded state list.
       expect(body).toContain('merge-gate-no-inline-approve');
       expect(body).toContain('https://stub-cdn.example.com/before--merge-gate-no-inline-approve.png');
       expect(body).toContain('https://stub-cdn.example.com/after--merge-gate-no-inline-approve.png');

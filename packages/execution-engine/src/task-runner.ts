@@ -1025,11 +1025,6 @@ export class TaskRunner {
         await this.removeMergeWorktree(wtDir);
       }
 
-      // Discover captured states from filenames present in BOTH before/ and after/.
-      // Previously the renderer iterated a hard-coded list (`empty-state`,
-      // `dag-loaded`, …), so newly added screenshots like
-      // `merge-gate-no-inline-approve.png` were silently dropped from the PR
-      // summary even when the script wrote them.
       const listPngStems = (dir: string): Set<string> => {
         try {
           return new Set(
