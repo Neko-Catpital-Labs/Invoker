@@ -37,9 +37,6 @@
     "check:types": "tsc -p tsconfig.typecheck.json",
     "check:all": "pnpm run check:deps && pnpm run check:types && pnpm run check:required-builds && bash scripts/check-owner-boundary.sh"
   },
-  "engines": {
-    "node": ">=22 <23"
-  },
   "pnpm": {
     "onlyBuiltDependencies": [
       "electron"
