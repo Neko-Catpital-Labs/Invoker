@@ -1052,7 +1052,7 @@ export class Orchestrator {
     now: number = Date.now(),
   ): boolean {
     if (attempt && this.isAttemptLeaseActive(attempt, now)) {
-      return task.status === 'running' || task.status === 'fixing_with_ai';
+      return task.status === 'pending' || task.status === 'running' || task.status === 'fixing_with_ai';
     }
 
     return task.status === 'running' || task.status === 'fixing_with_ai';
@@ -4193,7 +4193,6 @@ export class Orchestrator {
             startedAt: undefined,
             completedAt: undefined,
             lastHeartbeatAt: undefined,
-            leaseExpiresAt: undefined,
             launchStartedAt: undefined,
             launchCompletedAt: undefined,
             phase: undefined,
@@ -4284,7 +4283,6 @@ export class Orchestrator {
           startedAt: undefined,
           completedAt: undefined,
           lastHeartbeatAt: undefined,
-          leaseExpiresAt: undefined,
           launchStartedAt: undefined,
           launchCompletedAt: undefined,
           phase: undefined,
