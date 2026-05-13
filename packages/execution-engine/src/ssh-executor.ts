@@ -12,6 +12,7 @@ import { DEFAULT_WORKTREE_PROVISION_COMMAND } from './default-worktree-provision
 import type { AgentRegistry } from './agent-registry.js';
 import { computeRepoUrlHash, sanitizeBranchForPath } from './git-utils.js';
 import { isWorkspaceCleanupEnabled } from './workspace-cleanup-policy.js';
+import { buildSshConnectionArgs } from './ssh-transport-options.js';
 import {
   shellPosixSingleQuote as sshGitShellQuote,
   base64Encode as sshGitB64,
@@ -69,6 +70,8 @@ interface SshEntry extends BaseEntry {
  */
 export class SshExecutor extends BaseExecutor<SshEntry> {
   readonly type = 'ssh';
+  private static readonly REMOTE_HEARTBEAT_MARKER = '__INVOKER_REMOTE_HEARTBEAT__';
+  private static readonly DEFAULT_REMOTE_HEARTBEAT_INTERVAL_SECONDS = 30;
 
   private readonly host: string;
   private readonly user: string;
@@ -94,23 +97,60 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
   }
 
   private buildSshArgs(): string[] {
-    return [
-      '-i', this.sshKeyPath,
-      '-p', String(this.port),
-      '-o', 'StrictHostKeyChecking=accept-new',
-      '-o', 'BatchMode=yes',
-      `${this.user}@${this.host}`,
-    ];
+    return buildSshConnectionArgs({
+      sshKeyPath: this.sshKeyPath,
+      port: this.port,
+      user: this.user,
+      host: this.host,
+    }, { batchMode: true });
   }
 
   /** SSH args without `BatchMode` so `-t` / interactive sessions work for external Terminal.app. */
   private buildSshArgsInteractive(): string[] {
-    return [
-      '-i', this.sshKeyPath,
-      '-p', String(this.port),
-      '-o', 'StrictHostKeyChecking=accept-new',
-      `${this.user}@${this.host}`,
-    ];
+    return buildSshConnectionArgs({
+      sshKeyPath: this.sshKeyPath,
+      port: this.port,
+      user: this.user,
+      host: this.host,
+    }, { batchMode: false });
+  }
+
+  private getRemoteHeartbeatIntervalSeconds(): number {
+    const raw = process.env.INVOKER_SSH_REMOTE_HEARTBEAT_INTERVAL_SECONDS?.trim();
+    if (!raw) return SshExecutor.DEFAULT_REMOTE_HEARTBEAT_INTERVAL_SECONDS;
+    const parsed = Number.parseInt(raw, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return SshExecutor.DEFAULT_REMOTE_HEARTBEAT_INTERVAL_SECONDS;
+    }
+    return parsed;
+  }
+
+  private buildPayloadExecutionScript(payloadB64: string): string {
+    const intervalSeconds = this.getRemoteHeartbeatIntervalSeconds();
+    return `(
+  echo ${payloadB64} | base64 -d | bash -se
+) &
+PAYLOAD_PID=$!
+INVOKER_HEARTBEAT_MARKER=${this.shellQuote(SshExecutor.REMOTE_HEARTBEAT_MARKER)}
+INVOKER_HEARTBEAT_INTERVAL_SECONDS=${intervalSeconds}
+printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
+(
+  while kill -0 "$PAYLOAD_PID" 2>/dev/null; do
+    sleep "$INVOKER_HEARTBEAT_INTERVAL_SECONDS"
+    kill -0 "$PAYLOAD_PID" 2>/dev/null || break
+    printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
+  done
+) &
+HEARTBEAT_PID=$!
+if wait "$PAYLOAD_PID"; then
+  PAYLOAD_EXIT=0
+else
+  PAYLOAD_EXIT=$?
+fi
+kill "$HEARTBEAT_PID" >/dev/null 2>&1 || true
+wait "$HEARTBEAT_PID" 2>/dev/null || true
+exit "$PAYLOAD_EXIT"
+`;
   }
 
   private buildRemoteCommand(): string[] {
@@ -277,7 +317,7 @@ elif [[ "\${WT:0:2}" == '~/' ]]; then
 fi
 cd "$WT"
 echo "[SshExecutor BYO] Running task in user-provided workspace: $WT"
-echo ${payloadB64} | base64 -d | bash -se
+${this.buildPayloadExecutionScript(payloadB64)}
 `;
 
     return this.spawnSshRemoteStdin(executionId, request, handle, runScript, agentSessionId, undefined);
@@ -454,7 +494,7 @@ cd "$WT"
 echo "[SshExecutor] Provisioning remote worktree with: ${this.provisionCommand.slice(0, 50)}..."
 eval "$(echo ${provB64} | base64 -d)"
 echo "[SshExecutor] Running task payload..."
-echo ${payloadB64} | base64 -d | bash -se
+${this.buildPayloadExecutionScript(payloadB64)}
 `;
 
     return this.spawnSshRemoteStdin(executionId, request, handle, runScript, agentSessionId, {
@@ -475,6 +515,55 @@ echo ${payloadB64} | base64 -d | bash -se
     if (handle.agentSessionId) (wrapped as any).agentSessionId = handle.agentSessionId;
     if (handle.containerId) (wrapped as any).containerId = handle.containerId;
     return wrapped;
+  }
+
+  private processOutputChunk(
+    executionId: string,
+    chunk: string,
+    streamState: { remainder: string },
+  ): void {
+    const full = streamState.remainder + chunk;
+    const lines = full.split('\n');
+    streamState.remainder = lines.pop() ?? '';
+    for (const line of lines) {
+      if (line.startsWith(SshExecutor.REMOTE_HEARTBEAT_MARKER)) {
+        this.emitHeartbeat(executionId);
+        continue;
+      }
+      this.emitOutput(executionId, `${line}\n`);
+    }
+  }
+
+  private flushOutputRemainder(executionId: string, streamState: { remainder: string }): void {
+    if (!streamState.remainder) return;
+    if (streamState.remainder.startsWith(SshExecutor.REMOTE_HEARTBEAT_MARKER)) {
+      this.emitHeartbeat(executionId);
+    } else {
+      this.emitOutput(executionId, streamState.remainder);
+    }
+    streamState.remainder = '';
+  }
+
+  private mapSshTransportError(
+    exitCode: number,
+    stderrOutput: string,
+    bufferedOutput: string,
+  ): string | undefined {
+    if (exitCode !== 255) return undefined;
+    const haystack = `${stderrOutput}\n${bufferedOutput}`.toLowerCase();
+    if (haystack.includes('broken pipe')) {
+      return 'SSH transport failed (exit 255): broken pipe while streaming remote task output.';
+    }
+    if (haystack.includes('connection timed out')) {
+      return 'SSH transport failed (exit 255): connection timed out.';
+    }
+    if (haystack.includes('operation timed out')) {
+      return 'SSH transport failed (exit 255): SSH operation timed out.';
+    }
+    if (haystack.includes('connection reset')) {
+      return 'SSH transport failed (exit 255): connection reset by peer.';
+    }
+    return 'SSH transport failed (exit 255): remote session terminated unexpectedly.';
   }
 
   /**
@@ -573,31 +662,41 @@ echo ${payloadB64} | base64 -d | bash -se
       handle.agentSessionId = agentSessionId;
     }
 
+    let stderrOutput = '';
+    const stdoutState = { remainder: '' };
+    const stderrState = { remainder: '' };
+
     child.stdout?.on('data', (chunk: Buffer) => {
-      this.emitOutput(executionId, chunk.toString());
+      this.processOutputChunk(executionId, chunk.toString(), stdoutState);
     });
 
     child.stderr?.on('data', (chunk: Buffer) => {
-      this.emitOutput(executionId, chunk.toString());
+      const text = chunk.toString();
+      stderrOutput += text;
+      this.processOutputChunk(executionId, text, stderrState);
     });
 
     child.on('close', (code, signal) => {
       void (async () => {
+        this.flushOutputRemainder(executionId, stdoutState);
+        this.flushOutputRemainder(executionId, stderrState);
         const exitCode = code ?? (signal ? 1 : 0);
         const e = this.entries.get(executionId);
         if (e) e.finalizingAfterClose = true;
         try {
           let status: 'completed' | 'failed' = exitCode === 0 ? 'completed' : 'failed';
           let mappedError: string | undefined;
+          const output = e?.outputBuffer.join('') ?? '';
           if (exitCode === 30) {
             mappedError = 'Upstream branch missing on remote clone';
           } else if (exitCode === 31) {
-            const output = e?.outputBuffer.join('') ?? '';
             const branchMatch = output.match(/MERGE_CONFLICT_BRANCH=(.+)/);
             const filesSection = output.match(/MERGE_CONFLICT_FILES:\n([\s\S]*?)(?:\n\[Ssh|$)/);
             const branch = branchMatch?.[1]?.trim() ?? 'unknown';
             const files = filesSection?.[1]?.trim() ?? '(see task output)';
             mappedError = `Merge conflict merging upstream branch "${branch}" on remote.\nConflicting files:\n${files}`;
+          } else {
+            mappedError = this.mapSshTransportError(exitCode, stderrOutput, output);
           }
 
           let commitHash: string | undefined;
@@ -681,7 +780,7 @@ echo ${payloadB64} | base64 -d | bash -se
       })();
     });
 
-    this.startHeartbeat(executionId, child);
+    this.startHeartbeat(executionId, child, { emitIntervalHeartbeat: false });
     return handle;
   }
 

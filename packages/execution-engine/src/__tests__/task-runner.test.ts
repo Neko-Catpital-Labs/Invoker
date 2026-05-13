@@ -9303,4 +9303,93 @@ console.log(JSON.stringify(out));
       expect(validateCanonicalPrBody(body)).toEqual([]);
     });
   });
+
+  describe('SSH heartbeat persistence metadata', () => {
+    it('stores remote workload heartbeat metadata for SSH executors', async () => {
+      const runningTask = makeTask({
+        id: 'task-ssh-heartbeat',
+        status: 'running',
+        config: {
+          workflowId: 'wf-1',
+          executorType: 'ssh',
+          command: 'echo hi',
+          remoteTargetId: 'remote-1',
+        },
+        execution: { generation: 0, selectedAttemptId: 'attempt-ssh-1' },
+      });
+
+      const updateTask = vi.fn();
+      const updateAttempt = vi.fn();
+      const heartbeatCallbacks = new Map<string, (taskId: string) => void>();
+      const completeCallbacks = new Map<string, (response: any) => void>();
+      const sshExecutor = {
+        type: 'ssh',
+        start: vi.fn(async () => ({
+          executionId: 'exec-ssh-1',
+          taskId: runningTask.id,
+          workspacePath: '/tmp/ws',
+        })),
+        onOutput: vi.fn((_handle: unknown, _cb: (chunk: string) => void) => () => {}),
+        onHeartbeat: vi.fn((_handle: unknown, cb: (taskId: string) => void) => {
+          heartbeatCallbacks.set(runningTask.id, cb);
+          return () => {};
+        }),
+        onComplete: vi.fn((_handle: unknown, cb: (response: any) => void) => {
+          completeCallbacks.set(runningTask.id, cb);
+          return () => {};
+        }),
+      } as any;
+
+      const runner = new TaskRunner({
+        orchestrator: {
+          getTask: vi.fn((id: string) => (id === runningTask.id ? runningTask : undefined)),
+          getAllTasks: vi.fn(() => [runningTask]),
+          markTaskRunningAfterLaunch: vi.fn(() => true),
+          handleWorkerResponse: vi.fn(() => []),
+        } as any,
+        persistence: {
+          loadWorkflow: vi.fn(() => ({ id: 'wf-1', repoUrl: 'git@github.com:owner/repo.git' })),
+          updateTask,
+          updateAttempt,
+          appendTaskOutput: vi.fn(),
+        } as any,
+        executorRegistry: {
+          getDefault: vi.fn(() => sshExecutor),
+          get: vi.fn((type: string) => (type === 'ssh' ? sshExecutor : null)),
+          getAll: vi.fn(() => []),
+        } as any,
+        cwd: '/tmp',
+        callbacks: { onHeartbeat: vi.fn() },
+      });
+
+      const pending = runner.executeTask(runningTask);
+      await new Promise((resolve) => setImmediate(resolve));
+      heartbeatCallbacks.get(runningTask.id)?.(runningTask.id);
+      completeCallbacks.get(runningTask.id)?.({
+        requestId: 'req-done',
+        actionId: runningTask.id,
+        status: 'completed',
+        outputs: { exitCode: 0 },
+      });
+      await pending;
+
+      expect(updateTask).toHaveBeenCalledWith(
+        runningTask.id,
+        expect.objectContaining({
+          execution: expect.objectContaining({
+            lastHeartbeatAt: expect.any(Date),
+            remoteHeartbeatAt: expect.any(Date),
+            heartbeatSource: 'remote_workload',
+          }),
+        }),
+      );
+      expect(updateAttempt).toHaveBeenCalledWith(
+        'attempt-ssh-1',
+        expect.objectContaining({
+          lastHeartbeatAt: expect.any(Date),
+          leaseExpiresAt: expect.any(Date),
+        }),
+      );
+    });
+  });
 });

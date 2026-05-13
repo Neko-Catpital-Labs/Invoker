@@ -690,9 +690,18 @@ export class TaskRunner {
     // Wire heartbeat
     executor.onHeartbeat(handle, () => {
       const now = new Date();
+      const isRemoteWorkloadHeartbeat = executor.type === 'ssh';
       this.persistence.updateAttempt?.(attemptId, {
         lastHeartbeatAt: now,
         leaseExpiresAt: nextLeaseExpiry(now),
+      } as any);
+      this.persistence.updateTask(task.id, {
+        execution: {
+          lastHeartbeatAt: now,
+          ...(isRemoteWorkloadHeartbeat
+            ? { remoteHeartbeatAt: now, heartbeatSource: 'remote_workload' as const }
+            : { heartbeatSource: 'executor' as const }),
+        },
       } as any);
       this.callbacks.onHeartbeat?.(task.id);
     });

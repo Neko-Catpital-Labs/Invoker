@@ -41,6 +41,10 @@ export interface BaseEntry {
   finalizingAfterClose?: boolean;
 }
 
+interface HeartbeatOptions {
+  emitIntervalHeartbeat?: boolean;
+}
+
 export interface ClaudeSessionParams {
   sessionId: string;
   cliArgs: string[];
@@ -179,9 +183,14 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
    * Start a periodic heartbeat that detects orphaned processes: the child
    * has exited but the close handler failed to fire completion.
    */
-  protected startHeartbeat(executionId: string, child: ChildProcess): void {
+  protected startHeartbeat(
+    executionId: string,
+    child: ChildProcess,
+    opts: HeartbeatOptions = {},
+  ): void {
     const entry = this.entries.get(executionId);
     if (!entry) return;
+    const emitIntervalHeartbeat = opts.emitIntervalHeartbeat ?? true;
 
     entry.heartbeatStartedAt = Date.now();
 
@@ -232,7 +241,9 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         return;
       }
 
-      this.emitHeartbeat(executionId);
+      if (emitIntervalHeartbeat) {
+        this.emitHeartbeat(executionId);
+      }
     }, this.heartbeatIntervalMs);
   }
 

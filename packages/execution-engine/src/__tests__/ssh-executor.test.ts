@@ -885,6 +885,82 @@ describe('SshExecutor entry lifecycle', () => {
     expect(completed).toBe(true);
   });
 
+  it('filters remote heartbeat markers from output and emits heartbeat events', async () => {
+    const request = makeRequest({
+      inputs: {
+        command: 'echo hello',
+        repoUrl: 'git@github.com:test/repo.git',
+      },
+    });
+
+    const handle = await ssh.start(request);
+    const sshProcess = spawnedProcesses[spawnedProcesses.length - 1];
+    const outputChunks: string[] = [];
+    let heartbeatCount = 0;
+    ssh.onOutput(handle, (chunk) => outputChunks.push(chunk));
+    ssh.onHeartbeat(handle, () => {
+      heartbeatCount += 1;
+    });
+
+    (sshProcess.stdout as any).emit('data', Buffer.from('__INVOKER_REMOTE_HEARTBEAT__ 100\nhello\n'));
+    (sshProcess.stdout as any).emit('data', Buffer.from('__INVOKER_REMOTE_HEARTBEAT__ 101\nworld'));
+    sshProcess.emit('close', 0, null);
+
+    await new Promise((r) => setTimeout(r, 80));
+    expect(heartbeatCount).toBe(2);
+    expect(outputChunks.join('')).toContain('hello\n');
+    expect(outputChunks.join('')).toContain('world');
+    expect(outputChunks.join('')).not.toContain('__INVOKER_REMOTE_HEARTBEAT__');
+  });
+
+  it('maps SSH exit 255 broken pipe into deterministic transport error', async () => {
+    const request = makeRequest({
+      inputs: {
+        command: 'echo hello',
+        repoUrl: 'git@github.com:test/repo.git',
+      },
+    });
+
+    const handle = await ssh.start(request);
+    const sshProcess = spawnedProcesses[spawnedProcesses.length - 1];
+    const completion = new Promise<any>((resolve) => {
+      ssh.onComplete(handle, (response) => resolve(response));
+    });
+
+    (sshProcess.stderr as any).emit('data', Buffer.from('client_loop: send disconnect: Broken pipe\n'));
+    sshProcess.emit('close', 255, null);
+
+    const response = await completion;
+    expect(response.status).toBe('failed');
+    expect(response.outputs.exitCode).toBe(255);
+    expect(response.outputs.error).toContain('broken pipe');
+  });
+
+  it('includes SSH transport timeout/keepalive options in spawned SSH args', async () => {
+    const ssh2 = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+    }) as any;
+
+    const pending = ssh2.runBash('echo ready', '/tmp');
+    await new Promise((r) => setImmediate(r));
+    const sshProcess = spawnedProcesses[spawnedProcesses.length - 1];
+    (sshProcess.stdout as any).emit('data', Buffer.from('ready\n'));
+    sshProcess.emit('close', 0, null);
+    await pending;
+
+    const childProcessMod = await import('node:child_process');
+    const spawnMock = childProcessMod.spawn as unknown as ReturnType<typeof vi.fn>;
+    const firstCallArgs = spawnMock.mock.calls[spawnMock.mock.calls.length - 1]?.[1] as string[];
+    expect(firstCallArgs).toEqual(expect.arrayContaining([
+      '-o', 'ConnectTimeout=15',
+      '-o', 'ServerAliveInterval=30',
+      '-o', 'ServerAliveCountMax=3',
+      '-o', 'BatchMode=yes',
+    ]));
+  });
+
   it('preserves stdout on execRemoteCapture error (Bug #4)', async () => {
     const ssh2 = new SshExecutor({
       host: 'localhost',
