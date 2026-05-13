@@ -21,6 +21,7 @@ If you want to use a repo-specific config file, launch Invoker with `INVOKER_REP
       "host": "192.168.1.100",
       "user": "deploy",
       "sshKeyPath": "/home/user/.ssh/id_staging",
+      "maxConcurrentTasks": 1,
       "managedWorkspaces": true,
       "remoteInvokerHome": "~/.invoker",
       "provisionCommand": "pnpm install --frozen-lockfile"
@@ -30,9 +31,18 @@ If you want to use a repo-specific config file, launch Invoker with `INVOKER_REP
       "user": "deploy",
       "sshKeyPath": "/home/user/.ssh/id_staging_b",
       "port": 22,
+      "maxConcurrentTasks": 1,
       "managedWorkspaces": true,
       "remoteInvokerHome": "~/.invoker",
       "provisionCommand": "pnpm install --frozen-lockfile"
+    }
+  },
+  "executionPools": {
+    "ssh-light": {
+      "type": "ssh",
+      "members": ["staging-server", "staging-server-b"],
+      "selectionStrategy": "roundRobin",
+      "maxConcurrentTasksPerMember": 1
     }
   }
 }
@@ -49,10 +59,45 @@ If you want to use a repo-specific config file, launch Invoker with `INVOKER_REP
 | `managedWorkspaces` | boolean | no | When true, Invoker clones/fetches the repo and manages per-task worktrees on the remote host |
 | `remoteInvokerHome` | string | no | Base directory used by managed remote workspaces (default: `~/.invoker`) |
 | `provisionCommand` | string | no | Command run after worktree creation in managed mode |
+| `maxConcurrentTasks` | number | no | Per-target cap used by SSH execution pools (default in pools: 1) |
+
+### executionPools fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"ssh"` \| `"worktree"` | yes | Pool substrate |
+| `members` | string[] | yes | Member IDs (SSH pools use `remoteTargets` keys) |
+| `selectionStrategy` | `"roundRobin"` \| `"leastLoaded"` | no | Member selection strategy (default: `roundRobin`) |
+| `maxConcurrentTasksPerMember` | number | no | Fallback per-member cap when target-level cap is not set |
+
+### Routing to pools from config
+
+Use `executorRoutingRules` with `strategy: "route"` to auto-assign matching commands to an SSH pool.
+
+```json
+{
+  "executionPools": {
+    "ssh-light": {
+      "type": "ssh",
+      "members": ["staging-server", "staging-server-b"],
+      "selectionStrategy": "roundRobin",
+      "maxConcurrentTasksPerMember": 1
+    }
+  },
+  "executorRoutingRules": [
+    {
+      "regex": "\\bpnpm(?:\\s|$)",
+      "executorType": "ssh",
+      "poolId": "ssh-light",
+      "strategy": "route"
+    }
+  ]
+}
+```
 
 ## Multiple SSH Targets
 
-You can configure as many remote targets as you want under `remoteTargets`. Each task picks one by `remoteTargetId`.
+You can configure as many remote targets as you want under `remoteTargets`, then group them into named pools under `executionPools`.
 
 ```yaml
 name: "Run tasks on multiple remotes"
@@ -60,19 +105,21 @@ repoUrl: git@github.com:your-org/your-repo.git
 baseBranch: master
 tasks:
   - id: check-a
-    description: "Run tests on remote A"
+    description: "Run tests on SSH light pool"
     command: "pnpm test"
     executorType: ssh
-    remoteTargetId: staging-server
+    poolId: ssh-light
 
   - id: check-b
-    description: "Run tests on remote B"
+    description: "Run lint on SSH light pool"
     command: "pnpm test"
     executorType: ssh
-    remoteTargetId: staging-server-b
+    poolId: ssh-light
 ```
 
-This is the supported way to run multiple SSH executors in one workflow: define multiple targets, then attach different tasks to different target IDs.
+Queue semantics are shared across pools:
+- if all members are at capacity, new tasks wait in that pool queue;
+- when a member frees a slot, the next queued task is launched automatically.
 
 ## Usage in Plans
 
@@ -102,9 +149,10 @@ tasks:
 ### Task fields
 
 - `executorType: ssh` — selects the SSH executor
-- `remoteTargetId: <id>` — references a key in `remoteTargets` config
+- `poolId: <id>` — routes through a named pool in `executionPools`
+- `remoteTargetId: <id>` — legacy direct-target routing (still supported)
 
-Both fields are required for SSH tasks. The executor validates at runtime that the `remoteTargetId` exists in config and throws a clear error if it's missing.
+At least one destination is required for SSH tasks: `poolId` or `remoteTargetId`.
 
 ## How It Works
 
