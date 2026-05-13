@@ -1858,6 +1858,53 @@ describe('TaskRunner', () => {
   });
 
   describe('baseBranch in WorkRequest', () => {
+    it('translates workflow intermediateRepoUrl into executor branchRepoUrl', async () => {
+      let capturedRequest: any;
+      const capturingExecutor = {
+        type: 'worktree',
+        start: async (req: any) => {
+          capturedRequest = req;
+          return { executionId: 'exec-branch-repo', taskId: 'task-branch-repo' };
+        },
+        onOutput: () => () => {},
+        onComplete: (_handle: any, cb: any) => {
+          cb({ requestId: 'r', actionId: 'task-branch-repo', status: 'completed', outputs: { exitCode: 0 } });
+          return () => {};
+        },
+        onHeartbeat: () => () => {},
+      };
+      const registry = {
+        getDefault: () => capturingExecutor,
+        get: () => capturingExecutor,
+        getAll: () => [capturingExecutor],
+      };
+      const persistence = {
+        updateTask: vi.fn(),
+        loadWorkflow: () => ({ generation: 0, intermediateRepoUrl: '  git@example.com:owner/branches.git  ' }),
+      };
+      const orchestrator = {
+        getTask: () => undefined,
+        handleWorkerResponse: vi.fn(),
+      };
+      const executor = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        executorRegistry: registry as any,
+        cwd: '/tmp',
+      });
+
+      const task = makeTask({
+        id: 'task-branch-repo',
+        status: 'running',
+        config: { command: 'echo hi', workflowId: 'wf-branch-repo' },
+      });
+      await executor.executeTask(task);
+
+      expect(capturedRequest).toBeDefined();
+      expect(capturedRequest.inputs.branchRepoUrl).toBe('git@example.com:owner/branches.git');
+      expect(capturedRequest.inputs.intermediateRepoUrl).toBeUndefined();
+    });
+
     it('encodes workflow generation, task generation, and attemptId in request lifecycleTag', async () => {
       let capturedRequest: any;
       const capturingExecutor = {

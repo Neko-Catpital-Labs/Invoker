@@ -9,6 +9,7 @@ import {
   buildExperimentBranchName,
   extractAttemptSuffix,
   bashPreserveOrReset,
+  bashFetchNodeRemotes,
   bashMergeUpstreams,
   bashEnsureRef,
   parsePreserveResult,
@@ -535,12 +536,22 @@ describe('bashMergeUpstreams', () => {
     expect(stdout).toContain('SKIPPED=master');
   });
 
-  it('skips missing refs gracefully (exit 0)', async () => {
+  it('fails missing refs by default', async () => {
     const script = bashMergeUpstreams({
       worktreeDir: wtDir,
       upstreamBranches: ['nonexistent-branch'],
     });
-    // Should succeed (exit 0) and skip the missing branch
+    await expect(runBashLocal(script)).rejects.toMatchObject({
+      exitCode: 30,
+    });
+  });
+
+  it('can skip missing refs only when explicitly requested', async () => {
+    const script = bashMergeUpstreams({
+      worktreeDir: wtDir,
+      upstreamBranches: ['nonexistent-branch'],
+      missingRefMode: 'skip',
+    });
     const stdout = await runBashLocal(script);
     expect(stdout).toContain('SKIPPED_MISSING_REF=nonexistent-branch');
   });
@@ -697,6 +708,43 @@ describe('bashMergeUpstreams', () => {
       expect(readFileSync(join(wtDir, 'shared.txt'), 'utf-8')).toBe('dep-v2\n');
     } finally {
       rmSync(seedDir, { recursive: true, force: true });
+      rmSync(originDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fetches and merges dependency branches from intermediate', async () => {
+    const originDir = join(repoDir, '..', `origin-intermediate-${Date.now()}.git`);
+    const intermediateDir = join(repoDir, '..', `intermediate-${Date.now()}.git`);
+    const seedDir = join(repoDir, '..', `seed-intermediate-${Date.now()}`);
+
+    try {
+      execSync(`git init --bare "${originDir}"`);
+      gitExec(`git remote add origin "${originDir}"`, repoDir);
+      gitExec('git push origin master', repoDir);
+      execSync(`git init --bare "${intermediateDir}"`);
+      execSync(`git clone "${repoDir}" "${seedDir}"`, { stdio: 'ignore' });
+      gitExec('git config user.email "test@example.com"', seedDir);
+      gitExec('git config user.name "Test User"', seedDir);
+      gitExec(`git remote add intermediate "${intermediateDir}"`, seedDir);
+      gitExec('git push intermediate master', seedDir);
+      gitExec('git checkout -b dep-from-intermediate', seedDir);
+      writeFileSync(join(seedDir, 'intermediate-dep.txt'), 'from intermediate');
+      gitExec('git add -A && git commit -m "intermediate dep"', seedDir);
+      gitExec('git push intermediate dep-from-intermediate', seedDir);
+
+      await runBashLocal(bashFetchNodeRemotes({
+        worktreeDir: wtDir,
+        branchRepoUrl: intermediateDir,
+      }));
+      await runBashLocal(bashMergeUpstreams({
+        worktreeDir: wtDir,
+        upstreamBranches: ['dep-from-intermediate'],
+      }));
+
+      expect(readFileSync(join(wtDir, 'intermediate-dep.txt'), 'utf-8')).toBe('from intermediate');
+    } finally {
+      rmSync(seedDir, { recursive: true, force: true });
+      rmSync(intermediateDir, { recursive: true, force: true });
       rmSync(originDir, { recursive: true, force: true });
     }
   });

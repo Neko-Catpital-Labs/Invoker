@@ -2041,12 +2041,12 @@ describe('BaseExecutor.pushBranchToRemote', () => {
     expect(typeof err).toBe('string');
   });
 
-  it('pushes to intermediate remote when configured on request inputs', async () => {
+  it('pushes to branch repo remote when configured on request inputs', async () => {
     execSync('git checkout -b invoker/task-intermediate', { cwd: cloneDir });
     writeFileSync(join(cloneDir, 'intermediate.txt'), 'task result');
     execSync('git add -A && git commit -m "task commit intermediate"', { cwd: cloneDir });
 
-    const req = makeRequest('task-intermediate', { intermediateRepoUrl: intermediateDir });
+    const req = makeRequest('task-intermediate', { branchRepoUrl: intermediateDir });
     executor.registerTestEntry('exec-intermediate', req);
     const pushErr = await executor.testPushBranchToRemote(cloneDir, 'invoker/task-intermediate', 'exec-intermediate');
     expect(pushErr).toBeUndefined();
