@@ -17,7 +17,7 @@ permissions:
 
 env:
   CI: true
-  NODE_VERSION: '22'
+  NODE_VERSION: '26'
 
 jobs:
   build-artifacts:

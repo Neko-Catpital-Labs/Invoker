@@ -25,7 +25,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 cat > "$TMP/Dockerfile" <<'DOCKERFILE'
-FROM node:22-slim
+FROM node:26-slim
 
 # Core build/runtime tools used by Claude/Codex agents and most projects.
 RUN apt-get update && apt-get install -y --no-install-recommends \

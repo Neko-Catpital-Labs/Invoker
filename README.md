@@ -17,7 +17,7 @@ Current version: `0.0.1`. Version history lives in [CHANGELOG.md](CHANGELOG.md).
 
 ## Prerequisites
 
-- **Node.js** 22.x (`>=22 <23`, see [package.json](package.json))
+- **Node.js** 26.x (pinned in [package.json](package.json) and [.node-version](.node-version))
 - **pnpm** (version pinned in `package.json`)
 - **Git**
 
