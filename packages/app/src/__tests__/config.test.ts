@@ -137,17 +137,19 @@ describe('loadConfig', () => {
     expect(config.imageStorage).toEqual(imageStorage);
   });
 
-  it('reads heavyweightCommandRouting from user config', () => {
-    const heavyweightCommandRouting = {
-      remoteTargetId: 'ci-box',
-      matchers: [{ regex: '\\bpnpm(?:\\s|$)' }],
-    };
+  it('reads executorRoutingRules route strategy from user config', () => {
+    const executorRoutingRules = [{
+      regex: '\\bpnpm(?:\\s|$)',
+      executorType: 'ssh',
+      poolId: 'ssh-light',
+      strategy: 'route',
+    }];
     writeFileSync(
       join(fakeHome, '.invoker', 'config.json'),
-      JSON.stringify({ heavyweightCommandRouting }),
+      JSON.stringify({ executorRoutingRules }),
     );
     const config = loadConfig();
-    expect(config.heavyweightCommandRouting).toEqual(heavyweightCommandRouting);
+    expect(config.executorRoutingRules).toEqual(executorRoutingRules);
   });
 
   it('reads remote target maxConcurrentTasks from user config', () => {

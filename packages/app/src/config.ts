@@ -125,9 +125,8 @@ export interface InvokerConfig {
     maxConcurrentTasksPerMember?: number;
   }>;
   /**
-   * Config-owned routing policy for heavyweight shell commands.
-   * Matching tasks are auto-routed to the configured executor/target at plan submission time.
-   * Default matcher set for v1 is any command invoking `pnpm`.
+   * Deprecated compatibility alias for routing rules with `strategy: "route"`.
+   * Prefer `executorRoutingRules` for all command-routing policies.
    */
   heavyweightCommandRouting?: {
     /** Set false to disable heavyweight auto-routing without deleting the config block. */
@@ -145,19 +144,17 @@ export interface InvokerConfig {
     }>;
   };
   /**
-   * Pattern-based rules that enforce task execution environment conformance.
-   * When a rule matches a task command, the orchestrator validates that the task's
-   * executorType and remoteTargetId explicitly declared in the plan YAML match the
-   * rule's requirements. Rules do NOT fill in omitted fields — they enforce conformance.
-   * First matching rule wins.
+   * Pattern-based command routing rules.
    *
-   * Each rule may specify:
-   *   - `pattern`: substring matched against the task command (like utilizationRules)
-   *   - `regex`: compiled with `new RegExp(regex)` and tested against the command
+   * Rule strategies:
+   * - `enforce` (default): require matching tasks to already declare the same executor/destination.
+   * - `route`: auto-apply executor/destination when omitted; reject explicit conflicts.
+   *
+   * First matching rule wins per strategy bucket:
+   * - first matching `route` rule is applied
+   * - then first matching `enforce` rule validates the effective routing
    *
    * If both `pattern` and `regex` are present, a rule matches if either matches.
-   * Tasks with commands matching a rule MUST explicitly declare the required executorType
-   * and remoteTargetId in the plan YAML, or plan loading will fail with a validation error.
    * Only applies to tasks that have a command (not prompt-only tasks).
    */
   executorRoutingRules?: Array<{
@@ -171,6 +168,8 @@ export interface InvokerConfig {
     remoteTargetId?: string;
     /** Required execution pool ID for matching commands. */
     poolId?: string;
+    /** Routing strategy. Defaults to "enforce". */
+    strategy?: 'enforce' | 'route';
   }>;
 }
 

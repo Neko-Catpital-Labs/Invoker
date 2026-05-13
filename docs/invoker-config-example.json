@@ -53,15 +53,15 @@
     }
   },
 
-  "heavyweightCommandRouting": {
-    "comment": "Auto-route heavyweight shell commands like pnpm test to an execution pool",
-    "poolId": "ssh-light",
-    "matchers": [
-      {
-        "regex": "\\bpnpm(?:\\s|$)"
-      }
-    ]
-  },
+  "executorRoutingRules": [
+    {
+      "comment": "Route pnpm commands to ssh-light pool",
+      "regex": "\\bpnpm(?:\\s|$)",
+      "executorType": "ssh",
+      "poolId": "ssh-light",
+      "strategy": "route"
+    }
+  ],
 
   "autoFixRetries": 3,
   "autoApproveAIFixes": true,

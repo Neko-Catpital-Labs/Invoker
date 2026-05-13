@@ -392,6 +392,12 @@ export interface ExecutorRoutingRule {
   remoteTargetId?: string;
   /** Required execution pool ID for matching commands. */
   poolId?: string;
+  /**
+   * Rule behavior:
+   * - enforce (default): task must already declare matching executor/destination
+   * - route: auto-apply rule executor/destination when omitted, and reject conflicts
+   */
+  strategy?: 'enforce' | 'route';
 }
 
 export interface CommandRoutingMatcher {
@@ -411,116 +417,146 @@ const DEFAULT_HEAVYWEIGHT_COMMAND_MATCHERS: CommandRoutingMatcher[] = [
   { regex: '\\bpnpm(?:\\s|$)' },
 ];
 
-function findMatchingCommandRoutingMatcher(
-  command: string,
-  matchers: CommandRoutingMatcher[],
-): CommandRoutingMatcher | undefined {
-  for (const matcher of matchers) {
-    const patternMatch = matcher.pattern !== undefined && command.includes(matcher.pattern);
-    const regexMatch = matcher.regex !== undefined && new RegExp(matcher.regex).test(command);
-    if (patternMatch || regexMatch) {
-      return matcher;
-    }
-  }
-  return undefined;
-}
-
-function resolveHeavyweightCommandRouting(
+function validateRoutingDestinationShape(
   taskId: string,
-  command: string | undefined,
-  planExecutorType: string | undefined,
-  planRemoteTargetId: string | undefined,
-  planPoolId: string | undefined,
-  policy: HeavyweightCommandRoutingPolicy | undefined,
-  availableRemoteTargetIds: Set<string>,
-  availablePoolIds: Set<string>,
-): { executorType?: string; remoteTargetId?: string; poolId?: string } | undefined {
-  if (!command || !policy || policy.enabled === false) {
-    return undefined;
-  }
-
-  const matchers = policy.matchers?.length ? policy.matchers : DEFAULT_HEAVYWEIGHT_COMMAND_MATCHERS;
-  const matched = findMatchingCommandRoutingMatcher(command, matchers);
-  if (!matched) {
-    return undefined;
-  }
-
-  const policyExecutorType = normalizeExecutorType(policy.executorType) ?? 'ssh';
-  if (policyExecutorType !== 'ssh') {
+  command: string,
+  sourceLabel: string,
+  remoteTargetId: string | undefined,
+  poolId: string | undefined,
+): void {
+  if (remoteTargetId && poolId) {
     throw new Error(
-      `Task "${taskId}" with command "${command}" matched heavyweight command routing, ` +
-      `but config executorType="${policyExecutorType}" is unsupported. Expected "ssh".`,
-    );
-  }
-
-  if (policy.remoteTargetId && policy.poolId) {
-    throw new Error(
-      `Task "${taskId}" with command "${command}" matched heavyweight command routing, ` +
+      `Task "${taskId}" with command "${command}" matched ${sourceLabel}, ` +
       'but config must set exactly one destination: remoteTargetId or poolId.',
     );
   }
-  if (!policy.remoteTargetId && !policy.poolId) {
-    throw new Error(
-      `Task "${taskId}" with command "${command}" matched heavyweight command routing, ` +
-      'but config is missing destination: set remoteTargetId or poolId.',
-    );
-  }
+}
 
-  if (policy.remoteTargetId) {
-    if (availableRemoteTargetIds.size > 0 && !availableRemoteTargetIds.has(policy.remoteTargetId)) {
+function validateRoutingDestinationAvailability(
+  taskId: string,
+  command: string,
+  sourceLabel: string,
+  remoteTargetId: string | undefined,
+  poolId: string | undefined,
+  availableRemoteTargetIds: Set<string>,
+  availablePoolIds: Set<string>,
+): void {
+  if (remoteTargetId) {
+    if (availableRemoteTargetIds.size > 0 && !availableRemoteTargetIds.has(remoteTargetId)) {
       throw new Error(
-        `Task "${taskId}" with command "${command}" matched heavyweight command routing, ` +
-        `but config remoteTargetId="${policy.remoteTargetId}" is not defined in remoteTargets.`,
+        `Task "${taskId}" with command "${command}" matched ${sourceLabel}, ` +
+        `but config remoteTargetId="${remoteTargetId}" is not defined in remoteTargets.`,
       );
     }
     if (availableRemoteTargetIds.size === 0) {
       throw new Error(
-        `Task "${taskId}" with command "${command}" matched heavyweight command routing, ` +
+        `Task "${taskId}" with command "${command}" matched ${sourceLabel}, ` +
         'but no remoteTargets are configured.',
       );
     }
   }
 
-  if (policy.poolId) {
-    if (availablePoolIds.size > 0 && !availablePoolIds.has(policy.poolId)) {
+  if (poolId) {
+    if (availablePoolIds.size > 0 && !availablePoolIds.has(poolId)) {
       throw new Error(
-        `Task "${taskId}" with command "${command}" matched heavyweight command routing, ` +
-        `but config poolId="${policy.poolId}" is not defined in executionPools.`,
+        `Task "${taskId}" with command "${command}" matched ${sourceLabel}, ` +
+        `but config poolId="${poolId}" is not defined in executionPools.`,
       );
     }
     if (availablePoolIds.size === 0) {
       throw new Error(
-        `Task "${taskId}" with command "${command}" matched heavyweight command routing, ` +
+        `Task "${taskId}" with command "${command}" matched ${sourceLabel}, ` +
         'but no executionPools are configured.',
       );
     }
   }
+}
 
-  const normalizedPlanType = normalizeExecutorType(planExecutorType) ?? 'worktree';
-  if (planExecutorType !== undefined && normalizedPlanType !== policyExecutorType) {
+function buildHeavyweightRoutingRules(
+  taskId: string,
+  policy: HeavyweightCommandRoutingPolicy | undefined,
+): ExecutorRoutingRule[] {
+  if (!policy || policy.enabled === false) {
+    return [];
+  }
+
+  const matchers = policy.matchers?.length ? policy.matchers : DEFAULT_HEAVYWEIGHT_COMMAND_MATCHERS;
+  if (policy.remoteTargetId && policy.poolId) {
     throw new Error(
-      `Task "${taskId}" with command "${command}" matched heavyweight command routing and must use ` +
-      `executorType="${policyExecutorType}", but plan declares executorType="${normalizedPlanType}"`,
+      `Task "${taskId}" matched heavyweight command routing, ` +
+      'but config must set exactly one destination: remoteTargetId or poolId.',
+    );
+  }
+  if (!policy.remoteTargetId && !policy.poolId) {
+    throw new Error(
+      `Task "${taskId}" matched heavyweight command routing, ` +
+      'but config is missing destination: set remoteTargetId or poolId.',
     );
   }
 
-  if (policy.remoteTargetId && planRemoteTargetId !== undefined && planRemoteTargetId !== policy.remoteTargetId) {
+  const executorType = normalizeExecutorType(policy.executorType) ?? 'ssh';
+  if (executorType !== 'ssh') {
     throw new Error(
-      `Task "${taskId}" with command "${command}" matched heavyweight command routing and must use ` +
-      `remoteTargetId="${policy.remoteTargetId}", but plan declares remoteTargetId="${planRemoteTargetId}"`,
-    );
-  }
-  if (policy.poolId && planPoolId !== undefined && planPoolId !== policy.poolId) {
-    throw new Error(
-      `Task "${taskId}" with command "${command}" matched heavyweight command routing and must use ` +
-      `poolId="${policy.poolId}", but plan declares poolId="${planPoolId}"`,
+      `Task "${taskId}" matched heavyweight command routing, ` +
+      `but config executorType="${executorType}" is unsupported. Expected "ssh".`,
     );
   }
 
-  return {
-    executorType: policyExecutorType,
+  return matchers.map((matcher) => ({
+    pattern: matcher.pattern,
+    regex: matcher.regex,
+    executorType,
     remoteTargetId: policy.remoteTargetId,
     poolId: policy.poolId,
+    strategy: 'route',
+  }));
+}
+
+function applyRoutingRule(
+  taskId: string,
+  command: string,
+  planExecutorType: string | undefined,
+  planRemoteTargetId: string | undefined,
+  planPoolId: string | undefined,
+  rule: ExecutorRoutingRule,
+  sourceLabel: string,
+  availableRemoteTargetIds: Set<string>,
+  availablePoolIds: Set<string>,
+): { executorType?: string; remoteTargetId?: string; poolId?: string } | undefined {
+  const normalizedRuleType = normalizeExecutorType(rule.executorType) ?? rule.executorType;
+  validateRoutingDestinationShape(taskId, command, sourceLabel, rule.remoteTargetId, rule.poolId);
+  validateRoutingDestinationAvailability(
+    taskId,
+    command,
+    sourceLabel,
+    rule.remoteTargetId,
+    rule.poolId,
+    availableRemoteTargetIds,
+    availablePoolIds,
+  );
+  const normalizedPlanType = normalizeExecutorType(planExecutorType) ?? 'worktree';
+  if (planExecutorType !== undefined && normalizedPlanType !== normalizedRuleType) {
+    throw new Error(
+      `Task "${taskId}" with command "${command}" matched ${sourceLabel} and must use ` +
+      `executorType="${normalizedRuleType}", but plan declares executorType="${normalizedPlanType}"`,
+    );
+  }
+  if (rule.remoteTargetId && planRemoteTargetId !== undefined && planRemoteTargetId !== rule.remoteTargetId) {
+    throw new Error(
+      `Task "${taskId}" with command "${command}" matched ${sourceLabel} and must use ` +
+      `remoteTargetId="${rule.remoteTargetId}", but plan declares remoteTargetId="${planRemoteTargetId}"`,
+    );
+  }
+  if (rule.poolId && planPoolId !== undefined && planPoolId !== rule.poolId) {
+    throw new Error(
+      `Task "${taskId}" with command "${command}" matched ${sourceLabel} and must use ` +
+      `poolId="${rule.poolId}", but plan declares poolId="${planPoolId}"`,
+    );
+  }
+  return {
+    executorType: normalizedRuleType,
+    remoteTargetId: rule.remoteTargetId ?? planRemoteTargetId,
+    poolId: rule.poolId ?? planPoolId,
   };
 }
 
@@ -599,6 +635,64 @@ export function assertExecutorRoutingConforms(
   }
 }
 
+function resolveExecutorRouting(
+  taskId: string,
+  command: string | undefined,
+  planExecutorType: string | undefined,
+  planRemoteTargetId: string | undefined,
+  planPoolId: string | undefined,
+  rules: ExecutorRoutingRule[],
+  availableRemoteTargetIds: Set<string>,
+  availablePoolIds: Set<string>,
+): { executorType?: string; remoteTargetId?: string; poolId?: string } {
+  if (!command || rules.length === 0) {
+    return {
+      executorType: planExecutorType,
+      remoteTargetId: planRemoteTargetId,
+      poolId: planPoolId,
+    };
+  }
+
+  let effectiveExecutorType = planExecutorType;
+  let effectiveRemoteTargetId = planRemoteTargetId;
+  let effectivePoolId = planPoolId;
+
+  const routingRules = rules.filter((rule) => (rule.strategy ?? 'enforce') === 'route');
+  const matchingRoutingRule = findMatchingExecutorRoutingRule(command, routingRules);
+  if (matchingRoutingRule) {
+    const routed = applyRoutingRule(
+      taskId,
+      command,
+      effectiveExecutorType,
+      effectiveRemoteTargetId,
+      effectivePoolId,
+      matchingRoutingRule,
+      'routing rule',
+      availableRemoteTargetIds,
+      availablePoolIds,
+    );
+    effectiveExecutorType = routed?.executorType ?? effectiveExecutorType;
+    effectiveRemoteTargetId = routed?.remoteTargetId ?? effectiveRemoteTargetId;
+    effectivePoolId = routed?.poolId ?? effectivePoolId;
+  }
+
+  const enforcementRules = rules.filter((rule) => (rule.strategy ?? 'enforce') === 'enforce');
+  assertExecutorRoutingConforms(
+    taskId,
+    command,
+    effectiveExecutorType,
+    effectiveRemoteTargetId,
+    effectivePoolId,
+    enforcementRules,
+  );
+
+  return {
+    executorType: effectiveExecutorType,
+    remoteTargetId: effectiveRemoteTargetId,
+    poolId: effectivePoolId,
+  };
+}
+
 /**
  * Adapt an OrchestratorPersistence into the TaskRepository port.
  * Only the three write methods used by the orchestrator are bridged.
@@ -653,7 +747,10 @@ export interface OrchestratorConfig {
    * specified in the plan.
    */
   executorRoutingRules?: ExecutorRoutingRule[];
-  /** Config-owned routing for heavyweight commands (for example `pnpm ...`). */
+  /**
+   * Deprecated compatibility alias for config-owned heavyweight command routing.
+   * Internally translated into executorRoutingRules with strategy="route".
+   */
   heavyweightCommandRouting?: HeavyweightCommandRoutingPolicy;
   /** Valid SSH remote target IDs available at plan submission time. */
   availableRemoteTargetIds?: string[];
@@ -683,7 +780,6 @@ export class Orchestrator {
   private readonly taskRepository: TaskRepository;
   private readonly maxConcurrency: number;
   private readonly executorRoutingRules: ExecutorRoutingRule[];
-  private readonly heavyweightCommandRouting?: HeavyweightCommandRoutingPolicy;
   private readonly availableRemoteTargetIds: Set<string>;
   private readonly availablePoolIds: Set<string>;
   private readonly defaultAutoFixRetries: number;
@@ -745,8 +841,10 @@ export class Orchestrator {
     this.messageBus = config.messageBus;
     this.logger = config.logger ?? noopLogger;
     this.taskRepository = config.taskRepository ?? taskRepositoryFromPersistence(config.persistence);
-    this.executorRoutingRules = config.executorRoutingRules ?? [];
-    this.heavyweightCommandRouting = config.heavyweightCommandRouting;
+    this.executorRoutingRules = [
+      ...(config.executorRoutingRules ?? []),
+      ...buildHeavyweightRoutingRules('config', config.heavyweightCommandRouting),
+    ];
     this.availableRemoteTargetIds = new Set(config.availableRemoteTargetIds ?? []);
     this.availablePoolIds = new Set(config.availablePoolIds ?? []);
     this.defaultAutoFixRetries = Math.min(Math.max(0, Math.floor(config.defaultAutoFixRetries ?? 0)), 10);
@@ -1291,29 +1389,19 @@ export class Orchestrator {
 
     const validatedTasks: TaskState[] = [];
     for (const taskDef of plan.tasks) {
-      const resolvedHeavyweightRouting = resolveHeavyweightCommandRouting(
+      const resolvedRouting = resolveExecutorRouting(
         taskDef.id,
         taskDef.command,
         taskDef.executorType,
         taskDef.remoteTargetId,
         taskDef.poolId,
-        this.heavyweightCommandRouting,
+        this.executorRoutingRules,
         this.availableRemoteTargetIds,
         this.availablePoolIds,
       );
-      const effectiveExecutorType = resolvedHeavyweightRouting?.executorType ?? taskDef.executorType;
-      const effectiveRemoteTargetId = resolvedHeavyweightRouting?.remoteTargetId ?? taskDef.remoteTargetId;
-      const effectivePoolId = resolvedHeavyweightRouting?.poolId ?? taskDef.poolId;
-
-      // Validate executor routing conformance for tasks with commands
-      assertExecutorRoutingConforms(
-        taskDef.id,
-        taskDef.command,
-        effectiveExecutorType,
-        effectiveRemoteTargetId,
-        effectivePoolId,
-        this.executorRoutingRules,
-      );
+      const effectiveExecutorType = resolvedRouting.executorType;
+      const effectiveRemoteTargetId = resolvedRouting.remoteTargetId;
+      const effectivePoolId = resolvedRouting.poolId;
 
       const scopedId = localToScoped.get(taskDef.id)!;
       const scopedDeps = (taskDef.dependencies ?? []).map((dep) => {

@@ -70,6 +70,31 @@ If you want to use a repo-specific config file, launch Invoker with `INVOKER_REP
 | `selectionStrategy` | `"roundRobin"` \| `"leastLoaded"` | no | Member selection strategy (default: `roundRobin`) |
 | `maxConcurrentTasksPerMember` | number | no | Fallback per-member cap when target-level cap is not set |
 
+### Routing to pools from config
+
+Use `executorRoutingRules` with `strategy: "route"` to auto-assign matching commands to an SSH pool.
+
+```json
+{
+  "executionPools": {
+    "ssh-light": {
+      "type": "ssh",
+      "members": ["staging-server", "staging-server-b"],
+      "selectionStrategy": "roundRobin",
+      "maxConcurrentTasksPerMember": 1
+    }
+  },
+  "executorRoutingRules": [
+    {
+      "regex": "\\bpnpm(?:\\s|$)",
+      "executorType": "ssh",
+      "poolId": "ssh-light",
+      "strategy": "route"
+    }
+  ]
+}
+```
+
 ## Multiple SSH Targets
 
 You can configure as many remote targets as you want under `remoteTargets`, then group them into named pools under `executionPools`.
