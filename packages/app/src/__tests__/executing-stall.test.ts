@@ -10,7 +10,7 @@ describe('evaluateExecutingStall', () => {
     const result = evaluateExecutingStall({
       now,
       phase: 'executing',
-      executorType: 'ssh',
+      runnerKind: 'ssh',
       executingStartedAt: startedAt,
       executorHeartbeatAt: new Date(now.getTime() - 10_000),
       remoteHeartbeatAt: new Date(now.getTime() - 4 * 60_000),
@@ -25,7 +25,7 @@ describe('evaluateExecutingStall', () => {
     const result = evaluateExecutingStall({
       now,
       phase: 'executing',
-      executorType: 'ssh',
+      runnerKind: 'ssh',
       executingStartedAt: startedAt,
       executorHeartbeatAt: new Date(now.getTime() - 4 * 60_000),
       remoteHeartbeatAt: new Date(now.getTime() - 20_000),
@@ -40,7 +40,7 @@ describe('evaluateExecutingStall', () => {
     const result = evaluateExecutingStall({
       now,
       phase: 'executing',
-      executorType: 'worktree',
+      runnerKind: 'worktree',
       executingStartedAt: startedAt,
       executorHeartbeatAt: new Date(now.getTime() - 4 * 60_000),
       remoteHeartbeatAt: new Date(now.getTime() - 20_000),
@@ -55,7 +55,7 @@ describe('evaluateExecutingStall', () => {
     const result = evaluateExecutingStall({
       now,
       phase: 'executing',
-      executorType: 'ssh',
+      runnerKind: 'ssh',
       executingStartedAt: startedAt,
       remoteHeartbeatAt: new Date(now.getTime() - 5_000),
       leaseExpiresAt: new Date(now.getTime() - 1_000),

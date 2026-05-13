@@ -786,17 +786,17 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('t1')!.config.requiresManualApproval).toBe(true);
     });
 
-    it('passes executorType when specified', () => {
+    it('passes runnerKind when specified', () => {
       orchestrator.loadPlan({
-        name: 'executor-type-test',
+        name: 'runner-kind-test',
         tasks: [
-          { id: 't1', description: 'Worktree task', executorType: 'worktree' },
+          { id: 't1', description: 'Worktree task' },
           { id: 't2', description: 'Default task' },
         ],
       });
 
-      expect(orchestrator.getTask('t1')!.config.executorType).toBe('worktree');
-      expect(orchestrator.getTask('t2')!.config.executorType).toBe('worktree');
+      expect(orchestrator.getTask('t1')!.config.runnerKind).toBe('worktree');
+      expect(orchestrator.getTask('t2')!.config.runnerKind).toBe('worktree');
     });
 
     it('does not project auto-fix onto task config from plans', () => {
@@ -916,44 +916,45 @@ describe('Orchestrator', () => {
     // ── executor routing rules ───────────────────────────────
 
     describe('executor routing rules', () => {
-      it('validates matching pattern rule: task must declare required executorType and poolId', () => {
+      it('validates matching pattern rule: task must declare required runnerKind and poolId', () => {
         const routedOrchestrator = new Orchestrator({
           persistence: new InMemoryPersistence(),
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
           executorRoutingRules: [
-            { pattern: 'deploy', executorType: 'ssh', poolId: 'prod-pool' },
+            { pattern: 'deploy', poolId: 'prod-pool' },
           ],
           availablePoolIds: ['prod-pool'],
         });
 
         routedOrchestrator.loadPlan({
           name: 'routing-test',
-          tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod', executorType: 'ssh', poolId: 'prod-pool' }],
+          tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod', poolId: 'prod-pool' }],
         });
 
         const task = routedOrchestrator.getTask('t1');
-        expect(task!.config.executorType).toBe('ssh');
+        expect(task!.config.runnerKind).toBe('ssh');
         expect(task!.config.poolId).toBe('prod-pool');
       });
 
-      it('throws when task executorType does not match routing rule', () => {
+      it('ignores legacy task runnerKind when pool routing matches', () => {
         const routedOrchestrator = new Orchestrator({
           persistence: new InMemoryPersistence(),
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
           executorRoutingRules: [
-            { pattern: 'deploy', executorType: 'ssh', poolId: 'prod-pool' },
+            { pattern: 'deploy', poolId: 'prod-pool' },
           ],
           availablePoolIds: ['prod-pool'],
         });
 
-        expect(() => {
-          routedOrchestrator.loadPlan({
-            name: 'mismatch-test',
-            tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod', executorType: 'worktree', poolId: 'prod-pool' }],
-          });
-        }).toThrow('requires executorType="ssh"');
+        routedOrchestrator.loadPlan({
+          name: 'mismatch-test',
+          tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod', runnerKind: 'worktree', poolId: 'prod-pool' } as any],
+        });
+        const task = routedOrchestrator.getTask('t1');
+        expect(task!.config.runnerKind).toBe('ssh');
+        expect(task!.config.poolId).toBe('prod-pool');
       });
 
       it('prompt-only task (no command) ignores routing rules', () => {
@@ -962,7 +963,7 @@ describe('Orchestrator', () => {
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
           executorRoutingRules: [
-            { pattern: 'deploy', executorType: 'ssh', poolId: 'prod-pool' },
+            { pattern: 'deploy', poolId: 'prod-pool' },
           ],
           availablePoolIds: ['prod-pool'],
         });
@@ -973,7 +974,7 @@ describe('Orchestrator', () => {
         });
 
         const task = routedOrchestrator.getTask('t1');
-        expect(task!.config.executorType).toBe('worktree');
+        expect(task!.config.runnerKind).toBe('worktree');
         expect(task!.config.poolId).toBeUndefined();
       });
 
@@ -983,18 +984,18 @@ describe('Orchestrator', () => {
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
           executorRoutingRules: [
-            { regex: '^pnpm test', executorType: 'ssh', poolId: 'ci-pool' },
+            { regex: '^pnpm test', poolId: 'ci-pool' },
           ],
           availablePoolIds: ['ci-pool'],
         });
 
         routedOrchestrator.loadPlan({
           name: 'test-routing',
-          tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test', executorType: 'ssh', poolId: 'ci-pool' }],
+          tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test', poolId: 'ci-pool' }],
         });
 
         const task = routedOrchestrator.getTask('t1');
-        expect(task!.config.executorType).toBe('ssh');
+        expect(task!.config.runnerKind).toBe('ssh');
         expect(task!.config.poolId).toBe('ci-pool');
       });
 
@@ -1004,38 +1005,39 @@ describe('Orchestrator', () => {
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
           executorRoutingRules: [
-            { pattern: 'pnpm test', executorType: 'ssh', poolId: 'ci-pool' },
+            { pattern: 'pnpm test', poolId: 'ci-pool' },
           ],
           availablePoolIds: ['ci-pool'],
         });
 
         routedOrchestrator.loadPlan({
           name: 'test-routing-pattern',
-          tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test --coverage', executorType: 'ssh', poolId: 'ci-pool' }],
+          tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test --coverage', poolId: 'ci-pool' }],
         });
 
         const task = routedOrchestrator.getTask('t1');
-        expect(task!.config.executorType).toBe('ssh');
+        expect(task!.config.runnerKind).toBe('ssh');
         expect(task!.config.poolId).toBe('ci-pool');
       });
 
-      it('throws when task executorType does not match regex rule', () => {
+      it('ignores legacy task runnerKind when regex pool rule matches', () => {
         const routedOrchestrator = new Orchestrator({
           persistence: new InMemoryPersistence(),
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
           executorRoutingRules: [
-            { regex: '^pnpm test', executorType: 'ssh', poolId: 'ci-pool' },
+            { regex: '^pnpm test', poolId: 'ci-pool' },
           ],
           availablePoolIds: ['ci-pool'],
         });
 
-        expect(() => {
-          routedOrchestrator.loadPlan({
-            name: 'test-mismatch',
-            tasks: [{ id: 't1', description: 'Run tests locally', command: 'pnpm test', executorType: 'worktree', poolId: 'ci-pool' }],
-          });
-        }).toThrow('requires executorType="ssh"');
+        routedOrchestrator.loadPlan({
+          name: 'test-mismatch',
+          tasks: [{ id: 't1', description: 'Run tests locally', command: 'pnpm test', runnerKind: 'worktree', poolId: 'ci-pool' } as any],
+        });
+        const task = routedOrchestrator.getTask('t1');
+        expect(task!.config.runnerKind).toBe('ssh');
+        expect(task!.config.poolId).toBe('ci-pool');
       });
 
       it('throws when task poolId does not match routing rule', () => {
@@ -1044,7 +1046,7 @@ describe('Orchestrator', () => {
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
           executorRoutingRules: [
-            { pattern: 'pnpm test', executorType: 'ssh', poolId: 'ci-pool' },
+            { pattern: 'pnpm test', poolId: 'ci-pool' },
           ],
           availablePoolIds: ['ci-pool'],
         });
@@ -1052,28 +1054,29 @@ describe('Orchestrator', () => {
         expect(() => {
           routedOrchestrator.loadPlan({
             name: 'remote-mismatch',
-            tasks: [{ id: 't1', description: 'Run tests on staging', command: 'pnpm test', executorType: 'ssh', poolId: 'staging-pool' }],
+            tasks: [{ id: 't1', description: 'Run tests on staging', command: 'pnpm test', poolId: 'staging-pool' }],
           });
         }).toThrow('requires poolId="ci-pool"');
       });
 
-      it('throws when task executorType is missing for matching rule', () => {
+      it('accepts matching pool rule without a task runner kind', () => {
         const routedOrchestrator = new Orchestrator({
           persistence: new InMemoryPersistence(),
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
           executorRoutingRules: [
-            { pattern: 'deploy', executorType: 'ssh', poolId: 'prod-pool' },
+            { pattern: 'deploy', poolId: 'prod-pool' },
           ],
           availablePoolIds: ['prod-pool'],
         });
 
-        expect(() => {
-          routedOrchestrator.loadPlan({
-            name: 'missing-executorType',
-            tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod', poolId: 'prod-pool' }],
-          });
-        }).toThrow('requires executorType="ssh"');
+        routedOrchestrator.loadPlan({
+          name: 'missing-runnerKind',
+          tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod', poolId: 'prod-pool' }],
+        });
+        const task = routedOrchestrator.getTask('t1');
+        expect(task!.config.runnerKind).toBe('ssh');
+        expect(task!.config.poolId).toBe('prod-pool');
       });
 
       it('throws when task poolId is missing for matching rule', () => {
@@ -1082,7 +1085,7 @@ describe('Orchestrator', () => {
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
           executorRoutingRules: [
-            { pattern: 'deploy', executorType: 'ssh', poolId: 'prod-pool' },
+            { pattern: 'deploy', poolId: 'prod-pool' },
           ],
           availablePoolIds: ['prod-pool'],
         });
@@ -1090,7 +1093,7 @@ describe('Orchestrator', () => {
         expect(() => {
           routedOrchestrator.loadPlan({
             name: 'missing-poolId',
-            tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod', executorType: 'ssh' }],
+            tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod' }],
           });
         }).toThrow('requires poolId="prod-pool"');
       });
@@ -1101,18 +1104,18 @@ describe('Orchestrator', () => {
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
           executorRoutingRules: [
-            { pattern: 'pnpm test', executorType: 'ssh', poolId: 'ssh-light' },
+            { pattern: 'pnpm test', poolId: 'ssh-light' },
           ],
           availablePoolIds: ['ssh-light'],
         });
 
         routedOrchestrator.loadPlan({
           name: 'pool-routing-test',
-          tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test', executorType: 'ssh', poolId: 'ssh-light' }],
+          tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test', poolId: 'ssh-light' }],
         });
 
         const task = routedOrchestrator.getTask('t1');
-        expect(task!.config.executorType).toBe('ssh');
+        expect(task!.config.runnerKind).toBe('ssh');
         expect(task!.config.poolId).toBe('ssh-light');
       });
 
@@ -1122,7 +1125,7 @@ describe('Orchestrator', () => {
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
           executorRoutingRules: [
-            { pattern: 'pnpm test', executorType: 'ssh', poolId: 'ssh-light' },
+            { pattern: 'pnpm test', poolId: 'ssh-light' },
           ],
           availablePoolIds: ['ssh-light'],
         });
@@ -1130,30 +1133,30 @@ describe('Orchestrator', () => {
         expect(() => {
           routedOrchestrator.loadPlan({
             name: 'missing-pool',
-            tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test', executorType: 'ssh' }],
+            tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test' }],
           });
         }).toThrow('requires poolId="ssh-light"');
       });
 
-      it('merge node always has executorType merge regardless of routing rules', () => {
+      it('merge node always has runnerKind merge regardless of routing rules', () => {
         const routedOrchestrator = new Orchestrator({
           persistence: new InMemoryPersistence(),
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
           executorRoutingRules: [
-            { pattern: 'deploy', executorType: 'ssh', poolId: 'prod-pool' },
+            { pattern: 'deploy', poolId: 'prod-pool' },
           ],
           availablePoolIds: ['prod-pool'],
         });
 
         routedOrchestrator.loadPlan({
           name: 'merge-routing-test',
-          tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod', executorType: 'ssh', poolId: 'prod-pool' }],
+          tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod', poolId: 'prod-pool' }],
         });
 
         const mergeNode = routedOrchestrator.getAllTasks().find((t) => t.config.isMergeNode);
         expect(mergeNode).toBeDefined();
-        expect(mergeNode!.config.executorType).toBe('merge');
+        expect(mergeNode!.config.runnerKind).toBe('merge');
       });
 
       it('auto-routes pnpm test to pool with route strategy when executor is omitted', () => {
@@ -1162,7 +1165,7 @@ describe('Orchestrator', () => {
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
           executorRoutingRules: [
-            { regex: '\\bpnpm(?:\\s|$)', executorType: 'ssh', poolId: 'ci-pool', strategy: 'route' },
+            { regex: '\\bpnpm(?:\\s|$)', poolId: 'ci-pool', strategy: 'route' },
           ],
           availablePoolIds: ['ci-pool'],
         });
@@ -1173,7 +1176,7 @@ describe('Orchestrator', () => {
         });
 
         const task = routedOrchestrator.getTask('t1');
-        expect(task!.config.executorType).toBe('ssh');
+        expect(task!.config.runnerKind).toBe('ssh');
         expect(task!.config.poolId).toBe('ci-pool');
       });
 
@@ -1183,7 +1186,7 @@ describe('Orchestrator', () => {
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
           executorRoutingRules: [
-            { regex: '\\bpnpm(?:\\s|$)', executorType: 'ssh', poolId: 'ssh-light', strategy: 'route' },
+            { regex: '\\bpnpm(?:\\s|$)', poolId: 'ssh-light', strategy: 'route' },
           ],
           availablePoolIds: ['ssh-light'],
         });
@@ -1194,27 +1197,28 @@ describe('Orchestrator', () => {
         });
 
         const task = routedOrchestrator.getTask('t1');
-        expect(task!.config.executorType).toBe('ssh');
+        expect(task!.config.runnerKind).toBe('ssh');
         expect(task!.config.poolId).toBe('ssh-light');
       });
 
-      it('throws when route strategy command explicitly declares conflicting executor', () => {
+      it('routes matching command without an explicit runner kind', () => {
         const routedOrchestrator = new Orchestrator({
           persistence: new InMemoryPersistence(),
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
           executorRoutingRules: [
-            { regex: '\\bpnpm(?:\\s|$)', executorType: 'ssh', poolId: 'ci-pool', strategy: 'route' },
+            { regex: '\\bpnpm(?:\\s|$)', poolId: 'ci-pool', strategy: 'route' },
           ],
           availablePoolIds: ['ci-pool'],
         });
 
-        expect(() => {
-          routedOrchestrator.loadPlan({
-            name: 'route-strategy-conflict-test',
-            tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test', executorType: 'worktree' }],
-          });
-        }).toThrow('matched routing rule');
+        routedOrchestrator.loadPlan({
+          name: 'route-strategy-conflict-test',
+          tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test' }],
+        });
+        const task = routedOrchestrator.getTask('t1');
+        expect(task!.config.runnerKind).toBe('ssh');
+        expect(task!.config.poolId).toBe('ci-pool');
       });
 
       it('throws when route strategy target pool is not configured', () => {
@@ -1223,7 +1227,7 @@ describe('Orchestrator', () => {
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
           executorRoutingRules: [
-            { regex: '\\bpnpm(?:\\s|$)', executorType: 'ssh', poolId: 'ssh-light', strategy: 'route' },
+            { regex: '\\bpnpm(?:\\s|$)', poolId: 'ssh-light', strategy: 'route' },
           ],
           availablePoolIds: [],
         });
@@ -1242,7 +1246,7 @@ describe('Orchestrator', () => {
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
           executorRoutingRules: [
-            { regex: '\\bpnpm(?:\\s|$)', executorType: 'ssh', poolId: 'ci-pool', strategy: 'route' },
+            { regex: '\\bpnpm(?:\\s|$)', poolId: 'ci-pool', strategy: 'route' },
           ],
           availablePoolIds: ['ci-pool'],
         });
@@ -1253,7 +1257,7 @@ describe('Orchestrator', () => {
         });
 
         const task = routedOrchestrator.getTask('t1');
-        expect(task!.config.executorType).toBe('worktree');
+        expect(task!.config.runnerKind).toBe('worktree');
         expect(task!.config.poolId).toBeUndefined();
       });
 
@@ -1274,7 +1278,7 @@ describe('Orchestrator', () => {
         });
 
         const task = routedOrchestrator.getTask('t1');
-        expect(task!.config.executorType).toBe('ssh');
+        expect(task!.config.runnerKind).toBe('ssh');
         expect(task!.config.poolId).toBe('ssh-light');
       });
     });
@@ -1300,14 +1304,15 @@ describe('Orchestrator', () => {
         expect(orchestrator.getAllTasks()).toHaveLength(0);
       });
 
-      it('rolls back when routing rule fails on second task', () => {
+      it('rolls back when a matching routing rule task omits poolId', () => {
         const routedOrchestrator = new Orchestrator({
           persistence,
           messageBus: bus,
           maxConcurrency: 3,
           executorRoutingRules: [
-            { pattern: 'deploy', executorType: 'ssh', remoteTargetId: 'prod-server' },
+            { pattern: 'deploy', poolId: 'ssh-light' },
           ],
+          availablePoolIds: ['ssh-light'],
         });
 
         expect(() =>
@@ -1315,10 +1320,10 @@ describe('Orchestrator', () => {
             name: 'routing-fail-plan',
             tasks: [
               { id: 'ok', description: 'Valid task', command: 'echo hi' },
-              { id: 'bad', description: 'Misrouted', command: 'deploy prod', executorType: 'worktree' },
+              { id: 'bad', description: 'Misrouted', command: 'deploy prod' },
             ],
           }),
-        ).toThrow('requires executorType');
+        ).toThrow('requires poolId');
 
         expect(persistence.tasks.size).toBe(0);
         expect(persistence.workflows.size).toBe(0);
@@ -1346,21 +1351,16 @@ describe('Orchestrator', () => {
         expect(publishedDeltas.length).toBe(0);
       });
 
-      it('rolls back when unknown executorType appears on second task', () => {
-        expect(() =>
-          orchestrator.loadPlan({
-            name: 'unknown-type-plan',
-            tasks: [
-              { id: 'ok', description: 'Valid task' },
-              { id: 'bad', description: 'Kubernetes task', executorType: 'kubernetes' },
-            ],
-          }),
-        ).toThrow('Unknown executorType "kubernetes"');
+      it('ignores legacy runnerKind fields on direct plan definitions', () => {
+        orchestrator.loadPlan({
+          name: 'unknown-type-plan',
+          tasks: [
+            { id: 'ok', description: 'Valid task' },
+            { id: 'bad', description: 'Kubernetes task', runnerKind: 'kubernetes' } as any,
+          ],
+        });
 
-        expect(persistence.tasks.size).toBe(0);
-        expect(persistence.workflows.size).toBe(0);
-        expect(publishedDeltas.length).toBe(0);
-        expect(orchestrator.getAllTasks()).toHaveLength(0);
+        expect(orchestrator.getTask('bad')!.config.runnerKind).toBe('worktree');
       });
 
       it('recovers: failed plan followed by valid plan loads correctly', () => {
@@ -1901,7 +1901,7 @@ describe('Orchestrator', () => {
 
       publishedDeltas = [];
       orchestrator.setTaskAwaitingApproval('a1', {
-        config: { executorType: 'worktree', summary: 'test summary' },
+        config: { runnerKind: 'worktree', summary: 'test summary' },
         execution: {
           branch: 'plan/feature',
           workspacePath: '/tmp',
@@ -1913,7 +1913,7 @@ describe('Orchestrator', () => {
 
       const task = orchestrator.getTask('a1')!;
       expect(task.status).toBe('awaiting_approval');
-      expect(task.config.executorType).toBe('worktree');
+      expect(task.config.runnerKind).toBe('worktree');
       expect(task.config.summary).toBe('test summary');
       expect(task.execution.branch).toBe('plan/feature');
       expect(task.execution.workspacePath).toBe('/tmp');
@@ -1926,7 +1926,7 @@ describe('Orchestrator', () => {
         (d) => d.type === 'updated' && d.taskId === sid(orchestrator, 0, 'a1'),
       );
       expect(delta).toBeDefined();
-      expect(delta!.type === 'updated' && delta!.changes.config?.executorType).toBe('worktree');
+      expect(delta!.type === 'updated' && delta!.changes.config?.runnerKind).toBe('worktree');
       expect(delta!.type === 'updated' && delta!.changes.execution?.reviewUrl).toBe('https://github.com/owner/repo/pull/1');
     });
 
@@ -3271,21 +3271,21 @@ describe('Orchestrator', () => {
   });
 
   describe('editTaskType', () => {
-    it('changes executorType and restarts the task', () => {
+    it('changes runnerKind and restarts the task', () => {
       orchestrator.loadPlan({
         name: 'edit-type-test',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', executorType: 'docker' }],
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello' , dockerImage: 'node:20' }],
       });
       orchestrator.startExecution();
 
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
       );
-      expect(orchestrator.getTask('t1')?.config.executorType).toBe('docker');
+      expect(orchestrator.getTask('t1')?.config.runnerKind).toBe('docker');
 
       const started = orchestrator.editTaskType('t1', 'worktree');
       const task = orchestrator.getTask('t1');
-      expect(task?.config.executorType).toBe('worktree');
+      expect(task?.config.runnerKind).toBe('worktree');
       expect(task?.status).toBe('running');
       expect(started).toHaveLength(1);
     });
@@ -3294,7 +3294,7 @@ describe('Orchestrator', () => {
       orchestrator.loadPlan({
         name: 'edit-type-no-fork',
         tasks: [
-          { id: 'parent', description: 'Parent', command: 'echo parent', executorType: 'docker' },
+          { id: 'parent', description: 'Parent', command: 'echo parent' , dockerImage: 'node:20' },
           { id: 'child', description: 'Child', command: 'echo child', dependencies: ['parent'] },
         ],
       });
@@ -3318,7 +3318,7 @@ describe('Orchestrator', () => {
     it('editing an ACTIVE (running) task does NOT throw and cancels first, then restarts (retry-class)', () => {
       orchestrator.loadPlan({
         name: 'edit-type-running',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100', executorType: 'docker' }],
+        tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100' , dockerImage: 'node:20' }],
       });
       orchestrator.startExecution();
       const taskId = sid(orchestrator, 0, 't1');
@@ -3338,7 +3338,7 @@ describe('Orchestrator', () => {
       expect(recreateSpy).not.toHaveBeenCalled();
 
       const task = orchestrator.getTask(taskId);
-      expect(task?.config.executorType).toBe('worktree');
+      expect(task?.config.runnerKind).toBe('worktree');
       // Single-task plan with no deps → restart auto-starts the task.
       expect(task?.status).toBe('running');
       expect(started).toHaveLength(1);
@@ -3352,7 +3352,7 @@ describe('Orchestrator', () => {
     it('editing an INACTIVE (failed) task skips cancel but still routes through retryTask', () => {
       orchestrator.loadPlan({
         name: 'edit-type-inactive-test',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo old', executorType: 'docker' }],
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo old' , dockerImage: 'node:20' }],
       });
       orchestrator.startExecution();
       orchestrator.handleWorkerResponse(
@@ -3378,7 +3378,7 @@ describe('Orchestrator', () => {
     it('preserves valid lineage (branch / workspacePath) — retry-class does NOT discard substrate lineage', () => {
       orchestrator.loadPlan({
         name: 'edit-type-lineage-test',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo old', executorType: 'docker' }],
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo old' , dockerImage: 'node:20' }],
       });
       orchestrator.startExecution();
       const taskId = sid(orchestrator, 0, 't1');
@@ -3411,10 +3411,10 @@ describe('Orchestrator', () => {
       expect(task.execution.exitCode).toBeUndefined();
     });
 
-    it('bumps execution generation by exactly one per executor-type edit', () => {
+    it('bumps execution generation by exactly one per runner-kind edit', () => {
       orchestrator.loadPlan({
         name: 'edit-type-gen-test',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo old', executorType: 'docker' }],
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo old' , dockerImage: 'node:20' }],
       });
       orchestrator.startExecution();
       orchestrator.handleWorkerResponse(
@@ -3430,10 +3430,10 @@ describe('Orchestrator', () => {
       expect(after).toBe(before + 1);
     });
 
-    it('persists the updated executorType', () => {
+    it('persists the updated runnerKind', () => {
       orchestrator.loadPlan({
         name: 'edit-type-persist',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo old', executorType: 'docker' }],
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo old' , dockerImage: 'node:20' }],
       });
       orchestrator.startExecution();
 
@@ -3445,13 +3445,13 @@ describe('Orchestrator', () => {
 
       const persisted = persistence.getTaskEntry('t1');
       expect(persisted).toBeDefined();
-      expect(persisted?.task.config.executorType).toBe('worktree');
+      expect(persisted?.task.config.runnerKind).toBe('worktree');
     });
 
-    it('persists remoteTargetId when switching to ssh', () => {
+    it('persists poolMemberId when switching to ssh', () => {
       orchestrator.loadPlan({
         name: 'edit-type-ssh',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', executorType: 'worktree' }],
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello' }],
       });
       orchestrator.startExecution();
 
@@ -3462,18 +3462,18 @@ describe('Orchestrator', () => {
       orchestrator.editTaskType('t1', 'ssh', 'remote_digital_ocean');
 
       const task = orchestrator.getTask('t1');
-      expect(task?.config.executorType).toBe('ssh');
-      expect(task?.config.remoteTargetId).toBe('remote_digital_ocean');
+      expect(task?.config.runnerKind).toBe('ssh');
+      expect(task?.config.poolMemberId).toBe('remote_digital_ocean');
 
       const persisted = persistence.getTaskEntry('t1');
-      expect(persisted?.task.config.executorType).toBe('ssh');
-      expect(persisted?.task.config.remoteTargetId).toBe('remote_digital_ocean');
+      expect(persisted?.task.config.runnerKind).toBe('ssh');
+      expect(persisted?.task.config.poolMemberId).toBe('remote_digital_ocean');
     });
 
-    it('clears remoteTargetId when switching away from ssh', () => {
+    it('clears poolMemberId when switching away from ssh', () => {
       orchestrator.loadPlan({
         name: 'edit-type-clear-remote',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', executorType: 'ssh', remoteTargetId: 'remote_digital_ocean' }],
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', poolId: 'ssh-light' }],
       });
       orchestrator.startExecution();
 
@@ -3484,14 +3484,14 @@ describe('Orchestrator', () => {
       orchestrator.editTaskType('t1', 'worktree');
 
       const task = orchestrator.getTask('t1');
-      expect(task?.config.executorType).toBe('worktree');
-      expect(task?.config.remoteTargetId).toBeUndefined();
+      expect(task?.config.runnerKind).toBe('worktree');
+      expect(task?.config.poolMemberId).toBeUndefined();
     });
 
     it('switching worktree → ssh (host change) is RECREATE-class — clears branch/commit/workspacePath', () => {
       orchestrator.loadPlan({
         name: 'edit-type-step6-worktree-to-ssh',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', executorType: 'worktree' }],
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello' }],
       });
       orchestrator.startExecution();
       const taskId = sid(orchestrator, 0, 't1');
@@ -3514,8 +3514,8 @@ describe('Orchestrator', () => {
       orchestrator.editTaskType(taskId, 'ssh', 'remote_digital_ocean');
 
       const task = orchestrator.getTask(taskId)!;
-      expect(task.config.executorType).toBe('ssh');
-      expect(task.config.remoteTargetId).toBe('remote_digital_ocean');
+      expect(task.config.runnerKind).toBe('ssh');
+      expect(task.config.poolMemberId).toBe('remote_digital_ocean');
       // ── Recreate-class clears workspace lineage (chart Step 6) ──
       expect(task.execution.branch).toBeUndefined();
       expect(task.execution.commit).toBeUndefined();
@@ -3527,7 +3527,7 @@ describe('Orchestrator', () => {
     it('switching ssh:A → ssh:B (different remote host) is RECREATE-class — clears branch/workspacePath', () => {
       orchestrator.loadPlan({
         name: 'edit-type-step6-ssh-to-ssh',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', executorType: 'ssh', remoteTargetId: 'remote_a' }],
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', poolId: 'ssh-light' }],
       });
       orchestrator.startExecution();
       const taskId = sid(orchestrator, 0, 't1');
@@ -3547,8 +3547,8 @@ describe('Orchestrator', () => {
       orchestrator.editTaskType(taskId, 'ssh', 'remote_b');
 
       const task = orchestrator.getTask(taskId)!;
-      expect(task.config.executorType).toBe('ssh');
-      expect(task.config.remoteTargetId).toBe('remote_b');
+      expect(task.config.runnerKind).toBe('ssh');
+      expect(task.config.poolMemberId).toBe('remote_b');
       // ssh:A → ssh:B is a host change — workspace lineage cleared.
       expect(task.execution.branch).toBeUndefined();
       expect(task.execution.commit).toBeUndefined();
@@ -3560,7 +3560,7 @@ describe('Orchestrator', () => {
     it('switching ssh → worktree (host change) is RECREATE-class — clears workspace lineage', () => {
       orchestrator.loadPlan({
         name: 'edit-type-step6-ssh-to-worktree',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', executorType: 'ssh', remoteTargetId: 'remote_a' }],
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', poolId: 'ssh-light' }],
       });
       orchestrator.startExecution();
       const taskId = sid(orchestrator, 0, 't1');
@@ -3577,8 +3577,8 @@ describe('Orchestrator', () => {
       orchestrator.editTaskType(taskId, 'worktree');
 
       const task = orchestrator.getTask(taskId)!;
-      expect(task.config.executorType).toBe('worktree');
-      expect(task.config.remoteTargetId).toBeUndefined();
+      expect(task.config.runnerKind).toBe('worktree');
+      expect(task.config.poolMemberId).toBeUndefined();
       expect(task.execution.branch).toBeUndefined();
       expect(task.execution.workspacePath).toBeUndefined();
     });
@@ -3586,7 +3586,7 @@ describe('Orchestrator', () => {
     it('same-host ssh:A → ssh:A is RETRY-class — preserves branch/workspacePath (regression of Step 5)', () => {
       orchestrator.loadPlan({
         name: 'edit-type-step6-same-ssh',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', executorType: 'ssh', poolId: 'ssh-light' }],
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', poolId: 'ssh-light' }],
       });
       orchestrator.startExecution();
       const taskId = sid(orchestrator, 0, 't1');
@@ -3595,7 +3595,7 @@ describe('Orchestrator', () => {
       // Persisted state must reflect the current ssh member before asserting
       // same-host retry semantics on the next editTaskType call.
       persistence.updateTask(taskId, {
-        config: { remoteTargetId: 'remote_a' } as any,
+        config: { poolMemberId: 'remote_a' } as any,
       });
 
       persistence.updateTask(taskId, {
@@ -3613,8 +3613,8 @@ describe('Orchestrator', () => {
       orchestrator.editTaskType(taskId, 'ssh', 'remote_a');
 
       const task = orchestrator.getTask(taskId)!;
-      expect(task.config.executorType).toBe('ssh');
-      expect(task.config.remoteTargetId).toBe('remote_a');
+      expect(task.config.runnerKind).toBe('ssh');
+      expect(task.config.poolMemberId).toBe('remote_a');
       // Same host (ssh:A → ssh:A) — substrate-only retry-class
       // preserves workspace lineage even though the call exercised the
       // SSH path.
@@ -3628,7 +3628,7 @@ describe('Orchestrator', () => {
     it('routes through recreateTask with cancel-first ordering on a host change of an ACTIVE task', () => {
       orchestrator.loadPlan({
         name: 'edit-type-step6-active-host-change',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100', executorType: 'worktree' }],
+        tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100' }],
       });
       orchestrator.startExecution();
       const taskId = sid(orchestrator, 0, 't1');
@@ -3655,7 +3655,7 @@ describe('Orchestrator', () => {
     it('editing remote-target on an ACTIVE task does NOT throw', () => {
       orchestrator.loadPlan({
         name: 'edit-type-step6-active-no-throw',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100', executorType: 'ssh', remoteTargetId: 'remote_a' }],
+        tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100', poolId: 'ssh-light' }],
       });
       orchestrator.startExecution();
       const taskId = sid(orchestrator, 0, 't1');
@@ -3666,13 +3666,13 @@ describe('Orchestrator', () => {
       ).not.toThrow();
 
       const task = orchestrator.getTask(taskId);
-      expect(task?.config.remoteTargetId).toBe('remote_b');
+      expect(task?.config.poolMemberId).toBe('remote_b');
     });
 
     it('bumps execution generation by exactly one on a host-change recreate', () => {
       orchestrator.loadPlan({
         name: 'edit-type-step6-gen-recreate',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', executorType: 'ssh', remoteTargetId: 'remote_a' }],
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', poolId: 'ssh-light' }],
       });
       orchestrator.startExecution();
       orchestrator.handleWorkerResponse(
@@ -3691,7 +3691,7 @@ describe('Orchestrator', () => {
     it('bumps execution generation by exactly one on a substrate-only retry (regression of Step 5)', () => {
       orchestrator.loadPlan({
         name: 'edit-type-step6-gen-retry',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', executorType: 'docker' }],
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello' , dockerImage: 'node:20' }],
       });
       orchestrator.startExecution();
       orchestrator.handleWorkerResponse(
@@ -8905,7 +8905,7 @@ describe('Orchestrator', () => {
         config: {
           workflowId: wfId,
           parentTask: mergeId,
-          executorType: 'merge',
+          runnerKind: 'merge',
         },
         execution: {},
       } as TaskState);

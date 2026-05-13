@@ -100,7 +100,7 @@ describe('SSH worktree metadata repro', () => {
 
     const task = makeTask({
       id: 'wf-1/test-execution-engine',
-      config: { command: 'pnpm test', executorType: 'ssh' },
+      config: { command: 'pnpm test', runnerKind: 'ssh' },
     });
 
     const updateSpy = vi.fn();
@@ -127,7 +127,7 @@ describe('SSH worktree metadata repro', () => {
     await runner.executeTask(task);
 
     expect(updateSpy).toHaveBeenCalledWith('wf-1/test-execution-engine', {
-      config: { executorType: 'ssh' },
+      config: { runnerKind: 'ssh' },
       execution: {
         workspacePath: ownerPath,
         branch,

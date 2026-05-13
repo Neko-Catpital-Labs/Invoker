@@ -1,9 +1,9 @@
-import type { ExecutorType } from '@invoker/workflow-core';
+import type { RunnerKind } from '@invoker/workflow-core';
 
 export interface ExecutingStallEvaluationInput {
   now: Date;
   phase?: 'launching' | 'executing';
-  executorType?: ExecutorType;
+  runnerKind?: RunnerKind;
   executingStartedAt?: Date;
   leaseExpiresAt?: Date;
   executorHeartbeatAt?: Date;
@@ -22,14 +22,14 @@ export function evaluateExecutingStall(input: ExecutingStallEvaluationInput): Ex
   const {
     now,
     phase,
-    executorType,
+    runnerKind,
     executingStartedAt,
     leaseExpiresAt,
     executorHeartbeatAt,
     remoteHeartbeatAt,
     executingStallTimeoutMs,
   } = input;
-  const heartbeatSource = executorType === 'ssh'
+  const heartbeatSource = runnerKind === 'ssh'
     ? (remoteHeartbeatAt ?? executorHeartbeatAt)
     : executorHeartbeatAt;
   const heartbeatStale =
@@ -44,7 +44,7 @@ export function evaluateExecutingStall(input: ExecutingStallEvaluationInput): Ex
 
   const staleReason = leaseExpired
     ? 'attempt lease expired'
-    : executorType === 'ssh'
+    : runnerKind === 'ssh'
     ? 'remote workload heartbeat stale'
     : 'executor heartbeat stale';
 

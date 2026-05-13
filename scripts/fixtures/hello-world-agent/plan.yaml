@@ -10,5 +10,5 @@ onFinish: none
 tasks:
   - id: hello
     description: "Ask Claude to print Hello, world!"
-    executorType: docker
+    runnerKind: docker
     prompt: 'Respond with the literal string: Hello, world!'

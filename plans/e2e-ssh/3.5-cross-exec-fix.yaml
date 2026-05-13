@@ -15,8 +15,8 @@ tasks:
     description: "E2E 3.5 — SSH task fails (needs fix)"
     command: exit 1
     dependencies: []
-    executorType: ssh
-    remoteTargetId: localhost-e2e
+    runnerKind: ssh
+    poolMemberId: localhost-e2e
 
   - id: e2e-g335-taskC
     description: "E2E 3.5 — worktree depends on A and B"

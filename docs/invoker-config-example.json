@@ -45,7 +45,7 @@
 
   "heavyweightCommandRouting": {
     "comment": "Auto-route heavyweight shell commands like pnpm test to a remote target",
-    "remoteTargetId": "staging-server",
+    "poolMemberId": "staging-server",
     "matchers": [
       {
         "regex": "\\bpnpm(?:\\s|$)"

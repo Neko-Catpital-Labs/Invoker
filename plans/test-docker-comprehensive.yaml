@@ -13,7 +13,7 @@ tasks:
   # ── Provisioning failures ──────────────────────────────────
   - id: docker-no-image
     description: "Docker task with non-existent image → should fail with 'No such image'"
-    executorType: docker
+    runnerKind: docker
     dockerImage: "invoker-nonexistent-image:v999"
     command: "echo 'Should never run'"
     dependencies: []
@@ -21,14 +21,14 @@ tasks:
   # ── Runtime failures ───────────────────────────────────────
   - id: docker-cmd-exit-1
     description: "Docker command that exits with code 1"
-    executorType: docker
+    runnerKind: docker
     dockerImage: "invoker-agent:latest"
     command: "echo 'About to fail' && exit 1"
     dependencies: []
 
   - id: docker-cmd-crash
     description: "Docker command that crashes via SEGV signal"
-    executorType: docker
+    runnerKind: docker
     dockerImage: "invoker-agent:latest"
     command: "echo 'About to crash' && kill -SEGV $$"
     dependencies: []
@@ -36,14 +36,14 @@ tasks:
   # ── Success cases ──────────────────────────────────────────
   - id: docker-cmd-ok
     description: "Docker command that succeeds"
-    executorType: docker
+    runnerKind: docker
     dockerImage: "invoker-agent:latest"
     command: "echo 'DOCKER_CMD_OK'"
     dependencies: []
 
   - id: docker-cmd-output
     description: "Docker command that writes to stdout and stderr"
-    executorType: docker
+    runnerKind: docker
     dockerImage: "invoker-agent:latest"
     command: "echo 'STDOUT_LINE' && echo 'STDERR_LINE' >&2"
     dependencies: []
@@ -51,21 +51,21 @@ tasks:
   # ── Concurrent execution ───────────────────────────────────
   - id: docker-concurrent-a
     description: "Concurrent Docker task A"
-    executorType: docker
+    runnerKind: docker
     dockerImage: "invoker-agent:latest"
     command: "sleep 2 && echo 'CONCURRENT_A_DONE'"
     dependencies: []
 
   - id: docker-concurrent-b
     description: "Concurrent Docker task B"
-    executorType: docker
+    runnerKind: docker
     dockerImage: "invoker-agent:latest"
     command: "sleep 2 && echo 'CONCURRENT_B_DONE'"
     dependencies: []
 
   - id: docker-concurrent-c
     description: "Concurrent Docker task C"
-    executorType: docker
+    runnerKind: docker
     dockerImage: "invoker-agent:latest"
     command: "sleep 2 && echo 'CONCURRENT_C_DONE'"
     dependencies: []

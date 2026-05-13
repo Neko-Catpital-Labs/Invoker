@@ -13,7 +13,7 @@ Source of truth: `packages/surfaces/src/slack/plan-conversation.ts:100-116`
 | "Build/compile" | `command` | `pnpm --filter @invoker/<pkg> build` |
 | "Build all" / "verify compilation" | `command` | `pnpm build` |
 | "Create file X with content Y" | `prompt` | Specify exact path, content structure, what it should export |
-| "Run in Docker" | `command` + `executorType: docker` | Command string, set `dockerImage` |
+| "Run in Docker" | `command` + `runnerKind: docker` | Command string, set `dockerImage` |
 | "Lint / type-check" | `command` | `pnpm --filter @invoker/<pkg> lint` or `pnpm --filter @invoker/<pkg> typecheck` |
 | "Check file exists" | `command` | `test -f <path>` |
 | "Check pattern in file" | `command` | `grep -q '<pattern>' <path>` |

@@ -277,7 +277,7 @@ export function serializeTask(task: TaskState): Record<string, unknown> {
   if (task.config.workflowId != null) config.workflowId = task.config.workflowId;
   if (task.config.command != null) config.command = task.config.command;
   if (task.config.prompt != null) config.prompt = task.config.prompt;
-  if (task.config.executorType != null) config.executorType = task.config.executorType;
+  if (task.config.runnerKind != null) config.runnerKind = task.config.runnerKind;
   if (task.config.isMergeNode != null) config.isMergeNode = task.config.isMergeNode;
   if (task.config.executionAgent != null) config.executionAgent = task.config.executionAgent;
   if (task.config.featureBranch != null) config.featureBranch = task.config.featureBranch;
@@ -436,7 +436,7 @@ export function serializeCostEvent(event: NormalizedCostEvent): Record<string, u
     workflowId: event.attribution.workflowId,
     taskId: event.attribution.taskId,
     attemptId: event.attribution.attemptId,
-    executorType: event.attribution.executorType,
+    runnerKind: event.attribution.runnerKind,
     inputTokens: event.usage.inputTokens,
     outputTokens: event.usage.outputTokens,
     cachedTokens: event.usage.cachedTokens,

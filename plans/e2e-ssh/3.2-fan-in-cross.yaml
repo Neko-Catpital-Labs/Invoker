@@ -17,8 +17,8 @@ tasks:
     description: "E2E 3.2 — SSH writes file B"
     command: echo "content-from-ssh" > e2e-file-b.txt
     dependencies: []
-    executorType: ssh
-    remoteTargetId: localhost-e2e
+    runnerKind: ssh
+    poolMemberId: localhost-e2e
 
   - id: e2e-g332-taskC
     description: "E2E 3.2 — worktree verifies both files exist"

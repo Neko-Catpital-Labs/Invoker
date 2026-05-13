@@ -4,7 +4,7 @@ Execute Invoker tasks on remote machines via SSH key-based authentication.
 
 ## Overview
 
-The SSH executor (`executorType: ssh`) runs task commands on remote hosts over SSH. Authentication is exclusively key-based — no password auth or `sshpass` dependency is required.
+The SSH executor (`runnerKind: ssh`) runs task commands on remote hosts over SSH. Authentication is exclusively key-based — no password auth or `sshpass` dependency is required.
 
 Each remote target is defined in the Invoker config with a host, user, and path to an SSH private key. Tasks reference targets by ID.
 
@@ -55,7 +55,7 @@ If you want to use a repo-specific config file, launch Invoker with `INVOKER_REP
 
 ## Multiple SSH Targets
 
-You can configure as many remote targets as you want under `remoteTargets`. Each task picks one by `remoteTargetId`.
+You can configure as many remote targets as you want under `remoteTargets`. Each task picks one by `poolMemberId`.
 
 ```yaml
 name: "Run tasks on multiple remotes"
@@ -65,14 +65,14 @@ tasks:
   - id: check-a
     description: "Run tests on remote A"
     command: "pnpm test"
-    executorType: ssh
-    remoteTargetId: staging-server
+    runnerKind: ssh
+    poolMemberId: staging-server
 
   - id: check-b
     description: "Run tests on remote B"
     command: "pnpm test"
-    executorType: ssh
-    remoteTargetId: staging-server-b
+    runnerKind: ssh
+    poolMemberId: staging-server-b
 ```
 
 This is the supported way to run multiple SSH executors in one workflow: define multiple targets, then attach different tasks to different target IDs.
@@ -89,30 +89,30 @@ tasks:
   - id: health-check
     description: "Verify staging server is reachable"
     command: "echo 'OK'; uptime; df -h"
-    executorType: ssh
-    remoteTargetId: staging-server
+    runnerKind: ssh
+    poolMemberId: staging-server
     dependencies: []
 
   - id: run-migrations
     description: "Run database migrations on staging"
     command: "cd /opt/app && ./migrate.sh"
-    executorType: ssh
-    remoteTargetId: staging-server
+    runnerKind: ssh
+    poolMemberId: staging-server
     dependencies:
       - health-check
 ```
 
 ### Task fields
 
-- `executorType: ssh` — selects the SSH executor
-- `remoteTargetId: <id>` — references a key in `remoteTargets` config
+- `runnerKind: ssh` — selects the SSH executor
+- `poolMemberId: <id>` — references a key in `remoteTargets` config
 
-Both fields are required for SSH tasks. The executor validates at runtime that the `remoteTargetId` exists in config and throws a clear error if it's missing.
+Both fields are required for SSH tasks. The executor validates at runtime that the `poolMemberId` exists in config and throws a clear error if it's missing.
 
 ## How It Works
 
-1. The plan parser reads `executorType` and `remoteTargetId` from YAML and carries them through to `TaskConfig`.
-2. When `TaskRunner.selectExecutor()` sees `executorType: ssh`, it looks up the `remoteTargetId` in the `remoteTargets` config map.
+1. The plan parser reads `runnerKind` and `poolMemberId` from YAML and carries them through to `TaskConfig`.
+2. When `TaskRunner.selectExecutor()` sees `runnerKind: ssh`, it looks up the `poolMemberId` in the `remoteTargets` config map.
 3. An `SshExecutor` instance is created with the target's connection details.
 4. The runner spawns: `ssh -i <keyPath> -p <port> -o StrictHostKeyChecking=accept-new -o BatchMode=yes user@host <command>`
 5. For `claude` action types, the Claude CLI command is shell-quoted and executed remotely.
@@ -142,5 +142,5 @@ bash scripts/verify-digitalocean-e2e.sh
 ## Security Notes
 
 - SSH keys must never be committed to the repository. The `sshKeyPath` field is a local filesystem path, not the key content.
-- The `remoteTargetId` stored in the task config and SQLite database is a non-secret alias — it contains no credentials.
+- The `poolMemberId` stored in the task config and SQLite database is a non-secret alias — it contains no credentials.
 - `BatchMode=yes` ensures SSH never falls back to interactive password prompts.

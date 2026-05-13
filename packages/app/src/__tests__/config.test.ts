@@ -139,7 +139,7 @@ describe('loadConfig', () => {
 
   it('reads heavyweightCommandRouting from user config', () => {
     const heavyweightCommandRouting = {
-      remoteTargetId: 'ci-box',
+      poolMemberId: 'ci-box',
       matchers: [{ regex: '\\bpnpm(?:\\s|$)' }],
     };
     writeFileSync(

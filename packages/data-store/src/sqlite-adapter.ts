@@ -9,7 +9,7 @@ import initSqlJs, { type Database as SqlJsDatabase } from 'sql.js';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { TaskState, TaskStateChanges, Attempt, TaskStatus } from '@invoker/workflow-core';
-import { normalizeExecutorType } from '@invoker/workflow-core';
+import { normalizeRunnerKind } from '@invoker/workflow-core';
 import type { PersistenceAdapter, Workflow, TaskEvent, ActivityLogEntry, Conversation, ConversationMessage } from './adapter.js';
 
 /**
@@ -807,7 +807,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       null, cfg.featureBranch ?? null,
       cfg.isMergeNode ? 1 : 0,
       0, null,
-      cfg.executorType ?? null,
+      cfg.runnerKind ?? null,
       exec.agentSessionId ?? null,
       exec.workspacePath ?? null,
       exec.containerId ?? null,
@@ -830,7 +830,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       exec.reviewProviderId ?? null,
       exec.isFixingWithAI ? 1 : 0,
       exec.generation ?? 0,
-      cfg.remoteTargetId ?? null,
+      (cfg as { poolMemberId?: string }).poolMemberId ?? null,
       cfg.dockerImage ?? null,
       cfg.executionAgent ?? null,
       exec.agentName ?? null,
@@ -864,8 +864,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
         testPlan: 'test_plan',
         reproCommand: 'repro_command',
         featureBranch: 'feature_branch',
-        executorType: 'executor_type',
-        remoteTargetId: 'remote_target_id',
+        runnerKind: 'executor_type',
+        poolMemberId: 'remote_target_id',
         dockerImage: 'docker_image',
         executionAgent: 'execution_agent',
       };
@@ -1196,14 +1196,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return val === 'none' ? null : val;
   }
 
-  getExecutorType(taskId: string): string | null {
+  getRunnerKind(taskId: string): string | null {
     const row = this.queryOne(
       'SELECT executor_type FROM tasks WHERE id = ?',
       [taskId],
     );
     const raw = (row?.executor_type as string) ?? null;
     if (raw === null) return null;
-    return normalizeExecutorType(raw) ?? raw;
+    return normalizeRunnerKind(raw) ?? raw;
   }
 
   getTaskStatus(taskId: string): string | null {
@@ -1240,7 +1240,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return (row?.agent as string) ?? null;
   }
 
-  getRemoteTargetId(taskId: string): string | null {
+  getPoolMemberId(taskId: string): string | null {
     const row = this.queryOne(
       'SELECT remote_target_id FROM tasks WHERE id = ?',
       [taskId],
@@ -1697,8 +1697,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
         isReconciliation: row.is_reconciliation === 1 ? true : undefined,
         requiresManualApproval: row.requires_manual_approval === 1 ? true : undefined,
         featureBranch: row.feature_branch ?? undefined,
-        executorType: normalizeExecutorType(row.executor_type ?? undefined),
-        remoteTargetId: row.remote_target_id ?? undefined,
+        runnerKind: normalizeRunnerKind(row.executor_type ?? undefined),
+        ...((row.remote_target_id ?? undefined) ? { poolMemberId: row.remote_target_id } : {}),
         dockerImage: row.docker_image ?? undefined,
         isMergeNode: row.is_merge_node === 1 ? true : undefined,
         summary: row.summary ?? undefined,

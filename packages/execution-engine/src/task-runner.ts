@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 
 import { scopePlanTaskId } from '@invoker/workflow-core';
-import type { Orchestrator, TaskState, ExperimentVariant, ExecutorType } from '@invoker/workflow-core';
+import type { Orchestrator, TaskState, ExperimentVariant, RunnerKind } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { WorkRequest, WorkResponse, ActionType, Logger } from '@invoker/contracts';
 import type { Executor, ExecutorHandle } from './executor.js';
@@ -160,7 +160,7 @@ export class TaskRunner {
   private dockerConfig: { imageName?: string; secretsFile?: string };
   private executionAgentRegistry?: AgentRegistry;
   private logger: Logger;
-  /** Cache for SSH executors, keyed by remoteTargetId. One instance per target for correct git locking. */
+  /** Cache for SSH executors, keyed by poolMemberId. One instance per target for correct git locking. */
   private sshExecutorCache = new Map<string, SshExecutor>();
 
   /** In-flight executions keyed by attemptId (with taskId retained for external kill resolution). */
@@ -608,7 +608,7 @@ export class TaskRunner {
         }
         if (meta.containerId) execution.containerId = meta.containerId;
         this.persistence.updateTask(task.id, {
-          config: { executorType: executor.type as ExecutorType },
+          config: { runnerKind: executor.type as RunnerKind },
           execution: execution as any,
         });
       }
@@ -649,7 +649,7 @@ export class TaskRunner {
       }
 
       const changes = {
-        config: { executorType: executor.type as ExecutorType },
+        config: { runnerKind: executor.type as RunnerKind },
         execution: {
           workspacePath: handle.workspacePath,
           branch: handle.branch ?? undefined,  // Explicit undefined when branch is not applicable (e.g., BYO mode)
@@ -791,11 +791,11 @@ export class TaskRunner {
 
   /**
    * Select the executor to use for a given task.
-   * Uses task.executorType to look up in the registry; falls back to default.
+   * Uses task.runnerKind to look up in the registry; falls back to default.
    * Merge gate tasks use the default (worktree) executor when selected explicitly.
    */
   selectExecutor(task: TaskState): Executor {
-    const effectiveType = task.config.executorType;
+    const effectiveType = task.config.runnerKind;
 
     if (effectiveType) {
       const registered = this.executorRegistry.get(effectiveType);
@@ -830,14 +830,14 @@ export class TaskRunner {
         return worktree;
       }
 
-      // Lazy registration for SSH — resolve remoteTargetId from config and cache by targetId.
+      // Lazy registration for SSH — resolve poolMemberId from config and cache by targetId.
       // The cache is config-aware: if the underlying remote target config changes (e.g. via
       // remoteTargetsProvider returning new values), we replace the cached executor so the
       // new config takes effect immediately.
       if (effectiveType === 'ssh') {
-        const targetId = task.config.remoteTargetId;
+        const targetId = (task.config as { poolMemberId?: string }).poolMemberId;
         if (!targetId) {
-          throw new Error(`Task ${task.id} has executorType=ssh but no remoteTargetId`);
+          throw new Error(`Task ${task.id} has runnerKind=ssh but no poolMemberId`);
         }
 
         // Always re-read targets so dynamic provider updates are picked up.
@@ -845,7 +845,7 @@ export class TaskRunner {
         const target = remoteTargets[targetId];
         if (!target) {
           throw new Error(
-            `Task ${task.id} references remoteTargetId="${targetId}" but no matching ` +
+            `Task ${task.id} references poolMemberId="${targetId}" but no matching ` +
             `entry exists in remoteTargets config. Available: [${Object.keys(remoteTargets).join(', ')}]`,
           );
         }
@@ -1837,7 +1837,7 @@ export class TaskRunner {
    * Destroy and deregister a per-task Docker executor if one was created for this task.
    */
   private async cleanupPerTaskDockerExecutor(task: TaskState): Promise<void> {
-    if (task.config.executorType !== 'docker') return;
+    if (task.config.runnerKind !== 'docker') return;
     const dockerKey = `docker:${task.id}`;
     const dockerExec = this.executorRegistry.get(dockerKey);
     if (!dockerExec) return;

@@ -6,7 +6,7 @@
  */
 
 export * from './types.js';
-export * from './executor-type.js';
+export * from './runner-kind.js';
 export * from './dag.js';
 export * from './validity.js';
 export { ActionGraph } from './action-graph.js';

@@ -650,7 +650,7 @@ async function headlessCosts(
       const ctx = buildAttributionContext({
         id: task.id,
         workflowId: wf.id,
-        executorType: task.config.executorType ?? 'worktree',
+        runnerKind: task.config.runnerKind ?? 'worktree',
         agentSessionId: task.execution.agentSessionId,
         lastAgentSessionId: task.execution.lastAgentSessionId,
         agentName: task.execution.agentName,
@@ -739,7 +739,7 @@ async function collectCostEvents(
       const ctx = buildAttributionContext({
         id: task.id,
         workflowId: wf.id,
-        executorType: task.config.executorType ?? 'worktree',
+        runnerKind: task.config.runnerKind ?? 'worktree',
         agentSessionId: task.execution.agentSessionId,
         lastAgentSessionId: task.execution.lastAgentSessionId,
         agentName: task.execution.agentName,
@@ -1175,7 +1175,7 @@ ${BOLD}Configure:${RESET}
   install-skills [install|update|reinstall]          Install bundled Invoker skills into Codex
   set command <taskId> <cmd>                          Edit task command and re-run
   set prompt <taskId> <text>                          Edit task prompt and re-run
-  set executor <taskId> <type> [remoteTargetId]       Change executor type (worktree|docker|ssh)
+  set executor <taskId> <type> [poolMemberId]       Change executor type (worktree|docker|ssh)
   set agent <taskId> <agent>                          Change execution agent (claude|codex)
   set merge-mode <workflowId> <mode>                  manual | automatic | external_review
   set fix-prompt <taskId> <text>                      Update fix-session prompt and retry
@@ -2116,13 +2116,13 @@ async function headlessEditPrompt(taskId: string, newPrompt: string, deps: Headl
 
 async function headlessEditExecutor(
   taskId: string,
-  executorType: string,
-  remoteTargetId: string | undefined,
+  runnerKind: string,
+  poolMemberId: string | undefined,
   deps: HeadlessDeps,
 ): Promise<void> {
-  if (!taskId || !executorType) {
+  if (!taskId || !runnerKind) {
     throw new Error(
-      'Missing arguments. Usage: --headless edit-executor <taskId> <executorType> [remoteTargetId]',
+      'Missing arguments. Usage: --headless edit-executor <taskId> <runnerKind> [poolMemberId]',
     );
   }
   const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'set executor');
@@ -2131,7 +2131,7 @@ async function headlessEditExecutor(
   const taskExecutor = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
 
-  const envelope = makeEnvelope('edit-task-type', 'headless', 'task', { taskId, executorType, remoteTargetId });
+  const envelope = makeEnvelope('edit-task-type', 'headless', 'task', { taskId, runnerKind, poolMemberId });
   const result = await deps.commandService.editTaskType(envelope);
   if (!result.ok) throw new Error(result.error.message);
   const runnable = result.data.filter((task) => task.status === 'running');
@@ -2139,8 +2139,8 @@ async function headlessEditExecutor(
     await taskExecutor.executeTasks(runnable);
   }
   process.stdout.write(
-    `Edited task "${taskId}" executor → "${executorType}"` +
-    `${remoteTargetId ? ` (remoteTargetId=${remoteTargetId})` : ''}\n`,
+    `Edited task "${taskId}" executor → "${runnerKind}"` +
+    `${poolMemberId ? ` (poolMemberId=${poolMemberId})` : ''}\n`,
   );
 
   if (deps.noTrack) {
@@ -2246,12 +2246,12 @@ export async function resolveAgentSession(
   if (driver.fetchRemoteSession && allTasks) {
     const sshTask = allTasks.find(
       t => t.execution.agentSessionId === sessionId
-        && t.config.executorType === 'ssh',
+        && t.config.runnerKind === 'ssh',
     );
     if (sshTask) {
       const { loadConfig } = await import('./config.js');
       const targets = loadConfig().remoteTargets ?? {};
-      const targetId = sshTask.config.remoteTargetId;
+      const targetId = (sshTask.config as { poolMemberId?: string }).poolMemberId;
       const target = targetId
         ? targets[targetId]
         : Object.values(targets)[0];

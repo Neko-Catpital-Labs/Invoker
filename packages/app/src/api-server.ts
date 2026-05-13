@@ -26,7 +26,7 @@
  *   POST   /api/tasks/:id/input        body: { text }
  *   POST   /api/tasks/:id/edit         body: { command }
  *   POST   /api/tasks/:id/edit-prompt  body: { prompt }
- *   POST   /api/tasks/:id/edit-type    body: { executorType, remoteTargetId? }
+ *   POST   /api/tasks/:id/edit-type    body: { runnerKind, poolMemberId? }
  *   POST   /api/tasks/:id/edit-agent   body: { agent }
  *   POST   /api/tasks/:id/gate-policy  body: { updates: [{ workflowId, taskId?, gatePolicy }] }
  *   POST   /api/workflows/:id/detach  body: { upstreamWorkflowId }
@@ -505,12 +505,12 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         const taskId = decodeURIComponent(editTypeMatch[1]);
         try {
           const body = await readBody(req);
-          const { executorType, remoteTargetId } = JSON.parse(body);
-          if (!executorType) {
-            json(res, 400, { error: 'Missing "executorType" in request body' });
+          const { runnerKind, poolMemberId } = JSON.parse(body);
+          if (!runnerKind) {
+            json(res, 400, { error: 'Missing "runnerKind" in request body' });
             return;
           }
-          const result = await mutations.editTaskType(taskId, executorType, remoteTargetId);
+          const result = await mutations.editTaskType(taskId, runnerKind, poolMemberId);
           json(res, 200, { ok: true, taskId, action: 'type_edited', tasksStarted: result.runnable.length });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });

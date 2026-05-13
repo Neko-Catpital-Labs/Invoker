@@ -33,9 +33,8 @@ export interface TaskConfig {
   readonly isReconciliation?: boolean;
   readonly requiresManualApproval?: boolean;
   readonly featureBranch?: string;
-  readonly executorType?: string;
   readonly dockerImage?: string;
-  readonly remoteTargetId?: string;
+  readonly poolId?: string;
   readonly autoFix?: boolean;
   readonly isMergeNode?: boolean;
   readonly summary?: string;

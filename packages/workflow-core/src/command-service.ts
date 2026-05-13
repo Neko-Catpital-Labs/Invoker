@@ -208,14 +208,14 @@ export class CommandService {
   }
 
     async editTaskType(
-    envelope: CommandEnvelope<{ taskId: string; executorType: string; remoteTargetId?: string }>,
+    envelope: CommandEnvelope<{ taskId: string; runnerKind: string; poolMemberId?: string }>,
   ): Promise<CommandResult<TaskState[]>> {
     return this.executeCommand<TaskState[]>(
       'EDIT_TASK_TYPE_FAILED',
       () => this.orchestrator.editTaskType(
         envelope.payload.taskId,
-        envelope.payload.executorType,
-        envelope.payload.remoteTargetId,
+        envelope.payload.runnerKind,
+        envelope.payload.poolMemberId,
       ),
       this.workflowIdForTask(envelope.payload.taskId),
     );

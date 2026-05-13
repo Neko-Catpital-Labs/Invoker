@@ -53,8 +53,8 @@ dest.write_text(nl.join(out) + (nl if text.endswith('\n') else ''), encoding='ut
 echo "==> submit-plan (headless run) $PLAN_SRC (repoUrl -> file:// checkout)"
 ./submit-plan.sh "$PLAN_TMP"
 
-# Assert executor_type and remote_target_id in SQLite if sqlite3 is available and
-# the columns exist (schema may evolve). Task IDs are workflow-scoped.
+# Assert executor_type in SQLite if sqlite3 is available and the column exists
+# (schema may evolve). Task IDs are workflow-scoped.
 DB="$TMPDB/invoker.db"
 if [[ -f "$DB" ]] && command -v sqlite3 >/dev/null 2>&1; then
   COLS=$(sqlite3 "$DB" "PRAGMA table_info(tasks);" | cut -d'|' -f2)
@@ -66,15 +66,6 @@ if [[ -f "$DB" ]] && command -v sqlite3 >/dev/null 2>&1; then
     fi
     echo "PASS: executor_type=$FT (routing validation succeeded)"
 
-    # If remote_target_id column exists, assert it too
-    if echo "$COLS" | grep -q '^remote_target_id$'; then
-      RT=$(sqlite3 "$DB" "SELECT remote_target_id FROM tasks WHERE id LIKE '%/verify-routing-command' LIMIT 1;")
-      if [[ "$RT" != "dummy-target" ]]; then
-        echo "FAIL: expected remote_target_id=dummy-target, got '$RT'" >&2
-        exit 1
-      fi
-      echo "PASS: remote_target_id=$RT"
-    fi
   else
     echo "INFO: executor_type column not present; skipping SQLite assertion"
   fi

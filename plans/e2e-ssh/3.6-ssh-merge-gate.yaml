@@ -16,5 +16,5 @@ tasks:
     description: "E2E 3.6 — SSH task"
     command: echo ssh-b-ok
     dependencies: []
-    executorType: ssh
-    remoteTargetId: localhost-e2e
+    runnerKind: ssh
+    poolMemberId: localhost-e2e

@@ -4,8 +4,8 @@
   "executorRoutingRules": [
     {
       "pattern": "verify-routing-ok",
-      "executorType": "worktree",
-      "remoteTargetId": "dummy-target"
+      "runnerKind": "worktree",
+      "poolId": "dummy-target"
     }
   ],
   "remoteTargets": {
