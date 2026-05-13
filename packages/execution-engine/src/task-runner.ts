@@ -74,7 +74,7 @@ type ActiveExecutionEntry = {
 
 type SelectionStrategy = 'roundRobin' | 'leastLoaded';
 
-export interface RemoteTargetConfig {
+interface RemoteTargetConfig {
   host: string;
   user: string;
   sshKeyPath: string;
