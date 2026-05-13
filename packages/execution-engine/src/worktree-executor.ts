@@ -4,15 +4,13 @@ import { resolve, join } from 'node:path';
 import { homedir } from 'node:os';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
 import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from './executor.js';
-import { BaseExecutor, type BaseEntry } from './base-executor.js';
+import { BaseExecutor, MergeConflictError, type BaseEntry } from './base-executor.js';
 import { RepoPool } from './repo-pool.js';
 import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 import { DEFAULT_WORKTREE_PROVISION_COMMAND } from './default-worktree-provision-command.js';
 import {
   computeContentHash,
   buildExperimentBranchName,
-  bashMergeUpstreams,
-  parseMergeError,
 } from './branch-utils.js';
 import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
 import {
@@ -251,17 +249,9 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     const poolUpstreams = request.inputs.upstreamBranches ?? [];
     if (poolUpstreams.length > 0) {
       try {
-        const mergeScript = bashMergeUpstreams({
-          worktreeDir: acquired.worktreePath,
-          upstreamBranches: poolUpstreams,
-          skipAncestors: true,
-        });
-        await this.runBash(mergeScript, acquired.worktreePath);
+        await this.mergeRequestUpstreamBranches(request, acquired.worktreePath, baseHead);
       } catch (err: any) {
-        const exitCode = err.exitCode ?? 1;
-        const stderr = err.stderr ?? err.message ?? '';
-        if (exitCode === 31) {
-          const parsed = parseMergeError(exitCode, stderr);
+        if (err instanceof MergeConflictError) {
           const entry: WorktreeEntry = {
             process: null, request, worktreeDir: acquired.worktreePath, branch,
             phase: 'completed',
@@ -284,8 +274,8 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
               exitCode: 1,
               error: JSON.stringify({
                 type: 'merge_conflict',
-                failedBranch: parsed.failedBranch,
-                conflictFiles: parsed.conflictFiles,
+                failedBranch: err.failedBranch,
+                conflictFiles: err.conflictFiles,
               }),
             },
           };

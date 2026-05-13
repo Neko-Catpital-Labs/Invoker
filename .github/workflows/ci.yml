@@ -110,6 +110,8 @@ jobs:
             command: bash scripts/test-suites/required/10-vitest-workspace.sh
           - name: Submit Workflow Chain
             command: bash scripts/test-suites/required/15-submit-workflow-chain.sh
+          - name: Branch Carry Forward
+            command: bash scripts/test-suites/required/16-branch-carry-forward.sh
 
     name: required-fast / ${{ matrix.name }}
 

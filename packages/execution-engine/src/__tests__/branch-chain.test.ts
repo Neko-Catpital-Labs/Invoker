@@ -53,6 +53,82 @@ function branchExists(cwd: string, branch: string): boolean {
   }
 }
 
+function showFile(cwd: string, branch: string, file: string): string {
+  return execSync(`git show ${JSON.stringify(`${branch}:${file}`)}`, { cwd }).toString();
+}
+
+function fileOrAbsent(cwd: string, branch: string, file: string): string {
+  try {
+    execSync(`git cat-file -e ${JSON.stringify(`${branch}:${file}`)}`, { cwd, stdio: 'ignore' });
+    return showFile(cwd, branch, file);
+  } catch {
+    return '<absent>';
+  }
+}
+
+function branchFileSnapshot(cwd: string, branch: string): {
+  branch: string;
+  files: Record<'a.txt' | 'b.txt' | 'c.txt', string>;
+} {
+  return {
+    branch,
+    files: {
+      'a.txt': fileOrAbsent(cwd, branch, 'a.txt'),
+      'b.txt': fileOrAbsent(cwd, branch, 'b.txt'),
+      'c.txt': fileOrAbsent(cwd, branch, 'c.txt'),
+    },
+  };
+}
+
+function showBareFile(gitDir: string, branch: string, file: string): string {
+  return execSync(`git --git-dir=${JSON.stringify(gitDir)} show ${JSON.stringify(`${branch}:${file}`)}`).toString();
+}
+
+function bareFileOrAbsent(gitDir: string, branch: string, file: string): string {
+  try {
+    execSync(`git --git-dir=${JSON.stringify(gitDir)} cat-file -e ${JSON.stringify(`${branch}:${file}`)}`, {
+      stdio: 'ignore',
+    });
+    return showBareFile(gitDir, branch, file);
+  } catch {
+    return '<absent>';
+  }
+}
+
+function bareBranchFileSnapshot(gitDir: string, branch: string): {
+  branch: string;
+  files: Record<'a.txt' | 'b.txt' | 'c.txt', string>;
+} {
+  return {
+    branch,
+    files: {
+      'a.txt': bareFileOrAbsent(gitDir, branch, 'a.txt'),
+      'b.txt': bareFileOrAbsent(gitDir, branch, 'b.txt'),
+      'c.txt': bareFileOrAbsent(gitDir, branch, 'c.txt'),
+    },
+  };
+}
+
+function bareBranchExists(gitDir: string, branch: string): boolean {
+  try {
+    execSync(`git --git-dir=${JSON.stringify(gitDir)} rev-parse --verify ${JSON.stringify(`refs/heads/${branch}`)}`, {
+      stdio: 'ignore',
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isBareAncestor(gitDir: string, ancestor: string, descendant: string): boolean {
+  try {
+    execSync(`git --git-dir=${JSON.stringify(gitDir)} merge-base --is-ancestor ${JSON.stringify(ancestor)} ${JSON.stringify(descendant)}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 type TaskType = { executor: 'worktree'; action: 'command' | 'claude' };
 
 interface ChainConfig {
@@ -579,6 +655,286 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
       expect(upstreams).toContain(taskA.execution.branch);
       expect(upstreams).toContain(taskB.execution.branch);
       expect(upstreams).toHaveLength(3);
+    });
+  });
+
+  describe('review gate direct dependency branch', () => {
+    it('merges only C while C carries A and B changes', async () => {
+      const intermediateDir = join(tmpDir, 'intermediate.git');
+      execSync(`git init --bare ${JSON.stringify(intermediateDir)}`, { cwd: tmpDir });
+
+      const taskA = makeTaskState({
+        id: 'task-a',
+        description: 'Step A',
+        config: { command: 'printf A_CHANGE > a.txt', executorType: 'worktree', workflowId: 'wf-test' },
+      });
+      const taskB = makeTaskState({
+        id: 'task-b',
+        description: 'Step B',
+        config: { command: 'printf B_CHANGE > b.txt', executorType: 'worktree', workflowId: 'wf-test' },
+      });
+      const taskC = makeTaskState({
+        id: 'task-c',
+        description: 'Step C',
+        dependencies: ['task-a', 'task-b'],
+        config: { command: 'printf C_CHANGE > c.txt', executorType: 'worktree', workflowId: 'wf-test' },
+      });
+      const mergeTask = makeTaskState({
+        id: '__merge__wf-test',
+        description: 'Review gate',
+        dependencies: ['task-c'],
+        status: 'running',
+        config: { executorType: 'merge', isMergeNode: true, workflowId: 'wf-test' },
+      });
+
+      const tasks = [taskA, taskB, taskC, mergeTask];
+      const registry = new ExecutorRegistry();
+      registry.register(
+        'worktree',
+        new WorktreeExecutor({
+          cacheDir: join(tmpDir, 'branch-chain-cache'),
+          worktreeBaseDir: join(tmpDir, 'branch-chain-wt'),
+          claudeCommand: '/bin/echo',
+        }),
+      );
+
+      const orchestrator = {
+        getTask: (id: string) => tasks.find(t => t.id === id),
+        getAllTasks: () => tasks,
+        handleWorkerResponse: (response: WorkResponse) => {
+          const task = tasks.find(t => t.id === response.actionId);
+          if (task) task.status = response.status;
+          return [];
+        },
+        setTaskAwaitingApproval: () => {},
+      };
+      const persistence = {
+        loadWorkflow: () => ({
+          id: 'wf-test',
+          name: 'Branch carry forward',
+          onFinish: 'none',
+          mergeMode: 'manual',
+          baseBranch: 'master',
+          featureBranch: 'feature/review-branch',
+          repoUrl: `file://${tmpDir}`,
+          intermediateRepoUrl: intermediateDir,
+        }),
+        updateTask: (id: string, changes: any) => {
+          const task = tasks.find(t => t.id === id);
+          if (task && changes.execution) Object.assign(task.execution, changes.execution);
+          if (task && changes.config) Object.assign(task.config, changes.config);
+        },
+      };
+
+      const executor = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        executorRegistry: registry,
+        cwd: tmpDir,
+        defaultBranch: 'master',
+      });
+
+      taskA.status = 'running';
+      await (executor as any).executeTaskInner(taskA);
+      taskB.status = 'running';
+      await (executor as any).executeTaskInner(taskB);
+      const branchA = taskA.execution.branch!;
+      const branchB = taskB.execution.branch!;
+
+      expect(bareBranchExists(intermediateDir, branchA)).toBe(true);
+      expect(bareBranchExists(intermediateDir, branchB)).toBe(true);
+      expect(showBareFile(intermediateDir, branchA, 'a.txt')).toBe('A_CHANGE');
+      expect(showBareFile(intermediateDir, branchB, 'b.txt')).toBe('B_CHANGE');
+
+      taskC.status = 'running';
+      await (executor as any).executeTaskInner(taskC);
+      const branchC = taskC.execution.branch!;
+
+      expect(bareBranchExists(intermediateDir, branchC)).toBe(true);
+      expect(showBareFile(intermediateDir, branchC, 'a.txt')).toBe('A_CHANGE');
+      expect(showBareFile(intermediateDir, branchC, 'b.txt')).toBe('B_CHANGE');
+      expect(showBareFile(intermediateDir, branchC, 'c.txt')).toBe('C_CHANGE');
+
+      expect(isBareAncestor(intermediateDir, branchA, branchC)).toBe(true);
+      expect(isBareAncestor(intermediateDir, branchB, branchC)).toBe(true);
+      expect(executor.collectUpstreamBranches(mergeTask)).toEqual([branchC]);
+
+      await (executor as any).consolidateAndMerge(
+        'none',
+        'master',
+        'feature/review-branch',
+        'wf-test',
+        'Branch carry forward',
+        undefined,
+        undefined,
+        false,
+        'master',
+        '__merge__wf-test',
+      );
+
+      const branchProof = {
+        taskToBranch: {
+          'task-a': branchA,
+          'task-b': branchB,
+          'task-c': branchC,
+          '__merge__wf-test': 'feature/review-branch',
+        },
+        branchFiles: {
+          'task-a': bareBranchFileSnapshot(intermediateDir, branchA),
+          'task-b': bareBranchFileSnapshot(intermediateDir, branchB),
+          'task-c': bareBranchFileSnapshot(intermediateDir, branchC),
+          '__merge__wf-test': branchFileSnapshot(tmpDir, 'feature/review-branch'),
+        },
+      };
+
+      expect(branchProof.branchFiles).toEqual({
+        'task-a': {
+          branch: branchA,
+          files: {
+            'a.txt': 'A_CHANGE',
+            'b.txt': '<absent>',
+            'c.txt': '<absent>',
+          },
+        },
+        'task-b': {
+          branch: branchB,
+          files: {
+            'a.txt': '<absent>',
+            'b.txt': 'B_CHANGE',
+            'c.txt': '<absent>',
+          },
+        },
+        'task-c': {
+          branch: branchC,
+          files: {
+            'a.txt': 'A_CHANGE',
+            'b.txt': 'B_CHANGE',
+            'c.txt': 'C_CHANGE',
+          },
+        },
+        '__merge__wf-test': {
+          branch: 'feature/review-branch',
+          files: {
+            'a.txt': 'A_CHANGE',
+            'b.txt': 'B_CHANGE',
+            'c.txt': 'C_CHANGE',
+          },
+        },
+      });
+    });
+
+    it('keeps implementation changes through validation and post-fix leaf branches', async () => {
+      const implementation = makeTaskState({
+        id: 'implementation',
+        description: 'Implementation',
+        config: {
+          command: 'printf implementation > implementation.txt',
+          executorType: 'worktree',
+          workflowId: 'wf-test',
+        },
+      });
+      const verify = makeTaskState({
+        id: 'verify',
+        description: 'Verify',
+        dependencies: ['implementation'],
+        config: { command: 'true', executorType: 'worktree', workflowId: 'wf-test' },
+      });
+      const postFix = makeTaskState({
+        id: 'post-fix',
+        description: 'Post-fix regression',
+        dependencies: ['verify'],
+        config: { command: 'true', executorType: 'worktree', workflowId: 'wf-test' },
+      });
+      const mergeTask = makeTaskState({
+        id: '__merge__wf-test',
+        description: 'Review gate',
+        dependencies: ['post-fix'],
+        status: 'running',
+        config: { executorType: 'merge', isMergeNode: true, workflowId: 'wf-test' },
+      });
+
+      const tasks = [implementation, verify, postFix, mergeTask];
+      const registry = new ExecutorRegistry();
+      registry.register(
+        'worktree',
+        new WorktreeExecutor({
+          cacheDir: join(tmpDir, 'branch-chain-cache'),
+          worktreeBaseDir: join(tmpDir, 'branch-chain-wt'),
+          claudeCommand: '/bin/echo',
+        }),
+      );
+
+      const orchestrator = {
+        getTask: (id: string) => tasks.find(t => t.id === id),
+        getAllTasks: () => tasks,
+        handleWorkerResponse: (response: WorkResponse) => {
+          const task = tasks.find(t => t.id === response.actionId);
+          if (task) task.status = response.status;
+          return [];
+        },
+        setTaskAwaitingApproval: () => {},
+      };
+      const persistence = {
+        loadWorkflow: () => ({
+          id: 'wf-test',
+          name: 'Validation carry forward',
+          onFinish: 'none',
+          mergeMode: 'manual',
+          baseBranch: 'master',
+          featureBranch: 'feature/validation-review',
+          repoUrl: `file://${tmpDir}`,
+        }),
+        updateTask: (id: string, changes: any) => {
+          const task = tasks.find(t => t.id === id);
+          if (task && changes.execution) Object.assign(task.execution, changes.execution);
+          if (task && changes.config) Object.assign(task.config, changes.config);
+        },
+      };
+
+      const executor = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        executorRegistry: registry,
+        cwd: tmpDir,
+        defaultBranch: 'master',
+      });
+
+      implementation.status = 'running';
+      await (executor as any).executeTaskInner(implementation);
+      verify.status = 'running';
+      await (executor as any).executeTaskInner(verify);
+      postFix.status = 'running';
+      await (executor as any).executeTaskInner(postFix);
+
+      const implementationBranch = implementation.execution.branch!;
+      const verifyBranch = verify.execution.branch!;
+      const postFixBranch = postFix.execution.branch!;
+
+      expect(isAncestor(tmpDir, implementationBranch, verifyBranch)).toBe(true);
+      expect(isAncestor(tmpDir, verifyBranch, postFixBranch)).toBe(true);
+      expect(execSync(`git show ${JSON.stringify(verifyBranch)}:implementation.txt`, { cwd: tmpDir }).toString()).toBe('implementation');
+      expect(execSync(`git show ${JSON.stringify(postFixBranch)}:implementation.txt`, { cwd: tmpDir }).toString()).toBe('implementation');
+
+      const mergeUpstreams = executor.collectUpstreamBranches(mergeTask);
+      expect(mergeUpstreams).toEqual([postFixBranch]);
+      expect(mergeUpstreams).not.toContain(implementationBranch);
+      expect(mergeUpstreams).not.toContain(verifyBranch);
+
+      await (executor as any).consolidateAndMerge(
+        'none',
+        'master',
+        'feature/validation-review',
+        'wf-test',
+        'Validation carry forward',
+        undefined,
+        undefined,
+        false,
+        'master',
+        '__merge__wf-test',
+      );
+
+      expect(isAncestor(tmpDir, postFixBranch, 'feature/validation-review')).toBe(true);
+      expect(execSync('git show feature/validation-review:implementation.txt', { cwd: tmpDir }).toString()).toBe('implementation');
     });
   });
 });

@@ -351,6 +351,7 @@ ${this.buildPayloadExecutionScript(payloadB64)}
     // Step 1: Clone/fetch on remote + resolve baseHead
     const script1 = buildMirrorCloneScript({
       repoUrl,
+      branchRepoUrl: request.inputs.branchRepoUrl,
       repoHash: h,
       baseRef,
       invokerHome,
@@ -592,7 +593,7 @@ ${this.buildPayloadExecutionScript(payloadB64)}
       commitMessageEmpty: msgEmpty,
       gitUserName,
       gitUserEmail,
-      pushRemoteUrl: request.inputs.intermediateRepoUrl?.trim() || undefined,
+      pushRemoteUrl: request.inputs.branchRepoUrl?.trim() || undefined,
     });
 
     try {

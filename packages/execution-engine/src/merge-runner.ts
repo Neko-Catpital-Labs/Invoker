@@ -268,15 +268,16 @@ export async function buildPrAuthoringContext(
  * already have the ref; SSH (or other) tasks often push to origin from another host,
  * so fetch into refs/heads/{branch} when missing.
  *
- * Returns true if the branch was found/fetched, false if it's missing everywhere
- * (graceful skip - caller should check ancestry before treating as an error).
+ * Returns true if the branch was found/fetched, false if it's missing everywhere.
+ * Callers that are preparing node output branches must treat false as fatal:
+ * dependency branches are required graph inputs.
  */
 export async function ensureLocalBranchForMerge(
   host: MergeRunnerHost,
   worktreeDir: string,
   branch: string,
   repoUrl?: string,
-  intermediateRepoUrl?: string,
+  branchRepoUrl?: string,
 ): Promise<boolean> {
   let hadLocal = false;
   try {
@@ -300,12 +301,12 @@ export async function ensureLocalBranchForMerge(
     originErr = err;
   }
 
-  const trimmedIntermediateRepoUrl = intermediateRepoUrl?.trim();
-  if (trimmedIntermediateRepoUrl) {
+  const trimmedBranchRepoUrl = branchRepoUrl?.trim();
+  if (trimmedBranchRepoUrl) {
     try {
       await execGitInMergeSafe(
         host,
-        ['fetch', trimmedIntermediateRepoUrl, `+refs/heads/${branch}:refs/heads/${branch}`],
+        ['fetch', trimmedBranchRepoUrl, `+refs/heads/${branch}:refs/heads/${branch}`],
         worktreeDir,
       );
       return true;
@@ -336,7 +337,7 @@ export async function ensureLocalBranchForMerge(
     }
   }
 
-  // Branch not found anywhere - return false to allow graceful skip
+  // Branch not found anywhere.
   const originMsg = originErr instanceof Error ? originErr.message : String(originErr);
   console.log(
     `[merge-gate-workspace] ensureLocalBranchForMerge: branch ${branch} not found locally, on origin, or in mirror. ` +
@@ -708,6 +709,7 @@ export async function approveMergeImpl(
   // Clean up the persistent gate worktree created by executeMergeNodeImpl
   const mergeTaskId = `__merge__${workflowId}`;
   const gateWorktreePath = safeGetWorkspacePath(host.persistence, mergeTaskId);
+  const branchRepoUrl = workflow.intermediateRepoUrl?.trim() || undefined;
 
   if (onFinish === 'merge') {
     const worktreeDir = await host.createMergeWorktree(baseBranch, 'approve-' + workflowId, workflow.repoUrl);
@@ -718,7 +720,7 @@ export async function approveMergeImpl(
         worktreeDir,
         featureBranch,
         workflow.repoUrl,
-        workflow.intermediateRepoUrl,
+        branchRepoUrl,
       );
       await execGitInMergeSafe(host, ['merge', '--squash', featureBranch], worktreeDir);
       mergeTrace('GIT_COMMIT', { mergeMessage });
@@ -962,23 +964,18 @@ export async function publishAfterFixImpl(
         } catch { /* not an ancestor — needs merging */ }
 
         console.log(`[merge] Post-fix: merging task branch ${branch} → ${featureBranch}`);
+        const branchRepoUrl = workflow?.intermediateRepoUrl?.trim() || undefined;
         const branchAvailable = await ensureLocalBranchForMerge(
           host,
           consolidateDir,
           branch,
           workflow?.repoUrl,
-          workflow?.intermediateRepoUrl,
+          branchRepoUrl,
         );
         if (!branchAvailable) {
-          // Branch missing - skip gracefully if experiment branch
-          if (branch.startsWith('experiment/')) {
-            console.log(`[merge] Post-fix: skipping missing experiment branch ${branch} (likely already incorporated)`);
-            skippedCount++;
-            continue;
-          }
           throw new Error(
             `Cannot merge ${branch}: not found locally, on origin, or in mirror. ` +
-            `The branch must exist for non-experiment branches.`,
+            `Dependency branches are required graph inputs and must be available.`,
           );
         }
         const mergeMsg = description ? `Merge ${branch} — ${description}` : `Merge ${branch}`;
@@ -1324,31 +1321,18 @@ export async function consolidateAndMergeImpl(
     let skippedCount = 0;
     for (const branch of taskBranches) {
       console.log(`[merge] Merging task branch: ${branch} → ${featureBranch}`);
+      const branchRepoUrl = workflowForMerge?.intermediateRepoUrl?.trim() || undefined;
       const branchAvailable = await ensureLocalBranchForMerge(
         host,
         worktreeDir,
         branch,
         repoUrlForMerge,
-        workflowForMerge?.intermediateRepoUrl,
+        branchRepoUrl,
       );
       if (!branchAvailable) {
-        // Branch missing everywhere - check if already incorporated via ancestry
-        console.log(`[merge] Branch ${branch} not found, checking if already incorporated...`);
-        try {
-          // If we can't find the branch, we can't verify ancestry. Assume it's already incorporated
-          // if this is an experiment/* branch (common pattern for short-lived branches).
-          if (branch.startsWith('experiment/')) {
-            console.log(`[merge] Skipping missing experiment branch ${branch} (likely already incorporated and deleted)`);
-            skippedCount++;
-            continue;
-          }
-        } catch {
-          /* ancestry check failed, branch truly missing */
-        }
-        // Non-experiment branches must be available for merge
         throw new Error(
           `Cannot merge ${branch}: not found locally, on origin, or in mirror. ` +
-          `The branch must exist for non-experiment branches.`,
+          `Dependency branches are required graph inputs and must be available.`,
         );
       }
       const task = allTasks.find(t => t.execution.branch === branch);

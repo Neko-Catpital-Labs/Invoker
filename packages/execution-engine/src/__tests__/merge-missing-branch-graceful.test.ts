@@ -1,9 +1,6 @@
 /**
- * Regression test for: merge gate attempts to merge already-incorporated
- * experiment branches that no longer exist.
- *
- * Scenario: An experiment branch was merged via another path and deleted.
- * The merge gate still references it. Should skip gracefully, not fail.
+ * Legacy opt-in coverage for callers that explicitly allow missing branches.
+ * Node branch setup and merge gates use the default fatal mode.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -54,6 +51,7 @@ describe('Merge gate missing experiment branch handling', () => {
           worktreeDir: wtDir,
           upstreamBranches: ['experiment/add-feature-abc123'],
           skipAncestors: true,
+          missingRefMode: 'skip',
         });
 
         // Should succeed and skip the missing branch
@@ -80,6 +78,7 @@ describe('Merge gate missing experiment branch handling', () => {
         worktreeDir: wtDir,
         upstreamBranches: ['feature/missing-important-branch'],
         skipAncestors: true,
+        missingRefMode: 'skip',
       });
 
       // Should succeed but skip (bash script doesn't differentiate branch types,
@@ -115,6 +114,7 @@ describe('Merge gate missing experiment branch handling', () => {
           'experiment/missing-branch-2',
         ],
         skipAncestors: true,
+        missingRefMode: 'skip',
       });
 
       const stdout = await runBashLocal(script);

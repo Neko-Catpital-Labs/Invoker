@@ -187,19 +187,55 @@ export interface MergeUpstreamsOpts {
   worktreeDir: string;
   upstreamBranches: string[];
   skipAncestors?: boolean;
+  missingRefMode?: 'fail' | 'skip';
+}
+
+export interface FetchNodeRemotesOpts {
+  worktreeDir: string;
+  branchRepoUrl?: string;
+}
+
+/**
+ * Fetch refs needed for node branch setup. If a branch repo is configured
+ * it is part of the workflow's branch transport contract, so fetch failures are
+ * fatal instead of silently falling back to stale or incomplete refs.
+ */
+export function bashFetchNodeRemotes(opts: FetchNodeRemotesOpts): string {
+  const { worktreeDir, branchRepoUrl } = opts;
+  const q = shellQuote;
+  const branchRepo = branchRepoUrl?.trim();
+
+  return `set -euo pipefail
+WT_DIR=${q(worktreeDir)}
+if git -C "$WT_DIR" remote get-url origin >/dev/null 2>&1; then
+  git -C "$WT_DIR" fetch origin '+refs/heads/*:refs/remotes/origin/*' --prune
+fi
+${branchRepo ? `BRANCH_REPO_URL=${q(branchRepo)}
+if git -C "$WT_DIR" remote get-url invoker-branches >/dev/null 2>&1; then
+  git -C "$WT_DIR" remote set-url invoker-branches "$BRANCH_REPO_URL"
+else
+  git -C "$WT_DIR" remote add invoker-branches "$BRANCH_REPO_URL"
+fi
+if ! git -C "$WT_DIR" fetch invoker-branches '+refs/heads/*:refs/remotes/invoker-branches/*' --prune; then
+  echo "BRANCH_REPO_FETCH_FAILED=$BRANCH_REPO_URL" >&2
+  exit 32
+fi` : ''}
+`;
 }
 
 /**
  * Generate a bash script that merges upstream dependency branches into the
  * working directory. Skips branches already in HEAD's ancestry by default.
- * Skips missing branches gracefully (exit 0) when they don't exist locally or on origin.
+ * Fails missing branches by default because dependency branches are required
+ * graph inputs. Callers may opt into legacy skip behavior only where missing
+ * refs are explicitly non-authoritative.
  *
- * Exit codes: 0=success (includes skipped branches), 31=merge conflict.
+ * Exit codes: 0=success, 30=missing required upstream ref, 31=merge conflict.
  * On conflict, stderr contains MERGE_CONFLICT_BRANCH=<branch> and MERGE_CONFLICT_FILES.
- * On skipped missing refs, stdout contains SKIPPED_MISSING_REF=<branch>.
+ * On missing refs, stderr contains MISSING_REF=<branch> unless skip mode is used.
  */
 export function bashMergeUpstreams(opts: MergeUpstreamsOpts): string {
-  const { worktreeDir, upstreamBranches, skipAncestors = true } = opts;
+  const { worktreeDir, upstreamBranches, skipAncestors = true, missingRefMode = 'fail' } = opts;
   if (!upstreamBranches.length) return 'true';
 
   const q = shellQuote;
@@ -213,17 +249,20 @@ WT_DIR=${q(worktreeDir)}
 git -C "$WT_DIR" reset --hard HEAD >/dev/null 2>&1 || true
 git -C "$WT_DIR" clean -fd >/dev/null 2>&1 || true
 for upBranch in ${branches}; do
-  # Resolve: prefer fetched origin/<branch> over same-named local branches.
+  # Resolve: prefer fetched origin/<branch> or invoker-branches/<branch> over same-named local branches.
   # Managed mirrors accumulate local experiment refs from prior runs; after a
   # fetch, a stale local branch must not shadow a newer remote-tracking ref.
   if git -C "$WT_DIR" rev-parse --verify "origin/$upBranch" >/dev/null 2>&1; then
     upRef="origin/$upBranch"
+  elif git -C "$WT_DIR" rev-parse --verify "invoker-branches/$upBranch" >/dev/null 2>&1; then
+    upRef="invoker-branches/$upBranch"
   elif git -C "$WT_DIR" rev-parse --verify "$upBranch" >/dev/null 2>&1; then
     upRef="$upBranch"
   else
-    # Branch doesn't exist locally or on origin - skip gracefully
+${missingRefMode === 'skip' ? `    # Branch doesn't exist locally or on configured remotes - skip by caller request.
     echo "SKIPPED_MISSING_REF=$upBranch"
-    continue
+    continue` : `    echo "MISSING_REF=$upBranch" >&2
+    exit 30`}
   fi
 ${skipAncestors ? `  if git -C "$WT_DIR" merge-base --is-ancestor "$upRef" HEAD 2>/dev/null; then
     echo "SKIPPED=$upBranch"
