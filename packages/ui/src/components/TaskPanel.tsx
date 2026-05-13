@@ -18,6 +18,43 @@ import {
 } from '../lib/colors.js';
 import { mergeGatePanelHeading } from '../lib/merge-gate.js';
 
+interface TaskAuditEvent {
+  eventType: string;
+  payload?: string;
+}
+
+const SETUP_FAILURE_MARKERS = [
+  'Executor startup failed',
+  'Worktree provisioning failed',
+  'ERR_PNPM_UNSUPPORTED_ENGINE',
+] as const;
+
+function extractWorkspaceSetupFailures(events: readonly TaskAuditEvent[]): string[] {
+  const failures: string[] = [];
+
+  for (const event of events) {
+    if (event.eventType !== 'task.failed' || !event.payload) continue;
+
+    try {
+      const payload = JSON.parse(event.payload) as {
+        execution?: { error?: unknown };
+      };
+      const error = payload.execution?.error;
+      if (
+        typeof error === 'string'
+        && SETUP_FAILURE_MARKERS.some(marker => error.includes(marker))
+        && !failures.includes(error)
+      ) {
+        failures.push(error);
+      }
+    } catch {
+      // Ignore malformed historical audit payloads.
+    }
+  }
+
+  return failures;
+}
+
 function formatElapsed(dateVal: Date | string | undefined): string {
   if (!dateVal) return '--';
   const d = dateVal instanceof Date ? dateVal : new Date(dateVal);
@@ -210,6 +247,7 @@ export function TaskPanel({
   const [isSavingGatePolicies, setIsSavingGatePolicies] = useState(false);
   const [gatePolicyDraft, setGatePolicyDraft] = useState<Record<string, 'completed' | 'review_ready'>>({});
   const [isSatisfiedListExpanded, setIsSatisfiedListExpanded] = useState(false);
+  const [workspaceSetupFailures, setWorkspaceSetupFailures] = useState<string[]>([]);
 
   useEffect(() => {
     setIsEditingCommand(false);
@@ -226,6 +264,28 @@ export function TaskPanel({
     }
     setGatePolicyDraft(nextDraft);
   }, [task?.id, baseBranch]);
+
+  useEffect(() => {
+    if (!task) {
+      setWorkspaceSetupFailures([]);
+      return;
+    }
+
+    let cancelled = false;
+    setWorkspaceSetupFailures([]);
+    window.invoker?.getEvents(task.id)
+      .then((events) => {
+        const failures = extractWorkspaceSetupFailures(events);
+        if (!cancelled && failures.length > 0) {
+          setWorkspaceSetupFailures(failures);
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [task?.id]);
 
   if (!task) {
     return (
@@ -272,6 +332,9 @@ export function TaskPanel({
   const mergeGateDisplayTitle = mergeGatePanelHeading(task, mergeMode);
   const isFixApproval = Boolean(task.execution.pendingFixError);
   const externalDeps = task.config.externalDependencies ?? [];
+  const visibleWorkspaceSetupFailures = workspaceSetupFailures.filter((error) => {
+    return !task.execution.error?.includes(error);
+  });
   const canEditGatePolicies = Boolean(
     onSetExternalGatePolicies
     && externalDeps.length > 0
@@ -626,11 +689,23 @@ export function TaskPanel({
       )}
 
       {/* Error / Exit Code */}
-      {(task.execution.error || (task.execution.exitCode !== undefined && task.execution.exitCode !== 0)) && (
+      {(task.execution.error || visibleWorkspaceSetupFailures.length > 0 || (task.execution.exitCode !== undefined && task.execution.exitCode !== 0)) && (
         <div className="bg-red-900/30 border border-red-700 rounded p-3">
           <h3 className="text-sm font-medium text-red-400 mb-1">Error</h3>
           {task.execution.error && (
             <p className="text-xs text-red-300 whitespace-pre-wrap">{task.execution.error}</p>
+          )}
+          {visibleWorkspaceSetupFailures.length > 0 && (
+            <div className={task.execution.error ? 'mt-2 space-y-2' : 'space-y-2'}>
+              {visibleWorkspaceSetupFailures.map((error) => (
+                <pre
+                  key={error}
+                  className="text-xs text-red-200 whitespace-pre-wrap font-mono"
+                >
+                  {error}
+                </pre>
+              ))}
+            </div>
           )}
           {task.execution.exitCode !== undefined && (
             <p className="text-xs text-red-400 mt-1">Exit code: {task.execution.exitCode}</p>
