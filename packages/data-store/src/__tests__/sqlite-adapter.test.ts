@@ -340,6 +340,28 @@ describe('SQLiteAdapter', () => {
       [loaded] = adapter.loadTasks('wf-1');
       expect(loaded.config.dockerImage).toBe('invoker-agent:latest');
     });
+
+    it('round-trips poolId on save and update', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t-pool', {
+        config: {
+          executorType: 'ssh',
+          poolId: 'ssh-light',
+        },
+      }));
+
+      let [loaded] = adapter.loadTasks('wf-1');
+      expect(loaded.config.poolId).toBe('ssh-light');
+
+      adapter.updateTask('t-pool', {
+        config: {
+          poolId: 'ssh-heavy',
+        },
+      });
+
+      [loaded] = adapter.loadTasks('wf-1');
+      expect(loaded.config.poolId).toBe('ssh-heavy');
+    });
   });
 
   describe('listWorkflows', () => {

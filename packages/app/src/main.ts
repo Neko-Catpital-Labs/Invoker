@@ -421,6 +421,9 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     maxConcurrency: effectiveMaxConcurrency,
     defaultAutoFixRetries: invokerConfig.autoFixRetries,
     executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
+    heavyweightCommandRouting: invokerConfig.heavyweightCommandRouting,
+    availableRemoteTargetIds: Object.keys(invokerConfig.remoteTargets ?? {}),
+    availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
     deferRunningUntilLaunch: true,
   });
   commandService = new CommandService(orchestrator);
@@ -1467,6 +1470,7 @@ if (isHeadless) {
         secretsFile: resolveSecretsFilePath(invokerConfig),
       },
       remoteTargetsProvider: () => loadConfig().remoteTargets ?? {},
+      executionPoolsProvider: () => loadConfig().executionPools ?? {},
       mergeGateProvider: new GitHubMergeGateProvider(),
       reviewProviderRegistry: (() => {
         const registry = new ReviewProviderRegistry();
@@ -2826,6 +2830,9 @@ if (isHeadless) {
         maxConcurrency: effectiveMaxConcurrency,
         defaultAutoFixRetries: invokerConfig.autoFixRetries,
         executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
+        heavyweightCommandRouting: invokerConfig.heavyweightCommandRouting,
+        availableRemoteTargetIds: Object.keys(invokerConfig.remoteTargets ?? {}),
+        availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
         deferRunningUntilLaunch: true,
       });
       commandService = new CommandService(orchestrator);
