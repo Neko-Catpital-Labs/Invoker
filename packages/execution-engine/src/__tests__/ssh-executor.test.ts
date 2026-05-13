@@ -961,6 +961,43 @@ describe('SshExecutor entry lifecycle', () => {
     ]));
   });
 
+  it('uses configured remote heartbeat interval from SSH target config', async () => {
+    const ssh2 = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      remoteHeartbeatIntervalSeconds: 11,
+    }) as any;
+
+    vi.spyOn(ssh2, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return '__INVOKER_BASE_REF__=origin/main\n__INVOKER_BASE_HEAD__=abc123def456abc123def456abc123def456abc1';
+      }
+      if (script.includes('printf %s \"$HOME\"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+    vi.spyOn(ssh2, 'setupTaskBranch').mockResolvedValue(undefined);
+
+    await ssh2.start(makeRequest({
+      actionType: 'command',
+      inputs: {
+        command: 'echo heartbeat',
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    }));
+
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+    expect(proc).toBeDefined();
+    const writeMock = (proc.stdin as any).write as ReturnType<typeof vi.fn>;
+    const script = writeMock.mock.calls[0]![0] as string;
+    expect(script).toContain('INVOKER_HEARTBEAT_INTERVAL_SECONDS=11');
+    proc.emit('close', 0, null);
+    await new Promise((r) => setTimeout(r, 50));
+  });
+
   it('preserves stdout on execRemoteCapture error (Bug #4)', async () => {
     const ssh2 = new SshExecutor({
       host: 'localhost',

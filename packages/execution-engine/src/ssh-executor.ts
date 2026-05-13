@@ -53,6 +53,11 @@ export interface SshExecutorConfig {
    * Only used in managed mode. Default: pnpm install --frozen-lockfile
    */
   provisionCommand?: string;
+  /**
+   * Remote workload heartbeat interval (seconds) emitted by the SSH payload wrapper.
+   * Default: 30.
+   */
+  remoteHeartbeatIntervalSeconds?: number;
 }
 
 interface SshEntry extends BaseEntry {
@@ -81,6 +86,7 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
   private readonly managedWorkspaces: boolean;
   private readonly remoteInvokerHome: string;
   private readonly provisionCommand: string;
+  private readonly remoteHeartbeatIntervalSeconds: number;
   private readonly remotePath: string;
 
   constructor(config: SshExecutorConfig) {
@@ -93,6 +99,13 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
     this.managedWorkspaces = config.managedWorkspaces ?? false;
     this.remoteInvokerHome = config.remoteInvokerHome ?? '~/.invoker';
     this.provisionCommand = config.provisionCommand ?? DEFAULT_WORKTREE_PROVISION_COMMAND;
+    const configuredRemoteHeartbeatInterval = config.remoteHeartbeatIntervalSeconds;
+    this.remoteHeartbeatIntervalSeconds =
+      typeof configuredRemoteHeartbeatInterval === 'number'
+      && Number.isFinite(configuredRemoteHeartbeatInterval)
+      && configuredRemoteHeartbeatInterval > 0
+        ? configuredRemoteHeartbeatInterval
+        : SshExecutor.DEFAULT_REMOTE_HEARTBEAT_INTERVAL_SECONDS;
     this.remotePath = process.env.PATH ?? '';
   }
 
@@ -115,18 +128,8 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
     }, { batchMode: false });
   }
 
-  private getRemoteHeartbeatIntervalSeconds(): number {
-    const raw = process.env.INVOKER_SSH_REMOTE_HEARTBEAT_INTERVAL_SECONDS?.trim();
-    if (!raw) return SshExecutor.DEFAULT_REMOTE_HEARTBEAT_INTERVAL_SECONDS;
-    const parsed = Number.parseInt(raw, 10);
-    if (!Number.isFinite(parsed) || parsed <= 0) {
-      return SshExecutor.DEFAULT_REMOTE_HEARTBEAT_INTERVAL_SECONDS;
-    }
-    return parsed;
-  }
-
   private buildPayloadExecutionScript(payloadB64: string): string {
-    const intervalSeconds = this.getRemoteHeartbeatIntervalSeconds();
+    const intervalSeconds = this.remoteHeartbeatIntervalSeconds;
     return `(
   echo ${payloadB64} | base64 -d | bash -se
 ) &

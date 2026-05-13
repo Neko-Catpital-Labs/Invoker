@@ -27,7 +27,8 @@
       "port": 22,
       "managedWorkspaces": true,
       "remoteInvokerHome": "~/.invoker",
-      "provisionCommand": "pnpm install --frozen-lockfile"
+      "provisionCommand": "pnpm install --frozen-lockfile",
+      "remoteHeartbeatIntervalSeconds": 30
     },
     "build-server-b": {
       "comment": "Second SSH target for running different tasks on a different host",
@@ -37,7 +38,8 @@
       "port": 22,
       "managedWorkspaces": true,
       "remoteInvokerHome": "~/.invoker",
-      "provisionCommand": "pnpm install --frozen-lockfile"
+      "provisionCommand": "pnpm install --frozen-lockfile",
+      "remoteHeartbeatIntervalSeconds": 30
     }
   },
 
