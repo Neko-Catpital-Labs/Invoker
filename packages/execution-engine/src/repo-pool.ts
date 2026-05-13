@@ -26,6 +26,11 @@ export interface RepoPoolConfig {
   worktreeBaseDir?: string;
 }
 
+export interface RepoPoolTiming {
+  mark(functionName: string, phase: 'started' | 'completed' | 'failed', metadata?: Record<string, unknown>): void;
+  span<T>(functionName: string, metadata: Record<string, unknown> | undefined, fn: () => Promise<T>): Promise<T>;
+}
+
 export interface AcquiredWorktree {
   clonePath: string;
   worktreePath: string;
@@ -77,60 +82,109 @@ export class RepoPool {
   /**
    * Force-fetch mirror and sync origin/<baseBranch> (rebase-and-retry). Ignores remoteFetchForPool.
    */
-  async refreshMirrorForRebase(repoUrl: string, baseBranch: string): Promise<string> {
+  async refreshMirrorForRebase(repoUrl: string, baseBranch: string, timing?: RepoPoolTiming): Promise<string> {
     const prev = this.repoChains.get(repoUrl) ?? Promise.resolve();
-    const next = prev.then(() => this.doRefreshMirrorForRebase(repoUrl, baseBranch));
+    const queuedAtMs = Date.now();
+    const next = prev.then(() => {
+      timing?.mark('RepoPool.refreshMirrorForRebase.repoChainWait', 'completed', {
+        repoUrl,
+        baseBranch,
+        durationMs: Date.now() - queuedAtMs,
+      });
+      return this.doRefreshMirrorForRebase(repoUrl, baseBranch, timing);
+    });
     this.repoChains.set(repoUrl, next.catch(() => {}));
     return next;
   }
 
-  private async doRefreshMirrorForRebase(repoUrl: string, baseBranch: string): Promise<string> {
+  private async doRefreshMirrorForRebase(repoUrl: string, baseBranch: string, timing?: RepoPoolTiming): Promise<string> {
     const dir = this.cloneDir(repoUrl);
     if (existsSync(dir)) {
       try {
-        await this.execGit(['fetch', '--all', '--prune'], dir);
+        await this.time(timing, 'RepoPool.doRefreshMirrorForRebase.gitFetchAllPrune', { dir }, () =>
+          this.execGit(['fetch', '--all', '--prune'], dir),
+        );
       } catch (err) {
         console.warn(`[RepoPool] refreshMirrorForRebase fetch failed: ${err}`);
       }
       try {
-        const branch = (await this.execGit(['rev-parse', '--abbrev-ref', 'HEAD'], dir)).trim();
+        const branch = (await this.time(timing, 'RepoPool.doRefreshMirrorForRebase.gitCurrentBranch', { dir }, () =>
+          this.execGit(['rev-parse', '--abbrev-ref', 'HEAD'], dir),
+        )).trim();
         if (branch !== 'HEAD') {
-          await this.execGit(['merge', '--ff-only', `origin/${branch}`], dir);
+          await this.time(timing, 'RepoPool.doRefreshMirrorForRebase.gitFastForwardCurrentBranch', { dir, branch }, () =>
+            this.execGit(['merge', '--ff-only', `origin/${branch}`], dir),
+          );
+        } else {
+          timing?.mark('RepoPool.doRefreshMirrorForRebase.gitFastForwardCurrentBranch', 'completed', {
+            dir,
+            branch,
+            skipped: true,
+            reason: 'detached-head',
+          });
         }
       } catch { /* non-ff or detached */ }
     } else {
       mkdirSync(this.cacheDir, { recursive: true });
-      await this.execGit(['clone', repoUrl, dir], this.cacheDir);
+      await this.time(timing, 'RepoPool.doRefreshMirrorForRebase.gitCloneMirror', { dir, repoUrl }, () =>
+        this.execGit(['clone', repoUrl, dir], this.cacheDir),
+      );
     }
     const runGit = (args: string[]) => this.execGit(args, dir);
-    await syncPlanBaseRemoteForRef(runGit, baseBranch);
+    await this.time(timing, 'RepoPool.doRefreshMirrorForRebase.syncPlanBaseRemoteForRef', { dir, baseBranch }, () =>
+      syncPlanBaseRemoteForRef(runGit, baseBranch),
+    );
     return dir;
   }
 
   /**
    * Remove Invoker-managed branches (experiment/*, invoker/*) from the mirror and linked worktrees.
    */
-  async removeManagedBranchesInMirror(repoUrl: string, branches: string[]): Promise<void> {
+  async removeManagedBranchesInMirror(repoUrl: string, branches: string[], timing?: RepoPoolTiming): Promise<void> {
     const prev = this.repoChains.get(repoUrl) ?? Promise.resolve();
-    const next = prev.then(() => this.doRemoveManagedBranchesInMirror(repoUrl, branches));
+    const queuedAtMs = Date.now();
+    const next = prev.then(() => {
+      timing?.mark('RepoPool.removeManagedBranchesInMirror.repoChainWait', 'completed', {
+        repoUrl,
+        branchCount: branches.length,
+        durationMs: Date.now() - queuedAtMs,
+      });
+      return this.doRemoveManagedBranchesInMirror(repoUrl, branches, timing);
+    });
     this.repoChains.set(repoUrl, next.catch(() => {}));
     return next;
   }
 
-  private async doRemoveManagedBranchesInMirror(repoUrl: string, branches: string[]): Promise<void> {
+  private async doRemoveManagedBranchesInMirror(repoUrl: string, branches: string[], timing?: RepoPoolTiming): Promise<void> {
     // Gated: with attemptId in branch hash, leftover refs cannot collide with
     // future attempts, so deletion is unnecessary. Set
     // INVOKER_ENABLE_WORKSPACE_CLEANUP=1 to restore the rebase-and-retry
     // branch sweep.
-    if (!isWorkspaceCleanupEnabled()) return;
+    if (!isWorkspaceCleanupEnabled()) {
+      timing?.mark('RepoPool.doRemoveManagedBranchesInMirror', 'completed', {
+        enabled: false,
+        branchCount: branches.length,
+      });
+      return;
+    }
     const dir = this.cloneDir(repoUrl);
-    if (!existsSync(dir) || !this.worktreeBaseDir) return;
+    if (!existsSync(dir) || !this.worktreeBaseDir) {
+      timing?.mark('RepoPool.doRemoveManagedBranchesInMirror', 'completed', {
+        enabled: true,
+        skipped: true,
+        reason: 'missing-dir-or-worktree-base',
+        branchCount: branches.length,
+      });
+      return;
+    }
     for (const branch of branches) {
       if (!isInvokerManagedPoolBranch(branch)) continue;
       const sanitized = sanitizeBranchForPath(branch);
       const wtPath = `${this.worktreeBaseDir}/${computeRepoUrlHash(repoUrl)}/${sanitized}`;
       try {
-        await this.execGit(['worktree', 'remove', '--force', wtPath], dir);
+        await this.time(timing, 'RepoPool.doRemoveManagedBranchesInMirror.gitWorktreeRemove', { dir, branch, wtPath }, () =>
+          this.execGit(['worktree', 'remove', '--force', wtPath], dir),
+        );
       } catch {
         /* not registered */
       }
@@ -140,11 +194,23 @@ export class RepoPool {
         } catch { /* */ }
       }
       try {
-        await this.execGit(['branch', '-D', branch], dir);
+        await this.time(timing, 'RepoPool.doRemoveManagedBranchesInMirror.gitBranchDelete', { dir, branch }, () =>
+          this.execGit(['branch', '-D', branch], dir),
+        );
       } catch {
         /* missing or checked out elsewhere */
       }
     }
+  }
+
+  private async time<T>(
+    timing: RepoPoolTiming | undefined,
+    functionName: string,
+    metadata: Record<string, unknown>,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    if (!timing) return fn();
+    return timing.span(functionName, metadata, fn);
   }
 
   async ensureClone(repoUrl: string): Promise<string> {
