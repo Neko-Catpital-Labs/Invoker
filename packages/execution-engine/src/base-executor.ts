@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
 import type { Executor, ExecutorHandle, PersistedTaskMeta, TerminalSpec, Unsubscribe } from './executor.js';
-import { bashPreserveOrReset, bashMergeUpstreams, parsePreserveResult, parseMergeError } from './branch-utils.js';
+import { bashPreserveOrReset, bashMergeUpstreams, bashFetchNodeRemotes, parsePreserveResult, parseMergeError } from './branch-utils.js';
 import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
 import type { AgentRegistry } from './agent-registry.js';
 import { checkStaleness } from './git-staleness-detector.js';
@@ -79,7 +79,7 @@ export class MergeConflictError extends Error {
 }
 
 export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor {
-  protected static readonly INTERMEDIATE_REMOTE_NAME = 'intermediate';
+  protected static readonly BRANCH_REMOTE_NAME = 'invoker-branches';
   abstract readonly type: string;
   protected entries = new Map<string, TEntry>();
   protected heartbeatIntervalMs: number;
@@ -539,10 +539,18 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
       traceExecution(`${RESTART_TO_BRANCH_TRACE} [mergeRequestUpstreamBranches] no upstream merges`);
       return;
     }
+    await this.runBash(
+      bashFetchNodeRemotes({
+        worktreeDir: mergeCwd,
+        branchRepoUrl: request.inputs.branchRepoUrl,
+      }),
+      mergeCwd,
+    );
     const mergeScript = bashMergeUpstreams({
       worktreeDir: mergeCwd,
       upstreamBranches: upstreamsToMerge,
       skipAncestors: true,
+      missingRefMode: 'fail',
     });
     try {
       await this.runBash(mergeScript, mergeCwd);
@@ -598,6 +606,16 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         traceExecution(`${RESTART_TO_BRANCH_TRACE} [setupTaskBranch] originalBranch (repo checkout mode)=${originalBranch}`);
       } else {
         traceExecution(`${RESTART_TO_BRANCH_TRACE} [setupTaskBranch] originalBranch=(skipped, worktree mode)`);
+      }
+
+      if (!opts?.worktreeDir && upstreams.length > 0) {
+        await this.runBash(
+          bashFetchNodeRemotes({
+            worktreeDir: mergeCwd,
+            branchRepoUrl: request.inputs.branchRepoUrl,
+          }),
+          mergeCwd,
+        );
       }
 
       const preserveScript = bashPreserveOrReset({
@@ -671,7 +689,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     if (!commitHash) {
       return { error: 'commit approved fix failed' };
     }
-    const pushError = await this.pushBranchToRemote(cwd, branch, undefined, request.inputs.intermediateRepoUrl);
+    const pushError = await this.pushBranchToRemote(cwd, branch, undefined, request.inputs.branchRepoUrl);
     if (pushError) {
       return { error: pushError };
     }
@@ -786,27 +804,27 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     cwd: string,
     branch: string,
     executionId?: string,
-    intermediateRepoUrlOverride?: string,
+    branchRepoUrlOverride?: string,
   ): Promise<string | undefined> {
     try {
-      const requestIntermediateRepoUrl = intermediateRepoUrlOverride ?? (executionId
-        ? this.entries.get(executionId)?.request.inputs.intermediateRepoUrl
+      const requestBranchRepoUrl = branchRepoUrlOverride ?? (executionId
+        ? this.entries.get(executionId)?.request.inputs.branchRepoUrl
         : undefined);
-      const intermediateRepoUrl = requestIntermediateRepoUrl?.trim();
-      if (intermediateRepoUrl) {
+      const branchRepoUrl = requestBranchRepoUrl?.trim();
+      if (branchRepoUrl) {
         try {
           await this.execGitSimple(
-            ['remote', 'set-url', BaseExecutor.INTERMEDIATE_REMOTE_NAME, intermediateRepoUrl],
+            ['remote', 'set-url', BaseExecutor.BRANCH_REMOTE_NAME, branchRepoUrl],
             cwd,
           );
         } catch {
           await this.execGitSimple(
-            ['remote', 'add', BaseExecutor.INTERMEDIATE_REMOTE_NAME, intermediateRepoUrl],
+            ['remote', 'add', BaseExecutor.BRANCH_REMOTE_NAME, branchRepoUrl],
             cwd,
           );
         }
         await this.execGitSimpleWithNetworkTimeout(
-          ['push', '--force-with-lease', '-u', BaseExecutor.INTERMEDIATE_REMOTE_NAME, branch],
+          ['push', '--force-with-lease', '-u', BaseExecutor.BRANCH_REMOTE_NAME, branch],
           cwd,
         );
       } else {

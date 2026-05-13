@@ -142,6 +142,22 @@ describe('buildMirrorCloneScript', () => {
     expect(script).toContain('REPO=$(echo');
     expect(script).toContain('base64 -d)');
   });
+
+  it('configures and fetches branch repo when provided', () => {
+    const script = buildMirrorCloneScript({
+      repoUrl: 'git@github.com:owner/repo.git',
+      branchRepoUrl: 'git@github.com:fork/repo.git',
+      repoHash: 'abc123',
+      baseRef: 'main',
+    });
+
+    expect(script).toContain('BRANCH_REPO=$(echo');
+    expect(script).toContain('git -C "$CLONE" remote set-url invoker-branches "$BRANCH_REPO"');
+    expect(script).toContain('git -C "$CLONE" remote add invoker-branches "$BRANCH_REPO"');
+    expect(script).toContain("git -C \"$CLONE\" fetch invoker-branches '+refs/heads/*:refs/remotes/invoker-branches/*' --prune");
+    expect(script).toContain('BRANCH_REPO_FETCH_FAILED=$BRANCH_REPO');
+    expect(script).toContain('exit 32');
+  });
 });
 
 describe('parseBootstrapOutput', () => {
@@ -345,7 +361,7 @@ describe('buildRecordAndPushScript', () => {
     expect(script).toContain(bashNormalizeTildePath());
   });
 
-  it('targets intermediate remote when pushRemoteUrl is provided', () => {
+  it('targets branch repo remote when pushRemoteUrl is provided', () => {
     const script = buildRecordAndPushScript({
       worktreePath: '~/worktree',
       branch: 'branch',
@@ -356,9 +372,9 @@ describe('buildRecordAndPushScript', () => {
       pushRemoteUrl: 'https://github.com/fork/repo.git',
     });
 
-    expect(script).toContain('git remote set-url intermediate "$PUSH_URL"');
-    expect(script).toContain('git remote add intermediate "$PUSH_URL"');
-    expect(script).toContain('git push -u intermediate "$BR"');
+    expect(script).toContain('git remote set-url invoker-branches "$PUSH_URL"');
+    expect(script).toContain('git remote add invoker-branches "$PUSH_URL"');
+    expect(script).toContain('git push -u invoker-branches "$BR"');
   });
 
   it('commits and pushes successfully without preconfigured git identity', () => {
