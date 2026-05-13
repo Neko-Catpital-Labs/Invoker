@@ -24,7 +24,7 @@ export interface TerminalSpec {
 
 export interface PersistedTaskMeta {
   taskId: string;
-  executorType: string;
+  runnerKind: string;
   agentSessionId?: string;
   /** Configured execution agent name (e.g. 'claude', 'codex'). Used for session resume. */
   executionAgent?: string;

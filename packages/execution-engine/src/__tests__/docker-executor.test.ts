@@ -437,7 +437,7 @@ describe('DockerExecutor', () => {
   describe('getRestoredTerminalSpec', () => {
     const baseMeta: PersistedTaskMeta = {
       taskId: 'task-docker-1',
-      executorType: 'docker',
+      runnerKind: 'docker',
       containerId: 'container-abc123',
     };
 
@@ -464,7 +464,7 @@ describe('DockerExecutor', () => {
       expect(() =>
         executor.getRestoredTerminalSpec({
           taskId: 'task-no-container',
-          executorType: 'docker',
+          runnerKind: 'docker',
         }),
       ).toThrow(/No container ID found/);
     });
@@ -831,7 +831,7 @@ describe('DockerExecutor', () => {
       // Revisit path uses persisted metadata (containerId), NOT the entries map.
       const meta: PersistedTaskMeta = {
         taskId: handle.taskId,
-        executorType: executor.type,
+        runnerKind: executor.type,
         containerId: handle.containerId,
         branch: handle.branch,
         executionAgent: 'claude',

@@ -45,7 +45,7 @@
 
   "heavyweightCommandRouting": {
     "comment": "Auto-route heavyweight shell commands like pnpm test to a remote target",
-    "remoteTargetId": "staging-server",
+    "poolMemberId": "staging-server",
     "matchers": [
       {
         "regex": "\\bpnpm(?:\\s|$)"
@@ -62,7 +62,7 @@
       "~/.invoker/config.json - Default user-level settings",
       "INVOKER_REPO_CONFIG_PATH=/path/to/config.json - Explicit override for repo/test-specific config"
     ],
-    "executor_types": [
+    "runner_kinds": [
       "worktree - Git worktree isolation (default)",
       "docker - Docker container execution",
       "ssh - Remote SSH execution"

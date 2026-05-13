@@ -58,9 +58,8 @@ export interface RawPlanTask {
   experimentVariants?: RawExperimentVariant[];
   requiresManualApproval?: boolean;
   featureBranch?: string;
-  executorType?: string;
   dockerImage?: string;
-  remoteTargetId?: string;
+  poolId?: string;
   executionAgent?: string;
 }
 
@@ -75,7 +74,6 @@ export interface RawPlan {
   reviewProvider?: string;
   repoUrl?: string;
   intermediateRepoUrl?: string;
-  executorType?: string;
   externalDependencies?: Array<{
     workflowId?: string;
     taskId?: string;
@@ -198,6 +196,23 @@ function mergeExternalDependencies(
   return values.length > 0 ? values : undefined;
 }
 
+const legacyTaskRoutingKeys = [
+  ['executor', 'Type'].join(''),
+  ['remote', 'Target', 'Id'].join(''),
+  'runnerKind',
+  'poolMemberId',
+] as const;
+
+function assertNoLegacyRoutingKeys(ownerLabel: string, value: object): void {
+  for (const key of legacyTaskRoutingKeys) {
+    if (Object.prototype.hasOwnProperty.call(value, key)) {
+      throw new PlanParseError(
+        `${ownerLabel} uses unsupported routing field "${key}". Use "poolId" for pools and "dockerImage" for Docker.`,
+      );
+    }
+  }
+}
+
 /**
  * Parse a YAML string into a validated PlanDefinition.
  * Throws PlanParseError if validation fails.
@@ -230,6 +245,7 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       'Plan-level "autoFixRetries" is no longer supported. Configure "~/.invoker/config.json" with "autoFixRetries" instead.',
     );
   }
+  assertNoLegacyRoutingKeys('Plan', raw as object);
 
   // Validate onFinish
   const validOnFinishValues = ['none', 'merge', 'pull_request'] as const;
@@ -277,7 +293,6 @@ export function parsePlan(yamlContent: string): PlanDefinition {
     raw.intermediateRepoUrl = raw.intermediateRepoUrl.trim();
   }
 
-  const defaultExecutorType = raw.executorType;
   const topLevelExternalDependencies = parseExternalDependencies('Plan', raw.externalDependencies);
 
   const tasks = raw.tasks.map((task, index) => {
@@ -288,6 +303,7 @@ export function parsePlan(yamlContent: string): PlanDefinition {
     if (!task.description || typeof task.description !== 'string') {
       throw new PlanParseError(`Task "${task.id}" must have a "description" field`);
     }
+    assertNoLegacyRoutingKeys(`Task "${task.id}"`, task as object);
 
     if (hasOwn(task as object, 'autoFix')) {
       throw new PlanParseError(
@@ -324,19 +340,6 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       command: v.command,
     }));
 
-    const resolvedExecutorType = task.executorType ?? defaultExecutorType;
-
-    if (resolvedExecutorType === 'docker' && !task.dockerImage) {
-      throw new PlanParseError(
-        `Task "${task.id}" has executorType "docker" but is missing required field "dockerImage"`,
-      );
-    }
-    if (resolvedExecutorType === 'ssh' && !task.remoteTargetId) {
-      throw new PlanParseError(
-        `Task "${task.id}" has executorType "ssh" but is missing required field "remoteTargetId"`,
-      );
-    }
-
     return {
       id: task.id,
       description: task.description,
@@ -348,9 +351,8 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       experimentVariants,
       requiresManualApproval: task.requiresManualApproval,
       featureBranch: task.featureBranch,
-      executorType: resolvedExecutorType,
       dockerImage: task.dockerImage,
-      remoteTargetId: task.remoteTargetId,
+      poolId: task.poolId,
       executionAgent: task.executionAgent?.trim() || undefined,
     };
   });

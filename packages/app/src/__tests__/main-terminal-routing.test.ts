@@ -4,10 +4,10 @@ import type { TaskState } from '@invoker/workflow-core';
 
 // Reproduce the selectExecutor logic from main.ts
 function selectExecutor(registry: ExecutorRegistry, task: TaskState): Executor {
-  if (task.config.executorType) {
-    const registered = registry.get(task.config.executorType);
+  if (task.config.runnerKind) {
+    const registered = registry.get(task.config.runnerKind);
     if (registered) return registered;
-    if (task.config.executorType === 'docker') {
+    if (task.config.runnerKind === 'docker') {
       const docker = new DockerExecutor({});
       registry.register('docker', docker);
       return docker;
@@ -24,20 +24,20 @@ describe('Terminal routing via selectExecutor', () => {
     registry.register('worktree', new WorktreeExecutor({ cacheDir: '/tmp/cache' }));
   });
 
-  it('returns worktree executor when no executorType specified', () => {
-    const task = { config: { executorType: undefined }, execution: {} } as TaskState;
+  it('returns worktree executor when no runnerKind specified', () => {
+    const task = { config: { runnerKind: undefined }, execution: {} } as TaskState;
     const executor = selectExecutor(registry, task);
     expect(executor.type).toBe('worktree');
   });
 
-  it('returns worktree executor for executorType "worktree"', () => {
-    const task = { config: { executorType: 'worktree' }, execution: {} } as TaskState;
+  it('returns worktree executor for runnerKind "worktree"', () => {
+    const task = { config: { runnerKind: 'worktree' }, execution: {} } as TaskState;
     const executor = selectExecutor(registry, task);
     expect(executor.type).toBe('worktree');
   });
 
-  it('lazily creates and returns docker executor for executorType "docker"', () => {
-    const task = { config: { executorType: 'docker' }, execution: {} } as TaskState;
+  it('lazily creates and returns docker executor for runnerKind "docker"', () => {
+    const task = { config: { runnerKind: 'docker' }, execution: {} } as TaskState;
     const executor = selectExecutor(registry, task);
     expect(executor.type).toBe('docker');
     // Second call returns same instance
@@ -49,7 +49,7 @@ describe('Terminal routing via selectExecutor', () => {
     const taskHandles = new Map<string, { handle: ExecutorHandle; executor: Executor }>();
 
     const worktreeExecutor = registry.getDefault();
-    const dockerTask = { config: { executorType: 'docker' }, execution: {} } as TaskState;
+    const dockerTask = { config: { runnerKind: 'docker' }, execution: {} } as TaskState;
     const dockerExecutor = selectExecutor(registry, dockerTask);
 
     const worktreeHandle = { executionId: 'worktree-1', taskId: 'task-worktree' };

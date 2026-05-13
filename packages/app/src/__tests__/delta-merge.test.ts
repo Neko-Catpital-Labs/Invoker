@@ -26,7 +26,7 @@ function makeTask(id: string, overrides: Partial<TaskState> = {}): TaskState {
     status: 'running',
     dependencies: [],
     createdAt: new Date('2025-01-01'),
-    config: { workflowId: 'wf-1', command: `echo ${id}`, executorType: 'worktree' as const },
+    config: { workflowId: 'wf-1', command: `echo ${id}`, runnerKind: 'worktree' as const },
     execution: {},
     taskStateVersion: 1,
     ...overrides,

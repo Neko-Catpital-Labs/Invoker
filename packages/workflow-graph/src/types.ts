@@ -43,8 +43,8 @@ export interface BaseTaskConfig {
   readonly executionAgent?: string;
   /** Cross-workflow prerequisites for this task. */
   readonly externalDependencies?: readonly ExternalDependency[];
-  /** Remote target identifier for executor routing. Primarily used by SSH executors but can be set on any task via routing rules. */
-  readonly remoteTargetId?: string;
+  /** Execution pool identifier for shared queue/drain scheduling across substrates. */
+  readonly poolId?: string;
   /**
    * Fix-session prompt override carried on the failed task across the
    * `failed` → `fixing_with_ai` → `failed` cycle (Step 10 of the
@@ -62,23 +62,23 @@ export interface BaseTaskConfig {
 }
 
 export interface WorktreeTaskConfig extends BaseTaskConfig {
-  readonly executorType?: 'worktree';
+  readonly runnerKind?: 'worktree';
   readonly dockerImage?: never;
 }
 
 export interface DockerTaskConfig extends BaseTaskConfig {
-  readonly executorType: 'docker';
+  readonly runnerKind: 'docker';
   readonly dockerImage?: string;
 }
 
 export interface SshTaskConfig extends BaseTaskConfig {
-  readonly executorType: 'ssh';
+  readonly runnerKind: 'ssh';
   readonly dockerImage?: never;
 }
 
 /** Internal-only config for merge gate nodes. */
 export interface MergeTaskConfig extends BaseTaskConfig {
-  readonly executorType: 'merge';
+  readonly runnerKind: 'merge';
   readonly dockerImage?: never;
 }
 

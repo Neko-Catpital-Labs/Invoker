@@ -107,17 +107,30 @@ export interface InvokerConfig {
     remoteHeartbeatIntervalSeconds?: number;
   }>;
   /**
+   * Named execution pools used by routing rules.
+   * Pools provide shared queue + drain semantics with per-member capacity limits.
+   */
+  executionPools?: Record<string, {
+    /** Pool members can mix substrates under one shared queue. */
+    members: Array<
+      | { type: 'ssh'; id: string; maxConcurrentTasks?: number }
+      | { type: 'worktree'; id: string; maxConcurrentTasks?: number }
+    >;
+    /** Member selection strategy for available capacity. Default: roundRobin */
+    selectionStrategy?: 'roundRobin' | 'leastLoaded';
+    /** Fallback per-member cap when member-specific capacity is not set. */
+    maxConcurrentTasksPerMember?: number;
+  }>;
+  /**
    * Config-owned routing policy for heavyweight shell commands.
-   * Matching tasks are auto-routed to the configured executor/target at plan submission time.
+   * Matching tasks are auto-routed to the configured pool at plan submission time.
    * Default matcher set for v1 is any command invoking `pnpm`.
    */
   heavyweightCommandRouting?: {
     /** Set false to disable heavyweight auto-routing without deleting the config block. */
     enabled?: boolean;
-    /** Destination executor type. Default: "ssh". */
-    executorType?: string;
-    /** Required destination remote target ID for heavyweight commands. */
-    remoteTargetId: string;
+    /** Required destination execution pool ID for heavyweight commands. */
+    poolId: string;
     /** Optional command matchers; defaults to matching any `pnpm` invocation. */
     matchers?: Array<{
       pattern?: string;
@@ -125,10 +138,9 @@ export interface InvokerConfig {
     }>;
   };
   /**
-   * Pattern-based rules that enforce task execution environment conformance.
+   * Pattern-based rules that enforce task pool conformance.
    * When a rule matches a task command, the orchestrator validates that the task's
-   * executorType and remoteTargetId explicitly declared in the plan YAML match the
-   * rule's requirements. Rules do NOT fill in omitted fields — they enforce conformance.
+   * poolId declared in the plan YAML matches the rule's requirements.
    * First matching rule wins.
    *
    * Each rule may specify:
@@ -136,8 +148,8 @@ export interface InvokerConfig {
    *   - `regex`: compiled with `new RegExp(regex)` and tested against the command
    *
    * If both `pattern` and `regex` are present, a rule matches if either matches.
-   * Tasks with commands matching a rule MUST explicitly declare the required executorType
-   * and remoteTargetId in the plan YAML, or plan loading will fail with a validation error.
+   * Tasks with commands matching a rule MUST explicitly declare the required poolId
+   * in the plan YAML, or plan loading will fail with a validation error.
    * Only applies to tasks that have a command (not prompt-only tasks).
    */
   executorRoutingRules?: Array<{
@@ -145,10 +157,8 @@ export interface InvokerConfig {
     pattern?: string;
     /** Regular expression matched against the task command; compiled with new RegExp(regex). */
     regex?: string;
-    /** Required executor type for matching commands (e.g. "ssh", "docker", "worktree"). */
-    executorType: string;
-    /** Required remote target ID for matching commands; must correspond to an entry in remoteTargets. */
-    remoteTargetId: string;
+    /** Required execution pool ID for matching commands. */
+    poolId: string;
   }>;
 }
 

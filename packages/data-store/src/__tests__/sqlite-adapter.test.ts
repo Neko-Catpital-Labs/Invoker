@@ -322,13 +322,13 @@ describe('SQLiteAdapter', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('t1', {
         config: {
-          executorType: 'docker',
+          runnerKind: 'docker',
           dockerImage: 'node:20',
         },
       }));
 
       let [loaded] = adapter.loadTasks('wf-1');
-      expect(loaded.config.executorType).toBe('docker');
+      expect(loaded.config.runnerKind).toBe('docker');
       expect(loaded.config.dockerImage).toBe('node:20');
 
       adapter.updateTask('t1', {
@@ -532,18 +532,18 @@ describe('SQLiteAdapter', () => {
       const loaded = adapter.loadTasks('wf-1');
       const task = loaded[0];
 
-      expect(task.config.executorType).toBeUndefined();
+      expect(task.config.runnerKind).toBeUndefined();
       expect(task.execution.agentSessionId).toBeUndefined();
       expect(task.execution.workspacePath).toBeUndefined();
       expect(task.execution.containerId).toBeUndefined();
     });
 
-    it('does not store string "pending" as default for executorType', () => {
+    it('does not store string "pending" as default for runnerKind', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('t1'));
 
       const loaded = adapter.loadTasks('wf-1');
-      expect(loaded[0].config.executorType).not.toBe('pending');
+      expect(loaded[0].config.runnerKind).not.toBe('pending');
     });
 
   });
