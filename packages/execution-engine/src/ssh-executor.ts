@@ -585,83 +585,99 @@ echo ${payloadB64} | base64 -d | bash -se
       void (async () => {
         const exitCode = code ?? (signal ? 1 : 0);
         const e = this.entries.get(executionId);
-        if (e) e.completed = true;
-
-        let status: 'completed' | 'failed' = exitCode === 0 ? 'completed' : 'failed';
-        let mappedError: string | undefined;
-        if (exitCode === 30) {
-          mappedError = 'Upstream branch missing on remote clone';
-        } else if (exitCode === 31) {
-          const output = e?.outputBuffer.join('') ?? '';
-          const branchMatch = output.match(/MERGE_CONFLICT_BRANCH=(.+)/);
-          const filesSection = output.match(/MERGE_CONFLICT_FILES:\n([\s\S]*?)(?:\n\[Ssh|$)/);
-          const branch = branchMatch?.[1]?.trim() ?? 'unknown';
-          const files = filesSection?.[1]?.trim() ?? '(see task output)';
-          mappedError = `Merge conflict merging upstream branch "${branch}" on remote.\nConflicting files:\n${files}`;
-        }
-
-        let commitHash: string | undefined;
-
-        if (finalizeRemote) {
-          this.emitOutput(executionId, '[SshExecutor] Recording task result and pushing branch on remote...\n');
-          const fin = await this.remoteGitRecordAndPush(
-            executionId,
-            request,
-            finalizeRemote.worktreePath,
-            finalizeRemote.branch,
-            exitCode,
-          );
-          if (fin.commitHash) commitHash = fin.commitHash;
-          if (fin.error) {
-            this.emitOutput(executionId, `[SshExecutor] ${fin.error}\n`);
-            if (exitCode === 0) status = 'failed';
-            mappedError = fin.error;
+        if (e) e.finalizingAfterClose = true;
+        try {
+          let status: 'completed' | 'failed' = exitCode === 0 ? 'completed' : 'failed';
+          let mappedError: string | undefined;
+          if (exitCode === 30) {
+            mappedError = 'Upstream branch missing on remote clone';
+          } else if (exitCode === 31) {
+            const output = e?.outputBuffer.join('') ?? '';
+            const branchMatch = output.match(/MERGE_CONFLICT_BRANCH=(.+)/);
+            const filesSection = output.match(/MERGE_CONFLICT_FILES:\n([\s\S]*?)(?:\n\[Ssh|$)/);
+            const branch = branchMatch?.[1]?.trim() ?? 'unknown';
+            const files = filesSection?.[1]?.trim() ?? '(see task output)';
+            mappedError = `Merge conflict merging upstream branch "${branch}" on remote.\nConflicting files:\n${files}`;
           }
-        }
 
-        // When the command fails but no specific error was mapped (exit 30/31),
-        // capture the tail of the output buffer so the UI shows what went wrong.
-        if (!mappedError && exitCode !== 0 && e) {
-          const allOutput = e.outputBuffer.join('');
-          const lines = allOutput.split('\n');
-          const tail = lines.slice(-50).join('\n').trim();
-          if (tail) {
-            mappedError = tail.length > 3000 ? tail.slice(-3000) : tail;
-          }
-        }
+          let commitHash: string | undefined;
 
-        // Replace local UUID with real backend session/thread ID for resume,
-        // then store session locally via driver (matches worktree-executor pattern).
-        if (entry.agentSessionId && this.agentRegistry) {
-          const agentName = request.inputs.executionAgent ?? 'claude';
-          const driver = this.agentRegistry.getSessionDriver(agentName);
-          const rawOutput = e?.outputBuffer.join('') ?? '';
-          const realId = driver?.extractSessionId?.(rawOutput);
-          if (realId) {
-            entry.agentSessionId = realId;
+          if (finalizeRemote) {
+            this.emitOutput(executionId, '[SshExecutor] Recording task result and pushing branch on remote...\n');
+            const fin = await this.remoteGitRecordAndPush(
+              executionId,
+              request,
+              finalizeRemote.worktreePath,
+              finalizeRemote.branch,
+              exitCode,
+            );
+            if (fin.commitHash) commitHash = fin.commitHash;
+            if (fin.error) {
+              this.emitOutput(executionId, `[SshExecutor] ${fin.error}\n`);
+              if (exitCode === 0) status = 'failed';
+              mappedError = fin.error;
+            }
           }
-          if (driver) {
-            driver.processOutput(entry.agentSessionId!, rawOutput);
-          }
-        }
 
-        const finalExitCode = status === 'failed' && exitCode === 0 ? 1 : exitCode;
-        const response: WorkResponse = {
-          requestId: request.requestId,
-          actionId: request.actionId,
-          executionGeneration: request.executionGeneration,
-          status,
-          outputs: {
-            exitCode: finalExitCode,
-            commitHash,
-            agentSessionId: entry.agentSessionId,
-            ...(mappedError ? { error: mappedError } : {}),
-            ...(finalizeRemote && commitHash
-              ? { summary: `branch=${finalizeRemote.branch} commit=${commitHash}` }
-              : {}),
-          },
-        };
-        this.emitComplete(executionId, response);
+          // When the command fails but no specific error was mapped (exit 30/31),
+          // capture the tail of the output buffer so the UI shows what went wrong.
+          if (!mappedError && exitCode !== 0 && e) {
+            const allOutput = e.outputBuffer.join('');
+            const lines = allOutput.split('\n');
+            const tail = lines.slice(-50).join('\n').trim();
+            if (tail) {
+              mappedError = tail.length > 3000 ? tail.slice(-3000) : tail;
+            }
+          }
+
+          // Replace local UUID with real backend session/thread ID for resume,
+          // then store session locally via driver (matches worktree-executor pattern).
+          if (entry.agentSessionId && this.agentRegistry) {
+            const agentName = request.inputs.executionAgent ?? 'claude';
+            const driver = this.agentRegistry.getSessionDriver(agentName);
+            const rawOutput = e?.outputBuffer.join('') ?? '';
+            const realId = driver?.extractSessionId?.(rawOutput);
+            if (realId) {
+              entry.agentSessionId = realId;
+            }
+            if (driver) {
+              driver.processOutput(entry.agentSessionId!, rawOutput);
+            }
+          }
+
+          const finalExitCode = status === 'failed' && exitCode === 0 ? 1 : exitCode;
+          const response: WorkResponse = {
+            requestId: request.requestId,
+            actionId: request.actionId,
+            executionGeneration: request.executionGeneration,
+            status,
+            outputs: {
+              exitCode: finalExitCode,
+              commitHash,
+              agentSessionId: entry.agentSessionId,
+              ...(mappedError ? { error: mappedError } : {}),
+              ...(finalizeRemote && commitHash
+                ? { summary: `branch=${finalizeRemote.branch} commit=${commitHash}` }
+                : {}),
+            },
+          };
+          if (e) e.finalizingAfterClose = false;
+          this.emitComplete(executionId, response);
+        } catch (err) {
+          if (e) e.finalizingAfterClose = false;
+          const response: WorkResponse = {
+            requestId: request.requestId,
+            actionId: request.actionId,
+            executionGeneration: request.executionGeneration,
+            status: 'failed',
+            outputs: {
+              exitCode: exitCode === 0 ? 1 : exitCode,
+              agentSessionId: entry.agentSessionId,
+              error: err instanceof Error ? (err.stack ?? err.message) : String(err),
+            },
+          };
+          this.emitComplete(executionId, response);
+        }
       })();
     });
 

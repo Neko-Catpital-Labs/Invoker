@@ -30,6 +30,7 @@ function createMockProcess(): ChildProcess & EventEmitter {
   (proc as any).stdin = { write: vi.fn(), end: vi.fn() };
   (proc as any).pid = 12345;
   (proc as any).killed = false;
+  (proc as any).exitCode = null;
   proc.kill = vi.fn().mockReturnValue(true);
 
   return proc;
@@ -847,6 +848,41 @@ describe('SshExecutor entry lifecycle', () => {
     expect((ssh as any).entries.size).toBe(0);
 
     await expect(ssh.destroyAll()).resolves.toBeUndefined();
+  });
+
+  it('keeps heartbeats alive while close finalization is pending', async () => {
+    const request = makeRequest({
+      inputs: {
+        command: 'echo hello',
+        repoUrl: 'git@github.com:test/repo.git',
+      },
+    });
+    (ssh as any).heartbeatIntervalMs = 20;
+    const finalizeDeferred = createDeferred<{ commitHash?: string; error?: string }>();
+    vi.spyOn(ssh as any, 'remoteGitRecordAndPush').mockImplementation(() => finalizeDeferred.promise);
+
+    const handle = await ssh.start(request);
+    const sshProcess = spawnedProcesses[spawnedProcesses.length - 1];
+    (sshProcess as any).exitCode = 0;
+
+    let heartbeatCount = 0;
+    let completed = false;
+    ssh.onHeartbeat(handle, () => {
+      heartbeatCount += 1;
+    });
+    ssh.onComplete(handle, () => {
+      completed = true;
+    });
+
+    sshProcess.emit('close', 0, null);
+    await new Promise((r) => setTimeout(r, 80));
+
+    expect(completed).toBe(false);
+    expect(heartbeatCount).toBeGreaterThan(0);
+
+    finalizeDeferred.resolve({ commitHash: 'abc123' });
+    await new Promise((r) => setTimeout(r, 80));
+    expect(completed).toBe(true);
   });
 
   it('preserves stdout on execRemoteCapture error (Bug #4)', async () => {
