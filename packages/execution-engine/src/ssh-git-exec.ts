@@ -93,6 +93,8 @@ export function sshInteractiveCdFragment(workspacePath: string): string {
 export interface GitMirrorCloneOpts {
   /** Repository URL to clone */
   repoUrl: string;
+  /** Optional repository URL used to publish/read node branches. */
+  branchRepoUrl?: string;
   /** Repo URL hash (12 chars from computeRepoUrlHash) */
   repoHash: string;
   /** Base ref to resolve (e.g., "main", "origin/master", or "HEAD") */
@@ -122,12 +124,14 @@ export interface GitMirrorCloneOpts {
  */
 export function buildMirrorCloneScript(opts: GitMirrorCloneOpts): string {
   const repoB64 = base64Encode(opts.repoUrl);
+  const branchRepoB64 = base64Encode(opts.branchRepoUrl?.trim() ?? '');
   const baseB64 = base64Encode(opts.baseRef);
   const { repoHash, invokerHome = '$HOME/.invoker' } = opts;
   const homeB64 = base64Encode(invokerHome);
 
   return `set -euo pipefail
 REPO=$(echo ${repoB64} | base64 -d)
+BRANCH_REPO=$(echo ${branchRepoB64} | base64 -d)
 BASE=$(echo ${baseB64} | base64 -d)
 H="${repoHash}"
 INVOKER_HOME=$(echo ${homeB64} | base64 -d)
@@ -139,12 +143,25 @@ fi
 CLONE="$INVOKER_HOME/repos/$H"
 mkdir -p "$(dirname "$CLONE")"
 if [ ! -d "$CLONE/.git" ]; then git clone "$REPO" "$CLONE"; fi
+if [ -n "$BRANCH_REPO" ]; then
+  if git -C "$CLONE" remote get-url invoker-branches >/dev/null 2>&1; then
+    git -C "$CLONE" remote set-url invoker-branches "$BRANCH_REPO"
+  else
+    git -C "$CLONE" remote add invoker-branches "$BRANCH_REPO"
+  fi
+fi
 if ! git -C "$CLONE" fetch --all --prune; then
   echo "[WARNING] Git fetch failed for $CLONE" >&2
   echo "[WARNING] Continuing with existing refs. Tasks may use stale commits." >&2
   echo "__INVOKER_FETCH_FAILED__=1"
 else
   echo "__INVOKER_FETCH_SUCCESS__=1"
+fi
+if [ -n "$BRANCH_REPO" ]; then
+  if ! git -C "$CLONE" fetch invoker-branches '+refs/heads/*:refs/remotes/invoker-branches/*' --prune; then
+    echo "BRANCH_REPO_FETCH_FAILED=$BRANCH_REPO" >&2
+    exit 32
+  fi
 fi
 RESOLVED_BASE="$BASE"
 ORIGIN_HEAD=$(git -C "$CLONE" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
@@ -333,12 +350,12 @@ HASH=$(git rev-parse HEAD)
 BR=$(echo ${brB} | base64 -d)
 PUSH_URL=$(echo ${pushRemoteUrlB} | base64 -d)
 if [ -n "$PUSH_URL" ]; then
-  if git remote get-url intermediate >/dev/null 2>&1; then
-    git remote set-url intermediate "$PUSH_URL"
+  if git remote get-url invoker-branches >/dev/null 2>&1; then
+    git remote set-url invoker-branches "$PUSH_URL"
   else
-    git remote add intermediate "$PUSH_URL"
+    git remote add invoker-branches "$PUSH_URL"
   fi
-  git push -u intermediate "$BR"
+  git push -u invoker-branches "$BR"
 else
   git push -u origin "$BR"
 fi
