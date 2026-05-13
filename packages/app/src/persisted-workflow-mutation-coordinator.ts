@@ -4,6 +4,8 @@ import {
   type WorkflowMutationIntent,
   type WorkflowMutationPriority,
 } from '@invoker/data-store';
+import type { Logger } from '@invoker/contracts';
+import { createWorkflowMutationTiming, type WorkflowMutationTiming } from './workflow-mutation-timing.js';
 
 type Deferred<T> = {
   resolve: (value: T) => void;
@@ -20,6 +22,7 @@ export type WorkflowMutationContext = {
   signal: AbortSignal;
   intentId: number;
   workflowId: string;
+  mutationTiming?: WorkflowMutationTiming;
 };
 
 function envMs(name: string, fallback: number): number {
@@ -61,7 +64,7 @@ export class PersistedWorkflowMutationCoordinator {
     private readonly persistence: SQLiteAdapter,
     private readonly ownerId: string,
     private readonly dispatch: (channel: string, args: unknown[], context: WorkflowMutationContext) => Promise<unknown>,
-    options?: { maxConcurrentWorkflowDrains?: number },
+    private readonly options?: { maxConcurrentWorkflowDrains?: number; logger?: Logger },
   ) {
     this.maxConcurrentWorkflowDrains = Math.max(1, options?.maxConcurrentWorkflowDrains ?? 1);
     this.enableTraceLogs = process.env.INVOKER_TRACE_MUTATION_QUEUE === '1';
@@ -75,6 +78,8 @@ export class PersistedWorkflowMutationCoordinator {
   ): Promise<T> {
     const intentId = this.persistence.enqueueWorkflowMutationIntent(workflowId, channel, args, priority);
     this.enqueueStartedAtMs.set(intentId, Date.now());
+    this.createTiming(workflowId, channel, intentId, args)
+      .mark('PersistedWorkflowMutationCoordinator.enqueue', 'queued', { priority });
     this.invalidateSupersededRunningIntent(workflowId, intentId, channel, args);
     this.trace(
       `enqueue intent=${intentId} workflow=${workflowId} priority=${priority} channel=${channel} activeDrains=${this.activeWorkflowDrains} pendingWorkflows=${this.pendingDrainWorkflows.size}`,
@@ -95,6 +100,11 @@ export class PersistedWorkflowMutationCoordinator {
   ): number {
     const intentId = this.persistence.enqueueWorkflowMutationIntent(workflowId, channel, args, priority);
     this.enqueueStartedAtMs.set(intentId, Date.now());
+    this.createTiming(workflowId, channel, intentId, args)
+      .mark('PersistedWorkflowMutationCoordinator.submit', 'queued', {
+        priority,
+        deferDrain: Boolean(options?.deferDrain),
+      });
     this.invalidateSupersededRunningIntent(workflowId, intentId, channel, args);
     this.trace(
       `submit intent=${intentId} workflow=${workflowId} priority=${priority} channel=${channel} defer=${Boolean(options?.deferDrain)} activeDrains=${this.activeWorkflowDrains} pendingWorkflows=${this.pendingDrainWorkflows.size}`,
@@ -182,9 +192,17 @@ export class PersistedWorkflowMutationCoordinator {
       if (!this.persistence.claimWorkflowMutationLease(workflowId, this.ownerId)) {
         return;
       }
+      this.createTiming(workflowId, 'workflow-mutation-drain')
+        .mark('PersistedWorkflowMutationCoordinator.runWorkflowDrain.claimLease', 'completed', {
+          ownerId: this.ownerId,
+        });
       let intent = this.persistence.claimNextWorkflowMutationIntent(workflowId, this.ownerId);
       while (intent) {
         const waitMs = this.intentQueueWaitMs(intent.id);
+        this.createTiming(workflowId, intent.channel, intent.id, intent.args)
+          .mark('PersistedWorkflowMutationCoordinator.runWorkflowDrain.claimNextIntent', 'started', {
+            queueWaitMs: waitMs,
+          });
         this.trace(`drain-start workflow=${workflowId} intent=${intent.id} channel=${intent.channel} queueWaitMs=${waitMs}`);
         this.persistence.renewWorkflowMutationLease(workflowId, this.ownerId, {
           activeIntentId: intent.id,
@@ -205,6 +223,8 @@ export class PersistedWorkflowMutationCoordinator {
   private async executeIntent(workflowId: string, intent: WorkflowMutationIntent): Promise<void> {
     const deferred = this.inFlightPromises.get(intent.id);
     const invalidation = this.createRunningIntentInvalidation(intent.id);
+    const timing = this.createTiming(workflowId, intent.channel, intent.id, intent.args);
+    const intentStartedAtMs = Date.now();
     const leaseHeartbeat = setInterval(() => {
       this.persistence.renewWorkflowMutationLease(workflowId, this.ownerId, {
         activeIntentId: intent.id,
@@ -215,12 +235,20 @@ export class PersistedWorkflowMutationCoordinator {
     }, this.leaseHeartbeatMs);
     try {
       this.evictQueuedWorkflowIntentsForFence(workflowId, intent);
+      timing.mark('PersistedWorkflowMutationCoordinator.executeIntent', 'started', {
+        queueWaitMs: this.intentQueueWaitMs(intent.id),
+      });
       const mutationContext: WorkflowMutationContext = {
         signal: invalidation.abortController.signal,
         intentId: intent.id,
         workflowId,
+        mutationTiming: timing,
       };
-      const dispatchPromise = Promise.resolve(this.dispatch(intent.channel, intent.args, mutationContext));
+      const dispatchPromise = timing.span(
+        'PersistedWorkflowMutationCoordinator.dispatch',
+        undefined,
+        () => this.dispatch(intent.channel, intent.args, mutationContext),
+      );
       void dispatchPromise.catch(() => {});
       const result = await Promise.race([
         dispatchPromise,
@@ -230,6 +258,9 @@ export class PersistedWorkflowMutationCoordinator {
       if (latestIntent?.status === 'running') {
         this.persistence.completeWorkflowMutationIntent(intent.id);
       }
+      timing.mark('PersistedWorkflowMutationCoordinator.executeIntent', 'completed', {
+        durationMs: Date.now() - intentStartedAtMs,
+      });
       deferred?.resolve(result);
     } catch (error) {
       const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
@@ -237,6 +268,10 @@ export class PersistedWorkflowMutationCoordinator {
       if (latestIntent?.status === 'running') {
         this.persistence.failWorkflowMutationIntent(intent.id, message);
       }
+      timing.mark('PersistedWorkflowMutationCoordinator.executeIntent', 'failed', {
+        durationMs: Date.now() - intentStartedAtMs,
+        error: error instanceof Error ? error.message : String(error),
+      });
       deferred?.reject(error);
     } finally {
       clearInterval(leaseHeartbeat);
@@ -277,6 +312,16 @@ export class PersistedWorkflowMutationCoordinator {
     );
     if (evictedIds.length > 0) {
       for (const evictedId of evictedIds) {
+        const evictedIntent = this.persistence.loadWorkflowMutationIntent(evictedId);
+        this.createTiming(
+          workflowId,
+          evictedIntent?.channel ?? 'unknown',
+          evictedId,
+          evictedIntent?.args,
+        ).mark('PersistedWorkflowMutationCoordinator.evictQueuedWorkflowIntentsForFence', 'evicted', {
+          fenceIntentId: intent.id,
+          fenceChannel: intent.channel,
+        });
         const deferred = this.inFlightPromises.get(evictedId);
         if (!deferred) continue;
         deferred.reject(new Error(`Workflow mutation intent ${evictedId} was evicted by ${intent.channel}#${intent.id}`));
@@ -329,6 +374,12 @@ export class PersistedWorkflowMutationCoordinator {
     }
     const reason = `Superseded by ${fenceKind} intent #${newIntentId}`;
     this.persistence.failWorkflowMutationIntent(activeIntentId, reason);
+    this.createTiming(workflowId, activeIntent.channel, activeIntent.id, activeIntent.args)
+      .mark('PersistedWorkflowMutationCoordinator.invalidateSupersededRunningIntent', 'invalidated', {
+        newIntentId,
+        channel,
+        reason,
+      });
     const invalidation = this.runningIntentInvalidations.get(activeIntentId);
     invalidation?.abortController.abort(new WorkflowMutationInvalidatedError(reason));
     invalidation?.reject(new WorkflowMutationInvalidatedError(reason));
@@ -392,5 +443,21 @@ export class PersistedWorkflowMutationCoordinator {
       return false;
     }
     return command === 'recreate' || command === 'retry';
+  }
+
+  private createTiming(
+    workflowId: string,
+    channel: string,
+    intentId?: number,
+    args?: unknown[],
+  ): WorkflowMutationTiming {
+    return createWorkflowMutationTiming({
+      persistence: this.persistence,
+      logger: this.options?.logger,
+      workflowId,
+      channel,
+      intentId,
+      args,
+    });
   }
 }
