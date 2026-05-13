@@ -150,4 +150,45 @@ describe('loadConfig', () => {
     expect(config.heavyweightCommandRouting).toEqual(heavyweightCommandRouting);
   });
 
+  it('reads remote target maxConcurrentTasks from user config', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({
+        remoteTargets: {
+          ci1: {
+            host: '10.0.0.1',
+            user: 'invoker',
+            sshKeyPath: '/tmp/key',
+            maxConcurrentTasks: 2,
+          },
+        },
+      }),
+    );
+    const config = loadConfig();
+    expect(config.remoteTargets?.ci1?.maxConcurrentTasks).toBe(2);
+  });
+
+  it('reads executionPools from user config', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({
+        executionPools: {
+          'ssh-light': {
+            type: 'ssh',
+            members: ['remote-1', 'remote-2'],
+            selectionStrategy: 'roundRobin',
+            maxConcurrentTasksPerMember: 1,
+          },
+        },
+      }),
+    );
+    const config = loadConfig();
+    expect(config.executionPools?.['ssh-light']).toEqual({
+      type: 'ssh',
+      members: ['remote-1', 'remote-2'],
+      selectionStrategy: 'roundRobin',
+      maxConcurrentTasksPerMember: 1,
+    });
+  });
+
 });

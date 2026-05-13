@@ -7870,6 +7870,78 @@ console.log(JSON.stringify(out));
     });
   });
 
+  describe('execution pool scheduling', () => {
+    it('queues and drains pooled SSH slots when capacity is full', async () => {
+      const runner = new TaskRunner({
+        orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        remoteTargetsProvider: () => ({
+          'remote-a': {
+            host: 'a.example.com',
+            user: 'deployer',
+            sshKeyPath: '/home/user/.ssh/id_rsa',
+            maxConcurrentTasks: 1,
+          },
+        }),
+        executionPoolsProvider: () => ({
+          'ssh-light': {
+            type: 'ssh',
+            members: ['remote-a'],
+            selectionStrategy: 'roundRobin',
+          },
+        }),
+      });
+
+      const task = makeTask({
+        id: 'task-1',
+        config: { executorType: 'ssh', poolId: 'ssh-light' },
+      });
+      const first = await (runner as any).acquirePoolSlot(task);
+      expect(first).toEqual({ poolId: 'ssh-light', memberId: 'remote-a', type: 'ssh' });
+
+      const secondPromise = (runner as any).acquirePoolSlot(task);
+      let secondResolved = false;
+      secondPromise.then(() => { secondResolved = true; });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(secondResolved).toBe(false);
+
+      (runner as any).releasePoolSlot(first);
+      const second = await secondPromise;
+      expect(second).toEqual({ poolId: 'ssh-light', memberId: 'remote-a', type: 'ssh' });
+    });
+
+    it('uses roundRobin assignment across pool members', async () => {
+      const runner = new TaskRunner({
+        orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        remoteTargetsProvider: () => ({
+          'remote-a': { host: 'a', user: 'u', sshKeyPath: 'k', maxConcurrentTasks: 1 },
+          'remote-b': { host: 'b', user: 'u', sshKeyPath: 'k', maxConcurrentTasks: 1 },
+        }),
+        executionPoolsProvider: () => ({
+          'ssh-light': {
+            type: 'ssh',
+            members: ['remote-a', 'remote-b'],
+            selectionStrategy: 'roundRobin',
+          },
+        }),
+      });
+
+      const task = makeTask({
+        id: 'task-rr',
+        config: { executorType: 'ssh', poolId: 'ssh-light' },
+      });
+      const first = await (runner as any).acquirePoolSlot(task);
+      const second = await (runner as any).acquirePoolSlot(task);
+      expect(first.memberId).toBe('remote-a');
+      expect(second.memberId).toBe('remote-b');
+    });
+  });
+
   describe('metadata persistence hardening', () => {
     it('fails fast when executor returns handle without workspacePath', async () => {
       const badExecutor = {

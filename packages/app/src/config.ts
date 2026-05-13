@@ -100,6 +100,29 @@ export interface InvokerConfig {
      * Only used in managed mode. Default: pnpm install --frozen-lockfile
      */
     provisionCommand?: string;
+    /**
+     * Max concurrent tasks allowed on this target when used inside an execution pool.
+     * Default for pooled SSH members: 1.
+     */
+    maxConcurrentTasks?: number;
+  }>;
+  /**
+   * Named execution pools used by routing rules.
+   * Pools provide shared queue + drain semantics with per-member capacity limits.
+   */
+  executionPools?: Record<string, {
+    /** Pool executor substrate. */
+    type: 'worktree' | 'ssh';
+    /**
+     * Member IDs:
+     * - ssh pools: remote target IDs from `remoteTargets`
+     * - worktree pools: logical member IDs (for example ["local"])
+     */
+    members: string[];
+    /** Member selection strategy for available capacity. Default: roundRobin */
+    selectionStrategy?: 'roundRobin' | 'leastLoaded';
+    /** Fallback per-member cap when member-specific capacity is not set. */
+    maxConcurrentTasksPerMember?: number;
   }>;
   /**
    * Config-owned routing policy for heavyweight shell commands.
@@ -111,8 +134,10 @@ export interface InvokerConfig {
     enabled?: boolean;
     /** Destination executor type. Default: "ssh". */
     executorType?: string;
-    /** Required destination remote target ID for heavyweight commands. */
-    remoteTargetId: string;
+    /** Destination remote target ID (legacy mode). */
+    remoteTargetId?: string;
+    /** Destination execution pool ID. */
+    poolId?: string;
     /** Optional command matchers; defaults to matching any `pnpm` invocation. */
     matchers?: Array<{
       pattern?: string;
@@ -142,8 +167,10 @@ export interface InvokerConfig {
     regex?: string;
     /** Required executor type for matching commands (e.g. "ssh", "docker", "worktree"). */
     executorType: string;
-    /** Required remote target ID for matching commands; must correspond to an entry in remoteTargets. */
-    remoteTargetId: string;
+    /** Required remote target ID for matching commands (legacy mode). */
+    remoteTargetId?: string;
+    /** Required execution pool ID for matching commands. */
+    poolId?: string;
   }>;
 }
 

@@ -73,7 +73,8 @@ ensure_workspace_bootstrapped
 # Unset ELECTRON_RUN_AS_NODE so Electron loads its full API.
 unset ELECTRON_RUN_AS_NODE
 
-# In headless mode, validate config fast (before any build) and then ensure dist exists.
+# In headless mode, validate config fast and always rebuild app dist so
+# source changes are reflected immediately in headless commands.
 if [ "$1" = "--headless" ]; then
   # Fast-path config validation in bash so malformed JSON fails immediately
   # without waiting for a dist build.
@@ -85,23 +86,11 @@ if [ "$1" = "--headless" ]; then
     fi
   fi
 
-  # Build app and dependencies if headless entry point is missing (e.g. fresh worktree).
-  if [ ! -f "$REPO_ROOT/packages/app/dist/headless-client.js" ]; then
-    pnpm --filter @invoker/core build >&2
-    pnpm --filter @invoker/persistence build >&2
-    pnpm --filter @invoker/executors build >&2
-    pnpm --filter @invoker/surfaces build >&2
-    pnpm --filter @invoker/ui build >&2
-    pnpm --filter @invoker/app build >&2
-  fi
+  # Always rebuild @invoker/app in headless mode. This avoids stale-dist
+  # behavior where source edits are ignored until a manual build.
+  pnpm --filter @invoker/app build >&2
 
   shift
-  # Build @invoker/app on-demand when dist/headless-client.js is missing
-  # (e.g. fresh worktree that only ran pnpm install).
-  if [ ! -f "$REPO_ROOT/packages/app/dist/headless-client.js" ]; then
-    echo "Building @invoker/app (headless-client.js missing)..." >&2
-    pnpm --filter @invoker/app build >&2
-  fi
   exec node ./packages/app/dist/headless-client.js "$@"
 fi
 

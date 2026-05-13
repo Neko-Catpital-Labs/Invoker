@@ -45,6 +45,8 @@ export interface BaseTaskConfig {
   readonly externalDependencies?: readonly ExternalDependency[];
   /** Remote target identifier for executor routing. Primarily used by SSH executors but can be set on any task via routing rules. */
   readonly remoteTargetId?: string;
+  /** Execution pool identifier for shared queue/drain scheduling across substrates. */
+  readonly poolId?: string;
   /**
    * Fix-session prompt override carried on the failed task across the
    * `failed` → `fixing_with_ai` → `failed` cycle (Step 10 of the

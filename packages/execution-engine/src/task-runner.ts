@@ -72,6 +72,43 @@ type ActiveExecutionEntry = {
   taskId: string;
 };
 
+type SelectionStrategy = 'roundRobin' | 'leastLoaded';
+
+export interface RemoteTargetConfig {
+  host: string;
+  user: string;
+  sshKeyPath: string;
+  port?: number;
+  managedWorkspaces?: boolean;
+  remoteInvokerHome?: string;
+  provisionCommand?: string;
+  maxConcurrentTasks?: number;
+}
+
+export interface ExecutionPoolConfig {
+  type: 'ssh' | 'worktree';
+  members: string[];
+  selectionStrategy?: SelectionStrategy;
+  maxConcurrentTasksPerMember?: number;
+}
+
+interface PoolAssignment {
+  poolId: string;
+  memberId: string;
+  type: 'ssh' | 'worktree';
+}
+
+interface PoolState {
+  poolId: string;
+  type: 'ssh' | 'worktree';
+  strategy: SelectionStrategy;
+  members: string[];
+  capacities: Map<string, number>;
+  active: Map<string, number>;
+  rrCursor: number;
+  waiters: Array<(assignment: PoolAssignment) => void>;
+}
+
 function nextLeaseExpiry(from: Date): Date {
   return new Date(from.getTime() + ATTEMPT_LEASE_MS);
 }
@@ -122,15 +159,9 @@ export interface TaskRunnerConfig {
    * Provider that returns remote SSH targets keyed by target ID.
    * Called at task-execution time so config file changes take effect on retry.
    */
-  remoteTargetsProvider?: () => Record<string, {
-    host: string;
-    user: string;
-    sshKeyPath: string;
-    port?: number;
-    managedWorkspaces?: boolean;
-    remoteInvokerHome?: string;
-    provisionCommand?: string;
-  }>;
+  remoteTargetsProvider?: () => Record<string, RemoteTargetConfig>;
+  /** Provider that returns execution pools keyed by pool ID. */
+  executionPoolsProvider?: () => Record<string, ExecutionPoolConfig>;
   /** Docker execution environment configuration from .invoker.json. */
   dockerConfig?: {
     imageName?: string;
@@ -155,7 +186,8 @@ export class TaskRunner {
   /** @internal */ mergeGateProvider?: MergeGateProvider;
   /** @internal */ reviewProviderRegistry?: ReviewProviderRegistry;
   private activePrPollers = new Map<string, ReturnType<typeof setInterval>>();
-  private getRemoteTargets: () => Record<string, { host: string; user: string; sshKeyPath: string; port?: number; managedWorkspaces?: boolean; remoteInvokerHome?: string; provisionCommand?: string }>;
+  private getRemoteTargets: () => Record<string, RemoteTargetConfig>;
+  private getExecutionPools: () => Record<string, ExecutionPoolConfig>;
   private dockerConfig: { imageName?: string; secretsFile?: string };
   private executionAgentRegistry?: AgentRegistry;
   private logger: Logger;
@@ -165,6 +197,7 @@ export class TaskRunner {
   /** In-flight executions keyed by attemptId (with taskId retained for external kill resolution). */
   private activeExecutions = new Map<string, ActiveExecutionEntry>();
   private launchingAttemptIds = new Set<string>();
+  private poolStates = new Map<string, PoolState>();
 
   /** Serializes async onComplete handlers so orchestrator mutations never overlap. */
   private completionChain: Promise<void> = Promise.resolve();
@@ -227,6 +260,7 @@ export class TaskRunner {
     this.mergeGateProvider = config.mergeGateProvider;
     this.reviewProviderRegistry = config.reviewProviderRegistry;
     this.getRemoteTargets = config.remoteTargetsProvider ?? (() => ({}));
+    this.getExecutionPools = config.executionPoolsProvider ?? (() => ({}));
     this.dockerConfig = config.dockerConfig ?? {};
     this.executionAgentRegistry = config.executionAgentRegistry;
     this.logger = config.logger ?? NOOP_LOGGER;
@@ -281,6 +315,154 @@ export class TaskRunner {
     }
 
     return undefined;
+  }
+
+  private buildPoolState(poolId: string, pool: ExecutionPoolConfig): PoolState {
+    const capacities = new Map<string, number>();
+    const active = new Map<string, number>();
+    const remoteTargets = this.getRemoteTargets();
+    const fallbackCap = pool.maxConcurrentTasksPerMember && pool.maxConcurrentTasksPerMember > 0
+      ? Math.floor(pool.maxConcurrentTasksPerMember)
+      : 1;
+
+    for (const memberId of pool.members) {
+      let cap = fallbackCap;
+      if (pool.type === 'ssh') {
+        const target = remoteTargets[memberId];
+        if (!target) {
+          throw new Error(
+            `Execution pool "${poolId}" references unknown remote target "${memberId}". ` +
+            `Available: [${Object.keys(remoteTargets).join(', ')}]`,
+          );
+        }
+        cap = target.maxConcurrentTasks && target.maxConcurrentTasks > 0
+          ? Math.floor(target.maxConcurrentTasks)
+          : fallbackCap;
+      }
+      capacities.set(memberId, cap);
+      active.set(memberId, 0);
+    }
+
+    return {
+      poolId,
+      type: pool.type,
+      strategy: pool.selectionStrategy ?? 'roundRobin',
+      members: [...pool.members],
+      capacities,
+      active,
+      rrCursor: 0,
+      waiters: [],
+    };
+  }
+
+  private getOrBuildPoolState(poolId: string): PoolState {
+    const pools = this.getExecutionPools();
+    const pool = pools[poolId];
+    if (!pool) {
+      throw new Error(
+        `Task requested poolId="${poolId}" but no matching execution pool exists. ` +
+        `Available: [${Object.keys(pools).join(', ')}]`,
+      );
+    }
+    if (!Array.isArray(pool.members) || pool.members.length === 0) {
+      throw new Error(`Execution pool "${poolId}" must define a non-empty members array.`);
+    }
+    const existing = this.poolStates.get(poolId);
+    if (existing) {
+      return existing;
+    }
+    const built = this.buildPoolState(poolId, pool);
+    this.poolStates.set(poolId, built);
+    return built;
+  }
+
+  private pickAvailableMember(state: PoolState): string | undefined {
+    const candidates = state.members.filter((memberId) => {
+      const active = state.active.get(memberId) ?? 0;
+      const cap = state.capacities.get(memberId) ?? 0;
+      return active < cap;
+    });
+    if (candidates.length === 0) return undefined;
+
+    if (state.strategy === 'leastLoaded') {
+      let chosen = candidates[0]!;
+      let chosenRatio = (state.active.get(chosen) ?? 0) / Math.max(state.capacities.get(chosen) ?? 1, 1);
+      for (const memberId of candidates.slice(1)) {
+        const ratio = (state.active.get(memberId) ?? 0) / Math.max(state.capacities.get(memberId) ?? 1, 1);
+        if (ratio < chosenRatio) {
+          chosen = memberId;
+          chosenRatio = ratio;
+        }
+      }
+      return chosen;
+    }
+
+    const total = state.members.length;
+    for (let offset = 0; offset < total; offset += 1) {
+      const idx = (state.rrCursor + offset) % total;
+      const memberId = state.members[idx]!;
+      if (candidates.includes(memberId)) {
+        state.rrCursor = (idx + 1) % total;
+        return memberId;
+      }
+    }
+    return candidates[0];
+  }
+
+  private acquirePoolSlot(task: TaskState): Promise<PoolAssignment | undefined> {
+    const poolId = task.config.poolId?.trim();
+    if (!poolId) return Promise.resolve(undefined);
+    const state = this.getOrBuildPoolState(poolId);
+    const selected = this.pickAvailableMember(state);
+    if (selected) {
+      state.active.set(selected, (state.active.get(selected) ?? 0) + 1);
+      return Promise.resolve({ poolId, memberId: selected, type: state.type });
+    }
+    return new Promise<PoolAssignment>((resolve) => {
+      state.waiters.push(resolve);
+    });
+  }
+
+  private drainPoolQueue(state: PoolState): void {
+    while (state.waiters.length > 0) {
+      const selected = this.pickAvailableMember(state);
+      if (!selected) return;
+      const waiter = state.waiters.shift();
+      if (!waiter) return;
+      state.active.set(selected, (state.active.get(selected) ?? 0) + 1);
+      waiter({ poolId: state.poolId, memberId: selected, type: state.type });
+    }
+  }
+
+  private releasePoolSlot(assignment: PoolAssignment | undefined): void {
+    if (!assignment) return;
+    const state = this.poolStates.get(assignment.poolId);
+    if (!state) return;
+    const current = state.active.get(assignment.memberId) ?? 0;
+    state.active.set(assignment.memberId, Math.max(0, current - 1));
+    this.drainPoolQueue(state);
+  }
+
+  private applyPoolAssignment(task: TaskState, assignment: PoolAssignment | undefined): TaskState {
+    if (!assignment) return task;
+    if (assignment.type === 'ssh') {
+      return {
+        ...task,
+        config: {
+          ...task.config,
+          executorType: 'ssh',
+          remoteTargetId: assignment.memberId,
+          poolId: assignment.poolId,
+        },
+      } as TaskState;
+    }
+    return {
+      ...task,
+      config: {
+        ...task.config,
+        poolId: assignment.poolId,
+      },
+    } as TaskState;
   }
 
   /**
@@ -341,8 +523,11 @@ export class TaskRunner {
       return;
     }
     this.launchingAttemptIds.add(attemptId);
+    let poolAssignment: PoolAssignment | undefined;
     try {
-      await this.executeTaskInner(task, attemptId);
+      poolAssignment = await this.acquirePoolSlot(task);
+      const taskWithPoolAssignment = this.applyPoolAssignment(task, poolAssignment);
+      await this.executeTaskInner(taskWithPoolAssignment, attemptId);
     } catch (err) {
       // Resource limit: defer the task instead of failing it
       const cause = err instanceof Error ? err.cause : undefined;
@@ -400,6 +585,7 @@ export class TaskRunner {
         this.executeTasks(newlyStarted);
       }
     } finally {
+      this.releasePoolSlot(poolAssignment);
       this.launchingAttemptIds.delete(attemptId);
     }
   }
@@ -839,6 +1025,7 @@ export class TaskRunner {
           managedWorkspaces: target.managedWorkspaces,
           remoteInvokerHome: target.remoteInvokerHome,
           provisionCommand: target.provisionCommand,
+          maxConcurrentTasks: target.maxConcurrentTasks,
         });
         const cacheKey = `${targetId}|${configFingerprint}`;
 

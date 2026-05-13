@@ -1086,6 +1086,46 @@ describe('Orchestrator', () => {
         }).toThrow('requires remoteTargetId="prod-server"');
       });
 
+      it('validates matching rule with poolId destination', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          executorRoutingRules: [
+            { pattern: 'pnpm test', executorType: 'ssh', poolId: 'ssh-light' },
+          ],
+          availablePoolIds: ['ssh-light'],
+        });
+
+        routedOrchestrator.loadPlan({
+          name: 'pool-routing-test',
+          tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test', executorType: 'ssh', poolId: 'ssh-light' }],
+        });
+
+        const task = routedOrchestrator.getTask('t1');
+        expect(task!.config.executorType).toBe('ssh');
+        expect(task!.config.poolId).toBe('ssh-light');
+      });
+
+      it('throws when matching pool rule task omits poolId', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          executorRoutingRules: [
+            { pattern: 'pnpm test', executorType: 'ssh', poolId: 'ssh-light' },
+          ],
+          availablePoolIds: ['ssh-light'],
+        });
+
+        expect(() => {
+          routedOrchestrator.loadPlan({
+            name: 'missing-pool',
+            tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test', executorType: 'ssh' }],
+          });
+        }).toThrow('requires poolId="ssh-light"');
+      });
+
       it('merge node always has executorType merge regardless of routing rules', () => {
         const routedOrchestrator = new Orchestrator({
           persistence: new InMemoryPersistence(),
@@ -1146,6 +1186,27 @@ describe('Orchestrator', () => {
         const task = routedOrchestrator.getTask('t1');
         expect(task!.config.executorType).toBe('ssh');
         expect(task!.config.remoteTargetId).toBe('ci-box');
+      });
+
+      it('auto-routes heavyweight commands to configured poolId', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          heavyweightCommandRouting: {
+            poolId: 'ssh-light',
+          },
+          availablePoolIds: ['ssh-light'],
+        });
+
+        routedOrchestrator.loadPlan({
+          name: 'heavyweight-pool-routing-test',
+          tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test' }],
+        });
+
+        const task = routedOrchestrator.getTask('t1');
+        expect(task!.config.executorType).toBe('ssh');
+        expect(task!.config.poolId).toBe('ssh-light');
       });
 
       it('throws when heavyweight command explicitly declares conflicting local executor', () => {
