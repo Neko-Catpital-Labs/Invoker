@@ -1064,6 +1064,7 @@ if (isHeadless) {
               waitForApproval: delegatedWait,
               noTrack: delegatedNoTrack,
               signal: activeMutationContext?.signal,
+              mutationTiming: activeMutationContext?.mutationTiming,
             });
           });
           return { ok: true };
@@ -1696,6 +1697,7 @@ if (isHeadless) {
       commandService,
       repoRoot, invokerConfig, initServices, wireSlackBot,
       signal: activeMutationContext?.signal,
+      mutationTiming: activeMutationContext?.mutationTiming,
       cancelTask: (taskId: string) => performCancelTask(taskId),
       cancelWorkflow: (workflowId: string) => performCancelWorkflow(workflowId),
       waitForApproval: payload.waitForApproval,
@@ -2524,7 +2526,7 @@ if (isHeadless) {
             activeMutationContext = undefined;
           }
         },
-        { maxConcurrentWorkflowDrains },
+        { maxConcurrentWorkflowDrains, logger },
       );
     } else {
       logger.info('Launched in follower mode; mutation execution is delegated to the current owner', {
@@ -3192,8 +3194,15 @@ if (isHeadless) {
           preemptWorkflowExecution,
           logger,
           context: 'ipc.recreate-workflow',
+          mutationTiming: activeMutationContext?.mutationTiming,
         });
-        const started = sharedRecreateWorkflow(workflowId, { persistence, orchestrator });
+        const started = activeMutationContext?.mutationTiming
+          ? await activeMutationContext.mutationTiming.span(
+            'main.ipc.recreate-workflow.sharedRecreateWorkflow',
+            undefined,
+            async () => sharedRecreateWorkflow(workflowId, { persistence, orchestrator }),
+          )
+          : sharedRecreateWorkflow(workflowId, { persistence, orchestrator });
         remoteFetchForPool.enabled = false;
         try {
           await dispatchStartedTasksWithGlobalTopup({
@@ -3202,6 +3211,7 @@ if (isHeadless) {
             logger,
             context: 'ipc.recreate-workflow',
             started,
+            mutationTiming: activeMutationContext?.mutationTiming,
           });
         } finally {
           remoteFetchForPool.enabled = true;
@@ -3221,8 +3231,22 @@ if (isHeadless) {
       const taskId = String(taskIdArg);
       logger.info(`recreate-task: "${taskId}"`, { module: 'ipc' });
       try {
-        await preemptTaskSubgraph(taskId);
-        const started = sharedRecreateTask(taskId, { persistence, orchestrator });
+        if (activeMutationContext?.mutationTiming) {
+          await activeMutationContext.mutationTiming.span(
+            'main.ipc.recreate-task.preemptTaskSubgraph',
+            { taskId },
+            () => preemptTaskSubgraph(taskId),
+          );
+        } else {
+          await preemptTaskSubgraph(taskId);
+        }
+        const started = activeMutationContext?.mutationTiming
+          ? await activeMutationContext.mutationTiming.span(
+            'main.ipc.recreate-task.sharedRecreateTask',
+            { taskId },
+            async () => sharedRecreateTask(taskId, { persistence, orchestrator }),
+          )
+          : sharedRecreateTask(taskId, { persistence, orchestrator });
         remoteFetchForPool.enabled = false;
         try {
           await dispatchStartedTasksWithGlobalTopup({
@@ -3231,6 +3255,7 @@ if (isHeadless) {
             logger,
             context: 'ipc.recreate-task',
             started,
+            mutationTiming: activeMutationContext?.mutationTiming,
           });
         } finally {
           remoteFetchForPool.enabled = true;
@@ -3255,9 +3280,16 @@ if (isHeadless) {
           preemptWorkflowExecution,
           logger,
           context: 'ipc.retry-workflow',
+          mutationTiming: activeMutationContext?.mutationTiming,
         });
         const envelope = makeEnvelope('retry-workflow', 'ui', 'workflow', { workflowId });
-        const result = await commandService.retryWorkflow(envelope);
+        const result = activeMutationContext?.mutationTiming
+          ? await activeMutationContext.mutationTiming.span(
+            'main.ipc.retry-workflow.commandService.retryWorkflow',
+            undefined,
+            () => commandService.retryWorkflow(envelope),
+          )
+          : await commandService.retryWorkflow(envelope);
         if (!result.ok) throw new Error(result.error.message);
         remoteFetchForPool.enabled = false;
         try {
@@ -3267,6 +3299,7 @@ if (isHeadless) {
             logger,
             context: 'ipc.retry-workflow',
             started: result.data,
+            mutationTiming: activeMutationContext?.mutationTiming,
           });
         } finally {
           remoteFetchForPool.enabled = true;
@@ -3292,6 +3325,7 @@ if (isHeadless) {
             preemptWorkflowExecution,
             logger,
             context: 'ipc.rebase-and-retry',
+            mutationTiming: activeMutationContext?.mutationTiming,
           });
         }
         const started = await rebaseAndRetry(taskId, {
@@ -3299,6 +3333,7 @@ if (isHeadless) {
           persistence,
           repoRoot,
           taskExecutor: requireTaskExecutor(),
+          mutationTiming: activeMutationContext?.mutationTiming,
         });
         await dispatchStartedTasksWithGlobalTopup({
           orchestrator,
@@ -3306,6 +3341,7 @@ if (isHeadless) {
           logger,
           context: 'ipc.rebase-and-retry',
           started,
+          mutationTiming: activeMutationContext?.mutationTiming,
         });
       } catch (err) {
         logger.error(`rebase-and-retry failed: ${err}`, { module: 'ipc' });
@@ -3330,12 +3366,14 @@ if (isHeadless) {
           preemptWorkflowExecution,
           logger,
           context: 'ipc.recreate-with-rebase',
+          mutationTiming: activeMutationContext?.mutationTiming,
         });
         const started = await recreateWithRebase(workflowId, {
           orchestrator,
           persistence,
           repoRoot,
           taskExecutor: requireTaskExecutor(),
+          mutationTiming: activeMutationContext?.mutationTiming,
         });
         await dispatchStartedTasksWithGlobalTopup({
           orchestrator,
@@ -3343,6 +3381,7 @@ if (isHeadless) {
           logger,
           context: 'ipc.recreate-with-rebase',
           started,
+          mutationTiming: activeMutationContext?.mutationTiming,
         });
       } catch (err) {
         logger.error(`recreate-with-rebase failed: ${err}`, { module: 'ipc' });
