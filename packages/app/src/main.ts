@@ -146,6 +146,7 @@ import { dispatchStartedTasksWithGlobalTopup, executeGlobalTopup, finalizeMutati
 import { computeDeferredLaunchTiming } from './deferred-runnable.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import { relaunchOrphansAndStartReady } from './orphan-relaunch.js';
+import { evaluateExecutingStall } from './executing-stall.js';
 import { listOpenFixIntentsForTask } from './auto-fix-intents.js';
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
 
@@ -2344,6 +2345,7 @@ if (isHeadless) {
                   ? persistence.loadAttempt?.(task.execution.selectedAttemptId)
                   : undefined;
                 const leaseExpiresAt = parseExecutionDate(selectedAttempt?.leaseExpiresAt);
+                const remoteHeartbeat = parseExecutionDate(task.execution.remoteHeartbeatAt);
 
                 if (task.status === 'running') {
                   const launchStartedAt = parseExecutionDate(task.execution.launchStartedAt)
@@ -2390,17 +2392,18 @@ if (isHeadless) {
 
                   const executingStartedAt = parseExecutionDate(task.execution.startedAt);
                   const executingAgeMs = executingStartedAt ? now.getTime() - executingStartedAt.getTime() : 0;
-                  const heartbeatStale =
-                    !previousHeartbeat || now.getTime() - previousHeartbeat.getTime() >= executingStallTimeoutMs;
-                  const leaseExpired = !!leaseExpiresAt && leaseExpiresAt.getTime() < now.getTime();
-                  const executingStalled =
-                    task.execution.phase === 'executing'
-                    && executingStartedAt !== undefined
-                    && executingAgeMs >= executingStallTimeoutMs
-                    && (leaseExpired || heartbeatStale);
+                  const { heartbeatStale, leaseExpired, executingStalled, staleReason } = evaluateExecutingStall({
+                    now,
+                    phase: task.execution.phase,
+                    executorType: task.config.executorType,
+                    executingStartedAt,
+                    leaseExpiresAt,
+                    executorHeartbeatAt: previousHeartbeat,
+                    remoteHeartbeatAt: remoteHeartbeat,
+                    executingStallTimeoutMs,
+                  });
 
                   if (executingStalled) {
-                    const staleReason = leaseExpired ? 'attempt lease expired' : 'executor heartbeat stale';
                     const executingError =
                       `Execution stalled: task remained in running/executing for ${Math.floor(executingAgeMs / 1000)}s ` +
                       `without a live execution handle and no completion signal from executor (${staleReason}).`;

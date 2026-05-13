@@ -97,6 +97,7 @@ export interface ExternalDependency {
 // Never copied when cloning. Reset on restart.
 
 export type TaskRunPhase = 'launching' | 'executing';
+export type TaskHeartbeatSource = 'executor' | 'remote_workload';
 
 export interface TaskExecution {
   readonly generation?: number;
@@ -109,6 +110,8 @@ export interface TaskExecution {
   readonly startedAt?: Date;
   readonly completedAt?: Date;
   readonly lastHeartbeatAt?: Date;
+  readonly remoteHeartbeatAt?: Date;
+  readonly heartbeatSource?: TaskHeartbeatSource;
   readonly actionRequestId?: string;
   readonly branch?: string;
   readonly commit?: string;
