@@ -108,6 +108,10 @@ tasks:
       - workflowId: "__UPSTREAM_WORKFLOW_ID__"
         taskId: "leaf-task"
         requiredStatus: completed
+      - workflowId: "wf-static"
+        taskId: "__merge__"
+        requiredStatus: completed
+        gatePolicy: review_ready
 EOF
 
 cat > "$TMP_DIR/plans/c.yaml" <<'EOF'
@@ -143,6 +147,8 @@ grep -q "workflowId: \"$wf1\"" "$rp2"
 grep -q 'taskId: "__merge__"' "$rp2"
 grep -q '^ *gatePolicy: completed$' "$rp2"
 grep -q '^baseBranch: feature/a$' "$rp2"
+grep -q 'workflowId: "wf-static"' "$rp2"
+grep -q '^ *gatePolicy: review_ready$' "$rp2"
 
 grep -q "workflowId: \"$wf2\"" "$rp3"
 grep -q 'taskId: "__merge__"' "$rp3"

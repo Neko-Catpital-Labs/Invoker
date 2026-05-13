@@ -1263,7 +1263,7 @@ export class Orchestrator {
           workflowId: dep.workflowId,
           taskId: dep.taskId,
           requiredStatus: dep.requiredStatus ?? 'completed',
-          gatePolicy: dep.gatePolicy ?? 'review_ready',
+          gatePolicy: dep.gatePolicy ?? this.defaultExternalGatePolicy(dep.taskId),
         })) ?? [];
       const baseConfig = {
         workflowId,
@@ -3048,7 +3048,7 @@ export class Orchestrator {
     const nextDeps = deps.map((dep): ExternalDependency => {
       const update = byKey.get(keyOf(dep.workflowId, dep.taskId));
       if (!update) return dep;
-      const current = dep.gatePolicy ?? 'review_ready';
+      const current = dep.gatePolicy ?? this.defaultExternalGatePolicy(dep.taskId);
       if (current === update.gatePolicy) return dep;
       changed += 1;
       return { ...dep, gatePolicy: update.gatePolicy };
@@ -4311,6 +4311,11 @@ export class Orchestrator {
     return `${workflowId}/${normalizedTaskId}`;
   }
 
+  private defaultExternalGatePolicy(taskId?: string): 'completed' | 'review_ready' {
+    const normalizedTaskId = taskId?.trim() || '__merge__';
+    return normalizedTaskId === '__merge__' ? 'completed' : 'review_ready';
+  }
+
   private findExternalDependencyTask(workflowId: string, taskId?: string): TaskState | undefined {
     const normalizedTaskId = taskId?.trim() || '__merge__';
     if (normalizedTaskId === '__merge__') {
@@ -4335,7 +4340,7 @@ export class Orchestrator {
         return `missing prerequisite ${depDisplayId}`;
       }
       const required = dep.requiredStatus ?? 'completed';
-      const gatePolicy = dep.gatePolicy ?? 'review_ready';
+      const gatePolicy = dep.gatePolicy ?? this.defaultExternalGatePolicy(dep.taskId);
       const isMergeGateDep = (dep.taskId?.trim() || '__merge__') === '__merge__';
       const satisfied =
         prerequisite.status === required

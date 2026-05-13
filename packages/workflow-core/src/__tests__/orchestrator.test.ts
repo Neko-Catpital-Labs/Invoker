@@ -1448,7 +1448,7 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask(sid(orchestrator, 1, 'leaf-a'))!.status).toBe('running');
     });
 
-    it('workflow-level external dependency defaults to review_ready and starts on awaiting_approval', () => {
+    it('workflow-level external dependency defaults to completed and stays pending on awaiting_approval', () => {
       orchestrator.loadPlan({
         name: 'prereq-workflow',
         tasks: [{ id: 'verify-control-plane-regression', description: 'Prereq task' }],
@@ -1473,8 +1473,8 @@ describe('Orchestrator', () => {
       orchestrator.setTaskAwaitingApproval(prereqMergeId);
 
       const afterMergeAwaitingApproval = orchestrator.startExecution();
-      expect(afterMergeAwaitingApproval.map((t) => t.id)).toContain(sid(orchestrator, 1, 'leaf-a'));
-      expect(orchestrator.getTask(sid(orchestrator, 1, 'leaf-a'))!.status).toBe('running');
+      expect(afterMergeAwaitingApproval.map((t) => t.id)).not.toContain(sid(orchestrator, 1, 'leaf-a'));
+      expect(orchestrator.getTask(sid(orchestrator, 1, 'leaf-a'))!.status).toBe('pending');
     });
 
     it('review_ready merge-gate dependency starts downstream when upstream is awaiting_approval', () => {
