@@ -916,24 +916,25 @@ describe('Orchestrator', () => {
     // ── executor routing rules ───────────────────────────────
 
     describe('executor routing rules', () => {
-      it('validates matching pattern rule: task must declare required executorType and remoteTargetId', () => {
+      it('validates matching pattern rule: task must declare required executorType and poolId', () => {
         const routedOrchestrator = new Orchestrator({
           persistence: new InMemoryPersistence(),
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
           executorRoutingRules: [
-            { pattern: 'deploy', executorType: 'ssh', remoteTargetId: 'prod-server' },
+            { pattern: 'deploy', executorType: 'ssh', poolId: 'prod-pool' },
           ],
+          availablePoolIds: ['prod-pool'],
         });
 
         routedOrchestrator.loadPlan({
           name: 'routing-test',
-          tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod', executorType: 'ssh', remoteTargetId: 'prod-server' }],
+          tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod', executorType: 'ssh', poolId: 'prod-pool' }],
         });
 
         const task = routedOrchestrator.getTask('t1');
         expect(task!.config.executorType).toBe('ssh');
-        expect(task!.config.remoteTargetId).toBe('prod-server');
+        expect(task!.config.poolId).toBe('prod-pool');
       });
 
       it('throws when task executorType does not match routing rule', () => {
@@ -942,14 +943,15 @@ describe('Orchestrator', () => {
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
           executorRoutingRules: [
-            { pattern: 'deploy', executorType: 'ssh', remoteTargetId: 'prod-server' },
+            { pattern: 'deploy', executorType: 'ssh', poolId: 'prod-pool' },
           ],
+          availablePoolIds: ['prod-pool'],
         });
 
         expect(() => {
           routedOrchestrator.loadPlan({
             name: 'mismatch-test',
-            tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod', executorType: 'worktree', remoteTargetId: 'prod-server' }],
+            tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod', executorType: 'worktree', poolId: 'prod-pool' }],
           });
         }).toThrow('requires executorType="ssh"');
       });
@@ -960,8 +962,9 @@ describe('Orchestrator', () => {
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
           executorRoutingRules: [
-            { pattern: 'deploy', executorType: 'ssh', remoteTargetId: 'prod-server' },
+            { pattern: 'deploy', executorType: 'ssh', poolId: 'prod-pool' },
           ],
+          availablePoolIds: ['prod-pool'],
         });
 
         routedOrchestrator.loadPlan({
@@ -971,7 +974,7 @@ describe('Orchestrator', () => {
 
         const task = routedOrchestrator.getTask('t1');
         expect(task!.config.executorType).toBe('worktree');
-        expect(task!.config.remoteTargetId).toBeUndefined();
+        expect(task!.config.poolId).toBeUndefined();
       });
 
       it('validates regex rule matching pnpm test', () => {
@@ -980,18 +983,19 @@ describe('Orchestrator', () => {
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
           executorRoutingRules: [
-            { regex: '^pnpm test', executorType: 'ssh', remoteTargetId: 'ci-box' },
+            { regex: '^pnpm test', executorType: 'ssh', poolId: 'ci-pool' },
           ],
+          availablePoolIds: ['ci-pool'],
         });
 
         routedOrchestrator.loadPlan({
           name: 'test-routing',
-          tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test', executorType: 'ssh', remoteTargetId: 'ci-box' }],
+          tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test', executorType: 'ssh', poolId: 'ci-pool' }],
         });
 
         const task = routedOrchestrator.getTask('t1');
         expect(task!.config.executorType).toBe('ssh');
-        expect(task!.config.remoteTargetId).toBe('ci-box');
+        expect(task!.config.poolId).toBe('ci-pool');
       });
 
       it('validates pattern rule matching test command', () => {
@@ -1000,18 +1004,19 @@ describe('Orchestrator', () => {
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
           executorRoutingRules: [
-            { pattern: 'pnpm test', executorType: 'ssh', remoteTargetId: 'ci-box' },
+            { pattern: 'pnpm test', executorType: 'ssh', poolId: 'ci-pool' },
           ],
+          availablePoolIds: ['ci-pool'],
         });
 
         routedOrchestrator.loadPlan({
           name: 'test-routing-pattern',
-          tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test --coverage', executorType: 'ssh', remoteTargetId: 'ci-box' }],
+          tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test --coverage', executorType: 'ssh', poolId: 'ci-pool' }],
         });
 
         const task = routedOrchestrator.getTask('t1');
         expect(task!.config.executorType).toBe('ssh');
-        expect(task!.config.remoteTargetId).toBe('ci-box');
+        expect(task!.config.poolId).toBe('ci-pool');
       });
 
       it('throws when task executorType does not match regex rule', () => {
@@ -1020,34 +1025,36 @@ describe('Orchestrator', () => {
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
           executorRoutingRules: [
-            { regex: '^pnpm test', executorType: 'ssh', remoteTargetId: 'ci-box' },
+            { regex: '^pnpm test', executorType: 'ssh', poolId: 'ci-pool' },
           ],
+          availablePoolIds: ['ci-pool'],
         });
 
         expect(() => {
           routedOrchestrator.loadPlan({
             name: 'test-mismatch',
-            tasks: [{ id: 't1', description: 'Run tests locally', command: 'pnpm test', executorType: 'worktree', remoteTargetId: 'ci-box' }],
+            tasks: [{ id: 't1', description: 'Run tests locally', command: 'pnpm test', executorType: 'worktree', poolId: 'ci-pool' }],
           });
         }).toThrow('requires executorType="ssh"');
       });
 
-      it('throws when task remoteTargetId does not match routing rule', () => {
+      it('throws when task poolId does not match routing rule', () => {
         const routedOrchestrator = new Orchestrator({
           persistence: new InMemoryPersistence(),
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
           executorRoutingRules: [
-            { pattern: 'pnpm test', executorType: 'ssh', remoteTargetId: 'ci-box' },
+            { pattern: 'pnpm test', executorType: 'ssh', poolId: 'ci-pool' },
           ],
+          availablePoolIds: ['ci-pool'],
         });
 
         expect(() => {
           routedOrchestrator.loadPlan({
             name: 'remote-mismatch',
-            tasks: [{ id: 't1', description: 'Run tests on staging', command: 'pnpm test', executorType: 'ssh', remoteTargetId: 'staging-box' }],
+            tasks: [{ id: 't1', description: 'Run tests on staging', command: 'pnpm test', executorType: 'ssh', poolId: 'staging-pool' }],
           });
-        }).toThrow('requires remoteTargetId="ci-box"');
+        }).toThrow('requires poolId="ci-pool"');
       });
 
       it('throws when task executorType is missing for matching rule', () => {
@@ -1056,34 +1063,76 @@ describe('Orchestrator', () => {
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
           executorRoutingRules: [
-            { pattern: 'deploy', executorType: 'ssh', remoteTargetId: 'prod-server' },
+            { pattern: 'deploy', executorType: 'ssh', poolId: 'prod-pool' },
           ],
+          availablePoolIds: ['prod-pool'],
         });
 
         expect(() => {
           routedOrchestrator.loadPlan({
             name: 'missing-executorType',
-            tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod', remoteTargetId: 'prod-server' }],
+            tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod', poolId: 'prod-pool' }],
           });
         }).toThrow('requires executorType="ssh"');
       });
 
-      it('throws when task remoteTargetId is missing for matching rule', () => {
+      it('throws when task poolId is missing for matching rule', () => {
         const routedOrchestrator = new Orchestrator({
           persistence: new InMemoryPersistence(),
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
           executorRoutingRules: [
-            { pattern: 'deploy', executorType: 'ssh', remoteTargetId: 'prod-server' },
+            { pattern: 'deploy', executorType: 'ssh', poolId: 'prod-pool' },
           ],
+          availablePoolIds: ['prod-pool'],
         });
 
         expect(() => {
           routedOrchestrator.loadPlan({
-            name: 'missing-remoteTargetId',
+            name: 'missing-poolId',
             tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod', executorType: 'ssh' }],
           });
-        }).toThrow('requires remoteTargetId="prod-server"');
+        }).toThrow('requires poolId="prod-pool"');
+      });
+
+      it('validates matching rule with poolId destination', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          executorRoutingRules: [
+            { pattern: 'pnpm test', executorType: 'ssh', poolId: 'ssh-light' },
+          ],
+          availablePoolIds: ['ssh-light'],
+        });
+
+        routedOrchestrator.loadPlan({
+          name: 'pool-routing-test',
+          tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test', executorType: 'ssh', poolId: 'ssh-light' }],
+        });
+
+        const task = routedOrchestrator.getTask('t1');
+        expect(task!.config.executorType).toBe('ssh');
+        expect(task!.config.poolId).toBe('ssh-light');
+      });
+
+      it('throws when matching pool rule task omits poolId', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          executorRoutingRules: [
+            { pattern: 'pnpm test', executorType: 'ssh', poolId: 'ssh-light' },
+          ],
+          availablePoolIds: ['ssh-light'],
+        });
+
+        expect(() => {
+          routedOrchestrator.loadPlan({
+            name: 'missing-pool',
+            tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test', executorType: 'ssh' }],
+          });
+        }).toThrow('requires poolId="ssh-light"');
       });
 
       it('merge node always has executorType merge regardless of routing rules', () => {
@@ -1092,13 +1141,14 @@ describe('Orchestrator', () => {
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
           executorRoutingRules: [
-            { pattern: 'deploy', executorType: 'ssh', remoteTargetId: 'prod-server' },
+            { pattern: 'deploy', executorType: 'ssh', poolId: 'prod-pool' },
           ],
+          availablePoolIds: ['prod-pool'],
         });
 
         routedOrchestrator.loadPlan({
           name: 'merge-routing-test',
-          tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod', executorType: 'ssh', remoteTargetId: 'prod-server' }],
+          tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod', executorType: 'ssh', poolId: 'prod-pool' }],
         });
 
         const mergeNode = routedOrchestrator.getAllTasks().find((t) => t.config.isMergeNode);
@@ -1106,95 +1156,95 @@ describe('Orchestrator', () => {
         expect(mergeNode!.config.executorType).toBe('merge');
       });
 
-      it('auto-routes pnpm test to heavyweight SSH target when executor is omitted', () => {
+      it('auto-routes pnpm test to pool with route strategy when executor is omitted', () => {
         const routedOrchestrator = new Orchestrator({
           persistence: new InMemoryPersistence(),
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
-          heavyweightCommandRouting: {
-            remoteTargetId: 'ci-box',
-          },
-          availableRemoteTargetIds: ['ci-box'],
+          executorRoutingRules: [
+            { regex: '\\bpnpm(?:\\s|$)', executorType: 'ssh', poolId: 'ci-pool', strategy: 'route' },
+          ],
+          availablePoolIds: ['ci-pool'],
         });
 
         routedOrchestrator.loadPlan({
-          name: 'heavyweight-routing-test',
+          name: 'route-strategy-test',
           tasks: [{ id: 't1', description: 'Run tests', command: 'cd packages/app && pnpm test' }],
         });
 
         const task = routedOrchestrator.getTask('t1');
         expect(task!.config.executorType).toBe('ssh');
-        expect(task!.config.remoteTargetId).toBe('ci-box');
+        expect(task!.config.poolId).toBe('ci-pool');
       });
 
-      it('auto-routes pnpm install to heavyweight SSH target when executor is omitted', () => {
+      it('auto-routes matching command to configured poolId with route strategy', () => {
         const routedOrchestrator = new Orchestrator({
           persistence: new InMemoryPersistence(),
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
-          heavyweightCommandRouting: {
-            remoteTargetId: 'ci-box',
-          },
-          availableRemoteTargetIds: ['ci-box'],
+          executorRoutingRules: [
+            { regex: '\\bpnpm(?:\\s|$)', executorType: 'ssh', poolId: 'ssh-light', strategy: 'route' },
+          ],
+          availablePoolIds: ['ssh-light'],
         });
 
         routedOrchestrator.loadPlan({
-          name: 'heavyweight-install-routing-test',
-          tasks: [{ id: 't1', description: 'Install deps', command: 'pnpm install --frozen-lockfile' }],
+          name: 'route-strategy-pool-test',
+          tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test' }],
         });
 
         const task = routedOrchestrator.getTask('t1');
         expect(task!.config.executorType).toBe('ssh');
-        expect(task!.config.remoteTargetId).toBe('ci-box');
+        expect(task!.config.poolId).toBe('ssh-light');
       });
 
-      it('throws when heavyweight command explicitly declares conflicting local executor', () => {
+      it('throws when route strategy command explicitly declares conflicting executor', () => {
         const routedOrchestrator = new Orchestrator({
           persistence: new InMemoryPersistence(),
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
-          heavyweightCommandRouting: {
-            remoteTargetId: 'ci-box',
-          },
-          availableRemoteTargetIds: ['ci-box'],
+          executorRoutingRules: [
+            { regex: '\\bpnpm(?:\\s|$)', executorType: 'ssh', poolId: 'ci-pool', strategy: 'route' },
+          ],
+          availablePoolIds: ['ci-pool'],
         });
 
         expect(() => {
           routedOrchestrator.loadPlan({
-            name: 'heavyweight-conflict-test',
+            name: 'route-strategy-conflict-test',
             tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test', executorType: 'worktree' }],
           });
-        }).toThrow('matched heavyweight command routing');
+        }).toThrow('matched routing rule');
       });
 
-      it('throws when heavyweight command routing target is not configured', () => {
+      it('throws when route strategy target pool is not configured', () => {
         const routedOrchestrator = new Orchestrator({
           persistence: new InMemoryPersistence(),
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
-          heavyweightCommandRouting: {
-            remoteTargetId: 'ci-box',
-          },
-          availableRemoteTargetIds: [],
+          executorRoutingRules: [
+            { regex: '\\bpnpm(?:\\s|$)', executorType: 'ssh', poolId: 'ssh-light', strategy: 'route' },
+          ],
+          availablePoolIds: [],
         });
 
         expect(() => {
           routedOrchestrator.loadPlan({
-            name: 'heavyweight-missing-target',
+            name: 'route-strategy-missing-target',
             tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test' }],
           });
-        }).toThrow('no remoteTargets are configured');
+        }).toThrow('no executionPools are configured');
       });
 
-      it('leaves non-matching commands unchanged under heavyweight routing', () => {
+      it('leaves non-matching commands unchanged under route strategy', () => {
         const routedOrchestrator = new Orchestrator({
           persistence: new InMemoryPersistence(),
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
-          heavyweightCommandRouting: {
-            remoteTargetId: 'ci-box',
-          },
-          availableRemoteTargetIds: ['ci-box'],
+          executorRoutingRules: [
+            { regex: '\\bpnpm(?:\\s|$)', executorType: 'ssh', poolId: 'ci-pool', strategy: 'route' },
+          ],
+          availablePoolIds: ['ci-pool'],
         });
 
         routedOrchestrator.loadPlan({
@@ -1204,7 +1254,28 @@ describe('Orchestrator', () => {
 
         const task = routedOrchestrator.getTask('t1');
         expect(task!.config.executorType).toBe('worktree');
-        expect(task!.config.remoteTargetId).toBeUndefined();
+        expect(task!.config.poolId).toBeUndefined();
+      });
+
+      it('keeps heavyweightCommandRouting as compatibility alias to route strategy', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          heavyweightCommandRouting: {
+            poolId: 'ssh-light',
+          },
+          availablePoolIds: ['ssh-light'],
+        });
+
+        routedOrchestrator.loadPlan({
+          name: 'heavyweight-compatibility-test',
+          tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test' }],
+        });
+
+        const task = routedOrchestrator.getTask('t1');
+        expect(task!.config.executorType).toBe('ssh');
+        expect(task!.config.poolId).toBe('ssh-light');
       });
     });
 
@@ -3515,10 +3586,17 @@ describe('Orchestrator', () => {
     it('same-host ssh:A → ssh:A is RETRY-class — preserves branch/workspacePath (regression of Step 5)', () => {
       orchestrator.loadPlan({
         name: 'edit-type-step6-same-ssh',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', executorType: 'ssh', remoteTargetId: 'remote_a' }],
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', executorType: 'ssh', poolId: 'ssh-light' }],
       });
       orchestrator.startExecution();
       const taskId = sid(orchestrator, 0, 't1');
+      // Seed the current host assignment through the API (plan YAML is pool-only).
+      orchestrator.editTaskType(taskId, 'ssh', 'remote_a');
+      // Persisted state must reflect the current ssh member before asserting
+      // same-host retry semantics on the next editTaskType call.
+      persistence.updateTask(taskId, {
+        config: { remoteTargetId: 'remote_a' } as any,
+      });
 
       persistence.updateTask(taskId, {
         execution: {
