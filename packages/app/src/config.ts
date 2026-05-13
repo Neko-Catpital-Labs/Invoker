@@ -105,6 +105,26 @@ export interface InvokerConfig {
      * Used for SSH executing-stall liveness checks. Default: 30.
      */
     remoteHeartbeatIntervalSeconds?: number;
+    /**
+     * Max concurrent tasks allowed on this target when used inside an execution pool.
+     * Default for pooled SSH members: 1.
+     */
+    maxConcurrentTasks?: number;
+  }>;
+  /**
+   * Named execution pools used by routing rules.
+   * Pools provide shared queue + drain semantics with per-member capacity limits.
+   */
+  executionPools?: Record<string, {
+    /** Pool members can mix substrates under one shared queue. */
+    members: Array<
+      | { type: 'ssh'; id: string; maxConcurrentTasks?: number }
+      | { type: 'worktree'; id: string; maxConcurrentTasks?: number }
+    >;
+    /** Member selection strategy for available capacity. Default: roundRobin */
+    selectionStrategy?: 'roundRobin' | 'leastLoaded';
+    /** Fallback per-member cap when member-specific capacity is not set. */
+    maxConcurrentTasksPerMember?: number;
   }>;
   /**
    * Config-owned routing policy for heavyweight shell commands.
@@ -128,9 +148,13 @@ export interface InvokerConfig {
    * poolId declared in the plan YAML matches the rule's requirements.
    * First matching rule wins.
    *
-   * Each rule may specify:
-   *   - `pattern`: substring matched against the task command (like utilizationRules)
-   *   - `regex`: compiled with `new RegExp(regex)` and tested against the command
+   * Rule strategies:
+   * - `enforce` (default): require matching tasks to already declare the same pool.
+   * - `route`: auto-apply the pool when omitted; reject explicit pool conflicts.
+   *
+   * First matching rule wins per strategy bucket:
+   * - first matching `route` rule is applied
+   * - then first matching `enforce` rule validates the effective routing
    *
    * If both `pattern` and `regex` are present, a rule matches if either matches.
    * Tasks with commands matching a rule MUST explicitly declare the required poolId
@@ -144,6 +168,8 @@ export interface InvokerConfig {
     regex?: string;
     /** Required execution pool ID for matching commands. */
     poolId: string;
+    /** Routing strategy. Defaults to "enforce". */
+    strategy?: 'enforce' | 'route';
   }>;
 }
 
