@@ -41,7 +41,10 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 now_ms() {
-  date +%s%3N
+  python3 - <<'PY'
+import time
+print(int(time.time() * 1000))
+PY
 }
 
 log_chain() {
@@ -91,6 +94,82 @@ matches_pattern() {
   else
     grep -E -q "$pattern" "$file"
   fi
+}
+
+validate_upstream_dependency_fields() {
+  local file="$1"
+  local upstream_id="$2"
+  local gate_policy="$3"
+  awk -v upid="$upstream_id" -v expected_gate="$gate_policy" '
+    function normalize(v) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+      gsub(/^"|"$/, "", v)
+      return v
+    }
+    function validate_current_dep() {
+      if (!in_dep || !dep_is_upstream) return
+      found_upstream=1
+      if (normalize(dep_taskId) != "__merge__" || normalize(dep_requiredStatus) != "completed" || normalize(dep_gatePolicy) != expected_gate) {
+        invalid_upstream=1
+      }
+    }
+    BEGIN {
+      in_ext=0
+      in_dep=0
+      dep_is_upstream=0
+      dep_taskId=""
+      dep_requiredStatus=""
+      dep_gatePolicy=""
+      found_upstream=0
+      invalid_upstream=0
+    }
+    {
+      line=$0
+      if (line ~ /^[^[:space:]]/ && line !~ /^externalDependencies:[[:space:]]*$/) {
+        validate_current_dep()
+        in_ext=0
+        in_dep=0
+        dep_is_upstream=0
+        next
+      }
+      if (line ~ /^[[:space:]]*externalDependencies:[[:space:]]*$/) {
+        validate_current_dep()
+        in_ext=1
+        in_dep=0
+        dep_is_upstream=0
+        next
+      }
+      if (in_ext && line ~ /^[[:space:]]*-[[:space:]]*workflowId:[[:space:]]*/) {
+        validate_current_dep()
+        in_dep=1
+        dep_taskId=""
+        dep_requiredStatus=""
+        dep_gatePolicy=""
+        split(line, parts, "workflowId:")
+        dep_is_upstream=(normalize(parts[2]) == upid)
+        next
+      }
+      if (in_ext && in_dep && dep_is_upstream && line ~ /^[[:space:]]*taskId:[[:space:]]*/) {
+        split(line, parts, "taskId:")
+        dep_taskId=parts[2]
+        next
+      }
+      if (in_ext && in_dep && dep_is_upstream && line ~ /^[[:space:]]*requiredStatus:[[:space:]]*/) {
+        split(line, parts, "requiredStatus:")
+        dep_requiredStatus=parts[2]
+        next
+      }
+      if (in_ext && in_dep && dep_is_upstream && line ~ /^[[:space:]]*gatePolicy:[[:space:]]*/) {
+        split(line, parts, "gatePolicy:")
+        dep_gatePolicy=parts[2]
+        next
+      }
+    }
+    END {
+      validate_current_dep()
+      if (!found_upstream || invalid_upstream) exit 1
+    }
+  ' "$file"
 }
 
 resolve_persisted_workflow_id() {
@@ -288,12 +367,8 @@ for i in "${!INPUT_PLANS[@]}"; do
       echo "Rendered plan missing upstream workflow dependency '${prev_wf_id}': $submit_plan" >&2
       exit 1
     fi
-    if ! matches_pattern "taskId:[[:space:]]*\"__merge__\"" "$submit_plan"; then
-      echo "Rendered plan missing enforced merge-gate taskId '__merge__': $submit_plan" >&2
-      exit 1
-    fi
-    if ! matches_pattern "^[[:space:]]*gatePolicy:[[:space:]]*${GATE_POLICY}$" "$submit_plan"; then
-      echo "Rendered plan missing enforced gatePolicy '${GATE_POLICY}': $submit_plan" >&2
+    if ! validate_upstream_dependency_fields "$submit_plan" "$prev_wf_id" "$GATE_POLICY"; then
+      echo "Rendered plan did not enforce strict upstream merge dependency fields for '${prev_wf_id}' (taskId=__merge__, requiredStatus=completed, gatePolicy=${GATE_POLICY}): $submit_plan" >&2
       exit 1
     fi
 
