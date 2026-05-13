@@ -47,9 +47,12 @@
 
   "executionPools": {
     "ssh-light": {
-      "comment": "Pool routes tasks across both SSH machines with shared queue/drain semantics",
-      "type": "ssh",
-      "members": ["staging-server", "build-server-b"],
+      "comment": "Pool routes tasks across mixed SSH/local members with shared queue/drain semantics",
+      "members": [
+        { "type": "ssh", "id": "staging-server" },
+        { "type": "ssh", "id": "build-server-b" },
+        { "type": "worktree", "id": "local-fallback", "maxConcurrentTasks": 2 }
+      ],
       "selectionStrategy": "roundRobin",
       "maxConcurrentTasksPerMember": 1
     }

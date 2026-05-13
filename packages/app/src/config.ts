@@ -116,14 +116,11 @@ export interface InvokerConfig {
    * Pools provide shared queue + drain semantics with per-member capacity limits.
    */
   executionPools?: Record<string, {
-    /** Pool executor substrate. */
-    type: 'worktree' | 'ssh';
-    /**
-     * Member IDs:
-     * - ssh pools: remote target IDs from `remoteTargets`
-     * - worktree pools: logical member IDs (for example ["local"])
-     */
-    members: string[];
+    /** Pool members can mix substrates under one shared queue. */
+    members: Array<
+      | { type: 'ssh'; id: string; maxConcurrentTasks?: number }
+      | { type: 'worktree'; id: string; maxConcurrentTasks?: number }
+    >;
     /** Member selection strategy for available capacity. Default: roundRobin */
     selectionStrategy?: 'roundRobin' | 'leastLoaded';
     /** Fallback per-member cap when member-specific capacity is not set. */
@@ -138,10 +135,8 @@ export interface InvokerConfig {
     enabled?: boolean;
     /** Destination executor type. Default: "ssh". */
     executorType?: string;
-    /** Destination remote target ID (legacy mode). */
-    remoteTargetId?: string;
     /** Destination execution pool ID. */
-    poolId?: string;
+    poolId: string;
     /** Optional command matchers; defaults to matching any `pnpm` invocation. */
     matchers?: Array<{
       pattern?: string;
@@ -169,10 +164,8 @@ export interface InvokerConfig {
     regex?: string;
     /** Required executor type for matching commands (e.g. "ssh", "docker", "worktree"). */
     executorType: string;
-    /** Required remote target ID for matching commands (legacy mode). */
-    remoteTargetId?: string;
     /** Required execution pool ID for matching commands. */
-    poolId?: string;
+    poolId: string;
     /** Routing strategy. Defaults to "enforce". */
     strategy?: 'enforce' | 'route';
   }>;

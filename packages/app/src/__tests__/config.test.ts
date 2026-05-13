@@ -176,8 +176,11 @@ describe('loadConfig', () => {
       JSON.stringify({
         executionPools: {
           'ssh-light': {
-            type: 'ssh',
-            members: ['remote-1', 'remote-2'],
+            members: [
+              { type: 'ssh', id: 'remote-1' },
+              { type: 'ssh', id: 'remote-2' },
+              { type: 'worktree', id: 'local-fallback', maxConcurrentTasks: 2 },
+            ],
             selectionStrategy: 'roundRobin',
             maxConcurrentTasksPerMember: 1,
           },
@@ -186,8 +189,11 @@ describe('loadConfig', () => {
     );
     const config = loadConfig();
     expect(config.executionPools?.['ssh-light']).toEqual({
-      type: 'ssh',
-      members: ['remote-1', 'remote-2'],
+      members: [
+        { type: 'ssh', id: 'remote-1' },
+        { type: 'ssh', id: 'remote-2' },
+        { type: 'worktree', id: 'local-fallback', maxConcurrentTasks: 2 },
+      ],
       selectionStrategy: 'roundRobin',
       maxConcurrentTasksPerMember: 1,
     });
