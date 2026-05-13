@@ -1163,14 +1163,14 @@ if (isHeadless) {
   const traceUiDeltaFlow = process.env.INVOKER_TRACE_UI_DELTA === '1';
   const traceDbPollPerTask = process.env.INVOKER_TRACE_DB_POLL === '1';
   const traceTaskOutput = process.env.INVOKER_TRACE_TASK_OUTPUT === '1';
-  const runningHeartbeatTopupMs = Number.parseInt(
-    process.env.INVOKER_RUNNING_HEARTBEAT_TOPUP_MS ?? '30000',
-    10,
-  ) || 30000;
   const launchingStallTimeoutMs = Number.parseInt(
     process.env.INVOKER_LAUNCHING_STALL_TIMEOUT_MS ?? '60000',
     10,
   ) || 60000;
+  const executingStallTimeoutMs = Number.parseInt(
+    process.env.INVOKER_EXECUTING_STALL_TIMEOUT_MS ?? '180000',
+    10,
+  ) || 180000;
   const uiPerfStats = {
     mainDeltaToUi: 0,
     dbPollCreated: 0,
@@ -1499,6 +1499,8 @@ if (isHeadless) {
         },
         onComplete: (taskId, response) => {
           flushTaskOutput(taskId);
+          launchingTasks.delete(taskId);
+          taskHandles.delete(taskId);
           logger.info(
             `Task "${taskId}" completion callback received (status: ${response.status}, generation: ${response.executionGeneration}, exitCode: ${response.outputs.exitCode ?? 'none'})`,
             { module: 'exec' },
@@ -2338,24 +2340,12 @@ if (isHeadless) {
                 let task = loadedTask;
                 const now = new Date();
                 const previousHeartbeat = parseExecutionDate(task.execution.lastHeartbeatAt);
+                const selectedAttempt = task.execution.selectedAttemptId
+                  ? persistence.loadAttempt?.(task.execution.selectedAttemptId)
+                  : undefined;
+                const leaseExpiresAt = parseExecutionDate(selectedAttempt?.leaseExpiresAt);
 
                 if (task.status === 'running') {
-                  if (!previousHeartbeat || now.getTime() - previousHeartbeat.getTime() >= runningHeartbeatTopupMs) {
-                    persistence.updateTask(task.id, { execution: { lastHeartbeatAt: now } });
-                    messageBus.publish(Channels.TASK_DELTA, {
-                      type: 'updated' as const,
-                      taskId: task.id,
-                      changes: { execution: { lastHeartbeatAt: now } },
-                    });
-                    task = {
-                      ...task,
-                      execution: {
-                        ...task.execution,
-                        lastHeartbeatAt: now,
-                      },
-                    };
-                  }
-
                   const launchStartedAt = parseExecutionDate(task.execution.launchStartedAt)
                     ?? parseExecutionDate(task.execution.startedAt);
                   const launchAgeMs = launchStartedAt ? now.getTime() - launchStartedAt.getTime() : 0;
@@ -2393,6 +2383,57 @@ if (isHeadless) {
                       );
                       void requireTaskExecutor().executeTasks(runnableAfterFailure).catch((err) => {
                         logger.error(`[launch-stall] executeTasks failed after failing "${task.id}": ${err instanceof Error ? err.stack ?? err.message : String(err)}`, { module: 'db-poll' });
+                      });
+                    }
+                    continue;
+                  }
+
+                  const executingStartedAt = parseExecutionDate(task.execution.startedAt);
+                  const executingAgeMs = executingStartedAt ? now.getTime() - executingStartedAt.getTime() : 0;
+                  const heartbeatStale =
+                    !previousHeartbeat || now.getTime() - previousHeartbeat.getTime() >= executingStallTimeoutMs;
+                  const leaseExpired = !!leaseExpiresAt && leaseExpiresAt.getTime() < now.getTime();
+                  const executingStalled =
+                    task.execution.phase === 'executing'
+                    && executingStartedAt !== undefined
+                    && executingAgeMs >= executingStallTimeoutMs
+                    && (leaseExpired || heartbeatStale);
+
+                  if (executingStalled) {
+                    const staleReason = leaseExpired ? 'attempt lease expired' : 'executor heartbeat stale';
+                    const executingError =
+                      `Execution stalled: task remained in running/executing for ${Math.floor(executingAgeMs / 1000)}s ` +
+                      `without a live execution handle and no completion signal from executor (${staleReason}).`;
+                    logger.info(
+                      `[executing-stall] detected task="${task.id}" phase=${task.execution.phase} executingAgeMs=${executingAgeMs} ` +
+                        `handlePresent=${taskHandles.has(task.id)} leaseExpired=${leaseExpired} heartbeatStale=${heartbeatStale}`,
+                      { module: 'db-poll' },
+                    );
+                    const failedResponse: WorkResponse = {
+                      requestId: `executing-stall-${task.id}-${now.getTime()}`,
+                      actionId: task.id,
+                      attemptId: task.execution.selectedAttemptId,
+                      executionGeneration: task.execution.generation ?? 0,
+                      status: 'failed',
+                      outputs: {
+                        exitCode: 1,
+                        error: executingError,
+                      },
+                    };
+                    logger.error(`[executing-stall] forcing failure for "${task.id}": ${executingError}`, { module: 'db-poll' });
+                    const startedAfterFailure = orchestrator.handleWorkerResponse(failedResponse);
+                    const runnableAfterFailure = startedAfterFailure.filter((candidate) => candidate.status === 'running');
+                    if (runnableAfterFailure.length > 0) {
+                      logger.info(
+                        `[executing-stall] dispatching ${runnableAfterFailure.length} task(s) started after failing "${task.id}"`,
+                        { module: 'db-poll' },
+                      );
+                      void requireTaskExecutor().executeTasks(runnableAfterFailure).catch((err) => {
+                        logger.error(
+                          `[executing-stall] executeTasks failed after failing "${task.id}": ` +
+                            `${err instanceof Error ? err.stack ?? err.message : String(err)}`,
+                          { module: 'db-poll' },
+                        );
                       });
                     }
                     continue;
