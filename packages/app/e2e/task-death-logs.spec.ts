@@ -22,6 +22,17 @@ import {
   getTasks,
   findTaskByIdSuffix,
 } from './fixtures/electron-app.js';
+import type { Page } from '@playwright/test';
+
+async function selectTaskNode(page: Page, taskId: string): Promise<void> {
+  const node = page.locator(`.react-flow__node[data-testid$="/${taskId}"]`).first();
+  await expect(node).toBeVisible({ timeout: 10000 });
+
+  await expect(async () => {
+    await node.click();
+    await expect(page.locator('[data-testid="command-display"]')).toBeVisible({ timeout: 500 });
+  }).toPass({ timeout: 5000 });
+}
 
 const DEATH_LOG_PLAN = {
   name: 'E2E Death Log Plan',
@@ -84,7 +95,7 @@ test.describe('Task death logs', () => {
     await startPlan(page);
     await waitForTaskStatus(page, 'silent-fail', 'failed');
 
-    await page.locator('.react-flow__node[data-testid$="/silent-fail"]').click();
+    await selectTaskNode(page, 'silent-fail');
 
     await expect(page.locator('text=Exit code: 1')).toBeVisible({ timeout: 3000 });
   });
@@ -122,7 +133,7 @@ test.describe('Task death logs', () => {
       },
     ]);
 
-    await page.locator('.react-flow__node[data-testid$="/silent-fail"]').click();
+    await selectTaskNode(page, 'silent-fail');
 
     await expect(
       page.locator('text=Executor startup failed (worktree): git not found'),

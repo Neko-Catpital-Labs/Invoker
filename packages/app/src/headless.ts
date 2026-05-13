@@ -51,6 +51,7 @@ import { resolveHeadlessTargetWorkflowId } from './headless-command-classificati
 import { trackWorkflow } from './headless-watch.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import { relaunchOrphansAndStartReady } from './orphan-relaunch.js';
+import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import type { RuntimeServices } from '@invoker/runtime-service';
 
 export { bumpGenerationAndRecreate } from './workflow-actions.js';
@@ -98,6 +99,7 @@ export interface HeadlessDeps {
   installBundledSkills?: (mode?: BundledSkillsInstallMode) => BundledSkillsStatus;
   /** Abort signal from the workflow mutation coordinator, if running inside a coordinated mutation. */
   signal?: AbortSignal;
+  mutationTiming?: WorkflowMutationTiming;
   runtimeServices?: RuntimeServices;
 }
 
@@ -1506,10 +1508,24 @@ async function headlessRetryTask(taskId: string, deps: HeadlessDeps): Promise<vo
   if (!taskId) throw new Error('Missing arguments. Usage: --headless retry-task <taskId>');
   await withRestoredTaskUnlessDeleteAllWon(taskId, deps, 'retry-task', async (restored) => {
     taskId = restored.resolvedTaskId;
-    await preemptTaskSubgraph(taskId, deps);
+    if (deps.mutationTiming) {
+      await deps.mutationTiming.span(
+        'headless.retry-task.preemptTaskSubgraph',
+        { taskId },
+        () => preemptTaskSubgraph(taskId, deps),
+      );
+    } else {
+      await preemptTaskSubgraph(taskId, deps);
+    }
 
     const envelope = makeEnvelope('restart-task', 'headless', 'task', { taskId });
-    const result = await deps.commandService.retryTask(envelope);
+    const result = deps.mutationTiming
+      ? await deps.mutationTiming.span(
+        'headless.retry-task.commandService.retryTask',
+        { taskId },
+        () => deps.commandService.retryTask(envelope),
+      )
+      : await deps.commandService.retryTask(envelope);
     if (!result.ok) throw new Error(result.error.message);
     const runnable = result.data.filter(t => t.status === 'running');
     process.stdout.write(`Restarted task "${taskId}" — ${runnable.length} task(s) to execute\n`);
@@ -1522,6 +1538,7 @@ async function headlessRetryTask(taskId: string, deps: HeadlessDeps): Promise<vo
       logger: deps.logger,
       context: 'headless.restart-task',
       started: result.data,
+      mutationTiming: deps.mutationTiming,
     });
     if (runnable.length + topup.length === 0) {
       autoFix.unsubscribe();
@@ -1640,11 +1657,12 @@ async function headlessRebaseAndRetry(taskId: string, deps: HeadlessDeps): Promi
     preemptWorkflowExecution: (id) => preemptWorkflowExecution(id, deps),
     logger: deps.logger,
     context: 'headless.rebase-and-retry',
+    mutationTiming: deps.mutationTiming,
   });
 
   const te = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, te);
-  const started = await rebaseAndRetry(taskId, { ...deps, taskExecutor: te });
+  const started = await rebaseAndRetry(taskId, { ...deps, taskExecutor: te, mutationTiming: deps.mutationTiming });
   const runnable = started.filter(t => t.status === 'running');
   const { topup } = await dispatchStartedTasksWithGlobalTopup({
     orchestrator: deps.orchestrator,
@@ -1652,6 +1670,7 @@ async function headlessRebaseAndRetry(taskId: string, deps: HeadlessDeps): Promi
     logger: deps.logger,
     context: 'headless.rebase-and-retry',
     started,
+    mutationTiming: deps.mutationTiming,
   });
   if (runnable.length + topup.length === 0) {
     autoFix.unsubscribe();
@@ -1681,11 +1700,12 @@ async function headlessRecreateWithRebase(workflowTarget: string, deps: Headless
     preemptWorkflowExecution: (id) => preemptWorkflowExecution(id, deps),
     logger: deps.logger,
     context: 'headless.recreate-with-rebase',
+    mutationTiming: deps.mutationTiming,
   });
 
   const te = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, te);
-  const started = await recreateWithRebase(workflowId, { ...deps, taskExecutor: te });
+  const started = await recreateWithRebase(workflowId, { ...deps, taskExecutor: te, mutationTiming: deps.mutationTiming });
   const runnable = started.filter(t => t.status === 'running');
   const { topup } = await dispatchStartedTasksWithGlobalTopup({
     orchestrator: deps.orchestrator,
@@ -1693,6 +1713,7 @@ async function headlessRecreateWithRebase(workflowTarget: string, deps: Headless
     logger: deps.logger,
     context: 'headless.recreate-with-rebase',
     started,
+    mutationTiming: deps.mutationTiming,
   });
   if (runnable.length + topup.length === 0) {
     autoFix.unsubscribe();
@@ -1723,8 +1744,15 @@ async function headlessRecreateWorkflow(workflowId: string, deps: HeadlessDeps):
     preemptWorkflowExecution: (id) => preemptWorkflowExecution(id, deps),
     logger: deps.logger,
     context: 'headless.recreate-workflow',
+    mutationTiming: deps.mutationTiming,
   });
-  const started = sharedRecreateWorkflow(workflowId, { persistence: deps.persistence, orchestrator: deps.orchestrator });
+  const started = deps.mutationTiming
+    ? await deps.mutationTiming.span(
+      'headless.recreate-workflow.sharedRecreateWorkflow',
+      undefined,
+      async () => sharedRecreateWorkflow(workflowId, { persistence: deps.persistence, orchestrator: deps.orchestrator }),
+    )
+    : sharedRecreateWorkflow(workflowId, { persistence: deps.persistence, orchestrator: deps.orchestrator });
   const runnable = started.filter(t => t.status === 'running');
   if (runnable.length > 0) {
     const te = createHeadlessExecutor(deps);
@@ -1739,6 +1767,7 @@ async function headlessRecreateWorkflow(workflowId: string, deps: HeadlessDeps):
         logger: deps.logger,
         context: 'headless.recreate-workflow',
         alreadyDispatched: runnable,
+        mutationTiming: deps.mutationTiming,
       });
     } finally {
       remoteFetchForPool.enabled = true;
@@ -1771,9 +1800,23 @@ async function headlessRecreateTask(taskId: string, deps: HeadlessDeps): Promise
   const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'recreate-task');
   if (!restored) return;
   taskId = restored.resolvedTaskId;
-  await preemptTaskSubgraph(taskId, deps);
+  if (deps.mutationTiming) {
+    await deps.mutationTiming.span(
+      'headless.recreate-task.preemptTaskSubgraph',
+      { taskId },
+      () => preemptTaskSubgraph(taskId, deps),
+    );
+  } else {
+    await preemptTaskSubgraph(taskId, deps);
+  }
 
-  const started = sharedRecreateTask(taskId, { persistence: deps.persistence, orchestrator: deps.orchestrator });
+  const started = deps.mutationTiming
+    ? await deps.mutationTiming.span(
+      'headless.recreate-task.sharedRecreateTask',
+      { taskId },
+      async () => sharedRecreateTask(taskId, { persistence: deps.persistence, orchestrator: deps.orchestrator }),
+    )
+    : sharedRecreateTask(taskId, { persistence: deps.persistence, orchestrator: deps.orchestrator });
   const runnable = started.filter(t => t.status === 'running');
   const workflowId = deps.orchestrator.getTask(taskId)?.config.workflowId;
   process.stdout.write(`Recreate task "${taskId}" (+ downstream) — ${runnable.length} task(s) to execute (pool fetch skipped)\n`);
@@ -1788,6 +1831,7 @@ async function headlessRecreateTask(taskId: string, deps: HeadlessDeps): Promise
       logger: deps.logger,
       context: 'headless.recreate-task',
       started,
+      mutationTiming: deps.mutationTiming,
     }));
   } finally {
     remoteFetchForPool.enabled = true;
@@ -1848,9 +1892,16 @@ async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Pr
     preemptWorkflowExecution: (id) => preemptWorkflowExecution(id, deps),
     logger: deps.logger,
     context: 'headless.retry-workflow',
+    mutationTiming: deps.mutationTiming,
   });
   const envelope = makeEnvelope('retry-workflow', 'headless', 'workflow', { workflowId });
-  const result = await deps.commandService.retryWorkflow(envelope);
+  const result = deps.mutationTiming
+    ? await deps.mutationTiming.span(
+      'headless.retry-workflow.commandService.retryWorkflow',
+      undefined,
+      () => deps.commandService.retryWorkflow(envelope),
+    )
+    : await deps.commandService.retryWorkflow(envelope);
   if (!result.ok) throw new Error(result.error.message);
   const statusCounts = result.data.reduce<Record<string, number>>((acc, task) => {
     acc[task.status] = (acc[task.status] ?? 0) + 1;
@@ -1939,6 +1990,7 @@ async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Pr
       logger: deps.logger,
       context: 'headless.retry-workflow',
       started: dispatchable,
+      mutationTiming: deps.mutationTiming,
     }));
   } finally {
     remoteFetchForPool.enabled = true;

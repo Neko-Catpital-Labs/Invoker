@@ -1,6 +1,7 @@
 import type { Logger } from '@invoker/contracts';
 import type { Orchestrator, TaskState } from '@invoker/workflow-core';
 import type { TaskRunner } from '@invoker/execution-engine';
+import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 
 type GlobalTopupParams = {
   orchestrator: Orchestrator;
@@ -8,6 +9,7 @@ type GlobalTopupParams = {
   logger?: Logger;
   context: string;
   alreadyDispatched?: TaskState[];
+  mutationTiming?: WorkflowMutationTiming;
 };
 
 type MutationTopupParams = {
@@ -16,6 +18,7 @@ type MutationTopupParams = {
   logger?: Logger;
   context: string;
   started?: TaskState[];
+  mutationTiming?: WorkflowMutationTiming;
 };
 
 function runningExecutionKey(task: TaskState): string {
@@ -34,6 +37,7 @@ export async function executeGlobalTopup({
   logger,
   context,
   alreadyDispatched = [],
+  mutationTiming,
 }: GlobalTopupParams): Promise<TaskState[]> {
   const dedupeKeys = new Set(
     alreadyDispatched
@@ -53,7 +57,15 @@ export async function executeGlobalTopup({
   logger?.info(
     `[global-topup] ${context}: dispatching ${runnable.length} additional task(s): [${runnable.map((task) => task.id).join(', ')}]`,
   );
-  await taskExecutor.executeTasks(runnable);
+  if (mutationTiming) {
+    await mutationTiming.span(
+      'executeGlobalTopup.taskExecutor.executeTasks',
+      { context, runnableCount: runnable.length },
+      () => taskExecutor.executeTasks(runnable),
+    );
+  } else {
+    await taskExecutor.executeTasks(runnable);
+  }
   return runnable;
 }
 
@@ -67,13 +79,22 @@ export async function dispatchStartedTasksWithGlobalTopup({
   logger,
   context,
   started = [],
+  mutationTiming,
 }: MutationTopupParams): Promise<{ runnable: TaskState[]; topup: TaskState[] }> {
   const runnable = started.filter((task) => task.status === 'running');
   if (runnable.length > 0) {
     logger?.info(
       `[global-topup] ${context}: dispatching ${runnable.length} scoped task(s): [${runnable.map((task) => task.id).join(', ')}]`,
     );
-    await taskExecutor.executeTasks(runnable);
+    if (mutationTiming) {
+      await mutationTiming.span(
+        'dispatchStartedTasksWithGlobalTopup.scopedExecuteTasks',
+        { context, runnableCount: runnable.length },
+        () => taskExecutor.executeTasks(runnable),
+      );
+    } else {
+      await taskExecutor.executeTasks(runnable);
+    }
   }
   const topup = await executeGlobalTopup({
     orchestrator,
@@ -81,6 +102,7 @@ export async function dispatchStartedTasksWithGlobalTopup({
     logger,
     context,
     alreadyDispatched: runnable,
+    mutationTiming,
   });
   return { runnable, topup };
 }
@@ -96,6 +118,7 @@ export async function finalizeMutationWithGlobalTopup({
   logger,
   context,
   started = [],
+  mutationTiming,
 }: MutationTopupParams): Promise<{ started: TaskState[]; topup: TaskState[] }> {
   const { topup } = await dispatchStartedTasksWithGlobalTopup({
     orchestrator,
@@ -103,6 +126,7 @@ export async function finalizeMutationWithGlobalTopup({
     logger,
     context,
     started,
+    mutationTiming,
   });
   return { started, topup };
 }
