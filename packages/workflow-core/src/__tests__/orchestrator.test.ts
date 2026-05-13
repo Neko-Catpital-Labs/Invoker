@@ -1086,6 +1086,46 @@ describe('Orchestrator', () => {
         }).toThrow('requires remoteTargetId="prod-server"');
       });
 
+      it('validates matching rule with poolId destination', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          executorRoutingRules: [
+            { pattern: 'pnpm test', executorType: 'ssh', poolId: 'ssh-light' },
+          ],
+          availablePoolIds: ['ssh-light'],
+        });
+
+        routedOrchestrator.loadPlan({
+          name: 'pool-routing-test',
+          tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test', executorType: 'ssh', poolId: 'ssh-light' }],
+        });
+
+        const task = routedOrchestrator.getTask('t1');
+        expect(task!.config.executorType).toBe('ssh');
+        expect(task!.config.poolId).toBe('ssh-light');
+      });
+
+      it('throws when matching pool rule task omits poolId', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          executorRoutingRules: [
+            { pattern: 'pnpm test', executorType: 'ssh', poolId: 'ssh-light' },
+          ],
+          availablePoolIds: ['ssh-light'],
+        });
+
+        expect(() => {
+          routedOrchestrator.loadPlan({
+            name: 'missing-pool',
+            tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test', executorType: 'ssh' }],
+          });
+        }).toThrow('requires poolId="ssh-light"');
+      });
+
       it('merge node always has executorType merge regardless of routing rules', () => {
         const routedOrchestrator = new Orchestrator({
           persistence: new InMemoryPersistence(),
@@ -1106,19 +1146,19 @@ describe('Orchestrator', () => {
         expect(mergeNode!.config.executorType).toBe('merge');
       });
 
-      it('auto-routes pnpm test to heavyweight SSH target when executor is omitted', () => {
+      it('auto-routes pnpm test to SSH target with route strategy when executor is omitted', () => {
         const routedOrchestrator = new Orchestrator({
           persistence: new InMemoryPersistence(),
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
-          heavyweightCommandRouting: {
-            remoteTargetId: 'ci-box',
-          },
+          executorRoutingRules: [
+            { regex: '\\bpnpm(?:\\s|$)', executorType: 'ssh', remoteTargetId: 'ci-box', strategy: 'route' },
+          ],
           availableRemoteTargetIds: ['ci-box'],
         });
 
         routedOrchestrator.loadPlan({
-          name: 'heavyweight-routing-test',
+          name: 'route-strategy-test',
           tasks: [{ id: 't1', description: 'Run tests', command: 'cd packages/app && pnpm test' }],
         });
 
@@ -1127,73 +1167,73 @@ describe('Orchestrator', () => {
         expect(task!.config.remoteTargetId).toBe('ci-box');
       });
 
-      it('auto-routes pnpm install to heavyweight SSH target when executor is omitted', () => {
+      it('auto-routes matching command to configured poolId with route strategy', () => {
         const routedOrchestrator = new Orchestrator({
           persistence: new InMemoryPersistence(),
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
-          heavyweightCommandRouting: {
-            remoteTargetId: 'ci-box',
-          },
-          availableRemoteTargetIds: ['ci-box'],
+          executorRoutingRules: [
+            { regex: '\\bpnpm(?:\\s|$)', executorType: 'ssh', poolId: 'ssh-light', strategy: 'route' },
+          ],
+          availablePoolIds: ['ssh-light'],
         });
 
         routedOrchestrator.loadPlan({
-          name: 'heavyweight-install-routing-test',
-          tasks: [{ id: 't1', description: 'Install deps', command: 'pnpm install --frozen-lockfile' }],
+          name: 'route-strategy-pool-test',
+          tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test' }],
         });
 
         const task = routedOrchestrator.getTask('t1');
         expect(task!.config.executorType).toBe('ssh');
-        expect(task!.config.remoteTargetId).toBe('ci-box');
+        expect(task!.config.poolId).toBe('ssh-light');
       });
 
-      it('throws when heavyweight command explicitly declares conflicting local executor', () => {
+      it('throws when route strategy command explicitly declares conflicting executor', () => {
         const routedOrchestrator = new Orchestrator({
           persistence: new InMemoryPersistence(),
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
-          heavyweightCommandRouting: {
-            remoteTargetId: 'ci-box',
-          },
+          executorRoutingRules: [
+            { regex: '\\bpnpm(?:\\s|$)', executorType: 'ssh', remoteTargetId: 'ci-box', strategy: 'route' },
+          ],
           availableRemoteTargetIds: ['ci-box'],
         });
 
         expect(() => {
           routedOrchestrator.loadPlan({
-            name: 'heavyweight-conflict-test',
+            name: 'route-strategy-conflict-test',
             tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test', executorType: 'worktree' }],
           });
-        }).toThrow('matched heavyweight command routing');
+        }).toThrow('matched routing rule');
       });
 
-      it('throws when heavyweight command routing target is not configured', () => {
+      it('throws when route strategy target pool is not configured', () => {
         const routedOrchestrator = new Orchestrator({
           persistence: new InMemoryPersistence(),
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
-          heavyweightCommandRouting: {
-            remoteTargetId: 'ci-box',
-          },
-          availableRemoteTargetIds: [],
+          executorRoutingRules: [
+            { regex: '\\bpnpm(?:\\s|$)', executorType: 'ssh', poolId: 'ssh-light', strategy: 'route' },
+          ],
+          availablePoolIds: [],
         });
 
         expect(() => {
           routedOrchestrator.loadPlan({
-            name: 'heavyweight-missing-target',
+            name: 'route-strategy-missing-target',
             tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test' }],
           });
-        }).toThrow('no remoteTargets are configured');
+        }).toThrow('no executionPools are configured');
       });
 
-      it('leaves non-matching commands unchanged under heavyweight routing', () => {
+      it('leaves non-matching commands unchanged under route strategy', () => {
         const routedOrchestrator = new Orchestrator({
           persistence: new InMemoryPersistence(),
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
-          heavyweightCommandRouting: {
-            remoteTargetId: 'ci-box',
-          },
+          executorRoutingRules: [
+            { regex: '\\bpnpm(?:\\s|$)', executorType: 'ssh', remoteTargetId: 'ci-box', strategy: 'route' },
+          ],
           availableRemoteTargetIds: ['ci-box'],
         });
 
@@ -1205,6 +1245,27 @@ describe('Orchestrator', () => {
         const task = routedOrchestrator.getTask('t1');
         expect(task!.config.executorType).toBe('worktree');
         expect(task!.config.remoteTargetId).toBeUndefined();
+      });
+
+      it('keeps heavyweightCommandRouting as compatibility alias to route strategy', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          heavyweightCommandRouting: {
+            poolId: 'ssh-light',
+          },
+          availablePoolIds: ['ssh-light'],
+        });
+
+        routedOrchestrator.loadPlan({
+          name: 'heavyweight-compatibility-test',
+          tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test' }],
+        });
+
+        const task = routedOrchestrator.getTask('t1');
+        expect(task!.config.executorType).toBe('ssh');
+        expect(task!.config.poolId).toBe('ssh-light');
       });
     });
 

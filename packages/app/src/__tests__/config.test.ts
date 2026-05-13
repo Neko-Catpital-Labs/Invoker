@@ -137,17 +137,60 @@ describe('loadConfig', () => {
     expect(config.imageStorage).toEqual(imageStorage);
   });
 
-  it('reads heavyweightCommandRouting from user config', () => {
-    const heavyweightCommandRouting = {
-      remoteTargetId: 'ci-box',
-      matchers: [{ regex: '\\bpnpm(?:\\s|$)' }],
-    };
+  it('reads executorRoutingRules route strategy from user config', () => {
+    const executorRoutingRules = [{
+      regex: '\\bpnpm(?:\\s|$)',
+      executorType: 'ssh',
+      poolId: 'ssh-light',
+      strategy: 'route',
+    }];
     writeFileSync(
       join(fakeHome, '.invoker', 'config.json'),
-      JSON.stringify({ heavyweightCommandRouting }),
+      JSON.stringify({ executorRoutingRules }),
     );
     const config = loadConfig();
-    expect(config.heavyweightCommandRouting).toEqual(heavyweightCommandRouting);
+    expect(config.executorRoutingRules).toEqual(executorRoutingRules);
+  });
+
+  it('reads remote target maxConcurrentTasks from user config', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({
+        remoteTargets: {
+          ci1: {
+            host: '10.0.0.1',
+            user: 'invoker',
+            sshKeyPath: '/tmp/key',
+            maxConcurrentTasks: 2,
+          },
+        },
+      }),
+    );
+    const config = loadConfig();
+    expect(config.remoteTargets?.ci1?.maxConcurrentTasks).toBe(2);
+  });
+
+  it('reads executionPools from user config', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({
+        executionPools: {
+          'ssh-light': {
+            type: 'ssh',
+            members: ['remote-1', 'remote-2'],
+            selectionStrategy: 'roundRobin',
+            maxConcurrentTasksPerMember: 1,
+          },
+        },
+      }),
+    );
+    const config = loadConfig();
+    expect(config.executionPools?.['ssh-light']).toEqual({
+      type: 'ssh',
+      members: ['remote-1', 'remote-2'],
+      selectionStrategy: 'roundRobin',
+      maxConcurrentTasksPerMember: 1,
+    });
   });
 
 });

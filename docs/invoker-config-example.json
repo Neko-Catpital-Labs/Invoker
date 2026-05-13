@@ -25,6 +25,7 @@
       "user": "deploy",
       "sshKeyPath": "/home/user/.ssh/id_staging",
       "port": 22,
+      "maxConcurrentTasks": 1,
       "managedWorkspaces": true,
       "remoteInvokerHome": "~/.invoker",
       "provisionCommand": "pnpm install --frozen-lockfile",
@@ -36,6 +37,7 @@
       "user": "deploy",
       "sshKeyPath": "/home/user/.ssh/id_build_b",
       "port": 22,
+      "maxConcurrentTasks": 1,
       "managedWorkspaces": true,
       "remoteInvokerHome": "~/.invoker",
       "provisionCommand": "pnpm install --frozen-lockfile",
@@ -43,15 +45,25 @@
     }
   },
 
-  "heavyweightCommandRouting": {
-    "comment": "Auto-route heavyweight shell commands like pnpm test to a remote target",
-    "remoteTargetId": "staging-server",
-    "matchers": [
-      {
-        "regex": "\\bpnpm(?:\\s|$)"
-      }
-    ]
+  "executionPools": {
+    "ssh-light": {
+      "comment": "Pool routes tasks across both SSH machines with shared queue/drain semantics",
+      "type": "ssh",
+      "members": ["staging-server", "build-server-b"],
+      "selectionStrategy": "roundRobin",
+      "maxConcurrentTasksPerMember": 1
+    }
   },
+
+  "executorRoutingRules": [
+    {
+      "comment": "Route pnpm commands to ssh-light pool",
+      "regex": "\\bpnpm(?:\\s|$)",
+      "executorType": "ssh",
+      "poolId": "ssh-light",
+      "strategy": "route"
+    }
+  ],
 
   "autoFixRetries": 3,
   "autoApproveAIFixes": true,
