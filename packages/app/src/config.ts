@@ -100,6 +100,11 @@ export interface InvokerConfig {
      * Only used in managed mode. Default: pnpm install --frozen-lockfile
      */
     provisionCommand?: string;
+    /**
+     * Remote workload heartbeat interval (seconds) emitted by the SSH payload wrapper.
+     * Used for SSH executing-stall liveness checks. Default: 30.
+     */
+    remoteHeartbeatIntervalSeconds?: number;
   }>;
   /**
    * Config-owned routing policy for heavyweight shell commands.

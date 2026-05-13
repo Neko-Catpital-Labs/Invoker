@@ -14,6 +14,7 @@ import { spawn } from 'node:child_process';
 import type { AgentSessionInspection, SessionDriver, SessionUsageEvent, RemoteTarget } from './session-driver.js';
 import { parseCodexSessionJsonl, toReadableText, extractCodexSessionId, extractCodexUsage } from './codex-session.js';
 import type { AgentMessage } from './codex-session.js';
+import { buildSshConnectionArgs } from './ssh-transport-options.js';
 
 export class CodexSessionDriver implements SessionDriver {
   private getStorageDir(): string {
@@ -92,11 +93,12 @@ export class CodexSessionDriver implements SessionDriver {
     return new Promise((resolve) => {
       const script = `cat ~/.invoker/agent-sessions/${sessionId}.jsonl 2>/dev/null`;
       const sshArgs = [
-        '-i', target.sshKeyPath,
-        '-p', String(target.port ?? 22),
-        '-o', 'StrictHostKeyChecking=accept-new',
-        '-o', 'BatchMode=yes',
-        `${target.user}@${target.host}`,
+        ...buildSshConnectionArgs({
+          sshKeyPath: target.sshKeyPath,
+          port: target.port,
+          user: target.user,
+          host: target.host,
+        }, { batchMode: true }),
         script,
       ];
       const child = spawn('ssh', sshArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
