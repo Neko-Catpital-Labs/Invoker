@@ -145,7 +145,7 @@ export interface TaskRunnerConfig {
 // ── TaskRunner ──────────────────────────────────────────
 
 export class TaskRunner {
-  private static readonly INTERMEDIATE_REMOTE_NAME = 'intermediate';
+  private static readonly BRANCH_REMOTE_NAME = 'invoker-branches';
   /** @internal */ orchestrator: Orchestrator;
   /** @internal */ persistence: SQLiteAdapter;
   private executorRegistry: ExecutorRegistry;
@@ -484,7 +484,7 @@ export class TaskRunner {
     });
     const baseBranch = workflow?.baseBranch ?? this.defaultBranch;
     const repoUrl = workflow?.repoUrl;
-    const intermediateRepoUrl = workflow?.intermediateRepoUrl;
+    const branchRepoUrl = workflow?.intermediateRepoUrl?.trim() || undefined;
 
     // Persist the experiment branch as soon as the executor knows it — well
     // before `git worktree add` could leak a worktree without a recorded branch
@@ -526,7 +526,7 @@ export class TaskRunner {
         prompt: task.config.prompt,
         executionAgent: task.config.executionAgent?.trim() || DEFAULT_EXECUTION_AGENT,
         repoUrl,
-        intermediateRepoUrl,
+        branchRepoUrl,
         featureBranch: task.config.featureBranch,
         upstreamContext: upstreamContext.length > 0 ? upstreamContext : undefined,
         alternatives: alternatives.length > 0 ? alternatives : undefined,
@@ -951,7 +951,7 @@ export class TaskRunner {
         description: task.description,
         command: task.config.command,
         prompt: task.config.prompt,
-        intermediateRepoUrl: workflow?.intermediateRepoUrl,
+        branchRepoUrl: workflow?.intermediateRepoUrl?.trim() || undefined,
       },
       callbackUrl: '',
       timestamps: {
@@ -1444,7 +1444,7 @@ export class TaskRunner {
         ? this.persistence.loadWorkflow(reconWorkflowId)
         : undefined;
     const reconRepoUrl = reconWorkflow?.repoUrl;
-    const reconIntermediateRepoUrl = reconWorkflow?.intermediateRepoUrl;
+    const reconBranchRepoUrl = reconWorkflow?.intermediateRepoUrl?.trim() || undefined;
 
     const worktreeDir = await this.createMergeWorktree(baseBranch, 'recon-' + reconTaskId, reconRepoUrl);
 
@@ -1462,12 +1462,12 @@ export class TaskRunner {
           throw new Error(`Experiment ${expId} has no branch`);
         }
         const b = expTask.execution.branch;
-        await ensureLocalBranchForMerge(this, worktreeDir, b, reconRepoUrl, reconIntermediateRepoUrl);
+        await ensureLocalBranchForMerge(this, worktreeDir, b, reconRepoUrl, reconBranchRepoUrl);
         const expMergeMsg = `Merge ${b} — ${expTask.description}`;
         await this.execGitIn(['merge', '--no-ff', '-m', expMergeMsg, b], worktreeDir);
       }
 
-      await this.pushBranchFromMergeWorktree(worktreeDir, branchName, reconIntermediateRepoUrl);
+      await this.pushBranchFromMergeWorktree(worktreeDir, branchName, reconBranchRepoUrl);
 
       const commit = await this.execGitIn(['rev-parse', 'HEAD'], worktreeDir);
       return { branch: branchName, commit };
@@ -2008,7 +2008,7 @@ export class TaskRunner {
 
     const rebaseWorkflow = this.persistence.loadWorkflow?.(workflowId);
     const rebaseRepoUrl = rebaseWorkflow?.repoUrl;
-    const rebaseIntermediateRepoUrl = rebaseWorkflow?.intermediateRepoUrl;
+    const rebaseBranchRepoUrl = rebaseWorkflow?.intermediateRepoUrl?.trim() || undefined;
     const worktreeDir = await this.createMergeWorktree(baseBranch, 'rebase-' + workflowId, rebaseRepoUrl);
 
     const rebasedBranches: string[] = [];
@@ -2019,7 +2019,7 @@ export class TaskRunner {
         try {
           await this.execGitIn(['checkout', branch], worktreeDir);
           await this.execGitIn(['rebase', baseBranch], worktreeDir);
-          await this.pushBranchFromMergeWorktree(worktreeDir, branch, rebaseIntermediateRepoUrl);
+          await this.pushBranchFromMergeWorktree(worktreeDir, branch, rebaseBranchRepoUrl);
           rebasedBranches.push(branch);
           this.logger.info(`[rebase] Successfully rebased ${branch} onto ${baseBranch}`);
         } catch (err) {
@@ -2043,23 +2043,23 @@ export class TaskRunner {
   private async pushBranchFromMergeWorktree(
     worktreeDir: string,
     branch: string,
-    intermediateRepoUrl?: string,
+    branchRepoUrl?: string,
   ): Promise<void> {
-    const trimmedIntermediateUrl = intermediateRepoUrl?.trim();
-    if (trimmedIntermediateUrl) {
+    const trimmedBranchRepoUrl = branchRepoUrl?.trim();
+    if (trimmedBranchRepoUrl) {
       try {
         await this.execGitIn(
-          ['remote', 'set-url', TaskRunner.INTERMEDIATE_REMOTE_NAME, trimmedIntermediateUrl],
+          ['remote', 'set-url', TaskRunner.BRANCH_REMOTE_NAME, trimmedBranchRepoUrl],
           worktreeDir,
         );
       } catch {
         await this.execGitIn(
-          ['remote', 'add', TaskRunner.INTERMEDIATE_REMOTE_NAME, trimmedIntermediateUrl],
+          ['remote', 'add', TaskRunner.BRANCH_REMOTE_NAME, trimmedBranchRepoUrl],
           worktreeDir,
         );
       }
       await this.execGitIn(
-        ['push', '--force', TaskRunner.INTERMEDIATE_REMOTE_NAME, `${branch}:refs/heads/${branch}`],
+        ['push', '--force', TaskRunner.BRANCH_REMOTE_NAME, `${branch}:refs/heads/${branch}`],
         worktreeDir,
       );
       return;
