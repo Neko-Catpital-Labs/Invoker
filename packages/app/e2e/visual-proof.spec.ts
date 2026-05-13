@@ -181,6 +181,37 @@ test.describe('Visual proof capture', () => {
     await assertPageScreenshot(page, 'task-panel');
   });
 
+  test('task panel setup failure renders in Error panel', async ({ page }) => {
+    await loadPlan(page, TEST_PLAN);
+    const setupError = [
+      'Executor startup failed (worktree)',
+      'ERR_PNPM_UNSUPPORTED_ENGINE Unsupported environment (bad pnpm and/or Node.js version)',
+      'Expected version: >=20',
+    ].join('\n');
+
+    await injectTaskStates(page, [
+      {
+        taskId: 'task-alpha',
+        changes: {
+          status: 'failed',
+          execution: { error: setupError, exitCode: 1 },
+        },
+      },
+    ]);
+
+    await page.locator('.react-flow__node[data-testid$="task-alpha"]').click();
+    const panel = page.locator('.overflow-y-auto');
+    const errorHeading = panel.getByRole('heading', { name: 'Error' });
+    const errorPanel = errorHeading.locator('xpath=..');
+    await expect(errorHeading).toBeVisible();
+    await expect(panel.getByRole('heading', { name: 'Workspace Setup Failure' })).toHaveCount(0);
+    await expect(errorPanel).toContainText('ERR_PNPM_UNSUPPORTED_ENGINE Unsupported environment');
+    await expect(errorPanel).toContainText('Exit code: 1');
+
+    await captureScreenshot(page, 'task-panel-audit-setup-error');
+    await assertPageScreenshot(page, 'task-panel-audit-setup-error');
+  });
+
   test('dag before and after task selection', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     await expect(page.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
