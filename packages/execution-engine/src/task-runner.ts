@@ -18,7 +18,7 @@ import type { WorkRequest, WorkResponse, ActionType, Logger } from '@invoker/con
 import type { Executor, ExecutorHandle } from './executor.js';
 import { BaseExecutor } from './base-executor.js';
 import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
-import { ResourceLimitError } from './repo-pool.js';
+import { ResourceLimitError, type RepoPoolTiming } from './repo-pool.js';
 import type { ExecutorRegistry } from './registry.js';
 import type { AgentRegistry } from './agent-registry.js';
 import type { MergeGateProvider } from './merge-gate-provider.js';
@@ -182,15 +182,25 @@ export class TaskRunner {
     workflowId: string,
     repoUrl: string | undefined,
     baseBranchHint: string | undefined,
+    timing?: RepoPoolTiming,
   ): Promise<void> {
     if (!repoUrl) return;
     const executor = this.executorRegistry.get('worktree');
     if (!(executor instanceof WorktreeExecutor)) return;
     const pool = executor.getRepoPool();
     const baseBranch = baseBranchHint?.trim() || this.defaultBranch || 'master';
-    await pool.refreshMirrorForRebase(repoUrl, baseBranch);
+    await pool.refreshMirrorForRebase(repoUrl, baseBranch, timing);
+    const collectStartedAtMs = Date.now();
+    timing?.mark('TaskRunner.preparePoolForRebaseRetry.collectManagedWorkflowBranches', 'started', {
+      workflowId,
+    });
     const branches = this.collectManagedWorkflowBranches(workflowId);
-    await pool.removeManagedBranchesInMirror(repoUrl, branches);
+    timing?.mark('TaskRunner.preparePoolForRebaseRetry.collectManagedWorkflowBranches', 'completed', {
+      workflowId,
+      branchCount: branches.length,
+      durationMs: Date.now() - collectStartedAtMs,
+    });
+    await pool.removeManagedBranchesInMirror(repoUrl, branches, timing);
   }
 
   /**

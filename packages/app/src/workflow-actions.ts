@@ -19,6 +19,7 @@ import type { SQLiteAdapter } from '@invoker/data-store';
 import type { TaskRunner } from '@invoker/execution-engine';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 import { createDeleteAllSnapshot } from './delete-all-snapshot.js';
+import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 
 // ── Lineage guard ─────────────────────────────────────────────
 
@@ -96,6 +97,7 @@ export interface ActionDeps {
   repoRoot?: string;
   /** When set, rebase-and-refreshes the pool mirror and removes managed branches before bumping generation. */
   taskExecutor?: TaskRunner;
+  mutationTiming?: WorkflowMutationTiming;
   /** When true, successful AI-applied fixes are approved immediately. */
   autoApproveAIFixes?: boolean;
 }
@@ -356,7 +358,13 @@ export async function recreateWorkflowFromFreshBase(
   const workflow = deps.persistence.loadWorkflow(workflowId);
   if (!workflow) throw new OrchestratorError(OrchestratorErrorCode.WORKFLOW_NOT_FOUND, `Workflow ${workflowId} not found`);
   const nextGen = (workflow.generation ?? 0) + 1;
+  deps.mutationTiming?.mark('workflow-actions.recreateWorkflowFromFreshBase.bumpGeneration', 'started', {
+    nextGeneration: nextGen,
+  });
   deps.persistence.updateWorkflow(workflowId, { generation: nextGen });
+  deps.mutationTiming?.mark('workflow-actions.recreateWorkflowFromFreshBase.bumpGeneration', 'completed', {
+    nextGeneration: nextGen,
+  });
   deps.logger?.info(
     `recreateWorkflowFromFreshBase: workflowId=${workflowId} bumped generation to ${nextGen}`,
     { module: 'workflow' },
@@ -366,14 +374,30 @@ export async function recreateWorkflowFromFreshBase(
     { module: 'agent-session-trace' },
   );
 
-  return deps.orchestrator.recreateWorkflowFromFreshBase(workflowId, {
+  const recreate = () => deps.orchestrator.recreateWorkflowFromFreshBase(workflowId, {
     refreshBase: async () => {
       if (deps.taskExecutor && workflow.repoUrl) {
-        await deps.taskExecutor.preparePoolForRebaseRetry(
-          workflowId,
-          workflow.repoUrl,
-          workflow.baseBranch,
-        );
+        const prepare = () => deps.mutationTiming
+          ? deps.taskExecutor!.preparePoolForRebaseRetry(
+            workflowId,
+            workflow.repoUrl,
+            workflow.baseBranch,
+            deps.mutationTiming,
+          )
+          : deps.taskExecutor!.preparePoolForRebaseRetry(
+            workflowId,
+            workflow.repoUrl,
+            workflow.baseBranch,
+          );
+        if (deps.mutationTiming) {
+          await deps.mutationTiming.span(
+            'workflow-actions.recreateWorkflowFromFreshBase.preparePoolForRebaseRetry',
+            { repoUrl: workflow.repoUrl, baseBranch: workflow.baseBranch },
+            prepare,
+          );
+        } else {
+          await prepare();
+        }
       }
       // `preparePoolForRebaseRetry` does not yet expose the resulting
       // upstream HEAD SHA; surfacing it (so the orchestrator can
@@ -382,6 +406,9 @@ export async function recreateWorkflowFromFreshBase(
       return undefined;
     },
   });
+  return deps.mutationTiming
+    ? deps.mutationTiming.span('workflow-actions.recreateWorkflowFromFreshBase.orchestrator', undefined, recreate)
+    : recreate();
 }
 
 /**
@@ -397,11 +424,17 @@ export async function recreateWithRebase(
   workflowId: string,
   deps: ActionDeps,
 ): Promise<TaskState[]> {
+  deps.mutationTiming?.mark('workflow-actions.recreateWithRebase', 'started', { workflowId });
   deps.logger?.info(
     `recreateWithRebase: workflowId=${workflowId} → recreateWorkflowFromFreshBase`,
     { module: 'agent-session-trace' },
   );
-  return recreateWorkflowFromFreshBase(workflowId, deps);
+  const started = await recreateWorkflowFromFreshBase(workflowId, deps);
+  deps.mutationTiming?.mark('workflow-actions.recreateWithRebase', 'completed', {
+    workflowId,
+    startedCount: started.length,
+  });
+  return started;
 }
 
 /**
@@ -422,11 +455,18 @@ export async function rebaseAndRetry(
   const task = deps.orchestrator.getTask(taskId);
   if (!task?.config.workflowId) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found or has no workflow`);
   const workflowId = task.config.workflowId;
+  deps.mutationTiming?.mark('workflow-actions.rebaseAndRetry', 'started', { taskId, workflowId });
   deps.logger?.info(
     `rebaseAndRetry: taskId=${taskId} workflowId=${workflowId} → recreateWorkflowFromFreshBase (Step 12 delegate)`,
     { module: 'agent-session-trace' },
   );
-  return recreateWorkflowFromFreshBase(workflowId, deps);
+  const started = await recreateWorkflowFromFreshBase(workflowId, deps);
+  deps.mutationTiming?.mark('workflow-actions.rebaseAndRetry', 'completed', {
+    taskId,
+    workflowId,
+    startedCount: started.length,
+  });
+  return started;
 }
 
 export interface BuildCancelInFlightDeps {
@@ -450,7 +490,7 @@ export function buildCancelInFlight(deps: BuildCancelInFlightDeps): CancelInFlig
 }
 
 export function buildInvalidationDeps(
-  deps: Pick<ActionDeps, 'logger' | 'orchestrator' | 'persistence' | 'taskExecutor'>,
+  deps: Pick<ActionDeps, 'logger' | 'orchestrator' | 'persistence' | 'taskExecutor' | 'mutationTiming'>,
 ): InvalidationDeps {
   const cancelInFlight = buildCancelInFlight({
     orchestrator: deps.orchestrator,
@@ -473,6 +513,7 @@ export function buildInvalidationDeps(
         orchestrator: deps.orchestrator,
         persistence: deps.persistence,
         taskExecutor: deps.taskExecutor,
+        mutationTiming: deps.mutationTiming,
       }),
     workflowFork: (workflowId: string) => {
       const result = deps.orchestrator.forkWorkflow(workflowId);
