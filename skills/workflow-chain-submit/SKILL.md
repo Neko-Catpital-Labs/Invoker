@@ -30,7 +30,9 @@ Each template after the first must contain:
 ```yaml
 externalDependencies:
   - workflowId: "__UPSTREAM_WORKFLOW_ID__"
+    taskId: "__merge__"
     requiredStatus: completed
+    gatePolicy: completed
 ```
 
 ## Command

@@ -171,11 +171,12 @@ function parseExternalDependencies(
       );
     }
     const taskId = dep.taskId?.trim() || '__merge__';
+    const defaultGatePolicy: 'completed' | 'review_ready' = taskId === '__merge__' ? 'completed' : 'review_ready';
     return {
       workflowId: dep.workflowId,
       taskId,
       requiredStatus: 'completed' as const,
-      gatePolicy: (dep.gatePolicy ?? 'review_ready') as 'completed' | 'review_ready',
+      gatePolicy: (dep.gatePolicy ?? defaultGatePolicy) as 'completed' | 'review_ready',
     };
   });
 }
