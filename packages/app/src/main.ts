@@ -423,7 +423,6 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     defaultAutoFixRetries: invokerConfig.autoFixRetries,
     executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
     heavyweightCommandRouting: invokerConfig.heavyweightCommandRouting,
-    availableRemoteTargetIds: Object.keys(invokerConfig.remoteTargets ?? {}),
     availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
     deferRunningUntilLaunch: true,
   });
@@ -2834,7 +2833,6 @@ if (isHeadless) {
         defaultAutoFixRetries: invokerConfig.autoFixRetries,
         executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
         heavyweightCommandRouting: invokerConfig.heavyweightCommandRouting,
-        availableRemoteTargetIds: Object.keys(invokerConfig.remoteTargets ?? {}),
         availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
         deferRunningUntilLaunch: true,
       });
