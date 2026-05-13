@@ -19,6 +19,7 @@ import type { ExecutionAgent } from './agent.js';
 import type { SessionDriver } from './session-driver.js';
 import type { AgentRegistry } from './agent-registry.js';
 import { buildWorktreeListScript, createSshRemoteScriptError } from './ssh-git-exec.js';
+import { buildSshConnectionArgs } from './ssh-transport-options.js';
 import { findManagedWorktreeForBranch } from './worktree-discovery.js';
 
 // ── Host interface ───────────────────────────────────────
@@ -619,11 +620,12 @@ eval "$(echo "${agentCmdB64}" | base64 -d)"
 `;
 
   const sshArgs = [
-    '-i', target.sshKeyPath,
-    '-p', String(target.port ?? 22),
-    '-o', 'StrictHostKeyChecking=accept-new',
-    '-o', 'BatchMode=yes',
-    `${target.user}@${target.host}`,
+    ...buildSshConnectionArgs({
+      sshKeyPath: target.sshKeyPath,
+      port: target.port,
+      user: target.user,
+      host: target.host,
+    }, { batchMode: true }),
     'bash', '-s',
   ];
 
@@ -728,11 +730,12 @@ export function spawnAgentFixViaRegistry(
 
 function execRemoteSsh(target: RemoteTargetConfig, script: string, phase?: string): Promise<string> {
   const sshArgs = [
-    '-i', target.sshKeyPath,
-    '-p', String(target.port ?? 22),
-    '-o', 'StrictHostKeyChecking=accept-new',
-    '-o', 'BatchMode=yes',
-    `${target.user}@${target.host}`,
+    ...buildSshConnectionArgs({
+      sshKeyPath: target.sshKeyPath,
+      port: target.port,
+      user: target.user,
+      host: target.host,
+    }, { batchMode: true }),
     'bash', '-s',
   ];
 

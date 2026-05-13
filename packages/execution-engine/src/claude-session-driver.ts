@@ -15,6 +15,7 @@ import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
 import type { AgentSessionInspection, SessionDriver, SessionUsageEvent, RemoteTarget } from './session-driver.js';
 import type { AgentMessage } from './codex-session.js';
+import { buildSshConnectionArgs } from './ssh-transport-options.js';
 
 export class ClaudeSessionDriver implements SessionDriver {
   /**
@@ -166,11 +167,12 @@ export class ClaudeSessionDriver implements SessionDriver {
     return new Promise((resolve) => {
       const script = `find ~/.claude/projects -name '${sessionId}.jsonl' -print -quit 2>/dev/null | head -1 | xargs cat 2>/dev/null`;
       const sshArgs = [
-        '-i', target.sshKeyPath,
-        '-p', String(target.port ?? 22),
-        '-o', 'StrictHostKeyChecking=accept-new',
-        '-o', 'BatchMode=yes',
-        `${target.user}@${target.host}`,
+        ...buildSshConnectionArgs({
+          sshKeyPath: target.sshKeyPath,
+          port: target.port,
+          user: target.user,
+          host: target.host,
+        }, { batchMode: true }),
         script,
       ];
       const child = spawn('ssh', sshArgs, { stdio: ['ignore', 'pipe', 'pipe'] });

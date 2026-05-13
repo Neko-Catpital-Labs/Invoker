@@ -23,7 +23,8 @@ If you want to use a repo-specific config file, launch Invoker with `INVOKER_REP
       "sshKeyPath": "/home/user/.ssh/id_staging",
       "managedWorkspaces": true,
       "remoteInvokerHome": "~/.invoker",
-      "provisionCommand": "pnpm install --frozen-lockfile"
+      "provisionCommand": "pnpm install --frozen-lockfile",
+      "remoteHeartbeatIntervalSeconds": 30
     },
     "staging-server-b": {
       "host": "192.168.1.101",
@@ -32,7 +33,8 @@ If you want to use a repo-specific config file, launch Invoker with `INVOKER_REP
       "port": 22,
       "managedWorkspaces": true,
       "remoteInvokerHome": "~/.invoker",
-      "provisionCommand": "pnpm install --frozen-lockfile"
+      "provisionCommand": "pnpm install --frozen-lockfile",
+      "remoteHeartbeatIntervalSeconds": 30
     }
   }
 }
@@ -49,6 +51,7 @@ If you want to use a repo-specific config file, launch Invoker with `INVOKER_REP
 | `managedWorkspaces` | boolean | no | When true, Invoker clones/fetches the repo and manages per-task worktrees on the remote host |
 | `remoteInvokerHome` | string | no | Base directory used by managed remote workspaces (default: `~/.invoker`) |
 | `provisionCommand` | string | no | Command run after worktree creation in managed mode |
+| `remoteHeartbeatIntervalSeconds` | number | no | Interval (seconds) for SSH remote workload heartbeat markers used by executing-stall detection (default: `30`) |
 
 ## Multiple SSH Targets
 

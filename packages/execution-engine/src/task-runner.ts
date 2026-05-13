@@ -130,6 +130,7 @@ export interface TaskRunnerConfig {
     managedWorkspaces?: boolean;
     remoteInvokerHome?: string;
     provisionCommand?: string;
+    remoteHeartbeatIntervalSeconds?: number;
   }>;
   /** Docker execution environment configuration from .invoker.json. */
   dockerConfig?: {
@@ -155,7 +156,7 @@ export class TaskRunner {
   /** @internal */ mergeGateProvider?: MergeGateProvider;
   /** @internal */ reviewProviderRegistry?: ReviewProviderRegistry;
   private activePrPollers = new Map<string, ReturnType<typeof setInterval>>();
-  private getRemoteTargets: () => Record<string, { host: string; user: string; sshKeyPath: string; port?: number; managedWorkspaces?: boolean; remoteInvokerHome?: string; provisionCommand?: string }>;
+  private getRemoteTargets: () => Record<string, { host: string; user: string; sshKeyPath: string; port?: number; managedWorkspaces?: boolean; remoteInvokerHome?: string; provisionCommand?: string; remoteHeartbeatIntervalSeconds?: number }>;
   private dockerConfig: { imageName?: string; secretsFile?: string };
   private executionAgentRegistry?: AgentRegistry;
   private logger: Logger;
@@ -690,9 +691,18 @@ export class TaskRunner {
     // Wire heartbeat
     executor.onHeartbeat(handle, () => {
       const now = new Date();
+      const isRemoteWorkloadHeartbeat = executor.type === 'ssh';
       this.persistence.updateAttempt?.(attemptId, {
         lastHeartbeatAt: now,
         leaseExpiresAt: nextLeaseExpiry(now),
+      } as any);
+      this.persistence.updateTask(task.id, {
+        execution: {
+          lastHeartbeatAt: now,
+          ...(isRemoteWorkloadHeartbeat
+            ? { remoteHeartbeatAt: now, heartbeatSource: 'remote_workload' as const }
+            : { heartbeatSource: 'executor' as const }),
+        },
       } as any);
       this.callbacks.onHeartbeat?.(task.id);
     });
@@ -839,6 +849,7 @@ export class TaskRunner {
           managedWorkspaces: target.managedWorkspaces,
           remoteInvokerHome: target.remoteInvokerHome,
           provisionCommand: target.provisionCommand,
+          remoteHeartbeatIntervalSeconds: target.remoteHeartbeatIntervalSeconds,
         });
         const cacheKey = `${targetId}|${configFingerprint}`;
 
@@ -865,6 +876,7 @@ export class TaskRunner {
           managedWorkspaces: target.managedWorkspaces,
           remoteInvokerHome: target.remoteInvokerHome,
           provisionCommand: target.provisionCommand,
+          remoteHeartbeatIntervalSeconds: target.remoteHeartbeatIntervalSeconds,
         });
 
         this.sshExecutorCache.set(cacheKey, ssh);
@@ -1793,6 +1805,8 @@ export class TaskRunner {
     port?: number;
     managedWorkspaces?: boolean;
     remoteInvokerHome?: string;
+    provisionCommand?: string;
+    remoteHeartbeatIntervalSeconds?: number;
   } | undefined {
     return this.getRemoteTargets()[targetId];
   }
