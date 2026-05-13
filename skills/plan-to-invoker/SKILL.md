@@ -109,6 +109,7 @@ If `skill-doctor.sh` fails, run individual checks to isolate the problem:
      Use when submitting an entire dependency chain at once.
      `./scripts/submit-workflow-chain.sh [--gate-policy completed|review_ready] <plan1.yaml> <plan2.template.yaml> ...`
      The chain script handles: template rendering, baseBranch rewrite, merge-gate injection, sequential submission. For Invoker-on-Invoker work only, publish the resulting GitHub PR stack with `mergify stack push` once the chain's commits are prepared.
+     Strict default: when `--gate-policy` is omitted, chain submission enforces `taskId: "__merge__"` + `requiredStatus: completed` + `gatePolicy: completed` for upstream workflow dependencies.
 
 ## Runtime verification (Phase 1b)
 
