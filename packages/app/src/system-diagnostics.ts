@@ -50,7 +50,7 @@ export function collectSystemDiagnostics(args: {
     bundledSkills: args.bundledSkills,
     tools: [
       detectTool('git', 'Git', 'git', ['--version'], 'Install Git before running workflows.', true),
-      detectTool('node', 'Node.js', 'node', ['--version'], 'Install Node.js 22 or newer for repo-based workflows.'),
+      detectTool('node', 'Node.js', 'node', ['--version'], 'Install Node.js 26 for repo-based workflows.'),
       detectTool('pnpm', 'pnpm', 'pnpm', ['--version'], 'Install pnpm for repo-based workflows that use the default provision command.'),
       detectTool('claude', 'Claude CLI', 'claude', ['--version'], 'Install Claude CLI if you want Claude-backed execution or fix flows.'),
       detectTool('codex', 'Codex CLI', 'codex', ['--version'], 'Install Codex CLI if you want Codex-backed execution or fix flows.'),
