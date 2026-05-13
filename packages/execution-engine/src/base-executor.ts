@@ -33,6 +33,12 @@ export interface BaseEntry {
   heartbeatTimer?: ReturnType<typeof setInterval>;
   /** Timestamp when the heartbeat was started, for max duration enforcement. */
   heartbeatStartedAt?: number;
+  /**
+   * True while the child process has already closed but completion is intentionally
+   * deferred (for example, remote finalize/push). Keeps heartbeats alive so the
+   * orchestrator lease does not expire in this post-close window.
+   */
+  finalizingAfterClose?: boolean;
 }
 
 export interface ClaudeSessionParams {
@@ -187,6 +193,10 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
       }
 
       if (child.exitCode !== null || child.killed) {
+        if (entry.finalizingAfterClose) {
+          this.emitHeartbeat(executionId);
+          return;
+        }
         clearInterval(entry.heartbeatTimer);
         entry.heartbeatTimer = undefined;
 
