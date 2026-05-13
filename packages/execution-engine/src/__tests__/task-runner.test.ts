@@ -7841,7 +7841,7 @@ console.log(JSON.stringify(out));
         config: { executorType: 'ssh' },
       });
 
-      expect(() => executor.selectExecutor(task)).toThrow('has executorType=ssh but no remoteTargetId');
+      expect(() => executor.selectExecutor(task)).toThrow('resolved to executorType=ssh but no pool member target was assigned');
     });
 
     it('throws when remoteTargetId does not exist in config', () => {
@@ -7887,8 +7887,7 @@ console.log(JSON.stringify(out));
         }),
         executionPoolsProvider: () => ({
           'ssh-light': {
-            type: 'ssh',
-            members: ['remote-a'],
+            members: [{ type: 'ssh', id: 'remote-a' }],
             selectionStrategy: 'roundRobin',
           },
         }),
@@ -7924,8 +7923,10 @@ console.log(JSON.stringify(out));
         }),
         executionPoolsProvider: () => ({
           'ssh-light': {
-            type: 'ssh',
-            members: ['remote-a', 'remote-b'],
+            members: [
+              { type: 'ssh', id: 'remote-a' },
+              { type: 'ssh', id: 'remote-b' },
+            ],
             selectionStrategy: 'roundRobin',
           },
         }),
@@ -7939,6 +7940,26 @@ console.log(JSON.stringify(out));
       const second = await (runner as any).acquirePoolSlot(task);
       expect(first.memberId).toBe('remote-a');
       expect(second.memberId).toBe('remote-b');
+    });
+
+    it('rejects shared members across different pools', async () => {
+      const runner = new TaskRunner({
+        orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        remoteTargetsProvider: () => ({
+          'remote-a': { host: 'a', user: 'u', sshKeyPath: 'k', maxConcurrentTasks: 1 },
+        }),
+        executionPoolsProvider: () => ({
+          'pool-a': { members: [{ type: 'ssh', id: 'remote-a' }] },
+          'pool-b': { members: [{ type: 'ssh', id: 'remote-a' }] },
+        }),
+      });
+
+      expect(() =>
+        (runner as any).getOrBuildPoolState('pool-a'),
+      ).toThrow('Members may only belong to one pool.');
     });
   });
 
@@ -8029,7 +8050,7 @@ console.log(JSON.stringify(out));
         config: {
           command: 'echo test',
           executorType: 'ssh',
-          remoteTargetId: 'remote-1',
+          poolId: 'ssh-pool',
         },
       });
 
@@ -8050,6 +8071,12 @@ console.log(JSON.stringify(out));
           getAll: () => [managedSshExecutor],
         } as any,
         cwd: '/tmp',
+        remoteTargetsProvider: () => ({
+          'remote-1': { host: 'ssh', user: 'u', sshKeyPath: 'k' },
+        }),
+        executionPoolsProvider: () => ({
+          'ssh-pool': { members: [{ type: 'ssh', id: 'remote-1' }] },
+        }),
       });
 
       await executor.executeTask(task);
@@ -8089,7 +8116,7 @@ console.log(JSON.stringify(out));
       const task = makeTask({
         id: 'task-failed',
         status: 'pending',
-        config: { command: 'echo test', executorType: 'ssh' },
+        config: { command: 'echo test', executorType: 'ssh', poolId: 'ssh-pool' },
       });
 
       const updateSpy = vi.fn();
@@ -8110,6 +8137,12 @@ console.log(JSON.stringify(out));
           getAll: () => [failingExecutor],
         } as any,
         cwd: '/tmp',
+        remoteTargetsProvider: () => ({
+          'remote-1': { host: 'ssh', user: 'u', sshKeyPath: 'k' },
+        }),
+        executionPoolsProvider: () => ({
+          'ssh-pool': { members: [{ type: 'ssh', id: 'remote-1' }] },
+        }),
       });
 
       await executor.executeTask(task);
@@ -8227,7 +8260,7 @@ console.log(JSON.stringify(out));
       const task = makeTask({
         id: 'byo-task-1',
         status: 'pending',
-        config: { command: 'pwd', executorType: 'ssh' },
+        config: { command: 'pwd', executorType: 'ssh', poolId: 'ssh-pool' },
       });
 
       const updateSpy = vi.fn();
@@ -8247,6 +8280,12 @@ console.log(JSON.stringify(out));
           getAll: () => [byoExecutor],
         } as any,
         cwd: '/tmp',
+        remoteTargetsProvider: () => ({
+          'remote-1': { host: 'ssh', user: 'u', sshKeyPath: 'k' },
+        }),
+        executionPoolsProvider: () => ({
+          'ssh-pool': { members: [{ type: 'ssh', id: 'remote-1' }] },
+        }),
       });
 
       await executor.executeTask(task);

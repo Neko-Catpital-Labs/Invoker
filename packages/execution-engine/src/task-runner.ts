@@ -86,9 +86,14 @@ interface RemoteTargetConfig {
   maxConcurrentTasks?: number;
 }
 
-export interface ExecutionPoolConfig {
+export interface ExecutionPoolMemberConfig {
   type: 'ssh' | 'worktree';
-  members: string[];
+  id: string;
+  maxConcurrentTasks?: number;
+}
+
+export interface ExecutionPoolConfig {
+  members: ExecutionPoolMemberConfig[];
   selectionStrategy?: SelectionStrategy;
   maxConcurrentTasksPerMember?: number;
 }
@@ -101,9 +106,9 @@ interface PoolAssignment {
 
 interface PoolState {
   poolId: string;
-  type: 'ssh' | 'worktree';
   strategy: SelectionStrategy;
   members: string[];
+  memberTypes: Map<string, 'ssh' | 'worktree'>;
   capacities: Map<string, number>;
   active: Map<string, number>;
   rrCursor: number;
@@ -318,17 +323,36 @@ export class TaskRunner {
     return undefined;
   }
 
+  private validatePoolMemberUniqueness(pools: Record<string, ExecutionPoolConfig>): void {
+    const seen = new Map<string, string>();
+    for (const [poolId, pool] of Object.entries(pools)) {
+      for (const member of pool.members ?? []) {
+        const key = `${member.type}:${member.id}`;
+        const owner = seen.get(key);
+        if (owner && owner !== poolId) {
+          throw new Error(
+            `Execution pool member "${key}" is shared by pools "${owner}" and "${poolId}". ` +
+            'Members may only belong to one pool.',
+          );
+        }
+        seen.set(key, poolId);
+      }
+    }
+  }
+
   private buildPoolState(poolId: string, pool: ExecutionPoolConfig): PoolState {
     const capacities = new Map<string, number>();
     const active = new Map<string, number>();
+    const memberTypes = new Map<string, 'ssh' | 'worktree'>();
     const remoteTargets = this.getRemoteTargets();
     const fallbackCap = pool.maxConcurrentTasksPerMember && pool.maxConcurrentTasksPerMember > 0
       ? Math.floor(pool.maxConcurrentTasksPerMember)
       : 1;
 
-    for (const memberId of pool.members) {
+    for (const member of pool.members) {
+      const memberId = member.id;
       let cap = fallbackCap;
-      if (pool.type === 'ssh') {
+      if (member.type === 'ssh') {
         const target = remoteTargets[memberId];
         if (!target) {
           throw new Error(
@@ -336,19 +360,24 @@ export class TaskRunner {
             `Available: [${Object.keys(remoteTargets).join(', ')}]`,
           );
         }
-        cap = target.maxConcurrentTasks && target.maxConcurrentTasks > 0
-          ? Math.floor(target.maxConcurrentTasks)
-          : fallbackCap;
+        cap = member.maxConcurrentTasks && member.maxConcurrentTasks > 0
+          ? Math.floor(member.maxConcurrentTasks)
+          : (target.maxConcurrentTasks && target.maxConcurrentTasks > 0
+            ? Math.floor(target.maxConcurrentTasks)
+            : fallbackCap);
+      } else if (member.maxConcurrentTasks && member.maxConcurrentTasks > 0) {
+        cap = Math.floor(member.maxConcurrentTasks);
       }
+      memberTypes.set(memberId, member.type);
       capacities.set(memberId, cap);
       active.set(memberId, 0);
     }
 
     return {
       poolId,
-      type: pool.type,
       strategy: pool.selectionStrategy ?? 'roundRobin',
-      members: [...pool.members],
+      members: pool.members.map((m) => m.id),
+      memberTypes,
       capacities,
       active,
       rrCursor: 0,
@@ -358,6 +387,7 @@ export class TaskRunner {
 
   private getOrBuildPoolState(poolId: string): PoolState {
     const pools = this.getExecutionPools();
+    this.validatePoolMemberUniqueness(pools);
     const pool = pools[poolId];
     if (!pool) {
       throw new Error(
@@ -367,6 +397,14 @@ export class TaskRunner {
     }
     if (!Array.isArray(pool.members) || pool.members.length === 0) {
       throw new Error(`Execution pool "${poolId}" must define a non-empty members array.`);
+    }
+    for (const member of pool.members) {
+      if (!member?.id || (member.type !== 'ssh' && member.type !== 'worktree')) {
+        throw new Error(
+          `Execution pool "${poolId}" has invalid member. ` +
+          'Each member must include { type: "ssh" | "worktree", id: string }.',
+        );
+      }
     }
     const existing = this.poolStates.get(poolId);
     if (existing) {
@@ -412,12 +450,20 @@ export class TaskRunner {
 
   private acquirePoolSlot(task: TaskState): Promise<PoolAssignment | undefined> {
     const poolId = task.config.poolId?.trim();
-    if (!poolId) return Promise.resolve(undefined);
+    if (!poolId) {
+      if (task.config.executorType === 'ssh') {
+        throw new Error(
+          `Task ${task.id} has executorType=ssh but no poolId. ` +
+          'Assign SSH tasks to an execution pool.',
+        );
+      }
+      return Promise.resolve(undefined);
+    }
     const state = this.getOrBuildPoolState(poolId);
     const selected = this.pickAvailableMember(state);
     if (selected) {
       state.active.set(selected, (state.active.get(selected) ?? 0) + 1);
-      return Promise.resolve({ poolId, memberId: selected, type: state.type });
+      return Promise.resolve({ poolId, memberId: selected, type: state.memberTypes.get(selected) ?? 'worktree' });
     }
     return new Promise<PoolAssignment>((resolve) => {
       state.waiters.push(resolve);
@@ -431,7 +477,7 @@ export class TaskRunner {
       const waiter = state.waiters.shift();
       if (!waiter) return;
       state.active.set(selected, (state.active.get(selected) ?? 0) + 1);
-      waiter({ poolId: state.poolId, memberId: selected, type: state.type });
+      waiter({ poolId: state.poolId, memberId: selected, type: state.memberTypes.get(selected) ?? 'worktree' });
     }
   }
 
@@ -461,6 +507,8 @@ export class TaskRunner {
       ...task,
       config: {
         ...task.config,
+        executorType: 'worktree',
+        remoteTargetId: undefined,
         poolId: assignment.poolId,
       },
     } as TaskState;
@@ -1013,7 +1061,10 @@ export class TaskRunner {
       if (effectiveType === 'ssh') {
         const targetId = task.config.remoteTargetId;
         if (!targetId) {
-          throw new Error(`Task ${task.id} has executorType=ssh but no remoteTargetId`);
+          throw new Error(
+            `Task ${task.id} resolved to executorType=ssh but no pool member target was assigned. ` +
+            `poolId=${task.config.poolId ?? '(unset)'}`,
+          );
         }
 
         // Always re-read targets so dynamic provider updates are picked up.

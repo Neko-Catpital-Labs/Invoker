@@ -6,7 +6,7 @@ Execute Invoker tasks on remote machines via SSH key-based authentication.
 
 The SSH executor (`executorType: ssh`) runs task commands on remote hosts over SSH. Authentication is exclusively key-based — no password auth or `sshpass` dependency is required.
 
-Each remote target is defined in the Invoker config with a host, user, and path to an SSH private key. Tasks reference targets by ID.
+Each remote target is defined in the Invoker config with a host, user, and path to an SSH private key. Tasks route through `poolId` only.
 
 ## Configuration
 
@@ -41,8 +41,11 @@ If you want to use a repo-specific config file, launch Invoker with `INVOKER_REP
   },
   "executionPools": {
     "ssh-light": {
-      "type": "ssh",
-      "members": ["staging-server", "staging-server-b"],
+      "members": [
+        { "type": "ssh", "id": "staging-server" },
+        { "type": "ssh", "id": "staging-server-b" },
+        { "type": "worktree", "id": "local-fallback", "maxConcurrentTasks": 2 }
+      ],
       "selectionStrategy": "roundRobin",
       "maxConcurrentTasksPerMember": 1
     }
@@ -68,8 +71,7 @@ If you want to use a repo-specific config file, launch Invoker with `INVOKER_REP
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `type` | `"ssh"` \| `"worktree"` | yes | Pool substrate |
-| `members` | string[] | yes | Member IDs (SSH pools use `remoteTargets` keys) |
+| `members` | array | yes | Member objects: `{ "type": "ssh" \| "worktree", "id": "<member-id>" }` |
 | `selectionStrategy` | `"roundRobin"` \| `"leastLoaded"` | no | Member selection strategy (default: `roundRobin`) |
 | `maxConcurrentTasksPerMember` | number | no | Fallback per-member cap when target-level cap is not set |
 
@@ -81,8 +83,10 @@ Use `executorRoutingRules` with `strategy: "route"` to auto-assign matching comm
 {
   "executionPools": {
     "ssh-light": {
-      "type": "ssh",
-      "members": ["staging-server", "staging-server-b"],
+      "members": [
+        { "type": "ssh", "id": "staging-server" },
+        { "type": "ssh", "id": "staging-server-b" }
+      ],
       "selectionStrategy": "roundRobin",
       "maxConcurrentTasksPerMember": 1
     }
@@ -123,10 +127,11 @@ tasks:
 Queue semantics are shared across pools:
 - if all members are at capacity, new tasks wait in that pool queue;
 - when a member frees a slot, the next queued task is launched automatically.
+- members cannot be shared across pools (for example, the same `ssh:<id>` cannot appear in two pools).
 
 ## Usage in Plans
 
-Reference a remote target in a plan YAML task:
+Reference a pool in plan YAML tasks:
 
 ```yaml
 name: "Deploy to staging"
@@ -137,14 +142,14 @@ tasks:
     description: "Verify staging server is reachable"
     command: "echo 'OK'; uptime; df -h"
     executorType: ssh
-    remoteTargetId: staging-server
+    poolId: ssh-light
     dependencies: []
 
   - id: run-migrations
     description: "Run database migrations on staging"
     command: "cd /opt/app && ./migrate.sh"
     executorType: ssh
-    remoteTargetId: staging-server
+    poolId: ssh-light
     dependencies:
       - health-check
 ```
@@ -153,15 +158,15 @@ tasks:
 
 - `executorType: ssh` — selects the SSH executor
 - `poolId: <id>` — routes through a named pool in `executionPools`
-- `remoteTargetId: <id>` — legacy direct-target routing (still supported)
+- `remoteTargetId` is no longer accepted in plan YAML.
 
-At least one destination is required for SSH tasks: `poolId` or `remoteTargetId`.
+`poolId` is required for SSH tasks.
 
 ## How It Works
 
-1. The plan parser reads `executorType` and `remoteTargetId` from YAML and carries them through to `TaskConfig`.
-2. When `TaskRunner.selectExecutor()` sees `executorType: ssh`, it looks up the `remoteTargetId` in the `remoteTargets` config map.
-3. An `SshExecutor` instance is created with the target's connection details.
+1. The plan parser reads `executorType` and `poolId` from YAML.
+2. TaskRunner acquires a member slot from the selected pool (shared queue/drain).
+3. If the selected member is SSH, an `SshExecutor` instance is resolved from `remoteTargets`.
 4. The runner spawns: `ssh -i <keyPath> -p <port> -o StrictHostKeyChecking=accept-new -o BatchMode=yes user@host <command>`
 5. For `claude` action types, the Claude CLI command is shell-quoted and executed remotely.
 
@@ -190,5 +195,5 @@ bash scripts/verify-digitalocean-e2e.sh
 ## Security Notes
 
 - SSH keys must never be committed to the repository. The `sshKeyPath` field is a local filesystem path, not the key content.
-- The `remoteTargetId` stored in the task config and SQLite database is a non-secret alias — it contains no credentials.
+- Selected pool-member IDs stored in runtime task metadata are non-secret aliases; credentials remain only in local config.
 - `BatchMode=yes` ensures SSH never falls back to interactive password prompts.
