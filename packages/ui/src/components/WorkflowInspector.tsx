@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { ActionGraphNode } from '@invoker/contracts';
 import type { TaskState, WorkflowMeta, WorkflowRollupTaskIssue } from '../types.js';
 import { workflowStatusVisual } from '../lib/workflow-status.js';
 import { getEffectiveVisualStatus, getStatusColor } from '../lib/colors.js';
@@ -11,6 +12,7 @@ interface WorkflowInspectorProps {
   executionAgents: string[];
   collapsed: boolean;
   advancedExpanded: boolean;
+  actionNode?: ActionGraphNode | null;
   onEditType?: (taskId: string, executorType: string, remoteTargetId?: string) => void;
   onEditAgent?: (taskId: string, agentName: string) => void;
   onEditPrompt?: (taskId: string, newPrompt: string) => void;
@@ -68,6 +70,7 @@ export function WorkflowInspector({
   executionAgents,
   collapsed,
   advancedExpanded,
+  actionNode,
   onEditType,
   onEditAgent,
   onEditPrompt,
@@ -140,6 +143,96 @@ export function WorkflowInspector({
     : workflow?.status?.replaceAll('_', ' ') ?? 'unknown';
   const workflowTitle = workflow?.name ?? workflow?.id;
   const inspectorTitle = task?.description ?? (workflowTitle ? `${workflowTitle} task DAG` : 'No workflow selected');
+
+  if (actionNode) {
+    const durations = actionNode.durations ?? {};
+    const formatMs = (value: number | undefined) => {
+      if (value === undefined || !Number.isFinite(value)) return 'n/a';
+      const absolute = Math.max(0, Math.abs(value));
+      if (absolute < 1_000) return `${Math.round(absolute)}ms`;
+      if (absolute < 60_000) return `${Math.round(absolute / 1_000)}s`;
+      if (absolute < 3_600_000) return `${Math.round(absolute / 60_000)}m`;
+      return `${Math.round(absolute / 3_600_000)}h`;
+    };
+    return (
+      <aside className="h-full w-full border-l border-gray-800 bg-gray-900 flex flex-col">
+        <div className="flex items-center justify-between border-b border-gray-800 px-3 py-2">
+          <div className="min-w-0 pr-2">
+            <div className="text-sm font-semibold leading-snug text-gray-100" data-testid="workflow-inspector-title">
+              {actionNode.label}
+            </div>
+            <div className="mt-0.5 text-[11px] uppercase text-gray-500">{actionNode.type.replace('-', ' ')}</div>
+          </div>
+          <button
+            onClick={onToggleCollapsed}
+            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded border border-gray-700 text-gray-300 hover:bg-gray-800 hover:text-white"
+            aria-label="Minimize inspector"
+            title="Minimize inspector"
+          >
+            <InspectorToggleIcon collapsed={collapsed} />
+          </button>
+        </div>
+        <div className="flex-1 overflow-auto p-3 space-y-3 text-sm">
+          <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
+            <div className="text-[11px] uppercase tracking-wide text-gray-400">Action Status</div>
+            <div className="mt-1 text-xs text-gray-100">{actionNode.status}</div>
+            {actionNode.latestError && <p className="mt-2 break-words text-xs text-red-300">{actionNode.latestError}</p>}
+          </section>
+          <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
+            <div className="text-[11px] uppercase tracking-wide text-gray-400">Timing</div>
+            <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-gray-300">
+              <div>queued: {formatMs(durations.queuedMs)}</div>
+              <div>pending: {formatMs(durations.pendingMs)}</div>
+              <div>running: {formatMs(durations.runningMs)}</div>
+              <div>waiting: {formatMs(durations.waitingMs)}</div>
+              <div>stalled: {formatMs(durations.stalledMs)}</div>
+              <div>heartbeat: {formatMs(durations.heartbeatAgeMs)}</div>
+            </div>
+            <div className="mt-2 space-y-1 text-xs text-gray-400">
+              <div>lease expires: {actionNode.leaseExpiresAt ?? 'n/a'}</div>
+              <div>heartbeat at: {actionNode.heartbeatAt ?? 'n/a'}</div>
+            </div>
+          </section>
+          {actionNode.blockerIds?.length ? (
+            <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
+              <div className="text-[11px] uppercase tracking-wide text-gray-400">Blocker Chain</div>
+              <div className="mt-2 space-y-1 text-xs text-gray-300">
+                {actionNode.blockerIds.map((blockerId) => <div key={blockerId}>{blockerId}</div>)}
+              </div>
+            </section>
+          ) : null}
+          {actionNode.suggestedNextAction && (
+            <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
+              <div className="text-[11px] uppercase tracking-wide text-gray-400">Suggested Next Action</div>
+              <div className="mt-1 text-xs text-gray-200">{actionNode.suggestedNextAction}</div>
+            </section>
+          )}
+          <section className="rounded border border-gray-700 bg-gray-800/70">
+            <button
+              onClick={onToggleAdvanced}
+              className="w-full px-3 py-2 text-left text-[11px] uppercase tracking-wide text-gray-300 hover:bg-gray-800"
+            >
+              Full history {advancedExpanded ? '▲' : '▼'}
+            </button>
+            {advancedExpanded && (
+              <div className="border-t border-gray-700 px-3 py-2 space-y-2 text-xs text-gray-300">
+                <div>workflow id: {actionNode.workflowId ?? 'n/a'}</div>
+                <div>task id: {actionNode.taskId ?? 'n/a'}</div>
+                <div>attempt id: {actionNode.attemptId ?? 'n/a'}</div>
+                <div>intent id: {actionNode.intentId ?? 'n/a'}</div>
+                {actionNode.history?.map((entry) => (
+                  <div key={entry.id} className="border-t border-gray-700 pt-2">
+                    <div className="text-gray-500">{entry.timestamp} · {entry.source}</div>
+                    <div className="break-words">{entry.message}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+      </aside>
+    );
+  }
 
   return (
     <aside className="h-full w-full border-l border-gray-800 bg-gray-900 flex flex-col">
