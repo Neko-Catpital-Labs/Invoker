@@ -226,24 +226,6 @@ let hourlyBackupInterval: ReturnType<typeof setInterval> | null = null;
 let writerLock: DbWriterLockResult | null = null;
 const workflowMutationOwnerId = `owner-${process.pid}-${Date.now()}`;
 const appProcessStartedAt = Date.now();
-const DEFAULT_MAX_CONCURRENT_WORKFLOW_DRAINS = 8;
-
-function resolveMaxConcurrentWorkflowDrains(): number {
-  const raw = process.env.INVOKER_MAX_CONCURRENT_WORKFLOW_DRAINS;
-  if (!raw) {
-    return DEFAULT_MAX_CONCURRENT_WORKFLOW_DRAINS;
-  }
-  const parsed = Number(raw);
-  if (Number.isInteger(parsed) && parsed > 0) {
-    return parsed;
-  }
-  process.stderr.write(
-    `[workflow-mutation-coordinator] ignoring invalid INVOKER_MAX_CONCURRENT_WORKFLOW_DRAINS="${raw}", using default ${DEFAULT_MAX_CONCURRENT_WORKFLOW_DRAINS}\n`,
-  );
-  return DEFAULT_MAX_CONCURRENT_WORKFLOW_DRAINS;
-}
-
-const maxConcurrentWorkflowDrains = resolveMaxConcurrentWorkflowDrains();
 
 interface GuiMutationPayload {
   channel: string;
@@ -988,7 +970,7 @@ if (isHeadless) {
                 activeMutationContext = undefined;
               }
             },
-            { maxConcurrentWorkflowDrains, logger },
+            { logger },
           );
         }
 
@@ -2581,7 +2563,7 @@ if (isHeadless) {
             activeMutationContext = undefined;
           }
         },
-        { maxConcurrentWorkflowDrains, logger },
+        { logger },
       );
     } else {
       logger.info('Launched in follower mode; mutation execution is delegated to the current owner', {
