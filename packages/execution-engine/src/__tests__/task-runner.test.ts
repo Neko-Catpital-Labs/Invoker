@@ -8300,6 +8300,84 @@ console.log(JSON.stringify(out));
       );
     });
 
+    it('persists stale startup-failure metadata only on the stale attempt and suppresses the failed response', async () => {
+      const failingExecutor = {
+        type: 'ssh',
+        start: vi.fn().mockRejectedValue(Object.assign(
+          new Error('SSH connection failed'),
+          {
+            workspacePath: '~/.invoker/worktrees/abc123/task-failed-xyz',
+            branch: 'experiment/task-failed-xyz',
+            agentSessionId: 'session-fail-1',
+          },
+        )),
+        onComplete: vi.fn(),
+        onOutput: vi.fn(),
+        onHeartbeat: vi.fn(),
+        kill: vi.fn(),
+        destroyAll: vi.fn(),
+      };
+
+      const staleTask = makeTask({
+        id: 'task-failed',
+        status: 'pending',
+        config: { command: 'echo test', runnerKind: 'ssh' },
+        execution: {
+          selectedAttemptId: 'attempt-1',
+          generation: 1,
+        },
+      });
+      const currentTask = makeTask({
+        id: 'task-failed',
+        status: 'pending',
+        config: { command: 'echo test', runnerKind: 'ssh' },
+        execution: {
+          selectedAttemptId: 'attempt-2',
+          generation: 2,
+          workspacePath: '/current/workspace',
+          branch: 'experiment/current-branch',
+        },
+      });
+
+      const updateTaskSpy = vi.fn();
+      const updateAttemptSpy = vi.fn();
+      const handleResponseSpy = vi.fn();
+
+      const executor = new TaskRunner({
+        orchestrator: {
+          getTask: () => currentTask,
+          getAllTasks: () => [currentTask],
+          handleWorkerResponse: handleResponseSpy,
+        } as any,
+        persistence: {
+          updateTask: updateTaskSpy,
+          updateAttempt: updateAttemptSpy,
+          appendTaskOutput: vi.fn(),
+        } as any,
+        executorRegistry: {
+          getDefault: () => failingExecutor,
+          get: () => failingExecutor,
+          getAll: () => [failingExecutor],
+        } as any,
+        cwd: '/tmp',
+      });
+
+      await executor.executeTask(staleTask);
+
+      expect(updateAttemptSpy).toHaveBeenCalledWith('attempt-1', {
+        workspacePath: '~/.invoker/worktrees/abc123/task-failed-xyz',
+        branch: 'experiment/task-failed-xyz',
+        agentSessionId: 'session-fail-1',
+      });
+      expect(updateTaskSpy).not.toHaveBeenCalledWith('task-failed', expect.objectContaining({
+        execution: expect.objectContaining({
+          workspacePath: '~/.invoker/worktrees/abc123/task-failed-xyz',
+          branch: 'experiment/task-failed-xyz',
+        }),
+      }));
+      expect(handleResponseSpy).not.toHaveBeenCalled();
+    });
+
     it('persists attempt.branch via onBranchResolved when executor crashes mid-acquire', async () => {
       // Executor that resolves the branch (calls onBranchResolved) and then
       // crashes before attaching `branch` metadata to the thrown error —

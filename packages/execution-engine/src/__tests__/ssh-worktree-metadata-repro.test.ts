@@ -73,9 +73,21 @@ describe('SSH worktree metadata repro', () => {
     }).toThrow(/already (used by worktree|checked out) at '.*experiment-wf-1-test-execution-engine-bc7a0b71'/);
   });
 
-  it('proves TaskRunner should persist the owning worktree path on SSH startup failure', async () => {
+  it('blocks stale SSH startup-failure metadata from overwriting the live task row', async () => {
     const ownerPath = '/home/invoker/.invoker/worktrees/049de5b865cc/experiment-wf-1-test-execution-engine-bc7a0b71';
     const branch = 'experiment/wf-1/test-execution-engine-b68b146f';
+    const staleAttemptId = 'attempt-1';
+    const currentTask = makeTask({
+      id: 'wf-1/test-execution-engine',
+      status: 'pending',
+      config: { command: 'pnpm test', runnerKind: 'ssh' },
+      execution: {
+        selectedAttemptId: 'attempt-2',
+        generation: 2,
+        workspacePath: '/home/invoker/.invoker/worktrees/049de5b865cc/experiment-wf-1-test-execution-engine-current',
+        branch: 'experiment/wf-1/test-execution-engine-current',
+      },
+    });
 
     const failingExecutor = {
       type: 'ssh',
@@ -97,22 +109,29 @@ describe('SSH worktree metadata repro', () => {
       destroyAll: vi.fn(),
     };
 
-    const task = makeTask({
+    const staleTask = makeTask({
       id: 'wf-1/test-execution-engine',
+      status: 'pending',
       config: { command: 'pnpm test', runnerKind: 'ssh' },
+      execution: {
+        selectedAttemptId: staleAttemptId,
+        generation: 1,
+      },
     });
 
-    const updateSpy = vi.fn();
+    const updateTaskSpy = vi.fn();
+    const updateAttemptSpy = vi.fn();
     const handleResponseSpy = vi.fn();
 
     const runner = new TaskRunner({
       orchestrator: {
-        getTask: () => task,
-        getAllTasks: () => [task],
+        getTask: () => currentTask,
+        getAllTasks: () => [currentTask],
         handleWorkerResponse: handleResponseSpy,
       } as any,
       persistence: {
-        updateTask: updateSpy,
+        updateTask: updateTaskSpy,
+        updateAttempt: updateAttemptSpy,
         appendTaskOutput: vi.fn(),
       } as any,
       executorRegistry: {
@@ -120,28 +139,21 @@ describe('SSH worktree metadata repro', () => {
         get: () => failingExecutor,
         getAll: () => [failingExecutor],
       } as any,
-      cwd: '/tmp',
+        cwd: '/tmp',
     });
 
-    await runner.executeTask(task);
+    await runner.executeTask(staleTask);
 
-    expect(updateSpy).toHaveBeenCalledWith('wf-1/test-execution-engine', {
-      config: { runnerKind: 'ssh' },
-      execution: {
+    expect(updateAttemptSpy).toHaveBeenCalledWith(staleAttemptId, {
+      workspacePath: ownerPath,
+      branch,
+    });
+    expect(updateTaskSpy).not.toHaveBeenCalledWith('wf-1/test-execution-engine', expect.objectContaining({
+      execution: expect.objectContaining({
         workspacePath: ownerPath,
         branch,
-      },
-    });
-    expect(updateSpy).not.toHaveBeenCalledWith('wf-1/test-execution-engine', expect.objectContaining({
-      execution: expect.objectContaining({
-        workspacePath: '/home/invoker/.invoker/worktrees/049de5b865cc/experiment-wf-1-test-execution-engine-b68b146f',
       }),
     }));
-    expect(handleResponseSpy).toHaveBeenCalledWith(expect.objectContaining({
-      status: 'failed',
-      outputs: expect.objectContaining({
-        error: expect.stringContaining('Executor startup failed (ssh)'),
-      }),
-    }));
+    expect(handleResponseSpy).not.toHaveBeenCalled();
   });
 });

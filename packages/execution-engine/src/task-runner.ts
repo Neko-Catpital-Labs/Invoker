@@ -374,6 +374,49 @@ export class TaskRunner {
     return false;
   }
 
+  private persistStartupFailureMetadata(
+    task: TaskState,
+    attemptId: string,
+    executor: Executor,
+    meta: StartupFailureMetadata,
+    startGeneration: number,
+  ): void {
+    if (!meta.workspacePath && !meta.branch && !meta.agentSessionId && !meta.containerId) {
+      return;
+    }
+
+    const attemptExecution: Record<string, string> = {};
+    if (meta.workspacePath) attemptExecution.workspacePath = meta.workspacePath;
+    if (meta.branch) attemptExecution.branch = meta.branch;
+    if (meta.agentSessionId) attemptExecution.agentSessionId = meta.agentSessionId;
+    if (meta.containerId) attemptExecution.containerId = meta.containerId;
+
+    try {
+      this.persistence.updateAttempt?.(attemptId, attemptExecution as any);
+    } catch (err) {
+      traceExecution(
+        `${RESTART_TO_BRANCH_TRACE} task=${task.id} attempt=${attemptId} startup-failure attempt persist failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    if (this.isLaunchStale(task.id, attemptId, startGeneration)) {
+      return;
+    }
+
+    const taskExecution: Record<string, string> = {};
+    if (meta.workspacePath) taskExecution.workspacePath = meta.workspacePath;
+    if (meta.branch) taskExecution.branch = meta.branch;
+    if (meta.agentSessionId) {
+      taskExecution.agentSessionId = meta.agentSessionId;
+      taskExecution.lastAgentSessionId = meta.agentSessionId;
+    }
+    if (meta.containerId) taskExecution.containerId = meta.containerId;
+    this.persistence.updateTask(task.id, {
+      config: { runnerKind: executor.type as RunnerKind },
+      execution: taskExecution as any,
+    });
+  }
+
   async executeTask(task: TaskState): Promise<void> {
     traceExecution(
       `${RESTART_TO_BRANCH_TRACE} TaskRunner.executeTask BEGIN taskId=${task.id} isMergeNode=${Boolean(task.config.isMergeNode)} status=${task.status}`,
@@ -388,7 +431,7 @@ export class TaskRunner {
     }
     this.launchingAttemptIds.add(attemptId);
     try {
-      await this.executeTaskInner(task, attemptId);
+      await this.executeTaskInner(task, attemptId, startGeneration);
     } catch (err) {
       // Resource limit: defer the task instead of failing it
       const cause = err instanceof Error ? err.cause : undefined;
@@ -457,7 +500,11 @@ export class TaskRunner {
     }
   }
 
-  private async executeTaskInner(task: TaskState, attemptId: string): Promise<void> {
+  private async executeTaskInner(
+    task: TaskState,
+    attemptId: string,
+    startGeneration: number = task.execution.generation ?? 0,
+  ): Promise<void> {
     // Pivot tasks with experimentVariants: synthesize a spawn_experiments
     // response instead of running through the executor.
     if (task.config.pivot && task.config.experimentVariants && task.config.experimentVariants.length > 0) {
@@ -543,7 +590,6 @@ export class TaskRunner {
     // on the attempt row. Reconciliation paths can then observe the branch
     // even if the executor crashes mid-startup.
     let branchPersistedEarly = false;
-    const startGeneration = task.execution.generation ?? 0;
     const onBranchResolved = (branch: string): void => {
       if (!branch || branchPersistedEarly) return;
       // Skip if the task has moved to a newer attempt/generation.
@@ -638,23 +684,7 @@ export class TaskRunner {
       // current.  If the task has moved to a newer attempt or generation
       // (e.g. via recreate-task), writing old workspace/branch metadata
       // would corrupt the live attempt's state.
-      if (
-        (meta.workspacePath || meta.branch || meta.agentSessionId || meta.containerId)
-        && !this.isLaunchStale(task.id, attemptId, task.execution.generation ?? 0)
-      ) {
-        const execution: Record<string, string> = {};
-        if (meta.workspacePath) execution.workspacePath = meta.workspacePath;
-        if (meta.branch) execution.branch = meta.branch;
-        if (meta.agentSessionId) {
-          execution.agentSessionId = meta.agentSessionId;
-          execution.lastAgentSessionId = meta.agentSessionId;
-        }
-        if (meta.containerId) execution.containerId = meta.containerId;
-        this.persistence.updateTask(task.id, {
-          config: { runnerKind: executor.type as RunnerKind },
-          execution: execution as any,
-        });
-      }
+      this.persistStartupFailureMetadata(task, attemptId, executor, meta, startGeneration);
       const wrapped = new Error(
         `Executor startup failed (${executor.type}): ${err instanceof Error ? err.message : String(err)}`,
         { cause: err },
