@@ -21,7 +21,7 @@ What it checks:
     - no matching process found on any configured SSH remote
     - no terminal audit event (failed/completed/review_ready/awaiting_approval)
       after the current attempt started
-  By default only `executorType=ssh` tasks are considered.
+  By default only `runnerKind=ssh` tasks are considered.
   Use --strict to print per-task proof (remote checks + last terminal event).
 
 Exit codes:
@@ -202,12 +202,12 @@ for row in running:
     phase = execution.get("phase")
     started_at = parse_iso(execution.get("startedAt"))
     age_s = int((now - started_at).total_seconds()) if started_at else -1
-    executor_type = (task_obj.get("config") or {}).get("executorType")
+    runner_kind = (task_obj.get("config") or {}).get("runnerKind")
 
     # Only judge stale remote-command-like paths.
     if status != "running" or phase != "executing" or age_s < MIN_STALE:
         continue
-    if EXEC_FILTER == "ssh" and executor_type != "ssh":
+    if EXEC_FILTER == "ssh" and runner_kind != "ssh":
         continue
 
     # Check remote process match by task/attempt token.
@@ -262,7 +262,7 @@ for row in running:
             {
                 "taskId": task_id,
                 "attemptId": attempt_id or "",
-                "executorType": executor_type or "",
+                "runnerKind": runner_kind or "",
                 "ageSeconds": age_s,
                 "startedAt": execution.get("startedAt") or "",
                 "lastHeartbeatAt": execution.get("lastHeartbeatAt") or "",
@@ -278,7 +278,7 @@ for row in running:
             {
                 "taskId": task_id,
                 "attemptId": attempt_id or "",
-                "executorType": executor_type or "",
+                "runnerKind": runner_kind or "",
                 "ageSeconds": age_s,
                 "startedAt": execution.get("startedAt") or "",
                 "lastHeartbeatAt": execution.get("lastHeartbeatAt") or "",
@@ -307,7 +307,7 @@ if suspects:
     print("task_id\tage_s\texecutor\tstarted_at\tlast_heartbeat\tattempt_id")
     for s in suspects:
         print(
-            f"{s['taskId']}\t{s['ageSeconds']}\t{s['executorType']}\t"
+            f"{s['taskId']}\t{s['ageSeconds']}\t{s['runnerKind']}\t"
             f"{s['startedAt']}\t{s['lastHeartbeatAt']}\t{s['attemptId']}"
         )
 
@@ -317,7 +317,7 @@ if STRICT_MODE and suspects:
     for s in suspects:
         print(f"- task_id: {s['taskId']}")
         print(f"  attempt_id: {s['attemptId']}")
-        print(f"  executor: {s['executorType']}")
+        print(f"  executor: {s['runnerKind']}")
         print(f"  age_seconds: {s['ageSeconds']}")
         print(f"  started_at: {s['startedAt']}")
         print(f"  last_heartbeat_at: {s['lastHeartbeatAt']}")

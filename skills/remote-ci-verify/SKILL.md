@@ -17,7 +17,7 @@ bash skills/remote-ci-verify/scripts/run-remote-ci-verify.sh
 
 1. Push the current branch to `origin` (configurable).
 2. Read SSH targets from Invoker config (`INVOKER_REPO_CONFIG_PATH` or `~/.invoker/config.json`).
-3. Skip targets that appear busy in Invoker DB (`remote_target_id` with active statuses).
+3. Skip targets that appear busy in Invoker DB (`pool_member_id` with active statuses).
 4. Pick the first reachable SSH target.
 5. On remote host: clone/reuse repo cache, create temporary worktree for the branch, then run CI-equivalent setup and tests.
 6. Clean up worktree and lock by default.

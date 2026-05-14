@@ -182,7 +182,7 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
       config: {
         command: config.a.action === 'command' ? 'echo task-a-done' : undefined,
         prompt: config.a.action === 'claude' ? 'Do step A' : undefined,
-        executorType: config.a.executor,
+        runnerKind: config.a.executor,
         workflowId: 'wf-test',
       },
     });
@@ -193,7 +193,7 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
       config: {
         command: config.b.action === 'command' ? 'echo task-b-done' : undefined,
         prompt: config.b.action === 'claude' ? 'Do step B' : undefined,
-        executorType: config.b.executor,
+        runnerKind: config.b.executor,
         workflowId: 'wf-test',
       },
     });
@@ -204,7 +204,7 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
       config: {
         command: config.c.action === 'command' ? 'echo task-c-done' : undefined,
         prompt: config.c.action === 'claude' ? 'Do step C' : undefined,
-        executorType: config.c.executor,
+        runnerKind: config.c.executor,
         workflowId: 'wf-test',
       },
     });
@@ -404,25 +404,25 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
       const taskA = makeTaskState({
         id: 'task-a',
         description: 'Step A',
-        config: { command: 'echo a > diamond1-a.txt', executorType: 'worktree', workflowId: 'wf-test' },
+        config: { command: 'echo a > diamond1-a.txt', runnerKind: 'worktree', workflowId: 'wf-test' },
       });
       const taskB = makeTaskState({
         id: 'task-b',
         description: 'Step B',
         dependencies: ['task-a'],
-        config: { command: 'echo b > diamond1-b.txt', executorType: 'worktree', workflowId: 'wf-test' },
+        config: { command: 'echo b > diamond1-b.txt', runnerKind: 'worktree', workflowId: 'wf-test' },
       });
       const taskC = makeTaskState({
         id: 'task-c',
         description: 'Step C',
         dependencies: ['task-a'],
-        config: { command: 'echo c > diamond1-c.txt', executorType: 'worktree', workflowId: 'wf-test' },
+        config: { command: 'echo c > diamond1-c.txt', runnerKind: 'worktree', workflowId: 'wf-test' },
       });
       const taskD = makeTaskState({
         id: 'task-d',
         description: 'Step D',
         dependencies: ['task-b', 'task-c'],
-        config: { command: 'echo d > diamond1-d.txt', executorType: 'worktree', workflowId: 'wf-test' },
+        config: { command: 'echo d > diamond1-d.txt', runnerKind: 'worktree', workflowId: 'wf-test' },
       });
 
       const tasks = [taskA, taskB, taskC, taskD];
@@ -497,25 +497,25 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
       const taskA = makeTaskState({
         id: 'task-a',
         description: 'Step A',
-        config: { command: 'echo a > diamond2-a.txt', executorType: 'worktree', workflowId: 'wf-test' },
+        config: { command: 'echo a > diamond2-a.txt', runnerKind: 'worktree', workflowId: 'wf-test' },
       });
       const taskB = makeTaskState({
         id: 'task-b',
         description: 'Step B',
         dependencies: ['task-a'],
-        config: { command: 'echo b > diamond2-b.txt', executorType: 'worktree', workflowId: 'wf-test' },
+        config: { command: 'echo b > diamond2-b.txt', runnerKind: 'worktree', workflowId: 'wf-test' },
       });
       const taskC = makeTaskState({
         id: 'task-c',
         description: 'Step C',
         dependencies: ['task-a'],
-        config: { command: 'echo c > diamond2-c.txt', executorType: 'worktree', workflowId: 'wf-test' },
+        config: { command: 'echo c > diamond2-c.txt', runnerKind: 'worktree', workflowId: 'wf-test' },
       });
       const taskD = makeTaskState({
         id: 'task-d',
         description: 'Step D',
         dependencies: ['task-b', 'task-c'],
-        config: { command: 'echo d > diamond2-d.txt', executorType: 'worktree', workflowId: 'wf-test' },
+        config: { command: 'echo d > diamond2-d.txt', runnerKind: 'worktree', workflowId: 'wf-test' },
       });
 
       const tasks = [taskA, taskB, taskC, taskD];
@@ -577,18 +577,18 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
       const taskA = makeTaskState({
         id: 'task-a',
         description: 'Step A',
-        config: { command: 'echo a > fanin-a.txt', executorType: 'worktree', workflowId: 'wf-test' },
+        config: { command: 'echo a > fanin-a.txt', runnerKind: 'worktree', workflowId: 'wf-test' },
       });
       const taskB = makeTaskState({
         id: 'task-b',
         description: 'Step B',
-        config: { command: 'echo b > fanin-b.txt', executorType: 'worktree', workflowId: 'wf-test' },
+        config: { command: 'echo b > fanin-b.txt', runnerKind: 'worktree', workflowId: 'wf-test' },
       });
       const taskC = makeTaskState({
         id: 'task-c',
         description: 'Step C',
         dependencies: ['task-a', 'task-b'],
-        config: { command: 'echo c > fanin-c.txt', executorType: 'worktree', workflowId: 'wf-test' },
+        config: { command: 'echo c > fanin-c.txt', runnerKind: 'worktree', workflowId: 'wf-test' },
       });
 
       const tasks = [taskA, taskB, taskC];
@@ -666,25 +666,25 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
       const taskA = makeTaskState({
         id: 'task-a',
         description: 'Step A',
-        config: { command: 'printf A_CHANGE > a.txt', executorType: 'worktree', workflowId: 'wf-test' },
+        config: { command: 'printf A_CHANGE > a.txt', runnerKind: 'worktree', workflowId: 'wf-test' },
       });
       const taskB = makeTaskState({
         id: 'task-b',
         description: 'Step B',
-        config: { command: 'printf B_CHANGE > b.txt', executorType: 'worktree', workflowId: 'wf-test' },
+        config: { command: 'printf B_CHANGE > b.txt', runnerKind: 'worktree', workflowId: 'wf-test' },
       });
       const taskC = makeTaskState({
         id: 'task-c',
         description: 'Step C',
         dependencies: ['task-a', 'task-b'],
-        config: { command: 'printf C_CHANGE > c.txt', executorType: 'worktree', workflowId: 'wf-test' },
+        config: { command: 'printf C_CHANGE > c.txt', runnerKind: 'worktree', workflowId: 'wf-test' },
       });
       const mergeTask = makeTaskState({
         id: '__merge__wf-test',
         description: 'Review gate',
         dependencies: ['task-c'],
         status: 'running',
-        config: { executorType: 'merge', isMergeNode: true, workflowId: 'wf-test' },
+        config: { runnerKind: 'merge', isMergeNode: true, workflowId: 'wf-test' },
       });
 
       const tasks = [taskA, taskB, taskC, mergeTask];
@@ -829,7 +829,7 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
         description: 'Implementation',
         config: {
           command: 'printf implementation > implementation.txt',
-          executorType: 'worktree',
+          runnerKind: 'worktree',
           workflowId: 'wf-test',
         },
       });
@@ -837,20 +837,20 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
         id: 'verify',
         description: 'Verify',
         dependencies: ['implementation'],
-        config: { command: 'true', executorType: 'worktree', workflowId: 'wf-test' },
+        config: { command: 'true', runnerKind: 'worktree', workflowId: 'wf-test' },
       });
       const postFix = makeTaskState({
         id: 'post-fix',
         description: 'Post-fix regression',
         dependencies: ['verify'],
-        config: { command: 'true', executorType: 'worktree', workflowId: 'wf-test' },
+        config: { command: 'true', runnerKind: 'worktree', workflowId: 'wf-test' },
       });
       const mergeTask = makeTaskState({
         id: '__merge__wf-test',
         description: 'Review gate',
         dependencies: ['post-fix'],
         status: 'running',
-        config: { executorType: 'merge', isMergeNode: true, workflowId: 'wf-test' },
+        config: { runnerKind: 'merge', isMergeNode: true, workflowId: 'wf-test' },
       });
 
       const tasks = [implementation, verify, postFix, mergeTask];

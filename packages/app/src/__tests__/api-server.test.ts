@@ -621,32 +621,32 @@ describe('POST /api/tasks/:id/edit-prompt', () => {
 
 describe('POST /api/tasks/:id/edit-type', () => {
   it('edits task type', async () => {
-    const res = await request(port, 'POST', '/api/tasks/task-1/edit-type', { executorType: 'docker' });
+    const res = await request(port, 'POST', '/api/tasks/task-1/edit-type', { runnerKind: 'docker' });
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.action).toBe('type_edited');
     expect(mocks.orchestrator.editTaskType).toHaveBeenCalledWith('task-1', 'docker', undefined);
   });
 
-  it('passes remoteTargetId when provided', async () => {
+  it('passes poolMemberId when provided', async () => {
     const res = await request(port, 'POST', '/api/tasks/task-1/edit-type', {
-      executorType: 'ssh',
-      remoteTargetId: 'remote-1',
+      runnerKind: 'ssh',
+      poolMemberId: 'remote-1',
     });
     expect(res.status).toBe(200);
     expect(mocks.orchestrator.editTaskType).toHaveBeenCalledWith('task-1', 'ssh', 'remote-1');
   });
 
-  it('returns 400 when executorType is missing', async () => {
+  it('returns 400 when runnerKind is missing', async () => {
     const res = await request(port, 'POST', '/api/tasks/task-1/edit-type', {});
     expect(res.status).toBe(400);
-    expect(res.body.error).toContain('Missing "executorType"');
+    expect(res.body.error).toContain('Missing "runnerKind"');
   });
 
-  it('forwards a remoteTargetId-only change (host change)', async () => {
+  it('forwards a poolMemberId-only change (host change)', async () => {
     const res = await request(port, 'POST', '/api/tasks/task-1/edit-type', {
-      executorType: 'ssh',
-      remoteTargetId: 'remote-b',
+      runnerKind: 'ssh',
+      poolMemberId: 'remote-b',
     });
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);

@@ -19,7 +19,7 @@
  *   electron dist/main.js --headless fix <taskId>
  *   electron dist/main.js --headless resolve-conflict <taskId>
  *   electron dist/main.js --headless edit <taskId> <newCommand>
- *   electron dist/main.js --headless edit-executor <taskId> <executorType>
+ *   electron dist/main.js --headless edit-executor <taskId> <runnerKind>
  *   electron dist/main.js --headless edit-agent <taskId> <claude|codex>
  *   electron dist/main.js --headless cancel <taskId>
  *   electron dist/main.js --headless set-merge-mode <workflowId> <mode>
@@ -422,6 +422,7 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     maxConcurrency: effectiveMaxConcurrency,
     defaultAutoFixRetries: invokerConfig.autoFixRetries,
     executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
+    availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
     deferRunningUntilLaunch: true,
   });
   commandService = new CommandService(orchestrator);
@@ -1471,6 +1472,7 @@ if (isHeadless) {
         secretsFile: resolveSecretsFilePath(invokerConfig),
       },
       remoteTargetsProvider: () => loadConfig().remoteTargets ?? {},
+      executionPoolsProvider: () => loadConfig().executionPools ?? {},
       mergeGateProvider: new GitHubMergeGateProvider(),
       reviewProviderRegistry: (() => {
         const registry = new ReviewProviderRegistry();
@@ -2401,7 +2403,7 @@ if (isHeadless) {
                   const { heartbeatStale, leaseExpired, executingStalled, staleReason } = evaluateExecutingStall({
                     now,
                     phase: task.execution.phase,
-                    executorType: task.config.executorType,
+                    runnerKind: task.config.runnerKind,
                     executingStartedAt,
                     leaseExpiresAt,
                     executorHeartbeatAt: previousHeartbeat,
@@ -2835,6 +2837,7 @@ if (isHeadless) {
         maxConcurrency: effectiveMaxConcurrency,
         defaultAutoFixRetries: invokerConfig.autoFixRetries,
         executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
+        availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
         deferRunningUntilLaunch: true,
       });
       commandService = new CommandService(orchestrator);
@@ -3588,13 +3591,13 @@ if (isHeadless) {
       }
     });
 
-    registerGuiMutationHandler('invoker:edit-task-type', async (taskIdArg: unknown, executorTypeArg: unknown, remoteTargetIdArg?: unknown) => {
+    registerGuiMutationHandler('invoker:edit-task-type', async (taskIdArg: unknown, runnerKindArg: unknown, poolMemberIdArg?: unknown) => {
       const taskId = String(taskIdArg);
-      const executorType = String(executorTypeArg);
-      const remoteTargetId = remoteTargetIdArg === undefined ? undefined : String(remoteTargetIdArg);
-      logger.info(`edit-task-type: "${taskId}" → "${executorType}" remoteTargetId=${remoteTargetId ?? 'none'}`, { module: 'ipc' });
+      const runnerKind = String(runnerKindArg);
+      const poolMemberId = poolMemberIdArg === undefined ? undefined : String(poolMemberIdArg);
+      logger.info(`edit-task-type: "${taskId}" → "${runnerKind}" poolMemberId=${poolMemberId ?? 'none'}`, { module: 'ipc' });
       try {
-        const envelope = makeEnvelope('edit-task-type', 'ui', 'task', { taskId, executorType, remoteTargetId });
+        const envelope = makeEnvelope('edit-task-type', 'ui', 'task', { taskId, runnerKind, poolMemberId });
         const result = await commandService.editTaskType(envelope);
         if (!result.ok) throw new Error(result.error.message);
         await dispatchStartedTasksWithGlobalTopup({

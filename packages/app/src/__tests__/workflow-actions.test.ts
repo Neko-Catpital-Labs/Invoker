@@ -1458,7 +1458,7 @@ describe('editTaskType', () => {
     expect(result).toBe(tasks);
   });
 
-  it('passes remoteTargetId when provided', () => {
+  it('passes poolMemberId when provided', () => {
     const orchestrator = { editTaskType: vi.fn(() => []) };
 
     editTaskType('task-a', 'ssh', { orchestrator: orchestrator as unknown as Orchestrator }, 'remote-1');

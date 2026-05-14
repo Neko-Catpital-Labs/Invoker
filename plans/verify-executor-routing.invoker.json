@@ -4,15 +4,14 @@
   "executorRoutingRules": [
     {
       "pattern": "verify-routing-ok",
-      "executorType": "worktree",
-      "remoteTargetId": "dummy-target"
+      "poolId": "dummy-target"
     }
   ],
-  "remoteTargets": {
+  "executionPools": {
     "dummy-target": {
-      "host": "localhost",
-      "user": "nobody",
-      "sshKeyPath": "/dev/null"
+      "members": [
+        { "type": "worktree", "id": "local-worktree" }
+      ]
     }
   }
 }

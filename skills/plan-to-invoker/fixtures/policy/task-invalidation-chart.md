@@ -49,8 +49,8 @@ And it applies to any active execution state in the affected scope, including:
 | Edit `command` | Yes | Yes | `recreateTask` | `restartTask` when inactive; special-case task-level interrupt + `restartTask` for `fixing_with_ai`; blocked for normal `running` | A command edit means the task is now materially different, so old execution lineage should be discarded |
 | Edit `prompt` | Yes | Yes | `recreateTask` | no dedicated general policy today | A prompt edit changes the task definition, so old execution lineage should be discarded |
 | Edit `executionAgent` | Yes | Yes | `recreateTask` | `restartTask` when inactive; blocked when active | Agent choice changes execution behavior enough that old execution lineage should not remain authoritative |
-| Edit `executorType` | Yes | Yes | `retryTask` by default | `restartTask` when inactive; blocked when active | Execution environment changed, but workspace lineage may still be valid |
-| Edit `remoteTargetId` | Yes | Yes | `recreateTask` | currently piggybacks on `editTaskType()`, so effectively task-level `restartTask` when inactive | Remote host change invalidates existing workspace lineage |
+| Edit `runnerKind` | Yes | Yes | `retryTask` by default | `restartTask` when inactive; blocked when active | Execution environment changed, but workspace lineage may still be valid |
+| Edit `poolMemberId` | Yes | Yes | `recreateTask` | currently piggybacks on `editTaskType()`, so effectively task-level `restartTask` when inactive | Remote host change invalidates existing workspace lineage |
 | Edit selected experiment | Yes | Yes if active | `retryTask` for the affected reconciliation result | completes reconciliation task and unblocks downstream; no general active invalidation model | Downstream execution inputs changed |
 | Edit selected experiment set | Yes | Yes if active | `retryTask` for the affected reconciliation result | completes reconciliation task and unblocks downstream; no general active invalidation model | Same as above, but for merged lineage |
 | Change merge mode | Yes for merge node behavior | Yes if merge node is active | `retryTask` for merge node | restarts merge node only when it is terminal or waiting; no active invalidation path | Merge execution policy changed |
@@ -115,8 +115,8 @@ These should be treated as part of the task execution ABI:
 - `command`
 - `prompt`
 - `executionAgent`
-- `executorType`
-- `remoteTargetId`
+- `runnerKind`
+- `poolMemberId`
 - selected experiment or merged experiment lineage
 - merge mode for merge execution
 - fix prompt or fix context during fix sessions
@@ -139,7 +139,7 @@ These are not execution-defining task inputs:
 
 ### Remote target inconsistency
 
-- `remoteTargetId` is currently edited through `editTaskType()`
+- `poolMemberId` is currently edited through `editTaskType()`
 
 ### Repo/base invalidation inconsistency
 

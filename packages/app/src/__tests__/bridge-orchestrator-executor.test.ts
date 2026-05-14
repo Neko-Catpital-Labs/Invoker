@@ -525,7 +525,7 @@ describe('Flow 4: edit/fork mutations', () => {
 
     // A restarted
     const a = h.getTask('A')!;
-    expect(a.config.executorType).toBe('worktree');
+    expect(a.config.runnerKind).toBe('worktree');
     expect(a.status === 'pending' || a.status === 'running').toBe(true);
 
     // B should still be the original (not forked), no B-v2 created

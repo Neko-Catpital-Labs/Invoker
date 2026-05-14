@@ -95,7 +95,7 @@ invoker_e2e_ssh_cleanup_keys() {
 }
 
 # --------------------------------------------------------------------------- #
-# Write temp JSON config with localhost-e2e remote target.
+# Write temp JSON config with a localhost-e2e execution pool.
 # --------------------------------------------------------------------------- #
 invoker_e2e_ssh_write_config() {
   local config_file="$_INVOKER_E2E_SSH_TMPDIR/invoker-config.json"
@@ -106,6 +106,13 @@ invoker_e2e_ssh_write_config() {
 
   cat > "$config_file" <<EOJSON
 {
+  "executionPools": {
+    "localhost-e2e": {
+      "members": [
+        { "type": "ssh", "id": "localhost-e2e" }
+      ]
+    }
+  },
   "remoteTargets": {
     "localhost-e2e": {
       "host": "localhost",

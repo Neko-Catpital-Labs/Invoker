@@ -75,8 +75,8 @@ describe('fixWithAgentImpl remote worktree repair', () => {
       },
       config: {
         command: 'pnpm test',
-        executorType: 'ssh' as const,
-        remoteTargetId: 'remote-1',
+        runnerKind: 'ssh' as const,
+        poolMemberId: 'remote-1',
       },
     };
 

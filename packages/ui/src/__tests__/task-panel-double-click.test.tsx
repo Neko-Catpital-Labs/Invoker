@@ -638,7 +638,7 @@ describe('TaskPanel double-click editing', () => {
         />,
       );
 
-      expect(screen.queryByTestId('executor-type-select')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('runner-kind-select')).not.toBeInTheDocument();
     });
 
     it('renders executor dropdown for non-merge nodes when onEditType is provided', () => {
@@ -659,10 +659,10 @@ describe('TaskPanel double-click editing', () => {
         />,
       );
 
-      expect(screen.getByTestId('executor-type-select')).toBeInTheDocument();
+      expect(screen.getByTestId('runner-kind-select')).toBeInTheDocument();
     });
 
-    it('defaults executor select to worktree for prompt-only task when executorType unset (orchestrator default)', () => {
+    it('defaults executor select to worktree for prompt-only task when runnerKind unset (orchestrator default)', () => {
       const task = makeTask({
         prompt: 'Write a test',
         status: 'pending',
@@ -679,10 +679,10 @@ describe('TaskPanel double-click editing', () => {
         />,
       );
 
-      expect(screen.getByTestId('executor-type-select')).toHaveValue('worktree');
+      expect(screen.getByTestId('runner-kind-select')).toHaveValue('worktree');
     });
 
-    it('defaults executor select to worktree for command task when executorType unset (orchestrator default)', () => {
+    it('defaults executor select to worktree for command task when runnerKind unset (orchestrator default)', () => {
       const task = makeTask({
         command: 'echo test',
         status: 'pending',
@@ -699,7 +699,7 @@ describe('TaskPanel double-click editing', () => {
         />,
       );
 
-      expect(screen.getByTestId('executor-type-select')).toHaveValue('worktree');
+      expect(screen.getByTestId('runner-kind-select')).toHaveValue('worktree');
     });
 
     it('renders SSH remote target options when remoteTargets are provided', () => {
@@ -717,7 +717,7 @@ describe('TaskPanel double-click editing', () => {
         />,
       );
 
-      const select = screen.getByTestId('executor-type-select');
+      const select = screen.getByTestId('runner-kind-select');
       const options = select.querySelectorAll('option');
       expect(options).toHaveLength(4);
       expect(options[2]).toHaveValue('ssh:do-droplet');
@@ -741,16 +741,16 @@ describe('TaskPanel double-click editing', () => {
         />,
       );
 
-      const select = screen.getByTestId('executor-type-select');
+      const select = screen.getByTestId('runner-kind-select');
       const options = select.querySelectorAll('option');
       expect(options).toHaveLength(2);
     });
 
-    it('selects SSH target when task has executorType=ssh and remoteTargetId', () => {
+    it('selects SSH target when task has runnerKind=ssh and poolMemberId', () => {
       const task = makeTask({
         command: 'echo test',
         status: 'pending',
-        config: { command: 'echo test', executorType: 'ssh', remoteTargetId: 'do-droplet' } as TaskState['config'],
+        config: { command: 'echo test', runnerKind: 'ssh', poolMemberId: 'do-droplet' } as TaskState['config'],
       });
       render(
         <TaskPanel
@@ -765,10 +765,10 @@ describe('TaskPanel double-click editing', () => {
         />,
       );
 
-      expect(screen.getByTestId('executor-type-select')).toHaveValue('ssh:do-droplet');
+      expect(screen.getByTestId('runner-kind-select')).toHaveValue('ssh:do-droplet');
     });
 
-    it('calls onEditType with ssh and remoteTargetId when SSH option selected', () => {
+    it('calls onEditType with ssh and poolMemberId when SSH option selected', () => {
       const task = makeTask({ command: 'echo test', status: 'pending' });
       const mockOnEditType = vi.fn();
       render(
@@ -784,12 +784,12 @@ describe('TaskPanel double-click editing', () => {
         />,
       );
 
-      const select = screen.getByTestId('executor-type-select');
+      const select = screen.getByTestId('runner-kind-select');
       fireEvent.change(select, { target: { value: 'ssh:do-droplet' } });
       expect(mockOnEditType).toHaveBeenCalledWith('test-task-1', 'ssh', 'do-droplet');
     });
 
-    it('calls onEditType without remoteTargetId when non-SSH option selected', () => {
+    it('calls onEditType without poolMemberId when non-SSH option selected', () => {
       const task = makeTask({ command: 'echo test', status: 'pending' });
       const mockOnEditType = vi.fn();
       render(
@@ -805,7 +805,7 @@ describe('TaskPanel double-click editing', () => {
         />,
       );
 
-      const select = screen.getByTestId('executor-type-select');
+      const select = screen.getByTestId('runner-kind-select');
       fireEvent.change(select, { target: { value: 'docker' } });
       expect(mockOnEditType).toHaveBeenCalledWith('test-task-1', 'docker');
     });

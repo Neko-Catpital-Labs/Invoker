@@ -34,7 +34,7 @@ function makeContext(overrides: Partial<AttributionContext> = {}): AttributionCo
     workflowId: 'wf-1',
     taskId: 'wf-1/task-a',
     attemptId: 'wf-1/task-a-latest',
-    executorType: 'worktree',
+    runnerKind: 'worktree',
     agentSessionId: 'sess-abc',
     agentName: 'codex',
     source: 'openai',
@@ -82,7 +82,7 @@ function makeEvent(overrides: Partial<{
       workflowId,
       taskId,
       attemptId: `${taskId}-latest`,
-      executorType: 'worktree',
+      runnerKind: 'worktree',
     },
     usage: { inputTokens, outputTokens, cachedTokens, totalTokens },
     pricing: { model, pricingVersion: '0', estimatedCostUsd, confidence },
@@ -293,21 +293,21 @@ describe('competing design proof: deterministic grouped outputs without provider
 describe('resolveSessionId', () => {
   it('prefers agentSessionId', () => {
     expect(resolveSessionId({
-      id: 't1', workflowId: 'wf-1', executorType: 'worktree',
+      id: 't1', workflowId: 'wf-1', runnerKind: 'worktree',
       agentSessionId: 'current', lastAgentSessionId: 'previous',
     })).toBe('current');
   });
 
   it('falls back to lastAgentSessionId', () => {
     expect(resolveSessionId({
-      id: 't1', workflowId: 'wf-1', executorType: 'worktree',
+      id: 't1', workflowId: 'wf-1', runnerKind: 'worktree',
       lastAgentSessionId: 'previous',
     })).toBe('previous');
   });
 
   it('returns undefined when neither is available', () => {
     expect(resolveSessionId({
-      id: 't1', workflowId: 'wf-1', executorType: 'worktree',
+      id: 't1', workflowId: 'wf-1', runnerKind: 'worktree',
     })).toBeUndefined();
   });
 });
@@ -317,21 +317,21 @@ describe('resolveSessionId', () => {
 describe('resolveAgentName', () => {
   it('prefers agentName', () => {
     expect(resolveAgentName({
-      id: 't1', workflowId: 'wf-1', executorType: 'worktree',
+      id: 't1', workflowId: 'wf-1', runnerKind: 'worktree',
       agentName: 'codex', lastAgentName: 'claude',
     })).toBe('codex');
   });
 
   it('falls back to lastAgentName', () => {
     expect(resolveAgentName({
-      id: 't1', workflowId: 'wf-1', executorType: 'worktree',
+      id: 't1', workflowId: 'wf-1', runnerKind: 'worktree',
       lastAgentName: 'codex',
     })).toBe('codex');
   });
 
   it('defaults to claude', () => {
     expect(resolveAgentName({
-      id: 't1', workflowId: 'wf-1', executorType: 'worktree',
+      id: 't1', workflowId: 'wf-1', runnerKind: 'worktree',
     })).toBe('claude');
   });
 });
@@ -359,7 +359,7 @@ describe('buildAttributionContext', () => {
     const task: CostTaskInfo = {
       id: 'wf-1/task-a',
       workflowId: 'wf-1',
-      executorType: 'worktree',
+      runnerKind: 'worktree',
       agentSessionId: 'sess-123',
       agentName: 'codex',
     };
@@ -368,7 +368,7 @@ describe('buildAttributionContext', () => {
       workflowId: 'wf-1',
       taskId: 'wf-1/task-a',
       attemptId: 'wf-1/task-a-latest',
-      executorType: 'worktree',
+      runnerKind: 'worktree',
       agentSessionId: 'sess-123',
       agentName: 'codex',
       source: 'openai',
@@ -379,7 +379,7 @@ describe('buildAttributionContext', () => {
     const task: CostTaskInfo = {
       id: 'wf-1/task-a',
       workflowId: 'wf-1',
-      executorType: 'worktree',
+      runnerKind: 'worktree',
     };
     expect(buildAttributionContext(task)).toBeUndefined();
   });
@@ -388,7 +388,7 @@ describe('buildAttributionContext', () => {
     const task: CostTaskInfo = {
       id: 'wf-1/task-a',
       workflowId: 'wf-1',
-      executorType: 'ssh',
+      runnerKind: 'ssh',
       lastAgentSessionId: 'sess-old',
       lastAgentName: 'claude',
     };
@@ -398,15 +398,15 @@ describe('buildAttributionContext', () => {
     expect(ctx?.source).toBe('anthropic');
   });
 
-  it('defaults executorType to worktree when empty', () => {
+  it('defaults runnerKind to worktree when empty', () => {
     const task: CostTaskInfo = {
       id: 'wf-1/task-a',
       workflowId: 'wf-1',
-      executorType: '',
+      runnerKind: '',
       agentSessionId: 'sess-123',
     };
     const ctx = buildAttributionContext(task);
-    expect(ctx?.executorType).toBe('worktree');
+    expect(ctx?.runnerKind).toBe('worktree');
   });
 });
 

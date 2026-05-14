@@ -27,14 +27,14 @@ import { resolveEffectiveMaxConcurrency } from './execution-capacity.js';
 /** Persistence methods required to resolve terminal cwd / command for a task. */
 export interface OpenTerminalPersistence {
   getTaskStatus(taskId: string): string | null;
-  getExecutorType(taskId: string): string | null;
+  getRunnerKind(taskId: string): string | null;
   getAgentSessionId(taskId: string): string | null;
   getLastAgentSessionId?(taskId: string): string | null;
   getExecutionAgent?(taskId: string): string | null;
   getContainerId(taskId: string): string | null;
   getWorkspacePath(taskId: string): string | null;
   getBranch(taskId: string): string | null;
-  getRemoteTargetId?(taskId: string): string | null;
+  getPoolMemberId?(taskId: string): string | null;
   loadAttempts?(taskId: string): Array<{ id: string; agentSessionId?: string }>;
   updateTask?(taskId: string, changes: { execution?: { agentSessionId?: string; lastAgentSessionId?: string } }): void;
   updateAttempt?(attemptId: string, changes: { agentSessionId?: string }): void;
@@ -150,7 +150,7 @@ export async function openExternalTerminalForTask(
 
   const meta: PersistedTaskMeta = {
     taskId,
-    executorType: persistence.getExecutorType(taskId) ?? 'worktree',
+    runnerKind: persistence.getRunnerKind(taskId) ?? 'worktree',
     agentSessionId: persistence.getAgentSessionId(taskId) ?? undefined,
     executionAgent: persistence.getExecutionAgent?.(taskId) ?? undefined,
     containerId: persistence.getContainerId(taskId) ?? undefined,
@@ -159,7 +159,7 @@ export async function openExternalTerminalForTask(
   };
   const repairedMeta = repairCodexResumeSessionMeta(meta, persistence, opts.executionAgentRegistry);
   termLogger?.info(
-    `meta from DB: executorType=${repairedMeta.executorType} workspacePath=${repairedMeta.workspacePath ?? 'undefined'} branch=${repairedMeta.branch ?? 'undefined'} agentSessionId=${repairedMeta.agentSessionId ?? 'undefined'} executionAgent=${repairedMeta.executionAgent ?? 'undefined'} containerId=${repairedMeta.containerId ?? 'undefined'}`,
+    `meta from DB: runnerKind=${repairedMeta.runnerKind} workspacePath=${repairedMeta.workspacePath ?? 'undefined'} branch=${repairedMeta.branch ?? 'undefined'} agentSessionId=${repairedMeta.agentSessionId ?? 'undefined'} executionAgent=${repairedMeta.executionAgent ?? 'undefined'} containerId=${repairedMeta.containerId ?? 'undefined'}`,
   );
   if (repairedMeta.agentSessionId) {
     termLogger?.info(
@@ -169,17 +169,17 @@ export async function openExternalTerminalForTask(
     );
   }
 
-  let executor = executorRegistry.get(repairedMeta.executorType);
-  termLogger?.info(`executorRegistry.get("${repairedMeta.executorType}") → ${executor ? executor.type : 'null (will lazy-create)'}`);
+  let executor = executorRegistry.get(repairedMeta.runnerKind);
+  termLogger?.info(`executorRegistry.get("${repairedMeta.runnerKind}") → ${executor ? executor.type : 'null (will lazy-create)'}`);
 
   if (!executor) {
-    if (repairedMeta.executorType === 'docker') {
+    if (repairedMeta.runnerKind === 'docker') {
       const docker = new DockerExecutor({
         agentRegistry: opts.executionAgentRegistry,
       });
       executorRegistry.register('docker', docker);
       executor = docker;
-    } else if (repairedMeta.executorType === 'worktree') {
+    } else if (repairedMeta.runnerKind === 'worktree') {
       const invokerHome = path.resolve(homedir(), '.invoker');
       const maxWorktrees = resolveEffectiveMaxConcurrency(loadConfig().maxConcurrency);
       const worktree = new WorktreeExecutor({
@@ -190,8 +190,8 @@ export async function openExternalTerminalForTask(
       });
       executorRegistry.register('worktree', worktree);
       executor = worktree;
-    } else if (repairedMeta.executorType === 'ssh') {
-      const targetId = persistence.getRemoteTargetId?.(taskId);
+    } else if (repairedMeta.runnerKind === 'ssh') {
+      const targetId = persistence.getPoolMemberId?.(taskId);
       const target = targetId ? loadConfig().remoteTargets?.[targetId] : undefined;
       executor = target
         ? new SshExecutor({ ...target, agentRegistry: opts.executionAgentRegistry })
@@ -203,16 +203,16 @@ export async function openExternalTerminalForTask(
 
   // Managed-workspace executors (worktree, ssh, docker) MUST have a resolved workspacePath.
   // Refuse fallback to repoRoot host cwd to prevent silent data loss when workspace metadata is missing.
-  // SSH is excluded from hostWorkspaceExecutorTypes because its workspace is remote — its
+  // SSH is excluded from hostWorkspaceRunnerKinds because its workspace is remote — its
   // getRestoredTerminalSpec returns { command, args } without a local cwd by design. The first
   // workspace-metadata check below already enforces that SSH tasks have repairedMeta.workspacePath.
-  const managedExecutorTypes = ['worktree', 'ssh', 'docker'];
-  const hostWorkspaceExecutorTypes = ['worktree'];
-  const isManagedExecutor = managedExecutorTypes.includes(repairedMeta.executorType);
+  const managedRunnerKinds = ['worktree', 'ssh', 'docker'];
+  const hostWorkspaceRunnerKinds = ['worktree'];
+  const isManagedExecutor = managedRunnerKinds.includes(repairedMeta.runnerKind);
   if (isManagedExecutor && !repairedMeta.workspacePath) {
     const errorMsg = [
       `Cannot open terminal for task "${taskId}": workspace metadata is missing.`,
-      `Executor type "${repairedMeta.executorType}" requires a managed workspace but workspacePath is not set.`,
+      `Executor type "${repairedMeta.runnerKind}" requires a managed workspace but workspacePath is not set.`,
       `This typically means the task failed during startup before workspace metadata was persisted.`,
       ``,
       `Recovery options:`,
@@ -237,9 +237,9 @@ export async function openExternalTerminalForTask(
   }
 
   // Fail-fast workspace invariant: managed executors must have resolved workspace path
-  if (hostWorkspaceExecutorTypes.includes(repairedMeta.executorType) && !spec.cwd) {
+  if (hostWorkspaceRunnerKinds.includes(repairedMeta.runnerKind) && !spec.cwd) {
     const reason = [
-      `Task "${taskId}" has no workspace path (executor=${repairedMeta.executorType}).`,
+      `Task "${taskId}" has no workspace path (executor=${repairedMeta.runnerKind}).`,
       `This task requires a managed workspace but workspace metadata is missing.`,
       `Recovery: Retry the task using "Recreate Task" or recreate the entire workflow.`,
       `Refusing to fall back to host repo to prevent unintended mutations.`,

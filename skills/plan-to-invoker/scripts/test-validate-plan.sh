@@ -84,7 +84,7 @@ test_negative_fixture_error_keys() {
     'missing_required_field:id'
     'command_prompt_exclusive:command|prompt'
     'missing_command_or_prompt:command|prompt'
-    'invalid_enum_value:executorType'
+    'invalid_field_type:poolId'
     'banned_pattern:command'
     'invalid_dependency_reference:dependencies'
     'invalid_enum_value:externalDependencies[0].requiredStatus'
@@ -146,6 +146,7 @@ test_negative_fixture_specific_errors() {
   local error_types=(
     "missing_required_field"
     "invalid_enum_value"
+    "invalid_field_type"
     "command_prompt_exclusive"
     "missing_command_or_prompt"
     "banned_pattern"

@@ -9,7 +9,7 @@ import initSqlJs, { type Database as SqlJsDatabase } from 'sql.js';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { TaskState, TaskStateChanges, Attempt, TaskStatus } from '@invoker/workflow-core';
-import { normalizeExecutorType } from '@invoker/workflow-core';
+import { normalizeRunnerKind } from '@invoker/workflow-core';
 import type { PersistenceAdapter, Workflow, TaskEvent, ActivityLogEntry, Conversation, ConversationMessage } from './adapter.js';
 
 /**
@@ -559,7 +559,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN execution_generation INTEGER DEFAULT 0',
       'ALTER TABLE tasks ADD COLUMN docker_image TEXT',
       'ALTER TABLE tasks ADD COLUMN selected_attempt_id TEXT',
-      'ALTER TABLE tasks ADD COLUMN remote_target_id TEXT',
+      'ALTER TABLE tasks ADD COLUMN pool_member_id TEXT',
       'ALTER TABLE workflows ADD COLUMN description TEXT',
       'ALTER TABLE workflows ADD COLUMN visual_proof INTEGER',
       'ALTER TABLE workflows ADD COLUMN intermediate_repo_url TEXT',
@@ -574,7 +574,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN last_agent_session_id TEXT',
       'ALTER TABLE tasks ADD COLUMN last_agent_name TEXT',
       'ALTER TABLE tasks ADD COLUMN external_dependencies TEXT',
-      'ALTER TABLE tasks ADD COLUMN executor_type TEXT',
+      'ALTER TABLE tasks ADD COLUMN runner_kind TEXT',
+      'ALTER TABLE tasks ADD COLUMN pool_id TEXT',
       'ALTER TABLE tasks ADD COLUMN auto_fix_attempts INTEGER DEFAULT 0',
       'ALTER TABLE tasks ADD COLUMN launch_phase TEXT',
       'ALTER TABLE tasks ADD COLUMN launch_started_at TEXT',
@@ -746,7 +747,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         selected_experiments, experiment_results, requires_manual_approval,
         repo_url, feature_branch,
         is_merge_node, auto_fix, max_fix_attempts,
-        executor_type, agent_session_id, workspace_path, container_id,
+        runner_kind, pool_id, agent_session_id, workspace_path, container_id,
         last_agent_session_id, last_agent_name,
         action_request_id, experiments,
         created_at, launch_phase, launch_started_at, launch_completed_at, started_at, completed_at, last_heartbeat_at,
@@ -754,7 +755,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         review_url, review_id, review_status, review_provider_id,
         is_fixing_with_ai,
         execution_generation,
-        remote_target_id,
+        pool_member_id,
         docker_image,
         execution_agent,
         agent_name,
@@ -768,7 +769,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?, ?,
         ?, ?,
         ?, ?, ?,
-        ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?,
         ?, ?,
         ?, ?, ?, ?,
@@ -807,7 +808,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
       null, cfg.featureBranch ?? null,
       cfg.isMergeNode ? 1 : 0,
       0, null,
-      cfg.executorType ?? null,
+      cfg.runnerKind ?? null,
+      cfg.poolId ?? null,
       exec.agentSessionId ?? null,
       exec.workspacePath ?? null,
       exec.containerId ?? null,
@@ -830,7 +832,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       exec.reviewProviderId ?? null,
       exec.isFixingWithAI ? 1 : 0,
       exec.generation ?? 0,
-      cfg.remoteTargetId ?? null,
+      (cfg as { poolMemberId?: string }).poolMemberId ?? null,
       cfg.dockerImage ?? null,
       cfg.executionAgent ?? null,
       exec.agentName ?? null,
@@ -864,8 +866,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
         testPlan: 'test_plan',
         reproCommand: 'repro_command',
         featureBranch: 'feature_branch',
-        executorType: 'executor_type',
-        remoteTargetId: 'remote_target_id',
+        runnerKind: 'runner_kind',
+        poolId: 'pool_id',
+        poolMemberId: 'pool_member_id',
         dockerImage: 'docker_image',
         executionAgent: 'execution_agent',
       };
@@ -1196,14 +1199,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return val === 'none' ? null : val;
   }
 
-  getExecutorType(taskId: string): string | null {
+  getRunnerKind(taskId: string): string | null {
     const row = this.queryOne(
-      'SELECT executor_type FROM tasks WHERE id = ?',
+      'SELECT runner_kind FROM tasks WHERE id = ?',
       [taskId],
     );
-    const raw = (row?.executor_type as string) ?? null;
+    const raw = (row?.runner_kind as string) ?? null;
     if (raw === null) return null;
-    return normalizeExecutorType(raw) ?? raw;
+    return normalizeRunnerKind(raw) ?? raw;
   }
 
   getTaskStatus(taskId: string): string | null {
@@ -1240,12 +1243,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return (row?.agent as string) ?? null;
   }
 
-  getRemoteTargetId(taskId: string): string | null {
+  getPoolMemberId(taskId: string): string | null {
     const row = this.queryOne(
-      'SELECT remote_target_id FROM tasks WHERE id = ?',
+      'SELECT pool_member_id FROM tasks WHERE id = ?',
       [taskId],
     );
-    return (row?.remote_target_id as string) ?? null;
+    return (row?.pool_member_id as string) ?? null;
   }
 
   // ── Conversations ───────────────────────────────────────
@@ -1697,8 +1700,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
         isReconciliation: row.is_reconciliation === 1 ? true : undefined,
         requiresManualApproval: row.requires_manual_approval === 1 ? true : undefined,
         featureBranch: row.feature_branch ?? undefined,
-        executorType: normalizeExecutorType(row.executor_type ?? undefined),
-        remoteTargetId: row.remote_target_id ?? undefined,
+        poolId: row.pool_id ?? undefined,
+        runnerKind: normalizeRunnerKind(row.runner_kind ?? undefined),
+        ...((row.pool_member_id ?? undefined) ? { poolMemberId: row.pool_member_id } : {}),
         dockerImage: row.docker_image ?? undefined,
         isMergeNode: row.is_merge_node === 1 ? true : undefined,
         summary: row.summary ?? undefined,
