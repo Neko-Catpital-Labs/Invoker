@@ -1902,6 +1902,17 @@ describe('SQLiteAdapter', () => {
   });
 
   describe('output spool: in-memory cache with tail limit', () => {
+    it('falls back to durable task output when spool rows are absent', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t-fallback'));
+
+      adapter.appendTaskOutput('t-fallback', 'durable line 1\n');
+      adapter.appendTaskOutput('t-fallback', 'durable line 2\n');
+
+      const tail = adapter.getOutputTail('t-fallback');
+      expect(tail.map((chunk) => chunk.data)).toEqual(['durable line 1\n', 'durable line 2\n']);
+    });
+
     it('retains only recent tail in memory after exceeding limit', async () => {
       const tailLimit = 3;
       const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-tail-'));

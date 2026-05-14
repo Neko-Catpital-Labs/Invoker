@@ -848,6 +848,9 @@ describe('TaskRunner', () => {
 
     it('startup error includes phase prefix in outputs.error', async () => {
       const handleWorkerResponse = vi.fn();
+      const updateTask = vi.fn();
+      const appendTaskOutput = vi.fn();
+      const appendOutputChunk = vi.fn();
       const orchestrator = {
         getTask: () => undefined,
         handleWorkerResponse,
@@ -867,7 +870,7 @@ describe('TaskRunner', () => {
 
       const executor = new TaskRunner({
         orchestrator: orchestrator as any,
-        persistence: { updateTask: vi.fn() } as any,
+        persistence: { updateTask, appendTaskOutput, appendOutputChunk } as any,
         executorRegistry: registry as any,
         cwd: '/tmp',
         callbacks: { onComplete },
@@ -887,6 +890,9 @@ describe('TaskRunner', () => {
 
     it('startup error includes stack trace in outputs.error', async () => {
       const handleWorkerResponse = vi.fn();
+      const updateTask = vi.fn();
+      const appendTaskOutput = vi.fn();
+      const appendOutputChunk = vi.fn();
       const orchestrator = {
         getTask: () => undefined,
         handleWorkerResponse,
@@ -906,7 +912,7 @@ describe('TaskRunner', () => {
 
       const executor = new TaskRunner({
         orchestrator: orchestrator as any,
-        persistence: { updateTask: vi.fn() } as any,
+        persistence: { updateTask, appendTaskOutput, appendOutputChunk } as any,
         executorRegistry: registry as any,
         cwd: '/tmp',
         callbacks: { onComplete },
@@ -927,6 +933,8 @@ describe('TaskRunner', () => {
     it('persists startup metadata from executor errors before failing task', async () => {
       const handleWorkerResponse = vi.fn();
       const updateTask = vi.fn();
+      const appendTaskOutput = vi.fn();
+      const appendOutputChunk = vi.fn();
       const orchestrator = {
         getTask: () => undefined,
         handleWorkerResponse,
@@ -949,7 +957,7 @@ describe('TaskRunner', () => {
 
       const executor = new TaskRunner({
         orchestrator: orchestrator as any,
-        persistence: { updateTask } as any,
+        persistence: { updateTask, appendTaskOutput, appendOutputChunk } as any,
         executorRegistry: registry as any,
         cwd: '/tmp',
       });
@@ -976,6 +984,73 @@ describe('TaskRunner', () => {
             error: expect.stringContaining('Executor startup failed (ssh): merge conflict'),
           }),
         }),
+      );
+    });
+
+    it('appends a compact durable startup diagnostic block with raw stderr/stdout details', async () => {
+      const handleWorkerResponse = vi.fn();
+      const updateTask = vi.fn();
+      const appendTaskOutput = vi.fn();
+      const appendOutputChunk = vi.fn();
+      const orchestrator = {
+        getTask: () => undefined,
+        handleWorkerResponse,
+      };
+      const startupErr: any = new Error(
+        'SSH remote script failed (exit=254, phase=bootstrap_clone_fetch)\nSTDERR:\nreal bootstrap failure',
+      );
+      startupErr.phase = 'bootstrap_clone_fetch';
+      startupErr.stderr = 'Welcome to Ubuntu\nreal bootstrap failure\n';
+      startupErr.stdout = '__INVOKER_BASE_HEAD__=partial\n';
+      const throwingExecutor = {
+        type: 'ssh',
+        start: async () => { throw startupErr; },
+        onOutput: () => () => {},
+        onComplete: () => () => {},
+      };
+      const registry = {
+        getDefault: () => throwingExecutor,
+        get: () => throwingExecutor,
+        getAll: () => [throwingExecutor],
+      };
+
+      const executor = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: { updateTask, appendTaskOutput, appendOutputChunk } as any,
+        executorRegistry: registry as any,
+        cwd: '/tmp',
+      });
+
+      const task = makeTask({
+        id: 'failing-start',
+        status: 'running',
+        config: { command: 'echo hi', runnerKind: 'ssh' as any },
+      });
+      await executor.executeTask(task);
+
+      expect(appendOutputChunk).toHaveBeenCalledWith(
+        'failing-start',
+        expect.stringContaining('Executor startup failed (ssh): SSH remote script failed'),
+      );
+      expect(appendTaskOutput).toHaveBeenNthCalledWith(
+        2,
+        'failing-start',
+        expect.stringContaining('[Startup Diagnostic]'),
+      );
+      expect(appendTaskOutput).toHaveBeenNthCalledWith(
+        2,
+        'failing-start',
+        expect.stringContaining('phase=bootstrap_clone_fetch'),
+      );
+      expect(appendTaskOutput).toHaveBeenNthCalledWith(
+        2,
+        'failing-start',
+        expect.stringContaining('--- stderr ---\nWelcome to Ubuntu\nreal bootstrap failure'),
+      );
+      expect(appendTaskOutput).toHaveBeenNthCalledWith(
+        2,
+        'failing-start',
+        expect.stringContaining('--- stdout ---\n__INVOKER_BASE_HEAD__=partial'),
       );
     });
   });

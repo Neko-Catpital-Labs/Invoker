@@ -67,7 +67,74 @@ type StartupFailureMetadata = {
   branch?: string;
   agentSessionId?: string;
   containerId?: string;
+  stdout?: string;
+  stderr?: string;
+  phase?: string;
 };
+
+const STARTUP_DIAGNOSTIC_STREAM_CHARS = 2_000;
+
+function compactDiagnosticText(value: unknown, maxChars = STARTUP_DIAGNOSTIC_STREAM_CHARS): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const normalized = value.replace(/\r\n/g, '\n').trim();
+  if (!normalized) {
+    return null;
+  }
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  return `...${normalized.slice(normalized.length - maxChars)}`;
+}
+
+function firstLine(value: string): string {
+  const trimmed = value.trim();
+  const newlineIndex = trimmed.indexOf('\n');
+  return newlineIndex === -1 ? trimmed : trimmed.slice(0, newlineIndex);
+}
+
+function buildStartupDiagnosticBlock(
+  executorType: string,
+  err: unknown,
+  meta: StartupFailureMetadata,
+): string {
+  const parts: string[] = ['\n[Startup Diagnostic]'];
+  parts.push(`executor=${executorType}`);
+
+  const message = compactDiagnosticText(err instanceof Error ? firstLine(err.message) : String(err));
+  if (message) {
+    parts.push(`message=${message}`);
+  }
+  if (meta.phase) {
+    parts.push(`phase=${meta.phase}`);
+  }
+  if (meta.workspacePath) {
+    parts.push(`workspacePath=${meta.workspacePath}`);
+  }
+  if (meta.branch) {
+    parts.push(`branch=${meta.branch}`);
+  }
+  if (meta.agentSessionId) {
+    parts.push(`agentSessionId=${meta.agentSessionId}`);
+  }
+  if (meta.containerId) {
+    parts.push(`containerId=${meta.containerId}`);
+  }
+
+  const stderr = compactDiagnosticText(meta.stderr);
+  if (stderr) {
+    parts.push(`--- stderr ---\n${stderr}`);
+  }
+
+  const stdout = compactDiagnosticText(meta.stdout);
+  if (stdout) {
+    parts.push(`--- stdout ---\n${stdout}`);
+  }
+
+  parts.push('--- end startup diagnostic ---\n');
+  return parts.join('\n');
+}
 
 type ActiveExecutionHandle = ExecutorHandle & { attemptId?: string };
 type ActiveExecutionEntry = {
@@ -677,6 +744,8 @@ export class TaskRunner {
       this.callbacks.onOutput?.(task.id, startupErrorMessage);
       try {
         this.persistence.appendTaskOutput(task.id, startupErrorMessage);
+        this.persistence.appendOutputChunk(task.id, startupErrorMessage);
+        this.persistence.appendTaskOutput(task.id, buildStartupDiagnosticBlock(executor.type, err, meta));
       } catch {
         // Preserve the original startup failure if output persistence also fails.
       }

@@ -1483,9 +1483,23 @@ export class SQLiteAdapter implements PersistenceAdapter {
     // Populate cache
     if (chunks.length > 0) {
       this.outputTailCache.set(taskId, chunks);
+      return chunks;
     }
 
-    return chunks;
+    // Headless and synthetic diagnostic paths can persist durable output
+    // without also writing spool rows. Fall back so later shutdown
+    // diagnostics still retain recent concrete context.
+    const taskOutputRows = this.queryAll(
+      `SELECT id, data FROM task_output
+       WHERE task_id = ?
+       ORDER BY id DESC
+       LIMIT ?`,
+      [taskId, this.outputTailLimit],
+    ) as Array<{ id: number; data: string }>;
+
+    return taskOutputRows
+      .reverse()
+      .map((row) => ({ offset: row.id, data: row.data }));
   }
 
   // ── Attempts ────────────────────────────────────────────
