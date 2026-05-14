@@ -206,42 +206,32 @@ if [ "$FOLLOW" = true ]; then
   process_one_workflow() {
     local wf_id="$1"
     local result_file="$2"
-    local task_id=""
-
     echo "Processing workflow: $wf_id" >&2
 
-    # Use first non-merge task as rebase anchor.
-    task_id=$(headless_task_ids query tasks --workflow "$wf_id" --no-merge --output label | head -1)
-    if [ -z "$task_id" ]; then
-      echo "  No non-merge tasks found, skipping" >&2
-      printf "%s\tSKIPPED\n" "$wf_id" >> "$result_file"
-      return 0
-    fi
-
     if [ "$DRY_RUN" = true ]; then
-      echo "  [DRY RUN] Would rebase task: $task_id" >&2
+      echo "  [DRY RUN] Would recreate workflow from fresh base: $wf_id" >&2
       printf "%s\tSUCCEEDED\n" "$wf_id" >> "$result_file"
       return 0
     fi
 
     if [ "$COMMAND_TIMEOUT_SECONDS" -gt 0 ]; then
-      echo "  Rebasing task: $task_id (timeout=${COMMAND_TIMEOUT_SECONDS}s)" >&2
+      echo "  Recreating workflow from fresh base: $wf_id (timeout=${COMMAND_TIMEOUT_SECONDS}s)" >&2
     else
-      echo "  Rebasing task: $task_id (no timeout)" >&2
+      echo "  Recreating workflow from fresh base: $wf_id (no timeout)" >&2
     fi
     local cmd_out
     local cmd_status
     if [ "$COMMAND_TIMEOUT_SECONDS" -gt 0 ]; then
       set +e
       cmd_out="$(
-        run_with_optional_timeout "$COMMAND_TIMEOUT_SECONDS" headless_mutation --no-track rebase "$task_id" 2>&1
+        run_with_optional_timeout "$COMMAND_TIMEOUT_SECONDS" headless_mutation --no-track recreate-with-rebase "$wf_id" 2>&1
       )"
       cmd_status=$?
       set -e
     else
       set +e
       cmd_out="$(
-        headless_mutation --no-track rebase "$task_id" 2>&1
+        headless_mutation --no-track recreate-with-rebase "$wf_id" 2>&1
       )"
       cmd_status=$?
       set -e
@@ -308,21 +298,14 @@ else
     IDX=$((IDX + 1))
     echo "[queue $IDX/$TOTAL_WORKFLOWS] $WF_ID" >&2
 
-    task_id="$(headless_task_ids query tasks --workflow "$WF_ID" --no-merge --output label | head -1)"
-    if [ -z "$task_id" ]; then
-      echo "  No non-merge tasks found, skipping" >&2
-      SKIPPED=$((SKIPPED + 1))
-      continue
-    fi
-
     if [ "$DRY_RUN" = true ]; then
-      echo "  [DRY RUN] Would dispatch rebase for task: $task_id" >&2
+      echo "  [DRY RUN] Would dispatch recreate-with-rebase for workflow: $WF_ID" >&2
       DISPATCHED=$((DISPATCHED + 1))
       continue
     fi
 
     log_file="$LOG_DIR/${WF_ID}.log"
-    printf '{"label":"%s","workflowId":"%s","taskId":"%s","args":["rebase","%s"]}\n' "$WF_ID" "$WF_ID" "$task_id" "$task_id" >> "$COMMANDS_FILE"
+    printf '{"label":"%s","workflowId":"%s","args":["recreate-with-rebase","%s"]}\n' "$WF_ID" "$WF_ID" "$WF_ID" >> "$COMMANDS_FILE"
     echo "  queued log=$log_file" >&2
   done <<< "$WORKFLOW_IDS"
 
