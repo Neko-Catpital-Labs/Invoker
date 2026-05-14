@@ -598,6 +598,10 @@ export class TaskRunner {
       `${RESTART_TO_BRANCH_TRACE} executeTaskInner taskId=${task.id} WorkRequest built actionType=${request.actionType} repoUrl=${request.inputs.repoUrl ?? '(none)'} upstreamBranches=${JSON.stringify(request.inputs.upstreamBranches ?? [])}`,
     );
     const executor = this.selectExecutor(task);
+    const poolSelectionForStart = this.pendingPoolSelections.get(task.id);
+    const selectedSshPoolMemberId = executor.type === 'ssh'
+      ? this.selectedRemoteTargetId(task, poolSelectionForStart)
+      : undefined;
     traceExecution(
       `${RESTART_TO_BRANCH_TRACE} executeTaskInner taskId=${task.id} selectExecutor → type=${executor.type} calling executor.start()`,
     );
@@ -651,7 +655,10 @@ export class TaskRunner {
         }
         if (meta.containerId) execution.containerId = meta.containerId;
         this.persistence.updateTask(task.id, {
-          config: { runnerKind: executor.type as RunnerKind },
+          config: {
+            runnerKind: executor.type as RunnerKind,
+            ...(selectedSshPoolMemberId ? { poolMemberId: selectedSshPoolMemberId } : {}),
+          },
           execution: execution as any,
         });
       }
@@ -697,11 +704,14 @@ export class TaskRunner {
         executor,
         handle,
         attemptId,
-        this.pendingPoolSelections.get(task.id),
+        poolSelectionForStart,
       );
 
       const changes = {
-        config: { runnerKind: executor.type as RunnerKind },
+        config: {
+          runnerKind: executor.type as RunnerKind,
+          ...(selectedSshPoolMemberId ? { poolMemberId: selectedSshPoolMemberId } : {}),
+        },
         execution: {
           workspacePath: handle.workspacePath,
           branch: handle.branch ?? undefined,  // Explicit undefined when branch is not applicable (e.g., BYO mode)
@@ -742,7 +752,7 @@ export class TaskRunner {
     // Notify consumer about the spawned handle
     const activeHandle = handle as ActiveExecutionHandle;
     activeHandle.attemptId = attemptId;
-    const poolSelection = this.pendingPoolSelections.get(task.id);
+    const poolSelection = poolSelectionForStart;
     this.pendingPoolSelections.delete(task.id);
     this.activeExecutions.set(attemptId, {
       handle: activeHandle,
