@@ -687,7 +687,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     await waitFor(() => adapter.listWorkflowMutationIntents('wf-1', ['completed']).length === 1);
   });
 
-  it('bounds concurrent workflow drains across workflows during resume and burst submission', async () => {
+  it('starts all queued workflow drains across workflows during resume', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
     for (let index = 1; index <= 4; index += 1) {
@@ -718,27 +718,64 @@ describe('PersistedWorkflowMutationCoordinator', () => {
         await gate.promise;
         active -= 1;
       },
-      { maxConcurrentWorkflowDrains: 2 },
     );
 
     const resumePromise = coordinator.resumePending();
-    await waitFor(() => started.length === 2);
-    expect(maxActive).toBe(2);
+    await waitFor(() => started.length === 4);
+    expect(maxActive).toBe(4);
 
     gates.get('job-1')?.resolve();
-    await waitFor(() => started.length === 3);
-    expect(maxActive).toBe(2);
-
     gates.get('job-2')?.resolve();
-    await waitFor(() => started.length === 4);
-    expect(maxActive).toBe(2);
-
     gates.get('job-3')?.resolve();
     gates.get('job-4')?.resolve();
     await resumePromise;
 
     expect(adapter.listWorkflowMutationIntents(undefined, ['completed'])).toHaveLength(4);
-    expect(maxActive).toBe(2);
+    expect(maxActive).toBe(4);
+  });
+
+  it('does not run two intents for the same workflow concurrently', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const firstGate = deferred();
+    const order: string[] = [];
+    let active = 0;
+    let maxActive = 0;
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async (_channel, args) => {
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        order.push(String(args[0]));
+        if (args[0] === 'first') {
+          await firstGate.promise;
+        }
+        active -= 1;
+      },
+    );
+
+    const first = coordinator.enqueue<void>('wf-1', 'normal', 'mut', ['first']);
+    const second = coordinator.enqueue<void>('wf-1', 'normal', 'mut', ['second']);
+
+    await waitFor(() => order.length === 1);
+    expect(order).toEqual(['first']);
+    expect(maxActive).toBe(1);
+
+    firstGate.resolve();
+    await first;
+    await second;
+
+    expect(order).toEqual(['first', 'second']);
+    expect(maxActive).toBe(1);
   });
 
   it('invalidates an older running workflow intent when internal delete-workflow is enqueued', async () => {
