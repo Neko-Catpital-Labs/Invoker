@@ -12,6 +12,11 @@ const noopLogger = {
   child: vi.fn(function () { return noopLogger; }),
 };
 
+const attemptsByTaskId = new Map<string, Array<{ id: string; agentSessionId?: string }>>([
+  ['wf-1/task-a', [{ id: 'wf-1/task-a-attempt-1', agentSessionId: 'sess-wf-1-task-a' }]],
+  ['wf-1/task-b', [{ id: 'wf-1/task-b-attempt-1', agentSessionId: 'sess-wf-1-task-b' }]],
+]);
+
 function makeWorkflow(id: string, status: 'completed' | 'failed' | 'running') {
   return { id, name: `Workflow ${id}`, status, createdAt: '2025-01-01T00:00:00Z', updatedAt: '2025-01-01T00:01:00Z' };
 }
@@ -96,6 +101,7 @@ describe('headless query cost', () => {
         readOnly: false,
         listWorkflows: vi.fn(() => [makeWorkflow('wf-1', 'completed')]),
         loadTasks: vi.fn(() => []),
+        loadAttempts: vi.fn((taskId: string) => attemptsByTaskId.get(taskId) ?? []),
       } as unknown as SQLiteAdapter,
       commandService: {} as CommandService,
       executorRegistry: {} as any,
@@ -252,6 +258,7 @@ describe('headless query cost-events', () => {
         readOnly: false,
         listWorkflows: vi.fn(() => [makeWorkflow('wf-1', 'completed')]),
         loadTasks: vi.fn(() => []),
+        loadAttempts: vi.fn((taskId: string) => attemptsByTaskId.get(taskId) ?? []),
       } as unknown as SQLiteAdapter,
       commandService: {} as CommandService,
       executorRegistry: {} as any,
@@ -290,9 +297,15 @@ describe('headless query cost-events', () => {
       expect(event).toHaveProperty('outputTokens');
       expect(event).toHaveProperty('workflowId');
       expect(event).toHaveProperty('taskId');
+      expect(event).toHaveProperty('attemptId');
       expect(event).toHaveProperty('model');
       expect(event).toHaveProperty('confidence');
     }
+    expect(parsed.map((event: any) => event.attemptId)).toEqual([
+      'wf-1/task-a-attempt-1',
+      'wf-1/task-a-attempt-1',
+      'wf-1/task-b-attempt-1',
+    ]);
   });
 
   it('outputs events in JSONL format (one per line)', async () => {
@@ -356,6 +369,25 @@ describe('headless query cost-events', () => {
     const output2 = stdoutSpy.mock.calls[0][0] as string;
 
     expect(output1).toBe(output2);
+  });
+
+  it('uses selectedAttemptId when no exact persisted session match exists', async () => {
+    mockDeps.orchestrator.getAllTasks = vi.fn(() => [
+      makeTask('wf-1', 'task-a', {
+        execution: {
+          selectedAttemptId: 'wf-1/task-a-selected',
+        } as any,
+      }),
+    ] as any);
+    (mockDeps.persistence.loadAttempts as any) = vi.fn(() => [
+      { id: 'wf-1/task-a-older', agentSessionId: 'sess-older' },
+      { id: 'wf-1/task-a-selected', agentSessionId: 'sess-wf-1-task-a' },
+    ]);
+
+    await runHeadless(['query', 'cost-events', '--output', 'json'], mockDeps);
+    const output = stdoutSpy.mock.calls[0][0] as string;
+    const parsed = JSON.parse(output);
+    expect(parsed[0].attemptId).toBe('wf-1/task-a-selected');
   });
 
   it('supports JSONL piping without special handling', async () => {
