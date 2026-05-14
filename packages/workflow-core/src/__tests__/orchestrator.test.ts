@@ -312,6 +312,43 @@ describe('Orchestrator', () => {
     });
   });
 
+  describe('review_ready worker responses', () => {
+    it('transition a running merge gate through handleWorkerResponse', () => {
+      orchestrator.loadPlan({
+        name: 'Review ready workflow',
+        tasks: [{ id: 'task-a', description: 'task A' }],
+      });
+
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+      const mergeId = `__merge__${workflowId}`;
+      persistence.updateTask(mergeId, {
+        status: 'running',
+        execution: { generation: 0 },
+      });
+
+      orchestrator.handleWorkerResponse(makeResponse({
+        actionId: mergeId,
+        status: 'review_ready',
+        outputs: {
+          exitCode: 0,
+          summary: 'ready',
+          branch: 'feature/review-ready',
+          reviewUrl: 'https://github.com/owner/repo/pull/1',
+          reviewId: 'owner/repo#1',
+          reviewStatus: 'Awaiting review',
+        },
+      }));
+
+      const task = orchestrator.getTask(mergeId)!;
+      expect(task.status).toBe('review_ready');
+      expect(task.config.summary).toBe('ready');
+      expect(task.execution.branch).toBe('feature/review-ready');
+      expect(task.execution.reviewUrl).toBe('https://github.com/owner/repo/pull/1');
+      expect(task.execution.reviewId).toBe('owner/repo#1');
+      expect(task.execution.reviewStatus).toBe('Awaiting review');
+    });
+  });
+
   describe('workflow status transitions during retry paths', () => {
     it('stores a newly loaded workflow as pending while all tasks are pending', () => {
       orchestrator.loadPlan({

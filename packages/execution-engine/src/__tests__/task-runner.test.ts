@@ -2655,7 +2655,7 @@ describe('TaskRunner', () => {
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
       expect(onComplete).toHaveBeenCalledWith(
         '__merge__wf-1',
-        expect.objectContaining({ status: 'completed' }),
+        expect.objectContaining({ status: 'review_ready' }),
       );
     });
 
@@ -2846,7 +2846,7 @@ describe('TaskRunner', () => {
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
       expect(onComplete).toHaveBeenCalledWith(
         '__merge__wf-1',
-        expect.objectContaining({ status: 'completed' }),
+        expect.objectContaining({ status: 'review_ready' }),
       );
     });
 
@@ -8486,7 +8486,7 @@ console.log(JSON.stringify(out));
       for (let i = 0; i < 10; i++) await Promise.resolve();
     }
 
-    it('serializes concurrent onComplete handlers for merge-node tasks', async () => {
+    it('does not run merge-node work from the completion handler', async () => {
       const log: string[] = [];
       const deferred1 = createDeferred();
       const deferred2 = createDeferred();
@@ -8532,8 +8532,8 @@ console.log(JSON.stringify(out));
         log.push(`exit-${n}`);
       });
 
-      const task1 = makeTask({ id: 'merge-1', status: 'running', config: { isMergeNode: true } });
-      const task2 = makeTask({ id: 'merge-2', status: 'running', config: { isMergeNode: true } });
+      const task1 = makeTask({ id: 'merge-1', status: 'running', config: { isMergeNode: true, runnerKind: 'worktree' } });
+      const task2 = makeTask({ id: 'merge-2', status: 'running', config: { isMergeNode: true, runnerKind: 'worktree' } });
 
       const done1 = runner.executeTask(task1);
       const done2 = runner.executeTask(task2);
@@ -8549,18 +8549,12 @@ console.log(JSON.stringify(out));
       });
 
       await flush();
-      expect(log).toEqual(['enter-1']);
-
-      deferred1.resolve(undefined as any);
-      await flush();
-      expect(log).toEqual(['enter-1', 'exit-1', 'enter-2']);
-
-      deferred2.resolve(undefined as any);
       await Promise.all([done1, done2]);
-      expect(log).toEqual(['enter-1', 'exit-1', 'enter-2', 'exit-2']);
+      expect(log).toEqual([]);
+      expect(mergeCallCount).toBe(0);
     });
 
-    it('a blocked first merge completion prevents a second merge completion from entering merge execution', async () => {
+    it('a completed no-command merge worktree does not enter merge execution from onComplete', async () => {
       vi.useFakeTimers();
       try {
         const log: string[] = [];
@@ -8593,7 +8587,7 @@ console.log(JSON.stringify(out));
                 return makeTask({
                   id,
                   status: 'running',
-                  config: { isMergeNode: true },
+                  config: { isMergeNode: true, runnerKind: 'worktree' },
                   execution: { selectedAttemptId: 'attempt-1', generation: 1 },
                 });
               }
@@ -8601,7 +8595,7 @@ console.log(JSON.stringify(out));
                 return makeTask({
                   id,
                   status: 'running',
-                  config: { isMergeNode: true },
+                  config: { isMergeNode: true, runnerKind: 'worktree' },
                   execution: { selectedAttemptId: 'attempt-2', generation: 1 },
                 });
               }
@@ -8634,13 +8628,13 @@ console.log(JSON.stringify(out));
         const task1 = makeTask({
           id: 'merge-1',
           status: 'running',
-          config: { isMergeNode: true },
+          config: { isMergeNode: true, runnerKind: 'worktree' },
           execution: { selectedAttemptId: 'attempt-1', generation: 1 },
         });
         const task2 = makeTask({
           id: 'merge-2',
           status: 'running',
-          config: { isMergeNode: true },
+          config: { isMergeNode: true, runnerKind: 'worktree' },
           execution: { selectedAttemptId: 'attempt-2', generation: 1 },
         });
 
@@ -8665,26 +8659,113 @@ console.log(JSON.stringify(out));
         await flush();
         await vi.advanceTimersByTimeAsync(6 * 60 * 1000);
 
-        expect(log).toEqual(['enter-merge-1']);
-        expect(updateAttempt).not.toHaveBeenCalledWith(
-          'attempt-2',
-          expect.objectContaining({
-            lastHeartbeatAt: expect.any(Date),
-            leaseExpiresAt: expect.any(Date),
-          }),
-        );
+        expect(log).toEqual([]);
         expect(receivedHeartbeats).not.toContain('merge-2');
-        expect(onCompleteCb).not.toHaveBeenCalledWith(
+        expect(onCompleteCb).toHaveBeenCalledWith(
           'merge-2',
-          expect.anything(),
+          expect.objectContaining({ status: 'completed' }),
         );
 
         deferred1.resolve(undefined as any);
         await Promise.all([done1, done2]);
-        expect(log).toEqual(['enter-merge-1', 'exit-merge-1', 'enter-merge-2', 'exit-merge-2']);
+        expect(log).toEqual([]);
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it('starts an independent merge gate while another merge gate is still preparing review', async () => {
+      const log: string[] = [];
+      const deferred1 = createDeferred();
+      const completeCallbacks = new Map<string, (response: WorkResponse) => void>();
+
+      const mergeExecutor = {
+        type: 'merge',
+        start: vi.fn(async (request: any) => {
+          const handle = {
+            executionId: `exec-${request.actionId}`,
+            taskId: request.actionId,
+            workspacePath: `/tmp/mock-worktree-${request.actionId}`,
+            branch: `invoker/${request.actionId}`,
+          };
+          setImmediate(async () => {
+            log.push(`enter-${request.actionId}`);
+            if (request.actionId === '__merge__wf-a') {
+              await deferred1.promise;
+            }
+            log.push(`exit-${request.actionId}`);
+            completeCallbacks.get(request.actionId)?.({
+              requestId: request.requestId,
+              actionId: request.actionId,
+              attemptId: request.attemptId,
+              executionGeneration: request.executionGeneration,
+              status: 'completed',
+              outputs: { exitCode: 0 },
+            });
+          });
+          return handle;
+        }),
+        onComplete: vi.fn((handle: any, cb: any) => {
+          completeCallbacks.set(handle.taskId, cb);
+        }),
+        onOutput: vi.fn(),
+        onHeartbeat: vi.fn(),
+        kill: vi.fn(),
+      };
+
+      const runner = new TaskRunner({
+        orchestrator: {
+          getTask: (id: string) => makeTask({
+            id,
+            status: 'running',
+            config: { isMergeNode: true },
+            execution: {
+              selectedAttemptId: `attempt-${id}`,
+              generation: 1,
+            },
+          }),
+          handleWorkerResponse: vi.fn(() => []),
+          getAllTasks: () => [],
+        } as any,
+        persistence: { updateTask: vi.fn(), updateAttempt: vi.fn() } as any,
+        executorRegistry: {
+          getDefault: () => mergeExecutor,
+          get: () => mergeExecutor,
+          getAll: () => [mergeExecutor],
+        } as any,
+        cwd: '/tmp',
+      });
+
+      const task1 = makeTask({
+        id: '__merge__wf-a',
+        status: 'running',
+        config: { isMergeNode: true, runnerKind: 'merge' },
+        execution: { selectedAttemptId: 'attempt-__merge__wf-a', generation: 1 },
+      });
+      const task2 = makeTask({
+        id: '__merge__wf-b',
+        status: 'running',
+        config: { isMergeNode: true, runnerKind: 'merge' },
+        execution: { selectedAttemptId: 'attempt-__merge__wf-b', generation: 1 },
+      });
+
+      const done1 = runner.executeTask(task1);
+      const done2 = runner.executeTask(task2);
+      await flush();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(completeCallbacks.size).toBe(2);
+
+      await flush();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(log).toEqual([
+        'enter-__merge__wf-a',
+        'enter-__merge__wf-b',
+        'exit-__merge__wf-b',
+      ]);
+
+      deferred1.resolve(undefined as any);
+      await Promise.all([done1, done2]);
     });
 
     it('error in first onComplete handler does not block the second', async () => {
