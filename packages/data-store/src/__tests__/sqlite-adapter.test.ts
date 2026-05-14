@@ -319,12 +319,12 @@ describe('SQLiteAdapter', () => {
       ]);
     });
 
-    it('keeps running when failed tasks do not block all pending work', () => {
+    it('derives failed when failed tasks do not block all pending work', () => {
       adapter.saveWorkflow({ ...testWorkflow, status: 'running' });
       adapter.saveTask('wf-1', makeTask('alpha', { status: 'failed' }));
       adapter.saveTask('wf-1', makeTask('independent', { status: 'pending' }));
 
-      expect(adapter.loadWorkflow('wf-1')!.status).toBe('running');
+      expect(adapter.loadWorkflow('wf-1')!.status).toBe('failed');
     });
 
     it('derives listWorkflows with one aggregate rollup per workflow', () => {

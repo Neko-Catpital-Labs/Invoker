@@ -81,13 +81,13 @@ export function computeWorkflowStatusFromCounts(
   if (total === 0) return 'pending';
 
   if (counts.fixing_with_ai > 0) return 'fixing_with_ai';
+  if (counts.failed > 0) return 'failed';
   if (counts.running > 0) return 'running';
   if (counts.awaiting_approval > 0) return 'awaiting_approval';
   if (counts.review_ready > 0) return 'review_ready';
   if (counts.blocked > 0 || counts.needs_input > 0) return 'blocked';
   if (counts.pending === total) return 'pending';
   if (counts.pending > 0) return 'running';
-  if (counts.failed > 0) return 'failed';
   if (counts.completed > 0 && counts.completed + counts.stale === total) return 'completed';
   if (counts.stale === total) return 'stale';
 
