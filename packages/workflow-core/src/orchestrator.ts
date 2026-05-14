@@ -417,20 +417,21 @@ const DEFAULT_HEAVYWEIGHT_COMMAND_MATCHERS: CommandRoutingMatcher[] = [
 
 function validateRoutingDestinationAvailability(
   taskId: string,
-  command: string,
+  command: string | undefined,
   sourceLabel: string,
   poolId: string | undefined,
   availablePoolIds: Set<string>,
 ): void {
+  const commandLabel = command ? ` with command "${command}"` : '';
   if (availablePoolIds.size > 0 && (!poolId || !availablePoolIds.has(poolId))) {
     throw new Error(
-      `Task "${taskId}" with command "${command}" matched ${sourceLabel}, ` +
+      `Task "${taskId}"${commandLabel} matched ${sourceLabel}, ` +
       `but config poolId="${poolId}" is not defined in executionPools.`,
     );
   }
   if (availablePoolIds.size === 0) {
     throw new Error(
-      `Task "${taskId}" with command "${command}" matched ${sourceLabel}, ` +
+      `Task "${taskId}"${commandLabel} matched ${sourceLabel}, ` +
       'but no executionPools are configured.',
     );
   }
@@ -539,10 +540,23 @@ function resolveExecutorRouting(
   taskId: string,
   command: string | undefined,
   planPoolId: string | undefined,
+  defaultPoolId: string | undefined,
   rules: ExecutorRoutingRule[],
   availablePoolIds: Set<string>,
 ): { poolId?: string } {
   if (!command || rules.length === 0) {
+    if (planPoolId === undefined && defaultPoolId !== undefined) {
+      validateRoutingDestinationAvailability(
+        taskId,
+        command,
+        'defaultPoolId',
+        defaultPoolId,
+        availablePoolIds,
+      );
+      return {
+        poolId: defaultPoolId,
+      };
+    }
     return {
       poolId: planPoolId,
     };
@@ -562,6 +576,17 @@ function resolveExecutorRouting(
       availablePoolIds,
     );
     effectivePoolId = routed?.poolId ?? effectivePoolId;
+  }
+
+  if (effectivePoolId === undefined && defaultPoolId !== undefined) {
+    validateRoutingDestinationAvailability(
+      taskId,
+      command,
+      'defaultPoolId',
+      defaultPoolId,
+      availablePoolIds,
+    );
+    effectivePoolId = defaultPoolId;
   }
 
   const enforcementRules = rules.filter((rule) => (rule.strategy ?? 'enforce') === 'enforce');
@@ -635,6 +660,8 @@ export interface OrchestratorConfig {
    * Internally translated into executorRoutingRules with strategy="route".
    */
   heavyweightCommandRouting?: HeavyweightCommandRoutingPolicy;
+  /** Default execution pool ID for tasks that do not otherwise select a pool. */
+  defaultPoolId?: string;
   /** Valid execution pool IDs available at plan submission time. */
   availablePoolIds?: string[];
   /**
@@ -661,6 +688,7 @@ export class Orchestrator {
   private readonly taskRepository: TaskRepository;
   private readonly maxConcurrency: number;
   private readonly executorRoutingRules: ExecutorRoutingRule[];
+  private readonly defaultPoolId?: string;
   private readonly availablePoolIds: Set<string>;
   private readonly defaultAutoFixRetries: number;
   private readonly deferRunningUntilLaunch: boolean;
@@ -726,6 +754,7 @@ export class Orchestrator {
       ...(config.executorRoutingRules ?? []),
       ...buildHeavyweightRoutingRules('config', config.heavyweightCommandRouting),
     ];
+    this.defaultPoolId = config.defaultPoolId;
     this.availablePoolIds = new Set(config.availablePoolIds ?? []);
     this.defaultAutoFixRetries = Math.min(Math.max(0, Math.floor(config.defaultAutoFixRetries ?? 0)), 10);
     this.deferRunningUntilLaunch = config.deferRunningUntilLaunch ?? false;
@@ -1258,6 +1287,7 @@ export class Orchestrator {
         taskDef.id,
         taskDef.command,
         taskDef.poolId,
+        this.defaultPoolId,
         this.executorRoutingRules,
         this.availablePoolIds,
       );
