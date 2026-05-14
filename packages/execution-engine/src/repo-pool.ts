@@ -59,6 +59,7 @@ export class RepoPool {
   private cloneLocks = new Map<string, Promise<string>>();
   /** Chain of operations per repo to serialize git operations. */
   private repoChains = new Map<string, Promise<unknown>>();
+  private inFlightRebaseRefreshes = new Map<string, Promise<string>>();
 
   constructor(config: RepoPoolConfig) {
     this.cacheDir = config.cacheDir;
@@ -83,6 +84,16 @@ export class RepoPool {
    * Force-fetch mirror and sync origin/<baseBranch> (rebase-and-retry). Ignores remoteFetchForPool.
    */
   async refreshMirrorForRebase(repoUrl: string, baseBranch: string, timing?: RepoPoolTiming): Promise<string> {
+    const refreshKey = `${repoUrl}\0${baseBranch}`;
+    const inFlight = this.inFlightRebaseRefreshes.get(refreshKey);
+    if (inFlight) {
+      timing?.mark('RepoPool.refreshMirrorForRebase.coalesced', 'completed', {
+        repoUrl,
+        baseBranch,
+      });
+      return inFlight;
+    }
+
     const prev = this.repoChains.get(repoUrl) ?? Promise.resolve();
     const queuedAtMs = Date.now();
     const next = prev.then(() => {
@@ -94,7 +105,14 @@ export class RepoPool {
       return this.doRefreshMirrorForRebase(repoUrl, baseBranch, timing);
     });
     this.repoChains.set(repoUrl, next.catch(() => {}));
-    return next;
+    let shared!: Promise<string>;
+    shared = next.finally(() => {
+      if (this.inFlightRebaseRefreshes.get(refreshKey) === shared) {
+        this.inFlightRebaseRefreshes.delete(refreshKey);
+      }
+    });
+    this.inFlightRebaseRefreshes.set(refreshKey, shared);
+    return shared;
   }
 
   private async doRefreshMirrorForRebase(repoUrl: string, baseBranch: string, timing?: RepoPoolTiming): Promise<string> {
