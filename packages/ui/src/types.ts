@@ -161,6 +161,8 @@ export interface WorkflowMeta {
   repoUrl?: string;
   intermediateRepoUrl?: string;
   reviewProvider?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export type WorkflowStatus =
