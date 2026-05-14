@@ -21,7 +21,7 @@ describe('workflow rollup', () => {
     { name: 'review ready', statuses: ['completed', 'review_ready'], expected: 'review_ready' },
     { name: 'blocked task', statuses: ['completed', 'blocked'], expected: 'blocked' },
     { name: 'needs input task', statuses: ['completed', 'needs_input'], expected: 'blocked' },
-    { name: 'failed with unrelated pending work by counts only', statuses: ['failed', 'pending'], expected: 'running' },
+    { name: 'failed with unrelated pending work by counts only', statuses: ['failed', 'pending'], expected: 'failed' },
     { name: 'terminal failed', statuses: ['failed', 'completed'], expected: 'failed' },
     { name: 'completed workflow', statuses: ['completed', 'completed'], expected: 'completed' },
     { name: 'completed with stale prior task', statuses: ['completed', 'stale'], expected: 'completed' },
@@ -44,12 +44,23 @@ describe('workflow rollup', () => {
     expect(rollup.status).toBe('failed');
   });
 
-  it('keeps running when a failed task does not block all remaining pending work', () => {
+  it('fails when a failed task does not block all remaining pending work', () => {
     const rollup = computeWorkflowRollupFromSummaries([
       task('alpha', 'failed'),
       task('independent', 'pending'),
     ]);
 
-    expect(rollup.status).toBe('running');
+    expect(rollup.status).toBe('failed');
+  });
+
+  it('fails a diamond workflow when one ready branch failed and another is still pending', () => {
+    const rollup = computeWorkflowRollupFromSummaries([
+      task('alpha', 'completed'),
+      task('left', 'failed', ['alpha']),
+      task('right', 'pending', ['alpha']),
+      task('merge', 'pending', ['left', 'right']),
+    ]);
+
+    expect(rollup.status).toBe('failed');
   });
 });
