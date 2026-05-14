@@ -50,7 +50,6 @@ export function WorkflowNode({
       )}
 
       <div className="text-[13px] font-semibold text-gray-100 truncate">{workflow.name || workflow.id}</div>
-      <div className="mt-1 text-[11px] text-gray-400 truncate">{workflow.id}</div>
       <div className={`mt-2 text-[10px] uppercase tracking-wide ${visual.textClass}`}>{statusLabel(workflow.status)}</div>
     </div>
   );

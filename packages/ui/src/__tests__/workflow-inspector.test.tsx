@@ -23,6 +23,10 @@ const workflow: WorkflowMeta = {
   baseBranch: 'main',
 };
 
+function workflowTaskMap(...workflowTasks: TaskState[]): Map<string, TaskState> {
+  return new Map(workflowTasks.map((workflowTask) => [workflowTask.id, workflowTask]));
+}
+
 describe('WorkflowInspector', () => {
   it('keeps advanced metadata collapsed by default', () => {
     render(
@@ -56,6 +60,124 @@ describe('WorkflowInspector', () => {
 
     const link = screen.getByRole('link', { name: /github\.com/i });
     expect(link).toHaveAttribute('href', 'https://github.com/org/repo/pull/12');
+  });
+
+  it('keeps the status section before task controls when a task is selected', () => {
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask()}
+        executionAgents={['codex', 'claude']}
+        collapsed={false}
+        advancedExpanded={false}
+        onEditAgent={vi.fn()}
+        onEditPrompt={vi.fn()}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    const statusLabel = screen.getByText('Task Status');
+    const agentLabel = screen.getByText('AI Agent');
+    const promptInput = screen.getByTestId('workflow-inspector-prompt-input');
+
+    expect(statusLabel.compareDocumentPosition(agentLabel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(statusLabel.compareDocumentPosition(promptInput) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('shows workflow status at the top when only a workflow is selected', () => {
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'running' }}
+        task={null}
+        executionAgents={['codex', 'claude']}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    const statusLabel = screen.getByText('Workflow Status');
+    const pullRequestLabel = screen.getByText('Pull Request');
+
+    expect(screen.getByTestId('workflow-inspector-status-label')).toHaveTextContent('running');
+    expect(statusLabel.compareDocumentPosition(pullRequestLabel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('uses the selected workflow merge gate PR URL when only a workflow is selected', () => {
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={null}
+        workflowTasks={workflowTaskMap(
+          makeTask({
+            id: 'task-with-pr',
+            execution: { reviewUrl: 'https://github.com/org/repo/pull/leaf' },
+          }),
+          makeTask({
+            id: '__merge__wf-1',
+            config: { workflowId: 'wf-1', prompt: 'Merge', isMergeNode: true },
+            execution: { reviewUrl: 'https://github.com/org/repo/pull/merge' },
+          }),
+        )}
+        executionAgents={['codex', 'claude']}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    const link = screen.getByRole('link', { name: /pull\/merge/i });
+    expect(link).toHaveAttribute('href', 'https://github.com/org/repo/pull/merge');
+  });
+
+  it('shows no PR linked for workflow selection when no workflow task has a PR URL', () => {
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={null}
+        workflowTasks={workflowTaskMap(
+          makeTask({
+            id: '__merge__wf-1',
+            config: { workflowId: 'wf-1', prompt: 'Merge', isMergeNode: true },
+            execution: {},
+          }),
+        )}
+        executionAgents={['codex', 'claude']}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('No PR linked')).toBeInTheDocument();
+  });
+
+  it('uses the selected task PR URL before the workflow merge gate PR URL', () => {
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ execution: { reviewUrl: 'https://github.com/org/repo/pull/task' } })}
+        workflowTasks={workflowTaskMap(
+          makeTask({
+            id: '__merge__wf-1',
+            config: { workflowId: 'wf-1', prompt: 'Merge', isMergeNode: true },
+            execution: { reviewUrl: 'https://github.com/org/repo/pull/merge' },
+          }),
+        )}
+        executionAgents={['codex', 'claude']}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    const link = screen.getByRole('link', { name: /pull\/task/i });
+    expect(link).toHaveAttribute('href', 'https://github.com/org/repo/pull/task');
   });
 
   it('can be collapsed and restored', () => {

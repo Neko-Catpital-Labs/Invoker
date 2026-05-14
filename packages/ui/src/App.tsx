@@ -1101,6 +1101,7 @@ export function App() {
             <WorkflowInspector
               workflow={selectedWorkflow}
               task={selectedTask}
+              workflowTasks={miniDagTasks}
               remoteTargets={remoteTargets}
               executionAgents={executionAgents}
               collapsed={inspectorCollapsed}

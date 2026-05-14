@@ -71,4 +71,27 @@ describe('WorkflowGraph', () => {
 
     expect(screen.getAllByText('wf-a').length).toBeGreaterThan(0);
   });
+
+  it('does not render the workflow id as secondary chip text', () => {
+    const workflows = new Map([
+      ['branch-like-id', { id: 'branch-like-id', name: 'Workflow A', status: 'running' } satisfies WorkflowMeta],
+    ]);
+    const tasks = new Map([
+      ['t1', task('t1', 'branch-like-id')],
+    ]);
+
+    render(
+      <WorkflowGraph
+        tasks={tasks}
+        workflows={workflows}
+        selectedWorkflowId={null}
+        statusFilters={new Set()}
+        onSelectWorkflow={() => {}}
+        onWorkflowContextMenu={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('Workflow A')).toBeInTheDocument();
+    expect(screen.queryByText('branch-like-id')).not.toBeInTheDocument();
+  });
 });

@@ -6,6 +6,7 @@ import { getEffectiveVisualStatus, getStatusColor } from '../lib/colors.js';
 interface WorkflowInspectorProps {
   workflow: WorkflowMeta | null;
   task: TaskState | null;
+  workflowTasks?: ReadonlyMap<string, TaskState>;
   remoteTargets?: string[];
   executionAgents: string[];
   collapsed: boolean;
@@ -62,6 +63,7 @@ function primaryIssueText(issue: WorkflowRollupTaskIssue): string {
 export function WorkflowInspector({
   workflow,
   task,
+  workflowTasks,
   remoteTargets,
   executionAgents,
   collapsed,
@@ -119,7 +121,10 @@ export function WorkflowInspector({
   const nonZeroCounts = rollup
     ? Object.entries(rollup.countsByStatus).filter(([, count]) => count > 0)
     : [];
-  const reviewUrl = task?.execution.reviewUrl;
+  const workflowTaskList = workflowTasks ? [...workflowTasks.values()] : [];
+  const mergeGateReviewUrl = workflowTaskList.find((workflowTask) => workflowTask.config.isMergeNode)?.execution.reviewUrl;
+  const fallbackWorkflowReviewUrl = workflowTaskList.find((workflowTask) => workflowTask.execution.reviewUrl)?.execution.reviewUrl;
+  const reviewUrl = task ? task.execution.reviewUrl : mergeGateReviewUrl ?? fallbackWorkflowReviewUrl;
   const executorSelectValue = effectiveExecutorSelectValue(task);
   const canEditExecutor = Boolean(task && onEditType && !task.config.isMergeNode);
   const canEditPrompt = Boolean(task && ((task.config.prompt !== undefined && onEditPrompt) || (task.config.command !== undefined && onEditCommand)));
@@ -151,6 +156,70 @@ export function WorkflowInspector({
       </div>
 
       <div className="flex-1 overflow-auto p-3 space-y-3 text-sm">
+        <section className={`rounded border p-3 ${statusBorderClass} bg-gray-800/70`}>
+          <div className="text-[11px] uppercase tracking-wide text-gray-400">
+            {task ? 'Task Status' : 'Workflow Status'}
+          </div>
+          <div
+            className={`mt-1 text-xs ${statusTextClass}`}
+            data-testid="workflow-inspector-status-label"
+          >
+            {statusLabel}
+          </div>
+          {rollup && !task && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {nonZeroCounts.map(([status, count]) => (
+                <span
+                  key={status}
+                  className={`rounded border px-1.5 py-0.5 text-[10px] uppercase ${getStatusColor(status).border} ${getStatusColor(status).bg} ${getStatusColor(status).text}`}
+                >
+                  {status.replaceAll('_', ' ')} {count}
+                </span>
+              ))}
+            </div>
+          )}
+          {task?.execution.error && (
+            <p className="mt-2 text-xs text-red-300 break-words">{task.execution.error}</p>
+          )}
+          {!task && rollup?.failedTasks.length ? (
+            <div className="mt-3 space-y-2">
+              <div className={`text-[11px] uppercase tracking-wide ${failedStatusColors.text}`}>Failed Tasks</div>
+              {rollup.failedTasks.map((failedTask) => (
+                <div key={failedTask.taskId} className={`rounded border p-2 ${failedStatusColors.border} ${failedStatusColors.bg}`}>
+                  <div className={`truncate text-xs font-medium ${failedStatusColors.text}`}>{failedTask.description}</div>
+                  <div className={`mt-1 break-words text-[11px] ${failedStatusColors.text}`}>{primaryIssueText(failedTask)}</div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {!task && rollup?.fixingTasks.length ? (
+            <div className="mt-3 space-y-2">
+              <div className={`text-[11px] uppercase tracking-wide ${fixingStatusColors.text}`}>Fixing with AI</div>
+              {rollup.fixingTasks.map((fixingTask) => (
+                <div key={fixingTask.taskId} className={`rounded border p-2 ${fixingStatusColors.border} ${fixingStatusColors.bg}`}>
+                  <div className={`truncate text-xs font-medium ${fixingStatusColors.text}`}>{fixingTask.description}</div>
+                  <div className={`mt-1 text-[11px] ${fixingStatusColors.text}`}>
+                    {fixingTask.agentName ?? fixingTask.agentSessionId ?? 'Agent session pending'}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {!task && rollup?.waitingTasks.length ? (
+            <div className="mt-3 space-y-2">
+              <div className="text-[11px] uppercase tracking-wide text-gray-300">Waiting Tasks</div>
+              {rollup.waitingTasks.map((waitingTask) => (
+                <div key={waitingTask.taskId} className={`rounded border p-2 ${getStatusColor(waitingTask.status).border} ${getStatusColor(waitingTask.status).bg}`}>
+                  <div className={`truncate text-xs font-medium ${getStatusColor(waitingTask.status).text}`}>{waitingTask.description}</div>
+                  <div className={`mt-1 break-words text-[11px] ${getStatusColor(waitingTask.status).text}`}>
+                    {waitingTask.status.replaceAll('_', ' ')} · {primaryIssueText(waitingTask)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </section>
+
         {task && (
           <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
             <div className="text-[11px] uppercase tracking-wide text-gray-400">AI Agent</div>
@@ -248,70 +317,6 @@ export function WorkflowInspector({
             )}
           </section>
         )}
-
-        <section className={`rounded border p-3 ${statusBorderClass} bg-gray-800/70`}>
-          <div className="text-[11px] uppercase tracking-wide text-gray-400">
-            {task ? 'Task Status' : 'Workflow Status'}
-          </div>
-          <div
-            className={`mt-1 text-xs ${statusTextClass}`}
-            data-testid="workflow-inspector-status-label"
-          >
-            {statusLabel}
-          </div>
-          {rollup && !task && (
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {nonZeroCounts.map(([status, count]) => (
-                <span
-                  key={status}
-                  className={`rounded border px-1.5 py-0.5 text-[10px] uppercase ${getStatusColor(status).border} ${getStatusColor(status).bg} ${getStatusColor(status).text}`}
-                >
-                  {status.replaceAll('_', ' ')} {count}
-                </span>
-              ))}
-            </div>
-          )}
-          {task?.execution.error && (
-            <p className="mt-2 text-xs text-red-300 break-words">{task.execution.error}</p>
-          )}
-          {!task && rollup?.failedTasks.length ? (
-            <div className="mt-3 space-y-2">
-              <div className={`text-[11px] uppercase tracking-wide ${failedStatusColors.text}`}>Failed Tasks</div>
-              {rollup.failedTasks.map((failedTask) => (
-                <div key={failedTask.taskId} className={`rounded border p-2 ${failedStatusColors.border} ${failedStatusColors.bg}`}>
-                  <div className={`truncate text-xs font-medium ${failedStatusColors.text}`}>{failedTask.description}</div>
-                  <div className={`mt-1 break-words text-[11px] ${failedStatusColors.text}`}>{primaryIssueText(failedTask)}</div>
-                </div>
-              ))}
-            </div>
-          ) : null}
-          {!task && rollup?.fixingTasks.length ? (
-            <div className="mt-3 space-y-2">
-              <div className={`text-[11px] uppercase tracking-wide ${fixingStatusColors.text}`}>Fixing with AI</div>
-              {rollup.fixingTasks.map((fixingTask) => (
-                <div key={fixingTask.taskId} className={`rounded border p-2 ${fixingStatusColors.border} ${fixingStatusColors.bg}`}>
-                  <div className={`truncate text-xs font-medium ${fixingStatusColors.text}`}>{fixingTask.description}</div>
-                  <div className={`mt-1 text-[11px] ${fixingStatusColors.text}`}>
-                    {fixingTask.agentName ?? fixingTask.agentSessionId ?? 'Agent session pending'}
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : null}
-          {!task && rollup?.waitingTasks.length ? (
-            <div className="mt-3 space-y-2">
-              <div className="text-[11px] uppercase tracking-wide text-gray-300">Waiting Tasks</div>
-              {rollup.waitingTasks.map((waitingTask) => (
-                <div key={waitingTask.taskId} className={`rounded border p-2 ${getStatusColor(waitingTask.status).border} ${getStatusColor(waitingTask.status).bg}`}>
-                  <div className={`truncate text-xs font-medium ${getStatusColor(waitingTask.status).text}`}>{waitingTask.description}</div>
-                  <div className={`mt-1 break-words text-[11px] ${getStatusColor(waitingTask.status).text}`}>
-                    {waitingTask.status.replaceAll('_', ' ')} · {primaryIssueText(waitingTask)}
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : null}
-        </section>
 
         <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
           <div className="text-[11px] uppercase tracking-wide text-gray-400">Pull Request</div>
