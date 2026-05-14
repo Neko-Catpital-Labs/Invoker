@@ -141,6 +141,15 @@ export class RepoPool {
    * Remove Invoker-managed branches (experiment/*, invoker/*) from the mirror and linked worktrees.
    */
   async removeManagedBranchesInMirror(repoUrl: string, branches: string[], timing?: RepoPoolTiming): Promise<void> {
+    if (!isWorkspaceCleanupEnabled()) {
+      timing?.mark('RepoPool.removeManagedBranchesInMirror', 'completed', {
+        enabled: false,
+        branchCount: branches.length,
+        skipped: true,
+        reason: 'workspace-cleanup-disabled',
+      });
+      return;
+    }
     const prev = this.repoChains.get(repoUrl) ?? Promise.resolve();
     const queuedAtMs = Date.now();
     const next = prev.then(() => {
@@ -156,17 +165,6 @@ export class RepoPool {
   }
 
   private async doRemoveManagedBranchesInMirror(repoUrl: string, branches: string[], timing?: RepoPoolTiming): Promise<void> {
-    // Gated: with attemptId in branch hash, leftover refs cannot collide with
-    // future attempts, so deletion is unnecessary. Set
-    // INVOKER_ENABLE_WORKSPACE_CLEANUP=1 to restore the rebase-and-retry
-    // branch sweep.
-    if (!isWorkspaceCleanupEnabled()) {
-      timing?.mark('RepoPool.doRemoveManagedBranchesInMirror', 'completed', {
-        enabled: false,
-        branchCount: branches.length,
-      });
-      return;
-    }
     const dir = this.cloneDir(repoUrl);
     if (!existsSync(dir) || !this.worktreeBaseDir) {
       timing?.mark('RepoPool.doRemoveManagedBranchesInMirror', 'completed', {

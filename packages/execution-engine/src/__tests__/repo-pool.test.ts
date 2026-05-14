@@ -418,6 +418,8 @@ describe('RepoPool', () => {
   });
 
   describe('repoChains serialization', () => {
+    let prevWorkspaceCleanup: string | undefined;
+
     function createDeferred<T>() {
       let resolve!: (value: T) => void;
       let reject!: (reason?: any) => void;
@@ -432,7 +434,19 @@ describe('RepoPool', () => {
       for (let i = 0; i < 10; i++) await Promise.resolve();
     }
 
-    afterEach(() => { vi.restoreAllMocks(); });
+    beforeEach(() => {
+      prevWorkspaceCleanup = process.env.INVOKER_ENABLE_WORKSPACE_CLEANUP;
+      process.env.INVOKER_ENABLE_WORKSPACE_CLEANUP = '1';
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+      if (prevWorkspaceCleanup === undefined) {
+        delete process.env.INVOKER_ENABLE_WORKSPACE_CLEANUP;
+      } else {
+        process.env.INVOKER_ENABLE_WORKSPACE_CLEANUP = prevWorkspaceCleanup;
+      }
+    });
 
     it('serializes concurrent refreshMirrorForRebase calls on same repo', async () => {
       const log: string[] = [];
@@ -490,6 +504,25 @@ describe('RepoPool', () => {
       deferred2.resolve();
       await Promise.all([p1, p2]);
       expect(log).toEqual(['enter-1', 'exit-1', 'enter-2', 'exit-2']);
+    });
+
+    it('skips removeManagedBranchesInMirror chain enqueue when cleanup is disabled', async () => {
+      delete process.env.INVOKER_ENABLE_WORKSPACE_CLEANUP;
+      const removeSpy = vi.spyOn(pool as any, 'doRemoveManagedBranchesInMirror');
+      const timing = { mark: vi.fn(), span: vi.fn() };
+
+      await pool.removeManagedBranchesInMirror('repo-a', ['b1'], timing as any);
+
+      expect(removeSpy).not.toHaveBeenCalled();
+      expect(timing.mark).toHaveBeenCalledWith(
+        'RepoPool.removeManagedBranchesInMirror',
+        'completed',
+        expect.objectContaining({
+          enabled: false,
+          skipped: true,
+          reason: 'workspace-cleanup-disabled',
+        }),
+      );
     });
 
     it('serializes cross-method calls (refreshMirror + acquireWorktree) on same repo', async () => {
