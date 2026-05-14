@@ -50,6 +50,7 @@ import {
 import {
   dispatchStartedTasksWithGlobalTopup,
   executeGlobalTopup,
+  isDispatchableLaunch,
 } from './global-topup.js';
 
 // ── Result types ─────────────────────────────────────────────
@@ -298,7 +299,7 @@ export class WorkflowMutationFacade {
       orchestrator: this.deps.orchestrator,
       logger: this.deps.logger,
     });
-    const runnable = result.started.filter((t) => t.status === 'running');
+    const runnable = result.started.filter(isDispatchableLaunch);
     await this.deps.taskExecutor.executeTasks(runnable);
     const topup = await this.topupOnly('facade.fork-workflow');
     return {
