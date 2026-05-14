@@ -17,7 +17,7 @@ permissions:
 
 env:
   CI: true
-  NODE_VERSION: '22'
+  NODE_VERSION: '26'
 
 jobs:
   build-artifacts:
@@ -38,6 +38,9 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -85,6 +88,9 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -129,6 +135,9 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -152,7 +161,7 @@ jobs:
           git update-ref refs/remotes/origin/main refs/remotes/origin/master || true
 
       - name: Install Playwright system dependencies
-        run: pnpm --filter @invoker/app exec playwright install --with-deps
+        run: pnpm --filter @invoker/app exec playwright install-deps chromium
 
       - name: Run suite group
         run: ${{ matrix.command }}
@@ -178,6 +187,9 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -201,7 +213,7 @@ jobs:
           git update-ref refs/remotes/origin/main refs/remotes/origin/master || true
 
       - name: Install Playwright system dependencies
-        run: pnpm --filter @invoker/app exec playwright install --with-deps
+        run: pnpm --filter @invoker/app exec playwright install-deps chromium
 
       - name: Run fix-intent repro bundle
         run: bash scripts/test-suites/required/23-fix-intent-repros.sh
@@ -239,6 +251,12 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
+
+      - name: Install unzip
+        run: apt-get update && apt-get install -y unzip
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -297,6 +315,12 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
+
+      - name: Install unzip
+        run: apt-get update && apt-get install -y unzip
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -364,6 +388,12 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
+
+      - name: Install unzip
+        run: apt-get update && apt-get install -y unzip
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -433,6 +463,9 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -469,6 +502,9 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

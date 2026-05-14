@@ -25,15 +25,15 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 cat > "$TMP/Dockerfile" <<'DOCKERFILE'
-FROM node:22-slim
+FROM node:26-slim
 
 # Core build/runtime tools used by Claude/Codex agents and most projects.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      curl jq git python3 make g++ ca-certificates openssh-client \
+      curl jq git python3 make g++ ca-certificates openssh-client unzip \
     && rm -rf /var/lib/apt/lists/*
 
-# pnpm via corepack
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# pnpm for downstream project installs. Node 26 slim images do not ship corepack.
+RUN npm install -g pnpm@10.31.0
 
 # Claude CLI
 RUN npm install -g @anthropic-ai/claude-code

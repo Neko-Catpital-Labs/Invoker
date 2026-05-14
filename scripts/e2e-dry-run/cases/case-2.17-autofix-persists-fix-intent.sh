@@ -14,12 +14,12 @@ TMP_HOME="$(mktemp -d "${TMPDIR:-/tmp}/invoker-e2e-home.XXXXXX")"
 export HOME="$TMP_HOME"
 mkdir -p "$HOME/.invoker"
 git config --global --add safe.directory "$REPO_ROOT"
-export INVOKER_REPO_CONFIG_PATH="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-config.XXXXXX.json")"
+export INVOKER_REPO_CONFIG_PATH="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-config.XXXXXX")"
 printf '{\n  "autoFixRetries": 1\n}\n' > "$INVOKER_REPO_CONFIG_PATH"
 
-OWNER_LOG="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.17-owner.XXXXXX.log")"
-SUBMIT_LOG="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.17-submit.XXXXXX.log")"
-PLAN_PATH="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.17-plan.XXXXXX.yaml")"
+OWNER_LOG="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.17-owner.XXXXXX")"
+SUBMIT_LOG="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.17-submit.XXXXXX")"
+PLAN_PATH="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.17-plan.XXXXXX")"
 DB_PATH="$HOME/.invoker/invoker.db"
 OWNER_PID=""
 
@@ -40,15 +40,21 @@ OWNER_PID=$!
 
 echo "==> case 2.17: wait for owner mutation readiness"
 READY=0
-for i in $(seq 1 240); do
-  if [ -S "$HOME/.invoker/ipc-transport.sock" ]; then
+for i in $(seq 1 120); do
+  if ! kill -0 "$OWNER_PID" 2>/dev/null; then
+    echo "FAIL case 2.17: owner exited before mutation readiness"
+    cat "$OWNER_LOG"
+    exit 1
+  fi
+  if [ -S "$HOME/.invoker/ipc-transport.sock" ] \
+    && ./run.sh --headless query queue --output json >/dev/null 2>&1; then
     READY=1
     break
   fi
   sleep 1
 done
 if [ "$READY" -ne 1 ]; then
-  echo "FAIL case 2.17: owner never exposed ipc-transport socket"
+  echo "FAIL case 2.17: owner never reported mutation readiness"
   cat "$OWNER_LOG"
   exit 1
 fi
@@ -67,7 +73,7 @@ tasks:
 EOF
 
 echo "==> case 2.17: submit failing workflow"
-./submit-plan.sh "$PLAN_PATH" 2>&1 | tee "$SUBMIT_LOG" || true
+./run.sh --headless run "$PLAN_PATH" --no-track 2>&1 | tee "$SUBMIT_LOG" || true
 WF_ID="$(python3 - <<'PY' "$SUBMIT_LOG"
 import re, sys
 text = open(sys.argv[1], encoding='utf-8', errors='ignore').read()
