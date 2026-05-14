@@ -38,5 +38,5 @@ exec docker run --rm \
   -e REPRO_MAX_DB_MB \
   -e REPRO_SQLITE_HARD_HEAP_LIMIT_MB \
   -e REPRO_TIMEOUT_SEC \
-  node:22 \
+  node:26 \
   node --max-old-space-size="${NODE_HEAP_MB}" "$SCRIPT_PATH" --mode=sandbox

@@ -11,7 +11,7 @@ permissions:
 
 env:
   CI: true
-  NODE_VERSION: '22'
+  NODE_VERSION: '26'
 
 jobs:
   build-release:
@@ -50,6 +50,9 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

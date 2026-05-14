@@ -28,7 +28,7 @@ TAG=my/agent-base:dev bash scripts/build-agent-base-image.sh
 
 The base image contains:
 
-- `node:22-slim` + `pnpm` (via corepack)
+- `node:26-slim` + `pnpm` (via corepack)
 - `@anthropic-ai/claude-code` (Claude CLI)
 - `git`, `curl`, `jq`, `python3`, `make`, `g++`, `openssh-client`
 - Non-root `invoker` user with `HOME=/home/invoker` (so `~/.cache` writes
