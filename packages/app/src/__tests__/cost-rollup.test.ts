@@ -375,6 +375,27 @@ describe('buildAttributionContext', () => {
     });
   });
 
+  it('uses the caller-provided persisted session identity when supplied', () => {
+    const task: CostTaskInfo = {
+      id: 'wf-1/task-a',
+      workflowId: 'wf-1',
+      runnerKind: 'worktree',
+      agentSessionId: 'sess-current',
+      lastAgentSessionId: 'sess-old',
+      agentName: 'codex',
+    };
+    const ctx = buildAttributionContext(task, 'attempt-persisted', 'sess-persisted');
+    expect(ctx).toEqual({
+      workflowId: 'wf-1',
+      taskId: 'wf-1/task-a',
+      attemptId: 'attempt-persisted',
+      runnerKind: 'worktree',
+      agentSessionId: 'sess-persisted',
+      agentName: 'codex',
+      source: 'openai',
+    });
+  });
+
   it('returns undefined when no session ID is available', () => {
     const task: CostTaskInfo = {
       id: 'wf-1/task-a',
