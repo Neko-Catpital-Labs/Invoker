@@ -16,6 +16,7 @@ import type { Orchestrator, TaskState, ExperimentVariant, RunnerKind } from '@in
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { WorkRequest, WorkResponse, ActionType, Logger } from '@invoker/contracts';
 import type { Executor, ExecutorHandle } from './executor.js';
+import type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
 import { BaseExecutor } from './base-executor.js';
 import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
 import { ResourceLimitError, type RepoPoolTiming } from './repo-pool.js';
@@ -25,6 +26,7 @@ import type { MergeGateProvider } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
 import { DockerExecutor } from './docker-executor.js';
 import { WorktreeExecutor } from './worktree-executor.js';
+import { MergeGateExecutor } from './merge-gate-executor.js';
 import { isInvokerManagedPoolBranch } from './plan-base-remote.js';
 import { formatLifecycleTag, extractAttemptSuffix } from './branch-utils.js';
 import { SshExecutor } from './ssh-executor.js';
@@ -52,6 +54,8 @@ import {
   validateCanonicalPrBody,
   type PrAuthoringContext,
 } from './pr-authoring.js';
+
+export type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
 
 /** Keeps `lastHeartbeatAt` fresh while `executor.start()` is awaited (SSH remote setup/provision can take minutes). Matches BaseExecutor default heartbeat cadence. */
 const PRE_START_HEARTBEAT_INTERVAL_MS = 30_000;
@@ -91,17 +95,6 @@ const NOOP_LOGGER: Logger = {
   error: () => {},
   child: () => NOOP_LOGGER,
 };
-
-// ── Callbacks ─────────────────────────────────────────────
-
-export interface TaskRunnerCallbacks {
-  onOutput?: (taskId: string, data: string) => void;
-  onLaunchStart?: (taskId: string, executor: Executor) => void;
-  onLaunchFailed?: (taskId: string, error: Error, executor: Executor) => void;
-  onSpawned?: (taskId: string, handle: ExecutorHandle, executor: Executor) => void;
-  onComplete?: (taskId: string, response: WorkResponse) => void;
-  onHeartbeat?: (taskId: string) => void;
-}
 
 // ── Config ────────────────────────────────────────────────
 
@@ -750,15 +743,6 @@ export class TaskRunner {
             traceExecution(
               `${RESTART_TO_BRANCH_TRACE} resolvePromise | task.config.isMergeNode = ${task.config.isMergeNode}`,
             );
-            // Merge nodes: run consolidation/finish logic after executor completes
-            if (task.config.isMergeNode) {
-              traceExecution(
-                `${RESTART_TO_BRANCH_TRACE} executor.onComplete taskId=${task.id} isMergeNode → executeMergeNode (consolidate / gate)`,
-              );
-              await this.executeMergeNode(task);
-              return;
-            }
-
             this.callbacks.onComplete?.(task.id, normalizedResponse);
 
             const newlyStarted = this.orchestrator.handleWorkerResponse(normalizedResponse) ?? [];
@@ -809,10 +793,10 @@ export class TaskRunner {
   /**
    * Select the executor to use for a given task.
    * Uses task.runnerKind to look up in the registry; falls back to default.
-   * Merge gate tasks use the default (worktree) executor when selected explicitly.
+   * Merge gate tasks use the dedicated merge executor.
    */
   selectExecutor(task: TaskState): Executor {
-    let effectiveType = task.config.runnerKind;
+    let effectiveType = task.config.runnerKind ?? (task.config.isMergeNode ? 'merge' : undefined);
     let selectedPoolMemberId: string | undefined;
 
     if (task.config.poolId) {
@@ -835,7 +819,7 @@ export class TaskRunner {
 
     if (effectiveType) {
       const registered = this.executorRegistry.get(effectiveType);
-      if (registered) {
+      if (registered && (effectiveType !== 'merge' || registered.type === 'merge')) {
         traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=${effectiveType} → ${registered.type}`);
         return registered;
       }
@@ -864,6 +848,13 @@ export class TaskRunner {
         this.executorRegistry.register('worktree', worktree);
         traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=worktree → worktree (lazy registered)`);
         return worktree;
+      }
+
+      if (effectiveType === 'merge') {
+        const merge = new MergeGateExecutor(this);
+        this.executorRegistry.register?.('merge', merge);
+        traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=merge → merge (lazy registered)`);
+        return merge;
       }
 
       // Lazy registration for SSH — resolve poolMemberId from config and cache by targetId.
@@ -934,12 +925,6 @@ export class TaskRunner {
       }
     }
 
-    if (task.config.isMergeNode) {
-      const mergeGateExecutor = this.executorRegistry.getDefault();
-      traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} isMergeNode=true → ${mergeGateExecutor.type} (merge gate)`);
-      return mergeGateExecutor;
-    }
-
     const defaultExecutor = this.executorRegistry.getDefault();
     traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=${effectiveType ?? 'none'} → ${defaultExecutor.type} (default)`);
     return defaultExecutor;
@@ -947,9 +932,10 @@ export class TaskRunner {
 
   /**
    * Determine the correct ActionType for a task based on its fields.
-   * Priority: isReconciliation > command > prompt > default 'command'.
+   * Priority: merge gate > isReconciliation > command > prompt > default 'command'.
    */
   determineActionType(task: TaskState): ActionType {
+    if (task.config.runnerKind === 'merge' || task.config.isMergeNode) return 'merge_gate';
     if (task.config.isReconciliation) return 'reconciliation';
     if (task.config.command) return 'command';
     if (task.config.prompt) return 'ai_task';

@@ -8,7 +8,7 @@
 
 // ── Action Types ────────────────────────────────────────────
 
-export type ActionType = 'command' | 'ai_task' | 'reconciliation';
+export type ActionType = 'command' | 'ai_task' | 'reconciliation' | 'merge_gate';
 
 // ── Work Request ────────────────────────────────────────────
 
@@ -85,6 +85,7 @@ export interface WorkRequest {
 
 export type ResponseStatus =
   | 'completed'
+  | 'review_ready'
   | 'failed'
   | 'needs_input'
   | 'spawn_experiments'
@@ -100,6 +101,12 @@ export interface WorkResponseOutputs {
   agentName?: string;
   /** Branch the executor used — persisted at completion to close the write-once gap. */
   branch?: string;
+  /** Review URL produced by merge-gate style actions. */
+  reviewUrl?: string;
+  /** Provider-specific review identifier produced by merge-gate style actions. */
+  reviewId?: string;
+  /** Human-readable review state produced by merge-gate style actions. */
+  reviewStatus?: string;
 }
 
 export interface SpawnExperimentsRequest {

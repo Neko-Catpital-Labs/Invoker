@@ -33,7 +33,7 @@ export function validateWorkRequest(req: unknown): ValidationResult {
     return { valid: false, error: 'executionGeneration is required and must be a non-negative integer' };
   }
 
-  const validTypes = ['command', 'ai_task', 'reconciliation'];
+  const validTypes = ['command', 'ai_task', 'reconciliation', 'merge_gate'];
   if (!validTypes.includes(r.actionType as string)) {
     return { valid: false, error: `actionType must be one of: ${validTypes.join(', ')}` };
   }
@@ -72,7 +72,7 @@ export function validateWorkResponse(res: unknown): ValidationResult {
     return { valid: false, error: 'executionGeneration is required and must be a non-negative integer' };
   }
 
-  const validStatuses = ['completed', 'failed', 'needs_input', 'spawn_experiments', 'select_experiment'];
+  const validStatuses = ['completed', 'review_ready', 'failed', 'needs_input', 'spawn_experiments', 'select_experiment'];
   if (!validStatuses.includes(r.status as string)) {
     return { valid: false, error: `status must be one of: ${validStatuses.join(', ')}` };
   }

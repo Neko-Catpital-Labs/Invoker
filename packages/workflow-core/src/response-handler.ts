@@ -36,6 +36,19 @@ export type ParsedResponse =
       commitHash?: string;
       agentSessionId?: string;
       branch?: string;
+      reviewUrl?: string;
+      reviewId?: string;
+      reviewStatus?: string;
+    }
+  | {
+      type: 'review_ready';
+      taskId: string;
+      exitCode: number;
+      summary?: string;
+      branch?: string;
+      reviewUrl?: string;
+      reviewId?: string;
+      reviewStatus?: string;
     }
   | {
       type: 'failed';
@@ -84,6 +97,21 @@ export class ResponseHandler {
           commitHash: outputs.commitHash,
           agentSessionId: outputs.agentSessionId,
           branch: outputs.branch,
+          reviewUrl: outputs.reviewUrl,
+          reviewId: outputs.reviewId,
+          reviewStatus: outputs.reviewStatus,
+        };
+
+      case 'review_ready':
+        return {
+          type: 'review_ready',
+          taskId: actionId,
+          exitCode: outputs.exitCode ?? 0,
+          summary: outputs.summary,
+          branch: outputs.branch,
+          reviewUrl: outputs.reviewUrl,
+          reviewId: outputs.reviewId,
+          reviewStatus: outputs.reviewStatus,
         };
 
       case 'failed':
