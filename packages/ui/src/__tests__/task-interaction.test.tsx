@@ -69,6 +69,42 @@ describe('Task interaction (component)', () => {
     });
   });
 
+  it('switching between workflow and task selection replaces sidebar state', async () => {
+    const failedTask = makeUITask({
+      id: 'task-failed',
+      description: 'Failed task',
+      status: 'failed',
+      workflowId: 'wf-a',
+      command: 'exit 1',
+      execution: { error: 'task failed' },
+    });
+
+    render(<App />);
+    act(() => mock.setTasks([failedTask], workflows));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('workflow-node-wf-a'));
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-inspector-status-label')).toHaveTextContent('running');
+      expect(screen.queryByTestId('workflow-inspector-prompt-input')).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('rf__node-task-failed'));
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-inspector-status-label')).toHaveTextContent('failed');
+      expect(screen.getByTestId('workflow-inspector-prompt-input')).toHaveValue('exit 1');
+    });
+
+    fireEvent.click(screen.getByTestId('workflow-node-wf-a'));
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-inspector-status-label')).toHaveTextContent('running');
+      expect(screen.queryByTestId('workflow-inspector-prompt-input')).not.toBeInTheDocument();
+    });
+  });
+
   it('clicking workflow graph background dismisses the selected mini DAG', async () => {
     render(<App />);
     act(() => mock.setTasks([alpha, beta], workflows));

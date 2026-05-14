@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { TaskState, WorkflowMeta, WorkflowRollupTaskIssue } from '../types.js';
 import { workflowStatusVisual } from '../lib/workflow-status.js';
+import { getEffectiveVisualStatus, getStatusColor } from '../lib/colors.js';
 
 interface WorkflowInspectorProps {
   workflow: WorkflowMeta | null;
@@ -122,6 +123,13 @@ export function WorkflowInspector({
   const executorSelectValue = effectiveExecutorSelectValue(task);
   const canEditExecutor = Boolean(task && onEditType && !task.config.isMergeNode);
   const canEditPrompt = Boolean(task && ((task.config.prompt !== undefined && onEditPrompt) || (task.config.command !== undefined && onEditCommand)));
+  const taskVisualStatus = task ? getEffectiveVisualStatus(task.status, task.execution) : null;
+  const taskStatusColors = taskVisualStatus ? getStatusColor(taskVisualStatus) : null;
+  const statusBorderClass = taskStatusColors?.border ?? visual?.borderClass ?? 'border-gray-700';
+  const statusTextClass = taskStatusColors?.text ?? visual?.textClass ?? 'text-gray-300';
+  const statusLabel = task
+    ? taskVisualStatus?.replaceAll('_', ' ') ?? task.status.replaceAll('_', ' ')
+    : workflow?.status?.replaceAll('_', ' ') ?? 'unknown';
 
   return (
     <aside className="h-full w-full border-l border-gray-800 bg-gray-900 flex flex-col">
@@ -141,108 +149,115 @@ export function WorkflowInspector({
       </div>
 
       <div className="flex-1 overflow-auto p-3 space-y-3 text-sm">
-        <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
-          <div className="text-[11px] uppercase tracking-wide text-gray-400">AI Agent</div>
-          {task && onEditAgent && agentOptions.length > 0 ? (
-            <select
-              data-testid="workflow-inspector-agent-select"
-              value={agent}
-              onChange={(event) => onEditAgent(task.id, event.target.value)}
-              className="mt-1 w-full rounded border border-gray-700 bg-gray-900 px-2 py-1.5 text-xs text-gray-100 outline-none focus:border-blue-500"
-            >
-              {!agent && <option value="">Select agent</option>}
-              {agentOptions.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <div className="mt-1 text-gray-100">{agent || 'n/a'}</div>
-          )}
-          {canEditExecutor && (
-            <>
-              <div className="mt-2 text-[11px] uppercase tracking-wide text-gray-400">Run on</div>
+        {task && (
+          <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
+            <div className="text-[11px] uppercase tracking-wide text-gray-400">AI Agent</div>
+            {onEditAgent && agentOptions.length > 0 ? (
               <select
-                data-testid="workflow-inspector-executor-select"
-                value={executorSelectValue}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  if (value.startsWith('ssh:')) {
-                    onEditType?.(task!.id, 'ssh', value.slice(4));
-                  } else {
-                    onEditType?.(task!.id, value);
-                  }
-                }}
-                disabled={task?.status === 'running' || task?.status === 'fixing_with_ai'}
-                className="mt-1 w-full rounded border border-gray-700 bg-gray-900 px-2 py-1.5 text-xs text-gray-100 outline-none focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+                data-testid="workflow-inspector-agent-select"
+                value={agent}
+                onChange={(event) => onEditAgent(task.id, event.target.value)}
+                className="mt-1 w-full rounded border border-gray-700 bg-gray-900 px-2 py-1.5 text-xs text-gray-100 outline-none focus:border-blue-500"
               >
-                <option value="worktree">Worktree</option>
-                <option value="docker">Docker</option>
-                {remoteTargets?.map((targetId) => (
-                  <option key={targetId} value={`ssh:${targetId}`}>
-                    SSH: {targetId}
+                {!agent && <option value="">Select agent</option>}
+                {agentOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
                   </option>
                 ))}
               </select>
-            </>
-          )}
-          <div className="mt-2 text-[11px] uppercase tracking-wide text-gray-400">Prompt</div>
-          <textarea
-            data-testid="workflow-inspector-prompt-input"
-            value={promptValue}
-            onChange={(event) => {
-              setPromptValue(event.target.value);
-              setPromptDirty(event.target.value !== promptText);
-            }}
-            onBlur={savePrompt}
-            onKeyDown={(event) => {
-              if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-                event.preventDefault();
-                savePrompt();
-              }
-              if (event.key === 'Escape') {
-                setPromptValue(promptText);
-                setPromptDirty(false);
-                event.currentTarget.blur();
-              }
-            }}
-            readOnly={!canEditPrompt}
-            className={`mt-1 min-h-28 w-full resize-y rounded border px-2 py-2 text-xs leading-relaxed outline-none ${
-              canEditPrompt
-                ? 'border-gray-700 bg-gray-900 text-gray-100 focus:border-blue-500'
-                : 'border-gray-700 bg-gray-900/50 text-gray-400'
-            }`}
-          />
-          {promptDirty && canEditPrompt && (
-            <div className="mt-2 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => {
+            ) : (
+              <div className="mt-1 text-gray-100">{agent || 'n/a'}</div>
+            )}
+            {canEditExecutor && (
+              <>
+                <div className="mt-2 text-[11px] uppercase tracking-wide text-gray-400">Run on</div>
+                <select
+                  data-testid="workflow-inspector-executor-select"
+                  value={executorSelectValue}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    if (value.startsWith('ssh:')) {
+                      onEditType?.(task.id, 'ssh', value.slice(4));
+                    } else {
+                      onEditType?.(task.id, value);
+                    }
+                  }}
+                  disabled={task.status === 'running' || task.status === 'fixing_with_ai'}
+                  className="mt-1 w-full rounded border border-gray-700 bg-gray-900 px-2 py-1.5 text-xs text-gray-100 outline-none focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <option value="worktree">Worktree</option>
+                  <option value="docker">Docker</option>
+                  {remoteTargets?.map((targetId) => (
+                    <option key={targetId} value={`ssh:${targetId}`}>
+                      SSH: {targetId}
+                    </option>
+                  ))}
+                </select>
+              </>
+            )}
+            <div className="mt-2 text-[11px] uppercase tracking-wide text-gray-400">Prompt</div>
+            <textarea
+              data-testid="workflow-inspector-prompt-input"
+              value={promptValue}
+              onChange={(event) => {
+                setPromptValue(event.target.value);
+                setPromptDirty(event.target.value !== promptText);
+              }}
+              onBlur={savePrompt}
+              onKeyDown={(event) => {
+                if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+                  event.preventDefault();
+                  savePrompt();
+                }
+                if (event.key === 'Escape') {
                   setPromptValue(promptText);
                   setPromptDirty(false);
-                }}
-                className="rounded border border-gray-700 px-2 py-1 text-xs text-gray-300 hover:bg-gray-800"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={savePrompt}
-                className="rounded bg-blue-600 px-2 py-1 text-xs font-medium text-white hover:bg-blue-500"
-              >
-                Save
-              </button>
-            </div>
-          )}
-        </section>
+                  event.currentTarget.blur();
+                }
+              }}
+              readOnly={!canEditPrompt}
+              className={`mt-1 min-h-28 w-full resize-y rounded border px-2 py-2 text-xs leading-relaxed outline-none ${
+                canEditPrompt
+                  ? 'border-gray-700 bg-gray-900 text-gray-100 focus:border-blue-500'
+                  : 'border-gray-700 bg-gray-900/50 text-gray-400'
+              }`}
+            />
+            {promptDirty && canEditPrompt && (
+              <div className="mt-2 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPromptValue(promptText);
+                    setPromptDirty(false);
+                  }}
+                  className="rounded border border-gray-700 px-2 py-1 text-xs text-gray-300 hover:bg-gray-800"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={savePrompt}
+                  className="rounded bg-blue-600 px-2 py-1 text-xs font-medium text-white hover:bg-blue-500"
+                >
+                  Save
+                </button>
+              </div>
+            )}
+          </section>
+        )}
 
-        <section className={`rounded border p-3 ${visual?.borderClass ?? 'border-gray-700'} bg-gray-800/70`}>
-          <div className="text-[11px] uppercase tracking-wide text-gray-400">Status</div>
-          <div className={`mt-1 text-xs ${visual?.textClass ?? 'text-gray-300'}`}>
-            {workflow?.status?.replaceAll('_', ' ') ?? 'unknown'}
+        <section className={`rounded border p-3 ${statusBorderClass} bg-gray-800/70`}>
+          <div className="text-[11px] uppercase tracking-wide text-gray-400">
+            {task ? 'Task Status' : 'Workflow Status'}
           </div>
-          {rollup && (
+          <div
+            className={`mt-1 text-xs ${statusTextClass}`}
+            data-testid="workflow-inspector-status-label"
+          >
+            {statusLabel}
+          </div>
+          {rollup && !task && (
             <div className="mt-2 flex flex-wrap gap-1.5">
               {nonZeroCounts.map(([status, count]) => (
                 <span
@@ -257,7 +272,7 @@ export function WorkflowInspector({
           {task?.execution.error && (
             <p className="mt-2 text-xs text-red-300 break-words">{task.execution.error}</p>
           )}
-          {rollup?.failedTasks.length ? (
+          {!task && rollup?.failedTasks.length ? (
             <div className="mt-3 space-y-2">
               <div className="text-[11px] uppercase tracking-wide text-red-300">Failed Tasks</div>
               {rollup.failedTasks.map((failedTask) => (
@@ -268,7 +283,7 @@ export function WorkflowInspector({
               ))}
             </div>
           ) : null}
-          {rollup?.fixingTasks.length ? (
+          {!task && rollup?.fixingTasks.length ? (
             <div className="mt-3 space-y-2">
               <div className="text-[11px] uppercase tracking-wide text-cyan-300">Fixing with AI</div>
               {rollup.fixingTasks.map((fixingTask) => (
@@ -281,7 +296,7 @@ export function WorkflowInspector({
               ))}
             </div>
           ) : null}
-          {rollup?.waitingTasks.length ? (
+          {!task && rollup?.waitingTasks.length ? (
             <div className="mt-3 space-y-2">
               <div className="text-[11px] uppercase tracking-wide text-amber-300">Waiting Tasks</div>
               {rollup.waitingTasks.map((waitingTask) => (

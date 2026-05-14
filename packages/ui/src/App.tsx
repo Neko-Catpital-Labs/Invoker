@@ -414,6 +414,7 @@ export function App() {
   const handleWorkflowClick = useCallback((workflowId: string) => {
     setWorkflowSelectionDismissed(false);
     setSelectedWorkflowId(workflowId);
+    setSelectedTaskId(null);
     setContextMenu(null);
     setWorkflowContextMenu(null);
   }, []);

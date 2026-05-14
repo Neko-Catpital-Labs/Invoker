@@ -139,4 +139,42 @@ describe('WorkflowInspector', () => {
     fireEvent.change(select, { target: { value: 'ssh:remote-a' } });
     expect(onEditType).toHaveBeenCalledWith('task-1', 'ssh', 'remote-a');
   });
+
+  it('shows task status instead of workflow status when a task is selected', () => {
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'running' }}
+        task={makeTask({ status: 'failed', execution: { error: 'boom' } })}
+        executionAgents={['claude', 'codex']}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId('workflow-inspector-status-label')).toHaveTextContent('failed');
+  });
+
+  it('hides task-only controls when only a workflow is selected', () => {
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'running' }}
+        task={null}
+        executionAgents={['claude', 'codex']}
+        collapsed={false}
+        advancedExpanded={false}
+        onEditAgent={vi.fn()}
+        onEditPrompt={vi.fn()}
+        onEditType={vi.fn()}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId('workflow-inspector-status-label')).toHaveTextContent('running');
+    expect(screen.queryByTestId('workflow-inspector-agent-select')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('workflow-inspector-prompt-input')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('workflow-inspector-executor-select')).not.toBeInTheDocument();
+  });
 });
