@@ -953,7 +953,9 @@ if (isHeadless) {
           orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
           const workflowId = orchestrator.getWorkflowIds().find(id => !wfIdsBefore.has(id))!;
           const started = orchestrator.startExecution();
-          await createStandaloneTaskExecutor().executeTasks(started);
+          createStandaloneTaskExecutor().executeTasks(started).catch(err => {
+            logger.error(`headless.run: executeTasks failed for "${workflowId}": ${err}`, { module: 'ipc-delegate' });
+          });
           logger.info(`started ${started.length} tasks for workflow "${workflowId}"`, { module: 'ipc-delegate' });
           const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
           return { workflowId, tasks };
@@ -1657,7 +1659,9 @@ if (isHeadless) {
     orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
     const workflowId = orchestrator.getWorkflowIds().find(id => !wfIdsBefore.has(id))!;
     const started = orchestrator.startExecution();
-    await requireTaskExecutor().executeTasks(started);
+    requireTaskExecutor().executeTasks(started).catch(err => {
+      logger.error(`headless.run: executeTasks failed for "${workflowId}": ${err}`, { module: 'ipc-delegate' });
+    });
     logger.info(`started ${started.length} tasks for workflow "${workflowId}"`, { module: 'ipc-delegate' });
     const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
     return { workflowId, tasks };

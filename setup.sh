@@ -3,7 +3,7 @@
 # Detects OS and installs prerequisites, then runs pnpm install.
 set -e
 
-REQUIRED_NODE_MAJOR=22
+REQUIRED_NODE_MAJOR=26
 
 echo "==> Invoker project setup"
 echo ""
@@ -20,7 +20,7 @@ echo ""
 # --- Helper: check if a command exists ---
 has() { command -v "$1" >/dev/null 2>&1; }
 
-# --- Node.js 22.x ---
+# --- Node.js 26.x ---
 echo "==> Checking Node.js..."
 NEED_NODE=false
 
