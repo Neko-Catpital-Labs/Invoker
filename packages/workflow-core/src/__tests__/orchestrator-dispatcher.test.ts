@@ -103,12 +103,15 @@ function makeResponse(
   };
 }
 
-function makeOrchestrator(): { orchestrator: Orchestrator; persistence: InMemoryPersistence } {
+function makeOrchestrator(
+  opts: { deferRunningUntilLaunch?: boolean } = {},
+): { orchestrator: Orchestrator; persistence: InMemoryPersistence } {
   const persistence = new InMemoryPersistence();
   const orchestrator = new Orchestrator({
     persistence,
     messageBus: new InMemoryBus(),
     maxConcurrency: 4,
+    deferRunningUntilLaunch: opts.deferRunningUntilLaunch,
   });
   return { orchestrator, persistence };
 }
@@ -203,6 +206,67 @@ describe('Orchestrator launch claims', () => {
     respondForTask(orchestrator, taskId, 'failed', 1);
     started = orchestrator.recreateWorkflow(workflowId);
     expect(started.map((task) => task.id)).toEqual([taskId]);
+  });
+
+  it('keeps recreated tasks pending until executor launch is confirmed', () => {
+    const { orchestrator, persistence } = makeOrchestrator({ deferRunningUntilLaunch: true });
+    orchestrator.loadPlan({
+      name: 'truthful-recreate',
+      onFinish: 'none',
+      tasks: [{ id: 't1', description: 'one', command: 'echo one' }],
+    });
+
+    const taskId = taskIdBySuffix(orchestrator, 't1');
+    const workflowId = orchestrator.getWorkflowIds()[0]!;
+
+    let [claim] = orchestrator.startExecution();
+    expect(claim!.status).toBe('pending');
+    expect(persistence.loadAttempt(claim!.execution.selectedAttemptId!)?.status).toBe('claimed');
+    expect(orchestrator.markTaskRunningAfterLaunch(taskId, claim!.execution.selectedAttemptId!)).toBe(true);
+    respondForTask(orchestrator, taskId, 'completed');
+
+    [claim] = orchestrator.recreateWorkflow(workflowId);
+    const replacementAttemptId = claim!.execution.selectedAttemptId!;
+
+    expect(claim!.status).toBe('pending');
+    expect(orchestrator.getTask(taskId)?.status).toBe('pending');
+    expect(persistence.loadAttempt(replacementAttemptId)?.status).toBe('claimed');
+    expect(orchestrator.getLastInvalidationPlan()).toMatchObject({
+      action: 'recreateWorkflow',
+      mode: 'recreate',
+      affectedTaskIds: [`__merge__${workflowId}`, taskId],
+    });
+
+    expect(orchestrator.markTaskRunningAfterLaunch(taskId, replacementAttemptId)).toBe(true);
+    expect(orchestrator.getTask(taskId)?.status).toBe('running');
+    expect(persistence.loadAttempt(replacementAttemptId)?.status).toBe('running');
+  });
+
+  it('rejects stale attempt completions after recreate advances lineage', () => {
+    const { orchestrator } = makeOrchestrator({ deferRunningUntilLaunch: true });
+    orchestrator.loadPlan({
+      name: 'stale-recreate',
+      onFinish: 'none',
+      tasks: [{ id: 't1', description: 'one', command: 'echo one' }],
+    });
+
+    const taskId = taskIdBySuffix(orchestrator, 't1');
+    const [firstClaim] = orchestrator.startExecution();
+    const staleAttemptId = firstClaim!.execution.selectedAttemptId!;
+    expect(orchestrator.markTaskRunningAfterLaunch(taskId, staleAttemptId)).toBe(true);
+
+    const [replacementClaim] = orchestrator.recreateTask(taskId);
+    const replacementAttemptId = replacementClaim!.execution.selectedAttemptId!;
+    const generation = firstClaim!.execution.generation ?? 0;
+
+    const staleResult = orchestrator.handleWorkerResponse({
+      ...makeResponse(taskId, 'completed', generation),
+      attemptId: staleAttemptId,
+    });
+
+    expect(staleResult).toEqual([]);
+    expect(orchestrator.getTask(taskId)?.execution.selectedAttemptId).toBe(replacementAttemptId);
+    expect(orchestrator.getTask(taskId)?.status).toBe('pending');
   });
 
   it('resumeWorkflow returns persisted pending launch claims', () => {
