@@ -777,6 +777,20 @@ export class Orchestrator {
     },
   };
 
+  private clearStaleLaunchMetadataForPending(changes: TaskStateChanges): TaskStateChanges {
+    if (changes.status !== 'pending') return changes;
+    if (changes.execution?.phase === 'launching') return changes;
+    return {
+      ...changes,
+      execution: {
+        ...changes.execution,
+        phase: undefined,
+        launchStartedAt: undefined,
+        launchCompletedAt: undefined,
+      },
+    };
+  }
+
   constructor(config: OrchestratorConfig) {
     this.maxConcurrency = config.maxConcurrency ?? 3;
     this.persistence = config.persistence;
@@ -832,6 +846,7 @@ export class Orchestrator {
     changes: TaskStateChanges,
     opts?: { skipWorkflowStatusSync?: boolean },
   ): TaskState {
+    changes = this.clearStaleLaunchMetadataForPending(changes);
     const existing = this.stateGetTask(taskId);
     if (!existing) {
       throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `writeAndSync: task ${taskId} not found in graph`);

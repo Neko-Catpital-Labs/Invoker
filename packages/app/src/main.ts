@@ -1515,6 +1515,10 @@ if (isHeadless) {
         onOutput: (taskId, data) => {
           enqueueTaskOutput(taskId, data);
         },
+        onLaunchAccepted: (taskId) => {
+          launchingTasks.add(taskId);
+          logger.info(`Task "${taskId}" launch accepted by TaskRunner`, { module: 'exec' });
+        },
         onLaunchStart: (taskId, executor) => {
           launchingTasks.add(taskId);
           logger.info(`Task "${taskId}" launch started (executor: ${executor.type})`, { module: 'exec' });
@@ -1563,6 +1567,9 @@ if (isHeadless) {
             `Heartbeat for "${taskId}" (status: ${task?.status ?? 'unknown'}, generation: ${task?.execution.generation ?? 'unknown'}, gapMs: ${heartbeatGapMs ?? 'first'})`,
             { module: 'heartbeat' },
           );
+        },
+        onLaunchSettled: (taskId) => {
+          launchingTasks.delete(taskId);
         },
       },
     });

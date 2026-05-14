@@ -5106,6 +5106,37 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('B')!.status).toBe('pending');
     });
 
+    it('restartTask clears stale launch metadata when resetting to pending', () => {
+      orchestrator.loadPlan({
+        name: 'pending-restart-launch-metadata-test',
+        tasks: [
+          { id: 'A', description: 'Root', command: 'echo A' },
+          { id: 'B', description: 'Depends on A', command: 'echo B', dependencies: ['A'] },
+        ],
+      });
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'A', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
+      );
+      persistence.updateTask('B', {
+        execution: {
+          phase: 'launching',
+          launchStartedAt: new Date('2026-04-16T05:25:16.531Z'),
+          launchCompletedAt: new Date('2026-04-16T05:26:16.531Z'),
+        },
+      });
+      orchestrator.syncAllFromDb();
+
+      const result = orchestrator.retryTask('B');
+      const task = orchestrator.getTask('B')!;
+
+      expect(result[0].status).toBe('pending');
+      expect(task.status).toBe('pending');
+      expect(task.execution.phase).toBeUndefined();
+      expect(task.execution.launchStartedAt).toBeUndefined();
+      expect(task.execution.launchCompletedAt).toBeUndefined();
+    });
+
     it('restartTask from needs_input status resets to pending', () => {
       orchestrator.loadPlan({
         name: 'needs-input-restart-test',
