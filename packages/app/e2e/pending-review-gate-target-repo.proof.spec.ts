@@ -40,7 +40,7 @@ test('pending review gate target repo row', async ({ page }) => {
   await expect(mergeGateNode).toBeVisible({ timeout: 15000 });
   await mergeGateNode.click();
 
-  await expect(page.getByRole('heading', { name: /Review gate for/i })).toBeVisible();
+  await expect(page.getByTestId('workflow-inspector-title')).toBeVisible();
   await expect(page.getByText('Target Branch')).toBeVisible();
   await expect(page.getByTestId('target-branch-input')).toHaveValue('master');
   await expect(page.getByText('PR target repo')).toBeVisible();

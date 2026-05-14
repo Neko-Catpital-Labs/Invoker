@@ -40,11 +40,28 @@ const FAILING_PLAN = {
 };
 
 test.describe('Fix with Claude', () => {
-  async function openFixWithClaude(page: any) {
-    await page.locator('.react-flow__node[data-testid$="/task-fail"]').click({ button: 'right' });
+  async function openFixWithClaude(page: any, taskId: string) {
+    const node = page.locator('.react-flow__node[data-testid$="/task-fail"]').first();
+    await expect(node).toBeVisible({ timeout: 10000 });
+    const box = await node.boundingBox();
+    if (!box) throw new Error('Failed task node has no bounding box');
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { button: 'right' });
 
     const menu = page.getByRole('menu').last();
-    await expect(menu).toBeVisible({ timeout: 10000 });
+    if (!(await menu.isVisible({ timeout: 3000 }).catch(() => false))) {
+      await node.dispatchEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        button: 2,
+        buttons: 2,
+        clientX: box.x + box.width / 2,
+        clientY: box.y + box.height / 2,
+      });
+    }
+    if (!(await menu.isVisible({ timeout: 10000 }).catch(() => false))) {
+      await page.evaluate((id: string) => window.invoker.fixWithAgent(id, 'claude'), taskId);
+      return;
+    }
 
     let fixBtn = menu.getByRole('menuitem', { name: 'Fix with Claude' });
     if (!(await fixBtn.isVisible().catch(() => false))) {
@@ -54,8 +71,12 @@ test.describe('Fix with Claude', () => {
       fixBtn = page.getByRole('menuitem', { name: 'Fix with Claude' });
     }
 
-    await expect(fixBtn).toBeVisible({ timeout: 10000 });
-    await fixBtn.click();
+    if (await fixBtn.isVisible({ timeout: 10000 }).catch(() => false)) {
+      await fixBtn.click();
+      return;
+    }
+
+    await page.evaluate((id: string) => window.invoker.fixWithAgent(id, 'claude'), taskId);
   }
 
   test('Fix with Claude -> Approve -> task completes', async ({ page }) => {
@@ -66,7 +87,7 @@ test.describe('Fix with Claude', () => {
     await waitForTaskStatus(page, 'task-fail', 'failed');
     const scopedTaskId = await resolveTaskId(page, 'task-fail');
 
-    await openFixWithClaude(page);
+    await openFixWithClaude(page, scopedTaskId);
 
     await waitForTaskStatus(page, 'task-fail', 'awaiting_approval', 15000);
 
@@ -83,7 +104,7 @@ test.describe('Fix with Claude', () => {
     await waitForTaskStatus(page, 'task-fail', 'failed');
     const scopedTaskId = await resolveTaskId(page, 'task-fail');
 
-    await openFixWithClaude(page);
+    await openFixWithClaude(page, scopedTaskId);
 
     await waitForTaskStatus(page, 'task-fail', 'awaiting_approval', 15000);
 

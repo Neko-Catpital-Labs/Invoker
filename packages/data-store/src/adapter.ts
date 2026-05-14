@@ -5,7 +5,7 @@
  * This allows swapping storage backends (in-memory, SQLite, etc.)
  */
 
-import type { TaskState, TaskStateChanges, PlanDefinition, Attempt } from '@invoker/workflow-core';
+import type { TaskState, TaskStateChanges, PlanDefinition, Attempt, WorkflowDerivedStatus, WorkflowRollup } from '@invoker/workflow-core';
 
 // ── Conversation Types ─────────────────────────────────────
 
@@ -35,7 +35,8 @@ export interface Workflow {
   name: string;
   description?: string;
   visualProof?: boolean;
-  status: 'running' | 'completed' | 'failed';
+  status: WorkflowDerivedStatus;
+  rollup?: WorkflowRollup;
   planFile?: string;
   repoUrl?: string;
   intermediateRepoUrl?: string;

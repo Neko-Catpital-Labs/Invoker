@@ -18,6 +18,11 @@ export interface NodePosition {
   y: number;
 }
 
+export interface LayoutEdge {
+  source: string;
+  target: string;
+}
+
 const NODE_WIDTH = 280;
 const NODE_HEIGHT = 80;
 const HORIZONTAL_GAP = 120;
@@ -30,13 +35,31 @@ const BARYCENTER_SWEEPS = 4;
  * Tasks with no dependencies are level 0.
  * A task's level = max(levels of dependencies) + 1.
  */
-function computeLevels(tasks: TaskState[]): Map<string, number> {
+function parentIdsForTask(task: TaskState, taskIds: Set<string>, extraParents: Map<string, string[]>): string[] {
+  const parents = new Set<string>();
+  for (const depId of task.dependencies) {
+    if (taskIds.has(depId)) parents.add(depId);
+  }
+  for (const depId of extraParents.get(task.id) ?? []) {
+    if (taskIds.has(depId)) parents.add(depId);
+  }
+  return [...parents].sort();
+}
+
+function computeLevels(tasks: TaskState[], extraEdges: readonly LayoutEdge[] = []): Map<string, number> {
   const levels = new Map<string, number>();
   const taskIds = new Set(tasks.map((t) => t.id));
+  const extraParents = new Map<string, string[]>();
+  for (const edge of extraEdges) {
+    if (!taskIds.has(edge.source) || !taskIds.has(edge.target)) continue;
+    const parents = extraParents.get(edge.target) ?? [];
+    parents.push(edge.source);
+    extraParents.set(edge.target, parents);
+  }
 
   // Set level 0 for tasks with no dependencies (or deps outside this set)
   for (const task of tasks) {
-    const internalDeps = task.dependencies.filter((d) => taskIds.has(d));
+    const internalDeps = parentIdsForTask(task, taskIds, extraParents);
     if (internalDeps.length === 0) {
       levels.set(task.id, 0);
     }
@@ -54,7 +77,7 @@ function computeLevels(tasks: TaskState[]): Map<string, number> {
     for (const task of tasks) {
       if (levels.has(task.id)) continue;
 
-      const internalDeps = task.dependencies.filter((d) => taskIds.has(d));
+      const internalDeps = parentIdsForTask(task, taskIds, extraParents);
       const depLevels = internalDeps
         .map((depId) => levels.get(depId))
         .filter((l): l is number => l !== undefined);
@@ -83,6 +106,7 @@ function computeLevels(tasks: TaskState[]): Map<string, number> {
  */
 function buildAdjacency(
   tasks: TaskState[],
+  extraEdges: readonly LayoutEdge[] = [],
 ): { children: Map<string, string[]>; parents: Map<string, string[]> } {
   const taskIds = new Set(tasks.map((t) => t.id));
   const children = new Map<string, string[]>();
@@ -102,6 +126,17 @@ function buildAdjacency(
       }
     }
   }
+
+  for (const edge of extraEdges) {
+    if (!taskIds.has(edge.source) || !taskIds.has(edge.target) || edge.source === edge.target) continue;
+    const childList = children.get(edge.source)!;
+    if (!childList.includes(edge.target)) childList.push(edge.target);
+    const parentList = parents.get(edge.target)!;
+    if (!parentList.includes(edge.source)) parentList.push(edge.source);
+  }
+
+  for (const list of children.values()) list.sort();
+  for (const list of parents.values()) list.sort();
 
   return { children, parents };
 }
@@ -346,6 +381,7 @@ function medianNeighborY(
  */
 export function layoutNodes(
   tasks: TaskState[],
+  extraEdges: readonly LayoutEdge[] = [],
 ): Map<string, NodePosition> {
   const positions = new Map<string, NodePosition>();
 
@@ -354,8 +390,8 @@ export function layoutNodes(
   // Sort by id so level grouping and barycenter tie-breaks are deterministic regardless of caller order.
   const sorted = [...tasks].sort((a, b) => a.id.localeCompare(b.id));
 
-  const levels = computeLevels(sorted);
-  const { children, parents } = buildAdjacency(sorted);
+  const levels = computeLevels(sorted, extraEdges);
+  const { children, parents } = buildAdjacency(sorted, extraEdges);
   const connections = countConnections(sorted, children, parents);
 
   // Group tasks by level

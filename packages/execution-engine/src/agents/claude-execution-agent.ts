@@ -37,7 +37,7 @@ export class ClaudeExecutionAgent implements ExecutionAgent {
   private readonly apiKey: string;
 
   constructor(config: ClaudeExecutionAgentConfig = {}) {
-    this.command = config.command ?? 'claude';
+    this.command = config.command ?? process.env.INVOKER_CLAUDE_COMMAND ?? 'claude';
     this.fixCommand = config.fixCommand ?? process.env.INVOKER_CLAUDE_FIX_COMMAND ?? this.command;
     this.configDir = config.configDir ?? join(homedir(), '.claude');
     this.containerHomePath = config.containerHomePath ?? '/home/invoker';

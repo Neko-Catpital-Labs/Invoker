@@ -1,7 +1,7 @@
 /**
  * Plan text parser — validates YAML/JSON plan input.
  *
- * Extracted from PlanLoader for reuse in TopBar.
+ * Shared by plan loading controls.
  */
 
 import yaml from 'js-yaml';
