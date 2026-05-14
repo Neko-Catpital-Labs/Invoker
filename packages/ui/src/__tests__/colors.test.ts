@@ -3,7 +3,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { getStatusColor, matchesStatusFilter } from '../lib/colors.js';
+import { getStatusColor, getStatusInlineColors, matchesStatusFilter } from '../lib/colors.js';
+import { getStatusVisual, STATUS_VISUALS } from '../lib/status-colors.js';
 import type { TaskStatus } from '../types.js';
 
 describe('getStatusColor', () => {
@@ -35,6 +36,19 @@ describe('getStatusColor', () => {
     }
   });
 
+  it('keeps task color helpers backed by the canonical status visuals', () => {
+    for (const status of Object.keys(STATUS_VISUALS)) {
+      const visual = getStatusVisual(status);
+      expect(getStatusColor(status)).toEqual({
+        bg: visual.bg,
+        border: visual.border,
+        text: visual.text,
+        dot: visual.dot,
+      });
+      expect(getStatusInlineColors(status)).toEqual(visual.inline);
+    }
+  });
+
   it('returns unique colors for distinguishable statuses', () => {
     const running = getStatusColor('running');
     const completed = getStatusColor('completed');
@@ -62,15 +76,15 @@ describe('getStatusColor', () => {
     expect(colors.bg).toBe(defaultColors.bg);
   });
 
-  it('fixing_with_ai, needs_input, and awaiting_approval have pairwise distinct colors', () => {
+  it('uses shared urgency color for fix and input states while keeping approval distinct', () => {
     const fixingWithAI = getStatusColor('fixing_with_ai');
     const needsInput = getStatusColor('needs_input');
     const awaitingApproval = getStatusColor('awaiting_approval');
 
-    // Background colors must be pairwise unequal
-    expect(fixingWithAI.bg).not.toBe(needsInput.bg);
-    expect(needsInput.bg).not.toBe(awaitingApproval.bg);
-    expect(fixingWithAI.bg).not.toBe(awaitingApproval.bg);
+    expect(fixingWithAI.dot).toBe(needsInput.dot);
+    expect(fixingWithAI.border).toBe(needsInput.border);
+    expect(awaitingApproval.dot).not.toBe(needsInput.dot);
+    expect(awaitingApproval.border).not.toBe(needsInput.border);
   });
 });
 

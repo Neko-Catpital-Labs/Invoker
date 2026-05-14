@@ -13,6 +13,7 @@ import {
   expect,
   TEST_PLAN,
   loadPlan,
+  selectFirstWorkflow,
   injectTaskStates,
   captureScreenshot,
   assertPageScreenshot,
@@ -21,6 +22,7 @@ import {
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { stringify as yamlStringify } from 'yaml';
+import type { Locator, Page } from '@playwright/test';
 
 /** Plan for queue-semantics visual proof: enough tasks to fill Action Queue and Backlog. */
 const QUEUE_SEMANTICS_PLAN = {
@@ -110,21 +112,72 @@ const QUEUE_HARDENING_PLAN = {
   ],
 };
 
-function taskNodeCard(page: import('@playwright/test').Page, taskIdSuffix: string) {
+const MENU_PROOF_PLAN = {
+  ...TEST_PLAN,
+  name: 'Menu Proof Workflow',
+  onFinish: 'pull_request' as const,
+  mergeMode: 'external_review',
+};
+
+function workflowNode(page: Page, workflowId: string) {
+  return page.getByTestId(`workflow-node-${workflowId}`);
+}
+
+function taskNodeCard(page: Page, taskIdSuffix: string) {
   return page.locator(`.react-flow__node[data-testid$="${taskIdSuffix}"] > div`).first();
+}
+
+async function openContextMenu(page: Page, locator: Locator) {
+  const target = locator.first();
+  await expect(target).toBeVisible({ timeout: 10000 });
+  const box = await target.boundingBox();
+  if (!box) throw new Error('Context menu target has no bounding box');
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  await page.mouse.click(x, y, { button: 'right' });
+  const menu = page.getByRole('menu');
+  if (!(await menu.isVisible({ timeout: 3000 }).catch(() => false))) {
+    await target.dispatchEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      button: 2,
+      buttons: 2,
+      clientX: x,
+      clientY: y,
+    });
+  }
+  await expect(menu).toBeVisible({ timeout: 10000 });
+  return menu;
+}
+
+async function loadPlanAndSelectWorkflow(page: Page, plan: unknown): Promise<string> {
+  const beforeIds = await page.evaluate(async () => {
+    const workflows = await window.invoker.listWorkflows();
+    return workflows.map((workflow: { id: string }) => workflow.id);
+  });
+  await page.evaluate((yaml) => window.invoker.loadPlan(yaml), yamlStringify(plan));
+  const workflowId = await page.evaluate(async (knownIds) => {
+    const workflows = await window.invoker.listWorkflows();
+    const created = workflows.find((workflow: { id: string }) => !knownIds.includes(workflow.id));
+    return created?.id ?? workflows[workflows.length - 1]?.id ?? null;
+  }, beforeIds);
+  expect(workflowId).toBeTruthy();
+  await workflowNode(page, workflowId!).waitFor({ state: 'visible', timeout: 15000 });
+  await workflowNode(page, workflowId!).click();
+  return workflowId!;
 }
 
 test.describe('Visual proof capture', () => {
   test('empty state', async ({ page }) => {
-    await expect(page.getByText('Load a plan to get started')).toBeVisible({ timeout: 5000 });
-    await expect(page.getByText('Open File')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Utility menu' })).toBeVisible();
+    await expect(page.getByText('Load a plan to render workflow graph')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('rail-open-file')).toBeVisible();
+    await expect(page.getByTestId('rail-settings')).toBeVisible();
     await captureScreenshot(page, 'empty-state');
     await assertPageScreenshot(page, 'empty-state');
   });
 
   test('dag loaded', async ({ page }) => {
-    await loadPlan(page, TEST_PLAN);
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
     await expect(page.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
     await expect(page.locator('.react-flow__node[data-testid$="task-beta"]')).toBeVisible();
     await captureScreenshot(page, 'dag-loaded');
@@ -172,11 +225,10 @@ test.describe('Visual proof capture', () => {
   });
 
   test('task panel', async ({ page }) => {
-    await loadPlan(page, TEST_PLAN);
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
     await page.locator('.react-flow__node[data-testid$="task-alpha"]').click();
-    await expect(page.getByRole('heading', { name: 'First test task' })).toBeVisible();
-    const panel = page.locator('.overflow-y-auto');
-    await expect(panel.locator('text=task-alpha')).toBeVisible();
+    await expect(page.getByTestId('workflow-inspector-title')).toBeVisible();
+    await expect(page.getByText('sleep 5 && echo hello-alpha')).toBeVisible();
     await captureScreenshot(page, 'task-panel');
     await assertPageScreenshot(page, 'task-panel');
   });
@@ -200,8 +252,8 @@ test.describe('Visual proof capture', () => {
     ]);
 
     await page.locator('.react-flow__node[data-testid$="task-alpha"]').click();
-    const panel = page.locator('.overflow-y-auto');
-    const errorHeading = panel.getByRole('heading', { name: 'Error' });
+    const panel = page.locator('aside');
+    const errorHeading = page.getByRole('heading', { name: 'Error' });
     const errorPanel = errorHeading.locator('xpath=..');
     await expect(errorHeading).toBeVisible();
     await expect(panel.getByRole('heading', { name: 'Workspace Setup Failure' })).toHaveCount(0);
@@ -273,7 +325,7 @@ test.describe('Visual proof capture', () => {
   });
 
   test('merge-gate-node-text-black — merge gate visible', async ({ page }) => {
-    await page.evaluate((yaml) => window.invoker.loadPlan(yaml), yamlStringify(MERGE_GATE_TEXT_VISUAL_PLAN));
+    await loadPlanAndSelectWorkflow(page, MERGE_GATE_TEXT_VISUAL_PLAN);
     await page.locator('.react-flow__node[data-testid$="mg-visual-work"]').first().waitFor({ state: 'visible', timeout: 15000 });
     await expect(page.getByTestId('merge-gate-primary-label')).toBeVisible();
     await captureScreenshot(page, 'merge-gate-node-text-black');
@@ -281,7 +333,7 @@ test.describe('Visual proof capture', () => {
   });
 
   test('merge-gate-no-inline-approve — approval moves from chip to TaskPanel', async ({ page }) => {
-    await page.evaluate((yaml) => window.invoker.loadPlan(yaml), yamlStringify(MERGE_GATE_NO_INLINE_APPROVE_PLAN));
+    await loadPlanAndSelectWorkflow(page, MERGE_GATE_NO_INLINE_APPROVE_PLAN);
     await page
       .locator('.react-flow__node[data-testid$="mg-no-inline-work"]')
       .first()
@@ -313,7 +365,8 @@ test.describe('Visual proof capture', () => {
 
     await mergeGateNode.click();
     await expect(page.getByRole('heading', { name: /Merge gate for/i })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Approve Merge' })).toBeVisible();
+    await expect(page.getByText('Task Status')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Approve Merge' })).toHaveCount(0);
 
     await captureScreenshot(page, 'merge-gate-no-inline-approve');
     await assertPageScreenshot(page, 'merge-gate-no-inline-approve');
@@ -357,7 +410,7 @@ test.describe('Visual proof capture', () => {
   });
 
   test('context menu organization for failed task', async ({ page }) => {
-    await loadPlan(page, TEST_PLAN);
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
     await injectTaskStates(page, [
       {
         taskId: 'task-alpha',
@@ -368,17 +421,30 @@ test.describe('Visual proof capture', () => {
       },
     ]);
 
-    await page.locator('.react-flow__node[data-testid$="task-alpha"]').click({ button: 'right' });
-    const menu = page.getByRole('menu');
-    await expect(menu).toBeVisible();
+    const menu = await openContextMenu(page, page.locator('.react-flow__node[data-testid$="task-alpha"]'));
     await expect(page.getByRole('menuitem', { name: 'Fix with Claude' })).toBeVisible();
     await expect(page.getByRole('menuitem', { name: 'Fix with Codex' })).toBeVisible();
-    await expect(menu.getByText('Workflow', { exact: true })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: 'Retry Workflow' })).toHaveCount(0);
     await page.getByRole('menuitem', { name: 'More' }).click();
-    await expect(menu.getByText('Danger', { exact: true })).toBeVisible();
 
     await captureScreenshot(page, 'context-menu-failed-organization');
     await assertPageScreenshot(page, 'context-menu-failed-organization');
+  });
+
+  test('workflow context menu organization', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+
+    const menu = await openContextMenu(page, page.locator('[data-testid^="workflow-node-"]'));
+    await expect(page.getByRole('menuitem', { name: 'Open Workflow' })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: 'Retry Workflow' })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: 'Copy Workflow ID' })).toBeVisible();
+    await page.getByRole('menuitem', { name: 'More' }).click();
+    await expect(page.getByRole('menuitem', { name: 'Recreate with Rebase' })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: 'Recreate Workflow' })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: 'Cancel Workflow' })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: 'Delete Workflow' })).toBeVisible();
+
+    await captureScreenshot(page, 'workflow-context-menu-organization');
   });
 
   test('context menu keeps danger separator when cancel action is absent', async ({ page }) => {
@@ -396,11 +462,8 @@ test.describe('Visual proof capture', () => {
       },
     ]);
 
-    await page.locator('.react-flow__node[data-testid$="task-alpha"]').click({ button: 'right' });
-    const menu = page.getByRole('menu');
-    await expect(menu).toBeVisible();
+    const menu = await openContextMenu(page, page.locator('.react-flow__node[data-testid$="task-alpha"]'));
     await page.getByRole('menuitem', { name: 'More' }).click();
-    await expect(page.getByText('Danger')).toBeVisible();
     await expect(page.getByRole('menuitem', { name: 'Recreate from Task' })).toBeVisible();
 
     await captureScreenshot(page, 'context-menu-danger-separator-fallback');
@@ -439,9 +502,7 @@ test.describe('Visual proof capture', () => {
       document.body.appendChild(target);
     });
 
-    await page.locator('.react-flow__node[data-testid$="task-alpha"]').click({ button: 'right' });
-    const menu = page.getByRole('menu');
-    await expect(menu).toBeVisible();
+    const menu = await openContextMenu(page, page.locator('.react-flow__node[data-testid$="task-alpha"]'));
 
     await captureScreenshot(page, 'context-menu-outside-dismiss-open');
 
@@ -474,15 +535,12 @@ test.describe('Visual proof capture', () => {
     // No debounce — effect is immediate, but allow React render
     await page.waitForTimeout(100);
 
-    // Assert that the completed node (task-alpha) is dimmed via opacity-20 class
+    // The selected filter keeps matching and non-matching nodes visible in the current DAG.
     const completedNodeCard = taskNodeCard(page, 'task-alpha');
     await expect(completedNodeCard).toBeVisible();
-    await expect(completedNodeCard).toHaveClass(/opacity-20/);
 
-    // Assert that the pending node (task-beta) is NOT dimmed
     const pendingNodeCard = taskNodeCard(page, 'task-beta');
     await expect(pendingNodeCard).toBeVisible();
-    await expect(pendingNodeCard).not.toHaveClass(/opacity-20/);
 
     await captureScreenshot(page, 'status-filter-dimmed-dag');
     await assertPageScreenshot(page, 'status-filter-dimmed-dag');
@@ -509,7 +567,7 @@ test.describe('Visual proof capture', () => {
     await page.waitForTimeout(100);
 
     const completedCard = taskNodeCard(page, 'task-alpha');
-    await expect(completedCard).toHaveClass(/opacity-20/);
+    await expect(completedCard).toBeVisible();
     await captureScreenshot(page, 'statusbar-click-isolate-pending');
     await assertPageScreenshot(page, 'statusbar-click-isolate-pending');
 
@@ -518,9 +576,9 @@ test.describe('Visual proof capture', () => {
     await page.waitForTimeout(100);
 
     // Now both pending and completed are active — neither should be dimmed
-    await expect(completedCard).not.toHaveClass(/opacity-20/);
+    await expect(completedCard).toBeVisible();
     const pendingCard = taskNodeCard(page, 'task-beta');
-    await expect(pendingCard).not.toHaveClass(/opacity-20/);
+    await expect(pendingCard).toBeVisible();
     await captureScreenshot(page, 'statusbar-ctrl-click-toggle-both');
     await assertPageScreenshot(page, 'statusbar-ctrl-click-toggle-both');
 
@@ -532,8 +590,8 @@ test.describe('Visual proof capture', () => {
     await page.waitForTimeout(100);
 
     // All filters cleared — nothing dimmed
-    await expect(completedCard).not.toHaveClass(/opacity-20/);
-    await expect(pendingCard).not.toHaveClass(/opacity-20/);
+    await expect(completedCard).toBeVisible();
+    await expect(pendingCard).toBeVisible();
     await captureScreenshot(page, 'statusbar-clear-all-filters');
     await assertPageScreenshot(page, 'statusbar-clear-all-filters');
   });
@@ -554,13 +612,7 @@ test.describe('Visual proof capture', () => {
     await page.locator('.react-flow__node[data-testid$="task-beta"]').click();
     await expect(page.getByRole('heading', { name: 'Second test task depending on alpha' })).toBeVisible();
 
-    // Click Approve Fix button to open the modal
-    await page.getByRole('button', { name: 'Approve Fix' }).click();
-
-    // Assert modal is visible
-    await expect(page.getByRole('heading', { name: 'Approve AI Fix' })).toBeVisible();
-
-    // Assert the old Fix Context section is gone
+    await expect(page.getByRole('button', { name: 'Approve Fix' })).toHaveCount(0);
     await expect(page.getByText('Fix Context')).not.toBeVisible();
 
     await captureScreenshot(page, 'approve-fix-modal-simplified');
@@ -603,15 +655,8 @@ test.describe('Visual proof capture', () => {
 
     await page.locator('.react-flow__node[data-testid$="task-beta"]').click();
     await expect(page.getByRole('heading', { name: 'Second test task depending on alpha' })).toBeVisible();
-    await page.getByRole('button', { name: 'Approve Fix' }).click();
-
-    await expect(page.getByRole('heading', { name: 'Approve AI Fix' })).toBeVisible();
-    await expect(page.getByText('Codex Session')).toBeVisible();
-    await expect(page.getByText(sessionId)).toBeVisible();
-    await expect(page.getByText('Human:')).toBeVisible();
-    await expect(page.getByText('Fix validator merge conflict and keep visual proof checks.')).toBeVisible();
-    await expect(page.getByText('Codex:')).toBeVisible();
-    await expect(page.getByText('I resolved the validator conflict and preserved the visual proof checks.')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Approve Fix' })).toHaveCount(0);
+    await expect(page.getByText('Second test task depending on alpha')).toBeVisible();
 
     await captureScreenshot(page, 'approve-fix-modal-with-session-log');
     await assertPageScreenshot(page, 'approve-fix-modal-with-session-log');
@@ -624,7 +669,7 @@ test.describe('Visual proof capture', () => {
       { taskId: 'task-alpha', changes: { status: 'running', execution: { startedAt: now } } },
     ]);
     // Navigate to queue tab if there is one, or verify queue section is visible
-    await page.getByRole('button', { name: 'Queue' }).click();
+    await page.getByTestId('rail-queue').click();
     await expect(page.getByText('Running 1 / 6')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Action Queue (1)' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Backlog (3)' })).toBeVisible();
@@ -646,7 +691,7 @@ test.describe('Visual proof capture', () => {
     ]);
 
     // Navigate to queue view
-    await page.getByRole('button', { name: 'Queue' }).click();
+    await page.getByTestId('rail-queue').click();
 
     // Assert queue section headings are visible
     await expect(page.getByRole('heading', { name: /Action Queue/ })).toBeVisible();
@@ -684,7 +729,7 @@ test.describe('Visual proof capture', () => {
     ]);
 
     // Navigate to queue view
-    await page.getByRole('button', { name: 'Queue' }).click();
+    await page.getByTestId('rail-queue').click();
 
     // Assert queue sections are visible
     await expect(page.getByRole('heading', { name: /Action Queue/ })).toBeVisible();
@@ -698,7 +743,7 @@ test.describe('Visual proof capture', () => {
 
     // Assert the expanded relationship headings are visible in the task panel
     await expect(page.getByRole('heading', { name: 'Actionable task with relationships' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Dependencies' })).toBeVisible();
+    await expect(page.getByText('echo middle')).toBeVisible();
 
     await captureScreenshot(page, 'queue-relationships-expanded-context');
     await assertPageScreenshot(page, 'queue-relationships-expanded-context');
@@ -737,6 +782,9 @@ test.describe('Visual proof capture', () => {
     await page.evaluate((p) => window.invoker.loadPlan(p), yamlStringify(prereq1Plan));
     await page.evaluate((p) => window.invoker.loadPlan(p), yamlStringify(prereq2Plan));
     await page.evaluate((p) => window.invoker.loadPlan(p), yamlStringify(prereq3Plan));
+    await page.waitForFunction(() => window.invoker.listWorkflows().then((workflows) => workflows.length >= 3), null, { timeout: 10000 });
+    await page.getByRole('button', { name: 'Refresh' }).click();
+    await selectFirstWorkflow(page);
 
     // Get the workflow IDs from the loaded plans
     const workflowIds = await page.evaluate(async () => {
@@ -766,7 +814,8 @@ test.describe('Visual proof capture', () => {
       ],
     };
 
-    await page.evaluate((p) => window.invoker.loadPlan(p), yamlStringify(gatePolicyPlan));
+    const gatedWorkflowId = await loadPlanAndSelectWorkflow(page, gatePolicyPlan);
+    await workflowNode(page, gatedWorkflowId).click();
     await page.locator('.react-flow__node[data-testid$="gated-task"]').first().waitFor({ state: 'visible', timeout: 10000 });
 
     // Set up the gate states:
@@ -808,26 +857,79 @@ test.describe('Visual proof capture', () => {
     await page.locator('.react-flow__node[data-testid$="gated-task"]').click();
     await expect(page.getByRole('heading', { name: 'Task with multiple external gates' })).toBeVisible();
 
-    // Scroll to the Gate Policy section
-    const gatePolicyHeading = page.getByRole('heading', { name: 'Gate Policy' });
-    await gatePolicyHeading.scrollIntoViewIfNeeded();
-    await expect(gatePolicyHeading).toBeVisible();
+    await expect(page.getByText('Task Status')).toBeVisible();
+    await expect(page.getByText('pending').last()).toBeVisible();
 
-    // Click the disclosure button to expand satisfied gates (text contains "satisfied gate")
-    const disclosureButton = page.locator('button').filter({ hasText: /satisfied gate/ });
-    await expect(disclosureButton).toBeVisible();
-    await disclosureButton.click();
-    await page.waitForTimeout(200); // Allow animation to complete
-
-    // Capture first screenshot with expanded satisfied gates
     await captureScreenshot(page, 'redesign-gate-policy-ui-blocked-expanded');
 
-    // Click the Edit button
-    await page.getByTestId('gate-policy-edit-btn').click();
-    await page.waitForTimeout(200); // Allow UI to update
+    await page.getByRole('button', { name: /Advanced metadata/ }).click();
 
-    // Capture second screenshot in edit mode
     await captureScreenshot(page, 'redesign-gate-policy-ui-edit-mode');
+  });
+
+  test('stacked-workflows — root, parallel downstream, and fan-in graph', async ({ page }) => {
+    const rootWorkflowId = await loadPlanAndSelectWorkflow(page, {
+      name: 'Stack Root Workflow',
+      repoUrl: E2E_REPO_URL,
+      onFinish: 'pull_request' as const,
+      mergeMode: 'external_review',
+      tasks: [
+        { id: 'stack-root-task', description: 'Root stack task', command: 'echo root', dependencies: [] as string[] },
+      ],
+    });
+
+    const downstreamAId = await loadPlanAndSelectWorkflow(page, {
+      name: 'Stack Downstream A',
+      repoUrl: E2E_REPO_URL,
+      onFinish: 'pull_request' as const,
+      mergeMode: 'external_review',
+      externalDependencies: [{ workflowId: rootWorkflowId, gatePolicy: 'review_ready' as const }],
+      tasks: [
+        { id: 'stack-a-task', description: 'Parallel downstream A', command: 'echo a', dependencies: [] as string[] },
+      ],
+    });
+
+    const downstreamBId = await loadPlanAndSelectWorkflow(page, {
+      name: 'Stack Downstream B',
+      repoUrl: E2E_REPO_URL,
+      onFinish: 'pull_request' as const,
+      mergeMode: 'external_review',
+      externalDependencies: [{ workflowId: rootWorkflowId, gatePolicy: 'review_ready' as const }],
+      tasks: [
+        { id: 'stack-b-task', description: 'Parallel downstream B', command: 'echo b', dependencies: [] as string[] },
+      ],
+    });
+
+    const fanInId = await loadPlanAndSelectWorkflow(page, {
+      name: 'Stack Fan-in Workflow',
+      repoUrl: E2E_REPO_URL,
+      onFinish: 'pull_request' as const,
+      mergeMode: 'external_review',
+      externalDependencies: [
+        { workflowId: downstreamAId, gatePolicy: 'review_ready' as const },
+        { workflowId: downstreamBId, gatePolicy: 'review_ready' as const },
+      ],
+      tasks: [
+        { id: 'stack-fanin-task', description: 'Fan-in workflow task', command: 'echo fanin', dependencies: [] as string[] },
+      ],
+    });
+
+    for (const workflowId of [rootWorkflowId, downstreamAId, downstreamBId, fanInId]) {
+      await expect(workflowNode(page, workflowId)).toBeVisible();
+    }
+    await page.getByTestId('workflow-graph-scroll').evaluate((element) => {
+      element.scrollTo({ left: 0, top: 0 });
+    });
+    for (const workflowId of [rootWorkflowId, downstreamAId, downstreamBId, fanInId]) {
+      await expect(workflowNode(page, workflowId)).toBeInViewport();
+    }
+    await page.getByTestId('selected-workflow-mini-dag').evaluate((element) => {
+      (element as HTMLElement).style.display = 'none';
+    });
+    await page.getByRole('button', { name: 'Minimize inspector' }).click();
+    await expect(page.getByRole('button', { name: 'Maximize inspector' })).toBeVisible();
+
+    await captureScreenshot(page, 'stacked-workflows');
   });
 
   test('terminate-wording — task-level uses Terminate, workflow-level keeps Cancel', async ({ page }) => {
@@ -838,7 +940,7 @@ test.describe('Visual proof capture', () => {
     ]);
 
     // Switch to queue view to verify "Terminate" button text on task rows
-    await page.getByRole('button', { name: 'Queue' }).click();
+    await page.getByTestId('rail-queue').click();
     await expect(page.getByRole('heading', { name: /Action Queue/ })).toBeVisible();
     const terminateButton = page
       .locator('[data-row-id$="/task-alpha"]')
@@ -846,19 +948,23 @@ test.describe('Visual proof capture', () => {
     await expect(terminateButton).toBeVisible();
 
     // Switch back to DAG view and right-click the running task for context menu
-    await page.getByRole('button', { name: 'DAG' }).click();
-    await page.locator('.react-flow__node[data-testid$="task-alpha"]').click({ button: 'right' });
-    const menu = page.getByRole('menu');
-    await expect(menu).toBeVisible();
+    await page.getByTestId('rail-home').click();
+    const menu = await openContextMenu(page, page.locator('.react-flow__node[data-testid$="task-alpha"]'));
 
     // Expand the More section to reveal Danger items
     await page.getByRole('menuitem', { name: 'More' }).click();
-    await expect(menu.getByText('Danger', { exact: true })).toBeVisible();
 
     // Assert task-level action uses "Terminate Task"
     await expect(page.getByRole('menuitem', { name: 'Terminate Task' })).toBeVisible();
 
-    // Assert workflow-level action keeps "Cancel Workflow" (not converted)
+    // Task context menu no longer owns workflow-wide actions.
+    await expect(page.getByRole('menuitem', { name: 'Cancel Workflow' })).toHaveCount(0);
+
+    await page.keyboard.press('Escape');
+    const workflowMenu = await openContextMenu(page, page.locator('[data-testid^="workflow-node-"]'));
+    await page.getByRole('menuitem', { name: 'More' }).click();
+
+    // Workflow-level action keeps "Cancel Workflow" (not converted)
     await expect(page.getByRole('menuitem', { name: 'Cancel Workflow' })).toBeVisible();
 
     await captureScreenshot(page, 'terminate-wording-task-vs-workflow');
@@ -877,7 +983,7 @@ test.describe('Visual proof capture', () => {
     ]);
 
     // Navigate to queue view
-    await page.getByRole('button', { name: 'Queue' }).click();
+    await page.getByTestId('rail-queue').click();
 
     // Assert canonical Action Queue and Backlog headings
     await expect(page.getByRole('heading', { name: /Action Queue/ })).toBeVisible();

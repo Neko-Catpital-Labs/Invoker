@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
 import { vi } from 'vitest';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
+import type { WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
@@ -32,108 +33,59 @@ describe('Visual proof snapshots', () => {
 
   it('empty-state', () => {
     render(<App />);
-    expect(screen.getByText('Load a plan to get started')).toBeInTheDocument();
-    expect(screen.getByText('Open File')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Utility menu' })).toBeInTheDocument();
+    expect(screen.getByText('Load a plan to render workflow graph')).toBeInTheDocument();
+    expect(screen.getByTestId('rail-open-file')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Home' })).toBeInTheDocument();
     expect(screen.queryByText('System Setup')).not.toBeInTheDocument();
   });
 
-  it('dag-loaded', async () => {
-    const alpha = makeUITask({ id: 'task-alpha', description: 'First test task', status: 'pending' });
-    const beta = makeUITask({ id: 'task-beta', description: 'Second test task', status: 'pending', dependencies: ['task-alpha'] });
-
-    render(<App />);
-    act(() => mock.setTasks([alpha, beta]));
-
-    await waitFor(() => {
-      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
-      expect(screen.getByTestId('rf__node-task-beta')).toBeInTheDocument();
-    });
-
-    expect(screen.getByText('Pending:')).toBeInTheDocument();
-    expect(screen.getByText('First test task')).toBeInTheDocument();
-    expect(screen.getByText('Second test task')).toBeInTheDocument();
-  });
-
-  it('task-running', async () => {
-    const now = Date.now();
-    const alpha = makeUITask({ id: 'task-alpha', description: 'First test task', status: 'running', execution: { startedAt: new Date(now - 3000) } } as any);
-    const beta = makeUITask({ id: 'task-beta', description: 'Second test task', status: 'pending', dependencies: ['task-alpha'] });
-
-    render(<App />);
-    act(() => mock.setTasks([alpha, beta]));
-
-    await waitFor(() => {
-      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
-    });
-
-    expect(screen.getByText('RUNNING')).toBeInTheDocument();
-  });
-
-  it('task-complete', async () => {
-    const now = Date.now();
-    const alpha = makeUITask({
-      id: 'task-alpha', description: 'First test task', status: 'completed',
-      execution: { startedAt: new Date(now - 10000), completedAt: new Date(now - 5000) },
-    } as any);
+  it('workflow graph with selected mini-dag', async () => {
+    const workflows: WorkflowMeta[] = [
+      { id: 'wf-alpha', name: 'Alpha', status: 'running' },
+      { id: 'wf-beta', name: 'Beta', status: 'failed' },
+    ];
+    const alpha = makeUITask({ id: 'task-alpha', description: 'First test task', status: 'running', workflowId: 'wf-alpha' });
     const beta = makeUITask({
-      id: 'task-beta', description: 'Second test task', status: 'completed',
-      dependencies: ['task-alpha'],
-      execution: { startedAt: new Date(now - 5000), completedAt: new Date(now) },
-    } as any);
-
-    render(<App />);
-    act(() => mock.setTasks([alpha, beta]));
-
-    await waitFor(() => {
-      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
-    });
-
-    expect(screen.getAllByText('COMPLETED')).toHaveLength(2);
-  });
-
-  it('task-panel', async () => {
-    const alpha = makeUITask({ id: 'task-alpha', description: 'First test task', status: 'pending', command: 'echo hello-alpha' });
-    const beta = makeUITask({ id: 'task-beta', description: 'Second test task', status: 'pending', dependencies: ['task-alpha'] });
-
-    render(<App />);
-    act(() => mock.setTasks([alpha, beta]));
-
-    await waitFor(() => {
-      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByTestId('rf__node-task-alpha'));
-
-    await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'First test task' })).toBeInTheDocument();
-    });
-
-    expect(screen.getByText('echo hello-alpha')).toBeInTheDocument();
-  });
-
-  it('task-panel-agent-selector', async () => {
-    const alpha = makeUITask({
-      id: 'task-alpha',
-      description: 'Agent selector task',
+      id: 'task-beta',
+      description: 'Second test task',
       status: 'pending',
-      prompt: 'Write tests for the agent selector',
-      config: { prompt: 'Write tests for the agent selector', executionAgent: 'claude' } as any,
+      workflowId: 'wf-beta',
+      config: {
+        workflowId: 'wf-beta',
+        externalDependencies: [{ workflowId: 'wf-alpha', requiredStatus: 'completed' }],
+      } as any,
     });
 
     render(<App />);
-    act(() => mock.setTasks([alpha]));
+    act(() => mock.setTasks([alpha, beta], workflows));
 
     await waitFor(() => {
-      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+      expect(screen.getByText('Alpha')).toBeInTheDocument();
+      expect(screen.getByText('Beta')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByTestId('rf__node-task-alpha'));
+    fireEvent.click(screen.getByTestId('workflow-node-wf-alpha'));
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Alpha task DAG');
+      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Alpha task DAG');
+    });
+  });
+
+  it('workflow and task context menus render', async () => {
+    const workflows: WorkflowMeta[] = [{ id: 'wf-alpha', name: 'Alpha', status: 'running' }];
+    const alpha = makeUITask({ id: 'task-alpha', description: 'First test task', status: 'running', workflowId: 'wf-alpha' });
+
+    render(<App />);
+    act(() => mock.setTasks([alpha], workflows));
 
     await waitFor(() => {
-      expect(screen.getByTestId('execution-agent-select')).toBeInTheDocument();
+      expect(screen.getByTestId('workflow-node-wf-alpha')).toBeInTheDocument();
     });
 
-    expect(screen.getByTestId('execution-agent-select')).toHaveValue('claude');
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-alpha'));
+    await waitFor(() => {
+      expect(screen.getByText('Open Workflow')).toBeInTheDocument();
+      expect(screen.getByText('Retry Workflow')).toBeInTheDocument();
+    });
   });
 });

@@ -43,5 +43,6 @@ export default function globalSetup(): void {
   execSync(`git clone "${E2E_BARE_REPO}" "${tmpClone}"`, { env: gitEnv });
   execSync('git commit --allow-empty -m "init"', { cwd: tmpClone, env: gitEnv });
   execSync('git push origin HEAD:refs/heads/master', { cwd: tmpClone, env: gitEnv });
+  execSync('git push origin HEAD:refs/heads/main', { cwd: tmpClone, env: gitEnv });
   rmSync(tmpClone, { recursive: true });
 }

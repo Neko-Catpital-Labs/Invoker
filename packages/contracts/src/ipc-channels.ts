@@ -9,7 +9,15 @@
  *   - Event channels use webContents.send / ipcRenderer.on (main pushes to renderer).
  */
 
-import type { TaskState, TaskDelta, TaskStateChanges } from '@invoker/workflow-graph';
+import type {
+  TaskState,
+  TaskDelta,
+  TaskStateChanges,
+  WorkflowDerivedStatus,
+  WorkflowRollup,
+} from '@invoker/workflow-graph';
+
+export type { WorkflowDerivedStatus, WorkflowRollup } from '@invoker/workflow-graph';
 
 // ── Types used by IPC channels ──────────────────────────────
 // These were previously in packages/app/src/types.ts.
@@ -28,7 +36,8 @@ export interface TaskReplacementDef {
 export interface WorkflowMeta {
   id: string;
   name: string;
-  status: string;
+  status: WorkflowDerivedStatus;
+  rollup?: WorkflowRollup;
   baseBranch?: string;
   featureBranch?: string;
   onFinish?: string;
@@ -105,7 +114,8 @@ export interface ResumeWorkflowResult {
 export interface WorkflowListEntry {
   id: string;
   name: string;
-  status: string;
+  status: WorkflowDerivedStatus;
+  rollup?: WorkflowRollup;
   createdAt: string;
   updatedAt: string;
 }

@@ -1,3 +1,4 @@
+import { computeWorkflowRollup } from '@invoker/workflow-core';
 import type { TaskState, TaskStateChanges, OrchestratorPersistence, Attempt } from '@invoker/workflow-core';
 
 /**
@@ -90,7 +91,7 @@ export class InMemoryPersistence implements OrchestratorPersistence {
   }
 
   listWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string; baseBranch?: string; onFinish?: string; mergeMode?: 'manual' | 'automatic' | 'external_review'; generation?: number }> {
-    return Array.from(this.workflows.values());
+    return Array.from(this.workflows.values()).map((workflow) => this.withDerivedStatus(workflow));
   }
 
   loadTasks(workflowId: string): TaskState[] {
@@ -100,7 +101,15 @@ export class InMemoryPersistence implements OrchestratorPersistence {
   }
 
   loadWorkflow(workflowId: string) {
-    return this.workflows.get(workflowId) as any;
+    const workflow = this.workflows.get(workflowId);
+    return workflow ? this.withDerivedStatus(workflow) as any : undefined;
+  }
+
+  private withDerivedStatus<T extends { id: string; status: string }>(workflow: T): T {
+    const tasks = this.loadTasks(workflow.id);
+    if (tasks.length === 0) return workflow;
+    const rollup = computeWorkflowRollup(tasks);
+    return { ...workflow, status: rollup.status, rollup };
   }
 
   getWorkspacePath(taskId: string): string | null {

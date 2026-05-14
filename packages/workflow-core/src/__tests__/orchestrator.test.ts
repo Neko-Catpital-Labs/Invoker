@@ -3,6 +3,7 @@ import { reconciliationNeedsInputWorkResponse } from './reconciliation-needs-inp
 import { rid, sid } from './scoped-test-helpers.js';
 import { Orchestrator, PlanConflictError, descriptionForMergeNode } from '../orchestrator.js';
 import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
+import { computeWorkflowRollup } from '../task-types.js';
 import type { TaskState, TaskDelta, TaskStateChanges, Attempt } from '../task-types.js';
 import type { Logger, WorkResponse } from '@invoker/contracts';
 
@@ -62,6 +63,9 @@ class InMemoryPersistence implements OrchestratorPersistence {
     if (wf && changes.status) {
       wf.status = changes.status;
     }
+    if (wf && changes.updatedAt) {
+      wf.updatedAt = changes.updatedAt;
+    }
     if (wf && changes.mergeMode !== undefined) {
       wf.mergeMode = changes.mergeMode;
     }
@@ -78,11 +82,13 @@ class InMemoryPersistence implements OrchestratorPersistence {
   } | undefined {
     const wf = this.workflows.get(workflowId);
     if (!wf) return undefined;
+    const derived = this.withDerivedStatus(wf);
     return {
-      repoUrl: wf.repoUrl,
-      baseBranch: wf.baseBranch,
-      featureBranch: wf.featureBranch,
-      mergeMode: wf.mergeMode,
+      ...derived,
+      repoUrl: derived.repoUrl,
+      baseBranch: derived.baseBranch,
+      featureBranch: derived.featureBranch,
+      mergeMode: derived.mergeMode,
     };
   }
 
@@ -133,7 +139,14 @@ class InMemoryPersistence implements OrchestratorPersistence {
   }
 
   listWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string }> {
-    return Array.from(this.workflows.values());
+    return Array.from(this.workflows.values()).map((workflow) => this.withDerivedStatus(workflow));
+  }
+
+  private withDerivedStatus<T extends { id: string; status: string }>(workflow: T): T {
+    const tasks = this.loadTasks(workflow.id);
+    if (tasks.length === 0) return workflow;
+    const rollup = computeWorkflowRollup(tasks);
+    return { ...workflow, status: rollup.status, rollup };
   }
 
   loadTasks(workflowId: string): TaskState[] {
@@ -300,6 +313,40 @@ describe('Orchestrator', () => {
   });
 
   describe('workflow status transitions during retry paths', () => {
+    it('stores a newly loaded workflow as pending while all tasks are pending', () => {
+      orchestrator.loadPlan({
+        name: 'Pending workflow',
+        onFinish: 'none',
+        tasks: [
+          { id: 't1', description: 'First', command: 'echo 1' },
+          { id: 't2', description: 'Second', command: 'echo 2', dependencies: ['t1'] },
+        ],
+      });
+
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+
+      expect(persistence.listWorkflows().find((workflow) => workflow.id === workflowId)?.status).toBe('pending');
+    });
+
+    it('rolls workflow status up from active and waiting task states', () => {
+      orchestrator.loadPlan({
+        name: 'Status rollup',
+        onFinish: 'none',
+        tasks: [{ id: 't1', description: 'First', command: 'echo 1' }],
+      });
+
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+      const taskId = orchestrator.getAllTasks().find(
+        (task) => task.config.workflowId === workflowId && !task.config.isMergeNode,
+      )!.id;
+
+      orchestrator.startExecution();
+      expect(persistence.listWorkflows().find((workflow) => workflow.id === workflowId)?.status).toBe('running');
+
+      orchestrator.setTaskAwaitingApproval(taskId);
+      expect(persistence.listWorkflows().find((workflow) => workflow.id === workflowId)?.status).toBe('awaiting_approval');
+    });
+
     it('clears stale failed workflow status when a failed task is restarted', () => {
       orchestrator.loadPlan({
         name: 'Retry workflow',
@@ -322,7 +369,7 @@ describe('Orchestrator', () => {
       const restarted = orchestrator.retryTask(taskId);
 
       expect(restarted.some((task) => task.id === taskId && task.status === 'running')).toBe(true);
-      expect(persistence.workflows.get(workflowId)?.status).toBe('running');
+      expect(persistence.listWorkflows().find((workflow) => workflow.id === workflowId)?.status).toBe('running');
     });
 
     it('clears stale failed workflow status when a workflow is recreated', () => {
@@ -350,7 +397,7 @@ describe('Orchestrator', () => {
       const restarted = orchestrator.recreateWorkflow(workflowId);
 
       expect(restarted.some((task) => task.id === taskId && task.status === 'running')).toBe(true);
-      expect(persistence.workflows.get(workflowId)?.status).toBe('running');
+      expect(persistence.listWorkflows().find((workflow) => workflow.id === workflowId)?.status).toBe('running');
     });
 
     it('resets auto-fix attempts to zero when a workflow is recreated', () => {
@@ -1884,9 +1931,9 @@ describe('Orchestrator', () => {
 
       orchestrator.setTaskAwaitingApproval('a1');
 
-      // Workflow should NOT be marked completed because a task is awaiting_approval
+      // Workflow should expose the waiting state instead of collapsing it to completed.
       const workflows = persistence.listWorkflows();
-      expect(workflows[0].status).toBe('running');
+      expect(workflows[0].status).toBe('awaiting_approval');
     });
 
     it('includes additionalChanges in task state and delta', () => {
@@ -2746,11 +2793,11 @@ describe('Orchestrator', () => {
         makeResponse({ actionId: mergeNode!.id, status: 'completed', outputs: { exitCode: 0 } }),
       );
 
-      const wf = Array.from(persistence.workflows.values())[0];
+      const wf = persistence.listWorkflows()[0];
       expect(wf.status).toBe('completed');
     });
 
-    it('workflow stays running when a task fails but dependents are still pending', () => {
+    it('workflow fails when a failed task blocks all pending dependents', () => {
       orchestrator.loadPlan({
         name: 'fail-completion-test',
         tasks: [
@@ -2764,9 +2811,9 @@ describe('Orchestrator', () => {
         makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
       );
 
-      // t2 stays pending (not blocked), so workflow is not settled
-      const wf = Array.from(persistence.workflows.values())[0];
-      expect(wf.status).toBe('running');
+      // t2 and the merge node stay pending, but both are blocked behind t1.
+      const wf = persistence.listWorkflows()[0];
+      expect(wf.status).toBe('failed');
     });
 
     it('does not mark workflow complete while tasks are running', () => {
@@ -2783,7 +2830,7 @@ describe('Orchestrator', () => {
         makeResponse({ actionId: 't1', status: 'completed', outputs: { exitCode: 0 } }),
       );
 
-      const wf = Array.from(persistence.workflows.values())[0];
+      const wf = persistence.listWorkflows()[0];
       expect(wf.status).toBe('running');
     });
 
@@ -2802,8 +2849,8 @@ describe('Orchestrator', () => {
         }),
       );
 
-      const wf = Array.from(persistence.workflows.values())[0];
-      expect(wf.status).toBe('running');
+      const wf = persistence.listWorkflows()[0];
+      expect(wf.status).toBe('blocked');
     });
 
     it('updates workflow status to completed (no bogus __workflow__ event)', () => {
@@ -2822,7 +2869,7 @@ describe('Orchestrator', () => {
         makeResponse({ actionId: mergeNode!.id, status: 'completed', outputs: { exitCode: 0 } }),
       );
 
-      const wf = Array.from(persistence.workflows.values())[0];
+      const wf = persistence.listWorkflows()[0];
       expect(wf.status).toBe('completed');
 
       const wfEvents = persistence.events.filter((e) => e.eventType === 'workflow.completed');

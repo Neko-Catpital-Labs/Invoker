@@ -67,6 +67,7 @@ export const test = base.extend<ElectronFixtures>({
         INVOKER_REPO_CONFIG_PATH: configPath,
         INVOKER_E2E_MARKER_ROOT: markerRoot,
         INVOKER_TEST_FIXED_NOW: '2025-01-01T00:00:00.000Z',
+        INVOKER_CLAUDE_COMMAND: claudeMarker,
         INVOKER_CLAUDE_FIX_COMMAND: claudeMarker,
         PATH: pathEnv,
       },
@@ -134,10 +135,28 @@ export const TEST_PLAN = {
   ],
 };
 
-/** Load a plan into the running app via the IPC bridge and wait for DAG to render. */
-export async function loadPlan(page: Page, plan: typeof TEST_PLAN): Promise<void> {
+/** Select the first workflow node so the reskinned mini-DAG renders task nodes. */
+export async function selectFirstWorkflow(page: Page): Promise<void> {
+  const workflowNode = page.locator('[data-testid^="workflow-node-"]').first();
+  await workflowNode.waitFor({ state: 'visible', timeout: 10000 });
+  await workflowNode.click();
+}
+
+/** Load a plan into the running app via the IPC bridge and wait for its mini-DAG to render. */
+export async function loadPlan(page: Page, plan: { tasks: readonly { id: string }[] }): Promise<void> {
   const planYaml = yamlStringify(plan);
   await page.evaluate((p) => window.invoker.loadPlan(p), planYaml);
+  await page.waitForFunction(
+    (expectedTaskCount) => window.invoker.getTasks(true).then((result) => {
+      const tasks = Array.isArray(result) ? result : result.tasks;
+      const workflows = Array.isArray(result) ? [] : result.workflows ?? [];
+      return tasks.length >= expectedTaskCount && workflows.length > 0;
+    }),
+    plan.tasks.length,
+    { timeout: 10000 },
+  );
+  await page.getByRole('button', { name: 'Refresh' }).click();
+  await selectFirstWorkflow(page);
   await page.locator(`.react-flow__node[data-testid$="${plan.tasks[0].id}"]`).first().waitFor({ state: 'visible', timeout: 10000 });
 }
 

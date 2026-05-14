@@ -1,5 +1,5 @@
 /**
- * Component test: TopBar controls (Refresh, Clear).
+ * Component test: side rail controls (Refresh, Clear).
  *
  * Demoted from packages/app/e2e/keyboard-controls.spec.ts.
  * Dropped: Ctrl+Backtick terminal toggle, terminal toggle bar (Electron shell features).
@@ -17,7 +17,7 @@ vi.mock('@xyflow/react', async () => {
 
 const { App } = await import('../App.js');
 
-describe('TopBar controls (component)', () => {
+describe('Side rail controls (component)', () => {
   let mock: MockInvoker;
 
   beforeEach(() => {
@@ -31,8 +31,7 @@ describe('TopBar controls (component)', () => {
 
   it('Refresh button calls getTasks with forceRefresh=true', async () => {
     render(<App />);
-    fireEvent.click(screen.getByRole('button', { name: 'Utility menu' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Refresh' }));
+    fireEvent.click(screen.getByTestId('rail-refresh'));
 
     await waitFor(() => {
       expect(mock.api.getTasks).toHaveBeenCalled();
@@ -42,8 +41,7 @@ describe('TopBar controls (component)', () => {
 
   it('Clear button calls clear', async () => {
     render(<App />);
-    fireEvent.click(screen.getByRole('button', { name: 'Utility menu' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Clear Session' }));
+    fireEvent.click(screen.getByTestId('rail-clear'));
 
     await waitFor(() => {
       expect(mock.api.clear).toHaveBeenCalled();
