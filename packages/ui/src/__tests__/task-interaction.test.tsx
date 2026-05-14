@@ -92,7 +92,7 @@ describe('Task interaction (component)', () => {
       expect(screen.queryByTestId('workflow-inspector-prompt-input')).not.toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByTestId('rf__node-task-failed'));
+    fireEvent.click(await screen.findByTestId('rf__node-task-failed'));
     await waitFor(() => {
       expect(screen.getByTestId('workflow-inspector-status-label')).toHaveTextContent('failed');
       expect(screen.getByTestId('workflow-inspector-prompt-input')).toHaveValue('exit 1');

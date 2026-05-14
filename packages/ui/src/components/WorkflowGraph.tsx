@@ -1,7 +1,12 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent, PointerEvent } from 'react';
 import type { TaskState, WorkflowMeta, WorkflowStatus } from '../types.js';
-import { deriveWorkflowGraph, layoutWorkflowGraph } from '../lib/workflow-graph.js';
+import {
+  deriveWorkflowGraph,
+  layoutWorkflowGraphWithElk,
+  type WorkflowGraphLayout,
+  type WorkflowRoutePoint,
+} from '../lib/workflow-graph.js';
 import { WorkflowNode } from './WorkflowNode.js';
 
 interface WorkflowGraphProps {
@@ -31,15 +36,55 @@ export function WorkflowGraph({
   } | null>(null);
   const pannedRef = useRef(false);
   const [dragging, setDragging] = useState(false);
+  const [elkLayout, setElkLayout] = useState<{ key: string; result: WorkflowGraphLayout } | null>(null);
+  const [layoutError, setLayoutError] = useState<{ key: string; error: string } | null>(null);
   const graph = useMemo(() => deriveWorkflowGraph(workflows, tasks), [workflows, tasks]);
-  const positions = useMemo(() => layoutWorkflowGraph(graph), [graph]);
+  const graphKey = useMemo(() => JSON.stringify({
+    nodes: graph.nodes.map((node) => node.id).sort(),
+    edges: graph.edges.map((edge) => `${edge.source}->${edge.target}`).sort(),
+  }), [graph]);
+  const activeLayout = elkLayout?.key === graphKey ? elkLayout.result : null;
+  const positions = activeLayout?.positions ?? new Map<string, { x: number; y: number }>();
   const width = Math.max(1400, ...[...positions.values()].map((position) => position.x + 320));
   const height = Math.max(900, ...[...positions.values()].map((position) => position.y + 220));
+
+  useEffect(() => {
+    if (graph.nodes.length === 0) return;
+    let stale = false;
+
+    void layoutWorkflowGraphWithElk(graph).then((result) => {
+      if (!stale) {
+        setElkLayout({ key: graphKey, result });
+        setLayoutError(null);
+      }
+    }).catch((error: unknown) => {
+      if (!stale) {
+        setElkLayout(null);
+        setLayoutError({
+          key: graphKey,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
+
+    return () => {
+      stale = true;
+    };
+  }, [graph, graphKey]);
 
   if (graph.nodes.length === 0) {
     return (
       <div className="h-full flex items-center justify-center text-gray-500 text-sm">
         Load a plan to render workflow graph
+      </div>
+    );
+  }
+
+  if (!activeLayout) {
+    const error = layoutError?.key === graphKey ? layoutError.error : undefined;
+    return (
+      <div className="h-full flex items-center justify-center text-gray-500 text-sm">
+        {error ? `Workflow graph layout failed: ${error}` : 'Preparing workflow graph layout'}
       </div>
     );
   }
@@ -108,6 +153,7 @@ export function WorkflowGraph({
             const source = positions.get(edge.source);
             const target = positions.get(edge.target);
             if (!source || !target) return null;
+            const routePoints = activeLayout?.edgePoints.get(`${edge.source}->${edge.target}`);
             const x1 = source.x + 220;
             const y1 = source.y + 58;
             const x2 = target.x;
@@ -117,17 +163,19 @@ export function WorkflowGraph({
             return (
               <path
                 key={`${edge.source}-${edge.target}`}
-                d={`M ${x1} ${y1} C ${cx1} ${y1}, ${cx2} ${y2}, ${x2} ${y2}`}
+                d={routePoints ? routedPath(routePoints) : `M ${x1} ${y1} C ${cx1} ${y1}, ${cx2} ${y2}, ${x2} ${y2}`}
                 fill="none"
                 stroke="rgba(148,163,184,0.55)"
                 strokeWidth={2}
+                strokeDasharray="6 4"
               />
             );
           })}
         </svg>
 
         {graph.nodes.map((node) => {
-          const position = positions.get(node.id) ?? { x: 80, y: 80 };
+          const position = positions.get(node.id);
+          if (!position) return null;
           const dimmed = statusFilters.size > 0 && !statusFilters.has(node.workflow.status);
           return (
             <div
@@ -148,4 +196,9 @@ export function WorkflowGraph({
       </div>
     </div>
   );
+}
+
+function routedPath(points: readonly WorkflowRoutePoint[]): string {
+  const [first, ...rest] = points;
+  return `M ${first.x} ${first.y} ${rest.map((point) => `L ${point.x} ${point.y}`).join(' ')}`;
 }
