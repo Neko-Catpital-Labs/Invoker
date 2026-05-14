@@ -12,6 +12,7 @@ export * from './base-executor.js';
 export * from './process-utils.js';
 export * from './docker-executor.js';
 export * from './worktree-executor.js';
+export * from './merge-gate-executor.js';
 export * from './ssh-executor.js';
 export * from './repo-pool.js';
 export * from './registry.js';
