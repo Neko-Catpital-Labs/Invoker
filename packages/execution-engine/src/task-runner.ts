@@ -396,7 +396,14 @@ export class TaskRunner {
       const launchFailedAt = new Date();
       try {
         const latest = this.orchestrator.getTask(task.id);
-        if (latest && (latest.status === 'running' || latest.status === 'fixing_with_ai')) {
+        if (
+          latest
+          && (
+            latest.status === 'running'
+            || latest.status === 'fixing_with_ai'
+            || (latest.status === 'pending' && latest.execution.phase === 'launching')
+          )
+        ) {
           this.persistence.updateTask(task.id, {
             execution: {
               phase: latest.execution.phase ?? 'launching',

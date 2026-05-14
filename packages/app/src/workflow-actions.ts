@@ -20,6 +20,7 @@ import type { TaskRunner } from '@invoker/execution-engine';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 import { createDeleteAllSnapshot } from './delete-all-snapshot.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
+import { isDispatchableLaunch } from './global-topup.js';
 
 // ── Lineage guard ─────────────────────────────────────────────
 
@@ -689,7 +690,7 @@ export async function setWorkflowMergeMode(
     return;
   }
   const started = deps.orchestrator.editTaskMergeMode(mergeTask.id, normalized);
-  const runnable = started.filter((t) => t.status === 'running');
+  const runnable = started.filter(isDispatchableLaunch);
   if (runnable.length > 0) {
     await deps.taskExecutor.executeTasks(runnable);
   }
@@ -734,7 +735,7 @@ export async function setTaskFixContext(
   deps: Pick<ActionDeps, 'orchestrator'> & { taskExecutor: TaskRunner },
 ): Promise<TaskState[]> {
   const started = deps.orchestrator.editTaskFixContext(taskId, patch);
-  const runnable = started.filter((t) => t.status === 'running');
+  const runnable = started.filter(isDispatchableLaunch);
   if (runnable.length > 0) {
     await deps.taskExecutor.executeTasks(runnable);
   }
@@ -1090,7 +1091,7 @@ export async function autoFixOnFailure(
         persistence,
         taskExecutor,
       });
-      const runnable = started.filter((candidate) => candidate.status === 'running');
+      const runnable = started.filter(isDispatchableLaunch);
       persistence.logEvent?.(taskId, 'debug.auto-fix', {
         phase: 'auto-fix-post-route-recreate-workflow',
         workflowId: recoveryRoute.workflowId,
@@ -1165,7 +1166,7 @@ export async function autoFixOnFailure(
     }
     assertLineageCurrent(lineage, orchestrator, deps.signal);
     const started = orchestrator.retryTask(taskId);
-    const runnable = started.filter(t => t.status === 'running');
+    const runnable = started.filter(isDispatchableLaunch);
     persistence.logEvent?.(taskId, 'debug.auto-fix', {
       phase: 'auto-fix-post-route-restart',
       startedCount: started.length,

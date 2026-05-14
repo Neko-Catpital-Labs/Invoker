@@ -71,6 +71,11 @@ import {
 import type { GraphMutationHost } from './graph-mutation.js';
 import { buildPlanLocalToScopedIdMap, scopePlanTaskId } from './task-id-scope.js';
 import type { TaskRepository } from './task-repository.js';
+import {
+  planInvalidation,
+  withSchedulerEnqueueCandidates,
+  type InvalidationPlan,
+} from './invalidation-plan.js';
 
 // ── Channel Constants ───────────────────────────────────────
 
@@ -663,6 +668,7 @@ export class Orchestrator {
   private activeWorkflowIds = new Set<string>();
   private deferredTaskIds = new Set<string>();
   private beforeApproveHook?: (task: TaskState) => Promise<void>;
+  private lastInvalidationPlan?: InvalidationPlan;
 
   /**
    * Per-workflow record of the most recently observed upstream base
@@ -1066,6 +1072,16 @@ export class Orchestrator {
     return task.status === 'running' || task.status === 'fixing_with_ai';
   }
 
+  private isExecutableResponseTask(task: TaskState): boolean {
+    return task.status === 'running'
+      || task.status === 'fixing_with_ai'
+      || (
+        task.status === 'pending'
+        && task.execution.phase === 'launching'
+        && !!task.execution.selectedAttemptId
+      );
+  }
+
   private countActivePersistedAttempts(now: number = Date.now()): number {
     let count = 0;
     for (const task of this.stateMachine.getAllTasks()) {
@@ -1427,12 +1443,12 @@ export class Orchestrator {
         }
       }
       if (earlyTask) {
-        const executableStatuses = new Set(['running', 'fixing_with_ai']);
-        if (!executableStatuses.has(earlyTask.status)) {
+        if (!this.isExecutableResponseTask(earlyTask)) {
           this.logger.warn('[orchestrator] handleWorkerResponse: ignoring response for non-executable task', {
             workerResponseStatus: response.status,
             taskId: response.actionId,
             status: earlyTask.status,
+            phase: earlyTask.execution.phase,
           });
           return [];
         }
@@ -2031,6 +2047,12 @@ export class Orchestrator {
     // wired in Step 17) that bypass `applyInvalidation`'s upstream
     // cancel; a no-op when invoked through `applyInvalidation`.
     this.cancelActiveBeforeInvalidation('task', id);
+    let plan = planInvalidation({
+      action: 'retryTask',
+      targetId: id,
+      tasks: this.stateMachine.getAllTasks(),
+    });
+    this.lastInvalidationPlan = plan;
 
     const prevStatus = task.status;
     this.logger.info('[orchestrator] retryTask', { taskId: id, previousStatus: prevStatus });
@@ -2071,6 +2093,8 @@ export class Orchestrator {
     const { affectedIds } = this.resetSubgraphToPending([id], resetChanges, {
       forceResetIds: new Set([id]),
     });
+    plan = withSchedulerEnqueueCandidates(plan, affectedIds);
+    this.lastInvalidationPlan = plan;
     const afterRt = this.stateGetTask(id)!;
     this.logger.info('[agent-session-trace] retryTask: after writeAndSync', {
       taskId: id,
@@ -2147,7 +2171,7 @@ export class Orchestrator {
       (t) => t.config.workflowId === workflowId,
     );
 
-    const retryStatuses = new Set([
+    const retryStatuses: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
       'failed',
       'needs_input',
       'blocked',
@@ -2156,6 +2180,13 @@ export class Orchestrator {
       'awaiting_approval',
       'review_ready',
     ]);
+    let plan = planInvalidation({
+      action: 'retryWorkflow',
+      targetId: workflowId,
+      tasks: this.stateMachine.getAllTasks(),
+      retryStatuses,
+    });
+    this.lastInvalidationPlan = plan;
 
     const resetChanges: TaskStateChanges = {
       status: 'pending',
@@ -2177,6 +2208,8 @@ export class Orchestrator {
       .filter((task) => retryStatuses.has(task.status))
       .map((task) => task.id);
     const { affectedIds } = this.resetSubgraphToPending(retryRootIds, resetChanges);
+    plan = withSchedulerEnqueueCandidates(plan, affectedIds);
+    this.lastInvalidationPlan = plan;
     const afterResetMs = Date.now();
 
     this.logger.info('[orchestrator] retryWorkflow invalidation', {
@@ -2230,10 +2263,13 @@ export class Orchestrator {
     // Defense-in-depth for direct callers (CommandService.recreateTask
     // wired in Step 17); a no-op when invoked through `applyInvalidation`.
     this.cancelActiveBeforeInvalidation('task', rootId);
-    const allTasks = this.stateMachine.getAllTasks();
-    const taskMap = new Map(allTasks.map((t) => [t.id, t]));
-    const descendantIds = getTransitiveDependents(rootId, taskMap, () => false);
-    const toResetIds = [rootId, ...descendantIds];
+    let plan = planInvalidation({
+      action: 'recreateTask',
+      targetId: rootId,
+      tasks: this.stateMachine.getAllTasks(),
+    });
+    this.lastInvalidationPlan = plan;
+    const toResetIds = plan.affectedTaskIds;
     const toResetSet = new Set(toResetIds);
 
     const resetChanges: TaskStateChanges = {
@@ -2281,6 +2317,8 @@ export class Orchestrator {
       .getReadyTasks()
       .map((t) => t.id)
       .filter((id) => toResetSet.has(id));
+    plan = withSchedulerEnqueueCandidates(plan, readyIds);
+    this.lastInvalidationPlan = plan;
     return this.autoStartReadyTasks(readyIds, Orchestrator.EXPEDITED_PRIORITY);
   }
 
@@ -2302,6 +2340,12 @@ export class Orchestrator {
     // recreateWorkflowFromFreshBase wired in Step 17); a no-op when
     // invoked through `applyInvalidation`.
     this.cancelActiveBeforeInvalidation('workflow', workflowId);
+    let plan = planInvalidation({
+      action: 'recreateWorkflow',
+      targetId: workflowId,
+      tasks: this.stateMachine.getAllTasks(),
+    });
+    this.lastInvalidationPlan = plan;
 
     const resetChanges: TaskStateChanges = {
       status: 'pending',
@@ -2376,6 +2420,8 @@ export class Orchestrator {
       .getReadyTasks()
       .map((t) => t.id)
       .filter((id) => this.stateGetTask(id)?.config.workflowId === workflowId);
+    plan = withSchedulerEnqueueCandidates(plan, readyIds);
+    this.lastInvalidationPlan = plan;
     return this.autoStartReadyTasks(readyIds, Orchestrator.EXPEDITED_PRIORITY);
   }
 
@@ -3014,6 +3060,11 @@ export class Orchestrator {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
+    this.lastInvalidationPlan = planInvalidation({
+      action: 'scheduleOnly',
+      targetId: task.id,
+      tasks: this.stateMachine.getAllTasks(),
+    });
     if (task.status === 'running' || task.status === 'fixing_with_ai') {
       throw new Error(`Cannot edit running task ${taskId}`);
     }
@@ -3569,6 +3620,10 @@ export class Orchestrator {
 
   getAllTasks(): TaskState[] {
     return this.stateMachine.getAllTasks();
+  }
+
+  getLastInvalidationPlan(): InvalidationPlan | undefined {
+    return this.lastInvalidationPlan;
   }
 
   getReadyTasks(): TaskState[] {
@@ -4554,20 +4609,36 @@ export class Orchestrator {
         continue;
       }
 
-      const changes: TaskStateChanges = {
-        status: 'running',
-        execution: {
-          selectedAttemptId: launchAttemptId,
-          generation: this.getExecutionGeneration(task),
-          startedAt: now,
-          lastHeartbeatAt: now,
-          phase: 'launching',
-          launchStartedAt: now,
-          launchCompletedAt: undefined,
-        },
-      };
+      const changes: TaskStateChanges = this.deferRunningUntilLaunch
+        ? {
+            status: 'pending',
+            execution: {
+              selectedAttemptId: launchAttemptId,
+              generation: this.getExecutionGeneration(task),
+              lastHeartbeatAt: now,
+              phase: 'launching',
+              launchStartedAt: now,
+              launchCompletedAt: undefined,
+            },
+          }
+        : {
+            status: 'running',
+            execution: {
+              selectedAttemptId: launchAttemptId,
+              generation: this.getExecutionGeneration(task),
+              startedAt: now,
+              lastHeartbeatAt: now,
+              phase: 'launching',
+              launchStartedAt: now,
+              launchCompletedAt: undefined,
+            },
+          };
       const updated = this.writeAndSync(job.taskId, changes);
-      this.persistence.logEvent?.(job.taskId, 'task.running', changes);
+      this.persistence.logEvent?.(
+        job.taskId,
+        this.deferRunningUntilLaunch ? 'task.launch_claimed' : 'task.running',
+        changes,
+      );
       this.messageBus.publish(TASK_DELTA_CHANNEL, this.buildUpdateDelta(task, updated, changes));
       started.push(updated);
       this.logger.info('[orchestrator] drainScheduler: started', {
