@@ -96,6 +96,7 @@ describe('headless query cost', () => {
         readOnly: false,
         listWorkflows: vi.fn(() => [makeWorkflow('wf-1', 'completed')]),
         loadTasks: vi.fn(() => []),
+        loadAttempts: vi.fn((taskId: string) => [{ id: `${taskId}-attempt`, agentSessionId: `sess-${taskId.replace(/\//g, '-')}` }]),
       } as unknown as SQLiteAdapter,
       commandService: {} as CommandService,
       executorRegistry: {} as any,
@@ -204,6 +205,28 @@ describe('headless query cost', () => {
 
     expect(output1).toBe(output2);
   });
+
+  it('prefers persisted attempt matching the session over selectedAttemptId', async () => {
+    mockDeps.orchestrator.getAllTasks = vi.fn(() => [
+      makeTask('wf-1', 'task-a', {
+        execution: {
+          agentSessionId: 'sess-wf-1-task-a',
+          agentName: 'codex',
+          selectedAttemptId: 'selected-attempt',
+        },
+      }),
+    ] as any);
+    (mockDeps.persistence.loadAttempts as any) = vi.fn(() => [
+      { id: 'older-attempt', agentSessionId: 'other-session' },
+      { id: 'matched-attempt', agentSessionId: 'sess-wf-1-task-a' },
+    ]);
+
+    await runHeadless(['query', 'cost-events', '--output', 'json'], mockDeps);
+    const output = stdoutSpy.mock.calls[0][0] as string;
+    const parsed = JSON.parse(output);
+
+    expect(parsed[0].attemptId).toBe('matched-attempt');
+  });
 });
 
 describe('headless query cost-events', () => {
@@ -252,6 +275,7 @@ describe('headless query cost-events', () => {
         readOnly: false,
         listWorkflows: vi.fn(() => [makeWorkflow('wf-1', 'completed')]),
         loadTasks: vi.fn(() => []),
+        loadAttempts: vi.fn((taskId: string) => [{ id: `${taskId}-attempt`, agentSessionId: `sess-${taskId.replace(/\//g, '-')}` }]),
       } as unknown as SQLiteAdapter,
       commandService: {} as CommandService,
       executorRegistry: {} as any,
@@ -381,5 +405,27 @@ describe('headless query cost-events', () => {
     await expect(
       runHeadless(['query', 'cost-events', '--foo'], mockDeps),
     ).rejects.toThrow('Unknown query flag');
+  });
+
+  it('falls back to the latest persisted attempt when selectedAttemptId is missing', async () => {
+    sessionData.set('missing-from-attempts', makeSessionRaw([{ input: 10, output: 5 }]));
+    mockDeps.orchestrator.getAllTasks = vi.fn(() => [
+      makeTask('wf-1', 'task-a', {
+        execution: {
+          agentSessionId: 'missing-from-attempts',
+          agentName: 'codex',
+        },
+      }),
+    ] as any);
+    (mockDeps.persistence.loadAttempts as any) = vi.fn(() => [
+      { id: 'attempt-1', agentSessionId: 'older-session' },
+      { id: 'attempt-2', agentSessionId: 'newer-session' },
+    ]);
+
+    await runHeadless(['query', 'cost-events', '--output', 'json'], mockDeps);
+    const output = stdoutSpy.mock.calls[0][0] as string;
+    const parsed = JSON.parse(output);
+
+    expect(parsed[0].attemptId).toBe('attempt-2');
   });
 });

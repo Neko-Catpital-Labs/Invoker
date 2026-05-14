@@ -653,9 +653,11 @@ async function headlessCosts(
     );
 
     for (const task of tasks) {
+      const attemptId = resolveCostAttributionAttemptId(task, deps.persistence);
       const ctx = buildAttributionContext({
         id: task.id,
         workflowId: wf.id,
+        attemptId,
         runnerKind: task.config.runnerKind ?? 'worktree',
         agentSessionId: task.execution.agentSessionId,
         lastAgentSessionId: task.execution.lastAgentSessionId,
@@ -715,6 +717,23 @@ async function headlessCosts(
 
 type CostQueryDeps = Pick<HeadlessDeps, 'orchestrator' | 'persistence' | 'executionAgentRegistry'>;
 
+function resolveCostAttributionAttemptId(
+  task: Pick<TaskState, 'id' | 'execution'>,
+  persistence: Pick<SQLiteAdapter, 'loadAttempts'>,
+): string | undefined {
+  const attempts = persistence.loadAttempts(task.id);
+  const sessionId = task.execution.agentSessionId ?? task.execution.lastAgentSessionId;
+  const matchedAttemptId = sessionId
+    ? attempts.find((attempt) => attempt.agentSessionId === sessionId)?.id
+    : undefined;
+  if (matchedAttemptId) return matchedAttemptId;
+
+  const selectedAttemptId = task.execution.selectedAttemptId?.trim();
+  if (selectedAttemptId) return selectedAttemptId;
+
+  return attempts.at(-1)?.id;
+}
+
 async function collectCostEvents(
   flags: QueryFlags,
   deps: CostQueryDeps,
@@ -742,9 +761,11 @@ async function collectCostEvents(
     );
 
     for (const task of tasks) {
+      const attemptId = resolveCostAttributionAttemptId(task, deps.persistence);
       const ctx = buildAttributionContext({
         id: task.id,
         workflowId: wf.id,
+        attemptId,
         runnerKind: task.config.runnerKind ?? 'worktree',
         agentSessionId: task.execution.agentSessionId,
         lastAgentSessionId: task.execution.lastAgentSessionId,

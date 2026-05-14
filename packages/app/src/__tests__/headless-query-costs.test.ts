@@ -97,6 +97,7 @@ describe('headless query costs', () => {
         readOnly: false,
         listWorkflows: vi.fn(() => [makeWorkflow('wf-1', 'completed')]),
         loadTasks: vi.fn(() => []),
+        loadAttempts: vi.fn((taskId: string) => [{ id: `${taskId}-attempt`, agentSessionId: `sess-${taskId.replace(/\//g, '-')}` }]),
       } as unknown as SQLiteAdapter,
       commandService: {} as CommandService,
       executorRegistry: {} as any,
