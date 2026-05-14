@@ -95,6 +95,44 @@ describe('WorkflowGraph', () => {
     expect(screen.queryByText('branch-like-id')).not.toBeInTheDocument();
   });
 
+  it('uses the selected workflow status color for the selection ring', () => {
+    const workflows = new Map([
+      ['wf-failed', wf('wf-failed', 'failed')],
+      ['wf-completed', wf('wf-completed', 'completed')],
+    ]);
+    const tasks = new Map([
+      ['t1', task('t1', 'wf-failed')],
+      ['t2', task('t2', 'wf-completed')],
+    ]);
+
+    const { rerender } = render(
+      <WorkflowGraph
+        tasks={tasks}
+        workflows={workflows}
+        selectedWorkflowId="wf-failed"
+        statusFilters={new Set()}
+        onSelectWorkflow={() => {}}
+        onWorkflowContextMenu={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId('workflow-node-wf-failed')).toHaveClass('ring-red-500/80');
+    expect(screen.getByTestId('workflow-node-wf-failed')).not.toHaveClass('ring-blue-400/80');
+
+    rerender(
+      <WorkflowGraph
+        tasks={tasks}
+        workflows={workflows}
+        selectedWorkflowId="wf-completed"
+        statusFilters={new Set()}
+        onSelectWorkflow={() => {}}
+        onWorkflowContextMenu={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId('workflow-node-wf-completed')).toHaveClass('ring-green-500/80');
+  });
+
   it('renders failed workflow status from query-provided workflow metadata', () => {
     const workflows = new Map([
       [

@@ -127,7 +127,8 @@ export function WorkflowInspector({
   const reviewUrl = task ? task.execution.reviewUrl : mergeGateReviewUrl ?? fallbackWorkflowReviewUrl;
   const executorSelectValue = effectiveExecutorSelectValue(task);
   const canEditExecutor = Boolean(task && onEditType && !task.config.isMergeNode);
-  const canEditPrompt = Boolean(task && ((task.config.prompt !== undefined && onEditPrompt) || (task.config.command !== undefined && onEditCommand)));
+  const showTaskControls = Boolean(task && !task.config.isMergeNode);
+  const canEditPrompt = Boolean(showTaskControls && task && ((task.config.prompt !== undefined && onEditPrompt) || (task.config.command !== undefined && onEditCommand)));
   const taskVisualStatus = task ? getEffectiveVisualStatus(task.status, task.execution) : null;
   const taskStatusColors = taskVisualStatus ? getStatusColor(taskVisualStatus) : null;
   const failedStatusColors = getStatusColor('failed');
@@ -223,7 +224,7 @@ export function WorkflowInspector({
           ) : null}
         </section>
 
-        {task && (
+        {showTaskControls && task && (
           <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
             <div className="text-[11px] uppercase tracking-wide text-gray-400">AI Agent</div>
             {onEditAgent && agentOptions.length > 0 ? (

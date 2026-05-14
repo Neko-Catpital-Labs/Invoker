@@ -14,6 +14,30 @@ function statusLabel(status: WorkflowStatus): string {
   return status.replaceAll('_', ' ');
 }
 
+function selectedRingClass(status: WorkflowStatus): string {
+  switch (status) {
+    case 'running':
+      return 'ring-2 ring-blue-400/80';
+    case 'fixing_with_ai':
+      return 'ring-2 ring-orange-400/80';
+    case 'completed':
+      return 'ring-2 ring-green-500/80';
+    case 'failed':
+      return 'ring-2 ring-red-500/80';
+    case 'review_ready':
+      return 'ring-2 ring-sky-400/80';
+    case 'awaiting_approval':
+      return 'ring-2 ring-purple-400/80';
+    case 'blocked':
+      return 'ring-2 ring-slate-500/80';
+    case 'stale':
+      return 'ring-2 ring-slate-600/80';
+    case 'pending':
+    default:
+      return 'ring-2 ring-slate-400/80';
+  }
+}
+
 export function WorkflowNode({
   workflow,
   selected,
@@ -39,7 +63,7 @@ export function WorkflowNode({
       className={[
         'relative w-[220px] rounded-lg border bg-gray-900/95 pl-4 pr-3 py-3 text-left transition-all',
         visual.borderClass,
-        selected ? 'ring-2 ring-blue-400/80' : '',
+        selected ? selectedRingClass(workflow.status) : '',
         dimmed ? 'opacity-35' : 'opacity-100',
         'hover:bg-gray-800/95',
       ].join(' ')}

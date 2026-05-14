@@ -330,4 +330,34 @@ describe('WorkflowInspector', () => {
     expect(screen.queryByTestId('workflow-inspector-prompt-input')).not.toBeInTheDocument();
     expect(screen.queryByTestId('workflow-inspector-executor-select')).not.toBeInTheDocument();
   });
+
+  it('hides AI agent and prompt controls for review gate tasks', () => {
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'review_ready' }}
+        task={makeTask({
+          id: '__merge__wf-1',
+          description: 'Review gate for Workflow 1',
+          status: 'review_ready',
+          config: { workflowId: 'wf-1', prompt: 'Review this workflow', isMergeNode: true },
+          execution: { reviewUrl: 'https://github.com/org/repo/pull/merge' },
+        })}
+        executionAgents={['claude', 'codex']}
+        collapsed={false}
+        advancedExpanded={false}
+        onEditAgent={vi.fn()}
+        onEditPrompt={vi.fn()}
+        onEditType={vi.fn()}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId('workflow-inspector-status-label')).toHaveTextContent('review ready');
+    expect(screen.queryByText('AI Agent')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('workflow-inspector-agent-select')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('workflow-inspector-prompt-input')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('workflow-inspector-executor-select')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /pull\/merge/i })).toBeInTheDocument();
+  });
 });
