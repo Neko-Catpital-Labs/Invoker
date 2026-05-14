@@ -33,7 +33,7 @@ function makeContext(overrides: Partial<AttributionContext> = {}): AttributionCo
   return {
     workflowId: 'wf-1',
     taskId: 'wf-1/task-a',
-    attemptId: 'wf-1/task-a-latest',
+    attemptId: 'attempt-wf-1-task-a',
     runnerKind: 'worktree',
     agentSessionId: 'sess-abc',
     agentName: 'codex',
@@ -81,7 +81,7 @@ function makeEvent(overrides: Partial<{
     attribution: {
       workflowId,
       taskId,
-      attemptId: `${taskId}-latest`,
+      attemptId: `attempt:${taskId}`,
       runnerKind: 'worktree',
     },
     usage: { inputTokens, outputTokens, cachedTokens, totalTokens },
@@ -293,21 +293,21 @@ describe('competing design proof: deterministic grouped outputs without provider
 describe('resolveSessionId', () => {
   it('prefers agentSessionId', () => {
     expect(resolveSessionId({
-      id: 't1', workflowId: 'wf-1', runnerKind: 'worktree',
+      id: 't1', workflowId: 'wf-1', attemptId: 'attempt-1', runnerKind: 'worktree',
       agentSessionId: 'current', lastAgentSessionId: 'previous',
     })).toBe('current');
   });
 
   it('falls back to lastAgentSessionId', () => {
     expect(resolveSessionId({
-      id: 't1', workflowId: 'wf-1', runnerKind: 'worktree',
+      id: 't1', workflowId: 'wf-1', attemptId: 'attempt-1', runnerKind: 'worktree',
       lastAgentSessionId: 'previous',
     })).toBe('previous');
   });
 
   it('returns undefined when neither is available', () => {
     expect(resolveSessionId({
-      id: 't1', workflowId: 'wf-1', runnerKind: 'worktree',
+      id: 't1', workflowId: 'wf-1', attemptId: 'attempt-1', runnerKind: 'worktree',
     })).toBeUndefined();
   });
 });
@@ -317,21 +317,21 @@ describe('resolveSessionId', () => {
 describe('resolveAgentName', () => {
   it('prefers agentName', () => {
     expect(resolveAgentName({
-      id: 't1', workflowId: 'wf-1', runnerKind: 'worktree',
+      id: 't1', workflowId: 'wf-1', attemptId: 'attempt-1', runnerKind: 'worktree',
       agentName: 'codex', lastAgentName: 'claude',
     })).toBe('codex');
   });
 
   it('falls back to lastAgentName', () => {
     expect(resolveAgentName({
-      id: 't1', workflowId: 'wf-1', runnerKind: 'worktree',
+      id: 't1', workflowId: 'wf-1', attemptId: 'attempt-1', runnerKind: 'worktree',
       lastAgentName: 'codex',
     })).toBe('codex');
   });
 
   it('defaults to claude', () => {
     expect(resolveAgentName({
-      id: 't1', workflowId: 'wf-1', runnerKind: 'worktree',
+      id: 't1', workflowId: 'wf-1', attemptId: 'attempt-1', runnerKind: 'worktree',
     })).toBe('claude');
   });
 });
@@ -359,6 +359,7 @@ describe('buildAttributionContext', () => {
     const task: CostTaskInfo = {
       id: 'wf-1/task-a',
       workflowId: 'wf-1',
+      attemptId: 'attempt-123',
       runnerKind: 'worktree',
       agentSessionId: 'sess-123',
       agentName: 'codex',
@@ -367,7 +368,7 @@ describe('buildAttributionContext', () => {
     expect(ctx).toEqual({
       workflowId: 'wf-1',
       taskId: 'wf-1/task-a',
-      attemptId: 'wf-1/task-a-latest',
+      attemptId: 'attempt-123',
       runnerKind: 'worktree',
       agentSessionId: 'sess-123',
       agentName: 'codex',
@@ -379,6 +380,7 @@ describe('buildAttributionContext', () => {
     const task: CostTaskInfo = {
       id: 'wf-1/task-a',
       workflowId: 'wf-1',
+      attemptId: 'attempt-123',
       runnerKind: 'worktree',
     };
     expect(buildAttributionContext(task)).toBeUndefined();
@@ -388,6 +390,7 @@ describe('buildAttributionContext', () => {
     const task: CostTaskInfo = {
       id: 'wf-1/task-a',
       workflowId: 'wf-1',
+      attemptId: 'attempt-456',
       runnerKind: 'ssh',
       lastAgentSessionId: 'sess-old',
       lastAgentName: 'claude',
@@ -402,6 +405,7 @@ describe('buildAttributionContext', () => {
     const task: CostTaskInfo = {
       id: 'wf-1/task-a',
       workflowId: 'wf-1',
+      attemptId: 'attempt-789',
       runnerKind: '',
       agentSessionId: 'sess-123',
     };

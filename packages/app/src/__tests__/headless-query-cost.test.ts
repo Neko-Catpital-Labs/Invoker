@@ -96,6 +96,7 @@ describe('headless query cost', () => {
         readOnly: false,
         listWorkflows: vi.fn(() => [makeWorkflow('wf-1', 'completed')]),
         loadTasks: vi.fn(() => []),
+        loadAttempts: vi.fn((taskId: string) => [{ id: `attempt-${taskId}`, nodeId: taskId, createdAt: new Date('2025-01-01T00:00:00Z') }]),
       } as unknown as SQLiteAdapter,
       commandService: {} as CommandService,
       executorRegistry: {} as any,
@@ -204,6 +205,7 @@ describe('headless query cost', () => {
 
     expect(output1).toBe(output2);
   });
+
 });
 
 describe('headless query cost-events', () => {
@@ -252,6 +254,7 @@ describe('headless query cost-events', () => {
         readOnly: false,
         listWorkflows: vi.fn(() => [makeWorkflow('wf-1', 'completed')]),
         loadTasks: vi.fn(() => []),
+        loadAttempts: vi.fn((taskId: string) => [{ id: `attempt-${taskId}`, nodeId: taskId, createdAt: new Date('2025-01-01T00:00:00Z') }]),
       } as unknown as SQLiteAdapter,
       commandService: {} as CommandService,
       executorRegistry: {} as any,
@@ -369,6 +372,27 @@ describe('headless query cost-events', () => {
     for (const line of lines) {
       expect(() => JSON.parse(line)).not.toThrow();
     }
+  });
+
+  it('prefers an exact persisted agentSessionId match for attempt attribution', async () => {
+    mockDeps.orchestrator.getAllTasks = vi.fn(() => [
+      makeTask('wf-1', 'task-a', {
+        execution: {
+          agentSessionId: 'sess-wf-1-task-a',
+          selectedAttemptId: 'attempt-selected',
+        },
+      }),
+    ] as any);
+    (mockDeps.persistence.loadAttempts as any) = vi.fn(() => [
+      { id: 'attempt-older', agentSessionId: 'sess-other', createdAt: new Date('2025-01-01T00:00:00Z') },
+      { id: 'attempt-exact', agentSessionId: 'sess-wf-1-task-a', createdAt: new Date('2025-01-02T00:00:00Z') },
+    ]);
+
+    await runHeadless(['query', 'cost-events', '--output', 'json'], mockDeps);
+    const output = stdoutSpy.mock.calls[0][0] as string;
+    const parsed = JSON.parse(output);
+
+    expect(parsed[0].attemptId).toBe('attempt-exact');
   });
 
   it('rejects invalid --output format', async () => {

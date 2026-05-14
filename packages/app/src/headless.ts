@@ -108,6 +108,22 @@ export interface HeadlessDeps {
   runtimeServices?: RuntimeServices;
 }
 
+function resolveCostAttributionAttemptId(
+  task: TaskState,
+  persistence: Pick<SQLiteAdapter, 'loadAttempts'>,
+): string | undefined {
+  const attempts = persistence.loadAttempts(task.id);
+  const sessionId = task.execution.agentSessionId;
+  const selectedAttemptId = task.execution.selectedAttemptId?.trim();
+
+  if (sessionId) {
+    const exactMatch = attempts.find((attempt) => attempt.agentSessionId === sessionId);
+    if (exactMatch) return exactMatch.id;
+  }
+  if (selectedAttemptId) return selectedAttemptId;
+  return attempts.at(-1)?.id;
+}
+
 // ── ANSI Helpers ─────────────────────────────────────────────
 
 const RESET = '\x1b[0m';
@@ -653,9 +669,12 @@ async function headlessCosts(
     );
 
     for (const task of tasks) {
+      const attemptId = resolveCostAttributionAttemptId(task, deps.persistence);
+      if (!attemptId) continue;
       const ctx = buildAttributionContext({
         id: task.id,
         workflowId: wf.id,
+        attemptId,
         runnerKind: task.config.runnerKind ?? 'worktree',
         agentSessionId: task.execution.agentSessionId,
         lastAgentSessionId: task.execution.lastAgentSessionId,
@@ -742,9 +761,12 @@ async function collectCostEvents(
     );
 
     for (const task of tasks) {
+      const attemptId = resolveCostAttributionAttemptId(task, deps.persistence);
+      if (!attemptId) continue;
       const ctx = buildAttributionContext({
         id: task.id,
         workflowId: wf.id,
+        attemptId,
         runnerKind: task.config.runnerKind ?? 'worktree',
         agentSessionId: task.execution.agentSessionId,
         lastAgentSessionId: task.execution.lastAgentSessionId,

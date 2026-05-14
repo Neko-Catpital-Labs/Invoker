@@ -153,6 +153,7 @@ export function groupCostEvents(
 export interface CostTaskInfo {
   readonly id: string;
   readonly workflowId: string;
+  readonly attemptId: string;
   readonly runnerKind: string;
   readonly agentSessionId?: string;
   readonly lastAgentSessionId?: string;
@@ -204,7 +205,7 @@ export function buildAttributionContext(task: CostTaskInfo): AttributionContext 
   return {
     workflowId: task.workflowId,
     taskId: task.id,
-    attemptId: `${task.id}-latest`,
+    attemptId: task.attemptId,
     runnerKind: task.runnerKind || 'worktree',
     agentSessionId: sessionId,
     agentName,

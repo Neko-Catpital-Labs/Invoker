@@ -97,6 +97,7 @@ describe('headless query costs', () => {
         readOnly: false,
         listWorkflows: vi.fn(() => [makeWorkflow('wf-1', 'completed')]),
         loadTasks: vi.fn(() => []),
+        loadAttempts: vi.fn((taskId: string) => [{ id: `attempt-${taskId}`, nodeId: taskId, createdAt: new Date('2025-01-01T00:00:00Z') }]),
       } as unknown as SQLiteAdapter,
       commandService: {} as CommandService,
       executorRegistry: {} as any,
@@ -199,5 +200,46 @@ describe('headless query costs', () => {
     await runHeadless(['query', 'costs'], mockDeps);
     const output = stdoutSpy.mock.calls[0][0] as string;
     expect(output).toContain('No cost data');
+  });
+
+  it('falls back to selectedAttemptId when no persisted session match exists', async () => {
+    mockDeps.orchestrator.getAllTasks = vi.fn(() => [
+      makeTask('wf-1', 'task-a', {
+        execution: {
+          agentSessionId: 'sess-wf-1-task-a',
+          selectedAttemptId: 'attempt-selected',
+        },
+      }),
+    ] as any);
+    (mockDeps.persistence.loadAttempts as any) = vi.fn(() => [
+      { id: 'attempt-older', agentSessionId: 'sess-other', createdAt: new Date('2025-01-01T00:00:00Z') },
+    ]);
+
+    await runHeadless(['query', 'costs', '--output', 'json'], mockDeps);
+    const output = stdoutSpy.mock.calls[0][0] as string;
+    const parsed = JSON.parse(output);
+
+    expect(parsed.events[0].attemptId).toBe('attempt-selected');
+  });
+
+  it('falls back to the latest persisted attempt when selectedAttemptId is absent', async () => {
+    mockDeps.orchestrator.getAllTasks = vi.fn(() => [
+      makeTask('wf-1', 'task-a', {
+        execution: {
+          lastAgentSessionId: 'sess-wf-1-task-a',
+          agentSessionId: undefined,
+        },
+      }),
+    ] as any);
+    (mockDeps.persistence.loadAttempts as any) = vi.fn(() => [
+      { id: 'attempt-old', agentSessionId: 'sess-old', createdAt: new Date('2025-01-01T00:00:00Z') },
+      { id: 'attempt-latest', agentSessionId: 'sess-latest', createdAt: new Date('2025-01-02T00:00:00Z') },
+    ]);
+
+    await runHeadless(['query', 'costs', '--output', 'json'], mockDeps);
+    const output = stdoutSpy.mock.calls[0][0] as string;
+    const parsed = JSON.parse(output);
+
+    expect(parsed.events[0].attemptId).toBe('attempt-latest');
   });
 });
