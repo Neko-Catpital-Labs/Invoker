@@ -7918,6 +7918,195 @@ console.log(JSON.stringify(out));
   });
 
   describe('metadata persistence hardening', () => {
+    function createCompletingExecutor(type: string, handle: Record<string, unknown>) {
+      return {
+        type,
+        start: vi.fn(async (request: any) => ({
+          executionId: `exec-${request.actionId}`,
+          taskId: request.actionId,
+          ...handle,
+        })),
+        onComplete: vi.fn((_handle, cb) => {
+          setTimeout(() => cb({
+            requestId: 'req-1',
+            actionId: (_handle as any).taskId,
+            status: 'completed',
+            outputs: { exitCode: 0 },
+          }), 0);
+        }),
+        onOutput: vi.fn(),
+        onHeartbeat: vi.fn(),
+        kill: vi.fn(),
+        destroyAll: vi.fn(),
+      };
+    }
+
+    it('logs pool-routed SSH executor selection with remote target display fields', async () => {
+      const sshExecutor = createCompletingExecutor('ssh', {
+        workspacePath: '/remote/worktrees/task-1',
+        branch: 'experiment/task-1',
+      });
+      const logEvent = vi.fn();
+      const task = makeTask({
+        id: 'task-1',
+        status: 'pending',
+        config: { command: 'pnpm test', runnerKind: 'ssh', poolId: 'ci-pool' },
+        execution: { selectedAttemptId: 'attempt-1' },
+      });
+
+      const runner = new TaskRunner({
+        orchestrator: { getTask: () => task, getAllTasks: () => [task], handleWorkerResponse: vi.fn() } as any,
+        persistence: { updateTask: vi.fn(), updateAttempt: vi.fn(), logEvent } as any,
+        executorRegistry: {
+          getDefault: () => sshExecutor,
+          get: (type: string) => type === 'ssh' ? sshExecutor : null,
+          getAll: () => [sshExecutor],
+        } as any,
+        cwd: '/tmp',
+        executionPoolsProvider: () => ({
+          'ci-pool': {
+            selectionStrategy: 'leastLoaded',
+            members: [{ type: 'ssh', id: 'remote-a' }],
+          },
+        }),
+        remoteTargetsProvider: () => ({
+          'remote-a': {
+            host: 'ci.example.com',
+            user: 'runner',
+            sshKeyPath: '/secret/key',
+            port: 2222,
+          },
+        }),
+      });
+
+      await runner.executeTask(task);
+
+      expect(logEvent).toHaveBeenCalledWith('task-1', 'task.executor.selected', {
+        runnerKind: 'ssh',
+        reason: {
+          type: 'poolId',
+          poolId: 'ci-pool',
+          selectionStrategy: 'leastLoaded',
+          poolMemberId: 'remote-a',
+        },
+        attemptId: 'attempt-1',
+        workspacePath: '/remote/worktrees/task-1',
+        branch: 'experiment/task-1',
+        poolMemberId: 'remote-a',
+        remoteHost: 'ci.example.com',
+        remoteUser: 'runner',
+        port: 2222,
+      });
+      const selectedPayload = logEvent.mock.calls.find((call) => call[1] === 'task.executor.selected')?.[2];
+      expect(JSON.stringify(selectedPayload)).not.toContain('sshKeyPath');
+      expect(JSON.stringify(selectedPayload)).not.toContain('/secret/key');
+    });
+
+    it('logs explicit SSH executor selection as explicitPoolMemberId', async () => {
+      const sshExecutor = createCompletingExecutor('ssh', {
+        workspacePath: '/remote/worktrees/task-explicit',
+        branch: 'experiment/task-explicit',
+      });
+      const logEvent = vi.fn();
+      const task = makeTask({
+        id: 'task-explicit',
+        status: 'pending',
+        config: { command: 'echo hi', runnerKind: 'ssh', poolMemberId: 'remote-b' },
+      });
+
+      const runner = new TaskRunner({
+        orchestrator: { getTask: () => task, getAllTasks: () => [task], handleWorkerResponse: vi.fn() } as any,
+        persistence: { updateTask: vi.fn(), updateAttempt: vi.fn(), logEvent } as any,
+        executorRegistry: {
+          getDefault: () => sshExecutor,
+          get: (type: string) => type === 'ssh' ? sshExecutor : null,
+          getAll: () => [sshExecutor],
+        } as any,
+        cwd: '/tmp',
+        remoteTargetsProvider: () => ({
+          'remote-b': { host: 'dev.example.com', user: 'dev', sshKeyPath: '/secret/dev-key' },
+        }),
+      });
+
+      await runner.executeTask(task);
+
+      expect(logEvent).toHaveBeenCalledWith('task-explicit', 'task.executor.selected', expect.objectContaining({
+        runnerKind: 'ssh',
+        reason: { type: 'explicitPoolMemberId' },
+        poolMemberId: 'remote-b',
+        remoteHost: 'dev.example.com',
+        remoteUser: 'dev',
+      }));
+    });
+
+    it('logs configured worktree executor selection reason', async () => {
+      const worktreeExecutor = createCompletingExecutor('worktree', {
+        workspacePath: '/tmp/worktree/task-local',
+        branch: 'experiment/task-local',
+      });
+      const logEvent = vi.fn();
+      const task = makeTask({
+        id: 'task-local',
+        status: 'pending',
+        config: { command: 'echo local', runnerKind: 'worktree' },
+      });
+
+      const runner = new TaskRunner({
+        orchestrator: { getTask: () => task, getAllTasks: () => [task], handleWorkerResponse: vi.fn() } as any,
+        persistence: { updateTask: vi.fn(), updateAttempt: vi.fn(), logEvent } as any,
+        executorRegistry: {
+          getDefault: () => worktreeExecutor,
+          get: (type: string) => type === 'worktree' ? worktreeExecutor : null,
+          getAll: () => [worktreeExecutor],
+        } as any,
+        cwd: '/tmp',
+      });
+
+      await runner.executeTask(task);
+
+      expect(logEvent).toHaveBeenCalledWith('task-local', 'task.executor.selected', expect.objectContaining({
+        runnerKind: 'worktree',
+        reason: { type: 'configuredWorktree' },
+        workspacePath: '/tmp/worktree/task-local',
+        branch: 'experiment/task-local',
+      }));
+    });
+
+    it('logs SSH pool fallback to worktree when no pool member or remote target exists', async () => {
+      const worktreeExecutor = createCompletingExecutor('worktree', {
+        workspacePath: '/tmp/worktree/task-fallback',
+        branch: 'experiment/task-fallback',
+      });
+      const logEvent = vi.fn();
+      const task = makeTask({
+        id: 'task-fallback',
+        status: 'pending',
+        config: { command: 'echo fallback', runnerKind: 'ssh', poolId: 'missing-pool' },
+      });
+
+      const runner = new TaskRunner({
+        orchestrator: { getTask: () => task, getAllTasks: () => [task], handleWorkerResponse: vi.fn() } as any,
+        persistence: { updateTask: vi.fn(), updateAttempt: vi.fn(), logEvent } as any,
+        executorRegistry: {
+          getDefault: () => worktreeExecutor,
+          get: (type: string) => type === 'worktree' ? worktreeExecutor : null,
+          getAll: () => [worktreeExecutor],
+        } as any,
+        cwd: '/tmp',
+        executionPoolsProvider: () => ({}),
+        remoteTargetsProvider: () => ({}),
+      });
+
+      await runner.executeTask(task);
+
+      expect(logEvent).toHaveBeenCalledWith('task-fallback', 'task.executor.selected', expect.objectContaining({
+        runnerKind: 'worktree',
+        reason: { type: 'sshPoolFallbackToWorktree', poolId: 'missing-pool' },
+        workspacePath: '/tmp/worktree/task-fallback',
+        branch: 'experiment/task-fallback',
+      }));
+    });
+
     it('fails fast when executor returns handle without workspacePath', async () => {
       const badExecutor = {
         type: 'bad-executor',

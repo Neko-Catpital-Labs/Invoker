@@ -1265,8 +1265,9 @@ describe('Orchestrator', () => {
       });
 
       it('auto-routes matching command to configured poolId with route strategy', () => {
+        const persistence = new InMemoryPersistence();
         const routedOrchestrator = new Orchestrator({
-          persistence: new InMemoryPersistence(),
+          persistence,
           messageBus: new InMemoryBus(),
           maxConcurrency: 3,
           executorRoutingRules: [
@@ -1283,6 +1284,60 @@ describe('Orchestrator', () => {
         const task = routedOrchestrator.getTask('t1');
         expect(task!.config.runnerKind).toBe('ssh');
         expect(task!.config.poolId).toBe('ssh-light');
+        const routedEvent = persistence.events.find((event) =>
+          event.taskId.endsWith('/t1') && event.eventType === 'task.executor.routed'
+        );
+        expect(routedEvent?.payload).toEqual({
+          runnerKind: 'ssh',
+          poolId: 'ssh-light',
+          reason: { type: 'routingRule', regex: '\\bpnpm(?:\\s|$)', poolId: 'ssh-light' },
+        });
+      });
+
+      it('logs default worktree routing when no pool or docker rule applies', () => {
+        const persistence = new InMemoryPersistence();
+        const routedOrchestrator = new Orchestrator({
+          persistence,
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+        });
+
+        routedOrchestrator.loadPlan({
+          name: 'default-worktree-routing-test',
+          tasks: [{ id: 't1', description: 'Local task', command: 'echo local' }],
+        });
+
+        const routedEvent = persistence.events.find((event) =>
+          event.taskId.endsWith('/t1') && event.eventType === 'task.executor.routed'
+        );
+        expect(routedEvent?.payload).toEqual({
+          runnerKind: 'worktree',
+          reason: { type: 'defaultWorktree' },
+        });
+      });
+
+      it('logs explicit pool routing when a task declares poolId', () => {
+        const persistence = new InMemoryPersistence();
+        const routedOrchestrator = new Orchestrator({
+          persistence,
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          availablePoolIds: ['ssh-light'],
+        });
+
+        routedOrchestrator.loadPlan({
+          name: 'explicit-pool-routing-test',
+          tasks: [{ id: 't1', description: 'Remote task', command: 'echo remote', poolId: 'ssh-light' }],
+        });
+
+        const routedEvent = persistence.events.find((event) =>
+          event.taskId.endsWith('/t1') && event.eventType === 'task.executor.routed'
+        );
+        expect(routedEvent?.payload).toEqual({
+          runnerKind: 'ssh',
+          poolId: 'ssh-light',
+          reason: { type: 'poolId', poolId: 'ssh-light' },
+        });
       });
 
       it('routes matching command without an explicit runner kind', () => {
