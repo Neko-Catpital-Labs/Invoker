@@ -1,9 +1,9 @@
 /**
- * Tests for layoutNodes — the Sugiyama-inspired DAG layout algorithm.
+ * Tests for layoutNodes — Dagre-backed task DAG layout.
  */
 
 import { describe, it, expect } from 'vitest';
-import { layoutNodes, countCrossings } from '../lib/layout.js';
+import { layoutNodes, countCrossings, setDagreLayoutForTest } from '../lib/layout.js';
 import type { TaskState } from '../types.js';
 
 function makeTask(
@@ -229,6 +229,53 @@ describe('layoutNodes', () => {
     expect(posA.x).toBe(posB.x);
     expect(posB.x).toBe(posC.x);
     expect(posD.x).toBeGreaterThan(posA.x);
+  });
+
+  it('uses explicit external dependency edges in global layout', () => {
+    const tasks = [
+      makeTask('__merge_gate__upstream'),
+      makeTask('downstream/root'),
+      makeTask('independent'),
+    ];
+
+    const withoutExternalEdge = layoutNodes(tasks);
+    const withExternalEdge = layoutNodes(tasks, [
+      {
+        source: '__merge_gate__upstream',
+        target: 'downstream/root',
+        kind: 'external',
+      },
+    ]);
+
+    expect(withoutExternalEdge.get('__merge_gate__upstream')!.x)
+      .toBe(withoutExternalEdge.get('downstream/root')!.x);
+    expect(withExternalEdge.get('__merge_gate__upstream')!.x)
+      .toBeLessThan(withExternalEdge.get('downstream/root')!.x);
+  });
+
+  it('falls back to a complete legacy layout when Dagre throws', () => {
+    const restoreDagreLayout = setDagreLayoutForTest(() => {
+      throw new Error('forced Dagre failure');
+    });
+    const tasks = [
+      makeTask('a'),
+      makeTask('b', ['a']),
+      makeTask('c', ['b']),
+    ];
+
+    try {
+      const positions = layoutNodes(tasks);
+
+      expect(positions.size).toBe(tasks.length);
+      for (const task of tasks) {
+        const pos = positions.get(task.id);
+        expect(pos).toBeDefined();
+        expect(Number.isFinite(pos!.x)).toBe(true);
+        expect(Number.isFinite(pos!.y)).toBe(true);
+      }
+    } finally {
+      restoreDagreLayout();
+    }
   });
 });
 
