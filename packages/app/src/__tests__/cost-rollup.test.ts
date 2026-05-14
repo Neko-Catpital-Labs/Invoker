@@ -359,6 +359,7 @@ describe('buildAttributionContext', () => {
     const task: CostTaskInfo = {
       id: 'wf-1/task-a',
       workflowId: 'wf-1',
+      attemptId: 'attempt-real',
       runnerKind: 'worktree',
       agentSessionId: 'sess-123',
       agentName: 'codex',
@@ -367,7 +368,7 @@ describe('buildAttributionContext', () => {
     expect(ctx).toEqual({
       workflowId: 'wf-1',
       taskId: 'wf-1/task-a',
-      attemptId: 'wf-1/task-a-latest',
+      attemptId: 'attempt-real',
       runnerKind: 'worktree',
       agentSessionId: 'sess-123',
       agentName: 'codex',
@@ -379,7 +380,19 @@ describe('buildAttributionContext', () => {
     const task: CostTaskInfo = {
       id: 'wf-1/task-a',
       workflowId: 'wf-1',
+      attemptId: 'attempt-real',
       runnerKind: 'worktree',
+    };
+    expect(buildAttributionContext(task)).toBeUndefined();
+  });
+
+  it('returns undefined when no attempt ID is supplied', () => {
+    const task: CostTaskInfo = {
+      id: 'wf-1/task-a',
+      workflowId: 'wf-1',
+      attemptId: undefined,
+      runnerKind: 'worktree',
+      agentSessionId: 'sess-123',
     };
     expect(buildAttributionContext(task)).toBeUndefined();
   });
@@ -388,6 +401,7 @@ describe('buildAttributionContext', () => {
     const task: CostTaskInfo = {
       id: 'wf-1/task-a',
       workflowId: 'wf-1',
+      attemptId: 'attempt-old',
       runnerKind: 'ssh',
       lastAgentSessionId: 'sess-old',
       lastAgentName: 'claude',
@@ -402,6 +416,7 @@ describe('buildAttributionContext', () => {
     const task: CostTaskInfo = {
       id: 'wf-1/task-a',
       workflowId: 'wf-1',
+      attemptId: 'attempt-real',
       runnerKind: '',
       agentSessionId: 'sess-123',
     };

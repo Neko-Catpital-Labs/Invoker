@@ -153,6 +153,7 @@ export function groupCostEvents(
 export interface CostTaskInfo {
   readonly id: string;
   readonly workflowId: string;
+  readonly attemptId: string | undefined;
   readonly runnerKind: string;
   readonly agentSessionId?: string;
   readonly lastAgentSessionId?: string;
@@ -194,17 +195,17 @@ export function deriveSource(agentName: string): string {
 
 /**
  * Build an AttributionContext from a task info record.
- * Returns undefined if no session ID is available.
+ * Returns undefined if no session ID or caller-resolved attempt ID is available.
  */
 export function buildAttributionContext(task: CostTaskInfo): AttributionContext | undefined {
   const sessionId = resolveSessionId(task);
-  if (!sessionId) return undefined;
+  if (!sessionId || !task.attemptId) return undefined;
 
   const agentName = resolveAgentName(task);
   return {
     workflowId: task.workflowId,
     taskId: task.id,
-    attemptId: `${task.id}-latest`,
+    attemptId: task.attemptId,
     runnerKind: task.runnerKind || 'worktree',
     agentSessionId: sessionId,
     agentName,
