@@ -20,7 +20,7 @@ function task(id: string, workflowId: string): TaskState {
 }
 
 describe('WorkflowGraph', () => {
-  it('calls selection and context menu handlers', () => {
+  it('calls selection and context menu handlers', async () => {
     const onSelectWorkflow = vi.fn();
     const onWorkflowContextMenu = vi.fn();
     const workflows = new Map([
@@ -41,7 +41,7 @@ describe('WorkflowGraph', () => {
       />,
     );
 
-    const node = screen.getByRole('button');
+    const node = await screen.findByRole('button');
     fireEvent.click(node);
     expect(onSelectWorkflow).toHaveBeenCalledWith('wf-a');
 
@@ -50,7 +50,7 @@ describe('WorkflowGraph', () => {
     expect(onWorkflowContextMenu.mock.calls[0][1]).toBe('wf-a');
   });
 
-  it('renders workflow even when status filter does not match', () => {
+  it('renders workflow even when status filter does not match', async () => {
     const workflows = new Map([
       ['wf-a', wf('wf-a', 'running')],
     ]);
@@ -69,10 +69,47 @@ describe('WorkflowGraph', () => {
       />,
     );
 
-    expect(screen.getAllByText('wf-a').length).toBeGreaterThan(0);
+    expect((await screen.findAllByText('wf-a')).length).toBeGreaterThan(0);
   });
 
-  it('does not render the workflow id as secondary chip text', () => {
+  it('renders workflow dependency edges as dashed cross-workflow edges', async () => {
+    const workflows = new Map([
+      ['wf-a', wf('wf-a', 'completed')],
+      ['wf-b', wf('wf-b', 'running')],
+    ]);
+    const tasks = new Map([
+      ['t1', task('t1', 'wf-a')],
+      [
+        't2',
+        {
+          ...task('t2', 'wf-b'),
+          config: {
+            workflowId: 'wf-b',
+            externalDependencies: [
+              { workflowId: 'wf-a', requiredStatus: 'completed' as const },
+            ],
+          },
+        },
+      ],
+    ]);
+
+    const { container } = render(
+      <WorkflowGraph
+        tasks={tasks}
+        workflows={workflows}
+        selectedWorkflowId={null}
+        statusFilters={new Set()}
+        onSelectWorkflow={() => {}}
+        onWorkflowContextMenu={() => {}}
+      />,
+    );
+
+    await screen.findByTestId('workflow-node-wf-a');
+    const edgePath = container.querySelector('svg path');
+    expect(edgePath).toHaveAttribute('stroke-dasharray', '6 4');
+  });
+
+  it('does not render the workflow id as secondary chip text', async () => {
     const workflows = new Map([
       ['branch-like-id', { id: 'branch-like-id', name: 'Workflow A', status: 'running' } satisfies WorkflowMeta],
     ]);
@@ -91,11 +128,11 @@ describe('WorkflowGraph', () => {
       />,
     );
 
-    expect(screen.getByText('Workflow A')).toBeInTheDocument();
+    expect(await screen.findByText('Workflow A')).toBeInTheDocument();
     expect(screen.queryByText('branch-like-id')).not.toBeInTheDocument();
   });
 
-  it('uses the selected workflow status color for the selection ring', () => {
+  it('uses the selected workflow status color for the selection ring', async () => {
     const workflows = new Map([
       ['wf-failed', wf('wf-failed', 'failed')],
       ['wf-completed', wf('wf-completed', 'completed')],
@@ -116,7 +153,7 @@ describe('WorkflowGraph', () => {
       />,
     );
 
-    expect(screen.getByTestId('workflow-node-wf-failed')).toHaveClass('ring-red-500/80');
+    expect(await screen.findByTestId('workflow-node-wf-failed')).toHaveClass('ring-red-500/80');
     expect(screen.getByTestId('workflow-node-wf-failed')).not.toHaveClass('ring-blue-400/80');
 
     rerender(
@@ -130,10 +167,10 @@ describe('WorkflowGraph', () => {
       />,
     );
 
-    expect(screen.getByTestId('workflow-node-wf-completed')).toHaveClass('ring-green-500/80');
+    expect(await screen.findByTestId('workflow-node-wf-completed')).toHaveClass('ring-green-500/80');
   });
 
-  it('renders failed workflow status from query-provided workflow metadata', () => {
+  it('renders failed workflow status from query-provided workflow metadata', async () => {
     const workflows = new Map([
       [
         'wf-1778431088547-35',
@@ -174,7 +211,7 @@ describe('WorkflowGraph', () => {
       />,
     );
 
-    expect(screen.getByText('Reduce Large Files Step 2: main.ts decomposition')).toBeInTheDocument();
+    expect(await screen.findByText('Reduce Large Files Step 2: main.ts decomposition')).toBeInTheDocument();
     expect(screen.getByText('failed')).toBeInTheDocument();
   });
 });

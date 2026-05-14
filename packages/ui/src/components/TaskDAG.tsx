@@ -22,7 +22,7 @@ import {
 import '@xyflow/react/dist/style.css';
 
 import type { TaskState, WorkflowMeta } from '../types.js';
-import { layoutNodes } from '../lib/layout.js';
+import { layoutTaskGraph, type LayoutEdge, type TaskGraphLayout } from '../lib/layout.js';
 import { getEdgeStyle, getEffectiveVisualStatus, matchesStatusFilter } from '../lib/colors.js';
 import { TaskNode } from './TaskNode.js';
 import { BundledEdge, type BundledEdgeData } from './BundledEdge.js';
@@ -32,7 +32,6 @@ import {
   groupTasksByWorkflow,
   sortedWorkflowGroups,
   resolveMergeGateKind,
-  mergeGateId,
   mergeGatePlanTitle,
   computeMergeGateStatus,
 } from '../lib/merge-gate.js';
@@ -49,6 +48,21 @@ interface TaskDAGProps {
 
 const nodeTypes = { taskNode: TaskNode, mergeGateNode: MergeGateNode };
 const edgeTypes = { bundled: BundledEdge };
+const EMPTY_EDGE_POINTS = new Map<string, { x: number; y: number }[]>();
+
+type RawTaskEdge = LayoutEdge & {
+  kind: 'local' | 'external';
+};
+
+type LayoutState = {
+  key: string;
+  result: TaskGraphLayout;
+};
+
+type LayoutErrorState = {
+  key: string;
+  error: string;
+};
 
 /** Short label for edge hover tooltip showing the dependency relationship. */
 function buildEdgeLabel(source: TaskState, target: TaskState): string {
@@ -63,8 +77,8 @@ function resolveExternalDependencyTaskId(
 ): string | undefined {
   const taskId = dep.taskId?.trim() || '__merge__';
   if (taskId === '__merge__') {
-    const gateId = mergeGateId(dep.workflowId);
-    return tasks.has(gateId) ? gateId : undefined;
+    const mergeGateId = `__merge__${dep.workflowId}`;
+    return tasks.has(mergeGateId) ? mergeGateId : undefined;
   }
   if (taskId.includes('/')) {
     return tasks.has(taskId) ? taskId : undefined;
@@ -75,97 +89,71 @@ function resolveExternalDependencyTaskId(
   return undefined;
 }
 
+function layoutHasAllTasks(layout: TaskGraphLayout, tasks: TaskState[]): boolean {
+  return tasks.every((task) => layout.positions.has(task.id));
+}
+
+function layoutKeyFor(tasks: TaskState[], edges: RawTaskEdge[]): string {
+  return JSON.stringify({
+    nodes: tasks.map((task) => task.id).sort(),
+    edges: edges
+      .map((edge) => `${edge.id ?? `${edge.source}->${edge.target}`}:${edge.kind}:${edge.source}->${edge.target}`)
+      .sort(),
+  });
+}
+
 function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDoubleClick, onTaskContextMenu, statusFilters }: TaskDAGProps) {
   const { fitView } = useReactFlow();
   const prevNodeCount = useRef(0);
   const reportedGraphVisibleRef = useRef(false);
+  const [layoutState, setLayoutState] = useState<LayoutState | null>(null);
+  const [layoutError, setLayoutError] = useState<LayoutErrorState | null>(null);
 
   const onInitHandler = useCallback(() => {
     requestAnimationFrame(() => fitView({ padding: 0.2 }));
   }, [fitView]);
 
-  const { nodes, edges } = useMemo(() => {
+  const rawGraph = useMemo(() => {
     const taskArray = [...tasks.values()];
-    if (taskArray.length === 0) return { nodes: [], edges: [] };
-
-    const workflowGroups = groupTasksByWorkflow(taskArray);
-
-    const allNodes: Node[] = [];
-    const allRawEdges: Array<{ source: string; target: string; kind: 'local' | 'external' }> = [];
-    const gateStatuses = new Map<string, ReturnType<typeof computeMergeGateStatus>>();
-
-    for (const task of [...taskArray].sort((a, b) => a.id.localeCompare(b.id))) {
-      for (const depId of task.dependencies) {
-        if (tasks.has(depId)) {
-          allRawEdges.push({ source: depId, target: task.id, kind: 'local' });
-        }
-      }
-      for (const dep of task.config.externalDependencies ?? []) {
-        const sourceId = resolveExternalDependencyTaskId(dep, tasks);
-        if (!sourceId || sourceId === task.id) continue;
-        allRawEdges.push({ source: sourceId, target: task.id, kind: 'external' });
-      }
+    if (taskArray.length === 0) {
+      return {
+        taskArray,
+        rawEdges: [] as RawTaskEdge[],
+        gateStatuses: new Map<string, ReturnType<typeof computeMergeGateStatus>>(),
+        dimmedNodeIds: new Set<string>(),
+        layoutKey: 'empty',
+      };
     }
 
-    const positions = layoutNodes(taskArray, allRawEdges);
+    const workflowGroups = groupTasksByWorkflow(taskArray);
+    const allRawEdges: RawTaskEdge[] = [];
+    const gateStatuses = new Map<string, ReturnType<typeof computeMergeGateStatus>>();
 
     for (const [wfGroupId, wfTasksRaw] of sortedWorkflowGroups(workflowGroups)) {
       const wfTasks = [...wfTasksRaw].sort((a, b) => a.id.localeCompare(b.id));
-      const wfMeta = workflows?.get(wfGroupId);
-      const wfBaseBranch = wfMeta?.baseBranch;
-      const wfMergeMode = (wfMeta?.mergeMode as 'manual' | 'automatic' | 'external_review') ?? 'manual';
+      for (const task of wfTasks) {
+        if (task.config.isMergeNode) gateStatuses.set(task.id, task.status);
+      }
 
       for (const task of wfTasks) {
-        const pos = positions.get(task.id) ?? { x: 0, y: 0 };
-        if (task.config.isMergeNode) {
-          gateStatuses.set(task.id, task.status);
-          let gateKind = resolveMergeGateKind(task, wfMeta);
-          if (wfMergeMode === 'external_review') {
-            gateKind = 'external_review';
+        for (const depId of task.dependencies) {
+          if (tasks.has(depId)) {
+            allRawEdges.push({
+              id: `local:${depId}->${task.id}`,
+              source: depId,
+              target: task.id,
+              kind: 'local',
+            });
           }
-          const showMergeModeRow = gateKind !== 'external_review';
-          const mergeVisualStatus = getEffectiveVisualStatus(task.status, task.execution);
-          const mergeGateDimmed = statusFilters
-            && statusFilters.size > 0
-            && !Array.from(statusFilters).some((filterKey) => matchesStatusFilter(filterKey, mergeVisualStatus));
-          allNodes.push({
-            id: task.id,
-            type: 'mergeGateNode',
-            position: pos,
-            data: {
-              taskId: task.id,
-              status: task.status,
-              label: mergeGatePlanTitle(task.description),
-              gateKind,
-              showMergeModeRow,
-              baseBranch: wfBaseBranch,
-              featureBranch: wfMeta?.featureBranch,
-              mergeMode: wfMergeMode,
-              workflowId: wfGroupId,
-              reviewUrl: task.execution?.reviewUrl,
-              reviewStatus: task.execution?.reviewStatus,
-              summary: task.config?.summary,
-              onFinish: wfMeta?.onFinish,
-              pendingFixError: task.execution?.pendingFixError,
-              dimmed: mergeGateDimmed,
-              selected: selectedTaskId === task.id,
-            },
-          });
-        } else {
-          const taskVisualStatus = getEffectiveVisualStatus(task.status, task.execution);
-          const taskDimmed = statusFilters
-            && statusFilters.size > 0
-            && !Array.from(statusFilters).some((filterKey) => matchesStatusFilter(filterKey, taskVisualStatus));
-          allNodes.push({
-            id: task.id,
-            type: 'taskNode',
-            position: pos,
-            data: {
-              task,
-              label: task.description,
-              dimmed: taskDimmed,
-              selected: selectedTaskId === task.id,
-            },
+        }
+        for (const dep of task.config.externalDependencies ?? []) {
+          const sourceId = resolveExternalDependencyTaskId(dep, tasks);
+          if (!sourceId || sourceId === task.id) continue;
+          allRawEdges.push({
+            id: `external:${sourceId}->${task.id}`,
+            source: sourceId,
+            target: task.id,
+            kind: 'external',
           });
         }
       }
@@ -182,10 +170,117 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
       }
     }
 
+    const layoutTasks = [...taskArray].sort((a, b) => a.id.localeCompare(b.id));
+    const rawEdges = allRawEdges.sort((a, b) => (a.id ?? '').localeCompare(b.id ?? ''));
+
+    return {
+      taskArray,
+      rawEdges,
+      gateStatuses,
+      dimmedNodeIds,
+      layoutKey: layoutKeyFor(layoutTasks, rawEdges),
+    };
+  }, [tasks, statusFilters]);
+
+  useEffect(() => {
+    if (rawGraph.taskArray.length === 0) return;
+    let stale = false;
+    const layoutTasks = [...rawGraph.taskArray].sort((a, b) => a.id.localeCompare(b.id));
+    const layoutEdges = rawGraph.rawEdges.map(({ id, source, target }) => ({ id, source, target }));
+
+    void layoutTaskGraph(layoutTasks, layoutEdges).then((result) => {
+      if (!stale) {
+        setLayoutState({ key: rawGraph.layoutKey, result });
+        setLayoutError(null);
+      }
+    }).catch((error: unknown) => {
+      if (!stale) {
+        setLayoutState(null);
+        setLayoutError({
+          key: rawGraph.layoutKey,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
+
+    return () => {
+      stale = true;
+    };
+  }, [rawGraph.layoutKey]);
+
+  const activeLayout = useMemo(() => (
+    layoutState?.key === rawGraph.layoutKey
+      && layoutHasAllTasks(layoutState.result, rawGraph.taskArray)
+      ? layoutState.result
+      : null
+  ), [layoutState, rawGraph.layoutKey, rawGraph.taskArray]);
+
+  const routedEdgePoints = layoutState?.key === rawGraph.layoutKey
+    ? layoutState.result.edgePoints
+    : EMPTY_EDGE_POINTS;
+
+  const { nodes, edges } = useMemo(() => {
+    if (!activeLayout) return { nodes: [] as Node[], edges: [] as Edge<BundledEdgeData>[] };
+
+    const allNodes: Node[] = [];
+    for (const task of rawGraph.taskArray) {
+      const wfGroupId = task.config.workflowId ?? 'unknown';
+      const wfMeta = workflows?.get(wfGroupId);
+      const wfMergeMode = (wfMeta?.mergeMode as 'manual' | 'automatic' | 'external_review') ?? 'manual';
+      const pos = activeLayout.positions.get(task.id) ?? { x: 0, y: 0 };
+      const visualStatus = getEffectiveVisualStatus(task.status, task.execution);
+      const dimmed = statusFilters
+        && statusFilters.size > 0
+        && !Array.from(statusFilters).some((filterKey) => matchesStatusFilter(filterKey, visualStatus));
+
+      if (task.config.isMergeNode) {
+        let gateKind = resolveMergeGateKind(task, wfMeta);
+        if (wfMergeMode === 'external_review') {
+          gateKind = 'external_review';
+        }
+        const showMergeModeRow = gateKind !== 'external_review';
+        allNodes.push({
+          id: task.id,
+          type: 'mergeGateNode',
+          position: pos,
+          data: {
+            taskId: task.id,
+            status: task.status,
+            label: mergeGatePlanTitle(task.description),
+            gateKind,
+            showMergeModeRow,
+            baseBranch: wfMeta?.baseBranch,
+            featureBranch: wfMeta?.featureBranch,
+            mergeMode: wfMergeMode,
+            workflowId: wfGroupId,
+            reviewUrl: task.execution?.reviewUrl,
+            reviewStatus: task.execution?.reviewStatus,
+            summary: task.config?.summary,
+            onFinish: wfMeta?.onFinish,
+            pendingFixError: task.execution?.pendingFixError,
+            dimmed,
+            selected: selectedTaskId === task.id,
+          },
+        });
+      } else {
+        allNodes.push({
+          id: task.id,
+          type: 'taskNode',
+          position: pos,
+          data: {
+            task,
+            label: task.description,
+            dimmed,
+            selected: selectedTaskId === task.id,
+          },
+        });
+      }
+    }
+
     // Build edges with offset calculations
     const sourceOutCount = new Map<string, number>();
     const targetInCount = new Map<string, number>();
-    for (const e of allRawEdges) {
+    for (const e of rawGraph.rawEdges) {
       sourceOutCount.set(e.source, (sourceOutCount.get(e.source) ?? 0) + 1);
       targetInCount.set(e.target, (targetInCount.get(e.target) ?? 0) + 1);
     }
@@ -194,7 +289,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
     const targetInIndex = new Map<string, number>();
     const EDGE_SPACING = 12;
 
-    const newEdges: Edge<BundledEdgeData>[] = allRawEdges.map((e) => {
+    const newEdges: Edge<BundledEdgeData>[] = rawGraph.rawEdges.map((e) => {
       const srcTotal = sourceOutCount.get(e.source) ?? 1;
       const srcIdx = sourceOutIndex.get(e.source) ?? 0;
       sourceOutIndex.set(e.source, srcIdx + 1);
@@ -208,8 +303,8 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
 
       const sourceTask = tasks.get(e.source);
       const targetTask = tasks.get(e.target);
-      const sourceStatus = sourceTask?.status ?? gateStatuses.get(e.source) ?? 'pending';
-      const targetStatus = targetTask?.status ?? gateStatuses.get(e.target) ?? 'pending';
+      const sourceStatus = sourceTask?.status ?? rawGraph.gateStatuses.get(e.source) ?? 'pending';
+      const targetStatus = targetTask?.status ?? rawGraph.gateStatuses.get(e.target) ?? 'pending';
       const edgeStyle = getEdgeStyle(sourceStatus, targetStatus);
 
       const srcIsMerge = tasks.get(e.source)?.config.isMergeNode || isMergeGateId(e.source);
@@ -220,10 +315,12 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
       const truncTgt = tgtLabel.length > 12 ? tgtLabel.slice(0, 12) + '..' : tgtLabel;
       const label = `${truncSrc} → ${truncTgt}`;
 
-      const edgeDimmed = dimmedNodeIds.has(e.source) || dimmedNodeIds.has(e.target);
+      const edgeDimmed = rawGraph.dimmedNodeIds.has(e.source) || rawGraph.dimmedNodeIds.has(e.target);
+      const selectionActive = selectedTaskId === e.source || selectedTaskId === e.target;
+      const baseOpacity = edgeDimmed ? 0.15 : e.kind === 'external' ? 0.24 : 1;
 
       return {
-        id: `${e.kind}:${e.source}->${e.target}`,
+        id: e.id ?? `${e.kind}:${e.source}->${e.target}`,
         source: e.source,
         target: e.target,
         type: 'bundled',
@@ -232,7 +329,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
           stroke: edgeStyle.stroke,
           strokeWidth: edgeStyle.strokeWidth,
           strokeDasharray: e.kind === 'external' ? '6 4' : edgeStyle.strokeDasharray,
-          opacity: edgeDimmed ? 0.15 : 1,
+          opacity: selectionActive ? Math.max(baseOpacity, e.kind === 'external' ? 0.86 : 1) : baseOpacity,
         },
         markerEnd: {
           type: MarkerType.ArrowClosed,
@@ -248,12 +345,15 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
           label: e.kind === 'external' ? `external ${label}` : label,
           hoverStroke: edgeStyle.hoverStroke,
           hoverWidth: edgeStyle.hoverWidth,
+          routePoints: routedEdgePoints.get(e.id ?? `${e.kind}:${e.source}->${e.target}`),
+          external: e.kind === 'external',
+          selectionActive,
         },
       };
     });
 
     return { nodes: allNodes, edges: newEdges };
-  }, [tasks, workflows, selectedTaskId, statusFilters]);
+  }, [activeLayout, rawGraph, routedEdgePoints, selectedTaskId, statusFilters, tasks, workflows]);
 
   // Merge task-derived nodes with React Flow's internal dimension/selection state.
   // Without this, each task-delta re-render creates new node objects that discard
@@ -362,6 +462,18 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
         <div className="text-center">
           <p>No tasks yet</p>
           <p className="text-sm mt-1">Load a plan to create a task graph</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!activeLayout) {
+    const error = layoutError?.key === rawGraph.layoutKey ? layoutError.error : undefined;
+    return (
+      <div className="h-full w-full flex items-center justify-center text-gray-500">
+        <div className="text-center">
+          <p>{error ? 'Task graph layout failed' : 'Preparing task graph layout'}</p>
+          {error && <p className="text-sm mt-1 text-red-300">{error}</p>}
         </div>
       </div>
     );
