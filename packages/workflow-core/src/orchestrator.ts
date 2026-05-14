@@ -20,10 +20,10 @@ import { ResponseHandler } from './response-handler.js';
 import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
 import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, Attempt, ExternalDependency, TaskStatus } from '@invoker/workflow-graph';
-import type { ExecutorType } from '@invoker/workflow-graph';
+import type { RunnerKind } from '@invoker/workflow-graph';
 import { createTaskState, createAttempt } from '@invoker/workflow-graph';
 import type { Logger, WorkResponse } from '@invoker/contracts';
-import { normalizeExecutorType } from '@invoker/workflow-graph';
+import { normalizeRunnerKind } from '@invoker/workflow-graph';
 
 const MERGE_TRACE_LOG = resolve(homedir(), '.invoker', 'merge-trace.log');
 function mergeTrace(tag: string, data: Record<string, unknown>): void {
@@ -252,9 +252,8 @@ export interface PlanDefinition {
     experimentVariants?: Array<{ id: string; description: string; prompt?: string; command?: string }>;
     requiresManualApproval?: boolean;
     featureBranch?: string;
-    executorType?: string;
     dockerImage?: string;
-    remoteTargetId?: string;
+    poolId?: string;
     executionAgent?: string;
   }>;
 }
@@ -345,7 +344,7 @@ export interface GraphMutationNodeDef {
   experimentPrompt?: string;
   prompt?: string;
   command?: string;
-  executorType?: ExecutorType;
+  runnerKind?: RunnerKind;
   isReconciliation?: boolean;
   requiresManualApproval?: boolean;
   isMergeNode?: boolean;
@@ -365,7 +364,7 @@ export interface TaskReplacementDef {
   command?: string;
   prompt?: string;
   dependencies?: string[];
-  executorType?: ExecutorType;
+  runnerKind?: RunnerKind;
   executionAgent?: string;
 }
 
@@ -376,19 +375,23 @@ export interface ExternalGatePolicyUpdate {
 }
 
 /**
- * A single routing rule that validates task execution environment against command patterns.
+ * A single routing rule that validates task pool placement against command patterns.
  * When a rule matches a task command, the orchestrator validates that the task's
- * executorType and remoteTargetId conform to the rule's requirements.
+ * pool destination conforms to the rule's requirements.
  */
 export interface ExecutorRoutingRule {
   /** Substring to match against the task command. */
   pattern?: string;
   /** Regular expression matched against the task command; compiled with new RegExp(regex). */
   regex?: string;
-  /** Required executor type for matching commands (e.g. "ssh", "docker", "worktree"). */
-  executorType: string;
-  /** Required remote target ID for matching commands; must correspond to an entry in remoteTargets. */
-  remoteTargetId: string;
+  /** Required execution pool ID for matching commands. */
+  poolId: string;
+  /**
+   * Rule behavior:
+   * - enforce (default): task must already declare matching executor/destination
+   * - route: auto-apply rule executor/destination when omitted, and reject conflicts
+   */
+  strategy?: 'enforce' | 'route';
 }
 
 export interface CommandRoutingMatcher {
@@ -398,8 +401,7 @@ export interface CommandRoutingMatcher {
 
 export interface HeavyweightCommandRoutingPolicy {
   enabled?: boolean;
-  executorType?: string;
-  remoteTargetId: string;
+  poolId: string;
   matchers?: CommandRoutingMatcher[];
 }
 
@@ -407,78 +409,74 @@ const DEFAULT_HEAVYWEIGHT_COMMAND_MATCHERS: CommandRoutingMatcher[] = [
   { regex: '\\bpnpm(?:\\s|$)' },
 ];
 
-function findMatchingCommandRoutingMatcher(
+function validateRoutingDestinationAvailability(
+  taskId: string,
   command: string,
-  matchers: CommandRoutingMatcher[],
-): CommandRoutingMatcher | undefined {
-  for (const matcher of matchers) {
-    const patternMatch = matcher.pattern !== undefined && command.includes(matcher.pattern);
-    const regexMatch = matcher.regex !== undefined && new RegExp(matcher.regex).test(command);
-    if (patternMatch || regexMatch) {
-      return matcher;
-    }
+  sourceLabel: string,
+  poolId: string | undefined,
+  availablePoolIds: Set<string>,
+): void {
+  if (availablePoolIds.size > 0 && (!poolId || !availablePoolIds.has(poolId))) {
+    throw new Error(
+      `Task "${taskId}" with command "${command}" matched ${sourceLabel}, ` +
+      `but config poolId="${poolId}" is not defined in executionPools.`,
+    );
   }
-  return undefined;
+  if (availablePoolIds.size === 0) {
+    throw new Error(
+      `Task "${taskId}" with command "${command}" matched ${sourceLabel}, ` +
+      'but no executionPools are configured.',
+    );
+  }
 }
 
-function resolveHeavyweightCommandRouting(
+function buildHeavyweightRoutingRules(
   taskId: string,
-  command: string | undefined,
-  planExecutorType: string | undefined,
-  planRemoteTargetId: string | undefined,
   policy: HeavyweightCommandRoutingPolicy | undefined,
-  availableRemoteTargetIds: Set<string>,
-): { executorType?: string; remoteTargetId?: string } | undefined {
-  if (!command || !policy || policy.enabled === false) {
-    return undefined;
+): ExecutorRoutingRule[] {
+  if (!policy || policy.enabled === false) {
+    return [];
   }
 
   const matchers = policy.matchers?.length ? policy.matchers : DEFAULT_HEAVYWEIGHT_COMMAND_MATCHERS;
-  const matched = findMatchingCommandRoutingMatcher(command, matchers);
-  if (!matched) {
-    return undefined;
-  }
-
-  const policyExecutorType = normalizeExecutorType(policy.executorType) ?? 'ssh';
-  if (policyExecutorType !== 'ssh') {
+  if (!policy.poolId) {
     throw new Error(
-      `Task "${taskId}" with command "${command}" matched heavyweight command routing, ` +
-      `but config executorType="${policyExecutorType}" is unsupported. Expected "ssh".`,
+      `Task "${taskId}" matched heavyweight command routing, ` +
+      'but config is missing destination: set poolId.',
     );
   }
 
-  if (availableRemoteTargetIds.size > 0 && !availableRemoteTargetIds.has(policy.remoteTargetId)) {
+  return matchers.map((matcher) => ({
+    pattern: matcher.pattern,
+    regex: matcher.regex,
+    poolId: policy.poolId,
+    strategy: 'route',
+  }));
+}
+
+function applyRoutingRule(
+  taskId: string,
+  command: string,
+  planPoolId: string | undefined,
+  rule: ExecutorRoutingRule,
+  sourceLabel: string,
+  availablePoolIds: Set<string>,
+): { poolId?: string } | undefined {
+  validateRoutingDestinationAvailability(
+    taskId,
+    command,
+    sourceLabel,
+    rule.poolId,
+    availablePoolIds,
+  );
+  if (planPoolId !== undefined && planPoolId !== rule.poolId) {
     throw new Error(
-      `Task "${taskId}" with command "${command}" matched heavyweight command routing, ` +
-      `but config remoteTargetId="${policy.remoteTargetId}" is not defined in remoteTargets.`,
+      `Task "${taskId}" with command "${command}" matched ${sourceLabel} and must use ` +
+      `poolId="${rule.poolId}", but plan declares poolId="${planPoolId}"`,
     );
   }
-
-  if (availableRemoteTargetIds.size === 0) {
-    throw new Error(
-      `Task "${taskId}" with command "${command}" matched heavyweight command routing, ` +
-      `but no remoteTargets are configured.`,
-    );
-  }
-
-  const normalizedPlanType = normalizeExecutorType(planExecutorType) ?? 'worktree';
-  if (planExecutorType !== undefined && normalizedPlanType !== policyExecutorType) {
-    throw new Error(
-      `Task "${taskId}" with command "${command}" matched heavyweight command routing and must use ` +
-      `executorType="${policyExecutorType}", but plan declares executorType="${normalizedPlanType}"`,
-    );
-  }
-
-  if (planRemoteTargetId !== undefined && planRemoteTargetId !== policy.remoteTargetId) {
-    throw new Error(
-      `Task "${taskId}" with command "${command}" matched heavyweight command routing and must use ` +
-      `remoteTargetId="${policy.remoteTargetId}", but plan declares remoteTargetId="${planRemoteTargetId}"`,
-    );
-  }
-
   return {
-    executorType: policyExecutorType,
-    remoteTargetId: policy.remoteTargetId,
+    poolId: rule.poolId ?? planPoolId,
   };
 }
 
@@ -503,16 +501,15 @@ export function findMatchingExecutorRoutingRule(
 }
 
 /**
- * Validates that a task's routing conforms to executor routing rules.
+ * Validates that a task's routing conforms to pool routing rules.
  * Returns immediately if the task has no command or no rules are configured.
- * When a rule matches the task command, throws if the task's executorType or remoteTargetId
- * do not match the rule's requirements.
+ * When a rule matches the task command, throws if the task's poolId does not
+ * match the rule's requirements.
  */
 export function assertExecutorRoutingConforms(
   taskId: string,
   command: string | undefined,
-  planExecutorType: string | undefined,
-  planRemoteTargetId: string | undefined,
+  planPoolId: string | undefined,
   rules: ExecutorRoutingRule[],
 ): void {
   if (!command || rules.length === 0) {
@@ -524,23 +521,54 @@ export function assertExecutorRoutingConforms(
     return;
   }
 
-  // Normalize both plan and rule executorType the same way createTaskState does
-  const normalizedPlanType = normalizeExecutorType(planExecutorType) ?? 'worktree';
-  const normalizedRuleType = normalizeExecutorType(matchingRule.executorType) ?? matchingRule.executorType;
-
-  if (normalizedPlanType !== normalizedRuleType) {
+  if (planPoolId !== matchingRule.poolId) {
     throw new Error(
-      `Task "${taskId}" with command "${command}" requires executorType="${normalizedRuleType}" ` +
-      `but plan declares executorType="${normalizedPlanType}"`
+      `Task "${taskId}" with command "${command}" requires poolId="${matchingRule.poolId}" ` +
+      `but plan declares poolId="${planPoolId ?? '(undefined)'}"`
     );
   }
+}
 
-  if (planRemoteTargetId !== matchingRule.remoteTargetId) {
-    throw new Error(
-      `Task "${taskId}" with command "${command}" requires remoteTargetId="${matchingRule.remoteTargetId}" ` +
-      `but plan declares remoteTargetId="${planRemoteTargetId ?? '(undefined)'}"`
-    );
+function resolveExecutorRouting(
+  taskId: string,
+  command: string | undefined,
+  planPoolId: string | undefined,
+  rules: ExecutorRoutingRule[],
+  availablePoolIds: Set<string>,
+): { poolId?: string } {
+  if (!command || rules.length === 0) {
+    return {
+      poolId: planPoolId,
+    };
   }
+
+  let effectivePoolId = planPoolId;
+
+  const routingRules = rules.filter((rule) => (rule.strategy ?? 'enforce') === 'route');
+  const matchingRoutingRule = findMatchingExecutorRoutingRule(command, routingRules);
+  if (matchingRoutingRule) {
+    const routed = applyRoutingRule(
+      taskId,
+      command,
+      effectivePoolId,
+      matchingRoutingRule,
+      'routing rule',
+      availablePoolIds,
+    );
+    effectivePoolId = routed?.poolId ?? effectivePoolId;
+  }
+
+  const enforcementRules = rules.filter((rule) => (rule.strategy ?? 'enforce') === 'enforce');
+  assertExecutorRoutingConforms(
+    taskId,
+    command,
+    effectivePoolId,
+    enforcementRules,
+  );
+
+  return {
+    poolId: effectivePoolId,
+  };
 }
 
 /**
@@ -593,13 +621,16 @@ export interface OrchestratorConfig {
   /**
    * Rules that validate task execution environment against command patterns.
    * When loading a plan, the orchestrator validates that tasks with commands matching
-   * a rule have the required executorType and remoteTargetId specified in the plan.
+   * a rule have the required runnerKind and poolId specified in the plan.
    */
   executorRoutingRules?: ExecutorRoutingRule[];
-  /** Config-owned routing for heavyweight commands (for example `pnpm ...`). */
+  /**
+   * Deprecated compatibility alias for config-owned heavyweight command routing.
+   * Internally translated into executorRoutingRules with strategy="route".
+   */
   heavyweightCommandRouting?: HeavyweightCommandRoutingPolicy;
-  /** Valid SSH remote target IDs available at plan submission time. */
-  availableRemoteTargetIds?: string[];
+  /** Valid execution pool IDs available at plan submission time. */
+  availablePoolIds?: string[];
   /**
    * When true, keep tasks persisted as `pending` until the executor confirms
    * startup success, then transition to `running`.
@@ -624,8 +655,7 @@ export class Orchestrator {
   private readonly taskRepository: TaskRepository;
   private readonly maxConcurrency: number;
   private readonly executorRoutingRules: ExecutorRoutingRule[];
-  private readonly heavyweightCommandRouting?: HeavyweightCommandRoutingPolicy;
-  private readonly availableRemoteTargetIds: Set<string>;
+  private readonly availablePoolIds: Set<string>;
   private readonly defaultAutoFixRetries: number;
   private readonly deferRunningUntilLaunch: boolean;
 
@@ -685,9 +715,11 @@ export class Orchestrator {
     this.messageBus = config.messageBus;
     this.logger = config.logger ?? noopLogger;
     this.taskRepository = config.taskRepository ?? taskRepositoryFromPersistence(config.persistence);
-    this.executorRoutingRules = config.executorRoutingRules ?? [];
-    this.heavyweightCommandRouting = config.heavyweightCommandRouting;
-    this.availableRemoteTargetIds = new Set(config.availableRemoteTargetIds ?? []);
+    this.executorRoutingRules = [
+      ...(config.executorRoutingRules ?? []),
+      ...buildHeavyweightRoutingRules('config', config.heavyweightCommandRouting),
+    ];
+    this.availablePoolIds = new Set(config.availablePoolIds ?? []);
     this.defaultAutoFixRetries = Math.min(Math.max(0, Math.floor(config.defaultAutoFixRetries ?? 0)), 10);
     this.deferRunningUntilLaunch = config.deferRunningUntilLaunch ?? false;
 
@@ -742,7 +774,7 @@ export class Orchestrator {
       ...(changes.status !== undefined ? { status: changes.status } : {}),
       ...(changes.dependencies !== undefined ? { dependencies: changes.dependencies } : {}),
       // Type assertion: spread widens the discriminated union but the runtime
-      // value preserves the correct executorType discriminant from existing.config.
+      // value preserves the correct runnerKind discriminant from existing.config.
       config: { ...existing.config, ...changes.config } as TaskConfig,
       execution: { ...existing.execution, ...changes.execution },
       taskStateVersion: existing.taskStateVersion + 1,
@@ -1230,25 +1262,14 @@ export class Orchestrator {
 
     const validatedTasks: TaskState[] = [];
     for (const taskDef of plan.tasks) {
-      const resolvedHeavyweightRouting = resolveHeavyweightCommandRouting(
+      const resolvedRouting = resolveExecutorRouting(
         taskDef.id,
         taskDef.command,
-        taskDef.executorType,
-        taskDef.remoteTargetId,
-        this.heavyweightCommandRouting,
-        this.availableRemoteTargetIds,
-      );
-      const effectiveExecutorType = resolvedHeavyweightRouting?.executorType ?? taskDef.executorType;
-      const effectiveRemoteTargetId = resolvedHeavyweightRouting?.remoteTargetId ?? taskDef.remoteTargetId;
-
-      // Validate executor routing conformance for tasks with commands
-      assertExecutorRoutingConforms(
-        taskDef.id,
-        taskDef.command,
-        effectiveExecutorType,
-        effectiveRemoteTargetId,
+        taskDef.poolId,
         this.executorRoutingRules,
+        this.availablePoolIds,
       );
+      const effectivePoolId = resolvedRouting.poolId;
 
       const scopedId = localToScoped.get(taskDef.id)!;
       const scopedDeps = (taskDef.dependencies ?? []).map((dep) => {
@@ -1275,19 +1296,15 @@ export class Orchestrator {
         featureBranch: taskDef.featureBranch,
         executionAgent: taskDef.executionAgent,
         externalDependencies,
+        poolId: effectivePoolId,
       } as const;
-      const executorType = normalizeExecutorType(effectiveExecutorType) ?? 'worktree';
       let taskConfig: TaskConfig;
-      switch (executorType) {
-        case 'docker':
-          taskConfig = { ...baseConfig, executorType, dockerImage: taskDef.dockerImage, remoteTargetId: effectiveRemoteTargetId };
-          break;
-        case 'ssh':
-          taskConfig = { ...baseConfig, executorType, remoteTargetId: effectiveRemoteTargetId };
-          break;
-        default:
-          taskConfig = { ...baseConfig, executorType: 'worktree' as const, remoteTargetId: effectiveRemoteTargetId };
-          break;
+      if (taskDef.dockerImage) {
+        taskConfig = { ...baseConfig, runnerKind: 'docker' as const, dockerImage: taskDef.dockerImage };
+      } else if (effectivePoolId) {
+        taskConfig = { ...baseConfig, runnerKind: 'ssh' as const };
+      } else {
+        taskConfig = { ...baseConfig, runnerKind: 'worktree' as const };
       }
       const task = createTaskState(
         scopedId,
@@ -1326,7 +1343,7 @@ export class Orchestrator {
       mergeNodeId,
       descriptionForMergeNode(plan),
       leafIds,
-      { workflowId, isMergeNode: true, executorType: 'merge' },
+      { workflowId, isMergeNode: true, runnerKind: 'merge' },
     );
 
     // ── Pass 2: all validation passed — persist everything ──
@@ -2623,13 +2640,13 @@ export class Orchestrator {
     return this.recreateTask(taskId);
   }
 
-    editTaskType(taskId: string, executorType: string, remoteTargetId?: string): TaskState[] {
+    editTaskType(taskId: string, runnerKind: string, poolMemberId?: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
     if (task.config.isMergeNode) throw new Error(`Cannot change executor type of merge node ${taskId}`);
 
-    const effectiveType = normalizeExecutorType(executorType) ?? executorType;
+    const effectiveType = normalizeRunnerKind(runnerKind) ?? runnerKind;
 
     // SSH requires repoUrl on the workflow to clone onto the remote host
     if (effectiveType === 'ssh' && task.config.workflowId && this.persistence.loadWorkflow) {
@@ -2642,25 +2659,25 @@ export class Orchestrator {
       }
     }
 
-    const oldExecutorType = task.config.executorType;
-    const oldRemoteTargetId =
-      oldExecutorType === 'ssh' ? task.config.remoteTargetId : undefined;
-    const newRemoteTargetId = effectiveType === 'ssh' ? remoteTargetId : undefined;
+    const oldRunnerKind = task.config.runnerKind;
+    const oldPoolMemberId =
+      oldRunnerKind === 'ssh' ? (task.config as { poolMemberId?: string }).poolMemberId : undefined;
+    const newPoolMemberId = effectiveType === 'ssh' ? poolMemberId : undefined;
     const hostKey = (et: string | undefined, rid: string | undefined): string =>
       et === 'ssh' ? `ssh:${rid ?? ''}` : 'local';
     const hostChanged =
-      hostKey(oldExecutorType, oldRemoteTargetId) !==
-      hostKey(effectiveType, newRemoteTargetId);
+      hostKey(oldRunnerKind, oldPoolMemberId) !==
+      hostKey(effectiveType, newPoolMemberId);
 
     if (task.status === 'running' || task.status === 'fixing_with_ai') {
       this.cancelTask(taskId);
     }
 
-    const configPatch: Record<string, unknown> = { executorType: effectiveType };
+    const configPatch: Record<string, unknown> = { runnerKind: effectiveType };
     if (effectiveType === 'ssh') {
-      configPatch.remoteTargetId = remoteTargetId;
+      configPatch.poolMemberId = poolMemberId;
     } else {
-      configPatch.remoteTargetId = undefined;
+      configPatch.poolMemberId = undefined;
     }
     const typeChanges: TaskStateChanges = { config: configPatch };
     const typeBefore = this.stateGetTask(taskId)!;
@@ -2775,7 +2792,7 @@ export class Orchestrator {
    * built from upstream leaf results); only the merge execution
    * policy changed. That distinction is what makes merge-mode the
    * single retry-class route alongside the other retry-class rows
-   * (`executorType`, `selectedExperiment`, `selectedExperimentSet`)
+   * (`runnerKind`, `selectedExperiment`, `selectedExperimentSet`)
    * in the chart's Decision Table.
    */
   editTaskMergeMode(
@@ -2911,8 +2928,8 @@ export class Orchestrator {
    * NOTE: `restartTask` is intentionally used here (not
    * `recreateTask`) because Step 10 is retry-class — fix
    * prompt/context changes do NOT change the task's execution-defining
-   * spec (`command` / `prompt` / `executionAgent` / `executorType` /
-   * `remoteTargetId`); they only redirect the AI fix attempt that
+   * spec (`command` / `prompt` / `executionAgent` / `runnerKind` /
+   * `poolMemberId`); they only redirect the AI fix attempt that
    * runs against an already-failed task lineage.
    */
   editTaskFixContext(
@@ -3167,7 +3184,7 @@ export class Orchestrator {
       newMergeId,
       mergeDescription,
       leafIds,
-      { workflowId: newWfId, isMergeNode: true, executorType: 'merge' },
+      { workflowId: newWfId, isMergeNode: true, runnerKind: 'merge' },
     );
     this.createAndSync(newMerge);
     this.messageBus.publish(TASK_DELTA_CHANNEL, { type: 'created', task: newMerge });
@@ -3286,31 +3303,32 @@ export class Orchestrator {
       const deps = hasInternalDeps
         ? rt.dependencies!.map((d) => scopeLocal(d))
         : [...task.dependencies];
-      const rtExecutorType = normalizeExecutorType(rt.executorType) ?? task.config.executorType ?? 'worktree';
+      const rtRunnerKind = normalizeRunnerKind(rt.runnerKind) ?? task.config.runnerKind ?? 'worktree';
       const rtBase = {
         workflowId: wfId,
         command: rt.command,
         prompt: rt.prompt,
         executionAgent: rt.executionAgent ?? task.config.executionAgent,
+        poolId: task.config.poolId,
       } as const;
       // Replacement tasks inherit executor config from the parent task.
       // The switch narrows the config so TS accepts the correct variant.
       let rtConfig: TaskConfig;
-      switch (rtExecutorType) {
+      switch (rtRunnerKind) {
         case 'docker':
           rtConfig = {
-            ...rtBase, executorType: 'docker',
-            dockerImage: task.config.executorType === 'docker' ? task.config.dockerImage : undefined,
+            ...rtBase, runnerKind: 'docker',
+            dockerImage: task.config.runnerKind === 'docker' ? task.config.dockerImage : undefined,
           };
           break;
         case 'ssh':
-          rtConfig = {
-            ...rtBase, executorType: 'ssh',
-            remoteTargetId: task.config.executorType === 'ssh' ? task.config.remoteTargetId : undefined,
-          };
+          rtConfig = ({
+            ...rtBase, runnerKind: 'ssh',
+            poolMemberId: task.config.runnerKind === 'ssh' ? (task.config as { poolMemberId?: string }).poolMemberId : undefined,
+          } as unknown) as TaskConfig;
           break;
         default:
-          rtConfig = { ...rtBase, executorType: 'worktree' as const };
+          rtConfig = { ...rtBase, runnerKind: 'worktree' as const };
           break;
       }
       const newTask = createTaskState(scopedId, rt.description, deps, rtConfig);
@@ -4063,7 +4081,7 @@ export class Orchestrator {
       experimentPrompt: v.prompt,
       prompt: v.prompt,
       command: v.command,
-      executorType: parentTask?.config.executorType,
+      runnerKind: parentTask?.config.runnerKind,
     }));
 
     const reconciliationId = `${taskId}-reconciliation`;

@@ -316,7 +316,7 @@ function seedActiveTask(p: InMemoryPersistence, wfId: string, taskId: string): v
     status: 'pending',
     dependencies: [taskId],
     createdAt: new Date(),
-    config: { workflowId: wfId, isMergeNode: true, executorType: 'merge' },
+    config: { workflowId: wfId, isMergeNode: true, runnerKind: 'merge' },
     execution: {},
   });
 }

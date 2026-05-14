@@ -1218,7 +1218,7 @@ describe('SshExecutor entry lifecycle', () => {
     // Revisit path uses persisted metadata, NOT the entries map.
     const meta: PersistedTaskMeta = {
       taskId: handle.taskId,
-      executorType: ssh.type,
+      runnerKind: ssh.type,
       // Remote-style path so getRestoredTerminalSpec hits the isRemotePath branch.
       workspacePath: handle.workspacePath ?? '/home/testuser/.invoker/worktrees/test',
       branch: handle.branch,

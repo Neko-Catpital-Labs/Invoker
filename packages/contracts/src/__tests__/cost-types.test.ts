@@ -86,7 +86,7 @@ const SHARED_ATTRIBUTION: CostEventAttribution = {
   workflowId: 'wf-1',
   taskId: 'task-a',
   attemptId: 'att-1',
-  executorType: 'worktree',
+  runnerKind: 'worktree',
 };
 
 function makeEvent(overrides: Partial<NormalizedCostEvent> = {}): NormalizedCostEvent {
@@ -126,12 +126,12 @@ describe('NormalizedCostEvent type contract', () => {
       workflowId: 'wf-1',
       taskId: 'task-a',
       attemptId: 'att-1',
-      executorType: 'worktree',
+      runnerKind: 'worktree',
     };
     expect(attr.workflowId).toBe('wf-1');
     expect(attr.taskId).toBe('task-a');
     expect(attr.attemptId).toBe('att-1');
-    expect(attr.executorType).toBe('worktree');
+    expect(attr.runnerKind).toBe('worktree');
   });
 
   it('enforces all required usage fields', () => {

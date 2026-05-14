@@ -110,7 +110,7 @@ describe('rebase-and-retry: pool mirror cleanup before restart', { timeout: 120_
       description: 'Test task',
       config: {
         command: 'echo hello',
-        executorType: 'worktree',
+        runnerKind: 'worktree',
         workflowId: 'wf-test',
       },
     });

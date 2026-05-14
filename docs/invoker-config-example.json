@@ -25,6 +25,7 @@
       "user": "deploy",
       "sshKeyPath": "/home/user/.ssh/id_staging",
       "port": 22,
+      "maxConcurrentTasks": 1,
       "managedWorkspaces": true,
       "remoteInvokerHome": "~/.invoker",
       "provisionCommand": "pnpm install --frozen-lockfile",
@@ -36,6 +37,7 @@
       "user": "deploy",
       "sshKeyPath": "/home/user/.ssh/id_build_b",
       "port": 22,
+      "maxConcurrentTasks": 1,
       "managedWorkspaces": true,
       "remoteInvokerHome": "~/.invoker",
       "provisionCommand": "pnpm install --frozen-lockfile",
@@ -43,15 +45,27 @@
     }
   },
 
-  "heavyweightCommandRouting": {
-    "comment": "Auto-route heavyweight shell commands like pnpm test to a remote target",
-    "remoteTargetId": "staging-server",
-    "matchers": [
-      {
-        "regex": "\\bpnpm(?:\\s|$)"
-      }
-    ]
+  "executionPools": {
+    "ssh-light": {
+      "comment": "Pool routes tasks across mixed SSH/local members with shared queue/drain semantics",
+      "members": [
+        { "type": "ssh", "id": "staging-server" },
+        { "type": "ssh", "id": "build-server-b" },
+        { "type": "worktree", "id": "local-fallback", "maxConcurrentTasks": 2 }
+      ],
+      "selectionStrategy": "roundRobin",
+      "maxConcurrentTasksPerMember": 1
+    }
   },
+
+  "executorRoutingRules": [
+    {
+      "comment": "Route pnpm commands to ssh-light pool",
+      "regex": "\\bpnpm(?:\\s|$)",
+      "poolId": "ssh-light",
+      "strategy": "route"
+    }
+  ],
 
   "autoFixRetries": 3,
   "autoApproveAIFixes": true,
@@ -62,7 +76,7 @@
       "~/.invoker/config.json - Default user-level settings",
       "INVOKER_REPO_CONFIG_PATH=/path/to/config.json - Explicit override for repo/test-specific config"
     ],
-    "executor_types": [
+    "runner_kinds": [
       "worktree - Git worktree isolation (default)",
       "docker - Docker container execution",
       "ssh - Remote SSH execution"

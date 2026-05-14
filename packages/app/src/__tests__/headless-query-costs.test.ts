@@ -26,7 +26,7 @@ function makeTask(wfId: string, taskSuffix: string, overrides: Partial<TaskState
     config: {
       workflowId: wfId,
       isMergeNode: false,
-      executorType: 'worktree',
+      runnerKind: 'worktree',
       ...((overrides.config ?? {}) as any),
     },
     execution: {

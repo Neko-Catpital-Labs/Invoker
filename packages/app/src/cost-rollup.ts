@@ -18,7 +18,7 @@ export interface AttributionContext {
   readonly workflowId: string;
   readonly taskId: string;
   readonly attemptId: string;
-  readonly executorType: string;
+  readonly runnerKind: string;
   readonly agentSessionId: string;
   readonly agentName: string;
   readonly source: string;
@@ -47,7 +47,7 @@ export function attributeSessionUsage(
       workflowId: ctx.workflowId,
       taskId: ctx.taskId,
       attemptId: ctx.attemptId,
-      executorType: ctx.executorType,
+      runnerKind: ctx.runnerKind,
     },
     usage: {
       inputTokens: e.inputTokens,
@@ -153,7 +153,7 @@ export function groupCostEvents(
 export interface CostTaskInfo {
   readonly id: string;
   readonly workflowId: string;
-  readonly executorType: string;
+  readonly runnerKind: string;
   readonly agentSessionId?: string;
   readonly lastAgentSessionId?: string;
   readonly agentName?: string;
@@ -205,7 +205,7 @@ export function buildAttributionContext(task: CostTaskInfo): AttributionContext 
     workflowId: task.workflowId,
     taskId: task.id,
     attemptId: `${task.id}-latest`,
-    executorType: task.executorType || 'worktree',
+    runnerKind: task.runnerKind || 'worktree',
     agentSessionId: sessionId,
     agentName,
     source: deriveSource(agentName),

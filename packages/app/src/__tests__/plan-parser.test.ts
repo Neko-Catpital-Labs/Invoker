@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { parsePlan, PlanParseError, detectDefaultBranch, applyPlanDefinitionDefaults } from '../plan-parser.js';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
@@ -13,6 +14,7 @@ const isolatedConfigPath = join(tmpdir(), `invoker-plan-parser-config-${process.
 
 beforeEach(() => {
   process.env.INVOKER_REPO_CONFIG_PATH = isolatedConfigPath;
+  writeFileSync(isolatedConfigPath, JSON.stringify({ defaultBranch: 'main' }));
 });
 
 describe('applyPlanDefinitionDefaults', () => {
@@ -674,113 +676,62 @@ tasks:
     });
   });
 
-  describe('executor type validation', () => {
-    it('rejects executorType docker without dockerImage', () => {
+  describe('routing field validation', () => {
+    it('accepts dockerImage without a routing kind selector', () => {
       const yaml = `
-name: Docker No Image
+name: Docker Image
 repoUrl: git@github.com:test/repo.git
 tasks:
   - id: build
     description: Build in Docker
     command: echo build
-    executorType: docker
-`;
-      expect(() => parsePlan(yaml)).toThrow(PlanParseError);
-      expect(() => parsePlan(yaml)).toThrow('executorType "docker" but is missing required field "dockerImage"');
-    });
-
-    it('rejects executorType ssh without remoteTargetId', () => {
-      const yaml = `
-name: SSH No Target
-repoUrl: git@github.com:test/repo.git
-tasks:
-  - id: deploy
-    description: Deploy via SSH
-    command: echo deploy
-    executorType: ssh
-`;
-      expect(() => parsePlan(yaml)).toThrow(PlanParseError);
-      expect(() => parsePlan(yaml)).toThrow('executorType "ssh" but is missing required field "remoteTargetId"');
-    });
-
-    it('accepts executorType docker with dockerImage', () => {
-      const yaml = `
-name: Docker With Image
-repoUrl: git@github.com:test/repo.git
-tasks:
-  - id: build
-    description: Build in Docker
-    command: echo build
-    executorType: docker
     dockerImage: node:20
 `;
       const plan = parsePlan(yaml);
-      expect(plan.tasks[0].executorType).toBe('docker');
       expect(plan.tasks[0].dockerImage).toBe('node:20');
     });
 
-    it('accepts executorType ssh with remoteTargetId', () => {
+    it('accepts poolId without a routing kind selector', () => {
       const yaml = `
-name: SSH With Target
+name: Pool Plan
 repoUrl: git@github.com:test/repo.git
 tasks:
   - id: deploy
-    description: Deploy via SSH
+    description: Deploy via pool
     command: echo deploy
-    executorType: ssh
-    remoteTargetId: prod-server-1
+    poolId: prod-pool
 `;
       const plan = parsePlan(yaml);
-      expect(plan.tasks[0].executorType).toBe('ssh');
-      expect(plan.tasks[0].remoteTargetId).toBe('prod-server-1');
+      expect(plan.tasks[0].poolId).toBe('prod-pool');
     });
 
-    it('accepts worktree executorType without docker or ssh fields', () => {
+    it('rejects top-level legacy routing fields', () => {
       const yaml = `
-name: Worktree Plan
+name: Legacy Routing
 repoUrl: git@github.com:test/repo.git
-tasks:
-  - id: build
-    description: Build locally
-    command: echo build
-    executorType: worktree
-`;
-      const plan = parsePlan(yaml);
-      expect(plan.tasks[0].executorType).toBe('worktree');
-    });
-
-    it('rejects docker executorType inherited from plan level without dockerImage', () => {
-      const yaml = `
-name: Plan-Level Docker
-repoUrl: git@github.com:test/repo.git
-executorType: docker
+runnerKind: worktree
 tasks:
   - id: build
     description: Build
     command: echo build
 `;
       expect(() => parsePlan(yaml)).toThrow(PlanParseError);
-      expect(() => parsePlan(yaml)).toThrow('executorType "docker" but is missing required field "dockerImage"');
+      expect(() => parsePlan(yaml)).toThrow('unsupported routing field "runnerKind"');
     });
-  });
 
-  it('parses executorType without any warning', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const yaml = `
-name: Executor Type Plan
+    it('rejects task-level legacy routing fields', () => {
+      const yaml = `
+name: Legacy Task Routing
 repoUrl: git@github.com:test/repo.git
-executorType: worktree
 tasks:
-  - id: build
-    description: Build the project
-    command: echo "build"
-    executorType: docker
-    dockerImage: node:20
+  - id: deploy
+    description: Deploy
+    command: echo deploy
+    poolMemberId: prod-server-1
 `;
-    const plan = parsePlan(yaml);
-    expect(plan.tasks[0].executorType).toBe('docker');
-    expect(warnSpy).not.toHaveBeenCalled();
-    warnSpy.mockRestore();
+      expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+      expect(() => parsePlan(yaml)).toThrow('unsupported routing field "poolMemberId"');
+    });
   });
 
   it('parses description field from plan YAML', () => {
