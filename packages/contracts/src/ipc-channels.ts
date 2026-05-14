@@ -44,6 +44,8 @@ export interface WorkflowMeta {
   mergeMode?: string;
   repoUrl?: string;
   intermediateRepoUrl?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface WorkflowStatus {
