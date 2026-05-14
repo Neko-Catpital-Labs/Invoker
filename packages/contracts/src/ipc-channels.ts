@@ -105,6 +105,80 @@ export interface QueueStatus {
   queued: Array<{ taskId: string; priority: number; description: string }>;
 }
 
+export type ActionGraphNodeType =
+  | 'user-action'
+  | 'mutation-intent'
+  | 'mutation-lease'
+  | 'scheduler-job'
+  | 'task-attempt'
+  | 'blocker';
+
+export type ActionGraphNodeStatus =
+  | 'queued'
+  | 'pending'
+  | 'running'
+  | 'waiting'
+  | 'stalled'
+  | 'failed'
+  | 'cancelled'
+  | 'completed';
+
+export interface ActionGraphHistoryEntry {
+  id: string;
+  timestamp: string;
+  source: string;
+  message: string;
+  level?: string;
+}
+
+export interface ActionGraphNodeDurations {
+  queuedMs?: number;
+  pendingMs?: number;
+  runningMs?: number;
+  waitingMs?: number;
+  stalledMs?: number;
+  heartbeatAgeMs?: number;
+  leaseExpiresInMs?: number;
+}
+
+export interface ActionGraphNode {
+  id: string;
+  type: ActionGraphNodeType;
+  label: string;
+  status: ActionGraphNodeStatus;
+  workflowId?: string;
+  taskId?: string;
+  attemptId?: string;
+  intentId?: number;
+  priority?: number;
+  ownerId?: string;
+  createdAt?: string;
+  startedAt?: string;
+  completedAt?: string;
+  heartbeatAt?: string;
+  leaseExpiresAt?: string;
+  latestError?: string;
+  details?: Record<string, unknown>;
+  durations?: ActionGraphNodeDurations;
+  blockerIds?: string[];
+  suggestedNextAction?: string;
+  history?: ActionGraphHistoryEntry[];
+}
+
+export interface ActionGraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  label?: string;
+}
+
+export interface ActionGraphResponse {
+  generatedAt: string;
+  stallThresholdMs: number;
+  nodes: ActionGraphNode[];
+  edges: ActionGraphEdge[];
+}
+
 export interface ResumeWorkflowResult {
   workflow: { id: string; name: string; status: string };
   taskCount: number;
@@ -385,6 +459,10 @@ export const IpcChannels = {
   'invoker:get-queue-status': {} as {
     request: [];
     response: QueueStatus;
+  },
+  'invoker:get-action-graph': {} as {
+    request: [];
+    response: ActionGraphResponse;
   },
   'invoker:get-remote-targets': {} as {
     request: [];
