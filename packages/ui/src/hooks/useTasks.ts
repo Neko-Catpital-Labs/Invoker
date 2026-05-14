@@ -9,6 +9,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { TaskState, WorkflowMeta } from '../types.js';
 import { applyDelta } from '../lib/delta.js';
+import { normalizeWorkflowStatus } from '../lib/workflow-status.js';
 import {
   createTaskDeltaPipeline,
   type TaskDeltaPipeline,
@@ -37,7 +38,10 @@ export function useTasks(): UseTasksResult {
   const [workflows, setWorkflows] = useState<Map<string, WorkflowMeta>>(() => {
     const next = new Map<string, WorkflowMeta>();
     for (const workflow of bootstrapState?.workflows ?? []) {
-      next.set(workflow.id, workflow);
+      next.set(workflow.id, {
+        ...workflow,
+        status: normalizeWorkflowStatus((workflow as { status?: string }).status),
+      });
     }
     return next;
   });
@@ -72,7 +76,12 @@ export function useTasks(): UseTasksResult {
       });
       setWorkflows(() => {
         const wfMap = new Map<string, WorkflowMeta>();
-        for (const wf of wfList) wfMap.set(wf.id, wf);
+        for (const wf of wfList) {
+          wfMap.set(wf.id, {
+            ...wf,
+            status: normalizeWorkflowStatus((wf as { status?: string }).status),
+          });
+        }
         return wfMap;
       });
       if (!reportedStartupSnapshotRef.current) {
@@ -178,7 +187,12 @@ export function useTasks(): UseTasksResult {
       if (Array.isArray(wfList)) {
         setWorkflows(() => {
           const wfMap = new Map<string, WorkflowMeta>();
-          for (const wf of wfList) wfMap.set(wf.id, wf);
+          for (const wf of wfList) {
+            wfMap.set(wf.id, {
+              ...wf,
+              status: normalizeWorkflowStatus((wf as { status?: string }).status),
+            });
+          }
           return wfMap;
         });
       }

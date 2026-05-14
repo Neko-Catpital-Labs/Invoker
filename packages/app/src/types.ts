@@ -9,6 +9,7 @@ export type {
   InvokerAPI,
   TaskReplacementDef,
   WorkflowMeta,
+  WorkflowRollup,
   WorkflowStatus,
   TaskOutputData,
   ActivityLogEntry,

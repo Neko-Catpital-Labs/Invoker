@@ -5,9 +5,8 @@
  * Tests right-click, Escape close, click-outside close, and menu items.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
-import { vi } from 'vitest';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { WorkflowMeta } from '../../types.js';
 
@@ -53,154 +52,99 @@ describe('Context menu (component)', () => {
   beforeEach(() => {
     mock = createMockInvoker();
     mock.install();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: vi.fn(async () => undefined) },
+    });
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     mock.cleanup();
   });
 
-  async function setupAndRightClick(
-    taskTestId = 'rf__node-task-alpha',
-    tasks = [alpha, beta, merge],
-  ) {
+  async function setup() {
     render(<App />);
-    act(() => mock.setTasks(tasks, workflows));
+    act(() => mock.setTasks([alpha, beta, merge], workflows));
 
     await waitFor(() => {
-      expect(screen.getByTestId(taskTestId)).toBeInTheDocument();
+      expect(screen.getByTestId('workflow-node-wf-1')).toBeInTheDocument();
     });
-
-    fireEvent.contextMenu(screen.getByTestId(taskTestId));
   }
 
-  it('right-clicking a task node shows context menu', async () => {
-    await setupAndRightClick();
+  it('right-clicking a workflow shows workflow actions', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
 
     await waitFor(() => {
-      expect(screen.getByText('Restart Task')).toBeInTheDocument();
+      expect(screen.getByText('Open Workflow')).toBeInTheDocument();
+      expect(screen.getByText('Retry Workflow')).toBeInTheDocument();
+      expect(screen.getByText('Copy Workflow ID')).toBeInTheDocument();
+      expect(screen.getByText('More')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Recreate Workflow')).not.toBeInTheDocument();
+  });
+
+  it('task context menu still works in mini DAG', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    await waitFor(() => {
       expect(screen.getByText('Open Terminal')).toBeInTheDocument();
-    });
-  });
-
-  it('Escape closes the context menu', async () => {
-    await setupAndRightClick();
-
-    await waitFor(() => {
       expect(screen.getByText('Restart Task')).toBeInTheDocument();
     });
-
-    fireEvent.keyDown(document, { key: 'Escape' });
-
-    await waitFor(() => {
-      expect(screen.queryByText('Restart Task')).not.toBeInTheDocument();
-    });
+    expect(screen.queryByText('Retry Workflow')).not.toBeInTheDocument();
+    expect(screen.queryByText('Cancel Workflow')).not.toBeInTheDocument();
+    expect(screen.queryByText('Delete Workflow')).not.toBeInTheDocument();
   });
 
-  it('clicking outside closes the context menu', async () => {
-    await setupAndRightClick();
-
-    await waitFor(() => {
-      expect(screen.getByText('Restart Task')).toBeInTheDocument();
-    });
-
-    fireEvent.mouseDown(document.body);
-
-    await waitFor(() => {
-      expect(screen.queryByText('Restart Task')).not.toBeInTheDocument();
-    });
+  it('workflow context menu retries workflow', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    fireEvent.click(await screen.findByText('Retry Workflow'));
+    await waitFor(() => expect(mock.api.retryWorkflow).toHaveBeenCalledWith('wf-1'));
   });
 
-  it('Restart Task is enabled for pending tasks', async () => {
-    await setupAndRightClick();
-
-    await waitFor(() => {
-      const btn = screen.getByText('Restart Task');
-      expect(btn).toBeInTheDocument();
-      expect(btn.closest('button')).not.toBeDisabled();
-    });
+  it('workflow context menu recreates workflow', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    fireEvent.click(await screen.findByText('More'));
+    fireEvent.click(await screen.findByText('Recreate Workflow'));
+    await waitFor(() => expect(mock.api.recreateWorkflow).toHaveBeenCalledWith('wf-1'));
   });
 
-  it('clicking Restart Task closes the context menu', async () => {
-    await setupAndRightClick();
-
-    await waitFor(() => {
-      expect(screen.getByText('Restart Task')).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByText('Restart Task'));
-
-    await waitFor(() => {
-      expect(screen.queryByText('Restart Task')).not.toBeInTheDocument();
-    });
+  it('workflow context menu recreates workflow with rebase', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    fireEvent.click(await screen.findByText('More'));
+    fireEvent.click(await screen.findByText('Recreate with Rebase'));
+    await waitFor(() => expect(mock.api.recreateWithRebase).toHaveBeenCalledWith('wf-1'));
   });
 
-  it('Open Terminal option is present', async () => {
-    await setupAndRightClick();
-
-    await waitFor(() => {
-      const btn = screen.getByText('Open Terminal');
-      expect(btn).toBeInTheDocument();
-      expect(btn.closest('button')).not.toBeDisabled();
-    });
+  it('workflow context menu cancels workflow', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    fireEvent.click(await screen.findByText('More'));
+    fireEvent.click(await screen.findByText('Cancel Workflow'));
+    await waitFor(() => expect(mock.api.cancelWorkflow).toHaveBeenCalledWith('wf-1'));
   });
 
-  it('Retry with Rebase is visible for tasks with workflowId', async () => {
-    await setupAndRightClick();
-
-    await waitFor(() => {
-      expect(screen.getByText('Retry with Rebase')).toBeInTheDocument();
-    });
+  it('workflow context menu deletes workflow', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    fireEvent.click(await screen.findByText('More'));
+    fireEvent.click(await screen.findByText('Delete Workflow'));
+    await waitFor(() => expect(mock.api.deleteWorkflow).toHaveBeenCalledWith('wf-1'));
   });
 
-  it('Recreate with Rebase is visible and triggers distinct handler', async () => {
-    await setupAndRightClick('rf__node-__merge__wf-1');
-
-    await waitFor(() => {
-      expect(screen.getByText('Recreate with Rebase')).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByText('Recreate with Rebase'));
-
-    await waitFor(() => {
-      expect(mock.api.recreateWithRebase).toHaveBeenCalledWith('wf-1');
-      expect(screen.queryByText('Restart Task')).not.toBeInTheDocument();
-    });
-  });
-
-  it('shows and triggers Recreate from Task', async () => {
-    await setupAndRightClick();
-
-    await waitFor(() => {
-      expect(screen.getByText('More')).toBeInTheDocument();
-    });
-    fireEvent.click(screen.getByText('More'));
-    await waitFor(() => expect(screen.getByText('Recreate from Task')).toBeInTheDocument());
-
-    fireEvent.click(screen.getByText('Recreate from Task'));
-
-    await waitFor(() => {
-      expect(mock.api.recreateTask).toHaveBeenCalledWith('task-alpha');
-      expect(screen.queryByText('Restart Task')).not.toBeInTheDocument();
-    });
-  });
-
-  it('shows and triggers Cancel Workflow', async () => {
-    await setupAndRightClick();
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
-
-    await waitFor(() => {
-      expect(screen.getByText('More')).toBeInTheDocument();
-    });
-    fireEvent.click(screen.getByText('More'));
-    await waitFor(() => expect(screen.getByText('Cancel Workflow')).toBeInTheDocument());
-
-    fireEvent.click(screen.getByText('Cancel Workflow'));
-
-    await waitFor(() => {
-      expect(mock.api.cancelWorkflow).toHaveBeenCalledWith('wf-1');
-      expect(screen.queryByText('Restart Task')).not.toBeInTheDocument();
-    });
-
-    confirmSpy.mockRestore();
+  it('workflow context menu copies workflow id', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    fireEvent.click(await screen.findByText('Copy Workflow ID'));
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
 });

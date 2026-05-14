@@ -4,7 +4,6 @@
  * Design:
  * - Failed tasks: fix actions first.
  * - Task actions are grouped in a dedicated "Task" section.
- * - Workflow actions are grouped in a "Workflow" section.
  * - Dangerous actions are grouped in a "Danger" section (UI can collapse behind "More").
  * - No "Replace with..." action.
  */
@@ -19,7 +18,7 @@ export interface MenuItem {
   action: string; // handler key, e.g. 'onRestart', 'onFix'
   agentName?: string; // for fix items
   variant?: 'default' | 'primary' | 'warning' | 'danger';
-  separator?: 'task' | 'workflow' | 'danger'; // labeled separator BEFORE this item
+  separator?: 'task' | 'danger'; // labeled separator BEFORE this item
 }
 
 export interface GetMenuItemsOptions {
@@ -41,7 +40,6 @@ export function getMenuItems(
   const canOpenTerminal = !isExperimentSpawnPivotTask(task);
   const canFix = task.status === 'failed';
   const canCancel = task.status !== 'completed' && task.status !== 'stale';
-  const hasWorkflow = !!task.config.workflowId;
 
   // ── Fix actions (top, only for failed) ────────────────────────
   if (canFix) {
@@ -109,34 +107,6 @@ export function getMenuItems(
     });
   }
 
-  // ── Workflow-level items (grouped) ───────────────────────────
-  if (hasWorkflow) {
-    items.push({
-      id: 'rebase-retry',
-      label: 'Retry with Rebase',
-      enabled: true,
-      action: 'onRebaseAndRetry',
-      variant: 'warning',
-      separator: 'workflow',
-    });
-
-    items.push({
-      id: 'recreate-rebase',
-      label: 'Recreate with Rebase',
-      enabled: true,
-      action: 'onRecreateWithRebase',
-      variant: 'warning',
-    });
-
-    items.push({
-      id: 'retry-workflow',
-      label: 'Retry',
-      enabled: true,
-      action: 'onRetryWorkflow',
-      variant: 'warning',
-    });
-  }
-
   // ── Danger items (grouped; UI may hide behind More) ──────────
   if (canCancel) {
     items.push({
@@ -149,7 +119,7 @@ export function getMenuItems(
     });
   }
 
-  if (hasWorkflow) {
+  if (task.config.workflowId) {
     items.push({
       id: 'recreate-task',
       label: 'Recreate from Task',
@@ -159,29 +129,6 @@ export function getMenuItems(
       separator: !canCancel ? 'danger' : undefined,
     });
 
-    items.push({
-      id: 'recreate-workflow',
-      label: 'Recreate Workflow',
-      enabled: true,
-      action: 'onRecreateWorkflow',
-      variant: 'danger',
-    });
-
-    items.push({
-      id: 'cancel-workflow',
-      label: 'Cancel Workflow',
-      enabled: true,
-      action: 'onCancelWorkflow',
-      variant: 'danger',
-    });
-
-    items.push({
-      id: 'delete-workflow',
-      label: 'Delete Workflow',
-      enabled: true,
-      action: 'onDeleteWorkflow',
-      variant: 'danger',
-    });
   }
 
   return items;

@@ -10,7 +10,7 @@
  * inside orchestrator.ts.
  */
 
-import type { TaskState, TaskStateChanges, Attempt } from '@invoker/workflow-graph';
+import type { TaskState, TaskStateChanges, Attempt, WorkflowDerivedStatus } from '@invoker/workflow-graph';
 
 // ── Workflow value types (inline in OrchestratorPersistence today) ────
 
@@ -19,7 +19,7 @@ export interface WorkflowRecord {
   name: string;
   description?: string;
   visualProof?: boolean;
-  status: 'running' | 'completed' | 'failed';
+  status: WorkflowDerivedStatus;
   createdAt: string;
   updatedAt: string;
   repoUrl?: string;

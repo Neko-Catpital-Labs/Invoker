@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { sid } from './scoped-test-helpers.js';
 import { Orchestrator } from '../orchestrator.js';
 import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
+import { computeWorkflowRollup } from '../task-types.js';
 import type { TaskState, TaskDelta, TaskStateChanges , Attempt} from '../task-types.js';
 import type { WorkResponse } from '@invoker/contracts';
 
@@ -23,6 +24,9 @@ class InMemoryPersistence implements OrchestratorPersistence {
     if (wf && changes.status) {
       wf.status = changes.status;
     }
+    if (wf && changes.updatedAt) {
+      wf.updatedAt = changes.updatedAt;
+    }
   }
 
   saveTask(workflowId: string, task: TaskState): void {
@@ -43,7 +47,12 @@ class InMemoryPersistence implements OrchestratorPersistence {
   }
 
   listWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string }> {
-    return Array.from(this.workflows.values());
+    return Array.from(this.workflows.values()).map((workflow) => {
+      const tasks = this.loadTasks(workflow.id);
+      if (tasks.length === 0) return workflow;
+      const rollup = computeWorkflowRollup(tasks);
+      return { ...workflow, status: rollup.status, rollup };
+    });
   }
 
   loadTasks(workflowId: string): TaskState[] {
@@ -331,7 +340,7 @@ describe('cancelWorkflow', () => {
     orchestrator.loadPlan(simplePlan());
     const wfId = orchestrator.getTask('a')!.config.workflowId!;
     orchestrator.cancelWorkflow(wfId);
-    expect(persistence.workflows.get(wfId)?.status).toBe('failed');
+    expect(persistence.listWorkflows().find((workflow) => workflow.id === wfId)?.status).toBe('failed');
   });
 });
 

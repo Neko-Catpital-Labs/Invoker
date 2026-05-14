@@ -2763,6 +2763,9 @@ if (isHeadless) {
             } satisfies TaskDelta);
           }
           orchestrator.syncAllFromDb();
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('invoker:workflows-changed', persistence.listWorkflows());
+          }
         },
       );
     }

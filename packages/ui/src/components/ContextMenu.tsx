@@ -7,7 +7,7 @@
  * - Status-adaptive ordering (failed → Fix first, running → Open Terminal first, etc.)
  * - ARIA roles and keyboard navigation (ArrowUp/Down, Enter/Space)
  * - Viewport clamping (flips if overflows bottom/right)
- * - Labeled separators for workflow and danger zones
+ * - Labeled separators for task and danger zones
  */
 
 import { useEffect, useRef, useState, useLayoutEffect } from 'react';
@@ -22,13 +22,7 @@ interface ContextMenuProps {
   onRestart: (taskId: string) => void;
   onReplace: (taskId: string) => void;
   onOpenTerminal: (taskId: string) => void;
-  onRebaseAndRetry?: (taskId: string) => void;
-  onRecreateWithRebase?: (workflowId: string) => void;
-  onRetryWorkflow?: (workflowId: string) => void;
   onRecreateTask?: (taskId: string) => void;
-  onRecreateWorkflow?: (workflowId: string) => void;
-  onCancelWorkflow?: (workflowId: string) => void;
-  onDeleteWorkflow?: (workflowId: string) => void;
   onFix?: (taskId: string, agentName: string) => void;
   onCancel?: (taskId: string) => void;
   onClose: () => void;
@@ -41,13 +35,7 @@ export function ContextMenu({
   onRestart,
   onReplace,
   onOpenTerminal,
-  onRebaseAndRetry,
-  onRecreateWithRebase,
-  onRetryWorkflow,
   onRecreateTask,
-  onRecreateWorkflow,
-  onCancelWorkflow,
-  onDeleteWorkflow,
   onFix,
   onCancel,
   onClose,
@@ -62,13 +50,7 @@ export function ContextMenu({
 
   // Filter items based on available handlers
   const availableItems = items.filter((item) => {
-    if (item.action === 'onRebaseAndRetry' && !onRebaseAndRetry) return false;
-    if (item.action === 'onRecreateWithRebase' && !onRecreateWithRebase) return false;
-    if (item.action === 'onRetryWorkflow' && !onRetryWorkflow) return false;
     if (item.action === 'onRecreateTask' && !onRecreateTask) return false;
-    if (item.action === 'onRecreateWorkflow' && !onRecreateWorkflow) return false;
-    if (item.action === 'onCancelWorkflow' && !onCancelWorkflow) return false;
-    if (item.action === 'onDeleteWorkflow' && !onDeleteWorkflow) return false;
     if (item.action === 'onFix' && !onFix) return false;
     if (item.action === 'onCancel' && !onCancel) return false;
     return true;
@@ -190,26 +172,8 @@ export function ContextMenu({
       case 'onOpenTerminal':
         onOpenTerminal(task.id);
         break;
-      case 'onRebaseAndRetry':
-        onRebaseAndRetry?.(task.id);
-        break;
-      case 'onRecreateWithRebase':
-        onRecreateWithRebase?.(task.config.workflowId!);
-        break;
-      case 'onRetryWorkflow':
-        onRetryWorkflow?.(task.config.workflowId!);
-        break;
       case 'onRecreateTask':
         onRecreateTask?.(task.id);
-        break;
-      case 'onRecreateWorkflow':
-        onRecreateWorkflow?.(task.config.workflowId!);
-        break;
-      case 'onCancelWorkflow':
-        onCancelWorkflow?.(task.config.workflowId!);
-        break;
-      case 'onDeleteWorkflow':
-        onDeleteWorkflow?.(task.config.workflowId!);
         break;
       case 'onFix':
         if (item.agentName) {
@@ -255,6 +219,7 @@ export function ContextMenu({
       className="fixed z-50 bg-gray-800 border border-gray-600 rounded-lg shadow-xl py-1 min-w-[160px]"
       style={{ left: position.left, top: position.top }}
       onKeyDown={handleKeyDown}
+      onClick={(event) => event.stopPropagation()}
       tabIndex={-1}
     >
       {renderedItems.map((item, idx) => {
@@ -266,7 +231,6 @@ export function ContextMenu({
         return (
           <div key={item.id}>
             {item.separator === 'task' && renderSeparator('Task')}
-            {item.separator === 'workflow' && renderSeparator('Workflow')}
             {item.separator === 'danger' && renderSeparator('Danger')}
             <button
               role="menuitem"
