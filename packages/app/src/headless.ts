@@ -46,7 +46,12 @@ import {
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 import type { CostGroupDimension } from './cost-rollup.js';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
-import { dispatchStartedTasksWithGlobalTopup, executeGlobalTopup, finalizeMutationWithGlobalTopup } from './global-topup.js';
+import {
+  dispatchStartedTasksWithGlobalTopup,
+  executeGlobalTopup,
+  finalizeMutationWithGlobalTopup,
+  isDispatchableLaunch,
+} from './global-topup.js';
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
 import { trackWorkflow } from './headless-watch.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
@@ -1528,7 +1533,7 @@ async function headlessRetryTask(taskId: string, deps: HeadlessDeps): Promise<vo
       )
       : await deps.commandService.retryTask(envelope);
     if (!result.ok) throw new Error(result.error.message);
-    const runnable = result.data.filter(t => t.status === 'running');
+    const runnable = result.data.filter(isDispatchableLaunch);
     process.stdout.write(`Restarted task "${taskId}" — ${runnable.length} task(s) to execute\n`);
 
     const taskExecutor = createHeadlessExecutor(deps);
@@ -1664,7 +1669,7 @@ async function headlessRebaseAndRetry(taskId: string, deps: HeadlessDeps): Promi
   const te = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, te);
   const started = await rebaseAndRetry(taskId, { ...deps, taskExecutor: te, mutationTiming: deps.mutationTiming });
-  const runnable = started.filter(t => t.status === 'running');
+  const runnable = started.filter(isDispatchableLaunch);
   const { topup } = await dispatchStartedTasksWithGlobalTopup({
     orchestrator: deps.orchestrator,
     taskExecutor: te,
@@ -1707,7 +1712,7 @@ async function headlessRecreateWithRebase(workflowTarget: string, deps: Headless
   const te = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, te);
   const started = await recreateWithRebase(workflowId, { ...deps, taskExecutor: te, mutationTiming: deps.mutationTiming });
-  const runnable = started.filter(t => t.status === 'running');
+  const runnable = started.filter(isDispatchableLaunch);
   const { topup } = await dispatchStartedTasksWithGlobalTopup({
     orchestrator: deps.orchestrator,
     taskExecutor: te,
@@ -1754,7 +1759,7 @@ async function headlessRecreateWorkflow(workflowId: string, deps: HeadlessDeps):
       async () => sharedRecreateWorkflow(workflowId, { persistence: deps.persistence, orchestrator: deps.orchestrator }),
     )
     : sharedRecreateWorkflow(workflowId, { persistence: deps.persistence, orchestrator: deps.orchestrator });
-  const runnable = started.filter(t => t.status === 'running');
+  const runnable = started.filter(isDispatchableLaunch);
   if (runnable.length > 0) {
     const te = createHeadlessExecutor(deps);
     const autoFix = wireHeadlessAutoFix(deps, te);
@@ -1818,7 +1823,7 @@ async function headlessRecreateTask(taskId: string, deps: HeadlessDeps): Promise
       async () => sharedRecreateTask(taskId, { persistence: deps.persistence, orchestrator: deps.orchestrator }),
     )
     : sharedRecreateTask(taskId, { persistence: deps.persistence, orchestrator: deps.orchestrator });
-  const runnable = started.filter(t => t.status === 'running');
+  const runnable = started.filter(isDispatchableLaunch);
   const workflowId = deps.orchestrator.getTask(taskId)?.config.workflowId;
   process.stdout.write(`Recreate task "${taskId}" (+ downstream) — ${runnable.length} task(s) to execute (pool fetch skipped)\n`);
   const te = createHeadlessExecutor(deps);
@@ -1913,7 +1918,7 @@ async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Pr
     { module: 'headless' },
   );
   const retryRunningSummary = result.data
-    .filter((task) => task.status === 'running')
+    .filter(isDispatchableLaunch)
     .map((task) => `${task.id}(${task.config.workflowId ?? 'unknown'})`);
   if (retryRunningSummary.length > 0) {
     deps.logger.info(
@@ -1921,7 +1926,7 @@ async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Pr
       { module: 'headless' },
     );
   }
-  const runnable = result.data.filter((t) => t.status === 'running');
+  const runnable = result.data.filter(isDispatchableLaunch);
   const crossWorkflow = runnable.filter((t) => t.config.workflowId !== workflowId);
   if (crossWorkflow.length > 0) {
     deps.logger.info(
@@ -1940,7 +1945,7 @@ async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Pr
   const scopedKeys = new Set(runnable.map((task) => runningKey(task)));
   const globalTopup = deps.orchestrator
     .startExecution()
-    .filter((task) => task.status === 'running')
+    .filter(isDispatchableLaunch)
     .filter((task) => !scopedKeys.has(runningKey(task)));
   deps.logger.info(
     `headlessRetryWorkflow trace workflow="${workflowId}" postStartExecution globalTopup=${globalTopup.length}`,
@@ -2057,7 +2062,7 @@ async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDe
   const envelope = makeEnvelope('edit-task-command', 'headless', 'task', { taskId, newCommand });
   const result = await deps.commandService.editTaskCommand(envelope);
   if (!result.ok) throw new Error(result.error.message);
-  const runnable = result.data.filter((task) => task.status === 'running');
+  const runnable = result.data.filter(isDispatchableLaunch);
   if (runnable.length > 0) {
     await taskExecutor.executeTasks(runnable);
   }
@@ -2091,7 +2096,7 @@ async function headlessEditPrompt(taskId: string, newPrompt: string, deps: Headl
   const envelope = makeEnvelope('edit-task-prompt', 'headless', 'task', { taskId, newPrompt });
   const result = await deps.commandService.editTaskPrompt(envelope);
   if (!result.ok) throw new Error(result.error.message);
-  const runnable = result.data.filter((task) => task.status === 'running');
+  const runnable = result.data.filter(isDispatchableLaunch);
   if (runnable.length > 0) {
     await taskExecutor.executeTasks(runnable);
   }
@@ -2135,7 +2140,7 @@ async function headlessEditExecutor(
   const envelope = makeEnvelope('edit-task-type', 'headless', 'task', { taskId, runnerKind, poolMemberId });
   const result = await deps.commandService.editTaskType(envelope);
   if (!result.ok) throw new Error(result.error.message);
-  const runnable = result.data.filter((task) => task.status === 'running');
+  const runnable = result.data.filter(isDispatchableLaunch);
   if (runnable.length > 0) {
     await taskExecutor.executeTasks(runnable);
   }
@@ -2173,7 +2178,7 @@ async function headlessEditAgent(taskId: string, agentName: string, deps: Headle
   const envelope = makeEnvelope('edit-task-agent', 'headless', 'task', { taskId, agentName });
   const result = await deps.commandService.editTaskAgent(envelope);
   if (!result.ok) throw new Error(result.error.message);
-  const runnable = result.data.filter((task) => task.status === 'running');
+  const runnable = result.data.filter(isDispatchableLaunch);
   if (runnable.length > 0) {
     await taskExecutor.executeTasks(runnable);
   }
@@ -2561,7 +2566,7 @@ async function headlessSetMergeMode(
   });
   const result = await deps.commandService.editTaskMergeMode(envelope);
   if (!result.ok) throw new Error(result.error.message);
-  const runnable = result.data.filter((t) => t.status === 'running');
+  const runnable = result.data.filter(isDispatchableLaunch);
   if (runnable.length > 0) {
     await taskExecutor.executeTasks(runnable);
   }
@@ -2617,7 +2622,7 @@ async function headlessSetFixContext(
     autoFix.unsubscribe();
     throw new Error(result.error.message);
   }
-  const runnable = result.data.filter((t) => t.status === 'running');
+  const runnable = result.data.filter(isDispatchableLaunch);
   if (runnable.length > 0) {
     await taskExecutor.executeTasks(runnable);
   }
@@ -2664,7 +2669,7 @@ async function headlessSetGatePolicy(args: string[], deps: HeadlessDeps): Promis
     });
     const result = await deps.commandService.setTaskExternalGatePolicies(envelope);
     if (!result.ok) throw new Error(result.error.message);
-    const runnable = result.data.filter((t) => t.status === 'running');
+    const runnable = result.data.filter(isDispatchableLaunch);
     if (runnable.length > 0) {
       const taskExecutor = createHeadlessExecutor(deps);
       await taskExecutor.executeTasks(runnable);

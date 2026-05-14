@@ -1,5 +1,6 @@
 import type { Logger } from '@invoker/contracts';
 import type { Orchestrator, TaskState } from '@invoker/workflow-core';
+import { isDispatchableLaunch } from './global-topup.js';
 
 export function relaunchOrphansAndStartReady(
   orchestrator: Orchestrator,
@@ -31,7 +32,7 @@ export function relaunchOrphansAndStartReady(
       { module: logPrefix },
     );
     const started = orchestrator.retryTask(task.id);
-    const runnable = started.filter((candidate) => candidate.status === 'running');
+    const runnable = started.filter(isDispatchableLaunch);
     if (runnable.length > 0) {
       orphanRestarted.push(...runnable);
       continue;
