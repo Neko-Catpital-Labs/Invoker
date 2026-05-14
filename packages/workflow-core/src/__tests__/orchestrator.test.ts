@@ -1365,6 +1365,86 @@ describe('Orchestrator', () => {
         expect(task!.config.runnerKind).toBe('ssh');
         expect(task!.config.poolId).toBe('ssh-light');
       });
+
+      it('applies defaultPoolId to command tasks when no route rule matches', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          defaultPoolId: 'mixed-local-ssh',
+          executorRoutingRules: [
+            { regex: '\\bpnpm(?:\\s|$)', poolId: 'pnpm-ssh', strategy: 'route' },
+          ],
+          availablePoolIds: ['mixed-local-ssh', 'pnpm-ssh'],
+        });
+
+        routedOrchestrator.loadPlan({
+          name: 'default-pool-command',
+          tasks: [{ id: 't1', description: 'Echo hello', command: 'echo hello' }],
+        });
+
+        const task = routedOrchestrator.getTask('t1');
+        expect(task!.config.runnerKind).toBe('ssh');
+        expect(task!.config.poolId).toBe('mixed-local-ssh');
+      });
+
+      it('applies defaultPoolId to prompt-only tasks', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          defaultPoolId: 'mixed-local-ssh',
+          availablePoolIds: ['mixed-local-ssh'],
+        });
+
+        routedOrchestrator.loadPlan({
+          name: 'default-pool-prompt',
+          tasks: [{ id: 't1', description: 'Prompt task', prompt: 'inspect the code' }],
+        });
+
+        const task = routedOrchestrator.getTask('t1');
+        expect(task!.config.runnerKind).toBe('ssh');
+        expect(task!.config.poolId).toBe('mixed-local-ssh');
+      });
+
+      it('lets route strategy override defaultPoolId', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          defaultPoolId: 'mixed-local-ssh',
+          executorRoutingRules: [
+            { regex: '\\bpnpm(?:\\s|$)', poolId: 'pnpm-ssh', strategy: 'route' },
+          ],
+          availablePoolIds: ['mixed-local-ssh', 'pnpm-ssh'],
+        });
+
+        routedOrchestrator.loadPlan({
+          name: 'default-pool-route-override',
+          tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test' }],
+        });
+
+        const task = routedOrchestrator.getTask('t1');
+        expect(task!.config.runnerKind).toBe('ssh');
+        expect(task!.config.poolId).toBe('pnpm-ssh');
+      });
+
+      it('throws when defaultPoolId is not configured as an execution pool', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          defaultPoolId: 'missing-pool',
+          availablePoolIds: ['other-pool'],
+        });
+
+        expect(() => {
+          routedOrchestrator.loadPlan({
+            name: 'default-pool-missing',
+            tasks: [{ id: 't1', description: 'Prompt task', prompt: 'inspect the code' }],
+          });
+        }).toThrow('defaultPoolId');
+      });
     });
 
     // ── atomicity ───────────────────────────────────────────
