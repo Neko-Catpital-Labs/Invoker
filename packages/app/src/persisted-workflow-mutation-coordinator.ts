@@ -55,18 +55,15 @@ export class PersistedWorkflowMutationCoordinator {
     this.leaseHeartbeatMs,
     envMs('INVOKER_MUTATION_LEASE_RENEW_MIN_EXPIRY_LEAD_MS', 12_000),
   );
-  private readonly maxConcurrentWorkflowDrains: number;
   private readonly enableTraceLogs: boolean;
-  private activeWorkflowDrains = 0;
   private deferredDrainTimer: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly persistence: SQLiteAdapter,
     private readonly ownerId: string,
     private readonly dispatch: (channel: string, args: unknown[], context: WorkflowMutationContext) => Promise<unknown>,
-    private readonly options?: { maxConcurrentWorkflowDrains?: number; logger?: Logger },
+    private readonly options?: { logger?: Logger },
   ) {
-    this.maxConcurrentWorkflowDrains = Math.max(1, options?.maxConcurrentWorkflowDrains ?? 1);
     this.enableTraceLogs = process.env.INVOKER_TRACE_MUTATION_QUEUE === '1';
   }
 
@@ -82,7 +79,7 @@ export class PersistedWorkflowMutationCoordinator {
       .mark('PersistedWorkflowMutationCoordinator.enqueue', 'queued', { priority });
     this.invalidateSupersededRunningIntent(workflowId, intentId, channel, args);
     this.trace(
-      `enqueue intent=${intentId} workflow=${workflowId} priority=${priority} channel=${channel} activeDrains=${this.activeWorkflowDrains} pendingWorkflows=${this.pendingDrainWorkflows.size}`,
+      `enqueue intent=${intentId} workflow=${workflowId} priority=${priority} channel=${channel} pendingWorkflows=${this.pendingDrainWorkflows.size}`,
     );
     const result = new Promise<T>((resolve, reject) => {
       this.inFlightPromises.set(intentId, { resolve: resolve as (value: unknown) => void, reject });
@@ -107,7 +104,7 @@ export class PersistedWorkflowMutationCoordinator {
       });
     this.invalidateSupersededRunningIntent(workflowId, intentId, channel, args);
     this.trace(
-      `submit intent=${intentId} workflow=${workflowId} priority=${priority} channel=${channel} defer=${Boolean(options?.deferDrain)} activeDrains=${this.activeWorkflowDrains} pendingWorkflows=${this.pendingDrainWorkflows.size}`,
+      `submit intent=${intentId} workflow=${workflowId} priority=${priority} channel=${channel} defer=${Boolean(options?.deferDrain)} pendingWorkflows=${this.pendingDrainWorkflows.size}`,
     );
     if (options?.deferDrain) {
       this.scheduleWorkflowDrainDeferred(workflowId);
@@ -162,7 +159,7 @@ export class PersistedWorkflowMutationCoordinator {
   }
 
   private async processPendingDrains(): Promise<void> {
-    while (this.activeWorkflowDrains < this.maxConcurrentWorkflowDrains) {
+    while (true) {
       const nextWorkflowId = Array.from(this.pendingDrainWorkflows).find(
         (workflowId) => !this.drainingWorkflows.has(workflowId),
       );
@@ -170,14 +167,12 @@ export class PersistedWorkflowMutationCoordinator {
         return;
       }
       this.pendingDrainWorkflows.delete(nextWorkflowId);
-      this.activeWorkflowDrains += 1;
       void this.runWorkflowDrain(nextWorkflowId)
         .catch((error) => {
           const message = error instanceof Error ? error.stack ?? error.message : String(error);
           process.stderr.write(`[workflow-mutation-coordinator] drain failed for ${nextWorkflowId}: ${message}\n`);
         })
         .finally(() => {
-          this.activeWorkflowDrains = Math.max(0, this.activeWorkflowDrains - 1);
           void this.processPendingDrains();
         });
     }
