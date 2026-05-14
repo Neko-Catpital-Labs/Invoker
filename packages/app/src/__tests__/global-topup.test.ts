@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { TaskState } from '@invoker/workflow-core';
-import { dispatchStartedTasksWithGlobalTopup, executeGlobalTopup, finalizeMutationWithGlobalTopup } from '../global-topup.js';
+import { dispatchStartedTasksWithGlobalTopup, executeGlobalTopup, finalizeMutationWithGlobalTopup, scheduleStartedTasksWithGlobalTopup } from '../global-topup.js';
 
 function makeTask(id: string, status: TaskState['status'], attemptId?: string): TaskState {
   return {
@@ -83,5 +83,35 @@ describe('global-topup helpers', () => {
     expect(taskExecutor.executeTasks).toHaveBeenCalledWith([scoped]);
     expect(result.started).toEqual([scoped]);
     expect(result.topup).toEqual([]);
+  });
+
+  it('scheduleStartedTasksWithGlobalTopup returns before executor dispatch settles', async () => {
+    const scoped = makeTask('scoped-task', 'running', 'attempt-scoped');
+    const topupTask = makeTask('topup-task', 'running', 'attempt-topup');
+    const orchestrator = {
+      startExecution: vi.fn().mockReturnValue([topupTask]),
+    };
+    let resolveDispatch!: () => void;
+    const dispatchSettled = new Promise<void>((resolve) => {
+      resolveDispatch = resolve;
+    });
+    const taskExecutor = {
+      executeTasks: vi.fn().mockReturnValue(dispatchSettled),
+    };
+
+    const result = scheduleStartedTasksWithGlobalTopup({
+      orchestrator: orchestrator as any,
+      taskExecutor: taskExecutor as any,
+      context: 'test.schedule',
+      started: [scoped],
+    });
+
+    expect(result.runnable).toEqual([scoped]);
+    expect(result.topup).toEqual([topupTask]);
+    expect(orchestrator.startExecution).toHaveBeenCalledTimes(1);
+
+    await Promise.resolve();
+    expect(taskExecutor.executeTasks).toHaveBeenCalledTimes(2);
+    resolveDispatch();
   });
 });

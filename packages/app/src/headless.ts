@@ -46,7 +46,7 @@ import {
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 import type { CostGroupDimension } from './cost-rollup.js';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
-import { dispatchStartedTasksWithGlobalTopup, executeGlobalTopup, finalizeMutationWithGlobalTopup } from './global-topup.js';
+import { dispatchStartedTasksWithGlobalTopup, executeGlobalTopup, finalizeMutationWithGlobalTopup, scheduleStartedTasksWithGlobalTopup } from './global-topup.js';
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
 import { trackWorkflow } from './headless-watch.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
@@ -1533,7 +1533,7 @@ async function headlessRetryTask(taskId: string, deps: HeadlessDeps): Promise<vo
 
     const taskExecutor = createHeadlessExecutor(deps);
     const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
-    const { topup } = await dispatchStartedTasksWithGlobalTopup({
+    const { topup } = scheduleStartedTasksWithGlobalTopup({
       orchestrator: deps.orchestrator,
       taskExecutor,
       logger: deps.logger,
@@ -1665,7 +1665,7 @@ async function headlessRebaseAndRetry(taskId: string, deps: HeadlessDeps): Promi
   const autoFix = wireHeadlessAutoFix(deps, te);
   const started = await rebaseAndRetry(taskId, { ...deps, taskExecutor: te, mutationTiming: deps.mutationTiming });
   const runnable = started.filter(t => t.status === 'running');
-  const { topup } = await dispatchStartedTasksWithGlobalTopup({
+  const { topup } = scheduleStartedTasksWithGlobalTopup({
     orchestrator: deps.orchestrator,
     taskExecutor: te,
     logger: deps.logger,
@@ -1708,7 +1708,7 @@ async function headlessRecreateWithRebase(workflowTarget: string, deps: Headless
   const autoFix = wireHeadlessAutoFix(deps, te);
   const started = await recreateWithRebase(workflowId, { ...deps, taskExecutor: te, mutationTiming: deps.mutationTiming });
   const runnable = started.filter(t => t.status === 'running');
-  const { topup } = await dispatchStartedTasksWithGlobalTopup({
+  const { topup } = scheduleStartedTasksWithGlobalTopup({
     orchestrator: deps.orchestrator,
     taskExecutor: te,
     logger: deps.logger,
@@ -1761,15 +1761,14 @@ async function headlessRecreateWorkflow(workflowId: string, deps: HeadlessDeps):
     remoteFetchForPool.enabled = false;
     let topup: TaskState[] = [];
     try {
-      await te.executeTasks(runnable);
-      topup = await executeGlobalTopup({
+      ({ topup } = scheduleStartedTasksWithGlobalTopup({
         orchestrator: deps.orchestrator,
         taskExecutor: te,
         logger: deps.logger,
         context: 'headless.recreate-workflow',
-        alreadyDispatched: runnable,
+        started,
         mutationTiming: deps.mutationTiming,
-      });
+      }));
     } finally {
       remoteFetchForPool.enabled = true;
     }
@@ -1826,7 +1825,7 @@ async function headlessRecreateTask(taskId: string, deps: HeadlessDeps): Promise
   remoteFetchForPool.enabled = false;
   let topup: TaskState[] = [];
   try {
-    ({ topup } = await dispatchStartedTasksWithGlobalTopup({
+    ({ topup } = scheduleStartedTasksWithGlobalTopup({
       orchestrator: deps.orchestrator,
       taskExecutor: te,
       logger: deps.logger,
@@ -1985,7 +1984,7 @@ async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Pr
   remoteFetchForPool.enabled = false;
   let topup: TaskState[] = [];
   try {
-    ({ topup } = await dispatchStartedTasksWithGlobalTopup({
+    ({ topup } = scheduleStartedTasksWithGlobalTopup({
       orchestrator: deps.orchestrator,
       taskExecutor: te,
       logger: deps.logger,

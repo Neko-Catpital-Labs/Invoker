@@ -50,6 +50,7 @@ import {
 import {
   dispatchStartedTasksWithGlobalTopup,
   executeGlobalTopup,
+  scheduleStartedTasksWithGlobalTopup,
 } from './global-topup.js';
 
 // ── Result types ─────────────────────────────────────────────
@@ -137,7 +138,7 @@ export class WorkflowMutationFacade {
 
   async retryTask(taskId: string): Promise<MutationResult> {
     const started = sharedRetryTask(taskId, { orchestrator: this.deps.orchestrator });
-    return this.finalizeWithTopup(started, 'facade.retry-task');
+    return this.scheduleWithTopup(started, 'facade.retry-task');
   }
 
   async recreateTask(taskId: string): Promise<MutationResult> {
@@ -145,7 +146,7 @@ export class WorkflowMutationFacade {
       orchestrator: this.deps.orchestrator,
       persistence: this.deps.persistence,
     });
-    return this.finalizeWithTopup(started, 'facade.recreate-task');
+    return this.scheduleWithTopup(started, 'facade.recreate-task');
   }
 
   async selectExperiment(taskId: string, experimentId: string): Promise<MutationResult> {
@@ -225,7 +226,7 @@ export class WorkflowMutationFacade {
     const started = sharedRetryWorkflow(workflowId, {
       orchestrator: this.deps.orchestrator,
     });
-    return this.finalizeWithTopup(started, 'facade.retry-workflow');
+    return this.scheduleWithTopup(started, 'facade.retry-workflow');
   }
 
   async recreateWorkflow(workflowId: string): Promise<MutationResult> {
@@ -234,22 +235,22 @@ export class WorkflowMutationFacade {
       persistence: this.deps.persistence,
       orchestrator: this.deps.orchestrator,
     });
-    return this.finalizeWithTopup(started, 'facade.recreate-workflow');
+    return this.scheduleWithTopup(started, 'facade.recreate-workflow');
   }
 
   async recreateWorkflowFromFreshBase(workflowId: string): Promise<MutationResult> {
     const started = await sharedRecreateWorkflowFromFreshBase(workflowId, this.actionDeps());
-    return this.finalizeWithTopup(started, 'facade.recreate-from-fresh-base');
+    return this.scheduleWithTopup(started, 'facade.recreate-from-fresh-base');
   }
 
   async recreateWithRebase(workflowId: string): Promise<MutationResult> {
     const started = await sharedRecreateWithRebase(workflowId, this.actionDeps());
-    return this.finalizeWithTopup(started, 'facade.recreate-with-rebase');
+    return this.scheduleWithTopup(started, 'facade.recreate-with-rebase');
   }
 
   async rebaseAndRetry(taskId: string): Promise<MutationResult> {
     const started = await sharedRebaseAndRetry(taskId, this.actionDeps());
-    return this.finalizeWithTopup(started, 'facade.rebase-and-retry');
+    return this.scheduleWithTopup(started, 'facade.rebase-and-retry');
   }
 
   async cancelWorkflow(workflowId: string): Promise<CancelMutationResult> {
@@ -406,6 +407,20 @@ export class WorkflowMutationFacade {
     context: string,
   ): Promise<MutationResult> {
     const { runnable, topup } = await this.dispatchWithTopup(started, context);
+    return { started, runnable, topup };
+  }
+
+  private scheduleWithTopup(
+    started: TaskState[],
+    context: string,
+  ): MutationResult {
+    const { runnable, topup } = scheduleStartedTasksWithGlobalTopup({
+      orchestrator: this.deps.orchestrator,
+      taskExecutor: this.deps.taskExecutor,
+      logger: this.deps.logger,
+      context,
+      started,
+    });
     return { started, runnable, topup };
   }
 

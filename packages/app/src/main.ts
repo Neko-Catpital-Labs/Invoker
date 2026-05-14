@@ -142,7 +142,7 @@ import { ensureSqliteFlushDebounceForOwner } from './sqlite-flush-policy.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
 import { recoverWorkflowMutationsOnStartup } from './workflow-mutation-startup.js';
-import { dispatchStartedTasksWithGlobalTopup, executeGlobalTopup, finalizeMutationWithGlobalTopup } from './global-topup.js';
+import { dispatchStartedTasksWithGlobalTopup, executeGlobalTopup, finalizeMutationWithGlobalTopup, scheduleStartedTasksWithGlobalTopup } from './global-topup.js';
 import { computeDeferredLaunchTiming } from './deferred-runnable.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import { relaunchOrphansAndStartReady } from './orphan-relaunch.js';
@@ -3212,7 +3212,7 @@ if (isHeadless) {
           : sharedRecreateWorkflow(workflowId, { persistence, orchestrator });
         remoteFetchForPool.enabled = false;
         try {
-          await dispatchStartedTasksWithGlobalTopup({
+          scheduleStartedTasksWithGlobalTopup({
             orchestrator,
             taskExecutor: requireTaskExecutor(),
             logger,
@@ -3256,7 +3256,7 @@ if (isHeadless) {
           : sharedRecreateTask(taskId, { persistence, orchestrator });
         remoteFetchForPool.enabled = false;
         try {
-          await dispatchStartedTasksWithGlobalTopup({
+          scheduleStartedTasksWithGlobalTopup({
             orchestrator,
             taskExecutor: requireTaskExecutor(),
             logger,
@@ -3300,7 +3300,7 @@ if (isHeadless) {
         if (!result.ok) throw new Error(result.error.message);
         remoteFetchForPool.enabled = false;
         try {
-          await dispatchStartedTasksWithGlobalTopup({
+          scheduleStartedTasksWithGlobalTopup({
             orchestrator,
             taskExecutor: requireTaskExecutor(),
             logger,
@@ -3342,7 +3342,7 @@ if (isHeadless) {
           taskExecutor: requireTaskExecutor(),
           mutationTiming: activeMutationContext?.mutationTiming,
         });
-        await dispatchStartedTasksWithGlobalTopup({
+        scheduleStartedTasksWithGlobalTopup({
           orchestrator,
           taskExecutor: requireTaskExecutor(),
           logger,
@@ -3382,7 +3382,7 @@ if (isHeadless) {
           taskExecutor: requireTaskExecutor(),
           mutationTiming: activeMutationContext?.mutationTiming,
         });
-        await dispatchStartedTasksWithGlobalTopup({
+        scheduleStartedTasksWithGlobalTopup({
           orchestrator,
           taskExecutor: requireTaskExecutor(),
           logger,

@@ -21,9 +21,51 @@ type MutationTopupParams = {
   mutationTiming?: WorkflowMutationTiming;
 };
 
+type ScheduledDispatchParams = {
+  taskExecutor: TaskRunner;
+  logger?: Logger;
+  context: string;
+  tasks: TaskState[];
+  timingName: string;
+  mutationTiming?: WorkflowMutationTiming;
+};
+
 function runningExecutionKey(task: TaskState): string {
   const attemptId = task.execution.selectedAttemptId?.trim();
   return attemptId ? `attempt:${attemptId}` : `task:${task.id}`;
+}
+
+function scheduleTaskDispatch({
+  taskExecutor,
+  logger,
+  context,
+  tasks,
+  timingName,
+  mutationTiming,
+}: ScheduledDispatchParams): void {
+  if (tasks.length === 0) return;
+  mutationTiming?.mark(timingName, 'completed', {
+    context,
+    runnableCount: tasks.length,
+    scheduled: true,
+  });
+  void Promise.resolve()
+    .then(() => {
+      if (mutationTiming) {
+        return mutationTiming.span(
+          timingName,
+          { context, runnableCount: tasks.length, asyncDispatch: true },
+          () => taskExecutor.executeTasks(tasks),
+        );
+      }
+      return taskExecutor.executeTasks(tasks);
+    })
+    .catch((error) => {
+      logger?.error(
+        `[global-topup] ${context}: async task dispatch failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`,
+        { module: 'global-topup' },
+      );
+    });
 }
 
 /**
@@ -104,6 +146,59 @@ export async function dispatchStartedTasksWithGlobalTopup({
     alreadyDispatched: runnable,
     mutationTiming,
   });
+  return { runnable, topup };
+}
+
+/**
+ * Mark runnable work and scheduler top-up synchronously, but launch executor
+ * startup in the background. This keeps recreate/retry control-plane
+ * finalization outside executor startup latency while preserving the same
+ * runnable/top-up accounting returned to callers.
+ */
+export function scheduleStartedTasksWithGlobalTopup({
+  orchestrator,
+  taskExecutor,
+  logger,
+  context,
+  started = [],
+  mutationTiming,
+}: MutationTopupParams): { runnable: TaskState[]; topup: TaskState[] } {
+  const runnable = started.filter((task) => task.status === 'running');
+  if (runnable.length > 0) {
+    logger?.info(
+      `[global-topup] ${context}: scheduling ${runnable.length} scoped task(s): [${runnable.map((task) => task.id).join(', ')}]`,
+    );
+    scheduleTaskDispatch({
+      taskExecutor,
+      logger,
+      context,
+      tasks: runnable,
+      timingName: 'scheduleStartedTasksWithGlobalTopup.scopedExecuteTasks',
+      mutationTiming,
+    });
+  }
+
+  const dedupeKeys = new Set(runnable.map((task) => runningExecutionKey(task)));
+  const topup = orchestrator.startExecution()
+    .filter((task) => task.status === 'running')
+    .filter((task) => !dedupeKeys.has(runningExecutionKey(task)));
+
+  if (topup.length === 0) {
+    logger?.info(`[global-topup] ${context}: no additional globally ready tasks`);
+  } else {
+    logger?.info(
+      `[global-topup] ${context}: scheduling ${topup.length} additional task(s): [${topup.map((task) => task.id).join(', ')}]`,
+    );
+    scheduleTaskDispatch({
+      taskExecutor,
+      logger,
+      context,
+      tasks: topup,
+      timingName: 'scheduleStartedTasksWithGlobalTopup.topupExecuteTasks',
+      mutationTiming,
+    });
+  }
+
   return { runnable, topup };
 }
 
