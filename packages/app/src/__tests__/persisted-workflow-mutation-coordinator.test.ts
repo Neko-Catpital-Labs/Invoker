@@ -422,6 +422,55 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     ]);
   });
 
+  it('treats headless recreate-with-rebase as a recreate fence', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const gate = deferred();
+    const order: string[] = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async (channel, args) => {
+        const payload = args[0] as { args?: unknown[] } | undefined;
+        order.push(`${channel}:${Array.isArray(payload?.args) ? payload.args.join(' ') : String(args[0])}`);
+        if (channel === 'invoker:fix-with-agent') {
+          await gate.promise;
+        }
+      },
+    );
+
+    const running = coordinator.enqueue<void>('wf-1', 'normal', 'invoker:fix-with-agent', ['wf-1/blocker-task', null]);
+    void running.catch(() => {});
+    const olderQueued = coordinator.enqueue<void>('wf-1', 'normal', 'invoker:edit-task-agent', ['old-queued']);
+    void olderQueued.catch(() => {});
+    const recreateWithRebase = coordinator.enqueue<void>(
+      'wf-1',
+      'high',
+      'headless.exec',
+      [{ args: ['recreate-with-rebase', 'wf-1'], noTrack: true }],
+    );
+    const newerQueued = coordinator.enqueue<void>('wf-1', 'normal', 'invoker:edit-task-agent', ['new-queued']);
+
+    await recreateWithRebase;
+    await newerQueued;
+    await expect(running).rejects.toThrow(/superseded by recreate intent/i);
+    await expect(olderQueued).rejects.toThrow(/evicted/i);
+
+    expect(order).toEqual([
+      'invoker:fix-with-agent:wf-1/blocker-task',
+      'headless.exec:recreate-with-rebase wf-1',
+      'invoker:edit-task-agent:new-queued',
+    ]);
+  });
+
   it('evicts older queued workflow intents when retry-workflow fence starts', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
