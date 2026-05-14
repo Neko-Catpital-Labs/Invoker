@@ -1980,6 +1980,8 @@ if (isHeadless) {
         return { channel: 'headless.exec', request: { args: ['set', 'prompt', String(arg0), String(arg1)] } };
       case 'invoker:edit-task-type':
         return { channel: 'headless.exec', request: { args: ['set', 'executor', String(arg0), String(arg1)] } };
+      case 'invoker:edit-task-pool':
+        return null;
       case 'invoker:edit-task-agent':
         return { channel: 'headless.exec', request: { args: ['set', 'agent', String(arg0), String(arg1)] } };
       case 'invoker:set-task-external-gate-policies': {
@@ -2903,6 +2905,7 @@ if (isHeadless) {
     });
 
     ipcMain.handle('invoker:list-workflows', () => persistence.listWorkflows());
+    ipcMain.handle('invoker:get-execution-pools', () => Object.keys(loadConfig().executionPools ?? {}));
 
     registerGuiMutationHandler('invoker:delete-all-workflows', async () => {
       logger.info('delete-all-workflows', { module: 'ipc' });
@@ -3683,6 +3686,27 @@ if (isHeadless) {
         });
       } catch (err) {
         logger.error(`edit-task-type failed: ${err}`, { module: 'ipc' });
+        throw err;
+      }
+    });
+
+    registerGuiMutationHandler('invoker:edit-task-pool', async (taskIdArg: unknown, poolIdArg: unknown) => {
+      const taskId = String(taskIdArg);
+      const poolId = String(poolIdArg);
+      logger.info(`edit-task-pool: "${taskId}" → "${poolId}"`, { module: 'ipc' });
+      try {
+        const envelope = makeEnvelope('edit-task-pool', 'ui', 'task', { taskId, poolId });
+        const result = await commandService.editTaskPool(envelope);
+        if (!result.ok) throw new Error(result.error.message);
+        await dispatchStartedTasksWithGlobalTopup({
+          orchestrator,
+          taskExecutor: requireTaskExecutor(),
+          logger,
+          context: 'ipc.edit-task-pool',
+          started: result.data,
+        });
+      } catch (err) {
+        logger.error(`edit-task-pool failed: ${err}`, { module: 'ipc' });
         throw err;
       }
     });

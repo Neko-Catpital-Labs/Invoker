@@ -376,6 +376,10 @@ export const IpcChannels = {
     request: [taskId: string, runnerKind: string, poolMemberId?: string];
     response: void;
   },
+  'invoker:edit-task-pool': {} as {
+    request: [taskId: string, poolId: string];
+    response: void;
+  },
   'invoker:edit-task-agent': {} as {
     request: [taskId: string, agentName: string];
     response: void;
@@ -465,6 +469,10 @@ export const IpcChannels = {
     response: ActionGraphResponse;
   },
   'invoker:get-remote-targets': {} as {
+    request: [];
+    response: string[];
+  },
+  'invoker:get-execution-pools': {} as {
     request: [];
     response: string[];
   },

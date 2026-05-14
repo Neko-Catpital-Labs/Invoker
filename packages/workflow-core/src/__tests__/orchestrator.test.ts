@@ -3572,6 +3572,89 @@ describe('Orchestrator', () => {
       expect(task?.config.poolMemberId).toBeUndefined();
     });
 
+    it('edits poolId and clears legacy runner placement fields', () => {
+      orchestrator = new Orchestrator({
+        persistence,
+        messageBus: bus,
+        maxConcurrency: 3,
+        logger: consoleLogger,
+        availablePoolIds: ['mixed-local-ssh', 'pnpm-ssh'],
+      });
+      orchestrator.loadPlan({
+        name: 'edit-pool',
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello' }],
+      });
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
+      );
+      persistence.updateTask('t1', { config: { runnerKind: 'ssh', poolMemberId: 'remote-a' } });
+
+      orchestrator.editTaskPool('t1', 'mixed-local-ssh');
+
+      const task = orchestrator.getTask('t1');
+      expect(task?.config.poolId).toBe('mixed-local-ssh');
+      expect(task?.config.runnerKind).toBeUndefined();
+      expect(task?.config.poolMemberId).toBeUndefined();
+      expect(persistence.getTaskEntry('t1')?.task.config.poolId).toBe('mixed-local-ssh');
+    });
+
+    it('rejects unknown poolId edits', () => {
+      orchestrator = new Orchestrator({
+        persistence,
+        messageBus: bus,
+        maxConcurrency: 3,
+        logger: consoleLogger,
+        availablePoolIds: ['mixed-local-ssh'],
+      });
+      orchestrator.loadPlan({
+        name: 'edit-pool-unknown',
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello' }],
+      });
+
+      expect(() => orchestrator.editTaskPool('t1', 'missing-pool')).toThrow('pool is not defined');
+    });
+
+    it('rejects pool edits for merge nodes', () => {
+      orchestrator = new Orchestrator({
+        persistence,
+        messageBus: bus,
+        maxConcurrency: 3,
+        logger: consoleLogger,
+        availablePoolIds: ['mixed-local-ssh'],
+      });
+      orchestrator.loadPlan({
+        name: 'edit-pool-merge',
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello' }],
+      });
+      const mergeTask = orchestrator.getAllTasks().find((candidate) => candidate.config.isMergeNode)!;
+
+      expect(() => orchestrator.editTaskPool(mergeTask.id, 'mixed-local-ssh')).toThrow('Cannot change executor pool');
+    });
+
+    it('cancels active work before recreating for a pool edit', () => {
+      orchestrator = new Orchestrator({
+        persistence,
+        messageBus: bus,
+        maxConcurrency: 3,
+        logger: consoleLogger,
+        availablePoolIds: ['mixed-local-ssh'],
+      });
+      orchestrator.loadPlan({
+        name: 'edit-pool-active',
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello' }],
+      });
+      orchestrator.startExecution();
+      const before = orchestrator.getTask('t1')!.execution.generation ?? 0;
+
+      orchestrator.editTaskPool('t1', 'mixed-local-ssh');
+
+      const task = orchestrator.getTask('t1')!;
+      expect(task.status).toBe('running');
+      expect(task.config.poolId).toBe('mixed-local-ssh');
+      expect(task.execution.generation).toBeGreaterThan(before);
+    });
+
     it('switching worktree → ssh (host change) is RECREATE-class — clears branch/commit/workspacePath', () => {
       orchestrator.loadPlan({
         name: 'edit-type-step6-worktree-to-ssh',
