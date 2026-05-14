@@ -387,6 +387,7 @@ export class TaskRunner {
       return;
     }
     this.launchingAttemptIds.add(attemptId);
+    this.callbacks.onLaunchAccepted?.(task.id);
     try {
       await this.executeTaskInner(task, attemptId);
     } catch (err) {
@@ -454,6 +455,7 @@ export class TaskRunner {
       }
     } finally {
       this.launchingAttemptIds.delete(attemptId);
+      this.callbacks.onLaunchSettled?.(task.id);
     }
   }
 
@@ -492,7 +494,27 @@ export class TaskRunner {
     );
 
     // Gather upstream context from completed dependencies
-    const upstreamContext = await this.buildUpstreamContext(task);
+    const upstreamContextStartMs = Date.now();
+    let upstreamContext: Array<{taskId: string; description: string; summary?: string; commitHash?: string; commitMessage?: string}>;
+    try {
+      upstreamContext = await this.buildUpstreamContext(task);
+      const durationMs = Date.now() - upstreamContextStartMs;
+      this.logger.info('[TaskRunner] buildUpstreamContext completed', {
+        taskId: task.id,
+        durationMs,
+        contextCount: upstreamContext.length,
+      });
+      traceExecution(`[benchmark] TaskRunner.buildUpstreamContext task=${task.id} durationMs=${durationMs} contextCount=${upstreamContext.length}`);
+    } catch (err) {
+      const durationMs = Date.now() - upstreamContextStartMs;
+      this.logger.warn('[TaskRunner] buildUpstreamContext failed', {
+        taskId: task.id,
+        durationMs,
+        err,
+      });
+      traceExecution(`[benchmark] TaskRunner.buildUpstreamContext task=${task.id} failed durationMs=${durationMs}`);
+      throw err;
+    }
     const upstreamBranches = this.collectUpstreamBranches(task);
     const alternatives = this.buildAlternatives(task);
 

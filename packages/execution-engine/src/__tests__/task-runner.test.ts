@@ -1709,6 +1709,87 @@ describe('TaskRunner', () => {
   });
 
   describe('launch timeout repro', () => {
+    it('marks launch accepted while building upstream context before executor start', async () => {
+      let releaseUpstreamContext!: () => void;
+      const upstreamContextBlocked = new Promise<void>((resolve) => {
+        releaseUpstreamContext = resolve;
+      });
+      let completeCallback: ((response: WorkResponse) => void) | undefined;
+      const onLaunchAccepted = vi.fn();
+      const onLaunchStart = vi.fn();
+      const onLaunchSettled = vi.fn();
+      const handleWorkerResponse = vi.fn(() => []);
+      const task = makeTask({
+        id: 'preparing-before-start',
+        status: 'running',
+        config: { command: 'echo hello' },
+        execution: { selectedAttemptId: 'preparing-before-start-a1' },
+      });
+      const executor = {
+        type: 'worktree',
+        start: vi.fn(async () => ({
+          executionId: 'exec-preparing-before-start',
+          taskId: task.id,
+          workspacePath: '/tmp/preparing-before-start',
+          branch: 'experiment/preparing-before-start',
+        })),
+        onOutput: vi.fn(),
+        onComplete: vi.fn((_handle: any, cb: (response: WorkResponse) => void) => {
+          completeCallback = cb;
+        }),
+        onHeartbeat: vi.fn(),
+        kill: vi.fn(),
+        destroyAll: vi.fn(),
+      };
+      const runner = new TaskRunner({
+        orchestrator: {
+          getTask: () => task,
+          markTaskRunningAfterLaunch: vi.fn(() => true),
+          handleWorkerResponse,
+        } as any,
+        persistence: {
+          loadWorkflow: vi.fn(),
+          updateTask: vi.fn(),
+          updateAttempt: vi.fn(),
+          logEvent: vi.fn(),
+        } as any,
+        executorRegistry: {
+          getDefault: () => executor,
+          get: () => executor,
+          getAll: () => [executor],
+        } as any,
+        cwd: '/tmp',
+        callbacks: { onLaunchAccepted, onLaunchStart, onLaunchSettled },
+      });
+      vi.spyOn(runner as any, 'buildUpstreamContext').mockImplementation(async () => {
+        await upstreamContextBlocked;
+        return [];
+      });
+
+      const done = runner.executeTask(task);
+      await vi.waitFor(() => expect(onLaunchAccepted).toHaveBeenCalledWith(task.id));
+
+      expect(executor.start).not.toHaveBeenCalled();
+      expect(onLaunchStart).not.toHaveBeenCalled();
+
+      releaseUpstreamContext();
+      await vi.waitFor(() => expect(executor.start).toHaveBeenCalledTimes(1));
+      expect(onLaunchStart).toHaveBeenCalledWith(task.id, executor);
+
+      completeCallback?.({
+        requestId: 'req-preparing-before-start',
+        actionId: task.id,
+        attemptId: task.execution.selectedAttemptId,
+        executionGeneration: task.execution.generation ?? 0,
+        status: 'completed',
+        outputs: { exitCode: 0 },
+      });
+      await done;
+
+      expect(handleWorkerResponse).toHaveBeenCalled();
+      expect(onLaunchSettled).toHaveBeenCalledWith(task.id);
+    });
+
     it('reports launch-in-progress callbacks while executor.start is still pending', async () => {
       const launchStart = vi.fn();
       const launchFailed = vi.fn();
