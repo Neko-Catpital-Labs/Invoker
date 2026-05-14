@@ -142,7 +142,12 @@ import { ensureSqliteFlushDebounceForOwner } from './sqlite-flush-policy.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
 import { recoverWorkflowMutationsOnStartup } from './workflow-mutation-startup.js';
-import { dispatchStartedTasksWithGlobalTopup, executeGlobalTopup, finalizeMutationWithGlobalTopup } from './global-topup.js';
+import {
+  dispatchStartedTasksWithGlobalTopup,
+  executeGlobalTopup,
+  finalizeMutationWithGlobalTopup,
+  isDispatchableLaunch,
+} from './global-topup.js';
 import { computeDeferredLaunchTiming } from './deferred-runnable.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import { relaunchOrphansAndStartReady } from './orphan-relaunch.js';
@@ -153,6 +158,12 @@ import {
   buildActionGraphDiagnostics,
   resolveActionDiagnosticsStallThresholdMs,
 } from './action-graph-diagnostics.js';
+
+function isTaskInFlightForForcedStop(task: TaskState): boolean {
+  return task.status === 'running'
+    || task.status === 'fixing_with_ai'
+    || (task.status === 'pending' && task.execution.phase === 'launching');
+}
 
 declare const __BUILD_SHA__: string | undefined;
 declare const __BUILD_VERSION__: string | undefined;
@@ -821,7 +832,7 @@ if (isHeadless) {
             const envelope = makeEnvelope('replace-task', 'ui', 'task', { taskId, replacementTasks });
             const result = await commandService.replaceTask(envelope);
             if (!result.ok) throw new Error(result.error.message);
-            const runnable = result.data.filter((task) => task.status === 'running');
+            const runnable = result.data.filter(isDispatchableLaunch);
             if (runnable.length > 0) {
               const executor = createStandaloneTaskExecutor();
               await executor.executeTasks(runnable);
@@ -851,7 +862,7 @@ if (isHeadless) {
               const envelope = makeEnvelope('select-experiment', 'ui', 'task', { taskId, experimentId: ids[0] });
               const result = await commandService.selectExperiment(envelope);
               if (!result.ok) throw new Error(result.error.message);
-              const runnable = result.data.filter((task) => task.status === 'running');
+              const runnable = result.data.filter(isDispatchableLaunch);
               if (runnable.length > 0) await executor.executeTasks(runnable);
               return undefined;
             }
@@ -865,7 +876,7 @@ if (isHeadless) {
             const envelope = makeEnvelope('set-gate-policies', 'ui', 'task', { taskId, updates });
             const result = await commandService.setTaskExternalGatePolicies(envelope);
             if (!result.ok) throw new Error(result.error.message);
-            const runnable = result.data.filter((task) => task.status === 'running');
+            const runnable = result.data.filter(isDispatchableLaunch);
             if (runnable.length > 0) {
               const executor = createStandaloneTaskExecutor();
               await executor.executeTasks(runnable);
@@ -1088,11 +1099,12 @@ if (isHeadless) {
       }
       if (ownsHeadlessShutdown && orchestrator) {
         for (const task of orchestrator.getAllTasks()) {
-          if (task.status === 'running' || task.status === 'fixing_with_ai') {
+          if (isTaskInFlightForForcedStop(task)) {
             if (persistence) persistShutdownDiagnostic(task, persistence);
             orchestrator.handleWorkerResponse({
               requestId: `quit-${task.id}`,
               actionId: task.id,
+              attemptId: task.execution.selectedAttemptId,
               executionGeneration: task.execution.generation ?? 0,
               status: 'failed',
               outputs: { exitCode: 1, error: 'Application quit' },
@@ -2359,7 +2371,7 @@ if (isHeadless) {
                 const leaseExpiresAt = parseExecutionDate(selectedAttempt?.leaseExpiresAt);
                 const remoteHeartbeat = parseExecutionDate(task.execution.remoteHeartbeatAt);
 
-                if (task.status === 'running') {
+                if (task.status === 'running' || (task.status === 'pending' && task.execution.phase === 'launching')) {
                   const launchStartedAt = parseExecutionDate(task.execution.launchStartedAt)
                     ?? parseExecutionDate(task.execution.startedAt);
                   const launchAgeMs = launchStartedAt ? now.getTime() - launchStartedAt.getTime() : 0;
@@ -2389,7 +2401,7 @@ if (isHeadless) {
                     };
                     logger.error(`[launch-stall] forcing failure for "${task.id}": ${launchError}`, { module: 'db-poll' });
                     const startedAfterFailure = orchestrator.handleWorkerResponse(failedResponse);
-                    const runnableAfterFailure = startedAfterFailure.filter((candidate) => candidate.status === 'running');
+                    const runnableAfterFailure = startedAfterFailure.filter(isDispatchableLaunch);
                     if (runnableAfterFailure.length > 0) {
                       logger.info(
                         `[launch-stall] dispatching ${runnableAfterFailure.length} task(s) started after failing "${task.id}"`,
@@ -2437,7 +2449,7 @@ if (isHeadless) {
                     };
                     logger.error(`[executing-stall] forcing failure for "${task.id}": ${executingError}`, { module: 'db-poll' });
                     const startedAfterFailure = orchestrator.handleWorkerResponse(failedResponse);
-                    const runnableAfterFailure = startedAfterFailure.filter((candidate) => candidate.status === 'running');
+                    const runnableAfterFailure = startedAfterFailure.filter(isDispatchableLaunch);
                     if (runnableAfterFailure.length > 0) {
                       logger.info(
                         `[executing-stall] dispatching ${runnableAfterFailure.length} task(s) started after failing "${task.id}"`,
@@ -2808,20 +2820,25 @@ if (isHeadless) {
 
     registerGuiMutationHandler('invoker:stop', async () => {
       logger.info('stop — destroying all executors', { module: 'ipc' });
-      await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));
-      const allTasks = orchestrator.getAllTasks();
-      for (const task of allTasks) {
-        if (task.status === 'running' || task.status === 'fixing_with_ai') {
-          logger.info(`stop — failing in-flight task "${task.id}" (${task.status})`, { module: 'ipc' });
-          orchestrator.handleWorkerResponse({
-            requestId: `stop-${task.id}`,
-            actionId: task.id,
-            executionGeneration: task.execution.generation ?? 0,
-            status: 'failed',
-            outputs: { exitCode: 1, error: 'Stopped by user' },
-          });
+      const failInFlightTasks = (): void => {
+        const allTasks = orchestrator.getAllTasks();
+        for (const task of allTasks) {
+          if (isTaskInFlightForForcedStop(task)) {
+            logger.info(`stop — failing in-flight task "${task.id}" (${task.status})`, { module: 'ipc' });
+            orchestrator.handleWorkerResponse({
+              requestId: `stop-${task.id}`,
+              actionId: task.id,
+              attemptId: task.execution.selectedAttemptId,
+              executionGeneration: task.execution.generation ?? 0,
+              status: 'failed',
+              outputs: { exitCode: 1, error: 'Stopped by user' },
+            });
+          }
         }
-      }
+      };
+      failInFlightTasks();
+      await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));
+      failInFlightTasks();
     });
 
     registerGuiMutationHandler('invoker:clear', async () => {
@@ -3057,7 +3074,7 @@ if (isHeadless) {
           const envelope = makeEnvelope('select-experiment', 'ui', 'task', { taskId, experimentId: ids[0] });
           const result = await commandService.selectExperiment(envelope);
           if (!result.ok) throw new Error(result.error.message);
-          const runnable = result.data.filter(t => t.status === 'running');
+          const runnable = result.data.filter(isDispatchableLaunch);
           await requireTaskExecutor().executeTasks(runnable);
         } else {
           // Multi-select: needs taskExecutor for branch merge, stays in workflow-actions
@@ -3095,7 +3112,7 @@ if (isHeadless) {
           `${RESTART_TO_BRANCH_TRACE} ipc invoker:restart-task after commandService.retryTask: count=${started.length} [${started.map((t) => `${t.id}(${t.status})`).join(', ')}]`,
           { module: 'ipc' },
         );
-        const runnable = started.filter(t => t.status === 'running');
+        const runnable = started.filter(isDispatchableLaunch);
         logger.info(
           `${RESTART_TO_BRANCH_TRACE} ipc invoker:restart-task runnable=${runnable.length} [${runnable.map((t) => t.id).join(', ') || '(none)'}] → taskExecutor.executeTasks`,
           { module: 'ipc' },
