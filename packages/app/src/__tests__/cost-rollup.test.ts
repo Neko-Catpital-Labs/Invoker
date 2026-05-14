@@ -111,6 +111,17 @@ describe('attributeSessionUsage', () => {
     expect(result[1].usage.inputTokens).toBe(200);
   });
 
+  it('uses the caller-resolved persisted attempt ID without synthesis', () => {
+    const taskId = 'wf-1/task-a';
+    const result = attributeSessionUsage([makeUsageEvent()], makeContext({
+      taskId,
+      attemptId: 'attempt-persisted-123',
+    }));
+
+    expect(result[0].attribution.attemptId).toBe('attempt-persisted-123');
+    expect(result[0].attribution.attemptId).not.toBe(`${taskId}-latest`);
+  });
+
   it('returns empty array for empty input', () => {
     expect(attributeSessionUsage([], makeContext())).toEqual([]);
   });
@@ -285,6 +296,20 @@ describe('competing design proof: deterministic grouped outputs without provider
     const json1 = JSON.stringify(groups1.map(serializeGroupedRollup));
     const json2 = JSON.stringify(groups2.map(serializeGroupedRollup));
     expect(json1).toBe(json2);
+  });
+
+  it('preserves persisted attempt IDs through deterministic serialization', () => {
+    const event = attributeSessionUsage([makeUsageEvent({ eventId: 'e1' })], makeContext({
+      attemptId: 'attempt-persisted-serialized',
+    }))[0];
+
+    const json1 = JSON.stringify(event);
+    const json2 = JSON.stringify(attributeSessionUsage([makeUsageEvent({ eventId: 'e1' })], makeContext({
+      attemptId: 'attempt-persisted-serialized',
+    }))[0]);
+
+    expect(json1).toBe(json2);
+    expect(JSON.parse(json1).attribution.attemptId).toBe('attempt-persisted-serialized');
   });
 });
 
