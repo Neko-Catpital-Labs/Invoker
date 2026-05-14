@@ -1599,6 +1599,22 @@ describe('SQLiteAdapter', () => {
   });
 
   describe('owner-only writable initialization', () => {
+    it('flushes schema to disk on initial writable create', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-init-schema-'));
+      const dbPath = join(dir, 'invoker.db');
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        expect(existsSync(dbPath)).toBe(true);
+
+        const reader = await SQLiteAdapter.create(dbPath, { readOnly: true });
+        expect(reader.listWorkflows()).toEqual([]);
+        reader.close();
+        db.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
     it('allows writable init with ownerCapability=true for file-backed DB', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-owner-'));
       const dbPath = join(dir, 'invoker.db');

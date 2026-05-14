@@ -80,12 +80,18 @@ export class SQLiteAdapter implements PersistenceAdapter {
   private outputTailLimit: number;
   private outputTailCache = new Map<string, OutputChunk[]>();
   private writeTransactionDepth = 0;
+  private readonly initializedFreshFile: boolean;
 
   /** Use SQLiteAdapter.create() instead. */
-  private constructor(db: SqlJsDatabase, dbPath: string | null, options?: { readOnly?: boolean; outputTailLimit?: number }) {
+  private constructor(
+    db: SqlJsDatabase,
+    dbPath: string | null,
+    options?: { readOnly?: boolean; outputTailLimit?: number; initializedFreshFile?: boolean },
+  ) {
     this.db = db;
     this.dbPath = dbPath;
     this.readOnly = options?.readOnly === true;
+    this.initializedFreshFile = options?.initializedFreshFile === true;
     this.flushDelayMs = this.dbPath
       ? Number(process.env.INVOKER_SQLITE_FLUSH_DEBOUNCE_MS ?? 0)
       : 0;
@@ -139,7 +145,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     }
 
     const db = new SQL.Database();
-    return new SQLiteAdapter(db, isFile ? dbPath : null, options);
+    return new SQLiteAdapter(db, isFile ? dbPath : null, { ...options, initializedFreshFile: isFile });
   }
 
   // ── sql.js Helpers ───────────────────────────────────────
@@ -527,10 +533,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
       CREATE INDEX IF NOT EXISTS idx_output_spool_task_offset
         ON output_spool(task_id, offset);
     `);
+    if (this.initializedFreshFile) {
+      this.markDirtyAfterDirectWrite();
+    }
   }
 
   /** Add columns that may not exist in older databases. */
   private migrate(): void {
+    let mutated = false;
     const migrations = [
       'ALTER TABLE tasks ADD COLUMN claude_session_id TEXT',
       'ALTER TABLE tasks ADD COLUMN workspace_path TEXT',
@@ -591,6 +601,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     for (const sql of migrations) {
       try {
         this.db.run(sql);
+        mutated = true;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         if (!msg.includes('duplicate column name')) {
@@ -600,13 +611,37 @@ export class SQLiteAdapter implements PersistenceAdapter {
     }
 
     // Replace old attempt_number index with created_at index
+    const legacyAttemptIndexPresent = Boolean(
+      this.queryOne(
+        `SELECT 1 AS present FROM sqlite_master WHERE type = 'index' AND name = 'idx_attempts_node'`,
+      ),
+    );
+    const createdAttemptIndexPresent = Boolean(
+      this.queryOne(
+        `SELECT 1 AS present FROM sqlite_master WHERE type = 'index' AND name = 'idx_attempts_node_created'`,
+      ),
+    );
     this.db.run('DROP INDEX IF EXISTS idx_attempts_node');
     this.db.run('CREATE INDEX IF NOT EXISTS idx_attempts_node_created ON attempts(node_id, created_at)');
+    mutated = mutated || legacyAttemptIndexPresent || !createdAttemptIndexPresent;
 
     if (!this.readOnly) {
       this.migrateTestCommands();
       this.migrateGatePolicyApprovedToCompleted();
       this.runCompatibilityMigration();
+    }
+    if (mutated) {
+      this.markDirtyAfterDirectWrite();
+    }
+  }
+
+  private markDirtyAfterDirectWrite(): void {
+    if (this.readOnly || !this.dbPath) {
+      return;
+    }
+    this.dirty = true;
+    if (this.writeTransactionDepth === 0) {
+      this.scheduleFlush();
     }
   }
 

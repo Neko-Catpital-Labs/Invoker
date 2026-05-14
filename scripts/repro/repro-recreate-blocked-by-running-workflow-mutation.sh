@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TIMEOUT_SECONDS="${REPRO_TIMEOUT_SECONDS:-90}"
 KEEP_TEMP=false
 EXPECTATION="fixed"
+SQLITE_QUERY_JS="$ROOT_DIR/scripts/sqlite-query.mjs"
 
 for arg in "$@"; do
   case "$arg" in
@@ -52,13 +53,13 @@ trap cleanup EXIT
 
 query_sqlite_value() {
   local sql="$1"
-  sqlite3 -noheader "$DB_DIR/invoker.db" "$sql"
+  node "$SQLITE_QUERY_JS" --noheader "$DB_DIR/invoker.db" "$sql"
 }
 
 sqlite_schema_ready() {
   [[ -f "$DB_DIR/invoker.db" ]] || return 1
   local exists
-  exists="$(sqlite3 -noheader "$DB_DIR/invoker.db" "select count(*) from sqlite_master where type='table' and name='tasks';" 2>/dev/null || true)"
+  exists="$(node "$SQLITE_QUERY_JS" --noheader "$DB_DIR/invoker.db" "select count(*) from sqlite_master where type='table' and name='tasks';" 2>/dev/null || true)"
   [[ "$exists" == "1" ]]
 }
 
@@ -145,7 +146,7 @@ tasks:
   - id: hold-open
     description: Slow task that keeps recreate running long enough for a second recreate to queue behind it
     command: >-
-      bash -lc 'sleep 20'
+      bash -lc 'sleep 90'
 EOF
 
 HOME="$HOME_DIR" INVOKER_DB_DIR="$DB_DIR" INVOKER_IPC_SOCKET="$IPC_SOCKET_PATH" NODE_ENV=test "$ELECTRON_BIN" "$MAIN_JS" >"$GUI_STDOUT" 2>"$GUI_STDERR" &

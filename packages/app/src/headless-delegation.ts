@@ -15,6 +15,8 @@ type DelegateTrackingOptions = {
   timeoutMs?: number;
 };
 
+const DEFAULT_TRACKED_OWNER_DELEGATION_TIMEOUT_MS = 30_000;
+
 // ---------------------------------------------------------------------------
 // DelegationOutcome — typed result union for delegation attempts
 // ---------------------------------------------------------------------------
@@ -50,7 +52,7 @@ export async function tryDelegateRun(
     'headless.run',
     { planPath: resolvePath(planPath), traceId },
     messageBus,
-    { waitForApproval, noTrack, timeoutMs: timeoutMs ?? 5_000 },
+    { waitForApproval, noTrack, timeoutMs: timeoutMs ?? DEFAULT_TRACKED_OWNER_DELEGATION_TIMEOUT_MS },
   );
 }
 
@@ -66,16 +68,29 @@ export async function tryDelegateResume(
     'headless.resume',
     { workflowId, traceId },
     messageBus,
-    { waitForApproval, noTrack, timeoutMs: timeoutMs ?? 5_000 },
+    { waitForApproval, noTrack, timeoutMs: timeoutMs ?? DEFAULT_TRACKED_OWNER_DELEGATION_TIMEOUT_MS },
   );
 }
 
-function usesExtendedDelegationTimeout(command: string): boolean {
-  return command === 'rebase' || command === 'rebase-and-retry' || command === 'recreate-with-rebase' || command === 'restart';
+function usesExtendedWorkflowDelegationTimeout(command: string): boolean {
+  return command === 'rebase'
+    || command === 'rebase-and-retry'
+    || command === 'recreate-with-rebase'
+    || command === 'restart'
+    || command === 'recreate'
+    || command === 'retry';
+}
+
+function usesExtendedTaskDelegationTimeout(command: string): boolean {
+  return command === 'recreate-task' || command === 'retry-task';
 }
 
 function looksLikeWorkflowId(target: unknown): boolean {
   return /^wf-[^/]+$/.test(String(target ?? ''));
+}
+
+function looksLikeTaskId(target: unknown): boolean {
+  return /^wf-[^/]+\/.+$/.test(String(target ?? ''));
 }
 
 export function delegationTimeoutMs(
@@ -83,7 +98,10 @@ export function delegationTimeoutMs(
   targetLookup: HeadlessTargetLookup,
 ): number {
   const command = args[0] ?? '';
-  if (!usesExtendedDelegationTimeout(command)) {
+  if (usesExtendedTaskDelegationTimeout(command)) {
+    return looksLikeTaskId(args[1]) ? 60_000 : 5_000;
+  }
+  if (!usesExtendedWorkflowDelegationTimeout(command)) {
     return 5_000;
   }
 
@@ -96,7 +114,10 @@ export function delegationTimeoutMs(
 
 export async function resolveDelegationTimeoutMs(args: string[]): Promise<number> {
   const command = args[0] ?? '';
-  if (!usesExtendedDelegationTimeout(command)) {
+  if (usesExtendedTaskDelegationTimeout(command)) {
+    return looksLikeTaskId(args[1]) ? 60_000 : 5_000;
+  }
+  if (!usesExtendedWorkflowDelegationTimeout(command)) {
     return 5_000;
   }
   return looksLikeWorkflowId(args[1]) ? 60_000 : 5_000;
