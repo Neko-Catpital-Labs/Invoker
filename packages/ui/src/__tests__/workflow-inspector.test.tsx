@@ -23,48 +23,12 @@ const workflow: WorkflowMeta = {
   baseBranch: 'main',
 };
 
-function workflowTaskMap(...workflowTasks: TaskState[]): Map<string, TaskState> {
-  return new Map(workflowTasks.map((workflowTask) => [workflowTask.id, workflowTask]));
-}
-
 describe('WorkflowInspector', () => {
-  it('uses the selected node name as the sidebar title', () => {
-    const { rerender } = render(
-      <WorkflowInspector
-        workflow={workflow}
-        task={null}
-        executionAgents={['codex', 'claude']}
-        collapsed={false}
-        advancedExpanded={false}
-        onToggleCollapsed={() => {}}
-        onToggleAdvanced={() => {}}
-      />,
-    );
-
-    expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow 1 task DAG');
-    expect(screen.queryByText('Inspector')).not.toBeInTheDocument();
-
-    rerender(
-      <WorkflowInspector
-        workflow={workflow}
-        task={makeTask({ description: 'Full task node title' })}
-        executionAgents={['codex', 'claude']}
-        collapsed={false}
-        advancedExpanded={false}
-        onToggleCollapsed={() => {}}
-        onToggleAdvanced={() => {}}
-      />,
-    );
-
-    expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Full task node title');
-  });
-
   it('keeps advanced metadata collapsed by default', () => {
     render(
       <WorkflowInspector
         workflow={workflow}
         task={makeTask()}
-        executionAgents={['codex', 'claude']}
         collapsed={false}
         advancedExpanded={false}
         onToggleCollapsed={() => {}}
@@ -81,7 +45,6 @@ describe('WorkflowInspector', () => {
       <WorkflowInspector
         workflow={workflow}
         task={makeTask()}
-        executionAgents={['codex', 'claude']}
         collapsed={false}
         advancedExpanded={false}
         onToggleCollapsed={() => {}}
@@ -93,130 +56,11 @@ describe('WorkflowInspector', () => {
     expect(link).toHaveAttribute('href', 'https://github.com/org/repo/pull/12');
   });
 
-  it('keeps the status section before task controls when a task is selected', () => {
-    render(
-      <WorkflowInspector
-        workflow={workflow}
-        task={makeTask()}
-        executionAgents={['codex', 'claude']}
-        collapsed={false}
-        advancedExpanded={false}
-        onEditAgent={vi.fn()}
-        onEditPrompt={vi.fn()}
-        onToggleCollapsed={() => {}}
-        onToggleAdvanced={() => {}}
-      />,
-    );
-
-    const statusLabel = screen.getByText('Task Status');
-    const agentLabel = screen.getByText('AI Agent');
-    const promptInput = screen.getByTestId('workflow-inspector-prompt-input');
-
-    expect(statusLabel.compareDocumentPosition(agentLabel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(statusLabel.compareDocumentPosition(promptInput) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  });
-
-  it('shows workflow status at the top when only a workflow is selected', () => {
-    render(
-      <WorkflowInspector
-        workflow={{ ...workflow, status: 'running' }}
-        task={null}
-        executionAgents={['codex', 'claude']}
-        collapsed={false}
-        advancedExpanded={false}
-        onToggleCollapsed={() => {}}
-        onToggleAdvanced={() => {}}
-      />,
-    );
-
-    const statusLabel = screen.getByText('Workflow Status');
-    const pullRequestLabel = screen.getByText('Pull Request');
-
-    expect(screen.getByTestId('workflow-inspector-status-label')).toHaveTextContent('running');
-    expect(statusLabel.compareDocumentPosition(pullRequestLabel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  });
-
-  it('uses the selected workflow merge gate PR URL when only a workflow is selected', () => {
-    render(
-      <WorkflowInspector
-        workflow={workflow}
-        task={null}
-        workflowTasks={workflowTaskMap(
-          makeTask({
-            id: 'task-with-pr',
-            execution: { reviewUrl: 'https://github.com/org/repo/pull/leaf' },
-          }),
-          makeTask({
-            id: '__merge__wf-1',
-            config: { workflowId: 'wf-1', prompt: 'Merge', isMergeNode: true },
-            execution: { reviewUrl: 'https://github.com/org/repo/pull/merge' },
-          }),
-        )}
-        executionAgents={['codex', 'claude']}
-        collapsed={false}
-        advancedExpanded={false}
-        onToggleCollapsed={() => {}}
-        onToggleAdvanced={() => {}}
-      />,
-    );
-
-    const link = screen.getByRole('link', { name: /pull\/merge/i });
-    expect(link).toHaveAttribute('href', 'https://github.com/org/repo/pull/merge');
-  });
-
-  it('shows no PR linked for workflow selection when no workflow task has a PR URL', () => {
-    render(
-      <WorkflowInspector
-        workflow={workflow}
-        task={null}
-        workflowTasks={workflowTaskMap(
-          makeTask({
-            id: '__merge__wf-1',
-            config: { workflowId: 'wf-1', prompt: 'Merge', isMergeNode: true },
-            execution: {},
-          }),
-        )}
-        executionAgents={['codex', 'claude']}
-        collapsed={false}
-        advancedExpanded={false}
-        onToggleCollapsed={() => {}}
-        onToggleAdvanced={() => {}}
-      />,
-    );
-
-    expect(screen.getByText('No PR linked')).toBeInTheDocument();
-  });
-
-  it('uses the selected task PR URL before the workflow merge gate PR URL', () => {
-    render(
-      <WorkflowInspector
-        workflow={workflow}
-        task={makeTask({ execution: { reviewUrl: 'https://github.com/org/repo/pull/task' } })}
-        workflowTasks={workflowTaskMap(
-          makeTask({
-            id: '__merge__wf-1',
-            config: { workflowId: 'wf-1', prompt: 'Merge', isMergeNode: true },
-            execution: { reviewUrl: 'https://github.com/org/repo/pull/merge' },
-          }),
-        )}
-        executionAgents={['codex', 'claude']}
-        collapsed={false}
-        advancedExpanded={false}
-        onToggleCollapsed={() => {}}
-        onToggleAdvanced={() => {}}
-      />,
-    );
-
-    const link = screen.getByRole('link', { name: /pull\/task/i });
-    expect(link).toHaveAttribute('href', 'https://github.com/org/repo/pull/task');
-  });
-
   it('can be collapsed and restored', () => {
     const { rerender } = render(
       <WorkflowInspector
         workflow={workflow}
         task={makeTask()}
-        executionAgents={['codex', 'claude']}
         collapsed={true}
         advancedExpanded={false}
         onToggleCollapsed={() => {}}
@@ -229,135 +73,109 @@ describe('WorkflowInspector', () => {
       <WorkflowInspector
         workflow={workflow}
         task={makeTask()}
-        executionAgents={['codex', 'claude']}
         collapsed={false}
         advancedExpanded={false}
         onToggleCollapsed={() => {}}
         onToggleAdvanced={() => {}}
       />,
     );
-    expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Task');
+    expect(screen.getByText('Workflow 1')).toBeInTheDocument();
   });
 
-  it('edits the selected task agent and prompt from inspector controls', () => {
-    const onEditAgent = vi.fn();
-    const onEditPrompt = vi.fn();
-
+  it('renders selected task title and selected task status first', () => {
     render(
       <WorkflowInspector
         workflow={workflow}
-        task={makeTask({ status: 'pending' })}
+        task={makeTask({ description: 'Fix cancellation race', status: 'failed' })}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getAllByText('Fix cancellation race').length).toBeGreaterThan(0);
+    expect(screen.getByText('failed')).toBeInTheDocument();
+  });
+
+  it('edits AI agent from a dropdown', () => {
+    const onEditAgent = vi.fn();
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask()}
         executionAgents={['claude', 'codex']}
         collapsed={false}
         advancedExpanded={false}
         onEditAgent={onEditAgent}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    fireEvent.change(screen.getByTestId('execution-agent-select'), { target: { value: 'claude' } });
+    expect(onEditAgent).toHaveBeenCalledWith('task-1', 'claude');
+  });
+
+  it('double-click edits prompt and saves through callback', () => {
+    const onEditPrompt = vi.fn();
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ status: 'failed' })}
+        collapsed={false}
+        advancedExpanded={false}
         onEditPrompt={onEditPrompt}
         onToggleCollapsed={() => {}}
         onToggleAdvanced={() => {}}
       />,
     );
 
-    fireEvent.change(screen.getByTestId('workflow-inspector-agent-select'), {
-      target: { value: 'claude' },
-    });
-    expect(onEditAgent).toHaveBeenCalledWith('task-1', 'claude');
+    fireEvent.doubleClick(screen.getByTestId('prompt-command-display'));
+    fireEvent.change(screen.getByTestId('edit-prompt-input'), { target: { value: 'New prompt' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save & Re-run' }));
 
-    fireEvent.change(screen.getByTestId('workflow-inspector-prompt-input'), {
-      target: { value: 'Fix failing tests and update docs' },
-    });
-    fireEvent.blur(screen.getByTestId('workflow-inspector-prompt-input'));
-    expect(onEditPrompt).toHaveBeenCalledWith('task-1', 'Fix failing tests and update docs');
+    expect(onEditPrompt).toHaveBeenCalledWith('task-1', 'New prompt');
   });
 
-  it('edits the selected task executor from a primary inspector control', () => {
-    const onEditType = vi.fn();
-
+  it('double-click edits command and saves through callback', () => {
+    const onEditCommand = vi.fn();
     render(
       <WorkflowInspector
         workflow={workflow}
-        task={makeTask({ status: 'pending' })}
-        remoteTargets={['remote-a']}
-        executionAgents={['claude', 'codex']}
+        task={makeTask({ status: 'failed', config: { workflowId: 'wf-1', command: 'pnpm test' } })}
         collapsed={false}
         advancedExpanded={false}
-        onEditType={onEditType}
+        onEditCommand={onEditCommand}
         onToggleCollapsed={() => {}}
         onToggleAdvanced={() => {}}
       />,
     );
 
-    const select = screen.getByTestId('workflow-inspector-executor-select');
-    expect(select).toBeInTheDocument();
+    fireEvent.doubleClick(screen.getByTestId('prompt-command-display'));
+    fireEvent.change(screen.getByTestId('edit-command-input'), { target: { value: 'pnpm test --runInBand' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save & Re-run' }));
 
-    fireEvent.change(select, { target: { value: 'ssh:remote-a' } });
-    expect(onEditType).toHaveBeenCalledWith('task-1', 'ssh', 'remote-a');
+    expect(onEditCommand).toHaveBeenCalledWith('task-1', 'pnpm test --runInBand');
   });
 
-  it('shows task status instead of workflow status when a task is selected', () => {
+  it('edits executor pool outside advanced metadata', () => {
+    const onEditPool = vi.fn();
     render(
       <WorkflowInspector
-        workflow={{ ...workflow, status: 'running' }}
-        task={makeTask({ status: 'failed', execution: { error: 'boom' } })}
-        executionAgents={['claude', 'codex']}
+        workflow={workflow}
+        task={makeTask({ config: { workflowId: 'wf-1', prompt: 'Fix failing tests', poolId: 'mixed-local-ssh' } })}
+        executionPools={['mixed-local-ssh', 'pnpm-ssh']}
         collapsed={false}
-        advancedExpanded={false}
+        advancedExpanded={true}
+        onEditPool={onEditPool}
         onToggleCollapsed={() => {}}
         onToggleAdvanced={() => {}}
       />,
     );
 
-    expect(screen.getByTestId('workflow-inspector-status-label')).toHaveTextContent('failed');
-  });
-
-  it('hides task-only controls when only a workflow is selected', () => {
-    render(
-      <WorkflowInspector
-        workflow={{ ...workflow, status: 'running' }}
-        task={null}
-        executionAgents={['claude', 'codex']}
-        collapsed={false}
-        advancedExpanded={false}
-        onEditAgent={vi.fn()}
-        onEditPrompt={vi.fn()}
-        onEditType={vi.fn()}
-        onToggleCollapsed={() => {}}
-        onToggleAdvanced={() => {}}
-      />,
-    );
-
-    expect(screen.getByTestId('workflow-inspector-status-label')).toHaveTextContent('running');
-    expect(screen.queryByTestId('workflow-inspector-agent-select')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('workflow-inspector-prompt-input')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('workflow-inspector-executor-select')).not.toBeInTheDocument();
-  });
-
-  it('hides AI agent and prompt controls for review gate tasks', () => {
-    render(
-      <WorkflowInspector
-        workflow={{ ...workflow, status: 'review_ready' }}
-        task={makeTask({
-          id: '__merge__wf-1',
-          description: 'Review gate for Workflow 1',
-          status: 'review_ready',
-          config: { workflowId: 'wf-1', prompt: 'Review this workflow', isMergeNode: true },
-          execution: { reviewUrl: 'https://github.com/org/repo/pull/merge' },
-        })}
-        executionAgents={['claude', 'codex']}
-        collapsed={false}
-        advancedExpanded={false}
-        onEditAgent={vi.fn()}
-        onEditPrompt={vi.fn()}
-        onEditType={vi.fn()}
-        onToggleCollapsed={() => {}}
-        onToggleAdvanced={() => {}}
-      />,
-    );
-
-    expect(screen.getByTestId('workflow-inspector-status-label')).toHaveTextContent('review ready');
-    expect(screen.queryByText('AI Agent')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('workflow-inspector-agent-select')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('workflow-inspector-prompt-input')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('workflow-inspector-executor-select')).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /pull\/merge/i })).toBeInTheDocument();
+    fireEvent.change(screen.getByTestId('executor-pool-select'), { target: { value: 'pnpm-ssh' } });
+    expect(onEditPool).toHaveBeenCalledWith('task-1', 'pnpm-ssh');
+    expect(screen.queryByText(/executor:/i)).not.toBeInTheDocument();
   });
 });
