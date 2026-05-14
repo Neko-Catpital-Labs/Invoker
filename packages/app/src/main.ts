@@ -129,6 +129,7 @@ import {
   selectFailureRecoveryRoute,
   selectExperiments as sharedSelectExperiments,
   setWorkflowMergeMode,
+  StaleLineageError,
 } from './workflow-actions.js';
 import { spawn, execSync } from 'node:child_process';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
@@ -1404,23 +1405,34 @@ if (isHeadless) {
       });
       logAutoFixDebug(taskId, 'dispatch-attempt-bumped', { attemptsBefore, attemptsAfter });
     }
-    const result = await fixWithAgentAction(
-      taskId,
-      {
-        orchestrator,
-        persistence,
-        taskExecutor: requireTaskExecutor(),
-        autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
-      },
-      {
-        agentName,
-        recoveryRoute,
-        recreateOutputLabel: source === 'auto-fix' ? 'Auto-fix' : 'Fix with AI',
-        failureOutputLabel: source === 'auto-fix' ? 'Auto-fix' : `Fix with ${agentName ?? 'Claude'}`,
-        signal: mutationContext?.signal,
-      },
-    );
-    return result.started;
+    try {
+      const result = await fixWithAgentAction(
+        taskId,
+        {
+          orchestrator,
+          persistence,
+          taskExecutor: requireTaskExecutor(),
+          autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
+        },
+        {
+          agentName,
+          recoveryRoute,
+          recreateOutputLabel: source === 'auto-fix' ? 'Auto-fix' : 'Fix with AI',
+          failureOutputLabel: source === 'auto-fix' ? 'Auto-fix' : `Fix with ${agentName ?? 'Claude'}`,
+          signal: mutationContext?.signal,
+        },
+      );
+      return result.started;
+    } catch (err) {
+      if (err instanceof StaleLineageError) {
+        logger.info(
+          `fix-with-agent discarded late result for "${taskId}": ${err.message}`,
+          { module: source === 'auto-fix' ? 'auto-fix' : 'ipc' },
+        );
+        return [];
+      }
+      throw err;
+    }
   };
 
   const scheduleAutoFix = (taskId: string): void => {
@@ -3586,6 +3598,10 @@ if (isHeadless) {
           logger,
           context: 'ipc.resolve-conflict.failure',
         });
+        if (err instanceof StaleLineageError) {
+          logger.info(`resolve-conflict discarded late result for "${taskId}": ${err.message}`, { module: 'ipc' });
+          return;
+        }
         logger.error(`resolve-conflict failed: ${err}`, { module: 'ipc' });
         throw err;
       }

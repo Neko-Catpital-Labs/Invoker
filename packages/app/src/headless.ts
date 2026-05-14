@@ -42,6 +42,7 @@ import {
   recreateTask as sharedRecreateTask,
   forkWorkflow as sharedForkWorkflow,
   setWorkflowMergeMode,
+  StaleLineageError,
 } from './workflow-actions.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 import type { CostGroupDimension } from './cost-rollup.js';
@@ -1606,6 +1607,10 @@ async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string
       logger: deps.logger,
       context: 'headless.fix-with-agent.failure',
     });
+    if (err instanceof StaleLineageError) {
+      deps.logger.info(`headless.fix-with-agent discarded late result for "${taskId}": ${err.message}`, { module: 'headless' });
+      return;
+    }
     throw err;
   } finally {
     autoFix.unsubscribe();
@@ -1646,6 +1651,10 @@ async function headlessResolveConflict(taskId: string, deps: HeadlessDeps, agent
       logger: deps.logger,
       context: 'headless.resolve-conflict.failure',
     });
+    if (err instanceof StaleLineageError) {
+      deps.logger.info(`headless.resolve-conflict discarded late result for "${taskId}": ${err.message}`, { module: 'headless' });
+      return;
+    }
     throw err;
   } finally {
     autoFix.unsubscribe();

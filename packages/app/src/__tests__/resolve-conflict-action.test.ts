@@ -49,9 +49,16 @@ describe('resolveConflictAction', () => {
       taskExecutor: taskExecutor as unknown as TaskRunner,
     });
 
-    expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a');
+    expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith(
+      'task-a',
+      expect.objectContaining({ selectedAttemptId: 'att-1', generation: 1 }),
+    );
     expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', 'saved-err', undefined);
-    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'saved-err');
+    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith(
+      'task-a',
+      'saved-err',
+      expect.objectContaining({ selectedAttemptId: 'att-1', generation: 1 }),
+    );
     expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
     expect(persistence.appendTaskOutput).not.toHaveBeenCalled();
   });
@@ -77,7 +84,11 @@ describe('resolveConflictAction', () => {
       autoApproveAIFixes: true,
     });
 
-    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'saved-err');
+    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith(
+      'task-a',
+      'saved-err',
+      expect.objectContaining({ selectedAttemptId: 'att-1', generation: 1 }),
+    );
     expect(approve).toHaveBeenCalledWith('task-a');
     expect(taskExecutorWithApprove.executeTasks).not.toHaveBeenCalled();
     expect(taskExecutorWithApprove.publishAfterFix).not.toHaveBeenCalled();
@@ -102,6 +113,7 @@ describe('resolveConflictAction', () => {
       'task-a',
       'saved-err',
       'claude failed',
+      expect.objectContaining({ selectedAttemptId: 'att-1', generation: 1 }),
     );
     expect(orchestrator.setFixAwaitingApproval).not.toHaveBeenCalled();
   });
