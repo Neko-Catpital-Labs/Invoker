@@ -31,6 +31,7 @@ export type MutationKey =
   | 'prompt'
   | 'executionAgent'
   | 'runnerKind'
+  | 'poolId'
   | 'poolMemberId'
   | 'selectedExperiment'
   | 'selectedExperimentSet'
@@ -47,6 +48,7 @@ export const MUTATION_POLICIES: Readonly<Record<MutationKey, TaskMutationPolicy>
   prompt:                { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const },
   executionAgent:        { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const },
   runnerKind:          { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'retryTask' as const },
+  poolId:              { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const },
   poolMemberId:        { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const },
   selectedExperiment:    { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const },
   selectedExperimentSet: { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const },

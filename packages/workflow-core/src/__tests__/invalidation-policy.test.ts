@@ -34,6 +34,7 @@ describe('MUTATION_POLICIES', () => {
     expect(MUTATION_POLICIES.prompt.action).toBe('recreateTask');
     expect(MUTATION_POLICIES.executionAgent.action).toBe('recreateTask');
     expect(MUTATION_POLICIES.runnerKind.action).toBe('retryTask');
+    expect(MUTATION_POLICIES.poolId.action).toBe('recreateTask');
     expect(MUTATION_POLICIES.poolMemberId.action).toBe('recreateTask');
     expect(MUTATION_POLICIES.selectedExperiment.action).toBe('recreateTask');
     expect(MUTATION_POLICIES.selectedExperimentSet.action).toBe('recreateTask');
