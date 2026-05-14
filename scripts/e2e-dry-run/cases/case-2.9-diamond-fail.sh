@@ -17,6 +17,9 @@ invoker_e2e_run_headless delete-all
 echo "==> case 2.9: submit plan (B will fail)"
 invoker_e2e_submit_plan "$INVOKER_E2E_REPO_ROOT/plans/e2e-dry-run/group2-multi-task/2.9-diamond-fail.yaml" || true
 
+invoker_e2e_wait_task_status e2e-g229-taskB failed 180
+invoker_e2e_wait_task_status e2e-g229-taskC completed 180
+
 STA=$(invoker_e2e_task_status e2e-g229-taskA)
 STB=$(invoker_e2e_task_status e2e-g229-taskB)
 STC=$(invoker_e2e_task_status e2e-g229-taskC)
