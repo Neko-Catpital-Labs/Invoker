@@ -404,7 +404,7 @@ export class PersistedWorkflowMutationCoordinator {
     }
     const payload = args[0] as { args?: unknown[] } | undefined;
     const rawArgs = Array.isArray(payload?.args) ? payload.args : [];
-    if (rawArgs[0] === 'recreate' || rawArgs[0] === 'recreate-task') {
+    if (rawArgs[0] === 'recreate' || rawArgs[0] === 'recreate-task' || rawArgs[0] === 'recreate-with-rebase') {
       return 'recreate';
     }
     if (rawArgs[0] === 'delete' || rawArgs[0] === 'delete-workflow' || rawArgs[0] === 'delete-all') {
@@ -442,7 +442,7 @@ export class PersistedWorkflowMutationCoordinator {
     if (!isWorkflowId) {
       return false;
     }
-    return command === 'recreate' || command === 'retry';
+    return command === 'recreate' || command === 'recreate-with-rebase' || command === 'retry';
   }
 
   private createTiming(
