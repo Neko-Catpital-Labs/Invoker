@@ -7947,6 +7947,7 @@ console.log(JSON.stringify(out));
         branch: 'experiment/task-1',
       });
       const logEvent = vi.fn();
+      const updateTask = vi.fn();
       const task = makeTask({
         id: 'task-1',
         status: 'pending',
@@ -7956,7 +7957,7 @@ console.log(JSON.stringify(out));
 
       const runner = new TaskRunner({
         orchestrator: { getTask: () => task, getAllTasks: () => [task], handleWorkerResponse: vi.fn() } as any,
-        persistence: { updateTask: vi.fn(), updateAttempt: vi.fn(), logEvent } as any,
+        persistence: { updateTask, updateAttempt: vi.fn(), logEvent } as any,
         executorRegistry: {
           getDefault: () => sshExecutor,
           get: (type: string) => type === 'ssh' ? sshExecutor : null,
@@ -8000,6 +8001,16 @@ console.log(JSON.stringify(out));
       const selectedPayload = logEvent.mock.calls.find((call) => call[1] === 'task.executor.selected')?.[2];
       expect(JSON.stringify(selectedPayload)).not.toContain('sshKeyPath');
       expect(JSON.stringify(selectedPayload)).not.toContain('/secret/key');
+      expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({
+        config: expect.objectContaining({
+          runnerKind: 'ssh',
+          poolMemberId: 'remote-a',
+        }),
+        execution: expect.objectContaining({
+          workspacePath: '/remote/worktrees/task-1',
+          branch: 'experiment/task-1',
+        }),
+      }));
     });
 
     it('logs explicit SSH executor selection as explicitPoolMemberId', async () => {
@@ -8036,6 +8047,77 @@ console.log(JSON.stringify(out));
         poolMemberId: 'remote-b',
         remoteHost: 'dev.example.com',
         remoteUser: 'dev',
+      }));
+    });
+
+    it('persists pool member metadata for current pool-routed SSH startup failures', async () => {
+      const startupError = Object.assign(new Error('provision failed'), {
+        workspacePath: '/remote/worktrees/task-start-fail',
+        branch: 'experiment/task-start-fail',
+      });
+      const sshExecutor = {
+        type: 'ssh',
+        start: vi.fn(async () => {
+          throw startupError;
+        }),
+        onComplete: vi.fn(),
+        onOutput: vi.fn(),
+        onHeartbeat: vi.fn(),
+        kill: vi.fn(),
+        destroyAll: vi.fn(),
+      };
+      const updateTask = vi.fn();
+      const task = makeTask({
+        id: 'task-start-fail',
+        status: 'pending',
+        config: { command: 'pnpm test', runnerKind: 'ssh', poolId: 'ci-pool' },
+        execution: { selectedAttemptId: 'attempt-start-fail', phase: 'launching' },
+      });
+
+      const runner = new TaskRunner({
+        orchestrator: {
+          getTask: () => task,
+          getAllTasks: () => [task],
+          handleWorkerResponse: vi.fn(),
+        } as any,
+        persistence: {
+          updateTask,
+          updateAttempt: vi.fn(),
+          appendTaskOutput: vi.fn(),
+          logEvent: vi.fn(),
+        } as any,
+        executorRegistry: {
+          getDefault: () => sshExecutor,
+          get: (type: string) => type === 'ssh' ? sshExecutor : null,
+          getAll: () => [sshExecutor],
+        } as any,
+        cwd: '/tmp',
+        executionPoolsProvider: () => ({
+          'ci-pool': {
+            selectionStrategy: 'leastLoaded',
+            members: [{ type: 'ssh', id: 'remote-a' }],
+          },
+        }),
+        remoteTargetsProvider: () => ({
+          'remote-a': {
+            host: 'ci.example.com',
+            user: 'runner',
+            sshKeyPath: '/secret/key',
+          },
+        }),
+      });
+
+      await runner.executeTask(task);
+
+      expect(updateTask).toHaveBeenCalledWith('task-start-fail', expect.objectContaining({
+        config: expect.objectContaining({
+          runnerKind: 'ssh',
+          poolMemberId: 'remote-a',
+        }),
+        execution: expect.objectContaining({
+          workspacePath: '/remote/worktrees/task-start-fail',
+          branch: 'experiment/task-start-fail',
+        }),
       }));
     });
 
@@ -8220,7 +8302,7 @@ console.log(JSON.stringify(out));
 
       // Check that metadata was persisted immediately after start
       expect(updateSpy).toHaveBeenCalledWith('ssh-task-1', {
-        config: { runnerKind: 'ssh' },
+        config: { runnerKind: 'ssh', poolMemberId: 'remote-1' },
         execution: {
           workspacePath: '~/.invoker/worktrees/abc123/experiment-ssh-task-1-def456',
           branch: 'experiment/ssh-task-1-def456',
