@@ -1,5 +1,4 @@
 import type { TaskState, WorkflowMeta } from '../types.js';
-import ELK from 'elkjs/lib/elk.bundled.js';
 
 export interface WorkflowGraphNode {
   id: string;
@@ -22,27 +21,6 @@ export interface WorkflowPosition {
   x: number;
   y: number;
 }
-
-export interface WorkflowRoutePoint {
-  x: number;
-  y: number;
-}
-
-export interface WorkflowGraphLayout {
-  positions: Map<string, WorkflowPosition>;
-  edgePoints: Map<string, WorkflowRoutePoint[]>;
-}
-
-interface ElkLayoutEngine {
-  layout(graph: unknown): Promise<{
-    children?: Array<{ id?: string; x?: number; y?: number }>;
-    edges?: unknown[];
-  }>;
-}
-
-const WORKFLOW_NODE_WIDTH = 220;
-const WORKFLOW_NODE_HEIGHT = 68;
-const DEFAULT_ELK = new ELK();
 
 export function deriveWorkflowGraph(
   workflows: Map<string, WorkflowMeta>,
@@ -83,82 +61,73 @@ export function deriveWorkflowGraph(
   };
 }
 
-function workflowEdgeId(edge: WorkflowGraphEdge): string {
-  return `${edge.source}->${edge.target}`;
-}
-
-export async function layoutWorkflowGraphWithElk(
+export function layoutWorkflowGraph(
   graph: WorkflowGraph,
-  options?: { elk?: ElkLayoutEngine },
-): Promise<WorkflowGraphLayout> {
-  if (graph.nodes.length === 0) {
-    return { positions: new Map(), edgePoints: new Map() };
+  horizontalSpacing = 280,
+  verticalSpacing = 150,
+): Map<string, WorkflowPosition> {
+  const positions = new Map<string, WorkflowPosition>();
+  if (graph.nodes.length === 0) return positions;
+
+  const indegree = new Map<string, number>();
+  const outgoing = new Map<string, string[]>();
+  const level = new Map<string, number>();
+
+  for (const node of graph.nodes) {
+    indegree.set(node.id, 0);
+    outgoing.set(node.id, []);
   }
 
-  const elk = options?.elk ?? DEFAULT_ELK;
-  const nodeIds = new Set(graph.nodes.map((node) => node.id));
-  const sortedNodes = [...graph.nodes].sort((a, b) => a.id.localeCompare(b.id));
-  const sortedEdges = [...graph.edges]
-    .filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target))
-    .sort((a, b) => workflowEdgeId(a).localeCompare(workflowEdgeId(b)));
+  for (const edge of graph.edges) {
+    indegree.set(edge.target, (indegree.get(edge.target) ?? 0) + 1);
+    outgoing.get(edge.source)?.push(edge.target);
+  }
 
-  const result = await elk.layout({
-    id: 'workflow-graph',
-    layoutOptions: {
-      'elk.algorithm': 'layered',
-      'elk.direction': 'RIGHT',
-      'elk.edgeRouting': 'ORTHOGONAL',
-      'elk.spacing.nodeNode': '48',
-      'elk.layered.spacing.nodeNodeBetweenLayers': '48',
-      'elk.spacing.edgeNode': '32',
-      'elk.spacing.edgeEdge': '18',
-      'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
-    },
-    children: sortedNodes.map((node) => ({
-      id: node.id,
-      width: WORKFLOW_NODE_WIDTH,
-      height: WORKFLOW_NODE_HEIGHT,
-    })),
-    edges: sortedEdges.map((edge) => ({
-      id: workflowEdgeId(edge),
-      sources: [edge.source],
-      targets: [edge.target],
-    })),
-  });
+  const queue: string[] = graph.nodes
+    .map((node) => node.id)
+    .filter((id) => (indegree.get(id) ?? 0) === 0)
+    .sort();
 
-  const positions = new Map<string, WorkflowPosition>();
-  for (const child of result.children ?? []) {
-    if (typeof child.id !== 'string') continue;
-    positions.set(child.id, {
-      x: child.x ?? 0,
-      y: child.y ?? 0,
+  if (queue.length === 0) {
+    for (const node of graph.nodes) queue.push(node.id);
+  }
+
+  const visited = new Set<string>();
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    if (visited.has(current)) continue;
+    visited.add(current);
+    const currentLevel = level.get(current) ?? 0;
+    for (const target of outgoing.get(current) ?? []) {
+      const nextLevel = Math.max(level.get(target) ?? 0, currentLevel + 1);
+      level.set(target, nextLevel);
+      indegree.set(target, (indegree.get(target) ?? 0) - 1);
+      if ((indegree.get(target) ?? 0) <= 0) queue.push(target);
+    }
+    queue.sort();
+  }
+
+  for (const node of graph.nodes) {
+    if (!level.has(node.id)) level.set(node.id, 0);
+  }
+
+  const byLevel = new Map<number, WorkflowGraphNode[]>();
+  for (const node of graph.nodes) {
+    const nodeLevel = level.get(node.id) ?? 0;
+    const bucket = byLevel.get(nodeLevel) ?? [];
+    bucket.push(node);
+    byLevel.set(nodeLevel, bucket);
+  }
+
+  for (const [nodeLevel, nodes] of byLevel.entries()) {
+    nodes.sort((a, b) => a.name.localeCompare(b.name));
+    nodes.forEach((node, index) => {
+      positions.set(node.id, {
+        x: 80 + nodeLevel * horizontalSpacing,
+        y: 80 + index * verticalSpacing,
+      });
     });
   }
 
-  if (positions.size !== graph.nodes.length) {
-    throw new Error('ELK did not return a position for every workflow');
-  }
-
-  const edgePoints = new Map<string, WorkflowRoutePoint[]>();
-  const resultEdges = (result.edges ?? []) as Array<{
-    id?: string;
-    sections?: Array<{
-      startPoint?: WorkflowRoutePoint;
-      bendPoints?: WorkflowRoutePoint[];
-      endPoint?: WorkflowRoutePoint;
-    }>;
-  }>;
-
-  for (const edge of resultEdges) {
-    if (!edge.id) continue;
-    const section = edge.sections?.[0];
-    if (!section?.startPoint || !section.endPoint) continue;
-    edgePoints.set(edge.id, [
-      { x: section.startPoint.x, y: section.startPoint.y },
-      ...(section.bendPoints ?? []).map((point) => ({ x: point.x, y: point.y })),
-      { x: section.endPoint.x, y: section.endPoint.y },
-    ]);
-  }
-
-  return { positions, edgePoints };
+  return positions;
 }

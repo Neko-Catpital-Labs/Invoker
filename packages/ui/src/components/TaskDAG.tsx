@@ -22,7 +22,7 @@ import {
 import '@xyflow/react/dist/style.css';
 
 import type { TaskState, WorkflowMeta } from '../types.js';
-import { layoutTaskGraph, type LayoutEdge, type TaskGraphLayout } from '../lib/layout.js';
+import { layoutNodes, layoutTaskGraph, type LayoutEdge, type TaskGraphLayout } from '../lib/layout.js';
 import { getEdgeStyle, getEffectiveVisualStatus, matchesStatusFilter } from '../lib/colors.js';
 import { TaskNode } from './TaskNode.js';
 import { BundledEdge, type BundledEdgeData } from './BundledEdge.js';
@@ -48,7 +48,7 @@ interface TaskDAGProps {
 
 const nodeTypes = { taskNode: TaskNode, mergeGateNode: MergeGateNode };
 const edgeTypes = { bundled: BundledEdge };
-const EMPTY_EDGE_POINTS = new Map<string, { x: number; y: number }[]>();
+const WORKFLOW_GAP = 100;
 
 type RawTaskEdge = LayoutEdge & {
   kind: 'local' | 'external';
@@ -57,11 +57,6 @@ type RawTaskEdge = LayoutEdge & {
 type LayoutState = {
   key: string;
   result: TaskGraphLayout;
-};
-
-type LayoutErrorState = {
-  key: string;
-  error: string;
 };
 
 /** Short label for edge hover tooltip showing the dependency relationship. */
@@ -89,6 +84,34 @@ function resolveExternalDependencyTaskId(
   return undefined;
 }
 
+function makeFallbackLayout(tasks: TaskState[]): TaskGraphLayout {
+  const workflowGroups = groupTasksByWorkflow(tasks);
+  const positions = new Map<string, { x: number; y: number }>();
+  let yOffset = 0;
+
+  for (const [, wfTasksRaw] of sortedWorkflowGroups(workflowGroups)) {
+    const wfTasks = [...wfTasksRaw].sort((a, b) => a.id.localeCompare(b.id));
+    const groupPositions = layoutNodes(wfTasks);
+
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const pos of groupPositions.values()) {
+      minY = Math.min(minY, pos.y);
+      maxY = Math.max(maxY, pos.y);
+    }
+
+    for (const task of wfTasks) {
+      const pos = groupPositions.get(task.id) ?? { x: 0, y: 0 };
+      positions.set(task.id, { x: pos.x, y: pos.y + yOffset });
+    }
+
+    const groupHeight = maxY === -Infinity ? 0 : maxY - minY + 80;
+    yOffset += groupHeight + WORKFLOW_GAP;
+  }
+
+  return { positions, edgePoints: new Map(), usedFallback: true };
+}
+
 function layoutHasAllTasks(layout: TaskGraphLayout, tasks: TaskState[]): boolean {
   return tasks.every((task) => layout.positions.has(task.id));
 }
@@ -107,7 +130,6 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
   const prevNodeCount = useRef(0);
   const reportedGraphVisibleRef = useRef(false);
   const [layoutState, setLayoutState] = useState<LayoutState | null>(null);
-  const [layoutError, setLayoutError] = useState<LayoutErrorState | null>(null);
 
   const onInitHandler = useCallback(() => {
     requestAnimationFrame(() => fitView({ padding: 0.2 }));
@@ -121,6 +143,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
         rawEdges: [] as RawTaskEdge[],
         gateStatuses: new Map<string, ReturnType<typeof computeMergeGateStatus>>(),
         dimmedNodeIds: new Set<string>(),
+        fallbackLayout: makeFallbackLayout([]),
         layoutKey: 'empty',
       };
     }
@@ -178,6 +201,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
       rawEdges,
       gateStatuses,
       dimmedNodeIds,
+      fallbackLayout: makeFallbackLayout(taskArray),
       layoutKey: layoutKeyFor(layoutTasks, rawEdges),
     };
   }, [tasks, statusFilters]);
@@ -191,15 +215,6 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
     void layoutTaskGraph(layoutTasks, layoutEdges).then((result) => {
       if (!stale) {
         setLayoutState({ key: rawGraph.layoutKey, result });
-        setLayoutError(null);
-      }
-    }).catch((error: unknown) => {
-      if (!stale) {
-        setLayoutState(null);
-        setLayoutError({
-          key: rawGraph.layoutKey,
-          error: error instanceof Error ? error.message : String(error),
-        });
       }
     });
 
@@ -208,20 +223,20 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
     };
   }, [rawGraph.layoutKey]);
 
-  const activeLayout = useMemo(() => (
-    layoutState?.key === rawGraph.layoutKey
-      && layoutHasAllTasks(layoutState.result, rawGraph.taskArray)
-      ? layoutState.result
-      : null
-  ), [layoutState, rawGraph.layoutKey, rawGraph.taskArray]);
+  const activeLayout = useMemo(() => {
+    if (layoutState && layoutHasAllTasks(layoutState.result, rawGraph.taskArray)) {
+      return layoutState.result;
+    }
+    return rawGraph.fallbackLayout;
+  }, [layoutState, rawGraph.fallbackLayout, rawGraph.taskArray]);
 
-  const routedEdgePoints = layoutState?.key === rawGraph.layoutKey
-    ? layoutState.result.edgePoints
-    : EMPTY_EDGE_POINTS;
+  const emptyEdgePoints = useMemo(() => new Map<string, { x: number; y: number }[]>(), []);
+  const routedEdgePoints = useMemo(
+    () => layoutState?.key === rawGraph.layoutKey ? layoutState.result.edgePoints : emptyEdgePoints,
+    [emptyEdgePoints, layoutState, rawGraph.layoutKey],
+  );
 
   const { nodes, edges } = useMemo(() => {
-    if (!activeLayout) return { nodes: [] as Node[], edges: [] as Edge<BundledEdgeData>[] };
-
     const allNodes: Node[] = [];
     for (const task of rawGraph.taskArray) {
       const wfGroupId = task.config.workflowId ?? 'unknown';
@@ -353,7 +368,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
     });
 
     return { nodes: allNodes, edges: newEdges };
-  }, [activeLayout, rawGraph, routedEdgePoints, selectedTaskId, statusFilters, tasks, workflows]);
+  }, [activeLayout.positions, rawGraph, routedEdgePoints, selectedTaskId, statusFilters, tasks, workflows]);
 
   // Merge task-derived nodes with React Flow's internal dimension/selection state.
   // Without this, each task-delta re-render creates new node objects that discard
@@ -462,18 +477,6 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
         <div className="text-center">
           <p>No tasks yet</p>
           <p className="text-sm mt-1">Load a plan to create a task graph</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (!activeLayout) {
-    const error = layoutError?.key === rawGraph.layoutKey ? layoutError.error : undefined;
-    return (
-      <div className="h-full w-full flex items-center justify-center text-gray-500">
-        <div className="text-center">
-          <p>{error ? 'Task graph layout failed' : 'Preparing task graph layout'}</p>
-          {error && <p className="text-sm mt-1 text-red-300">{error}</p>}
         </div>
       </div>
     );

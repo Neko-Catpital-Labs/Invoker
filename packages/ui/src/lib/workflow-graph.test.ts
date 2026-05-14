@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TaskState, WorkflowMeta } from '../types.js';
-import { deriveWorkflowGraph, layoutWorkflowGraphWithElk } from './workflow-graph.js';
+import { deriveWorkflowGraph } from './workflow-graph.js';
 
 function makeWorkflow(id: string, status: WorkflowMeta['status'] = 'running'): WorkflowMeta {
   return { id, name: id, status };
@@ -92,64 +92,5 @@ describe('deriveWorkflowGraph', () => {
     const graph = deriveWorkflowGraph(workflows, new Map());
     expect(graph.nodes.map((node) => node.id)).toEqual(['A', 'B']);
     expect(graph.edges).toEqual([]);
-  });
-});
-
-describe('layoutWorkflowGraphWithElk', () => {
-  it('returns ELK workflow positions and route points', async () => {
-    const workflows = new Map([
-      ['A', makeWorkflow('A')],
-      ['B', makeWorkflow('B')],
-    ]);
-    const tasks = new Map<string, TaskState>([
-      ['b1', makeTask('b1', 'B', [{ workflowId: 'A' }])],
-    ]);
-
-    const graph = deriveWorkflowGraph(workflows, tasks);
-    const layout = await layoutWorkflowGraphWithElk(graph, {
-      elk: {
-        layout: async () => ({
-          children: [
-            { id: 'A', x: 10, y: 20 },
-            { id: 'B', x: 300, y: 20 },
-          ],
-          edges: [
-            {
-              id: 'A->B',
-              sections: [
-                {
-                  startPoint: { x: 230, y: 54 },
-                  bendPoints: [{ x: 260, y: 54 }],
-                  endPoint: { x: 300, y: 54 },
-                },
-              ],
-            },
-          ],
-        }),
-      },
-    });
-
-    expect(layout.positions.get('A')).toEqual({ x: 10, y: 20 });
-    expect(layout.positions.get('B')).toEqual({ x: 300, y: 20 });
-    expect(layout.edgePoints.get('A->B')).toEqual([
-      { x: 230, y: 54 },
-      { x: 260, y: 54 },
-      { x: 300, y: 54 },
-    ]);
-  });
-
-  it('rejects when ELK fails', async () => {
-    const workflows = new Map([
-      ['A', makeWorkflow('A')],
-      ['B', makeWorkflow('B')],
-    ]);
-    const tasks = new Map<string, TaskState>([
-      ['b1', makeTask('b1', 'B', [{ workflowId: 'A' }])],
-    ]);
-
-    const graph = deriveWorkflowGraph(workflows, tasks);
-    await expect(layoutWorkflowGraphWithElk(graph, {
-      elk: { layout: async () => { throw new Error('forced failure'); } },
-    })).rejects.toThrow('forced failure');
   });
 });
