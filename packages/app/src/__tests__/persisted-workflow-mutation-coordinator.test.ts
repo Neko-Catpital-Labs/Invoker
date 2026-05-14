@@ -1320,6 +1320,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     expect(capturedContext!.signal.aborted).toBe(false);
     expect(capturedContext!.workflowId).toBe('wf-1');
     expect(capturedContext!.intentId).toBe(1);
+    expect(capturedContext!.priority).toBe('normal');
+    expect(capturedContext!.channel).toBe('invoker:fix-with-agent');
+    expect(capturedContext!.args).toEqual(['wf-1/blocker-task', null]);
 
     const recreateTask = coordinator.enqueue<void>(
       'wf-1',
@@ -1554,5 +1557,122 @@ describe('PersistedWorkflowMutationCoordinator', () => {
 
     expect(iterationsBeforeAbort).toBeGreaterThan(0);
     await expect(olderRunning).rejects.toThrow(/superseded by recreate intent/i);
+  });
+
+  it('recreate-task aborts a superseded fix mutation before its deferred side effect runs', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const releaseSideEffect = deferred();
+    const fixStarted = deferred();
+    let staleWriteCount = 0;
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async (channel, _args, context) => {
+        if (channel !== 'invoker:fix-with-agent') {
+          return;
+        }
+        fixStarted.resolve();
+        await releaseSideEffect.promise;
+        if (context.signal.aborted) {
+          return;
+        }
+        staleWriteCount += 1;
+      },
+    );
+
+    const olderRunning = coordinator.enqueue<void>(
+      'wf-1',
+      'normal',
+      'invoker:fix-with-agent',
+      ['wf-1/blocker-task', null],
+    );
+    void olderRunning.catch(() => {});
+    await fixStarted.promise;
+
+    const recreateTask = coordinator.enqueue<void>(
+      'wf-1',
+      'high',
+      'invoker:recreate-task',
+      ['wf-1/target-task'],
+    );
+    await recreateTask;
+    releaseSideEffect.resolve();
+
+    await expect(olderRunning).rejects.toThrow(/superseded by recreate intent/i);
+    expect(staleWriteCount).toBe(0);
+  });
+
+  it('delete-workflow aborts a superseded fix mutation without regressing later queued work', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const releaseSideEffect = deferred();
+    const fixStarted = deferred();
+    const order: string[] = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async (channel, args, context) => {
+        if (channel === 'invoker:fix-with-agent') {
+          order.push('fix-start');
+          fixStarted.resolve();
+          await releaseSideEffect.promise;
+          if (!context.signal.aborted) {
+            order.push('fix-stale-write');
+          }
+          return;
+        }
+        order.push(`${channel}:${String(args[0] ?? '')}`);
+      },
+    );
+
+    const olderRunning = coordinator.enqueue<void>(
+      'wf-1',
+      'normal',
+      'invoker:fix-with-agent',
+      ['wf-1/blocker-task', null],
+    );
+    void olderRunning.catch(() => {});
+    await fixStarted.promise;
+
+    const deleteWorkflow = coordinator.enqueue<void>(
+      'wf-1',
+      'high',
+      'invoker:delete-workflow',
+      ['wf-1'],
+    );
+    const laterQueued = coordinator.enqueue<void>(
+      'wf-1',
+      'normal',
+      'invoker:edit-task-agent',
+      ['wf-1/task-next', 'codex'],
+    );
+
+    await deleteWorkflow;
+    releaseSideEffect.resolve();
+    await expect(olderRunning).rejects.toThrow(/superseded by delete intent/i);
+    await laterQueued;
+
+    expect(order).toEqual([
+      'fix-start',
+      'invoker:delete-workflow:wf-1',
+      'invoker:edit-task-agent:wf-1/task-next',
+    ]);
   });
 });

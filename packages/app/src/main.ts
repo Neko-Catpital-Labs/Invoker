@@ -140,7 +140,7 @@ import { applyDelta, resolveQuarantine, TaskSnapshotCache } from './delta-merge.
 import { shouldSkipAutoFixForError } from './auto-fix-gating.js';
 import { ensureSqliteFlushDebounceForOwner } from './sqlite-flush-policy.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
-import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
+import { PersistedWorkflowMutationCoordinator, type WorkflowMutationContext } from './persisted-workflow-mutation-coordinator.js';
 import { recoverWorkflowMutationsOnStartup } from './workflow-mutation-startup.js';
 import {
   dispatchStartedTasksWithGlobalTopup,
@@ -214,14 +214,14 @@ let orchestrator: Orchestrator;
 let commandService: CommandService;
 let runtimeServices: RuntimeServices;
 let workflowMutationCoordinator: PersistedWorkflowMutationCoordinator | null = null;
-const workflowMutationDispatcher = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+const workflowMutationDispatcher = new Map<string, (context: WorkflowMutationContext, ...args: unknown[]) => Promise<unknown>>();
 /**
  * The mutation context for the currently executing workflow mutation.
- * Set by the coordinator dispatch callback before invoking the handler,
- * cleared afterward. Allows fix-with-agent and conflict-resolution
- * handlers to read the AbortSignal without changing every handler signature.
+ * Set by the coordinator dispatch callback before invoking a workflow-scoped
+ * handler and cleared afterward. A few shared helpers still read it
+ * indirectly while the explicit dispatcher context is being threaded through.
  */
-let activeMutationContext: import('./persisted-workflow-mutation-coordinator.js').WorkflowMutationContext | undefined;
+let activeMutationContext: WorkflowMutationContext | undefined;
 let hourlyBackupInterval: ReturnType<typeof setInterval> | null = null;
 let writerLock: DbWriterLockResult | null = null;
 const workflowMutationOwnerId = `owner-${process.pid}-${Date.now()}`;
@@ -943,14 +943,14 @@ if (isHeadless) {
         };
 
         if (!workflowMutationDispatcher.has('headless.exec')) {
-          workflowMutationDispatcher.set('headless.exec', async (payloadArg: unknown) => {
+          workflowMutationDispatcher.set('headless.exec', async (context, payloadArg: unknown) => {
             const payload = payloadArg as HeadlessExecMutationPayload;
             await runHeadless(payload.args, {
               ...headlessDeps,
               waitForApproval: payload.waitForApproval,
               noTrack: payload.noTrack,
-              signal: activeMutationContext?.signal,
-              mutationTiming: activeMutationContext?.mutationTiming,
+              signal: context.signal,
+              mutationTiming: context.mutationTiming,
             });
             return { ok: true };
           });
@@ -966,7 +966,7 @@ if (isHeadless) {
               }
               activeMutationContext = context;
               try {
-                return await handler(...args);
+                return await handler(context, ...args);
               } finally {
                 activeMutationContext = undefined;
               }
@@ -1381,6 +1381,7 @@ if (isHeadless) {
     taskId: string,
     agentName?: string,
     source: 'ipc' | 'auto-fix' = 'ipc',
+    mutationContext?: WorkflowMutationContext,
   ): Promise<TaskState[]> => {
     const task = orchestrator.getTask(taskId);
     if (!task) {
@@ -1416,7 +1417,7 @@ if (isHeadless) {
         recoveryRoute,
         recreateOutputLabel: source === 'auto-fix' ? 'Auto-fix' : 'Fix with AI',
         failureOutputLabel: source === 'auto-fix' ? 'Auto-fix' : `Fix with ${agentName ?? 'Claude'}`,
-        signal: activeMutationContext?.signal,
+        signal: mutationContext?.signal,
       },
     );
     return result.started;
@@ -1716,7 +1717,10 @@ if (isHeadless) {
     return { workflowId, tasks };
   }
 
-  async function executeHeadlessExec(payload: HeadlessExecMutationPayload): Promise<unknown> {
+  async function executeHeadlessExec(
+    payload: HeadlessExecMutationPayload,
+    mutationContext?: WorkflowMutationContext,
+  ): Promise<unknown> {
     logger.info(`executeHeadlessExec begin args="${payload.args.join(' ')}" noTrack=${payload.noTrack ? 'true' : 'false'}`, {
       module: 'ipc-delegate',
     });
@@ -1734,8 +1738,8 @@ if (isHeadless) {
       orchestrator, persistence, executorRegistry, messageBus,
       commandService,
       repoRoot, invokerConfig, initServices, wireSlackBot,
-      signal: activeMutationContext?.signal,
-      mutationTiming: activeMutationContext?.mutationTiming,
+      signal: mutationContext?.signal,
+      mutationTiming: mutationContext?.mutationTiming,
       cancelTask: (taskId: string) => performCancelTask(taskId),
       cancelWorkflow: (workflowId: string) => performCancelWorkflow(workflowId),
       waitForApproval: payload.waitForApproval,
@@ -2038,12 +2042,19 @@ if (isHeadless) {
     channel: string,
     resolveWorkflowId: (...args: unknown[]) => string | undefined,
     priority: WorkflowMutationPriority,
-    handler: (...args: unknown[]) => Promise<TResult>,
+    handler: (context: WorkflowMutationContext, ...args: unknown[]) => Promise<TResult>,
   ): void {
-    workflowMutationDispatcher.set(channel, (...args: unknown[]) => handler(...args));
+    workflowMutationDispatcher.set(channel, (context, ...args: unknown[]) => handler(context, ...args));
     registerGuiMutationHandler(channel, async (...args: unknown[]) => {
       const workflowId = resolveWorkflowId(...args);
-      return runWorkflowMutation(workflowId, priority, channel, args, () => handler(...args));
+      const fallbackContext: WorkflowMutationContext = {
+        signal: new AbortController().signal,
+        workflowId: workflowId ?? 'unknown-workflow',
+        priority,
+        channel,
+        args,
+      };
+      return runWorkflowMutation(workflowId, priority, channel, args, () => handler(fallbackContext, ...args));
     });
   }
 
@@ -2561,7 +2572,7 @@ if (isHeadless) {
           }
           activeMutationContext = context;
           try {
-            return await handler(...args);
+            return await handler(context, ...args);
           } finally {
             activeMutationContext = undefined;
           }
@@ -2577,20 +2588,20 @@ if (isHeadless) {
     // ── IPC Delegation Handlers — peer → owner ────────────────
     // Peer processes delegate write-heavy commands to the owner process via IpcBus.
     if (ownerMode) {
-      workflowMutationDispatcher.set('headless.exec', async (payloadArg: unknown) => {
-        return executeHeadlessExec(payloadArg as HeadlessExecMutationPayload);
+      workflowMutationDispatcher.set('headless.exec', async (context, payloadArg: unknown) => {
+        return executeHeadlessExec(payloadArg as HeadlessExecMutationPayload, context);
       });
-      workflowMutationDispatcher.set('api:approve-task', async (taskIdArg: unknown) => {
+      workflowMutationDispatcher.set('api:approve-task', async (_context, taskIdArg: unknown) => {
         await performSharedApproveTask(String(taskIdArg), 'api');
       });
-      workflowMutationDispatcher.set('api:reject-task', async (taskIdArg: unknown, reasonArg?: unknown) => {
+      workflowMutationDispatcher.set('api:reject-task', async (_context, taskIdArg: unknown, reasonArg?: unknown) => {
         const taskId = String(taskIdArg);
         const reason = reasonArg === undefined ? undefined : String(reasonArg);
         const envelope = makeEnvelope('reject', 'surface', 'task', { taskId, reason });
         const result = await commandService.reject(envelope);
         if (!result.ok) throw new Error(result.error.message);
       });
-      workflowMutationDispatcher.set('surface:approve-task', async (taskIdArg: unknown) => {
+      workflowMutationDispatcher.set('surface:approve-task', async (_context, taskIdArg: unknown) => {
         await performSharedApproveTask(String(taskIdArg), 'surface');
       });
       messageBus.onRequest('headless.owner-ping', async () => ({
@@ -3253,7 +3264,7 @@ if (isHeadless) {
       'invoker:recreate-workflow',
       (workflowIdArg: unknown) => String(workflowIdArg),
       'high',
-      async (workflowIdArg: unknown) => {
+      async (context, workflowIdArg: unknown) => {
       const workflowId = String(workflowIdArg);
       cancelDeferredWorkflowLaunch(workflowId, 'ipc.recreate-workflow');
       logger.info(`recreate-workflow: "${workflowId}"`, { module: 'ipc' });
@@ -3262,10 +3273,10 @@ if (isHeadless) {
           preemptWorkflowExecution,
           logger,
           context: 'ipc.recreate-workflow',
-          mutationTiming: activeMutationContext?.mutationTiming,
+          mutationContext: context,
         });
-        const started = activeMutationContext?.mutationTiming
-          ? await activeMutationContext.mutationTiming.span(
+        const started = context.mutationTiming
+          ? await context.mutationTiming.span(
             'main.ipc.recreate-workflow.sharedRecreateWorkflow',
             undefined,
             async () => sharedRecreateWorkflow(workflowId, { persistence, orchestrator }),
@@ -3279,7 +3290,7 @@ if (isHeadless) {
             logger,
             context: 'ipc.recreate-workflow',
             started,
-            mutationTiming: activeMutationContext?.mutationTiming,
+            mutationTiming: context.mutationTiming,
           });
         } finally {
           remoteFetchForPool.enabled = true;
@@ -3295,12 +3306,12 @@ if (isHeadless) {
       'invoker:recreate-task',
       (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
       'high',
-      async (taskIdArg: unknown) => {
+      async (context, taskIdArg: unknown) => {
       const taskId = String(taskIdArg);
       logger.info(`recreate-task: "${taskId}"`, { module: 'ipc' });
       try {
-        if (activeMutationContext?.mutationTiming) {
-          await activeMutationContext.mutationTiming.span(
+        if (context.mutationTiming) {
+          await context.mutationTiming.span(
             'main.ipc.recreate-task.preemptTaskSubgraph',
             { taskId },
             () => preemptTaskSubgraph(taskId),
@@ -3308,8 +3319,8 @@ if (isHeadless) {
         } else {
           await preemptTaskSubgraph(taskId);
         }
-        const started = activeMutationContext?.mutationTiming
-          ? await activeMutationContext.mutationTiming.span(
+        const started = context.mutationTiming
+          ? await context.mutationTiming.span(
             'main.ipc.recreate-task.sharedRecreateTask',
             { taskId },
             async () => sharedRecreateTask(taskId, { persistence, orchestrator }),
@@ -3323,7 +3334,7 @@ if (isHeadless) {
             logger,
             context: 'ipc.recreate-task',
             started,
-            mutationTiming: activeMutationContext?.mutationTiming,
+            mutationTiming: context.mutationTiming,
           });
         } finally {
           remoteFetchForPool.enabled = true;
@@ -3339,7 +3350,7 @@ if (isHeadless) {
       'invoker:retry-workflow',
       (workflowIdArg: unknown) => String(workflowIdArg),
       'high',
-      async (workflowIdArg: unknown) => {
+      async (context, workflowIdArg: unknown) => {
       const workflowId = String(workflowIdArg);
       cancelDeferredWorkflowLaunch(workflowId, 'ipc.retry-workflow');
       logger.info(`retry-workflow: "${workflowId}"`, { module: 'ipc' });
@@ -3348,11 +3359,11 @@ if (isHeadless) {
           preemptWorkflowExecution,
           logger,
           context: 'ipc.retry-workflow',
-          mutationTiming: activeMutationContext?.mutationTiming,
+          mutationContext: context,
         });
         const envelope = makeEnvelope('retry-workflow', 'ui', 'workflow', { workflowId });
-        const result = activeMutationContext?.mutationTiming
-          ? await activeMutationContext.mutationTiming.span(
+        const result = context.mutationTiming
+          ? await context.mutationTiming.span(
             'main.ipc.retry-workflow.commandService.retryWorkflow',
             undefined,
             () => commandService.retryWorkflow(envelope),
@@ -3367,7 +3378,7 @@ if (isHeadless) {
             logger,
             context: 'ipc.retry-workflow',
             started: result.data,
-            mutationTiming: activeMutationContext?.mutationTiming,
+            mutationTiming: context.mutationTiming,
           });
         } finally {
           remoteFetchForPool.enabled = true;
@@ -3383,7 +3394,7 @@ if (isHeadless) {
       'invoker:rebase-and-retry',
       (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
       'high',
-      async (taskIdArg: unknown) => {
+      async (context, taskIdArg: unknown) => {
       const taskId = String(taskIdArg);
       logger.info(`rebase-and-retry: "${taskId}"`, { module: 'ipc' });
       try {
@@ -3393,7 +3404,7 @@ if (isHeadless) {
             preemptWorkflowExecution,
             logger,
             context: 'ipc.rebase-and-retry',
-            mutationTiming: activeMutationContext?.mutationTiming,
+            mutationContext: context,
           });
         }
         const started = await rebaseAndRetry(taskId, {
@@ -3401,7 +3412,7 @@ if (isHeadless) {
           persistence,
           repoRoot,
           taskExecutor: requireTaskExecutor(),
-          mutationTiming: activeMutationContext?.mutationTiming,
+          mutationTiming: context.mutationTiming,
         });
         await dispatchStartedTasksWithGlobalTopup({
           orchestrator,
@@ -3409,7 +3420,7 @@ if (isHeadless) {
           logger,
           context: 'ipc.rebase-and-retry',
           started,
-          mutationTiming: activeMutationContext?.mutationTiming,
+          mutationTiming: context.mutationTiming,
         });
       } catch (err) {
         logger.error(`rebase-and-retry failed: ${err}`, { module: 'ipc' });
@@ -3422,7 +3433,7 @@ if (isHeadless) {
       'invoker:recreate-with-rebase',
       (workflowIdArg: unknown) => workflowIdForTargetArg(workflowIdArg),
       'high',
-      async (workflowIdArg: unknown) => {
+      async (context, workflowIdArg: unknown) => {
       const workflowId = workflowIdForTargetArg(workflowIdArg);
       if (!workflowId) {
         throw new Error(`Could not resolve workflow for recreate-with-rebase target "${String(workflowIdArg)}"`);
@@ -3434,14 +3445,14 @@ if (isHeadless) {
           preemptWorkflowExecution,
           logger,
           context: 'ipc.recreate-with-rebase',
-          mutationTiming: activeMutationContext?.mutationTiming,
+          mutationContext: context,
         });
         const started = await recreateWithRebase(workflowId, {
           orchestrator,
           persistence,
           repoRoot,
           taskExecutor: requireTaskExecutor(),
-          mutationTiming: activeMutationContext?.mutationTiming,
+          mutationTiming: context.mutationTiming,
         });
         await dispatchStartedTasksWithGlobalTopup({
           orchestrator,
@@ -3449,7 +3460,7 @@ if (isHeadless) {
           logger,
           context: 'ipc.recreate-with-rebase',
           started,
-          mutationTiming: activeMutationContext?.mutationTiming,
+          mutationTiming: context.mutationTiming,
         });
       } catch (err) {
         logger.error(`recreate-with-rebase failed: ${err}`, { module: 'ipc' });
@@ -3547,7 +3558,7 @@ if (isHeadless) {
       'invoker:resolve-conflict',
       (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
       'normal',
-      async (taskIdArg: unknown, agentNameArg?: unknown) => {
+      async (context, taskIdArg: unknown, agentNameArg?: unknown) => {
       const taskId = String(taskIdArg);
       const agentName = agentNameArg === undefined ? undefined : String(agentNameArg);
       logger.info(
@@ -3560,7 +3571,7 @@ if (isHeadless) {
           persistence,
           taskExecutor: requireTaskExecutor(),
           autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
-        }, agentName, activeMutationContext?.signal);
+        }, agentName, context.signal);
         await finalizeMutationWithGlobalTopup({
           orchestrator,
           taskExecutor: requireTaskExecutor(),
@@ -3585,11 +3596,11 @@ if (isHeadless) {
       'invoker:fix-with-agent',
       (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
       'normal',
-      async (taskIdArg: unknown, agentNameArg?: unknown) => {
+      async (context, taskIdArg: unknown, agentNameArg?: unknown) => {
       const taskId = String(taskIdArg);
       const agentName = agentNameArg === undefined ? undefined : String(agentNameArg);
       try {
-        const started = await executeFixWithAgentMutation(taskId, agentName, 'ipc');
+        const started = await executeFixWithAgentMutation(taskId, agentName, 'ipc', context);
         await finalizeMutationWithGlobalTopup({
           orchestrator,
           taskExecutor: requireTaskExecutor(),

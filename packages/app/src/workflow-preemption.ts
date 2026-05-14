@@ -1,5 +1,6 @@
 import type { Logger } from '@invoker/contracts';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
+import type { WorkflowMutationContext } from './workflow-mutation-coordinator.js';
 
 export type WorkflowCancelResult = {
   cancelled: string[];
@@ -8,6 +9,15 @@ export type WorkflowCancelResult = {
 
 type PreemptWorkflowExecution = (workflowId: string) => Promise<WorkflowCancelResult | void>;
 
+function throwIfMutationAborted(context: WorkflowMutationContext | undefined, stage: string): void {
+  if (!context?.signal.aborted) {
+    return;
+  }
+  const reason = context.signal.reason;
+  const detail = reason instanceof Error ? reason.message : String(reason ?? 'unknown');
+  throw new Error(`Workflow mutation ${stage} aborted: ${detail}`);
+}
+
 export async function preemptWorkflowBeforeMutation(
   workflowId: string,
   deps: {
@@ -15,18 +25,22 @@ export async function preemptWorkflowBeforeMutation(
     logger?: Logger;
     context: string;
     mutationTiming?: WorkflowMutationTiming;
+    mutationContext?: WorkflowMutationContext;
   },
 ): Promise<WorkflowCancelResult> {
+  throwIfMutationAborted(deps.mutationContext, `${deps.context}.before-preempt`);
   deps.logger?.info(`preempt begin context="${deps.context}" workflow="${workflowId}"`, { module: 'preempt' });
-  const raw = deps.mutationTiming
-    ? await deps.mutationTiming.span(
+  const timing = deps.mutationContext?.mutationTiming ?? deps.mutationTiming;
+  const raw = timing
+    ? await timing.span(
       'preemptWorkflowBeforeMutation',
       { context: deps.context },
       () => deps.preemptWorkflowExecution(workflowId),
     )
     : await deps.preemptWorkflowExecution(workflowId);
   const result: WorkflowCancelResult = raw ?? { cancelled: [], runningCancelled: [] };
-  deps.mutationTiming?.mark('preemptWorkflowBeforeMutation.result', 'completed', {
+  throwIfMutationAborted(deps.mutationContext, `${deps.context}.after-preempt`);
+  timing?.mark('preemptWorkflowBeforeMutation.result', 'completed', {
     context: deps.context,
     cancelledCount: result.cancelled.length,
     runningCancelledCount: result.runningCancelled.length,

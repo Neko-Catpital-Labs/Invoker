@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { WorkflowMutationCoordinator } from '../workflow-mutation-coordinator.js';
+import { WorkflowMutationCoordinator, type WorkflowMutationContext } from '../workflow-mutation-coordinator.js';
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve = () => {};
@@ -8,6 +8,22 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 }
 
 describe('WorkflowMutationCoordinator', () => {
+  it('passes workflow mutation context metadata to queued jobs', async () => {
+    const c = new WorkflowMutationCoordinator();
+    let captured: WorkflowMutationContext | undefined;
+
+    await c.enqueue('wf-context', 'high', async (context) => {
+      captured = context;
+    });
+
+    expect(captured).toBeDefined();
+    expect(captured).toMatchObject({
+      workflowId: 'wf-context',
+      priority: 'high',
+    });
+    expect(captured?.signal.aborted).toBe(false);
+  });
+
   it('repro: normal-priority retry can leave old state visible until queued work finishes', async () => {
     const c = new WorkflowMutationCoordinator();
     const wf = 'wf-repro';
@@ -57,4 +73,3 @@ describe('WorkflowMutationCoordinator', () => {
     expect(order).toEqual(['running-normal', 'queued-high', 'queued-normal']);
   });
 });
-
