@@ -64,12 +64,11 @@ describe('ContextMenu getMenuItems', () => {
   });
 
   describe('Labeled separators', () => {
-    it('workflow items have "workflow" separator before first item', () => {
+    it('does not add a workflow separator to task menus', () => {
       const task = makeTask({ status: 'failed', workflowId: 'wf-1' });
       const items = getMenuItems(task);
 
-      const rebaseItem = items.find((item) => item.id === 'rebase-retry');
-      expect(rebaseItem?.separator).toBe('workflow');
+      expect(items.some((item) => (item.separator as string | undefined) === 'workflow')).toBe(false);
     });
 
     it('danger items have "danger" separator before first danger item', () => {
@@ -94,129 +93,34 @@ describe('ContextMenu getMenuItems', () => {
     });
   });
 
-  describe('Workflow items visibility', () => {
-    it('workflow items only appear when workflowId is set', () => {
+  describe('Workflow-owned item visibility', () => {
+    it('workflow-wide actions do not appear in task menus even when workflowId is set', () => {
       const taskWithWorkflow = makeTask({ status: 'failed', workflowId: 'wf-1' });
       const itemsWithWorkflow = getMenuItems(taskWithWorkflow);
 
-      const rebaseItem = itemsWithWorkflow.find((item) => item.id === 'rebase-retry');
-      expect(rebaseItem).toBeDefined();
-
-      const taskWithoutWorkflow = makeTask({ status: 'failed' });
-      const itemsWithoutWorkflow = getMenuItems(taskWithoutWorkflow);
-
-      const noRebaseItem = itemsWithoutWorkflow.find((item) => item.id === 'rebase-retry');
-      expect(noRebaseItem).toBeUndefined();
-    });
-
-    it('workflow items appear for merge nodes', () => {
-      const task = makeTask({ id: '__merge__wf-1', status: 'failed', isMergeNode: true, workflowId: 'wf-1' });
-      const items = getMenuItems(task);
-
-      const rebaseItem = items.find((item) => item.id === 'rebase-retry');
-      expect(rebaseItem).toBeDefined();
-      expect(rebaseItem?.action).toBe('onRebaseAndRetry');
-    });
-
-    it('all workflow items are present when workflowId exists', () => {
-      const task = makeTask({ status: 'failed', workflowId: 'wf-1' });
-      const items = getMenuItems(task);
-
-      const workflowItemIds = ['rebase-retry', 'recreate-rebase', 'retry-workflow', 'recreate-task', 'recreate-workflow', 'cancel-workflow', 'delete-workflow'];
+      const workflowItemIds = ['rebase-retry', 'recreate-rebase', 'retry-workflow', 'recreate-workflow', 'cancel-workflow', 'delete-workflow'];
       workflowItemIds.forEach((id) => {
-        const item = items.find((i) => i.id === id);
-        expect(item).toBeDefined();
+        expect(itemsWithWorkflow.find((i) => i.id === id)).toBeUndefined();
       });
     });
-  });
 
-  describe('Rebase & Retry visibility', () => {
-    it('is visible for any task with a workflowId', () => {
-      const task = makeTask({ id: 'regular-task', status: 'failed', workflowId: 'wf-1' });
-      const items = getMenuItems(task);
-
-      const rebaseItem = items.find((item) => item.id === 'rebase-retry');
-      expect(rebaseItem).toBeDefined();
-      expect(rebaseItem?.enabled).toBe(true);
-    });
-
-    it('is visible for merge nodes with a workflowId', () => {
+    it('workflow-wide actions do not appear for merge nodes', () => {
       const task = makeTask({ id: '__merge__wf-1', status: 'failed', isMergeNode: true, workflowId: 'wf-1' });
       const items = getMenuItems(task);
 
-      const rebaseItem = items.find((item) => item.id === 'rebase-retry');
-      expect(rebaseItem).toBeDefined();
-      expect(rebaseItem?.enabled).toBe(true);
+      expect(items.find((item) => item.id === 'retry-workflow')).toBeUndefined();
+      expect(items.find((item) => item.id === 'recreate-workflow')).toBeUndefined();
+      expect(items.find((item) => item.id === 'cancel-workflow')).toBeUndefined();
+      expect(items.find((item) => item.id === 'delete-workflow')).toBeUndefined();
     });
 
-    it('is visible regardless of task status', () => {
-      for (const status of ['pending', 'running', 'completed', 'failed'] as const) {
-        const task = makeTask({ id: 'task-1', status, workflowId: 'wf-1' });
-        const items = getMenuItems(task);
-
-        const rebaseItem = items.find((item) => item.id === 'rebase-retry');
-        expect(rebaseItem).toBeDefined();
-      }
-    });
-
-    it('is hidden for tasks without a workflowId', () => {
-      const task = makeTask({ id: 'orphan-task', status: 'failed' });
-      const items = getMenuItems(task);
-
-      const rebaseItem = items.find((item) => item.id === 'rebase-retry');
-      expect(rebaseItem).toBeUndefined();
-    });
-  });
-
-  describe('Recreate with Rebase visibility', () => {
-    it('is visible for any task with a workflowId', () => {
-      const task = makeTask({ id: 'regular-task', status: 'failed', workflowId: 'wf-1' });
-      const items = getMenuItems(task);
-
-      const item = items.find((i) => i.id === 'recreate-rebase');
-      expect(item).toBeDefined();
-      expect(item?.enabled).toBe(true);
-      expect(item?.action).toBe('onRecreateWithRebase');
-    });
-
-    it('is visible for merge nodes with a workflowId', () => {
-      const task = makeTask({ id: '__merge__wf-1', status: 'failed', isMergeNode: true, workflowId: 'wf-1' });
-      const items = getMenuItems(task);
-
-      const item = items.find((i) => i.id === 'recreate-rebase');
-      expect(item).toBeDefined();
-      expect(item?.enabled).toBe(true);
-    });
-
-    it('is visible regardless of task status', () => {
-      for (const status of ['pending', 'running', 'completed', 'failed'] as const) {
-        const task = makeTask({ id: 'task-1', status, workflowId: 'wf-1' });
-        const items = getMenuItems(task);
-
-        const item = items.find((i) => i.id === 'recreate-rebase');
-        expect(item).toBeDefined();
-      }
-    });
-
-    it('is hidden for tasks without a workflowId', () => {
-      const task = makeTask({ id: 'orphan-task', status: 'failed' });
-      const items = getMenuItems(task);
-
-      const item = items.find((i) => i.id === 'recreate-rebase');
-      expect(item).toBeUndefined();
-    });
-
-    it('is distinct from rebase-retry', () => {
+    it('keeps Recreate from Task as the task-scoped workflowId action', () => {
       const task = makeTask({ status: 'failed', workflowId: 'wf-1' });
       const items = getMenuItems(task);
 
-      const rebaseRetry = items.find((i) => i.id === 'rebase-retry');
-      const recreateRebase = items.find((i) => i.id === 'recreate-rebase');
-
-      expect(rebaseRetry).toBeDefined();
-      expect(recreateRebase).toBeDefined();
-      expect(rebaseRetry?.action).toBe('onRebaseAndRetry');
-      expect(recreateRebase?.action).toBe('onRecreateWithRebase');
+      const recreateTask = items.find((item) => item.id === 'recreate-task');
+      expect(recreateTask).toBeDefined();
+      expect(recreateTask?.action).toBe('onRecreateTask');
     });
   });
 
@@ -249,44 +153,6 @@ describe('ContextMenu getMenuItems', () => {
       const task = makeTask({ status: 'blocked' });
       const items = getMenuItems(task);
       expect(items.find((item) => item.id === 'replace')).toBeUndefined();
-    });
-  });
-
-  describe('Recreate Workflow visibility', () => {
-    it('is visible for any node with a workflowId', () => {
-      const task = makeTask({ id: 'regular-task', workflowId: 'wf-1' });
-      const items = getMenuItems(task);
-
-      const recreateItem = items.find((item) => item.id === 'recreate-workflow');
-      expect(recreateItem).toBeDefined();
-      expect(recreateItem?.enabled).toBe(true);
-    });
-
-    it('is visible for merge nodes with a workflowId', () => {
-      const task = makeTask({ id: '__merge__wf-1', isMergeNode: true, workflowId: 'wf-1' });
-      const items = getMenuItems(task);
-
-      const recreateItem = items.find((item) => item.id === 'recreate-workflow');
-      expect(recreateItem).toBeDefined();
-      expect(recreateItem?.enabled).toBe(true);
-    });
-
-    it('is hidden when task has no workflowId', () => {
-      const task = makeTask({ id: 'orphan-task' });
-      const items = getMenuItems(task);
-
-      const recreateItem = items.find((item) => item.id === 'recreate-workflow');
-      expect(recreateItem).toBeUndefined();
-    });
-
-    it('is visible regardless of task status', () => {
-      for (const status of ['pending', 'running', 'completed', 'failed'] as const) {
-        const task = makeTask({ id: 'task-1', status, workflowId: 'wf-1' });
-        const items = getMenuItems(task);
-
-        const recreateItem = items.find((item) => item.id === 'recreate-workflow');
-        expect(recreateItem).toBeDefined();
-      }
     });
   });
 
@@ -334,63 +200,6 @@ describe('ContextMenu getMenuItems', () => {
     });
   });
 
-  describe('Delete Workflow visibility', () => {
-    it('is visible for any node with a workflowId', () => {
-      const task = makeTask({ id: 'regular-task', workflowId: 'wf-1' });
-      const items = getMenuItems(task);
-
-      const deleteItem = items.find((item) => item.id === 'delete-workflow');
-      expect(deleteItem).toBeDefined();
-      expect(deleteItem?.enabled).toBe(true);
-    });
-
-    it('is visible for merge nodes with a workflowId', () => {
-      const task = makeTask({ id: '__merge__wf-1', isMergeNode: true, workflowId: 'wf-1' });
-      const items = getMenuItems(task);
-
-      const deleteItem = items.find((item) => item.id === 'delete-workflow');
-      expect(deleteItem).toBeDefined();
-      expect(deleteItem?.enabled).toBe(true);
-    });
-
-    it('is hidden when task has no workflowId', () => {
-      const task = makeTask({ id: 'orphan-task' });
-      const items = getMenuItems(task);
-
-      const deleteItem = items.find((item) => item.id === 'delete-workflow');
-      expect(deleteItem).toBeUndefined();
-    });
-
-    it('is visible regardless of task status', () => {
-      for (const status of ['pending', 'running', 'completed', 'failed'] as const) {
-        const task = makeTask({ id: 'task-1', status, workflowId: 'wf-1' });
-        const items = getMenuItems(task);
-
-        const deleteItem = items.find((item) => item.id === 'delete-workflow');
-        expect(deleteItem).toBeDefined();
-      }
-    });
-  });
-
-  describe('Cancel Workflow visibility', () => {
-    it('is visible for any node with a workflowId', () => {
-      const task = makeTask({ id: 'regular-task', workflowId: 'wf-1' });
-      const items = getMenuItems(task);
-
-      const cancelItem = items.find((item) => item.id === 'cancel-workflow');
-      expect(cancelItem).toBeDefined();
-      expect(cancelItem?.enabled).toBe(true);
-    });
-
-    it('is hidden when task has no workflowId', () => {
-      const task = makeTask({ id: 'orphan-task' });
-      const items = getMenuItems(task);
-
-      const cancelItem = items.find((item) => item.id === 'cancel-workflow');
-      expect(cancelItem).toBeUndefined();
-    });
-  });
-
   describe('Item variants', () => {
     it('assigns primary variant to first item based on status', () => {
       const failedTask = makeTask({ status: 'failed' });
@@ -406,22 +215,18 @@ describe('ContextMenu getMenuItems', () => {
       expect(pendingItems[0].variant).toBe('primary'); // Restart Task
     });
 
-    it('assigns warning variant to workflow items', () => {
+    it('does not assign workflow warning variants in task menus', () => {
       const task = makeTask({ status: 'failed', workflowId: 'wf-1' });
       const items = getMenuItems(task);
 
-      const rebaseItem = items.find((item) => item.id === 'rebase-retry');
-      const retryItem = items.find((item) => item.id === 'retry-workflow');
-
-      expect(rebaseItem?.variant).toBe('warning');
-      expect(retryItem?.variant).toBe('warning');
+      expect(items.some((item) => item.variant === 'warning')).toBe(false);
     });
 
     it('assigns danger variant to danger items', () => {
       const task = makeTask({ status: 'failed', workflowId: 'wf-1' });
       const items = getMenuItems(task);
 
-      const dangerIds = ['cancel-task', 'recreate-task', 'recreate-workflow', 'cancel-workflow', 'delete-workflow'];
+      const dangerIds = ['cancel-task', 'recreate-task'];
       dangerIds.forEach((id) => {
         const item = items.find((i) => i.id === id);
         expect(item?.variant).toBe('danger');

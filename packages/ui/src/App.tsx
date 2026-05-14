@@ -2,22 +2,19 @@
  * App — Main layout for Invoker UI.
  *
  * Layout:
- * - Top: Persistent TopBar (file loader, start/stop/clear)
- * - Left (60%): DAG visualization
- * - Right (40%): Task panel
- * - Bottom: Status bar
+ * - Left rail: workflow controls and navigation
+ * - Main: workflow graph / task DAG
+ * - Right: workflow inspector
+ * - Bottom: status chips and terminal drawer
  * - Modals overlay when needed
  */
 
-import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect } from 'react';
 import yaml from 'js-yaml';
-import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate } from './types.js';
+import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowStatus } from './types.js';
 import { useTasks } from './hooks/useTasks.js';
 import { useInvoker } from './hooks/useInvoker.js';
 import { TaskDAG } from './components/TaskDAG.js';
-import { TaskPanel } from './components/TaskPanel.js';
-import { StatusBar } from './components/StatusBar.js';
-import { TopBar } from './components/TopBar.js';
 import { HistoryView } from './components/HistoryView.js';
 import { TimelineView } from './components/TimelineView.js';
 import { ApprovalModal } from './components/ApprovalModal.js';
@@ -27,10 +24,15 @@ import { ContextMenu } from './components/ContextMenu.js';
 import { QueueView } from './components/QueueView.js';
 import { ReplaceTaskModal } from './components/ReplaceTaskModal.js';
 import { SystemSetupModal } from './components/SystemSetupModal.js';
+import { WorkflowGraph } from './components/WorkflowGraph.js';
+import { WorkflowInspector } from './components/WorkflowInspector.js';
+import { WorkflowStatusChips } from './components/WorkflowStatusChips.js';
+import { TerminalDrawer } from './components/TerminalDrawer.js';
 import {
   isExperimentSpawnPivotTask,
   EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE,
 } from './isExperimentSpawnPivot.js';
+import { parsePlanText } from './lib/plan-parser.js';
 import type { SystemDiagnostics } from '@invoker/contracts';
 
 type ModalState =
@@ -39,6 +41,166 @@ type ModalState =
   | { type: 'approval'; task: TaskState; action: 'approve' | 'reject' }
   | { type: 'experiment'; task: TaskState }
   | { type: 'replace'; task: TaskState };
+
+interface WorkflowContextMenuProps {
+  x: number;
+  y: number;
+  workflowId: string;
+  onOpenWorkflow: (workflowId: string) => void;
+  onOpenPr: (workflowId: string) => void;
+  onRetryWorkflow: (workflowId: string) => void;
+  onRecreateWithRebase: (workflowId: string) => void;
+  onRecreateWorkflow: (workflowId: string) => void;
+  onCancelWorkflow: (workflowId: string) => void;
+  onDeleteWorkflow: (workflowId: string) => void;
+  onCopyWorkflowId: (workflowId: string) => void;
+  onClose: () => void;
+}
+
+function WorkflowContextMenu({
+  x,
+  y,
+  workflowId,
+  onOpenWorkflow,
+  onOpenPr,
+  onRetryWorkflow,
+  onRecreateWithRebase,
+  onRecreateWorkflow,
+  onCancelWorkflow,
+  onDeleteWorkflow,
+  onCopyWorkflowId,
+  onClose,
+}: WorkflowContextMenuProps): JSX.Element {
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState({ left: x, top: y });
+  const [showMore, setShowMore] = useState(false);
+
+  useLayoutEffect(() => {
+    if (!menuRef.current) return;
+
+    const rect = menuRef.current.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+
+    let left = x;
+    let top = y;
+
+    if (rect.right > viewportWidth) {
+      left = x - rect.width;
+    }
+    if (rect.bottom > viewportHeight) {
+      top = y - rect.height;
+    }
+
+    left = Math.max(0, Math.min(left, viewportWidth - rect.width));
+    top = Math.max(0, Math.min(top, viewportHeight - rect.height));
+    setPosition({ left, top });
+  }, [x, y, showMore]);
+
+  useEffect(() => {
+    const dismissFromOutsideTarget = (target: EventTarget | null, button?: number) => {
+      if (button !== undefined && button !== 0) return;
+      if (menuRef.current && !menuRef.current.contains(target as Node)) {
+        onClose();
+      }
+    };
+    const handlePointerDownCapture = (event: PointerEvent) => dismissFromOutsideTarget(event.target, event.button);
+    const handleMouseDownCapture = (event: MouseEvent) => dismissFromOutsideTarget(event.target, event.button);
+    const handleClickCapture = (event: MouseEvent) => dismissFromOutsideTarget(event.target, event.button);
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+
+    document.addEventListener('pointerdown', handlePointerDownCapture, true);
+    document.addEventListener('mousedown', handleMouseDownCapture, true);
+    document.addEventListener('click', handleClickCapture, true);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDownCapture, true);
+      document.removeEventListener('mousedown', handleMouseDownCapture, true);
+      document.removeEventListener('click', handleClickCapture, true);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [onClose]);
+
+  const runAction = (action: (workflowId: string) => void) => {
+    action(workflowId);
+    onClose();
+  };
+
+  const buttonClass = 'w-full px-3 py-1.5 text-left text-sm text-gray-100 hover:bg-gray-700';
+  const dangerButtonClass = 'w-full px-3 py-1.5 text-left text-sm text-red-300 hover:bg-gray-700';
+
+  return (
+    <div
+      ref={menuRef}
+      role="menu"
+      className="fixed z-50 min-w-[200px] rounded-lg border border-gray-600 bg-gray-800 py-1 shadow-xl"
+      style={{ left: position.left, top: position.top }}
+      tabIndex={-1}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <button role="menuitem" onClick={() => runAction(onOpenWorkflow)} className={buttonClass}>
+        Open Workflow
+      </button>
+      <button role="menuitem" onClick={() => runAction(onOpenPr)} className={buttonClass}>
+        Open PR
+      </button>
+      <button role="menuitem" onClick={() => runAction(onRetryWorkflow)} className={buttonClass}>
+        Retry Workflow
+      </button>
+      <button role="menuitem" onClick={() => runAction(onCopyWorkflowId)} className={buttonClass}>
+        Copy Workflow ID
+      </button>
+      {!showMore ? (
+        <div>
+          <div className="my-1 border-t border-gray-600" />
+          <button
+            role="menuitem"
+            className="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-gray-700"
+            onClick={() => setShowMore(true)}
+          >
+            More
+          </button>
+        </div>
+      ) : (
+        <div>
+          <div className="my-1 border-t border-gray-600" />
+          <button role="menuitem" onClick={() => runAction(onRecreateWithRebase)} className={dangerButtonClass}>
+            Recreate with Rebase
+          </button>
+          <button role="menuitem" onClick={() => runAction(onRecreateWorkflow)} className={dangerButtonClass}>
+            Recreate Workflow
+          </button>
+          <button role="menuitem" onClick={() => runAction(onCancelWorkflow)} className={dangerButtonClass}>
+            Cancel Workflow
+          </button>
+          <button role="menuitem" onClick={() => runAction(onDeleteWorkflow)} className={dangerButtonClass}>
+            Delete Workflow
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function GearIcon(): JSX.Element {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 16 16"
+      className="h-4 w-4"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.6"
+    >
+      <path d="M6.9 2.2h2.2l.4 1.6a4.7 4.7 0 0 1 1.1.6l1.6-.5 1.1 1.9-1.2 1.1a4.8 4.8 0 0 1 0 1.3l1.2 1.1-1.1 1.9-1.6-.5a4.7 4.7 0 0 1-1.1.6l-.4 1.6H6.9l-.4-1.6a4.7 4.7 0 0 1-1.1-.6l-1.6.5-1.1-1.9 1.2-1.1a4.8 4.8 0 0 1 0-1.3L2.7 5.8l1.1-1.9 1.6.5a4.7 4.7 0 0 1 1.1-.6l.4-1.6Z" />
+      <circle cx="8" cy="7.5" r="1.7" />
+    </svg>
+  );
+}
 
 export function hasMergeConflictExecution(task: TaskState | undefined): boolean {
   if (!task) return false;
@@ -56,7 +218,10 @@ export function hasMergeConflictExecution(task: TaskState | undefined): boolean 
 export function App() {
   const { tasks, workflows, clearTasks, refreshTasks } = useTasks();
   const invoker = useInvoker();
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
+  const [workflowSelectionDismissed, setWorkflowSelectionDismissed] = useState(false);
   const [modal, setModal] = useState<ModalState>({ type: 'none' });
   const [hasLoadedPlan, setHasLoadedPlan] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
@@ -66,12 +231,16 @@ export function App() {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; taskId: string } | null>(null);
   const [remoteTargets, setRemoteTargets] = useState<string[]>([]);
   const [executionAgents, setExecutionAgents] = useState<string[]>([]);
-  const [statusFilters, setStatusFilters] = useState<Set<string>>(new Set());
+  const [statusFilters, setStatusFilters] = useState<Set<WorkflowStatus>>(new Set());
   const [systemDiagnostics, setSystemDiagnostics] = useState<SystemDiagnostics | null>(null);
   const [showSystemSetup, setShowSystemSetup] = useState(false);
   const [showSystemBanner, setShowSystemBanner] = useState(false);
   const [installSkillsPending, setInstallSkillsPending] = useState(false);
   const [installSkillsError, setInstallSkillsError] = useState<string | null>(null);
+  const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
+  const [advancedMetadataExpanded, setAdvancedMetadataExpanded] = useState(false);
+  const [terminalCollapsed, setTerminalCollapsed] = useState(true);
+  const [workflowContextMenu, setWorkflowContextMenu] = useState<{ x: number; y: number; workflowId: string } | null>(null);
   const uiPerfThrottleRef = useRef<Record<string, number>>({});
 
   const refreshSystemDiagnostics = useCallback(() => {
@@ -145,7 +314,46 @@ export function App() {
     };
   }, []);
 
-  const handleStatusClick = useCallback((filterKey: string, event: React.MouseEvent) => {
+  const selectedTask = selectedTaskId ? tasks.get(selectedTaskId) ?? null : null;
+  const contextMenuTask = contextMenu ? tasks.get(contextMenu.taskId) ?? null : null;
+  const selectedWorkflow = useMemo(() => {
+    if (selectedWorkflowId) {
+      return workflows.get(selectedWorkflowId) ?? null;
+    }
+    if (selectedTask?.config.workflowId) {
+      return workflows.get(selectedTask.config.workflowId) ?? null;
+    }
+    return null;
+  }, [selectedWorkflowId, selectedTask, workflows]);
+  const miniDagTasks = useMemo(() => {
+    const activeWorkflowId = selectedWorkflow?.id ?? selectedWorkflowId;
+    if (!activeWorkflowId) return new Map<string, TaskState>();
+    const next = new Map<string, TaskState>();
+    for (const task of tasks.values()) {
+      if (task.config.workflowId === activeWorkflowId) {
+        next.set(task.id, task);
+      }
+    }
+    return next;
+  }, [selectedWorkflow, selectedWorkflowId, tasks]);
+
+  useEffect(() => {
+    if (selectedTask?.config.workflowId) {
+      setWorkflowSelectionDismissed(false);
+      setSelectedWorkflowId(selectedTask.config.workflowId);
+      return;
+    }
+    if (selectedWorkflowId && workflows.has(selectedWorkflowId)) {
+      return;
+    }
+    if (workflowSelectionDismissed) {
+      return;
+    }
+    const firstWorkflowId = workflows.keys().next().value as string | undefined;
+    setSelectedWorkflowId(firstWorkflowId ?? null);
+  }, [selectedTask, selectedWorkflowId, workflowSelectionDismissed, workflows]);
+
+  const handleStatusClick = useCallback((filterKey: WorkflowStatus, event: React.MouseEvent) => {
     setStatusFilters(prev => {
       if (event.ctrlKey || event.metaKey) {
         // Toggle: add if absent, remove if present
@@ -159,15 +367,12 @@ export function App() {
       } else {
         // Isolate: if already the sole filter, clear all; otherwise set to this filter only
         if (prev.size === 1 && prev.has(filterKey)) {
-          return new Set<string>();
+          return new Set<WorkflowStatus>();
         }
         return new Set([filterKey]);
       }
     });
   }, []);
-
-  const selectedTask = selectedTaskId ? tasks.get(selectedTaskId) ?? null : null;
-  const contextMenuTask = contextMenu ? tasks.get(contextMenu.taskId) ?? null : null;
   const missingRequiredTool = systemDiagnostics?.tools.find((tool) => tool.required && !tool.installed) ?? null;
   const installedAgentCount = systemDiagnostics?.tools.filter((tool) => (tool.id === 'claude' || tool.id === 'codex') && tool.installed).length ?? 0;
   const needsBundledSkillsPrompt = Boolean(systemDiagnostics?.isPackaged && systemDiagnostics?.bundledSkills?.promptRecommended);
@@ -175,6 +380,11 @@ export function App() {
   // ── DAG interaction ───────────────────────────────────────
   const handleTaskClick = useCallback((task: TaskState) => {
     setSelectedTaskId(task.id);
+    setWorkflowSelectionDismissed(false);
+    if (task.config.workflowId) {
+      setSelectedWorkflowId(task.config.workflowId);
+    }
+    setWorkflowContextMenu(null);
   }, []);
 
   const handleTaskDoubleClick = useCallback(async (task: TaskState) => {
@@ -191,8 +401,52 @@ export function App() {
 
   const handleTaskContextMenu = useCallback((task: TaskState, event: React.MouseEvent) => {
     setSelectedTaskId(task.id);
+    setWorkflowSelectionDismissed(false);
+    if (task.config.workflowId) {
+      setSelectedWorkflowId(task.config.workflowId);
+    }
+    setWorkflowContextMenu(null);
     setContextMenu({ x: event.clientX, y: event.clientY, taskId: task.id });
   }, []);
+
+  const handleWorkflowClick = useCallback((workflowId: string) => {
+    setWorkflowSelectionDismissed(false);
+    setSelectedWorkflowId(workflowId);
+    setSelectedTaskId(null);
+    setContextMenu(null);
+    setWorkflowContextMenu(null);
+  }, []);
+
+  const handleWorkflowContextMenu = useCallback((event: React.MouseEvent<HTMLDivElement>, workflowId: string) => {
+    event.preventDefault();
+    setWorkflowSelectionDismissed(false);
+    setSelectedWorkflowId(workflowId);
+    setSelectedTaskId(null);
+    setContextMenu(null);
+    setWorkflowContextMenu({ x: event.clientX, y: event.clientY, workflowId });
+  }, []);
+
+  const handleDagSurfaceClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (contextMenu || workflowContextMenu) {
+      setContextMenu(null);
+      setWorkflowContextMenu(null);
+      return;
+    }
+
+    const target = event.target as HTMLElement;
+    if (
+      target.closest('[data-testid^="workflow-node-"]') ||
+      target.closest('[data-testid="selected-workflow-mini-dag"]') ||
+      target.closest('.react-flow__node') ||
+      target.closest('[role="menu"]')
+    ) {
+      return;
+    }
+
+    setSelectedTaskId(null);
+    setSelectedWorkflowId(null);
+    setWorkflowSelectionDismissed(true);
+  }, [contextMenu, workflowContextMenu]);
 
   const handleRestartTask = useCallback(async (taskId: string) => {
     if (!invoker) return;
@@ -228,18 +482,6 @@ export function App() {
       await window.invoker?.replaceTask(taskId, replacements);
     } catch (err) {
       console.error('Failed to replace task:', err);
-    }
-  }, []);
-
-  const handleRebaseAndRetry = useCallback(async (taskId: string) => {
-    setContextMenu(null);
-    try {
-      const result = await window.invoker?.rebaseAndRetry(taskId);
-      if (result && !result.success) {
-        console.error('Rebase failed for some branches:', result.errors);
-      }
-    } catch (err) {
-      console.error('Rebase & Retry failed:', err);
     }
   }, []);
 
@@ -291,11 +533,14 @@ export function App() {
     try {
       await window.invoker?.deleteWorkflow(workflowId);
       setSelectedTaskId(null);
+      if (selectedWorkflowId === workflowId) {
+        setSelectedWorkflowId(null);
+      }
       refreshTasks();
     } catch (err) {
       console.error('Delete Workflow failed:', err);
     }
-  }, [refreshTasks]);
+  }, [refreshTasks, selectedWorkflowId]);
 
   const handleFix = useCallback(async (taskId: string, agentName: string) => {
     setContextMenu(null);
@@ -348,8 +593,23 @@ export function App() {
     }
   }, []);
 
+  const handleOpenWorkflowPr = useCallback((workflowId: string) => {
+    const workflowTasks = [...tasks.values()].filter((task) => task.config.workflowId === workflowId);
+    const reviewUrl = workflowTasks.find((task) => task.execution.reviewUrl)?.execution.reviewUrl;
+    if (reviewUrl) {
+      window.open(reviewUrl, '_blank', 'noopener,noreferrer');
+    }
+    setWorkflowContextMenu(null);
+  }, [tasks]);
+
+  const handleCopyWorkflowId = useCallback((workflowId: string) => {
+    navigator.clipboard?.writeText(workflowId).catch(() => {});
+    setWorkflowContextMenu(null);
+  }, []);
+
   const closeContextMenu = useCallback(() => {
     setContextMenu(null);
+    setWorkflowContextMenu(null);
   }, []);
 
   const handleRefresh = useCallback(() => {
@@ -363,6 +623,7 @@ export function App() {
       if (!invoker) return;
       try {
         await invoker.loadPlan(planText);
+        setWorkflowSelectionDismissed(false);
         setHasLoadedPlan(true);
         // Parse locally just for UI display state
         const parsed = yaml.load(planText) as any;
@@ -374,6 +635,29 @@ export function App() {
       }
     },
     [invoker, refreshTasks],
+  );
+
+  const handleFileSelect = useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      if (!file) return;
+
+      const text = await file.text();
+      const dotIndex = file.name.lastIndexOf('.');
+      const ext = dotIndex >= 0 ? file.name.slice(dotIndex).toLowerCase() : undefined;
+
+      try {
+        parsePlanText(text, ext);
+        await handleLoadPlan(text);
+      } catch (err) {
+        console.error('Failed to parse plan file:', err);
+      }
+
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    },
+    [handleLoadPlan],
   );
 
   const handleStart = useCallback(async () => {
@@ -405,8 +689,9 @@ export function App() {
       setPlanName(null);
       setOnFinish('merge');
       setSelectedTaskId(null);
+      setSelectedWorkflowId(null);
       setModal({ type: 'none' });
-      setStatusFilters(new Set());
+      setStatusFilters(new Set<WorkflowStatus>());
     } catch (err) {
       console.error('Failed to clear:', err);
     }
@@ -425,6 +710,7 @@ export function App() {
       setHasStarted(false);
       setPlanName(null);
       setSelectedTaskId(null);
+      setSelectedWorkflowId(null);
       setModal({ type: 'none' });
     } catch (err) {
       console.error('Failed to delete workflows:', err);
@@ -441,6 +727,8 @@ export function App() {
     }
     return true;
   }, [tasks]);
+  const showStart = hasLoadedPlan && !hasStarted;
+  const showStop = hasStarted && !allSettled;
 
   // ── Task actions ──────────────────────────────────────────
   const handleProvideInput = useCallback(
@@ -574,24 +862,7 @@ export function App() {
   }, [refreshSystemDiagnostics]);
 
   return (
-    <div className="h-screen flex flex-col bg-gray-900 text-gray-100">
-      {/* Top bar */}
-      <TopBar
-        planName={planName}
-        hasLoadedPlan={hasLoadedPlan}
-        hasStarted={hasStarted}
-        allSettled={allSettled}
-        onLoadFile={handleLoadPlan}
-        onStart={handleStart}
-        onStop={handleStop}
-        onClear={handleClear}
-        onDeleteDB={handleDeleteDB}
-        onRefresh={handleRefresh}
-        onOpenSystemSetup={() => setShowSystemSetup(true)}
-        viewMode={viewMode}
-        onToggleView={setViewMode}
-      />
-
+    <div className="h-screen flex flex-col bg-gray-900 text-gray-100" onClick={closeContextMenu}>
       {showSystemBanner && (
         <div className="px-4 py-3 border-b border-amber-700 bg-amber-950/50 flex items-center justify-between gap-4">
           <div className="text-sm text-amber-100">
@@ -622,75 +893,210 @@ export function App() {
 
       {/* Main content */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Left: DAG visualization (60%) */}
-        <div className="w-3/5 border-r border-gray-700">
-          {viewMode === 'queue' ? (
-            <div className="h-full">
-              <QueueView
-                tasks={tasks}
-                onTaskClick={handleTaskClick}
-                onCancel={handleCancelTask}
-                selectedTaskId={selectedTaskId}
-              />
+        <nav className="w-24 border-r border-gray-800 bg-gray-950/60 flex flex-col justify-between py-3">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json,.yaml,.yml"
+            onChange={handleFileSelect}
+            className="hidden"
+          />
+          <div className="space-y-3 px-2">
+            <div className="space-y-1">
+              <button
+                data-testid="rail-open-file"
+                onClick={() => fileInputRef.current?.click()}
+                className="w-full rounded bg-gray-700 px-2 py-1.5 text-left text-xs font-medium text-gray-100 hover:bg-gray-600"
+              >
+                Open
+              </button>
+              {showStart && (
+                <button
+                  data-testid="rail-start"
+                  onClick={handleStart}
+                  className="w-full rounded bg-green-700 px-2 py-1.5 text-left text-xs font-medium text-white hover:bg-green-600"
+                >
+                  Start
+                </button>
+              )}
+              {showStop && (
+                <button
+                  data-testid="rail-stop"
+                  onClick={handleStop}
+                  className="w-full rounded bg-red-700 px-2 py-1.5 text-left text-xs font-medium text-white hover:bg-red-600"
+                >
+                  Stop
+                </button>
+              )}
+              {planName && (
+                <div className="truncate px-1 pt-1 text-[10px] leading-tight text-gray-500" title={planName}>
+                  {planName}
+                </div>
+              )}
             </div>
-          ) : viewMode === 'history' ? (
-            <div className="h-full">
-              <HistoryView onTaskClick={handleTaskClick} selectedTaskId={selectedTaskId} />
-            </div>
-          ) : viewMode === 'timeline' ? (
-            <div className="h-full">
-              <TimelineView tasks={tasks} onTaskClick={handleTaskClick} selectedTaskId={selectedTaskId} />
-            </div>
-          ) : tasks.size === 0 ? (
-            <div className="h-full flex items-center justify-center text-gray-500 text-sm">
-              Load a plan to get started
-            </div>
-          ) : (
-            <div className="h-full">
-              <TaskDAG
-                tasks={tasks}
-                workflows={workflows}
-                selectedTaskId={selectedTaskId}
-                onTaskClick={handleTaskClick}
-                onTaskDoubleClick={handleTaskDoubleClick}
-                onTaskContextMenu={handleTaskContextMenu}
-                statusFilters={statusFilters}
-              />
-            </div>
-          )}
-        </div>
 
-        {/* Right: Task panel (40%) */}
-        <div className="w-2/5 flex flex-col">
-          <div className="flex-1 overflow-hidden bg-gray-800">
-            <TaskPanel
+            <div className="space-y-1">
+            <button
+              data-testid="rail-home"
+              onClick={() => {
+                setViewMode('dag');
+              }}
+              className={`w-full rounded px-2 py-1.5 text-left text-xs ${viewMode === 'dag' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
+            >
+              Home
+            </button>
+            <button
+              data-testid="rail-timeline"
+              onClick={() => {
+                setViewMode('timeline');
+              }}
+              className={`w-full rounded px-2 py-1.5 text-left text-xs ${viewMode === 'timeline' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
+            >
+              Timeline
+            </button>
+            <button
+              data-testid="rail-history"
+              onClick={() => {
+                setViewMode('history');
+              }}
+              className={`w-full rounded px-2 py-1.5 text-left text-xs ${viewMode === 'history' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
+            >
+              History
+            </button>
+            <button
+              data-testid="rail-queue"
+              onClick={() => {
+                setViewMode('queue');
+              }}
+              className={`w-full rounded px-2 py-1.5 text-left text-xs ${viewMode === 'queue' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
+            >
+              Queue
+            </button>
+            </div>
+
+            <div className="space-y-1 border-t border-gray-800 pt-3">
+              <button
+                data-testid="rail-refresh"
+                onClick={handleRefresh}
+                className="w-full rounded px-2 py-1.5 text-left text-xs text-gray-300 hover:bg-gray-800/70"
+              >
+                Refresh
+              </button>
+              <button
+                data-testid="rail-clear"
+                onClick={handleClear}
+                className="w-full rounded px-2 py-1.5 text-left text-xs text-gray-300 hover:bg-gray-800/70"
+              >
+                Clear
+              </button>
+              <button
+                data-testid="rail-delete-history"
+                onClick={handleDeleteDB}
+                className="w-full rounded px-2 py-1.5 text-left text-xs text-red-300 hover:bg-red-950/50"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+          <div className="px-2">
+            <button
+              data-testid="rail-settings"
+              onClick={() => setShowSystemSetup(true)}
+              className="flex h-8 w-full items-center justify-center rounded text-gray-300 hover:bg-gray-800/70 hover:text-white"
+              aria-label="Settings"
+              title="Settings"
+            >
+              <GearIcon />
+            </button>
+          </div>
+        </nav>
+
+        <div className="flex-1 flex overflow-hidden">
+          <div className="flex-1 flex flex-col overflow-hidden">
+            <div
+              className="flex-1 relative overflow-hidden border-r border-gray-800 bg-gray-900"
+              onClick={viewMode === 'dag' ? handleDagSurfaceClick : undefined}
+            >
+              {viewMode === 'queue' ? (
+                <QueueView
+                  tasks={tasks}
+                  onTaskClick={handleTaskClick}
+                  onCancel={handleCancelTask}
+                  selectedTaskId={selectedTaskId}
+                />
+              ) : viewMode === 'history' ? (
+                <HistoryView onTaskClick={handleTaskClick} selectedTaskId={selectedTaskId} />
+              ) : viewMode === 'timeline' ? (
+                <TimelineView tasks={tasks} onTaskClick={handleTaskClick} selectedTaskId={selectedTaskId} />
+              ) : (
+                <>
+                  <WorkflowGraph
+                    tasks={tasks}
+                    workflows={workflows}
+                    selectedWorkflowId={selectedWorkflow?.id ?? null}
+                    statusFilters={statusFilters}
+                    onSelectWorkflow={handleWorkflowClick}
+                    onWorkflowContextMenu={handleWorkflowContextMenu}
+                  />
+                  {selectedWorkflow && miniDagTasks.size > 0 && (
+                    <div
+                      data-testid="selected-workflow-mini-dag"
+                      className="absolute top-3 right-3 h-[280px] w-[420px] rounded border border-gray-700 bg-gray-900/95 overflow-hidden shadow-lg"
+                    >
+                      <div className="px-2 py-1 text-[11px] text-gray-300 border-b border-gray-700">
+                        {selectedWorkflow.name} task DAG
+                      </div>
+                      <div className="h-[250px]">
+                        <TaskDAG
+                          tasks={miniDagTasks}
+                          workflows={workflows}
+                          selectedTaskId={selectedTaskId}
+                          onTaskClick={handleTaskClick}
+                          onTaskDoubleClick={handleTaskDoubleClick}
+                          onTaskContextMenu={handleTaskContextMenu}
+                          statusFilters={new Set()}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            {viewMode === 'dag' && (
+              <>
+                <WorkflowStatusChips
+                  workflows={workflows}
+                  activeFilters={statusFilters}
+                  onStatusClick={handleStatusClick}
+                />
+                <TerminalDrawer
+                  collapsed={terminalCollapsed}
+                  onToggle={() => setTerminalCollapsed((prev) => !prev)}
+                />
+              </>
+            )}
+          </div>
+
+          <div className={`${inspectorCollapsed ? 'w-16' : 'w-96'} transition-all duration-150`}>
+            <WorkflowInspector
+              workflow={selectedWorkflow}
               task={selectedTask}
-              allTasks={tasks}
-              baseBranch={selectedTask?.config.workflowId ? workflows.get(selectedTask.config.workflowId)?.baseBranch : undefined}
-              workflowRepoUrl={selectedTask?.config.workflowId ? workflows.get(selectedTask.config.workflowId)?.repoUrl : undefined}
-              mergeMode={selectedTask?.config.workflowId ? workflows.get(selectedTask.config.workflowId)?.mergeMode : undefined}
+              workflowTasks={miniDagTasks}
               remoteTargets={remoteTargets}
               executionAgents={executionAgents}
-              onProvideInput={openInputModal}
-              onApprove={openApprovalModal}
-              onReject={(task) => {
-                setModal({ type: 'approval', task, action: 'reject' });
-              }}
-              onSelectExperiment={openExperimentModal}
-              onEditCommand={handleEditCommand}
-              onEditPrompt={handleEditPrompt}
+              collapsed={inspectorCollapsed}
+              advancedExpanded={advancedMetadataExpanded}
               onEditType={handleEditType}
               onEditAgent={handleEditAgent}
-              onSetExternalGatePolicies={handleSetExternalGatePolicies}
-              onSetMergeBranch={invoker?.setMergeBranch}
-              onSetMergeMode={invoker?.setMergeMode}
+              onEditPrompt={handleEditPrompt}
+              onEditCommand={handleEditCommand}
+              onToggleCollapsed={() => setInspectorCollapsed((prev) => !prev)}
+              onToggleAdvanced={() => setAdvancedMetadataExpanded((prev) => !prev)}
             />
           </div>
         </div>
       </div>
-
-      {/* Status bar */}
-      <StatusBar tasks={tasks} activeFilters={statusFilters} onStatusClick={handleStatusClick} />
 
       {/* Modals */}
       {modal.type === 'input' && (
@@ -738,6 +1144,23 @@ export function App() {
         />
       )}
 
+      {workflowContextMenu && (
+        <WorkflowContextMenu
+          x={workflowContextMenu.x}
+          y={workflowContextMenu.y}
+          workflowId={workflowContextMenu.workflowId}
+          onOpenWorkflow={handleWorkflowClick}
+          onOpenPr={handleOpenWorkflowPr}
+          onRetryWorkflow={(workflowId) => void handleRetryWorkflow(workflowId)}
+          onRecreateWithRebase={(workflowId) => void handleRecreateWithRebase(workflowId)}
+          onRecreateWorkflow={(workflowId) => void handleRecreateWorkflow(workflowId)}
+          onCancelWorkflow={(workflowId) => void handleCancelWorkflow(workflowId)}
+          onDeleteWorkflow={(workflowId) => void handleDeleteWorkflow(workflowId)}
+          onCopyWorkflowId={handleCopyWorkflowId}
+          onClose={closeContextMenu}
+        />
+      )}
+
       {contextMenu && contextMenuTask && (
         <ContextMenu
           x={contextMenu.x}
@@ -746,15 +1169,9 @@ export function App() {
           onRestart={handleRestartTask}
           onReplace={handleReplaceTask}
           onOpenTerminal={handleOpenTerminal}
-          onRebaseAndRetry={handleRebaseAndRetry}
-          onRecreateWithRebase={handleRecreateWithRebase}
-          onRetryWorkflow={handleRetryWorkflow}
           onRecreateTask={handleRecreateTask}
-          onRecreateWorkflow={handleRecreateWorkflow}
-          onDeleteWorkflow={handleDeleteWorkflow}
           onFix={handleFix}
           onCancel={handleCancelTask}
-          onCancelWorkflow={handleCancelWorkflow}
           onClose={closeContextMenu}
         />
       )}

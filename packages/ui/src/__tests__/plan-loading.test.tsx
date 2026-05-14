@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, screen, act, waitFor } from '@testing-library/react';
 import { vi } from 'vitest';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
+import type { WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
@@ -21,6 +22,7 @@ const alpha = makeUITask({
   id: 'task-alpha',
   description: 'First test task',
   status: 'pending',
+  workflowId: 'wf-load',
   command: 'echo hello-alpha',
 });
 
@@ -28,9 +30,13 @@ const beta = makeUITask({
   id: 'task-beta',
   description: 'Second test task depending on alpha',
   status: 'pending',
+  workflowId: 'wf-load',
   dependencies: ['task-alpha'],
   command: 'echo hello-beta',
 });
+const workflows: WorkflowMeta[] = [
+  { id: 'wf-load', name: 'Loaded Workflow', status: 'running' },
+];
 
 describe('Plan loading (component)', () => {
   let mock: MockInvoker;
@@ -44,13 +50,12 @@ describe('Plan loading (component)', () => {
     mock.cleanup();
   });
 
-  it('renders task nodes in the DAG after setTasks', async () => {
+  it('renders workflow graph nodes after setTasks', async () => {
     render(<App />);
-    act(() => mock.setTasks([alpha, beta]));
+    act(() => mock.setTasks([alpha, beta], workflows));
 
     await waitFor(() => {
-      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
-      expect(screen.getByTestId('rf__node-task-beta')).toBeInTheDocument();
+      expect(screen.getByTestId('workflow-node-wf-load')).toBeInTheDocument();
     });
   });
 
@@ -61,30 +66,23 @@ describe('Plan loading (component)', () => {
 
   it('empty state disappears after tasks are loaded', async () => {
     render(<App />);
-    expect(screen.getByText('Load a plan to get started')).toBeInTheDocument();
+    expect(screen.getByText('Load a plan to render workflow graph')).toBeInTheDocument();
 
-    act(() => mock.setTasks([alpha, beta]));
+    act(() => mock.setTasks([alpha, beta], workflows));
 
     await waitFor(() => {
-      expect(screen.queryByText('Load a plan to get started')).not.toBeInTheDocument();
+      expect(screen.queryByText('Load a plan to render workflow graph')).not.toBeInTheDocument();
     });
   });
 
-  it('node shows task description', async () => {
+  it('selecting workflow renders mini DAG for its tasks', async () => {
     render(<App />);
-    act(() => mock.setTasks([alpha, beta]));
+    act(() => mock.setTasks([alpha, beta], workflows));
 
     await waitFor(() => {
-      expect(screen.getByText('First test task')).toBeInTheDocument();
+      expect(screen.getByTestId('workflow-node-wf-load')).toBeInTheDocument();
     });
-  });
-
-  it('node preserves task ID as node metadata (title)', async () => {
-    render(<App />);
-    act(() => mock.setTasks([alpha, beta]));
-
-    await waitFor(() => {
-      expect(screen.getByTitle('task-alpha')).toBeInTheDocument();
-    });
+    screen.getByTestId('workflow-node-wf-load').click();
+    await waitFor(() => expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Loaded Workflow task DAG'));
   });
 });

@@ -13,6 +13,7 @@ import {
   expect,
   TEST_PLAN,
   loadPlan,
+  selectFirstWorkflow,
   injectTaskStates,
   captureScreenshot,
   assertPageScreenshot,
@@ -110,21 +111,49 @@ const QUEUE_HARDENING_PLAN = {
   ],
 };
 
+const MENU_PROOF_PLAN = {
+  ...TEST_PLAN,
+  name: 'Menu Proof Workflow',
+  onFinish: 'pull_request' as const,
+  mergeMode: 'external_review',
+};
+
+function workflowNode(page: import('@playwright/test').Page, workflowId: string) {
+  return page.getByTestId(`workflow-node-${workflowId}`);
+}
+
 function taskNodeCard(page: import('@playwright/test').Page, taskIdSuffix: string) {
   return page.locator(`.react-flow__node[data-testid$="${taskIdSuffix}"] > div`).first();
 }
 
+async function loadPlanAndSelectWorkflow(page: import('@playwright/test').Page, plan: unknown): Promise<string> {
+  const beforeIds = await page.evaluate(async () => {
+    const workflows = await window.invoker.listWorkflows();
+    return workflows.map((workflow: { id: string }) => workflow.id);
+  });
+  await page.evaluate((yaml) => window.invoker.loadPlan(yaml), yamlStringify(plan));
+  const workflowId = await page.evaluate(async (knownIds) => {
+    const workflows = await window.invoker.listWorkflows();
+    const created = workflows.find((workflow: { id: string }) => !knownIds.includes(workflow.id));
+    return created?.id ?? workflows[workflows.length - 1]?.id ?? null;
+  }, beforeIds);
+  expect(workflowId).toBeTruthy();
+  await workflowNode(page, workflowId!).waitFor({ state: 'visible', timeout: 15000 });
+  await workflowNode(page, workflowId!).click();
+  return workflowId!;
+}
+
 test.describe('Visual proof capture', () => {
   test('empty state', async ({ page }) => {
-    await expect(page.getByText('Load a plan to get started')).toBeVisible({ timeout: 5000 });
-    await expect(page.getByText('Open File')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Utility menu' })).toBeVisible();
+    await expect(page.getByText('Load a plan to render workflow graph')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('rail-open-file')).toBeVisible();
+    await expect(page.getByTestId('rail-settings')).toBeVisible();
     await captureScreenshot(page, 'empty-state');
     await assertPageScreenshot(page, 'empty-state');
   });
 
   test('dag loaded', async ({ page }) => {
-    await loadPlan(page, TEST_PLAN);
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
     await expect(page.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
     await expect(page.locator('.react-flow__node[data-testid$="task-beta"]')).toBeVisible();
     await captureScreenshot(page, 'dag-loaded');
@@ -172,11 +201,10 @@ test.describe('Visual proof capture', () => {
   });
 
   test('task panel', async ({ page }) => {
-    await loadPlan(page, TEST_PLAN);
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
     await page.locator('.react-flow__node[data-testid$="task-alpha"]').click();
-    await expect(page.getByRole('heading', { name: 'First test task' })).toBeVisible();
-    const panel = page.locator('.overflow-y-auto');
-    await expect(panel.locator('text=task-alpha')).toBeVisible();
+    await expect(page.getByText('Inspector')).toBeVisible();
+    await expect(page.getByText('sleep 5 && echo hello-alpha')).toBeVisible();
     await captureScreenshot(page, 'task-panel');
     await assertPageScreenshot(page, 'task-panel');
   });
@@ -273,7 +301,7 @@ test.describe('Visual proof capture', () => {
   });
 
   test('merge-gate-node-text-black — merge gate visible', async ({ page }) => {
-    await page.evaluate((yaml) => window.invoker.loadPlan(yaml), yamlStringify(MERGE_GATE_TEXT_VISUAL_PLAN));
+    await loadPlanAndSelectWorkflow(page, MERGE_GATE_TEXT_VISUAL_PLAN);
     await page.locator('.react-flow__node[data-testid$="mg-visual-work"]').first().waitFor({ state: 'visible', timeout: 15000 });
     await expect(page.getByTestId('merge-gate-primary-label')).toBeVisible();
     await captureScreenshot(page, 'merge-gate-node-text-black');
@@ -281,7 +309,7 @@ test.describe('Visual proof capture', () => {
   });
 
   test('merge-gate-no-inline-approve — approval moves from chip to TaskPanel', async ({ page }) => {
-    await page.evaluate((yaml) => window.invoker.loadPlan(yaml), yamlStringify(MERGE_GATE_NO_INLINE_APPROVE_PLAN));
+    await loadPlanAndSelectWorkflow(page, MERGE_GATE_NO_INLINE_APPROVE_PLAN);
     await page
       .locator('.react-flow__node[data-testid$="mg-no-inline-work"]')
       .first()
@@ -357,7 +385,7 @@ test.describe('Visual proof capture', () => {
   });
 
   test('context menu organization for failed task', async ({ page }) => {
-    await loadPlan(page, TEST_PLAN);
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
     await injectTaskStates(page, [
       {
         taskId: 'task-alpha',
@@ -373,12 +401,30 @@ test.describe('Visual proof capture', () => {
     await expect(menu).toBeVisible();
     await expect(page.getByRole('menuitem', { name: 'Fix with Claude' })).toBeVisible();
     await expect(page.getByRole('menuitem', { name: 'Fix with Codex' })).toBeVisible();
-    await expect(menu.getByText('Workflow', { exact: true })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: 'Retry Workflow' })).toHaveCount(0);
     await page.getByRole('menuitem', { name: 'More' }).click();
     await expect(menu.getByText('Danger', { exact: true })).toBeVisible();
 
     await captureScreenshot(page, 'context-menu-failed-organization');
     await assertPageScreenshot(page, 'context-menu-failed-organization');
+  });
+
+  test('workflow context menu organization', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+
+    await page.locator('[data-testid^="workflow-node-"]').first().click({ button: 'right' });
+    const menu = page.getByRole('menu');
+    await expect(menu).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: 'Open Workflow' })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: 'Retry Workflow' })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: 'Copy Workflow ID' })).toBeVisible();
+    await page.getByRole('menuitem', { name: 'More' }).click();
+    await expect(page.getByRole('menuitem', { name: 'Recreate with Rebase' })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: 'Recreate Workflow' })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: 'Cancel Workflow' })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: 'Delete Workflow' })).toBeVisible();
+
+    await captureScreenshot(page, 'workflow-context-menu-organization');
   });
 
   test('context menu keeps danger separator when cancel action is absent', async ({ page }) => {
@@ -624,7 +670,7 @@ test.describe('Visual proof capture', () => {
       { taskId: 'task-alpha', changes: { status: 'running', execution: { startedAt: now } } },
     ]);
     // Navigate to queue tab if there is one, or verify queue section is visible
-    await page.getByRole('button', { name: 'Queue' }).click();
+    await page.getByTestId('rail-queue').click();
     await expect(page.getByText('Running 1 / 6')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Action Queue (1)' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Backlog (3)' })).toBeVisible();
@@ -646,7 +692,7 @@ test.describe('Visual proof capture', () => {
     ]);
 
     // Navigate to queue view
-    await page.getByRole('button', { name: 'Queue' }).click();
+    await page.getByTestId('rail-queue').click();
 
     // Assert queue section headings are visible
     await expect(page.getByRole('heading', { name: /Action Queue/ })).toBeVisible();
@@ -684,7 +730,7 @@ test.describe('Visual proof capture', () => {
     ]);
 
     // Navigate to queue view
-    await page.getByRole('button', { name: 'Queue' }).click();
+    await page.getByTestId('rail-queue').click();
 
     // Assert queue sections are visible
     await expect(page.getByRole('heading', { name: /Action Queue/ })).toBeVisible();
@@ -737,6 +783,7 @@ test.describe('Visual proof capture', () => {
     await page.evaluate((p) => window.invoker.loadPlan(p), yamlStringify(prereq1Plan));
     await page.evaluate((p) => window.invoker.loadPlan(p), yamlStringify(prereq2Plan));
     await page.evaluate((p) => window.invoker.loadPlan(p), yamlStringify(prereq3Plan));
+    await selectFirstWorkflow(page);
 
     // Get the workflow IDs from the loaded plans
     const workflowIds = await page.evaluate(async () => {
@@ -766,7 +813,8 @@ test.describe('Visual proof capture', () => {
       ],
     };
 
-    await page.evaluate((p) => window.invoker.loadPlan(p), yamlStringify(gatePolicyPlan));
+    const gatedWorkflowId = await loadPlanAndSelectWorkflow(page, gatePolicyPlan);
+    await workflowNode(page, gatedWorkflowId).click();
     await page.locator('.react-flow__node[data-testid$="gated-task"]').first().waitFor({ state: 'visible', timeout: 10000 });
 
     // Set up the gate states:
@@ -830,6 +878,71 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'redesign-gate-policy-ui-edit-mode');
   });
 
+  test('stacked-workflows — root, parallel downstream, and fan-in graph', async ({ page }) => {
+    const rootWorkflowId = await loadPlanAndSelectWorkflow(page, {
+      name: 'Stack Root Workflow',
+      repoUrl: E2E_REPO_URL,
+      onFinish: 'pull_request' as const,
+      mergeMode: 'external_review',
+      tasks: [
+        { id: 'stack-root-task', description: 'Root stack task', command: 'echo root', dependencies: [] as string[] },
+      ],
+    });
+
+    const downstreamAId = await loadPlanAndSelectWorkflow(page, {
+      name: 'Stack Downstream A',
+      repoUrl: E2E_REPO_URL,
+      onFinish: 'pull_request' as const,
+      mergeMode: 'external_review',
+      externalDependencies: [{ workflowId: rootWorkflowId, gatePolicy: 'review_ready' as const }],
+      tasks: [
+        { id: 'stack-a-task', description: 'Parallel downstream A', command: 'echo a', dependencies: [] as string[] },
+      ],
+    });
+
+    const downstreamBId = await loadPlanAndSelectWorkflow(page, {
+      name: 'Stack Downstream B',
+      repoUrl: E2E_REPO_URL,
+      onFinish: 'pull_request' as const,
+      mergeMode: 'external_review',
+      externalDependencies: [{ workflowId: rootWorkflowId, gatePolicy: 'review_ready' as const }],
+      tasks: [
+        { id: 'stack-b-task', description: 'Parallel downstream B', command: 'echo b', dependencies: [] as string[] },
+      ],
+    });
+
+    const fanInId = await loadPlanAndSelectWorkflow(page, {
+      name: 'Stack Fan-in Workflow',
+      repoUrl: E2E_REPO_URL,
+      onFinish: 'pull_request' as const,
+      mergeMode: 'external_review',
+      externalDependencies: [
+        { workflowId: downstreamAId, gatePolicy: 'review_ready' as const },
+        { workflowId: downstreamBId, gatePolicy: 'review_ready' as const },
+      ],
+      tasks: [
+        { id: 'stack-fanin-task', description: 'Fan-in workflow task', command: 'echo fanin', dependencies: [] as string[] },
+      ],
+    });
+
+    for (const workflowId of [rootWorkflowId, downstreamAId, downstreamBId, fanInId]) {
+      await expect(workflowNode(page, workflowId)).toBeVisible();
+    }
+    await page.getByTestId('workflow-graph-scroll').evaluate((element) => {
+      element.scrollTo({ left: 0, top: 0 });
+    });
+    for (const workflowId of [rootWorkflowId, downstreamAId, downstreamBId, fanInId]) {
+      await expect(workflowNode(page, workflowId)).toBeInViewport();
+    }
+    await page.getByTestId('selected-workflow-mini-dag').evaluate((element) => {
+      (element as HTMLElement).style.display = 'none';
+    });
+    await page.getByRole('button', { name: 'Minimize inspector' }).click();
+    await expect(page.getByRole('button', { name: 'Maximize inspector' })).toBeVisible();
+
+    await captureScreenshot(page, 'stacked-workflows');
+  });
+
   test('terminate-wording — task-level uses Terminate, workflow-level keeps Cancel', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     const now = new Date();
@@ -838,7 +951,7 @@ test.describe('Visual proof capture', () => {
     ]);
 
     // Switch to queue view to verify "Terminate" button text on task rows
-    await page.getByRole('button', { name: 'Queue' }).click();
+    await page.getByTestId('rail-queue').click();
     await expect(page.getByRole('heading', { name: /Action Queue/ })).toBeVisible();
     const terminateButton = page
       .locator('[data-row-id$="/task-alpha"]')
@@ -846,7 +959,7 @@ test.describe('Visual proof capture', () => {
     await expect(terminateButton).toBeVisible();
 
     // Switch back to DAG view and right-click the running task for context menu
-    await page.getByRole('button', { name: 'DAG' }).click();
+    await page.getByTestId('rail-home').click();
     await page.locator('.react-flow__node[data-testid$="task-alpha"]').click({ button: 'right' });
     const menu = page.getByRole('menu');
     await expect(menu).toBeVisible();
@@ -858,7 +971,16 @@ test.describe('Visual proof capture', () => {
     // Assert task-level action uses "Terminate Task"
     await expect(page.getByRole('menuitem', { name: 'Terminate Task' })).toBeVisible();
 
-    // Assert workflow-level action keeps "Cancel Workflow" (not converted)
+    // Task context menu no longer owns workflow-wide actions.
+    await expect(page.getByRole('menuitem', { name: 'Cancel Workflow' })).toHaveCount(0);
+
+    await page.keyboard.press('Escape');
+    await page.locator('[data-testid^="workflow-node-"]').first().click({ button: 'right' });
+    const workflowMenu = page.getByRole('menu');
+    await expect(workflowMenu).toBeVisible();
+    await page.getByRole('menuitem', { name: 'More' }).click();
+
+    // Workflow-level action keeps "Cancel Workflow" (not converted)
     await expect(page.getByRole('menuitem', { name: 'Cancel Workflow' })).toBeVisible();
 
     await captureScreenshot(page, 'terminate-wording-task-vs-workflow');
@@ -877,7 +999,7 @@ test.describe('Visual proof capture', () => {
     ]);
 
     // Navigate to queue view
-    await page.getByRole('button', { name: 'Queue' }).click();
+    await page.getByTestId('rail-queue').click();
 
     // Assert canonical Action Queue and Backlog headings
     await expect(page.getByRole('heading', { name: /Action Queue/ })).toBeVisible();

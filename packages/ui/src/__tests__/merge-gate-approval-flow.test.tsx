@@ -7,7 +7,6 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
-import { vi } from 'vitest';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { WorkflowMeta } from '../types.js';
 
@@ -17,8 +16,6 @@ vi.mock('@xyflow/react', async () => {
 });
 
 const { App } = await import('../App.js');
-
-// ── Scenario A: merge (onFinish='merge') ───────────────────
 
 const taskA = makeUITask({
   id: 'task-a1',
@@ -46,34 +43,6 @@ const wfA: WorkflowMeta = {
   mergeMode: 'manual',
 };
 
-// ── Scenario B: pull_request (onFinish='pull_request') ─────
-
-const taskB = makeUITask({
-  id: 'task-b1',
-  description: 'Regular task B',
-  status: 'completed',
-  workflowId: 'wf-pr',
-  command: 'echo hello',
-});
-
-const gateB = makeUITask({
-  id: 'gate-b',
-  description: 'Pull request gate for test plan',
-  status: 'awaiting_approval',
-  workflowId: 'wf-pr',
-  isMergeNode: true,
-  dependencies: ['task-b1'],
-});
-
-const wfB: WorkflowMeta = {
-  id: 'wf-pr',
-  name: 'PR Workflow',
-  status: 'running',
-  baseBranch: 'main',
-  onFinish: 'pull_request',
-  mergeMode: 'manual',
-};
-
 describe('Merge gate approval flow (integration)', () => {
   let mock: MockInvoker;
 
@@ -86,124 +55,19 @@ describe('Merge gate approval flow (integration)', () => {
     mock.cleanup();
   });
 
-  // ── Full App flow: TaskPanel → Modal ──────────────────────
-
-  it('merge flow: click gate → TaskPanel "Approve Merge" → modal with "Confirm Merge"', async () => {
+  it('workflow context menu retries workflow', async () => {
     render(<App />);
     act(() => mock.setTasks([taskA, gateA], [wfA]));
 
     await waitFor(() => {
-      expect(screen.getByTestId('rf__node-gate-a')).toBeInTheDocument();
+      expect(screen.getByTestId('workflow-node-wf-merge')).toBeInTheDocument();
     });
 
-    // Click gate node → selects task in TaskPanel
-    fireEvent.click(screen.getByTestId('rf__node-gate-a'));
-
-    // TaskPanel shows "Approve Merge" button for merge nodes
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-merge'));
     await waitFor(() => {
-      expect(screen.getByText('Approve Merge')).toBeInTheDocument();
+      expect(screen.getByText('Retry Workflow')).toBeInTheDocument();
     });
-
-    // Click "Approve Merge" → opens ApprovalModal
-    fireEvent.click(screen.getByText('Approve Merge'));
-
-    // Modal heading should say "Confirm Merge"
-    await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Confirm Merge' })).toBeInTheDocument();
-    });
-  });
-
-  it('PR flow: click gate → TaskPanel "Approve Merge" → modal with "Confirm Pull Request" + "Confirm Create PR"', async () => {
-    render(<App />);
-    act(() => mock.setTasks([taskB, gateB], [wfB]));
-
-    await waitFor(() => {
-      expect(screen.getByTestId('rf__node-gate-b')).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByTestId('rf__node-gate-b'));
-
-    await waitFor(() => {
-      expect(screen.getByText('Approve Merge')).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByText('Approve Merge'));
-
-    await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Confirm Pull Request' })).toBeInTheDocument();
-      expect(screen.getByText('Confirm Create PR')).toBeInTheDocument();
-    });
-  });
-
-  // ── API call verification ────────────────────────────────
-
-  it('clicking modal approve calls invoker.approve(taskId)', async () => {
-    // Use PR scenario where "Confirm Create PR" is unique to the modal
-    render(<App />);
-    act(() => mock.setTasks([taskB, gateB], [wfB]));
-
-    await waitFor(() => {
-      expect(screen.getByTestId('rf__node-gate-b')).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByTestId('rf__node-gate-b'));
-
-    await waitFor(() => {
-      expect(screen.getByText('Approve Merge')).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByText('Approve Merge'));
-
-    await waitFor(() => {
-      expect(screen.getByText('Confirm Create PR')).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByText('Confirm Create PR'));
-
-    await waitFor(() => {
-      expect(mock.api.approve).toHaveBeenCalledWith('gate-b');
-    });
-  });
-
-  it('clicking modal reject uses two-step flow and calls invoker.reject(taskId, reason)', async () => {
-    render(<App />);
-    act(() => mock.setTasks([taskB, gateB], [wfB]));
-
-    await waitFor(() => {
-      expect(screen.getByTestId('rf__node-gate-b')).toBeInTheDocument();
-    });
-
-    // Click gate node → select task in TaskPanel
-    fireEvent.click(screen.getByTestId('rf__node-gate-b'));
-
-    await waitFor(() => {
-      expect(screen.getByText('Reject Merge')).toBeInTheDocument();
-    });
-
-    // Step 1: Click "Reject Merge" in TaskPanel → opens modal with reject input shown
-    fireEvent.click(screen.getByText('Reject Merge'));
-
-    // Modal opens with initialAction='reject', so reject input is shown immediately
-    await waitFor(() => {
-      expect(screen.getByText('Confirm Reject Merge')).toBeInTheDocument();
-    });
-
-    // Step 2: Click "Confirm Reject Merge" → submits rejection
-    fireEvent.click(screen.getByText('Confirm Reject Merge'));
-
-    await waitFor(() => {
-      expect(mock.api.reject).toHaveBeenCalledWith('gate-b', undefined);
-    });
-  });
-
-  it('does not render an inline approve button on the merge gate node', async () => {
-    render(<App />);
-    act(() => mock.setTasks([taskA, gateA], [wfA]));
-
-    await waitFor(() => {
-      expect(screen.getByTestId('rf__node-gate-a')).toBeInTheDocument();
-    });
-
-    expect(screen.queryByTestId('approve-merge-button')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('Retry Workflow'));
+    await waitFor(() => expect(mock.api.retryWorkflow).toHaveBeenCalledWith('wf-merge'));
   });
 });

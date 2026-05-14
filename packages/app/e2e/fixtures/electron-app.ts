@@ -134,10 +134,18 @@ export const TEST_PLAN = {
   ],
 };
 
-/** Load a plan into the running app via the IPC bridge and wait for DAG to render. */
-export async function loadPlan(page: Page, plan: typeof TEST_PLAN): Promise<void> {
+/** Select the first workflow node so the reskinned mini-DAG renders task nodes. */
+export async function selectFirstWorkflow(page: Page): Promise<void> {
+  const workflowNode = page.locator('[data-testid^="workflow-node-"]').first();
+  await workflowNode.waitFor({ state: 'visible', timeout: 10000 });
+  await workflowNode.click();
+}
+
+/** Load a plan into the running app via the IPC bridge and wait for its mini-DAG to render. */
+export async function loadPlan(page: Page, plan: { tasks: readonly { id: string }[] }): Promise<void> {
   const planYaml = yamlStringify(plan);
   await page.evaluate((p) => window.invoker.loadPlan(p), planYaml);
+  await selectFirstWorkflow(page);
   await page.locator(`.react-flow__node[data-testid$="${plan.tasks[0].id}"]`).first().waitFor({ state: 'visible', timeout: 10000 });
 }
 

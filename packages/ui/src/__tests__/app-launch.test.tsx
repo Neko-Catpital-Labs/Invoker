@@ -33,120 +33,30 @@ describe('App launch (component)', () => {
 
   it('shows empty state prompt when no plan is loaded', () => {
     render(<App />);
-    expect(screen.getByText('Load a plan to get started')).toBeInTheDocument();
+    expect(screen.getByText('Load a plan to render workflow graph')).toBeInTheDocument();
   });
 
-  it('renders Open File and utility dropdown with Refresh, Clear Session, Delete DB, and System Setup', () => {
+  it('renders left rail navigation and workflow controls', () => {
     render(<App />);
-
-    // Open File is always visible
-    expect(screen.getByText('Open File')).toBeInTheDocument();
-
-    // Refresh, Clear, Delete DB are now inside the dropdown
-    expect(screen.queryByText('Refresh')).not.toBeInTheDocument();
-    expect(screen.queryByText('Clear Session')).not.toBeInTheDocument();
-    expect(screen.queryByText('Delete Workflow History (DB)')).not.toBeInTheDocument();
-
-    // Click the ellipsis button to open the dropdown
-    const utilityButton = screen.getByLabelText('Utility menu');
-    fireEvent.click(utilityButton);
-
-    // Now the items should be visible
-    expect(screen.getByText('Refresh')).toBeInTheDocument();
-    expect(screen.getByText('Clear Session')).toBeInTheDocument();
-    expect(screen.getByText('Delete Workflow History (DB)')).toBeInTheDocument();
-
-    // Also check for disabled placeholder items
-    expect(screen.getByText('Export Logs...')).toBeInTheDocument();
-    expect(screen.getByText('System Setup...')).toBeInTheDocument();
+    expect(screen.getByTestId('rail-open-file')).toBeInTheDocument();
+    expect(screen.getByTestId('rail-home')).toBeInTheDocument();
+    expect(screen.getByTestId('rail-timeline')).toBeInTheDocument();
+    expect(screen.getByTestId('rail-history')).toBeInTheDocument();
+    expect(screen.getByTestId('rail-queue')).toBeInTheDocument();
+    expect(screen.queryByTestId('rail-attention')).not.toBeInTheDocument();
+    expect(screen.getByTestId('rail-refresh')).toBeInTheDocument();
+    expect(screen.getByTestId('rail-clear')).toBeInTheDocument();
   });
 
-  it('does not show Start or Stop before a plan is loaded', () => {
+  it('shows workflow status chips and terminal drawer controls in home view', () => {
     render(<App />);
-    expect(screen.queryByRole('button', { name: 'Start' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('workflow-status-pill-running')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Expand terminal drawer' })).toBeInTheDocument();
   });
 
-  it('StatusBar renders with Total count', () => {
+  it('opens system setup from left rail settings', async () => {
     render(<App />);
-    expect(screen.getByText('Total:')).toBeInTheDocument();
-  });
-
-  it('TaskPanel shows selection prompt', () => {
-    render(<App />);
-    expect(screen.getByText('Select a task from the graph to view details')).toBeInTheDocument();
-  });
-
-  it('Delete Workflow History (DB) button calls deleteAllWorkflowsBulk (not legacy deleteAllWorkflows)', async () => {
-    // Stub window.confirm to auto-accept
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
-
-    render(<App />);
-
-    // Open utility dropdown
-    const utilityButton = screen.getByLabelText('Utility menu');
-    fireEvent.click(utilityButton);
-
-    // Click Delete Workflow History (DB)
-    const deleteButton = screen.getByText('Delete Workflow History (DB)');
-    fireEvent.click(deleteButton);
-
-    // Bulk variant must be called, legacy must NOT be called
-    expect(mock.api.deleteAllWorkflowsBulk).toHaveBeenCalledTimes(1);
-    expect(mock.api.deleteAllWorkflows).not.toHaveBeenCalled();
-
-    confirmSpy.mockRestore();
-  });
-
-  it('opens System Setup automatically when packaged bundled skills need installation', async () => {
-    mock.api.getSystemDiagnostics = vi.fn(async () => ({
-      platform: 'linux',
-      arch: 'x64',
-      appVersion: '0.0.1',
-      isPackaged: true,
-      tools: [],
-      bundledSkills: {
-        available: true,
-        promptRecommended: true,
-        managedPrefix: 'invoker-',
-        bundledSkillNames: ['plan-to-invoker'],
-        targets: [
-          {
-            id: 'codex',
-            name: 'Codex',
-            path: '/tmp/.codex/skills',
-            available: true,
-            installed: false,
-            upToDate: false,
-            installedSkillNames: [],
-          },
-          {
-            id: 'claude',
-            name: 'Claude',
-            path: '/tmp/.claude/skills',
-            available: true,
-            installed: false,
-            upToDate: false,
-            installedSkillNames: [],
-          },
-          {
-            id: 'cursor',
-            name: 'Cursor',
-            path: '/tmp/.cursor/skills-cursor',
-            available: true,
-            installed: false,
-            upToDate: false,
-            installedSkillNames: [],
-          },
-        ],
-      },
-    }));
-
-    render(<App />);
+    fireEvent.click(screen.getByTestId('rail-settings'));
     expect(await screen.findByText('System Setup')).toBeInTheDocument();
-    expect(screen.getByText('Bundled Invoker Skills')).toBeInTheDocument();
-    expect(screen.getByText('Install Skills')).toBeInTheDocument();
-    expect(screen.getByText('Claude')).toBeInTheDocument();
-    expect(screen.getByText('Cursor')).toBeInTheDocument();
   });
 });

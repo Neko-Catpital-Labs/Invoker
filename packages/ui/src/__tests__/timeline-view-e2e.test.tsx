@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
 import { vi } from 'vitest';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
+import type { WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
@@ -21,6 +22,7 @@ const alpha = makeUITask({
   id: 'task-alpha',
   description: 'First test task',
   status: 'pending',
+  workflowId: 'wf-timeline',
   command: 'echo hello-alpha',
 });
 
@@ -28,9 +30,11 @@ const beta = makeUITask({
   id: 'task-beta',
   description: 'Second test task',
   status: 'pending',
+  workflowId: 'wf-timeline',
   dependencies: ['task-alpha'],
   command: 'echo hello-beta',
 });
+const workflows: WorkflowMeta[] = [{ id: 'wf-timeline', name: 'Timeline WF', status: 'running' }];
 
 describe('Timeline view (component)', () => {
   let mock: MockInvoker;
@@ -46,13 +50,9 @@ describe('Timeline view (component)', () => {
 
   it('clicking Timeline button shows the timeline view', async () => {
     render(<App />);
-    act(() => mock.setTasks([alpha, beta]));
+    act(() => mock.setTasks([alpha, beta], workflows));
 
-    await waitFor(() => {
-      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: 'Timeline' }));
+    fireEvent.click(screen.getByTestId('rail-timeline'));
 
     await waitFor(() => {
       expect(screen.getByTestId('timeline-view')).toBeInTheDocument();
@@ -61,13 +61,9 @@ describe('Timeline view (component)', () => {
 
   it('timeline shows task bars after loading tasks', async () => {
     render(<App />);
-    act(() => mock.setTasks([alpha, beta]));
+    act(() => mock.setTasks([alpha, beta], workflows));
 
-    await waitFor(() => {
-      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: 'Timeline' }));
+    fireEvent.click(screen.getByTestId('rail-timeline'));
 
     await waitFor(() => {
       expect(screen.getByTestId('timeline-bar-task-alpha')).toBeInTheDocument();
@@ -81,6 +77,7 @@ describe('Timeline view (component)', () => {
       id: 'task-alpha',
       description: 'First test task',
       status: 'completed',
+      workflowId: 'wf-timeline',
       command: 'echo hello-alpha',
       execution: {
         startedAt: new Date(now - 5000),
@@ -89,13 +86,9 @@ describe('Timeline view (component)', () => {
     } as any);
 
     render(<App />);
-    act(() => mock.setTasks([completedAlpha, beta]));
+    act(() => mock.setTasks([completedAlpha, beta], workflows));
 
-    await waitFor(() => {
-      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: 'Timeline' }));
+    fireEvent.click(screen.getByTestId('rail-timeline'));
 
     await waitFor(() => {
       const bar = screen.getByTestId('timeline-bar-task-alpha');
@@ -103,46 +96,21 @@ describe('Timeline view (component)', () => {
     });
   });
 
-  it('clicking a task bar selects it in the TaskPanel', async () => {
+  it('switching back to Home workflow graph works', async () => {
     render(<App />);
-    act(() => mock.setTasks([alpha, beta]));
+    act(() => mock.setTasks([alpha, beta], workflows));
 
-    await waitFor(() => {
-      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: 'Timeline' }));
+    fireEvent.click(screen.getByTestId('rail-timeline'));
 
     await waitFor(() => {
       expect(screen.getByTestId('timeline-bar-task-alpha')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByTestId('timeline-bar-task-alpha'));
-
-    await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'First test task' })).toBeInTheDocument();
-    });
-  });
-
-  it('switching back to DAG view works', async () => {
-    render(<App />);
-    act(() => mock.setTasks([alpha, beta]));
-
-    await waitFor(() => {
-      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: 'Timeline' }));
-
-    await waitFor(() => {
-      expect(screen.getByTestId('timeline-view')).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: 'DAG' }));
+    fireEvent.click(screen.getByTestId('rail-home'));
 
     await waitFor(() => {
       expect(screen.queryByTestId('timeline-view')).not.toBeInTheDocument();
-      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+      expect(screen.getByTestId('workflow-node-wf-timeline')).toBeInTheDocument();
     });
   });
 });
