@@ -74,6 +74,24 @@ type ActiveExecutionEntry = {
   handle: ActiveExecutionHandle;
   executor: Executor;
   taskId: string;
+  poolId?: string;
+  poolMemberKey?: string;
+};
+
+type ExecutionPoolMember =
+  | { type: 'ssh'; id: string; maxConcurrentTasks?: number }
+  | { type: 'worktree'; id: string; maxConcurrentTasks?: number };
+
+type ExecutionPoolConfig = {
+  members: ExecutionPoolMember[];
+  selectionStrategy?: 'roundRobin' | 'leastLoaded';
+  maxConcurrentTasksPerMember?: number;
+};
+
+type PoolSelection = {
+  poolId: string;
+  member: ExecutionPoolMember;
+  memberKey: string;
 };
 
 function nextLeaseExpiry(from: Date): Date {
@@ -158,19 +176,14 @@ export class TaskRunner {
   /** @internal */ reviewProviderRegistry?: ReviewProviderRegistry;
   private activePrPollers = new Map<string, ReturnType<typeof setInterval>>();
   private getRemoteTargets: () => Record<string, { host: string; user: string; sshKeyPath: string; port?: number; managedWorkspaces?: boolean; remoteInvokerHome?: string; provisionCommand?: string; remoteHeartbeatIntervalSeconds?: number }>;
-  private getExecutionPools: () => Record<string, {
-    members: Array<
-      | { type: 'ssh'; id: string; maxConcurrentTasks?: number }
-      | { type: 'worktree'; id: string; maxConcurrentTasks?: number }
-    >;
-    selectionStrategy?: 'roundRobin' | 'leastLoaded';
-    maxConcurrentTasksPerMember?: number;
-  }>;
+  private getExecutionPools: () => Record<string, ExecutionPoolConfig>;
   private dockerConfig: { imageName?: string; secretsFile?: string };
   private executionAgentRegistry?: AgentRegistry;
   private logger: Logger;
   /** Cache for SSH executors, keyed by poolMemberId. One instance per target for correct git locking. */
   private sshExecutorCache = new Map<string, SshExecutor>();
+  private poolRoundRobinCursor = new Map<string, number>();
+  private pendingPoolSelections = new Map<string, PoolSelection>();
 
   /** In-flight executions keyed by attemptId (with taskId retained for external kill resolution). */
   private activeExecutions = new Map<string, ActiveExecutionEntry>();
@@ -600,6 +613,7 @@ export class TaskRunner {
         }),
       ]);
     } catch (err) {
+      this.pendingPoolSelections.delete(task.id);
       const meta = err as StartupFailureMetadata;
       const startupErrorMessage = `Executor startup failed (${executor.type}): ${err instanceof Error ? err.message : String(err)}\n`;
       this.callbacks.onOutput?.(task.id, startupErrorMessage);
@@ -651,6 +665,7 @@ export class TaskRunner {
       } catch (killErr) {
         this.logger.warn(`[TaskRunner] failed to kill rejected launch for task=${task.id}`, { killErr });
       }
+      this.pendingPoolSelections.delete(task.id);
       await this.cleanupPerTaskDockerExecutor(task);
       return;
     }
@@ -707,7 +722,15 @@ export class TaskRunner {
     // Notify consumer about the spawned handle
     const activeHandle = handle as ActiveExecutionHandle;
     activeHandle.attemptId = attemptId;
-    this.activeExecutions.set(attemptId, { handle: activeHandle, executor, taskId: task.id });
+    const poolSelection = this.pendingPoolSelections.get(task.id);
+    this.pendingPoolSelections.delete(task.id);
+    this.activeExecutions.set(attemptId, {
+      handle: activeHandle,
+      executor,
+      taskId: task.id,
+      poolId: poolSelection?.poolId,
+      poolMemberKey: poolSelection?.memberKey,
+    });
     this.callbacks.onSpawned?.(task.id, handle, executor);
 
     // Wire output
@@ -802,16 +825,60 @@ export class TaskRunner {
    * Uses task.runnerKind to look up in the registry; falls back to default.
    * Merge gate tasks use the dedicated merge executor.
    */
+  private poolMemberKey(member: ExecutionPoolMember): string {
+    return `${member.type}:${member.id}`;
+  }
+
+  private poolMemberLoad(poolId: string, memberKey: string): number {
+    let load = 0;
+    for (const selection of this.pendingPoolSelections.values()) {
+      if (selection.poolId === poolId && selection.memberKey === memberKey) load += 1;
+    }
+    for (const entry of this.activeExecutions.values()) {
+      if (entry.poolId === poolId && entry.poolMemberKey === memberKey) load += 1;
+    }
+    return load;
+  }
+
+  private selectPoolMember(poolId: string, pool: ExecutionPoolConfig): ExecutionPoolMember | undefined {
+    if (pool.members.length === 0) return undefined;
+
+    if (pool.selectionStrategy === 'roundRobin') {
+      const cursor = this.poolRoundRobinCursor.get(poolId) ?? 0;
+      const member = pool.members[cursor % pool.members.length];
+      this.poolRoundRobinCursor.set(poolId, (cursor + 1) % pool.members.length);
+      return member;
+    }
+
+    const scored = pool.members.map((member, index) => {
+      const memberKey = this.poolMemberKey(member);
+      const load = this.poolMemberLoad(poolId, memberKey);
+      const limit = member.maxConcurrentTasks ?? pool.maxConcurrentTasksPerMember;
+      return { member, index, load, hasCapacity: limit === undefined || load < limit };
+    });
+    const candidates = scored.some((entry) => entry.hasCapacity)
+      ? scored.filter((entry) => entry.hasCapacity)
+      : scored;
+    candidates.sort((a, b) => a.load - b.load || a.index - b.index);
+    return candidates[0]?.member;
+  }
+
   selectExecutor(task: TaskState): Executor {
     let effectiveType = task.config.runnerKind ?? (task.config.isMergeNode ? 'merge' : undefined);
     let selectedPoolMemberId: string | undefined;
+    this.pendingPoolSelections.delete(task.id);
 
     if (task.config.poolId) {
       const pool = this.getExecutionPools()[task.config.poolId];
-      const member = pool?.members[0];
+      const member = pool ? this.selectPoolMember(task.config.poolId, pool) : undefined;
       if (member) {
         effectiveType = member.type;
         selectedPoolMemberId = member.type === 'ssh' ? member.id : undefined;
+        this.pendingPoolSelections.set(task.id, {
+          poolId: task.config.poolId,
+          member,
+          memberKey: this.poolMemberKey(member),
+        });
       }
     }
     if (
