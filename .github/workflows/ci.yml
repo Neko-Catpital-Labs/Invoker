@@ -118,6 +118,8 @@ jobs:
             command: bash scripts/test-suites/required/15-submit-workflow-chain.sh
           - name: Branch Carry Forward
             command: bash scripts/test-suites/required/16-branch-carry-forward.sh
+          - name: Merge Gate Concurrency Repro
+            command: bash scripts/test-suites/required/17-merge-gate-concurrency-repro.sh
 
     name: required-fast / ${{ matrix.name }}
 

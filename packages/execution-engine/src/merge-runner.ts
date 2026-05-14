@@ -14,7 +14,7 @@ import type { Orchestrator, TaskState, TaskStateChanges } from '@invoker/workflo
 import { OrchestratorError, OrchestratorErrorCode } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { WorkResponse } from '@invoker/contracts';
-import type { TaskRunnerCallbacks } from './task-runner.js';
+import type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
 import type { MergeGateProvider } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
@@ -387,10 +387,18 @@ export function collectDirectNonMergeTaskIds(
 
 // ── Extracted functions ──────────────────────────────────
 
-export async function executeMergeNodeImpl(
+export interface MergeGateActionResult {
+  response: WorkResponse;
+  taskChanges: TaskStateChanges;
+  reviewIdForPolling?: string;
+  workflowIdForPolling?: string;
+}
+
+export async function runMergeGateActionImpl(
   host: MergeRunnerHost,
   task: TaskState,
-): Promise<void> {
+  opts: { gateWorkspacePath?: string } = {},
+): Promise<MergeGateActionResult> {
   const workflowId = task.config.workflowId;
   const workflow = workflowId
     ? host.persistence.loadWorkflow(workflowId)
@@ -403,6 +411,8 @@ export async function executeMergeNodeImpl(
 
   let response: WorkResponse;
   let reviewUrl: string | undefined;
+  let reviewId: string | undefined;
+  let reviewStatus: string | undefined;
 
   const summary = workflowId ? await host.buildMergeSummary(workflowId) : undefined;
 
@@ -432,8 +442,8 @@ export async function executeMergeNodeImpl(
   // Use baseBranch as the ref because featureBranch may not exist yet
   // (it gets created inside consolidateAndMerge). Terminal restore does
   // `git checkout <branch>` to switch to featureBranch anyway.
-  let gateWorkspacePath: string | undefined;
-  if (featureBranch) {
+  let gateWorkspacePath: string | undefined = opts.gateWorkspacePath;
+  if (!gateWorkspacePath && featureBranch) {
     const baseCheckoutRef = await resolveBaseCheckoutRef(
       host,
       baseBranch,
@@ -477,20 +487,20 @@ export async function executeMergeNodeImpl(
           `[merge-gate-workspace] setTaskReviewReady path=manual branch consolidate ` +
             `task=${task.id} gateWorkspacePath=${gateWorkspacePath ?? 'NULL'}`,
         );
-        const manualResponse: WorkResponse = {
+        response = {
           requestId: `merge-${task.id}`,
           actionId: task.id,
           executionGeneration: task.execution.generation ?? 0,
-          status: 'completed',
-          outputs: { exitCode: 0 },
+          status: 'review_ready',
+          outputs: { exitCode: 0, summary, branch: featureBranch ?? undefined },
         };
-        host.callbacks.onComplete?.(task.id, manualResponse);
-        setMergeGateReviewReady(host, task.id, {
-          config: { runnerKind: 'worktree', summary },
-          execution: { branch: featureBranch ?? undefined, workspacePath: gateWorkspacePath },
-        });
-        await startReviewReadyDependents(host);
-        return;
+        return {
+          response,
+          taskChanges: {
+            config: { summary },
+            execution: { branch: featureBranch ?? undefined, workspacePath: gateWorkspacePath },
+          },
+        };
       }
       if (mergeMode === 'external_review') {
         if (!host.mergeGateProvider) {
@@ -541,14 +551,9 @@ export async function executeMergeNodeImpl(
         });
         console.log(`[merge] Created GitHub PR: ${result.url}`);
 
-        const prResponse: WorkResponse = {
-          requestId: `merge-${task.id}`,
-          actionId: task.id,
-          executionGeneration: task.execution.generation ?? 0,
-          status: 'completed',
-          outputs: { exitCode: 0 },
-        };
-        host.callbacks.onComplete?.(task.id, prResponse);
+        reviewUrl = result.url;
+        reviewId = result.identifier;
+        reviewStatus = 'Awaiting review';
         mergeTrace('GATE_WS_PATH_EXTERNAL_REVIEW_AWAIT', {
           taskId: task.id,
           gateWorkspacePath: gateWorkspacePath ?? null,
@@ -558,26 +563,42 @@ export async function executeMergeNodeImpl(
           `[merge-gate-workspace] setTaskReviewReady path=external_review ` +
             `task=${task.id} gateWorkspacePath=${gateWorkspacePath ?? 'NULL'}`,
         );
-        setMergeGateReviewReady(host, task.id, {
-          config: { runnerKind: 'worktree', summary },
-          execution: {
+        response = {
+          requestId: `merge-${task.id}`,
+          actionId: task.id,
+          executionGeneration: task.execution.generation ?? 0,
+          status: 'review_ready',
+          outputs: {
+            exitCode: 0,
+            summary,
             branch: featureBranch,
-            workspacePath: gateWorkspacePath,
-            reviewUrl: result.url,
-            reviewId: result.identifier,
-            reviewStatus: 'Awaiting review',
+            reviewUrl,
+            reviewId,
+            reviewStatus,
           },
-        });
-        await startReviewReadyDependents(host);
-        host.startPrPolling(task.id, result.identifier, workflowId!);
-        return;
+        };
+        return {
+          response,
+          taskChanges: {
+            config: { summary },
+            execution: {
+              branch: featureBranch,
+              workspacePath: gateWorkspacePath,
+              reviewUrl,
+              reviewId,
+              reviewStatus,
+            },
+          },
+          reviewIdForPolling: reviewId,
+          workflowIdForPolling: workflowId,
+        };
       }
       response = {
         requestId: `merge-${task.id}`,
         actionId: task.id,
         executionGeneration: task.execution.generation ?? 0,
         status: 'completed',
-        outputs: { exitCode: 0 },
+        outputs: { exitCode: 0, summary, branch: featureBranch ?? undefined },
       };
     } catch (err) {
       response = {
@@ -602,27 +623,27 @@ export async function executeMergeNodeImpl(
         `[merge-gate-workspace] setTaskReviewReady path=no_consolidate_branch ` +
           `task=${task.id} gateWorkspacePath=${gateWorkspacePath ?? 'NULL'} mergeMode=${mergeMode}`,
       );
-      const gateResponse: WorkResponse = {
+      response = {
         requestId: `merge-${task.id}`,
         actionId: task.id,
         executionGeneration: task.execution.generation ?? 0,
-        status: 'completed',
-        outputs: { exitCode: 0 },
+        status: 'review_ready',
+        outputs: { exitCode: 0, summary, branch: featureBranch ?? undefined },
       };
-      host.callbacks.onComplete?.(task.id, gateResponse);
-      setMergeGateReviewReady(host, task.id, {
-        config: { runnerKind: 'worktree', summary },
-        execution: { branch: featureBranch ?? undefined, workspacePath: gateWorkspacePath },
-      });
-      await startReviewReadyDependents(host);
-      return;
+        return {
+          response,
+          taskChanges: {
+            config: { summary },
+            execution: { branch: featureBranch ?? undefined, workspacePath: gateWorkspacePath },
+          },
+        };
     }
     response = {
       requestId: `merge-${task.id}`,
       actionId: task.id,
       executionGeneration: task.execution.generation ?? 0,
       status: 'completed',
-      outputs: { exitCode: 0 },
+      outputs: { exitCode: 0, summary, branch: featureBranch ?? undefined },
     };
   }
 
@@ -635,36 +656,50 @@ export async function executeMergeNodeImpl(
     `[merge-gate-workspace] updateTask(merge metadata) task=${task.id} ` +
       `gateWorkspacePath=${gateWorkspacePath ?? 'NULL'} response=${response.status}`,
   );
-  host.persistence.updateTask(task.id, {
-    config: { runnerKind: 'worktree', summary },
-    execution: {
+  return {
+    response,
+    taskChanges: {
+      config: { summary },
+      execution: {
       branch: featureBranch ?? undefined,
       workspacePath: gateWorkspacePath,
       ...(reviewUrl ? { reviewUrl } : {}),
+      ...(reviewId ? { reviewId } : {}),
+      ...(reviewStatus ? { reviewStatus } : {}),
       ...(response.status === 'failed' && response.outputs.error
         ? { error: response.outputs.error }
         : {}),
-    },
-  });
-  host.callbacks.onComplete?.(task.id, response);
-  if (mergeMode === 'manual' && response.status === 'completed') {
-    mergeTrace('GATE_WS_PATH_MANUAL_AFTER_SUCCESS', {
-      taskId: task.id,
-      gateWorkspacePath: gateWorkspacePath ?? null,
-    });
-    console.log(
-      `[merge-gate-workspace] setTaskReviewReady path=manual_post_success ` +
-        `task=${task.id} gateWorkspacePath=${gateWorkspacePath ?? 'NULL'}`,
-    );
-    setMergeGateReviewReady(host, task.id, {
-      config: { runnerKind: 'worktree', summary },
-      execution: {
-        branch: featureBranch ?? undefined,
-        workspacePath: gateWorkspacePath,
-        ...(reviewUrl ? { reviewUrl } : {}),
       },
-    });
+    },
+  };
+}
+
+export async function executeMergeNodeImpl(
+  host: MergeRunnerHost,
+  task: TaskState,
+): Promise<void> {
+  const result = await runMergeGateActionImpl(host, task);
+  const { response } = result;
+  const legacyConfig = {
+    ...(result.taskChanges.config ?? {}),
+    runnerKind: 'worktree',
+  } as TaskStateChanges['config'];
+  const legacyChanges: TaskStateChanges = {
+    status: result.taskChanges.status,
+    dependencies: result.taskChanges.dependencies,
+    execution: result.taskChanges.execution,
+    config: legacyConfig,
+  };
+
+  host.persistence.updateTask(task.id, legacyChanges);
+  host.callbacks.onComplete?.(task.id, response);
+
+  if (response.status === 'review_ready') {
+    setMergeGateReviewReady(host, task.id, legacyChanges);
     await startReviewReadyDependents(host);
+    if (result.reviewIdForPolling && result.workflowIdForPolling) {
+      host.startPrPolling(task.id, result.reviewIdForPolling, result.workflowIdForPolling);
+    }
   } else {
     const newlyStarted = host.orchestrator.handleWorkerResponse(response) ?? [];
     if (newlyStarted.length > 0) {

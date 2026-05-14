@@ -52,6 +52,38 @@ describe('ResponseHandler (pure parser)', () => {
     });
   });
 
+  // ── review_ready ───────────────────────────────────────
+
+  describe('review_ready', () => {
+    it('parses merge gate review metadata', () => {
+      const result = handler.parseResponse(
+        makeResponse({
+          status: 'review_ready',
+          outputs: {
+            exitCode: 0,
+            summary: 'ready for review',
+            branch: 'feature/wf-1',
+            reviewUrl: 'https://github.com/owner/repo/pull/1',
+            reviewId: 'owner/repo#1',
+            reviewStatus: 'Awaiting review',
+          },
+        }),
+      );
+      expect('type' in result).toBe(true);
+      if (!('type' in result)) return;
+      expect(result).toEqual({
+        type: 'review_ready',
+        taskId: 't1',
+        exitCode: 0,
+        summary: 'ready for review',
+        branch: 'feature/wf-1',
+        reviewUrl: 'https://github.com/owner/repo/pull/1',
+        reviewId: 'owner/repo#1',
+        reviewStatus: 'Awaiting review',
+      });
+    });
+  });
+
   // ── failed ─────────────────────────────────────────────
 
   describe('failed', () => {

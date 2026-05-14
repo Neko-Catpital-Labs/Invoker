@@ -17,6 +17,12 @@ describe('validateWorkRequest', () => {
     expect(result.valid).toBe(true);
   });
 
+  it('accepts merge_gate action requests', () => {
+    const req = createWorkRequest('req-merge', '__merge__wf-1', 0, 'merge_gate', {}, 'http://localhost:4000/callback');
+    const result = validateWorkRequest(req);
+    expect(result.valid).toBe(true);
+  });
+
   it('rejects non-object input', () => {
     expect(validateWorkRequest(null).valid).toBe(false);
     expect(validateWorkRequest('string').valid).toBe(false);
@@ -52,6 +58,21 @@ describe('validateWorkResponse', () => {
 
   it('accepts an optional attemptId on WorkResponse', () => {
     const result = validateWorkResponse({ ...baseResponse, attemptId: 'task-1-a1' });
+    expect(result.valid).toBe(true);
+  });
+
+  it('accepts a valid review_ready response', () => {
+    const result = validateWorkResponse({
+      ...baseResponse,
+      status: 'review_ready',
+      outputs: {
+        exitCode: 0,
+        branch: 'feature/wf-1',
+        reviewUrl: 'https://github.com/owner/repo/pull/1',
+        reviewId: 'owner/repo#1',
+        reviewStatus: 'Awaiting review',
+      },
+    });
     expect(result.valid).toBe(true);
   });
 

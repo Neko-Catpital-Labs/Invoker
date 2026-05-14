@@ -1490,6 +1490,8 @@ export class Orchestrator {
     switch (parsed.type) {
       case 'completed':
         return this.handleCompleted(canonicalTaskId, parsed);
+      case 'review_ready':
+        return this.handleReviewReady(canonicalTaskId, parsed);
       case 'failed':
         return this.handleFailed(canonicalTaskId, parsed);
       case 'needs_input':
@@ -3845,6 +3847,9 @@ export class Orchestrator {
       lastAgentSessionId?: string;
       lastAgentName?: string;
       branch?: string;
+      reviewUrl?: string;
+      reviewId?: string;
+      reviewStatus?: string;
     } = {
       exitCode: parsed.exitCode,
       completedAt: new Date(),
@@ -3859,6 +3864,15 @@ export class Orchestrator {
     }
     if (parsed.branch !== undefined) {
       execution.branch = parsed.branch;
+    }
+    if (parsed.reviewUrl !== undefined) {
+      execution.reviewUrl = parsed.reviewUrl;
+    }
+    if (parsed.reviewId !== undefined) {
+      execution.reviewId = parsed.reviewId;
+    }
+    if (parsed.reviewStatus !== undefined) {
+      execution.reviewStatus = parsed.reviewStatus;
     }
 
     const changes: TaskStateChanges = {
@@ -3994,6 +4008,28 @@ export class Orchestrator {
       started.push(...this.drainScheduler());
     }
 
+    this.checkWorkflowCompletion();
+    return started;
+  }
+
+  private handleReviewReady(
+    taskId: string,
+    parsed: Extract<ParsedResponse, { type: 'review_ready' }>,
+  ): TaskState[] {
+    const changes: TaskStateChanges = {
+      config: { summary: parsed.summary },
+      execution: {
+        exitCode: parsed.exitCode,
+        branch: parsed.branch,
+        reviewUrl: parsed.reviewUrl,
+        reviewId: parsed.reviewId,
+        reviewStatus: parsed.reviewStatus,
+      },
+    };
+    this.setTaskApprovalStatus(taskId, 'review_ready', 'task.review_ready', changes);
+
+    const started = this.autoStartUnblockedTasks();
+    started.push(...this.autoStartExternallyUnblockedReadyTasks());
     this.checkWorkflowCompletion();
     return started;
   }
@@ -4668,14 +4704,17 @@ export class Orchestrator {
         const upstreamAttemptIds = task.dependencies
           .map(depId => this.stateGetTask(depId)?.execution.selectedAttemptId)
           .filter((id): id is string => !!id);
-        const attempt = createAttempt(taskId, {
-          status: 'running',
-          claimedAt: launchedAt,
-          startedAt: launchedAt,
-          lastHeartbeatAt: launchedAt,
-          leaseExpiresAt: nextLeaseExpiry(launchedAt),
-          upstreamAttemptIds,
-        });
+        const attempt: Attempt = {
+          ...createAttempt(taskId, {
+            status: 'running',
+            claimedAt: launchedAt,
+            startedAt: launchedAt,
+            lastHeartbeatAt: launchedAt,
+            leaseExpiresAt: nextLeaseExpiry(launchedAt),
+            upstreamAttemptIds,
+          }),
+          id: attemptId,
+        };
         this.taskRepository.saveAttempt(attempt);
         this.writeAndSync(taskId, { execution: { selectedAttemptId: attempt.id } });
       }
