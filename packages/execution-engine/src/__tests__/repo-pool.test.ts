@@ -442,7 +442,38 @@ describe('RepoPool', () => {
 
     afterEach(() => { vi.restoreAllMocks(); });
 
-    it('serializes concurrent refreshMirrorForRebase calls on same repo', async () => {
+    it('coalesces concurrent refreshMirrorForRebase calls on same repo and base branch', async () => {
+      const log: string[] = [];
+      const deferred1 = createDeferred<string>();
+      let callCount = 0;
+      const timing = { mark: vi.fn(), span: vi.fn() };
+
+      vi.spyOn(pool as any, 'doRefreshMirrorForRebase').mockImplementation(async () => {
+        const n = ++callCount;
+        log.push(`enter-${n}`);
+        const result = await deferred1.promise;
+        log.push(`exit-${n}`);
+        return result;
+      });
+
+      const p1 = pool.refreshMirrorForRebase('repo-a', 'master');
+      const p2 = pool.refreshMirrorForRebase('repo-a', 'master', timing);
+
+      await flush();
+      expect(log).toEqual(['enter-1']);
+      expect(callCount).toBe(1);
+      expect(timing.mark).toHaveBeenCalledWith('RepoPool.refreshMirrorForRebase.coalesced', 'completed', {
+        repoUrl: 'repo-a',
+        baseBranch: 'master',
+      });
+
+      deferred1.resolve('/fake/path');
+      await expect(Promise.all([p1, p2])).resolves.toEqual(['/fake/path', '/fake/path']);
+      expect(log).toEqual(['enter-1', 'exit-1']);
+      expect(callCount).toBe(1);
+    });
+
+    it('serializes concurrent refreshMirrorForRebase calls on same repo with different base branches', async () => {
       const log: string[] = [];
       const deferred1 = createDeferred<string>();
       const deferred2 = createDeferred<string>();
@@ -457,17 +488,17 @@ describe('RepoPool', () => {
       });
 
       const p1 = pool.refreshMirrorForRebase('repo-a', 'master');
-      const p2 = pool.refreshMirrorForRebase('repo-a', 'master');
+      const p2 = pool.refreshMirrorForRebase('repo-a', 'release');
 
       await flush();
       expect(log).toEqual(['enter-1']);
 
-      deferred1.resolve('/fake/path');
+      deferred1.resolve('/fake/path-master');
       await flush();
       expect(log).toEqual(['enter-1', 'exit-1', 'enter-2']);
 
-      deferred2.resolve('/fake/path');
-      await Promise.all([p1, p2]);
+      deferred2.resolve('/fake/path-release');
+      await expect(Promise.all([p1, p2])).resolves.toEqual(['/fake/path-master', '/fake/path-release']);
       expect(log).toEqual(['enter-1', 'exit-1', 'enter-2', 'exit-2']);
     });
 
