@@ -62,6 +62,7 @@ export interface TaskConfig {
   readonly requiresManualApproval?: boolean;
   readonly repoUrl?: string;
   readonly featureBranch?: string;
+  readonly poolId?: string;
   readonly runnerKind?: string;
   readonly autoFix?: boolean;
   readonly poolMemberId?: string;

@@ -76,9 +76,11 @@ export function createMockInvoker(
     restartTask: vi.fn(async () => {}),
     editTaskCommand: vi.fn(async () => {}),
     editTaskType: vi.fn(async () => {}),
+    editTaskPool: vi.fn(async () => {}),
     editTaskAgent: vi.fn(async () => {}),
     setTaskExternalGatePolicies: vi.fn(async () => {}),
     getRemoteTargets: vi.fn(async () => []),
+    getExecutionPools: vi.fn(async () => ['mixed-local-ssh', 'pnpm-ssh']),
     getExecutionAgents: vi.fn(async () => ['claude', 'codex']),
     getSystemDiagnostics: vi.fn(async () => ({
       platform: 'linux',
