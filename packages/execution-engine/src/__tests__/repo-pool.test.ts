@@ -26,8 +26,11 @@ describe('RepoPool', () => {
   let tmpDir: string;
   let localRepoUrl: string;
   let pool: RepoPool;
+  let previousWorkspaceCleanup: string | undefined;
 
   beforeEach(() => {
+    previousWorkspaceCleanup = process.env.INVOKER_ENABLE_WORKSPACE_CLEANUP;
+    delete process.env.INVOKER_ENABLE_WORKSPACE_CLEANUP;
     tmpDir = mkdtempSync(join(tmpdir(), 'repo-pool-cache-'));
     localRepoUrl = createTempRepo();
     pool = new RepoPool({ cacheDir: tmpDir });
@@ -35,6 +38,11 @@ describe('RepoPool', () => {
 
   afterEach(async () => {
     remoteFetchForPool.enabled = true;
+    if (previousWorkspaceCleanup === undefined) {
+      delete process.env.INVOKER_ENABLE_WORKSPACE_CLEANUP;
+    } else {
+      process.env.INVOKER_ENABLE_WORKSPACE_CLEANUP = previousWorkspaceCleanup;
+    }
     await pool.destroyAll();
     rmSync(tmpDir, { recursive: true, force: true });
     rmSync(localRepoUrl, { recursive: true, force: true });
@@ -464,6 +472,7 @@ describe('RepoPool', () => {
     });
 
     it('serializes concurrent removeManagedBranchesInMirror calls on same repo', async () => {
+      process.env.INVOKER_ENABLE_WORKSPACE_CLEANUP = '1';
       const log: string[] = [];
       const deferred1 = createDeferred<void>();
       const deferred2 = createDeferred<void>();
@@ -490,6 +499,71 @@ describe('RepoPool', () => {
       deferred2.resolve();
       await Promise.all([p1, p2]);
       expect(log).toEqual(['enter-1', 'exit-1', 'enter-2', 'exit-2']);
+    });
+
+    it('skips disabled removeManagedBranchesInMirror without waiting for repo chain', async () => {
+      const log: string[] = [];
+      const deferredRefresh = createDeferred<string>();
+      const doRemove = vi.spyOn(pool as any, 'doRemoveManagedBranchesInMirror');
+      const timing = { mark: vi.fn(), span: vi.fn() };
+
+      vi.spyOn(pool as any, 'doRefreshMirrorForRebase').mockImplementation(async () => {
+        log.push('enter-refresh');
+        const result = await deferredRefresh.promise;
+        log.push('exit-refresh');
+        return result;
+      });
+
+      const refresh = pool.refreshMirrorForRebase('repo-a', 'master');
+      await flush();
+      expect(log).toEqual(['enter-refresh']);
+
+      await pool.removeManagedBranchesInMirror('repo-a', ['experiment/old'], timing);
+      expect(log).toEqual(['enter-refresh']);
+      expect(doRemove).not.toHaveBeenCalled();
+      expect(timing.mark).toHaveBeenCalledWith('RepoPool.removeManagedBranchesInMirror', 'completed', {
+        repoUrl: 'repo-a',
+        enabled: false,
+        skipped: true,
+        reason: 'disabled',
+        branchCount: 1,
+      });
+
+      deferredRefresh.resolve('/fake/path');
+      await refresh;
+    });
+
+    it('skips empty removeManagedBranchesInMirror without waiting for repo chain', async () => {
+      process.env.INVOKER_ENABLE_WORKSPACE_CLEANUP = '1';
+      const log: string[] = [];
+      const deferredRefresh = createDeferred<string>();
+      const doRemove = vi.spyOn(pool as any, 'doRemoveManagedBranchesInMirror');
+      const timing = { mark: vi.fn(), span: vi.fn() };
+
+      vi.spyOn(pool as any, 'doRefreshMirrorForRebase').mockImplementation(async () => {
+        log.push('enter-refresh');
+        const result = await deferredRefresh.promise;
+        log.push('exit-refresh');
+        return result;
+      });
+
+      const refresh = pool.refreshMirrorForRebase('repo-a', 'master');
+      await flush();
+      expect(log).toEqual(['enter-refresh']);
+
+      await pool.removeManagedBranchesInMirror('repo-a', [], timing);
+      expect(log).toEqual(['enter-refresh']);
+      expect(doRemove).not.toHaveBeenCalled();
+      expect(timing.mark).toHaveBeenCalledWith('RepoPool.removeManagedBranchesInMirror', 'completed', {
+        repoUrl: 'repo-a',
+        enabled: true,
+        skipped: true,
+        reason: 'no-branches',
+        branchCount: 0,
+      });
+
+      deferredRefresh.resolve('/fake/path');
+      await refresh;
     });
 
     it('serializes cross-method calls (refreshMirror + acquireWorktree) on same repo', async () => {
