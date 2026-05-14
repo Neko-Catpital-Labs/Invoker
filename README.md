@@ -94,7 +94,7 @@ More examples: [docs/invoker-config-example.json](docs/invoker-config-example.js
 
 ### Multiple SSH Executors
 
-Define multiple entries under `remoteTargets`, then select them per task with `executorType: ssh` and `remoteTargetId`.
+Define multiple entries under `remoteTargets`, then select them per task with `runnerKind: ssh` and `poolMemberId`.
 
 ```yaml
 name: multi-remote-example
@@ -104,14 +104,14 @@ tasks:
   - id: test-a
     description: Run checks on remote target A
     command: pnpm test
-    executorType: ssh
-    remoteTargetId: staging-a
+    runnerKind: ssh
+    poolMemberId: staging-a
 
   - id: test-b
     description: Run checks on remote target B
     command: pnpm test
-    executorType: ssh
-    remoteTargetId: staging-b
+    runnerKind: ssh
+    poolMemberId: staging-b
 ```
 
 Use this when you want Invoker to spread work across machines you already manage. The SSH executor does not provision the hosts for you; it connects to the target you name and runs there.

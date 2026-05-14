@@ -430,7 +430,7 @@ describe('getRestoredTerminalSpec routing', () => {
       vi.mocked(existsSync).mockReturnValue(true);
       const meta: PersistedTaskMeta = {
         taskId: 'task-1',
-        executorType: 'worktree',
+        runnerKind: 'worktree',
         agentSessionId: 'abc-123-session',
         workspacePath: '/home/user/repo',
       };
@@ -445,7 +445,7 @@ describe('getRestoredTerminalSpec routing', () => {
       vi.mocked(existsSync).mockReturnValue(true);
       const meta: PersistedTaskMeta = {
         taskId: 'task-cmd',
-        executorType: 'worktree',
+        runnerKind: 'worktree',
         workspacePath: '/home/user/repo',
       };
       const spec = wt.getRestoredTerminalSpec(meta);
@@ -456,7 +456,7 @@ describe('getRestoredTerminalSpec routing', () => {
     it('returns spec with undefined cwd when workspace_path is not set', () => {
       const meta: PersistedTaskMeta = {
         taskId: 'task-unknown',
-        executorType: 'worktree',
+        runnerKind: 'worktree',
       };
       const spec = wt.getRestoredTerminalSpec(meta);
       expect(spec.cwd).toBeUndefined();
@@ -466,7 +466,7 @@ describe('getRestoredTerminalSpec routing', () => {
       vi.mocked(existsSync).mockReturnValue(false);
       const meta: PersistedTaskMeta = {
         taskId: 'task-missing',
-        executorType: 'worktree',
+        runnerKind: 'worktree',
         workspacePath: '/tmp/gone',
       };
       expect(() => wt.getRestoredTerminalSpec(meta)).toThrow(/no longer exists.*cleaned up/);
@@ -476,7 +476,7 @@ describe('getRestoredTerminalSpec routing', () => {
       vi.mocked(existsSync).mockReturnValue(true);
       const meta: PersistedTaskMeta = {
         taskId: 'task-wt',
-        executorType: 'worktree',
+        runnerKind: 'worktree',
         workspacePath: '/home/user/.invoker/worktrees/wt-abc',
       };
       const spec = wt.getRestoredTerminalSpec(meta);
@@ -487,7 +487,7 @@ describe('getRestoredTerminalSpec routing', () => {
       vi.mocked(existsSync).mockReturnValue(true);
       const meta: PersistedTaskMeta = {
         taskId: 'pivot-reconciliation',
-        executorType: 'worktree',
+        runnerKind: 'worktree',
         workspacePath: '/home/user/.invoker/worktrees/ab12/experiment-pivot-reconciliation-deadbeef',
         branch: 'experiment/pivot-reconciliation-deadbeef',
       };
@@ -506,7 +506,7 @@ describe('getRestoredTerminalSpec routing', () => {
       vi.mocked(existsSync).mockReturnValue(false);
       const meta: PersistedTaskMeta = {
         taskId: 'task-wt-gone',
-        executorType: 'worktree',
+        runnerKind: 'worktree',
         workspacePath: '/home/user/.invoker/worktrees/deleted-wt',
       };
       expect(() => wt.getRestoredTerminalSpec(meta)).toThrow(/no longer exists.*cleaned up/);
@@ -519,7 +519,7 @@ describe('getRestoredTerminalSpec routing', () => {
     it('returns docker exec spec with session resume', () => {
       const meta: PersistedTaskMeta = {
         taskId: 'task-docker',
-        executorType: 'docker',
+        runnerKind: 'docker',
         agentSessionId: 'docker-session-1',
         containerId: 'container-abc',
       };
@@ -532,7 +532,7 @@ describe('getRestoredTerminalSpec routing', () => {
     it('returns docker exec spec without session (bash fallback)', () => {
       const meta: PersistedTaskMeta = {
         taskId: 'task-docker-cmd',
-        executorType: 'docker',
+        runnerKind: 'docker',
         containerId: 'container-xyz',
       };
       const spec = docker.getRestoredTerminalSpec(meta);
@@ -544,7 +544,7 @@ describe('getRestoredTerminalSpec routing', () => {
     it('throws when no container ID provided', () => {
       const meta: PersistedTaskMeta = {
         taskId: 'task-no-cid',
-        executorType: 'docker',
+        runnerKind: 'docker',
       };
       expect(() => docker.getRestoredTerminalSpec(meta)).toThrow(/No container ID/);
     });
@@ -565,15 +565,15 @@ describe('merge gate open-terminal', () => {
 
     const meta: PersistedTaskMeta = {
       taskId: '__merge__wf-123',
-      executorType: 'merge',
+      runnerKind: 'merge',
       workspacePath: process.cwd(),
     };
 
-    let executor = registry.get(meta.executorType);
+    let executor = registry.get(meta.runnerKind);
     if (!executor) {
-      if (meta.executorType === 'docker') {
+      if (meta.runnerKind === 'docker') {
         /* lazy-register docker */
-      } else if (meta.executorType === 'worktree') {
+      } else if (meta.runnerKind === 'worktree') {
         /* lazy-register worktree */
       } else {
         executor = registry.getDefault();
@@ -593,12 +593,12 @@ describe('merge gate open-terminal', () => {
     const worktreePath = join(wtBase, 'gate-wt');
     const meta: PersistedTaskMeta = {
       taskId: '__merge__wf-123',
-      executorType: 'merge',
+      runnerKind: 'merge',
       workspacePath: worktreePath,
       branch: 'plan/my-workflow',
     };
 
-    let executor: any = registry.get(meta.executorType);
+    let executor: any = registry.get(meta.runnerKind);
     if (!executor) {
       executor = registry.getDefault();
     }
@@ -622,12 +622,12 @@ describe('merge gate open-terminal', () => {
     const worktreePath = join(wtBase, 'existing-wt');
     const meta: PersistedTaskMeta = {
       taskId: '__merge__wf-456',
-      executorType: 'merge',
+      runnerKind: 'merge',
       workspacePath: worktreePath,
       branch: 'plan/my-workflow',
     };
 
-    let executor: any = registry.get(meta.executorType);
+    let executor: any = registry.get(meta.runnerKind);
     if (!executor) {
       executor = registry.getDefault();
     }
@@ -649,11 +649,11 @@ describe('merge gate open-terminal', () => {
 
     const meta: PersistedTaskMeta = {
       taskId: '__merge__wf-123',
-      executorType: 'merge',
+      runnerKind: 'merge',
       workspacePath: process.cwd(),
     };
 
-    let executor: any = registry.get(meta.executorType);
+    let executor: any = registry.get(meta.runnerKind);
     if (!executor) {
       executor = registry.getDefault();
     }
@@ -675,7 +675,7 @@ describe('SshExecutor getRestoredTerminalSpec', () => {
     });
     const meta: PersistedTaskMeta = {
       taskId: 'remote-task',
-      executorType: 'ssh',
+      runnerKind: 'ssh',
       workspacePath: '~/.invoker/worktrees/abc123/experiment-remote-task-deadbeef',
       branch: 'experiment/remote-task-deadbeef',
     };
@@ -696,7 +696,7 @@ describe('SshExecutor getRestoredTerminalSpec', () => {
 
   it('returns non-interactive ssh spec when workspacePath is missing', () => {
     const ssh = new SshExecutor({ host: 'h', user: 'u', sshKeyPath: '/k' });
-    const spec = ssh.getRestoredTerminalSpec({ taskId: 't', executorType: 'ssh' });
+    const spec = ssh.getRestoredTerminalSpec({ taskId: 't', runnerKind: 'ssh' });
 
     // When workspacePath is missing, SshExecutor returns a non-interactive BatchMode spec
     // (not an error - the error is enforced by openExternalTerminalForTask's invariant check)
@@ -710,12 +710,12 @@ describe('SshExecutor getRestoredTerminalSpec', () => {
     // This test verifies the fail-fast invariant at line 208 of open-terminal-for-task.ts
     const mockPersistence = {
       getTaskStatus: vi.fn(() => 'completed'),
-      getExecutorType: vi.fn(() => 'ssh'),
+      getRunnerKind: vi.fn(() => 'ssh'),
       getAgentSessionId: vi.fn(() => null),
       getContainerId: vi.fn(() => null),
       getWorkspacePath: vi.fn(() => null),  // Missing workspace path - invariant violation!
       getBranch: vi.fn(() => 'experiment/test-branch'),
-      getRemoteTargetId: vi.fn(() => null),
+      getPoolMemberId: vi.fn(() => null),
     };
 
     const ssh = new SshExecutor({ host: 'h', user: 'u', sshKeyPath: '/k' });
@@ -739,19 +739,19 @@ describe('SshExecutor getRestoredTerminalSpec', () => {
 
     // Verify no real SSH call attempted
     expect(mockPersistence.getWorkspacePath).toHaveBeenCalledWith('task-ssh-no-workspace');
-    expect(mockPersistence.getExecutorType).toHaveBeenCalledWith('task-ssh-no-workspace');
+    expect(mockPersistence.getRunnerKind).toHaveBeenCalledWith('task-ssh-no-workspace');
   });
 
   it('deterministic: SSH success path scaffolding when workspacePath is present', async () => {
     // This test verifies the success path with complete metadata
     const mockPersistence = {
       getTaskStatus: vi.fn(() => 'completed'),
-      getExecutorType: vi.fn(() => 'ssh'),
+      getRunnerKind: vi.fn(() => 'ssh'),
       getAgentSessionId: vi.fn(() => 'ssh-sess-123'),
       getContainerId: vi.fn(() => null),
       getWorkspacePath: vi.fn(() => '~/.invoker/worktrees/abc/experiment-ssh-task'),  // Has workspace!
       getBranch: vi.fn(() => 'experiment/ssh-task'),
-      getRemoteTargetId: vi.fn(() => null),
+      getPoolMemberId: vi.fn(() => null),
       getExecutionAgent: vi.fn(() => 'claude'),
     };
 
@@ -800,12 +800,12 @@ describe('SshExecutor getRestoredTerminalSpec', () => {
 
     const mockPersistence = {
       getTaskStatus: vi.fn(() => 'completed'),
-      getExecutorType: vi.fn(() => 'ssh'),
+      getRunnerKind: vi.fn(() => 'ssh'),
       getAgentSessionId: vi.fn(() => 'ssh-sess-abc'),
       getContainerId: vi.fn(() => null),
       getWorkspacePath: vi.fn(() => '~/.invoker/worktrees/xyz/experiment-ssh-managed-deadbeef'),
       getBranch: vi.fn(() => 'experiment/ssh-managed-deadbeef'),
-      getRemoteTargetId: vi.fn(() => null),
+      getPoolMemberId: vi.fn(() => null),
       getExecutionAgent: vi.fn(() => 'claude'),
     };
 
@@ -900,7 +900,7 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
       vi.mocked(existsSync).mockReturnValue(true);
       const meta: PersistedTaskMeta = {
         taskId: 'task-codex',
-        executorType: 'worktree',
+        runnerKind: 'worktree',
         agentSessionId: 'codex-sess-123',
         workspacePath: '/tmp/workspace',
         executionAgent: 'codex',
@@ -925,7 +925,7 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
       vi.mocked(existsSync).mockReturnValue(true);
       const meta: PersistedTaskMeta = {
         taskId: 'task-claude',
-        executorType: 'worktree',
+        runnerKind: 'worktree',
         agentSessionId: 'claude-sess-456',
         workspacePath: '/tmp/workspace',
         executionAgent: 'claude',
@@ -947,7 +947,7 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
       vi.mocked(existsSync).mockReturnValue(true);
       const meta: PersistedTaskMeta = {
         taskId: 'task-default',
-        executorType: 'worktree',
+        runnerKind: 'worktree',
         agentSessionId: 'default-sess-789',
         workspacePath: '/tmp/workspace',
         // executionAgent intentionally omitted
@@ -968,7 +968,7 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
       });
       const meta: PersistedTaskMeta = {
         taskId: 'remote-codex',
-        executorType: 'ssh',
+        runnerKind: 'ssh',
         agentSessionId: 'codex-remote-sess',
         workspacePath: '~/.invoker/worktrees/abc/experiment-remote-codex',
         branch: 'experiment/remote-codex',
@@ -994,7 +994,7 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
       });
       const meta: PersistedTaskMeta = {
         taskId: 'remote-claude',
-        executorType: 'ssh',
+        runnerKind: 'ssh',
         agentSessionId: 'claude-remote-sess',
         workspacePath: '~/.invoker/worktrees/abc/experiment-remote-claude',
         branch: 'experiment/remote-claude',
@@ -1015,7 +1015,7 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
       const docker = new DockerExecutor({ agentRegistry });
       const meta: PersistedTaskMeta = {
         taskId: 'docker-codex',
-        executorType: 'docker',
+        runnerKind: 'docker',
         agentSessionId: 'codex-docker-sess',
         containerId: 'container-xyz',
         executionAgent: 'codex',
@@ -1060,7 +1060,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
   function createMockPersistence() {
     const store = new Map<string, {
       status: string;
-      executorType: string;
+      runnerKind: string;
       agentSessionId?: string;
       agentName?: string;
       workspacePath?: string;
@@ -1069,7 +1069,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
       store,
       // Write side — what fixWithAgentImpl calls
       updateTask(taskId: string, changes: { execution: { agentSessionId: string; agentName: string } }) {
-        const existing = store.get(taskId) ?? { status: 'failed', executorType: 'worktree' };
+        const existing = store.get(taskId) ?? { status: 'failed', runnerKind: 'worktree' };
         store.set(taskId, {
           ...existing,
           agentSessionId: changes.execution.agentSessionId,
@@ -1078,7 +1078,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
       },
       // Read side — what openExternalTerminalForTask calls
       getTaskStatus(taskId: string) { return store.get(taskId)?.status ?? null; },
-      getExecutorType(taskId: string) { return store.get(taskId)?.executorType ?? null; },
+      getRunnerKind(taskId: string) { return store.get(taskId)?.runnerKind ?? null; },
       getAgentSessionId(taskId: string) { return store.get(taskId)?.agentSessionId ?? null; },
       getExecutionAgent(taskId: string) { return store.get(taskId)?.agentName ?? null; },
       getContainerId() { return null; },
@@ -1101,7 +1101,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
     // 1. Simulate initial task state (before fix)
     persistence.store.set('task-codex-fix', {
       status: 'failed',
-      executorType: 'worktree',
+      runnerKind: 'worktree',
       workspacePath: '/tmp/workspace',
     });
 
@@ -1113,7 +1113,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
     // 3. Build PersistedTaskMeta exactly as openExternalTerminalForTask does (line 66-74)
     const meta: PersistedTaskMeta = {
       taskId: 'task-codex-fix',
-      executorType: persistence.getExecutorType('task-codex-fix') ?? 'worktree',
+      runnerKind: persistence.getRunnerKind('task-codex-fix') ?? 'worktree',
       agentSessionId: persistence.getAgentSessionId('task-codex-fix') ?? undefined,
       executionAgent: persistence.getExecutionAgent('task-codex-fix') ?? undefined,
       workspacePath: persistence.getWorkspacePath('task-codex-fix') ?? undefined,
@@ -1143,7 +1143,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
     const persistence = createMockPersistence();
     persistence.store.set('task-claude-fix', {
       status: 'failed',
-      executorType: 'worktree',
+      runnerKind: 'worktree',
       workspacePath: '/tmp/workspace',
     });
     persistence.updateTask('task-claude-fix', {
@@ -1152,7 +1152,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
 
     const meta: PersistedTaskMeta = {
       taskId: 'task-claude-fix',
-      executorType: persistence.getExecutorType('task-claude-fix') ?? 'worktree',
+      runnerKind: persistence.getRunnerKind('task-claude-fix') ?? 'worktree',
       agentSessionId: persistence.getAgentSessionId('task-claude-fix') ?? undefined,
       executionAgent: persistence.getExecutionAgent('task-claude-fix') ?? undefined,
       workspacePath: persistence.getWorkspacePath('task-claude-fix') ?? undefined,
@@ -1177,7 +1177,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
     const persistence = createMockPersistence();
     persistence.store.set('task-noagent', {
       status: 'failed',
-      executorType: 'worktree',
+      runnerKind: 'worktree',
       workspacePath: '/tmp/workspace',
       agentSessionId: 'sess-default',
       // agentName intentionally NOT set
@@ -1185,7 +1185,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
 
     const meta: PersistedTaskMeta = {
       taskId: 'task-noagent',
-      executorType: persistence.getExecutorType('task-noagent') ?? 'worktree',
+      runnerKind: persistence.getRunnerKind('task-noagent') ?? 'worktree',
       agentSessionId: persistence.getAgentSessionId('task-noagent') ?? undefined,
       executionAgent: persistence.getExecutionAgent('task-noagent') ?? undefined,
       workspacePath: persistence.getWorkspacePath('task-noagent') ?? undefined,
@@ -1203,7 +1203,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
     // Mock persistence that returns no workspacePath for a worktree executor
     const mockPersistence = {
       getTaskStatus: (_taskId: string) => 'failed',
-      getExecutorType: (_taskId: string) => 'worktree',
+      getRunnerKind: (_taskId: string) => 'worktree',
       getAgentSessionId: (_taskId: string) => null,
       getContainerId: (_taskId: string) => null,
       getWorkspacePath: (_taskId: string) => null, // Missing workspace!
@@ -1231,7 +1231,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
     // Docker is not in the managed list, but let's verify the invariant doesn't block it
     const mockPersistence = {
       getTaskStatus: (_taskId: string) => 'failed',
-      getExecutorType: (_taskId: string) => 'docker',
+      getRunnerKind: (_taskId: string) => 'docker',
       getAgentSessionId: (_taskId: string) => null,
       getContainerId: (_taskId: string) => 'abc123',
       getWorkspacePath: (_taskId: string) => '/workspace', // Has workspace
@@ -1266,7 +1266,7 @@ describe('openExternalTerminalForTask fail-fast workspace invariant', () => {
   it('refuses host-repo fallback when worktree task has no workspace path', async () => {
     const mockPersistence = {
       getTaskStatus: vi.fn(() => 'completed'),
-      getExecutorType: vi.fn(() => 'worktree'),
+      getRunnerKind: vi.fn(() => 'worktree'),
       getAgentSessionId: vi.fn(() => null),
       getContainerId: vi.fn(() => null),
       getWorkspacePath: vi.fn(() => null),  // Missing workspace path!
@@ -1294,12 +1294,12 @@ describe('openExternalTerminalForTask fail-fast workspace invariant', () => {
   it('refuses host-repo fallback when ssh task has no workspace path', async () => {
     const mockPersistence = {
       getTaskStatus: vi.fn(() => 'completed'),
-      getExecutorType: vi.fn(() => 'ssh'),
+      getRunnerKind: vi.fn(() => 'ssh'),
       getAgentSessionId: vi.fn(() => null),
       getContainerId: vi.fn(() => null),
       getWorkspacePath: vi.fn(() => null),  // Missing workspace path!
       getBranch: vi.fn(() => null),
-      getRemoteTargetId: vi.fn(() => null),
+      getPoolMemberId: vi.fn(() => null),
     };
 
     const ssh = new SshExecutor({ host: 'h', user: 'u', sshKeyPath: '/k' });
@@ -1321,7 +1321,7 @@ describe('openExternalTerminalForTask fail-fast workspace invariant', () => {
   it('refuses host-repo fallback when docker task has no workspace path', async () => {
     const mockPersistence = {
       getTaskStatus: vi.fn(() => 'completed'),
-      getExecutorType: vi.fn(() => 'docker'),
+      getRunnerKind: vi.fn(() => 'docker'),
       getAgentSessionId: vi.fn(() => null),
       getContainerId: vi.fn(() => 'container-abc'),  // Has container ID
       getWorkspacePath: vi.fn(() => null),  // But missing workspace path!
@@ -1349,7 +1349,7 @@ describe('openExternalTerminalForTask fail-fast workspace invariant', () => {
 
     const mockPersistence = {
       getTaskStatus: vi.fn(() => 'completed'),
-      getExecutorType: vi.fn(() => 'local'),  // Non-managed type
+      getRunnerKind: vi.fn(() => 'local'),  // Non-managed type
       getAgentSessionId: vi.fn(() => null),
       getContainerId: vi.fn(() => null),
       getWorkspacePath: vi.fn(() => null),

@@ -31,7 +31,7 @@ export interface CostEventAttribution {
   /** Specific execution attempt. */
   readonly attemptId: string;
   /** Executor type that ran the attempt (e.g. 'worktree', 'docker'). */
-  readonly executorType: string;
+  readonly runnerKind: string;
 }
 
 // ── Usage ───────────────────────────────────────────────────

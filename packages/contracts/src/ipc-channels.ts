@@ -21,7 +21,7 @@ export interface TaskReplacementDef {
   command?: string;
   prompt?: string;
   dependencies?: string[];
-  executorType?: string;
+  runnerKind?: string;
   executionAgent?: string;
 }
 
@@ -289,7 +289,7 @@ export const IpcChannels = {
     response: void;
   },
   'invoker:edit-task-type': {} as {
-    request: [taskId: string, executorType: string, remoteTargetId?: string];
+    request: [taskId: string, runnerKind: string, poolMemberId?: string];
     response: void;
   },
   'invoker:edit-task-agent': {} as {

@@ -9,7 +9,7 @@ function makeTask(overrides: Partial<TaskState> = {}): TaskState {
     status: 'failed',
     dependencies: [],
     createdAt: new Date('2024-01-01T00:00:00Z'),
-    config: { workflowId: 'wf-1', executorType: 'worktree' } as any,
+    config: { workflowId: 'wf-1', runnerKind: 'worktree' } as any,
     execution: {},
     ...overrides,
   } as TaskState;

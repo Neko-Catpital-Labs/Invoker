@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
@@ -144,7 +144,7 @@ describe('RepoPool', () => {
     writeFileSync(join(leakedPath, 'leaked.txt'), 'partial workspace');
 
     const wt = await poolWithExternalBase.acquireWorktree(localRepoUrl, branch);
-    expect(wt.worktreePath).toBe(leakedPath);
+    expect(realpathSync(wt.worktreePath)).toBe(realpathSync(leakedPath));
     expect(existsSync(join(wt.worktreePath, '.git'))).toBe(true);
     const currentBranch = execSync('git branch --show-current', { cwd: wt.worktreePath }).toString().trim();
     expect(currentBranch).toBe(branch);
@@ -186,7 +186,7 @@ describe('RepoPool', () => {
         actionId,
         { forceFresh: true },
       );
-      expect(acquired.worktreePath).toBe(targetPath);
+      expect(realpathSync(acquired.worktreePath)).toBe(realpathSync(targetPath));
       expect(existsSync(join(acquired.worktreePath, '.git'))).toBe(true);
       expect(runBashSpy).toHaveBeenCalledTimes(2);
     } finally {

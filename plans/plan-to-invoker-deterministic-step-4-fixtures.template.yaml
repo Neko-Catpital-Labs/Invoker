@@ -6,7 +6,6 @@ onFinish: pull_request
 mergeMode: external_review
 baseBranch: master
 repoUrl: git@github.com:example-org/acme-repo.git
-executorType: worktree
 
 externalDependencies:
   - workflowId: "__UPSTREAM_WORKFLOW_ID__"
@@ -34,16 +33,14 @@ tasks:
   - id: run-plan-to-invoker-tests
     description: "Run script + fixture validation tests"
     command: "bash scripts/test-plan-to-invoker-skill.sh"
-    executorType: ssh
-    remoteTargetId: remote_digital_ocean_1
+    poolId: remote_digital_ocean_1_pool
     dependencies:
       - trim-reference-markdown
 
   - id: post-fix-regression
     description: "Run the full repository test suite as post-fix regression"
     command: "pnpm run test:all"
-    executorType: ssh
-    remoteTargetId: remote_digital_ocean_1
+    poolId: remote_digital_ocean_1_pool
     dependencies:
       - convert-markdown-examples-to-fixtures
       - trim-reference-markdown

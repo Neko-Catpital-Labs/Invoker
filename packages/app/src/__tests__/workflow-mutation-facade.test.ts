@@ -124,7 +124,7 @@ describe('WorkflowMutationFacade', () => {
   });
 
   describe('editTaskType', () => {
-    it('calls orchestrator.editTaskType with optional remoteTargetId', async () => {
+    it('calls orchestrator.editTaskType with optional poolMemberId', async () => {
       const result = await facade.editTaskType('task-a', 'docker', 'remote-1');
 
       expect(deps.orchestrator.editTaskType).toHaveBeenCalledWith('task-a', 'docker', 'remote-1');
