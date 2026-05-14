@@ -614,7 +614,7 @@ if (isHeadless) {
     const command = cliArgs[0];
     const readOnlyMode = isHeadlessReadOnlyCommand(cliArgs);
     const mutatingMode = isHeadlessMutatingCommand(cliArgs);
-    const standaloneMode = process.env.INVOKER_HEADLESS_STANDALONE === '1';
+    const standaloneMode = process.env.INVOKER_HEADLESS_STANDALONE === '1' || command === 'owner-serve';
     const ownsHeadlessShutdown = standaloneMode && !readOnlyMode && command === 'owner-serve';
     const queueQueryMode = command === 'queue' || (command === 'query' && cliArgs[1] === 'queue');
 
@@ -958,6 +958,39 @@ if (isHeadless) {
           }
           return workflowMutationCoordinator.enqueue<T>(workflowId, priority, channel, args);
         };
+
+        if (!workflowMutationDispatcher.has('headless.exec')) {
+          workflowMutationDispatcher.set('headless.exec', async (payloadArg: unknown) => {
+            const payload = payloadArg as HeadlessExecMutationPayload;
+            await runHeadless(payload.args, {
+              ...headlessDeps,
+              waitForApproval: payload.waitForApproval,
+              noTrack: payload.noTrack,
+              signal: activeMutationContext?.signal,
+              mutationTiming: activeMutationContext?.mutationTiming,
+            });
+            return { ok: true };
+          });
+        }
+        if (!workflowMutationCoordinator) {
+          workflowMutationCoordinator = new PersistedWorkflowMutationCoordinator(
+            persistence,
+            workflowMutationOwnerId,
+            async (channel: string, args: unknown[], context) => {
+              const handler = workflowMutationDispatcher.get(channel);
+              if (!handler) {
+                throw new Error(`No workflow mutation dispatcher registered for ${channel}`);
+              }
+              activeMutationContext = context;
+              try {
+                return await handler(...args);
+              } finally {
+                activeMutationContext = undefined;
+              }
+            },
+            { maxConcurrentWorkflowDrains, logger },
+          );
+        }
 
         const executeStandaloneHeadlessRun = async (
           payload: HeadlessRunMutationPayload,
