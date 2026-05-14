@@ -219,6 +219,7 @@ export function ContextMenu({
       className="fixed z-50 bg-gray-800 border border-gray-600 rounded-lg shadow-xl py-1 min-w-[160px]"
       style={{ left: position.left, top: position.top }}
       onKeyDown={handleKeyDown}
+      onClick={(event) => event.stopPropagation()}
       tabIndex={-1}
     >
       {renderedItems.map((item, idx) => {

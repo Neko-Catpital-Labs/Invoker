@@ -179,9 +179,9 @@ export function WorkflowInspector({
     <aside className="h-full w-full border-l border-gray-800 bg-gray-900 flex flex-col">
       <div className="flex items-center justify-between border-b border-gray-800 px-3 py-2">
         <div className="min-w-0 pr-2">
-          <div className="text-sm font-semibold leading-snug text-gray-100" data-testid="workflow-inspector-title">
+          <h2 className="text-sm font-semibold leading-snug text-gray-100" data-testid="workflow-inspector-title">
             {inspectorTitle}
-          </div>
+          </h2>
         </div>
         <button
           onClick={onToggleCollapsed}
@@ -216,8 +216,16 @@ export function WorkflowInspector({
               ))}
             </div>
           )}
-          {task?.execution.error && (
-            <p className="mt-2 text-xs text-red-300 break-words">{task.execution.error}</p>
+          {(task?.execution.error || task?.execution.exitCode !== undefined) && (
+            <div className="mt-3 rounded border border-red-500/60 bg-red-950/30 p-2">
+              <h3 className="text-[11px] uppercase tracking-wide text-red-300">Error</h3>
+              {task.execution.error && (
+                <p className="mt-1 whitespace-pre-wrap break-words text-xs text-red-200">{task.execution.error}</p>
+              )}
+              {task.execution.exitCode !== undefined && (
+                <p className="mt-1 text-xs text-red-200">Exit code: {task.execution.exitCode}</p>
+              )}
+            </div>
           )}
           {!task && rollup?.failedTasks.length ? (
             <div className="mt-3 space-y-2">
