@@ -221,6 +221,16 @@ export class CommandService {
     );
   }
 
+    async editTaskPool(
+    envelope: CommandEnvelope<{ taskId: string; poolId: string }>,
+  ): Promise<CommandResult<TaskState[]>> {
+    return this.executeCommand<TaskState[]>(
+      'EDIT_TASK_POOL_FAILED',
+      () => this.orchestrator.editTaskPool(envelope.payload.taskId, envelope.payload.poolId),
+      this.workflowIdForTask(envelope.payload.taskId),
+    );
+  }
+
     async editTaskAgent(
     envelope: CommandEnvelope<{ taskId: string; agentName: string }>,
   ): Promise<CommandResult<TaskState[]>> {

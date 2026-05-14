@@ -2743,6 +2743,38 @@ export class Orchestrator {
     return hostChanged ? this.recreateTask(taskId) : this.retryTask(taskId);
   }
 
+    editTaskPool(taskId: string, poolId: string): TaskState[] {
+    this.refreshFromDb();
+    const task = this.stateGetTask(taskId);
+    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
+    if (task.config.isMergeNode) throw new Error(`Cannot change executor pool of merge node ${taskId}`);
+    if (!poolId || !this.availablePoolIds.has(poolId)) {
+      throw new Error(
+        `Cannot switch task "${taskId}" to poolId="${poolId}": pool is not defined in executionPools. ` +
+        `Available: [${[...this.availablePoolIds].join(', ')}]`,
+      );
+    }
+
+    if (task.status === 'running' || task.status === 'fixing_with_ai') {
+      this.cancelTask(taskId);
+    }
+
+    const poolChanges: TaskStateChanges = {
+      config: {
+        poolId,
+        runnerKind: undefined,
+        poolMemberId: undefined,
+      },
+    };
+    const poolBefore = this.stateGetTask(taskId)!;
+    const poolUpdated = this.writeAndSync(taskId, poolChanges);
+    const poolDelta: TaskDelta = this.buildUpdateDelta(poolBefore, poolUpdated, poolChanges);
+    this.persistence.logEvent?.(taskId, 'task.updated', poolChanges);
+    this.messageBus.publish(TASK_DELTA_CHANNEL, poolDelta);
+
+    return this.recreateTask(taskId);
+  }
+
     editTaskAgent(taskId: string, agentName: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);

@@ -28,7 +28,7 @@ describe('WorkflowInspector', () => {
     render(
       <WorkflowInspector
         workflow={workflow}
-        task={makeTask()}
+        task={makeTask({ status: 'failed' })}
         collapsed={false}
         advancedExpanded={false}
         onToggleCollapsed={() => {}}
@@ -44,7 +44,7 @@ describe('WorkflowInspector', () => {
     render(
       <WorkflowInspector
         workflow={workflow}
-        task={makeTask()}
+        task={makeTask({ status: 'failed' })}
         collapsed={false}
         advancedExpanded={false}
         onToggleCollapsed={() => {}}
