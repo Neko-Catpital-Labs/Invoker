@@ -29,6 +29,7 @@ import { WorkflowGraph } from './components/WorkflowGraph.js';
 import { WorkflowInspector } from './components/WorkflowInspector.js';
 import { ActionGraphView } from './components/ActionGraphView.js';
 import { WorkflowStatusChips } from './components/WorkflowStatusChips.js';
+import { StatusBar } from './components/StatusBar.js';
 import { TerminalDrawer } from './components/TerminalDrawer.js';
 import {
   isExperimentSpawnPivotTask,
@@ -1106,6 +1107,11 @@ export function App() {
                   activeFilters={statusFilters}
                   onStatusClick={handleStatusClick}
                 />
+                <StatusBar
+                  tasks={tasks}
+                  activeFilters={statusFilters}
+                  onStatusClick={(filterKey, event) => handleStatusClick(filterKey as WorkflowStatus, event)}
+                />
                 <TerminalDrawer
                   collapsed={terminalCollapsed}
                   onToggle={() => setTerminalCollapsed((prev) => !prev)}
@@ -1128,6 +1134,11 @@ export function App() {
               onEditAgent={handleEditAgent}
               onEditPrompt={handleEditPrompt}
               onEditCommand={handleEditCommand}
+              onProvideInput={openInputModal}
+              onApprove={openApprovalModal}
+              onReject={(task) => setModal({ type: 'approval', task, action: 'reject' })}
+              onSelectExperiment={openExperimentModal}
+              onSetExternalGatePolicies={handleSetExternalGatePolicies}
               onSetMergeBranch={handleSetMergeBranch}
               onToggleCollapsed={() => setInspectorCollapsed((prev) => !prev)}
               onToggleAdvanced={() => setAdvancedMetadataExpanded((prev) => !prev)}
