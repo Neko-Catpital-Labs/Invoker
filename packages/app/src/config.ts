@@ -135,6 +135,11 @@ export interface InvokerConfig {
     maxConcurrentTasksPerMember?: number;
   }>;
   /**
+   * Default execution pool for tasks that do not declare poolId and are not
+   * routed by executorRoutingRules. Applies to command and prompt-only tasks.
+   */
+  defaultPoolId?: string;
+  /**
    * Config-owned routing policy for heavyweight shell commands.
    * Matching tasks are auto-routed to the configured pool at plan submission time.
    * Default matcher set for v1 is any command invoking `pnpm`.

@@ -46,7 +46,7 @@
   },
 
   "executionPools": {
-    "ssh-light": {
+    "mixed-local-ssh": {
       "comment": "Pool routes tasks across mixed SSH/local members with shared queue/drain semantics",
       "members": [
         { "type": "ssh", "id": "staging-server" },
@@ -55,14 +55,24 @@
       ],
       "selectionStrategy": "roundRobin",
       "maxConcurrentTasksPerMember": 1
+    },
+    "pnpm-ssh": {
+      "comment": "Pool for pnpm commands that should run only on SSH machines",
+      "members": [
+        { "type": "ssh", "id": "staging-server" },
+        { "type": "ssh", "id": "build-server-b" }
+      ],
+      "selectionStrategy": "roundRobin",
+      "maxConcurrentTasksPerMember": 1
     }
   },
+  "defaultPoolId": "mixed-local-ssh",
 
   "executorRoutingRules": [
     {
-      "comment": "Route pnpm commands to ssh-light pool",
+      "comment": "Route pnpm commands to the SSH-only pool before defaultPoolId applies",
       "regex": "\\bpnpm(?:\\s|$)",
-      "poolId": "ssh-light",
+      "poolId": "pnpm-ssh",
       "strategy": "route"
     }
   ],

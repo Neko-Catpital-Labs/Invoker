@@ -198,4 +198,13 @@ describe('loadConfig', () => {
     });
   });
 
+  it('reads defaultPoolId from user config', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ defaultPoolId: 'mixed-local-ssh' }),
+    );
+    const config = loadConfig();
+    expect(config.defaultPoolId).toBe('mixed-local-ssh');
+  });
+
 });
