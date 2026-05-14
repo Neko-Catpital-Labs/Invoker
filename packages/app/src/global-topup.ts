@@ -26,6 +26,15 @@ function runningExecutionKey(task: TaskState): string {
   return attemptId ? `attempt:${attemptId}` : `task:${task.id}`;
 }
 
+export function isDispatchableLaunch(task: TaskState): boolean {
+  return task.status === 'running'
+    || (
+      task.status === 'pending'
+      && task.execution.phase === 'launching'
+      && !!task.execution.selectedAttemptId
+    );
+}
+
 /**
  * Top up idle scheduler capacity after a scoped mutation.
  * This starts globally-ready work while avoiding duplicate execution
@@ -41,12 +50,12 @@ export async function executeGlobalTopup({
 }: GlobalTopupParams): Promise<TaskState[]> {
   const dedupeKeys = new Set(
     alreadyDispatched
-      .filter((task) => task.status === 'running')
+      .filter(isDispatchableLaunch)
       .map((task) => runningExecutionKey(task)),
   );
   const started = orchestrator.startExecution();
   const runnable = started
-    .filter((task) => task.status === 'running')
+    .filter(isDispatchableLaunch)
     .filter((task) => !dedupeKeys.has(runningExecutionKey(task)));
 
   if (runnable.length === 0) {
@@ -81,7 +90,7 @@ export async function dispatchStartedTasksWithGlobalTopup({
   started = [],
   mutationTiming,
 }: MutationTopupParams): Promise<{ runnable: TaskState[]; topup: TaskState[] }> {
-  const runnable = started.filter((task) => task.status === 'running');
+  const runnable = started.filter(isDispatchableLaunch);
   if (runnable.length > 0) {
     logger?.info(
       `[global-topup] ${context}: dispatching ${runnable.length} scoped task(s): [${runnable.map((task) => task.id).join(', ')}]`,

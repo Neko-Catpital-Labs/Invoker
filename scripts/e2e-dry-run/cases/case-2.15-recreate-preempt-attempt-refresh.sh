@@ -28,22 +28,6 @@ echo "==> case 2.15: submit plan (background — sleep 8 blocks)"
 SUBMIT_LOG="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.15-submit.XXXXXX.log")"
 invoker_e2e_submit_plan_no_track_capture "$PLAN_PATH" "$SUBMIT_LOG"
 
-echo "==> case 2.15: waiting for task to reach running"
-for i in $(seq 1 30); do
-  ST="$(invoker_e2e_task_status e2e-g2215-task 2>/dev/null || true)"
-  if [ "$ST" = "running" ]; then
-    echo "==> case 2.15: task is running (poll $i)"
-    break
-  fi
-  sleep 1
-done
-
-if [ "$(invoker_e2e_task_status e2e-g2215-task 2>/dev/null || true)" != "running" ]; then
-  echo "FAIL case 2.15: task did not reach running before recreate"
-  invoker_e2e_run_headless status 2>&1 || true
-  exit 1
-fi
-
 WF_ID="$(invoker_e2e_extract_workflow_id_from_log "$SUBMIT_LOG")"
 if [ -z "$WF_ID" ]; then
   echo "FAIL case 2.15: could not resolve workflow id"
@@ -52,6 +36,33 @@ if [ -z "$WF_ID" ]; then
 fi
 
 TASK_ID="$WF_ID/e2e-g2215-task"
+
+echo "==> case 2.15: waiting for task to become in-flight"
+IN_FLIGHT=""
+for i in $(seq 1 30); do
+  TASK_JSON="$(invoker_e2e_run_headless query task "$TASK_ID" --output json 2>/dev/null || true)"
+  IN_FLIGHT="$(printf '%s' "$TASK_JSON" | python3 -c 'import json,sys
+try:
+    d=json.load(sys.stdin)
+except Exception:
+    print("")
+    raise SystemExit(0)
+status=d.get("status","")
+phase=(d.get("execution") or {}).get("phase","")
+print("yes" if status=="running" or (status=="pending" and phase=="launching") else "")
+')"
+  if [ "$IN_FLIGHT" = "yes" ]; then
+    echo "==> case 2.15: task is in-flight (poll $i)"
+    break
+  fi
+  sleep 1
+done
+
+if [ "$IN_FLIGHT" != "yes" ]; then
+  echo "FAIL case 2.15: task did not become in-flight before recreate"
+  invoker_e2e_run_headless status 2>&1 || true
+  exit 1
+fi
 
 echo "==> case 2.15: recreate (no-track) while workflow is in-flight"
 invoker_e2e_run_headless --no-track recreate "$WF_ID"
