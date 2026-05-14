@@ -43,6 +43,14 @@ export function createReactFlowMock() {
 
     return (
       <div data-testid="mock-react-flow" className="react-flow">
+        {props.edges?.map((edge: any) => (
+          <div
+            key={edge.id}
+            data-testid={`rf__edge-${edge.id}`}
+            data-source={edge.source}
+            data-target={edge.target}
+          />
+        ))}
         {nodes.map((node) => {
           const NodeComponent = nodeTypes[node.type ?? ''];
           return (
