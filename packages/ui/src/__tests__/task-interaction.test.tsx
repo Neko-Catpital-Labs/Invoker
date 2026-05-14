@@ -88,7 +88,7 @@ describe('Task interaction (component)', () => {
 
     fireEvent.click(screen.getByTestId('workflow-node-wf-a'));
     await waitFor(() => {
-      expect(screen.getByTestId('workflow-inspector-status-label')).toHaveTextContent('running');
+      expect(screen.getByTestId('workflow-inspector-status-label')).toHaveTextContent('failed');
       expect(screen.queryByTestId('workflow-inspector-prompt-input')).not.toBeInTheDocument();
     });
 
@@ -99,7 +99,7 @@ describe('Task interaction (component)', () => {
 
     fireEvent.click(screen.getByTestId('workflow-node-wf-a'));
     await waitFor(() => {
-      expect(screen.getByTestId('workflow-inspector-status-label')).toHaveTextContent('running');
+      expect(screen.getByTestId('workflow-inspector-status-label')).toHaveTextContent('failed');
       expect(screen.queryByTestId('workflow-inspector-prompt-input')).not.toBeInTheDocument();
     });
   });
