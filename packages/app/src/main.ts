@@ -149,6 +149,10 @@ import { relaunchOrphansAndStartReady } from './orphan-relaunch.js';
 import { evaluateExecutingStall } from './executing-stall.js';
 import { listOpenFixIntentsForTask } from './auto-fix-intents.js';
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
+import {
+  buildActionGraphDiagnostics,
+  resolveActionDiagnosticsStallThresholdMs,
+} from './action-graph-diagnostics.js';
 
 declare const __BUILD_SHA__: string | undefined;
 declare const __BUILD_VERSION__: string | undefined;
@@ -3162,6 +3166,23 @@ if (isHeadless) {
 
     ipcMain.handle('invoker:get-queue-status', () => {
       return orchestrator.getQueueStatus();
+    });
+
+    ipcMain.handle('invoker:get-action-graph', () => {
+      orchestrator.syncAllFromDb();
+      const tasks = orchestrator.getAllTasks();
+      const workflows = persistence.listWorkflows();
+      return buildActionGraphDiagnostics({
+        workflows,
+        tasks,
+        attemptsByTaskId: new Map(tasks.map((task) => [task.id, persistence.loadAttempts(task.id)])),
+        queueStatus: orchestrator.getQueueStatus(),
+        mutationIntents: persistence.listWorkflowMutationIntents(),
+        mutationLeases: persistence.listWorkflowMutationLeases(),
+        eventsByTaskId: new Map(tasks.map((task) => [task.id, persistence.getEvents(task.id)])),
+        activityLogs: persistence.getActivityLogs(0, 200),
+        stallThresholdMs: resolveActionDiagnosticsStallThresholdMs(invokerConfig),
+      });
     });
 
     ipcMain.handle('invoker:report-ui-perf', (_event, metric: string, data?: Record<string, unknown>) => {

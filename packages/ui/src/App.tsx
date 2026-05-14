@@ -12,6 +12,7 @@
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect } from 'react';
 import yaml from 'js-yaml';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowStatus } from './types.js';
+import type { ActionGraphNode } from '@invoker/contracts';
 import { useTasks } from './hooks/useTasks.js';
 import { useInvoker } from './hooks/useInvoker.js';
 import { TaskDAG } from './components/TaskDAG.js';
@@ -26,6 +27,7 @@ import { ReplaceTaskModal } from './components/ReplaceTaskModal.js';
 import { SystemSetupModal } from './components/SystemSetupModal.js';
 import { WorkflowGraph } from './components/WorkflowGraph.js';
 import { WorkflowInspector } from './components/WorkflowInspector.js';
+import { ActionGraphView } from './components/ActionGraphView.js';
 import { WorkflowStatusChips } from './components/WorkflowStatusChips.js';
 import { TerminalDrawer } from './components/TerminalDrawer.js';
 import {
@@ -227,7 +229,8 @@ export function App() {
   const [hasStarted, setHasStarted] = useState(false);
   const [planName, setPlanName] = useState<string | null>(null);
   const [onFinish, setOnFinish] = useState<'none' | 'merge' | 'pull_request'>('merge');
-  const [viewMode, setViewMode] = useState<'dag' | 'history' | 'timeline' | 'queue'>('dag');
+  const [viewMode, setViewMode] = useState<'dag' | 'history' | 'timeline' | 'queue' | 'actionGraph'>('dag');
+  const [selectedActionNode, setSelectedActionNode] = useState<ActionGraphNode | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; taskId: string } | null>(null);
   const [remoteTargets, setRemoteTargets] = useState<string[]>([]);
   const [executionAgents, setExecutionAgents] = useState<string[]>([]);
@@ -977,6 +980,17 @@ export function App() {
               History
             </button>
             <button
+              data-testid="rail-action-graph"
+              onClick={() => {
+                setViewMode('actionGraph');
+                setWorkflowSelectionDismissed(true);
+                setSelectedTaskId(null);
+              }}
+              className={`w-full rounded px-2 py-1.5 text-left text-xs ${viewMode === 'actionGraph' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
+            >
+              Action Graph
+            </button>
+            <button
               data-testid="rail-queue"
               onClick={() => {
                 setViewMode('queue');
@@ -1041,6 +1055,15 @@ export function App() {
                 <HistoryView onTaskClick={handleTaskClick} selectedTaskId={selectedTaskId} />
               ) : viewMode === 'timeline' ? (
                 <TimelineView tasks={tasks} onTaskClick={handleTaskClick} selectedTaskId={selectedTaskId} />
+              ) : viewMode === 'actionGraph' ? (
+                <ActionGraphView
+                  selectedNodeId={selectedActionNode?.id ?? null}
+                  onSelectNode={(node) => {
+                    setSelectedActionNode(node);
+                    if (node?.taskId) setSelectedTaskId(node.taskId);
+                    if (node?.workflowId) setSelectedWorkflowId(node.workflowId);
+                  }}
+                />
               ) : (
                 <>
                   <WorkflowGraph
@@ -1100,6 +1123,7 @@ export function App() {
               executionAgents={executionAgents}
               collapsed={inspectorCollapsed}
               advancedExpanded={advancedMetadataExpanded}
+              actionNode={viewMode === 'actionGraph' ? selectedActionNode : null}
               onEditType={handleEditType}
               onEditAgent={handleEditAgent}
               onEditPrompt={handleEditPrompt}
