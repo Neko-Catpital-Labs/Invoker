@@ -1,5 +1,6 @@
 import type { MouseEvent } from 'react';
 import type { WorkflowMeta, WorkflowStatus } from '../types.js';
+import { getStatusVisual } from '../lib/status-colors.js';
 
 interface WorkflowStatusChipsProps {
   workflows: Map<string, WorkflowMeta>;
@@ -20,18 +21,6 @@ const STATUS_LABELS: Record<WorkflowStatus, string> = {
   review_ready: 'Review Ready',
   awaiting_approval: 'Approval',
   stale: 'Stale',
-};
-
-const STATUS_TEXT_CLASSES: Record<WorkflowStatus, string> = {
-  pending: 'text-gray-300/70',
-  running: 'text-blue-300/70',
-  fixing_with_ai: 'text-cyan-300/70',
-  completed: 'text-green-300/70',
-  failed: 'text-red-300/70',
-  blocked: 'text-gray-400/70',
-  review_ready: 'text-sky-300/70',
-  awaiting_approval: 'text-purple-300/70',
-  stale: 'text-slate-400/70',
 };
 
 export function WorkflowStatusChips({
@@ -69,7 +58,7 @@ export function WorkflowStatusChips({
             type="button"
             data-testid={`workflow-status-pill-${status}`}
             onClick={(event) => onStatusClick(status, event)}
-            className={`${STATUS_TEXT_CLASSES[status]} ${filterClass(status)}`}
+            className={`${getStatusVisual(status).text} ${filterClass(status)}`}
           >
             {STATUS_LABELS[status]}: <span className="font-medium">{count}</span>
           </button>

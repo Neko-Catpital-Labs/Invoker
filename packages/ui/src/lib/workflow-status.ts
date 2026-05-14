@@ -1,4 +1,5 @@
 import type { WorkflowStatus } from '../types.js';
+import { getStatusVisual, isActiveStatusVisual } from './status-colors.js';
 
 const WORKFLOW_STATUS_SET: ReadonlySet<WorkflowStatus> = new Set<WorkflowStatus>([
   'pending',
@@ -26,74 +27,15 @@ export interface WorkflowStatusVisual {
 }
 
 export function workflowStatusVisual(status: WorkflowStatus): WorkflowStatusVisual {
-  switch (status) {
-    case 'completed':
-      return {
-        borderClass: 'border-green-500/45',
-        railClass: 'bg-green-500',
-        textClass: 'text-green-300',
-        pulse: false,
-      };
-    case 'running':
-      return {
-        borderClass: 'border-blue-400/70',
-        railClass: 'bg-blue-400',
-        textClass: 'text-blue-300',
-        pulse: true,
-      };
-    case 'fixing_with_ai':
-      return {
-        borderClass: 'border-cyan-400/70',
-        railClass: 'bg-cyan-400',
-        textClass: 'text-cyan-300',
-        pulse: true,
-      };
-    case 'failed':
-      return {
-        borderClass: 'border-red-500/60',
-        railClass: 'bg-red-500',
-        textClass: 'text-red-300',
-        pulse: false,
-      };
-    case 'blocked':
-      return {
-        borderClass: 'border-amber-500/60',
-        railClass: 'bg-amber-500',
-        textClass: 'text-amber-300',
-        pulse: false,
-      };
-    case 'review_ready':
-      return {
-        borderClass: 'border-violet-500/50',
-        railClass: 'bg-violet-500',
-        textClass: 'text-violet-300',
-        pulse: false,
-      };
-    case 'awaiting_approval':
-      return {
-        borderClass: 'border-orange-500/60',
-        railClass: 'bg-orange-500',
-        textClass: 'text-orange-300',
-        pulse: false,
-      };
-    case 'stale':
-      return {
-        borderClass: 'border-slate-500/55',
-        railClass: 'bg-slate-500',
-        textClass: 'text-slate-300',
-        pulse: false,
-      };
-    case 'pending':
-    default:
-      return {
-        borderClass: 'border-gray-500/60',
-        railClass: 'bg-gray-500',
-        textClass: 'text-gray-300',
-        pulse: false,
-      };
-  }
+  const visual = getStatusVisual(status);
+  return {
+    borderClass: visual.border,
+    railClass: visual.rail,
+    textClass: visual.text,
+    pulse: visual.pulse,
+  };
 }
 
 export function isWorkflowStatusActive(status: WorkflowStatus): boolean {
-  return status === 'running' || status === 'fixing_with_ai';
+  return isActiveStatusVisual(status);
 }
