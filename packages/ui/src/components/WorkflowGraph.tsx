@@ -1,12 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import type { MouseEvent, PointerEvent } from 'react';
+import { useMemo } from 'react';
+import type { MouseEvent } from 'react';
 import type { TaskState, WorkflowMeta, WorkflowStatus } from '../types.js';
-import {
-  deriveWorkflowGraph,
-  layoutWorkflowGraphWithElk,
-  type WorkflowGraphLayout,
-  type WorkflowRoutePoint,
-} from '../lib/workflow-graph.js';
+import { deriveWorkflowGraph, layoutWorkflowGraph } from '../lib/workflow-graph.js';
 import { WorkflowNode } from './WorkflowNode.js';
 
 interface WorkflowGraphProps {
@@ -26,51 +21,10 @@ export function WorkflowGraph({
   onSelectWorkflow,
   onWorkflowContextMenu,
 }: WorkflowGraphProps): JSX.Element {
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const dragRef = useRef<{
-    pointerId: number;
-    x: number;
-    y: number;
-    scrollLeft: number;
-    scrollTop: number;
-  } | null>(null);
-  const pannedRef = useRef(false);
-  const [dragging, setDragging] = useState(false);
-  const [elkLayout, setElkLayout] = useState<{ key: string; result: WorkflowGraphLayout } | null>(null);
-  const [layoutError, setLayoutError] = useState<{ key: string; error: string } | null>(null);
   const graph = useMemo(() => deriveWorkflowGraph(workflows, tasks), [workflows, tasks]);
-  const graphKey = useMemo(() => JSON.stringify({
-    nodes: graph.nodes.map((node) => node.id).sort(),
-    edges: graph.edges.map((edge) => `${edge.source}->${edge.target}`).sort(),
-  }), [graph]);
-  const activeLayout = elkLayout?.key === graphKey ? elkLayout.result : null;
-  const positions = activeLayout?.positions ?? new Map<string, { x: number; y: number }>();
+  const positions = useMemo(() => layoutWorkflowGraph(graph), [graph]);
   const width = Math.max(1400, ...[...positions.values()].map((position) => position.x + 320));
   const height = Math.max(900, ...[...positions.values()].map((position) => position.y + 220));
-
-  useEffect(() => {
-    if (graph.nodes.length === 0) return;
-    let stale = false;
-
-    void layoutWorkflowGraphWithElk(graph).then((result) => {
-      if (!stale) {
-        setElkLayout({ key: graphKey, result });
-        setLayoutError(null);
-      }
-    }).catch((error: unknown) => {
-      if (!stale) {
-        setElkLayout(null);
-        setLayoutError({
-          key: graphKey,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    });
-
-    return () => {
-      stale = true;
-    };
-  }, [graph, graphKey]);
 
   if (graph.nodes.length === 0) {
     return (
@@ -80,80 +34,14 @@ export function WorkflowGraph({
     );
   }
 
-  if (!activeLayout) {
-    const error = layoutError?.key === graphKey ? layoutError.error : undefined;
-    return (
-      <div className="h-full flex items-center justify-center text-gray-500 text-sm">
-        {error ? `Workflow graph layout failed: ${error}` : 'Preparing workflow graph layout'}
-      </div>
-    );
-  }
-
-  const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) return;
-    const target = event.target as HTMLElement;
-    if (target.closest('[data-testid^="workflow-node-"], [role="menu"], button, a, input, textarea, select')) {
-      return;
-    }
-    const scroller = scrollRef.current;
-    if (!scroller) return;
-    dragRef.current = {
-      pointerId: event.pointerId,
-      x: event.clientX,
-      y: event.clientY,
-      scrollLeft: scroller.scrollLeft,
-      scrollTop: scroller.scrollTop,
-    };
-    pannedRef.current = false;
-    setDragging(true);
-    scroller.setPointerCapture(event.pointerId);
-    event.preventDefault();
-  };
-
-  const handlePointerMove = (event: PointerEvent<HTMLDivElement>) => {
-    const drag = dragRef.current;
-    const scroller = scrollRef.current;
-    if (!drag || !scroller || drag.pointerId !== event.pointerId) return;
-    if (Math.abs(event.clientX - drag.x) > 3 || Math.abs(event.clientY - drag.y) > 3) {
-      pannedRef.current = true;
-    }
-    scroller.scrollLeft = drag.scrollLeft - (event.clientX - drag.x);
-    scroller.scrollTop = drag.scrollTop - (event.clientY - drag.y);
-  };
-
-  const endDrag = (event: PointerEvent<HTMLDivElement>) => {
-    const drag = dragRef.current;
-    const scroller = scrollRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    if (scroller?.hasPointerCapture(event.pointerId)) {
-      scroller.releasePointerCapture(event.pointerId);
-    }
-    dragRef.current = null;
-    setDragging(false);
-  };
-
   return (
-    <div
-      ref={scrollRef}
-      className={`h-full w-full overflow-auto ${dragging ? 'cursor-grabbing select-none' : 'cursor-grab'}`}
-      data-testid="workflow-graph-scroll"
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={endDrag}
-      onPointerCancel={endDrag}
-      onClick={(event) => {
-        if (!pannedRef.current) return;
-        pannedRef.current = false;
-        event.stopPropagation();
-      }}
-    >
+    <div className="h-full w-full overflow-auto" data-testid="workflow-graph-scroll">
       <div className="relative" style={{ width, height }}>
         <svg className="absolute inset-0 pointer-events-none" width={width} height={height}>
           {graph.edges.map((edge) => {
             const source = positions.get(edge.source);
             const target = positions.get(edge.target);
             if (!source || !target) return null;
-            const routePoints = activeLayout?.edgePoints.get(`${edge.source}->${edge.target}`);
             const x1 = source.x + 220;
             const y1 = source.y + 58;
             const x2 = target.x;
@@ -163,19 +51,17 @@ export function WorkflowGraph({
             return (
               <path
                 key={`${edge.source}-${edge.target}`}
-                d={routePoints ? routedPath(routePoints) : `M ${x1} ${y1} C ${cx1} ${y1}, ${cx2} ${y2}, ${x2} ${y2}`}
+                d={`M ${x1} ${y1} C ${cx1} ${y1}, ${cx2} ${y2}, ${x2} ${y2}`}
                 fill="none"
                 stroke="rgba(148,163,184,0.55)"
                 strokeWidth={2}
-                strokeDasharray="6 4"
               />
             );
           })}
         </svg>
 
         {graph.nodes.map((node) => {
-          const position = positions.get(node.id);
-          if (!position) return null;
+          const position = positions.get(node.id) ?? { x: 80, y: 80 };
           const dimmed = statusFilters.size > 0 && !statusFilters.has(node.workflow.status);
           return (
             <div
@@ -196,9 +82,4 @@ export function WorkflowGraph({
       </div>
     </div>
   );
-}
-
-function routedPath(points: readonly WorkflowRoutePoint[]): string {
-  const [first, ...rest] = points;
-  return `M ${first.x} ${first.y} ${rest.map((point) => `L ${point.x} ${point.y}`).join(' ')}`;
 }
