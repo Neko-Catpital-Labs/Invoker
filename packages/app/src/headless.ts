@@ -13,7 +13,7 @@ import type { BundledSkillsInstallMode, BundledSkillsStatus, Logger } from '@inv
 import { makeEnvelope } from '@invoker/contracts';
 import type { AgentSessionData } from '@invoker/contracts';
 import { OrchestratorErrorCode } from '@invoker/workflow-core';
-import type { Orchestrator, CommandService, TaskDelta, TaskState } from '@invoker/workflow-core';
+import type { Orchestrator, CommandService, TaskDelta, TaskState, Attempt } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { Channels } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
@@ -648,9 +648,12 @@ async function headlessCosts(
     );
 
     for (const task of tasks) {
+      const attempts = deps.persistence.loadAttempts(task.id);
+      const attemptId = resolveCostAttemptId(task, attempts);
       const ctx = buildAttributionContext({
         id: task.id,
         workflowId: wf.id,
+        attemptId,
         runnerKind: task.config.runnerKind ?? 'worktree',
         agentSessionId: task.execution.agentSessionId,
         lastAgentSessionId: task.execution.lastAgentSessionId,
@@ -710,6 +713,22 @@ async function headlessCosts(
 
 type CostQueryDeps = Pick<HeadlessDeps, 'orchestrator' | 'persistence' | 'executionAgentRegistry'>;
 
+function resolveCostAttemptId(
+  task: TaskState,
+  attempts: readonly Attempt[],
+): string | undefined {
+  const sessionId = task.execution.agentSessionId ?? task.execution.lastAgentSessionId;
+  if (sessionId) {
+    const sessionAttempt = attempts.find(attempt => attempt.agentSessionId === sessionId);
+    if (sessionAttempt) return sessionAttempt.id;
+  }
+
+  const selectedAttemptId = task.execution.selectedAttemptId?.trim();
+  if (selectedAttemptId) return selectedAttemptId;
+
+  return attempts.at(-1)?.id;
+}
+
 async function collectCostEvents(
   flags: QueryFlags,
   deps: CostQueryDeps,
@@ -737,9 +756,12 @@ async function collectCostEvents(
     );
 
     for (const task of tasks) {
+      const attempts = deps.persistence.loadAttempts(task.id);
+      const attemptId = resolveCostAttemptId(task, attempts);
       const ctx = buildAttributionContext({
         id: task.id,
         workflowId: wf.id,
+        attemptId,
         runnerKind: task.config.runnerKind ?? 'worktree',
         agentSessionId: task.execution.agentSessionId,
         lastAgentSessionId: task.execution.lastAgentSessionId,

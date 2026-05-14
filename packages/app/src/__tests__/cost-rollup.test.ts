@@ -111,6 +111,17 @@ describe('attributeSessionUsage', () => {
     expect(result[1].usage.inputTokens).toBe(200);
   });
 
+  it('uses the caller-resolved persisted attempt ID without synthesis', () => {
+    const taskId = 'wf-1/task-a';
+    const result = attributeSessionUsage([makeUsageEvent()], makeContext({
+      taskId,
+      attemptId: 'attempt-persisted-123',
+    }));
+
+    expect(result[0].attribution.attemptId).toBe('attempt-persisted-123');
+    expect(result[0].attribution.attemptId).not.toBe(`${taskId}-latest`);
+  });
+
   it('returns empty array for empty input', () => {
     expect(attributeSessionUsage([], makeContext())).toEqual([]);
   });
@@ -286,6 +297,20 @@ describe('competing design proof: deterministic grouped outputs without provider
     const json2 = JSON.stringify(groups2.map(serializeGroupedRollup));
     expect(json1).toBe(json2);
   });
+
+  it('preserves persisted attempt IDs through deterministic serialization', () => {
+    const event = attributeSessionUsage([makeUsageEvent({ eventId: 'e1' })], makeContext({
+      attemptId: 'attempt-persisted-serialized',
+    }))[0];
+
+    const json1 = JSON.stringify(event);
+    const json2 = JSON.stringify(attributeSessionUsage([makeUsageEvent({ eventId: 'e1' })], makeContext({
+      attemptId: 'attempt-persisted-serialized',
+    }))[0]);
+
+    expect(json1).toBe(json2);
+    expect(JSON.parse(json1).attribution.attemptId).toBe('attempt-persisted-serialized');
+  });
 });
 
 // ── Session ID Resolution ──────────────────────────────────
@@ -359,6 +384,7 @@ describe('buildAttributionContext', () => {
     const task: CostTaskInfo = {
       id: 'wf-1/task-a',
       workflowId: 'wf-1',
+      attemptId: 'attempt-real',
       runnerKind: 'worktree',
       agentSessionId: 'sess-123',
       agentName: 'codex',
@@ -367,7 +393,7 @@ describe('buildAttributionContext', () => {
     expect(ctx).toEqual({
       workflowId: 'wf-1',
       taskId: 'wf-1/task-a',
-      attemptId: 'wf-1/task-a-latest',
+      attemptId: 'attempt-real',
       runnerKind: 'worktree',
       agentSessionId: 'sess-123',
       agentName: 'codex',
@@ -379,7 +405,19 @@ describe('buildAttributionContext', () => {
     const task: CostTaskInfo = {
       id: 'wf-1/task-a',
       workflowId: 'wf-1',
+      attemptId: 'attempt-real',
       runnerKind: 'worktree',
+    };
+    expect(buildAttributionContext(task)).toBeUndefined();
+  });
+
+  it('returns undefined when no attempt ID is supplied', () => {
+    const task: CostTaskInfo = {
+      id: 'wf-1/task-a',
+      workflowId: 'wf-1',
+      attemptId: undefined,
+      runnerKind: 'worktree',
+      agentSessionId: 'sess-123',
     };
     expect(buildAttributionContext(task)).toBeUndefined();
   });
@@ -388,6 +426,7 @@ describe('buildAttributionContext', () => {
     const task: CostTaskInfo = {
       id: 'wf-1/task-a',
       workflowId: 'wf-1',
+      attemptId: 'attempt-old',
       runnerKind: 'ssh',
       lastAgentSessionId: 'sess-old',
       lastAgentName: 'claude',
@@ -402,6 +441,7 @@ describe('buildAttributionContext', () => {
     const task: CostTaskInfo = {
       id: 'wf-1/task-a',
       workflowId: 'wf-1',
+      attemptId: 'attempt-real',
       runnerKind: '',
       agentSessionId: 'sess-123',
     };

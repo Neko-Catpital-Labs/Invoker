@@ -75,6 +75,7 @@ async function flushOutputStream(stream: NodeJS.WriteStream): Promise<void> {
 }
 
 const DEFAULT_NO_TRACK_DELEGATION_TIMEOUT_MS = 30_000;
+const DEFAULT_TRACKED_OWNER_DELEGATION_TIMEOUT_MS = 30_000;
 const POST_BOOTSTRAP_NO_TRACK_DELEGATION_TIMEOUT_MS = 90_000;
 const POST_BOOTSTRAP_OWNER_READY_TIMEOUT_MS = 20_000;
 const READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS = 20_000;
@@ -111,7 +112,7 @@ async function delegateMutation(
   const timeoutMs = noTrack
     ? noTrackTimeoutMs
     : command === 'run' || command === 'resume'
-      ? 5_000
+      ? DEFAULT_TRACKED_OWNER_DELEGATION_TIMEOUT_MS
       : await resolveDelegationTimeoutMs(args);
   delegationClientLog(
     `delegateMutation command=${command ?? '<missing>'} timeoutMs=${timeoutMs} noTrack=${noTrack ? 'true' : 'false'} waitForApproval=${waitForApproval ? 'true' : 'false'}`,
