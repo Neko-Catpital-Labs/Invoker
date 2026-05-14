@@ -920,14 +920,14 @@ test.describe('Visual proof capture', () => {
     await page.getByTestId('workflow-graph-scroll').evaluate((element) => {
       element.scrollTo({ left: 0, top: 0 });
     });
-    for (const workflowId of [rootWorkflowId, downstreamAId, downstreamBId, fanInId]) {
-      await expect(workflowNode(page, workflowId)).toBeInViewport();
-    }
     await page.getByTestId('selected-workflow-mini-dag').evaluate((element) => {
       (element as HTMLElement).style.display = 'none';
     });
     await page.getByRole('button', { name: 'Minimize inspector' }).click();
     await expect(page.getByRole('button', { name: 'Maximize inspector' })).toBeVisible();
+    for (const workflowId of [rootWorkflowId, downstreamAId, downstreamBId, fanInId]) {
+      await expect(workflowNode(page, workflowId)).toBeInViewport();
+    }
 
     await captureScreenshot(page, 'stacked-workflows');
   });
