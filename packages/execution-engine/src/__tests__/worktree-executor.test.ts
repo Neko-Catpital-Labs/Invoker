@@ -1332,7 +1332,7 @@ describe('WorktreeExecutor', () => {
   describe('getRestoredTerminalSpec', () => {
     const baseMeta: PersistedTaskMeta = {
       taskId: 'task-wt-1',
-      executorType: 'worktree',
+      runnerKind: 'worktree',
     };
 
     afterEach(() => {

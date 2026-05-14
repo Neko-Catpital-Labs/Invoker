@@ -67,7 +67,7 @@ Negative fixtures demonstrate anti-patterns and validation errors:
 - **edge-neither-command-nor-prompt.yaml** - Task with neither command nor prompt
 - **edge-invalid-merge-mode.yaml** - Invalid `mergeMode` enum value
 - **edge-invalid-on-finish.yaml** - Invalid `onFinish` enum value
-- **edge-invalid-executor-type.yaml** - Invalid `executorType` enum value
+- **edge-invalid-runner-kind.yaml** - Invalid `runnerKind` enum value
 - **edge-invalid-dependency-reference.yaml** - Dependency on non-existent task
 - **edge-missing-description-for-pr.yaml** - Missing description when `onFinish: pull_request`
 - **edge-cyclic-dependency.yaml** - Cyclic dependency (may require cycle detection)

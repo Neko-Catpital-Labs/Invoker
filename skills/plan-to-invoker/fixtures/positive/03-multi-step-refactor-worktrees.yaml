@@ -1,7 +1,7 @@
 # Multi-Step Refactor with Worktrees
 # Source: examples.md Section 3
 # Description: A plan that performs a multi-step refactor where each task runs in its own isolated git worktree.
-# Uses `executorType: worktree` at the plan level to apply this to all tasks.
+# Uses `runnerKind: worktree` at the plan level to apply this to all tasks.
 #
 # When to use worktrees: Most implementation work. Each task gets a clean environment,
 # and changes merge back automatically when the task succeeds.
@@ -19,7 +19,7 @@ mergeMode: github
 repoUrl: git@github.com:example-org/acme-repo.git
 baseBranch: master
 featureBranch: refactor/config-validation
-executorType: worktree
+runnerKind: worktree
 
 tasks:
   - id: extract-validator

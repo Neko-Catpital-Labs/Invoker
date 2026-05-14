@@ -422,11 +422,11 @@ describe('replaceTask', () => {
     expect(result.errors).toEqual([]);
   });
 
-  it('replacement inherits executorType from broken task when not specified', () => {
+  it('replacement inherits runnerKind from broken task when not specified', () => {
     orchestrator.loadPlan({
       name: 'test',
       tasks: [
-        { id: 'X', description: 'X', command: 'echo X', executorType: 'worktree' },
+        { id: 'X', description: 'X', command: 'echo X', runnerKind: 'worktree' },
       ],
     });
     orchestrator.startExecution();
@@ -436,24 +436,24 @@ describe('replaceTask', () => {
       { id: 'fix', description: 'Fix', command: 'echo fix' },
     ]);
 
-    expect(orchestrator.getTask('fix')!.config.executorType).toBe('worktree');
+    expect(orchestrator.getTask('fix')!.config.runnerKind).toBe('worktree');
   });
 
-  it('replacement can override executorType', () => {
+  it('replacement can override runnerKind', () => {
     orchestrator.loadPlan({
       name: 'test',
       tasks: [
-        { id: 'X', description: 'X', command: 'echo X', executorType: 'worktree' },
+        { id: 'X', description: 'X', command: 'echo X', runnerKind: 'worktree' },
       ],
     });
     orchestrator.startExecution();
     failTask(orchestrator, 'X');
 
     orchestrator.replaceTask('X', [
-      { id: 'fix', description: 'Fix', command: 'echo fix', executorType: 'docker' },
+      { id: 'fix', description: 'Fix', command: 'echo fix', runnerKind: 'docker' },
     ]);
 
-    expect(orchestrator.getTask('fix')!.config.executorType).toBe('docker');
+    expect(orchestrator.getTask('fix')!.config.runnerKind).toBe('docker');
   });
 
   // ── Step 11 (task-invalidation roadmap): topology-fork policy ──

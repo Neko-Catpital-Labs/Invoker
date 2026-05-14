@@ -199,11 +199,11 @@ case "${1:-}" in
 
   edit-type)
     if [ -z "${2:-}" ] || [ -z "${3:-}" ]; then
-      echo "Usage: invoker-ctl edit-type <taskId> <executorType>" >&2
+      echo "Usage: invoker-ctl edit-type <taskId> <runnerKind>" >&2
       exit 1
     fi
     curl -sf -X POST -H 'Content-Type: application/json' \
-      -d "{\"executorType\":\"$3\"}" \
+      -d "{\"runnerKind\":\"$3\"}" \
       "$BASE/api/tasks/$2/edit-type" | fmt '.'
     ;;
 

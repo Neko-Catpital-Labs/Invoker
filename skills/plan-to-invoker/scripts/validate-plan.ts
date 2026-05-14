@@ -174,12 +174,12 @@ function validatePlan(yamlContent: string): ValidationError[] {
     });
   }
 
-  if (raw.executorType !== undefined && !VALID_EXECUTOR_TYPE.includes(raw.executorType as any)) {
+  if (raw.runnerKind !== undefined && !VALID_EXECUTOR_TYPE.includes(raw.runnerKind as any)) {
     errors.push({
       errorType: 'invalid_enum_value',
-      field: 'executorType',
-      message: `"executorType" must be one of: ${VALID_EXECUTOR_TYPE.join(', ')}`,
-      value: raw.executorType,
+      field: 'runnerKind',
+      message: `"runnerKind" must be one of: ${VALID_EXECUTOR_TYPE.join(', ')}`,
+      value: raw.runnerKind,
     });
   }
 
@@ -299,14 +299,24 @@ function validatePlan(yamlContent: string): ValidationError[] {
       });
     }
 
-    // Validate executorType enum
-    if (task.executorType !== undefined && !VALID_EXECUTOR_TYPE.includes(task.executorType as any)) {
+    // Validate runnerKind enum
+    if (task.runnerKind !== undefined && !VALID_EXECUTOR_TYPE.includes(task.runnerKind as any)) {
       errors.push({
         errorType: 'invalid_enum_value',
-        field: 'executorType',
+        field: 'runnerKind',
         taskId,
-        message: `Task "${taskId}" executorType must be one of: ${VALID_EXECUTOR_TYPE.join(', ')}`,
-        value: task.executorType,
+        message: `Task "${taskId}" runnerKind must be one of: ${VALID_EXECUTOR_TYPE.join(', ')}`,
+        value: task.runnerKind,
+      });
+    }
+
+    if (task.poolId !== undefined && typeof task.poolId !== 'string') {
+      errors.push({
+        errorType: 'invalid_field_type',
+        field: 'poolId',
+        taskId,
+        message: `Task "${taskId}" poolId must be a string when provided`,
+        value: task.poolId,
       });
     }
 

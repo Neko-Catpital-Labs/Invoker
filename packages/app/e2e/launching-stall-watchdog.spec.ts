@@ -285,8 +285,8 @@ base.describe('Launch stall watchdog', () => {
         changes: {
           status: 'running',
           config: {
-            executorType: 'ssh',
-            remoteTargetId: 'remote_digital_ocean_1',
+            runnerKind: 'ssh',
+            poolMemberId: 'remote_digital_ocean_1',
           },
           execution: {
             phase: 'executing',
@@ -304,7 +304,7 @@ base.describe('Launch stall watchdog', () => {
       const postInjectSnapshot = await page.evaluate(() => window.invoker.getTasks(true));
       const postInjectTasks = Array.isArray(postInjectSnapshot) ? postInjectSnapshot : postInjectSnapshot.tasks;
       const postInjectTask = findTask(postInjectTasks, 'stall-task');
-      expect(postInjectTask?.config?.executorType).toBe('ssh');
+      expect(postInjectTask?.config?.runnerKind).toBe('ssh');
 
       const deadline = Date.now() + 15_000;
       let stalledTask: any | undefined;

@@ -62,9 +62,9 @@ export interface TaskConfig {
   readonly requiresManualApproval?: boolean;
   readonly repoUrl?: string;
   readonly featureBranch?: string;
-  readonly executorType?: string;
+  readonly runnerKind?: string;
   readonly autoFix?: boolean;
-  readonly remoteTargetId?: string;
+  readonly poolMemberId?: string;
   readonly isMergeNode?: boolean;
   readonly executionAgent?: string;
   readonly autoFixRetries?: number;
@@ -217,7 +217,7 @@ export interface TaskReplacementDef {
   command?: string;
   prompt?: string;
   dependencies?: string[];
-  executorType?: string;
+  runnerKind?: string;
   autoFix?: boolean;
   executionAgent?: string;
 }

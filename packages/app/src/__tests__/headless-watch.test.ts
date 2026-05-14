@@ -18,7 +18,7 @@ function makeTask(overrides: Record<string, unknown> = {}) {
     status: 'completed',
     dependencies: [],
     createdAt: new Date('2024-01-01T00:00:00Z'),
-    config: { workflowId: 'wf-1', executorType: 'worktree', isMergeNode: false },
+    config: { workflowId: 'wf-1', runnerKind: 'worktree', isMergeNode: false },
     execution: {},
     ...overrides,
   };

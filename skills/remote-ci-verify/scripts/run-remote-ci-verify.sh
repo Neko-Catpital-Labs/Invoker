@@ -91,10 +91,10 @@ if command -v sqlite3 >/dev/null 2>&1 && [[ -f "$DB_PATH" ]]; then
     [[ -n "$tid" ]] && BUSY["$tid"]=1
   done < <(
     sqlite3 "$DB_PATH" "
-      SELECT DISTINCT remote_target_id
+      SELECT DISTINCT pool_member_id
       FROM tasks
-      WHERE remote_target_id IS NOT NULL
-        AND remote_target_id != ''
+      WHERE pool_member_id IS NOT NULL
+        AND pool_member_id != ''
         AND status IN ('running','awaiting_approval','review_ready','needs_input','fixing_with_ai');
     " 2>/dev/null || true
   )

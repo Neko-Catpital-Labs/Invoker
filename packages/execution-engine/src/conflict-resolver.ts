@@ -206,22 +206,23 @@ export async function resolveConflictImpl(
   }
 
   // SSH tasks: run conflict resolution on the remote host
-  if (task.config.executorType === 'ssh' && task.config.remoteTargetId && !existsSync(rawCwd)) {
+  const poolMemberId = (task.config as { poolMemberId?: string }).poolMemberId;
+  if (task.config.runnerKind === 'ssh' && poolMemberId && !existsSync(rawCwd)) {
     host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
       phase: 'resolve-conflict-remote-path',
-      remoteTargetId: task.config.remoteTargetId,
+      poolMemberId,
       workspacePath: rawCwd,
     });
-    const target = host.getRemoteTargetConfig?.(task.config.remoteTargetId);
+    const target = host.getRemoteTargetConfig?.(poolMemberId);
     if (!target) {
-      throw new Error(`No remote target config for "${task.config.remoteTargetId}" — cannot resolve conflict on remote`);
+      throw new Error(`No remote target config for "${poolMemberId}" — cannot resolve conflict on remote`);
     }
     await resolveConflictRemote(host, task, taskBranch, conflictInfo, rawCwd, target, agentName);
     return;
   }
 
   // For local tasks (worktree, docker), require workspace path exists on disk
-  if (task.config.executorType !== 'ssh' && !existsSync(rawCwd)) {
+  if (task.config.runnerKind !== 'ssh' && !existsSync(rawCwd)) {
     throw new Error(
       `resolveConflict: task "${taskId}" workspace does not exist on disk: ${rawCwd}. ` +
       `Refusing to run git operations without a valid workspace. ` +
@@ -458,15 +459,16 @@ export async function fixWithAgentImpl(
   const workspacePath = task.execution.workspacePath;
 
   // SSH tasks: run agent on the remote host
-  if (task.config.executorType === 'ssh' && task.config.remoteTargetId && workspacePath && !existsSync(workspacePath)) {
+  const poolMemberId = (task.config as { poolMemberId?: string }).poolMemberId;
+  if (task.config.runnerKind === 'ssh' && poolMemberId && workspacePath && !existsSync(workspacePath)) {
     host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
       phase: 'fix-with-agent-remote-path',
-      remoteTargetId: task.config.remoteTargetId,
+      poolMemberId,
       workspacePath,
     });
-    const target = host.getRemoteTargetConfig?.(task.config.remoteTargetId);
+    const target = host.getRemoteTargetConfig?.(poolMemberId);
     if (!target) {
-      throw new Error(`No remote target config for "${task.config.remoteTargetId}" — cannot fix on remote`);
+      throw new Error(`No remote target config for "${poolMemberId}" — cannot fix on remote`);
     }
     const resolvedWorkspacePath =
       (await resolveRemoteBranchOwnerPath(task.execution.branch, workspacePath, target)) ?? workspacePath;

@@ -580,11 +580,11 @@ export function editTaskPrompt(
 
 export function editTaskType(
   taskId: string,
-  executorType: string,
+  runnerKind: string,
   deps: Pick<ActionDeps, 'orchestrator'>,
-  remoteTargetId?: string,
+  poolMemberId?: string,
 ): TaskState[] {
-  return deps.orchestrator.editTaskType(taskId, executorType, remoteTargetId);
+  return deps.orchestrator.editTaskType(taskId, runnerKind, poolMemberId);
 }
 
 export function editTaskAgent(

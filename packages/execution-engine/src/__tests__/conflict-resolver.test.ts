@@ -412,8 +412,8 @@ describe('remote agent dispatch via registry', () => {
         workspacePath: '~/worktrees/task-remote-codex',
       },
       config: {
-        executorType: 'ssh' as const,
-        remoteTargetId: 'remote_do_1',
+        runnerKind: 'ssh' as const,
+        poolMemberId: 'remote_do_1',
       },
     };
 
@@ -522,7 +522,7 @@ describe('conflict-resolver fail-fast workspace invariant', () => {
           branch: 'invoker/task-no-workspace',
           workspacePath: undefined,  // Missing!
         },
-        config: { executorType: 'worktree' },
+        config: { runnerKind: 'worktree' },
       };
 
       await expect(
@@ -547,7 +547,7 @@ describe('conflict-resolver fail-fast workspace invariant', () => {
           branch: 'invoker/task-workspace-gone',
           workspacePath: nonExistentWorkspacePath(),
         },
-        config: { executorType: 'worktree' },
+        config: { runnerKind: 'worktree' },
       };
 
       await expect(
@@ -573,8 +573,8 @@ describe('conflict-resolver fail-fast workspace invariant', () => {
           workspacePath: '~/worktrees/remote',  // Remote path
         },
         config: {
-          executorType: 'ssh' as const,
-          remoteTargetId: 'remote-1',
+          runnerKind: 'ssh' as const,
+          poolMemberId: 'remote-1',
         },
       };
 
@@ -641,8 +641,8 @@ describe('conflict-resolver fail-fast workspace invariant', () => {
         },
         config: {
           command: 'npm test',
-          executorType: 'ssh' as const,
-          remoteTargetId: 'remote-1',
+          runnerKind: 'ssh' as const,
+          poolMemberId: 'remote-1',
         },
       };
 

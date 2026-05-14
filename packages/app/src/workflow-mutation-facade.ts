@@ -179,14 +179,14 @@ export class WorkflowMutationFacade {
 
   async editTaskType(
     taskId: string,
-    executorType: string,
-    remoteTargetId?: string,
+    runnerKind: string,
+    poolMemberId?: string,
   ): Promise<MutationResult> {
     const started = sharedEditTaskType(
       taskId,
-      executorType,
+      runnerKind,
       { orchestrator: this.deps.orchestrator },
-      remoteTargetId,
+      poolMemberId,
     );
     return this.finalizeWithTopup(started, 'facade.edit-task-type');
   }

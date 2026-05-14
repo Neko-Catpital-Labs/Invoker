@@ -28,7 +28,7 @@ describe('createWorkflowMutationTiming', () => {
       status: 'pending',
       dependencies: [],
       createdAt: now,
-      config: { workflowId: 'wf-1', isMergeNode: true, executorType: 'merge' },
+      config: { workflowId: 'wf-1', isMergeNode: true, runnerKind: 'merge' },
       execution: {},
       taskStateVersion: 1,
     });

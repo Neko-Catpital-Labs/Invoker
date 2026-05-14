@@ -4,7 +4,7 @@
     { "label": "Step 2: Command mutation path", "planFile": "skills/plan-to-invoker/fixtures/policy/stack/does-not-exist.yaml", "order": 2 },
     { "label": "Step 3: Prompt mutation path", "planFile": "skills/plan-to-invoker/fixtures/policy/stack/task-invalidation-step-3-prompt-mutation.template.yaml", "order": 3 },
     { "label": "Step 4: Agent mutation path", "planFile": "skills/plan-to-invoker/fixtures/policy/stack/task-invalidation-step-4-agent-mutation.template.yaml", "order": 4 },
-    { "label": "Step 5: Executor-type mutation path", "planFile": "skills/plan-to-invoker/fixtures/policy/stack/task-invalidation-step-5-executor-type-mutation.template.yaml", "order": 5 },
+    { "label": "Step 5: Executor-type mutation path", "planFile": "skills/plan-to-invoker/fixtures/policy/stack/task-invalidation-step-5-runner-kind-mutation.template.yaml", "order": 5 },
     { "label": "Step 6: Remote-target mutation path", "planFile": "skills/plan-to-invoker/fixtures/policy/stack/task-invalidation-step-6-remote-target-mutation.template.yaml", "order": 6 },
     { "label": "Step 7: Selected-experiment path", "planFile": "skills/plan-to-invoker/fixtures/policy/stack/task-invalidation-step-7-selected-experiment.template.yaml", "order": 7 },
     { "label": "Step 8: Selected-experiment-set path", "planFile": "skills/plan-to-invoker/fixtures/policy/stack/task-invalidation-step-8-selected-experiment-set.template.yaml", "order": 8 },

@@ -315,7 +315,7 @@ describe('State × Topology Matrix', () => {
       expect(allTasks.find((t) => t.id === 'D-v2')).toBeUndefined();
     });
 
-    it('matrix entry: executor-type edit is retry-class / task scope (root + descendants get gen bump; root branch/workspacePath preserved)', () => {
+    it('matrix entry: runner-kind edit is retry-class / task scope (root + descendants get gen bump; root branch/workspacePath preserved)', () => {
       orchestrator.loadPlan(diamondPlan());
       orchestrator.startExecution();
 
@@ -369,7 +369,7 @@ describe('State × Topology Matrix', () => {
       expect(genAfter.D).toBe(genBefore.D + 1);
 
       const rootAfter = orchestrator.getTask('A')!;
-      expect(rootAfter.config.executorType).toBe('worktree');
+      expect(rootAfter.config.runnerKind).toBe('worktree');
       expect(rootAfter.execution.branch).toBe('experiment/preserved-branch');
       expect(rootAfter.execution.workspacePath).toBe('/tmp/preserved-workspace');
     });
