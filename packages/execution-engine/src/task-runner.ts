@@ -92,6 +92,18 @@ type PoolSelection = {
   poolId: string;
   member: ExecutionPoolMember;
   memberKey: string;
+  selectionStrategy: 'roundRobin' | 'leastLoaded';
+};
+
+type RemoteTargetDisplay = {
+  host: string;
+  user: string;
+  sshKeyPath: string;
+  port?: number;
+  managedWorkspaces?: boolean;
+  remoteInvokerHome?: string;
+  provisionCommand?: string;
+  remoteHeartbeatIntervalSeconds?: number;
 };
 
 function nextLeaseExpiry(from: Date): Date {
@@ -175,7 +187,7 @@ export class TaskRunner {
   /** @internal */ mergeGateProvider?: MergeGateProvider;
   /** @internal */ reviewProviderRegistry?: ReviewProviderRegistry;
   private activePrPollers = new Map<string, ReturnType<typeof setInterval>>();
-  private getRemoteTargets: () => Record<string, { host: string; user: string; sshKeyPath: string; port?: number; managedWorkspaces?: boolean; remoteInvokerHome?: string; provisionCommand?: string; remoteHeartbeatIntervalSeconds?: number }>;
+  private getRemoteTargets: () => Record<string, RemoteTargetDisplay>;
   private getExecutionPools: () => Record<string, ExecutionPoolConfig>;
   private dockerConfig: { imageName?: string; secretsFile?: string };
   private executionAgentRegistry?: AgentRegistry;
@@ -680,6 +692,14 @@ export class TaskRunner {
         );
       }
 
+      this.logExecutorSelected(
+        task,
+        executor,
+        handle,
+        attemptId,
+        this.pendingPoolSelections.get(task.id),
+      );
+
       const changes = {
         config: { runnerKind: executor.type as RunnerKind },
         execution: {
@@ -863,6 +883,80 @@ export class TaskRunner {
     return candidates[0]?.member;
   }
 
+  private logExecutorSelected(
+    task: TaskState,
+    executor: Executor,
+    handle: ExecutorHandle,
+    attemptId: string,
+    poolSelection: PoolSelection | undefined,
+  ): void {
+    const payload: Record<string, unknown> = {
+      runnerKind: executor.type,
+      reason: this.executorSelectionReason(task, executor, poolSelection),
+      attemptId,
+      workspacePath: handle.workspacePath,
+      branch: handle.branch ?? undefined,
+    };
+
+    if (executor.type === 'ssh') {
+      const targetId = this.selectedRemoteTargetId(task, poolSelection);
+      const target = targetId ? this.getRemoteTargets()[targetId] : undefined;
+      if (targetId) payload.poolMemberId = targetId;
+      if (target) {
+        payload.remoteHost = target.host;
+        payload.remoteUser = target.user;
+        payload.port = target.port;
+      }
+    }
+
+    this.persistence.logEvent?.(task.id, 'task.executor.selected', payload);
+  }
+
+  private executorSelectionReason(
+    task: TaskState,
+    executor: Executor,
+    poolSelection: PoolSelection | undefined,
+  ): Record<string, unknown> {
+    if (executor.type === 'ssh') {
+      if (poolSelection) {
+        return {
+          type: 'poolId',
+          poolId: poolSelection.poolId,
+          selectionStrategy: poolSelection.selectionStrategy,
+          poolMemberId: poolSelection.member.id,
+        };
+      }
+      if ((task.config as { poolMemberId?: string }).poolMemberId) {
+        return { type: 'explicitPoolMemberId' };
+      }
+      if (task.config.poolId) {
+        return { type: 'poolId', poolId: task.config.poolId };
+      }
+    }
+
+    if (executor.type === 'worktree') {
+      if (task.config.runnerKind === 'ssh' && task.config.poolId) {
+        return { type: 'sshPoolFallbackToWorktree', poolId: task.config.poolId };
+      }
+      if (task.config.runnerKind === 'worktree') {
+        return { type: 'configuredWorktree' };
+      }
+      return { type: 'defaultWorktree' };
+    }
+
+    if (executor.type === 'docker') {
+      return { type: 'dockerImage' };
+    }
+
+    return { type: 'configuredRunnerKind', runnerKind: executor.type };
+  }
+
+  private selectedRemoteTargetId(task: TaskState, poolSelection: PoolSelection | undefined): string | undefined {
+    if (poolSelection?.member.type === 'ssh') return poolSelection.member.id;
+    return (task.config as { poolMemberId?: string }).poolMemberId
+      ?? (task.config.poolId && this.getRemoteTargets()[task.config.poolId] ? task.config.poolId : undefined);
+  }
+
   selectExecutor(task: TaskState): Executor {
     let effectiveType = task.config.runnerKind ?? (task.config.isMergeNode ? 'merge' : undefined);
     let selectedPoolMemberId: string | undefined;
@@ -878,6 +972,7 @@ export class TaskRunner {
           poolId: task.config.poolId,
           member,
           memberKey: this.poolMemberKey(member),
+          selectionStrategy: pool.selectionStrategy ?? 'roundRobin',
         });
       }
     }

@@ -543,7 +543,7 @@ function resolveExecutorRouting(
   defaultPoolId: string | undefined,
   rules: ExecutorRoutingRule[],
   availablePoolIds: Set<string>,
-): { poolId?: string } {
+): { poolId?: string; reason: ExecutorRoutingReason } {
   if (!command || rules.length === 0) {
     if (planPoolId === undefined && defaultPoolId !== undefined) {
       validateRoutingDestinationAvailability(
@@ -555,14 +555,19 @@ function resolveExecutorRouting(
       );
       return {
         poolId: defaultPoolId,
+        reason: { type: 'defaultPoolId', poolId: defaultPoolId },
       };
     }
     return {
       poolId: planPoolId,
+      reason: planPoolId ? { type: 'poolId', poolId: planPoolId } : { type: 'defaultWorktree' },
     };
   }
 
   let effectivePoolId = planPoolId;
+  let reason: ExecutorRoutingReason = planPoolId
+    ? { type: 'poolId', poolId: planPoolId }
+    : { type: 'defaultWorktree' };
 
   const routingRules = rules.filter((rule) => (rule.strategy ?? 'enforce') === 'route');
   const matchingRoutingRule = findMatchingExecutorRoutingRule(command, routingRules);
@@ -576,6 +581,14 @@ function resolveExecutorRouting(
       availablePoolIds,
     );
     effectivePoolId = routed?.poolId ?? effectivePoolId;
+    if (routed?.poolId) {
+      reason = {
+        type: 'routingRule',
+        poolId: routed.poolId,
+        ...(matchingRoutingRule.pattern !== undefined ? { pattern: matchingRoutingRule.pattern } : {}),
+        ...(matchingRoutingRule.regex !== undefined ? { regex: matchingRoutingRule.regex } : {}),
+      };
+    }
   }
 
   if (effectivePoolId === undefined && defaultPoolId !== undefined) {
@@ -599,6 +612,26 @@ function resolveExecutorRouting(
 
   return {
     poolId: effectivePoolId,
+    reason,
+  };
+}
+
+type ExecutorRoutingReason =
+  | { type: 'dockerImage' }
+  | { type: 'poolId'; poolId: string }
+  | { type: 'defaultPoolId'; poolId: string }
+  | { type: 'routingRule'; poolId: string; pattern?: string; regex?: string }
+  | { type: 'defaultWorktree' };
+
+function buildExecutorRoutedPayload(
+  runnerKind: RunnerKind,
+  poolId: string | undefined,
+  reason: ExecutorRoutingReason,
+): Record<string, unknown> {
+  return {
+    runnerKind,
+    ...(poolId ? { poolId } : {}),
+    reason,
   };
 }
 
@@ -1282,6 +1315,7 @@ export class Orchestrator {
     }
 
     const validatedTasks: TaskState[] = [];
+    const resolvedRoutingByTaskId = new Map<string, ExecutorRoutingReason>();
     for (const taskDef of plan.tasks) {
       const resolvedRouting = resolveExecutorRouting(
         taskDef.id,
@@ -1294,6 +1328,10 @@ export class Orchestrator {
       const effectivePoolId = resolvedRouting.poolId;
 
       const scopedId = localToScoped.get(taskDef.id)!;
+      resolvedRoutingByTaskId.set(
+        scopedId,
+        taskDef.dockerImage ? { type: 'dockerImage' } : resolvedRouting.reason,
+      );
       const scopedDeps = (taskDef.dependencies ?? []).map((dep) => {
         const s = localToScoped.get(dep);
         if (!s) {
@@ -1391,10 +1429,17 @@ export class Orchestrator {
     const deltas: TaskDelta[] = [];
     for (const task of validatedTasks) {
       this.createAndSync(task);
+      this.persistence.logEvent?.(task.id, 'task.created');
+      this.persistence.logEvent?.(task.id, 'task.executor.routed', buildExecutorRoutedPayload(
+        task.config.runnerKind ?? 'worktree',
+        task.config.poolId,
+        task.config.dockerImage ? { type: 'dockerImage' } : resolvedRoutingByTaskId.get(task.id) ?? { type: 'defaultWorktree' },
+      ));
       deltas.push({ type: 'created', task });
     }
 
     this.createAndSync(mergeTask);
+    this.persistence.logEvent?.(mergeTask.id, 'task.created');
     deltas.push({ type: 'created', task: mergeTask });
 
     for (const delta of deltas) {
@@ -2764,7 +2809,7 @@ export class Orchestrator {
         poolId,
         runnerKind: undefined,
         poolMemberId: undefined,
-      },
+      } as TaskStateChanges['config'],
     };
     const poolBefore = this.stateGetTask(taskId)!;
     const poolUpdated = this.writeAndSync(taskId, poolChanges);
