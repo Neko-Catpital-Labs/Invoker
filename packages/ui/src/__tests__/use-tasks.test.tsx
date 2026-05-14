@@ -10,16 +10,22 @@ import { makeUITask } from './helpers/mock-invoker.js';
 
 describe('useTasks', () => {
   let workflowsChangedHandler: ((wfList: unknown[]) => void) | undefined;
+  let taskDeltaHandler: ((delta: unknown) => void) | undefined;
 
   beforeEach(() => {
+    vi.useRealTimers();
     workflowsChangedHandler = undefined;
+    taskDeltaHandler = undefined;
     (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
       tasks: [],
       workflows: [],
     };
     (window as unknown as { invoker: Record<string, unknown> }).invoker = {
       getTasks: vi.fn().mockResolvedValue({ tasks: [], workflows: [] }),
-      onTaskDelta: vi.fn(() => () => {}),
+      onTaskDelta: vi.fn((cb: (delta: unknown) => void) => {
+        taskDeltaHandler = cb;
+        return () => {};
+      }),
       onWorkflowsChanged: vi.fn((cb: (wfList: unknown[]) => void) => {
         workflowsChangedHandler = cb;
         return () => {};
@@ -28,6 +34,7 @@ describe('useTasks', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     delete (window as unknown as { invoker?: unknown }).invoker;
     delete (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__;
   });
@@ -154,5 +161,69 @@ describe('useTasks', () => {
       expect(getTasks).toHaveBeenCalled();
       expect(getTasks).toHaveBeenLastCalledWith(true);
     });
+  });
+
+  it('recomputes workflow status from task deltas after failed metadata becomes pending or running', async () => {
+    const taskA = makeUITask({ id: 'wf-1/task-a', workflowId: 'wf-1', status: 'failed' });
+    const taskB = makeUITask({ id: 'wf-1/task-b', workflowId: 'wf-1', status: 'completed' });
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
+      tasks: [taskA, taskB],
+      workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'failed' }],
+    };
+    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
+      getTasks: vi.fn().mockResolvedValue({
+        tasks: [taskA, taskB],
+        workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'failed' }],
+      }),
+      onTaskDelta: vi.fn((cb: (delta: unknown) => void) => {
+        taskDeltaHandler = cb;
+        return () => {};
+      }),
+      onWorkflowsChanged: vi.fn((cb: (wfList: unknown[]) => void) => {
+        workflowsChangedHandler = cb;
+        return () => {};
+      }),
+    };
+
+    const { result } = renderHook(() => useTasks());
+    expect(result.current.workflows.get('wf-1')?.status).toBe('failed');
+
+    await act(async () => {
+      taskDeltaHandler!({
+        type: 'updated',
+        taskId: 'wf-1/task-a',
+        changes: { status: 'pending' },
+        taskStateVersion: 2,
+        previousTaskStateVersion: 1,
+      });
+      taskDeltaHandler!({
+        type: 'updated',
+        taskId: 'wf-1/task-b',
+        changes: { status: 'pending' },
+        taskStateVersion: 2,
+        previousTaskStateVersion: 1,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 110));
+    });
+
+    await waitFor(() => {
+      expect(result.current.workflows.get('wf-1')?.status).toBe('pending');
+    });
+
+    await act(async () => {
+      taskDeltaHandler!({
+        type: 'updated',
+        taskId: 'wf-1/task-a',
+        changes: { status: 'running' },
+        taskStateVersion: 3,
+        previousTaskStateVersion: 2,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 110));
+    });
+
+    await waitFor(() => {
+      expect(result.current.workflows.get('wf-1')?.status).toBe('running');
+    });
+    expect(result.current.workflows.get('wf-1')?.name).toBe('Workflow 1');
   });
 });
