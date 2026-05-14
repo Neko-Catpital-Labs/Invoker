@@ -137,13 +137,16 @@ export function WorkflowInspector({
   const statusLabel = task
     ? taskVisualStatus?.replaceAll('_', ' ') ?? task.status.replaceAll('_', ' ')
     : workflow?.status?.replaceAll('_', ' ') ?? 'unknown';
+  const workflowTitle = workflow?.name ?? workflow?.id;
+  const inspectorTitle = task?.description ?? (workflowTitle ? `${workflowTitle} task DAG` : 'No workflow selected');
 
   return (
     <aside className="h-full w-full border-l border-gray-800 bg-gray-900 flex flex-col">
       <div className="flex items-center justify-between border-b border-gray-800 px-3 py-2">
-        <div>
-          <div className="text-xs font-semibold uppercase tracking-wide text-gray-300">Inspector</div>
-          <div className="text-[11px] text-gray-400 truncate max-w-[240px]">{workflow?.name ?? workflow?.id ?? 'No workflow selected'}</div>
+        <div className="min-w-0 pr-2">
+          <div className="text-sm font-semibold leading-snug text-gray-100" data-testid="workflow-inspector-title">
+            {inspectorTitle}
+          </div>
         </div>
         <button
           onClick={onToggleCollapsed}

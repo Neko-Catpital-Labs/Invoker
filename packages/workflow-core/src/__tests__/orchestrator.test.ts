@@ -2797,7 +2797,7 @@ describe('Orchestrator', () => {
       expect(wf.status).toBe('completed');
     });
 
-    it('workflow stays running when a task fails but dependents are still pending', () => {
+    it('workflow fails when a failed task blocks all pending dependents', () => {
       orchestrator.loadPlan({
         name: 'fail-completion-test',
         tasks: [
@@ -2811,9 +2811,9 @@ describe('Orchestrator', () => {
         makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
       );
 
-      // t2 stays pending (not blocked), so workflow is not settled
+      // t2 and the merge node stay pending, but both are blocked behind t1.
       const wf = persistence.listWorkflows()[0];
-      expect(wf.status).toBe('running');
+      expect(wf.status).toBe('failed');
     });
 
     it('does not mark workflow complete while tasks are running', () => {

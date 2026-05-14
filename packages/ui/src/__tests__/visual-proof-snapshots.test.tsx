@@ -66,8 +66,8 @@ describe('Visual proof snapshots', () => {
 
     fireEvent.click(screen.getByTestId('workflow-node-wf-alpha'));
     await waitFor(() => {
-      expect(screen.getByText(/Alpha task DAG/i)).toBeInTheDocument();
-      expect(screen.getByText('Inspector')).toBeInTheDocument();
+      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Alpha task DAG');
+      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Alpha task DAG');
     });
   });
 

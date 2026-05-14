@@ -45,8 +45,8 @@ describe('Task interaction (component)', () => {
     fireEvent.click(screen.getByTestId('workflow-node-wf-a'));
 
     await waitFor(() => {
-      expect(screen.getByText(/Workflow A task DAG/)).toBeInTheDocument();
-      expect(screen.getByText('Inspector')).toBeInTheDocument();
+      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow A task DAG');
+      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow A task DAG');
     });
   });
 
@@ -115,13 +115,13 @@ describe('Task interaction (component)', () => {
 
     fireEvent.click(screen.getByTestId('workflow-node-wf-a'));
     await waitFor(() => {
-      expect(screen.getByText(/Workflow A task DAG/)).toBeInTheDocument();
+      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow A task DAG');
     });
 
     fireEvent.click(screen.getByTestId('workflow-graph-scroll'));
 
     await waitFor(() => {
-      expect(screen.queryByText(/Workflow A task DAG/)).not.toBeInTheDocument();
+      expect(screen.queryByTestId('selected-workflow-mini-dag')).not.toBeInTheDocument();
     });
   });
 });

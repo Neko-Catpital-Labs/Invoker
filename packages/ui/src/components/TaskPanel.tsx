@@ -498,7 +498,7 @@ export function TaskPanel({
             }}
             disabled={task.status === 'running' || task.status === 'fixing_with_ai'}
             className="bg-gray-700 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-            data-testid="executor-type-select"
+            data-testid="runner-kind-select"
           >
             <option value="worktree">Worktree</option>
             <option value="docker">Docker</option>

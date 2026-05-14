@@ -94,4 +94,49 @@ describe('WorkflowGraph', () => {
     expect(screen.getByText('Workflow A')).toBeInTheDocument();
     expect(screen.queryByText('branch-like-id')).not.toBeInTheDocument();
   });
+
+  it('renders failed workflow status from query-provided workflow metadata', () => {
+    const workflows = new Map([
+      [
+        'wf-1778431088547-35',
+        {
+          id: 'wf-1778431088547-35',
+          name: 'Reduce Large Files Step 2: main.ts decomposition',
+          status: 'failed',
+        } satisfies WorkflowMeta,
+      ],
+    ]);
+    const tasks = new Map([
+      ['wf-1778431088547-35/extract-main-bootstrap-and-ipc', task('wf-1778431088547-35/extract-main-bootstrap-and-ipc', 'wf-1778431088547-35')],
+      [
+        'wf-1778431088547-35/extract-main-window-and-runner-wiring',
+        {
+          ...task('wf-1778431088547-35/extract-main-window-and-runner-wiring', 'wf-1778431088547-35'),
+          status: 'failed' as const,
+          dependencies: ['wf-1778431088547-35/extract-main-bootstrap-and-ipc'],
+        },
+      ],
+      [
+        'wf-1778431088547-35/verify-main-decomposition-lane',
+        {
+          ...task('wf-1778431088547-35/verify-main-decomposition-lane', 'wf-1778431088547-35'),
+          dependencies: ['wf-1778431088547-35/extract-main-window-and-runner-wiring'],
+        },
+      ],
+    ]);
+
+    render(
+      <WorkflowGraph
+        tasks={tasks}
+        workflows={workflows}
+        selectedWorkflowId={null}
+        statusFilters={new Set()}
+        onSelectWorkflow={() => {}}
+        onWorkflowContextMenu={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('Reduce Large Files Step 2: main.ts decomposition')).toBeInTheDocument();
+    expect(screen.getByText('failed')).toBeInTheDocument();
+  });
 });

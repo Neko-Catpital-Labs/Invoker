@@ -83,6 +83,6 @@ describe('Plan loading (component)', () => {
       expect(screen.getByTestId('workflow-node-wf-load')).toBeInTheDocument();
     });
     screen.getByTestId('workflow-node-wf-load').click();
-    await waitFor(() => expect(screen.getByText(/task DAG/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Loaded Workflow task DAG'));
   });
 });

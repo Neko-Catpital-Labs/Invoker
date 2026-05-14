@@ -17,8 +17,7 @@ import type {
   WorkflowRollupTaskSummary,
 } from '@invoker/workflow-core';
 import {
-  computeWorkflowRollupFromCountsAndIssues,
-  createEmptyWorkflowTaskStatusCounts,
+  computeWorkflowRollupFromSummaries,
   normalizeRunnerKind,
 } from '@invoker/workflow-core';
 import type { PersistenceAdapter, Workflow, TaskEvent, ActivityLogEntry, Conversation, ConversationMessage } from './adapter.js';
@@ -1677,47 +1676,25 @@ export class SQLiteAdapter implements PersistenceAdapter {
     if (workflowIds.length === 0) return rollups;
 
     const placeholders = workflowIds.map(() => '?').join(', ');
-    const countsByWorkflow = new Map<string, ReturnType<typeof createEmptyWorkflowTaskStatusCounts>>();
-    for (const workflowId of workflowIds) {
-      countsByWorkflow.set(workflowId, createEmptyWorkflowTaskStatusCounts());
-    }
-
-    const countRows = this.queryAll(
-      `SELECT workflow_id, status, COUNT(*) AS count
-       FROM tasks
-       WHERE workflow_id IN (${placeholders})
-       GROUP BY workflow_id, status`,
-      workflowIds,
-    );
-    for (const row of countRows as Array<{ workflow_id: string; status: TaskStatus; count: number }>) {
-      const counts = countsByWorkflow.get(String(row.workflow_id));
-      if (counts && row.status in counts) {
-        counts[row.status] = Number(row.count);
-      }
-    }
-
-    const issueRows = this.queryAll(
-      `SELECT id, workflow_id, description, status, error, protocol_error_code, protocol_error_message,
+    const taskRows = this.queryAll(
+      `SELECT id, workflow_id, description, status, dependencies, error, protocol_error_code, protocol_error_message,
               pending_fix_error, exit_code, completed_at, agent_session_id, agent_name,
               review_url, input_prompt, is_fixing_with_ai
        FROM tasks
        WHERE workflow_id IN (${placeholders})
-         AND (
-           status IN ('failed', 'fixing_with_ai', 'needs_input', 'blocked', 'review_ready', 'awaiting_approval')
-           OR is_fixing_with_ai = 1
-         )
        ORDER BY id ASC`,
       workflowIds,
     );
 
-    const issuesByWorkflow = new Map<string, WorkflowRollupTaskSummary[]>();
-    for (const row of issueRows as any[]) {
+    const tasksByWorkflow = new Map<string, WorkflowRollupTaskSummary[]>();
+    for (const row of taskRows as any[]) {
       const workflowId = String(row.workflow_id);
-      const issues = issuesByWorkflow.get(workflowId) ?? [];
-      issues.push({
+      const tasks = tasksByWorkflow.get(workflowId) ?? [];
+      tasks.push({
         id: String(row.id),
         description: String(row.description),
         status: row.status as TaskStatus,
+        dependencies: JSON.parse(row.dependencies || '[]'),
         execution: {
           error: row.error ?? undefined,
           protocolErrorCode: row.protocol_error_code ?? undefined,
@@ -1732,17 +1709,13 @@ export class SQLiteAdapter implements PersistenceAdapter {
           isFixingWithAI: row.is_fixing_with_ai === 1,
         },
       });
-      issuesByWorkflow.set(workflowId, issues);
+      tasksByWorkflow.set(workflowId, tasks);
     }
 
     for (const workflowId of workflowIds) {
-      const counts = countsByWorkflow.get(workflowId) ?? createEmptyWorkflowTaskStatusCounts();
-      const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
-      if (total === 0) continue;
-      rollups.set(
-        workflowId,
-        computeWorkflowRollupFromCountsAndIssues(counts, issuesByWorkflow.get(workflowId) ?? []),
-      );
+      const tasks = tasksByWorkflow.get(workflowId) ?? [];
+      if (tasks.length === 0) continue;
+      rollups.set(workflowId, computeWorkflowRollupFromSummaries(tasks));
     }
 
     return rollups;

@@ -59,7 +59,7 @@ test.describe('Workflow status composition', () => {
         changes: { status: 'failed', execution: { error: 'alpha exploded', exitCode: 11, isFixingWithAI: false } },
       },
     ]);
-    workflow = await expectWorkflowStatus(page, 'running');
+    workflow = await expectWorkflowStatus(page, 'failed');
     expect(workflow.rollup.failedTasks).toEqual([
       expect.objectContaining({ taskId: expect.stringContaining('alpha'), error: 'alpha exploded', exitCode: 11 }),
     ]);

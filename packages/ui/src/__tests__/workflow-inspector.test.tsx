@@ -28,6 +28,37 @@ function workflowTaskMap(...workflowTasks: TaskState[]): Map<string, TaskState> 
 }
 
 describe('WorkflowInspector', () => {
+  it('uses the selected node name as the sidebar title', () => {
+    const { rerender } = render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={null}
+        executionAgents={['codex', 'claude']}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow 1 task DAG');
+    expect(screen.queryByText('Inspector')).not.toBeInTheDocument();
+
+    rerender(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ description: 'Full task node title' })}
+        executionAgents={['codex', 'claude']}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Full task node title');
+  });
+
   it('keeps advanced metadata collapsed by default', () => {
     render(
       <WorkflowInspector
@@ -205,7 +236,7 @@ describe('WorkflowInspector', () => {
         onToggleAdvanced={() => {}}
       />,
     );
-    expect(screen.getByText('Workflow 1')).toBeInTheDocument();
+    expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Task');
   });
 
   it('edits the selected task agent and prompt from inspector controls', () => {

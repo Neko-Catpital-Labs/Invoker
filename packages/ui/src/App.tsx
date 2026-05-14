@@ -237,7 +237,6 @@ export function App() {
   const [showSystemBanner, setShowSystemBanner] = useState(false);
   const [installSkillsPending, setInstallSkillsPending] = useState(false);
   const [installSkillsError, setInstallSkillsError] = useState<string | null>(null);
-  const [attentionMode, setAttentionMode] = useState(false);
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const [advancedMetadataExpanded, setAdvancedMetadataExpanded] = useState(false);
   const [terminalCollapsed, setTerminalCollapsed] = useState(true);
@@ -355,7 +354,6 @@ export function App() {
   }, [selectedTask, selectedWorkflowId, workflowSelectionDismissed, workflows]);
 
   const handleStatusClick = useCallback((filterKey: WorkflowStatus, event: React.MouseEvent) => {
-    setAttentionMode(false);
     setStatusFilters(prev => {
       if (event.ctrlKey || event.metaKey) {
         // Toggle: add if absent, remove if present
@@ -694,7 +692,6 @@ export function App() {
       setSelectedWorkflowId(null);
       setModal({ type: 'none' });
       setStatusFilters(new Set<WorkflowStatus>());
-      setAttentionMode(false);
     } catch (err) {
       console.error('Failed to clear:', err);
     }
@@ -715,7 +712,6 @@ export function App() {
       setSelectedTaskId(null);
       setSelectedWorkflowId(null);
       setModal({ type: 'none' });
-      setAttentionMode(false);
     } catch (err) {
       console.error('Failed to delete workflows:', err);
     }
@@ -944,9 +940,8 @@ export function App() {
               data-testid="rail-home"
               onClick={() => {
                 setViewMode('dag');
-                setAttentionMode(false);
               }}
-              className={`w-full rounded px-2 py-1.5 text-left text-xs ${viewMode === 'dag' && !attentionMode ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
+              className={`w-full rounded px-2 py-1.5 text-left text-xs ${viewMode === 'dag' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
             >
               Home
             </button>
@@ -954,7 +949,6 @@ export function App() {
               data-testid="rail-timeline"
               onClick={() => {
                 setViewMode('timeline');
-                setAttentionMode(false);
               }}
               className={`w-full rounded px-2 py-1.5 text-left text-xs ${viewMode === 'timeline' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
             >
@@ -964,7 +958,6 @@ export function App() {
               data-testid="rail-history"
               onClick={() => {
                 setViewMode('history');
-                setAttentionMode(false);
               }}
               className={`w-full rounded px-2 py-1.5 text-left text-xs ${viewMode === 'history' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
             >
@@ -974,22 +967,10 @@ export function App() {
               data-testid="rail-queue"
               onClick={() => {
                 setViewMode('queue');
-                setAttentionMode(false);
               }}
               className={`w-full rounded px-2 py-1.5 text-left text-xs ${viewMode === 'queue' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
             >
               Queue
-            </button>
-            <button
-              data-testid="rail-attention"
-              onClick={() => {
-                setViewMode('dag');
-                setAttentionMode(true);
-                setStatusFilters(new Set<WorkflowStatus>(['failed', 'blocked', 'stale']));
-              }}
-              className={`w-full rounded px-2 py-1.5 text-left text-xs ${attentionMode ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
-            >
-              Attention
             </button>
             </div>
 

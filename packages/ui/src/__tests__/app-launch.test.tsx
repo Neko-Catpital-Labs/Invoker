@@ -43,7 +43,7 @@ describe('App launch (component)', () => {
     expect(screen.getByTestId('rail-timeline')).toBeInTheDocument();
     expect(screen.getByTestId('rail-history')).toBeInTheDocument();
     expect(screen.getByTestId('rail-queue')).toBeInTheDocument();
-    expect(screen.getByTestId('rail-attention')).toBeInTheDocument();
+    expect(screen.queryByTestId('rail-attention')).not.toBeInTheDocument();
     expect(screen.getByTestId('rail-refresh')).toBeInTheDocument();
     expect(screen.getByTestId('rail-clear')).toBeInTheDocument();
   });

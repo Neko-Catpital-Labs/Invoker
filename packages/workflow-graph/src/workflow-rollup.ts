@@ -41,6 +41,7 @@ export interface WorkflowRollupTaskSummary {
   id: string;
   description: string;
   status: TaskStatus;
+  dependencies?: readonly string[];
   execution?: {
     error?: string;
     protocolErrorCode?: string;
@@ -93,6 +94,42 @@ export function computeWorkflowStatusFromCounts(
   return 'running';
 }
 
+function hasFailedDependencyPath(
+  task: WorkflowRollupTaskSummary,
+  tasksById: ReadonlyMap<string, WorkflowRollupTaskSummary>,
+  seen: Set<string> = new Set(),
+): boolean {
+  for (const dependencyId of task.dependencies ?? []) {
+    if (seen.has(dependencyId)) continue;
+    seen.add(dependencyId);
+    const dependency = tasksById.get(dependencyId);
+    if (!dependency) continue;
+    if (dependency.status === 'failed') return true;
+    if (hasFailedDependencyPath(dependency, tasksById, seen)) return true;
+  }
+  return false;
+}
+
+function computeWorkflowStatusFromTaskGraph(
+  tasks: readonly WorkflowRollupTaskSummary[],
+  counts: WorkflowTaskStatusCounts,
+): WorkflowDerivedStatus {
+  const countedStatus = computeWorkflowStatusFromCounts(counts);
+  if (countedStatus !== 'running' || counts.failed === 0 || counts.pending === 0) {
+    return countedStatus;
+  }
+
+  const pendingTasks = tasks.filter((task) => task.status === 'pending');
+  if (pendingTasks.length === 0) return countedStatus;
+
+  const tasksById = new Map(tasks.map((task) => [task.id, task]));
+  const allPendingWorkIsBlockedByFailedDependency = pendingTasks.every((task) =>
+    hasFailedDependencyPath(task, tasksById),
+  );
+
+  return allPendingWorkIsBlockedByFailedDependency ? 'failed' : countedStatus;
+}
+
 export function computeWorkflowRollupFromSummaries(
   tasks: readonly WorkflowRollupTaskSummary[],
 ): WorkflowRollup {
@@ -122,7 +159,7 @@ export function computeWorkflowRollupFromSummaries(
   }
 
   return {
-    status: computeWorkflowStatusFromCounts(counts),
+    status: computeWorkflowStatusFromTaskGraph(tasks, counts),
     countsByStatus: counts,
     failedTasks,
     fixingTasks,

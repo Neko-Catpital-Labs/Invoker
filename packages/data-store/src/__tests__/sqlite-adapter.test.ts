@@ -305,6 +305,28 @@ describe('SQLiteAdapter', () => {
       ]);
     });
 
+    it('derives failed when pending work is blocked by failed dependencies', () => {
+      adapter.saveWorkflow({ ...testWorkflow, status: 'running' });
+      adapter.saveTask('wf-1', makeTask('alpha', { status: 'failed' }));
+      adapter.saveTask('wf-1', makeTask('beta', { status: 'pending', dependencies: ['alpha'] }));
+      adapter.saveTask('wf-1', makeTask('merge', { status: 'pending', dependencies: ['beta'] }));
+
+      const loaded = adapter.loadWorkflow('wf-1')!;
+
+      expect(loaded.status).toBe('failed');
+      expect(loaded.rollup?.failedTasks).toEqual([
+        expect.objectContaining({ taskId: 'alpha' }),
+      ]);
+    });
+
+    it('keeps running when failed tasks do not block all pending work', () => {
+      adapter.saveWorkflow({ ...testWorkflow, status: 'running' });
+      adapter.saveTask('wf-1', makeTask('alpha', { status: 'failed' }));
+      adapter.saveTask('wf-1', makeTask('independent', { status: 'pending' }));
+
+      expect(adapter.loadWorkflow('wf-1')!.status).toBe('running');
+    });
+
     it('derives listWorkflows with one aggregate rollup per workflow', () => {
       adapter.saveWorkflow({ ...testWorkflow, status: 'running' });
       adapter.saveWorkflow({
