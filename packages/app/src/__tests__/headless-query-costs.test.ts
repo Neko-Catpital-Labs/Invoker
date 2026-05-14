@@ -38,6 +38,18 @@ function makeTask(wfId: string, taskSuffix: string, overrides: Partial<TaskState
   } as unknown as TaskState;
 }
 
+function makeAttempt(task: TaskState, id: string, agentSessionId?: string) {
+  return {
+    id,
+    nodeId: task.id,
+    queuePriority: 0,
+    upstreamAttemptIds: [],
+    status: 'completed',
+    createdAt: new Date(),
+    ...(agentSessionId ? { agentSessionId } : {}),
+  };
+}
+
 /** Fake JSONL content that extractCodexUsage can parse. */
 function makeSessionRaw(turns: Array<{ input: number; output: number; cached?: number }>) {
   return turns.map((t, i) => JSON.stringify({
@@ -97,6 +109,10 @@ describe('headless query costs', () => {
         readOnly: false,
         listWorkflows: vi.fn(() => [makeWorkflow('wf-1', 'completed')]),
         loadTasks: vi.fn(() => []),
+        loadAttempts: vi.fn((taskId: string) => {
+          const task = tasksForWf1.find(t => t.id === taskId);
+          return task ? [makeAttempt(task, `attempt-${taskId}`, task.execution.agentSessionId)] : [];
+        }),
       } as unknown as SQLiteAdapter,
       commandService: {} as CommandService,
       executorRegistry: {} as any,

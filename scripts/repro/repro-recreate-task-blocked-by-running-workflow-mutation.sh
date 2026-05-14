@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TIMEOUT_SECONDS="${REPRO_TIMEOUT_SECONDS:-90}"
 KEEP_TEMP=false
 EXPECTATION="fixed"
+SQLITE_QUERY_JS="$ROOT_DIR/scripts/sqlite-query.mjs"
 
 for arg in "$@"; do
   case "$arg" in
@@ -55,13 +56,13 @@ trap cleanup EXIT
 
 query_sqlite_value() {
   local sql="$1"
-  sqlite3 -noheader "$DB_DIR/invoker.db" "$sql"
+  node "$SQLITE_QUERY_JS" --noheader "$DB_DIR/invoker.db" "$sql"
 }
 
 sqlite_schema_ready() {
   [[ -f "$DB_DIR/invoker.db" ]] || return 1
   local exists
-  exists="$(sqlite3 -noheader "$DB_DIR/invoker.db" "select count(*) from sqlite_master where type='table' and name='tasks';" 2>/dev/null || true)"
+  exists="$(node "$SQLITE_QUERY_JS" --noheader "$DB_DIR/invoker.db" "select count(*) from sqlite_master where type='table' and name='tasks';" 2>/dev/null || true)"
   [[ "$exists" == "1" ]]
 }
 
@@ -165,7 +166,7 @@ tasks:
   - id: blocker-slow
     description: Running task whose recreate-task mutation keeps the workflow mutation queue occupied
     command: >-
-      bash -lc 'sleep 20'
+      bash -lc 'sleep 90'
 EOF
 
 HOME="$HOME_DIR" INVOKER_DB_DIR="$DB_DIR" INVOKER_IPC_SOCKET="$IPC_SOCKET_PATH" NODE_ENV=test \
@@ -188,39 +189,66 @@ fi
 wait_for_owner_ready 20
 
 set +e
-HOME="$HOME_DIR" INVOKER_DB_DIR="$DB_DIR" INVOKER_IPC_SOCKET="$IPC_SOCKET_PATH" NODE_ENV=test node "$HEADLESS_CLIENT_JS" --no-track run "$PLAN_PATH" \
-  >"$SUBMIT_STDOUT" 2>"$SUBMIT_STDERR"
-SUBMIT_STATUS=$?
-set -e
+submit_workflow_once() {
+  set +e
+  HOME="$HOME_DIR" INVOKER_DB_DIR="$DB_DIR" INVOKER_IPC_SOCKET="$IPC_SOCKET_PATH" NODE_ENV=test node "$HEADLESS_CLIENT_JS" --no-track run "$PLAN_PATH" \
+    >"$SUBMIT_STDOUT" 2>"$SUBMIT_STDERR"
+  SUBMIT_STATUS=$?
+  set -e
 
-WORKFLOW_ID="$(
-  {
-    sed -n 's/^Workflow ID: //p' "$SUBMIT_STDOUT"
-    sed -n 's/^Delegated to owner .*workflow: //p' "$SUBMIT_STDOUT"
-    sed -n 's/^Delegated to GUI .*workflow: //p' "$SUBMIT_STDOUT"
-  } | head -n1
-)"
+  WORKFLOW_ID="$(
+    {
+      sed -n 's/^Workflow ID: //p' "$SUBMIT_STDOUT"
+      sed -n 's/^Delegated to owner .*workflow: //p' "$SUBMIT_STDOUT"
+      sed -n 's/^Delegated to GUI .*workflow: //p' "$SUBMIT_STDOUT"
+    } | head -n1
+  )"
 
-if [[ -z "${WORKFLOW_ID:-}" ]]; then
-  for _ in {1..100}; do
-    WORKFLOW_ID="$(HOME="$HOME_DIR" INVOKER_DB_DIR="$DB_DIR" INVOKER_IPC_SOCKET="$IPC_SOCKET_PATH" NODE_ENV=test node "$HEADLESS_CLIENT_JS" query workflows --output label 2>/dev/null | tail -n1)"
-    [[ -n "${WORKFLOW_ID:-}" ]] && break
-    sleep 0.1
-  done
+  if [[ -z "${WORKFLOW_ID:-}" ]]; then
+    for _ in {1..100}; do
+      WORKFLOW_ID="$(HOME="$HOME_DIR" INVOKER_DB_DIR="$DB_DIR" INVOKER_IPC_SOCKET="$IPC_SOCKET_PATH" NODE_ENV=test node "$HEADLESS_CLIENT_JS" query workflows --output label 2>/dev/null | tail -n1)"
+      [[ -n "${WORKFLOW_ID:-}" ]] && break
+      sleep 0.1
+    done
+  fi
+
+  if [[ "$SUBMIT_STATUS" -ne 0 || -z "${WORKFLOW_ID:-}" ]]; then
+    echo "repro: failed to submit workflow" >&2
+    cat "$SUBMIT_STDOUT" >&2 || true
+    cat "$SUBMIT_STDERR" >&2 || true
+    return 1
+  fi
+  return 0
+}
+
+SEEDED=0
+SEED_ATTEMPT_TIMEOUT=$(( TIMEOUT_SECONDS / 3 ))
+if (( SEED_ATTEMPT_TIMEOUT < 30 )); then
+  SEED_ATTEMPT_TIMEOUT=30
 fi
 
-if [[ "$SUBMIT_STATUS" -ne 0 || -z "${WORKFLOW_ID:-}" ]]; then
-  echo "repro: failed to submit workflow" >&2
-  cat "$SUBMIT_STDOUT" >&2 || true
-  cat "$SUBMIT_STDERR" >&2 || true
+for seed_attempt in 1 2 3; do
+  submit_workflow_once
+
+  TARGET_ID="$WORKFLOW_ID/target-fast"
+  BLOCKER_ID="$WORKFLOW_ID/blocker-slow"
+
+  if wait_for_query_status "$TARGET_ID" "completed" "$SEED_ATTEMPT_TIMEOUT"; then
+    if wait_for_query_status "$BLOCKER_ID" "running" "$SEED_ATTEMPT_TIMEOUT"; then
+      SEEDED=1
+      break
+    fi
+  fi
+
+  TARGET_STATUS_NOW="$(query_sqlite_value "select coalesce(status,'') from tasks where id = '$TARGET_ID' limit 1;")"
+  BLOCKER_STATUS_NOW="$(query_sqlite_value "select coalesce(status,'') from tasks where id = '$BLOCKER_ID' limit 1;")"
+  echo "repro: seed attempt $seed_attempt did not reach overlap (target=$TARGET_STATUS_NOW blocker=$BLOCKER_STATUS_NOW); retrying" >&2
+done
+
+if [[ "$SEEDED" != "1" ]]; then
+  echo "repro: failed to seed overlapping target/blocker state" >&2
   exit 1
 fi
-
-TARGET_ID="$WORKFLOW_ID/target-fast"
-BLOCKER_ID="$WORKFLOW_ID/blocker-slow"
-
-wait_for_query_status "$TARGET_ID" "completed" "$TIMEOUT_SECONDS"
-wait_for_query_status "$BLOCKER_ID" "running" "$TIMEOUT_SECONDS"
 
 echo "repro: seeded workflow"
 echo "workflow: $WORKFLOW_ID"

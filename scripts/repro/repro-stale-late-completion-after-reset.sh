@@ -6,6 +6,7 @@ MODE="both"
 KEEP_TEMP=false
 TIMEOUT_SECONDS="${REPRO_TIMEOUT_SECONDS:-60}"
 EXPECT="${REPRO_EXPECTATION:-fixed}"
+SQLITE_QUERY_JS="$ROOT_DIR/scripts/sqlite-query.mjs"
 
 for arg in "$@"; do
   case "$arg" in
@@ -76,13 +77,13 @@ wait_for_query_status() {
 
 query_sqlite_value() {
   local sql="$1"
-  sqlite3 -noheader "$DB_DIR/invoker.db" "$sql"
+  node "$SQLITE_QUERY_JS" --noheader "$DB_DIR/invoker.db" "$sql"
 }
 
 sqlite_schema_ready() {
   [[ -f "$DB_DIR/invoker.db" ]] || return 1
   local exists
-  exists="$(sqlite3 -noheader "$DB_DIR/invoker.db" "select count(*) from sqlite_master where type='table' and name='tasks';" 2>/dev/null || true)"
+  exists="$(node "$SQLITE_QUERY_JS" --noheader "$DB_DIR/invoker.db" "select count(*) from sqlite_master where type='table' and name='tasks';" 2>/dev/null || true)"
   [[ "$exists" == "1" ]]
 }
 
@@ -114,7 +115,7 @@ submit_workflow_with_retry() {
       continue
     fi
 
-    if rg -q 'requires an owner process|No request handler registered' "$SUBMIT_STDERR"; then
+    if rg -q 'requires an owner process|requires a running owner process|No request handler registered' "$SUBMIT_STDERR"; then
       sleep 0.2
       continue
     fi
@@ -276,9 +277,9 @@ EOF
     echo "--- reset stderr ---" >&2
     cat "$RESET_STDERR" >&2 || true
     echo "--- task rows ---" >&2
-    sqlite3 "$DB_DIR/invoker.db" "select id,status,dependencies from tasks where workflow_id='$WORKFLOW_ID' order by id;" >&2 || true
+    node "$SQLITE_QUERY_JS" "$DB_DIR/invoker.db" "select id,status,dependencies from tasks where workflow_id='$WORKFLOW_ID' order by id;" >&2 || true
     echo "--- event timeline ---" >&2
-    sqlite3 "$DB_DIR/invoker.db" "select task_id,event_type,created_at from events where task_id in ('$PREPARE_ID','$MID_ID','$LATE_ID') order by created_at;" >&2 || true
+    node "$SQLITE_QUERY_JS" "$DB_DIR/invoker.db" "select task_id,event_type,created_at from events where task_id in ('$PREPARE_ID','$MID_ID','$LATE_ID') order by created_at;" >&2 || true
     return 1
   fi
 
@@ -294,9 +295,9 @@ EOF
     echo "--- reset stderr ---" >&2
     cat "$RESET_STDERR" >&2 || true
     echo "--- task rows ---" >&2
-    sqlite3 "$DB_DIR/invoker.db" "select id,status,dependencies from tasks where workflow_id='$WORKFLOW_ID' order by id;" >&2 || true
+    node "$SQLITE_QUERY_JS" "$DB_DIR/invoker.db" "select id,status,dependencies from tasks where workflow_id='$WORKFLOW_ID' order by id;" >&2 || true
     echo "--- event timeline ---" >&2
-    sqlite3 "$DB_DIR/invoker.db" "select task_id,event_type,created_at from events where task_id in ('$PREPARE_ID','$MID_ID','$LATE_ID') order by created_at;" >&2 || true
+    node "$SQLITE_QUERY_JS" "$DB_DIR/invoker.db" "select task_id,event_type,created_at from events where task_id in ('$PREPARE_ID','$MID_ID','$LATE_ID') order by created_at;" >&2 || true
     return 1
   fi
 
