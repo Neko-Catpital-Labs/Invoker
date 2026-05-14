@@ -43,6 +43,14 @@ export interface InvokerConfig {
    * then to the built-in default agent.
    */
   autoFixAgent?: string;
+  /**
+   * Read-only diagnostics tuning for the Action Graph view.
+   * Default stall threshold: 60000ms. Env fallback:
+   * INVOKER_ACTION_STALL_THRESHOLD_MS.
+   */
+  actionDiagnostics?: {
+    stallThresholdMs?: number;
+  };
   /** Cursor CLI subprocess timeout for plan conversations in seconds. Default: 7200 (2 hours). */
   planningTimeoutSeconds?: number;
   /** Interval for heartbeat messages posted to Slack during planning in seconds. Default: 120 (2 minutes). Set to 0 to disable. */
