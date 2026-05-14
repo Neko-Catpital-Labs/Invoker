@@ -32,6 +32,7 @@ import {
   groupTasksByWorkflow,
   sortedWorkflowGroups,
   resolveMergeGateKind,
+  mergeGateId,
   mergeGatePlanTitle,
   computeMergeGateStatus,
 } from '../lib/merge-gate.js';
@@ -62,8 +63,8 @@ function resolveExternalDependencyTaskId(
 ): string | undefined {
   const taskId = dep.taskId?.trim() || '__merge__';
   if (taskId === '__merge__') {
-    const mergeGateId = `__merge__${dep.workflowId}`;
-    return tasks.has(mergeGateId) ? mergeGateId : undefined;
+    const gateId = mergeGateId(dep.workflowId);
+    return tasks.has(gateId) ? gateId : undefined;
   }
   if (taskId.includes('/')) {
     return tasks.has(taskId) ? taskId : undefined;
@@ -93,23 +94,26 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
     const allRawEdges: Array<{ source: string; target: string; kind: 'local' | 'external' }> = [];
     const gateStatuses = new Map<string, ReturnType<typeof computeMergeGateStatus>>();
 
-    let yOffset = 0;
-    const WORKFLOW_GAP = 100;
+    for (const task of [...taskArray].sort((a, b) => a.id.localeCompare(b.id))) {
+      for (const depId of task.dependencies) {
+        if (tasks.has(depId)) {
+          allRawEdges.push({ source: depId, target: task.id, kind: 'local' });
+        }
+      }
+      for (const dep of task.config.externalDependencies ?? []) {
+        const sourceId = resolveExternalDependencyTaskId(dep, tasks);
+        if (!sourceId || sourceId === task.id) continue;
+        allRawEdges.push({ source: sourceId, target: task.id, kind: 'external' });
+      }
+    }
+
+    const positions = layoutNodes(taskArray, allRawEdges);
 
     for (const [wfGroupId, wfTasksRaw] of sortedWorkflowGroups(workflowGroups)) {
       const wfTasks = [...wfTasksRaw].sort((a, b) => a.id.localeCompare(b.id));
       const wfMeta = workflows?.get(wfGroupId);
       const wfBaseBranch = wfMeta?.baseBranch;
       const wfMergeMode = (wfMeta?.mergeMode as 'manual' | 'automatic' | 'external_review') ?? 'manual';
-      const positions = layoutNodes(wfTasks);
-
-      // Find bounding box to apply yOffset
-      let minY = Infinity;
-      let maxY = -Infinity;
-      for (const pos of positions.values()) {
-        if (pos.y < minY) minY = pos.y;
-        if (pos.y > maxY) maxY = pos.y;
-      }
 
       for (const task of wfTasks) {
         const pos = positions.get(task.id) ?? { x: 0, y: 0 };
@@ -127,7 +131,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
           allNodes.push({
             id: task.id,
             type: 'mergeGateNode',
-            position: { x: pos.x, y: pos.y + yOffset },
+            position: pos,
             data: {
               taskId: task.id,
               status: task.status,
@@ -155,7 +159,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
           allNodes.push({
             id: task.id,
             type: 'taskNode',
-            position: { x: pos.x, y: pos.y + yOffset },
+            position: pos,
             data: {
               task,
               label: task.description,
@@ -165,22 +169,6 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
           });
         }
       }
-
-      for (const task of wfTasks) {
-        for (const depId of task.dependencies) {
-          if (tasks.has(depId)) {
-            allRawEdges.push({ source: depId, target: task.id, kind: 'local' });
-          }
-        }
-        for (const dep of task.config.externalDependencies ?? []) {
-          const sourceId = resolveExternalDependencyTaskId(dep, tasks);
-          if (!sourceId || sourceId === task.id) continue;
-          allRawEdges.push({ source: sourceId, target: task.id, kind: 'external' });
-        }
-      }
-
-      const groupHeight = maxY === -Infinity ? 0 : maxY - minY + 80;
-      yOffset += groupHeight + WORKFLOW_GAP;
     }
 
     // Build dimmed node set for edge opacity

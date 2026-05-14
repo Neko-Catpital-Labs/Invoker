@@ -1,16 +1,12 @@
 /**
- * DAG layout algorithm — Sugiyama-inspired layered layout.
+ * Task DAG layout.
  *
- * Computes (x, y) positions for each task node based on dependency levels.
- * Tasks at the same level are arranged vertically, levels flow left to right.
- *
- * Enhancements over a basic level assignment:
- * 1. Barycenter ordering — reorders nodes within levels to minimize edge crossings.
- * 2. Variable spacing — nodes with more connections get extra vertical padding.
- * 3. Median alignment — shifts nodes toward the median y of their neighbors
- *    for straighter edges.
+ * Production layout uses Dagre over the full visible graph so cross-workflow
+ * and external dependency edges participate in placement. The previous local
+ * layered layout remains as a fallback if Dagre fails or returns invalid data.
  */
 
+import * as dagre from 'dagre';
 import type { TaskState } from '../types.js';
 
 export interface NodePosition {
@@ -21,14 +17,32 @@ export interface NodePosition {
 export interface LayoutEdge {
   source: string;
   target: string;
+  kind?: string;
 }
 
 const NODE_WIDTH = 280;
 const NODE_HEIGHT = 80;
+const RANK_SEP = 140;
+const NODE_SEP = 70;
+const EDGE_SEP = 24;
 const HORIZONTAL_GAP = 120;
 const VERTICAL_GAP_BASE = 40;
 const VERTICAL_GAP_PER_CONNECTION = 12;
 const BARYCENTER_SWEEPS = 4;
+
+let runDagreLayout = dagre.layout;
+
+export function setDagreLayoutForTest(layout: typeof dagre.layout): () => void {
+  const previous = runDagreLayout;
+  runDagreLayout = layout;
+  return () => {
+    runDagreLayout = previous;
+  };
+}
+
+function validPosition(pos: NodePosition | undefined): pos is NodePosition {
+  return Boolean(pos) && Number.isFinite(pos.x) && Number.isFinite(pos.y);
+}
 
 /**
  * Computes depth levels for tasks using iterative topological approach.
@@ -379,7 +393,7 @@ function medianNeighborY(
  * 3. Place nodes with variable vertical spacing (more connections = more space).
  * 4. Adjust y-positions toward the median of connected neighbors for alignment.
  */
-export function layoutNodes(
+function fallbackLayoutNodes(
   tasks: TaskState[],
   extraEdges: readonly LayoutEdge[] = [],
 ): Map<string, NodePosition> {
@@ -484,4 +498,86 @@ export function layoutNodes(
   }
 
   return positions;
+}
+
+function buildDefaultEdges(tasks: TaskState[]): LayoutEdge[] {
+  const taskIds = new Set(tasks.map((task) => task.id));
+  const edges: LayoutEdge[] = [];
+  for (const task of tasks) {
+    for (const depId of task.dependencies) {
+      if (taskIds.has(depId)) {
+        edges.push({ source: depId, target: task.id, kind: 'local' });
+      }
+    }
+  }
+  return edges;
+}
+
+function normalizeLayoutEdges(tasks: TaskState[], edges: readonly LayoutEdge[]): LayoutEdge[] {
+  const taskIds = new Set(tasks.map((task) => task.id));
+  return edges
+    .filter((edge) => (
+      taskIds.has(edge.source)
+      && taskIds.has(edge.target)
+      && edge.source !== edge.target
+    ))
+    .sort((a, b) => (
+      a.source.localeCompare(b.source)
+      || a.target.localeCompare(b.target)
+      || (a.kind ?? '').localeCompare(b.kind ?? '')
+    ));
+}
+
+/**
+ * Positions nodes in a left-to-right flow using Dagre. Positions are returned
+ * as top-left coordinates for React Flow.
+ */
+export function layoutNodes(
+  tasks: TaskState[],
+  layoutEdges: readonly LayoutEdge[] = buildDefaultEdges(tasks),
+): Map<string, NodePosition> {
+  if (tasks.length === 0) return new Map();
+
+  try {
+    const sortedTasks = [...tasks].sort((a, b) => a.id.localeCompare(b.id));
+    const sortedEdges = normalizeLayoutEdges(sortedTasks, layoutEdges);
+    const graph = new dagre.graphlib.Graph({ directed: true, multigraph: true });
+
+    graph.setGraph({
+      rankdir: 'LR',
+      ranksep: RANK_SEP,
+      nodesep: NODE_SEP,
+      edgesep: EDGE_SEP,
+    });
+    graph.setDefaultEdgeLabel(() => ({}));
+
+    for (const task of sortedTasks) {
+      graph.setNode(task.id, {
+        width: NODE_WIDTH,
+        height: NODE_HEIGHT,
+      });
+    }
+
+    sortedEdges.forEach((edge, index) => {
+      graph.setEdge(edge.source, edge.target, {}, `${edge.kind ?? 'edge'}:${index}`);
+    });
+
+    runDagreLayout(graph);
+
+    const positions = new Map<string, NodePosition>();
+    for (const task of sortedTasks) {
+      const node = graph.node(task.id);
+      const pos = {
+        x: node.x - NODE_WIDTH / 2,
+        y: node.y - NODE_HEIGHT / 2,
+      };
+      if (!validPosition(pos)) {
+        return fallbackLayoutNodes(tasks, layoutEdges);
+      }
+      positions.set(task.id, pos);
+    }
+    return positions;
+  } catch {
+    return fallbackLayoutNodes(tasks, layoutEdges);
+  }
 }
