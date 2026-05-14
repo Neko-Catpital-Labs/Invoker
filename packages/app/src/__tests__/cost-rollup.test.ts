@@ -111,6 +111,16 @@ describe('attributeSessionUsage', () => {
     expect(result[1].usage.inputTokens).toBe(200);
   });
 
+  it('preserves the caller-provided attemptId verbatim', () => {
+    const events = [makeUsageEvent()];
+    const result = attributeSessionUsage(events, makeContext({
+      attemptId: 'attempt-persisted-42',
+    }));
+
+    expect(result[0].attribution.attemptId).toBe('attempt-persisted-42');
+    expect(JSON.stringify(result[0])).toContain('"attemptId":"attempt-persisted-42"');
+  });
+
   it('returns empty array for empty input', () => {
     expect(attributeSessionUsage([], makeContext())).toEqual([]);
   });

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { runHeadless } from '../headless.js';
 import type { HeadlessDeps } from '../headless.js';
+import * as costRollup from '../cost-rollup.js';
 import type { Orchestrator, CommandService, TaskState } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { MessageBus } from '@invoker/transport';
@@ -206,6 +207,69 @@ describe('headless query cost', () => {
     expect(output1).toBe(output2);
   });
 
+  it('prefers an exact persisted agentSessionId match for attempt attribution', async () => {
+    const groupSpy = vi.spyOn(costRollup, 'groupCostEvents');
+    mockDeps.orchestrator.getAllTasks = vi.fn(() => [
+      makeTask('wf-1', 'task-a', {
+        execution: {
+          agentSessionId: 'sess-wf-1-task-a',
+          selectedAttemptId: 'attempt-selected',
+        },
+      }),
+    ] as any);
+    (mockDeps.persistence.loadAttempts as any) = vi.fn(() => [
+      { id: 'attempt-older', agentSessionId: 'sess-other', createdAt: new Date('2025-01-01T00:00:00Z') },
+      { id: 'attempt-exact', agentSessionId: 'sess-wf-1-task-a', createdAt: new Date('2025-01-02T00:00:00Z') },
+    ]);
+
+    await runHeadless(['query', 'cost', '--group-by', 'task', '--output', 'json'], mockDeps);
+    const [events] = groupSpy.mock.calls[0];
+
+    expect(events).toHaveLength(2);
+    expect(new Set(events.map((event) => event.attribution.attemptId))).toEqual(new Set(['attempt-exact']));
+  });
+
+  it('falls back to selectedAttemptId when no persisted session match exists', async () => {
+    const groupSpy = vi.spyOn(costRollup, 'groupCostEvents');
+    mockDeps.orchestrator.getAllTasks = vi.fn(() => [
+      makeTask('wf-1', 'task-a', {
+        execution: {
+          agentSessionId: 'sess-wf-1-task-a',
+          selectedAttemptId: 'attempt-selected',
+        },
+      }),
+    ] as any);
+    (mockDeps.persistence.loadAttempts as any) = vi.fn(() => [
+      { id: 'attempt-older', agentSessionId: 'sess-other', createdAt: new Date('2025-01-01T00:00:00Z') },
+    ]);
+
+    await runHeadless(['query', 'cost', '--group-by', 'task', '--output', 'json'], mockDeps);
+    const [events] = groupSpy.mock.calls[0];
+
+    expect(new Set(events.map((event) => event.attribution.attemptId))).toEqual(new Set(['attempt-selected']));
+  });
+
+  it('falls back to the latest persisted attempt when selectedAttemptId is absent', async () => {
+    const groupSpy = vi.spyOn(costRollup, 'groupCostEvents');
+    mockDeps.orchestrator.getAllTasks = vi.fn(() => [
+      makeTask('wf-1', 'task-a', {
+        execution: {
+          agentSessionId: undefined,
+          lastAgentSessionId: 'sess-wf-1-task-a',
+        },
+      }),
+    ] as any);
+    (mockDeps.persistence.loadAttempts as any) = vi.fn(() => [
+      { id: 'attempt-old', agentSessionId: 'sess-old', createdAt: new Date('2025-01-01T00:00:00Z') },
+      { id: 'attempt-latest', agentSessionId: 'sess-latest', createdAt: new Date('2025-01-02T00:00:00Z') },
+    ]);
+
+    await runHeadless(['query', 'cost', '--group-by', 'task', '--output', 'json'], mockDeps);
+    const [events] = groupSpy.mock.calls[0];
+
+    expect(new Set(events.map((event) => event.attribution.attemptId))).toEqual(new Set(['attempt-latest']));
+  });
+
 });
 
 describe('headless query cost-events', () => {
@@ -393,6 +457,49 @@ describe('headless query cost-events', () => {
     const parsed = JSON.parse(output);
 
     expect(parsed[0].attemptId).toBe('attempt-exact');
+  });
+
+  it('falls back to selectedAttemptId when no persisted session match exists', async () => {
+    mockDeps.orchestrator.getAllTasks = vi.fn(() => [
+      makeTask('wf-1', 'task-a', {
+        execution: {
+          agentSessionId: 'sess-wf-1-task-a',
+          selectedAttemptId: 'attempt-selected',
+        },
+      }),
+    ] as any);
+    (mockDeps.persistence.loadAttempts as any) = vi.fn(() => [
+      { id: 'attempt-older', agentSessionId: 'sess-other', createdAt: new Date('2025-01-01T00:00:00Z') },
+    ]);
+
+    await runHeadless(['query', 'cost-events', '--output', 'json'], mockDeps);
+    const output = stdoutSpy.mock.calls[0][0] as string;
+    const parsed = JSON.parse(output);
+
+    expect(parsed[0].attemptId).toBe('attempt-selected');
+    expect(output).not.toContain('"attemptId":"wf-1/task-a-latest"');
+  });
+
+  it('falls back to the latest persisted attempt when selectedAttemptId is absent', async () => {
+    mockDeps.orchestrator.getAllTasks = vi.fn(() => [
+      makeTask('wf-1', 'task-a', {
+        execution: {
+          agentSessionId: undefined,
+          lastAgentSessionId: 'sess-wf-1-task-a',
+        },
+      }),
+    ] as any);
+    (mockDeps.persistence.loadAttempts as any) = vi.fn(() => [
+      { id: 'attempt-old', agentSessionId: 'sess-old', createdAt: new Date('2025-01-01T00:00:00Z') },
+      { id: 'attempt-latest', agentSessionId: 'sess-latest', createdAt: new Date('2025-01-02T00:00:00Z') },
+    ]);
+
+    await runHeadless(['query', 'cost-events', '--output', 'json'], mockDeps);
+    const output = stdoutSpy.mock.calls[0][0] as string;
+    const parsed = JSON.parse(output);
+
+    expect(parsed[0].attemptId).toBe('attempt-latest');
+    expect(output).not.toContain('"attemptId":"wf-1/task-a-latest"');
   });
 
   it('rejects invalid --output format', async () => {
