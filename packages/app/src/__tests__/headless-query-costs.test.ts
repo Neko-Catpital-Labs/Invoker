@@ -12,6 +12,11 @@ const noopLogger = {
   child: vi.fn(function () { return noopLogger; }),
 };
 
+const attemptsByTaskId = new Map<string, Array<{ id: string; agentSessionId?: string }>>([
+  ['wf-1/task-a', [{ id: 'wf-1/task-a-attempt-1', agentSessionId: 'sess-wf-1-task-a' }]],
+  ['wf-1/task-b', [{ id: 'wf-1/task-b-attempt-1', agentSessionId: 'sess-wf-1-task-b' }]],
+]);
+
 function makeWorkflow(id: string, status: 'completed' | 'failed' | 'running') {
   return { id, name: `Workflow ${id}`, status, createdAt: '2025-01-01T00:00:00Z', updatedAt: '2025-01-01T00:01:00Z' };
 }
@@ -97,6 +102,7 @@ describe('headless query costs', () => {
         readOnly: false,
         listWorkflows: vi.fn(() => [makeWorkflow('wf-1', 'completed')]),
         loadTasks: vi.fn(() => []),
+        loadAttempts: vi.fn((taskId: string) => attemptsByTaskId.get(taskId) ?? []),
       } as unknown as SQLiteAdapter,
       commandService: {} as CommandService,
       executorRegistry: {} as any,
@@ -133,6 +139,11 @@ describe('headless query costs', () => {
     expect(parsed.total.eventCount).toBe(3); // 2 turns from task-a + 1 from task-b
     expect(parsed.total.inputTokens).toBe(600); // 100 + 200 + 300
     expect(parsed.total.outputTokens).toBe(250); // 50 + 80 + 120
+    expect(parsed.events.map((event: any) => event.attemptId)).toEqual([
+      'wf-1/task-a-attempt-1',
+      'wf-1/task-a-attempt-1',
+      'wf-1/task-b-attempt-1',
+    ]);
   });
 
   it('outputs events in JSONL format', async () => {
@@ -180,6 +191,65 @@ describe('headless query costs', () => {
     const output2 = stdoutSpy.mock.calls[0][0] as string;
 
     expect(output1).toBe(output2);
+  });
+
+  it('prefers an exact persisted agentSessionId match before selectedAttemptId', async () => {
+    mockDeps.orchestrator.getAllTasks = vi.fn(() => [
+      makeTask('wf-1', 'task-a', {
+        execution: {
+          agentSessionId: 'sess-wf-1-task-a',
+          selectedAttemptId: 'wf-1/task-a-selected',
+        } as any,
+      }),
+    ] as any);
+    (mockDeps.persistence.loadAttempts as any) = vi.fn(() => [
+      { id: 'wf-1/task-a-selected', agentSessionId: 'sess-stale' },
+      { id: 'wf-1/task-a-exact', agentSessionId: 'sess-wf-1-task-a' },
+    ]);
+
+    await runHeadless(['query', 'costs', '--output', 'json'], mockDeps);
+    const output = stdoutSpy.mock.calls[0][0] as string;
+    const parsed = JSON.parse(output);
+    expect(parsed.events[0].attemptId).toBe('wf-1/task-a-exact');
+  });
+
+  it('falls back to selectedAttemptId, then to the latest persisted attempt', async () => {
+    mockDeps.orchestrator.getAllTasks = vi.fn(() => [
+      makeTask('wf-1', 'task-a', {
+        execution: {
+          selectedAttemptId: 'wf-1/task-a-selected',
+        } as any,
+      }),
+      makeTask('wf-1', 'task-b', {
+        execution: {
+          agentSessionId: 'sess-wf-1-task-b',
+        } as any,
+      }),
+    ] as any);
+    (mockDeps.persistence.loadAttempts as any) = vi.fn((taskId: string) => {
+      if (taskId === 'wf-1/task-a') {
+        return [
+          { id: 'wf-1/task-a-older', agentSessionId: 'sess-old' },
+          { id: 'wf-1/task-a-selected', agentSessionId: 'sess-wf-1-task-a' },
+        ];
+      }
+      if (taskId === 'wf-1/task-b') {
+        return [
+          { id: 'wf-1/task-b-older', agentSessionId: 'sess-old-b' },
+          { id: 'wf-1/task-b-latest', agentSessionId: 'sess-wf-1-task-b' },
+        ];
+      }
+      return [];
+    });
+
+    await runHeadless(['query', 'costs', '--output', 'json'], mockDeps);
+    const output = stdoutSpy.mock.calls[0][0] as string;
+    const parsed = JSON.parse(output);
+    expect(parsed.events.map((event: any) => event.attemptId)).toEqual([
+      'wf-1/task-a-selected',
+      'wf-1/task-a-selected',
+      'wf-1/task-b-latest',
+    ]);
   });
 
   it('skips tasks without session drivers', async () => {

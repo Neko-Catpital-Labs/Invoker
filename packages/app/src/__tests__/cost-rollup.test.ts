@@ -33,7 +33,7 @@ function makeContext(overrides: Partial<AttributionContext> = {}): AttributionCo
   return {
     workflowId: 'wf-1',
     taskId: 'wf-1/task-a',
-    attemptId: 'wf-1/task-a-latest',
+    attemptId: 'attempt-1',
     runnerKind: 'worktree',
     agentSessionId: 'sess-abc',
     agentName: 'codex',
@@ -81,7 +81,7 @@ function makeEvent(overrides: Partial<{
     attribution: {
       workflowId,
       taskId,
-      attemptId: `${taskId}-latest`,
+      attemptId: 'attempt-1',
       runnerKind: 'worktree',
     },
     usage: { inputTokens, outputTokens, cachedTokens, totalTokens },
@@ -363,13 +363,34 @@ describe('buildAttributionContext', () => {
       agentSessionId: 'sess-123',
       agentName: 'codex',
     };
-    const ctx = buildAttributionContext(task);
+    const ctx = buildAttributionContext(task, 'attempt-123');
     expect(ctx).toEqual({
       workflowId: 'wf-1',
       taskId: 'wf-1/task-a',
-      attemptId: 'wf-1/task-a-latest',
+      attemptId: 'attempt-123',
       runnerKind: 'worktree',
       agentSessionId: 'sess-123',
+      agentName: 'codex',
+      source: 'openai',
+    });
+  });
+
+  it('uses the caller-provided persisted session identity when supplied', () => {
+    const task: CostTaskInfo = {
+      id: 'wf-1/task-a',
+      workflowId: 'wf-1',
+      runnerKind: 'worktree',
+      agentSessionId: 'sess-current',
+      lastAgentSessionId: 'sess-old',
+      agentName: 'codex',
+    };
+    const ctx = buildAttributionContext(task, 'attempt-persisted', 'sess-persisted');
+    expect(ctx).toEqual({
+      workflowId: 'wf-1',
+      taskId: 'wf-1/task-a',
+      attemptId: 'attempt-persisted',
+      runnerKind: 'worktree',
+      agentSessionId: 'sess-persisted',
       agentName: 'codex',
       source: 'openai',
     });
@@ -381,7 +402,7 @@ describe('buildAttributionContext', () => {
       workflowId: 'wf-1',
       runnerKind: 'worktree',
     };
-    expect(buildAttributionContext(task)).toBeUndefined();
+    expect(buildAttributionContext(task, 'attempt-123')).toBeUndefined();
   });
 
   it('falls back to lastAgentSessionId and lastAgentName', () => {
@@ -392,7 +413,7 @@ describe('buildAttributionContext', () => {
       lastAgentSessionId: 'sess-old',
       lastAgentName: 'claude',
     };
-    const ctx = buildAttributionContext(task);
+    const ctx = buildAttributionContext(task, 'attempt-older');
     expect(ctx?.agentSessionId).toBe('sess-old');
     expect(ctx?.agentName).toBe('claude');
     expect(ctx?.source).toBe('anthropic');
@@ -405,8 +426,18 @@ describe('buildAttributionContext', () => {
       runnerKind: '',
       agentSessionId: 'sess-123',
     };
-    const ctx = buildAttributionContext(task);
+    const ctx = buildAttributionContext(task, 'attempt-123');
     expect(ctx?.runnerKind).toBe('worktree');
+  });
+
+  it('returns undefined when attempt ID is empty', () => {
+    const task: CostTaskInfo = {
+      id: 'wf-1/task-a',
+      workflowId: 'wf-1',
+      runnerKind: 'worktree',
+      agentSessionId: 'sess-123',
+    };
+    expect(buildAttributionContext(task, '')).toBeUndefined();
   });
 });
 

@@ -13,7 +13,7 @@ import type { BundledSkillsInstallMode, BundledSkillsStatus, Logger } from '@inv
 import { makeEnvelope } from '@invoker/contracts';
 import type { AgentSessionData } from '@invoker/contracts';
 import { OrchestratorErrorCode } from '@invoker/workflow-core';
-import type { Orchestrator, CommandService, TaskDelta, TaskState } from '@invoker/workflow-core';
+import type { Attempt, Orchestrator, CommandService, TaskDelta, TaskState } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { Channels } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
@@ -622,61 +622,11 @@ async function headlessCosts(
     formatAsJson,
   } = await import('./formatter.js');
   const {
-    attributeSessionUsage, groupCostEvents, buildAttributionContext,
+    groupCostEvents,
     serializeGroupedRollup,
   } = await import('./cost-rollup.js');
   const { rollUpCostEvents } = await import('@invoker/contracts');
-
-  // Determine target workflow
-  const workflowFilter = flags.workflow ?? flags.positional[0];
-  const workflows = deps.persistence.listWorkflows();
-  if (workflows.length === 0) {
-    process.stdout.write('No workflows found.\n');
-    return;
-  }
-
-  const targetWorkflows = workflowFilter
-    ? workflows.filter(wf => wf.id === workflowFilter)
-    : workflows;
-
-  if (workflowFilter && targetWorkflows.length === 0) {
-    throw new Error(`Workflow "${workflowFilter}" not found.`);
-  }
-
-  // Collect all NormalizedCostEvents across tasks
-  const allEvents: import('@invoker/contracts').NormalizedCostEvent[] = [];
-
-  for (const wf of targetWorkflows) {
-    deps.orchestrator.syncFromDb(wf.id);
-    const tasks = deps.orchestrator.getAllTasks().filter(
-      t => t.config.workflowId === wf.id && !t.config.isMergeNode,
-    );
-
-    for (const task of tasks) {
-      const ctx = buildAttributionContext({
-        id: task.id,
-        workflowId: wf.id,
-        runnerKind: task.config.runnerKind ?? 'worktree',
-        agentSessionId: task.execution.agentSessionId,
-        lastAgentSessionId: task.execution.lastAgentSessionId,
-        agentName: task.execution.agentName,
-        lastAgentName: task.execution.lastAgentName,
-      });
-      if (!ctx) continue;
-
-      // Extract usage from session driver
-      const agentName = ctx.agentName;
-      const driver = deps.executionAgentRegistry?.getSessionDriver(agentName);
-      if (!driver?.extractUsage) continue;
-
-      const raw = driver.loadSession(ctx.agentSessionId);
-      if (!raw) continue;
-
-      const usageEvents = driver.extractUsage(raw);
-      const attributed = attributeSessionUsage(usageEvents, ctx);
-      allEvents.push(...attributed);
-    }
-  }
+  const allEvents = await collectCostEvents(flags, deps);
 
   if (allEvents.length === 0) {
     process.stdout.write('No cost data available.\n');
@@ -715,6 +665,25 @@ async function headlessCosts(
 
 type CostQueryDeps = Pick<HeadlessDeps, 'orchestrator' | 'persistence' | 'executionAgentRegistry'>;
 
+function resolveCostAttributionAttempt(
+  task: TaskState,
+  attempts: readonly Attempt[],
+): Attempt | undefined {
+  const sessionId = task.execution.agentSessionId?.trim();
+  if (sessionId) {
+    const exactSessionAttempt = attempts.find((attempt) => attempt.agentSessionId?.trim() === sessionId);
+    if (exactSessionAttempt) return exactSessionAttempt;
+  }
+
+  const selectedAttemptId = task.execution.selectedAttemptId?.trim();
+  if (selectedAttemptId) {
+    const selectedAttempt = attempts.find((attempt) => attempt.id === selectedAttemptId);
+    if (selectedAttempt) return selectedAttempt;
+  }
+
+  return attempts.at(-1);
+}
+
 async function collectCostEvents(
   flags: QueryFlags,
   deps: CostQueryDeps,
@@ -742,6 +711,8 @@ async function collectCostEvents(
     );
 
     for (const task of tasks) {
+      const attempts = deps.persistence.loadAttempts(task.id);
+      const attributedAttempt = resolveCostAttributionAttempt(task, attempts);
       const ctx = buildAttributionContext({
         id: task.id,
         workflowId: wf.id,
@@ -750,7 +721,7 @@ async function collectCostEvents(
         lastAgentSessionId: task.execution.lastAgentSessionId,
         agentName: task.execution.agentName,
         lastAgentName: task.execution.lastAgentName,
-      });
+      }, attributedAttempt?.id ?? task.execution.selectedAttemptId?.trim() ?? task.id, attributedAttempt?.agentSessionId?.trim());
       if (!ctx) continue;
 
       const agentName = ctx.agentName;
