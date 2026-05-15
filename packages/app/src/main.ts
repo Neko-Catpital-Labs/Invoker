@@ -730,6 +730,9 @@ if (isHeadless) {
           dbPollUpdatedAsUpdated: 0,
           rendererReports: 0,
           maxRendererEventLoopLagMs: 0,
+          maxRendererHiddenEventLoopLagMs: 0,
+          maxRendererCumulativeLagMs: 0,
+          maxRendererTickDeltaMs: 0,
           maxRendererLongTaskMs: 0,
         }),
         resetUiPerfStats: () => {},
@@ -1214,6 +1217,9 @@ if (isHeadless) {
     dbPollUpdatedAsUpdated: 0,
     rendererReports: 0,
     maxRendererEventLoopLagMs: 0,
+    maxRendererHiddenEventLoopLagMs: 0,
+    maxRendererCumulativeLagMs: 0,
+    maxRendererTickDeltaMs: 0,
     maxRendererLongTaskMs: 0,
   };
   const startupMarks = new Map<string, number>();
@@ -1268,6 +1274,9 @@ if (isHeadless) {
     uiPerfStats.dbPollUpdatedAsUpdated = 0;
     uiPerfStats.rendererReports = 0;
     uiPerfStats.maxRendererEventLoopLagMs = 0;
+    uiPerfStats.maxRendererHiddenEventLoopLagMs = 0;
+    uiPerfStats.maxRendererCumulativeLagMs = 0;
+    uiPerfStats.maxRendererTickDeltaMs = 0;
     uiPerfStats.maxRendererLongTaskMs = 0;
   };
 
@@ -3235,7 +3244,18 @@ if (isHeadless) {
         ...(data ?? {}),
       };
       if (metric === 'renderer_event_loop_lag' && typeof data?.lagMs === 'number') {
-        uiPerfStats.maxRendererEventLoopLagMs = Math.max(uiPerfStats.maxRendererEventLoopLagMs, data.lagMs);
+        const hiddenOrUnfocused = data.visibilityState === 'hidden' || data.hasFocus === false;
+        if (hiddenOrUnfocused) {
+          uiPerfStats.maxRendererHiddenEventLoopLagMs = Math.max(uiPerfStats.maxRendererHiddenEventLoopLagMs, data.lagMs);
+        } else {
+          uiPerfStats.maxRendererEventLoopLagMs = Math.max(uiPerfStats.maxRendererEventLoopLagMs, data.lagMs);
+        }
+        if (typeof data.cumulativeLagMs === 'number') {
+          uiPerfStats.maxRendererCumulativeLagMs = Math.max(uiPerfStats.maxRendererCumulativeLagMs, data.cumulativeLagMs);
+        }
+        if (typeof data.tickDeltaMs === 'number') {
+          uiPerfStats.maxRendererTickDeltaMs = Math.max(uiPerfStats.maxRendererTickDeltaMs, data.tickDeltaMs);
+        }
       }
       if (metric === 'renderer_long_task' && typeof data?.durationMs === 'number') {
         uiPerfStats.maxRendererLongTaskMs = Math.max(uiPerfStats.maxRendererLongTaskMs, data.durationMs);
