@@ -34,6 +34,7 @@ What it proves:
 This wrapper runs the committed repros for that stack:
   - scripts/repro/repro-workflow-mutation-cancellation-hardening.sh
   - scripts/repro/repro-fix-flow-lineage-guards.sh
+  - scripts/repro/repro-ssh-startup-lineage-guards.sh
   - scripts/repro/repro-recreate-task-blocked-by-running-workflow-mutation.sh
   - scripts/repro/repro-fix-intent-cancellation-and-stale-ssh-metadata.sh
   - scripts/repro/repro-stale-late-completion-after-reset.sh
@@ -95,6 +96,10 @@ bash scripts/repro/repro-workflow-mutation-cancellation-hardening.sh "${step_arg
 echo
 echo "==> stack repro: Step 2 — fix flow lineage guards"
 bash scripts/repro/repro-fix-flow-lineage-guards.sh "${step_args[@]}"
+
+echo
+echo "==> stack repro: Step 3 — SSH startup lineage guards"
+bash scripts/repro/repro-ssh-startup-lineage-guards.sh "${step_args[@]}"
 
 echo
 echo "==> stack repro: Scenario 1 — recreate-task queue authority"
