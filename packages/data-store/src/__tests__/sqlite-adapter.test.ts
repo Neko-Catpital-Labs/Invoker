@@ -1612,6 +1612,7 @@ describe('SQLiteAdapter', () => {
         migratedFixingWithAiStatuses: 1,
         normalizedMergeModes: 1,
         staleAutoFixExperimentTasks: 2,
+        normalizedStaleLaunchMetadata: 0,
       });
       const taskById = new Map(adapter.loadTasks('wf-1').map((task) => [task.id, task]));
       expect(adapter.loadWorkflow('wf-1')?.mergeMode).toBe('external_review');
@@ -1626,7 +1627,46 @@ describe('SQLiteAdapter', () => {
         migratedFixingWithAiStatuses: 0,
         normalizedMergeModes: 0,
         staleAutoFixExperimentTasks: 0,
+        normalizedStaleLaunchMetadata: 0,
       });
+    });
+
+    it('normalizes stale terminal launch metadata without touching legitimate long executions', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('stale-launch', {
+        status: 'failed',
+        execution: {
+          phase: 'launching',
+          launchStartedAt: new Date('2026-05-13T18:11:40.000Z'),
+          launchCompletedAt: undefined,
+          startedAt: new Date('2026-05-15T07:29:37.000Z'),
+          completedAt: new Date('2026-05-15T07:29:37.000Z'),
+          error: 'fixWithAgent: task has no valid workspace (workspacePath=undefined)',
+        },
+      }));
+      adapter.saveTask('wf-1', makeTask('long-running', {
+        status: 'completed',
+        execution: {
+          phase: 'executing',
+          launchStartedAt: new Date('2026-05-15T07:25:54.000Z'),
+          launchCompletedAt: new Date('2026-05-15T07:26:18.000Z'),
+          startedAt: new Date('2026-05-15T07:26:18.000Z'),
+          completedAt: new Date('2026-05-15T09:46:52.000Z'),
+        },
+      }));
+
+      const report = adapter.runCompatibilityMigration();
+
+      expect(report.normalizedStaleLaunchMetadata).toBe(1);
+      const taskById = new Map(adapter.loadTasks('wf-1').map((task) => [task.id, task]));
+      expect(taskById.get('stale-launch')?.execution.phase).toBeUndefined();
+      expect(taskById.get('stale-launch')?.execution.launchStartedAt).toBeUndefined();
+      expect(taskById.get('stale-launch')?.execution.launchCompletedAt).toBeUndefined();
+      expect(taskById.get('long-running')?.execution.launchStartedAt?.toISOString()).toBe('2026-05-15T07:25:54.000Z');
+      expect(taskById.get('long-running')?.execution.launchCompletedAt?.toISOString()).toBe('2026-05-15T07:26:18.000Z');
+
+      const secondRun = adapter.runCompatibilityMigration();
+      expect(secondRun.normalizedStaleLaunchMetadata).toBe(0);
     });
   });
 
