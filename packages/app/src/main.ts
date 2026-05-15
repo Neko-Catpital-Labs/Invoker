@@ -137,6 +137,7 @@ import { installBundledSkills, resolveBundledSkillsStatus } from './bundled-skil
 import { createRequire } from 'node:module';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
 import { applyDelta, resolveQuarantine, TaskSnapshotCache } from './delta-merge.js';
+import { WorkflowMetadataInvalidator } from './workflow-metadata-invalidation.js';
 import { shouldSkipAutoFixForError } from './auto-fix-gating.js';
 import { ensureSqliteFlushDebounceForOwner } from './sqlite-flush-policy.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
@@ -1189,6 +1190,7 @@ if (isHeadless) {
   const outputFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const pendingUiTaskDeltas: TaskDelta[] = [];
   let uiTaskDeltaFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  let workflowMetadataInvalidator: WorkflowMetadataInvalidator | null = null;
   let lastKnownWorkflowCount = 0;
   let lastActivityLogId = 0;
   let startupWorkflowId: string | null = null;
@@ -1307,6 +1309,7 @@ if (isHeadless) {
   };
 
   const sendTaskDeltaToRenderer = (delta: TaskDelta): void => {
+    workflowMetadataInvalidator?.markFromTaskDelta(delta);
     if (!mainWindow || mainWindow.isDestroyed() || !uiInteractive) {
       return;
     }
@@ -2178,6 +2181,19 @@ if (isHeadless) {
     }
     return undefined;
   }
+
+  workflowMetadataInvalidator = new WorkflowMetadataInvalidator({
+    getCachedTaskSnapshot: (taskId) => lastKnownTaskStates.get(taskId),
+    loadTask: loadTaskByIdFromPersistence,
+    listWorkflows: () => persistence.listWorkflows(),
+    publish: (workflows) => {
+      lastKnownWorkflowCount = workflows.length;
+      if (!mainWindow || mainWindow.isDestroyed() || !uiInteractive) {
+        return;
+      }
+      mainWindow.webContents.send('invoker:workflows-changed', workflows);
+    },
+  });
 
   function listWorkflowsByStartupRecency() {
     return [...persistence.listWorkflows()].sort((left, right) => {

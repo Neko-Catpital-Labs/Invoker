@@ -19,6 +19,7 @@ vi.mock('@xyflow/react', async () => {
 const { App } = await import('../App.js');
 
 const workflows: WorkflowMeta[] = [{ id: 'wf-a', name: 'Workflow A', status: 'running' }];
+const failedWorkflows: WorkflowMeta[] = [{ id: 'wf-a', name: 'Workflow A', status: 'failed' }];
 const alpha = makeUITask({ id: 'task-alpha', description: 'First test task', status: 'pending', workflowId: 'wf-a', command: 'echo hello-alpha' });
 const beta = makeUITask({ id: 'task-beta', description: 'Second test task depending on alpha', status: 'pending', workflowId: 'wf-a', dependencies: ['task-alpha'], command: 'echo hello-beta' });
 
@@ -80,7 +81,7 @@ describe('Task interaction (component)', () => {
     });
 
     render(<App />);
-    act(() => mock.setTasks([failedTask], workflows));
+    act(() => mock.setTasks([failedTask], failedWorkflows));
 
     await waitFor(() => {
       expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();

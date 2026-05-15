@@ -70,7 +70,7 @@ export interface ActivityLogEntry {
 export interface PersistenceAdapter {
   // Workflows
   saveWorkflow(workflow: Workflow): void;
-  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'status' | 'updatedAt' | 'baseBranch' | 'generation' | 'mergeMode'>>): void;
+  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'updatedAt' | 'baseBranch' | 'generation' | 'mergeMode'>>): void;
   loadWorkflow(workflowId: string): Workflow | undefined;
   listWorkflows(): Workflow[];
 
