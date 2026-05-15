@@ -94,7 +94,7 @@ describe('WorkflowInspector', () => {
       />,
     );
 
-    expect(screen.getAllByText('Fix cancellation race').length).toBeGreaterThan(0);
+    expect(screen.getByText('Fix cancellation race')).toBeInTheDocument();
     expect(screen.getByText('failed')).toBeInTheDocument();
   });
 

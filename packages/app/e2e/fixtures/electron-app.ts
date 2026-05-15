@@ -135,17 +135,32 @@ export const TEST_PLAN = {
   ],
 };
 
+async function selectWorkflowNode(page: Page, workflowId?: string): Promise<void> {
+  const miniDag = page.getByTestId('selected-workflow-mini-dag');
+  const workflowNode = workflowId ? page.getByTestId(`workflow-node-${workflowId}`) : page.locator('[data-testid^="workflow-node-"]').first();
+  await workflowNode.waitFor({ state: 'attached', timeout: 10000 });
+  await workflowNode.dispatchEvent('click', { bubbles: true });
+  await miniDag.waitFor({ state: 'visible', timeout: 10000 });
+}
+
 /** Select the first workflow node so the reskinned mini-DAG renders task nodes. */
 export async function selectFirstWorkflow(page: Page): Promise<void> {
-  const workflowNode = page.locator('[data-testid^="workflow-node-"]').first();
-  await workflowNode.waitFor({ state: 'visible', timeout: 10000 });
-  await workflowNode.click();
+  await selectWorkflowNode(page);
 }
 
 /** Load a plan into the running app via the IPC bridge and wait for its mini-DAG to render. */
 export async function loadPlan(page: Page, plan: { tasks: readonly { id: string }[] }): Promise<void> {
   const planYaml = yamlStringify(plan);
+  const beforeIds = await page.evaluate(async () => {
+    const workflows = await window.invoker.listWorkflows();
+    return workflows.map((workflow: { id: string }) => workflow.id);
+  });
   await page.evaluate((p) => window.invoker.loadPlan(p), planYaml);
+  const workflowId = await page.evaluate(async (knownIds) => {
+    const workflows = await window.invoker.listWorkflows();
+    const created = workflows.find((workflow: { id: string }) => !knownIds.includes(workflow.id));
+    return created?.id ?? workflows[workflows.length - 1]?.id ?? null;
+  }, beforeIds);
   await page.waitForFunction(
     (expectedTaskCount) => window.invoker.getTasks(true).then((result) => {
       const tasks = Array.isArray(result) ? result : result.tasks;
@@ -156,7 +171,7 @@ export async function loadPlan(page: Page, plan: { tasks: readonly { id: string 
     { timeout: 10000 },
   );
   await page.getByRole('button', { name: 'Refresh' }).click();
-  await selectFirstWorkflow(page);
+  await selectWorkflowNode(page, workflowId ?? undefined);
   await page.locator(`.react-flow__node[data-testid$="${plan.tasks[0].id}"]`).first().waitFor({ state: 'visible', timeout: 10000 });
 }
 
