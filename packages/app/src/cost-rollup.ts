@@ -193,18 +193,22 @@ export function deriveSource(agentName: string): string {
 }
 
 /**
- * Build an AttributionContext from a task info record.
+ * Build an AttributionContext from a task info record plus a caller-selected attempt ID.
  * Returns undefined if no session ID is available.
  */
-export function buildAttributionContext(task: CostTaskInfo): AttributionContext | undefined {
-  const sessionId = resolveSessionId(task);
+export function buildAttributionContext(
+  task: CostTaskInfo,
+  attemptId: string,
+  sessionId: string | undefined = resolveSessionId(task),
+): AttributionContext | undefined {
+  if (!attemptId) return undefined;
   if (!sessionId) return undefined;
 
   const agentName = resolveAgentName(task);
   return {
     workflowId: task.workflowId,
     taskId: task.id,
-    attemptId: `${task.id}-latest`,
+    attemptId,
     runnerKind: task.runnerKind || 'worktree',
     agentSessionId: sessionId,
     agentName,
