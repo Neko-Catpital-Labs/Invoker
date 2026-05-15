@@ -96,6 +96,7 @@ export interface WorkflowMutationFacadeDeps {
   orchestrator: Orchestrator;
   persistence: SQLiteAdapter;
   taskExecutor: TaskRunner;
+  dispatchMode?: 'await' | 'fire-and-forget';
   autoApproveAIFixes?: boolean;
   /** Optional pre-kill hook for active task executions. */
   killRunningTask?: (taskId: string) => Promise<void>;
@@ -399,6 +400,7 @@ export class WorkflowMutationFacade {
       logger: this.deps.logger,
       context,
       started,
+      dispatchMode: this.deps.dispatchMode,
     });
   }
 
@@ -416,6 +418,7 @@ export class WorkflowMutationFacade {
       taskExecutor: this.deps.taskExecutor,
       logger: this.deps.logger,
       context,
+      dispatchMode: this.deps.dispatchMode,
     });
   }
 }
