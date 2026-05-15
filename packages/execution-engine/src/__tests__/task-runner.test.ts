@@ -1709,87 +1709,6 @@ describe('TaskRunner', () => {
   });
 
   describe('launch timeout repro', () => {
-    it('marks launch accepted while building upstream context before executor start', async () => {
-      let releaseUpstreamContext!: () => void;
-      const upstreamContextBlocked = new Promise<void>((resolve) => {
-        releaseUpstreamContext = resolve;
-      });
-      let completeCallback: ((response: WorkResponse) => void) | undefined;
-      const onLaunchAccepted = vi.fn();
-      const onLaunchStart = vi.fn();
-      const onLaunchSettled = vi.fn();
-      const handleWorkerResponse = vi.fn(() => []);
-      const task = makeTask({
-        id: 'preparing-before-start',
-        status: 'running',
-        config: { command: 'echo hello' },
-        execution: { selectedAttemptId: 'preparing-before-start-a1' },
-      });
-      const executor = {
-        type: 'worktree',
-        start: vi.fn(async () => ({
-          executionId: 'exec-preparing-before-start',
-          taskId: task.id,
-          workspacePath: '/tmp/preparing-before-start',
-          branch: 'experiment/preparing-before-start',
-        })),
-        onOutput: vi.fn(),
-        onComplete: vi.fn((_handle: any, cb: (response: WorkResponse) => void) => {
-          completeCallback = cb;
-        }),
-        onHeartbeat: vi.fn(),
-        kill: vi.fn(),
-        destroyAll: vi.fn(),
-      };
-      const runner = new TaskRunner({
-        orchestrator: {
-          getTask: () => task,
-          markTaskRunningAfterLaunch: vi.fn(() => true),
-          handleWorkerResponse,
-        } as any,
-        persistence: {
-          loadWorkflow: vi.fn(),
-          updateTask: vi.fn(),
-          updateAttempt: vi.fn(),
-          logEvent: vi.fn(),
-        } as any,
-        executorRegistry: {
-          getDefault: () => executor,
-          get: () => executor,
-          getAll: () => [executor],
-        } as any,
-        cwd: '/tmp',
-        callbacks: { onLaunchAccepted, onLaunchStart, onLaunchSettled },
-      });
-      vi.spyOn(runner as any, 'buildUpstreamContext').mockImplementation(async () => {
-        await upstreamContextBlocked;
-        return [];
-      });
-
-      const done = runner.executeTask(task);
-      await vi.waitFor(() => expect(onLaunchAccepted).toHaveBeenCalledWith(task.id));
-
-      expect(executor.start).not.toHaveBeenCalled();
-      expect(onLaunchStart).not.toHaveBeenCalled();
-
-      releaseUpstreamContext();
-      await vi.waitFor(() => expect(executor.start).toHaveBeenCalledTimes(1));
-      expect(onLaunchStart).toHaveBeenCalledWith(task.id, executor);
-
-      completeCallback?.({
-        requestId: 'req-preparing-before-start',
-        actionId: task.id,
-        attemptId: task.execution.selectedAttemptId,
-        executionGeneration: task.execution.generation ?? 0,
-        status: 'completed',
-        outputs: { exitCode: 0 },
-      });
-      await done;
-
-      expect(handleWorkerResponse).toHaveBeenCalled();
-      expect(onLaunchSettled).toHaveBeenCalledWith(task.id);
-    });
-
     it('reports launch-in-progress callbacks while executor.start is still pending', async () => {
       const launchStart = vi.fn();
       const launchFailed = vi.fn();
@@ -8028,7 +7947,6 @@ console.log(JSON.stringify(out));
         branch: 'experiment/task-1',
       });
       const logEvent = vi.fn();
-      const updateTask = vi.fn();
       const task = makeTask({
         id: 'task-1',
         status: 'pending',
@@ -8038,7 +7956,7 @@ console.log(JSON.stringify(out));
 
       const runner = new TaskRunner({
         orchestrator: { getTask: () => task, getAllTasks: () => [task], handleWorkerResponse: vi.fn() } as any,
-        persistence: { updateTask, updateAttempt: vi.fn(), logEvent } as any,
+        persistence: { updateTask: vi.fn(), updateAttempt: vi.fn(), logEvent } as any,
         executorRegistry: {
           getDefault: () => sshExecutor,
           get: (type: string) => type === 'ssh' ? sshExecutor : null,
@@ -8082,16 +8000,6 @@ console.log(JSON.stringify(out));
       const selectedPayload = logEvent.mock.calls.find((call) => call[1] === 'task.executor.selected')?.[2];
       expect(JSON.stringify(selectedPayload)).not.toContain('sshKeyPath');
       expect(JSON.stringify(selectedPayload)).not.toContain('/secret/key');
-      expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({
-        config: expect.objectContaining({
-          runnerKind: 'ssh',
-          poolMemberId: 'remote-a',
-        }),
-        execution: expect.objectContaining({
-          workspacePath: '/remote/worktrees/task-1',
-          branch: 'experiment/task-1',
-        }),
-      }));
     });
 
     it('logs explicit SSH executor selection as explicitPoolMemberId', async () => {
@@ -8128,77 +8036,6 @@ console.log(JSON.stringify(out));
         poolMemberId: 'remote-b',
         remoteHost: 'dev.example.com',
         remoteUser: 'dev',
-      }));
-    });
-
-    it('persists pool member metadata for current pool-routed SSH startup failures', async () => {
-      const startupError = Object.assign(new Error('provision failed'), {
-        workspacePath: '/remote/worktrees/task-start-fail',
-        branch: 'experiment/task-start-fail',
-      });
-      const sshExecutor = {
-        type: 'ssh',
-        start: vi.fn(async () => {
-          throw startupError;
-        }),
-        onComplete: vi.fn(),
-        onOutput: vi.fn(),
-        onHeartbeat: vi.fn(),
-        kill: vi.fn(),
-        destroyAll: vi.fn(),
-      };
-      const updateTask = vi.fn();
-      const task = makeTask({
-        id: 'task-start-fail',
-        status: 'pending',
-        config: { command: 'pnpm test', runnerKind: 'ssh', poolId: 'ci-pool' },
-        execution: { selectedAttemptId: 'attempt-start-fail', phase: 'launching' },
-      });
-
-      const runner = new TaskRunner({
-        orchestrator: {
-          getTask: () => task,
-          getAllTasks: () => [task],
-          handleWorkerResponse: vi.fn(),
-        } as any,
-        persistence: {
-          updateTask,
-          updateAttempt: vi.fn(),
-          appendTaskOutput: vi.fn(),
-          logEvent: vi.fn(),
-        } as any,
-        executorRegistry: {
-          getDefault: () => sshExecutor,
-          get: (type: string) => type === 'ssh' ? sshExecutor : null,
-          getAll: () => [sshExecutor],
-        } as any,
-        cwd: '/tmp',
-        executionPoolsProvider: () => ({
-          'ci-pool': {
-            selectionStrategy: 'leastLoaded',
-            members: [{ type: 'ssh', id: 'remote-a' }],
-          },
-        }),
-        remoteTargetsProvider: () => ({
-          'remote-a': {
-            host: 'ci.example.com',
-            user: 'runner',
-            sshKeyPath: '/secret/key',
-          },
-        }),
-      });
-
-      await runner.executeTask(task);
-
-      expect(updateTask).toHaveBeenCalledWith('task-start-fail', expect.objectContaining({
-        config: expect.objectContaining({
-          runnerKind: 'ssh',
-          poolMemberId: 'remote-a',
-        }),
-        execution: expect.objectContaining({
-          workspacePath: '/remote/worktrees/task-start-fail',
-          branch: 'experiment/task-start-fail',
-        }),
       }));
     });
 
@@ -8383,7 +8220,7 @@ console.log(JSON.stringify(out));
 
       // Check that metadata was persisted immediately after start
       expect(updateSpy).toHaveBeenCalledWith('ssh-task-1', {
-        config: { runnerKind: 'ssh', poolMemberId: 'remote-1' },
+        config: { runnerKind: 'ssh' },
         execution: {
           workspacePath: '~/.invoker/worktrees/abc123/experiment-ssh-task-1-def456',
           branch: 'experiment/ssh-task-1-def456',

@@ -3,6 +3,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { WorkflowGraph } from '../components/WorkflowGraph.js';
 import type { TaskState, WorkflowMeta, WorkflowStatus } from '../types.js';
 
+vi.mock('@xyflow/react', async () => {
+  const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
+  return createReactFlowMock();
+});
+
 function wf(id: string, status: WorkflowStatus): WorkflowMeta {
   return { id, name: id, status };
 }
@@ -41,7 +46,7 @@ describe('WorkflowGraph', () => {
       />,
     );
 
-    const node = screen.getByRole('button');
+    const node = screen.getByTestId('workflow-node-wf-a');
     fireEvent.click(node);
     expect(onSelectWorkflow).toHaveBeenCalledWith('wf-a');
 
@@ -50,7 +55,7 @@ describe('WorkflowGraph', () => {
     expect(onWorkflowContextMenu.mock.calls[0][1]).toBe('wf-a');
   });
 
-  it('renders workflow even when status filter does not match', () => {
+  it('renders filtered workflows dimmed', () => {
     const workflows = new Map([
       ['wf-a', wf('wf-a', 'running')],
     ]);
@@ -69,6 +74,31 @@ describe('WorkflowGraph', () => {
       />,
     );
 
-    expect(screen.getAllByText('wf-a').length).toBeGreaterThan(0);
+    const node = screen.getByTestId('workflow-node-wf-a');
+    expect(node).toBeInTheDocument();
+    expect(node).toHaveClass('opacity-35');
+  });
+
+  it('renders the React Flow wrapper for non-empty workflow graphs', () => {
+    const workflows = new Map([
+      ['wf-a', wf('wf-a', 'running')],
+    ]);
+    const tasks = new Map([
+      ['t1', task('t1', 'wf-a')],
+    ]);
+
+    render(
+      <WorkflowGraph
+        tasks={tasks}
+        workflows={workflows}
+        selectedWorkflowId={null}
+        statusFilters={new Set()}
+        onSelectWorkflow={() => {}}
+        onWorkflowContextMenu={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId('workflow-graph-react-flow')).toBeInTheDocument();
+    expect(screen.getByTestId('mock-react-flow')).toBeInTheDocument();
   });
 });

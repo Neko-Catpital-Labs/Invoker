@@ -163,7 +163,8 @@ async function loadPlanAndSelectWorkflow(page: Page, plan: unknown): Promise<str
   }, beforeIds);
   expect(workflowId).toBeTruthy();
   await workflowNode(page, workflowId!).waitFor({ state: 'visible', timeout: 15000 });
-  await workflowNode(page, workflowId!).click();
+  await workflowNode(page, workflowId!).dispatchEvent('click', { bubbles: true });
+  await expect(page.getByTestId('selected-workflow-mini-dag')).toBeVisible({ timeout: 10000 });
   return workflowId!;
 }
 
@@ -815,7 +816,6 @@ test.describe('Visual proof capture', () => {
     };
 
     const gatedWorkflowId = await loadPlanAndSelectWorkflow(page, gatePolicyPlan);
-    await workflowNode(page, gatedWorkflowId).click();
     await page.locator('.react-flow__node[data-testid$="gated-task"]').first().waitFor({ state: 'visible', timeout: 10000 });
 
     // Set up the gate states:
@@ -925,6 +925,8 @@ test.describe('Visual proof capture', () => {
     });
     await page.getByRole('button', { name: 'Minimize inspector' }).click();
     await expect(page.getByRole('button', { name: 'Maximize inspector' })).toBeVisible();
+    await page.getByRole('button', { name: 'Fit View' }).first().click();
+    await page.waitForTimeout(200);
     for (const workflowId of [rootWorkflowId, downstreamAId, downstreamBId, fanInId]) {
       await expect(workflowNode(page, workflowId)).toBeInViewport();
     }
