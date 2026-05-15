@@ -2483,4 +2483,197 @@ describe('SQLiteAdapter', () => {
       expect(adapter.evictQueuedWorkflowMutationIntentsBefore('wf-1', fence)).toEqual([]);
     });
   });
+
+  describe('queryOne / queryAll statement cleanup', () => {
+    interface StubStatement {
+      free: () => boolean;
+      bind: (params: unknown[]) => boolean;
+      step: () => boolean;
+      getAsObject: () => Record<string, unknown>;
+      freed: boolean;
+    }
+
+    type StubBehaviour = {
+      bindThrows?: boolean;
+      stepThrows?: boolean;
+      getAsObjectThrows?: boolean;
+      stepResults?: boolean[];
+      getAsObjectResults?: Record<string, unknown>[];
+    };
+
+    function installStubPrepare(target: SQLiteAdapter, behaviour: StubBehaviour) {
+      const db = (target as any).db as { prepare: (sql: string) => unknown };
+      const originalPrepare = db.prepare.bind(db);
+      const stmt: StubStatement = {
+        freed: false,
+        free() {
+          this.freed = true;
+          return true;
+        },
+        bind() {
+          if (behaviour.bindThrows) {
+            throw new Error('stub: bind exploded');
+          }
+          return true;
+        },
+        step: (() => {
+          let callCount = 0;
+          return function step() {
+            if (behaviour.stepThrows) {
+              throw new Error('stub: step exploded');
+            }
+            const queue = behaviour.stepResults ?? [];
+            const value = callCount < queue.length ? queue[callCount] : false;
+            callCount += 1;
+            return value;
+          };
+        })(),
+        getAsObject: (() => {
+          let callCount = 0;
+          return function getAsObject() {
+            if (behaviour.getAsObjectThrows) {
+              throw new Error('stub: getAsObject exploded');
+            }
+            const queue = behaviour.getAsObjectResults ?? [];
+            const value = callCount < queue.length ? queue[callCount] : {};
+            callCount += 1;
+            return value;
+          };
+        })(),
+      };
+      db.prepare = () => stmt;
+      return {
+        stmt,
+        restore() {
+          db.prepare = originalPrepare;
+        },
+      };
+    }
+
+    it('queryOne frees the prepared statement when bind throws', () => {
+      const stub = installStubPrepare(adapter, { bindThrows: true });
+      try {
+        expect(() => (adapter as any).queryOne('SELECT 1')).toThrow(/bind exploded/);
+        expect(stub.stmt.freed).toBe(true);
+      } finally {
+        stub.restore();
+      }
+    });
+
+    it('queryOne frees the prepared statement when step throws', () => {
+      const stub = installStubPrepare(adapter, { stepThrows: true });
+      try {
+        expect(() => (adapter as any).queryOne('SELECT 1')).toThrow(/step exploded/);
+        expect(stub.stmt.freed).toBe(true);
+      } finally {
+        stub.restore();
+      }
+    });
+
+    it('queryOne frees the prepared statement when getAsObject throws', () => {
+      const stub = installStubPrepare(adapter, {
+        getAsObjectThrows: true,
+        stepResults: [true],
+      });
+      try {
+        expect(() => (adapter as any).queryOne('SELECT 1')).toThrow(/getAsObject exploded/);
+        expect(stub.stmt.freed).toBe(true);
+      } finally {
+        stub.restore();
+      }
+    });
+
+    it('queryOne frees the prepared statement on the success path', () => {
+      const stub = installStubPrepare(adapter, {
+        stepResults: [true],
+        getAsObjectResults: [{ id: 1 }],
+      });
+      try {
+        const row = (adapter as any).queryOne('SELECT 1');
+        expect(row).toEqual({ id: 1 });
+        expect(stub.stmt.freed).toBe(true);
+      } finally {
+        stub.restore();
+      }
+    });
+
+    it('queryOne frees the prepared statement when there is no matching row', () => {
+      const stub = installStubPrepare(adapter, { stepResults: [false] });
+      try {
+        const row = (adapter as any).queryOne('SELECT 1');
+        expect(row).toBeUndefined();
+        expect(stub.stmt.freed).toBe(true);
+      } finally {
+        stub.restore();
+      }
+    });
+
+    it('queryAll frees the prepared statement when bind throws', () => {
+      const stub = installStubPrepare(adapter, { bindThrows: true });
+      try {
+        expect(() => (adapter as any).queryAll('SELECT 1')).toThrow(/bind exploded/);
+        expect(stub.stmt.freed).toBe(true);
+      } finally {
+        stub.restore();
+      }
+    });
+
+    it('queryAll frees the prepared statement when step throws mid-iteration', () => {
+      const db = (adapter as any).db as { prepare: (sql: string) => unknown };
+      const originalPrepare = db.prepare.bind(db);
+      let stepCalls = 0;
+      const stmt = {
+        freed: false,
+        free() {
+          this.freed = true;
+          return true;
+        },
+        bind() {
+          return true;
+        },
+        step() {
+          stepCalls += 1;
+          if (stepCalls === 1) return true;
+          throw new Error('stub: step exploded after first row');
+        },
+        getAsObject() {
+          return { row: stepCalls };
+        },
+      };
+      db.prepare = () => stmt;
+      try {
+        expect(() => (adapter as any).queryAll('SELECT 1')).toThrow(/step exploded after first row/);
+        expect(stmt.freed).toBe(true);
+      } finally {
+        db.prepare = originalPrepare;
+      }
+    });
+
+    it('queryAll frees the prepared statement when getAsObject throws on row materialization', () => {
+      const stub = installStubPrepare(adapter, {
+        getAsObjectThrows: true,
+        stepResults: [true],
+      });
+      try {
+        expect(() => (adapter as any).queryAll('SELECT 1')).toThrow(/getAsObject exploded/);
+        expect(stub.stmt.freed).toBe(true);
+      } finally {
+        stub.restore();
+      }
+    });
+
+    it('queryAll frees the prepared statement on the success path', () => {
+      const stub = installStubPrepare(adapter, {
+        stepResults: [true, true, false],
+        getAsObjectResults: [{ id: 1 }, { id: 2 }],
+      });
+      try {
+        const rows = (adapter as any).queryAll('SELECT 1');
+        expect(rows).toEqual([{ id: 1 }, { id: 2 }]);
+        expect(stub.stmt.freed).toBe(true);
+      } finally {
+        stub.restore();
+      }
+    });
+  });
 });
