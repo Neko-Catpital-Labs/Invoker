@@ -20,6 +20,8 @@ type MutationTopupParams = {
   logger?: Logger;
   context: string;
   started?: TaskState[];
+  scopedWorkflowId?: string;
+  scopedTaskIds?: string[];
   mutationTiming?: WorkflowMutationTiming;
   dispatchMode?: 'await' | 'fire-and-forget';
 };
@@ -46,6 +48,19 @@ function createDispatchBench(
       attemptIds: runnable.map((task) => task.execution.selectedAttemptId ?? null),
     },
   });
+}
+
+function hasExplicitScope(scopedWorkflowId?: string, scopedTaskIds?: string[]): boolean {
+  return !!scopedWorkflowId || !!scopedTaskIds?.length;
+}
+
+function matchesScope(
+  task: TaskState,
+  scopedWorkflowId: string | undefined,
+  scopedTaskIds: Set<string>,
+): boolean {
+  return (!!scopedWorkflowId && task.config.workflowId === scopedWorkflowId)
+    || scopedTaskIds.has(task.id);
 }
 
 function dispatchTasks({
@@ -89,9 +104,46 @@ function dispatchTasks({
     .catch((err) => {
       const message = err instanceof Error ? err.stack ?? err.message : String(err);
       logger?.error(`[global-topup] ${context}: asynchronous task dispatch failed: ${message}`);
-    });
+  });
   bench(`${afterMark}.accepted`);
   return Promise.resolve();
+}
+
+function executeRunnableTasks({
+  taskExecutor,
+  logger,
+  context,
+  runnable,
+  dispatchKind,
+  mutationTiming,
+  spanName,
+  dispatchMode,
+}: {
+  taskExecutor: TaskRunner;
+  logger?: Logger;
+  context: string;
+  runnable: TaskState[];
+  dispatchKind: 'global-topup' | 'scoped';
+  mutationTiming?: WorkflowMutationTiming;
+  spanName: string;
+  dispatchMode: 'await' | 'fire-and-forget';
+}): Promise<void> {
+  const bench = createDispatchBench(logger, context, runnable, dispatchKind);
+  const phasePrefix = dispatchKind === 'scoped'
+    ? 'dispatchStartedTasksWithGlobalTopup.scopedExecuteTasks'
+    : 'dispatchStartedTasksWithGlobalTopup.prestartedTopupExecuteTasks';
+  return dispatchTasks({
+    taskExecutor,
+    logger,
+    context,
+    runnable,
+    mutationTiming,
+    bench,
+    spanName,
+    beforeMark: `${phasePrefix}.before`,
+    afterMark: `${phasePrefix}.after`,
+    dispatchMode,
+  });
 }
 
 export function isDispatchableLaunch(task: TaskState): boolean {
@@ -174,41 +226,65 @@ export async function dispatchStartedTasksWithGlobalTopup({
   logger,
   context,
   started = [],
+  scopedWorkflowId,
+  scopedTaskIds,
   mutationTiming,
   dispatchMode = mutationTiming ? 'fire-and-forget' : 'await',
 }: MutationTopupParams): Promise<{ runnable: TaskState[]; topup: TaskState[] }> {
-  const runnable = started.filter(isDispatchableLaunch);
+  const dispatchable = started.filter(isDispatchableLaunch);
+  const scopedTaskIdSet = new Set(scopedTaskIds ?? []);
+  const useScope = hasExplicitScope(scopedWorkflowId, scopedTaskIds);
+  const runnable = useScope
+    ? dispatchable.filter((task) => matchesScope(task, scopedWorkflowId, scopedTaskIdSet))
+    : dispatchable;
+  const prestartedTopup = useScope
+    ? dispatchable.filter((task) => !matchesScope(task, scopedWorkflowId, scopedTaskIdSet))
+    : [];
   const bench = createDispatchBench(logger, context, runnable, 'scoped');
   bench('dispatchStartedTasksWithGlobalTopup.runnableFiltered', { startedCount: started.length });
   if (runnable.length > 0) {
     logger?.info(
       `[global-topup] ${context}: dispatching ${runnable.length} scoped task(s): [${runnable.map((task) => task.id).join(', ')}]`,
     );
-    await dispatchTasks({
+    await executeRunnableTasks({
       taskExecutor,
       logger,
       context,
       runnable,
+      dispatchKind: 'scoped',
       mutationTiming,
-      bench,
       spanName: 'dispatchStartedTasksWithGlobalTopup.scopedExecuteTasks',
-      beforeMark: 'dispatchStartedTasksWithGlobalTopup.scopedExecuteTasks.before',
-      afterMark: 'dispatchStartedTasksWithGlobalTopup.scopedExecuteTasks.after',
       dispatchMode,
     });
   } else {
     bench('dispatchStartedTasksWithGlobalTopup.noScopedRunnable');
   }
+  if (prestartedTopup.length > 0) {
+    logger?.info(
+      `[global-topup] ${context}: dispatching ${prestartedTopup.length} prestarted top-up task(s): [${prestartedTopup.map((task) => task.id).join(', ')}]`,
+    );
+    await executeRunnableTasks({
+      taskExecutor,
+      logger,
+      context,
+      runnable: prestartedTopup,
+      dispatchKind: 'global-topup',
+      mutationTiming,
+      spanName: 'dispatchStartedTasksWithGlobalTopup.prestartedTopupExecuteTasks',
+      dispatchMode,
+    });
+  }
   bench('dispatchStartedTasksWithGlobalTopup.executeGlobalTopup.before');
-  const topup = await executeGlobalTopup({
+  const additionalTopup = await executeGlobalTopup({
     orchestrator,
     taskExecutor,
     logger,
     context,
-    alreadyDispatched: runnable,
+    alreadyDispatched: [...runnable, ...prestartedTopup],
     mutationTiming,
     dispatchMode,
   });
+  const topup = [...prestartedTopup, ...additionalTopup];
   bench('dispatchStartedTasksWithGlobalTopup.executeGlobalTopup.after', { topupCount: topup.length });
   return { runnable, topup };
 }
@@ -224,6 +300,8 @@ export async function finalizeMutationWithGlobalTopup({
   logger,
   context,
   started = [],
+  scopedWorkflowId,
+  scopedTaskIds,
   mutationTiming,
   dispatchMode,
 }: MutationTopupParams): Promise<{ started: TaskState[]; topup: TaskState[] }> {
@@ -233,6 +311,8 @@ export async function finalizeMutationWithGlobalTopup({
     logger,
     context,
     started,
+    scopedWorkflowId,
+    scopedTaskIds,
     mutationTiming,
     dispatchMode,
   });
