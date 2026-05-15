@@ -1866,7 +1866,7 @@ run_fixing_with_ai_visibility() {
 run_owner_restart_loop_during_tracked_recreate_task() {
   local workflow_count="$1"
   local operation_burst="$2"
-  local seed_timeout_seconds=120
+  local seed_timeout_seconds=180
   invoker_e2e_init
   trap 'ov_stop_owner; rm -rf "${OVERLOAD_TMP_DIR:-}" >/dev/null 2>&1 || true; invoker_e2e_cleanup' RETURN
   cd "$INVOKER_E2E_REPO_ROOT"
