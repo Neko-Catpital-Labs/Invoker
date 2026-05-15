@@ -114,6 +114,22 @@ const REVIEW_READY_WORKFLOW_PR_PLAN = {
   ],
 };
 
+/**
+ * Plan for workflow/task status color parity proof: a workflow whose rolled-up
+ * status is `review_ready` plus regular tasks at representative statuses so the
+ * screenshot captures workflow-level and task-level palettes side by side.
+ */
+const STATUS_COLOR_PARITY_PLAN = {
+  name: 'Workflow Task Color Parity Proof',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'pull_request' as const,
+  mergeMode: 'external_review',
+  tasks: [
+    { id: 'cp-review-ready', description: 'Review ready task', command: 'echo review', dependencies: [] as string[] },
+    { id: 'cp-completed', description: 'Completed task', command: 'echo done', dependencies: [] as string[] },
+  ],
+};
+
 /** Plan for queue-action-surface hardening: combines canonical states, dependency relationships, and destructive actions. */
 const QUEUE_HARDENING_PLAN = {
   name: 'Queue Hardening Visual Proof',
@@ -419,6 +435,46 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByRole('link', { name: reviewUrl })).toHaveAttribute('href', reviewUrl);
 
     await captureScreenshot(page, 'review-ready-workflow-pr-sidebar');
+  });
+
+  test('workflow-task-status-color-parity — review_ready hue matches across workflow and task surfaces', async ({ page }) => {
+    const workflowId = await loadPlanAndSelectWorkflow(page, STATUS_COLOR_PARITY_PLAN);
+    const now = new Date();
+    const earlier = new Date(Date.now() - 5000);
+
+    // Forcing the merge gate plus one regular task to `review_ready` makes the
+    // workflow rollup resolve to `review_ready`, so the workflow node and the
+    // review_ready task node share the canonical palette in the same frame.
+    await injectTaskStates(page, [
+      {
+        taskId: 'cp-review-ready',
+        changes: { status: 'review_ready', execution: { startedAt: earlier } },
+      },
+      {
+        taskId: 'cp-completed',
+        changes: {
+          status: 'completed',
+          execution: { startedAt: earlier, completedAt: now },
+        },
+      },
+      {
+        taskId: `__merge__${workflowId}`,
+        changes: { status: 'review_ready', execution: { startedAt: earlier } },
+      },
+    ]);
+
+    // Workflow node renders the rolled-up status label as lowercase with spaces.
+    await expect(workflowNode(page, workflowId).getByText('review ready')).toBeVisible();
+
+    // Task nodes render their canonical status labels in uppercase.
+    await expect(
+      page.locator('.react-flow__node[data-testid$="cp-review-ready"]').getByText('REVIEW_READY'),
+    ).toBeVisible();
+    await expect(
+      page.locator('.react-flow__node[data-testid$="cp-completed"]').getByText('COMPLETED'),
+    ).toBeVisible();
+
+    await captureScreenshot(page, 'workflow-task-status-color-parity');
   });
 
   test('interactive-status-hues — fixing-with-ai, needs-input, awaiting-approval', async ({ page }) => {
