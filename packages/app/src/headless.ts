@@ -131,6 +131,7 @@ function buildHeadlessApiServerDeps(
       orchestrator: deps.orchestrator,
       persistence: deps.persistence,
       taskExecutor,
+      dispatchMode: deps.mutationTiming ? 'fire-and-forget' : 'await',
       autoApproveAIFixes: deps.invokerConfig?.autoApproveAIFixes,
       killRunningTask: (taskId: string) => taskExecutor.killActiveExecution(taskId),
     }),
@@ -1401,6 +1402,7 @@ async function headlessApprove(taskId: string, deps: HeadlessDeps): Promise<void
       logger: deps.logger,
       context: 'headless.approve',
       started,
+      mutationTiming: deps.mutationTiming,
     });
     process.stdout.write(`Approved task: ${taskId}\n`);
     if (deps.noTrack) {
@@ -1558,6 +1560,7 @@ async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string
       logger: deps.logger,
       context: 'headless.fix-with-agent',
       started: result.started,
+      mutationTiming: deps.mutationTiming,
     });
     if (result.kind === 'recreateWorkflowFromFreshBase') {
       process.stdout.write(
@@ -1576,6 +1579,7 @@ async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string
       taskExecutor: te,
       logger: deps.logger,
       context: 'headless.fix-with-agent.failure',
+      mutationTiming: deps.mutationTiming,
     });
     throw err;
   } finally {
@@ -1604,6 +1608,7 @@ async function headlessResolveConflict(taskId: string, deps: HeadlessDeps, agent
       logger: deps.logger,
       context: 'headless.resolve-conflict',
       started: result.started,
+      mutationTiming: deps.mutationTiming,
     });
     process.stdout.write(
       deps.invokerConfig.autoApproveAIFixes
@@ -1616,6 +1621,7 @@ async function headlessResolveConflict(taskId: string, deps: HeadlessDeps, agent
       taskExecutor: te,
       logger: deps.logger,
       context: 'headless.resolve-conflict.failure',
+      mutationTiming: deps.mutationTiming,
     });
     throw err;
   } finally {
@@ -2359,6 +2365,7 @@ async function headlessCancel(taskId: string, deps: HeadlessDeps): Promise<void>
       taskExecutor: te,
       logger: deps.logger,
       context: 'headless.cancel-task',
+      mutationTiming: deps.mutationTiming,
     });
     process.stdout.write(`Cancelled ${cmdResult.data.cancelled.length} task(s): [${cmdResult.data.cancelled.join(', ')}]\n`);
     if (cmdResult.data.runningCancelled.length > 0) {
@@ -2413,6 +2420,7 @@ async function headlessCancelWorkflow(workflowId: string, deps: HeadlessDeps): P
     taskExecutor: te,
     logger: deps.logger,
     context: 'headless.cancel-workflow',
+    mutationTiming: deps.mutationTiming,
   });
   process.stdout.write(`Cancelled ${result.cancelled.length} task(s) in workflow "${workflowId}": [${result.cancelled.join(', ')}]\n`);
   if (result.runningCancelled.length > 0) {

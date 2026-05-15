@@ -298,5 +298,22 @@ describe('WorkflowMutationFacade', () => {
       expect(deps.orchestrator.retryWorkflow).toHaveBeenCalledWith('wf-1');
       expect(result.started).toHaveLength(1);
     });
+
+    it('can return after launch acceptance without waiting for task runtime', async () => {
+      deps = makeDeps({
+        dispatchMode: 'fire-and-forget',
+        taskExecutor: {
+          executeTasks: vi.fn(() => new Promise<void>(() => {})),
+          killActiveExecution: vi.fn(),
+        } as unknown as TaskRunner,
+      });
+      facade = new WorkflowMutationFacade(deps);
+
+      const result = await facade.retryWorkflow('wf-1');
+
+      expect(result.started).toHaveLength(1);
+      expect(result.runnable).toHaveLength(1);
+      expect(deps.taskExecutor.executeTasks).toHaveBeenCalled();
+    });
   });
 });
