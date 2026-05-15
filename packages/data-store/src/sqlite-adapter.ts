@@ -323,12 +323,19 @@ export class SQLiteAdapter implements PersistenceAdapter {
       CREATE TABLE IF NOT EXISTS workflows (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
-        status TEXT DEFAULT 'running',
+        description TEXT,
+        visual_proof INTEGER,
         plan_file TEXT,
         repo_url TEXT,
         intermediate_repo_url TEXT,
         branch TEXT,
+        on_finish TEXT,
+        base_branch TEXT,
         parent_remote TEXT,
+        feature_branch TEXT,
+        merge_mode TEXT,
+        review_provider TEXT,
+        generation INTEGER DEFAULT 0,
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
       );
@@ -608,6 +615,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         }
       }
     }
+    this.migrateWorkflowStatusColumn();
 
     // Replace old attempt_number index with created_at index
     this.db.run('DROP INDEX IF EXISTS idx_attempts_node');
@@ -618,6 +626,58 @@ export class SQLiteAdapter implements PersistenceAdapter {
       this.migrateGatePolicyApprovedToCompleted();
       this.runCompatibilityMigration();
     }
+  }
+
+  private migrateWorkflowStatusColumn(): void {
+    if (this.readOnly) return;
+    const columns = this.queryAll('PRAGMA table_info(workflows)') as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === 'status')) return;
+
+    const foreignKeys = this.queryOne('PRAGMA foreign_keys') as { foreign_keys?: number } | undefined;
+    const foreignKeysEnabled = foreignKeys?.foreign_keys === 1;
+    if (foreignKeysEnabled) {
+      this.db.run('PRAGMA foreign_keys = OFF');
+    }
+    this.db.run(`
+      CREATE TABLE workflows_new (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        visual_proof INTEGER,
+        plan_file TEXT,
+        repo_url TEXT,
+        intermediate_repo_url TEXT,
+        branch TEXT,
+        on_finish TEXT,
+        base_branch TEXT,
+        parent_remote TEXT,
+        feature_branch TEXT,
+        merge_mode TEXT,
+        review_provider TEXT,
+        generation INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+      )
+    `);
+    this.db.run(`
+      INSERT INTO workflows_new (
+        id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url,
+        branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode,
+        review_provider, generation, created_at, updated_at
+      )
+      SELECT
+        id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url,
+        branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode,
+        review_provider, generation, created_at, updated_at
+      FROM workflows
+    `);
+    this.db.run('DROP TABLE workflows');
+    this.db.run('ALTER TABLE workflows_new RENAME TO workflows');
+    if (foreignKeysEnabled) {
+      this.db.run('PRAGMA foreign_keys = ON');
+    }
+    this.dirty = true;
+    this.scheduleFlush();
   }
 
   /**
@@ -687,13 +747,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   saveWorkflow(workflow: Workflow): void {
     this.execRun(`
-      INSERT OR REPLACE INTO workflows (id, name, description, visual_proof, status, plan_file, repo_url, intermediate_repo_url, branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode, review_provider, generation, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO workflows (id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url, branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode, review_provider, generation, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       workflow.id, workflow.name,
       workflow.description ?? null,
       workflow.visualProof ? 1 : 0,
-      workflow.status,
       workflow.planFile ?? null, workflow.repoUrl ?? null, workflow.intermediateRepoUrl ?? null, workflow.branch ?? null,
       workflow.onFinish ?? null, workflow.baseBranch ?? null, null, workflow.featureBranch ?? null,
       workflow.mergeMode ?? null,
@@ -703,13 +762,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
     ]);
   }
 
-  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'status' | 'updatedAt' | 'baseBranch' | 'generation' | 'mergeMode'>>): void {
+  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'updatedAt' | 'baseBranch' | 'generation' | 'mergeMode'>>): void {
     const setClauses: string[] = [];
     const values: unknown[] = [];
-    if (changes.status !== undefined) {
-      setClauses.push('status = ?');
-      values.push(changes.status);
-    }
     if (changes.baseBranch !== undefined) {
       setClauses.push('base_branch = ?');
       values.push(changes.baseBranch);
@@ -1714,7 +1769,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
     for (const workflowId of workflowIds) {
       const tasks = tasksByWorkflow.get(workflowId) ?? [];
-      if (tasks.length === 0) continue;
       rollups.set(workflowId, computeWorkflowRollupFromSummaries(tasks));
     }
 
@@ -1727,7 +1781,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       name: row.name,
       description: row.description ?? undefined,
       visualProof: row.visual_proof === 1,
-      status: rollup?.status ?? row.status,
+      status: rollup?.status ?? 'pending',
       rollup,
       planFile: row.plan_file ?? undefined,
       repoUrl: row.repo_url ?? undefined,
