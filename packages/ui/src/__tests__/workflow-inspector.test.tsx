@@ -56,6 +56,38 @@ describe('WorkflowInspector', () => {
     expect(link).toHaveAttribute('href', 'https://github.com/org/repo/pull/12');
   });
 
+  it('renders workflow PR URL from its review-ready merge node', () => {
+    const mergeTask = makeTask({
+      id: '__merge__wf-1',
+      description: 'Merge gate',
+      status: 'review_ready',
+      config: { workflowId: 'wf-1', isMergeNode: true },
+      execution: { reviewUrl: 'https://github.com/org/repo/pull/34' },
+    });
+    const otherTask = makeTask({
+      id: 'task-2',
+      execution: { reviewUrl: 'https://github.com/org/repo/pull/12' },
+    });
+
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'review_ready' }}
+        task={null}
+        workflowTasks={new Map([
+          [otherTask.id, otherTask],
+          [mergeTask.id, mergeTask],
+        ])}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    const link = screen.getByRole('link', { name: /github\.com/i });
+    expect(link).toHaveAttribute('href', 'https://github.com/org/repo/pull/34');
+  });
+
   it('can be collapsed and restored', () => {
     const { rerender } = render(
       <WorkflowInspector
@@ -80,6 +112,40 @@ describe('WorkflowInspector', () => {
       />,
     );
     expect(screen.getByText('Workflow 1')).toBeInTheDocument();
+  });
+
+  it('uses the selected workflow title as the side panel title without a generic inspector label', () => {
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={null}
+        workflowTasks={new Map([['task-1', makeTask()]])}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow 1');
+    expect(screen.queryByText('Workflow 1 task DAG')).not.toBeInTheDocument();
+    expect(screen.queryByText('Inspector')).not.toBeInTheDocument();
+  });
+
+  it('uses the selected task title as the side panel title without a generic inspector label', () => {
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ description: 'Fix cancellation race', status: 'failed' })}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Fix cancellation race');
+    expect(screen.queryByText('Inspector')).not.toBeInTheDocument();
   });
 
   it('renders selected task title and selected task status first', () => {

@@ -46,8 +46,8 @@ describe('Task interaction (component)', () => {
     fireEvent.click(screen.getByTestId('rf__node-wf-a'));
 
     await waitFor(() => {
-      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow A task DAG');
-      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow A task DAG');
+      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow A');
+      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow A');
     });
   });
 
@@ -104,7 +104,7 @@ describe('Task interaction (component)', () => {
 
     fireEvent.click(screen.getByTestId('workflow-node-wf-a'));
     await waitFor(() => {
-      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow A task DAG');
+      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow A');
     });
 
     fireEvent.click(screen.getByTestId('workflow-graph-react-flow'));
@@ -127,7 +127,7 @@ describe('Task interaction (component)', () => {
     fireEvent.click(panel);
 
     expect(screen.getByTestId('selected-workflow-mini-dag')).toBeInTheDocument();
-    expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow A task DAG');
+    expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow A');
   });
 
   it('drags the selected workflow mini DAG by its header', async () => {
