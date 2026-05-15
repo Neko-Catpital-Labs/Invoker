@@ -191,7 +191,7 @@ describe('Parity: facade dispatch+topup lifecycle', () => {
 
   it('all mutations filter non-running tasks from dispatch', async () => {
     // Orchestrator returns a mix of running and pending tasks
-    const mixed = [makeTask({ id: 't1', status: 'running' }), makePendingTask({ id: 't2' })];
+    const mixed = [makeTask({ id: 'task-1', status: 'running' }), makePendingTask({ id: 't2' })];
     (deps.orchestrator as any).retryTask.mockReturnValue(mixed);
     facade = new WorkflowMutationFacade(deps);
 
@@ -199,9 +199,9 @@ describe('Parity: facade dispatch+topup lifecycle', () => {
 
     // Only the running task should be dispatched
     expect(result.runnable).toHaveLength(1);
-    expect(result.runnable[0].id).toBe('t1');
+    expect(result.runnable[0].id).toBe('task-1');
     expect(deps.taskExecutor.executeTasks).toHaveBeenCalledWith([
-      expect.objectContaining({ id: 't1', status: 'running' }),
+      expect.objectContaining({ id: 'task-1', status: 'running' }),
     ]);
   });
 
