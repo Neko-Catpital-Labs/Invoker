@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { SQLiteAdapter } from '@invoker/data-store';
 import { PersistedWorkflowMutationCoordinator, type WorkflowMutationContext } from '../persisted-workflow-mutation-coordinator.js';
+import { dispatchStartedTasksWithGlobalTopup } from '../global-topup.js';
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve = () => {};
@@ -60,6 +61,58 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     await queuedNormal;
 
     expect(order).toEqual(['mut:running-normal', 'mut:queued-high', 'mut:queued-normal']);
+  });
+
+  it('releases a workflow lease after fire-and-forget task launch acceptance', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const startedTask = {
+      id: 'task-a',
+      description: 'task-a',
+      status: 'running',
+      dependencies: [],
+      createdAt: new Date(),
+      config: { workflowId: 'wf-1' },
+      execution: { selectedAttemptId: 'attempt-a' },
+    };
+    const order: string[] = [];
+    const taskExecutor = {
+      executeTasks: async () => new Promise<void>(() => {}),
+    };
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async (channel) => {
+        order.push(channel);
+        if (channel === 'first') {
+          await dispatchStartedTasksWithGlobalTopup({
+            orchestrator: { startExecution: () => [] } as any,
+            taskExecutor: taskExecutor as any,
+            context: 'test.workflow-mutation-lease',
+            started: [startedTask as any],
+            dispatchMode: 'fire-and-forget',
+          });
+        }
+      },
+    );
+
+    const first = coordinator.enqueue<void>('wf-1', 'normal', 'first', []);
+    await waitFor(() => adapter.listWorkflowMutationIntents('wf-1', ['completed']).length === 1);
+    const second = coordinator.enqueue<void>('wf-1', 'normal', 'second', []);
+
+    await first;
+    await second;
+
+    expect(order).toEqual(['first', 'second']);
+    expect(adapter.listWorkflowMutationLeases()).toHaveLength(0);
   });
 
   it('evicts older queued workflow intents when a delegated recreate fence starts', async () => {
