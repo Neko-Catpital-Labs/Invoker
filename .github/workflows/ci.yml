@@ -122,6 +122,8 @@ jobs:
             command: bash scripts/test-suites/required/17-merge-gate-concurrency-repro.sh
           - name: Start Running MECE Repros
             command: bash scripts/test-suites/required/18-start-running-mece-repros.sh
+          - name: Task New Attempt Reset Repro
+            command: bash scripts/test-suites/required/19-task-new-attempt-reset-repro.sh
 
     name: required-fast / ${{ matrix.name }}
 
