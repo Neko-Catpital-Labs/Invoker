@@ -845,11 +845,12 @@ describe('diamond dependency merge', () => {
 
 import { TaskRunner, ExecutorRegistry } from '../index.js';
 import { WorktreeExecutor } from '../worktree-executor.js';
-import { Orchestrator, type TaskState, type TaskStateChanges, type PlanDefinition, type OrchestratorPersistence, type OrchestratorMessageBus } from '@invoker/workflow-core';
+import { Orchestrator, type Attempt, type TaskState, type TaskStateChanges, type PlanDefinition, type OrchestratorPersistence, type OrchestratorMessageBus } from '@invoker/workflow-core';
 
 class TestPersistence implements OrchestratorPersistence {
   workflows = new Map<string, any>();
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
+  attempts = new Map<string, Attempt>();
 
   saveWorkflow(wf: any): void {
     this.workflows.set(wf.id, { ...wf, createdAt: wf.createdAt ?? new Date().toISOString(), updatedAt: wf.updatedAt ?? new Date().toISOString() });
@@ -881,10 +882,20 @@ class TestPersistence implements OrchestratorPersistence {
     return entry?.task.execution.workspacePath ?? null;
   }
   logEvent(): void {}
-  saveAttempt(): void {}
-  loadAttempts(): any[] { return []; }
-  loadAttempt(): undefined { return undefined; }
-  updateAttempt(): void {}
+  saveAttempt(attempt: Attempt): void {
+    this.attempts.set(attempt.id, { ...attempt });
+  }
+  loadAttempts(nodeId: string): Attempt[] {
+    return Array.from(this.attempts.values()).filter((attempt) => attempt.nodeId === nodeId);
+  }
+  loadAttempt(attemptId: string): Attempt | undefined {
+    const attempt = this.attempts.get(attemptId);
+    return attempt ? { ...attempt } : undefined;
+  }
+  updateAttempt(attemptId: string, changes: Partial<Attempt>): void {
+    const attempt = this.attempts.get(attemptId);
+    if (attempt) this.attempts.set(attemptId, { ...attempt, ...changes });
+  }
 }
 
 class TestBus implements OrchestratorMessageBus {
@@ -1312,10 +1323,24 @@ describe('merge gate commit topology (real git)', () => {
     // Simulate task completion with branch info
     const taskA = orchestrator.getTask('task-a')!;
     const taskB = orchestrator.getTask('task-b')!;
-    persistence.updateTask('task-a', { execution: { branch: 'experiment/task-a' } });
-    persistence.updateTask('task-b', { execution: { branch: 'experiment/task-b' } });
-    orchestrator.handleWorkerResponse({ requestId: 'r1', actionId: 'task-a', status: 'completed', outputs: { exitCode: 0 } });
-    orchestrator.handleWorkerResponse({ requestId: 'r2', actionId: 'task-b', status: 'completed', outputs: { exitCode: 0 } });
+    persistence.updateTask(taskA.id, { execution: { branch: 'experiment/task-a' } });
+    persistence.updateTask(taskB.id, { execution: { branch: 'experiment/task-b' } });
+    orchestrator.handleWorkerResponse({
+      requestId: 'r1',
+      actionId: taskA.id,
+      attemptId: taskA.execution.selectedAttemptId,
+      executionGeneration: taskA.execution.generation ?? 0,
+      status: 'completed',
+      outputs: { exitCode: 0 },
+    });
+    orchestrator.handleWorkerResponse({
+      requestId: 'r2',
+      actionId: taskB.id,
+      attemptId: taskB.execution.selectedAttemptId,
+      executionGeneration: taskB.execution.generation ?? 0,
+      status: 'completed',
+      outputs: { exitCode: 0 },
+    });
 
     // Find the merge node and execute it (consolidation phase)
     const mergeNode = orchestrator.getAllTasks().find(t => t.config.isMergeNode)!;
@@ -1329,15 +1354,6 @@ describe('merge gate commit topology (real git)', () => {
     const masterBeforeApprove = execSync('git rev-parse master', { cwd: tmpDir }).toString().trim();
     expect(masterBeforeApprove).toBe(masterHead);
 
-    // The test's persistence.updateTask uses short IDs ('task-a') which don't
-    // match the orchestrator's prefixed IDs ('wf-XXXX/task-a'), so consolidation
-    // merges 0 task branches. Recreate feat/hook-e2e with the real merges and
-    // push to origin so approveMerge's merge worktree picks it up correctly.
-    execSync('git checkout -b feat/hook-e2e master', { cwd: tmpDir });
-    execSync('git merge --no-ff experiment/task-a -m "Merge experiment/task-a"', { cwd: tmpDir });
-    execSync('git merge --no-ff experiment/task-b -m "Merge experiment/task-b"', { cwd: tmpDir });
-    execSync('git push --force origin feat/hook-e2e', { cwd: tmpDir });
-    execSync('git checkout master', { cwd: tmpDir });
 
     // Approve via orchestrator — hook should fire and do the squash merge
     await orchestrator.approve(mergeNode.id);

@@ -13,6 +13,7 @@ import type { AgentRegistry } from './agent-registry.js';
 import { computeRepoUrlHash, sanitizeBranchForPath } from './git-utils.js';
 import { isWorkspaceCleanupEnabled } from './workspace-cleanup-policy.js';
 import { buildSshConnectionArgs } from './ssh-transport-options.js';
+import { createExecutionBench } from './execution-bench.js';
 import {
   shellPosixSingleQuote as sshGitShellQuote,
   base64Encode as sshGitB64,
@@ -162,19 +163,37 @@ exit "$PAYLOAD_EXIT"
   }
 
   private async execRemoteCapture(script: string, phase?: string): Promise<string> {
+    const bench = createExecutionBench({
+      module: 'ssh-executor-start-bench',
+      baseMetadata: {
+        host: this.host,
+        user: this.user,
+        remotePhase: phase ?? 'remote_capture',
+      },
+    });
+    bench('SshExecutor.execRemoteCapture.begin');
     return new Promise((resolve, reject) => {
       const child = spawn('ssh', [...this.buildSshArgs(), ...this.buildRemoteCommand()], {
         stdio: ['pipe', 'pipe', 'pipe'],
         env: cleanElectronEnv(),
       });
+      bench('SshExecutor.execRemoteCapture.spawned');
       child.stdin.write(script);
       child.stdin.end();
       let out = '';
       let err = '';
       child.stdout?.on('data', (c: Buffer) => { out += c.toString(); });
       child.stderr?.on('data', (c: Buffer) => { err += c.toString(); });
-      child.on('error', reject);
+      child.on('error', (error) => {
+        bench('SshExecutor.execRemoteCapture.spawnError', { error: error.message });
+        reject(error);
+      });
       child.on('close', (code) => {
+        bench('SshExecutor.execRemoteCapture.closed', {
+          code,
+          stdoutBytes: out.length,
+          stderrBytes: err.length,
+        });
         if (code === 0) resolve(out);
         else {
           reject(createSshRemoteScriptError(code, out, err, phase));
@@ -190,6 +209,18 @@ exit "$PAYLOAD_EXIT"
   async start(request: WorkRequest): Promise<ExecutorHandle> {
     const handle = this.createHandle(request);
     const executionId = handle.executionId;
+    const bench = createExecutionBench({
+      module: 'ssh-executor-start-bench',
+      baseMetadata: {
+        requestId: request.requestId,
+        actionId: request.actionId,
+        actionType: request.actionType,
+        host: this.host,
+        user: this.user,
+        managedWorkspaces: this.managedWorkspaces,
+      },
+    });
+    bench('SshExecutor.start.begin');
 
     if (request.actionType === 'reconciliation') {
       const entry: SshEntry = {
@@ -205,12 +236,16 @@ exit "$PAYLOAD_EXIT"
       };
       this.registerEntry(handle, entry);
       this.scheduleReconciliationResponse(executionId);
+      bench('SshExecutor.start.reconciliation.returning');
       return handle;
     }
 
     try {
+      bench('SshExecutor.sshKey.access.before', { sshKeyPath: this.sshKeyPath });
       accessSync(this.sshKeyPath, constants.R_OK);
+      bench('SshExecutor.sshKey.access.after', { sshKeyPath: this.sshKeyPath });
     } catch {
+      bench('SshExecutor.sshKey.access.failed', { sshKeyPath: this.sshKeyPath });
       throw new Error(
         `SSH key file not accessible: ${this.sshKeyPath}\n` +
         `Update "sshKeyPath" in your Invoker config (.invoker.json or ~/.invoker/config.json).`,
@@ -224,6 +259,7 @@ exit "$PAYLOAD_EXIT"
       const command = request.inputs.command;
       if (!command) throw new Error('WorkRequest with actionType "command" must have inputs.command');
       payload = command;
+      bench('SshExecutor.payload.built', { command: true });
     } else if (request.actionType === 'ai_task') {
       if (this.agentRegistry) {
         const requestedAgent = request.inputs.executionAgent ?? 'claude';
@@ -232,13 +268,22 @@ exit "$PAYLOAD_EXIT"
         const spec = agent.buildCommand(fullPrompt);
         agentSessionId = spec.sessionId;
         payload = `${spec.cmd} ${spec.args.map(a => this.shellQuote(a)).join(' ')}`;
+        bench('SshExecutor.payload.built', {
+          executionAgent: requestedAgent,
+          hasAgentSessionId: !!agentSessionId,
+        });
       } else {
         const session = this.prepareClaudeSession(request);
         agentSessionId = session.sessionId;
         payload = `claude ${session.cliArgs.map(a => this.shellQuote(a)).join(' ')}`;
+        bench('SshExecutor.payload.built', {
+          executionAgent: 'claude',
+          hasAgentSessionId: !!agentSessionId,
+        });
       }
     } else {
       payload = 'echo "Unsupported action type"';
+      bench('SshExecutor.payload.built', { unsupportedActionType: request.actionType });
     }
 
     try {
@@ -250,11 +295,26 @@ exit "$PAYLOAD_EXIT"
             `Add a top-level "repoUrl" to your plan YAML (e.g. repoUrl: git@github.com:user/repo.git).`,
           );
         }
-        return await this.startManagedWorkspace(request, handle, repoUrl, payload, agentSessionId);
+        bench('SshExecutor.startManagedWorkspace.before', { repoUrl });
+        const started = await this.startManagedWorkspace(request, handle, repoUrl, payload, agentSessionId);
+        bench('SshExecutor.startManagedWorkspace.after', {
+          workspacePath: started.workspacePath,
+          branch: started.branch,
+        });
+        return started;
       } else {
-        return await this.startBYOWorkspace(request, handle, payload, agentSessionId);
+        bench('SshExecutor.startBYOWorkspace.before');
+        const started = await this.startBYOWorkspace(request, handle, payload, agentSessionId);
+        bench('SshExecutor.startBYOWorkspace.after', {
+          workspacePath: started.workspacePath,
+          branch: started.branch,
+        });
+        return started;
       }
     } catch (err) {
+      bench('SshExecutor.start.failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
       throw this.withStartupMetadata(err, handle);
     }
   }
@@ -269,6 +329,16 @@ exit "$PAYLOAD_EXIT"
     payload: string,
     agentSessionId?: string,
   ): Promise<ExecutorHandle> {
+    const bench = createExecutionBench({
+      module: 'ssh-executor-start-bench',
+      baseMetadata: {
+        requestId: request.requestId,
+        actionId: request.actionId,
+        host: this.host,
+        user: this.user,
+      },
+    });
+    bench('SshExecutor.startBYOWorkspace.begin');
     const executionId = handle.executionId;
     const workspacePath = request.inputs.workspacePath;
 
@@ -281,6 +351,10 @@ exit "$PAYLOAD_EXIT"
 
     handle.workspacePath = workspacePath;
     handle.agentSessionId = agentSessionId;
+    bench('SshExecutor.startBYOWorkspace.workspaceResolved', {
+      workspacePath,
+      hasAgentSessionId: !!agentSessionId,
+    });
 
     // No-command tasks complete immediately
     if (!request.inputs.command && !request.inputs.prompt) {
@@ -305,6 +379,7 @@ exit "$PAYLOAD_EXIT"
       };
       this.registerEntry(handle, entry);
       this.emitComplete(executionId, response);
+      bench('SshExecutor.startBYOWorkspace.noCommand.returning');
       return handle;
     }
 
@@ -323,7 +398,10 @@ echo "[SshExecutor BYO] Running task in user-provided workspace: $WT"
 ${this.buildPayloadExecutionScript(payloadB64)}
 `;
 
-    return this.spawnSshRemoteStdin(executionId, request, handle, runScript, agentSessionId, undefined);
+    bench('SshExecutor.startBYOWorkspace.spawnSshRemoteStdin.before', { workspacePath });
+    const started = await this.spawnSshRemoteStdin(executionId, request, handle, runScript, agentSessionId, undefined);
+    bench('SshExecutor.startBYOWorkspace.spawnSshRemoteStdin.after', { workspacePath });
+    return started;
   }
 
   /**
@@ -336,6 +414,17 @@ ${this.buildPayloadExecutionScript(payloadB64)}
     payload: string,
     agentSessionId?: string,
   ): Promise<ExecutorHandle> {
+    const bench = createExecutionBench({
+      module: 'ssh-executor-start-bench',
+      baseMetadata: {
+        requestId: request.requestId,
+        actionId: request.actionId,
+        host: this.host,
+        user: this.user,
+        repoUrl,
+      },
+    });
+    bench('SshExecutor.startManagedWorkspace.begin');
     const executionId = handle.executionId;
     const h = computeRepoUrlHash(repoUrl);
     const baseRef = request.inputs.baseBranch ?? 'HEAD';
@@ -356,8 +445,15 @@ ${this.buildPayloadExecutionScript(payloadB64)}
       baseRef,
       invokerHome,
     });
+    bench('SshExecutor.startManagedWorkspace.bootstrapCloneFetch.before', { baseRef });
     const bootstrapOut = await this.execRemoteCapture(script1, 'bootstrap_clone_fetch');
     const { resolvedBaseRef, baseHead, warning, fetchSuccess } = parseBootstrapOutput(bootstrapOut);
+    bench('SshExecutor.startManagedWorkspace.bootstrapCloneFetch.after', {
+      resolvedBaseRef,
+      baseHead,
+      fetchSuccess,
+      hasWarning: !!warning,
+    });
     if (warning) {
       this.emitOutput(executionId, `[SshExecutor] ${warning}\n`);
     }
@@ -378,11 +474,17 @@ ${this.buildPayloadExecutionScript(payloadB64)}
       lifecycleTag,
       contentHash,
     );
+    bench('SshExecutor.startManagedWorkspace.branchComputed', {
+      experimentBranch,
+      contentHash,
+    });
     // Persist the branch on the attempt row before we run any remote git
     // command that could leak a worktree without a recorded branch.
     try {
       request.onBranchResolved?.(experimentBranch);
+      bench('SshExecutor.startManagedWorkspace.onBranchResolved.done', { experimentBranch });
     } catch {
+      bench('SshExecutor.startManagedWorkspace.onBranchResolved.failed', { experimentBranch });
       // Best-effort; the post-start path persists this again.
     }
     const san = sanitizeBranchForPath(experimentBranch);
@@ -393,9 +495,13 @@ ${this.buildPayloadExecutionScript(payloadB64)}
     // path as real until Git has actually created or confirmed it.
     handle.branch = experimentBranch;
 
+    bench('SshExecutor.startManagedWorkspace.detectHome.before');
     const remoteHome = (await this.execRemoteCapture('printf %s "$HOME"', 'detect_home')).trim();
+    bench('SshExecutor.startManagedWorkspace.detectHome.after', { remoteHome });
     const porcelainScript = buildWorktreeListScript({ repoHash: h, invokerHome });
+    bench('SshExecutor.startManagedWorkspace.listWorktrees.before');
     const porcelain = await this.execRemoteCapture(porcelainScript, 'list_worktrees');
+    bench('SshExecutor.startManagedWorkspace.listWorktrees.after', { bytes: porcelain.length });
 
     // Expand ~ in invokerHome for path matching
     const expandedInvokerHome = invokerHome === '~'
@@ -411,22 +517,31 @@ ${this.buildPayloadExecutionScript(payloadB64)}
     if (reuseAbs) {
       const headScript = buildWorktreeHeadScript(reuseAbs);
       try {
+        bench('SshExecutor.startManagedWorkspace.inspectReuseHead.before', { reuseAbs });
         const head = (await this.execRemoteCapture(headScript)).trim();
         exactBranchCandidate = {
           path: reuseAbs,
           headMatchesTargetBranch: abbrevRefMatchesBranch(head, experimentBranch),
         };
+        bench('SshExecutor.startManagedWorkspace.inspectReuseHead.after', {
+          reuseAbs,
+          head,
+          headMatchesTargetBranch: exactBranchCandidate.headMatchesTargetBranch,
+        });
       } catch {
         exactBranchCandidate = undefined;
+        bench('SshExecutor.startManagedWorkspace.inspectReuseHead.failed', { reuseAbs });
       }
     }
 
+    bench('SshExecutor.startManagedWorkspace.planManagedWorktree.before');
     const worktreePlan = planManagedWorktree({
       targetBranch: experimentBranch,
       targetWorktreePath: canonicalRemoteWt,
       forceFresh: request.inputs.freshWorkspace === true,
       exactBranchCandidate,
     });
+    bench('SshExecutor.startManagedWorkspace.planManagedWorktree.after', { planKind: worktreePlan.kind });
 
     let remoteWt = canonicalRemoteWt;
     let skippedRemotePreserve = false;
@@ -450,7 +565,13 @@ ${this.buildPayloadExecutionScript(payloadB64)}
             remoteClone,
             worktreePaths: worktreePlan.cleanupPaths,
           });
+          bench('SshExecutor.startManagedWorkspace.cleanupWorktree.before', {
+            cleanupCount: worktreePlan.cleanupPaths.length,
+          });
           await this.execRemoteCapture(cleanupScript, 'cleanup_worktree');
+          bench('SshExecutor.startManagedWorkspace.cleanupWorktree.after', {
+            cleanupCount: worktreePlan.cleanupPaths.length,
+          });
         }
         remoteWt = canonicalRemoteWt;
         break;
@@ -458,17 +579,32 @@ ${this.buildPayloadExecutionScript(payloadB64)}
     }
 
     if (skippedRemotePreserve) {
+      bench('SshExecutor.startManagedWorkspace.mergeRequestUpstreamBranches.before', { remoteWt });
       await this.mergeRequestUpstreamBranches(request, remoteWt, resolvedBaseRef);
+      bench('SshExecutor.startManagedWorkspace.mergeRequestUpstreamBranches.after', { remoteWt });
     } else {
       try {
+        bench('SshExecutor.startManagedWorkspace.setupTaskBranch.before', {
+          branchName: experimentBranch,
+          base: resolvedBaseRef,
+          remoteWt,
+        });
         await this.setupTaskBranch(remoteClone, request, handle, {
           branchName: experimentBranch,
           base: resolvedBaseRef,
           worktreeDir: remoteWt,
         });
+        bench('SshExecutor.startManagedWorkspace.setupTaskBranch.after', {
+          branchName: experimentBranch,
+          remoteWt,
+        });
       } catch (err) {
         const wrapped = err instanceof Error ? err : new Error(String(err));
         if (!(wrapped as any).phase) (wrapped as any).phase = 'setup_branch';
+        bench('SshExecutor.startManagedWorkspace.setupTaskBranch.failed', {
+          error: wrapped.message,
+          remoteWt,
+        });
         throw wrapped;
       }
       handle.workspacePath =
@@ -480,6 +616,7 @@ ${this.buildPayloadExecutionScript(payloadB64)}
       await this.handleProcessExit(executionId, request, remoteWt, 0, {
         branch: experimentBranch,
       });
+      bench('SshExecutor.startManagedWorkspace.noCommand.returning', { remoteWt });
       return handle;
     }
 
@@ -501,10 +638,21 @@ echo "[SshExecutor] Running task payload..."
 ${this.buildPayloadExecutionScript(payloadB64)}
 `;
 
-    return this.spawnSshRemoteStdin(executionId, request, handle, runScript, agentSessionId, {
+    bench('SshExecutor.startManagedWorkspace.spawnSshRemoteStdin.before', {
+      remoteWt,
+      workspacePath: handle.workspacePath,
+      branch: experimentBranch,
+    });
+    const started = await this.spawnSshRemoteStdin(executionId, request, handle, runScript, agentSessionId, {
       worktreePath: handle.workspacePath!,
       branch: experimentBranch,
     });
+    bench('SshExecutor.startManagedWorkspace.spawnSshRemoteStdin.after', {
+      remoteWt,
+      workspacePath: started.workspacePath,
+      branch: started.branch,
+    });
+    return started;
   }
 
   private withStartupMetadata(err: unknown, handle: ExecutorHandle): Error {

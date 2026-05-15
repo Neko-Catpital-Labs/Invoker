@@ -19,6 +19,7 @@ import type { Executor, ExecutorHandle } from './executor.js';
 import type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
 import { BaseExecutor } from './base-executor.js';
 import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
+import { createExecutionBench } from './execution-bench.js';
 import { ResourceLimitError, type RepoPoolTiming } from './repo-pool.js';
 import type { ExecutorRegistry } from './registry.js';
 import type { AgentRegistry } from './agent-registry.js';
@@ -329,6 +330,17 @@ export class TaskRunner {
     return undefined;
   }
 
+  private createExecuteTaskBench(taskId: string, attemptId: string): (phase: string, metadata?: Record<string, unknown>) => void {
+    return createExecutionBench({
+      module: 'execute-task-bench',
+      logger: this.logger,
+      baseMetadata: {
+        taskId,
+        attemptId,
+      },
+    });
+  }
+
   /**
    * Execute multiple tasks concurrently.
    */
@@ -380,16 +392,27 @@ export class TaskRunner {
     );
     const attemptId = this.resolveAttemptIdForStart(task);
     const startGeneration = task.execution.generation ?? 0;
+    const bench = this.createExecuteTaskBench(task.id, attemptId);
+    bench('executeTask.accepted', {
+      status: task.status,
+      phase: task.execution.phase,
+      generation: startGeneration,
+    });
     if (this.launchingAttemptIds.has(attemptId) || this.activeExecutions.has(attemptId)) {
       traceExecution(
         `[TaskRunner] executeTask skipping duplicate launch for task=${task.id} attempt=${attemptId}`,
       );
+      bench('executeTask.duplicateSkipped');
       return;
     }
     this.launchingAttemptIds.add(attemptId);
     try {
-      await this.executeTaskInner(task, attemptId);
+      await this.executeTaskInner(task, attemptId, bench);
+      bench('executeTask.innerReturned');
     } catch (err) {
+      bench('executeTask.failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
       // Resource limit: defer the task instead of failing it
       const cause = err instanceof Error ? err.cause : undefined;
       if (cause instanceof ResourceLimitError) {
@@ -454,13 +477,26 @@ export class TaskRunner {
       }
     } finally {
       this.launchingAttemptIds.delete(attemptId);
+      bench('executeTask.settled');
     }
   }
 
-  private async executeTaskInner(task: TaskState, attemptId: string): Promise<void> {
+  private async executeTaskInner(
+    task: TaskState,
+    attemptId: string,
+    bench: (phase: string, metadata?: Record<string, unknown>) => void = () => {},
+  ): Promise<void> {
+    bench('executeTaskInner.begin', {
+      dependencyCount: task.dependencies.length,
+      externalDependencyCount: task.config.externalDependencies?.length ?? 0,
+      runnerKind: task.config.runnerKind,
+      poolId: task.config.poolId,
+      isMergeNode: task.config.isMergeNode,
+    });
     // Pivot tasks with experimentVariants: synthesize a spawn_experiments
     // response instead of running through the executor.
     if (task.config.pivot && task.config.experimentVariants && task.config.experimentVariants.length > 0) {
+      bench('executeTaskInner.pivotResponse');
       const response: WorkResponse = {
         requestId: `req-${task.id}`,
         actionId: task.id,
@@ -484,6 +520,9 @@ export class TaskRunner {
       if (newlyStarted.length > 0) {
         this.executeTasks(newlyStarted);
       }
+      bench('executeTaskInner.pivotReturned', {
+        newlyStartedCount: newlyStarted.length,
+      });
       return;
     }
 
@@ -492,9 +531,21 @@ export class TaskRunner {
     );
 
     // Gather upstream context from completed dependencies
+    bench('buildUpstreamContext.start');
     const upstreamContext = await this.buildUpstreamContext(task);
+    bench('buildUpstreamContext.end', {
+      upstreamContextCount: upstreamContext.length,
+    });
+    bench('collectUpstreamBranches.start');
     const upstreamBranches = this.collectUpstreamBranches(task);
+    bench('collectUpstreamBranches.end', {
+      upstreamBranchCount: upstreamBranches.length,
+    });
+    bench('buildAlternatives.start');
     const alternatives = this.buildAlternatives(task);
+    bench('buildAlternatives.end', {
+      alternativeCount: alternatives.length,
+    });
 
     // Guard: every completed dependency (local or external) must have branch metadata.
     // Without it the downstream worktree would run against bare base branch,
@@ -520,6 +571,7 @@ export class TaskRunner {
         }
       }
     }
+    bench('dependencyBranchGuard.end');
 
     // Read workflow + task generations to build the visible lifecycle tag that
     // is appended to every experiment branch name. Lifecycle uniqueness lives
@@ -593,16 +645,31 @@ export class TaskRunner {
       },
       onBranchResolved,
     };
+    bench('workRequest.built', {
+      actionType: request.actionType,
+      hasRepoUrl: Boolean(request.inputs.repoUrl),
+      upstreamBranchCount: upstreamBranches.length,
+    });
 
     traceExecution(
       `${RESTART_TO_BRANCH_TRACE} executeTaskInner taskId=${task.id} WorkRequest built actionType=${request.actionType} repoUrl=${request.inputs.repoUrl ?? '(none)'} upstreamBranches=${JSON.stringify(request.inputs.upstreamBranches ?? [])}`,
     );
+    bench('selectExecutor.start');
     const executor = this.selectExecutor(task);
+    bench('selectExecutor.end', {
+      executorType: executor.type,
+    });
     traceExecution(
       `${RESTART_TO_BRANCH_TRACE} executeTaskInner taskId=${task.id} selectExecutor → type=${executor.type} calling executor.start()`,
     );
     traceExecution(`[trace] TaskRunner: task=${task.id} calling executor.start() type=${executor.type}`);
+    bench('onLaunchStart.before', {
+      executorType: executor.type,
+    });
     this.callbacks.onLaunchStart?.(task.id, executor);
+    bench('executor.start.before', {
+      executorType: executor.type,
+    });
     const startT0 = Date.now();
     const startTimeoutMs = getExecutorStartTimeoutMs();
     const preStartHeartbeatTimer = setInterval(() => {
@@ -666,6 +733,12 @@ export class TaskRunner {
       if (preStartTimeout) clearTimeout(preStartTimeout);
     }
     traceExecution(`[trace] TaskRunner: task=${task.id} executor.start() returned after ${Date.now() - startT0}ms executor=${executor.type} sessionId=${handle.agentSessionId ?? 'none'} workspace=${handle.workspacePath ?? 'default'}`);
+    bench('executor.start.after', {
+      executorType: executor.type,
+      executorStartMs: Date.now() - startT0,
+      hasWorkspacePath: Boolean(handle.workspacePath),
+      hasAgentSessionId: Boolean(handle.agentSessionId),
+    });
     const launchAccepted =
       this.orchestrator.markTaskRunningAfterLaunch?.(task.id, attemptId) ?? true;
     if (!launchAccepted) {
@@ -679,8 +752,10 @@ export class TaskRunner {
       }
       this.pendingPoolSelections.delete(task.id);
       await this.cleanupPerTaskDockerExecutor(task);
+      bench('markTaskRunningAfterLaunch.rejected');
       return;
     }
+    bench('markTaskRunningAfterLaunch.accepted');
 
     // Persist execution metadata immediately at task start — all fields explicit
     {
@@ -737,6 +812,10 @@ export class TaskRunner {
         );
       }
       traceExecution(`[trace] TaskRunner: persisted metadata for task=${task.id} workspacePath=${handle.workspacePath} branch=${handle.branch ?? 'null'}`);
+      bench('persistStartMetadata.end', {
+        workspacePath: handle.workspacePath,
+        branch: handle.branch ?? undefined,
+      });
     }
 
     // Notify consumer about the spawned handle
@@ -751,7 +830,9 @@ export class TaskRunner {
       poolId: poolSelection?.poolId,
       poolMemberKey: poolSelection?.memberKey,
     });
+    bench('onSpawned.before');
     this.callbacks.onSpawned?.(task.id, handle, executor);
+    bench('onSpawned.after');
 
     // Wire output
     executor.onOutput(handle, (data) => {

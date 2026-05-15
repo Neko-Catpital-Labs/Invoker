@@ -104,13 +104,13 @@ function makeResponse(
 }
 
 function makeOrchestrator(
-  opts: { deferRunningUntilLaunch?: boolean } = {},
+  opts: { deferRunningUntilLaunch?: boolean; maxConcurrency?: number } = {},
 ): { orchestrator: Orchestrator; persistence: InMemoryPersistence } {
   const persistence = new InMemoryPersistence();
   const orchestrator = new Orchestrator({
     persistence,
     messageBus: new InMemoryBus(),
-    maxConcurrency: 4,
+    maxConcurrency: opts.maxConcurrency ?? 4,
     deferRunningUntilLaunch: opts.deferRunningUntilLaunch,
   });
   return { orchestrator, persistence };
@@ -267,6 +267,80 @@ describe('Orchestrator launch claims', () => {
     expect(staleResult).toEqual([]);
     expect(orchestrator.getTask(taskId)?.execution.selectedAttemptId).toBe(replacementAttemptId);
     expect(orchestrator.getTask(taskId)?.status).toBe('pending');
+  });
+
+  it('ignores responses for a selected attempt row that has been superseded', () => {
+    const { orchestrator, persistence } = makeOrchestrator();
+    orchestrator.loadPlan({
+      name: 'superseded-response',
+      onFinish: 'none',
+      tasks: [{ id: 't1', description: 'one', command: 'echo one' }],
+    });
+
+    const taskId = taskIdBySuffix(orchestrator, 't1');
+    const [started] = orchestrator.startExecution();
+    const attemptId = started!.execution.selectedAttemptId!;
+    persistence.updateAttempt(attemptId, { status: 'superseded' });
+
+    const result = orchestrator.handleWorkerResponse({
+      ...makeResponse(taskId, 'completed', started!.execution.generation ?? 0),
+      attemptId,
+    });
+
+    expect(result).toEqual([]);
+    expect(orchestrator.getTask(taskId)?.status).toBe('running');
+    expect(persistence.loadAttempt(attemptId)?.status).toBe('superseded');
+  });
+
+  it('rejects launch finalization for a superseded selected attempt', () => {
+    const { orchestrator, persistence } = makeOrchestrator({ deferRunningUntilLaunch: true });
+    orchestrator.loadPlan({
+      name: 'superseded-launch',
+      onFinish: 'none',
+      tasks: [{ id: 't1', description: 'one', command: 'echo one' }],
+    });
+
+    const taskId = taskIdBySuffix(orchestrator, 't1');
+    const [claim] = orchestrator.startExecution();
+    const attemptId = claim!.execution.selectedAttemptId!;
+    persistence.updateAttempt(attemptId, { status: 'superseded' });
+
+    expect(orchestrator.markTaskRunningAfterLaunch(taskId, attemptId)).toBe(false);
+    expect(orchestrator.getTask(taskId)?.status).toBe('pending');
+    expect(persistence.loadAttempt(attemptId)?.status).toBe('superseded');
+  });
+
+  it('creates a fresh attempt instead of claiming a superseded queued job', () => {
+    const { orchestrator, persistence } = makeOrchestrator({ maxConcurrency: 1 });
+    orchestrator.loadPlan({
+      name: 'superseded-queued',
+      onFinish: 'none',
+      tasks: [
+        { id: 't1', description: 'first', command: 'echo one' },
+        { id: 't2', description: 'second', command: 'echo two' },
+      ],
+    });
+
+    const [started] = orchestrator.startExecution();
+    const firstTaskId = taskIdBySuffix(orchestrator, 't1');
+    const secondTaskId = taskIdBySuffix(orchestrator, 't2');
+    expect(started!.id).toBe(firstTaskId);
+
+    const queuedAttemptId = orchestrator.getTask(secondTaskId)!.execution.selectedAttemptId!;
+    persistence.updateAttempt(queuedAttemptId, { status: 'superseded' });
+
+    orchestrator.handleWorkerResponse({
+      ...makeResponse(firstTaskId, 'completed', started!.execution.generation ?? 0),
+      attemptId: started!.execution.selectedAttemptId,
+    });
+
+    const secondTask = orchestrator.getTask(secondTaskId)!;
+    const freshAttemptId = secondTask.execution.selectedAttemptId!;
+    expect(secondTask.status).toBe('running');
+    expect(freshAttemptId).not.toBe(queuedAttemptId);
+    expect(persistence.loadAttempt(queuedAttemptId)?.status).toBe('superseded');
+    expect(persistence.loadAttempt(freshAttemptId)?.status).toBe('running');
+    expect(persistence.loadAttempt(freshAttemptId)?.supersedesAttemptId).toBe(queuedAttemptId);
   });
 
   it('resumeWorkflow returns persisted pending launch claims', () => {
