@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "$ROOT_DIR/scripts/repro/start-running-mece-mock/lib.sh"
-run_start_running_mece_issue_repro "remote-git-bootstrap-lock"
+cd "$ROOT_DIR"
+
+pnpm --dir packages/execution-engine exec vitest run src/__tests__/ssh-git-exec.test.ts \
+  -t "fetches branch repo refs without mutating shared mirror remotes"

@@ -44,6 +44,20 @@ export interface AcquireWorktreeOptions {
   forceFresh?: boolean;
 }
 
+interface RebaseRefreshBatch {
+  baseBranches: Set<string>;
+  syncedBaseBranches: Set<string>;
+  callerCount: number;
+  timings: RepoPoolTiming[];
+  promise: Promise<string>;
+  mirrorPath?: string;
+  completedAtMs?: number;
+  cleanupTimer?: ReturnType<typeof setTimeout>;
+}
+
+const REBASE_REFRESH_BATCH_WINDOW_MS = 25;
+const REBASE_REFRESH_RECENT_REUSE_MS = 30_000;
+
 export class ResourceLimitError extends Error {
   constructor(message: string) {
     super(message);
@@ -59,7 +73,7 @@ export class RepoPool {
   private cloneLocks = new Map<string, Promise<string>>();
   /** Chain of operations per repo to serialize git operations. */
   private repoChains = new Map<string, Promise<unknown>>();
-  private inFlightRebaseRefreshes = new Map<string, Promise<string>>();
+  private pendingRebaseRefreshBatches = new Map<string, RebaseRefreshBatch>();
 
   constructor(config: RepoPoolConfig) {
     this.cacheDir = config.cacheDir;
@@ -81,41 +95,130 @@ export class RepoPool {
   }
 
   /**
-   * Force-fetch mirror and sync origin/<baseBranch> (rebase-and-retry). Ignores remoteFetchForPool.
+   * Force-fetch mirror and sync origin/<baseBranch> (rebase-and-retry).
+   * Ignores remoteFetchForPool, while single-flighting same-repo retry storms.
    */
   async refreshMirrorForRebase(repoUrl: string, baseBranch: string, timing?: RepoPoolTiming): Promise<string> {
-    const refreshKey = `${repoUrl}\0${baseBranch}`;
-    const inFlight = this.inFlightRebaseRefreshes.get(refreshKey);
-    if (inFlight) {
-      timing?.mark('RepoPool.refreshMirrorForRebase.coalesced', 'completed', {
-        repoUrl,
-        baseBranch,
-      });
-      return inFlight;
+    const existingBatch = this.pendingRebaseRefreshBatches.get(repoUrl);
+    if (existingBatch) {
+      if (existingBatch.completedAtMs !== undefined && existingBatch.mirrorPath) {
+        if (existingBatch.syncedBaseBranches.has(baseBranch)) {
+          timing?.mark('RepoPool.refreshMirrorForRebase.recent', 'completed', {
+            repoUrl,
+            baseBranch,
+            reuseAgeMs: Date.now() - existingBatch.completedAtMs,
+          });
+          return existingBatch.mirrorPath;
+        }
+        this.clearRebaseRefreshBatch(repoUrl, existingBatch);
+      } else {
+        if (existingBatch.cleanupTimer) {
+          clearTimeout(existingBatch.cleanupTimer);
+          existingBatch.cleanupTimer = undefined;
+        }
+        existingBatch.baseBranches.add(baseBranch);
+        existingBatch.callerCount += 1;
+        if (timing) existingBatch.timings.push(timing);
+        return existingBatch.promise;
+      }
     }
+
+    const batch: RebaseRefreshBatch = {
+      baseBranches: new Set([baseBranch]),
+      syncedBaseBranches: new Set(),
+      callerCount: 1,
+      timings: timing ? [timing] : [],
+      promise: Promise.resolve(''),
+    };
+    this.pendingRebaseRefreshBatches.set(repoUrl, batch);
+
+    let releaseBatchWindow!: () => void;
+    const batchWindow = new Promise<void>((resolve) => {
+      releaseBatchWindow = resolve;
+    });
+    setTimeout(() => {
+      releaseBatchWindow();
+    }, REBASE_REFRESH_BATCH_WINDOW_MS);
 
     const prev = this.repoChains.get(repoUrl) ?? Promise.resolve();
     const queuedAtMs = Date.now();
-    const next = prev.then(() => {
-      timing?.mark('RepoPool.refreshMirrorForRebase.repoChainWait', 'completed', {
-        repoUrl,
-        baseBranch,
-        durationMs: Date.now() - queuedAtMs,
-      });
-      return this.doRefreshMirrorForRebase(repoUrl, baseBranch, timing);
+    const next = prev.then(async () => {
+      await batchWindow;
+      const initialTimings = [...new Set(batch.timings)];
+      for (const batchTiming of initialTimings) {
+        batchTiming.mark('RepoPool.refreshMirrorForRebase.repoChainWait', 'completed', {
+          repoUrl,
+          durationMs: Date.now() - queuedAtMs,
+        });
+      }
+      const dir = await this.doRefreshMirrorForRebaseBatch(repoUrl, batch, initialTimings[0]);
+      const finalBaseBranches = [...batch.syncedBaseBranches];
+      const finalTimings = [...new Set(batch.timings)];
+      for (const batchTiming of finalTimings) {
+        batchTiming.mark('RepoPool.refreshMirrorForRebase.batched', 'completed', {
+          repoUrl,
+          callerCount: batch.callerCount,
+          baseBranchCount: finalBaseBranches.length,
+        });
+      }
+      batch.mirrorPath = dir;
+      batch.completedAtMs = Date.now();
+      return dir;
     });
     this.repoChains.set(repoUrl, next.catch(() => {}));
-    let shared!: Promise<string>;
-    shared = next.finally(() => {
-      if (this.inFlightRebaseRefreshes.get(refreshKey) === shared) {
-        this.inFlightRebaseRefreshes.delete(refreshKey);
-      }
-    });
-    this.inFlightRebaseRefreshes.set(refreshKey, shared);
-    return shared;
+    batch.promise = next.then(
+      (dir) => {
+        batch.cleanupTimer = setTimeout(() => {
+          if (this.pendingRebaseRefreshBatches.get(repoUrl) === batch) {
+            this.pendingRebaseRefreshBatches.delete(repoUrl);
+          }
+        }, REBASE_REFRESH_RECENT_REUSE_MS);
+        return dir;
+      },
+      (err) => {
+        this.clearRebaseRefreshBatch(repoUrl, batch);
+        throw err;
+      },
+    );
+    return batch.promise;
   }
 
-  private async doRefreshMirrorForRebase(repoUrl: string, baseBranch: string, timing?: RepoPoolTiming): Promise<string> {
+  private clearRebaseRefreshBatch(repoUrl: string, batch: RebaseRefreshBatch): void {
+    if (batch.cleanupTimer) {
+      clearTimeout(batch.cleanupTimer);
+      batch.cleanupTimer = undefined;
+    }
+    if (this.pendingRebaseRefreshBatches.get(repoUrl) === batch) {
+      this.pendingRebaseRefreshBatches.delete(repoUrl);
+    }
+  }
+
+  private async doRefreshMirrorForRebaseBatch(
+    repoUrl: string,
+    batch: RebaseRefreshBatch,
+    timing?: RepoPoolTiming,
+  ): Promise<string> {
+    const dir = await this.refreshMirrorCloneForRebase(repoUrl, timing);
+    const runGit = (args: string[]) => this.execGit(args, dir);
+    while (true) {
+      const baseBranches = [...batch.baseBranches].filter((branch) => !batch.syncedBaseBranches.has(branch));
+      if (baseBranches.length === 0) {
+        await Promise.resolve();
+        const lateBaseBranches = [...batch.baseBranches].filter((branch) => !batch.syncedBaseBranches.has(branch));
+        if (lateBaseBranches.length === 0) break;
+        continue;
+      }
+      for (const branch of baseBranches) {
+        await this.time(timing, 'RepoPool.doRefreshMirrorForRebase.syncPlanBaseRemoteForRef', { dir, baseBranch: branch }, () =>
+          syncPlanBaseRemoteForRef(runGit, branch),
+        );
+        batch.syncedBaseBranches.add(branch);
+      }
+    }
+    return dir;
+  }
+
+  private async refreshMirrorCloneForRebase(repoUrl: string, timing?: RepoPoolTiming): Promise<string> {
     const dir = this.cloneDir(repoUrl);
     if (existsSync(dir)) {
       try {
@@ -148,10 +251,6 @@ export class RepoPool {
         this.execGit(['clone', repoUrl, dir], this.cacheDir),
       );
     }
-    const runGit = (args: string[]) => this.execGit(args, dir);
-    await this.time(timing, 'RepoPool.doRefreshMirrorForRebase.syncPlanBaseRemoteForRef', { dir, baseBranch }, () =>
-      syncPlanBaseRemoteForRef(runGit, baseBranch),
-    );
     return dir;
   }
 

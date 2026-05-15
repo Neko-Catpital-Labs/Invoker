@@ -440,18 +440,43 @@ describe('RepoPool', () => {
       for (let i = 0; i < 10; i++) await Promise.resolve();
     }
 
-    afterEach(() => { vi.restoreAllMocks(); });
+    function requestedBaseBranches(request: unknown): string[] {
+      return typeof request === 'string'
+        ? [request]
+        : [...(request as { baseBranches: Set<string> }).baseBranches];
+    }
 
-    it('coalesces concurrent refreshMirrorForRebase calls on same repo and base branch', async () => {
+    function markSyncedBaseBranches(request: unknown): void {
+      if (typeof request === 'string') return;
+      const batch = request as { baseBranches: Set<string>; syncedBaseBranches: Set<string> };
+      for (const baseBranch of batch.baseBranches) batch.syncedBaseBranches.add(baseBranch);
+    }
+
+    function spyRefreshImplementation(impl: (repoUrl: string, request: unknown) => Promise<string>) {
+      const methodName = 'doRefreshMirrorForRebaseBatch' in pool
+        ? 'doRefreshMirrorForRebaseBatch'
+        : 'doRefreshMirrorForRebase';
+      return vi.spyOn(pool as any, methodName).mockImplementation(impl as any);
+    }
+
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    it('MECE 05: coalesces concurrent refreshMirrorForRebase calls on same repo and base branch', async () => {
+      vi.useFakeTimers();
       const log: string[] = [];
       const deferred1 = createDeferred<string>();
       let callCount = 0;
       const timing = { mark: vi.fn(), span: vi.fn() };
 
-      vi.spyOn(pool as any, 'doRefreshMirrorForRebase').mockImplementation(async () => {
+      spyRefreshImplementation(async (_repoUrl, request) => {
         const n = ++callCount;
-        log.push(`enter-${n}`);
+        const baseBranches = requestedBaseBranches(request);
+        log.push(`enter-${n}:${baseBranches.join(',')}`);
         const result = await deferred1.promise;
+        markSyncedBaseBranches(request);
         log.push(`exit-${n}`);
         return result;
       });
@@ -460,46 +485,119 @@ describe('RepoPool', () => {
       const p2 = pool.refreshMirrorForRebase('repo-a', 'master', timing);
 
       await flush();
-      expect(log).toEqual(['enter-1']);
+      expect(log).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(25);
+      await flush();
+      expect(log).toEqual(['enter-1:master']);
       expect(callCount).toBe(1);
-      expect(timing.mark).toHaveBeenCalledWith('RepoPool.refreshMirrorForRebase.coalesced', 'completed', {
-        repoUrl: 'repo-a',
-        baseBranch: 'master',
-      });
 
       deferred1.resolve('/fake/path');
       await expect(Promise.all([p1, p2])).resolves.toEqual(['/fake/path', '/fake/path']);
-      expect(log).toEqual(['enter-1', 'exit-1']);
+      expect(log).toEqual(['enter-1:master', 'exit-1']);
       expect(callCount).toBe(1);
+      expect(timing.mark).toHaveBeenCalledWith('RepoPool.refreshMirrorForRebase.batched', 'completed', {
+        repoUrl: 'repo-a',
+        callerCount: 2,
+        baseBranchCount: 1,
+      });
     });
 
-    it('serializes concurrent refreshMirrorForRebase calls on same repo with different base branches', async () => {
+    it('MECE 05: coalesces concurrent refreshMirrorForRebase calls on same repo with different base branches', async () => {
+      vi.useFakeTimers();
       const log: string[] = [];
       const deferred1 = createDeferred<string>();
-      const deferred2 = createDeferred<string>();
       let callCount = 0;
+      const timing = { mark: vi.fn(), span: vi.fn() };
 
-      vi.spyOn(pool as any, 'doRefreshMirrorForRebase').mockImplementation(async () => {
+      spyRefreshImplementation(async (_repoUrl, request) => {
         const n = ++callCount;
-        log.push(`enter-${n}`);
-        const result = n === 1 ? await deferred1.promise : await deferred2.promise;
+        const baseBranches = requestedBaseBranches(request);
+        log.push(`enter-${n}:${baseBranches.join(',')}`);
+        const result = await deferred1.promise;
+        markSyncedBaseBranches(request);
         log.push(`exit-${n}`);
         return result;
       });
 
       const p1 = pool.refreshMirrorForRebase('repo-a', 'master');
-      const p2 = pool.refreshMirrorForRebase('repo-a', 'release');
+      const p2 = pool.refreshMirrorForRebase('repo-a', 'release', timing);
 
+      await flush();
+      expect(log).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(25);
+      await flush();
+      expect(log).toEqual(['enter-1:master,release']);
+      deferred1.resolve('/fake/path-master');
+      await expect(Promise.all([p1, p2])).resolves.toEqual(['/fake/path-master', '/fake/path-master']);
+      expect(log).toEqual(['enter-1:master,release', 'exit-1']);
+      expect(callCount).toBe(1);
+      expect(timing.mark).toHaveBeenCalledWith('RepoPool.refreshMirrorForRebase.batched', 'completed', {
+        repoUrl: 'repo-a',
+        callerCount: 2,
+        baseBranchCount: 2,
+      });
+    });
+
+    it('MECE 06: joins late recreate/rebase preparation callers while same-repo refresh is still active', async () => {
+      vi.useFakeTimers();
+      const log: string[] = [];
+      const deferred1 = createDeferred<string>();
+      let callCount = 0;
+      const timing = { mark: vi.fn(), span: vi.fn() };
+
+      spyRefreshImplementation(async (_repoUrl, request) => {
+        const n = ++callCount;
+        log.push(`enter-${n}`);
+        const result = await deferred1.promise;
+        markSyncedBaseBranches(request);
+        log.push(`exit-${n}:${requestedBaseBranches(request).join(',')}`);
+        return result;
+      });
+
+      const p1 = pool.refreshMirrorForRebase('repo-a', 'master');
+      await vi.advanceTimersByTimeAsync(25);
       await flush();
       expect(log).toEqual(['enter-1']);
 
-      deferred1.resolve('/fake/path-master');
+      const p2 = pool.refreshMirrorForRebase('repo-a', 'release', timing);
       await flush();
-      expect(log).toEqual(['enter-1', 'exit-1', 'enter-2']);
+      expect(log).toEqual(['enter-1']);
 
-      deferred2.resolve('/fake/path-release');
-      await expect(Promise.all([p1, p2])).resolves.toEqual(['/fake/path-master', '/fake/path-release']);
-      expect(log).toEqual(['enter-1', 'exit-1', 'enter-2', 'exit-2']);
+      deferred1.resolve('/fake/path');
+      await expect(Promise.all([p1, p2])).resolves.toEqual(['/fake/path', '/fake/path']);
+      expect(log).toEqual(['enter-1', 'exit-1:master,release']);
+      expect(callCount).toBe(1);
+      expect(timing.mark).toHaveBeenCalledWith('RepoPool.refreshMirrorForRebase.batched', 'completed', {
+        repoUrl: 'repo-a',
+        callerCount: 2,
+        baseBranchCount: 2,
+      });
+    });
+
+    it('MECE 06: reuses a just-refreshed same repo and base branch for immediate retries', async () => {
+      vi.useFakeTimers();
+      const timing = { mark: vi.fn(), span: vi.fn() };
+      let callCount = 0;
+
+      spyRefreshImplementation(async (_repoUrl, request) => {
+        callCount += 1;
+        markSyncedBaseBranches(request);
+        return '/fake/path';
+      });
+
+      const p1 = pool.refreshMirrorForRebase('repo-a', 'master');
+      await vi.advanceTimersByTimeAsync(25);
+      await expect(p1).resolves.toBe('/fake/path');
+
+      await expect(pool.refreshMirrorForRebase('repo-a', 'master', timing)).resolves.toBe('/fake/path');
+      expect(callCount).toBe(1);
+      expect(timing.mark).toHaveBeenCalledWith('RepoPool.refreshMirrorForRebase.recent', 'completed', {
+        repoUrl: 'repo-a',
+        baseBranch: 'master',
+        reuseAgeMs: expect.any(Number),
+      });
     });
 
     it('serializes concurrent removeManagedBranchesInMirror calls on same repo', async () => {
@@ -533,12 +631,13 @@ describe('RepoPool', () => {
     });
 
     it('skips disabled removeManagedBranchesInMirror without waiting for repo chain', async () => {
+      vi.useFakeTimers();
       const log: string[] = [];
       const deferredRefresh = createDeferred<string>();
       const doRemove = vi.spyOn(pool as any, 'doRemoveManagedBranchesInMirror');
       const timing = { mark: vi.fn(), span: vi.fn() };
 
-      vi.spyOn(pool as any, 'doRefreshMirrorForRebase').mockImplementation(async () => {
+      vi.spyOn(pool as any, 'doRefreshMirrorForRebaseBatch').mockImplementation(async () => {
         log.push('enter-refresh');
         const result = await deferredRefresh.promise;
         log.push('exit-refresh');
@@ -547,10 +646,10 @@ describe('RepoPool', () => {
 
       const refresh = pool.refreshMirrorForRebase('repo-a', 'master');
       await flush();
-      expect(log).toEqual(['enter-refresh']);
+      expect(log).toEqual([]);
 
       await pool.removeManagedBranchesInMirror('repo-a', ['experiment/old'], timing);
-      expect(log).toEqual(['enter-refresh']);
+      expect(log).toEqual([]);
       expect(doRemove).not.toHaveBeenCalled();
       expect(timing.mark).toHaveBeenCalledWith('RepoPool.removeManagedBranchesInMirror', 'completed', {
         repoUrl: 'repo-a',
@@ -560,18 +659,22 @@ describe('RepoPool', () => {
         branchCount: 1,
       });
 
+      await vi.advanceTimersByTimeAsync(25);
+      await flush();
+      expect(log).toEqual(['enter-refresh']);
       deferredRefresh.resolve('/fake/path');
       await refresh;
     });
 
     it('skips empty removeManagedBranchesInMirror without waiting for repo chain', async () => {
+      vi.useFakeTimers();
       process.env.INVOKER_ENABLE_WORKSPACE_CLEANUP = '1';
       const log: string[] = [];
       const deferredRefresh = createDeferred<string>();
       const doRemove = vi.spyOn(pool as any, 'doRemoveManagedBranchesInMirror');
       const timing = { mark: vi.fn(), span: vi.fn() };
 
-      vi.spyOn(pool as any, 'doRefreshMirrorForRebase').mockImplementation(async () => {
+      vi.spyOn(pool as any, 'doRefreshMirrorForRebaseBatch').mockImplementation(async () => {
         log.push('enter-refresh');
         const result = await deferredRefresh.promise;
         log.push('exit-refresh');
@@ -580,10 +683,10 @@ describe('RepoPool', () => {
 
       const refresh = pool.refreshMirrorForRebase('repo-a', 'master');
       await flush();
-      expect(log).toEqual(['enter-refresh']);
+      expect(log).toEqual([]);
 
       await pool.removeManagedBranchesInMirror('repo-a', [], timing);
-      expect(log).toEqual(['enter-refresh']);
+      expect(log).toEqual([]);
       expect(doRemove).not.toHaveBeenCalled();
       expect(timing.mark).toHaveBeenCalledWith('RepoPool.removeManagedBranchesInMirror', 'completed', {
         repoUrl: 'repo-a',
@@ -593,16 +696,20 @@ describe('RepoPool', () => {
         branchCount: 0,
       });
 
+      await vi.advanceTimersByTimeAsync(25);
+      await flush();
+      expect(log).toEqual(['enter-refresh']);
       deferredRefresh.resolve('/fake/path');
       await refresh;
     });
 
     it('serializes cross-method calls (refreshMirror + acquireWorktree) on same repo', async () => {
+      vi.useFakeTimers();
       const log: string[] = [];
       const deferred1 = createDeferred<string>();
       const deferred2 = createDeferred<any>();
 
-      vi.spyOn(pool as any, 'doRefreshMirrorForRebase').mockImplementation(async () => {
+      vi.spyOn(pool as any, 'doRefreshMirrorForRebaseBatch').mockImplementation(async () => {
         log.push('enter-refresh');
         const result = await deferred1.promise;
         log.push('exit-refresh');
@@ -620,6 +727,10 @@ describe('RepoPool', () => {
       const p2 = pool.acquireWorktree('repo-a', 'branch-1');
 
       await flush();
+      expect(log).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(25);
+      await flush();
       expect(log).toEqual(['enter-refresh']);
 
       deferred1.resolve('/fake/path');
@@ -633,12 +744,13 @@ describe('RepoPool', () => {
     });
 
     it('allows parallel execution for different repoUrls', async () => {
+      vi.useFakeTimers();
       const log: string[] = [];
       const deferred1 = createDeferred<string>();
       const deferred2 = createDeferred<string>();
       let callCount = 0;
 
-      vi.spyOn(pool as any, 'doRefreshMirrorForRebase').mockImplementation(async () => {
+      vi.spyOn(pool as any, 'doRefreshMirrorForRebaseBatch').mockImplementation(async () => {
         const n = ++callCount;
         log.push(`enter-${n}`);
         const result = n === 1 ? await deferred1.promise : await deferred2.promise;
@@ -650,6 +762,10 @@ describe('RepoPool', () => {
       const p2 = pool.refreshMirrorForRebase('repo-b', 'master');
 
       await flush();
+      expect(log).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(25);
+      await flush();
       // Both should have entered since different repos have independent chains
       expect(log).toEqual(['enter-1', 'enter-2']);
 
@@ -657,6 +773,41 @@ describe('RepoPool', () => {
       deferred2.resolve('/fake/path-b');
       await Promise.all([p1, p2]);
       expect(log).toEqual(['enter-1', 'enter-2', 'exit-1', 'exit-2']);
+    });
+
+    it('rejects all callers in a failed refresh batch and clears state for retry', async () => {
+      vi.useFakeTimers();
+      const log: string[] = [];
+      const deferred1 = createDeferred<string>();
+      const deferred2 = createDeferred<string>();
+      let callCount = 0;
+
+      vi.spyOn(pool as any, 'doRefreshMirrorForRebaseBatch').mockImplementation(async () => {
+        const n = ++callCount;
+        log.push(`enter-${n}`);
+        const result = n === 1 ? await deferred1.promise : await deferred2.promise;
+        log.push(`exit-${n}`);
+        return result;
+      });
+
+      const p1 = pool.refreshMirrorForRebase('repo-a', 'master');
+      const p2 = pool.refreshMirrorForRebase('repo-a', 'release');
+
+      await vi.advanceTimersByTimeAsync(25);
+      await flush();
+      expect(log).toEqual(['enter-1']);
+
+      deferred1.reject(new Error('refresh failed'));
+      await expect(Promise.all([p1, p2])).rejects.toThrow('refresh failed');
+
+      const p3 = pool.refreshMirrorForRebase('repo-a', 'master');
+      await vi.advanceTimersByTimeAsync(25);
+      await flush();
+      expect(log).toEqual(['enter-1', 'enter-2']);
+
+      deferred2.resolve('/fake/path');
+      await expect(p3).resolves.toBe('/fake/path');
+      expect(log).toEqual(['enter-1', 'enter-2', 'exit-2']);
     });
   });
 
