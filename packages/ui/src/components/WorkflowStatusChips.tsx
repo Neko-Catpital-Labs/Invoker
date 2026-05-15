@@ -39,7 +39,6 @@ export function WorkflowStatusChips({
         return (
           <button
             key={status}
-            data-testid={`workflow-status-pill-${status}`}
             onClick={(event) => onStatusClick(status, event)}
             className={[
               'rounded border px-2 py-1 text-[11px] uppercase tracking-wide transition-colors',

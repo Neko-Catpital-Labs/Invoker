@@ -43,11 +43,11 @@ describe('Task interaction (component)', () => {
       expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByTestId('workflow-node-wf-a'));
+    fireEvent.click(screen.getByTestId('rf__node-wf-a'));
 
     await waitFor(() => {
       expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow A task DAG');
-      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow A');
+      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow A task DAG');
     });
   });
 
@@ -59,7 +59,7 @@ describe('Task interaction (component)', () => {
       expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByTestId('workflow-node-wf-a'));
+    fireEvent.click(screen.getByTestId('rf__node-wf-a'));
     await waitFor(() => {
       expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
     });
@@ -70,7 +70,7 @@ describe('Task interaction (component)', () => {
     });
   });
 
-  it('switching between workflow and task selection replaces sidebar state', async () => {
+  it('selecting a mini DAG task shows task sidebar state', async () => {
     const failedTask = makeUITask({
       id: 'task-failed',
       description: 'Failed task',
@@ -87,21 +87,10 @@ describe('Task interaction (component)', () => {
       expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByTestId('workflow-node-wf-a'));
-    await waitFor(() => {
-      expect(screen.getByTestId('workflow-inspector-status-label')).toHaveTextContent('failed');
-      expect(screen.queryByTestId('workflow-inspector-prompt-input')).not.toBeInTheDocument();
-    });
-
     fireEvent.click(await screen.findByTestId('rf__node-task-failed'));
     await waitFor(() => {
       expect(screen.getByTestId('workflow-inspector-status-label')).toHaveTextContent('failed');
-    });
-
-    fireEvent.click(screen.getByTestId('workflow-node-wf-a'));
-    await waitFor(() => {
-      expect(screen.getByTestId('workflow-inspector-status-label')).toHaveTextContent('failed');
-      expect(screen.queryByTestId('workflow-inspector-prompt-input')).not.toBeInTheDocument();
+      expect(screen.getByTestId('prompt-command-display')).toHaveTextContent('exit 1');
     });
   });
 
@@ -118,10 +107,120 @@ describe('Task interaction (component)', () => {
       expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow A task DAG');
     });
 
-    fireEvent.click(screen.getByTestId('workflow-graph-scroll'));
+    fireEvent.click(screen.getByTestId('workflow-graph-react-flow'));
 
     await waitFor(() => {
       expect(screen.queryByTestId('selected-workflow-mini-dag')).not.toBeInTheDocument();
     });
+  });
+
+  it('clicking inside the mini DAG panel keeps the workflow selected', async () => {
+    render(<App />);
+    act(() => mock.setTasks([alpha, beta], workflows));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('workflow-node-wf-a'));
+    const panel = await screen.findByTestId('selected-workflow-mini-dag');
+    fireEvent.click(panel);
+
+    expect(screen.getByTestId('selected-workflow-mini-dag')).toBeInTheDocument();
+    expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow A task DAG');
+  });
+
+  it('drags the selected workflow mini DAG by its header', async () => {
+    render(<App />);
+    act(() => mock.setTasks([alpha, beta], workflows));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('workflow-node-wf-a'));
+    const panel = await screen.findByTestId('selected-workflow-mini-dag');
+    const surface = screen.getByTestId('workflow-graph-surface');
+    const handle = screen.getByTestId('selected-workflow-mini-dag-drag-handle');
+
+    Object.defineProperty(surface, 'clientWidth', { configurable: true, value: 900 });
+    Object.defineProperty(surface, 'clientHeight', { configurable: true, value: 600 });
+    Object.defineProperty(panel, 'offsetWidth', { configurable: true, value: 420 });
+    Object.defineProperty(panel, 'offsetHeight', { configurable: true, value: 280 });
+    surface.getBoundingClientRect = vi.fn(() => ({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 900,
+      bottom: 600,
+      width: 900,
+      height: 600,
+      toJSON: () => ({}),
+    }));
+    panel.getBoundingClientRect = vi.fn(() => ({
+      x: 468,
+      y: 12,
+      left: 468,
+      top: 12,
+      right: 888,
+      bottom: 292,
+      width: 420,
+      height: 280,
+      toJSON: () => ({}),
+    }));
+
+    fireEvent(handle, new MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 500, clientY: 20 }));
+    fireEvent(handle, new MouseEvent('pointermove', { bubbles: true, clientX: 420, clientY: 80 }));
+    fireEvent(handle, new MouseEvent('pointerup', { bubbles: true, clientX: 420, clientY: 80 }));
+
+    expect(panel).toHaveStyle({ left: '388px', top: '72px' });
+  });
+
+  it('clamps the selected workflow mini DAG inside the graph surface while dragging', async () => {
+    render(<App />);
+    act(() => mock.setTasks([alpha, beta], workflows));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('workflow-node-wf-a'));
+    const panel = await screen.findByTestId('selected-workflow-mini-dag');
+    const surface = screen.getByTestId('workflow-graph-surface');
+    const handle = screen.getByTestId('selected-workflow-mini-dag-drag-handle');
+
+    Object.defineProperty(surface, 'clientWidth', { configurable: true, value: 900 });
+    Object.defineProperty(surface, 'clientHeight', { configurable: true, value: 600 });
+    Object.defineProperty(panel, 'offsetWidth', { configurable: true, value: 420 });
+    Object.defineProperty(panel, 'offsetHeight', { configurable: true, value: 280 });
+    surface.getBoundingClientRect = vi.fn(() => ({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 900,
+      bottom: 600,
+      width: 900,
+      height: 600,
+      toJSON: () => ({}),
+    }));
+    panel.getBoundingClientRect = vi.fn(() => ({
+      x: 468,
+      y: 12,
+      left: 468,
+      top: 12,
+      right: 888,
+      bottom: 292,
+      width: 420,
+      height: 280,
+      toJSON: () => ({}),
+    }));
+
+    fireEvent(handle, new MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 500, clientY: 20 }));
+    fireEvent(handle, new MouseEvent('pointermove', { bubbles: true, clientX: 1200, clientY: 900 }));
+    fireEvent(handle, new MouseEvent('pointerup', { bubbles: true, clientX: 1200, clientY: 900 }));
+
+    expect(panel).toHaveStyle({ left: '468px', top: '308px' });
   });
 });

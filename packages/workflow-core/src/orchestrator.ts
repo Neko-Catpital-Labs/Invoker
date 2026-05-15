@@ -417,21 +417,20 @@ const DEFAULT_HEAVYWEIGHT_COMMAND_MATCHERS: CommandRoutingMatcher[] = [
 
 function validateRoutingDestinationAvailability(
   taskId: string,
-  command: string | undefined,
+  command: string,
   sourceLabel: string,
   poolId: string | undefined,
   availablePoolIds: Set<string>,
 ): void {
-  const commandLabel = command ? ` with command "${command}"` : '';
   if (availablePoolIds.size > 0 && (!poolId || !availablePoolIds.has(poolId))) {
     throw new Error(
-      `Task "${taskId}"${commandLabel} matched ${sourceLabel}, ` +
+      `Task "${taskId}" with command "${command}" matched ${sourceLabel}, ` +
       `but config poolId="${poolId}" is not defined in executionPools.`,
     );
   }
   if (availablePoolIds.size === 0) {
     throw new Error(
-      `Task "${taskId}"${commandLabel} matched ${sourceLabel}, ` +
+      `Task "${taskId}" with command "${command}" matched ${sourceLabel}, ` +
       'but no executionPools are configured.',
     );
   }
@@ -544,30 +543,26 @@ function resolveExecutorRouting(
   rules: ExecutorRoutingRule[],
   availablePoolIds: Set<string>,
 ): { poolId?: string; reason: ExecutorRoutingReason } {
+  if (defaultPoolId && availablePoolIds.size > 0 && !availablePoolIds.has(defaultPoolId)) {
+    throw new Error(
+      `Task "${taskId}" cannot use defaultPoolId="${defaultPoolId}" because it is not defined in executionPools.`,
+    );
+  }
+
+  const initialPoolId = planPoolId ?? defaultPoolId;
+  const initialReason: ExecutorRoutingReason = initialPoolId
+    ? { type: 'poolId', poolId: initialPoolId }
+    : { type: 'defaultWorktree' };
+
   if (!command || rules.length === 0) {
-    if (planPoolId === undefined && defaultPoolId !== undefined) {
-      validateRoutingDestinationAvailability(
-        taskId,
-        command,
-        'defaultPoolId',
-        defaultPoolId,
-        availablePoolIds,
-      );
-      return {
-        poolId: defaultPoolId,
-        reason: { type: 'defaultPoolId', poolId: defaultPoolId },
-      };
-    }
     return {
-      poolId: planPoolId,
-      reason: planPoolId ? { type: 'poolId', poolId: planPoolId } : { type: 'defaultWorktree' },
+      poolId: initialPoolId,
+      reason: initialReason,
     };
   }
 
-  let effectivePoolId = planPoolId;
-  let reason: ExecutorRoutingReason = planPoolId
-    ? { type: 'poolId', poolId: planPoolId }
-    : { type: 'defaultWorktree' };
+  let effectivePoolId = initialPoolId;
+  let reason: ExecutorRoutingReason = initialReason;
 
   const routingRules = rules.filter((rule) => (rule.strategy ?? 'enforce') === 'route');
   const matchingRoutingRule = findMatchingExecutorRoutingRule(command, routingRules);
@@ -575,7 +570,7 @@ function resolveExecutorRouting(
     const routed = applyRoutingRule(
       taskId,
       command,
-      effectivePoolId,
+      planPoolId,
       matchingRoutingRule,
       'routing rule',
       availablePoolIds,
@@ -589,17 +584,6 @@ function resolveExecutorRouting(
         ...(matchingRoutingRule.regex !== undefined ? { regex: matchingRoutingRule.regex } : {}),
       };
     }
-  }
-
-  if (effectivePoolId === undefined && defaultPoolId !== undefined) {
-    validateRoutingDestinationAvailability(
-      taskId,
-      command,
-      'defaultPoolId',
-      defaultPoolId,
-      availablePoolIds,
-    );
-    effectivePoolId = defaultPoolId;
   }
 
   const enforcementRules = rules.filter((rule) => (rule.strategy ?? 'enforce') === 'enforce');
@@ -619,7 +603,6 @@ function resolveExecutorRouting(
 type ExecutorRoutingReason =
   | { type: 'dockerImage' }
   | { type: 'poolId'; poolId: string }
-  | { type: 'defaultPoolId'; poolId: string }
   | { type: 'routingRule'; poolId: string; pattern?: string; regex?: string }
   | { type: 'defaultWorktree' };
 
@@ -693,10 +676,10 @@ export interface OrchestratorConfig {
    * Internally translated into executorRoutingRules with strategy="route".
    */
   heavyweightCommandRouting?: HeavyweightCommandRoutingPolicy;
-  /** Default execution pool ID for tasks that do not otherwise select a pool. */
-  defaultPoolId?: string;
   /** Valid execution pool IDs available at plan submission time. */
   availablePoolIds?: string[];
+  /** Default pool applied to tasks that do not declare a pool and do not match a route rule. */
+  defaultPoolId?: string;
   /**
    * When true, keep tasks persisted as `pending` until the executor confirms
    * startup success, then transition to `running`.
@@ -721,8 +704,8 @@ export class Orchestrator {
   private readonly taskRepository: TaskRepository;
   private readonly maxConcurrency: number;
   private readonly executorRoutingRules: ExecutorRoutingRule[];
-  private readonly defaultPoolId?: string;
   private readonly availablePoolIds: Set<string>;
+  private readonly defaultPoolId: string | undefined;
   private readonly defaultAutoFixRetries: number;
   private readonly deferRunningUntilLaunch: boolean;
 
@@ -777,20 +760,6 @@ export class Orchestrator {
     },
   };
 
-  private clearStaleLaunchMetadataForPending(changes: TaskStateChanges): TaskStateChanges {
-    if (changes.status !== 'pending') return changes;
-    if (changes.execution?.phase === 'launching') return changes;
-    return {
-      ...changes,
-      execution: {
-        ...changes.execution,
-        phase: undefined,
-        launchStartedAt: undefined,
-        launchCompletedAt: undefined,
-      },
-    };
-  }
-
   constructor(config: OrchestratorConfig) {
     this.maxConcurrency = config.maxConcurrency ?? 3;
     this.persistence = config.persistence;
@@ -801,8 +770,8 @@ export class Orchestrator {
       ...(config.executorRoutingRules ?? []),
       ...buildHeavyweightRoutingRules('config', config.heavyweightCommandRouting),
     ];
-    this.defaultPoolId = config.defaultPoolId;
     this.availablePoolIds = new Set(config.availablePoolIds ?? []);
+    this.defaultPoolId = config.defaultPoolId;
     this.defaultAutoFixRetries = Math.min(Math.max(0, Math.floor(config.defaultAutoFixRetries ?? 0)), 10);
     this.deferRunningUntilLaunch = config.deferRunningUntilLaunch ?? false;
 
@@ -846,7 +815,6 @@ export class Orchestrator {
     changes: TaskStateChanges,
     opts?: { skipWorkflowStatusSync?: boolean },
   ): TaskState {
-    changes = this.clearStaleLaunchMetadataForPending(changes);
     const existing = this.stateGetTask(taskId);
     if (!existing) {
       throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `writeAndSync: task ${taskId} not found in graph`);
@@ -2171,6 +2139,9 @@ export class Orchestrator {
         exitCode: undefined,
         commit: undefined,
         lastHeartbeatAt: undefined,
+        launchStartedAt: undefined,
+        launchCompletedAt: undefined,
+        phase: undefined,
         isFixingWithAI: false,
         agentSessionId: undefined,
         containerId: undefined,
