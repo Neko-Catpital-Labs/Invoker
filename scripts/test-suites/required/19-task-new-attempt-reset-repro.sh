@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Electron repro for explicit resume replacing stale task launch attempts.
+# Required regression coverage for explicit resume replacing stale task launch attempts.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$ROOT"
