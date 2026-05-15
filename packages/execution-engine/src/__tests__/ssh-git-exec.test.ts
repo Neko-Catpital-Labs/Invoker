@@ -143,7 +143,7 @@ describe('buildMirrorCloneScript', () => {
     expect(script).toContain('base64 -d)');
   });
 
-  it('configures and fetches branch repo when provided', () => {
+  it('fetches branch repo refs without mutating shared mirror remotes', () => {
     const script = buildMirrorCloneScript({
       repoUrl: 'git@github.com:owner/repo.git',
       branchRepoUrl: 'git@github.com:fork/repo.git',
@@ -152,9 +152,9 @@ describe('buildMirrorCloneScript', () => {
     });
 
     expect(script).toContain('BRANCH_REPO=$(echo');
-    expect(script).toContain('git -C "$CLONE" remote set-url invoker-branches "$BRANCH_REPO"');
-    expect(script).toContain('git -C "$CLONE" remote add invoker-branches "$BRANCH_REPO"');
-    expect(script).toContain("git -C \"$CLONE\" fetch invoker-branches '+refs/heads/*:refs/remotes/invoker-branches/*' --prune");
+    expect(script).not.toContain('remote set-url invoker-branches');
+    expect(script).not.toContain('remote add invoker-branches');
+    expect(script).toContain('git -C "$CLONE" fetch "$BRANCH_REPO" \'+refs/heads/*:refs/remotes/invoker-branches/*\' --prune');
     expect(script).toContain('BRANCH_REPO_FETCH_FAILED=$BRANCH_REPO');
     expect(script).toContain('exit 32');
   });
