@@ -387,7 +387,6 @@ export class TaskRunner {
       return;
     }
     this.launchingAttemptIds.add(attemptId);
-    this.callbacks.onLaunchAccepted?.(task.id);
     try {
       await this.executeTaskInner(task, attemptId);
     } catch (err) {
@@ -455,7 +454,6 @@ export class TaskRunner {
       }
     } finally {
       this.launchingAttemptIds.delete(attemptId);
-      this.callbacks.onLaunchSettled?.(task.id);
     }
   }
 
@@ -494,27 +492,7 @@ export class TaskRunner {
     );
 
     // Gather upstream context from completed dependencies
-    const upstreamContextStartMs = Date.now();
-    let upstreamContext: Array<{taskId: string; description: string; summary?: string; commitHash?: string; commitMessage?: string}>;
-    try {
-      upstreamContext = await this.buildUpstreamContext(task);
-      const durationMs = Date.now() - upstreamContextStartMs;
-      this.logger.info('[TaskRunner] buildUpstreamContext completed', {
-        taskId: task.id,
-        durationMs,
-        contextCount: upstreamContext.length,
-      });
-      traceExecution(`[benchmark] TaskRunner.buildUpstreamContext task=${task.id} durationMs=${durationMs} contextCount=${upstreamContext.length}`);
-    } catch (err) {
-      const durationMs = Date.now() - upstreamContextStartMs;
-      this.logger.warn('[TaskRunner] buildUpstreamContext failed', {
-        taskId: task.id,
-        durationMs,
-        err,
-      });
-      traceExecution(`[benchmark] TaskRunner.buildUpstreamContext task=${task.id} failed durationMs=${durationMs}`);
-      throw err;
-    }
+    const upstreamContext = await this.buildUpstreamContext(task);
     const upstreamBranches = this.collectUpstreamBranches(task);
     const alternatives = this.buildAlternatives(task);
 
@@ -620,10 +598,6 @@ export class TaskRunner {
       `${RESTART_TO_BRANCH_TRACE} executeTaskInner taskId=${task.id} WorkRequest built actionType=${request.actionType} repoUrl=${request.inputs.repoUrl ?? '(none)'} upstreamBranches=${JSON.stringify(request.inputs.upstreamBranches ?? [])}`,
     );
     const executor = this.selectExecutor(task);
-    const poolSelectionForStart = this.pendingPoolSelections.get(task.id);
-    const selectedSshPoolMemberId = executor.type === 'ssh'
-      ? this.selectedRemoteTargetId(task, poolSelectionForStart)
-      : undefined;
     traceExecution(
       `${RESTART_TO_BRANCH_TRACE} executeTaskInner taskId=${task.id} selectExecutor → type=${executor.type} calling executor.start()`,
     );
@@ -677,10 +651,7 @@ export class TaskRunner {
         }
         if (meta.containerId) execution.containerId = meta.containerId;
         this.persistence.updateTask(task.id, {
-          config: {
-            runnerKind: executor.type as RunnerKind,
-            ...(selectedSshPoolMemberId ? { poolMemberId: selectedSshPoolMemberId } : {}),
-          },
+          config: { runnerKind: executor.type as RunnerKind },
           execution: execution as any,
         });
       }
@@ -726,14 +697,11 @@ export class TaskRunner {
         executor,
         handle,
         attemptId,
-        poolSelectionForStart,
+        this.pendingPoolSelections.get(task.id),
       );
 
       const changes = {
-        config: {
-          runnerKind: executor.type as RunnerKind,
-          ...(selectedSshPoolMemberId ? { poolMemberId: selectedSshPoolMemberId } : {}),
-        },
+        config: { runnerKind: executor.type as RunnerKind },
         execution: {
           workspacePath: handle.workspacePath,
           branch: handle.branch ?? undefined,  // Explicit undefined when branch is not applicable (e.g., BYO mode)
@@ -774,7 +742,7 @@ export class TaskRunner {
     // Notify consumer about the spawned handle
     const activeHandle = handle as ActiveExecutionHandle;
     activeHandle.attemptId = attemptId;
-    const poolSelection = poolSelectionForStart;
+    const poolSelection = this.pendingPoolSelections.get(task.id);
     this.pendingPoolSelections.delete(task.id);
     this.activeExecutions.set(attemptId, {
       handle: activeHandle,
