@@ -85,6 +85,9 @@ export function WorkflowInspector({
     return [...ids].filter(Boolean);
   }, [executionPools, task?.config.poolId]);
   const isTaskBusy = task?.status === 'running' || task?.status === 'fixing_with_ai';
+  const hasPrompt = task?.config.prompt !== undefined;
+  const hasCommand = task?.config.command !== undefined;
+  const hasExecutableContent = Boolean(hasPrompt || hasCommand);
   const canEditPrompt = Boolean(task?.config.prompt !== undefined && onEditPrompt && !isTaskBusy);
   const canEditCommand = Boolean(task?.config.command !== undefined && onEditCommand && !isTaskBusy);
   const statusBorder = taskColors?.border ?? workflowVisual?.borderClass ?? 'border-gray-700';
@@ -251,70 +254,70 @@ export function WorkflowInspector({
           </section>
         )}
 
-        <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
-          <div className="text-[11px] uppercase tracking-wide text-gray-400">
-            {task?.config.prompt ? 'Prompt' : task?.config.command ? 'Command' : 'Prompt'}
-          </div>
-          {isEditingPrompt && task?.config.prompt !== undefined ? (
-            <div className="mt-2 space-y-2">
-              <textarea
-                value={editPromptValue}
-                onChange={(event) => setEditPromptValue(event.target.value)}
-                rows={5}
-                className="w-full resize-y rounded border border-blue-500 bg-gray-950 p-2 text-xs text-gray-100 focus:outline-none"
-                data-testid="edit-prompt-input"
-              />
-              <div className="flex gap-2">
-                <button data-testid="save-prompt-btn" onClick={savePrompt} className="flex-1 rounded bg-blue-600 px-2 py-1 text-xs text-white hover:bg-blue-500">
-                  Save & Re-run
-                </button>
-                <button onClick={() => setIsEditingPrompt(false)} className="flex-1 rounded bg-gray-700 px-2 py-1 text-xs text-gray-100 hover:bg-gray-600">
-                  Cancel
-                </button>
-              </div>
+        {hasExecutableContent && (
+          <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
+            <div className="text-[11px] uppercase tracking-wide text-gray-400">
+              {hasPrompt ? 'Prompt' : 'Command'}
             </div>
-          ) : isEditingCommand && task?.config.command !== undefined ? (
-            <div className="mt-2 space-y-2">
-              <textarea
-                value={editCommandValue}
-                onChange={(event) => setEditCommandValue(event.target.value)}
-                rows={4}
-                className="w-full resize-y rounded border border-blue-500 bg-gray-950 p-2 font-mono text-xs text-green-300 focus:outline-none"
-                data-testid="edit-command-input"
-              />
-              <div className="flex gap-2">
-                <button data-testid="save-command-btn" onClick={saveCommand} className="flex-1 rounded bg-blue-600 px-2 py-1 text-xs text-white hover:bg-blue-500">
-                  Save & Re-run
-                </button>
-                <button onClick={() => setIsEditingCommand(false)} className="flex-1 rounded bg-gray-700 px-2 py-1 text-xs text-gray-100 hover:bg-gray-600">
-                  Cancel
-                </button>
+            {isEditingPrompt && task?.config.prompt !== undefined ? (
+              <div className="mt-2 space-y-2">
+                <textarea
+                  value={editPromptValue}
+                  onChange={(event) => setEditPromptValue(event.target.value)}
+                  rows={5}
+                  className="w-full resize-y rounded border border-blue-500 bg-gray-950 p-2 text-xs text-gray-100 focus:outline-none"
+                  data-testid="edit-prompt-input"
+                />
+                <div className="flex gap-2">
+                  <button data-testid="save-prompt-btn" onClick={savePrompt} className="flex-1 rounded bg-blue-600 px-2 py-1 text-xs text-white hover:bg-blue-500">
+                    Save & Re-run
+                  </button>
+                  <button onClick={() => setIsEditingPrompt(false)} className="flex-1 rounded bg-gray-700 px-2 py-1 text-xs text-gray-100 hover:bg-gray-600">
+                    Cancel
+                  </button>
+                </div>
               </div>
-            </div>
-          ) : (
-            <div
-              className={`mt-2 rounded border p-2 text-xs leading-relaxed ${
-                canEditPrompt || canEditCommand
-                  ? 'cursor-pointer border-gray-600 bg-gray-950 hover:border-blue-500'
-                  : 'cursor-text border-gray-700 bg-gray-950'
-              }`}
-              onClick={startEditingPromptOrCommand}
-              onDoubleClick={startEditingPromptOrCommand}
-              onDoubleClickCapture={startEditingPromptOrCommand}
-              data-testid="command-display"
-            >
-              <div data-testid="prompt-command-display" onClick={startEditingPromptOrCommand} onDoubleClick={startEditingPromptOrCommand}>
-                {task?.config.prompt ? (
-                  <p className="whitespace-pre-wrap break-words text-gray-200">{task.config.prompt}</p>
-                ) : task?.config.command ? (
-                  <code className="whitespace-pre-wrap break-words font-mono text-green-300">{task.config.command}</code>
-                ) : (
-                  <p className="text-gray-400">No prompt or command available.</p>
-                )}
+            ) : isEditingCommand && task?.config.command !== undefined ? (
+              <div className="mt-2 space-y-2">
+                <textarea
+                  value={editCommandValue}
+                  onChange={(event) => setEditCommandValue(event.target.value)}
+                  rows={4}
+                  className="w-full resize-y rounded border border-blue-500 bg-gray-950 p-2 font-mono text-xs text-green-300 focus:outline-none"
+                  data-testid="edit-command-input"
+                />
+                <div className="flex gap-2">
+                  <button data-testid="save-command-btn" onClick={saveCommand} className="flex-1 rounded bg-blue-600 px-2 py-1 text-xs text-white hover:bg-blue-500">
+                    Save & Re-run
+                  </button>
+                  <button onClick={() => setIsEditingCommand(false)} className="flex-1 rounded bg-gray-700 px-2 py-1 text-xs text-gray-100 hover:bg-gray-600">
+                    Cancel
+                  </button>
+                </div>
               </div>
-            </div>
-          )}
-        </section>
+            ) : (
+              <div
+                className={`mt-2 rounded border p-2 text-xs leading-relaxed ${
+                  canEditPrompt || canEditCommand
+                    ? 'cursor-pointer border-gray-600 bg-gray-950 hover:border-blue-500'
+                    : 'cursor-text border-gray-700 bg-gray-950'
+                }`}
+                onClick={startEditingPromptOrCommand}
+                onDoubleClick={startEditingPromptOrCommand}
+                onDoubleClickCapture={startEditingPromptOrCommand}
+                data-testid="command-display"
+              >
+                <div data-testid="prompt-command-display" onClick={startEditingPromptOrCommand} onDoubleClick={startEditingPromptOrCommand}>
+                  {hasPrompt ? (
+                    <p className="whitespace-pre-wrap break-words text-gray-200">{task?.config.prompt}</p>
+                  ) : (
+                    <code className="whitespace-pre-wrap break-words font-mono text-green-300">{task?.config.command}</code>
+                  )}
+                </div>
+              </div>
+            )}
+          </section>
+        )}
 
         <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
           <div className="text-[11px] uppercase tracking-wide text-gray-400">Pull Request</div>
