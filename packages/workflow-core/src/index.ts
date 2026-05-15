@@ -10,3 +10,4 @@ export * from './command-service.js';
 export * from './task-repository.js';
 export * from './invalidation-policy.js';
 export * from './invalidation-plan.js';
+export * from './attempt-policy.js';
