@@ -18,7 +18,8 @@ import type { WorkRequest, WorkResponse, ActionType, Logger } from '@invoker/con
 import type { Executor, ExecutorHandle } from './executor.js';
 import type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
 import { BaseExecutor } from './base-executor.js';
-import { RESTART_TO_BRANCH_TRACE, executionTraceEnabled, traceExecution } from './exec-trace.js';
+import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
+import { createExecutionBench } from './execution-bench.js';
 import { ResourceLimitError, type RepoPoolTiming } from './repo-pool.js';
 import type { ExecutorRegistry } from './registry.js';
 import type { AgentRegistry } from './agent-registry.js';
@@ -61,7 +62,6 @@ export type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
 const PRE_START_HEARTBEAT_INTERVAL_MS = 30_000;
 const ATTEMPT_LEASE_MS = 20 * 60 * 1000;
 const DEFAULT_EXECUTOR_START_TIMEOUT_MS = 10 * 60 * 1000;
-const EXECUTE_TASK_BENCH_ENV = 'INVOKER_BENCH_EXECUTE_TASK';
 
 type StartupFailureMetadata = {
   workspacePath?: string;
@@ -330,36 +330,15 @@ export class TaskRunner {
     return undefined;
   }
 
-  private executeTaskBenchEnabled(): boolean {
-    return process.env[EXECUTE_TASK_BENCH_ENV] === '1' || executionTraceEnabled();
-  }
-
   private createExecuteTaskBench(taskId: string, attemptId: string): (phase: string, metadata?: Record<string, unknown>) => void {
-    if (!this.executeTaskBenchEnabled()) return () => {};
-    const startedAt = Date.now();
-    let previousAt = startedAt;
-    return (phase, metadata = {}) => {
-      const now = Date.now();
-      const elapsedMs = now - startedAt;
-      const deltaMs = now - previousAt;
-      previousAt = now;
-      const payload = {
-        module: 'execute-task-bench',
+    return createExecutionBench({
+      module: 'execute-task-bench',
+      logger: this.logger,
+      baseMetadata: {
         taskId,
         attemptId,
-        phase,
-        elapsedMs,
-        deltaMs,
-        ...metadata,
-      };
-      this.logger.info(
-        `[execute-task-bench] task="${taskId}" attempt="${attemptId}" phase="${phase}" elapsedMs=${elapsedMs} deltaMs=${deltaMs}`,
-        payload,
-      );
-      traceExecution(
-        `[execute-task-bench] task=${taskId} attempt=${attemptId} phase=${phase} elapsedMs=${elapsedMs} deltaMs=${deltaMs}`,
-      );
-    };
+      },
+    });
   }
 
   /**
