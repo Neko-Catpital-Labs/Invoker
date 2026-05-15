@@ -98,6 +98,22 @@ const MERGE_GATE_NO_INLINE_APPROVE_PLAN = {
   ],
 };
 
+/** Pull-request workflow for proving workflow selection exposes the merge gate PR in the inspector. */
+const REVIEW_READY_WORKFLOW_PR_PLAN = {
+  name: 'Review ready workflow PR proof',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'pull_request' as const,
+  mergeMode: 'external_review',
+  tasks: [
+    {
+      id: 'rr-work',
+      description: 'Work that produced a pull request',
+      command: 'echo review-ready',
+      dependencies: [] as string[],
+    },
+  ],
+};
+
 /** Plan for queue-action-surface hardening: combines canonical states, dependency relationships, and destructive actions. */
 const QUEUE_HARDENING_PLAN = {
   name: 'Queue Hardening Visual Proof',
@@ -371,6 +387,36 @@ test.describe('Visual proof capture', () => {
 
     await captureScreenshot(page, 'merge-gate-no-inline-approve');
     await assertPageScreenshot(page, 'merge-gate-no-inline-approve');
+  });
+
+  test('review-ready workflow exposes pull request in inspector', async ({ page }) => {
+    const workflowId = await loadPlanAndSelectWorkflow(page, REVIEW_READY_WORKFLOW_PR_PLAN);
+    await page.locator('.react-flow__node[data-testid$="rr-work"]').first().waitFor({ state: 'visible', timeout: 15000 });
+
+    const reviewUrl = 'https://github.com/Neko-Catpital-Labs/Invoker/pull/626';
+    await injectTaskStates(page, [
+      {
+        taskId: 'rr-work',
+        changes: {
+          status: 'completed',
+          execution: { startedAt: new Date(Date.now() - 5000), completedAt: new Date() },
+        },
+      },
+      {
+        taskId: `__merge__${workflowId}`,
+        changes: {
+          status: 'review_ready',
+          execution: { startedAt: new Date(Date.now() - 3000), reviewUrl },
+        },
+      },
+    ]);
+
+    await workflowNode(page, workflowId).dispatchEvent('click', { bubbles: true });
+    await expect(page.getByTestId('workflow-inspector-title')).toContainText('Review ready workflow PR proof');
+    await expect(page.getByTestId('workflow-inspector-status-label')).toContainText('review ready');
+    await expect(page.getByRole('link', { name: reviewUrl })).toHaveAttribute('href', reviewUrl);
+
+    await captureScreenshot(page, 'review-ready-workflow-pr-sidebar');
   });
 
   test('interactive-status-hues — fixing-with-ai, needs-input, awaiting-approval', async ({ page }) => {
