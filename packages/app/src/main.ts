@@ -3819,7 +3819,7 @@ if (isHeadless) {
 
     // ── DB Polling — detect external workflow changes ───
     ipcMain.handle('invoker:get-activity-logs', () => {
-      return persistence.getActivityLogs(0);
+      return persistence.getActivityLogs(0, 2000);
     });
 
     // ── External terminal launcher ──────────────────────────────

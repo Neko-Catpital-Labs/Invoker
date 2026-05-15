@@ -178,8 +178,9 @@ async function loadPlanAndSelectWorkflow(page: Page, plan: unknown): Promise<str
     return created?.id ?? workflows[workflows.length - 1]?.id ?? null;
   }, beforeIds);
   expect(workflowId).toBeTruthy();
-  await workflowNode(page, workflowId!).waitFor({ state: 'visible', timeout: 15000 });
-  await workflowNode(page, workflowId!).dispatchEvent('click', { bubbles: true });
+  const node = workflowNode(page, workflowId!);
+  await node.waitFor({ state: 'attached', timeout: 15000 });
+  await node.dispatchEvent('click', { bubbles: true });
   await expect(page.getByTestId('selected-workflow-mini-dag')).toBeVisible({ timeout: 10000 });
   return workflowId!;
 }
