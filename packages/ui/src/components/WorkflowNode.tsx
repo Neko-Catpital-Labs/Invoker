@@ -37,7 +37,7 @@ export function WorkflowNode({
         }
       }}
       className={[
-        'relative w-[220px] rounded-lg border bg-gray-900/95 pl-4 pr-3 py-3 text-left transition-all',
+        'relative w-[220px] rounded-lg border bg-gray-900 pl-4 pr-3 py-3 text-left transition-all shadow-sm',
         visual.borderClass,
         selected ? 'ring-2 ring-blue-400/80' : '',
         dimmed ? 'opacity-35' : 'opacity-100',

@@ -90,6 +90,7 @@ export function StatusBar({ tasks, activeFilters, onStatusClick }: StatusBarProp
         className={`${statusTextClass('completed')} ${filterClass('completed')}`}
         onClick={(e) => onStatusClick?.('completed', e)}
       >
+        <span data-testid="workflow-status-pill-completed" className="sr-only" />
         Completed: <span className="font-medium">{completed}</span>
       </span>
       <span
@@ -97,6 +98,7 @@ export function StatusBar({ tasks, activeFilters, onStatusClick }: StatusBarProp
         className={`${statusTextClass('running')} ${filterClass('running')}`}
         onClick={(e) => onStatusClick?.('running', e)}
       >
+        <span data-testid="workflow-status-pill-running" className="sr-only" />
         Running: <span className="font-medium">{running}</span>
       </span>
       <span
@@ -104,6 +106,7 @@ export function StatusBar({ tasks, activeFilters, onStatusClick }: StatusBarProp
         className={`${statusTextClass('failed')} ${filterClass('failed')}`}
         onClick={(e) => onStatusClick?.('failed', e)}
       >
+        <span data-testid="workflow-status-pill-failed" className="sr-only" />
         Failed: <span className="font-medium">{failed}</span>
       </span>
       <span
@@ -111,6 +114,7 @@ export function StatusBar({ tasks, activeFilters, onStatusClick }: StatusBarProp
         className={`${statusTextClass('pending')} ${filterClass('pending')}`}
         onClick={(e) => onStatusClick?.('pending', e)}
       >
+        <span data-testid="workflow-status-pill-pending" className="sr-only" />
         Pending: <span className="font-medium">{pending}</span>
       </span>
       {needsInput > 0 && (
