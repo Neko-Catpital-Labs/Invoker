@@ -98,6 +98,38 @@ describe('WorkflowInspector', () => {
     expect(screen.getByText('failed')).toBeInTheDocument();
   });
 
+  it('does not render prompt content for workflow-only selection', () => {
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={null}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.queryByTestId('prompt-command-display')).not.toBeInTheDocument();
+    expect(screen.queryByText('No prompt or command available.')).not.toBeInTheDocument();
+  });
+
+  it('does not render prompt content for non-AI and non-command tasks', () => {
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ config: { workflowId: 'wf-1', runnerKind: 'merge', isMergeNode: true } })}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.queryByTestId('prompt-command-display')).not.toBeInTheDocument();
+    expect(screen.queryByText('No prompt or command available.')).not.toBeInTheDocument();
+  });
+
   it('edits AI agent from a dropdown', () => {
     const onEditAgent = vi.fn();
     render(
