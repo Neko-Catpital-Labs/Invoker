@@ -6,8 +6,22 @@
  */
 
 import initSqlJs, { type Database as SqlJsDatabase } from 'sql.js';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'node:fs';
-import { dirname } from 'node:path';
+import {
+  appendFileSync,
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { createHash } from 'node:crypto';
+import { homedir, tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import type {
   TaskState,
   TaskStateChanges,
@@ -57,6 +71,13 @@ export interface OutputChunk {
   data: string;
 }
 
+interface SQLiteAdapterOptions {
+  readOnly?: boolean;
+  ownerCapability?: boolean;
+  outputTailLimit?: number;
+  outputDir?: string;
+}
+
 export type WorkflowMutationPriority = 'high' | 'normal';
 export type WorkflowMutationIntentStatus = 'queued' | 'running' | 'completed' | 'failed';
 export const WORKFLOW_MUTATION_LEASE_MS = 30_000;
@@ -98,11 +119,13 @@ export class SQLiteAdapter implements PersistenceAdapter {
   private lastFlushWarnAtMs = 0;
   private outputTailLimit: number;
   private outputTailCache = new Map<string, OutputChunk[]>();
+  private outputDir: string;
+  private spoolNextOffsetCache = new Map<string, number>();
   private writeTransactionDepth = 0;
   private lastWorkflowTaskSnapshotStats: Record<string, unknown> | null = null;
 
   /** Use SQLiteAdapter.create() instead. */
-  private constructor(db: SqlJsDatabase, dbPath: string | null, options?: { readOnly?: boolean; outputTailLimit?: number }) {
+  private constructor(db: SqlJsDatabase, dbPath: string | null, options?: SQLiteAdapterOptions) {
     this.db = db;
     this.dbPath = dbPath;
     this.readOnly = options?.readOnly === true;
@@ -113,6 +136,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.flushWarnDbSizeBytes = Number(process.env.INVOKER_SQLITE_FLUSH_WARN_DB_MB ?? 256) * 1024 * 1024;
     this.flushWarnCooldownMs = Number(process.env.INVOKER_SQLITE_FLUSH_WARN_COOLDOWN_MS ?? 60_000);
     this.outputTailLimit = options?.outputTailLimit ?? 100;
+    this.outputDir = options?.outputDir ?? this.resolveOutputDir(dbPath);
     this.db.run('PRAGMA foreign_keys = ON');
     this.initSchema();
     this.migrate();
@@ -125,7 +149,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
    * @param options readOnly=true opens DB for read operations without schema mutation/flush.
    *                ownerCapability=true is required to open DB in writable mode for file-backed databases.
    */
-  static async create(dbPath: string = ':memory:', options?: { readOnly?: boolean; ownerCapability?: boolean; outputTailLimit?: number }): Promise<SQLiteAdapter> {
+  static async create(dbPath: string = ':memory:', options?: SQLiteAdapterOptions): Promise<SQLiteAdapter> {
     if (!sqlJsPromise) {
       sqlJsPromise = initSqlJs();
     }
@@ -160,6 +184,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
     const db = new SQL.Database();
     return new SQLiteAdapter(db, isFile ? dbPath : null, options);
+  }
+
+  private resolveOutputDir(dbPath: string | null): string {
+    const invokerHome = process.env.INVOKER_DB_DIR ?? (dbPath ? dirname(dbPath) : join(homedir(), '.invoker'));
+    if (!dbPath && !process.env.INVOKER_DB_DIR) {
+      return join(tmpdir(), `invoker-output-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    }
+    return join(invokerHome, 'task-output');
   }
 
   // ── sql.js Helpers ───────────────────────────────────────
@@ -1174,7 +1206,135 @@ export class SQLiteAdapter implements PersistenceAdapter {
   private invalidateOutputTailCache(taskIds: string[]): void {
     for (const taskId of taskIds) {
       this.outputTailCache.delete(taskId);
+      this.spoolNextOffsetCache.delete(taskId);
     }
+  }
+
+  private taskOutputKey(taskId: string): string {
+    return createHash('sha256').update(taskId).digest('hex');
+  }
+
+  private taskOutputFile(taskId: string): string {
+    return join(this.outputDir, 'full', `${this.taskOutputKey(taskId)}.log`);
+  }
+
+  private taskSpoolFile(taskId: string): string {
+    return join(this.outputDir, 'spool', `${this.taskOutputKey(taskId)}.jsonl`);
+  }
+
+  private ensureOutputSubdir(kind: 'full' | 'spool'): void {
+    mkdirSync(join(this.outputDir, kind), { recursive: true });
+  }
+
+  private removeOutputFiles(taskIds: string[]): void {
+    for (const taskId of taskIds) {
+      rmSync(this.taskOutputFile(taskId), { force: true });
+      rmSync(this.taskSpoolFile(taskId), { force: true });
+    }
+    this.invalidateOutputTailCache(taskIds);
+  }
+
+  private readTaskOutputFile(taskId: string): string {
+    const file = this.taskOutputFile(taskId);
+    if (!existsSync(file)) return '';
+    return readFileSync(file, 'utf8');
+  }
+
+  private encodeSpoolLine(chunk: OutputChunk): string {
+    const data = Buffer.from(chunk.data, 'utf8').toString('base64');
+    return `${chunk.offset}\t${data}\n`;
+  }
+
+  private decodeSpoolLine(line: string): OutputChunk | null {
+    if (!line) return null;
+    const separator = line.indexOf('\t');
+    if (separator <= 0) return null;
+    const offset = Number.parseInt(line.slice(0, separator), 10);
+    if (!Number.isFinite(offset)) return null;
+    return {
+      offset,
+      data: Buffer.from(line.slice(separator + 1), 'base64').toString('utf8'),
+    };
+  }
+
+  private readSpoolLines(taskId: string): OutputChunk[] {
+    const file = this.taskSpoolFile(taskId);
+    if (!existsSync(file)) return [];
+    return readFileSync(file, 'utf8')
+      .split('\n')
+      .map((line) => this.decodeSpoolLine(line))
+      .filter((chunk): chunk is OutputChunk => chunk !== null);
+  }
+
+  private readLastSpoolLines(taskId: string, limit: number): OutputChunk[] {
+    if (limit <= 0) return [];
+    const file = this.taskSpoolFile(taskId);
+    if (!existsSync(file)) return [];
+
+    const fd = openSync(file, 'r');
+    try {
+      const size = statSync(file).size;
+      const chunkSize = 64 * 1024;
+      let position = size;
+      let suffix = '';
+      let lines: string[] = [];
+
+      while (position > 0 && lines.length <= limit) {
+        const readSize = Math.min(chunkSize, position);
+        position -= readSize;
+        const buffer = Buffer.allocUnsafe(readSize);
+        readSync(fd, buffer, 0, readSize, position);
+        const text = buffer.toString('utf8') + suffix;
+        const parts = text.split('\n');
+        suffix = parts.shift() ?? '';
+        lines = parts.concat(lines);
+      }
+      if (position === 0 && suffix) {
+        lines.unshift(suffix);
+      }
+
+      return lines
+        .filter(Boolean)
+        .slice(-limit)
+        .map((line) => this.decodeSpoolLine(line))
+        .filter((chunk): chunk is OutputChunk => chunk !== null);
+    } finally {
+      closeSync(fd);
+    }
+  }
+
+  private readLastSpoolChunk(taskId: string): OutputChunk | null {
+    return this.readLastSpoolLines(taskId, 1)[0] ?? null;
+  }
+
+  private getLegacySpoolChunks(taskId: string): OutputChunk[] {
+    const rows = this.queryAll(
+      'SELECT offset, data FROM output_spool WHERE task_id = ? ORDER BY offset ASC',
+      [taskId],
+    ) as Array<{ offset: number; data: string }>;
+
+    return rows.map((row) => ({ offset: row.offset, data: row.data }));
+  }
+
+  private getLegacySpoolEndOffset(taskId: string): number {
+    const row = this.queryOne(
+      'SELECT offset, data FROM output_spool WHERE task_id = ? ORDER BY offset DESC LIMIT 1',
+      [taskId],
+    ) as { offset: number; data: string } | undefined;
+    if (!row) return 0;
+    return row.offset + Buffer.byteLength(row.data, 'utf8');
+  }
+
+  private getNextSpoolOffset(taskId: string): number {
+    const cached = this.spoolNextOffsetCache.get(taskId);
+    if (cached !== undefined) return cached;
+
+    const legacyEnd = this.getLegacySpoolEndOffset(taskId);
+    const fileLast = this.readLastSpoolChunk(taskId);
+    const fileEnd = fileLast ? fileLast.offset + Buffer.byteLength(fileLast.data, 'utf8') : 0;
+    const nextOffset = Math.max(legacyEnd, fileEnd);
+    this.spoolNextOffsetCache.set(taskId, nextOffset);
+    return nextOffset;
   }
 
   loadAllCompletedTasks(): Array<TaskState & { workflowName: string }> {
@@ -1216,10 +1376,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
       `, [workflowId]);
       this.db.run('DELETE FROM tasks WHERE workflow_id = ?', [workflowId]);
     });
-    this.invalidateOutputTailCache(taskIds);
+    this.removeOutputFiles(taskIds);
   }
 
   deleteAllWorkflows(): void {
+    const taskIds = this.getAllTaskIds();
     this.runTransaction(() => {
       this.db.run('DELETE FROM events');
       this.db.run('DELETE FROM task_output');
@@ -1228,7 +1389,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
       this.db.run('DELETE FROM tasks');
       this.db.run('DELETE FROM workflows');
     });
+    this.removeOutputFiles(taskIds);
     this.outputTailCache.clear();
+    this.spoolNextOffsetCache.clear();
   }
 
   deleteWorkflow(workflowId: string): void {
@@ -1267,7 +1430,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       // Finally delete the workflow
       this.db.run('DELETE FROM workflows WHERE id = ?', [workflowId]);
     });
-    this.invalidateOutputTailCache(taskIds);
+    this.removeOutputFiles(taskIds);
   }
 
   // ── Events ────────────────────────────────────────────
@@ -1505,10 +1668,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Task Output ─────────────────────────────────────
 
   appendTaskOutput(taskId: string, data: string): void {
-    this.execRun(
-      'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
-      [taskId, data],
-    );
+    this.ensureWritable();
+    this.ensureOutputSubdir('full');
+    appendFileSync(this.taskOutputFile(taskId), data, 'utf8');
   }
 
   getTaskOutput(taskId: string): string {
@@ -1516,28 +1678,17 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'SELECT data FROM task_output WHERE task_id = ? ORDER BY id ASC',
       [taskId],
     ) as Array<{ data: string }>;
-    return rows.map((r) => r.data).join('');
+    return rows.map((r) => r.data).join('') + this.readTaskOutputFile(taskId);
   }
 
   // ── Output Spool ────────────────────────────────────────
 
   appendOutputChunk(taskId: string, data: string): void {
     this.ensureWritable();
-
-    // Get current max offset for this task
-    const row = this.queryOne(
-      'SELECT COALESCE(MAX(offset), -1) AS max_offset FROM output_spool WHERE task_id = ?',
-      [taskId],
-    ) as { max_offset: number } | undefined;
-
-    const currentMaxOffset = row?.max_offset ?? -1;
-    const nextOffset = currentMaxOffset === -1 ? 0 : currentMaxOffset + this.getLastChunkLength(taskId, currentMaxOffset);
-
-    // Insert new chunk
-    this.execRun(
-      'INSERT INTO output_spool (task_id, offset, data) VALUES (?, ?, ?)',
-      [taskId, nextOffset, data],
-    );
+    const nextOffset = this.getNextSpoolOffset(taskId);
+    this.ensureOutputSubdir('spool');
+    appendFileSync(this.taskSpoolFile(taskId), this.encodeSpoolLine({ offset: nextOffset, data }), 'utf8');
+    this.spoolNextOffsetCache.set(taskId, nextOffset + Buffer.byteLength(data, 'utf8'));
 
     // Update in-memory tail cache
     const tail = this.outputTailCache.get(taskId) ?? [];
@@ -1550,32 +1701,20 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.outputTailCache.set(taskId, tail);
   }
 
-  private getLastChunkLength(taskId: string, offset: number): number {
-    const row = this.queryOne(
-      'SELECT data FROM output_spool WHERE task_id = ? AND offset = ?',
-      [taskId, offset],
-    ) as { data: string } | undefined;
-
-    if (!row) return 0;
-    return Buffer.byteLength(row.data, 'utf8');
-  }
-
   getOutputChunks(taskId: string): OutputChunk[] {
-    const rows = this.queryAll(
-      'SELECT offset, data FROM output_spool WHERE task_id = ? ORDER BY offset ASC',
-      [taskId],
-    ) as Array<{ offset: number; data: string }>;
-
-    return rows.map(r => ({ offset: r.offset, data: r.data }));
+    return [...this.getLegacySpoolChunks(taskId), ...this.readSpoolLines(taskId)]
+      .sort((a, b) => a.offset - b.offset);
   }
 
   replayOutputFrom(taskId: string, fromOffset: number): OutputChunk[] {
-    const rows = this.queryAll(
+    const legacyRows = this.queryAll(
       'SELECT offset, data FROM output_spool WHERE task_id = ? AND offset >= ? ORDER BY offset ASC',
       [taskId, fromOffset],
     ) as Array<{ offset: number; data: string }>;
 
-    return rows.map(r => ({ offset: r.offset, data: r.data }));
+    const legacyChunks = legacyRows.map((row) => ({ offset: row.offset, data: row.data }));
+    const fileChunks = this.readSpoolLines(taskId).filter((chunk) => chunk.offset >= fromOffset);
+    return [...legacyChunks, ...fileChunks].sort((a, b) => a.offset - b.offset);
   }
 
   getOutputTail(taskId: string): OutputChunk[] {
@@ -1585,8 +1724,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       return cached;
     }
 
-    // Otherwise fetch the tail from storage
-    const rows = this.queryAll(
+    const legacyRows = this.queryAll(
       `SELECT offset, data FROM output_spool
        WHERE task_id = ?
        ORDER BY offset DESC
@@ -1594,8 +1732,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
       [taskId, this.outputTailLimit],
     ) as Array<{ offset: number; data: string }>;
 
-    // Reverse to get ascending order
-    const chunks = rows.reverse().map(r => ({ offset: r.offset, data: r.data }));
+    const legacyChunks = legacyRows.map((row) => ({ offset: row.offset, data: row.data }));
+    const fileChunks = this.readLastSpoolLines(taskId, this.outputTailLimit);
+    const chunks = [...legacyChunks, ...fileChunks]
+      .sort((a, b) => a.offset - b.offset)
+      .slice(-this.outputTailLimit);
 
     // Populate cache
     if (chunks.length > 0) {
