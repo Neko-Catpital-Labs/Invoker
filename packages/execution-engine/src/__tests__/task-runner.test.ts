@@ -4019,9 +4019,104 @@ console.log(JSON.stringify(out));
       (executor as any).activePrPollers.delete('task-1');
     });
 
-    it('is no-op when no active poller', async () => {
+    it('rejected PR stops polling without completing the gate', async () => {
       const orchestrator = {
-        getTask: vi.fn(),
+        getTask: vi.fn((id: string) => ({
+          id,
+          status: 'review_ready',
+          execution: { reviewId: 'owner/repo#42' },
+        })),
+        approve: vi.fn(),
+      };
+      const persistence = {
+        updateTask: vi.fn(),
+      };
+      const mergeGateProvider = {
+        checkApproval: vi.fn().mockResolvedValue({
+          approved: false,
+          rejected: true,
+          statusText: 'Changes requested',
+          url: 'https://github.com/owner/repo/pull/42',
+        }),
+      };
+
+      const executor = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        mergeGateProvider: mergeGateProvider as any,
+      });
+
+      const interval = setInterval(() => {}, 1000);
+      (executor as any).activePrPollers.set('task-1', interval);
+      const executeTasks = vi.spyOn(executor, 'executeTasks').mockResolvedValue(undefined);
+
+      await executor.checkPrApprovalNow('task-1');
+
+      expect(persistence.updateTask).toHaveBeenCalledWith('task-1', {
+        execution: { reviewStatus: 'Changes requested' },
+      });
+      expect(orchestrator.approve).not.toHaveBeenCalled();
+      expect(executeTasks).not.toHaveBeenCalled();
+      // Polling should stop on rejection so the user can retry without an
+      // orphaned interval firing in the background.
+      expect((executor as any).activePrPollers.has('task-1')).toBe(false);
+    });
+
+    it('merged PR completes the gate even when no poller is active (e.g. after process restart)', async () => {
+      const downstream = makeTask({
+        id: 'downstream-after-restart',
+        status: 'running',
+      });
+      const orchestrator = {
+        getTask: vi.fn((id: string) => ({
+          id,
+          status: 'review_ready',
+          execution: { reviewId: 'owner/repo#42' },
+        })),
+        approve: vi.fn().mockResolvedValue([downstream]),
+      };
+      const persistence = {
+        updateTask: vi.fn(),
+      };
+      const mergeGateProvider = {
+        checkApproval: vi.fn().mockResolvedValue({
+          approved: true,
+          rejected: false,
+          statusText: 'Merged',
+          url: 'https://github.com/owner/repo/pull/42',
+        }),
+      };
+
+      const executor = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        mergeGateProvider: mergeGateProvider as any,
+      });
+
+      const executeTasks = vi.spyOn(executor, 'executeTasks').mockResolvedValue(undefined);
+
+      // No active poller is registered — simulates a fresh process after restart
+      await executor.checkPrApprovalNow('task-with-no-poller');
+
+      expect(mergeGateProvider.checkApproval).toHaveBeenCalledWith({
+        identifier: 'owner/repo#42',
+        cwd: '/tmp',
+      });
+      expect(orchestrator.approve).toHaveBeenCalledWith('task-with-no-poller');
+      expect(executeTasks).toHaveBeenCalledWith([downstream]);
+    });
+
+    it('is no-op when task has no reviewId', async () => {
+      const orchestrator = {
+        getTask: vi.fn((id: string) => ({
+          id,
+          status: 'review_ready',
+          execution: {},
+        })),
         approve: vi.fn(),
       };
       const persistence = {
@@ -4039,10 +4134,11 @@ console.log(JSON.stringify(out));
         mergeGateProvider: mergeGateProvider as any,
       });
 
-      await executor.checkPrApprovalNow('task-with-no-poller');
+      await executor.checkPrApprovalNow('task-without-review-id');
 
       expect(mergeGateProvider.checkApproval).not.toHaveBeenCalled();
       expect(persistence.updateTask).not.toHaveBeenCalled();
+      expect(orchestrator.approve).not.toHaveBeenCalled();
     });
 
     it('is no-op when no mergeGateProvider', async () => {
@@ -4394,6 +4490,58 @@ console.log(JSON.stringify(out));
         });
         expect(orchestrator.approve).not.toHaveBeenCalled();
       });
+
+      it('rejected PR stops polling without completing the gate', async () => {
+        const allTasks = [
+          makeTask({
+            id: 'merge-rejected',
+            status: 'review_ready',
+            config: { isMergeNode: true },
+            execution: {
+              reviewId: 'owner/repo#204',
+              workspacePath: '/workspace/rejected-gate',
+            },
+          }),
+        ];
+        const orchestrator = {
+          getTask: (id: string) => allTasks.find(t => t.id === id),
+          getAllTasks: () => allTasks,
+          approve: vi.fn(),
+        };
+        const persistence = { updateTask: vi.fn() };
+        const mergeGateProvider = {
+          checkApproval: vi.fn().mockResolvedValue({
+            approved: false,
+            rejected: true,
+            statusText: 'Changes requested',
+          }),
+        };
+
+        const executor = new TaskRunner({
+          orchestrator: orchestrator as any,
+          persistence: persistence as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          cwd: '/runner-base-cwd',
+          mergeGateProvider: mergeGateProvider as any,
+        });
+
+        const interval = setInterval(() => {}, 1000);
+        (executor as any).activePrPollers.set('merge-rejected', interval);
+        const executeTasks = vi.spyOn(executor, 'executeTasks').mockResolvedValue(undefined);
+
+        await executor.checkMergeGateStatuses();
+
+        expect(mergeGateProvider.checkApproval).toHaveBeenCalledWith({
+          identifier: 'owner/repo#204',
+          cwd: '/workspace/rejected-gate',
+        });
+        expect(persistence.updateTask).toHaveBeenCalledWith('merge-rejected', {
+          execution: { reviewStatus: 'Changes requested' },
+        });
+        expect(orchestrator.approve).not.toHaveBeenCalled();
+        expect(executeTasks).not.toHaveBeenCalled();
+        expect((executor as any).activePrPollers.has('merge-rejected')).toBe(false);
+      });
     });
 
     describe('startPrPolling', () => {
@@ -4591,6 +4739,58 @@ console.log(JSON.stringify(out));
 
           // Cleanup
           (executor as any).stopPrPolling('poll-open-approved');
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('poll with rejected PR stops polling without completing the gate', async () => {
+        vi.useFakeTimers();
+        try {
+          const orchestrator = {
+            getTask: vi.fn((id: string) => ({
+              id,
+              status: 'review_ready',
+              execution: {
+                reviewId: 'owner/repo#304',
+                workspacePath: '/workspace/poll-rejected',
+              },
+            })),
+            approve: vi.fn(),
+          };
+          const persistence = { updateTask: vi.fn() };
+          const mergeGateProvider = {
+            checkApproval: vi.fn().mockResolvedValue({
+              approved: false,
+              rejected: true,
+              statusText: 'Changes requested',
+            }),
+          };
+
+          const executor = new TaskRunner({
+            orchestrator: orchestrator as any,
+            persistence: persistence as any,
+            executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+            cwd: '/runner-base-cwd',
+            mergeGateProvider: mergeGateProvider as any,
+          });
+          const executeTasks = vi.spyOn(executor, 'executeTasks').mockResolvedValue(undefined);
+
+          (executor as any).startPrPolling('poll-rejected', 'owner/repo#304', 'wf-1');
+
+          await vi.advanceTimersByTimeAsync(30_000);
+
+          expect(mergeGateProvider.checkApproval).toHaveBeenCalledWith({
+            identifier: 'owner/repo#304',
+            cwd: '/workspace/poll-rejected',
+          });
+          expect(persistence.updateTask).toHaveBeenCalledWith('poll-rejected', {
+            execution: { reviewStatus: 'Changes requested' },
+          });
+          expect(orchestrator.approve).not.toHaveBeenCalled();
+          expect(executeTasks).not.toHaveBeenCalled();
+          // Rejection should stop the poller (no further intervals scheduled).
+          expect((executor as any).activePrPollers.has('poll-rejected')).toBe(false);
         } finally {
           vi.useRealTimers();
         }
