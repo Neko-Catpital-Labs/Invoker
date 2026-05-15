@@ -282,17 +282,33 @@ export function App() {
       return true;
     };
 
-    // Track renderer event loop lag.
-    let expected = performance.now() + 1000;
+    // Track per-tick renderer timer drift. Keep the old cumulative schedule
+    // value in the payload so startup perf data can prove whether a large
+    // number is an actual single stall or accumulated timer throttling.
+    const intervalMs = 1000;
+    let expected = performance.now() + intervalMs;
+    let previousTickAt = performance.now();
+    let tickCount = 0;
     const lagInterval = setInterval(() => {
       const now = performance.now();
-      const lagMs = Math.max(0, now - expected);
-      expected += 1000;
-      if (lagMs >= 250 && shouldEmit('event_loop_lag', 5000)) {
+      const tickDeltaMs = now - previousTickAt;
+      const lagMs = Math.max(0, tickDeltaMs - intervalMs);
+      const cumulativeLagMs = Math.max(0, now - expected);
+      previousTickAt = now;
+      expected = now + intervalMs;
+      tickCount += 1;
+      if ((lagMs >= 250 || cumulativeLagMs >= 250) && shouldEmit('event_loop_lag', 5000)) {
         // Defensive: window.invoker is undefined in vitest/jsdom environments.
-        void window.invoker?.reportUiPerf?.('renderer_event_loop_lag', { lagMs: Math.round(lagMs) });
+        void window.invoker?.reportUiPerf?.('renderer_event_loop_lag', {
+          lagMs: Math.round(lagMs),
+          cumulativeLagMs: Math.round(cumulativeLagMs),
+          tickDeltaMs: Math.round(tickDeltaMs),
+          tickCount,
+          visibilityState: document.visibilityState,
+          hasFocus: document.hasFocus(),
+        });
       }
-    }, 1000);
+    }, intervalMs);
 
     // Track long tasks if supported by Chromium.
     let perfObserver: PerformanceObserver | null = null;

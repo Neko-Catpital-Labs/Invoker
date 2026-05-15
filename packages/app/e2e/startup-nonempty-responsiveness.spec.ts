@@ -63,9 +63,9 @@ function buildPlan(index: number) {
   };
 }
 
-async function waitForGraphVisible(page: Page, taskSuffix: string, timeoutMs: number): Promise<number> {
+async function waitForWorkflowGraphVisible(page: Page, timeoutMs: number): Promise<number> {
   const startedAt = Date.now();
-  await page.locator(`.react-flow__node[data-testid$="${taskSuffix}"]`).first().waitFor({
+  await page.locator('[data-testid^="workflow-node-"]').first().waitFor({
     state: 'visible',
     timeout: timeoutMs,
   });
@@ -99,10 +99,9 @@ async function dragGraphAndAssertViewportMoves(page: Page): Promise<void> {
 
 test('non-empty persisted startup stays responsive and avoids initial db-poll replay flood', async () => {
   const testDir = mkdtempSync(path.join(tmpdir(), 'invoker-startup-nonempty-'));
-  const workflowCount = 14;
+  const workflowCount = 30;
   const tasksPerWorkflow = 8;
   const expectedTaskCount = workflowCount * tasksPerWorkflow;
-  const initialWorkflowIndex = workflowCount - 1;
   try {
     const seedApp = await launchElectronApp(testDir);
     try {
@@ -134,7 +133,7 @@ test('non-empty persisted startup stays responsive and avoids initial db-poll re
       await page.waitForLoadState('domcontentloaded');
       await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 5000 });
 
-      await waitForGraphVisible(page, `task-${initialWorkflowIndex}-0`, 5000);
+      await waitForWorkflowGraphVisible(page, 5000);
       await dragGraphAndAssertViewportMoves(page);
 
       const result = await page.evaluate(async () => {
@@ -157,15 +156,44 @@ test('non-empty persisted startup stays responsive and avoids initial db-poll re
       const graphVisible = startupEntries.find(
         (entry) =>
           entry.source === 'ui-perf'
+          && entry.payload?.metric === 'startup_workflow_graph_visible'
+          && entry.payload?.nodeCount === workflowCount,
+      )?.payload;
+      const taskGraphVisible = startupEntries.find(
+        (entry) =>
+          entry.source === 'ui-perf'
           && entry.payload?.metric === 'startup_graph_visible'
           && entry.payload?.nodeCount === tasksPerWorkflow,
       )?.payload;
+      const backgroundHydration = startupEntries.find(
+        (entry) =>
+          entry.source === 'startup-phase'
+          && typeof entry.payload?.phase === 'string'
+          && entry.payload.phase.startsWith('background-hydration'),
+      );
+      const phaseNames = new Set(
+        ((result.perf.startupPhaseDetails as Array<{ phase?: string }> | undefined) ?? [])
+          .map((entry) => entry.phase)
+          .filter(Boolean),
+      );
 
       expect(windowShow).toBeTruthy();
       expect(graphVisible).toBeTruthy();
+      expect(taskGraphVisible).toBeTruthy();
+      expect(backgroundHydration).toBeUndefined();
       expect(Number(graphVisible?.processElapsedMs) - Number(windowShow?.elapsedMs)).toBeLessThan(2000);
-      expect(Number(graphVisible?.nodeCount)).toBe(tasksPerWorkflow);
+      expect(Number(graphVisible?.nodeCount)).toBe(workflowCount);
+      expect(Number(taskGraphVisible?.nodeCount)).toBe(tasksPerWorkflow);
       expect(elapsedMs).toBeLessThan(STARTUP_BUDGET_MS);
+      expect([...phaseNames]).toEqual(expect.arrayContaining([
+        'listWorkflowsByStartupRecency',
+        'orchestrator.restore.full-snapshot',
+        'sqlite.workflow-metadata.query',
+        'sqlite.tasks.query',
+        'sqlite.workflow-rollups.compute',
+        'sqlite.tasks.deserialize-reconcile',
+        'bootstrap-ipc.serialize-return',
+      ]));
 
       expect(result.taskCount).toBe(expectedTaskCount);
       expect(result.perf.dbPollCreated).toBe(0);
