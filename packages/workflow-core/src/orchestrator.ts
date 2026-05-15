@@ -60,6 +60,7 @@ function isActiveForInvalidation(status: TaskStatus): boolean {
     status === 'review_ready'
   );
 }
+
 import { getTransitiveDependents } from '@invoker/workflow-graph';
 import { ActionGraph } from '@invoker/workflow-graph';
 import {
@@ -81,6 +82,13 @@ import {
 
 const TASK_DELTA_CHANNEL = 'task.delta';
 let workflowCounter = 0;
+
+function isReplaceableAttemptStatus(status: Attempt['status']): boolean {
+  return status === 'pending'
+    || status === 'claimed'
+    || status === 'running'
+    || status === 'needs_input';
+}
 
 function nextWorkflowId(): string {
   workflowCounter += 1;
@@ -1216,6 +1224,79 @@ export class Orchestrator {
     this.taskRepository.saveAttempt(freshAttempt);
     this.writeAndSync(task.id, { execution: { selectedAttemptId: freshAttempt.id } }, writeOpts);
     return freshAttempt.id;
+  }
+
+  prepareTaskForNewAttempt(taskId: string, reason: string): TaskState {
+    this.refreshFromDb();
+    const task = this.stateGetTask(taskId);
+    if (!task) {
+      throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
+    }
+    if (task.status === 'completed' || task.status === 'failed') {
+      throw new OrchestratorError(
+        OrchestratorErrorCode.TASK_ALREADY_TERMINAL,
+        `Task ${task.id} is terminal and cannot be prepared for a new attempt`,
+      );
+    }
+
+    const selected = this.getSelectedAttempt(task);
+    const loadAttempts = (this.persistence as Partial<OrchestratorPersistence>).loadAttempts;
+    const attempts =
+      typeof loadAttempts === 'function' ? loadAttempts.call(this.persistence, task.id) : [];
+    const latest = attempts[attempts.length - 1];
+    const activeAttempt = selected && isReplaceableAttemptStatus(selected.status)
+      ? selected
+      : latest && isReplaceableAttemptStatus(latest.status)
+        ? latest
+        : undefined;
+
+    const upstreamAttemptIds = task.dependencies
+      .map(depId => this.stateGetTask(depId)?.execution.selectedAttemptId)
+      .filter((id): id is string => !!id);
+    const freshAttempt = createAttempt(task.id, {
+      status: 'pending',
+      snapshotCommit: activeAttempt?.commit,
+      upstreamAttemptIds,
+      supersedesAttemptId: activeAttempt?.id,
+    });
+
+    const changes = this.withBumpedExecutionGeneration(task, {
+      status: 'pending',
+      execution: {
+        selectedAttemptId: freshAttempt.id,
+        phase: undefined,
+        startedAt: undefined,
+        completedAt: undefined,
+        launchStartedAt: undefined,
+        launchCompletedAt: undefined,
+        lastHeartbeatAt: undefined,
+        error: undefined,
+        exitCode: undefined,
+        inputPrompt: undefined,
+        pendingFixError: undefined,
+        agentSessionId: undefined,
+        workspacePath: undefined,
+        containerId: undefined,
+        isFixingWithAI: false,
+      },
+    });
+
+    let updated!: TaskState;
+    this.taskRepository.runInTransaction(() => {
+      if (activeAttempt) {
+        this.taskRepository.updateAttempt(activeAttempt.id, { status: 'superseded' });
+      }
+      this.taskRepository.saveAttempt(freshAttempt);
+      updated = this.writeAndSync(task.id, changes);
+    });
+    this.clearQueuedSchedulerEntries(task.id, task.execution.selectedAttemptId);
+    this.persistence.logEvent?.(task.id, 'task.prepared_for_new_attempt', {
+      reason,
+      oldAttemptId: activeAttempt?.id,
+      newAttemptId: freshAttempt.id,
+    });
+    this.messageBus.publish(TASK_DELTA_CHANNEL, this.buildUpdateDelta(task, updated, changes));
+    return updated;
   }
 
   private updateSelectedAttempt(
@@ -3557,6 +3638,21 @@ export class Orchestrator {
    */
   resumeWorkflow(workflowId: string): TaskState[] {
     this.syncFromDb(workflowId);
+    const workflowTaskIds = new Set(this.persistence.loadTasks(workflowId).map((task) => task.id));
+    const tasksToRecover = this.stateMachine
+      .getAllTasks()
+      .filter((task) => task.config.workflowId === workflowId || workflowTaskIds.has(task.id))
+      .filter((task) =>
+        task.status === 'running'
+        || (
+          task.status === 'pending'
+          && task.execution.phase === 'launching'
+          && !!task.execution.selectedAttemptId
+        )
+      );
+    for (const task of tasksToRecover) {
+      this.prepareTaskForNewAttempt(task.id, 'resume_workflow_recovery');
+    }
     return this.startExecution();
   }
 
