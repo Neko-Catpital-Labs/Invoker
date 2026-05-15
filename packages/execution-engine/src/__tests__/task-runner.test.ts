@@ -3922,13 +3922,17 @@ console.log(JSON.stringify(out));
     });
 
     it('merged PR auto-completes a review_ready merge gate', async () => {
+      const downstream = makeTask({
+        id: 'downstream-after-manual-check',
+        status: 'running',
+      });
       const orchestrator = {
         getTask: vi.fn((id: string) => ({
           id,
           status: 'review_ready',
           execution: { reviewId: 'owner/repo#42' },
         })),
-        approve: vi.fn(),
+        approve: vi.fn().mockResolvedValue([downstream]),
       };
       const persistence = {
         updateTask: vi.fn(),
@@ -3953,6 +3957,7 @@ console.log(JSON.stringify(out));
       // Simulate active poller
       const interval = setInterval(() => {}, 1000);
       (executor as any).activePrPollers.set('task-1', interval);
+      const executeTasks = vi.spyOn(executor, 'executeTasks').mockResolvedValue(undefined);
 
       await executor.checkPrApprovalNow('task-1');
 
@@ -3960,6 +3965,7 @@ console.log(JSON.stringify(out));
         execution: { reviewStatus: 'Merged' },
       });
       expect(orchestrator.approve).toHaveBeenCalledWith('task-1');
+      expect(executeTasks).toHaveBeenCalledWith([downstream]);
 
       // Should stop polling after approval
       expect((executor as any).activePrPollers.has('task-1')).toBe(false);
@@ -4157,6 +4163,10 @@ console.log(JSON.stringify(out));
       });
 
       it('merged PR with workspacePath triggers orchestrator.approve', async () => {
+        const downstream = makeTask({
+          id: 'downstream-after-check-now',
+          status: 'running',
+        });
         const orchestrator = {
           getTask: vi.fn((id: string) => ({
             id,
@@ -4166,7 +4176,7 @@ console.log(JSON.stringify(out));
               workspacePath: '/workspace/approved-worktree',
             },
           })),
-          approve: vi.fn(),
+          approve: vi.fn().mockResolvedValue([downstream]),
         };
         const persistence = { updateTask: vi.fn() };
         const mergeGateProvider = {
@@ -4188,6 +4198,7 @@ console.log(JSON.stringify(out));
 
         const interval = setInterval(() => {}, 1000);
         (executor as any).activePrPollers.set('task-approved', interval);
+        const executeTasks = vi.spyOn(executor, 'executeTasks').mockResolvedValue(undefined);
 
         await executor.checkPrApprovalNow('task-approved');
 
@@ -4199,6 +4210,7 @@ console.log(JSON.stringify(out));
           execution: { reviewStatus: 'Merged' },
         });
         expect(orchestrator.approve).toHaveBeenCalledWith('task-approved');
+        expect(executeTasks).toHaveBeenCalledWith([downstream]);
         expect((executor as any).activePrPollers.has('task-approved')).toBe(false);
       });
     });
@@ -4286,6 +4298,10 @@ console.log(JSON.stringify(out));
       });
 
       it('merged status with workspacePath triggers orchestrator.approve', async () => {
+        const downstream = makeTask({
+          id: 'downstream-after-refresh',
+          status: 'running',
+        });
         const allTasks = [
           makeTask({
             id: 'merge-approved',
@@ -4300,7 +4316,7 @@ console.log(JSON.stringify(out));
         const orchestrator = {
           getTask: (id: string) => allTasks.find(t => t.id === id),
           getAllTasks: () => allTasks,
-          approve: vi.fn(),
+          approve: vi.fn().mockResolvedValue([downstream]),
         };
         const persistence = { updateTask: vi.fn() };
         const mergeGateProvider = {
@@ -4318,6 +4334,7 @@ console.log(JSON.stringify(out));
           cwd: '/runner-base-cwd',
           mergeGateProvider: mergeGateProvider as any,
         });
+        const executeTasks = vi.spyOn(executor, 'executeTasks').mockResolvedValue(undefined);
 
         await executor.checkMergeGateStatuses();
 
@@ -4329,6 +4346,7 @@ console.log(JSON.stringify(out));
           execution: { reviewStatus: 'Merged' },
         });
         expect(orchestrator.approve).toHaveBeenCalledWith('merge-approved');
+        expect(executeTasks).toHaveBeenCalledWith([downstream]);
       });
 
       it('approved-but-open PR updates persistence without completing the gate', async () => {
@@ -4473,6 +4491,10 @@ console.log(JSON.stringify(out));
       it('poll with workspacePath triggers orchestrator.approve on merged PR', async () => {
         vi.useFakeTimers();
         try {
+          const downstream = makeTask({
+            id: 'downstream-after-poll',
+            status: 'running',
+          });
           const orchestrator = {
             getTask: vi.fn((id: string) => ({
               id,
@@ -4482,7 +4504,7 @@ console.log(JSON.stringify(out));
                 workspacePath: '/workspace/poll-approved',
               },
             })),
-            approve: vi.fn(),
+            approve: vi.fn().mockResolvedValue([downstream]),
           };
           const persistence = { updateTask: vi.fn() };
           const mergeGateProvider = {
@@ -4500,6 +4522,7 @@ console.log(JSON.stringify(out));
             cwd: '/runner-base-cwd',
             mergeGateProvider: mergeGateProvider as any,
           });
+          const executeTasks = vi.spyOn(executor, 'executeTasks').mockResolvedValue(undefined);
 
           (executor as any).startPrPolling('poll-approved', 'owner/repo#302', 'wf-1');
 
@@ -4513,6 +4536,7 @@ console.log(JSON.stringify(out));
             execution: { reviewStatus: 'Merged' },
           });
           expect(orchestrator.approve).toHaveBeenCalledWith('poll-approved');
+          expect(executeTasks).toHaveBeenCalledWith([downstream]);
           expect((executor as any).activePrPollers.has('poll-approved')).toBe(false);
         } finally {
           vi.useRealTimers();
