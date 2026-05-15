@@ -1737,6 +1737,13 @@ export class TaskRunner {
     }
   }
 
+  private async approveMergeGateAndDispatch(taskId: string): Promise<void> {
+    const newlyStarted = await this.orchestrator.approve(taskId);
+    if (newlyStarted.length > 0) {
+      await this.executeTasks(newlyStarted);
+    }
+  }
+
   async checkMergeGateStatuses(): Promise<void> {
     if (!this.mergeGateProvider) return;
     for (const task of this.orchestrator.getAllTasks()) {
@@ -1757,7 +1764,7 @@ export class TaskRunner {
           if (status.approved) {
             this.logger.info(`[merge-gate] PR ${task.execution.reviewId} approved (refresh), completing merge gate`);
             this.stopPrPolling(task.id);
-            await this.orchestrator.approve(task.id);
+            await this.approveMergeGateAndDispatch(task.id);
           } else if (status.rejected) {
             this.logger.info(`[merge-gate] PR ${task.execution.reviewId} rejected (refresh): ${status.statusText}`);
             this.stopPrPolling(task.id);
@@ -1789,7 +1796,7 @@ export class TaskRunner {
         if (status.approved) {
           this.logger.info(`[merge-gate] PR ${reviewId} approved, completing merge gate`);
           this.stopPrPolling(taskId);
-          await this.orchestrator.approve(taskId);
+          await this.approveMergeGateAndDispatch(taskId);
         } else if (status.rejected) {
           this.logger.info(`[merge-gate] PR ${reviewId} rejected: ${status.statusText}`);
           this.stopPrPolling(taskId);
@@ -1834,7 +1841,7 @@ export class TaskRunner {
       if (status.approved) {
         this.logger.info(`[merge-gate] PR ${reviewId} approved (manual check), completing merge gate`);
         this.stopPrPolling(taskId);
-        await this.orchestrator.approve(taskId);
+        await this.approveMergeGateAndDispatch(taskId);
       } else if (status.rejected) {
         this.logger.info(`[merge-gate] PR ${reviewId} rejected (manual check): ${status.statusText}`);
         this.stopPrPolling(taskId);
