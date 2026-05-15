@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 
 const MB = 1024 * 1024;
 const VALID_MODES = new Set(['safe', 'sandbox']);
+const VALID_EXPECTATIONS = new Set(['bug', 'fixed']);
 
 function envInt(name, fallback) {
   const raw = process.env[name];
@@ -16,8 +17,10 @@ function envInt(name, fallback) {
 
 function parseArgs(argv) {
   let mode = process.env.REPRO_MODE ?? 'safe';
+  let expect = process.env.REPRO_EXPECT ?? null;
   let help = false;
-  for (const arg of argv) {
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
     if (arg === '--help' || arg === '-h') {
       help = true;
       continue;
@@ -32,19 +35,34 @@ function parseArgs(argv) {
     }
     if (arg === '--sandbox') {
       mode = 'sandbox';
+      continue;
+    }
+    if (arg === '--expect') {
+      expect = argv[i + 1] ?? '';
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith('--expect=')) {
+      expect = arg.slice('--expect='.length);
     }
   }
   if (!VALID_MODES.has(mode)) {
     throw new Error(`invalid mode "${mode}" (expected: safe|sandbox)`);
   }
-  return { mode, help };
+  if (expect !== null && !VALID_EXPECTATIONS.has(expect)) {
+    throw new Error(`invalid expectation "${expect}" (expected: bug|fixed)`);
+  }
+  return { mode, expect, help };
 }
 
 function printHelp() {
-  console.error('Usage: node scripts/repro-workflow-mutation-oom.mjs [--mode=safe|sandbox]');
+  console.error('Usage: node scripts/repro-workflow-mutation-oom.mjs [--mode=safe|sandbox] [--expect bug|fixed]');
   console.error('Modes:');
   console.error('  safe    Default. Enforces timeout/db-size guards for host safety.');
   console.error('  sandbox Intended for memory-limited containers; guards mostly disabled.');
+  console.error('Expectations:');
+  console.error('  bug     Original SQLite-backed output growth is expected to hit a guard or OOM.');
+  console.error('  fixed   Task output is externalized; SQLite output_spool must stay empty.');
   console.error('Env overrides (optional):');
   console.error('  REPRO_ROWS_PER_CYCLE, REPRO_PAYLOAD_BYTES, REPRO_RENEWS_PER_CYCLE, REPRO_MAX_CYCLES');
   console.error('  REPRO_EXPORT_EVERY, REPRO_MAX_DB_MB, REPRO_SQLITE_HARD_HEAP_LIMIT_MB, REPRO_TIMEOUT_SEC');
@@ -135,7 +153,22 @@ function renewWorkflowMutationLease(db, workflowId, ownerId, options = {}) {
   return 'updated';
 }
 
-function fillLargeTables(db, rows, payloadBytes) {
+function appendExternalOutput(tempDir, taskId, data) {
+  const outputDir = path.join(tempDir, 'task-output');
+  fs.mkdirSync(outputDir, { recursive: true });
+  const key = Buffer.from(taskId).toString('base64url');
+  fs.appendFileSync(path.join(outputDir, `${key}.log`), data);
+}
+
+function externalOutputBytes(tempDir) {
+  const outputDir = path.join(tempDir, 'task-output');
+  if (!fs.existsSync(outputDir)) return 0;
+  return fs.readdirSync(outputDir).reduce((total, name) => {
+    return total + fs.statSync(path.join(outputDir, name)).size;
+  }, 0);
+}
+
+function fillLargeTables(db, rows, payloadBytes, options = {}) {
   const insertIntent = db.prepare(
     `INSERT INTO workflow_mutation_intents (workflow_id, channel, args_json, priority, status)
      VALUES (?, ?, ?, 'normal', 'queued')`
@@ -145,10 +178,16 @@ function fillLargeTables(db, rows, payloadBytes) {
   );
   const payload = 'x'.repeat(payloadBytes);
   for (let i = 0; i < rows; i += 1) {
-    const argsJson = JSON.stringify([payload, i, { nested: payload }]);
+    const argsJson = options.externalizeOutput
+      ? JSON.stringify(['dispatch', i])
+      : JSON.stringify([payload, i, { nested: payload }]);
     insertIntent.run(['wf-oom', 'dispatch', argsJson]);
     if (i % 4 === 0) {
-      insertSpool.run(['wf-oom/task', i * payloadBytes, payload]);
+      if (options.externalizeOutput) {
+        appendExternalOutput(options.tempDir, 'wf-oom/task', payload);
+      } else {
+        insertSpool.run(['wf-oom/task', i * payloadBytes, payload]);
+      }
     }
   }
   insertIntent.free();
@@ -156,7 +195,7 @@ function fillLargeTables(db, rows, payloadBytes) {
 }
 
 async function main() {
-  const { mode, help } = parseArgs(process.argv.slice(2));
+  const { mode, expect, help } = parseArgs(process.argv.slice(2));
   if (help) {
     printHelp();
     return;
@@ -216,10 +255,11 @@ async function main() {
   let leaseRenewUpdateWrites = 0;
   let seededIntentRows = 0;
   let failureReason = null;
+  const externalizeOutput = expect === 'fixed';
 
   console.error(`[repro] temp db=${dbPath}`);
   console.error(
-    `[repro] mode=${mode} rowsPerCycle=${rowsPerCycle} payloadBytes=${payloadBytes} renewsPerCycle=${renewsPerCycle} maxCycles=${maxCycles} hardHeapLimitMb=${hardHeapLimitMb} maxDbMb=${maxDbMb} timeoutSec=${timeoutSec}`
+    `[repro] mode=${mode} expect=${expect ?? 'none'} externalizeOutput=${externalizeOutput} rowsPerCycle=${rowsPerCycle} payloadBytes=${payloadBytes} renewsPerCycle=${renewsPerCycle} maxCycles=${maxCycles} hardHeapLimitMb=${hardHeapLimitMb} maxDbMb=${maxDbMb} timeoutSec=${timeoutSec}`
   );
   console.error(
     `[repro] flushDebounceMs=${flushDebounceMs} exportEvery=${exportEvery} leaseRenewMinIntervalMs=${leaseRenewMinIntervalMs} leaseRenewMinExpiryLeadMs=${leaseRenewMinExpiryLeadMs}`
@@ -287,7 +327,7 @@ async function main() {
       }
     };
     for (let cycle = 1; cycle <= maxCycles; cycle += 1) {
-      fillLargeTables(db, rowsPerCycle, payloadBytes);
+      fillLargeTables(db, rowsPerCycle, payloadBytes, { externalizeOutput, tempDir });
       seededIntentRows += rowsPerCycle;
       console.error(`[repro] cycle=${cycle} seeded rows; starting renew loop`);
       for (let i = 1; i <= renewsPerCycle; i += 1) {
@@ -299,11 +339,15 @@ async function main() {
         });
         leaseRenewWrites += 1;
         if (renewResult === 'updated') leaseRenewUpdateWrites += 1;
-        db.run('INSERT INTO output_spool (task_id, offset, data) VALUES (?, ?, ?)', [
-          'wf-oom/task',
-          (cycle * renewsPerCycle) + i,
-          'y'.repeat(payloadBytes),
-        ]);
+        if (externalizeOutput) {
+          appendExternalOutput(tempDir, 'wf-oom/task', 'y'.repeat(payloadBytes));
+        } else {
+          db.run('INSERT INTO output_spool (task_id, offset, data) VALUES (?, ?, ?)', [
+            'wf-oom/task',
+            (cycle * renewsPerCycle) + i,
+            'y'.repeat(payloadBytes),
+          ]);
+        }
         dirty = true;
         if (flushDebounceMs <= 0) {
           if (i % exportEvery === 0) maybeFlush();
@@ -324,13 +368,24 @@ async function main() {
         throw new Error(`db size guard reached (${dbSizeMb.toFixed(1)}MB > ${maxDbMb}MB) before OOM`);
       }
     }
+    if (expect === 'fixed') {
+      const spoolRows = queryOne(db, 'SELECT COUNT(*) AS count FROM output_spool')?.count ?? 0;
+      const bytes = externalOutputBytes(tempDir);
+      if (Number(spoolRows) !== 0) {
+        throw new Error(`fixed expectation failed: output_spool has ${spoolRows} row(s)`);
+      }
+      if (bytes <= 0) {
+        throw new Error('fixed expectation failed: no externalized output bytes were written');
+      }
+      console.error(`[repro] fixed expectation satisfied: output_spool=0 externalOutputBytes=${bytes}`);
+    }
     console.error('[repro] no OOM observed within configured cycles');
-    process.exitCode = 0;
+    process.exitCode = expect === 'bug' ? 1 : 0;
   } catch (err) {
     failureReason = err instanceof Error ? err.message : String(err);
     console.error(`[workflow-mutation-coordinator] drain failed for wf-1778141641513-26: ${err}`);
     console.error(`[workflow-mutation-coordinator] drain failed for wf-1778141629042-19: ${err}`);
-    process.exitCode = 1;
+    process.exitCode = expect === 'bug' ? 0 : 1;
   } finally {
     const elapsedMs = nowMs() - startedAt;
     const meanFlushIntervalMs = flushCount > 1
