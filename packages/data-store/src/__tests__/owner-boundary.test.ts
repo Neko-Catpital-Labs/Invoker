@@ -59,7 +59,7 @@ describe('owner boundary enforcement', () => {
       // Verify mutations are blocked
       expect(() => reader.saveWorkflow({ ...testWorkflow, status: 'completed' }))
         .toThrow(/read-only/i);
-      expect(() => reader.updateWorkflow('wf-boundary-test', { status: 'completed' }))
+      expect(() => reader.updateWorkflow('wf-boundary-test', { generation: 1 }))
         .toThrow(/read-only/i);
       expect(() => reader.deleteWorkflow('wf-boundary-test'))
         .toThrow(/read-only/i);
@@ -164,23 +164,23 @@ describe('owner boundary enforcement', () => {
       // Reader opens read-only
       const reader = await SQLiteAdapter.create(dbPath, { readOnly: true });
       const before = reader.loadWorkflow('wf-boundary-test');
-      expect(before!.status).toBe('running');
+      expect(before!.generation).toBe(0);
 
       // Owner process reopens and mutates
       const owner2 = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
-      owner2.updateWorkflow('wf-boundary-test', { status: 'completed' });
+      owner2.updateWorkflow('wf-boundary-test', { generation: 1 });
       owner2.close();
 
       // Reader sees stale data (expected - SQLite isolation)
       const stillStale = reader.loadWorkflow('wf-boundary-test');
-      expect(stillStale!.status).toBe('running');
+      expect(stillStale!.generation).toBe(0);
 
       reader.close();
 
       // New reader sees updated data
       const reader2 = await SQLiteAdapter.create(dbPath, { readOnly: true });
       const updated = reader2.loadWorkflow('wf-boundary-test');
-      expect(updated!.status).toBe('completed');
+      expect(updated!.generation).toBe(1);
       reader2.close();
     });
 
@@ -228,12 +228,12 @@ describe('owner boundary enforcement', () => {
       owner.saveWorkflow(testWorkflow);
       let loaded = owner.loadWorkflow('wf-boundary-test');
       expect(loaded).toBeDefined();
-      expect(loaded!.status).toBe('running');
+      expect(loaded!.status).toBe('pending');
 
       // Update
-      owner.updateWorkflow('wf-boundary-test', { status: 'completed' });
+      owner.updateWorkflow('wf-boundary-test', { generation: 2 });
       loaded = owner.loadWorkflow('wf-boundary-test');
-      expect(loaded!.status).toBe('completed');
+      expect(loaded!.generation).toBe(2);
 
       // List
       const workflows = owner.listWorkflows();

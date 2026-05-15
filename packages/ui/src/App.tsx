@@ -26,9 +26,9 @@ import { QueueView } from './components/QueueView.js';
 import { ReplaceTaskModal } from './components/ReplaceTaskModal.js';
 import { SystemSetupModal } from './components/SystemSetupModal.js';
 import { WorkflowGraph } from './components/WorkflowGraph.js';
+import { FloatingGraphPanel } from './components/FloatingGraphPanel.js';
 import { WorkflowInspector } from './components/WorkflowInspector.js';
 import { ActionGraphView } from './components/ActionGraphView.js';
-import { WorkflowStatusChips } from './components/WorkflowStatusChips.js';
 import { StatusBar } from './components/StatusBar.js';
 import { TerminalDrawer } from './components/TerminalDrawer.js';
 import {
@@ -222,6 +222,7 @@ export function App() {
   const { tasks, workflows, clearTasks, refreshTasks } = useTasks();
   const invoker = useInvoker();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const graphSurfaceRef = useRef<HTMLDivElement>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
   const [workflowSelectionDismissed, setWorkflowSelectionDismissed] = useState(false);
@@ -1057,6 +1058,8 @@ export function App() {
         <div className="flex-1 flex overflow-hidden">
           <div className="flex-1 flex flex-col overflow-hidden">
             <div
+              ref={graphSurfaceRef}
+              data-testid="workflow-graph-surface"
               className="flex-1 relative overflow-hidden border-r border-gray-800 bg-gray-900"
               onClick={viewMode === 'dag' ? handleDagSurfaceClick : undefined}
             >
@@ -1091,25 +1094,24 @@ export function App() {
                     onWorkflowContextMenu={handleWorkflowContextMenu}
                   />
                   {selectedWorkflow && miniDagTasks.size > 0 && (
-                    <div
-                      data-testid="selected-workflow-mini-dag"
-                      className="absolute top-3 right-3 h-[280px] w-[420px] rounded border border-gray-700 bg-gray-900/95 overflow-hidden shadow-lg"
+                    <FloatingGraphPanel
+                      key={selectedWorkflow.id}
+                      testId="selected-workflow-mini-dag"
+                      dragHandleTestId="selected-workflow-mini-dag-drag-handle"
+                      title={`${selectedWorkflow.name} task DAG`}
+                      boundsRef={graphSurfaceRef}
+                      contentClassName="h-[250px]"
                     >
-                      <div className="px-2 py-1 text-[11px] text-gray-300 border-b border-gray-700">
-                        {selectedWorkflow.name} task DAG
-                      </div>
-                      <div className="h-[250px]">
-                        <TaskDAG
-                          tasks={miniDagTasks}
-                          workflows={workflows}
-                          selectedTaskId={selectedTaskId}
-                          onTaskClick={handleTaskClick}
-                          onTaskDoubleClick={handleTaskDoubleClick}
-                          onTaskContextMenu={handleTaskContextMenu}
-                          statusFilters={new Set()}
-                        />
-                      </div>
-                    </div>
+                      <TaskDAG
+                        tasks={miniDagTasks}
+                        workflows={workflows}
+                        selectedTaskId={selectedTaskId}
+                        onTaskClick={handleTaskClick}
+                        onTaskDoubleClick={handleTaskDoubleClick}
+                        onTaskContextMenu={handleTaskContextMenu}
+                        statusFilters={new Set()}
+                      />
+                    </FloatingGraphPanel>
                   )}
                 </>
               )}
@@ -1117,11 +1119,6 @@ export function App() {
 
             {viewMode === 'dag' && (
               <>
-                <WorkflowStatusChips
-                  workflows={workflows}
-                  activeFilters={statusFilters}
-                  onStatusClick={handleStatusClick}
-                />
                 <StatusBar
                   tasks={tasks}
                   activeFilters={statusFilters}
@@ -1151,11 +1148,6 @@ export function App() {
               onEditAgent={handleEditAgent}
               onEditPrompt={handleEditPrompt}
               onEditCommand={handleEditCommand}
-              onProvideInput={openInputModal}
-              onApprove={openApprovalModal}
-              onReject={(task) => setModal({ type: 'approval', task, action: 'reject' })}
-              onSelectExperiment={openExperimentModal}
-              onSetExternalGatePolicies={handleSetExternalGatePolicies}
               onSetMergeBranch={handleSetMergeBranch}
               onToggleCollapsed={() => setInspectorCollapsed((prev) => !prev)}
               onToggleAdvanced={() => setAdvancedMetadataExpanded((prev) => !prev)}
