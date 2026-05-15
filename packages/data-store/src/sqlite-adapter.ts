@@ -18,6 +18,7 @@ import type {
 } from '@invoker/workflow-core';
 import {
   computeWorkflowRollupFromSummaries,
+  isDiscardedAttempt,
   normalizeRunnerKind,
 } from '@invoker/workflow-core';
 import type {
@@ -1957,6 +1958,13 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
     const attempt = this.loadAttempt(attemptId);
     if (!attempt) return task;
+
+    if (isDiscardedAttempt(attempt)) {
+      return {
+        ...task,
+        status: 'stale',
+      };
+    }
 
     if (attempt.status === 'failed') {
       return {

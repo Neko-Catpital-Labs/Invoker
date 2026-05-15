@@ -76,6 +76,11 @@ import {
   withSchedulerEnqueueCandidates,
   type InvalidationPlan,
 } from './invalidation-plan.js';
+import {
+  isActiveAttempt,
+  isDiscardedAttempt,
+  isOutcomeTerminalAttempt,
+} from './attempt-policy.js';
 
 // ── Channel Constants ───────────────────────────────────────
 
@@ -1115,6 +1120,7 @@ export class Orchestrator {
 
   private isAttemptLeaseActive(attempt: Attempt | undefined, now: number = Date.now()): boolean {
     if (!attempt) return false;
+    if (isDiscardedAttempt(attempt)) return false;
     if (attempt.status !== 'claimed' && attempt.status !== 'running') return false;
     if (!attempt.leaseExpiresAt) return true;
     return attempt.leaseExpiresAt.getTime() >= now;
@@ -1171,7 +1177,7 @@ export class Orchestrator {
 
   private ensureCurrentPendingAttempt(task: TaskState): string {
     const selected = this.getSelectedAttempt(task);
-    if (selected && (selected.status === 'pending' || selected.status === 'claimed' || selected.status === 'running' || selected.status === 'needs_input')) {
+    if (selected && isActiveAttempt(selected)) {
       return selected.id;
     }
 
@@ -1179,7 +1185,7 @@ export class Orchestrator {
     const attempts =
       typeof loadAttempts === 'function' ? loadAttempts.call(this.persistence, task.id) : [];
     const current = attempts[attempts.length - 1];
-    if (current && (current.status === 'pending' || current.status === 'claimed' || current.status === 'running' || current.status === 'needs_input')) {
+    if (current && isActiveAttempt(current)) {
       if (task.execution.selectedAttemptId !== current.id) {
         this.writeAndSync(task.id, { execution: { selectedAttemptId: current.id } });
       }
@@ -1194,7 +1200,7 @@ export class Orchestrator {
       upstreamAttemptIds,
       supersedesAttemptId: current?.id,
     });
-    if (current && current.status !== 'completed' && current.status !== 'failed' && current.status !== 'superseded') {
+    if (current && !isOutcomeTerminalAttempt(current) && !isDiscardedAttempt(current)) {
       this.taskRepository.updateAttempt(current.id, { status: 'superseded' });
     }
     this.taskRepository.saveAttempt(freshAttempt);
@@ -1213,7 +1219,7 @@ export class Orchestrator {
       typeof loadAttempts === 'function' ? loadAttempts.call(this.persistence, task.id) : [];
     const current = selected ?? attempts[attempts.length - 1];
 
-    if (current && current.status !== 'completed' && current.status !== 'failed' && current.status !== 'superseded') {
+    if (current && !isOutcomeTerminalAttempt(current) && !isDiscardedAttempt(current)) {
       this.taskRepository.updateAttempt(current.id, { status: 'superseded' });
     }
 
@@ -1499,6 +1505,17 @@ export class Orchestrator {
             });
             return [];
           }
+        }
+        const responseAttemptId = response.attemptId ?? activeAttemptId;
+        const responseAttempt = this.loadAttemptById(responseAttemptId);
+        if (isDiscardedAttempt(responseAttempt)) {
+          this.logger.warn('[worker-response] SUPERSEDED_ATTEMPT_REJECTED', {
+            taskId: earlyTask.id,
+            responseAttemptId: responseAttemptId ?? 'none',
+            activeAttemptId: activeAttemptId ?? 'none',
+            workerResponseStatus: response.status,
+          });
+          return [];
         }
         const activeGeneration = this.getExecutionGeneration(earlyTask);
         if (
@@ -4700,13 +4717,27 @@ export class Orchestrator {
       }
 
       const now = new Date();
-      const attemptId = job.attemptId ?? this.ensureCurrentPendingAttempt(task);
+      let attemptId = job.attemptId ?? this.ensureCurrentPendingAttempt(task);
+      let currentAttempt = this.loadAttemptById(attemptId);
+      if (!currentAttempt || isDiscardedAttempt(currentAttempt)) {
+        attemptId = this.ensureCurrentPendingAttempt(task);
+        currentAttempt = this.loadAttemptById(attemptId);
+      }
+      if (!currentAttempt || isDiscardedAttempt(currentAttempt)) {
+        this.logger.info('[orchestrator] drainScheduler: skipping non-runnable attempt', {
+          taskId: job.taskId,
+          attemptId,
+          attemptStatus: currentAttempt?.status ?? 'missing',
+        });
+        job = this.scheduler.takeNext();
+        continue;
+      }
       let launchAttemptId = attemptId;
-      if (task.execution.selectedAttemptId !== attemptId) {
+      const selectedTask = this.stateGetTask(job.taskId) ?? task;
+      if (selectedTask.execution.selectedAttemptId !== attemptId) {
         this.writeAndSync(job.taskId, { execution: { selectedAttemptId: attemptId } });
       }
       let claimSucceeded = false;
-      const currentAttempt = this.loadAttemptById(attemptId);
       const claimPatch = this.deferRunningUntilLaunch
         ? {
             status: 'claimed' as const,
@@ -4721,29 +4752,10 @@ export class Orchestrator {
             lastHeartbeatAt: now,
             leaseExpiresAt: nextLeaseExpiry(now),
           };
-      if (!currentAttempt) {
-        const upstreamAttemptIds = task.dependencies
-          .map(depId => this.stateGetTask(depId)?.execution.selectedAttemptId)
-          .filter((id): id is string => !!id);
-        const attempt = createAttempt(job.taskId, {
-          status: 'pending',
-          upstreamAttemptIds,
-        });
-        this.taskRepository.saveAttempt(attempt);
-        if (task.execution.selectedAttemptId !== attempt.id) {
-          this.writeAndSync(job.taskId, { execution: { selectedAttemptId: attempt.id } });
-        }
-        launchAttemptId = attempt.id;
-        claimSucceeded = this.taskRepository.claimAttemptForLaunch?.(attempt.id, claimPatch, now) ?? true;
-        if (claimSucceeded && !this.taskRepository.claimAttemptForLaunch) {
-          this.taskRepository.updateAttempt(attempt.id, claimPatch);
-        }
-      } else {
-        claimSucceeded = this.taskRepository.claimAttemptForLaunch?.(attemptId, claimPatch, now)
-          ?? !this.isAttemptLeaseActive(currentAttempt, now.getTime());
-        if (claimSucceeded && !this.taskRepository.claimAttemptForLaunch) {
-          this.taskRepository.updateAttempt(attemptId, claimPatch);
-        }
+      claimSucceeded = this.taskRepository.claimAttemptForLaunch?.(attemptId, claimPatch, now)
+        ?? !this.isAttemptLeaseActive(currentAttempt, now.getTime());
+      if (claimSucceeded && !this.taskRepository.claimAttemptForLaunch) {
+        this.taskRepository.updateAttempt(attemptId, claimPatch);
       }
       if (!claimSucceeded) {
         this.logger.info('[orchestrator] drainScheduler: skipping already-claimed attempt', {
@@ -4819,12 +4831,23 @@ export class Orchestrator {
     }
 
     const selectedAttemptId = task.execution.selectedAttemptId;
-    if (selectedAttemptId && selectedAttemptId !== attemptId) {
+    if (selectedAttemptId !== attemptId) {
       this.logger.info('[orchestrator] markTaskRunningAfterLaunch: reject', {
         taskId,
         attemptId,
         reason: 'attempt_mismatch',
         selectedAttemptId,
+      });
+      this.clearQueuedSchedulerEntries(taskId, attemptId);
+      return false;
+    }
+
+    const existingAttempt = this.loadAttemptById(attemptId);
+    if (!existingAttempt || isDiscardedAttempt(existingAttempt)) {
+      this.logger.info('[orchestrator] markTaskRunningAfterLaunch: reject', {
+        taskId,
+        attemptId,
+        reason: !existingAttempt ? 'attempt_missing' : 'attempt_superseded',
       });
       this.clearQueuedSchedulerEntries(taskId, attemptId);
       return false;
@@ -4871,33 +4894,13 @@ export class Orchestrator {
     }
 
     try {
-      const existingAttempt = this.persistence.loadAttempt(attemptId);
-      if (existingAttempt) {
-        this.taskRepository.updateAttempt(attemptId, {
-          status: 'running',
-          claimedAt: existingAttempt.claimedAt ?? launchedAt,
-          startedAt: launchedAt,
-          lastHeartbeatAt: launchedAt,
-          leaseExpiresAt: nextLeaseExpiry(launchedAt),
-        });
-      } else {
-        const upstreamAttemptIds = task.dependencies
-          .map(depId => this.stateGetTask(depId)?.execution.selectedAttemptId)
-          .filter((id): id is string => !!id);
-        const attempt: Attempt = {
-          ...createAttempt(taskId, {
-            status: 'running',
-            claimedAt: launchedAt,
-            startedAt: launchedAt,
-            lastHeartbeatAt: launchedAt,
-            leaseExpiresAt: nextLeaseExpiry(launchedAt),
-            upstreamAttemptIds,
-          }),
-          id: attemptId,
-        };
-        this.taskRepository.saveAttempt(attempt);
-        this.writeAndSync(taskId, { execution: { selectedAttemptId: attempt.id } });
-      }
+      this.taskRepository.updateAttempt(attemptId, {
+        status: 'running',
+        claimedAt: existingAttempt.claimedAt ?? launchedAt,
+        startedAt: launchedAt,
+        lastHeartbeatAt: launchedAt,
+        leaseExpiresAt: nextLeaseExpiry(launchedAt),
+      });
     } catch {
       // best effort — do not fail launch-state transition due to attempt sync
     }

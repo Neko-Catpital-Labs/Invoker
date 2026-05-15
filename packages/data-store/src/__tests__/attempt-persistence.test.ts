@@ -118,6 +118,23 @@ describe('Attempt persistence', () => {
     }, new Date('2026-05-12T00:06:00Z'))).toBe(true);
   });
 
+  it('does not hydrate a task with a superseded selected attempt as runnable', () => {
+    const attempt = createAttempt('taskA', { status: 'superseded' });
+    adapter.saveAttempt(attempt);
+    adapter.updateTask('taskA', {
+      status: 'running',
+      execution: {
+        selectedAttemptId: attempt.id,
+        startedAt: new Date('2026-05-12T00:00:00Z'),
+        lastHeartbeatAt: new Date('2026-05-12T00:01:00Z'),
+      },
+    });
+
+    const [task] = adapter.loadTasks('wf-1');
+    expect(task.status).toBe('stale');
+    expect(task.execution.selectedAttemptId).toBe(attempt.id);
+  });
+
   it('merge conflict JSON round-trip', () => {
     const attempt = createAttempt('taskA', {
       mergeConflict: {
