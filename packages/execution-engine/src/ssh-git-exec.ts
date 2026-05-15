@@ -143,13 +143,6 @@ fi
 CLONE="$INVOKER_HOME/repos/$H"
 mkdir -p "$(dirname "$CLONE")"
 if [ ! -d "$CLONE/.git" ]; then git clone "$REPO" "$CLONE"; fi
-if [ -n "$BRANCH_REPO" ]; then
-  if git -C "$CLONE" remote get-url invoker-branches >/dev/null 2>&1; then
-    git -C "$CLONE" remote set-url invoker-branches "$BRANCH_REPO"
-  else
-    git -C "$CLONE" remote add invoker-branches "$BRANCH_REPO"
-  fi
-fi
 if ! git -C "$CLONE" fetch --all --prune; then
   echo "[WARNING] Git fetch failed for $CLONE" >&2
   echo "[WARNING] Continuing with existing refs. Tasks may use stale commits." >&2
@@ -158,7 +151,7 @@ else
   echo "__INVOKER_FETCH_SUCCESS__=1"
 fi
 if [ -n "$BRANCH_REPO" ]; then
-  if ! git -C "$CLONE" fetch invoker-branches '+refs/heads/*:refs/remotes/invoker-branches/*' --prune; then
+  if ! git -C "$CLONE" fetch "$BRANCH_REPO" '+refs/heads/*:refs/remotes/invoker-branches/*' --prune; then
     echo "BRANCH_REPO_FETCH_FAILED=$BRANCH_REPO" >&2
     exit 32
   fi
