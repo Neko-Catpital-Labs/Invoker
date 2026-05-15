@@ -168,7 +168,7 @@ export interface OrchestratorPersistence {
     featureBranch?: string;
     mergeMode?: 'manual' | 'automatic' | 'external_review';
   }): void;
-  updateWorkflow?(workflowId: string, changes: { status?: WorkflowDerivedStatus | string; updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review' }): void;
+  updateWorkflow?(workflowId: string, changes: { updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review' }): void;
   saveTask(workflowId: string, task: TaskState): void;
   updateTask(taskId: string, changes: TaskStateChanges): void;
   logEvent?(taskId: string, eventType: string, payload?: unknown): void;
