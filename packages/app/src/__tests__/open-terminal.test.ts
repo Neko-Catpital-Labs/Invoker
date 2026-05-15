@@ -16,6 +16,7 @@ import { EventEmitter } from 'node:events';
 
 import {
   Orchestrator,
+  type Attempt,
   type PlanDefinition,
   type TaskState,
   type OrchestratorPersistence,
@@ -60,6 +61,7 @@ const worktreeCheckoutShell = process.platform === 'darwin' ? 'zsh' : 'bash';
 class InMemoryPersistence implements OrchestratorPersistence {
   workflows = new Map<string, { id: string; name: string; status: string; createdAt: string; updatedAt: string }>();
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
+  attempts = new Map<string, Attempt>();
 
   saveWorkflow(workflow: { id: string; name: string; status: string }): void {
     const now = new Date().toISOString();
@@ -85,6 +87,20 @@ class InMemoryPersistence implements OrchestratorPersistence {
       .map((e) => e.task);
   }
   logEvent(): void {}
+  saveAttempt(attempt: Attempt): void {
+    this.attempts.set(attempt.id, { ...attempt });
+  }
+  loadAttempts(nodeId: string): Attempt[] {
+    return Array.from(this.attempts.values()).filter((attempt) => attempt.nodeId === nodeId);
+  }
+  loadAttempt(attemptId: string): Attempt | undefined {
+    const attempt = this.attempts.get(attemptId);
+    return attempt ? { ...attempt } : undefined;
+  }
+  updateAttempt(attemptId: string, changes: Partial<Attempt>): void {
+    const attempt = this.attempts.get(attemptId);
+    if (attempt) this.attempts.set(attemptId, { ...attempt, ...changes });
+  }
 }
 
 class InMemoryBus implements OrchestratorMessageBus {
