@@ -114,6 +114,40 @@ describe('WorkflowInspector', () => {
     expect(screen.getByText('Workflow 1')).toBeInTheDocument();
   });
 
+  it('uses the selected workflow title as the side panel title without a generic inspector label', () => {
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={null}
+        workflowTasks={new Map([['task-1', makeTask()]])}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow 1');
+    expect(screen.queryByText('Workflow 1 task DAG')).not.toBeInTheDocument();
+    expect(screen.queryByText('Inspector')).not.toBeInTheDocument();
+  });
+
+  it('uses the selected task title as the side panel title without a generic inspector label', () => {
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ description: 'Fix cancellation race', status: 'failed' })}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Fix cancellation race');
+    expect(screen.queryByText('Inspector')).not.toBeInTheDocument();
+  });
+
   it('renders selected task title and selected task status first', () => {
     render(
       <WorkflowInspector

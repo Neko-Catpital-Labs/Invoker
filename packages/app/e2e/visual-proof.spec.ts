@@ -412,7 +412,8 @@ test.describe('Visual proof capture', () => {
     ]);
 
     await workflowNode(page, workflowId).dispatchEvent('click', { bubbles: true });
-    await expect(page.getByTestId('workflow-inspector-title')).toContainText('Review ready workflow PR proof');
+    await expect(page.getByTestId('workflow-inspector-title')).toHaveText('Review ready workflow PR proof');
+    await expect(page.getByText('Inspector', { exact: true })).toHaveCount(0);
     await expect(page.getByTestId('workflow-inspector-status-label')).toContainText('review ready');
     await expect(page.getByRole('link', { name: reviewUrl })).toHaveAttribute('href', reviewUrl);
 

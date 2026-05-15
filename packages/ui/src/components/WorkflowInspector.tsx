@@ -79,8 +79,7 @@ export function WorkflowInspector({
   const taskColors = taskVisualStatus ? getStatusColor(taskVisualStatus) : null;
   const workflowVisual = workflow ? workflowStatusVisual(workflow.status) : null;
   const reviewUrl = task?.execution.reviewUrl ?? getWorkflowReviewUrl(workflowTasks);
-  const workflowTaskCount = workflowTasks?.size ?? 0;
-  const workflowTitle = workflow ? `${workflow.name || workflow.id}${workflowTaskCount > 0 ? ' task DAG' : ''}` : null;
+  const workflowTitle = workflow ? workflow.name || workflow.id : null;
   const nodeTitle = task?.description ?? workflowTitle ?? 'No node selected';
   const showsWorkflowMergeDetails = Boolean(!task && workflow?.id && workflow.onFinish === 'pull_request');
   const isMergeNode = Boolean((task?.config.isMergeNode || showsWorkflowMergeDetails) && workflow?.id);
@@ -155,8 +154,7 @@ export function WorkflowInspector({
     <aside className="h-full w-full border-l border-gray-800 bg-gray-900 flex flex-col">
       <div className="flex items-center justify-between border-b border-gray-800 px-3 py-2">
         <div className="min-w-0">
-          <div className="text-xs font-semibold uppercase tracking-wide text-gray-300">Inspector</div>
-          <h2 data-testid="workflow-inspector-title" className="mt-1 text-sm font-medium text-gray-100 truncate max-w-[270px]">{nodeTitle}</h2>
+          <h2 data-testid="workflow-inspector-title" className="text-sm font-medium text-gray-100 truncate max-w-[270px]">{nodeTitle}</h2>
           {workflow && task && (
             <div className="text-[11px] text-gray-400 truncate max-w-[270px]">{workflow.name}</div>
           )}
