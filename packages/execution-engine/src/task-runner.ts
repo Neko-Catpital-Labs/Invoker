@@ -1737,7 +1737,14 @@ export class TaskRunner {
     }
   }
 
-  private async approveMergeGateAndDispatch(taskId: string): Promise<void> {
+  private async handleApprovedMergeGate(
+    taskId: string,
+    reviewId: string,
+    source?: 'refresh' | 'manual check',
+  ): Promise<void> {
+    const sourceSuffix = source ? ` (${source})` : '';
+    this.logger.info(`[merge-gate] PR ${reviewId} approved${sourceSuffix}, completing merge gate`);
+    this.stopPrPolling(taskId);
     const newlyStarted = await this.orchestrator.approve(taskId);
     if (newlyStarted.length > 0) {
       await this.executeTasks(newlyStarted);
@@ -1762,9 +1769,7 @@ export class TaskRunner {
             execution: { reviewStatus: status.statusText },
           });
           if (status.approved) {
-            this.logger.info(`[merge-gate] PR ${task.execution.reviewId} approved (refresh), completing merge gate`);
-            this.stopPrPolling(task.id);
-            await this.approveMergeGateAndDispatch(task.id);
+            await this.handleApprovedMergeGate(task.id, task.execution.reviewId, 'refresh');
           } else if (status.rejected) {
             this.logger.info(`[merge-gate] PR ${task.execution.reviewId} rejected (refresh): ${status.statusText}`);
             this.stopPrPolling(task.id);
@@ -1794,9 +1799,7 @@ export class TaskRunner {
         });
 
         if (status.approved) {
-          this.logger.info(`[merge-gate] PR ${reviewId} approved, completing merge gate`);
-          this.stopPrPolling(taskId);
-          await this.approveMergeGateAndDispatch(taskId);
+          await this.handleApprovedMergeGate(taskId, reviewId);
         } else if (status.rejected) {
           this.logger.info(`[merge-gate] PR ${reviewId} rejected: ${status.statusText}`);
           this.stopPrPolling(taskId);
@@ -1820,12 +1823,10 @@ export class TaskRunner {
 
   async checkPrApprovalNow(taskId: string): Promise<void> {
     if (!this.mergeGateProvider) return;
-    if (!this.activePrPollers.has(taskId)) return;
 
-    // Read reviewId from persistence
     const task = this.orchestrator.getTask(taskId);
     const reviewId = task?.execution.reviewId;
-    if (!reviewId) return;
+    if (!task || !reviewId) return;
 
     try {
       const manualCwd = task.execution.workspacePath ?? this.cwd;
@@ -1839,9 +1840,7 @@ export class TaskRunner {
       });
 
       if (status.approved) {
-        this.logger.info(`[merge-gate] PR ${reviewId} approved (manual check), completing merge gate`);
-        this.stopPrPolling(taskId);
-        await this.approveMergeGateAndDispatch(taskId);
+        await this.handleApprovedMergeGate(taskId, reviewId, 'manual check');
       } else if (status.rejected) {
         this.logger.info(`[merge-gate] PR ${reviewId} rejected (manual check): ${status.statusText}`);
         this.stopPrPolling(taskId);
