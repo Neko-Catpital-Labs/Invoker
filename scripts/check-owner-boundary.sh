@@ -15,6 +15,7 @@ if command -v rg >/dev/null 2>&1; then
     --glob '!**/*.test.ts' \
     --glob '!**/*.d.ts' \
     --glob '!**/dist/**' \
+    --glob '!**/e2e/**' \
     --glob '!**/node_modules/**' \
     --glob '!packages/app/src/main.ts' \
     --glob '!packages/persistence/src/sqlite-adapter.ts' \
@@ -27,6 +28,7 @@ if command -v rg >/dev/null 2>&1; then
     --glob '!**/*.test.ts' \
     --glob '!**/*.d.ts' \
     --glob '!**/dist/**' \
+    --glob '!**/e2e/**' \
     --glob '!**/node_modules/**' \
     --glob '!packages/app/src/main.ts' || true)"
 
@@ -40,6 +42,7 @@ else
   create_violations="$(grep -RInE "SQLiteAdapter\\.create\\(" packages \
     --exclude-dir="__tests__" \
     --exclude-dir="dist" \
+    --exclude-dir="e2e" \
     --exclude-dir="node_modules" \
     --exclude="*.d.ts" \
     --exclude="*.test.ts" \
@@ -50,6 +53,7 @@ else
   value_import_violations="$(grep -RInE "import[[:space:]]+\\{[^}]*SQLiteAdapter[^}]*\\}[[:space:]]+from[[:space:]]+'@invoker/(persistence|data-store)'" packages \
     --exclude-dir="__tests__" \
     --exclude-dir="dist" \
+    --exclude-dir="e2e" \
     --exclude-dir="node_modules" \
     --exclude="*.d.ts" \
     --exclude="*.test.ts" \

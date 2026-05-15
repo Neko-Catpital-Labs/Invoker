@@ -2728,8 +2728,16 @@ describe('Orchestrator', () => {
       expect(resumeOrchestrator.getTask('t3')!.status).toBe('running');
     });
 
-    it('preserves running tasks and only starts pending ones', () => {
+    it('recovers stale running tasks and starts a fresh attempt', () => {
       const resumePersistence = new InMemoryPersistence();
+      const oldAttempt: Attempt = {
+        id: 't1-aold',
+        nodeId: 't1',
+        queuePriority: 0,
+        status: 'running',
+        upstreamAttemptIds: [],
+        createdAt: new Date(),
+      };
       resumePersistence.saveTask('wf-resume', {
         id: 't1',
         description: 'Was running when process died',
@@ -2737,8 +2745,9 @@ describe('Orchestrator', () => {
         dependencies: [],
         createdAt: new Date(),
         config: {},
-        execution: { startedAt: new Date() },
+        execution: { startedAt: new Date(), selectedAttemptId: oldAttempt.id },
       });
+      resumePersistence.saveAttempt(oldAttempt);
 
       const resumeOrchestrator = new Orchestrator({
         persistence: resumePersistence,
@@ -2748,8 +2757,194 @@ describe('Orchestrator', () => {
 
       const started = resumeOrchestrator.resumeWorkflow('wf-resume');
 
-      expect(started).toHaveLength(0);
+      expect(started).toHaveLength(1);
       expect(resumeOrchestrator.getTask('t1')!.status).toBe('running');
+      const newAttemptId = resumeOrchestrator.getTask('t1')!.execution.selectedAttemptId;
+      expect(newAttemptId).toBeTruthy();
+      expect(newAttemptId).not.toBe(oldAttempt.id);
+      expect(resumePersistence.loadAttempt(oldAttempt.id)?.status).toBe('superseded');
+      expect(resumePersistence.loadAttempt(newAttemptId!)?.status).toBe('running');
+    });
+  });
+
+  describe('prepareTaskForNewAttempt', () => {
+    it('resets a running launching task to pending with a fresh selected attempt and preserves durable fields', () => {
+      orchestrator.loadPlan({
+        name: 'prepare-running-launching',
+        tasks: [
+          {
+            id: 't0',
+            description: 'Dependency',
+            command: 'echo dep',
+          },
+          {
+            id: 't1',
+            description: 'Task 1',
+            command: 'pnpm test',
+            prompt: 'Keep this prompt',
+            dependencies: ['t0'],
+          },
+        ],
+      });
+
+      const [depStarted] = orchestrator.startExecution();
+      const depAttemptId = depStarted!.execution.selectedAttemptId!;
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: depStarted!.id, status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      const taskId = sid(orchestrator, 0, 't1');
+      const oldAttemptId = orchestrator.getTask(taskId)!.execution.selectedAttemptId!;
+      const startedAt = new Date('2026-04-16T05:25:16.531Z');
+      const completedAt = new Date('2026-04-16T05:35:16.531Z');
+      const heartbeatAt = new Date('2026-04-16T05:30:16.531Z');
+      const launchCompletedAt = new Date('2026-04-16T05:25:20.531Z');
+      persistence.updateTask(taskId, {
+        status: 'running',
+        config: {
+          summary: 'durable summary',
+          problem: 'durable problem',
+          approach: 'durable approach',
+          testPlan: 'durable test plan',
+        },
+        execution: {
+          phase: 'launching',
+          startedAt,
+          completedAt,
+          launchStartedAt: startedAt,
+          launchCompletedAt,
+          lastHeartbeatAt: heartbeatAt,
+          error: 'volatile error',
+          exitCode: 1,
+          inputPrompt: 'volatile prompt',
+          pendingFixError: 'volatile fix error',
+          agentSessionId: 'sess-1',
+          workspacePath: '/tmp/workspace',
+          containerId: 'container-1',
+          isFixingWithAI: true,
+          branch: 'feature/task',
+          commit: 'abc123',
+          reviewUrl: 'https://example.test/review',
+          reviewId: 'review-1',
+          reviewStatus: 'open',
+          reviewProviderId: 'provider-1',
+        },
+      });
+
+      const prepared = orchestrator.prepareTaskForNewAttempt(taskId, 'unit-test');
+      const newAttemptId = prepared.execution.selectedAttemptId!;
+
+      expect(prepared.status).toBe('pending');
+      expect(newAttemptId).toBeTruthy();
+      expect(newAttemptId).not.toBe(oldAttemptId);
+      expect(persistence.loadAttempt(oldAttemptId)?.status).toBe('superseded');
+      expect(persistence.loadAttempt(newAttemptId)?.status).toBe('pending');
+      expect(persistence.loadAttempt(newAttemptId)?.supersedesAttemptId).toBe(oldAttemptId);
+      expect(prepared.execution.phase).toBeUndefined();
+      expect(prepared.execution.startedAt).toBeUndefined();
+      expect(prepared.execution.completedAt).toBeUndefined();
+      expect(prepared.execution.launchStartedAt).toBeUndefined();
+      expect(prepared.execution.launchCompletedAt).toBeUndefined();
+      expect(prepared.execution.lastHeartbeatAt).toBeUndefined();
+      expect(prepared.execution.error).toBeUndefined();
+      expect(prepared.execution.exitCode).toBeUndefined();
+      expect(prepared.execution.inputPrompt).toBeUndefined();
+      expect(prepared.execution.pendingFixError).toBeUndefined();
+      expect(prepared.execution.agentSessionId).toBeUndefined();
+      expect(prepared.execution.workspacePath).toBeUndefined();
+      expect(prepared.execution.containerId).toBeUndefined();
+      expect(prepared.execution.isFixingWithAI).toBe(false);
+      expect(prepared.config.command).toBe('pnpm test');
+      expect(prepared.config.prompt).toBe('Keep this prompt');
+      expect(prepared.config.summary).toBe('durable summary');
+      expect(prepared.config.problem).toBe('durable problem');
+      expect(prepared.config.approach).toBe('durable approach');
+      expect(prepared.config.testPlan).toBe('durable test plan');
+      expect(prepared.dependencies).toEqual([sid(orchestrator, 0, 't0')]);
+      expect(prepared.execution.branch).toBe('feature/task');
+      expect(prepared.execution.commit).toBe('abc123');
+      expect(prepared.execution.reviewUrl).toBe('https://example.test/review');
+      expect(prepared.execution.reviewId).toBe('review-1');
+      expect(prepared.execution.reviewStatus).toBe('open');
+      expect(prepared.execution.reviewProviderId).toBe('provider-1');
+      expect(persistence.loadAttempt(newAttemptId)?.upstreamAttemptIds).toEqual([depAttemptId]);
+      expect(persistence.events.at(-1)).toEqual({
+        taskId,
+        eventType: 'task.prepared_for_new_attempt',
+        payload: {
+          reason: 'unit-test',
+          oldAttemptId,
+          newAttemptId,
+        },
+      });
+    });
+
+    it('resets a pending launching task with a claimed selected attempt', () => {
+      const claimedOrchestrator = new Orchestrator({
+        persistence,
+        messageBus: bus,
+        maxConcurrency: 3,
+        deferRunningUntilLaunch: true,
+      });
+      claimedOrchestrator.loadPlan({
+        name: 'prepare-claimed-launching',
+        tasks: [{ id: 't1', description: 'Task 1' }],
+      });
+
+      const [started] = claimedOrchestrator.startExecution();
+      const taskId = started!.id;
+      const oldAttemptId = started!.execution.selectedAttemptId!;
+      expect(started!.status).toBe('pending');
+      expect(started!.execution.phase).toBe('launching');
+      expect(persistence.loadAttempt(oldAttemptId)?.status).toBe('claimed');
+
+      const prepared = claimedOrchestrator.prepareTaskForNewAttempt(taskId, 'claimed-launch-reset');
+      const newAttemptId = prepared.execution.selectedAttemptId!;
+
+      expect(prepared.status).toBe('pending');
+      expect(prepared.execution.phase).toBeUndefined();
+      expect(prepared.execution.launchStartedAt).toBeUndefined();
+      expect(prepared.execution.lastHeartbeatAt).toBeUndefined();
+      expect(newAttemptId).not.toBe(oldAttemptId);
+      expect(persistence.loadAttempt(oldAttemptId)?.status).toBe('superseded');
+      expect(persistence.loadAttempt(newAttemptId)?.status).toBe('pending');
+    });
+
+    it('rejects terminal tasks without changing attempts', () => {
+      for (const status of ['completed', 'failed'] as const) {
+        const taskId = `t-${status}`;
+        const attempt: Attempt = {
+          id: `${taskId}-aold`,
+          nodeId: taskId,
+          queuePriority: 0,
+          status,
+          upstreamAttemptIds: [],
+          createdAt: new Date(),
+        };
+        persistence.saveTask('wf-terminal', {
+          id: taskId,
+          description: `${status} task`,
+          status,
+          dependencies: [],
+          createdAt: new Date(),
+          config: {},
+          execution: {
+            completedAt: new Date('2026-04-16T05:35:16.531Z'),
+            error: status === 'failed' ? 'boom' : undefined,
+            selectedAttemptId: attempt.id,
+          },
+        });
+        persistence.saveAttempt(attempt);
+      }
+      orchestrator.syncFromDb('wf-terminal');
+
+      for (const status of ['completed', 'failed'] as const) {
+        const taskId = `t-${status}`;
+        const attemptId = `${taskId}-aold`;
+        expect(() => orchestrator.prepareTaskForNewAttempt(taskId, 'terminal-test')).toThrow('terminal');
+        expect(orchestrator.getTask(taskId)!.status).toBe(status);
+        expect(orchestrator.getTask(taskId)!.execution.selectedAttemptId).toBe(attemptId);
+        expect(persistence.loadAttempt(attemptId)?.status).toBe(status);
+      }
     });
   });
 
