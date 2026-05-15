@@ -191,7 +191,24 @@ fi
 # ── Helper: query task output from DB ────────────────────────
 
 task_output() {
-  sqlite3 "$DB_PATH" "SELECT data FROM task_output WHERE task_id = '$1' OR task_id LIKE '%/' || '$1' ORDER BY id ASC;" 2>/dev/null || echo ""
+  local query_id="$1"
+  local task_id
+  task_id="$(sqlite3 "$DB_PATH" "SELECT id FROM tasks WHERE id = '$query_id' OR id LIKE '%/' || '$query_id' ORDER BY id DESC LIMIT 1;" 2>/dev/null || true)"
+  if [[ -z "$task_id" ]]; then
+    task_id="$query_id"
+  fi
+
+  sqlite3 "$DB_PATH" "SELECT data FROM task_output WHERE task_id = '$task_id' ORDER BY id ASC;" 2>/dev/null || true
+
+  local output_file=""
+  if command -v shasum >/dev/null 2>&1; then
+    output_file="$INVOKER_DB_DIR/task-output/full/$(printf '%s' "$task_id" | shasum -a 256 | awk '{print $1}').log"
+  elif command -v sha256sum >/dev/null 2>&1; then
+    output_file="$INVOKER_DB_DIR/task-output/full/$(printf '%s' "$task_id" | sha256sum | awk '{print $1}').log"
+  fi
+  if [[ -n "$output_file" && -f "$output_file" ]]; then
+    cat "$output_file"
+  fi
 }
 
 task_status() {
