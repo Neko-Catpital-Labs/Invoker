@@ -45,6 +45,11 @@ describe('SQLiteAdapter', () => {
     return (result[0]?.values ?? []).map((row) => String(row[1]));
   }
 
+  function sqliteScalar(db: SQLiteAdapter, sql: string): number {
+    const result = (db as any).db.exec(sql) as Array<{ values: unknown[][] }>;
+    return Number(result[0]?.values?.[0]?.[0] ?? 0);
+  }
+
   describe('workflow schema', () => {
     it('does not persist a workflow status column on fresh databases', () => {
       expect(workflowColumns(adapter)).not.toContain('status');
@@ -1113,6 +1118,50 @@ describe('SQLiteAdapter', () => {
       expect(firstIdx).toBeLessThan(secondIdx);
       expect(secondIdx).toBeLessThan(thirdIdx);
     });
+
+    it('keeps new task output out of SQLite while preserving readback', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-output-file-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db.saveWorkflow(testWorkflow);
+        db.saveTask('wf-1', makeTask('t-file-output'));
+
+        const payload = 'x'.repeat(1024 * 1024);
+        db.appendTaskOutput('t-file-output', payload);
+
+        expect(sqliteScalar(db, 'SELECT COUNT(*) FROM task_output')).toBe(0);
+        expect(db.getTaskOutput('t-file-output')).toBe(payload);
+
+        db.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('returns legacy SQLite task output before new file-backed output', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-output-legacy-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db.saveWorkflow(testWorkflow);
+        db.saveTask('wf-1', makeTask('t-legacy-output'));
+        (db as any).db.run(
+          'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+          ['t-legacy-output', 'legacy\n'],
+        );
+
+        db.appendTaskOutput('t-legacy-output', 'file\n');
+
+        expect(db.getTaskOutput('t-legacy-output')).toBe('legacy\nfile\n');
+
+        db.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   // ── Conversations ──────────────────────────────────────
@@ -1996,6 +2045,36 @@ describe('SQLiteAdapter', () => {
       const resumeOffset = batch1[0].offset + batch1[0].data.length;
       expect(firstOffset2).toBeGreaterThanOrEqual(resumeOffset);
     });
+
+    it('continues offsets from legacy SQLite spool rows into file-backed chunks', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-spool-legacy-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db.saveWorkflow(testWorkflow);
+        db.saveTask('wf-1', makeTask('t-legacy-spool'));
+        (db as any).db.run(
+          'INSERT INTO output_spool (task_id, offset, data) VALUES (?, ?, ?)',
+          ['t-legacy-spool', 0, 'old'],
+        );
+
+        db.appendOutputChunk('t-legacy-spool', 'new');
+
+        expect(sqliteScalar(db, "SELECT COUNT(*) FROM output_spool WHERE task_id = 't-legacy-spool'")).toBe(1);
+        expect(db.replayOutputFrom('t-legacy-spool', 0)).toEqual([
+          { offset: 0, data: 'old' },
+          { offset: 3, data: 'new' },
+        ]);
+        expect(db.replayOutputFrom('t-legacy-spool', 3)).toEqual([
+          { offset: 3, data: 'new' },
+        ]);
+
+        db.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('output spool: in-memory cache with tail limit', () => {
@@ -2125,6 +2204,37 @@ describe('SQLiteAdapter', () => {
 
       db.close();
     });
+
+    it('reads only the configured tail from file-backed spool storage after restart', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-file-tail-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db1 = await SQLiteAdapter.create(dbPath, { ownerCapability: true, outputTailLimit: 4 });
+        db1.saveWorkflow(testWorkflow);
+        db1.saveTask('wf-1', makeTask('t-file-tail'));
+        for (let i = 0; i < 12; i++) {
+          db1.appendOutputChunk('t-file-tail', `tail ${i}\n`);
+        }
+        expect(sqliteScalar(db1, 'SELECT COUNT(*) FROM output_spool')).toBe(0);
+        db1.close();
+
+        const db2 = await SQLiteAdapter.create(dbPath, { ownerCapability: true, outputTailLimit: 4 });
+        const tail = db2.getOutputTail('t-file-tail');
+
+        expect(tail.map((chunk) => chunk.data)).toEqual([
+          'tail 8\n',
+          'tail 9\n',
+          'tail 10\n',
+          'tail 11\n',
+        ]);
+        expect(db2.replayOutputFrom('t-file-tail', 0)).toHaveLength(12);
+
+        db2.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('output spool: durability and persistence', () => {
@@ -2178,6 +2288,32 @@ describe('SQLiteAdapter', () => {
         expect(chunks2[1].data).toBe('BBB');
 
         db2.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('keeps workflow metadata queries functional after large output writes', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-output-oom-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true, outputTailLimit: 5 });
+        db.saveWorkflow(testWorkflow);
+        db.saveTask('wf-1', makeTask('t-large-output'));
+
+        const payload = 'z'.repeat(256 * 1024);
+        for (let i = 0; i < 24; i++) {
+          db.appendTaskOutput('t-large-output', payload);
+          db.appendOutputChunk('t-large-output', `${i}:${payload}`);
+        }
+
+        expect(sqliteScalar(db, 'SELECT COUNT(*) FROM task_output')).toBe(0);
+        expect(sqliteScalar(db, 'SELECT COUNT(*) FROM output_spool')).toBe(0);
+        expect(db.listWorkflows()).toHaveLength(1);
+        expect(db.getOutputTail('t-large-output')).toHaveLength(5);
+
+        db.close();
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
