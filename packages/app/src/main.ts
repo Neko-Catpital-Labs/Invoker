@@ -346,6 +346,12 @@ function installPackagedSkills(mode: import('@invoker/contracts').BundledSkillsI
 
 async function initServices(options?: InitServicesOptions): Promise<void> {
   messageBus = new IpcBus();
+  if (process.env.NODE_ENV === 'test' && process.env.INVOKER_ENABLE_TEST_QUIT === '1') {
+    messageBus.onRequest('invoker:test-quit-owner', async () => {
+      setImmediate(() => app.quit());
+      return { ok: true };
+    });
+  }
   const invokerHomeRoot = resolveInvokerHomeRoot();
   mkdirSync(invokerHomeRoot, { recursive: true });
   const readOnly = options?.readOnly === true;
