@@ -32,6 +32,7 @@ What it proves:
     Recreate-task authority must survive repeated owner restart churn.
 
 This wrapper runs the committed repros for that stack:
+  - scripts/repro/repro-workflow-mutation-cancellation-hardening.sh
   - scripts/repro/repro-recreate-task-blocked-by-running-workflow-mutation.sh
   - scripts/repro/repro-fix-intent-cancellation-and-stale-ssh-metadata.sh
   - scripts/repro/repro-stale-late-completion-after-reset.sh
@@ -70,6 +71,7 @@ fi
 
 cd "$ROOT_DIR"
 
+step_args=(--expect "$EXPECTATION")
 queue_args=()
 shared_args=(--expect "$EXPECTATION")
 late_completion_args=()
@@ -86,6 +88,10 @@ if [[ "$KEEP_ARTIFACTS" == "1" ]]; then
   late_completion_args+=(--keep-temp)
 fi
 
+echo "==> stack repro: Step 1 — workflow mutation cancellation hardening"
+bash scripts/repro/repro-workflow-mutation-cancellation-hardening.sh "${step_args[@]}"
+
+echo
 echo "==> stack repro: Scenario 1 — recreate-task queue authority"
 bash scripts/repro/repro-recreate-task-blocked-by-running-workflow-mutation.sh "${queue_args[@]}"
 
