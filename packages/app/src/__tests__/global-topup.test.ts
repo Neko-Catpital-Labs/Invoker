@@ -2,14 +2,19 @@ import { describe, expect, it, vi } from 'vitest';
 import type { TaskState } from '@invoker/workflow-core';
 import { dispatchStartedTasksWithGlobalTopup, executeGlobalTopup, finalizeMutationWithGlobalTopup } from '../global-topup.js';
 
-function makeTask(id: string, status: TaskState['status'], attemptId?: string): TaskState {
+function makeTask(
+  id: string,
+  status: TaskState['status'],
+  attemptId?: string,
+  workflowId = 'wf-1',
+): TaskState {
   return {
     id,
     description: id,
     status,
     dependencies: [],
     createdAt: new Date(),
-    config: {},
+    config: { workflowId },
     execution: {
       ...(attemptId ? { selectedAttemptId: attemptId } : {}),
     },
@@ -24,6 +29,59 @@ async function waitForCondition(condition: () => boolean): Promise<void> {
 }
 
 describe('global-topup helpers', () => {
+  it('keeps cross-workflow prestarted tasks in top-up when a workflow scope is explicit', async () => {
+    const scoped = makeTask('wf-1/task-a', 'running', 'attempt-a', 'wf-1');
+    const crossWorkflow = makeTask('wf-2/task-b', 'running', 'attempt-b', 'wf-2');
+    const orchestrator = {
+      startExecution: vi.fn().mockReturnValue([]),
+    };
+    const taskExecutor = {
+      executeTasks: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const result = await dispatchStartedTasksWithGlobalTopup({
+      orchestrator: orchestrator as any,
+      taskExecutor: taskExecutor as any,
+      context: 'test.dispatch-scoped-workflow',
+      started: [scoped, crossWorkflow],
+      scopedWorkflowId: 'wf-1',
+    });
+
+    expect(taskExecutor.executeTasks).toHaveBeenCalledTimes(2);
+    expect(taskExecutor.executeTasks).toHaveBeenNthCalledWith(1, [scoped]);
+    expect(taskExecutor.executeTasks).toHaveBeenNthCalledWith(2, [crossWorkflow]);
+    expect(orchestrator.startExecution).toHaveBeenCalledTimes(1);
+    expect(result.runnable).toEqual([scoped]);
+    expect(result.topup).toEqual([crossWorkflow]);
+  });
+
+  it('dedupes scoped and prestarted top-up tasks before additional global top-up', async () => {
+    const scoped = makeTask('wf-1/task-a', 'running', 'attempt-a', 'wf-1');
+    const crossWorkflow = makeTask('wf-2/task-b', 'running', 'attempt-b', 'wf-2');
+    const extraTopup = makeTask('wf-3/task-c', 'running', 'attempt-c', 'wf-3');
+    const orchestrator = {
+      startExecution: vi.fn().mockReturnValue([scoped, crossWorkflow, extraTopup]),
+    };
+    const taskExecutor = {
+      executeTasks: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const result = await dispatchStartedTasksWithGlobalTopup({
+      orchestrator: orchestrator as any,
+      taskExecutor: taskExecutor as any,
+      context: 'test.dispatch-dedupes-prestarted',
+      started: [scoped, crossWorkflow],
+      scopedWorkflowId: 'wf-1',
+    });
+
+    expect(taskExecutor.executeTasks).toHaveBeenCalledTimes(3);
+    expect(taskExecutor.executeTasks).toHaveBeenNthCalledWith(1, [scoped]);
+    expect(taskExecutor.executeTasks).toHaveBeenNthCalledWith(2, [crossWorkflow]);
+    expect(taskExecutor.executeTasks).toHaveBeenNthCalledWith(3, [extraTopup]);
+    expect(result.runnable).toEqual([scoped]);
+    expect(result.topup).toEqual([crossWorkflow, extraTopup]);
+  });
+
   it('dispatches scoped started tasks before running global top-up', async () => {
     const scoped = makeTask('scoped-task', 'running', 'attempt-scoped');
     const topupTask = makeTask('topup-task', 'running', 'attempt-topup');

@@ -845,6 +845,28 @@ describe('POST /api/workflows/:id/recreate-with-rebase', () => {
     );
   });
 
+  it('keeps cross-workflow started tasks out of the scoped recreate-with-rebase runnable result', async () => {
+    const scoped = makeTask({
+      id: 'wf-1/task-a',
+      config: { workflowId: 'wf-1' },
+      execution: { selectedAttemptId: 'attempt-a' },
+    });
+    const crossWorkflow = makeTask({
+      id: 'wf-2/task-b',
+      config: { workflowId: 'wf-2' },
+      execution: { selectedAttemptId: 'attempt-b' },
+    });
+    mocks.orchestrator.recreateWorkflowFromFreshBase = vi.fn().mockResolvedValue([scoped, crossWorkflow]);
+    mocks.orchestrator.startExecution.mockReturnValue([]);
+
+    const res = await request(port, 'POST', '/api/workflows/wf-1/recreate-with-rebase');
+
+    expect(res.status).toBe(200);
+    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalledTimes(2);
+    expect(mocks.taskExecutor.executeTasks).toHaveBeenNthCalledWith(1, [scoped]);
+    expect(mocks.taskExecutor.executeTasks).toHaveBeenNthCalledWith(2, [crossWorkflow]);
+  });
+
   it('rebase-and-retry still works as deprecated alias', async () => {
     mocks.orchestrator.recreateWorkflowFromFreshBase = vi.fn().mockResolvedValue([makeTask()]);
     const res = await request(port, 'POST', '/api/workflows/wf-1/rebase-and-retry');

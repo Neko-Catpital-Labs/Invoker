@@ -810,6 +810,7 @@ if (isHeadless) {
               logger,
               context: 'standalone.set-merge-branch',
               started,
+              scopedTaskIds: [mergeTask.id],
             });
             return undefined;
           }
@@ -3085,6 +3086,7 @@ if (isHeadless) {
         context: 'ipc.approve',
         started,
         mutationTiming: activeMutationContext?.mutationTiming,
+        scopedTaskIds: [taskId],
       });
       },
     );
@@ -3157,6 +3159,7 @@ if (isHeadless) {
           logger,
           context: 'ipc.restart-task',
           started,
+          scopedTaskIds: [taskId],
         });
       } catch (err) {
         logger.error(`restart-task failed: ${err}`, { module: 'ipc' });
@@ -3304,6 +3307,7 @@ if (isHeadless) {
             logger,
             context: 'ipc.recreate-workflow',
             started,
+            scopedWorkflowId: workflowId,
             mutationTiming: activeMutationContext?.mutationTiming,
           });
         } finally {
@@ -3348,6 +3352,7 @@ if (isHeadless) {
             logger,
             context: 'ipc.recreate-task',
             started,
+            scopedTaskIds: [taskId],
             mutationTiming: activeMutationContext?.mutationTiming,
           });
         } finally {
@@ -3392,6 +3397,7 @@ if (isHeadless) {
             logger,
             context: 'ipc.retry-workflow',
             started: result.data,
+            scopedWorkflowId: workflowId,
             mutationTiming: activeMutationContext?.mutationTiming,
           });
         } finally {
@@ -3434,6 +3440,7 @@ if (isHeadless) {
           logger,
           context: 'ipc.rebase-and-retry',
           started,
+          ...(workflowId ? { scopedWorkflowId: workflowId } : { scopedTaskIds: [taskId] }),
           mutationTiming: activeMutationContext?.mutationTiming,
         });
       } catch (err) {
@@ -3474,6 +3481,7 @@ if (isHeadless) {
           logger,
           context: 'ipc.recreate-with-rebase',
           started,
+          scopedWorkflowId: workflowId,
           mutationTiming: activeMutationContext?.mutationTiming,
         });
       } catch (err) {
@@ -3500,6 +3508,7 @@ if (isHeadless) {
             logger,
             context: 'ipc.set-merge-branch',
             started,
+            scopedTaskIds: [mergeTask.id],
           });
         }
       } catch (err) {
@@ -3546,6 +3555,7 @@ if (isHeadless) {
           context: 'ipc.approve-merge',
           started,
           mutationTiming: activeMutationContext?.mutationTiming,
+          scopedWorkflowId: workflowId,
         });
       } catch (err) {
         logger.error(`approve-merge failed: ${err}`, { module: 'ipc' });
@@ -3594,6 +3604,7 @@ if (isHeadless) {
           context: 'ipc.resolve-conflict',
           started: result.started,
           mutationTiming: activeMutationContext?.mutationTiming,
+          scopedTaskIds: [taskId],
         });
       } catch (err) {
         await finalizeMutationWithGlobalTopup({
@@ -3625,6 +3636,7 @@ if (isHeadless) {
           context: 'ipc.fix-with-agent',
           started,
           mutationTiming: activeMutationContext?.mutationTiming,
+          scopedTaskIds: [taskId],
         });
       } catch (err) {
         await finalizeMutationWithGlobalTopup({
@@ -3654,6 +3666,7 @@ if (isHeadless) {
           logger,
           context: 'ipc.edit-task-command',
           started: result.data,
+          scopedTaskIds: [taskId],
         });
       } catch (err) {
         logger.error(`edit-task-command failed: ${err}`, { module: 'ipc' });
@@ -3675,6 +3688,7 @@ if (isHeadless) {
           logger,
           context: 'ipc.edit-task-prompt',
           started: result.data,
+          scopedTaskIds: [taskId],
         });
       } catch (err) {
         logger.error(`edit-task-prompt failed: ${err}`, { module: 'ipc' });
@@ -3697,6 +3711,7 @@ if (isHeadless) {
           logger,
           context: 'ipc.edit-task-type',
           started: result.data,
+          scopedTaskIds: [taskId],
         });
       } catch (err) {
         logger.error(`edit-task-type failed: ${err}`, { module: 'ipc' });
@@ -3718,6 +3733,7 @@ if (isHeadless) {
           logger,
           context: 'ipc.edit-task-pool',
           started: result.data,
+          scopedTaskIds: [taskId],
         });
       } catch (err) {
         logger.error(`edit-task-pool failed: ${err}`, { module: 'ipc' });
@@ -3739,6 +3755,7 @@ if (isHeadless) {
           logger,
           context: 'ipc.edit-task-agent',
           started: result.data,
+          scopedTaskIds: [taskId],
         });
       } catch (err) {
         logger.error(`edit-task-agent failed: ${err}`, { module: 'ipc' });
@@ -3762,6 +3779,7 @@ if (isHeadless) {
             logger,
             context: 'ipc.set-task-external-gate-policies',
             started: result.data,
+            scopedTaskIds: [taskId],
           });
         } catch (err) {
           logger.error(`set-task-external-gate-policies failed: ${err}`, { module: 'ipc' });
@@ -3813,6 +3831,7 @@ if (isHeadless) {
           logger,
           context: 'ipc.replace-task',
           started: result.data,
+          scopedTaskIds: [taskId, ...result.data.map((task) => task.id)],
         });
         return result.data;
       } catch (err) {

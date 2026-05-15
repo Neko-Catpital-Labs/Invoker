@@ -1403,6 +1403,7 @@ async function headlessApprove(taskId: string, deps: HeadlessDeps): Promise<void
       context: 'headless.approve',
       started,
       mutationTiming: deps.mutationTiming,
+      scopedTaskIds: [taskId],
     });
     process.stdout.write(`Approved task: ${taskId}\n`);
     if (deps.noTrack) {
@@ -1517,6 +1518,7 @@ async function headlessRetryTask(taskId: string, deps: HeadlessDeps): Promise<vo
       logger: deps.logger,
       context: 'headless.restart-task',
       started: result.data,
+      scopedTaskIds: [taskId],
       mutationTiming: deps.mutationTiming,
     });
     if (runnable.length + topup.length === 0) {
@@ -1561,6 +1563,9 @@ async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string
       context: 'headless.fix-with-agent',
       started: result.started,
       mutationTiming: deps.mutationTiming,
+      ...(result.kind === 'recreateWorkflowFromFreshBase'
+        ? { scopedWorkflowId: result.workflowId }
+        : { scopedTaskIds: [taskId] }),
     });
     if (result.kind === 'recreateWorkflowFromFreshBase') {
       process.stdout.write(
@@ -1609,6 +1614,7 @@ async function headlessResolveConflict(taskId: string, deps: HeadlessDeps, agent
       context: 'headless.resolve-conflict',
       started: result.started,
       mutationTiming: deps.mutationTiming,
+      scopedTaskIds: [taskId],
     });
     process.stdout.write(
       deps.invokerConfig.autoApproveAIFixes
@@ -1653,6 +1659,7 @@ async function headlessRebaseAndRetry(taskId: string, deps: HeadlessDeps): Promi
     logger: deps.logger,
     context: 'headless.rebase-and-retry',
     started,
+    scopedWorkflowId: workflowId,
     mutationTiming: deps.mutationTiming,
   });
   if (runnable.length + topup.length === 0) {
@@ -1696,6 +1703,7 @@ async function headlessRecreateWithRebase(workflowTarget: string, deps: Headless
     logger: deps.logger,
     context: 'headless.recreate-with-rebase',
     started,
+    scopedWorkflowId: workflowId,
     mutationTiming: deps.mutationTiming,
   });
   if (runnable.length + topup.length === 0) {
@@ -1857,6 +1865,7 @@ async function headlessForkWorkflow(
     logger: deps.logger,
     context: 'headless.fork-workflow',
     started: result.started,
+    scopedWorkflowId: result.forkedWorkflowId,
   });
   process.stdout.write(
     `Forked workflow ${result.sourceWorkflowId} → ${result.forkedWorkflowId}; ` +
@@ -1973,6 +1982,7 @@ async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Pr
       logger: deps.logger,
       context: 'headless.retry-workflow',
       started: dispatchable,
+      scopedWorkflowId: workflowId,
       mutationTiming: deps.mutationTiming,
     }));
   } finally {
