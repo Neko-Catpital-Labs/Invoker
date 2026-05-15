@@ -31,6 +31,17 @@ function capitalize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
+function getWorkflowReviewUrl(tasks: Map<string, TaskState> | undefined): string | undefined {
+  if (!tasks) return undefined;
+  let fallbackUrl: string | undefined;
+  for (const candidate of tasks.values()) {
+    if (!candidate.execution.reviewUrl) continue;
+    if (candidate.config.isMergeNode) return candidate.execution.reviewUrl;
+    fallbackUrl ??= candidate.execution.reviewUrl;
+  }
+  return fallbackUrl;
+}
+
 export function WorkflowInspector({
   workflow,
   task,
@@ -67,7 +78,7 @@ export function WorkflowInspector({
   const taskVisualStatus = task ? getEffectiveVisualStatus(task.status, task.execution) : null;
   const taskColors = taskVisualStatus ? getStatusColor(taskVisualStatus) : null;
   const workflowVisual = workflow ? workflowStatusVisual(workflow.status) : null;
-  const reviewUrl = task?.execution.reviewUrl;
+  const reviewUrl = task?.execution.reviewUrl ?? getWorkflowReviewUrl(workflowTasks);
   const workflowTaskCount = workflowTasks?.size ?? 0;
   const workflowTitle = workflow ? `${workflow.name || workflow.id}${workflowTaskCount > 0 ? ' task DAG' : ''}` : null;
   const nodeTitle = task?.description ?? workflowTitle ?? 'No node selected';
