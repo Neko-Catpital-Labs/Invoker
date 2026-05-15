@@ -30,7 +30,6 @@ export interface WorkflowRecord {
 }
 
 export interface WorkflowChanges {
-  status?: string;
   updatedAt?: string;
   baseBranch?: string;
   generation?: number;
