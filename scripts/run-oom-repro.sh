@@ -2,6 +2,10 @@
 set -euo pipefail
 
 MODE="${1:-safe}"
+if [[ $# -gt 0 ]]; then
+  shift
+fi
+EXTRA_ARGS=("$@")
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT_PATH="scripts/repro-workflow-mutation-oom.mjs"
 
@@ -14,7 +18,7 @@ if [[ "$MODE" == "safe" ]]; then
   NODE_HEAP_MB="${REPRO_NODE_HEAP_MB:-192}"
   echo "[runner] mode=safe node_heap_mb=${NODE_HEAP_MB}"
   cd "$ROOT_DIR"
-  exec node --max-old-space-size="${NODE_HEAP_MB}" "$SCRIPT_PATH" --mode=safe
+  exec node --max-old-space-size="${NODE_HEAP_MB}" "$SCRIPT_PATH" --mode=safe "${EXTRA_ARGS[@]}"
 fi
 
 if ! command -v docker >/dev/null 2>&1; then
@@ -39,4 +43,4 @@ exec docker run --rm \
   -e REPRO_SQLITE_HARD_HEAP_LIMIT_MB \
   -e REPRO_TIMEOUT_SEC \
   node:26 \
-  node --max-old-space-size="${NODE_HEAP_MB}" "$SCRIPT_PATH" --mode=sandbox
+  node --max-old-space-size="${NODE_HEAP_MB}" "$SCRIPT_PATH" --mode=sandbox "${EXTRA_ARGS[@]}"
