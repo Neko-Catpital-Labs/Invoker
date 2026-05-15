@@ -31,10 +31,9 @@ export class InMemoryPersistence implements OrchestratorPersistence {
     });
   }
 
-  updateWorkflow(workflowId: string, changes: { status?: string; updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review' }): void {
+  updateWorkflow(workflowId: string, changes: { updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review' }): void {
     const wf = this.workflows.get(workflowId);
     if (wf) {
-      if (changes.status) wf.status = changes.status;
       if (changes.updatedAt) wf.updatedAt = changes.updatedAt;
       if (changes.baseBranch !== undefined) wf.baseBranch = changes.baseBranch;
       if (changes.generation !== undefined) wf.generation = changes.generation;
@@ -107,7 +106,6 @@ export class InMemoryPersistence implements OrchestratorPersistence {
 
   private withDerivedStatus<T extends { id: string; status: string }>(workflow: T): T {
     const tasks = this.loadTasks(workflow.id);
-    if (tasks.length === 0) return workflow;
     const rollup = computeWorkflowRollup(tasks);
     return { ...workflow, status: rollup.status, rollup };
   }
