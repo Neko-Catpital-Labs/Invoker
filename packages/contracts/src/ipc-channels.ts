@@ -244,6 +244,47 @@ export interface BundledSkillsStatus {
 
 export type BundledSkillsInstallMode = 'install' | 'update' | 'reinstall';
 
+/** Mode of an embedded task terminal session. */
+export type EmbeddedTerminalSessionMode = 'attached' | 'pty';
+
+/**
+ * Snapshot describing an embedded terminal session.
+ * Returned from open / select / list session channels.
+ */
+export interface EmbeddedTerminalSession {
+  sessionId: string;
+  taskId: string;
+  mode: EmbeddedTerminalSessionMode;
+  cwd?: string;
+  command?: string;
+  args?: string[];
+  exited: boolean;
+  exitCode?: number;
+  createdAt: string;
+}
+
+/** Result of opening an embedded terminal for a task. */
+export interface TerminalOpenResult {
+  opened: boolean;
+  reason?: string;
+  session?: EmbeddedTerminalSession;
+}
+
+/** Event payload streamed when a terminal session emits output. */
+export interface TerminalOutputEvent {
+  sessionId: string;
+  taskId: string;
+  data: string;
+}
+
+/** Event payload emitted when a terminal session exits. */
+export interface TerminalExitEvent {
+  sessionId: string;
+  taskId: string;
+  exitCode: number;
+  signal?: string;
+}
+
 export interface SystemDiagnostics {
   platform: string;
   arch: string;
@@ -497,10 +538,30 @@ export const IpcChannels = {
     response: ActivityLogEntry[];
   },
 
-  // Terminal
+  // Terminal — embedded task terminal sessions
   'invoker:open-terminal': {} as {
     request: [taskId: string];
-    response: { opened: boolean; reason?: string };
+    response: TerminalOpenResult;
+  },
+  'invoker:terminal-list-sessions': {} as {
+    request: [];
+    response: EmbeddedTerminalSession[];
+  },
+  'invoker:terminal-select-session': {} as {
+    request: [sessionId: string];
+    response: EmbeddedTerminalSession | null;
+  },
+  'invoker:terminal-write-input': {} as {
+    request: [sessionId: string, data: string];
+    response: { ok: boolean; reason?: string };
+  },
+  'invoker:terminal-resize': {} as {
+    request: [sessionId: string, cols: number, rows: number];
+    response: { ok: boolean; reason?: string };
+  },
+  'invoker:terminal-close-session': {} as {
+    request: [sessionId: string];
+    response: { closed: boolean };
   },
 
   // Worktree Cleanup
@@ -549,6 +610,12 @@ export const IpcEventChannels = {
   },
   'invoker:workflows-changed': {} as {
     payload: unknown[];
+  },
+  'invoker:terminal-output': {} as {
+    payload: TerminalOutputEvent;
+  },
+  'invoker:terminal-exit': {} as {
+    payload: TerminalExitEvent;
   },
 } as const;
 

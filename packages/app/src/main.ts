@@ -131,7 +131,11 @@ import {
   setWorkflowMergeMode,
 } from './workflow-actions.js';
 import { spawn, execSync } from 'node:child_process';
-import { openExternalTerminalForTask } from './open-terminal-for-task.js';
+import {
+  EmbeddedTerminalManager,
+  createDefaultPtyBackend,
+} from './embedded-terminal-manager.js';
+import type { TerminalExitEvent, TerminalOutputEvent } from '@invoker/contracts';
 import { collectSystemDiagnostics } from './system-diagnostics.js';
 import { installBundledSkills, resolveBundledSkillsStatus } from './bundled-skills.js';
 import { createRequire } from 'node:module';
@@ -225,6 +229,7 @@ const workflowMutationDispatcher = new Map<string, (...args: unknown[]) => Promi
 let activeMutationContext: import('./persisted-workflow-mutation-coordinator.js').WorkflowMutationContext | undefined;
 let hourlyBackupInterval: ReturnType<typeof setInterval> | null = null;
 let writerLock: DbWriterLockResult | null = null;
+let embeddedTerminalManager: EmbeddedTerminalManager | null = null;
 const workflowMutationOwnerId = `owner-${process.pid}-${Date.now()}`;
 const appProcessStartedAt = Date.now();
 
@@ -3822,19 +3827,49 @@ if (isHeadless) {
       return persistence.getActivityLogs(0, 2000);
     });
 
-    // ── External terminal launcher ──────────────────────────────
-    ipcMain.handle('invoker:open-terminal', async (_event, taskId: string): Promise<{ opened: boolean; reason?: string }> => {
+    // ── Embedded terminal sessions ─────────────────────────────
+    // GUI mode: open-terminal routes to the embedded session manager so users
+    // stay inside Invoker. Headless mode keeps using openExternalTerminalForTask
+    // (see headless.ts) — that path is unchanged and still launches the OS
+    // terminal because there is no renderer to host an embedded session.
+    const terminalManager = new EmbeddedTerminalManager({
+      persistence,
+      executorRegistry,
+      executionAgentRegistry: agentRegistry,
+      repoRoot,
+      getActiveHandle: (taskId) => taskHandles.get(taskId),
+      ptyBackend: createDefaultPtyBackend(logger),
+      logger,
+    });
+    embeddedTerminalManager = terminalManager;
+
+    terminalManager.on('output', (evt: TerminalOutputEvent) => {
+      if (!mainWindow || mainWindow.isDestroyed() || !uiInteractive) return;
+      mainWindow.webContents.send('invoker:terminal-output', evt);
+    });
+    terminalManager.on('exit', (evt: TerminalExitEvent) => {
+      if (!mainWindow || mainWindow.isDestroyed() || !uiInteractive) return;
+      mainWindow.webContents.send('invoker:terminal-exit', evt);
+    });
+
+    ipcMain.handle('invoker:open-terminal', async (_event, taskId: string) => {
       logger.info(`invoked for task="${taskId}"`, { module: 'open-terminal' });
-      return openExternalTerminalForTask({
-        taskId,
-        persistence,
-        executorRegistry,
-        executionAgentRegistry: agentRegistry,
-        repoRoot,
-        logger,
-        runningTaskReason:
-          'Task is still running or being fixed with AI. View output in the terminal panel below.',
-      });
+      return terminalManager.openOrSelectSession(taskId);
+    });
+    ipcMain.handle('invoker:terminal-list-sessions', async () => {
+      return terminalManager.listSessions();
+    });
+    ipcMain.handle('invoker:terminal-select-session', async (_event, sessionId: string) => {
+      return terminalManager.selectSession(sessionId);
+    });
+    ipcMain.handle('invoker:terminal-write-input', async (_event, sessionId: string, data: string) => {
+      return terminalManager.writeInput(sessionId, data);
+    });
+    ipcMain.handle('invoker:terminal-resize', async (_event, sessionId: string, cols: number, rows: number) => {
+      return terminalManager.resize(sessionId, cols, rows);
+    });
+    ipcMain.handle('invoker:terminal-close-session', async (_event, sessionId: string) => {
+      return terminalManager.closeSession(sessionId);
     });
 
     seedUiSnapshotCache();
@@ -3878,6 +3913,10 @@ if (isHeadless) {
       if (hourlyBackupInterval) {
         clearInterval(hourlyBackupInterval);
         hourlyBackupInterval = null;
+      }
+      if (embeddedTerminalManager) {
+        await embeddedTerminalManager.dispose().catch(() => {});
+        embeddedTerminalManager = null;
       }
       if (executorRegistry) {
         await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));

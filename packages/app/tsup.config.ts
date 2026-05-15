@@ -8,7 +8,7 @@ export default defineConfig({
   entry: ['src/main.ts', 'src/preload.ts', 'src/headless-client.ts'],
   format: ['cjs'],
   outDir: 'dist',
-  external: ['electron', 'sql.js', 'dockerode', '@invoker/surfaces', '@slack/bolt', 'dotenv'],
+  external: ['electron', 'sql.js', 'dockerode', '@invoker/surfaces', '@slack/bolt', 'dotenv', 'node-pty'],
   noExternal: [
     '@invoker/workflow-core',
     '@invoker/workflow-graph',
