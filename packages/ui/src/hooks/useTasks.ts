@@ -29,18 +29,32 @@ export function useTasks(): UseTasksResult {
   const bootstrapState =
     typeof window !== 'undefined' ? window.__INVOKER_BOOTSTRAP__ : undefined;
   const [tasks, setTasks] = useState<Map<string, TaskState>>(() => {
+    const startedAt = performance.now();
     const next = new Map<string, TaskState>();
     for (const task of bootstrapState?.tasks ?? []) {
       next.set(task.id, task);
     }
+    if (typeof window !== 'undefined' && window.invoker) {
+      void window.invoker.reportUiPerf?.('useTasks_bootstrap_task_map', {
+        durationMs: performance.now() - startedAt,
+        taskCount: next.size,
+      });
+    }
     return next;
   });
   const [workflows, setWorkflows] = useState<Map<string, WorkflowMeta>>(() => {
+    const startedAt = performance.now();
     const next = new Map<string, WorkflowMeta>();
     for (const workflow of bootstrapState?.workflows ?? []) {
       next.set(workflow.id, {
         ...workflow,
         status: normalizeWorkflowStatus((workflow as { status?: string }).status),
+      });
+    }
+    if (typeof window !== 'undefined' && window.invoker) {
+      void window.invoker.reportUiPerf?.('useTasks_bootstrap_workflow_map', {
+        durationMs: performance.now() - startedAt,
+        workflowCount: next.size,
       });
     }
     return next;
@@ -62,12 +76,25 @@ export function useTasks(): UseTasksResult {
   const fetchAll = useCallback((forceRefresh = false) => {
     if (typeof window === 'undefined' || !window.invoker) return;
     const gen = ++getTasksGenerationRef.current;
+    const requestedAt = performance.now();
     window.invoker.getTasks(forceRefresh).then((result) => {
+      const requestDurationMs = performance.now() - requestedAt;
       if (gen !== getTasksGenerationRef.current) {
         return;
       }
       const taskList = result.tasks ?? [];
       const wfList = result.workflows ?? [];
+      const bootstrapTaskCount = bootstrapState?.tasks?.length ?? 0;
+      if (!forceRefresh && bootstrapTaskCount > taskList.length) {
+        void window.invoker?.reportUiPerf?.('startup_snapshot_skipped_smaller_than_bootstrap', {
+          bootstrapTaskCount,
+          snapshotTaskCount: taskList.length,
+          workflowCount: wfList.length,
+          requestDurationMs,
+        });
+        return;
+      }
+      const replaceStartedAt = performance.now();
       // Always replace from server snapshot — empty lists mean "no tasks/workflows" (e.g. after delete).
       setTasks(() => {
         const next = new Map<string, TaskState>();
@@ -83,6 +110,15 @@ export function useTasks(): UseTasksResult {
           });
         }
         return wfMap;
+      });
+      const replaceDurationMs = performance.now() - replaceStartedAt;
+      void window.invoker.reportUiPerf?.('useTasks_snapshot_replace', {
+        taskCount: taskList.length,
+        workflowCount: wfList.length,
+        forceRefresh,
+        requestDurationMs,
+        replaceDurationMs,
+        jsonSizeBytes: new Blob([JSON.stringify(result)]).size,
       });
       if (!reportedStartupSnapshotRef.current) {
         reportedStartupSnapshotRef.current = true;
