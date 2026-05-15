@@ -11,6 +11,7 @@ type GlobalTopupParams = {
   context: string;
   alreadyDispatched?: TaskState[];
   mutationTiming?: WorkflowMutationTiming;
+  dispatchMode?: 'await' | 'fire-and-forget';
 };
 
 type MutationTopupParams = {
@@ -20,6 +21,7 @@ type MutationTopupParams = {
   context: string;
   started?: TaskState[];
   mutationTiming?: WorkflowMutationTiming;
+  dispatchMode?: 'await' | 'fire-and-forget';
 };
 
 function runningExecutionKey(task: TaskState): string {
@@ -46,6 +48,52 @@ function createDispatchBench(
   });
 }
 
+function dispatchTasks({
+  taskExecutor,
+  logger,
+  context,
+  runnable,
+  mutationTiming,
+  bench,
+  spanName,
+  beforeMark,
+  afterMark,
+  dispatchMode,
+}: {
+  taskExecutor: TaskRunner;
+  logger?: Logger;
+  context: string;
+  runnable: TaskState[];
+  mutationTiming?: WorkflowMutationTiming;
+  bench: (phase: string, metadata?: Record<string, unknown>) => void;
+  spanName: string;
+  beforeMark: string;
+  afterMark: string;
+  dispatchMode: 'await' | 'fire-and-forget';
+}): Promise<void> {
+  bench(beforeMark);
+  const run = () => taskExecutor.executeTasks(runnable);
+  if (dispatchMode === 'await') {
+    return mutationTiming
+      ? mutationTiming.span(spanName, { context, runnableCount: runnable.length }, run)
+        .then(() => bench(afterMark))
+      : Promise.resolve().then(run).then(() => bench(afterMark));
+  }
+
+  // TODO: replace app-level workflow mutation leases with atomic DB state transitions plus an outbox for launch/cancel side effects.
+  const dispatchPromise = mutationTiming
+    ? mutationTiming.span(spanName, { context, runnableCount: runnable.length }, run)
+    : Promise.resolve().then(run);
+  void dispatchPromise
+    .then(() => bench(afterMark))
+    .catch((err) => {
+      const message = err instanceof Error ? err.stack ?? err.message : String(err);
+      logger?.error(`[global-topup] ${context}: asynchronous task dispatch failed: ${message}`);
+    });
+  bench(`${afterMark}.accepted`);
+  return Promise.resolve();
+}
+
 export function isDispatchableLaunch(task: TaskState): boolean {
   return task.status === 'running'
     || (
@@ -67,6 +115,7 @@ export async function executeGlobalTopup({
   context,
   alreadyDispatched = [],
   mutationTiming,
+  dispatchMode = mutationTiming ? 'fire-and-forget' : 'await',
 }: GlobalTopupParams): Promise<TaskState[]> {
   const dedupeKeys = new Set(
     alreadyDispatched
@@ -100,19 +149,18 @@ export async function executeGlobalTopup({
   logger?.info(
     `[global-topup] ${context}: dispatching ${runnable.length} additional task(s): [${runnable.map((task) => task.id).join(', ')}]`,
   );
-  if (mutationTiming) {
-    bench('executeGlobalTopup.taskExecutor.executeTasks.before');
-    await mutationTiming.span(
-      'executeGlobalTopup.taskExecutor.executeTasks',
-      { context, runnableCount: runnable.length },
-      () => taskExecutor.executeTasks(runnable),
-    );
-    bench('executeGlobalTopup.taskExecutor.executeTasks.after');
-  } else {
-    bench('executeGlobalTopup.taskExecutor.executeTasks.before');
-    await taskExecutor.executeTasks(runnable);
-    bench('executeGlobalTopup.taskExecutor.executeTasks.after');
-  }
+  await dispatchTasks({
+    taskExecutor,
+    logger,
+    context,
+    runnable,
+    mutationTiming,
+    bench,
+    spanName: 'executeGlobalTopup.taskExecutor.executeTasks',
+    beforeMark: 'executeGlobalTopup.taskExecutor.executeTasks.before',
+    afterMark: 'executeGlobalTopup.taskExecutor.executeTasks.after',
+    dispatchMode,
+  });
   return runnable;
 }
 
@@ -127,6 +175,7 @@ export async function dispatchStartedTasksWithGlobalTopup({
   context,
   started = [],
   mutationTiming,
+  dispatchMode = mutationTiming ? 'fire-and-forget' : 'await',
 }: MutationTopupParams): Promise<{ runnable: TaskState[]; topup: TaskState[] }> {
   const runnable = started.filter(isDispatchableLaunch);
   const bench = createDispatchBench(logger, context, runnable, 'scoped');
@@ -135,19 +184,18 @@ export async function dispatchStartedTasksWithGlobalTopup({
     logger?.info(
       `[global-topup] ${context}: dispatching ${runnable.length} scoped task(s): [${runnable.map((task) => task.id).join(', ')}]`,
     );
-    if (mutationTiming) {
-      bench('dispatchStartedTasksWithGlobalTopup.scopedExecuteTasks.before');
-      await mutationTiming.span(
-        'dispatchStartedTasksWithGlobalTopup.scopedExecuteTasks',
-        { context, runnableCount: runnable.length },
-        () => taskExecutor.executeTasks(runnable),
-      );
-      bench('dispatchStartedTasksWithGlobalTopup.scopedExecuteTasks.after');
-    } else {
-      bench('dispatchStartedTasksWithGlobalTopup.scopedExecuteTasks.before');
-      await taskExecutor.executeTasks(runnable);
-      bench('dispatchStartedTasksWithGlobalTopup.scopedExecuteTasks.after');
-    }
+    await dispatchTasks({
+      taskExecutor,
+      logger,
+      context,
+      runnable,
+      mutationTiming,
+      bench,
+      spanName: 'dispatchStartedTasksWithGlobalTopup.scopedExecuteTasks',
+      beforeMark: 'dispatchStartedTasksWithGlobalTopup.scopedExecuteTasks.before',
+      afterMark: 'dispatchStartedTasksWithGlobalTopup.scopedExecuteTasks.after',
+      dispatchMode,
+    });
   } else {
     bench('dispatchStartedTasksWithGlobalTopup.noScopedRunnable');
   }
@@ -159,6 +207,7 @@ export async function dispatchStartedTasksWithGlobalTopup({
     context,
     alreadyDispatched: runnable,
     mutationTiming,
+    dispatchMode,
   });
   bench('dispatchStartedTasksWithGlobalTopup.executeGlobalTopup.after', { topupCount: topup.length });
   return { runnable, topup };
@@ -176,6 +225,7 @@ export async function finalizeMutationWithGlobalTopup({
   context,
   started = [],
   mutationTiming,
+  dispatchMode,
 }: MutationTopupParams): Promise<{ started: TaskState[]; topup: TaskState[] }> {
   const { topup } = await dispatchStartedTasksWithGlobalTopup({
     orchestrator,
@@ -184,6 +234,7 @@ export async function finalizeMutationWithGlobalTopup({
     context,
     started,
     mutationTiming,
+    dispatchMode,
   });
   return { started, topup };
 }
