@@ -4019,9 +4019,59 @@ console.log(JSON.stringify(out));
       (executor as any).activePrPollers.delete('task-1');
     });
 
-    it('is no-op when no active poller', async () => {
+    it('merged PR completes the gate even when no poller is active (e.g. after process restart)', async () => {
+      const downstream = makeTask({
+        id: 'downstream-after-restart',
+        status: 'running',
+      });
       const orchestrator = {
-        getTask: vi.fn(),
+        getTask: vi.fn((id: string) => ({
+          id,
+          status: 'review_ready',
+          execution: { reviewId: 'owner/repo#42' },
+        })),
+        approve: vi.fn().mockResolvedValue([downstream]),
+      };
+      const persistence = {
+        updateTask: vi.fn(),
+      };
+      const mergeGateProvider = {
+        checkApproval: vi.fn().mockResolvedValue({
+          approved: true,
+          rejected: false,
+          statusText: 'Merged',
+          url: 'https://github.com/owner/repo/pull/42',
+        }),
+      };
+
+      const executor = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        mergeGateProvider: mergeGateProvider as any,
+      });
+
+      const executeTasks = vi.spyOn(executor, 'executeTasks').mockResolvedValue(undefined);
+
+      // No active poller is registered — simulates a fresh process after restart
+      await executor.checkPrApprovalNow('task-with-no-poller');
+
+      expect(mergeGateProvider.checkApproval).toHaveBeenCalledWith({
+        identifier: 'owner/repo#42',
+        cwd: '/tmp',
+      });
+      expect(orchestrator.approve).toHaveBeenCalledWith('task-with-no-poller');
+      expect(executeTasks).toHaveBeenCalledWith([downstream]);
+    });
+
+    it('is no-op when task has no reviewId', async () => {
+      const orchestrator = {
+        getTask: vi.fn((id: string) => ({
+          id,
+          status: 'review_ready',
+          execution: {},
+        })),
         approve: vi.fn(),
       };
       const persistence = {
@@ -4039,10 +4089,11 @@ console.log(JSON.stringify(out));
         mergeGateProvider: mergeGateProvider as any,
       });
 
-      await executor.checkPrApprovalNow('task-with-no-poller');
+      await executor.checkPrApprovalNow('task-without-review-id');
 
       expect(mergeGateProvider.checkApproval).not.toHaveBeenCalled();
       expect(persistence.updateTask).not.toHaveBeenCalled();
+      expect(orchestrator.approve).not.toHaveBeenCalled();
     });
 
     it('is no-op when no mergeGateProvider', async () => {
