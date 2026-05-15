@@ -730,6 +730,9 @@ if (isHeadless) {
           dbPollUpdatedAsUpdated: 0,
           rendererReports: 0,
           maxRendererEventLoopLagMs: 0,
+          maxRendererHiddenEventLoopLagMs: 0,
+          maxRendererCumulativeLagMs: 0,
+          maxRendererTickDeltaMs: 0,
           maxRendererLongTaskMs: 0,
         }),
         resetUiPerfStats: () => {},
@@ -1194,9 +1197,6 @@ if (isHeadless) {
   let lastKnownWorkflowCount = 0;
   let lastActivityLogId = 0;
   let startupWorkflowId: string | null = null;
-  let allWorkflowsHydrated = false;
-  let backgroundHydrationStarted = false;
-  let backgroundHydrationScheduled = false;
   let uiInteractive = false;
   let deferredStartupTriggered = false;
   const traceUiDeltaFlow = process.env.INVOKER_TRACE_UI_DELTA === '1';
@@ -1217,9 +1217,13 @@ if (isHeadless) {
     dbPollUpdatedAsUpdated: 0,
     rendererReports: 0,
     maxRendererEventLoopLagMs: 0,
+    maxRendererHiddenEventLoopLagMs: 0,
+    maxRendererCumulativeLagMs: 0,
+    maxRendererTickDeltaMs: 0,
     maxRendererLongTaskMs: 0,
   };
   const startupMarks = new Map<string, number>();
+  const startupPhaseDetails: Array<Record<string, unknown>> = [];
   const recordStartupMark = (phase: string, extra?: Record<string, unknown>): void => {
     const elapsedMs = Date.now() - appProcessStartedAt;
     startupMarks.set(phase, elapsedMs);
@@ -1237,6 +1241,31 @@ if (isHeadless) {
       // best effort; db can be locked during startup
     }
   };
+  const recordStartupDuration = (phase: string, startedAtMs: number, extra?: Record<string, unknown>): void => {
+    const durationMs = Date.now() - startedAtMs;
+    startupPhaseDetails.push({
+      phase,
+      durationMs,
+      ...(extra ?? {}),
+    });
+    recordStartupMark(phase, {
+      durationMs,
+      ...(extra ?? {}),
+    });
+  };
+  const recordStartupDetail = (phase: string, details: Record<string, unknown>): void => {
+    startupPhaseDetails.push({
+      phase,
+      ...details,
+    });
+    recordStartupMark(phase, details);
+  };
+  const timeStartupPhase = <T>(phase: string, work: () => T, extra?: (result: T) => Record<string, unknown>): T => {
+    const startedAtMs = Date.now();
+    const result = work();
+    recordStartupDuration(phase, startedAtMs, extra?.(result));
+    return result;
+  };
 
   const resetUiPerfStats = (): void => {
     uiPerfStats.mainDeltaToUi = 0;
@@ -1245,12 +1274,16 @@ if (isHeadless) {
     uiPerfStats.dbPollUpdatedAsUpdated = 0;
     uiPerfStats.rendererReports = 0;
     uiPerfStats.maxRendererEventLoopLagMs = 0;
+    uiPerfStats.maxRendererHiddenEventLoopLagMs = 0;
+    uiPerfStats.maxRendererCumulativeLagMs = 0;
+    uiPerfStats.maxRendererTickDeltaMs = 0;
     uiPerfStats.maxRendererLongTaskMs = 0;
   };
 
   const getUiPerfStats = (): Record<string, unknown> => ({
     ...uiPerfStats,
     startupMarks: Object.fromEntries(startupMarks.entries()),
+    startupPhaseDetails: [...startupPhaseDetails],
     ts: new Date().toISOString(),
   });
 
@@ -2175,11 +2208,7 @@ if (isHeadless) {
   }
 
   function loadTaskByIdFromPersistence(taskId: string): TaskState | undefined {
-    for (const workflow of persistence.listWorkflows()) {
-      const task = persistence.loadTasks(workflow.id).find((candidate) => candidate.id === taskId);
-      if (task) return task;
-    }
-    return undefined;
+    return persistence.loadTask(taskId);
   }
 
   workflowMetadataInvalidator = new WorkflowMetadataInvalidator({
@@ -2196,7 +2225,10 @@ if (isHeadless) {
   });
 
   function listWorkflowsByStartupRecency() {
-    return [...persistence.listWorkflows()].sort((left, right) => {
+    const workflows = timeStartupPhase('listWorkflowsByStartupRecency', () => persistence.listWorkflows(), (result) => ({
+      workflowCount: result.length,
+    }));
+    return [...workflows].sort((left, right) => {
       const rightTs = Date.parse(right.updatedAt ?? '') || 0;
       const leftTs = Date.parse(left.updatedAt ?? '') || 0;
       if (rightTs !== leftTs) {
@@ -2210,27 +2242,50 @@ if (isHeadless) {
     const workflows = listWorkflowsByStartupRecency();
     lastKnownWorkflowCount = workflows.length;
     startupWorkflowId = workflows[0]?.id ?? null;
-    allWorkflowsHydrated = workflows.length <= 1;
     if (!startupWorkflowId) {
       logger.info('[init] No workflows available for initial startup bootstrap', { module: 'init' });
       return;
     }
     try {
-      orchestrator.syncFromDb(startupWorkflowId);
+      timeStartupPhase('orchestrator.restore.full-snapshot', () => orchestrator.syncAllFromDb(), () => ({
+        workflowCount: workflows.length,
+        taskCount: orchestrator.getAllTasks().length,
+      }));
+      const snapshotStats = (persistence as unknown as {
+        getLastWorkflowTaskSnapshotStats?: () => Record<string, unknown> | null;
+      }).getLastWorkflowTaskSnapshotStats?.();
+      if (snapshotStats) {
+        recordStartupDetail('sqlite.workflow-metadata.query', {
+          durationMs: snapshotStats.workflowMetadataQueryMs,
+          workflowCount: snapshotStats.workflowCount,
+        });
+        recordStartupDetail('sqlite.tasks.query', {
+          durationMs: snapshotStats.taskQueryMs,
+          taskCount: snapshotStats.taskCount,
+        });
+        recordStartupDetail('sqlite.workflow-rollups.compute', {
+          durationMs: snapshotStats.rollupComputationMs,
+          workflowCount: snapshotStats.workflowCount,
+          taskCount: snapshotStats.taskCount,
+        });
+        recordStartupDetail('sqlite.tasks.deserialize-reconcile', {
+          durationMs: snapshotStats.taskDeserializeReconcileMs,
+          taskCount: snapshotStats.taskCount,
+        });
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      logger.error(`workflow invariant violation during initial workflow bootstrap: ${message}`, {
+      logger.error(`workflow invariant violation during full startup bootstrap: ${message}`, {
         module: 'init',
         error: message,
-        workflowId: startupWorkflowId,
       });
       throw err;
     }
     logger.info(
-      `[init] Bootstrapped startup workflow "${startupWorkflowId}" with ${orchestrator.getAllTasks().length} tasks (${workflows.length} workflows total)`,
+      `[init] Bootstrapped full workflow graph with ${orchestrator.getAllTasks().length} tasks across ${workflows.length} workflows`,
       { module: 'init' },
     );
-    recordStartupMark('startup.initial-workflow.ready', {
+    recordStartupMark('startup.full-graph.ready', {
       workflowId: startupWorkflowId,
       taskCount: orchestrator.getAllTasks().length,
       workflowCount: workflows.length,
@@ -2257,88 +2312,6 @@ if (isHeadless) {
       }
       mainWindow.webContents.send('invoker:workflows-changed', workflows);
     }
-  }
-
-  function startBackgroundHydration(reason: string): void {
-    if (backgroundHydrationStarted || backgroundHydrationScheduled || allWorkflowsHydrated) {
-      return;
-    }
-    const hydrateDelayMs = Number.parseInt(process.env.INVOKER_BACKGROUND_HYDRATE_DELAY_MS ?? '10000', 10) || 10000;
-    backgroundHydrationScheduled = true;
-    setTimeout(() => {
-      backgroundHydrationScheduled = false;
-      backgroundHydrationStarted = true;
-      const workflows = listWorkflowsByStartupRecency();
-      const remainingWorkflowIds = workflows
-        .map((workflow) => workflow.id)
-        .filter((workflowId) => workflowId !== startupWorkflowId);
-      if (remainingWorkflowIds.length === 0) {
-        allWorkflowsHydrated = true;
-        backgroundHydrationStarted = false;
-        recordStartupMark('background-hydration.end', {
-          reason,
-          workflowCount: workflows.length,
-          taskCount: orchestrator.getAllTasks().length,
-        });
-        return;
-      }
-      try {
-        recordStartupMark('background-hydration.start', {
-          reason,
-          startupWorkflowId,
-          remainingWorkflowCount: remainingWorkflowIds.length,
-        });
-      } catch (err) {
-        backgroundHydrationStarted = false;
-        logger.error(
-          `background hydration failed before scheduling: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
-          { module: 'init' },
-        );
-        return;
-      }
-
-      const hydrateNext = (index: number): void => {
-        if (index >= remainingWorkflowIds.length) {
-          allWorkflowsHydrated = true;
-          backgroundHydrationStarted = false;
-          if (ownerMode && !invokerConfig.disableAutoRunOnStartup) {
-            const newlyStarted = relaunchOrphansAndStartReady(orchestrator, logger, 'background-hydration');
-            if (newlyStarted.length > 0) {
-              requireTaskExecutor().executeTasks(newlyStarted);
-            }
-            requireTaskExecutor().resumeMergeGatePolling();
-          }
-          publishOrchestratorSnapshotToRenderer();
-          recordStartupMark('background-hydration.end', {
-            reason,
-            workflowCount: workflows.length,
-            taskCount: orchestrator.getAllTasks().length,
-          });
-          return;
-        }
-
-        const workflowId = remainingWorkflowIds[index];
-        try {
-          orchestrator.hydrateWorkflowFromDb(workflowId);
-          recordStartupMark('background-hydration.workflow', {
-            workflowId,
-            index: index + 1,
-            total: remainingWorkflowIds.length,
-          });
-        } catch (err) {
-          backgroundHydrationStarted = false;
-          logger.error(
-            `background hydration failed for workflow "${workflowId}": ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
-            { module: 'init' },
-          );
-          return;
-        }
-
-        setTimeout(() => hydrateNext(index + 1), 0).unref?.();
-      };
-
-      hydrateNext(0);
-    }, hydrateDelayMs).unref?.();
   }
 
   function startDeferredStartupWork(): void {
@@ -2778,14 +2751,23 @@ if (isHeadless) {
 
     // Register IPC handlers
     ipcMain.on('invoker:get-bootstrap-state-sync', (event) => {
-      event.returnValue = {
-        tasks: orchestrator.getAllTasks(),
-        workflows: listWorkflowsByStartupRecency(),
+      const startedAtMs = Date.now();
+      const tasks = orchestrator.getAllTasks();
+      const workflows = listWorkflowsByStartupRecency();
+      const payload = {
+        tasks,
+        workflows,
         initialWorkflowId: startupWorkflowId,
         appStartedAtEpochMs: appProcessStartedAt,
       };
+      const jsonSizeBytes = Buffer.byteLength(JSON.stringify(payload), 'utf8');
+      recordStartupDuration('bootstrap-ipc.serialize-return', startedAtMs, {
+        taskCount: tasks.length,
+        workflowCount: workflows.length,
+        jsonSizeBytes,
+      });
+      event.returnValue = payload;
     });
-
     registerGuiMutationHandler('invoker:load-plan', async (planTextArg: unknown) => {
       const planText = String(planTextArg);
       const { parsePlan } = await import('./plan-parser.js');
@@ -3003,8 +2985,11 @@ if (isHeadless) {
     });
 
     ipcMain.handle('invoker:get-tasks', (_event, forceRefresh?: boolean) => {
+      const startedAtMs = Date.now();
       if (forceRefresh) {
-        orchestrator.syncAllFromDb();
+        timeStartupPhase('get-tasks.force-refresh.syncAllFromDb', () => orchestrator.syncAllFromDb(), () => ({
+          taskCount: orchestrator.getAllTasks().length,
+        }));
       }
       const tasks = orchestrator.getAllTasks();
       const workflows = persistence.listWorkflows();
@@ -3030,6 +3015,13 @@ if (isHeadless) {
         `get-tasks(forceRefresh=${forceRefresh ? 'true' : 'false'}) returning ${tasks.length} tasks, ${workflows.length} workflows`,
         { module: 'ipc' },
       );
+      if (forceRefresh) {
+        recordStartupDuration('get-tasks.force-refresh.return', startedAtMs, {
+          taskCount: tasks.length,
+          workflowCount: workflows.length,
+          jsonSizeBytes: Buffer.byteLength(JSON.stringify({ tasks, workflows }), 'utf8'),
+        });
+      }
       return { tasks, workflows };
     });
     ipcMain.handle('invoker:get-events', (_event, taskId: string) => persistence.getEvents(taskId));
@@ -3252,15 +3244,23 @@ if (isHeadless) {
         ...(data ?? {}),
       };
       if (metric === 'renderer_event_loop_lag' && typeof data?.lagMs === 'number') {
-        uiPerfStats.maxRendererEventLoopLagMs = Math.max(uiPerfStats.maxRendererEventLoopLagMs, data.lagMs);
+        const hiddenOrUnfocused = data.visibilityState === 'hidden' || data.hasFocus === false;
+        if (hiddenOrUnfocused) {
+          uiPerfStats.maxRendererHiddenEventLoopLagMs = Math.max(uiPerfStats.maxRendererHiddenEventLoopLagMs, data.lagMs);
+        } else {
+          uiPerfStats.maxRendererEventLoopLagMs = Math.max(uiPerfStats.maxRendererEventLoopLagMs, data.lagMs);
+        }
+        if (typeof data.cumulativeLagMs === 'number') {
+          uiPerfStats.maxRendererCumulativeLagMs = Math.max(uiPerfStats.maxRendererCumulativeLagMs, data.cumulativeLagMs);
+        }
+        if (typeof data.tickDeltaMs === 'number') {
+          uiPerfStats.maxRendererTickDeltaMs = Math.max(uiPerfStats.maxRendererTickDeltaMs, data.tickDeltaMs);
+        }
       }
       if (metric === 'renderer_long_task' && typeof data?.durationMs === 'number') {
         uiPerfStats.maxRendererLongTaskMs = Math.max(uiPerfStats.maxRendererLongTaskMs, data.durationMs);
       }
       uiPerfStats.rendererReports += 1;
-      if (metric === 'startup_graph_visible') {
-        startBackgroundHydration('startup_graph_visible');
-      }
       try {
         persistence.writeActivityLog('ui-perf', 'info', JSON.stringify(payload));
       } catch {

@@ -67,6 +67,12 @@ export interface ActivityLogEntry {
   message: string;
 }
 
+export interface WorkflowTaskSnapshot {
+  workflows: Workflow[];
+  tasks: TaskState[];
+  tasksByWorkflowId: Map<string, TaskState[]>;
+}
+
 export interface PersistenceAdapter {
   // Workflows
   saveWorkflow(workflow: Workflow): void;
@@ -78,6 +84,7 @@ export interface PersistenceAdapter {
   saveTask(workflowId: string, task: TaskState): void;
   updateTask(taskId: string, changes: TaskStateChanges): void;
   loadTasks(workflowId: string): TaskState[];
+  loadWorkflowTaskSnapshot?(): WorkflowTaskSnapshot;
   /** Authoritative single-task read by ID, suitable for recovery workflows. */
   loadTask(taskId: string): TaskState | undefined;
   getAllTaskIds(): string[];

@@ -1,6 +1,7 @@
 import type { Logger } from '@invoker/contracts';
 import type { Orchestrator, TaskState } from '@invoker/workflow-core';
 import type { TaskRunner } from '@invoker/execution-engine';
+import { createExecutionBench } from '@invoker/execution-engine';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 
 type GlobalTopupParams = {
@@ -24,6 +25,25 @@ type MutationTopupParams = {
 function runningExecutionKey(task: TaskState): string {
   const attemptId = task.execution.selectedAttemptId?.trim();
   return attemptId ? `attempt:${attemptId}` : `task:${task.id}`;
+}
+
+function createDispatchBench(
+  logger: Logger | undefined,
+  context: string,
+  runnable: TaskState[],
+  dispatchKind: 'global-topup' | 'scoped',
+): (phase: string, metadata?: Record<string, unknown>) => void {
+  return createExecutionBench({
+    module: 'scheduler-dispatch-bench',
+    logger,
+    baseMetadata: {
+      context,
+      dispatchKind,
+      runnableCount: runnable.length,
+      taskIds: runnable.map((task) => task.id),
+      attemptIds: runnable.map((task) => task.execution.selectedAttemptId ?? null),
+    },
+  });
 }
 
 export function isDispatchableLaunch(task: TaskState): boolean {
@@ -53,13 +73,27 @@ export async function executeGlobalTopup({
       .filter(isDispatchableLaunch)
       .map((task) => runningExecutionKey(task)),
   );
+  const startBench = createExecutionBench({
+    module: 'scheduler-dispatch-bench',
+    logger,
+    baseMetadata: {
+      context,
+      dispatchKind: 'global-topup',
+      alreadyDispatchedCount: alreadyDispatched.length,
+    },
+  });
+  startBench('executeGlobalTopup.startExecution.before');
   const started = orchestrator.startExecution();
+  startBench('executeGlobalTopup.startExecution.after', { startedCount: started.length });
   const runnable = started
     .filter(isDispatchableLaunch)
     .filter((task) => !dedupeKeys.has(runningExecutionKey(task)));
+  const bench = createDispatchBench(logger, context, runnable, 'global-topup');
+  bench('executeGlobalTopup.runnableFiltered', { startedCount: started.length });
 
   if (runnable.length === 0) {
     logger?.info(`[global-topup] ${context}: no additional globally ready tasks`);
+    bench('executeGlobalTopup.noRunnable');
     return [];
   }
 
@@ -67,13 +101,17 @@ export async function executeGlobalTopup({
     `[global-topup] ${context}: dispatching ${runnable.length} additional task(s): [${runnable.map((task) => task.id).join(', ')}]`,
   );
   if (mutationTiming) {
+    bench('executeGlobalTopup.taskExecutor.executeTasks.before');
     await mutationTiming.span(
       'executeGlobalTopup.taskExecutor.executeTasks',
       { context, runnableCount: runnable.length },
       () => taskExecutor.executeTasks(runnable),
     );
+    bench('executeGlobalTopup.taskExecutor.executeTasks.after');
   } else {
+    bench('executeGlobalTopup.taskExecutor.executeTasks.before');
     await taskExecutor.executeTasks(runnable);
+    bench('executeGlobalTopup.taskExecutor.executeTasks.after');
   }
   return runnable;
 }
@@ -91,20 +129,29 @@ export async function dispatchStartedTasksWithGlobalTopup({
   mutationTiming,
 }: MutationTopupParams): Promise<{ runnable: TaskState[]; topup: TaskState[] }> {
   const runnable = started.filter(isDispatchableLaunch);
+  const bench = createDispatchBench(logger, context, runnable, 'scoped');
+  bench('dispatchStartedTasksWithGlobalTopup.runnableFiltered', { startedCount: started.length });
   if (runnable.length > 0) {
     logger?.info(
       `[global-topup] ${context}: dispatching ${runnable.length} scoped task(s): [${runnable.map((task) => task.id).join(', ')}]`,
     );
     if (mutationTiming) {
+      bench('dispatchStartedTasksWithGlobalTopup.scopedExecuteTasks.before');
       await mutationTiming.span(
         'dispatchStartedTasksWithGlobalTopup.scopedExecuteTasks',
         { context, runnableCount: runnable.length },
         () => taskExecutor.executeTasks(runnable),
       );
+      bench('dispatchStartedTasksWithGlobalTopup.scopedExecuteTasks.after');
     } else {
+      bench('dispatchStartedTasksWithGlobalTopup.scopedExecuteTasks.before');
       await taskExecutor.executeTasks(runnable);
+      bench('dispatchStartedTasksWithGlobalTopup.scopedExecuteTasks.after');
     }
+  } else {
+    bench('dispatchStartedTasksWithGlobalTopup.noScopedRunnable');
   }
+  bench('dispatchStartedTasksWithGlobalTopup.executeGlobalTopup.before');
   const topup = await executeGlobalTopup({
     orchestrator,
     taskExecutor,
@@ -113,6 +160,7 @@ export async function dispatchStartedTasksWithGlobalTopup({
     alreadyDispatched: runnable,
     mutationTiming,
   });
+  bench('dispatchStartedTasksWithGlobalTopup.executeGlobalTopup.after', { topupCount: topup.length });
   return { runnable, topup };
 }
 

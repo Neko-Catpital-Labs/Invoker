@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import type { MouseEvent } from 'react';
 import type { TaskState, WorkflowMeta, WorkflowStatus } from '../types.js';
 import { deriveWorkflowGraph, layoutWorkflowGraph } from '../lib/workflow-graph.js';
@@ -72,26 +72,43 @@ function WorkflowGraphInner({
   onWorkflowContextMenu,
 }: WorkflowGraphProps): JSX.Element {
   const { fitView } = useReactFlow();
-  const graph = useMemo(() => deriveWorkflowGraph(workflows, tasks), [workflows, tasks]);
-  const positions = useMemo(() => layoutWorkflowGraph(graph), [graph]);
+  const reportedVisibleRef = useRef(false);
+  const graphMetricsRef = useRef({ deriveMs: 0, layoutMs: 0, objectsMs: 0 });
+  const graph = useMemo(() => {
+    const startedAt = performance.now();
+    const nextGraph = deriveWorkflowGraph(workflows, tasks);
+    graphMetricsRef.current.deriveMs = performance.now() - startedAt;
+    return nextGraph;
+  }, [workflows, tasks]);
+  const positions = useMemo(() => {
+    const startedAt = performance.now();
+    const nextPositions = layoutWorkflowGraph(graph);
+    graphMetricsRef.current.layoutMs = performance.now() - startedAt;
+    return nextPositions;
+  }, [graph]);
 
-  const nodes = useMemo<Node<WorkflowNodeData>[]>(() => graph.nodes.map((node) => {
-    const position = positions.get(node.id) ?? { x: 80, y: 80 };
-    const dimmed = statusFilters.size > 0 && !statusFilters.has(node.workflow.status);
-    return {
-      id: node.id,
-      type: 'workflowNode',
-      position,
-      sourcePosition: Position.Right,
-      targetPosition: Position.Left,
-      zIndex: 2,
-      data: {
-        workflow: node.workflow,
-        selected: selectedWorkflowId === node.id,
-        dimmed,
-      },
-    };
-  }), [graph.nodes, positions, selectedWorkflowId, statusFilters]);
+  const nodes = useMemo<Node<WorkflowNodeData>[]>(() => {
+    const startedAt = performance.now();
+    const nextNodes = graph.nodes.map((node) => {
+      const position = positions.get(node.id) ?? { x: 80, y: 80 };
+      const dimmed = statusFilters.size > 0 && !statusFilters.has(node.workflow.status);
+      return {
+        id: node.id,
+        type: 'workflowNode',
+        position,
+        sourcePosition: Position.Right,
+        targetPosition: Position.Left,
+        zIndex: 2,
+        data: {
+          workflow: node.workflow,
+          selected: selectedWorkflowId === node.id,
+          dimmed,
+        },
+      };
+    });
+    graphMetricsRef.current.objectsMs = performance.now() - startedAt;
+    return nextNodes;
+  }, [graph.nodes, positions, selectedWorkflowId, statusFilters]);
 
   const edges = useMemo<Edge[]>(() => graph.edges.map((edge) => ({
     id: `workflow:${edge.source}->${edge.target}`,
@@ -124,6 +141,29 @@ function WorkflowGraphInner({
     event.preventDefault();
     onWorkflowContextMenu(event, node.id);
   }, [onWorkflowContextMenu]);
+
+  useEffect(() => {
+    if (reportedVisibleRef.current || graph.nodes.length === 0 || typeof window === 'undefined') {
+      return;
+    }
+    const frame = requestAnimationFrame(() => {
+      const visibleNode = document.querySelector('[data-testid^="workflow-node-"]');
+      if (!visibleNode) return;
+      reportedVisibleRef.current = true;
+      void window.invoker?.reportUiPerf?.('startup_workflow_graph_visible', {
+        nodeCount: graph.nodes.length,
+        edgeCount: graph.edges.length,
+        deriveMs: graphMetricsRef.current.deriveMs,
+        layoutMs: graphMetricsRef.current.layoutMs,
+        objectsMs: graphMetricsRef.current.objectsMs,
+        elapsedMs: Math.round(performance.now()),
+        processElapsedMs: window.__INVOKER_BOOTSTRAP__?.appStartedAtEpochMs
+          ? Date.now() - window.__INVOKER_BOOTSTRAP__.appStartedAtEpochMs
+          : undefined,
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [graph.edges.length, graph.nodes.length]);
 
   if (graph.nodes.length === 0) {
     return (

@@ -109,6 +109,45 @@ describe('SQLiteAdapter', () => {
       expect(loaded[0].dependencies).toEqual(['dep1']);
       expect(loaded[0].status).toBe('pending');
     });
+
+    it('loads all workflows and tasks in one startup snapshot', () => {
+      const wf2: Workflow = {
+        ...testWorkflow,
+        id: 'wf-2',
+        name: 'Second Workflow',
+      };
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveWorkflow(wf2);
+      adapter.saveTask('wf-1', makeTask('wf-1/task-1', { status: 'completed', config: { workflowId: 'wf-1' } }));
+      adapter.saveTask('wf-2', makeTask('wf-2/task-1', { status: 'failed', config: { workflowId: 'wf-2' } }));
+
+      const snapshot = adapter.loadWorkflowTaskSnapshot();
+
+      expect(snapshot.workflows.map((workflow) => workflow.id).sort()).toEqual(['wf-1', 'wf-2']);
+      expect(snapshot.tasks.map((task) => task.id).sort()).toEqual(['wf-1/task-1', 'wf-2/task-1']);
+      expect(snapshot.tasksByWorkflowId.get('wf-1')?.map((task) => task.id)).toEqual(['wf-1/task-1']);
+      expect(snapshot.tasksByWorkflowId.get('wf-2')?.map((task) => task.id)).toEqual(['wf-2/task-1']);
+    });
+
+    it('computes snapshot workflow rollups from the snapshot task rows', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('wf-1/task-1', { status: 'completed', config: { workflowId: 'wf-1' } }));
+      adapter.saveTask('wf-1', makeTask('wf-1/task-2', { status: 'failed', config: { workflowId: 'wf-1' } }));
+
+      const [snapshotWorkflow] = adapter.loadWorkflowTaskSnapshot().workflows;
+      const [listedWorkflow] = adapter.listWorkflows();
+
+      expect(snapshotWorkflow.rollup).toEqual(listedWorkflow.rollup);
+      expect(snapshotWorkflow.status).toBe(listedWorkflow.status);
+      expect(snapshotWorkflow.rollup?.countsByStatus.failed).toBe(1);
+      expect(snapshotWorkflow.rollup?.countsByStatus.completed).toBe(1);
+    });
+
+    it('creates an index for workflow task lookups', () => {
+      const result = (adapter as any).db.exec('PRAGMA index_list(tasks)') as Array<{ values: unknown[][] }>;
+      const indexNames = (result[0]?.values ?? []).map((row) => String(row[1]));
+      expect(indexNames).toContain('idx_tasks_workflow_id');
+    });
   });
 
   describe('updateTask', () => {

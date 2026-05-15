@@ -143,6 +143,42 @@ describe('useTasks', () => {
     expect(result.current.tasks.get('t1')?.id).toBe('t1');
   });
 
+  it('does not replace a full bootstrap with a smaller initial snapshot', async () => {
+    const bootA = makeUITask({ id: 'boot-a', description: 'Bootstrap A' });
+    const bootB = makeUITask({ id: 'boot-b', description: 'Bootstrap B' });
+    const smaller = makeUITask({ id: 'boot-a', description: 'Smaller A' });
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
+      tasks: [bootA, bootB],
+      workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'running' }],
+    };
+    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
+      getTasks: vi.fn().mockResolvedValue({
+        tasks: [smaller],
+        workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'running' }],
+      }),
+      reportUiPerf: vi.fn(),
+      onTaskDelta: vi.fn(() => () => {}),
+      onWorkflowsChanged: vi.fn(() => () => {}),
+    };
+
+    const { result } = renderHook(() => useTasks());
+
+    await waitFor(() => {
+      expect(window.invoker.getTasks).toHaveBeenCalled();
+    });
+
+    expect(result.current.tasks.size).toBe(2);
+    expect(result.current.tasks.get('boot-a')?.description).toBe('Bootstrap A');
+    expect(result.current.tasks.get('boot-b')?.description).toBe('Bootstrap B');
+    expect(window.invoker.reportUiPerf).toHaveBeenCalledWith(
+      'startup_snapshot_skipped_smaller_than_bootstrap',
+      expect.objectContaining({
+        bootstrapTaskCount: 2,
+        snapshotTaskCount: 1,
+      }),
+    );
+  });
+
   it('passes forceRefresh flag to getTasks when requested', async () => {
     const getTasks = vi.fn().mockResolvedValue({ tasks: [], workflows: [] });
     (window as unknown as { invoker: Record<string, unknown> }).invoker = {
