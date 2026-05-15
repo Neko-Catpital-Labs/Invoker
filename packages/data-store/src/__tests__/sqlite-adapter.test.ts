@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, statSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import initSqlJs from 'sql.js';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
 import type { Workflow, Conversation } from '../adapter.js';
 import { createAttempt } from '@invoker/workflow-core';
@@ -246,7 +247,65 @@ describe('SQLiteAdapter', () => {
       const loaded = adapter.loadWorkflow('wf-1');
       expect(loaded).toBeDefined();
       expect(loaded!.name).toBe('Test Workflow');
-      expect(loaded!.status).toBe('running');
+      expect(loaded!.status).toBe('pending');
+      expect(loaded!.rollup?.countsByStatus.pending).toBe(0);
+    });
+
+    it('does not create a persisted workflow status column on fresh init', () => {
+      const columns = (adapter as any).queryAll('PRAGMA table_info(workflows)') as Array<{ name: string }>;
+      expect(columns.map((column) => column.name)).not.toContain('status');
+    });
+
+    it('migrates old workflow status column away while preserving metadata', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-status-migration-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const SQL = await initSqlJs();
+        const oldDb = new SQL.Database();
+        oldDb.run(`
+          CREATE TABLE workflows (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            status TEXT DEFAULT 'running',
+            plan_file TEXT,
+            repo_url TEXT,
+            intermediate_repo_url TEXT,
+            branch TEXT,
+            parent_remote TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+          );
+          INSERT INTO workflows (
+            id, name, status, plan_file, repo_url, intermediate_repo_url, branch, parent_remote, created_at, updated_at
+          ) VALUES (
+            'wf-old', 'Old Workflow', 'failed', 'plan.yaml', 'https://example.test/repo.git', 'https://example.test/intermediate.git',
+            'feature/old', 'origin', '2024-01-01T00:00:00.000Z', '2024-01-02T00:00:00.000Z'
+          );
+        `);
+        writeFileSync(dbPath, Buffer.from(oldDb.export()));
+        oldDb.close();
+
+        const migrated = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        const columns = (migrated as any).queryAll('PRAGMA table_info(workflows)') as Array<{ name: string }>;
+        const workflow = migrated.loadWorkflow('wf-old')!;
+
+        expect(columns.map((column) => column.name)).not.toContain('status');
+        expect(workflow).toMatchObject({
+          id: 'wf-old',
+          name: 'Old Workflow',
+          status: 'pending',
+          planFile: 'plan.yaml',
+          repoUrl: 'https://example.test/repo.git',
+          intermediateRepoUrl: 'https://example.test/intermediate.git',
+          branch: 'feature/old',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-02T00:00:00.000Z',
+        });
+        migrated.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
 
     it('derives workflow status and rollup details from task rows', () => {
@@ -354,28 +413,29 @@ describe('SQLiteAdapter', () => {
   });
 
   describe('updateWorkflow', () => {
-    it('updates workflow status', () => {
+    it('does not accept workflow status as persisted mutable state', () => {
       adapter.saveWorkflow(testWorkflow);
+      // @ts-expect-error workflow status is derived from tasks, not persisted.
       adapter.updateWorkflow('wf-1', { status: 'completed' });
 
       const loaded = adapter.loadWorkflow('wf-1');
-      expect(loaded!.status).toBe('completed');
+      expect(loaded!.status).toBe('pending');
     });
 
     it('updates workflow updatedAt', () => {
       adapter.saveWorkflow(testWorkflow);
       const newTime = '2099-01-01T00:00:00.000Z';
-      adapter.updateWorkflow('wf-1', { status: 'failed', updatedAt: newTime });
+      adapter.updateWorkflow('wf-1', { updatedAt: newTime });
 
       const loaded = adapter.loadWorkflow('wf-1');
-      expect(loaded!.status).toBe('failed');
+      expect(loaded!.status).toBe('pending');
       expect(loaded!.updatedAt).toBe(newTime);
     });
 
     it('auto-sets updatedAt when not provided', () => {
       adapter.saveWorkflow(testWorkflow);
       const before = new Date().toISOString();
-      adapter.updateWorkflow('wf-1', { status: 'completed' });
+      adapter.updateWorkflow('wf-1', { generation: 1 });
 
       const loaded = adapter.loadWorkflow('wf-1');
       expect(loaded!.updatedAt >= before).toBe(true);
@@ -1280,7 +1340,7 @@ describe('SQLiteAdapter', () => {
       const workflows = adapter.listWorkflows();
       expect(workflows[0].id).toBe('wf-1');
       expect(workflows[0].name).toBe('Test Workflow');
-      expect(workflows[0].status).toBe('running');
+      expect(workflows[0].status).toBe('pending');
       expect(workflows[0].planFile).toBe('plan.yaml');
       expect(workflows[0].repoUrl).toBe('https://github.com/test');
       expect(workflows[0].onFinish).toBe('merge');
@@ -1315,7 +1375,7 @@ describe('SQLiteAdapter', () => {
       adapter.updateWorkflow('wf-1', { baseBranch: 'release' });
 
       const loaded = adapter.loadWorkflow('wf-1');
-      expect(loaded!.status).toBe('running');
+      expect(loaded!.status).toBe('pending');
       expect(loaded!.baseBranch).toBe('release');
     });
   });
@@ -1350,7 +1410,7 @@ describe('SQLiteAdapter', () => {
       adapter.updateWorkflow('wf-1', { generation: 5 });
 
       const loaded = adapter.loadWorkflow('wf-1');
-      expect(loaded!.status).toBe('running');
+      expect(loaded!.status).toBe('pending');
       expect(loaded!.baseBranch).toBe('master');
       expect(loaded!.generation).toBe(5);
     });
