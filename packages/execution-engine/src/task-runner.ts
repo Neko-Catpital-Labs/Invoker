@@ -1755,9 +1755,7 @@ export class TaskRunner {
             execution: { reviewStatus: status.statusText },
           });
           if (status.approved) {
-            this.logger.info(`[merge-gate] PR ${task.execution.reviewId} approved (refresh), completing merge gate`);
-            this.stopPrPolling(task.id);
-            await this.orchestrator.approve(task.id);
+            await this.completeMergeGateOnApproval(task.id, task.execution.reviewId, ' (refresh)');
           } else if (status.rejected) {
             this.logger.info(`[merge-gate] PR ${task.execution.reviewId} rejected (refresh): ${status.statusText}`);
             this.stopPrPolling(task.id);
@@ -1766,6 +1764,26 @@ export class TaskRunner {
           this.logger.error(`[merge-gate] PR status check error for ${task.id}`, { err });
         }
       }
+    }
+  }
+
+  /**
+   * Shared completion path for an approved merge gate.
+   *
+   * Stops the PR poller, calls `orchestrator.approve`, and dispatches any
+   * downstream tasks that the orchestrator returned as runnable — so a merged
+   * GitHub PR is enough to unblock the rest of the workflow DAG.
+   */
+  private async completeMergeGateOnApproval(
+    taskId: string,
+    reviewId: string,
+    context: string,
+  ): Promise<void> {
+    this.logger.info(`[merge-gate] PR ${reviewId} approved${context}, completing merge gate`);
+    this.stopPrPolling(taskId);
+    const started = await this.orchestrator.approve(taskId);
+    if (started && started.length > 0) {
+      this.executeTasks(started);
     }
   }
 
@@ -1787,9 +1805,7 @@ export class TaskRunner {
         });
 
         if (status.approved) {
-          this.logger.info(`[merge-gate] PR ${reviewId} approved, completing merge gate`);
-          this.stopPrPolling(taskId);
-          await this.orchestrator.approve(taskId);
+          await this.completeMergeGateOnApproval(taskId, reviewId, '');
         } else if (status.rejected) {
           this.logger.info(`[merge-gate] PR ${reviewId} rejected: ${status.statusText}`);
           this.stopPrPolling(taskId);
@@ -1813,12 +1829,10 @@ export class TaskRunner {
 
   async checkPrApprovalNow(taskId: string): Promise<void> {
     if (!this.mergeGateProvider) return;
-    if (!this.activePrPollers.has(taskId)) return;
 
-    // Read reviewId from persistence
     const task = this.orchestrator.getTask(taskId);
     const reviewId = task?.execution.reviewId;
-    if (!reviewId) return;
+    if (!task || !reviewId) return;
 
     try {
       const manualCwd = task.execution.workspacePath ?? this.cwd;
@@ -1832,9 +1846,7 @@ export class TaskRunner {
       });
 
       if (status.approved) {
-        this.logger.info(`[merge-gate] PR ${reviewId} approved (manual check), completing merge gate`);
-        this.stopPrPolling(taskId);
-        await this.orchestrator.approve(taskId);
+        await this.completeMergeGateOnApproval(taskId, reviewId, ' (manual check)');
       } else if (status.rejected) {
         this.logger.info(`[merge-gate] PR ${reviewId} rejected (manual check): ${status.statusText}`);
         this.stopPrPolling(taskId);
