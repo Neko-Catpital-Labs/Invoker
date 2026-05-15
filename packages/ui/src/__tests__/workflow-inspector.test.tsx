@@ -67,7 +67,7 @@ describe('WorkflowInspector', () => {
         onToggleAdvanced={() => {}}
       />,
     );
-    expect(screen.getByRole('button', { name: 'Maximize inspector' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show' })).toBeInTheDocument();
 
     rerender(
       <WorkflowInspector
@@ -94,7 +94,7 @@ describe('WorkflowInspector', () => {
       />,
     );
 
-    expect(screen.getAllByText('Fix cancellation race').length).toBeGreaterThan(0);
+    expect(screen.getByText('Fix cancellation race')).toBeInTheDocument();
     expect(screen.getByText('failed')).toBeInTheDocument();
   });
 
