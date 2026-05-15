@@ -18,9 +18,18 @@ import type {
 } from '@invoker/workflow-core';
 import {
   computeWorkflowRollupFromSummaries,
+  isDiscardedAttempt,
   normalizeRunnerKind,
 } from '@invoker/workflow-core';
-import type { PersistenceAdapter, Workflow, TaskEvent, ActivityLogEntry, Conversation, ConversationMessage } from './adapter.js';
+import type {
+  PersistenceAdapter,
+  Workflow,
+  WorkflowTaskSnapshot,
+  TaskEvent,
+  ActivityLogEntry,
+  Conversation,
+  ConversationMessage,
+} from './adapter.js';
 
 /**
  * Rewrite `pnpm test packages/<pkg>/...` (incorrect root-level invocation)
@@ -90,6 +99,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
   private outputTailLimit: number;
   private outputTailCache = new Map<string, OutputChunk[]>();
   private writeTransactionDepth = 0;
+  private lastWorkflowTaskSnapshotStats: Record<string, unknown> | null = null;
 
   /** Use SQLiteAdapter.create() instead. */
   private constructor(db: SqlJsDatabase, dbPath: string | null, options?: { readOnly?: boolean; outputTailLimit?: number }) {
@@ -453,6 +463,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
       CREATE INDEX IF NOT EXISTS idx_task_output_task
         ON task_output(task_id);
 
+      CREATE INDEX IF NOT EXISTS idx_tasks_workflow_id
+        ON tasks(workflow_id);
+
       CREATE TABLE IF NOT EXISTS attempts (
         id TEXT PRIMARY KEY,
         node_id TEXT NOT NULL,
@@ -620,6 +633,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     // Replace old attempt_number index with created_at index
     this.db.run('DROP INDEX IF EXISTS idx_attempts_node');
     this.db.run('CREATE INDEX IF NOT EXISTS idx_attempts_node_created ON attempts(node_id, created_at)');
+    this.db.run('CREATE INDEX IF NOT EXISTS idx_tasks_workflow_id ON tasks(workflow_id)');
 
     if (!this.readOnly) {
       this.migrateTestCommands();
@@ -798,6 +812,54 @@ export class SQLiteAdapter implements PersistenceAdapter {
     const workflowIds = rows.map((row: any) => String(row.id));
     const rollups = this.loadWorkflowRollups(workflowIds);
     return rows.map((row: any) => this.rowToWorkflow(row, rollups.get(String(row.id))));
+  }
+
+  loadWorkflowTaskSnapshot(): WorkflowTaskSnapshot {
+    const totalStartedAt = Date.now();
+    const workflowQueryStartedAt = Date.now();
+    const workflowRows = this.queryAll('SELECT * FROM workflows ORDER BY created_at DESC');
+    const workflowMetadataQueryMs = Date.now() - workflowQueryStartedAt;
+    const taskQueryStartedAt = Date.now();
+    const taskRows = this.queryAll('SELECT * FROM tasks ORDER BY workflow_id ASC, id ASC');
+    const taskQueryMs = Date.now() - taskQueryStartedAt;
+    const tasksByWorkflowId = new Map<string, TaskState[]>();
+    const workflowIds = workflowRows.map((row: any) => String(row.id));
+    const rollupStartedAt = Date.now();
+    const rollups = this.computeWorkflowRollupsFromRows(workflowIds, taskRows);
+    const rollupComputationMs = Date.now() - rollupStartedAt;
+    const tasks: TaskState[] = [];
+
+    const deserializeStartedAt = Date.now();
+    for (const row of taskRows) {
+      const task = this.reconcileTaskFromSelectedAttempt(this.rowToTask(row));
+      tasks.push(task);
+      const workflowId = task.config.workflowId ?? '';
+      if (!workflowId) continue;
+      const workflowTasks = tasksByWorkflowId.get(workflowId) ?? [];
+      workflowTasks.push(task);
+      tasksByWorkflowId.set(workflowId, workflowTasks);
+    }
+    const taskDeserializeReconcileMs = Date.now() - deserializeStartedAt;
+
+    const snapshot = {
+      workflows: workflowRows.map((row: any) => this.rowToWorkflow(row, rollups.get(String(row.id)))),
+      tasks,
+      tasksByWorkflowId,
+    };
+    this.lastWorkflowTaskSnapshotStats = {
+      workflowMetadataQueryMs,
+      taskQueryMs,
+      rollupComputationMs,
+      taskDeserializeReconcileMs,
+      totalMs: Date.now() - totalStartedAt,
+      workflowCount: snapshot.workflows.length,
+      taskCount: tasks.length,
+    };
+    return snapshot;
+  }
+
+  getLastWorkflowTaskSnapshotStats(): Record<string, unknown> | null {
+    return this.lastWorkflowTaskSnapshotStats ? { ...this.lastWorkflowTaskSnapshotStats } : null;
   }
 
   // ── Tasks ─────────────────────────────────────────────
@@ -1741,6 +1803,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
       workflowIds,
     );
 
+    return this.computeWorkflowRollupsFromRows(workflowIds, taskRows);
+  }
+
+  private computeWorkflowRollupsFromRows(
+    workflowIds: string[],
+    taskRows: Record<string, unknown>[],
+  ): Map<string, WorkflowRollup> {
+    const rollups = new Map<string, WorkflowRollup>();
     const tasksByWorkflow = new Map<string, WorkflowRollupTaskSummary[]>();
     for (const row of taskRows as any[]) {
       const workflowId = String(row.workflow_id);
@@ -1888,6 +1958,13 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
     const attempt = this.loadAttempt(attemptId);
     if (!attempt) return task;
+
+    if (isDiscardedAttempt(attempt)) {
+      return {
+        ...task,
+        status: 'stale',
+      };
+    }
 
     if (attempt.status === 'failed') {
       return {

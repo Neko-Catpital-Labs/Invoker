@@ -29,9 +29,11 @@ function channelToEventMethod(channel: string): string {
 // ── Build the API object from the channel registries ────────
 
 const api: Record<string, unknown> = {};
+const bootstrapStartedAt = Date.now();
 const bootstrapState = ipcRenderer.sendSync('invoker:get-bootstrap-state-sync') as
   | { tasks?: unknown[]; workflows?: unknown[]; appStartedAtEpochMs?: number }
   | undefined;
+const bootstrapDurationMs = Date.now() - bootstrapStartedAt;
 
 // Invoke channels: each becomes (...args) => ipcRenderer.invoke(channel, ...args)
 for (const channel of Object.keys(IpcChannels)) {
@@ -78,3 +80,15 @@ for (const channel of Object.keys(IpcEventChannels)) {
 
 contextBridge.exposeInMainWorld('invoker', api as InvokerAPI);
 contextBridge.exposeInMainWorld('__INVOKER_BOOTSTRAP__', bootstrapState ?? { tasks: [], workflows: [] });
+
+setTimeout(() => {
+  ipcRenderer.invoke('invoker:report-ui-perf', 'preload_bootstrap_sync', {
+    durationMs: bootstrapDurationMs,
+    taskCount: bootstrapState?.tasks?.length ?? 0,
+    workflowCount: bootstrapState?.workflows?.length ?? 0,
+    jsonSizeBytes: Buffer.byteLength(JSON.stringify(bootstrapState ?? { tasks: [], workflows: [] }), 'utf8'),
+    processElapsedMs: bootstrapState?.appStartedAtEpochMs
+      ? Date.now() - bootstrapState.appStartedAtEpochMs
+      : undefined,
+  }).catch(() => undefined);
+}, 0);
