@@ -36,6 +36,13 @@ cat >"$TMP_DIR/repo/node_modules/electron/install.js" <<'JS'
 const fs = require('node:fs');
 const path = require('node:path');
 fs.writeFileSync(path.join(__dirname, '..', '..', 'installer-ran'), 'yes\n');
+if (process.env.FAKE_ELECTRON_INSTALL_SUCCESS === '1') {
+  const distDir = path.join(__dirname, 'dist');
+  fs.mkdirSync(distDir, { recursive: true });
+  fs.writeFileSync(path.join(distDir, 'electron'), '#!/usr/bin/env sh\nexit 0\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(__dirname, 'path.txt'), 'electron\n');
+  process.exit(0);
+}
 console.error('fake Electron installer ran');
 process.exit(42);
 JS
@@ -79,6 +86,17 @@ if ! grep -q "Electron is not installed. Provision this machine before running I
   echo "repro: missing pre-provisioning error message" >&2
   echo "--- stderr ---" >&2
   cat "$TMP_DIR/stderr" >&2
+  exit 1
+fi
+
+(
+  cd "$TMP_DIR/repo"
+  FAKE_ELECTRON_INSTALL_SUCCESS=1 node scripts/electron.cjs --install-only
+) >"$TMP_DIR/install-stdout" 2>"$TMP_DIR/install-stderr"
+if [[ ! -f "$INSTALLER_MARKER" ]]; then
+  echo "repro: install-only did not invoke Electron provisioning" >&2
+  echo "--- stderr ---" >&2
+  cat "$TMP_DIR/install-stderr" >&2
   exit 1
 fi
 
