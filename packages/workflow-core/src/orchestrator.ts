@@ -184,6 +184,21 @@ export interface OrchestratorPersistence {
     generation?: number;
   }>;
   loadTasks(workflowId: string): TaskState[];
+  loadWorkflowTaskSnapshot?(): {
+    workflows: Array<{
+      id: string;
+      name: string;
+      status: string;
+      createdAt: string;
+      updatedAt: string;
+      baseBranch?: string;
+      onFinish?: string;
+      mergeMode?: 'manual' | 'automatic' | 'external_review';
+      generation?: number;
+    }>;
+    tasks: TaskState[];
+    tasksByWorkflowId: Map<string, TaskState[]>;
+  };
   // Attempt methods
   saveAttempt(attempt: Attempt): void;
   loadAttempts(nodeId: string): Attempt[];
@@ -3512,10 +3527,11 @@ export class Orchestrator {
   syncAllFromDb(): void {
     this.stateMachine.clear();
     this.activeWorkflowIds.clear();
-    const workflows = this.persistence.listWorkflows();
+    const snapshot = this.persistence.loadWorkflowTaskSnapshot?.();
+    const workflows = snapshot?.workflows ?? this.persistence.listWorkflows();
     for (const wf of workflows) {
       this.activeWorkflowIds.add(wf.id);
-      const tasks = this.persistence.loadTasks(wf.id);
+      const tasks = snapshot?.tasksByWorkflowId.get(wf.id) ?? this.persistence.loadTasks(wf.id);
       for (const task of tasks) {
         this.stateMachine.restoreTask(task);
       }

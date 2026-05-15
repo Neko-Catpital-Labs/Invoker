@@ -142,6 +142,30 @@ class InMemoryPersistence implements OrchestratorPersistence {
     return Array.from(this.workflows.values()).map((workflow) => this.withDerivedStatus(workflow));
   }
 
+  loadWorkflowTaskSnapshot(): {
+    workflows: Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string }>;
+    tasks: TaskState[];
+    tasksByWorkflowId: Map<string, TaskState[]>;
+  } {
+    const tasksByWorkflowId = new Map<string, TaskState[]>();
+    for (const { workflowId, task } of this.tasks.values()) {
+      const workflowTasks = tasksByWorkflowId.get(workflowId) ?? [];
+      workflowTasks.push(task);
+      tasksByWorkflowId.set(workflowId, workflowTasks);
+    }
+    const workflows = Array.from(this.workflows.values()).map((workflow) => {
+      const tasks = tasksByWorkflowId.get(workflow.id) ?? [];
+      if (tasks.length === 0) return workflow;
+      const rollup = computeWorkflowRollup(tasks);
+      return { ...workflow, status: rollup.status, rollup };
+    });
+    return {
+      workflows,
+      tasks: Array.from(this.tasks.values()).map((entry) => entry.task),
+      tasksByWorkflowId,
+    };
+  }
+
   private withDerivedStatus<T extends { id: string; status: string }>(workflow: T): T {
     const tasks = this.loadTasks(workflow.id);
     if (tasks.length === 0) return workflow;
@@ -4430,6 +4454,27 @@ describe('Orchestrator', () => {
       orchestrator.syncAllFromDb();
       expect(orchestrator.getTask('a1')!.status).toBe('completed');
       expect(orchestrator.getTask('b1')!.status).toBe('pending');
+      expect(orchestrator.getAllTasks()).toHaveLength(4);
+    });
+
+    it('syncAllFromDb uses a bulk snapshot when the adapter provides one', () => {
+      orchestrator.loadPlan({
+        name: 'Plan A',
+        tasks: [{ id: 'a1', description: 'A1', command: 'echo a1' }],
+      });
+      orchestrator.loadPlan({
+        name: 'Plan B',
+        tasks: [{ id: 'b1', description: 'B1', command: 'echo b1' }],
+      });
+      const snapshotSpy = vi.spyOn(persistence as any, 'loadWorkflowTaskSnapshot');
+      const loadTasksSpy = vi.spyOn(persistence, 'loadTasks');
+
+      orchestrator.syncAllFromDb();
+
+      expect(snapshotSpy).toHaveBeenCalledTimes(1);
+      expect(loadTasksSpy).not.toHaveBeenCalled();
+      expect(orchestrator.getTask('a1')).toBeDefined();
+      expect(orchestrator.getTask('b1')).toBeDefined();
       expect(orchestrator.getAllTasks()).toHaveLength(4);
     });
 
