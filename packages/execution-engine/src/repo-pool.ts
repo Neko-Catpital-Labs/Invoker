@@ -59,6 +59,7 @@ export class RepoPool {
   private cloneLocks = new Map<string, Promise<string>>();
   /** Chain of operations per repo to serialize git operations. */
   private repoChains = new Map<string, Promise<unknown>>();
+  private inFlightRebaseRefreshes = new Map<string, Promise<string>>();
 
   constructor(config: RepoPoolConfig) {
     this.cacheDir = config.cacheDir;
@@ -83,6 +84,16 @@ export class RepoPool {
    * Force-fetch mirror and sync origin/<baseBranch> (rebase-and-retry). Ignores remoteFetchForPool.
    */
   async refreshMirrorForRebase(repoUrl: string, baseBranch: string, timing?: RepoPoolTiming): Promise<string> {
+    const refreshKey = `${repoUrl}\0${baseBranch}`;
+    const inFlight = this.inFlightRebaseRefreshes.get(refreshKey);
+    if (inFlight) {
+      timing?.mark('RepoPool.refreshMirrorForRebase.coalesced', 'completed', {
+        repoUrl,
+        baseBranch,
+      });
+      return inFlight;
+    }
+
     const prev = this.repoChains.get(repoUrl) ?? Promise.resolve();
     const queuedAtMs = Date.now();
     const next = prev.then(() => {
@@ -94,7 +105,14 @@ export class RepoPool {
       return this.doRefreshMirrorForRebase(repoUrl, baseBranch, timing);
     });
     this.repoChains.set(repoUrl, next.catch(() => {}));
-    return next;
+    let shared!: Promise<string>;
+    shared = next.finally(() => {
+      if (this.inFlightRebaseRefreshes.get(refreshKey) === shared) {
+        this.inFlightRebaseRefreshes.delete(refreshKey);
+      }
+    });
+    this.inFlightRebaseRefreshes.set(refreshKey, shared);
+    return shared;
   }
 
   private async doRefreshMirrorForRebase(repoUrl: string, baseBranch: string, timing?: RepoPoolTiming): Promise<string> {
@@ -141,6 +159,26 @@ export class RepoPool {
    * Remove Invoker-managed branches (experiment/*, invoker/*) from the mirror and linked worktrees.
    */
   async removeManagedBranchesInMirror(repoUrl: string, branches: string[], timing?: RepoPoolTiming): Promise<void> {
+    if (branches.length === 0) {
+      timing?.mark('RepoPool.removeManagedBranchesInMirror', 'completed', {
+        repoUrl,
+        enabled: isWorkspaceCleanupEnabled(),
+        skipped: true,
+        reason: 'no-branches',
+        branchCount: 0,
+      });
+      return;
+    }
+    if (!isWorkspaceCleanupEnabled()) {
+      timing?.mark('RepoPool.removeManagedBranchesInMirror', 'completed', {
+        repoUrl,
+        enabled: false,
+        skipped: true,
+        reason: 'disabled',
+        branchCount: branches.length,
+      });
+      return;
+    }
     const prev = this.repoChains.get(repoUrl) ?? Promise.resolve();
     const queuedAtMs = Date.now();
     const next = prev.then(() => {
@@ -156,17 +194,6 @@ export class RepoPool {
   }
 
   private async doRemoveManagedBranchesInMirror(repoUrl: string, branches: string[], timing?: RepoPoolTiming): Promise<void> {
-    // Gated: with attemptId in branch hash, leftover refs cannot collide with
-    // future attempts, so deletion is unnecessary. Set
-    // INVOKER_ENABLE_WORKSPACE_CLEANUP=1 to restore the rebase-and-retry
-    // branch sweep.
-    if (!isWorkspaceCleanupEnabled()) {
-      timing?.mark('RepoPool.doRemoveManagedBranchesInMirror', 'completed', {
-        enabled: false,
-        branchCount: branches.length,
-      });
-      return;
-    }
     const dir = this.cloneDir(repoUrl);
     if (!existsSync(dir) || !this.worktreeBaseDir) {
       timing?.mark('RepoPool.doRemoveManagedBranchesInMirror', 'completed', {

@@ -15,63 +15,6 @@ import {
   type TaskDeltaPipeline,
 } from '../lib/task-delta-pipeline.js';
 
-function deriveWorkflowStatusFromTasks(tasks: TaskState[]): WorkflowMeta['status'] {
-  if (tasks.length === 0) return 'pending';
-  const counts = {
-    pending: 0,
-    running: 0,
-    fixing_with_ai: 0,
-    completed: 0,
-    failed: 0,
-    needs_input: 0,
-    blocked: 0,
-    review_ready: 0,
-    awaiting_approval: 0,
-    stale: 0,
-  };
-
-  for (const task of tasks) {
-    counts[task.status] += 1;
-  }
-
-  if (counts.fixing_with_ai > 0) return 'fixing_with_ai';
-  if (counts.running > 0) return 'running';
-  if (counts.awaiting_approval > 0) return 'awaiting_approval';
-  if (counts.review_ready > 0) return 'review_ready';
-  if (counts.blocked > 0 || counts.needs_input > 0) return 'blocked';
-  if (counts.pending === tasks.length) return 'pending';
-  if (counts.pending > 0) return 'running';
-  if (counts.failed > 0) return 'failed';
-  if (counts.completed > 0 && counts.completed + counts.stale === tasks.length) return 'completed';
-  if (counts.stale === tasks.length) return 'stale';
-  return 'running';
-}
-
-function deriveWorkflowStatuses(
-  workflowMap: Map<string, WorkflowMeta>,
-  taskMap: Map<string, TaskState>,
-): Map<string, WorkflowMeta> {
-  const tasksByWorkflow = new Map<string, TaskState[]>();
-  for (const task of taskMap.values()) {
-    const workflowId = task.config.workflowId;
-    if (!workflowId) continue;
-    const workflowTasks = tasksByWorkflow.get(workflowId) ?? [];
-    workflowTasks.push(task);
-    tasksByWorkflow.set(workflowId, workflowTasks);
-  }
-
-  let changed = false;
-  const next = new Map<string, WorkflowMeta>();
-  for (const [workflowId, workflow] of workflowMap) {
-    const status = deriveWorkflowStatusFromTasks(tasksByWorkflow.get(workflowId) ?? []);
-    if (workflow.status !== status) {
-      changed = true;
-    }
-    next.set(workflowId, { ...workflow, status });
-  }
-  return changed ? next : workflowMap;
-}
-
 export interface UseTasksResult {
   tasks: Map<string, TaskState>;
   workflows: Map<string, WorkflowMeta>;
@@ -102,9 +45,6 @@ export function useTasks(): UseTasksResult {
     }
     return next;
   });
-  useEffect(() => {
-    setWorkflows((prev) => deriveWorkflowStatuses(prev, tasks));
-  }, [tasks]);
   const workflowsRef = useRef(workflows);
   workflowsRef.current = workflows;
   const deltaPipelineRef = useRef<TaskDeltaPipeline | null>(null);

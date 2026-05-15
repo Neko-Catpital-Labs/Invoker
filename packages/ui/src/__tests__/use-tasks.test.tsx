@@ -163,7 +163,7 @@ describe('useTasks', () => {
     });
   });
 
-  it('recomputes workflow status from task deltas after failed metadata becomes pending or running', async () => {
+  it('keeps backend-sent workflow status until workflows-changed refreshes metadata', async () => {
     const taskA = makeUITask({ id: 'wf-1/task-a', workflowId: 'wf-1', status: 'failed' });
     const taskB = makeUITask({ id: 'wf-1/task-b', workflowId: 'wf-1', status: 'completed' });
     (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
@@ -207,23 +207,105 @@ describe('useTasks', () => {
     });
 
     await waitFor(() => {
-      expect(result.current.workflows.get('wf-1')?.status).toBe('pending');
+      expect(result.current.tasks.get('wf-1/task-a')?.status).toBe('pending');
+      expect(result.current.tasks.get('wf-1/task-b')?.status).toBe('pending');
     });
+    expect(result.current.workflows.get('wf-1')?.status).toBe('failed');
+
+    act(() => {
+      workflowsChangedHandler!([
+        {
+          id: 'wf-1',
+          name: 'Workflow 1',
+          status: 'pending',
+          rollup: {
+            status: 'pending',
+            countsByStatus: {
+              pending: 2,
+              running: 0,
+              fixing_with_ai: 0,
+              completed: 0,
+              failed: 0,
+              needs_input: 0,
+              blocked: 0,
+              review_ready: 0,
+              awaiting_approval: 0,
+              stale: 0,
+            },
+            failedTasks: [],
+            fixingTasks: [],
+            waitingTasks: [],
+          },
+        },
+      ]);
+    });
+
+    expect(result.current.workflows.get('wf-1')?.status).toBe('pending');
+    expect(result.current.workflows.get('wf-1')?.rollup?.countsByStatus.pending).toBe(2);
+    expect(result.current.workflows.get('wf-1')?.name).toBe('Workflow 1');
+  });
+
+  it('does not locally recompute failed dependency paths from task deltas', async () => {
+    const failedTask = makeUITask({
+      id: 'wf-1/add-regression-coverage',
+      workflowId: 'wf-1',
+      status: 'running',
+    });
+    const downstreamTask = makeUITask({
+      id: 'wf-1/run-focused-tests',
+      workflowId: 'wf-1',
+      status: 'pending',
+      dependencies: ['wf-1/add-regression-coverage'],
+    });
+    const mergeTask = makeUITask({
+      id: '__merge__wf-1',
+      workflowId: 'wf-1',
+      status: 'pending',
+      isMergeNode: true,
+      dependencies: ['wf-1/run-focused-tests'],
+    });
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
+      tasks: [failedTask, downstreamTask, mergeTask],
+      workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'running' }],
+    };
+    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
+      getTasks: vi.fn().mockResolvedValue({
+        tasks: [failedTask, downstreamTask, mergeTask],
+        workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'running' }],
+      }),
+      onTaskDelta: vi.fn((cb: (delta: unknown) => void) => {
+        taskDeltaHandler = cb;
+        return () => {};
+      }),
+      onWorkflowsChanged: vi.fn((cb: (wfList: unknown[]) => void) => {
+        workflowsChangedHandler = cb;
+        return () => {};
+      }),
+    };
+
+    const { result } = renderHook(() => useTasks());
+    expect(result.current.workflows.get('wf-1')?.status).toBe('running');
 
     await act(async () => {
       taskDeltaHandler!({
         type: 'updated',
-        taskId: 'wf-1/task-a',
-        changes: { status: 'running' },
-        taskStateVersion: 3,
-        previousTaskStateVersion: 2,
+        taskId: 'wf-1/add-regression-coverage',
+        changes: { status: 'failed' },
+        taskStateVersion: 2,
+        previousTaskStateVersion: 1,
       });
       await new Promise((resolve) => setTimeout(resolve, 110));
     });
 
     await waitFor(() => {
-      expect(result.current.workflows.get('wf-1')?.status).toBe('running');
+      expect(result.current.tasks.get('wf-1/add-regression-coverage')?.status).toBe('failed');
     });
-    expect(result.current.workflows.get('wf-1')?.name).toBe('Workflow 1');
+    expect(result.current.workflows.get('wf-1')?.status).toBe('running');
+
+    act(() => {
+      workflowsChangedHandler!([{ id: 'wf-1', name: 'Workflow 1', status: 'failed' }]);
+    });
+
+    expect(result.current.workflows.get('wf-1')?.status).toBe('failed');
   });
 });

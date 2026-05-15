@@ -115,6 +115,7 @@ interface TaskPanelProps {
   onSetMergeBranch?: (workflowId: string, baseBranch: string) => Promise<void>;
   mergeMode?: string;
   onSetMergeMode?: (workflowId: string, mergeMode: string) => Promise<void>;
+  showApprovalActions?: boolean;
 }
 
 function formatDate(date?: Date | string): string {
@@ -236,6 +237,7 @@ export function TaskPanel({
   onSetMergeBranch,
   mergeMode,
   onSetMergeMode,
+  showApprovalActions = true,
 }: TaskPanelProps) {
   const [isEditingCommand, setIsEditingCommand] = useState(false);
   const [editCommandValue, setEditCommandValue] = useState('');
@@ -392,6 +394,7 @@ export function TaskPanel({
 
       {/* Status badge */}
       <div className="flex items-center gap-2">
+        <span className="text-sm text-gray-400">Task Status</span>
         <span
           className={`inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium ${colors.bg} ${colors.text}`}
         >
@@ -655,11 +658,13 @@ export function TaskPanel({
               }}
               data-testid="command-display"
             >
-              {task.config.prompt ? (
-                <p className="text-gray-300 whitespace-pre-wrap">{task.config.prompt}</p>
-              ) : (
-                <code className="text-green-300 font-mono whitespace-pre-wrap">{task.config.command}</code>
-              )}
+              <div data-testid="prompt-command-display">
+                {task.config.prompt ? (
+                  <p className="text-gray-300 whitespace-pre-wrap">{task.config.prompt}</p>
+                ) : (
+                  <code className="text-green-300 font-mono whitespace-pre-wrap">{task.config.command}</code>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -1121,7 +1126,7 @@ export function TaskPanel({
           </button>
         )}
 
-        {(task.status === 'awaiting_approval' || task.status === 'review_ready') && (
+        {showApprovalActions && (task.status === 'awaiting_approval' || task.status === 'review_ready') && (
           <div className="flex gap-2">
             <button
               onClick={() => onApprove(task)}

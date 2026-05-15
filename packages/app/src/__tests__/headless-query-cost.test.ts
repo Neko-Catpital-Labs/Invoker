@@ -12,6 +12,11 @@ const noopLogger = {
   child: vi.fn(function () { return noopLogger; }),
 };
 
+const attemptsByTaskId = new Map<string, Array<{ id: string; agentSessionId?: string }>>([
+  ['wf-1/task-a', [{ id: 'wf-1/task-a-attempt-1', agentSessionId: 'sess-wf-1-task-a' }]],
+  ['wf-1/task-b', [{ id: 'wf-1/task-b-attempt-1', agentSessionId: 'sess-wf-1-task-b' }]],
+]);
+
 function makeWorkflow(id: string, status: 'completed' | 'failed' | 'running') {
   return { id, name: `Workflow ${id}`, status, createdAt: '2025-01-01T00:00:00Z', updatedAt: '2025-01-01T00:01:00Z' };
 }
@@ -96,6 +101,7 @@ describe('headless query cost', () => {
         readOnly: false,
         listWorkflows: vi.fn(() => [makeWorkflow('wf-1', 'completed')]),
         loadTasks: vi.fn(() => []),
+        loadAttempts: vi.fn((taskId: string) => attemptsByTaskId.get(taskId) ?? []),
       } as unknown as SQLiteAdapter,
       commandService: {} as CommandService,
       executorRegistry: {} as any,
@@ -204,6 +210,54 @@ describe('headless query cost', () => {
 
     expect(output1).toBe(output2);
   });
+
+  it('loads the exact persisted attempt session before selectedAttemptId for query cost', async () => {
+    mockDeps.orchestrator.getAllTasks = vi.fn(() => [
+      makeTask('wf-1', 'task-a', {
+        execution: {
+          agentSessionId: 'sess-wf-1-task-a',
+          selectedAttemptId: 'wf-1/task-a-selected',
+        } as any,
+      }),
+    ] as any);
+    (mockDeps.persistence.loadAttempts as any) = vi.fn(() => [
+      { id: 'wf-1/task-a-selected', agentSessionId: 'sess-stale' },
+      { id: 'wf-1/task-a-exact', agentSessionId: 'sess-wf-1-task-a' },
+    ]);
+
+    await runHeadless(['query', 'cost', '--output', 'json'], mockDeps);
+
+    expect(mockDriver.loadSession).toHaveBeenCalledWith('sess-wf-1-task-a');
+    expect(mockDriver.loadSession).not.toHaveBeenCalledWith('sess-stale');
+
+    const output = stdoutSpy.mock.calls[0][0] as string;
+    const parsed = JSON.parse(output);
+    expect(parsed.totals.eventCount).toBe(2);
+  });
+
+  it('falls back to the latest persisted attempt session for query cost when no selected attempt exists', async () => {
+    mockDeps.orchestrator.getAllTasks = vi.fn(() => [
+      makeTask('wf-1', 'task-b', {
+        execution: {
+          agentSessionId: undefined,
+          selectedAttemptId: undefined,
+        } as any,
+      }),
+    ] as any);
+    (mockDeps.persistence.loadAttempts as any) = vi.fn(() => [
+      { id: 'wf-1/task-b-older', agentSessionId: 'sess-old-b' },
+      { id: 'wf-1/task-b-latest', agentSessionId: 'sess-wf-1-task-b' },
+    ]);
+
+    await runHeadless(['query', 'cost', '--output', 'json'], mockDeps);
+
+    expect(mockDriver.loadSession).toHaveBeenCalledWith('sess-wf-1-task-b');
+    expect(mockDriver.loadSession).not.toHaveBeenCalledWith('sess-old-b');
+
+    const output = stdoutSpy.mock.calls[0][0] as string;
+    const parsed = JSON.parse(output);
+    expect(parsed.totals.eventCount).toBe(1);
+  });
 });
 
 describe('headless query cost-events', () => {
@@ -252,6 +306,7 @@ describe('headless query cost-events', () => {
         readOnly: false,
         listWorkflows: vi.fn(() => [makeWorkflow('wf-1', 'completed')]),
         loadTasks: vi.fn(() => []),
+        loadAttempts: vi.fn((taskId: string) => attemptsByTaskId.get(taskId) ?? []),
       } as unknown as SQLiteAdapter,
       commandService: {} as CommandService,
       executorRegistry: {} as any,
@@ -290,9 +345,15 @@ describe('headless query cost-events', () => {
       expect(event).toHaveProperty('outputTokens');
       expect(event).toHaveProperty('workflowId');
       expect(event).toHaveProperty('taskId');
+      expect(event).toHaveProperty('attemptId');
       expect(event).toHaveProperty('model');
       expect(event).toHaveProperty('confidence');
     }
+    expect(parsed.map((event: any) => event.attemptId)).toEqual([
+      'wf-1/task-a-attempt-1',
+      'wf-1/task-a-attempt-1',
+      'wf-1/task-b-attempt-1',
+    ]);
   });
 
   it('outputs events in JSONL format (one per line)', async () => {
@@ -356,6 +417,130 @@ describe('headless query cost-events', () => {
     const output2 = stdoutSpy.mock.calls[0][0] as string;
 
     expect(output1).toBe(output2);
+  });
+
+  it('uses selectedAttemptId when no exact persisted session match exists', async () => {
+    mockDeps.orchestrator.getAllTasks = vi.fn(() => [
+      makeTask('wf-1', 'task-a', {
+        execution: {
+          agentName: 'codex',
+          selectedAttemptId: 'wf-1/task-a-selected',
+        } as any,
+      }),
+    ] as any);
+    (mockDeps.persistence.loadAttempts as any) = vi.fn(() => [
+      { id: 'wf-1/task-a-older', agentSessionId: 'sess-older' },
+      { id: 'wf-1/task-a-selected', agentSessionId: 'sess-wf-1-task-a' },
+    ]);
+
+    await runHeadless(['query', 'cost-events', '--output', 'json'], mockDeps);
+    const output = stdoutSpy.mock.calls[0][0] as string;
+    const parsed = JSON.parse(output);
+    expect(parsed[0].attemptId).toBe('wf-1/task-a-selected');
+  });
+
+  it('prefers an exact persisted agentSessionId match before selectedAttemptId', async () => {
+    mockDeps.orchestrator.getAllTasks = vi.fn(() => [
+      makeTask('wf-1', 'task-a', {
+        execution: {
+          agentSessionId: 'sess-wf-1-task-a',
+          selectedAttemptId: 'wf-1/task-a-selected',
+        } as any,
+      }),
+    ] as any);
+    (mockDeps.persistence.loadAttempts as any) = vi.fn(() => [
+      { id: 'wf-1/task-a-selected', agentSessionId: 'sess-stale' },
+      { id: 'wf-1/task-a-exact', agentSessionId: 'sess-wf-1-task-a' },
+    ]);
+
+    await runHeadless(['query', 'cost-events', '--output', 'json'], mockDeps);
+    const output = stdoutSpy.mock.calls[0][0] as string;
+    const parsed = JSON.parse(output);
+    expect(parsed.map((event: any) => event.attemptId)).toEqual([
+      'wf-1/task-a-exact',
+      'wf-1/task-a-exact',
+    ]);
+  });
+
+  it('falls back to the latest persisted attempt when no selected attempt is available', async () => {
+    mockDeps.orchestrator.getAllTasks = vi.fn(() => [
+      makeTask('wf-1', 'task-b', {
+        execution: {
+          agentSessionId: undefined,
+          selectedAttemptId: undefined,
+        } as any,
+      }),
+    ] as any);
+    (mockDeps.persistence.loadAttempts as any) = vi.fn(() => [
+      { id: 'wf-1/task-b-older', agentSessionId: 'sess-old-b' },
+      { id: 'wf-1/task-b-latest', agentSessionId: 'sess-wf-1-task-b' },
+    ]);
+
+    await runHeadless(['query', 'cost-events', '--output', 'json'], mockDeps);
+    const output = stdoutSpy.mock.calls[0][0] as string;
+    const parsed = JSON.parse(output);
+    expect(parsed.map((event: any) => event.attemptId)).toEqual([
+      'wf-1/task-b-latest',
+    ]);
+  });
+
+  it('serializes resolved persisted attempt IDs deterministically', async () => {
+    mockDeps.orchestrator.getAllTasks = vi.fn(() => [
+      makeTask('wf-1', 'task-a', {
+        execution: {
+          agentName: 'codex',
+          selectedAttemptId: 'wf-1/task-a-selected',
+        } as any,
+      }),
+    ] as any);
+    (mockDeps.persistence.loadAttempts as any) = vi.fn(() => [
+      { id: 'wf-1/task-a-older', agentSessionId: 'sess-older' },
+      { id: 'wf-1/task-a-selected', agentSessionId: 'sess-wf-1-task-a' },
+    ]);
+
+    await runHeadless(['query', 'cost-events', '--output', 'json'], mockDeps);
+    const output = stdoutSpy.mock.calls[0][0] as string;
+
+    expect(output).toBe(JSON.stringify([
+      {
+        eventId: 'codex-turn-0',
+        agentSessionId: 'sess-wf-1-task-a',
+        agentName: 'codex',
+        source: 'openai',
+        workflowId: 'wf-1',
+        taskId: 'wf-1/task-a',
+        attemptId: 'wf-1/task-a-selected',
+        runnerKind: 'worktree',
+        inputTokens: 100,
+        outputTokens: 50,
+        cachedTokens: 0,
+        totalTokens: 150,
+        model: 'gpt-4o',
+        pricingVersion: '0',
+        estimatedCostUsd: 0,
+        confidence: 'exact',
+        timestamp: '2025-01-01T00:00:00Z',
+      },
+      {
+        eventId: 'codex-turn-1',
+        agentSessionId: 'sess-wf-1-task-a',
+        agentName: 'codex',
+        source: 'openai',
+        workflowId: 'wf-1',
+        taskId: 'wf-1/task-a',
+        attemptId: 'wf-1/task-a-selected',
+        runnerKind: 'worktree',
+        inputTokens: 200,
+        outputTokens: 80,
+        cachedTokens: 0,
+        totalTokens: 280,
+        model: 'gpt-4o',
+        pricingVersion: '0',
+        estimatedCostUsd: 0,
+        confidence: 'exact',
+        timestamp: '2025-01-01T00:00:00Z',
+      },
+    ]) + '\n');
   });
 
   it('supports JSONL piping without special handling', async () => {

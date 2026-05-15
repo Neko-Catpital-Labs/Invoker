@@ -1420,6 +1420,86 @@ describe('Orchestrator', () => {
         expect(task!.config.runnerKind).toBe('ssh');
         expect(task!.config.poolId).toBe('ssh-light');
       });
+
+      it('applies defaultPoolId to command tasks when no route rule matches', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          defaultPoolId: 'mixed-local-ssh',
+          executorRoutingRules: [
+            { regex: '\\bpnpm(?:\\s|$)', poolId: 'pnpm-ssh', strategy: 'route' },
+          ],
+          availablePoolIds: ['mixed-local-ssh', 'pnpm-ssh'],
+        });
+
+        routedOrchestrator.loadPlan({
+          name: 'default-pool-command',
+          tasks: [{ id: 't1', description: 'Echo hello', command: 'echo hello' }],
+        });
+
+        const task = routedOrchestrator.getTask('t1');
+        expect(task!.config.runnerKind).toBe('ssh');
+        expect(task!.config.poolId).toBe('mixed-local-ssh');
+      });
+
+      it('applies defaultPoolId to prompt-only tasks', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          defaultPoolId: 'mixed-local-ssh',
+          availablePoolIds: ['mixed-local-ssh'],
+        });
+
+        routedOrchestrator.loadPlan({
+          name: 'default-pool-prompt',
+          tasks: [{ id: 't1', description: 'Prompt task', prompt: 'inspect the code' }],
+        });
+
+        const task = routedOrchestrator.getTask('t1');
+        expect(task!.config.runnerKind).toBe('ssh');
+        expect(task!.config.poolId).toBe('mixed-local-ssh');
+      });
+
+      it('lets route strategy override defaultPoolId', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          defaultPoolId: 'mixed-local-ssh',
+          executorRoutingRules: [
+            { regex: '\\bpnpm(?:\\s|$)', poolId: 'pnpm-ssh', strategy: 'route' },
+          ],
+          availablePoolIds: ['mixed-local-ssh', 'pnpm-ssh'],
+        });
+
+        routedOrchestrator.loadPlan({
+          name: 'default-pool-route-override',
+          tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test' }],
+        });
+
+        const task = routedOrchestrator.getTask('t1');
+        expect(task!.config.runnerKind).toBe('ssh');
+        expect(task!.config.poolId).toBe('pnpm-ssh');
+      });
+
+      it('throws when defaultPoolId is not configured as an execution pool', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          defaultPoolId: 'missing-pool',
+          availablePoolIds: ['other-pool'],
+        });
+
+        expect(() => {
+          routedOrchestrator.loadPlan({
+            name: 'default-pool-missing',
+            tasks: [{ id: 't1', description: 'Prompt task', prompt: 'inspect the code' }],
+          });
+        }).toThrow('defaultPoolId');
+      });
     });
 
     // ── atomicity ───────────────────────────────────────────
@@ -5024,6 +5104,37 @@ describe('Orchestrator', () => {
       expect(result).toHaveLength(1);
       expect(result[0].status).toBe('pending');
       expect(orchestrator.getTask('B')!.status).toBe('pending');
+    });
+
+    it('restartTask clears stale launch metadata when resetting to pending', () => {
+      orchestrator.loadPlan({
+        name: 'pending-restart-launch-metadata-test',
+        tasks: [
+          { id: 'A', description: 'Root', command: 'echo A' },
+          { id: 'B', description: 'Depends on A', command: 'echo B', dependencies: ['A'] },
+        ],
+      });
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'A', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
+      );
+      persistence.updateTask('B', {
+        execution: {
+          phase: 'launching',
+          launchStartedAt: new Date('2026-04-16T05:25:16.531Z'),
+          launchCompletedAt: new Date('2026-04-16T05:26:16.531Z'),
+        },
+      });
+      orchestrator.syncAllFromDb();
+
+      const result = orchestrator.retryTask('B');
+      const task = orchestrator.getTask('B')!;
+
+      expect(result[0].status).toBe('pending');
+      expect(task.status).toBe('pending');
+      expect(task.execution.phase).toBeUndefined();
+      expect(task.execution.launchStartedAt).toBeUndefined();
+      expect(task.execution.launchCompletedAt).toBeUndefined();
     });
 
     it('restartTask from needs_input status resets to pending', () => {

@@ -3,7 +3,6 @@ import type { WorkflowStatus } from '../types.js';
 const WORKFLOW_STATUS_SET: ReadonlySet<WorkflowStatus> = new Set<WorkflowStatus>([
   'pending',
   'running',
-  'fixing_with_ai',
   'completed',
   'failed',
   'blocked',

@@ -16,7 +16,9 @@ test.describe('Action Graph visual proof', () => {
 
     await page.getByTestId('rail-action-graph').click();
     await expect(page.getByTestId('action-graph-view')).toBeVisible();
-    await expect(page.getByText('E2E Test Plan', { exact: true })).toBeVisible();
+    await expect(
+      page.getByTestId('action-graph-node-action:wf-test-1').getByText('E2E Test Plan', { exact: true }),
+    ).toBeVisible();
     await expect(page.getByTestId('action-graph-node-attempt:wf-test-1/task-alpha')).toBeVisible();
     await page.getByTestId('action-graph-node-attempt:wf-test-1/task-alpha').click();
     await expect(page.getByTestId('workflow-inspector-title')).toHaveText('First test task');

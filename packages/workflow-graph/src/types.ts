@@ -45,6 +45,8 @@ export interface BaseTaskConfig {
   readonly externalDependencies?: readonly ExternalDependency[];
   /** Execution pool identifier for shared queue/drain scheduling across substrates. */
   readonly poolId?: string;
+  /** Legacy direct SSH pool member selection used by editable runner controls. */
+  readonly poolMemberId?: string;
   /**
    * Fix-session prompt override carried on the failed task across the
    * `failed` → `fixing_with_ai` → `failed` cycle (Step 10 of the

@@ -168,7 +168,7 @@ export interface OrchestratorPersistence {
     featureBranch?: string;
     mergeMode?: 'manual' | 'automatic' | 'external_review';
   }): void;
-  updateWorkflow?(workflowId: string, changes: { status?: WorkflowDerivedStatus | string; updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review' }): void;
+  updateWorkflow?(workflowId: string, changes: { updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review' }): void;
   saveTask(workflowId: string, task: TaskState): void;
   updateTask(taskId: string, changes: TaskStateChanges): void;
   logEvent?(taskId: string, eventType: string, payload?: unknown): void;
@@ -539,20 +539,30 @@ function resolveExecutorRouting(
   taskId: string,
   command: string | undefined,
   planPoolId: string | undefined,
+  defaultPoolId: string | undefined,
   rules: ExecutorRoutingRule[],
   availablePoolIds: Set<string>,
 ): { poolId?: string; reason: ExecutorRoutingReason } {
+  if (defaultPoolId && availablePoolIds.size > 0 && !availablePoolIds.has(defaultPoolId)) {
+    throw new Error(
+      `Task "${taskId}" cannot use defaultPoolId="${defaultPoolId}" because it is not defined in executionPools.`,
+    );
+  }
+
+  const initialPoolId = planPoolId ?? defaultPoolId;
+  const initialReason: ExecutorRoutingReason = initialPoolId
+    ? { type: 'poolId', poolId: initialPoolId }
+    : { type: 'defaultWorktree' };
+
   if (!command || rules.length === 0) {
     return {
-      poolId: planPoolId,
-      reason: planPoolId ? { type: 'poolId', poolId: planPoolId } : { type: 'defaultWorktree' },
+      poolId: initialPoolId,
+      reason: initialReason,
     };
   }
 
-  let effectivePoolId = planPoolId;
-  let reason: ExecutorRoutingReason = planPoolId
-    ? { type: 'poolId', poolId: planPoolId }
-    : { type: 'defaultWorktree' };
+  let effectivePoolId = initialPoolId;
+  let reason: ExecutorRoutingReason = initialReason;
 
   const routingRules = rules.filter((rule) => (rule.strategy ?? 'enforce') === 'route');
   const matchingRoutingRule = findMatchingExecutorRoutingRule(command, routingRules);
@@ -560,7 +570,7 @@ function resolveExecutorRouting(
     const routed = applyRoutingRule(
       taskId,
       command,
-      effectivePoolId,
+      planPoolId,
       matchingRoutingRule,
       'routing rule',
       availablePoolIds,
@@ -668,6 +678,8 @@ export interface OrchestratorConfig {
   heavyweightCommandRouting?: HeavyweightCommandRoutingPolicy;
   /** Valid execution pool IDs available at plan submission time. */
   availablePoolIds?: string[];
+  /** Default pool applied to tasks that do not declare a pool and do not match a route rule. */
+  defaultPoolId?: string;
   /**
    * When true, keep tasks persisted as `pending` until the executor confirms
    * startup success, then transition to `running`.
@@ -693,6 +705,7 @@ export class Orchestrator {
   private readonly maxConcurrency: number;
   private readonly executorRoutingRules: ExecutorRoutingRule[];
   private readonly availablePoolIds: Set<string>;
+  private readonly defaultPoolId: string | undefined;
   private readonly defaultAutoFixRetries: number;
   private readonly deferRunningUntilLaunch: boolean;
 
@@ -758,6 +771,7 @@ export class Orchestrator {
       ...buildHeavyweightRoutingRules('config', config.heavyweightCommandRouting),
     ];
     this.availablePoolIds = new Set(config.availablePoolIds ?? []);
+    this.defaultPoolId = config.defaultPoolId;
     this.defaultAutoFixRetries = Math.min(Math.max(0, Math.floor(config.defaultAutoFixRetries ?? 0)), 10);
     this.deferRunningUntilLaunch = config.deferRunningUntilLaunch ?? false;
 
@@ -1290,6 +1304,7 @@ export class Orchestrator {
         taskDef.id,
         taskDef.command,
         taskDef.poolId,
+        this.defaultPoolId,
         this.executorRoutingRules,
         this.availablePoolIds,
       );
@@ -2124,6 +2139,9 @@ export class Orchestrator {
         exitCode: undefined,
         commit: undefined,
         lastHeartbeatAt: undefined,
+        launchStartedAt: undefined,
+        launchCompletedAt: undefined,
+        phase: undefined,
         isFixingWithAI: false,
         agentSessionId: undefined,
         containerId: undefined,

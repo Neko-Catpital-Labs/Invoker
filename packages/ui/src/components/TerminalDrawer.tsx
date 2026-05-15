@@ -14,6 +14,7 @@ export function TerminalDrawer({ collapsed, onToggle }: TerminalDrawerProps): JS
         </div>
         <button
           onClick={onToggle}
+          aria-label={collapsed ? 'Expand terminal drawer' : 'Collapse terminal drawer'}
           className="rounded border border-gray-700 px-2 py-1 text-[11px] text-gray-300 hover:bg-gray-800"
         >
           {collapsed ? 'Expand' : 'Minimize'}

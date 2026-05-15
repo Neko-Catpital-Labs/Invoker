@@ -5,6 +5,11 @@ const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 
 const repoRoot = path.resolve(__dirname, '..');
+const ELECTRON_INSTALL_ATTEMPTS = 3;
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
 
 function resolveElectronPackageDir() {
   const electronPackageJson = require.resolve('electron/package.json', {
@@ -109,18 +114,30 @@ function ensureElectronInstalled() {
   }
 
   const installScript = path.join(electronPackageDir, 'install.js');
-  const install = spawnSync(process.execPath, [installScript], {
-    cwd: repoRoot,
-    env: process.env,
-    stdio: 'inherit',
-  });
+  for (let attempt = 1; attempt <= ELECTRON_INSTALL_ATTEMPTS; attempt += 1) {
+    const install = spawnSync(process.execPath, [installScript], {
+      cwd: repoRoot,
+      env: process.env,
+      stdio: 'inherit',
+    });
 
-  if (install.status !== 0) {
-    process.exit(install.status ?? 1);
-  }
-  if (install.signal) {
-    process.kill(process.pid, install.signal);
-    return null;
+    if (install.signal) {
+      process.kill(process.pid, install.signal);
+      return null;
+    }
+    if (install.status === 0) {
+      break;
+    }
+    if (attempt === ELECTRON_INSTALL_ATTEMPTS) {
+      process.exit(install.status ?? 1);
+    }
+
+    const delayMs = attempt * 1_000;
+    console.warn(
+      `Electron installer failed with exit code ${install.status ?? 1}; retrying in ${delayMs}ms ` +
+      `(${attempt + 1}/${ELECTRON_INSTALL_ATTEMPTS})`,
+    );
+    sleepSync(delayMs);
   }
 
   const repairedBinary = resolveInstalledElectronBinary(electronPackageDir);
