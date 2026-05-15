@@ -56,6 +56,38 @@ describe('WorkflowInspector', () => {
     expect(link).toHaveAttribute('href', 'https://github.com/org/repo/pull/12');
   });
 
+  it('renders workflow PR URL from its review-ready merge node', () => {
+    const mergeTask = makeTask({
+      id: '__merge__wf-1',
+      description: 'Merge gate',
+      status: 'review_ready',
+      config: { workflowId: 'wf-1', isMergeNode: true },
+      execution: { reviewUrl: 'https://github.com/org/repo/pull/34' },
+    });
+    const otherTask = makeTask({
+      id: 'task-2',
+      execution: { reviewUrl: 'https://github.com/org/repo/pull/12' },
+    });
+
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'review_ready' }}
+        task={null}
+        workflowTasks={new Map([
+          [otherTask.id, otherTask],
+          [mergeTask.id, mergeTask],
+        ])}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    const link = screen.getByRole('link', { name: /github\.com/i });
+    expect(link).toHaveAttribute('href', 'https://github.com/org/repo/pull/34');
+  });
+
   it('can be collapsed and restored', () => {
     const { rerender } = render(
       <WorkflowInspector
