@@ -237,11 +237,13 @@ export class SQLiteAdapter implements PersistenceAdapter {
     migratedFixingWithAiStatuses: number;
     normalizedMergeModes: number;
     staleAutoFixExperimentTasks: number;
+    normalizedStaleLaunchMetadata: number;
   } {
     const report = {
       migratedFixingWithAiStatuses: 0,
       normalizedMergeModes: 0,
       staleAutoFixExperimentTasks: 0,
+      normalizedStaleLaunchMetadata: 0,
     };
     this.runTransaction(() => {
       this.db.run(
@@ -283,6 +285,18 @@ export class SQLiteAdapter implements PersistenceAdapter {
            )`,
       );
       report.staleAutoFixExperimentTasks = this.db.getRowsModified();
+
+      this.db.run(
+        `UPDATE tasks
+         SET launch_phase = NULL,
+             launch_started_at = NULL,
+             launch_completed_at = NULL
+         WHERE status IN ('completed', 'failed', 'needs_input', 'awaiting_approval', 'review_ready', 'stale')
+           AND launch_started_at IS NOT NULL
+           AND started_at IS NOT NULL
+           AND (julianday(started_at) - julianday(launch_started_at)) * 86400.0 > 3600.0`,
+      );
+      report.normalizedStaleLaunchMetadata = this.db.getRowsModified();
     });
     return report;
   }
