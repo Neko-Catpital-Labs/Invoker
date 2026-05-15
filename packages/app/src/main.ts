@@ -3084,6 +3084,7 @@ if (isHeadless) {
         logger,
         context: 'ipc.approve',
         started,
+        mutationTiming: activeMutationContext?.mutationTiming,
       });
       },
     );
@@ -3178,6 +3179,7 @@ if (isHeadless) {
           taskExecutor: requireTaskExecutor(),
           logger,
           context: 'ipc.cancel-task',
+          mutationTiming: activeMutationContext?.mutationTiming,
         });
         return result;
       } catch (err) {
@@ -3199,12 +3201,14 @@ if (isHeadless) {
           preemptWorkflowExecution,
           logger,
           context: 'ipc.cancel-workflow',
+          mutationTiming: activeMutationContext?.mutationTiming,
         });
         await finalizeMutationWithGlobalTopup({
           orchestrator,
           taskExecutor: requireTaskExecutor(),
           logger,
           context: 'ipc.cancel-workflow',
+          mutationTiming: activeMutationContext?.mutationTiming,
         });
         return result;
       } catch (err) {
@@ -3541,6 +3545,7 @@ if (isHeadless) {
           logger,
           context: 'ipc.approve-merge',
           started,
+          mutationTiming: activeMutationContext?.mutationTiming,
         });
       } catch (err) {
         logger.error(`approve-merge failed: ${err}`, { module: 'ipc' });
@@ -3588,6 +3593,7 @@ if (isHeadless) {
           logger,
           context: 'ipc.resolve-conflict',
           started: result.started,
+          mutationTiming: activeMutationContext?.mutationTiming,
         });
       } catch (err) {
         await finalizeMutationWithGlobalTopup({
@@ -3595,6 +3601,7 @@ if (isHeadless) {
           taskExecutor: requireTaskExecutor(),
           logger,
           context: 'ipc.resolve-conflict.failure',
+          mutationTiming: activeMutationContext?.mutationTiming,
         });
         logger.error(`resolve-conflict failed: ${err}`, { module: 'ipc' });
         throw err;
@@ -3617,6 +3624,7 @@ if (isHeadless) {
           logger,
           context: 'ipc.fix-with-agent',
           started,
+          mutationTiming: activeMutationContext?.mutationTiming,
         });
       } catch (err) {
         await finalizeMutationWithGlobalTopup({
@@ -3624,6 +3632,7 @@ if (isHeadless) {
           taskExecutor: requireTaskExecutor(),
           logger,
           context: 'ipc.fix-with-agent.failure',
+          mutationTiming: activeMutationContext?.mutationTiming,
         });
         logger.error(`fix-with-agent failed: ${err}`, { module: 'ipc' });
         throw err;
