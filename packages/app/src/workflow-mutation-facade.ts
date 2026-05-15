@@ -89,6 +89,11 @@ export interface ResolveConflictMutationResult extends MutationResult {
   autoApproved: boolean;
 }
 
+type DispatchScope = {
+  scopedWorkflowId?: string;
+  scopedTaskIds?: string[];
+};
+
 // ── Facade deps ──────────────────────────────────────────────
 
 export interface WorkflowMutationFacadeDeps {
@@ -119,6 +124,7 @@ export class WorkflowMutationFacade {
     const { runnable, topup } = await this.dispatchWithTopup(
       result.started,
       'facade.approve-task',
+      { scopedTaskIds: [taskId] },
     );
     return {
       approvedTask: result.approvedTask,
@@ -139,7 +145,7 @@ export class WorkflowMutationFacade {
 
   async retryTask(taskId: string): Promise<MutationResult> {
     const started = sharedRetryTask(taskId, { orchestrator: this.deps.orchestrator });
-    return this.finalizeWithTopup(started, 'facade.retry-task');
+    return this.finalizeWithTopup(started, 'facade.retry-task', { scopedTaskIds: [taskId] });
   }
 
   async recreateTask(taskId: string): Promise<MutationResult> {
@@ -147,14 +153,14 @@ export class WorkflowMutationFacade {
       orchestrator: this.deps.orchestrator,
       persistence: this.deps.persistence,
     });
-    return this.finalizeWithTopup(started, 'facade.recreate-task');
+    return this.finalizeWithTopup(started, 'facade.recreate-task', { scopedTaskIds: [taskId] });
   }
 
   async selectExperiment(taskId: string, experimentId: string): Promise<MutationResult> {
     const started = sharedSelectExperiment(taskId, experimentId, {
       orchestrator: this.deps.orchestrator,
     });
-    return this.finalizeWithTopup(started, 'facade.select-experiment');
+    return this.finalizeWithTopup(started, 'facade.select-experiment', { scopedTaskIds: [taskId] });
   }
 
   async selectExperiments(taskId: string, experimentIds: string[]): Promise<MutationResult> {
@@ -162,21 +168,21 @@ export class WorkflowMutationFacade {
       orchestrator: this.deps.orchestrator,
       taskExecutor: this.deps.taskExecutor,
     });
-    return this.finalizeWithTopup(started, 'facade.select-experiments');
+    return this.finalizeWithTopup(started, 'facade.select-experiments', { scopedTaskIds: [taskId] });
   }
 
   async editTaskCommand(taskId: string, newCommand: string): Promise<MutationResult> {
     const started = sharedEditTaskCommand(taskId, newCommand, {
       orchestrator: this.deps.orchestrator,
     });
-    return this.finalizeWithTopup(started, 'facade.edit-task-command');
+    return this.finalizeWithTopup(started, 'facade.edit-task-command', { scopedTaskIds: [taskId] });
   }
 
   async editTaskPrompt(taskId: string, newPrompt: string): Promise<MutationResult> {
     const started = sharedEditTaskPrompt(taskId, newPrompt, {
       orchestrator: this.deps.orchestrator,
     });
-    return this.finalizeWithTopup(started, 'facade.edit-task-prompt');
+    return this.finalizeWithTopup(started, 'facade.edit-task-prompt', { scopedTaskIds: [taskId] });
   }
 
   async editTaskType(
@@ -190,14 +196,14 @@ export class WorkflowMutationFacade {
       { orchestrator: this.deps.orchestrator },
       poolMemberId,
     );
-    return this.finalizeWithTopup(started, 'facade.edit-task-type');
+    return this.finalizeWithTopup(started, 'facade.edit-task-type', { scopedTaskIds: [taskId] });
   }
 
   async editTaskAgent(taskId: string, agentName: string): Promise<MutationResult> {
     const started = sharedEditTaskAgent(taskId, agentName, {
       orchestrator: this.deps.orchestrator,
     });
-    return this.finalizeWithTopup(started, 'facade.edit-task-agent');
+    return this.finalizeWithTopup(started, 'facade.edit-task-agent', { scopedTaskIds: [taskId] });
   }
 
   async setTaskExternalGatePolicies(
@@ -207,7 +213,7 @@ export class WorkflowMutationFacade {
     const started = sharedSetTaskExternalGatePolicies(taskId, updates, {
       orchestrator: this.deps.orchestrator,
     });
-    return this.finalizeWithTopup(started, 'facade.set-gate-policy');
+    return this.finalizeWithTopup(started, 'facade.set-gate-policy', { scopedTaskIds: [taskId] });
   }
 
   async cancelTask(taskId: string): Promise<CancelMutationResult> {
@@ -227,7 +233,7 @@ export class WorkflowMutationFacade {
     const started = sharedRetryWorkflow(workflowId, {
       orchestrator: this.deps.orchestrator,
     });
-    return this.finalizeWithTopup(started, 'facade.retry-workflow');
+    return this.finalizeWithTopup(started, 'facade.retry-workflow', { scopedWorkflowId: workflowId });
   }
 
   async recreateWorkflow(workflowId: string): Promise<MutationResult> {
@@ -236,22 +242,27 @@ export class WorkflowMutationFacade {
       persistence: this.deps.persistence,
       orchestrator: this.deps.orchestrator,
     });
-    return this.finalizeWithTopup(started, 'facade.recreate-workflow');
+    return this.finalizeWithTopup(started, 'facade.recreate-workflow', { scopedWorkflowId: workflowId });
   }
 
   async recreateWorkflowFromFreshBase(workflowId: string): Promise<MutationResult> {
     const started = await sharedRecreateWorkflowFromFreshBase(workflowId, this.actionDeps());
-    return this.finalizeWithTopup(started, 'facade.recreate-from-fresh-base');
+    return this.finalizeWithTopup(started, 'facade.recreate-from-fresh-base', { scopedWorkflowId: workflowId });
   }
 
   async recreateWithRebase(workflowId: string): Promise<MutationResult> {
     const started = await sharedRecreateWithRebase(workflowId, this.actionDeps());
-    return this.finalizeWithTopup(started, 'facade.recreate-with-rebase');
+    return this.finalizeWithTopup(started, 'facade.recreate-with-rebase', { scopedWorkflowId: workflowId });
   }
 
   async rebaseAndRetry(taskId: string): Promise<MutationResult> {
+    const workflowId = this.deps.orchestrator.getTask(taskId)?.config.workflowId;
     const started = await sharedRebaseAndRetry(taskId, this.actionDeps());
-    return this.finalizeWithTopup(started, 'facade.rebase-and-retry');
+    return this.finalizeWithTopup(
+      started,
+      'facade.rebase-and-retry',
+      workflowId ? { scopedWorkflowId: workflowId } : { scopedTaskIds: [taskId] },
+    );
   }
 
   async cancelWorkflow(workflowId: string): Promise<CancelMutationResult> {
@@ -339,6 +350,7 @@ export class WorkflowMutationFacade {
     const { runnable, topup } = await this.dispatchWithTopup(
       result.started,
       'facade.resolve-conflict',
+      { scopedTaskIds: [taskId] },
     );
     return {
       autoApproved: result.autoApproved,
@@ -374,6 +386,9 @@ export class WorkflowMutationFacade {
     const { runnable, topup } = await this.dispatchWithTopup(
       started,
       'facade.fix-with-agent',
+      detail.kind === 'recreateWorkflowFromFreshBase'
+        ? { scopedWorkflowId: detail.workflowId }
+        : { scopedTaskIds: [taskId] },
     );
     return { detail, started, runnable, topup };
   }
@@ -393,6 +408,7 @@ export class WorkflowMutationFacade {
   private async dispatchWithTopup(
     started: TaskState[],
     context: string,
+    scope: DispatchScope = {},
   ): Promise<{ runnable: TaskState[]; topup: TaskState[] }> {
     return dispatchStartedTasksWithGlobalTopup({
       orchestrator: this.deps.orchestrator,
@@ -401,14 +417,16 @@ export class WorkflowMutationFacade {
       context,
       started,
       dispatchMode: this.deps.dispatchMode,
+      ...scope,
     });
   }
 
   private async finalizeWithTopup(
     started: TaskState[],
     context: string,
+    scope: DispatchScope = {},
   ): Promise<MutationResult> {
-    const { runnable, topup } = await this.dispatchWithTopup(started, context);
+    const { runnable, topup } = await this.dispatchWithTopup(started, context, scope);
     return { started, runnable, topup };
   }
 
