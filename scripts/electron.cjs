@@ -6,22 +6,34 @@ const { spawn, spawnSync } = require('node:child_process');
 
 const repoRoot = path.resolve(__dirname, '..');
 const ELECTRON_INSTALL_ATTEMPTS = 3;
+const MISSING_ELECTRON_MESSAGE =
+  'Electron is not installed. Provision this machine before running Invoker: ' +
+  'run pnpm install with network access and approved Electron build scripts.';
 
 function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 function resolveElectronPackageDir() {
-  const electronPackageJson = require.resolve('electron/package.json', {
-    paths: [
-      path.join(repoRoot, 'packages', 'app'),
-      repoRoot,
-    ],
-  });
+  let electronPackageJson;
+  try {
+    electronPackageJson = require.resolve('electron/package.json', {
+      paths: [
+        path.join(repoRoot, 'packages', 'app'),
+        repoRoot,
+      ],
+    });
+  } catch {
+    return null;
+  }
   return path.dirname(electronPackageJson);
 }
 
 function resolveInstalledElectronBinary(electronPackageDir) {
+  if (!electronPackageDir) {
+    return null;
+  }
+
   const pathFile = path.join(electronPackageDir, 'path.txt');
   if (!fs.existsSync(pathFile)) {
     return null;
@@ -106,8 +118,13 @@ async function repairElectronWithSystemUnzip(electronPackageDir) {
   return resolveInstalledElectronBinary(electronPackageDir);
 }
 
-function ensureElectronInstalled() {
+async function installElectronOrExit() {
   const electronPackageDir = resolveElectronPackageDir();
+  if (!electronPackageDir) {
+    console.error('Electron package is not installed. Run pnpm install with network access.');
+    process.exit(1);
+  }
+
   const existingBinary = resolveInstalledElectronBinary(electronPackageDir);
   if (existingBinary) {
     return existingBinary;
@@ -140,22 +157,31 @@ function ensureElectronInstalled() {
     sleepSync(delayMs);
   }
 
-  const repairedBinary = resolveInstalledElectronBinary(electronPackageDir);
-  if (!repairedBinary) {
-    return repairElectronWithSystemUnzip(electronPackageDir).then((fallbackBinary) => {
-      if (!fallbackBinary) {
-        console.error(
-          'Electron is still unavailable after running its installer. ' +
-          'If your environment blocks dependency build scripts, run `pnpm approve-builds` or reinstall with network access.',
-        );
-        process.exit(1);
-      }
-
-      return fallbackBinary;
-    });
+  const installedBinary = resolveInstalledElectronBinary(electronPackageDir);
+  if (installedBinary) {
+    return installedBinary;
   }
 
+  const repairedBinary = await repairElectronWithSystemUnzip(electronPackageDir);
+  if (!repairedBinary) {
+    console.error(
+      'Electron is still unavailable after running its installer. ' +
+      'If your environment blocks dependency build scripts, run `pnpm approve-builds` or reinstall with network access.',
+    );
+    process.exit(1);
+  }
   return repairedBinary;
+}
+
+function getElectronBinaryOrExit() {
+  const electronPackageDir = resolveElectronPackageDir();
+  const existingBinary = resolveInstalledElectronBinary(electronPackageDir);
+  if (existingBinary) {
+    return existingBinary;
+  }
+
+  console.error(MISSING_ELECTRON_MESSAGE);
+  process.exit(1);
 }
 
 function withLinuxSandboxFallback(binaryPath, args) {
@@ -176,39 +202,41 @@ function withLinuxSandboxFallback(binaryPath, args) {
   return ['--no-sandbox', ...args];
 }
 
-function main() {
+async function main() {
   const args = process.argv.slice(2);
-  Promise.resolve(ensureElectronInstalled()).then((binaryPath) => {
-    if (!binaryPath) {
-      process.exit(1);
-    }
 
-    if (args.length === 1 && args[0] === '--ensure-only') {
-      return;
-    }
+  if (args.length === 1 && args[0] === '--install-only') {
+    await installElectronOrExit();
+    return;
+  }
 
-    const launchArgs = withLinuxSandboxFallback(binaryPath, args);
-    const child = spawn(binaryPath, launchArgs, {
-      cwd: process.cwd(),
-      env: process.env,
-      stdio: 'inherit',
-    });
+  const binaryPath = getElectronBinaryOrExit();
 
-    child.once('error', (error) => {
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exit(1);
-    });
-    child.once('exit', (code, signal) => {
-      if (signal) {
-        process.kill(process.pid, signal);
-        return;
-      }
-      process.exit(code ?? 0);
-    });
-  }).catch((error) => {
+  if (args.length === 1 && args[0] === '--ensure-only') {
+    return;
+  }
+
+  const launchArgs = withLinuxSandboxFallback(binaryPath, args);
+  const child = spawn(binaryPath, launchArgs, {
+    cwd: process.cwd(),
+    env: process.env,
+    stdio: 'inherit',
+  });
+
+  child.once('error', (error) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
   });
+  child.once('exit', (code, signal) => {
+    if (signal) {
+      process.kill(process.pid, signal);
+      return;
+    }
+    process.exit(code ?? 0);
+  });
 }
 
-main();
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+});
