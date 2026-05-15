@@ -1197,7 +1197,6 @@ if (isHeadless) {
   let lastKnownWorkflowCount = 0;
   let lastActivityLogId = 0;
   let startupWorkflowId: string | null = null;
-  let allWorkflowsHydrated = false;
   let uiInteractive = false;
   let deferredStartupTriggered = false;
   const traceUiDeltaFlow = process.env.INVOKER_TRACE_UI_DELTA === '1';
@@ -2243,7 +2242,6 @@ if (isHeadless) {
     const workflows = listWorkflowsByStartupRecency();
     lastKnownWorkflowCount = workflows.length;
     startupWorkflowId = workflows[0]?.id ?? null;
-    allWorkflowsHydrated = workflows.length === 0;
     if (!startupWorkflowId) {
       logger.info('[init] No workflows available for initial startup bootstrap', { module: 'init' });
       return;
@@ -2253,7 +2251,6 @@ if (isHeadless) {
         workflowCount: workflows.length,
         taskCount: orchestrator.getAllTasks().length,
       }));
-      allWorkflowsHydrated = true;
       const snapshotStats = (persistence as unknown as {
         getLastWorkflowTaskSnapshotStats?: () => Record<string, unknown> | null;
       }).getLastWorkflowTaskSnapshotStats?.();
@@ -2369,10 +2366,8 @@ if (isHeadless) {
               lastKnownWorkflowCount = workflows.length;
               mainWindow.webContents.send('invoker:workflows-changed', workflows);
 
-              if (allWorkflowsHydrated) {
-                orchestrator.syncAllFromDb();
-                logger.info(`Synced orchestrator for all ${workflows.length} workflows`, { module: 'db-poll' });
-              }
+              orchestrator.syncAllFromDb();
+              logger.info(`Synced orchestrator for all ${workflows.length} workflows`, { module: 'db-poll' });
             }
 
             for (const wf of workflows) {
