@@ -16,6 +16,13 @@ function makeTask(id: string, status: TaskState['status'], attemptId?: string): 
   } as TaskState;
 }
 
+async function waitForCondition(condition: () => boolean): Promise<void> {
+  for (let i = 0; i < 20; i += 1) {
+    if (condition()) return;
+    await Promise.resolve();
+  }
+}
+
 describe('global-topup helpers', () => {
   it('dispatches scoped started tasks before running global top-up', async () => {
     const scoped = makeTask('scoped-task', 'running', 'attempt-scoped');
@@ -40,6 +47,77 @@ describe('global-topup helpers', () => {
     expect(orchestrator.startExecution).toHaveBeenCalledTimes(1);
     expect(result.runnable).toEqual([scoped]);
     expect(result.topup).toEqual([topupTask]);
+  });
+
+  it('awaited dispatch waits for executeTasks to finish', async () => {
+    const scoped = makeTask('scoped-task', 'running', 'attempt-scoped');
+    const release = vi.fn();
+    let resolveDispatch!: () => void;
+    const taskExecutor = {
+      executeTasks: vi.fn(() => new Promise<void>((resolve) => {
+        resolveDispatch = () => {
+          release();
+          resolve();
+        };
+      })),
+    };
+    const dispatch = dispatchStartedTasksWithGlobalTopup({
+      orchestrator: { startExecution: vi.fn().mockReturnValue([]) } as any,
+      taskExecutor: taskExecutor as any,
+      context: 'test.awaited-dispatch',
+      started: [scoped],
+    });
+
+    await Promise.resolve();
+    let completed = false;
+    void dispatch.then(() => { completed = true; });
+    await Promise.resolve();
+
+    expect(completed).toBe(false);
+    resolveDispatch();
+    await dispatch;
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it('fire-and-forget dispatch returns before executeTasks finishes', async () => {
+    const scoped = makeTask('scoped-task', 'running', 'attempt-scoped');
+    const taskExecutor = {
+      executeTasks: vi.fn(() => new Promise<void>(() => {})),
+    };
+
+    const result = await dispatchStartedTasksWithGlobalTopup({
+      orchestrator: { startExecution: vi.fn().mockReturnValue([]) } as any,
+      taskExecutor: taskExecutor as any,
+      context: 'test.fire-and-forget-dispatch',
+      started: [scoped],
+      dispatchMode: 'fire-and-forget',
+    });
+
+    expect(taskExecutor.executeTasks).toHaveBeenCalledWith([scoped]);
+    expect(result.runnable).toEqual([scoped]);
+    expect(result.topup).toEqual([]);
+  });
+
+  it('fire-and-forget dispatch logs asynchronous executeTasks rejection', async () => {
+    const scoped = makeTask('scoped-task', 'running', 'attempt-scoped');
+    const logger = { error: vi.fn(), info: vi.fn() };
+    const taskExecutor = {
+      executeTasks: vi.fn().mockRejectedValue(new Error('dispatch failed')),
+    };
+
+    await dispatchStartedTasksWithGlobalTopup({
+      orchestrator: { startExecution: vi.fn().mockReturnValue([]) } as any,
+      taskExecutor: taskExecutor as any,
+      logger: logger as any,
+      context: 'test.fire-and-forget-rejection',
+      started: [scoped],
+      dispatchMode: 'fire-and-forget',
+    });
+
+    await waitForCondition(() => logger.error.mock.calls.length > 0);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('asynchronous task dispatch failed'),
+    );
   });
 
   it('executeGlobalTopup skips tasks already marked as dispatched', async () => {
