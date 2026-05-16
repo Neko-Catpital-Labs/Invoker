@@ -165,13 +165,13 @@ The implementation plan **must** end with a final **`command`** task that runs:
 
 - `pnpm run test:all`
 
-Use earlier tasks to re-run the focused repro from Phase 1b (`cd packages/<pkg> && pnpm test -- <repro>`, `./submit-plan.sh plans/verify-<slug>.yaml`, or both). The terminal gate for submitted implementation plans is always the full repo suite.
+Use earlier tasks to re-run the focused repro from Phase 1b (`cd packages/<pkg> && pnpm test -- <repro>`, `./submit-plan.sh plans/verify-<slug>.yaml`, or both). The terminal gate for standalone implementation plans and terminal stack workflows is the full repo suite; non-terminal stack workflows use focused verification.
 
-**Dependencies:** The final `pnpm run test:all` task **must depend on every earlier task** so it runs last as the terminal regression gate.
+**Dependencies:** When present, the final `pnpm run test:all` task **must depend on every earlier task** so it runs last as the terminal regression gate.
 
 **Naming:** `final-regression`, `regression-test-all`, `final-test-suite`, etc.
 
-**Anti-pattern:** Implementation plan with **no** final `pnpm run test:all` task — you cannot show the submitted workflow passed the full suite end-to-end.
+**Anti-pattern:** Standalone implementation plan or terminal stack workflow with **no** final `pnpm run test:all` task — you cannot show the submitted workflow or stack passed the full suite end-to-end.
 
 ### Visual proof capture task (when `visualProof: true`)
 
@@ -199,4 +199,4 @@ Generate the implementation plan, validate with `scripts/validate-plan.sh`, pres
 - **Not cleaning up verification workflow** — Invoker may still have the verify plan running. Use `delete-all` before submitting implementation when needed.
 - **Trusting file paths from a plan without checking** — plans can reference moved, renamed, or deleted files. Verify first.
 - **Proceeding after verification failures without adjusting** — the whole point of Phase 1 is to inform Phase 2.
-- **Implementation plan without a final `pnpm run test:all` task** — cannot confirm the submitted workflow passed the full suite.
+- **Standalone plan or terminal stack workflow without a final `pnpm run test:all` task** — cannot confirm the submitted workflow or stack passed the full suite.

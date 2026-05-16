@@ -33,7 +33,7 @@ Grep-only checks are Phase 1a only; behavioral claims require executed Phase 1b 
 
 **Cross-layer dependency direction (required):** Dependency DAGs must flow from lower/foundational layers toward higher/integration layers. If a lower-layer task depends on a higher-layer task, mark an explicit exception in the task description with `Layer exception: allowed` and a rationale.
 
-**Experiment artifact persistence rule (required when prompt tasks design experiments):** Any `experiment-*` prompt task must write a deterministic artifact path (for example `docs/context/<issue>/experiment-brief.md`) and commit it during that task. Any `implement-*` task that depends on that experiment must reference and consume the exact artifact path in both `description` and `prompt` with explicit acceptance language. The workflow must include a dedicated cleanup task (typically `cleanup-experiment-artifacts-*`) that removes the artifact and commits cleanup before the final regression gate (`pnpm run test:all`).
+**Experiment artifact persistence rule (required when prompt tasks design experiments):** Any `experiment-*` prompt task must write a deterministic artifact path (for example `docs/context/<issue>/experiment-brief.md`) and commit it during that task. Any `implement-*` task that depends on that experiment must reference and consume the exact artifact path in both `description` and `prompt` with explicit acceptance language. The workflow must include a dedicated cleanup task (typically `cleanup-experiment-artifacts-*`) that removes the artifact and commits cleanup before that workflow's final verification gate.
 
 **Bugfix repro:** For bug/regression plans, a shared `bash scripts/repro-<slug>.sh` (or the same `command:` before and after) is **strongly recommended**; **`skill-doctor` does not require it.** If the fix invalidates the original repro, use another explicit verification task. See `references/task-patterns.md` § *Bugfix repro*.
 
@@ -80,7 +80,7 @@ If `skill-doctor.sh` fails, run individual checks to isolate the problem:
    `bash skills/plan-to-invoker/scripts/validate-plan.sh <plan-file>`
 4. `step-lint-atomicity`
    `bash skills/plan-to-invoker/scripts/lint-task-atomicity.sh <plan-file>`  
-  Optional: append `--warn-delegation` to print additional advisory hints. Atomicity lint always runs `--strict-delegation` inside `skill-doctor` and, for implementation plans (`onFinish != none`), hard-fails missing/invalid `Layer:` and `Feature state:` metadata, missing required rationale headings in `description` on any task (`Goal`, `Motivation`, `Alternative considerations`/`Alternatives`, `Implementation details`/`Implementation`), missing required rationale headings in `prompt` for prompt tasks, prompt tasks without `Files:`/`Change types:`/`Acceptance criteria:` description blocks, prompts missing zero-context execution framing, prompts missing deterministic pass/fail expectations, invalid cross-layer dependency direction without `Layer exception: allowed`, and missing experiment-artifact handoff/cleanup contract when experiment tasks are present.
+  Optional: append `--warn-delegation` to print additional advisory hints. For authored stacks, append `--stack-manifest <file>` so non-terminal workflows may end with focused verification while the highest-order workflow still requires `pnpm run test:all`. Atomicity lint always runs `--strict-delegation` inside `skill-doctor` and, for implementation plans (`onFinish != none`), hard-fails missing/invalid `Layer:` and `Feature state:` metadata, missing required rationale headings in `description` on any task (`Goal`, `Motivation`, `Alternative considerations`/`Alternatives`, `Implementation details`/`Implementation`), missing required rationale headings in `prompt` for prompt tasks, prompt tasks without `Files:`/`Change types:`/`Acceptance criteria:` description blocks, prompts missing zero-context execution framing, prompts missing deterministic pass/fail expectations, invalid cross-layer dependency direction without `Layer exception: allowed`, and missing experiment-artifact handoff/cleanup contract when experiment tasks are present.
 5. `step-parse-verify-results`
    `bash skills/plan-to-invoker/scripts/parse-results.sh < /tmp/invoker-verify.txt`
 
@@ -116,7 +116,7 @@ If `skill-doctor.sh` fails, run individual checks to isolate the problem:
 - Unit/package lane: `cd packages/<pkg> && pnpm test`
 - Invoker headless lane: run `./submit-plan.sh plans/verify-<slug>.yaml` when flow involves orchestrator/executor/persistence/headless behavior
 - Visual proof lane when UI changes apply
-- Implementation-plan final gate: the last task in any plan with `onFinish != none` must run `pnpm run test:all` from the repo root and depend on every earlier task
+- Implementation-plan full-suite gate: standalone implementation plans and terminal stack workflows must end with `pnpm run test:all` from the repo root and depend on every earlier task. Non-terminal stack workflows should end with focused verification; validate them with `skill-doctor --stack-manifest <file>` so the stack position is explicit.
 
 When Invoker config enables heavyweight command routing, keep `pnpm ...` commands in the plan as normal command tasks unless a specific remote target must be declared explicitly. Runtime config may auto-route those commands to SSH.
 
