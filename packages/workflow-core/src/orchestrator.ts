@@ -832,7 +832,17 @@ export class Orchestrator {
 
   private refreshWorkflowFromDb(workflowId: string): void {
     this.activeWorkflowIds.add(workflowId);
+    // INV-88 selected DB-first orchestration: a workflow-scoped refresh must
+    // replace, not overlay, that workflow's cache slice so deleted persisted
+    // rows cannot survive in memory.
+    const retainedTasks = this.stateMachine
+      .getAllTasks()
+      .filter((task) => task.config.workflowId !== workflowId);
     const tasks = this.persistence.loadTasks(workflowId);
+    this.stateMachine.clear();
+    for (const task of retainedTasks) {
+      this.stateMachine.restoreTask(task);
+    }
     for (const task of tasks) {
       this.stateMachine.restoreTask(task);
     }
