@@ -1,11 +1,10 @@
 /**
- * SQLiteAdapter — PersistenceAdapter backed by sql.js (WASM SQLite).
+ * SQLiteAdapter — PersistenceAdapter backed by native SQLite.
  *
  * Uses `:memory:` for testing, file path for production.
- * Construction is async (WASM init), all operations after init are synchronous.
+ * Construction remains async for API compatibility, all operations after init are synchronous.
  */
 
-import initSqlJs, { type Database as SqlJsDatabase } from 'sql.js';
 import {
   appendFileSync,
   closeSync,
@@ -17,11 +16,11 @@ import {
   renameSync,
   rmSync,
   statSync,
-  writeFileSync,
 } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import type {
   TaskState,
   TaskStateChanges,
@@ -45,6 +44,16 @@ import type {
   ConversationMessage,
 } from './adapter.js';
 
+type NativeSqlite = typeof import('node:sqlite');
+
+let nativeSqlite: Promise<NativeSqlite> | undefined;
+const nativeSqliteSpecifier = 'node:' + 'sqlite';
+
+function loadNativeSqlite(): Promise<NativeSqlite> {
+  nativeSqlite ??= import(nativeSqliteSpecifier) as Promise<NativeSqlite>;
+  return nativeSqlite;
+}
+
 /**
  * Rewrite `pnpm test packages/<pkg>/...` (incorrect root-level invocation)
  * to `cd packages/<pkg> && pnpm test -- <relative-path>`.
@@ -63,9 +72,6 @@ function rewritePnpmTestCommand(cmd: string): string {
   return cmd;
 }
 
-/** Cached sql.js init promise — WASM is loaded only once per process. */
-let sqlJsPromise: ReturnType<typeof initSqlJs> | null = null;
-
 export interface OutputChunk {
   offset: number;
   data: string;
@@ -81,6 +87,102 @@ interface SQLiteAdapterOptions {
 export type WorkflowMutationPriority = 'high' | 'normal';
 export type WorkflowMutationIntentStatus = 'queued' | 'running' | 'completed' | 'failed';
 export const WORKFLOW_MUTATION_LEASE_MS = 30_000;
+
+type SQLiteParams = unknown[] | Record<string, unknown>;
+
+function normalizeParams(params: SQLiteParams = []): unknown[] | Record<string, unknown> {
+  return Array.isArray(params) ? params : params;
+}
+
+function paramsToArgs(params: SQLiteParams = []): unknown[] {
+  return Array.isArray(params) ? params : [params];
+}
+
+class NativeStatementCompat {
+  private boundParams: SQLiteParams = [];
+  private iterator: Iterator<Record<string, unknown>> | null = null;
+  private current: Record<string, unknown> | undefined;
+
+  constructor(private readonly stmt: StatementSync) {}
+
+  bind(params: SQLiteParams = []): void {
+    this.boundParams = normalizeParams(params);
+    this.iterator = null;
+    this.current = undefined;
+  }
+
+  step(): boolean {
+    if (!this.iterator) {
+      this.iterator = this.stmt.iterate(...(paramsToArgs(this.boundParams) as any[])) as Iterator<Record<string, unknown>>;
+    }
+    const next = this.iterator.next();
+    this.current = next.done ? undefined : next.value;
+    return !next.done;
+  }
+
+  getAsObject(): Record<string, unknown> {
+    return this.current ?? {};
+  }
+
+  get(...params: unknown[]): Record<string, unknown> | undefined {
+    return this.stmt.get(...(params as any[])) as Record<string, unknown> | undefined;
+  }
+
+  all(...params: unknown[]): Record<string, unknown>[] {
+    return this.stmt.all(...(params as any[])) as Record<string, unknown>[];
+  }
+
+  run(...params: unknown[]): { changes: number | bigint; lastInsertRowid: number | bigint } {
+    return this.stmt.run(...(params as any[]));
+  }
+
+  free(): void {
+    this.iterator = null;
+    this.current = undefined;
+  }
+}
+
+class NativeDatabaseCompat {
+  private lastChanges = 0;
+
+  constructor(private readonly db: DatabaseSync) {}
+
+  run(sql: string, params: SQLiteParams = []): void {
+    const trimmed = sql.trim();
+    if (Array.isArray(params) && params.length === 0 && !trimmed.includes('?') && trimmed.split(';').filter(Boolean).length > 1) {
+      this.db.exec(sql);
+      this.lastChanges = 0;
+      return;
+    }
+    const result = this.db.prepare(sql).run(...(paramsToArgs(params) as any[]));
+    this.lastChanges = Number(result.changes);
+  }
+
+  prepare(sql: string): NativeStatementCompat {
+    return new NativeStatementCompat(this.db.prepare(sql));
+  }
+
+  exec(sql: string): Array<{ columns: string[]; values: unknown[][] }> {
+    const trimmed = sql.trim();
+    if (/^(?:SELECT|PRAGMA)\b/i.test(trimmed)) {
+      const stmt = this.db.prepare(sql);
+      const rows = stmt.all() as Record<string, unknown>[];
+      const columns = stmt.columns().map((column) => column.name);
+      return [{ columns, values: rows.map((row) => columns.map((column) => row[column])) }];
+    }
+    this.db.exec(sql);
+    this.lastChanges = 0;
+    return [];
+  }
+
+  getRowsModified(): number {
+    return this.lastChanges;
+  }
+
+  close(): void {
+    this.db.close();
+  }
+}
 
 export interface WorkflowMutationIntent {
   id: number;
@@ -107,16 +209,11 @@ export interface WorkflowMutationLease {
 }
 
 export class SQLiteAdapter implements PersistenceAdapter {
-  private db: SqlJsDatabase;
+  private db: NativeDatabaseCompat;
+  private nativeDb: DatabaseSync;
   private dbPath: string | null;
-  private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private readOnly: boolean;
   private dirty = false;
-  private flushDelayMs: number;
-  private flushWarnThresholdMs: number;
-  private flushWarnDbSizeBytes: number;
-  private flushWarnCooldownMs: number;
-  private lastFlushWarnAtMs = 0;
   private outputTailLimit: number;
   private outputTailCache = new Map<string, OutputChunk[]>();
   private outputDir: string;
@@ -125,36 +222,28 @@ export class SQLiteAdapter implements PersistenceAdapter {
   private lastWorkflowTaskSnapshotStats: Record<string, unknown> | null = null;
 
   /** Use SQLiteAdapter.create() instead. */
-  private constructor(db: SqlJsDatabase, dbPath: string | null, options?: SQLiteAdapterOptions) {
-    this.db = db;
+  private constructor(db: DatabaseSync, dbPath: string | null, options?: SQLiteAdapterOptions) {
+    this.nativeDb = db;
+    this.db = new NativeDatabaseCompat(db);
     this.dbPath = dbPath;
     this.readOnly = options?.readOnly === true;
-    this.flushDelayMs = this.dbPath
-      ? Number(process.env.INVOKER_SQLITE_FLUSH_DEBOUNCE_MS ?? 0)
-      : 0;
-    this.flushWarnThresholdMs = Number(process.env.INVOKER_SQLITE_FLUSH_WARN_THRESHOLD_MS ?? 250);
-    this.flushWarnDbSizeBytes = Number(process.env.INVOKER_SQLITE_FLUSH_WARN_DB_MB ?? 256) * 1024 * 1024;
-    this.flushWarnCooldownMs = Number(process.env.INVOKER_SQLITE_FLUSH_WARN_COOLDOWN_MS ?? 60_000);
     this.outputTailLimit = options?.outputTailLimit ?? 100;
     this.outputDir = options?.outputDir ?? this.resolveOutputDir(dbPath);
-    this.db.run('PRAGMA foreign_keys = ON');
-    this.initSchema();
-    this.migrate();
+    this.configureConnection(dbPath !== null);
+    if (!this.readOnly) {
+      this.initSchema();
+      this.migrate();
+    }
   }
 
   /**
-   * Async factory — loads WASM once, opens or creates the database.
+   * Async factory — opens or creates the database.
    * If the on-disk file is corrupted, backs it up and starts fresh.
    * @param dbPath File path or ':memory:' (default).
-   * @param options readOnly=true opens DB for read operations without schema mutation/flush.
+   * @param options readOnly=true opens DB for read operations without schema mutation.
    *                ownerCapability=true is required to open DB in writable mode for file-backed databases.
    */
   static async create(dbPath: string = ':memory:', options?: SQLiteAdapterOptions): Promise<SQLiteAdapter> {
-    if (!sqlJsPromise) {
-      sqlJsPromise = initSqlJs();
-    }
-    const SQL = await sqlJsPromise;
-
     const isFile = dbPath !== ':memory:';
     const requestWritable = options?.readOnly !== true;
 
@@ -167,23 +256,32 @@ export class SQLiteAdapter implements PersistenceAdapter {
       );
     }
 
-    if (isFile && existsSync(dbPath)) {
-      const buffer = readFileSync(dbPath);
-      try {
-        const db = new SQL.Database(buffer);
-        return new SQLiteAdapter(db, dbPath, options);
-      } catch (err) {
-        const backupPath = `${dbPath}.corrupt-${Date.now()}`;
-        console.error(
-          `[SQLiteAdapter] Database corrupted (${err instanceof Error ? err.message : String(err)}). ` +
-          `Backing up to ${backupPath} and starting fresh.`,
-        );
-        renameSync(dbPath, backupPath);
-      }
+    if (isFile) {
+      mkdirSync(dirname(dbPath), { recursive: true });
     }
 
-    const db = new SQL.Database();
-    return new SQLiteAdapter(db, isFile ? dbPath : null, options);
+    try {
+      const { DatabaseSync } = await loadNativeSqlite();
+      const db = new DatabaseSync(dbPath, { readOnly: options?.readOnly === true });
+      return new SQLiteAdapter(db, isFile ? dbPath : null, options);
+    } catch (err) {
+      if (!isFile || options?.readOnly === true || !existsSync(dbPath)) {
+        throw err;
+      }
+      const backupPath = `${dbPath}.corrupt-${Date.now()}`;
+      console.error(
+        `[SQLiteAdapter] Database corrupted (${err instanceof Error ? err.message : String(err)}). ` +
+        `Backing up to ${backupPath} and starting fresh.`,
+      );
+      renameSync(dbPath, backupPath);
+      for (const suffix of ['-wal', '-shm']) {
+        const sidecar = `${dbPath}${suffix}`;
+        if (existsSync(sidecar)) renameSync(sidecar, `${backupPath}${suffix}`);
+      }
+      const { DatabaseSync } = await loadNativeSqlite();
+      const db = new DatabaseSync(dbPath);
+      return new SQLiteAdapter(db, dbPath, options);
+    }
   }
 
   private resolveOutputDir(dbPath: string | null): string {
@@ -194,7 +292,17 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return join(invokerHome, 'task-output');
   }
 
-  // ── sql.js Helpers ───────────────────────────────────────
+  private configureConnection(fileBacked: boolean): void {
+    this.nativeDb.exec('PRAGMA busy_timeout = 5000');
+    this.nativeDb.exec('PRAGMA foreign_keys = ON');
+    if (fileBacked) {
+      this.nativeDb.exec('PRAGMA journal_mode = WAL');
+      this.nativeDb.exec('PRAGMA synchronous = FULL');
+      this.nativeDb.exec('PRAGMA wal_autocheckpoint = 1000');
+    }
+  }
+
+  // ── SQLite Helpers ───────────────────────────────────────
 
   /** Run a single-row SELECT, returning the row as an object or undefined. */
   private queryOne(sql: string, params: unknown[] = []): Record<string, unknown> | undefined {
@@ -227,31 +335,27 @@ export class SQLiteAdapter implements PersistenceAdapter {
     }
   }
 
-  /** Run an INSERT/UPDATE/DELETE and schedule a flush. */
+  /** Run an INSERT/UPDATE/DELETE. File-backed durability is handled by SQLite/WAL. */
   private execRun(sql: string, params: unknown[] = []): void {
     this.ensureWritable();
     this.db.run(sql, params as any[]);
     this.dirty = true;
-    if (this.writeTransactionDepth === 0) {
-      this.scheduleFlush();
-    }
   }
 
   private runTransaction<T>(work: () => T): T {
     this.ensureWritable();
-    this.db.run('BEGIN');
+    this.db.run(this.writeTransactionDepth === 0 ? 'BEGIN IMMEDIATE' : `SAVEPOINT invoker_nested_${this.writeTransactionDepth}`);
     this.writeTransactionDepth += 1;
     try {
       const result = work();
       this.writeTransactionDepth -= 1;
-      this.db.run('COMMIT');
+      this.db.run(this.writeTransactionDepth === 0 ? 'COMMIT' : `RELEASE invoker_nested_${this.writeTransactionDepth}`);
       this.dirty = true;
-      this.scheduleFlush();
       return result;
     } catch (err) {
       this.writeTransactionDepth = Math.max(0, this.writeTransactionDepth - 1);
       try {
-        this.db.run('ROLLBACK');
+        this.db.run(this.writeTransactionDepth === 0 ? 'ROLLBACK' : `ROLLBACK TO invoker_nested_${this.writeTransactionDepth}`);
       } catch {
         // Preserve the original statement failure if SQLite already aborted the
         // transaction before we reached this cleanup path.
@@ -298,6 +402,20 @@ export class SQLiteAdapter implements PersistenceAdapter {
       );
       report.normalizedMergeModes = this.db.getRowsModified();
 
+      const staleAutoFixRows = this.queryAll(
+        `SELECT id FROM tasks
+         WHERE status != 'stale'
+           AND (
+             (parent_task IS NOT NULL AND id LIKE '%-exp-fix-%')
+             OR (
+               is_reconciliation = 1
+               AND parent_task IN (
+                 SELECT id FROM tasks
+                 WHERE parent_task IS NOT NULL AND id LIKE '%-exp-fix-%'
+               )
+             )
+           )`,
+      );
       this.db.run(
         `UPDATE tasks
          SET status = 'stale',
@@ -316,7 +434,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
              )
            )`,
       );
-      report.staleAutoFixExperimentTasks = this.db.getRowsModified();
+      report.staleAutoFixExperimentTasks = staleAutoFixRows.length;
 
       this.db.run(
         `UPDATE tasks
@@ -333,45 +451,26 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return report;
   }
 
-  /** Flush DB to disk (no-op for :memory:). */
-  private flush(): void {
-    if (!this.dbPath || !this.dirty) return;
-    const startedAt = Date.now();
-    const dir = dirname(this.dbPath);
-    mkdirSync(dir, { recursive: true });
-    const tmpPath = `${this.dbPath}.tmp`;
-    const exported = Buffer.from(this.db.export());
-    writeFileSync(tmpPath, exported);
-    renameSync(tmpPath, this.dbPath);
-    this.dirty = false;
-    const elapsedMs = Date.now() - startedAt;
-    const shouldWarnElapsed = Number.isFinite(this.flushWarnThresholdMs) && elapsedMs >= this.flushWarnThresholdMs;
-    const shouldWarnSize = Number.isFinite(this.flushWarnDbSizeBytes) && exported.length >= this.flushWarnDbSizeBytes;
-    if ((shouldWarnElapsed || shouldWarnSize) && Date.now() - this.lastFlushWarnAtMs >= this.flushWarnCooldownMs) {
-      this.lastFlushWarnAtMs = Date.now();
-      process.stderr.write(
-        `[sqlite-flush] slow-or-large flush elapsedMs=${elapsedMs} sizeBytes=${exported.length} debounceMs=${this.flushDelayMs}\n`,
-      );
+  checkpointWal(mode: 'PASSIVE' | 'FULL' | 'RESTART' | 'TRUNCATE' = 'PASSIVE'): void {
+    if (!this.dbPath) return;
+    try {
+      this.nativeDb.exec(`PRAGMA wal_checkpoint(${mode})`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!/locked|busy/i.test(message)) {
+        throw err;
+      }
     }
   }
 
-  /** Debounced flush — coalesces rapid writes into a single I/O. */
-  private scheduleFlush(): void {
-    if (!this.dbPath) return;
-    if (this.flushDelayMs <= 0) {
-      if (this.flushTimer) {
-        clearTimeout(this.flushTimer);
-        this.flushTimer = null;
-      }
-      this.flush();
-      return;
+  async backupTo(destinationPath: string): Promise<void> {
+    if (!this.dbPath) {
+      throw new Error('SQLiteAdapter.backupTo requires a file-backed database');
     }
-    // Coalesce bursts onto the earliest pending flush to avoid timer churn.
-    if (this.flushTimer) return;
-    this.flushTimer = setTimeout(() => {
-      this.flush();
-      this.flushTimer = null;
-    }, this.flushDelayMs);
+    mkdirSync(dirname(destinationPath), { recursive: true });
+    const { backup } = await loadNativeSqlite();
+    await backup(this.nativeDb, destinationPath);
+    this.checkpointWal('PASSIVE');
   }
 
   private initSchema(): void {
@@ -737,7 +836,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
       this.db.run('PRAGMA foreign_keys = ON');
     }
     this.dirty = true;
-    this.scheduleFlush();
   }
 
   /**
@@ -1645,7 +1743,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
     );
     const changes = this.db.getRowsModified();
     this.dirty = true;
-    this.scheduleFlush();
     return changes;
   }
 
@@ -1876,9 +1973,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
     const claimed = this.db.getRowsModified() > 0;
     if (claimed) {
       this.dirty = true;
-      if (this.writeTransactionDepth === 0) {
-        this.scheduleFlush();
-      }
     }
     return claimed;
   }
@@ -1933,11 +2027,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Lifecycle ─────────────────────────────────────────
 
   close(): void {
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer);
-      this.flushTimer = null;
+    if (this.dbPath && !this.readOnly) {
+      this.checkpointWal('PASSIVE');
     }
-    this.flush();
     this.db.close();
   }
 
