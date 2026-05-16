@@ -153,6 +153,7 @@ import { computeDeferredLaunchTiming } from './deferred-runnable.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import { relaunchOrphansAndStartReady } from './orphan-relaunch.js';
 import { evaluateExecutingStall } from './executing-stall.js';
+import { evaluateLaunchStall } from './launch-stall.js';
 import { listOpenFixIntentsForTask } from './auto-fix-intents.js';
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
 import {
@@ -2387,13 +2388,17 @@ if (isHeadless) {
                 if (task.status === 'running' || (task.status === 'pending' && task.execution.phase === 'launching')) {
                   const launchStartedAt = parseExecutionDate(task.execution.launchStartedAt)
                     ?? parseExecutionDate(task.execution.startedAt);
-                  const launchAgeMs = launchStartedAt ? now.getTime() - launchStartedAt.getTime() : 0;
-                  const launchStalled =
-                    task.execution.phase === 'launching'
-                    && launchStartedAt !== undefined
-                    && launchAgeMs >= launchingStallTimeoutMs
-                    && !taskHandles.has(task.id)
-                    && !launchingTasks.has(task.id);
+                  const launchStall = evaluateLaunchStall({
+                    now,
+                    status: task.status,
+                    phase: task.execution.phase,
+                    launchStartedAt,
+                    selectedAttempt,
+                    hasExecutionHandle: taskHandles.has(task.id),
+                    isKnownLaunching: launchingTasks.has(task.id),
+                    launchingStallTimeoutMs,
+                  });
+                  const { launchAgeMs, launchStalled } = launchStall;
                   if (launchStalled) {
                     const launchError =
                       `Launch stalled: task remained in running/launching for ${Math.floor(launchingStallTimeoutMs / 1000)}s without a spawned execution handle`;
