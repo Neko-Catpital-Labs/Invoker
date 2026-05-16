@@ -27,6 +27,16 @@ if [ "${#cases[@]}" -eq 0 ]; then
   echo "No case scripts in scripts/e2e-dry-run/cases/"
   exit 1
 fi
+if [ -n "${INVOKER_E2E_DRY_RUN_EXPECTED_CASES:-}" ]; then
+  if ! [[ "$INVOKER_E2E_DRY_RUN_EXPECTED_CASES" =~ ^[0-9]+$ ]]; then
+    echo "INVOKER_E2E_DRY_RUN_EXPECTED_CASES must be a non-negative integer"
+    exit 2
+  fi
+  if [ "${#cases[@]}" -ne "$INVOKER_E2E_DRY_RUN_EXPECTED_CASES" ]; then
+    echo "Expected $INVOKER_E2E_DRY_RUN_EXPECTED_CASES case scripts, found ${#cases[@]}"
+    exit 1
+  fi
+fi
 
 failed=0
 passed=0
