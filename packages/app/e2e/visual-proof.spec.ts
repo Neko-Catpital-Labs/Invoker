@@ -98,6 +98,20 @@ const MERGE_GATE_NO_INLINE_APPROVE_PLAN = {
   ],
 };
 
+/** Plan for status color parity proof: tasks set to the representative canonical statuses while the workflow status itself is driven to `review_ready` via the merge gate. */
+const STATUS_COLOR_PARITY_PLAN = {
+  name: 'Workflow task status color parity',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'pull_request' as const,
+  mergeMode: 'external_review',
+  tasks: [
+    { id: 'parity-running', description: 'Running task', command: 'echo run', dependencies: [] as string[] },
+    { id: 'parity-review', description: 'Review ready task', command: 'echo review', dependencies: [] as string[] },
+    { id: 'parity-approval', description: 'Awaiting approval task', command: 'echo approve', dependencies: [] as string[] },
+    { id: 'parity-blocked', description: 'Blocked downstream task', command: 'echo blocked', dependencies: ['parity-running'] },
+  ],
+};
+
 /** Pull-request workflow for proving workflow selection exposes the merge gate PR in the inspector. */
 const REVIEW_READY_WORKFLOW_PR_PLAN = {
   name: 'Review ready workflow PR proof',
@@ -419,6 +433,33 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByRole('link', { name: reviewUrl })).toHaveAttribute('href', reviewUrl);
 
     await captureScreenshot(page, 'review-ready-workflow-pr-sidebar');
+  });
+
+  test('workflow-task-status-color-parity — workflow chip matches canonical task palette', async ({ page }) => {
+    const workflowId = await loadPlanAndSelectWorkflow(page, STATUS_COLOR_PARITY_PLAN);
+    const now = new Date();
+    await injectTaskStates(page, [
+      { taskId: 'parity-running', changes: { status: 'running', execution: { startedAt: now } } },
+      { taskId: 'parity-review', changes: { status: 'review_ready', execution: { startedAt: now } } },
+      { taskId: 'parity-approval', changes: { status: 'awaiting_approval', execution: { startedAt: now } } },
+      // parity-blocked keeps its pending status with an unmet dep on parity-running.
+      {
+        taskId: `__merge__${workflowId}`,
+        changes: { status: 'review_ready', execution: { startedAt: now } },
+      },
+    ]);
+
+    // Workflow-level: chip adopts the canonical review_ready label/colors.
+    const chip = workflowNode(page, workflowId);
+    await expect(chip).toBeVisible();
+    await expect(chip.getByText('review ready')).toBeVisible();
+
+    // Task-level: canonical status labels render on task nodes from the same palette.
+    await expect(page.locator('.react-flow__node[data-testid$="parity-review"]').getByText('REVIEW_READY')).toBeVisible();
+    await expect(page.locator('.react-flow__node[data-testid$="parity-approval"]').getByText('APPROVE')).toBeVisible();
+    await expect(page.locator('.react-flow__node[data-testid$="parity-running"]').getByText('RUNNING')).toBeVisible();
+
+    await captureScreenshot(page, 'workflow-task-status-color-parity');
   });
 
   test('interactive-status-hues — fixing-with-ai, needs-input, awaiting-approval', async ({ page }) => {
