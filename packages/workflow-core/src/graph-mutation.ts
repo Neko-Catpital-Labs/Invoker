@@ -11,12 +11,38 @@
  * the validity functions in @invoker/graph.
  */
 
-import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig } from '@invoker/workflow-graph';
-import type { GraphMutation, OrchestratorPersistence, OrchestratorMessageBus } from './orchestrator.js';
+import type { RunnerKind, TaskState, TaskDelta, TaskStateChanges, TaskConfig } from '@invoker/workflow-graph';
 import { createTaskState } from '@invoker/workflow-graph';
 import { findLeafTaskIds } from '@invoker/workflow-graph';
+import type { TaskDeltaMessageBus } from './orchestrator/events.js';
+import { publishTaskDelta, publishTaskUpdated } from './orchestrator/events.js';
 
-const TASK_DELTA_CHANNEL = 'task.delta';
+interface GraphMutationNodeDef {
+  id: string;
+  description: string;
+  dependencies: string[];
+  workflowId?: string;
+  parentTask?: string;
+  experimentPrompt?: string;
+  prompt?: string;
+  command?: string;
+  runnerKind?: RunnerKind;
+  isReconciliation?: boolean;
+  requiresManualApproval?: boolean;
+  isMergeNode?: boolean;
+}
+
+interface GraphMutation {
+  sourceNodeId: string;
+  sourceDisposition: 'complete' | 'stale';
+  sourceChanges?: TaskStateChanges;
+  newNodes: GraphMutationNodeDef[];
+  outputNodeId: string;
+}
+
+interface GraphMutationPersistence {
+  logEvent?(taskId: string, eventType: string, payload?: unknown): void;
+}
 
 // ── Host Interface ──────────────────────────────────────────
 
@@ -30,8 +56,8 @@ export interface GraphMutationHost {
     getTask(id: string): TaskState | undefined;
     restoreTask(task: TaskState): void;
   };
-  persistence: OrchestratorPersistence;
-  messageBus: OrchestratorMessageBus;
+  persistence: GraphMutationPersistence;
+  messageBus: TaskDeltaMessageBus;
   writeAndSync(taskId: string, changes: TaskStateChanges): TaskState;
   createAndSync(task: TaskState): TaskState;
   getMergeNode(workflowId: string): TaskState | undefined;
@@ -118,13 +144,7 @@ export function reconcileMergeLeavesImpl(host: GraphMutationHost, workflowId: st
     execution: {},
   };
   const updated = host.writeAndSync(mergeNode.id, changes);
-  host.messageBus.publish(TASK_DELTA_CHANNEL, {
-    type: 'updated',
-    taskId: mergeNode.id,
-    changes,
-    taskStateVersion: updated.taskStateVersion,
-    previousTaskStateVersion: mergeNode.taskStateVersion,
-  });
+  publishTaskUpdated(host, mergeNode, updated, changes);
 }
 
 /**
@@ -151,7 +171,7 @@ export function applyGraphMutationImpl(host: GraphMutationHost, mutation: GraphM
     const remapChanges: TaskStateChanges = { dependencies: newDeps };
     const remapped = host.writeAndSync(task.id, remapChanges);
     const delta: TaskDelta = { type: 'updated', taskId: task.id, changes: remapChanges, taskStateVersion: remapped.taskStateVersion, previousTaskStateVersion: task.taskStateVersion };
-    host.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+    publishTaskDelta(host, delta);
     allDeltas.push(delta);
   }
 
@@ -181,7 +201,7 @@ export function applyGraphMutationImpl(host: GraphMutationHost, mutation: GraphM
     mutation.sourceDisposition === 'complete' ? 'task.completed' : 'task.stale',
     sourceChanges,
   );
-  host.messageBus.publish(TASK_DELTA_CHANNEL, sourceDelta);
+  publishTaskDelta(host, sourceDelta);
   allDeltas.push(sourceDelta);
 
   // 3. Create new nodes
@@ -215,7 +235,7 @@ export function applyGraphMutationImpl(host: GraphMutationHost, mutation: GraphM
     host.createAndSync(task);
     const delta: TaskDelta = { type: 'created', task };
     host.persistence.logEvent?.(task.id, 'task.created');
-    host.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+    publishTaskDelta(host, delta);
     allDeltas.push(delta);
   }
 

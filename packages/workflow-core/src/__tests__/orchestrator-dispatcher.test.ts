@@ -198,6 +198,34 @@ describe('Orchestrator launch claims', () => {
     expect(persistence.loadAttempt(attemptId)?.leaseExpiresAt).toEqual(leaseExpiresAt);
   });
 
+  it('preserves ready-task scheduling after a completed transition', () => {
+    const { orchestrator, persistence } = makeOrchestrator({ maxConcurrency: 1 });
+    orchestrator.loadPlan({
+      name: 'ready-after-complete',
+      onFinish: 'none',
+      tasks: [
+        { id: 'prepare', description: 'prepare', command: 'echo prepare' },
+        { id: 'verify', description: 'verify', command: 'echo verify', dependencies: ['prepare'] },
+      ],
+    });
+
+    const prepareId = taskIdBySuffix(orchestrator, 'prepare');
+    const verifyId = taskIdBySuffix(orchestrator, 'verify');
+
+    const [initialClaim] = orchestrator.startExecution();
+    expect(initialClaim?.id).toBe(prepareId);
+    expect(orchestrator.getTask(verifyId)?.status).toBe('pending');
+
+    const downstreamClaims = respondForTask(orchestrator, prepareId, 'completed');
+    expect(downstreamClaims.map((task) => task.id)).toEqual([verifyId]);
+    expect(orchestrator.getTask(verifyId)?.status).toBe('running');
+
+    const verifyAttemptId = orchestrator.getTask(verifyId)?.execution.selectedAttemptId;
+    expect(verifyAttemptId).toBeTruthy();
+    expect(persistence.loadAttempt(verifyAttemptId!)?.status).toBe('running');
+    expect(orchestrator.startExecution()).toHaveLength(0);
+  });
+
   it('returns launch claims for restart/retry/recreate entrypoints', () => {
     const { orchestrator } = makeOrchestrator();
     orchestrator.loadPlan({
