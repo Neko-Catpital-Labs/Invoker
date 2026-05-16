@@ -60,9 +60,9 @@ Expected output:
 
 ```text
 ✓ src/__tests__/branch-utils.test.ts (55 tests)
-✓ src/__tests__/worktree-discovery.test.ts (25 tests)
+✓ src/__tests__/worktree-discovery.test.ts (26 tests)
 Test Files  2 passed (2)
-Tests  80 passed (80)
+Tests  81 passed (81)
 ```
 
 Thresholds:
@@ -139,7 +139,7 @@ Vitest expanded this through the package script into the package suite rather th
 
 ```text
 Test Files  46 passed (46)
-Tests  952 passed (952)
+Tests  953 passed (953)
 ```
 
 During the run, these relevant files reported passing:
@@ -149,6 +149,7 @@ During the run, these relevant files reported passing:
 ✓ src/__tests__/worktree-executor.test.ts (63 tests)
 ✓ src/__tests__/repo-pool.test.ts (31 tests)
 ✓ src/__tests__/branch-utils.test.ts (55 tests)
+✓ src/__tests__/worktree-discovery.test.ts (26 tests)
 ```
 
 This is useful as a smoke signal, but the deterministic reviewer commands above are the contract for INV-114.
