@@ -66,14 +66,14 @@ pnpm --filter @invoker/app exec vitest run src/__tests__/headless-client.test.ts
 Expected output:
 
 ```text
-✓ src/__tests__/headless-client.test.ts (18 tests)
+✓ src/__tests__/headless-client.test.ts (19 tests)
 Test Files  1 passed (1)
-Tests  18 passed (18)
+Tests  19 passed (19)
 ```
 
 Thresholds:
 
-- 18/18 headless-client tests pass.
+- 19/19 headless-client tests pass.
 - No skipped headless-client tests.
 - Slow-path tests are expected and bounded:
   - long no-track delegation under load completes before each 15 second test timeout.
@@ -120,12 +120,13 @@ Evidence from `packages/app/src/__tests__/headless-client.test.ts`:
 Evidence from `submit-plan.sh`:
 
 - The script resolves relative plan paths against the caller's directory.
+- The script rejects a missing plan path before launching Electron.
 - It unsets `ELECTRON_RUN_AS_NODE`.
 - It applies Linux sandbox and software rendering flags deterministically.
 - It invokes the Electron app in headless mode through `--headless run`.
 
 ## Decision
 
-Keep the selected design. The deterministic test surface proves scheduler behavior independently of I/O and proves headless owner delegation across normal, bootstrap, stale-bus, slow-response, query, and failure paths.
+Keep the selected design. The deterministic test surface proves scheduler behavior independently of I/O and proves headless owner delegation across normal, bootstrap, stale-bus, slow-response, query, and failure paths. The implementation update consumes this conclusion by keeping `submit-plan.sh` as a normalized Electron `--headless run` entrypoint, keeping `TaskScheduler` pure, and adding explicit `headless.run` proof for an existing GUI owner.
 
 Acceptance threshold for INV-143: both narrow commands above must pass exactly, and future changes that alter `submit-plan.sh`, `TaskScheduler`, or headless owner delegation must update this brief or add equivalent proof.
