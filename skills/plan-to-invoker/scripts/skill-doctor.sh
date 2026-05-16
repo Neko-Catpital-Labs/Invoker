@@ -303,6 +303,9 @@ fi
 # Check 4: Task atomicity linting (if not skipped)
 if [[ "$SKIP_ATOMICITY" == "false" ]]; then
   atomicity_args=(--strict-delegation)
+  if [[ -n "$STACK_MANIFEST_FILE" ]]; then
+    atomicity_args+=(--stack-manifest "$STACK_MANIFEST_FILE")
+  fi
   if [[ "$WARN_DELEGATION" == "true" ]]; then
     atomicity_args+=(--warn-delegation)
     run_check \

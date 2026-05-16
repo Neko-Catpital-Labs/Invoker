@@ -20,7 +20,7 @@ Standard pattern: **implement → test → verify**. Uses `onFinish: merge` to a
 
 **See**: `fixtures/positive/02-feature-implementation.yaml`
 
-**Pattern**: Every prompt task MUST have a corresponding command task to verify, and implementation plans end with a final `pnpm run test:all` gate.
+**Pattern**: Every prompt task MUST have a corresponding command task to verify. Standalone implementation plans and terminal stack workflows end with a final `pnpm run test:all` gate; non-terminal stack workflows end with focused verification.
 
 ---
 
@@ -55,7 +55,7 @@ Complex plan with diamond dependencies. Uses `onFinish: pull_request` for manual
 - `fixtures/negative/anti-pattern-f-dangerous-commands.yaml` — Avoid destructive commands (`rm -rf`, force push)
 - `fixtures/negative/anti-pattern-g-monolithic-prompt-edit-bridge.yaml` — Monolithic `wf-1777929074509-8`-style workflow missing dependency-first layered decomposition metadata
 - `fixtures/negative/anti-pattern-h-layer-order-violation.yaml` — Lower layer depends on higher layer without `Layer exception: allowed`
-- `fixtures/negative/anti-pattern-i-final-regression-not-test-all.yaml` — Implementation plan ends without a terminal `pnpm run test:all` gate
+- `fixtures/negative/anti-pattern-i-final-regression-not-test-all.yaml` — Standalone implementation plan ends without a terminal `pnpm run test:all` gate
 - `fixtures/negative/anti-pattern-j-zero-context-missing-metadata.yaml` — Prompt task omits strict zero-context handoff metadata required for implementation plans
 
 All anti-patterns are validated by `scripts/test-fixtures.sh` with deterministic error detection.
@@ -143,7 +143,7 @@ Use this pattern when a change is too large for a single reviewable workflow. Fo
 
 **Validation enforces**:
 - Every prompt task must have verification command task
-- Implementation plans must end with `pnpm run test:all` as the final regression gate
+- Standalone implementation plans and terminal stack workflows must end with `pnpm run test:all` as the final regression gate
 - Use `pnpm test`, never `npx vitest run`
 - Dependencies field required (even if empty)
 - No dangerous commands without manual approval

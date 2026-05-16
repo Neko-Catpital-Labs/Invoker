@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
 # Enforce atomic + detailed task quality constraints for Invoker plans.
-# Usage: bash lint-task-atomicity.sh [--warn-delegation] [--strict-delegation] <plan.yaml>
+# Usage: bash lint-task-atomicity.sh [--warn-delegation] [--strict-delegation] [--stack-manifest FILE] <plan.yaml>
 #
 # --warn-delegation  Print advisory warnings if task descriptions omit best-effort
 #                    delegation headings (Files: / Change types: / Acceptance criteria:).
 #                    Does not change exit code (still 0 if no hard errors). Optional.
 # --strict-delegation  For implementation plans (onFinish != none), fail prompt tasks
 #                    that are not self-contained for zero-context remote execution.
+# --stack-manifest FILE
+#                    When validating an authored stack, require the full-suite
+#                    pnpm run test:all gate only on the highest-order workflow.
 set -euo pipefail
 
 warn_delegation=0
 strict_delegation=0
+stack_manifest_file=""
 while [[ $# -gt 0 ]]; do
   case "${1:-}" in
     --warn-delegation)
@@ -21,20 +25,98 @@ while [[ $# -gt 0 ]]; do
       strict_delegation=1
       shift
       ;;
+    --stack-manifest)
+      stack_manifest_file="${2:-}"
+      if [[ -z "$stack_manifest_file" ]]; then
+        echo "ERROR: --stack-manifest requires a file path" >&2
+        exit 2
+      fi
+      shift 2
+      ;;
     *)
       break
       ;;
   esac
 done
 
-file="${1:?Usage: lint-task-atomicity.sh [--warn-delegation] [--strict-delegation] <plan.yaml>}"
+file="${1:?Usage: lint-task-atomicity.sh [--warn-delegation] [--strict-delegation] [--stack-manifest FILE] <plan.yaml>}"
 
 if [[ ! -f "$file" ]]; then
   echo "ERROR: File not found: $file" >&2
   exit 1
 fi
 
-awk -v warnDelegation="$warn_delegation" -v strictDelegation="$strict_delegation" '
+require_final_test_all=1
+if [[ -n "$stack_manifest_file" ]]; then
+  if [[ ! -f "$stack_manifest_file" ]]; then
+    echo "ERROR: Stack manifest not found: $stack_manifest_file" >&2
+    exit 1
+  fi
+  require_final_test_all="$(
+    python3 - "$file" "$stack_manifest_file" <<'PY'
+import json
+import pathlib
+import subprocess
+import sys
+
+plan_file = pathlib.Path(sys.argv[1]).resolve()
+manifest_file = pathlib.Path(sys.argv[2]).resolve()
+
+try:
+    data = json.loads(manifest_file.read_text(encoding="utf-8"))
+except Exception as exc:
+    print(f"ERROR: failed to parse stack manifest: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+manifest_dir = manifest_file.parent
+try:
+    repo_root_raw = subprocess.check_output(
+        ["git", "-C", str(manifest_dir), "rev-parse", "--show-toplevel"],
+        text=True,
+        stderr=subprocess.DEVNULL,
+    ).strip()
+    repo_root = pathlib.Path(repo_root_raw)
+except Exception:
+    repo_root = None
+
+def resolve(candidate: str) -> pathlib.Path:
+    path = pathlib.Path(candidate)
+    if path.is_absolute():
+        return path.resolve()
+    if repo_root is not None:
+        return (repo_root / path).resolve()
+    return (manifest_dir / path).resolve()
+
+workflows = data.get("workflows")
+if not isinstance(workflows, list) or not workflows:
+    print("ERROR: stack manifest must contain a non-empty workflows array", file=sys.stderr)
+    sys.exit(1)
+
+rows = []
+for item in workflows:
+    if not isinstance(item, dict):
+        continue
+    plan = item.get("planFile")
+    order = item.get("order")
+    if isinstance(plan, str) and plan.strip() and isinstance(order, int):
+        rows.append((order, resolve(plan)))
+
+if not rows:
+    print("ERROR: stack manifest has no valid planFile/order entries", file=sys.stderr)
+    sys.exit(1)
+
+matches = [order for order, path in rows if path == plan_file]
+if not matches:
+    print(f"ERROR: plan file is not listed in stack manifest: {plan_file}", file=sys.stderr)
+    sys.exit(1)
+
+max_order = max(order for order, _ in rows)
+print("1" if max(matches) == max_order else "0")
+PY
+  )"
+fi
+
+awk -v warnDelegation="$warn_delegation" -v strictDelegation="$strict_delegation" -v requireFinalTestAll="$require_final_test_all" '
 function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
 function strip_quotes(s) { gsub(/["'\''"]/, "", s); return s }
 function normalize_command(s) {
@@ -434,7 +516,7 @@ END {
       }
 
       if (cleanup_id == "") {
-        errors[++errn] = "Task \"" experiment_id "\" requires cleanup task \"cleanup-experiment-artifacts-" suffix "\" before final regression gate"
+        errors[++errn] = "Task \"" experiment_id "\" requires cleanup task \"cleanup-experiment-artifacts-" suffix "\" before that workflow final verification gate"
       } else {
         cleanup_idx = task_id_to_index[cleanup_id]
         if (cleanup_idx > 0) {
@@ -474,15 +556,15 @@ END {
     }
   }
 
-  if (enforce_layering == 1 && taskn > 0) {
+  if (enforce_layering == 1 && requireFinalTestAll == 1 && taskn > 0) {
     final_idx = taskn
     final_id = task_ids[final_idx]
     final_command = task_command_line[final_idx]
 
     if (task_has_command[final_idx] != 1) {
-      errors[++errn] = "Task \"" final_id "\" must be a command task because implementation plans require a final pnpm run test:all regression gate"
+      errors[++errn] = "Task \"" final_id "\" must be a command task because standalone implementation plans and terminal stack workflows require a final pnpm run test:all regression gate"
     } else if (final_command != "pnpm run test:all") {
-      errors[++errn] = "Task \"" final_id "\" must be the final regression gate and run exactly \"pnpm run test:all\""
+      errors[++errn] = "Task \"" final_id "\" must be the final full-suite regression gate and run exactly \"pnpm run test:all\""
     }
 
     split(task_dependencies[final_idx], final_dep_ids, /,/)
