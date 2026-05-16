@@ -42,6 +42,8 @@ export interface GraphMutationHost {
 /**
  * Recompute the merge node's dependencies from the actual graph state.
  * Active (non-stale, non-merge) leaf tasks become the merge gate's deps.
+ * INV-77 deliberately derives this from graph state instead of trusting
+ * incrementally persisted dependency arrays.
  * No-ops if deps are already correct.
  */
 function getExpectedMergeLeafIds(host: GraphMutationHost, workflowId: string): string[] {
@@ -52,7 +54,7 @@ function getExpectedMergeLeafIds(host: GraphMutationHost, workflowId: string): s
       !t.config.isMergeNode &&
       t.status !== 'stale',
   );
-  return findLeafTaskIds(activeTasks);
+  return findLeafTaskIds(activeTasks).sort((a, b) => a.localeCompare(b));
 }
 
 export function assertMergeLeavesInvariantImpl(host: GraphMutationHost, workflowId: string): void {
@@ -109,6 +111,8 @@ export function reconcileMergeLeavesImpl(host: GraphMutationHost, workflowId: st
     currentDeps.size === newDepsSet.size &&
     [...currentDeps].every((d) => newDepsSet.has(d))
   ) {
+    assertMergeLeavesInvariantImpl(host, workflowId);
+    assertMergeExperimentDependenciesInvariantImpl(host, workflowId);
     return;
   }
 
@@ -125,6 +129,8 @@ export function reconcileMergeLeavesImpl(host: GraphMutationHost, workflowId: st
     taskStateVersion: updated.taskStateVersion,
     previousTaskStateVersion: mergeNode.taskStateVersion,
   });
+  assertMergeLeavesInvariantImpl(host, workflowId);
+  assertMergeExperimentDependenciesInvariantImpl(host, workflowId);
 }
 
 /**
@@ -134,6 +140,7 @@ export function reconcileMergeLeavesImpl(host: GraphMutationHost, workflowId: st
  *   1. Remap downstream dependencies in-place (sourceNode → outputNode)
  *   2. Apply source disposition (complete or stale)
  *   3. Create all new nodes
+ *   4. Recompute merge leaves and assert INV-77 invariants
  */
 export function applyGraphMutationImpl(host: GraphMutationHost, mutation: GraphMutation): TaskDelta[] {
   const allDeltas: TaskDelta[] = [];

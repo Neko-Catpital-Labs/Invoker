@@ -1,5 +1,6 @@
 /**
  * Merge gate utilities — pure functions for computing the synthetic merge gate node.
+ * INV-77 keeps UI derivation snapshot-only: no provider calls and no graph mutation.
  */
 
 import type { TaskState, TaskStatus, WorkflowMeta } from '../types.js';
@@ -101,7 +102,14 @@ export function findLeafTasks(tasks: TaskState[]): TaskState[] {
   for (const task of tasks) {
     for (const dep of task.dependencies) dependedOn.add(dep);
   }
-  return tasks.filter(t => !dependedOn.has(t.id));
+  return tasks
+    .filter(t => !dependedOn.has(t.id))
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/** Active non-merge leaves that workflow-core expects a merge gate to depend on. */
+export function deriveMergeGateLeafTasks(tasks: TaskState[]): TaskState[] {
+  return findLeafTasks(tasks.filter(t => !t.config.isMergeNode && t.status !== 'stale'));
 }
 
 /** Group tasks by workflowId. Tasks without a workflowId go into 'unknown'. */

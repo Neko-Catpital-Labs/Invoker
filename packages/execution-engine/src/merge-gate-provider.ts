@@ -1,6 +1,19 @@
+export interface CreateMergeGateReviewOptions {
+  baseBranch: string;
+  featureBranch: string;
+  title: string;
+  cwd: string;
+  body?: string;
+}
+
 export interface MergeGateProviderResult {
   url: string;
   identifier: string;
+}
+
+export interface CheckMergeGateApprovalOptions {
+  identifier: string;
+  cwd: string;
 }
 
 export interface MergeGateApprovalStatus {
@@ -10,19 +23,14 @@ export interface MergeGateApprovalStatus {
   url: string;
 }
 
+/**
+ * IO boundary for merge-gate reviews. The provider receives branches and cwd
+ * only; graph state and merge dependency truth stay in workflow-core.
+ */
 export interface MergeGateProvider {
   readonly name: string;
 
-  createReview(opts: {
-    baseBranch: string;
-    featureBranch: string;
-    title: string;
-    cwd: string;
-    body?: string;
-  }): Promise<MergeGateProviderResult>;
+  createReview(opts: CreateMergeGateReviewOptions): Promise<MergeGateProviderResult>;
 
-  checkApproval(opts: {
-    identifier: string;
-    cwd: string;
-  }): Promise<MergeGateApprovalStatus>;
+  checkApproval(opts: CheckMergeGateApprovalOptions): Promise<MergeGateApprovalStatus>;
 }
