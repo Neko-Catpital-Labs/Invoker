@@ -51,17 +51,17 @@ pnpm exec vitest run src/__tests__/task-runner.test.ts
 Expected output thresholds:
 
 - Exit code: `0`
-- Test file summary contains: `src/__tests__/task-runner.test.ts (203 tests)`
+- Test file summary contains: `src/__tests__/task-runner.test.ts (204 tests)`
 - Final summary contains: `Test Files  1 passed (1)`
-- Final summary contains: `Tests  203 passed (203)`
+- Final summary contains: `Tests  204 passed (204)`
 
 Observed output on 2026-05-16 UTC:
 
 ```text
-PASS src/__tests__/task-runner.test.ts (203 tests) 4083ms
+PASS src/__tests__/task-runner.test.ts (204 tests) 3496ms
 Test Files  1 passed (1)
-Tests  203 passed (203)
-Duration  8.16s
+Tests  204 passed (204)
+Duration  6.53s
 ```
 
 Note: Vitest also emitted a package export condition warning about the `types` condition order in `packages/execution-engine/package.json`. It did not affect the pass/fail verdict.
@@ -116,6 +116,7 @@ Evidence:
 
 - Test: `kills the active execution for a task by resolving its current attempt` (`task-runner.test.ts:304`).
 - `killActiveExecution(task.id)` resolves the selected attempt and passes a handle containing `attemptId: kill-task-a1` to the executor.
+- Test: `kills the selected attempt when an older attempt for the same task is still active` proves the implementation consumes the experiment verdict by rejecting task-scoped first-match cancellation; cancellation now checks the selected attempt before falling back to task-id matching.
 
 Verdict: pass. Cancellation targets the active execution handle, not an ambiguous task-level placeholder.
 
@@ -144,11 +145,12 @@ Verdict: pass. Downstream branch inputs are deterministic and tied to completed 
 The selected design remains accepted only if all thresholds hold:
 
 - Focused command exits `0`.
-- All `203` tests in `src/__tests__/task-runner.test.ts` pass.
+- All `204` tests in `src/__tests__/task-runner.test.ts` pass.
 - Same-attempt concurrent launch starts exactly one executor process.
 - WorkRequest and completion response preserve selected attempt ID and generation.
 - Startup failure creates a failed response and executes newly ready follow-up tasks.
 - Recreate signals `freshWorkspace: true`; restart with retained branch/workspace signals `freshWorkspace: false`.
 - Completed dependency branch collection remains stable in dependency order, with fan-in base prepending.
+- Kill routing prefers the orchestrator-selected active attempt when multiple attempts exist for the same task.
 
 Any regression against these thresholds rejects the architecture until the implementation and proof are updated together.
