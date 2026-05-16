@@ -735,6 +735,7 @@ describe('bashMergeUpstreams', () => {
       await runBashLocal(bashFetchNodeRemotes({
         worktreeDir: wtDir,
         branchRepoUrl: intermediateDir,
+        branches: ['dep-from-intermediate'],
       }));
       await runBashLocal(bashMergeUpstreams({
         worktreeDir: wtDir,

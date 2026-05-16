@@ -193,6 +193,7 @@ export interface MergeUpstreamsOpts {
 export interface FetchNodeRemotesOpts {
   worktreeDir: string;
   branchRepoUrl?: string;
+  branches?: string[];
 }
 
 /**
@@ -201,25 +202,55 @@ export interface FetchNodeRemotesOpts {
  * fatal instead of silently falling back to stale or incomplete refs.
  */
 export function bashFetchNodeRemotes(opts: FetchNodeRemotesOpts): string {
-  const { worktreeDir, branchRepoUrl } = opts;
+  const { worktreeDir, branchRepoUrl, branches = [] } = opts;
   const q = shellQuote;
   const branchRepo = branchRepoUrl?.trim();
-
-  return `set -euo pipefail
-WT_DIR=${q(worktreeDir)}
-if git -C "$WT_DIR" remote get-url origin >/dev/null 2>&1; then
-  git -C "$WT_DIR" fetch origin '+refs/heads/*:refs/remotes/origin/*' --prune
-fi
-${branchRepo ? `BRANCH_REPO_URL=${q(branchRepo)}
+  const normalizedBranches = [...new Set(branches.map((branch) => branch.trim()).filter(Boolean))];
+  const quotedBranches = normalizedBranches.map((branch) => q(branch)).join(' ');
+  const branchFetchBlock = normalizedBranches.length > 0
+    ? `for branch in ${quotedBranches}; do
+  if git -C "$WT_DIR" remote get-url origin >/dev/null 2>&1; then
+    fetch_target origin "+refs/heads/$branch:refs/remotes/origin/$branch"
+  fi
+done`
+    : '';
+  const branchRepoFetchBlock = branchRepo
+    ? `BRANCH_REPO_URL=${q(branchRepo)}
 if git -C "$WT_DIR" remote get-url invoker-branches >/dev/null 2>&1; then
   git -C "$WT_DIR" remote set-url invoker-branches "$BRANCH_REPO_URL"
 else
   git -C "$WT_DIR" remote add invoker-branches "$BRANCH_REPO_URL"
 fi
-if ! git -C "$WT_DIR" fetch invoker-branches '+refs/heads/*:refs/remotes/invoker-branches/*' --prune; then
-  echo "BRANCH_REPO_FETCH_FAILED=$BRANCH_REPO_URL" >&2
+${normalizedBranches.length > 0
+    ? `for branch in ${quotedBranches}; do
+  fetch_target invoker-branches "+refs/heads/$branch:refs/remotes/invoker-branches/$branch"
+done`
+    : ''}`
+    : '';
+
+return `set -euo pipefail
+WT_DIR=${q(worktreeDir)}
+fetch_target() {
+  remote="$1"
+  refspec="$2"
+  err_file="$(mktemp)"
+  if git -C "$WT_DIR" fetch "$remote" "$refspec" --prune 2>"$err_file"; then
+    rm -f "$err_file"
+    return 0
+  fi
+  err="$(cat "$err_file" 2>/dev/null || true)"
+  rm -f "$err_file"
+  case "$err" in
+    *"couldn't find remote ref"*|*"could not find remote ref"*|*"fatal: couldn't find remote ref"*|*"fatal: invalid refspec"*)
+      return 0
+      ;;
+  esac
+  echo "FETCH_REF_FAILED remote=$remote refspec=$refspec" >&2
+  printf '%s\\n' "$err" >&2
   exit 32
-fi` : ''}
+}
+${branchFetchBlock}
+${branchRepoFetchBlock}
 `;
 }
 
