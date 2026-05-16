@@ -6,6 +6,7 @@ import {
 } from '@invoker/data-store';
 import type { Logger } from '@invoker/contracts';
 import { createWorkflowMutationTiming, type WorkflowMutationTiming } from './workflow-mutation-timing.js';
+import type { WorkflowMutationContext as BaseWorkflowMutationContext } from './workflow-mutation-coordinator.js';
 
 type Deferred<T> = {
   resolve: (value: T) => void;
@@ -18,10 +19,10 @@ type InvalidationSignal = {
   abortController: AbortController;
 };
 
-export type WorkflowMutationContext = {
-  signal: AbortSignal;
+export type WorkflowMutationContext = BaseWorkflowMutationContext & {
   intentId: number;
-  workflowId: string;
+  channel: string;
+  args: readonly unknown[];
   mutationTiming?: WorkflowMutationTiming;
 };
 
@@ -237,6 +238,8 @@ export class PersistedWorkflowMutationCoordinator {
         signal: invalidation.abortController.signal,
         intentId: intent.id,
         workflowId,
+        channel: intent.channel,
+        args: intent.args,
         mutationTiming: timing,
       };
       const dispatchPromise = timing.span(

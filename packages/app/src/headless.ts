@@ -94,7 +94,7 @@ export interface HeadlessDeps {
   resetUiPerfStats?: () => void;
   deferRunnableTasks?: (tasks: TaskState[], workflowId?: string) => void;
   preemptTaskSubgraph?: (taskId: string) => Promise<void>;
-  preemptWorkflowExecution?: (workflowId: string) => Promise<WorkflowCancelResult>;
+  preemptWorkflowExecution?: (workflowId: string, signal?: AbortSignal) => Promise<WorkflowCancelResult>;
   cancelTask?: (taskId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
   cancelWorkflow?: (workflowId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
   waitForApproval?: boolean;
@@ -1643,9 +1643,10 @@ async function headlessRebaseAndRetry(taskId: string, deps: HeadlessDeps): Promi
   const workflowId = deps.orchestrator.getTask(taskId)?.config.workflowId;
   if (!workflowId) throw new Error(`Task "${taskId}" has no workflow`);
   await preemptWorkflowBeforeMutation(workflowId, {
-    preemptWorkflowExecution: (id) => preemptWorkflowExecution(id, deps),
+    preemptWorkflowExecution: (id, signal) => preemptWorkflowExecution(id, deps, signal),
     logger: deps.logger,
     context: 'headless.rebase-and-retry',
+    signal: deps.signal,
     mutationTiming: deps.mutationTiming,
   });
 
@@ -1687,9 +1688,10 @@ async function headlessRecreateWithRebase(workflowTarget: string, deps: Headless
   if (!workflowTarget) throw new Error('Missing arguments. Usage: --headless recreate-with-rebase <workflowId|mergeTaskId|taskId>');
   const workflowId = resolveHeadlessTargetWorkflowId(workflowTarget, deps.persistence);
   await preemptWorkflowBeforeMutation(workflowId, {
-    preemptWorkflowExecution: (id) => preemptWorkflowExecution(id, deps),
+    preemptWorkflowExecution: (id, signal) => preemptWorkflowExecution(id, deps, signal),
     logger: deps.logger,
     context: 'headless.recreate-with-rebase',
+    signal: deps.signal,
     mutationTiming: deps.mutationTiming,
   });
 
@@ -1732,9 +1734,10 @@ async function headlessRecreateWorkflow(workflowId: string, deps: HeadlessDeps):
     throw new Error('Missing arguments. Usage: --headless recreate <workflowId>');
   }
   await preemptWorkflowBeforeMutation(workflowId, {
-    preemptWorkflowExecution: (id) => preemptWorkflowExecution(id, deps),
+    preemptWorkflowExecution: (id, signal) => preemptWorkflowExecution(id, deps, signal),
     logger: deps.logger,
     context: 'headless.recreate-workflow',
+    signal: deps.signal,
     mutationTiming: deps.mutationTiming,
   });
   const started = deps.mutationTiming
@@ -1881,9 +1884,10 @@ async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Pr
     module: 'headless',
   });
   await preemptWorkflowBeforeMutation(workflowId, {
-    preemptWorkflowExecution: (id) => preemptWorkflowExecution(id, deps),
+    preemptWorkflowExecution: (id, signal) => preemptWorkflowExecution(id, deps, signal),
     logger: deps.logger,
     context: 'headless.retry-workflow',
+    signal: deps.signal,
     mutationTiming: deps.mutationTiming,
   });
   const envelope = makeEnvelope('retry-workflow', 'headless', 'workflow', { workflowId });
@@ -2022,9 +2026,13 @@ async function preemptTaskSubgraph(taskId: string, deps: HeadlessDeps): Promise<
   }
 }
 
-async function preemptWorkflowExecution(workflowId: string, deps: HeadlessDeps): Promise<WorkflowCancelResult> {
+async function preemptWorkflowExecution(
+  workflowId: string,
+  deps: HeadlessDeps,
+  signal?: AbortSignal,
+): Promise<WorkflowCancelResult> {
   if (deps.preemptWorkflowExecution) {
-    return deps.preemptWorkflowExecution(workflowId);
+    return deps.preemptWorkflowExecution(workflowId, signal);
   }
   if (typeof deps.commandService.cancelWorkflow !== 'function') {
     return { cancelled: [], runningCancelled: [] };
