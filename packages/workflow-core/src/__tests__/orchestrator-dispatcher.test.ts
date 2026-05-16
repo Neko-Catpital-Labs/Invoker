@@ -132,6 +132,26 @@ function respondForTask(
   return orchestrator.handleWorkerResponse(makeResponse(taskId, status, generation, exitCode));
 }
 
+function seedStaleLaunchMetadata(
+  persistence: InMemoryPersistence,
+  taskId: string,
+  status: TaskState['status'] = 'failed',
+): void {
+  const staleAt = new Date('2026-05-16T00:00:00.000Z');
+  persistence.updateTask(taskId, {
+    status,
+    execution: {
+      phase: 'launching',
+      launchStartedAt: staleAt,
+      launchCompletedAt: staleAt,
+      startedAt: staleAt,
+      completedAt: staleAt,
+      error: 'old launch failure',
+      exitCode: 1,
+    },
+  });
+}
+
 describe('Orchestrator launch claims', () => {
   it('startExecution returns each started task exactly once', () => {
     const { orchestrator } = makeOrchestrator();
@@ -267,6 +287,84 @@ describe('Orchestrator launch claims', () => {
     expect(staleResult).toEqual([]);
     expect(orchestrator.getTask(taskId)?.execution.selectedAttemptId).toBe(replacementAttemptId);
     expect(orchestrator.getTask(taskId)?.status).toBe('pending');
+  });
+
+  it('clears stale launch metadata from dependency-blocked tasks during recreateWorkflow reset', () => {
+    const { orchestrator, persistence } = makeOrchestrator();
+    orchestrator.loadPlan({
+      name: 'clear-recreate-workflow-launch-metadata',
+      onFinish: 'none',
+      tasks: [
+        { id: 'a', description: 'upstream', command: 'echo a' },
+        { id: 'b', description: 'downstream', command: 'echo b', dependencies: ['a'] },
+      ],
+    });
+
+    const workflowId = orchestrator.getWorkflowIds()[0]!;
+    const upstreamId = taskIdBySuffix(orchestrator, 'a');
+    const downstreamId = taskIdBySuffix(orchestrator, 'b');
+    seedStaleLaunchMetadata(persistence, upstreamId, 'completed');
+    seedStaleLaunchMetadata(persistence, downstreamId, 'failed');
+    orchestrator.syncAllFromDb();
+
+    orchestrator.recreateWorkflow(workflowId);
+
+    const downstream = orchestrator.getTask(downstreamId)!;
+    expect(downstream.status).toBe('pending');
+    expect(downstream.execution.phase).toBeUndefined();
+    expect(downstream.execution.launchStartedAt).toBeUndefined();
+    expect(downstream.execution.launchCompletedAt).toBeUndefined();
+  });
+
+  it('clears stale launch metadata from downstream tasks during recreateTask reset', () => {
+    const { orchestrator, persistence } = makeOrchestrator();
+    orchestrator.loadPlan({
+      name: 'clear-recreate-task-launch-metadata',
+      onFinish: 'none',
+      tasks: [
+        { id: 'a', description: 'upstream', command: 'echo a' },
+        { id: 'b', description: 'downstream', command: 'echo b', dependencies: ['a'] },
+      ],
+    });
+
+    const upstreamId = taskIdBySuffix(orchestrator, 'a');
+    const downstreamId = taskIdBySuffix(orchestrator, 'b');
+    seedStaleLaunchMetadata(persistence, upstreamId, 'failed');
+    seedStaleLaunchMetadata(persistence, downstreamId, 'failed');
+    orchestrator.syncAllFromDb();
+
+    orchestrator.recreateTask(upstreamId);
+
+    const downstream = orchestrator.getTask(downstreamId)!;
+    expect(downstream.status).toBe('pending');
+    expect(downstream.execution.phase).toBeUndefined();
+    expect(downstream.execution.launchStartedAt).toBeUndefined();
+    expect(downstream.execution.launchCompletedAt).toBeUndefined();
+  });
+
+  it('clears stale launch metadata during retryWorkflow reset', () => {
+    const { orchestrator, persistence } = makeOrchestrator();
+    orchestrator.loadPlan({
+      name: 'clear-retry-workflow-launch-metadata',
+      onFinish: 'none',
+      tasks: [
+        { id: 'a', description: 'upstream', command: 'echo a' },
+        { id: 'b', description: 'downstream', command: 'echo b', dependencies: ['a'] },
+      ],
+    });
+
+    const workflowId = orchestrator.getWorkflowIds()[0]!;
+    const downstreamId = taskIdBySuffix(orchestrator, 'b');
+    seedStaleLaunchMetadata(persistence, downstreamId, 'failed');
+    orchestrator.syncAllFromDb();
+
+    orchestrator.retryWorkflow(workflowId);
+
+    const downstream = orchestrator.getTask(downstreamId)!;
+    expect(downstream.status).toBe('pending');
+    expect(downstream.execution.phase).toBeUndefined();
+    expect(downstream.execution.launchStartedAt).toBeUndefined();
+    expect(downstream.execution.launchCompletedAt).toBeUndefined();
   });
 
   it('ignores responses for a selected attempt row that has been superseded', () => {
