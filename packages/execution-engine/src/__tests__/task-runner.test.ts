@@ -3207,6 +3207,7 @@ console.log(JSON.stringify(out));
         'master',
         expect.stringContaining('gate-__merge__wf-1'),
         undefined,
+        ['plan/feature'],
       );
     });
 
@@ -7789,7 +7790,7 @@ console.log(JSON.stringify(out));
       expect(gateGitCalls.length).toBeGreaterThanOrEqual(3);
       expect(gateGitCalls[0].args).toEqual(['rev-parse', 'HEAD']);
       expect(gateGitCalls[1].args).toEqual(['checkout', '--detach', 'abc123deadbeef']);
-      expect(gateGitCalls[2].args).toEqual(['fetch', 'origin', '+refs/heads/*:refs/heads/*']);
+      expect(gateGitCalls[2].args).toEqual(['fetch', 'origin', '+refs/heads/plan/feature:refs/heads/plan/feature']);
 
       // Feature branch created from detached HEAD
       const checkoutBranch = gateGitCalls.find((c) => c.args[0] === 'checkout' && c.args[1] === '-b');
@@ -7948,7 +7949,7 @@ console.log(JSON.stringify(out));
       // The first three calls must be the detach-HEAD-then-fetch sequence
       expect(gateCalls[0]).toEqual(['rev-parse', 'HEAD']);
       expect(gateCalls[1]).toEqual(['checkout', '--detach', 'abc123deadbeef']);
-      expect(gateCalls[2]).toEqual(['fetch', 'origin', '+refs/heads/*:refs/heads/*']);
+      expect(gateCalls[2]).toEqual(['fetch', 'origin', '+refs/heads/plan/feature:refs/heads/plan/feature']);
 
       // Capture pre-pushed feature tip (if any), then create the feature branch
       expect(gateCalls[3]).toEqual(['rev-parse', '--verify', 'plan/feature']);

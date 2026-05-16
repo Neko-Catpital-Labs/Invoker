@@ -45,7 +45,7 @@ export interface ConflictResolverHost {
 
   execGitReadonly(args: string[], cwd?: string): Promise<string>;
   execGitIn(args: string[], dir: string): Promise<string>;
-  createMergeWorktree(ref: string, label: string, repoUrl?: string): Promise<string>;
+  createMergeWorktree(ref: string, label: string, repoUrl?: string, targetBranches?: readonly string[]): Promise<string>;
   removeMergeWorktree(dir: string): Promise<void>;
   spawnAgentFix(prompt: string, cwd: string, agentName?: string): Promise<{ stdout: string; sessionId: string }>;
   getRemoteTargetConfig?(targetId: string): RemoteTargetConfig | undefined;

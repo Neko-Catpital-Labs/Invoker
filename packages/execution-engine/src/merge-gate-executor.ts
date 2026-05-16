@@ -29,6 +29,7 @@ export class MergeGateExecutor extends BaseExecutor<MergeGateEntry> {
       baseCheckoutRef,
       'gate-' + task.id.replace(/[^a-zA-Z0-9_-]/g, '-'),
       workflow?.repoUrl,
+      workflow?.featureBranch ? [workflow.featureBranch] : undefined,
     );
 
     const handle = this.createHandle(request);

@@ -147,7 +147,7 @@ export interface MergeRunnerHost {
 
   execGitReadonly(args: string[], cwd?: string): Promise<string>;
   execGitIn(args: string[], dir: string): Promise<string>;
-  createMergeWorktree(ref: string, label: string, repoUrl?: string): Promise<string>;
+  createMergeWorktree(ref: string, label: string, repoUrl?: string, targetBranches?: readonly string[]): Promise<string>;
   removeMergeWorktree(dir: string): Promise<void>;
   execGh(args: string[], cwd?: string): Promise<string>;
   execPr(baseBranch: string, featureBranch: string, title: string, body?: string, cwd?: string): Promise<string>;
@@ -453,6 +453,7 @@ export async function runMergeGateActionImpl(
       baseCheckoutRef,
       'gate-' + task.id.replace(/[^a-zA-Z0-9_-]/g, '-'),
       workflow?.repoUrl,
+      featureBranch ? [featureBranch] : undefined,
     );
     mergeTrace('GATE_WS_GATE_CLONE_CREATED', { taskId: task.id, gateWorkspacePath });
     console.log(`[merge-gate-workspace] gate clone created task=${task.id} path=${gateWorkspacePath}`);
@@ -747,7 +748,7 @@ export async function approveMergeImpl(
   const branchRepoUrl = workflow.intermediateRepoUrl?.trim() || undefined;
 
   if (onFinish === 'merge') {
-    const worktreeDir = await host.createMergeWorktree(baseBranch, 'approve-' + workflowId, workflow.repoUrl);
+    const worktreeDir = await host.createMergeWorktree(baseBranch, 'approve-' + workflowId, workflow.repoUrl, [featureBranch]);
     try {
       mergeTrace('GIT_MERGE_SQUASH', { featureBranch, worktreeDir });
       await ensureLocalBranchForMerge(
@@ -779,7 +780,7 @@ export async function approveMergeImpl(
       }
     }
   } else if (onFinish === 'pull_request') {
-    const worktreeDir = await host.createMergeWorktree(featureBranch, 'approve-pr-' + workflowId, workflow.repoUrl);
+    const worktreeDir = await host.createMergeWorktree(featureBranch, 'approve-pr-' + workflowId, workflow.repoUrl, [featureBranch]);
     try {
       mergeTrace('GIT_PUSH', { featureBranch, worktreeDir });
       // Push feature branch directly to origin (GitHub) from the clone
@@ -895,11 +896,19 @@ export async function publishAfterFixImpl(
     }
     const consolidateDir = gateWorkspacePath;
 
-    // Refresh branch refs from origin (GitHub) into the gate clone.
+    // Refresh the feature branch from origin (GitHub) into the gate clone.
     // Must detach HEAD first — git refuses to fetch into a checked-out branch.
     const headSha = (await execGitInMergeSafe(host, ['rev-parse', 'HEAD'], gateWorkspacePath)).trim();
     await execGitInMergeSafe(host, ['checkout', '--detach', headSha], gateWorkspacePath);
-    await execGitInMergeSafe(host, ['fetch', 'origin', '+refs/heads/*:refs/heads/*'], gateWorkspacePath);
+    try {
+      await execGitInMergeSafe(
+        host,
+        ['fetch', 'origin', `+refs/heads/${featureBranch}:refs/heads/${featureBranch}`],
+        gateWorkspacePath,
+      );
+    } catch {
+      // Feature branch may not exist yet; it will be created from the fixed gate HEAD below.
+    }
     if (fixedIntegrationSha) {
       try {
         await execGitInMergeSafe(host, ['rev-parse', '--verify', `${fixedIntegrationSha}^{commit}`], gateWorkspacePath);
@@ -1292,11 +1301,38 @@ export async function consolidateAndMergeImpl(
       ? host.persistence.loadWorkflow(workflowId)
       : undefined;
   const repoUrlForMerge = workflowForMerge?.repoUrl;
+  const allTasks = host.orchestrator.getAllTasks();
+  let allowedTaskIds: Set<string> | undefined;
+  if (mergeNodeTaskId && workflowId) {
+    const mergeT = allTasks.find((x) => x.id === mergeNodeTaskId && x.config.isMergeNode);
+    if (mergeT) {
+      allowedTaskIds = collectDirectNonMergeTaskIds(mergeT, (id) => host.orchestrator.getTask(id));
+      console.log(
+        `[merge] consolidation task set (${allowedTaskIds.size} ids): ${[...allowedTaskIds].sort().join(', ')}`,
+      );
+      mergeTrace('CONSOLIDATION_TASK_SET', {
+        workflowId,
+        mergeNodeTaskId,
+        ids: [...allowedTaskIds].sort(),
+      });
+    }
+  }
+  const taskBranches = allTasks
+    .filter((t) => {
+      if (!t.execution.branch || t.config.isMergeNode) return false;
+      if (t.status !== 'completed') return false;
+      if (allowedTaskIds) return allowedTaskIds.has(t.id);
+      if (leafTaskIds && leafTaskIds.length > 0) return leafTaskIds.includes(t.id);
+      return t.config.workflowId === workflowId;
+    })
+    .map((t) => t.execution.branch!)
+    .sort();
 
   const worktreeDir = await host.createMergeWorktree(
     baseCheckoutRef ?? baseBranch,
     'consolidate-' + (workflowId ?? 'default'),
     repoUrlForMerge,
+    taskBranches,
   );
   console.log(`[merge] consolidateAndMerge: featureBranch=${featureBranch}, baseBranch=${baseBranch}, worktree=${worktreeDir}`);
 
@@ -1326,32 +1362,6 @@ export async function consolidateAndMergeImpl(
       console.log(`[merge] Recreated ${featureBranch} from current base HEAD (${baseBranch})`);
     }
 
-    const allTasks = host.orchestrator.getAllTasks();
-    let allowedTaskIds: Set<string> | undefined;
-    if (mergeNodeTaskId && workflowId) {
-      const mergeT = allTasks.find((x) => x.id === mergeNodeTaskId && x.config.isMergeNode);
-      if (mergeT) {
-        allowedTaskIds = collectDirectNonMergeTaskIds(mergeT, (id) => host.orchestrator.getTask(id));
-        console.log(
-          `[merge] consolidation task set (${allowedTaskIds.size} ids): ${[...allowedTaskIds].sort().join(', ')}`,
-        );
-        mergeTrace('CONSOLIDATION_TASK_SET', {
-          workflowId,
-          mergeNodeTaskId,
-          ids: [...allowedTaskIds].sort(),
-        });
-      }
-    }
-    const taskBranches = allTasks
-      .filter((t) => {
-        if (!t.execution.branch || t.config.isMergeNode) return false;
-        if (t.status !== 'completed') return false;
-        if (allowedTaskIds) return allowedTaskIds.has(t.id);
-        if (leafTaskIds && leafTaskIds.length > 0) return leafTaskIds.includes(t.id);
-        return t.config.workflowId === workflowId;
-      })
-      .map((t) => t.execution.branch!)
-      .sort();
     let mergedCount = 0;
     let skippedCount = 0;
     for (const branch of taskBranches) {

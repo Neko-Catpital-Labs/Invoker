@@ -1492,7 +1492,12 @@ export class TaskRunner {
     });
   }
 
-  /** @internal */ async createMergeWorktree(ref: string, label: string, repoUrl?: string): Promise<string> {
+  /** @internal */ async createMergeWorktree(
+    ref: string,
+    label: string,
+    repoUrl?: string,
+    targetBranches?: readonly string[],
+  ): Promise<string> {
     const invokerHomeRoot = process.env.INVOKER_DB_DIR
       ? resolve(process.env.INVOKER_DB_DIR)
       : resolve(homedir(), '.invoker');
@@ -1518,8 +1523,23 @@ export class TaskRunner {
     // Detach HEAD so the fetch can overwrite all branch refs (including the default branch)
     const headSha = (await this.execGitIn(['rev-parse', 'HEAD'], clonePath)).trim();
     await this.execGitIn(['update-ref', '--no-deref', 'HEAD', headSha], clonePath);
-    // Mirror all branches as local refs so bare branch names resolve.
-    await this.execGitIn(['fetch', 'origin', '+refs/heads/*:refs/heads/*'], clonePath);
+
+    const localTargetBranches = Array.from(new Set(
+      (targetBranches ?? [])
+        .map((branch) => normalizeBranchForGithubCli(branch.trim()))
+        .filter((branch) => branch.length > 0),
+    ));
+    for (const branch of localTargetBranches) {
+      try {
+        await this.execGitIn(
+          ['fetch', 'origin', `+refs/heads/${branch}:refs/heads/${branch}`],
+          clonePath,
+        );
+      } catch {
+        // Some target branches only exist on the real remote or intermediate repo.
+        // ensureLocalBranchForMerge will surface missing branches at the merge site.
+      }
+    }
 
     // Reconfigure origin to the real remote URL (GitHub) so subsequent push/fetch
     // operations go directly to GitHub, bypassing any intermediate clone.
@@ -1731,7 +1751,20 @@ export class TaskRunner {
     const reconRepoUrl = reconWorkflow?.repoUrl;
     const reconBranchRepoUrl = reconWorkflow?.intermediateRepoUrl?.trim() || undefined;
 
-    const worktreeDir = await this.createMergeWorktree(baseBranch, 'recon-' + reconTaskId, reconRepoUrl);
+    const experimentBranches = experimentIds.map((expId) => {
+      const expTask = this.orchestrator.getTask(expId);
+      if (!expTask?.execution.branch) {
+        throw new Error(`Experiment ${expId} has no branch`);
+      }
+      return expTask.execution.branch;
+    });
+
+    const worktreeDir = await this.createMergeWorktree(
+      baseBranch,
+      'recon-' + reconTaskId,
+      reconRepoUrl,
+      experimentBranches,
+    );
 
     try {
       try {
@@ -2300,7 +2333,7 @@ export class TaskRunner {
     const rebaseWorkflow = this.persistence.loadWorkflow?.(workflowId);
     const rebaseRepoUrl = rebaseWorkflow?.repoUrl;
     const rebaseBranchRepoUrl = rebaseWorkflow?.intermediateRepoUrl?.trim() || undefined;
-    const worktreeDir = await this.createMergeWorktree(baseBranch, 'rebase-' + workflowId, rebaseRepoUrl);
+    const worktreeDir = await this.createMergeWorktree(baseBranch, 'rebase-' + workflowId, rebaseRepoUrl, taskBranches);
 
     const rebasedBranches: string[] = [];
     const errors: string[] = [];

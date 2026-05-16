@@ -76,7 +76,7 @@ describe('createMergeWorktree isolation (real git)', { timeout: 30_000 }, () => 
     await executor.removeMergeWorktree(clonePath);
   });
 
-  it('host branches are mirrored into the clone', async () => {
+  it('does not mirror unrelated host branches into the clone', async () => {
     const sandbox = createSandbox();
     root = sandbox.root;
 
@@ -90,9 +90,9 @@ describe('createMergeWorktree isolation (real git)', { timeout: 30_000 }, () => 
     const executor = buildExecutor(sandbox.host);
     const clonePath = await executor.createMergeWorktree('master', 'test-mirror');
 
-    // The feature branch should be available as a local ref
+    // Unrelated host branches should not be mirrored as local refs.
     const branches = git(clonePath, 'branch --list');
-    expect(branches).toContain('feature/test');
+    expect(branches).not.toContain('feature/test');
 
     await executor.removeMergeWorktree(clonePath);
   });
