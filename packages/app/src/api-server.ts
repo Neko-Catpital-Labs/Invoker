@@ -56,10 +56,10 @@ export interface ApiServerDeps {
   orchestrator: Orchestrator;
   persistence: SQLiteAdapter;
   executorRegistry: ExecutorRegistry;
-  /** All write endpoints delegate to the facade for mutation + dispatch + topup. */
+  /** INV-130: all write endpoints delegate to the facade for mutation + dispatch + topup. */
   mutations: WorkflowMutationFacade;
-  deleteWorkflow: (workflowId: string) => Promise<void>;
-  detachWorkflow: (workflowId: string, upstreamWorkflowId: string) => Promise<void>;
+  deleteWorkflow?: (workflowId: string) => Promise<void>; // Deprecated: use mutations.deleteWorkflow.
+  detachWorkflow?: (workflowId: string, upstreamWorkflowId: string) => Promise<void>; // Deprecated.
 }
 
 export interface ApiServer {
@@ -149,8 +149,6 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
     orchestrator,
     persistence,
     mutations,
-    deleteWorkflow,
-    detachWorkflow,
   } = deps;
   const port = parseInt(process.env.INVOKER_API_PORT ?? '4100', 10);
 
@@ -562,7 +560,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
       if (method === 'DELETE' && wfDeleteMatch) {
         const workflowId = decodeURIComponent(wfDeleteMatch[1]);
         try {
-          await deleteWorkflow(workflowId);
+          await mutations.deleteWorkflow(workflowId);
           json(res, 200, { ok: true, workflowId, action: 'deleted' });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });
@@ -581,7 +579,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
             json(res, 400, { error: 'Missing "upstreamWorkflowId" in request body' });
             return;
           }
-          await detachWorkflow(workflowId, String(upstreamWorkflowId));
+          await mutations.detachWorkflow(workflowId, String(upstreamWorkflowId));
           json(res, 200, {
             ok: true,
             workflowId,
@@ -619,6 +617,8 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
       json(res, 500, { error: 'Internal server error' });
     }
   });
+
+
 
   server.listen(port, '127.0.0.1', () => {
     apiLogger?.info(`Listening on http://127.0.0.1:${port}`, { module: 'api-server' });

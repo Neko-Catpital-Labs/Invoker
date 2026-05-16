@@ -204,6 +204,8 @@ beforeEach(() => {
   mocks.orchestrator.setTaskExternalGatePolicies.mockReturnValue([makeTask()]);
   mocks.orchestrator.cancelTask.mockReturnValue({ cancelled: ['task-1'], runningCancelled: ['task-1'] });
   mocks.orchestrator.cancelWorkflow.mockReturnValue({ cancelled: ['task-1'], runningCancelled: ['task-1'] });
+  mocks.orchestrator.deleteWorkflow.mockImplementation(() => undefined);
+  mocks.orchestrator.detachWorkflow.mockImplementation(() => undefined);
   mocks.orchestrator.getQueueStatus.mockReturnValue({
     maxConcurrency: 4, runningCount: 1,
     running: [{ taskId: 'task-1', description: 'test' }], queued: [],
@@ -886,17 +888,19 @@ describe('POST /api/workflows/:id/recreate-with-rebase', () => {
 });
 
 describe('DELETE /api/workflows/:id', () => {
-  it('deletes workflow via deleteWorkflow callback', async () => {
+  it('deletes workflow via facade', async () => {
     const res = await request(port, 'DELETE', '/api/workflows/wf-1');
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.action).toBe('deleted');
-    expect(mocks.deleteWorkflow).toHaveBeenCalledWith('wf-1');
-    expect(mocks.orchestrator.deleteWorkflow).not.toHaveBeenCalled();
+    expect(mocks.orchestrator.deleteWorkflow).toHaveBeenCalledWith('wf-1');
+    expect(mocks.deleteWorkflow).not.toHaveBeenCalled();
   });
 
   it('returns 404 when workflow not found', async () => {
-    mocks.deleteWorkflow.mockRejectedValue(new OrchestratorError(OrchestratorErrorCode.WORKFLOW_NOT_FOUND, 'workflow not found'));
+    mocks.orchestrator.deleteWorkflow.mockImplementation(() => {
+      throw new OrchestratorError(OrchestratorErrorCode.WORKFLOW_NOT_FOUND, 'workflow not found');
+    });
     const res = await request(port, 'DELETE', '/api/workflows/missing');
     expect(res.status).toBe(404);
     expect(res.body.error).toBe('workflow not found');
@@ -911,7 +915,8 @@ describe('POST /api/workflows/:id/detach', () => {
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.action).toBe('detached');
-    expect(mocks.detachWorkflow).toHaveBeenCalledWith('wf-1', 'wf-0');
+    expect(mocks.orchestrator.detachWorkflow).toHaveBeenCalledWith('wf-1', 'wf-0');
+    expect(mocks.detachWorkflow).not.toHaveBeenCalled();
   });
 
   it('returns 400 when upstreamWorkflowId is missing', async () => {
