@@ -97,7 +97,8 @@ describe('buildMirrorCloneScript', () => {
     expect(script).toContain('INVOKER_HOME=$(echo');
     expect(script).toContain('CLONE="$INVOKER_HOME/repos/$H"');
     expect(script).toContain('if [ ! -d "$CLONE/.git" ]; then git clone "$REPO" "$CLONE"; fi');
-    expect(script).toContain('if ! git -C "$CLONE" fetch --all --prune; then');
+    expect(script).toContain('fetch_ref origin "+refs/heads/$branch:refs/remotes/origin/$branch"');
+    expect(script).not.toContain('fetch --all --prune');
     expect(script).toContain('__INVOKER_FETCH_FAILED__=1');
     expect(script).toContain('__INVOKER_FETCH_SUCCESS__=1');
     expect(script).toContain('__INVOKER_BASE_REF__');
@@ -149,12 +150,14 @@ describe('buildMirrorCloneScript', () => {
       branchRepoUrl: 'git@github.com:fork/repo.git',
       repoHash: 'abc123',
       baseRef: 'main',
+      upstreamBranches: ['experiment/task-a'],
     });
 
     expect(script).toContain('BRANCH_REPO=$(echo');
     expect(script).not.toContain('remote set-url invoker-branches');
     expect(script).not.toContain('remote add invoker-branches');
-    expect(script).toContain('git -C "$CLONE" fetch "$BRANCH_REPO" \'+refs/heads/*:refs/remotes/invoker-branches/*\' --prune');
+    expect(script).toContain('fetch_ref "$BRANCH_REPO" "+refs/heads/$branch:refs/remotes/invoker-branches/$branch"');
+    expect(script).not.toContain('refs/heads/*:refs/remotes/invoker-branches/*');
     expect(script).toContain('BRANCH_REPO_FETCH_FAILED=$BRANCH_REPO');
     expect(script).toContain('exit 32');
   });

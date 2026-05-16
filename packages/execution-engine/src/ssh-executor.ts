@@ -443,6 +443,7 @@ ${this.buildPayloadExecutionScript(payloadB64)}
       branchRepoUrl: request.inputs.branchRepoUrl,
       repoHash: h,
       baseRef,
+      upstreamBranches: request.inputs.upstreamBranches,
       invokerHome,
     });
     bench('SshExecutor.startManagedWorkspace.bootstrapCloneFetch.before', { baseRef });
