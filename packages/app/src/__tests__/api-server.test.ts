@@ -9,9 +9,22 @@
  */
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import http from 'node:http';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
 import { startApiServer, type ApiServer } from '../api-server.js';
 import { WorkflowMutationFacade } from '../workflow-mutation-facade.js';
 import { OrchestratorError, OrchestratorErrorCode } from '@invoker/workflow-core';
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
+
+function readRepoFile(path: string): string {
+  return readFileSync(resolve(repoRoot, path), 'utf8');
+}
+
+function matchCount(source: string, pattern: RegExp): number {
+  return source.match(pattern)?.length ?? 0;
+}
 
 // ── Helpers ──────────────────────────────────────────────────
 
@@ -955,5 +968,40 @@ describe('Unknown routes', () => {
     const res = await request(port, 'DELETE', '/api/health');
     expect(res.status).toBe(404);
     expect(res.body.error).toBe('Not found');
+  });
+});
+
+describe('INV-91 deterministic control-plane boundaries', () => {
+  it('keeps orchestrator mutation ownership centralized', () => {
+    const source = readRepoFile('packages/workflow-core/src/orchestrator.ts');
+
+    expect(matchCount(source, /private refreshFromDb\(/g)).toBe(1);
+    expect(matchCount(source, /private writeAndSync\(/g)).toBe(1);
+    expect(matchCount(source, /messageBus\.publish\(TASK_DELTA_CHANNEL/g)).toBeGreaterThanOrEqual(1);
+    expect(source).toContain('INV-91');
+  });
+
+  it('keeps IPC API shape derived from centralized channel registries', () => {
+    const source = readRepoFile('packages/contracts/src/ipc-channels.ts');
+
+    expect(matchCount(source, /export const IpcChannels|export const IpcEventChannels|export type InvokerAPI|type ChannelToMethod/g)).toBe(4);
+    expect(matchCount(source, /^  'invoker:/gm)).toBeGreaterThanOrEqual(60);
+    expect(source).toContain('INV-91');
+  });
+
+  it('keeps HTTP writes facade-backed and direct orchestrator calls read-only', () => {
+    const source = readRepoFile('packages/app/src/api-server.ts');
+    const directOrchestratorCalls = Array.from(source.matchAll(/orchestrator\.([a-zA-Z0-9_]+)/g), (match) => match[1]);
+
+    expect(matchCount(source, /^      if \(method === 'POST'/gm)).toBeGreaterThanOrEqual(15);
+    expect(matchCount(source, /mutations\./g)).toBeGreaterThanOrEqual(15);
+    expect(directOrchestratorCalls).toEqual([
+      'getWorkflowStatus',
+      'getAllTasks',
+      'getTask',
+      'getQueueStatus',
+    ]);
+    expect(source).toContain("server.listen(port, '127.0.0.1'");
+    expect(source).toContain('INV-91');
   });
 });

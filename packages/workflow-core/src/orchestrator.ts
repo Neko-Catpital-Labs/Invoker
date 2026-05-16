@@ -809,6 +809,9 @@ export class Orchestrator {
   }
 
   // ── DB Sync Helpers ────────────────────────────────────────
+  // INV-91: the experiment-selected control plane keeps refresh/write
+  // ownership here. Transport layers call public orchestrator mutations
+  // through a facade; they must not duplicate this DB-first sequence.
 
   /**
    * Refresh the in-memory graph from the database.
