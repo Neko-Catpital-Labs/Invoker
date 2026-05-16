@@ -4003,6 +4003,7 @@ console.log(JSON.stringify(out));
       // Simulate active poller
       const interval = setInterval(() => {}, 1000);
       (executor as any).activePrPollers.set('task-1', interval);
+      const executeTasks = vi.spyOn(executor, 'executeTasks').mockResolvedValue(undefined);
 
       await executor.checkPrApprovalNow('task-1');
 
@@ -4010,6 +4011,7 @@ console.log(JSON.stringify(out));
         execution: { reviewStatus: 'Approved, awaiting merge' },
       });
       expect(orchestrator.approve).not.toHaveBeenCalled();
+      expect(executeTasks).not.toHaveBeenCalled();
 
       // Should continue polling since PR is still open
       expect((executor as any).activePrPollers.has('task-1')).toBe(true);
@@ -4478,6 +4480,7 @@ console.log(JSON.stringify(out));
           cwd: '/runner-base-cwd',
           mergeGateProvider: mergeGateProvider as any,
         });
+        const executeTasks = vi.spyOn(executor, 'executeTasks').mockResolvedValue(undefined);
 
         await executor.checkMergeGateStatuses();
 
@@ -4489,6 +4492,7 @@ console.log(JSON.stringify(out));
           execution: { reviewStatus: 'Approved, awaiting merge' },
         });
         expect(orchestrator.approve).not.toHaveBeenCalled();
+        expect(executeTasks).not.toHaveBeenCalled();
       });
 
       it('rejected PR stops polling without completing the gate', async () => {
