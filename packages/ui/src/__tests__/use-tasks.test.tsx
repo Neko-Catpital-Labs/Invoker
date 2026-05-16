@@ -199,6 +199,135 @@ describe('useTasks', () => {
     });
   });
 
+  it('skips the mount-time getTasks when preload bootstrap is authoritative', async () => {
+    const bootTask = makeUITask({ id: 'boot-1', description: 'Boot Task' });
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
+      tasks: [bootTask],
+      workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'running' }],
+      appStartedAtEpochMs: Date.now() - 5,
+    };
+    const getTasks = vi.fn().mockResolvedValue({ tasks: [bootTask], workflows: [] });
+    const checkPrStatuses = vi.fn();
+    const reportUiPerf = vi.fn();
+    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
+      getTasks,
+      checkPrStatuses,
+      reportUiPerf,
+      onTaskDelta: vi.fn(() => () => {}),
+      onWorkflowsChanged: vi.fn(() => () => {}),
+    };
+
+    const { result } = renderHook(() => useTasks());
+
+    await waitFor(() => {
+      expect(checkPrStatuses).toHaveBeenCalled();
+    });
+
+    expect(getTasks).not.toHaveBeenCalled();
+    expect(result.current.tasks.get('boot-1')?.description).toBe('Boot Task');
+    expect(result.current.workflows.get('wf-1')?.name).toBe('Workflow 1');
+    expect(reportUiPerf).toHaveBeenCalledWith(
+      'startup_snapshot_skipped_bootstrap_authoritative',
+      expect.objectContaining({ taskCount: 1, workflowCount: 1 }),
+    );
+  });
+
+  it('still fetches on mount when preload bootstrap fell back to the empty shape', async () => {
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
+      tasks: [],
+      workflows: [],
+    };
+    const getTasks = vi.fn().mockResolvedValue({ tasks: [], workflows: [] });
+    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
+      getTasks,
+      onTaskDelta: vi.fn(() => () => {}),
+      onWorkflowsChanged: vi.fn(() => () => {}),
+    };
+
+    renderHook(() => useTasks());
+
+    await waitFor(() => {
+      expect(getTasks).toHaveBeenCalled();
+    });
+    expect(getTasks).toHaveBeenLastCalledWith(false);
+  });
+
+  it('forced refresh still hits getTasks even when bootstrap was authoritative', async () => {
+    const bootTask = makeUITask({ id: 'boot-1', description: 'Boot Task' });
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
+      tasks: [bootTask],
+      workflows: [],
+      appStartedAtEpochMs: Date.now() - 5,
+    };
+    const refreshed = makeUITask({ id: 'boot-1', description: 'Refreshed' });
+    const getTasks = vi.fn().mockResolvedValue({ tasks: [refreshed], workflows: [] });
+    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
+      getTasks,
+      checkPrStatuses: vi.fn(),
+      reportUiPerf: vi.fn(),
+      onTaskDelta: vi.fn(() => () => {}),
+      onWorkflowsChanged: vi.fn(() => () => {}),
+    };
+
+    const { result } = renderHook(() => useTasks());
+
+    await act(async () => {
+      result.current.refreshTasks(true);
+    });
+
+    await waitFor(() => {
+      expect(getTasks).toHaveBeenCalledTimes(1);
+    });
+    expect(getTasks).toHaveBeenLastCalledWith(true);
+    await waitFor(() => {
+      expect(result.current.tasks.get('boot-1')?.description).toBe('Refreshed');
+    });
+  });
+
+  it('refreshes when a created delta references an unknown workflow even with authoritative bootstrap', async () => {
+    const bootTask = makeUITask({ id: 'wf-1/a', workflowId: 'wf-1' });
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
+      tasks: [bootTask],
+      workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'running' }],
+      appStartedAtEpochMs: Date.now() - 5,
+    };
+    const newTask = makeUITask({ id: 'wf-2/a', workflowId: 'wf-2' });
+    const getTasks = vi.fn().mockResolvedValue({
+      tasks: [bootTask, newTask],
+      workflows: [
+        { id: 'wf-1', name: 'Workflow 1', status: 'running' },
+        { id: 'wf-2', name: 'Workflow 2', status: 'running' },
+      ],
+    });
+    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
+      getTasks,
+      checkPrStatuses: vi.fn(),
+      reportUiPerf: vi.fn(),
+      onTaskDelta: vi.fn((cb: (delta: unknown) => void) => {
+        taskDeltaHandler = cb;
+        return () => {};
+      }),
+      onWorkflowsChanged: vi.fn(() => () => {}),
+    };
+
+    const { result } = renderHook(() => useTasks());
+
+    expect(getTasks).not.toHaveBeenCalled();
+
+    await act(async () => {
+      taskDeltaHandler!({ type: 'created', task: newTask });
+      await new Promise((resolve) => setTimeout(resolve, 110));
+    });
+
+    await waitFor(() => {
+      expect(getTasks).toHaveBeenCalled();
+    });
+    expect(getTasks).toHaveBeenLastCalledWith(false);
+    await waitFor(() => {
+      expect(result.current.workflows.get('wf-2')?.name).toBe('Workflow 2');
+    });
+  });
+
   it('keeps backend-sent workflow status until workflows-changed refreshes metadata', async () => {
     const taskA = makeUITask({ id: 'wf-1/task-a', workflowId: 'wf-1', status: 'failed' });
     const taskB = makeUITask({ id: 'wf-1/task-b', workflowId: 'wf-1', status: 'completed' });

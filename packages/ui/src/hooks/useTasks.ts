@@ -155,7 +155,24 @@ export function useTasks(): UseTasksResult {
       });
     }
 
-    fetchAll();
+    // `appStartedAtEpochMs` is only set when the preload sync-IPC succeeded;
+    // preload falls back to `{ tasks: [], workflows: [] }` (no field) on failure,
+    // so its presence is our authoritative-snapshot signal.
+    const bootstrapAuthoritative =
+      bootstrapState != null && typeof bootstrapState.appStartedAtEpochMs === 'number';
+    if (bootstrapAuthoritative) {
+      void window.invoker.reportUiPerf?.('startup_snapshot_skipped_bootstrap_authoritative', {
+        taskCount: bootstrapState.tasks?.length ?? 0,
+        workflowCount: bootstrapState.workflows?.length ?? 0,
+        elapsedMs: Math.round(performance.now()),
+        processElapsedMs: bootstrapState.appStartedAtEpochMs
+          ? Date.now() - bootstrapState.appStartedAtEpochMs
+          : undefined,
+      });
+      window.invoker.checkPrStatuses?.();
+    } else {
+      fetchAll();
+    }
 
     deltaPipelineRef.current = createTaskDeltaPipeline({
       flushMs: 100,
