@@ -143,40 +143,98 @@ describe('useTasks', () => {
     expect(result.current.tasks.get('t1')?.id).toBe('t1');
   });
 
-  it('does not replace a full bootstrap with a smaller initial snapshot', async () => {
+  it('skips the initial non-forced snapshot fetch when bootstrap has data', async () => {
     const bootA = makeUITask({ id: 'boot-a', description: 'Bootstrap A' });
     const bootB = makeUITask({ id: 'boot-b', description: 'Bootstrap B' });
-    const smaller = makeUITask({ id: 'boot-a', description: 'Smaller A' });
+    const getTasks = vi.fn().mockResolvedValue({ tasks: [], workflows: [] });
+    const checkPrStatuses = vi.fn();
+    const reportUiPerf = vi.fn();
     (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
       tasks: [bootA, bootB],
       workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'running' }],
     };
     (window as unknown as { invoker: Record<string, unknown> }).invoker = {
-      getTasks: vi.fn().mockResolvedValue({
-        tasks: [smaller],
-        workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'running' }],
-      }),
-      reportUiPerf: vi.fn(),
+      getTasks,
+      checkPrStatuses,
+      reportUiPerf,
       onTaskDelta: vi.fn(() => () => {}),
       onWorkflowsChanged: vi.fn(() => () => {}),
     };
 
     const { result } = renderHook(() => useTasks());
 
-    await waitFor(() => {
-      expect(window.invoker.getTasks).toHaveBeenCalled();
+    // Bootstrap state seeds tasks/workflows synchronously.
+    expect(result.current.tasks.size).toBe(2);
+    expect(result.current.workflows.size).toBe(1);
+
+    // Give any microtasks a chance to flush; if the redundant fetch were still
+    // present it would resolve here.
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
     });
 
-    expect(result.current.tasks.size).toBe(2);
-    expect(result.current.tasks.get('boot-a')?.description).toBe('Bootstrap A');
-    expect(result.current.tasks.get('boot-b')?.description).toBe('Bootstrap B');
-    expect(window.invoker.reportUiPerf).toHaveBeenCalledWith(
-      'startup_snapshot_skipped_smaller_than_bootstrap',
+    expect(getTasks).not.toHaveBeenCalled();
+    expect(checkPrStatuses).toHaveBeenCalledTimes(1);
+    expect(reportUiPerf).toHaveBeenCalledWith(
+      'startup_snapshot_skipped_bootstrap_complete',
       expect.objectContaining({
-        bootstrapTaskCount: 2,
-        snapshotTaskCount: 1,
+        taskCount: 2,
+        workflowCount: 1,
       }),
     );
+  });
+
+  it('still fetches the initial snapshot when bootstrap is empty', async () => {
+    const getTasks = vi.fn().mockResolvedValue({ tasks: [], workflows: [] });
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
+      tasks: [],
+      workflows: [],
+    };
+    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
+      getTasks,
+      onTaskDelta: vi.fn(() => () => {}),
+      onWorkflowsChanged: vi.fn(() => () => {}),
+    };
+
+    renderHook(() => useTasks());
+
+    await waitFor(() => {
+      expect(getTasks).toHaveBeenCalledTimes(1);
+      expect(getTasks).toHaveBeenCalledWith(false);
+    });
+  });
+
+  it('forced refresh still calls getTasks even when bootstrap has data', async () => {
+    const bootA = makeUITask({ id: 'boot-a', description: 'Bootstrap A' });
+    const getTasks = vi.fn().mockResolvedValue({
+      tasks: [bootA],
+      workflows: [],
+    });
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
+      tasks: [bootA],
+      workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'running' }],
+    };
+    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
+      getTasks,
+      checkPrStatuses: vi.fn(),
+      onTaskDelta: vi.fn(() => () => {}),
+      onWorkflowsChanged: vi.fn(() => () => {}),
+    };
+
+    const { result } = renderHook(() => useTasks());
+
+    // Initial mount must NOT have called getTasks (bootstrap had data).
+    expect(getTasks).not.toHaveBeenCalled();
+
+    await act(async () => {
+      result.current.refreshTasks(true);
+    });
+
+    await waitFor(() => {
+      expect(getTasks).toHaveBeenCalledTimes(1);
+      expect(getTasks).toHaveBeenLastCalledWith(true);
+    });
   });
 
   it('passes forceRefresh flag to getTasks when requested', async () => {
