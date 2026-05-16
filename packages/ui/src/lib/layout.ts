@@ -11,9 +11,19 @@
  *    for straighter edges.
  */
 
-import ELK from 'elkjs/lib/elk.bundled.js';
+import type ELKType from 'elkjs/lib/elk.bundled.js';
 
 import type { TaskState } from '../types.js';
+
+// elkjs ships as a single ~1.5 MB bundled module. Load it on demand so the
+// initial UI chunk doesn't pay for it until a graph layout is actually needed.
+let elkCtorPromise: Promise<typeof ELKType> | undefined;
+function loadElkConstructor(): Promise<typeof ELKType> {
+  if (!elkCtorPromise) {
+    elkCtorPromise = import('elkjs/lib/elk.bundled.js').then((mod) => mod.default);
+  }
+  return elkCtorPromise;
+}
 
 export interface NodePosition {
   x: number;
@@ -88,7 +98,13 @@ export async function layoutTaskGraph(
     .sort((a, b) => edgeLayoutId(a).localeCompare(edgeLayoutId(b)));
 
   try {
-    const elk = options?.elk ?? new ELK();
+    let elk: ElkLayoutEngine;
+    if (options?.elk) {
+      elk = options.elk;
+    } else {
+      const ELK = await loadElkConstructor();
+      elk = new ELK();
+    }
     const graph = {
       id: 'task-dag',
       layoutOptions: {
