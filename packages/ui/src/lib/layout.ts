@@ -11,8 +11,6 @@
  *    for straighter edges.
  */
 
-import ELK from 'elkjs/lib/elk.bundled.js';
-
 import type { TaskState } from '../types.js';
 
 export interface NodePosition {
@@ -43,6 +41,15 @@ interface ElkLayoutEngine {
     children?: Array<{ id?: string; x?: number; y?: number }>;
     edges?: unknown[];
   }>;
+}
+
+// elkjs ships as a ~1.5 MB pre-bundled (Java→JS compiled) artifact. Loading it
+// lazily keeps it out of the synchronous entry chunk so the initial UI bundle
+// stays small; Rollup emits it as its own async chunk on first DAG layout.
+async function loadDefaultElk(): Promise<ElkLayoutEngine> {
+  const mod = await import('elkjs/lib/elk.bundled.js');
+  const ELK = (mod as { default: new () => ElkLayoutEngine }).default;
+  return new ELK();
 }
 
 const NODE_WIDTH = 280;
@@ -88,7 +95,7 @@ export async function layoutTaskGraph(
     .sort((a, b) => edgeLayoutId(a).localeCompare(edgeLayoutId(b)));
 
   try {
-    const elk = options?.elk ?? new ELK();
+    const elk = options?.elk ?? (await loadDefaultElk());
     const graph = {
       id: 'task-dag',
       layoutOptions: {
