@@ -131,7 +131,7 @@ import {
   setWorkflowMergeMode,
 } from './workflow-actions.js';
 import { spawn, execSync } from 'node:child_process';
-import { openExternalTerminalForTask } from './open-terminal-for-task.js';
+import { EmbeddedTerminalSessionManager } from './embedded-terminal-session-manager.js';
 import { collectSystemDiagnostics } from './system-diagnostics.js';
 import { installBundledSkills, resolveBundledSkillsStatus } from './bundled-skills.js';
 import { createRequire } from 'node:module';
@@ -1170,6 +1170,7 @@ if (isHeadless) {
   let apiServer: ApiServer | null = null;
   let ownerMode = true;
   const taskHandles = new Map<string, { handle: ExecutorHandle; executor: Executor }>();
+  let embeddedTerminalManager: EmbeddedTerminalSessionManager | null = null;
   const launchingTasks = new Set<string>();
   const guiMutationHandlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
   let dbPollInterval: ReturnType<typeof setInterval> | null = null;
@@ -3850,19 +3851,78 @@ if (isHeadless) {
       return persistence.getActivityLogs(0, 2000);
     });
 
-    // ── External terminal launcher ──────────────────────────────
-    ipcMain.handle('invoker:open-terminal', async (_event, taskId: string): Promise<{ opened: boolean; reason?: string }> => {
+    // ── Embedded terminal session manager (GUI) ─────────────────
+    // GUI invoker:open-terminal opens an in-app PTY session for the task
+    // (or attaches to its running executor handle) instead of spawning an
+    // external OS window. Headless (`headless.ts`) keeps the
+    // openExternalTerminalForTask path for compatibility.
+    embeddedTerminalManager = new EmbeddedTerminalSessionManager({
+      getTaskHandle: (taskId) => taskHandles.get(taskId),
+      logger,
+      emitOutput: (event) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('invoker:terminal-output', event);
+        }
+      },
+      emitExit: (event) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('invoker:terminal-exit', event);
+        }
+      },
+    });
+    const terminalManager = embeddedTerminalManager;
+
+    ipcMain.handle('invoker:open-terminal', async (_event, taskId: string) => {
       logger.info(`invoked for task="${taskId}"`, { module: 'open-terminal' });
-      return openExternalTerminalForTask({
+      const result = await terminalManager.open({
         taskId,
         persistence,
         executorRegistry,
         executionAgentRegistry: agentRegistry,
         repoRoot,
         logger,
-        runningTaskReason:
-          'Task is still running or being fixed with AI. View output in the terminal panel below.',
       });
+      if (result.opened) {
+        return { opened: true, session: result.session };
+      }
+      return { opened: false, reason: result.reason };
+    });
+
+    ipcMain.handle('invoker:terminal-open', async (_event, taskId: string) => {
+      const result = await terminalManager.open({
+        taskId,
+        persistence,
+        executorRegistry,
+        executionAgentRegistry: agentRegistry,
+        repoRoot,
+        logger,
+      });
+      if (result.opened) {
+        return { opened: true, session: result.session };
+      }
+      return { opened: false, reason: result.reason };
+    });
+
+    ipcMain.handle('invoker:terminal-select', (_event, sessionId: string) => {
+      const result = terminalManager.select(sessionId);
+      if (result.selected) return { selected: true, session: result.session };
+      return { selected: false, reason: result.reason };
+    });
+
+    ipcMain.handle('invoker:terminal-list-sessions', () => {
+      return terminalManager.list();
+    });
+
+    ipcMain.handle('invoker:terminal-write', (_event, sessionId: string, data: string) => {
+      return terminalManager.write(sessionId, data);
+    });
+
+    ipcMain.handle('invoker:terminal-resize', (_event, sessionId: string, cols: number, rows: number) => {
+      return terminalManager.resize(sessionId, cols, rows);
+    });
+
+    ipcMain.handle('invoker:terminal-close', (_event, sessionId: string) => {
+      return terminalManager.close(sessionId);
     });
 
     seedUiSnapshotCache();
@@ -3906,6 +3966,9 @@ if (isHeadless) {
       if (hourlyBackupInterval) {
         clearInterval(hourlyBackupInterval);
         hourlyBackupInterval = null;
+      }
+      if (embeddedTerminalManager) {
+        try { embeddedTerminalManager.destroyAll(); } catch { /* noop */ }
       }
       if (executorRegistry) {
         await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));

@@ -253,6 +253,62 @@ export interface SystemDiagnostics {
   bundledSkills?: BundledSkillsStatus;
 }
 
+// ── Embedded terminal session contracts ──────────────────────
+// `invoker:terminal-*` channels back the in-app terminal panel that
+// replaces the legacy OS terminal launcher for GUI mode. The session
+// id is stable per-task so reopening the same task reuses the session.
+
+export type TerminalSessionMode = 'pty' | 'executor-attached';
+
+export type TerminalSessionStatus = 'starting' | 'running' | 'exited' | 'error';
+
+export interface TerminalSessionDescriptor {
+  sessionId: string;
+  taskId: string;
+  mode: TerminalSessionMode;
+  status: TerminalSessionStatus;
+  reused: boolean;
+  cwd?: string;
+  command?: string;
+  args?: string[];
+  /** Reason for the latest status — populated when status is 'error' or 'exited'. */
+  reason?: string;
+  /** Exit code when status is 'exited'. */
+  exitCode?: number;
+}
+
+export interface TerminalOpenResult {
+  opened: boolean;
+  /** Populated when `opened === true`. */
+  session?: TerminalSessionDescriptor;
+  /** Populated when `opened === false`. */
+  reason?: string;
+}
+
+export interface TerminalSelectResult {
+  selected: boolean;
+  session?: TerminalSessionDescriptor;
+  reason?: string;
+}
+
+export interface TerminalSimpleAck {
+  ok: boolean;
+  reason?: string;
+}
+
+export interface TerminalOutputEvent {
+  sessionId: string;
+  taskId: string;
+  data: string;
+}
+
+export interface TerminalExitEvent {
+  sessionId: string;
+  taskId: string;
+  exitCode?: number;
+  reason?: string;
+}
+
 // ── Invoke Channel Registry ─────────────────────────────────
 // Each key is the channel name string; value is { request, response }.
 // `request` is a tuple of the arguments passed after the channel name.
@@ -497,10 +553,41 @@ export const IpcChannels = {
     response: ActivityLogEntry[];
   },
 
-  // Terminal
+  // Terminal — legacy GUI channel: in GUI mode this now returns an embedded
+  // session descriptor; in headless mode it continues to launch an OS terminal.
   'invoker:open-terminal': {} as {
     request: [taskId: string];
-    response: { opened: boolean; reason?: string };
+    response: {
+      opened: boolean;
+      reason?: string;
+      session?: TerminalSessionDescriptor;
+    };
+  },
+
+  // Embedded terminal session channels — back the in-app terminal panel.
+  'invoker:terminal-open': {} as {
+    request: [taskId: string];
+    response: TerminalOpenResult;
+  },
+  'invoker:terminal-select': {} as {
+    request: [sessionId: string];
+    response: TerminalSelectResult;
+  },
+  'invoker:terminal-list-sessions': {} as {
+    request: [];
+    response: TerminalSessionDescriptor[];
+  },
+  'invoker:terminal-write': {} as {
+    request: [sessionId: string, data: string];
+    response: TerminalSimpleAck;
+  },
+  'invoker:terminal-resize': {} as {
+    request: [sessionId: string, cols: number, rows: number];
+    response: TerminalSimpleAck;
+  },
+  'invoker:terminal-close': {} as {
+    request: [sessionId: string];
+    response: TerminalSimpleAck;
   },
 
   // Worktree Cleanup
@@ -549,6 +636,12 @@ export const IpcEventChannels = {
   },
   'invoker:workflows-changed': {} as {
     payload: unknown[];
+  },
+  'invoker:terminal-output': {} as {
+    payload: TerminalOutputEvent;
+  },
+  'invoker:terminal-exit': {} as {
+    payload: TerminalExitEvent;
   },
 } as const;
 

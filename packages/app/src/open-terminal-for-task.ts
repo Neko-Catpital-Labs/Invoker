@@ -11,9 +11,11 @@ import {
   getEffectivePath,
   WorktreeExecutor,
   SshExecutor,
+  type Executor,
   type ExecutorRegistry,
   type AgentRegistry,
   type PersistedTaskMeta,
+  type TerminalSpec,
 } from '@invoker/execution-engine';
 import { loadConfig } from './config.js';
 import {
@@ -127,21 +129,56 @@ export function repairCodexResumeSessionMeta(
 }
 
 /**
- * Opens Terminal.app / x-terminal-emulator for the given task when it is not running.
+ * Outcome of attempting to resolve a TerminalSpec for a persisted task.
+ * `ok: true` provides the spec plus the resolved executor and meta — both the
+ * external launcher and the embedded session manager consume this.
+ * `ok: false` carries the same `{ opened: false, reason }` shape the GUI relies on.
  */
-export async function openExternalTerminalForTask(
-  opts: OpenExternalTerminalForTaskOptions,
-): Promise<OpenTerminalResult> {
-  const { taskId, persistence, executorRegistry, repoRoot, runningTaskReason, logger: termLogger } = opts;
+export type ResolveTaskTerminalResult =
+  | {
+      ok: true;
+      spec: TerminalSpec;
+      meta: PersistedTaskMeta;
+      executor: Executor;
+      taskStatus: string;
+    }
+  | {
+      ok: false;
+      reason: string;
+      taskStatus?: string;
+    };
+
+/**
+ * Shared spec resolution used by both `openExternalTerminalForTask` (external
+ * OS terminal) and the embedded terminal session manager. Keeping the
+ * resolution in one place preserves the managed-workspace invariants and the
+ * codex session repair behaviour across both surfaces.
+ *
+ * When `treatRunningAsError` is true (the default), running / fixing_with_ai
+ * tasks are rejected just like the original external launcher. The embedded
+ * manager flips it off so it can attach to an active executor handle instead.
+ */
+export function resolveTaskTerminalSpec(
+  opts: OpenExternalTerminalForTaskOptions & { treatRunningAsError?: boolean },
+): ResolveTaskTerminalResult {
+  const {
+    taskId,
+    persistence,
+    executorRegistry,
+    runningTaskReason,
+    logger: termLogger,
+    treatRunningAsError = true,
+  } = opts;
 
   const taskStatus = persistence.getTaskStatus(taskId);
   termLogger?.info(`taskId=${taskId} taskStatus=${taskStatus ?? 'null'}`);
   if (taskStatus == null) {
-    return { opened: false, reason: `Task "${taskId}" not found.` };
+    return { ok: false, reason: `Task "${taskId}" not found.` };
   }
-  if (taskStatus === 'running' || taskStatus === 'fixing_with_ai') {
+  if (treatRunningAsError && (taskStatus === 'running' || taskStatus === 'fixing_with_ai')) {
     return {
-      opened: false,
+      ok: false,
+      taskStatus,
       reason:
         runningTaskReason ??
         'Task is still running or being fixed with AI. View output in the embedded terminal or logs.',
@@ -222,10 +259,10 @@ export async function openExternalTerminalForTask(
       `Refusing to fall back to host repo to prevent accidental mutation of the main repository.`,
     ].join('\n');
     termLogger?.info(`managed workspace invariant violation: ${errorMsg}`);
-    return { opened: false, reason: errorMsg };
+    return { ok: false, reason: errorMsg, taskStatus };
   }
 
-  let spec: { cwd?: string; command?: string; args?: string[] };
+  let spec: TerminalSpec;
   try {
     termLogger?.info(`calling executor.getRestoredTerminalSpec(meta) for task=${taskId}`);
     spec = executor.getRestoredTerminalSpec(repairedMeta);
@@ -233,7 +270,7 @@ export async function openExternalTerminalForTask(
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     termLogger?.info(`getRestoredTerminalSpec threw: ${reason}`);
-    return { opened: false, reason };
+    return { ok: false, reason, taskStatus };
   }
 
   // Fail-fast workspace invariant: managed executors must have resolved workspace path
@@ -245,8 +282,25 @@ export async function openExternalTerminalForTask(
       `Refusing to fall back to host repo to prevent unintended mutations.`,
     ].join(' ');
     termLogger?.info(`fail-fast: ${reason}`);
-    return { opened: false, reason };
+    return { ok: false, reason, taskStatus };
   }
+
+  return { ok: true, spec, meta: repairedMeta, executor, taskStatus };
+}
+
+/**
+ * Opens Terminal.app / x-terminal-emulator for the given task when it is not running.
+ */
+export async function openExternalTerminalForTask(
+  opts: OpenExternalTerminalForTaskOptions,
+): Promise<OpenTerminalResult> {
+  const { repoRoot, logger: termLogger } = opts;
+
+  const resolved = resolveTaskTerminalSpec(opts);
+  if (!resolved.ok) {
+    return { opened: false, reason: resolved.reason };
+  }
+  const { spec } = resolved;
 
   const cwd = spec.cwd ?? repoRoot;
   termLogger?.info(`effective cwd=${cwd} (repoRoot=${repoRoot})`);
