@@ -795,7 +795,10 @@ describe('autoFixOnFailure', () => {
       taskExecutor: taskExecutor as unknown as TaskRunner,
     });
 
-    expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a');
+    expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith(
+      'task-a',
+      expect.objectContaining({ expectedLineage: expect.objectContaining({ taskId: 'task-a' }) }),
+    );
     expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'claude', 'boom');
     expect(taskExecutor.resolveConflict).not.toHaveBeenCalled();
     expect(orchestrator.retryTask).toHaveBeenCalledWith('task-a');
@@ -886,7 +889,10 @@ describe('autoFixOnFailure', () => {
       taskExecutor: taskExecutor as unknown as TaskRunner,
     });
 
-    expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a');
+    expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith(
+      'task-a',
+      expect.objectContaining({ expectedLineage: expect.objectContaining({ taskId: 'task-a' }) }),
+    );
     expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'claude');
     expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
     expect(orchestrator.retryTask).toHaveBeenCalledWith('task-a');
@@ -1316,7 +1322,11 @@ describe('fixWithAgentAction', () => {
 
     expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'codex', 'boom');
     expect(taskExecutor.resolveConflict).not.toHaveBeenCalled();
-    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'boom');
+    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith(
+      'task-a',
+      'boom',
+      expect.objectContaining({ expectedLineage: expect.objectContaining({ taskId: 'task-a' }) }),
+    );
     expect(result).toEqual({ kind: 'fixWithAgent', autoApproved: false, started: [] });
   });
 
@@ -1355,7 +1365,11 @@ describe('fixWithAgentAction', () => {
 
     expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'claude');
     expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
-    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', mergeError);
+    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith(
+      'task-a',
+      mergeError,
+      expect.objectContaining({ expectedLineage: expect.objectContaining({ taskId: 'task-a' }) }),
+    );
     expect(result).toEqual({ kind: 'resolveConflict', autoApproved: false, started: [] });
   });
 
@@ -2227,7 +2241,7 @@ describe('fixWithAgentAction lineage guard', () => {
     const orchestrator = {
       getTask: vi.fn(() => {
         getTaskCallCount++;
-        if (getTaskCallCount <= 2) {
+        if (getTaskCallCount <= 5) {
           return makeTask({
             status: 'failed',
             config: { workflowId: 'wf-1' },
@@ -2260,6 +2274,7 @@ describe('fixWithAgentAction lineage guard', () => {
       taskExecutor: taskExecutor as unknown as TaskRunner,
     })).rejects.toThrow('agent crashed');
 
+    expect(persistence.appendTaskOutput).not.toHaveBeenCalled();
     // revertConflictResolution must NOT be called when lineage is stale
     expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
   });
@@ -2291,7 +2306,11 @@ describe('fixWithAgentAction lineage guard', () => {
     });
 
     // Normal path should proceed
-    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'boom');
+    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith(
+      'task-a',
+      'boom',
+      expect.objectContaining({ expectedLineage: expect.objectContaining({ taskId: 'task-a' }) }),
+    );
     expect(result).toEqual({ kind: 'fixWithAgent', autoApproved: false, started: [] });
   });
 });
@@ -2307,7 +2326,7 @@ describe('resolveConflictAction lineage guard', () => {
     const orchestrator = {
       getTask: vi.fn(() => {
         getTaskCallCount++;
-        if (getTaskCallCount <= 1) {
+        if (getTaskCallCount <= 4) {
           return makeTask({
             status: 'fixing_with_ai',
             config: { workflowId: 'wf-1' },
@@ -2347,7 +2366,7 @@ describe('resolveConflictAction lineage guard', () => {
     const orchestrator = {
       getTask: vi.fn(() => {
         getTaskCallCount++;
-        if (getTaskCallCount <= 1) {
+        if (getTaskCallCount <= 4) {
           return makeTask({
             status: 'fixing_with_ai',
             config: { workflowId: 'wf-1' },
@@ -2377,6 +2396,7 @@ describe('resolveConflictAction lineage guard', () => {
       taskExecutor: taskExecutor as unknown as TaskRunner,
     })).rejects.toThrow('resolution failed');
 
+    expect(persistence.appendTaskOutput).not.toHaveBeenCalled();
     expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
   });
 });
@@ -2388,7 +2408,7 @@ describe('autoFixOnFailure lineage guard', () => {
       shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => {
         getTaskCallCount++;
-        if (getTaskCallCount <= 2) {
+        if (getTaskCallCount <= 5) {
           return makeTask({
             status: 'failed',
             config: { workflowId: 'wf-1' },
@@ -2442,7 +2462,7 @@ describe('autoFixOnFailure lineage guard', () => {
       shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => {
         getTaskCallCount++;
-        if (getTaskCallCount <= 2) {
+        if (getTaskCallCount <= 5) {
           return makeTask({
             status: 'failed',
             config: { workflowId: 'wf-1' },
@@ -2485,6 +2505,11 @@ describe('autoFixOnFailure lineage guard', () => {
       taskExecutor: taskExecutor as unknown as TaskRunner,
     })).rejects.toThrow('agent crashed');
 
+    expect(persistence.appendTaskOutput).toHaveBeenCalledTimes(1);
+    expect(persistence.appendTaskOutput).toHaveBeenCalledWith(
+      'task-a',
+      expect.stringContaining('[Auto-fix Agent]'),
+    );
     expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
   });
 
