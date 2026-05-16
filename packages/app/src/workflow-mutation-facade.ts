@@ -105,6 +105,10 @@ export interface WorkflowMutationFacadeDeps {
   autoApproveAIFixes?: boolean;
   /** Optional pre-kill hook for active task executions. */
   killRunningTask?: (taskId: string) => Promise<void>;
+  /** Optional serialized workflow delete implementation, usually CommandService-backed. */
+  deleteWorkflow?: (workflowId: string) => Promise<void> | void;
+  /** Optional serialized workflow detach implementation, usually CommandService-backed. */
+  detachWorkflow?: (workflowId: string, upstreamWorkflowId: string) => Promise<void> | void;
 }
 
 // ── Facade ───────────────────────────────────────────────────
@@ -291,6 +295,10 @@ export class WorkflowMutationFacade {
         await this.deps.killRunningTask(task.id);
       }
     }
+    if (this.deps.deleteWorkflow) {
+      await this.deps.deleteWorkflow(workflowId);
+      return;
+    }
     this.deps.orchestrator.deleteWorkflow(workflowId);
   }
 
@@ -303,6 +311,10 @@ export class WorkflowMutationFacade {
   }
 
   async detachWorkflow(workflowId: string, upstreamWorkflowId: string): Promise<void> {
+    if (this.deps.detachWorkflow) {
+      await this.deps.detachWorkflow(workflowId, upstreamWorkflowId);
+      return;
+    }
     this.deps.orchestrator.detachWorkflow(workflowId, upstreamWorkflowId);
   }
 

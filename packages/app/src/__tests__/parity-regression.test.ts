@@ -360,8 +360,6 @@ describe('Parity: API endpoints wire to facade methods', () => {
       persistence: mocks.persistence as any,
       executorRegistry: mocks.executorRegistry as any,
       mutations: facade,
-      deleteWorkflow: mocks.deleteWorkflow,
-      detachWorkflow: mocks.detachWorkflow,
     });
     await new Promise<void>((resolve) => {
       if (api.server.listening) resolve();

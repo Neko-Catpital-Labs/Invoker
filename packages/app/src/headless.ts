@@ -124,7 +124,7 @@ function headlessHeartbeat(taskId: string, deps: Pick<HeadlessDeps, 'persistence
 function buildHeadlessApiServerDeps(
   deps: HeadlessDeps,
   taskExecutor: TaskRunner,
-): { mutations: WorkflowMutationFacade; deleteWorkflow: (id: string) => Promise<void>; detachWorkflow: (id: string, upstreamId: string) => Promise<void> } {
+): { mutations: WorkflowMutationFacade } {
   return {
     mutations: new WorkflowMutationFacade({
       logger: deps.logger,
@@ -134,26 +134,17 @@ function buildHeadlessApiServerDeps(
       dispatchMode: deps.mutationTiming ? 'fire-and-forget' : 'await',
       autoApproveAIFixes: deps.invokerConfig?.autoApproveAIFixes,
       killRunningTask: (taskId: string) => taskExecutor.killActiveExecution(taskId),
+      deleteWorkflow: async (workflowId: string) => {
+        const envelope = makeEnvelope('delete-workflow', 'headless', 'workflow', { workflowId });
+        const cmdResult = await deps.commandService.deleteWorkflow(envelope);
+        if (!cmdResult.ok) throw new Error(cmdResult.error.message);
+      },
+      detachWorkflow: async (workflowId: string, upstreamWorkflowId: string) => {
+        const envelope = makeEnvelope('detach-workflow', 'headless', 'workflow', { workflowId, upstreamWorkflowId });
+        const cmdResult = await deps.commandService.detachWorkflow(envelope);
+        if (!cmdResult.ok) throw new Error(cmdResult.error.message);
+      },
     }),
-    deleteWorkflow: async (workflowId: string) => {
-      const allTasks = deps.orchestrator.getAllTasks();
-      const workflowTasks = allTasks.filter(
-        (t) =>
-          t.config.workflowId === workflowId &&
-          (t.status === 'running' || t.status === 'fixing_with_ai'),
-      );
-      for (const task of workflowTasks) {
-        await taskExecutor.killActiveExecution(task.id);
-      }
-      const envelope = makeEnvelope('delete-workflow', 'headless', 'workflow', { workflowId });
-      const cmdResult = await deps.commandService.deleteWorkflow(envelope);
-      if (!cmdResult.ok) throw new Error(cmdResult.error.message);
-    },
-    detachWorkflow: async (workflowId: string, upstreamWorkflowId: string) => {
-      const envelope = makeEnvelope('detach-workflow', 'headless', 'workflow', { workflowId, upstreamWorkflowId });
-      const cmdResult = await deps.commandService.detachWorkflow(envelope);
-      if (!cmdResult.ok) throw new Error(cmdResult.error.message);
-    },
   };
 }
 
