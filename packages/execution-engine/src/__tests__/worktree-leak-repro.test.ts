@@ -219,9 +219,9 @@ describe('BUG REPRO: worktree lifecycle leaks', () => {
     });
     await executor.start(request);
 
-    // pool.ensureClone handles fetching internally (git fetch --all on existing clones)
+    // pool.ensureClone handles fetching the known base ref before branching.
     const pool = (executor as any).pool;
-    expect(pool.ensureClone).toHaveBeenCalledWith('git@github.com:test/repo.git');
+    expect(pool.ensureClone).toHaveBeenCalledWith('git@github.com:test/repo.git', { baseRef: 'main' });
 
     // Cleanup
     taskProcess.emit('close', 0, null);

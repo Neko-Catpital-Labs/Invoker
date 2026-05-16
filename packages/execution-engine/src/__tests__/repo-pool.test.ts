@@ -829,4 +829,25 @@ describe('RepoPool', () => {
     const shaFresh = execSync('git rev-parse origin/master', { cwd: clonePath }).toString().trim();
     expect(shaFresh).not.toBe(shaBefore);
   });
+
+  it('ensureClone fetches only the requested base ref when provided', async () => {
+    await pool.ensureClone(localRepoUrl);
+
+    writeFileSync(join(localRepoUrl, 'base-refresh.md'), 'base refresh');
+    execSync('git add -A && git commit -m "advance base"', { cwd: localRepoUrl });
+
+    const orig = (pool as any).execGit.bind(pool);
+    const calls: string[][] = [];
+    vi.spyOn(pool as any, 'execGit').mockImplementation((...params: unknown[]) => {
+      const args = params[0] as string[];
+      const cwd = params[1] as string;
+      calls.push(args);
+      return orig(args, cwd);
+    });
+
+    await pool.ensureClone(localRepoUrl, { baseRef: 'master' });
+
+    expect(calls).toContainEqual(['fetch', 'origin', 'refs/heads/master:refs/remotes/origin/master']);
+    expect(calls.some((args) => args[0] === 'fetch' && args.includes('--all'))).toBe(false);
+  });
 });

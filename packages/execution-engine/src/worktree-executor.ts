@@ -153,10 +153,10 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     const t0 = Date.now();
     const log = (step: string) => traceExecution(`[WorktreeExecutor] start task=${request.actionId} step=${step} elapsed=${Date.now() - t0}ms`);
 
-    bench('RepoPool.ensureClone.before');
-    const clonePath = await this.pool.ensureClone(repoUrl);
-    bench('RepoPool.ensureClone.after', { clonePath });
     const baseRef = request.inputs.baseBranch ?? 'HEAD';
+    bench('RepoPool.ensureClone.before');
+    const clonePath = await this.pool.ensureClone(repoUrl, { baseRef });
+    bench('RepoPool.ensureClone.after', { clonePath });
     log(`resolve base ${baseRef} begin`);
     const runGit = (args: string[]) => this.execGitSimple(args, clonePath);
     bench('WorktreeExecutor.resolveBase.before', { baseRef });

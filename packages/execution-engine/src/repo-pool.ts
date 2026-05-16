@@ -45,6 +45,10 @@ export interface AcquireWorktreeOptions {
   forceFresh?: boolean;
 }
 
+export interface EnsureCloneOptions {
+  baseRef?: string;
+}
+
 interface RebaseRefreshBatch {
   baseBranches: Set<string>;
   syncedBaseBranches: Set<string>;
@@ -340,10 +344,10 @@ export class RepoPool {
     return timing.span(functionName, metadata, fn);
   }
 
-  async ensureClone(repoUrl: string): Promise<string> {
+  async ensureClone(repoUrl: string, opts?: EnsureCloneOptions): Promise<string> {
     const bench = createExecutionBench({
       module: 'repo-pool-bench',
-      baseMetadata: { repoUrl },
+      baseMetadata: { repoUrl, baseRef: opts?.baseRef },
     });
     bench('RepoPool.ensureClone.begin');
     // Serialize clone operations per repo to prevent concurrent clone races
@@ -352,10 +356,15 @@ export class RepoPool {
       bench('RepoPool.ensureClone.waitForExistingLock.before');
       const clonePath = await existing;
       bench('RepoPool.ensureClone.waitForExistingLock.after', { clonePath });
+      if (remoteFetchForPool.enabled && opts?.baseRef) {
+        const runGit = (args: string[]) => this.execGit(args, clonePath);
+        await syncPlanBaseRemoteForRef(runGit, opts.baseRef);
+        bench('RepoPool.ensureClone.syncPlanBaseRemoteForRef.after', { clonePath, baseRef: opts.baseRef });
+      }
       return clonePath;
     }
 
-    const promise = this.doEnsureClone(repoUrl);
+    const promise = this.doEnsureClone(repoUrl, opts);
     this.cloneLocks.set(repoUrl, promise);
     try {
       const clonePath = await promise;
@@ -462,7 +471,7 @@ export class RepoPool {
     bench('RepoPool.runPreserveOrResetWithRecovery.retryRunBashLocal.after');
   }
 
-  private async doEnsureClone(repoUrl: string): Promise<string> {
+  private async doEnsureClone(repoUrl: string, opts?: EnsureCloneOptions): Promise<string> {
     const bench = createExecutionBench({
       module: 'repo-pool-bench',
       baseMetadata: { repoUrl },
@@ -471,16 +480,32 @@ export class RepoPool {
     bench('RepoPool.doEnsureClone.begin', { dir, exists: existsSync(dir) });
     if (existsSync(dir)) {
       if (remoteFetchForPool.enabled) {
-        try {
-          bench('RepoPool.doEnsureClone.gitFetchAllPrune.before', { dir });
-          await this.execGit(['fetch', '--all', '--prune'], dir);
-          bench('RepoPool.doEnsureClone.gitFetchAllPrune.after', { dir });
-        } catch (err) {
-          console.warn(`[RepoPool] doEnsureClone fetch failed: ${err}`);
-          bench('RepoPool.doEnsureClone.gitFetchAllPrune.failed', {
-            dir,
-            error: err instanceof Error ? err.message : String(err),
-          });
+        if (opts?.baseRef) {
+          try {
+            const runGit = (args: string[]) => this.execGit(args, dir);
+            bench('RepoPool.doEnsureClone.syncPlanBaseRemoteForRef.before', { dir, baseRef: opts.baseRef });
+            await syncPlanBaseRemoteForRef(runGit, opts.baseRef);
+            bench('RepoPool.doEnsureClone.syncPlanBaseRemoteForRef.after', { dir, baseRef: opts.baseRef });
+          } catch (err) {
+            console.warn(`[RepoPool] doEnsureClone base ref fetch failed: ${err}`);
+            bench('RepoPool.doEnsureClone.syncPlanBaseRemoteForRef.failed', {
+              dir,
+              baseRef: opts.baseRef,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        } else {
+          try {
+            bench('RepoPool.doEnsureClone.gitFetchAllPrune.before', { dir });
+            await this.execGit(['fetch', '--all', '--prune'], dir);
+            bench('RepoPool.doEnsureClone.gitFetchAllPrune.after', { dir });
+          } catch (err) {
+            console.warn(`[RepoPool] doEnsureClone fetch failed: ${err}`);
+            bench('RepoPool.doEnsureClone.gitFetchAllPrune.failed', {
+              dir,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
         }
         // Advance local HEAD branch to match origin so rev-parse returns the fresh ref
         try {
