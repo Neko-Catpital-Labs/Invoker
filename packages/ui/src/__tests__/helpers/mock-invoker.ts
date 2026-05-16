@@ -136,6 +136,8 @@ export function createMockInvoker(
     recreateWorkflow: vi.fn(async () => {}),
     recreateTask: vi.fn(async () => {}),
     retryWorkflow: vi.fn(async () => {}),
+    rebase: vi.fn(async () => ({ success: true, rebasedBranches: [], errors: [] })),
+    rebaseTask: vi.fn(async () => ({ success: true, rebasedBranches: [], errors: [] })),
     rebaseAndRetry: vi.fn(async () => ({ success: true, rebasedBranches: [], errors: [] })),
     recreateWithRebase: vi.fn(async () => ({ success: true, rebasedBranches: [], errors: [] })),
     setMergeBranch: vi.fn(async () => {}),

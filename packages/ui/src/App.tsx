@@ -52,7 +52,7 @@ interface WorkflowContextMenuProps {
   onOpenWorkflow: (workflowId: string) => void;
   onOpenPr: (workflowId: string) => void;
   onRetryWorkflow: (workflowId: string) => void;
-  onRecreateWithRebase: (workflowId: string) => void;
+  onRebaseWorkflow: (workflowId: string) => void;
   onRecreateWorkflow: (workflowId: string) => void;
   onCancelWorkflow: (workflowId: string) => void;
   onDeleteWorkflow: (workflowId: string) => void;
@@ -67,7 +67,7 @@ function WorkflowContextMenu({
   onOpenWorkflow,
   onOpenPr,
   onRetryWorkflow,
-  onRecreateWithRebase,
+  onRebaseWorkflow,
   onRecreateWorkflow,
   onCancelWorkflow,
   onDeleteWorkflow,
@@ -169,8 +169,8 @@ function WorkflowContextMenu({
       ) : (
         <div>
           <div className="my-1 border-t border-gray-600" />
-          <button role="menuitem" onClick={() => runAction(onRecreateWithRebase)} className={dangerButtonClass}>
-            Recreate with Rebase
+          <button role="menuitem" onClick={() => runAction(onRebaseWorkflow)} className={dangerButtonClass}>
+            Rebase Workflow
           </button>
           <button role="menuitem" onClick={() => runAction(onRecreateWorkflow)} className={dangerButtonClass}>
             Recreate Workflow
@@ -508,15 +508,15 @@ export function App() {
     }
   }, []);
 
-  const handleRecreateWithRebase = useCallback(async (workflowId: string) => {
+  const handleRebaseWorkflow = useCallback(async (workflowId: string) => {
     setContextMenu(null);
     try {
-      const result = await window.invoker?.recreateWithRebase(workflowId);
+      const result = await window.invoker?.rebase(workflowId);
       if (result && !result.success) {
-        console.error('Recreate with Rebase failed for some branches:', result.errors);
+        console.error('Rebase failed for some branches:', result.errors);
       }
     } catch (err) {
-      console.error('Recreate with Rebase failed:', err);
+      console.error('Rebase failed:', err);
     }
   }, []);
 
@@ -1226,7 +1226,7 @@ export function App() {
           onOpenWorkflow={handleWorkflowClick}
           onOpenPr={handleOpenWorkflowPr}
           onRetryWorkflow={(workflowId) => void handleRetryWorkflow(workflowId)}
-          onRecreateWithRebase={(workflowId) => void handleRecreateWithRebase(workflowId)}
+          onRebaseWorkflow={(workflowId) => void handleRebaseWorkflow(workflowId)}
           onRecreateWorkflow={(workflowId) => void handleRecreateWorkflow(workflowId)}
           onCancelWorkflow={(workflowId) => void handleCancelWorkflow(workflowId)}
           onDeleteWorkflow={(workflowId) => void handleDeleteWorkflow(workflowId)}

@@ -98,7 +98,7 @@ describe('ContextMenu getMenuItems', () => {
       const taskWithWorkflow = makeTask({ status: 'failed', workflowId: 'wf-1' });
       const itemsWithWorkflow = getMenuItems(taskWithWorkflow);
 
-      const workflowItemIds = ['rebase-retry', 'recreate-rebase', 'retry-workflow', 'recreate-workflow', 'cancel-workflow', 'delete-workflow'];
+      const workflowItemIds = ['rebase-workflow', 'retry-workflow', 'recreate-workflow', 'cancel-workflow', 'delete-workflow'];
       workflowItemIds.forEach((id) => {
         expect(itemsWithWorkflow.find((i) => i.id === id)).toBeUndefined();
       });
