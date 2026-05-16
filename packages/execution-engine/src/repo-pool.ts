@@ -203,7 +203,7 @@ export class RepoPool {
     batch: RebaseRefreshBatch,
     timing?: RepoPoolTiming,
   ): Promise<string> {
-    const dir = await this.refreshMirrorCloneForRebase(repoUrl, timing);
+    const dir = await this.refreshMirrorCloneForRebase(repoUrl, batch.baseBranches, timing);
     const runGit = (args: string[]) => this.execGit(args, dir);
     while (true) {
       const baseBranches = [...batch.baseBranches].filter((branch) => !batch.syncedBaseBranches.has(branch));
@@ -223,15 +223,23 @@ export class RepoPool {
     return dir;
   }
 
-  private async refreshMirrorCloneForRebase(repoUrl: string, timing?: RepoPoolTiming): Promise<string> {
+  private async refreshMirrorCloneForRebase(
+    repoUrl: string,
+    baseBranches: Iterable<string>,
+    timing?: RepoPoolTiming,
+  ): Promise<string> {
     const dir = this.cloneDir(repoUrl);
     if (existsSync(dir)) {
-      try {
-        await this.time(timing, 'RepoPool.doRefreshMirrorForRebase.gitFetchAllPrune', { dir }, () =>
-          this.execGit(['fetch', '--all', '--prune'], dir),
-        );
-      } catch (err) {
-        console.warn(`[RepoPool] refreshMirrorForRebase fetch failed: ${err}`);
+      const branches = [...new Set([...baseBranches].map((branch) => branch.trim()).filter(Boolean))];
+      for (const branch of branches) {
+        try {
+          const runGit = (args: string[]) => this.execGit(args, dir);
+          await this.time(timing, 'RepoPool.doRefreshMirrorForRebase.gitFetchBaseRef', { dir, baseBranch: branch }, () =>
+            syncPlanBaseRemoteForRef(runGit, branch),
+          );
+        } catch (err) {
+          console.warn(`[RepoPool] refreshMirrorForRebase base ref fetch failed for ${branch}: ${err}`);
+        }
       }
       try {
         const branch = (await this.time(timing, 'RepoPool.doRefreshMirrorForRebase.gitCurrentBranch', { dir }, () =>

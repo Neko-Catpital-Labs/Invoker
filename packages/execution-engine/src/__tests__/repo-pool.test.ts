@@ -368,13 +368,34 @@ describe('RepoPool', () => {
       expect(existsSync(path)).toBe(true);
     });
 
-    it('refreshMirrorForRebase succeeds when fetch --all fails', async () => {
+    it('refreshMirrorForRebase no longer depends on fetch --all for existing mirrors', async () => {
       await pool.ensureClone(localRepoUrl);
       spyFetchToFail(pool);
 
       const dir = await pool.refreshMirrorForRebase(localRepoUrl, 'master');
       expect(dir).toBeDefined();
       expect(existsSync(dir)).toBe(true);
+    });
+
+    it('refreshMirrorForRebase fetches only requested base refs for existing mirrors', async () => {
+      await pool.ensureClone(localRepoUrl);
+
+      writeFileSync(join(localRepoUrl, 'rebase-refresh.md'), 'rebase refresh');
+      execSync('git add -A && git commit -m "advance rebase base"', { cwd: localRepoUrl });
+
+      const orig = (pool as any).execGit.bind(pool);
+      const calls: string[][] = [];
+      vi.spyOn(pool as any, 'execGit').mockImplementation((...params: unknown[]) => {
+        const args = params[0] as string[];
+        const cwd = params[1] as string;
+        calls.push(args);
+        return orig(args, cwd);
+      });
+
+      await pool.refreshMirrorForRebase(localRepoUrl, 'master');
+
+      expect(calls).toContainEqual(['fetch', 'origin', 'refs/heads/master:refs/remotes/origin/master']);
+      expect(calls.some((args) => args[0] === 'fetch' && args.includes('--all'))).toBe(false);
     });
 
     it('concurrent fetches from separate pools sharing cacheDir both succeed', async () => {
