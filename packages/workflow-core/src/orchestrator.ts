@@ -3727,7 +3727,7 @@ export class Orchestrator {
 
   /**
    * Delete a single workflow: DB first, then scheduler, memory, and publish removal deltas.
-   * Follows the same DB→memory→publish pattern as writeAndSync().
+   * INV-130 API routes reach this through WorkflowMutationFacade to preserve that boundary.
    */
   deleteWorkflow(workflowId: string): void {
     this.syncAllFromDb();
