@@ -1825,6 +1825,22 @@ describe('SQLiteAdapter', () => {
   });
 
   describe('read-only / flush safety', () => {
+    it('opens file-backed databases in WAL mode with durable pragmas', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-wal-'));
+      const dbPath = join(dir, 'invoker.db');
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        expect((db as any).db.exec('PRAGMA journal_mode')[0].values[0][0]).toBe('wal');
+        expect(sqliteScalar(db, 'PRAGMA synchronous')).toBe(2);
+        expect(sqliteScalar(db, 'PRAGMA foreign_keys')).toBe(1);
+        expect(sqliteScalar(db, 'PRAGMA busy_timeout')).toBe(5000);
+        expect(sqliteScalar(db, 'PRAGMA wal_autocheckpoint')).toBe(1000);
+        db.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
     it('persists file-backed writes before close so restart recovery can read them', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-durable-'));
       const dbPath = join(dir, 'invoker.db');
@@ -1838,6 +1854,31 @@ describe('SQLiteAdapter', () => {
         expect(loaded.map((task) => task.id)).toContain('t-durable-before-close');
         reader.close();
         writer.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('commits successful transactions and rolls back failed transactions across reopen', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-transaction-'));
+      const dbPath = join(dir, 'invoker.db');
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db.runInTransaction(() => {
+          db.saveWorkflow({ ...testWorkflow, id: 'wf-commit' });
+        });
+        expect(() =>
+          db.runInTransaction(() => {
+            db.saveWorkflow({ ...testWorkflow, id: 'wf-rollback' });
+            throw new Error('rollback sentinel');
+          }),
+        ).toThrow(/rollback sentinel/);
+        db.close();
+
+        const reopened = await SQLiteAdapter.create(dbPath, { readOnly: true });
+        expect(reopened.loadWorkflow('wf-commit')).toBeDefined();
+        expect(reopened.loadWorkflow('wf-rollback')).toBeUndefined();
+        reopened.close();
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
@@ -2362,26 +2403,24 @@ describe('SQLiteAdapter', () => {
 
   // ── Data Integrity Hardening Tests ──────────────────────
 
-  describe('atomic flush (write-to-temp + rename)', () => {
-    it('does not leave a .tmp file after successful flush', async () => {
+  describe('native WAL durability', () => {
+    it('does not create legacy .tmp flush files', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-atomic-'));
       const dbPath = join(dir, 'invoker.db');
 
       try {
         const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
         db.saveWorkflow(testWorkflow);
-        db.close(); // close triggers flush
+        db.close();
 
-        // The .tmp file should not persist after a successful flush
         expect(existsSync(`${dbPath}.tmp`)).toBe(false);
-        // The main DB file should exist
         expect(existsSync(dbPath)).toBe(true);
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
     });
 
-    it('persists data correctly through atomic flush cycle', async () => {
+    it('persists data correctly through native WAL commits', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-atomic-roundtrip-'));
       const dbPath = join(dir, 'invoker.db');
 
@@ -2391,7 +2430,6 @@ describe('SQLiteAdapter', () => {
         db1.saveTask('wf-1', makeTask('t-atomic'));
         db1.close();
 
-        // Reopen and verify data survived the atomic write
         const db2 = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
         const tasks = db2.loadTasks('wf-1');
         expect(tasks).toHaveLength(1);
@@ -2402,14 +2440,13 @@ describe('SQLiteAdapter', () => {
       }
     });
 
-    it('no stale .tmp files left in directory after multiple flushes', async () => {
+    it('leaves no stale .tmp files after multiple writes', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-atomic-multi-'));
       const dbPath = join(dir, 'invoker.db');
 
       try {
         const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
 
-        // Perform multiple writes that each trigger a flush on close
         db.saveWorkflow(testWorkflow);
         db.saveTask('wf-1', makeTask('t1'));
         db.saveTask('wf-1', makeTask('t2'));
@@ -2633,7 +2670,7 @@ describe('SQLiteAdapter', () => {
       }
     });
 
-    it('sets dirty flag so scheduled flush actually writes', async () => {
+    it('marks deletion mutations as dirty for diagnostics', async () => {
       // Use in-memory adapter to verify the dirty flag is set
       // by checking the internal state after deleteConversationsOlderThan
       const old = new Date();
@@ -2649,14 +2686,13 @@ describe('SQLiteAdapter', () => {
         updatedAt: old.toISOString(),
       });
 
-      // Reset dirty flag to false (simulating a clean state after flush)
+      // Reset dirty flag to false to verify the mutation path marks it.
       (adapter as any).dirty = false;
 
       const cutoff = new Date();
       cutoff.setDate(cutoff.getDate() - 7);
       adapter.deleteConversationsOlderThan(cutoff.toISOString());
 
-      // dirty flag should now be true
       expect((adapter as any).dirty).toBe(true);
     });
   });

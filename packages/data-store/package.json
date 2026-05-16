@@ -19,13 +19,11 @@
   },
   "dependencies": {
     "@invoker/contracts": "workspace:*",
-    "@invoker/workflow-core": "workspace:*",
-    "sql.js": "^1.12.0"
+    "@invoker/workflow-core": "workspace:*"
   },
   "devDependencies": {
     "@invoker/persistence": "workspace:*",
     "@types/node": "^25.3.3",
-    "@types/sql.js": "^1.4.0",
     "tsup": "^8.0.0",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
