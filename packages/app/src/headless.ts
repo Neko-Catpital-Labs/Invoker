@@ -48,7 +48,6 @@ import type { CostGroupDimension } from './cost-rollup.js';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
 import {
   dispatchStartedTasksWithGlobalTopup,
-  executeGlobalTopup,
   finalizeMutationWithGlobalTopup,
   isDispatchableLaunch,
 } from './global-topup.js';
@@ -171,6 +170,35 @@ function buildHeadlessApproveAction(
     });
     return { started: result.started };
   };
+}
+
+async function dispatchHeadlessMutationStarted({
+  deps,
+  taskExecutor,
+  context,
+  started,
+  scopedWorkflowId,
+  scopedTaskIds,
+}: {
+  deps: Pick<HeadlessDeps, 'orchestrator' | 'logger' | 'mutationTiming'>;
+  taskExecutor: TaskRunner;
+  context: string;
+  started: TaskState[];
+  scopedWorkflowId?: string;
+  scopedTaskIds?: string[];
+}): Promise<{ runnable: TaskState[]; topup: TaskState[] }> {
+  // INV-97 experiment selected the app-layer dispatcher as the boundary for
+  // mutation-returned runnable work: scope first, then global top-up.
+  return dispatchStartedTasksWithGlobalTopup({
+    orchestrator: deps.orchestrator,
+    taskExecutor,
+    logger: deps.logger,
+    context,
+    started,
+    scopedWorkflowId,
+    scopedTaskIds,
+    mutationTiming: deps.mutationTiming,
+  });
 }
 
 export function createHeadlessExecutor(
@@ -1742,15 +1770,13 @@ async function headlessRecreateWorkflow(workflowId: string, deps: HeadlessDeps):
     remoteFetchForPool.enabled = false;
     let topup: TaskState[] = [];
     try {
-      await te.executeTasks(runnable);
-      topup = await executeGlobalTopup({
-        orchestrator: deps.orchestrator,
+      ({ topup } = await dispatchHeadlessMutationStarted({
+        deps,
         taskExecutor: te,
-        logger: deps.logger,
         context: 'headless.recreate-workflow',
-        alreadyDispatched: runnable,
-        mutationTiming: deps.mutationTiming,
-      });
+        started,
+        scopedWorkflowId: workflowId,
+      }));
     } finally {
       remoteFetchForPool.enabled = true;
     }
@@ -2041,9 +2067,13 @@ async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDe
   const result = await deps.commandService.editTaskCommand(envelope);
   if (!result.ok) throw new Error(result.error.message);
   const runnable = result.data.filter(isDispatchableLaunch);
-  if (runnable.length > 0) {
-    await taskExecutor.executeTasks(runnable);
-  }
+  const { topup } = await dispatchHeadlessMutationStarted({
+    deps,
+    taskExecutor,
+    context: 'headless.edit-task-command',
+    started: result.data,
+    scopedTaskIds: [taskId],
+  });
   process.stdout.write(`Edited task "${taskId}" command → "${newCommand}"\n`);
 
   if (deps.noTrack) {
@@ -2051,7 +2081,7 @@ async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDe
     autoFix.unsubscribe();
     return;
   }
-  if (runnable.length === 0) {
+  if (runnable.length + topup.length === 0) {
     autoFix.unsubscribe();
     return;
   }
@@ -2075,9 +2105,13 @@ async function headlessEditPrompt(taskId: string, newPrompt: string, deps: Headl
   const result = await deps.commandService.editTaskPrompt(envelope);
   if (!result.ok) throw new Error(result.error.message);
   const runnable = result.data.filter(isDispatchableLaunch);
-  if (runnable.length > 0) {
-    await taskExecutor.executeTasks(runnable);
-  }
+  const { topup } = await dispatchHeadlessMutationStarted({
+    deps,
+    taskExecutor,
+    context: 'headless.edit-task-prompt',
+    started: result.data,
+    scopedTaskIds: [taskId],
+  });
   process.stdout.write(`Edited task "${taskId}" prompt → "${newPrompt}"\n`);
 
   if (deps.noTrack) {
@@ -2085,7 +2119,7 @@ async function headlessEditPrompt(taskId: string, newPrompt: string, deps: Headl
     autoFix.unsubscribe();
     return;
   }
-  if (runnable.length === 0) {
+  if (runnable.length + topup.length === 0) {
     autoFix.unsubscribe();
     return;
   }
@@ -2119,9 +2153,13 @@ async function headlessEditExecutor(
   const result = await deps.commandService.editTaskType(envelope);
   if (!result.ok) throw new Error(result.error.message);
   const runnable = result.data.filter(isDispatchableLaunch);
-  if (runnable.length > 0) {
-    await taskExecutor.executeTasks(runnable);
-  }
+  const { topup } = await dispatchHeadlessMutationStarted({
+    deps,
+    taskExecutor,
+    context: 'headless.edit-task-type',
+    started: result.data,
+    scopedTaskIds: [taskId],
+  });
   process.stdout.write(
     `Edited task "${taskId}" executor → "${runnerKind}"` +
     `${poolMemberId ? ` (poolMemberId=${poolMemberId})` : ''}\n`,
@@ -2132,7 +2170,7 @@ async function headlessEditExecutor(
     autoFix.unsubscribe();
     return;
   }
-  if (runnable.length === 0) {
+  if (runnable.length + topup.length === 0) {
     autoFix.unsubscribe();
     return;
   }
@@ -2157,9 +2195,13 @@ async function headlessEditAgent(taskId: string, agentName: string, deps: Headle
   const result = await deps.commandService.editTaskAgent(envelope);
   if (!result.ok) throw new Error(result.error.message);
   const runnable = result.data.filter(isDispatchableLaunch);
-  if (runnable.length > 0) {
-    await taskExecutor.executeTasks(runnable);
-  }
+  const { topup } = await dispatchHeadlessMutationStarted({
+    deps,
+    taskExecutor,
+    context: 'headless.edit-task-agent',
+    started: result.data,
+    scopedTaskIds: [taskId],
+  });
   process.stdout.write(`Edited task "${taskId}" agent → "${agentName}"\n`);
 
   if (deps.noTrack) {
@@ -2167,7 +2209,7 @@ async function headlessEditAgent(taskId: string, agentName: string, deps: Headle
     autoFix.unsubscribe();
     return;
   }
-  if (runnable.length === 0) {
+  if (runnable.length + topup.length === 0) {
     autoFix.unsubscribe();
     return;
   }
@@ -2546,10 +2588,13 @@ async function headlessSetMergeMode(
   });
   const result = await deps.commandService.editTaskMergeMode(envelope);
   if (!result.ok) throw new Error(result.error.message);
-  const runnable = result.data.filter(isDispatchableLaunch);
-  if (runnable.length > 0) {
-    await taskExecutor.executeTasks(runnable);
-  }
+  await dispatchHeadlessMutationStarted({
+    deps,
+    taskExecutor,
+    context: 'headless.edit-task-merge-mode',
+    started: result.data,
+    scopedWorkflowId: workflowId,
+  });
   const wf = deps.persistence.loadWorkflow(workflowId);
   process.stdout.write(`Merge mode updated for ${workflowId}: ${wf?.mergeMode ?? '?'}\n`);
 }
@@ -2603,9 +2648,13 @@ async function headlessSetFixContext(
     throw new Error(result.error.message);
   }
   const runnable = result.data.filter(isDispatchableLaunch);
-  if (runnable.length > 0) {
-    await taskExecutor.executeTasks(runnable);
-  }
+  const { topup } = await dispatchHeadlessMutationStarted({
+    deps,
+    taskExecutor,
+    context: 'headless.edit-task-fix-context',
+    started: result.data,
+    scopedTaskIds: [taskId],
+  });
   const value = 'fixPrompt' in patch ? patch.fixPrompt : patch.fixContext;
   process.stdout.write(`Updated ${which} for "${taskId}" → "${value ?? ''}"\n`);
 
@@ -2614,7 +2663,7 @@ async function headlessSetFixContext(
     autoFix.unsubscribe();
     return;
   }
-  if (runnable.length === 0) {
+  if (runnable.length + topup.length === 0) {
     autoFix.unsubscribe();
     return;
   }
@@ -2650,10 +2699,14 @@ async function headlessSetGatePolicy(args: string[], deps: HeadlessDeps): Promis
     const result = await deps.commandService.setTaskExternalGatePolicies(envelope);
     if (!result.ok) throw new Error(result.error.message);
     const runnable = result.data.filter(isDispatchableLaunch);
-    if (runnable.length > 0) {
-      const taskExecutor = createHeadlessExecutor(deps);
-      await taskExecutor.executeTasks(runnable);
-    }
+    const taskExecutor = createHeadlessExecutor(deps);
+    await dispatchHeadlessMutationStarted({
+      deps,
+      taskExecutor,
+      context: 'headless.set-gate-policy',
+      started: result.data,
+      scopedTaskIds: [taskId],
+    });
     process.stdout.write(
       `Updated gate policy for ${taskId}: ${workflowId}/${depTaskId} -> ${gatePolicy} (${runnable.length} task(s) started)\n`,
     );

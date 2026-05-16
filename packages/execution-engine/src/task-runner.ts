@@ -757,7 +757,9 @@ export class TaskRunner {
     }
     bench('markTaskRunningAfterLaunch.accepted');
 
-    // Persist execution metadata immediately at task start — all fields explicit
+    // Persist execution metadata immediately at task start. INV-97's app-layer
+    // handoff depends on this being the single executor pipeline write for
+    // workspace provenance after mutation-returned runnable tasks are launched.
     {
       // Fail-fast: workspacePath must be provided by all executors
       if (!handle.workspacePath) {

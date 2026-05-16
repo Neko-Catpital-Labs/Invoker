@@ -37,6 +37,14 @@ async function dispatchStarted(h: TestHarness, started: Array<any>, context: str
   });
 }
 
+function expectWorkspacePersisted(h: TestHarness, taskId: string, workspacePath: string) {
+  const task = h.getTask(taskId)!;
+  expect(task.execution.workspacePath).toBe(workspacePath);
+  const attemptId = task.execution.selectedAttemptId;
+  expect(attemptId).toBeTruthy();
+  expect(h.persistence.loadAttempt(attemptId!)?.workspacePath).toBe(workspacePath);
+}
+
 describe('app-layer handoff repros', () => {
   let h: TestHarness;
 
@@ -54,7 +62,7 @@ describe('app-layer handoff repros', () => {
 
     await dispatchStarted(h, started, 'test.edit-task-command');
 
-    expect(h.getTask('A')!.execution.workspacePath).toBe('/tmp/mock-worktree');
+    expectWorkspacePersisted(h, 'A', '/tmp/mock-worktree');
     expect(h.getTask('A')!.status).toBe('completed');
   });
 
@@ -79,7 +87,7 @@ describe('app-layer handoff repros', () => {
 
     await dispatchStarted(h, started, 'test.edit-task-prompt');
 
-    expect(h.getTask('A')!.execution.workspacePath).toBe('/tmp/mock-worktree');
+    expectWorkspacePersisted(h, 'A', '/tmp/mock-worktree');
     expect(h.getTask('A')!.status).toBe('completed');
   });
 
@@ -93,7 +101,7 @@ describe('app-layer handoff repros', () => {
 
     await dispatchStarted(h, started, 'test.edit-task-type');
 
-    expect(h.getTask('A')!.execution.workspacePath).toBe('/tmp/mock-worktree');
+    expectWorkspacePersisted(h, 'A', '/tmp/mock-worktree');
     expect(h.getTask('A')!.status).toBe('completed');
   });
 
@@ -107,7 +115,7 @@ describe('app-layer handoff repros', () => {
 
     await dispatchStarted(h, started, 'test.edit-task-agent');
 
-    expect(h.getTask('A')!.execution.workspacePath).toBe('/tmp/mock-worktree');
+    expectWorkspacePersisted(h, 'A', '/tmp/mock-worktree');
     expect(h.getTask('A')!.status).toBe('completed');
   });
 
@@ -151,7 +159,7 @@ describe('app-layer handoff repros', () => {
 
     await dispatchStarted(h, started, 'test.set-task-external-gate-policies');
 
-    expect(h.getTask('leaf')!.execution.workspacePath).toBe('/tmp/mock-worktree');
+    expectWorkspacePersisted(h, 'leaf', '/tmp/mock-worktree');
     expect(h.getTask('leaf')!.status).toBe('completed');
   });
 
@@ -178,7 +186,7 @@ describe('app-layer handoff repros', () => {
 
     await dispatchStarted(h, started, 'test.replace-task');
 
-    expect(h.getTask('A-fix-1')!.execution.workspacePath).toBe('/tmp/mock-worktree');
+    expectWorkspacePersisted(h, 'A-fix-1', '/tmp/mock-worktree');
     expect(h.getTask('A-fix-1')!.status).toBe('completed');
   });
 
@@ -200,7 +208,7 @@ describe('app-layer handoff repros', () => {
 
     await dispatchStarted(h, started, 'test.set-merge-branch');
 
-    expect(h.getTask(mergeTaskId)!.execution.workspacePath).toBe('/tmp/mock-merge-worktree');
+    expectWorkspacePersisted(h, mergeTaskId, '/tmp/mock-merge-worktree');
     expect(h.getTask(mergeTaskId)!.status).toBe('completed');
     expect(h.persistence.loadWorkflow(workflowId).baseBranch).toBe('develop');
   });
@@ -219,7 +227,7 @@ describe('app-layer handoff repros', () => {
     const started = h.orchestrator.retryTask(mergeTaskId);
     await dispatchStarted(h, started, 'test.standalone.set-merge-branch');
 
-    expect(h.getTask(mergeTaskId)!.execution.workspacePath).toBe('/tmp/mock-merge-worktree');
+    expectWorkspacePersisted(h, mergeTaskId, '/tmp/mock-merge-worktree');
     expect(h.getTask(mergeTaskId)!.status).toBe('completed');
     expect(h.persistence.loadWorkflow(workflowId).baseBranch).toBe('release');
   });
