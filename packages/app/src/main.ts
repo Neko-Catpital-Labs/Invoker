@@ -131,7 +131,8 @@ import {
   setWorkflowMergeMode,
 } from './workflow-actions.js';
 import { spawn, execSync } from 'node:child_process';
-import { openExternalTerminalForTask } from './open-terminal-for-task.js';
+import { resolveTaskTerminalSpec } from './open-terminal-for-task.js';
+import { EmbeddedTerminalManager } from './embedded-terminal-manager.js';
 import { collectSystemDiagnostics } from './system-diagnostics.js';
 import { installBundledSkills, resolveBundledSkillsStatus } from './bundled-skills.js';
 import { createRequire } from 'node:module';
@@ -1170,6 +1171,17 @@ if (isHeadless) {
   let apiServer: ApiServer | null = null;
   let ownerMode = true;
   const taskHandles = new Map<string, { handle: ExecutorHandle; executor: Executor }>();
+  const embeddedTerminalManager = new EmbeddedTerminalManager();
+  embeddedTerminalManager.on('output', (payload) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('invoker:terminal-output', payload);
+    }
+  });
+  embeddedTerminalManager.on('exit', (payload) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('invoker:terminal-exit', payload);
+    }
+  });
   const launchingTasks = new Set<string>();
   const guiMutationHandlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
   let dbPollInterval: ReturnType<typeof setInterval> | null = null;
@@ -3850,19 +3862,53 @@ if (isHeadless) {
       return persistence.getActivityLogs(0, 2000);
     });
 
-    // ── External terminal launcher ──────────────────────────────
-    ipcMain.handle('invoker:open-terminal', async (_event, taskId: string): Promise<{ opened: boolean; reason?: string }> => {
+    // ── Embedded terminal session manager (GUI) ─────────────────
+    // GUI `invoker:open-terminal` keeps users inside Invoker by opening
+    // (or selecting) an embedded session managed in the main process.
+    // Headless `open-terminal` still routes to `openExternalTerminalForTask`
+    // in `headless.ts` so existing CLI behaviour is preserved.
+    ipcMain.handle('invoker:open-terminal', async (_event, taskId: string) => {
       logger.info(`invoked for task="${taskId}"`, { module: 'open-terminal' });
-      return openExternalTerminalForTask({
+      const liveHandle = taskHandles.get(taskId);
+      const resolved = resolveTaskTerminalSpec({
         taskId,
         persistence,
         executorRegistry,
         executionAgentRegistry: agentRegistry,
         repoRoot,
         logger,
+        // If a live executor handle exists we can safely attach instead of
+        // refusing — embedded mode is designed for this case.
+        allowRunning: Boolean(liveHandle),
         runningTaskReason:
           'Task is still running or being fixed with AI. View output in the terminal panel below.',
       });
+      if (!resolved.ok) {
+        return { opened: false, reason: resolved.reason };
+      }
+      const session = embeddedTerminalManager.openOrReuse({
+        taskId,
+        spec: resolved.spec,
+        cwd: resolved.cwd,
+        attach: liveHandle ? { handle: liveHandle.handle, executor: liveHandle.executor } : undefined,
+      });
+      return { opened: true, session };
+    });
+
+    ipcMain.handle('invoker:terminal-list', async () => {
+      return embeddedTerminalManager.list();
+    });
+
+    ipcMain.handle('invoker:terminal-write', async (_event, sessionId: string, data: string) => {
+      return embeddedTerminalManager.write(sessionId, data);
+    });
+
+    ipcMain.handle('invoker:terminal-resize', async (_event, sessionId: string, cols: number, rows: number) => {
+      return embeddedTerminalManager.resize(sessionId, cols, rows);
+    });
+
+    ipcMain.handle('invoker:terminal-close', async (_event, sessionId: string) => {
+      return embeddedTerminalManager.close(sessionId);
     });
 
     seedUiSnapshotCache();
@@ -3907,6 +3953,7 @@ if (isHeadless) {
         clearInterval(hourlyBackupInterval);
         hourlyBackupInterval = null;
       }
+      embeddedTerminalManager.closeAll();
       if (executorRegistry) {
         await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));
       }
