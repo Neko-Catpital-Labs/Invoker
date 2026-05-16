@@ -35,8 +35,7 @@ import {
   approveTask,
   deleteAllWorkflows as sharedDeleteAllWorkflows,
   fixWithAgentAction,
-  rebaseAndRetry,
-  recreateWithRebase,
+  rebase,
   resolveConflictAction,
   recreateWorkflow as sharedRecreateWorkflow,
   recreateTask as sharedRecreateTask,
@@ -969,16 +968,18 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       await headlessDetachWorkflow(args[1], args[2], deps);
       break;
     case 'rebase':
-      await headlessRebaseAndRetry(args[1], deps);
+      await headlessRebase(args[1], deps, 'rebase');
+      break;
+    case 'rebase-task':
+      await headlessRebaseTask(args[1], deps);
       break;
     case 'recreate-with-rebase':
-      await headlessRecreateWithRebase(args[1], deps);
+      warnDeprecated('recreate-with-rebase', 'rebase');
+      await headlessRebase(args[1], deps, 'recreate-with-rebase');
       break;
-
-    // Deprecated aliases
     case 'rebase-and-retry':
-      warnDeprecated('rebase-and-retry', 'rebase');
-      await headlessRebaseAndRetry(args[1], deps);
+      warnDeprecated('rebase-and-retry', 'rebase-task');
+      await headlessRebaseTask(args[1], deps, 'rebase-and-retry');
       break;
     case 'fix':
       await headlessFix(args[1], deps, args[2]);
@@ -1138,8 +1139,9 @@ ${BOLD}Execute:${RESET}
   recreate-task <taskId>                               Recreate task + downstream (task-scoped reset)
   fork-workflow <workflowId>                          Fork a live workflow into a new branched workflow (Step 14)
   detach-workflow <workflowId> <upstreamWorkflowId>  Detach one upstream workflow and void downstream to pending
-  rebase <taskId>                                     Refresh pool base + nuclear restart
-  recreate-with-rebase <workflowId|mergeTaskId|taskId> Recreate workflow from fresh upstream base
+  rebase <workflowId|mergeTaskId|taskId>              Rebase workflow from a fresh upstream base
+  rebase-task <taskId>                                Rebase workflow from a task on a fresh upstream base
+  recreate-with-rebase <workflowId|mergeTaskId|taskId> Deprecated alias for rebase
   fix <taskId> [claude|codex]                         Fix a failed task (default: claude)
   resolve-conflict <taskId> [claude|codex]            Resolve merge conflict + restart
 
@@ -1176,7 +1178,7 @@ ${BOLD}Deprecated${RESET} (use new names above):
   edit → set command            edit-executor → set executor
   edit-agent → set agent        set-merge-mode → set merge-mode
   delete-workflow → delete
-  rebase-and-retry → rebase (task) or recreate-with-rebase (workflow)
+  rebase-and-retry → rebase-task
 
 ${BOLD}Options:${RESET}
   --wait-for-approval    Keep running until PR approval (use with 'run' or 'resume')
@@ -1635,29 +1637,32 @@ async function headlessResolveConflict(taskId: string, deps: HeadlessDeps, agent
   }
 }
 
-async function headlessRebaseAndRetry(taskId: string, deps: HeadlessDeps): Promise<void> {
-  if (!taskId) throw new Error('Missing arguments. Usage: --headless rebase-and-retry <taskId>');
-  const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'rebase');
-  if (!restored) return;
-  taskId = restored.resolvedTaskId;
-  const workflowId = deps.orchestrator.getTask(taskId)?.config.workflowId;
-  if (!workflowId) throw new Error(`Task "${taskId}" has no workflow`);
+async function headlessRebase(
+  target: string,
+  deps: HeadlessDeps,
+  commandName: 'rebase' | 'rebase-task' | 'rebase-and-retry' | 'recreate-with-rebase' = 'rebase',
+): Promise<void> {
+  if (!target) {
+    throw new Error(`Missing arguments. Usage: --headless ${commandName} <workflowId|mergeTaskId|taskId>`);
+  }
+  const workflowId = resolveHeadlessTargetWorkflowId(target, deps.persistence);
+  deps.orchestrator.syncFromDb(workflowId);
   await preemptWorkflowBeforeMutation(workflowId, {
     preemptWorkflowExecution: (id) => preemptWorkflowExecution(id, deps),
     logger: deps.logger,
-    context: 'headless.rebase-and-retry',
+    context: `headless.${commandName}`,
     mutationTiming: deps.mutationTiming,
   });
 
   const te = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, te);
-  const started = await rebaseAndRetry(taskId, { ...deps, taskExecutor: te, mutationTiming: deps.mutationTiming });
+  const started = await rebase(target, { ...deps, taskExecutor: te, mutationTiming: deps.mutationTiming });
   const runnable = started.filter(isDispatchableLaunch);
   const { topup } = await dispatchStartedTasksWithGlobalTopup({
     orchestrator: deps.orchestrator,
     taskExecutor: te,
     logger: deps.logger,
-    context: 'headless.rebase-and-retry',
+    context: `headless.${commandName}`,
     started,
     scopedWorkflowId: workflowId,
     mutationTiming: deps.mutationTiming,
@@ -1680,51 +1685,18 @@ async function headlessRebaseAndRetry(taskId: string, deps: HeadlessDeps): Promi
   autoFix.unsubscribe();
 
   const tasksStarted = runnable.length;
-  process.stdout.write(`Rebase-and-retry: resetting workflow from current HEAD (${tasksStarted} task(s))\n`);
+  process.stdout.write(`Rebase: resetting workflow from fresh base (${tasksStarted} task(s))\n`);
 }
 
-async function headlessRecreateWithRebase(workflowTarget: string, deps: HeadlessDeps): Promise<void> {
-  if (!workflowTarget) throw new Error('Missing arguments. Usage: --headless recreate-with-rebase <workflowId|mergeTaskId|taskId>');
-  const workflowId = resolveHeadlessTargetWorkflowId(workflowTarget, deps.persistence);
-  await preemptWorkflowBeforeMutation(workflowId, {
-    preemptWorkflowExecution: (id) => preemptWorkflowExecution(id, deps),
-    logger: deps.logger,
-    context: 'headless.recreate-with-rebase',
-    mutationTiming: deps.mutationTiming,
-  });
-
-  const te = createHeadlessExecutor(deps);
-  const autoFix = wireHeadlessAutoFix(deps, te);
-  const started = await recreateWithRebase(workflowId, { ...deps, taskExecutor: te, mutationTiming: deps.mutationTiming });
-  const runnable = started.filter(isDispatchableLaunch);
-  const { topup } = await dispatchStartedTasksWithGlobalTopup({
-    orchestrator: deps.orchestrator,
-    taskExecutor: te,
-    logger: deps.logger,
-    context: 'headless.recreate-with-rebase',
-    started,
-    scopedWorkflowId: workflowId,
-    mutationTiming: deps.mutationTiming,
-  });
-  if (runnable.length + topup.length === 0) {
-    autoFix.unsubscribe();
-    return;
+async function headlessRebaseTask(
+  taskId: string,
+  deps: HeadlessDeps,
+  commandName: 'rebase-task' | 'rebase-and-retry' = 'rebase-task',
+): Promise<void> {
+  if (!taskId) {
+    throw new Error(`Missing arguments. Usage: --headless ${commandName} <taskId>`);
   }
-  if (deps.noTrack) {
-    process.stdout.write('[headless] --no-track enabled: recreate-with-rebase accepted; exiting without tracking.\n');
-    autoFix.unsubscribe();
-    return;
-  }
-  await trackHeadlessWorkflow(workflowId, deps, {
-    hasBackgroundWork: autoFix.isBusy,
-    printSummary: false,
-    printTaskOutput: true,
-    setExitCodeOnFailure: false,
-  });
-  autoFix.unsubscribe();
-
-  const tasksStarted = runnable.length;
-  process.stdout.write(`Recreate-with-rebase: resetting workflow from fresh base (${tasksStarted} task(s))\n`);
+  await headlessRebase(taskId, deps, commandName);
 }
 
 async function headlessRecreateWorkflow(workflowId: string, deps: HeadlessDeps): Promise<void> {

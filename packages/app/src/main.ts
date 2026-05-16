@@ -121,8 +121,7 @@ import {
   deleteAllWorkflows as sharedDeleteAllWorkflows,
   deleteAllWorkflowsBulk as sharedDeleteAllWorkflowsBulk,
   fixWithAgentAction,
-  rebaseAndRetry,
-  recreateWithRebase,
+  rebase,
   recreateWorkflow as sharedRecreateWorkflow,
   recreateTask as sharedRecreateTask,
   resolveConflictAction,
@@ -1901,6 +1900,7 @@ if (isHeadless) {
       case 'recreate-with-rebase':
         return { workflowId: workflowIdForTargetArg(arg0), priority: 'high' };
       case 'rebase':
+      case 'rebase-task':
       case 'cancel':
       case 'recreate-task':
         return { workflowId: workflowIdForTaskArg(arg0), priority: 'high' };
@@ -1980,10 +1980,13 @@ if (isHeadless) {
         return { channel: 'headless.exec', request: { args: ['recreate-task', String(arg0)] } };
       case 'invoker:retry-workflow':
         return { channel: 'headless.exec', request: { args: ['retry', String(arg0)] } };
-      case 'invoker:rebase-and-retry':
+      case 'invoker:rebase':
         return { channel: 'headless.exec', request: { args: ['rebase', String(arg0)] } };
+      case 'invoker:rebase-task':
+      case 'invoker:rebase-and-retry':
+        return { channel: 'headless.exec', request: { args: ['rebase-task', String(arg0)] } };
       case 'invoker:recreate-with-rebase':
-        return { channel: 'headless.exec', request: { args: ['recreate-with-rebase', String(arg0)] } };
+        return { channel: 'headless.exec', request: { args: ['rebase', String(arg0)] } };
       case 'invoker:set-merge-mode':
         return { channel: 'headless.exec', request: { args: ['set', 'merge-mode', String(arg0), String(arg1)] } };
       case 'invoker:approve-merge': {
@@ -3413,24 +3416,25 @@ if (isHeadless) {
       },
     );
 
-    registerWorkflowScopedGuiMutationHandler(
-      'invoker:rebase-and-retry',
-      (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
-      'high',
-      async (taskIdArg: unknown) => {
-      const taskId = String(taskIdArg);
-      logger.info(`rebase-and-retry: "${taskId}"`, { module: 'ipc' });
+    async function performRebaseTarget(
+      targetArg: unknown,
+      context: 'ipc.rebase' | 'ipc.rebase-task' | 'ipc.rebase-and-retry' | 'ipc.recreate-with-rebase',
+    ): Promise<{ success: boolean; rebasedBranches: string[]; errors: string[] }> {
+      const target = String(targetArg);
+      const workflowId = workflowIdForTargetArg(targetArg);
+      if (!workflowId) {
+        throw new Error(`Could not resolve workflow for rebase target "${target}"`);
+      }
+      cancelDeferredWorkflowLaunch(workflowId, context);
+      logger.info(`rebase: target="${target}" workflow="${workflowId}"`, { module: 'ipc' });
       try {
-        const workflowId = workflowIdForTaskArg(taskIdArg);
-        if (workflowId) {
-          await preemptWorkflowBeforeMutation(workflowId, {
-            preemptWorkflowExecution,
-            logger,
-            context: 'ipc.rebase-and-retry',
-            mutationTiming: activeMutationContext?.mutationTiming,
-          });
-        }
-        const started = await rebaseAndRetry(taskId, {
+        await preemptWorkflowBeforeMutation(workflowId, {
+          preemptWorkflowExecution,
+          logger,
+          context,
+          mutationTiming: activeMutationContext?.mutationTiming,
+        });
+        const started = await rebase(target, {
           orchestrator,
           persistence,
           repoRoot,
@@ -3441,15 +3445,42 @@ if (isHeadless) {
           orchestrator,
           taskExecutor: requireTaskExecutor(),
           logger,
-          context: 'ipc.rebase-and-retry',
+          context,
           started,
-          ...(workflowId ? { scopedWorkflowId: workflowId } : { scopedTaskIds: [taskId] }),
+          scopedWorkflowId: workflowId,
           mutationTiming: activeMutationContext?.mutationTiming,
         });
+        return { success: true, rebasedBranches: [], errors: [] };
       } catch (err) {
-        logger.error(`rebase-and-retry failed: ${err}`, { module: 'ipc' });
+        logger.error(`rebase failed: ${err}`, { module: 'ipc' });
         throw err;
       }
+    }
+
+    registerWorkflowScopedGuiMutationHandler(
+      'invoker:rebase',
+      (targetArg: unknown) => workflowIdForTargetArg(targetArg),
+      'high',
+      async (targetArg: unknown) => {
+        return performRebaseTarget(targetArg, 'ipc.rebase');
+      },
+    );
+
+    registerWorkflowScopedGuiMutationHandler(
+      'invoker:rebase-and-retry',
+      (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
+      'high',
+      async (taskIdArg: unknown) => {
+        return performRebaseTarget(taskIdArg, 'ipc.rebase-and-retry');
+      },
+    );
+
+    registerWorkflowScopedGuiMutationHandler(
+      'invoker:rebase-task',
+      (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
+      'high',
+      async (taskIdArg: unknown) => {
+        return performRebaseTarget(taskIdArg, 'ipc.rebase-task');
       },
     );
 
@@ -3458,39 +3489,7 @@ if (isHeadless) {
       (workflowIdArg: unknown) => workflowIdForTargetArg(workflowIdArg),
       'high',
       async (workflowIdArg: unknown) => {
-      const workflowId = workflowIdForTargetArg(workflowIdArg);
-      if (!workflowId) {
-        throw new Error(`Could not resolve workflow for recreate-with-rebase target "${String(workflowIdArg)}"`);
-      }
-      cancelDeferredWorkflowLaunch(workflowId, 'ipc.recreate-with-rebase');
-      logger.info(`recreate-with-rebase: "${workflowId}"`, { module: 'ipc' });
-      try {
-        await preemptWorkflowBeforeMutation(workflowId, {
-          preemptWorkflowExecution,
-          logger,
-          context: 'ipc.recreate-with-rebase',
-          mutationTiming: activeMutationContext?.mutationTiming,
-        });
-        const started = await recreateWithRebase(workflowId, {
-          orchestrator,
-          persistence,
-          repoRoot,
-          taskExecutor: requireTaskExecutor(),
-          mutationTiming: activeMutationContext?.mutationTiming,
-        });
-        await dispatchStartedTasksWithGlobalTopup({
-          orchestrator,
-          taskExecutor: requireTaskExecutor(),
-          logger,
-          context: 'ipc.recreate-with-rebase',
-          started,
-          scopedWorkflowId: workflowId,
-          mutationTiming: activeMutationContext?.mutationTiming,
-        });
-      } catch (err) {
-        logger.error(`recreate-with-rebase failed: ${err}`, { module: 'ipc' });
-        throw err;
-      }
+        return performRebaseTarget(workflowIdArg, 'ipc.recreate-with-rebase');
       },
     );
 

@@ -26,7 +26,7 @@ describe('headless→owner delegation', () => {
       listWorkflows: () => [{ id: 'wf-1' } as any, { id: 'wf-123' } as any],
       loadTasks: (workflowId) => {
         if (workflowId === 'wf-1') {
-          return [{ id: '__merge__wf-1' }] as any;
+          return [{ id: '__merge__wf-1' }, { id: 'task-1' }] as any;
         }
         if (workflowId === 'wf-123') {
           return [{ id: 'wf-123/task-1' }] as any;
@@ -80,6 +80,10 @@ describe('headless→owner delegation', () => {
 
     it('keeps task-scoped rebase at the default timeout', () => {
       expect(delegationTimeoutMs(['rebase', 'wf-123/task-1'], targetLookup)).toBe(5_000);
+    });
+
+    it('keeps rebase-task at the default task timeout', () => {
+      expect(delegationTimeoutMs(['rebase-task', 'task-1'], targetLookup)).toBe(5_000);
     });
 
     it('keeps non-matching workflow ids at the default timeout', () => {
@@ -306,6 +310,7 @@ describe('headless→owner delegation', () => {
     });
 
     it.each([
+      ['rebase-task', ['rebase-task', 'task-1']],
       ['restart task', ['restart', 'wf-123/task-1']],
       ['approve', ['approve', 'wf-123/task-1']],
     ])('times out at the default 5s for %s', async (_label, args) => {

@@ -1084,6 +1084,66 @@ describe('headless delegation enforcement', () => {
           preparePoolSpy.mockRestore();
         });
 
+        it('headless `rebase-task <taskId>` routes to orchestrator.recreateWorkflowFromFreshBase', async () => {
+          const { preemptWorkflowExecution, preparePoolSpy } = seedRebaseHappyPath();
+
+          const depsWithNoTrack: HeadlessDeps = {
+            ...mockDeps,
+            noTrack: true,
+            preemptWorkflowExecution,
+          } as HeadlessDeps;
+
+          await runHeadless(['rebase-task', 'task-1'], depsWithNoTrack);
+
+          expect(preemptWorkflowExecution).toHaveBeenCalledWith('wf-1');
+          expect(mockDeps.orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(
+            'wf-1',
+            expect.objectContaining({ refreshBase: expect.any(Function) }),
+          );
+
+          preparePoolSpy.mockRestore();
+        });
+
+        it('headless `rebase <workflowId>` routes to orchestrator.recreateWorkflowFromFreshBase', async () => {
+          const { preemptWorkflowExecution, preparePoolSpy } = seedRebaseHappyPath();
+
+          const depsWithNoTrack: HeadlessDeps = {
+            ...mockDeps,
+            noTrack: true,
+            preemptWorkflowExecution,
+          } as HeadlessDeps;
+
+          await runHeadless(['rebase', 'wf-1'], depsWithNoTrack);
+
+          expect(preemptWorkflowExecution).toHaveBeenCalledWith('wf-1');
+          expect(mockDeps.orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(
+            'wf-1',
+            expect.objectContaining({ refreshBase: expect.any(Function) }),
+          );
+
+          preparePoolSpy.mockRestore();
+        });
+
+        it('headless `rebase <mergeTaskId>` routes to orchestrator.recreateWorkflowFromFreshBase', async () => {
+          const { preemptWorkflowExecution, preparePoolSpy } = seedRebaseHappyPath();
+
+          const depsWithNoTrack: HeadlessDeps = {
+            ...mockDeps,
+            noTrack: true,
+            preemptWorkflowExecution,
+          } as HeadlessDeps;
+
+          await runHeadless(['rebase', '__merge__wf-1'], depsWithNoTrack);
+
+          expect(preemptWorkflowExecution).toHaveBeenCalledWith('wf-1');
+          expect(mockDeps.orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(
+            'wf-1',
+            expect.objectContaining({ refreshBase: expect.any(Function) }),
+          );
+
+          preparePoolSpy.mockRestore();
+        });
+
         it('headless `rebase` exercises the fresh-base-distinct pool prep step (preparePoolForRebaseRetry)', async () => {
           const { preemptWorkflowExecution, preparePoolSpy } = seedRebaseHappyPath();
 

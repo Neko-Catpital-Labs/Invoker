@@ -31,7 +31,8 @@
  *   POST   /api/tasks/:id/gate-policy  body: { updates: [{ workflowId, taskId?, gatePolicy }] }
  *   POST   /api/workflows/:id/detach  body: { upstreamWorkflowId }
  *   POST   /api/workflows/:id/restart
- *   POST   /api/workflows/:id/recreate-with-rebase
+ *   POST   /api/workflows/:id/rebase
+ *   POST   /api/workflows/:id/recreate-with-rebase  Deprecated alias
  *   POST   /api/workflows/:id/cancel
  *   POST   /api/workflows/:id/merge-mode  body: { mode }
  *   DELETE /api/workflows/:id
@@ -357,28 +358,29 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         return;
       }
 
-      // POST /api/workflows/:id/recreate-with-rebase  (legacy: /api/workflows/:id/rebase-and-retry)
+      const wfRebaseMatch = path.match(/^\/api\/workflows\/([^/]+)\/rebase$/);
       const wfRecreateWithRebaseMatch = path.match(/^\/api\/workflows\/([^/]+)\/recreate-with-rebase$/);
       const wfRebaseAndRetryMatch = path.match(/^\/api\/workflows\/([^/]+)\/rebase-and-retry$/);
-      if (method === 'POST' && (wfRecreateWithRebaseMatch || wfRebaseAndRetryMatch)) {
-        const isLegacy = !!wfRebaseAndRetryMatch;
-        const workflowTarget = decodeURIComponent((wfRecreateWithRebaseMatch ?? wfRebaseAndRetryMatch)![1]);
+      if (method === 'POST' && (wfRebaseMatch || wfRecreateWithRebaseMatch || wfRebaseAndRetryMatch)) {
+        const legacyMatch = wfRecreateWithRebaseMatch ?? wfRebaseAndRetryMatch;
+        const isLegacy = !!legacyMatch;
+        const workflowTarget = decodeURIComponent((wfRebaseMatch ?? legacyMatch)![1]);
         try {
           const workflowId = resolveHeadlessTargetWorkflowId(workflowTarget, persistence);
-          const result = await mutations.recreateWorkflowFromFreshBase(workflowId);
+          const result = await mutations.rebase(workflowTarget);
           if (isLegacy) {
             res.setHeader(
               'Deprecation',
-              'true; reason="Use /api/workflows/:id/recreate-with-rebase"',
+              'true; reason="Use /api/workflows/:id/rebase"',
             );
           }
           const tasksStarted = result.started.filter(t => t.status === 'running').length;
           json(res, 200, {
             ok: true,
             workflowId,
-            action: isLegacy ? 'rebase_and_retried' : 'recreated_with_rebase',
+            action: 'rebased',
             tasksStarted,
-            ...(isLegacy ? { deprecated: true, replacement: '/api/workflows/:id/recreate-with-rebase' } : {}),
+            ...(isLegacy ? { deprecated: true, replacement: '/api/workflows/:id/rebase' } : {}),
           });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });

@@ -28,8 +28,7 @@ import {
   recreateWorkflow as sharedRecreateWorkflow,
   recreateTask as sharedRecreateTask,
   recreateWorkflowFromFreshBase as sharedRecreateWorkflowFromFreshBase,
-  recreateWithRebase as sharedRecreateWithRebase,
-  rebaseAndRetry as sharedRebaseAndRetry,
+  rebase as sharedRebase,
   cancelWorkflow as sharedCancelWorkflow,
   forkWorkflow as sharedForkWorkflow,
   editTaskCommand as sharedEditTaskCommand,
@@ -47,6 +46,7 @@ import {
   type FixWithAgentActionResult,
   type ActionDeps,
 } from './workflow-actions.js';
+import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
 import {
   dispatchStartedTasksWithGlobalTopup,
   executeGlobalTopup,
@@ -115,6 +115,10 @@ export interface WorkflowMutationFacadeDeps {
  */
 export class WorkflowMutationFacade {
   constructor(private readonly deps: WorkflowMutationFacadeDeps) {}
+
+  private resolveTargetWorkflowId(target: string): string {
+    return resolveHeadlessTargetWorkflowId(target, this.deps.persistence);
+  }
 
   // ── Task-scoped mutations ────────────────────────────────
 
@@ -250,19 +254,22 @@ export class WorkflowMutationFacade {
     return this.finalizeWithTopup(started, 'facade.recreate-from-fresh-base', { scopedWorkflowId: workflowId });
   }
 
+  async rebase(target: string): Promise<MutationResult> {
+    const workflowId = this.resolveTargetWorkflowId(target);
+    const started = await sharedRebase(target, this.actionDeps());
+    return this.finalizeWithTopup(started, 'facade.rebase', { scopedWorkflowId: workflowId });
+  }
+
+  async rebaseTask(taskId: string): Promise<MutationResult> {
+    return this.rebase(taskId);
+  }
+
   async recreateWithRebase(workflowId: string): Promise<MutationResult> {
-    const started = await sharedRecreateWithRebase(workflowId, this.actionDeps());
-    return this.finalizeWithTopup(started, 'facade.recreate-with-rebase', { scopedWorkflowId: workflowId });
+    return this.rebase(workflowId);
   }
 
   async rebaseAndRetry(taskId: string): Promise<MutationResult> {
-    const workflowId = this.deps.orchestrator.getTask(taskId)?.config.workflowId;
-    const started = await sharedRebaseAndRetry(taskId, this.actionDeps());
-    return this.finalizeWithTopup(
-      started,
-      'facade.rebase-and-retry',
-      workflowId ? { scopedWorkflowId: workflowId } : { scopedTaskIds: [taskId] },
-    );
+    return this.rebase(taskId);
   }
 
   async cancelWorkflow(workflowId: string): Promise<CancelMutationResult> {
