@@ -129,6 +129,12 @@ function WorkflowGraphInner({
     },
   })), [graph.edges]);
 
+  const graphSignature = useMemo(() => {
+    const nodeIds = graph.nodes.map((node) => node.id).join('|');
+    const edgeIds = graph.edges.map((edge) => `${edge.source}->${edge.target}`).join('|');
+    return `${nodeIds}::${edgeIds}`;
+  }, [graph.edges, graph.nodes]);
+
   const onInitHandler = useCallback(() => {
     requestAnimationFrame(() => fitView({ padding: 0.2 }));
   }, [fitView]);
@@ -165,6 +171,14 @@ function WorkflowGraphInner({
     return () => cancelAnimationFrame(frame);
   }, [graph.edges.length, graph.nodes.length]);
 
+  useEffect(() => {
+    if (graph.nodes.length === 0 || typeof window === 'undefined') return;
+    const frame = requestAnimationFrame(() => {
+      requestAnimationFrame(() => fitView({ padding: 0.2 }));
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [fitView, graph.nodes.length, graphSignature]);
+
   if (graph.nodes.length === 0) {
     return (
       <div className="h-full flex items-center justify-center text-gray-500 text-sm">
@@ -181,6 +195,7 @@ function WorkflowGraphInner({
     >
       <div data-testid="workflow-graph-react-flow" className="h-full w-full">
         <ReactFlow
+          key={graphSignature}
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
