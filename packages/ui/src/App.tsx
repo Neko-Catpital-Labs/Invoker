@@ -12,7 +12,7 @@
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect } from 'react';
 import yaml from 'js-yaml';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowStatus } from './types.js';
-import type { ActionGraphNode } from '@invoker/contracts';
+import type { ActionGraphNode, TerminalSessionDescriptor } from '@invoker/contracts';
 import { useTasks } from './hooks/useTasks.js';
 import { useInvoker } from './hooks/useInvoker.js';
 import { TaskDAG } from './components/TaskDAG.js';
@@ -246,6 +246,8 @@ export function App() {
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const [advancedMetadataExpanded, setAdvancedMetadataExpanded] = useState(false);
   const [terminalCollapsed, setTerminalCollapsed] = useState(true);
+  const [terminalSessions, setTerminalSessions] = useState<TerminalSessionDescriptor[]>([]);
+  const [activeTerminalSessionId, setActiveTerminalSessionId] = useState<string | null>(null);
   const [workflowContextMenu, setWorkflowContextMenu] = useState<{ x: number; y: number; workflowId: string } | null>(null);
   const uiPerfThrottleRef = useRef<Record<string, number>>({});
 
@@ -410,17 +412,45 @@ export function App() {
     setWorkflowContextMenu(null);
   }, []);
 
+  const openTerminalForTask = useCallback(async (taskId: string) => {
+    // Expand the drawer immediately, regardless of whether the call ultimately
+    // succeeds, so the user can see status/failure feedback inline.
+    setTerminalCollapsed(false);
+    const invokerApi = window.invoker;
+    if (!invokerApi) return;
+    const openFn = invokerApi.terminalOpen ?? invokerApi.openTerminal;
+    if (!openFn) return;
+    try {
+      const result = await openFn.call(invokerApi, taskId);
+      if (!result) return;
+      if (!result.opened) {
+        window.alert(result.reason ?? 'Cannot open terminal for this task.');
+        return;
+      }
+      const session = result.session;
+      if (!session) return;
+      setTerminalSessions((prev) => {
+        const idx = prev.findIndex((s) => s.sessionId === session.sessionId);
+        if (idx === -1) return [...prev, session];
+        // Update existing entry (status may have changed on reuse).
+        const next = prev.slice();
+        next[idx] = { ...prev[idx], ...session };
+        return next;
+      });
+      setActiveTerminalSessionId(session.sessionId);
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
   const handleTaskDoubleClick = useCallback(async (task: TaskState) => {
     setSelectedTaskId(task.id);
     if (isExperimentSpawnPivotTask(task)) {
       window.alert(EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE);
       return;
     }
-    const result = await window.invoker?.openTerminal(task.id);
-    if (result && !result.opened) {
-      window.alert(result.reason ?? 'Cannot open terminal for this task.');
-    }
-  }, []);
+    await openTerminalForTask(task.id);
+  }, [openTerminalForTask]);
 
   const handleTaskContextMenu = useCallback((task: TaskState, event: React.MouseEvent) => {
     setSelectedTaskId(task.id);
@@ -489,10 +519,51 @@ export function App() {
         window.alert(EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE);
         return;
       }
-      void window.invoker?.openTerminal(taskId);
+      void openTerminalForTask(taskId);
     },
-    [tasks],
+    [tasks, openTerminalForTask],
   );
+
+  const handleSelectTerminalSession = useCallback((sessionId: string) => {
+    setActiveTerminalSessionId(sessionId);
+    void window.invoker?.terminalSelect?.(sessionId);
+  }, []);
+
+  const handleCloseTerminalSession = useCallback((sessionId: string) => {
+    setTerminalSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
+    setActiveTerminalSessionId((prev) => {
+      if (prev !== sessionId) return prev;
+      return null;
+    });
+    void window.invoker?.terminalClose?.(sessionId);
+  }, []);
+
+  // Promote the next remaining session when the active one is closed.
+  useEffect(() => {
+    if (activeTerminalSessionId) {
+      const stillThere = terminalSessions.some((s) => s.sessionId === activeTerminalSessionId);
+      if (stillThere) return;
+    }
+    const next = terminalSessions[terminalSessions.length - 1];
+    setActiveTerminalSessionId(next ? next.sessionId : null);
+  }, [terminalSessions, activeTerminalSessionId]);
+
+  // Update session status when the main process reports exit/error.
+  useEffect(() => {
+    if (!window.invoker?.onTerminalExit) return;
+    const off = window.invoker.onTerminalExit((event) => {
+      setTerminalSessions((prev) =>
+        prev.map((s) =>
+          s.sessionId === event.sessionId
+            ? { ...s, status: 'exited', exitCode: event.exitCode, reason: event.reason }
+            : s,
+        ),
+      );
+    });
+    return () => {
+      try { off?.(); } catch { /* noop */ }
+    };
+  }, []);
 
   const handleReplaceTask = useCallback((taskId: string) => {
     setContextMenu(null);
@@ -1143,6 +1214,10 @@ export function App() {
                 <TerminalDrawer
                   collapsed={terminalCollapsed}
                   onToggle={() => setTerminalCollapsed((prev) => !prev)}
+                  sessions={terminalSessions}
+                  activeSessionId={activeTerminalSessionId}
+                  onSelectSession={handleSelectTerminalSession}
+                  onCloseSession={handleCloseTerminalSession}
                 />
               </>
             )}
