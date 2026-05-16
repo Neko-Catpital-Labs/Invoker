@@ -156,7 +156,7 @@ describe('Attempt persistence', () => {
     const attempt = createAttempt('taskA', { status: 'completed' });
     adapter.saveAttempt(attempt);
 
-    // Access the raw db to verify column exists (sql.js API)
+    // Access the raw db to verify column exists.
     const db = (adapter as any).db;
     db.run('UPDATE tasks SET selected_attempt_id = ? WHERE id = ?', [attempt.id, 'taskA']);
     const stmt = db.prepare('SELECT selected_attempt_id FROM tasks WHERE id = ?');

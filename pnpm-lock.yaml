@@ -137,9 +137,6 @@ importers:
       '@invoker/workflow-core':
         specifier: workspace:*
         version: link:../workflow-core
-      sql.js:
-        specifier: ^1.12.0
-        version: 1.14.1
     devDependencies:
       '@invoker/persistence':
         specifier: workspace:*
@@ -147,9 +144,6 @@ importers:
       '@types/node':
         specifier: ^25.3.3
         version: 25.3.3
-      '@types/sql.js':
-        specifier: ^1.4.0
-        version: 1.4.10
       tsup:
         specifier: ^8.0.0
         version: 8.5.1(jiti@2.6.1)(postcss@8.5.8)(typescript@5.9.3)(yaml@2.8.2)
