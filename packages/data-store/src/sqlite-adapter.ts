@@ -199,26 +199,30 @@ export class SQLiteAdapter implements PersistenceAdapter {
   /** Run a single-row SELECT, returning the row as an object or undefined. */
   private queryOne(sql: string, params: unknown[] = []): Record<string, unknown> | undefined {
     const stmt = this.db.prepare(sql);
-    stmt.bind(params as any[]);
-    if (stmt.step()) {
-      const row = stmt.getAsObject();
+    try {
+      stmt.bind(params as any[]);
+      if (stmt.step()) {
+        return stmt.getAsObject() as Record<string, unknown>;
+      }
+      return undefined;
+    } finally {
       stmt.free();
-      return row as Record<string, unknown>;
     }
-    stmt.free();
-    return undefined;
   }
 
   /** Run a multi-row SELECT, returning an array of row objects. */
   private queryAll(sql: string, params: unknown[] = []): Record<string, unknown>[] {
     const stmt = this.db.prepare(sql);
-    stmt.bind(params as any[]);
-    const rows: Record<string, unknown>[] = [];
-    while (stmt.step()) {
-      rows.push(stmt.getAsObject() as Record<string, unknown>);
+    try {
+      stmt.bind(params as any[]);
+      const rows: Record<string, unknown>[] = [];
+      while (stmt.step()) {
+        rows.push(stmt.getAsObject() as Record<string, unknown>);
+      }
+      return rows;
+    } finally {
+      stmt.free();
     }
-    stmt.free();
-    return rows;
   }
 
   private ensureWritable(): void {
