@@ -2734,4 +2734,178 @@ describe('SQLiteAdapter', () => {
       expect(adapter.evictQueuedWorkflowMutationIntentsBefore('wf-1', fence)).toEqual([]);
     });
   });
+
+  describe('queryOne / queryAll statement cleanup', () => {
+    type PreparedHook = (stmt: any) => void;
+
+    function instrumentPrepare(adapter: SQLiteAdapter, hook: PreparedHook = () => {}): {
+      restore: () => void;
+      freeCallsFor: (stmt: any) => number;
+    } {
+      const db = (adapter as any).db;
+      const originalPrepare = db.prepare.bind(db);
+      const freeCounts = new WeakMap<object, number>();
+      db.prepare = (sql: string, ...rest: any[]) => {
+        const stmt = originalPrepare(sql, ...rest);
+        freeCounts.set(stmt, 0);
+        const originalFree = stmt.free.bind(stmt);
+        stmt.free = () => {
+          freeCounts.set(stmt, (freeCounts.get(stmt) ?? 0) + 1);
+          return originalFree();
+        };
+        hook(stmt);
+        return stmt;
+      };
+      return {
+        restore: () => {
+          db.prepare = originalPrepare;
+        },
+        freeCallsFor: (stmt: any) => freeCounts.get(stmt) ?? 0,
+      };
+    }
+
+    it('frees the prepared statement after a successful queryOne', () => {
+      let captured: any;
+      const handle = instrumentPrepare(adapter, (stmt) => {
+        captured = stmt;
+      });
+      try {
+        const row = (adapter as any).queryOne('SELECT 1 AS x') as Record<string, unknown> | undefined;
+        expect(row).toEqual({ x: 1 });
+        expect(handle.freeCallsFor(captured)).toBe(1);
+      } finally {
+        handle.restore();
+      }
+    });
+
+    it('frees the prepared statement after a successful queryAll', () => {
+      let captured: any;
+      const handle = instrumentPrepare(adapter, (stmt) => {
+        captured = stmt;
+      });
+      try {
+        const rows = (adapter as any).queryAll(
+          'SELECT value FROM (SELECT 1 AS value UNION ALL SELECT 2 UNION ALL SELECT 3) ORDER BY value',
+        ) as Array<Record<string, unknown>>;
+        expect(rows.map((r) => r.value)).toEqual([1, 2, 3]);
+        expect(handle.freeCallsFor(captured)).toBe(1);
+      } finally {
+        handle.restore();
+      }
+    });
+
+    it('frees the prepared statement when stmt.step throws inside queryOne', () => {
+      let captured: any;
+      const handle = instrumentPrepare(adapter, (stmt) => {
+        captured = stmt;
+        stmt.step = () => {
+          throw new Error('simulated OOM during step');
+        };
+      });
+      try {
+        expect(() => (adapter as any).queryOne('SELECT 1 AS x')).toThrow('simulated OOM during step');
+        expect(handle.freeCallsFor(captured)).toBe(1);
+      } finally {
+        handle.restore();
+      }
+    });
+
+    it('frees the prepared statement when stmt.getAsObject throws inside queryOne', () => {
+      let captured: any;
+      const handle = instrumentPrepare(adapter, (stmt) => {
+        captured = stmt;
+        stmt.getAsObject = () => {
+          throw new Error('simulated OOM during row materialization');
+        };
+      });
+      try {
+        expect(() => (adapter as any).queryOne('SELECT 1 AS x')).toThrow(
+          'simulated OOM during row materialization',
+        );
+        expect(handle.freeCallsFor(captured)).toBe(1);
+      } finally {
+        handle.restore();
+      }
+    });
+
+    it('frees the prepared statement when stmt.bind throws inside queryOne', () => {
+      let captured: any;
+      const handle = instrumentPrepare(adapter, (stmt) => {
+        captured = stmt;
+        stmt.bind = () => {
+          throw new Error('simulated OOM during bind');
+        };
+      });
+      try {
+        expect(() => (adapter as any).queryOne('SELECT ? AS x', ['v'])).toThrow(
+          'simulated OOM during bind',
+        );
+        expect(handle.freeCallsFor(captured)).toBe(1);
+      } finally {
+        handle.restore();
+      }
+    });
+
+    it('frees the prepared statement when stmt.step throws mid-iteration inside queryAll', () => {
+      let captured: any;
+      const handle = instrumentPrepare(adapter, (stmt) => {
+        captured = stmt;
+        const originalStep = stmt.step.bind(stmt);
+        let calls = 0;
+        stmt.step = () => {
+          calls += 1;
+          if (calls === 2) {
+            throw new Error('simulated OOM mid-iteration');
+          }
+          return originalStep();
+        };
+      });
+      try {
+        expect(() =>
+          (adapter as any).queryAll(
+            'SELECT value FROM (SELECT 1 AS value UNION ALL SELECT 2 UNION ALL SELECT 3) ORDER BY value',
+          ),
+        ).toThrow('simulated OOM mid-iteration');
+        expect(handle.freeCallsFor(captured)).toBe(1);
+      } finally {
+        handle.restore();
+      }
+    });
+
+    it('frees the prepared statement when stmt.getAsObject throws inside queryAll', () => {
+      let captured: any;
+      const handle = instrumentPrepare(adapter, (stmt) => {
+        captured = stmt;
+        stmt.getAsObject = () => {
+          throw new Error('simulated OOM during row materialization');
+        };
+      });
+      try {
+        expect(() =>
+          (adapter as any).queryAll('SELECT 1 AS value'),
+        ).toThrow('simulated OOM during row materialization');
+        expect(handle.freeCallsFor(captured)).toBe(1);
+      } finally {
+        handle.restore();
+      }
+    });
+
+    it('frees the prepared statement when stmt.bind throws inside queryAll', () => {
+      let captured: any;
+      const handle = instrumentPrepare(adapter, (stmt) => {
+        captured = stmt;
+        stmt.bind = () => {
+          throw new Error('simulated OOM during bind');
+        };
+      });
+      try {
+        expect(() => (adapter as any).queryAll('SELECT ? AS x', ['v'])).toThrow(
+          'simulated OOM during bind',
+        );
+        expect(handle.freeCallsFor(captured)).toBe(1);
+      } finally {
+        handle.restore();
+      }
+    });
+  });
 });
