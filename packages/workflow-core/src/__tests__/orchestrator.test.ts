@@ -8611,6 +8611,44 @@ describe('Orchestrator', () => {
       expect(failedDeltas).toHaveLength(1);
     });
 
+    it('setFixAwaitingApproval rejects stale fix lineage without changing approval state', () => {
+      orchestrator.beginConflictResolution('t2');
+      const fixingTask = orchestrator.getTask('t2')!;
+      const staleLineage = {
+        taskId: 't2',
+        selectedAttemptId: fixingTask.execution.selectedAttemptId,
+        generation: fixingTask.execution.generation ?? 0,
+      };
+
+      orchestrator.recreateTask('t2');
+
+      expect(() =>
+        orchestrator.setFixAwaitingApproval('t2', mergeConflictError, { expectedLineage: staleLineage }),
+      ).toThrow('lineage is stale');
+      expect(orchestrator.getTask('t2')!.status).not.toBe('awaiting_approval');
+      expect(orchestrator.getTask('t2')!.execution.pendingFixError).toBeUndefined();
+    });
+
+    it('revertConflictResolution rejects stale fix lineage without cleanup writes', () => {
+      const { savedError } = orchestrator.beginConflictResolution('t2');
+      const fixingTask = orchestrator.getTask('t2')!;
+      const staleLineage = {
+        taskId: 't2',
+        selectedAttemptId: fixingTask.execution.selectedAttemptId,
+        generation: fixingTask.execution.generation ?? 0,
+      };
+
+      orchestrator.recreateTask('t2');
+      const newerAttemptId = orchestrator.getTask('t2')!.execution.selectedAttemptId;
+
+      expect(() =>
+        orchestrator.revertConflictResolution('t2', savedError, 'late failure', { expectedLineage: staleLineage }),
+      ).toThrow('lineage is stale');
+      const task = orchestrator.getTask('t2')!;
+      expect(task.execution.selectedAttemptId).toBe(newerAttemptId);
+      expect(String(task.execution.error ?? '')).not.toContain('late failure');
+    });
+
     it('revertConflictResolution uses agent-agnostic fix failure prefix', () => {
       const { savedError } = orchestrator.beginConflictResolution('t2');
       orchestrator.revertConflictResolution('t2', savedError, 'startup failed');

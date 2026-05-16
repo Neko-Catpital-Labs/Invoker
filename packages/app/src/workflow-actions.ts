@@ -131,12 +131,15 @@ export async function approveTask(
     taskExecutor?: TaskRunner;
     approve?: (taskId: string) => Promise<TaskState[]>;
     resumeAfterFixApproval?: (taskId: string) => Promise<TaskState[]>;
+    assertCurrent?: () => void;
   },
 ): Promise<ApproveTaskResult> {
   const task = deps.orchestrator.getTask?.(taskId);
   const fixedTask = task?.execution.pendingFixError !== undefined;
+  deps.assertCurrent?.();
   if (fixedTask && task && deps.taskExecutor) {
     await deps.taskExecutor.commitApprovedFix(task);
+    deps.assertCurrent?.();
   }
 
   const shouldResume =
@@ -151,9 +154,12 @@ export async function approveTask(
   const postFixMerge = started.filter(
     (t) => t.status === 'running' && t.config.isMergeNode && t.id === taskId,
   );
+  deps.assertCurrent?.();
   if (deps.taskExecutor) {
     for (const task of postFixMerge) {
+      deps.assertCurrent?.();
       await deps.taskExecutor.publishAfterFix(task);
+      deps.assertCurrent?.();
     }
   }
   return { approvedTask: task, started, fixedTask };
@@ -749,22 +755,26 @@ export async function resolveConflictAction(
   signal?: AbortSignal,
 ): Promise<{ autoApproved: boolean; started: TaskState[] }> {
   const { orchestrator, persistence, taskExecutor } = deps;
-  const { savedError } = orchestrator.beginConflictResolution(taskId);
+  const entryLineage = captureTaskLineage(taskId, orchestrator);
+  assertLineageCurrent(entryLineage, orchestrator, signal);
+  const { savedError } = orchestrator.beginConflictResolution(taskId, { expectedLineage: entryLineage });
   const lineage = captureTaskLineage(taskId, orchestrator);
   try {
+    assertLineageCurrent(lineage, orchestrator, signal);
     await taskExecutor.resolveConflict(taskId, savedError, agentName);
     assertLineageCurrent(lineage, orchestrator, signal);
-    return await finalizeAppliedFix(taskId, savedError, deps, signal);
+    return await finalizeAppliedFix(taskId, savedError, deps, signal, lineage);
   } catch (err) {
     if (err instanceof StaleLineageError) throw err;
     const msg = err instanceof Error ? err.message : String(err);
-    persistence.appendTaskOutput(taskId, `\n[Resolve Conflict] Failed: ${msg}`);
     try {
       assertLineageCurrent(lineage, orchestrator, signal);
     } catch {
       throw err;
     }
-    orchestrator.revertConflictResolution(taskId, savedError, msg);
+    persistence.appendTaskOutput(taskId, `\n[Resolve Conflict] Failed: ${msg}`);
+    assertLineageCurrent(lineage, orchestrator, signal);
+    orchestrator.revertConflictResolution(taskId, savedError, msg, { expectedLineage: lineage });
     throw err;
   }
 }
@@ -805,9 +815,12 @@ export async function fixWithAgentAction(
     };
   }
 
-  const { savedError: persistedSavedError } = orchestrator.beginConflictResolution(taskId);
+  const entryLineage = captureTaskLineage(taskId, orchestrator);
+  assertLineageCurrent(entryLineage, orchestrator, options.signal);
+  const { savedError: persistedSavedError } = orchestrator.beginConflictResolution(taskId, { expectedLineage: entryLineage });
   const lineage = captureTaskLineage(taskId, orchestrator);
   try {
+    assertLineageCurrent(lineage, orchestrator, options.signal);
     if (recoveryRoute.kind === 'resolveConflict') {
       await taskExecutor.resolveConflict(taskId, persistedSavedError, options.agentName);
     } else {
@@ -815,7 +828,7 @@ export async function fixWithAgentAction(
       await taskExecutor.fixWithAgent(taskId, output, options.agentName, persistedSavedError);
     }
     assertLineageCurrent(lineage, orchestrator, options.signal);
-    const result = await finalizeAppliedFix(taskId, persistedSavedError, deps, options.signal);
+    const result = await finalizeAppliedFix(taskId, persistedSavedError, deps, options.signal, lineage);
     return {
       kind: recoveryRoute.kind,
       autoApproved: result.autoApproved,
@@ -826,13 +839,14 @@ export async function fixWithAgentAction(
     const msg = err instanceof Error ? err.message : String(err);
     const errorLabel = options.failureOutputLabel
       ?? (recoveryRoute.kind === 'resolveConflict' ? 'Resolve Conflict' : `Fix with ${options.agentName ?? 'Claude'}`);
-    persistence.appendTaskOutput(taskId, `\n[${errorLabel}] Failed: ${msg}`);
     try {
       assertLineageCurrent(lineage, orchestrator, options.signal);
     } catch {
       throw err;
     }
-    orchestrator.revertConflictResolution(taskId, persistedSavedError, msg);
+    persistence.appendTaskOutput(taskId, `\n[${errorLabel}] Failed: ${msg}`);
+    assertLineageCurrent(lineage, orchestrator, options.signal);
+    orchestrator.revertConflictResolution(taskId, persistedSavedError, msg, { expectedLineage: lineage });
     throw err;
   }
 }
@@ -842,18 +856,28 @@ export async function finalizeAppliedFix(
   savedError: string,
   deps: Pick<ActionDeps, 'orchestrator' | 'autoApproveAIFixes'> & { taskExecutor: TaskRunner },
   signal?: AbortSignal,
+  lineage?: TaskLineageSnapshot,
 ): Promise<{ autoApproved: boolean; started: TaskState[] }> {
   if (signal?.aborted) {
     throw new StaleLineageError(
       `Fix mutation for ${taskId} aborted before finalize: ${signal.reason instanceof Error ? signal.reason.message : String(signal.reason ?? 'unknown')}`,
     );
   }
-  deps.orchestrator.setFixAwaitingApproval(taskId, savedError);
+  if (lineage) assertLineageCurrent(lineage, deps.orchestrator, signal);
+  if (lineage) {
+    deps.orchestrator.setFixAwaitingApproval(taskId, savedError, { expectedLineage: lineage });
+  } else {
+    deps.orchestrator.setFixAwaitingApproval(taskId, savedError);
+  }
   if (!deps.autoApproveAIFixes) {
     return { autoApproved: false, started: [] };
   }
 
-  const { started } = await approveTask(taskId, deps);
+  if (lineage) assertLineageCurrent(lineage, deps.orchestrator, signal);
+  const { started } = await approveTask(taskId, {
+    ...deps,
+    assertCurrent: lineage ? () => assertLineageCurrent(lineage, deps.orchestrator, signal) : undefined,
+  });
   return { autoApproved: true, started };
 }
 
@@ -1118,12 +1142,15 @@ export async function autoFixOnFailure(
       return;
     }
 
-    ({ savedError: persistedSavedError } = orchestrator.beginConflictResolution(taskId));
+    const entryLineage = captureTaskLineage(taskId, orchestrator);
+    assertLineageCurrent(entryLineage, orchestrator, deps.signal);
+    ({ savedError: persistedSavedError } = orchestrator.beginConflictResolution(taskId, { expectedLineage: entryLineage }));
     lineage = captureTaskLineage(taskId, orchestrator);
     persistence.logEvent?.(taskId, 'debug.auto-fix', {
       phase: 'auto-fix-begin-conflict-resolution',
       savedErrorLength: persistedSavedError.length,
     });
+    assertLineageCurrent(lineage, orchestrator, deps.signal);
     if (recoveryRoute.kind === 'resolveConflict') {
       await taskExecutor.resolveConflict(taskId, persistedSavedError, agentSelection.selectedAgent);
     } else {
@@ -1137,21 +1164,24 @@ export async function autoFixOnFailure(
       strategy: postRouteStrategy,
     });
     if (postRouteStrategy === 'resume_from_fixed_tip') {
+      assertLineageCurrent(lineage, orchestrator, deps.signal);
       await recordFixedIntegrationAnchor(taskId, task, {
         persistence,
         taskExecutor,
       });
+      assertLineageCurrent(lineage, orchestrator, deps.signal);
       const finalizeResult = await finalizeAppliedFix(taskId, persistedSavedError, {
         orchestrator,
         taskExecutor,
         autoApproveAIFixes: deps.getAutoApproveAIFixes?.() ?? true,
-      }, deps.signal);
+      }, deps.signal, lineage);
       persistence.logEvent?.(taskId, 'debug.auto-fix', {
         phase: 'auto-fix-post-route-finalize',
         autoApproved: finalizeResult.autoApproved,
         startedCount: finalizeResult.started.length,
         startedStatuses: finalizeResult.started.map((t) => t.status),
       });
+      assertLineageCurrent(lineage, orchestrator, deps.signal);
       const latestTask = orchestrator.getTask(taskId);
       if (latestTask?.status === 'failed' && orchestrator.shouldAutoFix(taskId) && inlineRetryDepth < 1) {
         persistence.logEvent?.(taskId, 'debug.auto-fix', {
@@ -1188,10 +1218,6 @@ export async function autoFixOnFailure(
       fallbackChain: agentSelection.fallbackChain,
       diagnostics: diagnostics ?? null,
     });
-    if (diagnostics) {
-      persistence.appendTaskOutput(taskId, `\n[Auto-fix Diagnostics]\n${diagnostics}`);
-    }
-    persistence.appendTaskOutput(taskId, `\n[Auto-fix] Agent failed (attempt ${attempts}/${max}): ${msg}`);
     const detailedMsg = diagnostics ? `${msg}\n\n${diagnostics}` : msg;
     if (persistedSavedError !== undefined) {
       if (lineage) {
@@ -1201,7 +1227,17 @@ export async function autoFixOnFailure(
           throw err;
         }
       }
-      orchestrator.revertConflictResolution(taskId, persistedSavedError, detailedMsg);
+      if (diagnostics) {
+        persistence.appendTaskOutput(taskId, `\n[Auto-fix Diagnostics]\n${diagnostics}`);
+      }
+      persistence.appendTaskOutput(taskId, `\n[Auto-fix] Agent failed (attempt ${attempts}/${max}): ${msg}`);
+      if (lineage) assertLineageCurrent(lineage, orchestrator, deps.signal);
+      orchestrator.revertConflictResolution(taskId, persistedSavedError, detailedMsg, lineage ? { expectedLineage: lineage } : undefined);
+    } else {
+      if (diagnostics) {
+        persistence.appendTaskOutput(taskId, `\n[Auto-fix Diagnostics]\n${diagnostics}`);
+      }
+      persistence.appendTaskOutput(taskId, `\n[Auto-fix] Agent failed (attempt ${attempts}/${max}): ${msg}`);
     }
   }
 }

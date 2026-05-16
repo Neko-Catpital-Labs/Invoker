@@ -52,6 +52,12 @@ export class OrchestratorError extends Error {
   }
 }
 
+export interface TaskLineageExpectation {
+  taskId: string;
+  selectedAttemptId: string | undefined;
+  generation: number;
+}
+
 function isActiveForInvalidation(status: TaskStatus): boolean {
   return (
     status === 'running' ||
@@ -741,6 +747,21 @@ export class Orchestrator {
   private deferredTaskIds = new Set<string>();
   private beforeApproveHook?: (task: TaskState) => Promise<void>;
   private lastInvalidationPlan?: InvalidationPlan;
+
+  private assertTaskLineageCurrent(expectation: TaskLineageExpectation | undefined): void {
+    if (!expectation) return;
+    const current = this.stateGetTask(expectation.taskId);
+    const selectedAttemptId = current?.execution.selectedAttemptId;
+    const generation = current?.execution.generation ?? 0;
+    if (selectedAttemptId !== expectation.selectedAttemptId || generation !== expectation.generation) {
+      throw new OrchestratorError(
+        OrchestratorErrorCode.TASK_ALREADY_TERMINAL,
+        `Task ${expectation.taskId} lineage is stale `
+        + `(attempt ${expectation.selectedAttemptId} -> ${selectedAttemptId}, `
+        + `gen ${expectation.generation} -> ${generation})`,
+      );
+    }
+  }
 
   /**
    * Per-workflow record of the most recently observed upstream base
@@ -1792,8 +1813,13 @@ export class Orchestrator {
     this.setTaskApprovalStatus(taskId, 'review_ready', 'task.review_ready', additionalChanges);
   }
 
-  setFixAwaitingApproval(taskId: string, originalError: string): void {
+  setFixAwaitingApproval(
+    taskId: string,
+    originalError: string,
+    options?: { expectedLineage?: TaskLineageExpectation },
+  ): void {
     this.refreshFromDb();
+    this.assertTaskLineageCurrent(options?.expectedLineage);
     const task = this.stateGetTask(taskId);
     if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
     const tid = task.id;
@@ -2722,8 +2748,12 @@ export class Orchestrator {
    * Clears terminal failure fields on the row so SQLite does not show stale error/exit/completed.
    * Returns the saved error string so the caller can revert on failure.
    */
-  beginConflictResolution(taskId: string): { savedError: string } {
+  beginConflictResolution(
+    taskId: string,
+    options?: { expectedLineage?: TaskLineageExpectation },
+  ): { savedError: string } {
     this.refreshFromDb();
+    this.assertTaskLineageCurrent(options?.expectedLineage);
     const task = this.stateGetTask(taskId);
     if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
     if (task.status !== 'failed') throw new Error(`Task ${taskId} is not failed (status: ${task.status})`);
@@ -2771,8 +2801,14 @@ export class Orchestrator {
    * Revert a conflict resolution attempt: restore the task to failed
    * with its original error and re-parsed mergeConflict field.
    */
-  revertConflictResolution(taskId: string, savedError: string, fixError?: string): void {
+  revertConflictResolution(
+    taskId: string,
+    savedError: string,
+    fixError?: string,
+    options?: { expectedLineage?: TaskLineageExpectation },
+  ): void {
     this.refreshFromDb();
+    this.assertTaskLineageCurrent(options?.expectedLineage);
     const task = this.stateGetTask(taskId);
     if (!task) {
       throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
