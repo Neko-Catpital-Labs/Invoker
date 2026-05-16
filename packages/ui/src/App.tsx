@@ -12,7 +12,7 @@
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect } from 'react';
 import yaml from 'js-yaml';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowStatus } from './types.js';
-import type { ActionGraphNode } from '@invoker/contracts';
+import type { ActionGraphNode, TerminalSessionDescriptor } from '@invoker/contracts';
 import { useTasks } from './hooks/useTasks.js';
 import { useInvoker } from './hooks/useInvoker.js';
 import { TaskDAG } from './components/TaskDAG.js';
@@ -251,6 +251,8 @@ export function App() {
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const [advancedMetadataExpanded, setAdvancedMetadataExpanded] = useState(false);
   const [terminalCollapsed, setTerminalCollapsed] = useState(true);
+  const [terminalSessions, setTerminalSessions] = useState<TerminalSessionDescriptor[]>([]);
+  const [activeTerminalSessionId, setActiveTerminalSessionId] = useState<string | null>(null);
   const [workflowContextMenu, setWorkflowContextMenu] = useState<{ x: number; y: number; workflowId: string } | null>(null);
   const uiPerfThrottleRef = useRef<Record<string, number>>({});
 
@@ -275,6 +277,27 @@ export function App() {
     window.invoker?.getExecutionAgents?.().then(setExecutionAgents).catch(() => {});
     refreshSystemDiagnostics();
   }, [refreshSystemDiagnostics]);
+
+  useEffect(() => {
+    window.invoker?.terminalList?.().then((list) => {
+      if (Array.isArray(list) && list.length > 0) {
+        setTerminalSessions(list);
+      }
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = window.invoker?.onTerminalExit?.((event) => {
+      setTerminalSessions((prev) =>
+        prev.map((session) =>
+          session.sessionId === event.sessionId
+            ? { ...session, status: 'exited', exitCode: event.exitCode }
+            : session,
+        ),
+      );
+    });
+    return () => { unsubscribe?.(); };
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.invoker) return;
@@ -415,17 +438,38 @@ export function App() {
     setWorkflowContextMenu(null);
   }, []);
 
-  const handleTaskDoubleClick = useCallback(async (task: TaskState) => {
-    setSelectedTaskId(task.id);
-    if (isExperimentSpawnPivotTask(task)) {
+  const openTerminalForTaskId = useCallback(async (taskId: string) => {
+    const task = tasks.get(taskId);
+    if (task && isExperimentSpawnPivotTask(task)) {
       window.alert(EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE);
       return;
     }
-    const result = await window.invoker?.openTerminal(task.id);
-    if (result && !result.opened) {
+    setTerminalCollapsed(false);
+    const result = await window.invoker?.openTerminal?.(taskId);
+    if (!result) return;
+    if (!result.opened) {
       window.alert(result.reason ?? 'Cannot open terminal for this task.');
+      return;
     }
-  }, []);
+    const session = result.session;
+    if (session) {
+      setTerminalSessions((prev) => {
+        const idx = prev.findIndex((s) => s.sessionId === session.sessionId);
+        if (idx >= 0) {
+          const next = prev.slice();
+          next[idx] = session;
+          return next;
+        }
+        return [...prev, session];
+      });
+      setActiveTerminalSessionId(session.sessionId);
+    }
+  }, [tasks]);
+
+  const handleTaskDoubleClick = useCallback(async (task: TaskState) => {
+    setSelectedTaskId(task.id);
+    await openTerminalForTaskId(task.id);
+  }, [openTerminalForTaskId]);
 
   const handleTaskContextMenu = useCallback((task: TaskState, event: React.MouseEvent) => {
     setSelectedTaskId(task.id);
@@ -489,15 +533,32 @@ export function App() {
   const handleOpenTerminal = useCallback(
     (taskId: string) => {
       setContextMenu(null);
-      const task = tasks.get(taskId);
-      if (task && isExperimentSpawnPivotTask(task)) {
-        window.alert(EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE);
-        return;
-      }
-      void window.invoker?.openTerminal(taskId);
+      void openTerminalForTaskId(taskId);
     },
-    [tasks],
+    [openTerminalForTaskId],
   );
+
+  const handleCloseTerminalSession = useCallback(async (sessionId: string) => {
+    setTerminalSessions((prev) => prev.filter((session) => session.sessionId !== sessionId));
+    setActiveTerminalSessionId((prev) => {
+      if (prev !== sessionId) return prev;
+      const remaining = terminalSessions.filter((session) => session.sessionId !== sessionId);
+      return remaining[remaining.length - 1]?.sessionId ?? null;
+    });
+    try {
+      await window.invoker?.terminalClose?.(sessionId);
+    } catch {
+      /* best-effort */
+    }
+  }, [terminalSessions]);
+
+  const terminalTaskLabels = useMemo(() => {
+    const labels = new Map<string, string>();
+    for (const task of tasks.values()) {
+      labels.set(task.id, task.description || task.id);
+    }
+    return labels;
+  }, [tasks]);
 
   const handleReplaceTask = useCallback((taskId: string) => {
     setContextMenu(null);
@@ -1160,6 +1221,11 @@ export function App() {
                 <TerminalDrawer
                   collapsed={terminalCollapsed}
                   onToggle={() => setTerminalCollapsed((prev) => !prev)}
+                  sessions={terminalSessions}
+                  activeSessionId={activeTerminalSessionId}
+                  onSelectSession={setActiveTerminalSessionId}
+                  onCloseSession={(sessionId) => void handleCloseTerminalSession(sessionId)}
+                  taskLabels={terminalTaskLabels}
                 />
               </>
             )}
