@@ -155,6 +155,128 @@ describe('SQLiteAdapter', () => {
     });
   });
 
+  describe('execution resource leases', () => {
+    it('rejects a second holder for the same SSH resource at capacity 1', () => {
+      const now = new Date('2026-05-16T00:00:00.000Z');
+      const leaseExpiresAt = new Date('2026-05-16T00:05:00.000Z');
+
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:user@example.com:22',
+        resourceType: 'ssh',
+        holderId: 'attempt-1',
+        capacity: 1,
+        taskId: 'task-1',
+        leaseExpiresAt,
+        now,
+      })).toBe(true);
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:user@example.com:22',
+        resourceType: 'ssh',
+        holderId: 'attempt-2',
+        capacity: 1,
+        taskId: 'task-2',
+        leaseExpiresAt,
+        now,
+      })).toBe(false);
+    });
+
+    it('conflicts different target ids that resolve to the same host/user/port key', () => {
+      const now = new Date('2026-05-16T00:00:00.000Z');
+      const leaseExpiresAt = new Date('2026-05-16T00:05:00.000Z');
+
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:deploy@10.0.0.5:22',
+        resourceType: 'ssh',
+        holderId: 'remote-a-attempt',
+        capacity: 1,
+        poolMemberId: 'remote-a',
+        leaseExpiresAt,
+        now,
+      })).toBe(true);
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:deploy@10.0.0.5:22',
+        resourceType: 'ssh',
+        holderId: 'remote-b-attempt',
+        capacity: 1,
+        poolMemberId: 'remote-b',
+        leaseExpiresAt,
+        now,
+      })).toBe(false);
+    });
+
+    it('reaps expired leases and allows a new claim', () => {
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:user@host:22',
+        resourceType: 'ssh',
+        holderId: 'expired',
+        capacity: 1,
+        leaseExpiresAt: new Date('2026-05-16T00:01:00.000Z'),
+        now: new Date('2026-05-16T00:00:00.000Z'),
+      })).toBe(true);
+
+      expect(adapter.reapExpiredExecutionResourceLeases(new Date('2026-05-16T00:02:00.000Z'))).toBe(1);
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:user@host:22',
+        resourceType: 'ssh',
+        holderId: 'fresh',
+        capacity: 1,
+        leaseExpiresAt: new Date('2026-05-16T00:10:00.000Z'),
+        now: new Date('2026-05-16T00:02:00.000Z'),
+      })).toBe(true);
+    });
+
+    it('allows capacity 2 and rejects the third holder', () => {
+      const now = new Date('2026-05-16T00:00:00.000Z');
+      const leaseExpiresAt = new Date('2026-05-16T00:05:00.000Z');
+      for (const holderId of ['a', 'b']) {
+        expect(adapter.claimExecutionResourceLease({
+          resourceKey: 'ssh:user@host:2200',
+          resourceType: 'ssh',
+          holderId,
+          capacity: 2,
+          leaseExpiresAt,
+          now,
+        })).toBe(true);
+      }
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:user@host:2200',
+        resourceType: 'ssh',
+        holderId: 'c',
+        capacity: 2,
+        leaseExpiresAt,
+        now,
+      })).toBe(false);
+    });
+
+    it('release and renew only affect the matching holder', () => {
+      const now = new Date('2026-05-16T00:00:00.000Z');
+      for (const holderId of ['a', 'b']) {
+        adapter.claimExecutionResourceLease({
+          resourceKey: 'ssh:user@host:22',
+          resourceType: 'ssh',
+          holderId,
+          capacity: 2,
+          leaseExpiresAt: new Date('2026-05-16T00:05:00.000Z'),
+          now,
+        });
+      }
+
+      expect(adapter.renewExecutionResourceLease('ssh:user@host:22', 'missing', {
+        now: new Date('2026-05-16T00:01:00.000Z'),
+        leaseExpiresAt: new Date('2026-05-16T00:10:00.000Z'),
+      })).toBe(false);
+      expect(adapter.renewExecutionResourceLease('ssh:user@host:22', 'a', {
+        now: new Date('2026-05-16T00:01:00.000Z'),
+        leaseExpiresAt: new Date('2026-05-16T00:10:00.000Z'),
+      })).toBe(true);
+
+      adapter.releaseExecutionResourceLease('ssh:user@host:22', 'a');
+      const leases = adapter.listExecutionResourceLeases();
+      expect(leases.map((lease) => lease.holderId)).toEqual(['b']);
+      expect(leases[0].leaseExpiresAt).toBe('2026-05-16T00:05:00.000Z');
+    });
+  });
+
   describe('updateTask', () => {
     it('persists partial changes', () => {
       adapter.saveWorkflow(testWorkflow);

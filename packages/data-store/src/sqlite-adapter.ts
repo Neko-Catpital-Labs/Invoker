@@ -39,6 +39,7 @@ import type {
   PersistenceAdapter,
   Workflow,
   WorkflowTaskSnapshot,
+  ExecutionResourceLease,
   TaskEvent,
   ActivityLogEntry,
   Conversation,
@@ -81,6 +82,7 @@ interface SQLiteAdapterOptions {
 export type WorkflowMutationPriority = 'high' | 'normal';
 export type WorkflowMutationIntentStatus = 'queued' | 'running' | 'completed' | 'failed';
 export const WORKFLOW_MUTATION_LEASE_MS = 30_000;
+const DEFAULT_EXECUTION_RESOURCE_LEASE_MS = 20 * 60 * 1000;
 
 export interface WorkflowMutationIntent {
   id: number;
@@ -104,6 +106,19 @@ export interface WorkflowMutationLease {
   leasedAt: string;
   lastHeartbeatAt: string;
   leaseExpiresAt: string;
+}
+
+export interface ClaimExecutionResourceLeaseOptions {
+  resourceKey: string;
+  resourceType: string;
+  holderId: string;
+  capacity: number;
+  taskId?: string;
+  poolId?: string;
+  poolMemberId?: string;
+  leaseExpiresAt: Date;
+  now?: Date;
+  metadata?: unknown;
 }
 
 export class SQLiteAdapter implements PersistenceAdapter {
@@ -590,6 +605,26 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
       CREATE INDEX IF NOT EXISTS idx_workflow_mutation_leases_expiry
         ON workflow_mutation_leases(lease_expires_at);
+
+      CREATE TABLE IF NOT EXISTS execution_resource_leases (
+        resource_key TEXT NOT NULL,
+        resource_type TEXT NOT NULL,
+        holder_id TEXT NOT NULL,
+        task_id TEXT,
+        pool_id TEXT,
+        pool_member_id TEXT,
+        acquired_at TEXT NOT NULL,
+        last_heartbeat_at TEXT NOT NULL,
+        lease_expires_at TEXT NOT NULL,
+        metadata_json TEXT,
+        PRIMARY KEY (resource_key, holder_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_execution_resource_leases_resource_key
+        ON execution_resource_leases(resource_key);
+
+      CREATE INDEX IF NOT EXISTS idx_execution_resource_leases_expiry
+        ON execution_resource_leases(lease_expires_at);
 
       CREATE TABLE IF NOT EXISTS output_spool (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2316,6 +2351,98 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return this.rowToWorkflowMutationIntent(claimed);
   }
 
+  claimExecutionResourceLease(options: ClaimExecutionResourceLeaseOptions): boolean {
+    const capacity = Math.max(0, Math.floor(options.capacity));
+    if (capacity <= 0) return false;
+
+    return this.runTransaction(() => {
+      const now = options.now ?? new Date();
+      const nowIso = now.toISOString();
+      this.db.run(
+        'DELETE FROM execution_resource_leases WHERE resource_key = ? AND lease_expires_at <= ?',
+        [options.resourceKey, nowIso],
+      );
+
+      const current = this.queryOne(
+        'SELECT COUNT(*) AS count FROM execution_resource_leases WHERE resource_key = ?',
+        [options.resourceKey],
+      );
+      if (Number(current?.count ?? 0) >= capacity) {
+        return false;
+      }
+
+      this.db.run(
+        `INSERT INTO execution_resource_leases (
+          resource_key, resource_type, holder_id, task_id, pool_id, pool_member_id,
+          acquired_at, last_heartbeat_at, lease_expires_at, metadata_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          options.resourceKey,
+          options.resourceType,
+          options.holderId,
+          options.taskId ?? null,
+          options.poolId ?? null,
+          options.poolMemberId ?? null,
+          nowIso,
+          nowIso,
+          options.leaseExpiresAt.toISOString(),
+          options.metadata === undefined ? null : JSON.stringify(options.metadata),
+        ],
+      );
+      return true;
+    });
+  }
+
+  renewExecutionResourceLease(
+    resourceKey: string,
+    holderId: string,
+    options?: { now?: Date; leaseExpiresAt?: Date; metadata?: unknown },
+  ): boolean {
+    return this.runTransaction(() => {
+      const now = options?.now ?? new Date();
+      this.db.run(
+        `UPDATE execution_resource_leases
+           SET last_heartbeat_at = ?,
+               lease_expires_at = ?,
+               metadata_json = COALESCE(?, metadata_json)
+         WHERE resource_key = ? AND holder_id = ?`,
+        [
+          now.toISOString(),
+          (options?.leaseExpiresAt ?? new Date(now.getTime() + DEFAULT_EXECUTION_RESOURCE_LEASE_MS)).toISOString(),
+          options?.metadata === undefined ? null : JSON.stringify(options.metadata),
+          resourceKey,
+          holderId,
+        ],
+      );
+      const row = this.queryOne('SELECT changes() AS changes');
+      return Number(row?.changes ?? 0) > 0;
+    });
+  }
+
+  releaseExecutionResourceLease(resourceKey: string, holderId: string): void {
+    this.execRun(
+      'DELETE FROM execution_resource_leases WHERE resource_key = ? AND holder_id = ?',
+      [resourceKey, holderId],
+    );
+  }
+
+  reapExpiredExecutionResourceLeases(now: Date = new Date()): number {
+    return this.runTransaction(() => {
+      this.db.run(
+        'DELETE FROM execution_resource_leases WHERE lease_expires_at <= ?',
+        [now.toISOString()],
+      );
+      const row = this.queryOne('SELECT changes() AS changes');
+      return Number(row?.changes ?? 0);
+    });
+  }
+
+  listExecutionResourceLeases(): ExecutionResourceLease[] {
+    return this.queryAll(
+      'SELECT * FROM execution_resource_leases ORDER BY resource_key ASC, holder_id ASC',
+    ).map((row) => this.rowToExecutionResourceLease(row));
+  }
+
   claimWorkflowMutationLease(
     workflowId: string,
     ownerId: string,
@@ -2507,6 +2634,32 @@ export class SQLiteAdapter implements PersistenceAdapter {
       leasedAt: String(row.leased_at),
       lastHeartbeatAt: String(row.last_heartbeat_at),
       leaseExpiresAt: String(row.lease_expires_at),
+    };
+  }
+
+  private rowToExecutionResourceLease(row: Record<string, unknown>): ExecutionResourceLease {
+    const metadataJson = row.metadata_json === null || row.metadata_json === undefined
+      ? undefined
+      : String(row.metadata_json);
+    let metadata: unknown;
+    if (metadataJson !== undefined) {
+      try {
+        metadata = JSON.parse(metadataJson);
+      } catch {
+        metadata = metadataJson;
+      }
+    }
+    return {
+      resourceKey: String(row.resource_key),
+      resourceType: String(row.resource_type),
+      holderId: String(row.holder_id),
+      taskId: row.task_id ? String(row.task_id) : undefined,
+      poolId: row.pool_id ? String(row.pool_id) : undefined,
+      poolMemberId: row.pool_member_id ? String(row.pool_member_id) : undefined,
+      acquiredAt: String(row.acquired_at),
+      lastHeartbeatAt: String(row.last_heartbeat_at),
+      leaseExpiresAt: String(row.lease_expires_at),
+      metadata,
     };
   }
 

@@ -67,6 +67,19 @@ export interface ActivityLogEntry {
   message: string;
 }
 
+export interface ExecutionResourceLease {
+  resourceKey: string;
+  resourceType: string;
+  holderId: string;
+  taskId?: string;
+  poolId?: string;
+  poolMemberId?: string;
+  acquiredAt: string;
+  lastHeartbeatAt: string;
+  leaseExpiresAt: string;
+  metadata?: unknown;
+}
+
 export interface WorkflowTaskSnapshot {
   workflows: Workflow[];
   tasks: TaskState[];

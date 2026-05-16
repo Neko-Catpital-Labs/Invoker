@@ -119,6 +119,30 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
     }, { batchMode: true });
   }
 
+  private createStartupStepLogger(request: WorkRequest, executionId: string): (phase: string, metadata?: Record<string, unknown>) => void {
+    const startedAt = Date.now();
+    let previousAt = startedAt;
+    return (phase, metadata = {}) => {
+      const now = Date.now();
+      const elapsedMs = now - startedAt;
+      const deltaMs = now - previousAt;
+      previousAt = now;
+      request.onStartupTiming?.({
+        phase,
+        elapsedMs,
+        deltaMs,
+        metadata: {
+          requestId: request.requestId,
+          executionId,
+          host: this.host,
+          user: this.user,
+          managedWorkspaces: this.managedWorkspaces,
+          ...metadata,
+        },
+      });
+    };
+  }
+
   /** SSH args without `BatchMode` so `-t` / interactive sessions work for external Terminal.app. */
   private buildSshArgsInteractive(): string[] {
     return buildSshConnectionArgs({
@@ -426,6 +450,7 @@ ${this.buildPayloadExecutionScript(payloadB64)}
     });
     bench('SshExecutor.startManagedWorkspace.begin');
     const executionId = handle.executionId;
+    const startupStep = this.createStartupStepLogger(request, executionId);
     const h = computeRepoUrlHash(repoUrl);
     const baseRef = request.inputs.baseBranch ?? 'HEAD';
     const upstreamCommits = (request.inputs.upstreamContext ?? [])
@@ -436,6 +461,12 @@ ${this.buildPayloadExecutionScript(payloadB64)}
 
     // Use configured remoteInvokerHome (default ~/.invoker)
     const invokerHome = this.remoteInvokerHome;
+    startupStep('begin', {
+      repoUrl,
+      repoHash: h,
+      baseRef,
+      remoteInvokerHome: invokerHome,
+    });
 
     // Step 1: Clone/fetch on remote + resolve baseHead
     const script1 = buildMirrorCloneScript({
@@ -446,7 +477,17 @@ ${this.buildPayloadExecutionScript(payloadB64)}
       invokerHome,
     });
     bench('SshExecutor.startManagedWorkspace.bootstrapCloneFetch.before', { baseRef });
-    const bootstrapOut = await this.execRemoteCapture(script1, 'bootstrap_clone_fetch');
+    startupStep('bootstrap_clone_fetch.before', { baseRef });
+    let bootstrapOut: string;
+    try {
+      bootstrapOut = await this.execRemoteCapture(script1, 'bootstrap_clone_fetch');
+      startupStep('bootstrap_clone_fetch.after');
+    } catch (err) {
+      startupStep('bootstrap_clone_fetch.failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
     const { resolvedBaseRef, baseHead, warning, fetchSuccess } = parseBootstrapOutput(bootstrapOut);
     bench('SshExecutor.startManagedWorkspace.bootstrapCloneFetch.after', {
       resolvedBaseRef,
@@ -478,6 +519,7 @@ ${this.buildPayloadExecutionScript(payloadB64)}
       experimentBranch,
       contentHash,
     });
+    startupStep('branch_computed', { experimentBranch, contentHash, baseHead });
     // Persist the branch on the attempt row before we run any remote git
     // command that could leak a worktree without a recorded branch.
     try {
@@ -496,11 +538,15 @@ ${this.buildPayloadExecutionScript(payloadB64)}
     handle.branch = experimentBranch;
 
     bench('SshExecutor.startManagedWorkspace.detectHome.before');
+    startupStep('detect_home.before');
     const remoteHome = (await this.execRemoteCapture('printf %s "$HOME"', 'detect_home')).trim();
+    startupStep('detect_home.after', { remoteHome });
     bench('SshExecutor.startManagedWorkspace.detectHome.after', { remoteHome });
     const porcelainScript = buildWorktreeListScript({ repoHash: h, invokerHome });
     bench('SshExecutor.startManagedWorkspace.listWorktrees.before');
+    startupStep('list_worktrees.before', { repoHash: h });
     const porcelain = await this.execRemoteCapture(porcelainScript, 'list_worktrees');
+    startupStep('list_worktrees.after', { bytes: porcelain.length });
     bench('SshExecutor.startManagedWorkspace.listWorktrees.after', { bytes: porcelain.length });
 
     // Expand ~ in invokerHome for path matching
@@ -518,11 +564,17 @@ ${this.buildPayloadExecutionScript(payloadB64)}
       const headScript = buildWorktreeHeadScript(reuseAbs);
       try {
         bench('SshExecutor.startManagedWorkspace.inspectReuseHead.before', { reuseAbs });
+        startupStep('inspect_reuse_head.before', { reuseAbs });
         const head = (await this.execRemoteCapture(headScript)).trim();
         exactBranchCandidate = {
           path: reuseAbs,
           headMatchesTargetBranch: abbrevRefMatchesBranch(head, experimentBranch),
         };
+        startupStep('inspect_reuse_head.after', {
+          reuseAbs,
+          head,
+          headMatchesTargetBranch: exactBranchCandidate.headMatchesTargetBranch,
+        });
         bench('SshExecutor.startManagedWorkspace.inspectReuseHead.after', {
           reuseAbs,
           head,
@@ -530,17 +582,20 @@ ${this.buildPayloadExecutionScript(payloadB64)}
         });
       } catch {
         exactBranchCandidate = undefined;
+        startupStep('inspect_reuse_head.failed', { reuseAbs });
         bench('SshExecutor.startManagedWorkspace.inspectReuseHead.failed', { reuseAbs });
       }
     }
 
     bench('SshExecutor.startManagedWorkspace.planManagedWorktree.before');
+    startupStep('plan_worktree.before', { canonicalRemoteWt });
     const worktreePlan = planManagedWorktree({
       targetBranch: experimentBranch,
       targetWorktreePath: canonicalRemoteWt,
       forceFresh: request.inputs.freshWorkspace === true,
       exactBranchCandidate,
     });
+    startupStep('plan_worktree.after', { planKind: worktreePlan.kind });
     bench('SshExecutor.startManagedWorkspace.planManagedWorktree.after', { planKind: worktreePlan.kind });
 
     let remoteWt = canonicalRemoteWt;
@@ -552,6 +607,11 @@ ${this.buildPayloadExecutionScript(payloadB64)}
         remoteWt = worktreePlan.worktreePath;
         handle.workspacePath =
           remoteWt.startsWith(`${remoteHome}/`) ? `~${remoteWt.slice(remoteHome.length)}` : remoteWt;
+        startupStep('workspace_path_resolved', {
+          workspacePath: handle.workspacePath,
+          branch: experimentBranch,
+          source: 'reuse_exact',
+        });
         break;
       case 'rename_reuse':
         throw new Error('SSH managed workspaces do not support same-task different-branch rename reuse');
@@ -568,7 +628,13 @@ ${this.buildPayloadExecutionScript(payloadB64)}
           bench('SshExecutor.startManagedWorkspace.cleanupWorktree.before', {
             cleanupCount: worktreePlan.cleanupPaths.length,
           });
+          startupStep('cleanup_worktree.before', {
+            cleanupCount: worktreePlan.cleanupPaths.length,
+          });
           await this.execRemoteCapture(cleanupScript, 'cleanup_worktree');
+          startupStep('cleanup_worktree.after', {
+            cleanupCount: worktreePlan.cleanupPaths.length,
+          });
           bench('SshExecutor.startManagedWorkspace.cleanupWorktree.after', {
             cleanupCount: worktreePlan.cleanupPaths.length,
           });
@@ -580,11 +646,18 @@ ${this.buildPayloadExecutionScript(payloadB64)}
 
     if (skippedRemotePreserve) {
       bench('SshExecutor.startManagedWorkspace.mergeRequestUpstreamBranches.before', { remoteWt });
+      startupStep('merge_upstream_branches.before', { remoteWt });
       await this.mergeRequestUpstreamBranches(request, remoteWt, resolvedBaseRef);
+      startupStep('merge_upstream_branches.after', { remoteWt });
       bench('SshExecutor.startManagedWorkspace.mergeRequestUpstreamBranches.after', { remoteWt });
     } else {
       try {
         bench('SshExecutor.startManagedWorkspace.setupTaskBranch.before', {
+          branchName: experimentBranch,
+          base: resolvedBaseRef,
+          remoteWt,
+        });
+        startupStep('setup_task_branch.before', {
           branchName: experimentBranch,
           base: resolvedBaseRef,
           remoteWt,
@@ -594,6 +667,10 @@ ${this.buildPayloadExecutionScript(payloadB64)}
           base: resolvedBaseRef,
           worktreeDir: remoteWt,
         });
+        startupStep('setup_task_branch.after', {
+          branchName: experimentBranch,
+          remoteWt,
+        });
         bench('SshExecutor.startManagedWorkspace.setupTaskBranch.after', {
           branchName: experimentBranch,
           remoteWt,
@@ -601,6 +678,10 @@ ${this.buildPayloadExecutionScript(payloadB64)}
       } catch (err) {
         const wrapped = err instanceof Error ? err : new Error(String(err));
         if (!(wrapped as any).phase) (wrapped as any).phase = 'setup_branch';
+        startupStep('setup_task_branch.failed', {
+          error: wrapped.message,
+          remoteWt,
+        });
         bench('SshExecutor.startManagedWorkspace.setupTaskBranch.failed', {
           error: wrapped.message,
           remoteWt,
@@ -609,11 +690,20 @@ ${this.buildPayloadExecutionScript(payloadB64)}
       }
       handle.workspacePath =
         remoteWt.startsWith(`${remoteHome}/`) ? `~${remoteWt.slice(remoteHome.length)}` : remoteWt;
+      startupStep('workspace_path_resolved', {
+        workspacePath: handle.workspacePath,
+        branch: experimentBranch,
+        source: 'setup_task_branch',
+      });
     }
 
     // Step 4: No-command tasks complete immediately
     if (!request.inputs.command && !request.inputs.prompt) {
       await this.handleProcessExit(executionId, request, remoteWt, 0, {
+        branch: experimentBranch,
+      });
+      startupStep('no_command.returning', {
+        workspacePath: handle.workspacePath,
         branch: experimentBranch,
       });
       bench('SshExecutor.startManagedWorkspace.noCommand.returning', { remoteWt });
@@ -643,9 +733,18 @@ ${this.buildPayloadExecutionScript(payloadB64)}
       workspacePath: handle.workspacePath,
       branch: experimentBranch,
     });
+    startupStep('spawn_payload.before', {
+      remoteWt,
+      workspacePath: handle.workspacePath,
+      branch: experimentBranch,
+    });
     const started = await this.spawnSshRemoteStdin(executionId, request, handle, runScript, agentSessionId, {
       worktreePath: handle.workspacePath!,
       branch: experimentBranch,
+    });
+    startupStep('spawn_payload.after', {
+      workspacePath: started.workspacePath,
+      branch: started.branch,
     });
     bench('SshExecutor.startManagedWorkspace.spawnSshRemoteStdin.after', {
       remoteWt,

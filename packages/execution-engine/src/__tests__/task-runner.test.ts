@@ -112,6 +112,289 @@ afterEach(() => {
 });
 
 describe('TaskRunner', () => {
+  describe('SSH execution resource leases', () => {
+    function createLeasedSshHarness(overrides: {
+      pools?: any;
+      targets?: any;
+      startImpl?: (request: any) => Promise<any>;
+    } = {}) {
+      let completeCallback: ((response: WorkResponse) => void) | undefined;
+      const start = vi.fn().mockImplementation(overrides.startImpl ?? (async (request: any) => ({
+        executionId: `exec-${request.actionId}`,
+        taskId: request.actionId,
+        workspacePath: `/tmp/${request.actionId}`,
+        branch: `experiment/${request.actionId}`,
+      })));
+      const executor = {
+        type: 'ssh',
+        start,
+        onComplete: vi.fn().mockImplementation((_handle: any, cb: any) => {
+          completeCallback = cb;
+          return () => {};
+        }),
+        onOutput: vi.fn().mockReturnValue(() => {}),
+        onHeartbeat: vi.fn().mockReturnValue(() => {}),
+        kill: vi.fn(),
+        destroyAll: vi.fn(),
+      };
+      const registry = {
+        getDefault: () => executor,
+        get: () => executor,
+        getAll: () => [executor],
+        register: vi.fn(),
+      };
+      const tasks = new Map<string, TaskState>();
+      const orchestrator = {
+        getTask: (id: string) => tasks.get(id),
+        handleWorkerResponse: vi.fn(),
+        markTaskRunningAfterLaunch: vi.fn().mockReturnValue(true),
+        deferTask: vi.fn((taskId: string) => {
+          const task = tasks.get(taskId);
+          if (task) tasks.set(taskId, { ...task, status: 'pending' } as TaskState);
+        }),
+        startExecution: vi.fn().mockReturnValue([]),
+      };
+      const leases = new Map<string, Set<string>>();
+      const persistence = {
+        loadWorkflow: vi.fn().mockReturnValue({}),
+        updateTask: vi.fn(),
+        updateAttempt: vi.fn(),
+        appendTaskOutput: vi.fn(),
+        logEvent: vi.fn(),
+        claimExecutionResourceLease: vi.fn((options: any) => {
+          const holders = leases.get(options.resourceKey) ?? new Set<string>();
+          if (holders.size >= options.capacity) return false;
+          holders.add(options.holderId);
+          leases.set(options.resourceKey, holders);
+          return true;
+        }),
+        renewExecutionResourceLease: vi.fn().mockReturnValue(true),
+        releaseExecutionResourceLease: vi.fn((resourceKey: string, holderId: string) => {
+          leases.get(resourceKey)?.delete(holderId);
+        }),
+      };
+      const runner = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        executorRegistry: registry as any,
+        cwd: '/tmp',
+        remoteTargetsProvider: () => overrides.targets ?? {
+          remoteA: { host: 'host', user: 'deploy', sshKeyPath: '~/.ssh/id', port: 22 },
+          remoteB: { host: 'host', user: 'deploy', sshKeyPath: '~/.ssh/id', port: 22 },
+        },
+        executionPoolsProvider: () => overrides.pools ?? {
+          poolA: { members: [{ type: 'ssh', id: 'remoteA' }], selectionStrategy: 'leastLoaded' },
+          poolB: { members: [{ type: 'ssh', id: 'remoteB' }], selectionStrategy: 'leastLoaded' },
+        },
+      });
+      return { runner, executor, orchestrator, persistence, tasks, leases, complete: (response: WorkResponse) => completeCallback?.(response) };
+    }
+
+    it('same SSH target in two pools is leased only once when capacity is 1', async () => {
+      const h = createLeasedSshHarness();
+      const taskA = makeTask({ id: 'task-a', status: 'running', config: { poolId: 'poolA' }, execution: { selectedAttemptId: 'attempt-a' } });
+      const taskB = makeTask({ id: 'task-b', status: 'running', config: { poolId: 'poolB' }, execution: { selectedAttemptId: 'attempt-b' } });
+      h.tasks.set(taskA.id, taskA);
+      h.tasks.set(taskB.id, taskB);
+
+      const runningA = h.runner.executeTask(taskA);
+      await vi.waitFor(() => expect(h.executor.start).toHaveBeenCalledTimes(1));
+      await h.runner.executeTask(taskB);
+
+      expect(h.orchestrator.deferTask).toHaveBeenCalledWith('task-b');
+      expect(h.persistence.logEvent).toHaveBeenCalledWith('task-b', 'task.resource_deferred', expect.objectContaining({
+        resourceKey: 'ssh:deploy@host:22',
+        capacity: 1,
+      }));
+      expect(h.executor.start).toHaveBeenCalledTimes(1);
+      h.complete({
+        requestId: 'req',
+        actionId: taskA.id,
+        attemptId: 'attempt-a',
+        executionGeneration: 0,
+        status: 'completed',
+        outputs: { exitCode: 0 },
+      });
+      await runningA;
+    });
+
+    it('uses the minimum positive limit for the physical SSH target', async () => {
+      const h = createLeasedSshHarness({
+        targets: {
+          remoteA: { host: 'host', user: 'deploy', sshKeyPath: '~/.ssh/id', maxConcurrentTasks: 3 },
+          remoteB: { host: 'host', user: 'deploy', sshKeyPath: '~/.ssh/id' },
+        },
+        pools: {
+          poolA: { members: [{ type: 'ssh', id: 'remoteA', maxConcurrentTasks: 2 }], maxConcurrentTasksPerMember: 4, selectionStrategy: 'leastLoaded' },
+          poolB: { members: [{ type: 'ssh', id: 'remoteB' }], maxConcurrentTasksPerMember: 1, selectionStrategy: 'leastLoaded' },
+        },
+      });
+      const task = makeTask({ id: 'task-a', status: 'running', config: { poolId: 'poolA' }, execution: { selectedAttemptId: 'attempt-a' } });
+      h.tasks.set(task.id, task);
+
+      const running = h.runner.executeTask(task);
+      await vi.waitFor(() => expect(h.persistence.claimExecutionResourceLease).toHaveBeenCalled());
+
+      expect(h.persistence.claimExecutionResourceLease).toHaveBeenCalledWith(expect.objectContaining({
+        resourceKey: 'ssh:deploy@host:22',
+        capacity: 1,
+      }));
+      h.complete({
+        requestId: 'req',
+        actionId: task.id,
+        attemptId: 'attempt-a',
+        executionGeneration: 0,
+        status: 'completed',
+        outputs: { exitCode: 0 },
+      });
+      await running;
+    });
+
+    it('tries another SSH pool member when the first candidate has an external lease', async () => {
+      const h = createLeasedSshHarness({
+        targets: {
+          remoteA: { host: 'host-a', user: 'deploy', sshKeyPath: '~/.ssh/id' },
+          remoteB: { host: 'host-b', user: 'deploy', sshKeyPath: '~/.ssh/id' },
+        },
+        pools: {
+          poolA: {
+            members: [
+              { type: 'ssh', id: 'remoteA' },
+              { type: 'ssh', id: 'remoteB' },
+            ],
+            selectionStrategy: 'leastLoaded',
+            maxConcurrentTasksPerMember: 1,
+          },
+        },
+      });
+      h.leases.set('ssh:deploy@host-a:22', new Set(['external-holder']));
+      const task = makeTask({ id: 'task-a', status: 'running', config: { poolId: 'poolA' }, execution: { selectedAttemptId: 'attempt-a' } });
+      h.tasks.set(task.id, task);
+
+      const running = h.runner.executeTask(task);
+      await vi.waitFor(() => expect(h.executor.start).toHaveBeenCalledTimes(1));
+
+      expect(h.persistence.claimExecutionResourceLease).toHaveBeenCalledWith(expect.objectContaining({
+        resourceKey: 'ssh:deploy@host-a:22',
+      }));
+      expect(h.persistence.claimExecutionResourceLease).toHaveBeenCalledWith(expect.objectContaining({
+        resourceKey: 'ssh:deploy@host-b:22',
+      }));
+      expect(h.persistence.logEvent).not.toHaveBeenCalledWith('task-a', 'task.resource_deferred', expect.anything());
+      h.complete({
+        requestId: 'req',
+        actionId: task.id,
+        attemptId: 'attempt-a',
+        executionGeneration: 0,
+        status: 'completed',
+        outputs: { exitCode: 0 },
+      });
+      await running;
+    });
+
+    it('defers a full SSH pool instead of falling back to worktree', async () => {
+      const sshStart = vi.fn();
+      const worktreeStart = vi.fn();
+      const sshExecutor = {
+        type: 'ssh',
+        start: sshStart,
+        onComplete: vi.fn().mockReturnValue(() => {}),
+        onOutput: vi.fn().mockReturnValue(() => {}),
+        onHeartbeat: vi.fn().mockReturnValue(() => {}),
+        kill: vi.fn(),
+        destroyAll: vi.fn(),
+      };
+      const worktreeExecutor = {
+        type: 'worktree',
+        start: worktreeStart,
+        onComplete: vi.fn().mockReturnValue(() => {}),
+        onOutput: vi.fn().mockReturnValue(() => {}),
+        onHeartbeat: vi.fn().mockReturnValue(() => {}),
+        kill: vi.fn(),
+        destroyAll: vi.fn(),
+      };
+      const registry = {
+        getDefault: () => worktreeExecutor,
+        get: (type: string) => type === 'ssh' ? sshExecutor : type === 'worktree' ? worktreeExecutor : null,
+        getAll: () => [sshExecutor, worktreeExecutor],
+        register: vi.fn(),
+      };
+      const task = makeTask({
+        id: 'task-full',
+        status: 'running',
+        config: { poolId: 'poolA' },
+        execution: { selectedAttemptId: 'attempt-full' },
+      });
+      const orchestrator = {
+        getTask: (id: string) => id === task.id ? task : undefined,
+        handleWorkerResponse: vi.fn(),
+        markTaskRunningAfterLaunch: vi.fn().mockReturnValue(true),
+        deferTask: vi.fn(),
+        startExecution: vi.fn().mockReturnValue([]),
+      };
+      const persistence = {
+        loadWorkflow: vi.fn().mockReturnValue({}),
+        updateTask: vi.fn(),
+        updateAttempt: vi.fn(),
+        appendTaskOutput: vi.fn(),
+        logEvent: vi.fn(),
+        claimExecutionResourceLease: vi.fn().mockReturnValue(false),
+        renewExecutionResourceLease: vi.fn().mockReturnValue(true),
+        releaseExecutionResourceLease: vi.fn(),
+      };
+      const runner = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        executorRegistry: registry as any,
+        cwd: '/tmp',
+        remoteTargetsProvider: () => ({
+          remoteA: { host: 'host', user: 'deploy', sshKeyPath: '~/.ssh/id', port: 22 },
+        }),
+        executionPoolsProvider: () => ({
+          poolA: { members: [{ type: 'ssh', id: 'remoteA' }], selectionStrategy: 'leastLoaded' },
+        }),
+      });
+
+      await runner.executeTask(task);
+
+      expect(orchestrator.deferTask).toHaveBeenCalledWith('task-full');
+      expect(sshStart).not.toHaveBeenCalled();
+      expect(worktreeStart).not.toHaveBeenCalled();
+      expect(persistence.logEvent).toHaveBeenCalledWith('task-full', 'task.resource_deferred', expect.objectContaining({
+        poolId: 'poolA',
+        poolMemberId: 'remoteA',
+        resourceKey: 'ssh:deploy@host:22',
+        capacity: 1,
+      }));
+    });
+
+    it('releases the SSH lease on startup failure and normal completion', async () => {
+      const failing = createLeasedSshHarness({
+        startImpl: async () => { throw new Error('boom'); },
+      });
+      const failTask = makeTask({ id: 'fail-task', status: 'running', config: { poolId: 'poolA' }, execution: { selectedAttemptId: 'attempt-fail' } });
+      failing.tasks.set(failTask.id, failTask);
+      await failing.runner.executeTask(failTask);
+      expect(failing.persistence.releaseExecutionResourceLease).toHaveBeenCalledWith('ssh:deploy@host:22', 'attempt-fail');
+
+      const ok = createLeasedSshHarness();
+      const task = makeTask({ id: 'ok-task', status: 'running', config: { poolId: 'poolA' }, execution: { selectedAttemptId: 'attempt-ok' } });
+      ok.tasks.set(task.id, task);
+      const running = ok.runner.executeTask(task);
+      await vi.waitFor(() => expect(ok.executor.start).toHaveBeenCalled());
+      ok.complete({
+        requestId: 'req',
+        actionId: task.id,
+        attemptId: 'attempt-ok',
+        executionGeneration: 0,
+        status: 'completed',
+        outputs: { exitCode: 0 },
+      });
+      await running;
+      expect(ok.persistence.releaseExecutionResourceLease).toHaveBeenCalledWith('ssh:deploy@host:22', 'attempt-ok');
+    });
+  });
+
   it('sends attemptId and executionGeneration in work requests and preserves them in responses', async () => {
     const handleWorkerResponse = vi.fn();
     let seenRequest: any;

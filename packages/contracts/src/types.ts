@@ -79,6 +79,19 @@ export interface WorkRequest {
    * Non-serializable. Producers and consumers live in the same process.
    */
   onBranchResolved?: (branch: string) => void;
+  /**
+   * In-process callback for structured executor startup phase timings. Used by
+   * managed workspace executors to persist per-task audit events without
+   * depending on text logs.
+   *
+   * Non-serializable. Producers and consumers live in the same process.
+   */
+  onStartupTiming?: (event: {
+    phase: string;
+    elapsedMs: number;
+    deltaMs: number;
+    metadata?: Record<string, unknown>;
+  }) => void;
 }
 
 // ── Work Response ───────────────────────────────────────────
