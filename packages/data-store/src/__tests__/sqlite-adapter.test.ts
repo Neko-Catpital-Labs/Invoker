@@ -1162,6 +1162,137 @@ describe('SQLiteAdapter', () => {
         rmSync(dir, { recursive: true, force: true });
       }
     });
+
+    it('prefers output_spool chunks over task_output rows when both exist', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-output-prefer-spool-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db.saveWorkflow(testWorkflow);
+        db.saveTask('wf-1', makeTask('t-both'));
+
+        // Legacy duplicated history in task_output (this would have been written
+        // by the old flush path that double-wrote runner output).
+        (db as any).db.run(
+          'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+          ['t-both', 'duplicate stream\n'],
+        );
+
+        // Canonical spool data is what should be returned.
+        db.appendOutputChunk('t-both', 'spool line 1\n');
+        db.appendOutputChunk('t-both', 'spool line 2\n');
+
+        expect(db.getTaskOutput('t-both')).toBe('spool line 1\nspool line 2\n');
+
+        db.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('falls back to task_output when no output_spool chunks exist', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-output-fallback-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db.saveWorkflow(testWorkflow);
+        db.saveTask('wf-1', makeTask('t-fallback'));
+
+        (db as any).db.run(
+          'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+          ['t-fallback', 'diagnostic-only\n'],
+        );
+        // No appendOutputChunk calls — only a diagnostic write to task_output.
+
+        expect(db.getTaskOutput('t-fallback')).toBe('diagnostic-only\n');
+
+        db.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('pruneDuplicateTaskOutputRows', () => {
+    it('deletes task_output rows only for tasks that have output_spool rows', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-prune-dup-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db.saveWorkflow(testWorkflow);
+        db.saveTask('wf-1', makeTask('t-dup'));
+        db.saveTask('wf-1', makeTask('t-diag-only'));
+
+        // Duplicated stream: both tables contain rows for t-dup.
+        (db as any).db.run(
+          'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+          ['t-dup', 'duplicate row 1\n'],
+        );
+        (db as any).db.run(
+          'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+          ['t-dup', 'duplicate row 2\n'],
+        );
+        (db as any).db.run(
+          'INSERT INTO output_spool (task_id, offset, data) VALUES (?, ?, ?)',
+          ['t-dup', 0, 'spool stream\n'],
+        );
+
+        // Diagnostic-only task with no spool row — must be preserved.
+        (db as any).db.run(
+          'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+          ['t-diag-only', 'shutdown diagnostic\n'],
+        );
+
+        const result = db.pruneDuplicateTaskOutputRows();
+
+        expect(result.deletedTaskOutputRows).toBe(2);
+        expect(result.backupPath).toBeTruthy();
+        expect(existsSync(result.backupPath!)).toBe(true);
+
+        expect(sqliteScalar(db, "SELECT COUNT(*) FROM task_output WHERE task_id = 't-dup'"))
+          .toBe(0);
+        expect(sqliteScalar(db, "SELECT COUNT(*) FROM task_output WHERE task_id = 't-diag-only'"))
+          .toBe(1);
+
+        // t-dup now reads from spool; t-diag-only still reads from task_output.
+        expect(db.getTaskOutput('t-dup')).toBe('spool stream\n');
+        expect(db.getTaskOutput('t-diag-only')).toBe('shutdown diagnostic\n');
+
+        db.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('skips backup file when backup option is false', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-prune-nobackup-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db.saveWorkflow(testWorkflow);
+        db.saveTask('wf-1', makeTask('t-x'));
+        (db as any).db.run(
+          'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+          ['t-x', 'dup\n'],
+        );
+        (db as any).db.run(
+          'INSERT INTO output_spool (task_id, offset, data) VALUES (?, ?, ?)',
+          ['t-x', 0, 'spool\n'],
+        );
+
+        const result = db.pruneDuplicateTaskOutputRows({ backup: false });
+        expect(result.backupPath).toBeNull();
+        expect(result.deletedTaskOutputRows).toBe(1);
+
+        db.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   // ── Conversations ──────────────────────────────────────
@@ -2732,6 +2863,180 @@ describe('SQLiteAdapter', () => {
       adapter.saveWorkflow(testWorkflow);
       const fence = adapter.enqueueWorkflowMutationIntent('wf-1', 'headless.exec', [{ args: ['recreate', 'wf-1'] }], 'high');
       expect(adapter.evictQueuedWorkflowMutationIntentsBefore('wf-1', fence)).toEqual([]);
+    });
+  });
+
+  describe('queryOne / queryAll statement cleanup', () => {
+    type PreparedHook = (stmt: any) => void;
+
+    function instrumentPrepare(adapter: SQLiteAdapter, hook: PreparedHook = () => {}): {
+      restore: () => void;
+      freeCallsFor: (stmt: any) => number;
+    } {
+      const db = (adapter as any).db;
+      const originalPrepare = db.prepare.bind(db);
+      const freeCounts = new WeakMap<object, number>();
+      db.prepare = (sql: string, ...rest: any[]) => {
+        const stmt = originalPrepare(sql, ...rest);
+        freeCounts.set(stmt, 0);
+        const originalFree = stmt.free.bind(stmt);
+        stmt.free = () => {
+          freeCounts.set(stmt, (freeCounts.get(stmt) ?? 0) + 1);
+          return originalFree();
+        };
+        hook(stmt);
+        return stmt;
+      };
+      return {
+        restore: () => {
+          db.prepare = originalPrepare;
+        },
+        freeCallsFor: (stmt: any) => freeCounts.get(stmt) ?? 0,
+      };
+    }
+
+    it('frees the prepared statement after a successful queryOne', () => {
+      let captured: any;
+      const handle = instrumentPrepare(adapter, (stmt) => {
+        captured = stmt;
+      });
+      try {
+        const row = (adapter as any).queryOne('SELECT 1 AS x') as Record<string, unknown> | undefined;
+        expect(row).toEqual({ x: 1 });
+        expect(handle.freeCallsFor(captured)).toBe(1);
+      } finally {
+        handle.restore();
+      }
+    });
+
+    it('frees the prepared statement after a successful queryAll', () => {
+      let captured: any;
+      const handle = instrumentPrepare(adapter, (stmt) => {
+        captured = stmt;
+      });
+      try {
+        const rows = (adapter as any).queryAll(
+          'SELECT value FROM (SELECT 1 AS value UNION ALL SELECT 2 UNION ALL SELECT 3) ORDER BY value',
+        ) as Array<Record<string, unknown>>;
+        expect(rows.map((r) => r.value)).toEqual([1, 2, 3]);
+        expect(handle.freeCallsFor(captured)).toBe(1);
+      } finally {
+        handle.restore();
+      }
+    });
+
+    it('frees the prepared statement when stmt.step throws inside queryOne', () => {
+      let captured: any;
+      const handle = instrumentPrepare(adapter, (stmt) => {
+        captured = stmt;
+        stmt.step = () => {
+          throw new Error('simulated OOM during step');
+        };
+      });
+      try {
+        expect(() => (adapter as any).queryOne('SELECT 1 AS x')).toThrow('simulated OOM during step');
+        expect(handle.freeCallsFor(captured)).toBe(1);
+      } finally {
+        handle.restore();
+      }
+    });
+
+    it('frees the prepared statement when stmt.getAsObject throws inside queryOne', () => {
+      let captured: any;
+      const handle = instrumentPrepare(adapter, (stmt) => {
+        captured = stmt;
+        stmt.getAsObject = () => {
+          throw new Error('simulated OOM during row materialization');
+        };
+      });
+      try {
+        expect(() => (adapter as any).queryOne('SELECT 1 AS x')).toThrow(
+          'simulated OOM during row materialization',
+        );
+        expect(handle.freeCallsFor(captured)).toBe(1);
+      } finally {
+        handle.restore();
+      }
+    });
+
+    it('frees the prepared statement when stmt.bind throws inside queryOne', () => {
+      let captured: any;
+      const handle = instrumentPrepare(adapter, (stmt) => {
+        captured = stmt;
+        stmt.bind = () => {
+          throw new Error('simulated OOM during bind');
+        };
+      });
+      try {
+        expect(() => (adapter as any).queryOne('SELECT ? AS x', ['v'])).toThrow(
+          'simulated OOM during bind',
+        );
+        expect(handle.freeCallsFor(captured)).toBe(1);
+      } finally {
+        handle.restore();
+      }
+    });
+
+    it('frees the prepared statement when stmt.step throws mid-iteration inside queryAll', () => {
+      let captured: any;
+      const handle = instrumentPrepare(adapter, (stmt) => {
+        captured = stmt;
+        const originalStep = stmt.step.bind(stmt);
+        let calls = 0;
+        stmt.step = () => {
+          calls += 1;
+          if (calls === 2) {
+            throw new Error('simulated OOM mid-iteration');
+          }
+          return originalStep();
+        };
+      });
+      try {
+        expect(() =>
+          (adapter as any).queryAll(
+            'SELECT value FROM (SELECT 1 AS value UNION ALL SELECT 2 UNION ALL SELECT 3) ORDER BY value',
+          ),
+        ).toThrow('simulated OOM mid-iteration');
+        expect(handle.freeCallsFor(captured)).toBe(1);
+      } finally {
+        handle.restore();
+      }
+    });
+
+    it('frees the prepared statement when stmt.getAsObject throws inside queryAll', () => {
+      let captured: any;
+      const handle = instrumentPrepare(adapter, (stmt) => {
+        captured = stmt;
+        stmt.getAsObject = () => {
+          throw new Error('simulated OOM during row materialization');
+        };
+      });
+      try {
+        expect(() =>
+          (adapter as any).queryAll('SELECT 1 AS value'),
+        ).toThrow('simulated OOM during row materialization');
+        expect(handle.freeCallsFor(captured)).toBe(1);
+      } finally {
+        handle.restore();
+      }
+    });
+
+    it('frees the prepared statement when stmt.bind throws inside queryAll', () => {
+      let captured: any;
+      const handle = instrumentPrepare(adapter, (stmt) => {
+        captured = stmt;
+        stmt.bind = () => {
+          throw new Error('simulated OOM during bind');
+        };
+      });
+      try {
+        expect(() => (adapter as any).queryAll('SELECT ? AS x', ['v'])).toThrow(
+          'simulated OOM during bind',
+        );
+        expect(handle.freeCallsFor(captured)).toBe(1);
+      } finally {
+        handle.restore();
+      }
     });
   });
 });
