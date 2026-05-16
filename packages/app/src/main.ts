@@ -1307,7 +1307,8 @@ if (isHeadless) {
     const outputData: TaskOutputData = { taskId, data };
     messageBus.publish(Channels.TASK_OUTPUT, outputData);
     try {
-      persistence.appendTaskOutput(taskId, data);
+      // Runner stream chunks land in the output spool only — task_output is
+      // reserved for explicit diagnostic writes (workflow actions, shutdown).
       persistence.appendOutputChunk(taskId, data);
     } catch (err) {
       logger.error(`Failed to persist output for ${taskId}: ${err}`, { module: 'output' });

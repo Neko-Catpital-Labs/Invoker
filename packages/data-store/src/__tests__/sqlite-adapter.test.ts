@@ -1162,6 +1162,137 @@ describe('SQLiteAdapter', () => {
         rmSync(dir, { recursive: true, force: true });
       }
     });
+
+    it('prefers output_spool chunks over task_output rows when both exist', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-output-prefer-spool-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db.saveWorkflow(testWorkflow);
+        db.saveTask('wf-1', makeTask('t-both'));
+
+        // Legacy duplicated history in task_output (this would have been written
+        // by the old flush path that double-wrote runner output).
+        (db as any).db.run(
+          'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+          ['t-both', 'duplicate stream\n'],
+        );
+
+        // Canonical spool data is what should be returned.
+        db.appendOutputChunk('t-both', 'spool line 1\n');
+        db.appendOutputChunk('t-both', 'spool line 2\n');
+
+        expect(db.getTaskOutput('t-both')).toBe('spool line 1\nspool line 2\n');
+
+        db.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('falls back to task_output when no output_spool chunks exist', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-output-fallback-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db.saveWorkflow(testWorkflow);
+        db.saveTask('wf-1', makeTask('t-fallback'));
+
+        (db as any).db.run(
+          'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+          ['t-fallback', 'diagnostic-only\n'],
+        );
+        // No appendOutputChunk calls — only a diagnostic write to task_output.
+
+        expect(db.getTaskOutput('t-fallback')).toBe('diagnostic-only\n');
+
+        db.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('pruneDuplicateTaskOutputRows', () => {
+    it('deletes task_output rows only for tasks that have output_spool rows', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-prune-dup-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db.saveWorkflow(testWorkflow);
+        db.saveTask('wf-1', makeTask('t-dup'));
+        db.saveTask('wf-1', makeTask('t-diag-only'));
+
+        // Duplicated stream: both tables contain rows for t-dup.
+        (db as any).db.run(
+          'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+          ['t-dup', 'duplicate row 1\n'],
+        );
+        (db as any).db.run(
+          'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+          ['t-dup', 'duplicate row 2\n'],
+        );
+        (db as any).db.run(
+          'INSERT INTO output_spool (task_id, offset, data) VALUES (?, ?, ?)',
+          ['t-dup', 0, 'spool stream\n'],
+        );
+
+        // Diagnostic-only task with no spool row — must be preserved.
+        (db as any).db.run(
+          'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+          ['t-diag-only', 'shutdown diagnostic\n'],
+        );
+
+        const result = db.pruneDuplicateTaskOutputRows();
+
+        expect(result.deletedTaskOutputRows).toBe(2);
+        expect(result.backupPath).toBeTruthy();
+        expect(existsSync(result.backupPath!)).toBe(true);
+
+        expect(sqliteScalar(db, "SELECT COUNT(*) FROM task_output WHERE task_id = 't-dup'"))
+          .toBe(0);
+        expect(sqliteScalar(db, "SELECT COUNT(*) FROM task_output WHERE task_id = 't-diag-only'"))
+          .toBe(1);
+
+        // t-dup now reads from spool; t-diag-only still reads from task_output.
+        expect(db.getTaskOutput('t-dup')).toBe('spool stream\n');
+        expect(db.getTaskOutput('t-diag-only')).toBe('shutdown diagnostic\n');
+
+        db.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('skips backup file when backup option is false', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-prune-nobackup-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db.saveWorkflow(testWorkflow);
+        db.saveTask('wf-1', makeTask('t-x'));
+        (db as any).db.run(
+          'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+          ['t-x', 'dup\n'],
+        );
+        (db as any).db.run(
+          'INSERT INTO output_spool (task_id, offset, data) VALUES (?, ?, ?)',
+          ['t-x', 0, 'spool\n'],
+        );
+
+        const result = db.pruneDuplicateTaskOutputRows({ backup: false });
+        expect(result.backupPath).toBeNull();
+        expect(result.deletedTaskOutputRows).toBe(1);
+
+        db.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   // ── Conversations ──────────────────────────────────────
