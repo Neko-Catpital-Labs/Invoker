@@ -707,7 +707,7 @@ export class TaskRunner {
       // would corrupt the live attempt's state.
       if (
         (meta.workspacePath || meta.branch || meta.agentSessionId || meta.containerId)
-        && !this.isLaunchStale(task.id, attemptId, task.execution.generation ?? 0)
+        && !this.isLaunchStale(task.id, attemptId, startGeneration)
       ) {
         const execution: Record<string, string> = {};
         if (meta.workspacePath) execution.workspacePath = meta.workspacePath;
