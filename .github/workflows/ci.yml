@@ -225,6 +225,8 @@ jobs:
         run: bash scripts/test-suites/required/23-fix-intent-repros.sh
 
   dry-run:
+    # INV-119 selected explicit dry-run shards over a monolithic command so CI
+    # failure names remain tied to the deterministic case groups in the brief.
     needs: build-artifacts
     runs-on: ubuntu-latest
     container:

@@ -121,6 +121,8 @@ suite_name() {
 
 is_parallel_safe() {
   case "$(suite_relpath "$1")" in
+    # INV-119 keeps the three dry-run shards parallel-safe so local proof mode
+    # mirrors the selected CI matrix instead of collapsing them into one run.
     required/05-delete-all-prod-db-guard.sh|required/07-invalid-config-json.sh|required/10-vitest-workspace.sh|required/15-owner-boundary-policy.sh|required/15-submit-workflow-chain.sh|required/20-e2e-dry-run.sh|required/21-e2e-dry-run-downstream.sh|required/22-e2e-dry-run-github.sh|required/50-verify-executor-routing.sh|optional/40-playwright-app.sh|optional/60-worktree-provisioning.sh|optional/70-ui-visual-proof-validate.sh)
       return 0
       ;;
