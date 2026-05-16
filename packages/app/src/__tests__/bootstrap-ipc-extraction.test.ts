@@ -162,4 +162,36 @@ describe('main composition root extraction', () => {
     expect(mainSource).toContain('registerGuiBootstrapLifecycle({');
     expect(mainSource).toContain('createIpcRegistration<WorkflowMutationPriority>({');
   });
+
+  it('delegates window lifecycle and task-runner wiring through extracted modules', () => {
+    const mainSource = readFileSync(join(__dirname, '..', 'main.ts'), 'utf8');
+    const windowLifecycleSource = readFileSync(join(__dirname, '..', 'window', 'window-lifecycle.ts'), 'utf8');
+    const taskRunnerWiringSource = readFileSync(join(__dirname, '..', 'execution', 'task-runner-wiring.ts'), 'utf8');
+
+    expect(mainSource).toContain("from './window/window-lifecycle.js'");
+    expect(mainSource).toContain("from './execution/task-runner-wiring.js'");
+    expect(mainSource).toContain('registerSecondInstanceFocus(app, () => mainWindow)');
+    expect(mainSource).toContain('createMainWindow({');
+    expect(mainSource).toContain('taskExecutor = createTaskRunner({');
+    expect(mainSource).not.toContain('taskExecutor = new TaskRunner({');
+
+    expect(windowLifecycleSource).toContain("mainWindow.webContents.on('render-process-gone'");
+    expect(windowLifecycleSource).toContain("mainWindow.once('ready-to-show', showWindow)");
+    expect(windowLifecycleSource).toContain('mainWindow.webContents.setWindowOpenHandler');
+
+    expect(taskRunnerWiringSource).toContain('new TaskRunner({');
+    expect(taskRunnerWiringSource).toContain('callbacks: options.callbacks');
+    expect(taskRunnerWiringSource).toContain('options.orchestrator.setBeforeApproveHook');
+  });
+
+  it('keeps task dispatch and renderer forwarding flow wired after extraction', () => {
+    const mainSource = readFileSync(join(__dirname, '..', 'main.ts'), 'utf8');
+
+    expect(mainSource).toContain('const started = orchestrator.startExecution();');
+    expect(mainSource).toContain('await requireTaskExecutor().executeTasks(started);');
+    expect(mainSource).toContain('void requireTaskExecutor().executeTasks(filteredTasks)');
+    expect(mainSource).toContain('messageBus.subscribe(Channels.TASK_DELTA, (delta: unknown) => {');
+    expect(mainSource).toContain('sendTaskDeltaToRenderer(delta as TaskDelta);');
+    expect(mainSource).toContain("mainWindow.webContents.send('invoker:task-output', data);");
+  });
 });

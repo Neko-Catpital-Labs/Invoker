@@ -1,4 +1,4 @@
-import type { BrowserWindowConstructorOptions } from 'electron';
+import type { BrowserWindowConstructorOptions, NativeImage } from 'electron';
 
 interface ElectronAppLike {
   whenReady(): Promise<void>;
@@ -32,9 +32,7 @@ interface BrowserWindowConstructor<TWindow extends BrowserWindowLike> {
 }
 
 interface NativeImageLike {
-  createFromPath(path: string): {
-    isEmpty(): boolean;
-  };
+  createFromPath(path: string): NativeImage;
 }
 
 interface BootstrapLogger {

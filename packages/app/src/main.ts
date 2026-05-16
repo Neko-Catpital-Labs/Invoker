@@ -74,7 +74,7 @@ import type { RuntimeServices } from '@invoker/runtime-service';
 import type { MessageBus } from '@invoker/transport';
 import {
   ExecutorRegistry, TaskRunner,
-  DockerExecutor, WorktreeExecutor, SshExecutor, GitHubMergeGateProvider, ReviewProviderRegistry,
+  DockerExecutor, WorktreeExecutor, SshExecutor,
   initializeShellEnvironment,
   RESTART_TO_BRANCH_TRACE,
   remoteFetchForPool,
@@ -165,6 +165,8 @@ import {
   registerGuiBootstrapLifecycle,
 } from './bootstrap/app-bootstrap.js';
 import { createIpcRegistration } from './ipc/ipc-registration.js';
+import { createTaskRunner } from './execution/task-runner-wiring.js';
+import { createMainWindow, registerSecondInstanceFocus } from './window/window-lifecycle.js';
 
 function isTaskInFlightForForcedStop(task: TaskState): boolean {
   return task.status === 'running'
@@ -1526,16 +1528,10 @@ if (isHeadless) {
     return Number.isNaN(parsed.getTime()) ? undefined : parsed;
   };
 
-  // Focus existing window when a second instance is launched
-  app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
-    }
-  });
+  registerSecondInstanceFocus(app, () => mainWindow);
 
   function rebuildTaskRunner(): void {
-    taskExecutor = new TaskRunner({
+    taskExecutor = createTaskRunner({
       orchestrator,
       persistence,
       executorRegistry,
@@ -1548,12 +1544,6 @@ if (isHeadless) {
       },
       remoteTargetsProvider: () => loadConfig().remoteTargets ?? {},
       executionPoolsProvider: () => loadConfig().executionPools ?? {},
-      mergeGateProvider: new GitHubMergeGateProvider(),
-      reviewProviderRegistry: (() => {
-        const registry = new ReviewProviderRegistry();
-        registry.register(new GitHubMergeGateProvider());
-        return registry;
-      })(),
       callbacks: {
         onOutput: (taskId, data) => {
           enqueueTaskOutput(taskId, data);
@@ -1615,17 +1605,6 @@ if (isHeadless) {
           launchingTasks.delete(taskId);
         },
       },
-    });
-    wireApproveHook();
-  }
-
-  function wireApproveHook(): void {
-    orchestrator.setBeforeApproveHook(async (task) => {
-      if (task.config.isMergeNode && task.config.workflowId && task.execution.pendingFixError === undefined) {
-        const workflow = persistence.loadWorkflow(task.config.workflowId);
-        if (workflow?.mergeMode === "external_review") return; // external review is the merge mechanism
-        await requireTaskExecutor().approveMerge(task.config.workflowId);
-      }
     });
   }
 
@@ -2075,77 +2054,31 @@ if (isHeadless) {
   });
 
   function createWindow(): void {
-    createInvokerWindow({
+    createMainWindow({
       BrowserWindow,
       nativeImage,
+      shell,
+      spawn,
       dirname: __dirname,
       platform: process.platform,
       devServerUrl: process.env.VITE_DEV_SERVER_URL,
       existsSync,
       joinPath: path.join,
       logger,
-      recordStartupMark,
-      onWindowCreated: (window) => {
-        mainWindow = window;
-      },
+      browserCommand: invokerConfig.browser,
+      enableTestCompositor,
+      nodeEnv: process.env.NODE_ENV,
       fallbackHtml:
         'data:text/html,<html><body style="background:#1a1a2e;color:#eee;font-family:system-ui;padding:2rem"><h1>Invoker</h1><p>UI not built yet. Run: <code>pnpm --filter @invoker/ui build</code></p></body></html>',
-    });
-
-    mainWindow.webContents.on('render-process-gone', (_event, details) => {
-      logger.error(
-        `main window render-process-gone: reason=${details.reason} exitCode=${details.exitCode}`,
-        { module: 'window' },
-      );
-    });
-
-    const shouldShowWindow = process.env.NODE_ENV !== 'test' || enableTestCompositor;
-    if (shouldShowWindow) {
-      let showTriggered = false;
-      const showWindow = (): void => {
-        if (!mainWindow || mainWindow.isDestroyed() || showTriggered) return;
-        showTriggered = true;
-        logger.info('main window show()', { module: 'window' });
-        recordStartupMark('window.show');
-        mainWindow.show();
-        mainWindow.focus();
-        uiInteractive = true;
-        recordStartupMark('ui.interactive');
-        startDeferredStartupWork();
-      };
-
-      mainWindow.once('ready-to-show', showWindow);
-      setTimeout(showWindow, 1500).unref?.();
-    } else {
-      uiInteractive = true;
-      recordStartupMark('ui.interactive');
-      startDeferredStartupWork();
-    }
-
-    mainWindow.on('closed', () => {
-      logger.info('main window closed', { module: 'window' });
-      mainWindow = null;
-    });
-
-    mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-      if (url.startsWith('https://') || url.startsWith('http://')) {
-        const browserCmd = invokerConfig.browser;
-        if (browserCmd) {
-          spawn(browserCmd, [url], { detached: true, stdio: 'ignore' }).unref();
-        } else {
-          const chromeCmd: [string, string[]] = process.platform === 'darwin'
-            ? ['open', ['-a', 'Google Chrome', url]]
-            : process.platform === 'win32'
-              ? ['cmd', ['/c', 'start', 'chrome', url]]
-              : ['google-chrome', [url]];
-          try {
-            spawn(chromeCmd[0], chromeCmd[1], { detached: true, stdio: 'ignore' }).unref();
-          } catch {
-            shell.openExternal(url);
-          }
-        }
-      }
-      return { action: 'deny' as const };
+      createInvokerWindow,
+      recordStartupMark,
+      setMainWindow: (window) => {
+        mainWindow = window;
+      },
+      setUiInteractive: (value) => {
+        uiInteractive = value;
+      },
+      startDeferredStartupWork,
     });
   }
 
