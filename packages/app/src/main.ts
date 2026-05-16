@@ -74,7 +74,7 @@ import type { RuntimeServices } from '@invoker/runtime-service';
 import type { MessageBus } from '@invoker/transport';
 import {
   ExecutorRegistry, TaskRunner,
-  DockerExecutor, WorktreeExecutor, SshExecutor, GitHubMergeGateProvider, ReviewProviderRegistry,
+  DockerExecutor, WorktreeExecutor, SshExecutor,
   initializeShellEnvironment,
   RESTART_TO_BRANCH_TRACE,
   remoteFetchForPool,
@@ -160,6 +160,13 @@ import {
   buildActionGraphDiagnostics,
   resolveActionDiagnosticsStallThresholdMs,
 } from './action-graph-diagnostics.js';
+import {
+  createInvokerWindow,
+  registerGuiBootstrapLifecycle,
+} from './bootstrap/app-bootstrap.js';
+import { createIpcRegistration } from './ipc/ipc-registration.js';
+import { createTaskRunner } from './execution/task-runner-wiring.js';
+import { createMainWindow, registerSecondInstanceFocus } from './window/window-lifecycle.js';
 
 function isTaskInFlightForForcedStop(task: TaskState): boolean {
   return task.status === 'running'
@@ -1521,16 +1528,10 @@ if (isHeadless) {
     return Number.isNaN(parsed.getTime()) ? undefined : parsed;
   };
 
-  // Focus existing window when a second instance is launched
-  app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
-    }
-  });
+  registerSecondInstanceFocus(app, () => mainWindow);
 
   function rebuildTaskRunner(): void {
-    taskExecutor = new TaskRunner({
+    taskExecutor = createTaskRunner({
       orchestrator,
       persistence,
       executorRegistry,
@@ -1543,12 +1544,6 @@ if (isHeadless) {
       },
       remoteTargetsProvider: () => loadConfig().remoteTargets ?? {},
       executionPoolsProvider: () => loadConfig().executionPools ?? {},
-      mergeGateProvider: new GitHubMergeGateProvider(),
-      reviewProviderRegistry: (() => {
-        const registry = new ReviewProviderRegistry();
-        registry.register(new GitHubMergeGateProvider());
-        return registry;
-      })(),
       callbacks: {
         onOutput: (taskId, data) => {
           enqueueTaskOutput(taskId, data);
@@ -1610,17 +1605,6 @@ if (isHeadless) {
           launchingTasks.delete(taskId);
         },
       },
-    });
-    wireApproveHook();
-  }
-
-  function wireApproveHook(): void {
-    orchestrator.setBeforeApproveHook(async (task) => {
-      if (task.config.isMergeNode && task.config.workflowId && task.execution.pendingFixError === undefined) {
-        const workflow = persistence.loadWorkflow(task.config.workflowId);
-        if (workflow?.mergeMode === "external_review") return; // external review is the merge mechanism
-        await requireTaskExecutor().approveMerge(task.config.workflowId);
-      }
     });
   }
 
@@ -2055,149 +2039,46 @@ if (isHeadless) {
     });
   }
 
-  function registerGuiMutationHandler<TResult = unknown>(
-    channel: string,
-    handler: (...args: unknown[]) => Promise<TResult>,
-  ): void {
-    guiMutationHandlers.set(channel, handler as (...args: unknown[]) => Promise<unknown>);
-    ipcMain.handle(channel, async (_event, ...args: unknown[]) => {
-      if (ownerMode) {
-        return handler(...args);
-      }
-      const translated = translateGuiMutationToHeadless({ channel, args });
-      if (!translated) {
-        throw new Error(`No owner delegation route is available for ${channel}`);
-      }
-      try {
-        return await messageBus.request<typeof translated.request, TResult>(translated.channel, translated.request);
-      } catch (err) {
-        if (err instanceof TransportError && err.code === TransportErrorCode.NO_HANDLER) {
-          throw new Error('No mutation owner is available');
-        }
-        throw err;
-      }
-    });
-  }
-
-  function registerWorkflowScopedGuiMutationHandler<TResult = unknown>(
-    channel: string,
-    resolveWorkflowId: (...args: unknown[]) => string | undefined,
-    priority: WorkflowMutationPriority,
-    handler: (...args: unknown[]) => Promise<TResult>,
-  ): void {
-    workflowMutationDispatcher.set(channel, (...args: unknown[]) => handler(...args));
-    registerGuiMutationHandler(channel, async (...args: unknown[]) => {
-      const workflowId = resolveWorkflowId(...args);
-      return runWorkflowMutation(workflowId, priority, channel, args, () => handler(...args));
-    });
-  }
+  const {
+    registerGuiMutationHandler,
+    registerWorkflowScopedGuiMutationHandler,
+  } = createIpcRegistration<WorkflowMutationPriority>({
+    ipcMain,
+    guiMutationHandlers,
+    workflowMutationDispatcher,
+    isOwnerMode: () => ownerMode,
+    getMessageBus: () => messageBus,
+    translateGuiMutationToHeadless,
+    isMissingOwnerError: (err) => err instanceof TransportError && err.code === TransportErrorCode.NO_HANDLER,
+    runWorkflowMutation,
+  });
 
   function createWindow(): void {
-    recordStartupMark('createWindow.begin');
-    const iconPath = path.join(__dirname, 'assets', 'icons', 'png', '256x256.png');
-    const icon = nativeImage.createFromPath(iconPath);
-    mainWindow = new BrowserWindow({
-      width: 1200,
-      height: 800,
-      // Show explicitly after load/timeout rather than relying on Electron's
-      // implicit initial map behavior, which has regressed on some Linux/X11
-      // sessions and leaves the BrowserWindow unmapped.
-      show: false,
-      webPreferences: {
-        preload: path.join(__dirname, 'preload.js'),
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: false,
+    createMainWindow({
+      BrowserWindow,
+      nativeImage,
+      shell,
+      spawn,
+      dirname: __dirname,
+      platform: process.platform,
+      devServerUrl: process.env.VITE_DEV_SERVER_URL,
+      existsSync,
+      joinPath: path.join,
+      logger,
+      browserCommand: invokerConfig.browser,
+      enableTestCompositor,
+      nodeEnv: process.env.NODE_ENV,
+      fallbackHtml:
+        'data:text/html,<html><body style="background:#1a1a2e;color:#eee;font-family:system-ui;padding:2rem"><h1>Invoker</h1><p>UI not built yet. Run: <code>pnpm --filter @invoker/ui build</code></p></body></html>',
+      createInvokerWindow,
+      recordStartupMark,
+      setMainWindow: (window) => {
+        mainWindow = window;
       },
-      icon: !icon.isEmpty() && process.platform !== 'darwin' ? icon : undefined,
-      title: 'Invoker',
-    });
-
-    // BrowserWindow icons matter on Windows/Linux. macOS uses the bundle icon.
-    if (process.platform !== 'darwin') {
-      if (!icon.isEmpty()) mainWindow.setIcon(icon);
-    }
-
-    const devUrl = process.env.VITE_DEV_SERVER_URL;
-    if (devUrl) {
-      mainWindow.loadURL(devUrl);
-    } else {
-      const packagedUiPath = path.join(__dirname, 'ui', 'index.html');
-      const repoUiPath = path.join(__dirname, '..', '..', 'ui', 'dist', 'index.html');
-      const uiDistPath = existsSync(packagedUiPath) ? packagedUiPath : repoUiPath;
-      mainWindow.loadFile(uiDistPath).catch(() => {
-        mainWindow?.loadURL(
-          `data:text/html,<html><body style="background:#1a1a2e;color:#eee;font-family:system-ui;padding:2rem"><h1>Invoker</h1><p>UI not built yet. Run: <code>pnpm --filter @invoker/ui build</code></p></body></html>`,
-        );
-      });
-    }
-
-    mainWindow.webContents.on('did-finish-load', () => {
-      logger.info('main window did-finish-load', { module: 'window' });
-      recordStartupMark('window.did-finish-load');
-    });
-
-    mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
-      logger.error(
-        `main window did-fail-load: code=${errorCode} desc=${errorDescription} url=${validatedURL}`,
-        { module: 'window' },
-      );
-    });
-
-    mainWindow.webContents.on('render-process-gone', (_event, details) => {
-      logger.error(
-        `main window render-process-gone: reason=${details.reason} exitCode=${details.exitCode}`,
-        { module: 'window' },
-      );
-    });
-
-    const shouldShowWindow = process.env.NODE_ENV !== 'test' || enableTestCompositor;
-    if (shouldShowWindow) {
-      let showTriggered = false;
-      const showWindow = (): void => {
-        if (!mainWindow || mainWindow.isDestroyed() || showTriggered) return;
-        showTriggered = true;
-        logger.info('main window show()', { module: 'window' });
-        recordStartupMark('window.show');
-        mainWindow.show();
-        mainWindow.focus();
-        uiInteractive = true;
-        recordStartupMark('ui.interactive');
-        startDeferredStartupWork();
-      };
-
-      mainWindow.once('ready-to-show', showWindow);
-      setTimeout(showWindow, 1500).unref?.();
-    } else {
-      uiInteractive = true;
-      recordStartupMark('ui.interactive');
-      startDeferredStartupWork();
-    }
-
-    mainWindow.on('closed', () => {
-      logger.info('main window closed', { module: 'window' });
-      mainWindow = null;
-    });
-
-    mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-      if (url.startsWith('https://') || url.startsWith('http://')) {
-        const browserCmd = invokerConfig.browser;
-        if (browserCmd) {
-          spawn(browserCmd, [url], { detached: true, stdio: 'ignore' }).unref();
-        } else {
-          const chromeCmd: [string, string[]] = process.platform === 'darwin'
-            ? ['open', ['-a', 'Google Chrome', url]]
-            : process.platform === 'win32'
-              ? ['cmd', ['/c', 'start', 'chrome', url]]
-              : ['google-chrome', [url]];
-          try {
-            spawn(chromeCmd[0], chromeCmd[1], { detached: true, stdio: 'ignore' }).unref();
-          } catch {
-            shell.openExternal(url);
-          }
-        }
-      }
-      return { action: 'deny' as const };
+      setUiInteractive: (value) => {
+        uiInteractive = value;
+      },
+      startDeferredStartupWork,
     });
   }
 
@@ -2529,50 +2410,56 @@ if (isHeadless) {
     }, 0);
   }
 
-  app.whenReady().then(async () => {
-    recordStartupMark('app.whenReady');
-    ownerMode = true;
-    try {
-      recordStartupMark('initServices.start');
-      await initServices({ executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
-      recordStartupMark('initServices.end', { ownerMode: true });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (!message.includes('[db-writer-lock]')) {
-        process.stderr.write(`${RED}Error:${RESET} ${message}\n`);
-        app.quit();
-        return;
-      }
-      recordStartupMark('initServices.readOnly.start');
-      await initServices({ readOnly: true, executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
-      ownerMode = false;
-      recordStartupMark('initServices.readOnly.end', { ownerMode: false });
-    }
+  let isQuitting = false;
 
-    if (ownerMode) {
-      rebuildTaskRunner();
-      workflowMutationCoordinator = new PersistedWorkflowMutationCoordinator(
-        persistence,
-        workflowMutationOwnerId,
-        async (channel: string, args: unknown[], context) => {
-          const handler = workflowMutationDispatcher.get(channel);
-          if (!handler) {
-            throw new Error(`No workflow mutation dispatcher registered for ${channel}`);
-          }
-          activeMutationContext = context;
-          try {
-            return await handler(...args);
-          } finally {
-            activeMutationContext = undefined;
-          }
-        },
-        { logger },
-      );
-    } else {
-      logger.info('Launched in follower mode; mutation execution is delegated to the current owner', {
-        module: 'init',
-      });
-    }
+  registerGuiBootstrapLifecycle({
+    app,
+    BrowserWindow,
+    createWindow,
+    onReady: async () => {
+      recordStartupMark('app.whenReady');
+      ownerMode = true;
+      try {
+        recordStartupMark('initServices.start');
+        await initServices({ executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
+        recordStartupMark('initServices.end', { ownerMode: true });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (!message.includes('[db-writer-lock]')) {
+          process.stderr.write(`${RED}Error:${RESET} ${message}\n`);
+          app.quit();
+          return;
+        }
+        recordStartupMark('initServices.readOnly.start');
+        await initServices({ readOnly: true, executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
+        ownerMode = false;
+        recordStartupMark('initServices.readOnly.end', { ownerMode: false });
+      }
+
+      if (ownerMode) {
+        rebuildTaskRunner();
+        workflowMutationCoordinator = new PersistedWorkflowMutationCoordinator(
+          persistence,
+          workflowMutationOwnerId,
+          async (channel: string, args: unknown[], context) => {
+            const handler = workflowMutationDispatcher.get(channel);
+            if (!handler) {
+              throw new Error(`No workflow mutation dispatcher registered for ${channel}`);
+            }
+            activeMutationContext = context;
+            try {
+              return await handler(...args);
+            } finally {
+              activeMutationContext = undefined;
+            }
+          },
+          { logger },
+        );
+      } else {
+        logger.info('Launched in follower mode; mutation execution is delegated to the current owner', {
+          module: 'init',
+        });
+      }
 
     // ── IPC Delegation Handlers — peer → owner ────────────────
     // Peer processes delegate write-heavy commands to the owner process via IpcBus.
@@ -3869,73 +3756,67 @@ if (isHeadless) {
     createWindow();
     recordStartupMark('createWindow.end');
 
-    app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
-        createWindow();
-      }
-    });
-  }).catch((err) => {
-    process.stderr.write(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
-    app.quit();
-  });
-
-  app.on('window-all-closed', () => {
-    logger.info('window-all-closed', { module: 'window' });
-    if (process.platform !== 'darwin') {
+    },
+    onReadyError: (err) => {
+      process.stderr.write(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
       app.quit();
-    }
-  });
-
-  let isQuitting = false;
-  app.on('before-quit', async (event) => {
-    if (isQuitting) return;
-    isQuitting = true;
-    logger.info('before-quit begin', { module: 'process' });
-    event.preventDefault();
-
-    const safetyTimer = setTimeout(() => {
-      console.error('[quit] Cleanup timed out after 10s, forcing exit');
-      process.exit(1);
-    }, 10_000);
-
-    try {
-      if (apiServer) await apiServer.close().catch(() => {});
-      if (dbPollInterval) clearInterval(dbPollInterval);
-      if (activityPollInterval) clearInterval(activityPollInterval);
-      if (uiPerfLogInterval) clearInterval(uiPerfLogInterval);
-      if (hourlyBackupInterval) {
-        clearInterval(hourlyBackupInterval);
-        hourlyBackupInterval = null;
+    },
+    onWindowAllClosed: () => {
+      logger.info('window-all-closed', { module: 'window' });
+      if (process.platform !== 'darwin') {
+        app.quit();
       }
-      if (executorRegistry) {
-        await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));
-      }
-      if (orchestrator) {
-        for (const task of orchestrator.getAllTasks()) {
-          if (task.status === 'running' || task.status === 'fixing_with_ai') {
-            if (persistence) {
-              persistShutdownDiagnostic(task, persistence, {
-                flushPendingOutput: flushTaskOutput,
+    },
+    onBeforeQuit: async (event) => {
+      if (isQuitting) return;
+      isQuitting = true;
+      logger.info('before-quit begin', { module: 'process' });
+      event.preventDefault();
+
+      const safetyTimer = setTimeout(() => {
+        console.error('[quit] Cleanup timed out after 10s, forcing exit');
+        process.exit(1);
+      }, 10_000);
+
+      try {
+        if (apiServer) await apiServer.close().catch(() => {});
+        if (dbPollInterval) clearInterval(dbPollInterval);
+        if (activityPollInterval) clearInterval(activityPollInterval);
+        if (uiPerfLogInterval) clearInterval(uiPerfLogInterval);
+        if (hourlyBackupInterval) {
+          clearInterval(hourlyBackupInterval);
+          hourlyBackupInterval = null;
+        }
+        if (executorRegistry) {
+          await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));
+        }
+        if (orchestrator) {
+          for (const task of orchestrator.getAllTasks()) {
+            if (task.status === 'running' || task.status === 'fixing_with_ai') {
+              if (persistence) {
+                persistShutdownDiagnostic(task, persistence, {
+                  flushPendingOutput: flushTaskOutput,
+                });
+              }
+              orchestrator.handleWorkerResponse({
+                requestId: `quit-${task.id}`,
+                actionId: task.id,
+                executionGeneration: task.execution.generation ?? 0,
+                status: 'failed',
+                outputs: { exitCode: 1, error: 'Application quit' },
               });
             }
-            orchestrator.handleWorkerResponse({
-              requestId: `quit-${task.id}`,
-              actionId: task.id,
-              executionGeneration: task.execution.generation ?? 0,
-              status: 'failed',
-              outputs: { exitCode: 1, error: 'Application quit' },
-            });
           }
         }
+        if (persistence) persistence.close();
+        if (writerLock) writerLock.release();
+        if (messageBus) messageBus.disconnect();
+      } finally {
+        clearTimeout(safetyTimer);
+        logger.info('before-quit end -> app.exit(0)', { module: 'process' });
+        app.exit(0);
       }
-      if (persistence) persistence.close();
-      if (writerLock) writerLock.release();
-      if (messageBus) messageBus.disconnect();
-    } finally {
-      clearTimeout(safetyTimer);
-      logger.info('before-quit end -> app.exit(0)', { module: 'process' });
-      app.exit(0);
-    }
+    },
   });
 
   // ── Slack Bot (embedded in GUI process) ──────────────────
