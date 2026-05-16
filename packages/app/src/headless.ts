@@ -61,6 +61,8 @@ import type { RuntimeServices } from '@invoker/runtime-service';
 
 export { bumpGenerationAndRecreate } from './workflow-actions.js';
 export {
+  DEFAULT_DELEGATION_TIMEOUT_MS,
+  WORKFLOW_DELEGATION_TIMEOUT_MS,
   delegationTimeoutMs,
   isDelegated,
   resolveDelegationTimeoutMs,
