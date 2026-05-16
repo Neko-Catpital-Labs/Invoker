@@ -69,7 +69,7 @@ export class TaskScheduler {
     }
 
     let removed = 0;
-    for (const attemptId of attemptIds) {
+    for (const attemptId of Array.from(attemptIds)) {
       if (this.removeRunningAttempt(attemptId)) {
         removed += 1;
       }
@@ -98,7 +98,9 @@ export class TaskScheduler {
    * Remove and return the next queued job without mutating the running set.
    *
    * Orchestrator uses this when persisted attempt leases, not in-memory state,
-   * are the source of truth for occupancy.
+   * are the source of truth for occupancy. Keep this scheduler free of I/O so
+   * INV-143's selected runtime-owner design remains deterministic under unit
+   * proof.
    */
   takeNext(): TaskJob | null {
     if (this.queue.length === 0) {
