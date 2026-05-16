@@ -109,15 +109,14 @@ Rules:
 3. Keep plans focused — 3-8 tasks maximum.
 4. File-count guidance is a soft heuristic, not a hard validator gate. Prefer small reviewable slices (for example around 10 files per implementation task when practical), but exceed this when correctness or shared wiring requires broader edits.
 5. Each task should have either a \`command\` or a \`prompt\`, not both.
-6. Every step MUST be testable. Every implementation task MUST have a corresponding test task that verifies it works using a concrete, executable \`command\` (e.g. \`cd packages/protocol && pnpm test\`, \`git diff --name-only\`). The test command must produce a clear pass/fail exit code. Do NOT skip tests for any step. Do NOT use prompts for test tasks — use commands only.
+6. Every step MUST be testable. Every implementation task MUST have a corresponding test task that verifies it works using a concrete, executable \`command\` discovered from the target repo (e.g. that repo's package scripts, build commands, or focused checks such as \`git diff --name-only\`). The test command must produce a clear pass/fail exit code. Do NOT skip tests for any step. Do NOT use prompts for test tasks — use commands only.
    Test command rules:
-   - For focused package tests, ALWAYS cd into the package directory first: \`cd packages/<pkg> && pnpm test\`
-   - To target a specific test file: \`cd packages/<pkg> && pnpm test -- src/__tests__/file.test.ts\`
-   - NEVER run \`pnpm test <path>\` from the repo root — it runs \`pnpm -r test\` across all packages and the path will be wrong
-   - NEVER use \`npx vitest run\` — always use \`pnpm test\` which runs the package.json test script
-   - For implementation plans (\`onFinish\` is not \`none\`), the FINAL task MUST be a \`command\` task that runs \`pnpm run test:all\` from the repo root
-   - That final \`pnpm run test:all\` task MUST depend on every earlier task so it is the terminal regression gate
-   - If Invoker config auto-routes heavyweight commands, keep \`pnpm ...\` as a normal command unless the task must name a specific remote target
+   - Inspect repo manifests and existing docs/scripts before choosing commands.
+   - Use the package manager and test runner the target repo already uses; do not impose Invoker-specific commands on external repos.
+   - For focused package tests in a monorepo, run from the relevant package/workspace directory or use the repo's documented workspace filter.
+   - To target a specific test file, use the syntax supported by the discovered test script.
+   - Prefer focused verification during iteration and reserve broad/full-suite commands for the final gate only when the target repo documents such a command.
+   - If Invoker config auto-routes heavyweight commands, keep discovered test/build commands as normal command tasks unless the task must name a specific remote target
    - NEVER invent test file names. Verify the test file exists before referencing it in a command.
 7. Use meaningful task IDs (kebab-case).
 8. When ready, output the plan inside a \`\`\`yaml code block.
@@ -434,31 +433,11 @@ export function globToRegex(pattern: string): RegExp {
   return new RegExp(`^${escaped}$`);
 }
 
-// ── Command Rewriting ────────────────────────────────────────
-
-/**
- * Rewrite `pnpm test packages/<pkg>/...` (run from repo root, incorrect)
- * into `cd packages/<pkg> && pnpm test -- <relative-path>` (correct).
- */
-export function rewritePnpmTestCommand(cmd: string): string {
-  const withFile = cmd.match(/^(pnpm test)\s+(?:--\s+)?packages\/([^/\s]+)\/(\S+)(.*)/);
-  if (withFile) {
-    const [, , pkg, rest, suffix] = withFile;
-    return `cd packages/${pkg} && pnpm test -- ${rest}${suffix}`;
-  }
-  const pkgOnly = cmd.match(/^(pnpm test)\s+(?:--\s+)?packages\/([^/\s]+)(.*)/);
-  if (pkgOnly) {
-    const [, , pkg, suffix] = pkgOnly;
-    return `cd packages/${pkg} && pnpm test${suffix}`;
-  }
-  return cmd;
-}
-
 // ── YAML Extraction ─────────────────────────────────────────
 
 /**
  * Extract and validate a YAML plan from a message containing ```yaml blocks.
- * Returns the raw YAML string (with command rewrites applied) or null if invalid.
+ * Returns the raw YAML string or null if invalid.
  * Defaulting (onFinish, baseBranch, mergeMode, etc.) is NOT applied here —
  * callers should pass the returned string through parsePlan() for that.
  */
@@ -503,20 +482,9 @@ export function extractYamlPlan(text: string): string | null {
         console.warn(`extractYamlPlan: task missing id or description: ${JSON.stringify(task).slice(0, 120)}`);
         return null;
       }
-      if (task.command && /\bnpx vitest run\b/.test(task.command)) {
-        console.warn(`extractYamlPlan: task "${task.id}" uses 'npx vitest run' — rewriting to 'pnpm test'`);
-        task.command = task.command.replace(/\bnpx vitest run\b/, 'pnpm test');
-      }
-      if (task.command && /\bpnpm test\b.*\bpackages\//.test(task.command)) {
-        const rewritten = rewritePnpmTestCommand(task.command);
-        if (rewritten !== task.command) {
-          console.warn(`extractYamlPlan: task "${task.id}" uses root-level 'pnpm test packages/...' — rewriting to '${rewritten}'`);
-          task.command = rewritten;
-        }
-      }
     }
 
-    // Return serialized YAML (with command rewrites applied) — no defaulting
+    // Return serialized YAML as provided — no defaulting or repo-specific command rewriting.
     return stringifyYaml(plan);
   } catch (err) {
     console.warn(`extractYamlPlan: YAML parse error: ${err instanceof Error ? err.message : String(err)}`);

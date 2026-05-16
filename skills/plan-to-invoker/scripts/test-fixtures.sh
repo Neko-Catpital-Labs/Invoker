@@ -424,10 +424,151 @@ EOF
     return 1
   fi
 
-  if ! grep -q 'must be the final regression gate and run exactly "pnpm run test:all"' <<<"$output"; then
+  if ! grep -q 'must be the final full-suite regression gate and run exactly "pnpm run test:all"' <<<"$output"; then
     echo "Expected final gate command error, got: $output" >&2
     return 1
   fi
+}
+
+test_lint_allows_nonterminal_stack_workflow_without_test_all() {
+  local temp_dir first_plan second_plan stack_manifest
+  temp_dir=$(mktemp -d)
+  trap "rm -rf $temp_dir" RETURN
+  first_plan="$temp_dir/stack-step-1.yaml"
+  second_plan="$temp_dir/stack-step-2.yaml"
+  stack_manifest="$temp_dir/stack-manifest.json"
+
+  cat > "$first_plan" <<'EOF'
+name: "Stack step 1 without full-suite gate"
+description: "First implementation workflow in a stack with focused verification only."
+onFinish: pull_request
+mergeMode: github
+repoUrl: git@github.com:example-org/acme-repo.git
+featureBranch: plan/stack-step-1
+tasks:
+  - id: implement-surface
+    description: |
+      Goal:
+      - Implement the first stacked workflow surface change.
+      Motivation:
+      - Keep non-terminal stack workflows fast while preserving focused verification.
+      Alternative considerations:
+      - Option A (chosen): focused package verification before the PR gate.
+      - Option B: repeat full-suite verification in every stack layer.
+      Implementation details:
+      - Update packages/foo/src/surface.ts with the stack step one behavior.
+      Layer: contact_surface
+      Feature state: active
+      Files:
+      - packages/foo/src/surface.ts
+      Change types:
+      - Implementation update.
+      Acceptance criteria:
+      - The focused package verification task passes.
+    prompt: |
+      Goal:
+      - Implement the first stacked workflow surface change in packages/foo/src/surface.ts.
+      Motivation:
+      - Keep non-terminal stack workflows fast while preserving focused verification.
+      Alternative considerations:
+      - Option A (chosen): focused package verification before the PR gate.
+      - Option B: repeat full-suite verification in every stack layer.
+      Implementation details:
+      - Assume no prior context. Update packages/foo/src/surface.ts with the stack step one behavior.
+      Acceptance criteria:
+      - Pass condition: focused package tests exit code 0 after this change.
+    dependencies: []
+  - id: verify-surface
+    description: |
+      Goal:
+      - Run focused verification for the first stacked workflow.
+      Motivation:
+      - Catch local regressions without paying for the stack-level full suite.
+      Alternative considerations:
+      - Option A (chosen): package-scoped test command.
+      - Option B: root full-suite test in every stack layer.
+      Implementation details:
+      - Execute the package test lane for packages/foo.
+      Layer: app_regression
+      Feature state: active
+    command: "cd packages/foo && pnpm test"
+    dependencies: [implement-surface]
+EOF
+
+  cat > "$second_plan" <<'EOF'
+name: "Stack step 2 terminal full-suite gate"
+description: "Terminal implementation workflow in a stack with the full regression gate."
+onFinish: pull_request
+mergeMode: github
+repoUrl: git@github.com:example-org/acme-repo.git
+baseBranch: plan/stack-step-1
+featureBranch: plan/stack-step-2
+externalDependencies:
+  - workflowId: wf-upstream
+    taskId: "__merge__"
+    requiredStatus: completed
+    gatePolicy: completed
+tasks:
+  - id: implement-terminal-surface
+    description: |
+      Goal:
+      - Implement the terminal stacked workflow surface change.
+      Motivation:
+      - Validate the integrated stack at the final workflow only.
+      Alternative considerations:
+      - Option A (chosen): one full-suite gate at stack end.
+      - Option B: repeat full-suite verification in every stack layer.
+      Implementation details:
+      - Update packages/foo/src/terminal-surface.ts with the stack terminal behavior.
+      Layer: contact_surface
+      Feature state: active
+      Files:
+      - packages/foo/src/terminal-surface.ts
+      Change types:
+      - Implementation update.
+      Acceptance criteria:
+      - The terminal full-suite gate passes.
+    prompt: |
+      Goal:
+      - Implement the terminal stacked workflow surface change in packages/foo/src/terminal-surface.ts.
+      Motivation:
+      - Validate the integrated stack at the final workflow only.
+      Alternative considerations:
+      - Option A (chosen): one full-suite gate at stack end.
+      - Option B: repeat full-suite verification in every stack layer.
+      Implementation details:
+      - Assume no prior context. Update packages/foo/src/terminal-surface.ts with the stack terminal behavior.
+      Acceptance criteria:
+      - Pass condition: the final full-suite gate exits 0.
+    dependencies: []
+  - id: final-regression
+    description: |
+      Goal:
+      - Run final full-suite regression gate for the stack.
+      Motivation:
+      - Validate all stack layers together before publication.
+      Alternative considerations:
+      - Option A (chosen): root full-suite test only at stack end.
+      - Option B: root full-suite test in every stack layer.
+      Implementation details:
+      - Execute root-level test gate after all earlier terminal-workflow tasks complete.
+      Layer: e2e_regression
+      Feature state: active
+    command: "pnpm run test:all"
+    dependencies: [implement-terminal-surface]
+EOF
+
+  cat > "$stack_manifest" <<EOF
+{
+  "workflows": [
+    { "label": "Stack step 1", "planFile": "$first_plan", "order": 1 },
+    { "label": "Stack step 2", "planFile": "$second_plan", "order": 2 }
+  ]
+}
+EOF
+
+  bash "$LINT_SCRIPT" --stack-manifest "$stack_manifest" "$first_plan" >/dev/null
+  bash "$LINT_SCRIPT" --stack-manifest "$stack_manifest" "$second_plan" >/dev/null
 }
 
 test_lint_rejects_final_gate_missing_dependencies() {
@@ -917,6 +1058,7 @@ run_test "Edge: unrendered_template_placeholder" test_unrendered_template_placeh
 run_test "Edge: stacked_basebranch_default" test_stacked_basebranch_master
 run_test "Lint: valid final pnpm run test:all gate" test_lint_valid_final_test_all
 run_test "Lint: reject non-test:all final gate" test_lint_rejects_non_test_all_final_gate
+run_test "Lint: allow non-terminal stack workflow without test:all" test_lint_allows_nonterminal_stack_workflow_without_test_all
 run_test "Lint: reject final gate missing dependencies" test_lint_rejects_final_gate_missing_dependencies
 run_test "Lint: reject missing design sections for prompt tasks" test_lint_requires_design_sections_for_prompt_tasks
 run_test "Lint: accept prompt tasks with design sections" test_lint_accepts_design_sections_for_prompt_tasks
