@@ -365,6 +365,27 @@ describe('headless-client', () => {
     expect(runElectronHeadless).toHaveBeenCalledWith(['query', 'workflows']);
   });
 
+  it('keeps bundled skill installation in the Electron app runtime', async () => {
+    const bus = new LocalBus();
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'standalone' }));
+    const ownerHandler = vi.fn(async () => ({ ok: true }));
+    bus.onRequest('headless.exec', ownerHandler);
+
+    const runElectronHeadless = vi.fn(async () => 0);
+    const ensureStandaloneOwner = vi.fn(async () => {});
+
+    const exitCode = await runHeadlessClientCommand(['install-skills', 'update'], {
+      messageBus: bus,
+      ensureStandaloneOwner,
+      runElectronHeadless,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(runElectronHeadless).toHaveBeenCalledWith(['install-skills', 'update']);
+    expect(ownerHandler).not.toHaveBeenCalled();
+    expect(ensureStandaloneOwner).not.toHaveBeenCalled();
+  });
+
   it('delegates query ui-perf to a reachable owner endpoint', async () => {
     const bus = new LocalBus();
     bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
