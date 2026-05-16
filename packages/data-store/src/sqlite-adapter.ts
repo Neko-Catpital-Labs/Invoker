@@ -1692,11 +1692,45 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   getTaskOutput(taskId: string): string {
+    const legacySpoolRows = this.queryAll(
+      'SELECT data FROM output_spool WHERE task_id = ? ORDER BY offset ASC, id ASC',
+      [taskId],
+    ) as Array<{ data: string }>;
+    const fileSpool = this.readSpoolLines(taskId);
+
+    if (legacySpoolRows.length > 0 || fileSpool.length > 0) {
+      const legacy = legacySpoolRows.map((r) => r.data).join('');
+      const file = fileSpool.map((c) => c.data).join('');
+      return legacy + file;
+    }
+
     const rows = this.queryAll(
       'SELECT data FROM task_output WHERE task_id = ? ORDER BY id ASC',
       [taskId],
     ) as Array<{ data: string }>;
     return rows.map((r) => r.data).join('') + this.readTaskOutputFile(taskId);
+  }
+
+  /**
+   * Delete legacy task_output rows for task ids that already have output_spool rows.
+   * Returns the number of rows removed. Tasks with diagnostic-only task_output rows
+   * (no output_spool rows) are left untouched. Callers should snapshot/backup the DB
+   * before invoking this.
+   */
+  pruneDuplicateTaskOutputRows(): number {
+    this.ensureWritable();
+    this.db.run(`
+      DELETE FROM task_output
+      WHERE task_id IN (
+        SELECT DISTINCT task_id FROM output_spool
+      )
+    `);
+    const removed = this.db.getRowsModified();
+    if (removed > 0) {
+      this.dirty = true;
+      this.scheduleFlush();
+    }
+    return removed;
   }
 
   // ── Output Spool ────────────────────────────────────────

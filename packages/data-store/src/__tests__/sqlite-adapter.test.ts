@@ -1162,6 +1162,96 @@ describe('SQLiteAdapter', () => {
         rmSync(dir, { recursive: true, force: true });
       }
     });
+
+    it('prefers output_spool chunks over task_output when both exist for a task', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t-dual'));
+
+      (adapter as any).db.run(
+        'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+        ['t-dual', 'duplicated-historic\n'],
+      );
+      (adapter as any).db.run(
+        'INSERT INTO output_spool (task_id, offset, data) VALUES (?, ?, ?)',
+        ['t-dual', 0, 'spool-canonical\n'],
+      );
+
+      expect(adapter.getTaskOutput('t-dual')).toBe('spool-canonical\n');
+    });
+
+    it('falls back to task_output when no output_spool chunks exist', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t-fallback'));
+
+      (adapter as any).db.run(
+        'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+        ['t-fallback', 'diagnostic-only\n'],
+      );
+
+      expect(adapter.getTaskOutput('t-fallback')).toBe('diagnostic-only\n');
+    });
+
+    it('prefers file-backed output_spool over task_output rows', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t-file-spool'));
+
+      (adapter as any).db.run(
+        'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+        ['t-file-spool', 'historic\n'],
+      );
+
+      adapter.appendOutputChunk('t-file-spool', 'live chunk\n');
+
+      expect(adapter.getTaskOutput('t-file-spool')).toBe('live chunk\n');
+    });
+  });
+
+  describe('pruneDuplicateTaskOutputRows', () => {
+    it('removes only task_output rows for task ids with output_spool rows', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t-dup'));
+      adapter.saveTask('wf-1', makeTask('t-diag-only'));
+
+      (adapter as any).db.run(
+        'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+        ['t-dup', 'duplicated-historic\n'],
+      );
+      (adapter as any).db.run(
+        'INSERT INTO output_spool (task_id, offset, data) VALUES (?, ?, ?)',
+        ['t-dup', 0, 'spool-canonical\n'],
+      );
+      (adapter as any).db.run(
+        'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+        ['t-diag-only', 'diagnostic-only\n'],
+      );
+
+      const removed = adapter.pruneDuplicateTaskOutputRows();
+
+      expect(removed).toBe(1);
+      expect(
+        sqliteScalar(adapter, "SELECT COUNT(*) FROM task_output WHERE task_id = 't-dup'"),
+      ).toBe(0);
+      expect(
+        sqliteScalar(adapter, "SELECT COUNT(*) FROM task_output WHERE task_id = 't-diag-only'"),
+      ).toBe(1);
+      expect(adapter.getTaskOutput('t-diag-only')).toBe('diagnostic-only\n');
+      expect(adapter.getTaskOutput('t-dup')).toBe('spool-canonical\n');
+    });
+
+    it('is a no-op when there are no duplicate rows', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t-no-dup'));
+
+      (adapter as any).db.run(
+        'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+        ['t-no-dup', 'diagnostic\n'],
+      );
+
+      expect(adapter.pruneDuplicateTaskOutputRows()).toBe(0);
+      expect(
+        sqliteScalar(adapter, "SELECT COUNT(*) FROM task_output WHERE task_id = 't-no-dup'"),
+      ).toBe(1);
+    });
   });
 
   // ── Conversations ──────────────────────────────────────
