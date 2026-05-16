@@ -1162,6 +1162,31 @@ describe('SQLiteAdapter', () => {
         rmSync(dir, { recursive: true, force: true });
       }
     });
+
+    it('appends durable diagnostics to persisted output and replay spool', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-durable-diagnostic-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db.saveWorkflow(testWorkflow);
+        db.saveTask('wf-1', makeTask('t-diagnostic-output'));
+
+        db.appendDurableTaskOutput('t-diagnostic-output', '\n[Startup Failure Diagnostic]\nmessage=git not found\n');
+
+        expect(db.getTaskOutput('t-diagnostic-output')).toContain('message=git not found');
+        expect(db.replayOutputFrom('t-diagnostic-output', 0).map(chunk => chunk.data).join('')).toContain(
+          'message=git not found',
+        );
+        expect(db.getOutputTail('t-diagnostic-output').map(chunk => chunk.data).join('')).toContain(
+          'message=git not found',
+        );
+
+        db.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   // ── Conversations ──────────────────────────────────────

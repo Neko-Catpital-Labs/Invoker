@@ -156,7 +156,7 @@ import { relaunchOrphansAndStartReady } from './orphan-relaunch.js';
 import { evaluateExecutingStall } from './executing-stall.js';
 import { evaluateLaunchStall } from './launch-stall.js';
 import { listOpenFixIntentsForTask } from './auto-fix-intents.js';
-import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
+import { persistShutdownDiagnostic, persistStartupFailureDiagnostic } from './shutdown-diagnostic.js';
 import {
   buildActionGraphDiagnostics,
   resolveActionDiagnosticsStallThresholdMs,
@@ -747,7 +747,11 @@ if (isHeadless) {
       };
 
       const createStandaloneTaskExecutor = (): TaskRunner => {
-        const executor = createHeadlessExecutor(headlessDeps);
+        const executor = createHeadlessExecutor(headlessDeps, {
+          onLaunchFailed: (taskId, error, executor) => {
+            persistStartupFailureDiagnostic(taskId, executor.type, error, persistence);
+          },
+        });
         wireHeadlessApproveHook(headlessDeps, executor);
         return executor;
       };
@@ -1564,6 +1568,8 @@ if (isHeadless) {
         },
         onLaunchFailed: (taskId, error, executor) => {
           launchingTasks.delete(taskId);
+          flushTaskOutput(taskId);
+          persistStartupFailureDiagnostic(taskId, executor.type, error, persistence);
           logger.error(
             `Task "${taskId}" launch failed before spawn (executor: ${executor.type}): ${error.message}`,
             { module: 'exec' },
@@ -3926,7 +3932,7 @@ if (isHeadless) {
       }
       if (orchestrator) {
         for (const task of orchestrator.getAllTasks()) {
-          if (task.status === 'running' || task.status === 'fixing_with_ai') {
+          if (isTaskInFlightForForcedStop(task)) {
             if (persistence) {
               persistShutdownDiagnostic(task, persistence, {
                 flushPendingOutput: flushTaskOutput,

@@ -1687,6 +1687,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
     appendFileSync(this.taskOutputFile(taskId), data, 'utf8');
   }
 
+  appendDurableTaskOutput(taskId: string, data: string): void {
+    this.appendTaskOutput(taskId, data);
+    this.appendOutputChunk(taskId, data);
+  }
+
   getTaskOutput(taskId: string): string {
     const rows = this.queryAll(
       'SELECT data FROM task_output WHERE task_id = ? ORDER BY id ASC',

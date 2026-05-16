@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import type { TaskState } from '@invoker/workflow-core';
 import {
   persistShutdownDiagnostic,
+  persistStartupFailureDiagnostic,
   SHUTDOWN_DIAGNOSTIC_TAIL_CHARS,
   type ShutdownDiagnosticDb,
 } from '../shutdown-diagnostic.js';
@@ -162,5 +163,59 @@ describe('persistShutdownDiagnostic', () => {
 
     const output = db.appended[0];
     expect(output).toContain('status=fixing_with_ai');
+  });
+
+  it('uses durable diagnostic append when available', () => {
+    const task = makeTask();
+    const db = makeDb() as ShutdownDiagnosticDb & {
+      durable: string[];
+      appended: string[];
+      appendDurableTaskOutput: (taskId: string, data: string) => void;
+    };
+    db.durable = [];
+    db.appendDurableTaskOutput = (_taskId: string, data: string) => {
+      db.durable.push(data);
+    };
+
+    persistShutdownDiagnostic(task, db);
+
+    expect(db.appended).toHaveLength(0);
+    expect(db.durable).toHaveLength(1);
+    expect(db.durable[0]).toContain('[Shutdown Diagnostic]');
+  });
+});
+
+describe('persistStartupFailureDiagnostic', () => {
+  it('appends concrete startup failure detail as a compact diagnostic block', () => {
+    const db = makeDb();
+    const err = new Error('git not found');
+    err.stack = 'Error: git not found\n    at startExecutor';
+
+    persistStartupFailureDiagnostic('task-1', 'worktree', err, db);
+
+    const output = db.appended[0];
+    expect(output).toContain('[Startup Failure Diagnostic]');
+    expect(output).toContain('executor=worktree');
+    expect(output).toContain('message=git not found');
+    expect(output).toContain('--- startup failure detail ---');
+    expect(output).toContain('at startExecutor');
+    expect(output).toContain('--- end startup failure diagnostic ---');
+  });
+
+  it('uses durable diagnostic append for startup failures when available', () => {
+    const db = makeDb() as ShutdownDiagnosticDb & {
+      durable: string[];
+      appendDurableTaskOutput: (taskId: string, data: string) => void;
+    };
+    db.durable = [];
+    db.appendDurableTaskOutput = (_taskId: string, data: string) => {
+      db.durable.push(data);
+    };
+
+    persistStartupFailureDiagnostic('task-1', 'ssh', new Error('permission denied'), db);
+
+    expect(db.appended).toHaveLength(0);
+    expect(db.durable).toHaveLength(1);
+    expect(db.durable[0]).toContain('permission denied');
   });
 });
