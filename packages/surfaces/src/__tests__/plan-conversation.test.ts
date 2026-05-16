@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { PlanConversation, extractYamlPlan, rewritePnpmTestCommand, globToRegex, isDangerousCommand, isConfirmation } from '../slack/plan-conversation.js';
+import { PlanConversation, extractYamlPlan, globToRegex, isDangerousCommand, isConfirmation } from '../slack/plan-conversation.js';
 import { parse as parseYaml } from 'yaml';
 import * as child_process from 'node:child_process';
 import { EventEmitter } from 'node:events';
@@ -161,34 +161,31 @@ tasks:
     expect(plan.tasks[0].requiresManualApproval).toBe(true);
   });
 
-  it('rewrites npx vitest run to pnpm test in task commands', () => {
+  it('preserves discovered repo commands without rewriting them', () => {
     const text = `\`\`\`yaml
-name: "Rewrite Test"
+name: "Preserve Commands"
 tasks:
-  - id: run-tests
-    description: "Run tests"
+  - id: run-vitest
+    description: "Run Vitest"
     command: "cd packages/surfaces && npx vitest run"
     dependencies: []
-\`\`\``;
-    const result = extractYamlPlan(text);
-    expect(result).not.toBeNull();
-    const plan = parsePlanText(result!);
-    expect(plan.tasks[0].command).toBe('cd packages/surfaces && pnpm test');
-  });
-
-  it('rewrites pnpm test packages/... to cd packages/... && pnpm test', () => {
-    const text = `\`\`\`yaml
-name: "Rewrite Root Test"
-tasks:
-  - id: run-tests
-    description: "Run tests"
+  - id: run-root-package-test
+    description: "Run package test"
     command: "pnpm test packages/protocol/src/__tests__/validation.test.ts"
-    dependencies: []
+    dependencies:
+      - run-vitest
+  - id: run-npm-test
+    description: "Run npm test"
+    command: "npm test -- src/foo.test.ts"
+    dependencies:
+      - run-root-package-test
 \`\`\``;
     const result = extractYamlPlan(text);
     expect(result).not.toBeNull();
     const plan = parsePlanText(result!);
-    expect(plan.tasks[0].command).toBe('cd packages/protocol && pnpm test -- src/__tests__/validation.test.ts');
+    expect(plan.tasks[0].command).toBe('cd packages/surfaces && npx vitest run');
+    expect(plan.tasks[1].command).toBe('pnpm test packages/protocol/src/__tests__/validation.test.ts');
+    expect(plan.tasks[2].command).toBe('npm test -- src/foo.test.ts');
   });
 
   it('extracts correctly when YAML contains nested triple backticks', () => {
@@ -336,33 +333,6 @@ Does this look better?`;
   });
 });
 
-describe('rewritePnpmTestCommand', () => {
-  it('rewrites pnpm test packages/<pkg>/<path> to cd + pnpm test -- <relpath>', () => {
-    expect(rewritePnpmTestCommand('pnpm test packages/protocol/src/__tests__/validation.test.ts'))
-      .toBe('cd packages/protocol && pnpm test -- src/__tests__/validation.test.ts');
-  });
-
-  it('rewrites pnpm test -- packages/<pkg>/<path>', () => {
-    expect(rewritePnpmTestCommand('pnpm test -- packages/surfaces/src/__tests__/slack.test.ts'))
-      .toBe('cd packages/surfaces && pnpm test -- src/__tests__/slack.test.ts');
-  });
-
-  it('rewrites pnpm test packages/<pkg> (no file)', () => {
-    expect(rewritePnpmTestCommand('pnpm test packages/protocol'))
-      .toBe('cd packages/protocol && pnpm test');
-  });
-
-  it('preserves trailing suffixes like 2>&1', () => {
-    expect(rewritePnpmTestCommand('pnpm test packages/ui/src/__tests__/foo.test.ts 2>&1'))
-      .toBe('cd packages/ui && pnpm test -- src/__tests__/foo.test.ts 2>&1');
-  });
-
-  it('returns already-correct commands unchanged', () => {
-    expect(rewritePnpmTestCommand('cd packages/protocol && pnpm test'))
-      .toBe('cd packages/protocol && pnpm test');
-  });
-});
-
 describe('globToRegex', () => {
   it('converts *.ts to match .ts files', () => {
     const re = globToRegex('*.ts');
@@ -456,7 +426,7 @@ describe('PlanConversation', () => {
     const prompt = mockSpawn.mock.calls[0][1][1] as string;
     expect(prompt).toContain('YAML task plan');
     expect(prompt).toContain('Hello');
-    expect(prompt).toContain('pnpm run test:all');
+    expect(prompt).toContain('Use the package manager and test runner the target repo already uses');
   });
 
   it('submittedPlanText is null before confirmation', async () => {

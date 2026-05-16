@@ -58,7 +58,7 @@ must_contain "$SKILL_MD" "## Intended flow (do not skip steps)" "SKILL must docu
 must_contain "$SKILL_MD" "Runtime verification (Phase 1b)" "SKILL must require runtime behavioral verification"
 must_contain "$SKILL_MD" "Invoker headless" "SKILL must mention Invoker headless as a verification lane"
 must_contain "$SKILL_MD" "pnpm test" "SKILL must mention pnpm test for behavioral proof"
-must_contain "$SKILL_MD" "pnpm run test:all" "SKILL must require the final full-suite regression gate for implementation plans"
+must_contain "$SKILL_MD" "terminal stack workflows must end with" "SKILL must require the final full-suite regression gate for standalone plans and terminal stack workflows"
 must_contain "$SKILL_MD" "Grep-only checks" "SKILL must separate grep from behavioral verification"
 must_contain "$SKILL_MD" "see playbook" "SKILL Execution must reference the playbook"
 must_contain "$SKILL_MD" "Phase 1b" "SKILL must reference Phase 1b"

@@ -1,11 +1,11 @@
-# Anti-Pattern I: Implementation plan without terminal full-suite regression
+# Anti-Pattern I: Standalone implementation plan without terminal full-suite regression
 # Expected outcome: validate-plan passes schema, but skill-doctor fails lint-task-atomicity
-# because implementation workflows must end with a `pnpm run test:all` task that
-# depends on every earlier task.
+# because standalone implementation workflows must end with a `pnpm run test:all`
+# task that depends on every earlier task.
 
 name: "Anti-pattern: final regression is not full suite"
 description: |
-  Demonstrates an implementation workflow that incorrectly ends with a
+  Demonstrates a standalone implementation workflow that incorrectly ends with a
   package-scoped test command instead of the required full-suite gate.
 onFinish: pull_request
 mergeMode: github
