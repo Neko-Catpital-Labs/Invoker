@@ -251,6 +251,46 @@ test.describe('Visual proof capture', () => {
     await assertPageScreenshot(page, 'task-panel');
   });
 
+  test('embedded-tabbed-terminal — drawer expands with active task tab', async ({ page, testDir }) => {
+    await loadPlan(page, TEST_PLAN);
+
+    // Materialise a real workspace dir so the main-process executor can resolve
+    // a terminal spec and spawn an embedded shell without a remote SSH target.
+    const workspacePath = path.join(testDir, 'embedded-terminal-workspace');
+    await fs.mkdir(workspacePath, { recursive: true });
+
+    const now = new Date();
+    const earlier = new Date(Date.now() - 5000);
+    await injectTaskStates(page, [
+      {
+        taskId: 'task-alpha',
+        changes: {
+          status: 'completed',
+          execution: { startedAt: earlier, completedAt: now, workspacePath },
+        },
+      },
+    ]);
+
+    // Drawer starts collapsed.
+    await expect(page.getByRole('button', { name: 'Expand terminal drawer' })).toBeVisible();
+    await expect(page.getByTestId('terminal-drawer-body')).toHaveCount(0);
+
+    const taskNode = page.locator('.react-flow__node[data-testid$="task-alpha"]').first();
+    await expect(taskNode).toBeVisible({ timeout: 10000 });
+    await taskNode.dblclick();
+
+    // Drawer expands; one active tab for task-alpha; terminal pane rendered.
+    await expect(page.getByRole('button', { name: 'Collapse terminal drawer' })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByTestId('terminal-drawer-body')).toBeVisible();
+    const tabs = page.getByTestId('terminal-tab-strip').locator('[data-testid^="terminal-tab-"]');
+    await expect(tabs).toHaveCount(1);
+    await expect(tabs.first()).toHaveAttribute('data-active', 'true');
+    await expect(tabs.first()).toContainText('First test task');
+    await expect(page.locator('[data-testid^="terminal-pane-"]').first()).toBeVisible();
+
+    await captureScreenshot(page, 'embedded-tabbed-terminal');
+  });
+
   test('task panel setup failure renders in Error panel', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     const setupError = [
