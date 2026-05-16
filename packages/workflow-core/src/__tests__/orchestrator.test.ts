@@ -9458,6 +9458,32 @@ describe('Orchestrator', () => {
   });
 
   describe('blocked task unblocking', () => {
+    it('hydrateWorkflowFromDb replaces the workflow cache slice from persisted rows', () => {
+      orchestrator.loadPlan({
+        name: 'db-first-hydrate-test',
+        tasks: [
+          { id: 'task-a', description: 'task A' },
+          { id: 'task-b', description: 'task B' },
+        ],
+      });
+
+      const wfId = orchestrator.getWorkflowIds()[0]!;
+      const taskAId = sid(orchestrator, 0, 'task-a');
+      const taskBId = sid(orchestrator, 0, 'task-b');
+      const mergeId = `__merge__${wfId}`;
+      expect(orchestrator.getTask(taskBId)).toBeDefined();
+
+      // INV-88: DB-first refresh means the in-memory graph is a snapshot of
+      // persisted rows, not an overlay that can keep deleted DB tasks alive.
+      persistence.tasks.delete(taskBId);
+      persistence.updateTask(mergeId, { dependencies: [taskAId] });
+
+      orchestrator.hydrateWorkflowFromDb(wfId);
+
+      expect(orchestrator.getTask(taskBId)).toBeUndefined();
+      expect(orchestrator.getTask(mergeId)!.dependencies).toEqual([taskAId]);
+    });
+
     it('throws when a persisted merge node has detached dependencies', () => {
       orchestrator.loadPlan({
         name: 'merge-repair-test',
