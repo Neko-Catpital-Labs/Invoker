@@ -31,15 +31,18 @@ function capitalize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-function getWorkflowReviewUrl(tasks: Map<string, TaskState> | undefined): string | undefined {
+function getReviewReadyMergeReviewUrl(tasks: Map<string, TaskState> | undefined): string | undefined {
   if (!tasks) return undefined;
-  let fallbackUrl: string | undefined;
   for (const candidate of tasks.values()) {
-    if (!candidate.execution.reviewUrl) continue;
-    if (candidate.config.isMergeNode) return candidate.execution.reviewUrl;
-    fallbackUrl ??= candidate.execution.reviewUrl;
+    if (
+      candidate.config.isMergeNode &&
+      candidate.status === 'review_ready' &&
+      candidate.execution.reviewUrl
+    ) {
+      return candidate.execution.reviewUrl;
+    }
   }
-  return fallbackUrl;
+  return undefined;
 }
 
 export function WorkflowInspector({
@@ -78,7 +81,11 @@ export function WorkflowInspector({
   const taskVisualStatus = task ? getEffectiveVisualStatus(task.status, task.execution) : null;
   const taskColors = taskVisualStatus ? getStatusColor(taskVisualStatus) : null;
   const workflowVisual = workflow ? workflowStatusVisual(workflow.status) : null;
-  const reviewUrl = task?.execution.reviewUrl ?? getWorkflowReviewUrl(workflowTasks);
+  const reviewUrl = workflow?.status === 'review_ready'
+    ? (task
+        ? (task.config.isMergeNode && task.status === 'review_ready' ? task.execution.reviewUrl : undefined)
+        : getReviewReadyMergeReviewUrl(workflowTasks))
+    : undefined;
   const workflowTitle = workflow ? workflow.name || workflow.id : null;
   const nodeTitle = task?.description ?? workflowTitle ?? 'No node selected';
   const showsWorkflowMergeDetails = Boolean(!task && workflow?.id && workflow.onFinish === 'pull_request');
@@ -328,9 +335,9 @@ export function WorkflowInspector({
           </section>
         )}
 
-        <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
-          <div className="text-[11px] uppercase tracking-wide text-gray-400">Pull Request</div>
-          {reviewUrl ? (
+        {reviewUrl && (
+          <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
+            <div className="text-[11px] uppercase tracking-wide text-gray-400">Pull Request</div>
             <a
               href={reviewUrl}
               target="_blank"
@@ -339,10 +346,8 @@ export function WorkflowInspector({
             >
               {reviewUrl}
             </a>
-          ) : (
-            <div className="mt-1 text-xs text-gray-400">No PR linked</div>
-          )}
-        </section>
+          </section>
+        )}
 
         <section className="rounded border border-gray-700 bg-gray-800/70">
           <button

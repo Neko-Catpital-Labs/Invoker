@@ -40,7 +40,7 @@ describe('WorkflowInspector', () => {
     expect(screen.queryByText(/workflow id:/i)).not.toBeInTheDocument();
   });
 
-  it('renders PR URL as hyperlink when present', () => {
+  it('hides Pull Request section for an ordinary task even when it has a reviewUrl', () => {
     render(
       <WorkflowInspector
         workflow={workflow}
@@ -52,11 +52,62 @@ describe('WorkflowInspector', () => {
       />,
     );
 
-    const link = screen.getByRole('link', { name: /github\.com/i });
-    expect(link).toHaveAttribute('href', 'https://github.com/org/repo/pull/12');
+    expect(screen.queryByText('Pull Request')).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /github\.com/i })).not.toBeInTheDocument();
   });
 
-  it('renders workflow PR URL from its review-ready merge node', () => {
+  it('hides Pull Request section for a review-ready merge gate when the workflow is not review_ready', () => {
+    const mergeTask = makeTask({
+      id: '__merge__wf-1',
+      description: 'Merge gate',
+      status: 'review_ready',
+      config: { workflowId: 'wf-1', isMergeNode: true },
+      execution: { reviewUrl: 'https://github.com/org/repo/pull/34' },
+    });
+
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={mergeTask}
+        workflowTasks={new Map([[mergeTask.id, mergeTask]])}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.queryByText('Pull Request')).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /github\.com/i })).not.toBeInTheDocument();
+  });
+
+  it('shows Pull Request link for a review-ready merge gate in a review-ready workflow', () => {
+    const mergeTask = makeTask({
+      id: '__merge__wf-1',
+      description: 'Merge gate',
+      status: 'review_ready',
+      config: { workflowId: 'wf-1', isMergeNode: true },
+      execution: { reviewUrl: 'https://github.com/org/repo/pull/34' },
+    });
+
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'review_ready' }}
+        task={mergeTask}
+        workflowTasks={new Map([[mergeTask.id, mergeTask]])}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('Pull Request')).toBeInTheDocument();
+    const link = screen.getByRole('link', { name: /github\.com/i });
+    expect(link).toHaveAttribute('href', 'https://github.com/org/repo/pull/34');
+  });
+
+  it('renders workflow PR URL from its review-ready merge node when the workflow is review_ready', () => {
     const mergeTask = makeTask({
       id: '__merge__wf-1',
       description: 'Merge gate',
