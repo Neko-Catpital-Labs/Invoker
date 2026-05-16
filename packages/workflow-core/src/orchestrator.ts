@@ -82,6 +82,7 @@ import {
   isDiscardedAttempt,
   isOutcomeTerminalAttempt,
 } from './attempt-policy.js';
+import { MUTATION_POLICIES } from './invalidation-policy.js';
 
 // ── Channel Constants ───────────────────────────────────────
 
@@ -3080,14 +3081,28 @@ export class Orchestrator {
     // attempt picks up the new policy when restartTask reschedules it.
     this.persistence.updateWorkflow?.(workflowId, { mergeMode });
 
-    // Step 9 retry-class reset: restartTask is today's `retryTask`
-    // compatibility wire (`buildInvalidationDeps` →
-    // `orchestrator.restartTask`). It resets the merge node to
-    // `pending`, clears volatile attempt state, and bumps execution
-    // generation exactly once via `withBumpedExecutionGeneration`
-    // while preserving branch/workspacePath lineage — the chart's
-    // retry-class semantics for merge-mode mutations.
-    return this.retryTask(taskId);
+    const mutationPolicy = MUTATION_POLICIES.mergeMode;
+    const mutationPlan = planInvalidation({
+      action: mutationPolicy.action,
+      targetId: task.id,
+      tasks: this.stateMachine.getAllTasks(),
+      reason: 'mergeMode',
+    });
+
+    // Step 9 retry-class reset: retryTask is the lifecycle primitive
+    // selected by MUTATION_POLICIES.mergeMode. It resets the merge
+    // node to `pending`, clears volatile attempt state, and bumps
+    // execution generation exactly once via
+    // `withBumpedExecutionGeneration` while preserving
+    // branch/workspacePath lineage — the chart's retry-class
+    // semantics for merge-mode mutations.
+    const started = this.retryTask(taskId);
+    const primitivePlan = this.lastInvalidationPlan;
+    this.lastInvalidationPlan = withSchedulerEnqueueCandidates(
+      mutationPlan,
+      primitivePlan?.schedulerEnqueueCandidates.map((candidate) => candidate.taskId) ?? [],
+    );
+    return started;
   }
 
   /**
@@ -3224,16 +3239,29 @@ export class Orchestrator {
     this.persistence.logEvent?.(taskId, 'task.updated', fixContextChanges);
     this.messageBus.publish(TASK_DELTA_CHANNEL, fixContextDelta);
 
-    // Step 10 retry-class reset: restartTask is today's `retryTask`
-    // compatibility wire (`buildInvalidationDeps` →
-    // `orchestrator.restartTask`). It resets the task to `pending`,
-    // clears volatile attempt state (`agentSessionId`, `containerId`,
-    // transient `error`/`exitCode`/timing fields), and bumps
-    // execution generation exactly once via
+    const mutationPolicy = MUTATION_POLICIES.fixContext;
+    const mutationPlan = planInvalidation({
+      action: mutationPolicy.action,
+      targetId: task.id,
+      tasks: this.stateMachine.getAllTasks(),
+      reason: 'fixContext',
+    });
+
+    // Step 10 retry-class reset: retryTask is the lifecycle primitive
+    // selected by MUTATION_POLICIES.fixContext. It resets the task to
+    // `pending`, clears volatile attempt state (`agentSessionId`,
+    // `containerId`, transient `error`/`exitCode`/timing fields), and
+    // bumps execution generation exactly once via
     // `withBumpedExecutionGeneration` while preserving branch /
     // workspacePath lineage — the chart's "retry from reverted
     // failed state" baseline for fix-context mutations.
-    return this.retryTask(taskId);
+    const started = this.retryTask(taskId);
+    const primitivePlan = this.lastInvalidationPlan;
+    this.lastInvalidationPlan = withSchedulerEnqueueCandidates(
+      mutationPlan,
+      primitivePlan?.schedulerEnqueueCandidates.map((candidate) => candidate.taskId) ?? [],
+    );
+    return started;
   }
 
   /**
@@ -3280,10 +3308,12 @@ export class Orchestrator {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
+    const mutationPolicy = MUTATION_POLICIES.externalGatePolicy;
     this.lastInvalidationPlan = planInvalidation({
-      action: 'scheduleOnly',
+      action: mutationPolicy.action,
       targetId: task.id,
       tasks: this.stateMachine.getAllTasks(),
+      reason: 'externalGatePolicy',
     });
     if (task.status === 'running' || task.status === 'fixing_with_ai') {
       throw new Error(`Cannot edit running task ${taskId}`);

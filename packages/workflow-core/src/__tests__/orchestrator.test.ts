@@ -7543,6 +7543,13 @@ describe('Orchestrator', () => {
       expect(cancelSpy).toHaveBeenCalledWith(mergeId);
       expect(retrySpy).toHaveBeenCalledWith(mergeId);
       expect(recreateSpy).not.toHaveBeenCalled();
+      expect(orchestrator.getLastInvalidationPlan()).toMatchObject({
+        action: 'retryTask',
+        scope: 'task',
+        mode: 'retry',
+        reason: 'mergeMode',
+        affectedTaskIds: [mergeId],
+      });
       // Hard Invariant: cancel-first MUST precede the retry-class
       // reset. `mock.invocationCallOrder` is the global vi-internal
       // ordering counter — comparing the first cancel/restart call
@@ -7720,6 +7727,13 @@ describe('Orchestrator', () => {
       expect(cancelSpy).toHaveBeenCalledWith(mergeId);
       expect(retrySpy).toHaveBeenCalledWith(mergeId);
       expect(recreateSpy).not.toHaveBeenCalled();
+      expect(orchestrator.getLastInvalidationPlan()).toMatchObject({
+        action: 'retryTask',
+        scope: 'task',
+        mode: 'retry',
+        reason: 'mergeMode',
+        affectedTaskIds: [mergeId],
+      });
       // Hard Invariant: cancel-first MUST precede the retry-class
       // reset. `mock.invocationCallOrder` is the global vi-internal
       // ordering counter — comparing the first cancel/restart call
@@ -7924,6 +7938,13 @@ describe('Orchestrator', () => {
       expect(cancelSpy).toHaveBeenCalledWith(taskId);
       expect(retrySpy).toHaveBeenCalledWith(taskId);
       expect(recreateSpy).not.toHaveBeenCalled();
+      expect(orchestrator.getLastInvalidationPlan()).toMatchObject({
+        action: 'retryTask',
+        scope: 'task',
+        mode: 'retry',
+        reason: 'fixContext',
+        affectedTaskIds: expect.arrayContaining([taskId]),
+      });
       // Hard Invariant: cancel-first MUST precede the retry-class
       // reset. `mock.invocationCallOrder` is the global vi-internal
       // ordering counter — comparing the first cancel/restart call
@@ -9879,6 +9900,13 @@ describe('Orchestrator', () => {
         { workflowId: prereqWfId, gatePolicy: 'review_ready' },
       ]);
 
+      expect(orchestrator.getLastInvalidationPlan()).toMatchObject({
+        action: 'scheduleOnly',
+        scope: 'task',
+        mode: 'scheduleOnly',
+        reason: 'externalGatePolicy',
+        affectedTaskIds: [leafId],
+      });
       expect(cancelTaskSpy).not.toHaveBeenCalled();
       expect(retryTaskSpy).not.toHaveBeenCalled();
       expect(recreateTaskSpy).not.toHaveBeenCalled();
