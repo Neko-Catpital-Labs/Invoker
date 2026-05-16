@@ -864,7 +864,7 @@ describe('Experiment Lifecycle (integration)', () => {
     expect(status.pending).toBe(0);
   });
 
-  describe('selectExperiment invalidation routing', () => {
+  describe('INV-55 selectedExperiment recreate-class invalidation routing', () => {
     /** Helper: drive standard plan to recon `needs_input`. */
     function runToReconNeedsInput(): { reconId: string; expV1Id: string; expV2Id: string; downstreamId: string } {
       orchestrator.loadPlan(standardPlan);
@@ -1054,7 +1054,7 @@ describe('Experiment Lifecycle (integration)', () => {
     });
   });
 
-  describe('selectExperiments invalidation routing', () => {
+  describe('INV-55 selectedExperimentSet recreate-class invalidation routing', () => {
     function runToReconNeedsInput3(): {
       reconId: string;
       expV1Id: string;

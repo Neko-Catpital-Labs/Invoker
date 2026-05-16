@@ -1969,75 +1969,30 @@ export class Orchestrator {
   }
 
   /**
-   * Select a winning experiment for a reconciliation task — **retry-class**
-   * invalidation route per Step 7 of
-   * `docs/architecture/task-invalidation-roadmap.md` and the Decision Table
-   * row "Edit selected experiment" in
-   * `docs/architecture/task-invalidation-chart.md`
-   * (`MUTATION_POLICIES.selectedExperiment` → `retryTask` / task scope).
+   * Select a winning experiment for a reconciliation task.
    *
-   * Why retry-class (not recreate-class). The chart classifies single
-   * experiment selection as a downstream-input mutation: the
-   * reconciliation task's *result* (its selected branch/commit) is the
-   * execution input that downstream consumers use, so changing the
-   * winner invalidates downstream attempts but does NOT change the
-   * reconciliation task's own spec. The chart's "Why" column reads
-   * "Downstream execution inputs changed". `applyInvalidation('task',
-   * 'retryTask', reconId, deps)` is wired to today's
-   * `Orchestrator.restartTask` via `buildInvalidationDeps` (the
-   * compatibility seam Step 1 introduced; Step 13 will rename
-   * `restartTask` → `retryTask` to close the matrix).
+   * INV-55 consumes the experiment verdict in
+   * `docs/context/inv-55/experiment-brief.md`: changed experiment
+   * selections are recreate-class invalidations for direct downstream
+   * consumers. A different winner changes downstream execution input,
+   * so stale downstream lineage and volatile attempt state must be
+   * cleared before rerun.
    *
-   * Sequence (mirrors `applyInvalidation`'s contract for the
-   * synchronous orchestrator-internal seam — see `invalidation-policy.ts`
-   * and the Step 5/6 `editTaskType` precedent):
-   *   1. **Cancel-first (Hard Invariant).** Compute the transitive
-   *      downstream subgraph of the reconciliation task and cancel any
-   *      member that is actively executing (`running` or
-   *      `fixing_with_ai`) BEFORE we mutate the recon's
-   *      `selectedExperiment`. This is the "any AFFECTED in-flight
-   *      work" guarantee from the chart: stale downstream attempts
-   *      cannot survive a re-selection because they would consume the
-   *      OLD winner's lineage. For the common initial-selection path
-   *      (recon `needs_input` → `completed` with downstream blocked at
-   *      `pending`) this loop is a no-op — there is nothing active.
-   *   2. **Persist new winner.** `writeAndSync` updates
-   *      `execution.selectedExperiment` (and the recon's
-   *      `branch`/`commit` to mirror the winner's lineage) and emits a
-   *      `task.completed` delta. The reconciliation task's status
-   *      transitions to `completed`; this matches the existing
-   *      "Behavior Today" column in the chart ("completes
-   *      reconciliation task and unblocks downstream").
-   *   3. **Retry-class reset of downstream (re-selection only).** When
-   *      the recon was previously completed with a *different* winner,
-   *      every direct downstream consumer is reset via `restartTask`,
-   *      which is the current `retryTask` compatibility wire.
-   *      `restartTask` cascades to its own descendants and bumps each
-   *      affected task's execution generation exactly once via
-   *      `withBumpedExecutionGeneration` (single source of truth for the
-   *      retry reset shape — Step 7 deliberately reuses it instead of
-   *      duplicating the field list here, mirroring Steps 5/6). For
-   *      the initial-selection path no downstream reset is needed
-   *      because nothing has executed yet against the recon's result.
-   *   4. **Auto-start newly ready tasks.** Existing behavior:
-   *      `findNewlyReadyTasks(reconId)` plus `autoStartReadyTasks`
-   *      unblocks downstream that just became ready due to recon
-   *      completing.
-   *
-   * Public surface is unchanged: same `(taskId, experimentId)` signature
-   * returning `TaskState[]` of newly-started tasks. Active downstream is
-   * NO LONGER silently overwritten with a new winner — that's the whole
-   * point of cancel-first per the chart's Hard Invariant. Prior to
-   * Step 7 there was no general active invalidation model for selection
-   * (per the chart's "Behavior Today" column); this method introduces
-   * one.
-   *
-   * NOTE: `recreateTask`'s lineage-discarding reset shape is
-   * deliberately NOT used here. Downstream tasks may still hold valid
-   * workspace lineage (their own branch, their own workspacePath) that
-   * the executor can reuse when the new winner's branch is rebased onto
-   * theirs; that is what makes selection retry-class rather than
-   * recreate-class in the chart's Decision Table.
+   * Sequence:
+   *   1. Detect true re-selection with set semantics. Selecting the
+   *      same winner again is a no-op for downstream invalidation.
+   *   2. Cancel active downstream dependents before the recon winner is
+   *      updated. This preserves the cancel-before-recreate threshold
+   *      from the INV-55 brief.
+   *   3. Persist the new winner on the reconciliation task, preserving
+   *      reconciliation identity and mirroring the selected winner's
+   *      branch/commit lineage.
+   *   4. On changed re-selection only, route each direct downstream
+   *      consumer through `recreateTask`. That reset bumps generation
+   *      once and clears branch, workspace, agent session, container,
+   *      error, and exit-code state before auto-starting ready work.
+   *   5. Initial selection still uses the existing unblock path and
+   *      does not recreate downstream that has never consumed a winner.
    */
   selectExperiment(taskId: string, experimentId: string): TaskState[] {
     this.refreshFromDb();
@@ -2112,7 +2067,16 @@ export class Orchestrator {
     return started;
   }
 
-    selectExperiments(
+  /**
+   * Multi-winner variant of `selectExperiment`.
+   *
+   * INV-55 applies the same recreate-class verdict to changed
+   * experiment sets: order-insensitive same-set re-selection is a
+   * no-op, while a changed set cancels active downstream work and
+   * recreates direct downstream consumers against the combined
+   * branch/commit lineage.
+   */
+  selectExperiments(
     taskId: string,
     experimentIds: string[],
     combinedBranch?: string,
