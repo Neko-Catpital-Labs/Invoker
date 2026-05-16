@@ -35,6 +35,18 @@ import {
   isDiscardedAttempt,
   normalizeRunnerKind,
 } from '@invoker/workflow-core';
+import { queryAll as queryAllRows, queryOne as queryOneRow } from './sqlite-adapter-query.js';
+import {
+  ensureSQLiteWritable,
+  execSQLiteRun,
+  runSQLiteTransaction,
+  type SQLiteWriteContext,
+} from './sqlite-adapter-write.js';
+import {
+  rewritePnpmTestCommand,
+  SQLITE_COLUMN_MIGRATIONS,
+  SQLITE_SCHEMA_SQL,
+} from './sqlite-adapter-schema.js';
 import type {
   PersistenceAdapter,
   Workflow,
@@ -44,24 +56,6 @@ import type {
   Conversation,
   ConversationMessage,
 } from './adapter.js';
-
-/**
- * Rewrite `pnpm test packages/<pkg>/...` (incorrect root-level invocation)
- * to `cd packages/<pkg> && pnpm test -- <relative-path>`.
- */
-function rewritePnpmTestCommand(cmd: string): string {
-  const withFile = cmd.match(/^(pnpm test)\s+(?:--\s+)?packages\/([^/\s]+)\/(\S+)(.*)/);
-  if (withFile) {
-    const [, , pkg, rest, suffix] = withFile;
-    return `cd packages/${pkg} && pnpm test -- ${rest}${suffix}`;
-  }
-  const pkgOnly = cmd.match(/^(pnpm test)\s+(?:--\s+)?packages\/([^/\s]+)(.*)/);
-  if (pkgOnly) {
-    const [, , pkg, suffix] = pkgOnly;
-    return `cd packages/${pkg} && pnpm test${suffix}`;
-  }
-  return cmd;
-}
 
 /** Cached sql.js init promise — WASM is loaded only once per process. */
 let sqlJsPromise: ReturnType<typeof initSqlJs> | null = null;
@@ -123,6 +117,33 @@ export class SQLiteAdapter implements PersistenceAdapter {
   private spoolNextOffsetCache = new Map<string, number>();
   private writeTransactionDepth = 0;
   private lastWorkflowTaskSnapshotStats: Record<string, unknown> | null = null;
+
+  private get writeContext(): SQLiteWriteContext {
+    const adapter = this;
+    return {
+      get db() {
+        return adapter.db;
+      },
+      get readOnly() {
+        return adapter.readOnly;
+      },
+      get dirty() {
+        return adapter.dirty;
+      },
+      set dirty(value: boolean) {
+        adapter.dirty = value;
+      },
+      get writeTransactionDepth() {
+        return adapter.writeTransactionDepth;
+      },
+      set writeTransactionDepth(value: number) {
+        adapter.writeTransactionDepth = value;
+      },
+      scheduleFlush() {
+        adapter.scheduleFlush();
+      },
+    };
+  }
 
   /** Use SQLiteAdapter.create() instead. */
   private constructor(db: SqlJsDatabase, dbPath: string | null, options?: SQLiteAdapterOptions) {
@@ -198,66 +219,25 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   /** Run a single-row SELECT, returning the row as an object or undefined. */
   private queryOne(sql: string, params: unknown[] = []): Record<string, unknown> | undefined {
-    const stmt = this.db.prepare(sql);
-    stmt.bind(params as any[]);
-    if (stmt.step()) {
-      const row = stmt.getAsObject();
-      stmt.free();
-      return row as Record<string, unknown>;
-    }
-    stmt.free();
-    return undefined;
+    return queryOneRow(this.db, sql, params);
   }
 
   /** Run a multi-row SELECT, returning an array of row objects. */
   private queryAll(sql: string, params: unknown[] = []): Record<string, unknown>[] {
-    const stmt = this.db.prepare(sql);
-    stmt.bind(params as any[]);
-    const rows: Record<string, unknown>[] = [];
-    while (stmt.step()) {
-      rows.push(stmt.getAsObject() as Record<string, unknown>);
-    }
-    stmt.free();
-    return rows;
+    return queryAllRows(this.db, sql, params);
   }
 
   private ensureWritable(): void {
-    if (this.readOnly) {
-      throw new Error('SQLiteAdapter is read-only in this process');
-    }
+    ensureSQLiteWritable(this.writeContext);
   }
 
   /** Run an INSERT/UPDATE/DELETE and schedule a flush. */
   private execRun(sql: string, params: unknown[] = []): void {
-    this.ensureWritable();
-    this.db.run(sql, params as any[]);
-    this.dirty = true;
-    if (this.writeTransactionDepth === 0) {
-      this.scheduleFlush();
-    }
+    execSQLiteRun(this.writeContext, sql, params);
   }
 
   private runTransaction<T>(work: () => T): T {
-    this.ensureWritable();
-    this.db.run('BEGIN');
-    this.writeTransactionDepth += 1;
-    try {
-      const result = work();
-      this.writeTransactionDepth -= 1;
-      this.db.run('COMMIT');
-      this.dirty = true;
-      this.scheduleFlush();
-      return result;
-    } catch (err) {
-      this.writeTransactionDepth = Math.max(0, this.writeTransactionDepth - 1);
-      try {
-        this.db.run('ROLLBACK');
-      } catch {
-        // Preserve the original statement failure if SQLite already aborted the
-        // transaction before we reached this cleanup path.
-      }
-      throw err;
-    }
+    return runSQLiteTransaction(this.writeContext, work);
   }
 
   /** Public transactional wrapper for higher-level batched write paths. */
@@ -375,295 +355,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   private initSchema(): void {
-    this.db.run(`
-      CREATE TABLE IF NOT EXISTS workflows (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        description TEXT,
-        visual_proof INTEGER,
-        plan_file TEXT,
-        repo_url TEXT,
-        intermediate_repo_url TEXT,
-        branch TEXT,
-        on_finish TEXT,
-        base_branch TEXT,
-        parent_remote TEXT,
-        feature_branch TEXT,
-        merge_mode TEXT,
-        review_provider TEXT,
-        generation INTEGER DEFAULT 0,
-        created_at TEXT DEFAULT (datetime('now')),
-        updated_at TEXT DEFAULT (datetime('now'))
-      );
-
-      CREATE TABLE IF NOT EXISTS tasks (
-        id TEXT PRIMARY KEY,
-        workflow_id TEXT NOT NULL,
-        description TEXT NOT NULL,
-        status TEXT DEFAULT 'pending',
-        blocked_by TEXT,
-        dependencies TEXT DEFAULT '[]',
-        command TEXT,
-        prompt TEXT,
-        exit_code INTEGER,
-        error TEXT,
-        protocol_error_code TEXT,
-        protocol_error_message TEXT,
-        input_prompt TEXT,
-        external_dependencies TEXT,
-
-        -- Context
-        summary TEXT,
-        problem TEXT,
-        approach TEXT,
-        test_plan TEXT,
-        repro_command TEXT,
-
-        -- Git
-        branch TEXT,
-        commit_hash TEXT,
-        fixed_integration_sha TEXT,
-        fixed_integration_recorded_at TEXT,
-        fixed_integration_source TEXT,
-        parent_task TEXT,
-
-        -- Experiments
-        pivot INTEGER DEFAULT 0,
-        experiment_variants TEXT,
-        is_reconciliation INTEGER DEFAULT 0,
-        selected_experiment TEXT,
-        experiment_results TEXT,
-        requires_manual_approval INTEGER DEFAULT 0,
-
-        -- Repository
-        repo_url TEXT,
-        feature_branch TEXT,
-
-        -- Merge node
-        is_merge_node INTEGER DEFAULT 0,
-
-        -- Claude session
-        claude_session_id TEXT,
-        workspace_path TEXT,
-
-        -- Timestamps
-        created_at TEXT DEFAULT (datetime('now')),
-        launch_phase TEXT,
-        launch_started_at TEXT,
-        launch_completed_at TEXT,
-        started_at TEXT,
-        completed_at TEXT,
-        execution_generation INTEGER DEFAULT 0,
-        docker_image TEXT,
-
-        FOREIGN KEY (workflow_id) REFERENCES workflows(id)
-      );
-
-      CREATE TABLE IF NOT EXISTS events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id TEXT NOT NULL,
-        event_type TEXT NOT NULL,
-        payload TEXT,
-        created_at TEXT DEFAULT (datetime('now')),
-        FOREIGN KEY (task_id) REFERENCES tasks(id)
-      );
-
-      CREATE TABLE IF NOT EXISTS activity_log (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        timestamp TEXT NOT NULL DEFAULT (datetime('now')),
-        source TEXT NOT NULL,
-        level TEXT NOT NULL DEFAULT 'info',
-        message TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS conversations (
-        thread_ts TEXT PRIMARY KEY,
-        channel_id TEXT NOT NULL,
-        user_id TEXT NOT NULL,
-        extracted_plan TEXT,
-        plan_submitted INTEGER DEFAULT 0,
-        created_at TEXT DEFAULT (datetime('now')),
-        updated_at TEXT DEFAULT (datetime('now'))
-      );
-
-      CREATE TABLE IF NOT EXISTS conversation_messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        thread_ts TEXT NOT NULL,
-        seq INTEGER NOT NULL,
-        role TEXT NOT NULL,
-        content TEXT NOT NULL,
-        created_at TEXT DEFAULT (datetime('now')),
-        FOREIGN KEY (thread_ts) REFERENCES conversations(thread_ts)
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_conv_messages_thread
-        ON conversation_messages(thread_ts, seq);
-
-      CREATE TABLE IF NOT EXISTS task_output (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id TEXT NOT NULL,
-        data TEXT NOT NULL,
-        created_at TEXT DEFAULT (datetime('now'))
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_task_output_task
-        ON task_output(task_id);
-
-      CREATE INDEX IF NOT EXISTS idx_tasks_workflow_id
-        ON tasks(workflow_id);
-
-      CREATE TABLE IF NOT EXISTS attempts (
-        id TEXT PRIMARY KEY,
-        node_id TEXT NOT NULL,
-        attempt_number INTEGER NOT NULL,
-        queue_priority INTEGER NOT NULL DEFAULT 0,
-        status TEXT DEFAULT 'pending',
-
-        -- Input snapshot
-        snapshot_commit TEXT,
-        base_branch TEXT,
-        upstream_attempt_ids TEXT DEFAULT '[]',
-
-        -- Overrides
-        command_override TEXT,
-        prompt_override TEXT,
-
-        -- Execution state
-        claimed_at TEXT,
-        started_at TEXT,
-        completed_at TEXT,
-        exit_code INTEGER,
-        error TEXT,
-        last_heartbeat_at TEXT,
-        lease_expires_at TEXT,
-
-        -- Output
-        branch TEXT,
-        commit_hash TEXT,
-        summary TEXT,
-        workspace_path TEXT,
-        claude_session_id TEXT,
-        container_id TEXT,
-
-        -- Lineage
-        supersedes_attempt_id TEXT,
-        created_at TEXT DEFAULT (datetime('now')),
-
-        -- Merge conflict
-        merge_conflict TEXT,
-
-        FOREIGN KEY (node_id) REFERENCES tasks(id)
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_attempts_node_created
-        ON attempts(node_id, created_at);
-
-      CREATE TABLE IF NOT EXISTS workflow_mutation_intents (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        workflow_id TEXT NOT NULL,
-        channel TEXT NOT NULL,
-        args_json TEXT NOT NULL,
-        priority TEXT NOT NULL DEFAULT 'normal',
-        status TEXT NOT NULL DEFAULT 'queued',
-        owner_id TEXT,
-        error TEXT,
-        created_at TEXT DEFAULT (datetime('now')),
-        started_at TEXT,
-        completed_at TEXT,
-        FOREIGN KEY (workflow_id) REFERENCES workflows(id)
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_workflow_mutation_intents_workflow_status
-        ON workflow_mutation_intents(workflow_id, status, priority, id);
-
-      CREATE TABLE IF NOT EXISTS workflow_mutation_leases (
-        workflow_id TEXT PRIMARY KEY,
-        owner_id TEXT NOT NULL,
-        active_intent_id INTEGER,
-        active_mutation_kind TEXT,
-        leased_at TEXT NOT NULL,
-        last_heartbeat_at TEXT NOT NULL,
-        lease_expires_at TEXT NOT NULL,
-        FOREIGN KEY (workflow_id) REFERENCES workflows(id),
-        FOREIGN KEY (active_intent_id) REFERENCES workflow_mutation_intents(id)
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_workflow_mutation_leases_expiry
-        ON workflow_mutation_leases(lease_expires_at);
-
-      CREATE TABLE IF NOT EXISTS output_spool (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id TEXT NOT NULL,
-        offset INTEGER NOT NULL,
-        data TEXT NOT NULL,
-        created_at TEXT DEFAULT (datetime('now')),
-        FOREIGN KEY (task_id) REFERENCES tasks(id)
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_output_spool_task_offset
-        ON output_spool(task_id, offset);
-    `);
+    this.db.run(SQLITE_SCHEMA_SQL);
   }
 
   /** Add columns that may not exist in older databases. */
   private migrate(): void {
-    const migrations = [
-      'ALTER TABLE tasks ADD COLUMN claude_session_id TEXT',
-      'ALTER TABLE tasks ADD COLUMN workspace_path TEXT',
-      'ALTER TABLE tasks ADD COLUMN container_id TEXT',
-      'ALTER TABLE tasks ADD COLUMN is_merge_node INTEGER DEFAULT 0',
-      'ALTER TABLE workflows ADD COLUMN on_finish TEXT',
-      'ALTER TABLE workflows ADD COLUMN base_branch TEXT',
-      'ALTER TABLE workflows ADD COLUMN parent_remote TEXT',
-      'ALTER TABLE workflows ADD COLUMN feature_branch TEXT',
-      'ALTER TABLE workflows ADD COLUMN generation INTEGER DEFAULT 0',
-      'ALTER TABLE tasks ADD COLUMN last_heartbeat_at TEXT',
-      'ALTER TABLE tasks ADD COLUMN experiment_prompt TEXT',
-      'ALTER TABLE tasks ADD COLUMN auto_fix INTEGER DEFAULT 0',
-      'ALTER TABLE tasks ADD COLUMN max_fix_attempts INTEGER',
-      'ALTER TABLE tasks ADD COLUMN action_request_id TEXT',
-      'ALTER TABLE tasks ADD COLUMN experiments TEXT',
-      'ALTER TABLE tasks ADD COLUMN selected_experiments TEXT',
-      'ALTER TABLE tasks ADD COLUMN utilization INTEGER',
-      'ALTER TABLE tasks ADD COLUMN pending_fix_error TEXT',
-      'ALTER TABLE workflows ADD COLUMN merge_mode TEXT',
-      'ALTER TABLE tasks ADD COLUMN review_url TEXT',
-      'ALTER TABLE tasks ADD COLUMN review_id TEXT',
-      'ALTER TABLE tasks ADD COLUMN review_status TEXT',
-      'ALTER TABLE tasks ADD COLUMN review_provider_id TEXT',
-      'ALTER TABLE tasks ADD COLUMN is_fixing_with_ai INTEGER DEFAULT 0',
-      'ALTER TABLE tasks ADD COLUMN execution_generation INTEGER DEFAULT 0',
-      'ALTER TABLE tasks ADD COLUMN docker_image TEXT',
-      'ALTER TABLE tasks ADD COLUMN selected_attempt_id TEXT',
-      'ALTER TABLE tasks ADD COLUMN pool_member_id TEXT',
-      'ALTER TABLE workflows ADD COLUMN description TEXT',
-      'ALTER TABLE workflows ADD COLUMN visual_proof INTEGER',
-      'ALTER TABLE workflows ADD COLUMN intermediate_repo_url TEXT',
-      // agent_session_id: new column for pluggable agent architecture
-      'ALTER TABLE tasks ADD COLUMN agent_session_id TEXT',
-      'ALTER TABLE attempts ADD COLUMN agent_session_id TEXT',
-      'ALTER TABLE workflows ADD COLUMN review_provider TEXT',
-      // execution_agent / agent_name: interchangeable agent support
-      'ALTER TABLE tasks ADD COLUMN execution_agent TEXT',
-      'ALTER TABLE tasks ADD COLUMN agent_name TEXT',
-      // durable audit pointers for most-recent agent session/name
-      'ALTER TABLE tasks ADD COLUMN last_agent_session_id TEXT',
-      'ALTER TABLE tasks ADD COLUMN last_agent_name TEXT',
-      'ALTER TABLE tasks ADD COLUMN external_dependencies TEXT',
-      'ALTER TABLE tasks ADD COLUMN runner_kind TEXT',
-      'ALTER TABLE tasks ADD COLUMN pool_id TEXT',
-      'ALTER TABLE tasks ADD COLUMN auto_fix_attempts INTEGER DEFAULT 0',
-      'ALTER TABLE tasks ADD COLUMN launch_phase TEXT',
-      'ALTER TABLE tasks ADD COLUMN launch_started_at TEXT',
-      'ALTER TABLE tasks ADD COLUMN launch_completed_at TEXT',
-      'ALTER TABLE tasks ADD COLUMN fixed_integration_sha TEXT',
-      'ALTER TABLE tasks ADD COLUMN fixed_integration_recorded_at TEXT',
-      'ALTER TABLE tasks ADD COLUMN fixed_integration_source TEXT',
-      'ALTER TABLE attempts ADD COLUMN queue_priority INTEGER NOT NULL DEFAULT 0',
-      'ALTER TABLE attempts ADD COLUMN claimed_at TEXT',
-      'ALTER TABLE attempts ADD COLUMN lease_expires_at TEXT',
-      'ALTER TABLE tasks ADD COLUMN task_state_version INTEGER NOT NULL DEFAULT 1',
-    ];
+    const migrations = SQLITE_COLUMN_MIGRATIONS;
     for (const sql of migrations) {
       try {
         this.db.run(sql);
