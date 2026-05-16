@@ -114,6 +114,23 @@ const REVIEW_READY_WORKFLOW_PR_PLAN = {
   ],
 };
 
+/**
+ * Plan that drives the workflow node and task nodes to representative statuses
+ * (review_ready, awaiting_approval, running, completed) so the screenshot shows
+ * the workflow card hue next to the task/merge-gate hues for the same states.
+ */
+const STATUS_COLOR_PARITY_PLAN = {
+  name: 'Status Color Parity Visual Proof',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'pull_request' as const,
+  mergeMode: 'external_review',
+  tasks: [
+    { id: 'parity-completed', description: 'Completed work', command: 'echo done', dependencies: [] as string[] },
+    { id: 'parity-running', description: 'Running work', command: 'echo run', dependencies: [] as string[] },
+    { id: 'parity-approval', description: 'Awaiting approval', command: 'echo approve', dependencies: [] as string[] },
+  ],
+};
+
 /** Plan for queue-action-surface hardening: combines canonical states, dependency relationships, and destructive actions. */
 const QUEUE_HARDENING_PLAN = {
   name: 'Queue Hardening Visual Proof',
@@ -419,6 +436,60 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByRole('link', { name: reviewUrl })).toHaveAttribute('href', reviewUrl);
 
     await captureScreenshot(page, 'review-ready-workflow-pr-sidebar');
+  });
+
+  test('workflow-task-status-color-parity — workflow card and task nodes share palette', async ({ page }) => {
+    // onFinish: 'pull_request' produces a merge gate task; setting it to
+    // review_ready rolls the workflow status up to review_ready (see
+    // workflow-rollup priority). Both the workflow card and the merge gate
+    // task drive their visuals from getStatusVisual in status-colors.ts, so
+    // capturing them in one frame proves the canonical palette is shared.
+    const workflowId = await loadPlanAndSelectWorkflow(page, STATUS_COLOR_PARITY_PLAN);
+    await page
+      .locator('.react-flow__node[data-testid$="parity-running"]')
+      .first()
+      .waitFor({ state: 'visible', timeout: 15000 });
+
+    const now = new Date();
+    const earlier = new Date(Date.now() - 5000);
+    await injectTaskStates(page, [
+      {
+        taskId: 'parity-completed',
+        changes: { status: 'completed', execution: { startedAt: earlier, completedAt: now } },
+      },
+      {
+        taskId: 'parity-running',
+        changes: { status: 'running', execution: { startedAt: now } },
+      },
+      {
+        taskId: 'parity-approval',
+        changes: { status: 'awaiting_approval', execution: { startedAt: now } },
+      },
+      {
+        taskId: `__merge__${workflowId}`,
+        changes: {
+          status: 'review_ready',
+          execution: { startedAt: now, reviewUrl: 'https://example.com/pr/parity' },
+        },
+      },
+    ]);
+
+    // Workflow card uses the review_ready palette (sky/blue) — label is lower-case "review ready".
+    await expect(workflowNode(page, workflowId)).toContainText('review ready');
+
+    // Merge gate task in the DAG renders REVIEW READY using the same palette.
+    await expect(page.getByTestId('merge-gate-primary-label')).toBeVisible();
+    await expect(page.getByText('REVIEW READY', { exact: true })).toBeVisible();
+
+    // Sibling task palettes are visible to prove parity across the rest of the status set.
+    await expect(
+      page.locator('.react-flow__node[data-testid$="parity-approval"]').getByText('APPROVE'),
+    ).toBeVisible();
+    await expect(
+      page.locator('.react-flow__node[data-testid$="parity-completed"]').getByText('COMPLETED'),
+    ).toBeVisible();
+
+    await captureScreenshot(page, 'workflow-task-status-color-parity');
   });
 
   test('interactive-status-hues — fixing-with-ai, needs-input, awaiting-approval', async ({ page }) => {
