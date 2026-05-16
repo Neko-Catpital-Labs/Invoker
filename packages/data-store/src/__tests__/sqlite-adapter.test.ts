@@ -2698,4 +2698,172 @@ describe('SQLiteAdapter', () => {
       expect(adapter.evictQueuedWorkflowMutationIntentsBefore('wf-1', fence)).toEqual([]);
     });
   });
+
+  describe('queryOne/queryAll statement cleanup', () => {
+    type FakeStmt = {
+      bind: (params: unknown[]) => boolean;
+      step: () => boolean;
+      getAsObject: () => Record<string, unknown>;
+      free: () => boolean;
+      freed: boolean;
+    };
+
+    function makeFakeStmt(behavior: {
+      throwOn?: 'bind' | 'step' | 'getAsObject';
+      stepResults?: boolean[];
+      rows?: Array<Record<string, unknown>>;
+    }): FakeStmt {
+      const stepResults = [...(behavior.stepResults ?? [])];
+      const rows = [...(behavior.rows ?? [])];
+      const stmt: FakeStmt = {
+        freed: false,
+        bind: () => {
+          if (behavior.throwOn === 'bind') {
+            throw new Error('boom: bind out of memory');
+          }
+          return true;
+        },
+        step: () => {
+          if (behavior.throwOn === 'step') {
+            throw new Error('boom: step out of memory');
+          }
+          return stepResults.length > 0 ? Boolean(stepResults.shift()) : false;
+        },
+        getAsObject: () => {
+          if (behavior.throwOn === 'getAsObject') {
+            throw new Error('boom: getAsObject out of memory');
+          }
+          return rows.shift() ?? {};
+        },
+        free: function () {
+          this.freed = true;
+          return true;
+        },
+      };
+      return stmt;
+    }
+
+    function patchPrepare(stmt: FakeStmt): { restore: () => void } {
+      const db = (adapter as any).db;
+      const original = db.prepare.bind(db);
+      db.prepare = () => stmt;
+      return {
+        restore: () => {
+          db.prepare = original;
+        },
+      };
+    }
+
+    it('frees the statement when queryOne bind throws', () => {
+      const stmt = makeFakeStmt({ throwOn: 'bind' });
+      const patch = patchPrepare(stmt);
+      try {
+        expect(() => (adapter as any).queryOne('SELECT 1', [1])).toThrow(/boom: bind/);
+      } finally {
+        patch.restore();
+      }
+      expect(stmt.freed).toBe(true);
+    });
+
+    it('frees the statement when queryOne step throws', () => {
+      const stmt = makeFakeStmt({ throwOn: 'step' });
+      const patch = patchPrepare(stmt);
+      try {
+        expect(() => (adapter as any).queryOne('SELECT 1')).toThrow(/boom: step/);
+      } finally {
+        patch.restore();
+      }
+      expect(stmt.freed).toBe(true);
+    });
+
+    it('frees the statement when queryOne getAsObject throws', () => {
+      const stmt = makeFakeStmt({ throwOn: 'getAsObject', stepResults: [true] });
+      const patch = patchPrepare(stmt);
+      try {
+        expect(() => (adapter as any).queryOne('SELECT 1')).toThrow(/boom: getAsObject/);
+      } finally {
+        patch.restore();
+      }
+      expect(stmt.freed).toBe(true);
+    });
+
+    it('frees the statement when queryOne returns a row', () => {
+      const stmt = makeFakeStmt({ stepResults: [true], rows: [{ id: 7 }] });
+      const patch = patchPrepare(stmt);
+      try {
+        const row = (adapter as any).queryOne('SELECT 1');
+        expect(row).toEqual({ id: 7 });
+      } finally {
+        patch.restore();
+      }
+      expect(stmt.freed).toBe(true);
+    });
+
+    it('frees the statement when queryOne finds no rows', () => {
+      const stmt = makeFakeStmt({ stepResults: [false] });
+      const patch = patchPrepare(stmt);
+      try {
+        const row = (adapter as any).queryOne('SELECT 1');
+        expect(row).toBeUndefined();
+      } finally {
+        patch.restore();
+      }
+      expect(stmt.freed).toBe(true);
+    });
+
+    it('frees the statement when queryAll bind throws', () => {
+      const stmt = makeFakeStmt({ throwOn: 'bind' });
+      const patch = patchPrepare(stmt);
+      try {
+        expect(() => (adapter as any).queryAll('SELECT 1', [1])).toThrow(/boom: bind/);
+      } finally {
+        patch.restore();
+      }
+      expect(stmt.freed).toBe(true);
+    });
+
+    it('frees the statement when queryAll step throws mid-iteration', () => {
+      const stmt = makeFakeStmt({ stepResults: [true], rows: [{ id: 1 }] });
+      let calls = 0;
+      const originalStep = stmt.step.bind(stmt);
+      stmt.step = () => {
+        calls += 1;
+        if (calls === 2) throw new Error('boom: step out of memory');
+        return originalStep();
+      };
+      const patch = patchPrepare(stmt);
+      try {
+        expect(() => (adapter as any).queryAll('SELECT 1')).toThrow(/boom: step/);
+      } finally {
+        patch.restore();
+      }
+      expect(stmt.freed).toBe(true);
+    });
+
+    it('frees the statement when queryAll getAsObject throws', () => {
+      const stmt = makeFakeStmt({ throwOn: 'getAsObject', stepResults: [true] });
+      const patch = patchPrepare(stmt);
+      try {
+        expect(() => (adapter as any).queryAll('SELECT 1')).toThrow(/boom: getAsObject/);
+      } finally {
+        patch.restore();
+      }
+      expect(stmt.freed).toBe(true);
+    });
+
+    it('frees the statement when queryAll returns rows', () => {
+      const stmt = makeFakeStmt({
+        stepResults: [true, true, false],
+        rows: [{ id: 1 }, { id: 2 }],
+      });
+      const patch = patchPrepare(stmt);
+      try {
+        const rows = (adapter as any).queryAll('SELECT 1');
+        expect(rows).toEqual([{ id: 1 }, { id: 2 }]);
+      } finally {
+        patch.restore();
+      }
+      expect(stmt.freed).toBe(true);
+    });
+  });
 });
