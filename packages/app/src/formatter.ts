@@ -8,6 +8,7 @@ import type { TaskState, TaskStatus } from '@invoker/workflow-core';
 import type { TaskEvent, Workflow } from '@invoker/data-store';
 import type { NormalizedCostEvent, CostRollup } from '@invoker/contracts';
 import type { GroupedCostRollup } from './cost-rollup.js';
+import type { ConflictHeatmapRow } from './conflict-heatmap.js';
 
 // ── ANSI Color Codes ─────────────────────────────────────────
 
@@ -237,6 +238,31 @@ export function formatWorkflowStats(stats: {
   }
 
   return lines.join('\n');
+}
+
+export function formatConflictHeatmap(rows: ConflictHeatmapRow[]): string {
+  if (rows.length === 0) {
+    return `${DIM}No merge conflicts recorded.${RESET}`;
+  }
+
+  const lines = [`${BOLD}Conflict heatmap${RESET}`];
+  for (const row of rows) {
+    lines.push(
+      `  ${RED}${row.count}x${RESET} ${BOLD}${row.file}${RESET} ${DIM}` +
+      `[workflows: ${row.workflowIds.length}, latest: ${row.latestTaskId}]${RESET}`,
+    );
+  }
+  return lines.join('\n');
+}
+
+export function serializeConflictHeatmapRow(row: ConflictHeatmapRow): Record<string, unknown> {
+  return {
+    file: row.file,
+    count: row.count,
+    workflowIds: row.workflowIds,
+    taskIds: row.taskIds,
+    latestTaskId: row.latestTaskId,
+  };
 }
 
 // ── Output Format Type ──────────────────────────────────────

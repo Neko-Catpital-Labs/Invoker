@@ -378,14 +378,14 @@ export function parseQueryFlags(args: string[]): QueryFlags {
 async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> {
   const subCommand = args[0];
   if (!subCommand) {
-    throw new Error('Missing query sub-command. Usage: --headless query <workflows|tasks|task|queue|audit|session|cost|cost-events|costs|ui-perf|stats>');
+    throw new Error('Missing query sub-command. Usage: --headless query <workflows|tasks|task|queue|audit|session|conflicts|cost|cost-events|costs|ui-perf|stats>');
   }
   const flags = parseQueryFlags(args.slice(1));
 
   const {
     formatWorkflowList, formatTaskStatus, formatWorkflowStatus,
-    formatEventLog, formatQueueStatus, formatWorkflowStats,
-    serializeWorkflow, serializeTask, serializeEvent,
+    formatEventLog, formatQueueStatus, formatWorkflowStats, formatConflictHeatmap,
+    serializeWorkflow, serializeTask, serializeEvent, serializeConflictHeatmapRow,
     formatAsLabel, formatAsJson, formatAsJsonl,
   } = await import('./formatter.js');
 
@@ -505,6 +505,17 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
       }
       break;
     }
+    case 'conflicts': {
+      const { buildConflictHeatmap } = await import('./conflict-heatmap.js');
+      const rows = buildConflictHeatmap(deps.persistence);
+      switch (flags.output) {
+        case 'label': process.stdout.write(rows.map(row => row.file).join('\n') + '\n'); break;
+        case 'json':  process.stdout.write(formatAsJson(rows.map(serializeConflictHeatmapRow)) + '\n'); break;
+        case 'jsonl': process.stdout.write(formatAsJsonl(rows.map(serializeConflictHeatmapRow)) + '\n'); break;
+        default:      process.stdout.write(formatConflictHeatmap(rows) + '\n'); break;
+      }
+      break;
+    }
     case 'session': {
       const taskId = flags.positional[0];
       if (!taskId) throw new Error('Usage: --headless query session <taskId>');
@@ -610,7 +621,7 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
       break;
     }
     default:
-      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, tasks, task, queue, audit, session, cost, cost-events, costs, ui-perf, stats`);
+      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, tasks, task, queue, audit, session, conflicts, cost, cost-events, costs, ui-perf, stats`);
   }
 }
 
@@ -1122,6 +1133,7 @@ ${BOLD}Query${RESET} (read-only, all support --output text|label|json|jsonl):
   query queue [--output F]                            Show queue status
   query audit <taskId> [--output F]                   Print event history
   query session <taskId>                              Print agent session messages
+  query conflicts [--output F]                        Rank files seen in merge conflicts
   query ui-perf [--output F] [--reset]               Print live UI perf stats
   query stats [--output F]                           Aggregate stats across all workflows
 
