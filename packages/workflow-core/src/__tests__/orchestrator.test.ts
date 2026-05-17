@@ -371,6 +371,69 @@ describe('Orchestrator', () => {
       expect(task.execution.reviewId).toBe('owner/repo#1');
       expect(task.execution.reviewStatus).toBe('Awaiting review');
     });
+
+    it('clears stale cancellation errors when a merge gate reaches review_ready', () => {
+      orchestrator.loadPlan({
+        name: 'Review ready after invalidation marker',
+        tasks: [{ id: 'task-a', description: 'task A' }],
+      });
+
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+      const mergeId = `__merge__${workflowId}`;
+      persistence.updateTask(mergeId, {
+        status: 'running',
+        execution: {
+          error: 'Cancelled before workflow-scope invalidation',
+          generation: 0,
+        },
+      });
+
+      orchestrator.handleWorkerResponse(makeResponse({
+        actionId: mergeId,
+        status: 'review_ready',
+        outputs: {
+          exitCode: 0,
+          summary: 'ready',
+          branch: 'feature/review-ready',
+        },
+      }));
+
+      const task = orchestrator.getTask(mergeId)!;
+      expect(task.status).toBe('review_ready');
+      expect(task.execution.error).toBeUndefined();
+    });
+  });
+
+  describe('successful worker responses', () => {
+    it('clears stale cancellation errors when a task completes', () => {
+      orchestrator.loadPlan({
+        name: 'Complete after invalidation marker',
+        tasks: [{ id: 'task-a', description: 'task A' }],
+      });
+
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+      const taskId = `${workflowId}/task-a`;
+      persistence.updateTask(taskId, {
+        status: 'running',
+        execution: {
+          error: 'Cancelled before workflow-scope invalidation',
+          generation: 0,
+        },
+      });
+
+      orchestrator.handleWorkerResponse(makeResponse({
+        actionId: taskId,
+        status: 'completed',
+        outputs: {
+          exitCode: 0,
+          summary: 'done',
+        },
+      }));
+
+      const task = orchestrator.getTask(taskId)!;
+      expect(task.status).toBe('completed');
+      expect(task.execution.error).toBeUndefined();
+    });
   });
 
   describe('workflow status transitions during retry paths', () => {
