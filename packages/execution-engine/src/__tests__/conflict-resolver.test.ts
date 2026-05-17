@@ -658,9 +658,52 @@ describe('conflict-resolver fail-fast workspace invariant', () => {
 
       // Should not throw workspace check - SSH tasks can have remote paths
       // This path will still fail in unit tests because no SSH target exists.
-      await expect(
+    await expect(
         fixWithAgentImpl(host, 'task-ssh', 'error output'),
       ).rejects.not.toThrow(/has no valid workspace/);
+    });
+
+    it('uses launch audit poolMemberId for pool-routed SSH task fixes', async () => {
+      const task = {
+        id: 'task-ssh-pool',
+        status: 'failed' as const,
+        execution: {
+          error: 'Test failed',
+          workspacePath: '~/.invoker/worktrees/repo/task-ssh-pool',
+        },
+        config: {
+          command: 'npm test',
+          runnerKind: 'ssh' as const,
+          poolId: 'pnpm-ssh',
+        },
+      };
+      const getRemoteTargetConfig = vi.fn(() => ({
+        host: 'remote.example',
+        user: 'user',
+        sshKeyPath: '/key',
+      }));
+
+      const host: ConflictResolverHost = {
+        ...makeHost(task),
+        persistence: {
+          getEvents: () => [
+            {
+              id: 1,
+              taskId: task.id,
+              eventType: 'task.executor.selected',
+              payload: JSON.stringify({ poolMemberId: 'remote-from-audit' }),
+              createdAt: new Date().toISOString(),
+            },
+          ],
+        } as any,
+        getRemoteTargetConfig,
+        agentRegistry: registerBuiltinAgents(),
+      };
+
+      await expect(
+        fixWithAgentImpl(host, task.id, 'error output'),
+      ).rejects.not.toThrow(/has no valid workspace/);
+      expect(getRemoteTargetConfig).toHaveBeenCalledWith('remote-from-audit');
     });
   });
 });
