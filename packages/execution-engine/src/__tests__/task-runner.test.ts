@@ -366,6 +366,157 @@ describe('TaskRunner', () => {
     await execution;
   });
 
+  it('kills the selected attempt when an older attempt for the same task is still active', async () => {
+    const completeCallbacks = new Map<string, (response: WorkResponse) => void>();
+    const kill = vi.fn();
+    const executorImpl = {
+      type: 'worktree',
+      start: vi.fn().mockImplementation(async (request: any) => ({
+        executionId: `exec-${request.attemptId}`,
+        taskId: request.actionId,
+        workspacePath: `/tmp/mock-worktree-${request.attemptId}`,
+        branch: `experiment/${request.attemptId}-mock`,
+      })),
+      onComplete: vi.fn().mockImplementation((handle: any, cb: any) => {
+        completeCallbacks.set(handle.executionId.replace(/^exec-/, ''), cb);
+        return () => {};
+      }),
+      onOutput: vi.fn().mockReturnValue(() => {}),
+      onHeartbeat: vi.fn().mockReturnValue(() => {}),
+      kill,
+      destroyAll: vi.fn(),
+    };
+    const registry = {
+      getDefault: () => executorImpl,
+      get: () => executorImpl,
+      getAll: () => [executorImpl],
+    };
+    const currentTask = makeTask({
+      id: 'kill-selected-task',
+      status: 'running',
+      config: { command: 'echo current' },
+      execution: { selectedAttemptId: 'kill-selected-task-a2' },
+    });
+    const orchestrator = {
+      getTask: (id: string) => id === currentTask.id ? currentTask : undefined,
+      handleWorkerResponse: vi.fn(() => []),
+    };
+    const runner = new TaskRunner({
+      orchestrator: orchestrator as any,
+      persistence: { updateTask: vi.fn() } as any,
+      executorRegistry: registry as any,
+      cwd: '/tmp',
+    });
+
+    const oldAttemptTask = makeTask({
+      id: currentTask.id,
+      status: 'running',
+      config: { command: 'echo old' },
+      execution: { selectedAttemptId: 'kill-selected-task-a1' },
+    });
+    const selectedAttemptTask = makeTask({
+      id: currentTask.id,
+      status: 'running',
+      config: { command: 'echo current' },
+      execution: { selectedAttemptId: 'kill-selected-task-a2' },
+    });
+
+    const oldExecution = runner.executeTask(oldAttemptTask);
+    const selectedExecution = runner.executeTask(selectedAttemptTask);
+    await vi.waitFor(() => expect(executorImpl.start).toHaveBeenCalledTimes(2));
+
+    await runner.killActiveExecution(currentTask.id);
+
+    expect(kill).toHaveBeenCalledTimes(1);
+    expect(kill).toHaveBeenCalledWith(expect.objectContaining({
+      executionId: 'exec-kill-selected-task-a2',
+      taskId: currentTask.id,
+      attemptId: 'kill-selected-task-a2',
+    }));
+
+    completeCallbacks.get('kill-selected-task-a1')?.({
+      requestId: 'req-kill-old',
+      actionId: currentTask.id,
+      attemptId: 'kill-selected-task-a1',
+      executionGeneration: 0,
+      status: 'completed',
+      outputs: { exitCode: 0 },
+    });
+    completeCallbacks.get('kill-selected-task-a2')?.({
+      requestId: 'req-kill-selected',
+      actionId: currentTask.id,
+      attemptId: 'kill-selected-task-a2',
+      executionGeneration: 0,
+      status: 'completed',
+      outputs: { exitCode: 0 },
+    });
+    await Promise.all([oldExecution, selectedExecution]);
+  });
+
+  it('does not kill an older active attempt when the selected attempt has no live execution', async () => {
+    let completeCallback: ((response: WorkResponse) => void) | undefined;
+    const kill = vi.fn();
+    const executorImpl = {
+      type: 'worktree',
+      start: vi.fn().mockImplementation(async (request: any) => ({
+        executionId: `exec-${request.attemptId}`,
+        taskId: request.actionId,
+        workspacePath: `/tmp/mock-worktree-${request.attemptId}`,
+        branch: `experiment/${request.attemptId}-mock`,
+      })),
+      onComplete: vi.fn().mockImplementation((_handle: any, cb: any) => {
+        completeCallback = cb;
+        return () => {};
+      }),
+      onOutput: vi.fn().mockReturnValue(() => {}),
+      onHeartbeat: vi.fn().mockReturnValue(() => {}),
+      kill,
+      destroyAll: vi.fn(),
+    };
+    const registry = {
+      getDefault: () => executorImpl,
+      get: () => executorImpl,
+      getAll: () => [executorImpl],
+    };
+    const currentTask = makeTask({
+      id: 'stale-active-task',
+      status: 'running',
+      config: { command: 'echo current' },
+      execution: { selectedAttemptId: 'stale-active-task-a2' },
+    });
+    const orchestrator = {
+      getTask: (id: string) => id === currentTask.id ? currentTask : undefined,
+      handleWorkerResponse: vi.fn(() => []),
+    };
+    const runner = new TaskRunner({
+      orchestrator: orchestrator as any,
+      persistence: { updateTask: vi.fn() } as any,
+      executorRegistry: registry as any,
+      cwd: '/tmp',
+    });
+
+    const staleExecution = runner.executeTask(makeTask({
+      id: currentTask.id,
+      status: 'running',
+      config: { command: 'echo stale' },
+      execution: { selectedAttemptId: 'stale-active-task-a1' },
+    }));
+    await vi.waitFor(() => expect(executorImpl.start).toHaveBeenCalledTimes(1));
+
+    await runner.killActiveExecution(currentTask.id);
+    expect(kill).not.toHaveBeenCalled();
+
+    completeCallback?.({
+      requestId: 'req-stale-active',
+      actionId: currentTask.id,
+      attemptId: 'stale-active-task-a1',
+      executionGeneration: 0,
+      status: 'completed',
+      outputs: { exitCode: 0 },
+    });
+    await staleExecution;
+  });
+
   it('marks recreateTask-style executions as requiring a fresh workspace', async () => {
     let seenRequest: any;
     let completeCallback: ((response: WorkResponse) => void) | undefined;

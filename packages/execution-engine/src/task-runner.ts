@@ -313,22 +313,23 @@ export class TaskRunner {
   }
 
   private resolveActiveExecution(taskId: string): { attemptId: string; entry: ActiveExecutionEntry } | undefined {
-    for (const [attemptId, entry] of this.activeExecutions) {
-      if (entry.taskId === taskId || entry.handle.taskId === taskId) {
-        return { attemptId, entry };
-      }
-    }
-
     const selectedAttemptId = this.orchestrator.getTask(taskId)?.execution.selectedAttemptId;
     if (selectedAttemptId) {
       const entry = this.activeExecutions.get(selectedAttemptId);
       if (entry) return { attemptId: selectedAttemptId, entry };
+      return undefined;
     }
 
     const latestAttemptId = this.loadLatestAttemptId(taskId);
     if (latestAttemptId) {
       const entry = this.activeExecutions.get(latestAttemptId);
       if (entry) return { attemptId: latestAttemptId, entry };
+    }
+
+    for (const [attemptId, entry] of this.activeExecutions) {
+      if (entry.taskId === taskId || entry.handle.taskId === taskId) {
+        return { attemptId, entry };
+      }
     }
 
     return undefined;
