@@ -634,6 +634,8 @@ type KebabToCamel<S extends string> =
 type ChannelToMethod<S extends string> = KebabToCamel<StripPrefix<S>>;
 
 // ── Derived InvokerAPI ──────────────────────────────────────
+// INV-91: renderer-facing IPC stays derived from the registries above so
+// transport contracts cannot drift into a hand-written duplicate API.
 
 type InvokeChannels = typeof IpcChannels;
 type TestOnlyChannels = typeof IpcTestOnlyChannels;
