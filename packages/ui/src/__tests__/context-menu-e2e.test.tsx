@@ -84,6 +84,9 @@ describe('Context menu (component)', () => {
       expect(screen.getByText('More')).toBeInTheDocument();
     });
     expect(screen.queryByText('Recreate Workflow')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('More'));
+    expect(await screen.findByText('Rebase and Retry')).toBeInTheDocument();
+    expect(screen.getByText('Rebase and Recreate')).toBeInTheDocument();
   });
 
   it('task context menu still works in mini DAG', async () => {
@@ -117,12 +120,20 @@ describe('Context menu (component)', () => {
     await waitFor(() => expect(mock.api.recreateWorkflow).toHaveBeenCalledWith('wf-1'));
   });
 
+  it('workflow context menu retries workflow with rebase', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    fireEvent.click(await screen.findByText('More'));
+    fireEvent.click(await screen.findByText('Rebase and Retry'));
+    await waitFor(() => expect(mock.api.rebaseRetry).toHaveBeenCalledWith('wf-1'));
+  });
+
   it('workflow context menu recreates workflow with rebase', async () => {
     await setup();
     fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
     fireEvent.click(await screen.findByText('More'));
-    fireEvent.click(await screen.findByText('Recreate with Rebase'));
-    await waitFor(() => expect(mock.api.recreateWithRebase).toHaveBeenCalledWith('wf-1'));
+    fireEvent.click(await screen.findByText('Rebase and Recreate'));
+    await waitFor(() => expect(mock.api.rebaseRecreate).toHaveBeenCalledWith('wf-1'));
   });
 
   it('workflow context menu cancels workflow', async () => {
