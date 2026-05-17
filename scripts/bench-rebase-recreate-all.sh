@@ -13,7 +13,7 @@ usage() {
   cat <<'EOF'
 Usage: scripts/bench-rebase-recreate-all.sh [--dry-run] [--workflow <id-or-name>] [--timeout <seconds>]
 
-Dispatches recreate-with-rebase across matching workflows, then reports
+Dispatches rebase-recreate across matching workflows, then reports
 workflow_mutation_intents timing:
   intent id, workflow id/name, created, started, completed, queue wait seconds,
   run seconds, and final status.
@@ -119,9 +119,9 @@ fi
 while IFS=$'\t' read -r workflow_id workflow_name; do
   [[ -z "$workflow_id" ]] && continue
   if [[ "$DRY_RUN" = true ]]; then
-    printf '[DRY RUN] would dispatch recreate-with-rebase\t%s\t%s\n' "$workflow_id" "$workflow_name"
+    printf '[DRY RUN] would dispatch rebase-recreate\t%s\t%s\n' "$workflow_id" "$workflow_name"
   else
-    printf '{"label":"%s","workflowId":"%s","args":["recreate-with-rebase","%s"]}\n' \
+    printf '{"label":"%s","workflowId":"%s","args":["rebase-recreate","%s"]}\n' \
       "$workflow_id" "$workflow_id" "$workflow_id" >> "$COMMANDS_FILE"
   fi
 done < "$WORKFLOWS_FILE"
@@ -149,7 +149,7 @@ while true; do
       from workflow_mutation_intents
       where id > $LAST_INTENT_ID
         and workflow_id in ($WORKFLOW_ID_LIST)
-        and args_json like '%recreate-with-rebase%'
+        and args_json like '%rebase-recreate%'
         and status in ('queued', 'running');
     "
   )"
@@ -159,14 +159,14 @@ while true; do
       from workflow_mutation_intents
       where id > $LAST_INTENT_ID
         and workflow_id in ($WORKFLOW_ID_LIST)
-        and args_json like '%recreate-with-rebase%';
+        and args_json like '%rebase-recreate%';
     "
   )"
   if [[ "$intent_count" -ge "$TOTAL_WORKFLOWS" && "$pending_count" -eq 0 ]]; then
     break
   fi
   if (( $(date +%s) - started_at_epoch >= TIMEOUT_SECONDS )); then
-    echo "Timed out waiting for recreate-with-rebase intents (seen=$intent_count pending=$pending_count)." >&2
+    echo "Timed out waiting for rebase-recreate intents (seen=$intent_count pending=$pending_count)." >&2
     break
   fi
   sleep "$POLL_INTERVAL_SECONDS"
@@ -195,7 +195,7 @@ sqlite3 -header -separator $'\t' "$DB_PATH" "
   from workflow_mutation_intents i
   join target_workflows on target_workflows.id = i.workflow_id
   where i.id > $LAST_INTENT_ID
-    and i.args_json like '%recreate-with-rebase%'
+    and i.args_json like '%rebase-recreate%'
   order by i.id asc;
 " | tee "$METRICS_FILE"
 
