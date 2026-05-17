@@ -94,6 +94,7 @@ describe('StatusBar click behavior', () => {
         ['task-2', makeTask('running')],
         ['task-3', makeTask('failed')],
         ['task-4', makeTask('pending')],
+        ['task-5', makeTask('closed')],
       ]);
 
       render(
@@ -112,10 +113,13 @@ describe('StatusBar click behavior', () => {
       fireEvent.click(screen.getByTestId('status-bar-pill-failed'));
       expect(mockOnStatusClick).toHaveBeenCalledWith('failed', expect.any(Object));
 
+      fireEvent.click(screen.getByTestId('status-bar-pill-closed'));
+      expect(mockOnStatusClick).toHaveBeenCalledWith('closed', expect.any(Object));
+
       fireEvent.click(screen.getByTestId('status-bar-pill-pending'));
       expect(mockOnStatusClick).toHaveBeenCalledWith('pending', expect.any(Object));
 
-      expect(mockOnStatusClick).toHaveBeenCalledTimes(4);
+      expect(mockOnStatusClick).toHaveBeenCalledTimes(5);
     });
   });
 
