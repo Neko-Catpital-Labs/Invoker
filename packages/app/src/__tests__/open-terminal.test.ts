@@ -45,6 +45,7 @@ import {
   spawnDetachedTerminal,
 } from '../terminal-external-launch.js';
 import { openExternalTerminalForTask } from '../open-terminal-for-task.js';
+import * as configModule from '../config.js';
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
@@ -786,8 +787,13 @@ describe('SshExecutor getRestoredTerminalSpec', () => {
       getContainerId: vi.fn(() => null),
       getWorkspacePath: vi.fn(() => null),  // Missing workspace path - invariant violation!
       getBranch: vi.fn(() => 'experiment/test-branch'),
-      getPoolMemberId: vi.fn(() => null),
+      getPoolMemberId: vi.fn(() => 'remote-missing-workspace'),
     };
+    const loadConfigSpy = vi.spyOn(configModule, 'loadConfig').mockReturnValue({
+      remoteTargets: {
+        'remote-missing-workspace': { host: 'h', user: 'u', sshKeyPath: '/k' },
+      },
+    } as any);
 
     const ssh = new SshExecutor({ host: 'h', user: 'u', sshKeyPath: '/k' });
     const registry = new ExecutorRegistry();
@@ -807,6 +813,7 @@ describe('SshExecutor getRestoredTerminalSpec', () => {
     expect(result.reason).toContain('workspacePath is not set');
     expect(result.reason).toContain('Recreate the task');
     expect(result.reason).toContain('Refusing to fall back to host repo');
+    loadConfigSpy.mockRestore();
 
     // Verify no real SSH call attempted
     expect(mockPersistence.getWorkspacePath).toHaveBeenCalledWith('task-ssh-no-workspace');
@@ -822,9 +829,19 @@ describe('SshExecutor getRestoredTerminalSpec', () => {
       getContainerId: vi.fn(() => null),
       getWorkspacePath: vi.fn(() => '~/.invoker/worktrees/abc/experiment-ssh-task'),  // Has workspace!
       getBranch: vi.fn(() => 'experiment/ssh-task'),
-      getPoolMemberId: vi.fn(() => null),
+      getPoolMemberId: vi.fn(() => 'droplet-1'),
       getExecutionAgent: vi.fn(() => 'claude'),
     };
+    const loadConfigSpy = vi.spyOn(configModule, 'loadConfig').mockReturnValue({
+      remoteTargets: {
+        'droplet-1': {
+          host: 'droplet.example',
+          user: 'ubuntu',
+          sshKeyPath: '/home/user/.ssh/id_rsa',
+          port: 2222,
+        },
+      },
+    } as any);
 
     const ssh = new SshExecutor({
       host: 'droplet.example',
@@ -849,6 +866,7 @@ describe('SshExecutor getRestoredTerminalSpec', () => {
       expect(result.reason).not.toContain('requires a managed workspace');
       expect(result.reason).not.toContain('workspacePath is not set');
     }
+    loadConfigSpy.mockRestore();
 
     // Verify persistence was queried correctly
     expect(mockPersistence.getWorkspacePath).toHaveBeenCalledWith('task-ssh-with-workspace');
@@ -876,9 +894,19 @@ describe('SshExecutor getRestoredTerminalSpec', () => {
       getContainerId: vi.fn(() => null),
       getWorkspacePath: vi.fn(() => '~/.invoker/worktrees/xyz/experiment-ssh-managed-deadbeef'),
       getBranch: vi.fn(() => 'experiment/ssh-managed-deadbeef'),
-      getPoolMemberId: vi.fn(() => null),
+      getPoolMemberId: vi.fn(() => 'remote-1'),
       getExecutionAgent: vi.fn(() => 'claude'),
     };
+    const loadConfigSpy = vi.spyOn(configModule, 'loadConfig').mockReturnValue({
+      remoteTargets: {
+        'remote-1': {
+          host: 'remote.dev',
+          user: 'deployer',
+          sshKeyPath: '/home/me/.ssh/deploy_key',
+          port: 2222,
+        },
+      },
+    } as any);
 
     const ssh = new SshExecutor({
       host: 'remote.dev',
@@ -932,11 +960,70 @@ describe('SshExecutor getRestoredTerminalSpec', () => {
     // Verify no workspace invariant error
     expect(mockPersistence.getWorkspacePath).toHaveBeenCalledWith('ssh-managed-task');
     expect(mockPersistence.getBranch).toHaveBeenCalledWith('ssh-managed-task');
+    expect(mockPersistence.getPoolMemberId).toHaveBeenCalledWith('ssh-managed-task');
+    loadConfigSpy.mockRestore();
 
     // Reset only the per-test spy. Do not call vi.restoreAllMocks() — it would
     // wipe the module-level vi.mock for spawnDetachedTerminal that subsequent
     // tests rely on, causing "vi.mocked(spawnDetachedTerminal).mockClear is
     // not a function" failures in the fail-fast invariant describe block.
+    vi.mocked(terminalLaunch.spawnDetachedTerminal).mockReset();
+    vi.mocked(terminalLaunch.spawnDetachedTerminal).mockImplementation(
+      async () => ({ opened: true } as const),
+    );
+  });
+
+  it('opens completed SSH task from persisted pool member instead of host worktree lookup', async () => {
+    const mockSpawnDetached = vi.fn(
+      async (_cmd: string, _args: string[], _opts: any, _onClose: () => void) =>
+        ({ opened: true } as const),
+    );
+    const terminalLaunch = await import('../terminal-external-launch.js');
+    vi.spyOn(terminalLaunch, 'spawnDetachedTerminal').mockImplementation(mockSpawnDetached as any);
+    const loadConfigSpy = vi.spyOn(configModule, 'loadConfig').mockReturnValue({
+      remoteTargets: {
+        'remote-db': {
+          host: 'db.remote.example',
+          user: 'runner',
+          sshKeyPath: '/tmp/key',
+          port: 2222,
+        },
+      },
+    } as any);
+
+    const mockPersistence = {
+      getTaskStatus: vi.fn(() => 'completed'),
+      getRunnerKind: vi.fn(() => 'ssh'),
+      getAgentSessionId: vi.fn(() => null),
+      getContainerId: vi.fn(() => null),
+      getWorkspacePath: vi.fn(() => '~/.invoker/worktrees/xyz/experiment-db-backed'),
+      getBranch: vi.fn(() => 'experiment/db-backed'),
+      getPoolMemberId: vi.fn(() => 'remote-db'),
+      getExecutionAgent: vi.fn(() => 'claude'),
+    };
+    const registry = new ExecutorRegistry();
+    registry.register('ssh', new WorktreeExecutor({
+      worktreeBaseDir: '/tmp/wt',
+      cacheDir: '/tmp/cache',
+    }) as any);
+    vi.mocked(existsSync).mockReturnValue(false);
+
+    const result = await openExternalTerminalForTask({
+      taskId: 'ssh-db-backed-task',
+      persistence: mockPersistence as any,
+      executorRegistry: registry,
+      repoRoot: '/local/repo',
+    });
+
+    expect(result.opened).toBe(true);
+    expect(mockSpawnDetached).toHaveBeenCalledTimes(1);
+    const spawned = mockSpawnDetached.mock.calls[0];
+    expect(spawned?.[0]).toBe(process.platform === 'darwin' ? 'osascript' : 'x-terminal-emulator');
+    expect(JSON.stringify(spawned?.[1])).toContain('db.remote.example');
+    expect(JSON.stringify(spawned?.[1])).toContain('experiment/db-backed');
+    expect(existsSync).not.toHaveBeenCalledWith('~/.invoker/worktrees/xyz/experiment-db-backed');
+
+    loadConfigSpy.mockRestore();
     vi.mocked(terminalLaunch.spawnDetachedTerminal).mockReset();
     vi.mocked(terminalLaunch.spawnDetachedTerminal).mockImplementation(
       async () => ({ opened: true } as const),
@@ -1370,8 +1457,13 @@ describe('openExternalTerminalForTask fail-fast workspace invariant', () => {
       getContainerId: vi.fn(() => null),
       getWorkspacePath: vi.fn(() => null),  // Missing workspace path!
       getBranch: vi.fn(() => null),
-      getPoolMemberId: vi.fn(() => null),
+      getPoolMemberId: vi.fn(() => 'remote-missing-workspace-2'),
     };
+    const loadConfigSpy = vi.spyOn(configModule, 'loadConfig').mockReturnValue({
+      remoteTargets: {
+        'remote-missing-workspace-2': { host: 'h', user: 'u', sshKeyPath: '/k' },
+      },
+    } as any);
 
     const ssh = new SshExecutor({ host: 'h', user: 'u', sshKeyPath: '/k' });
     const registry = new ExecutorRegistry();
@@ -1387,6 +1479,7 @@ describe('openExternalTerminalForTask fail-fast workspace invariant', () => {
     expect(result.opened).toBe(false);
     expect(result.reason).toContain('workspace metadata is missing');
     expect(result.reason).toContain('Executor type "ssh" requires a managed workspace');
+    loadConfigSpy.mockRestore();
   });
 
   it('refuses host-repo fallback when docker task has no workspace path', async () => {

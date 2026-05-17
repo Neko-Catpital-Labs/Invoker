@@ -115,6 +115,23 @@ describe('SQLiteAdapter', () => {
       expect(loaded[0].status).toBe('pending');
     });
 
+    it('persists poolMemberId through updateTask and getPoolMemberId', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('ssh-task', {
+        config: { runnerKind: 'ssh' },
+      }));
+
+      adapter.updateTask('ssh-task', {
+        config: { poolMemberId: 'remote-1' },
+      });
+
+      expect(adapter.getPoolMemberId('ssh-task')).toBe('remote-1');
+      expect(adapter.loadTask('ssh-task')?.config).toMatchObject({
+        runnerKind: 'ssh',
+        poolMemberId: 'remote-1',
+      });
+    });
+
     it('loads all workflows and tasks in one startup snapshot', () => {
       const wf2: Workflow = {
         ...testWorkflow,
@@ -1793,6 +1810,7 @@ describe('SQLiteAdapter', () => {
         normalizedMergeModes: 1,
         staleAutoFixExperimentTasks: 2,
         normalizedStaleLaunchMetadata: 0,
+        backfilledMissingSshPoolMemberIds: 0,
       });
       const taskById = new Map(adapter.loadTasks('wf-1').map((task) => [task.id, task]));
       expect(adapter.loadWorkflow('wf-1')?.mergeMode).toBe('external_review');
@@ -1808,7 +1826,42 @@ describe('SQLiteAdapter', () => {
         normalizedMergeModes: 0,
         staleAutoFixExperimentTasks: 0,
         normalizedStaleLaunchMetadata: 0,
+        backfilledMissingSshPoolMemberIds: 0,
       });
+    });
+
+    it('repairs missing SSH pool member ids from the latest executor-selected event', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('ssh-old', {
+        status: 'completed',
+        config: { runnerKind: 'ssh' },
+        execution: { workspacePath: '~/.invoker/worktrees/ssh-old', branch: 'experiment/ssh-old' },
+      }));
+      adapter.logEvent('ssh-old', 'task.executor.selected', { runnerKind: 'ssh', poolMemberId: 'remote-old' });
+      adapter.logEvent('ssh-old', 'task.executor.selected', { runnerKind: 'ssh', poolMemberId: 'remote-new' });
+
+      const report = adapter.runCompatibilityMigration();
+
+      expect(report.backfilledMissingSshPoolMemberIds).toBe(1);
+      expect(adapter.getPoolMemberId('ssh-old')).toBe('remote-new');
+      expect(adapter.loadTask('ssh-old')?.config).toMatchObject({ runnerKind: 'ssh', poolMemberId: 'remote-new' });
+      expect(adapter.runCompatibilityMigration().backfilledMissingSshPoolMemberIds).toBe(0);
+    });
+
+    it('does not repair missing SSH pool member ids from malformed or empty event payloads', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('ssh-empty', { config: { runnerKind: 'ssh' } }));
+      adapter.logEvent('ssh-empty', 'task.executor.selected', { runnerKind: 'ssh', poolMemberId: '  ' });
+      adapter.saveTask('wf-1', makeTask('ssh-bad', { config: { runnerKind: 'ssh' } }));
+      (adapter as any).db.run(
+        `INSERT INTO events (task_id, event_type, payload) VALUES ('ssh-bad', 'task.executor.selected', '{')`,
+      );
+
+      const report = adapter.runCompatibilityMigration();
+
+      expect(report.backfilledMissingSshPoolMemberIds).toBe(0);
+      expect(adapter.getPoolMemberId('ssh-empty')).toBeNull();
+      expect(adapter.getPoolMemberId('ssh-bad')).toBeNull();
     });
 
     it('normalizes stale terminal launch metadata without touching legitimate long executions', () => {

@@ -702,7 +702,6 @@ export class TaskRunner {
         }),
       ]);
     } catch (err) {
-      this.pendingPoolSelections.delete(task.id);
       const meta = err as StartupFailureMetadata;
       const startupErrorMessage = `Executor startup failed (${executor.type}): ${err instanceof Error ? err.message : String(err)}\n`;
       this.callbacks.onOutput?.(task.id, startupErrorMessage);
@@ -727,11 +726,19 @@ export class TaskRunner {
           execution.lastAgentSessionId = meta.agentSessionId;
         }
         if (meta.containerId) execution.containerId = meta.containerId;
+        const poolSelection = this.pendingPoolSelections.get(task.id);
+        const selectedSshTargetId = executor.type === 'ssh'
+          ? this.selectedRemoteTargetId(task, poolSelection)
+          : undefined;
         this.persistence.updateTask(task.id, {
-          config: { runnerKind: executor.type as RunnerKind },
+          config: {
+            runnerKind: executor.type as RunnerKind,
+            ...(selectedSshTargetId ? { poolMemberId: selectedSshTargetId } : {}),
+          },
           execution: execution as any,
         });
       }
+      this.pendingPoolSelections.delete(task.id);
       const wrapped = new Error(
         `Executor startup failed (${executor.type}): ${err instanceof Error ? err.message : String(err)}`,
         { cause: err },
