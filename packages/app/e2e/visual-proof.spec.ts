@@ -135,6 +135,20 @@ const MENU_PROOF_PLAN = {
   mergeMode: 'external_review',
 };
 
+const SSH_TERMINAL_RESUME_PLAN = {
+  name: 'SSH Terminal Resume Visual Proof',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'none' as const,
+  tasks: [
+    {
+      id: 'ssh-resume',
+      description: 'Completed SSH resume task',
+      command: 'echo done',
+      dependencies: [] as string[],
+    },
+  ],
+};
+
 function workflowNode(page: Page, workflowId: string) {
   return page.getByTestId(`workflow-node-${workflowId}`);
 }
@@ -1098,5 +1112,80 @@ test.describe('Visual proof capture', () => {
 
     await captureScreenshot(page, 'queue-action-surface-hardening');
     await assertPageScreenshot(page, 'queue-action-surface-hardening');
+  });
+
+  test('completed SSH task double-click expands terminal drawer with resume command', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, SSH_TERMINAL_RESUME_PLAN);
+    const workspacePath = '/home/invoker/.invoker/worktrees/wf-ssh/experiment-ssh-resume';
+    const sessionId = 'codex-session-ssh-123';
+    const sshInnerCommand = `cd '${workspacePath}' && codex resume ${sessionId}`;
+    const sshArgs = ['-i', '/tmp/e2e_id_rsa', '-t', 'invoker@remote-do-1', sshInnerCommand];
+
+    await injectTaskStates(page, [
+      {
+        taskId: 'ssh-resume',
+        changes: {
+          status: 'completed',
+          config: {
+            runnerKind: 'ssh',
+            poolMemberId: 'remote-do-1',
+            executionAgent: 'codex',
+          },
+          execution: {
+            workspacePath,
+            agentSessionId: sessionId,
+            completedAt: new Date('2025-01-01T00:00:00.000Z'),
+          },
+        },
+      },
+    ]);
+
+    await page.evaluate(({ args, cwd }) => {
+      (window as unknown as { __terminalCalls: string[] }).__terminalCalls = [];
+      window.__INVOKER_TEST_OPEN_TERMINAL__ = async (taskId: string) => {
+        (window as unknown as { __terminalCalls: string[] }).__terminalCalls.push(taskId);
+        return {
+          opened: true,
+          session: {
+            sessionId: 'visual-proof-ssh-session',
+            taskId,
+            status: 'running',
+            cwd,
+            command: 'ssh',
+            args,
+            mode: 'spawn',
+            attached: false,
+            createdAt: '2025-01-01T00:00:00.000Z',
+          },
+        };
+      };
+    }, { args: sshArgs, cwd: workspacePath });
+
+    const sshTaskNode = page
+      .getByTestId('selected-workflow-mini-dag')
+      .locator('.react-flow__node[data-testid$="ssh-resume"]')
+      .first();
+    const box = await sshTaskNode.boundingBox();
+    if (!box) throw new Error('SSH task node has no bounding box');
+    await sshTaskNode.locator('> div').dispatchEvent('dblclick', {
+      bubbles: true,
+      cancelable: true,
+      clientX: box.x + box.width / 2,
+      clientY: box.y + box.height / 2,
+    });
+
+    await expect(page.getByTestId('terminal-drawer-body')).toBeVisible();
+    await expect(page.getByTestId('terminal-tab-wf-test-1/ssh-resume')).toHaveAttribute('data-active', 'true');
+    await expect(page.getByTestId('terminal-session-command')).toContainText('ssh');
+    await expect(page.getByTestId('terminal-session-command')).toContainText(workspacePath);
+    await expect(page.getByTestId('terminal-session-command')).toContainText(`codex resume ${sessionId}`);
+    await expect(page.getByTestId('terminal-pane-wf-test-1/ssh-resume')).toBeVisible();
+
+    const calls = await page.evaluate(() => (window as unknown as { __terminalCalls: string[] }).__terminalCalls);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain('ssh-resume');
+
+    await captureScreenshot(page, 'completed-ssh-terminal-resume');
+    await assertPageScreenshot(page, 'completed-ssh-terminal-resume');
   });
 });

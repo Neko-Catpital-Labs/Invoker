@@ -390,7 +390,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
     });
 
     return { nodes: allNodes, edges: newEdges };
-  }, [activeLayout.positions, rawGraph, routedEdgePoints, selectedTaskId, statusFilters, tasks, workflows]);
+  }, [activeLayout.positions, onTaskDoubleClick, rawGraph, routedEdgePoints, selectedTaskId, statusFilters, tasks, workflows]);
 
   // Merge task-derived nodes with React Flow's internal dimension state.
   // Without this, each task-delta re-render creates new node objects that discard

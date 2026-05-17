@@ -281,5 +281,6 @@ declare global {
       initialWorkflowId?: string | null;
       appStartedAtEpochMs?: number;
     };
+    __INVOKER_TEST_OPEN_TERMINAL__?: (taskId: string) => ReturnType<InvokerAPI['openTerminal']>;
   }
 }

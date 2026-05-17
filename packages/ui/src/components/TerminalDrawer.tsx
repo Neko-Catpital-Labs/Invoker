@@ -29,9 +29,10 @@ interface TerminalDrawerProps {
 interface TerminalSessionPaneProps {
   session: TerminalSessionDescriptor;
   isActive: boolean;
+  hasHeader: boolean;
 }
 
-function TerminalSessionPane({ session, isActive }: TerminalSessionPaneProps): JSX.Element {
+function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPaneProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -134,7 +135,7 @@ function TerminalSessionPane({ session, isActive }: TerminalSessionPaneProps): J
       ref={containerRef}
       data-testid={`terminal-pane-${session.taskId}`}
       data-session-id={session.sessionId}
-      className="absolute inset-0"
+      className={hasHeader ? 'absolute bottom-0 left-0 right-0 top-8' : 'absolute inset-0'}
       style={{ display: isActive ? 'block' : 'none' }}
     />
   );
@@ -149,6 +150,11 @@ export function TerminalDrawer({
   onCloseSession,
   taskLabels,
 }: TerminalDrawerProps): JSX.Element {
+  const activeSession = sessions.find((session) => session.sessionId === activeSessionId) ?? null;
+  const activeCommand = activeSession?.command
+    ? [activeSession.command, ...(activeSession.args ?? [])].join(' ')
+    : null;
+
   return (
     <div
       data-testid="terminal-drawer"
@@ -225,11 +231,23 @@ export function TerminalDrawer({
               Open a terminal from a task to attach.
             </div>
           )}
+          {activeSession && activeCommand && (
+            <div
+              data-testid="terminal-session-command"
+              className="absolute left-0 right-0 top-0 z-10 flex h-8 items-center gap-2 border-b border-gray-800 bg-gray-950 px-3 text-[11px]"
+            >
+              <span className="text-gray-500">SSH</span>
+              <span className="min-w-0 flex-1 truncate font-mono text-emerald-200">
+                {activeCommand}
+              </span>
+            </div>
+          )}
           {sessions.map((session) => (
             <TerminalSessionPane
               key={session.sessionId}
               session={session}
               isActive={session.sessionId === activeSessionId}
+              hasHeader={Boolean(session.sessionId === activeSessionId && activeCommand)}
             />
           ))}
         </div>

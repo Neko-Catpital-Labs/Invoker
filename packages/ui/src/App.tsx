@@ -445,7 +445,7 @@ export function App() {
       return;
     }
     setTerminalCollapsed(false);
-    const result = await window.invoker?.openTerminal?.(taskId);
+    const result = await (window.__INVOKER_TEST_OPEN_TERMINAL__ ?? window.invoker?.openTerminal)?.(taskId);
     if (!result) return;
     if (!result.opened) {
       window.alert(result.reason ?? 'Cannot open terminal for this task.');
