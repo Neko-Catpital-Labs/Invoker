@@ -23,6 +23,7 @@ describe('workflow rollup', () => {
     { name: 'needs input task', statuses: ['completed', 'needs_input'], expected: 'blocked' },
     { name: 'failed with unrelated pending work by counts only', statuses: ['failed', 'pending'], expected: 'failed' },
     { name: 'terminal failed', statuses: ['failed', 'completed'], expected: 'failed' },
+    { name: 'closed gate', statuses: ['completed', 'closed'], expected: 'closed' },
     { name: 'completed workflow', statuses: ['completed', 'completed'], expected: 'completed' },
     { name: 'completed with stale prior task', statuses: ['completed', 'stale'], expected: 'completed' },
     { name: 'all stale', statuses: ['stale', 'stale'], expected: 'stale' },
@@ -62,5 +63,15 @@ describe('workflow rollup', () => {
     ]);
 
     expect(rollup.status).toBe('failed');
+  });
+
+  it('closes a workflow when pending work is blocked by a closed dependency', () => {
+    const rollup = computeWorkflowRollupFromSummaries([
+      task('alpha', 'closed'),
+      task('beta', 'pending', ['alpha']),
+      task('merge', 'pending', ['beta']),
+    ]);
+
+    expect(rollup.status).toBe('closed');
   });
 });
