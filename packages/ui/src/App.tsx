@@ -52,7 +52,8 @@ interface WorkflowContextMenuProps {
   onOpenWorkflow: (workflowId: string) => void;
   onOpenPr: (workflowId: string) => void;
   onRetryWorkflow: (workflowId: string) => void;
-  onRecreateWithRebase: (workflowId: string) => void;
+  onRebaseRetry: (workflowId: string) => void;
+  onRebaseRecreate: (workflowId: string) => void;
   onRecreateWorkflow: (workflowId: string) => void;
   onCancelWorkflow: (workflowId: string) => void;
   onDeleteWorkflow: (workflowId: string) => void;
@@ -67,7 +68,8 @@ function WorkflowContextMenu({
   onOpenWorkflow,
   onOpenPr,
   onRetryWorkflow,
-  onRecreateWithRebase,
+  onRebaseRetry,
+  onRebaseRecreate,
   onRecreateWorkflow,
   onCancelWorkflow,
   onDeleteWorkflow,
@@ -169,8 +171,11 @@ function WorkflowContextMenu({
       ) : (
         <div>
           <div className="my-1 border-t border-gray-600" />
-          <button role="menuitem" onClick={() => runAction(onRecreateWithRebase)} className={dangerButtonClass}>
-            Recreate with Rebase
+          <button role="menuitem" onClick={() => runAction(onRebaseRetry)} className={buttonClass}>
+            Rebase and Retry
+          </button>
+          <button role="menuitem" onClick={() => runAction(onRebaseRecreate)} className={dangerButtonClass}>
+            Rebase and Recreate
           </button>
           <button role="menuitem" onClick={() => runAction(onRecreateWorkflow)} className={dangerButtonClass}>
             Recreate Workflow
@@ -508,15 +513,27 @@ export function App() {
     }
   }, []);
 
-  const handleRecreateWithRebase = useCallback(async (workflowId: string) => {
+  const handleRebaseRetry = useCallback(async (workflowId: string) => {
     setContextMenu(null);
     try {
-      const result = await window.invoker?.recreateWithRebase(workflowId);
+      const result = await window.invoker?.rebaseRetry(workflowId);
       if (result && !result.success) {
-        console.error('Recreate with Rebase failed for some branches:', result.errors);
+        console.error('Rebase and Retry failed for some branches:', result.errors);
       }
     } catch (err) {
-      console.error('Recreate with Rebase failed:', err);
+      console.error('Rebase and Retry failed:', err);
+    }
+  }, []);
+
+  const handleRebaseRecreate = useCallback(async (workflowId: string) => {
+    setContextMenu(null);
+    try {
+      const result = await window.invoker?.rebaseRecreate(workflowId);
+      if (result && !result.success) {
+        console.error('Rebase and Recreate failed for some branches:', result.errors);
+      }
+    } catch (err) {
+      console.error('Rebase and Recreate failed:', err);
     }
   }, []);
 
@@ -1226,7 +1243,8 @@ export function App() {
           onOpenWorkflow={handleWorkflowClick}
           onOpenPr={handleOpenWorkflowPr}
           onRetryWorkflow={(workflowId) => void handleRetryWorkflow(workflowId)}
-          onRecreateWithRebase={(workflowId) => void handleRecreateWithRebase(workflowId)}
+          onRebaseRetry={(workflowId) => void handleRebaseRetry(workflowId)}
+          onRebaseRecreate={(workflowId) => void handleRebaseRecreate(workflowId)}
           onRecreateWorkflow={(workflowId) => void handleRecreateWorkflow(workflowId)}
           onCancelWorkflow={(workflowId) => void handleCancelWorkflow(workflowId)}
           onDeleteWorkflow={(workflowId) => void handleDeleteWorkflow(workflowId)}
