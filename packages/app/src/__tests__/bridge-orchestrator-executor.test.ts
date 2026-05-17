@@ -1170,6 +1170,7 @@ describe('Flow 9c: set-merge-mode external_review', () => {
     checkApproval: async () => ({
       approved: false,
       rejected: false,
+      closedUnmerged: false,
       statusText: 'Open',
       url: 'https://github.com/owner/repo/pull/99',
     }),
