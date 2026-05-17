@@ -14,7 +14,7 @@ unset ELECTRON_RUN_AS_NODE
 echo "==> case 2.16: delete-all"
 invoker_e2e_run_headless delete-all
 
-PLAN_PATH="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.16-plan.XXXXXX.yaml")"
+PLAN_PATH="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.16-plan-yaml.XXXXXX")"
 cat > "$PLAN_PATH" <<'EOF'
 name: e2e-dry-run group2 2.16 retry-vs-recreate-window
 repoUrl: git@github.com:invoker/workflow-test.git
@@ -28,7 +28,7 @@ tasks:
 EOF
 
 echo "==> case 2.16: submit seed workflow"
-SUBMIT_LOG="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.16-submit.XXXXXX.log")"
+SUBMIT_LOG="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.16-submit-log.XXXXXX")"
 invoker_e2e_submit_plan_capture "$PLAN_PATH" "$SUBMIT_LOG"
 
 WF_ID="$(invoker_e2e_extract_workflow_id_from_log "$SUBMIT_LOG")"
