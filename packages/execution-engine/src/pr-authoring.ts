@@ -6,7 +6,7 @@ import { homedir, tmpdir } from 'node:os';
 
 import type { ExecutionAgent } from './agent.js';
 import type { SessionDriver } from './session-driver.js';
-import { cleanElectronEnv } from './process-utils.js';
+import { cleanElectronEnv, resolveExecutableOnCurrentPath } from './process-utils.js';
 
 // ── Structured PR-authoring context ──────────────────────
 
@@ -279,9 +279,10 @@ export function spawnAgentPrAuthorViaRegistry(
   const promptTransport = materializeLocalPrompt(prompt);
   const spec = agent.buildCommand(promptTransport.effectivePrompt);
   const sessionId = spec.sessionId ?? randomUUID();
+  const cmd = resolveExecutableOnCurrentPath(spec.cmd) ?? spec.cmd;
 
   return new Promise<{ body: string; stdout: string; sessionId: string }>((resolve, reject) => {
-    const child = spawn(spec.cmd, spec.args, {
+    const child = spawn(cmd, spec.args, {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: cleanElectronEnv(),
