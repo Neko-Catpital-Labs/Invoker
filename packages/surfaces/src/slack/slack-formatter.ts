@@ -15,6 +15,7 @@ const STATUS_EMOJI: Record<string, string> = {
   fixing_with_ai: ':hammer_and_wrench:',
   completed: ':white_check_mark:',
   failed: ':x:',
+  closed: ':black_circle:',
   blocked: ':no_entry_sign:',
   needs_input: ':question:',
   awaiting_approval: ':raised_hand:',
@@ -26,6 +27,7 @@ const STATUS_LABEL: Record<string, string> = {
   fixing_with_ai: 'Fixing with AI',
   completed: 'Completed',
   failed: 'Failed',
+  closed: 'Closed',
   blocked: 'Blocked',
   needs_input: 'Needs Input',
   awaiting_approval: 'Awaiting Approval',
@@ -153,6 +155,7 @@ export function formatWorkflowStatus(status: WorkflowStatus): SlackMessage {
     `Total: ${status.total}`,
     `:white_check_mark: Completed: ${status.completed}`,
     `:x: Failed: ${status.failed}`,
+    `:black_circle: Closed: ${status.closed}`,
     `:large_blue_circle: Running: ${status.running}`,
     `:white_circle: Pending: ${status.pending}`,
   ];

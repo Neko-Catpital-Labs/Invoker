@@ -822,7 +822,7 @@ export function App() {
   const allSettled = useMemo(() => {
     if (tasks.size === 0) return false;
     for (const task of tasks.values()) {
-      if (task.status !== 'completed' && task.status !== 'failed' && task.status !== 'blocked') {
+      if (task.status !== 'completed' && task.status !== 'failed' && task.status !== 'closed' && task.status !== 'blocked') {
         return false;
       }
     }

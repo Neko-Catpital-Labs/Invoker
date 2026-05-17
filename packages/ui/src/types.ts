@@ -13,6 +13,7 @@ export type TaskStatus =
   | 'fixing_with_ai'
   | 'completed'
   | 'failed'
+  | 'closed'
   | 'needs_input'
   | 'blocked'
   | 'review_ready'
@@ -171,6 +172,7 @@ export type WorkflowStatus =
   | 'fixing_with_ai'
   | 'completed'
   | 'failed'
+  | 'closed'
   | 'blocked'
   | 'review_ready'
   | 'awaiting_approval'
@@ -182,6 +184,7 @@ export interface WorkflowStatusCounts {
   total: number;
   completed: number;
   failed: number;
+  closed: number;
   running: number;
   pending: number;
 }

@@ -709,6 +709,36 @@ test.describe('Visual proof capture', () => {
     await assertPageScreenshot(page, 'statusbar-clear-all-filters');
   });
 
+  test('closed review PR status is visible and filterable', async ({ page }) => {
+    await loadPlan(page, TEST_PLAN);
+    const now = new Date();
+    await injectTaskStates(page, [
+      {
+        taskId: 'task-alpha',
+        changes: {
+          status: 'closed',
+          execution: {
+            startedAt: new Date(Date.now() - 5000),
+            completedAt: now,
+            reviewStatus: 'Closed without merge',
+            reviewUrl: 'https://github.com/Neko-Catpital-Labs/Invoker/pull/123',
+          },
+        },
+      },
+    ]);
+
+    const closedNode = page.locator('.react-flow__node[data-testid$="task-alpha"]');
+    await expect(closedNode.getByText('CLOSED')).toBeVisible();
+    await expect(page.getByText(/Closed:/)).toBeVisible();
+
+    await page.getByText(/Closed:/).click();
+    await page.waitForTimeout(100);
+    await expect(taskNodeCard(page, 'task-alpha')).toBeVisible();
+    await expect(taskNodeCard(page, 'task-beta')).toBeVisible();
+
+    await captureScreenshot(page, 'closed-review-pr-status');
+  });
+
   test('approve-fix modal — no Fix Context panel', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     await injectTaskStates(page, [
