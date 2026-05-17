@@ -9171,12 +9171,26 @@ describe('Orchestrator', () => {
       const downstreamTaskId = sid(orchestrator, 1, 'wait-for-upstream');
       orchestrator.startExecution();
       expect(orchestrator.getTask(downstreamTaskId)!.status).toBe('pending');
+      persistence.updateTask(downstreamTaskId, {
+        execution: {
+          branch: 'feature/downstream-external-dependent-task',
+          commit: 'abc123',
+          workspacePath: '/tmp/downstream-worktree',
+          reviewId: '12',
+          reviewUrl: 'https://github.com/owner/repo/pull/12',
+        },
+      });
 
       orchestrator.deleteWorkflow(upstreamWfId);
 
       const downstream = orchestrator.getTask(downstreamTaskId)!;
       expect(downstream.status).toBe('pending');
       expect(downstream.execution.blockedBy).toBeUndefined();
+      expect(downstream.execution.branch).toBeUndefined();
+      expect(downstream.execution.commit).toBeUndefined();
+      expect(downstream.execution.workspacePath).toBeUndefined();
+      expect(downstream.execution.reviewId).toBeUndefined();
+      expect(downstream.execution.reviewUrl).toBeUndefined();
       expect(downstream.config.externalDependencies).toBeUndefined();
       expect(persistence.loadWorkflow(downstreamTaskId.split('/')[0]!)!.baseBranch).toBe('master');
     });
@@ -9231,6 +9245,13 @@ describe('Orchestrator', () => {
         ],
       });
       const childTaskId = sid(orchestrator, 3, 'child-leaf');
+      persistence.updateTask(childTaskId, {
+        execution: {
+          branch: 'feature/child-leaf',
+          commit: 'def456',
+          workspacePath: '/tmp/child-worktree',
+        },
+      });
 
       orchestrator.detachWorkflow(targetWfId, upstreamAWfId);
 
@@ -9243,6 +9264,9 @@ describe('Orchestrator', () => {
 
       const childTask = orchestrator.getTask(childTaskId)!;
       expect(childTask.status).toBe('pending');
+      expect(childTask.execution.branch).toBeUndefined();
+      expect(childTask.execution.commit).toBeUndefined();
+      expect(childTask.execution.workspacePath).toBeUndefined();
       expect(childTask.config.externalDependencies).toEqual([
         { workflowId: targetWfId, requiredStatus: 'completed', gatePolicy: 'review_ready' },
       ]);
