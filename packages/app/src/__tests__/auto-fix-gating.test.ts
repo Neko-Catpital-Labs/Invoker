@@ -17,6 +17,11 @@ describe('auto-fix-gating', () => {
     expect(shouldSkipAutoFixForError('Cancelled: upstream task "build" was cancelled')).toBe(true);
   });
 
+  it('skips auto-fix for cancel-first invalidation errors', () => {
+    expect(shouldSkipAutoFixForError('Cancelled before workflow-scope invalidation')).toBe(true);
+    expect(shouldSkipAutoFixForError('Cancelled before task-scope invalidation')).toBe(true);
+  });
+
   it('skips auto-fix for task-level termination errors', () => {
     expect(shouldSkipAutoFixForError('Terminated by user')).toBe(true);
   });
