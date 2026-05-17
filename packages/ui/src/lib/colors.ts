@@ -152,6 +152,7 @@ export function formatStatusLabel(status: TaskStatus): string {
     stale: 'Stale',
     needs_input: 'Needs Input',
     fixing_with_ai: 'Fixing With AI',
+    closed: 'Closed',
   };
   return labelMap[status] ?? status;
 }
