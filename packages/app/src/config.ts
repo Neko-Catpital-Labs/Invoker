@@ -109,6 +109,16 @@ export interface InvokerConfig {
      */
     provisionCommand?: string;
     /**
+     * When true, export agent API keys from the local secrets file into SSH task/fix
+     * shells. Default false so remote Claude/Codex CLI account auth is preserved.
+     */
+    use_api_key?: boolean;
+    /**
+     * Optional local KEY=value secrets file used when use_api_key is true.
+     * Defaults to docker.secretsFile/fallback when unset.
+     */
+    secretsFile?: string;
+    /**
      * Remote workload heartbeat interval (seconds) emitted by the SSH payload wrapper.
      * Used for SSH executing-stall liveness checks. Default: 30.
      */

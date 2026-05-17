@@ -8444,7 +8444,7 @@ console.log(JSON.stringify(out));
 
       // Check that metadata was persisted immediately after start
       expect(updateSpy).toHaveBeenCalledWith('ssh-task-1', {
-        config: { runnerKind: 'ssh' },
+        config: { runnerKind: 'ssh', poolMemberId: 'remote-1' },
         execution: {
           workspacePath: '~/.invoker/worktrees/abc123/experiment-ssh-task-1-def456',
           branch: 'experiment/ssh-task-1-def456',
