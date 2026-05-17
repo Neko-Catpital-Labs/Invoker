@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import type { Orchestrator } from '@invoker/workflow-core';
 import { OrchestratorError, OrchestratorErrorCode } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import { cleanElectronEnv } from './process-utils.js';
+import { cleanElectronEnv, resolveExecutableOnCurrentPath } from './process-utils.js';
 import type { ExecutionAgent } from './agent.js';
 import type { SessionDriver } from './session-driver.js';
 import type { AgentRegistry } from './agent-registry.js';
@@ -708,10 +708,11 @@ export function spawnAgentFixViaRegistry(
     throw new Error(`Agent "${agent.name}" does not support fix commands`);
   }
   const sessionId = spec.sessionId ?? randomUUID();
-  console.log(`[spawnAgentFix] cmd: ${spec.cmd} ${spec.args.map(a => JSON.stringify(a)).join(' ')}`);
+  const cmd = resolveExecutableOnCurrentPath(spec.cmd) ?? spec.cmd;
+  console.log(`[spawnAgentFix] cmd: ${cmd} ${spec.args.map(a => JSON.stringify(a)).join(' ')}`);
   console.log(`[spawnAgentFix] cwd: ${cwd}`);
   return new Promise<{ stdout: string; sessionId: string }>((resolve, reject) => {
-    const child = spawn(spec.cmd, spec.args, {
+    const child = spawn(cmd, spec.args, {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: cleanElectronEnv(),

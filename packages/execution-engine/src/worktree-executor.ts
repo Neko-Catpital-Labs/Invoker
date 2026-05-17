@@ -6,7 +6,7 @@ import type { WorkRequest, WorkResponse } from '@invoker/contracts';
 import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from './executor.js';
 import { BaseExecutor, MergeConflictError, type BaseEntry } from './base-executor.js';
 import { RepoPool } from './repo-pool.js';
-import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
+import { killProcessGroup, cleanElectronEnv, resolveExecutableOnCurrentPath, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 import { DEFAULT_WORKTREE_PROVISION_COMMAND } from './default-worktree-provision-command.js';
 import {
   computeContentHash,
@@ -437,8 +437,9 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     const stdinMode = this.agentRegistry && executionAgent
       ? this.agentRegistry.getOrThrow(executionAgent).stdinMode
       : (request.actionType === 'ai_task' ? 'ignore' : 'pipe');
-    bench('WorktreeExecutor.spawn.before', { cmd, argCount: args.length, cwd: acquired.worktreePath });
-    const child = spawn(cmd, args, {
+    const spawnCmd = request.actionType === 'ai_task' ? (resolveExecutableOnCurrentPath(cmd) ?? cmd) : cmd;
+    bench('WorktreeExecutor.spawn.before', { cmd: spawnCmd, argCount: args.length, cwd: acquired.worktreePath });
+    const child = spawn(spawnCmd, args, {
       stdio: [stdinMode, 'pipe', 'pipe'],
       cwd: acquired.worktreePath,
       detached: true,
