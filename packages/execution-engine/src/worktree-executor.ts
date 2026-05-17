@@ -215,7 +215,12 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         branch,
         baseHead,
         request.actionId,
-        { forceFresh: request.inputs.freshWorkspace === true },
+        {
+          forceFresh: request.inputs.freshWorkspace === true,
+          ...(request.inputs.reusableWorktree
+            ? { reusableWorktree: request.inputs.reusableWorktree }
+            : {}),
+        },
       );
       bench('RepoPool.acquireWorktree.reconciliation.after', {
         branch: acquired.branch,
@@ -278,7 +283,12 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       branch,
       baseHead,
       request.actionId,
-      { forceFresh: request.inputs.freshWorkspace === true },
+      {
+        forceFresh: request.inputs.freshWorkspace === true,
+        ...(request.inputs.reusableWorktree
+          ? { reusableWorktree: request.inputs.reusableWorktree }
+          : {}),
+      },
     );
     bench('RepoPool.acquireWorktree.after', {
       branch: acquired.branch,
