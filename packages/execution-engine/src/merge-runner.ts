@@ -130,6 +130,20 @@ async function execGitInMergeSafe(
   return host.execGitIn(args, dir);
 }
 
+async function syncGateWorkspaceToFeatureBranch(
+  host: MergeRunnerHost,
+  gateWorkspacePath: string | undefined,
+  featureBranch: string,
+): Promise<void> {
+  if (!gateWorkspacePath) return;
+  await execGitInMergeSafe(
+    host,
+    ['fetch', 'origin', `+refs/heads/${featureBranch}:refs/heads/${featureBranch}`],
+    gateWorkspacePath,
+  );
+  await execGitInMergeSafe(host, ['checkout', featureBranch], gateWorkspacePath);
+}
+
 // ── Host interface ───────────────────────────────────────
 
 /**
@@ -507,6 +521,11 @@ export async function runMergeGateActionImpl(
           throw new Error('mergeMode is "external_review" but no review provider configured');
         }
 
+        // The PR branch is pushed from the separate consolidation clone above.
+        // Fetch it into the persistent gate workspace and check it out before
+        // persisting the workspace handoff used by review terminals.
+        await syncGateWorkspaceToFeatureBranch(host, gateWorkspacePath, featureBranch);
+
         let fullSummary = summary;
         let vpMarkdownCapture: string | undefined;
         if (visualProof && host.runVisualProofCapture) {
@@ -517,13 +536,6 @@ export async function runMergeGateActionImpl(
             fullSummary = (summary ?? '') + '\n\n' + vpMarkdown;
           }
         }
-
-        // Fetch the feature branch from origin into the gate clone.
-        // consolidateAndMerge() pushed it from a separate (now removed) clone.
-        await host.execGitIn(
-          ['fetch', 'origin', `+refs/heads/${featureBranch}:refs/heads/${featureBranch}`],
-          gateWorkspacePath!,
-        );
 
         // Route through shared PR-authoring helper for consistent PR bodies.
         const structuredCtx = workflowId
