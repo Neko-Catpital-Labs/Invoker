@@ -193,10 +193,26 @@ export function resolveTaskTerminalSpec(
     `meta from DB: runnerKind=${repairedMeta.runnerKind} workspacePath=${repairedMeta.workspacePath ?? 'undefined'} branch=${repairedMeta.branch ?? 'undefined'} agentSessionId=${repairedMeta.agentSessionId ?? 'undefined'} executionAgent=${repairedMeta.executionAgent ?? 'undefined'} containerId=${repairedMeta.containerId ?? 'undefined'}`,
   );
 
-  let executor = executorRegistry.get(repairedMeta.runnerKind);
+  let executor = repairedMeta.runnerKind === 'ssh' ? undefined : executorRegistry.get(repairedMeta.runnerKind);
   termLogger?.info(`executorRegistry.get("${repairedMeta.runnerKind}") → ${executor ? executor.type : 'null (will lazy-create)'}`);
 
-  if (!executor) {
+  if (repairedMeta.runnerKind === 'ssh') {
+    const targetId = persistence.getPoolMemberId?.(taskId)?.trim();
+    const target = targetId ? loadConfig().remoteTargets?.[targetId] : undefined;
+    if (!targetId) {
+      return {
+        ok: false,
+        reason: `Cannot open terminal for SSH task "${taskId}": pool member metadata is missing.`,
+      };
+    }
+    if (!target) {
+      return {
+        ok: false,
+        reason: `Cannot open terminal for SSH task "${taskId}": remote target "${targetId}" is not configured.`,
+      };
+    }
+    executor = new SshExecutor({ ...target, agentRegistry: opts.executionAgentRegistry });
+  } else if (!executor) {
     if (repairedMeta.runnerKind === 'docker') {
       const docker = new DockerExecutor({
         agentRegistry: opts.executionAgentRegistry,
@@ -214,12 +230,6 @@ export function resolveTaskTerminalSpec(
       });
       executorRegistry.register('worktree', worktree);
       executor = worktree;
-    } else if (repairedMeta.runnerKind === 'ssh') {
-      const targetId = persistence.getPoolMemberId?.(taskId);
-      const target = targetId ? loadConfig().remoteTargets?.[targetId] : undefined;
-      executor = target
-        ? new SshExecutor({ ...target, agentRegistry: opts.executionAgentRegistry })
-        : executorRegistry.getDefault();
     } else {
       executor = executorRegistry.getDefault();
     }

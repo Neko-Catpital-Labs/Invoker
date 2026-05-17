@@ -382,12 +382,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
     normalizedMergeModes: number;
     staleAutoFixExperimentTasks: number;
     normalizedStaleLaunchMetadata: number;
+    backfilledMissingSshPoolMemberIds: number;
   } {
     const report = {
       migratedFixingWithAiStatuses: 0,
       normalizedMergeModes: 0,
       staleAutoFixExperimentTasks: 0,
       normalizedStaleLaunchMetadata: 0,
+      backfilledMissingSshPoolMemberIds: 0,
     };
     this.runTransaction(() => {
       this.db.run(
@@ -455,8 +457,52 @@ export class SQLiteAdapter implements PersistenceAdapter {
            AND (julianday(started_at) - julianday(launch_started_at)) * 86400.0 > 3600.0`,
       );
       report.normalizedStaleLaunchMetadata = this.db.getRowsModified();
+
+      // One-time compatibility backfill for SSH tasks created before
+      // pool_member_id was durably written to tasks. Runtime routing must use
+      // tasks.pool_member_id; this audit-event fallback is migration-only and
+      // can be deleted after old databases no longer need the backfill.
+      const missingSshPoolRows = this.queryAll(
+        `SELECT t.id, e.payload
+         FROM tasks t
+         JOIN events e ON e.id = (
+           SELECT MAX(id)
+           FROM events
+           WHERE task_id = t.id
+             AND event_type = 'task.executor.selected'
+         )
+         WHERE t.runner_kind = 'ssh'
+           AND (t.pool_member_id IS NULL OR TRIM(t.pool_member_id) = '')
+           AND e.payload IS NOT NULL`,
+      ) as Array<{ id: string; payload?: string | null }>;
+      for (const row of missingSshPoolRows) {
+        const poolMemberId = this.parseExecutorSelectedPoolMemberId(row.payload);
+        if (!poolMemberId) continue;
+        this.db.run(
+          `UPDATE tasks
+           SET pool_member_id = ?,
+               task_state_version = task_state_version + 1
+           WHERE id = ?
+             AND runner_kind = 'ssh'
+             AND (pool_member_id IS NULL OR TRIM(pool_member_id) = '')`,
+          [poolMemberId, row.id],
+        );
+        report.backfilledMissingSshPoolMemberIds += this.db.getRowsModified();
+      }
     });
     return report;
+  }
+
+  private parseExecutorSelectedPoolMemberId(payload: string | null | undefined): string | undefined {
+    if (!payload) return undefined;
+    try {
+      const parsed = JSON.parse(payload) as { poolMemberId?: unknown };
+      return typeof parsed.poolMemberId === 'string' && parsed.poolMemberId.trim()
+        ? parsed.poolMemberId.trim()
+        : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   checkpointWal(mode: 'PASSIVE' | 'FULL' | 'RESTART' | 'TRUNCATE' = 'PASSIVE'): void {
