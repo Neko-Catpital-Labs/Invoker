@@ -26,6 +26,12 @@ describe('workflow rollup', () => {
     { name: 'completed workflow', statuses: ['completed', 'completed'], expected: 'completed' },
     { name: 'completed with stale prior task', statuses: ['completed', 'stale'], expected: 'completed' },
     { name: 'all stale', statuses: ['stale', 'stale'], expected: 'stale' },
+    { name: 'closed alongside completed task', statuses: ['completed', 'closed'], expected: 'closed' },
+    { name: 'closed alongside pending task', statuses: ['pending', 'closed'], expected: 'closed' },
+    { name: 'failed beats closed', statuses: ['failed', 'closed'], expected: 'failed' },
+    { name: 'running beats closed', statuses: ['running', 'closed'], expected: 'running' },
+    { name: 'review_ready beats closed', statuses: ['review_ready', 'closed'], expected: 'review_ready' },
+    { name: 'awaiting_approval beats closed', statuses: ['awaiting_approval', 'closed'], expected: 'awaiting_approval' },
   ])('$name rolls up to $expected', ({ statuses, expected }) => {
     const rollup = computeWorkflowRollupFromSummaries(
       statuses.map((status, index) => task(`task-${index}`, status as TaskStatus)),
@@ -62,5 +68,18 @@ describe('workflow rollup', () => {
     ]);
 
     expect(rollup.status).toBe('failed');
+  });
+
+  it('classifies closed as terminal-neutral: counted, but not failed and not completed', () => {
+    const rollup = computeWorkflowRollupFromSummaries([
+      task('alpha', 'completed'),
+      task('merge', 'closed'),
+    ]);
+
+    expect(rollup.status).toBe('closed');
+    expect(rollup.countsByStatus.closed).toBe(1);
+    expect(rollup.countsByStatus.completed).toBe(1);
+    expect(rollup.countsByStatus.failed).toBe(0);
+    expect(rollup.failedTasks).toEqual([]);
   });
 });

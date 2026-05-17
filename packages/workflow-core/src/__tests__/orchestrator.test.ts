@@ -1927,6 +1927,77 @@ describe('Orchestrator', () => {
       expect(deps.find((d) => d.workflowId === wfB)!.gatePolicy).toBe('review_ready');
     });
 
+    it('closed upstream merge gate keeps downstream pending under default completed policy', () => {
+      orchestrator.loadPlan({
+        name: 'prereq-workflow',
+        tasks: [{ id: 'verify-control-plane-regression', description: 'Prereq task' }],
+      });
+      const prereqTaskId = sid(orchestrator, 0, 'verify-control-plane-regression');
+      const prereqWfId = prereqTaskId.split('/')[0]!;
+      const prereqMergeId = `__merge__${prereqWfId}`;
+
+      orchestrator.loadPlan({
+        name: 'workflow-gated-completed',
+        tasks: [
+          {
+            id: 'leaf-a',
+            description: 'leaf waits for upstream merge gate completion',
+            externalDependencies: [{ workflowId: prereqWfId, gatePolicy: 'completed' }],
+          },
+        ],
+      });
+      const leafId = sid(orchestrator, 1, 'leaf-a');
+
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(makeResponse({ actionId: prereqTaskId, status: 'completed' }));
+      orchestrator.setTaskAwaitingApproval(prereqMergeId);
+
+      // Simulate closed-unmerged PR transition (TaskRunner writes status='closed' directly).
+      persistence.updateTask(prereqMergeId, { status: 'closed' });
+      orchestrator.syncAllFromDb();
+      expect(orchestrator.getTask(prereqMergeId)!.status).toBe('closed');
+
+      const startedAfterClosed = orchestrator.startExecution();
+      expect(startedAfterClosed.map((t) => t.id)).not.toContain(leafId);
+      expect(orchestrator.getTask(leafId)!.status).toBe('pending');
+    });
+
+    it('closed upstream merge gate keeps downstream pending under review_ready gate policy', () => {
+      orchestrator.loadPlan({
+        name: 'prereq-workflow',
+        tasks: [{ id: 'verify-control-plane-regression', description: 'Prereq task' }],
+      });
+      const prereqTaskId = sid(orchestrator, 0, 'verify-control-plane-regression');
+      const prereqWfId = prereqTaskId.split('/')[0]!;
+      const prereqMergeId = `__merge__${prereqWfId}`;
+
+      orchestrator.loadPlan({
+        name: 'workflow-gated-review-ready',
+        tasks: [
+          {
+            id: 'leaf-a',
+            description: 'leaf waits for upstream merge gate (review_ready policy)',
+            externalDependencies: [{ workflowId: prereqWfId, gatePolicy: 'review_ready' }],
+          },
+        ],
+      });
+      const leafId = sid(orchestrator, 1, 'leaf-a');
+
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(makeResponse({ actionId: prereqTaskId, status: 'completed' }));
+      orchestrator.setTaskAwaitingApproval(prereqMergeId);
+
+      // Closed-unmerged means the review is no longer actionable, so even the
+      // permissive review_ready gate policy must not satisfy the dependency.
+      persistence.updateTask(prereqMergeId, { status: 'closed' });
+      orchestrator.syncAllFromDb();
+      expect(orchestrator.getTask(prereqMergeId)!.status).toBe('closed');
+
+      const startedAfterClosed = orchestrator.startExecution();
+      expect(startedAfterClosed.map((t) => t.id)).not.toContain(leafId);
+      expect(orchestrator.getTask(leafId)!.status).toBe('pending');
+    });
+
     it('repro: deleting upstream workflow detaches downstream external dependency on restart', () => {
       orchestrator.loadPlan({
         name: 'upstream-workflow',

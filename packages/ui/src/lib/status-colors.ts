@@ -155,6 +155,16 @@ export const STATUS_VISUALS: Record<StatusVisualKey, StatusVisual> = {
     active: false,
     pulse: false,
   },
+  closed: {
+    bg: 'bg-slate-900/80',
+    border: 'border-white/10',
+    text: 'text-slate-400',
+    dot: 'bg-slate-500',
+    rail: 'bg-slate-500',
+    inline: { bg: '#64748b', border: '#475569', text: '#cbd5e1' },
+    active: false,
+    pulse: false,
+  },
 };
 
 export const DEFAULT_STATUS_VISUAL = STATUS_VISUALS.pending;

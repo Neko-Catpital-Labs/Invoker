@@ -17,7 +17,8 @@ export type TaskStatus =
   | 'blocked'
   | 'review_ready'
   | 'awaiting_approval'
-  | 'stale';
+  | 'stale'
+  | 'closed';
 
 // ── Task Config (definition / spec) ────────────────────────
 // Copied wholesale when cloning/forking: clone.config = original.config

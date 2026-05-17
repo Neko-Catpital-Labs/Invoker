@@ -34,6 +34,7 @@ const STATUS_COLORS: Record<TaskStatus, string> = {
   blocked: DIM,
   awaiting_approval: CYAN,
   stale: DIM,
+  closed: DIM,
 };
 
 const STATUS_ICONS: Record<TaskStatus, string> = {
@@ -47,6 +48,7 @@ const STATUS_ICONS: Record<TaskStatus, string> = {
   blocked: '⊘',
   awaiting_approval: '⏳',
   stale: '◌',
+  closed: '⊠',
 };
 
 // ── Public API ───────────────────────────────────────────────

@@ -86,17 +86,18 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     };
 
     const approved = data.state === 'MERGED';
-    const rejected = data.state === 'CLOSED' || data.reviewDecision === 'CHANGES_REQUESTED';
+    const closedUnmerged = data.state === 'CLOSED';
+    const rejected = !approved && !closedUnmerged && data.reviewDecision === 'CHANGES_REQUESTED';
 
     let statusText: string;
     if (data.state === 'MERGED') {
       statusText = 'Merged';
+    } else if (data.state === 'CLOSED') {
+      statusText = 'Closed';
     } else if (data.reviewDecision === 'APPROVED') {
       statusText = 'Approved, awaiting merge';
     } else if (data.reviewDecision === 'CHANGES_REQUESTED') {
       statusText = 'Changes requested';
-    } else if (data.state === 'CLOSED') {
-      statusText = 'Closed';
     } else {
       statusText = 'Awaiting review';
     }
@@ -104,6 +105,7 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     return {
       approved,
       rejected,
+      closedUnmerged,
       statusText,
       url: data.url,
     };
