@@ -68,7 +68,7 @@ export function createMockInvoker(
     start: vi.fn(async () => taskSnapshot),
     stop: vi.fn(async () => {}),
     clear: vi.fn(async () => {}),
-    getStatus: vi.fn(async () => ({ total: 0, completed: 0, failed: 0, running: 0, pending: 0 })),
+    getStatus: vi.fn(async () => ({ total: 0, completed: 0, failed: 0, closed: 0, running: 0, pending: 0 })),
     provideInput: vi.fn(async () => {}),
     approve: vi.fn(async () => {}),
     reject: vi.fn(async () => {}),

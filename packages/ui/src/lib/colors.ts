@@ -148,6 +148,7 @@ export function formatStatusLabel(status: TaskStatus): string {
     awaiting_approval: 'Awaiting Approval',
     completed: 'Completed',
     failed: 'Failed',
+    closed: 'Closed',
     blocked: 'Blocked',
     stale: 'Stale',
     needs_input: 'Needs Input',

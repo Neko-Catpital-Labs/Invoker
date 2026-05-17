@@ -95,6 +95,16 @@ export const STATUS_VISUALS: Record<StatusVisualKey, StatusVisual> = {
     active: false,
     pulse: false,
   },
+  closed: {
+    bg: 'bg-zinc-500/20',
+    border: 'border-zinc-500/55',
+    text: 'text-zinc-300',
+    dot: 'bg-zinc-500',
+    rail: 'bg-zinc-500',
+    inline: { bg: '#71717a', border: '#52525b', text: '#f4f4f5' },
+    active: false,
+    pulse: false,
+  },
   blocked: {
     bg: 'bg-slate-800/95',
     border: 'border-slate-500/30',

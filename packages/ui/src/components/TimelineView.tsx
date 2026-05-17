@@ -37,10 +37,11 @@ export function sortTasksForTimeline(tasks: TaskState[]): TaskState[] {
     review_ready: 2,
     awaiting_approval: 2,
     failed: 3,
-    completed: 4,
-    pending: 5,
-    blocked: 6,
-    stale: 7,
+    closed: 4,
+    completed: 5,
+    pending: 6,
+    blocked: 7,
+    stale: 8,
   };
 
   return [...tasks].sort((a, b) => {
