@@ -11,9 +11,11 @@ import {
   getEffectivePath,
   WorktreeExecutor,
   SshExecutor,
+  type Executor,
   type ExecutorRegistry,
   type AgentRegistry,
   type PersistedTaskMeta,
+  type TerminalSpec,
 } from '@invoker/execution-engine';
 import { loadConfig } from './config.js';
 import {
@@ -127,21 +129,50 @@ export function repairCodexResumeSessionMeta(
 }
 
 /**
- * Opens Terminal.app / x-terminal-emulator for the given task when it is not running.
+ * Result of {@link resolveTaskTerminalSpec}.
+ * Either provides the resolved {spec, cwd, meta, executor} or a refusal reason.
  */
-export async function openExternalTerminalForTask(
-  opts: OpenExternalTerminalForTaskOptions,
-): Promise<OpenTerminalResult> {
-  const { taskId, persistence, executorRegistry, repoRoot, runningTaskReason, logger: termLogger } = opts;
+export type ResolveTaskTerminalSpecResult =
+  | {
+      ok: true;
+      spec: TerminalSpec;
+      cwd: string;
+      meta: PersistedTaskMeta;
+      executor: Executor;
+    }
+  | { ok: false; reason: string };
+
+export interface ResolveTaskTerminalSpecOptions {
+  taskId: string;
+  persistence: OpenTerminalPersistence;
+  executorRegistry: ExecutorRegistry;
+  executionAgentRegistry?: AgentRegistry;
+  repoRoot: string;
+  /** Reason to use when the task is currently running. */
+  runningTaskReason?: string;
+  /** When true, allow resolution even if the task status is `running` / `fixing_with_ai` — used by the embedded manager which can attach to a live executor handle. */
+  allowRunning?: boolean;
+  logger?: Logger;
+}
+
+/**
+ * Resolve the {@link TerminalSpec} (and cwd / repaired metadata / executor) for a task
+ * without launching anything. Shared between the external launcher and the embedded
+ * terminal manager so workspace metadata and session-repair checks stay in one place.
+ */
+export function resolveTaskTerminalSpec(
+  opts: ResolveTaskTerminalSpecOptions,
+): ResolveTaskTerminalSpecResult {
+  const { taskId, persistence, executorRegistry, repoRoot, runningTaskReason, allowRunning, logger: termLogger } = opts;
 
   const taskStatus = persistence.getTaskStatus(taskId);
   termLogger?.info(`taskId=${taskId} taskStatus=${taskStatus ?? 'null'}`);
   if (taskStatus == null) {
-    return { opened: false, reason: `Task "${taskId}" not found.` };
+    return { ok: false, reason: `Task "${taskId}" not found.` };
   }
-  if (taskStatus === 'running' || taskStatus === 'fixing_with_ai') {
+  if (!allowRunning && (taskStatus === 'running' || taskStatus === 'fixing_with_ai')) {
     return {
-      opened: false,
+      ok: false,
       reason:
         runningTaskReason ??
         'Task is still running or being fixed with AI. View output in the embedded terminal or logs.',
@@ -161,13 +192,6 @@ export async function openExternalTerminalForTask(
   termLogger?.info(
     `meta from DB: runnerKind=${repairedMeta.runnerKind} workspacePath=${repairedMeta.workspacePath ?? 'undefined'} branch=${repairedMeta.branch ?? 'undefined'} agentSessionId=${repairedMeta.agentSessionId ?? 'undefined'} executionAgent=${repairedMeta.executionAgent ?? 'undefined'} containerId=${repairedMeta.containerId ?? 'undefined'}`,
   );
-  if (repairedMeta.agentSessionId) {
-    termLogger?.info(
-      'building resume spec with persisted agentSessionId — ' +
-        'if recreateWorkflow left a stale UUID (downstream still pending), claude --resume may report no conversation',
-      { module: 'agent-session-trace' },
-    );
-  }
 
   let executor = executorRegistry.get(repairedMeta.runnerKind);
   termLogger?.info(`executorRegistry.get("${repairedMeta.runnerKind}") → ${executor ? executor.type : 'null (will lazy-create)'}`);
@@ -203,9 +227,6 @@ export async function openExternalTerminalForTask(
 
   // Managed-workspace executors (worktree, ssh, docker) MUST have a resolved workspacePath.
   // Refuse fallback to repoRoot host cwd to prevent silent data loss when workspace metadata is missing.
-  // SSH is excluded from hostWorkspaceRunnerKinds because its workspace is remote — its
-  // getRestoredTerminalSpec returns { command, args } without a local cwd by design. The first
-  // workspace-metadata check below already enforces that SSH tasks have repairedMeta.workspacePath.
   const managedRunnerKinds = ['worktree', 'ssh', 'docker'];
   const hostWorkspaceRunnerKinds = ['worktree'];
   const isManagedExecutor = managedRunnerKinds.includes(repairedMeta.runnerKind);
@@ -222,10 +243,10 @@ export async function openExternalTerminalForTask(
       `Refusing to fall back to host repo to prevent accidental mutation of the main repository.`,
     ].join('\n');
     termLogger?.info(`managed workspace invariant violation: ${errorMsg}`);
-    return { opened: false, reason: errorMsg };
+    return { ok: false, reason: errorMsg };
   }
 
-  let spec: { cwd?: string; command?: string; args?: string[] };
+  let spec: TerminalSpec;
   try {
     termLogger?.info(`calling executor.getRestoredTerminalSpec(meta) for task=${taskId}`);
     spec = executor.getRestoredTerminalSpec(repairedMeta);
@@ -233,10 +254,9 @@ export async function openExternalTerminalForTask(
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     termLogger?.info(`getRestoredTerminalSpec threw: ${reason}`);
-    return { opened: false, reason };
+    return { ok: false, reason };
   }
 
-  // Fail-fast workspace invariant: managed executors must have resolved workspace path
   if (hostWorkspaceRunnerKinds.includes(repairedMeta.runnerKind) && !spec.cwd) {
     const reason = [
       `Task "${taskId}" has no workspace path (executor=${repairedMeta.runnerKind}).`,
@@ -245,11 +265,43 @@ export async function openExternalTerminalForTask(
       `Refusing to fall back to host repo to prevent unintended mutations.`,
     ].join(' ');
     termLogger?.info(`fail-fast: ${reason}`);
-    return { opened: false, reason };
+    return { ok: false, reason };
   }
 
   const cwd = spec.cwd ?? repoRoot;
   termLogger?.info(`effective cwd=${cwd} (repoRoot=${repoRoot})`);
+
+  return { ok: true, spec, cwd, meta: repairedMeta, executor };
+}
+
+/**
+ * Opens Terminal.app / x-terminal-emulator for the given task when it is not running.
+ */
+export async function openExternalTerminalForTask(
+  opts: OpenExternalTerminalForTaskOptions,
+): Promise<OpenTerminalResult> {
+  const { repoRoot, logger: termLogger } = opts;
+
+  const resolved = resolveTaskTerminalSpec({
+    taskId: opts.taskId,
+    persistence: opts.persistence,
+    executorRegistry: opts.executorRegistry,
+    executionAgentRegistry: opts.executionAgentRegistry,
+    repoRoot: opts.repoRoot,
+    runningTaskReason: opts.runningTaskReason,
+    logger: opts.logger,
+  });
+  if (!resolved.ok) {
+    return { opened: false, reason: resolved.reason };
+  }
+  const { spec, cwd } = resolved;
+  if (resolved.meta.agentSessionId) {
+    termLogger?.info(
+      'building resume spec with persisted agentSessionId — ' +
+        'if recreateWorkflow left a stale UUID (downstream still pending), claude --resume may report no conversation',
+      { module: 'agent-session-trace' },
+    );
+  }
 
   const onTerminalClose = () => {
     if (!cwd || cwd === repoRoot) return;
