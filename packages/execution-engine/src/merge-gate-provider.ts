@@ -25,4 +25,9 @@ export interface MergeGateProvider {
     identifier: string;
     cwd: string;
   }): Promise<MergeGateApprovalStatus>;
+
+  closeReview?(opts: {
+    identifier: string;
+    cwd: string;
+  }): Promise<void>;
 }

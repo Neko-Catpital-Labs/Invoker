@@ -1673,6 +1673,7 @@ if (isHeadless) {
     for (const task of workflowTasks) {
       await killRunningTask(task.id);
     }
+    await requireTaskExecutor().closeWorkflowReview(workflowId);
     // Serialized via CommandService: DB delete + memory clear + scheduler cleanup + removal deltas
     const envelope = makeEnvelope('delete-workflow', 'ui', 'workflow', { workflowId });
     const result = await commandService.deleteWorkflow(envelope);
