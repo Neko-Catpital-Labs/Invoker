@@ -2768,6 +2768,60 @@ export class Orchestrator {
   }
 
   /**
+   * Begin an AI fix session from either a failed task or an external review
+   * gate state. Review-gate CI failures use this path because the merge task
+   * may still be review_ready/awaiting_approval while the PR checks are red.
+   */
+  beginAutoFixSession(taskId: string, opts: { savedError?: string } = {}): { savedError: string } {
+    this.refreshFromDb();
+    const task = this.stateGetTask(taskId);
+    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
+    if (
+      task.status !== 'failed' &&
+      task.status !== 'review_ready' &&
+      task.status !== 'awaiting_approval'
+    ) {
+      throw new Error(`Task ${taskId} is not in an auto-fixable state (status: ${task.status})`);
+    }
+
+    const savedError = opts.savedError ?? task.execution.error ?? '';
+    const startedAt = new Date();
+    const id = task.id;
+    const changes: TaskStateChanges = {
+      status: 'fixing_with_ai',
+      execution: {
+        error: undefined,
+        exitCode: undefined,
+        completedAt: undefined,
+        mergeConflict: undefined,
+        isFixingWithAI: false,
+        startedAt,
+        lastHeartbeatAt: startedAt,
+      },
+    };
+    const changesWithGeneration = this.withBumpedExecutionGeneration(task, changes);
+    const updated = this.writeAndSync(id, changesWithGeneration);
+    const attemptId = this.replaceSelectedAttempt(task);
+    this.taskRepository.updateAttempt(attemptId, {
+      status: 'running',
+      startedAt,
+      lastHeartbeatAt: startedAt,
+      branch: task.execution.branch,
+      commit: task.execution.commit,
+      workspacePath: task.execution.workspacePath,
+      agentSessionId: task.execution.agentSessionId,
+      containerId: task.execution.containerId,
+      mergeConflict: undefined,
+      error: undefined,
+      exitCode: undefined,
+    });
+    const delta: TaskDelta = this.buildUpdateDelta(task, updated, changesWithGeneration);
+    this.persistence.logEvent?.(id, 'task.fixing_with_ai', changesWithGeneration);
+    this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+    return { savedError };
+  }
+
+  /**
    * Revert a conflict resolution attempt: restore the task to failed
    * with its original error and re-parsed mergeConflict field.
    */

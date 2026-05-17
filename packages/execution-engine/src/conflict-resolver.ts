@@ -439,6 +439,7 @@ export async function fixWithAgentImpl(
   taskOutput: string,
   agentName?: string,
   savedError?: string,
+  fixContext?: string,
 ): Promise<void> {
   host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
     phase: 'fix-with-agent-start',
@@ -455,7 +456,10 @@ export async function fixWithAgentImpl(
   const taskForPrompt = savedError
     ? { ...task, execution: { ...task.execution, error: savedError } }
     : task;
-  const prompt = buildFixPrompt(taskForPrompt, taskOutput);
+  const basePrompt = buildFixPrompt(taskForPrompt, taskOutput);
+  const prompt = fixContext?.trim()
+    ? `${basePrompt}\n\nAdditional fix context:\n${fixContext.trim()}`
+    : basePrompt;
   const workspacePath = task.execution.workspacePath;
 
   // SSH tasks: run agent on the remote host

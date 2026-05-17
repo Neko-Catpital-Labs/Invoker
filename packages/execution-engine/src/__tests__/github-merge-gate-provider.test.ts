@@ -308,5 +308,69 @@ describe('GitHubMergeGateProvider', () => {
       expect(result.rejected).toBe(true);
       expect(result.statusText).toBe('Closed');
     });
+
+    it('returns PR head metadata and failed checks for review-gate auto-fix', async () => {
+      process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      spawnMock.mockImplementation(((cmd: string) => {
+        if (cmd === 'gh') {
+          return mockSpawnResult(JSON.stringify({
+            state: 'OPEN',
+            reviewDecision: null,
+            url: 'https://github.com/owner/repo/pull/4',
+            headRefOid: 'abc123',
+            headRefName: 'feature/red-ci',
+            mergeStateStatus: 'CLEAN',
+            statusCheckRollup: [
+              {
+                __typename: 'StatusContext',
+                context: 'invoker/fake-ci',
+                state: 'FAILURE',
+                targetUrl: 'https://github.com/owner/repo/pull/4',
+                description: 'Fixture failed',
+              },
+              {
+                name: 'test-all',
+                status: 'COMPLETED',
+                conclusion: 'FAILURE',
+                detailsUrl: 'https://github.com/owner/repo/actions/runs/1',
+                summary: 'Tests failed',
+              },
+              {
+                name: 'lint',
+                status: 'COMPLETED',
+                conclusion: 'SUCCESS',
+              },
+            ],
+          }), 0);
+        }
+        return mockSpawnResult('', 0);
+      }) as any);
+
+      const result = await provider.checkApproval({ identifier: '4', cwd: '/tmp/repo' });
+
+      expect(result.headSha).toBe('abc123');
+      expect(result.headRef).toBe('feature/red-ci');
+      expect(result.mergeState).toBe('clean');
+      expect(result.checks).toEqual({
+        state: 'failure',
+        failed: [
+          {
+            name: 'invoker/fake-ci',
+            conclusion: 'FAILURE',
+            detailsUrl: 'https://github.com/owner/repo/pull/4',
+            summary: 'Fixture failed',
+          },
+          {
+            name: 'test-all',
+            conclusion: 'FAILURE',
+            detailsUrl: 'https://github.com/owner/repo/actions/runs/1',
+            summary: 'Tests failed',
+          },
+        ],
+      });
+    });
   });
 });

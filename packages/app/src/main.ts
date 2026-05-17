@@ -119,6 +119,7 @@ import {
 } from './headless.js';
 import {
   approveTask as sharedApproveTask,
+  autoFixOnReviewGateFailure,
   deleteAllWorkflows as sharedDeleteAllWorkflows,
   deleteAllWorkflowsBulk as sharedDeleteAllWorkflowsBulk,
   fixWithAgentAction,
@@ -1544,6 +1545,21 @@ if (isHeadless) {
       },
       remoteTargetsProvider: () => loadConfig().remoteTargets ?? {},
       executionPoolsProvider: () => loadConfig().executionPools ?? {},
+      onReviewGateCiFailure: invokerConfig.autoFixCi
+        ? async (trigger) => {
+            const currentTaskExecutor = taskExecutor;
+            if (!currentTaskExecutor) {
+              throw new Error('Task executor is not initialized for review-gate CI auto-fix');
+            }
+            await autoFixOnReviewGateFailure(trigger, {
+              orchestrator,
+              persistence,
+              taskExecutor: currentTaskExecutor,
+              getAutoFixAgent: () => loadConfig().autoFixAgent,
+              getAutoApproveAIFixes: () => loadConfig().autoApproveAIFixes,
+            });
+          }
+        : undefined,
       mergeGateProvider: new GitHubMergeGateProvider(),
       reviewProviderRegistry: (() => {
         const registry = new ReviewProviderRegistry();

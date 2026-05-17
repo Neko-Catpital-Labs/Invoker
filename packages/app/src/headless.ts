@@ -33,6 +33,7 @@ import { startApiServer } from './api-server.js';
 import { WorkflowMutationFacade } from './workflow-mutation-facade.js';
 import {
   approveTask,
+  autoFixOnReviewGateFailure,
   deleteAllWorkflows as sharedDeleteAllWorkflows,
   fixWithAgentAction,
   rebaseRetry,
@@ -186,7 +187,8 @@ export function createHeadlessExecutor(
   deps: HeadlessDeps,
   callbackOverrides?: Partial<ConstructorParameters<typeof TaskRunner>[0]['callbacks']>,
 ): TaskRunner {
-  const executor = new TaskRunner({
+  let executor: TaskRunner;
+  executor = new TaskRunner({
     orchestrator: deps.orchestrator,
     persistence: deps.persistence,
     executorRegistry: deps.executorRegistry,
@@ -198,6 +200,17 @@ export function createHeadlessExecutor(
     },
     remoteTargetsProvider: () => loadConfig().remoteTargets ?? {},
     executionPoolsProvider: () => deps.invokerConfig.executionPools ?? {},
+    onReviewGateCiFailure: deps.invokerConfig.autoFixCi
+      ? async (trigger) => {
+          await autoFixOnReviewGateFailure(trigger, {
+            orchestrator: deps.orchestrator,
+            persistence: deps.persistence,
+            taskExecutor: executor,
+            getAutoFixAgent: () => loadConfig().autoFixAgent,
+            getAutoApproveAIFixes: () => loadConfig().autoApproveAIFixes,
+          });
+        }
+      : undefined,
     mergeGateProvider: new GitHubMergeGateProvider(),
     reviewProviderRegistry: (() => {
       const registry = new ReviewProviderRegistry();

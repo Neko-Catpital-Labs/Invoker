@@ -23,7 +23,7 @@ import { createExecutionBench } from './execution-bench.js';
 import { ResourceLimitError, type RepoPoolTiming } from './repo-pool.js';
 import type { ExecutorRegistry } from './registry.js';
 import type { AgentRegistry } from './agent-registry.js';
-import type { MergeGateProvider } from './merge-gate-provider.js';
+import type { MergeGateProvider, MergeGateApprovalStatus } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
 import { DockerExecutor } from './docker-executor.js';
 import { WorktreeExecutor } from './worktree-executor.js';
@@ -91,6 +91,20 @@ type ActiveExecutionEntry = {
 
 type PoolSelection = ExecutionPoolAllocation;
 
+export interface ReviewGateCiFailureTrigger {
+  taskId: string;
+  workflowId: string;
+  reviewId: string;
+  reviewUrl: string;
+  headSha?: string;
+  headRef?: string;
+  branch?: string;
+  selectedAttemptId?: string;
+  generation: number;
+  failedChecks: NonNullable<MergeGateApprovalStatus['checks']>['failed'];
+  statusText: string;
+}
+
 function nextLeaseExpiry(from: Date): Date {
   return new Date(from.getTime() + ATTEMPT_LEASE_MS);
 }
@@ -126,6 +140,7 @@ export interface TaskRunnerConfig {
   callbacks?: TaskRunnerCallbacks;
   mergeGateProvider?: MergeGateProvider;
   reviewProviderRegistry?: ReviewProviderRegistry;
+  onReviewGateCiFailure?: (trigger: ReviewGateCiFailureTrigger) => Promise<void>;
   /**
    * Provider that returns remote SSH targets keyed by target ID.
    * Called at task-execution time so config file changes take effect on retry.
@@ -172,6 +187,8 @@ export class TaskRunner {
   /** @internal */ callbacks: TaskRunnerCallbacks;
   /** @internal */ mergeGateProvider?: MergeGateProvider;
   /** @internal */ reviewProviderRegistry?: ReviewProviderRegistry;
+  private onReviewGateCiFailure?: (trigger: ReviewGateCiFailureTrigger) => Promise<void>;
+  private reviewGateCiFixInFlight = new Set<string>();
   private activePrPollers = new Map<string, ReturnType<typeof setInterval>>();
   private getRemoteTargets: () => Record<string, RemoteTargetDisplay>;
   private getExecutionPools: () => Record<string, ExecutionPoolConfig>;
@@ -258,6 +275,7 @@ export class TaskRunner {
     this.callbacks = config.callbacks ?? {};
     this.mergeGateProvider = config.mergeGateProvider;
     this.reviewProviderRegistry = config.reviewProviderRegistry;
+    this.onReviewGateCiFailure = config.onReviewGateCiFailure;
     this.getRemoteTargets = config.remoteTargetsProvider ?? (() => ({}));
     this.getExecutionPools = config.executionPoolsProvider ?? (() => ({}));
     this.dockerConfig = config.dockerConfig ?? {};
@@ -1914,8 +1932,17 @@ export class TaskRunner {
    * Fix a failed task by spawning an agent with the error output.
    * The agent's output is captured and appended to the task's output stream for auditing.
    */
-  async fixWithAgent(taskId: string, taskOutput: string, agentName?: string, savedError?: string): Promise<void> {
-    return this.withAttemptHeartbeat(taskId, () => fixWithAgentImpl(this, taskId, taskOutput, agentName, savedError));
+  async fixWithAgent(
+    taskId: string,
+    taskOutput: string,
+    agentName?: string,
+    savedError?: string,
+    fixContext?: string,
+  ): Promise<void> {
+    return this.withAttemptHeartbeat(
+      taskId,
+      () => fixWithAgentImpl(this, taskId, taskOutput, agentName, savedError, fixContext),
+    );
   }
 
   private async withAttemptHeartbeat<T>(taskId: string, work: () => Promise<T>): Promise<T> {
@@ -1992,6 +2019,8 @@ export class TaskRunner {
           } else if (status.rejected) {
             this.logger.info(`[merge-gate] PR ${task.execution.reviewId} rejected (refresh): ${status.statusText}`);
             this.stopPrPolling(task.id);
+          } else {
+            await this.maybeTriggerReviewGateCiFix(task, status);
           }
         } catch (err) {
           this.logger.error(`[merge-gate] PR status check error for ${task.id}`, { err });
@@ -2023,6 +2052,9 @@ export class TaskRunner {
           this.logger.info(`[merge-gate] PR ${reviewId} rejected: ${status.statusText}`);
           this.stopPrPolling(taskId);
           // Leave in review_ready/awaiting_approval — user can retry
+        } else {
+          const latestTask = this.orchestrator.getTask(taskId);
+          if (latestTask) await this.maybeTriggerReviewGateCiFix(latestTask, status);
         }
       } catch (err) {
         this.logger.error(`[merge-gate] PR poll error for ${taskId}`, { err });
@@ -2063,9 +2095,47 @@ export class TaskRunner {
       } else if (status.rejected) {
         this.logger.info(`[merge-gate] PR ${reviewId} rejected (manual check): ${status.statusText}`);
         this.stopPrPolling(taskId);
+      } else {
+        await this.maybeTriggerReviewGateCiFix(task, status);
       }
     } catch (err) {
       this.logger.error(`[merge-gate] Manual PR check error for ${taskId}`, { err });
+    }
+  }
+
+  private async maybeTriggerReviewGateCiFix(
+    task: TaskState,
+    status: MergeGateApprovalStatus,
+  ): Promise<void> {
+    if (!this.onReviewGateCiFailure) return;
+    if (!task.config.workflowId || !task.execution.reviewId) return;
+    if (status.checks?.state !== 'failure' || status.checks.failed.length === 0) return;
+
+    const key = [
+      task.id,
+      task.execution.selectedAttemptId ?? 'no-attempt',
+      task.execution.generation ?? 0,
+      status.headSha ?? 'no-head-sha',
+    ].join(':');
+    if (this.reviewGateCiFixInFlight.has(key)) return;
+
+    this.reviewGateCiFixInFlight.add(key);
+    try {
+      await this.onReviewGateCiFailure({
+        taskId: task.id,
+        workflowId: task.config.workflowId,
+        reviewId: task.execution.reviewId,
+        reviewUrl: status.url,
+        headSha: status.headSha,
+        headRef: status.headRef,
+        branch: task.execution.branch,
+        selectedAttemptId: task.execution.selectedAttemptId,
+        generation: task.execution.generation ?? 0,
+        failedChecks: status.checks.failed,
+        statusText: status.statusText,
+      });
+    } finally {
+      this.reviewGateCiFixInFlight.delete(key);
     }
   }
 

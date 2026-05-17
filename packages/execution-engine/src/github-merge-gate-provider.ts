@@ -1,6 +1,11 @@
 import { spawn } from 'node:child_process';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
-import type { MergeGateProvider, MergeGateProviderResult, MergeGateApprovalStatus } from './merge-gate-provider.js';
+import type {
+  MergeGateProvider,
+  MergeGateProviderResult,
+  MergeGateApprovalStatus,
+  MergeGateFailedCheck,
+} from './merge-gate-provider.js';
 import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
 
 export class GitHubMergeGateProvider implements MergeGateProvider {
@@ -76,13 +81,17 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     const stdout = await this.exec('gh', [
       'pr', 'view', identifier,
       '--repo', targetRepo,
-      '--json', 'state,reviewDecision,url',
+      '--json', 'state,reviewDecision,url,headRefOid,headRefName,mergeStateStatus,statusCheckRollup',
     ], cwd);
 
     const data = JSON.parse(stdout) as {
       state: string;
       reviewDecision: string | null;
       url: string;
+      headRefOid?: string;
+      headRefName?: string;
+      mergeStateStatus?: string;
+      statusCheckRollup?: unknown[];
     };
 
     const approved = data.state === 'MERGED';
@@ -106,6 +115,10 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       rejected,
       statusText,
       url: data.url,
+      headSha: data.headRefOid,
+      headRef: data.headRefName,
+      mergeState: normalizeMergeState(data.mergeStateStatus),
+      checks: summarizeStatusChecks(data.statusCheckRollup),
     };
   }
 
@@ -151,4 +164,73 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       });
     });
   }
+}
+
+function normalizeMergeState(value: string | undefined): 'clean' | 'dirty' | 'unknown' {
+  switch (value) {
+    case 'CLEAN':
+    case 'HAS_HOOKS':
+    case 'UNSTABLE':
+      return 'clean';
+    case 'DIRTY':
+    case 'BLOCKED':
+    case 'BEHIND':
+      return 'dirty';
+    default:
+      return 'unknown';
+  }
+}
+
+function stringProp(value: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const candidate = value[key];
+    if (typeof candidate === 'string' && candidate.trim()) return candidate;
+  }
+  return undefined;
+}
+
+function summarizeStatusChecks(items: unknown[] | undefined): MergeGateApprovalStatus['checks'] {
+  if (!Array.isArray(items) || items.length === 0) return undefined;
+
+  let hasPending = false;
+  const failed: MergeGateFailedCheck[] = [];
+  for (const item of items) {
+    if (!item || typeof item !== 'object') continue;
+    const check = item as Record<string, unknown>;
+    const name = stringProp(check, 'name', 'workflowName', 'context') ?? 'unknown check';
+    const status = stringProp(check, 'status')?.toUpperCase();
+    const conclusion = stringProp(check, 'conclusion')?.toUpperCase();
+    const state = stringProp(check, 'state')?.toUpperCase();
+    if (state) {
+      if (state === 'PENDING' || state === 'EXPECTED') {
+        hasPending = true;
+        continue;
+      }
+      if (state !== 'SUCCESS') {
+        failed.push({
+          name,
+          conclusion: state,
+          detailsUrl: stringProp(check, 'detailsUrl', 'targetUrl'),
+          summary: stringProp(check, 'summary', 'description'),
+        });
+      }
+      continue;
+    }
+    if (status && status !== 'COMPLETED') {
+      hasPending = true;
+      continue;
+    }
+    if (conclusion && conclusion !== 'SUCCESS' && conclusion !== 'SKIPPED' && conclusion !== 'NEUTRAL') {
+      failed.push({
+        name,
+        conclusion,
+        detailsUrl: stringProp(check, 'detailsUrl', 'targetUrl'),
+        summary: stringProp(check, 'summary', 'description'),
+      });
+    }
+  }
+
+  if (failed.length > 0) return { state: 'failure', failed };
+  if (hasPending) return { state: 'pending', failed: [] };
+  return { state: 'success', failed: [] };
 }
