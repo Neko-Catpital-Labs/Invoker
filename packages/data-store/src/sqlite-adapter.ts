@@ -98,6 +98,10 @@ function paramsToArgs(params: SQLiteParams = []): unknown[] {
   return Array.isArray(params) ? params : [params];
 }
 
+function sqlStringLiteral(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
 class NativeStatementCompat {
   private boundParams: SQLiteParams = [];
   private iterator: Iterator<Record<string, unknown>> | null = null;
@@ -1820,14 +1824,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
     let backupPath: string | null = null;
     const shouldBackup = options?.backup !== false;
     if (shouldBackup && this.dbPath) {
-      // Flush any pending writes before snapshotting.
-      this.flush();
       backupPath = options?.backupPath ?? `${this.dbPath}.prune-backup-${Date.now()}`;
       if (!existsSync(backupPath)) {
         const dir = dirname(backupPath);
         mkdirSync(dir, { recursive: true });
-        const exported = Buffer.from(this.db.export());
-        writeFileSync(backupPath, exported);
+        this.checkpointWal('FULL');
+        this.nativeDb.exec(`VACUUM INTO ${sqlStringLiteral(backupPath)}`);
       }
     }
 
