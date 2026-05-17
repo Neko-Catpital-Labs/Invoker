@@ -145,6 +145,7 @@ function mergeMeasuredNodeState(prevNodes: Node[], nextNodes: Node[]): Node[] {
 function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDoubleClick, onTaskContextMenu, statusFilters }: TaskDAGProps) {
   const { fitView } = useReactFlow();
   const prevNodeCount = useRef(0);
+  const lastNodeClickRef = useRef<{ id: string; at: number } | null>(null);
   const reportedGraphVisibleRef = useRef(false);
   const watchdogMissCountRef = useRef(0);
   const watchdogRecoveryAttemptedRef = useRef(false);
@@ -307,6 +308,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
             label: task.description,
             dimmed,
             selected: selectedTaskId === task.id,
+            ...(onTaskDoubleClick ? { onDoubleClick: onTaskDoubleClick } : {}),
           },
         });
       }
@@ -484,8 +486,18 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
       if (task && onTaskClick) {
         onTaskClick(task);
       }
+      if (task && onTaskDoubleClick) {
+        const now = Date.now();
+        const lastClick = lastNodeClickRef.current;
+        if (lastClick?.id === node.id && now - lastClick.at <= 500) {
+          lastNodeClickRef.current = null;
+          onTaskDoubleClick(task);
+        } else {
+          lastNodeClickRef.current = { id: node.id, at: now };
+        }
+      }
     },
-    [tasks, onTaskClick],
+    [tasks, onTaskClick, onTaskDoubleClick],
   );
 
   const onNodeDoubleClick = useCallback(

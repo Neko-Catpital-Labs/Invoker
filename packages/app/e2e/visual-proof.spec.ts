@@ -275,9 +275,9 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByRole('button', { name: 'Expand terminal drawer' })).toBeVisible();
     await expect(page.getByTestId('terminal-drawer-body')).toHaveCount(0);
 
-    const taskNode = page.locator('.react-flow__node[data-testid$="task-alpha"]').first();
-    await expect(taskNode).toBeVisible({ timeout: 10000 });
-    await taskNode.dblclick();
+    const taskCard = page.locator('[title$="task-alpha"]').first();
+    await expect(taskCard).toBeVisible({ timeout: 10000 });
+    await taskCard.dispatchEvent('dblclick');
 
     // Drawer expands; one active tab for task-alpha; terminal pane rendered.
     await expect(page.getByRole('button', { name: 'Collapse terminal drawer' })).toBeVisible({ timeout: 10000 });
