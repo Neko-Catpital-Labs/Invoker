@@ -72,6 +72,7 @@ function WorkflowGraphInner({
   onWorkflowContextMenu,
 }: WorkflowGraphProps): JSX.Element {
   const { fitView } = useReactFlow();
+  const prevNodeCount = useRef(0);
   const reportedVisibleRef = useRef(false);
   const graphMetricsRef = useRef({ deriveMs: 0, layoutMs: 0, objectsMs: 0 });
   const graph = useMemo(() => {
@@ -139,6 +140,15 @@ function WorkflowGraphInner({
     requestAnimationFrame(() => fitView({ padding: 0.2 }));
   }, [fitView]);
 
+  useEffect(() => {
+    if (nodes.length !== prevNodeCount.current && nodes.length > 0) {
+      prevNodeCount.current = nodes.length;
+      const frame = requestAnimationFrame(() => fitView({ padding: 0.2 }));
+      return () => cancelAnimationFrame(frame);
+    }
+    return undefined;
+  }, [fitView, nodes.length]);
+
   const onNodeClick = useCallback((_event: MouseEvent, node: Node) => {
     onSelectWorkflow(node.id);
   }, [onSelectWorkflow]);
@@ -178,6 +188,23 @@ function WorkflowGraphInner({
     });
     return () => cancelAnimationFrame(frame);
   }, [fitView, graph.nodes.length, graphSignature]);
+
+  useEffect(() => {
+    if (nodes.length === 0) return;
+    const interval = setInterval(() => {
+      const domNodes = document.querySelectorAll('[data-testid^="workflow-node-"]');
+      const hiddenNodes = document.querySelectorAll(
+        '.react-flow__node[style*="visibility: hidden"] [data-testid^="workflow-node-"]',
+      );
+      if (
+        (domNodes.length === 0 && nodes.length > 0) ||
+        (hiddenNodes.length > 0 && hiddenNodes.length === domNodes.length)
+      ) {
+        fitView({ padding: 0.2 });
+      }
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [fitView, nodes.length]);
 
   if (graph.nodes.length === 0) {
     return (
