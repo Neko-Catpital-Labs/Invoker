@@ -11,7 +11,7 @@ trap invoker_e2e_cleanup EXIT
 cd "$INVOKER_E2E_REPO_ROOT"
 unset ELECTRON_RUN_AS_NODE
 # Force deterministic failure behavior for this case (disable auto-fix fan-out).
-CFG_FILE="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-config.XXXXXX.json")"
+CFG_FILE="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-config-json.XXXXXX")"
 printf '{\n  "autoFixRetries": 0\n}\n' > "$CFG_FILE"
 export INVOKER_REPO_CONFIG_PATH="$CFG_FILE"
 
