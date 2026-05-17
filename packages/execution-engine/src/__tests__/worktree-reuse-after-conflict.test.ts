@@ -102,7 +102,12 @@ describe('worktree reuse after conflict resolution (real git)', { timeout: 30_00
 
     // --- Re-acquire with hash2 (same actionId, different hash) ---
     const branch2 = `experiment/${actionId}/g0.t0.aa2-ccdd3344`;
-    const acquired2 = await pool.acquireWorktree(bare, branch2, baseSha, actionId);
+    const acquired2 = await pool.acquireWorktree(bare, branch2, baseSha, actionId, {
+      reusableWorktree: {
+        branch: branch1,
+        workspacePath: acquired1.worktreePath,
+      },
+    });
 
     // Assert: reused the same worktree path
     expect(acquired2.worktreePath).toBe(acquired1.worktreePath);

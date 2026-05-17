@@ -73,29 +73,6 @@ export function findManagedWorktreeForBranch(
   return undefined;
 }
 
-/**
- * First Invoker-managed worktree whose branch matches the canonical
- * `experiment/<actionId>/<lifecycleTag>-<contentHash>` shape for the supplied
- * actionId. Legacy `experiment/<actionId>-<sha8>` branches are intentionally
- * ignored so recreate/restart behavior follows the INV-114 experiment contract.
- */
-export function findManagedWorktreeByActionId(
-  porcelain: string,
-  actionId: string,
-  managedPathPrefixes: string[],
-): { path: string; branch: string } | undefined {
-  const entries = parseGitWorktreePorcelain(porcelain);
-  for (const e of entries) {
-    if (!e.branch) continue;
-    if (!pathIsUnderManagedPrefixes(e.path, managedPathPrefixes)) continue;
-    const parsed = parseExperimentBranch(e.branch);
-    if (!parsed) continue;
-    if (parsed.actionId !== actionId) continue;
-    return { path: e.path, branch: e.branch };
-  }
-  return undefined;
-}
-
 /** True if `git rev-parse --abbrev-ref HEAD` output matches the logical branch name. */
 export function abbrevRefMatchesBranch(abbrevRef: string, branch: string): boolean {
   const t = abbrevRef.trim();

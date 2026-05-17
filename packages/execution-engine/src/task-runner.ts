@@ -638,6 +638,12 @@ export class TaskRunner {
         lifecycleTag,
         baseBranch,
         freshWorkspace: this.shouldUseFreshWorkspace(task),
+        reusableWorktree: task.execution.branch && task.execution.workspacePath
+          ? {
+            branch: task.execution.branch,
+            workspacePath: task.execution.workspacePath,
+          }
+          : undefined,
       },
       callbackUrl: '',
       timestamps: {

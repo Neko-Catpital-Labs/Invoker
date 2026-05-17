@@ -54,6 +54,15 @@ export interface WorkRequestInputs {
   executionAgent?: string;
   /** When true, executors must not reuse existing task worktrees for this run. */
   freshWorkspace?: boolean;
+  /**
+   * Persisted worktree metadata for the same task/action, loaded by the
+   * orchestrator from storage. Executors may validate this against git before
+   * reusing it, but should not infer action identity from branch name patterns.
+   */
+  reusableWorktree?: {
+    branch: string;
+    workspacePath: string;
+  };
 }
 
 export interface WorkRequest {
