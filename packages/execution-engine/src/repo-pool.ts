@@ -9,9 +9,9 @@ import {
   abbrevRefMatchesBranch,
   canonicalPathForComparison,
   findContentHashCollisions,
-  findManagedWorktreeByActionId,
   findManagedWorktreeByContent,
   findManagedWorktreeForBranch,
+  pathIsUnderManagedPrefixes,
   parseGitWorktreePorcelain,
   parseExperimentBranch,
 } from './worktree-discovery.js';
@@ -43,6 +43,10 @@ export interface AcquiredWorktree {
 
 export interface AcquireWorktreeOptions {
   forceFresh?: boolean;
+  reusableWorktree?: {
+    branch: string;
+    workspacePath: string;
+  };
 }
 
 interface RebaseRefreshBatch {
@@ -631,22 +635,30 @@ export class RepoPool {
     let actionIdCandidate:
       | { path: string; branch: string; baseIsAncestorOfHead: boolean }
       | undefined;
-    if (allowReuse && actionId) {
-      const actionIdHit = findManagedWorktreeByActionId(porcelain, actionId, managedPrefixes);
-      if (actionIdHit && existsSync(actionIdHit.path)) {
+    if (allowReuse && opts?.reusableWorktree) {
+      const candidate = opts.reusableWorktree;
+      if (
+        candidate.branch &&
+        candidate.workspacePath &&
+        pathIsUnderManagedPrefixes(candidate.workspacePath, managedPrefixes) &&
+        existsSync(candidate.workspacePath)
+      ) {
+        const head = await this.execGit(['rev-parse', '--abbrev-ref', 'HEAD'], candidate.workspacePath).catch(() => '');
         let baseIsAncestorOfHead = true;
         if (base) {
           try {
-            await this.execGit(['merge-base', '--is-ancestor', base, 'HEAD'], actionIdHit.path);
+            await this.execGit(['merge-base', '--is-ancestor', base, 'HEAD'], candidate.workspacePath);
           } catch {
             baseIsAncestorOfHead = false;
           }
         }
-        actionIdCandidate = {
-          path: actionIdHit.path,
-          branch: actionIdHit.branch,
-          baseIsAncestorOfHead,
-        };
+        if (abbrevRefMatchesBranch(head, candidate.branch)) {
+          actionIdCandidate = {
+            path: candidate.workspacePath,
+            branch: candidate.branch,
+            baseIsAncestorOfHead,
+          };
+        }
       }
     }
 
