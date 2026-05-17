@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { spawnRemoteAgentFixImpl } from '../conflict-resolver.js';
 import type { AgentRegistry } from '../agent-registry.js';
 
@@ -42,6 +45,60 @@ function mockSpawnChildWithStderr(stdoutData: string, stderrData: string, exitCo
 describe('spawnRemoteAgentFixImpl processOutput', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('does not export API keys into the remote fix shell by default', async () => {
+    const { spawn } = await import('node:child_process');
+    const previous = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = 'ambient-key-that-should-not-forward';
+    const child = mockSpawnChild('ok', 0) as any;
+    vi.mocked(spawn).mockReturnValueOnce(child);
+
+    try {
+      await spawnRemoteAgentFixImpl(
+        'fix the bug',
+        '/home/user/worktree',
+        { host: '1.2.3.4', user: 'invoker', sshKeyPath: '/tmp/key' },
+        'claude',
+      );
+
+      const script = child.stdin.write.mock.calls[0][0] as string;
+      expect(script).not.toContain('ANTHROPIC_API_KEY');
+      expect(script).not.toContain('ambient-key-that-should-not-forward');
+    } finally {
+      if (previous === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = previous;
+    }
+  });
+
+  it('exports agent API keys from secrets only when use_api_key is true', async () => {
+    const { spawn } = await import('node:child_process');
+    const dir = mkdtempSync(join(tmpdir(), 'invoker-remote-agent-env-'));
+    const secretsFile = join(dir, 'secrets.env');
+    writeFileSync(secretsFile, "ANTHROPIC_API_KEY=test-key-with-'quote\nIGNORED_TOKEN=nope\n", { mode: 0o600 });
+    const child = mockSpawnChild('ok', 0) as any;
+    vi.mocked(spawn).mockReturnValueOnce(child);
+
+    try {
+      await spawnRemoteAgentFixImpl(
+        'fix the bug',
+        '/home/user/worktree',
+        {
+          host: '1.2.3.4',
+          user: 'invoker',
+          sshKeyPath: '/tmp/key',
+          use_api_key: true,
+          secretsFile,
+        },
+        'claude',
+      );
+
+      const script = child.stdin.write.mock.calls[0][0] as string;
+      expect(script).toContain("export ANTHROPIC_API_KEY='test-key-with-'\\''quote'");
+      expect(script).not.toContain('IGNORED_TOKEN');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('calls driver.processOutput with effectiveSessionId and stdout on success', async () => {

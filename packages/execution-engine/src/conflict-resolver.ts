@@ -21,6 +21,7 @@ import type { AgentRegistry } from './agent-registry.js';
 import { buildWorktreeListScript, createSshRemoteScriptError } from './ssh-git-exec.js';
 import { buildSshConnectionArgs } from './ssh-transport-options.js';
 import { findManagedWorktreeForBranch } from './worktree-discovery.js';
+import { buildRemoteAgentEnvExports } from './remote-agent-env.js';
 
 // ── Host interface ───────────────────────────────────────
 
@@ -31,6 +32,8 @@ export interface RemoteTargetConfig {
   port?: number;
   managedWorkspaces?: boolean;
   remoteInvokerHome?: string;
+  use_api_key?: boolean;
+  secretsFile?: string;
 }
 
 /**
@@ -206,7 +209,7 @@ export async function resolveConflictImpl(
   }
 
   // SSH tasks: run conflict resolution on the remote host
-  const poolMemberId = (task.config as { poolMemberId?: string }).poolMemberId;
+  const poolMemberId = resolveSelectedRemoteTargetId(host, taskId, task);
   if (task.config.runnerKind === 'ssh' && poolMemberId && !existsSync(rawCwd)) {
     host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
       phase: 'resolve-conflict-remote-path',
@@ -330,6 +333,27 @@ function buildRemoteAgentCommand(
   };
 }
 
+function resolveSelectedRemoteTargetId(host: ConflictResolverHost, taskId: string, task: ReturnType<Orchestrator['getTask']> & {}): string | undefined {
+  const direct = (task.config as { poolMemberId?: string }).poolMemberId;
+  if (direct) return direct;
+
+  const events = host.persistence.getEvents?.(taskId) ?? [];
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i];
+    if (event?.eventType !== 'task.executor.selected' || !event.payload) continue;
+    try {
+      const payload = JSON.parse(event.payload) as { poolMemberId?: unknown };
+      if (typeof payload.poolMemberId === 'string' && payload.poolMemberId.trim()) {
+        return payload.poolMemberId;
+      }
+    } catch {
+      // Ignore malformed historical diagnostics.
+    }
+  }
+
+  return undefined;
+}
+
 async function resolveConflictRemote(
   host: ConflictResolverHost,
   task: ReturnType<Orchestrator['getTask']> & {},
@@ -360,11 +384,13 @@ async function resolveConflictRemote(
   const { shellCommand: agentCmd } = buildRemoteAgentCommand(prompt, host.agentRegistry, agentName);
   const agentCmdB64 = Buffer.from(agentCmd).toString('base64');
   const mergeMsgB64 = Buffer.from(conflictMergeMsg).toString('base64');
+  const envExports = buildRemoteAgentEnvExports(target.secretsFile, target.use_api_key === true);
 
   const script = `set -euo pipefail
 WT="${remoteCwd}"
 if [[ "$WT" == '~' ]]; then WT="$HOME"; elif [[ "\${WT:0:2}" == '~/' ]]; then WT="$HOME/\${WT:2}"; fi
 cd "$WT"
+${envExports}
 git checkout "${taskBranch}"
 MERGE_MSG=$(echo "${mergeMsgB64}" | base64 -d)
 if git merge --no-edit -m "$MERGE_MSG" "${conflictInfo.failedBranch}" 2>/dev/null; then
@@ -459,7 +485,7 @@ export async function fixWithAgentImpl(
   const workspacePath = task.execution.workspacePath;
 
   // SSH tasks: run agent on the remote host
-  const poolMemberId = (task.config as { poolMemberId?: string }).poolMemberId;
+  const poolMemberId = resolveSelectedRemoteTargetId(host, taskId, task);
   if (task.config.runnerKind === 'ssh' && poolMemberId && workspacePath && !existsSync(workspacePath)) {
     host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
       phase: 'fix-with-agent-remote-path',
@@ -612,11 +638,13 @@ export function spawnRemoteAgentFixImpl(
         `trap 'rm -f "$PROMPT_FILE"' EXIT`,
       ].join('\n') + '\n'
     : '';
+  const envExports = buildRemoteAgentEnvExports(target.secretsFile, target.use_api_key === true);
 
 const script = `set -euo pipefail
 WT="${remoteCwd}"
 if [[ "$WT" == '~' ]]; then WT="$HOME"; elif [[ "\${WT:0:2}" == '~/' ]]; then WT="$HOME/\${WT:2}"; fi
 cd "$WT"
+${envExports}
 ${promptWrite}
 eval "$(echo "${agentCmdB64}" | base64 -d)"
 `;
