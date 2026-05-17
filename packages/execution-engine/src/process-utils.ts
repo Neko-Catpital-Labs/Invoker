@@ -1,4 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { accessSync, constants } from 'node:fs';
+import { delimiter, join } from 'node:path';
 
 export const SIGKILL_TIMEOUT_MS = 5_000;
 const SHELL_ENV_RESOLUTION_TIMEOUT_MS = 10_000;
@@ -65,11 +67,15 @@ function withPrependedUniqueEntries(prefixes: string[], rest: string[]): string[
   return ordered;
 }
 
+function mergePathValues(first?: string, second?: string): string {
+  return joinPathEntries(withPrependedUniqueEntries(splitPathEntries(first), splitPathEntries(second)));
+}
+
 export function applyMacOSPathFallback(rawPath?: string): string {
   const current = splitPathEntries(rawPath);
   const preferred = process.platform === 'darwin' ? MACOS_PATH_FALLBACK_PREFIXES : [];
-  const fallback = current.length > 0 ? current : MACOS_STANDARD_PATH_ENTRIES;
-  return joinPathEntries(withPrependedUniqueEntries(preferred, fallback));
+  const base = current.length > 0 ? current : MACOS_STANDARD_PATH_ENTRIES;
+  return joinPathEntries(withPrependedUniqueEntries(base, preferred));
 }
 
 export function parseResolvedShellPath(output: string): string | null {
@@ -84,6 +90,22 @@ export function parseResolvedShellPath(output: string): string | null {
 
 export function getEffectivePath(): string {
   return effectivePath;
+}
+
+export function resolveExecutableOnCurrentPath(command: string): string | undefined {
+  if (command.includes('/') || command.includes('\\')) return command;
+  const pathValue = process.env.PATH ?? '';
+  for (const dir of pathValue.split(delimiter)) {
+    if (!dir) continue;
+    const candidate = join(dir, command);
+    try {
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // Continue searching PATH.
+    }
+  }
+  return undefined;
 }
 
 export async function probeMacOSShellPath(shell: string, timeoutMs = SHELL_ENV_RESOLUTION_TIMEOUT_MS): Promise<string> {
@@ -162,8 +184,9 @@ export async function initializeShellEnvironment(): Promise<ShellEnvironmentInit
     }
 
     try {
+      const inheritedPath = process.env.PATH;
       const resolvedPath = await probeMacOSShellPath(shell);
-      effectivePath = applyMacOSPathFallback(resolvedPath);
+      effectivePath = applyMacOSPathFallback(mergePathValues(inheritedPath, resolvedPath));
       process.env.PATH = effectivePath;
       initializationResult = {
         status: 'resolved',
