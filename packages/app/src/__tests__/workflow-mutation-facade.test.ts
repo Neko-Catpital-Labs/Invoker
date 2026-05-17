@@ -66,6 +66,7 @@ function makeDeps(overrides: Partial<WorkflowMutationFacadeDeps> = {}): Workflow
     taskExecutor: {
       executeTasks: vi.fn(),
       killActiveExecution: vi.fn(),
+      closeWorkflowReview: vi.fn(),
     } as unknown as TaskRunner,
     ...overrides,
   };
@@ -216,6 +217,7 @@ describe('WorkflowMutationFacade', () => {
 
       expect(killFn).toHaveBeenCalledWith('task-a');
       expect(killFn).not.toHaveBeenCalledWith('task-b');
+      expect(deps.taskExecutor.closeWorkflowReview).toHaveBeenCalledWith('wf-1');
       expect(deps.orchestrator.deleteWorkflow).toHaveBeenCalledWith('wf-1');
     });
   });

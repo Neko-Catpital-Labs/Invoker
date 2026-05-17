@@ -289,6 +289,7 @@ export class WorkflowMutationFacade {
         await this.deps.killRunningTask(task.id);
       }
     }
+    await this.deps.taskExecutor?.closeWorkflowReview?.(workflowId);
     this.deps.orchestrator.deleteWorkflow(workflowId);
   }
 

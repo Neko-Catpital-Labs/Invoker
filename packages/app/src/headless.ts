@@ -147,6 +147,7 @@ function buildHeadlessApiServerDeps(
       for (const task of workflowTasks) {
         await taskExecutor.killActiveExecution(task.id);
       }
+      await taskExecutor.closeWorkflowReview(workflowId);
       const envelope = makeEnvelope('delete-workflow', 'headless', 'workflow', { workflowId });
       const cmdResult = await deps.commandService.deleteWorkflow(envelope);
       if (!cmdResult.ok) throw new Error(cmdResult.error.message);
@@ -2452,6 +2453,8 @@ async function headlessDeleteWorkflow(workflowId: string, deps: HeadlessDeps): P
   if (!workflowId) throw new Error('Missing workflowId. Usage: --headless delete-workflow <workflowId>');
   // Preempt running tasks (kill processes + cancel) — matches owner-mode bridge contract
   await preemptWorkflowExecution(workflowId, deps);
+  const taskExecutor = createHeadlessExecutor(deps);
+  await taskExecutor.closeWorkflowReview(workflowId);
   // Serialized via CommandService: DB delete + memory clear + scheduler cleanup + removal deltas
   const envelope = makeEnvelope('delete-workflow', 'headless', 'workflow', { workflowId });
   const result = await deps.commandService.deleteWorkflow(envelope);

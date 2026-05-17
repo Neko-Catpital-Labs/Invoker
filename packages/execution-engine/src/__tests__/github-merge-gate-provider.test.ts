@@ -61,7 +61,6 @@ describe('GitHubMergeGateProvider', () => {
           'pr', 'list',
           '--repo', 'Neko-Catpital-Labs/Invoker',
           '--head', 'feature/test',
-          '--base', 'master',
           '--state', 'open',
           '--json', 'url,number',
           '--limit', '1',
@@ -116,7 +115,6 @@ describe('GitHubMergeGateProvider', () => {
           'pr', 'list',
           '--repo', 'owner/repo',
           '--head', 'feature/test',
-          '--base', 'main',
           '--state', 'open',
           '--json', 'url,number',
           '--limit', '1',
@@ -137,7 +135,7 @@ describe('GitHubMergeGateProvider', () => {
       );
     });
 
-    it('reuses an existing open PR instead of creating a new one', async () => {
+    it('reuses an existing open PR by head and retargets its base', async () => {
       const { spawn } = await import('node:child_process');
       const spawnMock = vi.mocked(spawn);
 
@@ -163,7 +161,13 @@ describe('GitHubMergeGateProvider', () => {
       expect(result.url).toBe('https://github.com/owner/repo/pull/10');
       expect(spawnMock).toHaveBeenCalledWith(
         'gh',
-        ['api', 'repos/owner/repo/pulls/10', '--method', 'PATCH', '-f', 'title=Updated PR', '-f', 'body=## Summary'],
+        [
+          'api', 'repos/owner/repo/pulls/10',
+          '--method', 'PATCH',
+          '-f', 'base=main',
+          '-f', 'title=Updated PR',
+          '-f', 'body=## Summary',
+        ],
         expect.objectContaining({ cwd: '/tmp/repo' }),
       );
     });
@@ -236,6 +240,31 @@ describe('GitHubMergeGateProvider', () => {
         title: 'Missing origin',
         cwd: '/tmp/repo',
       })).rejects.toThrow('parseable origin GitHub remote');
+    });
+  });
+
+  describe('closeReview', () => {
+    it('closes the owning PR without deleting the branch', async () => {
+      process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      spawnMock.mockImplementation(((cmd: string) => {
+        if (cmd === 'gh') return mockSpawnResult('{}', 0);
+        return mockSpawnResult('', 0);
+      }) as any);
+
+      await provider.closeReview({ identifier: '42', cwd: '/tmp/repo' });
+
+      expect(spawnMock).toHaveBeenCalledWith(
+        'gh',
+        [
+          'api', 'repos/owner/repo/pulls/42',
+          '--method', 'PATCH',
+          '-f', 'state=closed',
+        ],
+        expect.objectContaining({ cwd: '/tmp/repo' }),
+      );
     });
   });
 

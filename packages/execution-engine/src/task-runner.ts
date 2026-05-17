@@ -1846,6 +1846,24 @@ export class TaskRunner {
     }
   }
 
+  async closeWorkflowReview(workflowId: string): Promise<void> {
+    if (!this.mergeGateProvider?.closeReview) return;
+    const getAllTasks = this.orchestrator.getAllTasks?.bind(this.orchestrator);
+    if (!getAllTasks) return;
+    const mergeTask = getAllTasks().find((task) =>
+      task.config.workflowId === workflowId
+      && task.config.isMergeNode
+      && !!task.execution.reviewId
+    );
+    if (!mergeTask?.execution.reviewId) return;
+
+    this.stopPrPolling(mergeTask.id);
+    await this.mergeGateProvider.closeReview({
+      identifier: mergeTask.execution.reviewId,
+      cwd: mergeTask.execution.workspacePath ?? this.cwd,
+    });
+  }
+
   private async handleApprovedMergeGate(
     taskId: string,
     reviewId: string,
