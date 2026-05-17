@@ -25,6 +25,7 @@ import {
 import type { TaskStateChanges } from '@invoker/workflow-graph';
 import {
   DockerExecutor, WorktreeExecutor, ExecutorRegistry, SshExecutor,
+  MergeGateExecutor,
   BaseExecutor,
   getEffectivePath,
   type ExecutorHandle, type TerminalSpec, type PersistedTaskMeta,
@@ -574,6 +575,29 @@ describe('merge gate open-terminal', () => {
     vi.mocked(existsSync).mockReset();
   });
 
+  function createMergeGateExecutor() {
+    return new MergeGateExecutor({
+      persistence: {} as any,
+      orchestrator: {} as any,
+      defaultBranch: 'master',
+      callbacks: {},
+      cwd: '/home/user/repo',
+      execGitReadonly: vi.fn(),
+      execGitIn: vi.fn(),
+      createMergeWorktree: vi.fn(),
+      removeMergeWorktree: vi.fn(),
+      execGh: vi.fn(),
+      execPr: vi.fn(),
+      detectDefaultBranch: vi.fn(),
+      gitLogMessage: vi.fn(),
+      gitDiffStat: vi.fn(),
+      startPrPolling: vi.fn(),
+      executeTasks: vi.fn(),
+      buildMergeSummary: vi.fn(),
+      consolidateAndMerge: vi.fn(),
+    } as any);
+  }
+
   it('resolves merge gate fallback to default worktree executor', () => {
     const registry = new ExecutorRegistry();
     const worktree = new WorktreeExecutor({ cacheDir: join(tmpdir(), 'cache'), worktreeBaseDir: join(tmpdir(), 'merge-gate-wt') });
@@ -598,6 +622,37 @@ describe('merge gate open-terminal', () => {
 
     expect(executor).toBe(worktree);
     expect(executor!.type).toBe('worktree');
+  });
+
+  it('merge executor restore checks out branch before opening shell', () => {
+    const merge = createMergeGateExecutor();
+    const meta: PersistedTaskMeta = {
+      taskId: '__merge__wf-123',
+      runnerKind: 'merge',
+      workspacePath: '/home/user/.invoker/merge-clones/gate-wf',
+      branch: 'plan/example',
+    };
+
+    vi.mocked(existsSync).mockReturnValue(true);
+    const spec = merge.getRestoredTerminalSpec(meta);
+    expect(spec.cwd).toBe(meta.workspacePath);
+    expect(spec.command).toBe(worktreeCheckoutShell);
+    expect(spec.args).toContain('-c');
+    expect(spec.args![1]).toContain("git checkout 'plan/example'");
+    expect(spec.args![1]).toContain(`exec ${worktreeCheckoutShell}`);
+  });
+
+  it('merge executor restore keeps cwd-only behavior when branch is absent', () => {
+    const merge = createMergeGateExecutor();
+    const meta: PersistedTaskMeta = {
+      taskId: '__merge__wf-123',
+      runnerKind: 'merge',
+      workspacePath: '/home/user/.invoker/merge-clones/gate-wf',
+    };
+
+    vi.mocked(existsSync).mockReturnValue(true);
+    const spec = merge.getRestoredTerminalSpec(meta);
+    expect(spec).toEqual({ cwd: meta.workspacePath });
   });
 
   it('opens terminal with git checkout for merge gate with branch when workspacePath is a worktree', () => {
