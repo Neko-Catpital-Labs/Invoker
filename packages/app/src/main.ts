@@ -161,6 +161,7 @@ import {
   buildActionGraphDiagnostics,
   resolveActionDiagnosticsStallThresholdMs,
 } from './action-graph-diagnostics.js';
+import { registerReadOnlyIpcHandlers } from './ipc-read-handlers.js';
 
 function isTaskInFlightForForcedStop(task: TaskState): boolean {
   return task.status === 'running'
@@ -2910,8 +2911,21 @@ if (isHeadless) {
       taskHandles.clear();
     });
 
-    ipcMain.handle('invoker:list-workflows', () => persistence.listWorkflows());
-    ipcMain.handle('invoker:get-execution-pools', () => Object.keys(loadConfig().executionPools ?? {}));
+    registerReadOnlyIpcHandlers({
+      ipcMain,
+      logger,
+      persistence,
+      getOrchestrator: () => orchestrator,
+      agentRegistry,
+      lastKnownTaskStates,
+      getMainWindow: () => mainWindow,
+      sendTaskDeltaToRenderer,
+      setLastKnownWorkflowCount: (count) => { lastKnownWorkflowCount = count; },
+      loadTaskByIdFromPersistence,
+      resolveAgentSession,
+      timeStartupPhase,
+      recordStartupDuration,
+    });
 
     registerGuiMutationHandler('invoker:delete-all-workflows', async () => {
       logger.info('delete-all-workflows', { module: 'ipc' });
@@ -2947,7 +2961,6 @@ if (isHeadless) {
         try {
           await performDeleteWorkflow(workflowId);
 
-          // Update workflow count and send workflows-changed
           const workflows = persistence.listWorkflows();
           lastKnownWorkflowCount = workflows.length;
           if (mainWindow && !mainWindow.isDestroyed()) {
@@ -2972,113 +2985,13 @@ if (isHeadless) {
           { module: 'ipc' },
         );
         try {
-          const envelope = makeEnvelope('detach-workflow', 'ui', 'workflow', {
-            workflowId,
-            upstreamWorkflowId,
-          });
-          const result = await commandService.detachWorkflow(envelope);
-          if (!result.ok) throw new Error(result.error.message);
+          await performDetachWorkflow(workflowId, upstreamWorkflowId);
         } catch (err) {
           logger.error(`detach-workflow failed: ${err}`, { module: 'ipc' });
           throw err;
         }
       },
     );
-
-    ipcMain.handle('invoker:load-workflow', (_event, workflowId: string) => {
-      logger.info(`load-workflow: "${workflowId}"`, { module: 'ipc' });
-      // Sync orchestrator so mutations (restart, approve, etc.) work on this workflow
-      orchestrator.syncFromDb(workflowId);
-      const tasks = persistence.loadTasks(workflowId);
-      const workflow = persistence.loadWorkflow(workflowId);
-      logger.info(`load-workflow: found ${tasks.length} tasks for "${workflow?.name ?? workflowId}"`, { module: 'ipc' });
-      for (const task of tasks) {
-        lastKnownTaskStates.set(task.id, JSON.stringify(task));
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          sendTaskDeltaToRenderer({ type: 'created', task });
-        }
-      }
-      return { workflow, tasks };
-    });
-
-    ipcMain.handle('invoker:get-tasks', (_event, forceRefresh?: boolean) => {
-      const startedAtMs = Date.now();
-      if (forceRefresh) {
-        timeStartupPhase('get-tasks.force-refresh.syncAllFromDb', () => orchestrator.syncAllFromDb(), () => ({
-          taskCount: orchestrator.getAllTasks().length,
-        }));
-      }
-      const tasks = orchestrator.getAllTasks();
-      const workflows = persistence.listWorkflows();
-      if (forceRefresh) {
-        const previousTaskIds = new Set(lastKnownTaskStates.keys());
-        lastKnownTaskStates.clear();
-        for (const task of tasks) {
-          lastKnownTaskStates.set(task.id, JSON.stringify(task));
-          previousTaskIds.delete(task.id);
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            sendTaskDeltaToRenderer({ type: 'created', task });
-          }
-        }
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          for (const removedTaskId of previousTaskIds) {
-            sendTaskDeltaToRenderer({ type: 'removed', taskId: removedTaskId, previousTaskStateVersion: 0 });
-          }
-          mainWindow.webContents.send('invoker:workflows-changed', workflows);
-        }
-        lastKnownWorkflowCount = workflows.length;
-      }
-      logger.info(
-        `get-tasks(forceRefresh=${forceRefresh ? 'true' : 'false'}) returning ${tasks.length} tasks, ${workflows.length} workflows`,
-        { module: 'ipc' },
-      );
-      if (forceRefresh) {
-        recordStartupDuration('get-tasks.force-refresh.return', startedAtMs, {
-          taskCount: tasks.length,
-          workflowCount: workflows.length,
-          jsonSizeBytes: Buffer.byteLength(JSON.stringify({ tasks, workflows }), 'utf8'),
-        });
-      }
-      return { tasks, workflows };
-    });
-    ipcMain.handle('invoker:get-events', (_event, taskId: string) => persistence.getEvents(taskId));
-    ipcMain.handle('invoker:get-status', () => orchestrator.getWorkflowStatus());
-    ipcMain.handle('invoker:get-task-by-id', (_event, taskId: string) => loadTaskByIdFromPersistence(taskId) ?? null);
-    ipcMain.handle('invoker:get-task-output', (_event, taskId: string) => persistence.getTaskOutput(taskId));
-
-    ipcMain.handle('invoker:get-output-chunks', (_event, taskId: string) => persistence.getOutputChunks(taskId));
-
-    ipcMain.handle('invoker:replay-output-from', (_event, taskId: string, fromOffset: number) =>
-      persistence.replayOutputFrom(taskId, fromOffset)
-    );
-
-    ipcMain.handle('invoker:get-output-tail', (_event, taskId: string) => persistence.getOutputTail(taskId));
-
-    ipcMain.handle('invoker:get-all-completed-tasks', () => {
-      return persistence.loadAllCompletedTasks();
-    });
-
-    ipcMain.handle('invoker:get-claude-session', async (_event, sessionId: string) => {
-      logger.info(`get-claude-session: "${sessionId}"`, { module: 'ipc' });
-      try {
-        const allTasks = orchestrator.getAllTasks();
-        return await resolveAgentSession(sessionId, 'claude', agentRegistry, allTasks);
-      } catch (err) {
-        logger.error(`get-claude-session failed: ${err}`, { module: 'ipc' });
-        return null;
-      }
-    });
-
-    ipcMain.handle('invoker:get-agent-session', async (_event, sessionId: string, agentName?: string) => {
-      logger.info(`get-agent-session: "${sessionId}" agent="${agentName ?? 'claude'}"`, { module: 'ipc' });
-      try {
-        const allTasks = orchestrator.getAllTasks();
-        return await resolveAgentSession(sessionId, agentName ?? 'claude', agentRegistry, allTasks);
-      } catch (err) {
-        logger.error(`get-agent-session failed: ${err}`, { module: 'ipc' });
-        return null;
-      }
-    });
 
     registerGuiMutationHandler('invoker:provide-input', async (taskIdArg: unknown, inputArg: unknown) => {
       const taskId = String(taskIdArg);
