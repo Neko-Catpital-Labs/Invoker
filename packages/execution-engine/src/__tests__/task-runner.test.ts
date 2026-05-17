@@ -2850,6 +2850,113 @@ describe('TaskRunner', () => {
       );
     });
 
+    it('external_review checks out the fetched feature branch in the gate workspace', async () => {
+      const allTasks = [
+        makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
+      ];
+      const orchestrator = {
+        getTask: (id: string) => allTasks.find(t => t.id === id),
+        getAllTasks: () => allTasks,
+        handleWorkerResponse: vi.fn(() => []),
+        setTaskAwaitingApproval: vi.fn(),
+      };
+      const persistence = {
+        loadWorkflow: () => ({
+          id: 'wf-1',
+          onFinish: 'merge',
+          mergeMode: 'external_review',
+          baseBranch: 'master',
+          featureBranch: 'plan/example',
+          name: 'Review Gate Checkout',
+        }),
+        updateTask: vi.fn(),
+      };
+      const mergeGateProvider = {
+        createReview: vi.fn().mockResolvedValue({
+          url: 'https://github.com/owner/repo/pull/42',
+          identifier: 'owner/repo#42',
+        }),
+      };
+      const executor = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp/host',
+        callbacks: { onComplete: vi.fn() },
+        mergeGateProvider: mergeGateProvider as any,
+      });
+
+      const gateWorkspace = '/tmp/gate-wt';
+      const consolidateWorkspace = '/tmp/consolidate-wt';
+      const currentBranchByDir = new Map<string, string | undefined>([
+        [gateWorkspace, undefined],
+        [consolidateWorkspace, 'plan/example'],
+      ]);
+      const gitCalls: Array<{ args: string[]; dir: string }> = [];
+      (executor as any).execGitReadonly = async () => '';
+      (executor as any).execGitIn = async (args: string[], dir: string) => {
+        gitCalls.push({ args: [...args], dir });
+        if (args[0] === 'checkout' && args[1] === 'plan/example') {
+          currentBranchByDir.set(dir, 'plan/example');
+        }
+        if (args[0] === 'checkout' && args[1] === '--detach') {
+          currentBranchByDir.set(dir, undefined);
+        }
+        if (args[0] === 'checkout' && args[1] === '-b' && args[2]) {
+          currentBranchByDir.set(dir, args[2]);
+        }
+        if (args[0] === 'branch' && args[1] === '--show-current') {
+          return currentBranchByDir.get(dir) ?? '';
+        }
+        return '';
+      };
+      (executor as any).createMergeWorktree = vi.fn()
+        .mockResolvedValueOnce(gateWorkspace)
+        .mockResolvedValueOnce(consolidateWorkspace);
+      (executor as any).removeMergeWorktree = async () => {};
+      (executor as any).startPrPolling = vi.fn();
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: '## Summary\n\nAuthored body',
+        sessionId: 'sess-pr-ext',
+        agentName: 'codex',
+      });
+
+      const mergeTask = makeTask({
+        id: '__merge__wf-1',
+        status: 'running',
+        dependencies: ['t1'],
+        config: { isMergeNode: true, workflowId: 'wf-1' },
+      });
+
+      await (executor as any).executeMergeNode(mergeTask);
+
+      const gateGitCalls = gitCalls.filter(c => c.dir === gateWorkspace).map(c => c.args);
+      const fetchIndex = gateGitCalls.findIndex(args =>
+        args[0] === 'fetch' &&
+        args[1] === 'origin' &&
+        args[2] === '+refs/heads/plan/example:refs/heads/plan/example',
+      );
+      const checkoutIndex = gateGitCalls.findIndex(args =>
+        args[0] === 'checkout' &&
+        args[1] === 'plan/example',
+      );
+      expect(fetchIndex).toBeGreaterThanOrEqual(0);
+      expect(checkoutIndex).toBeGreaterThan(fetchIndex);
+      expect(currentBranchByDir.get(gateWorkspace)).toBe('plan/example');
+      expect(persistence.updateTask).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
+        execution: expect.objectContaining({
+          workspacePath: gateWorkspace,
+          branch: 'plan/example',
+        }),
+      }));
+      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
+        execution: expect.objectContaining({
+          workspacePath: gateWorkspace,
+          branch: 'plan/example',
+        }),
+      }));
+    });
+
     it('reproduces wf-1778431030512-12 visual-proof markdown in the merge-gate PR body', async () => {
       const cwd = createTempWorkspace();
       mkdirSync(join(cwd, 'scripts'), { recursive: true });
