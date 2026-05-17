@@ -317,6 +317,7 @@ export class TaskRunner {
     if (selectedAttemptId) {
       const entry = this.activeExecutions.get(selectedAttemptId);
       if (entry) return { attemptId: selectedAttemptId, entry };
+      return undefined;
     }
 
     const latestAttemptId = this.loadLatestAttemptId(taskId);
