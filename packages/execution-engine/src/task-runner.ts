@@ -1878,6 +1878,21 @@ export class TaskRunner {
     }
   }
 
+  private handleClosedMergeGate(
+    taskId: string,
+    reviewId: string,
+    statusText: string,
+    source?: 'refresh' | 'manual check',
+  ): void {
+    const sourceSuffix = source ? ` (${source})` : '';
+    this.logger.info(`[merge-gate] PR ${reviewId} closed${sourceSuffix}: ${statusText}`);
+    this.persistence.updateTask(taskId, {
+      status: 'closed',
+      execution: { reviewStatus: statusText },
+    });
+    this.stopPrPolling(taskId);
+  }
+
   async checkMergeGateStatuses(): Promise<void> {
     if (!this.mergeGateProvider) return;
     for (const task of this.orchestrator.getAllTasks()) {
@@ -1892,14 +1907,23 @@ export class TaskRunner {
             identifier: task.execution.reviewId,
             cwd: gateCwd,
           });
-          this.persistence.updateTask(task.id, {
-            execution: { reviewStatus: status.statusText },
-          });
-          if (status.approved) {
+          if (status.closed) {
+            this.handleClosedMergeGate(task.id, task.execution.reviewId, status.statusText, 'refresh');
+          } else if (status.approved) {
+            this.persistence.updateTask(task.id, {
+              execution: { reviewStatus: status.statusText },
+            });
             await this.handleApprovedMergeGate(task.id, task.execution.reviewId, 'refresh');
           } else if (status.rejected) {
+            this.persistence.updateTask(task.id, {
+              execution: { reviewStatus: status.statusText },
+            });
             this.logger.info(`[merge-gate] PR ${task.execution.reviewId} rejected (refresh): ${status.statusText}`);
             this.stopPrPolling(task.id);
+          } else {
+            this.persistence.updateTask(task.id, {
+              execution: { reviewStatus: status.statusText },
+            });
           }
         } catch (err) {
           this.logger.error(`[merge-gate] PR status check error for ${task.id}`, { err });
@@ -1920,17 +1944,24 @@ export class TaskRunner {
           cwd: pollCwd,
         });
 
-        // Update PR status on task
-        this.persistence.updateTask(taskId, {
-          execution: { reviewStatus: status.statusText },
-        });
-
-        if (status.approved) {
+        if (status.closed) {
+          this.handleClosedMergeGate(taskId, reviewId, status.statusText);
+        } else if (status.approved) {
+          this.persistence.updateTask(taskId, {
+            execution: { reviewStatus: status.statusText },
+          });
           await this.handleApprovedMergeGate(taskId, reviewId);
         } else if (status.rejected) {
+          this.persistence.updateTask(taskId, {
+            execution: { reviewStatus: status.statusText },
+          });
           this.logger.info(`[merge-gate] PR ${reviewId} rejected: ${status.statusText}`);
           this.stopPrPolling(taskId);
           // Leave in review_ready/awaiting_approval — user can retry
+        } else {
+          this.persistence.updateTask(taskId, {
+            execution: { reviewStatus: status.statusText },
+          });
         }
       } catch (err) {
         this.logger.error(`[merge-gate] PR poll error for ${taskId}`, { err });
@@ -1962,15 +1993,23 @@ export class TaskRunner {
         cwd: manualCwd,
       });
 
-      this.persistence.updateTask(taskId, {
-        execution: { reviewStatus: status.statusText },
-      });
-
-      if (status.approved) {
+      if (status.closed) {
+        this.handleClosedMergeGate(taskId, reviewId, status.statusText, 'manual check');
+      } else if (status.approved) {
+        this.persistence.updateTask(taskId, {
+          execution: { reviewStatus: status.statusText },
+        });
         await this.handleApprovedMergeGate(taskId, reviewId, 'manual check');
       } else if (status.rejected) {
+        this.persistence.updateTask(taskId, {
+          execution: { reviewStatus: status.statusText },
+        });
         this.logger.info(`[merge-gate] PR ${reviewId} rejected (manual check): ${status.statusText}`);
         this.stopPrPolling(taskId);
+      } else {
+        this.persistence.updateTask(taskId, {
+          execution: { reviewStatus: status.statusText },
+        });
       }
     } catch (err) {
       this.logger.error(`[merge-gate] Manual PR check error for ${taskId}`, { err });

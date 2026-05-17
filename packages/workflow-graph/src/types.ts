@@ -13,6 +13,7 @@ export type TaskStatus =
   | 'fixing_with_ai'
   | 'completed'
   | 'failed'
+  | 'closed'
   | 'needs_input'
   | 'blocked'
   | 'review_ready'

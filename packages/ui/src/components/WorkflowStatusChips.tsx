@@ -11,6 +11,7 @@ interface WorkflowStatusChipsProps {
 const DISPLAY_ORDER: WorkflowStatus[] = [
   'running',
   'failed',
+  'closed',
   'blocked',
   'awaiting_approval',
   'review_ready',

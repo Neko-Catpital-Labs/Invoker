@@ -179,7 +179,7 @@ describe('SlackSurface', () => {
 
       await surface.handleEvent({
         type: 'workflow_status',
-        status: { total: 5, completed: 2, failed: 0, running: 1, pending: 2 },
+        status: { total: 5, completed: 2, failed: 0, closed: 0, running: 1, pending: 2 },
       });
 
       expect(app.client.chat.postMessage).toHaveBeenCalled();

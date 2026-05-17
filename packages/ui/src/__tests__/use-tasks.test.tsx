@@ -262,6 +262,7 @@ describe('useTasks', () => {
               fixing_with_ai: 0,
               completed: 0,
               failed: 0,
+              closed: 0,
               needs_input: 0,
               blocked: 0,
               review_ready: 0,

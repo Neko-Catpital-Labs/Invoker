@@ -19,6 +19,7 @@ export function StatusBar({ tasks, activeFilters, onStatusClick }: StatusBarProp
   let completed = 0;
   let running = 0;
   let failed = 0;
+  let closed = 0;
   let pending = 0;
   let needsInput = 0;
   let reviewReady = 0;
@@ -44,6 +45,9 @@ export function StatusBar({ tasks, activeFilters, onStatusClick }: StatusBarProp
         break;
       case 'failed':
         failed++;
+        break;
+      case 'closed':
+        closed++;
         break;
       case 'pending':
         pending++;
@@ -109,6 +113,15 @@ export function StatusBar({ tasks, activeFilters, onStatusClick }: StatusBarProp
         <span data-testid="workflow-status-pill-failed" className="sr-only" />
         Failed: <span className="font-medium">{failed}</span>
       </span>
+      {closed > 0 && (
+        <span
+          data-testid="status-bar-pill-closed"
+          className={`${statusTextClass('closed')} ${filterClass('closed')}`}
+          onClick={(e) => onStatusClick?.('closed', e)}
+        >
+          Closed: <span className="font-medium">{closed}</span>
+        </span>
+      )}
       <span
         data-testid="status-bar-pill-pending"
         className={`${statusTextClass('pending')} ${filterClass('pending')}`}

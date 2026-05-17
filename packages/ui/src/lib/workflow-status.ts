@@ -5,6 +5,7 @@ const WORKFLOW_STATUS_SET: ReadonlySet<WorkflowStatus> = new Set<WorkflowStatus>
   'running',
   'completed',
   'failed',
+  'closed',
   'blocked',
   'review_ready',
   'awaiting_approval',
@@ -45,6 +46,13 @@ export function workflowStatusVisual(status: WorkflowStatus): WorkflowStatusVisu
         borderClass: 'border-red-500/60',
         railClass: 'bg-red-500',
         textClass: 'text-red-300',
+        pulse: false,
+      };
+    case 'closed':
+      return {
+        borderClass: 'border-zinc-500/60',
+        railClass: 'bg-zinc-500',
+        textClass: 'text-zinc-300',
         pulse: false,
       };
     case 'blocked':

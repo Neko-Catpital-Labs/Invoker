@@ -14,6 +14,7 @@ describe('getStatusColor', () => {
     'fixing_with_ai',
     'completed',
     'failed',
+    'closed',
     'blocked',
     'needs_input',
     'awaiting_approval',

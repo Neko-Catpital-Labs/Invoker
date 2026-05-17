@@ -24,6 +24,7 @@ export interface WorkflowStatus {
   total: number;
   completed: number;
   failed: number;
+  closed: number;
   running: number;
   pending: number;
 }
