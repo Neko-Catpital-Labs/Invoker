@@ -3,10 +3,10 @@
  * - onNodesChange filters to only dimension/select changes
  * - Watchdog detects both missing and visibility:hidden nodes
  * - fitView prop removed (no visibility:hidden mechanism)
- * - rfNodes state syncs from task-derived nodes
+ * - rfNodes state preserves measured dimensions from task-derived node updates
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { applyNodeChanges, type Node, type NodeChange } from '@xyflow/react';
@@ -155,7 +155,23 @@ describe('TaskDAG stability', () => {
       expect(updated[0].measured).toEqual({ width: 260, height: 80 });
     });
 
-    it('dimension changes survive a simulated task-delta re-render', () => {
+    function mergeMeasuredNodeState(prevNodes: Node[], nextNodes: Node[]): Node[] {
+      const previousById = new Map(prevNodes.map((node) => [node.id, node]));
+
+      return nextNodes.map((node) => {
+        const previous = previousById.get(node.id);
+        if (!previous) return node;
+
+        return {
+          ...node,
+          ...(previous.measured ? { measured: previous.measured } : {}),
+          ...(previous.width !== undefined ? { width: previous.width } : {}),
+          ...(previous.height !== undefined ? { height: previous.height } : {}),
+        };
+      });
+    }
+
+    it('preserves dimensions across a simulated task-delta re-render', () => {
       // 1. Start with task-derived nodes (no dimensions)
       let rfNodes: Node[] = [{ ...baseNode }];
 
@@ -181,11 +197,16 @@ describe('TaskDAG stability', () => {
           data: { task: { status: 'running' }, label: 'Test' },
         },
       ];
-      rfNodes = newTaskNodes;
+      rfNodes = mergeMeasuredNodeState(rfNodes, newTaskNodes);
 
-      // 4. Dimensions are lost on the new objects — this is expected.
-      //    React Flow will re-measure but without fitView prop it won't hide them.
-      expect(rfNodes[0].measured).toBeUndefined();
+      // 4. Dimensions are retained so React Flow does not need to re-measure
+      //    existing nodes after each status/task data update.
+      expect(rfNodes[0].measured).toEqual({ width: 260, height: 80 });
+      expect(rfNodes[0].data).toEqual({ task: { status: 'running' }, label: 'Test' });
+    });
+
+    it('wires task-derived node sync through measured-state merge', () => {
+      expect(source).toContain('mergeMeasuredNodeState(prev, nodes)');
     });
   });
 
@@ -220,6 +241,36 @@ describe('TaskDAG stability', () => {
 
     it('does not trigger when no props nodes exist', () => {
       expect(shouldTrigger(0, 0, 0)).toBe(false);
+    });
+
+    function shouldRecover(missCount: number, recoveryAttempted: boolean): boolean {
+      return missCount >= 3 && !recoveryAttempted;
+    }
+
+    it('does not recover before repeated watchdog misses', () => {
+      expect(shouldRecover(1, false)).toBe(false);
+      expect(shouldRecover(2, false)).toBe(false);
+    });
+
+    it('recovers once after repeated watchdog misses', () => {
+      expect(shouldRecover(3, false)).toBe(true);
+      expect(shouldRecover(4, true)).toBe(false);
+    });
+
+    it('logs watchdog miss and recovery state', () => {
+      expect(source).toContain('missCount: watchdogMissCountRef.current');
+      expect(source).toContain('recoveryAttempted: watchdogRecoveryAttemptedRef.current');
+      expect(source).toContain('recoveryTriggered: shouldRecover');
+    });
+
+    it('remounts React Flow for bounded watchdog recovery', () => {
+      const reactFlowBlock = source.slice(
+        source.indexOf('<ReactFlow'),
+        source.indexOf('</ReactFlow>'),
+      );
+      expect(source).toContain('const WATCHDOG_RECOVERY_MISS_COUNT = 3;');
+      expect(source).toContain('setFlowInstanceKey((key) => key + 1)');
+      expect(reactFlowBlock).toContain('key={flowInstanceKey}');
     });
   });
 
