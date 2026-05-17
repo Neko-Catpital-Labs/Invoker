@@ -91,6 +91,14 @@ export class MergeGateExecutor extends BaseExecutor<MergeGateEntry> {
     if (!meta.workspacePath || !existsSync(meta.workspacePath)) {
       throw new Error(`Workspace path no longer exists for task ${meta.taskId}: ${meta.workspacePath ?? 'none'}`);
     }
+    if (meta.branch) {
+      const sh = process.platform === 'darwin' ? 'zsh' : 'bash';
+      return {
+        command: sh,
+        args: ['-c', `git checkout '${meta.branch}' 2>/dev/null; exec ${sh}`],
+        cwd: meta.workspacePath,
+      };
+    }
     return { cwd: meta.workspacePath };
   }
 
