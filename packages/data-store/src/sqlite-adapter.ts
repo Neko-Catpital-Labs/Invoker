@@ -98,6 +98,10 @@ function paramsToArgs(params: SQLiteParams = []): unknown[] {
   return Array.isArray(params) ? params : [params];
 }
 
+function sqlStringLiteral(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
 class NativeStatementCompat {
   private boundParams: SQLiteParams = [];
   private iterator: Iterator<Record<string, unknown>> | null = null;
@@ -307,26 +311,30 @@ export class SQLiteAdapter implements PersistenceAdapter {
   /** Run a single-row SELECT, returning the row as an object or undefined. */
   private queryOne(sql: string, params: unknown[] = []): Record<string, unknown> | undefined {
     const stmt = this.db.prepare(sql);
-    stmt.bind(params as any[]);
-    if (stmt.step()) {
-      const row = stmt.getAsObject();
+    try {
+      stmt.bind(params as any[]);
+      if (stmt.step()) {
+        return stmt.getAsObject() as Record<string, unknown>;
+      }
+      return undefined;
+    } finally {
       stmt.free();
-      return row as Record<string, unknown>;
     }
-    stmt.free();
-    return undefined;
   }
 
   /** Run a multi-row SELECT, returning an array of row objects. */
   private queryAll(sql: string, params: unknown[] = []): Record<string, unknown>[] {
     const stmt = this.db.prepare(sql);
-    stmt.bind(params as any[]);
-    const rows: Record<string, unknown>[] = [];
-    while (stmt.step()) {
-      rows.push(stmt.getAsObject() as Record<string, unknown>);
+    try {
+      stmt.bind(params as any[]);
+      const rows: Record<string, unknown>[] = [];
+      while (stmt.step()) {
+        rows.push(stmt.getAsObject() as Record<string, unknown>);
+      }
+      return rows;
+    } finally {
+      stmt.free();
     }
-    stmt.free();
-    return rows;
   }
 
   private ensureWritable(): void {
@@ -1785,11 +1793,68 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   getTaskOutput(taskId: string): string {
+    // Prefer the output spool (DB + file) when it has any chunks for this task —
+    // it is the canonical streaming-output store. Otherwise fall back to
+    // task_output (legacy DB rows + diagnostic file), which avoids returning a
+    // duplicated stream when both stores contain the same data.
+    const spoolChunks = this.getOutputChunks(taskId);
+    if (spoolChunks.length > 0) {
+      return spoolChunks.map((chunk) => chunk.data).join('');
+    }
     const rows = this.queryAll(
       'SELECT data FROM task_output WHERE task_id = ? ORDER BY id ASC',
       [taskId],
     ) as Array<{ data: string }>;
     return rows.map((r) => r.data).join('') + this.readTaskOutputFile(taskId);
+  }
+
+  /**
+   * Maintenance: delete task_output rows for tasks that already have output_spool
+   * rows. Diagnostic-only task_output rows for tasks with no output_spool rows
+   * are preserved. Writes a DB backup before mutating unless `backup: false` is
+   * passed. Returns the number of rows deleted and the backup path used (or
+   * null for in-memory databases or when `backup: false`).
+   */
+  pruneDuplicateTaskOutputRows(options?: { backup?: boolean; backupPath?: string }): {
+    deletedTaskOutputRows: number;
+    backupPath: string | null;
+  } {
+    this.ensureWritable();
+
+    let backupPath: string | null = null;
+    const shouldBackup = options?.backup !== false;
+    if (shouldBackup && this.dbPath) {
+      backupPath = options?.backupPath ?? `${this.dbPath}.prune-backup-${Date.now()}`;
+      if (!existsSync(backupPath)) {
+        const dir = dirname(backupPath);
+        mkdirSync(dir, { recursive: true });
+        this.checkpointWal('FULL');
+        this.nativeDb.exec(`VACUUM INTO ${sqlStringLiteral(backupPath)}`);
+      }
+    }
+
+    const before = this.queryOne('SELECT COUNT(*) AS c FROM task_output') as
+      | { c: number }
+      | undefined;
+    const beforeCount = Number(before?.c ?? 0);
+
+    this.runTransaction(() => {
+      this.db.run(`
+        DELETE FROM task_output
+        WHERE task_id IN (
+          SELECT DISTINCT task_id FROM output_spool
+        )
+      `);
+    });
+
+    const after = this.queryOne('SELECT COUNT(*) AS c FROM task_output') as
+      | { c: number }
+      | undefined;
+    const afterCount = Number(after?.c ?? 0);
+    return {
+      deletedTaskOutputRows: Math.max(0, beforeCount - afterCount),
+      backupPath,
+    };
   }
 
   // ── Output Spool ────────────────────────────────────────
