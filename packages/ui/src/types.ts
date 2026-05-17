@@ -17,7 +17,8 @@ export type TaskStatus =
   | 'blocked'
   | 'review_ready'
   | 'awaiting_approval'
-  | 'stale';
+  | 'stale'
+  | 'closed';
 
 // ── Experiment Types ────────────────────────────────────────
 
@@ -174,7 +175,8 @@ export type WorkflowStatus =
   | 'blocked'
   | 'review_ready'
   | 'awaiting_approval'
-  | 'stale';
+  | 'stale'
+  | 'closed';
 
 // ── Workflow Status ─────────────────────────────────────────
 

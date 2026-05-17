@@ -9,7 +9,8 @@ export type WorkflowDerivedStatus =
   | 'blocked'
   | 'review_ready'
   | 'awaiting_approval'
-  | 'stale';
+  | 'stale'
+  | 'closed';
 
 export type WorkflowTaskStatusCounts = Record<TaskStatus, number>;
 
@@ -68,6 +69,7 @@ export const TASK_STATUSES: readonly TaskStatus[] = [
   'review_ready',
   'awaiting_approval',
   'stale',
+  'closed',
 ];
 
 export function createEmptyWorkflowTaskStatusCounts(): WorkflowTaskStatusCounts {
@@ -85,6 +87,7 @@ export function computeWorkflowStatusFromCounts(
   if (counts.running > 0) return 'running';
   if (counts.awaiting_approval > 0) return 'awaiting_approval';
   if (counts.review_ready > 0) return 'review_ready';
+  if (counts.closed > 0) return 'closed';
   if (counts.blocked > 0 || counts.needs_input > 0) return 'blocked';
   if (counts.pending === total) return 'pending';
   if (counts.pending > 0) return 'running';

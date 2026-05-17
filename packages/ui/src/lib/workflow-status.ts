@@ -9,6 +9,7 @@ const WORKFLOW_STATUS_SET: ReadonlySet<WorkflowStatus> = new Set<WorkflowStatus>
   'review_ready',
   'awaiting_approval',
   'stale',
+  'closed',
 ]);
 
 export function normalizeWorkflowStatus(rawStatus: string | undefined): WorkflowStatus {

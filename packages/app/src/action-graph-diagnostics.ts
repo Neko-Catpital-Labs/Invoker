@@ -64,6 +64,8 @@ function taskStatusToActionStatus(status: TaskState['status']): ActionGraphNodeS
       return 'cancelled';
     case 'fixing_with_ai':
       return 'running';
+    case 'closed':
+      return 'cancelled';
   }
 }
 

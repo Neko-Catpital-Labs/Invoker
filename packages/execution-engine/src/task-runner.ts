@@ -1847,6 +1847,19 @@ export class TaskRunner {
     }
   }
 
+  private handleClosedUnmergedGate(
+    taskId: string,
+    reviewId: string,
+    source?: 'refresh' | 'manual check',
+  ): void {
+    const sourceSuffix = source ? ` (${source})` : '';
+    this.logger.info(`[merge-gate] PR ${reviewId} closed without merging${sourceSuffix}, transitioning task to closed`);
+    this.stopPrPolling(taskId);
+    // Terminal-neutral: do NOT call orchestrator.approve or executeTasks; downstream
+    // tasks must not dispatch from a closed-unmerged review gate.
+    this.persistence.updateTask(taskId, { status: 'closed' });
+  }
+
   async checkMergeGateStatuses(): Promise<void> {
     if (!this.mergeGateProvider) return;
     for (const task of this.orchestrator.getAllTasks()) {
@@ -1866,6 +1879,8 @@ export class TaskRunner {
           });
           if (status.approved) {
             await this.handleApprovedMergeGate(task.id, task.execution.reviewId, 'refresh');
+          } else if (status.closedUnmerged) {
+            this.handleClosedUnmergedGate(task.id, task.execution.reviewId, 'refresh');
           } else if (status.rejected) {
             this.logger.info(`[merge-gate] PR ${task.execution.reviewId} rejected (refresh): ${status.statusText}`);
             this.stopPrPolling(task.id);
@@ -1896,6 +1911,8 @@ export class TaskRunner {
 
         if (status.approved) {
           await this.handleApprovedMergeGate(taskId, reviewId);
+        } else if (status.closedUnmerged) {
+          this.handleClosedUnmergedGate(taskId, reviewId);
         } else if (status.rejected) {
           this.logger.info(`[merge-gate] PR ${reviewId} rejected: ${status.statusText}`);
           this.stopPrPolling(taskId);
@@ -1937,6 +1954,8 @@ export class TaskRunner {
 
       if (status.approved) {
         await this.handleApprovedMergeGate(taskId, reviewId, 'manual check');
+      } else if (status.closedUnmerged) {
+        this.handleClosedUnmergedGate(taskId, reviewId, 'manual check');
       } else if (status.rejected) {
         this.logger.info(`[merge-gate] PR ${reviewId} rejected (manual check): ${status.statusText}`);
         this.stopPrPolling(taskId);
