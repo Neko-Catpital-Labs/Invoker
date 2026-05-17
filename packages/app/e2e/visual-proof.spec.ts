@@ -135,6 +135,20 @@ const MENU_PROOF_PLAN = {
   mergeMode: 'external_review',
 };
 
+const SSH_TERMINAL_RESUME_PLAN = {
+  name: 'SSH Terminal Resume Visual Proof',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'none' as const,
+  tasks: [
+    {
+      id: 'ssh-resume',
+      description: 'Completed SSH resume task',
+      command: 'echo done',
+      dependencies: [] as string[],
+    },
+  ],
+};
+
 function workflowNode(page: Page, workflowId: string) {
   return page.getByTestId(`workflow-node-${workflowId}`);
 }
@@ -249,6 +263,46 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByText('sleep 5 && echo hello-alpha')).toBeVisible();
     await captureScreenshot(page, 'task-panel');
     await assertPageScreenshot(page, 'task-panel');
+  });
+
+  test('embedded-tabbed-terminal — drawer expands with active task tab', async ({ page, testDir }) => {
+    await loadPlan(page, TEST_PLAN);
+
+    // Materialise a real workspace dir so the main-process executor can resolve
+    // a terminal spec and spawn an embedded shell without a remote SSH target.
+    const workspacePath = path.join(testDir, 'embedded-terminal-workspace');
+    await fs.mkdir(workspacePath, { recursive: true });
+
+    const now = new Date();
+    const earlier = new Date(Date.now() - 5000);
+    await injectTaskStates(page, [
+      {
+        taskId: 'task-alpha',
+        changes: {
+          status: 'completed',
+          execution: { startedAt: earlier, completedAt: now, workspacePath },
+        },
+      },
+    ]);
+
+    // Drawer starts collapsed.
+    await expect(page.getByRole('button', { name: 'Expand terminal drawer' })).toBeVisible();
+    await expect(page.getByTestId('terminal-drawer-body')).toHaveCount(0);
+
+    const taskCard = page.locator('[title$="task-alpha"]').first();
+    await expect(taskCard).toBeVisible({ timeout: 10000 });
+    await taskCard.dispatchEvent('dblclick');
+
+    // Drawer expands; one active tab for task-alpha; terminal pane rendered.
+    await expect(page.getByRole('button', { name: 'Collapse terminal drawer' })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByTestId('terminal-drawer-body')).toBeVisible();
+    const tabs = page.getByTestId('terminal-tab-strip').locator('[data-testid^="terminal-tab-"]');
+    await expect(tabs).toHaveCount(1);
+    await expect(tabs.first()).toHaveAttribute('data-active', 'true');
+    await expect(tabs.first()).toContainText('First test task');
+    await expect(page.locator('[data-testid^="terminal-pane-"]').first()).toBeVisible();
+
+    await captureScreenshot(page, 'embedded-tabbed-terminal');
   });
 
   test('task panel setup failure renders in Error panel', async ({ page }) => {
@@ -1058,5 +1112,111 @@ test.describe('Visual proof capture', () => {
 
     await captureScreenshot(page, 'queue-action-surface-hardening');
     await assertPageScreenshot(page, 'queue-action-surface-hardening');
+  });
+
+  test('completed SSH task double-click expands terminal drawer with working SSH resume terminal', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, SSH_TERMINAL_RESUME_PLAN);
+    const workspacePath = '/home/invoker/.invoker/worktrees/wf-ssh/experiment-ssh-resume';
+    const sessionId = 'codex-session-ssh-123';
+    const terminalSessionId = 'visual-proof-ssh-session';
+    const sshInnerCommand = `cd '${workspacePath}' && codex resume ${sessionId}`;
+    const sshArgs = ['-i', '/tmp/e2e_id_rsa', '-t', 'invoker@remote-do-1', sshInnerCommand];
+    const terminalOutput = [
+      '$ ssh -i /tmp/e2e_id_rsa -t invoker@remote-do-1\r\n',
+      'Connection established: remote-do-1\r\n',
+      `$ ${sshInnerCommand}\r\n`,
+      `Resumed Codex session ${sessionId}\r\n`,
+      'Terminal stream ready for input.\r\n',
+    ].join('');
+
+    await injectTaskStates(page, [
+      {
+        taskId: 'ssh-resume',
+        changes: {
+          status: 'completed',
+          config: {
+            runnerKind: 'ssh',
+            poolMemberId: 'remote-do-1',
+            executionAgent: 'codex',
+          },
+          execution: {
+            workspacePath,
+            agentSessionId: sessionId,
+            completedAt: new Date('2025-01-01T00:00:00.000Z'),
+          },
+        },
+      },
+    ]);
+
+    await page.evaluate(({ args, cwd, terminalId }) => {
+      (window as unknown as { __terminalCalls: string[] }).__terminalCalls = [];
+      (window as unknown as { __terminalOutputSubscribers: Array<(event: { sessionId: string; taskId: string; data: string }) => void> }).__terminalOutputSubscribers = [];
+      window.__INVOKER_TEST_OPEN_TERMINAL__ = async (taskId: string) => {
+        (window as unknown as { __terminalCalls: string[] }).__terminalCalls.push(taskId);
+        return {
+          opened: true,
+          session: {
+            sessionId: terminalId,
+            taskId,
+            status: 'running',
+            cwd,
+            command: 'ssh',
+            args,
+            mode: 'spawn',
+            attached: false,
+            createdAt: '2025-01-01T00:00:00.000Z',
+          },
+        };
+      };
+      window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__ = (cb) => {
+        const subscribers = (window as unknown as { __terminalOutputSubscribers: Array<(event: { sessionId: string; taskId: string; data: string }) => void> }).__terminalOutputSubscribers;
+        subscribers.push(cb);
+        return () => {
+          const index = subscribers.indexOf(cb);
+          if (index >= 0) subscribers.splice(index, 1);
+        };
+      };
+    }, { args: sshArgs, cwd: workspacePath, terminalId: terminalSessionId });
+
+    const sshTaskNode = page
+      .getByTestId('selected-workflow-mini-dag')
+      .locator('.react-flow__node[data-testid$="ssh-resume"]')
+      .first();
+    const box = await sshTaskNode.boundingBox();
+    if (!box) throw new Error('SSH task node has no bounding box');
+    await sshTaskNode.locator('> div').dispatchEvent('dblclick', {
+      bubbles: true,
+      cancelable: true,
+      clientX: box.x + box.width / 2,
+      clientY: box.y + box.height / 2,
+    });
+
+    await expect(page.getByTestId('terminal-drawer-body')).toBeVisible();
+    await expect(page.getByTestId('terminal-tab-wf-test-1/ssh-resume')).toHaveAttribute('data-active', 'true');
+    await expect(page.getByTestId('terminal-session-command')).toContainText('ssh');
+    await expect(page.getByTestId('terminal-session-command')).toContainText(workspacePath);
+    await expect(page.getByTestId('terminal-session-command')).toContainText(`codex resume ${sessionId}`);
+    await expect(page.getByTestId('terminal-pane-wf-test-1/ssh-resume')).toBeVisible();
+    const terminalPane = page.getByTestId('terminal-pane-wf-test-1/ssh-resume');
+    await page.waitForFunction(() => {
+      return (window as unknown as { __terminalOutputSubscribers: unknown[] }).__terminalOutputSubscribers.length > 0;
+    });
+    await page.evaluate(({ output, terminalId }) => {
+      const subscribers = (window as unknown as { __terminalOutputSubscribers: Array<(event: { sessionId: string; taskId: string; data: string }) => void> }).__terminalOutputSubscribers;
+      for (const subscriber of subscribers) {
+        subscriber({ sessionId: terminalId, taskId: 'wf-test-1/ssh-resume', data: output });
+      }
+    }, { output: terminalOutput, terminalId: terminalSessionId });
+    await expect(terminalPane.getByText('Connection established: remote-do-1')).toBeVisible();
+    await expect(terminalPane.getByText(`Resumed Codex session ${sessionId}`)).toBeVisible();
+    await expect(terminalPane.getByText('Terminal stream ready for input.')).toBeVisible();
+    await expect(page.getByTestId('terminal-session-output-preview')).toContainText('Terminal stream ready for input.');
+
+    const calls = await page.evaluate(() => (window as unknown as { __terminalCalls: string[] }).__terminalCalls);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain('ssh-resume');
+
+    await captureScreenshot(page, 'completed-ssh-terminal-resume');
+    await assertPageScreenshot(page, 'completed-ssh-terminal-resume');
   });
 });
