@@ -268,7 +268,7 @@ export interface TaskReplacementDef {
 
 export type { InvokerAPI, ClaudeMessage, AgentSessionData } from '@invoker/contracts';
 
-import type { InvokerAPI } from '@invoker/contracts';
+import type { InvokerAPI, TerminalOutputEvent } from '@invoker/contracts';
 
 // ── Augment global Window ───────────────────────────────────
 
@@ -282,5 +282,6 @@ declare global {
       appStartedAtEpochMs?: number;
     };
     __INVOKER_TEST_OPEN_TERMINAL__?: (taskId: string) => ReturnType<InvokerAPI['openTerminal']>;
+    __INVOKER_TEST_ON_TERMINAL_OUTPUT__?: (cb: (event: TerminalOutputEvent) => void) => () => void;
   }
 }

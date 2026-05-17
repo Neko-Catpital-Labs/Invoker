@@ -1114,12 +1114,20 @@ test.describe('Visual proof capture', () => {
     await assertPageScreenshot(page, 'queue-action-surface-hardening');
   });
 
-  test('completed SSH task double-click expands terminal drawer with resume command', async ({ page }) => {
+  test('completed SSH task double-click expands terminal drawer with working SSH resume terminal', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, SSH_TERMINAL_RESUME_PLAN);
     const workspacePath = '/home/invoker/.invoker/worktrees/wf-ssh/experiment-ssh-resume';
     const sessionId = 'codex-session-ssh-123';
+    const terminalSessionId = 'visual-proof-ssh-session';
     const sshInnerCommand = `cd '${workspacePath}' && codex resume ${sessionId}`;
     const sshArgs = ['-i', '/tmp/e2e_id_rsa', '-t', 'invoker@remote-do-1', sshInnerCommand];
+    const terminalOutput = [
+      '$ ssh -i /tmp/e2e_id_rsa -t invoker@remote-do-1\r\n',
+      'Connection established: remote-do-1\r\n',
+      `$ ${sshInnerCommand}\r\n`,
+      `Resumed Codex session ${sessionId}\r\n`,
+      'Terminal stream ready for input.\r\n',
+    ].join('');
 
     await injectTaskStates(page, [
       {
@@ -1140,14 +1148,15 @@ test.describe('Visual proof capture', () => {
       },
     ]);
 
-    await page.evaluate(({ args, cwd }) => {
+    await page.evaluate(({ args, cwd, terminalId }) => {
       (window as unknown as { __terminalCalls: string[] }).__terminalCalls = [];
+      (window as unknown as { __terminalOutputSubscribers: Array<(event: { sessionId: string; taskId: string; data: string }) => void> }).__terminalOutputSubscribers = [];
       window.__INVOKER_TEST_OPEN_TERMINAL__ = async (taskId: string) => {
         (window as unknown as { __terminalCalls: string[] }).__terminalCalls.push(taskId);
         return {
           opened: true,
           session: {
-            sessionId: 'visual-proof-ssh-session',
+            sessionId: terminalId,
             taskId,
             status: 'running',
             cwd,
@@ -1159,7 +1168,15 @@ test.describe('Visual proof capture', () => {
           },
         };
       };
-    }, { args: sshArgs, cwd: workspacePath });
+      window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__ = (cb) => {
+        const subscribers = (window as unknown as { __terminalOutputSubscribers: Array<(event: { sessionId: string; taskId: string; data: string }) => void> }).__terminalOutputSubscribers;
+        subscribers.push(cb);
+        return () => {
+          const index = subscribers.indexOf(cb);
+          if (index >= 0) subscribers.splice(index, 1);
+        };
+      };
+    }, { args: sshArgs, cwd: workspacePath, terminalId: terminalSessionId });
 
     const sshTaskNode = page
       .getByTestId('selected-workflow-mini-dag')
@@ -1180,6 +1197,20 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByTestId('terminal-session-command')).toContainText(workspacePath);
     await expect(page.getByTestId('terminal-session-command')).toContainText(`codex resume ${sessionId}`);
     await expect(page.getByTestId('terminal-pane-wf-test-1/ssh-resume')).toBeVisible();
+    const terminalPane = page.getByTestId('terminal-pane-wf-test-1/ssh-resume');
+    await page.waitForFunction(() => {
+      return (window as unknown as { __terminalOutputSubscribers: unknown[] }).__terminalOutputSubscribers.length > 0;
+    });
+    await page.evaluate(({ output, terminalId }) => {
+      const subscribers = (window as unknown as { __terminalOutputSubscribers: Array<(event: { sessionId: string; taskId: string; data: string }) => void> }).__terminalOutputSubscribers;
+      for (const subscriber of subscribers) {
+        subscriber({ sessionId: terminalId, taskId: 'wf-test-1/ssh-resume', data: output });
+      }
+    }, { output: terminalOutput, terminalId: terminalSessionId });
+    await expect(terminalPane.getByText('Connection established: remote-do-1')).toBeVisible();
+    await expect(terminalPane.getByText(`Resumed Codex session ${sessionId}`)).toBeVisible();
+    await expect(terminalPane.getByText('Terminal stream ready for input.')).toBeVisible();
+    await expect(page.getByTestId('terminal-session-output-preview')).toContainText('Terminal stream ready for input.');
 
     const calls = await page.evaluate(() => (window as unknown as { __terminalCalls: string[] }).__terminalCalls);
     expect(calls).toHaveLength(1);

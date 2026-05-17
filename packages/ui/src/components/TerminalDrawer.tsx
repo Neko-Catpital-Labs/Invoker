@@ -8,12 +8,13 @@
  * requiring a real terminal backing.
  */
 
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Terminal as XTermTerminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 const DRAWER_BODY_HEIGHT_PX = 280;
+const ANSI_PATTERN = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
 
 interface TerminalDrawerProps {
   collapsed: boolean;
@@ -30,9 +31,16 @@ interface TerminalSessionPaneProps {
   session: TerminalSessionDescriptor;
   isActive: boolean;
   hasHeader: boolean;
+  onOutput: (sessionId: string, data: string) => void;
 }
 
-function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPaneProps): JSX.Element {
+function lastNonEmptyLine(data: string): string {
+  const clean = data.replace(ANSI_PATTERN, '').replace(/\r/g, '\n');
+  const lines = clean.split('\n').map((line) => line.trim()).filter(Boolean);
+  return lines.at(-1) ?? '';
+}
+
+function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: TerminalSessionPaneProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -65,8 +73,10 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
       void window.invoker?.terminalWrite?.(session.sessionId, data);
     });
 
-    const unsubscribeOutput = window.invoker?.onTerminalOutput?.((event) => {
+    const subscribeToOutput = window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__ ?? window.invoker?.onTerminalOutput;
+    const unsubscribeOutput = subscribeToOutput?.((event) => {
       if (event.sessionId !== session.sessionId) return;
+      onOutput(session.sessionId, event.data);
       try {
         term.write(event.data);
       } catch {
@@ -114,7 +124,7 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
       termRef.current = null;
       fitRef.current = null;
     };
-  }, [session.sessionId]);
+  }, [onOutput, session.sessionId]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -135,7 +145,7 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
       ref={containerRef}
       data-testid={`terminal-pane-${session.taskId}`}
       data-session-id={session.sessionId}
-      className={hasHeader ? 'absolute bottom-0 left-0 right-0 top-8' : 'absolute inset-0'}
+      className={hasHeader ? 'absolute bottom-0 left-0 right-0 top-14' : 'absolute inset-0'}
       style={{ display: isActive ? 'block' : 'none' }}
     />
   );
@@ -150,10 +160,22 @@ export function TerminalDrawer({
   onCloseSession,
   taskLabels,
 }: TerminalDrawerProps): JSX.Element {
+  const [latestOutputBySession, setLatestOutputBySession] = useState<Map<string, string>>(() => new Map());
   const activeSession = sessions.find((session) => session.sessionId === activeSessionId) ?? null;
   const activeCommand = activeSession?.command
     ? [activeSession.command, ...(activeSession.args ?? [])].join(' ')
     : null;
+  const activeOutput = activeSession ? latestOutputBySession.get(activeSession.sessionId) ?? null : null;
+
+  const handleOutput = useCallback((sessionId: string, data: string) => {
+    const line = lastNonEmptyLine(data);
+    if (!line) return;
+    setLatestOutputBySession((previous) => {
+      const next = new Map(previous);
+      next.set(sessionId, line);
+      return next;
+    });
+  }, []);
 
   return (
     <div
@@ -234,12 +256,22 @@ export function TerminalDrawer({
           {activeSession && activeCommand && (
             <div
               data-testid="terminal-session-command"
-              className="absolute left-0 right-0 top-0 z-10 flex h-8 items-center gap-2 border-b border-gray-800 bg-gray-950 px-3 text-[11px]"
+              className="absolute left-0 right-0 top-0 z-10 flex h-14 flex-col justify-center gap-1 border-b border-gray-800 bg-gray-950 px-3 text-[11px]"
             >
-              <span className="text-gray-500">SSH</span>
-              <span className="min-w-0 flex-1 truncate font-mono text-emerald-200">
-                {activeCommand}
-              </span>
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="text-gray-500">SSH</span>
+                <span className="min-w-0 flex-1 truncate font-mono text-emerald-200">
+                  {activeCommand}
+                </span>
+              </div>
+              {activeOutput && (
+                <div className="flex min-w-0 items-center gap-2" data-testid="terminal-session-output-preview">
+                  <span className="text-gray-500">output</span>
+                  <span className="min-w-0 flex-1 truncate font-mono text-sky-200">
+                    {activeOutput}
+                  </span>
+                </div>
+              )}
             </div>
           )}
           {sessions.map((session) => (
@@ -248,6 +280,7 @@ export function TerminalDrawer({
               session={session}
               isActive={session.sessionId === activeSessionId}
               hasHeader={Boolean(session.sessionId === activeSessionId && activeCommand)}
+              onOutput={handleOutput}
             />
           ))}
         </div>
