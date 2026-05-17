@@ -6,6 +6,7 @@ export interface MergeGateProviderResult {
 export interface MergeGateApprovalStatus {
   approved: boolean;
   rejected: boolean;
+  closed?: boolean;
   statusText: string;
   url: string;
 }
