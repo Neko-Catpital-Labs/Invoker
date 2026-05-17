@@ -104,6 +104,8 @@ type RemoteTargetDisplay = {
   managedWorkspaces?: boolean;
   remoteInvokerHome?: string;
   provisionCommand?: string;
+  use_api_key?: boolean;
+  secretsFile?: string;
   remoteHeartbeatIntervalSeconds?: number;
 };
 
@@ -154,6 +156,8 @@ export interface TaskRunnerConfig {
     managedWorkspaces?: boolean;
     remoteInvokerHome?: string;
     provisionCommand?: string;
+    use_api_key?: boolean;
+    secretsFile?: string;
     remoteHeartbeatIntervalSeconds?: number;
   }>;
   executionPoolsProvider?: () => Record<string, {
@@ -775,8 +779,15 @@ export class TaskRunner {
         this.pendingPoolSelections.get(task.id),
       );
 
+      const poolSelection = this.pendingPoolSelections.get(task.id);
+      const selectedSshTargetId = executor.type === 'ssh'
+        ? this.selectedRemoteTargetId(task, poolSelection)
+        : undefined;
       const changes = {
-        config: { runnerKind: executor.type as RunnerKind },
+        config: {
+          runnerKind: executor.type as RunnerKind,
+          ...(selectedSshTargetId ? { poolMemberId: selectedSshTargetId } : {}),
+        },
         execution: {
           workspacePath: handle.workspacePath,
           branch: handle.branch ?? undefined,  // Explicit undefined when branch is not applicable (e.g., BYO mode)
@@ -1139,6 +1150,8 @@ export class TaskRunner {
           managedWorkspaces: target.managedWorkspaces,
           remoteInvokerHome: target.remoteInvokerHome,
           provisionCommand: target.provisionCommand,
+          use_api_key: target.use_api_key === true,
+          secretsFile: target.secretsFile ?? this.dockerConfig.secretsFile,
           remoteHeartbeatIntervalSeconds: target.remoteHeartbeatIntervalSeconds,
         });
         const cacheKey = `${targetId}|${configFingerprint}`;
@@ -1166,6 +1179,8 @@ export class TaskRunner {
           managedWorkspaces: target.managedWorkspaces,
           remoteInvokerHome: target.remoteInvokerHome,
           provisionCommand: target.provisionCommand,
+          useApiKey: target.use_api_key === true,
+          secretsFile: target.secretsFile ?? this.dockerConfig.secretsFile,
           remoteHeartbeatIntervalSeconds: target.remoteHeartbeatIntervalSeconds,
         });
 
@@ -2097,9 +2112,16 @@ export class TaskRunner {
     managedWorkspaces?: boolean;
     remoteInvokerHome?: string;
     provisionCommand?: string;
+    use_api_key?: boolean;
+    secretsFile?: string;
     remoteHeartbeatIntervalSeconds?: number;
   } | undefined {
-    return this.getRemoteTargets()[targetId];
+    const target = this.getRemoteTargets()[targetId];
+    if (!target) return undefined;
+    return {
+      ...target,
+      secretsFile: target.secretsFile ?? this.dockerConfig.secretsFile,
+    };
   }
 
   /**
