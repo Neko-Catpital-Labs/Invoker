@@ -14,6 +14,7 @@ import { computeRepoUrlHash, sanitizeBranchForPath } from './git-utils.js';
 import { isWorkspaceCleanupEnabled } from './workspace-cleanup-policy.js';
 import { buildSshConnectionArgs } from './ssh-transport-options.js';
 import { createExecutionBench } from './execution-bench.js';
+import { buildRemoteAgentEnvExports } from './remote-agent-env.js';
 import {
   shellPosixSingleQuote as sshGitShellQuote,
   base64Encode as sshGitB64,
@@ -54,6 +55,10 @@ export interface SshExecutorConfig {
    * Only used in managed mode. Default: pnpm install --frozen-lockfile
    */
   provisionCommand?: string;
+  /** Opt-in: export agent API keys from secretsFile into remote task shells. */
+  useApiKey?: boolean;
+  /** Optional local secrets file used when useApiKey is true. */
+  secretsFile?: string;
   /**
    * Remote workload heartbeat interval (seconds) emitted by the SSH payload wrapper.
    * Default: 30.
@@ -87,6 +92,8 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
   private readonly managedWorkspaces: boolean;
   private readonly remoteInvokerHome: string;
   private readonly provisionCommand: string;
+  private readonly useApiKey: boolean;
+  private readonly secretsFile: string | undefined;
   private readonly remoteHeartbeatIntervalSeconds: number;
   private readonly remotePath: string;
 
@@ -100,6 +107,8 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
     this.managedWorkspaces = config.managedWorkspaces ?? false;
     this.remoteInvokerHome = config.remoteInvokerHome ?? '~/.invoker';
     this.provisionCommand = config.provisionCommand ?? DEFAULT_WORKTREE_PROVISION_COMMAND;
+    this.useApiKey = config.useApiKey === true;
+    this.secretsFile = config.secretsFile;
     const configuredRemoteHeartbeatInterval = config.remoteHeartbeatIntervalSeconds;
     this.remoteHeartbeatIntervalSeconds =
       typeof configuredRemoteHeartbeatInterval === 'number'
@@ -386,6 +395,7 @@ exit "$PAYLOAD_EXIT"
     // Run payload in user-provided directory
     const payloadB64 = sshGitB64(payload);
     const wtB64 = sshGitB64(workspacePath);
+    const envExports = buildRemoteAgentEnvExports(this.secretsFile, this.useApiKey);
     const runScript = `set -euo pipefail
 WT=$(echo ${wtB64} | base64 -d)
 if [[ "$WT" == '~' ]]; then
@@ -394,6 +404,7 @@ elif [[ "\${WT:0:2}" == '~/' ]]; then
   WT="$HOME/\${WT:2}"
 fi
 cd "$WT"
+${envExports}
 echo "[SshExecutor BYO] Running task in user-provided workspace: $WT"
 ${this.buildPayloadExecutionScript(payloadB64)}
 `;
@@ -624,6 +635,7 @@ ${this.buildPayloadExecutionScript(payloadB64)}
     const provB64 = sshGitB64(this.provisionCommand);
     const payloadB64 = sshGitB64(payload);
     const wtB64 = sshGitB64(remoteWt);
+    const envExports = buildRemoteAgentEnvExports(this.secretsFile, this.useApiKey);
     const runScript = `set -euo pipefail
 WT=$(echo ${wtB64} | base64 -d)
 if [[ "$WT" == '~' ]]; then
@@ -632,6 +644,7 @@ elif [[ "\${WT:0:2}" == '~/' ]]; then
   WT="$HOME/\${WT:2}"
 fi
 cd "$WT"
+${envExports}
 echo "[SshExecutor] Provisioning remote worktree with: ${this.provisionCommand.slice(0, 50)}..."
 eval "$(echo ${provB64} | base64 -d)"
 echo "[SshExecutor] Running task payload..."
