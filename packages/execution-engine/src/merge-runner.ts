@@ -1178,8 +1178,9 @@ export async function buildMergeSummaryImpl(
 
   const completed = workflowTasks.filter((t) => t.status === 'completed');
   const failed = workflowTasks.filter((t) => t.status === 'failed');
+  const closed = workflowTasks.filter((t) => t.status === 'closed');
   const skipped = workflowTasks.filter(
-    (t) => t.status !== 'completed' && t.status !== 'failed',
+    (t) => t.status !== 'completed' && t.status !== 'failed' && t.status !== 'closed',
   );
   const claudeResolved = completed.filter(
     (t) => t.config.isReconciliation,
@@ -1201,7 +1202,7 @@ export async function buildMergeSummaryImpl(
   }
 
   lines.push(
-    `${workflowName} — ${completed.length} tasks completed, ${failed.length} failed, ${skipped.length} skipped`,
+    `${workflowName} — ${completed.length} tasks completed, ${failed.length} failed, ${closed.length} closed, ${skipped.length} skipped`,
   );
   lines.push('');
 
@@ -1266,6 +1267,14 @@ export async function buildMergeSummaryImpl(
       lines.push(
         `- **${t.id}**: ${t.description} — ${t.execution.error ?? 'unknown error'}`,
       );
+    }
+    lines.push('');
+  }
+
+  if (closed.length > 0) {
+    lines.push('## Closed Tasks');
+    for (const t of closed) {
+      lines.push(`- **${t.id}**: ${t.description}`);
     }
     lines.push('');
   }
