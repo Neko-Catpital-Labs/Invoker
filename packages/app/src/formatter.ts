@@ -290,6 +290,9 @@ export function serializeTask(task: TaskState): Record<string, unknown> {
   if (task.execution.error != null) execution.error = task.execution.error;
   if (task.execution.exitCode != null) execution.exitCode = task.execution.exitCode;
   if (task.execution.reviewUrl != null) execution.reviewUrl = task.execution.reviewUrl;
+  if (task.execution.reviewId != null) execution.reviewId = task.execution.reviewId;
+  if (task.execution.reviewStatus != null) execution.reviewStatus = task.execution.reviewStatus;
+  if (task.execution.autoFixAttempts != null) execution.autoFixAttempts = task.execution.autoFixAttempts;
   if (task.execution.agentSessionId != null) execution.agentSessionId = task.execution.agentSessionId;
   if (task.execution.lastAgentSessionId != null) execution.lastAgentSessionId = task.execution.lastAgentSessionId;
   if (task.execution.agentName != null) execution.agentName = task.execution.agentName;
