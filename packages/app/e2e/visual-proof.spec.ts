@@ -390,11 +390,19 @@ test.describe('Visual proof capture', () => {
     await assertPageScreenshot(page, 'merge-gate-no-inline-approve');
   });
 
-  test('review-ready workflow exposes pull request in inspector', async ({ page }) => {
+  test('workflow inspector captures review-ready and not-review-ready pull request states', async ({ page }) => {
     const workflowId = await loadPlanAndSelectWorkflow(page, REVIEW_READY_WORKFLOW_PR_PLAN);
     await page.locator('.react-flow__node[data-testid$="rr-work"]').first().waitFor({ state: 'visible', timeout: 15000 });
 
     const reviewUrl = 'https://github.com/Neko-Catpital-Labs/Invoker/pull/626';
+
+    await workflowNode(page, workflowId).dispatchEvent('click', { bubbles: true });
+    await expect(page.getByTestId('workflow-inspector-title')).toHaveText('Review ready workflow PR proof');
+    await expect(page.getByText('Inspector', { exact: true })).toHaveCount(0);
+    await expect(page.getByTestId('workflow-inspector-status-label')).not.toContainText('review ready');
+    await expect(page.getByRole('link', { name: reviewUrl })).toHaveCount(0);
+    await captureScreenshot(page, 'not-review-ready-workflow-pr-sidebar');
+
     await injectTaskStates(page, [
       {
         taskId: 'rr-work',
