@@ -84,19 +84,21 @@ describe('formatWorkflowStatus', () => {
       total: 10,
       completed: 5,
       failed: 1,
+      closed: 0,
       running: 2,
       pending: 2,
     });
     expect(msg.text).toContain('5/10');
     expect(msg.blocks[0].text!.text).toContain('Completed: 5');
     expect(msg.blocks[0].text!.text).toContain('Failed: 1');
+    expect(msg.blocks[0].text!.text).toContain('Closed: 0');
     expect(msg.blocks[0].text!.text).toContain('Running: 2');
     expect(msg.blocks[0].text!.text).toContain('Pending: 2');
   });
 
   it('formats zero counts', () => {
     const msg = formatWorkflowStatus({
-      total: 0, completed: 0, failed: 0, running: 0, pending: 0,
+      total: 0, completed: 0, failed: 0, closed: 0, running: 0, pending: 0,
     });
     expect(msg.text).toContain('0/0');
   });
@@ -173,7 +175,7 @@ describe('formatSurfaceEvent', () => {
   it('routes workflow_status events', () => {
     const event: SurfaceEvent = {
       type: 'workflow_status',
-      status: { total: 3, completed: 1, failed: 0, running: 1, pending: 1 },
+      status: { total: 3, completed: 1, failed: 0, closed: 0, running: 1, pending: 1 },
     };
     const msg = formatSurfaceEvent(event);
     expect(msg).not.toBeNull();

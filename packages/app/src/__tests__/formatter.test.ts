@@ -56,6 +56,13 @@ describe('formatTaskStatus', () => {
     expect(output).toContain('[failed]');
   });
 
+  it('shows correct label for closed status', () => {
+    const task = makeTask({ status: 'closed' });
+    const output = formatTaskStatus(task);
+    expect(output).toContain(DIM);
+    expect(output).toContain('[closed]');
+  });
+
   it('shows correct color for running status', () => {
     const task = makeTask({ status: 'running' });
     const output = formatTaskStatus(task);
