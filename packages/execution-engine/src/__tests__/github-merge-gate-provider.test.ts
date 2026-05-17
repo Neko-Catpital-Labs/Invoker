@@ -335,6 +335,7 @@ describe('GitHubMergeGateProvider', () => {
 
       expect(result.approved).toBe(false);
       expect(result.rejected).toBe(true);
+      expect(result.closed).toBe(true);
       expect(result.statusText).toBe('Closed');
     });
   });
