@@ -31,7 +31,6 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       'pr', 'list',
       '--repo', targetRepo,
       '--head', ghHead,
-      '--base', ghBase,
       '--state', 'open',
       '--json', 'url,number',
       '--limit', '1',
@@ -44,7 +43,9 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     if (existing.length > 0) {
       const apiArgs = [
         'api', `repos/${targetRepo}/pulls/${existing[0].number}`,
-        '--method', 'PATCH', '-f', `title=${title}`,
+        '--method', 'PATCH',
+        '-f', `base=${ghBase}`,
+        '-f', `title=${title}`,
       ];
       if (body) apiArgs.push('-f', `body=${body}`);
       const ghResult = await this.exec('gh', apiArgs, cwd);
@@ -64,6 +65,19 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
 
     console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview creating stdout=${stdout}`);
     return { url: pr.html_url, identifier: String(pr.number) };
+  }
+
+  async closeReview(opts: {
+    identifier: string;
+    cwd: string;
+  }): Promise<void> {
+    const { identifier, cwd } = opts;
+    const targetRepo = await this.resolveTargetRepo(cwd);
+    await this.exec('gh', [
+      'api', `repos/${targetRepo}/pulls/${identifier}`,
+      '--method', 'PATCH',
+      '-f', 'state=closed',
+    ], cwd);
   }
 
   async checkApproval(opts: {

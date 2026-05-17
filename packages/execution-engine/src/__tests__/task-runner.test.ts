@@ -4419,6 +4419,44 @@ console.log(JSON.stringify(out));
     });
 
     describe('checkMergeGateStatuses', () => {
+      it('closes the workflow merge-gate review using the gate workspace', async () => {
+        const allTasks = [
+          makeTask({
+            id: 'merge-close',
+            status: 'review_ready',
+            config: { workflowId: 'wf-close', isMergeNode: true },
+            execution: {
+              reviewId: '205',
+              workspacePath: '/workspace/close-gate',
+            },
+          }),
+        ];
+        const orchestrator = {
+          getAllTasks: () => allTasks,
+        };
+        const mergeGateProvider = {
+          closeReview: vi.fn().mockResolvedValue(undefined),
+        };
+
+        const executor = new TaskRunner({
+          orchestrator: orchestrator as any,
+          persistence: { updateTask: vi.fn() } as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          cwd: '/runner-base-cwd',
+          mergeGateProvider: mergeGateProvider as any,
+        });
+        const interval = setInterval(() => {}, 1000);
+        (executor as any).activePrPollers.set('merge-close', interval);
+
+        await executor.closeWorkflowReview('wf-close');
+
+        expect(mergeGateProvider.closeReview).toHaveBeenCalledWith({
+          identifier: '205',
+          cwd: '/workspace/close-gate',
+        });
+        expect((executor as any).activePrPollers.has('merge-close')).toBe(false);
+      });
+
       it('uses task workspacePath as cwd when present', async () => {
         const allTasks = [
           makeTask({
