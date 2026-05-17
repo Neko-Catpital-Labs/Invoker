@@ -8278,6 +8278,7 @@ console.log(JSON.stringify(out));
         branch: 'experiment/task-1',
       });
       const logEvent = vi.fn();
+      const updateTask = vi.fn();
       const task = makeTask({
         id: 'task-1',
         status: 'pending',
@@ -8287,7 +8288,7 @@ console.log(JSON.stringify(out));
 
       const runner = new TaskRunner({
         orchestrator: { getTask: () => task, getAllTasks: () => [task], handleWorkerResponse: vi.fn() } as any,
-        persistence: { updateTask: vi.fn(), updateAttempt: vi.fn(), logEvent } as any,
+        persistence: { updateTask, updateAttempt: vi.fn(), logEvent } as any,
         executorRegistry: {
           getDefault: () => sshExecutor,
           get: (type: string) => type === 'ssh' ? sshExecutor : null,
@@ -8331,6 +8332,13 @@ console.log(JSON.stringify(out));
       const selectedPayload = logEvent.mock.calls.find((call) => call[1] === 'task.executor.selected')?.[2];
       expect(JSON.stringify(selectedPayload)).not.toContain('sshKeyPath');
       expect(JSON.stringify(selectedPayload)).not.toContain('/secret/key');
+      expect(updateTask).toHaveBeenCalledWith('task-1', {
+        config: { runnerKind: 'ssh', poolMemberId: 'remote-a' },
+        execution: expect.objectContaining({
+          workspacePath: '/remote/worktrees/task-1',
+          branch: 'experiment/task-1',
+        }),
+      });
     });
 
     it('logs explicit SSH executor selection as explicitPoolMemberId', async () => {
@@ -8629,6 +8637,61 @@ console.log(JSON.stringify(out));
           }),
         }),
       );
+    });
+
+    it('persists pool-routed SSH target on error path when executor.start throws', async () => {
+      const failingExecutor = {
+        type: 'ssh',
+        start: vi.fn().mockRejectedValue(Object.assign(new Error('SSH startup failed'), {
+          workspacePath: '~/.invoker/worktrees/ci/task-failed',
+          branch: 'experiment/task-failed',
+        })),
+        onComplete: vi.fn(),
+        onOutput: vi.fn(),
+        onHeartbeat: vi.fn(),
+        kill: vi.fn(),
+        destroyAll: vi.fn(),
+      };
+      const task = makeTask({
+        id: 'task-failed-pool',
+        status: 'pending',
+        config: { command: 'echo test', runnerKind: 'ssh', poolId: 'ci-pool' },
+      });
+      const updateTask = vi.fn();
+
+      const runner = new TaskRunner({
+        orchestrator: {
+          getTask: () => task,
+          getAllTasks: () => [task],
+          handleWorkerResponse: vi.fn(),
+        } as any,
+        persistence: { updateTask } as any,
+        executorRegistry: {
+          getDefault: () => failingExecutor,
+          get: () => failingExecutor,
+          getAll: () => [failingExecutor],
+        } as any,
+        cwd: '/tmp',
+        executionPoolsProvider: () => ({
+          'ci-pool': {
+            selectionStrategy: 'leastLoaded',
+            members: [{ type: 'ssh', id: 'remote-a' }],
+          },
+        }),
+        remoteTargetsProvider: () => ({
+          'remote-a': { host: 'ci.example.com', user: 'runner', sshKeyPath: '/secret/key' },
+        }),
+      });
+
+      await runner.executeTask(task);
+
+      expect(updateTask).toHaveBeenCalledWith('task-failed-pool', {
+        config: { runnerKind: 'ssh', poolMemberId: 'remote-a' },
+        execution: {
+          workspacePath: '~/.invoker/worktrees/ci/task-failed',
+          branch: 'experiment/task-failed',
+        },
+      });
     });
 
     it('persists attempt.branch via onBranchResolved when executor crashes mid-acquire', async () => {
