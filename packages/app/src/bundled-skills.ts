@@ -18,7 +18,7 @@ interface BundledSkillsManifest {
   targets: Record<string, { path: string; installedSkillNames: string[] }>;
 }
 
-interface BundledSkillsContext {
+export interface BundledSkillsContext {
   isPackaged: boolean;
   repoRoot: string;
   resourcesPath?: string;

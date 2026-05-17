@@ -133,7 +133,11 @@ import {
 import { spawn, execSync } from 'node:child_process';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
 import { collectSystemDiagnostics } from './system-diagnostics.js';
-import { installBundledSkills, resolveBundledSkillsStatus } from './bundled-skills.js';
+import {
+  installBundledSkills,
+  resolveBundledSkillsStatus,
+  type BundledSkillsContext,
+} from './bundled-skills.js';
 import { createRequire } from 'node:module';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
 import { applyDelta, resolveQuarantine, TaskSnapshotCache } from './delta-merge.js';
@@ -328,20 +332,20 @@ interface InitServicesOptions {
   startupSyncMode?: 'all' | 'none';
 }
 
-function getBundledSkillsStatus() {
-  return resolveBundledSkillsStatus({
+function createBundledSkillsContext(): BundledSkillsContext {
+  return {
     isPackaged: app.isPackaged,
     repoRoot,
     resourcesPath: process.resourcesPath,
-  });
+  };
+}
+
+function getBundledSkillsStatus() {
+  return resolveBundledSkillsStatus(createBundledSkillsContext());
 }
 
 function installPackagedSkills(mode: import('@invoker/contracts').BundledSkillsInstallMode = 'install') {
-  return installBundledSkills({
-    isPackaged: app.isPackaged,
-    repoRoot,
-    resourcesPath: process.resourcesPath,
-  }, mode);
+  return installBundledSkills(createBundledSkillsContext(), mode);
 }
 
 async function initServices(options?: InitServicesOptions): Promise<void> {

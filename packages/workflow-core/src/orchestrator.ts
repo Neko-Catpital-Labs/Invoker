@@ -1741,6 +1741,7 @@ export class Orchestrator {
       config: additionalChanges?.config,
       execution: {
         ...additionalExecution,
+        error: undefined,
         ...(keepAgentSessionId !== undefined ? { agentSessionId: keepAgentSessionId } : {}),
         ...(keepLastAgentSessionId !== undefined ? { lastAgentSessionId: keepLastAgentSessionId } : {}),
         ...(keepAgentName !== undefined ? { agentName: keepAgentName } : {}),
@@ -4136,9 +4137,11 @@ export class Orchestrator {
       reviewUrl?: string;
       reviewId?: string;
       reviewStatus?: string;
+      error?: string;
     } = {
       exitCode: parsed.exitCode,
       completedAt: new Date(),
+      error: undefined,
     };
     if (parsed.commitHash !== undefined) {
       execution.commit = parsed.commitHash;

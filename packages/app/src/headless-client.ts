@@ -302,6 +302,10 @@ function parseArgs(argv: string[]): { args: string[]; waitForApproval?: boolean;
   return { args, waitForApproval, noTrack };
 }
 
+function isAppLayerLifecycleCommand(args: string[]): boolean {
+  return args[0] === 'install-skills';
+}
+
 /**
  * Resolve a writable owner endpoint using the resolver, then delegate.
  *
@@ -440,6 +444,10 @@ export async function runHeadlessClientCommand(
   const { args, waitForApproval, noTrack } = parseArgs(argv);
   const standaloneMode = process.env.INVOKER_HEADLESS_STANDALONE === '1';
   const internalOwnerServe = args[0] === 'owner-serve';
+
+  if (isAppLayerLifecycleCommand(args)) {
+    return deps.runElectronHeadless(argv);
+  }
 
   if (!standaloneMode && !internalOwnerServe && await delegateReadOnlyQuery(args, deps.messageBus, deps.refreshMessageBus)) {
     const exitCode = process.exitCode;
