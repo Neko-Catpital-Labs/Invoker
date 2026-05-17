@@ -16,8 +16,8 @@ import {
   retryTask,
   retryWorkflow,
   recreateWorkflowFromFreshBase,
-  recreateWithRebase,
-  rebaseAndRetry,
+  rebaseRetry,
+  rebaseRecreate,
   approveTask,
   rejectTask,
   provideInput,
@@ -274,56 +274,52 @@ describe('recreateWorkflowFromFreshBase', () => {
   });
 });
 
-describe('rebaseAndRetry', () => {
-  it('translates taskId → workflowId and delegates to recreateWorkflowFromFreshBase', async () => {
+describe('rebaseRetry', () => {
+  it('translates target → workflowId, prepares fresh base, and delegates to retryWorkflow', async () => {
     const tasks = [makeRunningTask()];
     const orchestrator = {
       getTask: vi.fn(() => makeTask({ config: { workflowId: 'wf-1' } })),
-      recreateWorkflowFromFreshBase: vi.fn(async () => tasks),
+      retryWorkflow: vi.fn(() => tasks),
     };
     const persistence = {
       loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 1, repoUrl: 'https://example/repo.git', baseBranch: 'master' })),
+      listWorkflows: vi.fn(() => [{ id: 'wf-1' }]),
+      loadTasks: vi.fn(() => []),
       updateWorkflow: vi.fn(),
     };
 
-    const result = await rebaseAndRetry('wf-1/task-a', {
+    const result = await rebaseRetry('wf-1/task-a', {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
     });
 
-    expect(orchestrator.getTask).toHaveBeenCalledWith('wf-1/task-a');
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 2 });
-    expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(
-      'wf-1',
-      expect.objectContaining({ refreshBase: expect.any(Function) }),
-    );
+    expect(orchestrator.retryWorkflow).toHaveBeenCalledWith('wf-1');
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(result).toBe(tasks);
   });
 
-  it('throws when task not found', async () => {
+  it('throws when target cannot resolve to a workflow', async () => {
     const orchestrator = {
       getTask: vi.fn(() => undefined),
-      recreateWorkflowFromFreshBase: vi.fn(),
+      retryWorkflow: vi.fn(),
     };
-    const persistence = { loadWorkflow: vi.fn(), updateWorkflow: vi.fn() };
+    const persistence = { loadWorkflow: vi.fn(), listWorkflows: vi.fn(() => []), loadTasks: vi.fn(() => []), updateWorkflow: vi.fn() };
 
     await expect(
-      rebaseAndRetry('missing-task', {
+      rebaseRetry('missing-task', {
         orchestrator: orchestrator as unknown as Orchestrator,
         persistence: persistence as unknown as SQLiteAdapter,
       }),
-    ).rejects.toThrow('Task missing-task not found or has no workflow');
+    ).rejects.toThrow('Could not resolve workflow for rebase target "missing-task"');
   });
 });
 
-describe('recreateWithRebase', () => {
-  it('delegates directly to recreateWorkflowFromFreshBase with the provided workflowId', async () => {
+describe('rebaseRecreate', () => {
+  it('prepares fresh base, then delegates to recreateWorkflow', async () => {
     const tasks = [makeRunningTask()];
     const orchestrator = {
-      recreateWorkflowFromFreshBase: vi.fn(async (_id: string, opts?: { refreshBase?: () => Promise<unknown> }) => {
-        await opts?.refreshBase?.();
-        return tasks;
-      }),
+      getTask: vi.fn(() => undefined),
+      recreateWorkflow: vi.fn(() => tasks),
     };
     const persistence = {
       loadWorkflow: vi.fn(() => ({
@@ -333,22 +329,21 @@ describe('recreateWithRebase', () => {
         baseBranch: 'main',
       })),
       updateWorkflow: vi.fn(),
+      listWorkflows: vi.fn(() => [{ id: 'wf-1' }]),
+      loadTasks: vi.fn(() => []),
     };
     const taskExecutor = {
       preparePoolForRebaseRetry: vi.fn(async () => undefined),
     } as unknown as TaskRunner;
 
-    const result = await recreateWithRebase('wf-1', {
+    const result = await rebaseRecreate('wf-1', {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor,
     });
 
     expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 3 });
-    expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(
-      'wf-1',
-      expect.objectContaining({ refreshBase: expect.any(Function) }),
-    );
+    expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
     expect(taskExecutor.preparePoolForRebaseRetry).toHaveBeenCalledWith(
       'wf-1',
       'https://example/repo.git',
@@ -358,15 +353,15 @@ describe('recreateWithRebase', () => {
   });
 
   it('throws when workflow not found', async () => {
-    const orchestrator = { recreateWorkflowFromFreshBase: vi.fn(async () => []) };
-    const persistence = { loadWorkflow: vi.fn(() => undefined), updateWorkflow: vi.fn() };
+    const orchestrator = { getTask: vi.fn(() => undefined), recreateWorkflow: vi.fn(() => []) };
+    const persistence = { loadWorkflow: vi.fn(() => undefined), listWorkflows: vi.fn(() => []), loadTasks: vi.fn(() => []), updateWorkflow: vi.fn() };
 
     await expect(
-      recreateWithRebase('missing', {
+      rebaseRecreate('missing', {
         orchestrator: orchestrator as unknown as Orchestrator,
         persistence: persistence as unknown as SQLiteAdapter,
       }),
-    ).rejects.toThrow('Workflow missing not found');
+    ).rejects.toThrow('Could not resolve workflow for rebase target "missing"');
   });
 });
 

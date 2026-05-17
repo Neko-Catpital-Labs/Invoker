@@ -31,7 +31,8 @@
  *   POST   /api/tasks/:id/gate-policy  body: { updates: [{ workflowId, taskId?, gatePolicy }] }
  *   POST   /api/workflows/:id/detach  body: { upstreamWorkflowId }
  *   POST   /api/workflows/:id/restart
- *   POST   /api/workflows/:id/recreate-with-rebase
+ *   POST   /api/workflows/:id/rebase-retry
+ *   POST   /api/workflows/:id/rebase-recreate
  *   POST   /api/workflows/:id/cancel
  *   POST   /api/workflows/:id/merge-mode  body: { mode }
  *   DELETE /api/workflows/:id
@@ -357,28 +358,39 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         return;
       }
 
-      // POST /api/workflows/:id/recreate-with-rebase  (legacy: /api/workflows/:id/rebase-and-retry)
-      const wfRecreateWithRebaseMatch = path.match(/^\/api\/workflows\/([^/]+)\/recreate-with-rebase$/);
-      const wfRebaseAndRetryMatch = path.match(/^\/api\/workflows\/([^/]+)\/rebase-and-retry$/);
-      if (method === 'POST' && (wfRecreateWithRebaseMatch || wfRebaseAndRetryMatch)) {
-        const isLegacy = !!wfRebaseAndRetryMatch;
-        const workflowTarget = decodeURIComponent((wfRecreateWithRebaseMatch ?? wfRebaseAndRetryMatch)![1]);
+      // POST /api/workflows/:id/rebase-retry
+      const wfRebaseRetryMatch = path.match(/^\/api\/workflows\/([^/]+)\/rebase-retry$/);
+      if (method === 'POST' && wfRebaseRetryMatch) {
+        const workflowTarget = decodeURIComponent(wfRebaseRetryMatch[1]);
         try {
           const workflowId = resolveHeadlessTargetWorkflowId(workflowTarget, persistence);
-          const result = await mutations.recreateWorkflowFromFreshBase(workflowId);
-          if (isLegacy) {
-            res.setHeader(
-              'Deprecation',
-              'true; reason="Use /api/workflows/:id/recreate-with-rebase"',
-            );
-          }
+          const result = await mutations.rebaseRetry(workflowId);
           const tasksStarted = result.started.filter(t => t.status === 'running').length;
           json(res, 200, {
             ok: true,
             workflowId,
-            action: isLegacy ? 'rebase_and_retried' : 'recreated_with_rebase',
+            action: 'rebase_retried',
             tasksStarted,
-            ...(isLegacy ? { deprecated: true, replacement: '/api/workflows/:id/recreate-with-rebase' } : {}),
+          });
+        } catch (err) {
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
+        }
+        return;
+      }
+
+      // POST /api/workflows/:id/rebase-recreate
+      const wfRebaseRecreateMatch = path.match(/^\/api\/workflows\/([^/]+)\/rebase-recreate$/);
+      if (method === 'POST' && wfRebaseRecreateMatch) {
+        const workflowTarget = decodeURIComponent(wfRebaseRecreateMatch[1]);
+        try {
+          const workflowId = resolveHeadlessTargetWorkflowId(workflowTarget, persistence);
+          const result = await mutations.rebaseRecreate(workflowId);
+          const tasksStarted = result.started.filter(t => t.status === 'running').length;
+          json(res, 200, {
+            ok: true,
+            workflowId,
+            action: 'rebase_recreated',
+            tasksStarted,
           });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });

@@ -135,7 +135,7 @@ describe('fetch status visibility in task output', () => {
     it('shows staleness when commits behind', async () => {
       // Create a second clone and push commits ahead
       const secondClone = mkdtempSync(join(tmpdir(), 'fetch-status-clone-'));
-      execSync(`git clone ${remoteRepo} ${secondClone}`, { cwd: tmpdir() });
+      execSync(`git clone --no-local ${remoteRepo} ${secondClone}`, { cwd: tmpdir() });
       execSync('git checkout -B master origin/master', { cwd: secondClone });
       execSync('git config user.email "test@test.com"', { cwd: secondClone });
       execSync('git config user.name "Test"', { cwd: secondClone });
@@ -165,7 +165,7 @@ describe('fetch status visibility in task output', () => {
       // rev-list count so this test exercises the warning threshold without
       // manufacturing 101 physical commits in CI's temporary git store.
       const secondClone = mkdtempSync(join(tmpdir(), 'fetch-status-clone-'));
-      execSync(`git clone ${remoteRepo} ${secondClone}`, { cwd: tmpdir() });
+      execSync(`git clone --no-local ${remoteRepo} ${secondClone}`, { cwd: tmpdir() });
       execSync('git checkout -B master origin/master', { cwd: secondClone });
       execSync('git config user.email "test@test.com"', { cwd: secondClone });
       execSync('git config user.name "Test"', { cwd: secondClone });
