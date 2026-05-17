@@ -488,7 +488,9 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByRole('menuitem', { name: 'Retry Workflow' })).toBeVisible();
     await expect(page.getByRole('menuitem', { name: 'Copy Workflow ID' })).toBeVisible();
     await page.getByRole('menuitem', { name: 'More' }).click();
-    await expect(page.getByRole('menuitem', { name: 'Recreate with Rebase' })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: 'Rebase and Retry' })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: 'Rebase and Recreate' })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: 'Recreate with Rebase' })).toHaveCount(0);
     await expect(page.getByRole('menuitem', { name: 'Recreate Workflow' })).toBeVisible();
     await expect(page.getByRole('menuitem', { name: 'Cancel Workflow' })).toBeVisible();
     await expect(page.getByRole('menuitem', { name: 'Delete Workflow' })).toBeVisible();
