@@ -69,6 +69,7 @@ Minimal example:
   "maxConcurrency": 6,
   "autoFixRetries": 3,
   "autoFixAgent": "claude",
+  "autoFixCi": false,
   "remoteTargets": {
     "staging-a": {
       "host": "203.0.113.10",
