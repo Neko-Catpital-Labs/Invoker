@@ -49,6 +49,7 @@ interface TaskDAGProps {
 const nodeTypes = { taskNode: TaskNode, mergeGateNode: MergeGateNode };
 const edgeTypes = { bundled: BundledEdge };
 const WORKFLOW_GAP = 100;
+const WATCHDOG_RECOVERY_MISS_COUNT = 3;
 
 type RawTaskEdge = LayoutEdge & {
   kind: 'local' | 'external';
@@ -125,11 +126,30 @@ function layoutKeyFor(tasks: TaskState[], edges: RawTaskEdge[]): string {
   });
 }
 
+function mergeMeasuredNodeState(prevNodes: Node[], nextNodes: Node[]): Node[] {
+  const previousById = new Map(prevNodes.map((node) => [node.id, node]));
+
+  return nextNodes.map((node) => {
+    const previous = previousById.get(node.id);
+    if (!previous) return node;
+
+    return {
+      ...node,
+      ...(previous.measured ? { measured: previous.measured } : {}),
+      ...(previous.width !== undefined ? { width: previous.width } : {}),
+      ...(previous.height !== undefined ? { height: previous.height } : {}),
+    };
+  });
+}
+
 function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDoubleClick, onTaskContextMenu, statusFilters }: TaskDAGProps) {
   const { fitView } = useReactFlow();
   const prevNodeCount = useRef(0);
   const reportedGraphVisibleRef = useRef(false);
+  const watchdogMissCountRef = useRef(0);
+  const watchdogRecoveryAttemptedRef = useRef(false);
   const [layoutState, setLayoutState] = useState<LayoutState | null>(null);
+  const [flowInstanceKey, setFlowInstanceKey] = useState(0);
 
   const onInitHandler = useCallback(() => {
     requestAnimationFrame(() => fitView({ padding: 0.2 }));
@@ -370,13 +390,13 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
     return { nodes: allNodes, edges: newEdges };
   }, [activeLayout.positions, rawGraph, routedEdgePoints, selectedTaskId, statusFilters, tasks, workflows]);
 
-  // Merge task-derived nodes with React Flow's internal dimension/selection state.
+  // Merge task-derived nodes with React Flow's internal dimension state.
   // Without this, each task-delta re-render creates new node objects that discard
   // previously measured dimensions, forcing React Flow to re-measure.
   const [rfNodes, setRfNodes] = useState<Node[]>([]);
 
   useEffect(() => {
-    setRfNodes(nodes);
+    setRfNodes((prev) => mergeMeasuredNodeState(prev, nodes));
   }, [nodes]);
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
@@ -390,6 +410,8 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
   useEffect(() => {
     if (nodes.length !== prevNodeCount.current && nodes.length > 0) {
       prevNodeCount.current = nodes.length;
+      watchdogMissCountRef.current = 0;
+      watchdogRecoveryAttemptedRef.current = false;
       requestAnimationFrame(() => fitView({ padding: 0.2 }));
     }
   }, [nodes.length, fitView]);
@@ -426,15 +448,31 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
         (domNodes.length === 0 && nodes.length > 0) ||
         (hiddenNodes.length > 0 && hiddenNodes.length === domNodes.length)
       ) {
+        watchdogMissCountRef.current += 1;
+        const shouldRecover =
+          watchdogMissCountRef.current >= WATCHDOG_RECOVERY_MISS_COUNT &&
+          !watchdogRecoveryAttemptedRef.current;
+
         console.warn(
-          '[DAG-watchdog] Nodes hidden or missing, forcing fitView',
+          shouldRecover
+            ? '[DAG-watchdog] Nodes hidden or missing, remounting React Flow'
+            : '[DAG-watchdog] Nodes hidden or missing, forcing fitView',
           {
             propsNodeCount: nodes.length,
             domNodeCount: domNodes.length,
             hiddenCount: hiddenNodes.length,
+            missCount: watchdogMissCountRef.current,
+            recoveryAttempted: watchdogRecoveryAttemptedRef.current,
+            recoveryTriggered: shouldRecover,
           },
         );
         fitView({ padding: 0.2 });
+        if (shouldRecover) {
+          watchdogRecoveryAttemptedRef.current = true;
+          setFlowInstanceKey((key) => key + 1);
+        }
+      } else {
+        watchdogMissCountRef.current = 0;
       }
     }, 2000);
     return () => clearInterval(interval);
@@ -485,6 +523,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
   return (
     <div className="h-full w-full" style={{ minHeight: '300px' }}>
       <ReactFlow
+        key={flowInstanceKey}
         nodes={rfNodes}
         edges={edges}
         nodeTypes={nodeTypes}
