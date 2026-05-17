@@ -1259,7 +1259,7 @@ export class Orchestrator {
     if (!task) {
       throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
     }
-    if (task.status === 'completed' || task.status === 'failed') {
+    if (task.status === 'completed' || task.status === 'failed' || task.status === 'closed') {
       throw new OrchestratorError(
         OrchestratorErrorCode.TASK_ALREADY_TERMINAL,
         `Task ${task.id} is terminal and cannot be prepared for a new attempt`,
@@ -3913,7 +3913,7 @@ export class Orchestrator {
     const task = this.stateGetTask(taskId);
     if (!task) throw new OrchestratorError('TASK_NOT_FOUND', `Task "${taskId}" not found`);
 
-    const terminal = new Set(['completed', 'stale']);
+    const terminal = new Set(['completed', 'closed', 'stale']);
     if (terminal.has(task.status)) {
       throw new OrchestratorError('TASK_ALREADY_TERMINAL', `Task "${taskId}" is already ${task.status}`);
     }
@@ -4620,7 +4620,7 @@ export class Orchestrator {
       const dep = this.stateGetTask(depId);
       if (!dep) return false;
       if (task.config?.isReconciliation) {
-        return dep.status === 'completed' || dep.status === 'failed' || dep.status === 'stale';
+        return dep.status === 'completed' || dep.status === 'failed' || dep.status === 'closed' || dep.status === 'stale';
       }
       return dep.status === 'completed' || dep.status === 'stale';
     });
