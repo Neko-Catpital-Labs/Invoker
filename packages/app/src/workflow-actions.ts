@@ -16,7 +16,7 @@ import type {
 } from '@invoker/workflow-core';
 import { OrchestratorError, OrchestratorErrorCode } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import type { TaskRunner } from '@invoker/execution-engine';
+import type { TaskRunner, ReviewGateCiFailureTrigger } from '@invoker/execution-engine';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 import { createDeleteAllSnapshot } from './delete-all-snapshot.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
@@ -1231,6 +1231,139 @@ export async function autoFixOnFailure(
         }
       }
       orchestrator.revertConflictResolution(taskId, persistedSavedError, detailedMsg);
+    }
+  }
+}
+
+function formatReviewGateCiSavedError(trigger: ReviewGateCiFailureTrigger): string {
+  const lines = [
+    `Review-gate CI failed for PR ${trigger.reviewId}.`,
+    `PR: ${trigger.reviewUrl}`,
+    trigger.headRef ? `Branch: ${trigger.headRef}` : undefined,
+    trigger.headSha ? `Head SHA: ${trigger.headSha}` : undefined,
+    `Status: ${trigger.statusText}`,
+    '',
+    'Failed checks:',
+    ...trigger.failedChecks.map((check) => (
+      `- ${check.name}${check.conclusion ? ` (${check.conclusion})` : ''}`
+    )),
+  ].filter((line): line is string => line !== undefined);
+  return lines.join('\n');
+}
+
+function formatReviewGateCiFixContext(trigger: ReviewGateCiFailureTrigger): string {
+  const checkLines = trigger.failedChecks.map((check) => {
+    const details = [
+      check.conclusion ? `conclusion=${check.conclusion}` : undefined,
+      check.detailsUrl ? `details=${check.detailsUrl}` : undefined,
+      check.summary ? `summary=${check.summary}` : undefined,
+    ].filter(Boolean).join(' ');
+    return `- ${check.name}${details ? `: ${details}` : ''}`;
+  });
+  return [
+    'This auto-fix was triggered by failed CI on an external review gate PR.',
+    `PR: ${trigger.reviewUrl}`,
+    `Review ID: ${trigger.reviewId}`,
+    trigger.headRef ? `PR head ref: ${trigger.headRef}` : undefined,
+    trigger.headSha ? `PR head SHA: ${trigger.headSha}` : undefined,
+    trigger.branch ? `Invoker branch: ${trigger.branch}` : undefined,
+    '',
+    'Fix the code on this task branch so the failed PR checks pass.',
+    'Preserve the original task intent and do not recreate the PR manually.',
+    '',
+    'Failed checks:',
+    ...checkLines,
+  ].filter((line): line is string => line !== undefined).join('\n');
+}
+
+function assertReviewGateTriggerCurrent(
+  trigger: ReviewGateCiFailureTrigger,
+  orchestrator: Pick<Orchestrator, 'getTask'>,
+): void {
+  const task = orchestrator.getTask(trigger.taskId);
+  if (!task) {
+    throw new StaleLineageError(`Review-gate CI auto-fix task ${trigger.taskId} no longer exists`);
+  }
+  if (
+    task.execution.selectedAttemptId !== trigger.selectedAttemptId ||
+    (task.execution.generation ?? 0) !== trigger.generation ||
+    task.execution.reviewId !== trigger.reviewId ||
+    task.execution.branch !== trigger.branch
+  ) {
+    throw new StaleLineageError(`Review-gate CI auto-fix for ${trigger.taskId} is stale`);
+  }
+}
+
+export async function autoFixOnReviewGateFailure(
+  trigger: ReviewGateCiFailureTrigger,
+  deps: {
+    orchestrator: Orchestrator;
+    persistence: SQLiteAdapter;
+    taskExecutor: TaskRunner;
+    getAutoFixAgent?: () => string | undefined;
+    getAutoApproveAIFixes?: () => boolean | undefined;
+    signal?: AbortSignal;
+  },
+): Promise<void> {
+  const { orchestrator, persistence, taskExecutor } = deps;
+  const task = orchestrator.getTask(trigger.taskId);
+  if (!task) return;
+  if (task.status !== 'review_ready' && task.status !== 'awaiting_approval' && task.status !== 'failed') return;
+  const max = orchestrator.getAutoFixRetryBudget(trigger.taskId);
+  if (max <= 0) return;
+  const attempts = (task.execution.autoFixAttempts ?? 0) + 1;
+  if (attempts > max) return;
+
+  assertReviewGateTriggerCurrent(trigger, orchestrator);
+  persistence.updateTask(trigger.taskId, { execution: { autoFixAttempts: attempts } });
+  const savedError = formatReviewGateCiSavedError(trigger);
+  const fixContext = formatReviewGateCiFixContext(trigger);
+  const agentSelection = resolveAutoFixAgent(deps.getAutoFixAgent?.());
+
+  let persistedSavedError: string | undefined;
+  let lineage: TaskLineageSnapshot | undefined;
+  try {
+    ({ savedError: persistedSavedError } = orchestrator.beginAutoFixSession(trigger.taskId, { savedError }));
+    lineage = captureTaskLineage(trigger.taskId, orchestrator);
+    persistence.logEvent?.(trigger.taskId, 'debug.auto-fix', {
+      phase: 'review-gate-ci-auto-fix-start',
+      reviewId: trigger.reviewId,
+      headSha: trigger.headSha ?? null,
+      failedCheckCount: trigger.failedChecks.length,
+      selectedAgent: agentSelection.selectedAgent,
+    });
+    const output = persistence.getTaskOutput(trigger.taskId);
+    await taskExecutor.fixWithAgent(
+      trigger.taskId,
+      output,
+      agentSelection.selectedAgent,
+      persistedSavedError,
+      fixContext,
+    );
+    assertLineageCurrent(lineage, orchestrator, deps.signal);
+    const latest = orchestrator.getTask(trigger.taskId);
+    if (!latest) throw new StaleLineageError(`Review-gate CI auto-fix task ${trigger.taskId} disappeared`);
+    await recordFixedIntegrationAnchor(trigger.taskId, latest, { persistence, taskExecutor });
+    const finalizeResult = await finalizeAppliedFix(trigger.taskId, persistedSavedError, {
+      orchestrator,
+      taskExecutor,
+      autoApproveAIFixes: deps.getAutoApproveAIFixes?.() ?? true,
+    }, deps.signal);
+    persistence.logEvent?.(trigger.taskId, 'debug.auto-fix', {
+      phase: 'review-gate-ci-auto-fix-finalize',
+      autoApproved: finalizeResult.autoApproved,
+      startedCount: finalizeResult.started.length,
+    });
+  } catch (err) {
+    if (err instanceof StaleLineageError) throw err;
+    const msg = err instanceof Error ? err.message : String(err);
+    persistence.appendTaskOutput(
+      trigger.taskId,
+      `\n[Review Gate Auto-fix] Agent failed (attempt ${attempts}/${max}): ${msg}`,
+    );
+    if (persistedSavedError !== undefined) {
+      if (lineage) assertLineageCurrent(lineage, orchestrator, deps.signal);
+      orchestrator.revertConflictResolution(trigger.taskId, persistedSavedError, msg);
     }
   }
 }
