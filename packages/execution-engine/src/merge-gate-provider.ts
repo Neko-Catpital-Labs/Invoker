@@ -9,6 +9,20 @@ export interface MergeGateApprovalStatus {
   closed?: boolean;
   statusText: string;
   url: string;
+  headSha?: string;
+  headRef?: string;
+  mergeState?: 'clean' | 'dirty' | 'unknown';
+  checks?: {
+    state: 'pending' | 'success' | 'failure';
+    failed: MergeGateFailedCheck[];
+  };
+}
+
+export interface MergeGateFailedCheck {
+  name: string;
+  conclusion?: string;
+  detailsUrl?: string;
+  summary?: string;
 }
 
 export interface MergeGateProvider {
