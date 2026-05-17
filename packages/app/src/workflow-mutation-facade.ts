@@ -28,8 +28,9 @@ import {
   recreateWorkflow as sharedRecreateWorkflow,
   recreateTask as sharedRecreateTask,
   recreateWorkflowFromFreshBase as sharedRecreateWorkflowFromFreshBase,
-  recreateWithRebase as sharedRecreateWithRebase,
-  rebaseAndRetry as sharedRebaseAndRetry,
+  rebaseRetry as sharedRebaseRetry,
+  rebaseRecreate as sharedRebaseRecreate,
+  resolveWorkflowIdForRebaseTarget,
   cancelWorkflow as sharedCancelWorkflow,
   forkWorkflow as sharedForkWorkflow,
   editTaskCommand as sharedEditTaskCommand,
@@ -250,19 +251,16 @@ export class WorkflowMutationFacade {
     return this.finalizeWithTopup(started, 'facade.recreate-from-fresh-base', { scopedWorkflowId: workflowId });
   }
 
-  async recreateWithRebase(workflowId: string): Promise<MutationResult> {
-    const started = await sharedRecreateWithRebase(workflowId, this.actionDeps());
-    return this.finalizeWithTopup(started, 'facade.recreate-with-rebase', { scopedWorkflowId: workflowId });
+  async rebaseRetry(target: string): Promise<MutationResult> {
+    const workflowId = resolveWorkflowIdForRebaseTarget(target, this.actionDeps());
+    const started = await sharedRebaseRetry(target, this.actionDeps());
+    return this.finalizeWithTopup(started, 'facade.rebase-retry', { scopedWorkflowId: workflowId });
   }
 
-  async rebaseAndRetry(taskId: string): Promise<MutationResult> {
-    const workflowId = this.deps.orchestrator.getTask(taskId)?.config.workflowId;
-    const started = await sharedRebaseAndRetry(taskId, this.actionDeps());
-    return this.finalizeWithTopup(
-      started,
-      'facade.rebase-and-retry',
-      workflowId ? { scopedWorkflowId: workflowId } : { scopedTaskIds: [taskId] },
-    );
+  async rebaseRecreate(target: string): Promise<MutationResult> {
+    const workflowId = resolveWorkflowIdForRebaseTarget(target, this.actionDeps());
+    const started = await sharedRebaseRecreate(target, this.actionDeps());
+    return this.finalizeWithTopup(started, 'facade.rebase-recreate', { scopedWorkflowId: workflowId });
   }
 
   async cancelWorkflow(workflowId: string): Promise<CancelMutationResult> {

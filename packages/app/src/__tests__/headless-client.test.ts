@@ -132,7 +132,7 @@ describe('headless-client', () => {
       .mockResolvedValueOnce(firstBus)
       .mockResolvedValueOnce(secondBus);
 
-    const exitCode = await runHeadlessClientCommand(['rebase', 'wf-2/root', '--no-track'], {
+    const exitCode = await runHeadlessClientCommand(['rebase-retry', 'wf-2/root', '--no-track'], {
       messageBus: firstBus,
       ensureStandaloneOwner,
       refreshMessageBus,
@@ -187,7 +187,7 @@ describe('headless-client', () => {
       });
     });
 
-    const exitCode = await runHeadlessClientCommand(['rebase', 'wf-9/root', '--no-track'], {
+    const exitCode = await runHeadlessClientCommand(['rebase-retry', 'wf-9/root', '--no-track'], {
       messageBus: bus,
       ensureStandaloneOwner,
       runElectronHeadless: vi.fn(async () => 0),
