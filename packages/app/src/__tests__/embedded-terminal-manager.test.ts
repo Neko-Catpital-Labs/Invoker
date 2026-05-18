@@ -2,7 +2,7 @@
  * Embedded terminal manager unit + integration tests.
  *
  * Covers:
- *   - openOrReuse returns the same sessionId for the same taskId
+ *   - openOrReuse returns the same sessionId for the same resolved terminal target
  *   - spawn mode wires stdout/stderr → output events and exit
  *   - attached mode forwards executor.onOutput → output events and
  *     executor.sendInput → write()
@@ -19,7 +19,7 @@ import { mkdirSync, rmSync } from 'node:fs';
 
 import {
   EmbeddedTerminalManager,
-  type SpawnFn,
+  type PtySpawnFn,
 } from '../embedded-terminal-manager.js';
 import { resolveTaskTerminalSpec } from '../open-terminal-for-task.js';
 import {
@@ -29,37 +29,52 @@ import {
   type ExecutorHandle,
   type TerminalSpec,
 } from '@invoker/execution-engine';
+import type { IPty } from 'node-pty';
 
-function createFakeChild() {
-  const ee = new EventEmitter() as EventEmitter & {
-    stdout: EventEmitter;
-    stderr: EventEmitter;
-    stdin: { write: (data: string) => boolean };
-    kill: () => void;
+function createFakePty() {
+  const ee = new EventEmitter() as EventEmitter & IPty & {
+    __written: Array<string | Buffer>;
+    __resized: Array<{ cols: number; rows: number }>;
     killed: boolean;
   };
-  ee.stdout = new EventEmitter();
-  ee.stderr = new EventEmitter();
-  const written: string[] = [];
-  ee.stdin = {
-    write: (data: string) => {
-      written.push(data);
-      return true;
-    },
-  };
+  ee.__written = [];
+  ee.__resized = [];
   ee.killed = false;
+  ee.pid = 1234;
+  ee.cols = 80;
+  ee.rows = 24;
+  ee.process = 'fake';
+  ee.handleFlowControl = false;
+  ee.onData = (listener) => {
+    ee.on('data', listener);
+    return { dispose: () => ee.off('data', listener) };
+  };
+  ee.onExit = (listener) => {
+    ee.on('exit', listener);
+    return { dispose: () => ee.off('exit', listener) };
+  };
+  ee.write = (data: string | Buffer) => {
+    ee.__written.push(data);
+  };
+  ee.resize = (cols: number, rows: number) => {
+    ee.cols = cols;
+    ee.rows = rows;
+    ee.__resized.push({ cols, rows });
+  };
   ee.kill = () => {
     ee.killed = true;
   };
-  (ee as unknown as { __written: string[] }).__written = written;
+  ee.clear = () => {};
+  ee.pause = () => {};
+  ee.resume = () => {};
   return ee;
 }
 
 describe('EmbeddedTerminalManager', () => {
   it('opens a spawn-mode session and returns a descriptor', () => {
-    const child = createFakeChild();
-    const spawnFn = vi.fn(() => child as unknown as ReturnType<SpawnFn>) as unknown as SpawnFn;
-    const mgr = new EmbeddedTerminalManager({ spawnFn });
+    const pty = createFakePty();
+    const ptySpawnFn = vi.fn(() => pty) as unknown as PtySpawnFn;
+    const mgr = new EmbeddedTerminalManager({ ptySpawnFn });
 
     const spec: TerminalSpec = { cwd: '/tmp/wt-1' };
     const session = mgr.openOrReuse({ taskId: 'task-1', spec, cwd: '/tmp/wt-1' });
@@ -70,83 +85,149 @@ describe('EmbeddedTerminalManager', () => {
     expect(session.attached).toBe(false);
     expect(session.cwd).toBe('/tmp/wt-1');
     expect(typeof session.sessionId).toBe('string');
-    expect(spawnFn).toHaveBeenCalledTimes(1);
+    expect(ptySpawnFn).toHaveBeenCalledTimes(1);
   });
 
-  it('reopening the same task returns the same session id', () => {
-    const child = createFakeChild();
-    const spawnFn = vi.fn(() => child as unknown as ReturnType<SpawnFn>) as unknown as SpawnFn;
-    const mgr = new EmbeddedTerminalManager({ spawnFn });
+  it('reopening the same task and terminal target returns the same session id', () => {
+    const pty = createFakePty();
+    const ptySpawnFn = vi.fn(() => pty) as unknown as PtySpawnFn;
+    const mgr = new EmbeddedTerminalManager({ ptySpawnFn });
 
     const first = mgr.openOrReuse({ taskId: 'task-1', spec: {}, cwd: '/tmp' });
     const second = mgr.openOrReuse({ taskId: 'task-1', spec: {}, cwd: '/tmp' });
 
     expect(second.sessionId).toBe(first.sessionId);
-    expect(spawnFn).toHaveBeenCalledTimes(1);
+    expect(ptySpawnFn).toHaveBeenCalledTimes(1);
     expect(mgr.list()).toHaveLength(1);
   });
 
-  it('fans stdout and stderr through the output event', () => {
-    const child = createFakeChild();
-    const spawnFn = vi.fn(() => child as unknown as ReturnType<SpawnFn>) as unknown as SpawnFn;
-    const mgr = new EmbeddedTerminalManager({ spawnFn });
+  it('opens a distinct session when the same task resolves to a different terminal target', () => {
+    const pty1 = createFakePty();
+    const pty2 = createFakePty();
+    const pty3 = createFakePty();
+    const ptySpawnFn = vi
+      .fn()
+      .mockReturnValueOnce(pty1)
+      .mockReturnValueOnce(pty2)
+      .mockReturnValueOnce(pty3) as unknown as PtySpawnFn;
+    const mgr = new EmbeddedTerminalManager({ ptySpawnFn });
+
+    const first = mgr.openOrReuse({
+      taskId: 'task-1',
+      spec: { command: 'claude', args: ['--resume', 'session-a'], cwd: '/tmp/wt-a' },
+      cwd: '/tmp/wt-a',
+    });
+    const changedSession = mgr.openOrReuse({
+      taskId: 'task-1',
+      spec: { command: 'claude', args: ['--resume', 'session-b'], cwd: '/tmp/wt-a' },
+      cwd: '/tmp/wt-a',
+    });
+    const changedWorkspace = mgr.openOrReuse({
+      taskId: 'task-1',
+      spec: { command: 'claude', args: ['--resume', 'session-b'], cwd: '/tmp/wt-b' },
+      cwd: '/tmp/wt-b',
+    });
+
+    expect(changedSession.sessionId).not.toBe(first.sessionId);
+    expect(changedWorkspace.sessionId).not.toBe(changedSession.sessionId);
+    expect(ptySpawnFn).toHaveBeenCalledTimes(3);
+    expect(mgr.list()).toHaveLength(3);
+  });
+
+  it('preserves the resolved command, args, and cwd when spawning the PTY', () => {
+    const pty = createFakePty();
+    const ptySpawnFn = vi.fn(() => pty) as unknown as PtySpawnFn;
+    const mgr = new EmbeddedTerminalManager({ ptySpawnFn });
+
+    const session = mgr.openOrReuse({
+      taskId: 'task-1',
+      spec: { command: 'codex', args: ['resume', 'codex-session-1'], cwd: '/tmp/wt' },
+      cwd: '/tmp/wt',
+    });
+
+    expect(session.command).toBe('codex');
+    expect(session.args).toEqual(['resume', 'codex-session-1']);
+    expect(session.cwd).toBe('/tmp/wt');
+    expect(ptySpawnFn).toHaveBeenCalledWith(
+      'codex',
+      ['resume', 'codex-session-1'],
+      expect.objectContaining({ cwd: '/tmp/wt', cols: 80, rows: 24, name: 'xterm-256color' }),
+    );
+  });
+
+  it('fans PTY data through the output event', () => {
+    const pty = createFakePty();
+    const ptySpawnFn = vi.fn(() => pty) as unknown as PtySpawnFn;
+    const mgr = new EmbeddedTerminalManager({ ptySpawnFn });
     const events: Array<{ sessionId: string; data: string }> = [];
     mgr.on('output', (e) => events.push({ sessionId: e.sessionId, data: e.data }));
 
     const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
-    child.stdout.emit('data', Buffer.from('hello'));
-    child.stderr.emit('data', Buffer.from('err'));
+    pty.emit('data', 'hello');
+    pty.emit('data', 'err');
 
     expect(events.map((e) => e.data)).toEqual(['hello', 'err']);
     expect(events.every((e) => e.sessionId === session.sessionId)).toBe(true);
   });
 
-  it('write() forwards data to child stdin in spawn mode', () => {
-    const child = createFakeChild();
-    const spawnFn = vi.fn(() => child as unknown as ReturnType<SpawnFn>) as unknown as SpawnFn;
-    const mgr = new EmbeddedTerminalManager({ spawnFn });
+  it('write() forwards data to the PTY in spawn mode', () => {
+    const pty = createFakePty();
+    const ptySpawnFn = vi.fn(() => pty) as unknown as PtySpawnFn;
+    const mgr = new EmbeddedTerminalManager({ ptySpawnFn });
     const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
 
     const res = mgr.write(session.sessionId, 'ls\n');
 
     expect(res.ok).toBe(true);
-    expect((child as unknown as { __written: string[] }).__written).toEqual(['ls\n']);
+    expect(pty.__written).toEqual(['ls\n']);
   });
 
-  it('emits exit and removes session when child exits', () => {
-    const child = createFakeChild();
-    const spawnFn = vi.fn(() => child as unknown as ReturnType<SpawnFn>) as unknown as SpawnFn;
-    const mgr = new EmbeddedTerminalManager({ spawnFn });
+  it('resize() forwards dimensions to the PTY in spawn mode', () => {
+    const pty = createFakePty();
+    const ptySpawnFn = vi.fn(() => pty) as unknown as PtySpawnFn;
+    const mgr = new EmbeddedTerminalManager({ ptySpawnFn });
+    const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+
+    const res = mgr.resize(session.sessionId, 120, 40);
+
+    expect(res.ok).toBe(true);
+    expect(pty.__resized).toEqual([{ cols: 120, rows: 40 }]);
+  });
+
+  it('emits exit and removes session when the PTY exits', () => {
+    const pty = createFakePty();
+    const ptySpawnFn = vi.fn(() => pty) as unknown as PtySpawnFn;
+    const mgr = new EmbeddedTerminalManager({ ptySpawnFn });
     const exits: Array<{ sessionId: string; exitCode?: number }> = [];
     mgr.on('exit', (e) => exits.push({ sessionId: e.sessionId, exitCode: e.exitCode }));
 
     const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
-    child.emit('exit', 0);
+    pty.emit('exit', { exitCode: 0 });
 
     expect(exits).toEqual([{ sessionId: session.sessionId, exitCode: 0 }]);
     expect(mgr.list()).toHaveLength(0);
   });
 
   it('after exit, openOrReuse spawns a fresh session', () => {
-    const child1 = createFakeChild();
-    const child2 = createFakeChild();
-    const spawnFn = vi
+    const pty1 = createFakePty();
+    const pty2 = createFakePty();
+    const ptySpawnFn = vi
       .fn()
-      .mockReturnValueOnce(child1)
-      .mockReturnValueOnce(child2) as unknown as SpawnFn;
-    const mgr = new EmbeddedTerminalManager({ spawnFn });
+      .mockReturnValueOnce(pty1)
+      .mockReturnValueOnce(pty2) as unknown as PtySpawnFn;
+    const mgr = new EmbeddedTerminalManager({ ptySpawnFn });
 
     const a = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
-    child1.emit('exit', 0);
+    pty1.emit('exit', { exitCode: 0 });
     const b = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
 
     expect(b.sessionId).not.toBe(a.sessionId);
   });
 
-  it('close() kills the child and clears the session', () => {
-    const child = createFakeChild();
-    const spawnFn = vi.fn(() => child as unknown as ReturnType<SpawnFn>) as unknown as SpawnFn;
-    const mgr = new EmbeddedTerminalManager({ spawnFn });
+  it('close() kills the PTY and clears the session', () => {
+    const pty = createFakePty();
+    const ptySpawnFn = vi.fn(() => pty) as unknown as PtySpawnFn;
+    const mgr = new EmbeddedTerminalManager({ ptySpawnFn });
     const exits: Array<{ sessionId: string }> = [];
     mgr.on('exit', (e) => exits.push({ sessionId: e.sessionId }));
 
@@ -154,7 +235,7 @@ describe('EmbeddedTerminalManager', () => {
     const res = mgr.close(session.sessionId);
 
     expect(res.ok).toBe(true);
-    expect(child.killed).toBe(true);
+    expect(pty.killed).toBe(true);
     expect(exits).toEqual([{ sessionId: session.sessionId }]);
   });
 
@@ -177,8 +258,8 @@ describe('EmbeddedTerminalManager', () => {
     const handle: ExecutorHandle = { executionId: 'exec-1', taskId: 'task-live' };
     const mgr = new EmbeddedTerminalManager({
       // spawnFn is irrelevant for attached mode; supply a guard.
-      spawnFn: () => {
-        throw new Error('spawn should not be called in attached mode');
+      ptySpawnFn: () => {
+        throw new Error('pty should not be spawned in attached mode');
       },
     });
     const events: string[] = [];
@@ -209,7 +290,7 @@ describe('EmbeddedTerminalManager', () => {
   });
 
   it('write() rejects unknown sessions', () => {
-    const mgr = new EmbeddedTerminalManager({ spawnFn: () => createFakeChild() as never });
+    const mgr = new EmbeddedTerminalManager({ ptySpawnFn: () => createFakePty() });
     const res = mgr.write('not-a-session', 'x');
     expect(res).toEqual({ ok: false, reason: expect.stringContaining('Unknown session') });
   });
@@ -248,9 +329,9 @@ describe('GUI open-terminal embedded route', () => {
       expect(resolved.ok).toBe(true);
       if (!resolved.ok) return;
 
-      const child = createFakeChild();
+      const pty = createFakePty();
       const mgr = new EmbeddedTerminalManager({
-        spawnFn: () => child as unknown as ReturnType<SpawnFn>,
+        ptySpawnFn: () => pty,
       });
 
       const session = mgr.openOrReuse({
