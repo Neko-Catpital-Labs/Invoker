@@ -37,6 +37,28 @@ describe('evaluateLaunchStall', () => {
     expect(result.launchStalled).toBe(true);
   });
 
+  it('does not fail claimed pending launches while the selected attempt lease is still alive', () => {
+    const result = evaluateLaunchStall({
+      now,
+      status: 'pending',
+      phase: 'launching',
+      launchStartedAt: staleLaunchStartedAt,
+      selectedAttempt: {
+        status: 'claimed',
+        claimedAt: staleLaunchStartedAt,
+        lastHeartbeatAt: new Date('2026-05-16T00:59:45.000Z'),
+        leaseExpiresAt: new Date('2026-05-16T01:20:00.000Z'),
+      },
+      hasExecutionHandle: false,
+      isKnownLaunching: false,
+      launchingStallTimeoutMs: 3_000,
+    });
+
+    expect(result.launchClaimedForCurrentAttempt).toBe(true);
+    expect(result.launchLeaseActive).toBe(true);
+    expect(result.launchStalled).toBe(false);
+  });
+
   it('preserves launch-stall detection for running tasks', () => {
     const result = evaluateLaunchStall({
       now,
