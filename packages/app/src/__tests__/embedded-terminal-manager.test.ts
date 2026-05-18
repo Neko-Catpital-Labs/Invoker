@@ -123,6 +123,40 @@ describe('EmbeddedTerminalManager', () => {
     expect(mgr.list()).toHaveLength(1);
   });
 
+  it('opens a distinct tab when the same task targets a different terminal identity', () => {
+    const pty1 = createFakePty();
+    const pty2 = createFakePty();
+    const ptySpawnFn = vi
+      .fn()
+      .mockReturnValueOnce(pty1)
+      .mockReturnValueOnce(pty2) as unknown as PtySpawnFn;
+    const mgr = new EmbeddedTerminalManager({ ptySpawnFn });
+
+    const first = mgr.openOrReuse({
+      taskId: 'task-1',
+      spec: { cwd: '/tmp/wt-1', command: 'codex', args: ['resume', 'sess-1'] },
+      cwd: '/tmp/wt-1',
+      terminalKey: 'branch-a/session-1',
+    });
+    const sameTarget = mgr.openOrReuse({
+      taskId: 'task-1',
+      spec: { cwd: '/tmp/wt-1', command: 'codex', args: ['resume', 'sess-1'] },
+      cwd: '/tmp/wt-1',
+      terminalKey: 'branch-a/session-1',
+    });
+    const nextAttempt = mgr.openOrReuse({
+      taskId: 'task-1',
+      spec: { cwd: '/tmp/wt-2', command: 'codex', args: ['resume', 'sess-2'] },
+      cwd: '/tmp/wt-2',
+      terminalKey: 'branch-b/session-2',
+    });
+
+    expect(sameTarget.sessionId).toBe(first.sessionId);
+    expect(nextAttempt.sessionId).not.toBe(first.sessionId);
+    expect(ptySpawnFn).toHaveBeenCalledTimes(2);
+    expect(mgr.list()).toHaveLength(2);
+  });
+
   it('fans PTY data through the output event', () => {
     const pty = createFakePty();
     const ptySpawnFn = vi.fn(() => pty as never) as unknown as PtySpawnFn;

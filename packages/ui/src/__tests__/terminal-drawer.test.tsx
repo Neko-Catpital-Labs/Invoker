@@ -63,7 +63,9 @@ describe('Terminal drawer (component)', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Expand terminal drawer' })).toBeInTheDocument();
     });
-    expect(screen.queryByTestId('terminal-drawer-body')).not.toBeInTheDocument();
+    const body = screen.getByTestId('terminal-drawer-body');
+    expect(body).toHaveAttribute('aria-hidden', 'true');
+    expect(body).toHaveStyle({ height: '0px' });
   });
 
   it('expands the drawer and adds a tab when opening a terminal via double-click', async () => {
@@ -78,6 +80,8 @@ describe('Terminal drawer (component)', () => {
       expect(screen.getByTestId('terminal-drawer-body')).toBeInTheDocument();
       expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
     });
+    expect(screen.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'expanded');
+    expect(screen.getByTestId('terminal-drawer-body')).toHaveStyle({ height: 'calc(100vh - 88px)' });
     expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha');
   });
 
@@ -100,6 +104,71 @@ describe('Terminal drawer (component)', () => {
     });
     const tabs = screen.getAllByTestId('terminal-tab-task-alpha');
     expect(tabs).toHaveLength(1);
+  });
+
+  it('keeps mounted panes across minimize and expand', async () => {
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+    await waitFor(() => expect(screen.getByTestId('terminal-pane-task-alpha')).toBeInTheDocument());
+    const pane = screen.getByTestId('terminal-pane-task-alpha');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse terminal drawer' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-drawer-body')).toHaveAttribute('aria-hidden', 'true');
+    });
+    expect(screen.getByTestId('terminal-pane-task-alpha')).toBe(pane);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand terminal drawer' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-drawer-body')).toHaveAttribute('aria-hidden', 'false');
+    });
+    expect(screen.getByTestId('terminal-pane-task-alpha')).toBe(pane);
+  });
+
+  it('adds another tab when the same task opens a different attempt session', async () => {
+    (mock.api.openTerminal as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({
+        opened: true,
+        session: {
+          sessionId: 'mock-session-task-alpha-attempt-1',
+          taskId: 'task-alpha',
+          status: 'running',
+          mode: 'pty',
+          backend: 'pty',
+          attached: false,
+          cwd: '/tmp/wt-attempt-1',
+          createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+        },
+      })
+      .mockResolvedValueOnce({
+        opened: true,
+        session: {
+          sessionId: 'mock-session-task-alpha-attempt-2',
+          taskId: 'task-alpha',
+          status: 'running',
+          mode: 'pty',
+          backend: 'pty',
+          attached: false,
+          cwd: '/tmp/wt-attempt-2',
+          createdAt: new Date('2025-01-01T00:00:01Z').toISOString(),
+        },
+      });
+
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+    await waitFor(() => expect(screen.getAllByTestId('terminal-tab-task-alpha')).toHaveLength(1));
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+    await waitFor(() => expect(screen.getAllByTestId('terminal-tab-task-alpha')).toHaveLength(2));
+    const panes = screen.getAllByTestId('terminal-pane-task-alpha');
+    expect(panes[0].dataset.sessionId).toBe('mock-session-task-alpha-attempt-1');
+    expect(panes[1].dataset.sessionId).toBe('mock-session-task-alpha-attempt-2');
   });
 
   it('renders distinct tabs for different tasks side by side', async () => {

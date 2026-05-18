@@ -49,6 +49,8 @@ export interface OpenSessionOptions {
   spec: TerminalSpec;
   cwd: string;
   agentName?: string;
+  /** Stable identity for the concrete terminal target: workspace, branch, session, command. */
+  terminalKey?: string;
   /** When provided, the session attaches to the running executor rather than spawning a child. */
   attach?: AttachContext;
 }
@@ -59,6 +61,7 @@ interface BaseSessionState {
   spec: TerminalSpec;
   cwd: string;
   agentName?: string;
+  terminalKey: string;
   createdAt: string;
   status: 'running' | 'exited';
   exitCode?: number;
@@ -105,7 +108,7 @@ function describeSession(state: SessionState): TerminalSessionDescriptor {
 
 export class EmbeddedTerminalManager extends EventEmitter {
   private readonly sessions = new Map<string, SessionState>();
-  private readonly taskIndex = new Map<string, string>();
+  private readonly targetIndex = new Map<string, string>();
   private readonly ptySpawnFn: PtySpawnFn;
   private readonly defaultShell: string;
 
@@ -124,14 +127,16 @@ export class EmbeddedTerminalManager extends EventEmitter {
    * intentionally `open-terminal` for both paths.
    */
   openOrReuse(opts: OpenSessionOptions): TerminalSessionDescriptor {
-    const existingId = this.taskIndex.get(opts.taskId);
+    const terminalKey = opts.terminalKey ?? this.defaultTerminalKey(opts);
+    const targetKey = this.targetIndexKey(opts.taskId, terminalKey);
+    const existingId = this.targetIndex.get(targetKey);
     if (existingId) {
       const existing = this.sessions.get(existingId);
       if (existing && existing.status === 'running') {
         return describeSession(existing);
       }
       // Stale entry — clean up before re-opening.
-      this.taskIndex.delete(opts.taskId);
+      this.targetIndex.delete(targetKey);
       if (existing) this.sessions.delete(existingId);
     }
 
@@ -143,6 +148,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
       spec: opts.spec,
       cwd: opts.cwd,
       agentName: opts.agentName,
+      terminalKey,
       createdAt,
       status: 'running' as const,
     };
@@ -174,7 +180,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
     }
 
     this.sessions.set(sessionId, state);
-    this.taskIndex.set(opts.taskId, sessionId);
+    this.targetIndex.set(targetKey, sessionId);
     return describeSession(state);
   }
 
@@ -242,6 +248,20 @@ export class EmbeddedTerminalManager extends EventEmitter {
     }
   }
 
+  private targetIndexKey(taskId: string, terminalKey: string): string {
+    return `${taskId}\0${terminalKey}`;
+  }
+
+  private defaultTerminalKey(opts: OpenSessionOptions): string {
+    return JSON.stringify({
+      mode: opts.attach ? 'attached' : 'pty',
+      cwd: opts.cwd,
+      command: opts.spec.command ?? null,
+      args: opts.spec.args ?? [],
+      attachExecutionId: opts.attach?.handle.executionId ?? null,
+    });
+  }
+
   private spawnPty(spec: TerminalSpec, cwd: string): nodePty.IPty {
     const command = spec.command ?? this.defaultShell;
     const args = spec.command ? spec.args ?? [] : [];
@@ -282,8 +302,9 @@ export class EmbeddedTerminalManager extends EventEmitter {
       }
     }
 
-    if (this.taskIndex.get(state.taskId) === state.sessionId) {
-      this.taskIndex.delete(state.taskId);
+    const targetKey = this.targetIndexKey(state.taskId, state.terminalKey);
+    if (this.targetIndex.get(targetKey) === state.sessionId) {
+      this.targetIndex.delete(targetKey);
     }
     if (remove) {
       this.sessions.delete(state.sessionId);
