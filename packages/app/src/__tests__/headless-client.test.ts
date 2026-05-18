@@ -262,6 +262,30 @@ describe('headless-client', () => {
     expect(pingCalls).toBeGreaterThanOrEqual(2);
   });
 
+  it('retries post-bootstrap delegation when owner SQLite is transiently locked', async () => {
+    const bus = new LocalBus();
+    let execCalls = 0;
+
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-locked', mode: 'standalone' }));
+    bus.onRequest('headless.exec', async () => {
+      execCalls += 1;
+      if (execCalls === 1) {
+        throw new Error('database is locked');
+      }
+      return { ok: true };
+    });
+
+    const exitCode = await runHeadlessClientCommand(['approve', 'wf-locked/task', '--no-track'], {
+      messageBus: bus,
+      ensureStandaloneOwner: vi.fn(async () => {}),
+      refreshMessageBus: vi.fn(async () => bus),
+      runElectronHeadless: vi.fn(async () => 0),
+    });
+
+    expect(exitCode).toBe(0);
+    expect(execCalls).toBe(2);
+  });
+
   it('re-bootstraps after repeated owner loss during post-bootstrap no-track delegation', async () => {
     const firstBus = new LocalBus();
     const secondBus = new LocalBus();

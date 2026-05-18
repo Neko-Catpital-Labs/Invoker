@@ -82,6 +82,10 @@ const READ_ONLY_QUERY_REQUEST_TIMEOUT_MS = 8_000;
 const POST_BOOTSTRAP_OWNER_RESTART_ATTEMPTS = 3;
 const DEFAULT_STANDALONE_OWNER_BOOTSTRAP_TIMEOUT_MS = 60_000;
 
+function isOwnerBootstrapSpawnDisabled(): boolean {
+  return process.env.INVOKER_HEADLESS_DISABLE_OWNER_BOOTSTRAP_SPAWN === '1';
+}
+
 function standaloneOwnerBootstrapTimeoutMs(): number {
   const raw = process.env.INVOKER_HEADLESS_OWNER_BOOTSTRAP_TIMEOUT_MS;
   const parsed = raw ? Number.parseInt(raw, 10) : NaN;
@@ -127,6 +131,31 @@ async function delegateMutation(
     return tryDelegateResume(workflowId, bus, waitForApproval, noTrack, timeoutMs);
   }
   return tryDelegateExec(args, bus, waitForApproval, noTrack, timeoutMs);
+}
+
+function isTransientOwnerContentionError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\bdatabase is (?:locked|busy)\b|SQLITE_(?:BUSY|LOCKED)/i.test(message);
+}
+
+async function tryDelegateMutation(
+  args: string[],
+  bus: MessageBus,
+  waitForApproval?: boolean,
+  noTrack?: boolean,
+  noTrackTimeoutMs?: number,
+): Promise<DelegationOutcome> {
+  try {
+    return await delegateMutation(args, bus, waitForApproval, noTrack, noTrackTimeoutMs);
+  } catch (error) {
+    if (!isTransientOwnerContentionError(error)) {
+      throw error;
+    }
+    delegationClientLog(
+      `delegateMutation transient owner contention: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return { kind: 'timeout' };
+  }
 }
 
 async function delegateReadOnlyQuery(
@@ -221,7 +250,7 @@ async function delegateAfterBootstrap(
       `post-bootstrap attempt=${attempts} ownerReachable=${isOwnerReachable(owner) ? 'true' : 'false'} standaloneCapable=${isStandaloneCapable(owner) ? 'true' : 'false'} ownerId=${owner?.ownerId ?? '<none>'}`,
     );
     if (isStandaloneCapable(owner)) {
-      const outcome = await delegateMutation(
+      const outcome = await tryDelegateMutation(
         args,
         messageBus,
         waitForApproval,
@@ -262,8 +291,12 @@ async function ensureStandaloneOwnerViaBootstrap(bus: MessageBus): Promise<void>
   delegationClientLog(`bootstrap begin lockAcquired=${bootstrapLock ? 'true' : 'false'} home=${invokerHomeRoot}`);
   try {
     if (bootstrapLock) {
-      delegationClientLog('bootstrap spawning detached standalone owner');
-      spawnDetachedStandaloneOwner(repoRoot);
+      if (isOwnerBootstrapSpawnDisabled()) {
+        delegationClientLog('bootstrap spawn disabled; waiting for externally managed standalone owner');
+      } else {
+        delegationClientLog('bootstrap spawning detached standalone owner');
+        spawnDetachedStandaloneOwner(repoRoot);
+      }
     }
     const deadline = Date.now() + standaloneOwnerBootstrapTimeoutMs();
     let attempts = 0;
@@ -334,7 +367,7 @@ async function resolveOwnerAndDelegate(
     `phase1 discover standaloneCapable=${isStandaloneCapable(owner) ? 'true' : 'false'} ownerReachable=${isOwnerReachable(owner) ? 'true' : 'false'} ownerId=${owner?.ownerId ?? '<none>'}`,
   );
   if (isStandaloneCapable(owner)) {
-    const outcome = await delegateMutation(args, messageBus, waitForApproval, noTrack);
+    const outcome = await tryDelegateMutation(args, messageBus, waitForApproval, noTrack);
     delegationClientLog(`phase1 outcome=${outcome.kind}`);
     if (outcome.kind === 'delegated') {
       delegationClientLog(`phase1 delegated successfully elapsedMs=${Date.now() - startedAt}`);
@@ -349,7 +382,7 @@ async function resolveOwnerAndDelegate(
 
   // Phase 2: Try any reachable owner (may be non-standalone)
   if (isOwnerReachable(owner)) {
-    const outcome = await delegateMutation(args, messageBus, waitForApproval, noTrack);
+    const outcome = await tryDelegateMutation(args, messageBus, waitForApproval, noTrack);
     delegationClientLog(`phase2 outcome=${outcome.kind} ownerId=${owner.ownerId}`);
     if (outcome.kind === 'delegated') {
       delegationClientLog(`phase2 delegated to reachable owner elapsedMs=${Date.now() - startedAt}`);
@@ -372,7 +405,7 @@ async function resolveOwnerAndDelegate(
       `phase3 discover ownerReachable=${isOwnerReachable(refreshedOwner) ? 'true' : 'false'} standaloneCapable=${isStandaloneCapable(refreshedOwner) ? 'true' : 'false'} ownerId=${refreshedOwner?.ownerId ?? '<none>'}`,
     );
     if (isOwnerReachable(refreshedOwner)) {
-      const outcome = await delegateMutation(args, messageBus, waitForApproval, noTrack);
+      const outcome = await tryDelegateMutation(args, messageBus, waitForApproval, noTrack);
       delegationClientLog(`phase3 outcome=${outcome.kind}`);
       if (outcome.kind === 'delegated') {
         delegationClientLog(`phase3 delegated successfully elapsedMs=${Date.now() - startedAt}`);
