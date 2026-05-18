@@ -1172,6 +1172,40 @@ if (isHeadless) {
   let apiServer: ApiServer | null = null;
   let ownerMode = true;
   const taskHandles = new Map<string, { handle: ExecutorHandle; executor: Executor }>();
+  const taskHandlesByAttempt = new Map<string, { taskId: string; handle: ExecutorHandle; executor: Executor }>();
+  const attemptIdForHandle = (handle: ExecutorHandle): string | undefined =>
+    (handle as ExecutorHandle & { attemptId?: string }).attemptId;
+  const isTaskSelectedAttempt = (taskId: string, attemptId: string | undefined): boolean => {
+    if (!attemptId) return true;
+    const selectedAttemptId = orchestrator.getTask(taskId)?.execution.selectedAttemptId
+      ?? persistence.loadTask(taskId)?.execution.selectedAttemptId;
+    return selectedAttemptId === undefined || selectedAttemptId === attemptId;
+  };
+  const setLiveTaskHandle = (taskId: string, handle: ExecutorHandle, executor: Executor): void => {
+    const attemptId = attemptIdForHandle(handle);
+    if (attemptId) taskHandlesByAttempt.set(attemptId, { taskId, handle, executor });
+    if (isTaskSelectedAttempt(taskId, attemptId)) taskHandles.set(taskId, { handle, executor });
+  };
+  const deleteLiveTaskHandle = (taskId: string, attemptId?: string): void => {
+    if (attemptId) taskHandlesByAttempt.delete(attemptId);
+    const current = taskHandles.get(taskId);
+    const currentAttemptId = current ? attemptIdForHandle(current.handle) : undefined;
+    if (!attemptId || currentAttemptId === attemptId) taskHandles.delete(taskId);
+  };
+  const clearLiveTaskHandles = (): void => {
+    taskHandles.clear();
+    taskHandlesByAttempt.clear();
+  };
+  const getLiveTaskHandle = (taskId: string): { handle: ExecutorHandle; executor: Executor } | undefined => {
+    const selectedAttemptId = orchestrator.getTask(taskId)?.execution.selectedAttemptId
+      ?? persistence.loadTask(taskId)?.execution.selectedAttemptId;
+    if (selectedAttemptId) {
+      const attemptEntry = taskHandlesByAttempt.get(selectedAttemptId);
+      if (attemptEntry) return { handle: attemptEntry.handle, executor: attemptEntry.executor };
+    }
+    return taskHandles.get(taskId);
+  };
+  const hasLiveTaskHandle = (taskId: string): boolean => Boolean(getLiveTaskHandle(taskId));
   const embeddedTerminalManager = new EmbeddedTerminalManager();
   embeddedTerminalManager.on('output', (payload) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1604,12 +1638,12 @@ if (isHeadless) {
             `Task "${taskId}" spawned (handle: ${handle.executionId}, executor: ${executor.type}, workspace: ${handle.workspacePath ?? 'none'}, branch: ${handle.branch ?? 'none'})`,
             { module: 'exec' },
           );
-          taskHandles.set(taskId, { handle, executor });
+          setLiveTaskHandle(taskId, handle, executor);
         },
         onComplete: (taskId, response) => {
           flushTaskOutput(taskId);
           launchingTasks.delete(taskId);
-          taskHandles.delete(taskId);
+          deleteLiveTaskHandle(taskId, response.attemptId);
           logger.info(
             `Task "${taskId}" completion callback received (status: ${response.status}, generation: ${response.executionGeneration}, exitCode: ${response.outputs.exitCode ?? 'none'})`,
             { module: 'exec' },
@@ -1654,11 +1688,11 @@ if (isHeadless) {
   }
 
   async function killRunningTask(taskId: string): Promise<void> {
-    const entry = taskHandles.get(taskId);
+    const entry = getLiveTaskHandle(taskId);
     if (!entry) return;
     logger.info(`Killing running task "${taskId}" before restart`, { module: 'kill' });
     await entry.executor.kill(entry.handle);
-    taskHandles.delete(taskId);
+    deleteLiveTaskHandle(taskId, attemptIdForHandle(entry.handle));
   }
 
   /** Cancel a task and cascade-kill all downstream DAG dependents. Shared by IPC, headless, and API. */
@@ -1762,7 +1796,7 @@ if (isHeadless) {
   async function executeHeadlessRun(payload: HeadlessRunMutationPayload): Promise<{ workflowId: string; tasks: TaskState[] }> {
     const { parsePlanFile } = await import('./plan-parser.js');
     const plan = await parsePlanFile(payload.planPath);
-    taskHandles.clear();
+    clearLiveTaskHandles();
     backupPlan(plan, undefined, logger);
     const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
     orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
@@ -2424,7 +2458,7 @@ if (isHeadless) {
                     phase: task.execution.phase,
                     launchStartedAt,
                     selectedAttempt,
-                    hasExecutionHandle: taskHandles.has(task.id),
+                    hasExecutionHandle: hasLiveTaskHandle(task.id),
                     isKnownLaunching: launchingTasks.has(task.id),
                     launchingStallTimeoutMs,
                   });
@@ -2481,7 +2515,7 @@ if (isHeadless) {
                       `without a live execution handle and no completion signal from executor (${staleReason}).`;
                     logger.info(
                       `[executing-stall] detected task="${task.id}" phase=${task.execution.phase} executingAgeMs=${executingAgeMs} ` +
-                        `handlePresent=${taskHandles.has(task.id)} leaseExpired=${leaseExpired} heartbeatStale=${heartbeatStale}`,
+                        `handlePresent=${hasLiveTaskHandle(task.id)} leaseExpired=${leaseExpired} heartbeatStale=${heartbeatStale}`,
                       { module: 'db-poll' },
                     );
                     const failedResponse: WorkResponse = {
@@ -2807,7 +2841,7 @@ if (isHeadless) {
       const { parsePlan } = await import('./plan-parser.js');
       const plan = parsePlan(planText);
       logger.info(`load-plan: "${plan.name}" (${plan.tasks.length} tasks)`, { module: 'ipc' });
-      taskHandles.clear();
+      clearLiveTaskHandles();
       backupPlan(plan, undefined, logger);
       orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
     });
@@ -2924,7 +2958,7 @@ if (isHeadless) {
       });
       commandService = new CommandService(orchestrator);
       rebuildTaskRunner();
-      taskHandles.clear();
+      clearLiveTaskHandles();
     });
 
     registerReadOnlyIpcHandlers({
@@ -2947,7 +2981,7 @@ if (isHeadless) {
       logger.info('delete-all-workflows', { module: 'ipc' });
       assertDeleteAllEnabled();
       await sharedDeleteAllWorkflows({ logger, orchestrator, taskExecutor: taskExecutor ?? undefined });
-      taskHandles.clear();
+      clearLiveTaskHandles();
       lastKnownTaskStates.clear();
       lastKnownWorkflowCount = 0;
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -2959,7 +2993,7 @@ if (isHeadless) {
       logger.info('delete-all-workflows-bulk', { module: 'ipc' });
       assertDeleteAllEnabled();
       await sharedDeleteAllWorkflowsBulk({ logger, orchestrator, taskExecutor: taskExecutor ?? undefined });
-      taskHandles.clear();
+      clearLiveTaskHandles();
       lastKnownTaskStates.clear();
       lastKnownWorkflowCount = 0;
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -3801,7 +3835,7 @@ if (isHeadless) {
     // in `headless.ts` so existing CLI behaviour is preserved.
     ipcMain.handle('invoker:open-terminal', async (_event, taskId: string) => {
       logger.info(`invoked for task="${taskId}"`, { module: 'open-terminal' });
-      const liveHandle = taskHandles.get(taskId);
+      const liveHandle = getLiveTaskHandle(taskId);
       const resolved = resolveTaskTerminalSpec({
         taskId,
         persistence,
@@ -3937,7 +3971,10 @@ if (isHeadless) {
           await performSharedApproveTask(taskId, 'surface');
         });
       },
-      onStartPlan: () => handles.clear(),
+      onStartPlan: () => {
+        handles.clear();
+        taskHandlesByAttempt.clear();
+      },
       onPlanLoaded: () => {},
     });
 
