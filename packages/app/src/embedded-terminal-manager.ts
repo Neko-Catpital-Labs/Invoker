@@ -23,11 +23,7 @@
 
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import {
-  spawn as nodeSpawn,
-  type ChildProcessWithoutNullStreams,
-  type SpawnOptions,
-} from 'node:child_process';
+import { spawn as nodePtySpawn, type IPty, type IPtyForkOptions } from 'node-pty';
 import type {
   TerminalSessionDescriptor,
   TerminalOutputEvent,
@@ -35,12 +31,12 @@ import type {
 } from '@invoker/contracts';
 import type { Executor, ExecutorHandle, TerminalSpec } from '@invoker/execution-engine';
 
-/** Factory used to spawn a child shell for `spawn`-mode sessions. */
-export type SpawnFn = (
+/** Factory used to spawn a pseudoterminal for `spawn`-mode sessions. */
+export type PtySpawnFn = (
   command: string,
   args: readonly string[],
-  options: SpawnOptions,
-) => ChildProcessWithoutNullStreams;
+  options: IPtyForkOptions,
+) => IPty;
 
 /** Optional attach handle pair routing a session through a live executor. */
 export interface AttachContext {
@@ -59,6 +55,7 @@ export interface OpenSessionOptions {
 interface BaseSessionState {
   sessionId: string;
   taskId: string;
+  targetKey: string;
   spec: TerminalSpec;
   cwd: string;
   createdAt: string;
@@ -68,7 +65,9 @@ interface BaseSessionState {
 
 interface SpawnSessionState extends BaseSessionState {
   mode: 'spawn';
-  child: ChildProcessWithoutNullStreams;
+  pty: IPty;
+  disposeData: () => void;
+  disposeExit: () => void;
 }
 
 interface AttachedSessionState extends BaseSessionState {
@@ -80,8 +79,8 @@ interface AttachedSessionState extends BaseSessionState {
 type SessionState = SpawnSessionState | AttachedSessionState;
 
 export interface EmbeddedTerminalManagerOptions {
-  /** Override the child_process.spawn function (used by tests). */
-  spawnFn?: SpawnFn;
+  /** Override the node-pty spawn function (used by tests). */
+  ptySpawnFn?: PtySpawnFn;
   /** Default shell for `spawn`-mode sessions when the spec has no command. */
   defaultShell?: string;
 }
@@ -103,31 +102,32 @@ function describeSession(state: SessionState): TerminalSessionDescriptor {
 
 export class EmbeddedTerminalManager extends EventEmitter {
   private readonly sessions = new Map<string, SessionState>();
-  private readonly taskIndex = new Map<string, string>();
-  private readonly spawnFn: SpawnFn;
+  private readonly targetIndex = new Map<string, string>();
+  private readonly ptySpawnFn: PtySpawnFn;
   private readonly defaultShell: string;
 
   constructor(options: EmbeddedTerminalManagerOptions = {}) {
     super();
-    this.spawnFn = options.spawnFn ?? (nodeSpawn as unknown as SpawnFn);
+    this.ptySpawnFn = options.ptySpawnFn ?? (nodePtySpawn as unknown as PtySpawnFn);
     this.defaultShell =
       options.defaultShell ?? (process.platform === 'darwin' ? 'zsh' : 'bash');
   }
 
   /**
-   * Open a new embedded session for the task, or return the existing live one.
-   * Reusing by taskId is what the spec calls "select" — the channel name is
-   * intentionally `open-terminal` for both paths.
+   * Open a new embedded session for the resolved terminal target, or return
+   * the existing live one. A changed attempt/session/workspace/branch resolves
+   * to a different target and therefore gets a distinct tab.
    */
   openOrReuse(opts: OpenSessionOptions): TerminalSessionDescriptor {
-    const existingId = this.taskIndex.get(opts.taskId);
+    const targetKey = buildTargetKey(opts);
+    const existingId = this.targetIndex.get(targetKey);
     if (existingId) {
       const existing = this.sessions.get(existingId);
       if (existing && existing.status === 'running') {
         return describeSession(existing);
       }
       // Stale entry — clean up before re-opening.
-      this.taskIndex.delete(opts.taskId);
+      this.targetIndex.delete(targetKey);
       if (existing) this.sessions.delete(existingId);
     }
 
@@ -136,6 +136,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
     const base = {
       sessionId,
       taskId: opts.taskId,
+      targetKey,
       spec: opts.spec,
       cwd: opts.cwd,
       createdAt,
@@ -157,13 +158,15 @@ export class EmbeddedTerminalManager extends EventEmitter {
       state = {
         ...base,
         mode: 'spawn',
-        child: this.spawnChild(opts.spec, opts.cwd),
+        pty: this.spawnPty(opts.spec, opts.cwd),
+        disposeData: () => {},
+        disposeExit: () => {},
       };
-      this.wireSpawnedChild(state);
+      this.wireSpawnedPty(state);
     }
 
     this.sessions.set(sessionId, state);
-    this.taskIndex.set(opts.taskId, sessionId);
+    this.targetIndex.set(targetKey, sessionId);
     return describeSession(state);
   }
 
@@ -195,20 +198,26 @@ export class EmbeddedTerminalManager extends EventEmitter {
       }
     }
     try {
-      state.child.stdin.write(data);
+      state.pty.write(data);
       return { ok: true };
     } catch (err) {
       return { ok: false, reason: err instanceof Error ? err.message : String(err) };
     }
   }
 
-  resize(sessionId: string, _cols: number, _rows: number): { ok: boolean; reason?: string } {
+  resize(sessionId: string, cols: number, rows: number): { ok: boolean; reason?: string } {
     const state = this.sessions.get(sessionId);
     if (!state) return { ok: false, reason: `Unknown session "${sessionId}".` };
-    // node:child_process spawn does not expose a TTY resize hook. We accept
-    // the call so the renderer can stay in sync, but it is a no-op until a
-    // true PTY backend (e.g. node-pty) is wired in.
-    return { ok: true };
+    if (state.status !== 'running') {
+      return { ok: false, reason: `Session "${sessionId}" has already exited.` };
+    }
+    if (state.mode === 'attached') return { ok: true };
+    try {
+      state.pty.resize(cols, rows);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   close(sessionId: string): { ok: boolean; reason?: string } {
@@ -225,33 +234,29 @@ export class EmbeddedTerminalManager extends EventEmitter {
     }
   }
 
-  private spawnChild(spec: TerminalSpec, cwd: string): ChildProcessWithoutNullStreams {
+  private spawnPty(spec: TerminalSpec, cwd: string): IPty {
     const command = spec.command ?? this.defaultShell;
     const args = spec.command ? spec.args ?? [] : [];
-    const options: SpawnOptions = {
+    const options: IPtyForkOptions = {
+      name: 'xterm-256color',
+      cols: 80,
+      rows: 24,
       cwd,
       env: { ...process.env, TERM: process.env.TERM ?? 'xterm-256color' },
-      stdio: ['pipe', 'pipe', 'pipe'],
     };
-    return this.spawnFn(command, args, options);
+    return this.ptySpawnFn(command, args, options);
   }
 
-  private wireSpawnedChild(state: SpawnSessionState): void {
-    const { child, sessionId, taskId } = state;
-    child.stdout?.on('data', (chunk: Buffer | string) => {
-      this.emitOutput(sessionId, taskId, chunk.toString());
+  private wireSpawnedPty(state: SpawnSessionState): void {
+    const { pty, sessionId, taskId } = state;
+    const dataDisposable = pty.onData((data) => {
+      this.emitOutput(sessionId, taskId, data);
     });
-    child.stderr?.on('data', (chunk: Buffer | string) => {
-      this.emitOutput(sessionId, taskId, chunk.toString());
+    state.disposeData = () => dataDisposable.dispose();
+    const exitDisposable = pty.onExit(({ exitCode }) => {
+      this.finalizeSession(state, exitCode);
     });
-    const onExit = (code: number | null) => {
-      this.finalizeSession(state, code ?? undefined);
-    };
-    child.once('exit', onExit);
-    child.once('error', (err) => {
-      this.emitOutput(sessionId, taskId, `\n[embedded-terminal error] ${err.message}\n`);
-      this.finalizeSession(state, undefined);
-    });
+    state.disposeExit = () => exitDisposable.dispose();
   }
 
   private finalizeSession(state: SessionState, exitCode: number | undefined): void {
@@ -261,7 +266,13 @@ export class EmbeddedTerminalManager extends EventEmitter {
 
     if (state.mode === 'spawn') {
       try {
-        if (!state.child.killed) state.child.kill();
+        state.disposeData();
+        state.disposeExit();
+      } catch {
+        /* listener disposal is best-effort */
+      }
+      try {
+        state.pty.kill();
       } catch {
         /* already dead */
       }
@@ -273,8 +284,8 @@ export class EmbeddedTerminalManager extends EventEmitter {
       }
     }
 
-    if (this.taskIndex.get(state.taskId) === state.sessionId) {
-      this.taskIndex.delete(state.taskId);
+    if (this.targetIndex.get(state.targetKey) === state.sessionId) {
+      this.targetIndex.delete(state.targetKey);
     }
     this.sessions.delete(state.sessionId);
 
@@ -290,4 +301,23 @@ export class EmbeddedTerminalManager extends EventEmitter {
     const payload: TerminalOutputEvent = { sessionId, taskId, data };
     this.emit('output', payload);
   }
+}
+
+function buildTargetKey(opts: OpenSessionOptions): string {
+  return JSON.stringify({
+    taskId: opts.taskId,
+    cwd: opts.cwd,
+    command: opts.spec.command ?? null,
+    args: opts.spec.args ?? [],
+    linuxTerminalTail: opts.spec.linuxTerminalTail ?? null,
+    attach: opts.attach
+      ? {
+          executionId: opts.attach.handle.executionId,
+          agentSessionId: opts.attach.handle.agentSessionId ?? null,
+          containerId: opts.attach.handle.containerId ?? null,
+          workspacePath: opts.attach.handle.workspacePath ?? null,
+          branch: opts.attach.handle.branch ?? null,
+        }
+      : null,
+  });
 }
