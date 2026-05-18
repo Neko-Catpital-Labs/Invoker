@@ -231,6 +231,81 @@ describe('EmbeddedTerminalManager', () => {
     expect(events.every((e) => e.sessionId === session.sessionId)).toBe(true);
   });
 
+  it('returns output emitted synchronously during backend spawn in the descriptor snapshot', () => {
+    const spawned = {
+      write: vi.fn(),
+      resize: vi.fn(),
+      close: vi.fn(),
+    };
+    const backend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: vi.fn((opts) => {
+        opts.emitOutput('early output');
+        return spawned;
+      }),
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+
+    expect(session.outputSnapshot).toBe('early output');
+    expect(mgr.list()).toEqual([
+      expect.objectContaining({
+        sessionId: session.sessionId,
+        outputSnapshot: 'early output',
+      }),
+    ]);
+  });
+
+  it('keeps the replay snapshot bounded to the most recent 64 KiB', () => {
+    const backend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: vi.fn((opts) => {
+        opts.emitOutput('a'.repeat(64 * 1024));
+        opts.emitOutput('tail');
+        return {
+          write: vi.fn(),
+          resize: vi.fn(),
+          close: vi.fn(),
+        };
+      }),
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+
+    expect(session.outputSnapshot).toHaveLength(64 * 1024);
+    expect(session.outputSnapshot?.endsWith('tail')).toBe(true);
+  });
+
+  it('handles synchronous backend exit during spawn without reading uninitialized state', () => {
+    const close = vi.fn();
+    const backend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: vi.fn((opts) => {
+        opts.emitOutput('before exit');
+        opts.emitExit(7);
+        return {
+          write: vi.fn(),
+          resize: vi.fn(),
+          close,
+        };
+      }),
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+    const exits: Array<{ sessionId: string; exitCode?: number }> = [];
+    mgr.on('exit', (e) => exits.push({ sessionId: e.sessionId, exitCode: e.exitCode }));
+
+    const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+
+    expect(session.status).toBe('exited');
+    expect(session.exitCode).toBe(7);
+    expect(session.outputSnapshot).toBe('before exit');
+    expect(exits).toEqual([{ sessionId: session.sessionId, exitCode: 7 }]);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(mgr.list()).toHaveLength(0);
+  });
+
   it('write() forwards data to bash stdin in spawn mode', () => {
     const child = createFakeChild();
     const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;

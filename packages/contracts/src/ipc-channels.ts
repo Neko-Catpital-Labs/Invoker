@@ -277,6 +277,8 @@ export interface TerminalSessionDescriptor {
   mode: 'spawn' | 'attached';
   attached: boolean;
   createdAt: string;
+  /** Bounded recent terminal output used to seed late-subscribing renderer panes. */
+  outputSnapshot?: string;
 }
 
 export interface TerminalOutputEvent {
