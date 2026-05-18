@@ -173,6 +173,7 @@ import {
   resolveActionDiagnosticsStallThresholdMs,
 } from './action-graph-diagnostics.js';
 import { registerReadOnlyIpcHandlers } from './ipc-read-handlers.js';
+import { startReviewGateStatusWorker, type ReviewGateStatusWorker } from './review-gate-status-worker.js';
 
 function isTaskInFlightForForcedStop(task: TaskState): boolean {
   return task.status === 'running'
@@ -723,6 +724,7 @@ if (isHeadless) {
     }
 
     let exitCode = 0;
+    let reviewGateStatusWorker: ReviewGateStatusWorker | null = null;
     try {
       // Standalone mode: initialize services and run headless
       await initServices({
@@ -1024,7 +1026,6 @@ if (isHeadless) {
               logger.error(`headless.resume: executeTasks failed for "${workflowId}": ${err}`, { module: 'ipc-delegate' });
             });
           }
-          executor.resumeMergeGatePolling();
           const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
           return { workflowId, tasks };
         };
@@ -1121,6 +1122,12 @@ if (isHeadless) {
           });
           return { ok: true };
         });
+
+        reviewGateStatusWorker = startReviewGateStatusWorker({
+          ownerMode: true,
+          getTaskExecutor: createStandaloneTaskExecutor,
+          logger,
+        });
       }
 
       await runHeadless(cliArgs, headlessDeps);
@@ -1128,6 +1135,7 @@ if (isHeadless) {
       process.stderr.write(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
       exitCode = 1;
     } finally {
+      reviewGateStatusWorker?.stop();
       if (ownsHeadlessShutdown && executorRegistry) {
         await Promise.all(executorRegistry.getAll().map(f => f.destroyAll().catch(() => undefined)));
       }
@@ -1186,6 +1194,7 @@ function createEmbeddedTerminalBackendFromConfig(
   const agentRegistry = registerBuiltinAgents();
   let mainWindow: BrowserWindow | null = null;
   let taskExecutor: TaskRunner | null = null;
+  let reviewGateStatusWorker: ReviewGateStatusWorker | null = null;
   let apiServer: ApiServer | null = null;
   let ownerMode = true;
   const taskHandles = new Map<string, { handle: ExecutorHandle; executor: Executor }>();
@@ -1805,7 +1814,6 @@ function createEmbeddedTerminalBackendFromConfig(
         logger.error(`headless.resume: executeTasks failed for "${workflowId}": ${err}`, { module: 'ipc-delegate' });
       });
     }
-    requireTaskExecutor().resumeMergeGatePolling();
     const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
     return { workflowId, tasks };
   }
@@ -2726,6 +2734,12 @@ function createEmbeddedTerminalBackendFromConfig(
 
     bootstrapInitialWorkflowState();
 
+    reviewGateStatusWorker = startReviewGateStatusWorker({
+      ownerMode,
+      getTaskExecutor: requireTaskExecutor,
+      logger,
+    });
+
     // Relaunch orphaned running tasks and start any pending-but-ready tasks.
     if (!ownerMode) {
       logger.info('follower mode startup: auto-run and orphan relaunch disabled', { module: 'init' });
@@ -2736,7 +2750,6 @@ function createEmbeddedTerminalBackendFromConfig(
       if (allStarted.length > 0) {
         requireTaskExecutor().executeTasks(allStarted);
       }
-      requireTaskExecutor().resumeMergeGatePolling();
     }
 
     const dbPath = path.join(resolveInvokerHomeRoot(), 'invoker.db');
@@ -2890,7 +2903,6 @@ function createEmbeddedTerminalBackendFromConfig(
       if (allStarted.length > 0) {
         void requireTaskExecutor().executeTasks(allStarted);
       }
-      requireTaskExecutor().resumeMergeGatePolling();
       return { workflow: workflows[0], taskCount: tasks.length, startedCount: allStarted.length };
     });
 
@@ -3897,6 +3909,8 @@ function createEmbeddedTerminalBackendFromConfig(
 
     try {
       if (apiServer) await apiServer.close().catch(() => {});
+      reviewGateStatusWorker?.stop();
+      reviewGateStatusWorker = null;
       if (dbPollInterval) clearInterval(dbPollInterval);
       if (activityPollInterval) clearInterval(activityPollInterval);
       if (uiPerfLogInterval) clearInterval(uiPerfLogInterval);
