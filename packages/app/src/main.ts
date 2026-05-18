@@ -85,7 +85,13 @@ import {
 import type { Logger } from '@invoker/contracts';
 import { FileAndDbLogger } from './logger.js';
 import type { TaskOutputData } from './types.js';
-import { loadConfig, resolveSecretsFilePath, type InvokerConfig } from './config.js';
+import {
+  loadConfig,
+  resolveEmbeddedTerminalBackendConfig,
+  resolveSecretsFilePath,
+  type EmbeddedTerminalBackendConfig,
+  type InvokerConfig,
+} from './config.js';
 import {
   DEFAULT_WORKTREE_MAX_CONCURRENCY,
   resolveEffectiveMaxConcurrency,
@@ -134,7 +140,11 @@ import {
 } from './workflow-actions.js';
 import { spawn, execSync } from 'node:child_process';
 import { resolveTaskTerminalSpec } from './open-terminal-for-task.js';
-import { EmbeddedTerminalManager } from './embedded-terminal-manager.js';
+import {
+  createBashTerminalBackend,
+  EmbeddedTerminalManager,
+  type EmbeddedTerminalBackend,
+} from './embedded-terminal-manager.js';
 import { collectSystemDiagnostics } from './system-diagnostics.js';
 import { installBundledSkills, resolveBundledSkillsStatus } from './bundled-skills.js';
 import { createRequire } from 'node:module';
@@ -1165,6 +1175,13 @@ if (isHeadless) {
 // GUI MODE
 // ══════════════════════════════════════════════════════════════
 
+function createEmbeddedTerminalBackendFromConfig(
+  backend: EmbeddedTerminalBackendConfig,
+): EmbeddedTerminalBackend {
+  if (backend === 'bash') return createBashTerminalBackend();
+  throw new Error('Embedded terminal PTY backend requested, but the PTY backend is not installed.');
+}
+
   function setupGuiMode(): void {
   const agentRegistry = registerBuiltinAgents();
   let mainWindow: BrowserWindow | null = null;
@@ -1172,7 +1189,9 @@ if (isHeadless) {
   let apiServer: ApiServer | null = null;
   let ownerMode = true;
   const taskHandles = new Map<string, { handle: ExecutorHandle; executor: Executor }>();
-  const embeddedTerminalManager = new EmbeddedTerminalManager();
+  const embeddedTerminalManager = new EmbeddedTerminalManager({
+    backend: createEmbeddedTerminalBackendFromConfig(resolveEmbeddedTerminalBackendConfig(invokerConfig)),
+  });
   embeddedTerminalManager.on('output', (payload) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('invoker:terminal-output', payload);

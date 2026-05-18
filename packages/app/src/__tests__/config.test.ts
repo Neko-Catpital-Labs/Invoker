@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { loadConfig } from '../config.js';
+import { loadConfig, resolveEmbeddedTerminalBackendConfig } from '../config.js';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -216,4 +216,37 @@ describe('loadConfig', () => {
     expect(config.defaultPoolId).toBe('mixed-local-ssh');
   });
 
+});
+
+describe('resolveEmbeddedTerminalBackendConfig', () => {
+  it('defaults GUI embedded terminals to the bash backend', () => {
+    expect(resolveEmbeddedTerminalBackendConfig({}, {})).toBe('bash');
+  });
+
+  it('reads the configured GUI embedded terminal backend', () => {
+    expect(resolveEmbeddedTerminalBackendConfig({
+      terminal: { embeddedBackend: 'pty' },
+    }, {})).toBe('pty');
+  });
+
+  it('lets the environment override config', () => {
+    expect(resolveEmbeddedTerminalBackendConfig(
+      { terminal: { embeddedBackend: 'pty' } },
+      { INVOKER_EMBEDDED_TERMINAL_BACKEND: 'bash' },
+    )).toBe('bash');
+  });
+
+  it('normalizes backend values', () => {
+    expect(resolveEmbeddedTerminalBackendConfig(
+      {},
+      { INVOKER_EMBEDDED_TERMINAL_BACKEND: ' PTY ' },
+    )).toBe('pty');
+  });
+
+  it('rejects invalid backend values', () => {
+    expect(() => resolveEmbeddedTerminalBackendConfig(
+      {},
+      { INVOKER_EMBEDDED_TERMINAL_BACKEND: 'external' },
+    )).toThrow(/Invalid embedded terminal backend/);
+  });
 });
