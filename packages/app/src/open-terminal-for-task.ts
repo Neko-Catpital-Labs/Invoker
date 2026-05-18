@@ -267,6 +267,14 @@ export function resolveTaskTerminalSpec(
     return { ok: false, reason };
   }
 
+  if (!repairedMeta.agentSessionId && repairedMeta.workspacePath && spec.cwd === repairedMeta.workspacePath) {
+    const opensHostWorkspace = repairedMeta.runnerKind !== 'ssh' && repairedMeta.runnerKind !== 'docker';
+    if (opensHostWorkspace) {
+      spec = { cwd: repairedMeta.workspacePath };
+      termLogger?.info('task has no persisted agent session; opening workspace shell');
+    }
+  }
+
   if (hostWorkspaceRunnerKinds.includes(repairedMeta.runnerKind) && !spec.cwd) {
     const reason = [
       `Task "${taskId}" has no workspace path (executor=${repairedMeta.runnerKind}).`,

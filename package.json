@@ -4,7 +4,7 @@
   "version": "0.0.1",
   "description": "Auditable multi-agent orchestration with a mutating action graph",
   "scripts": {
-    "postinstall": "node scripts/electron.cjs --install-only",
+    "postinstall": "node scripts/electron.cjs --install-only && node scripts/verify-node-pty-install.cjs",
     "test": "bash scripts/test-plan-to-invoker-skill.sh && bash scripts/workspace-test.sh",
     "test:high-resource": "bash scripts/test-plan-to-invoker-skill.sh && INVOKER_VITEST_HIGH_RESOURCE=1 bash scripts/workspace-test.sh",
     "test:low-resource": "pnpm run test",
@@ -43,7 +43,8 @@
   },
   "pnpm": {
     "onlyBuiltDependencies": [
-      "electron"
+      "electron",
+      "node-pty"
     ]
   },
   "devDependencies": {

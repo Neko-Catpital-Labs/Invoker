@@ -3818,13 +3818,20 @@ if (isHeadless) {
       if (!resolved.ok) {
         return { opened: false, reason: resolved.reason };
       }
-      const session = embeddedTerminalManager.openOrReuse({
-        taskId,
-        spec: resolved.spec,
-        cwd: resolved.cwd,
-        attach: liveHandle ? { handle: liveHandle.handle, executor: liveHandle.executor } : undefined,
-      });
-      return { opened: true, session };
+      try {
+        const session = embeddedTerminalManager.openOrReuse({
+          taskId,
+          spec: resolved.spec,
+          cwd: resolved.cwd,
+          agentName: resolved.meta.agentSessionId ? resolved.meta.executionAgent : undefined,
+          attach: liveHandle ? { handle: liveHandle.handle, executor: liveHandle.executor } : undefined,
+        });
+        return { opened: true, session };
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        logger.error(`embedded terminal failed: ${reason}`, { module: 'open-terminal' });
+        return { opened: false, reason: `Cannot open embedded terminal: ${reason}` };
+      }
     });
 
     ipcMain.handle('invoker:terminal-list', async () => {
