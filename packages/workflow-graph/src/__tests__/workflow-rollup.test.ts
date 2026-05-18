@@ -74,4 +74,30 @@ describe('workflow rollup', () => {
 
     expect(rollup.status).toBe('closed');
   });
+
+  it('closed is terminal-neutral: not "completed" and not "failed" when paired with completed siblings', () => {
+    const rollup = computeWorkflowRollupFromSummaries([
+      task('done', 'completed'),
+      task('shut', 'closed'),
+    ]);
+
+    expect(rollup.status).toBe('closed');
+    expect(rollup.status).not.toBe('completed');
+    expect(rollup.status).not.toBe('failed');
+    expect(rollup.countsByStatus.closed).toBe(1);
+    expect(rollup.countsByStatus.completed).toBe(1);
+    expect(rollup.countsByStatus.failed).toBe(0);
+  });
+
+  it('failed wins over closed so closed never masks a real execution failure', () => {
+    const rollup = computeWorkflowRollupFromSummaries([
+      task('done', 'completed'),
+      task('shut', 'closed'),
+      task('broke', 'failed'),
+    ]);
+
+    expect(rollup.status).toBe('failed');
+    expect(rollup.countsByStatus.failed).toBe(1);
+    expect(rollup.countsByStatus.closed).toBe(1);
+  });
 });

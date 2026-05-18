@@ -2097,4 +2097,77 @@ describe('Orchestrator', () => {
     });
   });
 
+  // Closed-unmerged external-review PRs land the upstream merge gate
+  // in `closed`. Neither gate policy treats that as a satisfied
+  // prerequisite — the downstream stays blocked instead of cascading
+  // off a review that was abandoned.
+  describe('external dependency on a closed upstream merge gate', () => {
+    function loadUpstreamAndDownstream(gatePolicy: 'completed' | 'review_ready') {
+      orchestrator.loadPlan({
+        name: `upstream-${gatePolicy}`,
+        tasks: [{ id: 'verify', description: 'upstream prerequisite' }],
+      });
+      const prereqTaskId = sid(orchestrator, 0, 'verify');
+      const prereqWfId = prereqTaskId.split('/')[0]!;
+      const prereqMergeId = `__merge__${prereqWfId}`;
+
+      orchestrator.loadPlan({
+        name: `downstream-${gatePolicy}`,
+        tasks: [
+          {
+            id: 'leaf',
+            description: `leaf waits on upstream merge gate (${gatePolicy} policy)`,
+            externalDependencies: [{ workflowId: prereqWfId, gatePolicy }],
+          },
+        ],
+      });
+      const leafId = sid(orchestrator, 1, 'leaf');
+
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(makeResponse({ actionId: prereqTaskId, status: 'completed' }));
+
+      return { prereqMergeId, leafId };
+    }
+
+    it('does not satisfy the default completed gate policy when the upstream merge gate is closed', () => {
+      const { prereqMergeId, leafId } = loadUpstreamAndDownstream('completed');
+
+      // Simulate the TaskRunner persisting a closed-unmerged PR
+      // transition on the upstream merge gate.
+      persistence.updateTask(prereqMergeId, { status: 'closed' });
+
+      const started = orchestrator.startExecution();
+
+      expect(started.map((t) => t.id)).not.toContain(leafId);
+      expect(orchestrator.getTask(leafId)!.status).toBe('pending');
+      expect(orchestrator.getTask(prereqMergeId)!.status).toBe('closed');
+    });
+
+    it('does not satisfy the review_ready gate policy when the upstream merge gate is closed', () => {
+      const { prereqMergeId, leafId } = loadUpstreamAndDownstream('review_ready');
+
+      persistence.updateTask(prereqMergeId, { status: 'closed' });
+
+      const started = orchestrator.startExecution();
+
+      expect(started.map((t) => t.id)).not.toContain(leafId);
+      expect(orchestrator.getTask(leafId)!.status).toBe('pending');
+      expect(orchestrator.getTask(prereqMergeId)!.status).toBe('closed');
+    });
+
+    it('would unblock the same leaf when the upstream merge gate is review_ready under review_ready policy (control)', () => {
+      const { prereqMergeId, leafId } = loadUpstreamAndDownstream('review_ready');
+
+      // review_ready policy explicitly allows review_ready merge
+      // gates to satisfy the external dep. Closed must not share
+      // this treatment, hence the pair of negative tests above.
+      orchestrator.setTaskReviewReady(prereqMergeId);
+
+      const started = orchestrator.startExecution();
+
+      expect(started.map((t) => t.id)).toContain(leafId);
+      expect(orchestrator.getTask(leafId)!.status).toBe('running');
+    });
+  });
+
 });
