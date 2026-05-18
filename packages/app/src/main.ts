@@ -85,7 +85,12 @@ import {
 import type { Logger } from '@invoker/contracts';
 import { FileAndDbLogger } from './logger.js';
 import type { TaskOutputData } from './types.js';
-import { loadConfig, resolveSecretsFilePath, type InvokerConfig } from './config.js';
+import {
+  loadConfig,
+  resolveEmbeddedTerminalBackendConfig,
+  resolveSecretsFilePath,
+  type InvokerConfig,
+} from './config.js';
 import {
   DEFAULT_WORKTREE_MAX_CONCURRENCY,
   resolveEffectiveMaxConcurrency,
@@ -1172,7 +1177,9 @@ if (isHeadless) {
   let apiServer: ApiServer | null = null;
   let ownerMode = true;
   const taskHandles = new Map<string, { handle: ExecutorHandle; executor: Executor }>();
-  const embeddedTerminalManager = new EmbeddedTerminalManager();
+  const embeddedTerminalManager = new EmbeddedTerminalManager({
+    backend: resolveEmbeddedTerminalBackendConfig(invokerConfig),
+  });
   embeddedTerminalManager.on('output', (payload) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('invoker:terminal-output', payload);

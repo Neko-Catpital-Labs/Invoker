@@ -2,7 +2,7 @@
  * Embedded terminal manager unit + integration tests.
  *
  * Covers:
- *   - openOrReuse returns the same sessionId for the same taskId
+ *   - openOrReuse returns the same sessionId for the same resolved terminal target
  *   - spawn mode wires stdout/stderr → output events and exit
  *   - attached mode forwards executor.onOutput → output events and
  *     executor.sendInput → write()
@@ -19,7 +19,7 @@ import { mkdirSync, rmSync } from 'node:fs';
 
 import {
   EmbeddedTerminalManager,
-  type SpawnFn,
+  type BashSpawnFn,
 } from '../embedded-terminal-manager.js';
 import { resolveTaskTerminalSpec } from '../open-terminal-for-task.js';
 import {
@@ -37,13 +37,14 @@ function createFakeChild() {
     stdin: { write: (data: string) => boolean };
     kill: () => void;
     killed: boolean;
+    __written: string[];
   };
   ee.stdout = new EventEmitter();
   ee.stderr = new EventEmitter();
-  const written: string[] = [];
+  ee.__written = [];
   ee.stdin = {
     write: (data: string) => {
-      written.push(data);
+      ee.__written.push(data);
       return true;
     },
   };
@@ -51,15 +52,14 @@ function createFakeChild() {
   ee.kill = () => {
     ee.killed = true;
   };
-  (ee as unknown as { __written: string[] }).__written = written;
   return ee;
 }
 
 describe('EmbeddedTerminalManager', () => {
-  it('opens a spawn-mode session and returns a descriptor', () => {
+  it('opens a spawn-mode session through the default bash backend and returns a descriptor', () => {
     const child = createFakeChild();
-    const spawnFn = vi.fn(() => child as unknown as ReturnType<SpawnFn>) as unknown as SpawnFn;
-    const mgr = new EmbeddedTerminalManager({ spawnFn });
+    const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+    const mgr = new EmbeddedTerminalManager({ bashSpawnFn });
 
     const spec: TerminalSpec = { cwd: '/tmp/wt-1' };
     const session = mgr.openOrReuse({ taskId: 'task-1', spec, cwd: '/tmp/wt-1' });
@@ -70,26 +70,80 @@ describe('EmbeddedTerminalManager', () => {
     expect(session.attached).toBe(false);
     expect(session.cwd).toBe('/tmp/wt-1');
     expect(typeof session.sessionId).toBe('string');
-    expect(spawnFn).toHaveBeenCalledTimes(1);
+    expect(bashSpawnFn).toHaveBeenCalledTimes(1);
   });
 
-  it('reopening the same task returns the same session id', () => {
+  it('reopening the same task and terminal target returns the same session id', () => {
     const child = createFakeChild();
-    const spawnFn = vi.fn(() => child as unknown as ReturnType<SpawnFn>) as unknown as SpawnFn;
-    const mgr = new EmbeddedTerminalManager({ spawnFn });
+    const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+    const mgr = new EmbeddedTerminalManager({ bashSpawnFn });
 
     const first = mgr.openOrReuse({ taskId: 'task-1', spec: {}, cwd: '/tmp' });
     const second = mgr.openOrReuse({ taskId: 'task-1', spec: {}, cwd: '/tmp' });
 
     expect(second.sessionId).toBe(first.sessionId);
-    expect(spawnFn).toHaveBeenCalledTimes(1);
+    expect(bashSpawnFn).toHaveBeenCalledTimes(1);
     expect(mgr.list()).toHaveLength(1);
   });
 
-  it('fans stdout and stderr through the output event', () => {
+  it('opens a distinct session when the same task resolves to a different terminal target', () => {
+    const child1 = createFakeChild();
+    const child2 = createFakeChild();
+    const child3 = createFakeChild();
+    const bashSpawnFn = vi
+      .fn()
+      .mockReturnValueOnce(child1)
+      .mockReturnValueOnce(child2)
+      .mockReturnValueOnce(child3) as unknown as BashSpawnFn;
+    const mgr = new EmbeddedTerminalManager({ bashSpawnFn });
+
+    const first = mgr.openOrReuse({
+      taskId: 'task-1',
+      spec: { command: 'claude', args: ['--resume', 'session-a'], cwd: '/tmp/wt-a' },
+      cwd: '/tmp/wt-a',
+    });
+    const changedSession = mgr.openOrReuse({
+      taskId: 'task-1',
+      spec: { command: 'claude', args: ['--resume', 'session-b'], cwd: '/tmp/wt-a' },
+      cwd: '/tmp/wt-a',
+    });
+    const changedWorkspace = mgr.openOrReuse({
+      taskId: 'task-1',
+      spec: { command: 'claude', args: ['--resume', 'session-b'], cwd: '/tmp/wt-b' },
+      cwd: '/tmp/wt-b',
+    });
+
+    expect(changedSession.sessionId).not.toBe(first.sessionId);
+    expect(changedWorkspace.sessionId).not.toBe(changedSession.sessionId);
+    expect(bashSpawnFn).toHaveBeenCalledTimes(3);
+    expect(mgr.list()).toHaveLength(3);
+  });
+
+  it('preserves the resolved command, args, and cwd when spawning the bash backend', () => {
     const child = createFakeChild();
-    const spawnFn = vi.fn(() => child as unknown as ReturnType<SpawnFn>) as unknown as SpawnFn;
-    const mgr = new EmbeddedTerminalManager({ spawnFn });
+    const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+    const mgr = new EmbeddedTerminalManager({ bashSpawnFn });
+
+    const session = mgr.openOrReuse({
+      taskId: 'task-1',
+      spec: { command: 'codex', args: ['resume', 'codex-session-1'], cwd: '/tmp/wt' },
+      cwd: '/tmp/wt',
+    });
+
+    expect(session.command).toBe('codex');
+    expect(session.args).toEqual(['resume', 'codex-session-1']);
+    expect(session.cwd).toBe('/tmp/wt');
+    expect(bashSpawnFn).toHaveBeenCalledWith(
+      'codex',
+      ['resume', 'codex-session-1'],
+      expect.objectContaining({ cwd: '/tmp/wt', stdio: ['pipe', 'pipe', 'pipe'] }),
+    );
+  });
+
+  it('fans bash stdout and stderr through the output event', () => {
+    const child = createFakeChild();
+    const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+    const mgr = new EmbeddedTerminalManager({ bashSpawnFn });
     const events: Array<{ sessionId: string; data: string }> = [];
     mgr.on('output', (e) => events.push({ sessionId: e.sessionId, data: e.data }));
 
@@ -101,22 +155,33 @@ describe('EmbeddedTerminalManager', () => {
     expect(events.every((e) => e.sessionId === session.sessionId)).toBe(true);
   });
 
-  it('write() forwards data to child stdin in spawn mode', () => {
+  it('write() forwards data to bash stdin in spawn mode', () => {
     const child = createFakeChild();
-    const spawnFn = vi.fn(() => child as unknown as ReturnType<SpawnFn>) as unknown as SpawnFn;
-    const mgr = new EmbeddedTerminalManager({ spawnFn });
+    const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+    const mgr = new EmbeddedTerminalManager({ bashSpawnFn });
     const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
 
     const res = mgr.write(session.sessionId, 'ls\n');
 
     expect(res.ok).toBe(true);
-    expect((child as unknown as { __written: string[] }).__written).toEqual(['ls\n']);
+    expect(child.__written).toEqual(['ls\n']);
   });
 
-  it('emits exit and removes session when child exits', () => {
+  it('resize() is accepted by the bash backend as a no-op', () => {
     const child = createFakeChild();
-    const spawnFn = vi.fn(() => child as unknown as ReturnType<SpawnFn>) as unknown as SpawnFn;
-    const mgr = new EmbeddedTerminalManager({ spawnFn });
+    const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+    const mgr = new EmbeddedTerminalManager({ bashSpawnFn });
+    const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+
+    const res = mgr.resize(session.sessionId, 120, 40);
+
+    expect(res.ok).toBe(true);
+  });
+
+  it('emits exit and removes session when the bash child exits', () => {
+    const child = createFakeChild();
+    const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+    const mgr = new EmbeddedTerminalManager({ bashSpawnFn });
     const exits: Array<{ sessionId: string; exitCode?: number }> = [];
     mgr.on('exit', (e) => exits.push({ sessionId: e.sessionId, exitCode: e.exitCode }));
 
@@ -130,11 +195,11 @@ describe('EmbeddedTerminalManager', () => {
   it('after exit, openOrReuse spawns a fresh session', () => {
     const child1 = createFakeChild();
     const child2 = createFakeChild();
-    const spawnFn = vi
+    const bashSpawnFn = vi
       .fn()
       .mockReturnValueOnce(child1)
-      .mockReturnValueOnce(child2) as unknown as SpawnFn;
-    const mgr = new EmbeddedTerminalManager({ spawnFn });
+      .mockReturnValueOnce(child2) as unknown as BashSpawnFn;
+    const mgr = new EmbeddedTerminalManager({ bashSpawnFn });
 
     const a = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
     child1.emit('exit', 0);
@@ -143,10 +208,10 @@ describe('EmbeddedTerminalManager', () => {
     expect(b.sessionId).not.toBe(a.sessionId);
   });
 
-  it('close() kills the child and clears the session', () => {
+  it('close() kills the bash child and clears the session', () => {
     const child = createFakeChild();
-    const spawnFn = vi.fn(() => child as unknown as ReturnType<SpawnFn>) as unknown as SpawnFn;
-    const mgr = new EmbeddedTerminalManager({ spawnFn });
+    const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+    const mgr = new EmbeddedTerminalManager({ bashSpawnFn });
     const exits: Array<{ sessionId: string }> = [];
     mgr.on('exit', (e) => exits.push({ sessionId: e.sessionId }));
 
@@ -176,9 +241,9 @@ describe('EmbeddedTerminalManager', () => {
     };
     const handle: ExecutorHandle = { executionId: 'exec-1', taskId: 'task-live' };
     const mgr = new EmbeddedTerminalManager({
-      // spawnFn is irrelevant for attached mode; supply a guard.
-      spawnFn: () => {
-        throw new Error('spawn should not be called in attached mode');
+      // backend spawn is irrelevant for attached mode; supply a guard.
+      bashSpawnFn: () => {
+        throw new Error('bash should not be spawned in attached mode');
       },
     });
     const events: string[] = [];
@@ -209,7 +274,7 @@ describe('EmbeddedTerminalManager', () => {
   });
 
   it('write() rejects unknown sessions', () => {
-    const mgr = new EmbeddedTerminalManager({ spawnFn: () => createFakeChild() as never });
+    const mgr = new EmbeddedTerminalManager({ bashSpawnFn: () => createFakeChild() });
     const res = mgr.write('not-a-session', 'x');
     expect(res).toEqual({ ok: false, reason: expect.stringContaining('Unknown session') });
   });
@@ -250,7 +315,7 @@ describe('GUI open-terminal embedded route', () => {
 
       const child = createFakeChild();
       const mgr = new EmbeddedTerminalManager({
-        spawnFn: () => child as unknown as ReturnType<SpawnFn>,
+        bashSpawnFn: () => child,
       });
 
       const session = mgr.openOrReuse({

@@ -66,6 +66,11 @@ export interface InvokerConfig {
   maxConcurrency?: number;
   /** Browser executable for opening external URLs (e.g. "firefox"). Default: Chrome. */
   browser?: string;
+  /** GUI embedded terminal options. Headless open-terminal ignores this. */
+  terminal?: {
+    /** Backend for GUI embedded spawned terminals. Default: bash. */
+    embeddedBackend?: 'bash' | 'pty';
+  };
   /** Cloudflare R2 (or S3-compatible) storage for PR images. Env var fallback: R2_*. */
   imageStorage?: {
     provider: 'r2';
@@ -229,6 +234,21 @@ export function loadConfig(): InvokerConfig {
     return readJsonSafe(process.env.INVOKER_REPO_CONFIG_PATH);
   }
   return readJsonSafe(join(homedir(), '.invoker', 'config.json'));
+}
+
+export type EmbeddedTerminalBackendConfig = 'bash' | 'pty';
+
+export function resolveEmbeddedTerminalBackendConfig(
+  config: InvokerConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): EmbeddedTerminalBackendConfig {
+  const rawValue = env.INVOKER_EMBEDDED_TERMINAL_BACKEND ?? config.terminal?.embeddedBackend ?? 'bash';
+  const raw = typeof rawValue === 'string' ? rawValue : String(rawValue);
+  const value = raw.trim().toLowerCase();
+  if (value === 'bash' || value === 'pty') return value;
+  throw new Error(
+    `Invalid embedded terminal backend "${raw}". Expected "bash" or "pty".`,
+  );
 }
 
 /**
