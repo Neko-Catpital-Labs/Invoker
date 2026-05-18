@@ -8,6 +8,7 @@
 
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
 import {
   spawn as nodeSpawn,
   type ChildProcessWithoutNullStreams,
@@ -21,6 +22,29 @@ import type {
 import type { Executor, ExecutorHandle, TerminalSpec } from '@invoker/execution-engine';
 
 export type EmbeddedTerminalBackendName = 'bash' | 'pty';
+
+export interface PtyForkOptionsLike {
+  name: string;
+  cols: number;
+  rows: number;
+  cwd: string;
+  env: Record<string, string | undefined>;
+}
+
+export interface PtyLike {
+  onData(listener: (data: string) => void): { dispose: () => void };
+  onExit(listener: (event: { exitCode: number }) => void): { dispose: () => void };
+  write(data: string): void;
+  resize(cols: number, rows: number): void;
+  kill(): void;
+}
+
+/** Factory used by the optional PTY backend. Tests can supply a fake. */
+export type PtySpawnFn = (
+  command: string,
+  args: readonly string[],
+  options: PtyForkOptionsLike,
+) => PtyLike;
 
 /** Factory used by the default bash/pipe backend. Tests can supply a fake. */
 export type BashSpawnFn = (
@@ -49,6 +73,11 @@ export interface EmbeddedTerminalBackend {
 export interface BashTerminalBackendOptions {
   /** Override the child_process.spawn function for this Bash backend instance. */
   spawnFn?: BashSpawnFn;
+}
+
+export interface PtyTerminalBackendOptions {
+  /** Override the node-pty spawn function for this PTY backend instance. */
+  spawnFn?: PtySpawnFn;
 }
 
 /** Optional attach handle pair routing a session through a live executor. */
@@ -91,7 +120,7 @@ interface AttachedSessionState extends BaseSessionState {
 type SessionState = SpawnSessionState | AttachedSessionState;
 
 export interface EmbeddedTerminalManagerOptions {
-  /** Single backend used for GUI spawned sessions. Defaults to the Bash/pipe backend. */
+  /** Single backend used for GUI spawned sessions. Defaults to the PTY backend. */
   backend?: EmbeddedTerminalBackend;
   /** Default shell for `spawn`-mode sessions when the spec has no command. */
   defaultShell?: string;
@@ -159,6 +188,57 @@ export function createBashTerminalBackend(
   options: BashTerminalBackendOptions = {},
 ): EmbeddedTerminalBackend {
   return new BashTerminalBackend(options.spawnFn);
+}
+
+class PtyTerminalBackend implements EmbeddedTerminalBackend {
+  readonly name = 'pty' as const;
+  private readonly spawnFn: PtySpawnFn;
+
+  constructor(spawnFn?: PtySpawnFn) {
+    this.spawnFn = spawnFn ?? loadNodePtySpawn();
+  }
+
+  spawn(opts: Parameters<EmbeddedTerminalBackend['spawn']>[0]): SpawnedTerminalProcess {
+    const command = opts.spec.command ?? opts.defaultShell;
+    const args = opts.spec.command ? opts.spec.args ?? [] : [];
+    const pty = this.spawnFn(command, args, {
+      name: 'xterm-256color',
+      cols: 80,
+      rows: 24,
+      cwd: opts.cwd,
+      env: { ...process.env, TERM: process.env.TERM ?? 'xterm-256color' },
+    });
+    const dataDisposable = pty.onData(opts.emitOutput);
+    const exitDisposable = pty.onExit(({ exitCode }) => opts.emitExit(exitCode));
+
+    return {
+      write(data: string) {
+        pty.write(data);
+      },
+      resize(cols: number, rows: number) {
+        pty.resize(cols, rows);
+      },
+      close() {
+        try {
+          dataDisposable.dispose();
+          exitDisposable.dispose();
+        } catch {
+          /* listener disposal is best-effort */
+        }
+        try {
+          pty.kill();
+        } catch {
+          /* already dead */
+        }
+      },
+    };
+  }
+}
+
+export function createPtyTerminalBackend(
+  options: PtyTerminalBackendOptions = {},
+): EmbeddedTerminalBackend {
+  return new PtyTerminalBackend(options.spawnFn);
 }
 
 export class EmbeddedTerminalManager extends EventEmitter {
@@ -330,7 +410,23 @@ export class EmbeddedTerminalManager extends EventEmitter {
 
 function resolveBackend(options: EmbeddedTerminalManagerOptions): EmbeddedTerminalBackend {
   if (options.backend) return options.backend;
-  return createBashTerminalBackend();
+  return createPtyTerminalBackend();
+}
+
+function loadNodePtySpawn(): PtySpawnFn {
+  try {
+    const nodeRequire = createRequire(__filename);
+    const mod = nodeRequire('node-pty') as { spawn?: PtySpawnFn };
+    if (typeof mod.spawn !== 'function') {
+      throw new Error('node-pty does not export spawn()');
+    }
+    return mod.spawn;
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Embedded terminal PTY backend requested, but node-pty is unavailable or not built: ${detail}`,
+    );
+  }
 }
 
 function buildTargetKey(opts: OpenSessionOptions): string {
