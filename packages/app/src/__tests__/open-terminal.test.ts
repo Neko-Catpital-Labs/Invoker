@@ -1327,6 +1327,12 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
     vi.mocked(existsSync).mockReturnValue(true);
     const { resolveTaskTerminalSpec } = await import('../open-terminal-for-task.js');
     const agentRegistry = registerBuiltinAgents();
+    vi.spyOn(agentRegistry, 'getSessionDriver').mockReturnValue({
+      processOutput: () => '',
+      loadSession: () => 'stored codex transcript',
+      parseSession: () => [],
+      inspectSession: () => ({ state: 'finished' }),
+    });
     const executorRegistry = new ExecutorRegistry();
     executorRegistry.register('worktree', new WorktreeExecutor({
       worktreeBaseDir: tmpdir(),
