@@ -129,9 +129,6 @@ export class MergeGateExecutor extends BaseExecutor<MergeGateEntry> {
           execution: result.taskChanges.execution,
         });
       }
-      if (result.reviewIdForPolling && result.workflowIdForPolling) {
-        this.host.startPrPolling(task.id, result.reviewIdForPolling, result.workflowIdForPolling);
-      }
       this.emitOutput(handle.executionId, `[merge] Merge gate action finished: ${task.id} status=${result.response.status}\n`);
       this.emitComplete(handle.executionId, this.withAttempt(entry.request, result.response));
     } catch (err) {
