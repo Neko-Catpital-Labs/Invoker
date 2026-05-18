@@ -85,7 +85,13 @@ import {
 import type { Logger } from '@invoker/contracts';
 import { FileAndDbLogger } from './logger.js';
 import type { TaskOutputData } from './types.js';
-import { loadConfig, resolveSecretsFilePath, type InvokerConfig } from './config.js';
+import {
+  loadConfig,
+  resolveEmbeddedTerminalBackendConfig,
+  resolveSecretsFilePath,
+  type EmbeddedTerminalBackendConfig,
+  type InvokerConfig,
+} from './config.js';
 import {
   DEFAULT_WORKTREE_MAX_CONCURRENCY,
   resolveEffectiveMaxConcurrency,
@@ -134,7 +140,12 @@ import {
 } from './workflow-actions.js';
 import { spawn, execSync } from 'node:child_process';
 import { resolveTaskTerminalSpec } from './open-terminal-for-task.js';
-import { EmbeddedTerminalManager } from './embedded-terminal-manager.js';
+import {
+  createBashTerminalBackend,
+  createPtyTerminalBackend,
+  EmbeddedTerminalManager,
+  type EmbeddedTerminalBackend,
+} from './embedded-terminal-manager.js';
 import { collectSystemDiagnostics } from './system-diagnostics.js';
 import { installBundledSkills, resolveBundledSkillsStatus } from './bundled-skills.js';
 import { createRequire } from 'node:module';
@@ -163,6 +174,7 @@ import {
   resolveActionDiagnosticsStallThresholdMs,
 } from './action-graph-diagnostics.js';
 import { registerReadOnlyIpcHandlers } from './ipc-read-handlers.js';
+import { startReviewGateStatusWorker, type ReviewGateStatusWorker } from './review-gate-status-worker.js';
 
 function isTaskInFlightForForcedStop(task: TaskState): boolean {
   return task.status === 'running'
@@ -713,6 +725,7 @@ if (isHeadless) {
     }
 
     let exitCode = 0;
+    let reviewGateStatusWorker: ReviewGateStatusWorker | null = null;
     try {
       // Standalone mode: initialize services and run headless
       await initServices({
@@ -1014,7 +1027,6 @@ if (isHeadless) {
               logger.error(`headless.resume: executeTasks failed for "${workflowId}": ${err}`, { module: 'ipc-delegate' });
             });
           }
-          executor.resumeMergeGatePolling();
           const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
           return { workflowId, tasks };
         };
@@ -1111,6 +1123,12 @@ if (isHeadless) {
           });
           return { ok: true };
         });
+
+        reviewGateStatusWorker = startReviewGateStatusWorker({
+          ownerMode: true,
+          getTaskExecutor: createStandaloneTaskExecutor,
+          logger,
+        });
       }
 
       await runHeadless(cliArgs, headlessDeps);
@@ -1118,6 +1136,7 @@ if (isHeadless) {
       process.stderr.write(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
       exitCode = 1;
     } finally {
+      reviewGateStatusWorker?.stop();
       if (ownsHeadlessShutdown && executorRegistry) {
         await Promise.all(executorRegistry.getAll().map(f => f.destroyAll().catch(() => undefined)));
       }
@@ -1165,14 +1184,24 @@ if (isHeadless) {
 // GUI MODE
 // ══════════════════════════════════════════════════════════════
 
+function createEmbeddedTerminalBackendFromConfig(
+  backend: EmbeddedTerminalBackendConfig,
+): EmbeddedTerminalBackend {
+  if (backend === 'bash') return createBashTerminalBackend();
+  return createPtyTerminalBackend();
+}
+
   function setupGuiMode(): void {
   const agentRegistry = registerBuiltinAgents();
   let mainWindow: BrowserWindow | null = null;
   let taskExecutor: TaskRunner | null = null;
+  let reviewGateStatusWorker: ReviewGateStatusWorker | null = null;
   let apiServer: ApiServer | null = null;
   let ownerMode = true;
   const taskHandles = new Map<string, { handle: ExecutorHandle; executor: Executor }>();
-  const embeddedTerminalManager = new EmbeddedTerminalManager();
+  const embeddedTerminalManager = new EmbeddedTerminalManager({
+    backend: createEmbeddedTerminalBackendFromConfig(resolveEmbeddedTerminalBackendConfig(invokerConfig)),
+  });
   embeddedTerminalManager.on('output', (payload) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('invoker:terminal-output', payload);
@@ -1786,7 +1815,6 @@ if (isHeadless) {
         logger.error(`headless.resume: executeTasks failed for "${workflowId}": ${err}`, { module: 'ipc-delegate' });
       });
     }
-    requireTaskExecutor().resumeMergeGatePolling();
     const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
     return { workflowId, tasks };
   }
@@ -2707,6 +2735,12 @@ if (isHeadless) {
 
     bootstrapInitialWorkflowState();
 
+    reviewGateStatusWorker = startReviewGateStatusWorker({
+      ownerMode,
+      getTaskExecutor: requireTaskExecutor,
+      logger,
+    });
+
     // Relaunch orphaned running tasks and start any pending-but-ready tasks.
     if (!ownerMode) {
       logger.info('follower mode startup: auto-run and orphan relaunch disabled', { module: 'init' });
@@ -2717,7 +2751,6 @@ if (isHeadless) {
       if (allStarted.length > 0) {
         requireTaskExecutor().executeTasks(allStarted);
       }
-      requireTaskExecutor().resumeMergeGatePolling();
     }
 
     const dbPath = path.join(resolveInvokerHomeRoot(), 'invoker.db');
@@ -2871,7 +2904,6 @@ if (isHeadless) {
       if (allStarted.length > 0) {
         void requireTaskExecutor().executeTasks(allStarted);
       }
-      requireTaskExecutor().resumeMergeGatePolling();
       return { workflow: workflows[0], taskCount: tasks.length, startedCount: allStarted.length };
     });
 
@@ -3878,6 +3910,8 @@ if (isHeadless) {
 
     try {
       if (apiServer) await apiServer.close().catch(() => {});
+      reviewGateStatusWorker?.stop();
+      reviewGateStatusWorker = null;
       if (dbPollInterval) clearInterval(dbPollInterval);
       if (activityPollInterval) clearInterval(activityPollInterval);
       if (uiPerfLogInterval) clearInterval(uiPerfLogInterval);

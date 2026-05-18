@@ -317,6 +317,7 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
     log(`${TAG} Container created: ${container.id.slice(0, 12)} image=${this.imageName}`);
 
     // Determine task command and Claude session before entry registration
+    const executionAgent = request.inputs.executionAgent ?? 'claude';
     const { cmd, args: cmdArgs, agentSessionId } = this.buildCommandAndArgs(request, {
       agentRegistry: this.agentRegistry,
     });
@@ -408,6 +409,7 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
       if (!request.inputs.command && !request.inputs.prompt) {
         await this.handleProcessExit(executionId, request, CONTAINER_CWD, 0, {
           branch: handle.branch,
+          agentName: request.actionType === 'ai_task' ? executionAgent : undefined,
         });
         return handle;
       }
@@ -434,6 +436,7 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
           outputs: {
             exitCode: 1,
             error: `Failed to spawn docker exec: ${err.message}`,
+            agentName: request.actionType === 'ai_task' ? executionAgent : undefined,
           },
         };
         this.emitComplete(executionId, response);
@@ -455,6 +458,7 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
             signal,
             branch: handle.branch,
             agentSessionId: entry.agentSessionId,
+            agentName: request.actionType === 'ai_task' ? executionAgent : undefined,
           });
 
           // Stop the idle container after git finalize completes

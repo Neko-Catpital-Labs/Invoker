@@ -267,6 +267,35 @@ describe('WorktreeExecutor', () => {
     taskProcess.emit('close', 0, null);
   });
 
+  it('uses provided base commit without resolving the base ref again', async () => {
+    const { taskProcess } = setupSpawnMock();
+    const baseCommit = '1234567890abcdef1234567890abcdef12345678';
+
+    await executor.start(makeRequest({
+      inputs: {
+        command: 'echo hello',
+        baseBranch: 'master',
+        baseCommit,
+      },
+    }));
+
+    const pool = (executor as any).pool;
+    expect(pool.acquireWorktree).toHaveBeenCalledTimes(1);
+    expect(pool.acquireWorktree.mock.calls[0][2]).toBe(baseCommit);
+
+    const gitCalls = mockedSpawn.mock.calls
+      .filter(([cmd]) => cmd === 'git')
+      .map(([, args]) => args as string[]);
+    expect(gitCalls.some((args) => args[0] === 'fetch')).toBe(false);
+    expect(gitCalls.some((args) =>
+      args[0] === 'rev-parse'
+      && args.includes('--verify')
+      && args.some((arg) => arg.includes('master')),
+    )).toBe(false);
+
+    taskProcess.emit('close', 0, null);
+  });
+
   it('task runs in worktree directory, not main repo', async () => {
     const { taskProcess } = setupSpawnMock();
 

@@ -62,6 +62,38 @@ describe('RepoPool', () => {
     expect(p1).toBe(p2);
   });
 
+  it('uses one cache path for equivalent GitHub SSH and HTTPS URLs', () => {
+    const githubPool = new RepoPool({ cacheDir: tmpDir, worktreeBaseDir: join(tmpDir, 'worktrees') });
+    const httpsUrl = 'https://github.com/Neko-Catpital-Labs/Invoker';
+    const sshUrl = 'git@github.com:Neko-Catpital-Labs/Invoker.git';
+
+    expect(githubPool.getClonePath(httpsUrl)).toBe(githubPool.getClonePath(sshUrl));
+    expect(githubPool.externalWorktreePath(httpsUrl, 'experiment/demo')).toBe(
+      githubPool.externalWorktreePath(sshUrl, 'experiment/demo'),
+    );
+  });
+
+  it('single-flights equivalent GitHub URL spellings without rewriting clone URL', async () => {
+    const githubPool = new RepoPool({ cacheDir: tmpDir, worktreeBaseDir: join(tmpDir, 'worktrees') });
+    const httpsUrl = 'https://github.com/Neko-Catpital-Labs/Invoker';
+    const sshUrl = 'git@github.com:Neko-Catpital-Labs/Invoker.git';
+    const clonePath = githubPool.getClonePath(httpsUrl);
+    const doEnsureClone = vi
+      .spyOn(githubPool as any, 'doEnsureClone')
+      .mockImplementation(async (_repoUrl: string) => clonePath);
+
+    const [p1, p2] = await Promise.all([
+      githubPool.ensureClone(httpsUrl),
+      githubPool.ensureClone(sshUrl),
+    ]);
+
+    expect(p1).toBe(clonePath);
+    expect(p2).toBe(clonePath);
+    expect(doEnsureClone).toHaveBeenCalledTimes(1);
+    expect(doEnsureClone).toHaveBeenCalledWith(httpsUrl);
+    await githubPool.destroyAll();
+  });
+
   it('acquireWorktree: creates worktree with feature branch', async () => {
     const acquired = await pool.acquireWorktree(localRepoUrl, 'experiment/v1');
     expect(acquired.worktreePath).toBeDefined();
@@ -375,6 +407,64 @@ describe('RepoPool', () => {
       const dir = await pool.refreshMirrorForRebase(localRepoUrl, 'master');
       expect(dir).toBeDefined();
       expect(existsSync(dir)).toBe(true);
+    });
+
+    it('skips per-base fetch after a successful full origin ref refresh', async () => {
+      await pool.ensureClone(localRepoUrl);
+      const orig = (pool as any).execGit.bind(pool);
+      const execGit = vi.spyOn(pool as any, 'execGit').mockImplementation(
+        (...params: unknown[]) => {
+          const args = params[0] as string[];
+          const cwd = params[1] as string;
+          return orig(args, cwd);
+        },
+      );
+      const timing = {
+        mark: vi.fn(),
+        span: vi.fn(async (_functionName, _metadata, fn) => fn()),
+      };
+
+      const dir = await pool.refreshMirrorForRebase(localRepoUrl, 'plan/missing-branch', timing);
+
+      expect(dir).toBeDefined();
+      expect(execGit).not.toHaveBeenCalledWith(
+        ['fetch', 'origin', 'refs/heads/plan/missing-branch:refs/remotes/origin/plan/missing-branch'],
+        expect.any(String),
+      );
+      expect(timing.mark).toHaveBeenCalledWith('RepoPool.doRefreshMirrorForRebase.syncPlanBaseRemoteForRef', 'completed', {
+        dir,
+        baseBranch: 'plan/missing-branch',
+        skipped: true,
+        reason: 'origin-refs-fresh',
+      });
+    });
+
+    it('reuses the base commit resolved by the rebase refresh batch', async () => {
+      await pool.ensureClone(localRepoUrl);
+      const orig = (pool as any).execGit.bind(pool);
+      const execGit = vi.spyOn(pool as any, 'execGit').mockImplementation(
+        (...params: unknown[]) => {
+          const args = params[0] as string[];
+          const cwd = params[1] as string;
+          return orig(args, cwd);
+        },
+      );
+      const timing = {
+        mark: vi.fn(),
+        span: vi.fn(async (_functionName, _metadata, fn) => fn()),
+      };
+
+      await pool.refreshMirrorForRebase(localRepoUrl, 'master', timing);
+      execGit.mockClear();
+
+      const commit = await pool.resolveBaseCommit(localRepoUrl, 'master', timing);
+
+      expect(commit).toMatch(/^[0-9a-f]{40}$/);
+      expect(execGit).not.toHaveBeenCalled();
+      expect(timing.mark).toHaveBeenCalledWith('RepoPool.resolveBaseCommit.batched', 'completed', {
+        repoUrl: localRepoUrl,
+        baseBranch: 'master',
+      });
     });
 
     it('concurrent fetches from separate pools sharing cacheDir both succeed', async () => {

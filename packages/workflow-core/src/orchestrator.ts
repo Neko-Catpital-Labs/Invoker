@@ -77,6 +77,7 @@ import {
   withSchedulerEnqueueCandidates,
   type InvalidationPlan,
 } from './invalidation-plan.js';
+import { INV_90_EXPERIMENT_BRIEF_PATH } from './invalidation-policy.js';
 import {
   isActiveAttempt,
   isDiscardedAttempt,
@@ -722,6 +723,7 @@ export interface OrchestratorConfig {
 
 export class Orchestrator {
   private static readonly EXPEDITED_PRIORITY = 100;
+  static readonly INVALIDATION_EXPERIMENT_BRIEF_PATH = INV_90_EXPERIMENT_BRIEF_PATH;
 
   private readonly stateMachine: TaskStateMachine;
   private readonly responseHandler: ResponseHandler;
@@ -4190,6 +4192,7 @@ export class Orchestrator {
       completedAt: Date;
       commit?: string;
       agentSessionId?: string;
+      agentName?: string;
       lastAgentSessionId?: string;
       lastAgentName?: string;
       branch?: string;
@@ -4206,7 +4209,11 @@ export class Orchestrator {
     if (parsed.agentSessionId !== undefined) {
       execution.agentSessionId = parsed.agentSessionId;
       execution.lastAgentSessionId = parsed.agentSessionId;
-      execution.lastAgentName = task?.execution.agentName ?? task?.execution.lastAgentName;
+      execution.lastAgentName = parsed.agentName ?? task?.execution.agentName ?? task?.execution.lastAgentName;
+    }
+    if (parsed.agentName !== undefined) {
+      execution.agentName = parsed.agentName;
+      execution.lastAgentName = parsed.agentName;
     }
     if (parsed.branch !== undefined) {
       execution.branch = parsed.branch;
@@ -4288,6 +4295,8 @@ export class Orchestrator {
     executionFields: {
       exitCode?: number;
       error?: string;
+      agentName?: string;
+      lastAgentName?: string;
       protocolErrorCode?: string;
       protocolErrorMessage?: string;
       mergeConflict?: { failedBranch: string; conflictFiles: string[] };
@@ -4390,6 +4399,8 @@ export class Orchestrator {
       {
         exitCode: parsed.exitCode,
         error: parsed.error,
+        agentName: parsed.agentName,
+        lastAgentName: parsed.agentName,
         mergeConflict,
       },
       'task.failed',

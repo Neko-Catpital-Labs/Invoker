@@ -178,7 +178,6 @@ export interface MergeRunnerHost {
   detectDefaultBranch(): Promise<string>;
   gitLogMessage(commitHash: string, cwd?: string): Promise<string>;
   gitDiffStat(branch: string, cwd?: string): Promise<string>;
-  startPrPolling(taskId: string, reviewId: string, workflowId: string): void;
   executeTasks(tasks: TaskState[]): Promise<void>;
   buildMergeSummary(workflowId: string): Promise<string>;
   runVisualProofCapture?(baseBranch: string, featureBranch: string, slug: string, repoUrl?: string): Promise<string | undefined>;
@@ -404,8 +403,6 @@ export function collectDirectNonMergeTaskIds(
 export interface MergeGateActionResult {
   response: WorkResponse;
   taskChanges: TaskStateChanges;
-  reviewIdForPolling?: string;
-  workflowIdForPolling?: string;
 }
 
 export async function runMergeGateActionImpl(
@@ -601,8 +598,6 @@ export async function runMergeGateActionImpl(
               reviewStatus,
             },
           },
-          reviewIdForPolling: reviewId,
-          workflowIdForPolling: workflowId,
         };
       }
       response = {
@@ -709,9 +704,6 @@ export async function executeMergeNodeImpl(
   if (response.status === 'review_ready') {
     setMergeGateReviewReady(host, task.id, legacyChanges);
     await startReviewReadyDependents(host);
-    if (result.reviewIdForPolling && result.workflowIdForPolling) {
-      host.startPrPolling(task.id, result.reviewIdForPolling, result.workflowIdForPolling);
-    }
   } else {
     const newlyStarted = host.orchestrator.handleWorkerResponse(response) ?? [];
     if (newlyStarted.length > 0) {
@@ -1101,7 +1093,6 @@ export async function publishAfterFixImpl(
         },
       });
       await startReviewReadyDependents(host);
-      host.startPrPolling(task.id, result.identifier, workflowId!);
       return;
     }
 

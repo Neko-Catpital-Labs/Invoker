@@ -1566,7 +1566,6 @@ describe('TaskRunner', () => {
       };
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
-      (executor as any).startPrPolling = vi.fn();
       (executor as any).buildMergeSummary = vi.fn().mockResolvedValue('Raw summary text only');
 
       const authoredBody = '## Summary\n\nRich authored body with details\n\n## Test Plan\n\n- [x] `pnpm test`\n\n## Revert Plan\n\n- Safe to revert? Yes';
@@ -1959,7 +1958,6 @@ describe('TaskRunner', () => {
       };
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
-      (executor as any).startPrPolling = vi.fn();
       (executor as any).buildMergeSummary = vi.fn().mockResolvedValue('## Summary');
       (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
         body: '## Summary\n\nPublished body',
@@ -3832,7 +3830,6 @@ describe('TaskRunner', () => {
       (executor as any).execGitIn = async () => '';
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
-      (executor as any).startPrPolling = vi.fn();
       (executor as any).buildMergeSummary = vi.fn().mockResolvedValue(rawSummary);
       (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
         body: authoredBody,
@@ -3906,7 +3903,6 @@ describe('TaskRunner', () => {
       (executor as any).execGitIn = async () => '';
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
-      (executor as any).startPrPolling = vi.fn();
       (executor as any).buildMergeSummary = vi.fn().mockResolvedValue('## Summary\nWorkflow summary');
       (executor as any).authorPrBodyWithSkill = authorPrSpy;
 

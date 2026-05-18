@@ -3,6 +3,7 @@
 # Invoked like: claude --session-id <uuid> ... (prompt) or via INVOKER_CLAUDE_FIX_COMMAND (fix).
 set -eu
 SESSION_ID=""
+RESUME_ID=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --session-id)
@@ -13,11 +14,29 @@ while [ "$#" -gt 0 ]; do
       SESSION_ID="$2"
       shift 2
       ;;
+    --resume)
+      if [ "$#" -lt 2 ]; then
+        echo "claude-marker: --resume requires a value" >&2
+        exit 2
+      fi
+      RESUME_ID="$2"
+      shift 2
+      ;;
     *)
       shift
       ;;
   esac
 done
+
+if [ -n "$RESUME_ID" ]; then
+  if [ ! -t 0 ] || [ ! -t 1 ]; then
+    echo "stdin is not a terminal" >&2
+    exit 12
+  fi
+  sleep 1
+  echo "TTY OK: claude resume $RESUME_ID"
+  exit 0
+fi
 
 ROOT="${INVOKER_E2E_MARKER_ROOT:-}"
 if [ -n "$ROOT" ] && [ -n "$SESSION_ID" ]; then

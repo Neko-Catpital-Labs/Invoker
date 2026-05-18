@@ -1918,7 +1918,7 @@ describe('SQLiteAdapter', () => {
       adapter.saveWorkflow(testWorkflow);
       // Task created with executionAgent: 'claude' in config
       const task = makeTask('t-agent-2', {
-        config: { workflowId: 'wf-1', executionAgent: 'claude' },
+        config: { workflowId: 'wf-1', command: 'pnpm test', executionAgent: 'claude' },
       });
       adapter.saveTask('wf-1', task);
 
@@ -1929,6 +1929,26 @@ describe('SQLiteAdapter', () => {
 
       // getExecutionAgent should return 'codex' (agent_name) not 'claude' (execution_agent)
       expect(adapter.getExecutionAgent('t-agent-2')).toBe('codex');
+    });
+
+    it('returns execution_agent for prompt tasks when stale agent_name disagrees', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const task = makeTask('t-agent-prompt-stale', {
+        status: 'completed',
+        config: {
+          workflowId: 'wf-1',
+          prompt: 'Design experiment and alternative proof task for INV-130.',
+          executionAgent: 'codex',
+        },
+        execution: {
+          agentName: 'claude',
+          lastAgentName: 'claude',
+          agentSessionId: '019e386c-87c7-71e1-80bb-eb649ae99b82',
+        },
+      });
+      adapter.saveTask('wf-1', task);
+
+      expect(adapter.getExecutionAgent('t-agent-prompt-stale')).toBe('codex');
     });
 
     it('returns agent_name when execution_agent is null', () => {

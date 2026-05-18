@@ -22,6 +22,7 @@ interface WorkflowGraphProps {
   tasks: Map<string, TaskState>;
   workflows: Map<string, WorkflowMeta>;
   selectedWorkflowId: string | null;
+  centerWorkflowId?: string | null;
   statusFilters: Set<WorkflowStatus>;
   onSelectWorkflow: (workflowId: string) => void;
   onWorkflowContextMenu: (event: MouseEvent, workflowId: string) => void;
@@ -67,11 +68,12 @@ function WorkflowGraphInner({
   tasks,
   workflows,
   selectedWorkflowId,
+  centerWorkflowId,
   statusFilters,
   onSelectWorkflow,
   onWorkflowContextMenu,
 }: WorkflowGraphProps): JSX.Element {
-  const { fitView } = useReactFlow();
+  const { fitView, setCenter } = useReactFlow();
   const prevNodeCount = useRef(0);
   const reportedVisibleRef = useRef(false);
   const graphMetricsRef = useRef({ deriveMs: 0, layoutMs: 0, objectsMs: 0 });
@@ -188,6 +190,20 @@ function WorkflowGraphInner({
     });
     return () => cancelAnimationFrame(frame);
   }, [fitView, graph.nodes.length, graphSignature]);
+
+  useEffect(() => {
+    if (!centerWorkflowId || nodes.length === 0) return;
+    const node = nodes.find((candidate) => candidate.id === centerWorkflowId);
+    if (!node) return;
+    const frame = requestAnimationFrame(() => {
+      if (typeof setCenter === 'function') {
+        setCenter(node.position.x + 110, node.position.y + 45, { zoom: 1, duration: 180 });
+      } else {
+        fitView({ padding: 0.2 });
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [centerWorkflowId, fitView, nodes, setCenter]);
 
   useEffect(() => {
     if (nodes.length === 0) return;

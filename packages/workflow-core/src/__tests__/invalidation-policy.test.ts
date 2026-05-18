@@ -2,6 +2,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   applyInvalidation,
+  INV_90_EXPERIMENT_BRIEF_PATH,
+  INV_90_SUPPORTED_ROUTER_ACTIONS,
   MUTATION_POLICIES,
   type InvalidationDeps,
 } from '../invalidation-policy.js';
@@ -29,6 +31,19 @@ function makeDeps(overrides: Partial<MockedDeps> = {}): MockedDeps {
 }
 
 describe('MUTATION_POLICIES', () => {
+  it('keeps the INV-90 supported router action set aligned with the experiment brief', () => {
+    expect(INV_90_EXPERIMENT_BRIEF_PATH).toBe('docs/context/inv-90/experiment-brief.md');
+    expect(INV_90_SUPPORTED_ROUTER_ACTIONS).toEqual([
+      'scheduleOnly',
+      'retryTask',
+      'retryWorkflow',
+      'recreateTask',
+      'recreateWorkflow',
+      'recreateWorkflowFromFreshBase',
+      'workflowFork',
+    ]);
+  });
+
   it('matches the chart Decision Table for execution-spec mutations', () => {
     expect(MUTATION_POLICIES.command.action).toBe('recreateTask');
     expect(MUTATION_POLICIES.prompt.action).toBe('recreateTask');

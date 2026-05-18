@@ -96,6 +96,11 @@ type PoolSelection = {
   selectionStrategy: 'roundRobin' | 'leastLoaded';
 };
 
+type FreshBaseCommit = {
+  branch: string;
+  commit: string;
+};
+
 type RemoteTargetDisplay = {
   host: string;
   user: string;
@@ -208,7 +213,6 @@ export class TaskRunner {
   /** @internal */ reviewProviderRegistry?: ReviewProviderRegistry;
   private onReviewGateCiFailure?: (trigger: ReviewGateCiFailureTrigger) => Promise<void>;
   private reviewGateCiFixInFlight = new Set<string>();
-  private activePrPollers = new Map<string, ReturnType<typeof setInterval>>();
   private getRemoteTargets: () => Record<string, RemoteTargetDisplay>;
   private getExecutionPools: () => Record<string, ExecutionPoolConfig>;
   private dockerConfig: { imageName?: string; secretsFile?: string };
@@ -218,6 +222,7 @@ export class TaskRunner {
   private sshExecutorCache = new Map<string, SshExecutor>();
   private poolRoundRobinCursor = new Map<string, number>();
   private pendingPoolSelections = new Map<string, PoolSelection>();
+  private freshBaseCommits = new Map<string, FreshBaseCommit>();
 
   /** In-flight executions keyed by attemptId (with taskId retained for external kill resolution). */
   private activeExecutions = new Map<string, ActiveExecutionEntry>();
@@ -239,13 +244,15 @@ export class TaskRunner {
     repoUrl: string | undefined,
     baseBranchHint: string | undefined,
     timing?: RepoPoolTiming,
-  ): Promise<void> {
-    if (!repoUrl) return;
+  ): Promise<{ branch: string; commit: string } | undefined> {
+    if (!repoUrl) return undefined;
     const executor = this.executorRegistry.get('worktree');
-    if (!(executor instanceof WorktreeExecutor)) return;
+    if (!(executor instanceof WorktreeExecutor)) return undefined;
     const pool = executor.getRepoPool();
     const baseBranch = baseBranchHint?.trim() || this.defaultBranch || 'master';
     await pool.refreshMirrorForRebase(repoUrl, baseBranch, timing);
+    const commit = await pool.resolveBaseCommit(repoUrl, baseBranch, timing);
+    this.freshBaseCommits.set(workflowId, { branch: baseBranch, commit });
     const collectStartedAtMs = Date.now();
     timing?.mark('TaskRunner.preparePoolForRebaseRetry.collectManagedWorkflowBranches', 'started', {
       workflowId,
@@ -257,6 +264,7 @@ export class TaskRunner {
       durationMs: Date.now() - collectStartedAtMs,
     });
     await pool.removeManagedBranchesInMirror(repoUrl, branches, timing);
+    return { branch: baseBranch, commit };
   }
 
   /**
@@ -612,6 +620,8 @@ export class TaskRunner {
     const baseBranch = workflow?.baseBranch ?? this.defaultBranch;
     const repoUrl = workflow?.repoUrl;
     const branchRepoUrl = workflow?.intermediateRepoUrl?.trim() || undefined;
+    const freshBase = task.config.workflowId ? this.freshBaseCommits.get(task.config.workflowId) : undefined;
+    const baseCommit = freshBase && freshBase.branch === baseBranch ? freshBase.commit : undefined;
 
     // Persist the experiment branch as soon as the executor knows it — well
     // before `git worktree add` could leak a worktree without a recorded branch
@@ -641,17 +651,19 @@ export class TaskRunner {
       }
     };
 
+    const actionType = this.determineActionType(task);
+    const executionAgent = task.config.executionAgent?.trim() || DEFAULT_EXECUTION_AGENT;
     const request: WorkRequest = {
       requestId: randomUUID(),
       actionId: task.id,
       attemptId,
       executionGeneration: task.execution.generation ?? 0,
-      actionType: this.determineActionType(task),
+      actionType,
       inputs: {
         description: task.description,
         command: task.config.command,
         prompt: task.config.prompt,
-        executionAgent: task.config.executionAgent?.trim() || DEFAULT_EXECUTION_AGENT,
+        executionAgent,
         repoUrl,
         branchRepoUrl,
         featureBranch: task.config.featureBranch,
@@ -660,6 +672,7 @@ export class TaskRunner {
         upstreamBranches: upstreamBranches.length > 0 ? upstreamBranches : undefined,
         lifecycleTag,
         baseBranch,
+        baseCommit,
         freshWorkspace: this.shouldUseFreshWorkspace(task),
         reusableWorktree: task.execution.branch && task.execution.workspacePath
           ? {
@@ -825,7 +838,8 @@ export class TaskRunner {
           branch: handle.branch ?? undefined,  // Explicit undefined when branch is not applicable (e.g., BYO mode)
           agentSessionId: handle.agentSessionId ?? undefined,
           lastAgentSessionId: handle.agentSessionId ?? undefined,
-          lastAgentName: task.execution.agentName ?? undefined,
+          agentName: actionType === 'ai_task' ? executionAgent : undefined,
+          lastAgentName: actionType === 'ai_task' ? executionAgent : undefined,
           containerId: handle.containerId ?? undefined,
         },
       };
@@ -1859,21 +1873,6 @@ export class TaskRunner {
     }
   }
 
-  resumeMergeGatePolling(): void {
-    if (!this.mergeGateProvider) return;
-    for (const task of this.orchestrator.getAllTasks()) {
-      if (
-        task.config.isMergeNode &&
-        (task.status === 'review_ready' || task.status === 'awaiting_approval') &&
-        task.execution.reviewId &&
-        !this.activePrPollers.has(task.id)
-      ) {
-        this.logger.info(`[merge-gate] Resuming PR polling for ${task.id} (PR ${task.execution.reviewId})`);
-        this.startPrPolling(task.id, task.execution.reviewId, task.config.workflowId!);
-      }
-    }
-  }
-
   async closeWorkflowReview(workflowId: string): Promise<void> {
     if (!this.mergeGateProvider?.closeReview) return;
     const getAllTasks = this.orchestrator.getAllTasks?.bind(this.orchestrator);
@@ -1885,7 +1884,6 @@ export class TaskRunner {
     );
     if (!mergeTask?.execution.reviewId) return;
 
-    this.stopPrPolling(mergeTask.id);
     await this.mergeGateProvider.closeReview({
       identifier: mergeTask.execution.reviewId,
       cwd: mergeTask.execution.workspacePath ?? this.cwd,
@@ -1899,7 +1897,6 @@ export class TaskRunner {
   ): Promise<void> {
     const sourceSuffix = source ? ` (${source})` : '';
     this.logger.info(`[merge-gate] PR ${reviewId} approved${sourceSuffix}, completing merge gate`);
-    this.stopPrPolling(taskId);
     const newlyStarted = await this.orchestrator.approve(taskId);
     if (newlyStarted.length > 0) {
       await this.executeTasks(newlyStarted);
@@ -1918,7 +1915,6 @@ export class TaskRunner {
       status: 'closed',
       execution: { reviewStatus: statusText },
     });
-    this.stopPrPolling(taskId);
   }
 
   async checkMergeGateStatuses(): Promise<void> {
@@ -1947,7 +1943,6 @@ export class TaskRunner {
               execution: { reviewStatus: status.statusText },
             });
             this.logger.info(`[merge-gate] PR ${task.execution.reviewId} rejected (refresh): ${status.statusText}`);
-            this.stopPrPolling(task.id);
           } else {
             this.persistence.updateTask(task.id, {
               execution: { reviewStatus: status.statusText },
@@ -1958,55 +1953,6 @@ export class TaskRunner {
           this.logger.error(`[merge-gate] PR status check error for ${task.id}`, { err });
         }
       }
-    }
-  }
-
-  /** @internal */ startPrPolling(taskId: string, reviewId: string, workflowId: string): void {
-    const pollIntervalMs = 30_000;
-    const interval = setInterval(async () => {
-      try {
-        if (!this.mergeGateProvider) return;
-        const pollTask = this.orchestrator.getTask(taskId);
-        const pollCwd = pollTask?.execution.workspacePath ?? this.cwd;
-        const status = await this.mergeGateProvider.checkApproval({
-          identifier: reviewId,
-          cwd: pollCwd,
-        });
-
-        if (status.closed) {
-          this.handleClosedMergeGate(taskId, reviewId, status.statusText);
-        } else if (status.approved) {
-          this.persistence.updateTask(taskId, {
-            execution: { reviewStatus: status.statusText },
-          });
-          await this.handleApprovedMergeGate(taskId, reviewId);
-        } else if (status.rejected) {
-          this.persistence.updateTask(taskId, {
-            execution: { reviewStatus: status.statusText },
-          });
-          this.logger.info(`[merge-gate] PR ${reviewId} rejected: ${status.statusText}`);
-          this.stopPrPolling(taskId);
-          // Leave in review_ready/awaiting_approval — user can retry
-        } else {
-          this.persistence.updateTask(taskId, {
-            execution: { reviewStatus: status.statusText },
-          });
-          const latestTask = this.orchestrator.getTask(taskId);
-          if (latestTask) await this.maybeTriggerReviewGateCiFix(latestTask, status);
-        }
-      } catch (err) {
-        this.logger.error(`[merge-gate] PR poll error for ${taskId}`, { err });
-        // Continue polling on transient errors
-      }
-    }, pollIntervalMs);
-    this.activePrPollers.set(taskId, interval);
-  }
-
-  private stopPrPolling(taskId: string): void {
-    const interval = this.activePrPollers.get(taskId);
-    if (interval) {
-      clearInterval(interval);
-      this.activePrPollers.delete(taskId);
     }
   }
 
@@ -2036,7 +1982,6 @@ export class TaskRunner {
           execution: { reviewStatus: status.statusText },
         });
         this.logger.info(`[merge-gate] PR ${reviewId} rejected (manual check): ${status.statusText}`);
-        this.stopPrPolling(taskId);
       } else {
         this.persistence.updateTask(taskId, {
           execution: { reviewStatus: status.statusText },

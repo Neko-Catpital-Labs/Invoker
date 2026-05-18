@@ -35,6 +35,7 @@ export type ParsedResponse =
       summary?: string;
       commitHash?: string;
       agentSessionId?: string;
+      agentName?: string;
       branch?: string;
       reviewUrl?: string;
       reviewId?: string;
@@ -55,6 +56,7 @@ export type ParsedResponse =
       taskId: string;
       exitCode: number;
       error?: string;
+      agentName?: string;
     }
   | {
       type: 'needs_input';
@@ -96,6 +98,7 @@ export class ResponseHandler {
           summary: outputs.summary,
           commitHash: outputs.commitHash,
           agentSessionId: outputs.agentSessionId,
+          agentName: outputs.agentName,
           branch: outputs.branch,
           reviewUrl: outputs.reviewUrl,
           reviewId: outputs.reviewId,
@@ -120,6 +123,7 @@ export class ResponseHandler {
           taskId: actionId,
           exitCode: outputs.exitCode ?? 1,
           error: outputs.error,
+          agentName: outputs.agentName,
         };
 
       case 'needs_input':

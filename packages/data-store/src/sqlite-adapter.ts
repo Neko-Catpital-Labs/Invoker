@@ -1696,7 +1696,15 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   getExecutionAgent(taskId: string): string | null {
     const row = this.queryOne(
-      'SELECT COALESCE(agent_name, execution_agent) AS agent FROM tasks WHERE id = ?',
+      `
+      SELECT
+        CASE
+          WHEN prompt IS NOT NULL AND TRIM(prompt) != '' THEN COALESCE(execution_agent, agent_name)
+          ELSE COALESCE(agent_name, execution_agent)
+        END AS agent
+      FROM tasks
+      WHERE id = ?
+      `,
       [taskId],
     );
     return (row?.agent as string) ?? null;

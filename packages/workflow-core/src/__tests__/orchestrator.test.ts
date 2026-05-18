@@ -305,6 +305,10 @@ describe('Orchestrator', () => {
     });
   });
 
+  it('surfaces the INV-90 experiment brief that selected the invalidation router design', () => {
+    expect(Orchestrator.INVALIDATION_EXPERIMENT_BRIEF_PATH).toBe('docs/context/inv-90/experiment-brief.md');
+  });
+
   describe('descriptionForMergeNode', () => {
     it('uses Review gate when mergeMode is external_review', () => {
       expect(descriptionForMergeNode({ name: 'My plan', onFinish: 'none', mergeMode: 'external_review' })).toBe(
