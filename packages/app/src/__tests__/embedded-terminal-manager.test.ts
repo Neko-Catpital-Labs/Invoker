@@ -20,11 +20,8 @@ import { mkdirSync, rmSync } from 'node:fs';
 import {
   EmbeddedTerminalManager,
   createBashTerminalBackend,
-  createPtyTerminalBackend,
   type EmbeddedTerminalBackend,
   type BashSpawnFn,
-  type PtyLike,
-  type PtySpawnFn,
 } from '../embedded-terminal-manager.js';
 import { resolveTaskTerminalSpec } from '../open-terminal-for-task.js';
 import {
@@ -54,35 +51,6 @@ function createFakeChild() {
     },
   };
   ee.killed = false;
-  ee.kill = () => {
-    ee.killed = true;
-  };
-  return ee;
-}
-
-function createFakePty() {
-  const ee = new EventEmitter() as EventEmitter & PtyLike & {
-    __written: string[];
-    __resized: Array<{ cols: number; rows: number }>;
-    killed: boolean;
-  };
-  ee.__written = [];
-  ee.__resized = [];
-  ee.killed = false;
-  ee.onData = (listener) => {
-    ee.on('data', listener);
-    return { dispose: () => ee.off('data', listener) };
-  };
-  ee.onExit = (listener) => {
-    ee.on('exit', listener);
-    return { dispose: () => ee.off('exit', listener) };
-  };
-  ee.write = (data: string) => {
-    ee.__written.push(data);
-  };
-  ee.resize = (cols: number, rows: number) => {
-    ee.__resized.push({ cols, rows });
-  };
   ee.kill = () => {
     ee.killed = true;
   };
@@ -256,29 +224,6 @@ describe('EmbeddedTerminalManager', () => {
     const res = mgr.resize(session.sessionId, 120, 40);
 
     expect(res.ok).toBe(true);
-  });
-
-  it('opt-in PTY backend preserves command metadata and forwards resize', () => {
-    const pty = createFakePty();
-    const ptySpawnFn = vi.fn(() => pty) as unknown as PtySpawnFn;
-    const mgr = new EmbeddedTerminalManager({
-      backend: createPtyTerminalBackend({ spawnFn: ptySpawnFn }),
-    });
-    const session = mgr.openOrReuse({
-      taskId: 't',
-      spec: { command: 'claude', args: ['--resume', 'session-1'], cwd: '/tmp' },
-      cwd: '/tmp',
-    });
-
-    const res = mgr.resize(session.sessionId, 120, 40);
-
-    expect(ptySpawnFn).toHaveBeenCalledWith(
-      'claude',
-      ['--resume', 'session-1'],
-      expect.objectContaining({ cwd: '/tmp', cols: 80, rows: 24, name: 'xterm-256color' }),
-    );
-    expect(res.ok).toBe(true);
-    expect(pty.__resized).toEqual([{ cols: 120, rows: 40 }]);
   });
 
   it('emits exit and removes session when the bash child exits', () => {
