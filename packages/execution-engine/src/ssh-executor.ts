@@ -626,7 +626,7 @@ ${this.buildPayloadExecutionScript(payloadB64)}
     if (!request.inputs.command && !request.inputs.prompt) {
       await this.handleProcessExit(executionId, request, remoteWt, 0, {
         branch: experimentBranch,
-        agentName: request.actionType === 'ai_task' ? executionAgent : undefined,
+        agentName: request.actionType === 'ai_task' ? request.inputs.executionAgent ?? 'claude' : undefined,
       });
       bench('SshExecutor.startManagedWorkspace.noCommand.returning', { remoteWt });
       return handle;
@@ -920,7 +920,7 @@ ${this.buildPayloadExecutionScript(payloadB64)}
               exitCode: finalExitCode,
               commitHash,
               agentSessionId: entry.agentSessionId,
-              agentName: request.actionType === 'ai_task' ? executionAgent : undefined,
+              agentName: request.actionType === 'ai_task' ? request.inputs.executionAgent ?? 'claude' : undefined,
               ...(mappedError ? { error: mappedError } : {}),
               ...(finalizeRemote && commitHash
                 ? { summary: `branch=${finalizeRemote.branch} commit=${commitHash}` }
