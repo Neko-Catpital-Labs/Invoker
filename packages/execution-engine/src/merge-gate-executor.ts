@@ -9,6 +9,7 @@ import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 
 interface MergeGateEntry extends BaseEntry {
   killed?: boolean;
+  running?: Promise<void>;
 }
 
 export class MergeGateExecutor extends BaseExecutor<MergeGateEntry> {
@@ -55,8 +56,14 @@ export class MergeGateExecutor extends BaseExecutor<MergeGateEntry> {
       this.emitHeartbeat(handle.executionId);
     }, this.heartbeatIntervalMs);
 
-    setImmediate(() => {
-      void this.run(handle, task, workspacePath);
+    entry.running = new Promise<void>((resolve) => {
+      setImmediate(() => {
+        void this.run(handle, task, workspacePath).finally(() => {
+          const latestEntry = this.getEntry(handle);
+          if (latestEntry) latestEntry.running = undefined;
+          resolve();
+        });
+      });
     });
 
     return handle;
@@ -103,6 +110,14 @@ export class MergeGateExecutor extends BaseExecutor<MergeGateEntry> {
   }
 
   async destroyAll(): Promise<void> {
+    const running = Array.from(this.entries.values())
+      .map((entry) => entry.running)
+      .filter((promise): promise is Promise<void> => !!promise);
+
+    if (running.length > 0) {
+      await Promise.allSettled(running);
+    }
+
     for (const [executionId, entry] of this.entries) {
       if (entry.heartbeatTimer) clearInterval(entry.heartbeatTimer);
       this.entries.delete(executionId);
