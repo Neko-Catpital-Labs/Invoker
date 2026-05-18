@@ -142,6 +142,7 @@ import { spawn, execSync } from 'node:child_process';
 import { resolveTaskTerminalSpec } from './open-terminal-for-task.js';
 import {
   createBashTerminalBackend,
+  createPtyTerminalBackend,
   EmbeddedTerminalManager,
   type EmbeddedTerminalBackend,
 } from './embedded-terminal-manager.js';
@@ -1179,7 +1180,7 @@ function createEmbeddedTerminalBackendFromConfig(
   backend: EmbeddedTerminalBackendConfig,
 ): EmbeddedTerminalBackend {
   if (backend === 'bash') return createBashTerminalBackend();
-  throw new Error('Embedded terminal PTY backend requested, but the PTY backend is not installed.');
+  return createPtyTerminalBackend();
 }
 
   function setupGuiMode(): void {
