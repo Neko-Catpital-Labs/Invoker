@@ -219,8 +219,8 @@ describe('loadConfig', () => {
 });
 
 describe('resolveEmbeddedTerminalBackendConfig', () => {
-  it('defaults GUI embedded terminals to the bash backend', () => {
-    expect(resolveEmbeddedTerminalBackendConfig({}, {})).toBe('bash');
+  it('defaults GUI embedded terminals to the PTY backend', () => {
+    expect(resolveEmbeddedTerminalBackendConfig({}, {})).toBe('pty');
   });
 
   it('reads the configured GUI embedded terminal backend', () => {

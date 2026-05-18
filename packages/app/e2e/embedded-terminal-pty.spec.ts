@@ -39,11 +39,6 @@ const CLAUDE_RESUME_PLAN = {
 };
 
 test.describe('Embedded terminal PTY', () => {
-  test.skip(
-    process.env.INVOKER_E2E_EMBEDDED_TERMINAL_BACKEND !== 'pty',
-    'requires PTY backend opt-in',
-  );
-
   test('completed Codex resume terminal gets a real TTY in the drawer', async ({ page, testDir }) => {
     await loadPlan(page, CODEX_RESUME_PLAN);
     const workspacePath = path.join(testDir, 'codex-resume-workspace');
@@ -106,6 +101,7 @@ test.describe('Embedded terminal PTY', () => {
     await expect(terminalPane).toBeVisible();
     await expect(terminalPane.getByText(`TTY OK: codex resume ${agentSessionId}`)).toBeVisible({ timeout: 10000 });
     await expect(page.getByText('stdin is not a terminal')).toHaveCount(0);
+    await expect(page.getByText('No deferred tool marker found')).toHaveCount(0);
   });
 
   test('completed Claude resume terminal gets a real TTY in the drawer', async ({ page, testDir }) => {
@@ -164,5 +160,6 @@ test.describe('Embedded terminal PTY', () => {
     await expect(terminalPane).toBeVisible();
     await expect(terminalPane.getByText(`TTY OK: claude resume ${agentSessionId}`)).toBeVisible({ timeout: 10000 });
     await expect(page.getByText('stdin is not a terminal')).toHaveCount(0);
+    await expect(page.getByText('No deferred tool marker found')).toHaveCount(0);
   });
 });
