@@ -114,6 +114,19 @@ const REVIEW_READY_WORKFLOW_PR_PLAN = {
   ],
 };
 
+/** Plan that exposes a review_ready workflow alongside representative task statuses so the workflow node and task nodes can be compared in one frame. */
+const STATUS_COLOR_PARITY_PLAN = {
+  name: 'Workflow Task Status Color Parity',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'pull_request' as const,
+  mergeMode: 'external_review',
+  tasks: [
+    { id: 'parity-review', description: 'Review ready work task', command: 'echo review', dependencies: [] as string[] },
+    { id: 'parity-done', description: 'Completed prerequisite', command: 'echo done', dependencies: [] as string[] },
+    { id: 'parity-pending', description: 'Pending follow up', command: 'echo pending', dependencies: [] as string[] },
+  ],
+};
+
 /** Plan for queue-action-surface hardening: combines canonical states, dependency relationships, and destructive actions. */
 const QUEUE_HARDENING_PLAN = {
   name: 'Queue Hardening Visual Proof',
@@ -481,6 +494,57 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByRole('link', { name: reviewUrl })).toHaveAttribute('href', reviewUrl);
 
     await captureScreenshot(page, 'review-ready-workflow-pr-sidebar');
+  });
+
+  test('workflow-task-status-color-parity — workflow node and task nodes share canonical palette', async ({ page }) => {
+    const workflowId = await loadPlanAndSelectWorkflow(page, STATUS_COLOR_PARITY_PLAN);
+    const miniDag = page.getByTestId('selected-workflow-mini-dag');
+    await miniDag.locator('.react-flow__node[data-testid$="parity-review"]').first().waitFor({
+      state: 'visible',
+      timeout: 15000,
+    });
+
+    const reviewUrl = 'https://github.com/Neko-Catpital-Labs/Invoker/pull/777';
+    const earlier = new Date(Date.now() - 5000);
+    const now = new Date();
+
+    // review_ready dominates the rollup (no failed/running/awaiting_approval), so the
+    // workflow node and the review_ready task node both render the canonical sky palette.
+    await injectTaskStates(page, [
+      {
+        taskId: 'parity-review',
+        changes: { status: 'review_ready', execution: { startedAt: earlier, reviewUrl } },
+      },
+      {
+        taskId: 'parity-done',
+        changes: { status: 'completed', execution: { startedAt: earlier, completedAt: now } },
+      },
+      {
+        taskId: `__merge__${workflowId}`,
+        changes: { status: 'review_ready', execution: { startedAt: earlier, reviewUrl } },
+      },
+    ]);
+
+    await expect
+      .poll(async () => {
+        const workflows = await page.evaluate(() => window.invoker.listWorkflows());
+        return (workflows.find((workflow: { id: string }) => workflow.id === workflowId) as { status: string } | undefined)?.status;
+      })
+      .toBe('review_ready');
+
+    // Workflow-level surface uses the canonical review_ready palette label.
+    await expect(workflowNode(page, workflowId)).toContainText('review ready');
+
+    // Task-level surfaces render the same canonical labels (and, by way of the shared
+    // helper, the same border/rail/text/pulse classes) for each representative status.
+    const reviewTaskNode = miniDag.locator('.react-flow__node[data-testid$="parity-review"]').first();
+    const doneTaskNode = miniDag.locator('.react-flow__node[data-testid$="parity-done"]').first();
+    const pendingTaskNode = miniDag.locator('.react-flow__node[data-testid$="parity-pending"]').first();
+    await expect(reviewTaskNode).toContainText('REVIEW_READY');
+    await expect(doneTaskNode).toContainText('COMPLETED');
+    await expect(pendingTaskNode).toContainText('PENDING');
+
+    await captureScreenshot(page, 'workflow-task-status-color-parity');
   });
 
   test('interactive-status-hues — fixing-with-ai, needs-input, awaiting-approval', async ({ page }) => {
