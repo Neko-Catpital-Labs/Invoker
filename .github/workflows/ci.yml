@@ -366,8 +366,6 @@ jobs:
   ssh:
     needs: build-artifacts
     runs-on: ubuntu-latest
-    container:
-      image: mcr.microsoft.com/playwright:v1.58.2-noble
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -399,7 +397,7 @@ jobs:
             .node-version
 
       - name: Install unzip
-        run: apt-get update && apt-get install -y unzip
+        run: sudo apt-get update && sudo apt-get install -y unzip
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -421,6 +419,9 @@ jobs:
           git config --global --add url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
           git update-ref refs/heads/main refs/remotes/origin/master || true
           git update-ref refs/remotes/origin/main refs/remotes/origin/master || true
+
+      - name: Install Playwright system dependencies
+        run: pnpm --filter @invoker/app exec playwright install-deps chromium
 
       - name: Install and start sshd
         run: |

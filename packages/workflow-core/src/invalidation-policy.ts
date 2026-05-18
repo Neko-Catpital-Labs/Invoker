@@ -42,17 +42,25 @@ export type MutationKey =
   | 'fixReject'
   | 'topology';
 
+function freezePolicy(policy: TaskMutationPolicy): Readonly<TaskMutationPolicy> {
+  return Object.freeze(policy);
+}
+
+// INV-90 experiment conclusion:
+// keep mutation classification as reviewable policy data, then route through
+// `applyInvalidation`. Freeze both the table and its entries so tests can rely
+// on the policy source of truth being immutable at runtime.
 export const MUTATION_POLICIES: Readonly<Record<MutationKey, TaskMutationPolicy>> = Object.freeze({
-  command:               { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const },
-  prompt:                { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const },
-  executionAgent:        { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const },
-  runnerKind:          { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'retryTask' as const },
-  poolMemberId:        { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const },
-  selectedExperiment:    { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const },
-  selectedExperimentSet: { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const },
-  mergeMode:             { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'retryTask' as const },
-  fixContext:            { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'retryTask' as const },
-  rebaseAndRetry:        { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateWorkflowFromFreshBase' as const },
+  command:               freezePolicy({ invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const }),
+  prompt:                freezePolicy({ invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const }),
+  executionAgent:        freezePolicy({ invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const }),
+  runnerKind:            freezePolicy({ invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'retryTask' as const }),
+  poolMemberId:          freezePolicy({ invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const }),
+  selectedExperiment:    freezePolicy({ invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const }),
+  selectedExperimentSet: freezePolicy({ invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const }),
+  mergeMode:             freezePolicy({ invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'retryTask' as const }),
+  fixContext:            freezePolicy({ invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'retryTask' as const }),
+  rebaseAndRetry:        freezePolicy({ invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateWorkflowFromFreshBase' as const }),
   // Step 15 (`docs/architecture/task-invalidation-roadmap.md`): the
   // chart's Decision Table row "Change external gate policy" is the
   // intentional non-invalidating outlier — it's a scheduling policy
@@ -64,16 +72,16 @@ export const MUTATION_POLICIES: Readonly<Record<MutationKey, TaskMutationPolicy>
   // `Orchestrator.autoStartExternallyUnblockedReadyTasks`). Per chart:
   //   - `invalidatesExecutionSpec: false` (no ABI change)
   //   - `invalidateIfActive: false`       (in-flight work survives)
-  externalGatePolicy:    { invalidatesExecutionSpec: false, invalidateIfActive: false, action: 'scheduleOnly' as const },
-  fixApprove:            { invalidatesExecutionSpec: false, invalidateIfActive: false, action: 'fixApprove' as const },
-  fixReject:             { invalidatesExecutionSpec: false, invalidateIfActive: false, action: 'fixReject' as const },
+  externalGatePolicy:    freezePolicy({ invalidatesExecutionSpec: false, invalidateIfActive: false, action: 'scheduleOnly' as const }),
+  fixApprove:            freezePolicy({ invalidatesExecutionSpec: false, invalidateIfActive: false, action: 'fixApprove' as const }),
+  fixReject:             freezePolicy({ invalidatesExecutionSpec: false, invalidateIfActive: false, action: 'fixReject' as const }),
   // Step 11 (`docs/architecture/task-invalidation-roadmap.md`): graph
   // topology mutations (e.g. `replaceTask`, `addTask` that changes
   // parent edges) are fork-class / workflow scope. They must NOT
   // mutate a live workflow in place; they fork a new workflow rooted
   // from the relevant node/result. Step 12 wires the matching
   // `forkWorkflow*` lifecycle dep on `applyInvalidation`.
-  topology:              { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'workflowFork' as const },
+  topology:              freezePolicy({ invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'workflowFork' as const }),
 });
 
 export type CancelInFlightFn = (

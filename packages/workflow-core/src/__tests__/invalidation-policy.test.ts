@@ -90,6 +90,12 @@ describe('MUTATION_POLICIES', () => {
   it('is frozen — the policy table is a constant, not a mutable map', () => {
     expect(Object.isFrozen(MUTATION_POLICIES)).toBe(true);
   });
+
+  it('freezes every policy entry so the reviewable table cannot be mutated in place', () => {
+    for (const [key, policy] of Object.entries(MUTATION_POLICIES)) {
+      expect(Object.isFrozen(policy), key).toBe(true);
+    }
+  });
 });
 
 describe("applyInvalidation: action='none'", () => {
