@@ -651,17 +651,19 @@ export class TaskRunner {
       }
     };
 
+    const actionType = this.determineActionType(task);
+    const executionAgent = task.config.executionAgent?.trim() || DEFAULT_EXECUTION_AGENT;
     const request: WorkRequest = {
       requestId: randomUUID(),
       actionId: task.id,
       attemptId,
       executionGeneration: task.execution.generation ?? 0,
-      actionType: this.determineActionType(task),
+      actionType,
       inputs: {
         description: task.description,
         command: task.config.command,
         prompt: task.config.prompt,
-        executionAgent: task.config.executionAgent?.trim() || DEFAULT_EXECUTION_AGENT,
+        executionAgent,
         repoUrl,
         branchRepoUrl,
         featureBranch: task.config.featureBranch,
@@ -836,7 +838,8 @@ export class TaskRunner {
           branch: handle.branch ?? undefined,  // Explicit undefined when branch is not applicable (e.g., BYO mode)
           agentSessionId: handle.agentSessionId ?? undefined,
           lastAgentSessionId: handle.agentSessionId ?? undefined,
-          lastAgentName: task.execution.agentName ?? undefined,
+          agentName: actionType === 'ai_task' ? executionAgent : undefined,
+          lastAgentName: actionType === 'ai_task' ? executionAgent : undefined,
           containerId: handle.containerId ?? undefined,
         },
       };
