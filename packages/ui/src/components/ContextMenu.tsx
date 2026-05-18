@@ -10,9 +10,10 @@
  * - Labeled separators for task and danger zones
  */
 
-import { useEffect, useRef, useState, useLayoutEffect } from 'react';
+import { useCallback, useEffect, useRef, useState, useLayoutEffect } from 'react';
 import type { TaskState } from '../types.js';
 import { getMenuItems, type MenuItem } from '../lib/context-menu-items.js';
+import { useMenuKeyboard } from '../lib/menu-keyboard.js';
 import { EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE } from '../isExperimentSpawnPivot.js';
 
 interface ContextMenuProps {
@@ -41,7 +42,6 @@ export function ContextMenu({
   onClose,
 }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
-  const [focusedIndex, setFocusedIndex] = useState(0);
   const [position, setPosition] = useState({ left: x, top: y });
   const [showMore, setShowMore] = useState(false);
 
@@ -60,16 +60,11 @@ export function ContextMenu({
   const dangerItems = availableItems.filter((item) => item.variant === 'danger');
   const hasMoreButton = dangerItems.length > 0 && !showMore;
   const renderedItems: MenuItem[] = showMore ? [...safeItems, ...dangerItems] : safeItems;
-
-  // Find first enabled item index
+  // Keyboard-focusable slots: rendered items, then optional More expansion at the end.
+  const moreSlotIndex = hasMoreButton ? renderedItems.length : -1;
+  const slotCount = renderedItems.length + (hasMoreButton ? 1 : 0);
   const firstEnabledIndex = renderedItems.findIndex((item) => item.enabled);
-
-  // Auto-focus first enabled item on mount
-  useEffect(() => {
-    if (firstEnabledIndex >= 0) {
-      setFocusedIndex(firstEnabledIndex);
-    }
-  }, [firstEnabledIndex]);
+  const initialFocusedIndex = firstEnabledIndex >= 0 ? firstEnabledIndex : moreSlotIndex >= 0 ? moreSlotIndex : 0;
 
   // Viewport clamping: flip if menu overflows bottom or right
   useLayoutEffect(() => {
@@ -133,33 +128,8 @@ export function ContextMenu({
     };
   }, [onClose]);
 
-  // Keyboard navigation
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    const enabledIndices = renderedItems
-      .map((item, idx) => (item.enabled ? idx : -1))
-      .filter((idx) => idx >= 0);
-
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const nextPos = (currentPos + 1) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[nextPos]);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const prevPos = (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[prevPos]);
-    } else if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      const item = renderedItems[focusedIndex];
-      if (item?.enabled) {
-        handleItemClick(item);
-      }
-    }
-  };
-
   // Handle menu item click
-  const handleItemClick = (item: MenuItem) => {
+  const handleItemClick = useCallback((item: MenuItem) => {
     if (!item.enabled) return;
 
     switch (item.action) {
@@ -185,7 +155,41 @@ export function ContextMenu({
         break;
     }
     onClose();
-  };
+  }, [onCancel, onClose, onFix, onOpenTerminal, onRecreateTask, onReplace, onRestart, task.id]);
+
+  const expandMore = useCallback(() => {
+    setShowMore(true);
+  }, []);
+
+  const isSlotEnabled = useCallback((index: number): boolean => {
+    if (index === moreSlotIndex) return true;
+    return Boolean(renderedItems[index]?.enabled);
+  }, [moreSlotIndex, renderedItems]);
+
+  const activateSlot = useCallback((index: number) => {
+    if (index === moreSlotIndex) {
+      expandMore();
+      return;
+    }
+    const item = renderedItems[index];
+    if (item) handleItemClick(item);
+  }, [expandMore, handleItemClick, moreSlotIndex, renderedItems]);
+
+  const { focusedIndex, setFocusedIndex, handleKeyDown } = useMenuKeyboard({
+    menuRef,
+    itemCount: slotCount,
+    isItemEnabled: isSlotEnabled,
+    onActivate: activateSlot,
+    initialFocusedIndex,
+  });
+
+  // After More expansion, move focus to the first newly revealed danger item.
+  useEffect(() => {
+    if (showMore && dangerItems.length > 0) {
+      setFocusedIndex(safeItems.length);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showMore]);
 
   // Get variant styles
   const getVariantClasses = (variant?: MenuItem['variant'], enabled?: boolean) => {
@@ -254,8 +258,11 @@ export function ContextMenu({
           <div className="border-t border-gray-600 my-1" />
           <button
             role="menuitem"
-            className="w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
-            onClick={() => setShowMore(true)}
+            className={`w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 ${
+              focusedIndex === moreSlotIndex ? 'bg-gray-700' : ''
+            }`}
+            onClick={expandMore}
+            onMouseEnter={() => setFocusedIndex(moreSlotIndex)}
           >
             More
           </button>
