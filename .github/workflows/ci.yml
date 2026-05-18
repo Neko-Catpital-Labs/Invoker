@@ -261,8 +261,8 @@ jobs:
             pnpm-lock.yaml
             .node-version
 
-      - name: Install unzip
-        run: apt-get update && apt-get install -y unzip
+      - name: Install native build tools
+        run: apt-get update && apt-get install -y unzip make g++ python3
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -325,8 +325,8 @@ jobs:
             pnpm-lock.yaml
             .node-version
 
-      - name: Install unzip
-        run: apt-get update && apt-get install -y unzip
+      - name: Install native build tools
+        run: apt-get update && apt-get install -y unzip make g++ python3
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -398,8 +398,8 @@ jobs:
             pnpm-lock.yaml
             .node-version
 
-      - name: Install unzip
-        run: apt-get update && apt-get install -y unzip
+      - name: Install native build tools
+        run: apt-get update && apt-get install -y unzip make g++ python3
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
