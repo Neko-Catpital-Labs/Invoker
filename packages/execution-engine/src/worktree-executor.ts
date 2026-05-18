@@ -468,6 +468,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         outputs: {
           exitCode: 1,
           error: `Failed to spawn command: ${err.message}`,
+          agentName: request.actionType === 'ai_task' ? executionAgent : undefined,
         },
       };
       this.emitComplete(executionId, response);
@@ -511,6 +512,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
           signal,
           branch,
           agentSessionId: entry.agentSessionId,
+          agentName: request.actionType === 'ai_task' ? executionAgent : undefined,
         });
       } catch (err) {
         const ent = this.entries.get(executionId);
@@ -529,6 +531,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
               exitCode: exitCode === 0 ? 1 : exitCode,
               error: `Invoker finalization failed after agent exited: ${reason}`,
               agentSessionId: entry.agentSessionId,
+              agentName: request.actionType === 'ai_task' ? executionAgent : undefined,
               branch,
             },
           });
