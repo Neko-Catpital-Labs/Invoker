@@ -439,6 +439,34 @@ describe('RepoPool', () => {
       });
     });
 
+    it('reuses the base commit resolved by the rebase refresh batch', async () => {
+      await pool.ensureClone(localRepoUrl);
+      const orig = (pool as any).execGit.bind(pool);
+      const execGit = vi.spyOn(pool as any, 'execGit').mockImplementation(
+        (...params: unknown[]) => {
+          const args = params[0] as string[];
+          const cwd = params[1] as string;
+          return orig(args, cwd);
+        },
+      );
+      const timing = {
+        mark: vi.fn(),
+        span: vi.fn(async (_functionName, _metadata, fn) => fn()),
+      };
+
+      await pool.refreshMirrorForRebase(localRepoUrl, 'master', timing);
+      execGit.mockClear();
+
+      const commit = await pool.resolveBaseCommit(localRepoUrl, 'master', timing);
+
+      expect(commit).toMatch(/^[0-9a-f]{40}$/);
+      expect(execGit).not.toHaveBeenCalled();
+      expect(timing.mark).toHaveBeenCalledWith('RepoPool.resolveBaseCommit.batched', 'completed', {
+        repoUrl: localRepoUrl,
+        baseBranch: 'master',
+      });
+    });
+
     it('concurrent fetches from separate pools sharing cacheDir both succeed', async () => {
       // Setup: bare repo so multiple clones can fetch concurrently
       const bareDir = mkdtempSync(join(tmpdir(), 'repo-pool-bare-'));
