@@ -560,6 +560,31 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'workflow-context-menu-organization');
   });
 
+  test('context menu keyboard navigation highlights active item', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+    const menu = await openContextMenu(page, page.locator('[data-testid^="workflow-node-"]'));
+
+    // The menu auto-focuses on open; move the cursor off the menu so the active
+    // highlight tracks keyboard state, not mouse hover.
+    await menu.focus();
+    await page.mouse.move(0, 0);
+
+    // Initial keyboard focus lands on the first item ("Open Workflow"). The
+    // implementation marks the active item with `bg-gray-700`; hover variants
+    // are escaped (`hover\:bg-gray-700`) and do not match the bare token.
+    const initialActive = menu.locator('button.bg-gray-700');
+    await expect(initialActive).toHaveCount(1);
+    await expect(initialActive).toHaveText('Open Workflow');
+
+    await page.keyboard.press('ArrowDown');
+
+    const afterArrow = menu.locator('button.bg-gray-700');
+    await expect(afterArrow).toHaveCount(1);
+    await expect(afterArrow).toHaveText('Open PR');
+
+    await captureScreenshot(page, 'context-menu-keyboard-navigation');
+  });
+
   test('context menu keeps danger separator when cancel action is absent', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     await injectTaskStates(page, [
