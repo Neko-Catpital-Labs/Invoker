@@ -18,7 +18,7 @@ import {
 import { syncPlanBaseRemoteForRef, isInvokerManagedPoolBranch } from './plan-base-remote.js';
 import { remoteFetchForPool } from './remote-fetch-policy.js';
 import { isWorkspaceCleanupEnabled } from './workspace-cleanup-policy.js';
-import { computeRepoUrlHash, sanitizeBranchForPath } from './git-utils.js';
+import { computeRepoCacheHash, computeRepoCacheKey, sanitizeBranchForPath } from './git-utils.js';
 
 export interface RepoPoolConfig {
   cacheDir: string;
@@ -92,7 +92,11 @@ export class RepoPool {
   }
 
   private cloneDir(repoUrl: string): string {
-    return `${this.cacheDir}/${computeRepoUrlHash(repoUrl)}`;
+    return `${this.cacheDir}/${computeRepoCacheHash(repoUrl)}`;
+  }
+
+  private repoKey(repoUrl: string): string {
+    return computeRepoCacheKey(repoUrl);
   }
 
   /** Deterministic external worktree path for a branch (requires worktreeBaseDir). */
@@ -101,7 +105,7 @@ export class RepoPool {
       throw new Error('RepoPool.externalWorktreePath requires worktreeBaseDir');
     }
     const sanitized = sanitizeBranchForPath(branch);
-    return `${this.worktreeBaseDir}/${computeRepoUrlHash(repoUrl)}/${sanitized}`;
+    return `${this.worktreeBaseDir}/${computeRepoCacheHash(repoUrl)}/${sanitized}`;
   }
 
   /**
@@ -109,7 +113,8 @@ export class RepoPool {
    * Ignores remoteFetchForPool, while single-flighting same-repo retry storms.
    */
   async refreshMirrorForRebase(repoUrl: string, baseBranch: string, timing?: RepoPoolTiming): Promise<string> {
-    const existingBatch = this.pendingRebaseRefreshBatches.get(repoUrl);
+    const repoKey = this.repoKey(repoUrl);
+    const existingBatch = this.pendingRebaseRefreshBatches.get(repoKey);
     if (existingBatch) {
       if (existingBatch.completedAtMs !== undefined && existingBatch.mirrorPath) {
         if (existingBatch.syncedBaseBranches.has(baseBranch)) {
@@ -120,7 +125,7 @@ export class RepoPool {
           });
           return existingBatch.mirrorPath;
         }
-        this.clearRebaseRefreshBatch(repoUrl, existingBatch);
+        this.clearRebaseRefreshBatch(repoKey, existingBatch);
       } else {
         if (existingBatch.cleanupTimer) {
           clearTimeout(existingBatch.cleanupTimer);
@@ -140,7 +145,7 @@ export class RepoPool {
       timings: timing ? [timing] : [],
       promise: Promise.resolve(''),
     };
-    this.pendingRebaseRefreshBatches.set(repoUrl, batch);
+    this.pendingRebaseRefreshBatches.set(repoKey, batch);
 
     let releaseBatchWindow!: () => void;
     const batchWindow = new Promise<void>((resolve) => {
@@ -150,7 +155,7 @@ export class RepoPool {
       releaseBatchWindow();
     }, REBASE_REFRESH_BATCH_WINDOW_MS);
 
-    const prev = this.repoChains.get(repoUrl) ?? Promise.resolve();
+    const prev = this.repoChains.get(repoKey) ?? Promise.resolve();
     const queuedAtMs = Date.now();
     const next = prev.then(async () => {
       await batchWindow;
@@ -175,18 +180,18 @@ export class RepoPool {
       batch.completedAtMs = Date.now();
       return dir;
     });
-    this.repoChains.set(repoUrl, next.catch(() => {}));
+    this.repoChains.set(repoKey, next.catch(() => {}));
     batch.promise = next.then(
       (dir) => {
         batch.cleanupTimer = setTimeout(() => {
-          if (this.pendingRebaseRefreshBatches.get(repoUrl) === batch) {
-            this.pendingRebaseRefreshBatches.delete(repoUrl);
+          if (this.pendingRebaseRefreshBatches.get(repoKey) === batch) {
+            this.pendingRebaseRefreshBatches.delete(repoKey);
           }
         }, REBASE_REFRESH_RECENT_REUSE_MS);
         return dir;
       },
       (err) => {
-        this.clearRebaseRefreshBatch(repoUrl, batch);
+        this.clearRebaseRefreshBatch(repoKey, batch);
         throw err;
       },
     );
@@ -300,7 +305,8 @@ export class RepoPool {
       });
       return;
     }
-    const prev = this.repoChains.get(repoUrl) ?? Promise.resolve();
+    const repoKey = this.repoKey(repoUrl);
+    const prev = this.repoChains.get(repoKey) ?? Promise.resolve();
     const queuedAtMs = Date.now();
     const next = prev.then(() => {
       timing?.mark('RepoPool.removeManagedBranchesInMirror.repoChainWait', 'completed', {
@@ -310,7 +316,7 @@ export class RepoPool {
       });
       return this.doRemoveManagedBranchesInMirror(repoUrl, branches, timing);
     });
-    this.repoChains.set(repoUrl, next.catch(() => {}));
+    this.repoChains.set(repoKey, next.catch(() => {}));
     return next;
   }
 
@@ -328,7 +334,7 @@ export class RepoPool {
     for (const branch of branches) {
       if (!isInvokerManagedPoolBranch(branch)) continue;
       const sanitized = sanitizeBranchForPath(branch);
-      const wtPath = `${this.worktreeBaseDir}/${computeRepoUrlHash(repoUrl)}/${sanitized}`;
+      const wtPath = `${this.worktreeBaseDir}/${computeRepoCacheHash(repoUrl)}/${sanitized}`;
       try {
         await this.time(timing, 'RepoPool.doRemoveManagedBranchesInMirror.gitWorktreeRemove', { dir, branch, wtPath }, () =>
           this.execGit(['worktree', 'remove', '--force', wtPath], dir),
@@ -368,7 +374,8 @@ export class RepoPool {
     });
     bench('RepoPool.ensureClone.begin');
     // Serialize clone operations per repo to prevent concurrent clone races
-    const existing = this.cloneLocks.get(repoUrl);
+    const repoKey = this.repoKey(repoUrl);
+    const existing = this.cloneLocks.get(repoKey);
     if (existing) {
       bench('RepoPool.ensureClone.waitForExistingLock.before');
       const clonePath = await existing;
@@ -377,13 +384,13 @@ export class RepoPool {
     }
 
     const promise = this.doEnsureClone(repoUrl);
-    this.cloneLocks.set(repoUrl, promise);
+    this.cloneLocks.set(repoKey, promise);
     try {
       const clonePath = await promise;
       bench('RepoPool.ensureClone.after', { clonePath });
       return clonePath;
     } finally {
-      this.cloneLocks.delete(repoUrl);
+      this.cloneLocks.delete(repoKey);
       bench('RepoPool.ensureClone.lockDeleted');
     }
   }
@@ -546,13 +553,14 @@ export class RepoPool {
     });
     bench('RepoPool.acquireWorktree.begin');
     // Serialize per-repo to prevent concurrent git worktree operations
-    const prev = this.repoChains.get(repoUrl) ?? Promise.resolve();
+    const repoKey = this.repoKey(repoUrl);
+    const prev = this.repoChains.get(repoKey) ?? Promise.resolve();
     const queuedAtMs = Date.now();
     const next = prev.then(() => {
       bench('RepoPool.acquireWorktree.repoChainWait.after', { durationMs: Date.now() - queuedAtMs });
       return this.doAcquireWorktree(repoUrl, branch, base, actionId, opts);
     });
-    this.repoChains.set(repoUrl, next.catch(() => {}));
+    this.repoChains.set(repoKey, next.catch(() => {}));
     const acquired = await next;
     bench('RepoPool.acquireWorktree.after', { worktreePath: acquired.worktreePath });
     return acquired;
@@ -567,12 +575,13 @@ export class RepoPool {
    * reservations behind and artificially pin the pool at max capacity.
    */
   reconcileActiveWorktrees(repoUrl: string, livePaths: Iterable<string>): void {
+    const repoKey = this.repoKey(repoUrl);
     const live = new Set(Array.from(livePaths, (path) => canonicalPathForComparison(path)));
     if (live.size === 0) {
-      this.activeWorktrees.delete(repoUrl);
+      this.activeWorktrees.delete(repoKey);
       return;
     }
-    this.activeWorktrees.set(repoUrl, live);
+    this.activeWorktrees.set(repoKey, live);
   }
 
   private async isReusableManagedWorktree(worktreePath: string, expectedBranch: string): Promise<boolean> {
@@ -604,13 +613,14 @@ export class RepoPool {
     bench('RepoPool.doAcquireWorktree.ensureClone.before');
     const clonePath = await this.ensureClone(repoUrl);
     bench('RepoPool.doAcquireWorktree.ensureClone.after', { clonePath });
-    const active = this.activeWorktrees.get(repoUrl) ?? new Set();
+    const repoKey = this.repoKey(repoUrl);
+    const active = this.activeWorktrees.get(repoKey) ?? new Set();
     bench('RepoPool.doAcquireWorktree.activeWorktreeCount', { activeCount: active.size, maxWorktrees: this.maxWorktrees });
     if (active.size >= this.maxWorktrees) {
       throw new ResourceLimitError(`Worktree limit reached for ${repoUrl}: ${active.size}/${this.maxWorktrees}`);
     }
     const sanitized = sanitizeBranchForPath(branch);
-    const urlHash = computeRepoUrlHash(repoUrl);
+    const urlHash = computeRepoCacheHash(repoUrl);
     const worktreePath = this.worktreeBaseDir
       ? `${this.worktreeBaseDir}/${urlHash}/${sanitized}`
       : `${clonePath}/worktrees/${sanitized}`;
@@ -830,7 +840,7 @@ export class RepoPool {
 
     effectivePath = canonicalPathForComparison(effectivePath);
     active.add(effectivePath);
-    this.activeWorktrees.set(repoUrl, active);
+    this.activeWorktrees.set(repoKey, active);
     bench('RepoPool.doAcquireWorktree.applyPlan.after', {
       planKind: plan.kind,
       effectivePath,
