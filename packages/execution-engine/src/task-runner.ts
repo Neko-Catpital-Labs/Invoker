@@ -96,6 +96,11 @@ type PoolSelection = {
   selectionStrategy: 'roundRobin' | 'leastLoaded';
 };
 
+type FreshBaseCommit = {
+  branch: string;
+  commit: string;
+};
+
 type RemoteTargetDisplay = {
   host: string;
   user: string;
@@ -218,6 +223,7 @@ export class TaskRunner {
   private sshExecutorCache = new Map<string, SshExecutor>();
   private poolRoundRobinCursor = new Map<string, number>();
   private pendingPoolSelections = new Map<string, PoolSelection>();
+  private freshBaseCommits = new Map<string, FreshBaseCommit>();
 
   /** In-flight executions keyed by attemptId (with taskId retained for external kill resolution). */
   private activeExecutions = new Map<string, ActiveExecutionEntry>();
@@ -239,13 +245,15 @@ export class TaskRunner {
     repoUrl: string | undefined,
     baseBranchHint: string | undefined,
     timing?: RepoPoolTiming,
-  ): Promise<void> {
-    if (!repoUrl) return;
+  ): Promise<{ branch: string; commit: string } | undefined> {
+    if (!repoUrl) return undefined;
     const executor = this.executorRegistry.get('worktree');
-    if (!(executor instanceof WorktreeExecutor)) return;
+    if (!(executor instanceof WorktreeExecutor)) return undefined;
     const pool = executor.getRepoPool();
     const baseBranch = baseBranchHint?.trim() || this.defaultBranch || 'master';
     await pool.refreshMirrorForRebase(repoUrl, baseBranch, timing);
+    const commit = await pool.resolveBaseCommit(repoUrl, baseBranch, timing);
+    this.freshBaseCommits.set(workflowId, { branch: baseBranch, commit });
     const collectStartedAtMs = Date.now();
     timing?.mark('TaskRunner.preparePoolForRebaseRetry.collectManagedWorkflowBranches', 'started', {
       workflowId,
@@ -257,6 +265,7 @@ export class TaskRunner {
       durationMs: Date.now() - collectStartedAtMs,
     });
     await pool.removeManagedBranchesInMirror(repoUrl, branches, timing);
+    return { branch: baseBranch, commit };
   }
 
   /**
@@ -612,6 +621,8 @@ export class TaskRunner {
     const baseBranch = workflow?.baseBranch ?? this.defaultBranch;
     const repoUrl = workflow?.repoUrl;
     const branchRepoUrl = workflow?.intermediateRepoUrl?.trim() || undefined;
+    const freshBase = task.config.workflowId ? this.freshBaseCommits.get(task.config.workflowId) : undefined;
+    const baseCommit = freshBase && freshBase.branch === baseBranch ? freshBase.commit : undefined;
 
     // Persist the experiment branch as soon as the executor knows it — well
     // before `git worktree add` could leak a worktree without a recorded branch
@@ -660,6 +671,7 @@ export class TaskRunner {
         upstreamBranches: upstreamBranches.length > 0 ? upstreamBranches : undefined,
         lifecycleTag,
         baseBranch,
+        baseCommit,
         freshWorkspace: this.shouldUseFreshWorkspace(task),
         reusableWorktree: task.execution.branch && task.execution.workspacePath
           ? {

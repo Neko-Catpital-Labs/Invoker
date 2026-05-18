@@ -22,6 +22,8 @@ import { createDeleteAllSnapshot } from './delete-all-snapshot.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import { isDispatchableLaunch } from './global-topup.js';
 
+type LoadedWorkflow = NonNullable<ReturnType<SQLiteAdapter['loadWorkflow']>>;
+
 // ── Lineage guard ─────────────────────────────────────────────
 
 /**
@@ -379,19 +381,18 @@ export async function deleteAllWorkflowsBulk(
  *      `taskExecutor.killActiveExecution`) when invoked through that
  *      route — this wrapper does not add a parallel cancel call.
  *
- * The `refreshBase` callback returns `undefined` today because
- * `preparePoolForRebaseRetry` does not yet expose the resulting
- * upstream HEAD SHA; recording the SHA is a follow-up. Tests inject
- * their own `refreshBase` callback (via the orchestrator method
- * directly) to assert the fresh-base observable.
+ * `preparePoolForRebaseRetry` resolves the fresh upstream HEAD once.
+ * The explicit fresh-base lifecycle entrypoint can pass that commit
+ * through to the orchestrator callback when available.
  */
 async function prepareWorkflowFreshBase(
   workflowId: string,
   deps: ActionDeps,
-) {
+): Promise<{ workflow: LoadedWorkflow; freshBase?: { branch: string; commit: string } }> {
   const workflow = deps.persistence.loadWorkflow(workflowId);
   if (!workflow) throw new OrchestratorError(OrchestratorErrorCode.WORKFLOW_NOT_FOUND, `Workflow ${workflowId} not found`);
 
+  let freshBase: { branch: string; commit: string } | undefined;
   if (deps.taskExecutor && workflow.repoUrl) {
     const prepare = () => deps.mutationTiming
       ? deps.taskExecutor!.preparePoolForRebaseRetry(
@@ -406,24 +407,24 @@ async function prepareWorkflowFreshBase(
         workflow.baseBranch,
       );
     if (deps.mutationTiming) {
-      await deps.mutationTiming.span(
+      freshBase = await deps.mutationTiming.span(
         'workflow-actions.prepareWorkflowFreshBase.preparePoolForRebaseRetry',
         { repoUrl: workflow.repoUrl, baseBranch: workflow.baseBranch },
         prepare,
       );
     } else {
-      await prepare();
+      freshBase = await prepare();
     }
   }
 
-  return workflow;
+  return { workflow, freshBase };
 }
 
 export async function recreateWorkflowFromFreshBase(
   workflowId: string,
   deps: ActionDeps,
 ): Promise<TaskState[]> {
-  const workflow = await prepareWorkflowFreshBase(workflowId, deps);
+  const { workflow, freshBase } = await prepareWorkflowFreshBase(workflowId, deps);
   const nextGen = (workflow.generation ?? 0) + 1;
   deps.mutationTiming?.mark('workflow-actions.recreateWorkflowFromFreshBase.bumpGeneration', 'started', {
     nextGeneration: nextGen,
@@ -445,7 +446,7 @@ export async function recreateWorkflowFromFreshBase(
     refreshBase: async () => {
       // Pool preparation already ran above. The callback is kept so the
       // orchestrator still sees the fresh-base lifecycle entrypoint.
-      return undefined;
+      return freshBase;
     },
   });
   return deps.mutationTiming

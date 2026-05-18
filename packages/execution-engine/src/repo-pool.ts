@@ -15,7 +15,7 @@ import {
   parseGitWorktreePorcelain,
   parseExperimentBranch,
 } from './worktree-discovery.js';
-import { syncPlanBaseRemoteForRef, isInvokerManagedPoolBranch } from './plan-base-remote.js';
+import { syncPlanBaseRemoteForRef, isInvokerManagedPoolBranch, resolvePlanBaseRevision } from './plan-base-remote.js';
 import { remoteFetchForPool } from './remote-fetch-policy.js';
 import { isWorkspaceCleanupEnabled } from './workspace-cleanup-policy.js';
 import { computeRepoCacheHash, computeRepoCacheKey, sanitizeBranchForPath } from './git-utils.js';
@@ -240,6 +240,14 @@ export class RepoPool {
       }
     }
     return dir;
+  }
+
+  async resolveBaseCommit(repoUrl: string, baseBranch: string, timing?: RepoPoolTiming): Promise<string> {
+    const dir = this.cloneDir(repoUrl);
+    const runGit = (args: string[]) => this.execGit(args, dir);
+    return this.time(timing, 'RepoPool.resolveBaseCommit.resolvePlanBaseRevision', { dir, baseBranch }, () =>
+      resolvePlanBaseRevision(runGit, baseBranch),
+    );
   }
 
   private async refreshMirrorCloneForRebase(repoUrl: string, timing?: RepoPoolTiming): Promise<RebaseMirrorRefreshResult> {
