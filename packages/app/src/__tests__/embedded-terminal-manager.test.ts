@@ -509,6 +509,125 @@ describe('EmbeddedTerminalManager', () => {
   });
 });
 
+// ── PTY first-frame race regression ──────────────────────────────────────
+//
+// Regression coverage for the embedded PTY output race: the renderer terminal
+// pane subscribes to `invoker:terminal-output` only after `openTerminal`
+// returns a session descriptor. Any output the backend emits *synchronously*
+// during spawn — including the very first frame from a fast PTY — is therefore
+// missed by the live event stream. The session descriptor's `outputSnapshot`
+// must replay that frame so a late consumer can seed itself deterministically.
+//
+// The `FIRST_FRAME_FROM_PTY\n` marker is the focused string used by
+// `scripts/repro-gui-open-terminal-pty-race.sh`. Renaming or removing it must
+// be done in lockstep with the repro script.
+
+describe('EmbeddedTerminalManager — PTY first-frame race regression', () => {
+  const FIRST_FRAME = 'FIRST_FRAME_FROM_PTY\n';
+
+  it('replays FIRST_FRAME_FROM_PTY emitted synchronously during spawn() in the returned descriptor', () => {
+    // Use the real PTY backend with a fake node-pty spawn that emits its first
+    // frame synchronously inside `onData` registration — the same shape the
+    // production race exhibits when a PTY's startup banner lands before the
+    // renderer mounts.
+    const ptySpawnFn: PtySpawnFn = () => {
+      const pty = createFakePty();
+      const originalOnData = pty.onData.bind(pty);
+      pty.onData = (listener) => {
+        const disposable = originalOnData(listener);
+        listener(FIRST_FRAME);
+        return disposable;
+      };
+      return pty;
+    };
+    const mgr = new EmbeddedTerminalManager({
+      backend: createPtyTerminalBackend({ spawnFn: ptySpawnFn }),
+    });
+
+    const session = mgr.openOrReuse({ taskId: 'race', spec: {}, cwd: '/tmp' });
+
+    expect(session.outputSnapshot).toBe(FIRST_FRAME);
+    expect(session.outputSnapshot).toContain('FIRST_FRAME_FROM_PTY');
+  });
+
+  it('lets a late consumer seed itself from the descriptor when it missed the live output event', () => {
+    const ptySpawnFn: PtySpawnFn = () => {
+      const pty = createFakePty();
+      const originalOnData = pty.onData.bind(pty);
+      pty.onData = (listener) => {
+        const disposable = originalOnData(listener);
+        listener(FIRST_FRAME);
+        return disposable;
+      };
+      return pty;
+    };
+    const mgr = new EmbeddedTerminalManager({
+      backend: createPtyTerminalBackend({ spawnFn: ptySpawnFn }),
+    });
+
+    // Simulate the renderer race: openOrReuse() returns BEFORE the consumer
+    // attaches its `invoker:terminal-output` listener. The live stream from
+    // here on is empty, so the consumer is entirely dependent on the snapshot
+    // it reads off the descriptor.
+    const session = mgr.openOrReuse({ taskId: 'race', spec: {}, cwd: '/tmp' });
+    const liveEvents: string[] = [];
+    mgr.on('output', (e) => liveEvents.push(e.data));
+
+    const seededFromSnapshot = session.outputSnapshot ?? '';
+    expect(liveEvents).toEqual([]);
+    expect(seededFromSnapshot).toBe(FIRST_FRAME);
+
+    // `terminalList()` (e.g. a reload after the renderer comes up) must serve
+    // the same snapshot so a late-attaching pane reconstructs the first frame.
+    const listed = mgr.list();
+    expect(listed).toHaveLength(1);
+    expect(listed[0].sessionId).toBe(session.sessionId);
+    expect(listed[0].outputSnapshot).toBe(FIRST_FRAME);
+  });
+
+  it('does not throw when the PTY backend emits FIRST_FRAME_FROM_PTY and exits synchronously during spawn()', () => {
+    // Combined synchronous output + exit during spawn() is the harshest case:
+    // the manager's placeholder bookkeeping must absorb both before the real
+    // process handle has been installed, otherwise the finalize path closes
+    // over an unassigned variable.
+    const ptySpawnFn: PtySpawnFn = () => {
+      const pty = createFakePty();
+      const originalOnData = pty.onData.bind(pty);
+      const originalOnExit = pty.onExit.bind(pty);
+      pty.onData = (listener) => {
+        const disposable = originalOnData(listener);
+        listener(FIRST_FRAME);
+        return disposable;
+      };
+      pty.onExit = (listener) => {
+        const disposable = originalOnExit(listener);
+        listener({ exitCode: 3 });
+        return disposable;
+      };
+      return pty;
+    };
+    const mgr = new EmbeddedTerminalManager({
+      backend: createPtyTerminalBackend({ spawnFn: ptySpawnFn }),
+    });
+    const exits: Array<{ sessionId: string; exitCode?: number }> = [];
+    mgr.on('exit', (e) => exits.push({ sessionId: e.sessionId, exitCode: e.exitCode }));
+
+    let descriptor: ReturnType<EmbeddedTerminalManager['openOrReuse']> | undefined;
+    expect(() => {
+      descriptor = mgr.openOrReuse({ taskId: 'race-exit', spec: {}, cwd: '/tmp' });
+    }).not.toThrow();
+
+    expect(descriptor).toBeDefined();
+    expect(descriptor!.status).toBe('exited');
+    expect(descriptor!.exitCode).toBe(3);
+    expect(descriptor!.outputSnapshot).toBe(FIRST_FRAME);
+    expect(exits).toHaveLength(1);
+    expect(exits[0].exitCode).toBe(3);
+    // The session has finalized and dropped out of the live list.
+    expect(mgr.list()).toHaveLength(0);
+  });
+});
+
 // ── Deterministic GUI route: resolveTaskTerminalSpec + EmbeddedTerminalManager ──
 
 describe('GUI open-terminal embedded route', () => {
