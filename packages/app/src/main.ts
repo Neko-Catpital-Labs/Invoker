@@ -3824,6 +3824,17 @@ if (isHeadless) {
           spec: resolved.spec,
           cwd: resolved.cwd,
           agentName: resolved.meta.agentSessionId ? resolved.meta.executionAgent : undefined,
+          terminalKey: JSON.stringify({
+            runnerKind: resolved.meta.runnerKind,
+            workspacePath: resolved.meta.workspacePath ?? resolved.cwd,
+            branch: resolved.meta.branch ?? null,
+            agentSessionId: resolved.meta.agentSessionId ?? null,
+            executionAgent: resolved.meta.executionAgent ?? null,
+            containerId: resolved.meta.containerId ?? null,
+            command: resolved.spec.command ?? null,
+            args: resolved.spec.args ?? [],
+            attachExecutionId: liveHandle?.handle.executionId ?? null,
+          }),
           attach: liveHandle ? { handle: liveHandle.handle, executor: liveHandle.executor } : undefined,
         });
         return { opened: true, session };

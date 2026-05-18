@@ -14,6 +14,7 @@ import { FitAddon } from 'xterm-addon-fit';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 const DRAWER_BODY_HEIGHT_PX = 280;
+const EXPANDED_BODY_HEIGHT = 'calc(100vh - 88px)';
 const ANSI_PATTERN = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
 
 interface TerminalDrawerProps {
@@ -30,6 +31,7 @@ interface TerminalDrawerProps {
 interface TerminalSessionPaneProps {
   session: TerminalSessionDescriptor;
   isActive: boolean;
+  drawerCollapsed: boolean;
   hasHeader: boolean;
   onOutput: (sessionId: string, data: string) => void;
 }
@@ -46,7 +48,7 @@ function commandLabel(session: TerminalSessionDescriptor): string {
   return session.command ? 'command' : 'shell';
 }
 
-function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: TerminalSessionPaneProps): JSX.Element {
+function TerminalSessionPane({ session, isActive, drawerCollapsed, hasHeader, onOutput }: TerminalSessionPaneProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -133,7 +135,7 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
   }, [onOutput, session.sessionId]);
 
   useEffect(() => {
-    if (!isActive) return;
+    if (!isActive || drawerCollapsed) return;
     const term = termRef.current;
     const fit = fitRef.current;
     if (!term || !fit) return;
@@ -144,7 +146,7 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
     } catch {
       /* fit failed (e.g., hidden) */
     }
-  }, [isActive, session.sessionId]);
+  }, [drawerCollapsed, isActive, session.sessionId]);
 
   return (
     <div
@@ -186,7 +188,8 @@ export function TerminalDrawer({
   return (
     <div
       data-testid="terminal-drawer"
-      className="border-t border-gray-800 bg-gray-950"
+      data-state={collapsed ? 'collapsed' : 'expanded'}
+      className="shrink-0 border-t border-gray-800 bg-gray-950"
     >
       <div className="flex items-center gap-2 border-b border-gray-800 px-3 py-2">
         <div
@@ -248,12 +251,12 @@ export function TerminalDrawer({
           {collapsed ? 'Expand' : 'Minimize'}
         </button>
       </div>
-      {!collapsed && (
-        <div
-          data-testid="terminal-drawer-body"
-          className="relative bg-black"
-          style={{ height: DRAWER_BODY_HEIGHT_PX }}
-        >
+      <div
+        data-testid="terminal-drawer-body"
+        aria-hidden={collapsed}
+        className="relative overflow-hidden bg-black transition-[height] duration-150"
+        style={{ height: collapsed ? 0 : EXPANDED_BODY_HEIGHT, minHeight: collapsed ? 0 : DRAWER_BODY_HEIGHT_PX }}
+      >
           {sessions.length === 0 && (
             <div className="absolute inset-0 flex items-center justify-center px-3 text-xs text-gray-500">
               Open a terminal from a task to attach.
@@ -285,12 +288,12 @@ export function TerminalDrawer({
               key={session.sessionId}
               session={session}
               isActive={session.sessionId === activeSessionId}
+              drawerCollapsed={collapsed}
               hasHeader={Boolean(session.sessionId === activeSessionId && activeCommand)}
               onOutput={handleOutput}
             />
           ))}
-        </div>
-      )}
+      </div>
     </div>
   );
 }
