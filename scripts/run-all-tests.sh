@@ -60,16 +60,16 @@ declare -a SUITES=()
 expected_executed_for_mode() {
   case "$MODE_KEY" in
     required)
-      printf '16'
+      printf '17'
       ;;
     extended)
-      printf '23'
+      printf '24'
       ;;
     dangerous)
       if [ "${#SKIPPED_UNAVAILABLE[@]}" -eq 1 ] && [ "${SKIPPED_UNAVAILABLE[0]}" = "dangerous/10-docker-comprehensive.sh" ]; then
-        printf '23'
-      else
         printf '24'
+      else
+        printf '25'
       fi
       ;;
   esac
@@ -121,7 +121,7 @@ suite_name() {
 
 is_parallel_safe() {
   case "$(suite_relpath "$1")" in
-    required/05-delete-all-prod-db-guard.sh|required/07-invalid-config-json.sh|required/10-vitest-workspace.sh|required/15-owner-boundary-policy.sh|required/15-submit-workflow-chain.sh|required/20-e2e-dry-run.sh|required/21-e2e-dry-run-downstream.sh|required/22-e2e-dry-run-github.sh|required/50-verify-executor-routing.sh|optional/40-playwright-app.sh|optional/60-worktree-provisioning.sh|optional/70-ui-visual-proof-validate.sh)
+    required/05-delete-all-prod-db-guard.sh|required/07-invalid-config-json.sh|required/09-large-file-guardrail.sh|required/10-vitest-workspace.sh|required/15-owner-boundary-policy.sh|required/15-submit-workflow-chain.sh|required/20-e2e-dry-run.sh|required/21-e2e-dry-run-downstream.sh|required/22-e2e-dry-run-github.sh|required/50-verify-executor-routing.sh|optional/40-playwright-app.sh|optional/60-worktree-provisioning.sh|optional/70-ui-visual-proof-validate.sh)
       return 0
       ;;
     *)
