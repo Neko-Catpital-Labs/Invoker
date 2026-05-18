@@ -65,7 +65,7 @@ function buildPlan(index: number) {
 
 async function waitForWorkflowGraphVisible(page: Page, timeoutMs: number): Promise<number> {
   const startedAt = Date.now();
-  await page.locator('[data-testid^="workflow-node-"]').first().waitFor({
+  await page.locator('[data-testid^="workflow-node-"]:visible').first().waitFor({
     state: 'visible',
     timeout: timeoutMs,
   });
