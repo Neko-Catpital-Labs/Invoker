@@ -11,7 +11,12 @@ import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vites
 import http from 'node:http';
 import { startApiServer, type ApiServer } from '../api-server.js';
 import { WorkflowMutationFacade } from '../workflow-mutation-facade.js';
-import { OrchestratorError, OrchestratorErrorCode } from '@invoker/workflow-core';
+import {
+  OrchestratorError,
+  OrchestratorErrorCode,
+  PlanConflictError,
+  TopologyForkRequired,
+} from '@invoker/workflow-core';
 
 // ── Helpers ──────────────────────────────────────────────────
 
@@ -348,12 +353,15 @@ describe('POST /api/tasks/:id/restart', () => {
     expect(mocks.orchestrator.retryTask).toHaveBeenCalledWith('task-1');
   });
 
-  it('returns 400 on error', async () => {
+  it('returns 409 for terminal task domain errors', async () => {
     mocks.orchestrator.retryTask.mockImplementation(() => {
-      throw new Error('task not restartable');
+      throw new OrchestratorError(
+        OrchestratorErrorCode.TASK_ALREADY_TERMINAL,
+        'task not restartable',
+      );
     });
     const res = await request(port, 'POST', '/api/tasks/task-1/restart');
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(409);
     expect(res.body.error).toBe('task not restartable');
   });
 
@@ -719,6 +727,19 @@ describe('POST /api/tasks/:id/gate-policy', () => {
     expect(mocks.orchestrator.recreateWorkflow).not.toHaveBeenCalled();
     expect(mocks.orchestrator.cancelTask).not.toHaveBeenCalled();
     expect(mocks.orchestrator.cancelWorkflow).not.toHaveBeenCalled();
+
+    mocks.orchestrator.setTaskExternalGatePolicies.mockImplementationOnce(() => {
+      throw new PlanConflictError('plan conflicts with active workflow', ['task-2'], [
+        { id: 'wf-2', name: 'active workflow' },
+      ]);
+    });
+    const conflict = await request(port, 'POST', '/api/tasks/task-1/gate-policy', {
+      updates: [
+        { workflowId: 'wf-upstream', taskId: '__merge__', gatePolicy: 'review_ready' },
+      ],
+    });
+    expect(conflict.status).toBe(409);
+    expect(conflict.body.error).toBe('plan conflicts with active workflow');
   });
 });
 
@@ -824,6 +845,13 @@ describe('POST /api/workflows/:id/fork', () => {
     const res = await request(port, 'POST', '/api/workflows/missing/fork');
     expect(res.status).toBe(404);
     expect(res.body.error).toContain('not found');
+
+    mocks.orchestrator.forkWorkflow.mockImplementationOnce(() => {
+      throw new TopologyForkRequired('wf-live', 'task-running');
+    });
+    const conflict = await request(port, 'POST', '/api/workflows/wf-live/fork');
+    expect(conflict.status).toBe(409);
+    expect(conflict.body.error).toContain('TopologyForkRequired');
   });
 });
 

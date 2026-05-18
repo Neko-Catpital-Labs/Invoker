@@ -120,7 +120,7 @@ function serializeTask(task: any): any {
   return obj;
 }
 
-/** Map domain errors to HTTP status codes. Falls back to 400. */
+/** INV-130: keep domain errors in workflow-core and translate them only at the HTTP boundary. */
 const notFoundCodes: ReadonlySet<string> = new Set([
   OrchestratorErrorCode.TASK_NOT_FOUND,
   OrchestratorErrorCode.WORKFLOW_NOT_FOUND,
