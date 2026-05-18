@@ -120,7 +120,7 @@ interface AttachedSessionState extends BaseSessionState {
 type SessionState = SpawnSessionState | AttachedSessionState;
 
 export interface EmbeddedTerminalManagerOptions {
-  /** Single backend used for GUI spawned sessions. Defaults to the Bash/pipe backend. */
+  /** Single backend used for GUI spawned sessions. Defaults to the PTY backend. */
   backend?: EmbeddedTerminalBackend;
   /** Default shell for `spawn`-mode sessions when the spec has no command. */
   defaultShell?: string;
@@ -410,7 +410,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
 
 function resolveBackend(options: EmbeddedTerminalManagerOptions): EmbeddedTerminalBackend {
   if (options.backend) return options.backend;
-  return createBashTerminalBackend();
+  return createPtyTerminalBackend();
 }
 
 function loadNodePtySpawn(): PtySpawnFn {

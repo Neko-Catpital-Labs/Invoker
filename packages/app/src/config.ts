@@ -242,7 +242,7 @@ export function resolveEmbeddedTerminalBackendConfig(
   config: InvokerConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): EmbeddedTerminalBackendConfig {
-  const rawValue = env.INVOKER_EMBEDDED_TERMINAL_BACKEND ?? config.terminal?.embeddedBackend ?? 'bash';
+  const rawValue = env.INVOKER_EMBEDDED_TERMINAL_BACKEND ?? config.terminal?.embeddedBackend ?? 'pty';
   const raw = typeof rawValue === 'string' ? rawValue : String(rawValue);
   const value = raw.trim().toLowerCase();
   if (value === 'bash' || value === 'pty') return value;
