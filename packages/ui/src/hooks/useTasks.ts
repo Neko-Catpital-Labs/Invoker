@@ -155,7 +155,25 @@ export function useTasks(): UseTasksResult {
       });
     }
 
-    fetchAll();
+    // Skip the immediate post-bootstrap non-forced getTasks: preload already
+    // delivered the same orchestrator/persistence snapshot via
+    // __INVOKER_BOOTSTRAP__, and later updates arrive through the
+    // task-delta / workflows-changed subscriptions registered below.
+    // Forced refreshes (refreshTasks(true)) and mutation-driven refreshes
+    // still call fetchAll.
+    if (bootstrapState) {
+      void window.invoker.reportUiPerf?.('startup_snapshot_skipped_bootstrap_provided', {
+        bootstrapTaskCount: bootstrapState.tasks?.length ?? 0,
+        bootstrapWorkflowCount: bootstrapState.workflows?.length ?? 0,
+        elapsedMs: Math.round(performance.now()),
+        processElapsedMs: bootstrapState.appStartedAtEpochMs
+          ? Date.now() - bootstrapState.appStartedAtEpochMs
+          : undefined,
+      });
+      void window.invoker.checkPrStatuses?.();
+    } else {
+      fetchAll();
+    }
 
     deltaPipelineRef.current = createTaskDeltaPipeline({
       flushMs: 100,

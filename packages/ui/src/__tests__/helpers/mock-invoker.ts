@@ -164,6 +164,12 @@ export function createMockInvoker(
     for (const task of tasks) {
       deltaCallback?.({ type: 'created', task });
     }
+    // Mirror production: when workflows change in main, the renderer learns
+    // about them through the workflows-changed channel (not via the initial
+    // snapshot, which useTasks skips when preload bootstrap is present).
+    if (workflows) {
+      workflowsCallback?.(workflows);
+    }
   }
 
   function fireDelta(delta: TaskDelta) {
