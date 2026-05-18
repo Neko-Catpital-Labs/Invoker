@@ -52,6 +52,7 @@ export interface AcquireWorktreeOptions {
 interface RebaseRefreshBatch {
   baseBranches: Set<string>;
   syncedBaseBranches: Set<string>;
+  resolvedBaseCommits: Map<string, string>;
   callerCount: number;
   timings: RepoPoolTiming[];
   promise: Promise<string>;
@@ -141,6 +142,7 @@ export class RepoPool {
     const batch: RebaseRefreshBatch = {
       baseBranches: new Set([baseBranch]),
       syncedBaseBranches: new Set(),
+      resolvedBaseCommits: new Map(),
       callerCount: 1,
       timings: timing ? [timing] : [],
       promise: Promise.resolve(''),
@@ -237,12 +239,71 @@ export class RepoPool {
           );
         }
         batch.syncedBaseBranches.add(branch);
+        const commit = await this.time(timing, 'RepoPool.doRefreshMirrorForRebase.resolveBaseCommitNoFetch', { dir, baseBranch: branch }, () =>
+          this.tryResolveBaseCommitNoFetch(runGit, branch),
+        );
+        if (commit) {
+          batch.resolvedBaseCommits.set(branch, commit);
+        }
       }
     }
     return dir;
   }
 
+  private async tryResolveBaseCommitNoFetch(runGit: (args: string[]) => Promise<string>, baseRef: string): Promise<string | undefined> {
+    const ref = baseRef.trim() || 'HEAD';
+    const tryRevParse = async (expr: string): Promise<string | undefined> => {
+      try {
+        const resolved = (await runGit(['rev-parse', '--verify', expr])).trim();
+        return resolved || undefined;
+      } catch {
+        return undefined;
+      }
+    };
+    if (ref === 'HEAD') {
+      try {
+        const resolved = (await runGit(['rev-parse', 'HEAD'])).trim();
+        return resolved || undefined;
+      } catch {
+        return undefined;
+      }
+    }
+    if (/^[0-9a-f]{40}$/i.test(ref)) {
+      return tryRevParse(`${ref}^{commit}`);
+    }
+    if (ref.startsWith('refs/heads/') || ref.startsWith('refs/remotes/origin/') || ref.startsWith('origin/')) {
+      return tryRevParse(`${ref}^{commit}`);
+    }
+    if (ref.startsWith('refs/')) {
+      return undefined;
+    }
+    if (ref.includes('~') || ref.includes('^')) {
+      return tryRevParse(ref);
+    }
+
+    const originResolved = await tryRevParse(`origin/${ref}^{commit}`);
+    if (originResolved) return originResolved;
+    const localResolved = await tryRevParse(`refs/heads/${ref}^{commit}`);
+    if (localResolved) return localResolved;
+    try {
+      const originHeadRef = (await runGit(['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'])).trim();
+      if (originHeadRef) return tryRevParse(`${originHeadRef}^{commit}`);
+    } catch {
+      return undefined;
+    }
+    return undefined;
+  }
+
   async resolveBaseCommit(repoUrl: string, baseBranch: string, timing?: RepoPoolTiming): Promise<string> {
+    const batch = this.pendingRebaseRefreshBatches.get(this.repoKey(repoUrl));
+    const batchedCommit = batch?.resolvedBaseCommits.get(baseBranch);
+    if (batchedCommit) {
+      timing?.mark('RepoPool.resolveBaseCommit.batched', 'completed', {
+        repoUrl,
+        baseBranch,
+      });
+      return batchedCommit;
+    }
     const dir = this.cloneDir(repoUrl);
     const runGit = (args: string[]) => this.execGit(args, dir);
     return this.time(timing, 'RepoPool.resolveBaseCommit.resolvePlanBaseRevision', { dir, baseBranch }, () =>
