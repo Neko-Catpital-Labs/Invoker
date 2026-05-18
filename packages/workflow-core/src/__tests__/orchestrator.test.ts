@@ -3,6 +3,7 @@ import { reconciliationNeedsInputWorkResponse } from './reconciliation-needs-inp
 import { rid, sid } from './scoped-test-helpers.js';
 import { Orchestrator, PlanConflictError, descriptionForMergeNode } from '../orchestrator.js';
 import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
+import { MUTATION_POLICIES, applyInvalidation } from '../invalidation-policy.js';
 import { computeWorkflowRollup } from '../task-types.js';
 import type { TaskState, TaskDelta, TaskStateChanges, Attempt } from '../task-types.js';
 import type { Logger, WorkResponse } from '@invoker/contracts';
@@ -6624,9 +6625,36 @@ describe('Orchestrator', () => {
     });
 
     describe('applyInvalidation routing (Step 11 "not yet wired" path is closed)', () => {
-      it("applyInvalidation('workflow', 'recreateWorkflowFromFreshBase', ...) succeeds when the dep is wired", async () => {
-        const { applyInvalidation } = await import('../invalidation-policy.js');
+      it('consumes the INV-90 selected rebaseAndRetry policy instead of hard-coding the fresh-base route', async () => {
+        const p = new InMemoryPersistence();
+        const b = new InMemoryBus();
+        const wfId = 'wf-inv90-policy-consumed';
+        seedSimpleWorkflow(p, wfId);
+        const o = new Orchestrator({ persistence: p, messageBus: b, maxConcurrency: 2 });
+        o.syncFromDb(wfId);
 
+        const policy = MUTATION_POLICIES.rebaseAndRetry;
+        expect(policy.action).toBe('recreateWorkflowFromFreshBase');
+
+        const cancelInFlight = vi.fn(async () => undefined);
+        await applyInvalidation('workflow', policy.action, wfId, {
+          cancelInFlight,
+          retryTask: async () => [],
+          recreateTask: async () => [],
+          retryWorkflow: async () => [],
+          recreateWorkflow: async () => [],
+          recreateWorkflowFromFreshBase: (workflowId: string) =>
+            o.recreateWorkflowFromFreshBase(workflowId, {
+              refreshBase: async () => ({ commit: 'sha-inv90-selected' }),
+            }),
+        });
+
+        expect(cancelInFlight).toHaveBeenCalledWith('workflow', wfId);
+        expect(o.getKnownFreshBaseCommit(wfId)).toBe('sha-inv90-selected');
+        expect(o.getTask('a')!.execution.commit).toBeUndefined();
+      });
+
+      it("applyInvalidation('workflow', 'recreateWorkflowFromFreshBase', ...) succeeds when the dep is wired", async () => {
         const p = new InMemoryPersistence();
         const b = new InMemoryBus();
         const wfId = 'wf-step12-apply-invalidation';
@@ -6656,8 +6684,6 @@ describe('Orchestrator', () => {
       });
 
       it('cancel-first runs strictly before the recreateWorkflowFromFreshBase reset', async () => {
-        const { applyInvalidation } = await import('../invalidation-policy.js');
-
         const p = new InMemoryPersistence();
         const b = new InMemoryBus();
         const wfId = 'wf-step12-cancel-first-ordering';
@@ -6686,8 +6712,6 @@ describe('Orchestrator', () => {
       });
 
       it("applyInvalidation('workflow', 'retryWorkflow', ...) routes through cancelInFlight first", async () => {
-        const { applyInvalidation } = await import('../invalidation-policy.js');
-
         const p = new InMemoryPersistence();
         const b = new InMemoryBus();
         const wfId = 'wf-step12-retry-cancel-first';
