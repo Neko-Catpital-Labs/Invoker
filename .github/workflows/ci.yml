@@ -397,7 +397,13 @@ jobs:
             .node-version
 
       - name: Install native build tools
-        run: apt-get update && apt-get install -y unzip make g++ python3
+        run: |
+          SUDO=""
+          if command -v sudo >/dev/null 2>&1; then
+            SUDO="sudo"
+          fi
+          $SUDO apt-get update
+          $SUDO apt-get install -y unzip make g++ python3
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
