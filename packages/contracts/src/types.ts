@@ -50,6 +50,8 @@ export interface WorkRequestInputs {
   lifecycleTag?: string;
   /** Workflow base branch — worktrees are created from this ref instead of HEAD. */
   baseBranch?: string;
+  /** Already-resolved base commit for baseBranch, used to skip redundant base ref resolution. */
+  baseCommit?: string;
   /** Name of the execution agent to use (e.g. 'claude', 'codex'). Defaults to 'claude'. */
   executionAgent?: string;
   /** When true, executors must not reuse existing task worktrees for this run. */
