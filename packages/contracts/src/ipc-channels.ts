@@ -260,7 +260,7 @@ export interface SystemDiagnostics {
  * Describes an embedded terminal session managed by the main process.
  *
  * `mode` distinguishes how the session is backed:
- *   - `spawn`    — main process spawned a fresh child shell for the task
+ *   - `pty`      — main process spawned a fresh PTY for the task
  *                  (typical for completed/failed tasks restoring a workspace).
  *   - `attached` — the session is wired to a live executor handle; output is
  *                  fanned in from `executor.onOutput` and input flows through
@@ -274,7 +274,9 @@ export interface TerminalSessionDescriptor {
   cwd?: string;
   command?: string;
   args?: string[];
-  mode: 'spawn' | 'attached';
+  mode: 'pty' | 'attached';
+  backend: 'pty' | 'attached';
+  agentName?: string;
   attached: boolean;
   createdAt: string;
 }

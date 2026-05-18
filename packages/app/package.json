@@ -63,18 +63,19 @@
     "test:e2e": "xvfb-run --auto-servernum playwright test"
   },
   "dependencies": {
-    "@invoker/workflow-core": "workspace:*",
-    "@invoker/execution-engine": "workspace:*",
-    "@invoker/data-store": "workspace:*",
     "@invoker/contracts": "workspace:*",
+    "@invoker/data-store": "workspace:*",
+    "@invoker/execution-engine": "workspace:*",
     "@invoker/runtime-adapters": "workspace:*",
     "@invoker/runtime-service": "workspace:*",
     "@invoker/surfaces": "workspace:*",
     "@invoker/transport": "workspace:*",
+    "@invoker/workflow-core": "workspace:*",
     "@slack/bolt": "^4.6.0",
     "dockerode": "^4.0.0",
-    "sql.js": "^1.12.0",
     "dotenv": "^16.0.0",
+    "node-pty": "^1.1.0",
+    "sql.js": "^1.12.0",
     "yaml": "^2.7.0"
   },
   "devDependencies": {

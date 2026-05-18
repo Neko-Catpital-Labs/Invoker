@@ -172,4 +172,33 @@ describe('Terminal drawer (component)', () => {
     });
     expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha');
   });
+
+  it('shows generic command metadata instead of labeling every session SSH', async () => {
+    (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      opened: true,
+      session: {
+        sessionId: 'mock-session-command',
+        taskId: 'task-alpha',
+        status: 'running',
+        mode: 'pty',
+        backend: 'pty',
+        attached: false,
+        command: 'codex',
+        args: ['resume', 'sess-1'],
+        agentName: 'codex',
+        createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+      },
+    });
+
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-session-command')).toHaveTextContent('codex');
+      expect(screen.getByTestId('terminal-session-command')).not.toHaveTextContent('SSH');
+    });
+  });
 });

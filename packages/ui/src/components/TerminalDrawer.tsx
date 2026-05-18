@@ -40,6 +40,12 @@ function lastNonEmptyLine(data: string): string {
   return lines.at(-1) ?? '';
 }
 
+function commandLabel(session: TerminalSessionDescriptor): string {
+  if (session.backend === 'attached' || session.mode === 'attached') return 'attached';
+  if (session.agentName) return session.agentName;
+  return session.command ? 'command' : 'shell';
+}
+
 function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: TerminalSessionPaneProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTermTerminal | null>(null);
@@ -259,7 +265,7 @@ export function TerminalDrawer({
               className="absolute left-0 right-0 top-0 z-10 flex h-14 flex-col justify-center gap-1 border-b border-gray-800 bg-gray-950 px-3 text-[11px]"
             >
               <div className="flex min-w-0 items-center gap-2">
-                <span className="text-gray-500">SSH</span>
+                <span className="text-gray-500">{commandLabel(activeSession)}</span>
                 <span className="min-w-0 flex-1 truncate font-mono text-emerald-200">
                   {activeCommand}
                 </span>

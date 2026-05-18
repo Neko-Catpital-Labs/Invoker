@@ -19,134 +19,186 @@ import { mkdirSync, rmSync } from 'node:fs';
 
 import {
   EmbeddedTerminalManager,
-  type SpawnFn,
+  type PtySpawnFn,
 } from '../embedded-terminal-manager.js';
 import { resolveTaskTerminalSpec } from '../open-terminal-for-task.js';
 import {
   ExecutorRegistry,
   WorktreeExecutor,
+  AgentRegistry,
   type Executor,
   type ExecutorHandle,
+  type ExecutionAgent,
   type TerminalSpec,
 } from '@invoker/execution-engine';
 
-function createFakeChild() {
+function createFakePty() {
   const ee = new EventEmitter() as EventEmitter & {
-    stdout: EventEmitter;
-    stderr: EventEmitter;
-    stdin: { write: (data: string) => boolean };
+    onData: (cb: (data: string) => void) => { dispose: () => void };
+    onExit: (cb: (event: { exitCode: number }) => void) => { dispose: () => void };
+    write: (data: string) => void;
+    resize: (cols: number, rows: number) => void;
     kill: () => void;
     killed: boolean;
+    pid: number;
+    cols: number;
+    rows: number;
+    process: string;
+    handleFlowControl: boolean;
+    clear: () => void;
+    pause: () => void;
+    resume: () => void;
   };
-  ee.stdout = new EventEmitter();
-  ee.stderr = new EventEmitter();
   const written: string[] = [];
-  ee.stdin = {
-    write: (data: string) => {
-      written.push(data);
-      return true;
-    },
+  const resizes: Array<{ cols: number; rows: number }> = [];
+  ee.onData = (cb) => {
+    ee.on('data', cb);
+    return { dispose: () => ee.off('data', cb) };
+  };
+  ee.onExit = (cb) => {
+    ee.on('exit', cb);
+    return { dispose: () => ee.off('exit', cb) };
+  };
+  ee.write = (data: string) => {
+    written.push(data);
+  };
+  ee.resize = (cols: number, rows: number) => {
+    resizes.push({ cols, rows });
   };
   ee.killed = false;
   ee.kill = () => {
     ee.killed = true;
   };
+  ee.pid = 123;
+  ee.cols = 80;
+  ee.rows = 24;
+  ee.process = 'zsh';
+  ee.handleFlowControl = false;
+  ee.clear = () => {};
+  ee.pause = () => {};
+  ee.resume = () => {};
   (ee as unknown as { __written: string[] }).__written = written;
+  (ee as unknown as { __resizes: Array<{ cols: number; rows: number }> }).__resizes = resizes;
   return ee;
 }
 
+function makeAgent(name: string): ExecutionAgent {
+  return {
+    name,
+    stdinMode: 'pipe',
+    buildCommand: (prompt: string) => ({ cmd: name, args: ['run', prompt] }),
+    buildResumeArgs: (sessionId: string) => ({ cmd: `${name}-bin`, args: ['resume', sessionId] }),
+  };
+}
+
 describe('EmbeddedTerminalManager', () => {
-  it('opens a spawn-mode session and returns a descriptor', () => {
-    const child = createFakeChild();
-    const spawnFn = vi.fn(() => child as unknown as ReturnType<SpawnFn>) as unknown as SpawnFn;
-    const mgr = new EmbeddedTerminalManager({ spawnFn });
+  it('opens a PTY-backed session and returns a descriptor', () => {
+    const pty = createFakePty();
+    const ptySpawnFn = vi.fn(() => pty as never) as unknown as PtySpawnFn;
+    const mgr = new EmbeddedTerminalManager({ ptySpawnFn });
 
     const spec: TerminalSpec = { cwd: '/tmp/wt-1' };
     const session = mgr.openOrReuse({ taskId: 'task-1', spec, cwd: '/tmp/wt-1' });
 
     expect(session.taskId).toBe('task-1');
     expect(session.status).toBe('running');
-    expect(session.mode).toBe('spawn');
+    expect(session.mode).toBe('pty');
+    expect(session.backend).toBe('pty');
     expect(session.attached).toBe(false);
     expect(session.cwd).toBe('/tmp/wt-1');
     expect(typeof session.sessionId).toBe('string');
-    expect(spawnFn).toHaveBeenCalledTimes(1);
+    expect(ptySpawnFn).toHaveBeenCalledTimes(1);
   });
 
   it('reopening the same task returns the same session id', () => {
-    const child = createFakeChild();
-    const spawnFn = vi.fn(() => child as unknown as ReturnType<SpawnFn>) as unknown as SpawnFn;
-    const mgr = new EmbeddedTerminalManager({ spawnFn });
+    const pty = createFakePty();
+    const ptySpawnFn = vi.fn(() => pty as never) as unknown as PtySpawnFn;
+    const mgr = new EmbeddedTerminalManager({ ptySpawnFn });
 
     const first = mgr.openOrReuse({ taskId: 'task-1', spec: {}, cwd: '/tmp' });
     const second = mgr.openOrReuse({ taskId: 'task-1', spec: {}, cwd: '/tmp' });
 
     expect(second.sessionId).toBe(first.sessionId);
-    expect(spawnFn).toHaveBeenCalledTimes(1);
+    expect(ptySpawnFn).toHaveBeenCalledTimes(1);
     expect(mgr.list()).toHaveLength(1);
   });
 
-  it('fans stdout and stderr through the output event', () => {
-    const child = createFakeChild();
-    const spawnFn = vi.fn(() => child as unknown as ReturnType<SpawnFn>) as unknown as SpawnFn;
-    const mgr = new EmbeddedTerminalManager({ spawnFn });
+  it('fans PTY data through the output event', () => {
+    const pty = createFakePty();
+    const ptySpawnFn = vi.fn(() => pty as never) as unknown as PtySpawnFn;
+    const mgr = new EmbeddedTerminalManager({ ptySpawnFn });
     const events: Array<{ sessionId: string; data: string }> = [];
     mgr.on('output', (e) => events.push({ sessionId: e.sessionId, data: e.data }));
 
     const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
-    child.stdout.emit('data', Buffer.from('hello'));
-    child.stderr.emit('data', Buffer.from('err'));
+    pty.emit('data', 'hello');
+    pty.emit('data', 'err');
 
     expect(events.map((e) => e.data)).toEqual(['hello', 'err']);
     expect(events.every((e) => e.sessionId === session.sessionId)).toBe(true);
   });
 
-  it('write() forwards data to child stdin in spawn mode', () => {
-    const child = createFakeChild();
-    const spawnFn = vi.fn(() => child as unknown as ReturnType<SpawnFn>) as unknown as SpawnFn;
-    const mgr = new EmbeddedTerminalManager({ spawnFn });
+  it('write() forwards data to the PTY', () => {
+    const pty = createFakePty();
+    const ptySpawnFn = vi.fn(() => pty as never) as unknown as PtySpawnFn;
+    const mgr = new EmbeddedTerminalManager({ ptySpawnFn });
     const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
 
     const res = mgr.write(session.sessionId, 'ls\n');
 
     expect(res.ok).toBe(true);
-    expect((child as unknown as { __written: string[] }).__written).toEqual(['ls\n']);
+    expect((pty as unknown as { __written: string[] }).__written).toEqual(['ls\n']);
   });
 
-  it('emits exit and removes session when child exits', () => {
-    const child = createFakeChild();
-    const spawnFn = vi.fn(() => child as unknown as ReturnType<SpawnFn>) as unknown as SpawnFn;
-    const mgr = new EmbeddedTerminalManager({ spawnFn });
+  it('routes resize to the PTY backend', () => {
+    const pty = createFakePty();
+    const ptySpawnFn = vi.fn(() => pty as never) as unknown as PtySpawnFn;
+    const mgr = new EmbeddedTerminalManager({ ptySpawnFn });
+
+    const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+    const res = mgr.resize(session.sessionId, 120, 30);
+
+    expect(res.ok).toBe(true);
+    expect((pty as unknown as { __resizes: Array<{ cols: number; rows: number }> }).__resizes).toEqual([
+      { cols: 120, rows: 30 },
+    ]);
+  });
+
+  it('emits exit and leaves the session visible when the PTY exits', () => {
+    const pty = createFakePty();
+    const ptySpawnFn = vi.fn(() => pty as never) as unknown as PtySpawnFn;
+    const mgr = new EmbeddedTerminalManager({ ptySpawnFn });
     const exits: Array<{ sessionId: string; exitCode?: number }> = [];
     mgr.on('exit', (e) => exits.push({ sessionId: e.sessionId, exitCode: e.exitCode }));
 
     const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
-    child.emit('exit', 0);
+    pty.emit('exit', { exitCode: 0 });
 
     expect(exits).toEqual([{ sessionId: session.sessionId, exitCode: 0 }]);
-    expect(mgr.list()).toHaveLength(0);
+    expect(mgr.list()).toHaveLength(1);
+    expect(mgr.get(session.sessionId)?.status).toBe('exited');
   });
 
   it('after exit, openOrReuse spawns a fresh session', () => {
-    const child1 = createFakeChild();
-    const child2 = createFakeChild();
-    const spawnFn = vi
+    const pty1 = createFakePty();
+    const pty2 = createFakePty();
+    const ptySpawnFn = vi
       .fn()
-      .mockReturnValueOnce(child1)
-      .mockReturnValueOnce(child2) as unknown as SpawnFn;
-    const mgr = new EmbeddedTerminalManager({ spawnFn });
+      .mockReturnValueOnce(pty1)
+      .mockReturnValueOnce(pty2) as unknown as PtySpawnFn;
+    const mgr = new EmbeddedTerminalManager({ ptySpawnFn });
 
     const a = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
-    child1.emit('exit', 0);
+    pty1.emit('exit', { exitCode: 0 });
     const b = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
 
     expect(b.sessionId).not.toBe(a.sessionId);
   });
 
-  it('close() kills the child and clears the session', () => {
-    const child = createFakeChild();
-    const spawnFn = vi.fn(() => child as unknown as ReturnType<SpawnFn>) as unknown as SpawnFn;
-    const mgr = new EmbeddedTerminalManager({ spawnFn });
+  it('close() kills the PTY and clears the session', () => {
+    const pty = createFakePty();
+    const ptySpawnFn = vi.fn(() => pty as never) as unknown as PtySpawnFn;
+    const mgr = new EmbeddedTerminalManager({ ptySpawnFn });
     const exits: Array<{ sessionId: string }> = [];
     mgr.on('exit', (e) => exits.push({ sessionId: e.sessionId }));
 
@@ -154,8 +206,9 @@ describe('EmbeddedTerminalManager', () => {
     const res = mgr.close(session.sessionId);
 
     expect(res.ok).toBe(true);
-    expect(child.killed).toBe(true);
+    expect(pty.killed).toBe(true);
     expect(exits).toEqual([{ sessionId: session.sessionId }]);
+    expect(mgr.list()).toHaveLength(0);
   });
 
   it('attached mode forwards executor output and routes sendInput', () => {
@@ -176,9 +229,9 @@ describe('EmbeddedTerminalManager', () => {
     };
     const handle: ExecutorHandle = { executionId: 'exec-1', taskId: 'task-live' };
     const mgr = new EmbeddedTerminalManager({
-      // spawnFn is irrelevant for attached mode; supply a guard.
-      spawnFn: () => {
-        throw new Error('spawn should not be called in attached mode');
+      // ptySpawnFn is irrelevant for attached mode; supply a guard.
+      ptySpawnFn: () => {
+        throw new Error('PTY should not be spawned in attached mode');
       },
     });
     const events: string[] = [];
@@ -192,6 +245,7 @@ describe('EmbeddedTerminalManager', () => {
     });
 
     expect(session.mode).toBe('attached');
+    expect(session.backend).toBe('attached');
     expect(session.attached).toBe(true);
 
     // Output fan-in
@@ -209,7 +263,7 @@ describe('EmbeddedTerminalManager', () => {
   });
 
   it('write() rejects unknown sessions', () => {
-    const mgr = new EmbeddedTerminalManager({ spawnFn: () => createFakeChild() as never });
+    const mgr = new EmbeddedTerminalManager({ ptySpawnFn: () => createFakePty() as never });
     const res = mgr.write('not-a-session', 'x');
     expect(res).toEqual({ ok: false, reason: expect.stringContaining('Unknown session') });
   });
@@ -248,9 +302,9 @@ describe('GUI open-terminal embedded route', () => {
       expect(resolved.ok).toBe(true);
       if (!resolved.ok) return;
 
-      const child = createFakeChild();
+      const pty = createFakePty();
       const mgr = new EmbeddedTerminalManager({
-        spawnFn: () => child as unknown as ReturnType<SpawnFn>,
+        ptySpawnFn: () => pty as never,
       });
 
       const session = mgr.openOrReuse({
@@ -261,7 +315,7 @@ describe('GUI open-terminal embedded route', () => {
 
       expect(session.taskId).toBe('task-X');
       expect(session.status).toBe('running');
-      expect(session.mode).toBe('spawn');
+      expect(session.mode).toBe('pty');
       expect(session.cwd).toBe(workspacePath);
 
       // Reopening the same task reuses the same session id (deterministic outcome).
@@ -338,6 +392,86 @@ describe('GUI open-terminal embedded route', () => {
         allowRunning: true,
       });
       expect(allowed.ok).toBe(true);
+    } finally {
+      try { rmSync(wtBase, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+  });
+
+  it.each([
+    ['claude', 'claude-bin'],
+    ['codex', 'codex-bin'],
+    ['future-agent', 'future-agent-bin'],
+  ])('resolves %s sessions through ExecutionAgent.buildResumeArgs', (agentName, expectedCommand) => {
+    const wtBase = join(tmpdir(), `embedded-agent-wt-${randomUUID()}`);
+    const workspacePath = join(wtBase, 'task-workspace');
+    mkdirSync(workspacePath, { recursive: true });
+    try {
+      const agentRegistry = new AgentRegistry();
+      agentRegistry.registerExecution(makeAgent(agentName));
+      const registry = new ExecutorRegistry();
+      registry.register('worktree', new WorktreeExecutor({
+        cacheDir: join(tmpdir(), `cache-${randomUUID()}`),
+        worktreeBaseDir: wtBase,
+        agentRegistry,
+      }));
+      const persistence = {
+        getTaskStatus: vi.fn(() => 'completed'),
+        getRunnerKind: vi.fn(() => 'worktree'),
+        getAgentSessionId: vi.fn(() => 'sess-123'),
+        getExecutionAgent: vi.fn(() => agentName),
+        getContainerId: vi.fn(() => null),
+        getWorkspacePath: vi.fn(() => workspacePath),
+        getBranch: vi.fn(() => null),
+      };
+
+      const resolved = resolveTaskTerminalSpec({
+        taskId: 'task-agent',
+        persistence: persistence as never,
+        executorRegistry: registry,
+        executionAgentRegistry: agentRegistry,
+        repoRoot: '/repo',
+      });
+
+      expect(resolved.ok).toBe(true);
+      if (!resolved.ok) return;
+      expect(resolved.meta.executionAgent).toBe(agentName);
+      expect(resolved.spec.command).toBe(expectedCommand);
+      expect(resolved.spec.args).toEqual(['resume', 'sess-123']);
+    } finally {
+      try { rmSync(wtBase, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+  });
+
+  it('opens a shell in the workspace for command tasks without an agent session', () => {
+    const wtBase = join(tmpdir(), `embedded-command-wt-${randomUUID()}`);
+    const workspacePath = join(wtBase, 'task-workspace');
+    mkdirSync(workspacePath, { recursive: true });
+    try {
+      const registry = new ExecutorRegistry();
+      registry.register('worktree', new WorktreeExecutor({
+        cacheDir: join(tmpdir(), `cache-${randomUUID()}`),
+        worktreeBaseDir: wtBase,
+      }));
+      const persistence = {
+        getTaskStatus: vi.fn(() => 'completed'),
+        getRunnerKind: vi.fn(() => 'worktree'),
+        getAgentSessionId: vi.fn(() => null),
+        getExecutionAgent: vi.fn(() => null),
+        getContainerId: vi.fn(() => null),
+        getWorkspacePath: vi.fn(() => workspacePath),
+        getBranch: vi.fn(() => 'task/branch'),
+      };
+
+      const resolved = resolveTaskTerminalSpec({
+        taskId: 'task-command',
+        persistence: persistence as never,
+        executorRegistry: registry,
+        repoRoot: '/repo',
+      });
+
+      expect(resolved.ok).toBe(true);
+      if (!resolved.ok) return;
+      expect(resolved.spec).toEqual({ cwd: workspacePath });
     } finally {
       try { rmSync(wtBase, { recursive: true, force: true }); } catch { /* ignore */ }
     }
