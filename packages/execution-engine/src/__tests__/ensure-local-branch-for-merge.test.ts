@@ -83,7 +83,6 @@ describe('ensureLocalBranchForMerge pool mirror fallback', () => {
       async gitDiffStat() {
         return '';
       },
-      startPrPolling() {},
       async executeTasks() {},
       async consolidateAndMerge() {
         return undefined;

@@ -106,7 +106,6 @@ function makeHost(hostDir: string, gateDir: string, allTasks: TaskState[]): Merg
     async detectDefaultBranch() { return 'master'; },
     async gitLogMessage() { return ''; },
     async gitDiffStat() { return ''; },
-    startPrPolling: vi.fn(),
     async executeTasks() {},
     async buildMergeSummary() { return '## Summary'; },
     async consolidateAndMerge() { return undefined; },

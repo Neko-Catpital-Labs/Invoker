@@ -592,7 +592,6 @@ describe('merge gate open-terminal', () => {
       detectDefaultBranch: vi.fn(),
       gitLogMessage: vi.fn(),
       gitDiffStat: vi.fn(),
-      startPrPolling: vi.fn(),
       executeTasks: vi.fn(),
       buildMergeSummary: vi.fn(),
       consolidateAndMerge: vi.fn(),
