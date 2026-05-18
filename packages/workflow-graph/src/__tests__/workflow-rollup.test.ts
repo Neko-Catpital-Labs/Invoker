@@ -24,6 +24,10 @@ describe('workflow rollup', () => {
     { name: 'failed with unrelated pending work by counts only', statuses: ['failed', 'pending'], expected: 'failed' },
     { name: 'terminal failed', statuses: ['failed', 'completed'], expected: 'failed' },
     { name: 'closed gate', statuses: ['completed', 'closed'], expected: 'closed' },
+    { name: 'running outranks closed', statuses: ['closed', 'running'], expected: 'running' },
+    { name: 'awaiting approval outranks closed', statuses: ['closed', 'awaiting_approval'], expected: 'awaiting_approval' },
+    { name: 'review ready outranks closed', statuses: ['closed', 'review_ready'], expected: 'review_ready' },
+    { name: 'closed outranks blocked', statuses: ['closed', 'blocked'], expected: 'closed' },
     { name: 'completed workflow', statuses: ['completed', 'completed'], expected: 'completed' },
     { name: 'completed with stale prior task', statuses: ['completed', 'stale'], expected: 'completed' },
     { name: 'all stale', statuses: ['stale', 'stale'], expected: 'stale' },
@@ -73,5 +77,14 @@ describe('workflow rollup', () => {
     ]);
 
     expect(rollup.status).toBe('closed');
+  });
+
+  it('does not report closed tasks as failed issues', () => {
+    const rollup = computeWorkflowRollupFromSummaries([
+      task('alpha', 'closed'),
+      task('beta', 'failed'),
+    ]);
+
+    expect(rollup.failedTasks.map((issue) => issue.taskId)).toEqual(['beta']);
   });
 });

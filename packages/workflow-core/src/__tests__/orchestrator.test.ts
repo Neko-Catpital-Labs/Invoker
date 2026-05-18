@@ -1855,6 +1855,45 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask(sid(orchestrator, 1, 'leaf-a'))!.status).toBe('pending');
     });
 
+    it('closed merge-gate dependency keeps downstream pending for completed and review_ready policies', () => {
+      orchestrator.loadPlan({
+        name: 'prereq-workflow',
+        tasks: [{ id: 'verify-control-plane-regression', description: 'Prereq task' }],
+      });
+      const prereqTaskId = sid(orchestrator, 0, 'verify-control-plane-regression');
+      const prereqWfId = prereqTaskId.split('/')[0]!;
+      const prereqMergeId = `__merge__${prereqWfId}`;
+
+      orchestrator.loadPlan({
+        name: 'workflow-gated-closed',
+        tasks: [
+          {
+            id: 'strict-leaf',
+            description: 'strict leaf waits for upstream merge completion',
+            externalDependencies: [{ workflowId: prereqWfId, gatePolicy: 'completed' }],
+          },
+          {
+            id: 'review-leaf',
+            description: 'review leaf waits for upstream merge review readiness',
+            externalDependencies: [{ workflowId: prereqWfId, gatePolicy: 'review_ready' }],
+          },
+        ],
+      });
+      const strictLeafId = sid(orchestrator, 1, 'strict-leaf');
+      const reviewLeafId = sid(orchestrator, 1, 'review-leaf');
+
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(makeResponse({ actionId: prereqTaskId, status: 'completed' }));
+      persistence.updateTask(prereqMergeId, { status: 'closed' });
+      orchestrator.syncAllFromDb();
+
+      const startedAfterClosedGate = orchestrator.startExecution();
+      expect(startedAfterClosedGate.map((t) => t.id)).not.toContain(strictLeafId);
+      expect(startedAfterClosedGate.map((t) => t.id)).not.toContain(reviewLeafId);
+      expect(orchestrator.getTask(strictLeafId)!.status).toBe('pending');
+      expect(orchestrator.getTask(reviewLeafId)!.status).toBe('pending');
+    });
+
     it('setTaskExternalGatePolicies can unblock pending task immediately', () => {
       orchestrator.loadPlan({
         name: 'prereq-workflow',
@@ -4612,10 +4651,12 @@ describe('Orchestrator', () => {
       const statusA = orchestrator.getWorkflowStatus(wfIds[0]);
       expect(statusA.total).toBe(3);
       expect(statusA.pending).toBe(3);
+      expect(statusA.closed).toBe(0);
 
       const statusB = orchestrator.getWorkflowStatus(wfIds[1]);
       expect(statusB.total).toBe(2);
       expect(statusB.pending).toBe(2);
+      expect(statusB.closed).toBe(0);
     });
 
     it('getWorkflowStatus() without wfId returns aggregate across all workflows', () => {
@@ -4630,6 +4671,22 @@ describe('Orchestrator', () => {
 
       const status = orchestrator.getWorkflowStatus();
       expect(status.total).toBe(4);
+    });
+
+    it('getWorkflowStatus() counts closed separately from completed and failed', () => {
+      orchestrator.loadPlan({
+        name: 'Closed Status',
+        tasks: [{ id: 'a1', description: 'A1', command: 'echo a1' }],
+      });
+      const taskId = sid(orchestrator, 0, 'a1');
+
+      persistence.updateTask(taskId, { status: 'closed' });
+      orchestrator.syncAllFromDb();
+
+      const status = orchestrator.getWorkflowStatus();
+      expect(status.closed).toBe(1);
+      expect(status.completed).toBe(0);
+      expect(status.failed).toBe(0);
     });
 
     it('syncAllFromDb reloads tasks from all workflows', () => {
