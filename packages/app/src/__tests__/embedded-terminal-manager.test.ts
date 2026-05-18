@@ -278,6 +278,48 @@ describe('EmbeddedTerminalManager', () => {
     expect(session.outputSnapshot?.endsWith('tail')).toBe(true);
   });
 
+  it('replays FIRST_FRAME_FROM_PTY emitted synchronously during spawn to a late renderer-style consumer', () => {
+    // Regression for the GUI open-terminal PTY race: the embedded backend
+    // emits the first chunk synchronously during `spawn()`, but the renderer
+    // pane subscribes only after `openTerminal` returns and React mounts.
+    // The descriptor must carry that early output in `outputSnapshot` so a
+    // late consumer can seed its terminal without losing the first frame.
+    const FIRST_FRAME = 'FIRST_FRAME_FROM_PTY\n';
+    const ptyBackend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: vi.fn((opts) => {
+        opts.emitOutput(FIRST_FRAME);
+        return {
+          write: vi.fn(),
+          resize: vi.fn(),
+          close: vi.fn(),
+        };
+      }),
+    };
+    const mgr = new EmbeddedTerminalManager({ backend: ptyBackend });
+
+    // Renderer-style late subscriber: attaches AFTER openOrReuse returns.
+    const session = mgr.openOrReuse({
+      taskId: 'task-late-consumer',
+      spec: { command: 'claude', args: [], cwd: '/tmp/wt' },
+      cwd: '/tmp/wt',
+    });
+    const lateChunks: string[] = [];
+    mgr.on('output', (e) => {
+      if (e.sessionId === session.sessionId) lateChunks.push(e.data);
+    });
+
+    expect(session.outputSnapshot).toContain('FIRST_FRAME_FROM_PTY');
+    // The late subscriber missed the live event; replay from the snapshot.
+    expect(lateChunks).toEqual([]);
+    const seeded = [session.outputSnapshot ?? '', ...lateChunks].join('');
+    expect(seeded).toContain('FIRST_FRAME_FROM_PTY');
+
+    // terminalList() descriptors must include the same replay snapshot.
+    const listed = mgr.list().find((s) => s.sessionId === session.sessionId);
+    expect(listed?.outputSnapshot).toContain('FIRST_FRAME_FROM_PTY');
+  });
+
   it('handles synchronous backend exit during spawn without reading uninitialized state', () => {
     const close = vi.fn();
     const backend: EmbeddedTerminalBackend = {
