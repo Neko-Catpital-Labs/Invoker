@@ -157,21 +157,31 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     const clonePath = await this.pool.ensureClone(repoUrl);
     bench('RepoPool.ensureClone.after', { clonePath });
     const baseRef = request.inputs.baseBranch ?? 'HEAD';
-    log(`resolve base ${baseRef} begin`);
     const runGit = (args: string[]) => this.execGitSimple(args, clonePath);
-    bench('WorktreeExecutor.resolveBase.before', { baseRef });
-    if (remoteFetchForPool.enabled && shouldResolveViaOriginTracking(baseRef)) {
-      const preferredRemote = await resolvePreferredTrackingRemote(runGit, baseRef.trim());
-      bench('WorktreeExecutor.resolvePreferredTrackingRemote.done', { baseRef, preferredRemote });
-      await syncPlanBaseRemote(runGit, baseRef.trim(), preferredRemote);
-      bench('WorktreeExecutor.syncPlanBaseRemote.done', { baseRef, preferredRemote });
-    } else if (remoteFetchForPool.enabled) {
-      await syncPlanBaseRemoteForRef(runGit, baseRef.trim());
-      bench('WorktreeExecutor.syncPlanBaseRemoteForRef.done', { baseRef });
+    let baseHead = request.inputs.baseCommit?.trim();
+    if (baseHead) {
+      bench('WorktreeExecutor.resolveBase.skipped', {
+        baseRef,
+        baseHead,
+        reason: 'base-commit-provided',
+      });
+      log(`resolve base ${baseRef} skipped → ${baseHead}`);
+    } else {
+      log(`resolve base ${baseRef} begin`);
+      bench('WorktreeExecutor.resolveBase.before', { baseRef });
+      if (remoteFetchForPool.enabled && shouldResolveViaOriginTracking(baseRef)) {
+        const preferredRemote = await resolvePreferredTrackingRemote(runGit, baseRef.trim());
+        bench('WorktreeExecutor.resolvePreferredTrackingRemote.done', { baseRef, preferredRemote });
+        await syncPlanBaseRemote(runGit, baseRef.trim(), preferredRemote);
+        bench('WorktreeExecutor.syncPlanBaseRemote.done', { baseRef, preferredRemote });
+      } else if (remoteFetchForPool.enabled) {
+        await syncPlanBaseRemoteForRef(runGit, baseRef.trim());
+        bench('WorktreeExecutor.syncPlanBaseRemoteForRef.done', { baseRef });
+      }
+      baseHead = await resolvePlanBaseRevision(runGit, baseRef);
+      bench('WorktreeExecutor.resolveBase.after', { baseRef, baseHead });
+      log(`resolve base ${baseRef} done → ${baseHead}`);
     }
-    const baseHead = await resolvePlanBaseRevision(runGit, baseRef);
-    bench('WorktreeExecutor.resolveBase.after', { baseRef, baseHead });
-    log(`resolve base ${baseRef} done → ${baseHead}`);
     const upstreamCommits = (request.inputs.upstreamContext ?? [])
       .map(c => c.commitHash)
       .filter((h): h is string => !!h);
