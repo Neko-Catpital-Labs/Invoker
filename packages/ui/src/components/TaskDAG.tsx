@@ -40,6 +40,7 @@ interface TaskDAGProps {
   tasks: Map<string, TaskState>;
   workflows?: Map<string, WorkflowMeta>;
   selectedTaskId?: string | null;
+  centerTaskId?: string | null;
   onTaskClick?: (task: TaskState) => void;
   onTaskDoubleClick?: (task: TaskState) => void;
   onTaskContextMenu?: (task: TaskState, event: React.MouseEvent) => void;
@@ -142,8 +143,8 @@ function mergeMeasuredNodeState(prevNodes: Node[], nextNodes: Node[]): Node[] {
   });
 }
 
-function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDoubleClick, onTaskContextMenu, statusFilters }: TaskDAGProps) {
-  const { fitView } = useReactFlow();
+function TaskDAGInner({ tasks, workflows, selectedTaskId, centerTaskId, onTaskClick, onTaskDoubleClick, onTaskContextMenu, statusFilters }: TaskDAGProps) {
+  const { fitView, setCenter } = useReactFlow();
   const prevNodeCount = useRef(0);
   const lastNodeClickRef = useRef<{ id: string; at: number } | null>(null);
   const reportedGraphVisibleRef = useRef(false);
@@ -417,6 +418,20 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
       requestAnimationFrame(() => fitView({ padding: 0.2 }));
     }
   }, [nodes.length, fitView]);
+
+  useEffect(() => {
+    if (!centerTaskId || nodes.length === 0) return;
+    const node = nodes.find((candidate) => candidate.id === centerTaskId);
+    if (!node) return;
+    const frame = requestAnimationFrame(() => {
+      if (typeof setCenter === 'function') {
+        setCenter(node.position.x + 132, node.position.y + 55, { zoom: 1, duration: 180 });
+      } else {
+        fitView({ padding: 0.2 });
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [centerTaskId, fitView, nodes, setCenter]);
 
   useEffect(() => {
     if (reportedGraphVisibleRef.current || nodes.length === 0 || typeof window === 'undefined') {
