@@ -199,6 +199,71 @@ describe('useTasks', () => {
     });
   });
 
+  it('skips the post-mount snapshot getTasks when preload bootstrap delivered state', async () => {
+    const bootTask = makeUITask({ id: 'boot-1', description: 'Boot Task' });
+    const getTasks = vi.fn().mockResolvedValue({ tasks: [bootTask], workflows: [] });
+    const reportUiPerf = vi.fn();
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
+      tasks: [bootTask],
+      workflows: [],
+      appStartedAtEpochMs: Date.now() - 50,
+    };
+    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
+      getTasks,
+      reportUiPerf,
+      onTaskDelta: vi.fn(() => () => {}),
+      onWorkflowsChanged: vi.fn(() => () => {}),
+    };
+
+    const { result } = renderHook(() => useTasks());
+
+    // Let any pending microtasks / effects flush before asserting.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(getTasks).not.toHaveBeenCalled();
+    expect(result.current.tasks.get('boot-1')?.description).toBe('Boot Task');
+    expect(reportUiPerf).toHaveBeenCalledWith(
+      'startup_snapshot_skipped_bootstrap_delivered',
+      expect.objectContaining({ taskCount: 1, workflowCount: 0 }),
+    );
+  });
+
+  it('still issues forced refresh getTasks even when bootstrap delivered state', async () => {
+    const bootTask = makeUITask({ id: 'boot-1', description: 'Boot Task' });
+    const refreshed = makeUITask({ id: 'boot-1', description: 'Refreshed' });
+    const getTasks = vi.fn().mockResolvedValue({ tasks: [refreshed], workflows: [] });
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
+      tasks: [bootTask],
+      workflows: [],
+      appStartedAtEpochMs: Date.now() - 50,
+    };
+    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
+      getTasks,
+      reportUiPerf: vi.fn(),
+      onTaskDelta: vi.fn(() => () => {}),
+      onWorkflowsChanged: vi.fn(() => () => {}),
+    };
+
+    const { result } = renderHook(() => useTasks());
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(getTasks).not.toHaveBeenCalled();
+
+    await act(async () => {
+      result.current.refreshTasks(true);
+    });
+
+    await waitFor(() => {
+      expect(getTasks).toHaveBeenCalledTimes(1);
+      expect(getTasks).toHaveBeenLastCalledWith(true);
+      expect(result.current.tasks.get('boot-1')?.description).toBe('Refreshed');
+    });
+  });
+
   it('keeps backend-sent workflow status until workflows-changed refreshes metadata', async () => {
     const taskA = makeUITask({ id: 'wf-1/task-a', workflowId: 'wf-1', status: 'failed' });
     const taskB = makeUITask({ id: 'wf-1/task-b', workflowId: 'wf-1', status: 'completed' });

@@ -175,9 +175,11 @@ try {
     const r = await window.invoker.getTasks(true);
     return Array.isArray(r) ? r.length : r.tasks.length;
   });
-  const expected = workflowCount * tasksPerWorkflow;
-  if (seedSize !== expected) {
-    throw new Error(`seed expected ${expected} tasks but got ${seedSize}`);
+  // Each workflow may auto-add a merge node, so the minimum is the user-task
+  // count; the actual seed can legitimately be larger.
+  const expectedMin = workflowCount * tasksPerWorkflow;
+  if (seedSize < expectedMin) {
+    throw new Error(`seed expected at least ${expectedMin} tasks but got ${seedSize}`);
   }
 } finally {
   await seedApp.close();
@@ -206,9 +208,22 @@ try {
     .filter((e) => e.payload);
   const indexOf = (target) => uiPerf.indexOf(target);
   const findByMetric = (m) => uiPerf.find((e) => e.payload.metric === m);
+  const findLastByMetric = (m) => {
+    for (let i = uiPerf.length - 1; i >= 0; i--) {
+      if (uiPerf[i].payload.metric === m) return uiPerf[i];
+    }
+    return undefined;
+  };
+  // The activity log spans both the seed launch and the verify launch (shared
+  // INVOKER_DB_DIR). Use the FIRST preload as the post-preload cut point —
+  // robust against the verify-launch race where `useTasks_snapshot_replace`
+  // can be appended to the log before the verify-launch's own preload event.
+  // Prefer the LAST event for reporting since it reflects the verify launch's
+  // observed state and matches what a fresh user-facing startup looks like.
   const preload = findByMetric('preload_bootstrap_sync');
-  const workflowGraphVisible = findByMetric('startup_workflow_graph_visible');
-  const taskGraphVisible = findByMetric('startup_graph_visible');
+  const preloadForReport = findLastByMetric('preload_bootstrap_sync') ?? preload;
+  const workflowGraphVisible = findLastByMetric('startup_workflow_graph_visible');
+  const taskGraphVisible = findLastByMetric('startup_graph_visible');
   const snapshotReplaces = uiPerf.filter((e) => e.payload.metric === 'useTasks_snapshot_replace');
   const preloadIdx = preload ? indexOf(preload) : -1;
   const postPreloadReplaces = preloadIdx >= 0
@@ -223,12 +238,12 @@ try {
   const round = (n) => (typeof n === 'number' ? Math.round(n * 100) / 100 : null);
 
   console.log('repro-startup-snapshot-refresh-overhead:');
-  if (preload) {
-    console.log('  preload_bootstrap_sync:');
-    console.log(`    taskCount=${preload.payload.taskCount}`);
-    console.log(`    workflowCount=${preload.payload.workflowCount}`);
-    console.log(`    jsonSizeBytes=${preload.payload.jsonSizeBytes}`);
-    console.log(`    durationMs=${round(preload.payload.durationMs)}`);
+  if (preloadForReport) {
+    console.log('  preload_bootstrap_sync (verify launch):');
+    console.log(`    taskCount=${preloadForReport.payload.taskCount}`);
+    console.log(`    workflowCount=${preloadForReport.payload.workflowCount}`);
+    console.log(`    jsonSizeBytes=${preloadForReport.payload.jsonSizeBytes}`);
+    console.log(`    durationMs=${round(preloadForReport.payload.durationMs)}`);
   } else {
     console.log('  preload_bootstrap_sync: MISSING');
   }

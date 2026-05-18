@@ -155,7 +155,26 @@ export function useTasks(): UseTasksResult {
       });
     }
 
-    fetchAll();
+    // Preload's `invoker:get-bootstrap-state-sync` stamps `appStartedAtEpochMs` on
+    // every successful response — its presence means the renderer already has the
+    // complete task/workflow snapshot (even if both lists are empty). Skip the
+    // redundant non-forced startup getTasks. Forced refreshes via
+    // `refreshTasks(true)` and the delta-driven `fetchAll()` below still run.
+    const bootstrapDelivered =
+      typeof bootstrapState?.appStartedAtEpochMs === 'number';
+    if (bootstrapDelivered) {
+      reportedStartupSnapshotRef.current = true;
+      void window.invoker.reportUiPerf?.('startup_snapshot_skipped_bootstrap_delivered', {
+        taskCount: bootstrapState?.tasks?.length ?? 0,
+        workflowCount: bootstrapState?.workflows?.length ?? 0,
+        elapsedMs: Math.round(performance.now()),
+        processElapsedMs: bootstrapState?.appStartedAtEpochMs
+          ? Date.now() - bootstrapState.appStartedAtEpochMs
+          : undefined,
+      });
+    } else {
+      fetchAll();
+    }
 
     deltaPipelineRef.current = createTaskDeltaPipeline({
       flushMs: 100,
