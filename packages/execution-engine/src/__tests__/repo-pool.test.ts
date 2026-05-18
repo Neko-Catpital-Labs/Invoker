@@ -62,6 +62,38 @@ describe('RepoPool', () => {
     expect(p1).toBe(p2);
   });
 
+  it('uses one cache path for equivalent GitHub SSH and HTTPS URLs', () => {
+    const githubPool = new RepoPool({ cacheDir: tmpDir, worktreeBaseDir: join(tmpDir, 'worktrees') });
+    const httpsUrl = 'https://github.com/Neko-Catpital-Labs/Invoker';
+    const sshUrl = 'git@github.com:Neko-Catpital-Labs/Invoker.git';
+
+    expect(githubPool.getClonePath(httpsUrl)).toBe(githubPool.getClonePath(sshUrl));
+    expect(githubPool.externalWorktreePath(httpsUrl, 'experiment/demo')).toBe(
+      githubPool.externalWorktreePath(sshUrl, 'experiment/demo'),
+    );
+  });
+
+  it('single-flights equivalent GitHub URL spellings without rewriting clone URL', async () => {
+    const githubPool = new RepoPool({ cacheDir: tmpDir, worktreeBaseDir: join(tmpDir, 'worktrees') });
+    const httpsUrl = 'https://github.com/Neko-Catpital-Labs/Invoker';
+    const sshUrl = 'git@github.com:Neko-Catpital-Labs/Invoker.git';
+    const clonePath = githubPool.getClonePath(httpsUrl);
+    const doEnsureClone = vi
+      .spyOn(githubPool as any, 'doEnsureClone')
+      .mockImplementation(async (_repoUrl: string) => clonePath);
+
+    const [p1, p2] = await Promise.all([
+      githubPool.ensureClone(httpsUrl),
+      githubPool.ensureClone(sshUrl),
+    ]);
+
+    expect(p1).toBe(clonePath);
+    expect(p2).toBe(clonePath);
+    expect(doEnsureClone).toHaveBeenCalledTimes(1);
+    expect(doEnsureClone).toHaveBeenCalledWith(httpsUrl);
+    await githubPool.destroyAll();
+  });
+
   it('acquireWorktree: creates worktree with feature branch', async () => {
     const acquired = await pool.acquireWorktree(localRepoUrl, 'experiment/v1');
     expect(acquired.worktreePath).toBeDefined();
