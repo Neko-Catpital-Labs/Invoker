@@ -6,6 +6,12 @@ cd "$ROOT"
 # shellcheck disable=SC1091
 source "$ROOT/scripts/e2e-dry-run/lib/common.sh"
 
+# The overload harness owns standalone owner restarts explicitly. Allowing
+# background headless clients to spawn detached fallback owners during the
+# restart gap creates multiple writable owners against the same isolated DB
+# because this suite intentionally disables the external writer lock.
+export INVOKER_HEADLESS_DISABLE_OWNER_BOOTSTRAP_SPAWN=1
+
 # Headless chaos polls for terminal task states within tight windows (often 120s).
 # Product default for network git is 15 minutes; a stalled fetch/push can keep tasks
 # in a non-terminal state longer than those pollers. Unless the caller already set

@@ -528,7 +528,7 @@ rows = conn.execute(
     """
 ).fetchall()
 
-def parse_ts(value: str | None):
+def parse_ts(value):
     if not value:
         return None
     return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
