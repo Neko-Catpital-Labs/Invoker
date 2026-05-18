@@ -20,7 +20,7 @@ import type {
 } from '@invoker/contracts';
 import type { Executor, ExecutorHandle, TerminalSpec } from '@invoker/execution-engine';
 
-export type EmbeddedTerminalBackendName = 'bash';
+export type EmbeddedTerminalBackendName = 'bash' | 'pty';
 
 /** Factory used by the default bash/pipe backend. Tests can supply a fake. */
 export type BashSpawnFn = (
