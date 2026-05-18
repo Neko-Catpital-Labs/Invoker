@@ -89,7 +89,7 @@ if [ "$1" = "--headless" ]; then
   if [ ! -f "$REPO_ROOT/packages/app/dist/headless-client.js" ]; then
     pnpm --filter @invoker/core build >&2
     pnpm --filter @invoker/persistence build >&2
-    pnpm --filter @invoker/executors build >&2
+    pnpm --filter @invoker/execution-engine build >&2
     pnpm --filter @invoker/surfaces build >&2
     pnpm --filter @invoker/ui build >&2
     pnpm --filter @invoker/app build >&2
@@ -114,7 +114,7 @@ sleep 0.2
 # Clean build all packages (tsup.config has clean: true)
 pnpm --filter @invoker/core build
 pnpm --filter @invoker/persistence build
-pnpm --filter @invoker/executors build
+pnpm --filter @invoker/execution-engine build
 pnpm --filter @invoker/surfaces build
 pnpm --filter @invoker/ui build
 pnpm --filter @invoker/app build
