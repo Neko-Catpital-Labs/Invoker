@@ -11,9 +11,23 @@
  *    for straighter edges.
  */
 
-import ELK from 'elkjs/lib/elk.bundled.js';
-
 import type { TaskState } from '../types.js';
+
+// elkjs ships as a ~1.5 MB pre-bundled UMD module that runs both the API and
+// its embedded worker on the main thread. Loading it lazily keeps the entry
+// chunk small; the dynamic import lets Rollup emit elkjs as its own chunk
+// that is fetched only when ELK layout is actually requested. layoutTaskGraph
+// already falls back to the synchronous Sugiyama layout on error, so a slow
+// chunk fetch never blocks initial render.
+let elkConstructorPromise: Promise<new () => ElkLayoutEngine> | null = null;
+function loadElk(): Promise<new () => ElkLayoutEngine> {
+  if (!elkConstructorPromise) {
+    elkConstructorPromise = import('elkjs/lib/elk.bundled.js').then(
+      (mod) => (mod.default ?? mod) as new () => ElkLayoutEngine,
+    );
+  }
+  return elkConstructorPromise;
+}
 
 export interface NodePosition {
   x: number;
@@ -88,7 +102,8 @@ export async function layoutTaskGraph(
     .sort((a, b) => edgeLayoutId(a).localeCompare(edgeLayoutId(b)));
 
   try {
-    const elk = options?.elk ?? new ELK();
+    const ElkCtor = options?.elk ? null : await loadElk();
+    const elk = options?.elk ?? new ElkCtor!();
     const graph = {
       id: 'task-dag',
       layoutOptions: {
