@@ -1323,6 +1323,45 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
     expect(spec.args).toContain('claude-sess-99');
   });
 
+  it('prompt task with stale claude agent_name still launches configured codex resume', async () => {
+    vi.mocked(existsSync).mockReturnValue(true);
+    const { resolveTaskTerminalSpec } = await import('../open-terminal-for-task.js');
+    const agentRegistry = registerBuiltinAgents();
+    const executorRegistry = {
+      get: vi.fn(() => undefined),
+      register: vi.fn(),
+      getDefault: vi.fn(),
+    } as any;
+    const persistence = {
+      getTaskStatus: () => 'completed',
+      getRunnerKind: () => 'worktree',
+      getAgentSessionId: () => '019e386c-87c7-71e1-80bb-eb649ae99b82',
+      getLastAgentSessionId: () => '019e386c-87c7-71e1-80bb-eb649ae99b82',
+      getExecutionAgent: () => 'codex',
+      getContainerId: () => null,
+      getWorkspacePath: () => '/tmp/workspace',
+      getBranch: () => null,
+      loadAttempts: () => [],
+    };
+
+    const resolved = resolveTaskTerminalSpec({
+      taskId: 'wf-1778431089965-37/experiment-inv-130',
+      persistence,
+      executorRegistry,
+      executionAgentRegistry: agentRegistry,
+      repoRoot: '/repo',
+    });
+
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) throw new Error(resolved.reason);
+    expect(resolved.spec.command).toBe('codex');
+    expect(resolved.spec.args).toEqual([
+      'resume',
+      '019e386c-87c7-71e1-80bb-eb649ae99b82',
+    ]);
+    expect(resolved.spec.command).not.toBe('claude');
+  });
+
   it('fix with no agent specified → terminal defaults to claude', () => {
     vi.mocked(existsSync).mockReturnValue(true);
     const agentRegistry = registerBuiltinAgents();
