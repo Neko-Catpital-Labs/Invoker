@@ -114,6 +114,22 @@ const REVIEW_READY_WORKFLOW_PR_PLAN = {
   ],
 };
 
+/** Pull-request workflow used to prove workflow and task surfaces share the canonical status palette. */
+const STATUS_COLOR_PARITY_PLAN = {
+  name: 'Status color parity proof',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'pull_request' as const,
+  mergeMode: 'external_review',
+  tasks: [
+    {
+      id: 'parity-work',
+      description: 'Work task that lands review-ready',
+      command: 'echo parity',
+      dependencies: [] as string[],
+    },
+  ],
+};
+
 /** Plan for queue-action-surface hardening: combines canonical states, dependency relationships, and destructive actions. */
 const QUEUE_HARDENING_PLAN = {
   name: 'Queue Hardening Visual Proof',
@@ -481,6 +497,66 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByRole('link', { name: reviewUrl })).toHaveAttribute('href', reviewUrl);
 
     await captureScreenshot(page, 'review-ready-workflow-pr-sidebar');
+  });
+
+  test('workflow-task-status-color-parity — workflow node and merge task share the canonical review_ready palette', async ({ page }) => {
+    const workflowId = await loadPlanAndSelectWorkflow(page, STATUS_COLOR_PARITY_PLAN);
+    await page.locator('.react-flow__node[data-testid$="parity-work"]').first().waitFor({ state: 'visible', timeout: 15000 });
+
+    const mergeGateTaskId = await page.evaluate(async () => {
+      const result = await window.invoker.getTasks();
+      const tasks = Array.isArray(result) ? result : result.tasks;
+      const mergeTask = tasks.find((task: { id: string }) => task.id.includes('__merge__'));
+      return mergeTask?.id ?? null;
+    });
+    expect(mergeGateTaskId).toBeTruthy();
+
+    await injectTaskStates(page, [
+      {
+        taskId: 'parity-work',
+        changes: {
+          status: 'completed',
+          execution: { startedAt: new Date(Date.now() - 5000), completedAt: new Date() },
+        },
+      },
+      {
+        taskId: mergeGateTaskId!,
+        changes: {
+          status: 'review_ready',
+          execution: {
+            startedAt: new Date(Date.now() - 3000),
+            reviewUrl: 'https://example.test/parity/pull/1',
+          },
+        },
+      },
+    ]);
+
+    // Workflow rollup follows the merge gate → workflow node renders review_ready.
+    await expect.poll(async () => {
+      const workflows = await page.evaluate(() => window.invoker.listWorkflows());
+      return (workflows.find((workflow: { id: string }) => workflow.id === workflowId) as { status?: string } | undefined)?.status;
+    }).toBe('review_ready');
+
+    // Re-select the workflow so the inspector picks up the rolled-up status.
+    await workflowNode(page, workflowId).dispatchEvent('click', { bubbles: true });
+    await expect(page.getByTestId('selected-workflow-mini-dag')).toBeVisible({ timeout: 10000 });
+
+    // Workflow-level surface: workflow node shows the review ready label.
+    await expect(workflowNode(page, workflowId).getByText('review ready')).toBeVisible();
+    // Workflow-level surface: workflow inspector also shows review ready.
+    await expect(page.getByTestId('workflow-inspector-status-label')).toContainText('review ready');
+
+    // Task-level surface: merge gate node in the selected workflow mini-DAG renders REVIEW READY.
+    const mergeGateNode = page
+      .locator(`.react-flow__node[data-testid="${mergeGateTaskId}"], .react-flow__node[data-testid$="${mergeGateTaskId}"]`)
+      .first();
+    await expect(mergeGateNode).toBeVisible({ timeout: 15000 });
+    await expect(mergeGateNode.getByText('REVIEW READY', { exact: true })).toBeVisible();
+
+    // Task-level surface: the completed work task is rendered alongside the merge gate.
+    await expect(page.locator('.react-flow__node[data-testid$="parity-work"]').first()).toBeVisible();
+
+    await captureScreenshot(page, 'workflow-task-status-color-parity');
   });
 
   test('interactive-status-hues — fixing-with-ai, needs-input, awaiting-approval', async ({ page }) => {
