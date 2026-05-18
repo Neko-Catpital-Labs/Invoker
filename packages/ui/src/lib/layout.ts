@@ -11,7 +11,8 @@
  *    for straighter edges.
  */
 
-import ELK from 'elkjs/lib/elk.bundled.js';
+import ELK from 'elkjs/lib/elk-api.js';
+import elkWorkerUrl from 'elkjs/lib/elk-worker.min.js?url';
 
 import type { TaskState } from '../types.js';
 
@@ -43,6 +44,15 @@ interface ElkLayoutEngine {
     children?: Array<{ id?: string; x?: number; y?: number }>;
     edges?: unknown[];
   }>;
+}
+
+async function createDefaultElkEngine(): Promise<ElkLayoutEngine> {
+  if (import.meta.env.PROD) {
+    return new ELK({ algorithms: ['layered'], workerUrl: elkWorkerUrl }) as ElkLayoutEngine;
+  }
+
+  const { default: BundledELK } = await import('elkjs/lib/elk.bundled.js');
+  return new BundledELK({ algorithms: ['layered'] }) as ElkLayoutEngine;
 }
 
 const NODE_WIDTH = 280;
@@ -88,7 +98,7 @@ export async function layoutTaskGraph(
     .sort((a, b) => edgeLayoutId(a).localeCompare(edgeLayoutId(b)));
 
   try {
-    const elk = options?.elk ?? new ELK();
+    const elk = options?.elk ?? await createDefaultElkEngine();
     const graph = {
       id: 'task-dag',
       layoutOptions: {
