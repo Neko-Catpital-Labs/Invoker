@@ -377,6 +377,36 @@ describe('RepoPool', () => {
       expect(existsSync(dir)).toBe(true);
     });
 
+    it('skips per-base fetch after a successful full origin ref refresh', async () => {
+      await pool.ensureClone(localRepoUrl);
+      const orig = (pool as any).execGit.bind(pool);
+      const execGit = vi.spyOn(pool as any, 'execGit').mockImplementation(
+        (...params: unknown[]) => {
+          const args = params[0] as string[];
+          const cwd = params[1] as string;
+          return orig(args, cwd);
+        },
+      );
+      const timing = {
+        mark: vi.fn(),
+        span: vi.fn(async (_functionName, _metadata, fn) => fn()),
+      };
+
+      const dir = await pool.refreshMirrorForRebase(localRepoUrl, 'plan/missing-branch', timing);
+
+      expect(dir).toBeDefined();
+      expect(execGit).not.toHaveBeenCalledWith(
+        ['fetch', 'origin', 'refs/heads/plan/missing-branch:refs/remotes/origin/plan/missing-branch'],
+        expect.any(String),
+      );
+      expect(timing.mark).toHaveBeenCalledWith('RepoPool.doRefreshMirrorForRebase.syncPlanBaseRemoteForRef', 'completed', {
+        dir,
+        baseBranch: 'plan/missing-branch',
+        skipped: true,
+        reason: 'origin-refs-fresh',
+      });
+    });
+
     it('concurrent fetches from separate pools sharing cacheDir both succeed', async () => {
       // Setup: bare repo so multiple clones can fetch concurrently
       const bareDir = mkdtempSync(join(tmpdir(), 'repo-pool-bare-'));
