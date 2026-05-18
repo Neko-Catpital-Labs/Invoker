@@ -87,4 +87,14 @@ describe('workflow rollup', () => {
 
     expect(rollup.failedTasks.map((issue) => issue.taskId)).toEqual(['beta']);
   });
+
+  it('counts closed tasks as terminal-neutral (not completed, not failed)', () => {
+    const rollup = computeWorkflowRollupFromSummaries([task('alpha', 'closed')]);
+
+    expect(rollup.status).toBe('closed');
+    expect(rollup.countsByStatus.closed).toBe(1);
+    expect(rollup.countsByStatus.completed).toBe(0);
+    expect(rollup.countsByStatus.failed).toBe(0);
+    expect(rollup.failedTasks).toEqual([]);
+  });
 });
