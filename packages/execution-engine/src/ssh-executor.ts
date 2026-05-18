@@ -263,6 +263,7 @@ exit "$PAYLOAD_EXIT"
 
     let payload: string;
     let agentSessionId: string | undefined;
+    const executionAgent = request.inputs.executionAgent ?? 'claude';
 
     if (request.actionType === 'command') {
       const command = request.inputs.command;
@@ -271,14 +272,13 @@ exit "$PAYLOAD_EXIT"
       bench('SshExecutor.payload.built', { command: true });
     } else if (request.actionType === 'ai_task') {
       if (this.agentRegistry) {
-        const requestedAgent = request.inputs.executionAgent ?? 'claude';
-        const agent = this.agentRegistry.getOrThrow(requestedAgent);
+        const agent = this.agentRegistry.getOrThrow(executionAgent);
         const fullPrompt = this.buildFullPrompt(request);
         const spec = agent.buildCommand(fullPrompt);
         agentSessionId = spec.sessionId;
         payload = `${spec.cmd} ${spec.args.map(a => this.shellQuote(a)).join(' ')}`;
         bench('SshExecutor.payload.built', {
-          executionAgent: requestedAgent,
+          executionAgent,
           hasAgentSessionId: !!agentSessionId,
         });
       } else {
@@ -626,6 +626,7 @@ ${this.buildPayloadExecutionScript(payloadB64)}
     if (!request.inputs.command && !request.inputs.prompt) {
       await this.handleProcessExit(executionId, request, remoteWt, 0, {
         branch: experimentBranch,
+        agentName: request.actionType === 'ai_task' ? executionAgent : undefined,
       });
       bench('SshExecutor.startManagedWorkspace.noCommand.returning', { remoteWt });
       return handle;
@@ -919,6 +920,7 @@ ${this.buildPayloadExecutionScript(payloadB64)}
               exitCode: finalExitCode,
               commitHash,
               agentSessionId: entry.agentSessionId,
+              agentName: request.actionType === 'ai_task' ? executionAgent : undefined,
               ...(mappedError ? { error: mappedError } : {}),
               ...(finalizeRemote && commitHash
                 ? { summary: `branch=${finalizeRemote.branch} commit=${commitHash}` }
