@@ -50,7 +50,12 @@ export interface ConflictResolverHost {
   execGitIn(args: string[], dir: string): Promise<string>;
   createMergeWorktree(ref: string, label: string, repoUrl?: string): Promise<string>;
   removeMergeWorktree(dir: string): Promise<void>;
-  spawnAgentFix(prompt: string, cwd: string, agentName?: string): Promise<{ stdout: string; sessionId: string }>;
+  spawnAgentFix(
+    prompt: string,
+    cwd: string,
+    agentName?: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<{ stdout: string; sessionId: string }>;
   getRemoteTargetConfig?(targetId: string): RemoteTargetConfig | undefined;
 }
 
@@ -170,6 +175,7 @@ export async function resolveConflictImpl(
   taskId: string,
   savedError?: string,
   agentName?: string,
+  options?: { signal?: AbortSignal },
 ): Promise<void> {
   host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
     phase: 'resolve-conflict-start',
@@ -275,7 +281,7 @@ export async function resolveConflictImpl(
         `5. Completing the merge with 'git commit --no-edit'`,
       ].join('\n');
 
-      await host.spawnAgentFix(prompt, cwd, agentName);
+      await host.spawnAgentFix(prompt, cwd, agentName, { signal: options?.signal });
     }
 
     console.log(`[resolveConflict] Successfully resolved conflict for ${taskId}`);
@@ -466,6 +472,7 @@ export async function fixWithAgentImpl(
   agentName?: string,
   savedError?: string,
   fixContext?: string,
+  options?: { signal?: AbortSignal },
 ): Promise<void> {
   host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
     phase: 'fix-with-agent-start',
@@ -521,6 +528,7 @@ export async function fixWithAgentImpl(
       target,
       agentName,
       host.agentRegistry,
+      { signal: options?.signal },
     );
     if (output) {
       host.persistence.appendTaskOutput(taskId, `\n[Fix with ${remoteAgentBin} (remote)] Output:\n${output}`);
@@ -569,7 +577,9 @@ export async function fixWithAgentImpl(
       workspacePath: cwd,
       agent: agentLabel,
     });
-    const { stdout: output, sessionId } = await host.spawnAgentFix(prompt, cwd, agentName);
+    const { stdout: output, sessionId } = await host.spawnAgentFix(prompt, cwd, agentName, {
+      signal: options?.signal,
+    });
     if (output) {
       host.persistence.appendTaskOutput(taskId, `\n[Fix with ${agentLabel}] Output:\n${output}`);
     }
@@ -627,6 +637,7 @@ export function spawnRemoteAgentFixImpl(
   target: RemoteTargetConfig,
   agentName?: string,
   agentRegistry?: AgentRegistry,
+  options?: { signal?: AbortSignal },
 ): Promise<{ stdout: string; sessionId: string }> {
   const promptTransport = materializeRemotePrompt(prompt);
   const { shellCommand: agentCmd, sessionId } = buildRemoteAgentCommand(
@@ -670,6 +681,7 @@ eval "$(echo "${agentCmdB64}" | base64 -d)"
     const child = spawn('ssh', sshArgs, {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: cleanElectronEnv(),
+      signal: options?.signal,
     });
     child.stdin?.write(script);
     child.stdin?.end();
@@ -704,6 +716,7 @@ export function spawnAgentFixViaRegistry(
   cwd: string,
   agent: ExecutionAgent,
   driver?: SessionDriver,
+  options?: { signal?: AbortSignal },
 ): Promise<{ stdout: string; sessionId: string }> {
   const promptTransport = materializeLocalPrompt(prompt);
   const spec = agent.buildFixCommand?.(promptTransport.effectivePrompt);
@@ -716,10 +729,17 @@ export function spawnAgentFixViaRegistry(
   console.log(`[spawnAgentFix] cmd: ${cmd} ${spec.args.map(a => JSON.stringify(a)).join(' ')}`);
   console.log(`[spawnAgentFix] cwd: ${cwd}`);
   return new Promise<{ stdout: string; sessionId: string }>((resolve, reject) => {
+    let cleaned = false;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      promptTransport.cleanup();
+    };
     const child = spawn(cmd, spec.args, {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: cleanElectronEnv(),
+      signal: options?.signal,
     });
     let stdout = '';
     let stderr = '';
@@ -732,10 +752,10 @@ export function spawnAgentFixViaRegistry(
       const effectiveSessionId = realId ?? sessionId;
       const displayStdout = driver ? driver.processOutput(effectiveSessionId, stdout) : stdout;
       if (code === 0) {
-        promptTransport.cleanup();
+        cleanup();
         resolve({ stdout: displayStdout, sessionId: effectiveSessionId });
       } else {
-        promptTransport.cleanup();
+        cleanup();
         reject(Object.assign(
           new Error(`${agent.name} fix exited with code ${code}: ${stderr.trim()}`),
           {
@@ -751,7 +771,7 @@ export function spawnAgentFixViaRegistry(
       }
     });
     child.on('error', (err: any) => {
-      promptTransport.cleanup();
+      cleanup();
       reject(Object.assign(err, {
         cmd: spec.cmd,
         args: spec.args,

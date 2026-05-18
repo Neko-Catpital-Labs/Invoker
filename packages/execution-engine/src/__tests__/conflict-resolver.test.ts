@@ -350,6 +350,39 @@ describe('agent dispatch — codex vs claude', () => {
       expect(spawnAgentFix.mock.calls[0][2]).toBe('claude');
     });
 
+    it('passes AbortSignal through to spawnAgentFix', async () => {
+      const signal = new AbortController().signal;
+      const spawnAgentFix = vi.fn<(
+        prompt: string,
+        cwd: string,
+        agentName?: string,
+        options?: { signal?: AbortSignal },
+      ) => Promise<{ stdout: string; sessionId: string }>>(async () => ({ stdout: 'fixed', sessionId: 'sess-signal' }));
+      const host: ConflictResolverHost = {
+        orchestrator: {
+          getTask: () => ({
+            id: 'task-signal',
+            status: 'failed',
+            config: { command: 'pnpm test' },
+            execution: { error: 'test failed', workspacePath: createTempWorkspace() },
+          }),
+          getAllTasks: () => [],
+        } as unknown as Orchestrator,
+        persistence: { appendTaskOutput: vi.fn(), updateTask: vi.fn() } as any,
+        cwd: '/tmp',
+        execGitReadonly: async () => '',
+        execGitIn: async () => '',
+        createMergeWorktree: async () => '/tmp/wt',
+        removeMergeWorktree: async () => {},
+        spawnAgentFix,
+      };
+
+      await fixWithAgentImpl(host, 'task-signal', 'error output', 'codex', undefined, undefined, { signal });
+
+      expect(spawnAgentFix).toHaveBeenCalledTimes(1);
+      expect(spawnAgentFix.mock.calls[0]?.[3]?.signal).toBe(signal);
+    });
+
     it('records agentName in persistence for codex fixes', async () => {
       const updateTask = vi.fn();
       const spawnAgentFix = vi.fn<(prompt: string, cwd: string, agentName?: string) => Promise<{ stdout: string; sessionId: string }>>(async () => ({ stdout: 'fixed', sessionId: 'sess-codex' }));
