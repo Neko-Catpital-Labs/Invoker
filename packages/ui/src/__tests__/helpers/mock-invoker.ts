@@ -15,6 +15,7 @@ import type {
   TaskConfig,
   TaskExecution,
 } from '../../types.js';
+import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 export interface MockInvoker {
   /** The mock InvokerAPI object installed on window.invoker. */
@@ -205,6 +206,22 @@ export function createMockInvoker(
   }
 
   return { api, setTasks, fireDelta, fireWorkflowsChanged, install, cleanup };
+}
+
+/** Create a minimal TerminalSessionDescriptor for testing replay seeding flows. */
+export function makeTerminalSession(
+  overrides: Partial<TerminalSessionDescriptor> & { taskId: string },
+): TerminalSessionDescriptor {
+  const { taskId, sessionId, ...rest } = overrides;
+  return {
+    sessionId: sessionId ?? `mock-session-${taskId}`,
+    taskId,
+    status: 'running',
+    mode: 'spawn',
+    attached: false,
+    createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+    ...rest,
+  };
 }
 
 /** Create a minimal TaskState for testing. */

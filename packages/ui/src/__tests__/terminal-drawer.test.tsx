@@ -10,13 +10,56 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
-import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
+import {
+  createMockInvoker,
+  makeTerminalSession,
+  makeUITask,
+  type MockInvoker,
+} from './helpers/mock-invoker.js';
 import type { WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
   return createReactFlowMock();
 });
+
+const xtermState = vi.hoisted(() => ({
+  instances: [] as Array<{
+    writes: string[];
+    onData?: (data: string) => void;
+    disposed: boolean;
+  }>,
+}));
+
+vi.mock('xterm', () => {
+  class Terminal {
+    cols = 80;
+    rows = 24;
+    private readonly id: number;
+    constructor() {
+      this.id = xtermState.instances.length;
+      xtermState.instances.push({ writes: [], disposed: false });
+    }
+    loadAddon(): void { /* no-op */ }
+    open(): void { /* no-op */ }
+    onData(cb: (data: string) => void): { dispose: () => void } {
+      xtermState.instances[this.id].onData = cb;
+      return { dispose: () => { xtermState.instances[this.id].onData = undefined; } };
+    }
+    write(data: string): void {
+      xtermState.instances[this.id].writes.push(data);
+    }
+    focus(): void { /* no-op */ }
+    dispose(): void {
+      xtermState.instances[this.id].disposed = true;
+    }
+  }
+  return { Terminal };
+});
+
+vi.mock('xterm-addon-fit', () => ({
+  FitAddon: class { fit(): void { /* no-op */ } },
+}));
 
 const { App } = await import('../App.js');
 
@@ -51,6 +94,7 @@ describe('Terminal drawer (component)', () => {
   beforeEach(() => {
     mock = createMockInvoker();
     mock.install();
+    xtermState.instances.length = 0;
   });
 
   afterEach(() => {
@@ -155,6 +199,75 @@ describe('Terminal drawer (component)', () => {
       expect(alertSpy).toHaveBeenCalledWith('Task is still running.');
     });
     expect(screen.queryByTestId('terminal-tab-task-alpha')).not.toBeInTheDocument();
+  });
+
+  it('writes the replay snapshot into xterm before live output for newly mounted panes', async () => {
+    const snapshot = 'cached terminal output\r\n$ ';
+    (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      opened: true,
+      session: makeTerminalSession({ taskId: 'task-alpha', outputSnapshot: snapshot }),
+    });
+
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
+      expect(xtermState.instances).toHaveLength(1);
+      expect(xtermState.instances[0]?.writes).toContain(snapshot);
+    });
+
+    expect(xtermState.instances[0]?.writes[0]).toBe(snapshot);
+  });
+
+  it('does not duplicate the replay snapshot when the same session re-renders', async () => {
+    const snapshot = 'persisted scrollback';
+    const sessionDescriptor = makeTerminalSession({
+      taskId: 'task-alpha',
+      outputSnapshot: snapshot,
+    });
+    (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      opened: true,
+      session: sessionDescriptor,
+    });
+
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(xtermState.instances[0]?.writes).toContain(snapshot);
+    });
+
+    const snapshotWritesBefore = xtermState.instances[0]?.writes.filter((w) => w === snapshot)
+      .length ?? 0;
+    expect(snapshotWritesBefore).toBe(1);
+
+    // Force a re-render with the same (sessionId, snapshot) by firing an
+    // unrelated task delta. The parent state changes but the pane keeps the
+    // same key so it should not remount or re-seed.
+    act(() =>
+      mock.fireDelta({
+        type: 'updated',
+        taskId: taskAlpha.id,
+        changes: { status: 'completed' },
+        taskStateVersion: 2,
+        previousTaskStateVersion: 1,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
+    });
+
+    const snapshotWritesAfter = xtermState.instances[0]?.writes.filter((w) => w === snapshot)
+      .length ?? 0;
+    expect(snapshotWritesAfter).toBe(1);
   });
 
   it('opens the drawer when the context-menu Open Terminal action is used', async () => {
