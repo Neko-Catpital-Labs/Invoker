@@ -20,7 +20,7 @@ import type {
 } from '@invoker/contracts';
 import type { Executor, ExecutorHandle, TerminalSpec } from '@invoker/execution-engine';
 
-export type EmbeddedTerminalBackendName = 'bash';
+export type EmbeddedTerminalBackendName = 'bash' | 'pty';
 
 /** Factory used by the default bash/pipe backend. Tests can supply a fake. */
 export type BashSpawnFn = (
@@ -87,7 +87,7 @@ type SessionState = SpawnSessionState | AttachedSessionState;
 
 export interface EmbeddedTerminalManagerOptions {
   /** Backend for GUI spawned sessions. Defaults to the dependency-free bash/pipe backend. */
-  backend?: EmbeddedTerminalBackend;
+  backend?: EmbeddedTerminalBackendName | EmbeddedTerminalBackend;
   /** Override the child_process.spawn function for the bash backend. */
   bashSpawnFn?: BashSpawnFn;
   /** Default shell for `spawn`-mode sessions when the spec has no command. */
@@ -320,7 +320,10 @@ export class EmbeddedTerminalManager extends EventEmitter {
 }
 
 function resolveBackend(options: EmbeddedTerminalManagerOptions): EmbeddedTerminalBackend {
-  if (options.backend) return options.backend;
+  if (typeof options.backend === 'object') return options.backend;
+  if (options.backend === 'pty') {
+    throw new Error('Embedded terminal PTY backend requested, but the PTY backend is not installed.');
+  }
   return new BashTerminalBackend(options.bashSpawnFn);
 }
 
