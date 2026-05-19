@@ -2459,7 +2459,12 @@ export class Orchestrator {
 
     const resetChanges: TaskStateChanges = {
       status: 'pending',
-      config: { summary: undefined },
+      // Clear poolMemberId so the next launch goes through pool selection
+      // again instead of re-pinning to whichever host the previous run
+      // happened to land on. Without this, a rebase-recreate storm replays
+      // the historical assignment without rebalancing, piling many tasks
+      // onto the same SSH host.
+      config: { summary: undefined, poolMemberId: undefined },
       execution: {
         autoFixAttempts: 0,
         startedAt: undefined,
@@ -2537,7 +2542,10 @@ export class Orchestrator {
 
     const resetChanges: TaskStateChanges = {
       status: 'pending',
-      config: { summary: undefined },
+      // Clear poolMemberId so a rebase-recreate storm does not replay every
+      // task's historical SSH host without rebalancing. See recreateTask for
+      // the full rationale.
+      config: { summary: undefined, poolMemberId: undefined },
       execution: {
         autoFixAttempts: 0,
         startedAt: undefined,
@@ -2953,7 +2961,15 @@ export class Orchestrator {
     this.persistence.logEvent?.(taskId, 'task.updated', typeChanges);
     this.messageBus.publish(TASK_DELTA_CHANNEL, typeDelta);
 
-    return hostChanged ? this.recreateTask(taskId) : this.retryTask(taskId);
+    const result = hostChanged ? this.recreateTask(taskId) : this.retryTask(taskId);
+    // recreateTask now clears config.poolMemberId so pool-routed tasks
+    // re-pick a member on the next launch. Re-apply the explicit user pin
+    // after the reset so editTaskType's contract (caller-chosen host
+    // survives the reset) is preserved.
+    if (hostChanged && effectiveType === 'ssh' && newPoolMemberId !== undefined) {
+      this.writeAndSync(taskId, { config: { poolMemberId: newPoolMemberId } } as TaskStateChanges);
+    }
+    return result;
   }
 
     editTaskPool(taskId: string, poolId: string): TaskState[] {
