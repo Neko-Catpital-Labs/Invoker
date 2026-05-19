@@ -13,10 +13,12 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: {
-          // Split large vendor chunks to reduce memory pressure
-          react: ['react', 'react-dom'],
+          // Split heavy vendors so the entry chunk stays small. xyflow ships
+          // with the eager WorkflowGraph render. elkjs is heavy and only
+          // reachable through the lazy TaskDAG, so it lands in its own chunk
+          // and is fetched on demand.
           xyflow: ['@xyflow/react'],
-          xterm: ['xterm', 'xterm-addon-fit'],
+          elkjs: ['elkjs/lib/elk.bundled.js'],
         },
       },
     },
