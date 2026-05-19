@@ -1,6 +1,17 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
+function manualChunks(id: string): string | undefined {
+  if (!id.includes('/node_modules/')) return undefined;
+
+  if (id.includes('/@xyflow/')) return 'xyflow';
+  if (id.includes('/elkjs/')) return 'elkjs';
+  if (id.includes('/xterm') || id.includes('/xterm-addon-fit/')) return 'xterm';
+  if (id.includes('/react/') || id.includes('/react-dom/') || id.includes('/scheduler/')) return 'react';
+
+  return 'vendor';
+}
+
 export default defineConfig({
   plugins: [react()],
   base: './', // relative paths for Electron
@@ -12,12 +23,7 @@ export default defineConfig({
     minify: 'esbuild', // esbuild is faster and uses less memory than terser
     rollupOptions: {
       output: {
-        manualChunks: {
-          // Split large vendor chunks to reduce memory pressure
-          react: ['react', 'react-dom'],
-          xyflow: ['@xyflow/react'],
-          xterm: ['xterm', 'xterm-addon-fit'],
-        },
+        manualChunks,
       },
     },
   },
