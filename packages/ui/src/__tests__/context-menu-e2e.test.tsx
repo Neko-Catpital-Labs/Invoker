@@ -158,4 +158,52 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
+
+  it('workflow context menu focuses itself and supports roving keyboard activation', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+
+    const menu = await screen.findByRole('menu');
+    await waitFor(() => expect(document.activeElement).toBe(menu));
+
+    fireEvent.keyDown(menu, { key: 'ArrowUp' });
+    fireEvent.keyDown(menu, { key: 'Enter' });
+    expect(await screen.findByText('Rebase and Retry')).toBeInTheDocument();
+
+    fireEvent.keyDown(menu, { key: 'Enter' });
+    await waitFor(() => expect(mock.api.rebaseRetry).toHaveBeenCalledWith('wf-1'));
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+
+  it('task context menu focuses itself and activates expanded danger actions by keyboard', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    const menu = await screen.findByRole('menu');
+    await waitFor(() => expect(document.activeElement).toBe(menu));
+
+    fireEvent.keyDown(menu, { key: 'ArrowUp' });
+    fireEvent.keyDown(menu, { key: 'Enter' });
+    expect(await screen.findByText('Terminate Task')).toBeInTheDocument();
+
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'Enter' });
+    await waitFor(() => expect(mock.api.recreateTask).toHaveBeenCalledWith('task-alpha'));
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+
+  it('open context menus own graph shortcut keys fired on document', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    expect(await screen.findByRole('menu')).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: 'Enter' });
+
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+    expect(screen.queryAllByRole('menu')).toHaveLength(1);
+  });
 });
