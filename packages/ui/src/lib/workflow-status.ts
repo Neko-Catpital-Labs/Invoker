@@ -1,5 +1,5 @@
 import type { WorkflowStatus } from '../types.js';
-import { getStatusVisual } from './status-colors.js';
+import { getStatusVisual, isActiveStatusVisual } from './status-colors.js';
 
 const WORKFLOW_STATUS_SET: ReadonlySet<WorkflowStatus> = new Set<WorkflowStatus>([
   'pending',
@@ -38,5 +38,5 @@ export function workflowStatusVisual(status: WorkflowStatus): WorkflowStatusVisu
 }
 
 export function isWorkflowStatusActive(status: WorkflowStatus): boolean {
-  return status === 'running';
+  return isActiveStatusVisual(status);
 }

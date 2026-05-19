@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeWorkflowStatus, workflowStatusVisual } from './workflow-status.js';
+import { isWorkflowStatusActive, normalizeWorkflowStatus, workflowStatusVisual } from './workflow-status.js';
 import { getStatusVisual } from './status-colors.js';
 import type { WorkflowStatus } from '../types.js';
 
@@ -15,6 +15,69 @@ const WORKFLOW_STATUSES: readonly WorkflowStatus[] = [
   'awaiting_approval',
   'stale',
 ];
+
+const EXPECTED_WORKFLOW_VISUALS = {
+  pending: {
+    borderClass: 'border-white/10',
+    railClass: 'bg-slate-400',
+    textClass: 'text-slate-100',
+    pulse: false,
+  },
+  running: {
+    borderClass: 'border-blue-400/25',
+    railClass: 'bg-blue-400',
+    textClass: 'text-blue-300',
+    pulse: true,
+  },
+  fixing_with_ai: {
+    borderClass: 'border-orange-400/25',
+    railClass: 'bg-orange-400',
+    textClass: 'text-orange-100',
+    pulse: true,
+  },
+  completed: {
+    borderClass: 'border-green-500/30',
+    railClass: 'bg-green-500',
+    textClass: 'text-green-300',
+    pulse: false,
+  },
+  failed: {
+    borderClass: 'border-red-500/55',
+    railClass: 'bg-red-500',
+    textClass: 'text-red-300',
+    pulse: false,
+  },
+  closed: {
+    borderClass: 'border-zinc-500/55',
+    railClass: 'bg-zinc-500',
+    textClass: 'text-zinc-300',
+    pulse: false,
+  },
+  blocked: {
+    borderClass: 'border-slate-500/30',
+    railClass: 'bg-slate-500',
+    textClass: 'text-slate-300',
+    pulse: false,
+  },
+  review_ready: {
+    borderClass: 'border-sky-500/55',
+    railClass: 'bg-sky-400',
+    textClass: 'text-sky-300',
+    pulse: false,
+  },
+  awaiting_approval: {
+    borderClass: 'border-purple-500/55',
+    railClass: 'bg-purple-400',
+    textClass: 'text-purple-300',
+    pulse: false,
+  },
+  stale: {
+    borderClass: 'border-white/5',
+    railClass: 'bg-slate-600',
+    textClass: 'text-slate-500',
+    pulse: false,
+  },
+} satisfies Record<WorkflowStatus, ReturnType<typeof workflowStatusVisual>>;
 
 describe('workflow-status', () => {
   it('normalizes known statuses and falls back to pending', () => {
@@ -34,6 +97,7 @@ describe('workflow-status', () => {
     for (const status of WORKFLOW_STATUSES) {
       const visual = workflowStatusVisual(status);
       const canonical = getStatusVisual(status);
+      expect(visual).toEqual(EXPECTED_WORKFLOW_VISUALS[status]);
       expect(visual.borderClass).toBe(canonical.border);
       expect(visual.railClass).toBe(canonical.rail);
       expect(visual.textClass).toBe(canonical.text);
@@ -41,4 +105,9 @@ describe('workflow-status', () => {
     }
   });
 
+  it('uses the canonical active status definition', () => {
+    for (const status of WORKFLOW_STATUSES) {
+      expect(isWorkflowStatusActive(status)).toBe(getStatusVisual(status).active);
+    }
+  });
 });
