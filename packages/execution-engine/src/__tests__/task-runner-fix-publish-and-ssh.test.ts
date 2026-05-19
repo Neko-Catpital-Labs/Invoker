@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TaskRunner } from '../task-runner.js';
 import { collectDirectNonMergeTaskIds } from '../merge-runner.js';
 import { SshExecutor } from '../ssh-executor.js';
+import { ResourceLimitError } from '../repo-pool.js';
 import type { TaskState } from '@invoker/workflow-core';
 import type { WorkResponse, Logger } from '@invoker/contracts';
 import { EventEmitter } from 'events';
@@ -2633,6 +2634,168 @@ describe('TaskRunner', () => {
         remoteHost: 'dev.example.com',
         remoteUser: 'dev',
       }));
+    });
+
+    it('defers explicit SSH pool member selection when the member is already at capacity', async () => {
+      const sshExecutor = createCompletingExecutor('ssh', {
+        workspacePath: '/remote/worktrees/task-explicit-capacity',
+        branch: 'experiment/task-explicit-capacity',
+      });
+      const deferTask = vi.fn();
+      const handleWorkerResponse = vi.fn();
+      const task = makeTask({
+        id: 'task-explicit-capacity',
+        status: 'pending',
+        config: {
+          command: 'pnpm test',
+          runnerKind: 'ssh',
+          poolId: 'ci-pool',
+          poolMemberId: 'remote-a',
+        },
+        execution: { selectedAttemptId: 'attempt-explicit-capacity' },
+      });
+
+      const runner = new TaskRunner({
+        orchestrator: {
+          getTask: () => task,
+          getAllTasks: () => [task],
+          handleWorkerResponse,
+          deferTask,
+        } as any,
+        persistence: { updateTask: vi.fn(), updateAttempt: vi.fn(), logEvent: vi.fn() } as any,
+        executorRegistry: {
+          getDefault: () => sshExecutor,
+          get: (type: string) => type === 'ssh' ? sshExecutor : null,
+          getAll: () => [sshExecutor],
+        } as any,
+        cwd: '/tmp',
+        executionPoolsProvider: () => ({
+          'ci-pool': {
+            selectionStrategy: 'roundRobin',
+            maxConcurrentTasksPerMember: 1,
+            members: [{ type: 'ssh', id: 'remote-a' }],
+          },
+        }),
+        remoteTargetsProvider: () => ({
+          'remote-a': { host: 'a.example.com', user: 'runner', sshKeyPath: '/secret/a' },
+        }),
+      });
+      (runner as any).activeExecutions.set('attempt-active', {
+        taskId: 'task-active',
+        executor: sshExecutor,
+        handle: { executionId: 'exec-active', taskId: 'task-active' },
+        poolId: 'ci-pool',
+        poolMemberKey: 'ssh:remote-a',
+      });
+
+      await runner.executeTask(task);
+
+      expect(sshExecutor.start).not.toHaveBeenCalled();
+      expect(deferTask).toHaveBeenCalledWith('task-explicit-capacity');
+      expect(handleWorkerResponse).not.toHaveBeenCalledWith(expect.objectContaining({ status: 'failed' }));
+    });
+
+    it('defers pool-routed SSH selection when every member is already at capacity', async () => {
+      const sshExecutor = createCompletingExecutor('ssh', {
+        workspacePath: '/remote/worktrees/task-pool-capacity',
+        branch: 'experiment/task-pool-capacity',
+      });
+      const deferTask = vi.fn();
+      const handleWorkerResponse = vi.fn();
+      const task = makeTask({
+        id: 'task-pool-capacity',
+        status: 'pending',
+        config: { command: 'pnpm test', runnerKind: 'ssh', poolId: 'ci-pool' },
+        execution: { selectedAttemptId: 'attempt-pool-capacity' },
+      });
+
+      const runner = new TaskRunner({
+        orchestrator: {
+          getTask: () => task,
+          getAllTasks: () => [task],
+          handleWorkerResponse,
+          deferTask,
+        } as any,
+        persistence: { updateTask: vi.fn(), updateAttempt: vi.fn(), logEvent: vi.fn() } as any,
+        executorRegistry: {
+          getDefault: () => sshExecutor,
+          get: (type: string) => type === 'ssh' ? sshExecutor : null,
+          getAll: () => [sshExecutor],
+        } as any,
+        cwd: '/tmp',
+        executionPoolsProvider: () => ({
+          'ci-pool': {
+            selectionStrategy: 'leastLoaded',
+            maxConcurrentTasksPerMember: 1,
+            members: [{ type: 'ssh', id: 'remote-a' }],
+          },
+        }),
+        remoteTargetsProvider: () => ({
+          'remote-a': { host: 'a.example.com', user: 'runner', sshKeyPath: '/secret/a' },
+        }),
+      });
+      (runner as any).activeExecutions.set('attempt-active', {
+        taskId: 'task-active',
+        executor: sshExecutor,
+        handle: { executionId: 'exec-active', taskId: 'task-active' },
+        poolId: 'ci-pool',
+        poolMemberKey: 'ssh:remote-a',
+      });
+
+      await runner.executeTask(task);
+
+      expect(sshExecutor.start).not.toHaveBeenCalled();
+      expect(deferTask).toHaveBeenCalledWith('task-pool-capacity');
+      expect(handleWorkerResponse).not.toHaveBeenCalledWith(expect.objectContaining({ status: 'failed' }));
+    });
+
+    it('throws a resource-limit cause for capacity-blocked explicit SSH selection', () => {
+      const sshExecutor = createCompletingExecutor('ssh', {
+        workspacePath: '/remote/worktrees/task-select-capacity',
+        branch: 'experiment/task-select-capacity',
+      });
+      const task = makeTask({
+        id: 'task-select-capacity',
+        status: 'pending',
+        config: {
+          command: 'pnpm test',
+          runnerKind: 'ssh',
+          poolId: 'ci-pool',
+          poolMemberId: 'remote-a',
+        },
+      });
+      const runner = new TaskRunner({
+        orchestrator: { getTask: () => task, getAllTasks: () => [task], handleWorkerResponse: vi.fn() } as any,
+        persistence: { updateTask: vi.fn(), updateAttempt: vi.fn(), logEvent: vi.fn() } as any,
+        executorRegistry: {
+          getDefault: () => sshExecutor,
+          get: (type: string) => type === 'ssh' ? sshExecutor : null,
+          getAll: () => [sshExecutor],
+        } as any,
+        cwd: '/tmp',
+        executionPoolsProvider: () => ({
+          'ci-pool': {
+            maxConcurrentTasksPerMember: 1,
+            members: [{ type: 'ssh', id: 'remote-a' }],
+          },
+        }),
+        remoteTargetsProvider: () => ({
+          'remote-a': { host: 'a.example.com', user: 'runner', sshKeyPath: '/secret/a' },
+        }),
+      });
+      (runner as any).activeExecutions.set('attempt-active', {
+        taskId: 'task-active',
+        executor: sshExecutor,
+        handle: { executionId: 'exec-active', taskId: 'task-active' },
+        poolId: 'ci-pool',
+        poolMemberKey: 'ssh:remote-a',
+      });
+
+      expect(() => runner.selectExecutor(task)).toThrow(
+        expect.objectContaining({
+          cause: expect.any(ResourceLimitError),
+        }),
+      );
     });
 
     it('logs configured worktree executor selection reason', async () => {

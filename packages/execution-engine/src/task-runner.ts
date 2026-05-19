@@ -123,6 +123,7 @@ type RemoteTargetDisplay = {
   user: string;
   sshKeyPath: string;
   port?: number;
+  maxConcurrentTasks?: number;
   managedWorkspaces?: boolean;
   remoteInvokerHome?: string;
   provisionCommand?: string;
@@ -1083,6 +1084,28 @@ export class TaskRunner {
     return load;
   }
 
+  private resourceLimitError(message: string): Error {
+    const err = new Error(message);
+    (err as Error & { cause?: unknown }).cause = new ResourceLimitError(message);
+    return err;
+  }
+
+  private assertPoolMemberCapacity(
+    poolId: string,
+    member: ExecutionPoolMember,
+    pool: Pick<ExecutionPoolConfig, 'maxConcurrentTasksPerMember'>,
+  ): string {
+    const memberKey = this.poolMemberKey(member);
+    const load = this.poolMemberLoad(poolId, memberKey);
+    const limit = member.maxConcurrentTasks ?? pool.maxConcurrentTasksPerMember;
+    if (limit !== undefined && load >= limit) {
+      throw this.resourceLimitError(
+        `Execution pool member ${poolId}/${member.id} is at capacity (${load}/${limit})`,
+      );
+    }
+    return memberKey;
+  }
+
   private selectPoolMember(
     poolId: string,
     pool: ExecutionPoolConfig,
@@ -1095,7 +1118,11 @@ export class TaskRunner {
       for (let offset = 0; offset < pool.members.length; offset += 1) {
         const index = (cursor + offset) % pool.members.length;
         const member = pool.members[index];
-        if (excludedMemberKeys.has(this.poolMemberKey(member))) continue;
+        const memberKey = this.poolMemberKey(member);
+        if (excludedMemberKeys.has(memberKey)) continue;
+        const load = this.poolMemberLoad(poolId, memberKey);
+        const limit = member.maxConcurrentTasks ?? pool.maxConcurrentTasksPerMember;
+        if (limit !== undefined && load >= limit) continue;
         this.poolRoundRobinCursor.set(poolId, (index + 1) % pool.members.length);
         return member;
       }
@@ -1108,9 +1135,8 @@ export class TaskRunner {
       const limit = member.maxConcurrentTasks ?? pool.maxConcurrentTasksPerMember;
       return { member, index, load, hasCapacity: limit === undefined || load < limit };
     });
-    const candidates = scored.some((entry) => entry.hasCapacity)
-      ? scored.filter((entry) => entry.hasCapacity)
-      : scored;
+    const candidates = scored.filter((entry) => entry.hasCapacity);
+    if (candidates.length === 0) return undefined;
     candidates.sort((a, b) => a.load - b.load || a.index - b.index);
     return candidates[0]?.member;
   }
@@ -1193,9 +1219,26 @@ export class TaskRunner {
     let effectiveType = task.config.runnerKind ?? (task.config.isMergeNode ? 'merge' : undefined);
     let selectedPoolMemberId: string | undefined;
     const explicitPoolMemberId = (task.config as { poolMemberId?: string }).poolMemberId;
+    let remoteTargetsForSelection: Record<string, RemoteTargetDisplay> | undefined;
     this.pendingPoolSelections.delete(task.id);
 
-    if (task.config.poolId && !explicitPoolMemberId) {
+    if (task.config.poolId && explicitPoolMemberId) {
+      const pool = this.getExecutionPools()[task.config.poolId];
+      const member = pool?.members.find(
+        (candidate) => candidate.type === 'ssh' && candidate.id === explicitPoolMemberId,
+      );
+      if (pool && member) {
+        const memberKey = this.assertPoolMemberCapacity(task.config.poolId, member, pool);
+        selectedPoolMemberId = explicitPoolMemberId;
+        effectiveType = member.type;
+        this.pendingPoolSelections.set(task.id, {
+          poolId: task.config.poolId,
+          member,
+          memberKey,
+          selectionStrategy: pool.selectionStrategy ?? 'roundRobin',
+        });
+      }
+    } else if (task.config.poolId && !explicitPoolMemberId) {
       const pool = this.getExecutionPools()[task.config.poolId];
       const member = pool ? this.selectPoolMember(task.config.poolId, pool, excludedPoolMemberKeys) : undefined;
       if (member) {
@@ -1207,8 +1250,32 @@ export class TaskRunner {
           memberKey: this.poolMemberKey(member),
           selectionStrategy: pool.selectionStrategy ?? 'roundRobin',
         });
+      } else if (pool?.members.length) {
+        throw this.resourceLimitError(`Execution pool ${task.config.poolId} has no available members`);
       }
     }
+
+    if (effectiveType === 'ssh' && explicitPoolMemberId && !this.pendingPoolSelections.has(task.id)) {
+      remoteTargetsForSelection = this.getRemoteTargets();
+      const target = remoteTargetsForSelection[explicitPoolMemberId];
+      if (target?.maxConcurrentTasks !== undefined) {
+        const member: ExecutionPoolMember = {
+          type: 'ssh',
+          id: explicitPoolMemberId,
+          maxConcurrentTasks: target.maxConcurrentTasks,
+        };
+        const poolId = `remote-target:${explicitPoolMemberId}`;
+        const memberKey = this.assertPoolMemberCapacity(poolId, member, {});
+        selectedPoolMemberId = explicitPoolMemberId;
+        this.pendingPoolSelections.set(task.id, {
+          poolId,
+          member,
+          memberKey,
+          selectionStrategy: 'leastLoaded',
+        });
+      }
+    }
+
     if (
       effectiveType === 'ssh'
       && task.config.poolId
@@ -1264,7 +1331,7 @@ export class TaskRunner {
       // remoteTargetsProvider returning new values), we replace the cached executor so the
       // new config takes effect immediately.
       if (effectiveType === 'ssh') {
-        const remoteTargets = this.getRemoteTargets();
+        const remoteTargets = remoteTargetsForSelection ?? this.getRemoteTargets();
         const targetId =
           selectedPoolMemberId
           ?? (task.config as { poolMemberId?: string }).poolMemberId
