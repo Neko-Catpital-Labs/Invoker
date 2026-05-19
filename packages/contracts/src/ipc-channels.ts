@@ -277,6 +277,11 @@ export interface TerminalSessionDescriptor {
   mode: 'spawn' | 'attached';
   attached: boolean;
   createdAt: string;
+  /**
+   * Bounded recent terminal output used to seed renderer panes that subscribe
+   * after the session has already emitted startup output.
+   */
+  outputSnapshot?: string;
 }
 
 export interface TerminalOutputEvent {
