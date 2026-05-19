@@ -44,6 +44,7 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const seededSnapshotRef = useRef<{ sessionId: string; outputSnapshot: string } | null>(null);
 
   useEffect(() => {
     const host = containerRef.current;
@@ -68,6 +69,24 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
     }
     termRef.current = term;
     fitRef.current = fit;
+
+    if (
+      session.outputSnapshot &&
+      (
+        seededSnapshotRef.current?.sessionId !== session.sessionId ||
+        seededSnapshotRef.current.outputSnapshot !== session.outputSnapshot
+      )
+    ) {
+      try {
+        term.write(session.outputSnapshot);
+        seededSnapshotRef.current = {
+          sessionId: session.sessionId,
+          outputSnapshot: session.outputSnapshot,
+        };
+      } catch {
+        /* terminal disposed */
+      }
+    }
 
     const inputDisposable = term.onData((data) => {
       void window.invoker?.terminalWrite?.(session.sessionId, data);

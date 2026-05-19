@@ -14,6 +14,8 @@ import type {
   TaskStatus,
   TaskConfig,
   TaskExecution,
+  TerminalSessionDescriptor,
+  TerminalOutputEvent,
 } from '../../types.js';
 
 export interface MockInvoker {
@@ -25,6 +27,8 @@ export interface MockInvoker {
   fireDelta: (delta: TaskDelta) => void;
   /** Fire a workflows-changed event. */
   fireWorkflowsChanged: (workflows: WorkflowMeta[]) => void;
+  /** Fire an embedded terminal output event. */
+  fireTerminalOutput: (event: TerminalOutputEvent) => void;
   /** Install the mock on window.invoker. */
   install: () => void;
   /** Remove window.invoker. */
@@ -39,6 +43,7 @@ export function createMockInvoker(
   let workflowSnapshot = initialWorkflows;
   let deltaCallback: ((delta: TaskDelta) => void) | undefined;
   let workflowsCallback: ((workflows: unknown[]) => void) | undefined;
+  let terminalOutputCallback: ((event: TerminalOutputEvent) => void) | undefined;
 
   const api: InvokerAPI = {
     // Defer resolution one microtask so snapshot is read after synchronous setTasks()
@@ -69,6 +74,7 @@ export function createMockInvoker(
     stop: vi.fn(async () => {}),
     clear: vi.fn(async () => {}),
     getStatus: vi.fn(async () => ({ total: 0, completed: 0, failed: 0, closed: 0, running: 0, pending: 0 })),
+    reportUiPerf: vi.fn(async () => {}),
     provideInput: vi.fn(async () => {}),
     approve: vi.fn(async () => {}),
     reject: vi.fn(async () => {}),
@@ -140,7 +146,10 @@ export function createMockInvoker(
     terminalWrite: vi.fn(async () => ({ ok: true })),
     terminalResize: vi.fn(async () => ({ ok: true })),
     terminalClose: vi.fn(async () => ({ ok: true })),
-    onTerminalOutput: vi.fn(() => () => {}),
+    onTerminalOutput: vi.fn((cb: (event: TerminalOutputEvent) => void) => {
+      terminalOutputCallback = cb;
+      return () => { terminalOutputCallback = undefined; };
+    }),
     onTerminalExit: vi.fn(() => () => {}),
     resumeWorkflow: vi.fn(async () => null),
     listWorkflows: vi.fn(async () => []),
@@ -191,6 +200,10 @@ export function createMockInvoker(
     workflowsCallback?.(workflows);
   }
 
+  function fireTerminalOutput(event: TerminalOutputEvent) {
+    terminalOutputCallback?.(event);
+  }
+
   function install() {
     (window as unknown as { invoker: InvokerAPI }).invoker = api;
     (window as unknown as { __INVOKER_BOOTSTRAP__?: { tasks: TaskState[]; workflows: WorkflowMeta[] } }).__INVOKER_BOOTSTRAP__ = {
@@ -204,7 +217,7 @@ export function createMockInvoker(
     delete (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__;
   }
 
-  return { api, setTasks, fireDelta, fireWorkflowsChanged, install, cleanup };
+  return { api, setTasks, fireDelta, fireWorkflowsChanged, fireTerminalOutput, install, cleanup };
 }
 
 /** Create a minimal TaskState for testing. */
@@ -241,4 +254,20 @@ export function makeUITask(overrides: Partial<TaskState> & {
     execution: ((overrides as any).execution ?? {}) as TaskExecution,
     ...rest,
   } as TaskState;
+}
+
+/** Create a minimal embedded terminal session descriptor for testing. */
+export function makeTerminalSession(
+  overrides: Partial<TerminalSessionDescriptor> & { taskId?: string; sessionId?: string } = {},
+): TerminalSessionDescriptor {
+  const taskId = overrides.taskId ?? 'task-1';
+  return {
+    sessionId: overrides.sessionId ?? `mock-session-${taskId}`,
+    taskId,
+    status: 'running',
+    mode: 'spawn',
+    attached: false,
+    createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+    ...overrides,
+  };
 }
