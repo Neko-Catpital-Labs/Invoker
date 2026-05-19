@@ -84,6 +84,7 @@ export function formatWorkflowStatus(status: {
   total: number;
   completed: number;
   failed: number;
+  closed?: number;
   running: number;
   pending: number;
 }): string {
@@ -91,6 +92,7 @@ export function formatWorkflowStatus(status: {
     `${BOLD}Workflow:${RESET} ${status.total} total`,
     `${GREEN}${status.completed} completed${RESET}`,
     `${RED}${status.failed} failed${RESET}`,
+    `${DIM}${status.closed ?? 0} closed${RESET}`,
     `${YELLOW}${status.running} running${RESET}`,
     `${DIM}${status.pending} pending${RESET}`,
   ];
