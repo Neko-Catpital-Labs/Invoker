@@ -6,10 +6,13 @@ set -euo pipefail
 # state. The current baseline pays ~65-164ms and ~377KB transferring a snapshot
 # that duplicates what preload just delivered.
 #
-# This script seeds an isolated INVOKER_DB_DIR with multiple workflows × tasks,
-# relaunches the Electron app, captures the ui-perf events recorded into the
-# `activity_log` table via `window.invoker.getActivityLogs()`, and reports the
-# timing/size numbers needed to characterize the bug or its fix.
+# This script launches an isolated Electron app, seeds it with multiple
+# workflows × tasks via IPC, reloads the renderer (which re-runs preload with
+# the orchestrator already populated — the same path production hits when the
+# user opens Invoker with existing workflows), then captures the post-reload
+# ui-perf events recorded into the `activity_log` table via
+# `window.invoker.getActivityLogs()` and reports the timing/size numbers needed
+# to characterize the bug or its fix.
 #
 # Modes:
 #   --expect-issue  Exit 0 when at least one non-forced startup
@@ -175,12 +178,19 @@ function buildPlan(index) {
   };
 }
 
-// 1) Seed N workflows × M tasks into an isolated DB.
-const seedApp = await electron.launch({ args: electronArgs, env: electronEnv });
+// Single-launch flow: seed workflows in the running app, then reload the
+// renderer so the preload runs again with the orchestrator already populated.
+// This is the closest analog to the production "open Invoker with existing
+// workflows" path without requiring a clean restart from disk (cross-launch DB
+// persistence is finicky in Playwright-managed Electron tests).
+const app = await electron.launch({ args: electronArgs, env: electronEnv });
+let exitCode = 1;
 try {
-  const page = await seedApp.firstWindow({ timeout: timeoutMs });
+  const page = await app.firstWindow({ timeout: timeoutMs });
   await page.waitForLoadState('domcontentloaded');
   await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: timeoutMs });
+
+  // 1) Seed N workflows × M tasks via the running app's IPC.
   for (let i = 0; i < workflowCount; i++) {
     const planYaml = yamlStringify(buildPlan(i));
     await page.evaluate((text) => window.invoker.loadPlan(text), planYaml);
@@ -189,20 +199,23 @@ try {
     const r = await window.invoker.getTasks(true);
     return Array.isArray(r) ? r.length : r.tasks.length;
   });
-  const expected = workflowCount * tasksPerWorkflow;
+  // The orchestrator injects one synthetic __merge__ task per loadPlan, so the
+  // post-seed task count is workflowCount * (tasksPerWorkflow + 1).
+  const expected = workflowCount * (tasksPerWorkflow + 1);
   if (seedSize !== expected) {
     throw new Error(`seed expected ${expected} tasks but got ${seedSize}`);
   }
-} finally {
-  await seedApp.close();
-}
+  console.log(`repro: seeded ${seedSize} tasks across ${workflowCount} workflows`);
 
-// 2) Relaunch and capture startup ui-perf events.
-const app = await electron.launch({ args: electronArgs, env: electronEnv });
-let exitCode = 1;
-try {
-  const page = await app.firstWindow({ timeout: timeoutMs });
-  await page.waitForLoadState('domcontentloaded');
+  // 2) Capture pre-reload activity log ids so we can isolate post-reload events.
+  const preReloadIdSet = new Set(
+    (await page.evaluate(async () => await window.invoker.getActivityLogs())).map((e) => e.id),
+  );
+
+  // 3) Reload the renderer. Electron re-runs preload, which re-fires
+  //    preload_bootstrap_sync via the same get-bootstrap-state-sync IPC the
+  //    real startup uses — but with the orchestrator already populated.
+  await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: timeoutMs });
   await page
     .locator('[data-testid^="workflow-node-"]')
@@ -211,7 +224,8 @@ try {
   // Give post-mount fetchAll() time to run and `useTasks_snapshot_replace`
   // time to land in activity_log before we query.
   await page.waitForTimeout(postVisibleWaitMs);
-  const activityLogs = await page.evaluate(() => window.invoker.getActivityLogs());
+  const activityLogs = (await page.evaluate(() => window.invoker.getActivityLogs()))
+    .filter((entry) => !preReloadIdSet.has(entry.id));
 
   const parse = (msg) => { try { return JSON.parse(msg); } catch { return null; } };
   const uiPerf = (activityLogs ?? [])
