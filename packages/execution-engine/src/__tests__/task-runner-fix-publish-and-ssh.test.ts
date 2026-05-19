@@ -2440,6 +2440,83 @@ describe('TaskRunner', () => {
       });
     });
 
+    it('retries SSH startup transport failures on another pool member before failing the task', async () => {
+      const sshExecutor = createCompletingExecutor('ssh', {
+        workspacePath: '/remote/worktrees/task-retry',
+        branch: 'experiment/task-retry',
+      });
+      sshExecutor.start = vi.fn()
+        .mockRejectedValueOnce(new Error(
+          'SSH remote script failed (exit=255)\nSTDERR:\nConnection timed out during banner exchange',
+        ))
+        .mockResolvedValueOnce({
+          executionId: 'exec-task-retry',
+          taskId: 'task-retry',
+          workspacePath: '/remote/worktrees/task-retry',
+          branch: 'experiment/task-retry',
+        });
+      const logEvent = vi.fn();
+      const updateTask = vi.fn();
+      const appendTaskOutput = vi.fn();
+      const handleWorkerResponse = vi.fn();
+      const task = makeTask({
+        id: 'task-retry',
+        status: 'pending',
+        config: { command: 'pnpm test', runnerKind: 'ssh', poolId: 'ci-pool' },
+        execution: { selectedAttemptId: 'attempt-retry' },
+      });
+
+      const runner = new TaskRunner({
+        orchestrator: { getTask: () => task, getAllTasks: () => [task], handleWorkerResponse } as any,
+        persistence: { updateTask, updateAttempt: vi.fn(), appendTaskOutput, logEvent } as any,
+        executorRegistry: {
+          getDefault: () => sshExecutor,
+          get: (type: string) => type === 'ssh' ? sshExecutor : null,
+          getAll: () => [sshExecutor],
+        } as any,
+        cwd: '/tmp',
+        executionPoolsProvider: () => ({
+          'ci-pool': {
+            selectionStrategy: 'leastLoaded',
+            members: [
+              { type: 'ssh', id: 'remote-a' },
+              { type: 'ssh', id: 'remote-b' },
+            ],
+          },
+        }),
+        remoteTargetsProvider: () => ({
+          'remote-a': { host: 'a.example.com', user: 'runner', sshKeyPath: '/secret/a' },
+          'remote-b': { host: 'b.example.com', user: 'runner', sshKeyPath: '/secret/b' },
+        }),
+      });
+
+      await runner.executeTask(task);
+
+      expect(sshExecutor.start).toHaveBeenCalledTimes(2);
+      expect(appendTaskOutput).toHaveBeenCalledWith(
+        'task-retry',
+        expect.stringContaining('retrying another SSH pool member'),
+      );
+      expect(logEvent).toHaveBeenCalledWith('task-retry', 'task.executor.startup-retry', expect.objectContaining({
+        poolId: 'ci-pool',
+        poolMemberId: 'remote-a',
+        reason: 'ssh-startup-transport-failure',
+      }));
+      expect(logEvent).toHaveBeenCalledWith('task-retry', 'task.executor.selected', expect.objectContaining({
+        runnerKind: 'ssh',
+        poolMemberId: 'remote-b',
+        remoteHost: 'b.example.com',
+      }));
+      expect(updateTask).toHaveBeenCalledWith('task-retry', {
+        config: { runnerKind: 'ssh', poolMemberId: 'remote-b' },
+        execution: expect.objectContaining({
+          workspacePath: '/remote/worktrees/task-retry',
+          branch: 'experiment/task-retry',
+        }),
+      });
+      expect(handleWorkerResponse).not.toHaveBeenCalledWith(expect.objectContaining({ status: 'failed' }));
+    });
+
     it('logs explicit SSH executor selection as explicitPoolMemberId', async () => {
       const sshExecutor = createCompletingExecutor('ssh', {
         workspacePath: '/remote/worktrees/task-explicit',
