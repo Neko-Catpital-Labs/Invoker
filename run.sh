@@ -5,6 +5,10 @@ set -e
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$REPO_ROOT"
 
+# Workspaces are durable task/attempt artifacts. Disable destructive cleanup
+# from this launcher even if the caller's environment opts into it.
+export INVOKER_ENABLE_WORKSPACE_CLEANUP=0
+
 has_bootstrap_artifacts() {
   [ -f "$REPO_ROOT/node_modules/.modules.yaml" ] \
     && [ -x "$REPO_ROOT/packages/app/node_modules/.bin/electron" ]
