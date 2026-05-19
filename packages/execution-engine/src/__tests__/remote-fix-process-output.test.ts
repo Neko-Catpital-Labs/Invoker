@@ -47,7 +47,7 @@ describe('spawnRemoteAgentFixImpl processOutput', () => {
     vi.clearAllMocks();
   });
 
-  it('does not export API keys into the remote fix shell by default', async () => {
+  it('clears API key env in the remote fix shell by default', async () => {
     const { spawn } = await import('node:child_process');
     const previous = process.env.ANTHROPIC_API_KEY;
     process.env.ANTHROPIC_API_KEY = 'ambient-key-that-should-not-forward';
@@ -63,7 +63,8 @@ describe('spawnRemoteAgentFixImpl processOutput', () => {
       );
 
       const script = child.stdin.write.mock.calls[0][0] as string;
-      expect(script).not.toContain('ANTHROPIC_API_KEY');
+      expect(script).toContain('unset ANTHROPIC_API_KEY');
+      expect(script).toContain('unset OPENAI_API_KEY');
       expect(script).not.toContain('ambient-key-that-should-not-forward');
     } finally {
       if (previous === undefined) delete process.env.ANTHROPIC_API_KEY;

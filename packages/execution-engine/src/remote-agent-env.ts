@@ -27,6 +27,12 @@ export function loadRemoteAgentEnv(secretsFile: string | undefined, useApiKey: b
 }
 
 export function buildRemoteAgentEnvExports(secretsFile: string | undefined, useApiKey: boolean): string {
+  if (!useApiKey) {
+    return Array.from(AGENT_ENV_KEYS)
+      .map((key) => `unset ${key}`)
+      .join('\n') + '\n';
+  }
+
   const entries = Object.entries(loadRemoteAgentEnv(secretsFile, useApiKey));
   if (entries.length === 0) return '';
   return entries

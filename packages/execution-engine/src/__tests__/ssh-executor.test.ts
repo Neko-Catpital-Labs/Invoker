@@ -208,6 +208,8 @@ describe('SshExecutor managed workspace mode', () => {
     // Provision command is base64-encoded in the script, check for presence
     expect(callScript).toMatch(/Provisioning remote worktree/);
     expect(callScript).toMatch(/base64 -d/);
+    expect(callScript).toContain('unset ANTHROPIC_API_KEY');
+    expect(callScript).toContain('unset OPENAI_API_KEY');
     expect(callAgentId).toBeUndefined();
     expect(callFinalize).toEqual({ branch: handle.branch, worktreePath: handle.workspacePath });
   });
