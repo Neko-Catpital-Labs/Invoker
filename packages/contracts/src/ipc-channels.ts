@@ -277,6 +277,14 @@ export interface TerminalSessionDescriptor {
   mode: 'spawn' | 'attached';
   attached: boolean;
   createdAt: string;
+  /**
+   * Bounded recent terminal output snapshot used by the renderer to seed a
+   * newly mounted `TerminalDrawer`/`TerminalSessionPane` so a late subscriber
+   * does not start blank when the backend emitted early output before the
+   * renderer subscribed to `invoker:terminal-output`. The main process caps
+   * this snapshot at a fixed byte budget (64 KiB) of the most recent output.
+   */
+  outputSnapshot?: string;
 }
 
 export interface TerminalOutputEvent {
