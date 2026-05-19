@@ -55,7 +55,7 @@ import {
   validateCanonicalPrBody,
   type PrAuthoringContext,
 } from './pr-authoring.js';
-import { ensureRemoteUrl } from './git-config-mutation.js';
+import { assertNotGitConfigMutation, ensureRemoteUrl } from './git-config-mutation.js';
 
 export type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
 
@@ -1537,9 +1537,10 @@ export class TaskRunner {
   }
 
   /**
-   * @internal Read-only git queries only. For mutations, use execGitIn.
+   * @internal Read-only git queries only. Config mutations must use git-config-mutation helpers.
    */
   execGitReadonly(args: string[], cwd?: string): Promise<string> {
+    assertNotGitConfigMutation(args, 'TaskRunner.execGitReadonly');
     return new Promise((resolvePromise, reject) => {
       const child = spawn('git', args, {
         cwd: cwd ?? this.cwd,
@@ -1562,6 +1563,7 @@ export class TaskRunner {
   }
 
   /** @internal */ execGitIn(args: string[], dir: string): Promise<string> {
+    assertNotGitConfigMutation(args, 'TaskRunner.execGitIn');
     return new Promise((resolvePromise, reject) => {
       const child = spawn('git', args, {
         cwd: dir,
