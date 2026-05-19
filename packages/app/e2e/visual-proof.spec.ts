@@ -560,6 +560,35 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'workflow-context-menu-organization');
   });
 
+  test('context-menu-keyboard-navigation — ArrowDown shifts highlight to next enabled item', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+
+    await openContextMenu(page, page.locator('[data-testid^="workflow-node-"]'));
+
+    // The menu owns ArrowDown only while it has focus; useMenuKeyboard's
+    // mount effect calls menuRef.focus(), so wait until that completes before
+    // dispatching the keystroke instead of relying on a timing-based sleep.
+    await page.waitForFunction(() => {
+      const node = document.querySelector('[role="menu"]');
+      return node !== null && document.activeElement === node;
+    });
+
+    const openWorkflowItem = page.getByRole('menuitem', { name: 'Open Workflow' });
+    const openPrItem = page.getByRole('menuitem', { name: 'Open PR' });
+
+    // Initial state: first item carries the bg-gray-700 highlight (focusedIndex = 0).
+    await expect(openWorkflowItem).toHaveClass(/(?:^|\s)bg-gray-700(?:\s|$)/);
+
+    await page.keyboard.press('ArrowDown');
+
+    // After ArrowDown the highlight moves to the second enabled menu item
+    // and leaves the first one without the active class.
+    await expect(openPrItem).toHaveClass(/(?:^|\s)bg-gray-700(?:\s|$)/);
+    await expect(openWorkflowItem).not.toHaveClass(/(?:^|\s)bg-gray-700(?:\s|$)/);
+
+    await captureScreenshot(page, 'context-menu-keyboard-navigation');
+  });
+
   test('context menu keeps danger separator when cancel action is absent', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     await injectTaskStates(page, [
