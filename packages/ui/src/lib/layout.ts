@@ -11,7 +11,8 @@
  *    for straighter edges.
  */
 
-import ELK from 'elkjs/lib/elk.bundled.js';
+import ELK from 'elkjs/lib/elk-api.js';
+import elkWorkerUrl from 'elkjs/lib/elk-worker.min.js?url';
 
 import type { TaskState } from '../types.js';
 
@@ -88,7 +89,7 @@ export async function layoutTaskGraph(
     .sort((a, b) => edgeLayoutId(a).localeCompare(edgeLayoutId(b)));
 
   try {
-    const elk = options?.elk ?? new ELK();
+    const elk = options?.elk ?? new ELK({ workerUrl: elkWorkerUrl });
     const graph = {
       id: 'task-dag',
       layoutOptions: {
