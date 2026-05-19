@@ -343,12 +343,7 @@ HASH=$(git rev-parse HEAD)
 BR=$(echo ${brB} | base64 -d)
 PUSH_URL=$(echo ${pushRemoteUrlB} | base64 -d)
 if [ -n "$PUSH_URL" ]; then
-  if git remote get-url invoker-branches >/dev/null 2>&1; then
-    git remote set-url invoker-branches "$PUSH_URL"
-  else
-    git remote add invoker-branches "$PUSH_URL"
-  fi
-  git push invoker-branches "$BR:refs/heads/$BR"
+  git push "$PUSH_URL" "$BR:refs/heads/$BR"
 else
   git push origin "$BR:refs/heads/$BR"
 fi
