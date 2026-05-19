@@ -393,6 +393,33 @@ describe('EmbeddedTerminalManager', () => {
 });
 
 describe('EmbeddedTerminalManager replay buffer', () => {
+  it('replays FIRST_FRAME_FROM_PTY emitted synchronously during spawn to a late renderer-style consumer', () => {
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: (opts) => {
+        opts.emitOutput('FIRST_FRAME_FROM_PTY\n');
+        return { write: () => {}, resize: () => {}, close: () => {} };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+    const liveEvents: string[] = [];
+
+    const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+    mgr.on('output', (event) => {
+      if (event.sessionId === session.sessionId) liveEvents.push(event.data);
+    });
+
+    const lateConsumerSeed = session.outputSnapshot ?? '';
+    const listed = mgr.list();
+
+    expect(session.outputSnapshot).toContain('FIRST_FRAME_FROM_PTY\n');
+    expect(lateConsumerSeed).toBe('FIRST_FRAME_FROM_PTY\n');
+    expect(liveEvents).toEqual([]);
+    expect(listed).toHaveLength(1);
+    expect(listed[0].sessionId).toBe(session.sessionId);
+    expect(listed[0].outputSnapshot).toContain('FIRST_FRAME_FROM_PTY\n');
+  });
+
   it('captures output emitted synchronously during backend spawn in the returned descriptor', () => {
     const backend: EmbeddedTerminalBackend = {
       name: 'bash',
@@ -428,7 +455,7 @@ describe('EmbeddedTerminalManager replay buffer', () => {
     expect(listed[0].outputSnapshot).toBe(session.outputSnapshot);
   });
 
-  it('does not throw when the backend emits exit synchronously during spawn', () => {
+  it('synchronous backend exit does not throw', () => {
     const backend: EmbeddedTerminalBackend = {
       name: 'bash',
       spawn: (opts) => {
