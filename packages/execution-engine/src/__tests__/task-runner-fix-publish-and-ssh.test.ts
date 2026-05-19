@@ -1949,6 +1949,63 @@ describe('TaskRunner', () => {
       expect(provider).toHaveBeenCalledTimes(2);
     });
 
+    it('does not inherit docker secretsFile for SSH API-key forwarding', () => {
+      const provider = vi.fn().mockReturnValue({
+        'do-droplet': {
+          host: '1.2.3.4',
+          user: 'root',
+          sshKeyPath: '/key',
+          use_api_key: true,
+        },
+      });
+      const executor = new TaskRunner({
+        orchestrator: { getTask: () => undefined } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        dockerConfig: { secretsFile: '/tmp/docker-secrets.env' },
+        remoteTargetsProvider: provider,
+      });
+
+      const task = makeTask({
+        id: 'ssh-task',
+        config: { runnerKind: 'ssh', poolMemberId: 'do-droplet' },
+      });
+
+      const ssh = executor.selectExecutor(task);
+      expect((ssh as any).secretsFile).toBeUndefined();
+      expect(executor.getRemoteTargetConfig('do-droplet')?.secretsFile).toBeUndefined();
+    });
+
+    it('uses an explicit SSH target secretsFile when API-key forwarding is enabled', () => {
+      const provider = vi.fn().mockReturnValue({
+        'do-droplet': {
+          host: '1.2.3.4',
+          user: 'root',
+          sshKeyPath: '/key',
+          use_api_key: true,
+          secretsFile: '/tmp/ssh-secrets.env',
+        },
+      });
+      const executor = new TaskRunner({
+        orchestrator: { getTask: () => undefined } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        dockerConfig: { secretsFile: '/tmp/docker-secrets.env' },
+        remoteTargetsProvider: provider,
+      });
+
+      const task = makeTask({
+        id: 'ssh-task',
+        config: { runnerKind: 'ssh', poolMemberId: 'do-droplet' },
+      });
+
+      const ssh = executor.selectExecutor(task);
+      expect((ssh as any).secretsFile).toBe('/tmp/ssh-secrets.env');
+      expect(executor.getRemoteTargetConfig('do-droplet')?.secretsFile).toBe('/tmp/ssh-secrets.env');
+    });
+
     it('throws when provider returns no entry for the target ID', () => {
       const provider = vi.fn().mockReturnValue({});
       const executor = new TaskRunner({

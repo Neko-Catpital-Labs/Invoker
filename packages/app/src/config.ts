@@ -127,7 +127,8 @@ export interface InvokerConfig {
     use_api_key?: boolean;
     /**
      * Optional local KEY=value secrets file used when use_api_key is true.
-     * Defaults to docker.secretsFile/fallback when unset.
+     * No fallback is applied for SSH targets; set this explicitly when the
+     * remote task shell should receive local agent API keys.
      */
     secretsFile?: string;
     /**

@@ -1292,7 +1292,7 @@ export class TaskRunner {
           remoteInvokerHome: target.remoteInvokerHome,
           provisionCommand: target.provisionCommand,
           use_api_key: target.use_api_key === true,
-          secretsFile: target.secretsFile ?? this.dockerConfig.secretsFile,
+          secretsFile: target.secretsFile,
           remoteHeartbeatIntervalSeconds: target.remoteHeartbeatIntervalSeconds,
         });
         const cacheKey = `${targetId}|${configFingerprint}`;
@@ -1321,7 +1321,7 @@ export class TaskRunner {
           remoteInvokerHome: target.remoteInvokerHome,
           provisionCommand: target.provisionCommand,
           useApiKey: target.use_api_key === true,
-          secretsFile: target.secretsFile ?? this.dockerConfig.secretsFile,
+          secretsFile: target.secretsFile,
           remoteHeartbeatIntervalSeconds: target.remoteHeartbeatIntervalSeconds,
         });
 
@@ -2327,7 +2327,7 @@ export class TaskRunner {
     if (!target) return undefined;
     return {
       ...target,
-      secretsFile: target.secretsFile ?? this.dockerConfig.secretsFile,
+      secretsFile: target.secretsFile,
     };
   }
 

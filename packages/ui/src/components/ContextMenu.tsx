@@ -13,6 +13,7 @@
 import { useEffect, useRef, useState, useLayoutEffect } from 'react';
 import type { TaskState } from '../types.js';
 import { getMenuItems, type MenuItem } from '../lib/context-menu-items.js';
+import { useMenuKeyboard, type KeyboardMenuItem } from '../lib/menu-keyboard.js';
 import { EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE } from '../isExperimentSpawnPivot.js';
 
 interface ContextMenuProps {
@@ -63,6 +64,7 @@ export function ContextMenu({
 
   // Find first enabled item index
   const firstEnabledIndex = renderedItems.findIndex((item) => item.enabled);
+  const moreIndex = renderedItems.length;
 
   // Auto-focus first enabled item on mount
   useEffect(() => {
@@ -133,31 +135,6 @@ export function ContextMenu({
     };
   }, [onClose]);
 
-  // Keyboard navigation
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    const enabledIndices = renderedItems
-      .map((item, idx) => (item.enabled ? idx : -1))
-      .filter((idx) => idx >= 0);
-
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const nextPos = (currentPos + 1) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[nextPos]);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const prevPos = (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[prevPos]);
-    } else if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      const item = renderedItems[focusedIndex];
-      if (item?.enabled) {
-        handleItemClick(item);
-      }
-    }
-  };
-
   // Handle menu item click
   const handleItemClick = (item: MenuItem) => {
     if (!item.enabled) return;
@@ -186,6 +163,26 @@ export function ContextMenu({
     }
     onClose();
   };
+
+  const handleMore = () => {
+    setShowMore(true);
+    const firstEnabledDanger = dangerItems.findIndex((item) => item.enabled);
+    setFocusedIndex(firstEnabledDanger >= 0 ? safeItems.length + firstEnabledDanger : 0);
+  };
+
+  const keyboardItems: KeyboardMenuItem[] = [
+    ...renderedItems.map((item) => ({
+      enabled: item.enabled,
+      activate: () => handleItemClick(item),
+    })),
+    ...(hasMoreButton
+      ? [{
+          enabled: true,
+          activate: handleMore,
+        }]
+      : []),
+  ];
+  const handleKeyDown = useMenuKeyboard(menuRef, keyboardItems, focusedIndex, setFocusedIndex);
 
   // Get variant styles
   const getVariantClasses = (variant?: MenuItem['variant'], enabled?: boolean) => {
@@ -254,8 +251,11 @@ export function ContextMenu({
           <div className="border-t border-gray-600 my-1" />
           <button
             role="menuitem"
-            className="w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
-            onClick={() => setShowMore(true)}
+            className={`w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 ${
+              focusedIndex === moreIndex ? 'bg-gray-700' : ''
+            }`}
+            onClick={handleMore}
+            onMouseEnter={() => setFocusedIndex(moreIndex)}
           >
             More
           </button>

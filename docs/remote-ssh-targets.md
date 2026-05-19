@@ -51,6 +51,8 @@ If you want to use a repo-specific config file, launch Invoker with `INVOKER_REP
 | `managedWorkspaces` | boolean | no | When true, Invoker clones/fetches the repo and manages per-task worktrees on the remote host |
 | `remoteInvokerHome` | string | no | Base directory used by managed remote workspaces (default: `~/.invoker`) |
 | `provisionCommand` | string | no | Command run after worktree creation in managed mode |
+| `use_api_key` | boolean | no | When true, export agent API keys from this target's explicit `secretsFile` into SSH task/fix shells |
+| `secretsFile` | string | no | Local `KEY=value` secrets file for SSH API-key forwarding. Unlike Docker, SSH targets do not inherit `docker.secretsFile`; set this field explicitly when needed |
 | `remoteHeartbeatIntervalSeconds` | number | no | Interval (seconds) for SSH remote workload heartbeat markers used by executing-stall detection (default: `30`) |
 
 ## Multiple SSH Targets
