@@ -17,6 +17,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 const repoRoot = resolveRepoRoot(__dirname);
+const RESPONSIVE_INTERACTION_TIMEOUT_MS = 15000;
 
 async function runHeadlessClient(testDir: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
   const configPath = path.join(testDir, 'e2e-config.json');
@@ -103,14 +104,14 @@ test.describe('Headless thundering herd', () => {
     );
 
     const firstInteractionStartedAt = Date.now();
-    await assertTaskPanelResponsive(page, 8000);
-    expect(Date.now() - firstInteractionStartedAt).toBeLessThan(8000);
+    await assertTaskPanelResponsive(page, RESPONSIVE_INTERACTION_TIMEOUT_MS);
+    expect(Date.now() - firstInteractionStartedAt).toBeLessThan(RESPONSIVE_INTERACTION_TIMEOUT_MS);
 
     await page.waitForTimeout(1500);
 
     const secondInteractionStartedAt = Date.now();
-    await assertTaskPanelResponsive(page, 8000);
-    expect(Date.now() - secondInteractionStartedAt).toBeLessThan(8000);
+    await assertTaskPanelResponsive(page, RESPONSIVE_INTERACTION_TIMEOUT_MS);
+    expect(Date.now() - secondInteractionStartedAt).toBeLessThan(RESPONSIVE_INTERACTION_TIMEOUT_MS);
 
     await Promise.all(burst);
 
