@@ -30,7 +30,7 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     const targetRepo = await this.resolveTargetRepo(cwd);
     console.log(`[merge-gate] createReview: ghBase=${ghBase} apiHead=${ghHead} cwd=${cwd}`);
 
-    await this.exec('git', ['push', '--force', '-u', 'origin', featureBranch], cwd);
+    await this.exec('git', ['push', '--force', 'origin', `${featureBranch}:refs/heads/${featureBranch}`], cwd);
 
     const listOutput = await this.exec('gh', [
       'pr', 'list',
