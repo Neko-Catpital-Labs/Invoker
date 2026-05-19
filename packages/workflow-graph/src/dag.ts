@@ -16,43 +16,43 @@ import type { TaskState } from './types.js';
 export function topologicalSort(tasks: TaskState[]): TaskState[] {
   if (tasks.length === 0) return [];
 
-  const taskMap = new Map<string, TaskState>();
-  const inDegree = new Map<string, number>();
-  const adjacency = new Map<string, string[]>();
+  const taskIndexById = new Map<string, number>();
+  const inDegree = new Array<number>(tasks.length).fill(0);
+  const adjacency: number[][] = Array.from({ length: tasks.length }, () => []);
 
-  for (const task of tasks) {
-    taskMap.set(task.id, task);
-    inDegree.set(task.id, 0);
-    adjacency.set(task.id, []);
+  for (let i = 0; i < tasks.length; i++) {
+    taskIndexById.set(tasks[i]!.id, i);
   }
 
   // Build edges: for each dependency, add an edge from dep -> task
-  for (const task of tasks) {
+  for (let taskIndex = 0; taskIndex < tasks.length; taskIndex++) {
+    const task = tasks[taskIndex]!;
     for (const dep of task.dependencies) {
-      if (taskMap.has(dep)) {
-        adjacency.get(dep)!.push(task.id);
-        inDegree.set(task.id, inDegree.get(task.id)! + 1);
+      const depIndex = taskIndexById.get(dep);
+      if (depIndex !== undefined) {
+        adjacency[depIndex]!.push(taskIndex);
+        inDegree[taskIndex]! += 1;
       }
     }
   }
 
   // Seed queue with zero in-degree nodes
-  const queue: string[] = [];
-  for (const [id, degree] of inDegree) {
-    if (degree === 0) {
-      queue.push(id);
+  const queue: number[] = [];
+  for (let i = 0; i < inDegree.length; i++) {
+    if (inDegree[i] === 0) {
+      queue.push(i);
     }
   }
 
   const sorted: TaskState[] = [];
 
-  while (queue.length > 0) {
-    const id = queue.shift()!;
-    sorted.push(taskMap.get(id)!);
+  for (let queueIndex = 0; queueIndex < queue.length; queueIndex++) {
+    const taskIndex = queue[queueIndex]!;
+    sorted.push(tasks[taskIndex]!);
 
-    for (const neighbor of adjacency.get(id)!) {
-      const newDegree = inDegree.get(neighbor)! - 1;
-      inDegree.set(neighbor, newDegree);
+    for (const neighbor of adjacency[taskIndex]!) {
+      const newDegree = inDegree[neighbor]! - 1;
+      inDegree[neighbor] = newDegree;
       if (newDegree === 0) {
         queue.push(neighbor);
       }

@@ -162,8 +162,28 @@ describe('TaskStateMachine', () => {
       expect(sm.findNewlyReadyTasks('exp2')).toEqual(['recon']);
     });
 
+    it('treats closed deps as settled for reconciliation tasks', () => {
+      sm.restoreTask(makeTask('exp1', [], 'closed'));
+      sm.restoreTask(makeTask('exp2', [], 'completed'));
+      sm.restoreTask(
+        makeTask('recon', ['exp1', 'exp2'], 'pending', {
+          config: { isReconciliation: true },
+        }),
+      );
+
+      expect(sm.findNewlyReadyTasks('exp2')).toEqual(['recon']);
+    });
+
     it('does not unblock normal tasks when a dependency failed', () => {
       sm.restoreTask(makeTask('exp1', [], 'failed'));
+      sm.restoreTask(makeTask('exp2', [], 'completed'));
+      sm.restoreTask(makeTask('downstream', ['exp1', 'exp2'], 'pending'));
+
+      expect(sm.findNewlyReadyTasks('exp2')).toEqual([]);
+    });
+
+    it('does not unblock normal tasks when a dependency closed', () => {
+      sm.restoreTask(makeTask('exp1', [], 'closed'));
       sm.restoreTask(makeTask('exp2', [], 'completed'));
       sm.restoreTask(makeTask('downstream', ['exp1', 'exp2'], 'pending'));
 
