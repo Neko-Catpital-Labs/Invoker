@@ -6,6 +6,7 @@ import { bashPreserveOrReset, bashMergeUpstreams, bashFetchNodeRemotes, parsePre
 import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
 import type { AgentRegistry } from './agent-registry.js';
 import { checkStaleness } from './git-staleness-detector.js';
+import { ensureRemoteUrl } from './git-config-mutation.js';
 
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
@@ -812,17 +813,12 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         : undefined);
       const branchRepoUrl = requestBranchRepoUrl?.trim();
       if (branchRepoUrl) {
-        try {
-          await this.execGitSimple(
-            ['remote', 'set-url', BaseExecutor.BRANCH_REMOTE_NAME, branchRepoUrl],
-            cwd,
-          );
-        } catch {
-          await this.execGitSimple(
-            ['remote', 'add', BaseExecutor.BRANCH_REMOTE_NAME, branchRepoUrl],
-            cwd,
-          );
-        }
+        await ensureRemoteUrl({
+          cwd,
+          remote: BaseExecutor.BRANCH_REMOTE_NAME,
+          url: branchRepoUrl,
+          context: { caller: `${this.type}.pushBranchToRemote`, detail: branch },
+        });
         await this.execGitSimpleWithNetworkTimeout(
           ['push', '--force-with-lease', '-u', BaseExecutor.BRANCH_REMOTE_NAME, branch],
           cwd,
