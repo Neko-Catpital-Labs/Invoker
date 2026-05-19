@@ -216,6 +216,15 @@ test.describe('Visual proof capture', () => {
     await assertPageScreenshot(page, 'dag-loaded');
   });
 
+  test('task-graph-keyboard-controls-selected — selected workflow task graph is visible', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+    const miniDag = page.getByTestId('selected-workflow-mini-dag');
+    await expect(miniDag).toBeVisible();
+    await expect(miniDag.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
+    await expect(miniDag.locator('.react-flow__node[data-testid$="task-beta"]')).toBeVisible();
+    await captureScreenshot(page, 'task-graph-keyboard-controls-selected');
+  });
+
   test('task running', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     const now = new Date();
