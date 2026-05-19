@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect } from 'react';
 import yaml from 'js-yaml';
-import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowStatus } from './types.js';
+import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
 import type { ActionGraphNode, TerminalSessionDescriptor } from '@invoker/contracts';
 import { useTasks } from './hooks/useTasks.js';
 import { useInvoker } from './hooks/useInvoker.js';
@@ -267,6 +267,7 @@ export function App() {
   const graphSurfaceRef = useRef<HTMLDivElement>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
+  const [stickySelectedWorkflow, setStickySelectedWorkflow] = useState<WorkflowMeta | null>(null);
   const [workflowSelectionDismissed, setWorkflowSelectionDismissed] = useState(false);
   const [modal, setModal] = useState<ModalState>({ type: 'none' });
   const [hasLoadedPlan, setHasLoadedPlan] = useState(false);
@@ -414,15 +415,29 @@ export function App() {
 
   const selectedTask = selectedTaskId ? tasks.get(selectedTaskId) ?? null : null;
   const contextMenuTask = contextMenu ? tasks.get(contextMenu.taskId) ?? null : null;
+  const selectedWorkflowTaskCount = useMemo(() => {
+    if (!selectedWorkflowId) return 0;
+    let count = 0;
+    for (const task of tasks.values()) {
+      if (task.config.workflowId === selectedWorkflowId) count += 1;
+    }
+    return count;
+  }, [selectedWorkflowId, tasks]);
   const selectedWorkflow = useMemo(() => {
     if (selectedWorkflowId) {
-      return workflows.get(selectedWorkflowId) ?? null;
+      return workflows.get(selectedWorkflowId)
+        ?? (stickySelectedWorkflow?.id === selectedWorkflowId && selectedWorkflowTaskCount > 0
+          ? stickySelectedWorkflow
+          : null);
     }
     if (selectedTask?.config.workflowId) {
-      return workflows.get(selectedTask.config.workflowId) ?? null;
+      return workflows.get(selectedTask.config.workflowId)
+        ?? (stickySelectedWorkflow?.id === selectedTask.config.workflowId
+          ? stickySelectedWorkflow
+          : null);
     }
     return null;
-  }, [selectedWorkflowId, selectedTask, workflows]);
+  }, [selectedWorkflowId, selectedTask, workflows, stickySelectedWorkflow, selectedWorkflowTaskCount]);
   const miniDagTasks = useMemo(() => {
     const activeWorkflowId = selectedWorkflow?.id ?? selectedWorkflowId;
     if (!activeWorkflowId) return new Map<string, TaskState>();
@@ -434,6 +449,29 @@ export function App() {
     }
     return next;
   }, [selectedWorkflow, selectedWorkflowId, tasks]);
+  const selectedTaskDagWorkflows = useMemo(() => {
+    if (!selectedWorkflow || workflows.has(selectedWorkflow.id)) {
+      return workflows;
+    }
+    const next = new Map(workflows);
+    next.set(selectedWorkflow.id, selectedWorkflow);
+    return next;
+  }, [selectedWorkflow, workflows]);
+
+  useEffect(() => {
+    if (!selectedWorkflowId) {
+      setStickySelectedWorkflow(null);
+      return;
+    }
+    const liveWorkflow = workflows.get(selectedWorkflowId);
+    if (liveWorkflow) {
+      setStickySelectedWorkflow(liveWorkflow);
+      return;
+    }
+    if (selectedWorkflowTaskCount === 0) {
+      setStickySelectedWorkflow((prev) => (prev?.id === selectedWorkflowId ? null : prev));
+    }
+  }, [selectedWorkflowId, selectedWorkflowTaskCount, workflows]);
 
   useEffect(() => {
     if (selectedTask?.config.workflowId) {
@@ -441,7 +479,7 @@ export function App() {
       setSelectedWorkflowId(selectedTask.config.workflowId);
       return;
     }
-    if (selectedWorkflowId && workflows.has(selectedWorkflowId)) {
+    if (selectedWorkflowId && (workflows.has(selectedWorkflowId) || selectedWorkflowTaskCount > 0)) {
       return;
     }
     if (workflowSelectionDismissed) {
@@ -449,7 +487,7 @@ export function App() {
     }
     const firstWorkflowId = workflows.keys().next().value as string | undefined;
     setSelectedWorkflowId(firstWorkflowId ?? null);
-  }, [selectedTask, selectedWorkflowId, workflowSelectionDismissed, workflows]);
+  }, [selectedTask, selectedWorkflowId, selectedWorkflowTaskCount, workflowSelectionDismissed, workflows]);
 
   const handleStatusClick = useCallback((filterKey: WorkflowStatus, event: React.MouseEvent) => {
     setStatusFilters(prev => {
@@ -1583,7 +1621,7 @@ export function App() {
                       >
                         <TaskDAG
                           tasks={miniDagTasks}
-                          workflows={workflows}
+                          workflows={selectedTaskDagWorkflows}
                           selectedTaskId={selectedTaskId}
                           centerTaskId={centerTaskId}
                           onTaskClick={handleTaskClick}
