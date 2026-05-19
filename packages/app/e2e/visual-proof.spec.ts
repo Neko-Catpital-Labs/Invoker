@@ -560,6 +560,38 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'workflow-context-menu-organization');
   });
 
+  test('context menu keyboard navigation highlights ArrowDown-selected item', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+
+    const menu = await openContextMenu(page, page.locator('[data-testid^="workflow-node-"]'));
+
+    // Move the cursor away from the menu so :hover styling does not co-mingle
+    // with the keyboard focus highlight in the captured screenshot.
+    await page.mouse.move(1, 1);
+
+    // The menu auto-focuses itself on open; wait for focus so ArrowDown is
+    // delivered to the menu's onKeyDown rather than escaping to graph shortcuts.
+    await expect(menu).toBeFocused();
+
+    const firstItem = page.getByRole('menuitem', { name: 'Open Workflow' });
+    const secondItem = page.getByRole('menuitem', { name: 'Open PR' });
+
+    // Active item carries the bg-gray-700 utility class (added by the focused-index
+    // highlight). Hover-only matches like "hover:bg-gray-700" are excluded by
+    // requiring whitespace or string boundary on either side.
+    const activeClassRegex = /(?:^|\s)bg-gray-700(?:\s|$)/;
+
+    await expect(firstItem).toHaveClass(activeClassRegex);
+    await expect(secondItem).not.toHaveClass(activeClassRegex);
+
+    await page.keyboard.press('ArrowDown');
+
+    await expect(secondItem).toHaveClass(activeClassRegex);
+    await expect(firstItem).not.toHaveClass(activeClassRegex);
+
+    await captureScreenshot(page, 'context-menu-keyboard-navigation');
+  });
+
   test('context menu keeps danger separator when cancel action is absent', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     await injectTaskStates(page, [
