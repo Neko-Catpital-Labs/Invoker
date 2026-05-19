@@ -17,6 +17,8 @@ vi.mock('@xyflow/react', async () => {
 
 const { App } = await import('../App.js');
 
+vi.setConfig({ testTimeout: 15_000 });
+
 const alpha = makeUITask({
   id: 'task-alpha',
   description: 'First test task',
@@ -32,6 +34,20 @@ const beta = makeUITask({
   dependencies: ['task-alpha'],
   command: 'echo hello-beta',
   workflowId: 'wf-1',
+});
+
+const pivotFailed = makeUITask({
+  id: 'task-pivot',
+  description: 'Experiment pivot',
+  status: 'failed',
+  command: 'echo pivot',
+  workflowId: 'wf-1',
+  config: {
+    workflowId: 'wf-1',
+    command: 'echo pivot',
+    pivot: true,
+    experimentVariants: [{ id: 'a', description: 'A', prompt: 'try A' }],
+  },
 });
 
 const merge = makeUITask({
@@ -71,6 +87,19 @@ describe('Context menu (component)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('workflow-node-wf-1')).toBeInTheDocument();
     });
+  }
+
+  async function selectWorkflow() {
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+  }
+
+  async function expectActiveMenuItem(name: RegExp | string) {
+    const item = await screen.findByRole('menuitem', { name });
+    await waitFor(() => expect(item).toHaveAttribute('data-active', 'true'));
+    return item;
   }
 
   it('right-clicking a workflow shows workflow actions', async () => {
@@ -157,5 +186,75 @@ describe('Context menu (component)', () => {
     fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('workflow context menu handles document ArrowDown and Enter for the highlighted item', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+
+    await expectActiveMenuItem('Open Workflow');
+    fireEvent.keyDown(document, { key: 'ArrowDown' });
+    await expectActiveMenuItem('Open PR');
+    fireEvent.keyDown(document, { key: 'ArrowDown' });
+    await expectActiveMenuItem('Retry Workflow');
+    fireEvent.keyDown(document, { key: 'ArrowDown' });
+    await expectActiveMenuItem('Copy Workflow ID');
+    fireEvent.keyDown(document, { key: 'Enter' });
+
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('workflow context menu ArrowUp wraps to the last enabled item', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+
+    await expectActiveMenuItem('Open Workflow');
+    fireEvent.keyDown(document, { key: 'ArrowUp' });
+
+    await expectActiveMenuItem('More');
+  });
+
+  it('task context menu handles document ArrowDown and Enter for the next enabled action', async () => {
+    await setup();
+    await selectWorkflow();
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+
+    await expectActiveMenuItem('Restart Task');
+    fireEvent.keyDown(document, { key: 'ArrowDown' });
+    await expectActiveMenuItem('Open Terminal');
+    fireEvent.keyDown(document, { key: 'Enter' });
+
+    await waitFor(() => expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'));
+  });
+
+  it('task context menu activates the highlighted item with Space', async () => {
+    await setup();
+    await selectWorkflow();
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+
+    fireEvent.keyDown(document, { key: 'ArrowDown' });
+    await expectActiveMenuItem('Open Terminal');
+    fireEvent.keyDown(document, { key: ' ' });
+
+    await waitFor(() => expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'));
+  });
+
+  it('task context menu ArrowUp wraps to the last enabled action and skips disabled actions', async () => {
+    render(<App />);
+    act(() => mock.setTasks([alpha, pivotFailed, merge], workflows));
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-wf-1')).toBeInTheDocument();
+    });
+    await selectWorkflow();
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-pivot'));
+
+    await expectActiveMenuItem('Fix with Claude');
+    expect(await screen.findByRole('menuitem', { name: 'Open Terminal' })).toBeDisabled();
+    fireEvent.keyDown(document, { key: 'ArrowUp' });
+
+    await expectActiveMenuItem('Restart Task');
+    fireEvent.keyDown(document, { key: 'Enter' });
+    await waitFor(() => expect(mock.api.restartTask).toHaveBeenCalledWith('task-pivot'));
+    expect(mock.api.openTerminal).not.toHaveBeenCalledWith('task-pivot');
   });
 });

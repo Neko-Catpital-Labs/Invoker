@@ -168,6 +168,7 @@ export function createMockInvoker(
       running: [],
       queued: [],
     })),
+    reportUiPerf: vi.fn(async () => {}),
     getClaudeSession: vi.fn(async () => null),
     getAgentSession: vi.fn(async () => null),
   };

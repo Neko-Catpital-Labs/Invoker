@@ -99,66 +99,6 @@ export function ContextMenu({
     setPosition({ left, top });
   }, [x, y]);
 
-  // Capture-phase outside dismissal stays reliable even if graph layers stop
-  // bubbling on mouse/pointer events before they reach document listeners.
-  useEffect(() => {
-    const dismissFromOutsideTarget = (target: EventTarget | null, button?: number) => {
-      if (button !== undefined && button !== 0) return;
-      if (menuRef.current && !menuRef.current.contains(target as Node)) {
-        onClose();
-      }
-    };
-    const handlePointerDownCapture = (e: PointerEvent) => {
-      dismissFromOutsideTarget(e.target, e.button);
-    };
-    const handleMouseDownCapture = (e: MouseEvent) => {
-      dismissFromOutsideTarget(e.target, e.button);
-    };
-    const handleClickCapture = (e: MouseEvent) => {
-      dismissFromOutsideTarget(e.target, e.button);
-    };
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-
-    document.addEventListener('pointerdown', handlePointerDownCapture, true);
-    document.addEventListener('mousedown', handleMouseDownCapture, true);
-    document.addEventListener('click', handleClickCapture, true);
-    document.addEventListener('keydown', handleKey);
-    return () => {
-      document.removeEventListener('pointerdown', handlePointerDownCapture, true);
-      document.removeEventListener('mousedown', handleMouseDownCapture, true);
-      document.removeEventListener('click', handleClickCapture, true);
-      document.removeEventListener('keydown', handleKey);
-    };
-  }, [onClose]);
-
-  // Keyboard navigation
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    const enabledIndices = renderedItems
-      .map((item, idx) => (item.enabled ? idx : -1))
-      .filter((idx) => idx >= 0);
-
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const nextPos = (currentPos + 1) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[nextPos]);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const prevPos = (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[prevPos]);
-    } else if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      const item = renderedItems[focusedIndex];
-      if (item?.enabled) {
-        handleItemClick(item);
-      }
-    }
-  };
-
-  // Handle menu item click
   const handleItemClick = (item: MenuItem) => {
     if (!item.enabled) return;
 
@@ -185,6 +125,86 @@ export function ContextMenu({
         break;
     }
     onClose();
+  };
+
+  const moveFocusedItem = (direction: 1 | -1) => {
+    const enabledIndices = renderedItems
+      .map((item, idx) => (item.enabled ? idx : -1))
+      .filter((idx) => idx >= 0);
+    if (enabledIndices.length === 0) return;
+
+    const currentPos = enabledIndices.indexOf(focusedIndex);
+    const startPos = currentPos >= 0 ? currentPos : 0;
+    const nextPos = (startPos + direction + enabledIndices.length) % enabledIndices.length;
+    setFocusedIndex(enabledIndices[nextPos]);
+  };
+
+  const activateFocusedItem = () => {
+    const item = renderedItems[focusedIndex];
+    if (item?.enabled) {
+      handleItemClick(item);
+    }
+  };
+
+  // Capture-phase outside dismissal stays reliable even if graph layers stop
+  // bubbling on mouse/pointer events before they reach document listeners.
+  useEffect(() => {
+    const dismissFromOutsideTarget = (target: EventTarget | null, button?: number) => {
+      if (button !== undefined && button !== 0) return;
+      if (menuRef.current && !menuRef.current.contains(target as Node)) {
+        onClose();
+      }
+    };
+    const handlePointerDownCapture = (e: PointerEvent) => {
+      dismissFromOutsideTarget(e.target, e.button);
+    };
+    const handleMouseDownCapture = (e: MouseEvent) => {
+      dismissFromOutsideTarget(e.target, e.button);
+    };
+    const handleClickCapture = (e: MouseEvent) => {
+      dismissFromOutsideTarget(e.target, e.button);
+    };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        moveFocusedItem(1);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        moveFocusedItem(-1);
+      } else if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        activateFocusedItem();
+      }
+    };
+
+    document.addEventListener('pointerdown', handlePointerDownCapture, true);
+    document.addEventListener('mousedown', handleMouseDownCapture, true);
+    document.addEventListener('click', handleClickCapture, true);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDownCapture, true);
+      document.removeEventListener('mousedown', handleMouseDownCapture, true);
+      document.removeEventListener('click', handleClickCapture, true);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [activateFocusedItem, moveFocusedItem, onClose]);
+
+  // Keyboard navigation
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      moveFocusedItem(1);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      moveFocusedItem(-1);
+    } else if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      activateFocusedItem();
+    }
   };
 
   // Get variant styles
@@ -243,6 +263,7 @@ export function ContextMenu({
               onMouseEnter={() => setFocusedIndex(idx)}
               disabled={!item.enabled}
               title={tooltip}
+              data-active={isFocused ? 'true' : 'false'}
             >
               {item.label}
             </button>
