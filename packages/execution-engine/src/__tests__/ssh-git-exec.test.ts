@@ -337,8 +337,9 @@ describe('buildRecordAndPushScript', () => {
     expect(script).toContain('set -euo pipefail');
     expect(script).toContain('WT=$(echo');
     expect(script).toContain('base64 -d)');
-    expect(script).toContain('git config user.name');
-    expect(script).toContain('git config user.email');
+    expect(script).not.toContain('git config user.name');
+    expect(script).not.toContain('git config user.email');
+    expect(script).toContain('GIT_AUTHOR_NAME="$GIT_NAME"');
     expect(script).toContain('git add -A');
     expect(script).toContain('if git diff --cached --quiet');
     expect(script).toContain('git commit --allow-empty -F');

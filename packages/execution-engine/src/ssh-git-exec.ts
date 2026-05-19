@@ -327,17 +327,17 @@ export function buildRecordAndPushScript(opts: GitRecordAndPushOpts): string {
 WT=$(echo ${wtB} | base64 -d)
 ${bashNormalizeTildePath()}
 cd "$WT"
-git config user.name "$(echo ${userNameB} | base64 -d)"
-git config user.email "$(echo ${userEmailB} | base64 -d)"
 git add -A
 M=$(mktemp)
 trap 'rm -f "$M"' EXIT
+GIT_NAME=$(echo ${userNameB} | base64 -d)
+GIT_EMAIL=$(echo ${userEmailB} | base64 -d)
 if git diff --cached --quiet; then
   echo ${emB} | base64 -d > "$M"
-  git commit --allow-empty -F "$M"
+  GIT_AUTHOR_NAME="$GIT_NAME" GIT_AUTHOR_EMAIL="$GIT_EMAIL" GIT_COMMITTER_NAME="$GIT_NAME" GIT_COMMITTER_EMAIL="$GIT_EMAIL" git commit --allow-empty -F "$M"
 else
   echo ${chB} | base64 -d > "$M"
-  git commit -F "$M"
+  GIT_AUTHOR_NAME="$GIT_NAME" GIT_AUTHOR_EMAIL="$GIT_EMAIL" GIT_COMMITTER_NAME="$GIT_NAME" GIT_COMMITTER_EMAIL="$GIT_EMAIL" git commit -F "$M"
 fi
 HASH=$(git rev-parse HEAD)
 BR=$(echo ${brB} | base64 -d)
