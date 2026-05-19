@@ -327,8 +327,10 @@ export function buildRecordAndPushScript(opts: GitRecordAndPushOpts): string {
 WT=$(echo ${wtB} | base64 -d)
 ${bashNormalizeTildePath()}
 cd "$WT"
-git config user.name "$(echo ${userNameB} | base64 -d)"
-git config user.email "$(echo ${userEmailB} | base64 -d)"
+export GIT_AUTHOR_NAME="$(echo ${userNameB} | base64 -d)"
+export GIT_AUTHOR_EMAIL="$(echo ${userEmailB} | base64 -d)"
+export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
+export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
 git add -A
 M=$(mktemp)
 trap 'rm -f "$M"' EXIT
@@ -343,14 +345,9 @@ HASH=$(git rev-parse HEAD)
 BR=$(echo ${brB} | base64 -d)
 PUSH_URL=$(echo ${pushRemoteUrlB} | base64 -d)
 if [ -n "$PUSH_URL" ]; then
-  if git remote get-url invoker-branches >/dev/null 2>&1; then
-    git remote set-url invoker-branches "$PUSH_URL"
-  else
-    git remote add invoker-branches "$PUSH_URL"
-  fi
-  git push -u invoker-branches "$BR"
+  git push "$PUSH_URL" "HEAD:refs/heads/$BR"
 else
-  git push -u origin "$BR"
+  git push origin "HEAD:refs/heads/$BR"
 fi
 printf "%s" "$HASH"
 `;

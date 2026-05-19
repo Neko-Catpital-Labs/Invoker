@@ -79,7 +79,6 @@ export class MergeConflictError extends Error {
 }
 
 export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor {
-  protected static readonly BRANCH_REMOTE_NAME = 'invoker-branches';
   abstract readonly type: string;
   protected entries = new Map<string, TEntry>();
   protected heartbeatIntervalMs: number;
@@ -812,23 +811,12 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         : undefined);
       const branchRepoUrl = requestBranchRepoUrl?.trim();
       if (branchRepoUrl) {
-        try {
-          await this.execGitSimple(
-            ['remote', 'set-url', BaseExecutor.BRANCH_REMOTE_NAME, branchRepoUrl],
-            cwd,
-          );
-        } catch {
-          await this.execGitSimple(
-            ['remote', 'add', BaseExecutor.BRANCH_REMOTE_NAME, branchRepoUrl],
-            cwd,
-          );
-        }
         await this.execGitSimpleWithNetworkTimeout(
-          ['push', '--force-with-lease', '-u', BaseExecutor.BRANCH_REMOTE_NAME, branch],
+          ['push', '--force-with-lease', branchRepoUrl, `${branch}:refs/heads/${branch}`],
           cwd,
         );
       } else {
-        await this.execGitSimpleWithNetworkTimeout(['push', '--force-with-lease', '-u', 'origin', branch], cwd);
+        await this.execGitSimpleWithNetworkTimeout(['push', '--force-with-lease', 'origin', `${branch}:refs/heads/${branch}`], cwd);
       }
       return undefined;
     } catch (err) {

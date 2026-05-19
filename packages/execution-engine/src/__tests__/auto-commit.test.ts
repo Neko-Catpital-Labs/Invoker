@@ -2069,6 +2069,7 @@ describe('BaseExecutor.pushBranchToRemote', () => {
 
     const remoteBranches = execSync('git branch', { cwd: intermediateDir }).toString();
     expect(remoteBranches).toContain('invoker/task-intermediate');
+    expect(() => execSync('git remote get-url invoker-branches', { cwd: cloneDir, stdio: 'pipe' })).toThrow();
   });
 });
 

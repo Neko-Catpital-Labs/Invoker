@@ -736,6 +736,13 @@ describe('bashMergeUpstreams', () => {
         worktreeDir: wtDir,
         branchRepoUrl: intermediateDir,
       }));
+      const fetchScript = bashFetchNodeRemotes({
+        worktreeDir: wtDir,
+        branchRepoUrl: intermediateDir,
+      });
+      expect(fetchScript).not.toContain('remote set-url invoker-branches');
+      expect(fetchScript).not.toContain('remote add invoker-branches');
+      expect(fetchScript).toContain('fetch "$BRANCH_REPO_URL" \'+refs/heads/*:refs/remotes/invoker-branches/*\' --prune');
       await runBashLocal(bashMergeUpstreams({
         worktreeDir: wtDir,
         upstreamBranches: ['dep-from-intermediate'],
@@ -746,6 +753,17 @@ describe('bashMergeUpstreams', () => {
       rmSync(seedDir, { recursive: true, force: true });
       rmSync(intermediateDir, { recursive: true, force: true });
       rmSync(originDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not generate high-risk runtime config mutations for branch repo fetches', () => {
+    const script = bashFetchNodeRemotes({
+      worktreeDir: '/tmp/worktree',
+      branchRepoUrl: '/tmp/branch-repo.git',
+    });
+
+    for (const forbidden of ['git remote add', 'git remote set-url', 'git config user.', 'git config remote.']) {
+      expect(script).not.toContain(forbidden);
     }
   });
 });

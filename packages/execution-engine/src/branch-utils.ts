@@ -211,12 +211,7 @@ if git -C "$WT_DIR" remote get-url origin >/dev/null 2>&1; then
   git -C "$WT_DIR" fetch origin '+refs/heads/*:refs/remotes/origin/*' --prune
 fi
 ${branchRepo ? `BRANCH_REPO_URL=${q(branchRepo)}
-if git -C "$WT_DIR" remote get-url invoker-branches >/dev/null 2>&1; then
-  git -C "$WT_DIR" remote set-url invoker-branches "$BRANCH_REPO_URL"
-else
-  git -C "$WT_DIR" remote add invoker-branches "$BRANCH_REPO_URL"
-fi
-if ! git -C "$WT_DIR" fetch invoker-branches '+refs/heads/*:refs/remotes/invoker-branches/*' --prune; then
+if ! git -C "$WT_DIR" fetch "$BRANCH_REPO_URL" '+refs/heads/*:refs/remotes/invoker-branches/*' --prune; then
   echo "BRANCH_REPO_FETCH_FAILED=$BRANCH_REPO_URL" >&2
   exit 32
 fi` : ''}

@@ -337,14 +337,17 @@ describe('buildRecordAndPushScript', () => {
     expect(script).toContain('set -euo pipefail');
     expect(script).toContain('WT=$(echo');
     expect(script).toContain('base64 -d)');
-    expect(script).toContain('git config user.name');
-    expect(script).toContain('git config user.email');
+    expect(script).not.toContain('git config user.');
+    expect(script).toContain('export GIT_AUTHOR_NAME=');
+    expect(script).toContain('export GIT_AUTHOR_EMAIL=');
+    expect(script).toContain('export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"');
+    expect(script).toContain('export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"');
     expect(script).toContain('git add -A');
     expect(script).toContain('if git diff --cached --quiet');
     expect(script).toContain('git commit --allow-empty -F');
     expect(script).toContain('git commit -F');
     expect(script).toContain('HASH=$(git rev-parse HEAD)');
-    expect(script).toContain('git push -u origin "$BR"');
+    expect(script).toContain('git push origin "HEAD:refs/heads/$BR"');
     expect(script).toContain('printf "%s" "$HASH"');
   });
 
@@ -372,9 +375,9 @@ describe('buildRecordAndPushScript', () => {
       pushRemoteUrl: 'https://github.com/fork/repo.git',
     });
 
-    expect(script).toContain('git remote set-url invoker-branches "$PUSH_URL"');
-    expect(script).toContain('git remote add invoker-branches "$PUSH_URL"');
-    expect(script).toContain('git push -u invoker-branches "$BR"');
+    expect(script).not.toContain('git remote set-url');
+    expect(script).not.toContain('git remote add');
+    expect(script).toContain('git push "$PUSH_URL" "HEAD:refs/heads/$BR"');
   });
 
   it('commits and pushes successfully without preconfigured git identity', () => {
@@ -423,6 +426,67 @@ describe('buildRecordAndPushScript', () => {
     expect(authorName).toBe('Remote CI Bot');
     expect(authorEmail).toBe('remote-ci@example.com');
     expect(pushedHead).toBe(localHead);
+  });
+
+  it('commits and pushes while .git/config.lock exists', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ssh-record-push-lock-'));
+    const source = join(root, 'source');
+    const bare = join(root, 'remote.git');
+    const clone = join(root, 'clone');
+
+    mkdirSync(source, { recursive: true });
+    execSync('git init -b master', { cwd: source, stdio: 'ignore' });
+    writeFileSync(join(source, 'README.md'), 'seed\n');
+    execSync('git add README.md', { cwd: source, stdio: 'ignore' });
+    execSync('git -c user.name="Seed User" -c user.email="seed@example.com" commit -m "seed"', {
+      cwd: source,
+      stdio: 'ignore',
+    });
+    execSync(`git clone --bare ${JSON.stringify(source)} ${JSON.stringify(bare)}`, { stdio: 'ignore' });
+    execSync(`git clone ${JSON.stringify(bare)} ${JSON.stringify(clone)}`, { stdio: 'ignore' });
+    execSync('git checkout -b experiment/config-lock', { cwd: clone, stdio: 'ignore' });
+    writeFileSync(join(clone, 'result.txt'), 'ok\n');
+    writeFileSync(join(clone, '.git', 'config.lock'), '');
+
+    const script = buildRecordAndPushScript({
+      worktreePath: clone,
+      branch: 'experiment/config-lock',
+      commitMessageChanges: 'invoker: record remote result',
+      commitMessageEmpty: 'invoker: record remote empty result',
+      gitUserName: 'Remote CI Bot',
+      gitUserEmail: 'remote-ci@example.com',
+    });
+
+    execFileSync('bash', ['-lc', script], {
+      env: {
+        ...process.env,
+        GIT_CONFIG_GLOBAL: '/dev/null',
+        GIT_CONFIG_NOSYSTEM: '1',
+      },
+      stdio: 'pipe',
+    });
+
+    const pushed = execSync('git show experiment/config-lock:result.txt', {
+      cwd: bare,
+      encoding: 'utf8',
+    }).trim();
+    expect(pushed).toBe('ok');
+  });
+
+  it('does not generate high-risk runtime config mutations', () => {
+    const script = buildRecordAndPushScript({
+      worktreePath: '~/worktree',
+      branch: 'branch',
+      commitMessageChanges: 'msg',
+      commitMessageEmpty: 'empty',
+      gitUserName: 'Invoker Bot',
+      gitUserEmail: 'invoker@local',
+      pushRemoteUrl: 'https://github.com/fork/repo.git',
+    });
+
+    for (const forbidden of ['git remote add', 'git remote set-url', 'git config user.', 'git config remote.']) {
+      expect(script).not.toContain(forbidden);
+    }
   });
 });
 

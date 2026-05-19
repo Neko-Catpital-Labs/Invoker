@@ -201,7 +201,6 @@ export interface TaskRunnerConfig {
 // ── TaskRunner ──────────────────────────────────────────
 
 export class TaskRunner {
-  private static readonly BRANCH_REMOTE_NAME = 'invoker-branches';
   /** @internal */ orchestrator: Orchestrator;
   /** @internal */ persistence: SQLiteAdapter;
   private executorRegistry: ExecutorRegistry;
@@ -1570,25 +1569,27 @@ export class TaskRunner {
         cloneSource = mirrorPath;
         originUrl = repoUrl;
       } else {
-        this.logger.warn(`[createMergeWorktree] Pool mirror unavailable for ${repoUrl}, falling back to host repo`);
+        cloneSource = repoUrl;
+        originUrl = repoUrl;
+        this.logger.warn(`[createMergeWorktree] Pool mirror unavailable for ${repoUrl}, cloning from repo URL`);
       }
     }
 
-    // Clone with hard-linked objects — near-instant, fully isolated refs
-    await this.execGitReadonly(['clone', '--local', '--no-checkout', cloneSource, clonePath]);
+    // Prefer hard-linked local clones; when no mirror exists, clone from repoUrl
+    // directly so origin is correct without mutating .git/config afterward.
+    const cloneArgs = cloneSource === originUrl
+      ? ['clone', '--no-checkout', cloneSource, clonePath]
+      : ['clone', '--local', '--no-checkout', cloneSource, clonePath];
+    await this.execGitReadonly(cloneArgs);
     // Detach HEAD so the fetch can overwrite all branch refs (including the default branch)
     const headSha = (await this.execGitIn(['rev-parse', 'HEAD'], clonePath)).trim();
     await this.execGitIn(['update-ref', '--no-deref', 'HEAD', headSha], clonePath);
     // Mirror all branches as local refs so bare branch names resolve.
     await this.execGitIn(['fetch', 'origin', '+refs/heads/*:refs/heads/*'], clonePath);
 
-    // Reconfigure origin to the real remote URL (GitHub) so subsequent push/fetch
-    // operations go directly to GitHub, bypassing any intermediate clone.
     if (!originUrl) {
-      // Fallback: read origin from the host repo (old behavior)
       originUrl = (await this.execGitReadonly(['remote', 'get-url', 'origin'])).trim();
     }
-    await this.execGitIn(['remote', 'set-url', 'origin', originUrl], clonePath);
 
     // Refresh the requested base branch from the real remote. The pool mirror's
     // local refs/heads/* can go stale after force-pushes or history rewrites,
@@ -1602,7 +1603,7 @@ export class TaskRunner {
       : strippedRemoteRef;
     try {
       await this.execGitIn(
-        ['fetch', remoteName, `+refs/heads/${baseRef}:refs/remotes/${remoteName}/${baseRef}`],
+        ['fetch', originUrl, `+refs/heads/${baseRef}:refs/remotes/${remoteName}/${baseRef}`],
         clonePath,
       );
     } catch {
@@ -2443,25 +2444,15 @@ export class TaskRunner {
   ): Promise<void> {
     const trimmedBranchRepoUrl = branchRepoUrl?.trim();
     if (trimmedBranchRepoUrl) {
-      try {
-        await this.execGitIn(
-          ['remote', 'set-url', TaskRunner.BRANCH_REMOTE_NAME, trimmedBranchRepoUrl],
-          worktreeDir,
-        );
-      } catch {
-        await this.execGitIn(
-          ['remote', 'add', TaskRunner.BRANCH_REMOTE_NAME, trimmedBranchRepoUrl],
-          worktreeDir,
-        );
-      }
       await this.execGitIn(
-        ['push', '--force', TaskRunner.BRANCH_REMOTE_NAME, `${branch}:refs/heads/${branch}`],
+        ['push', '--force', trimmedBranchRepoUrl, `${branch}:refs/heads/${branch}`],
         worktreeDir,
       );
       return;
     }
 
-    await this.execGitIn(['push', '--force', 'origin', `${branch}:refs/heads/${branch}`], worktreeDir);
+    const originUrl = (await this.execGitReadonly(['remote', 'get-url', 'origin'])).trim();
+    await this.execGitIn(['push', '--force', originUrl, `${branch}:refs/heads/${branch}`], worktreeDir);
   }
 
   /** @internal */ gitLogMessage(commitHash: string, cwd?: string): Promise<string> {

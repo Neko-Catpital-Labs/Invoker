@@ -1,9 +1,9 @@
 /**
  * createMergeWorktree isolation tests (real git).
  *
- * Proves that createMergeWorktree produces a clone whose origin points to
- * the real GitHub remote (not the host working directory), and that branches
- * are mirrored correctly.  Covers gaps 2-5 from scripts/repro/repro-host-cwd-safety.sh.
+ * Proves that createMergeWorktree produces an isolated clone with mirrored
+ * branches and can refresh requested bases without mutating clone remotes.
+ * Covers gaps 2-5 from scripts/repro/repro-host-cwd-safety.sh.
  *
  * Pattern: bare remote + working clone + TaskRunner with real git.
  */
@@ -57,21 +57,16 @@ describe('createMergeWorktree isolation (real git)', { timeout: 30_000 }, () => 
     });
   }
 
-  it('clone origin points to real remote, not host cwd', async () => {
+  it('clone origin remains local clone source to avoid runtime remote rewrites', async () => {
     const sandbox = createSandbox();
     root = sandbox.root;
 
     const executor = buildExecutor(sandbox.host);
     const clonePath = await executor.createMergeWorktree('master', 'test-origin');
 
-    // The clone's origin should point to the bare remote (real GitHub),
-    // NOT to the host working directory.
     const cloneOrigin = git(clonePath, 'remote get-url origin');
-    const hostOrigin = git(sandbox.host, 'remote get-url origin');
 
-    expect(cloneOrigin).toBe(hostOrigin);
-    expect(cloneOrigin).toContain('bare.git');
-    expect(cloneOrigin).not.toBe(sandbox.host);
+    expect(cloneOrigin).toBe(sandbox.host);
 
     await executor.removeMergeWorktree(clonePath);
   });
@@ -190,10 +185,9 @@ describe('createMergeWorktree isolation (real git)', { timeout: 30_000 }, () => 
     // Host should be behind remote
     expect(hostMasterSha).not.toBe(remoteMasterSha);
 
-    // When repoUrl is provided, createMergeWorktree falls back to host.cwd
-    // (no pool mirror in test), but origin still points to bare remote.
-    // The clone should have branches mirrored from the host and origin
-    // should be set to the bare remote URL.
+    // When repoUrl is provided, createMergeWorktree falls back to cloning
+    // from the repo URL directly (no pool mirror in test) so origin is correct
+    // without a follow-up remote rewrite.
     const executor = buildExecutor(sandbox.host);
     const clonePath = await executor.createMergeWorktree('master', 'test-stale', sandbox.bare);
 

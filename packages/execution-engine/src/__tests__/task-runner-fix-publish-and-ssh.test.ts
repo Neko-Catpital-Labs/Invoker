@@ -781,6 +781,34 @@ describe('TaskRunner', () => {
     });
   });
 
+  describe('pushBranchFromMergeWorktree', () => {
+    it('pushes branch repo updates by direct URL without mutating remotes', async () => {
+      const calls: string[][] = [];
+      const runner = new TaskRunner({
+        orchestrator: { getTask: () => undefined } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+      (runner as any).execGitIn = async (args: string[]) => {
+        calls.push(args);
+        return '';
+      };
+
+      await (runner as any).pushBranchFromMergeWorktree(
+        '/tmp/mock-wt',
+        'experiment/direct-url',
+        'https://github.com/fork/repo.git',
+      );
+
+      expect(calls).toEqual([
+        ['push', '--force', 'https://github.com/fork/repo.git', 'experiment/direct-url:refs/heads/experiment/direct-url'],
+      ]);
+      expect(calls.flat().join(' ')).not.toContain('remote set-url');
+      expect(calls.flat().join(' ')).not.toContain('remote add');
+    });
+  });
+
   describe('merge commit messages include task descriptions', () => {
     it('consolidateAndMerge includes task description in merge -m', async () => {
       const tasks = new Map<string, TaskState>();
@@ -1555,6 +1583,7 @@ describe('TaskRunner', () => {
 
       (executor as any).execGitReadonly = async (args: string[]) => {
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'remote' && args[1] === 'get-url' && args[2] === 'origin') return '/tmp/origin.git';
         return '';
       };
       (executor as any).execGitIn = async (args: string[], dir: string) => {
@@ -2003,9 +2032,11 @@ describe('TaskRunner', () => {
       const mergeCall = gateGitCalls.find((c) => c.args[0] === 'merge' && c.args.includes('invoker/t1'));
       expect(mergeCall).toBeDefined();
 
-      // Feature branch pushed directly from gate clone to origin
-      const gatePush = gateGitCalls.find((c) => c.args[0] === 'push' && c.args.includes('origin') && c.args.includes('plan/feature'));
+      // Feature branch pushed directly by URL without mutating clone remotes.
+      const gatePush = gateGitCalls.find((c) => c.args[0] === 'push' && c.args.includes('plan/feature:refs/heads/plan/feature'));
       expect(gatePush).toBeDefined();
+      expect(gatePush!.args).not.toContain('origin');
+      expect(gatePush!.args).not.toContain('-u');
 
       // No git operations in host.cwd
       const hostCalls = gitCalls.filter((c) => c.dir === '/tmp/host');

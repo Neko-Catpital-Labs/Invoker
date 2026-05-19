@@ -130,6 +130,12 @@ async function execGitInMergeSafe(
   return host.execGitIn(args, dir);
 }
 
+async function resolveOriginPushUrl(host: MergeRunnerHost, repoUrl?: string): Promise<string> {
+  const trimmedRepoUrl = repoUrl?.trim();
+  if (trimmedRepoUrl) return trimmedRepoUrl;
+  return (await host.execGitReadonly(['remote', 'get-url', 'origin'])).trim();
+}
+
 async function syncGateWorkspaceToFeatureBranch(
   host: MergeRunnerHost,
   gateWorkspacePath: string | undefined,
@@ -329,6 +335,19 @@ export async function ensureLocalBranchForMerge(
   }
 
   const trimmedUrl = repoUrl?.trim();
+  if (trimmedUrl) {
+    try {
+      await execGitInMergeSafe(
+        host,
+        ['fetch', trimmedUrl, `+refs/heads/${branch}:refs/heads/${branch}`],
+        worktreeDir,
+      );
+      return true;
+    } catch {
+      // Fall through to mirror fetch and final diagnostics.
+    }
+  }
+
   let mirrorErr: string | undefined;
   if (trimmedUrl && host.ensureRepoMirrorPath) {
     const mirror = await host.ensureRepoMirrorPath(trimmedUrl);
@@ -765,8 +784,9 @@ export async function approveMergeImpl(
       mergeTrace('GIT_COMMIT', { mergeMessage });
       const commitBody = fullSummary ? `${mergeMessage}\n\n${fullSummary}` : mergeMessage;
       await execGitInMergeSafe(host, ['commit', '-m', commitBody], worktreeDir);
-      // Push squash commit directly to origin (GitHub) from the clone
-      await execGitInMergeSafe(host, ['push', '--force', 'origin', `HEAD:refs/heads/${baseBranch}`], worktreeDir);
+      // Push squash commit directly to the origin URL without mutating clone remotes.
+      const originPushUrl = await resolveOriginPushUrl(host, workflow.repoUrl);
+      await execGitInMergeSafe(host, ['push', '--force', originPushUrl, `HEAD:refs/heads/${baseBranch}`], worktreeDir);
       // Advance the baseBranch ref in the clone so subsequent operations see the updated base
       const newHead = (await execGitInMergeSafe(host, ['rev-parse', 'HEAD'], worktreeDir)).trim();
       await execGitInMergeSafe(host, ['update-ref', `refs/heads/${baseBranch}`, newHead], worktreeDir);
@@ -786,8 +806,9 @@ export async function approveMergeImpl(
     const worktreeDir = await host.createMergeWorktree(featureBranch, 'approve-pr-' + workflowId, workflow.repoUrl);
     try {
       mergeTrace('GIT_PUSH', { featureBranch, worktreeDir });
-      // Push feature branch directly to origin (GitHub) from the clone
-      await execGitInMergeSafe(host, ['push', '--force', '-u', 'origin', featureBranch], worktreeDir);
+      // Push feature branch directly without mutating clone remotes/upstream config.
+      const featurePushUrl = branchRepoUrl ?? await resolveOriginPushUrl(host, workflow.repoUrl);
+      await execGitInMergeSafe(host, ['push', '--force', featurePushUrl, `${featureBranch}:refs/heads/${featureBranch}`], worktreeDir);
       const prBody = await authorPrBodyForMerge(host, {
         workflowId,
         mergeNodeTaskId: mergeTaskId,
@@ -967,6 +988,7 @@ export async function publishAfterFixImpl(
       })
       .map((t) => ({ branch: t.execution.branch!, description: t.description }))
       .sort((a, b) => a.branch.localeCompare(b.branch));
+    const branchRepoUrl = workflow?.intermediateRepoUrl?.trim() || undefined;
 
     let mergedViaPriorConsolidation = false;
     if (priorConsolidatedSha) {
@@ -1003,7 +1025,6 @@ export async function publishAfterFixImpl(
         } catch { /* not an ancestor — needs merging */ }
 
         console.log(`[merge] Post-fix: merging task branch ${branch} → ${featureBranch}`);
-        const branchRepoUrl = workflow?.intermediateRepoUrl?.trim() || undefined;
         const branchAvailable = await ensureLocalBranchForMerge(
           host,
           consolidateDir,
@@ -1034,8 +1055,9 @@ export async function publishAfterFixImpl(
         (skippedCount > 0 ? ` (skipped ${skippedCount} missing branches)` : ''));
     }
 
-    // Push feature branch directly to origin (GitHub) from the gate clone
-    await execGitInMergeSafe(host, ['push', '--force', '-u', 'origin', featureBranch], consolidateDir);
+    // Push feature branch directly without mutating clone remotes/upstream config.
+    const featurePushUrl = branchRepoUrl ?? await resolveOriginPushUrl(host, workflow?.repoUrl);
+    await execGitInMergeSafe(host, ['push', '--force', featurePushUrl, `${featureBranch}:refs/heads/${featureBranch}`], consolidateDir);
 
     let fullSummary = summary;
     let vpMarkdownCapture2: string | undefined;
@@ -1394,7 +1416,9 @@ export async function consolidateAndMergeImpl(
     // Push feature branch to origin so other clones (e.g., the gate clone used
     // by external review providers can access it. The consolidation clone is removed
     // in the finally block, so without this push the branch would be lost.
-    await execGitInMergeSafe(host, ['push', '--force', '-u', 'origin', featureBranch], worktreeDir);
+    const featurePushUrl = workflowForMerge?.intermediateRepoUrl?.trim()
+      || await resolveOriginPushUrl(host, repoUrlForMerge);
+    await execGitInMergeSafe(host, ['push', '--force', featurePushUrl, `${featureBranch}:refs/heads/${featureBranch}`], worktreeDir);
 
     if (visualProof && onFinish === 'pull_request' && host.runVisualProofCapture) {
       const slug = (featureBranch ?? 'workflow').replace(/\//g, '-');
@@ -1416,7 +1440,8 @@ export async function consolidateAndMergeImpl(
       if (hasChanges) {
         const commitBody = body ? `${mergeMessage}\n\n${body}` : mergeMessage;
         await execGitInMergeSafe(host, ['commit', '-m', commitBody], worktreeDir);
-        await execGitInMergeSafe(host, ['push', '--force', 'origin', `HEAD:refs/heads/${baseBranch}`], worktreeDir);
+        const originPushUrl = await resolveOriginPushUrl(host, repoUrlForMerge);
+        await execGitInMergeSafe(host, ['push', '--force', originPushUrl, `HEAD:refs/heads/${baseBranch}`], worktreeDir);
         // Advance the baseBranch ref in the clone so subsequent operations see the updated base
         const newHead = (await execGitInMergeSafe(host, ['rev-parse', 'HEAD'], worktreeDir)).trim();
         await execGitInMergeSafe(host, ['update-ref', `refs/heads/${baseBranch}`, newHead], worktreeDir);
@@ -1425,8 +1450,10 @@ export async function consolidateAndMergeImpl(
         console.log(`[merge] No changes to commit — ${baseBranch} already up-to-date with ${featureBranch}`);
       }
     } else if (onFinish === 'pull_request') {
-      // Push feature branch directly to origin (GitHub) from the clone
-      await execGitInMergeSafe(host, ['push', '--force', '-u', 'origin', featureBranch], worktreeDir);
+      // Push feature branch directly without mutating clone remotes/upstream config.
+      const featurePushUrl = workflowForMerge?.intermediateRepoUrl?.trim()
+        || await resolveOriginPushUrl(host, repoUrlForMerge);
+      await execGitInMergeSafe(host, ['push', '--force', featurePushUrl, `${featureBranch}:refs/heads/${featureBranch}`], worktreeDir);
       const structuredCtx3 = workflowId
         ? await buildPrAuthoringContext(host, workflowId)
         : undefined;
