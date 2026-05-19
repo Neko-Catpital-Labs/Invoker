@@ -55,6 +55,7 @@ import {
   validateCanonicalPrBody,
   type PrAuthoringContext,
 } from './pr-authoring.js';
+import { ensureRemoteUrl } from './git-config-mutation.js';
 
 export type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
 
@@ -1588,7 +1589,12 @@ export class TaskRunner {
       // Fallback: read origin from the host repo (old behavior)
       originUrl = (await this.execGitReadonly(['remote', 'get-url', 'origin'])).trim();
     }
-    await this.execGitIn(['remote', 'set-url', 'origin', originUrl], clonePath);
+    await ensureRemoteUrl({
+      cwd: clonePath,
+      remote: 'origin',
+      url: originUrl,
+      context: { caller: 'TaskRunner.createMergeWorktree', detail: `${label}:${ref}` },
+    });
 
     // Refresh the requested base branch from the real remote. The pool mirror's
     // local refs/heads/* can go stale after force-pushes or history rewrites,
@@ -2443,17 +2449,12 @@ export class TaskRunner {
   ): Promise<void> {
     const trimmedBranchRepoUrl = branchRepoUrl?.trim();
     if (trimmedBranchRepoUrl) {
-      try {
-        await this.execGitIn(
-          ['remote', 'set-url', TaskRunner.BRANCH_REMOTE_NAME, trimmedBranchRepoUrl],
-          worktreeDir,
-        );
-      } catch {
-        await this.execGitIn(
-          ['remote', 'add', TaskRunner.BRANCH_REMOTE_NAME, trimmedBranchRepoUrl],
-          worktreeDir,
-        );
-      }
+      await ensureRemoteUrl({
+        cwd: worktreeDir,
+        remote: TaskRunner.BRANCH_REMOTE_NAME,
+        url: trimmedBranchRepoUrl,
+        context: { caller: 'TaskRunner.pushBranchFromMergeWorktree', detail: branch },
+      });
       await this.execGitIn(
         ['push', '--force', TaskRunner.BRANCH_REMOTE_NAME, `${branch}:refs/heads/${branch}`],
         worktreeDir,
