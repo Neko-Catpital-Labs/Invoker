@@ -2004,7 +2004,10 @@ describe('TaskRunner', () => {
       expect(mergeCall).toBeDefined();
 
       // Feature branch pushed directly from gate clone to origin
-      const gatePush = gateGitCalls.find((c) => c.args[0] === 'push' && c.args.includes('origin') && c.args.includes('plan/feature'));
+      const gatePush = gateGitCalls.find((c) =>
+        c.args[0] === 'push' &&
+        c.args.includes('origin') &&
+        c.args.includes('plan/feature:refs/heads/plan/feature'));
       expect(gatePush).toBeDefined();
 
       // No git operations in host.cwd

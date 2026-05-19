@@ -4,9 +4,11 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
 import {
+  assertNotGitConfigMutation,
   classifyGitConfigMutation,
   ensureRemoteUrl,
 } from '../git-config-mutation.js';
+import { TaskRunner, ExecutorRegistry } from '../index.js';
 
 function git(cwd: string, args: string): string {
   return execSync(`git ${args}`, { cwd, stdio: ['ignore', 'pipe', 'pipe'] }).toString().trim();
@@ -97,5 +99,21 @@ describe('git config mutation gateway', () => {
     expect(results).toContain('added');
     expect(results).toContain('unchanged');
     expect(git(root, 'remote get-url origin')).toBe('/tmp/origin.git');
+  });
+
+  it('rejects raw runtime git config mutations at TaskRunner boundaries', () => {
+    root = createRepo();
+    const runner = new TaskRunner({
+      orchestrator: { getAllTasks: () => [] } as any,
+      persistence: { updateTask: () => {} } as any,
+      executorRegistry: new ExecutorRegistry(),
+      cwd: root,
+      defaultBranch: 'master',
+    });
+
+    expect(() => runner.execGitIn(['remote', 'add', 'origin', '/tmp/origin.git'], root!))
+      .toThrow('TaskRunner.execGitIn rejected');
+    expect(() => assertNotGitConfigMutation(['push', '-u', 'origin', 'branch'], 'test'))
+      .toThrow('mutates .git/config');
   });
 });

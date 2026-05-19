@@ -787,7 +787,7 @@ export async function approveMergeImpl(
     try {
       mergeTrace('GIT_PUSH', { featureBranch, worktreeDir });
       // Push feature branch directly to origin (GitHub) from the clone
-      await execGitInMergeSafe(host, ['push', '--force', '-u', 'origin', featureBranch], worktreeDir);
+      await execGitInMergeSafe(host, ['push', '--force', 'origin', `${featureBranch}:refs/heads/${featureBranch}`], worktreeDir);
       const prBody = await authorPrBodyForMerge(host, {
         workflowId,
         mergeNodeTaskId: mergeTaskId,
@@ -1035,7 +1035,7 @@ export async function publishAfterFixImpl(
     }
 
     // Push feature branch directly to origin (GitHub) from the gate clone
-    await execGitInMergeSafe(host, ['push', '--force', '-u', 'origin', featureBranch], consolidateDir);
+    await execGitInMergeSafe(host, ['push', '--force', 'origin', `${featureBranch}:refs/heads/${featureBranch}`], consolidateDir);
 
     let fullSummary = summary;
     let vpMarkdownCapture2: string | undefined;
@@ -1394,7 +1394,7 @@ export async function consolidateAndMergeImpl(
     // Push feature branch to origin so other clones (e.g., the gate clone used
     // by external review providers can access it. The consolidation clone is removed
     // in the finally block, so without this push the branch would be lost.
-    await execGitInMergeSafe(host, ['push', '--force', '-u', 'origin', featureBranch], worktreeDir);
+    await execGitInMergeSafe(host, ['push', '--force', 'origin', `${featureBranch}:refs/heads/${featureBranch}`], worktreeDir);
 
     if (visualProof && onFinish === 'pull_request' && host.runVisualProofCapture) {
       const slug = (featureBranch ?? 'workflow').replace(/\//g, '-');
@@ -1426,7 +1426,7 @@ export async function consolidateAndMergeImpl(
       }
     } else if (onFinish === 'pull_request') {
       // Push feature branch directly to origin (GitHub) from the clone
-      await execGitInMergeSafe(host, ['push', '--force', '-u', 'origin', featureBranch], worktreeDir);
+      await execGitInMergeSafe(host, ['push', '--force', 'origin', `${featureBranch}:refs/heads/${featureBranch}`], worktreeDir);
       const structuredCtx3 = workflowId
         ? await buildPrAuthoringContext(host, workflowId)
         : undefined;
