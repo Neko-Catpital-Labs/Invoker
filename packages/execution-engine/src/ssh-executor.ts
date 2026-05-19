@@ -693,6 +693,11 @@ ${this.buildPayloadExecutionScript(payloadB64)}
     streamState.remainder = lines.pop() ?? '';
     for (const line of lines) {
       if (line.startsWith(SshExecutor.REMOTE_HEARTBEAT_MARKER)) {
+        const entry = this.entries.get(executionId);
+        console.info(
+          `[ssh-lifecycle] remote heartbeat marker executionId=${executionId} ` +
+            `task=${entry?.request.actionId ?? 'unknown'} marker="${line}"`,
+        );
         this.emitHeartbeat(executionId);
         continue;
       }
@@ -703,6 +708,11 @@ ${this.buildPayloadExecutionScript(payloadB64)}
   private flushOutputRemainder(executionId: string, streamState: { remainder: string }): void {
     if (!streamState.remainder) return;
     if (streamState.remainder.startsWith(SshExecutor.REMOTE_HEARTBEAT_MARKER)) {
+      const entry = this.entries.get(executionId);
+      console.info(
+        `[ssh-lifecycle] remote heartbeat marker executionId=${executionId} ` +
+          `task=${entry?.request.actionId ?? 'unknown'} marker="${streamState.remainder}" source=remainder`,
+      );
       this.emitHeartbeat(executionId);
     } else {
       this.emitOutput(executionId, streamState.remainder);
@@ -791,6 +801,11 @@ ${this.buildPayloadExecutionScript(payloadB64)}
       detached: true,
       env: cleanElectronEnv(),
     });
+    console.info(
+      `[ssh-lifecycle] spawned ssh session task=${request.actionId} executionId=${executionId} ` +
+        `pid=${child.pid ?? 'unknown'} finalizeRemote=${finalizeRemote ? 'yes' : 'no'} ` +
+        `workspace=${handle.workspacePath ?? 'none'} branch=${handle.branch ?? 'none'}`,
+    );
     child.stdin?.write(bashScript);
     child.stdin?.end();
 
@@ -808,8 +823,16 @@ ${this.buildPayloadExecutionScript(payloadB64)}
     };
 
     this.registerEntry(handle, entry);
+    console.info(
+      `[ssh-lifecycle] registered entry task=${request.actionId} executionId=${executionId} ` +
+        `pid=${child.pid ?? 'unknown'} entries=${this.entries.size}`,
+    );
 
     child.on('error', (err) => {
+      console.info(
+        `[ssh-lifecycle] child error task=${request.actionId} executionId=${executionId} ` +
+          `pid=${child.pid ?? 'unknown'} error=${err.message}`,
+      );
       const e = this.entries.get(executionId);
       if (e) e.completed = true;
       const response: WorkResponse = {
@@ -843,6 +866,11 @@ ${this.buildPayloadExecutionScript(payloadB64)}
     });
 
     child.on('close', (code, signal) => {
+      console.info(
+        `[ssh-lifecycle] child close task=${request.actionId} executionId=${executionId} ` +
+          `pid=${child.pid ?? 'unknown'} code=${code ?? 'null'} signal=${signal ?? 'none'} ` +
+          `stderrBytes=${stderrOutput.length}`,
+      );
       void (async () => {
         this.flushOutputRemainder(executionId, stdoutState);
         this.flushOutputRemainder(executionId, stderrState);
@@ -868,6 +896,10 @@ ${this.buildPayloadExecutionScript(payloadB64)}
           let commitHash: string | undefined;
 
           if (finalizeRemote) {
+            console.info(
+              `[ssh-lifecycle] remote finalize begin task=${request.actionId} executionId=${executionId} ` +
+                `worktree=${finalizeRemote.worktreePath} branch=${finalizeRemote.branch} exitCode=${exitCode}`,
+            );
             this.emitOutput(executionId, '[SshExecutor] Recording task result and pushing branch on remote...\n');
             const fin = await this.remoteGitRecordAndPush(
               executionId,
@@ -882,6 +914,10 @@ ${this.buildPayloadExecutionScript(payloadB64)}
               if (exitCode === 0) status = 'failed';
               mappedError = fin.error;
             }
+            console.info(
+              `[ssh-lifecycle] remote finalize end task=${request.actionId} executionId=${executionId} ` +
+                `commitHash=${commitHash ?? 'none'} error=${fin.error ?? 'none'}`,
+            );
           }
 
           // When the command fails but no specific error was mapped (exit 30/31),
@@ -928,9 +964,18 @@ ${this.buildPayloadExecutionScript(payloadB64)}
             },
           };
           if (e) e.finalizingAfterClose = false;
+          console.info(
+            `[ssh-lifecycle] emit complete task=${request.actionId} executionId=${executionId} ` +
+              `status=${status} exitCode=${finalExitCode} commitHash=${commitHash ?? 'none'} ` +
+              `agentSessionId=${entry.agentSessionId ?? 'none'}`,
+          );
           this.emitComplete(executionId, response);
         } catch (err) {
           if (e) e.finalizingAfterClose = false;
+          console.info(
+            `[ssh-lifecycle] completion failure task=${request.actionId} executionId=${executionId} ` +
+              `error=${err instanceof Error ? err.message : String(err)}`,
+          );
           const response: WorkResponse = {
             requestId: request.requestId,
             actionId: request.actionId,
