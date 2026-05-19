@@ -374,6 +374,44 @@ test.describe('Visual proof capture', () => {
     await assertPageScreenshot(page, 'status-bar-no-system-log');
   });
 
+  test('workflow-task-status-color-parity — workflow rollup and task surfaces share canonical hue', async ({ page }) => {
+    const parityPlan = {
+      name: 'Status Color Parity Proof',
+      repoUrl: E2E_REPO_URL,
+      onFinish: 'none' as const,
+      tasks: [
+        { id: 'scp-review', description: 'Review ready task', command: 'echo review', dependencies: [] as string[] },
+        { id: 'scp-completed', description: 'Completed task', command: 'echo done', dependencies: [] as string[] },
+        { id: 'scp-pending', description: 'Pending task', command: 'echo pending', dependencies: [] as string[] },
+      ],
+    };
+
+    const workflowId = await loadPlanAndSelectWorkflow(page, parityPlan);
+    await page.locator('.react-flow__node[data-testid$="scp-review"]').first().waitFor({ state: 'visible', timeout: 15000 });
+
+    const now = new Date();
+    const earlier = new Date(Date.now() - 5000);
+    await injectTaskStates(page, [
+      {
+        taskId: 'scp-review',
+        changes: { status: 'review_ready', execution: { startedAt: earlier } },
+      },
+      {
+        taskId: 'scp-completed',
+        changes: { status: 'completed', execution: { startedAt: earlier, completedAt: now } },
+      },
+    ]);
+
+    // Workflow rollup propagates review_ready so the workflow chip is rendered with the same canonical hue as the task node.
+    await expect(workflowNode(page, workflowId).getByText('review ready', { exact: true })).toBeVisible();
+
+    await expect(page.locator('.react-flow__node[data-testid$="scp-review"]').getByText('REVIEW_READY')).toBeVisible();
+    await expect(page.locator('.react-flow__node[data-testid$="scp-completed"]').getByText('COMPLETED')).toBeVisible();
+    await expect(page.locator('.react-flow__node[data-testid$="scp-pending"]').getByText('PENDING')).toBeVisible();
+
+    await captureScreenshot(page, 'workflow-task-status-color-parity');
+  });
+
   test('fixing-with-ai vs fix-approval colors', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     await injectTaskStates(page, [
