@@ -738,6 +738,87 @@ describe('TaskRunner', () => {
       });
     });
 
+    it('pins SSH approved-fix publish to the recorded pool member in mixed pools', async () => {
+      const publishSpy = vi.spyOn(SshExecutor.prototype, 'publishApprovedFix').mockResolvedValue({
+        commitHash: 'def5678',
+      });
+      const worktreePublish = vi.fn().mockResolvedValue({
+        error: 'local worktree publish should not be used for an SSH workspace',
+      });
+      const worktreeExecutor = {
+        type: 'worktree',
+        publishApprovedFix: worktreePublish,
+      };
+
+      const task = makeTask({
+        id: 'mixed-pool-ssh-fix-task',
+        description: 'Apply approved fix over the recorded SSH pool member',
+        config: {
+          runnerKind: 'ssh',
+          poolId: 'mixed-local-ssh',
+          poolMemberId: 'remote-1',
+          command: 'bash -lc false',
+        },
+        execution: {
+          workspacePath: '~/.invoker/worktrees/task-a',
+          branch: 'experiment/mixed-pool-ssh-fix-gap',
+          selectedAttemptId: 'attempt-mixed-ssh-1',
+        },
+      });
+      const tasks = new Map<string, TaskState>([['mixed-pool-ssh-fix-task', task]]);
+      const updateTask = vi.fn();
+      const updateAttempt = vi.fn();
+      const registryMap = new Map<string, any>([['worktree', worktreeExecutor]]);
+      const executorRegistry = {
+        getDefault: () => worktreeExecutor,
+        get: (name: string) => registryMap.get(name) ?? null,
+        register: (name: string, executor: any) => {
+          registryMap.set(name, executor);
+        },
+        getAll: () => [...registryMap.values()],
+      };
+      const runner = new TaskRunner({
+        orchestrator: { getTask: (id: string) => tasks.get(id) } as any,
+        persistence: { updateTask, updateAttempt } as any,
+        executorRegistry: executorRegistry as any,
+        cwd: '/tmp',
+        remoteTargetsProvider: () => ({
+          'remote-1': {
+            host: 'example.com',
+            user: 'invoker',
+            sshKeyPath: '/tmp/test-key',
+          },
+        }),
+        executionPoolsProvider: () => ({
+          'mixed-local-ssh': {
+            selectionStrategy: 'roundRobin',
+            members: [
+              { type: 'worktree', id: 'local' },
+              { type: 'ssh', id: 'remote-1' },
+            ],
+          },
+        }),
+      });
+
+      await runner.publishApprovedFix(task);
+
+      expect(worktreePublish).not.toHaveBeenCalled();
+      expect(publishSpy).toHaveBeenCalledWith(
+        '~/.invoker/worktrees/task-a',
+        expect.objectContaining({
+          actionId: 'mixed-pool-ssh-fix-task',
+        }),
+        'experiment/mixed-pool-ssh-fix-gap',
+      );
+      expect(updateTask).toHaveBeenCalledWith('mixed-pool-ssh-fix-task', {
+        execution: { commit: 'def5678' },
+      });
+      expect(updateAttempt).toHaveBeenCalledWith('attempt-mixed-ssh-1', {
+        branch: 'experiment/mixed-pool-ssh-fix-gap',
+        commit: 'def5678',
+      });
+    });
+
     it('commits approved merge-gate fixes locally and records a fixed integration anchor', async () => {
       const repoDir = createTempWorkspace();
       execSync('git init', { cwd: repoDir });
