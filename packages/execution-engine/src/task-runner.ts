@@ -99,6 +99,20 @@ type PoolSelection = {
   selectionStrategy: 'roundRobin' | 'leastLoaded';
 };
 
+function isRetryableSshStartupTransportError(err: unknown): boolean {
+  const message = err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err);
+  const lower = message.toLowerCase();
+  return lower.includes('exit=255')
+    || lower.includes('ssh transport failed')
+    || lower.includes('connection timed out')
+    || lower.includes('operation timed out')
+    || lower.includes('connection reset')
+    || lower.includes('broken pipe')
+    || lower.includes('banner exchange')
+    || lower.includes('kex_exchange_identification')
+    || lower.includes('remote session terminated unexpectedly');
+}
+
 type FreshBaseCommit = {
   branch: string;
   commit: string;
@@ -703,94 +717,133 @@ export class TaskRunner {
     traceExecution(
       `${RESTART_TO_BRANCH_TRACE} executeTaskInner taskId=${task.id} WorkRequest built actionType=${request.actionType} repoUrl=${request.inputs.repoUrl ?? '(none)'} upstreamBranches=${JSON.stringify(request.inputs.upstreamBranches ?? [])}`,
     );
-    bench('selectExecutor.start');
-    const executor = this.selectExecutor(task);
-    bench('selectExecutor.end', {
-      executorType: executor.type,
-    });
-    traceExecution(
-      `${RESTART_TO_BRANCH_TRACE} executeTaskInner taskId=${task.id} selectExecutor → type=${executor.type} calling executor.start()`,
-    );
-    traceExecution(`[trace] TaskRunner: task=${task.id} calling executor.start() type=${executor.type}`);
-    this.logger.info(
-      `[TaskRunner] executor.start begin task=${task.id} attempt=${attemptId} executor=${executor.type} ` +
-        `generation=${task.execution.generation ?? 0}`,
-    );
-    bench('onLaunchStart.before', {
-      executorType: executor.type,
-    });
-    this.callbacks.onLaunchStart?.(task.id, executor);
-    bench('executor.start.before', {
-      executorType: executor.type,
-    });
     const startT0 = Date.now();
-    const startTimeoutMs = getExecutorStartTimeoutMs();
-    const preStartHeartbeatTimer = setInterval(() => {
-      const now = new Date();
-      this.persistence.updateAttempt?.(attemptId, {
-        lastHeartbeatAt: now,
-        leaseExpiresAt: nextLeaseExpiry(now),
-      } as any);
-      this.callbacks.onHeartbeat?.(task.id);
-    }, PRE_START_HEARTBEAT_INTERVAL_MS);
-    let preStartTimeout: ReturnType<typeof setTimeout> | undefined;
-    let handle: ExecutorHandle;
-    try {
-      handle = await Promise.race<ExecutorHandle>([
-        executor.start(request),
-        new Promise<ExecutorHandle>((_resolve, reject) => {
-          preStartTimeout = setTimeout(() => {
-            reject(new Error(`Executor startup timed out after ${startTimeoutMs}ms (${executor.type})`));
-          }, startTimeoutMs);
-        }),
-      ]);
-    } catch (err) {
-      const meta = err as StartupFailureMetadata;
-      const startupErrorMessage = `Executor startup failed (${executor.type}): ${err instanceof Error ? err.message : String(err)}\n`;
-      this.callbacks.onOutput?.(task.id, startupErrorMessage);
-      try {
-        this.persistence.appendTaskOutput(task.id, startupErrorMessage);
-      } catch {
-        // Preserve the original startup failure if output persistence also fails.
-      }
-      // Only persist startup-failure metadata when the launch is still
-      // current.  If the task has moved to a newer attempt or generation
-      // (e.g. via recreate-task), writing old workspace/branch metadata
-      // would corrupt the live attempt's state.
-      if (
-        (meta.workspacePath || meta.branch || meta.agentSessionId || meta.containerId)
-        && !this.isLaunchStale(task.id, attemptId, task.execution.generation ?? 0)
-      ) {
-        const execution: Record<string, string> = {};
-        if (meta.workspacePath) execution.workspacePath = meta.workspacePath;
-        if (meta.branch) execution.branch = meta.branch;
-        if (meta.agentSessionId) {
-          execution.agentSessionId = meta.agentSessionId;
-          execution.lastAgentSessionId = meta.agentSessionId;
-        }
-        if (meta.containerId) execution.containerId = meta.containerId;
-        const poolSelection = this.pendingPoolSelections.get(task.id);
-        const selectedSshTargetId = executor.type === 'ssh'
-          ? this.selectedRemoteTargetId(task, poolSelection)
-          : undefined;
-        this.persistence.updateTask(task.id, {
-          config: {
-            runnerKind: executor.type as RunnerKind,
-            ...(selectedSshTargetId ? { poolMemberId: selectedSshTargetId } : {}),
-          },
-          execution: execution as any,
-        });
-      }
-      this.pendingPoolSelections.delete(task.id);
-      const wrapped = new Error(
-        `Executor startup failed (${executor.type}): ${err instanceof Error ? err.message : String(err)}`,
-        { cause: err },
+    const attemptedPoolMemberKeys = new Set<string>();
+    let executor!: Executor;
+    let handle!: ExecutorHandle;
+    while (true) {
+      bench('selectExecutor.start');
+      executor = this.selectExecutor(task, attemptedPoolMemberKeys);
+      const poolSelectionForStart = this.pendingPoolSelections.get(task.id);
+      bench('selectExecutor.end', {
+        executorType: executor.type,
+      });
+      traceExecution(
+        `${RESTART_TO_BRANCH_TRACE} executeTaskInner taskId=${task.id} selectExecutor → type=${executor.type} calling executor.start()`,
       );
-      this.callbacks.onLaunchFailed?.(task.id, wrapped, executor);
-      throw wrapped;
-    } finally {
-      clearInterval(preStartHeartbeatTimer);
-      if (preStartTimeout) clearTimeout(preStartTimeout);
+      traceExecution(`[trace] TaskRunner: task=${task.id} calling executor.start() type=${executor.type}`);
+      this.logger.info(
+        `[TaskRunner] executor.start begin task=${task.id} attempt=${attemptId} executor=${executor.type} ` +
+          `generation=${task.execution.generation ?? 0}`,
+      );
+      bench('onLaunchStart.before', {
+        executorType: executor.type,
+      });
+      this.callbacks.onLaunchStart?.(task.id, executor);
+      bench('executor.start.before', {
+        executorType: executor.type,
+      });
+      const startTimeoutMs = getExecutorStartTimeoutMs();
+      const preStartHeartbeatTimer = setInterval(() => {
+        const now = new Date();
+        this.persistence.updateAttempt?.(attemptId, {
+          lastHeartbeatAt: now,
+          leaseExpiresAt: nextLeaseExpiry(now),
+        } as any);
+        this.callbacks.onHeartbeat?.(task.id);
+      }, PRE_START_HEARTBEAT_INTERVAL_MS);
+      let preStartTimeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        handle = await Promise.race<ExecutorHandle>([
+          executor.start(request),
+          new Promise<ExecutorHandle>((_resolve, reject) => {
+            preStartTimeout = setTimeout(() => {
+              reject(new Error(`Executor startup timed out after ${startTimeoutMs}ms (${executor.type})`));
+            }, startTimeoutMs);
+          }),
+        ]);
+        break;
+      } catch (err) {
+        const meta = err as StartupFailureMetadata;
+        if (
+          executor.type === 'ssh'
+          && poolSelectionForStart?.member.type === 'ssh'
+          && !meta.workspacePath
+          && !meta.branch
+          && isRetryableSshStartupTransportError(err)
+        ) {
+          attemptedPoolMemberKeys.add(poolSelectionForStart.memberKey);
+          const pool = this.getExecutionPools()[poolSelectionForStart.poolId];
+          const hasAnotherSshMember = pool?.members.some((member) =>
+            member.type === 'ssh' && !attemptedPoolMemberKeys.has(this.poolMemberKey(member)),
+          ) ?? false;
+          if (hasAnotherSshMember) {
+            const retryMessage =
+              `Executor startup failed (${executor.type}) on pool member ${poolSelectionForStart.member.id}; ` +
+              `retrying another SSH pool member: ${err instanceof Error ? err.message : String(err)}\n`;
+            this.callbacks.onOutput?.(task.id, retryMessage);
+            try {
+              this.persistence.appendTaskOutput(task.id, retryMessage);
+            } catch {
+              // Preserve the original startup failure if output persistence also fails.
+            }
+            this.persistence.logEvent?.(task.id, 'task.executor.startup-retry', {
+              runnerKind: executor.type,
+              poolId: poolSelectionForStart.poolId,
+              poolMemberId: poolSelectionForStart.member.id,
+              reason: 'ssh-startup-transport-failure',
+              error: err instanceof Error ? err.message : String(err),
+            });
+            this.pendingPoolSelections.delete(task.id);
+            continue;
+          }
+        }
+        const startupErrorMessage = `Executor startup failed (${executor.type}): ${err instanceof Error ? err.message : String(err)}\n`;
+        this.callbacks.onOutput?.(task.id, startupErrorMessage);
+        try {
+          this.persistence.appendTaskOutput(task.id, startupErrorMessage);
+        } catch {
+          // Preserve the original startup failure if output persistence also fails.
+        }
+        // Only persist startup-failure metadata when the launch is still
+        // current.  If the task has moved to a newer attempt or generation
+        // (e.g. via recreate-task), writing old workspace/branch metadata
+        // would corrupt the live attempt's state.
+        if (
+          (meta.workspacePath || meta.branch || meta.agentSessionId || meta.containerId)
+          && !this.isLaunchStale(task.id, attemptId, task.execution.generation ?? 0)
+        ) {
+          const execution: Record<string, string> = {};
+          if (meta.workspacePath) execution.workspacePath = meta.workspacePath;
+          if (meta.branch) execution.branch = meta.branch;
+          if (meta.agentSessionId) {
+            execution.agentSessionId = meta.agentSessionId;
+            execution.lastAgentSessionId = meta.agentSessionId;
+          }
+          if (meta.containerId) execution.containerId = meta.containerId;
+          const poolSelection = this.pendingPoolSelections.get(task.id);
+          const selectedSshTargetId = executor.type === 'ssh'
+            ? this.selectedRemoteTargetId(task, poolSelection)
+            : undefined;
+          this.persistence.updateTask(task.id, {
+            config: {
+              runnerKind: executor.type as RunnerKind,
+              ...(selectedSshTargetId ? { poolMemberId: selectedSshTargetId } : {}),
+            },
+            execution: execution as any,
+          });
+        }
+        this.pendingPoolSelections.delete(task.id);
+        const wrapped = new Error(
+          `Executor startup failed (${executor.type}): ${err instanceof Error ? err.message : String(err)}`,
+          { cause: err },
+        );
+        this.callbacks.onLaunchFailed?.(task.id, wrapped, executor);
+        throw wrapped;
+      } finally {
+        clearInterval(preStartHeartbeatTimer);
+        if (preStartTimeout) clearTimeout(preStartTimeout);
+      }
     }
     traceExecution(`[trace] TaskRunner: task=${task.id} executor.start() returned after ${Date.now() - startT0}ms executor=${executor.type} sessionId=${handle.agentSessionId ?? 'none'} workspace=${handle.workspacePath ?? 'default'}`);
     this.logger.info(
@@ -1030,17 +1083,26 @@ export class TaskRunner {
     return load;
   }
 
-  private selectPoolMember(poolId: string, pool: ExecutionPoolConfig): ExecutionPoolMember | undefined {
+  private selectPoolMember(
+    poolId: string,
+    pool: ExecutionPoolConfig,
+    excludedMemberKeys: Set<string> = new Set(),
+  ): ExecutionPoolMember | undefined {
     if (pool.members.length === 0) return undefined;
 
     if (pool.selectionStrategy === 'roundRobin') {
       const cursor = this.poolRoundRobinCursor.get(poolId) ?? 0;
-      const member = pool.members[cursor % pool.members.length];
-      this.poolRoundRobinCursor.set(poolId, (cursor + 1) % pool.members.length);
-      return member;
+      for (let offset = 0; offset < pool.members.length; offset += 1) {
+        const index = (cursor + offset) % pool.members.length;
+        const member = pool.members[index];
+        if (excludedMemberKeys.has(this.poolMemberKey(member))) continue;
+        this.poolRoundRobinCursor.set(poolId, (index + 1) % pool.members.length);
+        return member;
+      }
+      return undefined;
     }
 
-    const scored = pool.members.map((member, index) => {
+    const scored = pool.members.filter((member) => !excludedMemberKeys.has(this.poolMemberKey(member))).map((member, index) => {
       const memberKey = this.poolMemberKey(member);
       const load = this.poolMemberLoad(poolId, memberKey);
       const limit = member.maxConcurrentTasks ?? pool.maxConcurrentTasksPerMember;
@@ -1127,7 +1189,7 @@ export class TaskRunner {
       ?? (task.config.poolId && this.getRemoteTargets()[task.config.poolId] ? task.config.poolId : undefined);
   }
 
-  selectExecutor(task: TaskState): Executor {
+  selectExecutor(task: TaskState, excludedPoolMemberKeys: Set<string> = new Set()): Executor {
     let effectiveType = task.config.runnerKind ?? (task.config.isMergeNode ? 'merge' : undefined);
     let selectedPoolMemberId: string | undefined;
     const explicitPoolMemberId = (task.config as { poolMemberId?: string }).poolMemberId;
@@ -1135,7 +1197,7 @@ export class TaskRunner {
 
     if (task.config.poolId && !explicitPoolMemberId) {
       const pool = this.getExecutionPools()[task.config.poolId];
-      const member = pool ? this.selectPoolMember(task.config.poolId, pool) : undefined;
+      const member = pool ? this.selectPoolMember(task.config.poolId, pool, excludedPoolMemberKeys) : undefined;
       if (member) {
         effectiveType = member.type;
         selectedPoolMemberId = member.type === 'ssh' ? member.id : undefined;
