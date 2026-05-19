@@ -84,10 +84,10 @@ export function computeWorkflowStatusFromCounts(
 
   if (counts.fixing_with_ai > 0) return 'fixing_with_ai';
   if (counts.failed > 0) return 'failed';
-  if (counts.closed > 0) return 'closed';
   if (counts.running > 0) return 'running';
   if (counts.awaiting_approval > 0) return 'awaiting_approval';
   if (counts.review_ready > 0) return 'review_ready';
+  if (counts.closed > 0) return 'closed';
   if (counts.blocked > 0 || counts.needs_input > 0) return 'blocked';
   if (counts.pending === total) return 'pending';
   if (counts.pending > 0) return 'running';
@@ -145,7 +145,7 @@ export function computeWorkflowRollupFromSummaries(
     counts[task.status] += 1;
     const issue = toRollupIssue(task);
 
-    if (task.status === 'failed' || task.status === 'closed') {
+    if (task.status === 'failed') {
       failedTasks.push(issue);
     }
     if (task.status === 'fixing_with_ai' || task.execution?.isFixingWithAI) {
@@ -180,7 +180,7 @@ export function computeWorkflowRollupFromCountsAndIssues(
 
   for (const task of issues) {
     const issue = toRollupIssue(task);
-    if (task.status === 'failed' || task.status === 'closed') failedTasks.push(issue);
+    if (task.status === 'failed') failedTasks.push(issue);
     if (task.status === 'fixing_with_ai' || task.execution?.isFixingWithAI) fixingTasks.push(issue);
     if (
       task.status === 'needs_input' ||

@@ -100,15 +100,17 @@ describe('formatWorkflowStatus', () => {
       total: 5,
       completed: 2,
       failed: 1,
+      closed: 1,
       running: 1,
-      pending: 1,
+      pending: 0,
     };
     const output = formatWorkflowStatus(status);
     expect(output).toContain('5 total');
     expect(output).toContain('2 completed');
     expect(output).toContain('1 failed');
+    expect(output).toContain('1 closed');
     expect(output).toContain('1 running');
-    expect(output).toContain('1 pending');
+    expect(output).toContain('0 pending');
   });
 
   it('uses colored output', () => {
