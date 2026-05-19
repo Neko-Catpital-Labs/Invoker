@@ -106,7 +106,7 @@ describe('GitHubMergeGateProvider', () => {
       expect(result.identifier).toBe('42');
       expect(spawnMock).toHaveBeenCalledWith(
         'git',
-        ['push', '--force', '-u', 'origin', 'feature/test'],
+        ['push', '--force', 'origin', 'feature/test:refs/heads/feature/test'],
         expect.objectContaining({ cwd: '/tmp/repo' }),
       );
       expect(spawnMock).toHaveBeenCalledWith(

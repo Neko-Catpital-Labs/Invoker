@@ -6,7 +6,7 @@ import { bashPreserveOrReset, bashMergeUpstreams, bashFetchNodeRemotes, parsePre
 import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
 import type { AgentRegistry } from './agent-registry.js';
 import { checkStaleness } from './git-staleness-detector.js';
-import { ensureRemoteUrl } from './git-config-mutation.js';
+import { assertNotGitConfigMutation, ensureRemoteUrl } from './git-config-mutation.js';
 
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
@@ -431,6 +431,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     cwd: string,
     opts?: { signal?: AbortSignal },
   ): Promise<string> {
+    assertNotGitConfigMutation(args, `${this.type}.execGitSimple`);
     const stack = new Error().stack;
     const callerFrames = stack?.split('\n').slice(1, 5).map(l => l.trim()).join('\n    ') ?? '(no stack)';
     traceExecution(`[git-trace] git ${args.join(' ')}  cwd=${cwd}\n    ${callerFrames}`);
@@ -820,11 +821,11 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
           context: { caller: `${this.type}.pushBranchToRemote`, detail: branch },
         });
         await this.execGitSimpleWithNetworkTimeout(
-          ['push', '--force-with-lease', '-u', BaseExecutor.BRANCH_REMOTE_NAME, branch],
+          ['push', '--force-with-lease', BaseExecutor.BRANCH_REMOTE_NAME, `${branch}:refs/heads/${branch}`],
           cwd,
         );
       } else {
-        await this.execGitSimpleWithNetworkTimeout(['push', '--force-with-lease', '-u', 'origin', branch], cwd);
+        await this.execGitSimpleWithNetworkTimeout(['push', '--force-with-lease', 'origin', `${branch}:refs/heads/${branch}`], cwd);
       }
       return undefined;
     } catch (err) {
