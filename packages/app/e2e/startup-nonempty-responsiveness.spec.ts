@@ -8,9 +8,12 @@ import { stringify as yamlStringify } from 'yaml';
 import type { Page } from '@playwright/test';
 
 import { E2E_REPO_URL } from './fixtures/electron-app.js';
+import { electronE2ELaunchArgs } from './fixtures/electron-launch-args.js';
 
 const repoRoot = resolveRepoRoot(__dirname);
 const STARTUP_BUDGET_MS = 12000;
+
+test.setTimeout(240000);
 
 async function launchElectronApp(testDir: string, extraEnv?: Record<string, string>) {
   const claudeMarker = path.join(repoRoot, 'scripts', 'e2e-dry-run', 'fixtures', 'claude-marker.sh');
@@ -27,12 +30,7 @@ async function launchElectronApp(testDir: string, extraEnv?: Record<string, stri
     // ignore symlink failures on restricted platforms
   }
   return electron.launch({
-    args: [
-      ...(process.platform === 'linux'
-        ? ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--disable-gpu-compositing', '--disable-gpu-sandbox', '--disable-software-rasterizer']
-        : []),
-      path.resolve(__dirname, '..', 'dist', 'main.js'),
-    ],
+    args: electronE2ELaunchArgs(path.resolve(__dirname, '..', 'dist', 'main.js')),
     env: {
       ...process.env,
       NODE_ENV: 'test',

@@ -5,7 +5,7 @@
  * so WorktreeExecutor can clone without a network. Sharded CI can override the
  * bare-repo path via INVOKER_E2E_BARE_REPO to avoid cross-shard interference.
  */
-import { execSync } from 'child_process';
+import { execSync, spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { existsSync, rmSync } from 'fs';
 import * as path from 'path';
 import { resolveRepoRoot } from '@invoker/contracts';
@@ -22,7 +22,69 @@ const gitEnv = {
 
 const repoRoot = resolveRepoRoot(__dirname);
 
-export default function globalSetup(): void {
+async function startXvfbIfNeeded(): Promise<ChildProcessWithoutNullStreams | null> {
+  if (process.platform !== 'linux' || process.env.DISPLAY || process.env.WAYLAND_DISPLAY) {
+    return null;
+  }
+
+  try {
+    execSync('command -v Xvfb', { stdio: 'ignore' });
+  } catch {
+    throw new Error('Electron E2E tests require Xvfb when no DISPLAY or WAYLAND_DISPLAY is available');
+  }
+
+  const xvfb = spawn('Xvfb', [
+    '-displayfd',
+    '1',
+    '-screen',
+    '0',
+    '1280x720x24',
+    '-nolisten',
+    'tcp',
+  ]);
+  let stderr = '';
+  xvfb.stderr.setEncoding('utf8');
+  xvfb.stderr.on('data', (chunk) => {
+    stderr += chunk;
+  });
+
+  const display = await new Promise<string>((resolve, reject) => {
+    let stdout = '';
+    const fail = (message: string) => {
+      reject(new Error(`Failed to start Xvfb for Electron E2E tests: ${message}${stderr ? `\n${stderr}` : ''}`));
+    };
+
+    const timeout = setTimeout(() => {
+      xvfb.kill();
+      fail('timed out waiting for display number');
+    }, 5000);
+
+    xvfb.stdout.setEncoding('utf8');
+    xvfb.stdout.on('data', (chunk) => {
+      stdout += chunk;
+      const match = stdout.match(/\d+/);
+      if (match) {
+        clearTimeout(timeout);
+        resolve(`:${match[0]}`);
+      }
+    });
+    xvfb.once('error', (error) => {
+      clearTimeout(timeout);
+      fail(error.message);
+    });
+    xvfb.once('exit', (code, signal) => {
+      clearTimeout(timeout);
+      fail(`process exited before reporting a display (code=${code ?? 'null'} signal=${signal ?? 'null'})`);
+    });
+  });
+
+  process.env.DISPLAY = display;
+  return xvfb;
+}
+
+export default async function globalSetup(): Promise<() => void> {
+  const xvfb = await startXvfbIfNeeded();
+
   // Build dependent packages and the app itself if artifacts are missing.
   if (!existsSync(path.join(repoRoot, 'packages', 'ui', 'dist', 'index.html'))) {
     execSync('pnpm --filter @invoker/ui build', { cwd: repoRoot, stdio: 'inherit' });
@@ -45,4 +107,8 @@ export default function globalSetup(): void {
   execSync('git push origin HEAD:refs/heads/master', { cwd: tmpClone, env: gitEnv });
   execSync('git push origin HEAD:refs/heads/main', { cwd: tmpClone, env: gitEnv });
   rmSync(tmpClone, { recursive: true });
+
+  return () => {
+    xvfb?.kill();
+  };
 }

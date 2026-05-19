@@ -15,6 +15,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { stringify as yamlStringify } from 'yaml';
+import { electronE2ELaunchArgs } from './electron-launch-args.js';
 
 export type ElectronFixtures = {
   electronApp: ElectronApplication;
@@ -50,12 +51,7 @@ export const test = base.extend<ElectronFixtures>({
     }
     const pathEnv = `${stubDir}${path.delimiter}${process.env.PATH ?? ''}`;
     const app = await electron.launch({
-      args: [
-        ...(process.platform === 'linux'
-          ? ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--disable-gpu-compositing', '--disable-gpu-sandbox', '--disable-software-rasterizer']
-          : []),
-        path.resolve(__dirname, '..', '..', 'dist', 'main.js'),
-      ],
+      args: electronE2ELaunchArgs(path.resolve(__dirname, '..', '..', 'dist', 'main.js')),
       env: {
         ...process.env,
         NODE_ENV: 'test',
