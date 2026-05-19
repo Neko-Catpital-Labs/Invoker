@@ -372,9 +372,9 @@ describe('buildRecordAndPushScript', () => {
       pushRemoteUrl: 'https://github.com/fork/repo.git',
     });
 
-    expect(script).toContain('git remote set-url invoker-branches "$PUSH_URL"');
-    expect(script).toContain('git remote add invoker-branches "$PUSH_URL"');
-    expect(script).toContain('git push invoker-branches "$BR:refs/heads/$BR"');
+    expect(script).not.toContain('git remote set-url invoker-branches "$PUSH_URL"');
+    expect(script).not.toContain('git remote add invoker-branches "$PUSH_URL"');
+    expect(script).toContain('git push "$PUSH_URL" "$BR:refs/heads/$BR"');
   });
 
   it('commits and pushes successfully without preconfigured git identity', () => {
