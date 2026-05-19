@@ -3936,6 +3936,7 @@ export class Orchestrator {
     total: number;
     completed: number;
     failed: number;
+    closed: number;
     running: number;
     pending: number;
   } {
@@ -3948,6 +3949,7 @@ export class Orchestrator {
       total: tasks.length,
       completed: tasks.filter((t) => t.status === 'completed').length,
       failed: tasks.filter((t) => t.status === 'failed').length,
+      closed: tasks.filter((t) => t.status === 'closed').length,
       running: tasks.filter((t) => t.status === 'running' || t.status === 'fixing_with_ai').length,
       pending: tasks.filter((t) => t.status === 'pending').length,
     };
