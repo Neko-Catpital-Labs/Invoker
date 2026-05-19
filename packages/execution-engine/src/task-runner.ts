@@ -436,6 +436,10 @@ export class TaskRunner {
       bench('executeTask.duplicateSkipped');
       return;
     }
+    this.logger.info(
+      `[TaskRunner] launch accepted task=${task.id} attempt=${attemptId} status=${task.status} ` +
+        `phase=${task.execution.phase ?? 'none'} generation=${startGeneration}`,
+    );
     this.launchingAttemptIds.add(attemptId);
     try {
       await this.executeTaskInner(task, attemptId, bench);
@@ -705,6 +709,10 @@ export class TaskRunner {
       `${RESTART_TO_BRANCH_TRACE} executeTaskInner taskId=${task.id} selectExecutor → type=${executor.type} calling executor.start()`,
     );
     traceExecution(`[trace] TaskRunner: task=${task.id} calling executor.start() type=${executor.type}`);
+    this.logger.info(
+      `[TaskRunner] executor.start begin task=${task.id} attempt=${attemptId} executor=${executor.type} ` +
+        `generation=${task.execution.generation ?? 0}`,
+    );
     bench('onLaunchStart.before', {
       executorType: executor.type,
     });
@@ -782,6 +790,12 @@ export class TaskRunner {
       if (preStartTimeout) clearTimeout(preStartTimeout);
     }
     traceExecution(`[trace] TaskRunner: task=${task.id} executor.start() returned after ${Date.now() - startT0}ms executor=${executor.type} sessionId=${handle.agentSessionId ?? 'none'} workspace=${handle.workspacePath ?? 'default'}`);
+    this.logger.info(
+      `[TaskRunner] executor.start returned task=${task.id} attempt=${attemptId} executor=${executor.type} ` +
+        `elapsedMs=${Date.now() - startT0} executionId=${handle.executionId} ` +
+        `workspace=${handle.workspacePath ?? 'none'} branch=${handle.branch ?? 'none'} ` +
+        `agentSessionId=${handle.agentSessionId ?? 'none'}`,
+    );
     bench('executor.start.after', {
       executorType: executor.type,
       executorStartMs: Date.now() - startT0,
@@ -887,6 +901,10 @@ export class TaskRunner {
       poolId: poolSelection?.poolId,
       poolMemberKey: poolSelection?.memberKey,
     });
+    this.logger.info(
+      `[TaskRunner] active execution registered task=${task.id} attempt=${attemptId} ` +
+        `executor=${executor.type} executionId=${handle.executionId} activeExecutions=${this.activeExecutions.size}`,
+    );
     bench('onSpawned.before');
     this.callbacks.onSpawned?.(task.id, handle, executor);
     bench('onSpawned.after');
@@ -900,6 +918,12 @@ export class TaskRunner {
     executor.onHeartbeat(handle, () => {
       const now = new Date();
       const isRemoteWorkloadHeartbeat = executor.type === 'ssh';
+      if (isRemoteWorkloadHeartbeat) {
+        this.logger.info(
+          `[TaskRunner] ssh heartbeat received task=${task.id} attempt=${attemptId} executionId=${handle.executionId} ` +
+            `at=${now.toISOString()}`,
+        );
+      }
       this.persistence.updateAttempt?.(attemptId, {
         lastHeartbeatAt: now,
         leaseExpiresAt: nextLeaseExpiry(now),
@@ -923,6 +947,11 @@ export class TaskRunner {
         const work = async () => {
           const normalizedResponse = response.attemptId ? response : { ...response, attemptId };
           this.activeExecutions.delete(normalizedResponse.attemptId ?? attemptId);
+          this.logger.info(
+            `[TaskRunner] completion callback task=${task.id} attempt=${normalizedResponse.attemptId ?? attemptId} ` +
+              `status=${normalizedResponse.status} exitCode=${normalizedResponse.outputs.exitCode ?? 'none'} ` +
+              `executionId=${handle.executionId} activeExecutions=${this.activeExecutions.size}`,
+          );
           try {
             traceExecution(
               `[task-runner] onComplete taskId=${task.id} responseStatus=${response.status} ` +
