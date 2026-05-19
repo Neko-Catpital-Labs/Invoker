@@ -60,8 +60,8 @@ describe('Visual proof snapshots', () => {
     act(() => mock.setTasks([alpha, beta], workflows));
 
     await waitFor(() => {
-      expect(screen.getByText('Alpha')).toBeInTheDocument();
-      expect(screen.getByText('Beta')).toBeInTheDocument();
+      expect(screen.getByTestId('workflow-node-wf-alpha')).toBeInTheDocument();
+      expect(screen.getByTestId('workflow-node-wf-beta')).toBeInTheDocument();
     });
 
     fireEvent.click(screen.getByTestId('workflow-node-wf-alpha'));

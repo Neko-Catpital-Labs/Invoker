@@ -126,6 +126,12 @@ describe('useTasks', () => {
 
     const { result } = renderHook(() => useTasks());
 
+    // First refresh is left pending so we can release it later as a stale snapshot.
+    await act(async () => {
+      result.current.refreshTasks();
+    });
+
+    // Second refresh wins immediately with tasks.
     await act(async () => {
       result.current.refreshTasks();
     });
@@ -143,7 +149,7 @@ describe('useTasks', () => {
     expect(result.current.tasks.get('t1')?.id).toBe('t1');
   });
 
-  it('does not replace a full bootstrap with a smaller initial snapshot', async () => {
+  it('does not replace a full bootstrap with a smaller non-forced snapshot on refresh', async () => {
     const bootA = makeUITask({ id: 'boot-a', description: 'Bootstrap A' });
     const bootB = makeUITask({ id: 'boot-b', description: 'Bootstrap B' });
     const smaller = makeUITask({ id: 'boot-a', description: 'Smaller A' });
@@ -163,6 +169,10 @@ describe('useTasks', () => {
 
     const { result } = renderHook(() => useTasks());
 
+    await act(async () => {
+      result.current.refreshTasks();
+    });
+
     await waitFor(() => {
       expect(window.invoker.getTasks).toHaveBeenCalled();
     });
@@ -177,6 +187,63 @@ describe('useTasks', () => {
         snapshotTaskCount: 1,
       }),
     );
+  });
+
+  it('does not request an initial getTasks snapshot when preload bootstrap is delivered', async () => {
+    const bootTask = makeUITask({ id: 'boot-1', description: 'Boot Task' });
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
+      tasks: [bootTask],
+      workflows: [],
+    };
+    const getTasks = vi.fn().mockResolvedValue({ tasks: [bootTask], workflows: [] });
+    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
+      getTasks,
+      onTaskDelta: vi.fn(() => () => {}),
+      onWorkflowsChanged: vi.fn(() => () => {}),
+    };
+
+    const { result } = renderHook(() => useTasks());
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(result.current.tasks.get('boot-1')?.description).toBe('Boot Task');
+    expect(getTasks).not.toHaveBeenCalled();
+  });
+
+  it('skips the initial snapshot even when bootstrap delivered no tasks (still authoritative)', async () => {
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
+      tasks: [],
+      workflows: [],
+    };
+    const getTasks = vi.fn().mockResolvedValue({ tasks: [], workflows: [] });
+    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
+      getTasks,
+      onTaskDelta: vi.fn(() => () => {}),
+      onWorkflowsChanged: vi.fn(() => () => {}),
+    };
+
+    renderHook(() => useTasks());
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(getTasks).not.toHaveBeenCalled();
+  });
+
+  it('falls back to an initial getTasks snapshot when bootstrap is not delivered', async () => {
+    delete (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__;
+    const getTasks = vi.fn().mockResolvedValue({ tasks: [], workflows: [] });
+    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
+      getTasks,
+      onTaskDelta: vi.fn(() => () => {}),
+      onWorkflowsChanged: vi.fn(() => () => {}),
+    };
+
+    renderHook(() => useTasks());
+
+    await waitFor(() => {
+      expect(getTasks).toHaveBeenCalledTimes(1);
+    });
+    expect(getTasks).toHaveBeenLastCalledWith(false);
   });
 
   it('passes forceRefresh flag to getTasks when requested', async () => {

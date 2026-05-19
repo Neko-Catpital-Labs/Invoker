@@ -160,9 +160,19 @@ export function createMockInvoker(
     taskSnapshot = tasks;
     if (workflows) workflowSnapshot = workflows;
 
-    // Fire created deltas for each task
+    // Fire task-delta 'created' events for each task.
     for (const task of tasks) {
       deltaCallback?.({ type: 'created', task });
+    }
+    // Mirror real main-process behavior: a workflows-changed event accompanies
+    // plan load. Deferred one microtask so the renderer sees the workflows-changed
+    // IPC arrive after the synchronous setTasks() call returns — matching how IPC
+    // events surface asynchronously in production.
+    if (workflows) {
+      const wfList = workflows;
+      queueMicrotask(() => {
+        workflowsCallback?.(wfList);
+      });
     }
   }
 

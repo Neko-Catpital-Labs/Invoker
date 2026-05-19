@@ -155,7 +155,13 @@ export function useTasks(): UseTasksResult {
       });
     }
 
-    fetchAll();
+    // Preload's synchronous bootstrap already delivered the authoritative task/workflow
+    // snapshot from main, so skip the redundant initial getTasks() request. Forced
+    // refreshes (refresh button, etc.) and delta-triggered workflow refreshes still
+    // call fetchAll(). Fall back to fetchAll() when bootstrap was not delivered.
+    if (!bootstrapState) {
+      fetchAll();
+    }
 
     deltaPipelineRef.current = createTaskDeltaPipeline({
       flushMs: 100,
