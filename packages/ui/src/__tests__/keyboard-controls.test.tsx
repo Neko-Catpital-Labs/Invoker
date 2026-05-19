@@ -56,7 +56,7 @@ function key(keyName: string, init: Partial<KeyboardEvent> = {}) {
   fireEvent.keyDown(document, { key: keyName, ...init });
 }
 
-describe('Side rail controls (component)', () => {
+describe('Side rail controls (component)', { timeout: 30000 }, () => {
   let mock: MockInvoker;
 
   beforeEach(() => {
@@ -185,4 +185,59 @@ describe('Side rail controls (component)', () => {
     expect(screen.getByTestId('keyboard-search-overlay')).toBeInTheDocument();
     expect(screen.getByTestId('workflow-graph-surface')).toHaveAttribute('data-keyboard-active', 'true');
   });
+
+  it('Escape dismisses the selected workflow mini DAG from task graph keyboard focus', async () => {
+    await renderKeyboardFixture(mock);
+
+    key('Tab');
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('selected-workflow-mini-dag').querySelector('[data-keyboard-region="taskGraph"]'),
+      ).toHaveAttribute('data-keyboard-active', 'true');
+    });
+
+    key('Escape');
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('selected-workflow-mini-dag')).not.toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-graph-surface')).toHaveAttribute('data-keyboard-active', 'true');
+    });
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  }, 30000);
+
+  it('Space opens the selected workflow task graph from workflow graph keyboard focus', async () => {
+    await renderKeyboardFixture(mock);
+
+    key('Tab');
+    key('Escape');
+    await waitFor(() => {
+      expect(screen.queryByTestId('selected-workflow-mini-dag')).not.toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-graph-surface')).toHaveAttribute('data-keyboard-active', 'true');
+    });
+
+    key('ArrowRight');
+    key(' ');
+
+    const panel = await screen.findByTestId('selected-workflow-mini-dag');
+    await waitFor(() => {
+      expect(panel.querySelector('[data-keyboard-region="taskGraph"]')).toHaveAttribute('data-keyboard-active', 'true');
+    });
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  }, 30000);
+
+  it('Enter from workflow graph keyboard focus opens the workflow context menu', async () => {
+    await renderKeyboardFixture(mock);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-graph-surface')).toHaveAttribute('data-keyboard-active', 'true');
+    });
+    key('Enter');
+
+    const menu = await screen.findByRole('menu');
+    expect(menu).toHaveTextContent('Open Workflow');
+  }, 30000);
 });

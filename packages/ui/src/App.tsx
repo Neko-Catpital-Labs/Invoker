@@ -623,6 +623,17 @@ export function App() {
     focusKeyboardRegion('taskGraph');
   }, [focusKeyboardRegion, tasks]);
 
+  const dismissSelectedWorkflowGraph = useCallback((nextKeyboardRegion?: KeyboardRegion) => {
+    setContextMenu(null);
+    setWorkflowContextMenu(null);
+    setSelectedTaskId(null);
+    setSelectedWorkflowId(null);
+    setWorkflowSelectionDismissed(true);
+    if (nextKeyboardRegion) {
+      focusKeyboardRegion(nextKeyboardRegion);
+    }
+  }, [focusKeyboardRegion]);
+
   const selectRelativeNode = useCallback((direction: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight') => {
     const inTaskGraph = keyboardRegion === 'taskGraph';
     const nodeRecords = inTaskGraph
@@ -749,6 +760,11 @@ export function App() {
       }
 
       if (event.key === 'Escape') {
+        if (keyboardRegion === 'taskGraph' && selectedWorkflow && miniDagTasks.size > 0) {
+          event.preventDefault();
+          dismissSelectedWorkflowGraph('workflowGraph');
+          return;
+        }
         if (keyboardRegion === 'inspector') {
           event.preventDefault();
           focusKeyboardRegion(previousGraphRegion);
@@ -757,6 +773,20 @@ export function App() {
       }
 
       if (keyboardRegion === 'workflowGraph' || keyboardRegion === 'taskGraph') {
+        if (keyboardRegion === 'workflowGraph' && event.key === ' ') {
+          const workflowId = selectedWorkflow?.id ?? selectedWorkflowId;
+          if (workflowId && workflows.has(workflowId)) {
+            event.preventDefault();
+            setContextMenu(null);
+            setWorkflowContextMenu(null);
+            setSelectedTaskId(null);
+            setWorkflowSelectionDismissed(false);
+            setSelectedWorkflowId(workflowId);
+            setCenterWorkflowId(workflowId);
+            focusKeyboardRegion('taskGraph');
+            return;
+          }
+        }
         if (event.key === 'Enter') {
           event.preventDefault();
           openSelectedContextMenu();
@@ -826,6 +856,7 @@ export function App() {
     focusKeyboardRegion,
     handleStatusClick,
     keyboardRegion,
+    dismissSelectedWorkflowGraph,
     miniDagTasks,
     modal.type,
     openSelectedContextMenu,
@@ -835,7 +866,10 @@ export function App() {
     searchResults,
     selectRelativeNode,
     selectTaskById,
+    selectedWorkflow,
+    selectedWorkflowId,
     visibleStatusKeys,
+    workflows,
   ]);
   const missingRequiredTool = systemDiagnostics?.tools.find((tool) => tool.required && !tool.installed) ?? null;
   const installedAgentCount = systemDiagnostics?.tools.filter((tool) => (tool.id === 'claude' || tool.id === 'codex') && tool.installed).length ?? 0;
@@ -928,10 +962,8 @@ export function App() {
       return;
     }
 
-    setSelectedTaskId(null);
-    setSelectedWorkflowId(null);
-    setWorkflowSelectionDismissed(true);
-  }, [contextMenu, workflowContextMenu]);
+    dismissSelectedWorkflowGraph();
+  }, [contextMenu, dismissSelectedWorkflowGraph, workflowContextMenu]);
 
   const handleRestartTask = useCallback(async (taskId: string) => {
     if (!invoker) return;
