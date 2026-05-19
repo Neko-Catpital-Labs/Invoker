@@ -13,6 +13,7 @@
 import { useEffect, useRef, useState, useLayoutEffect } from 'react';
 import type { TaskState } from '../types.js';
 import { getMenuItems, type MenuItem } from '../lib/context-menu-items.js';
+import { useMenuKeyboard } from '../lib/menu-keyboard.js';
 import { EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE } from '../isExperimentSpawnPivot.js';
 
 interface ContextMenuProps {
@@ -61,15 +62,59 @@ export function ContextMenu({
   const hasMoreButton = dangerItems.length > 0 && !showMore;
   const renderedItems: MenuItem[] = showMore ? [...safeItems, ...dangerItems] : safeItems;
 
-  // Find first enabled item index
-  const firstEnabledIndex = renderedItems.findIndex((item) => item.enabled);
+  const showMoreItems = () => {
+    setShowMore(true);
+    const firstEnabledDangerIndex = dangerItems.findIndex((item) => item.enabled);
+    const firstEnabledSafeIndex = safeItems.findIndex((item) => item.enabled);
+    setFocusedIndex(firstEnabledDangerIndex >= 0
+      ? safeItems.length + firstEnabledDangerIndex
+      : Math.max(firstEnabledSafeIndex, 0));
+  };
 
-  // Auto-focus first enabled item on mount
-  useEffect(() => {
-    if (firstEnabledIndex >= 0) {
-      setFocusedIndex(firstEnabledIndex);
+  // Handle menu item click
+  const handleItemClick = (item: MenuItem) => {
+    if (!item.enabled) return;
+
+    switch (item.action) {
+      case 'onRestart':
+        onRestart(task.id);
+        break;
+      case 'onReplace':
+        onReplace(task.id);
+        break;
+      case 'onOpenTerminal':
+        onOpenTerminal(task.id);
+        break;
+      case 'onRecreateTask':
+        onRecreateTask?.(task.id);
+        break;
+      case 'onFix':
+        if (item.agentName) {
+          onFix?.(task.id, item.agentName);
+        }
+        break;
+      case 'onCancel':
+        onCancel?.(task.id);
+        break;
     }
-  }, [firstEnabledIndex]);
+    onClose();
+  };
+
+  const keyboardItems = [
+    ...renderedItems.map((item) => ({
+      enabled: item.enabled,
+      onActivate: () => handleItemClick(item),
+    })),
+    ...(hasMoreButton ? [{ enabled: true, onActivate: showMoreItems }] : []),
+  ];
+
+  const menuKeyboard = useMenuKeyboard({
+    menuRef,
+    items: keyboardItems,
+    focusedIndex,
+    setFocusedIndex,
+    onClose,
+  });
 
   // Viewport clamping: flip if menu overflows bottom or right
   useLayoutEffect(() => {
@@ -97,7 +142,7 @@ export function ContextMenu({
     top = Math.max(0, Math.min(top, viewportHeight - rect.height));
 
     setPosition({ left, top });
-  }, [x, y]);
+  }, [x, y, showMore]);
 
   // Capture-phase outside dismissal stays reliable even if graph layers stop
   // bubbling on mouse/pointer events before they reach document listeners.
@@ -133,60 +178,6 @@ export function ContextMenu({
     };
   }, [onClose]);
 
-  // Keyboard navigation
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    const enabledIndices = renderedItems
-      .map((item, idx) => (item.enabled ? idx : -1))
-      .filter((idx) => idx >= 0);
-
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const nextPos = (currentPos + 1) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[nextPos]);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const prevPos = (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[prevPos]);
-    } else if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      const item = renderedItems[focusedIndex];
-      if (item?.enabled) {
-        handleItemClick(item);
-      }
-    }
-  };
-
-  // Handle menu item click
-  const handleItemClick = (item: MenuItem) => {
-    if (!item.enabled) return;
-
-    switch (item.action) {
-      case 'onRestart':
-        onRestart(task.id);
-        break;
-      case 'onReplace':
-        onReplace(task.id);
-        break;
-      case 'onOpenTerminal':
-        onOpenTerminal(task.id);
-        break;
-      case 'onRecreateTask':
-        onRecreateTask?.(task.id);
-        break;
-      case 'onFix':
-        if (item.agentName) {
-          onFix?.(task.id, item.agentName);
-        }
-        break;
-      case 'onCancel':
-        onCancel?.(task.id);
-        break;
-    }
-    onClose();
-  };
-
   // Get variant styles
   const getVariantClasses = (variant?: MenuItem['variant'], enabled?: boolean) => {
     if (!enabled) {
@@ -218,7 +209,7 @@ export function ContextMenu({
       role="menu"
       className="fixed z-50 bg-gray-800 border border-gray-600 rounded-lg shadow-xl py-1 min-w-[160px]"
       style={{ left: position.left, top: position.top }}
-      onKeyDown={handleKeyDown}
+      onKeyDown={menuKeyboard.onKeyDown}
       onClick={(event) => event.stopPropagation()}
       tabIndex={-1}
     >
@@ -254,8 +245,11 @@ export function ContextMenu({
           <div className="border-t border-gray-600 my-1" />
           <button
             role="menuitem"
-            className="w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
-            onClick={() => setShowMore(true)}
+            className={`w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 ${
+              focusedIndex === renderedItems.length ? 'bg-gray-700' : ''
+            }`}
+            onClick={showMoreItems}
+            onMouseEnter={() => setFocusedIndex(renderedItems.length)}
           >
             More
           </button>
