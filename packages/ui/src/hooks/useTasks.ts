@@ -155,7 +155,29 @@ export function useTasks(): UseTasksResult {
       });
     }
 
-    fetchAll();
+    // Preload delivers complete task/workflow state via __INVOKER_BOOTSTRAP__.
+    // When that snapshot is non-empty, the post-mount non-forced getTasks would
+    // just duplicate the same data (~377KB at p99). Skip it; forced refreshes,
+    // mutation-driven refreshes, and the task-delta subscription keep state
+    // fresh from this point on. When bootstrap is empty (fresh install or
+    // tests that lazily install tasks), keep the original fetchAll so workflows
+    // and tasks added after mount are still picked up.
+    const bootstrapHasData =
+      !!bootstrapState &&
+      ((bootstrapState.tasks?.length ?? 0) > 0 || (bootstrapState.workflows?.length ?? 0) > 0);
+    if (bootstrapHasData) {
+      void window.invoker.reportUiPerf?.('useTasks_startup_snapshot_skipped_bootstrap_complete', {
+        bootstrapTaskCount: bootstrapState!.tasks?.length ?? 0,
+        bootstrapWorkflowCount: bootstrapState!.workflows?.length ?? 0,
+        elapsedMs: Math.round(performance.now()),
+        processElapsedMs: bootstrapState!.appStartedAtEpochMs
+          ? Date.now() - bootstrapState!.appStartedAtEpochMs
+          : undefined,
+      });
+      window.invoker.checkPrStatuses?.();
+    } else {
+      fetchAll();
+    }
 
     deltaPipelineRef.current = createTaskDeltaPipeline({
       flushMs: 100,

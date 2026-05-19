@@ -1,6 +1,7 @@
 /**
  * useTasks — workflows-changed must clear workflow metadata when main sends [].
  * Overlapping getTasks responses: older empty snapshot must not wipe after refreshTasks.
+ * Bootstrap-complete startup must skip the redundant non-forced post-mount getTasks.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -54,6 +55,103 @@ describe('useTasks', () => {
     const { result } = renderHook(() => useTasks());
 
     expect(result.current.tasks.get('boot-1')?.description).toBe('Boot Task');
+  });
+
+  it('skips the redundant post-mount getTasks when preload delivered bootstrap state', async () => {
+    const bootTask = makeUITask({ id: 'boot-1', description: 'Boot Task' });
+    const bootWorkflow = { id: 'wf-boot', name: 'Workflow Boot', status: 'running' };
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
+      tasks: [bootTask],
+      workflows: [bootWorkflow],
+      appStartedAtEpochMs: Date.now() - 1000,
+    };
+    const getTasks = vi.fn().mockResolvedValue({ tasks: [bootTask], workflows: [bootWorkflow] });
+    const checkPrStatuses = vi.fn();
+    const reportUiPerf = vi.fn();
+    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
+      getTasks,
+      checkPrStatuses,
+      reportUiPerf,
+      onTaskDelta: vi.fn(() => () => {}),
+      onWorkflowsChanged: vi.fn(() => () => {}),
+    };
+
+    const { result } = renderHook(() => useTasks());
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(getTasks).not.toHaveBeenCalled();
+    expect(result.current.tasks.get('boot-1')?.description).toBe('Boot Task');
+    expect(result.current.workflows.get('wf-boot')?.name).toBe('Workflow Boot');
+    expect(checkPrStatuses).toHaveBeenCalledTimes(1);
+    expect(reportUiPerf).toHaveBeenCalledWith(
+      'useTasks_startup_snapshot_skipped_bootstrap_complete',
+      expect.objectContaining({
+        bootstrapTaskCount: 1,
+        bootstrapWorkflowCount: 1,
+      }),
+    );
+  });
+
+  it('still fires the post-mount getTasks when no bootstrap state was delivered', async () => {
+    delete (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__;
+    const getTasks = vi.fn().mockResolvedValue({ tasks: [], workflows: [] });
+    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
+      getTasks,
+      checkPrStatuses: vi.fn(),
+      onTaskDelta: vi.fn(() => () => {}),
+      onWorkflowsChanged: vi.fn(() => () => {}),
+    };
+
+    renderHook(() => useTasks());
+
+    await waitFor(() => {
+      expect(getTasks).toHaveBeenCalledTimes(1);
+      expect(getTasks).toHaveBeenLastCalledWith(false);
+    });
+  });
+
+  it('refreshes via getTasks when a delta creates a task whose workflow is not in the local map', async () => {
+    const bootTask = makeUITask({ id: 'boot-1', description: 'Boot Task', workflowId: 'wf-known' });
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
+      tasks: [bootTask],
+      workflows: [{ id: 'wf-known', name: 'Known WF', status: 'running' }],
+    };
+    const newWorkflowTask = makeUITask({
+      id: 'wf-new/task-a',
+      workflowId: 'wf-new',
+      description: 'New WF Task',
+    });
+    const getTasks = vi.fn().mockResolvedValue({
+      tasks: [bootTask, newWorkflowTask],
+      workflows: [
+        { id: 'wf-known', name: 'Known WF', status: 'running' },
+        { id: 'wf-new', name: 'New WF', status: 'running' },
+      ],
+    });
+    let deltaCb: ((delta: unknown) => void) | undefined;
+    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
+      getTasks,
+      checkPrStatuses: vi.fn(),
+      onTaskDelta: vi.fn((cb: (delta: unknown) => void) => {
+        deltaCb = cb;
+        return () => {};
+      }),
+      onWorkflowsChanged: vi.fn(() => () => {}),
+    };
+
+    const { result } = renderHook(() => useTasks());
+
+    expect(getTasks).not.toHaveBeenCalled();
+
+    await act(async () => {
+      deltaCb!({ type: 'created', task: newWorkflowTask });
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    });
+
+    await waitFor(() => {
+      expect(getTasks).toHaveBeenCalled();
+      expect(result.current.workflows.has('wf-new')).toBe(true);
+    });
   });
 
   it('clears workflows when onWorkflowsChanged receives an empty array', async () => {
@@ -120,12 +218,18 @@ describe('useTasks', () => {
         .fn()
         .mockReturnValueOnce(firstPending)
         .mockResolvedValue({ tasks: [t1], workflows: [] }),
+      checkPrStatuses: vi.fn(),
       onTaskDelta: vi.fn(() => () => {}),
       onWorkflowsChanged: vi.fn(() => () => {}),
     };
 
     const { result } = renderHook(() => useTasks());
 
+    // First refresh: returns the pending promise (will be released last).
+    await act(async () => {
+      result.current.refreshTasks();
+    });
+    // Second refresh: resolves immediately with t1, bumping the generation past the first.
     await act(async () => {
       result.current.refreshTasks();
     });
@@ -143,7 +247,7 @@ describe('useTasks', () => {
     expect(result.current.tasks.get('t1')?.id).toBe('t1');
   });
 
-  it('does not replace a full bootstrap with a smaller initial snapshot', async () => {
+  it('does not replace a full bootstrap with a smaller non-forced refresh snapshot', async () => {
     const bootA = makeUITask({ id: 'boot-a', description: 'Bootstrap A' });
     const bootB = makeUITask({ id: 'boot-b', description: 'Bootstrap B' });
     const smaller = makeUITask({ id: 'boot-a', description: 'Smaller A' });
@@ -151,11 +255,13 @@ describe('useTasks', () => {
       tasks: [bootA, bootB],
       workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'running' }],
     };
+    const getTasks = vi.fn().mockResolvedValue({
+      tasks: [smaller],
+      workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'running' }],
+    });
     (window as unknown as { invoker: Record<string, unknown> }).invoker = {
-      getTasks: vi.fn().mockResolvedValue({
-        tasks: [smaller],
-        workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'running' }],
-      }),
+      getTasks,
+      checkPrStatuses: vi.fn(),
       reportUiPerf: vi.fn(),
       onTaskDelta: vi.fn(() => () => {}),
       onWorkflowsChanged: vi.fn(() => () => {}),
@@ -163,8 +269,17 @@ describe('useTasks', () => {
 
     const { result } = renderHook(() => useTasks());
 
+    // Bootstrap is authoritative on mount — initial getTasks should be skipped.
+    expect(getTasks).not.toHaveBeenCalled();
+    expect(result.current.tasks.size).toBe(2);
+
+    // A later non-forced refresh that returns a smaller snapshot must not wipe bootstrap.
+    await act(async () => {
+      result.current.refreshTasks();
+    });
+
     await waitFor(() => {
-      expect(window.invoker.getTasks).toHaveBeenCalled();
+      expect(getTasks).toHaveBeenCalledWith(false);
     });
 
     expect(result.current.tasks.size).toBe(2);
