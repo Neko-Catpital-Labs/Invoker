@@ -344,7 +344,7 @@ describe('buildRecordAndPushScript', () => {
     expect(script).toContain('git commit --allow-empty -F');
     expect(script).toContain('git commit -F');
     expect(script).toContain('HASH=$(git rev-parse HEAD)');
-    expect(script).toContain('git push -u origin "$BR"');
+    expect(script).toContain('git push origin "$BR:refs/heads/$BR"');
     expect(script).toContain('printf "%s" "$HASH"');
   });
 
@@ -374,7 +374,7 @@ describe('buildRecordAndPushScript', () => {
 
     expect(script).toContain('git remote set-url invoker-branches "$PUSH_URL"');
     expect(script).toContain('git remote add invoker-branches "$PUSH_URL"');
-    expect(script).toContain('git push -u invoker-branches "$BR"');
+    expect(script).toContain('git push invoker-branches "$BR:refs/heads/$BR"');
   });
 
   it('commits and pushes successfully without preconfigured git identity', () => {

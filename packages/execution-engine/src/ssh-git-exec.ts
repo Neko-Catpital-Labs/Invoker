@@ -348,9 +348,9 @@ if [ -n "$PUSH_URL" ]; then
   else
     git remote add invoker-branches "$PUSH_URL"
   fi
-  git push -u invoker-branches "$BR"
+  git push invoker-branches "$BR:refs/heads/$BR"
 else
-  git push -u origin "$BR"
+  git push origin "$BR:refs/heads/$BR"
 fi
 printf "%s" "$HASH"
 `;
