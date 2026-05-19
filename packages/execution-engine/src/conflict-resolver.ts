@@ -140,7 +140,7 @@ function deriveRemoteManagedWorkspaceInfo(
   };
 }
 
-async function resolveRemoteBranchOwnerPath(
+export async function resolveRemoteBranchOwnerPath(
   branch: string | undefined,
   workspacePath: string,
   target: RemoteTargetConfig,
@@ -333,7 +333,7 @@ function buildRemoteAgentCommand(
   };
 }
 
-function resolveSelectedRemoteTargetId(host: ConflictResolverHost, taskId: string, task: ReturnType<Orchestrator['getTask']> & {}): string | undefined {
+export function resolveSelectedRemoteTargetId(host: ConflictResolverHost, taskId: string, task: ReturnType<Orchestrator['getTask']> & {}): string | undefined {
   const direct = (task.config as { poolMemberId?: string }).poolMemberId;
   if (direct) return direct;
 

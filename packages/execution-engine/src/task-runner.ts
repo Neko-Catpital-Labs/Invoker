@@ -45,6 +45,8 @@ import {
   resolveConflictImpl,
   fixWithAgentImpl,
   spawnAgentFixViaRegistry,
+  resolveRemoteBranchOwnerPath,
+  resolveSelectedRemoteTargetId,
 } from './conflict-resolver.js';
 import { DEFAULT_EXECUTION_AGENT } from './agent.js';
 import {
@@ -1128,9 +1130,10 @@ export class TaskRunner {
   selectExecutor(task: TaskState): Executor {
     let effectiveType = task.config.runnerKind ?? (task.config.isMergeNode ? 'merge' : undefined);
     let selectedPoolMemberId: string | undefined;
+    const explicitPoolMemberId = (task.config as { poolMemberId?: string }).poolMemberId;
     this.pendingPoolSelections.delete(task.id);
 
-    if (task.config.poolId) {
+    if (task.config.poolId && !explicitPoolMemberId) {
       const pool = this.getExecutionPools()[task.config.poolId];
       const member = pool ? this.selectPoolMember(task.config.poolId, pool) : undefined;
       if (member) {
@@ -1148,7 +1151,7 @@ export class TaskRunner {
       effectiveType === 'ssh'
       && task.config.poolId
       && !selectedPoolMemberId
-      && !(task.config as { poolMemberId?: string }).poolMemberId
+      && !explicitPoolMemberId
       && !this.getRemoteTargets()[task.config.poolId]
     ) {
       effectiveType = 'worktree';
@@ -1335,12 +1338,34 @@ export class TaskRunner {
       },
     };
 
+    let publishWorkspacePath = workspacePath;
+    if (task.config.runnerKind === 'ssh') {
+      const poolMemberId = resolveSelectedRemoteTargetId(this, task.id, task);
+      const target = poolMemberId ? this.getRemoteTargetConfig(poolMemberId) : undefined;
+      if (target) {
+        const repairedWorkspacePath = await resolveRemoteBranchOwnerPath(branch, workspacePath, target);
+        if (repairedWorkspacePath && repairedWorkspacePath !== workspacePath) {
+          publishWorkspacePath = repairedWorkspacePath;
+          this.persistence.updateTask(task.id, {
+            execution: {
+              workspacePath: repairedWorkspacePath,
+            },
+          });
+          this.persistence.logEvent?.(task.id, 'debug.approved-fix', {
+            phase: 'publish-approved-fix-remote-path-repaired',
+            previousWorkspacePath: workspacePath,
+            repairedWorkspacePath,
+          });
+        }
+      }
+    }
+
     const executor = this.selectExecutor(task);
     let result: { commitHash?: string; error?: string };
     if (executor instanceof SshExecutor) {
-      result = await executor.publishApprovedFix(workspacePath, request, branch);
+      result = await executor.publishApprovedFix(publishWorkspacePath, request, branch);
     } else if (executor instanceof BaseExecutor) {
-      result = await executor.publishApprovedFix(workspacePath, request, branch);
+      result = await executor.publishApprovedFix(publishWorkspacePath, request, branch);
     } else {
       throw new Error(
         `Executor ${executor.type} does not support approved-fix publish for task ${task.id}`,

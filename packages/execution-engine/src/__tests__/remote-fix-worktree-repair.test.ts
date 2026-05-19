@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fixWithAgentImpl } from '../conflict-resolver.js';
 import type { ConflictResolverHost } from '../conflict-resolver.js';
+import { TaskRunner } from '../task-runner.js';
+import { SshExecutor } from '../ssh-executor.js';
 import type { Orchestrator } from '@invoker/workflow-core';
 import { registerBuiltinAgents } from '../agents/index.js';
 
@@ -114,5 +116,81 @@ branch refs/heads/${branch}
       task.id,
       expect.stringContaining('[Fix with codex (remote)] Output:'),
     );
+  });
+
+  it('repairs the remote workspace path before publishing an approved fix', async () => {
+    const { spawn } = await import('node:child_process');
+    const stalePath = '/home/invoker/.invoker/worktrees/049de5b865cc/experiment-wf-1-test-execution-engine-b68b146f';
+    const ownerPath = '/home/invoker/.invoker/worktrees/049de5b865cc/experiment-wf-1-test-execution-engine-bc7a0b71';
+    const branch = 'experiment/wf-1/test-execution-engine-b68b146f';
+    const task = {
+      id: 'wf-1/test-execution-engine',
+      description: 'Fix execution engine',
+      status: 'awaiting_approval' as const,
+      execution: {
+        workspacePath: stalePath,
+        branch,
+        selectedAttemptId: 'attempt-1',
+      },
+      config: {
+        command: 'pnpm test',
+        runnerKind: 'ssh' as const,
+        poolMemberId: 'remote-1',
+      },
+    };
+    const updateTask = vi.fn();
+    const updateAttempt = vi.fn();
+    const logEvent = vi.fn();
+    const runner = new TaskRunner({
+      orchestrator: { getTask: () => task } as any,
+      persistence: { updateTask, updateAttempt, logEvent } as any,
+      executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, register: () => {}, getAll: () => [] } as any,
+      cwd: '/tmp',
+      remoteTargetsProvider: () => ({
+        'remote-1': {
+          host: 'remote.example',
+          user: 'invoker',
+          sshKeyPath: '/tmp/key',
+          remoteInvokerHome: '/home/invoker/.invoker',
+          managedWorkspaces: true,
+        },
+      }),
+    });
+    const publishSpy = vi.spyOn(SshExecutor.prototype, 'publishApprovedFix').mockResolvedValue({
+      commitHash: 'deadbeef',
+    });
+    const listChild = mockSshChild(
+      `worktree ${ownerPath}
+HEAD deadbeef
+branch refs/heads/${branch}
+`,
+      0,
+    );
+    vi.mocked(spawn).mockReturnValueOnce(listChild as any);
+
+    await runner.publishApprovedFix(task as any);
+
+    expect(updateTask).toHaveBeenCalledWith(task.id, {
+      execution: {
+        workspacePath: ownerPath,
+      },
+    });
+    expect(logEvent).toHaveBeenCalledWith(task.id, 'debug.approved-fix', {
+      phase: 'publish-approved-fix-remote-path-repaired',
+      previousWorkspacePath: stalePath,
+      repairedWorkspacePath: ownerPath,
+    });
+    expect(publishSpy).toHaveBeenCalledWith(
+      ownerPath,
+      expect.objectContaining({ actionId: task.id }),
+      branch,
+    );
+    expect(updateTask).toHaveBeenCalledWith(task.id, {
+      execution: { commit: 'deadbeef' },
+    });
+    expect(updateAttempt).toHaveBeenCalledWith('attempt-1', {
+      branch,
+      commit: 'deadbeef',
+    });
   });
 });
