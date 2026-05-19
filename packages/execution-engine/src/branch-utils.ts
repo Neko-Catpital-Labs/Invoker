@@ -165,7 +165,7 @@ if git -C "$REPO_DIR" rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
   fi
 fi
 if [ "$preserved" -eq 0 ]; then
-  git -C "$REPO_DIR" worktree add -B "$BRANCH" "$WT_DIR" "$BASE"
+  git -C "$REPO_DIR" worktree add --no-track -B "$BRANCH" "$WT_DIR" "$BASE"
 fi`;
 }
 
@@ -179,7 +179,7 @@ function generateCheckoutPreserve(): string {
   fi
 fi
 if [ "$preserved" -eq 0 ]; then
-  git -C "$REPO_DIR" checkout -B "$BRANCH" "$BASE"
+  git -C "$REPO_DIR" checkout --no-track -B "$BRANCH" "$BASE"
 fi`;
 }
 
