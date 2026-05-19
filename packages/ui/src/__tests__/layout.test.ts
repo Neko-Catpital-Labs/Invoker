@@ -21,6 +21,44 @@ function makeTask(
   };
 }
 
+function makeTestElk() {
+  return {
+    layout: async (graph: unknown) => {
+      const layoutGraph = graph as {
+        children?: Array<{ id?: string }>;
+        edges?: Array<{ sources?: string[]; targets?: string[] }>;
+      };
+      const children = layoutGraph.children ?? [];
+      const levels = new Map(children.map((child) => [child.id ?? '', 0]));
+      const edges = layoutGraph.edges ?? [];
+
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const edge of edges) {
+          const source = edge.sources?.[0];
+          const target = edge.targets?.[0];
+          if (!source || !target) continue;
+          const nextLevel = (levels.get(source) ?? 0) + 1;
+          if (nextLevel > (levels.get(target) ?? 0)) {
+            levels.set(target, nextLevel);
+            changed = true;
+          }
+        }
+      }
+
+      return {
+        children: children.map((child, index) => ({
+          id: child.id,
+          x: (levels.get(child.id ?? '') ?? 0) * 400,
+          y: index * 120,
+        })),
+        edges: [],
+      };
+    },
+  };
+}
+
 describe('layoutNodes', () => {
   it('positions nodes at correct x/y for each level', () => {
     // A -> B -> C (linear chain, 3 levels)
@@ -283,7 +321,7 @@ describe('layoutTaskGraph', () => {
     const result = await layoutTaskGraph(tasks, [
       { id: 'local:a->b', source: 'a', target: 'b' },
       { id: 'local:b->c', source: 'b', target: 'c' },
-    ]);
+    ], { elk: makeTestElk() });
 
     expect(result.usedFallback).toBe(false);
     expect(result.positions.size).toBe(tasks.length);
@@ -302,7 +340,7 @@ describe('layoutTaskGraph', () => {
     const result = await layoutTaskGraph(tasks, [
       { id: 'local:a->b', source: 'a', target: 'b' },
       { id: 'local:b->c', source: 'b', target: 'c' },
-    ]);
+    ], { elk: makeTestElk() });
 
     expect(result.positions.get('a')!.x).toBeLessThan(result.positions.get('b')!.x);
     expect(result.positions.get('b')!.x).toBeLessThan(result.positions.get('c')!.x);
@@ -322,8 +360,12 @@ describe('layoutTaskGraph', () => {
       { id: 'local:right->leaf', source: 'right', target: 'leaf' },
     ];
 
-    const reference = await layoutTaskGraph(tasks, edges);
-    const shuffled = await layoutTaskGraph([tasks[3], tasks[1], tasks[0], tasks[2]], [edges[2], edges[0], edges[3], edges[1]]);
+    const reference = await layoutTaskGraph(tasks, edges, { elk: makeTestElk() });
+    const shuffled = await layoutTaskGraph(
+      [tasks[3], tasks[1], tasks[0], tasks[2]],
+      [edges[2], edges[0], edges[3], edges[1]],
+      { elk: makeTestElk() },
+    );
 
     for (const task of tasks) {
       expect(shuffled.positions.get(task.id)).toEqual(reference.positions.get(task.id));
@@ -339,7 +381,7 @@ describe('layoutTaskGraph', () => {
 
     const result = await layoutTaskGraph(tasks, [
       { id: 'external:source->target', source: 'source', target: 'target' },
-    ]);
+    ], { elk: makeTestElk() });
 
     expect(result.positions.get('source')!.x).toBeLessThan(result.positions.get('target')!.x);
   });
