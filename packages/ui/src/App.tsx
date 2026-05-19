@@ -36,6 +36,7 @@ import {
   EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE,
 } from './isExperimentSpawnPivot.js';
 import { parsePlanText } from './lib/plan-parser.js';
+import { useMenuKeyboard, type MenuKeyboardItem } from './lib/menu-keyboard.js';
 import type { SystemDiagnostics } from '@invoker/contracts';
 
 type ModalState =
@@ -116,6 +117,7 @@ function WorkflowContextMenu({
   const menuRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: x, top: y });
   const [showMore, setShowMore] = useState(false);
+  const [focusedIndex, setFocusedIndex] = useState(0);
 
   useLayoutEffect(() => {
     if (!menuRef.current) return;
@@ -172,6 +174,38 @@ function WorkflowContextMenu({
 
   const buttonClass = 'w-full px-3 py-1.5 text-left text-sm text-gray-100 hover:bg-gray-700';
   const dangerButtonClass = 'w-full px-3 py-1.5 text-left text-sm text-red-300 hover:bg-gray-700';
+  const safeEntries = [
+    { label: 'Open Workflow', action: onOpenWorkflow, className: buttonClass },
+    { label: 'Open PR', action: onOpenPr, className: buttonClass },
+    { label: 'Retry Workflow', action: onRetryWorkflow, className: buttonClass },
+    { label: 'Copy Workflow ID', action: onCopyWorkflowId, className: buttonClass },
+  ];
+  const dangerEntries = [
+    { label: 'Rebase and Retry', action: onRebaseRetry, className: buttonClass },
+    { label: 'Rebase and Recreate', action: onRebaseRecreate, className: dangerButtonClass },
+    { label: 'Recreate Workflow', action: onRecreateWorkflow, className: dangerButtonClass },
+    { label: 'Cancel Workflow', action: onCancelWorkflow, className: dangerButtonClass },
+    { label: 'Delete Workflow', action: onDeleteWorkflow, className: dangerButtonClass },
+  ];
+  const renderedEntries = showMore ? [...safeEntries, ...dangerEntries] : safeEntries;
+  const hasMoreButton = !showMore;
+  const expandMore = () => {
+    setShowMore(true);
+    setFocusedIndex(safeEntries.length);
+  };
+  const keyboardItems: MenuKeyboardItem[] = [
+    ...renderedEntries.map((entry) => ({
+      enabled: true,
+      onSelect: () => runAction(entry.action),
+    })),
+    ...(hasMoreButton ? [{ enabled: true, onSelect: expandMore }] : []),
+  ];
+  const handleKeyDown = useMenuKeyboard({
+    menuRef,
+    items: keyboardItems,
+    activeIndex: focusedIndex,
+    setActiveIndex: setFocusedIndex,
+  });
 
   return (
     <div
@@ -180,27 +214,30 @@ function WorkflowContextMenu({
       className="fixed z-50 min-w-[200px] rounded-lg border border-gray-600 bg-gray-800 py-1 shadow-xl"
       style={{ left: position.left, top: position.top }}
       tabIndex={-1}
+      onKeyDown={handleKeyDown}
       onClick={(event) => event.stopPropagation()}
     >
-      <button role="menuitem" onClick={() => runAction(onOpenWorkflow)} className={buttonClass}>
-        Open Workflow
-      </button>
-      <button role="menuitem" onClick={() => runAction(onOpenPr)} className={buttonClass}>
-        Open PR
-      </button>
-      <button role="menuitem" onClick={() => runAction(onRetryWorkflow)} className={buttonClass}>
-        Retry Workflow
-      </button>
-      <button role="menuitem" onClick={() => runAction(onCopyWorkflowId)} className={buttonClass}>
-        Copy Workflow ID
-      </button>
+      {safeEntries.map((entry, index) => (
+        <button
+          key={entry.label}
+          role="menuitem"
+          onClick={() => runAction(entry.action)}
+          onMouseEnter={() => setFocusedIndex(index)}
+          className={`${entry.className} ${focusedIndex === index ? 'bg-gray-700' : ''}`}
+        >
+          {entry.label}
+        </button>
+      ))}
       {!showMore ? (
         <div>
           <div className="my-1 border-t border-gray-600" />
           <button
             role="menuitem"
-            className="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-gray-700"
-            onClick={() => setShowMore(true)}
+            className={`w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-gray-700 ${
+              focusedIndex === renderedEntries.length ? 'bg-gray-700' : ''
+            }`}
+            onClick={expandMore}
+            onMouseEnter={() => setFocusedIndex(renderedEntries.length)}
           >
             More
           </button>
@@ -208,21 +245,20 @@ function WorkflowContextMenu({
       ) : (
         <div>
           <div className="my-1 border-t border-gray-600" />
-          <button role="menuitem" onClick={() => runAction(onRebaseRetry)} className={buttonClass}>
-            Rebase and Retry
-          </button>
-          <button role="menuitem" onClick={() => runAction(onRebaseRecreate)} className={dangerButtonClass}>
-            Rebase and Recreate
-          </button>
-          <button role="menuitem" onClick={() => runAction(onRecreateWorkflow)} className={dangerButtonClass}>
-            Recreate Workflow
-          </button>
-          <button role="menuitem" onClick={() => runAction(onCancelWorkflow)} className={dangerButtonClass}>
-            Cancel Workflow
-          </button>
-          <button role="menuitem" onClick={() => runAction(onDeleteWorkflow)} className={dangerButtonClass}>
-            Delete Workflow
-          </button>
+          {dangerEntries.map((entry, dangerIndex) => {
+            const index = safeEntries.length + dangerIndex;
+            return (
+              <button
+                key={entry.label}
+                role="menuitem"
+                onClick={() => runAction(entry.action)}
+                onMouseEnter={() => setFocusedIndex(index)}
+                className={`${entry.className} ${focusedIndex === index ? 'bg-gray-700' : ''}`}
+              >
+                {entry.label}
+              </button>
+            );
+          })}
         </div>
       )}
     </div>
@@ -719,6 +755,19 @@ export function App() {
         lastShiftAtRef.current = now;
       }
 
+      if ((contextMenu || workflowContextMenu) && (
+        event.key === 'ArrowUp'
+        || event.key === 'ArrowDown'
+        || event.key === 'Enter'
+        || event.key === ' '
+        || event.key === 'Space'
+        || event.key === 'Spacebar'
+      )) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+
       if (searchOpen) {
         if (event.key === 'Escape') {
           event.preventDefault();
@@ -823,6 +872,7 @@ export function App() {
   }, [
     activateSearchResult,
     bottomStatusIndex,
+    contextMenu,
     focusKeyboardRegion,
     handleStatusClick,
     keyboardRegion,
@@ -836,6 +886,7 @@ export function App() {
     selectRelativeNode,
     selectTaskById,
     visibleStatusKeys,
+    workflowContextMenu,
   ]);
   const missingRequiredTool = systemDiagnostics?.tools.find((tool) => tool.required && !tool.installed) ?? null;
   const installedAgentCount = systemDiagnostics?.tools.filter((tool) => (tool.id === 'claude' || tool.id === 'codex') && tool.installed).length ?? 0;
