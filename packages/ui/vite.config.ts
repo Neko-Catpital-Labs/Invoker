@@ -1,6 +1,46 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
+function manualChunks(id: string): string | undefined {
+  if (!id.includes('node_modules')) {
+    return undefined;
+  }
+
+  const normalizedId = id.replaceAll('\\', '/');
+
+  if (normalizedId.includes('/node_modules/elkjs/')) {
+    return 'elk';
+  }
+
+  if (
+    normalizedId.includes('/node_modules/xterm/') ||
+    normalizedId.includes('/node_modules/xterm-addon-fit/')
+  ) {
+    return 'xterm';
+  }
+
+  if (normalizedId.includes('/node_modules/@xyflow/')) {
+    return 'xyflow';
+  }
+
+  if (
+    normalizedId.includes('/node_modules/argparse/') ||
+    normalizedId.includes('/node_modules/js-yaml/')
+  ) {
+    return 'yaml';
+  }
+
+  if (
+    normalizedId.includes('/node_modules/react/') ||
+    normalizedId.includes('/node_modules/react-dom/') ||
+    normalizedId.includes('/node_modules/scheduler/')
+  ) {
+    return 'react';
+  }
+
+  return 'vendor';
+}
+
 export default defineConfig({
   plugins: [react()],
   base: './', // relative paths for Electron
@@ -12,12 +52,7 @@ export default defineConfig({
     minify: 'esbuild', // esbuild is faster and uses less memory than terser
     rollupOptions: {
       output: {
-        manualChunks: {
-          // Split large vendor chunks to reduce memory pressure
-          react: ['react', 'react-dom'],
-          xyflow: ['@xyflow/react'],
-          xterm: ['xterm', 'xterm-addon-fit'],
-        },
+        manualChunks,
       },
     },
   },
