@@ -242,6 +242,8 @@ ${content}${content.endsWith('\n') ? '' : '\n'}${delimiter}
     const runner = this.buildRunnerScript();
     const payload = this.buildPayloadScript(options.payload);
     const provision = options.managed ? this.buildProvisionScript() : undefined;
+    const heartbeatMarker = this.shellQuote(SshExecutor.REMOTE_HEARTBEAT_MARKER);
+    const heartbeatIntervalSeconds = this.remoteHeartbeatIntervalSeconds;
     const stagingTokenExpression = this.buildStagingDirExpression(options.executionId, options.actionId);
     const provisionSection = provision
       ? `${this.renderHeredocFile('"$PROVISION_PATH"', provision, 'provision')}
@@ -269,8 +271,29 @@ PROVISION_PATH="$STAGING_DIR/provision.sh"
 cleanup_runtime() {
   local status="$1"
   trap - EXIT HUP INT TERM
+  stop_bootstrap_heartbeat
   rm -rf "$STAGING_DIR" >/dev/null 2>&1 || true
   exit "$status"
+}
+BOOTSTRAP_HEARTBEAT_PID=""
+INVOKER_HEARTBEAT_MARKER=${heartbeatMarker}
+INVOKER_HEARTBEAT_INTERVAL_SECONDS=${heartbeatIntervalSeconds}
+start_bootstrap_heartbeat() {
+  printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
+  (
+    while true; do
+      sleep "$INVOKER_HEARTBEAT_INTERVAL_SECONDS"
+      printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
+    done
+  ) &
+  BOOTSTRAP_HEARTBEAT_PID=$!
+}
+stop_bootstrap_heartbeat() {
+  if [ -n "\${BOOTSTRAP_HEARTBEAT_PID:-}" ]; then
+    kill "$BOOTSTRAP_HEARTBEAT_PID" >/dev/null 2>&1 || true
+    wait "$BOOTSTRAP_HEARTBEAT_PID" 2>/dev/null || true
+    BOOTSTRAP_HEARTBEAT_PID=""
+  fi
 }
 trap 'cleanup_runtime "$?"' EXIT
 trap 'cleanup_runtime 129' HUP
@@ -282,7 +305,9 @@ ${this.renderHeredocFile('"$RUNNER_PATH"', runner, 'runner')}${this.renderHeredo
 WT=$(normalize_remote_path ${this.shellQuote(options.workspacePath)})
 cd "$WT"
 ${options.envExports}
-${runProvisionSection}"$RUNNER_PATH" "$PAYLOAD_PATH"
+start_bootstrap_heartbeat
+${runProvisionSection}stop_bootstrap_heartbeat
+"$RUNNER_PATH" "$PAYLOAD_PATH"
 `;
   }
 

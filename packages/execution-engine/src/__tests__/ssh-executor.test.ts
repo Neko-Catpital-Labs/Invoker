@@ -214,6 +214,10 @@ describe('SshExecutor managed workspace mode', () => {
     expect(callScript).toContain('cat > "$RUNNER_PATH" <<');
     expect(callScript).toContain('cat > "$PAYLOAD_PATH" <<');
     expect(callScript).toContain('cat > "$PROVISION_PATH" <<');
+    expect(callScript).toContain('start_bootstrap_heartbeat');
+    expect(callScript).toContain('stop_bootstrap_heartbeat');
+    expect(callScript.indexOf('start_bootstrap_heartbeat')).toBeLessThan(callScript.indexOf('. "$PROVISION_PATH"'));
+    expect(callScript.indexOf('stop_bootstrap_heartbeat')).toBeLessThan(callScript.indexOf('"$RUNNER_PATH" "$PAYLOAD_PATH"'));
     expect(callScript).toContain('"$RUNNER_PATH" "$PAYLOAD_PATH"');
     expect(callScript).toContain('rm -rf "$STAGING_DIR"');
     expect(callScript).toContain("trap 'cleanup_runtime \"$?\"' EXIT");
@@ -1013,6 +1017,8 @@ describe('SshExecutor entry lifecycle', () => {
     const writeMock = (proc.stdin as any).write as ReturnType<typeof vi.fn>;
     const script = writeMock.mock.calls[0]![0] as string;
     expect(script).toContain('INVOKER_HEARTBEAT_INTERVAL_SECONDS=11');
+    expect(script).toContain('start_bootstrap_heartbeat');
+    expect(script).toContain('stop_bootstrap_heartbeat');
     expect(script).toContain('RUNNER_PATH="$STAGING_DIR/runner.sh"');
     expect(script).toContain('"$RUNNER_PATH" "$PAYLOAD_PATH"');
     expect(script).not.toContain('base64 -d');
