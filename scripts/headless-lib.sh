@@ -22,6 +22,9 @@ RUNNER="$REPO_ROOT/run.sh"
 ELECTRON="$REPO_ROOT/scripts/electron.cjs"
 MAIN="$REPO_ROOT/packages/app/dist/main.js"
 IPC_HELPER="$REPO_ROOT/scripts/headless-ipc.js"
+if [[ -n "${INVOKER_HEADLESS_IPC_HELPER:-}" ]]; then
+  IPC_HELPER="$INVOKER_HEADLESS_IPC_HELPER"
+fi
 STANDALONE_MODE="${INVOKER_HEADLESS_STANDALONE:-0}"
 
 # ---------------------------------------------------------------------------
@@ -60,6 +63,10 @@ headless_mutation() {
 
 # Extract workflow IDs (label format) from a query.
 headless_workflow_ids() {
+  if [[ -n "${INVOKER_HEADLESS_WORKFLOW_IDS_FILE:-}" ]]; then
+    grep -E '^wf-[0-9]+-[0-9]+$' "$INVOKER_HEADLESS_WORKFLOW_IDS_FILE" || true
+    return
+  fi
   headless_query "$@" | grep -E '^wf-[0-9]+-[0-9]+$' || true
 }
 
