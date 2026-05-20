@@ -473,6 +473,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
          )
          WHERE t.runner_kind = 'ssh'
            AND (t.pool_member_id IS NULL OR TRIM(t.pool_member_id) = '')
+           AND t.workspace_path IS NOT NULL
+           AND TRIM(t.workspace_path) != ''
            AND e.payload IS NOT NULL`,
       ) as Array<{ id: string; payload?: string | null }>;
       for (const row of missingSshPoolRows) {
@@ -484,7 +486,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
                task_state_version = task_state_version + 1
            WHERE id = ?
              AND runner_kind = 'ssh'
-             AND (pool_member_id IS NULL OR TRIM(pool_member_id) = '')`,
+             AND (pool_member_id IS NULL OR TRIM(pool_member_id) = '')
+             AND workspace_path IS NOT NULL
+             AND TRIM(workspace_path) != ''`,
           [poolMemberId, row.id],
         );
         report.backfilledMissingSshPoolMemberIds += this.db.getRowsModified();
