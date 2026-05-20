@@ -143,37 +143,7 @@ fi
 CLONE="$INVOKER_HOME/repos/$H"
 mkdir -p "$(dirname "$CLONE")"
 if [ ! -d "$CLONE/.git" ]; then git clone "$REPO" "$CLONE"; fi
-FETCH_LOCK="$CLONE/.git/invoker-fetch.lock"
-acquire_fetch_lock() {
-  local waited=0
-  while ! mkdir "$FETCH_LOCK" 2>/dev/null; do
-    if [ -f "$FETCH_LOCK/pid" ] && ! kill -0 "$(cat "$FETCH_LOCK/pid" 2>/dev/null)" 2>/dev/null; then
-      rm -rf "$FETCH_LOCK"
-      continue
-    fi
-    if [ "$waited" -ge 300 ]; then
-      echo "Timed out waiting for git fetch lock: $FETCH_LOCK" >&2
-      exit 33
-    fi
-    sleep 1
-    waited=$((waited + 1))
-  done
-  printf '%s\\n' "$$" > "$FETCH_LOCK/pid"
-  trap 'rm -rf "$FETCH_LOCK"' EXIT
-}
-cleanup_stale_ref_locks() {
-  find "$CLONE/.git/refs/remotes" -name '*.lock' -mmin +10 -type f -delete 2>/dev/null || true
-}
-fetch_with_retry() {
-  if "$@"; then
-    return 0
-  fi
-  cleanup_stale_ref_locks
-  sleep 1
-  "$@"
-}
-acquire_fetch_lock
-if ! fetch_with_retry git -C "$CLONE" fetch --all --prune; then
+if ! git -C "$CLONE" fetch --all --prune; then
   echo "[WARNING] Git fetch failed for $CLONE" >&2
   echo "[WARNING] Continuing with existing refs. Tasks may use stale commits." >&2
   echo "__INVOKER_FETCH_FAILED__=1"
@@ -181,7 +151,7 @@ else
   echo "__INVOKER_FETCH_SUCCESS__=1"
 fi
 if [ -n "$BRANCH_REPO" ]; then
-  if ! fetch_with_retry git -C "$CLONE" fetch "$BRANCH_REPO" '+refs/heads/*:refs/remotes/invoker-branches/*' --prune; then
+  if ! git -C "$CLONE" fetch "$BRANCH_REPO" '+refs/heads/*:refs/remotes/invoker-branches/*' --prune; then
     echo "BRANCH_REPO_FETCH_FAILED=$BRANCH_REPO" >&2
     exit 32
   fi
