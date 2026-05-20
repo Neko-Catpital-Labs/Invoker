@@ -215,14 +215,17 @@ async function seed() {
       const yaml = planToYaml(buildPlan(idx));
       await page.evaluate((y) => window.invoker.loadPlan(y), yaml);
     }
-    const expected = WORKFLOW_COUNT * TASKS_PER_WORKFLOW;
     const seeded = await page.evaluate(() => window.invoker.getTasks(true));
     const tasks = Array.isArray(seeded) ? seeded : (seeded.tasks ?? []);
     const workflows = Array.isArray(seeded) ? [] : (seeded.workflows ?? []);
-    if (tasks.length !== expected) {
-      throw new Error(`seed failed: expected ${expected} tasks, got ${tasks.length}`);
+    // Orchestrator auto-creates one merge node per workflow (`__merge__<wf>`)
+    // regardless of onFinish, so the expected total includes those nodes.
+    const expectedUser = WORKFLOW_COUNT * TASKS_PER_WORKFLOW;
+    const userTasks = tasks.filter((t) => !t.config?.isMergeNode);
+    if (userTasks.length !== expectedUser) {
+      throw new Error(`seed failed: expected ${expectedUser} user tasks, got ${userTasks.length} (total ${tasks.length})`);
     }
-    console.error(`repro: seeded ${workflows.length} workflows / ${tasks.length} tasks`);
+    console.error(`repro: seeded ${workflows.length} workflows / ${tasks.length} tasks (${userTasks.length} user + merge nodes)`);
   } finally {
     await app.close();
   }
@@ -281,6 +284,10 @@ export REPRO_REPO_URL="$REPO_URL"
 export REPRO_WORKFLOW_COUNT="$WORKFLOW_COUNT"
 export REPRO_TASKS_PER_WORKFLOW="$TASKS_PER_WORKFLOW"
 export REPRO_RESULT_JSON="$RESULT_JSON"
+# The driver lives in $TMP_DIR, so Node's CJS resolver cannot walk up into the
+# workspace's node_modules. Pin NODE_PATH to the @invoker/app and repo-root
+# node_modules so require('@playwright/test') succeeds.
+export NODE_PATH="$ROOT_DIR/packages/app/node_modules:$ROOT_DIR/node_modules${NODE_PATH:+:$NODE_PATH}"
 
 PLAYWRIGHT_RUN=(pnpm --filter @invoker/app exec node "$DRIVER_JS")
 if [[ "$(uname)" == "Linux" && -z "${DISPLAY:-}" ]]; then
