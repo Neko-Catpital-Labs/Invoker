@@ -205,9 +205,18 @@ describe('SshExecutor managed workspace mode', () => {
     expect(callExecId).toBe(handle.executionId);
     expect(callReq).toBe(req);
     expect(callHandle).toBe(handle);
-    // Provision command is base64-encoded in the script, check for presence
     expect(callScript).toMatch(/Provisioning remote worktree/);
-    expect(callScript).toMatch(/base64 -d/);
+    expect(callScript).not.toMatch(/base64 -d/);
+    expect(callScript).toContain(`/runtime/ssh-executor/${callExecId}-test-task`);
+    expect(callScript).toContain('RUNNER_PATH="$STAGING_DIR/runner.sh"');
+    expect(callScript).toContain('PAYLOAD_PATH="$STAGING_DIR/payload.sh"');
+    expect(callScript).toContain('PROVISION_PATH="$STAGING_DIR/provision.sh"');
+    expect(callScript).toContain('cat > "$RUNNER_PATH" <<');
+    expect(callScript).toContain('cat > "$PAYLOAD_PATH" <<');
+    expect(callScript).toContain('cat > "$PROVISION_PATH" <<');
+    expect(callScript).toContain('"$RUNNER_PATH" "$PAYLOAD_PATH"');
+    expect(callScript).toContain('rm -rf "$STAGING_DIR"');
+    expect(callScript).toContain("trap 'cleanup_runtime \"$?\"' EXIT");
     expect(callAgentId).toBeUndefined();
     expect(callFinalize).toEqual({ branch: handle.branch, worktreePath: handle.workspacePath });
   });
@@ -589,7 +598,7 @@ branch refs/heads/${targetBranch}
 
     const execSpy = vi.spyOn(ssh, 'execRemoteCapture').mockResolvedValue('');
     const setupSpy = vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
-    vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+    const spawnStub = vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
       (_executionId: string, _request: any, handle: any) => handle,
     );
 
@@ -611,6 +620,16 @@ branch refs/heads/${targetBranch}
     // No clone/fetch/worktree/provision should happen
     expect(execSpy).not.toHaveBeenCalled();
     expect(setupSpy).not.toHaveBeenCalled();
+    expect(spawnStub).toHaveBeenCalledTimes(1);
+    const [callExecId, , , callScript] = spawnStub.mock.calls[0];
+    expect(callScript).not.toContain('base64 -d');
+    expect(callScript).toContain(`/runtime/ssh-executor/${callExecId}-test-task`);
+    expect(callScript).toContain('RUNNER_PATH="$STAGING_DIR/runner.sh"');
+    expect(callScript).toContain('PAYLOAD_PATH="$STAGING_DIR/payload.sh"');
+    expect(callScript).not.toContain('cat > "$PROVISION_PATH"');
+    expect(callScript).toContain('WT=$(normalize_remote_path \'/custom/path\')');
+    expect(callScript).toContain('"$RUNNER_PATH" "$PAYLOAD_PATH"');
+    expect(callScript).toContain('rm -rf "$STAGING_DIR"');
   });
 
   it('BYO mode throws when workspacePath is missing', async () => {
@@ -994,6 +1013,9 @@ describe('SshExecutor entry lifecycle', () => {
     const writeMock = (proc.stdin as any).write as ReturnType<typeof vi.fn>;
     const script = writeMock.mock.calls[0]![0] as string;
     expect(script).toContain('INVOKER_HEARTBEAT_INTERVAL_SECONDS=11');
+    expect(script).toContain('RUNNER_PATH="$STAGING_DIR/runner.sh"');
+    expect(script).toContain('"$RUNNER_PATH" "$PAYLOAD_PATH"');
+    expect(script).not.toContain('base64 -d');
     proc.emit('close', 0, null);
     await new Promise((r) => setTimeout(r, 50));
   });
@@ -1031,7 +1053,7 @@ describe('SshExecutor entry lifecycle', () => {
     expect(err.stdout).toBe('COMMIT_HASH=abc123def456\n');
   });
 
-  it('managed mode with remoteInvokerHome="~/.invoker" uses base64-decode + tilde-normalize (Bug #1 variant)', async () => {
+  it('managed mode with remoteInvokerHome="~/.invoker" stages runtime scripts and tilde-normalizes paths', async () => {
     const ssh2 = new SshExecutor({
       host: 'localhost',
       user: 'testuser',
@@ -1069,19 +1091,19 @@ describe('SshExecutor entry lifecycle', () => {
     expect(writeMock).toHaveBeenCalled();
     const script = writeMock.mock.calls[0]![0] as string;
 
-    // Bug #1 fix: base64-decode + tilde-normalize block replaces the old
-    // buggy `WT="~/.invoker/..."` literal (which bash would NOT expand).
-    expect(script).toContain('WT=$(echo ');
-    expect(script).toContain('| base64 -d)');
-    expect(script).toContain(`if [[ "$WT" == '~' ]]; then`);
-    expect(script).toContain('WT="$HOME"');
+    // The workspace path is transported as a quoted literal and normalized on
+    // the remote, avoiding the old buggy `WT="~/.invoker/..."` literal (which
+    // bash would NOT expand) and avoiding base64 runtime delivery.
+    expect(script).not.toContain('base64 -d');
+    expect(script).toContain("INVOKER_HOME=$(normalize_remote_path '~/.invoker')");
+    expect(script).toContain('WT=$(normalize_remote_path \'~/.invoker/worktrees/');
+    expect(script).toContain(`if [[ "$path" == '~' ]]; then`);
     expect(script).not.toContain('WT="~/.invoker/');
-
-    // Prove the decoded path is the tilde-prefixed canonical worktree path.
-    const match = script.match(/WT=\$\(echo (\S+) \| base64 -d\)/);
-    expect(match).toBeTruthy();
-    const decoded = Buffer.from(match![1]!, 'base64').toString('utf-8');
-    expect(decoded).toMatch(/^~\/\.invoker\/worktrees\/[a-f0-9]{12}\//);
+    expect(script).toContain('RUNNER_PATH="$STAGING_DIR/runner.sh"');
+    expect(script).toContain('PAYLOAD_PATH="$STAGING_DIR/payload.sh"');
+    expect(script).toContain('PROVISION_PATH="$STAGING_DIR/provision.sh"');
+    expect(script).toContain('"$RUNNER_PATH" "$PAYLOAD_PATH"');
+    expect(script).toContain('rm -rf "$STAGING_DIR"');
 
     // Let the mock process finish so heartbeat and entry state clean up.
     proc.emit('close', 0, null);
@@ -1147,7 +1169,7 @@ describe('SshExecutor entry lifecycle', () => {
     expect(second.workspacePath).toBe(secondOpts?.worktreeDir);
   });
 
-  it('managed mode with absolute remoteInvokerHome still uses base64-decode (normalize is a no-op)', async () => {
+  it('managed mode with absolute remoteInvokerHome stages scripts under that home', async () => {
     const ssh2 = new SshExecutor({
       host: 'localhost',
       user: 'testuser',
@@ -1182,16 +1204,13 @@ describe('SshExecutor entry lifecycle', () => {
     const writeMock = (proc.stdin as any).write as ReturnType<typeof vi.fn>;
     const script = writeMock.mock.calls[0]![0] as string;
 
-    // Same base64-decode pattern regardless of absolute vs tilde path.
-    expect(script).toContain('WT=$(echo ');
-    expect(script).toContain('| base64 -d)');
-
-    // Decoded path starts with /opt/invoker; the normalize block is a no-op
-    // because $WT does not begin with '~'.
-    const match = script.match(/WT=\$\(echo (\S+) \| base64 -d\)/);
-    expect(match).toBeTruthy();
-    const decoded = Buffer.from(match![1]!, 'base64').toString('utf-8');
-    expect(decoded).toMatch(/^\/opt\/invoker\/worktrees\/[a-f0-9]{12}\//);
+    expect(script).not.toContain('base64 -d');
+    expect(script).toContain("INVOKER_HOME=$(normalize_remote_path '/opt/invoker')");
+    expect(script).toContain('STAGING_DIR="$INVOKER_HOME/runtime/ssh-executor/');
+    expect(script).toContain('WT=$(normalize_remote_path \'/opt/invoker/worktrees/');
+    expect(script).toContain('RUNNER_PATH="$STAGING_DIR/runner.sh"');
+    expect(script).toContain('PAYLOAD_PATH="$STAGING_DIR/payload.sh"');
+    expect(script).toContain('"$RUNNER_PATH" "$PAYLOAD_PATH"');
 
     proc.emit('close', 0, null);
     await new Promise((r) => setTimeout(r, 50));
