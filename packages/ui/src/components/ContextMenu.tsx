@@ -6,13 +6,15 @@
  * Features:
  * - Status-adaptive ordering (failed → Fix first, running → Open Terminal first, etc.)
  * - ARIA roles and keyboard navigation (ArrowUp/Down, Enter/Space)
+ * - Auto-focuses the menu on open so keyboard nav works without an extra click
  * - Viewport clamping (flips if overflows bottom/right)
  * - Labeled separators for task and danger zones
  */
 
-import { useEffect, useRef, useState, useLayoutEffect } from 'react';
+import { useEffect, useMemo, useRef, useState, useLayoutEffect } from 'react';
 import type { TaskState } from '../types.js';
 import { getMenuItems, type MenuItem } from '../lib/context-menu-items.js';
+import { firstEnabledIndex, nextEnabledIndex } from '../lib/menu-keyboard.js';
 import { EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE } from '../isExperimentSpawnPivot.js';
 
 interface ContextMenuProps {
@@ -28,6 +30,12 @@ interface ContextMenuProps {
   onClose: () => void;
 }
 
+type MenuEntry =
+  | { kind: 'item'; item: MenuItem }
+  | { kind: 'more' };
+
+const MORE_ENTRY_ID = '__more__';
+
 export function ContextMenu({
   x,
   y,
@@ -41,7 +49,6 @@ export function ContextMenu({
   onClose,
 }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
-  const [focusedIndex, setFocusedIndex] = useState(0);
   const [position, setPosition] = useState({ left: x, top: y });
   const [showMore, setShowMore] = useState(false);
 
@@ -58,18 +65,52 @@ export function ContextMenu({
 
   const safeItems = availableItems.filter((item) => item.variant !== 'danger');
   const dangerItems = availableItems.filter((item) => item.variant === 'danger');
-  const hasMoreButton = dangerItems.length > 0 && !showMore;
-  const renderedItems: MenuItem[] = showMore ? [...safeItems, ...dangerItems] : safeItems;
+  const safeItemCount = safeItems.length;
 
-  // Find first enabled item index
-  const firstEnabledIndex = renderedItems.findIndex((item) => item.enabled);
-
-  // Auto-focus first enabled item on mount
-  useEffect(() => {
-    if (firstEnabledIndex >= 0) {
-      setFocusedIndex(firstEnabledIndex);
+  // Build the navigable entry list. The "More" affordance, when visible, is
+  // included so ArrowUp/ArrowDown can land on it and Enter/Space expands it.
+  const entries = useMemo<MenuEntry[]>(() => {
+    if (showMore) {
+      return [...safeItems, ...dangerItems].map((item) => ({ kind: 'item', item }));
     }
-  }, [firstEnabledIndex]);
+    const base: MenuEntry[] = safeItems.map((item) => ({ kind: 'item', item }));
+    if (dangerItems.length > 0) base.push({ kind: 'more' });
+    return base;
+  }, [safeItems, dangerItems, showMore]);
+
+  const enabledFlags = useMemo(
+    () => entries.map((entry) => (entry.kind === 'more' ? true : entry.item.enabled)),
+    [entries],
+  );
+
+  const [focusedIndex, setFocusedIndex] = useState(() => firstEnabledIndex(enabledFlags));
+
+  // Keep the highlight on an enabled entry when the entry list changes.
+  useEffect(() => {
+    setFocusedIndex((prev) => (enabledFlags[prev] ? prev : firstEnabledIndex(enabledFlags)));
+  }, [enabledFlags]);
+
+  // When the user expands More, move the highlight to the first newly-revealed
+  // (danger) entry so a follow-up Enter does the obvious thing.
+  const wasShowMoreRef = useRef(showMore);
+  useEffect(() => {
+    if (!wasShowMoreRef.current && showMore) {
+      const dangerStart = safeItemCount;
+      const dangerEnabled = enabledFlags
+        .slice(dangerStart)
+        .findIndex((flag) => flag);
+      if (dangerEnabled >= 0) {
+        setFocusedIndex(dangerStart + dangerEnabled);
+      }
+    }
+    wasShowMoreRef.current = showMore;
+  }, [showMore, safeItemCount, enabledFlags]);
+
+  // Focus the menu container so its onKeyDown handler receives keys without
+  // the user having to click first.
+  useEffect(() => {
+    menuRef.current?.focus({ preventScroll: true });
+  }, []);
 
   // Viewport clamping: flip if menu overflows bottom or right
   useLayoutEffect(() => {
@@ -97,7 +138,7 @@ export function ContextMenu({
     top = Math.max(0, Math.min(top, viewportHeight - rect.height));
 
     setPosition({ left, top });
-  }, [x, y]);
+  }, [x, y, showMore]);
 
   // Capture-phase outside dismissal stays reliable even if graph layers stop
   // bubbling on mouse/pointer events before they reach document listeners.
@@ -133,31 +174,6 @@ export function ContextMenu({
     };
   }, [onClose]);
 
-  // Keyboard navigation
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    const enabledIndices = renderedItems
-      .map((item, idx) => (item.enabled ? idx : -1))
-      .filter((idx) => idx >= 0);
-
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const nextPos = (currentPos + 1) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[nextPos]);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const prevPos = (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[prevPos]);
-    } else if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      const item = renderedItems[focusedIndex];
-      if (item?.enabled) {
-        handleItemClick(item);
-      }
-    }
-  };
-
   // Handle menu item click
   const handleItemClick = (item: MenuItem) => {
     if (!item.enabled) return;
@@ -185,6 +201,32 @@ export function ContextMenu({
         break;
     }
     onClose();
+  };
+
+  const activateEntry = (entry: MenuEntry | undefined) => {
+    if (!entry) return;
+    if (entry.kind === 'more') {
+      setShowMore(true);
+      return;
+    }
+    if (entry.item.enabled) handleItemClick(entry.item);
+  };
+
+  // Keyboard navigation
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      e.stopPropagation();
+      setFocusedIndex((prev) => nextEnabledIndex(enabledFlags, prev, 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      e.stopPropagation();
+      setFocusedIndex((prev) => nextEnabledIndex(enabledFlags, prev, -1));
+    } else if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      e.stopPropagation();
+      activateEntry(entries[focusedIndex]);
+    }
   };
 
   // Get variant styles
@@ -222,8 +264,27 @@ export function ContextMenu({
       onClick={(event) => event.stopPropagation()}
       tabIndex={-1}
     >
-      {renderedItems.map((item, idx) => {
+      {entries.map((entry, idx) => {
         const isFocused = idx === focusedIndex;
+        if (entry.kind === 'more') {
+          return (
+            <div key={MORE_ENTRY_ID}>
+              <div className="border-t border-gray-600 my-1" />
+              <button
+                role="menuitem"
+                className={`w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 ${
+                  isFocused ? 'bg-gray-700' : ''
+                }`}
+                onClick={() => setShowMore(true)}
+                onMouseEnter={() => setFocusedIndex(idx)}
+              >
+                More
+              </button>
+            </div>
+          );
+        }
+
+        const item = entry.item;
         const tooltip = !item.enabled && item.id === 'open-terminal'
           ? EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE
           : undefined;
@@ -249,18 +310,6 @@ export function ContextMenu({
           </div>
         );
       })}
-      {hasMoreButton && (
-        <div>
-          <div className="border-t border-gray-600 my-1" />
-          <button
-            role="menuitem"
-            className="w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
-            onClick={() => setShowMore(true)}
-          >
-            More
-          </button>
-        </div>
-      )}
     </div>
   );
 }
