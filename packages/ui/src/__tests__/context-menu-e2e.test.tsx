@@ -105,6 +105,40 @@ describe('Context menu (component)', () => {
     expect(screen.queryByText('Delete Workflow')).not.toBeInTheDocument();
   });
 
+  it('task context menu focuses and activates the highlighted item from the keyboard', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    const menu = await screen.findByRole('menu');
+
+    await waitFor(() => expect(document.activeElement).toBe(menu));
+    fireEvent.keyDown(menu, { key: ' ' });
+
+    await waitFor(() => expect(mock.api.restartTask).toHaveBeenCalledWith('task-alpha'));
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+
+  it('workflow context menu roves to More and activates expanded actions by keyboard', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+
+    await waitFor(() => expect(document.activeElement).toBe(menu));
+    fireEvent.keyDown(menu, { key: 'ArrowUp' });
+    fireEvent.keyDown(menu, { key: 'Enter' });
+
+    expect(await screen.findByText('Rebase and Recreate')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Rebase and Recreate')).toHaveClass('bg-gray-700'));
+    fireEvent.keyDown(menu, { key: 'Enter' });
+
+    await waitFor(() => expect(mock.api.rebaseRecreate).toHaveBeenCalledWith('wf-1'));
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+
   it('workflow context menu retries workflow', async () => {
     await setup();
     fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
