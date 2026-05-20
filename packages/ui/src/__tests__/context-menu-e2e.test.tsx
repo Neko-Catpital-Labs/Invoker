@@ -158,4 +158,75 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
+
+  it('focuses the menu container when the workflow context menu opens', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    await waitFor(() => expect(document.activeElement).toBe(menu));
+  });
+
+  it('workflow context menu activates highlighted item with Enter after ArrowDown', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    // Starts focused on Open Workflow (index 0). ArrowDown twice → Retry Workflow.
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'Enter' });
+    await waitFor(() => expect(mock.api.retryWorkflow).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('workflow context menu activates highlighted item with Space', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    // Index 0 → ArrowDown 3x → Copy Workflow ID (index 3). Space activates.
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: ' ' });
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('workflow context menu reaches More via keyboard and lands on first revealed item', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    // ArrowUp from item 0 wraps to More (last in the cycle); Enter expands it.
+    fireEvent.keyDown(menu, { key: 'ArrowUp' });
+    fireEvent.keyDown(menu, { key: 'Enter' });
+    // After More expands, Enter activates the now-highlighted first revealed
+    // entry ("Rebase and Retry").
+    expect(await screen.findByText('Rebase and Retry')).toBeInTheDocument();
+    fireEvent.keyDown(menu, { key: 'Enter' });
+    await waitFor(() => expect(mock.api.rebaseRetry).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('task context menu auto-focuses on open and activates first item with Enter', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    const menu = await screen.findByRole('menu');
+    await waitFor(() => expect(document.activeElement).toBe(menu));
+    // Pending task: first enabled item is "Restart Task". Enter activates it.
+    fireEvent.keyDown(menu, { key: 'Enter' });
+    await waitFor(() => expect(mock.api.restartTask).toHaveBeenCalledWith('task-alpha'));
+  });
+
+  it('open context menu owns Enter — App graph shortcut does not steal it', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    // Dispatch a document-level keydown for Enter — the App-level handler
+    // must defer to the menu and not re-open the context menu or swallow it.
+    fireEvent.keyDown(document, { key: 'Enter' });
+    // The menu should still be present, and no action should have fired
+    // through the menu since the event was not directed at the menu element.
+    expect(menu).toBeInTheDocument();
+    expect(mock.api.retryWorkflow).not.toHaveBeenCalled();
+  });
 });
