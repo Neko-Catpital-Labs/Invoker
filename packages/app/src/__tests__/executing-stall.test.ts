@@ -6,7 +6,23 @@ describe('evaluateExecutingStall', () => {
   const timeoutMs = 120_000;
   const startedAt = new Date(now.getTime() - 5 * 60_000);
 
-  it('treats stale remote heartbeat as stalled for SSH tasks', () => {
+  it('keeps SSH task healthy when remote heartbeat is stale but attempt lease is still valid', () => {
+    const result = evaluateExecutingStall({
+      now,
+      phase: 'executing',
+      runnerKind: 'ssh',
+      executingStartedAt: startedAt,
+      executorHeartbeatAt: new Date(now.getTime() - 10_000),
+      remoteHeartbeatAt: new Date(now.getTime() - 4 * 60_000),
+      leaseExpiresAt: new Date(now.getTime() + 10 * 60_000),
+      executingStallTimeoutMs: timeoutMs,
+    });
+
+    expect(result.executingStalled).toBe(false);
+    expect(result.heartbeatStale).toBe(true);
+  });
+
+  it('treats stale remote heartbeat as stalled for SSH tasks without a valid lease', () => {
     const result = evaluateExecutingStall({
       now,
       phase: 'executing',

@@ -97,7 +97,7 @@ describe('buildMirrorCloneScript', () => {
     expect(script).toContain('INVOKER_HOME=$(echo');
     expect(script).toContain('CLONE="$INVOKER_HOME/repos/$H"');
     expect(script).toContain('if [ ! -d "$CLONE/.git" ]; then git clone "$REPO" "$CLONE"; fi');
-    expect(script).toContain('if ! git -C "$CLONE" fetch --all --prune; then');
+    expect(script).toContain('if ! fetch_with_retry git -C "$CLONE" fetch --all --prune; then');
     expect(script).toContain('__INVOKER_FETCH_FAILED__=1');
     expect(script).toContain('__INVOKER_FETCH_SUCCESS__=1');
     expect(script).toContain('__INVOKER_BASE_REF__');
@@ -157,6 +157,21 @@ describe('buildMirrorCloneScript', () => {
     expect(script).toContain('git -C "$CLONE" fetch "$BRANCH_REPO" \'+refs/heads/*:refs/remotes/invoker-branches/*\' --prune');
     expect(script).toContain('BRANCH_REPO_FETCH_FAILED=$BRANCH_REPO');
     expect(script).toContain('exit 32');
+  });
+
+  it('serializes remote mirror fetches and retries after stale ref-lock cleanup', () => {
+    const script = buildMirrorCloneScript({
+      repoUrl: 'git@github.com:owner/repo.git',
+      branchRepoUrl: 'git@github.com:fork/repo.git',
+      repoHash: 'abc123',
+      baseRef: 'main',
+    });
+
+    expect(script).toContain('FETCH_LOCK="$CLONE/.git/invoker-fetch.lock"');
+    expect(script).toContain('while ! mkdir "$FETCH_LOCK"');
+    expect(script).toContain("find \"$CLONE/.git/refs/remotes\" -name '*.lock' -mmin +10 -type f -delete");
+    expect(script).toContain('fetch_with_retry git -C "$CLONE" fetch --all --prune');
+    expect(script).toContain('fetch_with_retry git -C "$CLONE" fetch "$BRANCH_REPO"');
   });
 });
 
