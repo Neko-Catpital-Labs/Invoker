@@ -301,11 +301,24 @@ export class TaskRunner {
   }
 
   private collectManagedWorkflowBranches(workflowId: string): string[] {
-    return this.orchestrator
-      .getAllTasks()
-      .filter((t) => t.config.workflowId === workflowId && !t.config.isMergeNode)
-      .map((t) => t.execution.branch ?? `invoker/${t.id}`)
-      .filter((b) => isInvokerManagedPoolBranch(b));
+    const branches: string[] = [];
+    const seen = new Set<string>();
+    const addBranch = (branch: string | undefined): void => {
+      const trimmed = branch?.trim();
+      if (!trimmed || !isInvokerManagedPoolBranch(trimmed) || seen.has(trimmed)) return;
+      seen.add(trimmed);
+      branches.push(trimmed);
+    };
+
+    for (const task of this.orchestrator.getAllTasks()) {
+      if (task.config.workflowId !== workflowId || task.config.isMergeNode) continue;
+      addBranch(task.execution.branch);
+      for (const attempt of this.persistence.loadAttempts?.(task.id) ?? []) {
+        addBranch(attempt.branch);
+      }
+    }
+
+    return branches;
   }
 
   constructor(config: TaskRunnerConfig) {
@@ -2521,10 +2534,7 @@ export class TaskRunner {
     workflowId: string,
     baseBranch: string,
   ): Promise<{ success: boolean; rebasedBranches: string[]; errors: string[] }> {
-    const allTasks = this.orchestrator.getAllTasks();
-    const taskBranches = allTasks
-      .filter((t) => t.config.workflowId === workflowId && t.status === 'completed' && t.execution.branch && !t.config.isMergeNode)
-      .map((t) => t.execution.branch!);
+    const taskBranches = this.collectManagedWorkflowBranches(workflowId);
 
     const rebaseWorkflow = this.persistence.loadWorkflow?.(workflowId);
     const rebaseRepoUrl = rebaseWorkflow?.repoUrl;
