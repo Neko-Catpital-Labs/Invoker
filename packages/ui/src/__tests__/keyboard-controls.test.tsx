@@ -185,4 +185,46 @@ describe('Side rail controls (component)', () => {
     expect(screen.getByTestId('keyboard-search-overlay')).toBeInTheDocument();
     expect(screen.getByTestId('workflow-graph-surface')).toHaveAttribute('data-keyboard-active', 'true');
   });
+
+  it('Escape dismisses the task graph from task graph keyboard focus', async () => {
+    await renderKeyboardFixture(mock);
+
+    key('Tab');
+    expect(
+      screen.getByTestId('selected-workflow-mini-dag').querySelector('[data-keyboard-region="taskGraph"]'),
+    ).toHaveAttribute('data-keyboard-active', 'true');
+
+    key('Escape');
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('selected-workflow-mini-dag')).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId('workflow-graph-surface')).toHaveAttribute('data-keyboard-active', 'true');
+  });
+
+  it('Space opens the selected workflow task graph from workflow graph keyboard focus', async () => {
+    await renderKeyboardFixture(mock);
+
+    expect(screen.getByTestId('workflow-graph-surface')).toHaveAttribute('data-keyboard-active', 'true');
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+
+    key(' ');
+
+    await waitFor(() => {
+      const taskGraphRegion = screen
+        .getByTestId('selected-workflow-mini-dag')
+        .querySelector('[data-keyboard-region="taskGraph"]');
+      expect(taskGraphRegion).toHaveAttribute('data-keyboard-active', 'true');
+    });
+    expect(screen.getByTestId('selected-workflow-mini-dag')).toBeInTheDocument();
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+
+  it('Enter still opens the workflow context menu from workflow graph keyboard focus', async () => {
+    await renderKeyboardFixture(mock);
+
+    key('Enter');
+
+    expect(await screen.findByRole('menu')).toHaveTextContent('Open Workflow');
+  });
 });
