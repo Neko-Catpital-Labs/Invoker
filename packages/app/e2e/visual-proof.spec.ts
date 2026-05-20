@@ -216,6 +216,24 @@ test.describe('Visual proof capture', () => {
     await assertPageScreenshot(page, 'dag-loaded');
   });
 
+  test('task graph keyboard controls selected', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+
+    await page.keyboard.press(' ');
+
+    const selectedTaskGraph = page.getByTestId('selected-workflow-mini-dag');
+    await expect(selectedTaskGraph).toBeVisible();
+    await expect(selectedTaskGraph).toContainText('Menu Proof Workflow task DAG');
+    await expect(selectedTaskGraph.locator('[data-keyboard-region="taskGraph"]')).toHaveAttribute(
+      'data-keyboard-active',
+      'true',
+    );
+    await expect(selectedTaskGraph.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
+    await expect(selectedTaskGraph.locator('.react-flow__node[data-testid$="task-beta"]')).toBeVisible();
+
+    await captureScreenshot(page, 'task-graph-keyboard-controls-selected');
+  });
+
   test('task running', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     const now = new Date();
