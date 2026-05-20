@@ -273,6 +273,21 @@ export type { InvokerAPI, ClaudeMessage, AgentSessionData } from '@invoker/contr
 
 import type { InvokerAPI, TerminalOutputEvent } from '@invoker/contracts';
 
+interface TestTerminalLike {
+  cols: number;
+  rows: number;
+  loadAddon(addon: unknown): void;
+  open(parent: HTMLElement): void;
+  write(data: string): void;
+  onData(callback: (data: string) => void): { dispose(): void };
+  focus(): void;
+  dispose(): void;
+}
+
+interface TestFitAddonLike {
+  fit(): void;
+}
+
 // ── Augment global Window ───────────────────────────────────
 
 declare global {
@@ -286,5 +301,9 @@ declare global {
     };
     __INVOKER_TEST_OPEN_TERMINAL__?: (taskId: string) => ReturnType<InvokerAPI['openTerminal']>;
     __INVOKER_TEST_ON_TERMINAL_OUTPUT__?: (cb: (event: TerminalOutputEvent) => void) => () => void;
+    __INVOKER_TEST_CREATE_TERMINAL__?: () => {
+      terminal: TestTerminalLike;
+      fitAddon: TestFitAddonLike;
+    };
   }
 }

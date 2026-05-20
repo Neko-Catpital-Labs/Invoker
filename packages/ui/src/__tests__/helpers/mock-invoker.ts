@@ -15,6 +15,7 @@ import type {
   TaskConfig,
   TaskExecution,
 } from '../../types.js';
+import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 export interface MockInvoker {
   /** The mock InvokerAPI object installed on window.invoker. */
@@ -127,14 +128,7 @@ export function createMockInvoker(
     getEvents: vi.fn(async () => []),
     openTerminal: vi.fn(async (taskId: string) => ({
       opened: true,
-      session: {
-        sessionId: `mock-session-${taskId}`,
-        taskId,
-        status: 'running',
-        mode: 'spawn',
-        attached: false,
-        createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
-      },
+      session: makeTerminalSession({ taskId }),
     })),
     terminalList: vi.fn(async () => []),
     terminalWrite: vi.fn(async () => ({ ok: true })),
@@ -205,6 +199,23 @@ export function createMockInvoker(
   }
 
   return { api, setTasks, fireDelta, fireWorkflowsChanged, install, cleanup };
+}
+
+/** Create a minimal TerminalSessionDescriptor for testing. */
+export function makeTerminalSession(overrides: Partial<TerminalSessionDescriptor> & {
+  taskId?: string;
+  sessionId?: string;
+} = {}): TerminalSessionDescriptor {
+  const taskId = overrides.taskId ?? 'task-1';
+  return {
+    sessionId: overrides.sessionId ?? `mock-session-${taskId}`,
+    taskId,
+    status: 'running',
+    mode: 'spawn',
+    attached: false,
+    createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+    ...overrides,
+  };
 }
 
 /** Create a minimal TaskState for testing. */

@@ -10,8 +10,28 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
-import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
+import { createMockInvoker, makeTerminalSession, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { WorkflowMeta } from '../types.js';
+import type { TerminalOutputEvent } from '@invoker/contracts';
+
+const xtermMock = vi.hoisted(() => {
+  type DataHandler = (data: string) => void;
+  type TerminalInstance = {
+    cols: number;
+    rows: number;
+    writes: string[];
+    dataHandlers: DataHandler[];
+    loadAddon: ReturnType<typeof vi.fn>;
+    open: ReturnType<typeof vi.fn>;
+    write: ReturnType<typeof vi.fn>;
+    onData: ReturnType<typeof vi.fn>;
+    focus: ReturnType<typeof vi.fn>;
+    dispose: ReturnType<typeof vi.fn>;
+  };
+  return {
+    instances: [] as TerminalInstance[],
+  };
+});
 
 vi.mock('@xyflow/react', async () => {
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
@@ -19,6 +39,7 @@ vi.mock('@xyflow/react', async () => {
 });
 
 const { App } = await import('../App.js');
+const { TerminalDrawer } = await import('../components/TerminalDrawer.js');
 
 const workflows: WorkflowMeta[] = [{ id: 'wf-a', name: 'Workflow A', status: 'completed' }];
 const taskAlpha = makeUITask({
@@ -49,12 +70,40 @@ describe('Terminal drawer (component)', () => {
   let mock: MockInvoker;
 
   beforeEach(() => {
+    xtermMock.instances.length = 0;
     mock = createMockInvoker();
     mock.install();
+    window.__INVOKER_TEST_CREATE_TERMINAL__ = () => {
+      const instance = {
+        cols: 80,
+        rows: 24,
+        writes: [] as string[],
+        dataHandlers: [] as Array<(data: string) => void>,
+        loadAddon: vi.fn(),
+        open: vi.fn(),
+        write: vi.fn((data: string) => {
+          instance.writes.push(data);
+        }),
+        onData: vi.fn((handler: (data: string) => void) => {
+          instance.dataHandlers.push(handler);
+          return { dispose: vi.fn() };
+        }),
+        focus: vi.fn(),
+        dispose: vi.fn(),
+      };
+      xtermMock.instances.push(instance);
+      return {
+        terminal: instance,
+        fitAddon: { fit: vi.fn() },
+      };
+    };
   });
 
   afterEach(() => {
     mock.cleanup();
+    delete window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__;
+    delete window.__INVOKER_TEST_CREATE_TERMINAL__;
+    xtermMock.instances.length = 0;
     vi.restoreAllMocks();
   });
 
@@ -171,5 +220,63 @@ describe('Terminal drawer (component)', () => {
       expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
     });
     expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha');
+  });
+
+  it('writes a restored session output snapshot before live terminal output', async () => {
+    const session = makeTerminalSession({
+      taskId: 'task-alpha',
+      outputSnapshot: 'early output\n',
+    });
+    (mock.api.terminalList as ReturnType<typeof vi.fn>).mockResolvedValueOnce([session]);
+    let emitTerminalOutput: ((event: TerminalOutputEvent) => void) | null = null;
+    window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__ = vi.fn((cb) => {
+      emitTerminalOutput = cb;
+      return () => { emitTerminalOutput = null; };
+    });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Expand terminal drawer' }));
+    await waitFor(() => {
+      expect(xtermMock.instances).toHaveLength(1);
+      expect(emitTerminalOutput).not.toBeNull();
+    });
+
+    act(() => {
+      emitTerminalOutput?.({
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        data: 'live output\n',
+      });
+    });
+
+    expect(xtermMock.instances[0].writes).toEqual(['early output\n', 'live output\n']);
+  });
+
+  it('does not duplicate the output snapshot when the same pane re-renders', async () => {
+    const session = makeTerminalSession({
+      taskId: 'task-alpha',
+      outputSnapshot: 'seed once\n',
+    });
+    const noop = vi.fn();
+    const props = {
+      collapsed: false,
+      onToggle: noop,
+      sessions: [session],
+      activeSessionId: session.sessionId,
+      onSelectSession: noop,
+      onCloseSession: noop,
+    };
+
+    const { rerender } = render(<TerminalDrawer {...props} />);
+    await waitFor(() => {
+      expect(xtermMock.instances).toHaveLength(1);
+      expect(xtermMock.instances[0].writes).toEqual(['seed once\n']);
+    });
+
+    rerender(<TerminalDrawer {...props} taskLabels={new Map([[session.taskId, 'Alpha description']])} />);
+
+    expect(xtermMock.instances).toHaveLength(1);
+    expect(xtermMock.instances[0].writes).toEqual(['seed once\n']);
   });
 });

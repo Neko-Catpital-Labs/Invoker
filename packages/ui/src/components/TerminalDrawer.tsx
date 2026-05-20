@@ -34,6 +34,21 @@ interface TerminalSessionPaneProps {
   onOutput: (sessionId: string, data: string) => void;
 }
 
+interface TerminalLike {
+  cols: number;
+  rows: number;
+  loadAddon(addon: unknown): void;
+  open(parent: HTMLElement): void;
+  write(data: string): void;
+  onData(callback: (data: string) => void): { dispose(): void };
+  focus(): void;
+  dispose(): void;
+}
+
+interface FitAddonLike {
+  fit(): void;
+}
+
 function lastNonEmptyLine(data: string): string {
   const clean = data.replace(ANSI_PATTERN, '').replace(/\r/g, '\n');
   const lines = clean.split('\n').map((line) => line.trim()).filter(Boolean);
@@ -42,32 +57,52 @@ function lastNonEmptyLine(data: string): string {
 
 function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: TerminalSessionPaneProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const termRef = useRef<XTermTerminal | null>(null);
-  const fitRef = useRef<FitAddon | null>(null);
+  const termRef = useRef<TerminalLike | null>(null);
+  const fitRef = useRef<FitAddonLike | null>(null);
+  const seededSnapshotRef = useRef<{ sessionId: string; snapshot: string } | null>(null);
 
   useEffect(() => {
     const host = containerRef.current;
     if (!host) return;
 
-    let term: XTermTerminal;
-    let fit: FitAddon;
+    let term: TerminalLike;
+    let fit: FitAddonLike;
     try {
-      term = new XTermTerminal({
-        fontSize: 12,
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-        cursorBlink: true,
-        convertEol: false,
-        scrollback: 5000,
-        theme: { background: '#0b0f1a', foreground: '#e5e7eb' },
-      });
-      fit = new FitAddon();
-      term.loadAddon(fit);
+      const testTerminal = window.__INVOKER_TEST_CREATE_TERMINAL__?.();
+      if (testTerminal) {
+        term = testTerminal.terminal;
+        fit = testTerminal.fitAddon;
+      } else {
+        term = new XTermTerminal({
+          fontSize: 12,
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+          cursorBlink: true,
+          convertEol: false,
+          scrollback: 5000,
+          theme: { background: '#0b0f1a', foreground: '#e5e7eb' },
+        });
+        fit = new FitAddon();
+        term.loadAddon(fit);
+      }
       term.open(host);
     } catch {
       return;
     }
     termRef.current = term;
     fitRef.current = fit;
+
+    const snapshot = session.outputSnapshot;
+    if (snapshot) {
+      const seeded = seededSnapshotRef.current;
+      if (!seeded || seeded.sessionId !== session.sessionId || seeded.snapshot !== snapshot) {
+        try {
+          term.write(snapshot);
+          seededSnapshotRef.current = { sessionId: session.sessionId, snapshot };
+        } catch {
+          /* terminal disposed */
+        }
+      }
+    }
 
     const inputDisposable = term.onData((data) => {
       void window.invoker?.terminalWrite?.(session.sessionId, data);
