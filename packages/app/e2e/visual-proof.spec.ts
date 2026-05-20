@@ -149,6 +149,34 @@ const SSH_TERMINAL_RESUME_PLAN = {
   ],
 };
 
+const STATUS_COLOR_PARITY_STATUSES = [
+  'running',
+  'completed',
+  'failed',
+  'awaiting_approval',
+  'review_ready',
+] as const;
+
+const STATUS_COLOR_PARITY_TASK_PLAN = {
+  name: 'Workflow Task Status Color Parity',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'none' as const,
+  tasks: STATUS_COLOR_PARITY_STATUSES.map((status) => ({
+    id: `parity-${status}`,
+    description: `Task ${status.replaceAll('_', ' ')}`,
+    command: `echo ${status}`,
+    dependencies: [] as string[],
+  })),
+};
+
+const STATUS_COLOR_PARITY_TASK_LABELS: Record<(typeof STATUS_COLOR_PARITY_STATUSES)[number], string> = {
+  running: 'RUNNING',
+  completed: 'COMPLETED',
+  failed: 'FAILED',
+  awaiting_approval: 'APPROVE',
+  review_ready: 'REVIEW_READY',
+};
+
 function workflowNode(page: Page, workflowId: string) {
   return page.getByTestId(`workflow-node-${workflowId}`);
 }
@@ -197,6 +225,17 @@ async function loadPlanAndSelectWorkflow(page: Page, plan: unknown): Promise<str
   await node.dispatchEvent('click', { bubbles: true });
   await expect(page.getByTestId('selected-workflow-mini-dag')).toBeVisible({ timeout: 10000 });
   return workflowId!;
+}
+
+async function assertRailColorParity(page: Page, workflowId: string, taskIdSuffix: string): Promise<void> {
+  const workflowRail = workflowNode(page, workflowId).locator('> div').first();
+  const taskRail = page.locator(`.react-flow__node[data-testid$="${taskIdSuffix}"] > div > span`).first();
+  await expect(workflowRail).toBeVisible();
+  await expect(taskRail).toBeVisible();
+
+  const workflowColor = await workflowRail.evaluate((element) => getComputedStyle(element).backgroundColor);
+  const taskColor = await taskRail.evaluate((element) => getComputedStyle(element).backgroundColor);
+  expect(taskColor).toBe(workflowColor);
 }
 
 test.describe('Visual proof capture', () => {
@@ -394,6 +433,92 @@ test.describe('Visual proof capture', () => {
     ]);
     await captureScreenshot(page, 'fixing-vs-fix-approval-colors');
     await assertPageScreenshot(page, 'fixing-vs-fix-approval-colors');
+  });
+
+  test('workflow and task status colors use the same palette', async ({ page }) => {
+    const statusWorkflowIds = new Map<string, string>();
+    const now = new Date();
+    const earlier = new Date(Date.now() - 5000);
+
+    for (const status of STATUS_COLOR_PARITY_STATUSES) {
+      const workflowId = await loadPlanAndSelectWorkflow(page, {
+        name: `Workflow ${status.replaceAll('_', ' ')}`,
+        repoUrl: E2E_REPO_URL,
+        onFinish: 'none' as const,
+        tasks: [
+          {
+            id: `workflow-${status}`,
+            description: `Workflow ${status.replaceAll('_', ' ')}`,
+            command: `echo ${status}`,
+            dependencies: [] as string[],
+          },
+        ],
+      });
+      statusWorkflowIds.set(status, workflowId);
+      await injectTaskStates(page, [
+        {
+          taskId: `workflow-${status}`,
+          changes: {
+            status,
+            execution: status === 'completed'
+              ? { startedAt: earlier, completedAt: now }
+              : status === 'failed'
+                ? { startedAt: earlier, completedAt: now, exitCode: 1, error: 'visual proof failure' }
+                : { startedAt: now },
+          },
+        },
+        {
+          taskId: `__merge__${workflowId}`,
+          changes: {
+            status,
+            execution: status === 'completed'
+              ? { startedAt: earlier, completedAt: now }
+              : status === 'failed'
+                ? { startedAt: earlier, completedAt: now, exitCode: 1, error: 'visual proof failure' }
+                : { startedAt: now },
+          },
+        },
+      ]);
+      await expect.poll(async () => {
+        const workflows = await page.evaluate(() => window.invoker.listWorkflows());
+        return workflows.find((workflow: { id: string }) => workflow.id === workflowId)?.status;
+      }).toBe(status);
+    }
+
+    const parityWorkflowId = await loadPlanAndSelectWorkflow(page, STATUS_COLOR_PARITY_TASK_PLAN);
+    await injectTaskStates(page, STATUS_COLOR_PARITY_STATUSES.map((status) => ({
+      taskId: `parity-${status}`,
+      changes: {
+        status,
+        execution: status === 'completed'
+          ? { startedAt: earlier, completedAt: now }
+          : status === 'failed'
+            ? { startedAt: earlier, completedAt: now, exitCode: 1, error: 'visual proof failure' }
+            : { startedAt: now },
+      },
+    })));
+
+    await page.getByRole('button', { name: 'Fit View' }).first().click();
+    await workflowNode(page, parityWorkflowId).dispatchEvent('click', { bubbles: true });
+    await expect(page.getByTestId('selected-workflow-mini-dag')).toBeVisible();
+    await page.getByRole('button', { name: 'Fit View' }).nth(1).click();
+    await page.waitForTimeout(300);
+
+    for (const status of STATUS_COLOR_PARITY_STATUSES) {
+      const workflowId = statusWorkflowIds.get(status);
+      expect(workflowId).toBeTruthy();
+      const readableStatus = status.replaceAll('_', ' ');
+      const workflow = workflowNode(page, workflowId!);
+      await expect(workflow.getByText(readableStatus, { exact: true })).toBeVisible();
+      await expect(
+        page
+          .locator(`.react-flow__node[data-testid$="parity-${status}"]`)
+          .getByText(STATUS_COLOR_PARITY_TASK_LABELS[status], { exact: true }),
+      ).toBeVisible();
+      await assertRailColorParity(page, workflowId!, `parity-${status}`);
+    }
+
+    await captureScreenshot(page, 'workflow-task-status-color-parity');
   });
 
   test('merge-gate-node-text-black — merge gate visible', async ({ page }) => {
