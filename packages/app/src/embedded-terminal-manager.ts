@@ -103,12 +103,13 @@ interface BaseSessionState {
   createdAt: string;
   status: 'running' | 'exited';
   exitCode?: number;
+  outputSnapshot: string;
 }
 
 interface SpawnSessionState extends BaseSessionState {
   mode: 'spawn';
   backend: EmbeddedTerminalBackendName;
-  process: SpawnedTerminalProcess;
+  process?: SpawnedTerminalProcess;
 }
 
 interface AttachedSessionState extends BaseSessionState {
@@ -118,6 +119,8 @@ interface AttachedSessionState extends BaseSessionState {
 }
 
 type SessionState = SpawnSessionState | AttachedSessionState;
+
+const OUTPUT_REPLAY_BUFFER_LIMIT = 64 * 1024;
 
 export interface EmbeddedTerminalManagerOptions {
   /** Single backend used for GUI spawned sessions. Defaults to the PTY backend. */
@@ -138,6 +141,7 @@ function describeSession(state: SessionState): TerminalSessionDescriptor {
     mode: state.mode,
     attached: state.mode === 'attached',
     createdAt: state.createdAt,
+    outputSnapshot: state.outputSnapshot,
   };
 }
 
@@ -281,38 +285,60 @@ export class EmbeddedTerminalManager extends EventEmitter {
       cwd: opts.cwd,
       createdAt,
       status: 'running' as const,
+      outputSnapshot: '',
     };
 
-    let state: SessionState;
     if (opts.attach) {
-      const unsubscribe = opts.attach.executor.onOutput(opts.attach.handle, (data) => {
-        this.emitOutput(sessionId, opts.taskId, data);
-      });
-      state = {
+      const state: AttachedSessionState = {
         ...base,
         mode: 'attached',
         attach: opts.attach,
-        unsubscribeOutput: unsubscribe,
+        unsubscribeOutput: () => {},
       };
-    } else {
-      const process = this.backend.spawn({
-        spec: opts.spec,
-        cwd: opts.cwd,
-        defaultShell: this.defaultShell,
-        emitOutput: (data) => this.emitOutput(sessionId, opts.taskId, data),
-        emitExit: (exitCode) => this.finalizeSession(state, exitCode),
+      this.sessions.set(sessionId, state);
+      this.targetIndex.set(targetKey, sessionId);
+      state.unsubscribeOutput = opts.attach.executor.onOutput(opts.attach.handle, (data) => {
+        this.emitOutput(state, data);
       });
-      state = {
+      return describeSession(state);
+    } else {
+      const state: SpawnSessionState = {
         ...base,
         mode: 'spawn',
         backend: this.backend.name,
-        process,
       };
-    }
+      this.sessions.set(sessionId, state);
+      this.targetIndex.set(targetKey, sessionId);
 
-    this.sessions.set(sessionId, state);
-    this.targetIndex.set(targetKey, sessionId);
-    return describeSession(state);
+      let pendingExit: number | undefined;
+      let hasPendingExit = false;
+      try {
+        state.process = this.backend.spawn({
+          spec: opts.spec,
+          cwd: opts.cwd,
+          defaultShell: this.defaultShell,
+          emitOutput: (data) => this.emitOutput(state, data),
+          emitExit: (exitCode) => {
+            if (!state.process) {
+              pendingExit = exitCode;
+              hasPendingExit = true;
+              return;
+            }
+            this.finalizeSession(state, exitCode);
+          },
+        });
+      } catch (err) {
+        this.sessions.delete(sessionId);
+        if (this.targetIndex.get(targetKey) === sessionId) {
+          this.targetIndex.delete(targetKey);
+        }
+        throw err;
+      }
+      if (hasPendingExit) {
+        this.finalizeSession(state, pendingExit);
+      }
+      return describeSession(state);
+    }
   }
 
   list(): TerminalSessionDescriptor[] {
@@ -339,6 +365,9 @@ export class EmbeddedTerminalManager extends EventEmitter {
       }
     }
     try {
+      if (!state.process) {
+        return { ok: false, reason: `Session "${sessionId}" is still starting.` };
+      }
       state.process.write(data);
       return { ok: true };
     } catch (err) {
@@ -354,6 +383,9 @@ export class EmbeddedTerminalManager extends EventEmitter {
     }
     if (state.mode === 'attached') return { ok: true };
     try {
+      if (!state.process) {
+        return { ok: false, reason: `Session "${sessionId}" is still starting.` };
+      }
       state.process.resize(cols, rows);
       return { ok: true };
     } catch (err) {
@@ -380,7 +412,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
     state.exitCode = exitCode;
 
     if (state.mode === 'spawn') {
-      state.process.close();
+      state.process?.close();
     } else {
       try {
         state.unsubscribeOutput();
@@ -402,10 +434,20 @@ export class EmbeddedTerminalManager extends EventEmitter {
     this.emit('exit', payload);
   }
 
-  private emitOutput(sessionId: string, taskId: string, data: string): void {
-    const payload: TerminalOutputEvent = { sessionId, taskId, data };
+  private emitOutput(state: SessionState, data: string): void {
+    state.outputSnapshot = trimOutputSnapshot(state.outputSnapshot + data);
+    const payload: TerminalOutputEvent = {
+      sessionId: state.sessionId,
+      taskId: state.taskId,
+      data,
+    };
     this.emit('output', payload);
   }
+}
+
+function trimOutputSnapshot(output: string): string {
+  if (output.length <= OUTPUT_REPLAY_BUFFER_LIMIT) return output;
+  return output.slice(output.length - OUTPUT_REPLAY_BUFFER_LIMIT);
 }
 
 function resolveBackend(options: EmbeddedTerminalManagerOptions): EmbeddedTerminalBackend {
