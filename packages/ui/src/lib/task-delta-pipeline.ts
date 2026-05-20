@@ -8,7 +8,9 @@ export interface TaskDeltaPipeline {
 
 export interface CreateTaskDeltaPipelineOptions {
   flushMs?: number;
+  maxBatchSize?: number;
   onBatch: (batch: TaskDelta[]) => void;
+  onLargeBatch?: (stats: { batchSize: number; remaining: number }) => void;
 }
 
 /**
@@ -25,16 +27,21 @@ export function createTaskDeltaPipeline(
   options: CreateTaskDeltaPipelineOptions,
 ): TaskDeltaPipeline {
   const flushMs = options.flushMs ?? 100;
+  const maxBatchSize = options.maxBatchSize ?? 250;
   let queue: TaskDelta[] = [];
   let timer: ReturnType<typeof setTimeout> | null = null;
 
   const flushNow = (): void => {
     if (queue.length === 0) return;
-    const batch = queue;
-    queue = [];
+    const batchSize = Math.min(maxBatchSize, queue.length);
+    const batch = queue.splice(0, batchSize);
     if (timer) {
       clearTimeout(timer);
       timer = null;
+    }
+    if (queue.length > 0) {
+      options.onLargeBatch?.({ batchSize: batch.length, remaining: queue.length });
+      schedule();
     }
     options.onBatch(batch);
   };
