@@ -149,6 +149,8 @@ const SSH_TERMINAL_RESUME_PLAN = {
   ],
 };
 
+const ACTIVE_MENU_ITEM_CLASS = /(?:^|\s)bg-gray-700(?:\s|$)/;
+
 function workflowNode(page: Page, workflowId: string) {
   return page.getByTestId(`workflow-node-${workflowId}`);
 }
@@ -558,6 +560,27 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByRole('menuitem', { name: 'Delete Workflow' })).toBeVisible();
 
     await captureScreenshot(page, 'workflow-context-menu-organization');
+  });
+
+  test('context menu keyboard navigation highlights active item', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+
+    const menu = await openContextMenu(page, page.locator('[data-testid^="workflow-node-"]'));
+    await expect(menu).toBeVisible();
+    await page.waitForFunction(() => document.activeElement?.getAttribute('role') === 'menu');
+
+    const openWorkflow = page.getByRole('menuitem', { name: 'Open Workflow' });
+    const openPr = page.getByRole('menuitem', { name: 'Open PR' });
+    await expect(openWorkflow).toHaveClass(ACTIVE_MENU_ITEM_CLASS);
+    await expect(openPr).not.toHaveClass(ACTIVE_MENU_ITEM_CLASS);
+
+    await page.keyboard.press('ArrowDown');
+
+    await expect(openPr).toHaveClass(ACTIVE_MENU_ITEM_CLASS);
+    await expect(openWorkflow).not.toHaveClass(ACTIVE_MENU_ITEM_CLASS);
+    await page.mouse.move(1, 1);
+
+    await captureScreenshot(page, 'context-menu-keyboard-navigation');
   });
 
   test('context menu keeps danger separator when cancel action is absent', async ({ page }) => {
