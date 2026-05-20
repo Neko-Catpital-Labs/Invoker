@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TaskRunner } from '../task-runner.js';
 import { collectDirectNonMergeTaskIds } from '../merge-runner.js';
 import { SshExecutor } from '../ssh-executor.js';
+import { WorktreeExecutor } from '../worktree-executor.js';
 import type { TaskState } from '@invoker/workflow-core';
 import type { WorkResponse, Logger } from '@invoker/contracts';
 import { EventEmitter } from 'events';
@@ -2567,20 +2568,38 @@ describe('TaskRunner', () => {
   });
 
   describe('rebaseTaskBranches', () => {
-    it('rebases all completed task branches onto baseBranch', async () => {
+    it('rebases all managed workflow task and attempt branches onto baseBranch', async () => {
       const allTasks = [
         makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
-        makeTask({ id: 't2', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t2' } }),
+        makeTask({ id: 't2', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t2-current' } }),
         makeTask({ id: 't3', config: { workflowId: 'wf-1' }, status: 'pending', execution: { branch: 'experiment/t3' } }),
+        makeTask({ id: 't4', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'feature/user-branch' } }),
         makeTask({ id: '__merge__wf-1', config: { workflowId: 'wf-1', isMergeNode: true }, status: 'failed' }),
       ];
       const orchestrator = {
         getTask: (id: string) => allTasks.find(t => t.id === id),
         getAllTasks: () => allTasks,
       };
+      const loadAttempts = vi.fn((taskId: string) => {
+        if (taskId === 't1') {
+          return [
+            { id: 't1-a1', nodeId: 't1', branch: 'experiment/t1-old' },
+            { id: 't1-a2', nodeId: 't1', branch: 'feature/not-managed' },
+          ];
+        }
+        if (taskId === 't2') {
+          return [
+            { id: 't2-a1', nodeId: 't2', branch: 'experiment/t2-old' },
+            { id: 't2-a2', nodeId: 't2', branch: 'experiment/t2-current' },
+          ];
+        }
+        if (taskId === 't3') return [{ id: 't3-a1', nodeId: 't3', branch: 'invoker/t3-old' }];
+        if (taskId === 't4') return [{ id: 't4-a1', nodeId: 't4', branch: 'invoker/t4-old' }];
+        return [];
+      });
       const executor = new TaskRunner({
         orchestrator: orchestrator as any,
-        persistence: {} as any,
+        persistence: { loadAttempts } as any,
         executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
@@ -2602,13 +2621,25 @@ describe('TaskRunner', () => {
       const result = await executor.rebaseTaskBranches('wf-1', 'master');
 
       expect(result.success).toBe(true);
-      expect(result.rebasedBranches).toEqual(['experiment/t1', 'experiment/t2']);
+      expect(result.rebasedBranches).toEqual([
+        'experiment/t1',
+        'experiment/t1-old',
+        'experiment/t2-current',
+        'experiment/t2-old',
+        'experiment/t3',
+        'invoker/t3-old',
+        'invoker/t4-old',
+      ]);
       expect(result.errors).toEqual([]);
+      expect(loadAttempts).toHaveBeenCalledTimes(4);
+      expect(loadAttempts).toHaveBeenNthCalledWith(1, 't1');
+      expect(loadAttempts).toHaveBeenNthCalledWith(2, 't2');
+      expect(loadAttempts).toHaveBeenNthCalledWith(3, 't3');
+      expect(loadAttempts).toHaveBeenNthCalledWith(4, 't4');
 
       const rebaseCalls = gitCalls.filter(c => c[0] === 'rebase');
-      expect(rebaseCalls).toHaveLength(2);
-      expect(rebaseCalls[0]).toEqual(['rebase', 'master']);
-      expect(rebaseCalls[1]).toEqual(['rebase', 'master']);
+      expect(rebaseCalls).toHaveLength(7);
+      expect(rebaseCalls.every(c => c[1] === 'master')).toBe(true);
     });
 
     it('reports errors for branches that fail to rebase', async () => {
@@ -2694,10 +2725,10 @@ describe('TaskRunner', () => {
       expect(rebaseCalls.length).toBeGreaterThan(0);
     });
 
-    it('skips merge nodes and non-completed tasks', async () => {
+    it('skips merge nodes and unmanaged duplicate branches', async () => {
       const allTasks = [
         makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
-        makeTask({ id: 't2', config: { workflowId: 'wf-1' }, status: 'failed', execution: { branch: 'experiment/t2' } }),
+        makeTask({ id: 't2', config: { workflowId: 'wf-1' }, status: 'failed', execution: { branch: 'feature/t2' } }),
         makeTask({ id: '__merge__wf-1', config: { workflowId: 'wf-1', isMergeNode: true }, status: 'failed', execution: { branch: 'plan/feature' } }),
       ];
       const orchestrator = {
@@ -2706,7 +2737,7 @@ describe('TaskRunner', () => {
       };
       const executor = new TaskRunner({
         orchestrator: orchestrator as any,
-        persistence: {} as any,
+        persistence: { loadAttempts: () => [{ id: 'attempt-1', nodeId: 't1', branch: 'experiment/t1' }] } as any,
         executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
@@ -2731,6 +2762,110 @@ describe('TaskRunner', () => {
       const checkoutCalls = gitCalls.filter(c => c[0] === 'checkout' && c[1] !== 'master');
       expect(checkoutCalls).toHaveLength(1);
       expect(checkoutCalls[0][1]).toBe('experiment/t1');
+    });
+
+    it('uses persisted attempt branches with current completed task branches in the repro order', async () => {
+      const allTasks = [
+        makeTask({
+          id: 'wf-1/t1',
+          config: { workflowId: 'wf-1' },
+          status: 'completed',
+          execution: { branch: 'experiment/wf-1-t1/g23.t28.a-current-cccccccc' },
+        }),
+        makeTask({
+          id: 'wf-1/t2',
+          config: { workflowId: 'wf-1' },
+          status: 'pending',
+        }),
+      ];
+      const loadAttempts = vi.fn((taskId: string) => taskId === 'wf-1/t1'
+        ? [
+          { id: 'old', nodeId: taskId, branch: 'experiment/wf-1-t1/g0.t1.a-old-aaaaaaaa' },
+          { id: 'current', nodeId: taskId, branch: 'experiment/wf-1-t1/g23.t28.a-current-cccccccc' },
+        ]
+        : []);
+      const executor = new TaskRunner({
+        orchestrator: {
+          getTask: (id: string) => allTasks.find(t => t.id === id),
+          getAllTasks: () => allTasks,
+        } as any,
+        persistence: { loadAttempts } as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      const gitCalls: string[][] = [];
+      (executor as any).execGitIn = async (args: string[]) => {
+        gitCalls.push(args);
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
+
+      const result = await executor.rebaseTaskBranches('wf-1', 'origin/master');
+
+      expect(result.rebasedBranches).toEqual([
+        'experiment/wf-1-t1/g23.t28.a-current-cccccccc',
+        'experiment/wf-1-t1/g0.t1.a-old-aaaaaaaa',
+      ]);
+      expect(loadAttempts).toHaveBeenCalledWith('wf-1/t1');
+      expect(loadAttempts).toHaveBeenCalledWith('wf-1/t2');
+      expect(gitCalls.filter(c => c[0] === 'checkout').map(c => c[1])).toEqual(result.rebasedBranches);
+    });
+  });
+
+  describe('preparePoolForRebaseRetry', () => {
+    it('removes historical managed attempt branches from the pool mirror', async () => {
+      const allTasks = [
+        makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1-current' } }),
+        makeTask({ id: 't2', config: { workflowId: 'wf-1' }, status: 'failed', execution: { branch: 'feature/t2' } }),
+        makeTask({ id: '__merge__wf-1', config: { workflowId: 'wf-1', isMergeNode: true }, status: 'completed', execution: { branch: 'experiment/merge' } }),
+      ];
+      const pool = {
+        refreshMirrorForRebase: vi.fn().mockResolvedValue(undefined),
+        resolveBaseCommit: vi.fn().mockResolvedValue('abc123'),
+        removeManagedBranchesInMirror: vi.fn().mockResolvedValue(undefined),
+      };
+      const worktreeExecutor = new WorktreeExecutor({
+        cacheDir: mkdtempSync(join(tmpdir(), 'invoker-task-runner-cache-')),
+      });
+      vi.spyOn(worktreeExecutor, 'getRepoPool').mockReturnValue(pool as any);
+      const loadAttempts = vi.fn((taskId: string) => {
+        if (taskId === 't1') {
+          return [
+            { id: 't1-old', nodeId: 't1', branch: 'experiment/t1-old' },
+            { id: 't1-dup', nodeId: 't1', branch: 'experiment/t1-current' },
+          ];
+        }
+        if (taskId === 't2') {
+          return [
+            { id: 't2-old', nodeId: 't2', branch: 'invoker/t2-old' },
+            { id: 't2-feature', nodeId: 't2', branch: 'feature/t2-old' },
+          ];
+        }
+        return [{ id: 'merge-old', nodeId: taskId, branch: 'experiment/merge-old' }];
+      });
+      const executor = new TaskRunner({
+        orchestrator: {
+          getTask: (id: string) => allTasks.find(t => t.id === id),
+          getAllTasks: () => allTasks,
+        } as any,
+        persistence: { loadAttempts } as any,
+        executorRegistry: { get: (kind: string) => kind === 'worktree' ? worktreeExecutor : null } as any,
+        cwd: '/tmp',
+      });
+
+      const result = await executor.preparePoolForRebaseRetry('wf-1', 'git@example.com/repo.git', 'master');
+
+      expect(result).toEqual({ branch: 'master', commit: 'abc123' });
+      expect(pool.removeManagedBranchesInMirror).toHaveBeenCalledWith(
+        'git@example.com/repo.git',
+        ['experiment/t1-current', 'experiment/t1-old', 'invoker/t2-old'],
+        undefined,
+      );
+      expect(loadAttempts).toHaveBeenCalledTimes(2);
+      expect(loadAttempts).toHaveBeenCalledWith('t1');
+      expect(loadAttempts).toHaveBeenCalledWith('t2');
     });
   });
 
