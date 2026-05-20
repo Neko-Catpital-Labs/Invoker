@@ -13,6 +13,7 @@
 import { useEffect, useRef, useState, useLayoutEffect } from 'react';
 import type { TaskState } from '../types.js';
 import { getMenuItems, type MenuItem } from '../lib/context-menu-items.js';
+import { cycleEnabledIndex, firstEnabledIndex } from '../lib/menu-keyboard.js';
 import { EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE } from '../isExperimentSpawnPivot.js';
 
 interface ContextMenuProps {
@@ -27,6 +28,10 @@ interface ContextMenuProps {
   onCancel?: (taskId: string) => void;
   onClose: () => void;
 }
+
+type MenuEntry =
+  | { kind: 'item'; enabled: boolean; item: MenuItem }
+  | { kind: 'more'; enabled: boolean };
 
 export function ContextMenu({
   x,
@@ -61,15 +66,32 @@ export function ContextMenu({
   const hasMoreButton = dangerItems.length > 0 && !showMore;
   const renderedItems: MenuItem[] = showMore ? [...safeItems, ...dangerItems] : safeItems;
 
-  // Find first enabled item index
-  const firstEnabledIndex = renderedItems.findIndex((item) => item.enabled);
+  // Unified entry list including the "More" toggle so keyboard navigation
+  // covers every visible row, not just product actions.
+  const entries: MenuEntry[] = [
+    ...renderedItems.map<MenuEntry>((item) => ({ kind: 'item', enabled: item.enabled, item })),
+    ...(hasMoreButton ? [{ kind: 'more' as const, enabled: true }] : []),
+  ];
 
-  // Auto-focus first enabled item on mount
+  // Track the index of the first danger item; used to land the highlight on a
+  // deterministic enabled row once More expands.
+  const firstDangerIndex = renderedItems.findIndex((item) => item.variant === 'danger');
+
+  // Auto-focus first enabled entry on mount.
   useEffect(() => {
-    if (firstEnabledIndex >= 0) {
-      setFocusedIndex(firstEnabledIndex);
-    }
-  }, [firstEnabledIndex]);
+    const idx = firstEnabledIndex(entries);
+    if (idx >= 0) setFocusedIndex(idx);
+    // Mount-only: we want the initial highlight to land on the first enabled
+    // entry; subsequent re-renders manage focus through explicit user action.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Focus the menu container so it receives keydown events without scrolling
+  // the viewport. The menu uses a "highlighted index" pattern rather than
+  // moving DOM focus per item, so the container is the keyboard target.
+  useEffect(() => {
+    menuRef.current?.focus({ preventScroll: true });
+  }, []);
 
   // Viewport clamping: flip if menu overflows bottom or right
   useLayoutEffect(() => {
@@ -97,7 +119,7 @@ export function ContextMenu({
     top = Math.max(0, Math.min(top, viewportHeight - rect.height));
 
     setPosition({ left, top });
-  }, [x, y]);
+  }, [x, y, showMore]);
 
   // Capture-phase outside dismissal stays reliable even if graph layers stop
   // bubbling on mouse/pointer events before they reach document listeners.
@@ -133,31 +155,6 @@ export function ContextMenu({
     };
   }, [onClose]);
 
-  // Keyboard navigation
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    const enabledIndices = renderedItems
-      .map((item, idx) => (item.enabled ? idx : -1))
-      .filter((idx) => idx >= 0);
-
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const nextPos = (currentPos + 1) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[nextPos]);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const prevPos = (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[prevPos]);
-    } else if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      const item = renderedItems[focusedIndex];
-      if (item?.enabled) {
-        handleItemClick(item);
-      }
-    }
-  };
-
   // Handle menu item click
   const handleItemClick = (item: MenuItem) => {
     if (!item.enabled) return;
@@ -185,6 +182,41 @@ export function ContextMenu({
         break;
     }
     onClose();
+  };
+
+  const expandMore = () => {
+    setShowMore(true);
+    // Land the highlight on the first revealed danger item so keyboard users
+    // immediately know where focus moved.
+    if (firstDangerIndex >= 0) {
+      setFocusedIndex(safeItems.length);
+    } else {
+      setFocusedIndex(firstEnabledIndex(entries));
+    }
+  };
+
+  // Keyboard navigation. Handled keys stop propagation so App-level graph
+  // shortcuts cannot consume them while the menu is open.
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      e.stopPropagation();
+      setFocusedIndex((idx) => cycleEnabledIndex(entries, idx, 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      e.stopPropagation();
+      setFocusedIndex((idx) => cycleEnabledIndex(entries, idx, -1));
+    } else if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      e.stopPropagation();
+      const entry = entries[focusedIndex];
+      if (!entry?.enabled) return;
+      if (entry.kind === 'more') {
+        expandMore();
+      } else {
+        handleItemClick(entry.item);
+      }
+    }
   };
 
   // Get variant styles
@@ -254,8 +286,11 @@ export function ContextMenu({
           <div className="border-t border-gray-600 my-1" />
           <button
             role="menuitem"
-            className="w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
-            onClick={() => setShowMore(true)}
+            className={`w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 ${
+              focusedIndex === renderedItems.length ? 'bg-gray-700' : ''
+            }`}
+            onClick={expandMore}
+            onMouseEnter={() => setFocusedIndex(renderedItems.length)}
           >
             More
           </button>
