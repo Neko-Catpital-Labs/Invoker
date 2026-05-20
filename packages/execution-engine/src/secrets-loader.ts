@@ -36,6 +36,21 @@ function stripQuotes(value: string): string {
   return value;
 }
 
+function stripInlineComment(value: string): string {
+  let quote: '"' | "'" | undefined;
+  for (let i = 0; i < value.length; i++) {
+    const char = value[i];
+    if ((char === '"' || char === "'") && (i === 0 || value[i - 1] !== '\\')) {
+      quote = quote === char ? undefined : quote ?? char;
+      continue;
+    }
+    if (char === '#' && quote === undefined && (i === 0 || /\s/.test(value[i - 1] ?? ''))) {
+      return value.slice(0, i).trimEnd();
+    }
+  }
+  return value;
+}
+
 /**
  * Load a secrets file as an array of `KEY=value` env entries.
  *
@@ -84,7 +99,7 @@ export function loadSecretsFile(path: string | undefined): string[] {
     }
 
     const key = line.slice(0, eq).trim();
-    const value = stripQuotes(line.slice(eq + 1).trim());
+    const value = stripQuotes(stripInlineComment(line.slice(eq + 1).trim()));
 
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
       throw new Error(`${expanded}:${i + 1}: invalid key "${key}"`);
