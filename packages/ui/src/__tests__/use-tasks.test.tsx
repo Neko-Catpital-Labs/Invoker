@@ -56,6 +56,69 @@ describe('useTasks', () => {
     expect(result.current.tasks.get('boot-1')?.description).toBe('Boot Task');
   });
 
+  it('skips initial getTasks when preload bootstrap has startup state', async () => {
+    const bootTask = makeUITask({ id: 'boot-1', description: 'Boot Task' });
+    const getTasks = vi.fn().mockResolvedValue({ tasks: [bootTask], workflows: [] });
+    const reportUiPerf = vi.fn();
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
+      tasks: [bootTask],
+      workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'running' }],
+    };
+    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
+      getTasks,
+      reportUiPerf,
+      checkPrStatuses: vi.fn(),
+      onTaskDelta: vi.fn(() => () => {}),
+      onWorkflowsChanged: vi.fn(() => () => {}),
+    };
+
+    renderHook(() => useTasks());
+
+    await waitFor(() => {
+      expect(window.invoker.onTaskDelta).toHaveBeenCalled();
+    });
+    expect(getTasks).not.toHaveBeenCalled();
+    expect(window.invoker.checkPrStatuses).toHaveBeenCalled();
+    expect(reportUiPerf).toHaveBeenCalledWith(
+      'useTasks_startup_snapshot_skipped_bootstrap_complete',
+      expect.objectContaining({
+        taskCount: 1,
+        workflowCount: 1,
+      }),
+    );
+  });
+
+  it('falls back to initial getTasks when preload bootstrap is absent', async () => {
+    delete (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__;
+    const getTasks = vi.fn().mockResolvedValue({ tasks: [], workflows: [] });
+    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
+      getTasks,
+      onTaskDelta: vi.fn(() => () => {}),
+      onWorkflowsChanged: vi.fn(() => () => {}),
+    };
+
+    renderHook(() => useTasks());
+
+    await waitFor(() => {
+      expect(getTasks).toHaveBeenCalledWith(false);
+    });
+  });
+
+  it('falls back to initial getTasks when preload bootstrap is empty', async () => {
+    const getTasks = vi.fn().mockResolvedValue({ tasks: [], workflows: [] });
+    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
+      getTasks,
+      onTaskDelta: vi.fn(() => () => {}),
+      onWorkflowsChanged: vi.fn(() => () => {}),
+    };
+
+    renderHook(() => useTasks());
+
+    await waitFor(() => {
+      expect(getTasks).toHaveBeenCalledWith(false);
+    });
+  });
+
   it('clears workflows when onWorkflowsChanged receives an empty array', async () => {
     const { result } = renderHook(() => useTasks());
 
@@ -129,6 +192,9 @@ describe('useTasks', () => {
     await act(async () => {
       result.current.refreshTasks();
     });
+    await act(async () => {
+      result.current.refreshTasks();
+    });
 
     await waitFor(() => {
       expect(result.current.tasks.size).toBe(1);
@@ -163,10 +229,11 @@ describe('useTasks', () => {
 
     const { result } = renderHook(() => useTasks());
 
-    await waitFor(() => {
-      expect(window.invoker.getTasks).toHaveBeenCalled();
+    await act(async () => {
+      result.current.refreshTasks();
     });
 
+    expect(window.invoker.getTasks).toHaveBeenCalled();
     expect(result.current.tasks.size).toBe(2);
     expect(result.current.tasks.get('boot-a')?.description).toBe('Bootstrap A');
     expect(result.current.tasks.get('boot-b')?.description).toBe('Bootstrap B');

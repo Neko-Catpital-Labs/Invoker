@@ -1,7 +1,8 @@
 /**
  * Hook managing task state with delta updates.
  *
- * On mount: fetches the current task list from main process.
+ * On mount: hydrates from preload bootstrap state when available, otherwise
+ * fetches the current task list from main process.
  * Then subscribes to TaskDelta events for real-time updates.
  * No polling -- all updates arrive via IPC subscription.
  */
@@ -28,6 +29,9 @@ export function useTasks(): UseTasksResult {
     window.location.search.includes('traceTaskDeltas=1');
   const bootstrapState =
     typeof window !== 'undefined' ? window.__INVOKER_BOOTSTRAP__ : undefined;
+  const hasBootstrapStartupState =
+    !!bootstrapState &&
+    ((bootstrapState.tasks?.length ?? 0) > 0 || (bootstrapState.workflows?.length ?? 0) > 0);
   const [tasks, setTasks] = useState<Map<string, TaskState>>(() => {
     const startedAt = performance.now();
     const next = new Map<string, TaskState>();
@@ -141,8 +145,7 @@ export function useTasks(): UseTasksResult {
 
     if (
       !reportedStartupBootstrapRef.current &&
-      bootstrapState &&
-      ((bootstrapState.tasks?.length ?? 0) > 0 || (bootstrapState.workflows?.length ?? 0) > 0)
+      hasBootstrapStartupState
     ) {
       reportedStartupBootstrapRef.current = true;
       void window.invoker.reportUiPerf?.('startup_bootstrap_state', {
@@ -155,7 +158,19 @@ export function useTasks(): UseTasksResult {
       });
     }
 
-    fetchAll();
+    if (hasBootstrapStartupState) {
+      void window.invoker.reportUiPerf?.('useTasks_startup_snapshot_skipped_bootstrap_complete', {
+        taskCount: bootstrapState.tasks?.length ?? 0,
+        workflowCount: bootstrapState.workflows?.length ?? 0,
+        elapsedMs: Math.round(performance.now()),
+        processElapsedMs: bootstrapState.appStartedAtEpochMs
+          ? Date.now() - bootstrapState.appStartedAtEpochMs
+          : undefined,
+      });
+      window.invoker.checkPrStatuses?.();
+    } else {
+      fetchAll();
+    }
 
     deltaPipelineRef.current = createTaskDeltaPipeline({
       flushMs: 100,

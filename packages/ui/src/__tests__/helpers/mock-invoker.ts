@@ -160,10 +160,14 @@ export function createMockInvoker(
     taskSnapshot = tasks;
     if (workflows) workflowSnapshot = workflows;
 
-    // Fire created deltas for each task
-    for (const task of tasks) {
-      deltaCallback?.({ type: 'created', task });
-    }
+    queueMicrotask(() => {
+      if (workflows) workflowsCallback?.(workflowSnapshot);
+
+      // Fire created deltas for each task.
+      for (const task of tasks) {
+        deltaCallback?.({ type: 'created', task });
+      }
+    });
   }
 
   function fireDelta(delta: TaskDelta) {

@@ -102,13 +102,15 @@ export REPRO_HEADFUL="${REPRO_HEADFUL:-0}"
 
 run_node() {
   node <<'NODE'
-const { _electron: electron } = require('@playwright/test');
 const fs = require('node:fs');
+const { createRequire } = require('node:module');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const yaml = require('yaml');
 
 const repoRoot = process.env.REPRO_REPO_ROOT;
+const appRequire = createRequire(path.join(repoRoot, 'packages', 'app', 'package.json'));
+const { _electron: electron } = appRequire('@playwright/test');
 const tmpRoot = process.env.REPRO_TMP_ROOT;
 const dbDir = process.env.REPRO_DB_DIR;
 const bareRepo = process.env.REPRO_BARE_REPO;
@@ -204,88 +206,87 @@ async function firstWindow(app) {
   return page;
 }
 
-async function seedFixture() {
-  const app = await launchApp();
-  try {
-    const page = await firstWindow(app);
-    await page.evaluate(async () => {
-      await window.invoker.clear();
-      await window.invoker.deleteAllWorkflows();
-    });
-    for (let index = 0; index < workflowCount; index += 1) {
-      await page.evaluate((planText) => window.invoker.loadPlan(planText), yaml.stringify(buildPlan(index)));
-    }
-    const seeded = await page.evaluate(async () => {
-      const result = await window.invoker.getTasks(true);
-      const tasks = Array.isArray(result) ? result : result.tasks;
-      const workflows = Array.isArray(result) ? [] : result.workflows || [];
-      return { taskCount: tasks.length, workflowCount: workflows.length };
-    });
-    if (seeded.workflowCount !== workflowCount || seeded.taskCount !== workflowCount * tasksPerWorkflow) {
-      throw new Error(
-        `Seed count mismatch: got ${seeded.workflowCount} workflows / ${seeded.taskCount} tasks, ` +
-        `expected ${workflowCount} workflows / ${workflowCount * tasksPerWorkflow} tasks`,
-      );
-    }
-    console.log(`[repro] Seeded ${seeded.workflowCount} workflows / ${seeded.taskCount} tasks`);
-  } finally {
-    await app.close();
+async function seedFixture(page) {
+  await page.evaluate(async () => {
+    await window.invoker.clear();
+    await window.invoker.deleteAllWorkflows();
+  });
+  for (let index = 0; index < workflowCount; index += 1) {
+    await page.evaluate((planText) => window.invoker.loadPlan(planText), yaml.stringify(buildPlan(index)));
   }
+  const seeded = await page.evaluate(async () => {
+    const result = await window.invoker.getTasks(true);
+    const tasks = Array.isArray(result) ? result : result.tasks;
+    const workflows = Array.isArray(result) ? [] : result.workflows || [];
+    return { taskCount: tasks.length, workflowCount: workflows.length };
+  });
+  const expectedTaskCount = workflowCount * (tasksPerWorkflow + 1);
+  if (seeded.workflowCount !== workflowCount || seeded.taskCount !== expectedTaskCount) {
+    throw new Error(
+      `Seed count mismatch: got ${seeded.workflowCount} workflows / ${seeded.taskCount} tasks, ` +
+      `expected ${workflowCount} workflows / ${expectedTaskCount} tasks`,
+    );
+  }
+  console.log(`[repro] Seeded ${seeded.workflowCount} workflows / ${seeded.taskCount} tasks`);
 }
 
-async function collectStartupEvidence() {
+async function collectStartupEvidence(page) {
   const startedAt = Date.now();
-  const app = await launchApp({ INVOKER_TEST_RESUME_PENDING_DELAY_MS: '15000' });
-  try {
-    const page = await firstWindow(app);
-    const graphWaitStartedAt = Date.now();
-    await page.locator('[data-testid^="workflow-node-"]').first().waitFor({ state: 'visible', timeout: timeoutMs });
-    const graphVisibleWallMs = Date.now() - graphWaitStartedAt;
-    await page.waitForTimeout(postVisibleWaitMs);
-    const result = await page.evaluate(async () => {
-      const activityLogs = await window.invoker.getActivityLogs();
-      const tasksResult = await window.invoker.getTasks(true);
-      const tasks = Array.isArray(tasksResult) ? tasksResult : tasksResult.tasks;
-      const workflows = Array.isArray(tasksResult) ? [] : tasksResult.workflows || [];
-      return { activityLogs, taskCount: tasks.length, workflowCount: workflows.length };
-    });
+  const beforeReloadLastLogId = await page.evaluate(async () => {
+    const logs = await window.invoker.getActivityLogs();
+    return logs.reduce((max, entry) => Math.max(max, Number(entry.id) || 0), 0);
+  });
+  await page.reload({ waitUntil: 'domcontentloaded', timeout: timeoutMs });
+  await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: timeoutMs });
 
-    const uiPerf = result.activityLogs.map(parseUiPerf).filter(Boolean);
-    const bootstrap = uiPerf.find((entry) => entry.payload.metric === 'preload_bootstrap_sync');
-    const graphVisible = uiPerf.find((entry) => entry.payload.metric === 'startup_workflow_graph_visible');
-    const taskGraphVisible = uiPerf.find((entry) => entry.payload.metric === 'startup_graph_visible');
-    const replacements = uiPerf.filter((entry) => entry.payload.metric === 'useTasks_snapshot_replace');
-    const postBootstrapReplacements = bootstrap
-      ? replacements.filter((entry) => entry.id > bootstrap.id)
-      : replacements;
-    const redundant = postBootstrapReplacements.find((entry) => entry.payload.forceRefresh !== true);
+  const graphWaitStartedAt = Date.now();
+  await page.locator('[data-testid^="workflow-node-"]').first().waitFor({ state: 'visible', timeout: timeoutMs });
+  const graphVisibleWallMs = Date.now() - graphWaitStartedAt;
+  await page.waitForTimeout(postVisibleWaitMs);
+  const result = await page.evaluate(async () => {
+    const activityLogs = await window.invoker.getActivityLogs();
+    const tasksResult = await window.invoker.getTasks(true);
+    const tasks = Array.isArray(tasksResult) ? tasksResult : tasksResult.tasks;
+    const workflows = Array.isArray(tasksResult) ? [] : tasksResult.workflows || [];
+    return { activityLogs, taskCount: tasks.length, workflowCount: workflows.length };
+  });
 
-    if (!bootstrap || !graphVisible) {
-      console.log(`[repro] ui-perf metrics seen: ${uiPerf.map((entry) => entry.payload.metric).join(', ')}`);
-      throw Object.assign(new Error('Missing required startup ui-perf evidence'), { exitCode: 2 });
-    }
+  const uiPerf = result.activityLogs
+    .filter((entry) => Number(entry.id) > beforeReloadLastLogId)
+    .map(parseUiPerf)
+    .filter(Boolean);
+  const bootstrap = uiPerf.find((entry) => entry.payload.metric === 'preload_bootstrap_sync');
+  const graphVisible = uiPerf.find((entry) => entry.payload.metric === 'startup_workflow_graph_visible');
+  const taskGraphVisible = uiPerf.find((entry) => entry.payload.metric === 'startup_graph_visible');
+  const replacements = uiPerf.filter((entry) => entry.payload.metric === 'useTasks_snapshot_replace');
+  const postBootstrapReplacements = bootstrap
+    ? replacements.filter((entry) => entry.id > bootstrap.id)
+    : replacements;
+  const redundant = postBootstrapReplacements.find((entry) => entry.payload.forceRefresh !== true);
 
-    console.log('[repro] Startup evidence');
-    console.log(`bootstrap taskCount=${fmt(bootstrap.payload.taskCount)} workflowCount=${fmt(bootstrap.payload.workflowCount)} jsonSizeBytes=${fmt(bootstrap.payload.jsonSizeBytes)} durationMs=${fmt(bootstrap.payload.durationMs)} processElapsedMs=${fmt(bootstrap.payload.processElapsedMs)}`);
-    console.log(`workflow_graph_visible nodeCount=${fmt(graphVisible.payload.nodeCount)} edgeCount=${fmt(graphVisible.payload.edgeCount)} elapsedMs=${fmt(graphVisible.payload.elapsedMs)} processElapsedMs=${fmt(graphVisible.payload.processElapsedMs)} wallWaitMs=${graphVisibleWallMs}`);
-    if (taskGraphVisible) {
-      console.log(`task_graph_visible nodeCount=${fmt(taskGraphVisible.payload.nodeCount)} edgeCount=${fmt(taskGraphVisible.payload.edgeCount)} elapsedMs=${fmt(taskGraphVisible.payload.elapsedMs)} processElapsedMs=${fmt(taskGraphVisible.payload.processElapsedMs)}`);
-    } else {
-      console.log('task_graph_visible nodeCount=n/a edgeCount=n/a elapsedMs=n/a processElapsedMs=n/a');
-    }
-
-    if (redundant) {
-      const p = redundant.payload;
-      console.log(`snapshot_after_bootstrap observed=true forced=${fmt(p.forceRefresh)} taskCount=${fmt(p.taskCount)} workflowCount=${fmt(p.workflowCount)} jsonSizeBytes=${fmt(p.jsonSizeBytes)} requestDurationMs=${fmt(p.requestDurationMs)} replaceDurationMs=${fmt(p.replaceDurationMs)}`);
-    } else {
-      console.log('snapshot_after_bootstrap observed=false forced=n/a taskCount=n/a workflowCount=n/a jsonSizeBytes=n/a requestDurationMs=n/a replaceDurationMs=n/a');
-    }
-    console.log(`final_counts taskCount=${result.taskCount} workflowCount=${result.workflowCount} processStartupWallMs=${Date.now() - startedAt}`);
-
-    return Boolean(redundant);
-  } finally {
-    await app.close();
+  if (!bootstrap || !graphVisible) {
+    console.log(`[repro] ui-perf metrics seen: ${uiPerf.map((entry) => entry.payload.metric).join(', ')}`);
+    throw Object.assign(new Error('Missing required startup ui-perf evidence'), { exitCode: 2 });
   }
+
+  console.log('[repro] Startup evidence');
+  console.log(`bootstrap taskCount=${fmt(bootstrap.payload.taskCount)} workflowCount=${fmt(bootstrap.payload.workflowCount)} jsonSizeBytes=${fmt(bootstrap.payload.jsonSizeBytes)} durationMs=${fmt(bootstrap.payload.durationMs)} processElapsedMs=${fmt(bootstrap.payload.processElapsedMs)}`);
+  console.log(`workflow_graph_visible nodeCount=${fmt(graphVisible.payload.nodeCount)} edgeCount=${fmt(graphVisible.payload.edgeCount)} elapsedMs=${fmt(graphVisible.payload.elapsedMs)} processElapsedMs=${fmt(graphVisible.payload.processElapsedMs)} wallWaitMs=${graphVisibleWallMs}`);
+  if (taskGraphVisible) {
+    console.log(`task_graph_visible nodeCount=${fmt(taskGraphVisible.payload.nodeCount)} edgeCount=${fmt(taskGraphVisible.payload.edgeCount)} elapsedMs=${fmt(taskGraphVisible.payload.elapsedMs)} processElapsedMs=${fmt(taskGraphVisible.payload.processElapsedMs)}`);
+  } else {
+    console.log('task_graph_visible nodeCount=n/a edgeCount=n/a elapsedMs=n/a processElapsedMs=n/a');
+  }
+
+  if (redundant) {
+    const p = redundant.payload;
+    console.log(`snapshot_after_bootstrap observed=true forced=${fmt(p.forceRefresh)} taskCount=${fmt(p.taskCount)} workflowCount=${fmt(p.workflowCount)} jsonSizeBytes=${fmt(p.jsonSizeBytes)} requestDurationMs=${fmt(p.requestDurationMs)} replaceDurationMs=${fmt(p.replaceDurationMs)}`);
+  } else {
+    console.log('snapshot_after_bootstrap observed=false forced=n/a taskCount=n/a workflowCount=n/a jsonSizeBytes=n/a requestDurationMs=n/a replaceDurationMs=n/a');
+  }
+  console.log(`final_counts taskCount=${result.taskCount} workflowCount=${result.workflowCount} processStartupWallMs=${Date.now() - startedAt}`);
+
+  return Boolean(redundant);
 }
 
 async function main() {
@@ -300,8 +301,15 @@ async function main() {
     console.log('[repro] DISPLAY is not set; Playwright/Electron will rely on the environment headless support or xvfb-run from the caller.');
   }
 
-  await seedFixture();
-  const observedIssue = await collectStartupEvidence();
+  const app = await launchApp({ INVOKER_TEST_RESUME_PENDING_DELAY_MS: '15000' });
+  let observedIssue;
+  try {
+    const page = await firstWindow(app);
+    await seedFixture(page);
+    observedIssue = await collectStartupEvidence(page);
+  } finally {
+    await app.close();
+  }
 
   if (expectIssue) {
     if (observedIssue) {
