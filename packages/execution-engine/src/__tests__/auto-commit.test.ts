@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { BaseExecutor, type BaseEntry, MergeConflictError, type SetupBranchOptions } from '../base-executor.js';
 import type { WorkRequest, WorkRequestInputs, WorkResponse } from '@invoker/contracts';
 import type { ExecutorHandle, TerminalSpec } from '../executor.js';
@@ -1623,6 +1623,52 @@ describe('BaseExecutor.setupTaskBranch', () => {
     expect(isAncestor(tmpDir, hashB, 'HEAD')).toBe(true);
     expect(existsSync(join(tmpDir, 'a.txt'))).toBe(true);
     expect(existsSync(join(tmpDir, 'b.txt'))).toBe(true);
+  });
+
+  it('drops leading workflow base marker when an explicit resolved base is supplied for worktree setup', async () => {
+    const masterHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+    execSync('git checkout -b invoker/task-a', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'a.txt'), 'a-work');
+    execSync('git add -A && git commit -m "task-a"', { cwd: tmpDir });
+    const hashA = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+    execSync(`git checkout ${masterHead}`, { cwd: tmpDir });
+    execSync('git checkout -b invoker/task-b', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'b.txt'), 'b-work');
+    execSync('git add -A && git commit -m "task-b"', { cwd: tmpDir });
+    const hashB = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+    execSync('git checkout master', { cwd: tmpDir });
+
+    const worktreeDir = mkdtempSync(join(tmpdir(), 'setup-task-branch-wt-'));
+    rmSync(worktreeDir, { recursive: true, force: true });
+    try {
+      const handle: ExecutorHandle = { executionId: 'e-explicit-base', taskId: 'task-c' };
+      const request = makeRequest('task-c', {
+        baseBranch: 'stack/local-only-base',
+        upstreamBranches: ['stack/local-only-base', 'invoker/task-a', 'invoker/task-b'],
+      });
+
+      await executor.testSetupTaskBranch(tmpDir, request, handle, {
+        branchName: 'invoker/task-c',
+        base: 'master',
+        worktreeDir,
+      });
+
+      expect(handle.branch).toBe('invoker/task-c');
+      expect(isAncestor(worktreeDir, hashA, 'HEAD')).toBe(true);
+      expect(isAncestor(worktreeDir, hashB, 'HEAD')).toBe(true);
+      expect(existsSync(join(worktreeDir, 'a.txt'))).toBe(true);
+      expect(existsSync(join(worktreeDir, 'b.txt'))).toBe(true);
+    } finally {
+      try {
+        execFileSync('git', ['worktree', 'remove', '--force', worktreeDir], { cwd: tmpDir, stdio: 'ignore' });
+      } catch {
+        // Best-effort cleanup; the temp directory removal below handles partial setup.
+      }
+      rmSync(worktreeDir, { recursive: true, force: true });
+    }
   });
 
   it('returns undefined for non-git directories', async () => {

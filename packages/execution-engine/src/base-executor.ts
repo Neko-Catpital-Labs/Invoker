@@ -531,8 +531,12 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     setupBranchExplicitBase?: string,
   ): Promise<void> {
     const upstreams = request.inputs.upstreamBranches ?? [];
+    const upstreamsToMerge = this.selectUpstreamBranchesToMerge(
+      upstreams,
+      request.inputs.baseBranch,
+      setupBranchExplicitBase,
+    );
     const baseFromUpstream = !setupBranchExplicitBase && upstreams.length > 0;
-    const upstreamsToMerge = baseFromUpstream ? upstreams.slice(1) : upstreams;
     traceExecution(
       `${RESTART_TO_BRANCH_TRACE} [mergeRequestUpstreamBranches] upstreamsToMerge=${JSON.stringify(upstreamsToMerge)} ` +
         `(baseFromUpstream=${baseFromUpstream}) mergeCwd=${mergeCwd}`,
@@ -572,6 +576,26 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
       }
       throw err;
     }
+  }
+
+  private selectUpstreamBranchesToMerge(
+    upstreamBranches: string[],
+    requestBaseBranch?: string,
+    setupBranchExplicitBase?: string,
+  ): string[] {
+    const requestBase = requestBaseBranch?.trim();
+    // Contract: upstreamBranches may be shaped as
+    // [workflowBase, dependencyBranch, ...]. When the workflow base was already
+    // resolved and supplied explicitly, do not merge that marker again.
+    if (setupBranchExplicitBase && requestBase && upstreamBranches[0] === requestBase) {
+      return upstreamBranches.slice(1);
+    }
+
+    if (!setupBranchExplicitBase && upstreamBranches.length > 0) {
+      return upstreamBranches.slice(1);
+    }
+
+    return upstreamBranches;
   }
 
   protected async setupTaskBranch(
