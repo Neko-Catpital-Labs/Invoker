@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { accessSync, constants } from 'node:fs';
 import { normalize } from 'node:path';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
@@ -17,7 +18,6 @@ import { createExecutionBench } from './execution-bench.js';
 import { buildRemoteAgentEnvExports } from './remote-agent-env.js';
 import {
   shellPosixSingleQuote as sshGitShellQuote,
-  base64Encode as sshGitB64,
   sshInteractiveCdFragment,
   buildMirrorCloneScript,
   parseBootstrapOutput,
@@ -138,10 +138,19 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
     }, { batchMode: false });
   }
 
-  private buildPayloadExecutionScript(payloadB64: string): string {
+  private buildRunnerScript(): string {
     const intervalSeconds = this.remoteHeartbeatIntervalSeconds;
-    return `(
-  echo ${payloadB64} | base64 -d | bash -se
+    return `#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -ne 1 ]]; then
+  echo "usage: $0 <payload-script>" >&2
+  exit 2
+fi
+
+PAYLOAD_PATH=$1
+(
+  bash "$PAYLOAD_PATH"
 ) &
 PAYLOAD_PID=$!
 INVOKER_HEARTBEAT_MARKER=${this.shellQuote(SshExecutor.REMOTE_HEARTBEAT_MARKER)}
@@ -163,6 +172,117 @@ fi
 kill "$HEARTBEAT_PID" >/dev/null 2>&1 || true
 wait "$HEARTBEAT_PID" 2>/dev/null || true
 exit "$PAYLOAD_EXIT"
+`;
+  }
+
+  private buildPayloadScript(payload: string): string {
+    return `#!/usr/bin/env bash
+set -e
+${payload}
+`;
+  }
+
+  private buildProvisionScript(): string {
+    return `#!/usr/bin/env bash
+set -e
+${this.provisionCommand}
+`;
+  }
+
+  private safePathToken(value: string): string {
+    const token = value.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+    return token || 'task';
+  }
+
+  private buildStagingDirExpression(executionId: string, actionId: string): string {
+    const safeExecutionId = this.safePathToken(executionId);
+    const safeActionId = this.safePathToken(actionId).slice(0, 80);
+    return `${safeExecutionId}-${safeActionId}`;
+  }
+
+  private createHeredocDelimiter(content: string, label: string): string {
+    const safeLabel = this.safePathToken(label).toUpperCase();
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const delimiter = `__INVOKER_${safeLabel}_${randomUUID().replace(/-/g, '')}_${attempt}__`;
+      const pattern = new RegExp(`(^|\\n)${delimiter}(\\n|$)`);
+      if (!pattern.test(content)) return delimiter;
+    }
+    throw new Error(`Unable to create heredoc delimiter for ${label}`);
+  }
+
+  private renderHeredocFile(pathExpression: string, content: string, label: string): string {
+    const delimiter = this.createHeredocDelimiter(content, label);
+    return `cat > ${pathExpression} <<'${delimiter}'
+${content}${content.endsWith('\n') ? '' : '\n'}${delimiter}
+`;
+  }
+
+  private remotePathNormalizeFunction(): string {
+    return `normalize_remote_path() {
+  local path="$1"
+  if [[ "$path" == '~' ]]; then
+    printf '%s\\n' "$HOME"
+  elif [[ "\${path:0:2}" == '~/' ]]; then
+    printf '%s/%s\\n' "$HOME" "\${path:2}"
+  else
+    printf '%s\\n' "$path"
+  fi
+}
+`;
+  }
+
+  private buildRuntimeBootstrapScript(options: {
+    executionId: string;
+    actionId: string;
+    workspacePath: string;
+    payload: string;
+    managed: boolean;
+    envExports: string;
+  }): string {
+    const runner = this.buildRunnerScript();
+    const payload = this.buildPayloadScript(options.payload);
+    const provision = options.managed ? this.buildProvisionScript() : undefined;
+    const stagingTokenExpression = this.buildStagingDirExpression(options.executionId, options.actionId);
+    const provisionSection = provision
+      ? `${this.renderHeredocFile('"$PROVISION_PATH"', provision, 'provision')}
+chmod 700 "$PROVISION_PATH"
+`
+      : '';
+    const provisionLogLine = this.shellQuote(
+      `[SshExecutor] Provisioning remote worktree with: ${this.provisionCommand.slice(0, 50)}...`,
+    );
+    const runProvisionSection = provision
+      ? `echo ${provisionLogLine}
+. "$PROVISION_PATH"
+echo "[SshExecutor] Running task payload..."
+`
+      : `echo "[SshExecutor BYO] Running task in user-provided workspace: $WT"
+`;
+
+    return `set -euo pipefail
+${this.remotePathNormalizeFunction()}
+INVOKER_HOME=$(normalize_remote_path ${this.shellQuote(this.remoteInvokerHome)})
+STAGING_DIR="$INVOKER_HOME/runtime/ssh-executor/${stagingTokenExpression}"
+RUNNER_PATH="$STAGING_DIR/runner.sh"
+PAYLOAD_PATH="$STAGING_DIR/payload.sh"
+PROVISION_PATH="$STAGING_DIR/provision.sh"
+cleanup_runtime() {
+  local status="$1"
+  trap - EXIT HUP INT TERM
+  rm -rf "$STAGING_DIR" >/dev/null 2>&1 || true
+  exit "$status"
+}
+trap 'cleanup_runtime "$?"' EXIT
+trap 'cleanup_runtime 129' HUP
+trap 'cleanup_runtime 130' INT
+trap 'cleanup_runtime 143' TERM
+mkdir -p "$STAGING_DIR"
+chmod 700 "$STAGING_DIR"
+${this.renderHeredocFile('"$RUNNER_PATH"', runner, 'runner')}${this.renderHeredocFile('"$PAYLOAD_PATH"', payload, 'payload')}${provisionSection}chmod 700 "$RUNNER_PATH" "$PAYLOAD_PATH"
+WT=$(normalize_remote_path ${this.shellQuote(options.workspacePath)})
+cd "$WT"
+${options.envExports}
+${runProvisionSection}"$RUNNER_PATH" "$PAYLOAD_PATH"
 `;
   }
 
@@ -392,22 +512,15 @@ exit "$PAYLOAD_EXIT"
       return handle;
     }
 
-    // Run payload in user-provided directory
-    const payloadB64 = sshGitB64(payload);
-    const wtB64 = sshGitB64(workspacePath);
     const envExports = buildRemoteAgentEnvExports(this.secretsFile, this.useApiKey);
-    const runScript = `set -euo pipefail
-WT=$(echo ${wtB64} | base64 -d)
-if [[ "$WT" == '~' ]]; then
-  WT="$HOME"
-elif [[ "\${WT:0:2}" == '~/' ]]; then
-  WT="$HOME/\${WT:2}"
-fi
-cd "$WT"
-${envExports}
-echo "[SshExecutor BYO] Running task in user-provided workspace: $WT"
-${this.buildPayloadExecutionScript(payloadB64)}
-`;
+    const runScript = this.buildRuntimeBootstrapScript({
+      executionId,
+      actionId: request.actionId,
+      workspacePath,
+      payload,
+      managed: false,
+      envExports,
+    });
 
     bench('SshExecutor.startBYOWorkspace.spawnSshRemoteStdin.before', { workspacePath });
     const started = await this.spawnSshRemoteStdin(executionId, request, handle, runScript, agentSessionId, undefined);
@@ -633,24 +746,15 @@ ${this.buildPayloadExecutionScript(payloadB64)}
     }
 
     // Step 5: Provision + run payload in a single SSH session
-    const provB64 = sshGitB64(this.provisionCommand);
-    const payloadB64 = sshGitB64(payload);
-    const wtB64 = sshGitB64(remoteWt);
     const envExports = buildRemoteAgentEnvExports(this.secretsFile, this.useApiKey);
-    const runScript = `set -euo pipefail
-WT=$(echo ${wtB64} | base64 -d)
-if [[ "$WT" == '~' ]]; then
-  WT="$HOME"
-elif [[ "\${WT:0:2}" == '~/' ]]; then
-  WT="$HOME/\${WT:2}"
-fi
-cd "$WT"
-${envExports}
-echo "[SshExecutor] Provisioning remote worktree with: ${this.provisionCommand.slice(0, 50)}..."
-eval "$(echo ${provB64} | base64 -d)"
-echo "[SshExecutor] Running task payload..."
-${this.buildPayloadExecutionScript(payloadB64)}
-`;
+    const runScript = this.buildRuntimeBootstrapScript({
+      executionId,
+      actionId: request.actionId,
+      workspacePath: remoteWt,
+      payload,
+      managed: true,
+      envExports,
+    });
 
     bench('SshExecutor.startManagedWorkspace.spawnSshRemoteStdin.before', {
       remoteWt,
