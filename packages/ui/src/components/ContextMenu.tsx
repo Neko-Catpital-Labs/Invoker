@@ -60,16 +60,33 @@ export function ContextMenu({
   const dangerItems = availableItems.filter((item) => item.variant === 'danger');
   const hasMoreButton = dangerItems.length > 0 && !showMore;
   const renderedItems: MenuItem[] = showMore ? [...safeItems, ...dangerItems] : safeItems;
+  const moreIndex = renderedItems.length;
 
-  // Find first enabled item index
-  const firstEnabledIndex = renderedItems.findIndex((item) => item.enabled);
-
-  // Auto-focus first enabled item on mount
+  // Initial focus: first enabled item (runs only on mount; later navigation
+  // and More expansion manage focusedIndex directly so this does not override
+  // them on re-renders).
   useEffect(() => {
+    const firstEnabledIndex = renderedItems.findIndex((item) => item.enabled);
     if (firstEnabledIndex >= 0) {
       setFocusedIndex(firstEnabledIndex);
     }
-  }, [firstEnabledIndex]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Focus the menu container so its onKeyDown handler receives arrow/Enter
+  // keys without depending on which descendant the browser focuses.
+  useEffect(() => {
+    menuRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  const expandMore = () => {
+    setShowMore(true);
+    // After expansion the renderedItems array becomes [...safeItems, ...dangerItems].
+    // The first newly-revealed item sits at safeItems.length, which is the
+    // deterministic landing spot for the highlight.
+    const firstNewEnabled = dangerItems.findIndex((item) => item.enabled);
+    setFocusedIndex(firstNewEnabled >= 0 ? safeItems.length + firstNewEnabled : safeItems.length);
+  };
 
   // Viewport clamping: flip if menu overflows bottom or right
   useLayoutEffect(() => {
@@ -138,19 +155,31 @@ export function ContextMenu({
     const enabledIndices = renderedItems
       .map((item, idx) => (item.enabled ? idx : -1))
       .filter((idx) => idx >= 0);
+    if (hasMoreButton) enabledIndices.push(moreIndex);
+
+    if (enabledIndices.length === 0) return;
 
     if (e.key === 'ArrowDown') {
       e.preventDefault();
+      e.stopPropagation();
       const currentPos = enabledIndices.indexOf(focusedIndex);
-      const nextPos = (currentPos + 1) % enabledIndices.length;
+      const nextPos = currentPos < 0 ? 0 : (currentPos + 1) % enabledIndices.length;
       setFocusedIndex(enabledIndices[nextPos]);
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
+      e.stopPropagation();
       const currentPos = enabledIndices.indexOf(focusedIndex);
-      const prevPos = (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
+      const prevPos = currentPos < 0
+        ? enabledIndices.length - 1
+        : (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
       setFocusedIndex(enabledIndices[prevPos]);
     } else if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
+      e.stopPropagation();
+      if (hasMoreButton && focusedIndex === moreIndex) {
+        expandMore();
+        return;
+      }
       const item = renderedItems[focusedIndex];
       if (item?.enabled) {
         handleItemClick(item);
@@ -254,8 +283,11 @@ export function ContextMenu({
           <div className="border-t border-gray-600 my-1" />
           <button
             role="menuitem"
-            className="w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
-            onClick={() => setShowMore(true)}
+            className={`w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 ${
+              focusedIndex === moreIndex ? 'bg-gray-700' : ''
+            }`}
+            onClick={expandMore}
+            onMouseEnter={() => setFocusedIndex(moreIndex)}
           >
             More
           </button>
