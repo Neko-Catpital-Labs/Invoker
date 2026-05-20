@@ -693,6 +693,27 @@ export function App() {
     }
   }, [keyboardRegion, nodeCenter, selectedTaskId, selectedWorkflow?.id, selectedWorkflowId, tasks, workflows]);
 
+  const dismissSelectedWorkflowTaskGraph = useCallback(() => {
+    setContextMenu(null);
+    setWorkflowContextMenu(null);
+    setSelectedTaskId(null);
+    setSelectedWorkflowId(null);
+    setWorkflowSelectionDismissed(true);
+    focusKeyboardRegion('workflowGraph');
+  }, [focusKeyboardRegion]);
+
+  const openSelectedWorkflowTaskGraph = useCallback(() => {
+    const workflowId = selectedWorkflow?.id ?? selectedWorkflowId;
+    if (!workflowId || !workflows.has(workflowId)) return false;
+    setContextMenu(null);
+    setWorkflowContextMenu(null);
+    setSelectedTaskId(null);
+    setWorkflowSelectionDismissed(false);
+    setSelectedWorkflowId(workflowId);
+    focusKeyboardRegion('taskGraph');
+    return true;
+  }, [focusKeyboardRegion, selectedWorkflow?.id, selectedWorkflowId, workflows]);
+
   const activateSearchResult = useCallback((result: SearchResult | undefined) => {
     if (!result) return;
     setSearchOpen(false);
@@ -752,6 +773,9 @@ export function App() {
         if (keyboardRegion === 'inspector') {
           event.preventDefault();
           focusKeyboardRegion(previousGraphRegion);
+        } else if (keyboardRegion === 'taskGraph' && selectedWorkflow) {
+          event.preventDefault();
+          dismissSelectedWorkflowTaskGraph();
         }
         return;
       }
@@ -760,6 +784,12 @@ export function App() {
         if (event.key === 'Enter') {
           event.preventDefault();
           openSelectedContextMenu();
+          return;
+        }
+        if (event.key === ' ' && keyboardRegion === 'workflowGraph') {
+          if (openSelectedWorkflowTaskGraph()) {
+            event.preventDefault();
+          }
           return;
         }
         if (event.key === 'Home' && keyboardRegion === 'taskGraph') {
@@ -823,11 +853,13 @@ export function App() {
   }, [
     activateSearchResult,
     bottomStatusIndex,
+    dismissSelectedWorkflowTaskGraph,
     focusKeyboardRegion,
     handleStatusClick,
     keyboardRegion,
     miniDagTasks,
     modal.type,
+    openSelectedWorkflowTaskGraph,
     openSelectedContextMenu,
     previousGraphRegion,
     searchActiveIndex,
@@ -835,6 +867,7 @@ export function App() {
     searchResults,
     selectRelativeNode,
     selectTaskById,
+    selectedWorkflow,
     visibleStatusKeys,
   ]);
   const missingRequiredTool = systemDiagnostics?.tools.find((tool) => tool.required && !tool.installed) ?? null;

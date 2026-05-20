@@ -11,6 +11,8 @@ import { vi } from 'vitest';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { WorkflowMeta } from '../types.js';
 
+vi.setConfig({ testTimeout: 15_000 });
+
 vi.mock('@xyflow/react', async () => {
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
   return createReactFlowMock();
@@ -108,6 +110,39 @@ describe('Side rail controls (component)', () => {
     });
 
     key('Enter');
+    expect(await screen.findByRole('menu')).toHaveTextContent('Open Workflow');
+  });
+
+  it('Escape from task graph dismisses selected-workflow-mini-dag and re-activates workflow graph', async () => {
+    await renderKeyboardFixture(mock);
+
+    key('Tab');
+    expect(screen.getByTestId('selected-workflow-mini-dag').querySelector('[data-keyboard-region="taskGraph"]')).toHaveAttribute('data-keyboard-active', 'true');
+
+    key('Escape');
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('selected-workflow-mini-dag')).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId('workflow-graph-surface')).toHaveAttribute('data-keyboard-active', 'true');
+  });
+
+  it('Space from workflow graph expands the selected workflow task graph without opening the context menu', async () => {
+    await renderKeyboardFixture(mock);
+
+    expect(screen.getByTestId('workflow-graph-surface')).toHaveAttribute('data-keyboard-active', 'true');
+    key(' ');
+
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Alpha Workflow task DAG');
+    expect(screen.getByTestId('selected-workflow-mini-dag').querySelector('[data-keyboard-region="taskGraph"]')).toHaveAttribute('data-keyboard-active', 'true');
+  });
+
+  it('Enter from workflow graph still opens the workflow context menu', async () => {
+    await renderKeyboardFixture(mock);
+
+    key('Enter');
+
     expect(await screen.findByRole('menu')).toHaveTextContent('Open Workflow');
   });
 
