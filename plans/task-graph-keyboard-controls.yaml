@@ -1,0 +1,164 @@
+name: "Task graph keyboard controls"
+description: |
+  Adds keyboard affordances for the selected workflow task graph in the Invoker UI. Escape should dismiss the selected task graph when keyboard focus is inside that graph, and Space should expand/open the selected workflow's task graph while Enter remains reserved for the workflow context menu.
+
+  The change is contained in renderer keyboard state and tests, with visual proof enabled because it changes UI behavior in `packages/ui`. Because this targets Invoker itself, the implementation workflow uses the external review PR gate and the resulting stack should be published with `mergify stack push` after the branch commits are ready.
+onFinish: pull_request
+mergeMode: external_review
+visualProof: true
+repoUrl: git@github.com:Neko-Catpital-Labs/Invoker.git
+baseBranch: master
+featureBranch: plan/task-graph-keyboard-controls
+
+tasks:
+  - id: implement-task-graph-keyboard-controls
+    description: |
+      Goal:
+      Implement keyboard behavior for opening and dismissing the selected workflow task graph.
+      Motivation:
+      Users need a reversible keyboard path for task graph inspection: Space opens the graph from workflow selection, and Escape dismisses it from task-graph focus without interfering with search, modals, or inspector Escape behavior.
+      Alternative considerations:
+      Enter was rejected for expansion because it already opens context menus; Space matches activation semantics while keeping Enter stable.
+      Implementation details:
+      Update the central keyboard handler and selection helpers in App so task graph dismissal mirrors the existing graph-background click behavior, while Space expands the current workflow selection.
+      Layer: ui
+      Feature state: active
+      Files:
+      - packages/ui/src/App.tsx
+      - packages/ui/src/__tests__/keyboard-controls.test.tsx
+      Change types:
+      - packages/ui/src/App.tsx -- modify
+      - packages/ui/src/__tests__/keyboard-controls.test.tsx -- modify
+      Acceptance criteria:
+      - Pressing Escape while the task graph keyboard region is active removes `selected-workflow-mini-dag`, clears selected task/workflow state, and returns keyboard focus to `workflowGraph`.
+      - Pressing Space while the workflow graph keyboard region is active opens/expands the selected workflow task graph.
+      - Pressing Enter on a workflow node still opens the workflow context menu.
+      - `cd packages/ui && pnpm test -- src/__tests__/keyboard-controls.test.tsx` exits 0.
+    prompt: |
+      Goal:
+      Implement keyboard behavior for opening and dismissing the selected workflow task graph.
+      Motivation:
+      Users need a reversible keyboard path for task graph inspection: Space opens the graph from workflow selection, and Escape dismisses it from task-graph focus without interfering with search, modals, or inspector Escape behavior.
+      Alternative considerations:
+      Keep Enter reserved for the existing context-menu behavior. Do not remap Enter to expansion.
+      Implementation details:
+      Zero-context execution: assume no prior context. Modify `packages/ui/src/App.tsx` and `packages/ui/src/__tests__/keyboard-controls.test.tsx` to add task graph keyboard controls.
+      In the App keyboard handler, when `keyboardRegion === 'taskGraph'`, `event.key === 'Escape'`, and a selected workflow task graph is visible, prevent default, close any task/workflow context menus, clear selected task and selected workflow, set the dismissed flag so the mini DAG disappears, and move keyboard focus back to `workflowGraph`. Preserve the existing search Escape, modal guard, and inspector Escape behavior.
+      Add Space handling for `keyboardRegion === 'workflowGraph'`: when a workflow node is selected, prevent default and expand/open that workflow's task graph without opening the workflow context menu. Preserve Enter as the context menu shortcut.
+      Update `packages/ui/src/__tests__/keyboard-controls.test.tsx` with deterministic tests covering:
+      1. Escape dismisses `selected-workflow-mini-dag` from task graph keyboard focus and marks the workflow graph surface as keyboard-active.
+      2. Space opens/expands the selected workflow task graph from workflow graph keyboard focus.
+      3. Enter still opens the workflow context menu.
+      Acceptance criteria:
+      - Ensure Escape dismisses `selected-workflow-mini-dag` from task graph keyboard focus and returns keyboard activity to `workflowGraph`.
+      - Ensure Space opens the selected workflow task graph from workflow graph keyboard focus.
+      - Ensure Enter still opens the workflow context menu.
+      - Deterministic pass/fail expectation: `cd packages/ui && pnpm test -- src/__tests__/keyboard-controls.test.tsx` must exit code 0 after the changes.
+    dependencies: []
+
+  - id: add-task-graph-visual-proof
+    description: |
+      Goal:
+      Add visual proof coverage for the selected task graph keyboard state.
+      Motivation:
+      The plan modifies visible UI state, so the review should include a reproducible screenshot state that shows the selected workflow task graph before and after keyboard-driven changes.
+      Alternative considerations:
+      Unit tests prove behavior, but visual proof gives reviewers confidence that the selected graph panel remains framed and visible in the actual app shell.
+      Implementation details:
+      Add a plan-specific Playwright visual proof case that captures the selected task graph state using the existing visual proof harness patterns.
+      Layer: e2e_regression
+      Layer exception: allowed
+      This e2e regression task intentionally depends on the UI implementation so the screenshot state captures the activated behavior after the renderer change exists.
+      Feature state: active
+      Files:
+      - packages/app/e2e/visual-proof.spec.ts
+      Change types:
+      - packages/app/e2e/visual-proof.spec.ts -- modify
+      Acceptance criteria:
+      - A plan-specific visual proof case captures a stable selected task graph state.
+      - The test uses existing helpers and screenshot naming conventions.
+      - `pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && bash scripts/ui-visual-proof.sh --label after` exits 0.
+    prompt: |
+      Goal:
+      Add visual proof coverage for the selected task graph keyboard state.
+      Motivation:
+      The plan modifies visible UI state, so reviewers need a reproducible screenshot state showing the selected workflow task graph in the real app shell.
+      Alternative considerations:
+      Do not create a new visual proof harness. Reuse the existing `visual-proof.spec.ts` helpers, setup style, and screenshot capture naming conventions.
+      Implementation details:
+      Zero-context execution: assume no prior context. Modify `packages/app/e2e/visual-proof.spec.ts` to add visual proof coverage for the selected workflow task graph state.
+      Add one plan-specific test case that loads or creates a workflow state with a selected workflow task graph visible and captures it with a stable screenshot name such as `task-graph-keyboard-controls-selected`. Keep the test scoped to the selected mini DAG visibility/framing; behavioral keyboard assertions belong in `packages/ui/src/__tests__/keyboard-controls.test.tsx`.
+      Acceptance criteria:
+      - Ensure a plan-specific visual proof case captures the selected task graph state.
+      - Ensure the new case uses existing helpers and screenshot naming conventions.
+      - Deterministic pass/fail expectation: `pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && bash scripts/ui-visual-proof.sh --label after` must exit code 0 after the implementation and visual proof test land.
+    dependencies: [implement-task-graph-keyboard-controls]
+
+  - id: verify-ui-keyboard-controls
+    description: |
+      Goal:
+      Run focused renderer tests for the keyboard controls.
+      Motivation:
+      The central keyboard handler is easy to regress, so the component tests should prove Escape, Space, and Enter behavior before broader checks run.
+      Alternative considerations:
+      A full UI test pass is acceptable if the package script expands the file filter, but this task intentionally targets the keyboard-controls suite.
+      Implementation details:
+      Run the UI package Vitest command from inside `packages/ui`.
+      Layer: ui
+      Feature state: active
+      Files:
+      - packages/ui/src/App.tsx
+      - packages/ui/src/__tests__/keyboard-controls.test.tsx
+      Change types:
+      - none
+      Acceptance criteria:
+      - The command exits 0.
+    command: "cd packages/ui && pnpm test -- src/__tests__/keyboard-controls.test.tsx"
+    dependencies: [implement-task-graph-keyboard-controls]
+
+  - id: capture-task-graph-visual-proof
+    description: |
+      Goal:
+      Build the UI and app packages and capture after-change visual proof.
+      Motivation:
+      Visual proof documents that the selected task graph remains correctly rendered after keyboard behavior changes.
+      Alternative considerations:
+      Screenshot capture should happen after both implementation and the plan-specific visual proof test are present.
+      Implementation details:
+      Build the renderer and Electron app packages, then run the existing visual proof script with the `after` label.
+      Layer: e2e_regression
+      Layer exception: allowed
+      This e2e regression task intentionally depends on the UI implementation so visual proof runs only after the renderer behavior is present.
+      Feature state: active
+      Files:
+      - packages/ui/src/App.tsx
+      - packages/app/e2e/visual-proof.spec.ts
+      Change types:
+      - none
+      Acceptance criteria:
+      - The command exits 0 and produces after-change visual proof artifacts.
+    command: "pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && bash scripts/ui-visual-proof.sh --label after"
+    dependencies: [implement-task-graph-keyboard-controls, add-task-graph-visual-proof]
+
+  - id: final-regression
+    description: |
+      Goal:
+      Run the full repository regression suite as the terminal gate.
+      Motivation:
+      The UI keyboard handler sits in the main app shell, so the final workflow gate should catch cross-package regressions before PR review.
+      Alternative considerations:
+      Focused UI tests run earlier for fast feedback; this full suite remains the final standalone implementation-plan gate.
+      Implementation details:
+      Run the repository's canonical full test command from the repo root after every implementation and verification task completes.
+      Layer: e2e_regression
+      Layer exception: allowed
+      This terminal regression gate intentionally depends on UI implementation and UI verification tasks so the full repository suite validates the completed feature.
+      Feature state: active
+      Files:
+      - none
+      Change types:
+      - none
+      Acceptance criteria:
+      - `pnpm run test:all` exits 0.
+    command: "pnpm run test:all"
+    dependencies: [implement-task-graph-keyboard-controls, add-task-graph-visual-proof, verify-ui-keyboard-controls, capture-task-graph-visual-proof]

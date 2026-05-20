@@ -1,0 +1,128 @@
+name: "Fix context menu keyboard navigation"
+description: |
+  Fixes context menus so a user can open a menu, press ArrowUp/ArrowDown to move through menu items, and press Enter or Space to execute the highlighted action.
+
+  Phase 1a static analysis found two root causes. The task context menu in packages/ui/src/components/ContextMenu.tsx defines ArrowUp/ArrowDown/Enter handling on the menu container, but the menu is rendered with tabIndex={-1} and never receives focus when opened, so normal document-level key presses do not reach that handler. The workflow context menu defined inline in packages/ui/src/App.tsx has no roving keyboard handler at all; it only closes on Escape through a document listener. App-level graph keyboard handling remains active while a menu is open, so Arrow keys and Enter can be consumed by graph navigation/open-menu behavior instead of menu selection.
+
+  Phase 1b repro added packages/ui/src/__tests__/context-menu-keyboard-repro.test.tsx locally and ran `cd packages/ui && pnpm test src/__tests__/context-menu-keyboard-repro.test.tsx`. The test opened a workflow context menu, pressed ArrowDown three times, pressed Enter, and expected Copy Workflow ID to call `navigator.clipboard.writeText('wf-1')`. It failed with zero clipboard calls, proving the open menu does not receive or execute keyboard navigation.
+
+  This plan adds durable regression coverage, implements accessible keyboard behavior for task and workflow menus, captures visual proof for the highlighted menu state, and ends with the full repository test suite. Because this is Invoker-on-Invoker work, publish the resulting GitHub PR stack with Mergify Stacks (`mergify stack push`) after the workflow is ready.
+visualProof: true
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: git@github.com:Neko-Catpital-Labs/Invoker.git
+baseBranch: stack/EdbertChan/prompt-terminal-configured-agent
+featureBranch: fix/context-menu-keyboard-navigation
+
+tasks:
+  - id: add-context-menu-keyboard-regression-tests
+    dependencies: []
+    prompt: "Assume no prior context. Goal: Add durable regression tests for open context menu keyboard navigation and activation in packages/ui/src/__tests__/context-menu-e2e.test.tsx, using packages/ui/src/__tests__/context-menu-keyboard-repro.test.tsx only as temporary source material if present. Motivation: A local repro proved that opening a workflow context menu, pressing ArrowDown three times, and pressing Enter does not call navigator.clipboard.writeText('wf-1'), so the tests must render the real App/menu components and dispatch keyboard events. Alternative considerations: Do not rely only on static checks and do not leave a permanent __tmp repro file; fold the repro into durable context menu coverage. Implementation details: Add tests that open workflow-node-wf-1, send ArrowDown three times and Enter from the active/document keyboard target, and expect navigator.clipboard.writeText to be called with wf-1; verify ArrowUp wraps deterministically; open a task context menu in the mini DAG, send ArrowDown then Enter, and expect the next enabled task action to call the mock API; verify Space activates the highlighted item as well as Enter. Acceptance criteria: Running cd packages/ui && pnpm test src/__tests__/context-menu-e2e.test.tsx must exit code 0 after the implementation task, and the new expectations must fail on the pre-fix behavior."
+    description: |
+      Layer: e2e_regression
+      Feature state: active
+      Goal:
+      Add failing-first regression coverage for keyboard navigation and activation in open context menus.
+      Motivation:
+      The verified repro shows that document-level ArrowDown and Enter do not execute the highlighted workflow menu item, and task menus have the same focus-delivery risk because their keyboard handler is only attached to an unfocused menu element.
+      Alternative considerations:
+      A static-only assertion would miss the event propagation and focus interaction between App-level graph shortcuts and menu shortcuts, so use rendered component tests that dispatch real keyboard events after opening the menus.
+      Implementation details:
+      Add component-level tests that open workflow and task context menus and assert ArrowUp/ArrowDown move the active item while Enter/Space execute the selected action.
+      Files:
+      packages/ui/src/__tests__/context-menu-e2e.test.tsx
+      packages/ui/src/__tests__/context-menu-keyboard-repro.test.tsx may be used as source material but should be folded into durable non-temporary coverage or removed after equivalent coverage exists.
+      Change types:
+      Test-only changes in the UI package.
+      Acceptance criteria:
+      Before the implementation fix, at least one new test must fail for the current defect. After the implementation fix, tests must prove workflow menu ArrowDown x3 + Enter executes Copy Workflow ID, task menu ArrowDown + Enter executes the next enabled task action, ArrowUp wraps to the last enabled item, and disabled task actions are skipped.
+
+  - id: implement-context-menu-keyboard-navigation
+    dependencies: []
+    prompt: "Assume no prior context. Goal: Implement keyboard navigation and activation for every Invoker context menu. Motivation: Static analysis found that packages/ui/src/components/ContextMenu.tsx has ArrowUp/ArrowDown/Enter handling but the menu uses tabIndex={-1} and never focuses itself when opened, while WorkflowContextMenu in packages/ui/src/App.tsx has no Arrow/Enter handler at all and App document keydown can consume graph shortcuts while a menu is open. Alternative considerations: Do not introduce a broad dependency or rewrite unrelated menu organization; keep the fix local to packages/ui/src/components/ContextMenu.tsx and packages/ui/src/App.tsx, using an optional helper such as packages/ui/src/lib/menu-keyboard.ts only if it clearly reduces duplication. Implementation details: Focus each menu on open with preventScroll; ensure ArrowDown and ArrowUp cycle through enabled menu items, skipping disabled task actions; ensure Enter and Space activate the highlighted enabled item; ensure handled keys call preventDefault and stopPropagation; make the More item reachable and keyboard-activatable; after More expands, move focus/highlight to a deterministic enabled item; keep Escape and outside-click dismissal; guard App-level graph shortcuts so open context menus own ArrowUp, ArrowDown, Enter, and Space. Acceptance criteria: cd packages/ui && pnpm test src/__tests__/context-menu-e2e.test.tsx must exit code 0, manual behavior must allow opening a menu, moving the visual highlight with ArrowUp/ArrowDown, activating with Enter or Space, closing after action, and preserving existing click behavior."
+    description: |
+      Layer: ui_activation
+      Feature state: active
+      Goal:
+      Make task and workflow context menus own ArrowUp/ArrowDown/Enter/Space while open.
+      Motivation:
+      Users should be able to operate context menus without switching to the mouse after the menu is visible. Current task menus do not focus their keyboard handler, workflow menus have no roving handler, and App-level graph shortcuts can consume the same keys while a menu is open.
+      Alternative considerations:
+      Replacing menus with a third-party menu library would be larger than needed. A small shared local helper or consistent duplicated pattern is enough if it keeps ARIA roles, focus, and menu item activation correct.
+      Implementation details:
+      Focus the menu on open, add or standardize roving active-index keyboard handling for both menus, stop handled menu key events from falling through to graph shortcuts, and keep Escape/outside-click dismissal intact.
+      Files:
+      packages/ui/src/components/ContextMenu.tsx
+      packages/ui/src/App.tsx
+      Optional shared helper under packages/ui/src/components/ or packages/ui/src/lib/ if it reduces duplication.
+      Change types:
+      UI behavior changes and small refactor if needed.
+      Acceptance criteria:
+      Opening either a task or workflow context menu must focus a keyboard event target. ArrowDown and ArrowUp must cycle through enabled role=menuitem controls, skipping disabled task actions. Enter and Space must execute the highlighted enabled action and close the menu. The More item must be reachable and activatable by keyboard, with focus moving to a sensible item after expansion. Escape and outside click dismissal must continue working. App graph keyboard shortcuts must not run for ArrowUp/ArrowDown/Enter/Space while a context menu is open.
+
+  - id: add-context-menu-visual-proof
+    dependencies: [implement-context-menu-keyboard-navigation]
+    prompt: "Assume no prior context. Goal: Add visual proof for context menu keyboard navigation in packages/app/e2e/visual-proof.spec.ts. Motivation: The implementation changes interactive menu focus and highlight behavior in packages/ui/, so reviewers need deterministic screenshot proof that the keyboard-selected menu item is visible. Alternative considerations: Do not add a standalone screenshot mechanism; use the existing captureScreenshot helper from packages/app/e2e/fixtures/electron-app.ts and the visual-proof.spec.ts conventions. Implementation details: Add a test under the existing Visual proof capture describe block that loads a stable plan, opens a workflow or task context menu, presses ArrowDown at least once, asserts the newly active menu item has the active/highlight styling or accessible marker added by the implementation, and calls captureScreenshot(page, 'context-menu-keyboard-navigation'). Acceptance criteria: pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && bash scripts/ui-visual-proof.sh --label after must produce the context-menu-keyboard-navigation capture with exit code 0; the test must be deterministic and avoid arbitrary sleeps."
+    description: |
+      Layer: e2e_regression
+      Feature state: active
+      Goal:
+      Add visual proof coverage for the keyboard-highlighted context menu state.
+      Motivation:
+      This plan modifies packages/ui/ interactive behavior. The review should include screenshot proof that keyboard focus/highlight is visible and that the menu remains visually coherent after keyboard navigation.
+      Alternative considerations:
+      Unit tests prove behavior but do not show the visual active state; visual-proof.spec.ts is the repo's existing screenshot surface for UI changes.
+      Implementation details:
+      Add a Playwright visual-proof test that opens a workflow or task context menu, presses ArrowDown to move the highlighted item, asserts the target menu item is keyboard-active, and captures a screenshot.
+      Files:
+      packages/app/e2e/visual-proof.spec.ts
+      Change types:
+      E2E visual proof test.
+      Acceptance criteria:
+      The test must use captureScreenshot from packages/app/e2e/fixtures/electron-app.ts with a stable label such as context-menu-keyboard-navigation. It must assert the menu is visible and that keyboard navigation changed the active/highlighted item before capturing.
+
+  - id: run-ui-context-menu-tests
+    command: "cd packages/ui && pnpm test src/__tests__/context-menu-e2e.test.tsx"
+    dependencies: [add-context-menu-keyboard-regression-tests, implement-context-menu-keyboard-navigation]
+    description: |
+      Layer: e2e_regression
+      Feature state: active
+      Goal:
+      Verify focused UI package coverage for context menu keyboard behavior.
+      Motivation:
+      The local repro failed in packages/ui, so the fastest deterministic confirmation is the targeted UI package test lane.
+      Alternative considerations:
+      Running only the full suite would make failures slower to diagnose; this task keeps the focused signal before broader gates.
+      Implementation details:
+      Run the UI package test file that contains the context menu regression coverage.
+
+  - id: capture-context-menu-visual-proof
+    command: "pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && bash scripts/ui-visual-proof.sh --label after"
+    dependencies: [implement-context-menu-keyboard-navigation, add-context-menu-visual-proof]
+    description: |
+      Layer: e2e_regression
+      Feature state: active
+      Goal:
+      Build the UI/app packages and capture after-state visual proof for the keyboard-highlighted menu.
+      Motivation:
+      The change affects visible keyboard focus state, so screenshot proof is required for review confidence.
+      Alternative considerations:
+      A unit-only gate would prove behavior but not the reviewed visual state.
+      Implementation details:
+      Build the relevant packages and run the repo visual proof script in after mode.
+
+  - id: verify-full-regression-suite
+    command: "pnpm run test:all"
+    dependencies: [add-context-menu-keyboard-regression-tests, implement-context-menu-keyboard-navigation, add-context-menu-visual-proof, run-ui-context-menu-tests, capture-context-menu-visual-proof]
+    description: |
+      Layer: app_regression
+      Layer exception: allowed because the terminal repository-wide regression gate intentionally depends on focused UI and E2E verification tasks before running the broad suite.
+      Feature state: active
+      Goal:
+      Run the full repository test suite as the final regression gate.
+      Motivation:
+      Context menu keyboard handling touches App-level document shortcuts, so broad regression coverage is needed after focused UI and visual proof gates pass.
+      Alternative considerations:
+      Skipping the full suite could miss keyboard shortcut regressions outside the context menu path.
+      Implementation details:
+      Run the standard repository-wide test command from the repo root.
