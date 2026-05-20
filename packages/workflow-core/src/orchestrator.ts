@@ -2537,7 +2537,7 @@ export class Orchestrator {
 
     const resetChanges: TaskStateChanges = {
       status: 'pending',
-      config: { summary: undefined },
+      config: { summary: undefined, poolMemberId: undefined },
       execution: {
         autoFixAttempts: 0,
         startedAt: undefined,
