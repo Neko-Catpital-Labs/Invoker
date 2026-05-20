@@ -4132,6 +4132,7 @@ console.log(JSON.stringify(out));
         checkApproval: vi.fn().mockResolvedValue({
           approved: false,
           rejected: false,
+          closed: false,
           statusText: 'Awaiting review',
           url: 'https://github.com/owner/repo/pull/42',
         }),
@@ -4178,6 +4179,7 @@ console.log(JSON.stringify(out));
         checkApproval: vi.fn().mockResolvedValue({
           approved: true,
           rejected: false,
+          closed: false,
           statusText: 'Merged',
           url: 'https://github.com/owner/repo/pull/42',
         }),
@@ -4217,6 +4219,7 @@ console.log(JSON.stringify(out));
         checkApproval: vi.fn().mockResolvedValue({
           approved: false,
           rejected: false,
+          closed: false,
           statusText: 'Approved, awaiting merge',
           url: 'https://github.com/owner/repo/pull/42',
         }),
@@ -4254,6 +4257,7 @@ console.log(JSON.stringify(out));
         checkApproval: vi.fn().mockResolvedValue({
           approved: false,
           rejected: true,
+          closed: false,
           statusText: 'Changes requested',
           url: 'https://github.com/owner/repo/pull/42',
         }),
@@ -4292,7 +4296,7 @@ console.log(JSON.stringify(out));
       const mergeGateProvider = {
         checkApproval: vi.fn().mockResolvedValue({
           approved: false,
-          rejected: true,
+          rejected: false,
           closed: true,
           statusText: 'Closed',
           url: 'https://github.com/owner/repo/pull/43',
@@ -4338,6 +4342,7 @@ console.log(JSON.stringify(out));
         checkApproval: vi.fn().mockResolvedValue({
           approved: true,
           rejected: false,
+          closed: false,
           statusText: 'Merged',
           url: 'https://github.com/owner/repo/pull/42',
         }),
@@ -4439,6 +4444,7 @@ console.log(JSON.stringify(out));
           checkApproval: vi.fn().mockResolvedValue({
             approved: false,
             rejected: false,
+            closed: false,
             statusText: 'Pending',
             url: 'https://github.com/owner/repo/pull/99',
           }),
@@ -4474,6 +4480,7 @@ console.log(JSON.stringify(out));
           checkApproval: vi.fn().mockResolvedValue({
             approved: false,
             rejected: false,
+            closed: false,
             statusText: 'Pending',
             url: 'https://github.com/owner/repo/pull/100',
           }),
@@ -4516,6 +4523,7 @@ console.log(JSON.stringify(out));
           checkApproval: vi.fn().mockResolvedValue({
             approved: true,
             rejected: false,
+            closed: false,
             statusText: 'Merged',
             url: 'https://github.com/owner/repo/pull/101',
           }),
@@ -4602,6 +4610,7 @@ console.log(JSON.stringify(out));
           checkApproval: vi.fn().mockResolvedValue({
             approved: false,
             rejected: false,
+            closed: false,
             statusText: 'Pending',
           }),
         };
@@ -4641,6 +4650,7 @@ console.log(JSON.stringify(out));
           checkApproval: vi.fn().mockResolvedValue({
             approved: false,
             rejected: false,
+            closed: false,
             statusText: 'Pending',
           }),
         };
@@ -4687,6 +4697,7 @@ console.log(JSON.stringify(out));
           checkApproval: vi.fn().mockResolvedValue({
             approved: true,
             rejected: false,
+            closed: false,
             statusText: 'Merged',
           }),
         };
@@ -4735,6 +4746,7 @@ console.log(JSON.stringify(out));
           checkApproval: vi.fn().mockResolvedValue({
             approved: false,
             rejected: false,
+            closed: false,
             statusText: 'Approved, awaiting merge',
           }),
         };
@@ -4781,6 +4793,7 @@ console.log(JSON.stringify(out));
           checkApproval: vi.fn().mockResolvedValue({
             approved: false,
             rejected: true,
+            closed: false,
             statusText: 'Changes requested',
           }),
         };
@@ -4828,7 +4841,7 @@ console.log(JSON.stringify(out));
         const mergeGateProvider = {
           checkApproval: vi.fn().mockResolvedValue({
             approved: false,
-            rejected: true,
+            rejected: false,
             closed: true,
             statusText: 'Closed',
           }),
