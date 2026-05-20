@@ -44,6 +44,7 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const seededSnapshotRef = useRef<{ sessionId: string; snapshot: string } | null>(null);
 
   useEffect(() => {
     const host = containerRef.current;
@@ -68,6 +69,23 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
     }
     termRef.current = term;
     fitRef.current = fit;
+
+    // Seed the pane with the bounded replay snapshot the main process captured
+    // before this pane subscribed to live output, so users see output emitted
+    // between session spawn and React subscribe. The ref guards against
+    // duplicate writes if the same (sessionId, snapshot) tuple is re-seeded.
+    const snapshot = session.outputSnapshot;
+    if (snapshot && snapshot.length > 0) {
+      const seeded = seededSnapshotRef.current;
+      if (!seeded || seeded.sessionId !== session.sessionId || seeded.snapshot !== snapshot) {
+        try {
+          term.write(snapshot);
+          seededSnapshotRef.current = { sessionId: session.sessionId, snapshot };
+        } catch {
+          /* terminal disposed before seed could land */
+        }
+      }
+    }
 
     const inputDisposable = term.onData((data) => {
       void window.invoker?.terminalWrite?.(session.sessionId, data);
@@ -123,6 +141,10 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
       }
       termRef.current = null;
       fitRef.current = null;
+      // Clear the seed marker so a re-mount of the same session (e.g. under
+      // React.StrictMode's intentional double-invoke) can seed the fresh
+      // xterm instance.
+      seededSnapshotRef.current = null;
     };
   }, [onOutput, session.sessionId]);
 

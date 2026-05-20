@@ -6,6 +6,7 @@
  */
 
 import { vi } from 'vitest';
+import type { TerminalSessionDescriptor } from '@invoker/contracts';
 import type {
   InvokerAPI,
   TaskState,
@@ -205,6 +206,24 @@ export function createMockInvoker(
   }
 
   return { api, setTasks, fireDelta, fireWorkflowsChanged, install, cleanup };
+}
+
+/**
+ * Build a `TerminalSessionDescriptor` with sensible defaults, letting tests
+ * override only the fields they care about (e.g. `outputSnapshot`).
+ */
+export function makeTerminalSession(
+  overrides: Partial<TerminalSessionDescriptor> = {},
+): TerminalSessionDescriptor {
+  return {
+    sessionId: 'mock-session',
+    taskId: 'task-1',
+    status: 'running',
+    mode: 'spawn',
+    attached: false,
+    createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+    ...overrides,
+  };
 }
 
 /** Create a minimal TaskState for testing. */
