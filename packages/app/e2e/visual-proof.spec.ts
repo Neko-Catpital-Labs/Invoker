@@ -542,6 +542,26 @@ test.describe('Visual proof capture', () => {
     await assertPageScreenshot(page, 'context-menu-failed-organization');
   });
 
+  test('context menu keyboard navigation — ArrowDown highlights next enabled menu item', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+
+    const menu = await openContextMenu(page, page.locator('[data-testid^="workflow-node-"]'));
+
+    // Menu focuses itself on open and highlights the first enabled item.
+    const openWorkflowItem = page.getByRole('menuitem', { name: 'Open Workflow' });
+    const openPrItem = page.getByRole('menuitem', { name: 'Open PR' });
+    await expect(openWorkflowItem).toHaveAttribute('data-focused', 'true');
+
+    await page.keyboard.press('ArrowDown');
+
+    // ArrowDown moves the active highlight to the next enabled menu item.
+    await expect(openPrItem).toHaveAttribute('data-focused', 'true');
+    await expect(openWorkflowItem).not.toHaveAttribute('data-focused', 'true');
+    await expect(menu).toBeVisible();
+
+    await captureScreenshot(page, 'context-menu-keyboard-navigation');
+  });
+
   test('workflow context menu organization', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
 
