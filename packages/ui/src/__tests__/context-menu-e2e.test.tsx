@@ -158,4 +158,104 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
+
+  // ── Keyboard activation regressions ────────────────────────────
+  //
+  // These tests fire keyboard events at `document.activeElement`, which is
+  // what a real user keystroke targets. They prove that the open context
+  // menu must own its own focus/keydown handling: if focus stays on
+  // <body>, the keydown never reaches the menu's React handler and the
+  // highlighted action is never invoked.
+  //
+  // Pre-fix behaviour the tests pin:
+  //   - WorkflowContextMenu has no keyboard handler at all.
+  //   - ContextMenu has a handler bound to its menu div, but the menu is
+  //     never focused, so document keystrokes never reach it.
+
+  function pressKeyOnActiveTarget(key: string) {
+    const target = (document.activeElement as HTMLElement | null) ?? document.body;
+    fireEvent.keyDown(target, { key, bubbles: true });
+  }
+
+  async function openWorkflowMenu() {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    await screen.findByRole('menu');
+  }
+
+  async function openTaskMenu() {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    await screen.findByRole('menu');
+  }
+
+  it('workflow menu: ArrowDown x3 + Enter copies the workflow id', async () => {
+    await openWorkflowMenu();
+
+    // From the initial focused item (Open Workflow), ArrowDown three times
+    // should land on "Copy Workflow ID"; Enter should invoke it.
+    pressKeyOnActiveTarget('ArrowDown');
+    pressKeyOnActiveTarget('ArrowDown');
+    pressKeyOnActiveTarget('ArrowDown');
+    pressKeyOnActiveTarget('Enter');
+
+    await waitFor(() => {
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1');
+    });
+  });
+
+  it('workflow menu: ArrowUp from first item wraps deterministically to the last item', async () => {
+    await openWorkflowMenu();
+
+    // Before any navigation, the danger group must still be collapsed —
+    // any premature reveal would mean we did not wrap from the first
+    // enabled item.
+    expect(screen.queryByText('Delete Workflow')).not.toBeInTheDocument();
+
+    // ArrowUp from the first focused item must wrap to the last enabled
+    // navigable entry. In the closed-state menu that is the "More"
+    // affordance; activating it expands the danger group, which we can
+    // observe via the presence of "Delete Workflow".
+    pressKeyOnActiveTarget('ArrowUp');
+    pressKeyOnActiveTarget('Enter');
+
+    await waitFor(() => {
+      expect(screen.getByText('Delete Workflow')).toBeInTheDocument();
+    });
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+    expect(mock.api.retryWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('task menu: ArrowDown + Enter activates the next enabled action', async () => {
+    await openTaskMenu();
+
+    // task-alpha is pending → safe items render as:
+    //   [0] Restart Task   (initial focus)
+    //   [1] Open Terminal  (next enabled action)
+    // ArrowDown moves to "Open Terminal"; Enter invokes onOpenTerminal,
+    // which the App wires to invoker.openTerminal.
+    pressKeyOnActiveTarget('ArrowDown');
+    pressKeyOnActiveTarget('Enter');
+
+    await waitFor(() => {
+      expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha');
+    });
+    expect(mock.api.restartTask).not.toHaveBeenCalled();
+  });
+
+  it('task menu: Space activates the highlighted item just like Enter', async () => {
+    await openTaskMenu();
+
+    pressKeyOnActiveTarget('ArrowDown');
+    pressKeyOnActiveTarget(' ');
+
+    await waitFor(() => {
+      expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha');
+    });
+    expect(mock.api.restartTask).not.toHaveBeenCalled();
+  });
 });
