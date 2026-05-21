@@ -158,4 +158,79 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
+
+  // ── Keyboard navigation regression ─────────────────────────────────────────
+  // Right-clicking a node only paints the menu — keyboard navigation must then
+  // work from the document/active keyboard target the user is actually pressing
+  // keys against. The pre-fix code wires arrow/Enter/Space handlers onto the
+  // menu div's React onKeyDown (with tabIndex={-1} and no autofocus), so
+  // dispatching keydown on `document` never reaches them. The workflow menu has
+  // no key handling at all besides Escape. These tests pin both menus to real
+  // keyboard semantics so the bug cannot regress.
+
+  function pressKey(key: string): void {
+    fireEvent.keyDown(document, { key });
+  }
+
+  it('workflow context menu: ArrowDown × 3 + Enter copies workflow id via keyboard', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    await screen.findByText('Copy Workflow ID');
+
+    pressKey('ArrowDown');
+    pressKey('ArrowDown');
+    pressKey('ArrowDown');
+    pressKey('Enter');
+
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('workflow context menu: ArrowUp wraps to the last enabled menu item', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    await screen.findByText('Copy Workflow ID');
+
+    // Expand the danger zone so the last item is deterministic (Delete
+    // Workflow) and not dependent on the More button.
+    fireEvent.click(screen.getByText('More'));
+    await screen.findByText('Delete Workflow');
+
+    pressKey('ArrowUp');
+    pressKey('Enter');
+
+    await waitFor(() => expect(mock.api.deleteWorkflow).toHaveBeenCalledWith('wf-1'));
+    expect(mock.api.retryWorkflow).not.toHaveBeenCalled();
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+  });
+
+  it('task context menu: ArrowDown + Enter activates the next enabled task action', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await screen.findByTestId('rf__node-task-alpha');
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    await screen.findByText('Open Terminal');
+
+    // Pending task: focus starts on Restart Task (index 0); ArrowDown moves to
+    // Open Terminal (index 1); Enter activates it.
+    pressKey('ArrowDown');
+    pressKey('Enter');
+
+    await waitFor(() => expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'));
+    expect(mock.api.restartTask).not.toHaveBeenCalled();
+  });
+
+  it('task context menu: Space activates the highlighted item just like Enter', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await screen.findByTestId('rf__node-task-alpha');
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    await screen.findByText('Restart Task');
+
+    // Focus starts on the first enabled item (Restart Task). Space must fire
+    // it without requiring the user to first move focus or press Enter.
+    pressKey(' ');
+
+    await waitFor(() => expect(mock.api.restartTask).toHaveBeenCalledWith('task-alpha'));
+    expect(mock.api.openTerminal).not.toHaveBeenCalled();
+  });
 });
