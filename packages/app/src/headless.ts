@@ -32,6 +32,11 @@ import { backupPlan } from './plan-backup.js';
 import { startApiServer } from './api-server.js';
 import { WorkflowMutationFacade } from './workflow-mutation-facade.js';
 import {
+  parseMetadataValue,
+  setTaskMetadata,
+  setWorkflowMetadata,
+} from './metadata-setter.js';
+import {
   approveTask,
   autoFixOnReviewGateFailure,
   deleteAllWorkflows as sharedDeleteAllWorkflows,
@@ -137,6 +142,7 @@ function buildHeadlessApiServerDeps(
       dispatchMode: deps.mutationTiming ? 'fire-and-forget' : 'await',
       autoApproveAIFixes: deps.invokerConfig?.autoApproveAIFixes,
       killRunningTask: (taskId: string) => taskExecutor.killActiveExecution(taskId),
+      commandService: deps.commandService,
     }),
     deleteWorkflow: async (workflowId: string) => {
       const allTasks = deps.orchestrator.getAllTasks();
@@ -413,6 +419,19 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
         case 'json':  process.stdout.write(formatAsJson(workflows.map(serializeWorkflow)) + '\n'); break;
         case 'jsonl': process.stdout.write(formatAsJsonl(workflows.map(serializeWorkflow)) + '\n'); break;
         default:      process.stdout.write(formatWorkflowList(workflows) + '\n'); break;
+      }
+      break;
+    }
+    case 'workflow': {
+      const workflowId = flags.positional[0];
+      if (!workflowId) throw new Error('Missing workflowId. Usage: --headless query workflow <workflowId>');
+      const workflow = deps.persistence.loadWorkflow(workflowId);
+      if (!workflow) throw new Error(`Workflow "${workflowId}" not found.`);
+      switch (flags.output) {
+        case 'label': process.stdout.write(`${workflow.id}\n`); break;
+        case 'json':  process.stdout.write(formatAsJson(serializeWorkflow(workflow)) + '\n'); break;
+        case 'jsonl': process.stdout.write(formatAsJsonl([serializeWorkflow(workflow)]) + '\n'); break;
+        default:      process.stdout.write(formatWorkflowList([workflow]) + '\n'); break;
       }
       break;
     }
@@ -867,7 +886,7 @@ async function headlessCostEvents(
 async function headlessSet(args: string[], deps: HeadlessDeps): Promise<void> {
   const subCommand = args[0];
   if (!subCommand) {
-    throw new Error('Missing set sub-command. Usage: --headless set <command|executor|agent|merge-mode|gate-policy>');
+    throw new Error('Missing set sub-command. Usage: --headless set <command|executor|agent|merge-mode|gate-policy|workflow|task>');
   }
 
   switch (subCommand) {
@@ -895,8 +914,14 @@ async function headlessSet(args: string[], deps: HeadlessDeps): Promise<void> {
     case 'gate-policy':
       await headlessSetGatePolicy(args.slice(1), deps);
       break;
+    case 'workflow':
+      await headlessSetWorkflowMetadata(args[1], args[2], args.slice(3).join(' '), deps);
+      break;
+    case 'task':
+      await headlessSetTaskMetadata(args[1], args[2], args.slice(3).join(' '), deps);
+      break;
     default:
-      throw new Error(`Unknown set sub-command: "${subCommand}". Use: command, prompt, executor, agent, merge-mode, fix-prompt, fix-context, gate-policy`);
+      throw new Error(`Unknown set sub-command: "${subCommand}". Use: command, prompt, executor, agent, merge-mode, fix-prompt, fix-context, gate-policy, workflow, task`);
   }
 }
 
@@ -1128,6 +1153,7 @@ ${BOLD}Usage:${RESET}  electron dist/main.js --headless <command> [args...]
 
 ${BOLD}Query${RESET} (read-only, all support --output text|label|json|jsonl):
   query workflows [--status S] [--output F]          List all saved workflows
+  query workflow <workflowId> [--output F]           Show one workflow
   query tasks [--workflow <id>|<workflowId>] [--status S]
                                                       Show task states (latest workflow by default)
     [--no-merge] [--output F]
@@ -1170,6 +1196,8 @@ ${BOLD}Configure:${RESET}
   set fix-context <taskId> <text>                     Update fix-session context and retry
   set gate-policy <taskId> <wfId> [depTaskId] <policy>
                                                       policy: completed | review_ready
+  set workflow <workflowId> <fieldPath> <value>      Safely update workflow metadata/config
+  set task <taskId> <fieldPath> <value>              Safely update task metadata/config
   migrate-compat                                     Normalize persisted compatibility workflow/task state
 
 ${BOLD}Lifecycle:${RESET}
@@ -2674,6 +2702,50 @@ async function headlessSetGatePolicy(args: string[], deps: HeadlessDeps): Promis
       `Updated gate policy for ${taskId}: ${workflowId}/${depTaskId} -> ${gatePolicy} (${runnable.length} task(s) started)\n`,
     );
   });
+}
+
+async function headlessSetWorkflowMetadata(
+  workflowId: string,
+  fieldPath: string,
+  rawValue: string,
+  deps: HeadlessDeps,
+): Promise<void> {
+  if (!workflowId || !fieldPath || rawValue === '') {
+    throw new Error('Missing arguments. Usage: --headless set workflow <workflowId> <fieldPath> <value>');
+  }
+  const result = await setWorkflowMetadata(
+    {
+      commandService: deps.commandService,
+      orchestrator: deps.orchestrator,
+      persistence: deps.persistence,
+    },
+    workflowId,
+    fieldPath,
+    parseMetadataValue(rawValue),
+  );
+  process.stdout.write(`Updated workflow "${result.id}" ${result.fieldPath} → ${JSON.stringify(result.value)}\n`);
+}
+
+async function headlessSetTaskMetadata(
+  taskId: string,
+  fieldPath: string,
+  rawValue: string,
+  deps: HeadlessDeps,
+): Promise<void> {
+  if (!taskId || !fieldPath || rawValue === '') {
+    throw new Error('Missing arguments. Usage: --headless set task <taskId> <fieldPath> <value>');
+  }
+  const result = await setTaskMetadata(
+    {
+      commandService: deps.commandService,
+      orchestrator: deps.orchestrator,
+      persistence: deps.persistence,
+    },
+    taskId,
+    fieldPath,
+    parseMetadataValue(rawValue),
+  );
+  process.stdout.write(`Updated task "${result.id}" ${result.fieldPath} → ${JSON.stringify(result.value)}\n`);
 }
 
 async function headlessSlack(deps: HeadlessDeps): Promise<void> {

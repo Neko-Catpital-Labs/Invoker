@@ -178,6 +178,7 @@ export interface ExperimentResultEntry {
 // ── Task State Changes (for updates / deltas) ───────────────
 
 export interface TaskStateChanges {
+  readonly description?: string;
   readonly status?: TaskStatus;
   readonly dependencies?: readonly string[];
   readonly config?: Partial<TaskConfig>;

@@ -16,7 +16,7 @@
  */
 
 import type { Logger } from '@invoker/contracts';
-import type { Orchestrator, ExternalGatePolicyUpdate, TaskState } from '@invoker/workflow-core';
+import type { CommandService, Orchestrator, ExternalGatePolicyUpdate, TaskState } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { TaskRunner } from '@invoker/execution-engine';
 import {
@@ -53,6 +53,11 @@ import {
   executeGlobalTopup,
   isDispatchableLaunch,
 } from './global-topup.js';
+import {
+  setTaskMetadata as sharedSetTaskMetadata,
+  setWorkflowMetadata as sharedSetWorkflowMetadata,
+  type MetadataSetResult,
+} from './metadata-setter.js';
 
 // ── Result types ─────────────────────────────────────────────
 
@@ -101,6 +106,7 @@ export interface WorkflowMutationFacadeDeps {
   logger?: Logger;
   orchestrator: Orchestrator;
   persistence: SQLiteAdapter;
+  commandService?: CommandService;
   taskExecutor: TaskRunner;
   dispatchMode?: 'await' | 'fire-and-forget';
   autoApproveAIFixes?: boolean;
@@ -217,6 +223,20 @@ export class WorkflowMutationFacade {
     return this.finalizeWithTopup(started, 'facade.set-gate-policy', { scopedTaskIds: [taskId] });
   }
 
+  async setTaskMetadata(
+    taskId: string,
+    fieldPath: string,
+    value: unknown,
+    options: { raw?: boolean } = {},
+  ): Promise<MetadataSetResult> {
+    if (!this.deps.commandService) throw new Error('Metadata updates require CommandService serialization.');
+    return sharedSetTaskMetadata({
+      commandService: this.deps.commandService,
+      orchestrator: this.deps.orchestrator,
+      persistence: this.deps.persistence,
+    }, taskId, fieldPath, value, options);
+  }
+
   async cancelTask(taskId: string): Promise<CancelMutationResult> {
     const result = this.deps.orchestrator.cancelTask(taskId);
     if (this.deps.killRunningTask) {
@@ -328,6 +348,20 @@ export class WorkflowMutationFacade {
       persistence: this.deps.persistence,
       taskExecutor: this.deps.taskExecutor,
     });
+  }
+
+  async setWorkflowMetadata(
+    workflowId: string,
+    fieldPath: string,
+    value: unknown,
+    options: { raw?: boolean } = {},
+  ): Promise<MetadataSetResult> {
+    if (!this.deps.commandService) throw new Error('Metadata updates require CommandService serialization.');
+    return sharedSetWorkflowMetadata({
+      commandService: this.deps.commandService,
+      orchestrator: this.deps.orchestrator,
+      persistence: this.deps.persistence,
+    }, workflowId, fieldPath, value, options);
   }
 
   // ── AI-driven mutations ──────────────────────────────────

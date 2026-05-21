@@ -74,6 +74,7 @@ let port: number;
 let mocks: {
   orchestrator: Record<string, ReturnType<typeof vi.fn>>;
   persistence: Record<string, ReturnType<typeof vi.fn>>;
+  commandService: Record<string, ReturnType<typeof vi.fn>>;
   executorRegistry: Record<string, ReturnType<typeof vi.fn>>;
   taskExecutor: Record<string, ReturnType<typeof vi.fn>>;
   killRunningTask: ReturnType<typeof vi.fn>;
@@ -86,6 +87,7 @@ function createMocks() {
     orchestrator: {
       getWorkflowStatus: vi.fn(() => ({ total: 1, completed: 0, failed: 0, running: 1, pending: 0 })),
       getAllTasks: vi.fn(() => [makeTask()]),
+      syncFromDb: vi.fn(),
       startExecution: vi.fn(() => []),
       getTask: vi.fn((id: string) => (id === 'task-1' ? makeTask() : undefined)),
       approve: vi.fn().mockResolvedValue([]),
@@ -122,12 +124,21 @@ function createMocks() {
     persistence: {
       listWorkflows: vi.fn(() => [{ id: 'wf-1', name: 'test', generation: 1 }]),
       loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 1 })),
+      loadTask: vi.fn((id: string) => (id === 'task-1' ? makeTask() : undefined)),
       updateWorkflow: vi.fn(),
-      loadTasks: vi.fn(() => []),
+      updateTask: vi.fn(),
+      loadTasks: vi.fn(() => [makeTask()]),
+      logEvent: vi.fn(),
       getEvents: vi.fn(() => [{ taskId: 'task-1', eventType: 'started', timestamp: '2024-01-01' }]),
       getTaskOutput: vi.fn(() => 'hello world output'),
     },
     executorRegistry: {},
+    commandService: {
+      runSerializedForWorkflow: vi.fn(async (_workflowId: string, fn: () => unknown) => {
+        await fn();
+        return { ok: true, data: undefined };
+      }),
+    },
     taskExecutor: {
       executeTasks: vi.fn().mockResolvedValue(undefined),
       publishAfterFix: vi.fn().mockResolvedValue(undefined),
@@ -145,6 +156,7 @@ function buildFacade(m: typeof mocks) {
   return new WorkflowMutationFacade({
     orchestrator: m.orchestrator as any,
     persistence: m.persistence as any,
+    commandService: m.commandService as any,
     taskExecutor: m.taskExecutor as any,
     killRunningTask: m.killRunningTask,
   });
@@ -181,7 +193,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   // Reset all mocks between tests
-  for (const group of [mocks.orchestrator, mocks.persistence, mocks.taskExecutor]) {
+  for (const group of [mocks.orchestrator, mocks.persistence, mocks.taskExecutor, mocks.commandService]) {
     for (const fn of Object.values(group)) {
       if (typeof fn === 'function' && 'mockClear' in fn) fn.mockClear();
     }
@@ -193,6 +205,7 @@ beforeEach(() => {
   // Re-apply default return values after clear
   mocks.orchestrator.getWorkflowStatus.mockReturnValue({ total: 1, completed: 0, failed: 0, running: 1, pending: 0 });
   mocks.orchestrator.getAllTasks.mockReturnValue([makeTask()]);
+  mocks.orchestrator.syncFromDb.mockReturnValue(undefined);
   mocks.orchestrator.startExecution.mockReturnValue([]);
   mocks.orchestrator.getTask.mockImplementation((id: string) => (id === 'task-1' ? makeTask() : undefined));
   mocks.orchestrator.approve.mockResolvedValue([]);
@@ -210,7 +223,12 @@ beforeEach(() => {
   });
   mocks.persistence.listWorkflows.mockReturnValue([{ id: 'wf-1', name: 'test', generation: 1 }]);
   mocks.persistence.loadWorkflow.mockReturnValue({ id: 'wf-1', generation: 1 });
-  mocks.persistence.loadTasks.mockReturnValue([]);
+  mocks.persistence.loadTask.mockImplementation((id: string) => (id === 'task-1' ? makeTask() : undefined));
+  mocks.persistence.loadTasks.mockReturnValue([makeTask()]);
+  mocks.commandService.runSerializedForWorkflow.mockImplementation(async (_workflowId: string, fn: () => unknown) => {
+    await fn();
+    return { ok: true, data: undefined };
+  });
   mocks.persistence.getEvents.mockReturnValue([{ taskId: 'task-1', eventType: 'started', timestamp: '2024-01-01' }]);
   mocks.persistence.getTaskOutput.mockReturnValue('hello world output');
   mocks.killRunningTask.mockResolvedValue(undefined);
@@ -964,6 +982,72 @@ describe('POST /api/workflows/:id/merge-mode', () => {
     const res = await request(port, 'POST', '/api/workflows/wf-1/merge-mode', { mode: 'invalid' });
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('Invalid mergeMode');
+  });
+});
+
+describe('PATCH metadata endpoints', () => {
+  it('updates workflow metadata through the facade', async () => {
+    const res = await request(port, 'PATCH', '/api/workflows/wf-1/metadata', {
+      fieldPath: 'repoUrl',
+      value: 'git@github.com:Neko-Catpital-Labs/Invoker.git',
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.scope).toBe('workflow');
+    expect(mocks.commandService.runSerializedForWorkflow).toHaveBeenCalledWith('wf-1', expect.any(Function));
+    expect(mocks.persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', {
+      repoUrl: 'git@github.com:Neko-Catpital-Labs/Invoker.git',
+    });
+  });
+
+  it('updates task metadata through the facade', async () => {
+    const res = await request(port, 'PATCH', '/api/tasks/task-1/metadata', {
+      fieldPath: 'config.poolId',
+      value: 'some-pool',
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.scope).toBe('task');
+    expect(mocks.persistence.updateTask).toHaveBeenCalledWith('task-1', {
+      config: { poolId: 'some-pool' },
+    });
+  });
+
+  it('rejects forbidden fields in normal mode', async () => {
+    const res = await request(port, 'PATCH', '/api/tasks/task-1/metadata', {
+      fieldPath: 'execution.error',
+      value: 'boom',
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('not allowed');
+    expect(mocks.persistence.updateTask).not.toHaveBeenCalled();
+  });
+
+  it('gates raw metadata repair mode', async () => {
+    const original = process.env.INVOKER_ALLOW_RAW_METADATA_SET;
+    delete process.env.INVOKER_ALLOW_RAW_METADATA_SET;
+    const rejected = await request(port, 'PATCH', '/api/tasks/task-1/metadata', {
+      fieldPath: 'raw.execution.error',
+      value: 'boom',
+    });
+    expect(rejected.status).toBe(400);
+    expect(rejected.body.error).toContain('Raw metadata updates are disabled');
+
+    process.env.INVOKER_ALLOW_RAW_METADATA_SET = '1';
+    const accepted = await request(port, 'PATCH', '/api/tasks/task-1/metadata', {
+      fieldPath: 'raw.execution.error',
+      value: 'boom',
+    });
+    expect(accepted.status).toBe(200);
+    expect(mocks.persistence.updateTask).toHaveBeenCalledWith('task-1', {
+      execution: { error: 'boom' },
+    });
+
+    if (original === undefined) delete process.env.INVOKER_ALLOW_RAW_METADATA_SET;
+    else process.env.INVOKER_ALLOW_RAW_METADATA_SET = original;
   });
 });
 
