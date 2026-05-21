@@ -139,9 +139,14 @@ async function loadTransport() {
   return mod;
 }
 
-async function createBus(transport) {
+async function createBus(transport, timeoutMs) {
   const bus = new transport.IpcBus(undefined, { allowServe: false });
-  await bus.ready();
+  try {
+    await withTimeout(bus.ready(), timeoutMs);
+  } catch (error) {
+    bus.disconnect();
+    throw error;
+  }
   return bus;
 }
 
@@ -210,6 +215,10 @@ async function requestExecWithRetry(bus, item, options) {
         throw error;
       }
       const delayMs = Math.min(5_000, 250 * attempt * attempt);
+      process.stderr.write(
+        `headless.exec dispatch attempt ${attempt}/${attempts} failed for "${item.args.join(' ')}"; ` +
+        `retrying in ${delayMs}ms: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
       await sleep(delayMs);
     }
   }
@@ -242,7 +251,7 @@ async function main() {
   }
 
   // Create a client-only IPC bus (no server election).
-  const bus = await createBus(transport);
+  const bus = await createBus(transport, options.timeoutMs);
 
   try {
     if (options.mode === 'exec') {
