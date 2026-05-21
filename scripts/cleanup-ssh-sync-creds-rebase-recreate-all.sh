@@ -201,11 +201,12 @@ fi
 ssh_base_args() {
   local port="$1"
   local key_path="$2"
-  printf '%s\n' \
-    -p "$port" \
-    -i "$key_path" \
-    -o BatchMode=yes \
+  SSH_ARGS=(
+    -p "$port"
+    -i "$key_path"
+    -o BatchMode=yes
     -o StrictHostKeyChecking=accept-new
+  )
 }
 
 run_ssh_script() {
@@ -221,8 +222,9 @@ run_ssh_script() {
     return 0
   fi
 
-  mapfile -t ssh_args < <(ssh_base_args "$port" "$key_path")
-  ssh "${ssh_args[@]}" "$user_host" 'bash -s' <<< "$script_body"
+  local -a SSH_ARGS
+  ssh_base_args "$port" "$key_path"
+  ssh "${SSH_ARGS[@]}" "$user_host" 'bash -s' <<< "$script_body"
 }
 
 remote_cleanup_script() {
@@ -286,8 +288,9 @@ sync_credentials_to_target() {
       continue
     fi
 
-    mapfile -t ssh_args < <(ssh_base_args "$port" "$key_path")
-    ssh "${ssh_args[@]}" "$user_host" "mkdir -p ~/'$remote_parent' && chmod 700 ~"
+    local -a SSH_ARGS
+    ssh_base_args "$port" "$key_path"
+    ssh "${SSH_ARGS[@]}" "$user_host" "mkdir -p ~/'$remote_parent' && chmod 700 ~"
 
     if [[ -d "$path_entry" ]]; then
       rsync -az --delete \
