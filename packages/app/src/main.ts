@@ -2440,6 +2440,7 @@ function createEmbeddedTerminalBackendFromConfig(
           logger,
           orchestrator,
           persistence,
+          commandService,
           taskExecutor: requireTaskExecutor(),
           autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
           killRunningTask,

@@ -589,6 +589,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
         approach TEXT,
         test_plan TEXT,
         repro_command TEXT,
+        fix_prompt TEXT,
+        fix_context TEXT,
 
         -- Git
         branch TEXT,
@@ -850,6 +852,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN fixed_integration_sha TEXT',
       'ALTER TABLE tasks ADD COLUMN fixed_integration_recorded_at TEXT',
       'ALTER TABLE tasks ADD COLUMN fixed_integration_source TEXT',
+      'ALTER TABLE tasks ADD COLUMN fix_prompt TEXT',
+      'ALTER TABLE tasks ADD COLUMN fix_context TEXT',
       'ALTER TABLE attempts ADD COLUMN queue_priority INTEGER NOT NULL DEFAULT 0',
       'ALTER TABLE attempts ADD COLUMN claimed_at TEXT',
       'ALTER TABLE attempts ADD COLUMN lease_expires_at TEXT',
@@ -1012,20 +1016,41 @@ export class SQLiteAdapter implements PersistenceAdapter {
     ]);
   }
 
-  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'updatedAt' | 'baseBranch' | 'generation' | 'mergeMode'>>): void {
+  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'name' | 'description' | 'visualProof' | 'planFile' | 'repoUrl' | 'intermediateRepoUrl' | 'branch' | 'onFinish' | 'baseBranch' | 'featureBranch' | 'mergeMode' | 'reviewProvider' | 'generation' | 'updatedAt'>>): void {
     const setClauses: string[] = [];
     const values: unknown[] = [];
+    const columnMap: Record<string, string> = {
+      name: 'name',
+      description: 'description',
+      planFile: 'plan_file',
+      repoUrl: 'repo_url',
+      intermediateRepoUrl: 'intermediate_repo_url',
+      branch: 'branch',
+      onFinish: 'on_finish',
+      baseBranch: 'base_branch',
+      featureBranch: 'feature_branch',
+      mergeMode: 'merge_mode',
+      reviewProvider: 'review_provider',
+    };
+    for (const [key, column] of Object.entries(columnMap)) {
+      if (key in changes) {
+        setClauses.push(`${column} = ?`);
+        values.push((changes as any)[key] ?? null);
+      }
+    }
+    if (changes.visualProof !== undefined) {
+      setClauses.push('visual_proof = ?');
+      values.push(changes.visualProof ? 1 : 0);
+    }
     if (changes.baseBranch !== undefined) {
-      setClauses.push('base_branch = ?');
-      values.push(changes.baseBranch);
+      // handled by columnMap; kept for backward-compatible patch shapes
     }
     if (changes.generation !== undefined) {
       setClauses.push('generation = ?');
       values.push(changes.generation);
     }
     if (changes.mergeMode !== undefined) {
-      setClauses.push('merge_mode = ?');
-      values.push(changes.mergeMode);
+      // handled by columnMap; kept for backward-compatible patch shapes
     }
     setClauses.push('updated_at = ?');
     values.push(changes.updatedAt ?? new Date().toISOString());
@@ -1107,7 +1132,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       INSERT OR REPLACE INTO tasks (
         id, workflow_id, description, status, blocked_by, dependencies,
         command, prompt, experiment_prompt, exit_code, error, protocol_error_code, protocol_error_message, input_prompt, external_dependencies,
-        summary, problem, approach, test_plan, repro_command,
+        summary, problem, approach, test_plan, repro_command, fix_prompt, fix_context,
         branch, commit_hash, fixed_integration_sha, fixed_integration_recorded_at, fixed_integration_source, parent_task,
         pivot, experiment_variants, is_reconciliation, selected_experiment,
         selected_experiments, experiment_results, requires_manual_approval,
@@ -1129,7 +1154,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       ) VALUES (
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?,
@@ -1157,7 +1182,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       exec.exitCode ?? null, exec.error ?? null, exec.protocolErrorCode ?? null, exec.protocolErrorMessage ?? null, exec.inputPrompt ?? null,
       cfg.externalDependencies ? JSON.stringify(cfg.externalDependencies) : null,
       cfg.summary ?? null, cfg.problem ?? null, cfg.approach ?? null,
-      cfg.testPlan ?? null, cfg.reproCommand ?? null,
+      cfg.testPlan ?? null, cfg.reproCommand ?? null, cfg.fixPrompt ?? null, cfg.fixContext ?? null,
       exec.branch ?? null,
       exec.commit ?? null,
       exec.fixedIntegrationSha ?? null,
@@ -1210,6 +1235,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
     const setClauses: string[] = [];
     const values: any[] = [];
 
+    if (changes.description !== undefined) {
+      setClauses.push('description = ?');
+      values.push(changes.description);
+    }
     if (changes.status !== undefined) {
       setClauses.push('status = ?');
       values.push(changes.status);
@@ -1237,6 +1266,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
         poolMemberId: 'pool_member_id',
         dockerImage: 'docker_image',
         executionAgent: 'execution_agent',
+        fixPrompt: 'fix_prompt',
+        fixContext: 'fix_context',
       };
       const configBoolMap: Record<string, string> = {
         pivot: 'pivot',
@@ -2302,6 +2333,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
         approach: row.approach ?? undefined,
         testPlan: row.test_plan ?? undefined,
         reproCommand: row.repro_command ?? undefined,
+        fixPrompt: row.fix_prompt ?? undefined,
+        fixContext: row.fix_context ?? undefined,
         executionAgent: row.execution_agent ?? undefined,
       },
       execution: {

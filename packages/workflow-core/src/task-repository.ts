@@ -30,10 +30,20 @@ export interface WorkflowRecord {
 }
 
 export interface WorkflowChanges {
+  name?: string;
+  description?: string;
+  visualProof?: boolean;
+  planFile?: string;
+  repoUrl?: string;
+  intermediateRepoUrl?: string;
+  branch?: string;
+  onFinish?: string;
   updatedAt?: string;
   baseBranch?: string;
+  featureBranch?: string;
   generation?: number;
   mergeMode?: 'manual' | 'automatic' | 'external_review';
+  reviewProvider?: string;
 }
 
 export type AttemptChanges = Partial<

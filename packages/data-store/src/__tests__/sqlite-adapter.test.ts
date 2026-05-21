@@ -548,6 +548,59 @@ describe('SQLiteAdapter', () => {
       expect(loaded!.updatedAt).toBe(newTime);
     });
 
+    it('updates workflow metadata fields including repoUrl', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.updateWorkflow('wf-1', {
+        name: 'Renamed',
+        description: 'new description',
+        visualProof: true,
+        planFile: '/tmp/plan.yaml',
+        repoUrl: 'git@github.com:Neko-Catpital-Labs/Invoker.git',
+        intermediateRepoUrl: 'git@github.com:Neko-Catpital-Labs/Invoker-Intermediate.git',
+        branch: 'main',
+        onFinish: 'pull_request',
+        baseBranch: 'master',
+        featureBranch: 'feature/generic-setters',
+        mergeMode: 'external_review',
+        reviewProvider: 'github',
+      });
+
+      expect(adapter.loadWorkflow('wf-1')).toMatchObject({
+        name: 'Renamed',
+        description: 'new description',
+        visualProof: true,
+        planFile: '/tmp/plan.yaml',
+        repoUrl: 'git@github.com:Neko-Catpital-Labs/Invoker.git',
+        intermediateRepoUrl: 'git@github.com:Neko-Catpital-Labs/Invoker-Intermediate.git',
+        branch: 'main',
+        onFinish: 'pull_request',
+        baseBranch: 'master',
+        featureBranch: 'feature/generic-setters',
+        mergeMode: 'external_review',
+        reviewProvider: 'github',
+      });
+    });
+
+    it('updates task description and representative config metadata', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('task-1'));
+      adapter.updateTask('task-1', {
+        description: 'Updated task',
+        config: {
+          poolId: 'some-pool',
+          fixPrompt: 'fix this',
+        },
+      });
+
+      expect(adapter.loadTask('task-1')).toMatchObject({
+        description: 'Updated task',
+        config: {
+          poolId: 'some-pool',
+          fixPrompt: 'fix this',
+        },
+      });
+    });
+
     it('auto-sets updatedAt when not provided', () => {
       adapter.saveWorkflow(testWorkflow);
       const before = new Date().toISOString();
