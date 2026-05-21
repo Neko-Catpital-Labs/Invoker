@@ -51,6 +51,7 @@ import type { SQLiteAdapter } from '@invoker/data-store';
 import type { ExecutorRegistry } from '@invoker/execution-engine';
 import type { WorkflowMutationFacade } from './workflow-mutation-facade.js';
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
+import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 
 export interface ApiServerDeps {
   logger?: Logger;
@@ -59,6 +60,13 @@ export interface ApiServerDeps {
   executorRegistry: ExecutorRegistry;
   /** All write endpoints delegate to the facade for mutation + dispatch + topup. */
   mutations: WorkflowMutationFacade;
+  queueWorkflowMutation?: (
+    workflowId: string,
+    priority: WorkflowMutationPriority,
+    channel: string,
+    args: unknown[],
+    options?: { deferDrain?: boolean },
+  ) => number;
   deleteWorkflow: (workflowId: string) => Promise<void>;
   detachWorkflow: (workflowId: string, upstreamWorkflowId: string) => Promise<void>;
 }
@@ -384,6 +392,18 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         const workflowTarget = decodeURIComponent(wfRebaseRecreateMatch[1]);
         try {
           const workflowId = resolveHeadlessTargetWorkflowId(workflowTarget, persistence);
+          if (deps.queueWorkflowMutation) {
+            const intentId = deps.queueWorkflowMutation(workflowId, 'high', 'invoker:rebase-recreate', [workflowId]);
+            json(res, 202, {
+              ok: true,
+              workflowId,
+              action: 'rebase_recreated',
+              queued: true,
+              intentId,
+              tasksStarted: 0,
+            });
+            return;
+          }
           const result = await mutations.rebaseRecreate(workflowId);
           const tasksStarted = result.started.filter(t => t.status === 'running').length;
           json(res, 200, {

@@ -171,9 +171,9 @@ elif $FOLLOW; then
     exit 1
   fi
 else
-  echo "Dispatched $DISPATCHED workflow(s) (fire-and-forget). Logs: $LOG_DIR"
+  echo "Queued $DISPATCHED workflow mutation intent(s) (fire-and-forget). Logs: $LOG_DIR"
   if [[ "$LAUNCH_FAILED" -ne 0 ]]; then
-    echo "$LAUNCH_FAILED workflow(s) failed to launch."
+    echo "$LAUNCH_FAILED workflow(s) were not acknowledged as queued."
     exit 1
   fi
 fi
