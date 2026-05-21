@@ -277,6 +277,14 @@ export interface TerminalSessionDescriptor {
   mode: 'spawn' | 'attached';
   attached: boolean;
   createdAt: string;
+  /**
+   * Bounded snapshot of recent terminal output captured by the main process,
+   * used by the renderer to seed newly mounted terminal panes that subscribe
+   * to `invoker:terminal-output` after the session has already produced data.
+   * The snapshot is trimmed to a fixed maximum size and is omitted when the
+   * session has not produced any output yet.
+   */
+  outputSnapshot?: string;
 }
 
 export interface TerminalOutputEvent {

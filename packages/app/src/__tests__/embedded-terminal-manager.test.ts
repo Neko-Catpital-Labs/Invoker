@@ -390,6 +390,107 @@ describe('EmbeddedTerminalManager', () => {
     const res = mgr.write('not-a-session', 'x');
     expect(res).toEqual({ ok: false, reason: expect.stringContaining('Unknown session') });
   });
+
+  it('captures output emitted synchronously during backend spawn in the descriptor snapshot', () => {
+    const backend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: (opts) => {
+        // Backend emits before returning, simulating fast PTY boot output that
+        // would otherwise be lost when the renderer subscribes asynchronously.
+        opts.emitOutput('boot-1\n');
+        opts.emitOutput('boot-2\n');
+        return {
+          write: () => {},
+          resize: () => {},
+          close: () => {},
+        };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.openOrReuse({ taskId: 'task-snapshot', spec: {}, cwd: '/tmp' });
+
+    expect(session.outputSnapshot).toBe('boot-1\nboot-2\n');
+  });
+
+  it('terminal list descriptors expose the same bounded replay snapshot for live sessions', () => {
+    const child = createFakeChild();
+    const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+    const mgr = new EmbeddedTerminalManager({
+      backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+    });
+
+    const session = mgr.openOrReuse({ taskId: 'task-list', spec: {}, cwd: '/tmp' });
+    child.stdout.emit('data', Buffer.from('first '));
+    child.stderr.emit('data', Buffer.from('second'));
+
+    const list = mgr.list();
+    expect(list).toHaveLength(1);
+    expect(list[0].sessionId).toBe(session.sessionId);
+    expect(list[0].outputSnapshot).toBe('first second');
+
+    const got = mgr.get(session.sessionId);
+    expect(got?.outputSnapshot).toBe('first second');
+  });
+
+  it('does not throw when the backend emits exit synchronously during spawn', () => {
+    let realClosed = false;
+    const backend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: (opts) => {
+        opts.emitOutput('hi\n');
+        opts.emitExit(0);
+        return {
+          write: () => {},
+          resize: () => {},
+          close: () => {
+            realClosed = true;
+          },
+        };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+    const exits: Array<{ sessionId: string; exitCode?: number }> = [];
+    mgr.on('exit', (e) => exits.push({ sessionId: e.sessionId, exitCode: e.exitCode }));
+
+    let session: ReturnType<EmbeddedTerminalManager['openOrReuse']> | undefined;
+    expect(() => {
+      session = mgr.openOrReuse({ taskId: 'task-sync-exit', spec: {}, cwd: '/tmp' });
+    }).not.toThrow();
+
+    expect(session?.status).toBe('exited');
+    expect(session?.exitCode).toBe(0);
+    expect(session?.outputSnapshot).toBe('hi\n');
+    expect(exits).toHaveLength(1);
+    expect(exits[0]?.exitCode).toBe(0);
+    // The session was finalized synchronously, but the real process handle
+    // returned by the backend is still closed so no resource leaks.
+    expect(realClosed).toBe(true);
+    expect(mgr.list()).toHaveLength(0);
+  });
+
+  it('bounds the replay snapshot to roughly 64 KiB and keeps the most recent tail', () => {
+    const child = createFakeChild();
+    const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+    const mgr = new EmbeddedTerminalManager({
+      backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+    });
+    mgr.openOrReuse({ taskId: 'task-bounded', spec: {}, cwd: '/tmp' });
+
+    const chunkA = 'A'.repeat(40 * 1024);
+    const chunkB = 'B'.repeat(40 * 1024);
+    child.stdout.emit('data', Buffer.from(chunkA));
+    child.stdout.emit('data', Buffer.from(chunkB));
+    const tailMarker = 'TAIL-MARKER';
+    child.stdout.emit('data', Buffer.from(tailMarker));
+
+    const [descriptor] = mgr.list();
+    const snapshot = descriptor.outputSnapshot ?? '';
+    expect(snapshot.length).toBeLessThanOrEqual(64 * 1024);
+    expect(snapshot.endsWith(tailMarker)).toBe(true);
+    // The oldest chunk must have been trimmed away.
+    expect(snapshot.includes(chunkA)).toBe(false);
+  });
 });
 
 // ── Deterministic GUI route: resolveTaskTerminalSpec + EmbeddedTerminalManager ──

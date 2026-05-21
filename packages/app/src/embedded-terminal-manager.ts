@@ -94,6 +94,13 @@ export interface OpenSessionOptions {
   attach?: AttachContext;
 }
 
+/**
+ * Maximum size (in UTF-16 code units, approximately bytes for ASCII terminal
+ * output) of the per-session replay buffer. Output beyond this size is trimmed
+ * from the front, so the snapshot keeps the most recent stream tail.
+ */
+const MAX_OUTPUT_SNAPSHOT_BYTES = 64 * 1024;
+
 interface BaseSessionState {
   sessionId: string;
   taskId: string;
@@ -103,6 +110,8 @@ interface BaseSessionState {
   createdAt: string;
   status: 'running' | 'exited';
   exitCode?: number;
+  /** Rolling tail of recent output, capped at MAX_OUTPUT_SNAPSHOT_BYTES. */
+  outputBuffer: string;
 }
 
 interface SpawnSessionState extends BaseSessionState {
@@ -138,6 +147,7 @@ function describeSession(state: SessionState): TerminalSessionDescriptor {
     mode: state.mode,
     attached: state.mode === 'attached',
     createdAt: state.createdAt,
+    outputSnapshot: state.outputBuffer.length > 0 ? state.outputBuffer : undefined,
   };
 }
 
@@ -281,6 +291,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
       cwd: opts.cwd,
       createdAt,
       status: 'running' as const,
+      outputBuffer: '',
     };
 
     let state: SessionState;
@@ -294,24 +305,44 @@ export class EmbeddedTerminalManager extends EventEmitter {
         attach: opts.attach,
         unsubscribeOutput: unsubscribe,
       };
+      this.sessions.set(sessionId, state);
+      this.targetIndex.set(targetKey, sessionId);
     } else {
-      const process = this.backend.spawn({
+      // Register the session with a placeholder process *before* invoking
+      // backend.spawn() so backends that emit output or exit synchronously
+      // during spawn find the session in the map and never close over an
+      // uninitialized `state`. The placeholder's close() is a no-op so a
+      // synchronous emitExit() finalization can run without throwing.
+      const spawnState: SpawnSessionState = {
+        ...base,
+        mode: 'spawn',
+        backend: this.backend.name,
+        process: NOOP_PROCESS,
+      };
+      state = spawnState;
+      this.sessions.set(sessionId, state);
+      this.targetIndex.set(targetKey, sessionId);
+
+      const realProcess = this.backend.spawn({
         spec: opts.spec,
         cwd: opts.cwd,
         defaultShell: this.defaultShell,
         emitOutput: (data) => this.emitOutput(sessionId, opts.taskId, data),
         emitExit: (exitCode) => this.finalizeSession(state, exitCode),
       });
-      state = {
-        ...base,
-        mode: 'spawn',
-        backend: this.backend.name,
-        process,
-      };
+      if (spawnState.status === 'running') {
+        spawnState.process = realProcess;
+      } else {
+        // Backend finalized the session synchronously during spawn; tear down
+        // the real handle since finalizeSession only closed the placeholder.
+        try {
+          realProcess.close();
+        } catch {
+          /* best-effort */
+        }
+      }
     }
 
-    this.sessions.set(sessionId, state);
-    this.targetIndex.set(targetKey, sessionId);
     return describeSession(state);
   }
 
@@ -403,10 +434,31 @@ export class EmbeddedTerminalManager extends EventEmitter {
   }
 
   private emitOutput(sessionId: string, taskId: string, data: string): void {
+    const state = this.sessions.get(sessionId);
+    if (state) {
+      state.outputBuffer = state.outputBuffer + data;
+      if (state.outputBuffer.length > MAX_OUTPUT_SNAPSHOT_BYTES) {
+        state.outputBuffer = state.outputBuffer.slice(
+          state.outputBuffer.length - MAX_OUTPUT_SNAPSHOT_BYTES,
+        );
+      }
+    }
     const payload: TerminalOutputEvent = { sessionId, taskId, data };
     this.emit('output', payload);
   }
 }
+
+const NOOP_PROCESS: SpawnedTerminalProcess = {
+  write() {
+    /* no-op until the backend's real process is wired in */
+  },
+  resize() {
+    /* no-op */
+  },
+  close() {
+    /* no-op */
+  },
+};
 
 function resolveBackend(options: EmbeddedTerminalManagerOptions): EmbeddedTerminalBackend {
   if (options.backend) return options.backend;
