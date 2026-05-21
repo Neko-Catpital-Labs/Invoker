@@ -114,6 +114,30 @@ const REVIEW_READY_WORKFLOW_PR_PLAN = {
   ],
 };
 
+/** Plan for workflow/task status color parity: a workflow with multiple tasks so the
+ *  workflow status (driven by the merge gate) and task status visuals can be
+ *  inspected side by side after workflow visuals adopt the canonical task palette. */
+const WORKFLOW_TASK_STATUS_COLOR_PARITY_PLAN = {
+  name: 'Workflow Task Status Color Parity',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'pull_request' as const,
+  mergeMode: 'external_review',
+  tasks: [
+    {
+      id: 'parity-review',
+      description: 'Review ready task',
+      command: 'echo review',
+      dependencies: [] as string[],
+    },
+    {
+      id: 'parity-completed',
+      description: 'Completed task',
+      command: 'echo done',
+      dependencies: [] as string[],
+    },
+  ],
+};
+
 /** Plan for queue-action-surface hardening: combines canonical states, dependency relationships, and destructive actions. */
 const QUEUE_HARDENING_PLAN = {
   name: 'Queue Hardening Visual Proof',
@@ -481,6 +505,53 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByRole('link', { name: reviewUrl })).toHaveAttribute('href', reviewUrl);
 
     await captureScreenshot(page, 'review-ready-workflow-pr-sidebar');
+  });
+
+  test('workflow-task-status-color-parity — workflow and task visuals share the canonical palette', async ({ page }) => {
+    // workflowStatusVisual now adapts getStatusVisual from status-colors.ts, so the
+    // workflow node and the task nodes in the mini-DAG render the same status
+    // (review_ready) with the same sky palette — proving parity for the status that
+    // previously diverged (workflow purple vs. task sky).
+    const workflowId = await loadPlanAndSelectWorkflow(page, WORKFLOW_TASK_STATUS_COLOR_PARITY_PLAN);
+    await page
+      .locator('.react-flow__node[data-testid$="parity-review"]')
+      .first()
+      .waitFor({ state: 'visible', timeout: 15000 });
+
+    const now = new Date();
+    const earlier = new Date(now.getTime() - 5000);
+    await injectTaskStates(page, [
+      {
+        taskId: 'parity-review',
+        changes: { status: 'review_ready', execution: { startedAt: now } },
+      },
+      {
+        taskId: 'parity-completed',
+        changes: {
+          status: 'completed',
+          execution: { startedAt: earlier, completedAt: now },
+        },
+      },
+      {
+        taskId: `__merge__${workflowId}`,
+        changes: {
+          status: 'review_ready',
+          execution: {
+            startedAt: now,
+            reviewUrl: 'https://example.test/pr/parity',
+          },
+        },
+      },
+    ]);
+
+    // Workflow rolled up to review_ready: the workflow node label and the task node
+    // label are visible in the same screenshot so reviewers can confirm the workflow
+    // surface uses the same sky palette as the task surface.
+    await expect(workflowNode(page, workflowId).getByText(/review ready/i)).toBeVisible();
+    const reviewTask = page.locator('.react-flow__node[data-testid$="parity-review"]');
+    await expect(reviewTask.getByText('REVIEW_READY')).toBeVisible();
+
+    await captureScreenshot(page, 'workflow-task-status-color-parity');
   });
 
   test('interactive-status-hues — fixing-with-ai, needs-input, awaiting-approval', async ({ page }) => {
