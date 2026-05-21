@@ -752,6 +752,17 @@ export function App() {
         if (keyboardRegion === 'inspector') {
           event.preventDefault();
           focusKeyboardRegion(previousGraphRegion);
+          return;
+        }
+        if (keyboardRegion === 'taskGraph' && miniDagTasks.size > 0) {
+          event.preventDefault();
+          setContextMenu(null);
+          setWorkflowContextMenu(null);
+          setSelectedTaskId(null);
+          setSelectedWorkflowId(null);
+          setWorkflowSelectionDismissed(true);
+          focusKeyboardRegion('workflowGraph');
+          return;
         }
         return;
       }
@@ -760,6 +771,16 @@ export function App() {
         if (event.key === 'Enter') {
           event.preventDefault();
           openSelectedContextMenu();
+          return;
+        }
+        if (event.key === ' ' && keyboardRegion === 'workflowGraph') {
+          if (miniDagTasks.size > 0) {
+            event.preventDefault();
+            setContextMenu(null);
+            setWorkflowContextMenu(null);
+            setWorkflowSelectionDismissed(false);
+            focusKeyboardRegion('taskGraph');
+          }
           return;
         }
         if (event.key === 'Home' && keyboardRegion === 'taskGraph') {
