@@ -151,7 +151,10 @@ import { installBundledSkills, resolveBundledSkillsStatus } from './bundled-skil
 import { createRequire } from 'node:module';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
 import { applyDelta, resolveQuarantine, TaskSnapshotCache } from './delta-merge.js';
-import { WorkflowMetadataInvalidator } from './workflow-metadata-invalidation.js';
+import {
+  CoalescedWorkflowMetadataPublisher,
+  WorkflowMetadataInvalidator,
+} from './workflow-metadata-invalidation.js';
 import { shouldSkipAutoFixForError } from './auto-fix-gating.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
@@ -1286,6 +1289,7 @@ function createEmbeddedTerminalBackendFromConfig(
   const pendingUiTaskDeltas: TaskDelta[] = [];
   let uiTaskDeltaFlushTimer: ReturnType<typeof setTimeout> | null = null;
   let workflowMetadataInvalidator: WorkflowMetadataInvalidator | null = null;
+  let workflowMetadataPublisher: CoalescedWorkflowMetadataPublisher | null = null;
   let lastKnownWorkflowCount = 0;
   let lastActivityLogId = 0;
   let startupWorkflowId: string | null = null;
@@ -1313,6 +1317,11 @@ function createEmbeddedTerminalBackendFromConfig(
     maxRendererCumulativeLagMs: 0,
     maxRendererTickDeltaMs: 0,
     maxRendererLongTaskMs: 0,
+    workflowMetadataPublishRequests: 0,
+    workflowMetadataPublishes: 0,
+    workflowMetadataCoalescedRequests: 0,
+    largeTaskDeltaBatches: 0,
+    maxTaskDeltaBatchSize: 0,
   };
   const startupMarks = new Map<string, number>();
   const startupPhaseDetails: Array<Record<string, unknown>> = [];
@@ -1370,6 +1379,11 @@ function createEmbeddedTerminalBackendFromConfig(
     uiPerfStats.maxRendererCumulativeLagMs = 0;
     uiPerfStats.maxRendererTickDeltaMs = 0;
     uiPerfStats.maxRendererLongTaskMs = 0;
+    uiPerfStats.workflowMetadataPublishRequests = 0;
+    uiPerfStats.workflowMetadataPublishes = 0;
+    uiPerfStats.workflowMetadataCoalescedRequests = 0;
+    uiPerfStats.largeTaskDeltaBatches = 0;
+    uiPerfStats.maxTaskDeltaBatchSize = 0;
   };
 
   const getUiPerfStats = (): Record<string, unknown> => ({
@@ -1426,7 +1440,18 @@ function createEmbeddedTerminalBackendFromConfig(
       pendingUiTaskDeltas.length = 0;
       return;
     }
-    const batch = pendingUiTaskDeltas.splice(0, pendingUiTaskDeltas.length);
+    const batch = pendingUiTaskDeltas.splice(0, Math.min(pendingUiTaskDeltas.length, 250));
+    if (pendingUiTaskDeltas.length > 0) {
+      uiTaskDeltaFlushTimer = setTimeout(() => flushUiTaskDeltas(), 0);
+      uiTaskDeltaFlushTimer.unref?.();
+    }
+    if (batch.length >= 200) {
+      uiPerfStats.largeTaskDeltaBatches += 1;
+      uiPerfStats.maxTaskDeltaBatchSize = Math.max(uiPerfStats.maxTaskDeltaBatchSize, batch.length);
+      logger.info(`large task-delta batch chunked size=${batch.length} remaining=${pendingUiTaskDeltas.length}`, {
+        module: 'ui-backpressure',
+      });
+    }
     if (batch.length === 1) {
       mainWindow.webContents.send('invoker:task-delta', batch[0]);
       return;
@@ -1445,6 +1470,11 @@ function createEmbeddedTerminalBackendFromConfig(
     }
     uiTaskDeltaFlushTimer = setTimeout(() => flushUiTaskDeltas(), 25);
     uiTaskDeltaFlushTimer.unref?.();
+  };
+
+  const requestWorkflowMetadataPublish = (reason: string): void => {
+    uiPerfStats.workflowMetadataPublishRequests += 1;
+    workflowMetadataPublisher?.requestPublish(reason);
   };
 
   const buildAutoFixQueueSnapshot = (taskId: string): Record<string, unknown> => {
@@ -2319,17 +2349,29 @@ function createEmbeddedTerminalBackendFromConfig(
     return persistence.loadTask(taskId);
   }
 
-  workflowMetadataInvalidator = new WorkflowMetadataInvalidator({
-    getCachedTaskSnapshot: (taskId) => lastKnownTaskStates.get(taskId),
-    loadTask: loadTaskByIdFromPersistence,
+  workflowMetadataPublisher = new CoalescedWorkflowMetadataPublisher({
     listWorkflows: () => persistence.listWorkflows(),
-    publish: (workflows) => {
+    publish: (workflows, stats) => {
       lastKnownWorkflowCount = workflows.length;
+      uiPerfStats.workflowMetadataPublishes += 1;
+      uiPerfStats.workflowMetadataCoalescedRequests += Math.max(0, stats.coalescedRequests - 1);
+      if (stats.coalescedRequests > 1) {
+        logger.info(
+          `coalesced workflow metadata publish requests=${stats.coalescedRequests} workflows=${workflows.length}`,
+          { module: 'ui-backpressure', reasonCounts: stats.reasonCounts },
+        );
+      }
       if (!mainWindow || mainWindow.isDestroyed() || !uiInteractive) {
         return;
       }
       mainWindow.webContents.send('invoker:workflows-changed', workflows);
     },
+  });
+  workflowMetadataInvalidator = new WorkflowMetadataInvalidator({
+    getCachedTaskSnapshot: (taskId) => lastKnownTaskStates.get(taskId),
+    loadTask: loadTaskByIdFromPersistence,
+    listWorkflows: () => [],
+    publish: () => requestWorkflowMetadataPublish('task-delta'),
   });
 
   function listWorkflowsByStartupRecency() {
@@ -2418,7 +2460,7 @@ function createEmbeddedTerminalBackendFromConfig(
       for (const removedTaskId of previousTaskIds) {
         sendTaskDeltaToRenderer({ type: 'removed', taskId: removedTaskId, previousTaskStateVersion: 0 });
       }
-      mainWindow.webContents.send('invoker:workflows-changed', workflows);
+      requestWorkflowMetadataPublish('orchestrator-snapshot');
     }
   }
 
@@ -2479,7 +2521,7 @@ function createEmbeddedTerminalBackendFromConfig(
               logger.info(msg, { module: 'db-poll' });
               try { persistence.writeActivityLog('db-poll', 'info', msg); } catch { /* db locked */ }
               lastKnownWorkflowCount = workflows.length;
-              mainWindow.webContents.send('invoker:workflows-changed', workflows);
+              requestWorkflowMetadataPublish('db-poll-count');
 
               orchestrator.syncAllFromDb();
               logger.info(`Synced orchestrator for all ${workflows.length} workflows`, { module: 'db-poll' });
@@ -2921,7 +2963,7 @@ function createEmbeddedTerminalBackendFromConfig(
           }
           orchestrator.syncAllFromDb();
           if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send('invoker:workflows-changed', persistence.listWorkflows());
+            requestWorkflowMetadataPublish('gap-detect');
           }
         },
       );
@@ -3019,6 +3061,7 @@ function createEmbeddedTerminalBackendFromConfig(
       lastKnownTaskStates,
       getMainWindow: () => mainWindow,
       sendTaskDeltaToRenderer,
+      requestWorkflowMetadataPublish,
       setLastKnownWorkflowCount: (count) => { lastKnownWorkflowCount = count; },
       loadTaskByIdFromPersistence,
       resolveAgentSession,
@@ -3033,9 +3076,7 @@ function createEmbeddedTerminalBackendFromConfig(
       taskHandles.clear();
       lastKnownTaskStates.clear();
       lastKnownWorkflowCount = 0;
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('invoker:workflows-changed', []);
-      }
+      requestWorkflowMetadataPublish('delete-all-workflows');
     });
 
     registerGuiMutationHandler('invoker:delete-all-workflows-bulk', async () => {
@@ -3045,9 +3086,7 @@ function createEmbeddedTerminalBackendFromConfig(
       taskHandles.clear();
       lastKnownTaskStates.clear();
       lastKnownWorkflowCount = 0;
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('invoker:workflows-changed', []);
-      }
+      requestWorkflowMetadataPublish('delete-all-workflows-bulk');
     });
 
     registerWorkflowScopedGuiMutationHandler(
@@ -3062,9 +3101,7 @@ function createEmbeddedTerminalBackendFromConfig(
 
           const workflows = persistence.listWorkflows();
           lastKnownWorkflowCount = workflows.length;
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send('invoker:workflows-changed', workflows);
-          }
+          requestWorkflowMetadataPublish('delete-workflow');
         } catch (err) {
           logger.error(`delete-workflow failed: ${err}`, { module: 'ipc' });
           throw err;
@@ -3564,9 +3601,8 @@ function createEmbeddedTerminalBackendFromConfig(
         throw err;
       }
       const workflows = persistence.listWorkflows();
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('invoker:workflows-changed', workflows);
-      }
+      lastKnownWorkflowCount = workflows.length;
+      requestWorkflowMetadataPublish('set-merge-mode');
     });
 
     registerWorkflowScopedGuiMutationHandler(
