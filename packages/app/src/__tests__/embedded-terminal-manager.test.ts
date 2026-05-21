@@ -390,6 +390,140 @@ describe('EmbeddedTerminalManager', () => {
     const res = mgr.write('not-a-session', 'x');
     expect(res).toEqual({ ok: false, reason: expect.stringContaining('Unknown session') });
   });
+
+  // ── Replay buffer ──────────────────────────────────────────
+
+  it('captures output emitted synchronously during backend.spawn() in the descriptor', () => {
+    const earlyBackend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: (opts) => {
+        opts.emitOutput('boot-banner\n');
+        opts.emitOutput('ready> ');
+        return {
+          write: () => {},
+          resize: () => {},
+          close: () => {},
+        };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend: earlyBackend });
+
+    const session = mgr.openOrReuse({ taskId: 't-early', spec: {}, cwd: '/tmp' });
+
+    expect(session.outputSnapshot).toBe('boot-banner\nready> ');
+  });
+
+  it('terminalList descriptors include the same replay snapshot for live sessions', () => {
+    const pty = createFakePty();
+    const mgr = new EmbeddedTerminalManager({
+      backend: createPtyTerminalBackend({ spawnFn: (() => pty) as unknown as PtySpawnFn }),
+    });
+    const session = mgr.openOrReuse({ taskId: 't-list', spec: {}, cwd: '/tmp' });
+    pty.emit('data', 'live-chunk-1');
+    pty.emit('data', 'live-chunk-2');
+
+    const listed = mgr.list();
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.sessionId).toBe(session.sessionId);
+    expect(listed[0]?.outputSnapshot).toBe('live-chunk-1live-chunk-2');
+    expect(mgr.get(session.sessionId)?.outputSnapshot).toBe('live-chunk-1live-chunk-2');
+  });
+
+  it('reusing a live session returns a descriptor including buffered output', () => {
+    const pty = createFakePty();
+    const mgr = new EmbeddedTerminalManager({
+      backend: createPtyTerminalBackend({ spawnFn: (() => pty) as unknown as PtySpawnFn }),
+    });
+    const first = mgr.openOrReuse({ taskId: 't-reuse', spec: {}, cwd: '/tmp' });
+    pty.emit('data', 'late-output');
+    const reused = mgr.openOrReuse({ taskId: 't-reuse', spec: {}, cwd: '/tmp' });
+
+    expect(reused.sessionId).toBe(first.sessionId);
+    expect(reused.outputSnapshot).toBe('late-output');
+  });
+
+  it('synchronous backend output and exit during spawn do not throw', () => {
+    const syncExitBackend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: (opts) => {
+        opts.emitOutput('hello\n');
+        opts.emitExit(0);
+        return {
+          write: () => {},
+          resize: () => {},
+          close: () => {},
+        };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend: syncExitBackend });
+    const exits: number[] = [];
+    mgr.on('exit', (e) => exits.push(e.exitCode ?? -1));
+
+    let session: ReturnType<typeof mgr.openOrReuse> | undefined;
+    expect(() => {
+      session = mgr.openOrReuse({ taskId: 't-sync-exit', spec: {}, cwd: '/tmp' });
+    }).not.toThrow();
+
+    expect(session?.status).toBe('exited');
+    expect(session?.exitCode).toBe(0);
+    expect(session?.outputSnapshot).toBe('hello\n');
+    expect(exits).toEqual([0]);
+    expect(mgr.list()).toHaveLength(0);
+  });
+
+  it('replay buffer is bounded and drops the oldest bytes when capacity is exceeded', () => {
+    const pty = createFakePty();
+    const mgr = new EmbeddedTerminalManager({
+      backend: createPtyTerminalBackend({ spawnFn: (() => pty) as unknown as PtySpawnFn }),
+    });
+    const session = mgr.openOrReuse({ taskId: 't-bounded', spec: {}, cwd: '/tmp' });
+
+    const CAPACITY = 64 * 1024;
+    pty.emit('data', 'A'.repeat(CAPACITY - 4));
+    pty.emit('data', 'BCDE');
+    pty.emit('data', 'TAIL');
+
+    const snapshot = mgr.get(session.sessionId)?.outputSnapshot ?? '';
+    expect(snapshot.length).toBe(CAPACITY);
+    expect(snapshot.endsWith('BCDETAIL')).toBe(true);
+    expect(snapshot.startsWith('A')).toBe(true);
+
+    pty.emit('data', 'Z'.repeat(CAPACITY * 2));
+    const snapshot2 = mgr.get(session.sessionId)?.outputSnapshot ?? '';
+    expect(snapshot2.length).toBe(CAPACITY);
+    expect(snapshot2).toBe('Z'.repeat(CAPACITY));
+  });
+
+  it('attached-mode descriptors include the replay snapshot', () => {
+    const outputCallbacks: Array<(data: string) => void> = [];
+    const executor: Pick<Executor, 'onOutput' | 'sendInput'> & { type: string } = {
+      type: 'fake',
+      onOutput(_handle: ExecutorHandle, cb: (data: string) => void) {
+        outputCallbacks.push(cb);
+        return () => {};
+      },
+      sendInput() {},
+    };
+    const handle: ExecutorHandle = { executionId: 'exec-1', taskId: 'task-live' };
+    const mgr = new EmbeddedTerminalManager({
+      backend: createBashTerminalBackend({
+        spawnFn: () => {
+          throw new Error('bash should not be spawned in attached mode');
+        },
+      }),
+    });
+
+    const session = mgr.openOrReuse({
+      taskId: 'task-live',
+      spec: { cwd: '/tmp/wt' },
+      cwd: '/tmp/wt',
+      attach: { handle, executor: executor as Executor },
+    });
+    outputCallbacks[0]?.('attached-output');
+
+    expect(mgr.get(session.sessionId)?.outputSnapshot).toBe('attached-output');
+    expect(mgr.list()[0]?.outputSnapshot).toBe('attached-output');
+  });
 });
 
 // ── Deterministic GUI route: resolveTaskTerminalSpec + EmbeddedTerminalManager ──

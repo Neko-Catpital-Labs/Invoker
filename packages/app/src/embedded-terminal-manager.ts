@@ -103,7 +103,18 @@ interface BaseSessionState {
   createdAt: string;
   status: 'running' | 'exited';
   exitCode?: number;
+  /** Bounded ring of recent output bytes (UTF-16 length). See MAX_OUTPUT_SNAPSHOT_BYTES. */
+  outputBuffer: string;
 }
+
+/** Upper bound for the per-session replay buffer in JS string length. */
+const MAX_OUTPUT_SNAPSHOT_BYTES = 64 * 1024;
+
+const NOOP_SPAWNED_PROCESS: SpawnedTerminalProcess = {
+  write: () => {},
+  resize: () => {},
+  close: () => {},
+};
 
 interface SpawnSessionState extends BaseSessionState {
   mode: 'spawn';
@@ -138,7 +149,15 @@ function describeSession(state: SessionState): TerminalSessionDescriptor {
     mode: state.mode,
     attached: state.mode === 'attached',
     createdAt: state.createdAt,
+    outputSnapshot: state.outputBuffer,
   };
+}
+
+function appendBoundedBuffer(current: string, chunk: string, max: number): string {
+  if (!chunk) return current;
+  const combined = current + chunk;
+  if (combined.length <= max) return combined;
+  return combined.slice(combined.length - max);
 }
 
 class BashTerminalBackend implements EmbeddedTerminalBackend {
@@ -273,45 +292,76 @@ export class EmbeddedTerminalManager extends EventEmitter {
 
     const sessionId = randomUUID();
     const createdAt = new Date().toISOString();
-    const base = {
+    const base: BaseSessionState = {
       sessionId,
       taskId: opts.taskId,
       targetKey,
       spec: opts.spec,
       cwd: opts.cwd,
       createdAt,
-      status: 'running' as const,
+      status: 'running',
+      outputBuffer: '',
     };
 
     let state: SessionState;
     if (opts.attach) {
-      const unsubscribe = opts.attach.executor.onOutput(opts.attach.handle, (data) => {
-        this.emitOutput(sessionId, opts.taskId, data);
-      });
-      state = {
+      const attached: AttachedSessionState = {
         ...base,
         mode: 'attached',
         attach: opts.attach,
-        unsubscribeOutput: unsubscribe,
+        unsubscribeOutput: () => {},
       };
+      // Register before subscribing so any synchronous executor output is captured.
+      this.sessions.set(sessionId, attached);
+      this.targetIndex.set(targetKey, sessionId);
+      try {
+        attached.unsubscribeOutput = opts.attach.executor.onOutput(
+          opts.attach.handle,
+          (data) => this.emitOutput(sessionId, opts.taskId, data),
+        );
+      } catch (err) {
+        this.sessions.delete(sessionId);
+        if (this.targetIndex.get(targetKey) === sessionId) {
+          this.targetIndex.delete(targetKey);
+        }
+        throw err;
+      }
+      state = attached;
     } else {
-      const process = this.backend.spawn({
-        spec: opts.spec,
-        cwd: opts.cwd,
-        defaultShell: this.defaultShell,
-        emitOutput: (data) => this.emitOutput(sessionId, opts.taskId, data),
-        emitExit: (exitCode) => this.finalizeSession(state, exitCode),
-      });
-      state = {
+      const spawnState: SpawnSessionState = {
         ...base,
         mode: 'spawn',
         backend: this.backend.name,
-        process,
+        // Placeholder until backend.spawn() returns. Guards against synchronous
+        // backend exit firing finalizeSession() before the real process is assigned.
+        process: NOOP_SPAWNED_PROCESS,
       };
+      // Register before spawn so synchronous output/exit can find the buffer
+      // and operate on a fully-initialized state.
+      this.sessions.set(sessionId, spawnState);
+      this.targetIndex.set(targetKey, sessionId);
+      try {
+        const spawnedProcess = this.backend.spawn({
+          spec: opts.spec,
+          cwd: opts.cwd,
+          defaultShell: this.defaultShell,
+          emitOutput: (data) => this.emitOutput(sessionId, opts.taskId, data),
+          emitExit: (exitCode) => {
+            const current = this.sessions.get(sessionId) ?? spawnState;
+            this.finalizeSession(current, exitCode);
+          },
+        });
+        spawnState.process = spawnedProcess;
+      } catch (err) {
+        this.sessions.delete(sessionId);
+        if (this.targetIndex.get(targetKey) === sessionId) {
+          this.targetIndex.delete(targetKey);
+        }
+        throw err;
+      }
+      state = spawnState;
     }
 
-    this.sessions.set(sessionId, state);
-    this.targetIndex.set(targetKey, sessionId);
     return describeSession(state);
   }
 
@@ -380,7 +430,11 @@ export class EmbeddedTerminalManager extends EventEmitter {
     state.exitCode = exitCode;
 
     if (state.mode === 'spawn') {
-      state.process.close();
+      try {
+        state.process.close();
+      } catch {
+        /* close is best-effort; spawn may have failed before assignment */
+      }
     } else {
       try {
         state.unsubscribeOutput();
@@ -403,6 +457,14 @@ export class EmbeddedTerminalManager extends EventEmitter {
   }
 
   private emitOutput(sessionId: string, taskId: string, data: string): void {
+    const state = this.sessions.get(sessionId);
+    if (state) {
+      state.outputBuffer = appendBoundedBuffer(
+        state.outputBuffer,
+        data,
+        MAX_OUTPUT_SNAPSHOT_BYTES,
+      );
+    }
     const payload: TerminalOutputEvent = { sessionId, taskId, data };
     this.emit('output', payload);
   }
