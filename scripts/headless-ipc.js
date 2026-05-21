@@ -168,6 +168,19 @@ async function requestExec(bus, item, options) {
     waitForApproval: options.waitForApproval,
   };
   const response = await withTimeout(bus.request('headless.exec', payload), options.timeoutMs);
+  if (options.noTrack) {
+    const acknowledged =
+      response &&
+      typeof response === 'object' &&
+      response.ok === true &&
+      (typeof response.intentId === 'number' || typeof response.intentId === 'string');
+    if (!acknowledged) {
+      throw new Error(
+        `Fire-and-forget dispatch was not queued for args "${item.args.join(' ')}"; ` +
+        `expected owner response { ok: true, intentId }, got ${JSON.stringify(response)}`,
+      );
+    }
+  }
   return {
     ...item,
     ok: true,

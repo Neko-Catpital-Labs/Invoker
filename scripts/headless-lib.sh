@@ -184,9 +184,16 @@ for raw in output_jsonl.read_text(encoding="utf-8").splitlines():
         continue
     item = json.loads(raw)
     workflow_id = item.get("workflowId") or item.get("label") or "unknown"
+    response = item.get("response")
+    queued = (
+        item.get("ok") is True
+        and isinstance(response, dict)
+        and response.get("ok") is True
+        and response.get("intentId") not in (None, "")
+    )
     (log_dir / f"{workflow_id}.log").write_text(raw + "\n", encoding="utf-8")
     with result_file.open("a", encoding="utf-8") as handle:
-        handle.write(f"{workflow_id}\t{'SUCCEEDED' if item.get('ok') else 'FAILED'}\n")
+        handle.write(f"{workflow_id}\t{'SUCCEEDED' if queued else 'FAILED'}\n")
 PY
 }
 
