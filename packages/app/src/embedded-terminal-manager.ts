@@ -126,7 +126,19 @@ export interface EmbeddedTerminalManagerOptions {
   defaultShell?: string;
 }
 
-function describeSession(state: SessionState): TerminalSessionDescriptor {
+/**
+ * Maximum size, in UTF-16 code units, of the per-session output replay
+ * snapshot. Roughly 64 KiB worth of typical terminal output — bounded so the
+ * snapshot cannot grow without limit while still being large enough to seed a
+ * late-mounting renderer pane with the most recent shell prompt and a screen
+ * or two of context.
+ */
+const OUTPUT_SNAPSHOT_MAX_CHARS = 64 * 1024;
+
+function describeSession(
+  state: SessionState,
+  outputSnapshot: string | undefined,
+): TerminalSessionDescriptor {
   return {
     sessionId: state.sessionId,
     taskId: state.taskId,
@@ -138,6 +150,7 @@ function describeSession(state: SessionState): TerminalSessionDescriptor {
     mode: state.mode,
     attached: state.mode === 'attached',
     createdAt: state.createdAt,
+    outputSnapshot: outputSnapshot && outputSnapshot.length > 0 ? outputSnapshot : undefined,
   };
 }
 
@@ -244,6 +257,7 @@ export function createPtyTerminalBackend(
 export class EmbeddedTerminalManager extends EventEmitter {
   private readonly sessions = new Map<string, SessionState>();
   private readonly targetIndex = new Map<string, string>();
+  private readonly outputBuffers = new Map<string, { data: string }>();
   private readonly backend: EmbeddedTerminalBackend;
   private readonly defaultShell: string;
 
@@ -265,10 +279,13 @@ export class EmbeddedTerminalManager extends EventEmitter {
     if (existingId) {
       const existing = this.sessions.get(existingId);
       if (existing && existing.status === 'running') {
-        return describeSession(existing);
+        return describeSession(existing, this.outputBuffers.get(existing.sessionId)?.data);
       }
       this.targetIndex.delete(targetKey);
-      if (existing) this.sessions.delete(existingId);
+      if (existing) {
+        this.sessions.delete(existingId);
+        this.outputBuffers.delete(existingId);
+      }
     }
 
     const sessionId = randomUUID();
@@ -282,6 +299,15 @@ export class EmbeddedTerminalManager extends EventEmitter {
       createdAt,
       status: 'running' as const,
     };
+
+    // Seed replay bookkeeping before the backend spawns so output emitted
+    // synchronously during spawn() is captured into the snapshot.
+    this.outputBuffers.set(sessionId, { data: '' });
+
+    // Synchronous backend exits may fire before `state` is assigned below;
+    // capture them here and finalize after state assignment instead of
+    // dereferencing an uninitialized closure variable.
+    let syncExit: { exitCode: number | undefined } | null = null;
 
     let state: SessionState;
     if (opts.attach) {
@@ -300,7 +326,14 @@ export class EmbeddedTerminalManager extends EventEmitter {
         cwd: opts.cwd,
         defaultShell: this.defaultShell,
         emitOutput: (data) => this.emitOutput(sessionId, opts.taskId, data),
-        emitExit: (exitCode) => this.finalizeSession(state, exitCode),
+        emitExit: (exitCode) => {
+          const existing = this.sessions.get(sessionId);
+          if (existing) {
+            this.finalizeSession(existing, exitCode);
+            return;
+          }
+          syncExit = { exitCode };
+        },
       });
       state = {
         ...base,
@@ -312,16 +345,25 @@ export class EmbeddedTerminalManager extends EventEmitter {
 
     this.sessions.set(sessionId, state);
     this.targetIndex.set(targetKey, sessionId);
-    return describeSession(state);
+
+    if (syncExit !== null) {
+      this.finalizeSession(state, (syncExit as { exitCode: number | undefined }).exitCode);
+    }
+
+    return describeSession(state, this.outputBuffers.get(sessionId)?.data);
   }
 
   list(): TerminalSessionDescriptor[] {
-    return Array.from(this.sessions.values()).map(describeSession);
+    return Array.from(this.sessions.values()).map((state) =>
+      describeSession(state, this.outputBuffers.get(state.sessionId)?.data),
+    );
   }
 
   get(sessionId: string): TerminalSessionDescriptor | undefined {
     const state = this.sessions.get(sessionId);
-    return state ? describeSession(state) : undefined;
+    return state
+      ? describeSession(state, this.outputBuffers.get(sessionId)?.data)
+      : undefined;
   }
 
   write(sessionId: string, data: string): { ok: boolean; reason?: string } {
@@ -393,6 +435,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
       this.targetIndex.delete(state.targetKey);
     }
     this.sessions.delete(state.sessionId);
+    this.outputBuffers.delete(state.sessionId);
 
     const payload: TerminalExitEvent = {
       sessionId: state.sessionId,
@@ -403,6 +446,13 @@ export class EmbeddedTerminalManager extends EventEmitter {
   }
 
   private emitOutput(sessionId: string, taskId: string, data: string): void {
+    const buffer = this.outputBuffers.get(sessionId);
+    if (buffer) {
+      buffer.data = buffer.data + data;
+      if (buffer.data.length > OUTPUT_SNAPSHOT_MAX_CHARS) {
+        buffer.data = buffer.data.slice(buffer.data.length - OUTPUT_SNAPSHOT_MAX_CHARS);
+      }
+    }
     const payload: TerminalOutputEvent = { sessionId, taskId, data };
     this.emit('output', payload);
   }
