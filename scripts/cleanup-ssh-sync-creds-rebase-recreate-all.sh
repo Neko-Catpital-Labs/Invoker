@@ -22,6 +22,8 @@ SKIP_CLEANUP=false
 SKIP_CREDS=false
 SKIP_REBASE_RECREATE=false
 REBASE_RECREATE_TIMEOUT_SECONDS="${REBASE_RECREATE_TIMEOUT_SECONDS:-900}"
+IDLE_TIMEOUT_SECONDS="${IDLE_TIMEOUT_SECONDS:-900}"
+IDLE_POLL_SECONDS="${IDLE_POLL_SECONDS:-5}"
 
 usage() {
   cat <<'EOF'
@@ -34,6 +36,7 @@ Options:
   --skip-creds             Do not sync Claude/Codex credential files.
   --skip-rebase-recreate   Do not dispatch workflow rebase-recreate commands.
   --timeout <seconds>      Timeout passed to bench-rebase-recreate-all.sh.
+  --idle-timeout <seconds> Maximum time to wait for Invoker to become idle before cleanup.
   -h, --help               Show this help.
 
 Environment:
@@ -69,6 +72,10 @@ while [[ $# -gt 0 ]]; do
       REBASE_RECREATE_TIMEOUT_SECONDS="${2:-}"
       shift 2
       ;;
+    --idle-timeout)
+      IDLE_TIMEOUT_SECONDS="${2:-}"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -88,6 +95,10 @@ fi
 
 if ! [[ "$REBASE_RECREATE_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
   echo "Invalid --timeout value: $REBASE_RECREATE_TIMEOUT_SECONDS" >&2
+  exit 1
+fi
+if ! [[ "$IDLE_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Invalid --idle-timeout value: $IDLE_TIMEOUT_SECONDS" >&2
   exit 1
 fi
 
@@ -110,11 +121,40 @@ require_command() {
 
 require_command node
 require_command ssh
+require_command sqlite3
 if [[ "$SKIP_CREDS" = false ]]; then
   require_command rsync
 fi
 
 CONFIG_PATH="${INVOKER_REPO_CONFIG_PATH:-$HOME/.invoker/config.json}"
+DB_PATH="${INVOKER_DB_PATH:-${INVOKER_DB_DIR:-$HOME/.invoker}/invoker.db}"
+
+wait_for_invoker_idle() {
+  if [[ ! -f "$DB_PATH" ]]; then
+    echo "Invoker DB not found yet; skipping idle wait: $DB_PATH"
+    return 0
+  fi
+
+  local started_at now active_tasks active_mutations
+  started_at="$(date +%s)"
+  while true; do
+    active_tasks="$(sqlite3 "$DB_PATH" "select count(*) from tasks where status in ('running','fixing_with_ai');")"
+    active_mutations="$(sqlite3 "$DB_PATH" "select count(*) from workflow_mutation_intents where status in ('queued','running');")"
+    if [[ "$active_tasks" = "0" && "$active_mutations" = "0" ]]; then
+      echo "Invoker is idle; remote cleanup can proceed."
+      return 0
+    fi
+
+    now="$(date +%s)"
+    if (( now - started_at >= IDLE_TIMEOUT_SECONDS )); then
+      echo "Timed out waiting for Invoker idle state before remote cleanup (tasks=$active_tasks mutations=$active_mutations)." >&2
+      echo "Refusing to delete remote managed workspaces while Invoker is active." >&2
+      return 1
+    fi
+    echo "Waiting for Invoker idle before remote cleanup: active_tasks=$active_tasks active_mutations=$active_mutations"
+    sleep "$IDLE_POLL_SECONDS"
+  done
+}
 
 CONFIG_PATH="$CONFIG_PATH" node > "$TARGETS_FILE" <<'NODE'
 const fs = require('node:fs');
@@ -269,6 +309,10 @@ sync_credentials_to_target() {
 echo "Config: $CONFIG_PATH"
 echo "Targets:"
 awk -F '\t' '{ printf "  - %s (%s@%s:%s, remoteInvokerHome=%s)\n", $1, $3, $2, $4, $6 }' "$TARGETS_FILE"
+
+if [[ "$SKIP_CLEANUP" = false && "$DRY_RUN" = false ]]; then
+  wait_for_invoker_idle
+fi
 
 while IFS=$'\t' read -r target_id host user port key_path remote_invoker_home; do
   [[ -z "$target_id" ]] && continue
