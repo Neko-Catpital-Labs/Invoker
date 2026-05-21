@@ -560,6 +560,33 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'workflow-context-menu-organization');
   });
 
+  test('context-menu-keyboard-navigation — ArrowDown highlights the next menu item', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+
+    await openContextMenu(page, page.locator('[data-testid^="workflow-node-"]'));
+
+    const openWorkflowItem = page.getByRole('menuitem', { name: 'Open Workflow' });
+    const openPrItem = page.getByRole('menuitem', { name: 'Open PR' });
+    await expect(openWorkflowItem).toBeVisible();
+    await expect(openPrItem).toBeVisible();
+
+    const hasHighlight = async (locator: Locator) => {
+      const classAttr = await locator.getAttribute('class');
+      return classAttr ? classAttr.split(/\s+/).includes('bg-gray-700') : false;
+    };
+
+    // Menu auto-focuses the first enabled item, applying the bg-gray-700 highlight token.
+    await expect.poll(() => hasHighlight(openWorkflowItem)).toBe(true);
+    await expect.poll(() => hasHighlight(openPrItem)).toBe(false);
+
+    // ArrowDown moves the roving highlight to the next enabled menu item.
+    await page.keyboard.press('ArrowDown');
+    await expect.poll(() => hasHighlight(openPrItem)).toBe(true);
+    await expect.poll(() => hasHighlight(openWorkflowItem)).toBe(false);
+
+    await captureScreenshot(page, 'context-menu-keyboard-navigation');
+  });
+
   test('context menu keeps danger separator when cancel action is absent', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     await injectTaskStates(page, [
