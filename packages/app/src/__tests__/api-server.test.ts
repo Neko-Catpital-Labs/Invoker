@@ -828,6 +828,40 @@ describe('POST /api/workflows/:id/fork', () => {
 });
 
 describe('POST /api/workflows/:id/rebase-recreate', () => {
+  it('queues rebase-recreate through the workflow mutation coordinator when available', async () => {
+    const localMocks = createMocks();
+    localMocks.orchestrator.recreateWorkflow = vi.fn(() => [makeTask()]);
+    const queueWorkflowMutation = vi.fn(() => 123);
+    const queuedApi = startApiServer({
+      orchestrator: localMocks.orchestrator as any,
+      persistence: localMocks.persistence as any,
+      executorRegistry: localMocks.executorRegistry as any,
+      mutations: buildFacade(localMocks),
+      queueWorkflowMutation,
+      deleteWorkflow: localMocks.deleteWorkflow,
+      detachWorkflow: localMocks.detachWorkflow,
+    });
+    await new Promise<void>((resolve) => {
+      if (queuedApi.server.listening) resolve();
+      else queuedApi.server.on('listening', resolve);
+    });
+    const queuedAddr = queuedApi.server.address();
+    const queuedPort = typeof queuedAddr === 'object' && queuedAddr ? queuedAddr.port : queuedApi.port;
+
+    try {
+      const res = await request(queuedPort, 'POST', '/api/workflows/wf-1/rebase-recreate');
+
+      expect(res.status).toBe(202);
+      expect(res.body.ok).toBe(true);
+      expect(res.body.queued).toBe(true);
+      expect(res.body.intentId).toBe(123);
+      expect(queueWorkflowMutation).toHaveBeenCalledWith('wf-1', 'high', 'invoker:rebase-recreate', ['wf-1']);
+      expect(localMocks.orchestrator.recreateWorkflow).not.toHaveBeenCalled();
+    } finally {
+      await queuedApi.close();
+    }
+  });
+
   it('recreates workflow from fresh base', async () => {
     mocks.orchestrator.recreateWorkflow = vi.fn(() => [makeTask()]);
     const res = await request(port, 'POST', '/api/workflows/wf-1/rebase-recreate');
