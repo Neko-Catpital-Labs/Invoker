@@ -107,6 +107,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TARGETS_FILE="$(mktemp -t invoker-ssh-targets.XXXXXX)"
 LOCK_DIR="${TMPDIR:-/tmp}/invoker-cleanup-ssh-sync-creds-rebase-recreate-all.lock"
+LOCK_PID_FILE="$LOCK_DIR/pid"
 
 cleanup() {
   rm -f "$TARGETS_FILE" >/dev/null 2>&1 || true
@@ -118,9 +119,31 @@ trap cleanup EXIT
 
 if mkdir "$LOCK_DIR" 2>/dev/null; then
   LOCK_ACQUIRED=true
+  printf '%s\n' "$$" > "$LOCK_PID_FILE"
 else
-  echo "Another cleanup/sync/rebase-recreate run is already active: $LOCK_DIR" >&2
-  exit 75
+  existing_pid=""
+  if [[ -f "$LOCK_PID_FILE" ]]; then
+    existing_pid="$(cat "$LOCK_PID_FILE" 2>/dev/null || true)"
+  fi
+  lock_is_stale=false
+  if [[ -z "$existing_pid" || ! "$existing_pid" =~ ^[0-9]+$ ]]; then
+    lock_is_stale=true
+  elif ! kill -0 "$existing_pid" 2>/dev/null; then
+    lock_is_stale=true
+  fi
+  if [[ "$lock_is_stale" = true ]]; then
+    rm -rf "$LOCK_DIR"
+    if mkdir "$LOCK_DIR" 2>/dev/null; then
+      LOCK_ACQUIRED=true
+      printf '%s\n' "$$" > "$LOCK_PID_FILE"
+    else
+      echo "Another cleanup/sync/rebase-recreate run is already active: $LOCK_DIR" >&2
+      exit 75
+    fi
+  else
+    echo "Another cleanup/sync/rebase-recreate run is already active: $LOCK_DIR" >&2
+    exit 75
+  fi
 fi
 
 require_command() {
