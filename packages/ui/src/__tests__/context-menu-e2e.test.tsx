@@ -158,4 +158,95 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
+
+  it('workflow context menu focuses itself on open', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    await waitFor(() => expect(document.activeElement).toBe(menu));
+    // First item is highlighted by default.
+    expect(screen.getByText('Open Workflow').getAttribute('data-focused')).toBe('true');
+  });
+
+  it('workflow context menu ArrowDown then Enter activates highlighted item', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    expect(screen.getByText('Open PR').getAttribute('data-focused')).toBe('true');
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    expect(screen.getByText('Retry Workflow').getAttribute('data-focused')).toBe('true');
+    fireEvent.keyDown(menu, { key: 'Enter' });
+    await waitFor(() => expect(mock.api.retryWorkflow).toHaveBeenCalledWith('wf-1'));
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+  });
+
+  it('workflow context menu Space activates highlighted item', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    // ArrowDown twice: Open Workflow → Open PR → Retry Workflow
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: ' ' });
+    await waitFor(() => expect(mock.api.retryWorkflow).toHaveBeenCalledWith('wf-1'));
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+  });
+
+  it('workflow context menu ArrowUp wraps around to last item', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    fireEvent.keyDown(menu, { key: 'ArrowUp' });
+    // Items: Open Workflow, Open PR, Retry Workflow, Copy Workflow ID, More
+    expect(screen.getByText('More').getAttribute('data-focused')).toBe('true');
+  });
+
+  it('workflow context menu activates More with Enter then focuses first new item', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    // Navigate to More (index 4)
+    fireEvent.keyDown(menu, { key: 'ArrowUp' }); // jumps to last → More
+    expect(screen.getByText('More').getAttribute('data-focused')).toBe('true');
+    fireEvent.keyDown(menu, { key: 'Enter' });
+    // After expansion, Rebase and Retry should be the focused entry.
+    const rebaseEntry = await screen.findByText('Rebase and Retry');
+    await waitFor(() => expect(rebaseEntry.getAttribute('data-focused')).toBe('true'));
+    fireEvent.keyDown(menu, { key: 'Enter' });
+    await waitFor(() => expect(mock.api.rebaseRetry).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('task context menu supports ArrowDown then Enter activation', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    const menu = await screen.findByRole('menu');
+    await waitFor(() => expect(document.activeElement).toBe(menu));
+    // Pending task: first item is Restart Task. ArrowDown should go to Open Terminal.
+    expect(screen.getByText('Restart Task').getAttribute('data-focused')).toBe('true');
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    expect(screen.getByText('Open Terminal').getAttribute('data-focused')).toBe('true');
+    fireEvent.keyDown(menu, { key: 'Enter' });
+    await waitFor(() => expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'));
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+  });
+
+  it('task context menu Escape closes without invoking actions', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    const menu = await screen.findByRole('menu');
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+    expect(mock.api.restartTask).not.toHaveBeenCalled();
+    expect(mock.api.openTerminal).not.toHaveBeenCalled();
+    expect(menu).not.toBeInTheDocument();
+  });
 });
