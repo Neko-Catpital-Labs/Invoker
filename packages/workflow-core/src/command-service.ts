@@ -473,6 +473,28 @@ export class CommandService {
     );
   }
 
+  async runSerializedForWorkflow<T>(
+    workflowId: string | undefined,
+    fn: () => T | Promise<T>,
+  ): Promise<CommandResult<T>> {
+    return this.executeCommand<T>(
+      'SERIALIZED_WORKFLOW_MUTATION_FAILED',
+      fn,
+      workflowId,
+    );
+  }
+
+  async runSerializedForTask<T>(
+    taskId: string,
+    fn: () => T | Promise<T>,
+  ): Promise<CommandResult<T>> {
+    return this.executeCommand<T>(
+      'SERIALIZED_TASK_MUTATION_FAILED',
+      fn,
+      this.workflowIdForTask(taskId),
+    );
+  }
+
   // ── Private Helpers ────────────────────────────────────
 
   private async executeCommand<T>(
