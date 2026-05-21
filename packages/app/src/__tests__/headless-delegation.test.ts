@@ -107,11 +107,28 @@ describe('headless delegation enforcement', () => {
       ).resolves.toBeUndefined();
     });
 
-    it('allows deprecated list command in read-only mode', async () => {
-      await expect(
-        runHeadless(['list'], mockDeps)
-      ).resolves.toBeUndefined();
-    });
+      it('allows deprecated list command in read-only mode', async () => {
+        await expect(
+          runHeadless(['list'], mockDeps)
+        ).resolves.toBeUndefined();
+      });
+
+      it('allows query workflow for a single workflow', async () => {
+        mockDeps.persistence.loadWorkflow = vi.fn(() => ({
+          id: 'wf-1',
+          name: 'Workflow one',
+          status: 'pending',
+          generation: 0,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        } as any));
+
+        await expect(
+          runHeadless(['query', 'workflow', 'wf-1', '--output', 'json'], mockDeps),
+        ).resolves.toBeUndefined();
+
+        expect(mockDeps.persistence.loadWorkflow).toHaveBeenCalledWith('wf-1');
+      });
 
     it('allows deprecated status command in read-only mode', async () => {
       mockDeps.orchestrator.syncFromDb = vi.fn();
@@ -459,6 +476,77 @@ describe('headless delegation enforcement', () => {
 
         expect(mockDeps.commandService.editTaskAgent).toHaveBeenCalled();
         expect(elapsed).toBeLessThan(1000);
+      });
+
+      it('headless generic setters update workflow and task metadata without dispatching', async () => {
+        mockDeps.commandService.runSerializedForWorkflow = vi.fn(async (_workflowId: string, fn: () => unknown) => {
+          await fn();
+          return { ok: true as const, data: undefined };
+        });
+        mockDeps.orchestrator.syncFromDb = vi.fn();
+        mockDeps.persistence.loadWorkflow = vi.fn(() => ({ id: 'wf-1', name: 'Workflow one' } as any));
+        mockDeps.persistence.loadTask = vi.fn((id: string) => (id === 'task-1'
+          ? {
+              id: 'task-1',
+              status: 'pending',
+              description: 'Task one',
+              dependencies: [],
+              config: { workflowId: 'wf-1' },
+              execution: {},
+            } as any
+          : undefined));
+        mockDeps.persistence.listWorkflows = vi.fn(() => [{
+          id: 'wf-1',
+          name: 'test-workflow',
+          generation: 0,
+          status: 'running' as const,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }]);
+        mockDeps.persistence.loadTasks = vi.fn(() => [{
+          id: 'task-1',
+          status: 'pending',
+          description: 'Task one',
+          dependencies: [],
+          config: { workflowId: 'wf-1' },
+          execution: {},
+        } as any]);
+        mockDeps.persistence.updateWorkflow = vi.fn();
+        mockDeps.persistence.updateTask = vi.fn();
+        mockDeps.persistence.logEvent = vi.fn();
+        const executeTasksSpy = vi.spyOn(TaskRunner.prototype, 'executeTasks');
+
+        await runHeadless(
+          ['set', 'workflow', 'wf-1', 'repoUrl', 'git@github.com:Neko-Catpital-Labs/Invoker.git'],
+          mockDeps,
+        );
+        await runHeadless(['set', 'task', 'task-1', 'config.poolId', 'some-pool'], mockDeps);
+
+        expect(mockDeps.persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', {
+          repoUrl: 'git@github.com:Neko-Catpital-Labs/Invoker.git',
+        });
+        expect(mockDeps.persistence.updateTask).toHaveBeenCalledWith('task-1', {
+          config: { poolId: 'some-pool' },
+        });
+        expect(executeTasksSpy).not.toHaveBeenCalled();
+
+        executeTasksSpy.mockRestore();
+      });
+
+      it('headless generic setters reject forbidden fields', async () => {
+        mockDeps.commandService.runSerializedForWorkflow = vi.fn();
+        mockDeps.persistence.loadTask = vi.fn(() => ({
+          id: 'task-1',
+          config: { workflowId: 'wf-1' },
+          execution: {},
+        } as any));
+
+        await expect(runHeadless(['set', 'task', 'task-1', 'execution.error', 'boom'], mockDeps))
+          .rejects.toThrow(/not allowed/);
+        await expect(runHeadless(['set', 'task', 'task-1', 'status', 'failed'], mockDeps))
+          .rejects.toThrow(/not allowed/);
+        await expect(runHeadless(['set', 'task', 'task-1', 'config.workflowId', 'wf-2'], mockDeps))
+          .rejects.toThrow(/not allowed/);
       });
 
       it('headless set mutations dispatch runnable tasks before waiting for completion', async () => {

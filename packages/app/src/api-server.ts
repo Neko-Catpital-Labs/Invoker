@@ -52,6 +52,7 @@ import type { ExecutorRegistry } from '@invoker/execution-engine';
 import type { WorkflowMutationFacade } from './workflow-mutation-facade.js';
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
+import { parseMetadataPatchBody } from './metadata-setter.js';
 
 export interface ApiServerDeps {
   logger?: Logger;
@@ -589,6 +590,21 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         return;
       }
 
+      // PATCH /api/tasks/:id/metadata
+      const taskMetadataMatch = path.match(/^\/api\/tasks\/([^/]+)\/metadata$/);
+      if (method === 'PATCH' && taskMetadataMatch) {
+        const taskId = decodeURIComponent(taskMetadataMatch[1]);
+        try {
+          const body = await readBody(req);
+          const patch = parseMetadataPatchBody(body);
+          const result = await mutations.setTaskMetadata(taskId, patch.fieldPath, patch.value, { raw: patch.raw });
+          json(res, 200, { ok: true, ...result });
+        } catch (err) {
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
+        }
+        return;
+      }
+
       // DELETE /api/workflows/:id
       const wfDeleteMatch = path.match(/^\/api\/workflows\/([^/]+)$/);
       if (method === 'DELETE' && wfDeleteMatch) {
@@ -639,6 +655,21 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           }
           await mutations.setWorkflowMergeMode(workflowId, mode);
           json(res, 200, { ok: true, workflowId, action: 'merge_mode_set', mode });
+        } catch (err) {
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
+        }
+        return;
+      }
+
+      // PATCH /api/workflows/:id/metadata
+      const wfMetadataMatch = path.match(/^\/api\/workflows\/([^/]+)\/metadata$/);
+      if (method === 'PATCH' && wfMetadataMatch) {
+        const workflowId = decodeURIComponent(wfMetadataMatch[1]);
+        try {
+          const body = await readBody(req);
+          const patch = parseMetadataPatchBody(body);
+          const result = await mutations.setWorkflowMetadata(workflowId, patch.fieldPath, patch.value, { raw: patch.raw });
+          json(res, 200, { ok: true, ...result });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
