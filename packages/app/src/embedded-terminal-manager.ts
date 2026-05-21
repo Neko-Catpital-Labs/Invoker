@@ -94,6 +94,28 @@ export interface OpenSessionOptions {
   attach?: AttachContext;
 }
 
+/**
+ * Maximum number of characters retained in the per-session replay snapshot.
+ * 64 KiB worth of characters is enough to seed a freshly mounted pane with
+ * the most recent screenful(s) of output without growing without bound for
+ * long-lived sessions.
+ */
+const TERMINAL_OUTPUT_SNAPSHOT_MAX_CHARS = 64 * 1024;
+
+interface OutputBuffer {
+  content: string;
+}
+
+function appendToOutputBuffer(buffer: OutputBuffer, data: string): void {
+  if (!data) return;
+  buffer.content = buffer.content.length === 0 ? data : buffer.content + data;
+  if (buffer.content.length > TERMINAL_OUTPUT_SNAPSHOT_MAX_CHARS) {
+    buffer.content = buffer.content.slice(
+      buffer.content.length - TERMINAL_OUTPUT_SNAPSHOT_MAX_CHARS,
+    );
+  }
+}
+
 interface BaseSessionState {
   sessionId: string;
   taskId: string;
@@ -103,6 +125,7 @@ interface BaseSessionState {
   createdAt: string;
   status: 'running' | 'exited';
   exitCode?: number;
+  outputBuffer: OutputBuffer;
 }
 
 interface SpawnSessionState extends BaseSessionState {
@@ -138,6 +161,9 @@ function describeSession(state: SessionState): TerminalSessionDescriptor {
     mode: state.mode,
     attached: state.mode === 'attached',
     createdAt: state.createdAt,
+    outputSnapshot: state.outputBuffer.content.length > 0
+      ? state.outputBuffer.content
+      : undefined,
   };
 }
 
@@ -273,6 +299,10 @@ export class EmbeddedTerminalManager extends EventEmitter {
 
     const sessionId = randomUUID();
     const createdAt = new Date().toISOString();
+    // Initialize the replay buffer before backend spawn so that any output
+    // emitted synchronously during spawn() is captured even though the
+    // SessionState (and the session-map registration) does not yet exist.
+    const outputBuffer: OutputBuffer = { content: '' };
     const base = {
       sessionId,
       taskId: opts.taskId,
@@ -281,13 +311,34 @@ export class EmbeddedTerminalManager extends EventEmitter {
       cwd: opts.cwd,
       createdAt,
       status: 'running' as const,
+      outputBuffer,
     };
 
-    let state: SessionState;
+    const emitOutputForSession = (data: string) => {
+      appendToOutputBuffer(outputBuffer, data);
+      this.emitOutput(sessionId, opts.taskId, data);
+    };
+
+    let state: SessionState | undefined;
+    let pendingExitCode: number | undefined;
+    let exitedBeforeReady = false;
+    const handleSpawnExit = (exitCode?: number) => {
+      if (state) {
+        this.finalizeSession(state, exitCode);
+        return;
+      }
+      // Backend produced an exit synchronously from inside spawn(), before
+      // `state` was assigned. Defer finalization until after state is set so
+      // finalizeSession() does not dereference an undefined state.
+      exitedBeforeReady = true;
+      pendingExitCode = exitCode;
+    };
+
     if (opts.attach) {
-      const unsubscribe = opts.attach.executor.onOutput(opts.attach.handle, (data) => {
-        this.emitOutput(sessionId, opts.taskId, data);
-      });
+      const unsubscribe = opts.attach.executor.onOutput(
+        opts.attach.handle,
+        emitOutputForSession,
+      );
       state = {
         ...base,
         mode: 'attached',
@@ -299,8 +350,8 @@ export class EmbeddedTerminalManager extends EventEmitter {
         spec: opts.spec,
         cwd: opts.cwd,
         defaultShell: this.defaultShell,
-        emitOutput: (data) => this.emitOutput(sessionId, opts.taskId, data),
-        emitExit: (exitCode) => this.finalizeSession(state, exitCode),
+        emitOutput: emitOutputForSession,
+        emitExit: handleSpawnExit,
       });
       state = {
         ...base,
@@ -312,6 +363,11 @@ export class EmbeddedTerminalManager extends EventEmitter {
 
     this.sessions.set(sessionId, state);
     this.targetIndex.set(targetKey, sessionId);
+
+    if (exitedBeforeReady) {
+      this.finalizeSession(state, pendingExitCode);
+    }
+
     return describeSession(state);
   }
 
