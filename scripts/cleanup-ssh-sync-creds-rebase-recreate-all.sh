@@ -14,7 +14,7 @@ set -euo pipefail
 #   scripts/cleanup-ssh-sync-creds-rebase-recreate-all.sh --yes
 #
 # Optional:
-#   INVOKER_SSH_CREDENTIAL_PATHS="$HOME/.claude:$HOME/.claude.json:$HOME/.codex"
+#   INVOKER_SSH_CREDENTIAL_PATHS="$HOME/.claude.json:$HOME/.claude/settings.json:$HOME/.codex/auth.json:$HOME/.codex/config.toml"
 
 DRY_RUN=false
 YES=false
@@ -39,7 +39,7 @@ Options:
 Environment:
   INVOKER_REPO_CONFIG_PATH       Repo-specific Invoker config path.
   INVOKER_SSH_CREDENTIAL_PATHS   Colon-separated local paths to sync.
-                                Defaults to ~/.claude, ~/.claude.json, ~/.codex.
+                                Defaults to Claude/Codex auth + config files.
 EOF
 }
 
@@ -217,9 +217,11 @@ sync_credentials_to_target() {
   local port="$3"
   local key_path="$4"
 
-  local credential_paths="${INVOKER_SSH_CREDENTIAL_PATHS:-$HOME/.claude:$HOME/.claude.json:$HOME/.codex}"
+  local credential_paths="${INVOKER_SSH_CREDENTIAL_PATHS:-$HOME/.claude.json:$HOME/.claude/settings.json:$HOME/.claude/mcp-needs-auth-cache.json:$HOME/.codex/auth.json:$HOME/.codex/config.toml}"
   local path_entry=""
-  local basename_entry=""
+  local remote_rel=""
+  local remote_parent=""
+  local remote_dest=""
 
   IFS=':' read -r -a credential_array <<< "$credential_paths"
   for path_entry in "${credential_array[@]}"; do
@@ -230,23 +232,36 @@ sync_credentials_to_target() {
       continue
     fi
 
-    basename_entry="$(basename "$path_entry")"
-    echo "[$target_label] sync $path_entry -> $user_host:~/$basename_entry"
+    if [[ "$path_entry" == "$HOME/"* ]]; then
+      remote_rel="${path_entry#"$HOME"/}"
+    else
+      remote_rel="$(basename "$path_entry")"
+    fi
+    remote_parent="$(dirname "$remote_rel")"
+    remote_dest="~/$remote_rel"
+
+    echo "[$target_label] sync $path_entry -> $user_host:$remote_dest"
     if [[ "$DRY_RUN" = true ]]; then
       continue
     fi
 
     mapfile -t ssh_args < <(ssh_base_args "$port" "$key_path")
-    ssh "${ssh_args[@]}" "$user_host" "mkdir -p ~ && chmod 700 ~"
+    ssh "${ssh_args[@]}" "$user_host" "mkdir -p ~/'$remote_parent' && chmod 700 ~"
 
     if [[ -d "$path_entry" ]]; then
       rsync -az --delete \
+        --exclude '.tmp/' \
+        --exclude 'tmp/' \
+        --exclude 'cache/' \
+        --exclude 'generated_images/' \
+        --exclude 'logs*.sqlite*' \
+        --exclude 'state*.sqlite*' \
         -e "ssh -p $port -i $(printf '%q' "$key_path") -o BatchMode=yes -o StrictHostKeyChecking=accept-new" \
-        "$path_entry/" "$user_host:~/$basename_entry/"
+        "$path_entry/" "$user_host:$remote_dest/"
     else
       rsync -az \
         -e "ssh -p $port -i $(printf '%q' "$key_path") -o BatchMode=yes -o StrictHostKeyChecking=accept-new" \
-        "$path_entry" "$user_host:~/$basename_entry"
+        "$path_entry" "$user_host:$remote_dest"
     fi
   done
 }
