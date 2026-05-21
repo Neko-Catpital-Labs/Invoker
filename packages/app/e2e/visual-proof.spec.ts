@@ -444,6 +444,65 @@ test.describe('Visual proof capture', () => {
     await assertPageScreenshot(page, 'merge-gate-no-inline-approve');
   });
 
+  test('workflow-task-status-color-parity — workflow node and task nodes share canonical status hues', async ({ page }) => {
+    const workflowId = await loadPlanAndSelectWorkflow(page, {
+      name: 'Workflow task status color parity proof',
+      repoUrl: E2E_REPO_URL,
+      onFinish: 'pull_request' as const,
+      mergeMode: 'external_review',
+      tasks: [
+        { id: 'parity-alpha', description: 'Parity alpha task', command: 'echo alpha', dependencies: [] as string[] },
+        { id: 'parity-beta', description: 'Parity beta task', command: 'echo beta', dependencies: ['parity-alpha'] },
+      ],
+    });
+
+    const mergeTaskId = await page.evaluate(async () => {
+      const result = await window.invoker.getTasks();
+      const tasks = Array.isArray(result) ? result : result.tasks;
+      const merge = tasks.find((task: { id: string; config?: { isMergeNode?: boolean } }) => task.config?.isMergeNode);
+      return merge?.id ?? null;
+    });
+    expect(mergeTaskId).toBeTruthy();
+
+    const now = new Date();
+    const earlier = new Date(Date.now() - 5000);
+    await injectTaskStates(page, [
+      {
+        taskId: 'parity-alpha',
+        changes: { status: 'completed', execution: { startedAt: earlier, completedAt: now } },
+      },
+      {
+        taskId: 'parity-beta',
+        changes: { status: 'completed', execution: { startedAt: earlier, completedAt: now } },
+      },
+      {
+        taskId: mergeTaskId!,
+        changes: {
+          status: 'review_ready',
+          execution: { startedAt: earlier, reviewUrl: 'https://example.test/parity' },
+        },
+      },
+    ]);
+
+    // Workflow-level surface: workflow node in the workflow graph shows canonical review_ready label/hue.
+    const workflow = workflowNode(page, workflowId);
+    await expect(workflow).toBeVisible();
+    await expect(workflow.getByText('review ready')).toBeVisible();
+
+    // Task-level surface: merge gate task node in the selected workflow mini-DAG shows the same hue.
+    const mergeNode = page
+      .locator(`.react-flow__node[data-testid="${mergeTaskId}"], .react-flow__node[data-testid$="${mergeTaskId}"]`)
+      .first();
+    await expect(mergeNode).toBeVisible();
+    await expect(mergeNode.getByText('REVIEW READY', { exact: true })).toBeVisible();
+
+    // Completed task nodes also remain visible so the screenshot covers multiple canonical hues at once.
+    await expect(page.locator('.react-flow__node[data-testid$="parity-alpha"]')).toBeVisible();
+    await expect(page.locator('.react-flow__node[data-testid$="parity-beta"]')).toBeVisible();
+
+    await captureScreenshot(page, 'workflow-task-status-color-parity');
+  });
+
   test('workflow inspector captures review-ready and not-review-ready pull request states', async ({ page }) => {
     const workflowId = await loadPlanAndSelectWorkflow(page, REVIEW_READY_WORKFLOW_PR_PLAN);
     await page.locator('.react-flow__node[data-testid$="rr-work"]').first().waitFor({ state: 'visible', timeout: 15000 });
