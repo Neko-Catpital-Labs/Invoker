@@ -326,11 +326,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
   private queryOne(sql: string, params: unknown[] = []): Record<string, unknown> | undefined {
     const stmt = this.db.prepare(sql);
     try {
-      stmt.bind(params as any[]);
-      if (stmt.step()) {
-        return stmt.getAsObject() as Record<string, unknown>;
-      }
-      return undefined;
+      return stmt.get(...(paramsToArgs(params) as any[])) as Record<string, unknown> | undefined;
     } finally {
       stmt.free();
     }
@@ -340,12 +336,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
   private queryAll(sql: string, params: unknown[] = []): Record<string, unknown>[] {
     const stmt = this.db.prepare(sql);
     try {
-      stmt.bind(params as any[]);
-      const rows: Record<string, unknown>[] = [];
-      while (stmt.step()) {
-        rows.push(stmt.getAsObject() as Record<string, unknown>);
-      }
-      return rows;
+      return stmt.all(...(paramsToArgs(params) as any[])) as Record<string, unknown>[];
     } finally {
       stmt.free();
     }

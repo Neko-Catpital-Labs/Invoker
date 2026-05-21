@@ -142,6 +142,10 @@ fi
 batch_dispatch "$COMMANDS_FILE" "$RESULT_FILE" "$LOG_DIR" "$PARALLELISM"
 read -r DISPATCHED LAUNCH_FAILED _ < <(count_results "$RESULT_FILE")
 echo "Dispatch accepted: $DISPATCHED; launch failed: $LAUNCH_FAILED; logs: $LOG_DIR" >&2
+if [[ "$DISPATCHED" -ne "$TOTAL_WORKFLOWS" ]]; then
+  echo "Dispatch incomplete: accepted $DISPATCHED of $TOTAL_WORKFLOWS workflows." >&2
+  exit 1
+fi
 if [[ "$LAUNCH_FAILED" -ne 0 ]]; then
   exit 1
 fi
