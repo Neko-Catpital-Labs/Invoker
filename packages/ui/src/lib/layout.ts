@@ -11,9 +11,21 @@
  *    for straighter edges.
  */
 
-import ELK from 'elkjs/lib/elk.bundled.js';
-
 import type { TaskState } from '../types.js';
+
+// elkjs ships a single ~1.5 MB self-contained GWT bundle. Loading it lazily
+// keeps the initial JS payload below the chunk-size warning threshold and
+// confines the heavy layout engine to its own async chunk.
+type ElkConstructor = new () => ElkLayoutEngine;
+let elkCtorPromise: Promise<ElkConstructor> | null = null;
+async function loadElk(): Promise<ElkConstructor> {
+  if (!elkCtorPromise) {
+    elkCtorPromise = import('elkjs/lib/elk.bundled.js').then(
+      (mod) => (mod.default ?? mod) as ElkConstructor,
+    );
+  }
+  return elkCtorPromise;
+}
 
 export interface NodePosition {
   x: number;
@@ -88,7 +100,7 @@ export async function layoutTaskGraph(
     .sort((a, b) => edgeLayoutId(a).localeCompare(edgeLayoutId(b)));
 
   try {
-    const elk = options?.elk ?? new ELK();
+    const elk = options?.elk ?? new (await loadElk())();
     const graph = {
       id: 'task-dag',
       layoutOptions: {
