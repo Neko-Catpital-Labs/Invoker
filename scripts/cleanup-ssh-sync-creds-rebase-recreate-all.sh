@@ -37,6 +37,7 @@ Options:
   --skip-rebase-recreate   Do not dispatch workflow rebase-recreate commands.
   --timeout <seconds>      Timeout passed to bench-rebase-recreate-all.sh.
   --idle-timeout <seconds> Maximum time to wait for Invoker to become idle before cleanup.
+                           Use 0 to wait indefinitely.
   -h, --help               Show this help.
 
 Environment:
@@ -97,7 +98,7 @@ if ! [[ "$REBASE_RECREATE_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
   echo "Invalid --timeout value: $REBASE_RECREATE_TIMEOUT_SECONDS" >&2
   exit 1
 fi
-if ! [[ "$IDLE_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+if ! [[ "$IDLE_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]]; then
   echo "Invalid --idle-timeout value: $IDLE_TIMEOUT_SECONDS" >&2
   exit 1
 fi
@@ -146,7 +147,7 @@ wait_for_invoker_idle() {
     fi
 
     now="$(date +%s)"
-    if (( now - started_at >= IDLE_TIMEOUT_SECONDS )); then
+    if (( IDLE_TIMEOUT_SECONDS > 0 && now - started_at >= IDLE_TIMEOUT_SECONDS )); then
       echo "Timed out waiting for Invoker idle state before remote cleanup (tasks=$active_tasks mutations=$active_mutations)." >&2
       echo "Refusing to delete remote managed workspaces while Invoker is active." >&2
       return 1
