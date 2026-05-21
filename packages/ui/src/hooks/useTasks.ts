@@ -139,15 +139,15 @@ export function useTasks(): UseTasksResult {
   useEffect(() => {
     if (typeof window === 'undefined' || !window.invoker) return;
 
-    if (
-      !reportedStartupBootstrapRef.current &&
-      bootstrapState &&
-      ((bootstrapState.tasks?.length ?? 0) > 0 || (bootstrapState.workflows?.length ?? 0) > 0)
-    ) {
+    const bootstrapTaskCount = bootstrapState?.tasks?.length ?? 0;
+    const bootstrapWorkflowCount = bootstrapState?.workflows?.length ?? 0;
+    const hasBootstrapContent = bootstrapTaskCount > 0 || bootstrapWorkflowCount > 0;
+
+    if (!reportedStartupBootstrapRef.current && bootstrapState && hasBootstrapContent) {
       reportedStartupBootstrapRef.current = true;
       void window.invoker.reportUiPerf?.('startup_bootstrap_state', {
-        taskCount: bootstrapState.tasks?.length ?? 0,
-        workflowCount: bootstrapState.workflows?.length ?? 0,
+        taskCount: bootstrapTaskCount,
+        workflowCount: bootstrapWorkflowCount,
         elapsedMs: Math.round(performance.now()),
         processElapsedMs: bootstrapState.appStartedAtEpochMs
           ? Date.now() - bootstrapState.appStartedAtEpochMs
@@ -155,7 +155,18 @@ export function useTasks(): UseTasksResult {
       });
     }
 
-    fetchAll();
+    if (hasBootstrapContent) {
+      // Bootstrap already populated the maps with authoritative state from main;
+      // skip the redundant non-forced getTasks snapshot. Forced refreshes,
+      // delta-triggered refreshes, and workflows-changed events still update us.
+      void window.invoker.reportUiPerf?.('startup_snapshot_skipped_complete_bootstrap', {
+        bootstrapTaskCount,
+        bootstrapWorkflowCount,
+        elapsedMs: Math.round(performance.now()),
+      });
+    } else {
+      fetchAll();
+    }
 
     deltaPipelineRef.current = createTaskDeltaPipeline({
       flushMs: 100,
