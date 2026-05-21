@@ -139,15 +139,15 @@ export function useTasks(): UseTasksResult {
   useEffect(() => {
     if (typeof window === 'undefined' || !window.invoker) return;
 
-    if (
-      !reportedStartupBootstrapRef.current &&
-      bootstrapState &&
-      ((bootstrapState.tasks?.length ?? 0) > 0 || (bootstrapState.workflows?.length ?? 0) > 0)
-    ) {
+    const bootstrapTaskCount = bootstrapState?.tasks?.length ?? 0;
+    const bootstrapWorkflowCount = bootstrapState?.workflows?.length ?? 0;
+    const bootstrapComplete = bootstrapTaskCount > 0 || bootstrapWorkflowCount > 0;
+
+    if (!reportedStartupBootstrapRef.current && bootstrapState && bootstrapComplete) {
       reportedStartupBootstrapRef.current = true;
       void window.invoker.reportUiPerf?.('startup_bootstrap_state', {
-        taskCount: bootstrapState.tasks?.length ?? 0,
-        workflowCount: bootstrapState.workflows?.length ?? 0,
+        taskCount: bootstrapTaskCount,
+        workflowCount: bootstrapWorkflowCount,
         elapsedMs: Math.round(performance.now()),
         processElapsedMs: bootstrapState.appStartedAtEpochMs
           ? Date.now() - bootstrapState.appStartedAtEpochMs
@@ -155,7 +155,15 @@ export function useTasks(): UseTasksResult {
       });
     }
 
-    fetchAll();
+    if (bootstrapComplete) {
+      // Preload already delivered the full task/workflow state via
+      // __INVOKER_BOOTSTRAP__, so skip the redundant non-forced getTasks
+      // request. Forced refreshes, mutation-driven refreshTasks() calls, and
+      // the workflows-changed/task-delta subscriptions below still run.
+      window.invoker.checkPrStatuses?.();
+    } else {
+      fetchAll();
+    }
 
     deltaPipelineRef.current = createTaskDeltaPipeline({
       flushMs: 100,
