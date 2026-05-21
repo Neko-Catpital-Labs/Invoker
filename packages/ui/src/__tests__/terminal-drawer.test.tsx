@@ -10,12 +10,66 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
-import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
+import {
+  createMockInvoker,
+  makeTerminalSessionDescriptor,
+  makeUITask,
+  type MockInvoker,
+} from './helpers/mock-invoker.js';
+import type { TerminalOutputEvent } from '@invoker/contracts';
 import type { WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
   return createReactFlowMock();
+});
+
+const xtermMock = vi.hoisted(() => {
+  type Instance = {
+    writes: string[];
+    disposed: boolean;
+    onDataCb: ((data: string) => void) | null;
+  };
+  const instances: Instance[] = [];
+  return { instances };
+});
+
+vi.mock('xterm', () => {
+  class Terminal {
+    cols = 80;
+    rows = 24;
+    writes: string[] = [];
+    disposed = false;
+    onDataCb: ((data: string) => void) | null = null;
+    constructor(_options?: unknown) {
+      xtermMock.instances.push(this as unknown as (typeof xtermMock.instances)[number]);
+    }
+    loadAddon(_addon: unknown): void {}
+    open(_host: HTMLElement): void {}
+    onData(cb: (data: string) => void): { dispose: () => void } {
+      this.onDataCb = cb;
+      return {
+        dispose: () => {
+          this.onDataCb = null;
+        },
+      };
+    }
+    write(data: string): void {
+      this.writes.push(data);
+    }
+    focus(): void {}
+    dispose(): void {
+      this.disposed = true;
+    }
+  }
+  return { Terminal };
+});
+
+vi.mock('xterm-addon-fit', () => {
+  class FitAddon {
+    fit(): void {}
+  }
+  return { FitAddon };
 });
 
 const { App } = await import('../App.js');
@@ -51,10 +105,13 @@ describe('Terminal drawer (component)', () => {
   beforeEach(() => {
     mock = createMockInvoker();
     mock.install();
+    xtermMock.instances.length = 0;
   });
 
   afterEach(() => {
     mock.cleanup();
+    delete (window as unknown as { __INVOKER_TEST_ON_TERMINAL_OUTPUT__?: unknown })
+      .__INVOKER_TEST_ON_TERMINAL_OUTPUT__;
     vi.restoreAllMocks();
   });
 
@@ -155,6 +212,125 @@ describe('Terminal drawer (component)', () => {
       expect(alertSpy).toHaveBeenCalledWith('Task is still running.');
     });
     expect(screen.queryByTestId('terminal-tab-task-alpha')).not.toBeInTheDocument();
+  });
+
+  it('seeds the xterm instance with the session output snapshot before live output', async () => {
+    const snapshot = 'replayed-stdout\r\n$ ';
+    (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      opened: true,
+      session: makeTerminalSessionDescriptor({
+        sessionId: 'session-with-snapshot',
+        taskId: 'task-alpha',
+        outputSnapshot: snapshot,
+      }),
+    });
+
+    let emitOutput: ((event: TerminalOutputEvent) => void) | null = null;
+    (window as unknown as {
+      __INVOKER_TEST_ON_TERMINAL_OUTPUT__?: (cb: (event: TerminalOutputEvent) => void) => () => void;
+    }).__INVOKER_TEST_ON_TERMINAL_OUTPUT__ = (cb) => {
+      emitOutput = cb;
+      return () => {
+        emitOutput = null;
+      };
+    };
+
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(xtermMock.instances.length).toBeGreaterThan(0);
+    });
+
+    const instance = xtermMock.instances[0];
+    expect(instance.writes[0]).toBe(snapshot);
+
+    act(() => {
+      emitOutput?.({ sessionId: 'session-with-snapshot', taskId: 'task-alpha', data: 'live-data' });
+    });
+
+    expect(instance.writes).toEqual([snapshot, 'live-data']);
+  });
+
+  it('does not duplicate the snapshot write when the parent re-renders the session', async () => {
+    const snapshot = 'one-time-snapshot';
+    (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      opened: true,
+      session: makeTerminalSessionDescriptor({
+        sessionId: 'session-rerender',
+        taskId: 'task-alpha',
+        outputSnapshot: snapshot,
+      }),
+    });
+
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha, taskBeta], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(xtermMock.instances.length).toBeGreaterThan(0);
+    });
+    const initialWriteCount = xtermMock.instances[0].writes.filter((entry) => entry === snapshot).length;
+    expect(initialWriteCount).toBe(1);
+
+    // Trigger a parent re-render (collapse + re-expand should not re-seed
+    // the existing terminal because the session id is unchanged).
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse terminal drawer' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Expand terminal drawer' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-drawer-body')).toBeInTheDocument();
+    });
+
+    // Only the original instance should carry the seeded snapshot; even if a
+    // new xterm was constructed on remount, each instance must contain the
+    // snapshot at most once (no duplicates per terminal).
+    for (const instance of xtermMock.instances) {
+      const snapshotWrites = instance.writes.filter((entry) => entry === snapshot).length;
+      expect(snapshotWrites).toBeLessThanOrEqual(1);
+    }
+    const totalSnapshotWrites = xtermMock.instances.reduce(
+      (count, instance) => count + instance.writes.filter((entry) => entry === snapshot).length,
+      0,
+    );
+    expect(totalSnapshotWrites).toBeGreaterThanOrEqual(1);
+  });
+
+  it('seeds panes opened from a terminalList reload with their snapshot', async () => {
+    const snapshot = 'reload-replay';
+    (mock.api.terminalList as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      makeTerminalSessionDescriptor({
+        sessionId: 'reloaded-session',
+        taskId: 'task-alpha',
+        outputSnapshot: snapshot,
+      }),
+    ]);
+
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
+    });
+
+    // Pane (and therefore xterm) only mounts when the drawer body is visible.
+    fireEvent.click(screen.getByRole('button', { name: 'Expand terminal drawer' }));
+
+    await waitFor(() => {
+      expect(xtermMock.instances.length).toBeGreaterThan(0);
+    });
+
+    const seeded = xtermMock.instances.find((instance) => instance.writes.includes(snapshot));
+    expect(seeded).toBeDefined();
   });
 
   it('opens the drawer when the context-menu Open Terminal action is used', async () => {

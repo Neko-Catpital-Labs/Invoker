@@ -15,6 +15,7 @@ import type {
   TaskConfig,
   TaskExecution,
 } from '../../types.js';
+import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 export interface MockInvoker {
   /** The mock InvokerAPI object installed on window.invoker. */
@@ -205,6 +206,23 @@ export function createMockInvoker(
   }
 
   return { api, setTasks, fireDelta, fireWorkflowsChanged, install, cleanup };
+}
+
+/**
+ * Build a TerminalSessionDescriptor with sensible defaults. Tests use this
+ * to drive the openTerminal / terminalList mocks with descriptors that
+ * include an `outputSnapshot` so replay-seeding behaviour can be asserted.
+ */
+export function makeTerminalSessionDescriptor(
+  overrides: Partial<TerminalSessionDescriptor> & { sessionId: string; taskId: string },
+): TerminalSessionDescriptor {
+  return {
+    status: 'running',
+    mode: 'spawn',
+    attached: false,
+    createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+    ...overrides,
+  };
 }
 
 /** Create a minimal TaskState for testing. */

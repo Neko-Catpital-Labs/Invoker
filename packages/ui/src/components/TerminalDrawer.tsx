@@ -44,6 +44,11 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  // Tracks which (sessionId, snapshot) pair has been written to the current
+  // xterm instance so re-renders that pass an unchanged snapshot do not
+  // duplicate replay output. The ref is cleared on cleanup so a fresh
+  // terminal (e.g., after React StrictMode mount/unmount) is reseeded.
+  const seededSnapshotKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     const host = containerRef.current;
@@ -68,6 +73,20 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
     }
     termRef.current = term;
     fitRef.current = fit;
+
+    const snapshot = session.outputSnapshot;
+    if (snapshot) {
+      const seedKey = `${session.sessionId}:${snapshot}`;
+      if (seededSnapshotKeyRef.current !== seedKey) {
+        try {
+          term.write(snapshot);
+          onOutput(session.sessionId, snapshot);
+          seededSnapshotKeyRef.current = seedKey;
+        } catch {
+          /* terminal disposed */
+        }
+      }
+    }
 
     const inputDisposable = term.onData((data) => {
       void window.invoker?.terminalWrite?.(session.sessionId, data);
@@ -123,6 +142,7 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
       }
       termRef.current = null;
       fitRef.current = null;
+      seededSnapshotKeyRef.current = null;
     };
   }, [onOutput, session.sessionId]);
 
