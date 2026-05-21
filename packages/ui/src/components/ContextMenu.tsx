@@ -10,9 +10,10 @@
  * - Labeled separators for task and danger zones
  */
 
-import { useEffect, useRef, useState, useLayoutEffect } from 'react';
+import { useCallback, useEffect, useRef, useState, useLayoutEffect } from 'react';
 import type { TaskState } from '../types.js';
 import { getMenuItems, type MenuItem } from '../lib/context-menu-items.js';
+import { handleMenuKeyDown, type MenuEntry } from '../lib/menu-keyboard.js';
 import { EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE } from '../isExperimentSpawnPivot.js';
 
 interface ContextMenuProps {
@@ -60,6 +61,7 @@ export function ContextMenu({
   const dangerItems = availableItems.filter((item) => item.variant === 'danger');
   const hasMoreButton = dangerItems.length > 0 && !showMore;
   const renderedItems: MenuItem[] = showMore ? [...safeItems, ...dangerItems] : safeItems;
+  const moreIndex = hasMoreButton ? renderedItems.length : -1;
 
   // Find first enabled item index
   const firstEnabledIndex = renderedItems.findIndex((item) => item.enabled);
@@ -68,8 +70,16 @@ export function ContextMenu({
   useEffect(() => {
     if (firstEnabledIndex >= 0) {
       setFocusedIndex(firstEnabledIndex);
+    } else if (hasMoreButton) {
+      setFocusedIndex(0);
     }
-  }, [firstEnabledIndex]);
+  }, [firstEnabledIndex, hasMoreButton]);
+
+  // Focus the menu container on mount so it owns keyboard input. preventScroll
+  // keeps the surrounding graph from snapping to the menu position.
+  useEffect(() => {
+    menuRef.current?.focus({ preventScroll: true });
+  }, []);
 
   // Viewport clamping: flip if menu overflows bottom or right
   useLayoutEffect(() => {
@@ -133,33 +143,8 @@ export function ContextMenu({
     };
   }, [onClose]);
 
-  // Keyboard navigation
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    const enabledIndices = renderedItems
-      .map((item, idx) => (item.enabled ? idx : -1))
-      .filter((idx) => idx >= 0);
-
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const nextPos = (currentPos + 1) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[nextPos]);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const prevPos = (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[prevPos]);
-    } else if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      const item = renderedItems[focusedIndex];
-      if (item?.enabled) {
-        handleItemClick(item);
-      }
-    }
-  };
-
   // Handle menu item click
-  const handleItemClick = (item: MenuItem) => {
+  const handleItemClick = useCallback((item: MenuItem) => {
     if (!item.enabled) return;
 
     switch (item.action) {
@@ -185,6 +170,29 @@ export function ContextMenu({
         break;
     }
     onClose();
+  }, [task.id, onRestart, onReplace, onOpenTerminal, onRecreateTask, onFix, onCancel, onClose]);
+
+  // Expand the danger section and move focus to the first new enabled entry.
+  const handleMoreActivate = useCallback(() => {
+    const firstDanger = dangerItems.findIndex((item) => item.enabled);
+    const target = firstDanger >= 0 ? safeItems.length + firstDanger : safeItems.length;
+    setShowMore(true);
+    setFocusedIndex(target);
+  }, [dangerItems, safeItems.length]);
+
+  // Build entries used by keyboard navigation. Includes the More button as
+  // its own entry so ArrowDown reaches it and Enter/Space activate it.
+  const entries: MenuEntry[] = renderedItems.map((item) => ({
+    enabled: item.enabled,
+    onActivate: () => handleItemClick(item),
+  }));
+  if (hasMoreButton) {
+    entries.push({ enabled: true, onActivate: handleMoreActivate });
+  }
+
+  // Keyboard navigation
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    handleMenuKeyDown(e, entries, focusedIndex, setFocusedIndex);
   };
 
   // Get variant styles
@@ -235,6 +243,7 @@ export function ContextMenu({
             <button
               role="menuitem"
               aria-disabled={!item.enabled}
+              tabIndex={-1}
               className={`w-full text-left px-3 py-1.5 text-sm ${getVariantClasses(
                 item.variant,
                 item.enabled
@@ -254,8 +263,13 @@ export function ContextMenu({
           <div className="border-t border-gray-600 my-1" />
           <button
             role="menuitem"
-            className="w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
-            onClick={() => setShowMore(true)}
+            aria-haspopup="menu"
+            tabIndex={-1}
+            className={`w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 ${
+              focusedIndex === moreIndex ? 'bg-gray-700' : ''
+            }`}
+            onClick={handleMoreActivate}
+            onMouseEnter={() => setFocusedIndex(moreIndex)}
           >
             More
           </button>
