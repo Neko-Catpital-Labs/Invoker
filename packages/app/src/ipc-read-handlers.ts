@@ -15,6 +15,7 @@ export interface RegisterReadOnlyIpcHandlersContext {
   lastKnownTaskStates: TaskSnapshotCache;
   getMainWindow: () => BrowserWindow | null;
   sendTaskDeltaToRenderer: (delta: TaskDelta) => void;
+  requestWorkflowMetadataPublish: (reason: string) => void;
   setLastKnownWorkflowCount: (count: number) => void;
   loadTaskByIdFromPersistence: (taskId: string) => TaskState | undefined;
   resolveAgentSession: (
@@ -37,6 +38,7 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
     lastKnownTaskStates,
     getMainWindow,
     sendTaskDeltaToRenderer,
+    requestWorkflowMetadataPublish,
     setLastKnownWorkflowCount,
     loadTaskByIdFromPersistence,
     resolveAgentSession,
@@ -90,7 +92,7 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
         for (const removedTaskId of previousTaskIds) {
           sendTaskDeltaToRenderer({ type: 'removed', taskId: removedTaskId, previousTaskStateVersion: 0 });
         }
-        mainWindow.webContents.send('invoker:workflows-changed', workflows);
+        requestWorkflowMetadataPublish('get-tasks-force-refresh');
       }
       setLastKnownWorkflowCount(workflows.length);
     }

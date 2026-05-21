@@ -114,4 +114,44 @@ describe('task-delta-pipeline', () => {
 
     pipeline.dispose();
   });
+
+  it('chunks large queues across flush windows', () => {
+    vi.useFakeTimers();
+    const onBatch = vi.fn<(batch: TaskDelta[]) => void>();
+    const onLargeBatch = vi.fn();
+    const pipeline = createTaskDeltaPipeline({
+      flushMs: 100,
+      maxBatchSize: 2,
+      onBatch,
+      onLargeBatch,
+    });
+
+    const deltas: TaskDelta[] = ['a', 'b', 'c', 'd', 'e'].map((id) => ({
+      type: 'created',
+      task: {
+        id,
+        description: id,
+        status: 'pending',
+        dependencies: [],
+        createdAt: new Date('2025-01-01'),
+        config: {},
+        execution: {},
+      },
+    }));
+
+    for (const delta of deltas) pipeline.push(delta);
+    vi.advanceTimersByTime(100);
+
+    expect(onBatch).toHaveBeenCalledTimes(1);
+    expect(onBatch.mock.calls[0][0].map((delta) => delta.type === 'created' ? delta.task.id : 'other')).toEqual(['a', 'b']);
+    expect(onLargeBatch).toHaveBeenCalledWith({ batchSize: 2, remaining: 3 });
+
+    vi.advanceTimersByTime(100);
+    expect(onBatch.mock.calls[1][0].map((delta) => delta.type === 'created' ? delta.task.id : 'other')).toEqual(['c', 'd']);
+
+    vi.advanceTimersByTime(100);
+    expect(onBatch.mock.calls[2][0].map((delta) => delta.type === 'created' ? delta.task.id : 'other')).toEqual(['e']);
+
+    pipeline.dispose();
+  });
 });
