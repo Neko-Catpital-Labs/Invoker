@@ -178,6 +178,11 @@ import {
 } from './action-graph-diagnostics.js';
 import { registerReadOnlyIpcHandlers } from './ipc-read-handlers.js';
 import { startReviewGateStatusWorker, type ReviewGateStatusWorker } from './review-gate-status-worker.js';
+import {
+  executeNoTrackHeadlessBatch,
+  type HeadlessBatchExecRequest,
+  type HeadlessExecMutationPayload,
+} from './headless-batch-exec.js';
 
 function isTaskInFlightForForcedStop(task: TaskState): boolean {
   return task.status === 'running'
@@ -259,13 +264,6 @@ interface HeadlessRunMutationPayload {
 
 interface HeadlessResumeMutationPayload {
   workflowId: string;
-  traceId?: string;
-}
-
-interface HeadlessExecMutationPayload {
-  args: string[];
-  waitForApproval?: boolean;
-  noTrack?: boolean;
   traceId?: string;
 }
 
@@ -2821,6 +2819,26 @@ function createEmbeddedTerminalBackendFromConfig(
         const acknowledgement = acknowledgeNoTrackHeadlessExec(payload, workflowId, priority, 'gui');
         if (acknowledgement) return acknowledgement;
         return runWorkflowMutation(workflowId, priority, 'headless.exec', [payload], async () => executeHeadlessExec(payload));
+      });
+      messageBus.onRequest('headless.batch-exec', async (req: unknown) => {
+        const request = req as HeadlessBatchExecRequest;
+        const itemCount = Array.isArray(request.items) ? request.items.length : 0;
+        logger.info(`headless.batch-exec received items=${itemCount} noTrack=${request.noTrack ? 'true' : 'false'} mode=gui`, {
+          module: 'ipc-delegate',
+        });
+        if (!workflowMutationCoordinator) {
+          throw new Error('Workflow mutation coordinator is unavailable');
+        }
+        const results = executeNoTrackHeadlessBatch(request, {
+          classify: classifyHeadlessExecMutation,
+          submit: (workflowId, priority, channel, args, options) =>
+            workflowMutationCoordinator.submit(workflowId, priority, channel, args, options),
+        });
+        const accepted = results.filter((result) => result.ok).length;
+        logger.info(`headless.batch-exec accepted=${accepted} failed=${results.length - accepted} mode=gui`, {
+          module: 'ipc-delegate',
+        });
+        return results;
       });
       logger.info(`owner-ipc-ready ownerId=${workflowMutationOwnerId}`, { module: 'ipc-delegate' });
       recordStartupMark('owner-ipc-ready');
