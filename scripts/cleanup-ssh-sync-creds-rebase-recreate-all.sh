@@ -24,6 +24,7 @@ SKIP_REBASE_RECREATE=false
 REBASE_RECREATE_TIMEOUT_SECONDS="${REBASE_RECREATE_TIMEOUT_SECONDS:-900}"
 IDLE_TIMEOUT_SECONDS="${IDLE_TIMEOUT_SECONDS:-900}"
 IDLE_POLL_SECONDS="${IDLE_POLL_SECONDS:-5}"
+IDLE_STALE_HEARTBEAT_SECONDS="${IDLE_STALE_HEARTBEAT_SECONDS:-600}"
 
 usage() {
   cat <<'EOF'
@@ -38,6 +39,8 @@ Options:
   --timeout <seconds>      Timeout passed to bench-rebase-recreate-all.sh.
   --idle-timeout <seconds> Maximum time to wait for Invoker to become idle before cleanup.
                            Use 0 to wait indefinitely.
+  --stale-heartbeat <sec>  Fail idle wait when a running task heartbeat is older than this.
+                           Defaults to 600.
   -h, --help               Show this help.
 
 Environment:
@@ -77,6 +80,10 @@ while [[ $# -gt 0 ]]; do
       IDLE_TIMEOUT_SECONDS="${2:-}"
       shift 2
       ;;
+    --stale-heartbeat)
+      IDLE_STALE_HEARTBEAT_SECONDS="${2:-}"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -100,6 +107,10 @@ if ! [[ "$REBASE_RECREATE_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if ! [[ "$IDLE_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]]; then
   echo "Invalid --idle-timeout value: $IDLE_TIMEOUT_SECONDS" >&2
+  exit 1
+fi
+if ! [[ "$IDLE_STALE_HEARTBEAT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Invalid --stale-heartbeat value: $IDLE_STALE_HEARTBEAT_SECONDS" >&2
   exit 1
 fi
 
@@ -170,11 +181,40 @@ wait_for_invoker_idle() {
     return 0
   fi
 
-  local started_at now active_tasks active_mutations
+  local started_at now active_tasks active_mutations stale_tasks
   started_at="$(date +%s)"
   while true; do
     active_tasks="$(sqlite3 "$DB_PATH" "select count(*) from tasks where status in ('running','fixing_with_ai');")"
     active_mutations="$(sqlite3 "$DB_PATH" "select count(*) from workflow_mutation_intents where status in ('queued','running');")"
+    stale_tasks="$(sqlite3 "$DB_PATH" "
+      select count(*)
+      from tasks
+      where status in ('running','fixing_with_ai')
+        and (
+          last_heartbeat_at is null
+          or (julianday('now') - julianday(last_heartbeat_at)) * 86400.0 >= $IDLE_STALE_HEARTBEAT_SECONDS
+        );
+    ")"
+    if [[ "$stale_tasks" != "0" ]]; then
+      echo "Refusing to wait indefinitely: found $stale_tasks stale running task(s) with heartbeat age >= ${IDLE_STALE_HEARTBEAT_SECONDS}s." >&2
+      sqlite3 -header -separator $'\t' "$DB_PATH" "
+        select id,
+               status,
+               runner_kind,
+               coalesce(pool_member_id, '') as pool_member_id,
+               coalesce(started_at, '') as started_at,
+               coalesce(last_heartbeat_at, '') as last_heartbeat_at,
+               cast((julianday('now') - julianday(last_heartbeat_at)) * 86400 as integer) as heartbeat_age_seconds
+          from tasks
+         where status in ('running','fixing_with_ai')
+           and (
+             last_heartbeat_at is null
+             or (julianday('now') - julianday(last_heartbeat_at)) * 86400.0 >= $IDLE_STALE_HEARTBEAT_SECONDS
+           )
+         order by heartbeat_age_seconds desc;
+      " >&2
+      return 1
+    fi
     if [[ "$active_tasks" = "0" && "$active_mutations" = "0" ]]; then
       echo "Invoker is idle; remote cleanup can proceed."
       return 0
