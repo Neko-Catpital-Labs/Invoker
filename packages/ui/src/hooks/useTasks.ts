@@ -159,6 +159,13 @@ export function useTasks(): UseTasksResult {
 
     deltaPipelineRef.current = createTaskDeltaPipeline({
       flushMs: 100,
+      maxBatchSize: 200,
+      onLargeBatch: ({ batchSize, remaining }) => {
+        void window.invoker?.reportUiPerf?.('ui_delta_large_batch_chunked', {
+          batchSize,
+          remaining,
+        });
+      },
       onBatch: (batch) => {
         let shouldRefreshWorkflows = false;
 
