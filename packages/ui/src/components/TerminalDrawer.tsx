@@ -44,6 +44,7 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const seededSessionIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     const host = containerRef.current;
@@ -68,6 +69,24 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
     }
     termRef.current = term;
     fitRef.current = fit;
+
+    // Seed xterm with the main-process replay snapshot before live output
+    // subscription so PTY bytes emitted before the renderer subscribed are
+    // not lost. The ref guard ensures a single seed per session id even if
+    // this effect ever runs more than once for the same session.
+    const snapshot = session.outputSnapshot;
+    if (
+      typeof snapshot === 'string' &&
+      snapshot.length > 0 &&
+      seededSessionIdRef.current !== session.sessionId
+    ) {
+      seededSessionIdRef.current = session.sessionId;
+      try {
+        term.write(snapshot);
+      } catch {
+        /* terminal disposed */
+      }
+    }
 
     const inputDisposable = term.onData((data) => {
       void window.invoker?.terminalWrite?.(session.sessionId, data);

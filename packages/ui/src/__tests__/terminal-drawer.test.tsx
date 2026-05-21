@@ -11,11 +11,53 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
-import type { WorkflowMeta } from '../types.js';
+import type { TaskDelta, WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
   return createReactFlowMock();
+});
+
+interface MockTerminal {
+  writes: string[];
+  disposed: boolean;
+  dataCallbacks: Array<(data: string) => void>;
+}
+
+const mockTerminalInstances: MockTerminal[] = [];
+
+vi.mock('xterm', () => {
+  class Terminal implements MockTerminal {
+    cols = 80;
+    rows = 24;
+    writes: string[] = [];
+    disposed = false;
+    dataCallbacks: Array<(data: string) => void> = [];
+    constructor() {
+      mockTerminalInstances.push(this);
+    }
+    loadAddon(): void {}
+    open(): void {}
+    write(data: string): void {
+      this.writes.push(data);
+    }
+    onData(cb: (data: string) => void): { dispose: () => void } {
+      this.dataCallbacks.push(cb);
+      return { dispose: () => {} };
+    }
+    dispose(): void {
+      this.disposed = true;
+    }
+    focus(): void {}
+  }
+  return { Terminal };
+});
+
+vi.mock('xterm-addon-fit', () => {
+  class FitAddon {
+    fit(): void {}
+  }
+  return { FitAddon };
 });
 
 const { App } = await import('../App.js');
@@ -49,6 +91,7 @@ describe('Terminal drawer (component)', () => {
   let mock: MockInvoker;
 
   beforeEach(() => {
+    mockTerminalInstances.length = 0;
     mock = createMockInvoker();
     mock.install();
   });
@@ -155,6 +198,94 @@ describe('Terminal drawer (component)', () => {
       expect(alertSpy).toHaveBeenCalledWith('Task is still running.');
     });
     expect(screen.queryByTestId('terminal-tab-task-alpha')).not.toBeInTheDocument();
+  });
+
+  it('seeds a newly mounted pane with the session replay snapshot', async () => {
+    (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      opened: true,
+      session: {
+        sessionId: 'replay-session',
+        taskId: 'task-alpha',
+        status: 'running',
+        mode: 'spawn',
+        attached: false,
+        createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+        outputSnapshot: 'previous output\r\n',
+      },
+    });
+
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
+      expect(mockTerminalInstances.length).toBeGreaterThan(0);
+    });
+    await waitFor(() => {
+      expect(mockTerminalInstances[0].writes).toContain('previous output\r\n');
+    });
+  });
+
+  it('does not duplicate the replay snapshot when the parent re-renders', async () => {
+    (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      opened: true,
+      session: {
+        sessionId: 'replay-session',
+        taskId: 'task-alpha',
+        status: 'running',
+        mode: 'spawn',
+        attached: false,
+        createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+        outputSnapshot: 'previous output\r\n',
+      },
+    });
+
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+    await waitFor(() => {
+      expect(mockTerminalInstances.length).toBeGreaterThan(0);
+      expect(mockTerminalInstances[0].writes).toContain('previous output\r\n');
+    });
+
+    const initialSnapshotWrites = mockTerminalInstances[0].writes.filter(
+      (chunk) => chunk === 'previous output\r\n',
+    ).length;
+
+    // Force App to re-render with an updated task state for the same session id.
+    // The pane key is sessionId and the seed effect dep is sessionId, so this
+    // re-render must not cause a second snapshot write.
+    const delta: TaskDelta = {
+      type: 'updated',
+      taskId: 'task-alpha',
+      changes: { description: 'Alpha updated' },
+      taskStateVersion: 2,
+      previousTaskStateVersion: 1,
+    };
+    act(() => mock.fireDelta(delta));
+
+    const finalSnapshotWrites = mockTerminalInstances[0].writes.filter(
+      (chunk) => chunk === 'previous output\r\n',
+    ).length;
+    expect(finalSnapshotWrites).toBe(initialSnapshotWrites);
+  });
+
+  it('skips snapshot seeding when the session has no outputSnapshot', async () => {
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+    await waitFor(() => {
+      expect(mockTerminalInstances.length).toBeGreaterThan(0);
+    });
+
+    expect(mockTerminalInstances[0].writes).toHaveLength(0);
   });
 
   it('opens the drawer when the context-menu Open Terminal action is used', async () => {
