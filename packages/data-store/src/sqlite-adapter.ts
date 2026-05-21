@@ -87,6 +87,20 @@ interface SQLiteAdapterOptions {
 export type WorkflowMutationPriority = 'high' | 'normal';
 export type WorkflowMutationIntentStatus = 'queued' | 'running' | 'completed' | 'failed';
 export const WORKFLOW_MUTATION_LEASE_MS = 30_000;
+export const EXECUTION_RESOURCE_LEASE_MS = 20 * 60 * 1000;
+
+export interface ExecutionResourceLease {
+  resourceKey: string;
+  resourceType: string;
+  holderId: string;
+  taskId?: string;
+  poolId?: string;
+  poolMemberId?: string;
+  acquiredAt: string;
+  lastHeartbeatAt: string;
+  leaseExpiresAt: string;
+  metadata?: unknown;
+}
 
 type SQLiteParams = unknown[] | Record<string, unknown>;
 
@@ -747,6 +761,26 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
       CREATE INDEX IF NOT EXISTS idx_workflow_mutation_leases_expiry
         ON workflow_mutation_leases(lease_expires_at);
+
+      CREATE TABLE IF NOT EXISTS execution_resource_leases (
+        resource_key TEXT NOT NULL,
+        resource_type TEXT NOT NULL,
+        holder_id TEXT NOT NULL,
+        task_id TEXT,
+        pool_id TEXT,
+        pool_member_id TEXT,
+        acquired_at TEXT NOT NULL,
+        last_heartbeat_at TEXT NOT NULL,
+        lease_expires_at TEXT NOT NULL,
+        metadata_json TEXT,
+        PRIMARY KEY(resource_key, holder_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_execution_resource_leases_resource
+        ON execution_resource_leases(resource_key, lease_expires_at);
+
+      CREATE INDEX IF NOT EXISTS idx_execution_resource_leases_expiry
+        ON execution_resource_leases(lease_expires_at);
 
       CREATE TABLE IF NOT EXISTS output_spool (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2657,6 +2691,103 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'DELETE FROM workflow_mutation_leases WHERE workflow_id = ? AND owner_id = ?',
       [workflowId, ownerId],
     );
+  }
+
+  claimExecutionResourceLease(options: {
+    resourceKey: string;
+    resourceType: string;
+    holderId: string;
+    taskId?: string;
+    poolId?: string;
+    poolMemberId?: string;
+    metadata?: unknown;
+    leaseMs?: number;
+  }): boolean {
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const leaseExpiresAt = new Date(now.getTime() + (options.leaseMs ?? EXECUTION_RESOURCE_LEASE_MS)).toISOString();
+    return this.runTransaction(() => {
+      this.execRun(
+        'DELETE FROM execution_resource_leases WHERE resource_key = ? AND lease_expires_at <= ?',
+        [options.resourceKey, nowIso],
+      );
+      const active = this.queryOne(
+        `SELECT holder_id FROM execution_resource_leases
+         WHERE resource_key = ?
+           AND holder_id != ?
+           AND lease_expires_at > ?
+         LIMIT 1`,
+        [options.resourceKey, options.holderId, nowIso],
+      );
+      if (active) return false;
+
+      this.execRun(
+        `INSERT OR REPLACE INTO execution_resource_leases (
+          resource_key, resource_type, holder_id, task_id, pool_id, pool_member_id,
+          acquired_at, last_heartbeat_at, lease_expires_at, metadata_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          options.resourceKey,
+          options.resourceType,
+          options.holderId,
+          options.taskId ?? null,
+          options.poolId ?? null,
+          options.poolMemberId ?? null,
+          nowIso,
+          nowIso,
+          leaseExpiresAt,
+          options.metadata === undefined ? null : JSON.stringify(options.metadata),
+        ],
+      );
+      return true;
+    });
+  }
+
+  renewExecutionResourceLease(
+    resourceKey: string,
+    holderId: string,
+    leaseMs = EXECUTION_RESOURCE_LEASE_MS,
+  ): boolean {
+    const now = new Date();
+    this.execRun(
+      `UPDATE execution_resource_leases
+         SET last_heartbeat_at = ?,
+             lease_expires_at = ?
+       WHERE resource_key = ?
+         AND holder_id = ?`,
+      [
+        now.toISOString(),
+        new Date(now.getTime() + leaseMs).toISOString(),
+        resourceKey,
+        holderId,
+      ],
+    );
+    const changed = (this.db.getRowsModified?.() ?? 0) as number;
+    return changed > 0;
+  }
+
+  releaseExecutionResourceLease(resourceKey: string, holderId: string): void {
+    this.execRun(
+      'DELETE FROM execution_resource_leases WHERE resource_key = ? AND holder_id = ?',
+      [resourceKey, holderId],
+    );
+  }
+
+  listExecutionResourceLeases(): ExecutionResourceLease[] {
+    return this.queryAll(
+      'SELECT * FROM execution_resource_leases ORDER BY resource_key ASC, acquired_at ASC',
+    ).map((row) => ({
+      resourceKey: String(row.resource_key),
+      resourceType: String(row.resource_type),
+      holderId: String(row.holder_id),
+      taskId: row.task_id ? String(row.task_id) : undefined,
+      poolId: row.pool_id ? String(row.pool_id) : undefined,
+      poolMemberId: row.pool_member_id ? String(row.pool_member_id) : undefined,
+      acquiredAt: String(row.acquired_at),
+      lastHeartbeatAt: String(row.last_heartbeat_at),
+      leaseExpiresAt: String(row.lease_expires_at),
+      metadata: row.metadata_json ? JSON.parse(String(row.metadata_json)) : undefined,
+    }));
   }
 
   listWorkflowMutationLeases(): WorkflowMutationLease[] {

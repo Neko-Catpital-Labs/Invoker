@@ -172,6 +172,63 @@ describe('SQLiteAdapter', () => {
     });
   });
 
+  describe('execution resource leases', () => {
+    it('allows only one live holder per resource key', () => {
+      const acquired = adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:invoker@example.com:22',
+        resourceType: 'ssh',
+        holderId: 'holder-1',
+        taskId: 'task-1',
+        poolId: 'ssh-pool',
+        poolMemberId: 'remote-a',
+      });
+      const blocked = adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:invoker@example.com:22',
+        resourceType: 'ssh',
+        holderId: 'holder-2',
+        taskId: 'task-2',
+        poolId: 'ssh-pool',
+        poolMemberId: 'remote-a',
+      });
+
+      expect(acquired).toBe(true);
+      expect(blocked).toBe(false);
+      expect(adapter.listExecutionResourceLeases()).toHaveLength(1);
+    });
+
+    it('reclaims expired resource leases', () => {
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:invoker@example.com:22',
+        resourceType: 'ssh',
+        holderId: 'holder-1',
+        leaseMs: -1,
+      })).toBe(true);
+
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:invoker@example.com:22',
+        resourceType: 'ssh',
+        holderId: 'holder-2',
+      })).toBe(true);
+
+      const leases = adapter.listExecutionResourceLeases();
+      expect(leases).toHaveLength(1);
+      expect(leases[0].holderId).toBe('holder-2');
+    });
+
+    it('renews and releases resource leases by holder', () => {
+      adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:invoker@example.com:22',
+        resourceType: 'ssh',
+        holderId: 'holder-1',
+      });
+
+      expect(adapter.renewExecutionResourceLease('ssh:invoker@example.com:22', 'holder-1')).toBe(true);
+      adapter.releaseExecutionResourceLease('ssh:invoker@example.com:22', 'holder-1');
+
+      expect(adapter.listExecutionResourceLeases()).toHaveLength(0);
+    });
+  });
+
   describe('updateTask', () => {
     it('persists partial changes', () => {
       adapter.saveWorkflow(testWorkflow);

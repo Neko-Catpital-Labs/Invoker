@@ -80,6 +80,8 @@ type ActiveExecutionEntry = {
   taskId: string;
   poolId?: string;
   poolMemberKey?: string;
+  leaseResourceKey?: string;
+  leaseHolderId?: string;
 };
 
 type ExecutionPoolMember =
@@ -97,6 +99,8 @@ type PoolSelection = {
   member: ExecutionPoolMember;
   memberKey: string;
   selectionStrategy: 'roundRobin' | 'leastLoaded';
+  leaseResourceKey?: string;
+  leaseHolderId?: string;
 };
 
 function isRetryableSshStartupTransportError(err: unknown): boolean {
@@ -235,6 +239,7 @@ export class TaskRunner {
   private dockerConfig: { imageName?: string; secretsFile?: string };
   private executionAgentRegistry?: AgentRegistry;
   private logger: Logger;
+  private readonly runnerInstanceId = randomUUID();
   /** Cache for SSH executors, keyed by poolMemberId. One instance per target for correct git locking. */
   private sshExecutorCache = new Map<string, SshExecutor>();
   private poolRoundRobinCursor = new Map<string, number>();
@@ -346,6 +351,9 @@ export class TaskRunner {
     const resolved = this.resolveActiveExecution(taskId);
     if (!resolved) return;
     this.activeExecutions.delete(resolved.attemptId);
+    if (resolved.entry.leaseResourceKey && resolved.entry.leaseHolderId) {
+      this.persistence.releaseExecutionResourceLease?.(resolved.entry.leaseResourceKey, resolved.entry.leaseHolderId);
+    }
     try {
       await resolved.entry.executor.kill(resolved.entry.handle);
     } catch {
@@ -738,6 +746,13 @@ export class TaskRunner {
       bench('selectExecutor.start');
       executor = this.selectExecutor(task, attemptedPoolMemberKeys);
       const poolSelectionForStart = this.pendingPoolSelections.get(task.id);
+      if (!this.acquirePoolSelectionLease(task, attemptId, poolSelectionForStart)) {
+        if (poolSelectionForStart) {
+          attemptedPoolMemberKeys.add(poolSelectionForStart.memberKey);
+          this.pendingPoolSelections.delete(task.id);
+        }
+        continue;
+      }
       bench('selectExecutor.end', {
         executorType: executor.type,
       });
@@ -759,6 +774,7 @@ export class TaskRunner {
       const startTimeoutMs = getExecutorStartTimeoutMs();
       const preStartHeartbeatTimer = setInterval(() => {
         const now = new Date();
+        this.renewPoolSelectionLease(poolSelectionForStart);
         this.persistence.updateAttempt?.(attemptId, {
           lastHeartbeatAt: now,
           leaseExpiresAt: nextLeaseExpiry(now),
@@ -808,6 +824,7 @@ export class TaskRunner {
               error: err instanceof Error ? err.message : String(err),
             });
             this.pendingPoolSelections.delete(task.id);
+            this.releasePoolSelectionLease(poolSelectionForStart);
             continue;
           }
         }
@@ -847,6 +864,7 @@ export class TaskRunner {
           });
         }
         this.pendingPoolSelections.delete(task.id);
+        this.releasePoolSelectionLease(poolSelectionForStart);
         const wrapped = new Error(
           `Executor startup failed (${executor.type}): ${err instanceof Error ? err.message : String(err)}`,
           { cause: err },
@@ -882,6 +900,7 @@ export class TaskRunner {
       } catch (killErr) {
         this.logger.warn(`[TaskRunner] failed to kill rejected launch for task=${task.id}`, { killErr });
       }
+      this.releasePoolSelectionLease(this.pendingPoolSelections.get(task.id));
       this.pendingPoolSelections.delete(task.id);
       await this.cleanupPerTaskDockerExecutor(task);
       bench('markTaskRunningAfterLaunch.rejected');
@@ -893,6 +912,7 @@ export class TaskRunner {
     {
       // Fail-fast: workspacePath must be provided by all executors
       if (!handle.workspacePath) {
+        this.releasePoolSelectionLease(this.pendingPoolSelections.get(task.id));
         throw new Error(
           `Executor "${executor.type}" did not provide workspacePath for task "${task.id}". ` +
           `All executors must set workspacePath; refusing to fall back to host repo.`,
@@ -969,6 +989,8 @@ export class TaskRunner {
       taskId: task.id,
       poolId: poolSelection?.poolId,
       poolMemberKey: poolSelection?.memberKey,
+      leaseResourceKey: poolSelection?.leaseResourceKey,
+      leaseHolderId: poolSelection?.leaseHolderId,
     });
     this.logger.info(
       `[TaskRunner] active execution registered task=${task.id} attempt=${attemptId} ` +
@@ -993,6 +1015,10 @@ export class TaskRunner {
             `at=${now.toISOString()}`,
         );
       }
+      const activeLease = this.activeExecutions.get(attemptId);
+      if (activeLease?.leaseResourceKey && activeLease.leaseHolderId) {
+        this.persistence.renewExecutionResourceLease?.(activeLease.leaseResourceKey, activeLease.leaseHolderId);
+      }
       this.persistence.updateAttempt?.(attemptId, {
         lastHeartbeatAt: now,
         leaseExpiresAt: nextLeaseExpiry(now),
@@ -1015,6 +1041,10 @@ export class TaskRunner {
       executor.onComplete(handle, async (response: WorkResponse) => {
         const work = async () => {
           const normalizedResponse = response.attemptId ? response : { ...response, attemptId };
+          const activeExecution = this.activeExecutions.get(normalizedResponse.attemptId ?? attemptId);
+          if (activeExecution?.leaseResourceKey && activeExecution.leaseHolderId) {
+            this.persistence.releaseExecutionResourceLease?.(activeExecution.leaseResourceKey, activeExecution.leaseHolderId);
+          }
           this.activeExecutions.delete(normalizedResponse.attemptId ?? attemptId);
           this.logger.info(
             `[TaskRunner] completion callback task=${task.id} attempt=${normalizedResponse.attemptId ?? attemptId} ` +
@@ -1096,6 +1126,15 @@ export class TaskRunner {
     return load;
   }
 
+  private poolMemberLimit(pool: ExecutionPoolConfig, member: ExecutionPoolMember): number | undefined {
+    return member.maxConcurrentTasks ?? pool.maxConcurrentTasksPerMember;
+  }
+
+  private poolMemberHasCapacity(poolId: string, pool: ExecutionPoolConfig, member: ExecutionPoolMember): boolean {
+    const limit = this.poolMemberLimit(pool, member);
+    return limit === undefined || this.poolMemberLoad(poolId, this.poolMemberKey(member)) < limit;
+  }
+
   private selectPoolMember(
     poolId: string,
     pool: ExecutionPoolConfig,
@@ -1109,6 +1148,7 @@ export class TaskRunner {
         const index = (cursor + offset) % pool.members.length;
         const member = pool.members[index];
         if (excludedMemberKeys.has(this.poolMemberKey(member))) continue;
+        if (!this.poolMemberHasCapacity(poolId, pool, member)) continue;
         this.poolRoundRobinCursor.set(poolId, (index + 1) % pool.members.length);
         return member;
       }
@@ -1118,14 +1158,99 @@ export class TaskRunner {
     const scored = pool.members.filter((member) => !excludedMemberKeys.has(this.poolMemberKey(member))).map((member, index) => {
       const memberKey = this.poolMemberKey(member);
       const load = this.poolMemberLoad(poolId, memberKey);
-      const limit = member.maxConcurrentTasks ?? pool.maxConcurrentTasksPerMember;
+      const limit = this.poolMemberLimit(pool, member);
       return { member, index, load, hasCapacity: limit === undefined || load < limit };
     });
-    const candidates = scored.some((entry) => entry.hasCapacity)
-      ? scored.filter((entry) => entry.hasCapacity)
-      : scored;
+    const candidates = scored.filter((entry) => entry.hasCapacity);
     candidates.sort((a, b) => a.load - b.load || a.index - b.index);
     return candidates[0]?.member;
+  }
+
+  private poolCapacitySnapshot(poolId: string, pool: ExecutionPoolConfig): Array<{
+    memberId: string;
+    memberType: string;
+    load: number;
+    limit: number | undefined;
+  }> {
+    return pool.members.map((member) => {
+      const memberKey = this.poolMemberKey(member);
+      return {
+        memberId: member.id,
+        memberType: member.type,
+        load: this.poolMemberLoad(poolId, memberKey),
+        limit: this.poolMemberLimit(pool, member),
+      };
+    });
+  }
+
+  private poolCapacityError(taskId: string, poolId: string, pool: ExecutionPoolConfig, excludedMemberKeys: Set<string>): Error {
+    const snapshot = this.poolCapacitySnapshot(poolId, pool);
+    const message = `Execution pool "${poolId}" has no member capacity available`;
+    const resourceLimit = new ResourceLimitError(message);
+    this.persistence.logEvent?.(taskId, 'task.executor.deferred', {
+      reason: 'execution-pool-capacity',
+      poolId,
+      excludedMemberKeys: [...excludedMemberKeys],
+      members: snapshot,
+    });
+    this.logger.info(`[TaskRunner] deferring task: ${message}`, {
+      poolId,
+      excludedMemberKeys: [...excludedMemberKeys],
+      members: snapshot,
+    });
+    return new Error(message, { cause: resourceLimit });
+  }
+
+  private sshResourceKey(target: RemoteTargetDisplay): string {
+    return `ssh:${target.user}@${target.host}:${target.port ?? 22}`;
+  }
+
+  private leaseHolderId(taskId: string, attemptId: string): string {
+    return `${this.runnerInstanceId}:${process.pid}:${taskId}:${attemptId}`;
+  }
+
+  private acquirePoolSelectionLease(task: TaskState, attemptId: string, selection: PoolSelection | undefined): boolean {
+    if (!selection || selection.member.type !== 'ssh') return true;
+    const target = this.getRemoteTargets()[selection.member.id];
+    if (!target) return true;
+    const resourceKey = this.sshResourceKey(target);
+    const holderId = this.leaseHolderId(task.id, attemptId);
+    const acquired = this.persistence.claimExecutionResourceLease?.({
+      resourceKey,
+      resourceType: 'ssh',
+      holderId,
+      taskId: task.id,
+      poolId: selection.poolId,
+      poolMemberId: selection.member.id,
+      metadata: {
+        runnerInstanceId: this.runnerInstanceId,
+        pid: process.pid,
+      },
+    }) ?? true;
+    if (!acquired) {
+      this.persistence.logEvent?.(task.id, 'task.executor.deferred', {
+        reason: 'ssh-resource-lease-held',
+        poolId: selection.poolId,
+        poolMemberId: selection.member.id,
+        resourceKey,
+      });
+      return false;
+    }
+    selection.leaseResourceKey = resourceKey;
+    selection.leaseHolderId = holderId;
+    return true;
+  }
+
+  private renewPoolSelectionLease(selection: PoolSelection | undefined): void {
+    if (!selection?.leaseResourceKey || !selection.leaseHolderId) return;
+    this.persistence.renewExecutionResourceLease?.(selection.leaseResourceKey, selection.leaseHolderId);
+  }
+
+  private releasePoolSelectionLease(selection: PoolSelection | undefined): void {
+    if (!selection?.leaseResourceKey || !selection.leaseHolderId) return;
+    this.persistence.releaseExecutionResourceLease?.(selection.leaseResourceKey, selection.leaseHolderId);
+    selection.leaseResourceKey = undefined;
+    selection.leaseHolderId = undefined;
   }
 
   private logExecutorSelected(
@@ -1220,6 +1345,8 @@ export class TaskRunner {
           memberKey: this.poolMemberKey(member),
           selectionStrategy: pool.selectionStrategy ?? 'roundRobin',
         });
+      } else if (pool) {
+        throw this.poolCapacityError(task.id, task.config.poolId, pool, excludedPoolMemberKeys);
       }
     }
     if (
