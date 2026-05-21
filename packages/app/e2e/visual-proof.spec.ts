@@ -483,6 +483,43 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'review-ready-workflow-pr-sidebar');
   });
 
+  test('workflow-task-status-color-parity — workflow chip and task share review_ready palette', async ({ page }) => {
+    const workflowId = await loadPlanAndSelectWorkflow(page, REVIEW_READY_WORKFLOW_PR_PLAN);
+    await page.locator('.react-flow__node[data-testid$="rr-work"]').first().waitFor({ state: 'visible', timeout: 15000 });
+
+    const reviewUrl = 'https://github.com/Neko-Catpital-Labs/Invoker/pull/700';
+
+    await injectTaskStates(page, [
+      {
+        taskId: 'rr-work',
+        changes: {
+          status: 'completed',
+          execution: { startedAt: new Date(Date.now() - 5000), completedAt: new Date() },
+        },
+      },
+      {
+        taskId: `__merge__${workflowId}`,
+        changes: {
+          status: 'review_ready',
+          execution: { startedAt: new Date(Date.now() - 3000), reviewUrl },
+        },
+      },
+    ]);
+
+    // Re-select the workflow so the inspector refreshes after the rollup status changes.
+    await workflowNode(page, workflowId).dispatchEvent('click', { bubbles: true });
+
+    // Workflow-level surface: the chip in the left sidebar shows the rolled-up review_ready label.
+    await expect(workflowNode(page, workflowId).getByText('review ready')).toBeVisible();
+    // Workflow-level surface: the inspector status label renders the same review_ready label.
+    await expect(page.getByTestId('workflow-inspector-status-label')).toContainText('review ready');
+    // Task-level surface: the merge gate task node in the selected workflow's mini-DAG shows REVIEW READY.
+    const miniDag = page.getByTestId('selected-workflow-mini-dag');
+    await expect(miniDag.getByText('REVIEW READY')).toBeVisible();
+
+    await captureScreenshot(page, 'workflow-task-status-color-parity');
+  });
+
   test('interactive-status-hues — fixing-with-ai, needs-input, awaiting-approval', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     const now = new Date();
