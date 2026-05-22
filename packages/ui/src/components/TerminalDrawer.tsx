@@ -44,6 +44,7 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const seededSessionIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     const host = containerRef.current;
@@ -68,6 +69,18 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
     }
     termRef.current = term;
     fitRef.current = fit;
+
+    // Seed the pane with the bounded replay snapshot captured by the main
+    // process before live output streaming takes over. Guard with a ref so a
+    // re-mount of the same session does not write the snapshot twice.
+    if (session.outputSnapshot && seededSessionIdRef.current !== session.sessionId) {
+      try {
+        term.write(session.outputSnapshot);
+      } catch {
+        /* terminal disposed or write failed */
+      }
+      seededSessionIdRef.current = session.sessionId;
+    }
 
     const inputDisposable = term.onData((data) => {
       void window.invoker?.terminalWrite?.(session.sessionId, data);
