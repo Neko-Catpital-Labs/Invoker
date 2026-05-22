@@ -481,6 +481,92 @@ describe('EmbeddedTerminalManager', () => {
     expect(noopProcess.close).toHaveBeenCalledTimes(1);
   });
 
+  it('replays FIRST_FRAME_FROM_PTY output emitted before openOrReuse() returns to a late consumer', () => {
+    // Late-attaching renderer pane scenario: the embedded PTY emits its very
+    // first frame synchronously during spawn(), before the renderer has had a
+    // chance to subscribe to `invoker:terminal-output`. The replay buffer must
+    // (a) be included on the descriptor returned by openOrReuse() and
+    // (b) survive on the descriptor returned by list() / get() so that a late
+    //     consumer can seed its xterm.js buffer with what it missed.
+    const FIRST_FRAME = 'FIRST_FRAME_FROM_PTY\n';
+    const noopProcess: SpawnedTerminalProcess = {
+      write: vi.fn(),
+      resize: vi.fn(),
+      close: vi.fn(),
+    };
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: (opts) => {
+        opts.emitOutput(FIRST_FRAME);
+        return noopProcess;
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    // Simulate the broken-baseline ordering: backend emits before any
+    // renderer-style subscriber attaches.
+    const lateEvents: string[] = [];
+    const descriptor = mgr.openOrReuse({
+      taskId: 'first-frame-task',
+      spec: {},
+      cwd: '/tmp',
+    });
+    mgr.on('output', (e) => lateEvents.push(e.data));
+
+    // (a) Returned descriptor carries the replay snapshot.
+    expect(descriptor.outputSnapshot).toBe(FIRST_FRAME);
+    expect(descriptor.status).toBe('running');
+
+    // (b) list() and get() carry the same snapshot so terminalList()-driven
+    // reloads can also seed the pane.
+    const listed = mgr.list();
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.outputSnapshot).toBe(FIRST_FRAME);
+    expect(mgr.get(descriptor.sessionId)?.outputSnapshot).toBe(FIRST_FRAME);
+
+    // (c) A late consumer that only subscribed after spawn() returned would
+    // observe no live `output` events for the missed frame — but it can
+    // reconstruct the frame from the descriptor snapshot. This is the
+    // contract the renderer terminal pane relies on.
+    expect(lateEvents).toEqual([]);
+    const seeded = descriptor.outputSnapshot ?? '';
+    expect(seeded).toContain('FIRST_FRAME_FROM_PTY');
+  });
+
+  it('does not throw when the backend exits synchronously and the descriptor still carries the pre-exit snapshot', () => {
+    // Companion to the FIRST_FRAME test above: covers the second half of the
+    // race, where a misbehaving backend both emits output and exits before
+    // openOrReuse() has finished assigning state. The implementation
+    // registers the session in the map and uses a no-op placeholder process
+    // so synchronous emitOutput / emitExit are safe.
+    const noopProcess: SpawnedTerminalProcess = {
+      write: vi.fn(),
+      resize: vi.fn(),
+      close: vi.fn(),
+    };
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: (opts) => {
+        opts.emitOutput('FIRST_FRAME_FROM_PTY\n');
+        opts.emitExit(0);
+        return noopProcess;
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    let descriptor!: ReturnType<typeof mgr.openOrReuse>;
+    expect(() => {
+      descriptor = mgr.openOrReuse({ taskId: 'sync-exit-frame', spec: {}, cwd: '/tmp' });
+    }).not.toThrow();
+
+    expect(descriptor.status).toBe('exited');
+    expect(descriptor.exitCode).toBe(0);
+    expect(descriptor.outputSnapshot).toBe('FIRST_FRAME_FROM_PTY\n');
+    // Real backend process is closed even though finalizeSession ran against
+    // the placeholder before the real process was attached.
+    expect(noopProcess.close).toHaveBeenCalledTimes(1);
+  });
+
   it('bounds the replay buffer to a fixed maximum so memory does not grow without limit', () => {
     const child = createFakeChild();
     const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
