@@ -1267,7 +1267,12 @@ function createEmbeddedTerminalBackendFromConfig(
       mainWindow.webContents.send('invoker:terminal-exit', payload);
     }
   });
-  const launchingTasks = new Set<string>();
+  // CC.5: the legacy `launchingTasks` Set is gone. Per-attempt launch
+  // state is tracked durably by `task_launch_dispatch` (Phase B); the
+  // TaskRunner's internal `launchingAttemptIds` Set (CB.4) is the
+  // process-local duplicate-suppression guard. The renderer's
+  // `activeExecutions` count now just reflects spawned execution
+  // handles in `taskHandles`.
   const guiMutationHandlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
   let dbPollInterval: ReturnType<typeof setInterval> | null = null;
   let activityPollInterval: ReturnType<typeof setInterval> | null = null;
@@ -1647,7 +1652,7 @@ function createEmbeddedTerminalBackendFromConfig(
     try {
       assertExecutionCapacityInvariant({
         config: loadConfig(),
-        activeExecutions: launchingTasks.size + taskHandles.size,
+        activeExecutions: taskHandles.size,
         label,
       });
     } catch (err) {
@@ -1706,18 +1711,7 @@ function createEmbeddedTerminalBackendFromConfig(
         onOutput: (taskId, data) => {
           enqueueTaskOutput(taskId, data);
         },
-        onLaunchAccepted: (taskId) => {
-          launchingTasks.add(taskId);
-          assertFatalExecutionCapacity(`launch accepted ${taskId}`);
-          logger.info(`Task "${taskId}" launch accepted by TaskRunner`, { module: 'exec' });
-        },
-        onLaunchStart: (taskId, executor) => {
-          launchingTasks.add(taskId);
-          assertFatalExecutionCapacity(`launch start ${taskId}`);
-          logger.info(`Task "${taskId}" launch started (executor: ${executor.type})`, { module: 'exec' });
-        },
         onLaunchFailed: (taskId, error, executor) => {
-          launchingTasks.delete(taskId);
           assertFatalExecutionCapacity(`launch failed ${taskId}`);
           logger.error(
             `Task "${taskId}" launch failed before spawn (executor: ${executor.type}): ${error.message}`,
@@ -1725,7 +1719,6 @@ function createEmbeddedTerminalBackendFromConfig(
           );
         },
         onSpawned: (taskId, handle, executor) => {
-          launchingTasks.delete(taskId);
           flushTaskOutput(taskId);
           logger.info(
             `Task "${taskId}" spawned (handle: ${handle.executionId}, executor: ${executor.type}, workspace: ${handle.workspacePath ?? 'none'}, branch: ${handle.branch ?? 'none'})`,
@@ -1736,7 +1729,6 @@ function createEmbeddedTerminalBackendFromConfig(
         },
         onComplete: (taskId, response) => {
           flushTaskOutput(taskId);
-          launchingTasks.delete(taskId);
           taskHandles.delete(taskId);
           assertFatalExecutionCapacity(`complete ${taskId}`);
           logger.info(
@@ -1763,10 +1755,6 @@ function createEmbeddedTerminalBackendFromConfig(
             `Heartbeat for "${taskId}" (status: ${task?.status ?? 'unknown'}, generation: ${task?.execution.generation ?? 'unknown'}, gapMs: ${heartbeatGapMs ?? 'first'})`,
             { module: 'heartbeat' },
           );
-        },
-        onLaunchSettled: (taskId) => {
-          launchingTasks.delete(taskId);
-          assertFatalExecutionCapacity(`launch settled ${taskId}`);
         },
       },
     });
