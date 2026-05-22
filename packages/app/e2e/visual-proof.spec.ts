@@ -98,6 +98,19 @@ const MERGE_GATE_NO_INLINE_APPROVE_PLAN = {
   ],
 };
 
+/** Plan for proving workflow-level and task-level status colors share the canonical palette. */
+const WORKFLOW_TASK_STATUS_PARITY_PLAN = {
+  name: 'Workflow task status color parity',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'pull_request' as const,
+  mergeMode: 'external_review',
+  tasks: [
+    { id: 'parity-review', description: 'Review ready task', command: 'echo review', dependencies: [] as string[] },
+    { id: 'parity-done', description: 'Completed task', command: 'echo done', dependencies: [] as string[] },
+    { id: 'parity-blocked', description: 'Blocked task', command: 'echo blocked', dependencies: [] as string[] },
+  ],
+};
+
 /** Pull-request workflow for proving workflow selection exposes the merge gate PR in the inspector. */
 const REVIEW_READY_WORKFLOW_PR_PLAN = {
   name: 'Review ready workflow PR proof',
@@ -481,6 +494,47 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByRole('link', { name: reviewUrl })).toHaveAttribute('href', reviewUrl);
 
     await captureScreenshot(page, 'review-ready-workflow-pr-sidebar');
+  });
+
+  test('workflow-task-status-color-parity — workflow and task surfaces share the canonical palette', async ({ page }) => {
+    const workflowId = await loadPlanAndSelectWorkflow(page, WORKFLOW_TASK_STATUS_PARITY_PLAN);
+    const now = new Date();
+    const earlier = new Date(Date.now() - 5000);
+
+    // Drive the workflow into review_ready by setting the merge gate to review_ready and
+    // keeping no tasks in higher-precedence states (running/awaiting_approval/failed/fixing_with_ai).
+    await injectTaskStates(page, [
+      { taskId: 'parity-review', changes: { status: 'review_ready', execution: { startedAt: earlier } } },
+      {
+        taskId: 'parity-done',
+        changes: { status: 'completed', execution: { startedAt: earlier, completedAt: now } },
+      },
+      { taskId: 'parity-blocked', changes: { status: 'blocked' } },
+      {
+        taskId: `__merge__${workflowId}`,
+        changes: { status: 'review_ready', execution: { startedAt: earlier } },
+      },
+    ]);
+
+    // Workflow-level surface: top-level workflow node renders with the canonical review_ready visual.
+    const wfNode = workflowNode(page, workflowId);
+    await expect(wfNode).toBeVisible();
+    await expect(wfNode).toContainText('review ready');
+
+    // Reselect the workflow so the inspector reflects the injected rollup state.
+    await wfNode.dispatchEvent('click', { bubbles: true });
+    await expect(page.getByTestId('workflow-inspector-status-label')).toContainText('review ready');
+
+    // Task-level surface: task nodes in the selected mini-DAG render representative status labels.
+    const reviewTaskNode = page.locator('.react-flow__node[data-testid$="parity-review"]').first();
+    const completedTaskNode = page.locator('.react-flow__node[data-testid$="parity-done"]').first();
+    const blockedTaskNode = page.locator('.react-flow__node[data-testid$="parity-blocked"]').first();
+
+    await expect(reviewTaskNode.getByText('REVIEW_READY')).toBeVisible();
+    await expect(completedTaskNode.getByText('COMPLETED')).toBeVisible();
+    await expect(blockedTaskNode.getByText('BLOCKED')).toBeVisible();
+
+    await captureScreenshot(page, 'workflow-task-status-color-parity');
   });
 
   test('interactive-status-hues — fixing-with-ai, needs-input, awaiting-approval', async ({ page }) => {
