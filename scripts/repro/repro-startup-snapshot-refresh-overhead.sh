@@ -138,6 +138,7 @@ async function launchApp(extraEnv = {}) {
       INVOKER_E2E_ENABLE_COMPOSITOR: '1',
       INVOKER_CLAUDE_COMMAND: claudeMarker,
       INVOKER_CLAUDE_FIX_COMMAND: claudeMarker,
+      INVOKER_UNSAFE_DISABLE_DB_WRITER_LOCK: '1',
       PATH: `${stubDir}${path.delimiter}${process.env.PATH ?? ''}`,
       ...extraEnv,
     },
@@ -159,10 +160,41 @@ function buildPlan(index) {
 }
 
 async function collectStartupSnapshot() {
+  // We exercise the cold-start renderer path via page.reload() against a
+  // single main-process launch. The renderer re-runs its preload (resyncing
+  // window.__INVOKER_BOOTSTRAP__) and useTasks re-mounts — exactly the
+  // sequence that exposes the redundant non-forced getTasks() if it's still
+  // wired up. This avoids cross-launch DB-flush/lock flakiness that's
+  // unrelated to the renderer behavior under test.
   const app = await launchApp({ INVOKER_TEST_RESUME_PENDING_DELAY_MS: '15000' });
+  app.process().stdout?.on('data', (d) => process.stderr.write(`[electron-stdout] ${d}`));
+  app.process().stderr?.on('data', (d) => process.stderr.write(`[electron-stderr] ${d}`));
   try {
     const page = await app.firstWindow({ timeout: 15000 });
     await page.waitForLoadState('domcontentloaded');
+    await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 15000 });
+
+    // Seed the running main process with multiple workflows/tasks.
+    for (let i = 0; i < workflowCount; i += 1) {
+      const yaml = yamlStringify(buildPlan(i));
+      await page.evaluate((y) => window.invoker.loadPlan(y), yaml);
+    }
+    const seeded = await page.evaluate(() => window.invoker.getTasks(true));
+    const seedTasks = Array.isArray(seeded) ? seeded : seeded.tasks;
+    if (seedTasks.length < workflowCount * tasksPerWorkflow) {
+      throw new Error(
+        `seed expected >= ${workflowCount * tasksPerWorkflow} tasks, got ${seedTasks.length}`,
+      );
+    }
+
+    // Drop the existing activity-log baseline so the post-reload analysis
+    // only inspects events from the cold-start renderer pass.
+    const baselineLogId = await page.evaluate(async () => {
+      const logs = await window.invoker.getActivityLogs();
+      return logs.reduce((max, entry) => (entry.id > max ? entry.id : max), 0);
+    });
+
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 15000 });
     await page.locator('[data-testid^="workflow-node-"]').first().waitFor({
       state: 'visible',
@@ -171,10 +203,13 @@ async function collectStartupSnapshot() {
     // Give the renderer a moment so a post-bootstrap snapshot refresh has time
     // to be invoked and logged before we drain the activity_log.
     await page.waitForTimeout(2500);
-    return page.evaluate(async () => ({
-      activityLogs: await window.invoker.getActivityLogs(),
-      perf: await window.invoker.getUiPerfStats(),
-    }));
+    return page.evaluate(async (cutoffId) => {
+      const allLogs = await window.invoker.getActivityLogs();
+      return {
+        activityLogs: allLogs.filter((entry) => entry.id > cutoffId),
+        perf: await window.invoker.getUiPerfStats(),
+      };
+    }, baselineLogId);
   } finally {
     await app.close();
   }
@@ -182,27 +217,8 @@ async function collectStartupSnapshot() {
 
 let exitCode = 1;
 try {
-  // Phase 1 — seed the DB with multiple workflows/tasks.
-  const seed = await launchApp();
-  try {
-    const page = await seed.firstWindow({ timeout: 15000 });
-    await page.waitForLoadState('domcontentloaded');
-    await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 15000 });
-    for (let i = 0; i < workflowCount; i += 1) {
-      const yaml = yamlStringify(buildPlan(i));
-      await page.evaluate((y) => window.invoker.loadPlan(y), yaml);
-    }
-    const seeded = await page.evaluate(() => window.invoker.getTasks(true));
-    const tasks = Array.isArray(seeded) ? seeded : seeded.tasks;
-    const expected = workflowCount * tasksPerWorkflow;
-    if (tasks.length !== expected) {
-      throw new Error(`seed expected ${expected} tasks, got ${tasks.length}`);
-    }
-  } finally {
-    await seed.close();
-  }
-
-  // Phase 2 — measure the cold-start snapshot behavior against the seeded DB.
+  // Seed the running main process, then exercise the cold-start renderer path
+  // via page.reload(). collectStartupSnapshot() handles both.
   const collected = await collectStartupSnapshot();
 
   const events = [];
@@ -289,6 +305,9 @@ process.exit(exitCode);
 MJS
 
 # @playwright/test and yaml resolve from packages/app, not the repo root.
+# Node ESM walks up from the driver's *file* location (not cwd), so expose
+# packages/app/node_modules adjacent to the driver in TMP_DIR.
+ln -sfn "$ROOT_DIR/packages/app/node_modules" "$TMP_DIR/node_modules"
 pushd packages/app >/dev/null
 set +e
 INVOKER_REPRO_REPO_ROOT="$ROOT_DIR" \
