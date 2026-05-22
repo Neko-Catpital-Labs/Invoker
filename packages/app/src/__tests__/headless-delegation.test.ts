@@ -383,10 +383,15 @@ describe('headless delegation enforcement', () => {
       });
 
       it('headless resume completes quickly enough that the noTrack short-circuit is observable', async () => {
+        // CC.2: post-orphan-relaunch removal, headless resume calls
+        // orchestrator.startExecution() and (when noTrack) lets it run
+        // asynchronously instead of awaiting completion. Make
+        // startExecution return at least one task so the executeTasks
+        // path actually fires.
+        mockDeps.orchestrator.startExecution = vi.fn(() => [
+          { id: 'wf-1/task-1', status: 'pending', config: { workflowId: 'wf-1' }, execution: {} } as any,
+        ]);
         const executeTasksSpy = vi.spyOn(TaskRunner.prototype, 'executeTasks').mockResolvedValue(undefined as any);
-        // Sanity check: prove the noTrack path returns in well under 1s. If the
-        // function ever falls back to waitForCompletion (100ms polls), this would
-        // fail because at minimum one poll iteration would be observed.
         const depsWithNoTrack: HeadlessDeps = { ...mockDeps, noTrack: true } as HeadlessDeps;
         const start = Date.now();
         await runHeadless(['resume', 'wf-1'], depsWithNoTrack);
@@ -396,58 +401,13 @@ describe('headless delegation enforcement', () => {
         executeTasksSpy.mockRestore();
       });
 
-      it('headless resume only relaunches orphaned tasks in the requested workflow', async () => {
-        const executeTasksSpy = vi.spyOn(TaskRunner.prototype, 'executeTasks').mockResolvedValue(undefined as any);
-        mockDeps.orchestrator.getAllTasks = vi.fn(() => [
-          {
-            id: 'wf-1/task-1',
-            status: 'running',
-            config: { workflowId: 'wf-1' },
-            execution: {},
-          } as any,
-          {
-            id: 'wf-2/task-1',
-            status: 'running',
-            config: { workflowId: 'wf-2' },
-            execution: {},
-          } as any,
-        ]);
-
-        const depsWithNoTrack: HeadlessDeps = { ...mockDeps, noTrack: true } as HeadlessDeps;
-        await runHeadless(['resume', 'wf-1'], depsWithNoTrack);
-
-        expect(mockDeps.orchestrator.retryTask).toHaveBeenCalledTimes(1);
-        expect(mockDeps.orchestrator.retryTask).toHaveBeenCalledWith('wf-1/task-1');
-        expect(executeTasksSpy).toHaveBeenCalled();
-        executeTasksSpy.mockRestore();
-      });
-
-      it('headless resume relaunches pending tasks with persisted claimed attempts', async () => {
-        const executeTasksSpy = vi.spyOn(TaskRunner.prototype, 'executeTasks').mockResolvedValue(undefined as any);
-        mockDeps.orchestrator.getPersistedActiveTaskIds = vi.fn(() => new Set(['wf-1/task-claimed']));
-        mockDeps.orchestrator.getAllTasks = vi.fn(() => [
-          {
-            id: 'wf-1/task-claimed',
-            status: 'pending',
-            config: { workflowId: 'wf-1' },
-            execution: {},
-          } as any,
-          {
-            id: 'wf-1/task-ready',
-            status: 'pending',
-            config: { workflowId: 'wf-1' },
-            execution: {},
-          } as any,
-        ]);
-
-        const depsWithNoTrack: HeadlessDeps = { ...mockDeps, noTrack: true } as HeadlessDeps;
-        await runHeadless(['resume', 'wf-1'], depsWithNoTrack);
-
-        expect(mockDeps.orchestrator.retryTask).toHaveBeenCalledTimes(1);
-        expect(mockDeps.orchestrator.retryTask).toHaveBeenCalledWith('wf-1/task-claimed');
-        expect(executeTasksSpy).toHaveBeenCalled();
-        executeTasksSpy.mockRestore();
-      });
+      // CC.2: the two tests that asserted explicit orphan relaunch
+      // (retryTask called per orphaned 'running' task and per
+      // 'pending+claimed' task) were removed when
+      // relaunchOrphansAndStartReady was deleted. The
+      // LaunchDispatcher's reapers (reapExpiredLeases /
+      // abandonStuckLeases) are the new authoritative recovery path
+      // and have direct unit coverage in launch-dispatcher.test.ts.
 
       it('headless set agent with deps.noTrack=true returns without polling all workflows', async () => {
         mockDeps.commandService.editTaskAgent = vi.fn(async () => ({
