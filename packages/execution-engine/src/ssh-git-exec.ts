@@ -277,6 +277,43 @@ done < <(echo "$WORKTREES_B64" | base64 -d)
 `;
 }
 
+export interface GitWorktreeSandboxResetOpts {
+  worktreePath: string;
+  /** The commit/ref to hard-reset the branch to before execution (e.g. resolvedBaseRef / baseHead). */
+  toRef: string;
+}
+
+/**
+ * Sandbox-reset a reused managed worktree to a known-good state before task execution.
+ *
+ * Removes residual state from a prior (possibly SIGKILL-interrupted) run so that
+ * the task always starts from the declared base ref.
+ *
+ *   1. git reset --hard <toRef>   — force branch tip back to declared base
+ *   2. git clean -fd              — remove untracked/modified files, but keep gitignored
+ *                                   files (e.g. node_modules/, build caches).
+ *
+ * Why -fd and not -fdx:
+ *   The managed-workspace execution path always runs provisionCommand
+ *   (pnpm install --frozen-lockfile) inside buildRuntimeBootstrapScript, so
+ *   there is no warm-reuse savings to protect by keeping node_modules/ out of the
+ *   clean.  However, -x would unconditionally evict the package cache on every
+ *   reuse_exact hit, forcing a full network re-install.  Keeping gitignored caches
+ *   alive with -fd lets the package manager do its own lockfile-gated cache check,
+ *   which is faster and no less correct.
+ */
+export function buildWorktreeSandboxResetScript(opts: GitWorktreeSandboxResetOpts): string {
+  const wtB64 = base64Encode(opts.worktreePath);
+  const refB64 = base64Encode(opts.toRef);
+  return `set -euo pipefail
+WT=$(echo ${wtB64} | base64 -d)
+REF=$(echo ${refB64} | base64 -d)
+${bashNormalizeTildePath('WT')}
+git -C "$WT" reset --hard "$REF"
+git -C "$WT" clean -fd
+`;
+}
+
 export interface GitWorktreeRenameBranchOpts {
   worktreePath: string;
   fromBranch: string;

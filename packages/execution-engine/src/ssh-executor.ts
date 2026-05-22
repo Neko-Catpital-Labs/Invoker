@@ -24,6 +24,7 @@ import {
   buildWorktreeListScript,
   buildWorktreeHeadScript,
   buildWorktreeCleanupScript,
+  buildWorktreeSandboxResetScript,
   buildRecordAndPushScript,
   parseRecordAndPushOutput,
   createSshRemoteScriptError,
@@ -299,6 +300,7 @@ trap 'cleanup_runtime "$?"' EXIT
 trap 'cleanup_runtime 129' HUP
 trap 'cleanup_runtime 130' INT
 trap 'cleanup_runtime 143' TERM
+rm -rf "$STAGING_DIR" 2>/dev/null || true
 mkdir -p "$STAGING_DIR"
 chmod 700 "$STAGING_DIR"
 ${this.renderHeredocFile('"$RUNNER_PATH"', runner, 'runner')}${this.renderHeredocFile('"$PAYLOAD_PATH"', payload, 'payload')}${provisionSection}chmod 700 "$RUNNER_PATH" "$PAYLOAD_PATH"
@@ -728,6 +730,12 @@ ${runProvisionSection}stop_bootstrap_heartbeat
     }
 
     if (skippedRemotePreserve) {
+      bench('SshExecutor.startManagedWorkspace.sandboxReset.before', { remoteWt });
+      await this.execRemoteCapture(
+        buildWorktreeSandboxResetScript({ worktreePath: remoteWt, toRef: resolvedBaseRef }),
+        'sandbox_reset',
+      );
+      bench('SshExecutor.startManagedWorkspace.sandboxReset.after', { remoteWt });
       bench('SshExecutor.startManagedWorkspace.mergeRequestUpstreamBranches.before', { remoteWt });
       await this.mergeRequestUpstreamBranches(request, remoteWt, resolvedBaseRef);
       bench('SshExecutor.startManagedWorkspace.mergeRequestUpstreamBranches.after', { remoteWt });
