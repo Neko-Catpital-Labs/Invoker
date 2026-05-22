@@ -172,7 +172,6 @@ import { computeDeferredLaunchTiming } from './deferred-runnable.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import { relaunchOrphansAndStartReady } from './orphan-relaunch.js';
 import { evaluateExecutingStall } from './executing-stall.js';
-import { evaluateLaunchStall } from './launch-stall.js';
 import { listOpenFixIntentsForTask } from './auto-fix-intents.js';
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
 import {
@@ -1301,10 +1300,6 @@ function createEmbeddedTerminalBackendFromConfig(
   const traceUiDeltaFlow = process.env.INVOKER_TRACE_UI_DELTA === '1';
   const traceDbPollPerTask = process.env.INVOKER_TRACE_DB_POLL === '1';
   const traceTaskOutput = process.env.INVOKER_TRACE_TASK_OUTPUT === '1';
-  const launchingStallTimeoutMs = Number.parseInt(
-    process.env.INVOKER_LAUNCHING_STALL_TIMEOUT_MS ?? '60000',
-    10,
-  ) || 60000;
   const executingStallTimeoutMs = Number.parseInt(
     process.env.INVOKER_EXECUTING_STALL_TIMEOUT_MS ?? '180000',
     10,
@@ -2567,66 +2562,10 @@ function createEmbeddedTerminalBackendFromConfig(
                 const remoteHeartbeat = parseExecutionDate(task.execution.remoteHeartbeatAt);
 
                 if (task.status === 'running' || (task.status === 'pending' && task.execution.phase === 'launching')) {
-                  const launchStartedAt = parseExecutionDate(task.execution.launchStartedAt)
-                    ?? parseExecutionDate(task.execution.startedAt);
-                  const launchStall = evaluateLaunchStall({
-                    now,
-                    status: task.status,
-                    phase: task.execution.phase,
-                    launchStartedAt,
-                    selectedAttempt,
-                    hasExecutionHandle: taskHandles.has(task.id),
-                    isKnownLaunching: launchingTasks.has(task.id),
-                    launchingStallTimeoutMs,
-                  });
-                  const { launchAgeMs, launchStalled } = launchStall;
-                  if (launchStalled) {
-                    // CB.6: in active launch-outbox mode the LaunchDispatcher's
-                    // abandonStuckLeases is the authoritative recovery path —
-                    // it writes a concrete `task.failed` event (with the real
-                    // reason, not the misleading "60s without a spawned
-                    // execution handle") and re-prepares the task for a fresh
-                    // attempt. The legacy watchdog action below would double-
-                    // fire and emit a misleading error, so we skip it.
-                    if (invokerConfig.launchOutboxMode === 'active') {
-                      logger.debug?.(
-                        `[launch-stall] suppressed for task="${task.id}" launchAgeMs=${launchAgeMs} — launchOutboxMode=active`,
-                        { module: 'db-poll' },
-                      );
-                      continue;
-                    }
-                    const launchError =
-                      `Launch stalled: task remained in running/launching for ${Math.floor(launchingStallTimeoutMs / 1000)}s without a spawned execution handle`;
-                    logger.info(
-                      `[launch-stall] detected task="${task.id}" phase=${task.execution.phase} launchAgeMs=${launchAgeMs} handlePresent=false`,
-                      { module: 'db-poll' },
-                    );
-                    const failedResponse: WorkResponse = {
-                      requestId: `launch-stall-${task.id}-${now.getTime()}`,
-                      actionId: task.id,
-                      attemptId: task.execution.selectedAttemptId,
-                      executionGeneration: task.execution.generation ?? 0,
-                      status: 'failed',
-                      outputs: {
-                        exitCode: 1,
-                        error: launchError,
-                      },
-                    };
-                    logger.error(`[launch-stall] forcing failure for "${task.id}": ${launchError}`, { module: 'db-poll' });
-                    const startedAfterFailure = orchestrator.handleWorkerResponse(failedResponse);
-                    const runnableAfterFailure = startedAfterFailure.filter(isDispatchableLaunch);
-                    if (runnableAfterFailure.length > 0) {
-                      logger.info(
-                        `[launch-stall] dispatching ${runnableAfterFailure.length} task(s) started after failing "${task.id}"`,
-                        { module: 'db-poll' },
-                      );
-                      void requireTaskExecutor().executeTasks(runnableAfterFailure).catch((err) => {
-                        logger.error(`[launch-stall] executeTasks failed after failing "${task.id}": ${err instanceof Error ? err.stack ?? err.message : String(err)}`, { module: 'db-poll' });
-                      });
-                    }
-                    continue;
-                  }
-
+                  // CC.1: launch-stall watchdog removed. The
+                  // LaunchDispatcher's reapExpiredLeases /
+                  // abandonStuckLeases reapers (Phase B, CB.3) are the
+                  // sole recovery path for stalled launch claims.
                   const executingStartedAt = parseExecutionDate(task.execution.startedAt);
                   const executingAgeMs = executingStartedAt ? now.getTime() - executingStartedAt.getTime() : 0;
                   const { heartbeatStale, leaseExpired, executingStalled, staleReason } = evaluateExecutingStall({
