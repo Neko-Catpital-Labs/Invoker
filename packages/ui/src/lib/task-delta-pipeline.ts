@@ -3,6 +3,7 @@ import type { TaskDelta } from '../types.js';
 export interface TaskDeltaPipeline {
   push: (delta: TaskDelta) => void;
   flushNow: () => void;
+  clear: () => void;
   dispose: () => void;
 }
 
@@ -60,6 +61,13 @@ export function createTaskDeltaPipeline(
       schedule();
     },
     flushNow,
+    clear(): void {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      queue = [];
+    },
     dispose(): void {
       if (timer) {
         clearTimeout(timer);
