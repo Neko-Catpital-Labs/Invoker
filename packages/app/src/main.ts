@@ -2581,6 +2581,20 @@ function createEmbeddedTerminalBackendFromConfig(
                   });
                   const { launchAgeMs, launchStalled } = launchStall;
                   if (launchStalled) {
+                    // CB.6: in active launch-outbox mode the LaunchDispatcher's
+                    // abandonStuckLeases is the authoritative recovery path —
+                    // it writes a concrete `task.failed` event (with the real
+                    // reason, not the misleading "60s without a spawned
+                    // execution handle") and re-prepares the task for a fresh
+                    // attempt. The legacy watchdog action below would double-
+                    // fire and emit a misleading error, so we skip it.
+                    if (invokerConfig.launchOutboxMode === 'active') {
+                      logger.debug?.(
+                        `[launch-stall] suppressed for task="${task.id}" launchAgeMs=${launchAgeMs} — launchOutboxMode=active`,
+                        { module: 'db-poll' },
+                      );
+                      continue;
+                    }
                     const launchError =
                       `Launch stalled: task remained in running/launching for ${Math.floor(launchingStallTimeoutMs / 1000)}s without a spawned execution handle`;
                     logger.info(
@@ -2769,9 +2783,15 @@ function createEmbeddedTerminalBackendFromConfig(
       if (invokerConfig.launchOutboxMode && invokerConfig.launchOutboxMode !== 'disabled') {
         launchDispatcher = new LaunchDispatcher({
           persistence,
+          orchestrator,
+          // taskExecutor is re-built by rebuildTaskRunner(); read via
+          // a provider so the dispatcher always picks up the current
+          // instance instead of capturing a stale reference.
+          taskRunnerProvider: () => taskExecutor,
           ownerId: workflowMutationOwnerId,
           logger,
           mode: invokerConfig.launchOutboxMode as LaunchDispatcherMode,
+          maxConcurrency: effectiveMaxConcurrency,
         });
       }
     } else {

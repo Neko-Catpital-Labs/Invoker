@@ -428,10 +428,157 @@ describe('SQLiteAdapter', () => {
       expect(liveAfter?.state).toBe('leased');
     });
 
-    it('claimLaunchDispatchAtomic is a CB.1 placeholder that throws', () => {
-      expect(() =>
-        adapter.claimLaunchDispatchAtomic({ ownerId: 'runner-x', maxConcurrency: 1 }),
-      ).toThrow('CB.1 not implemented');
+    describe('claimLaunchDispatchAtomic', () => {
+      it('leases the only enqueued row when capacity allows', () => {
+        setupWorkflowAndTask();
+        const enqueued = adapter.enqueueLaunchDispatch({
+          taskId: 'wf-launch/t1',
+          attemptId: 'attempt-claim-1',
+          workflowId: 'wf-launch',
+          generation: 0,
+        });
+
+        const claimed = adapter.claimLaunchDispatchAtomic({
+          ownerId: 'runner-1',
+          maxConcurrency: 4,
+        });
+
+        expect(claimed?.id).toBe(enqueued.id);
+        expect(claimed?.state).toBe('leased');
+        expect(claimed?.dispatchOwner).toBe('runner-1');
+        expect(claimed?.attemptsCount).toBe(1);
+        expect(claimed?.fencedUntil).toBeDefined();
+        expect(claimed?.leasedAt).toBeDefined();
+      });
+
+      it('returns undefined when no enqueued rows exist', () => {
+        setupWorkflowAndTask();
+        const claimed = adapter.claimLaunchDispatchAtomic({
+          ownerId: 'runner-1',
+          maxConcurrency: 4,
+        });
+        expect(claimed).toBeUndefined();
+      });
+
+      it('does not double-lease an already-leased row', () => {
+        setupWorkflowAndTask();
+        adapter.enqueueLaunchDispatch({
+          taskId: 'wf-launch/t1',
+          attemptId: 'attempt-conflict',
+          workflowId: 'wf-launch',
+          generation: 0,
+        });
+
+        const first = adapter.claimLaunchDispatchAtomic({
+          ownerId: 'runner-a',
+          maxConcurrency: 4,
+        });
+        const second = adapter.claimLaunchDispatchAtomic({
+          ownerId: 'runner-b',
+          maxConcurrency: 4,
+        });
+
+        expect(first?.dispatchOwner).toBe('runner-a');
+        expect(second).toBeUndefined();
+      });
+
+      it('orders by priority (high, normal, low) then by insertion order', () => {
+        setupWorkflowAndTask();
+        const normal1 = adapter.enqueueLaunchDispatch({
+          taskId: 'wf-launch/t1',
+          attemptId: 'attempt-normal-1',
+          workflowId: 'wf-launch',
+          generation: 0,
+        });
+        adapter.enqueueLaunchDispatch({
+          taskId: 'wf-launch/t1',
+          attemptId: 'attempt-low',
+          workflowId: 'wf-launch',
+          priority: 'low',
+          generation: 0,
+        });
+        const high = adapter.enqueueLaunchDispatch({
+          taskId: 'wf-launch/t1',
+          attemptId: 'attempt-high',
+          workflowId: 'wf-launch',
+          priority: 'high',
+          generation: 0,
+        });
+
+        const firstClaim = adapter.claimLaunchDispatchAtomic({
+          ownerId: 'runner-pri',
+          maxConcurrency: 4,
+        });
+        const secondClaim = adapter.claimLaunchDispatchAtomic({
+          ownerId: 'runner-pri',
+          maxConcurrency: 4,
+        });
+        const thirdClaim = adapter.claimLaunchDispatchAtomic({
+          ownerId: 'runner-pri',
+          maxConcurrency: 4,
+        });
+
+        expect(firstClaim?.id).toBe(high.id);
+        expect(secondClaim?.id).toBe(normal1.id);
+        expect(thirdClaim?.attemptId).toBe('attempt-low');
+      });
+
+      it('enforces maxConcurrency by counting leased + acknowledged rows', () => {
+        setupWorkflowAndTask();
+        adapter.enqueueLaunchDispatch({
+          taskId: 'wf-launch/t1',
+          attemptId: 'attempt-cap-1',
+          workflowId: 'wf-launch',
+          generation: 0,
+        });
+        adapter.enqueueLaunchDispatch({
+          taskId: 'wf-launch/t1',
+          attemptId: 'attempt-cap-2',
+          workflowId: 'wf-launch',
+          generation: 0,
+        });
+
+        const first = adapter.claimLaunchDispatchAtomic({
+          ownerId: 'runner-c',
+          maxConcurrency: 1,
+        });
+        expect(first?.attemptId).toBe('attempt-cap-1');
+
+        const blocked = adapter.claimLaunchDispatchAtomic({
+          ownerId: 'runner-c',
+          maxConcurrency: 1,
+        });
+        expect(blocked).toBeUndefined();
+
+        adapter.markLaunchDispatchAcknowledged(first!.id, 'runner-c');
+        const stillBlocked = adapter.claimLaunchDispatchAtomic({
+          ownerId: 'runner-c',
+          maxConcurrency: 1,
+        });
+        expect(stillBlocked).toBeUndefined();
+
+        adapter.markLaunchDispatchCompleted(first!.id);
+        const unblocked = adapter.claimLaunchDispatchAtomic({
+          ownerId: 'runner-c',
+          maxConcurrency: 1,
+        });
+        expect(unblocked?.attemptId).toBe('attempt-cap-2');
+      });
+
+      it('returns undefined when maxConcurrency is zero', () => {
+        setupWorkflowAndTask();
+        adapter.enqueueLaunchDispatch({
+          taskId: 'wf-launch/t1',
+          attemptId: 'attempt-zero',
+          workflowId: 'wf-launch',
+          generation: 0,
+        });
+        const claimed = adapter.claimLaunchDispatchAtomic({
+          ownerId: 'runner-z',
+          maxConcurrency: 0,
+        });
+        expect(claimed).toBeUndefined();
+      });
     });
   });
 

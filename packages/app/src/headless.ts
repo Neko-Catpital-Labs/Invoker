@@ -114,6 +114,18 @@ export interface HeadlessDeps {
   signal?: AbortSignal;
   mutationTiming?: WorkflowMutationTiming;
   runtimeServices?: RuntimeServices;
+  /**
+   * CB.7: provider for the owner's long-lived TaskRunner. When the
+   * launch-outbox is `'active'`, `createHeadlessExecutor` reuses this
+   * instance instead of constructing a fresh `TaskRunner` per command.
+   * Returning `null` (or omitting the provider entirely) falls back to
+   * the legacy behaviour (a new TaskRunner each call). This eliminates
+   * Issue 6 (multi-TaskRunner blindness — each runner has its own
+   * `launchingAttemptIds` Set) once the outbox dispatcher is the only
+   * launch path. The fallback also keeps the function safe to call in
+   * environments without an owner-mode TaskRunner (peer mode, tests).
+   */
+  ownerTaskRunnerProvider?: () => TaskRunner | null;
 }
 
 // ── ANSI Helpers ─────────────────────────────────────────────
@@ -196,6 +208,32 @@ export function createHeadlessExecutor(
   deps: HeadlessDeps,
   callbackOverrides?: Partial<ConstructorParameters<typeof TaskRunner>[0]['callbacks']>,
 ): TaskRunner {
+  // CB.7: in active launch-outbox mode the owner's long-lived
+  // TaskRunner is the single launch path (it services the
+  // task_launch_dispatch outbox via LaunchDispatcher). Reusing it
+  // eliminates the multi-TaskRunner blindness from Issue 6 — every
+  // headless command shares the same launchingAttemptIds Set so
+  // duplicate-suppression and dispatch-row ack/complete/fail accounting
+  // all stay coherent. callbackOverrides are intentionally ignored on
+  // this path because the owner's TaskRunner already has its own
+  // production callbacks (persistence writes, renderer deltas, etc.);
+  // per-command callbacks would either duplicate that work or fight it.
+  if (deps.invokerConfig.launchOutboxMode === 'active') {
+    const owner = deps.ownerTaskRunnerProvider?.() ?? null;
+    if (owner) {
+      if (callbackOverrides) {
+        deps.logger?.debug?.(
+          '[headless] createHeadlessExecutor: ignoring callbackOverrides — launchOutboxMode=active reuses owner TaskRunner',
+          { module: 'headless' },
+        );
+      }
+      return owner;
+    }
+    deps.logger?.warn?.(
+      '[headless] createHeadlessExecutor: launchOutboxMode=active but ownerTaskRunnerProvider is unavailable — falling back to per-command TaskRunner',
+      { module: 'headless' },
+    );
+  }
   let executor: TaskRunner;
   executor = new TaskRunner({
     orchestrator: deps.orchestrator,
