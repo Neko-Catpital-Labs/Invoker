@@ -158,4 +158,101 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
+
+  // ── Keyboard navigation regression ────────────────────────────
+  //
+  // Regression coverage for the open-menu keyboard path.
+  //
+  // A local repro proved that opening a workflow context menu, pressing
+  // ArrowDown three times, and pressing Enter did NOT call
+  // navigator.clipboard.writeText('wf-1'): the open menu silently dropped
+  // arrow / activation keys dispatched from the document, so users could
+  // not drive the menu from the keyboard once it was open.
+  //
+  // These tests mount the real App and dispatch keyboard events on the
+  // document (where real browser keystrokes land when the menu has no
+  // focused interactive child), and assert the menu both moves its
+  // highlight and invokes the matching handler on activation.
+  describe('open-menu keyboard navigation', () => {
+    function dispatchKey(key: string) {
+      const target = document.activeElement ?? document.body;
+      fireEvent.keyDown(target, { key, bubbles: true });
+    }
+
+    it('workflow menu: ArrowDown x3 + Enter copies the workflow id', async () => {
+      await setup();
+      fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+      await screen.findByRole('menu');
+
+      // Items in declaration order:
+      //   0: Open Workflow  (initial focus)
+      //   1: Open PR
+      //   2: Retry Workflow
+      //   3: Copy Workflow ID  <-- target
+      dispatchKey('ArrowDown');
+      dispatchKey('ArrowDown');
+      dispatchKey('ArrowDown');
+      dispatchKey('Enter');
+
+      await waitFor(() => {
+        expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1');
+      });
+    });
+
+    it('workflow menu: Space activates the highlighted item like Enter', async () => {
+      await setup();
+      fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+      await screen.findByRole('menu');
+
+      dispatchKey('ArrowDown');
+      dispatchKey('ArrowDown');
+      dispatchKey('ArrowDown');
+      dispatchKey(' ');
+
+      await waitFor(() => {
+        expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1');
+      });
+    });
+
+    it('workflow menu: ArrowUp from the first item wraps to the last menu item', async () => {
+      await setup();
+      fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+      await screen.findByRole('menu');
+
+      // With proper wrap semantics, ArrowUp at the first item lands on the
+      // last visible menuitem — the "More" disclosure button — and Enter
+      // expands it, revealing the danger actions. Without wrap (the
+      // pre-fix behavior) ArrowUp is a no-op so Enter never reaches More.
+      dispatchKey('ArrowUp');
+      dispatchKey('Enter');
+
+      await waitFor(() => {
+        expect(screen.getByText('Delete Workflow')).toBeInTheDocument();
+      });
+      expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+    });
+
+    it('task menu in mini DAG: ArrowDown + Enter activates the next enabled action', async () => {
+      await setup();
+      fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+      await waitFor(() => {
+        expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+      });
+
+      fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+      await screen.findByRole('menu');
+
+      // For pending task-alpha, the menu opens with Restart Task focused.
+      // ArrowDown advances to the next enabled action (Open Terminal),
+      // and Enter must dispatch openTerminal for the task — proving the
+      // menu absorbs Enter rather than letting the App's region handler
+      // reopen the workflow menu.
+      dispatchKey('ArrowDown');
+      dispatchKey('Enter');
+
+      await waitFor(() => {
+        expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha');
+      });
+    });
+  });
 });
