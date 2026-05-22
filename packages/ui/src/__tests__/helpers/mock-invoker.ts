@@ -15,6 +15,7 @@ import type {
   TaskConfig,
   TaskExecution,
 } from '../../types.js';
+import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 export interface MockInvoker {
   /** The mock InvokerAPI object installed on window.invoker. */
@@ -25,6 +26,8 @@ export interface MockInvoker {
   fireDelta: (delta: TaskDelta) => void;
   /** Fire a workflows-changed event. */
   fireWorkflowsChanged: (workflows: WorkflowMeta[]) => void;
+  /** Override what `terminalList()` resolves to on the next mount. */
+  setTerminalListSeed: (sessions: TerminalSessionDescriptor[]) => void;
   /** Install the mock on window.invoker. */
   install: () => void;
   /** Remove window.invoker. */
@@ -37,6 +40,7 @@ export function createMockInvoker(
 ): MockInvoker {
   let taskSnapshot = initialTasks;
   let workflowSnapshot = initialWorkflows;
+  let terminalListSeed: TerminalSessionDescriptor[] = [];
   let deltaCallback: ((delta: TaskDelta) => void) | undefined;
   let workflowsCallback: ((workflows: unknown[]) => void) | undefined;
 
@@ -136,7 +140,7 @@ export function createMockInvoker(
         createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
       },
     })),
-    terminalList: vi.fn(async () => []),
+    terminalList: vi.fn(async () => terminalListSeed),
     terminalWrite: vi.fn(async () => ({ ok: true })),
     terminalResize: vi.fn(async () => ({ ok: true })),
     terminalClose: vi.fn(async () => ({ ok: true })),
@@ -191,6 +195,10 @@ export function createMockInvoker(
     workflowsCallback?.(workflows);
   }
 
+  function setTerminalListSeed(sessions: TerminalSessionDescriptor[]) {
+    terminalListSeed = sessions;
+  }
+
   function install() {
     (window as unknown as { invoker: InvokerAPI }).invoker = api;
     (window as unknown as { __INVOKER_BOOTSTRAP__?: { tasks: TaskState[]; workflows: WorkflowMeta[] } }).__INVOKER_BOOTSTRAP__ = {
@@ -204,7 +212,23 @@ export function createMockInvoker(
     delete (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__;
   }
 
-  return { api, setTasks, fireDelta, fireWorkflowsChanged, install, cleanup };
+  return { api, setTasks, fireDelta, fireWorkflowsChanged, setTerminalListSeed, install, cleanup };
+}
+
+/** Build a minimal `TerminalSessionDescriptor` for tests, with optional replay snapshot. */
+export function makeTerminalSession(
+  overrides: Partial<TerminalSessionDescriptor> & { taskId?: string } = {},
+): TerminalSessionDescriptor {
+  const taskId = overrides.taskId ?? 'task-1';
+  return {
+    sessionId: `mock-session-${taskId}`,
+    taskId,
+    status: 'running',
+    mode: 'spawn',
+    attached: false,
+    createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+    ...overrides,
+  };
 }
 
 /** Create a minimal TaskState for testing. */

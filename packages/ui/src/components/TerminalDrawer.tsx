@@ -44,6 +44,9 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  // Tracks the (sessionId, snapshot) tuple already written into the current
+  // xterm so re-renders or repeated effect runs don't duplicate replay output.
+  const seededRef = useRef<{ sessionId: string; snapshot: string } | null>(null);
 
   useEffect(() => {
     const host = containerRef.current;
@@ -68,6 +71,21 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
     }
     termRef.current = term;
     fitRef.current = fit;
+
+    const snapshot = session.outputSnapshot ?? '';
+    if (snapshot.length > 0) {
+      const previousSeed = seededRef.current;
+      const alreadySeeded =
+        previousSeed?.sessionId === session.sessionId && previousSeed.snapshot === snapshot;
+      if (!alreadySeeded) {
+        try {
+          term.write(snapshot);
+          seededRef.current = { sessionId: session.sessionId, snapshot };
+        } catch {
+          /* terminal disposed */
+        }
+      }
+    }
 
     const inputDisposable = term.onData((data) => {
       void window.invoker?.terminalWrite?.(session.sessionId, data);
