@@ -9,10 +9,29 @@ import type {
 import type { TaskState, TaskStateChanges } from '../task-types.js';
 import type { WorkResponse } from '@invoker/contracts';
 
+interface LoggedEvent {
+  taskId: string;
+  eventType: string;
+  payload?: unknown;
+}
+
+interface LaunchDispatchRow {
+  id: number;
+  taskId: string;
+  attemptId: string;
+  workflowId: string;
+  priority: 'high' | 'normal' | 'low';
+  generation: number;
+}
+
 class InMemoryPersistence implements OrchestratorPersistence {
   workflows = new Map<string, { id: string; name: string; status: string; createdAt: string; updatedAt: string }>();
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
+  events: LoggedEvent[] = [];
+  launchDispatchRows: LaunchDispatchRow[] = [];
+  enqueueLaunchDispatchEnabled = false;
   private attempts = new Map<string, Attempt[]>();
+  private nextDispatchId = 1;
 
   saveWorkflow(workflow: { id: string; name: string; status: string }): void {
     const now = new Date().toISOString();
@@ -78,7 +97,33 @@ class InMemoryPersistence implements OrchestratorPersistence {
     }
   }
 
-  logEvent(): void {}
+  logEvent(taskId: string, eventType: string, payload?: unknown): void {
+    this.events.push({ taskId, eventType, payload });
+  }
+
+  enqueueLaunchDispatch(input: {
+    taskId: string;
+    attemptId: string;
+    workflowId: string;
+    priority?: 'high' | 'normal' | 'low';
+    generation: number;
+  }): { id: number } {
+    if (!this.enqueueLaunchDispatchEnabled) {
+      throw new Error('enqueueLaunchDispatch called when not enabled');
+    }
+    const existing = this.launchDispatchRows.find((row) => row.attemptId === input.attemptId);
+    if (existing) return { id: existing.id };
+    const row: LaunchDispatchRow = {
+      id: this.nextDispatchId++,
+      taskId: input.taskId,
+      attemptId: input.attemptId,
+      workflowId: input.workflowId,
+      priority: input.priority ?? 'normal',
+      generation: input.generation,
+    };
+    this.launchDispatchRows.push(row);
+    return { id: row.id };
+  }
 }
 
 class InMemoryBus implements OrchestratorMessageBus {
@@ -104,14 +149,21 @@ function makeResponse(
 }
 
 function makeOrchestrator(
-  opts: { deferRunningUntilLaunch?: boolean; maxConcurrency?: number } = {},
+  opts: {
+    deferRunningUntilLaunch?: boolean;
+    maxConcurrency?: number;
+    launchOutboxMode?: 'disabled' | 'observe' | 'active';
+    enqueueLaunchDispatchEnabled?: boolean;
+  } = {},
 ): { orchestrator: Orchestrator; persistence: InMemoryPersistence } {
   const persistence = new InMemoryPersistence();
+  persistence.enqueueLaunchDispatchEnabled = opts.enqueueLaunchDispatchEnabled ?? false;
   const orchestrator = new Orchestrator({
     persistence,
     messageBus: new InMemoryBus(),
     maxConcurrency: opts.maxConcurrency ?? 4,
     deferRunningUntilLaunch: opts.deferRunningUntilLaunch,
+    launchOutboxMode: opts.launchOutboxMode,
   });
   return { orchestrator, persistence };
 }
@@ -453,6 +505,99 @@ describe('Orchestrator launch claims', () => {
 
     const started = orchestrator.resumeWorkflow(workflowId);
     expect(started.map((task) => task.id)).toEqual([taskId]);
+  });
+
+  describe('launch-outbox observer wiring (Phase A)', () => {
+    function loadPlanForLaunchOutbox(orchestrator: Orchestrator): { taskId: string } {
+      orchestrator.loadPlan({
+        name: 'launch-outbox-observer',
+        onFinish: 'none',
+        tasks: [{ id: 't1', description: 'one', command: 'echo one' }],
+      });
+      return { taskId: taskIdBySuffix(orchestrator, 't1') };
+    }
+
+    it("does not write outbox rows when launchOutboxMode='disabled'", () => {
+      const { orchestrator, persistence } = makeOrchestrator({
+        deferRunningUntilLaunch: true,
+        enqueueLaunchDispatchEnabled: true,
+        launchOutboxMode: 'disabled',
+      });
+      loadPlanForLaunchOutbox(orchestrator);
+      orchestrator.startExecution();
+
+      expect(persistence.launchDispatchRows).toEqual([]);
+      expect(
+        persistence.events.find((event) => event.eventType === 'task.dispatch_enqueued'),
+      ).toBeUndefined();
+      expect(
+        persistence.events.find((event) => event.eventType === 'task.launch_claimed'),
+      ).toBeDefined();
+    });
+
+    it("writes one outbox row per claimed attempt when launchOutboxMode='observe' and still emits task.launch_claimed", () => {
+      const { orchestrator, persistence } = makeOrchestrator({
+        deferRunningUntilLaunch: true,
+        enqueueLaunchDispatchEnabled: true,
+        launchOutboxMode: 'observe',
+        maxConcurrency: 4,
+      });
+      orchestrator.loadPlan({
+        name: 'launch-outbox-observer',
+        onFinish: 'none',
+        tasks: [
+          { id: 't1', description: 'one', command: 'echo one' },
+          { id: 't2', description: 'two', command: 'echo two' },
+        ],
+      });
+      const started = orchestrator.startExecution();
+
+      expect(started).toHaveLength(2);
+      expect(persistence.launchDispatchRows).toHaveLength(2);
+      const claimedAttemptIds = new Set(started.map((task) => task.execution.selectedAttemptId));
+      const dispatchedAttemptIds = new Set(
+        persistence.launchDispatchRows.map((row) => row.attemptId),
+      );
+      expect(dispatchedAttemptIds).toEqual(claimedAttemptIds);
+      expect(
+        persistence.events.filter((event) => event.eventType === 'task.launch_claimed'),
+      ).toHaveLength(2);
+      const enqueueEvents = persistence.events.filter(
+        (event) => event.eventType === 'task.dispatch_enqueued',
+      );
+      expect(enqueueEvents).toHaveLength(2);
+      for (const event of enqueueEvents) {
+        const payload = event.payload as { dispatchId?: number };
+        expect(typeof payload?.dispatchId).toBe('number');
+      }
+    });
+
+    it("treats launchOutboxMode='active' the same as observe in Phase A (active behavior lands in CB)", () => {
+      const { orchestrator, persistence } = makeOrchestrator({
+        deferRunningUntilLaunch: true,
+        enqueueLaunchDispatchEnabled: true,
+        launchOutboxMode: 'active',
+      });
+      loadPlanForLaunchOutbox(orchestrator);
+      orchestrator.startExecution();
+
+      expect(persistence.launchDispatchRows).toHaveLength(1);
+      expect(
+        persistence.events.find((event) => event.eventType === 'task.dispatch_enqueued'),
+      ).toBeDefined();
+    });
+
+    it("tolerates missing enqueueLaunchDispatch without throwing when launchOutboxMode='observe'", () => {
+      const { orchestrator, persistence } = makeOrchestrator({
+        deferRunningUntilLaunch: true,
+        enqueueLaunchDispatchEnabled: false,
+        launchOutboxMode: 'observe',
+      });
+      (persistence as unknown as { enqueueLaunchDispatch?: unknown }).enqueueLaunchDispatch = undefined;
+      loadPlanForLaunchOutbox(orchestrator);
+      expect(() => orchestrator.startExecution()).not.toThrow();
+      expect(persistence.launchDispatchRows).toEqual([]);
+    });
   });
 
   it('returns downstream launch claims from worker completion and approval cascades', async () => {

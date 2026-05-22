@@ -160,6 +160,7 @@ import {
 import { shouldSkipAutoFixForError } from './auto-fix-gating.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
+import { LaunchDispatcher, type LaunchDispatcherMode } from './launch-dispatcher.js';
 import { recoverWorkflowMutationsOnStartup } from './workflow-mutation-startup.js';
 import {
   dispatchStartedTasksWithGlobalTopup,
@@ -241,6 +242,7 @@ let orchestrator: Orchestrator;
 let commandService: CommandService;
 let runtimeServices: RuntimeServices;
 let workflowMutationCoordinator: PersistedWorkflowMutationCoordinator | null = null;
+let launchDispatcher: LaunchDispatcher | null = null;
 const workflowMutationDispatcher = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 /**
  * The mutation context for the currently executing workflow mutation.
@@ -500,6 +502,7 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     defaultPoolId: invokerConfig.defaultPoolId,
     availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
     deferRunningUntilLaunch: true,
+    launchOutboxMode: invokerConfig.launchOutboxMode,
   });
   commandService = new CommandService(orchestrator);
 
@@ -2693,6 +2696,16 @@ function createEmbeddedTerminalBackendFromConfig(
                 }
               }
             }
+            if (launchDispatcher) {
+              try {
+                launchDispatcher.poll();
+              } catch (err) {
+                logger.warn(
+                  `[launch-dispatcher] poll() failed: ${err instanceof Error ? err.message : String(err)}`,
+                  { module: 'db-poll' },
+                );
+              }
+            }
           } catch {
             // DB might be locked — skip this tick
           }
@@ -2753,6 +2766,14 @@ function createEmbeddedTerminalBackendFromConfig(
         },
         { logger },
       );
+      if (invokerConfig.launchOutboxMode && invokerConfig.launchOutboxMode !== 'disabled') {
+        launchDispatcher = new LaunchDispatcher({
+          persistence,
+          ownerId: workflowMutationOwnerId,
+          logger,
+          mode: invokerConfig.launchOutboxMode as LaunchDispatcherMode,
+        });
+      }
     } else {
       logger.info('Launched in follower mode; mutation execution is delegated to the current owner', {
         module: 'init',
@@ -3090,6 +3111,7 @@ function createEmbeddedTerminalBackendFromConfig(
         defaultPoolId: invokerConfig.defaultPoolId,
         availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
         deferRunningUntilLaunch: true,
+        launchOutboxMode: invokerConfig.launchOutboxMode,
       });
       commandService = new CommandService(orchestrator);
       rebuildTaskRunner();
