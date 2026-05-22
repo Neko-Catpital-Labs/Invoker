@@ -5869,7 +5869,12 @@ describe('Orchestrator', () => {
   // ── retryWorkflow ────────────────────────────────────────
 
   describe('retryWorkflow', () => {
-    it('refreshes only the targeted workflow before retrying', () => {
+    it('does not modify unrelated workflows when retrying', () => {
+      // The cross-workflow cascade legitimately reads the DB globally
+      // to discover downstream dependents — that scan is correctness-
+      // critical and must not rely on in-memory state. The invariant
+      // this test enforces is the operational one: retrying wfA must
+      // not perturb an unrelated wfB.
       const persistence = new CountingPersistence();
       const bus = new InMemoryBus();
       const o = new Orchestrator({
@@ -5892,13 +5897,17 @@ describe('Orchestrator', () => {
         ],
       });
 
-      persistence.loadTasksCalls = [];
       const wfA = o.getAllTasks().find((task) => task.id.endsWith('/a1'))!.config.workflowId!;
+      const wfBTaskBefore = o.getAllTasks().find((task) => task.id.endsWith('/b1'))!;
+
+      persistence.loadTasksCalls = [];
       o.retryWorkflow(wfA);
 
       expect(persistence.loadTasksCalls.filter((id) => id === wfA).length).toBeGreaterThan(0);
-      const wfB = o.getAllTasks().find((task) => task.id.endsWith('/b1'))!.config.workflowId!;
-      expect(persistence.loadTasksCalls).not.toContain(wfB);
+
+      const wfBTaskAfter = o.getAllTasks().find((task) => task.id.endsWith('/b1'))!;
+      expect(wfBTaskAfter.status).toBe(wfBTaskBefore.status);
+      expect(wfBTaskAfter.execution.generation ?? 0).toBe(wfBTaskBefore.execution.generation ?? 0);
     });
 
     it('preserves completed tasks and resets failed tasks', () => {
