@@ -18,6 +18,41 @@ vi.mock('@xyflow/react', async () => {
   return createReactFlowMock();
 });
 
+// Lightweight xterm.js mock so jsdom-based tests can observe what the
+// terminal pane writes (snapshot replay + live output). Real xterm needs
+// a layout-capable DOM which jsdom does not provide. Implemented as a
+// class so its constructor survives `vi.restoreAllMocks()` between tests
+// (a `vi.fn().mockImplementation(...)` would have its implementation
+// reset and would return `undefined` on subsequent constructions).
+const xtermMocks = vi.hoisted(() => ({
+  write: vi.fn(),
+}));
+
+vi.mock('xterm', () => {
+  class Terminal {
+    cols = 80;
+    rows = 24;
+    loadAddon() {}
+    open() {}
+    onData() {
+      return { dispose() {} };
+    }
+    write(data: string) {
+      xtermMocks.write(data);
+    }
+    focus() {}
+    dispose() {}
+  }
+  return { Terminal };
+});
+
+vi.mock('xterm-addon-fit', () => {
+  class FitAddon {
+    fit() {}
+  }
+  return { FitAddon };
+});
+
 const { App } = await import('../App.js');
 
 const workflows: WorkflowMeta[] = [{ id: 'wf-a', name: 'Workflow A', status: 'completed' }];
@@ -51,6 +86,7 @@ describe('Terminal drawer (component)', () => {
   beforeEach(() => {
     mock = createMockInvoker();
     mock.install();
+    xtermMocks.write.mockClear();
   });
 
   afterEach(() => {
@@ -155,6 +191,81 @@ describe('Terminal drawer (component)', () => {
       expect(alertSpy).toHaveBeenCalledWith('Task is still running.');
     });
     expect(screen.queryByTestId('terminal-tab-task-alpha')).not.toBeInTheDocument();
+  });
+
+  it('seeds xterm with the session output snapshot before live output flows', async () => {
+    const snapshot = 'banner line\r\n$ ';
+    (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      opened: true,
+      session: {
+        sessionId: 'session-alpha-replay',
+        taskId: 'task-alpha',
+        status: 'running',
+        mode: 'spawn',
+        attached: false,
+        createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+        outputSnapshot: snapshot,
+      },
+    });
+
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-pane-task-alpha')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(xtermMocks.write).toHaveBeenCalledWith(snapshot);
+    });
+  });
+
+  it('does not duplicate the snapshot replay on parent re-renders of the same session', async () => {
+    const snapshot = 'replay-once\r\n';
+    (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      opened: true,
+      session: {
+        sessionId: 'session-alpha-once',
+        taskId: 'task-alpha',
+        status: 'running',
+        mode: 'spawn',
+        attached: false,
+        createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+        outputSnapshot: snapshot,
+      },
+    });
+
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+    await waitFor(() => {
+      expect(xtermMocks.write).toHaveBeenCalledWith(snapshot);
+    });
+
+    // Force a parent re-render that does not change the session id. The
+    // exit event keeps the same sessionId but produces a new descriptor
+    // object — the pane must not replay the snapshot again.
+    act(() => mock.setTasks([taskAlpha, taskBeta], workflows));
+
+    const snapshotWrites = xtermMocks.write.mock.calls.filter(([data]) => data === snapshot);
+    expect(snapshotWrites).toHaveLength(1);
+  });
+
+  it('skips snapshot replay when the session descriptor has no outputSnapshot', async () => {
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-pane-task-alpha')).toBeInTheDocument();
+    });
+    expect(xtermMocks.write).not.toHaveBeenCalled();
   });
 
   it('opens the drawer when the context-menu Open Terminal action is used', async () => {
