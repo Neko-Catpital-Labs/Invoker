@@ -483,6 +483,98 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'review-ready-workflow-pr-sidebar');
   });
 
+  test('workflow-task-status-color-parity — workflow chips and task nodes share canonical palette', async ({ page }) => {
+    const REVIEW_PARITY_PLAN = {
+      name: 'Parity review-ready workflow',
+      repoUrl: E2E_REPO_URL,
+      onFinish: 'pull_request' as const,
+      mergeMode: 'external_review',
+      tasks: [
+        { id: 'parity-review-task', description: 'Review-ready parity task', command: 'echo review', dependencies: [] as string[] },
+      ],
+    };
+    const APPROVAL_PARITY_PLAN = {
+      name: 'Parity awaiting-approval workflow',
+      repoUrl: E2E_REPO_URL,
+      onFinish: 'pull_request' as const,
+      mergeMode: 'external_review',
+      tasks: [
+        { id: 'parity-approval-task', description: 'Awaiting-approval parity task', command: 'echo approval', dependencies: [] as string[] },
+      ],
+    };
+    const FAILED_PARITY_PLAN = {
+      name: 'Parity failed workflow',
+      repoUrl: E2E_REPO_URL,
+      onFinish: 'none' as const,
+      tasks: [
+        { id: 'parity-failed-task', description: 'Failed parity task', command: 'echo failed', dependencies: [] as string[] },
+      ],
+    };
+    const RUNNING_PARITY_PLAN = {
+      name: 'Parity running workflow',
+      repoUrl: E2E_REPO_URL,
+      onFinish: 'none' as const,
+      tasks: [
+        { id: 'parity-running-task', description: 'Running parity task', command: 'echo running', dependencies: [] as string[] },
+      ],
+    };
+
+    const reviewWorkflowId = await loadPlanAndSelectWorkflow(page, REVIEW_PARITY_PLAN);
+    const approvalWorkflowId = await loadPlanAndSelectWorkflow(page, APPROVAL_PARITY_PLAN);
+    const failedWorkflowId = await loadPlanAndSelectWorkflow(page, FAILED_PARITY_PLAN);
+    const runningWorkflowId = await loadPlanAndSelectWorkflow(page, RUNNING_PARITY_PLAN);
+
+    const now = new Date();
+    const earlier = new Date(Date.now() - 5000);
+
+    await injectTaskStates(page, [
+      {
+        taskId: `${reviewWorkflowId}/parity-review-task`,
+        changes: { status: 'completed', execution: { startedAt: earlier, completedAt: now } },
+      },
+      {
+        taskId: `__merge__${reviewWorkflowId}`,
+        changes: { status: 'review_ready', execution: { startedAt: earlier } },
+      },
+      {
+        taskId: `${approvalWorkflowId}/parity-approval-task`,
+        changes: { status: 'completed', execution: { startedAt: earlier, completedAt: now } },
+      },
+      {
+        taskId: `__merge__${approvalWorkflowId}`,
+        changes: { status: 'awaiting_approval', execution: { startedAt: earlier } },
+      },
+      {
+        taskId: `${failedWorkflowId}/parity-failed-task`,
+        changes: { status: 'failed', execution: { exitCode: 1, stderr: 'parity failure' } },
+      },
+      {
+        taskId: `${runningWorkflowId}/parity-running-task`,
+        changes: { status: 'running', execution: { startedAt: now } },
+      },
+    ]);
+
+    // Re-select the review-ready workflow so the mini-DAG renders alongside the workflow chips,
+    // putting workflow-level and task-level review_ready visuals side by side in one frame.
+    await workflowNode(page, reviewWorkflowId).dispatchEvent('click', { bubbles: true });
+    await expect(page.getByTestId('selected-workflow-mini-dag')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByTestId('workflow-inspector-title')).toHaveText('Parity review-ready workflow');
+
+    // Workflow-level chips render the canonical labels for each representative status.
+    // exact:true keeps the assertion from matching the workflow name (which contains the status word).
+    await expect(workflowNode(page, reviewWorkflowId).getByText('review ready', { exact: true })).toBeVisible();
+    await expect(workflowNode(page, approvalWorkflowId).getByText('awaiting approval', { exact: true })).toBeVisible();
+    await expect(workflowNode(page, failedWorkflowId).getByText('failed', { exact: true })).toBeVisible();
+    await expect(workflowNode(page, runningWorkflowId).getByText('running', { exact: true })).toBeVisible();
+
+    // Mini-DAG shows the task-level merge gate in the same review_ready state — same canonical hue
+    // as the workflow chip above proves both surfaces share the palette.
+    const miniDag = page.getByTestId('selected-workflow-mini-dag');
+    await expect(miniDag.getByText('REVIEW READY', { exact: true })).toBeVisible();
+
+    await captureScreenshot(page, 'workflow-task-status-color-parity');
+  });
+
   test('interactive-status-hues — fixing-with-ai, needs-input, awaiting-approval', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     const now = new Date();
