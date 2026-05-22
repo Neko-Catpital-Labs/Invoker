@@ -135,6 +135,27 @@ const MENU_PROOF_PLAN = {
   mergeMode: 'external_review',
 };
 
+/**
+ * Plan for the workflow/task status color parity proof.
+ *
+ * Tasks span {review_ready, completed, blocked, closed} so the workflow rollup
+ * lands on `review_ready` (none of fixing_with_ai/failed/running/awaiting_approval
+ * are present — see computeWorkflowStatusFromCounts in workflow-rollup.ts).
+ * That puts the workflow chip and the `parity-review` task on the same sky
+ * palette, with the other tasks providing contrast colors in the same view.
+ */
+const STATUS_COLOR_PARITY_PLAN = {
+  name: 'Status color parity proof',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'none' as const,
+  tasks: [
+    { id: 'parity-review', description: 'Review-ready task', command: 'echo review', dependencies: [] as string[] },
+    { id: 'parity-completed', description: 'Completed task', command: 'echo done', dependencies: [] as string[] },
+    { id: 'parity-blocked', description: 'Blocked task', command: 'echo blocked', dependencies: [] as string[] },
+    { id: 'parity-closed', description: 'Closed task', command: 'echo closed', dependencies: [] as string[] },
+  ],
+};
+
 const SSH_TERMINAL_RESUME_PLAN = {
   name: 'SSH Terminal Resume Visual Proof',
   repoUrl: E2E_REPO_URL,
@@ -1256,5 +1277,70 @@ test.describe('Visual proof capture', () => {
 
     await captureScreenshot(page, 'completed-ssh-terminal-resume');
     await assertPageScreenshot(page, 'completed-ssh-terminal-resume');
+  });
+
+  test('workflow-task-status-color-parity — workflow chip and task nodes share the canonical palette', async ({ page }) => {
+    const workflowId = await loadPlanAndSelectWorkflow(page, STATUS_COLOR_PARITY_PLAN);
+    const earlier = new Date(Date.now() - 5000);
+    const now = new Date();
+
+    await injectTaskStates(page, [
+      {
+        taskId: 'parity-review',
+        changes: {
+          status: 'review_ready',
+          execution: {
+            startedAt: earlier,
+            reviewUrl: 'https://github.com/Neko-Catpital-Labs/Invoker/pull/999',
+          },
+        },
+      },
+      {
+        taskId: 'parity-completed',
+        changes: {
+          status: 'completed',
+          execution: { startedAt: earlier, completedAt: now },
+        },
+      },
+      {
+        taskId: 'parity-blocked',
+        changes: { status: 'blocked', execution: { startedAt: earlier } },
+      },
+      {
+        taskId: 'parity-closed',
+        changes: {
+          status: 'closed',
+          execution: {
+            startedAt: earlier,
+            completedAt: now,
+            reviewStatus: 'Closed without merge',
+            reviewUrl: 'https://github.com/Neko-Catpital-Labs/Invoker/pull/998',
+          },
+        },
+      },
+    ]);
+
+    // Workflow chip rolls up to review_ready (no failed/running/awaiting_approval
+    // tasks present), so the chip and the parity-review task render with the
+    // canonical sky palette in the same screenshot — that's the parity proof.
+    const chip = workflowNode(page, workflowId);
+    await expect(chip).toBeVisible();
+    await expect(chip).toContainText('review ready');
+
+    const miniDag = page.getByTestId('selected-workflow-mini-dag');
+    await expect(
+      miniDag.locator('.react-flow__node[data-testid$="parity-review"]').getByText('REVIEW_READY'),
+    ).toBeVisible();
+    await expect(
+      miniDag.locator('.react-flow__node[data-testid$="parity-completed"]').getByText('COMPLETED'),
+    ).toBeVisible();
+    await expect(
+      miniDag.locator('.react-flow__node[data-testid$="parity-blocked"]').getByText('BLOCKED'),
+    ).toBeVisible();
+    await expect(
+      miniDag.locator('.react-flow__node[data-testid$="parity-closed"]').getByText('CLOSED'),
+    ).toBeVisible();
+
+    await captureScreenshot(page, 'workflow-task-status-color-parity');
   });
 });
