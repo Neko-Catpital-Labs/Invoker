@@ -226,6 +226,33 @@ export interface WorkflowMutationLease {
   leaseExpiresAt: string;
 }
 
+export type TaskLaunchDispatchState =
+  | 'enqueued'
+  | 'leased'
+  | 'acknowledged'
+  | 'completed'
+  | 'abandoned';
+
+export type TaskLaunchDispatchPriority = 'high' | 'normal' | 'low';
+
+export interface TaskLaunchDispatch {
+  id: number;
+  taskId: string;
+  attemptId: string;
+  workflowId: string;
+  state: TaskLaunchDispatchState;
+  priority: TaskLaunchDispatchPriority;
+  dispatchOwner?: string;
+  enqueuedAt: string;
+  leasedAt?: string;
+  acknowledgedAt?: string;
+  completedAt?: string;
+  fencedUntil?: string;
+  attemptsCount: number;
+  lastError?: string;
+  generation: number;
+}
+
 export class SQLiteAdapter implements PersistenceAdapter {
   private db: NativeDatabaseCompat;
   private nativeDb: DatabaseSync;
@@ -2843,6 +2870,191 @@ export class SQLiteAdapter implements PersistenceAdapter {
       leaseExpiresAt: String(row.lease_expires_at),
       metadata: row.metadata_json ? JSON.parse(String(row.metadata_json)) : undefined,
     }));
+  }
+
+  enqueueLaunchDispatch(input: {
+    taskId: string;
+    attemptId: string;
+    workflowId: string;
+    priority?: TaskLaunchDispatchPriority;
+    generation: number;
+  }): TaskLaunchDispatch {
+    const priority: TaskLaunchDispatchPriority = input.priority ?? 'normal';
+    return this.runTransaction(() => {
+      const existing = this.queryOne(
+        `SELECT * FROM task_launch_dispatch
+           WHERE attempt_id = ?
+             AND state IN ('enqueued', 'leased', 'acknowledged')
+           LIMIT 1`,
+        [input.attemptId],
+      );
+      if (existing) {
+        return this.rowToTaskLaunchDispatch(existing);
+      }
+      this.execRun(
+        `INSERT INTO task_launch_dispatch (
+          task_id, attempt_id, workflow_id, state, priority, generation
+        ) VALUES (?, ?, ?, 'enqueued', ?, ?)`,
+        [input.taskId, input.attemptId, input.workflowId, priority, input.generation],
+      );
+      const inserted = this.queryOne(
+        `SELECT * FROM task_launch_dispatch
+           WHERE attempt_id = ?
+             AND state IN ('enqueued', 'leased', 'acknowledged')
+           LIMIT 1`,
+        [input.attemptId],
+      );
+      if (!inserted) {
+        throw new Error('Failed to read back inserted task_launch_dispatch row');
+      }
+      return this.rowToTaskLaunchDispatch(inserted);
+    });
+  }
+
+  loadLaunchDispatchById(id: number): TaskLaunchDispatch | undefined {
+    const row = this.queryOne(
+      'SELECT * FROM task_launch_dispatch WHERE id = ?',
+      [id],
+    );
+    return row ? this.rowToTaskLaunchDispatch(row) : undefined;
+  }
+
+  loadLaunchDispatchByAttempt(attemptId: string): TaskLaunchDispatch | undefined {
+    const row = this.queryOne(
+      `SELECT * FROM task_launch_dispatch
+         WHERE attempt_id = ?
+           AND state IN ('enqueued', 'leased', 'acknowledged')
+         ORDER BY id DESC
+         LIMIT 1`,
+      [attemptId],
+    );
+    return row ? this.rowToTaskLaunchDispatch(row) : undefined;
+  }
+
+  listLaunchDispatchesByState(
+    states: readonly TaskLaunchDispatchState[],
+  ): TaskLaunchDispatch[] {
+    if (states.length === 0) return [];
+    const placeholders = states.map(() => '?').join(', ');
+    const rows = this.queryAll(
+      `SELECT * FROM task_launch_dispatch
+         WHERE state IN (${placeholders})
+         ORDER BY id ASC`,
+      states as unknown as unknown[],
+    );
+    return rows.map((row) => this.rowToTaskLaunchDispatch(row));
+  }
+
+  claimLaunchDispatchAtomic(_options: {
+    ownerId: string;
+    maxConcurrency: number;
+    nowIso?: string;
+  }): TaskLaunchDispatch | undefined {
+    throw new Error('CB.1 not implemented');
+  }
+
+  markLaunchDispatchAcknowledged(
+    id: number,
+    runnerId: string,
+    nowIso?: string,
+  ): boolean {
+    const now = nowIso ?? new Date().toISOString();
+    const fencedUntil = new Date(
+      new Date(now).getTime() + 30_000,
+    ).toISOString();
+    this.execRun(
+      `UPDATE task_launch_dispatch
+         SET state = 'acknowledged',
+             acknowledged_at = ?,
+             dispatch_owner = ?,
+             fenced_until = ?
+       WHERE id = ?
+         AND state = 'leased'`,
+      [now, runnerId, fencedUntil, id],
+    );
+    return (this.db.getRowsModified?.() ?? 0) > 0;
+  }
+
+  markLaunchDispatchCompleted(id: number, nowIso?: string): boolean {
+    const now = nowIso ?? new Date().toISOString();
+    this.execRun(
+      `UPDATE task_launch_dispatch
+         SET state = 'completed',
+             completed_at = ?
+       WHERE id = ?
+         AND state NOT IN ('completed', 'abandoned')`,
+      [now, id],
+    );
+    return (this.db.getRowsModified?.() ?? 0) > 0;
+  }
+
+  markLaunchDispatchFailed(
+    id: number,
+    errorMessage: string,
+    _nowIso?: string,
+  ): boolean {
+    this.execRun(
+      `UPDATE task_launch_dispatch
+         SET state = 'enqueued',
+             last_error = ?,
+             dispatch_owner = NULL,
+             fenced_until = NULL
+       WHERE id = ?
+         AND state NOT IN ('completed', 'abandoned')`,
+      [errorMessage, id],
+    );
+    return (this.db.getRowsModified?.() ?? 0) > 0;
+  }
+
+  reapExpiredLaunchDispatchLeases(nowIso?: string): TaskLaunchDispatch[] {
+    const now = nowIso ?? new Date().toISOString();
+    return this.runTransaction(() => {
+      const expired = this.queryAll(
+        `SELECT * FROM task_launch_dispatch
+           WHERE state = 'leased'
+             AND fenced_until IS NOT NULL
+             AND fenced_until < ?`,
+        [now],
+      );
+      if (expired.length === 0) return [];
+      this.execRun(
+        `UPDATE task_launch_dispatch
+           SET state = 'enqueued',
+               dispatch_owner = NULL,
+               fenced_until = NULL
+         WHERE state = 'leased'
+           AND fenced_until IS NOT NULL
+           AND fenced_until < ?`,
+        [now],
+      );
+      return expired.map((row) => {
+        const reset = { ...row, state: 'enqueued', dispatch_owner: null, fenced_until: null };
+        return this.rowToTaskLaunchDispatch(reset);
+      });
+    });
+  }
+
+  private rowToTaskLaunchDispatch(row: Record<string, unknown>): TaskLaunchDispatch {
+    const priorityRaw = String(row.priority ?? 'normal');
+    const priority: TaskLaunchDispatchPriority =
+      priorityRaw === 'high' || priorityRaw === 'low' ? priorityRaw : 'normal';
+    return {
+      id: Number(row.id),
+      taskId: String(row.task_id),
+      attemptId: String(row.attempt_id),
+      workflowId: String(row.workflow_id),
+      state: String(row.state ?? 'enqueued') as TaskLaunchDispatchState,
+      priority,
+      dispatchOwner: row.dispatch_owner ? String(row.dispatch_owner) : undefined,
+      enqueuedAt: String(row.enqueued_at),
+      leasedAt: row.leased_at ? String(row.leased_at) : undefined,
+      acknowledgedAt: row.acknowledged_at ? String(row.acknowledged_at) : undefined,
+      completedAt: row.completed_at ? String(row.completed_at) : undefined,
+      fencedUntil: row.fenced_until ? String(row.fenced_until) : undefined,
+      attemptsCount: Number(row.attempts_count ?? 0),
+      lastError: row.last_error ? String(row.last_error) : undefined,
+      generation: Number(row.generation ?? 0),
+    };
   }
 
   listWorkflowMutationLeases(): WorkflowMutationLease[] {

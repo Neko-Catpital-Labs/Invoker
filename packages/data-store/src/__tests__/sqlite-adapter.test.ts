@@ -229,6 +229,212 @@ describe('SQLiteAdapter', () => {
     });
   });
 
+  describe('task_launch_dispatch outbox', () => {
+    function setupWorkflowAndTask(workflowId = 'wf-launch', taskId = 'wf-launch/t1'): void {
+      adapter.saveWorkflow({ ...testWorkflow, id: workflowId });
+      adapter.saveTask(workflowId, makeTask(taskId, { config: { workflowId } }));
+    }
+
+    it('round-trips enqueueLaunchDispatch + load by id and attempt', () => {
+      setupWorkflowAndTask();
+      const inserted = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-launch/t1',
+        attemptId: 'attempt-1',
+        workflowId: 'wf-launch',
+        generation: 0,
+      });
+
+      expect(inserted.id).toBeGreaterThan(0);
+      expect(inserted.state).toBe('enqueued');
+      expect(inserted.priority).toBe('normal');
+      expect(inserted.attemptsCount).toBe(0);
+
+      const byId = adapter.loadLaunchDispatchById(inserted.id);
+      expect(byId).toMatchObject({
+        id: inserted.id,
+        attemptId: 'attempt-1',
+        taskId: 'wf-launch/t1',
+        workflowId: 'wf-launch',
+        state: 'enqueued',
+      });
+
+      const byAttempt = adapter.loadLaunchDispatchByAttempt('attempt-1');
+      expect(byAttempt?.id).toBe(inserted.id);
+    });
+
+    it('returns existing row instead of creating a duplicate active dispatch for the same attempt', () => {
+      setupWorkflowAndTask();
+      const first = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-launch/t1',
+        attemptId: 'attempt-dup',
+        workflowId: 'wf-launch',
+        priority: 'high',
+        generation: 0,
+      });
+      const second = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-launch/t1',
+        attemptId: 'attempt-dup',
+        workflowId: 'wf-launch',
+        priority: 'low',
+        generation: 0,
+      });
+
+      expect(second.id).toBe(first.id);
+      expect(second.priority).toBe('high');
+      expect(
+        adapter.listLaunchDispatchesByState(['enqueued', 'leased', 'acknowledged']),
+      ).toHaveLength(1);
+    });
+
+    it('filters listLaunchDispatchesByState by the requested states', () => {
+      setupWorkflowAndTask();
+      const a = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-launch/t1',
+        attemptId: 'attempt-a',
+        workflowId: 'wf-launch',
+        generation: 0,
+      });
+      const b = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-launch/t1',
+        attemptId: 'attempt-b',
+        workflowId: 'wf-launch',
+        generation: 0,
+      });
+      adapter.enqueueLaunchDispatch({
+        taskId: 'wf-launch/t1',
+        attemptId: 'attempt-c',
+        workflowId: 'wf-launch',
+        generation: 0,
+      });
+      adapter.markLaunchDispatchCompleted(a.id);
+      (adapter as any).db.run(
+        `UPDATE task_launch_dispatch SET state = 'leased', fenced_until = datetime('now', '+30 seconds') WHERE id = ?`,
+        [b.id],
+      );
+
+      const enqueuedOnly = adapter
+        .listLaunchDispatchesByState(['enqueued'])
+        .map((row) => row.attemptId);
+      expect(enqueuedOnly).toEqual(['attempt-c']);
+      const leasedOnly = adapter
+        .listLaunchDispatchesByState(['leased'])
+        .map((row) => row.attemptId);
+      expect(leasedOnly).toEqual(['attempt-b']);
+      const completedOnly = adapter
+        .listLaunchDispatchesByState(['completed'])
+        .map((row) => row.attemptId);
+      expect(completedOnly).toEqual(['attempt-a']);
+    });
+
+    it('markLaunchDispatchAcknowledged only succeeds for leased rows', () => {
+      setupWorkflowAndTask();
+      const row = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-launch/t1',
+        attemptId: 'attempt-ack',
+        workflowId: 'wf-launch',
+        generation: 0,
+      });
+
+      expect(adapter.markLaunchDispatchAcknowledged(row.id, 'runner-1')).toBe(false);
+
+      (adapter as any).db.run(
+        `UPDATE task_launch_dispatch SET state = 'leased', fenced_until = datetime('now', '+30 seconds') WHERE id = ?`,
+        [row.id],
+      );
+
+      expect(adapter.markLaunchDispatchAcknowledged(row.id, 'runner-1')).toBe(true);
+      const after = adapter.loadLaunchDispatchById(row.id);
+      expect(after?.state).toBe('acknowledged');
+      expect(after?.dispatchOwner).toBe('runner-1');
+      expect(after?.acknowledgedAt).toBeDefined();
+      expect(after?.fencedUntil).toBeDefined();
+
+      expect(adapter.markLaunchDispatchAcknowledged(row.id, 'runner-1')).toBe(false);
+    });
+
+    it('markLaunchDispatchCompleted transitions to completed and rejects already-terminal rows', () => {
+      setupWorkflowAndTask();
+      const row = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-launch/t1',
+        attemptId: 'attempt-complete',
+        workflowId: 'wf-launch',
+        generation: 0,
+      });
+
+      expect(adapter.markLaunchDispatchCompleted(row.id)).toBe(true);
+      const after = adapter.loadLaunchDispatchById(row.id);
+      expect(after?.state).toBe('completed');
+      expect(after?.completedAt).toBeDefined();
+
+      expect(adapter.markLaunchDispatchCompleted(row.id)).toBe(false);
+    });
+
+    it('markLaunchDispatchFailed re-enqueues the row and clears the owner / fence', () => {
+      setupWorkflowAndTask();
+      const row = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-launch/t1',
+        attemptId: 'attempt-failed',
+        workflowId: 'wf-launch',
+        generation: 0,
+      });
+      (adapter as any).db.run(
+        `UPDATE task_launch_dispatch SET state = 'leased', dispatch_owner = 'runner-x', fenced_until = datetime('now', '+30 seconds') WHERE id = ?`,
+        [row.id],
+      );
+
+      expect(adapter.markLaunchDispatchFailed(row.id, 'boom')).toBe(true);
+      const after = adapter.loadLaunchDispatchById(row.id);
+      expect(after?.state).toBe('enqueued');
+      expect(after?.lastError).toBe('boom');
+      expect(after?.dispatchOwner).toBeUndefined();
+      expect(after?.fencedUntil).toBeUndefined();
+
+      adapter.markLaunchDispatchCompleted(row.id);
+      expect(adapter.markLaunchDispatchFailed(row.id, 'too late')).toBe(false);
+    });
+
+    it('reapExpiredLaunchDispatchLeases resets leased rows whose fence has passed', () => {
+      setupWorkflowAndTask();
+      const expired = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-launch/t1',
+        attemptId: 'attempt-expired',
+        workflowId: 'wf-launch',
+        generation: 0,
+      });
+      const live = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-launch/t1',
+        attemptId: 'attempt-live',
+        workflowId: 'wf-launch',
+        generation: 0,
+      });
+      const now = new Date();
+      const pastIso = new Date(now.getTime() - 60_000).toISOString();
+      const futureIso = new Date(now.getTime() + 60_000).toISOString();
+      (adapter as any).db.run(
+        `UPDATE task_launch_dispatch SET state = 'leased', dispatch_owner = 'runner-x', fenced_until = ? WHERE id = ?`,
+        [pastIso, expired.id],
+      );
+      (adapter as any).db.run(
+        `UPDATE task_launch_dispatch SET state = 'leased', dispatch_owner = 'runner-y', fenced_until = ? WHERE id = ?`,
+        [futureIso, live.id],
+      );
+
+      const reaped = adapter.reapExpiredLaunchDispatchLeases(now.toISOString());
+      expect(reaped.map((row) => row.attemptId)).toEqual(['attempt-expired']);
+      const expiredAfter = adapter.loadLaunchDispatchById(expired.id);
+      expect(expiredAfter?.state).toBe('enqueued');
+      expect(expiredAfter?.dispatchOwner).toBeUndefined();
+      const liveAfter = adapter.loadLaunchDispatchById(live.id);
+      expect(liveAfter?.state).toBe('leased');
+    });
+
+    it('claimLaunchDispatchAtomic is a CB.1 placeholder that throws', () => {
+      expect(() =>
+        adapter.claimLaunchDispatchAtomic({ ownerId: 'runner-x', maxConcurrency: 1 }),
+      ).toThrow('CB.1 not implemented');
+    });
+  });
+
   describe('updateTask', () => {
     it('persists partial changes', () => {
       adapter.saveWorkflow(testWorkflow);
