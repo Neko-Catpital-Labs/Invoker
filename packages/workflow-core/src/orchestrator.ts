@@ -4809,6 +4809,68 @@ export class Orchestrator {
     return descendants;
   }
 
+  /**
+   * Cascade an upstream invalidation to every transitive downstream
+   * workflow. For each downstream workflow:
+   *   1. Cancel any in-flight task (`cancelActiveBeforeInvalidation`).
+   *   2. Reset every task in the workflow to `pending` (with bumped
+   *      execution generation to supersede prior attempts) using the
+   *      same shape as `detachWorkflowInternal`'s reset payload.
+   *
+   * The downstream's existing external-dependency gate
+   * (`getExternalDependencyBlocker`) re-evaluates at scheduling time
+   * and holds the now-pending tasks until the upstream re-completes,
+   * so this method does not start anything itself.
+   *
+   * Wired by `applyInvalidation` (via the `cascadeDownstream` dep on
+   * `InvalidationDeps`) so every invalidating action — `recreateTask`,
+   * `retryTask`, `recreateWorkflow`, `retryWorkflow`,
+   * `recreateWorkflowFromFreshBase`, `workflowFork` — propagates.
+   * Non-invalidating actions (`scheduleOnly`, `fixApprove`,
+   * `fixReject`, `none`) skip the cascade per `MUTATION_POLICIES`.
+   */
+  cascadeInvalidationToDownstream(workflowId: string): TaskState[] {
+    this.refreshFromDb();
+    const downstreamWorkflowIds = this.collectDownstreamWorkflowIds(workflowId);
+    if (downstreamWorkflowIds.length === 0) return [];
+
+    this.logger.info('[orchestrator] cascadeInvalidationToDownstream', {
+      upstreamWorkflowId: workflowId,
+      downstreamCount: downstreamWorkflowIds.length,
+      downstreamWorkflowIds,
+    });
+
+    for (const dwfId of downstreamWorkflowIds) {
+      this.cancelActiveBeforeInvalidation('workflow', dwfId);
+    }
+
+    const affectedTaskIds = downstreamWorkflowIds.flatMap((dwfId) =>
+      this.stateMachine
+        .getAllTasks()
+        .filter((task) => task.config.workflowId === dwfId)
+        .map((task) => task.id),
+    );
+    if (affectedTaskIds.length === 0) return [];
+
+    const forceResetIds = new Set(affectedTaskIds);
+    const { affectedIds } = this.resetSubgraphToPending(
+      affectedTaskIds,
+      Orchestrator.DETACH_RESET_CHANGES,
+      { forceResetIds },
+    );
+
+    for (const taskId of affectedIds) {
+      this.persistence.logEvent?.(taskId, 'task.invalidated_by_upstream', {
+        upstreamWorkflowId: workflowId,
+        downstreamWorkflowIds,
+      });
+    }
+
+    return affectedIds
+      .map((id) => this.stateGetTask(id))
+      .filter((t): t is TaskState => !!t);
+  }
+
   private detachWorkflowInternal(
     workflowId: string,
     upstreamWorkflowId: string,

@@ -15,6 +15,7 @@ type MockedDeps = InvalidationDeps & {
   recreateWorkflowFromFreshBase?: ReturnType<typeof vi.fn>;
   workflowFork?: ReturnType<typeof vi.fn>;
   scheduleOnly?: ReturnType<typeof vi.fn>;
+  cascadeDownstream?: ReturnType<typeof vi.fn>;
 };
 
 function makeDeps(overrides: Partial<MockedDeps> = {}): MockedDeps {
@@ -372,5 +373,142 @@ describe("applyInvalidation: action='scheduleOnly' (Step 15)", () => {
     expect(deps.recreateWorkflow).not.toHaveBeenCalled();
     expect(recreateWorkflowFromFreshBase).not.toHaveBeenCalled();
     expect(workflowFork).not.toHaveBeenCalled();
+  });
+});
+
+// Cross-workflow cascade matrix (Phase 3.2 of "Cascade Upstream
+// Invalidations to Downstream Workflows"). Every invalidating action
+// MUST invoke `deps.cascadeDownstream(scope, id)` AFTER the lifecycle
+// dep returns, and AFTER `cancelInFlight`. Non-invalidating actions
+// (`'none'`, `'scheduleOnly'`, `'fixApprove'`, `'fixReject'`) MUST NOT
+// invoke the cascade.
+describe('applyInvalidation: cascadeDownstream (cross-workflow cascade)', () => {
+  it('calls cascadeDownstream after retryTask', async () => {
+    const cascadeDownstream = vi.fn(async () => []);
+    const deps = makeDeps({ cascadeDownstream });
+    await applyInvalidation('task', 'retryTask', 'task-a', deps);
+    expect(cascadeDownstream).toHaveBeenCalledWith('task', 'task-a');
+    expect(deps.retryTask.mock.invocationCallOrder[0]).toBeLessThan(
+      cascadeDownstream.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('calls cascadeDownstream after recreateTask', async () => {
+    const cascadeDownstream = vi.fn(async () => []);
+    const deps = makeDeps({ cascadeDownstream });
+    await applyInvalidation('task', 'recreateTask', 'task-a', deps);
+    expect(cascadeDownstream).toHaveBeenCalledWith('task', 'task-a');
+    expect(deps.recreateTask.mock.invocationCallOrder[0]).toBeLessThan(
+      cascadeDownstream.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('calls cascadeDownstream after retryWorkflow', async () => {
+    const cascadeDownstream = vi.fn(async () => []);
+    const deps = makeDeps({ cascadeDownstream });
+    await applyInvalidation('workflow', 'retryWorkflow', 'wf-1', deps);
+    expect(cascadeDownstream).toHaveBeenCalledWith('workflow', 'wf-1');
+    expect(deps.retryWorkflow.mock.invocationCallOrder[0]).toBeLessThan(
+      cascadeDownstream.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('calls cascadeDownstream after recreateWorkflow', async () => {
+    const cascadeDownstream = vi.fn(async () => []);
+    const deps = makeDeps({ cascadeDownstream });
+    await applyInvalidation('workflow', 'recreateWorkflow', 'wf-1', deps);
+    expect(cascadeDownstream).toHaveBeenCalledWith('workflow', 'wf-1');
+    expect(deps.recreateWorkflow.mock.invocationCallOrder[0]).toBeLessThan(
+      cascadeDownstream.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('calls cascadeDownstream after recreateWorkflowFromFreshBase', async () => {
+    const cascadeDownstream = vi.fn(async () => []);
+    const recreateWorkflowFromFreshBase = vi.fn(async () => []);
+    const deps = makeDeps({ cascadeDownstream, recreateWorkflowFromFreshBase });
+    await applyInvalidation('workflow', 'recreateWorkflowFromFreshBase', 'wf-1', deps);
+    expect(cascadeDownstream).toHaveBeenCalledWith('workflow', 'wf-1');
+    expect(recreateWorkflowFromFreshBase.mock.invocationCallOrder[0]).toBeLessThan(
+      cascadeDownstream.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('calls cascadeDownstream after workflowFork', async () => {
+    const cascadeDownstream = vi.fn(async () => []);
+    const workflowFork = vi.fn(async () => []);
+    const deps = makeDeps({ cascadeDownstream, workflowFork });
+    await applyInvalidation('workflow', 'workflowFork', 'wf-1', deps);
+    expect(cascadeDownstream).toHaveBeenCalledWith('workflow', 'wf-1');
+    expect(workflowFork.mock.invocationCallOrder[0]).toBeLessThan(
+      cascadeDownstream.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("does NOT call cascadeDownstream for action 'none'", async () => {
+    const cascadeDownstream = vi.fn(async () => []);
+    const deps = makeDeps({ cascadeDownstream });
+    await applyInvalidation('none', 'none', 'task-a', deps);
+    expect(cascadeDownstream).not.toHaveBeenCalled();
+  });
+
+  it("does NOT call cascadeDownstream for action 'scheduleOnly'", async () => {
+    const cascadeDownstream = vi.fn(async () => []);
+    const scheduleOnly = vi.fn(async () => []);
+    const deps = makeDeps({ cascadeDownstream, scheduleOnly });
+    await applyInvalidation('task', 'scheduleOnly', 'task-a', deps);
+    expect(cascadeDownstream).not.toHaveBeenCalled();
+  });
+
+  it("does NOT call cascadeDownstream for action 'fixApprove'", async () => {
+    const cascadeDownstream = vi.fn(async () => []);
+    const fixApprove = vi.fn(async () => []);
+    const deps = makeDeps({ cascadeDownstream, fixApprove });
+    await applyInvalidation('task', 'fixApprove', 'task-a', deps);
+    expect(cascadeDownstream).not.toHaveBeenCalled();
+  });
+
+  it("does NOT call cascadeDownstream for action 'fixReject'", async () => {
+    const cascadeDownstream = vi.fn(async () => []);
+    const fixReject = vi.fn(async () => []);
+    const deps = makeDeps({ cascadeDownstream, fixReject });
+    await applyInvalidation('task', 'fixReject', 'task-a', deps);
+    expect(cascadeDownstream).not.toHaveBeenCalled();
+  });
+
+  it('cascadeDownstream is optional — missing dep does not break invalidating actions', async () => {
+    const deps = makeDeps();
+    expect(deps.cascadeDownstream).toBeUndefined();
+    await expect(
+      applyInvalidation('workflow', 'recreateWorkflow', 'wf-1', deps),
+    ).resolves.toBeDefined();
+    expect(deps.recreateWorkflow).toHaveBeenCalledWith('wf-1');
+  });
+
+  it('cascadeDownstream is awaited (sequencing lock-in)', async () => {
+    const events: string[] = [];
+    const cascadeDownstream = vi.fn(async () => {
+      events.push('cascade-start');
+      await new Promise((r) => setTimeout(r, 1));
+      events.push('cascade-end');
+      return [];
+    });
+    const recreateWorkflow = vi.fn(async () => {
+      events.push('recreate');
+      return [];
+    });
+    const deps = makeDeps({ cascadeDownstream, recreateWorkflow });
+    await applyInvalidation('workflow', 'recreateWorkflow', 'wf-1', deps);
+    expect(events).toEqual(['recreate', 'cascade-start', 'cascade-end']);
+  });
+
+  it('returns the lifecycle dep result, not the cascade result', async () => {
+    const lifecycleResult = [{ id: 'task-a' } as never];
+    const cascadeResult = [{ id: 'cascade-a' } as never];
+    const cascadeDownstream = vi.fn(async () => cascadeResult);
+    const recreateWorkflow = vi.fn(async () => lifecycleResult);
+    const deps = makeDeps({ cascadeDownstream, recreateWorkflow });
+    const out = await applyInvalidation('workflow', 'recreateWorkflow', 'wf-1', deps);
+    expect(out).toBe(lifecycleResult);
   });
 });
