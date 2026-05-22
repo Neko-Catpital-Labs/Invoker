@@ -500,6 +500,7 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     defaultPoolId: invokerConfig.defaultPoolId,
     availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
     deferRunningUntilLaunch: true,
+    launchOutboxMode: invokerConfig.launchOutboxMode,
   });
   commandService = new CommandService(orchestrator);
 
@@ -3090,6 +3091,7 @@ function createEmbeddedTerminalBackendFromConfig(
         defaultPoolId: invokerConfig.defaultPoolId,
         availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
         deferRunningUntilLaunch: true,
+        launchOutboxMode: invokerConfig.launchOutboxMode,
       });
       commandService = new CommandService(orchestrator);
       rebuildTaskRunner();
