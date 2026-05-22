@@ -387,6 +387,114 @@ describe('LaunchDispatcher', () => {
       });
     });
 
+    it('CD.2: abandonStuckLeases releases execution-resource leases held by the abandoned task (Issue 14)', () => {
+      seed();
+      const row = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-r/t1',
+        attemptId: 'attempt-ssh-abandon',
+        workflowId: 'wf-r',
+        generation: 0,
+      });
+      const pastIso = new Date(Date.now() - 60_000).toISOString();
+      (adapter as any).db.run(
+        `UPDATE task_launch_dispatch
+           SET state = 'acknowledged', dispatch_owner = 'owner-x',
+               fenced_until = ?, attempts_count = 2, last_error = 'ssh-selection stuck'
+         WHERE id = ?`,
+        [pastIso, row.id],
+      );
+
+      // Simulate the SSH pool taking a slot lease on behalf of this task
+      // during executor selection — the lease normally survives the
+      // launch and is released by TaskRunner.onComplete, but a launch
+      // that never completes leaves it behind. We acquire two leases
+      // here to confirm the dispatcher releases ALL of them, not just
+      // the first.
+      const acquired1 = adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh-pool/host-A',
+        resourceType: 'ssh-pool-slot',
+        holderId: 'launch-holder-1',
+        taskId: 'wf-r/t1',
+        poolId: 'ssh-pool',
+        poolMemberId: 'host-A',
+      });
+      const acquired2 = adapter.claimExecutionResourceLease({
+        resourceKey: 'worktree-pool/slot-7',
+        resourceType: 'worktree-pool-slot',
+        holderId: 'launch-holder-2',
+        taskId: 'wf-r/t1',
+        poolId: 'worktree-pool',
+        poolMemberId: 'slot-7',
+      });
+      expect(acquired1).toBe(true);
+      expect(acquired2).toBe(true);
+      // Also seed an unrelated lease for a different task to make sure
+      // the dispatcher does NOT release it.
+      const unrelated = adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh-pool/host-B',
+        resourceType: 'ssh-pool-slot',
+        holderId: 'launch-holder-3',
+        taskId: 'wf-other/tX',
+        poolId: 'ssh-pool',
+        poolMemberId: 'host-B',
+      });
+      expect(unrelated).toBe(true);
+
+      const prepare = vi.fn();
+      const { dispatcher } = dispatcherWithOrchestrator({ prepareTaskForNewAttempt: prepare });
+      expect(dispatcher.abandonStuckLeases()).toBe(1);
+
+      // The task's own leases must be gone.
+      const remaining = adapter.listExecutionResourceLeasesByTask('wf-r/t1');
+      expect(remaining).toHaveLength(0);
+      // The unrelated lease must still be present.
+      const stillThere = adapter.listExecutionResourceLeasesByTask('wf-other/tX');
+      expect(stillThere).toHaveLength(1);
+
+      // Both lease releases must have produced an audit event keyed
+      // to the abandoned dispatch row.
+      const events = adapter.getEvents('wf-r/t1');
+      const releaseEvents = events.filter(
+        (event) => event.eventType === 'task.launch_dispatch_lease_released',
+      );
+      expect(releaseEvents).toHaveLength(2);
+      const keys = releaseEvents
+        .map((event) => JSON.parse(event.payload!).resourceKey as string)
+        .sort();
+      expect(keys).toEqual(['ssh-pool/host-A', 'worktree-pool/slot-7']);
+      for (const event of releaseEvents) {
+        const payload = JSON.parse(event.payload!);
+        expect(payload.dispatchId).toBe(row.id);
+        expect(payload.reason).toBe('launch-dispatch-abandoned');
+      }
+      expect(prepare).toHaveBeenCalledWith('wf-r/t1', 'launch-dispatch-abandoned');
+    });
+
+    it('CD.2: abandonStuckLeases is a no-op for leases when no resource leases are held', () => {
+      seed();
+      const row = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-r/t1',
+        attemptId: 'attempt-no-lease',
+        workflowId: 'wf-r',
+        generation: 0,
+      });
+      const pastIso = new Date(Date.now() - 60_000).toISOString();
+      (adapter as any).db.run(
+        `UPDATE task_launch_dispatch
+           SET state = 'acknowledged', fenced_until = ?, attempts_count = 2,
+               dispatch_owner = 'owner-x'
+         WHERE id = ?`,
+        [pastIso, row.id],
+      );
+      const prepare = vi.fn();
+      const { dispatcher } = dispatcherWithOrchestrator({ prepareTaskForNewAttempt: prepare });
+      expect(dispatcher.abandonStuckLeases()).toBe(1);
+      const events = adapter.getEvents('wf-r/t1');
+      expect(
+        events.filter((event) => event.eventType === 'task.launch_dispatch_lease_released'),
+      ).toHaveLength(0);
+    });
+
     it('abandonStuckLeases ignores rows still within their fence or below max attempts', () => {
       seed();
       const futureRow = adapter.enqueueLaunchDispatch({
