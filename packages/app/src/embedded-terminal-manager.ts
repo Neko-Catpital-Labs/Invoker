@@ -103,12 +103,15 @@ interface BaseSessionState {
   createdAt: string;
   status: 'running' | 'exited';
   exitCode?: number;
+  /** Bounded recent output captured for late renderer subscribers. */
+  replayBuffer: string;
 }
 
 interface SpawnSessionState extends BaseSessionState {
   mode: 'spawn';
   backend: EmbeddedTerminalBackendName;
-  process: SpawnedTerminalProcess;
+  /** Null while backend.spawn() is still running (synchronous output/exit). */
+  process: SpawnedTerminalProcess | null;
 }
 
 interface AttachedSessionState extends BaseSessionState {
@@ -126,6 +129,18 @@ export interface EmbeddedTerminalManagerOptions {
   defaultShell?: string;
 }
 
+/** Upper bound on the replay buffer length, in characters. */
+const MAX_REPLAY_BUFFER_BYTES = 64 * 1024;
+
+function appendReplay(state: SessionState, data: string): void {
+  if (!data) return;
+  const combined = state.replayBuffer + data;
+  state.replayBuffer =
+    combined.length > MAX_REPLAY_BUFFER_BYTES
+      ? combined.slice(combined.length - MAX_REPLAY_BUFFER_BYTES)
+      : combined;
+}
+
 function describeSession(state: SessionState): TerminalSessionDescriptor {
   return {
     sessionId: state.sessionId,
@@ -138,6 +153,7 @@ function describeSession(state: SessionState): TerminalSessionDescriptor {
     mode: state.mode,
     attached: state.mode === 'attached',
     createdAt: state.createdAt,
+    outputSnapshot: state.replayBuffer.length > 0 ? state.replayBuffer : undefined,
   };
 }
 
@@ -281,6 +297,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
       cwd: opts.cwd,
       createdAt,
       status: 'running' as const,
+      replayBuffer: '',
     };
 
     let state: SessionState;
@@ -294,24 +311,41 @@ export class EmbeddedTerminalManager extends EventEmitter {
         attach: opts.attach,
         unsubscribeOutput: unsubscribe,
       };
+      this.sessions.set(sessionId, state);
+      this.targetIndex.set(targetKey, sessionId);
     } else {
+      // Register bookkeeping before spawn so a backend that emits output or
+      // exits synchronously inside spawn() can be captured without referencing
+      // an unassigned `state` closure.
+      const spawnState: SpawnSessionState = {
+        ...base,
+        mode: 'spawn',
+        backend: this.backend.name,
+        process: null,
+      };
+      state = spawnState;
+      this.sessions.set(sessionId, spawnState);
+      this.targetIndex.set(targetKey, sessionId);
+
       const process = this.backend.spawn({
         spec: opts.spec,
         cwd: opts.cwd,
         defaultShell: this.defaultShell,
         emitOutput: (data) => this.emitOutput(sessionId, opts.taskId, data),
-        emitExit: (exitCode) => this.finalizeSession(state, exitCode),
+        emitExit: (exitCode) => this.finalizeSessionById(sessionId, exitCode),
       });
-      state = {
-        ...base,
-        mode: 'spawn',
-        backend: this.backend.name,
-        process,
-      };
+      spawnState.process = process;
+      // If finalizeSession ran synchronously during spawn, the close() call
+      // there saw a null process — close the late-arriving handle here.
+      if (spawnState.status === 'exited') {
+        try {
+          process.close();
+        } catch {
+          /* already dead */
+        }
+      }
     }
 
-    this.sessions.set(sessionId, state);
-    this.targetIndex.set(targetKey, sessionId);
     return describeSession(state);
   }
 
@@ -338,6 +372,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
         return { ok: false, reason: err instanceof Error ? err.message : String(err) };
       }
     }
+    if (!state.process) return { ok: false, reason: `Session "${sessionId}" is not ready.` };
     try {
       state.process.write(data);
       return { ok: true };
@@ -353,6 +388,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
       return { ok: false, reason: `Session "${sessionId}" has already exited.` };
     }
     if (state.mode === 'attached') return { ok: true };
+    if (!state.process) return { ok: true };
     try {
       state.process.resize(cols, rows);
       return { ok: true };
@@ -374,13 +410,24 @@ export class EmbeddedTerminalManager extends EventEmitter {
     }
   }
 
+  private finalizeSessionById(sessionId: string, exitCode: number | undefined): void {
+    const state = this.sessions.get(sessionId);
+    if (state) this.finalizeSession(state, exitCode);
+  }
+
   private finalizeSession(state: SessionState, exitCode: number | undefined): void {
     if (state.status === 'exited') return;
     state.status = 'exited';
     state.exitCode = exitCode;
 
     if (state.mode === 'spawn') {
-      state.process.close();
+      // Process may be null if exit fires synchronously inside backend.spawn();
+      // openOrReuse() closes the late-arriving handle once spawn returns.
+      try {
+        state.process?.close();
+      } catch {
+        /* already dead */
+      }
     } else {
       try {
         state.unsubscribeOutput();
@@ -403,6 +450,8 @@ export class EmbeddedTerminalManager extends EventEmitter {
   }
 
   private emitOutput(sessionId: string, taskId: string, data: string): void {
+    const state = this.sessions.get(sessionId);
+    if (state) appendReplay(state, data);
     const payload: TerminalOutputEvent = { sessionId, taskId, data };
     this.emit('output', payload);
   }
