@@ -1994,6 +1994,73 @@ describe('buildInvalidationDeps', () => {
       taskExecutor.killActiveExecution.mock.invocationCallOrder[0],
     );
   });
+
+  // Cross-workflow cascade wiring: a task-scoped id resolves to its
+  // owning workflowId via `orchestrator.getTask(id)?.config.workflowId`,
+  // then delegates to `Orchestrator.cascadeInvalidationToDownstream`.
+  it('exposes cascadeDownstream that delegates to orchestrator.cascadeInvalidationToDownstream for workflow scope', async () => {
+    const cascaded = [makeRunningTask({ id: 'wf-2/leaf' })];
+    const orchestrator = {
+      ...makeBaseOrchestrator(),
+      cascadeInvalidationToDownstream: vi.fn(() => cascaded),
+      getTask: vi.fn(() => undefined),
+    };
+    const persistence = makePersistence();
+
+    const deps = buildInvalidationDeps({
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+    });
+
+    expect(deps.cascadeDownstream).toBeDefined();
+    const result = await deps.cascadeDownstream!('workflow', 'wf-1');
+
+    expect(orchestrator.cascadeInvalidationToDownstream).toHaveBeenCalledWith('wf-1');
+    expect(orchestrator.getTask).not.toHaveBeenCalled();
+    expect(result).toEqual(cascaded);
+  });
+
+  it('cascadeDownstream resolves task scope to workflowId via orchestrator.getTask', async () => {
+    const orchestrator = {
+      ...makeBaseOrchestrator(),
+      cascadeInvalidationToDownstream: vi.fn(() => []),
+      getTask: vi.fn(() => ({
+        id: 'task-a',
+        config: { workflowId: 'wf-resolved' },
+      })),
+    };
+    const persistence = makePersistence();
+
+    const deps = buildInvalidationDeps({
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+    });
+
+    await deps.cascadeDownstream!('task', 'task-a');
+
+    expect(orchestrator.getTask).toHaveBeenCalledWith('task-a');
+    expect(orchestrator.cascadeInvalidationToDownstream).toHaveBeenCalledWith('wf-resolved');
+  });
+
+  it('cascadeDownstream returns [] without calling orchestrator when task is not found', async () => {
+    const orchestrator = {
+      ...makeBaseOrchestrator(),
+      cascadeInvalidationToDownstream: vi.fn(() => []),
+      getTask: vi.fn(() => undefined),
+    };
+    const persistence = makePersistence();
+
+    const deps = buildInvalidationDeps({
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+    });
+
+    const result = await deps.cascadeDownstream!('task', 'unknown-task');
+
+    expect(orchestrator.getTask).toHaveBeenCalledWith('unknown-task');
+    expect(orchestrator.cascadeInvalidationToDownstream).not.toHaveBeenCalled();
+    expect(result).toEqual([]);
+  });
 });
 
 describe('deleteAllWorkflows', () => {
