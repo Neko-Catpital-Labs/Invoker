@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { loadConfig, resolveEmbeddedTerminalBackendConfig } from '../config.js';
+import {
+  loadConfig,
+  resolveEmbeddedTerminalBackendConfig,
+  resolveLaunchOutboxMode,
+} from '../config.js';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -24,9 +28,9 @@ vi.mock('node:os', async (importOriginal) => {
 });
 
 describe('loadConfig', () => {
-  it('returns empty config when no files exist', () => {
+  it('returns config with default launchOutboxMode when no files exist', () => {
     const config = loadConfig();
-    expect(config).toEqual({});
+    expect(config).toEqual({ launchOutboxMode: 'disabled' });
   });
 
   it('reads user-level ~/.invoker/config.json', () => {
@@ -248,5 +252,42 @@ describe('resolveEmbeddedTerminalBackendConfig', () => {
       {},
       { INVOKER_EMBEDDED_TERMINAL_BACKEND: 'external' },
     )).toThrow(/Invalid embedded terminal backend/);
+  });
+});
+
+describe('resolveLaunchOutboxMode', () => {
+  it('defaults to disabled when INVOKER_LAUNCH_OUTBOX is unset', () => {
+    expect(resolveLaunchOutboxMode({})).toBe('disabled');
+  });
+
+  it('returns observe when INVOKER_LAUNCH_OUTBOX=observe', () => {
+    expect(
+      resolveLaunchOutboxMode({ INVOKER_LAUNCH_OUTBOX: 'observe' }),
+    ).toBe('observe');
+  });
+
+  it('returns active when INVOKER_LAUNCH_OUTBOX=active', () => {
+    expect(
+      resolveLaunchOutboxMode({ INVOKER_LAUNCH_OUTBOX: 'active' }),
+    ).toBe('active');
+  });
+
+  it('falls back to disabled with a warning for unknown values', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(
+        resolveLaunchOutboxMode({ INVOKER_LAUNCH_OUTBOX: 'on' }),
+      ).toBe('disabled');
+      expect(warnSpy).toHaveBeenCalledOnce();
+      expect(warnSpy.mock.calls[0]?.[0]).toMatch(/Unknown INVOKER_LAUNCH_OUTBOX/);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('is case- and whitespace-insensitive', () => {
+    expect(
+      resolveLaunchOutboxMode({ INVOKER_LAUNCH_OUTBOX: '  Observe  ' }),
+    ).toBe('observe');
   });
 });
