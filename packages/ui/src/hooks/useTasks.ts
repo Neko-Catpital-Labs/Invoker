@@ -139,23 +139,43 @@ export function useTasks(): UseTasksResult {
   useEffect(() => {
     if (typeof window === 'undefined' || !window.invoker) return;
 
-    if (
-      !reportedStartupBootstrapRef.current &&
-      bootstrapState &&
-      ((bootstrapState.tasks?.length ?? 0) > 0 || (bootstrapState.workflows?.length ?? 0) > 0)
-    ) {
+    const bootstrapTaskCount = bootstrapState?.tasks?.length ?? 0;
+    const bootstrapWorkflowCount = bootstrapState?.workflows?.length ?? 0;
+    const bootstrapHasState = bootstrapTaskCount > 0 || bootstrapWorkflowCount > 0;
+
+    if (!reportedStartupBootstrapRef.current && bootstrapHasState) {
       reportedStartupBootstrapRef.current = true;
       void window.invoker.reportUiPerf?.('startup_bootstrap_state', {
-        taskCount: bootstrapState.tasks?.length ?? 0,
-        workflowCount: bootstrapState.workflows?.length ?? 0,
+        taskCount: bootstrapTaskCount,
+        workflowCount: bootstrapWorkflowCount,
         elapsedMs: Math.round(performance.now()),
-        processElapsedMs: bootstrapState.appStartedAtEpochMs
+        processElapsedMs: bootstrapState?.appStartedAtEpochMs
           ? Date.now() - bootstrapState.appStartedAtEpochMs
           : undefined,
       });
     }
 
-    fetchAll();
+    if (bootstrapHasState) {
+      // Bootstrap already seeded the renderer with the authoritative snapshot
+      // (preload_bootstrap_sync). Skipping the redundant non-forced getTasks
+      // avoids an extra IPC + full snapshot replace on startup. Forced refreshes
+      // and delta-triggered refreshes still call fetchAll() via refreshTasks().
+      if (!reportedStartupSnapshotRef.current) {
+        reportedStartupSnapshotRef.current = true;
+        void window.invoker.reportUiPerf?.('startup_snapshot_applied', {
+          taskCount: bootstrapTaskCount,
+          workflowCount: bootstrapWorkflowCount,
+          forceRefresh: false,
+          source: 'bootstrap',
+          elapsedMs: Math.round(performance.now()),
+          processElapsedMs: bootstrapState?.appStartedAtEpochMs
+            ? Date.now() - bootstrapState.appStartedAtEpochMs
+            : undefined,
+        });
+      }
+    } else {
+      fetchAll();
+    }
 
     deltaPipelineRef.current = createTaskDeltaPipeline({
       flushMs: 100,
