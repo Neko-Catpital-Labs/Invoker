@@ -169,6 +169,31 @@ const NOOP_LOGGER: Logger = {
   child: () => NOOP_LOGGER,
 };
 
+// ── Launch outbox ─────────────────────────────────────────
+
+/**
+ * Narrow interface for the launch-handoff outbox surface that
+ * `executeTask` calls into. Defined here (rather than imported from
+ * `@invoker/app`) to avoid a layering cycle: the execution engine
+ * never depends on the app shell, the app provides this implementation
+ * via the LaunchDispatcher.
+ *
+ * Each method MUST be safe to call even if the dispatch row was reaped
+ * between the dispatcher's lease and the runner's call — the
+ * persistence layer returns false in that case and the runner bails
+ * out without starting the executor.
+ */
+export interface LaunchOutboxAck {
+  ackDispatch(dispatchId: number, runnerId: string): boolean;
+  completeDispatch(dispatchId: number): boolean;
+  failDispatch(dispatchId: number, error: unknown): boolean;
+}
+
+export interface LaunchDispatchOptions {
+  dispatchId: number;
+  launchOutbox: LaunchOutboxAck;
+}
+
 // ── Config ────────────────────────────────────────────────
 
 export interface TaskRunnerConfig {
@@ -455,7 +480,7 @@ export class TaskRunner {
     return false;
   }
 
-  async executeTask(task: TaskState): Promise<void> {
+  async executeTask(task: TaskState, dispatchOpts?: LaunchDispatchOptions): Promise<void> {
     traceExecution(
       `${RESTART_TO_BRANCH_TRACE} TaskRunner.executeTask BEGIN taskId=${task.id} isMergeNode=${Boolean(task.config.isMergeNode)} status=${task.status}`,
     );
@@ -472,16 +497,38 @@ export class TaskRunner {
         `[TaskRunner] executeTask skipping duplicate launch for task=${task.id} attempt=${attemptId}`,
       );
       bench('executeTask.duplicateSkipped');
+      if (dispatchOpts) {
+        // Another runner already owns this attempt — release the dispatch
+        // row so the dispatcher can re-queue if needed instead of orphaning.
+        dispatchOpts.launchOutbox.failDispatch(
+          dispatchOpts.dispatchId,
+          new Error('Duplicate launch suppressed in TaskRunner'),
+        );
+      }
       return;
+    }
+    if (dispatchOpts) {
+      const accepted = dispatchOpts.launchOutbox.ackDispatch(
+        dispatchOpts.dispatchId,
+        this.runnerInstanceId,
+      );
+      if (!accepted) {
+        this.logger.warn(
+          `[TaskRunner] launch dispatch ack rejected (lease reaped?) for task=${task.id} attempt=${attemptId} dispatchId=${dispatchOpts.dispatchId}`,
+        );
+        bench('executeTask.dispatchAckRejected');
+        return;
+      }
     }
     this.logger.info(
       `[TaskRunner] launch accepted task=${task.id} attempt=${attemptId} status=${task.status} ` +
-        `phase=${task.execution.phase ?? 'none'} generation=${startGeneration}`,
+        `phase=${task.execution.phase ?? 'none'} generation=${startGeneration} ` +
+        `dispatchId=${dispatchOpts?.dispatchId ?? 'none'}`,
     );
     this.launchingAttemptIds.add(attemptId);
     this.callbacks.onLaunchAccepted?.(task.id);
     try {
-      await this.executeTaskInner(task, attemptId, bench);
+      await this.executeTaskInner(task, attemptId, bench, dispatchOpts);
       bench('executeTask.innerReturned');
     } catch (err) {
       bench('executeTask.failed', {
@@ -508,6 +555,9 @@ export class TaskRunner {
       }
 
       this.logger.error(`[TaskRunner] executeTask failed for task=${task.id}`, { err });
+      if (dispatchOpts) {
+        dispatchOpts.launchOutbox.failDispatch(dispatchOpts.dispatchId, err);
+      }
       const launchFailedAt = new Date();
       try {
         const latest = this.orchestrator.getTask(task.id);
@@ -559,6 +609,7 @@ export class TaskRunner {
     task: TaskState,
     attemptId: string,
     bench: (phase: string, metadata?: Record<string, unknown>) => void = () => {},
+    dispatchOpts?: LaunchDispatchOptions,
   ): Promise<void> {
     bench('executeTaskInner.begin', {
       dependencyCount: task.dependencies.length,
@@ -908,6 +959,9 @@ export class TaskRunner {
       return;
     }
     bench('markTaskRunningAfterLaunch.accepted');
+    if (dispatchOpts) {
+      dispatchOpts.launchOutbox.completeDispatch(dispatchOpts.dispatchId);
+    }
 
     // Persist execution metadata immediately at task start — all fields explicit
     {
