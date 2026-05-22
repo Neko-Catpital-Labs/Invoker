@@ -158,4 +158,99 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
+
+  // Keyboard navigation regression tests.
+  //
+  // A local repro (right-click workflow → ArrowDown × 3 → Enter) proved
+  // that dispatching keyboard events on the document does not reach the
+  // open context menu's item selection. The menu's React onKeyDown is
+  // never triggered because document is above the React root, so events
+  // fired there never reach React's delegated listener.
+  //
+  // These tests fire keys on `document` to match the user-facing flow and
+  // assert the side effect that activation produces (clipboard write or
+  // mock API call). They must fail until keyboard handling moves to a
+  // document-level listener that wins against App's global arrow/Enter
+  // handlers when a context menu is open.
+  describe('keyboard navigation', () => {
+    it('workflow menu: ArrowDown × 3 + Enter copies workflow id', async () => {
+      await setup();
+      fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+      await screen.findByText('Copy Workflow ID');
+
+      // Items in initial state: Open Workflow (0), Open PR (1),
+      // Retry Workflow (2), Copy Workflow ID (3), More (4). Initial focus
+      // is on the first item, so ArrowDown × 3 lands on Copy Workflow ID.
+      fireEvent.keyDown(document, { key: 'ArrowDown' });
+      fireEvent.keyDown(document, { key: 'ArrowDown' });
+      fireEvent.keyDown(document, { key: 'ArrowDown' });
+      fireEvent.keyDown(document, { key: 'Enter' });
+
+      await waitFor(() => {
+        expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1');
+      });
+    });
+
+    it('workflow menu: ArrowUp from first item wraps to the last menu item', async () => {
+      await setup();
+      fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+      await screen.findByText('More');
+
+      // Pre-condition: danger-section items are hidden until More is
+      // activated. Wrapping with ArrowUp from idx 0 must land on the
+      // last navigable menuitem (More); activating it expands the menu.
+      expect(screen.queryByText('Recreate Workflow')).not.toBeInTheDocument();
+
+      fireEvent.keyDown(document, { key: 'ArrowUp' });
+      fireEvent.keyDown(document, { key: 'Enter' });
+
+      await waitFor(() => {
+        expect(screen.getByText('Recreate Workflow')).toBeInTheDocument();
+      });
+      // Wrapping must not have activated Open Workflow (idx 0): clipboard
+      // and workflow APIs must not have been called.
+      expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+      expect(mock.api.retryWorkflow).not.toHaveBeenCalled();
+    });
+
+    it('task menu: ArrowDown + Enter activates the next enabled action', async () => {
+      await setup();
+      fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+      await waitFor(() => {
+        expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+      });
+      fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+      await screen.findByText('Restart Task');
+
+      // task-alpha is pending: navigable items are Restart Task (0) and
+      // Open Terminal (1). Initial focus is on idx 0, so ArrowDown lands
+      // on Open Terminal.
+      fireEvent.keyDown(document, { key: 'ArrowDown' });
+      fireEvent.keyDown(document, { key: 'Enter' });
+
+      await waitFor(() => {
+        expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha');
+      });
+      expect(mock.api.restartTask).not.toHaveBeenCalled();
+    });
+
+    it('task menu: Space activates the highlighted item like Enter', async () => {
+      await setup();
+      fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+      await waitFor(() => {
+        expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+      });
+      fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+      await screen.findByText('Restart Task');
+
+      // Initial focus is on Restart Task (idx 0). Space should activate
+      // it the same as Enter would.
+      fireEvent.keyDown(document, { key: ' ' });
+
+      await waitFor(() => {
+        expect(mock.api.restartTask).toHaveBeenCalledWith('task-alpha');
+      });
+      expect(mock.api.openTerminal).not.toHaveBeenCalled();
+    });
+  });
 });
