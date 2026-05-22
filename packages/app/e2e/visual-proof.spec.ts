@@ -114,6 +114,32 @@ const REVIEW_READY_WORKFLOW_PR_PLAN = {
   ],
 };
 
+/**
+ * Pull-request workflow used to prove that workflow-level and task-level status
+ * visuals share the same palette — most importantly that `review_ready` renders
+ * with the same sky-blue hue on both the workflow node and the merge gate task.
+ */
+const STATUS_COLOR_PARITY_PLAN = {
+  name: 'Status color parity visual proof',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'pull_request' as const,
+  mergeMode: 'external_review',
+  tasks: [
+    {
+      id: 'parity-completed',
+      description: 'Completed parity task',
+      command: 'echo done',
+      dependencies: [] as string[],
+    },
+    {
+      id: 'parity-completed-2',
+      description: 'Another completed parity task',
+      command: 'echo done2',
+      dependencies: [] as string[],
+    },
+  ],
+};
+
 /** Plan for queue-action-surface hardening: combines canonical states, dependency relationships, and destructive actions. */
 const QUEUE_HARDENING_PLAN = {
   name: 'Queue Hardening Visual Proof',
@@ -481,6 +507,64 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByRole('link', { name: reviewUrl })).toHaveAttribute('href', reviewUrl);
 
     await captureScreenshot(page, 'review-ready-workflow-pr-sidebar');
+  });
+
+  test('workflow-task-status-color-parity — workflow node hue matches task node hue for review_ready', async ({ page }) => {
+    const workflowId = await loadPlanAndSelectWorkflow(page, STATUS_COLOR_PARITY_PLAN);
+    await page
+      .locator('.react-flow__node[data-testid$="parity-completed"]')
+      .first()
+      .waitFor({ state: 'visible', timeout: 15000 });
+
+    const earlier = new Date(Date.now() - 5000);
+    const now = new Date();
+    await injectTaskStates(page, [
+      {
+        taskId: 'parity-completed',
+        changes: {
+          status: 'completed',
+          execution: { startedAt: earlier, completedAt: now },
+        },
+      },
+      {
+        taskId: 'parity-completed-2',
+        changes: {
+          status: 'completed',
+          execution: { startedAt: earlier, completedAt: now },
+        },
+      },
+      {
+        taskId: `__merge__${workflowId}`,
+        changes: {
+          status: 'review_ready',
+          execution: { startedAt: new Date(Date.now() - 3000) },
+        },
+      },
+    ]);
+
+    // Re-select to refresh the inspector after status changes.
+    await workflowNode(page, workflowId).dispatchEvent('click', { bubbles: true });
+
+    // Workflow-level treatment: workflow node and inspector both reflect review_ready.
+    await expect(workflowNode(page, workflowId)).toBeVisible();
+    await expect(workflowNode(page, workflowId)).toContainText('review ready');
+    await expect(page.getByTestId('workflow-inspector-status-label')).toContainText('review ready');
+
+    // Task-level treatment: merge gate task in the mini DAG renders REVIEW READY,
+    // and completed task nodes render COMPLETED — the same palette must back both.
+    const mergeGateNode = page
+      .locator(`.react-flow__node[data-testid$="__merge__${workflowId}"]`)
+      .first();
+    await expect(mergeGateNode).toBeVisible({ timeout: 15000 });
+    await expect(mergeGateNode.getByText('REVIEW READY', { exact: true })).toBeVisible();
+    await expect(
+      page.locator('.react-flow__node[data-testid$="parity-completed"]').getByText('COMPLETED').first(),
+    ).toBeVisible();
+    await expect(
+      page.locator('.react-flow__node[data-testid$="parity-completed-2"]').getByText('COMPLETED').first(),
+    ).toBeVisible();
+
+    await captureScreenshot(page, 'workflow-task-status-color-parity');
   });
 
   test('interactive-status-hues — fixing-with-ai, needs-input, awaiting-approval', async ({ page }) => {
