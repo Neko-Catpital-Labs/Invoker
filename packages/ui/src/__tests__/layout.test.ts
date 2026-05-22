@@ -3,8 +3,16 @@
  */
 
 import { describe, it, expect } from 'vitest';
+// elk.bundled.js ships an in-process fake worker so ELK runs synchronously in
+// Node/jsdom. Production code uses elk-api.js + a separately loaded worker
+// URL (see ../lib/layout.ts), which only works in a real browser.
+import ELKBundled from 'elkjs/lib/elk.bundled.js';
 import { layoutNodes, layoutTaskGraph, countCrossings } from '../lib/layout.js';
 import type { TaskState } from '../types.js';
+
+function createTestElk() {
+  return new ELKBundled();
+}
 
 function makeTask(
   id: string,
@@ -280,10 +288,14 @@ describe('layoutTaskGraph', () => {
       makeTask('c', ['b']),
     ];
 
-    const result = await layoutTaskGraph(tasks, [
-      { id: 'local:a->b', source: 'a', target: 'b' },
-      { id: 'local:b->c', source: 'b', target: 'c' },
-    ]);
+    const result = await layoutTaskGraph(
+      tasks,
+      [
+        { id: 'local:a->b', source: 'a', target: 'b' },
+        { id: 'local:b->c', source: 'b', target: 'c' },
+      ],
+      { elk: createTestElk() },
+    );
 
     expect(result.usedFallback).toBe(false);
     expect(result.positions.size).toBe(tasks.length);
@@ -299,10 +311,14 @@ describe('layoutTaskGraph', () => {
       makeTask('c', ['b']),
     ];
 
-    const result = await layoutTaskGraph(tasks, [
-      { id: 'local:a->b', source: 'a', target: 'b' },
-      { id: 'local:b->c', source: 'b', target: 'c' },
-    ]);
+    const result = await layoutTaskGraph(
+      tasks,
+      [
+        { id: 'local:a->b', source: 'a', target: 'b' },
+        { id: 'local:b->c', source: 'b', target: 'c' },
+      ],
+      { elk: createTestElk() },
+    );
 
     expect(result.positions.get('a')!.x).toBeLessThan(result.positions.get('b')!.x);
     expect(result.positions.get('b')!.x).toBeLessThan(result.positions.get('c')!.x);
@@ -322,8 +338,12 @@ describe('layoutTaskGraph', () => {
       { id: 'local:right->leaf', source: 'right', target: 'leaf' },
     ];
 
-    const reference = await layoutTaskGraph(tasks, edges);
-    const shuffled = await layoutTaskGraph([tasks[3], tasks[1], tasks[0], tasks[2]], [edges[2], edges[0], edges[3], edges[1]]);
+    const reference = await layoutTaskGraph(tasks, edges, { elk: createTestElk() });
+    const shuffled = await layoutTaskGraph(
+      [tasks[3], tasks[1], tasks[0], tasks[2]],
+      [edges[2], edges[0], edges[3], edges[1]],
+      { elk: createTestElk() },
+    );
 
     for (const task of tasks) {
       expect(shuffled.positions.get(task.id)).toEqual(reference.positions.get(task.id));
@@ -337,9 +357,11 @@ describe('layoutTaskGraph', () => {
       makeTask('target'),
     ];
 
-    const result = await layoutTaskGraph(tasks, [
-      { id: 'external:source->target', source: 'source', target: 'target' },
-    ]);
+    const result = await layoutTaskGraph(
+      tasks,
+      [{ id: 'external:source->target', source: 'source', target: 'target' }],
+      { elk: createTestElk() },
+    );
 
     expect(result.positions.get('source')!.x).toBeLessThan(result.positions.get('target')!.x);
   });
