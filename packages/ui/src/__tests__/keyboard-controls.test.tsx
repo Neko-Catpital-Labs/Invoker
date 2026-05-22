@@ -173,6 +173,53 @@ describe('Side rail controls (component)', () => {
     });
   });
 
+  it('Escape from task graph keyboard focus dismisses the mini DAG and returns to workflow graph', async () => {
+    await renderKeyboardFixture(mock);
+
+    key('Tab');
+    const taskGraphRegion = screen
+      .getByTestId('selected-workflow-mini-dag')
+      .querySelector('[data-keyboard-region="taskGraph"]');
+    expect(taskGraphRegion).toHaveAttribute('data-keyboard-active', 'true');
+
+    key('Escape');
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('selected-workflow-mini-dag')).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId('workflow-graph-surface')).toHaveAttribute('data-keyboard-active', 'true');
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+
+  it('Space from workflow graph keyboard focus opens the selected workflow task graph', async () => {
+    await renderKeyboardFixture(mock);
+
+    expect(screen.getByTestId('workflow-graph-surface')).toHaveAttribute('data-keyboard-active', 'true');
+
+    key(' ');
+
+    await waitFor(() => {
+      expect(
+        screen
+          .getByTestId('selected-workflow-mini-dag')
+          .querySelector('[data-keyboard-region="taskGraph"]'),
+      ).toHaveAttribute('data-keyboard-active', 'true');
+    });
+    expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Alpha Workflow task DAG');
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+
+  it('Enter from workflow graph keyboard focus still opens the workflow context menu', async () => {
+    await renderKeyboardFixture(mock);
+
+    expect(screen.getByTestId('workflow-graph-surface')).toHaveAttribute('data-keyboard-active', 'true');
+
+    key('Enter');
+
+    const menu = await screen.findByRole('menu');
+    expect(menu).toHaveTextContent('Open Workflow');
+  });
+
   it('does not let region shortcuts steal focus while typing in search', async () => {
     await renderKeyboardFixture(mock);
 
