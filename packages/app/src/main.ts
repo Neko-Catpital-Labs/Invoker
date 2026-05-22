@@ -170,7 +170,6 @@ import {
 } from './global-topup.js';
 import { computeDeferredLaunchTiming } from './deferred-runnable.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
-import { relaunchOrphansAndStartReady } from './orphan-relaunch.js';
 import { evaluateExecutingStall } from './executing-stall.js';
 import { listOpenFixIntentsForTask } from './auto-fix-intents.js';
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
@@ -852,7 +851,10 @@ if (isHeadless) {
         const { workflowId } = payload;
         const executor = createStandaloneTaskExecutor();
         orchestrator.syncFromDb(workflowId);
-        const started = relaunchOrphansAndStartReady(orchestrator, logger, 'standalone-ipc-delegate', workflowId);
+        // CC.2: orphan relaunch removed. orchestrator.startExecution()
+        // enqueues into the task_launch_dispatch outbox; the
+        // LaunchDispatcher's poll loop is the single recovery path.
+        const started = orchestrator.startExecution();
         await executor.executeTasks(started);
         logger.info(`standalone resumed ${started.length} tasks for workflow "${workflowId}"`, { module: 'ipc-delegate' });
         const tasks = orchestrator.getAllTasks().filter((task) => task.config.workflowId === workflowId);
@@ -1085,7 +1087,7 @@ if (isHeadless) {
           orchestrator.syncFromDb(workflowId);
           const executor = createStandaloneTaskExecutor();
 
-          const allStarted = relaunchOrphansAndStartReady(orchestrator, logger, 'ipc-delegate', workflowId);
+          const allStarted = orchestrator.startExecution();
           if (allStarted.length > 0) {
             executor.executeTasks(allStarted).catch(err => {
               logger.error(`headless.resume: executeTasks failed for "${workflowId}": ${err}`, { module: 'ipc-delegate' });
@@ -1908,7 +1910,7 @@ function createEmbeddedTerminalBackendFromConfig(
     const { workflowId } = payload;
     orchestrator.syncFromDb(workflowId);
 
-    const allStarted = relaunchOrphansAndStartReady(orchestrator, logger, 'ipc-delegate', workflowId);
+    const allStarted = orchestrator.startExecution();
     if (allStarted.length > 0) {
       requireTaskExecutor().executeTasks(allStarted).catch(err => {
         logger.error(`headless.resume: executeTasks failed for "${workflowId}": ${err}`, { module: 'ipc-delegate' });
@@ -2860,11 +2862,11 @@ function createEmbeddedTerminalBackendFromConfig(
 
     // Relaunch orphaned running tasks and start any pending-but-ready tasks.
     if (!ownerMode) {
-      logger.info('follower mode startup: auto-run and orphan relaunch disabled', { module: 'init' });
+      logger.info('follower mode startup: auto-run disabled', { module: 'init' });
     } else if (invokerConfig.disableAutoRunOnStartup) {
-      logger.info('auto-run on startup disabled by config — skipping orphan relaunch', { module: 'init' });
+      logger.info('auto-run on startup disabled by config', { module: 'init' });
     } else {
-      const allStarted = relaunchOrphansAndStartReady(orchestrator, logger, 'init');
+      const allStarted = orchestrator.startExecution();
       if (allStarted.length > 0) {
         requireTaskExecutor().executeTasks(allStarted);
       }
@@ -3009,7 +3011,7 @@ function createEmbeddedTerminalBackendFromConfig(
       }
       orchestrator.syncAllFromDb();
 
-      const allStarted = relaunchOrphansAndStartReady(orchestrator, logger, 'resume-workflow');
+      const allStarted = orchestrator.startExecution();
       const tasks = orchestrator.getAllTasks();
       for (const task of tasks) {
         lastKnownTaskStates.set(task.id, JSON.stringify(task));
