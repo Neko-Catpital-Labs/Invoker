@@ -2999,6 +2999,18 @@ function createEmbeddedTerminalBackendFromConfig(
       }
       orchestrator.syncAllFromDb();
 
+      const tasksToRecover = orchestrator.getAllTasks().filter((task) =>
+        task.status === 'running'
+        || (
+          task.status === 'pending'
+          && task.execution.phase === 'launching'
+          && !!task.execution.selectedAttemptId
+        )
+      );
+      for (const task of tasksToRecover) {
+        orchestrator.prepareTaskForNewAttempt(task.id, 'resume_workflow_recovery');
+      }
+
       const allStarted = orchestrator.startExecution();
       const tasks = orchestrator.getAllTasks();
       for (const task of tasks) {
