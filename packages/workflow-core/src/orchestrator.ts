@@ -2326,6 +2326,21 @@ export class Orchestrator {
       });
     }
 
+    // Phase 0 of the invalidation pipeline cleanup
+    // (`docs/invalidation-pipeline-cleanup-plan.md`): production
+    // callers reach this primitive directly via `CommandService` /
+    // `workflow-actions`, bypassing `applyInvalidation`'s
+    // `cascadeDownstream` hook. Mirror the cancel-first
+    // defense-in-depth pattern: propagate the local invalidation to
+    // every transitive downstream workflow whose `externalDependencies`
+    // include this task's workflow. Idempotent and a no-op when reached
+    // through `applyInvalidation` (Phase 2 will retire this duplicate
+    // call once Step 17 production routing lands).
+    const retryTaskWorkflowId = this.stateGetTask(id)?.config.workflowId;
+    if (retryTaskWorkflowId) {
+      this.cascadeInvalidationToDownstream(retryTaskWorkflowId);
+    }
+
     const readyTasks = this.stateMachine.getReadyTasks();
     const isReady = readyTasks.some((t) => t.id === id);
     this.logger.info('[orchestrator] retryTask ready check', { taskId: id, ready: isReady });
@@ -2437,6 +2452,12 @@ export class Orchestrator {
       note: 'preserved completed outside invalidated subgraphs',
     });
 
+    // Phase 0 of the invalidation pipeline cleanup
+    // (`docs/invalidation-pipeline-cleanup-plan.md`): see retryTask
+    // for the full rationale. Cascade propagates this workflow's
+    // invalidation to every transitive downstream workflow.
+    this.cascadeInvalidationToDownstream(workflowId);
+
     const readyIds = this.stateMachine
       .getReadyTasks()
       .map((t) => t.id)
@@ -2526,6 +2547,14 @@ export class Orchestrator {
 
       this.deferredTaskIds.delete(id);
       this.clearQueuedSchedulerEntries(id, priorAttemptId);
+    }
+
+    // Phase 0 of the invalidation pipeline cleanup
+    // (`docs/invalidation-pipeline-cleanup-plan.md`): see retryTask
+    // for the full rationale.
+    const recreateTaskWorkflowId = task.config.workflowId;
+    if (recreateTaskWorkflowId) {
+      this.cascadeInvalidationToDownstream(recreateTaskWorkflowId);
     }
 
     const readyIds = this.stateMachine
@@ -2633,6 +2662,12 @@ export class Orchestrator {
       this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
       this.clearQueuedSchedulerEntries(task.id, priorAttemptId);
     }
+
+    // Phase 0 of the invalidation pipeline cleanup
+    // (`docs/invalidation-pipeline-cleanup-plan.md`): see retryTask
+    // for the full rationale. Also covers
+    // `recreateWorkflowFromFreshBase`, which delegates here.
+    this.cascadeInvalidationToDownstream(workflowId);
 
     const readyIds = this.stateMachine
       .getReadyTasks()
@@ -3521,6 +3556,12 @@ export class Orchestrator {
     this.messageBus.publish(TASK_DELTA_CHANNEL, { type: 'created', task: newMerge });
 
     this.reconcileMergeLeaves(newWfId);
+
+    // Phase 0 of the invalidation pipeline cleanup
+    // (`docs/invalidation-pipeline-cleanup-plan.md`): forking the
+    // source workflow invalidates anything that depended on it.
+    // Cascade applies to the SOURCE workflowId (not the new fork).
+    this.cascadeInvalidationToDownstream(workflowId);
 
     const autoStart = opts?.autoStart !== false;
     let started: TaskState[] = [];
@@ -4830,6 +4871,15 @@ export class Orchestrator {
    * `fixReject`, `none`) skip the cascade per `MUTATION_POLICIES`.
    */
   cascadeInvalidationToDownstream(workflowId: string): TaskState[] {
+    // Cheap path: consult the in-memory state machine first so we
+    // don't trigger a global `refreshFromDb` (which loads tasks for
+    // every active workflow) when there are no downstream
+    // dependents. `externalDependencies` are written via
+    // `writeAndSync`, keeping the in-memory view in sync, so the
+    // pre-refresh check is sound. Only refresh + do work when at
+    // least one downstream workflow is detected.
+    if (this.collectDownstreamWorkflowIds(workflowId).length === 0) return [];
+
     this.refreshFromDb();
     const downstreamWorkflowIds = this.collectDownstreamWorkflowIds(workflowId);
     if (downstreamWorkflowIds.length === 0) return [];
