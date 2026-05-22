@@ -645,6 +645,28 @@ export class TaskRunner {
       if (newlyStarted.length > 0) {
         this.executeTasks(newlyStarted);
       }
+      // CD.1 / Issue 13: terminate the parent pivot task's outbox row.
+      // Without this, drainScheduler enqueued a launch-dispatch row for
+      // the pivot, but executeTaskInner returns here without ever
+      // calling completeDispatch — so the row stays acknowledged,
+      // gets reaped after DISPATCH_LEASE_MS, and is eventually
+      // abandoned. The spawn_experiments path is the terminal state
+      // for the pivot itself; only the spawned variants should
+      // continue through the outbox.
+      if (dispatchOpts) {
+        try {
+          dispatchOpts.launchOutbox.completeDispatch(dispatchOpts.dispatchId);
+        } catch (err) {
+          // completeDispatch is best-effort here — if the row has
+          // already been failed or completed by another path the
+          // failure is benign. Log and continue so the pivot's
+          // observable behaviour (spawning variants) is unaffected.
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[task-runner] pivot completeDispatch failed for dispatchId=${dispatchOpts.dispatchId}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
       bench('executeTaskInner.pivotReturned', {
         newlyStartedCount: newlyStarted.length,
       });

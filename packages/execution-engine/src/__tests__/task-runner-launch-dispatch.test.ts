@@ -208,4 +208,45 @@ describe('TaskRunner launch-dispatch wiring', () => {
     expect(launchOutbox.failCalls[0][0]).toBe(123);
     expect((launchOutbox.failCalls[0][1] as Error).message).toMatch(/Duplicate launch suppressed/);
   });
+
+  it('CD.1: pivot tasks terminate the dispatch row via completeDispatch', async () => {
+    // Issue 13: pivot/spawn-experiments returns from executeTaskInner
+    // BEFORE the normal markTaskRunningAfterLaunch completeDispatch
+    // path (it synthesises a spawn_experiments WorkResponse and
+    // returns). Without an explicit completeDispatch here, the parent
+    // pivot's outbox row stays acknowledged → reaped → abandoned.
+    const pivotTask = makeTask({
+      id: 'wf-pivot/parent',
+      config: {
+        workflowId: 'wf-pivot',
+        pivot: true,
+        experimentVariants: [
+          { id: 'v1', description: 'V1', prompt: 'A' },
+          { id: 'v2', description: 'V2', prompt: 'B' },
+        ],
+      } as any,
+      execution: { selectedAttemptId: 'pivot-attempt-1', generation: 0, phase: 'launching' },
+    });
+    const env = buildRunnerEnv(pivotTask);
+    // handleWorkerResponse returns the spawned variants as a TaskState[];
+    // we don't need real instances — the test asserts on the dispatch
+    // row, not the spawned executions.
+    env.orchestrator.handleWorkerResponse.mockReturnValue([]);
+    const launchOutbox = makeLaunchOutbox();
+
+    await env.runner.executeTask(pivotTask, { dispatchId: 555, launchOutbox });
+
+    // ackDispatch fired at the top of executeTask.
+    expect(launchOutbox.ackCalls).toHaveLength(1);
+    expect(launchOutbox.ackCalls[0][0]).toBe(555);
+    // The pivot path emits a spawn_experiments WorkResponse and then,
+    // critically, terminates the parent's dispatch row.
+    expect(env.orchestrator.handleWorkerResponse).toHaveBeenCalled();
+    const synthResponse = env.orchestrator.handleWorkerResponse.mock.calls[0][0];
+    expect(synthResponse.status).toBe('spawn_experiments');
+    expect(launchOutbox.completeCalls).toEqual([555]);
+    expect(launchOutbox.failCalls).toHaveLength(0);
+    // The executor must NOT have been called — pivot short-circuits.
+    expect(env.executor.start).not.toHaveBeenCalled();
+  });
 });
