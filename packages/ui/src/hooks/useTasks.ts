@@ -139,23 +139,36 @@ export function useTasks(): UseTasksResult {
   useEffect(() => {
     if (typeof window === 'undefined' || !window.invoker) return;
 
-    if (
-      !reportedStartupBootstrapRef.current &&
-      bootstrapState &&
-      ((bootstrapState.tasks?.length ?? 0) > 0 || (bootstrapState.workflows?.length ?? 0) > 0)
-    ) {
+    const bootstrapHasData =
+      !!bootstrapState &&
+      ((bootstrapState.tasks?.length ?? 0) > 0 || (bootstrapState.workflows?.length ?? 0) > 0);
+
+    if (!reportedStartupBootstrapRef.current && bootstrapHasData) {
       reportedStartupBootstrapRef.current = true;
       void window.invoker.reportUiPerf?.('startup_bootstrap_state', {
-        taskCount: bootstrapState.tasks?.length ?? 0,
-        workflowCount: bootstrapState.workflows?.length ?? 0,
+        taskCount: bootstrapState!.tasks?.length ?? 0,
+        workflowCount: bootstrapState!.workflows?.length ?? 0,
         elapsedMs: Math.round(performance.now()),
-        processElapsedMs: bootstrapState.appStartedAtEpochMs
-          ? Date.now() - bootstrapState.appStartedAtEpochMs
+        processElapsedMs: bootstrapState!.appStartedAtEpochMs
+          ? Date.now() - bootstrapState!.appStartedAtEpochMs
           : undefined,
       });
     }
 
-    fetchAll();
+    // Preload's synchronous bootstrap already hydrated the full task/workflow
+    // snapshot into `window.__INVOKER_BOOTSTRAP__`. Firing a second non-forced
+    // getTasks() here would re-fetch ~377KB the renderer already has. Skip it
+    // when bootstrap delivered data; explicit refreshTasks() calls (forced or
+    // not) and delta-driven workflow refreshes still go through fetchAll.
+    if (!bootstrapHasData) {
+      fetchAll();
+    } else {
+      void window.invoker.reportUiPerf?.('startup_snapshot_skipped_bootstrap_authoritative', {
+        bootstrapTaskCount: bootstrapState!.tasks?.length ?? 0,
+        bootstrapWorkflowCount: bootstrapState!.workflows?.length ?? 0,
+        elapsedMs: Math.round(performance.now()),
+      });
+    }
 
     deltaPipelineRef.current = createTaskDeltaPipeline({
       flushMs: 100,
