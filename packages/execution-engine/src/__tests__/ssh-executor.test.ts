@@ -321,7 +321,7 @@ branch refs/heads/experiment/test-task-oldhash
       return '';
     });
 
-    vi.spyOn(ssh, 'mergeRequestUpstreamBranches').mockResolvedValue(undefined);
+    const mergeUpstreamSpy = vi.spyOn(ssh, 'mergeRequestUpstreamBranches').mockResolvedValue(undefined);
     vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
       (_executionId: string, _request: any, handle: any) => handle,
     );
@@ -332,15 +332,27 @@ branch refs/heads/experiment/test-task-oldhash
       inputs: { command, description: 'sandbox reset test', repoUrl: 'git@github.com:owner/repo.git' },
     }));
 
-    // sandbox_reset must have been called
+    // sandbox_reset must have been called with the right script content
     const sandboxResetCall = capturedCalls.find(c => c.phase === 'sandbox_reset');
     expect(sandboxResetCall).toBeDefined();
     expect(sandboxResetCall?.script).toContain('git -C "$WT" reset --hard "$REF"');
-    expect(sandboxResetCall?.script).toContain('git -C "$WT" clean -fdx');
+    expect(sandboxResetCall?.script).toContain('git -C "$WT" clean -fd');
 
-    // sandbox_reset must appear before mergeRequestUpstreamBranches
-    const resetIndex = capturedCalls.findIndex(c => c.phase === 'sandbox_reset');
-    expect(resetIndex).toBeGreaterThanOrEqual(0);
+    // mergeRequestUpstreamBranches must have been called exactly once
+    expect(mergeUpstreamSpy).toHaveBeenCalledTimes(1);
+
+    // sandbox_reset (execRemoteCapture call) must be ordered before mergeRequestUpstreamBranches.
+    // We verify this via invocationCallOrder so a future refactor cannot silently move
+    // the reset after the merge without breaking this test.
+    const sandboxResetCallIndex = capturedCalls.findIndex(c => c.phase === 'sandbox_reset');
+    // execRemoteCapture is called once per capturedCalls entry; find which mock invocation
+    // index corresponds to the sandbox_reset call.
+    const execMock = vi.mocked(ssh.execRemoteCapture as unknown as (...args: any[]) => any);
+    const sandboxResetInvocationOrder = execMock.mock.invocationCallOrder[sandboxResetCallIndex];
+    const mergeInvocationOrder = mergeUpstreamSpy.mock.invocationCallOrder[0];
+    expect(sandboxResetInvocationOrder).toBeDefined();
+    expect(mergeInvocationOrder).toBeDefined();
+    expect(sandboxResetInvocationOrder!).toBeLessThan(mergeInvocationOrder!);
   });
 
   it('staging dir is always evicted (rm -rf before mkdir) in buildRuntimeBootstrapScript', async () => {

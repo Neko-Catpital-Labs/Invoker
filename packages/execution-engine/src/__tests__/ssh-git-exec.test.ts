@@ -320,7 +320,8 @@ describe('buildWorktreeSandboxResetScript', () => {
     expect(script).toContain('REF=$(echo');
     expect(script).toContain('base64 -d)');
     expect(script).toContain('git -C "$WT" reset --hard "$REF"');
-    expect(script).toContain('git -C "$WT" clean -fdx');
+    expect(script).toContain('git -C "$WT" clean -fd');
+    expect(script).not.toContain('clean -fdx');
   });
 
   it('includes tilde-expansion logic for worktree path', () => {
@@ -331,7 +332,8 @@ describe('buildWorktreeSandboxResetScript', () => {
 
     expect(script).toContain('"$HOME"');
     expect(script).toContain('git -C "$WT" reset --hard "$REF"');
-    expect(script).toContain('git -C "$WT" clean -fdx');
+    expect(script).toContain('git -C "$WT" clean -fd');
+    expect(script).not.toContain('clean -fdx');
   });
 
   it('encodes path and ref as base64 so special characters are safe', () => {
