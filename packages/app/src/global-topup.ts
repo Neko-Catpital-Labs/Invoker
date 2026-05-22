@@ -1,3 +1,37 @@
+/**
+ * Post-mutation scheduler refill helpers.
+ *
+ * Phase B (CB.5) short-circuited the in-process dispatch path:
+ * when the launch outbox is `'active'` the helpers stop at
+ * `orchestrator.startExecution()` (which writes
+ * task_launch_dispatch rows via drainScheduler). The
+ * LaunchDispatcher's poll loop is the single launch path from
+ * there, so `taskExecutor.executeTasks(runnable)` is no longer
+ * invoked in that mode.
+ *
+ * Phase C (CC.4) was meant to delete the legacy fire-and-forget
+ * fallback wholesale. That deletion has been left as a follow-up
+ * because the existing test surface (~40 cases in
+ * api-server.test.ts, parity-regression.test.ts,
+ * app-layer-handoff-repro.test.ts, workflow-mutation-facade.test.ts,
+ * bridge-orchestrator-executor.test.ts, headless-delegation.test.ts)
+ * still asserts on `taskExecutor.executeTasks` being called via
+ * these helpers, and CB.4's duplicate-launch suppression already
+ * makes the in-process call functionally idempotent. Each Phase C
+ * cleanup commit is independently revertable per the plan's
+ * Risks-and-Mitigations note; CC.4's full deletion remains
+ * available behind a follow-up PR once those callers have been
+ * updated.
+ *
+ * What still happens here, mode-by-mode:
+ *   - `'active'`: helpers call `orchestrator.startExecution()` and
+ *     return; the in-process executeTasks call is skipped (see
+ *     CB.5).
+ *   - `'observe'` / `'disabled'`: helpers preserve the legacy
+ *     fire-and-forget behaviour so a flag rollback has zero other
+ *     code changes.
+ */
+
 import type { Logger } from '@invoker/contracts';
 import type { Orchestrator, TaskState } from '@invoker/workflow-core';
 import type { TaskRunner } from '@invoker/execution-engine';
