@@ -752,11 +752,36 @@ export function App() {
         if (keyboardRegion === 'inspector') {
           event.preventDefault();
           focusKeyboardRegion(previousGraphRegion);
+          return;
+        }
+        if (keyboardRegion === 'taskGraph' && selectedWorkflow && miniDagTasks.size > 0) {
+          event.preventDefault();
+          setContextMenu(null);
+          setWorkflowContextMenu(null);
+          setSelectedTaskId(null);
+          setSelectedWorkflowId(null);
+          setWorkflowSelectionDismissed(true);
+          focusKeyboardRegion('workflowGraph');
+          return;
         }
         return;
       }
 
       if (keyboardRegion === 'workflowGraph' || keyboardRegion === 'taskGraph') {
+        if (keyboardRegion === 'workflowGraph' && event.key === ' ') {
+          const workflowId = selectedWorkflow?.id ?? selectedWorkflowId;
+          if (workflowId && workflows.has(workflowId)) {
+            event.preventDefault();
+            setContextMenu(null);
+            setWorkflowContextMenu(null);
+            setWorkflowSelectionDismissed(false);
+            setSelectedTaskId(null);
+            setSelectedWorkflowId(workflowId);
+            setCenterWorkflowId(workflowId);
+            focusKeyboardRegion('taskGraph');
+            return;
+          }
+        }
         if (event.key === 'Enter') {
           event.preventDefault();
           openSelectedContextMenu();
@@ -835,7 +860,10 @@ export function App() {
     searchResults,
     selectRelativeNode,
     selectTaskById,
+    selectedWorkflow,
+    selectedWorkflowId,
     visibleStatusKeys,
+    workflows,
   ]);
   const missingRequiredTool = systemDiagnostics?.tools.find((tool) => tool.required && !tool.installed) ?? null;
   const installedAgentCount = systemDiagnostics?.tools.filter((tool) => (tool.id === 'claude' || tool.id === 'codex') && tool.installed).length ?? 0;
