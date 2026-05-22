@@ -158,4 +158,93 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
+
+  // ── Keyboard navigation regression coverage ───────────────────────────
+  //
+  // Real users open a context menu, then press arrow keys / Enter / Space
+  // without first clicking the menu. Pre-fix, both menus left focus on the
+  // body, so document-level key events reached the App's graph shortcuts
+  // (which navigated the graph or re-opened the menu) but never reached the
+  // menu's own item navigation. These tests prove the open menu owns those
+  // keys and activates the highlighted item.
+  //
+  // The dispatchKey helper sends the event to whatever element currently has
+  // focus — exactly what a real keypress does. The fix must move focus onto
+  // the menu container; until that happens these expectations fail.
+  function dispatchKey(key: string) {
+    const target = document.activeElement && document.activeElement !== document.body
+      ? document.activeElement
+      : document.body;
+    fireEvent.keyDown(target, { key });
+  }
+
+  it('open workflow menu: ArrowDown x3 + Enter activates Copy Workflow ID', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    expect(await screen.findByRole('menu')).toHaveTextContent('Open Workflow');
+
+    // Visible items in order: Open Workflow, Open PR, Retry Workflow,
+    // Copy Workflow ID, More. Initial highlight is on Open Workflow (0); three
+    // ArrowDowns must move it to Copy Workflow ID (3).
+    dispatchKey('ArrowDown');
+    dispatchKey('ArrowDown');
+    dispatchKey('ArrowDown');
+    dispatchKey('Enter');
+
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
+    expect(mock.api.retryWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('open workflow menu: ArrowUp wraps to the last enabled item and activates with Enter', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    expect(await screen.findByRole('menu')).toHaveTextContent('Open Workflow');
+
+    // ArrowUp from the initial first-item highlight must wrap deterministically
+    // to the last enabled entry — the "More" toggle — and Enter must activate
+    // it, expanding the danger-zone section.
+    dispatchKey('ArrowUp');
+    dispatchKey('Enter');
+
+    expect(await screen.findByText('Rebase and Retry')).toBeInTheDocument();
+    expect(screen.getByText('Delete Workflow')).toBeInTheDocument();
+    expect(mock.api.retryWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('open task menu: ArrowDown + Enter activates the next enabled task action', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    expect(await screen.findByRole('menu')).toHaveTextContent('Restart Task');
+
+    // Pending task safe items: Restart Task (initial highlight), Open Terminal.
+    // ArrowDown must advance the highlight; Enter must call onOpenTerminal for
+    // task-alpha rather than letting the App-level shortcuts hijack the key.
+    dispatchKey('ArrowDown');
+    dispatchKey('Enter');
+
+    await waitFor(() => expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'));
+    expect(mock.api.restartTask).not.toHaveBeenCalled();
+  });
+
+  it('open task menu: Space activates the highlighted item just like Enter', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    expect(await screen.findByRole('menu')).toHaveTextContent('Restart Task');
+
+    // Without moving the highlight, Space must activate the first enabled
+    // item (Restart Task) so users can confirm the default action without
+    // reaching for Enter.
+    dispatchKey(' ');
+
+    await waitFor(() => expect(mock.api.restartTask).toHaveBeenCalledWith('task-alpha'));
+    expect(mock.api.openTerminal).not.toHaveBeenCalled();
+  });
 });
