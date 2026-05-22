@@ -2873,6 +2873,30 @@ export class SQLiteAdapter implements PersistenceAdapter {
     }));
   }
 
+  /**
+   * Return every execution-resource lease held on behalf of a specific
+   * task. Used by the LaunchDispatcher when abandoning a stuck launch
+   * to release any SSH-pool / worktree-pool leases the task acquired
+   * during executor selection but never released (Issue 14).
+   */
+  listExecutionResourceLeasesByTask(taskId: string): ExecutionResourceLease[] {
+    return this.queryAll(
+      'SELECT * FROM execution_resource_leases WHERE task_id = ? ORDER BY acquired_at ASC',
+      [taskId],
+    ).map((row) => ({
+      resourceKey: String(row.resource_key),
+      resourceType: String(row.resource_type),
+      holderId: String(row.holder_id),
+      taskId: row.task_id ? String(row.task_id) : undefined,
+      poolId: row.pool_id ? String(row.pool_id) : undefined,
+      poolMemberId: row.pool_member_id ? String(row.pool_member_id) : undefined,
+      acquiredAt: String(row.acquired_at),
+      lastHeartbeatAt: String(row.last_heartbeat_at),
+      leaseExpiresAt: String(row.lease_expires_at),
+      metadata: row.metadata_json ? JSON.parse(String(row.metadata_json)) : undefined,
+    }));
+  }
+
   enqueueLaunchDispatch(input: {
     taskId: string;
     attemptId: string;
