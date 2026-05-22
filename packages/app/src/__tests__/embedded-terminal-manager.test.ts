@@ -25,6 +25,7 @@ import {
   type BashSpawnFn,
   type PtyLike,
   type PtySpawnFn,
+  type SpawnedTerminalProcess,
 } from '../embedded-terminal-manager.js';
 import { resolveTaskTerminalSpec } from '../open-terminal-for-task.js';
 import {
@@ -389,6 +390,119 @@ describe('EmbeddedTerminalManager', () => {
     });
     const res = mgr.write('not-a-session', 'x');
     expect(res).toEqual({ ok: false, reason: expect.stringContaining('Unknown session') });
+  });
+
+  // ── Replay buffer (output snapshot) ──────────────────────────
+
+  it('captures output emitted synchronously during backend spawn() into the returned descriptor', () => {
+    const noopProcess: SpawnedTerminalProcess = {
+      write: vi.fn(),
+      resize: vi.fn(),
+      close: vi.fn(),
+    };
+    // Backend that emits PTY startup output before spawn() returns — this is
+    // the race the replay buffer is designed to plug.
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: (opts) => {
+        opts.emitOutput('PTY ready\r\n');
+        opts.emitOutput('$ ');
+        return noopProcess;
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.openOrReuse({
+      taskId: 'sync-output-task',
+      spec: {},
+      cwd: '/tmp',
+    });
+
+    expect(session.outputSnapshot).toBe('PTY ready\r\n$ ');
+    expect(session.status).toBe('running');
+  });
+
+  it('includes the live replay snapshot in terminalList() / list() descriptors', () => {
+    const child = createFakeChild();
+    const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+    const mgr = new EmbeddedTerminalManager({
+      backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+    });
+
+    const session = mgr.openOrReuse({ taskId: 'list-replay', spec: {}, cwd: '/tmp' });
+    child.stdout.emit('data', Buffer.from('first chunk\n'));
+    child.stderr.emit('data', Buffer.from('warn\n'));
+
+    const listed = mgr.list();
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.sessionId).toBe(session.sessionId);
+    expect(listed[0]?.outputSnapshot).toBe('first chunk\nwarn\n');
+
+    const fetched = mgr.get(session.sessionId);
+    expect(fetched?.outputSnapshot).toBe('first chunk\nwarn\n');
+  });
+
+  it('does not throw when the backend exits synchronously during spawn() before state is assigned', () => {
+    const noopProcess: SpawnedTerminalProcess = {
+      write: vi.fn(),
+      resize: vi.fn(),
+      close: vi.fn(),
+    };
+    // Synchronous exit — exercises the bug where finalizeSession(state, ...)
+    // would have closed over an uninitialized `state` binding.
+    const backend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: (opts) => {
+        opts.emitOutput('crashed before init\n');
+        opts.emitExit(127);
+        return noopProcess;
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const exits: Array<{ sessionId: string; exitCode?: number }> = [];
+    mgr.on('exit', (e) => exits.push({ sessionId: e.sessionId, exitCode: e.exitCode }));
+
+    let session!: ReturnType<typeof mgr.openOrReuse>;
+    expect(() => {
+      session = mgr.openOrReuse({ taskId: 'sync-exit', spec: {}, cwd: '/tmp' });
+    }).not.toThrow();
+
+    // The descriptor returned to the caller reflects the exit + carries the
+    // pre-exit replay buffer.
+    expect(session.status).toBe('exited');
+    expect(session.exitCode).toBe(127);
+    expect(session.outputSnapshot).toBe('crashed before init\n');
+
+    expect(exits).toEqual([{ sessionId: session.sessionId, exitCode: 127 }]);
+    expect(mgr.list()).toHaveLength(0);
+    // The real backend process must still be closed even though
+    // finalizeSession ran before it was attached to the session state.
+    expect(noopProcess.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounds the replay buffer to a fixed maximum so memory does not grow without limit', () => {
+    const child = createFakeChild();
+    const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+    const mgr = new EmbeddedTerminalManager({
+      backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+    });
+
+    const session = mgr.openOrReuse({ taskId: 'bounded', spec: {}, cwd: '/tmp' });
+
+    // Emit more output than the 64 KiB cap. Each chunk is 8 KiB; emit 20×
+    // for ~160 KiB of total output. The snapshot must end up bounded.
+    const chunk = 'x'.repeat(8 * 1024);
+    for (let i = 0; i < 20; i += 1) {
+      child.stdout.emit('data', Buffer.from(chunk));
+    }
+    // Finally emit a known sentinel so we can confirm the trim kept the
+    // most recent bytes rather than the oldest.
+    child.stdout.emit('data', Buffer.from('TAIL'));
+
+    const snapshot = mgr.get(session.sessionId)?.outputSnapshot ?? '';
+    expect(snapshot.length).toBeLessThanOrEqual(64 * 1024);
+    expect(snapshot.endsWith('TAIL')).toBe(true);
   });
 });
 
