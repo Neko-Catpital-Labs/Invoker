@@ -1333,7 +1333,26 @@ export class TaskRunner {
     const explicitPoolMemberId = (task.config as { poolMemberId?: string }).poolMemberId;
     this.pendingPoolSelections.delete(task.id);
 
-    if (task.config.poolId && !explicitPoolMemberId) {
+    if (task.config.poolId && explicitPoolMemberId) {
+      const pool = this.getExecutionPools()[task.config.poolId];
+      const member = pool?.members.find((candidate) => candidate.type === 'ssh' && candidate.id === explicitPoolMemberId);
+      if (pool && member) {
+        if (
+          excludedPoolMemberKeys.has(this.poolMemberKey(member))
+          || !this.poolMemberHasCapacity(task.config.poolId, pool, member)
+        ) {
+          throw this.poolCapacityError(task.id, task.config.poolId, pool, excludedPoolMemberKeys);
+        }
+        effectiveType = member.type;
+        selectedPoolMemberId = member.id;
+        this.pendingPoolSelections.set(task.id, {
+          poolId: task.config.poolId,
+          member,
+          memberKey: this.poolMemberKey(member),
+          selectionStrategy: pool.selectionStrategy ?? 'roundRobin',
+        });
+      }
+    } else if (task.config.poolId) {
       const pool = this.getExecutionPools()[task.config.poolId];
       const member = pool ? this.selectPoolMember(task.config.poolId, pool, excludedPoolMemberKeys) : undefined;
       if (member) {

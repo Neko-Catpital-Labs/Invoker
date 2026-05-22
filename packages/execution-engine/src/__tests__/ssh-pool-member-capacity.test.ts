@@ -87,6 +87,39 @@ describe('SSH pool member capacity', () => {
     expect(selections.map((selection: any) => selection.member.id)).toEqual(['remote-a', 'remote-b']);
   });
 
+  it('treats persisted poolMemberId on a pool-routed SSH task as consuming member capacity', () => {
+    const runner = makeRunner({
+      members: [
+        { id: 'remote-a', type: 'ssh', maxConcurrentTasks: 1 },
+        { id: 'remote-b', type: 'ssh', maxConcurrentTasks: 1 },
+      ],
+    });
+    const firstTask = makeTask('wf-1/task-a');
+    firstTask.config = { ...firstTask.config, poolMemberId: 'remote-a' };
+    const secondTask = makeTask('wf-2/task-b');
+    secondTask.config = { ...secondTask.config, poolMemberId: 'remote-a' };
+
+    runner.selectExecutor(firstTask);
+
+    expect(() => runner.selectExecutor(secondTask)).toThrow(/no member capacity/);
+    const selections = [...(runner as any).pendingPoolSelections.values()];
+    expect(selections.map((selection: any) => selection.member.id)).toEqual(['remote-a']);
+  });
+
+  it('does not reselect an excluded persisted poolMemberId', () => {
+    const runner = makeRunner({
+      members: [
+        { id: 'remote-a', type: 'ssh', maxConcurrentTasks: 1 },
+        { id: 'remote-b', type: 'ssh', maxConcurrentTasks: 1 },
+      ],
+    });
+    const task = makeTask('wf-1/task-a');
+    task.config = { ...task.config, poolMemberId: 'remote-a' };
+
+    expect(() => runner.selectExecutor(task, new Set(['ssh:remote-a']))).toThrow(/no member capacity/);
+    expect([...(runner as any).pendingPoolSelections.values()]).toHaveLength(0);
+  });
+
   it('defers instead of starting when all pool members are full', async () => {
     const firstTask = makeTask('wf-1/task-a');
     const secondTask = makeTask('wf-2/task-b');
