@@ -106,6 +106,15 @@ function withTimeout(promise, timeoutMs) {
   return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timer));
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableDispatchError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /database is locked|SQLITE_BUSY|Timed out after/i.test(message);
+}
+
 // ---------------------------------------------------------------------------
 // Stdin reader (for batch-exec)
 // ---------------------------------------------------------------------------
@@ -130,9 +139,14 @@ async function loadTransport() {
   return mod;
 }
 
-async function createBus(transport) {
+async function createBus(transport, timeoutMs) {
   const bus = new transport.IpcBus(undefined, { allowServe: false });
-  await bus.ready();
+  try {
+    await withTimeout(bus.ready(), timeoutMs);
+  } catch (error) {
+    bus.disconnect();
+    throw error;
+  }
   return bus;
 }
 
@@ -188,6 +202,29 @@ async function requestExec(bus, item, options) {
   };
 }
 
+async function requestExecWithRetry(bus, item, options) {
+  const maxAttempts = Number.parseInt(process.env.INVOKER_HEADLESS_IPC_DISPATCH_ATTEMPTS ?? '8', 10);
+  const attempts = Number.isFinite(maxAttempts) && maxAttempts > 0 ? maxAttempts : 8;
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await requestExec(bus, item, options);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= attempts || !isRetryableDispatchError(error)) {
+        throw error;
+      }
+      const delayMs = Math.min(5_000, 250 * attempt * attempt);
+      process.stderr.write(
+        `headless.exec dispatch attempt ${attempt}/${attempts} failed for "${item.args.join(' ')}"; ` +
+        `retrying in ${delayMs}ms: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+      await sleep(delayMs);
+    }
+  }
+  throw lastError;
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -214,14 +251,14 @@ async function main() {
   }
 
   // Create a client-only IPC bus (no server election).
-  const bus = await createBus(transport);
+  const bus = await createBus(transport, options.timeoutMs);
 
   try {
     if (options.mode === 'exec') {
       if (options.args.length === 0) {
         throw new Error('Missing headless args for exec');
       }
-      const result = await requestExec(bus, { args: options.args }, options);
+      const result = await requestExecWithRetry(bus, { args: options.args }, options);
       process.stdout.write(`${JSON.stringify(result)}\n`);
       return;
     }
@@ -251,7 +288,7 @@ async function main() {
         }
         const item = items[index];
         try {
-          const result = await requestExec(bus, item, options);
+          const result = await requestExecWithRetry(bus, item, options);
           process.stdout.write(`${JSON.stringify(result)}\n`);
         } catch (error) {
           process.stdout.write(`${JSON.stringify({
