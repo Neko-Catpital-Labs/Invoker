@@ -511,6 +511,9 @@ describe('Parity: CommandService routes to correct orchestrator primitives', () 
       selectExperiment: vi.fn(() => [makeTask()]),
       setTaskExternalGatePolicies: vi.fn(() => []),
       replaceTask: vi.fn(() => []),
+      cascadeInvalidationToDownstream: vi.fn(() => []),
+      autoStartExternallyUnblockedReadyTasks: vi.fn(() => []),
+      forkWorkflow: vi.fn(() => ({ started: [] })),
     };
     commandService = new CommandService(orchestrator as any);
   });
@@ -723,6 +726,9 @@ describe('Parity: CommandService serializes concurrent mutations', () => {
         callOrder.push('edit-end');
         return [makeTask()];
       }),
+      cancelTask: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+      cancelWorkflow: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+      cascadeInvalidationToDownstream: vi.fn(() => []),
     };
     const cs = new CommandService(orchestrator as any);
 
@@ -750,6 +756,9 @@ describe('Parity: CommandService serializes concurrent mutations', () => {
         callOrder.push(`${wf}-retry-end`);
         return [makeTask({ id: taskId, config: { workflowId: wf } })];
       }),
+      cancelTask: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+      cancelWorkflow: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+      cascadeInvalidationToDownstream: vi.fn(() => []),
     };
     const cs = new CommandService(orchestrator as any);
 
