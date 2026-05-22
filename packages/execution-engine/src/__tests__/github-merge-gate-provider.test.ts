@@ -289,6 +289,7 @@ describe('GitHubMergeGateProvider', () => {
 
       expect(result.approved).toBe(true);
       expect(result.rejected).toBe(false);
+      expect(result.closed).toBe(false);
       expect(result.statusText).toBe('Merged');
     });
 
@@ -312,10 +313,11 @@ describe('GitHubMergeGateProvider', () => {
 
       expect(result.approved).toBe(false);
       expect(result.rejected).toBe(false);
+      expect(result.closed).toBe(false);
       expect(result.statusText).toBe('Approved, awaiting merge');
     });
 
-    it('treats a closed non-merged PR as terminal with statusText "Closed"', async () => {
+    it('treats an open changes-requested PR as rejected with statusText "Changes requested"', async () => {
       process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
       const { spawn } = await import('node:child_process');
       const spawnMock = vi.mocked(spawn);
@@ -323,8 +325,8 @@ describe('GitHubMergeGateProvider', () => {
       spawnMock.mockImplementation(((cmd: string) => {
         if (cmd === 'gh') {
           return mockSpawnResult(JSON.stringify({
-            state: 'CLOSED',
-            reviewDecision: null,
+            state: 'OPEN',
+            reviewDecision: 'CHANGES_REQUESTED',
             url: 'https://github.com/owner/repo/pull/3',
           }), 0);
         }
@@ -335,6 +337,30 @@ describe('GitHubMergeGateProvider', () => {
 
       expect(result.approved).toBe(false);
       expect(result.rejected).toBe(true);
+      expect(result.closed).toBe(false);
+      expect(result.statusText).toBe('Changes requested');
+    });
+
+    it('treats a closed non-merged PR as closed without rejecting it', async () => {
+      process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      spawnMock.mockImplementation(((cmd: string) => {
+        if (cmd === 'gh') {
+          return mockSpawnResult(JSON.stringify({
+            state: 'CLOSED',
+            reviewDecision: 'APPROVED',
+            url: 'https://github.com/owner/repo/pull/4',
+          }), 0);
+        }
+        return mockSpawnResult('', 0);
+      }) as any);
+
+      const result = await provider.checkApproval({ identifier: '4', cwd: '/tmp/repo' });
+
+      expect(result.approved).toBe(false);
+      expect(result.rejected).toBe(false);
       expect(result.closed).toBe(true);
       expect(result.statusText).toBe('Closed');
     });
