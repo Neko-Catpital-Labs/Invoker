@@ -94,6 +94,19 @@ export interface OpenSessionOptions {
   attach?: AttachContext;
 }
 
+/**
+ * Maximum size of the bounded per-session output buffer used to seed late
+ * renderer subscribers. 64 KiB is enough to cover fast PTY startup output
+ * (banners, prompt, MOTD) without unbounded memory growth.
+ */
+const OUTPUT_SNAPSHOT_MAX_BYTES = 64 * 1024;
+
+const NOOP_SPAWNED_PROCESS: SpawnedTerminalProcess = {
+  write() {},
+  resize() {},
+  close() {},
+};
+
 interface BaseSessionState {
   sessionId: string;
   taskId: string;
@@ -103,6 +116,29 @@ interface BaseSessionState {
   createdAt: string;
   status: 'running' | 'exited';
   exitCode?: number;
+  outputBuffer: string;
+}
+
+function describeSession(state: SessionState): TerminalSessionDescriptor {
+  return {
+    sessionId: state.sessionId,
+    taskId: state.taskId,
+    status: state.status,
+    exitCode: state.exitCode,
+    cwd: state.cwd,
+    command: state.spec.command,
+    args: state.spec.args,
+    mode: state.mode,
+    attached: state.mode === 'attached',
+    createdAt: state.createdAt,
+    outputSnapshot: state.outputBuffer.length > 0 ? state.outputBuffer : undefined,
+  };
+}
+
+function appendBoundedOutput(existing: string, addition: string): string {
+  const combined = existing + addition;
+  if (combined.length <= OUTPUT_SNAPSHOT_MAX_BYTES) return combined;
+  return combined.slice(combined.length - OUTPUT_SNAPSHOT_MAX_BYTES);
 }
 
 interface SpawnSessionState extends BaseSessionState {
@@ -126,20 +162,6 @@ export interface EmbeddedTerminalManagerOptions {
   defaultShell?: string;
 }
 
-function describeSession(state: SessionState): TerminalSessionDescriptor {
-  return {
-    sessionId: state.sessionId,
-    taskId: state.taskId,
-    status: state.status,
-    exitCode: state.exitCode,
-    cwd: state.cwd,
-    command: state.spec.command,
-    args: state.spec.args,
-    mode: state.mode,
-    attached: state.mode === 'attached',
-    createdAt: state.createdAt,
-  };
-}
 
 class BashTerminalBackend implements EmbeddedTerminalBackend {
   readonly name = 'bash' as const;
@@ -281,37 +303,62 @@ export class EmbeddedTerminalManager extends EventEmitter {
       cwd: opts.cwd,
       createdAt,
       status: 'running' as const,
+      outputBuffer: '',
     };
 
     let state: SessionState;
     if (opts.attach) {
-      const unsubscribe = opts.attach.executor.onOutput(opts.attach.handle, (data) => {
-        this.emitOutput(sessionId, opts.taskId, data);
-      });
-      state = {
+      const attachedState: AttachedSessionState = {
         ...base,
         mode: 'attached',
         attach: opts.attach,
-        unsubscribeOutput: unsubscribe,
+        unsubscribeOutput: () => {},
       };
+      state = attachedState;
+      this.sessions.set(sessionId, attachedState);
+      this.targetIndex.set(targetKey, sessionId);
+      const unsubscribe = opts.attach.executor.onOutput(opts.attach.handle, (data) => {
+        this.emitOutput(sessionId, opts.taskId, data);
+      });
+      attachedState.unsubscribeOutput = unsubscribe;
     } else {
-      const process = this.backend.spawn({
+      // Register the session before spawning so synchronous output and exit
+      // callbacks have a state to write into / finalize. The real process
+      // handle is patched in after `backend.spawn` returns.
+      const spawnState: SpawnSessionState = {
+        ...base,
+        mode: 'spawn',
+        backend: this.backend.name,
+        process: NOOP_SPAWNED_PROCESS,
+      };
+      state = spawnState;
+      this.sessions.set(sessionId, spawnState);
+      this.targetIndex.set(targetKey, sessionId);
+
+      const spawned = this.backend.spawn({
         spec: opts.spec,
         cwd: opts.cwd,
         defaultShell: this.defaultShell,
         emitOutput: (data) => this.emitOutput(sessionId, opts.taskId, data),
-        emitExit: (exitCode) => this.finalizeSession(state, exitCode),
+        emitExit: (exitCode) => {
+          const current = this.sessions.get(sessionId) ?? spawnState;
+          this.finalizeSession(current, exitCode);
+        },
       });
-      state = {
-        ...base,
-        mode: 'spawn',
-        backend: this.backend.name,
-        process,
-      };
+
+      if (spawnState.status === 'running') {
+        spawnState.process = spawned;
+      } else {
+        // Backend exited synchronously during spawn; close the now-orphaned
+        // handle so the backend's own resources are released.
+        try {
+          spawned.close();
+        } catch {
+          /* best-effort */
+        }
+      }
     }
 
-    this.sessions.set(sessionId, state);
-    this.targetIndex.set(targetKey, sessionId);
     return describeSession(state);
   }
 
@@ -403,6 +450,10 @@ export class EmbeddedTerminalManager extends EventEmitter {
   }
 
   private emitOutput(sessionId: string, taskId: string, data: string): void {
+    const state = this.sessions.get(sessionId);
+    if (state) {
+      state.outputBuffer = appendBoundedOutput(state.outputBuffer, data);
+    }
     const payload: TerminalOutputEvent = { sessionId, taskId, data };
     this.emit('output', payload);
   }
