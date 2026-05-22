@@ -94,7 +94,9 @@ import {
 } from './config.js';
 import {
   DEFAULT_WORKTREE_MAX_CONCURRENCY,
+  assertExecutionCapacityInvariant,
   resolveEffectiveMaxConcurrency,
+  shouldFatalOnExecutionCapacityOvercommit,
 } from './execution-capacity.js';
 import {
   createHourlySnapshot,
@@ -178,6 +180,11 @@ import {
 } from './action-graph-diagnostics.js';
 import { registerReadOnlyIpcHandlers } from './ipc-read-handlers.js';
 import { startReviewGateStatusWorker, type ReviewGateStatusWorker } from './review-gate-status-worker.js';
+import {
+  executeNoTrackHeadlessBatch,
+  type HeadlessBatchExecRequest,
+  type HeadlessExecMutationPayload,
+} from './headless-batch-exec.js';
 
 function isTaskInFlightForForcedStop(task: TaskState): boolean {
   return task.status === 'running'
@@ -259,13 +266,6 @@ interface HeadlessRunMutationPayload {
 
 interface HeadlessResumeMutationPayload {
   workflowId: string;
-  traceId?: string;
-}
-
-interface HeadlessExecMutationPayload {
-  args: string[];
-  waitForApproval?: boolean;
-  noTrack?: boolean;
   traceId?: string;
 }
 
@@ -1642,6 +1642,23 @@ function createEmbeddedTerminalBackendFromConfig(
     return Number.isNaN(parsed.getTime()) ? undefined : parsed;
   };
 
+  function assertFatalExecutionCapacity(label: string): void {
+    if (!shouldFatalOnExecutionCapacityOvercommit()) return;
+    try {
+      assertExecutionCapacityInvariant({
+        config: loadConfig(),
+        activeExecutions: launchingTasks.size + taskHandles.size,
+        label,
+      });
+    } catch (err) {
+      logger.error(err instanceof Error ? err.stack ?? err.message : String(err), { module: 'exec' });
+      setImmediate(() => {
+        throw err;
+      });
+      throw err;
+    }
+  }
+
   // Focus existing window when a second instance is launched
   app.on('second-instance', () => {
     if (mainWindow) {
@@ -1691,14 +1708,17 @@ function createEmbeddedTerminalBackendFromConfig(
         },
         onLaunchAccepted: (taskId) => {
           launchingTasks.add(taskId);
+          assertFatalExecutionCapacity(`launch accepted ${taskId}`);
           logger.info(`Task "${taskId}" launch accepted by TaskRunner`, { module: 'exec' });
         },
         onLaunchStart: (taskId, executor) => {
           launchingTasks.add(taskId);
+          assertFatalExecutionCapacity(`launch start ${taskId}`);
           logger.info(`Task "${taskId}" launch started (executor: ${executor.type})`, { module: 'exec' });
         },
         onLaunchFailed: (taskId, error, executor) => {
           launchingTasks.delete(taskId);
+          assertFatalExecutionCapacity(`launch failed ${taskId}`);
           logger.error(
             `Task "${taskId}" launch failed before spawn (executor: ${executor.type}): ${error.message}`,
             { module: 'exec' },
@@ -1712,11 +1732,13 @@ function createEmbeddedTerminalBackendFromConfig(
             { module: 'exec' },
           );
           taskHandles.set(taskId, { handle, executor });
+          assertFatalExecutionCapacity(`spawned ${taskId}`);
         },
         onComplete: (taskId, response) => {
           flushTaskOutput(taskId);
           launchingTasks.delete(taskId);
           taskHandles.delete(taskId);
+          assertFatalExecutionCapacity(`complete ${taskId}`);
           logger.info(
             `Task "${taskId}" completion callback received (status: ${response.status}, generation: ${response.executionGeneration}, exitCode: ${response.outputs.exitCode ?? 'none'})`,
             { module: 'exec' },
@@ -1744,6 +1766,7 @@ function createEmbeddedTerminalBackendFromConfig(
         },
         onLaunchSettled: (taskId) => {
           launchingTasks.delete(taskId);
+          assertFatalExecutionCapacity(`launch settled ${taskId}`);
         },
       },
     });
@@ -2821,6 +2844,27 @@ function createEmbeddedTerminalBackendFromConfig(
         const acknowledgement = acknowledgeNoTrackHeadlessExec(payload, workflowId, priority, 'gui');
         if (acknowledgement) return acknowledgement;
         return runWorkflowMutation(workflowId, priority, 'headless.exec', [payload], async () => executeHeadlessExec(payload));
+      });
+      messageBus.onRequest('headless.batch-exec', async (req: unknown) => {
+        const request = req as HeadlessBatchExecRequest;
+        const itemCount = Array.isArray(request.items) ? request.items.length : 0;
+        logger.info(`headless.batch-exec received items=${itemCount} noTrack=${request.noTrack ? 'true' : 'false'} mode=gui`, {
+          module: 'ipc-delegate',
+        });
+        if (!workflowMutationCoordinator) {
+          throw new Error('Workflow mutation coordinator is unavailable');
+        }
+        const coordinator = workflowMutationCoordinator;
+        const results = executeNoTrackHeadlessBatch(request, {
+          classify: classifyHeadlessExecMutation,
+          submit: (workflowId, priority, channel, args, options) =>
+            coordinator.submit(workflowId, priority, channel, args, options),
+        });
+        const accepted = results.filter((result) => result.ok).length;
+        logger.info(`headless.batch-exec accepted=${accepted} failed=${results.length - accepted} mode=gui`, {
+          module: 'ipc-delegate',
+        });
+        return results;
       });
       logger.info(`owner-ipc-ready ownerId=${workflowMutationOwnerId}`, { module: 'ipc-delegate' });
       recordStartupMark('owner-ipc-ready');

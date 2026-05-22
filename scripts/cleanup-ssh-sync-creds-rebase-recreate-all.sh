@@ -394,7 +394,7 @@ sync_credentials_to_target() {
 
     local -a SSH_ARGS
     ssh_base_args "$port" "$key_path"
-    ssh "${SSH_ARGS[@]}" "$user_host" "mkdir -p ~/'$remote_parent' && chmod 700 ~"
+    ssh "${SSH_ARGS[@]}" "$user_host" "mkdir -p ~/'$remote_parent' && chmod 700 ~" </dev/null
 
     if [[ -d "$path_entry" ]]; then
       rsync -az --delete \

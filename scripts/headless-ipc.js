@@ -115,6 +115,14 @@ function isRetryableDispatchError(error) {
   return /database is locked|SQLITE_BUSY|Timed out after/i.test(message);
 }
 
+function isNoHandlerError(error) {
+  if (error && typeof error === 'object' && error.code === 'NO_HANDLER') {
+    return true;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return /NO_HANDLER|No request handler registered|No handler registered/i.test(message);
+}
+
 // ---------------------------------------------------------------------------
 // Stdin reader (for batch-exec)
 // ---------------------------------------------------------------------------
@@ -225,6 +233,38 @@ async function requestExecWithRetry(bus, item, options) {
   throw lastError;
 }
 
+async function requestBatchExec(bus, items, options) {
+  const payload = {
+    items,
+    noTrack: options.noTrack,
+    waitForApproval: options.waitForApproval,
+  };
+  const response = await withTimeout(bus.request('headless.batch-exec', payload), options.timeoutMs);
+  if (!Array.isArray(response)) {
+    throw new Error(`headless.batch-exec returned non-array response: ${JSON.stringify(response)}`);
+  }
+  return response;
+}
+
+async function requestBatchExecWithRetry(bus, items, options) {
+  const maxAttempts = Number.parseInt(process.env.INVOKER_HEADLESS_IPC_DISPATCH_ATTEMPTS ?? '8', 10);
+  const attempts = Number.isFinite(maxAttempts) && maxAttempts > 0 ? maxAttempts : 8;
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await requestBatchExec(bus, items, options);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= attempts || isNoHandlerError(error) || !isRetryableDispatchError(error)) {
+        throw error;
+      }
+      const delayMs = Math.min(5_000, 250 * attempt * attempt);
+      await sleep(delayMs);
+    }
+  }
+  throw lastError;
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -275,6 +315,21 @@ async function main() {
       }
       return parsed;
     });
+
+    if (options.noTrack) {
+      try {
+        const results = await requestBatchExecWithRetry(bus, items, options);
+        for (const result of results) {
+          process.stdout.write(`${JSON.stringify(result)}\n`);
+        }
+        return;
+      } catch (error) {
+        if (!isNoHandlerError(error)) {
+          throw error;
+        }
+        process.stderr.write('headless.batch-exec handler unavailable; falling back to per-item headless.exec dispatch\n');
+      }
+    }
 
     let nextIndex = 0;
     const parallel = Math.max(1, Number.isFinite(options.parallel) ? options.parallel : 1);
