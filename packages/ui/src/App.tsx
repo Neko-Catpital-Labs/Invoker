@@ -752,11 +752,30 @@ export function App() {
         if (keyboardRegion === 'inspector') {
           event.preventDefault();
           focusKeyboardRegion(previousGraphRegion);
+        } else if (keyboardRegion === 'taskGraph' && selectedWorkflow && miniDagTasks.size > 0) {
+          event.preventDefault();
+          setContextMenu(null);
+          setWorkflowContextMenu(null);
+          setSelectedTaskId(null);
+          setSelectedWorkflowId(null);
+          setWorkflowSelectionDismissed(true);
+          focusKeyboardRegion('workflowGraph');
         }
         return;
       }
 
       if (keyboardRegion === 'workflowGraph' || keyboardRegion === 'taskGraph') {
+        if (event.key === ' ' && keyboardRegion === 'workflowGraph') {
+          const workflowId = selectedWorkflow?.id ?? selectedWorkflowId;
+          if (workflowId) {
+            event.preventDefault();
+            setContextMenu(null);
+            setWorkflowContextMenu(null);
+            setWorkflowSelectionDismissed(false);
+            focusKeyboardRegion('taskGraph');
+            return;
+          }
+        }
         if (event.key === 'Enter') {
           event.preventDefault();
           openSelectedContextMenu();
@@ -835,6 +854,8 @@ export function App() {
     searchResults,
     selectRelativeNode,
     selectTaskById,
+    selectedWorkflow,
+    selectedWorkflowId,
     visibleStatusKeys,
   ]);
   const missingRequiredTool = systemDiagnostics?.tools.find((tool) => tool.required && !tool.installed) ?? null;
