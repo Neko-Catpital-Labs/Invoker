@@ -24,6 +24,7 @@ import type { RunnerKind } from '@invoker/workflow-graph';
 import { createTaskState, createAttempt } from '@invoker/workflow-graph';
 import type { WorkflowDerivedStatus } from '@invoker/workflow-graph';
 import type { Logger, WorkResponse } from '@invoker/contracts';
+import { ATTEMPT_LEASE_MS } from '@invoker/contracts';
 import { normalizeRunnerKind } from '@invoker/workflow-graph';
 
 const MERGE_TRACE_LOG = resolve(homedir(), '.invoker', 'merge-trace.log');
@@ -108,7 +109,6 @@ function workflowTimestamp(): Date {
   return new Date();
 }
 const FIX_FAILURE_PREFIX_RE = /^\[Fix with (?:Claude|Agent) failed\] [^\n]*\n\n/;
-const ATTEMPT_LEASE_MS = 20 * 60 * 1000;
 const TRACE_PERSIST_SYNC = process.env.INVOKER_TRACE_PERSIST_SYNC === '1';
 const TRACE_WORKER_RESPONSE = process.env.INVOKER_TRACE_WORKER_RESPONSE === '1';
 const noopLogger: Logger = {
@@ -240,6 +240,21 @@ export interface OrchestratorPersistence {
   deleteWorkflow?(workflowId: string): void;
   /** Delete all workflows and tasks from the DB. */
   deleteAllWorkflows?(): void;
+  /**
+   * Optional launch-handoff outbox sink. When provided AND
+   * `OrchestratorConfig.launchOutboxMode` is `'observe'` or `'active'`,
+   * `drainScheduler` writes a `task_launch_dispatch` row alongside the
+   * legacy claim path. The orchestrator does not take a hard dependency
+   * on this method; it is observer-only in Phase A. See
+   * `docs/incidents/2026-05-22-launch-handoff-architecture-proposal.md`.
+   */
+  enqueueLaunchDispatch?(input: {
+    taskId: string;
+    attemptId: string;
+    workflowId: string;
+    priority?: 'high' | 'normal' | 'low';
+    generation: number;
+  }): { id: number };
 }
 
 export interface OrchestratorMessageBus {
@@ -716,6 +731,16 @@ export interface OrchestratorConfig {
    * scheduler dequeue time).
    */
   deferRunningUntilLaunch?: boolean;
+  /**
+   * Launch-handoff outbox mode. When set to `'observe'` or `'active'` (and
+   * the persistence layer implements `enqueueLaunchDispatch`),
+   * `drainScheduler` writes a durable `task_launch_dispatch` row alongside
+   * the existing claim path and emits a `task.dispatch_enqueued` event.
+   *
+   * Default `'disabled'` preserves existing behaviour. See
+   * `docs/incidents/2026-05-22-launch-handoff-architecture-proposal.md`.
+   */
+  launchOutboxMode?: 'disabled' | 'observe' | 'active';
 }
 
 // ── Orchestrator ────────────────────────────────────────────
@@ -736,6 +761,7 @@ export class Orchestrator {
   private readonly defaultPoolId: string | undefined;
   private readonly defaultAutoFixRetries: number;
   private readonly deferRunningUntilLaunch: boolean;
+  private readonly launchOutboxMode: 'disabled' | 'observe' | 'active';
 
   private activeWorkflowIds = new Set<string>();
   private deferredTaskIds = new Set<string>();
@@ -808,6 +834,7 @@ export class Orchestrator {
     this.defaultPoolId = config.defaultPoolId;
     this.defaultAutoFixRetries = Math.min(Math.max(0, Math.floor(config.defaultAutoFixRetries ?? 0)), 10);
     this.deferRunningUntilLaunch = config.deferRunningUntilLaunch ?? false;
+    this.launchOutboxMode = config.launchOutboxMode ?? 'disabled';
 
     this.stateMachine = new TaskStateMachine(new ActionGraph());
     this.responseHandler = new ResponseHandler();
@@ -4972,6 +4999,30 @@ export class Orchestrator {
         this.deferRunningUntilLaunch ? 'task.launch_claimed' : 'task.running',
         changes,
       );
+      if (
+        this.launchOutboxMode !== 'disabled'
+        && typeof this.persistence.enqueueLaunchDispatch === 'function'
+        && task.config.workflowId
+      ) {
+        try {
+          const dispatch = this.persistence.enqueueLaunchDispatch({
+            taskId: job.taskId,
+            attemptId: launchAttemptId,
+            workflowId: task.config.workflowId,
+            generation: this.getExecutionGeneration(task),
+          });
+          this.persistence.logEvent?.(job.taskId, 'task.dispatch_enqueued', {
+            ...changes,
+            dispatchId: dispatch.id,
+          });
+        } catch (err) {
+          this.logger.warn('[orchestrator] drainScheduler: enqueueLaunchDispatch failed', {
+            taskId: job.taskId,
+            attemptId: launchAttemptId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
       this.messageBus.publish(TASK_DELTA_CHANNEL, this.buildUpdateDelta(task, updated, changes));
       started.push(updated);
       this.logger.info('[orchestrator] drainScheduler: started', {
