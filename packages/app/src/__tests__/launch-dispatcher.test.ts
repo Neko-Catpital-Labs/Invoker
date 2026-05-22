@@ -87,18 +87,25 @@ describe('LaunchDispatcher', () => {
     expect(afterPoll).toMatchObject({ state: 'enqueued' });
   });
 
-  it('active mode throws a CB.5 placeholder error after running the reapers', () => {
+  it('active mode without a taskRunnerProvider warns and does not dispatch', () => {
     const listSpy = vi.spyOn(adapter, 'listLaunchDispatchesByState');
+    const claimSpy = vi.spyOn(adapter, 'claimLaunchDispatchAtomic');
+    const logger = makeLogger();
     const dispatcher = new LaunchDispatcher({
       persistence: adapter,
       ownerId: 'owner-test',
+      logger,
       mode: 'active',
     });
-    expect(() => dispatcher.poll()).toThrow(/CB\.5 not implemented/);
+    expect(() => dispatcher.poll()).not.toThrow();
+    expect(claimSpy).not.toHaveBeenCalled();
+    const warn = logger.records.find((entry) => entry.level === 'warn');
+    expect(warn?.msg).toMatch(/active mode without taskRunner/);
     // Active mode never observes (no aggregate log) — observation is the
     // observer-mode tail and the reapers don't need it.
     expect(listSpy).not.toHaveBeenCalled();
     listSpy.mockRestore();
+    claimSpy.mockRestore();
   });
 
   it('observer mode reports zero counts when the outbox is empty', () => {
@@ -437,6 +444,184 @@ describe('LaunchDispatcher', () => {
       });
       observer.poll();
       expect(adapter.loadLaunchDispatchById(row.id)?.state).toBe('enqueued');
+    });
+  });
+
+  describe('active mode dispatch (CB.5)', () => {
+    function seedWorkflowAndTask(taskId: string, workflowId = 'wf-a') {
+      adapter.saveWorkflow({
+        id: workflowId,
+        name: workflowId,
+        status: 'running',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+      const task = {
+        id: taskId,
+        description: taskId,
+        status: 'pending' as const,
+        dependencies: [],
+        createdAt: new Date(),
+        config: { workflowId },
+        execution: {},
+        taskStateVersion: 1,
+      };
+      adapter.saveTask(workflowId, task);
+      return task;
+    }
+
+    it('active mode leases an enqueued row and hands it to the TaskRunner', () => {
+      const task = seedWorkflowAndTask('wf-a/t1');
+      const enq = adapter.enqueueLaunchDispatch({
+        taskId: task.id,
+        attemptId: 'attempt-active-1',
+        workflowId: 'wf-a',
+        generation: 0,
+      });
+
+      const executeTask = vi.fn().mockResolvedValue(undefined);
+      const getTask = vi.fn().mockReturnValue(task as any);
+
+      const dispatcher = new LaunchDispatcher({
+        persistence: adapter,
+        ownerId: 'owner-a',
+        orchestrator: {
+          prepareTaskForNewAttempt: vi.fn(),
+          getTask,
+        },
+        taskRunnerProvider: () => ({ executeTask }),
+        mode: 'active',
+        maxConcurrency: 4,
+      });
+      dispatcher.poll();
+
+      expect(getTask).toHaveBeenCalledWith(task.id);
+      expect(executeTask).toHaveBeenCalledTimes(1);
+      const [taskArg, optsArg] = executeTask.mock.calls[0]!;
+      expect(taskArg.id).toBe(task.id);
+      expect(optsArg.dispatchId).toBe(enq.id);
+      expect(optsArg.launchOutbox).toBe(dispatcher);
+
+      // Row is leased on this poll; the runner will transition it via
+      // ackDispatch/completeDispatch (those are unit-tested elsewhere).
+      const after = adapter.loadLaunchDispatchById(enq.id);
+      expect(after?.state).toBe('leased');
+      expect(after?.dispatchOwner).toBe('owner-a');
+    });
+
+    it('active mode loops until maxLeasesPerPoll is reached', () => {
+      for (let i = 0; i < 3; i += 1) {
+        seedWorkflowAndTask(`wf-a/t${i}`);
+      }
+      for (let i = 0; i < 3; i += 1) {
+        adapter.enqueueLaunchDispatch({
+          taskId: `wf-a/t${i}`,
+          attemptId: `attempt-multi-${i}`,
+          workflowId: 'wf-a',
+          generation: 0,
+        });
+      }
+      const executeTask = vi.fn().mockResolvedValue(undefined);
+      const getTask = vi.fn((id: string) => ({
+        id,
+        description: id,
+        status: 'pending',
+        dependencies: [],
+        createdAt: new Date(),
+        config: { workflowId: 'wf-a' },
+        execution: {},
+        taskStateVersion: 1,
+      } as any));
+
+      const dispatcher = new LaunchDispatcher({
+        persistence: adapter,
+        ownerId: 'owner-a',
+        orchestrator: {
+          prepareTaskForNewAttempt: vi.fn(),
+          getTask,
+        },
+        taskRunnerProvider: () => ({ executeTask }),
+        mode: 'active',
+        maxConcurrency: 10,
+        maxLeasesPerPoll: 2,
+      });
+      dispatcher.poll();
+      expect(executeTask).toHaveBeenCalledTimes(2);
+    });
+
+    it('active mode fails the dispatch when the orchestrator has no matching task', () => {
+      seedWorkflowAndTask('wf-a/t-missing');
+      const enq = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-a/t-missing',
+        attemptId: 'attempt-missing',
+        workflowId: 'wf-a',
+        generation: 0,
+      });
+      const executeTask = vi.fn();
+      const dispatcher = new LaunchDispatcher({
+        persistence: adapter,
+        ownerId: 'owner-a',
+        orchestrator: {
+          prepareTaskForNewAttempt: vi.fn(),
+          getTask: vi.fn().mockReturnValue(undefined),
+        },
+        taskRunnerProvider: () => ({ executeTask }),
+        mode: 'active',
+        maxConcurrency: 4,
+      });
+      dispatcher.poll();
+
+      expect(executeTask).not.toHaveBeenCalled();
+      const after = adapter.loadLaunchDispatchById(enq.id);
+      // failDispatch re-enqueues with last_error set (so the next poll
+      // can try again after the fence expires).
+      expect(after?.state).toBe('enqueued');
+      expect(after?.lastError).toMatch(/missing from orchestrator state/);
+    });
+
+    it('active mode is a no-op when the queue is empty', () => {
+      const executeTask = vi.fn();
+      const dispatcher = new LaunchDispatcher({
+        persistence: adapter,
+        ownerId: 'owner-a',
+        orchestrator: {
+          prepareTaskForNewAttempt: vi.fn(),
+          getTask: vi.fn(),
+        },
+        taskRunnerProvider: () => ({ executeTask }),
+        mode: 'active',
+        maxConcurrency: 4,
+      });
+      dispatcher.poll();
+      expect(executeTask).not.toHaveBeenCalled();
+    });
+
+    it('active mode catches runner promise rejections via failDispatch backstop', async () => {
+      const task = seedWorkflowAndTask('wf-a/t-throw');
+      const enq = adapter.enqueueLaunchDispatch({
+        taskId: task.id,
+        attemptId: 'attempt-throw',
+        workflowId: 'wf-a',
+        generation: 0,
+      });
+      const executeTask = vi.fn().mockRejectedValue(new Error('runner exploded synchronously'));
+      const dispatcher = new LaunchDispatcher({
+        persistence: adapter,
+        ownerId: 'owner-a',
+        orchestrator: {
+          prepareTaskForNewAttempt: vi.fn(),
+          getTask: vi.fn().mockReturnValue(task as any),
+        },
+        taskRunnerProvider: () => ({ executeTask }),
+        mode: 'active',
+        maxConcurrency: 4,
+      });
+      dispatcher.poll();
+      // Wait one microtask tick for the .catch backstop to run.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const after = adapter.loadLaunchDispatchById(enq.id);
+      expect(after?.state).toBe('enqueued');
+      expect(after?.lastError).toMatch(/runner exploded synchronously/);
     });
   });
 });

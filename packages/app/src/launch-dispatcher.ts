@@ -14,6 +14,8 @@
  */
 
 import type { SQLiteAdapter, TaskLaunchDispatch, TaskLaunchDispatchState } from '@invoker/data-store';
+import type { LaunchOutboxAck } from '@invoker/execution-engine';
+import type { TaskState } from '@invoker/workflow-core';
 import { DISPATCH_MAX_ATTEMPTS, type Logger } from '@invoker/contracts';
 
 export type LaunchDispatcherMode = 'observe' | 'active';
@@ -27,24 +29,52 @@ export type LaunchDispatcherPersistence = Pick<
   | 'markLaunchDispatchAbandoned'
   | 'reapExpiredLaunchDispatchLeases'
   | 'listAbandonableAcknowledgedLeases'
+  | 'claimLaunchDispatchAtomic'
   | 'logEvent'
 >;
 
 /**
  * Narrow interface for the orchestrator surface the dispatcher needs.
  * Avoids widening the dependency on the whole Orchestrator class.
+ * `getTask` is optional because the reaper path (used in observer
+ * mode and by tests that only exercise abandon/reap) does not need
+ * it; only active-mode dispatch reads it.
  */
 export interface LaunchDispatcherOrchestrator {
   prepareTaskForNewAttempt(taskId: string, reason: string): unknown;
+  getTask?(taskId: string): TaskState | undefined;
+}
+
+/**
+ * Narrow interface for the TaskRunner surface the dispatcher hands
+ * leased rows to. Defined here (rather than `Pick<TaskRunner, ...>`)
+ * because @invoker/app already depends on @invoker/execution-engine
+ * but we want to keep the surface area minimal and testable.
+ */
+export interface LaunchDispatcherTaskRunner {
+  executeTask(
+    task: TaskState,
+    dispatchOpts?: { dispatchId: number; launchOutbox: LaunchOutboxAck },
+  ): Promise<void>;
 }
 
 export interface LaunchDispatcherOptions {
   persistence: LaunchDispatcherPersistence;
   orchestrator?: LaunchDispatcherOrchestrator;
+  /**
+   * Provider for the current TaskRunner. A function (rather than a
+   * direct reference) so that rebuildTaskRunner() in main.ts can
+   * swap the runner instance without re-creating the dispatcher.
+   * Returning `null` short-circuits the active-mode dispatch loop
+   * (logged as a warning).
+   */
+  taskRunnerProvider?: () => LaunchDispatcherTaskRunner | null;
   ownerId: string;
   logger?: Logger;
   mode: LaunchDispatcherMode;
   maxAttempts?: number;
+  maxConcurrency?: number;
+  maxLeasesPerPoll?: number;
 }
 
 const OBSERVED_STATES: readonly TaskLaunchDispatchState[] = [
@@ -56,18 +86,26 @@ const OBSERVED_STATES: readonly TaskLaunchDispatchState[] = [
 export class LaunchDispatcher {
   private readonly persistence: LaunchDispatcherPersistence;
   private readonly orchestrator?: LaunchDispatcherOrchestrator;
+  private readonly taskRunnerProvider?: () => LaunchDispatcherTaskRunner | null;
   private readonly ownerId: string;
   private readonly logger?: Logger;
   private readonly mode: LaunchDispatcherMode;
   private readonly maxAttempts: number;
+  private readonly maxConcurrency: number;
+  private readonly maxLeasesPerPoll: number;
 
   constructor(options: LaunchDispatcherOptions) {
     this.persistence = options.persistence;
     this.orchestrator = options.orchestrator;
+    this.taskRunnerProvider = options.taskRunnerProvider;
     this.ownerId = options.ownerId;
     this.logger = options.logger;
     this.mode = options.mode;
     this.maxAttempts = options.maxAttempts ?? DISPATCH_MAX_ATTEMPTS;
+    this.maxConcurrency = options.maxConcurrency ?? 16;
+    // Bound a single poll's work so the dispatcher cannot starve other
+    // owner-loop ticks; the leftover rows are picked up on the next tick.
+    this.maxLeasesPerPoll = options.maxLeasesPerPoll ?? 32;
   }
 
   getMode(): LaunchDispatcherMode {
@@ -111,7 +149,62 @@ export class LaunchDispatcher {
       });
       return;
     }
-    throw new Error('CB.5 not implemented');
+    this.dispatchActive();
+  }
+
+  /**
+   * Active-mode dispatch loop. Lease as many enqueued rows as capacity
+   * allows (bounded by `maxLeasesPerPoll`) and hand each one to the
+   * TaskRunner. The TaskRunner ack/complete/fail flow drives the rest
+   * of the lifecycle; if the JS promise drops mid-flight, the durable
+   * outbox row stays leased and the next poll's `reapExpiredLeases`
+   * reclaims it after `DISPATCH_LEASE_MS`.
+   */
+  private dispatchActive(): void {
+    const runner = this.taskRunnerProvider?.() ?? null;
+    if (!runner) {
+      this.logger?.warn?.('[launch-dispatcher] active mode without taskRunner — skipping dispatch', {
+        ownerId: this.ownerId,
+        module: 'launch-dispatcher',
+      });
+      return;
+    }
+    let dispatched = 0;
+    while (dispatched < this.maxLeasesPerPoll) {
+      const leased = this.persistence.claimLaunchDispatchAtomic({
+        ownerId: this.ownerId,
+        maxConcurrency: this.maxConcurrency,
+      });
+      if (!leased) break;
+      dispatched += 1;
+      const task = this.orchestrator?.getTask?.(leased.taskId);
+      if (!task) {
+        this.failDispatch(
+          leased.id,
+          new Error(`Task ${leased.taskId} missing from orchestrator state at dispatch time`),
+        );
+        continue;
+      }
+      // Fire-and-forget within the loop: the dispatch row is the durable
+      // anchor. If the promise drops, the next poll reaps the lease and
+      // tries again; if it completes, the runner calls completeDispatch.
+      void runner
+        .executeTask(task, { dispatchId: leased.id, launchOutbox: this })
+        .catch((err) => {
+          // The runner's outer catch should already have called failDispatch;
+          // this is a defensive backstop for the case the runner itself threw
+          // before reaching its own catch (e.g. synchronous setup error).
+          this.failDispatch(leased.id, err);
+        });
+    }
+    if (dispatched > 0) {
+      this.logger?.info?.('[launch-dispatcher] dispatched', {
+        ownerId: this.ownerId,
+        dispatched,
+        maxLeasesPerPoll: this.maxLeasesPerPoll,
+        module: 'launch-dispatcher',
+      });
+    }
   }
 
   /**

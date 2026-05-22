@@ -2770,9 +2770,14 @@ function createEmbeddedTerminalBackendFromConfig(
         launchDispatcher = new LaunchDispatcher({
           persistence,
           orchestrator,
+          // taskExecutor is re-built by rebuildTaskRunner(); read via
+          // a provider so the dispatcher always picks up the current
+          // instance instead of capturing a stale reference.
+          taskRunnerProvider: () => taskExecutor,
           ownerId: workflowMutationOwnerId,
           logger,
           mode: invokerConfig.launchOutboxMode as LaunchDispatcherMode,
+          maxConcurrency: effectiveMaxConcurrency,
         });
       }
     } else {
