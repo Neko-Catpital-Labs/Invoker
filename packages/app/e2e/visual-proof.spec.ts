@@ -492,6 +492,55 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'review-ready-workflow-pr-sidebar');
   });
 
+  test('workflow-task-status-color-parity — workflow chip and task nodes share canonical palette', async ({ page }) => {
+    const parityPlan = {
+      name: 'Workflow Task Status Color Parity',
+      repoUrl: E2E_REPO_URL,
+      onFinish: 'none' as const,
+      tasks: [
+        { id: 'parity-review', description: 'Review ready task', command: 'echo review', dependencies: [] as string[] },
+        { id: 'parity-complete', description: 'Completed task', command: 'echo done', dependencies: [] as string[] },
+        { id: 'parity-blocked', description: 'Blocked task', command: 'echo block', dependencies: [] as string[] },
+      ],
+    };
+
+    const workflowId = await loadPlanAndSelectWorkflow(page, parityPlan);
+    const completedAt = new Date();
+    const startedAt = new Date(Date.now() - 5000);
+
+    await injectTaskStates(page, [
+      {
+        taskId: 'parity-review',
+        changes: { status: 'review_ready', execution: { startedAt } },
+      },
+      {
+        taskId: 'parity-complete',
+        changes: { status: 'completed', execution: { startedAt, completedAt } },
+      },
+      {
+        taskId: 'parity-blocked',
+        changes: { status: 'blocked', execution: { startedAt } },
+      },
+    ]);
+
+    // Reselect so the inspector reflects the rolled-up workflow status.
+    await workflowNode(page, workflowId).dispatchEvent('click', { bubbles: true });
+
+    // Workflow rolls up to review_ready since it outranks completed/blocked in the rollup.
+    const chip = workflowNode(page, workflowId);
+    await expect(chip).toBeVisible();
+    await expect(chip.getByText('review ready')).toBeVisible();
+    await expect(page.getByTestId('workflow-inspector-status-label')).toContainText('review ready');
+
+    // Task-level labels render alongside the workflow chip with the same canonical palette.
+    const miniDag = page.getByTestId('selected-workflow-mini-dag');
+    await expect(miniDag.locator('.react-flow__node[data-testid$="parity-review"]').getByText('REVIEW_READY')).toBeVisible();
+    await expect(miniDag.locator('.react-flow__node[data-testid$="parity-complete"]').getByText('COMPLETED')).toBeVisible();
+    await expect(miniDag.locator('.react-flow__node[data-testid$="parity-blocked"]').getByText('BLOCKED')).toBeVisible();
+
+    await captureScreenshot(page, 'workflow-task-status-color-parity');
+  });
+
   test('interactive-status-hues — fixing-with-ai, needs-input, awaiting-approval', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     const now = new Date();
