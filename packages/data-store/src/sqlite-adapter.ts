@@ -755,6 +755,37 @@ export class SQLiteAdapter implements PersistenceAdapter {
       CREATE INDEX IF NOT EXISTS idx_workflow_mutation_leases_expiry
         ON workflow_mutation_leases(lease_expires_at);
 
+      CREATE TABLE IF NOT EXISTS task_launch_dispatch (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id TEXT NOT NULL,
+        attempt_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'enqueued',
+        priority TEXT NOT NULL DEFAULT 'normal',
+        dispatch_owner TEXT,
+        enqueued_at TEXT NOT NULL DEFAULT (datetime('now')),
+        leased_at TEXT,
+        acknowledged_at TEXT,
+        completed_at TEXT,
+        fenced_until TEXT,
+        attempts_count INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        generation INTEGER NOT NULL,
+        FOREIGN KEY (task_id) REFERENCES tasks(id),
+        FOREIGN KEY (workflow_id) REFERENCES workflows(id)
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_task_launch_dispatch_active_attempt
+        ON task_launch_dispatch(attempt_id)
+        WHERE state IN ('enqueued', 'leased', 'acknowledged');
+
+      CREATE INDEX IF NOT EXISTS idx_task_launch_dispatch_ready
+        ON task_launch_dispatch(state, priority, id)
+        WHERE state IN ('enqueued', 'leased');
+
+      CREATE INDEX IF NOT EXISTS idx_task_launch_dispatch_workflow_state
+        ON task_launch_dispatch(workflow_id, state);
+
       CREATE TABLE IF NOT EXISTS execution_resource_leases (
         resource_key TEXT NOT NULL,
         resource_type TEXT NOT NULL,
