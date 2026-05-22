@@ -803,6 +803,14 @@ if (isHeadless) {
         orchestrator, persistence, executorRegistry, messageBus,
         repoRoot, invokerConfig, initServices, wireSlackBot,
         commandService,
+        // CB.7: expose the owner's long-lived TaskRunner so
+        // createHeadlessExecutor can short-circuit in active mode
+        // instead of building a fresh runner per command. Reading via
+        // a function (not a captured reference) so rebuildTaskRunner()
+        // is picked up automatically. Returns null while the owner is
+        // still bootstrapping; createHeadlessExecutor falls back to a
+        // per-command runner in that case (logged as a warning).
+        ownerTaskRunnerProvider: () => taskExecutor,
         getUiPerfStats: () => ({
           ts: new Date().toISOString(),
           mainDeltaToUi: 0,
