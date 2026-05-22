@@ -155,11 +155,14 @@ batch_dispatch() {
     output_jsonl="$(mktemp -t batch-output.XXXXXX)"
     # With `set -u`, `"${extra_batch_args[@]}"` errors when the array is empty
     # (no optional batch-exec args). Branch avoids unbound expansion.
+    local batch_timeout_seconds="${INVOKER_HEADLESS_BATCH_TIMEOUT_SECONDS:-300}"
     if [[ ${#extra_batch_args[@]} -gt 0 ]]; then
-      node "$IPC_HELPER" batch-exec --no-track --parallel "$parallelism" \
+      run_with_optional_timeout "$batch_timeout_seconds" \
+        node "$IPC_HELPER" batch-exec --no-track --parallel "$parallelism" \
         "${extra_batch_args[@]}" < "$commands_file" > "$output_jsonl"
     else
-      node "$IPC_HELPER" batch-exec --no-track --parallel "$parallelism" \
+      run_with_optional_timeout "$batch_timeout_seconds" \
+        node "$IPC_HELPER" batch-exec --no-track --parallel "$parallelism" \
         < "$commands_file" > "$output_jsonl"
     fi
     parse_batch_results "$output_jsonl" "$result_file" "$log_dir"

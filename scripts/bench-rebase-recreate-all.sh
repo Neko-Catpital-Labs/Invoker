@@ -8,10 +8,11 @@ DRY_RUN=false
 TARGET_WORKFLOW=""
 TIMEOUT_SECONDS="${BENCH_TIMEOUT_SECONDS:-900}"
 POLL_INTERVAL_SECONDS="${BENCH_POLL_INTERVAL_SECONDS:-1}"
+PARALLELISM="${BENCH_PARALLELISM:-1}"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/bench-rebase-recreate-all.sh [--dry-run] [--workflow <id-or-name>] [--timeout <seconds>]
+Usage: scripts/bench-rebase-recreate-all.sh [--dry-run] [--workflow <id-or-name>] [--timeout <seconds>] [--parallel <count>]
 
 Dispatches rebase-recreate across matching workflows, then reports
 workflow_mutation_intents timing:
@@ -38,6 +39,10 @@ while [[ $# -gt 0 ]]; do
       TIMEOUT_SECONDS="${2:-}"
       shift 2
       ;;
+    --parallel)
+      PARALLELISM="${2:-}"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -52,6 +57,10 @@ done
 
 if ! [[ "$TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
   echo "Invalid --timeout value: $TIMEOUT_SECONDS" >&2
+  exit 1
+fi
+if ! [[ "$PARALLELISM" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Invalid --parallel value: $PARALLELISM" >&2
   exit 1
 fi
 
@@ -130,9 +139,13 @@ if [[ "$DRY_RUN" = true ]]; then
   exit 0
 fi
 
-batch_dispatch "$COMMANDS_FILE" "$RESULT_FILE" "$LOG_DIR" "$TOTAL_WORKFLOWS"
+batch_dispatch "$COMMANDS_FILE" "$RESULT_FILE" "$LOG_DIR" "$PARALLELISM"
 read -r DISPATCHED LAUNCH_FAILED _ < <(count_results "$RESULT_FILE")
 echo "Dispatch accepted: $DISPATCHED; launch failed: $LAUNCH_FAILED; logs: $LOG_DIR" >&2
+if [[ "$DISPATCHED" -ne "$TOTAL_WORKFLOWS" ]]; then
+  echo "Dispatch incomplete: accepted $DISPATCHED of $TOTAL_WORKFLOWS workflows." >&2
+  exit 1
+fi
 if [[ "$LAUNCH_FAILED" -ne 0 ]]; then
   exit 1
 fi

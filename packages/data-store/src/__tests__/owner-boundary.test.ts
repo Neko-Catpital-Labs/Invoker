@@ -172,9 +172,10 @@ describe('owner boundary enforcement', () => {
       owner2.updateWorkflow('wf-boundary-test', { generation: 1 });
       owner2.close();
 
-      // Reader sees stale data (expected - SQLite isolation)
-      const stillStale = reader.loadWorkflow('wf-boundary-test');
-      expect(stillStale!.generation).toBe(0);
+      // Each read is its own WAL snapshot, so an idle read-only adapter sees
+      // the latest committed owner write without holding a long-lived cursor.
+      const latest = reader.loadWorkflow('wf-boundary-test');
+      expect(latest!.generation).toBe(1);
 
       reader.close();
 
