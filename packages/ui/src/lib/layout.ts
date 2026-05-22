@@ -11,9 +11,35 @@
  *    for straighter edges.
  */
 
-import ELK from 'elkjs/lib/elk.bundled.js';
-
 import type { TaskState } from '../types.js';
+
+interface ElkConstructor {
+  new (options?: { workerUrl?: string }): ElkLayoutEngine;
+}
+
+// Production loads the worker-driven ELK so the ~1.4 MB engine is emitted as
+// an asset (the Web Worker source) instead of a JS chunk that would breach
+// the 500 kB chunk size warning. Dev/test environments (jsdom has no Worker)
+// fall through to the synchronous bundle.
+let elkPromise: Promise<ElkLayoutEngine> | null = null;
+function loadElk(): Promise<ElkLayoutEngine> {
+  if (elkPromise) return elkPromise;
+  if (import.meta.env.PROD) {
+    elkPromise = Promise.all([
+      import('elkjs/lib/elk-api.js'),
+      import('elkjs/lib/elk-worker.min.js?url'),
+    ]).then(([elkModule, urlModule]) => {
+      const ELK = elkModule.default as ElkConstructor;
+      return new ELK({ workerUrl: urlModule.default });
+    });
+  } else {
+    elkPromise = import('elkjs/lib/elk.bundled.js').then((mod) => {
+      const ELK = mod.default as ElkConstructor;
+      return new ELK();
+    });
+  }
+  return elkPromise;
+}
 
 export interface NodePosition {
   x: number;
@@ -88,7 +114,7 @@ export async function layoutTaskGraph(
     .sort((a, b) => edgeLayoutId(a).localeCompare(edgeLayoutId(b)));
 
   try {
-    const elk = options?.elk ?? new ELK();
+    const elk = options?.elk ?? (await loadElk());
     const graph = {
       id: 'task-dag',
       layoutOptions: {
