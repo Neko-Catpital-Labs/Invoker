@@ -2173,6 +2173,23 @@ describe('SQLiteAdapter', () => {
       }
     });
 
+    it('does not leave file-backed read cursors holding locks before later writes', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-read-cursor-'));
+      const dbPath = join(dir, 'invoker.db');
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db.saveWorkflow(testWorkflow);
+
+        expect(db.loadWorkflow(testWorkflow.id)).toBeDefined();
+
+        db.enqueueWorkflowMutationIntent(testWorkflow.id, 'headless.exec', [{ args: ['rebase-recreate', testWorkflow.id] }], 'high');
+        expect(db.listWorkflowMutationIntents(testWorkflow.id, ['queued'])).toHaveLength(1);
+        db.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
     it('commits successful transactions and rolls back failed transactions across reopen', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-transaction-'));
       const dbPath = join(dir, 'invoker.db');
@@ -3108,51 +3125,33 @@ describe('SQLiteAdapter', () => {
       }
     });
 
-    it('frees the prepared statement when stmt.step throws inside queryOne', () => {
+    it('frees the prepared statement when stmt.get throws inside queryOne', () => {
       let captured: any;
       const handle = instrumentPrepare(adapter, (stmt) => {
         captured = stmt;
-        stmt.step = () => {
-          throw new Error('simulated OOM during step');
+        stmt.get = () => {
+          throw new Error('simulated OOM during get');
         };
       });
       try {
-        expect(() => (adapter as any).queryOne('SELECT 1 AS x')).toThrow('simulated OOM during step');
+        expect(() => (adapter as any).queryOne('SELECT 1 AS x')).toThrow('simulated OOM during get');
         expect(handle.freeCallsFor(captured)).toBe(1);
       } finally {
         handle.restore();
       }
     });
 
-    it('frees the prepared statement when stmt.getAsObject throws inside queryOne', () => {
+    it('frees the prepared statement when stmt.get throws with params inside queryOne', () => {
       let captured: any;
       const handle = instrumentPrepare(adapter, (stmt) => {
         captured = stmt;
-        stmt.getAsObject = () => {
-          throw new Error('simulated OOM during row materialization');
-        };
-      });
-      try {
-        expect(() => (adapter as any).queryOne('SELECT 1 AS x')).toThrow(
-          'simulated OOM during row materialization',
-        );
-        expect(handle.freeCallsFor(captured)).toBe(1);
-      } finally {
-        handle.restore();
-      }
-    });
-
-    it('frees the prepared statement when stmt.bind throws inside queryOne', () => {
-      let captured: any;
-      const handle = instrumentPrepare(adapter, (stmt) => {
-        captured = stmt;
-        stmt.bind = () => {
-          throw new Error('simulated OOM during bind');
+        stmt.get = () => {
+          throw new Error('simulated OOM during parameterized get');
         };
       });
       try {
         expect(() => (adapter as any).queryOne('SELECT ? AS x', ['v'])).toThrow(
-          'simulated OOM during bind',
+          'simulated OOM during parameterized get',
         );
         expect(handle.freeCallsFor(captured)).toBe(1);
       } finally {
@@ -3160,18 +3159,12 @@ describe('SQLiteAdapter', () => {
       }
     });
 
-    it('frees the prepared statement when stmt.step throws mid-iteration inside queryAll', () => {
+    it('frees the prepared statement when stmt.all throws inside queryAll', () => {
       let captured: any;
       const handle = instrumentPrepare(adapter, (stmt) => {
         captured = stmt;
-        const originalStep = stmt.step.bind(stmt);
-        let calls = 0;
-        stmt.step = () => {
-          calls += 1;
-          if (calls === 2) {
-            throw new Error('simulated OOM mid-iteration');
-          }
-          return originalStep();
+        stmt.all = () => {
+          throw new Error('simulated OOM during all');
         };
       });
       try {
@@ -3179,42 +3172,26 @@ describe('SQLiteAdapter', () => {
           (adapter as any).queryAll(
             'SELECT value FROM (SELECT 1 AS value UNION ALL SELECT 2 UNION ALL SELECT 3) ORDER BY value',
           ),
-        ).toThrow('simulated OOM mid-iteration');
+        ).toThrow(
+          'simulated OOM during all',
+        );
         expect(handle.freeCallsFor(captured)).toBe(1);
       } finally {
         handle.restore();
       }
     });
 
-    it('frees the prepared statement when stmt.getAsObject throws inside queryAll', () => {
+    it('frees the prepared statement when stmt.all throws with params inside queryAll', () => {
       let captured: any;
       const handle = instrumentPrepare(adapter, (stmt) => {
         captured = stmt;
-        stmt.getAsObject = () => {
-          throw new Error('simulated OOM during row materialization');
-        };
-      });
-      try {
-        expect(() =>
-          (adapter as any).queryAll('SELECT 1 AS value'),
-        ).toThrow('simulated OOM during row materialization');
-        expect(handle.freeCallsFor(captured)).toBe(1);
-      } finally {
-        handle.restore();
-      }
-    });
-
-    it('frees the prepared statement when stmt.bind throws inside queryAll', () => {
-      let captured: any;
-      const handle = instrumentPrepare(adapter, (stmt) => {
-        captured = stmt;
-        stmt.bind = () => {
-          throw new Error('simulated OOM during bind');
+        stmt.all = () => {
+          throw new Error('simulated OOM during parameterized all');
         };
       });
       try {
         expect(() => (adapter as any).queryAll('SELECT ? AS x', ['v'])).toThrow(
-          'simulated OOM during bind',
+          'simulated OOM during parameterized all',
         );
         expect(handle.freeCallsFor(captured)).toBe(1);
       } finally {
