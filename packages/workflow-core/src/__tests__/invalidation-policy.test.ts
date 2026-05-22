@@ -2,7 +2,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   applyInvalidation,
+  ACTION_SPECS,
   MUTATION_POLICIES,
+  type InvalidationAction,
   type InvalidationDeps,
 } from '../invalidation-policy.js';
 
@@ -509,5 +511,83 @@ describe('applyInvalidation: cascadeDownstream (cross-workflow cascade)', () => 
     const deps = makeDeps({ cascadeDownstream, recreateWorkflow });
     const out = await applyInvalidation('workflow', 'recreateWorkflow', 'wf-1', deps);
     expect(out).toBe(lifecycleResult);
+  });
+});
+
+// Property tests over `ACTION_SPECS`: adding a new
+// `InvalidationAction` or a new pipeline stage must preserve these
+// invariants.
+
+const ALL_INVALIDATION_ACTIONS: readonly InvalidationAction[] = [
+  'none',
+  'scheduleOnly',
+  'fixApprove',
+  'fixReject',
+  'retryTask',
+  'recreateTask',
+  'retryWorkflow',
+  'recreateWorkflow',
+  'recreateWorkflowFromFreshBase',
+  'workflowFork',
+] as const;
+
+const INVALIDATING_ACTIONS: readonly InvalidationAction[] = [
+  'retryTask',
+  'recreateTask',
+  'retryWorkflow',
+  'recreateWorkflow',
+  'recreateWorkflowFromFreshBase',
+  'workflowFork',
+] as const;
+
+describe('ACTION_SPECS pipeline invariants', () => {
+  it('exhaustiveness: every InvalidationAction has an ActionSpec', () => {
+    for (const action of ALL_INVALIDATION_ACTIONS) {
+      expect(ACTION_SPECS[action], `missing ACTION_SPECS entry for '${action}'`).toBeDefined();
+      expect(ACTION_SPECS[action].stages.length, `'${action}' must declare at least one stage`).toBeGreaterThan(0);
+    }
+  });
+
+  it("cancel-first invariant: 'cancelInFlight' (when present) precedes 'applyPrimitive'", () => {
+    for (const action of ALL_INVALIDATION_ACTIONS) {
+      const stages = ACTION_SPECS[action].stages;
+      const cancelIdx = stages.indexOf('cancelInFlight');
+      const applyIdx = stages.indexOf('applyPrimitive');
+      if (cancelIdx === -1) continue; // action skips cancel — fine
+      expect(applyIdx, `'${action}' has cancelInFlight but no applyPrimitive`).toBeGreaterThan(-1);
+      expect(
+        cancelIdx,
+        `'${action}' must run cancelInFlight before applyPrimitive (got cancelInFlight at ${cancelIdx}, applyPrimitive at ${applyIdx})`,
+      ).toBeLessThan(applyIdx);
+    }
+  });
+
+  it("cascade-completeness: cascadesAcrossWorkflows iff stages.includes('cascadeAcrossWorkflows')", () => {
+    for (const action of ALL_INVALIDATION_ACTIONS) {
+      const spec = ACTION_SPECS[action];
+      const hasCascadeStage = spec.stages.includes('cascadeAcrossWorkflows');
+      expect(
+        spec.cascadesAcrossWorkflows,
+        `'${action}': cascadesAcrossWorkflows=${spec.cascadesAcrossWorkflows} but stages.includes('cascadeAcrossWorkflows')=${hasCascadeStage}`,
+      ).toBe(hasCascadeStage);
+    }
+  });
+
+  it('cascade-completeness: every chart-mandated invalidating action cascades', () => {
+    for (const action of INVALIDATING_ACTIONS) {
+      expect(
+        ACTION_SPECS[action].cascadesAcrossWorkflows,
+        `invalidating action '${action}' must cascade across workflows`,
+      ).toBe(true);
+    }
+  });
+
+  it("policy-table consistency: every MUTATION_POLICIES[k].action is a key of ACTION_SPECS", () => {
+    for (const [mutationKey, policy] of Object.entries(MUTATION_POLICIES)) {
+      expect(
+        ACTION_SPECS[policy.action],
+        `MUTATION_POLICIES.${mutationKey}.action='${policy.action}' has no ActionSpec`,
+      ).toBeDefined();
+    }
   });
 });
