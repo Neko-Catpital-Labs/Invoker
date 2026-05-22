@@ -390,6 +390,149 @@ describe('EmbeddedTerminalManager', () => {
     const res = mgr.write('not-a-session', 'x');
     expect(res).toEqual({ ok: false, reason: expect.stringContaining('Unknown session') });
   });
+
+  // ── Replay buffer: descriptor.outputSnapshot for late subscribers ──
+
+  it('captures output emitted synchronously during spawn in the returned descriptor snapshot', () => {
+    const backend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: (opts) => {
+        // Emit before spawn returns — simulates fast PTY startup output that
+        // would otherwise be lost to a renderer that has not yet subscribed.
+        opts.emitOutput('early-line-1\r\n');
+        opts.emitOutput('early-line-2\r\n');
+        return { write: () => {}, resize: () => {}, close: () => {} };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+
+    expect(session.outputSnapshot).toBe('early-line-1\r\nearly-line-2\r\n');
+  });
+
+  it('terminal-list descriptors expose the same replay snapshot for live sessions', () => {
+    const child = createFakeChild();
+    const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+    const mgr = new EmbeddedTerminalManager({
+      backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+    });
+
+    const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+    child.stdout.emit('data', Buffer.from('post-spawn-output'));
+
+    const listed = mgr.list();
+    expect(listed).toHaveLength(1);
+    expect(listed[0].sessionId).toBe(session.sessionId);
+    expect(listed[0].outputSnapshot).toBe('post-spawn-output');
+
+    const fetched = mgr.get(session.sessionId);
+    expect(fetched?.outputSnapshot).toBe('post-spawn-output');
+  });
+
+  it('survives a synchronous backend exit during spawn without throwing', () => {
+    const backend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: (opts) => {
+        opts.emitOutput('boot\n');
+        // Exit synchronously, before spawn() returns and before SessionState
+        // has been assigned. The manager must not call finalizeSession with
+        // an undefined state.
+        opts.emitExit(2);
+        return { write: () => {}, resize: () => {}, close: () => {} };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+    const exits: Array<{ sessionId: string; exitCode?: number }> = [];
+    mgr.on('exit', (e) => exits.push({ sessionId: e.sessionId, exitCode: e.exitCode }));
+
+    expect(() =>
+      mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' }),
+    ).not.toThrow();
+
+    // The descriptor returned by openOrReuse must still surface the boot
+    // output it captured before exit tore the session down.
+    const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+    expect(session.outputSnapshot).toBe('boot\n');
+
+    // The exit should have been emitted and the session removed.
+    expect(exits.map((e) => e.exitCode)).toEqual([2, 2]);
+    expect(mgr.list()).toHaveLength(0);
+  });
+
+  it('drops the replay buffer after the session is finalized', () => {
+    const child = createFakeChild();
+    const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+    const mgr = new EmbeddedTerminalManager({
+      backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+    });
+
+    const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+    child.stdout.emit('data', Buffer.from('hello'));
+    expect(mgr.get(session.sessionId)?.outputSnapshot).toBe('hello');
+
+    child.emit('exit', 0);
+    expect(mgr.get(session.sessionId)).toBeUndefined();
+    expect(mgr.list()).toHaveLength(0);
+  });
+
+  it('bounds the replay snapshot at the documented cap so memory cannot grow unbounded', () => {
+    const cap = 64 * 1024;
+    let emitter: ((data: string) => void) | null = null;
+    const backend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: (opts) => {
+        emitter = opts.emitOutput;
+        return { write: () => {}, resize: () => {}, close: () => {} };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+    const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+
+    // Push well over the cap to confirm trimming occurs from the front.
+    expect(emitter).not.toBeNull();
+    const chunk = 'x'.repeat(8 * 1024);
+    for (let i = 0; i < 20; i += 1) emitter!(chunk);
+    emitter!('TAIL-MARKER');
+
+    const snapshot = mgr.get(session.sessionId)?.outputSnapshot ?? '';
+    expect(snapshot.length).toBeLessThanOrEqual(cap);
+    expect(snapshot.endsWith('TAIL-MARKER')).toBe(true);
+  });
+
+  it('attached mode also surfaces a replay snapshot of executor-fanned output', () => {
+    const outputCallbacks: Array<(data: string) => void> = [];
+    const executor: Pick<Executor, 'onOutput' | 'sendInput'> & { type: string } = {
+      type: 'fake',
+      onOutput(_handle: ExecutorHandle, cb: (data: string) => void) {
+        // Emit synchronously during registration to simulate a live executor
+        // that already has buffered output ready when the session opens.
+        cb('attached-early');
+        outputCallbacks.push(cb);
+        return () => {};
+      },
+      sendInput() {},
+    };
+    const handle: ExecutorHandle = { executionId: 'exec-1', taskId: 'task-live' };
+    const mgr = new EmbeddedTerminalManager({
+      backend: createBashTerminalBackend({
+        spawnFn: () => {
+          throw new Error('bash should not spawn in attached mode');
+        },
+      }),
+    });
+
+    const session = mgr.openOrReuse({
+      taskId: 'task-live',
+      spec: { cwd: '/tmp/wt' },
+      cwd: '/tmp/wt',
+      attach: { handle, executor: executor as Executor },
+    });
+
+    expect(session.outputSnapshot).toBe('attached-early');
+    outputCallbacks[0]?.('-later');
+    expect(mgr.get(session.sessionId)?.outputSnapshot).toBe('attached-early-later');
+  });
 });
 
 // ── Deterministic GUI route: resolveTaskTerminalSpec + EmbeddedTerminalManager ──
