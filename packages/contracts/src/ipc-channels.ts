@@ -277,6 +277,12 @@ export interface TerminalSessionDescriptor {
   mode: 'spawn' | 'attached';
   attached: boolean;
   createdAt: string;
+  /**
+   * Bounded recent terminal output snapshot used by the renderer to seed
+   * newly mounted panes that subscribe after early output has already
+   * been emitted. Capped to a fixed maximum so memory stays bounded.
+   */
+  outputSnapshot?: string;
 }
 
 export interface TerminalOutputEvent {
