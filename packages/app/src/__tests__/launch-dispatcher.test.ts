@@ -87,17 +87,18 @@ describe('LaunchDispatcher', () => {
     expect(afterPoll).toMatchObject({ state: 'enqueued' });
   });
 
-  it('active mode throws a CB.5 placeholder error', () => {
-    const fakePersistence = {
-      listLaunchDispatchesByState: vi.fn(),
-    };
+  it('active mode throws a CB.5 placeholder error after running the reapers', () => {
+    const listSpy = vi.spyOn(adapter, 'listLaunchDispatchesByState');
     const dispatcher = new LaunchDispatcher({
-      persistence: fakePersistence as unknown as SQLiteAdapter,
+      persistence: adapter,
       ownerId: 'owner-test',
       mode: 'active',
     });
     expect(() => dispatcher.poll()).toThrow(/CB\.5 not implemented/);
-    expect(fakePersistence.listLaunchDispatchesByState).not.toHaveBeenCalled();
+    // Active mode never observes (no aggregate log) — observation is the
+    // observer-mode tail and the reapers don't need it.
+    expect(listSpy).not.toHaveBeenCalled();
+    listSpy.mockRestore();
   });
 
   it('observer mode reports zero counts when the outbox is empty', () => {
@@ -273,6 +274,169 @@ describe('LaunchDispatcher', () => {
 
       const { dispatcher } = makeDispatcher();
       expect(dispatcher.failDispatch(enqueued.id, 'too late')).toBe(false);
+    });
+  });
+
+  describe('reapers', () => {
+    function seed(): void {
+      adapter.saveWorkflow({
+        id: 'wf-r',
+        name: 'wf-r',
+        status: 'running',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+      adapter.saveTask('wf-r', {
+        id: 'wf-r/t1',
+        description: 't1',
+        status: 'pending',
+        dependencies: [],
+        createdAt: new Date(),
+        config: { workflowId: 'wf-r' },
+        execution: {},
+        taskStateVersion: 1,
+      });
+    }
+
+    function dispatcherWithOrchestrator(orchestrator?: { prepareTaskForNewAttempt: ReturnType<typeof vi.fn> }) {
+      const logger = makeLogger();
+      const dispatcher = new LaunchDispatcher({
+        persistence: adapter,
+        orchestrator,
+        ownerId: 'owner-test',
+        logger,
+        mode: 'observe',
+        maxAttempts: 2,
+      });
+      return { dispatcher, logger };
+    }
+
+    it('reapExpiredLeases resets stale leased rows and emits an audit event per row', () => {
+      seed();
+      const row = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-r/t1',
+        attemptId: 'attempt-reap',
+        workflowId: 'wf-r',
+        generation: 0,
+      });
+      const pastIso = new Date(Date.now() - 60_000).toISOString();
+      (adapter as any).db.run(
+        `UPDATE task_launch_dispatch SET state = 'leased', dispatch_owner = 'owner-x', fenced_until = ? WHERE id = ?`,
+        [pastIso, row.id],
+      );
+
+      const { dispatcher } = dispatcherWithOrchestrator();
+      const reaped = dispatcher.reapExpiredLeases();
+
+      expect(reaped).toBe(1);
+      expect(adapter.loadLaunchDispatchById(row.id)?.state).toBe('enqueued');
+      const events = adapter.getEvents('wf-r/t1');
+      const reapEvent = events.find((event) => event.eventType === 'task.launch_dispatch_reaped');
+      expect(reapEvent).toBeDefined();
+      expect(JSON.parse(reapEvent!.payload!)).toMatchObject({
+        dispatchId: row.id,
+        reason: 'lease_expired',
+      });
+    });
+
+    it('reapExpiredLeases is a no-op when nothing is stale', () => {
+      seed();
+      const { dispatcher } = dispatcherWithOrchestrator();
+      expect(dispatcher.reapExpiredLeases()).toBe(0);
+    });
+
+    it('abandonStuckLeases abandons acknowledged rows past max attempts and calls prepareTaskForNewAttempt', () => {
+      seed();
+      const row = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-r/t1',
+        attemptId: 'attempt-abandon',
+        workflowId: 'wf-r',
+        generation: 0,
+      });
+      const pastIso = new Date(Date.now() - 60_000).toISOString();
+      (adapter as any).db.run(
+        `UPDATE task_launch_dispatch
+           SET state = 'acknowledged', dispatch_owner = 'owner-x',
+               fenced_until = ?, attempts_count = 2, last_error = 'startup error'
+         WHERE id = ?`,
+        [pastIso, row.id],
+      );
+
+      const prepare = vi.fn();
+      const { dispatcher } = dispatcherWithOrchestrator({ prepareTaskForNewAttempt: prepare });
+      const abandoned = dispatcher.abandonStuckLeases();
+
+      expect(abandoned).toBe(1);
+      const after = adapter.loadLaunchDispatchById(row.id);
+      expect(after?.state).toBe('abandoned');
+      expect(after?.lastError).toMatch(/Launch dispatch abandoned after 2 attempt/);
+      expect(prepare).toHaveBeenCalledWith('wf-r/t1', 'launch-dispatch-abandoned');
+      const events = adapter.getEvents('wf-r/t1');
+      const failedEvent = events.find((event) => event.eventType === 'task.failed');
+      expect(failedEvent).toBeDefined();
+      expect(JSON.parse(failedEvent!.payload!)).toMatchObject({
+        source: 'launch-dispatcher',
+        dispatchId: row.id,
+      });
+    });
+
+    it('abandonStuckLeases ignores rows still within their fence or below max attempts', () => {
+      seed();
+      const futureRow = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-r/t1',
+        attemptId: 'attempt-future',
+        workflowId: 'wf-r',
+        generation: 0,
+      });
+      const futureIso = new Date(Date.now() + 60_000).toISOString();
+      (adapter as any).db.run(
+        `UPDATE task_launch_dispatch
+           SET state = 'acknowledged', fenced_until = ?, attempts_count = 5
+         WHERE id = ?`,
+        [futureIso, futureRow.id],
+      );
+
+      const underAttemptRow = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-r/t1',
+        attemptId: 'attempt-under',
+        workflowId: 'wf-r',
+        generation: 0,
+      });
+      const pastIso = new Date(Date.now() - 60_000).toISOString();
+      (adapter as any).db.run(
+        `UPDATE task_launch_dispatch
+           SET state = 'acknowledged', fenced_until = ?, attempts_count = 1
+         WHERE id = ?`,
+        [pastIso, underAttemptRow.id],
+      );
+
+      const prepare = vi.fn();
+      const { dispatcher } = dispatcherWithOrchestrator({ prepareTaskForNewAttempt: prepare });
+      expect(dispatcher.abandonStuckLeases()).toBe(0);
+      expect(prepare).not.toHaveBeenCalled();
+    });
+
+    it('poll() runs reapers in both observer and active modes', () => {
+      seed();
+      const row = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-r/t1',
+        attemptId: 'attempt-poll',
+        workflowId: 'wf-r',
+        generation: 0,
+      });
+      const pastIso = new Date(Date.now() - 60_000).toISOString();
+      (adapter as any).db.run(
+        `UPDATE task_launch_dispatch SET state = 'leased', dispatch_owner = 'owner-x', fenced_until = ? WHERE id = ?`,
+        [pastIso, row.id],
+      );
+
+      const observer = new LaunchDispatcher({
+        persistence: adapter,
+        ownerId: 'observer',
+        mode: 'observe',
+      });
+      observer.poll();
+      expect(adapter.loadLaunchDispatchById(row.id)?.state).toBe('enqueued');
     });
   });
 });

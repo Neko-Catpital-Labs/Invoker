@@ -2769,6 +2769,7 @@ function createEmbeddedTerminalBackendFromConfig(
       if (invokerConfig.launchOutboxMode && invokerConfig.launchOutboxMode !== 'disabled') {
         launchDispatcher = new LaunchDispatcher({
           persistence,
+          orchestrator,
           ownerId: workflowMutationOwnerId,
           logger,
           mode: invokerConfig.launchOutboxMode as LaunchDispatcherMode,

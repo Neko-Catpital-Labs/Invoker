@@ -3059,6 +3059,54 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return (this.db.getRowsModified?.() ?? 0) > 0;
   }
 
+  /**
+   * Return the dispatch rows in `acknowledged` whose fence has expired AND
+   * whose `attempts_count` has reached `maxAttempts`. These are the rows
+   * that the dispatcher should abandon and report to the orchestrator —
+   * they have already burned through their retry budget without the
+   * TaskRunner finishing the launch.
+   */
+  listAbandonableAcknowledgedLeases(options: {
+    nowIso?: string;
+    maxAttempts: number;
+  }): TaskLaunchDispatch[] {
+    const now = options.nowIso ?? new Date().toISOString();
+    const rows = this.queryAll(
+      `SELECT * FROM task_launch_dispatch
+         WHERE state = 'acknowledged'
+           AND fenced_until IS NOT NULL
+           AND fenced_until < ?
+           AND attempts_count >= ?
+         ORDER BY id ASC`,
+      [now, options.maxAttempts],
+    );
+    return rows.map((row) => this.rowToTaskLaunchDispatch(row));
+  }
+
+  /**
+   * Terminal abandon: row leaves the live set. Returns false when the row
+   * is already terminal so callers can treat a race as a no-op.
+   */
+  markLaunchDispatchAbandoned(
+    id: number,
+    errorMessage: string,
+    nowIso?: string,
+  ): boolean {
+    const now = nowIso ?? new Date().toISOString();
+    this.execRun(
+      `UPDATE task_launch_dispatch
+         SET state = 'abandoned',
+             completed_at = ?,
+             last_error = ?,
+             dispatch_owner = NULL,
+             fenced_until = NULL
+       WHERE id = ?
+         AND state NOT IN ('completed', 'abandoned')`,
+      [now, errorMessage, id],
+    );
+    return (this.db.getRowsModified?.() ?? 0) > 0;
+  }
+
   reapExpiredLaunchDispatchLeases(nowIso?: string): TaskLaunchDispatch[] {
     const now = nowIso ?? new Date().toISOString();
     return this.runTransaction(() => {
