@@ -97,4 +97,13 @@ describe('workflow rollup', () => {
     expect(rollup.countsByStatus.failed).toBe(0);
     expect(rollup.failedTasks).toEqual([]);
   });
+
+  it('does not list closed tasks as waiting issues alongside review-state tasks', () => {
+    const rollup = computeWorkflowRollupFromSummaries([
+      task('alpha', 'closed'),
+      task('beta', 'review_ready'),
+    ]);
+
+    expect(rollup.waitingTasks.map((issue) => issue.taskId)).toEqual(['beta']);
+  });
 });

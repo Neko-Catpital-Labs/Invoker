@@ -1894,6 +1894,37 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask(reviewLeafId)!.status).toBe('pending');
     });
 
+    it('default merge-gate policy keeps downstream pending when upstream merge gate is closed', () => {
+      orchestrator.loadPlan({
+        name: 'prereq-workflow-default',
+        tasks: [{ id: 'verify-control-plane-regression', description: 'Prereq task' }],
+      });
+      const prereqTaskId = sid(orchestrator, 0, 'verify-control-plane-regression');
+      const prereqWfId = prereqTaskId.split('/')[0]!;
+      const prereqMergeId = `__merge__${prereqWfId}`;
+
+      orchestrator.loadPlan({
+        name: 'workflow-gated-default-closed',
+        tasks: [
+          {
+            id: 'default-leaf',
+            description: 'leaf relies on default merge-gate policy',
+            externalDependencies: [{ workflowId: prereqWfId }],
+          },
+        ],
+      });
+      const defaultLeafId = sid(orchestrator, 1, 'default-leaf');
+
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(makeResponse({ actionId: prereqTaskId, status: 'completed' }));
+      persistence.updateTask(prereqMergeId, { status: 'closed' });
+      orchestrator.syncAllFromDb();
+
+      const startedAfterClosedGate = orchestrator.startExecution();
+      expect(startedAfterClosedGate.map((t) => t.id)).not.toContain(defaultLeafId);
+      expect(orchestrator.getTask(defaultLeafId)!.status).toBe('pending');
+    });
+
     it('setTaskExternalGatePolicies can unblock pending task immediately', () => {
       orchestrator.loadPlan({
         name: 'prereq-workflow',
