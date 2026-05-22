@@ -94,7 +94,9 @@ import {
 } from './config.js';
 import {
   DEFAULT_WORKTREE_MAX_CONCURRENCY,
+  assertExecutionCapacityInvariant,
   resolveEffectiveMaxConcurrency,
+  shouldFatalOnExecutionCapacityOvercommit,
 } from './execution-capacity.js';
 import {
   createHourlySnapshot,
@@ -1640,6 +1642,23 @@ function createEmbeddedTerminalBackendFromConfig(
     return Number.isNaN(parsed.getTime()) ? undefined : parsed;
   };
 
+  function assertFatalExecutionCapacity(label: string): void {
+    if (!shouldFatalOnExecutionCapacityOvercommit()) return;
+    try {
+      assertExecutionCapacityInvariant({
+        config: loadConfig(),
+        activeExecutions: launchingTasks.size + taskHandles.size,
+        label,
+      });
+    } catch (err) {
+      logger.error(err instanceof Error ? err.stack ?? err.message : String(err), { module: 'exec' });
+      setImmediate(() => {
+        throw err;
+      });
+      throw err;
+    }
+  }
+
   // Focus existing window when a second instance is launched
   app.on('second-instance', () => {
     if (mainWindow) {
@@ -1689,14 +1708,17 @@ function createEmbeddedTerminalBackendFromConfig(
         },
         onLaunchAccepted: (taskId) => {
           launchingTasks.add(taskId);
+          assertFatalExecutionCapacity(`launch accepted ${taskId}`);
           logger.info(`Task "${taskId}" launch accepted by TaskRunner`, { module: 'exec' });
         },
         onLaunchStart: (taskId, executor) => {
           launchingTasks.add(taskId);
+          assertFatalExecutionCapacity(`launch start ${taskId}`);
           logger.info(`Task "${taskId}" launch started (executor: ${executor.type})`, { module: 'exec' });
         },
         onLaunchFailed: (taskId, error, executor) => {
           launchingTasks.delete(taskId);
+          assertFatalExecutionCapacity(`launch failed ${taskId}`);
           logger.error(
             `Task "${taskId}" launch failed before spawn (executor: ${executor.type}): ${error.message}`,
             { module: 'exec' },
@@ -1710,11 +1732,13 @@ function createEmbeddedTerminalBackendFromConfig(
             { module: 'exec' },
           );
           taskHandles.set(taskId, { handle, executor });
+          assertFatalExecutionCapacity(`spawned ${taskId}`);
         },
         onComplete: (taskId, response) => {
           flushTaskOutput(taskId);
           launchingTasks.delete(taskId);
           taskHandles.delete(taskId);
+          assertFatalExecutionCapacity(`complete ${taskId}`);
           logger.info(
             `Task "${taskId}" completion callback received (status: ${response.status}, generation: ${response.executionGeneration}, exitCode: ${response.outputs.exitCode ?? 'none'})`,
             { module: 'exec' },
@@ -1742,6 +1766,7 @@ function createEmbeddedTerminalBackendFromConfig(
         },
         onLaunchSettled: (taskId) => {
           launchingTasks.delete(taskId);
+          assertFatalExecutionCapacity(`launch settled ${taskId}`);
         },
       },
     });
@@ -2829,10 +2854,11 @@ function createEmbeddedTerminalBackendFromConfig(
         if (!workflowMutationCoordinator) {
           throw new Error('Workflow mutation coordinator is unavailable');
         }
+        const coordinator = workflowMutationCoordinator;
         const results = executeNoTrackHeadlessBatch(request, {
           classify: classifyHeadlessExecMutation,
           submit: (workflowId, priority, channel, args, options) =>
-            workflowMutationCoordinator.submit(workflowId, priority, channel, args, options),
+            coordinator.submit(workflowId, priority, channel, args, options),
         });
         const accepted = results.filter((result) => result.ok).length;
         logger.info(`headless.batch-exec accepted=${accepted} failed=${results.length - accepted} mode=gui`, {

@@ -479,6 +479,7 @@ export class TaskRunner {
         `phase=${task.execution.phase ?? 'none'} generation=${startGeneration}`,
     );
     this.launchingAttemptIds.add(attemptId);
+    this.callbacks.onLaunchAccepted?.(task.id);
     try {
       await this.executeTaskInner(task, attemptId, bench);
       bench('executeTask.innerReturned');
