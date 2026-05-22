@@ -387,6 +387,46 @@ describe('buildWorktreeSandboxResetScript', () => {
     const { existsSync } = require('node:fs');
     expect(existsSync(join(wtDir, 'untracked.txt'))).toBe(false);
   });
+
+  it('gitignored files (e.g. node_modules/) survive the reset because -fd not -fdx', () => {
+    const fakeHome = mkdtempSync(join(tmpdir(), 'ssh-sandbox-reset-gitignore-'));
+    const cloneDir = join(fakeHome, '.invoker', 'repos', 'abc123');
+    const wtDir = join(fakeHome, '.invoker', 'worktrees', 'abc123', 'exp-task-def');
+
+    // Set up a real git repo + worktree with a .gitignore
+    mkdirSync(cloneDir, { recursive: true });
+    execSync('git init', { cwd: cloneDir, stdio: 'ignore' });
+    execSync('git config user.email "test@test.com"', { cwd: cloneDir, stdio: 'ignore' });
+    execSync('git config user.name "Test"', { cwd: cloneDir, stdio: 'ignore' });
+    writeFileSync(join(cloneDir, '.gitignore'), 'node_modules/\n.cache/\n');
+    writeFileSync(join(cloneDir, 'initial.txt'), 'initial');
+    execSync('git add -A && git commit -m "initial"', { cwd: cloneDir, stdio: 'ignore' });
+
+    execSync(`git worktree add ${JSON.stringify(wtDir)}`, { cwd: cloneDir, stdio: 'ignore' });
+
+    // Simulate a warm-reuse scenario: node_modules/ and .cache/ exist from a prior run
+    mkdirSync(join(wtDir, 'node_modules', 'some-pkg'), { recursive: true });
+    writeFileSync(join(wtDir, 'node_modules', 'some-pkg', 'index.js'), 'cached');
+    mkdirSync(join(wtDir, '.cache'), { recursive: true });
+    writeFileSync(join(wtDir, '.cache', 'build.json'), '{}');
+
+    const baseRef = execSync('git rev-parse HEAD', { cwd: cloneDir }).toString().trim();
+
+    const script = buildWorktreeSandboxResetScript({
+      worktreePath: '~/.invoker/worktrees/abc123/exp-task-def',
+      toRef: baseRef,
+    });
+
+    execFileSync('bash', ['-lc', script], {
+      env: { ...process.env, HOME: fakeHome },
+    });
+
+    // Gitignored caches must survive (-fd keeps them; -fdx would delete them)
+    const { existsSync, readFileSync } = require('node:fs');
+    expect(existsSync(join(wtDir, 'node_modules', 'some-pkg', 'index.js'))).toBe(true);
+    expect(readFileSync(join(wtDir, 'node_modules', 'some-pkg', 'index.js'), 'utf8')).toBe('cached');
+    expect(existsSync(join(wtDir, '.cache', 'build.json'))).toBe(true);
+  });
 });
 
 describe('buildWorktreeRenameBranchScript', () => {
