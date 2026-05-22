@@ -29,6 +29,7 @@ import type {
   WorkflowRollup,
   WorkflowRollupTaskSummary,
 } from '@invoker/workflow-core';
+import { DISPATCH_LEASE_MS } from '@invoker/contracts';
 import {
   computeWorkflowRollupFromSummaries,
   isDiscardedAttempt,
@@ -2945,12 +2946,64 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return rows.map((row) => this.rowToTaskLaunchDispatch(row));
   }
 
-  claimLaunchDispatchAtomic(_options: {
+  /**
+   * Atomic capacity-gated lease of the next enqueued dispatch row.
+   *
+   * Selects the oldest enqueued row (priority high < normal < low, then id
+   * ascending) and transitions it to `leased` only if the current count of
+   * `leased | acknowledged` rows is below `maxConcurrency`. Wrapped in an
+   * IMMEDIATE transaction so concurrent dispatchers cannot double-lease.
+   * Returns the freshly leased row or `undefined` when nothing is enqueued,
+   * capacity is exhausted, or another dispatcher beat us to it.
+   */
+  claimLaunchDispatchAtomic(options: {
     ownerId: string;
     maxConcurrency: number;
     nowIso?: string;
   }): TaskLaunchDispatch | undefined {
-    throw new Error('CB.1 not implemented');
+    if (options.maxConcurrency <= 0) return undefined;
+    const now = options.nowIso ?? new Date().toISOString();
+    const fencedUntil = new Date(
+      new Date(now).getTime() + DISPATCH_LEASE_MS,
+    ).toISOString();
+    return this.runTransaction(() => {
+      const activeRow = this.queryOne(
+        `SELECT COUNT(*) AS active FROM task_launch_dispatch
+           WHERE state IN ('leased', 'acknowledged')`,
+      );
+      const active = Number(activeRow?.active ?? 0);
+      if (active >= options.maxConcurrency) return undefined;
+      const candidate = this.queryOne(
+        `SELECT id FROM task_launch_dispatch
+           WHERE state = 'enqueued'
+           ORDER BY CASE priority
+             WHEN 'high' THEN 0
+             WHEN 'normal' THEN 1
+             ELSE 2
+           END, id
+           LIMIT 1`,
+      );
+      if (!candidate || candidate.id == null) return undefined;
+      const candidateId = Number(candidate.id);
+      this.execRun(
+        `UPDATE task_launch_dispatch
+           SET state = 'leased',
+               dispatch_owner = ?,
+               leased_at = ?,
+               fenced_until = ?,
+               attempts_count = attempts_count + 1
+         WHERE id = ?
+           AND state = 'enqueued'`,
+        [options.ownerId, now, fencedUntil, candidateId],
+      );
+      const updated = (this.db.getRowsModified?.() ?? 0) > 0;
+      if (!updated) return undefined;
+      const row = this.queryOne(
+        'SELECT * FROM task_launch_dispatch WHERE id = ?',
+        [candidateId],
+      );
+      return row ? this.rowToTaskLaunchDispatch(row) : undefined;
+    });
   }
 
   markLaunchDispatchAcknowledged(
@@ -2960,7 +3013,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
   ): boolean {
     const now = nowIso ?? new Date().toISOString();
     const fencedUntil = new Date(
-      new Date(now).getTime() + 30_000,
+      new Date(now).getTime() + DISPATCH_LEASE_MS,
     ).toISOString();
     this.execRun(
       `UPDATE task_launch_dispatch
@@ -3002,6 +3055,54 @@ export class SQLiteAdapter implements PersistenceAdapter {
        WHERE id = ?
          AND state NOT IN ('completed', 'abandoned')`,
       [errorMessage, id],
+    );
+    return (this.db.getRowsModified?.() ?? 0) > 0;
+  }
+
+  /**
+   * Return the dispatch rows in `acknowledged` whose fence has expired AND
+   * whose `attempts_count` has reached `maxAttempts`. These are the rows
+   * that the dispatcher should abandon and report to the orchestrator —
+   * they have already burned through their retry budget without the
+   * TaskRunner finishing the launch.
+   */
+  listAbandonableAcknowledgedLeases(options: {
+    nowIso?: string;
+    maxAttempts: number;
+  }): TaskLaunchDispatch[] {
+    const now = options.nowIso ?? new Date().toISOString();
+    const rows = this.queryAll(
+      `SELECT * FROM task_launch_dispatch
+         WHERE state = 'acknowledged'
+           AND fenced_until IS NOT NULL
+           AND fenced_until < ?
+           AND attempts_count >= ?
+         ORDER BY id ASC`,
+      [now, options.maxAttempts],
+    );
+    return rows.map((row) => this.rowToTaskLaunchDispatch(row));
+  }
+
+  /**
+   * Terminal abandon: row leaves the live set. Returns false when the row
+   * is already terminal so callers can treat a race as a no-op.
+   */
+  markLaunchDispatchAbandoned(
+    id: number,
+    errorMessage: string,
+    nowIso?: string,
+  ): boolean {
+    const now = nowIso ?? new Date().toISOString();
+    this.execRun(
+      `UPDATE task_launch_dispatch
+         SET state = 'abandoned',
+             completed_at = ?,
+             last_error = ?,
+             dispatch_owner = NULL,
+             fenced_until = NULL
+       WHERE id = ?
+         AND state NOT IN ('completed', 'abandoned')`,
+      [now, errorMessage, id],
     );
     return (this.db.getRowsModified?.() ?? 0) > 0;
   }
