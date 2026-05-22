@@ -18,8 +18,16 @@ import type { Logger } from '@invoker/contracts';
 
 export type LaunchDispatcherMode = 'observe' | 'active';
 
+export type LaunchDispatcherPersistence = Pick<
+  SQLiteAdapter,
+  | 'listLaunchDispatchesByState'
+  | 'markLaunchDispatchAcknowledged'
+  | 'markLaunchDispatchCompleted'
+  | 'markLaunchDispatchFailed'
+>;
+
 export interface LaunchDispatcherOptions {
-  persistence: Pick<SQLiteAdapter, 'listLaunchDispatchesByState'>;
+  persistence: LaunchDispatcherPersistence;
   ownerId: string;
   logger?: Logger;
   mode: LaunchDispatcherMode;
@@ -32,7 +40,7 @@ const OBSERVED_STATES: readonly TaskLaunchDispatchState[] = [
 ];
 
 export class LaunchDispatcher {
-  private readonly persistence: LaunchDispatcherOptions['persistence'];
+  private readonly persistence: LaunchDispatcherPersistence;
   private readonly ownerId: string;
   private readonly logger?: Logger;
   private readonly mode: LaunchDispatcherMode;
@@ -46,6 +54,10 @@ export class LaunchDispatcher {
 
   getMode(): LaunchDispatcherMode {
     return this.mode;
+  }
+
+  getOwnerId(): string {
+    return this.ownerId;
   }
 
   /**
@@ -67,6 +79,62 @@ export class LaunchDispatcher {
       return;
     }
     throw new Error('CB.5 not implemented');
+  }
+
+  /**
+   * Transition a leased dispatch row to acknowledged. Called by the
+   * TaskRunner at the top of {@link executeTask} once it has accepted
+   * ownership of the launch. Returns false when the row is no longer
+   * in `leased` (e.g. it was reaped first), in which case the runner
+   * should bail out without starting the executor.
+   */
+  ackDispatch(dispatchId: number, runnerId: string): boolean {
+    const ok = this.persistence.markLaunchDispatchAcknowledged(dispatchId, runnerId);
+    this.logger?.info?.('[launch-dispatcher] ack', {
+      ownerId: this.ownerId,
+      dispatchId,
+      runnerId,
+      accepted: ok,
+      module: 'launch-dispatcher',
+    });
+    return ok;
+  }
+
+  /**
+   * Transition an acknowledged dispatch row to completed. Called by the
+   * TaskRunner once {@link markTaskRunningAfterLaunch} has succeeded
+   * (the executor handle is live and the task is in the executing
+   * phase). Returns false when the row is already terminal.
+   */
+  completeDispatch(dispatchId: number): boolean {
+    const ok = this.persistence.markLaunchDispatchCompleted(dispatchId);
+    this.logger?.info?.('[launch-dispatcher] complete', {
+      ownerId: this.ownerId,
+      dispatchId,
+      accepted: ok,
+      module: 'launch-dispatcher',
+    });
+    return ok;
+  }
+
+  /**
+   * Record a launch failure by re-enqueuing the dispatch row and storing
+   * the error message in `last_error`. The dispatcher's reaper /
+   * abandon-after-N-attempts logic decides whether to retry or abandon.
+   * Returns false when the row is already terminal.
+   */
+  failDispatch(dispatchId: number, error: unknown): boolean {
+    const message =
+      error instanceof Error ? error.message : String(error ?? 'unknown launch error');
+    const ok = this.persistence.markLaunchDispatchFailed(dispatchId, message);
+    this.logger?.info?.('[launch-dispatcher] fail', {
+      ownerId: this.ownerId,
+      dispatchId,
+      error: message,
+      accepted: ok,
+      module: 'launch-dispatcher',
+    });
+    return ok;
   }
 }
 
