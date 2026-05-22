@@ -13,6 +13,7 @@ import {
   buildWorktreeListScript,
   buildWorktreeHeadScript,
   buildWorktreeCleanupScript,
+  buildWorktreeSandboxResetScript,
   buildWorktreeRenameBranchScript,
   buildRecordAndPushScript,
   parseRecordAndPushOutput,
@@ -304,6 +305,85 @@ describe('buildWorktreeCleanupScript', () => {
     expect(() => execSync(`test ! -e ${JSON.stringify(join(staleWt, 'sentinel.txt'))}`)).not.toThrow();
     expect(() => execSync(`test ! -e ${JSON.stringify(literalTildeRoot)}`)).not.toThrow();
     execSync(`rm -rf ${JSON.stringify(literalTildeRoot)}`);
+  });
+});
+
+describe('buildWorktreeSandboxResetScript', () => {
+  it('generates script with set -euo pipefail and base64-decoded WT and REF', () => {
+    const script = buildWorktreeSandboxResetScript({
+      worktreePath: '/home/invoker/.invoker/worktrees/abc123/exp-task-def',
+      toRef: 'origin/main',
+    });
+
+    expect(script).toContain('set -euo pipefail');
+    expect(script).toContain('WT=$(echo');
+    expect(script).toContain('REF=$(echo');
+    expect(script).toContain('base64 -d)');
+    expect(script).toContain('git -C "$WT" reset --hard "$REF"');
+    expect(script).toContain('git -C "$WT" clean -fdx');
+  });
+
+  it('includes tilde-expansion logic for worktree path', () => {
+    const script = buildWorktreeSandboxResetScript({
+      worktreePath: '~/.invoker/worktrees/abc123/exp-task-def',
+      toRef: 'abc123def',
+    });
+
+    expect(script).toContain('"$HOME"');
+    expect(script).toContain('git -C "$WT" reset --hard "$REF"');
+    expect(script).toContain('git -C "$WT" clean -fdx');
+  });
+
+  it('encodes path and ref as base64 so special characters are safe', () => {
+    const path = "/home/user's worktree/path";
+    const ref = 'branch/with spaces and $pecial';
+    const script = buildWorktreeSandboxResetScript({ worktreePath: path, toRef: ref });
+
+    const pathB64 = Buffer.from(path, 'utf8').toString('base64');
+    const refB64 = Buffer.from(ref, 'utf8').toString('base64');
+    expect(script).toContain(pathB64);
+    expect(script).toContain(refB64);
+    expect(script).not.toContain(path);
+    expect(script).not.toContain(ref);
+  });
+
+  it('actually resets and cleans a dirty worktree via bash execution', () => {
+    const fakeHome = mkdtempSync(join(tmpdir(), 'ssh-sandbox-reset-home-'));
+    const cloneDir = join(fakeHome, '.invoker', 'repos', 'abc123');
+    const wtDir = join(fakeHome, '.invoker', 'worktrees', 'abc123', 'exp-task-def');
+
+    // Set up a real git repo + worktree
+    mkdirSync(cloneDir, { recursive: true });
+    execSync('git init', { cwd: cloneDir, stdio: 'ignore' });
+    execSync('git config user.email "test@test.com"', { cwd: cloneDir, stdio: 'ignore' });
+    execSync('git config user.name "Test"', { cwd: cloneDir, stdio: 'ignore' });
+    writeFileSync(join(cloneDir, 'initial.txt'), 'initial');
+    execSync('git add -A && git commit -m "initial"', { cwd: cloneDir, stdio: 'ignore' });
+
+    execSync(`git worktree add ${JSON.stringify(wtDir)}`, { cwd: cloneDir, stdio: 'ignore' });
+
+    // Dirty the worktree: modify tracked file + add untracked file
+    writeFileSync(join(wtDir, 'initial.txt'), 'dirty');
+    writeFileSync(join(wtDir, 'untracked.txt'), 'untracked');
+
+    const baseRef = execSync('git rev-parse HEAD', { cwd: cloneDir }).toString().trim();
+
+    const script = buildWorktreeSandboxResetScript({
+      worktreePath: '~/.invoker/worktrees/abc123/exp-task-def',
+      toRef: baseRef,
+    });
+
+    execFileSync('bash', ['-lc', script], {
+      env: { ...process.env, HOME: fakeHome },
+    });
+
+    // Tracked file should be restored
+    const content = require('node:fs').readFileSync(join(wtDir, 'initial.txt'), 'utf8');
+    expect(content).toBe('initial');
+
+    // Untracked file should be gone
+    const { existsSync } = require('node:fs');
+    expect(existsSync(join(wtDir, 'untracked.txt'))).toBe(false);
   });
 });
 

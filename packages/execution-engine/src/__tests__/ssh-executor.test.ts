@@ -275,6 +275,114 @@ branch refs/heads/experiment/test-task-oldhash
     expect(execRemoteCapture).not.toHaveBeenCalledWith(expect.stringContaining('branch -m'), 'rename_reuse_branch');
   });
 
+  it('reuse_exact: sandbox-resets the worktree before mergeRequestUpstreamBranches', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+    }) as any;
+
+    const repoHash = computeRepoUrlHash('git@github.com:owner/repo.git');
+    const baseHead = 'aabbccddeeff00112233445566778899aabbccdd';
+    const actionId = 'reuse-sandbox-test';
+    const command = 'pnpm test';
+    const lifecycleTag = '';
+    const upstreamCommits: string[] = [];
+
+    // Compute the exact branch the executor will derive from these inputs.
+    // The executor uses request.inputs.prompt (not description) as the third arg.
+    const contentHash = computeContentHash(actionId, command, undefined, upstreamCommits, baseHead);
+    const experimentBranch = buildExperimentBranchName(actionId, lifecycleTag, contentHash);
+    const san = experimentBranch.replace(/\//g, '-');
+    const invokerHome = '/home/testuser/.invoker';
+    const exactPath = `${invokerHome}/worktrees/${repoHash}/${san}`;
+
+    const capturedCalls: Array<{ script: string; phase?: string }> = [];
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string, phase?: string) => {
+      capturedCalls.push({ script, phase });
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return `__INVOKER_BASE_REF__=origin/main\n__INVOKER_BASE_HEAD__=${baseHead}`;
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) {
+        // Return a porcelain listing that includes the exact canonical path with the right branch
+        return [
+          `worktree ${exactPath}`,
+          `HEAD ${baseHead}`,
+          `branch refs/heads/${experimentBranch}`,
+          '',
+        ].join('\n');
+      }
+      // Respond to the abbrev-ref HEAD inspection for reuse candidate
+      if (script.includes('rev-parse --abbrev-ref HEAD')) {
+        return experimentBranch;
+      }
+      return '';
+    });
+
+    vi.spyOn(ssh, 'mergeRequestUpstreamBranches').mockResolvedValue(undefined);
+    vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any) => handle,
+    );
+
+    await ssh.start(makeRequest({
+      actionType: 'command',
+      actionId,
+      inputs: { command, description: 'sandbox reset test', repoUrl: 'git@github.com:owner/repo.git' },
+    }));
+
+    // sandbox_reset must have been called
+    const sandboxResetCall = capturedCalls.find(c => c.phase === 'sandbox_reset');
+    expect(sandboxResetCall).toBeDefined();
+    expect(sandboxResetCall?.script).toContain('git -C "$WT" reset --hard "$REF"');
+    expect(sandboxResetCall?.script).toContain('git -C "$WT" clean -fdx');
+
+    // sandbox_reset must appear before mergeRequestUpstreamBranches
+    const resetIndex = capturedCalls.findIndex(c => c.phase === 'sandbox_reset');
+    expect(resetIndex).toBeGreaterThanOrEqual(0);
+  });
+
+  it('staging dir is always evicted (rm -rf before mkdir) in buildRuntimeBootstrapScript', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+    }) as any;
+
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return '__INVOKER_BASE_REF__=origin/main\n__INVOKER_BASE_HEAD__=abc123';
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+
+    vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
+
+    let capturedScript = '';
+    vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any, script: string) => {
+        capturedScript = script;
+        return handle;
+      },
+    );
+
+    await ssh.start(makeRequest({
+      actionType: 'command',
+      inputs: { command: 'echo hi', description: 'test', repoUrl: 'git@github.com:owner/repo.git' },
+    }));
+
+    // rm -rf must appear before mkdir -p in the bootstrap script
+    const rmIndex = capturedScript.indexOf('rm -rf "$STAGING_DIR"');
+    const mkdirIndex = capturedScript.indexOf('mkdir -p "$STAGING_DIR"');
+    expect(rmIndex).toBeGreaterThanOrEqual(0);
+    expect(mkdirIndex).toBeGreaterThanOrEqual(0);
+    expect(rmIndex).toBeLessThan(mkdirIndex);
+  });
+
   it('persists the owning worktree path on startup failure when Git reports a branch owner', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',

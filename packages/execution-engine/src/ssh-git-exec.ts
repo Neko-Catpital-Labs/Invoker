@@ -277,6 +277,33 @@ done < <(echo "$WORKTREES_B64" | base64 -d)
 `;
 }
 
+export interface GitWorktreeSandboxResetOpts {
+  worktreePath: string;
+  /** The commit/ref to hard-reset the branch to before execution (e.g. resolvedBaseRef / baseHead). */
+  toRef: string;
+}
+
+/**
+ * Sandbox-reset a reused managed worktree to a known-good state before task execution.
+ *
+ * Mirrors the Bazel guarantee: action inputs are always the declared inputs, never
+ * residual state from a prior (possibly killed) run.
+ *
+ *   1. git reset --hard <toRef>   — force branch tip back to declared base
+ *   2. git clean -fdx             — remove all untracked/dirty files (full sandbox clean)
+ */
+export function buildWorktreeSandboxResetScript(opts: GitWorktreeSandboxResetOpts): string {
+  const wtB64 = base64Encode(opts.worktreePath);
+  const refB64 = base64Encode(opts.toRef);
+  return `set -euo pipefail
+WT=$(echo ${wtB64} | base64 -d)
+REF=$(echo ${refB64} | base64 -d)
+${bashNormalizeTildePath('WT')}
+git -C "$WT" reset --hard "$REF"
+git -C "$WT" clean -fdx
+`;
+}
+
 export interface GitWorktreeRenameBranchOpts {
   worktreePath: string;
   fromBranch: string;
