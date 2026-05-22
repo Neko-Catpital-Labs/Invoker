@@ -749,6 +749,16 @@ export function App() {
       }
 
       if (event.key === 'Escape') {
+        if (keyboardRegion === 'taskGraph' && selectedWorkflow && miniDagTasks.size > 0) {
+          event.preventDefault();
+          setContextMenu(null);
+          setWorkflowContextMenu(null);
+          setSelectedTaskId(null);
+          setSelectedWorkflowId(null);
+          setWorkflowSelectionDismissed(true);
+          focusKeyboardRegion('workflowGraph');
+          return;
+        }
         if (keyboardRegion === 'inspector') {
           event.preventDefault();
           focusKeyboardRegion(previousGraphRegion);
@@ -760,6 +770,12 @@ export function App() {
         if (event.key === 'Enter') {
           event.preventDefault();
           openSelectedContextMenu();
+          return;
+        }
+        if (event.key === ' ' && keyboardRegion === 'workflowGraph') {
+          event.preventDefault();
+          setWorkflowContextMenu(null);
+          setWorkflowSelectionDismissed(false);
           return;
         }
         if (event.key === 'Home' && keyboardRegion === 'taskGraph') {
@@ -835,6 +851,7 @@ export function App() {
     searchResults,
     selectRelativeNode,
     selectTaskById,
+    selectedWorkflow,
     visibleStatusKeys,
   ]);
   const missingRequiredTool = systemDiagnostics?.tools.find((tool) => tool.required && !tool.installed) ?? null;
