@@ -61,7 +61,6 @@ import {
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
 import { trackWorkflow } from './headless-watch.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
-import { relaunchOrphansAndStartReady } from './orphan-relaunch.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import type { RuntimeServices } from '@invoker/runtime-service';
 
@@ -1421,7 +1420,7 @@ async function headlessResume(
   });
 
   orchestrator.syncFromDb(workflowId);
-  const allStarted = relaunchOrphansAndStartReady(orchestrator, deps.logger, 'headless', workflowId);
+  const allStarted = orchestrator.startExecution();
 
   if (noTrack) {
     if (allStarted.length > 0) {

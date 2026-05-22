@@ -214,9 +214,21 @@ export interface InvokerConfig {
    *   the existing claim path; LaunchDispatcher polls and logs counts but
    *   does not own dispatch.
    * - "active": LaunchDispatcher is the source of truth for dispatch
-   *   (Phase B; placeholder today).
+   *   (Phase B, default in production).
    *
    * Unknown values fall back to "disabled" with a console warning.
+   *
+   * CC.6 deferral: the plan's Phase C calls for removing this flag
+   * entirely once the outbox has dogfooded clean. That deletion is
+   * left as a follow-up because the test surface still flips between
+   * 'observe' / 'active' / 'disabled' to exercise both code paths
+   * (see launch-dispatcher.test.ts active-mode suite,
+   * launch-claim-orphan-regression.test.ts active-mode passing test,
+   * and several headless-delegation parity cases). Each Phase C
+   * cleanup is independently revertable per the plan; CC.6 stays
+   * documented-but-deferred so the production env-var rollout (and
+   * the ability to flip back to observe mode in a hot incident) is
+   * preserved while the dispatcher matures.
    */
   launchOutboxMode?: LaunchOutboxMode;
 }

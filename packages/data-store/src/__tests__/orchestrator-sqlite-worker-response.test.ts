@@ -254,9 +254,13 @@ describe('Protocol failure persistence (SQLite roundtrip)', () => {
     expect(row.execution.exitCode).toBe(1);
     expect(row.execution.completedAt).toBeDefined();
 
-    // Verify scheduler slot freed
+    // CC.3: the scheduler is now a pure priority queue; concurrency is
+    // tracked by the task_launch_dispatch outbox, not the scheduler.
+    // The "scheduler slot freed" assertion is therefore meaningless
+    // post-CC.3 — what we actually want is that the queue is no
+    // longer holding this task.
     const status = (orchestrator as any).scheduler.getStatus();
-    expect(status.runningCount).toBe(0);
+    expect(status.queueLength).toBe(0);
   });
 
   it('spawn_experiments without dagMutation persists failed', () => {
@@ -283,8 +287,9 @@ describe('Protocol failure persistence (SQLite roundtrip)', () => {
     expect(row.execution.exitCode).toBe(1);
     expect(row.execution.completedAt).toBeDefined();
 
+    // CC.3: see note above — assert queue freed, not legacy runningCount.
     const status = (orchestrator as any).scheduler.getStatus();
-    expect(status.runningCount).toBe(0);
+    expect(status.queueLength).toBe(0);
   });
 
   it('select_experiment without dagMutation persists failed', () => {
@@ -311,8 +316,9 @@ describe('Protocol failure persistence (SQLite roundtrip)', () => {
     expect(row.execution.exitCode).toBe(1);
     expect(row.execution.completedAt).toBeDefined();
 
+    // CC.3: see note above — assert queue freed, not legacy runningCount.
     const status = (orchestrator as any).scheduler.getStatus();
-    expect(status.runningCount).toBe(0);
+    expect(status.queueLength).toBe(0);
   });
 
   it('unknown actionId does not mutate unrelated tasks', () => {
