@@ -44,6 +44,7 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const seededSnapshotRef = useRef<{ sessionId: string; snapshot: string } | null>(null);
 
   useEffect(() => {
     const host = containerRef.current;
@@ -68,6 +69,24 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
     }
     termRef.current = term;
     fitRef.current = fit;
+
+    // Seed this xterm instance with the replay snapshot captured by the
+    // embedded terminal manager before the renderer subscribed. The ref
+    // dedups across React strict-mode double-effect runs and any future
+    // change that re-triggers this effect with the same snapshot.
+    const snapshot = session.outputSnapshot;
+    const alreadySeeded =
+      seededSnapshotRef.current?.sessionId === session.sessionId
+      && seededSnapshotRef.current?.snapshot === snapshot;
+    if (snapshot && !alreadySeeded) {
+      try {
+        term.write(snapshot);
+      } catch {
+        /* terminal disposed */
+      }
+      onOutput(session.sessionId, snapshot);
+      seededSnapshotRef.current = { sessionId: session.sessionId, snapshot };
+    }
 
     const inputDisposable = term.onData((data) => {
       void window.invoker?.terminalWrite?.(session.sessionId, data);
@@ -123,6 +142,9 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
       }
       termRef.current = null;
       fitRef.current = null;
+      // Reset the seeded-snapshot guard so the next effect run (e.g. React
+      // strict-mode double-effect) seeds the freshly created xterm instance.
+      seededSnapshotRef.current = null;
     };
   }, [onOutput, session.sessionId]);
 

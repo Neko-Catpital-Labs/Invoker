@@ -18,6 +18,51 @@ vi.mock('@xyflow/react', async () => {
   return createReactFlowMock();
 });
 
+// Replace xterm with a tracking stub so jsdom doesn't try to use a real
+// canvas-backed renderer and so tests can assert what was written to each
+// terminal instance (used to verify replay-snapshot seeding).
+vi.mock('xterm', () => {
+  const instances: Array<{ writes: string[] }> = [];
+  class Terminal {
+    cols = 80;
+    rows = 24;
+    private readonly _record: { writes: string[] };
+    constructor(_opts?: unknown) {
+      this._record = { writes: [] };
+      instances.push(this._record);
+    }
+    loadAddon(_addon: unknown): void {}
+    open(_host: HTMLElement): void {}
+    onData(_cb: (data: string) => void): { dispose: () => void } {
+      return { dispose: () => {} };
+    }
+    write(data: string): void {
+      this._record.writes.push(data);
+    }
+    focus(): void {}
+    dispose(): void {}
+  }
+  return {
+    Terminal,
+    __xtermInstances__: instances,
+    __resetXtermInstances__: () => { instances.length = 0; },
+  };
+});
+
+vi.mock('xterm-addon-fit', () => {
+  class FitAddon {
+    fit(): void {}
+  }
+  return { FitAddon };
+});
+
+interface XTermMockModule {
+  __xtermInstances__: Array<{ writes: string[] }>;
+  __resetXtermInstances__: () => void;
+}
+
+const xtermMock = (await import('xterm')) as unknown as XTermMockModule;
+
 const { App } = await import('../App.js');
 
 const workflows: WorkflowMeta[] = [{ id: 'wf-a', name: 'Workflow A', status: 'completed' }];
@@ -49,6 +94,7 @@ describe('Terminal drawer (component)', () => {
   let mock: MockInvoker;
 
   beforeEach(() => {
+    xtermMock.__resetXtermInstances__();
     mock = createMockInvoker();
     mock.install();
   });
@@ -155,6 +201,120 @@ describe('Terminal drawer (component)', () => {
       expect(alertSpy).toHaveBeenCalledWith('Task is still running.');
     });
     expect(screen.queryByTestId('terminal-tab-task-alpha')).not.toBeInTheDocument();
+  });
+
+  it('writes the session replay snapshot into xterm when the pane mounts', async () => {
+    const snapshot = '[32mwelcome[0m\r\n$ echo seeded\r\nseeded\r\n';
+    (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      opened: true,
+      session: {
+        sessionId: 'mock-session-task-alpha',
+        taskId: 'task-alpha',
+        status: 'running',
+        mode: 'spawn',
+        attached: false,
+        createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+        command: 'bash',
+        outputSnapshot: snapshot,
+      },
+    });
+
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      const allWrites = xtermMock.__xtermInstances__.flatMap((instance) => instance.writes);
+      expect(allWrites).toContain(snapshot);
+    });
+
+    // The snapshot's last non-empty line should also flow through onOutput so
+    // the drawer's output preview reflects pre-mount output.
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-session-output-preview')).toHaveTextContent('seeded');
+    });
+  });
+
+  it('does not duplicate the replay snapshot on parent re-renders', async () => {
+    const snapshot = 'initial replay\r\n';
+    (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      opened: true,
+      session: {
+        sessionId: 'mock-session-task-alpha',
+        taskId: 'task-alpha',
+        status: 'running',
+        mode: 'spawn',
+        attached: false,
+        createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+        outputSnapshot: snapshot,
+      },
+    });
+
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
+    });
+
+    // Force several parent re-renders by firing task deltas. The pane's
+    // useEffect deps are stable (sessionId + stable callback), so it must
+    // not re-seed the snapshot on each re-render.
+    act(() => {
+      mock.fireDelta({ type: 'updated', task: { ...taskAlpha, status: 'running' } });
+      mock.fireDelta({ type: 'updated', task: { ...taskAlpha, status: 'completed' } });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
+    });
+
+    const seededInstance = xtermMock.__xtermInstances__
+      .find((instance) => instance.writes.some((data) => data === snapshot));
+    expect(seededInstance).toBeDefined();
+    const snapshotWrites = seededInstance!.writes.filter((data) => data === snapshot);
+    expect(snapshotWrites).toHaveLength(1);
+  });
+
+  it('skips replay seeding when the session has no snapshot', async () => {
+    (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      opened: true,
+      session: {
+        sessionId: 'mock-session-task-alpha',
+        taskId: 'task-alpha',
+        status: 'running',
+        mode: 'spawn',
+        attached: false,
+        createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+        // No outputSnapshot field at all.
+      },
+    });
+
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
+    });
+
+    const totalWrites = xtermMock.__xtermInstances__.reduce(
+      (sum, instance) => sum + instance.writes.length,
+      0,
+    );
+    expect(totalWrites).toBe(0);
+    expect(screen.queryByTestId('terminal-session-output-preview')).not.toBeInTheDocument();
   });
 
   it('opens the drawer when the context-menu Open Terminal action is used', async () => {

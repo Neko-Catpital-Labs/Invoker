@@ -134,6 +134,7 @@ export function createMockInvoker(
         mode: 'spawn',
         attached: false,
         createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+        outputSnapshot: '',
       },
     })),
     terminalList: vi.fn(async () => []),
