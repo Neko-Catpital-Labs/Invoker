@@ -15,6 +15,7 @@ import { scopePlanTaskId } from '@invoker/workflow-core';
 import type { Orchestrator, TaskState, ExperimentVariant, RunnerKind } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { WorkRequest, WorkResponse, ActionType, Logger } from '@invoker/contracts';
+import { ATTEMPT_LEASE_MS } from '@invoker/contracts';
 import type { Executor, ExecutorHandle } from './executor.js';
 import type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
 import { BaseExecutor } from './base-executor.js';
@@ -63,7 +64,6 @@ export type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
 
 /** Keeps `lastHeartbeatAt` fresh while `executor.start()` is awaited (SSH remote setup/provision can take minutes). Matches BaseExecutor default heartbeat cadence. */
 const PRE_START_HEARTBEAT_INTERVAL_MS = 30_000;
-const ATTEMPT_LEASE_MS = 20 * 60 * 1000;
 const DEFAULT_EXECUTOR_START_TIMEOUT_MS = 10 * 60 * 1000;
 
 type StartupFailureMetadata = {

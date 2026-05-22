@@ -206,7 +206,22 @@ export interface InvokerConfig {
     /** Routing strategy. Defaults to "enforce". */
     strategy?: 'enforce' | 'route';
   }>;
+  /**
+   * Launch-handoff outbox mode (Phase A of the launch-handoff
+   * re-architecture). Resolved from the INVOKER_LAUNCH_OUTBOX env var:
+   * - "disabled" (default): legacy in-memory dispatch only.
+   * - "observe": orchestrator writes task_launch_dispatch rows alongside
+   *   the existing claim path; LaunchDispatcher polls and logs counts but
+   *   does not own dispatch.
+   * - "active": LaunchDispatcher is the source of truth for dispatch
+   *   (Phase B; placeholder today).
+   *
+   * Unknown values fall back to "disabled" with a console warning.
+   */
+  launchOutboxMode?: LaunchOutboxMode;
 }
+
+export type LaunchOutboxMode = 'disabled' | 'observe' | 'active';
 
 function readJsonSafe(path: string): InvokerConfig {
   if (!existsSync(path)) {
@@ -230,10 +245,34 @@ function readJsonSafe(path: string): InvokerConfig {
 }
 
 export function loadConfig(): InvokerConfig {
-  if (process.env.INVOKER_REPO_CONFIG_PATH) {
-    return readJsonSafe(process.env.INVOKER_REPO_CONFIG_PATH);
+  const base = process.env.INVOKER_REPO_CONFIG_PATH
+    ? readJsonSafe(process.env.INVOKER_REPO_CONFIG_PATH)
+    : readJsonSafe(join(homedir(), '.invoker', 'config.json'));
+  base.launchOutboxMode = resolveLaunchOutboxMode();
+  return base;
+}
+
+/**
+ * Resolve the launch-outbox feature-flag mode from the
+ * `INVOKER_LAUNCH_OUTBOX` env var.
+ *
+ * Returns `'disabled'` when the var is unset, empty, or holds an
+ * unrecognised value (with a console warning for unknown values so
+ * operators notice typos like `INVOKER_LAUNCH_OUTBOX=on`).
+ */
+export function resolveLaunchOutboxMode(
+  env: NodeJS.ProcessEnv = process.env,
+): LaunchOutboxMode {
+  const raw = env.INVOKER_LAUNCH_OUTBOX;
+  if (typeof raw !== 'string' || raw.trim() === '') return 'disabled';
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === 'disabled' || normalized === 'observe' || normalized === 'active') {
+    return normalized;
   }
-  return readJsonSafe(join(homedir(), '.invoker', 'config.json'));
+  console.warn(
+    `[config] Unknown INVOKER_LAUNCH_OUTBOX value "${raw}"; falling back to "disabled".`,
+  );
+  return 'disabled';
 }
 
 export type EmbeddedTerminalBackendConfig = 'bash' | 'pty';
