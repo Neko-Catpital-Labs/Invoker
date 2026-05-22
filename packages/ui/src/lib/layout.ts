@@ -11,9 +11,15 @@
  *    for straighter edges.
  */
 
-import ELK from 'elkjs/lib/elk.bundled.js';
-
 import type { TaskState } from '../types.js';
+
+// Lazy-load the elkjs runtime: it's a ~1.4 MB GWT-compiled bundle, so deferring
+// the import until the first DAG layout call keeps it out of the initial app
+// chunk and the React/UI critical path.
+async function loadElkConstructor(): Promise<new () => ElkLayoutEngine> {
+  const mod = await import('elkjs/lib/elk.bundled.js');
+  return (mod.default ?? mod) as unknown as new () => ElkLayoutEngine;
+}
 
 export interface NodePosition {
   x: number;
@@ -88,7 +94,11 @@ export async function layoutTaskGraph(
     .sort((a, b) => edgeLayoutId(a).localeCompare(edgeLayoutId(b)));
 
   try {
-    const elk = options?.elk ?? new ELK();
+    let elk = options?.elk;
+    if (!elk) {
+      const ElkCtor = await loadElkConstructor();
+      elk = new ElkCtor();
+    }
     const graph = {
       id: 'task-dag',
       layoutOptions: {
