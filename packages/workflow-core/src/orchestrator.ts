@@ -3809,7 +3809,7 @@ export class Orchestrator {
   removeAllWorkflows(): void {
     this.activeWorkflowIds.clear();
     this.stateMachine.clear();
-    this.scheduler.killAll();
+    this.scheduler.clearQueue();
   }
 
   /**
@@ -3875,7 +3875,7 @@ export class Orchestrator {
     this.persistence.deleteAllWorkflows?.();
 
     // 3. Clear scheduler
-    this.scheduler.killAll();
+    this.scheduler.clearQueue();
 
     // 4. Clear memory
     this.activeWorkflowIds.clear();
