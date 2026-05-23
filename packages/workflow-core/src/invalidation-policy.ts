@@ -281,8 +281,8 @@ export async function applyInvalidation(
 // Structural type to avoid a circular import on the full
 // `Orchestrator` class (which imports `applyInvalidation` from here).
 export interface InvalidationDepsOrchestrator {
-  cancelTask(taskId: string): unknown;
-  cancelWorkflow(workflowId: string): unknown;
+  cancelTask(taskId: string): { runningCancelled: string[] };
+  cancelWorkflow(workflowId: string): { runningCancelled: string[] };
   retryTask(taskId: string): TaskState[];
   recreateTask(taskId: string): TaskState[];
   retryWorkflow(workflowId: string): TaskState[];
@@ -301,23 +301,50 @@ const TERMINAL_CANCEL_ERROR_CODES = new Set([
   'WORKFLOW_ALREADY_TERMINAL',
 ]);
 
+export interface BuildCancelInFlightDeps {
+  orchestrator: Pick<InvalidationDepsOrchestrator, 'cancelTask' | 'cancelWorkflow'>;
+  /**
+   * Optional hook to kill the active executor handle for each running
+   * task that was cancelled. Production callers wire this to
+   * `TaskRunner.killActiveExecution`; the orchestrator-only fallback
+   * omits it (the orchestrator state machine still transitions the
+   * tasks, but the in-flight process keeps running until it self-exits).
+   */
+  killActiveExecution?: (taskId: string) => void | Promise<void>;
+}
+
+/**
+ * Single cancel-in-flight implementation shared by the orchestrator-only
+ * fallback and the production `buildInvalidationDeps`. Tolerates
+ * already-terminal targets (the rest of the pipeline still runs) and
+ * fans out the optional executor-kill hook for every running task that
+ * was cancelled.
+ */
+export function buildCancelInFlight(deps: BuildCancelInFlightDeps): CancelInFlightFn {
+  return async (scope, id) => {
+    if (scope === 'none') return;
+    let result: { runningCancelled: string[] };
+    try {
+      result = scope === 'task'
+        ? deps.orchestrator.cancelTask(id)
+        : deps.orchestrator.cancelWorkflow(id);
+    } catch (e) {
+      const code = (e as { code?: string })?.code;
+      if (code && TERMINAL_CANCEL_ERROR_CODES.has(code)) return;
+      throw e;
+    }
+    if (!deps.killActiveExecution) return;
+    for (const runningId of result.runningCancelled) {
+      await deps.killActiveExecution(runningId);
+    }
+  };
+}
+
 export function buildOrchestratorOnlyInvalidationDeps(
   orchestrator: InvalidationDepsOrchestrator,
 ): InvalidationDeps {
   return {
-    cancelInFlight: async (scope, id) => {
-      if (scope === 'none') return;
-      try {
-        if (scope === 'task') orchestrator.cancelTask(id);
-        else orchestrator.cancelWorkflow(id);
-      } catch (e) {
-        // Already-terminal targets have nothing to cancel; the rest
-        // of the pipeline still runs.
-        const code = (e as { code?: string })?.code;
-        if (code && TERMINAL_CANCEL_ERROR_CODES.has(code)) return;
-        throw e;
-      }
-    },
+    cancelInFlight: buildCancelInFlight({ orchestrator }),
     retryTask: (taskId) => orchestrator.retryTask(taskId),
     recreateTask: (taskId) => orchestrator.recreateTask(taskId),
     retryWorkflow: (workflowId) => orchestrator.retryWorkflow(workflowId),
