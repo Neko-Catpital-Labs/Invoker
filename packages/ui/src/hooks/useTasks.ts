@@ -72,6 +72,8 @@ export function useTasks(): UseTasksResult {
   const getTasksGenerationRef = useRef(0);
   const reportedStartupBootstrapRef = useRef(false);
   const reportedStartupSnapshotRef = useRef(false);
+  const lastSeenSequenceRef = useRef<number>(bootstrapState?.streamSequence ?? 0);
+  const isResyncInFlightRef = useRef<boolean>(false);
 
   const fetchAll = useCallback((forceRefresh = false) => {
     if (typeof window === 'undefined' || !window.invoker) return;
@@ -111,6 +113,10 @@ export function useTasks(): UseTasksResult {
         }
         return wfMap;
       });
+      if (typeof result.streamSequence === 'number') {
+        lastSeenSequenceRef.current = result.streamSequence;
+      }
+      isResyncInFlightRef.current = false;
       const replaceDurationMs = performance.now() - replaceStartedAt;
       void window.invoker.reportUiPerf?.('useTasks_snapshot_replace', {
         taskCount: taskList.length,
@@ -221,6 +227,26 @@ export function useTasks(): UseTasksResult {
               `execPatchKeys=${ex ? Object.keys(ex).join(',') : '—'}`,
           );
         }
+      }
+
+      const seq = delta.streamSequence;
+      if (typeof seq === 'number') {
+        const lastSeen = lastSeenSequenceRef.current;
+        if (seq <= lastSeen) return;
+        if (isResyncInFlightRef.current) return;
+        if (seq !== lastSeen + 1) {
+          const gapSize = seq - (lastSeen + 1);
+          window.invoker.reportUiPerf?.('ui_delta_stream_gap_detected', {
+            expected: lastSeen + 1,
+            actual: seq,
+            gapSize,
+          });
+          isResyncInFlightRef.current = true;
+          deltaPipelineRef.current?.clear();
+          fetchAll(true);
+          return;
+        }
+        lastSeenSequenceRef.current = seq;
       }
 
       deltaPipelineRef.current?.push(delta);
