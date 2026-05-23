@@ -144,9 +144,9 @@ export interface TaskStateChanges {
 // ── Task Delta ──────────────────────────────────────────────
 
 export type TaskDelta =
-  | { readonly type: 'created'; readonly task: TaskState }
-  | { readonly type: 'updated'; readonly taskId: string; readonly changes: TaskStateChanges; readonly taskStateVersion: number; readonly previousTaskStateVersion: number }
-  | { readonly type: 'removed'; readonly taskId: string; readonly previousTaskStateVersion: number };
+  | { readonly type: 'created'; readonly task: TaskState; readonly streamSequence?: number }
+  | { readonly type: 'updated'; readonly taskId: string; readonly changes: TaskStateChanges; readonly taskStateVersion: number; readonly previousTaskStateVersion: number; readonly streamSequence?: number }
+  | { readonly type: 'removed'; readonly taskId: string; readonly previousTaskStateVersion: number; readonly streamSequence?: number };
 
 // ── Workflow Metadata ────────────────────────────────────────
 
@@ -283,6 +283,7 @@ declare global {
       workflows?: WorkflowMeta[];
       initialWorkflowId?: string | null;
       appStartedAtEpochMs?: number;
+      streamSequence?: number;
     };
     __INVOKER_TEST_OPEN_TERMINAL__?: (taskId: string) => ReturnType<InvokerAPI['openTerminal']>;
     __INVOKER_TEST_ON_TERMINAL_OUTPUT__?: (cb: (event: TerminalOutputEvent) => void) => () => void;

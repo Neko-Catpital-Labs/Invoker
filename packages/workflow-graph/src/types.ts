@@ -188,9 +188,9 @@ export interface TaskStateChanges {
 // ── Task Delta (for UI updates) ─────────────────────────────
 
 export type TaskDelta =
-  | { readonly type: 'created'; readonly task: TaskState }
-  | { readonly type: 'updated'; readonly taskId: string; readonly changes: TaskStateChanges; readonly taskStateVersion: number; readonly previousTaskStateVersion: number }
-  | { readonly type: 'removed'; readonly taskId: string; readonly previousTaskStateVersion: number };
+  | { readonly type: 'created'; readonly task: TaskState; readonly streamSequence?: number }
+  | { readonly type: 'updated'; readonly taskId: string; readonly changes: TaskStateChanges; readonly taskStateVersion: number; readonly previousTaskStateVersion: number; readonly streamSequence?: number }
+  | { readonly type: 'removed'; readonly taskId: string; readonly previousTaskStateVersion: number; readonly streamSequence?: number };
 
 // ── Task Create Options (alias for TaskConfig) ──────────────
 
