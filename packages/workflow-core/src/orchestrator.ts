@@ -2326,6 +2326,11 @@ export class Orchestrator {
       });
     }
 
+    const retryTaskWorkflowId = this.stateGetTask(id)?.config.workflowId;
+    if (retryTaskWorkflowId) {
+      this.cascadeInvalidationToDownstream(retryTaskWorkflowId);
+    }
+
     const readyTasks = this.stateMachine.getReadyTasks();
     const isReady = readyTasks.some((t) => t.id === id);
     this.logger.info('[orchestrator] retryTask ready check', { taskId: id, ready: isReady });
@@ -2437,6 +2442,8 @@ export class Orchestrator {
       note: 'preserved completed outside invalidated subgraphs',
     });
 
+    this.cascadeInvalidationToDownstream(workflowId);
+
     const readyIds = this.stateMachine
       .getReadyTasks()
       .map((t) => t.id)
@@ -2526,6 +2533,11 @@ export class Orchestrator {
 
       this.deferredTaskIds.delete(id);
       this.clearQueuedSchedulerEntries(id, priorAttemptId);
+    }
+
+    const recreateTaskWorkflowId = task.config.workflowId;
+    if (recreateTaskWorkflowId) {
+      this.cascadeInvalidationToDownstream(recreateTaskWorkflowId);
     }
 
     const readyIds = this.stateMachine
@@ -2633,6 +2645,8 @@ export class Orchestrator {
       this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
       this.clearQueuedSchedulerEntries(task.id, priorAttemptId);
     }
+
+    this.cascadeInvalidationToDownstream(workflowId);
 
     const readyIds = this.stateMachine
       .getReadyTasks()
@@ -3521,6 +3535,10 @@ export class Orchestrator {
     this.messageBus.publish(TASK_DELTA_CHANNEL, { type: 'created', task: newMerge });
 
     this.reconcileMergeLeaves(newWfId);
+
+    // Forking invalidates anything that depended on the source
+    // workflow; cascade against the source workflowId, not the fork.
+    this.cascadeInvalidationToDownstream(workflowId);
 
     const autoStart = opts?.autoStart !== false;
     let started: TaskState[] = [];
