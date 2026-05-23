@@ -578,6 +578,16 @@ export function buildInvalidationDeps(
       rejectTask(taskId, { orchestrator: deps.orchestrator });
       return [];
     },
+    // For task scope, resolve the owning workflow first; if the task
+    // is gone (detached), the cascade is a no-op.
+    cascadeDownstream: (scope, id) => {
+      const workflowId =
+        scope === 'workflow'
+          ? id
+          : deps.orchestrator.getTask(id)?.config.workflowId;
+      if (!workflowId) return [];
+      return deps.orchestrator.cascadeInvalidationToDownstream(workflowId);
+    },
   };
 }
 
