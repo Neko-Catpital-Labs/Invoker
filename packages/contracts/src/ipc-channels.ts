@@ -348,7 +348,7 @@ export const IpcChannels = {
   // Task Queries
   'invoker:get-tasks': {} as {
     request: [forceRefresh?: boolean];
-    response: { tasks: TaskState[]; workflows: WorkflowMeta[] };
+    response: { tasks: TaskState[]; workflows: WorkflowMeta[]; streamSequence: number };
   },
   'invoker:get-events': {} as {
     request: [taskId: string];
@@ -538,7 +538,7 @@ export const IpcChannels = {
     response: Record<string, unknown>;
   },
   'invoker:get-activity-logs': {} as {
-    request: [];
+    request: [sinceId?: number, limit?: number];
     response: ActivityLogEntry[];
   },
 
