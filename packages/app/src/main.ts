@@ -3417,13 +3417,16 @@ function createEmbeddedTerminalBackendFromConfig(
           context: 'ipc.recreate-workflow',
           mutationTiming: activeMutationContext?.mutationTiming,
         });
-        const started = activeMutationContext?.mutationTiming
+        const recreateWfEnvelope = makeEnvelope('recreate-workflow', 'ui', 'workflow', { workflowId });
+        const recreateWfResult = activeMutationContext?.mutationTiming
           ? await activeMutationContext.mutationTiming.span(
-            'main.ipc.recreate-workflow.sharedRecreateWorkflow',
+            'main.ipc.recreate-workflow.commandService.recreateWorkflow',
             undefined,
-            async () => sharedRecreateWorkflow(workflowId, { persistence, orchestrator }),
+            () => commandService.recreateWorkflow(recreateWfEnvelope),
           )
-          : sharedRecreateWorkflow(workflowId, { persistence, orchestrator });
+          : await commandService.recreateWorkflow(recreateWfEnvelope);
+        if (!recreateWfResult.ok) throw new Error(recreateWfResult.error.message);
+        const started = recreateWfResult.data;
         remoteFetchForPool.enabled = false;
         try {
           await dispatchStartedTasksWithGlobalTopup({
@@ -3462,13 +3465,16 @@ function createEmbeddedTerminalBackendFromConfig(
         } else {
           await preemptTaskSubgraph(taskId);
         }
-        const started = activeMutationContext?.mutationTiming
+        const recreateTaskEnvelope = makeEnvelope('recreate-task', 'ui', 'task', { taskId });
+        const recreateTaskResult = activeMutationContext?.mutationTiming
           ? await activeMutationContext.mutationTiming.span(
-            'main.ipc.recreate-task.sharedRecreateTask',
+            'main.ipc.recreate-task.commandService.recreateTask',
             { taskId },
-            async () => sharedRecreateTask(taskId, { persistence, orchestrator }),
+            () => commandService.recreateTask(recreateTaskEnvelope),
           )
-          : sharedRecreateTask(taskId, { persistence, orchestrator });
+          : await commandService.recreateTask(recreateTaskEnvelope);
+        if (!recreateTaskResult.ok) throw new Error(recreateTaskResult.error.message);
+        const started = recreateTaskResult.data;
         remoteFetchForPool.enabled = false;
         try {
           await dispatchStartedTasksWithGlobalTopup({
