@@ -26,6 +26,7 @@ export interface RegisterReadOnlyIpcHandlersContext {
   ) => Promise<unknown>;
   timeStartupPhase: <T>(label: string, fn: () => T, fields?: () => Record<string, unknown>) => T;
   recordStartupDuration: (label: string, startedAtMs: number, fields?: Record<string, unknown>) => void;
+  getTaskDeltaStreamSequence: () => number;
 }
 
 export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlersContext): void {
@@ -44,6 +45,7 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
     resolveAgentSession,
     timeStartupPhase,
     recordStartupDuration,
+    getTaskDeltaStreamSequence,
   } = context;
 
   ipcMain.handle('invoker:list-workflows', () => persistence.listWorkflows());
@@ -100,14 +102,16 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
       `get-tasks(forceRefresh=${forceRefresh ? 'true' : 'false'}) returning ${tasks.length} tasks, ${workflows.length} workflows`,
       { module: 'ipc' },
     );
+    const streamSequence = getTaskDeltaStreamSequence();
     if (forceRefresh) {
       recordStartupDuration('get-tasks.force-refresh.return', startedAtMs, {
         taskCount: tasks.length,
         workflowCount: workflows.length,
         jsonSizeBytes: Buffer.byteLength(JSON.stringify({ tasks, workflows }), 'utf8'),
+        streamSequence,
       });
     }
-    return { tasks, workflows };
+    return { tasks, workflows, streamSequence };
   });
 
   ipcMain.handle('invoker:get-events', (_event, taskId: string) => persistence.getEvents(taskId));

@@ -178,6 +178,7 @@ import {
   resolveActionDiagnosticsStallThresholdMs,
 } from './action-graph-diagnostics.js';
 import { registerReadOnlyIpcHandlers } from './ipc-read-handlers.js';
+import { createTaskDeltaStreamSequence } from './task-delta-stream-sequence.js';
 import { startReviewGateStatusWorker, type ReviewGateStatusWorker } from './review-gate-status-worker.js';
 import {
   executeNoTrackHeadlessBatch,
@@ -1464,12 +1465,15 @@ function createEmbeddedTerminalBackendFromConfig(
     mainWindow.webContents.send('invoker:task-delta-batch', batch);
   };
 
+  const taskDeltaStream = createTaskDeltaStreamSequence();
+  const getTaskDeltaStreamSequence = (): number => taskDeltaStream.current();
+
   const sendTaskDeltaToRenderer = (delta: TaskDelta): void => {
     workflowMetadataInvalidator?.markFromTaskDelta(delta);
     if (!mainWindow || mainWindow.isDestroyed() || !uiInteractive) {
       return;
     }
-    pendingUiTaskDeltas.push(delta);
+    pendingUiTaskDeltas.push(taskDeltaStream.stamp(delta));
     if (uiTaskDeltaFlushTimer) {
       return;
     }
@@ -2930,11 +2934,13 @@ function createEmbeddedTerminalBackendFromConfig(
       const startedAtMs = Date.now();
       const tasks = orchestrator.getAllTasks();
       const workflows = listWorkflowsByStartupRecency();
+      const streamSequence = getTaskDeltaStreamSequence();
       const payload = {
         tasks,
         workflows,
         initialWorkflowId: startupWorkflowId,
         appStartedAtEpochMs: appProcessStartedAt,
+        streamSequence,
       };
       const jsonSizeBytes = Buffer.byteLength(JSON.stringify(payload), 'utf8');
       recordStartupDuration('bootstrap-ipc.serialize-return', startedAtMs, {
@@ -3096,6 +3102,7 @@ function createEmbeddedTerminalBackendFromConfig(
       resolveAgentSession,
       timeStartupPhase,
       recordStartupDuration,
+      getTaskDeltaStreamSequence,
     });
 
     registerGuiMutationHandler('invoker:delete-all-workflows', async () => {
@@ -3938,8 +3945,8 @@ function createEmbeddedTerminalBackendFromConfig(
     });
 
     // ── DB Polling — detect external workflow changes ───
-    ipcMain.handle('invoker:get-activity-logs', () => {
-      return persistence.getActivityLogs(0, 2000);
+    ipcMain.handle('invoker:get-activity-logs', (_event, sinceId?: number, limit?: number) => {
+      return persistence.getActivityLogs(sinceId ?? 0, limit ?? 2000);
     });
 
     // ── Embedded terminal session manager (GUI) ─────────────────
