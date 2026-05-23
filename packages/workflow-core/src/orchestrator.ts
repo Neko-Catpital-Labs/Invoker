@@ -2914,7 +2914,7 @@ export class Orchestrator {
     if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
     if (task.config.isMergeNode) throw new Error(`Cannot edit merge node ${taskId}`);
 
-    if (task.status === 'running' || task.status === 'fixing_with_ai') {
+    if (isActiveForInvalidation(task.status)) {
       this.cancelTask(taskId);
     }
 
@@ -2934,7 +2934,7 @@ export class Orchestrator {
     if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
     if (task.config.isMergeNode) throw new Error(`Cannot edit merge node ${taskId}`);
 
-    if (task.status === 'running' || task.status === 'fixing_with_ai') {
+    if (isActiveForInvalidation(task.status)) {
       this.cancelTask(taskId);
     }
 
@@ -2977,7 +2977,7 @@ export class Orchestrator {
       hostKey(oldRunnerKind, oldPoolMemberId) !==
       hostKey(effectiveType, newPoolMemberId);
 
-    if (task.status === 'running' || task.status === 'fixing_with_ai') {
+    if (isActiveForInvalidation(task.status)) {
       this.cancelTask(taskId);
     }
 
@@ -3009,7 +3009,7 @@ export class Orchestrator {
       );
     }
 
-    if (task.status === 'running' || task.status === 'fixing_with_ai') {
+    if (isActiveForInvalidation(task.status)) {
       this.cancelTask(taskId);
     }
 
@@ -3035,7 +3035,7 @@ export class Orchestrator {
     if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
     if (task.config.isMergeNode) throw new Error(`Cannot change execution agent of merge node ${taskId}`);
 
-    if (task.status === 'running' || task.status === 'fixing_with_ai') {
+    if (isActiveForInvalidation(task.status)) {
       this.cancelTask(taskId);
     }
 
