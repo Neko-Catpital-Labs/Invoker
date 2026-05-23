@@ -162,6 +162,11 @@ export function applyDelta(
  * with the authoritative snapshot from persistence.
  *
  * If `task` is undefined (task no longer exists), the cache entry is removed.
+ *
+ * NOTE: this primitive is intentionally low-level — it does NOT notify the
+ * renderer. Production callers should go through `recoverQuarantinedTask`
+ * below, which enforces the "no implicit message drops" rule by always
+ * returning a renderer delta whenever it mutates the owner cache.
  */
 export function resolveQuarantine(
   cache: TaskSnapshotCache,
@@ -173,4 +178,76 @@ export function resolveQuarantine(
     return;
   }
   cache.set(taskId, JSON.stringify(task));
+}
+
+// ── Authoritative recovery (no implicit message drops) ──────
+
+/**
+ * Loaders the recovery loop consults to find an authoritative snapshot
+ * for a quarantined task id.
+ *
+ * - `loadTask`: persistence by id. Returns `undefined` for ids that have
+ *   never been persisted (notably synthetic merge nodes).
+ * - `getMergeNode`: orchestrator in-memory lookup by workflowId. Authoritative
+ *   source for synthetic `__merge__${workflowId}` ids, which are not stored
+ *   in persistence but are tracked in `Orchestrator.stateMachine`.
+ */
+export interface RecoveryLoaders {
+  loadTask: (taskId: string) => TaskState | undefined;
+  getMergeNode: (workflowId: string) => TaskState | undefined;
+}
+
+export interface RecoveryResult {
+  /**
+   * Renderer-bound delta the caller MUST forward to keep the renderer in
+   * sync with the owner cache. `undefined` only when no cache mutation
+   * happened (currently never — every branch either restores from an
+   * authoritative source or emits `removed`).
+   */
+  rendererDelta?: TaskDelta;
+}
+
+const SYNTHETIC_MERGE_PREFIX = '__merge__';
+
+/**
+ * Single source of truth for the main-process quarantine-recovery loop.
+ *
+ * Contract — no implicit message drops:
+ * - If persistence has the task → restore from persistence, emit `created`.
+ * - Else if it's a synthetic merge id and the orchestrator has it in memory
+ *   → restore from orchestrator, emit `created`.
+ * - Else (truly absent) → delete the cache entry, emit `removed` so the
+ *   renderer drops its stale copy too.
+ *
+ * This replaces the legacy `if (authoritative) { sendTaskDeltaToRenderer(...) }`
+ * pattern that silently dropped the recovery message whenever
+ * `loadTask` returned `undefined`. For synthetic merge nodes that path
+ * never produced a recovery delta, leaving the renderer's selected
+ * mini-DAG blank after every `[gap-detect]` event.
+ */
+export function recoverQuarantinedTask(
+  cache: TaskSnapshotCache,
+  taskId: string,
+  loaders: RecoveryLoaders,
+): RecoveryResult {
+  const persisted = loaders.loadTask(taskId);
+  if (persisted) {
+    resolveQuarantine(cache, taskId, persisted);
+    return { rendererDelta: { type: 'created', task: persisted } };
+  }
+
+  if (taskId.startsWith(SYNTHETIC_MERGE_PREFIX)) {
+    const workflowId = taskId.slice(SYNTHETIC_MERGE_PREFIX.length);
+    const synthetic = loaders.getMergeNode(workflowId);
+    if (synthetic) {
+      resolveQuarantine(cache, taskId, synthetic);
+      return { rendererDelta: { type: 'created', task: synthetic } };
+    }
+  }
+
+  const previousTaskStateVersion = cache.getEntry(taskId)?.taskStateVersion ?? 0;
+  resolveQuarantine(cache, taskId, undefined);
+  return {
+    rendererDelta: { type: 'removed', taskId, previousTaskStateVersion },
+  };
 }

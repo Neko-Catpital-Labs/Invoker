@@ -152,7 +152,7 @@ import { collectSystemDiagnostics } from './system-diagnostics.js';
 import { installBundledSkills, resolveBundledSkillsStatus } from './bundled-skills.js';
 import { createRequire } from 'node:module';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
-import { applyDelta, resolveQuarantine, TaskSnapshotCache } from './delta-merge.js';
+import { applyDelta, recoverQuarantinedTask, TaskSnapshotCache } from './delta-merge.js';
 import {
   CoalescedWorkflowMetadataPublisher,
   WorkflowMetadataInvalidator,
@@ -2896,10 +2896,12 @@ function createEmbeddedTerminalBackendFromConfig(
       const { quarantined } = applyDelta(d, lastKnownTaskStates);
       for (const taskId of quarantined) {
         logger.info(`[gap-detect] quarantined task="${taskId}" — triggering authoritative reload`, { module: 'delta-merge' });
-        const authoritative = loadTaskByIdFromPersistence(taskId);
-        resolveQuarantine(lastKnownTaskStates, taskId, authoritative);
-        if (authoritative) {
-          sendTaskDeltaToRenderer({ type: 'created', task: authoritative });
+        const { rendererDelta } = recoverQuarantinedTask(lastKnownTaskStates, taskId, {
+          loadTask: loadTaskByIdFromPersistence,
+          getMergeNode: (workflowId) => orchestrator.getMergeNode(workflowId),
+        });
+        if (rendererDelta) {
+          sendTaskDeltaToRenderer(rendererDelta);
         }
       }
     });
