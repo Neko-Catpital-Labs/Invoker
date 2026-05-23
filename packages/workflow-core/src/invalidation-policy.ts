@@ -115,6 +115,33 @@ export interface InvalidationDeps {
   scheduleOnly?: (taskId: string) => TaskState[] | Promise<TaskState[]>;
   fixApprove?: (taskId: string) => TaskState[] | Promise<TaskState[]>;
   fixReject?: (taskId: string) => TaskState[] | Promise<TaskState[]>;
+  /**
+   * Cross-workflow cascade hook. Invoked by `applyInvalidation` after
+   * an invalidating action's dep returns, so any transitive downstream
+   * workflow that depends on the invalidated upstream is itself
+   * cancel-and-reset-to-pending. The downstream's existing external
+   * dependency gate then re-blocks the freshly-pending tasks until
+   * the upstream re-completes.
+   *
+   * Only invoked for actions that change execution state:
+   *   - task scope:     `retryTask`, `recreateTask`
+   *   - workflow scope: `retryWorkflow`, `recreateWorkflow`,
+   *                     `recreateWorkflowFromFreshBase`, `workflowFork`
+   *
+   * Skipped for `'none'`, `'scheduleOnly'`, `'fixApprove'`, and
+   * `'fixReject'` — these are non-invalidating per `MUTATION_POLICIES`
+   * and must not reset downstream lineage.
+   *
+   * Production callers wire this via `buildInvalidationDeps`
+   * (`packages/app/src/workflow-actions.ts`) to
+   * `Orchestrator.cascadeInvalidationToDownstream`. The dep is
+   * optional so unit tests that build a partial `InvalidationDeps`
+   * keep working without supplying the cascade.
+   */
+  cascadeDownstream?: (
+    scope: InvalidationScope,
+    id: string,
+  ) => TaskState[] | Promise<TaskState[]>;
 }
 
 const TASK_ACTIONS = new Set<InvalidationAction>(['retryTask', 'recreateTask']);
@@ -195,15 +222,20 @@ export async function applyInvalidation(
 
   await deps.cancelInFlight(scope, id);
 
+  let started: TaskState[];
   switch (action) {
     case 'retryTask':
-      return await deps.retryTask(id);
+      started = await deps.retryTask(id);
+      break;
     case 'recreateTask':
-      return await deps.recreateTask(id);
+      started = await deps.recreateTask(id);
+      break;
     case 'retryWorkflow':
-      return await deps.retryWorkflow(id);
+      started = await deps.retryWorkflow(id);
+      break;
     case 'recreateWorkflow':
-      return await deps.recreateWorkflow(id);
+      started = await deps.recreateWorkflow(id);
+      break;
     case 'recreateWorkflowFromFreshBase': {
       if (!deps.recreateWorkflowFromFreshBase) {
         throw new Error(
@@ -211,7 +243,8 @@ export async function applyInvalidation(
             'Provide deps.recreateWorkflowFromFreshBase to use this action.',
         );
       }
-      return await deps.recreateWorkflowFromFreshBase(id);
+      started = await deps.recreateWorkflowFromFreshBase(id);
+      break;
     }
     case 'workflowFork': {
       if (!deps.workflowFork) {
@@ -226,7 +259,20 @@ export async function applyInvalidation(
             'deps.workflowFork to use this action.',
         );
       }
-      return await deps.workflowFork(id);
+      started = await deps.workflowFork(id);
+      break;
     }
   }
+
+  // Cross-workflow cascade: every invalidating action above (six in
+  // total) must propagate to transitive downstream workflows so their
+  // tasks are cancel-cancel-then-reset-to-pending and re-blocked by
+  // the existing external-dependency gate. Non-invalidating actions
+  // (`'none'`, `'scheduleOnly'`, `'fixApprove'`, `'fixReject'`)
+  // already returned above and never reach this point. The dep is
+  // optional so partial test wiring keeps working.
+  if (deps.cascadeDownstream) {
+    await deps.cascadeDownstream(scope, id);
+  }
+  return started;
 }
