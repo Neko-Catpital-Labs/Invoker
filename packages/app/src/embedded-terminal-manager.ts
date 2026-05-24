@@ -103,6 +103,13 @@ interface BaseSessionState {
   createdAt: string;
   status: 'running' | 'exited';
   exitCode?: number;
+  /**
+   * Recent terminal output captured since session start, trimmed to
+   * MAX_REPLAY_BUFFER_CHARS so memory stays bounded. Surfaced via
+   * `TerminalSessionDescriptor.outputSnapshot` so late subscribers can
+   * replay output emitted before they mounted.
+   */
+  outputBuffer: string;
 }
 
 interface SpawnSessionState extends BaseSessionState {
@@ -126,6 +133,21 @@ export interface EmbeddedTerminalManagerOptions {
   defaultShell?: string;
 }
 
+/** Cap on the per-session replay buffer. Approximate bytes; see outputBuffer doc. */
+const MAX_REPLAY_BUFFER_CHARS = 64 * 1024;
+
+/**
+ * Stand-in process used between state registration and the spawn() call
+ * returning. If the backend exits synchronously during spawn, finalizeSession
+ * will run against this no-op process; the real wrapper is then closed
+ * defensively in openOrReuse once it is available.
+ */
+const PLACEHOLDER_PROCESS: SpawnedTerminalProcess = {
+  write: () => {},
+  resize: () => {},
+  close: () => {},
+};
+
 function describeSession(state: SessionState): TerminalSessionDescriptor {
   return {
     sessionId: state.sessionId,
@@ -138,6 +160,7 @@ function describeSession(state: SessionState): TerminalSessionDescriptor {
     mode: state.mode,
     attached: state.mode === 'attached',
     createdAt: state.createdAt,
+    outputSnapshot: state.outputBuffer.length > 0 ? state.outputBuffer : undefined,
   };
 }
 
@@ -281,37 +304,61 @@ export class EmbeddedTerminalManager extends EventEmitter {
       cwd: opts.cwd,
       createdAt,
       status: 'running' as const,
+      outputBuffer: '',
     };
 
-    let state: SessionState;
     if (opts.attach) {
-      const unsubscribe = opts.attach.executor.onOutput(opts.attach.handle, (data) => {
-        this.emitOutput(sessionId, opts.taskId, data);
-      });
-      state = {
+      const state: AttachedSessionState = {
         ...base,
         mode: 'attached',
         attach: opts.attach,
-        unsubscribeOutput: unsubscribe,
+        unsubscribeOutput: () => {},
       };
-    } else {
-      const process = this.backend.spawn({
-        spec: opts.spec,
-        cwd: opts.cwd,
-        defaultShell: this.defaultShell,
-        emitOutput: (data) => this.emitOutput(sessionId, opts.taskId, data),
-        emitExit: (exitCode) => this.finalizeSession(state, exitCode),
+      this.sessions.set(sessionId, state);
+      this.targetIndex.set(targetKey, sessionId);
+      state.unsubscribeOutput = opts.attach.executor.onOutput(opts.attach.handle, (data) => {
+        this.emitOutput(sessionId, opts.taskId, data);
       });
-      state = {
-        ...base,
-        mode: 'spawn',
-        backend: this.backend.name,
-        process,
-      };
+      return describeSession(state);
     }
 
+    // Spawn-mode: register state with a placeholder process BEFORE calling
+    // backend.spawn(). This lets emitOutput/emitExit invoked synchronously
+    // during spawn find the session in the map, and avoids the closure
+    // referencing an unassigned `state` variable.
+    const state: SpawnSessionState = {
+      ...base,
+      mode: 'spawn',
+      backend: this.backend.name,
+      process: PLACEHOLDER_PROCESS,
+    };
     this.sessions.set(sessionId, state);
     this.targetIndex.set(targetKey, sessionId);
+
+    const spawned = this.backend.spawn({
+      spec: opts.spec,
+      cwd: opts.cwd,
+      defaultShell: this.defaultShell,
+      emitOutput: (data) => this.emitOutput(sessionId, opts.taskId, data),
+      emitExit: (exitCode) => {
+        const current = this.sessions.get(sessionId);
+        if (current) this.finalizeSession(current, exitCode);
+      },
+    });
+
+    if (state.status === 'running') {
+      state.process = spawned;
+    } else {
+      // Backend exited synchronously during spawn; finalizeSession already
+      // ran against the placeholder. Close the real wrapper defensively so
+      // any underlying resource (pipe, pty) is released.
+      try {
+        spawned.close();
+      } catch {
+        /* best-effort */
+      }
+    }
+
     return describeSession(state);
   }
 
@@ -403,6 +450,14 @@ export class EmbeddedTerminalManager extends EventEmitter {
   }
 
   private emitOutput(sessionId: string, taskId: string, data: string): void {
+    const state = this.sessions.get(sessionId);
+    if (state) {
+      const combined = state.outputBuffer + data;
+      state.outputBuffer =
+        combined.length > MAX_REPLAY_BUFFER_CHARS
+          ? combined.slice(combined.length - MAX_REPLAY_BUFFER_CHARS)
+          : combined;
+    }
     const payload: TerminalOutputEvent = { sessionId, taskId, data };
     this.emit('output', payload);
   }
