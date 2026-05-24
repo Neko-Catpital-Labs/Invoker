@@ -1,8 +1,12 @@
 # Invoker
 
+<video src="docs/assets/invoker-preview.mp4" controls muted playsinline width="100%"></video>
+
+[Watch the Invoker demo video](docs/assets/invoker-preview.mp4)
+
 **Persisted workflow orchestration: a DAG of tasks in isolated workspaces, composed through git branches, merge gates, and review.**
 
-Current version: `0.0.1`. Version history lives in [CHANGELOG.md](CHANGELOG.md).
+Current version: `0.0.2`. Version history lives in [CHANGELOG.md](CHANGELOG.md).
 
 ## Overview
 
@@ -12,8 +16,9 @@ Current version: `0.0.1`. Version history lives in [CHANGELOG.md](CHANGELOG.md).
 | Hard to see what ran and on what inputs | Every execution is an addressable, replayable record with explicit lineage |
 | Review/merge treated as "outside" the tool | Human gates are first-class states in the workflow lifecycle |
 | Control actions racing each other | A single serialized control plane mediates every mutation |
+| Multi-agent work becomes hard to supervise | Stacked workflow graphs show parallel runs, dependencies, PRs, and replay paths in one UI |
 
-**What it is (one paragraph):** Invoker is a persisted workflow engine—not just a task list. It runs ready nodes under a concurrency cap, tracks explicit lifecycle states, and treats **code changes** (branches, merges, conflicts) as part of the execution model. Desktop UI, **headless** CLI, and Slack are surfaces on the same engine. Details: [docs/architecture-overview.md](docs/architecture-overview.md), longer narrative: [docs/invoker-medium-article.md](docs/invoker-medium-article.md).
+**What it is (one paragraph):** Invoker is a persisted workflow engine—not just a task list. It runs ready nodes under a concurrency cap, tracks explicit lifecycle states, preserves AI session audit trails, and treats **code changes** (branches, merges, conflicts, pull requests) as part of the execution model. Desktop UI, **headless** CLI, and Slack are surfaces on the same engine. Details: [docs/architecture-overview.md](docs/architecture-overview.md), longer narrative: [docs/invoker-medium-article.md](docs/invoker-medium-article.md).
 
 ## Prerequisites
 
@@ -176,16 +181,44 @@ Use `--output text|label|json|jsonl` on `query` commands. Only **one** process s
 **Example plan:**
 
 ```yaml
-name: ci-hardening
+name: ai-feature-hardening
+description: |
+  Demonstrates a small AI implementation workflow with parallel code paths,
+  an SSH-backed verification task, and a pull request review gate.
+repoUrl: git@github.com:your-org/your-repo.git
 baseBranch: main
+onFinish: pull_request
+mergeMode: github
 tasks:
-  - id: deps
-    description: Install dependencies
-    command: pnpm install --frozen-lockfile
+  - id: plan
+    description: Ask an AI agent to produce a scoped implementation plan
+    prompt: |
+      Inspect the repository, identify the smallest implementation slice,
+      and produce a concise plan with verification steps.
+    executionAgent: codex
+    dependencies: []
+
+  - id: api
+    description: Implement the API slice in an isolated worktree
+    command: pnpm --filter @your-org/api test
+    runnerKind: worktree
+    dependencies: [plan]
+
+  - id: ui
+    description: Implement the UI slice in an isolated worktree
+    prompt: |
+      Implement the UI affordance described by the plan. Preserve audit
+      state so a failed task can be reopened, edited, and replayed.
+    executionAgent: codex
+    runnerKind: worktree
+    dependencies: [plan]
+
   - id: tests
-    description: Run tests
-    command: pnpm test
-    dependencies: [deps]
+    description: Run the final regression suite on a configured SSH executor
+    command: pnpm run test:all
+    runnerKind: ssh
+    poolMemberId: staging-a
+    dependencies: [api, ui]
 ```
 
 ## Architecture (at a glance)
