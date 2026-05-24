@@ -155,6 +155,10 @@ function parse_metadata(desc_lower,    tmp, parts) {
   has_motivation_heading = (desc_lower ~ /(^|\n)[ \t]*motivation:/)
   has_alternatives_heading = (desc_lower ~ /(^|\n)[ \t]*(alternative considerations|alternatives):/)
   has_implementation_heading = (desc_lower ~ /(^|\n)[ \t]*(implementation details|implementation):/)
+  has_review_claim_heading = (desc_lower ~ /(^|\n)[ \t]*review claim:/)
+  has_safety_invariant_heading = (desc_lower ~ /(^|\n)[ \t]*safety invariant:/)
+  has_slice_rationale_heading = (desc_lower ~ /(^|\n)[ \t]*slice rationale:/)
+  has_architectural_effect_heading = (desc_lower ~ /(^|\n)[ \t]*architectural effect:/)
 
   tmp = desc_lower
   sub(/^.*layer:[ \t]*/, "", tmp)
@@ -259,6 +263,18 @@ function flush_task(    wc, and_count, valid_id, d, desc_lower, idx) {
       errors[++errn] = "Task \"" id "\" uses Feature state dormant but omits \"Acceptance criteria:\" in description"
     }
 
+    if (strictDelegation == 1 && has_review_claim_heading == 0) {
+      errors[++errn] = "Task \"" id "\" missing required \"Review claim:\" section in description for implementation plans"
+    }
+    if (strictDelegation == 1 && has_safety_invariant_heading == 0) {
+      errors[++errn] = "Task \"" id "\" missing required \"Safety invariant:\" section in description for implementation plans"
+    }
+    if (strictDelegation == 1 && has_slice_rationale_heading == 0) {
+      errors[++errn] = "Task \"" id "\" missing required \"Slice rationale:\" section in description for implementation plans"
+    }
+    if (strictDelegation == 1 && has_architectural_effect_heading == 0) {
+      errors[++errn] = "Task \"" id "\" missing required \"Architectural effect:\" section in description for implementation plans"
+    }
     if (has_goal_heading == 0) {
       errors[++errn] = "Task \"" id "\" missing required \"Goal:\" section in description for implementation plans"
     }

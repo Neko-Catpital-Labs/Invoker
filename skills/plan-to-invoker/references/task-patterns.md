@@ -63,6 +63,21 @@ For plans with `onFinish` set to `pull_request` or `merge`, each task `descripti
 
 `onFinish: none` verify-only plans are exempt.
 
+### Review compression contract
+
+Apply `skills/review-compression/SKILL.md` before authoring implementation tasks.
+Each implementation task must include these description headings:
+
+- `Review claim:` the one sentence a reviewer is being asked to approve.
+- `Safety invariant:` why this slice is safe to review locally.
+- `Slice rationale:` why this slice is separate from neighboring work.
+- `Architectural effect:` what changes in control flow, data flow, ownership,
+  dependency direction, or public surface.
+
+Keep directly affected tests and compatibility adapters with the change that
+requires them. Split optional cleanup, special cases, behavior-plus-rename,
+default-flip-plus-deletion, and unrelated stale visual refreshes.
+
 ### Cross-layer direction
 
 - Dependencies should flow from lower/foundational layers to higher/integration layers.
@@ -265,5 +280,6 @@ The validator now enforces atomic/detailed tasks:
 - IDs must avoid generic placeholders (`task-1`, `step-2`); kebab-case is recommended
 - Each task must have exactly one of `command` or `prompt`
 - Descriptions must be specific (minimum detail threshold)
+- Implementation task descriptions must include review-compression headings
 - Command tasks cannot be overloaded with long shell chains
 - Prompt tasks must include concrete file paths and explicit acceptance language

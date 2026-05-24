@@ -21,6 +21,8 @@ Minimal controller skill. Keep policy short here; use deterministic scripts and 
 
 Grep-only checks are Phase 1a only; behavioral claims require executed Phase 1b evidence.
 
+**Review compression (required for implementation plans):** Before authoring any plan with `onFinish != none`, apply `skills/review-compression/SKILL.md`. Split by reviewer cognition, not file count: one local review claim, one safety invariant, one slice rationale, and one architectural effect per implementation task. This applies to Invoker and non-Invoker target repos.
+
 **Policy-matrix documents:** When the source is an architecture or policy document with a decision table, exception rules, or cross-cutting invariants, you must preserve row-level coverage before authoring workflows. Do not stop at files/functions/packages; every required policy row must map to a workflow step or an explicit waiver.
 
 **Delegated task hints (hard requirement for implementation plans):** For plans with `onFinish != none`, every prompt task must include `Files:`, `Change types:`, and `Acceptance criteria:` sections in `description`. Prompt text must be zero-context executable: assume no prior chat knowledge, include deterministic pass/fail expectations, and keep instructions self-contained. Verify-only plans (`onFinish: none`) keep delegation hints advisory.
@@ -29,7 +31,7 @@ Grep-only checks are Phase 1a only; behavioral claims require executed Phase 1b 
 
 **Dependency-first layered decomposition (required for implementation plans):** For plans whose `onFinish` is not `none`, every implementation task must include `Layer:` and `Feature state:` headings in `description`. Use normalized layer names (`persistence`, `domain`, `transport`, `api`, `contact_surface`, `app_bridge`, `owner_delegation`, `ui_activation`, `app_regression`, `e2e_regression`, `ui`, `docs`) and feature state values (`active` or `dormant`). `dormant` tasks must still include `Acceptance criteria:` in `description`. Verify-only plans (`onFinish: none`) are exempt from this hard requirement.
 
-**Implementation-rationale headings (required for all implementation tasks):** For plans whose `onFinish` is not `none`, every task (prompt or command) must include `Goal:`, `Motivation:`, `Alternative considerations:` (or `Alternatives:`), and `Implementation details:` (or `Implementation:`) in the task `description`. In addition, prompt tasks must include the same rationale headings directly in `prompt` so execution instructions contain explicit intent (not only metadata). This is a hard requirement enforced by `lint-task-atomicity.sh` so implementation intent is explicit and reviewable in authored workflow YAML.
+**Implementation-rationale headings (required for all implementation tasks):** For plans whose `onFinish` is not `none`, every task (prompt or command) must include `Review claim:`, `Safety invariant:`, `Slice rationale:`, `Architectural effect:`, `Goal:`, `Motivation:`, `Alternative considerations:` (or `Alternatives:`), and `Implementation details:` (or `Implementation:`) in the task `description`. In addition, prompt tasks must include the same rationale headings directly in `prompt` so execution instructions contain explicit intent (not only metadata). This is a hard requirement enforced by `lint-task-atomicity.sh` so implementation intent is explicit and reviewable in authored workflow YAML.
 
 **Cross-layer dependency direction (required):** Dependency DAGs must flow from lower/foundational layers toward higher/integration layers. If a lower-layer task depends on a higher-layer task, mark an explicit exception in the task description with `Layer exception: allowed` and a rationale.
 
@@ -80,7 +82,7 @@ If `skill-doctor.sh` fails, run individual checks to isolate the problem:
    `bash skills/plan-to-invoker/scripts/validate-plan.sh <plan-file>`
 4. `step-lint-atomicity`
    `bash skills/plan-to-invoker/scripts/lint-task-atomicity.sh <plan-file>`  
-  Optional: append `--warn-delegation` to print additional advisory hints. For authored stacks, append `--stack-manifest <file>` so non-terminal workflows may end with focused verification while the highest-order workflow still requires `pnpm run test:all`. Atomicity lint always runs `--strict-delegation` inside `skill-doctor` and, for implementation plans (`onFinish != none`), hard-fails missing/invalid `Layer:` and `Feature state:` metadata, missing required rationale headings in `description` on any task (`Goal`, `Motivation`, `Alternative considerations`/`Alternatives`, `Implementation details`/`Implementation`), missing required rationale headings in `prompt` for prompt tasks, prompt tasks without `Files:`/`Change types:`/`Acceptance criteria:` description blocks, prompts missing zero-context execution framing, prompts missing deterministic pass/fail expectations, invalid cross-layer dependency direction without `Layer exception: allowed`, and missing experiment-artifact handoff/cleanup contract when experiment tasks are present.
+  Optional: append `--warn-delegation` to print additional advisory hints. For authored stacks, append `--stack-manifest <file>` so non-terminal workflows may end with focused verification while the highest-order workflow still requires `pnpm run test:all`. Atomicity lint always runs `--strict-delegation` inside `skill-doctor` and, for implementation plans (`onFinish != none`), hard-fails missing/invalid `Layer:` and `Feature state:` metadata, missing required review-compression/rationale headings in `description` on any task (`Review claim`, `Safety invariant`, `Slice rationale`, `Architectural effect`, `Goal`, `Motivation`, `Alternative considerations`/`Alternatives`, `Implementation details`/`Implementation`), missing required rationale headings in `prompt` for prompt tasks, prompt tasks without `Files:`/`Change types:`/`Acceptance criteria:` description blocks, prompts missing zero-context execution framing, prompts missing deterministic pass/fail expectations, invalid cross-layer dependency direction without `Layer exception: allowed`, and missing experiment-artifact handoff/cleanup contract when experiment tasks are present.
 5. `step-parse-verify-results`
    `bash skills/plan-to-invoker/scripts/parse-results.sh < /tmp/invoker-verify.txt`
 
@@ -160,6 +162,7 @@ When those hardening workflows target Invoker itself, the branch/PR publication 
 - File/function-heavy plans: see playbook `playbooks/verify-then-build.md`
 - Schema and required fields: `references/schema.md`
 - Task decomposition and dependency patterns: `references/task-patterns.md`
+- Review compression: `../review-compression/SKILL.md`
 - End-to-end examples: `references/examples.md`
 - Efficacy / soft scoring: `references/efficacy-rubric.md`
 

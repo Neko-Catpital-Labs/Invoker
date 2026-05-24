@@ -1,19 +1,13 @@
-name: "Anti-pattern J: prompt lacks zero-context metadata contract"
-description: "Implementation plan where prompt task omits strict zero-context handoff fields."
+# Expected outcome: skill-doctor fails lint-task-atomicity because implementation
+# tasks omit Review claim / Safety invariant / Slice rationale / Architectural effect.
+name: "Anti-pattern K: missing review compression metadata"
+description: "Implementation plan missing review-compression headings."
 onFinish: pull_request
 mergeMode: external_review
 repoUrl: git@github.com:example-org/acme-repo.git
 tasks:
   - id: implement-runtime-flow
     description: |
-      Review claim:
-      - This task makes one locally reviewable implementation claim.
-      Safety invariant:
-      - The slice is safe because its verification remains local and explicit.
-      Slice rationale:
-      - This work is isolated from neighboring behavior or cleanup changes.
-      Architectural effect:
-      - The affected boundary and data or control flow remain explicit.
       Goal:
       - Implement deterministic runtime flow updates.
       Motivation:
@@ -25,6 +19,12 @@ tasks:
       - Apply runtime-flow edits and preserve existing behavior contracts.
       Layer: transport
       Feature state: active
+      Files:
+      - packages/execution-engine/src/task-runner.ts
+      Change types:
+      - modify
+      Acceptance criteria:
+      - `cd packages/execution-engine && pnpm test` exits 0.
     prompt: |
       Goal:
       - Implement deterministic runtime flow updates in task-runner.
@@ -34,20 +34,12 @@ tasks:
       - Option A (chosen): targeted update.
       - Option B: broad refactor.
       Implementation details:
-      - Update packages/execution-engine/src/task-runner.ts.
+      - Assume no prior context. Update packages/execution-engine/src/task-runner.ts.
       Acceptance criteria:
-      - Tests should pass.
+      - Pass condition: `cd packages/execution-engine && pnpm test` exits 0.
     dependencies: []
   - id: final-regression
     description: |
-      Review claim:
-      - This task makes one locally reviewable implementation claim.
-      Safety invariant:
-      - The slice is safe because its verification remains local and explicit.
-      Slice rationale:
-      - This work is isolated from neighboring behavior or cleanup changes.
-      Architectural effect:
-      - The affected boundary and data or control flow remain explicit.
       Goal:
       - Run final full-suite regression gate.
       Motivation:
