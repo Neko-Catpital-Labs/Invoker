@@ -158,4 +158,80 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
+
+  // Regression tests for keyboard navigation in open context menus.
+  //
+  // Pre-fix behavior: the workflow context menu only listened for Escape at the
+  // document level and had no key handlers for ArrowDown/ArrowUp/Enter/Space.
+  // These tests render the real App so they catch any future regression where
+  // an open menu silently stops responding to the keyboard.
+
+  function pressKey(menu: HTMLElement, keyName: string) {
+    fireEvent.keyDown(menu, { key: keyName, bubbles: true });
+  }
+
+  it('workflow context menu activates Copy Workflow ID via ArrowDown x3 + Enter', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    // Visible items in order: Open Workflow (0), Open PR (1), Retry Workflow (2),
+    // Copy Workflow ID (3). Three ArrowDowns from the initial focus land on
+    // Copy Workflow ID.
+    pressKey(menu, 'ArrowDown');
+    pressKey(menu, 'ArrowDown');
+    pressKey(menu, 'ArrowDown');
+    pressKey(menu, 'Enter');
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('workflow context menu ArrowUp from first item wraps to last item deterministically', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    // A single ArrowUp from the initial focus (Open Workflow) must wrap to the
+    // last actionable item in the cycle (Copy Workflow ID). Activating it must
+    // call writeText('wf-1').
+    pressKey(menu, 'ArrowUp');
+    pressKey(menu, 'Enter');
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('workflow context menu Space activates the highlighted item like Enter', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    pressKey(menu, 'ArrowDown');
+    pressKey(menu, 'ArrowDown');
+    pressKey(menu, 'ArrowDown');
+    pressKey(menu, ' ');
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('task context menu in mini DAG activates next enabled action via ArrowDown + Enter', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    const menu = await screen.findByRole('menu');
+    // For a pending task: Restart Task (0), Open Terminal (1). One ArrowDown
+    // lands on Open Terminal, which invokes the openTerminal IPC.
+    pressKey(menu, 'ArrowDown');
+    pressKey(menu, 'Enter');
+    await waitFor(() => expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'));
+  });
+
+  it('task context menu in mini DAG activates next enabled action via ArrowDown + Space', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    const menu = await screen.findByRole('menu');
+    pressKey(menu, 'ArrowDown');
+    pressKey(menu, ' ');
+    await waitFor(() => expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'));
+  });
 });
