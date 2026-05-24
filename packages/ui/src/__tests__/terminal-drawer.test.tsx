@@ -11,11 +11,22 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
+import { xtermMockState, resetXtermMocks } from './helpers/mock-xterm.js';
 import type { WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
   return createReactFlowMock();
+});
+
+vi.mock('xterm', async () => {
+  const { createXtermModule } = await import('./helpers/mock-xterm.js');
+  return createXtermModule();
+});
+
+vi.mock('xterm-addon-fit', async () => {
+  const { createFitAddonModule } = await import('./helpers/mock-xterm.js');
+  return createFitAddonModule();
 });
 
 const { App } = await import('../App.js');
@@ -51,6 +62,7 @@ describe('Terminal drawer (component)', () => {
   beforeEach(() => {
     mock = createMockInvoker();
     mock.install();
+    resetXtermMocks();
   });
 
   afterEach(() => {
@@ -171,5 +183,61 @@ describe('Terminal drawer (component)', () => {
       expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
     });
     expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha');
+  });
+
+  it('seeds xterm with the replay snapshot when a new pane mounts', async () => {
+    (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      opened: true,
+      session: {
+        sessionId: 'mock-session-task-alpha',
+        taskId: 'task-alpha',
+        status: 'running',
+        mode: 'spawn',
+        attached: false,
+        createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+        outputSnapshot: 'replayed early output\n',
+      },
+    });
+
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(xtermMockState.instances.length).toBeGreaterThan(0);
+    });
+
+    const term = xtermMockState.instances[0];
+    await waitFor(() => {
+      expect(term.write).toHaveBeenCalledWith('replayed early output\n');
+    });
+
+    // The snapshot should only be seeded once — re-rendering with the same
+    // session must not duplicate it.
+    act(() => mock.setTasks([taskAlpha], workflows));
+    const snapshotWrites = term.write.mock.calls.filter(
+      ([data]) => data === 'replayed early output\n',
+    );
+    expect(snapshotWrites).toHaveLength(1);
+  });
+
+  it('does not write to xterm when the session has no replay snapshot', async () => {
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(xtermMockState.instances.length).toBeGreaterThan(0);
+    });
+
+    const term = xtermMockState.instances[0];
+    // term.open is invoked during pane setup; term.write should not be called
+    // because openTerminal returned a descriptor without outputSnapshot.
+    expect(term.open).toHaveBeenCalled();
+    expect(term.write).not.toHaveBeenCalled();
   });
 });

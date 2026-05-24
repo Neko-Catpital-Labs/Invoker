@@ -44,6 +44,13 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const seededSnapshotRef = useRef<string | null>(null);
+  // Capture the snapshot in a ref so a later prop update with a different
+  // snapshot doesn't trigger a re-seed; the live subscription owns everything
+  // after mount.
+  const initialSnapshot = session.outputSnapshot;
+  const initialSnapshotRef = useRef<string | undefined>(initialSnapshot);
+  initialSnapshotRef.current = initialSnapshot;
 
   useEffect(() => {
     const host = containerRef.current;
@@ -68,6 +75,20 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
     }
     termRef.current = term;
     fitRef.current = fit;
+
+    // Seed the pane with the bounded replay snapshot captured by the main
+    // process at openOrReuse() time. Live IPC output (subscribed below) then
+    // continues from where the snapshot left off.
+    const snapshot = initialSnapshotRef.current;
+    const seedKey = `${session.sessionId}:${snapshot ?? ''}`;
+    if (snapshot && seededSnapshotRef.current !== seedKey) {
+      try {
+        term.write(snapshot);
+      } catch {
+        /* terminal disposed */
+      }
+      seededSnapshotRef.current = seedKey;
+    }
 
     const inputDisposable = term.onData((data) => {
       void window.invoker?.terminalWrite?.(session.sessionId, data);
@@ -123,6 +144,9 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
       }
       termRef.current = null;
       fitRef.current = null;
+      // Reset seed tracking so the next mount (e.g., after a session swap)
+      // re-seeds the freshly created xterm instance.
+      seededSnapshotRef.current = null;
     };
   }, [onOutput, session.sessionId]);
 
