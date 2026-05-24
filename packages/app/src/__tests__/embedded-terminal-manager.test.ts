@@ -480,6 +480,94 @@ describe('EmbeddedTerminalManager replay buffer', () => {
     expect((snapshot as string).endsWith('x')).toBe(true);
   });
 
+  it('regression: PTY backend that emits FIRST_FRAME_FROM_PTY synchronously seeds late consumers via the descriptor', () => {
+    // Mirrors the renderer terminal-pane race: the embedded backend (node-pty
+    // in production) emits the first frame of output as soon as spawn returns,
+    // but the renderer only subscribes to `invoker:terminal-output` after the
+    // session descriptor crosses the IPC boundary and the React pane mounts.
+    // If the descriptor does not carry a snapshot of that early output, the
+    // first frame is lost forever for that pane and any subsequent `list()`
+    // reload from another window. The fake PTY below produces the exact frame
+    // the upstream task spec references so the regression is unambiguous.
+    const eagerPtySpawn: PtySpawnFn = vi.fn((_command, _args, _options) => {
+      const pty = createFakePty();
+      const originalOnData = pty.onData.bind(pty);
+      pty.onData = (listener) => {
+        const disposable = originalOnData(listener);
+        listener('FIRST_FRAME_FROM_PTY\n');
+        return disposable;
+      };
+      return pty;
+    });
+    const mgr = new EmbeddedTerminalManager({
+      backend: createPtyTerminalBackend({ spawnFn: eagerPtySpawn }),
+    });
+    const lateEvents: string[] = [];
+
+    const session = mgr.openOrReuse({
+      taskId: 'task-late-subscriber',
+      spec: { command: 'claude', args: ['--resume', 'session-1'], cwd: '/tmp' },
+      cwd: '/tmp',
+    });
+
+    // The renderer pane only subscribes *after* the descriptor lands. Simulate
+    // that subscription order — the listener attaches strictly after the
+    // PTY's first frame has already been emitted.
+    mgr.on('output', (e) => lateEvents.push(e.data));
+
+    expect(session.outputSnapshot).toBe('FIRST_FRAME_FROM_PTY\n');
+    // A late subscriber sees no live event for the first frame; the snapshot
+    // on the descriptor is the only way they could replay it.
+    expect(lateEvents).toEqual([]);
+    // A second window opening the same target via list() also receives the
+    // same snapshot — this is the `terminalList()` reload acceptance bullet.
+    const listed = mgr.list();
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.outputSnapshot).toBe('FIRST_FRAME_FROM_PTY\n');
+  });
+
+  it('regression: synchronous backend exit during spawn does not crash and still surfaces the snapshot', () => {
+    // Pairs with the synchronous-output regression: a spawn that exits before
+    // returning previously hit an uninitialized `state` because the exit
+    // callback fired before the manager assigned the session record. The
+    // descriptor must still carry the early output and the exit must finalize.
+    const immediateExitPty: PtySpawnFn = vi.fn(() => {
+      const pty = createFakePty();
+      const originalOnData = pty.onData.bind(pty);
+      const originalOnExit = pty.onExit.bind(pty);
+      pty.onData = (listener) => {
+        const disposable = originalOnData(listener);
+        listener('FIRST_FRAME_FROM_PTY\n');
+        return disposable;
+      };
+      pty.onExit = (listener) => {
+        const disposable = originalOnExit(listener);
+        listener({ exitCode: 7 });
+        return disposable;
+      };
+      return pty;
+    });
+    const mgr = new EmbeddedTerminalManager({
+      backend: createPtyTerminalBackend({ spawnFn: immediateExitPty }),
+    });
+    const exits: Array<{ sessionId: string; exitCode?: number }> = [];
+    mgr.on('exit', (e) => exits.push({ sessionId: e.sessionId, exitCode: e.exitCode }));
+
+    let session: ReturnType<typeof mgr.openOrReuse> | undefined;
+    expect(() => {
+      session = mgr.openOrReuse({
+        taskId: 'task-sync-exit',
+        spec: { command: 'true' },
+        cwd: '/tmp',
+      });
+    }).not.toThrow();
+
+    expect(session?.outputSnapshot).toBe('FIRST_FRAME_FROM_PTY\n');
+    expect(exits).toEqual([{ sessionId: session?.sessionId, exitCode: 7 }]);
+    // Session was finalized synchronously and is gone from the live list.
+    expect(mgr.list()).toHaveLength(0);
+  });
+
   it('clears the replay buffer when a session exits and frees a new buffer on reopen', () => {
     const child1 = createFakeChild();
     const child2 = createFakeChild();
