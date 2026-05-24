@@ -501,6 +501,74 @@ describe('EmbeddedTerminalManager', () => {
 
     expect(session.outputSnapshot).toBeUndefined();
   });
+
+  // ── PTY first-frame race regression ──
+  //
+  // The renderer terminal pane subscribes to `invoker:terminal-output` only
+  // after `openTerminal` returns. Without the bounded replay buffer, output
+  // emitted between backend spawn and renderer subscription is lost. These
+  // tests use a marker string `FIRST_FRAME_FROM_PTY\n` that the
+  // `scripts/repro-gui-open-terminal-pty-race.sh` repro script greps the test
+  // names for.
+
+  it('FIRST_FRAME_FROM_PTY: descriptor replays synchronous spawn output for late renderer consumers', () => {
+    const FIRST_FRAME = 'FIRST_FRAME_FROM_PTY\n';
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: (opts) => {
+        // Simulate the race: the PTY emits its first frame synchronously
+        // during spawn, before the renderer subscribes.
+        opts.emitOutput(FIRST_FRAME);
+        return { write() {}, resize() {}, close() {} };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.openOrReuse({ taskId: 't-pty-race', spec: {}, cwd: '/tmp' });
+
+    // Acceptance: returned descriptor includes the bounded replay snapshot.
+    expect(session.outputSnapshot).toBe(FIRST_FRAME);
+
+    // A late consumer subscribing after openOrReuse() returns cannot receive
+    // the first frame through the live `output` event — it must seed from
+    // the descriptor's snapshot. `terminalList()` must surface the same
+    // snapshot so a renderer reload sees identical data.
+    const lateEvents: string[] = [];
+    mgr.on('output', (e) => lateEvents.push(e.data));
+    expect(lateEvents).toEqual([]);
+
+    const reload = mgr.list().find((s) => s.sessionId === session.sessionId);
+    expect(reload?.outputSnapshot).toBe(FIRST_FRAME);
+    const fetched = mgr.get(session.sessionId);
+    expect(fetched?.outputSnapshot).toBe(FIRST_FRAME);
+  });
+
+  it('FIRST_FRAME_FROM_PTY: synchronous backend exit during spawn does not throw and preserves replay', () => {
+    const FIRST_FRAME = 'FIRST_FRAME_FROM_PTY\n';
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: (opts) => {
+        opts.emitOutput(FIRST_FRAME);
+        // Backend exits synchronously inside spawn — the manager must defer
+        // finalization until session state is initialized.
+        opts.emitExit(0);
+        return { write() {}, resize() {}, close() {} };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+    const exits: Array<{ sessionId: string; exitCode?: number }> = [];
+    mgr.on('exit', (e) => exits.push({ sessionId: e.sessionId, exitCode: e.exitCode }));
+
+    let session: ReturnType<typeof mgr.openOrReuse> | undefined;
+    expect(() => {
+      session = mgr.openOrReuse({ taskId: 't-pty-race-exit', spec: {}, cwd: '/tmp' });
+    }).not.toThrow();
+
+    expect(session).toBeDefined();
+    expect(session!.outputSnapshot).toBe(FIRST_FRAME);
+    expect(exits).toEqual([{ sessionId: session!.sessionId, exitCode: 0 }]);
+    expect(mgr.list()).toHaveLength(0);
+  });
 });
 
 // ── Deterministic GUI route: resolveTaskTerminalSpec + EmbeddedTerminalManager ──
