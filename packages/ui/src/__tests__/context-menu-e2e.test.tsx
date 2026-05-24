@@ -158,4 +158,92 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
+
+  // ── Keyboard navigation regression coverage ──────────────────────────────
+  //
+  // The open context menu must own ArrowUp/ArrowDown/Enter/Space while it is
+  // visible. The pre-fix workflow menu has no keyboard handler at all, and the
+  // task menu's handler is attached to an unfocused element, so document-level
+  // key events never reach an item activation. These tests dispatch real
+  // keyboard events at the active keyboard target after opening each menu so
+  // they regress if focus delivery, roving index, or item activation breaks.
+
+  function activeKeyboardTarget(): Element {
+    const active = document.activeElement;
+    return active && active !== document.body ? active : document.body;
+  }
+
+  it('workflow context menu: ArrowDown x3 + Enter copies workflow id via keyboard', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    await screen.findByRole('menu');
+
+    // From the initial highlighted item ("Open Workflow"), three ArrowDowns
+    // must land on "Copy Workflow ID" and Enter must execute that item.
+    const target = activeKeyboardTarget();
+    fireEvent.keyDown(target, { key: 'ArrowDown' });
+    fireEvent.keyDown(target, { key: 'ArrowDown' });
+    fireEvent.keyDown(target, { key: 'ArrowDown' });
+    fireEvent.keyDown(target, { key: 'Enter' });
+
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('workflow context menu: ArrowUp wraps deterministically to the last enabled item', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    await screen.findByRole('menu');
+
+    // Danger items (e.g. "Cancel Workflow") are hidden until the "More" item
+    // is activated. The initial highlight is on the first enabled item, so
+    // ArrowUp must wrap to the last enabled item ("More"); pressing Enter then
+    // must expand the danger group, revealing "Cancel Workflow".
+    expect(screen.queryByText('Cancel Workflow')).not.toBeInTheDocument();
+    const target = activeKeyboardTarget();
+    fireEvent.keyDown(target, { key: 'ArrowUp' });
+    fireEvent.keyDown(target, { key: 'Enter' });
+
+    await waitFor(() => expect(screen.getByText('Cancel Workflow')).toBeInTheDocument());
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+    expect(mock.api.retryWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('task context menu in mini DAG: ArrowDown + Enter activates the next enabled task action', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    await screen.findByText('Restart Task');
+
+    // Initial highlight is on "Restart Task". ArrowDown must move to the next
+    // enabled task action ("Open Terminal" for a pending task) and Enter must
+    // execute that action via the mocked invoker API.
+    const target = activeKeyboardTarget();
+    fireEvent.keyDown(target, { key: 'ArrowDown' });
+    fireEvent.keyDown(target, { key: 'Enter' });
+
+    await waitFor(() => expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'));
+    expect(mock.api.restartTask).not.toHaveBeenCalled();
+  });
+
+  it('task context menu: Space activates the highlighted item like Enter', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    await screen.findByText('Restart Task');
+
+    // Initial highlight is on the first enabled action ("Restart Task" for a
+    // pending task). Space must activate that highlighted item exactly like
+    // Enter does, calling the mocked invoker API.
+    const target = activeKeyboardTarget();
+    fireEvent.keyDown(target, { key: ' ' });
+
+    await waitFor(() => expect(mock.api.restartTask).toHaveBeenCalledWith('task-alpha'));
+    expect(mock.api.openTerminal).not.toHaveBeenCalled();
+  });
 });
