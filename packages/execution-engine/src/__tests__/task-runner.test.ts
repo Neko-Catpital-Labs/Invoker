@@ -4427,7 +4427,7 @@ console.log(JSON.stringify(out));
       const mergeGateProvider = {
         checkApproval: vi.fn().mockResolvedValue({
           approved: false,
-          rejected: true,
+          rejected: false,
           closed: true,
           statusText: 'Closed',
           url: 'https://github.com/owner/repo/pull/43',
@@ -4963,7 +4963,7 @@ console.log(JSON.stringify(out));
         const mergeGateProvider = {
           checkApproval: vi.fn().mockResolvedValue({
             approved: false,
-            rejected: true,
+            rejected: false,
             closed: true,
             statusText: 'Closed',
           }),
