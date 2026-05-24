@@ -9,7 +9,7 @@
  */
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import http from 'node:http';
-import { startApiServer, type ApiServer } from '../api-server.js';
+import { startApiServer, type ApiMutationFacade, type ApiServer } from '../api-server.js';
 import { WorkflowMutationFacade } from '../workflow-mutation-facade.js';
 import { OrchestratorError, OrchestratorErrorCode } from '@invoker/workflow-core';
 
@@ -382,6 +382,86 @@ describe('GET /api/tasks/:id/output', () => {
 });
 
 // ── Write endpoints ──────────────────────────────────────────
+
+describe('INV-130 mutation control plane', () => {
+  it('delegates task retry to the facade instead of owning orchestrator dispatch', async () => {
+    const localMocks = createMocks();
+    localMocks.orchestrator.retryTask.mockImplementation(() => {
+      throw new Error('route bypassed facade');
+    });
+    const retryTask = vi.fn().mockResolvedValue({
+      started: [makeTask()],
+      runnable: [makeTask()],
+      topup: [],
+    });
+    const localApi = startApiServer({
+      orchestrator: localMocks.orchestrator as any,
+      persistence: localMocks.persistence as any,
+      executorRegistry: localMocks.executorRegistry as any,
+      mutations: { retryTask } as unknown as ApiMutationFacade,
+      deleteWorkflow: localMocks.deleteWorkflow,
+      detachWorkflow: localMocks.detachWorkflow,
+    });
+    await new Promise<void>((resolve) => {
+      if (localApi.server.listening) resolve();
+      else localApi.server.on('listening', resolve);
+    });
+    const addr = localApi.server.address();
+    const localPort = typeof addr === 'object' && addr ? addr.port : localApi.port;
+
+    try {
+      const res = await request(localPort, 'POST', '/api/tasks/task-1/retry');
+
+      expect(res.status).toBe(200);
+      expect(res.body.action).toBe('retried');
+      expect(res.body.tasksStarted).toBe(1);
+      expect(retryTask).toHaveBeenCalledWith('task-1');
+      expect(localMocks.orchestrator.retryTask).not.toHaveBeenCalled();
+      expect(localMocks.orchestrator.startExecution).not.toHaveBeenCalled();
+    } finally {
+      await localApi.close();
+    }
+  });
+
+  it('delegates direct rebase-recreate execution to the facade after target normalization', async () => {
+    const localMocks = createMocks();
+    localMocks.orchestrator.recreateWorkflow.mockImplementation(() => {
+      throw new Error('route bypassed facade');
+    });
+    const rebaseRecreate = vi.fn().mockResolvedValue({
+      started: [makeTask({ id: 'wf-1/task-1', config: { workflowId: 'wf-1' } })],
+      runnable: [makeTask({ id: 'wf-1/task-1', config: { workflowId: 'wf-1' } })],
+      topup: [],
+    });
+    const localApi = startApiServer({
+      orchestrator: localMocks.orchestrator as any,
+      persistence: localMocks.persistence as any,
+      executorRegistry: localMocks.executorRegistry as any,
+      mutations: { rebaseRecreate } as unknown as ApiMutationFacade,
+      deleteWorkflow: localMocks.deleteWorkflow,
+      detachWorkflow: localMocks.detachWorkflow,
+    });
+    await new Promise<void>((resolve) => {
+      if (localApi.server.listening) resolve();
+      else localApi.server.on('listening', resolve);
+    });
+    const addr = localApi.server.address();
+    const localPort = typeof addr === 'object' && addr ? addr.port : localApi.port;
+
+    try {
+      const res = await request(localPort, 'POST', '/api/workflows/wf-1/rebase-recreate');
+
+      expect(res.status).toBe(200);
+      expect(res.body.action).toBe('rebase_recreated');
+      expect(res.body.tasksStarted).toBe(1);
+      expect(rebaseRecreate).toHaveBeenCalledWith('wf-1');
+      expect(localMocks.orchestrator.recreateWorkflow).not.toHaveBeenCalled();
+      expect(localMocks.orchestrator.startExecution).not.toHaveBeenCalled();
+    } finally {
+      await localApi.close();
+    }
+  });
+});
 
 describe('POST /api/tasks/:id/cancel', () => {
   it('cancels task via facade', async () => {

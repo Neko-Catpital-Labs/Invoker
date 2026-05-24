@@ -54,13 +54,46 @@ import { resolveHeadlessTargetWorkflowId } from './headless-command-classificati
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { parseMetadataPatchBody } from './metadata-setter.js';
 
+const REBASE_RECREATE_MUTATION_CHANNEL = 'invoker:rebase-recreate';
+
+/**
+ * INV-130 consumes docs/context/inv-130/experiment-brief.md by keeping
+ * the HTTP layer on a narrow facade contract. Route handlers may parse
+ * requests and format responses; mutation ordering, dispatch, and topup
+ * stay behind this boundary.
+ */
+export type ApiMutationFacade = Pick<
+  WorkflowMutationFacade,
+  | 'cancelTask'
+  | 'retryTask'
+  | 'recreateTask'
+  | 'resolveConflict'
+  | 'approveTask'
+  | 'rejectTask'
+  | 'recreateWorkflow'
+  | 'retryWorkflow'
+  | 'rebaseRetry'
+  | 'rebaseRecreate'
+  | 'forkWorkflow'
+  | 'cancelWorkflow'
+  | 'provideInput'
+  | 'editTaskCommand'
+  | 'editTaskPrompt'
+  | 'editTaskType'
+  | 'editTaskAgent'
+  | 'setTaskExternalGatePolicies'
+  | 'setTaskMetadata'
+  | 'setWorkflowMergeMode'
+  | 'setWorkflowMetadata'
+>;
+
 export interface ApiServerDeps {
   logger?: Logger;
   orchestrator: Orchestrator;
   persistence: SQLiteAdapter;
   executorRegistry: ExecutorRegistry;
   /** All write endpoints delegate to the facade for mutation + dispatch + topup. */
-  mutations: WorkflowMutationFacade;
+  mutations: ApiMutationFacade;
   queueWorkflowMutation?: (
     workflowId: string,
     priority: WorkflowMutationPriority,
@@ -394,7 +427,12 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         try {
           const workflowId = resolveHeadlessTargetWorkflowId(workflowTarget, persistence);
           if (deps.queueWorkflowMutation) {
-            const intentId = deps.queueWorkflowMutation(workflowId, 'high', 'invoker:rebase-recreate', [workflowId]);
+            const intentId = deps.queueWorkflowMutation(
+              workflowId,
+              'high',
+              REBASE_RECREATE_MUTATION_CHANNEL,
+              [workflowId],
+            );
             json(res, 202, {
               ok: true,
               workflowId,

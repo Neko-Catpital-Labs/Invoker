@@ -10,6 +10,10 @@
  *   2. validate / compute using read-only queries
  *   3. writeAndSync()   — persist changes to DB, update graph cache
  *   4. publish delta    — notify UI
+ *
+ * INV-130 relies on this contract from the HTTP API control plane: API
+ * routes delegate writes through WorkflowMutationFacade rather than
+ * reimplementing these state-machine steps in route handlers.
  */
 
 import { appendFileSync, mkdirSync } from 'node:fs';
