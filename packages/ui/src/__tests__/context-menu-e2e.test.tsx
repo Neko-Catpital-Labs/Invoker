@@ -158,4 +158,56 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
+
+  it('focuses the workflow menu on open so keyboard input lands on it', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    await waitFor(() => expect(document.activeElement).toBe(menu));
+  });
+
+  it('ArrowDown then Enter activates the highlighted workflow menu item', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    // Initial highlight is on the first item (Open Workflow). One ArrowDown
+    // moves it to Open PR, then to Retry Workflow.
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'Enter' });
+    await waitFor(() => expect(mock.api.retryWorkflow).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('Space activates the highlighted workflow menu item', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    fireEvent.keyDown(menu, { key: ' ' });
+    // Activating the first item (Open Workflow) closes the menu.
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+  });
+
+  it('ArrowUp wraps around to the More entry, expanding it on Enter', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    // With four safe items + More, wrapping ArrowUp from the first item lands on More.
+    fireEvent.keyDown(menu, { key: 'ArrowUp' });
+    fireEvent.keyDown(menu, { key: 'Enter' });
+    expect(await screen.findByText('Rebase and Retry')).toBeInTheDocument();
+  });
+
+  it('task context menu focuses on open and Enter activates the highlighted item', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    const menu = await screen.findByRole('menu');
+    await waitFor(() => expect(document.activeElement).toBe(menu));
+    // Pending task: first enabled item is Restart Task — pressing Enter restarts it.
+    fireEvent.keyDown(menu, { key: 'Enter' });
+    await waitFor(() => expect(mock.api.restartTask).toHaveBeenCalledWith('task-alpha'));
+  });
 });
