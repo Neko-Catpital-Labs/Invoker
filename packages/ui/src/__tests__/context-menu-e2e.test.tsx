@@ -158,4 +158,108 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
+
+  it('workflow menu focuses itself on open and highlights the first item', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    expect(document.activeElement).toBe(menu);
+    expect(screen.getByText('Open Workflow').className).toContain('bg-gray-700');
+  });
+
+  it('workflow menu ArrowDown moves highlight, Enter activates and closes', async () => {
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(null);
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    expect(screen.getByText('Open PR').className).toContain('bg-gray-700');
+    fireEvent.keyDown(menu, { key: 'Enter' });
+    // handleOpenWorkflowPr calls window.open only when a review URL exists; in
+    // this fixture there is none, so we just confirm the menu closed.
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+    openSpy.mockRestore();
+  });
+
+  it('workflow menu Space activates the highlighted item', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    expect(screen.getByText('Retry Workflow').className).toContain('bg-gray-700');
+    fireEvent.keyDown(menu, { key: ' ' });
+    await waitFor(() => expect(mock.api.retryWorkflow).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('workflow menu ArrowUp wraps from first item to last (More)', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    fireEvent.keyDown(menu, { key: 'ArrowUp' });
+    const more = screen.getByText('More');
+    expect(more.className).toContain('bg-gray-700');
+  });
+
+  it('workflow menu keyboard reaches More and expands it via Enter, refocusing newly revealed item', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    fireEvent.keyDown(menu, { key: 'ArrowUp' });
+    expect(screen.getByText('More').className).toContain('bg-gray-700');
+    fireEvent.keyDown(menu, { key: 'Enter' });
+    const rebaseRetry = await screen.findByText('Rebase and Retry');
+    expect(rebaseRetry.className).toContain('bg-gray-700');
+  });
+
+  it('workflow menu Enter on Cancel after More invokes cancel', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    fireEvent.keyDown(menu, { key: 'ArrowUp' });
+    fireEvent.keyDown(menu, { key: 'Enter' });
+    await screen.findByText('Cancel Workflow');
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    expect(screen.getByText('Cancel Workflow').className).toContain('bg-gray-700');
+    fireEvent.keyDown(menu, { key: 'Enter' });
+    await waitFor(() => expect(mock.api.cancelWorkflow).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('task context menu supports keyboard nav and Enter activates', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    const menu = await screen.findByRole('menu');
+    expect(document.activeElement).toBe(menu);
+    // pending task: first item is "Restart Task"
+    expect(screen.getByText('Restart Task').className).toContain('bg-gray-700');
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    expect(screen.getByText('Open Terminal').className).toContain('bg-gray-700');
+    fireEvent.keyDown(menu, { key: ' ' });
+    await waitFor(() => {
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    });
+  });
+
+  it('task context menu More is keyboard-reachable and expanding it focuses a newly revealed enabled item', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    const menu = await screen.findByRole('menu');
+    // ArrowUp wraps to the last entry, which is More.
+    fireEvent.keyDown(menu, { key: 'ArrowUp' });
+    expect(screen.getByText('More').className).toContain('bg-gray-700');
+    fireEvent.keyDown(menu, { key: 'Enter' });
+    // After expanding, focus should be on the first newly-revealed enabled item.
+    const terminate = await screen.findByText('Terminate Task');
+    expect(terminate.className).toContain('bg-gray-700');
+  });
 });

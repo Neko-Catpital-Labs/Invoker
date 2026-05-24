@@ -10,9 +10,10 @@
  * - Labeled separators for task and danger zones
  */
 
-import { useEffect, useRef, useState, useLayoutEffect } from 'react';
+import { useEffect, useRef, useState, useLayoutEffect, useMemo } from 'react';
 import type { TaskState } from '../types.js';
 import { getMenuItems, type MenuItem } from '../lib/context-menu-items.js';
+import { findFirstEnabledIndex, findNextEnabledIndex } from '../lib/menu-keyboard.js';
 import { EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE } from '../isExperimentSpawnPivot.js';
 
 interface ContextMenuProps {
@@ -27,6 +28,10 @@ interface ContextMenuProps {
   onCancel?: (taskId: string) => void;
   onClose: () => void;
 }
+
+type NavEntry =
+  | { kind: 'item'; enabled: boolean; item: MenuItem }
+  | { kind: 'more'; enabled: true };
 
 export function ContextMenu({
   x,
@@ -45,10 +50,8 @@ export function ContextMenu({
   const [position, setPosition] = useState({ left: x, top: y });
   const [showMore, setShowMore] = useState(false);
 
-  // Generate menu items
   const items = getMenuItems(task, { agents: ['claude', 'codex'] });
 
-  // Filter items based on available handlers
   const availableItems = items.filter((item) => {
     if (item.action === 'onRecreateTask' && !onRecreateTask) return false;
     if (item.action === 'onFix' && !onFix) return false;
@@ -61,15 +64,27 @@ export function ContextMenu({
   const hasMoreButton = dangerItems.length > 0 && !showMore;
   const renderedItems: MenuItem[] = showMore ? [...safeItems, ...dangerItems] : safeItems;
 
-  // Find first enabled item index
-  const firstEnabledIndex = renderedItems.findIndex((item) => item.enabled);
-
-  // Auto-focus first enabled item on mount
-  useEffect(() => {
-    if (firstEnabledIndex >= 0) {
-      setFocusedIndex(firstEnabledIndex);
+  const navEntries = useMemo<NavEntry[]>(() => {
+    const entries: NavEntry[] = renderedItems.map((item) => ({
+      kind: 'item' as const,
+      enabled: item.enabled,
+      item,
+    }));
+    if (hasMoreButton) {
+      entries.push({ kind: 'more' as const, enabled: true });
     }
-  }, [firstEnabledIndex]);
+    return entries;
+  }, [renderedItems, hasMoreButton]);
+
+  // Focus the menu element on mount so it receives keystrokes, and seed
+  // focusedIndex to the first enabled entry.
+  useEffect(() => {
+    menuRef.current?.focus({ preventScroll: true });
+    const first = findFirstEnabledIndex(navEntries);
+    if (first >= 0) setFocusedIndex(first);
+    // Only on mount — subsequent focus moves happen via key handlers / More expansion.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Viewport clamping: flip if menu overflows bottom or right
   useLayoutEffect(() => {
@@ -82,22 +97,18 @@ export function ContextMenu({
     let left = x;
     let top = y;
 
-    // Flip horizontally if overflows right
     if (rect.right > viewportWidth) {
       left = x - rect.width;
     }
-
-    // Flip vertically if overflows bottom
     if (rect.bottom > viewportHeight) {
       top = y - rect.height;
     }
 
-    // Ensure menu stays within viewport (clamp to edges)
     left = Math.max(0, Math.min(left, viewportWidth - rect.width));
     top = Math.max(0, Math.min(top, viewportHeight - rect.height));
 
     setPosition({ left, top });
-  }, [x, y]);
+  }, [x, y, showMore]);
 
   // Capture-phase outside dismissal stays reliable even if graph layers stop
   // bubbling on mouse/pointer events before they reach document listeners.
@@ -133,32 +144,22 @@ export function ContextMenu({
     };
   }, [onClose]);
 
-  // Keyboard navigation
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    const enabledIndices = renderedItems
-      .map((item, idx) => (item.enabled ? idx : -1))
-      .filter((idx) => idx >= 0);
-
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const nextPos = (currentPos + 1) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[nextPos]);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const prevPos = (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[prevPos]);
-    } else if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      const item = renderedItems[focusedIndex];
-      if (item?.enabled) {
-        handleItemClick(item);
-      }
+  const expandMore = () => {
+    // After expanding, deterministically highlight the first newly-revealed
+    // enabled item (the first danger item). Falls back to first enabled.
+    const newlyRevealed = safeItems.length;
+    const newNav: NavEntry[] = [
+      ...safeItems.map((item) => ({ kind: 'item' as const, enabled: item.enabled, item })),
+      ...dangerItems.map((item) => ({ kind: 'item' as const, enabled: item.enabled, item })),
+    ];
+    let target = newlyRevealed;
+    if (!newNav[target]?.enabled) {
+      target = findNextEnabledIndex(newNav, target - 1, 1);
     }
+    setShowMore(true);
+    setFocusedIndex(target);
   };
 
-  // Handle menu item click
   const handleItemClick = (item: MenuItem) => {
     if (!item.enabled) return;
 
@@ -187,7 +188,31 @@ export function ContextMenu({
     onClose();
   };
 
-  // Get variant styles
+  const activateEntry = (entry: NavEntry | undefined) => {
+    if (!entry) return;
+    if (entry.kind === 'more') {
+      expandMore();
+      return;
+    }
+    if (entry.enabled) handleItemClick(entry.item);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      e.stopPropagation();
+      setFocusedIndex((idx) => findNextEnabledIndex(navEntries, idx, 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      e.stopPropagation();
+      setFocusedIndex((idx) => findNextEnabledIndex(navEntries, idx, -1));
+    } else if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      e.stopPropagation();
+      activateEntry(navEntries[focusedIndex]);
+    }
+  };
+
   const getVariantClasses = (variant?: MenuItem['variant'], enabled?: boolean) => {
     if (!enabled) {
       return 'text-gray-500 cursor-not-allowed';
@@ -205,12 +230,13 @@ export function ContextMenu({
     }
   };
 
-  // Render separator
   const renderSeparator = (label: string) => (
     <div className="border-t border-gray-600 my-1">
       <div className="text-xs text-gray-500 text-center py-1">{label}</div>
     </div>
   );
+
+  const moreIndex = hasMoreButton ? navEntries.length - 1 : -1;
 
   return (
     <div
@@ -254,8 +280,11 @@ export function ContextMenu({
           <div className="border-t border-gray-600 my-1" />
           <button
             role="menuitem"
-            className="w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
-            onClick={() => setShowMore(true)}
+            className={`w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 ${
+              focusedIndex === moreIndex ? 'bg-gray-700' : ''
+            }`}
+            onClick={expandMore}
+            onMouseEnter={() => setFocusedIndex(moreIndex)}
           >
             More
           </button>
