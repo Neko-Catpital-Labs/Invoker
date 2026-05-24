@@ -126,7 +126,13 @@ export interface EmbeddedTerminalManagerOptions {
   defaultShell?: string;
 }
 
-function describeSession(state: SessionState): TerminalSessionDescriptor {
+/** Maximum bytes retained in the per-session output replay buffer. */
+export const TERMINAL_REPLAY_BUFFER_MAX_BYTES = 64 * 1024;
+
+function describeSessionInternal(
+  state: SessionState,
+  outputSnapshot: string | undefined,
+): TerminalSessionDescriptor {
   return {
     sessionId: state.sessionId,
     taskId: state.taskId,
@@ -138,6 +144,7 @@ function describeSession(state: SessionState): TerminalSessionDescriptor {
     mode: state.mode,
     attached: state.mode === 'attached',
     createdAt: state.createdAt,
+    outputSnapshot: outputSnapshot && outputSnapshot.length > 0 ? outputSnapshot : undefined,
   };
 }
 
@@ -244,14 +251,17 @@ export function createPtyTerminalBackend(
 export class EmbeddedTerminalManager extends EventEmitter {
   private readonly sessions = new Map<string, SessionState>();
   private readonly targetIndex = new Map<string, string>();
+  private readonly outputBuffers = new Map<string, string>();
   private readonly backend: EmbeddedTerminalBackend;
   private readonly defaultShell: string;
+  private readonly maxBufferBytes: number;
 
   constructor(options: EmbeddedTerminalManagerOptions = {}) {
     super();
     this.backend = resolveBackend(options);
     this.defaultShell =
       options.defaultShell ?? (process.platform === 'darwin' ? 'zsh' : 'bash');
+    this.maxBufferBytes = TERMINAL_REPLAY_BUFFER_MAX_BYTES;
   }
 
   /**
@@ -265,10 +275,13 @@ export class EmbeddedTerminalManager extends EventEmitter {
     if (existingId) {
       const existing = this.sessions.get(existingId);
       if (existing && existing.status === 'running') {
-        return describeSession(existing);
+        return this.describeSession(existing);
       }
       this.targetIndex.delete(targetKey);
-      if (existing) this.sessions.delete(existingId);
+      if (existing) {
+        this.sessions.delete(existingId);
+        this.outputBuffers.delete(existingId);
+      }
     }
 
     const sessionId = randomUUID();
@@ -283,10 +296,21 @@ export class EmbeddedTerminalManager extends EventEmitter {
       status: 'running' as const,
     };
 
+    // Initialize the replay buffer BEFORE invoking the backend so output
+    // emitted synchronously during spawn is captured. Without this, a fast
+    // backend that emits during construction would race the bookkeeping.
+    this.outputBuffers.set(sessionId, '');
+
     let state: SessionState;
+    // Defer finalization if the backend reports exit synchronously during
+    // spawn — at that point `state` has not yet been assigned. Looking up by
+    // sessionId after assignment avoids the uninitialized-closure hazard.
+    let pendingExitCode: number | undefined;
+    let hasPendingExit = false;
+
     if (opts.attach) {
       const unsubscribe = opts.attach.executor.onOutput(opts.attach.handle, (data) => {
-        this.emitOutput(sessionId, opts.taskId, data);
+        this.handleOutput(sessionId, opts.taskId, data);
       });
       state = {
         ...base,
@@ -299,8 +323,16 @@ export class EmbeddedTerminalManager extends EventEmitter {
         spec: opts.spec,
         cwd: opts.cwd,
         defaultShell: this.defaultShell,
-        emitOutput: (data) => this.emitOutput(sessionId, opts.taskId, data),
-        emitExit: (exitCode) => this.finalizeSession(state, exitCode),
+        emitOutput: (data) => this.handleOutput(sessionId, opts.taskId, data),
+        emitExit: (exitCode) => {
+          const live = this.sessions.get(sessionId);
+          if (live) {
+            this.finalizeSession(live, exitCode);
+          } else {
+            pendingExitCode = exitCode;
+            hasPendingExit = true;
+          }
+        },
       });
       state = {
         ...base,
@@ -312,16 +344,27 @@ export class EmbeddedTerminalManager extends EventEmitter {
 
     this.sessions.set(sessionId, state);
     this.targetIndex.set(targetKey, sessionId);
-    return describeSession(state);
+
+    // Snapshot output before any synchronous-exit cleanup wipes the buffer,
+    // so the returned descriptor still includes the early output.
+    const snapshot = this.outputBuffers.get(sessionId);
+    if (hasPendingExit) {
+      this.finalizeSession(state, pendingExitCode);
+    }
+    return describeSessionInternal(state, snapshot);
   }
 
   list(): TerminalSessionDescriptor[] {
-    return Array.from(this.sessions.values()).map(describeSession);
+    return Array.from(this.sessions.values()).map((state) => this.describeSession(state));
   }
 
   get(sessionId: string): TerminalSessionDescriptor | undefined {
     const state = this.sessions.get(sessionId);
-    return state ? describeSession(state) : undefined;
+    return state ? this.describeSession(state) : undefined;
+  }
+
+  private describeSession(state: SessionState): TerminalSessionDescriptor {
+    return describeSessionInternal(state, this.outputBuffers.get(state.sessionId));
   }
 
   write(sessionId: string, data: string): { ok: boolean; reason?: string } {
@@ -393,6 +436,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
       this.targetIndex.delete(state.targetKey);
     }
     this.sessions.delete(state.sessionId);
+    this.outputBuffers.delete(state.sessionId);
 
     const payload: TerminalExitEvent = {
       sessionId: state.sessionId,
@@ -402,9 +446,28 @@ export class EmbeddedTerminalManager extends EventEmitter {
     this.emit('exit', payload);
   }
 
-  private emitOutput(sessionId: string, taskId: string, data: string): void {
+  private handleOutput(sessionId: string, taskId: string, data: string): void {
+    this.appendToBuffer(sessionId, data);
     const payload: TerminalOutputEvent = { sessionId, taskId, data };
     this.emit('output', payload);
+  }
+
+  private appendToBuffer(sessionId: string, data: string): void {
+    const current = this.outputBuffers.get(sessionId);
+    if (current === undefined) return;
+    const combined = current + data;
+    const bytes = Buffer.byteLength(combined, 'utf8');
+    if (bytes <= this.maxBufferBytes) {
+      this.outputBuffers.set(sessionId, combined);
+      return;
+    }
+    // Trim oldest bytes so memory stays bounded. We slice on a UTF-8 byte
+    // boundary by round-tripping through a Buffer; the very first character
+    // of the trimmed snapshot may be a partial codepoint, which the renderer
+    // tolerates because the buffer is replayed as raw terminal output.
+    const buf = Buffer.from(combined, 'utf8');
+    const trimmed = buf.subarray(buf.length - this.maxBufferBytes).toString('utf8');
+    this.outputBuffers.set(sessionId, trimmed);
   }
 }
 
