@@ -513,6 +513,123 @@ describe('EmbeddedTerminalManager replay buffer', () => {
     expect(descriptor.outputSnapshot!.endsWith('TAIL')).toBe(true);
   });
 
+  // Regression: GUI open-terminal PTY race.
+  //
+  // Prior to the replay buffer, the embedded PTY backend would emit output
+  // synchronously during spawn, before the renderer terminal pane subscribed
+  // to `invoker:terminal-output`. That first frame was dropped on the floor.
+  // These tests pin the contract that the returned descriptor (and a
+  // subsequent `list()` snapshot) contains the marker emitted during spawn,
+  // so a late renderer subscriber can seed its xterm buffer from it.
+  it('replays a PTY first frame emitted synchronously during spawn (GUI open-terminal PTY race)', () => {
+    const ptySpawnFn = vi.fn((_command: string, _args: readonly string[]) => {
+      const pty = createFakePty();
+      // Defer the data emit by one microtask so the manager's emitOutput
+      // wiring (which is installed *after* spawnFn returns) sees the event.
+      // This mirrors how a real PTY emits its first frame from a worker
+      // thread the moment after fork().
+      queueMicrotask(() => pty.emit('data', 'FIRST_FRAME_FROM_PTY\n'));
+      return pty;
+    }) as unknown as PtySpawnFn;
+    const mgr = new EmbeddedTerminalManager({
+      backend: createPtyTerminalBackend({ spawnFn: ptySpawnFn }),
+    });
+
+    const session = mgr.openOrReuse({
+      taskId: 'task-pty-race',
+      spec: { command: '/bin/echo', args: ['boot'], cwd: '/tmp/wt' },
+      cwd: '/tmp/wt',
+    });
+
+    // Drain the microtask the fake PTY queued so the first frame lands in
+    // the manager's replay buffer before we inspect the snapshot.
+    return Promise.resolve().then(() => {
+      const [listed] = mgr.list();
+      expect(listed.sessionId).toBe(session.sessionId);
+      expect(listed.outputSnapshot).toBe('FIRST_FRAME_FROM_PTY\n');
+
+      // A late renderer-style consumer subscribes only after the descriptor
+      // is in hand. It must be able to seed from `outputSnapshot` and then
+      // pick up any further live output via the 'output' event.
+      const lateSeed: string[] = [];
+      if (listed.outputSnapshot) lateSeed.push(listed.outputSnapshot);
+      mgr.on('output', (e) => {
+        if (e.sessionId === session.sessionId) lateSeed.push(e.data);
+      });
+
+      expect(lateSeed.join('')).toBe('FIRST_FRAME_FROM_PTY\n');
+    });
+  });
+
+  it('captures a synchronous PTY first frame in the returned descriptor itself', () => {
+    // Variant of the race where the backend emits *during* spawn() (truly
+    // synchronous), not via microtask. This is the path that exercises the
+    // placeholder-process / pre-registered session state.
+    const ptySpawnFn = vi.fn((_command: string, _args: readonly string[]) => {
+      const pty = createFakePty();
+      const originalOnData = pty.onData;
+      pty.onData = (listener) => {
+        const disposable = originalOnData(listener);
+        // Emit immediately, while the backend is still inside spawn(),
+        // before openOrReuse() returns the descriptor.
+        listener('FIRST_FRAME_FROM_PTY\n');
+        return disposable;
+      };
+      return pty;
+    }) as unknown as PtySpawnFn;
+    const mgr = new EmbeddedTerminalManager({
+      backend: createPtyTerminalBackend({ spawnFn: ptySpawnFn }),
+    });
+
+    const session = mgr.openOrReuse({
+      taskId: 'task-pty-race-sync',
+      spec: { command: '/bin/echo', args: ['boot'], cwd: '/tmp/wt' },
+      cwd: '/tmp/wt',
+    });
+
+    expect(session.status).toBe('running');
+    expect(session.outputSnapshot).toBe('FIRST_FRAME_FROM_PTY\n');
+  });
+
+  it('synchronous PTY exit during spawn does not throw and surfaces the snapshot', () => {
+    // Companion safety test for the race fix: emitting output + exit
+    // synchronously during spawn must finalize cleanly (no uninitialized
+    // session state) and still surface the captured snapshot to callers.
+    const ptySpawnFn = vi.fn((_command: string, _args: readonly string[]) => {
+      const pty = createFakePty();
+      const originalOnData = pty.onData;
+      const originalOnExit = pty.onExit;
+      pty.onData = (listener) => {
+        const disposable = originalOnData(listener);
+        listener('FIRST_FRAME_FROM_PTY\n');
+        return disposable;
+      };
+      pty.onExit = (listener) => {
+        const disposable = originalOnExit(listener);
+        listener({ exitCode: 1 });
+        return disposable;
+      };
+      return pty;
+    }) as unknown as PtySpawnFn;
+    const mgr = new EmbeddedTerminalManager({
+      backend: createPtyTerminalBackend({ spawnFn: ptySpawnFn }),
+    });
+
+    const exits: Array<{ sessionId: string; exitCode?: number }> = [];
+    mgr.on('exit', (e) => exits.push({ sessionId: e.sessionId, exitCode: e.exitCode }));
+
+    expect(() => {
+      mgr.openOrReuse({
+        taskId: 'task-pty-race-sync-exit',
+        spec: { command: '/bin/false', cwd: '/tmp/wt' },
+        cwd: '/tmp/wt',
+      });
+    }).not.toThrow();
+
+    expect(exits).toHaveLength(1);
+    expect(exits[0]?.exitCode).toBe(1);
+  });
+
   it('captures attached-mode executor output into the replay snapshot', () => {
     const outputCallbacks: Array<(data: string) => void> = [];
     const executor: Pick<Executor, 'onOutput' | 'sendInput'> & { type: string } = {
