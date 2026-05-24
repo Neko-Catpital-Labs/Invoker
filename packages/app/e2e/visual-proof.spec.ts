@@ -569,6 +569,30 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'workflow-context-menu-organization');
   });
 
+  test('context-menu-keyboard-navigation — ArrowDown moves the keyboard highlight to the next enabled menuitem', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+
+    await openContextMenu(page, page.locator('[data-testid^="workflow-node-"]'));
+
+    // Highlight token is `bg-gray-700`; base class also includes `hover:bg-gray-700`,
+    // so match the standalone class (not preceded by `:`) via whitespace boundaries.
+    const highlightedRegex = /(?:^|\s)bg-gray-700(?:\s|$)/;
+
+    // Menu auto-focuses its first enabled item ("Open Workflow") on open.
+    const openWorkflow = page.getByRole('menuitem', { name: 'Open Workflow' });
+    const openPr = page.getByRole('menuitem', { name: 'Open PR' });
+    await expect(openWorkflow).toBeVisible();
+    await expect(openWorkflow).toHaveClass(highlightedRegex);
+    await expect(openPr).not.toHaveClass(highlightedRegex);
+
+    // ArrowDown advances the roving highlight to the next enabled menuitem.
+    await page.getByRole('menu').press('ArrowDown');
+    await expect(openPr).toHaveClass(highlightedRegex);
+    await expect(openWorkflow).not.toHaveClass(highlightedRegex);
+
+    await captureScreenshot(page, 'context-menu-keyboard-navigation');
+  });
+
   test('context menu keeps danger separator when cancel action is absent', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     await injectTaskStates(page, [
