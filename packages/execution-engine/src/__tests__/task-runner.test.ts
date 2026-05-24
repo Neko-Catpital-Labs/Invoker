@@ -4991,6 +4991,45 @@ console.log(JSON.stringify(out));
         expect(orchestrator.approve).not.toHaveBeenCalled();
         expect(executeTasks).not.toHaveBeenCalled();
       });
+
+      it('a subsequent poll tick does not re-check a task whose gate is already closed', async () => {
+        const allTasks = [
+          makeTask({
+            id: 'merge-already-closed',
+            status: 'closed',
+            config: { isMergeNode: true },
+            execution: {
+              reviewId: 'owner/repo#206',
+              workspacePath: '/workspace/already-closed-gate',
+              reviewStatus: 'Closed',
+            },
+          }),
+        ];
+        const orchestrator = {
+          getTask: (id: string) => allTasks.find(t => t.id === id),
+          getAllTasks: () => allTasks,
+          approve: vi.fn(),
+        };
+        const persistence = { updateTask: vi.fn() };
+        const mergeGateProvider = {
+          checkApproval: vi.fn(),
+        };
+
+        const executor = new TaskRunner({
+          orchestrator: orchestrator as any,
+          persistence: persistence as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          cwd: '/runner-base-cwd',
+          mergeGateProvider: mergeGateProvider as any,
+        });
+
+        await executor.checkMergeGateStatuses();
+        await executor.checkMergeGateStatuses();
+
+        expect(mergeGateProvider.checkApproval).not.toHaveBeenCalled();
+        expect(persistence.updateTask).not.toHaveBeenCalled();
+        expect(orchestrator.approve).not.toHaveBeenCalled();
+      });
     });
   });
 

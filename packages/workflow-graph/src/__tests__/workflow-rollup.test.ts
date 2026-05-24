@@ -97,4 +97,25 @@ describe('workflow rollup', () => {
     expect(rollup.countsByStatus.failed).toBe(0);
     expect(rollup.failedTasks).toEqual([]);
   });
+
+  it('does not collapse closed workflow to completed when sibling tasks completed', () => {
+    const rollup = computeWorkflowRollupFromSummaries([
+      task('done-1', 'completed'),
+      task('done-2', 'completed'),
+      task('gate', 'closed'),
+    ]);
+
+    expect(rollup.status).toBe('closed');
+    expect(rollup.countsByStatus.completed).toBe(2);
+    expect(rollup.countsByStatus.closed).toBe(1);
+  });
+
+  it('does not surface closed tasks in waitingTasks', () => {
+    const rollup = computeWorkflowRollupFromSummaries([
+      task('gate', 'closed'),
+      task('pending-leaf', 'pending', ['gate']),
+    ]);
+
+    expect(rollup.waitingTasks.map((issue) => issue.taskId)).not.toContain('gate');
+  });
 });

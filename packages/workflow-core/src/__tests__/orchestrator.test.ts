@@ -1894,6 +1894,61 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask(reviewLeafId)!.status).toBe('pending');
     });
 
+    it('closed upstream merge gate is counted as closed (not completed) in workflow status', () => {
+      orchestrator.loadPlan({
+        name: 'prereq-workflow',
+        tasks: [{ id: 'verify-control-plane-regression', description: 'Prereq task' }],
+      });
+      const prereqTaskId = sid(orchestrator, 0, 'verify-control-plane-regression');
+      const prereqWfId = prereqTaskId.split('/')[0]!;
+      const prereqMergeId = `__merge__${prereqWfId}`;
+
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(makeResponse({ actionId: prereqTaskId, status: 'completed' }));
+      persistence.updateTask(prereqMergeId, { status: 'closed' });
+      orchestrator.syncAllFromDb();
+
+      const stats = orchestrator.getWorkflowStatus(prereqWfId);
+      expect(stats.closed).toBe(1);
+      // Completed task (verify-control-plane-regression) remains counted as completed;
+      // the merge gate itself contributes to "closed", not "completed" or "failed".
+      expect(stats.failed).toBe(0);
+      expect(orchestrator.getTask(prereqMergeId)!.status).toBe('closed');
+    });
+
+    it('closed merge gate does not start downstream even on repeated startExecution ticks', () => {
+      orchestrator.loadPlan({
+        name: 'prereq-workflow',
+        tasks: [{ id: 'verify-control-plane-regression', description: 'Prereq task' }],
+      });
+      const prereqTaskId = sid(orchestrator, 0, 'verify-control-plane-regression');
+      const prereqWfId = prereqTaskId.split('/')[0]!;
+      const prereqMergeId = `__merge__${prereqWfId}`;
+
+      orchestrator.loadPlan({
+        name: 'workflow-gated-closed-repeat',
+        tasks: [
+          {
+            id: 'leaf',
+            description: 'leaf waits for upstream merge completion',
+            externalDependencies: [{ workflowId: prereqWfId, gatePolicy: 'completed' }],
+          },
+        ],
+      });
+      const leafId = sid(orchestrator, 1, 'leaf');
+
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(makeResponse({ actionId: prereqTaskId, status: 'completed' }));
+      persistence.updateTask(prereqMergeId, { status: 'closed' });
+      orchestrator.syncAllFromDb();
+
+      for (let i = 0; i < 3; i += 1) {
+        const startedAgain = orchestrator.startExecution();
+        expect(startedAgain.map((t) => t.id)).not.toContain(leafId);
+      }
+      expect(orchestrator.getTask(leafId)!.status).toBe('pending');
+    });
+
     it('setTaskExternalGatePolicies can unblock pending task immediately', () => {
       orchestrator.loadPlan({
         name: 'prereq-workflow',
