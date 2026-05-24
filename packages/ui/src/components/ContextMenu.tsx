@@ -60,9 +60,20 @@ export function ContextMenu({
   const dangerItems = availableItems.filter((item) => item.variant === 'danger');
   const hasMoreButton = dangerItems.length > 0 && !showMore;
   const renderedItems: MenuItem[] = showMore ? [...safeItems, ...dangerItems] : safeItems;
+  const moreSlotIndex = hasMoreButton ? renderedItems.length : -1;
 
-  // Find first enabled item index
-  const firstEnabledIndex = renderedItems.findIndex((item) => item.enabled);
+  const isEnabledNavIndex = (idx: number) => {
+    if (idx === moreSlotIndex) return true;
+    return Boolean(renderedItems[idx]?.enabled);
+  };
+
+  // Find first enabled item index across the navigable space (renderedItems + optional More).
+  const firstEnabledIndex = (() => {
+    for (let i = 0; i < renderedItems.length; i++) {
+      if (renderedItems[i].enabled) return i;
+    }
+    return moreSlotIndex >= 0 ? moreSlotIndex : 0;
+  })();
 
   // Auto-focus first enabled item on mount
   useEffect(() => {
@@ -70,6 +81,11 @@ export function ContextMenu({
       setFocusedIndex(firstEnabledIndex);
     }
   }, [firstEnabledIndex]);
+
+  // Focus the menu container on open so keyboard events reach the handler.
+  useEffect(() => {
+    menuRef.current?.focus({ preventScroll: true });
+  }, []);
 
   // Viewport clamping: flip if menu overflows bottom or right
   useLayoutEffect(() => {
@@ -133,28 +149,53 @@ export function ContextMenu({
     };
   }, [onClose]);
 
+  const expandMore = () => {
+    setShowMore(true);
+    // After expansion: navigation array becomes [...safeItems, ...dangerItems].
+    // Move focus/highlight to the first newly-revealed enabled item (deterministic).
+    setFocusedIndex(safeItems.length);
+    menuRef.current?.focus({ preventScroll: true });
+  };
+
   // Keyboard navigation
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    const enabledIndices = renderedItems
-      .map((item, idx) => (item.enabled ? idx : -1))
-      .filter((idx) => idx >= 0);
+    const navCount = renderedItems.length + (hasMoreButton ? 1 : 0);
+    const enabledIndices: number[] = [];
+    for (let i = 0; i < navCount; i++) {
+      if (isEnabledNavIndex(i)) enabledIndices.push(i);
+    }
 
     if (e.key === 'ArrowDown') {
       e.preventDefault();
+      e.stopPropagation();
+      if (enabledIndices.length === 0) return;
       const currentPos = enabledIndices.indexOf(focusedIndex);
-      const nextPos = (currentPos + 1) % enabledIndices.length;
+      const nextPos = currentPos < 0 ? 0 : (currentPos + 1) % enabledIndices.length;
       setFocusedIndex(enabledIndices[nextPos]);
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
+      e.stopPropagation();
+      if (enabledIndices.length === 0) return;
       const currentPos = enabledIndices.indexOf(focusedIndex);
-      const prevPos = (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
+      const prevPos = currentPos < 0
+        ? enabledIndices.length - 1
+        : (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
       setFocusedIndex(enabledIndices[prevPos]);
     } else if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
+      e.stopPropagation();
+      if (focusedIndex === moreSlotIndex) {
+        expandMore();
+        return;
+      }
       const item = renderedItems[focusedIndex];
       if (item?.enabled) {
         handleItemClick(item);
       }
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      onClose();
     }
   };
 
@@ -254,8 +295,11 @@ export function ContextMenu({
           <div className="border-t border-gray-600 my-1" />
           <button
             role="menuitem"
-            className="w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
-            onClick={() => setShowMore(true)}
+            className={`w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 ${
+              focusedIndex === moreSlotIndex ? 'bg-gray-700' : ''
+            }`}
+            onClick={expandMore}
+            onMouseEnter={() => setFocusedIndex(moreSlotIndex)}
           >
             More
           </button>
