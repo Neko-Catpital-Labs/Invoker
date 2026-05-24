@@ -101,8 +101,9 @@ describe('global top-up dispatch', () => {
     });
 
     expect(orchestrator.startExecution).toHaveBeenCalledTimes(1);
-    expect(taskExecutor.executeTasks).toHaveBeenCalledTimes(1);
-    expect(taskExecutor.executeTasks).toHaveBeenCalledWith([newTask]);
+    // After CC.4 the outbox owns dispatch; the helper no longer calls
+    // executeTasks in-process.
+    expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
     expect(topup.map((task) => task.id)).toEqual(['wf-2/task-b']);
   });
 
@@ -153,9 +154,8 @@ describe('global top-up dispatch', () => {
     });
 
     expect(topup.map((task) => task.id)).toEqual([taskB.id]);
-    expect(taskExecutor.executeTasks).toHaveBeenCalledWith([
-      expect.objectContaining({ id: taskB.id, status: 'running' }),
-    ]);
+    // Outbox owns dispatch; helper does not call executeTasks in-process.
+    expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
   });
 });
 

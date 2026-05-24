@@ -9,19 +9,6 @@ cd "$REPO_ROOT"
 # from this launcher even if the caller's environment opts into it.
 export INVOKER_ENABLE_WORKSPACE_CLEANUP=0
 
-# Launch-handoff outbox: default to `active` so the LaunchDispatcher
-# (Phase B) is the source of truth for dispatch. Phase C (PR #873)
-# deleted the legacy `launch-stall` watchdog and
-# `relaunchOrphansAndStartReady` on the assumption this flag is
-# `active` in production. With the flag unset, `resolveLaunchOutboxMode`
-# falls back to `disabled`, which leaves no recovery path for orphaned
-# `pending/launching` claims and silently wedges tasks forever (see
-# docs/incidents/2026-05-22-launch-handoff-orphan-architecture.md).
-# Respect a caller-provided override so operators can flip back to
-# `observe` or `disabled` in a hot incident without editing this file
-# (matches the CC.6 rollback intent in packages/app/src/config.ts).
-export INVOKER_LAUNCH_OUTBOX="${INVOKER_LAUNCH_OUTBOX:-active}"
-
 has_bootstrap_artifacts() {
   [ -f "$REPO_ROOT/node_modules/.modules.yaml" ] \
     && [ -x "$REPO_ROOT/packages/app/node_modules/.bin/electron" ]

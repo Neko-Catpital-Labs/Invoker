@@ -11,17 +11,16 @@
  *    before the watchdog failed them with the misleading
  *    "60 seconds" error message.
  *
- * This test reproduces the steady-state shape in-process: 38 single-task
+ * The first case reproduces the original orphan shape: 38 single-task
  * plans are loaded, `startExecution()` is called to claim every
- * attempt, and **no TaskRunner is wired in** — exactly the fragile
- * seam the re-architecture is meant to eliminate.
+ * attempt, and **no LaunchDispatcher polls the outbox** — so the
+ * outbox rows accumulate but are never serviced. The invariant must
+ * detect this (`no_terminal_event` violations). This stands in for
+ * the worst-case "owner crashed before dispatching" scenario.
  *
- * The test is marked `it.fails` so CI stays green while the bug is
- * documented. The Phase B definition of done (see
- * .cursor/plans/launch_handoff_rearchitecture_c13d3ffc.plan.md) calls
- * for removing the `.fails` marker once the durable
- * `task_launch_dispatch` outbox dispatcher is active and resolves
- * every claim.
+ * The second case wires the LaunchDispatcher (which is always-on in
+ * production after the CC.6 migration) and verifies the invariant
+ * holds end-to-end: every claim reaches a terminal launch event.
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
@@ -49,8 +48,8 @@ describe('launch-claim orphan regression (2026-05-22 storm)', () => {
     }
   });
 
-  it.fails(
-    'a 38-claim rebase-recreate storm without a dispatcher orphans every claim',
+  it(
+    'a 38-claim rebase-recreate storm with no dispatcher polling still orphans every claim (invariant detects it)',
     async () => {
       const persistence = await SQLiteAdapter.create(':memory:');
       adapters.push(persistence);
@@ -109,26 +108,27 @@ describe('launch-claim orphan regression (2026-05-22 storm)', () => {
         );
       expect(terminalCount).toBe(0);
 
+      let caught: unknown = null;
       try {
         assertLaunchInvariant(persistence, {
           maxGapMs: TIGHT_MAX_GAP_MS,
           nowMs: Date.now() + PRETEND_LATER_MS,
         });
       } catch (err) {
-        expect(err).toBeInstanceOf(LaunchInvariantViolationError);
-        const violation = err as LaunchInvariantViolationError;
-        expect(violation.summary.claimCount).toBe(STORM_SIZE);
-        expect(violation.violations).toHaveLength(STORM_SIZE);
-        for (const v of violation.violations) {
-          expect(v.reason).toBe('no_terminal_event');
-        }
-        throw err;
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(LaunchInvariantViolationError);
+      const violation = caught as LaunchInvariantViolationError;
+      expect(violation.summary.claimCount).toBe(STORM_SIZE);
+      expect(violation.violations).toHaveLength(STORM_SIZE);
+      for (const v of violation.violations) {
+        expect(v.reason).toBe('no_terminal_event');
       }
     },
   );
 
   it(
-    'with INVOKER_LAUNCH_OUTBOX=active, the LaunchDispatcher resolves every claim into a terminal event',
+    'with the LaunchDispatcher polling, every claim resolves to a terminal event',
     async () => {
       // CB.5 acceptance: wire the same 38-claim storm through the durable
       // outbox dispatcher (orchestrator -> task_launch_dispatch ->
@@ -142,10 +142,6 @@ describe('launch-claim orphan regression (2026-05-22 storm)', () => {
         messageBus: new InMemoryBus(),
         maxConcurrency: STORM_SIZE,
         deferRunningUntilLaunch: true,
-        // Active mode causes drainScheduler to write the outbox row alongside
-        // the durable launch claim — that row is what the LaunchDispatcher
-        // polls below.
-        launchOutboxMode: 'active',
       });
 
       const startedTasks: TaskState[] = [];
@@ -177,7 +173,6 @@ describe('launch-claim orphan regression (2026-05-22 storm)', () => {
         },
         taskRunnerProvider: () => fakeTaskRunner,
         ownerId: 'cb5-test-owner',
-        mode: 'active',
         maxConcurrency: STORM_SIZE,
         maxLeasesPerPoll: STORM_SIZE,
       });

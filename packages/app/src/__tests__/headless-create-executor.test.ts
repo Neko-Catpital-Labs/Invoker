@@ -1,11 +1,11 @@
 /**
- * CB.7 acceptance: verifies createHeadlessExecutor's active-mode
- * short-circuit. In `INVOKER_LAUNCH_OUTBOX=active` mode the owner's
- * long-lived TaskRunner is the single launch path (it services the
- * task_launch_dispatch outbox via LaunchDispatcher), so headless
- * commands must reuse it instead of constructing a per-command
- * TaskRunner — that was the root of Issue 6 (multi-TaskRunner
- * blindness from per-instance `launchingAttemptIds` Sets).
+ * CB.7 acceptance: verifies createHeadlessExecutor's owner-runner
+ * short-circuit. The owner's long-lived TaskRunner is the single
+ * launch path (it services the task_launch_dispatch outbox via
+ * LaunchDispatcher), so headless commands must reuse it instead of
+ * constructing a per-command TaskRunner — that was the root of
+ * Issue 6 (multi-TaskRunner blindness from per-instance
+ * `launchingAttemptIds` Sets).
  */
 import { describe, expect, it, vi } from 'vitest';
 import type { Logger } from '@invoker/contracts';
@@ -47,7 +47,6 @@ function makeDeps(overrides: Partial<HeadlessDeps>): HeadlessDeps {
     commandService: {} as any,
     repoRoot: '/tmp/repo',
     invokerConfig: {
-      launchOutboxMode: 'disabled',
       defaultBranch: 'main',
       docker: {},
       executionPools: {},
@@ -59,17 +58,10 @@ function makeDeps(overrides: Partial<HeadlessDeps>): HeadlessDeps {
   };
 }
 
-describe('createHeadlessExecutor (CB.7 active-mode short-circuit)', () => {
-  it('returns the owner TaskRunner when launchOutboxMode=active and the provider yields one', () => {
+describe('createHeadlessExecutor (CB.7 owner-runner short-circuit)', () => {
+  it('returns the owner TaskRunner when the provider yields one', () => {
     const owner = fakeOwnerTaskRunner();
     const deps = makeDeps({
-      invokerConfig: {
-        launchOutboxMode: 'active',
-        defaultBranch: 'main',
-        docker: {},
-        executionPools: {},
-        remoteTargets: {},
-      } as any,
       ownerTaskRunnerProvider: () => owner,
     });
 
@@ -82,13 +74,6 @@ describe('createHeadlessExecutor (CB.7 active-mode short-circuit)', () => {
     const logger = makeLogger();
     const deps = makeDeps({
       logger,
-      invokerConfig: {
-        launchOutboxMode: 'active',
-        defaultBranch: 'main',
-        docker: {},
-        executionPools: {},
-        remoteTargets: {},
-      } as any,
       ownerTaskRunnerProvider: () => owner,
     });
 
@@ -100,61 +85,25 @@ describe('createHeadlessExecutor (CB.7 active-mode short-circuit)', () => {
     expect(debugRecord).toBeDefined();
   });
 
-  it('warns and falls back to constructing a fresh TaskRunner when active but no owner is available', () => {
+  it('falls through to constructing a fresh TaskRunner when no owner provider is available', () => {
     const logger = makeLogger();
     const deps = makeDeps({
       logger,
-      invokerConfig: {
-        launchOutboxMode: 'active',
-        defaultBranch: 'main',
-        docker: {},
-        executionPools: {},
-        remoteTargets: {},
-      } as any,
-      // No ownerTaskRunnerProvider — simulates a true standalone owner
-      // that hasn't initialised its TaskRunner yet.
+      // No ownerTaskRunnerProvider — simulates a true standalone follower
+      // process that has no owner TaskRunner to reuse. The fallback
+      // constructs a per-command TaskRunner, which may fail to fully
+      // construct in this minimal env; we catch that and assert the
+      // owner provider path was not taken.
     });
 
-    // The constructor of TaskRunner requires real shared services to
-    // succeed; for this test we only care that the active branch took
-    // the fallback path (warning emitted) before any throw. We catch
-    // any constructor-time error so we can assert on the warning
-    // independently.
     let threw = false;
     try {
       createHeadlessExecutor(deps);
     } catch {
       threw = true;
     }
-    void threw; // either outcome is acceptable for this assertion
-    const warn = logger.records.find(
-      (r) => r.level === 'warn' && r.msg.includes('ownerTaskRunnerProvider is unavailable'),
-    );
-    expect(warn).toBeDefined();
-  });
-
-  it('does not short-circuit when launchOutboxMode is not active', () => {
-    const owner = fakeOwnerTaskRunner();
-    const providerCalls = vi.fn(() => owner);
-    const deps = makeDeps({
-      invokerConfig: {
-        launchOutboxMode: 'observe',
-        defaultBranch: 'main',
-        docker: {},
-        executionPools: {},
-        remoteTargets: {},
-      } as any,
-      ownerTaskRunnerProvider: providerCalls,
-    });
-
-    // We expect a real TaskRunner construction to fail in this minimal
-    // env; that's fine — what we're asserting is that the provider was
-    // *not* consulted (the legacy code path was taken).
-    try {
-      createHeadlessExecutor(deps);
-    } catch {
-      // swallow — verifying the provider call below
-    }
-    expect(providerCalls).not.toHaveBeenCalled();
+    void threw;
+    const warn = logger.records.find((r) => r.level === 'warn');
+    expect(warn).toBeUndefined();
   });
 });

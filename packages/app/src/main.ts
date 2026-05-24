@@ -161,7 +161,7 @@ import {
 import { shouldSkipAutoFixForError } from './auto-fix-gating.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
-import { LaunchDispatcher, type LaunchDispatcherMode } from './launch-dispatcher.js';
+import { LaunchDispatcher } from './launch-dispatcher.js';
 import { recoverWorkflowMutationsOnStartup } from './workflow-mutation-startup.js';
 import {
   dispatchStartedTasksWithGlobalTopup,
@@ -506,7 +506,6 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     defaultPoolId: invokerConfig.defaultPoolId,
     availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
     deferRunningUntilLaunch: true,
-    launchOutboxMode: invokerConfig.launchOutboxMode,
   });
   commandService = new CommandService(
     orchestrator,
@@ -2727,20 +2726,17 @@ function createEmbeddedTerminalBackendFromConfig(
         },
         { logger },
       );
-      if (invokerConfig.launchOutboxMode && invokerConfig.launchOutboxMode !== 'disabled') {
-        launchDispatcher = new LaunchDispatcher({
-          persistence,
-          orchestrator,
-          // taskExecutor is re-built by rebuildTaskRunner(); read via
-          // a provider so the dispatcher always picks up the current
-          // instance instead of capturing a stale reference.
-          taskRunnerProvider: () => taskExecutor,
-          ownerId: workflowMutationOwnerId,
-          logger,
-          mode: invokerConfig.launchOutboxMode as LaunchDispatcherMode,
-          maxConcurrency: effectiveMaxConcurrency,
-        });
-      }
+      launchDispatcher = new LaunchDispatcher({
+        persistence,
+        orchestrator,
+        // taskExecutor is re-built by rebuildTaskRunner(); read via
+        // a provider so the dispatcher always picks up the current
+        // instance instead of capturing a stale reference.
+        taskRunnerProvider: () => taskExecutor,
+        ownerId: workflowMutationOwnerId,
+        logger,
+        maxConcurrency: effectiveMaxConcurrency,
+      });
     } else {
       logger.info('Launched in follower mode; mutation execution is delegated to the current owner', {
         module: 'init',
@@ -3094,7 +3090,6 @@ function createEmbeddedTerminalBackendFromConfig(
         defaultPoolId: invokerConfig.defaultPoolId,
         availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
         deferRunningUntilLaunch: true,
-        launchOutboxMode: invokerConfig.launchOutboxMode,
       });
       commandService = new CommandService(
         orchestrator,

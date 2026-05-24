@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createTestHarness, type TestHarness } from '@invoker/test-kit';
-import type { PlanDefinition } from '@invoker/workflow-core';
-import { dispatchStartedTasksWithGlobalTopup } from '../global-topup.js';
+import type { PlanDefinition, TaskState } from '@invoker/workflow-core';
 
 const LINEAR_PLAN: PlanDefinition = {
   name: 'Linear Handoff Repro',
@@ -28,13 +27,24 @@ const PARALLEL_PLAN: PlanDefinition = {
   ],
 };
 
-async function dispatchStarted(h: TestHarness, started: Array<any>, context: string) {
-  return dispatchStartedTasksWithGlobalTopup({
-    orchestrator: h.orchestrator,
-    taskExecutor: h.executor,
-    context,
-    started,
-  });
+/**
+ * Drive the post-mutation launch in the test harness.
+ *
+ * After CC.4 the production path is: orchestrator → outbox row → LaunchDispatcher
+ * → TaskRunner.executeTask. The harness doesn't run a LaunchDispatcher in
+ * these tests, so we short-circuit the dispatcher and call the executor
+ * directly on the runnable subset. This mirrors what the LaunchDispatcher's
+ * dispatch loop would do for each leased outbox row, and lets us assert on
+ * the workspace handoff regardless of the (mocked) dispatcher polling.
+ */
+async function dispatchStarted(h: TestHarness, started: Array<TaskState>, _context: string) {
+  const runnable = started.filter(
+    (task) =>
+      task.status === 'running'
+      || (task.status === 'pending' && task.execution.phase === 'launching'),
+  );
+  if (runnable.length === 0) return;
+  await h.executor.executeTasks(runnable);
 }
 
 describe('app-layer handoff repros', () => {

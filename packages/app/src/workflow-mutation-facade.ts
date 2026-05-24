@@ -351,7 +351,11 @@ export class WorkflowMutationFacade {
       logger: this.deps.logger,
     });
     const runnable = result.started.filter(isDispatchableLaunch);
-    await this.deps.taskExecutor.executeTasks(runnable);
+    // CC.4: launch is now outbox-only. The orchestrator's
+    // drainScheduler has already enqueued task_launch_dispatch rows
+    // for each runnable task; the LaunchDispatcher will lease them
+    // and call TaskRunner.executeTask. We no longer dispatch
+    // in-process from the facade.
     const topup = await this.topupOnly('facade.fork-workflow');
     return {
       forkedWorkflowId: result.forkedWorkflowId,

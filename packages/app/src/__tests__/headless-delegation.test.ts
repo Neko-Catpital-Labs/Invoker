@@ -580,6 +580,11 @@ describe('headless delegation enforcement', () => {
       });
 
       it('headless approve waits for downstream runnable tasks to settle', async () => {
+        // After CC.4, headlessApprove no longer dispatches the
+        // started set in-process; the LaunchDispatcher (mocked away
+        // in this test) consumes the outbox row instead. Simulate
+        // the settlement by toggling taskBStatus to 'completed' as
+        // soon as commandService.approve returns the running task.
         let taskBStatus: 'running' | 'completed' = 'running';
         mockDeps.persistence.listWorkflows = vi.fn(() => [{
           id: 'wf-1',
@@ -625,21 +630,19 @@ describe('headless delegation enforcement', () => {
           config: { workflowId: 'wf-1' },
           execution: {},
         } as any;
-        mockDeps.commandService.approve = vi.fn(async () => ({ ok: true as const, data: [runnableTask] }));
-
-        const executeTasksSpy = vi
-          .spyOn(TaskRunner.prototype, 'executeTasks')
-          .mockImplementation(async () => {
+        mockDeps.commandService.approve = vi.fn(async () => {
+          // Simulate the LaunchDispatcher picking up the outbox row
+          // shortly after approve returns.
+          setTimeout(() => {
             taskBStatus = 'completed';
-          });
+          }, 5);
+          return { ok: true as const, data: [runnableTask] };
+        });
 
         await runHeadless(['approve', 'wf-1/task-a'], mockDeps);
 
-        expect(executeTasksSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
-        expect(executeTasksSpy).toHaveBeenCalledWith([runnableTask]);
         expect(mockDeps.commandService.approve).toHaveBeenCalled();
-
-        executeTasksSpy.mockRestore();
+        expect(taskBStatus).toBe('completed');
       });
 
       // Step 16: pin headless approve/reject routing.
@@ -707,6 +710,10 @@ describe('headless delegation enforcement', () => {
       });
 
       it('headless approve returns once a workflow has no running or ready work', async () => {
+        // After CC.4, the approve flow enqueues the started set on
+        // the outbox and immediately polls for settlement. Simulate
+        // the LaunchDispatcher draining the outbox by toggling
+        // taskBStatus to 'pending' once approve returns.
         let taskBStatus: 'running' | 'pending' = 'running';
         mockDeps.persistence.listWorkflows = vi.fn(() => [{
           id: 'wf-1',
@@ -752,20 +759,20 @@ describe('headless delegation enforcement', () => {
           config: { workflowId: 'wf-1' },
           execution: {},
         } as any;
-        mockDeps.commandService.approve = vi.fn(async () => ({ ok: true as const, data: [runnableTask] }));
-
-        const executeTasksSpy = vi
-          .spyOn(TaskRunner.prototype, 'executeTasks')
-          .mockImplementation(async () => {
-            taskBStatus = 'pending';
-          });
+        mockDeps.commandService.approve = vi.fn(async () => {
+          // Outbox dispatch is async in production; in this mock,
+          // the LaunchDispatcher would have drained the row before
+          // the post-mutation settle check runs, so toggle the
+          // status synchronously before returning.
+          taskBStatus = 'pending';
+          return { ok: true as const, data: [runnableTask] };
+        });
 
         await expect(runHeadless(['approve', 'wf-1/task-a'], mockDeps)).resolves.toBeUndefined();
 
-        expect(executeTasksSpy).toHaveBeenCalledTimes(1);
+        expect(mockDeps.commandService.approve).toHaveBeenCalled();
         expect(mockDeps.orchestrator.getReadyTasks).toHaveBeenCalled();
-
-        executeTasksSpy.mockRestore();
+        expect(taskBStatus).toBe('pending');
       });
 
       it('headless retry with deps.noTrack=true can defer runnable execution to the caller', async () => {

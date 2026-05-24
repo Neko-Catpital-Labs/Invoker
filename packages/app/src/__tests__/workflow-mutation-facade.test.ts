@@ -90,7 +90,7 @@ describe('WorkflowMutationFacade', () => {
       expect(deps.orchestrator.retryTask).toHaveBeenCalledWith('task-a');
       expect(result.started).toHaveLength(1);
       expect(result.started[0].status).toBe('running');
-      expect(deps.taskExecutor.executeTasks).toHaveBeenCalled();
+      expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
     });
   });
 
@@ -100,7 +100,7 @@ describe('WorkflowMutationFacade', () => {
 
       expect(deps.orchestrator.recreateTask).toHaveBeenCalledWith('task-a');
       expect(result.started).toHaveLength(1);
-      expect(deps.taskExecutor.executeTasks).toHaveBeenCalled();
+      expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
     });
   });
 
@@ -110,7 +110,7 @@ describe('WorkflowMutationFacade', () => {
 
       expect(deps.orchestrator.editTaskCommand).toHaveBeenCalledWith('task-a', 'new-cmd');
       expect(result.started).toHaveLength(1);
-      expect(deps.taskExecutor.executeTasks).toHaveBeenCalled();
+      expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
     });
   });
 
@@ -120,7 +120,7 @@ describe('WorkflowMutationFacade', () => {
 
       expect(deps.orchestrator.editTaskPrompt).toHaveBeenCalledWith('task-a', 'new prompt');
       expect(result.started).toHaveLength(1);
-      expect(deps.taskExecutor.executeTasks).toHaveBeenCalled();
+      expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
     });
   });
 
@@ -238,7 +238,7 @@ describe('WorkflowMutationFacade', () => {
       expect(result.forkedWorkflowId).toBe('wf-fork');
       expect(result.sourceWorkflowId).toBe('wf-1');
       expect(result.runnable).toHaveLength(1);
-      expect(deps.taskExecutor.executeTasks).toHaveBeenCalled();
+      expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
     });
   });
 
@@ -315,7 +315,7 @@ describe('WorkflowMutationFacade', () => {
 
       expect(result.started).toHaveLength(1);
       expect(result.runnable).toHaveLength(1);
-      expect(deps.taskExecutor.executeTasks).toHaveBeenCalled();
+      expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
     });
   });
 });
