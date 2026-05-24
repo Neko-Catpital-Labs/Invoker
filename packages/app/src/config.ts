@@ -231,6 +231,27 @@ export interface InvokerConfig {
    * preserved while the dispatcher matures.
    */
   launchOutboxMode?: LaunchOutboxMode;
+  /**
+   * Optional external failure recovery hook. When enabled with a non-empty
+   * command, the app may invoke an operator-provided script to handle failed
+   * workflows in addition to the built-in Fix with AI flow.
+   *
+   * Wiring is intentionally dormant: this config is read by the launcher
+   * helper but no failed-task delta handler invokes it yet.
+   */
+  externalFailureRecovery?: {
+    /** Master switch. When false, the launcher is a no-op. */
+    enabled: boolean;
+    /** Executable to invoke (resolved by the OS PATH unless absolute). */
+    command: string;
+    /** Optional working directory for the launched process. */
+    cwd?: string;
+    /**
+     * Minimum number of seconds that must elapse between launches.
+     * When unset or <= 0, no throttling is applied.
+     */
+    cooldownSeconds?: number;
+  };
 }
 
 export type LaunchOutboxMode = 'disabled' | 'observe' | 'active';
