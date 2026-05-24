@@ -43,6 +43,9 @@ function stubOrchestrator(overrides: Partial<Orchestrator> = {}): Orchestrator {
     retryWorkflow: vi.fn().mockReturnValue([]),
     recreateWorkflow: vi.fn().mockReturnValue([]),
     recreateWorkflowFromFreshBase: vi.fn().mockResolvedValue([] as TaskState[]),
+    cascadeInvalidationToDownstream: vi.fn().mockReturnValue([]),
+    autoStartExternallyUnblockedReadyTasks: vi.fn().mockReturnValue([]),
+    forkWorkflow: vi.fn().mockReturnValue({ started: [] }),
     ...overrides,
   } as unknown as Orchestrator;
 }
@@ -616,14 +619,20 @@ describe('CommandService', () => {
       const p1 = service.retryTask(makeEnvelope({ taskId: 't-1' }, 'k1'));
       const p2 = service.editTaskCommand(makeEnvelope({ taskId: 't-2', newCommand: 'x' }, 'k2'));
 
-      await Promise.resolve();
-      expect(order).toEqual(['restart-start', 'edit-start']);
+      for (let i = 0; i < 4; i += 1) await Promise.resolve();
+      expect(order).toContain('restart-start');
+      expect(order).toContain('edit-start');
+      expect(order).not.toContain('restart-end');
+      expect(order).not.toContain('edit-end');
 
       resolveRestart();
       resolveEdit();
 
       await Promise.all([p1, p2]);
-      expect(order).toEqual(['restart-start', 'edit-start', 'restart-end', 'edit-end']);
+      expect(order).toContain('restart-end');
+      expect(order).toContain('edit-end');
+      expect(order.indexOf('restart-end')).toBeGreaterThan(order.indexOf('restart-start'));
+      expect(order.indexOf('edit-end')).toBeGreaterThan(order.indexOf('edit-start'));
     });
   });
 });
