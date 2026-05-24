@@ -2208,9 +2208,11 @@ describe('fixWithAgentAction lineage guard', () => {
       getTask: vi.fn(() => {
         fixCallCount++;
         // First call: entry point reads task
-        // Second call: lineage capture after beginConflictResolution
-        // Third call: lineage check after async fix returns (lineage changed)
-        if (fixCallCount <= 2) {
+        // Second call: entry lineage capture
+        // Third call: post-begin lineage capture
+        // Fourth call: pre-agent lineage checkpoint
+        // Fifth call: lineage check after async fix returns (lineage changed)
+        if (fixCallCount <= 4) {
           return makeTask({
             status: 'failed',
             config: { workflowId: 'wf-1' },
@@ -2290,7 +2292,7 @@ describe('fixWithAgentAction lineage guard', () => {
     const orchestrator = {
       getTask: vi.fn(() => {
         getTaskCallCount++;
-        if (getTaskCallCount <= 2) {
+        if (getTaskCallCount <= 4) {
           return makeTask({
             status: 'failed',
             config: { workflowId: 'wf-1' },
@@ -2321,10 +2323,11 @@ describe('fixWithAgentAction lineage guard', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
-    })).rejects.toThrow('agent crashed');
+    })).rejects.toThrow(StaleLineageError);
 
     // revertConflictResolution must NOT be called when lineage is stale
     expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
+    expect(persistence.appendTaskOutput).not.toHaveBeenCalled();
   });
 
   it('proceeds normally when lineage is current', async () => {
@@ -2370,7 +2373,7 @@ describe('resolveConflictAction lineage guard', () => {
     const orchestrator = {
       getTask: vi.fn(() => {
         getTaskCallCount++;
-        if (getTaskCallCount <= 1) {
+        if (getTaskCallCount <= 3) {
           return makeTask({
             status: 'fixing_with_ai',
             config: { workflowId: 'wf-1' },
@@ -2410,7 +2413,7 @@ describe('resolveConflictAction lineage guard', () => {
     const orchestrator = {
       getTask: vi.fn(() => {
         getTaskCallCount++;
-        if (getTaskCallCount <= 1) {
+        if (getTaskCallCount <= 3) {
           return makeTask({
             status: 'fixing_with_ai',
             config: { workflowId: 'wf-1' },
@@ -2438,9 +2441,13 @@ describe('resolveConflictAction lineage guard', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
-    })).rejects.toThrow('resolution failed');
+    })).rejects.toThrow(StaleLineageError);
 
     expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
+    expect(persistence.appendTaskOutput).not.toHaveBeenCalledWith(
+      'task-a',
+      expect.stringContaining('[Auto-fix] Agent failed'),
+    );
   });
 });
 
@@ -2451,7 +2458,7 @@ describe('autoFixOnFailure lineage guard', () => {
       shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => {
         getTaskCallCount++;
-        if (getTaskCallCount <= 2) {
+        if (getTaskCallCount <= 4) {
           return makeTask({
             status: 'failed',
             config: { workflowId: 'wf-1' },
@@ -2505,7 +2512,7 @@ describe('autoFixOnFailure lineage guard', () => {
       shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => {
         getTaskCallCount++;
-        if (getTaskCallCount <= 2) {
+        if (getTaskCallCount <= 4) {
           return makeTask({
             status: 'failed',
             config: { workflowId: 'wf-1' },
@@ -2546,9 +2553,13 @@ describe('autoFixOnFailure lineage guard', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
-    })).rejects.toThrow('agent crashed');
+    })).rejects.toThrow(StaleLineageError);
 
     expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
+    expect(persistence.appendTaskOutput).not.toHaveBeenCalledWith(
+      'task-a',
+      expect.stringContaining('[Auto-fix] Agent failed'),
+    );
   });
 
   it('throws StaleLineageError when signal is aborted during auto-fix', async () => {
