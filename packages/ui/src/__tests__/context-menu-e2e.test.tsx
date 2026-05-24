@@ -158,4 +158,116 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
+
+  // Keyboard navigation regression tests for open context menus.
+  //
+  // A local repro showed that opening the workflow context menu, pressing
+  // ArrowDown three times, and pressing Enter did not invoke Copy Workflow ID
+  // (navigator.clipboard.writeText was never called). The workflow menu had
+  // no arrow/Enter/Space handler at all, so keystrokes after opening were
+  // silently dropped. These tests render the real App + menu components and
+  // dispatch keystrokes from the active keyboard target so the fix must wire
+  // up either a focused menu element or a document-level listener — anything
+  // shy of that leaves the regression in place.
+  describe('keyboard navigation', () => {
+    function activeKeyboardTarget(): Element {
+      const active = document.activeElement;
+      if (active && active !== document.body && active instanceof HTMLElement) {
+        return active;
+      }
+      return document.body;
+    }
+
+    async function openWorkflowMenu() {
+      await setup();
+      fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+      await screen.findByRole('menu');
+    }
+
+    async function openTaskMenuInMiniDag() {
+      await setup();
+      fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+      await waitFor(() => {
+        expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+      });
+      fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+      await screen.findByRole('menu');
+    }
+
+    it('workflow menu: ArrowDown x3 + Enter activates Copy Workflow ID', async () => {
+      await openWorkflowMenu();
+
+      // Visible items with showMore=false:
+      //   0: Open Workflow (initial focus)
+      //   1: Open PR
+      //   2: Retry Workflow
+      //   3: Copy Workflow ID  <-- ArrowDown x3 lands here
+      //   4: More
+      const target = activeKeyboardTarget();
+      fireEvent.keyDown(target, { key: 'ArrowDown' });
+      fireEvent.keyDown(target, { key: 'ArrowDown' });
+      fireEvent.keyDown(target, { key: 'ArrowDown' });
+      fireEvent.keyDown(target, { key: 'Enter' });
+
+      await waitFor(() =>
+        expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'),
+      );
+      expect(mock.api.retryWorkflow).not.toHaveBeenCalled();
+      expect(mock.api.recreateWorkflow).not.toHaveBeenCalled();
+    });
+
+    it('workflow menu: ArrowUp from the first item wraps to the last enabled menuitem', async () => {
+      await openWorkflowMenu();
+
+      // From the initially-focused first item, ArrowUp must wrap to the last
+      // enabled menuitem ("More"). Pressing Enter then expands the menu and
+      // reveals the danger actions. The assertion checks BOTH the danger
+      // items appearing AND that no unintended action handler was invoked.
+      const target = activeKeyboardTarget();
+      fireEvent.keyDown(target, { key: 'ArrowUp' });
+      fireEvent.keyDown(target, { key: 'Enter' });
+
+      await screen.findByText('Rebase and Retry');
+      expect(screen.getByText('Rebase and Recreate')).toBeInTheDocument();
+      expect(screen.getByText('Recreate Workflow')).toBeInTheDocument();
+      expect(screen.getByText('Cancel Workflow')).toBeInTheDocument();
+      expect(screen.getByText('Delete Workflow')).toBeInTheDocument();
+      expect(mock.api.retryWorkflow).not.toHaveBeenCalled();
+      expect(mock.api.recreateWorkflow).not.toHaveBeenCalled();
+      expect(mock.api.cancelWorkflow).not.toHaveBeenCalled();
+      expect(mock.api.deleteWorkflow).not.toHaveBeenCalled();
+      expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+    });
+
+    it('workflow menu: Space activates the highlighted menuitem just like Enter', async () => {
+      await openWorkflowMenu();
+
+      const target = activeKeyboardTarget();
+      fireEvent.keyDown(target, { key: 'ArrowDown' });
+      fireEvent.keyDown(target, { key: 'ArrowDown' });
+      fireEvent.keyDown(target, { key: 'ArrowDown' });
+      fireEvent.keyDown(target, { key: ' ', code: 'Space' });
+
+      await waitFor(() =>
+        expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'),
+      );
+    });
+
+    it('task menu in mini DAG: ArrowDown + Enter activates the next enabled task action', async () => {
+      await openTaskMenuInMiniDag();
+
+      // task-alpha is pending. Visible items with showMore=false:
+      //   0: Restart Task (primary, initial focus)
+      //   1: Open Terminal  <-- ArrowDown lands here
+      //   ("More" reveals the danger group; we don't navigate into it here.)
+      const target = activeKeyboardTarget();
+      fireEvent.keyDown(target, { key: 'ArrowDown' });
+      fireEvent.keyDown(target, { key: 'Enter' });
+
+      await waitFor(() =>
+        expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'),
+      );
+      expect(mock.api.restartTask).not.toHaveBeenCalled();
+    });
+  });
 });
