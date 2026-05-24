@@ -65,6 +65,9 @@ must_contain "$SKILL_MD" "Phase 1b" "SKILL must reference Phase 1b"
 must_contain "$SKILL_MD" "Policy-matrix documents" "SKILL must document policy-matrix coverage mode"
 must_contain "$SKILL_MD" "verify-noop" "SKILL must explain policy-matrix degradation checks"
 must_contain "$SKILL_MD" "zero-context executable" "SKILL must require zero-context executable prompt instructions"
+must_contain "$SKILL_MD" "Review compression" "SKILL must require review compression for implementation plans"
+must_contain "$SKILL_MD" "Review claim:" "SKILL must require review claim metadata"
+must_contain "$SKILL_MD" "Safety invariant:" "SKILL must require safety invariant metadata"
 
 # Playbook — Phase 1a / 1b (three lanes) and anti-patterns
 must_contain "$PLAYBOOK" "### Phase 1a — Static analysis" "Playbook must define Phase 1a"
@@ -79,6 +82,7 @@ must_contain "$PLAYBOOK" "assume no prior context" "Playbook must require zero-c
 # Task patterns — strict prompt handoff requirements
 must_contain "$TASK_PATTERNS" "Assume zero context" "Task patterns must define zero-context prompt requirement"
 must_contain "$TASK_PATTERNS" "deterministic pass/fail expectations" "Task patterns must require deterministic prompt outcomes"
+must_contain "$TASK_PATTERNS" "Review compression contract" "Task patterns must define review compression metadata"
 
 echo "OK: plan-to-invoker skill contract checks passed"
 

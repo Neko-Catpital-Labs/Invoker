@@ -22,6 +22,7 @@ DOCTOR_NEGATIVE_FIXTURES=(
   "anti-pattern-h-layer-order-violation.yaml"
   "anti-pattern-i-final-regression-not-test-all.yaml"
   "anti-pattern-j-zero-context-missing-metadata.yaml"
+  "anti-pattern-k-missing-review-compression.yaml"
 )
 
 is_doctor_negative_fixture() {
@@ -738,6 +739,29 @@ EOF
   fi
 }
 
+test_lint_requires_review_compression_sections() {
+  local fixture="$NEGATIVE_DIR/anti-pattern-k-missing-review-compression.yaml"
+  local output
+  set +e
+  output=$(bash "$LINT_SCRIPT" --strict-delegation "$fixture" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected lint to reject missing review-compression sections" >&2
+    return 1
+  fi
+
+  if ! grep -q 'missing required "Review claim:" section' <<<"$output"; then
+    echo "Expected Review claim lint error, got: $output" >&2
+    return 1
+  fi
+  if ! grep -q 'missing required "Safety invariant:" section' <<<"$output"; then
+    echo "Expected Safety invariant lint error, got: $output" >&2
+    return 1
+  fi
+}
+
 test_lint_accepts_design_sections_for_prompt_tasks() {
   local temp_plan
   temp_plan=$(mktemp)
@@ -870,6 +894,14 @@ repoUrl: git@github.com:example-org/acme-repo.git
 tasks:
   - id: implement-runtime-flow
     description: |
+      Review claim:
+      - Implement deterministic runtime flow updates in task-runner.
+      Safety invariant:
+      - The change is scoped to one execution-engine file and verified by package tests.
+      Slice rationale:
+      - Runtime implementation is separate from terminal full-suite validation.
+      Architectural effect:
+      - Updates the execution-engine runtime path without changing external surfaces.
       Goal:
       - Implement deterministic runtime flow updates.
       Motivation:
@@ -904,6 +936,14 @@ tasks:
     dependencies: []
   - id: final-regression
     description: |
+      Review claim:
+      - Run the terminal full-suite regression gate for runtime changes.
+      Safety invariant:
+      - This command changes no production code and depends on runtime implementation.
+      Slice rationale:
+      - Terminal validation is separate from implementation work.
+      Architectural effect:
+      - No architecture changes; validates integrated behavior.
       Goal:
       - Run final full-suite regression gate.
       Motivation:
@@ -1061,6 +1101,7 @@ run_test "Lint: reject non-test:all final gate" test_lint_rejects_non_test_all_f
 run_test "Lint: allow non-terminal stack workflow without test:all" test_lint_allows_nonterminal_stack_workflow_without_test_all
 run_test "Lint: reject final gate missing dependencies" test_lint_rejects_final_gate_missing_dependencies
 run_test "Lint: reject missing design sections for prompt tasks" test_lint_requires_design_sections_for_prompt_tasks
+run_test "Lint: reject missing review-compression sections" test_lint_requires_review_compression_sections
 run_test "Lint: accept prompt tasks with design sections" test_lint_accepts_design_sections_for_prompt_tasks
 run_test "Lint: reject missing design sections for command tasks" test_lint_requires_design_sections_for_command_tasks
 run_test "Lint strict: accept zero-context prompt contract" test_lint_strict_accepts_zero_context_prompt_contract

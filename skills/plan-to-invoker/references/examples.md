@@ -57,6 +57,7 @@ Complex plan with diamond dependencies. Uses `onFinish: pull_request` for manual
 - `fixtures/negative/anti-pattern-h-layer-order-violation.yaml` — Lower layer depends on higher layer without `Layer exception: allowed`
 - `fixtures/negative/anti-pattern-i-final-regression-not-test-all.yaml` — Standalone implementation plan ends without a terminal `pnpm run test:all` gate
 - `fixtures/negative/anti-pattern-j-zero-context-missing-metadata.yaml` — Prompt task omits strict zero-context handoff metadata required for implementation plans
+- `fixtures/negative/anti-pattern-k-missing-review-compression.yaml` — Implementation task omits review claim, safety invariant, slice rationale, and architectural effect metadata
 
 All anti-patterns are validated by `scripts/test-fixtures.sh` with deterministic error detection.
 
