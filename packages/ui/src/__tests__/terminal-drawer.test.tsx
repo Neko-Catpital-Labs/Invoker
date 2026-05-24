@@ -11,11 +11,26 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
+import {
+  getLatestXtermInstance,
+  getXtermInstances,
+  resetXtermMockState,
+} from './helpers/mock-xterm.js';
 import type { WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
   return createReactFlowMock();
+});
+
+vi.mock('xterm', async () => {
+  const { createXtermMock } = await import('./helpers/mock-xterm.js');
+  return createXtermMock();
+});
+
+vi.mock('xterm-addon-fit', async () => {
+  const { createFitAddonMock } = await import('./helpers/mock-xterm.js');
+  return createFitAddonMock();
 });
 
 const { App } = await import('../App.js');
@@ -49,6 +64,7 @@ describe('Terminal drawer (component)', () => {
   let mock: MockInvoker;
 
   beforeEach(() => {
+    resetXtermMockState();
     mock = createMockInvoker();
     mock.install();
   });
@@ -155,6 +171,98 @@ describe('Terminal drawer (component)', () => {
       expect(alertSpy).toHaveBeenCalledWith('Task is still running.');
     });
     expect(screen.queryByTestId('terminal-tab-task-alpha')).not.toBeInTheDocument();
+  });
+
+  it('seeds the xterm pane with the session replay snapshot before live output', async () => {
+    const snapshot = 'welcome to bash\n$ ';
+    const liveBytes = 'ls\n';
+    (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      opened: true,
+      session: {
+        sessionId: 'session-replay-alpha',
+        taskId: 'task-alpha',
+        status: 'running',
+        mode: 'spawn',
+        attached: false,
+        createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+        outputSnapshot: snapshot,
+      },
+    });
+
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      const term = getLatestXtermInstance();
+      expect(term?.writes[0]).toBe(snapshot);
+    });
+
+    // Simulate a live output event arriving after the seed and confirm it is
+    // appended to xterm rather than replacing the snapshot.
+    const term = getLatestXtermInstance();
+    const subscribe = window.invoker?.onTerminalOutput as ReturnType<typeof vi.fn>;
+    const liveCallback = subscribe.mock.calls.at(-1)?.[0] as
+      | ((event: { sessionId: string; taskId: string; data: string }) => void)
+      | undefined;
+    expect(liveCallback).toBeDefined();
+    act(() => {
+      liveCallback?.({ sessionId: 'session-replay-alpha', taskId: 'task-alpha', data: liveBytes });
+    });
+
+    expect(term?.writes).toEqual([snapshot, liveBytes]);
+  });
+
+  it('does not re-seed the snapshot when the drawer re-renders for the same session', async () => {
+    const snapshot = 'startup banner\n';
+    (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      opened: true,
+      session: {
+        sessionId: 'session-replay-beta',
+        taskId: 'task-alpha',
+        status: 'running',
+        mode: 'spawn',
+        attached: false,
+        createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+        outputSnapshot: snapshot,
+      },
+    });
+
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha, taskBeta], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(getLatestXtermInstance()?.writes[0]).toBe(snapshot);
+    });
+    const instancesAfterOpen = getXtermInstances().length;
+    const writesAfterOpen = getLatestXtermInstance()?.writes.length ?? 0;
+
+    // Force App to re-render with the same session descriptor still in state
+    // (the pane stays mounted). The seeding effect keys on session.sessionId,
+    // so xterm should not be re-instantiated and the snapshot should not be
+    // re-written.
+    act(() => mock.fireDelta({ type: 'created', task: taskBeta }));
+    act(() => mock.fireDelta({
+      type: 'updated',
+      taskId: taskAlpha.id,
+      changes: { status: 'completed' },
+      taskStateVersion: 2,
+      previousTaskStateVersion: 1,
+    }));
+
+    expect(getXtermInstances().length).toBe(instancesAfterOpen);
+    expect(getLatestXtermInstance()?.writes.length).toBe(writesAfterOpen);
   });
 
   it('opens the drawer when the context-menu Open Terminal action is used', async () => {

@@ -73,6 +73,21 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
       void window.invoker?.terminalWrite?.(session.sessionId, data);
     });
 
+    // Seed the pane with the bounded replay snapshot the main process retained
+    // for this session before subscribing to live output. The snapshot covers
+    // bytes emitted between the PTY spawn and this pane mounting (e.g. shell
+    // prompt, banners). Writing it synchronously before the live subscription
+    // is registered preserves byte ordering: snapshot first, live output after.
+    const snapshot = session.outputSnapshot;
+    if (snapshot) {
+      try {
+        term.write(snapshot);
+        onOutput(session.sessionId, snapshot);
+      } catch {
+        /* terminal disposed */
+      }
+    }
+
     const subscribeToOutput = window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__ ?? window.invoker?.onTerminalOutput;
     const unsubscribeOutput = subscribeToOutput?.((event) => {
       if (event.sessionId !== session.sessionId) return;
