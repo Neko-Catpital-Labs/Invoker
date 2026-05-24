@@ -128,6 +128,7 @@ import {
 import {
   approveTask as sharedApproveTask,
   autoFixOnReviewGateFailure,
+  buildInvalidationDeps,
   deleteAllWorkflows as sharedDeleteAllWorkflows,
   deleteAllWorkflowsBulk as sharedDeleteAllWorkflowsBulk,
   fixWithAgentAction,
@@ -239,6 +240,10 @@ let persistence: SQLiteAdapter;
 let executorRegistry: ExecutorRegistry;
 let orchestrator: Orchestrator;
 let commandService: CommandService;
+// Latest TaskRunner reference for invalidation deps. CommandService is
+// constructed in initServices before TaskRunner exists, so the deps
+// resolve via this getter at cancel-in-flight time.
+let latestTaskExecutor: TaskRunner | null = null;
 let runtimeServices: RuntimeServices;
 let workflowMutationCoordinator: PersistedWorkflowMutationCoordinator | null = null;
 let launchDispatcher: LaunchDispatcher | null = null;
@@ -503,7 +508,15 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     deferRunningUntilLaunch: true,
     launchOutboxMode: invokerConfig.launchOutboxMode,
   });
-  commandService = new CommandService(orchestrator);
+  commandService = new CommandService(
+    orchestrator,
+    buildInvalidationDeps({
+      logger,
+      orchestrator,
+      persistence,
+      taskExecutor: () => latestTaskExecutor,
+    }),
+  );
 
   const startupSyncMode = options?.startupSyncMode ?? 'all';
   const initLog = isHeadless
@@ -1762,6 +1775,7 @@ function createEmbeddedTerminalBackendFromConfig(
         },
       },
     });
+    latestTaskExecutor = taskExecutor;
     wireApproveHook();
   }
 
@@ -3082,7 +3096,15 @@ function createEmbeddedTerminalBackendFromConfig(
         deferRunningUntilLaunch: true,
         launchOutboxMode: invokerConfig.launchOutboxMode,
       });
-      commandService = new CommandService(orchestrator);
+      commandService = new CommandService(
+        orchestrator,
+        buildInvalidationDeps({
+          logger,
+          orchestrator,
+          persistence,
+          taskExecutor: () => latestTaskExecutor,
+        }),
+      );
       rebuildTaskRunner();
       taskHandles.clear();
     });
