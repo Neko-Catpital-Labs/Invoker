@@ -231,6 +231,34 @@ export interface InvokerConfig {
    * preserved while the dispatcher matures.
    */
   launchOutboxMode?: LaunchOutboxMode;
+  /**
+   * Optional external failure-recovery launcher. When `enabled` is true and
+   * `command` is non-empty, callers can invoke a configured shell command to
+   * route failed workflows to an out-of-process supervisor while still
+   * preserving the manual "Fix with AI" flow.
+   *
+   * Wiring failed-task deltas to this launcher is intentionally deferred — the
+   * config + helper land dormant here and are activated in a later change.
+   */
+  externalFailureRecovery?: ExternalFailureRecoveryConfig;
+}
+
+export interface ExternalFailureRecoveryConfig {
+  /** When false (or unset), the launcher is dormant. */
+  enabled: boolean;
+  /**
+   * Shell command line invoked when a failed task triggers recovery.
+   * Empty/whitespace-only strings are treated as "no command" and skipped.
+   */
+  command: string;
+  /** Working directory for the spawned process. Defaults to the caller's cwd. */
+  cwd?: string;
+  /**
+   * Minimum seconds between consecutive launches. The first launch always
+   * proceeds; subsequent launches inside the window are skipped. Zero or
+   * unset disables the cooldown.
+   */
+  cooldownSeconds?: number;
 }
 
 export type LaunchOutboxMode = 'disabled' | 'observe' | 'active';
