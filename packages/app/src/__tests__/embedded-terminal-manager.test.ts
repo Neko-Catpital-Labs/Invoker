@@ -554,6 +554,103 @@ describe('EmbeddedTerminalManager', () => {
   });
 });
 
+// ── Regression: GUI open-terminal PTY race (FIRST_FRAME_FROM_PTY) ──
+//
+// These tests pin the symptom of the original bug: an embedded PTY backend
+// emits its first frame synchronously inside spawn() — before openOrReuse()
+// returns the descriptor — so a renderer-style consumer that subscribes after
+// the descriptor lands would never see that early output. The marker string
+// `FIRST_FRAME_FROM_PTY\n` is intentionally unique so the standalone repro
+// script (`scripts/repro-gui-open-terminal-pty-race.sh`) can target these
+// tests by name and fail loudly on the pre-fix codebase.
+describe('GUI open-terminal PTY race regression', () => {
+  const FIRST_FRAME = 'FIRST_FRAME_FROM_PTY\n';
+
+  function makeImmediatePtyBackend(opts: {
+    firstFrame: string;
+    exitAfter?: boolean;
+  }): EmbeddedTerminalBackend {
+    return {
+      name: 'pty',
+      spawn: ({ emitOutput, emitExit }) => {
+        // The real PTY backend writes its boot banner before any renderer
+        // listener attaches. Simulate that synchronously so the test fails
+        // on the pre-fix codebase where the replay buffer was not retained.
+        emitOutput(opts.firstFrame);
+        if (opts.exitAfter) emitExit(0);
+        return { write: () => {}, resize: () => {}, close: () => {} };
+      },
+    };
+  }
+
+  it('replays FIRST_FRAME_FROM_PTY emitted synchronously during spawn on the returned descriptor', () => {
+    const mgr = new EmbeddedTerminalManager({
+      backend: makeImmediatePtyBackend({ firstFrame: FIRST_FRAME }),
+    });
+
+    const session = mgr.openOrReuse({
+      taskId: 'race-task',
+      spec: { command: 'pty-shell', args: [] },
+      cwd: '/tmp/race',
+    });
+
+    expect(session.outputSnapshot).toBe(FIRST_FRAME);
+    expect(session.status).toBe('running');
+  });
+
+  it('lets a late renderer-style consumer seed from the descriptor snapshot after openOrReuse() returns', () => {
+    const mgr = new EmbeddedTerminalManager({
+      backend: makeImmediatePtyBackend({ firstFrame: FIRST_FRAME }),
+    });
+
+    const session = mgr.openOrReuse({
+      taskId: 'race-task-late',
+      spec: { command: 'pty-shell', args: [] },
+      cwd: '/tmp/race',
+    });
+
+    // Renderer pane subscribes only *after* the IPC round-trip completes,
+    // so it would otherwise miss the first frame. Seed it from the snapshot
+    // and then attach a live listener for any follow-up writes — exactly
+    // what TerminalSessionPane does on mount.
+    const lateConsumerBuffer: string[] = [];
+    if (session.outputSnapshot) lateConsumerBuffer.push(session.outputSnapshot);
+    const lateListener = (e: { sessionId: string; data: string }) => {
+      if (e.sessionId === session.sessionId) lateConsumerBuffer.push(e.data);
+    };
+    mgr.on('output', lateListener);
+
+    try {
+      expect(lateConsumerBuffer.join('')).toContain('FIRST_FRAME_FROM_PTY');
+      // terminalList() reloads must surface the same snapshot so a pane
+      // that mounts after a window refresh can replay the first frame too.
+      expect(mgr.list()[0]?.outputSnapshot).toBe(FIRST_FRAME);
+    } finally {
+      mgr.off('output', lateListener);
+    }
+  });
+
+  it('does not throw when the backend emits FIRST_FRAME_FROM_PTY then exits synchronously during spawn', () => {
+    const mgr = new EmbeddedTerminalManager({
+      backend: makeImmediatePtyBackend({ firstFrame: FIRST_FRAME, exitAfter: true }),
+    });
+
+    let session: ReturnType<EmbeddedTerminalManager['openOrReuse']> | undefined;
+    expect(() => {
+      session = mgr.openOrReuse({
+        taskId: 'race-task-sync-exit',
+        spec: { command: 'pty-shell', args: [] },
+        cwd: '/tmp/race',
+      });
+    }).not.toThrow();
+
+    expect(session?.status).toBe('exited');
+    expect(session?.exitCode).toBe(0);
+    expect(session?.outputSnapshot).toBe(FIRST_FRAME);
+    expect(mgr.list()).toHaveLength(0);
+  });
+});
+
 // ── Deterministic GUI route: resolveTaskTerminalSpec + EmbeddedTerminalManager ──
 
 describe('GUI open-terminal embedded route', () => {
