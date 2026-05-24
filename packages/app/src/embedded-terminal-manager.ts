@@ -126,20 +126,29 @@ export interface EmbeddedTerminalManagerOptions {
   defaultShell?: string;
 }
 
-function describeSession(state: SessionState): TerminalSessionDescriptor {
-  return {
-    sessionId: state.sessionId,
-    taskId: state.taskId,
-    status: state.status,
-    exitCode: state.exitCode,
-    cwd: state.cwd,
-    command: state.spec.command,
-    args: state.spec.args,
-    mode: state.mode,
-    attached: state.mode === 'attached',
-    createdAt: state.createdAt,
-  };
-}
+/**
+ * Maximum byte length retained per session for the replay snapshot.
+ * Chosen as a small fixed cap so memory stays bounded even for chatty PTYs.
+ */
+const MAX_REPLAY_BYTES = 64 * 1024;
+
+/**
+ * Placeholder process used while a real backend process is being constructed.
+ * Lets the session be registered in `sessions` before `backend.spawn()` runs,
+ * which keeps a synchronous `emitExit` callback from dereferencing an
+ * uninitialised `state` variable.
+ */
+const NOOP_SPAWNED_PROCESS: SpawnedTerminalProcess = {
+  write() {
+    /* no-op until the real process is wired in */
+  },
+  resize() {
+    /* no-op until the real process is wired in */
+  },
+  close() {
+    /* no-op until the real process is wired in */
+  },
+};
 
 class BashTerminalBackend implements EmbeddedTerminalBackend {
   readonly name = 'bash' as const;
@@ -244,6 +253,13 @@ export function createPtyTerminalBackend(
 export class EmbeddedTerminalManager extends EventEmitter {
   private readonly sessions = new Map<string, SessionState>();
   private readonly targetIndex = new Map<string, string>();
+  /**
+   * Bounded per-session replay buffer. Holds at most {@link MAX_REPLAY_BYTES}
+   * bytes of the most-recently emitted output so a renderer pane that mounts
+   * after `openOrReuse()` returns can seed itself with the early startup
+   * output it would otherwise miss. Cleared when a session is finalized.
+   */
+  private readonly replayBuffers = new Map<string, string>();
   private readonly backend: EmbeddedTerminalBackend;
   private readonly defaultShell: string;
 
@@ -265,7 +281,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
     if (existingId) {
       const existing = this.sessions.get(existingId);
       if (existing && existing.status === 'running') {
-        return describeSession(existing);
+        return this.describeSession(existing);
       }
       this.targetIndex.delete(targetKey);
       if (existing) this.sessions.delete(existingId);
@@ -273,6 +289,9 @@ export class EmbeddedTerminalManager extends EventEmitter {
 
     const sessionId = randomUUID();
     const createdAt = new Date().toISOString();
+    // Initialise the replay buffer before any backend code can emit output so
+    // synchronous startup output is captured.
+    this.replayBuffers.set(sessionId, '');
     const base = {
       sessionId,
       taskId: opts.taskId,
@@ -294,34 +313,57 @@ export class EmbeddedTerminalManager extends EventEmitter {
         attach: opts.attach,
         unsubscribeOutput: unsubscribe,
       };
+      this.sessions.set(sessionId, state);
+      this.targetIndex.set(targetKey, sessionId);
     } else {
-      const process = this.backend.spawn({
+      // Register the session in `sessions` before calling `backend.spawn()` so
+      // a synchronous `emitExit` from the backend can safely look the session
+      // up via `sessionId` instead of dereferencing an unassigned `state`.
+      const spawnState: SpawnSessionState = {
+        ...base,
+        mode: 'spawn',
+        backend: this.backend.name,
+        process: NOOP_SPAWNED_PROCESS,
+      };
+      state = spawnState;
+      this.sessions.set(sessionId, spawnState);
+      this.targetIndex.set(targetKey, sessionId);
+
+      const realProcess = this.backend.spawn({
         spec: opts.spec,
         cwd: opts.cwd,
         defaultShell: this.defaultShell,
         emitOutput: (data) => this.emitOutput(sessionId, opts.taskId, data),
-        emitExit: (exitCode) => this.finalizeSession(state, exitCode),
+        emitExit: (exitCode) => {
+          const current = this.sessions.get(sessionId);
+          if (current) this.finalizeSession(current, exitCode);
+        },
       });
-      state = {
-        ...base,
-        mode: 'spawn',
-        backend: this.backend.name,
-        process,
-      };
+
+      if (spawnState.status === 'running') {
+        spawnState.process = realProcess;
+      } else {
+        // Backend exited synchronously during spawn — finalizeSession already
+        // ran with the no-op placeholder. Dispose the late-arriving real
+        // process so its resources are not leaked.
+        try {
+          realProcess.close();
+        } catch {
+          /* best-effort cleanup */
+        }
+      }
     }
 
-    this.sessions.set(sessionId, state);
-    this.targetIndex.set(targetKey, sessionId);
-    return describeSession(state);
+    return this.describeSession(state);
   }
 
   list(): TerminalSessionDescriptor[] {
-    return Array.from(this.sessions.values()).map(describeSession);
+    return Array.from(this.sessions.values()).map((s) => this.describeSession(s));
   }
 
   get(sessionId: string): TerminalSessionDescriptor | undefined {
     const state = this.sessions.get(sessionId);
-    return state ? describeSession(state) : undefined;
+    return state ? this.describeSession(state) : undefined;
   }
 
   write(sessionId: string, data: string): { ok: boolean; reason?: string } {
@@ -393,6 +435,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
       this.targetIndex.delete(state.targetKey);
     }
     this.sessions.delete(state.sessionId);
+    this.replayBuffers.delete(state.sessionId);
 
     const payload: TerminalExitEvent = {
       sessionId: state.sessionId,
@@ -403,8 +446,36 @@ export class EmbeddedTerminalManager extends EventEmitter {
   }
 
   private emitOutput(sessionId: string, taskId: string, data: string): void {
+    this.appendToReplay(sessionId, data);
     const payload: TerminalOutputEvent = { sessionId, taskId, data };
     this.emit('output', payload);
+  }
+
+  private appendToReplay(sessionId: string, data: string): void {
+    const current = this.replayBuffers.get(sessionId);
+    if (current === undefined) return;
+    let next = current.length === 0 ? data : current + data;
+    if (next.length > MAX_REPLAY_BYTES) {
+      next = next.slice(next.length - MAX_REPLAY_BYTES);
+    }
+    this.replayBuffers.set(sessionId, next);
+  }
+
+  private describeSession(state: SessionState): TerminalSessionDescriptor {
+    const snapshot = this.replayBuffers.get(state.sessionId);
+    return {
+      sessionId: state.sessionId,
+      taskId: state.taskId,
+      status: state.status,
+      exitCode: state.exitCode,
+      cwd: state.cwd,
+      command: state.spec.command,
+      args: state.spec.args,
+      mode: state.mode,
+      attached: state.mode === 'attached',
+      createdAt: state.createdAt,
+      outputSnapshot: snapshot && snapshot.length > 0 ? snapshot : undefined,
+    };
   }
 }
 
