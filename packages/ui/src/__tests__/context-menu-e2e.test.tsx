@@ -158,4 +158,121 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
+
+  it('task menu focuses itself on open and highlights the first enabled item', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    const menu = await screen.findByRole('menu');
+
+    expect(document.activeElement).toBe(menu);
+    // Pending task: Restart Task is the first enabled item.
+    expect(screen.getByText('Restart Task').closest('button')).toHaveAttribute('data-focused', 'true');
+  });
+
+  it('ArrowDown / ArrowUp moves the highlight through enabled task menu items', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument());
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    const menu = await screen.findByRole('menu');
+
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    expect(screen.getByText('Open Terminal').closest('button')).toHaveAttribute('data-focused', 'true');
+
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    expect(screen.getByText('More').closest('button')).toHaveAttribute('data-focused', 'true');
+
+    // ArrowDown from the last item wraps back to the first enabled item.
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    expect(screen.getByText('Restart Task').closest('button')).toHaveAttribute('data-focused', 'true');
+
+    // ArrowUp wraps the other direction.
+    fireEvent.keyDown(menu, { key: 'ArrowUp' });
+    expect(screen.getByText('More').closest('button')).toHaveAttribute('data-focused', 'true');
+  });
+
+  it('Enter activates the highlighted task menu item and closes the menu', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument());
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    const menu = await screen.findByRole('menu');
+
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'Enter' });
+
+    await waitFor(() => expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'));
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+  });
+
+  it('Space activates the highlighted task menu item', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument());
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    const menu = await screen.findByRole('menu');
+
+    // First enabled is Restart Task.
+    fireEvent.keyDown(menu, { key: ' ' });
+
+    await waitFor(() => expect(mock.api.restartTask).toHaveBeenCalledWith('task-alpha'));
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+  });
+
+  it('keyboard navigation in the workflow menu cycles, activates with Space, and skips graph shortcuts', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+
+    expect(document.activeElement).toBe(menu);
+    expect(screen.getByText('Open Workflow').closest('button')).toHaveAttribute('data-focused', 'true');
+
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    expect(screen.getByText('Open PR').closest('button')).toHaveAttribute('data-focused', 'true');
+
+    fireEvent.keyDown(menu, { key: ' ' });
+    // Open PR uses window.open; the menu still closes after activation.
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+  });
+
+  it('Enter on More expands the workflow menu and moves focus to the first newly revealed item', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+
+    // Walk to the More item (5th = index 4).
+    for (let i = 0; i < 4; i += 1) {
+      fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    }
+    expect(screen.getByText('More').closest('button')).toHaveAttribute('data-focused', 'true');
+
+    fireEvent.keyDown(menu, { key: 'Enter' });
+
+    const expanded = await screen.findByText('Rebase and Retry');
+    expect(expanded.closest('button')).toHaveAttribute('data-focused', 'true');
+    expect(screen.queryByText('More')).not.toBeInTheDocument();
+
+    // Activating with Enter then fires the action.
+    fireEvent.keyDown(await screen.findByRole('menu'), { key: 'Enter' });
+    await waitFor(() => expect(mock.api.rebaseRetry).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('App-level graph shortcuts are suppressed while a workflow context menu is open', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+
+    // Fire ArrowRight on the document. App's keydown handler would normally
+    // try to navigate to the next workflow node; while the menu is open it
+    // must return early and the menu's own handler must own the key.
+    fireEvent.keyDown(document, { key: 'ArrowRight' });
+
+    expect(screen.getByRole('menu')).toBe(menu);
+    // No navigation side-effect either: workflow selection is unchanged.
+    expect(screen.getByTestId('workflow-node-wf-1')).toBeInTheDocument();
+  });
 });
