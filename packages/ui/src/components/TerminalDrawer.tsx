@@ -44,6 +44,12 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  // Tracks which sessionId has already had its replay snapshot written into
+  // xterm so React re-renders that re-run the effect (e.g. callback identity
+  // changes) do not replay the snapshot a second time. Refs persist across
+  // renders within a single mount but are fresh on remount, so remounting the
+  // pane (e.g. after collapsing/expanding the drawer) correctly re-seeds.
+  const seededSnapshotSessionRef = useRef<string | null>(null);
 
   useEffect(() => {
     const host = containerRef.current;
@@ -68,6 +74,15 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
     }
     termRef.current = term;
     fitRef.current = fit;
+
+    if (session.outputSnapshot && seededSnapshotSessionRef.current !== session.sessionId) {
+      try {
+        term.write(session.outputSnapshot);
+      } catch {
+        /* terminal disposed */
+      }
+      seededSnapshotSessionRef.current = session.sessionId;
+    }
 
     const inputDisposable = term.onData((data) => {
       void window.invoker?.terminalWrite?.(session.sessionId, data);
