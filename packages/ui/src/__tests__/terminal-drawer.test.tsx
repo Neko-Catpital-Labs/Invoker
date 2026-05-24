@@ -11,11 +11,22 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
+import { mockXtermInstances, resetMockXterm } from './helpers/mock-xterm.js';
 import type { WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
   return createReactFlowMock();
+});
+
+vi.mock('xterm', async () => {
+  const { createXtermMock } = await import('./helpers/mock-xterm.js');
+  return createXtermMock();
+});
+
+vi.mock('xterm-addon-fit', async () => {
+  const { createXtermFitAddonMock } = await import('./helpers/mock-xterm.js');
+  return createXtermFitAddonMock();
 });
 
 const { App } = await import('../App.js');
@@ -49,12 +60,14 @@ describe('Terminal drawer (component)', () => {
   let mock: MockInvoker;
 
   beforeEach(() => {
+    resetMockXterm();
     mock = createMockInvoker();
     mock.install();
   });
 
   afterEach(() => {
     mock.cleanup();
+    resetMockXterm();
     vi.restoreAllMocks();
   });
 
@@ -155,6 +168,83 @@ describe('Terminal drawer (component)', () => {
       expect(alertSpy).toHaveBeenCalledWith('Task is still running.');
     });
     expect(screen.queryByTestId('terminal-tab-task-alpha')).not.toBeInTheDocument();
+  });
+
+  it('seeds the xterm pane with the session output snapshot on first mount', async () => {
+    (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      opened: true,
+      session: {
+        sessionId: 'mock-session-task-alpha',
+        taskId: 'task-alpha',
+        status: 'running',
+        mode: 'spawn',
+        attached: false,
+        createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+        outputSnapshot: 'replayed-output-from-buffer',
+      },
+    });
+
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-pane-task-alpha')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(mockXtermInstances).toHaveLength(1);
+    });
+
+    const term = mockXtermInstances[0];
+    expect(term.write).toHaveBeenCalledWith('replayed-output-from-buffer');
+    // Snapshot must be written before any live IPC output reaches the pane.
+    expect(term.write).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not duplicate the snapshot when the descriptor re-renders', async () => {
+    (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      opened: true,
+      session: {
+        sessionId: 'mock-session-task-alpha',
+        taskId: 'task-alpha',
+        status: 'running',
+        mode: 'spawn',
+        attached: false,
+        createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+        outputSnapshot: 'initial-snapshot',
+      },
+    });
+
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(mockXtermInstances).toHaveLength(1);
+    });
+    const term = mockXtermInstances[0];
+    expect(term.write).toHaveBeenCalledTimes(1);
+    expect(term.write).toHaveBeenCalledWith('initial-snapshot');
+
+    // Simulate an exit-event-triggered descriptor refresh in App.tsx
+    // (this updates the session prop without changing its sessionId).
+    // The xterm instance must not be recreated and the snapshot must not
+    // be written a second time.
+    act(() => {
+      // onTerminalExit reuses the existing sessionId, so the App's
+      // state-merge swaps to a new descriptor object whose snapshot may
+      // already differ. The pane must still seed only once.
+      const [exitCb] = (mock.api.onTerminalExit as ReturnType<typeof vi.fn>).mock.calls[0] ?? [];
+      exitCb?.({ sessionId: 'mock-session-task-alpha', taskId: 'task-alpha', exitCode: 0 });
+    });
+
+    // No additional writes from the snapshot. The original xterm instance is reused.
+    expect(mockXtermInstances).toHaveLength(1);
+    expect(term.write).toHaveBeenCalledTimes(1);
   });
 
   it('opens the drawer when the context-menu Open Terminal action is used', async () => {

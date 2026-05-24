@@ -44,6 +44,12 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const seededSessionIdRef = useRef<string | null>(null);
+  // The snapshot is intentionally captured at the time the effect runs (first
+  // mount for this sessionId); later descriptor updates that change the
+  // snapshot string must not re-seed, otherwise we would duplicate output.
+  const snapshotRef = useRef<string | undefined>(session.outputSnapshot);
+  snapshotRef.current = session.outputSnapshot;
 
   useEffect(() => {
     const host = containerRef.current;
@@ -68,6 +74,19 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
     }
     termRef.current = term;
     fitRef.current = fit;
+
+    // Seed the pane with any output that the main process buffered before the
+    // renderer subscribed to live events. Guarded by sessionId so re-renders
+    // (status changes, descriptor refreshes) never duplicate the replay.
+    const snapshot = snapshotRef.current;
+    if (snapshot && seededSessionIdRef.current !== session.sessionId) {
+      seededSessionIdRef.current = session.sessionId;
+      try {
+        term.write(snapshot);
+      } catch {
+        /* terminal disposed */
+      }
+    }
 
     const inputDisposable = term.onData((data) => {
       void window.invoker?.terminalWrite?.(session.sessionId, data);
