@@ -569,6 +569,33 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'workflow-context-menu-organization');
   });
 
+  test('context-menu-keyboard-navigation — ArrowDown moves active highlight to next workflow menu item', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+
+    const menu = await openContextMenu(page, page.locator('[data-testid^="workflow-node-"]'));
+
+    // Roving keyboard handler lives on the menu container, so the test waits for
+    // focus to land there before sending ArrowDown rather than sleeping.
+    await expect(menu).toBeFocused();
+
+    const openWorkflowItem = page.getByRole('menuitem', { name: 'Open Workflow' });
+    const openPrItem = page.getByRole('menuitem', { name: 'Open PR' });
+    await expect(openWorkflowItem).toBeVisible();
+    await expect(openPrItem).toBeVisible();
+
+    // Initial highlight lands on the first enabled menu item.
+    const activeClass = /(?:^|\s)bg-gray-700(?:\s|$)/;
+    await expect(openWorkflowItem).toHaveClass(activeClass);
+
+    await page.keyboard.press('ArrowDown');
+
+    // ArrowDown moves the active highlight from the first to the second item.
+    await expect(openPrItem).toHaveClass(activeClass);
+    await expect(openWorkflowItem).not.toHaveClass(activeClass);
+
+    await captureScreenshot(page, 'context-menu-keyboard-navigation');
+  });
+
   test('context menu keeps danger separator when cancel action is absent', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     await injectTaskStates(page, [
