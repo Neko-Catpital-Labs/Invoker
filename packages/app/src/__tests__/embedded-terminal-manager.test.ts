@@ -519,6 +519,92 @@ describe('EmbeddedTerminalManager', () => {
     expect(Buffer.byteLength(listed!.outputSnapshot!, 'utf8')).toBeLessThanOrEqual(64 * 1024);
   });
 
+  // ── PTY race regression: output emitted before openOrReuse() returns ────
+  //
+  // The renderer terminal pane subscribes to `invoker:terminal-output` only
+  // after `openTerminal` returns the session descriptor and React mounts the
+  // pane. A real PTY emits its first frame synchronously during spawn, so
+  // without a bounded replay snapshot on the descriptor, that early output is
+  // lost. These tests pin the contract using a fake PTY backend that emits
+  // `FIRST_FRAME_FROM_PTY\n` synchronously during spawn.
+
+  it('replays FIRST_FRAME_FROM_PTY output emitted before openOrReuse() returns', () => {
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: ({ emitOutput }) => {
+        emitOutput('FIRST_FRAME_FROM_PTY\n');
+        return { write: () => {}, resize: () => {}, close: () => {} };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+
+    expect(session.outputSnapshot).toBe('FIRST_FRAME_FROM_PTY\n');
+  });
+
+  it('FIRST_FRAME_FROM_PTY is replayable by a late renderer-style consumer', () => {
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: ({ emitOutput }) => {
+        emitOutput('FIRST_FRAME_FROM_PTY\n');
+        return { write: () => {}, resize: () => {}, close: () => {} };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+
+    // Renderer subscribes AFTER openOrReuse returned — the gap that drops
+    // early PTY output unless a replay snapshot is included in the descriptor.
+    const receivedAfterMount: string[] = [];
+    mgr.on('output', (e) => {
+      if (e.sessionId === session.sessionId) receivedAfterMount.push(e.data);
+    });
+
+    const seeded = session.outputSnapshot ?? '';
+    const reconstructed = seeded + receivedAfterMount.join('');
+    expect(reconstructed).toContain('FIRST_FRAME_FROM_PTY\n');
+  });
+
+  it('terminalList() includes FIRST_FRAME_FROM_PTY replay snapshot for live sessions', () => {
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: ({ emitOutput }) => {
+        emitOutput('FIRST_FRAME_FROM_PTY\n');
+        return { write: () => {}, resize: () => {}, close: () => {} };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+
+    const [listed] = mgr.list();
+    expect(listed.sessionId).toBe(session.sessionId);
+    expect(listed.outputSnapshot).toBe('FIRST_FRAME_FROM_PTY\n');
+  });
+
+  it('does not throw when the backend emits FIRST_FRAME_FROM_PTY and exits synchronously during spawn', () => {
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: ({ emitOutput, emitExit }) => {
+        emitOutput('FIRST_FRAME_FROM_PTY\n');
+        emitExit(0);
+        return { write: () => {}, resize: () => {}, close: () => {} };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    let session: ReturnType<typeof mgr.openOrReuse>;
+    expect(() => {
+      session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+    }).not.toThrow();
+
+    expect(session!.status).toBe('exited');
+    expect(session!.exitCode).toBe(0);
+    expect(session!.outputSnapshot).toBe('FIRST_FRAME_FROM_PTY\n');
+  });
+
   it('captures attached-mode output emitted synchronously during onOutput', () => {
     const inputs: string[] = [];
     const executor: Pick<Executor, 'onOutput' | 'sendInput'> & { type: string } = {
