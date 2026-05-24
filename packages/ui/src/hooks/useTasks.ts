@@ -155,12 +155,44 @@ export function useTasks(): UseTasksResult {
       });
     }
 
-    fetchAll();
+    // Preload bootstrap synchronously delivered authoritative tasks/workflows.
+    // The immediate non-forced snapshot would just rebuild equivalent maps,
+    // burning IPC/serialization wall time after the UI already has the data.
+    // Forced refreshes, workflows-changed events, and the mutation-driven
+    // fetchAll() inside the delta pipeline still keep state fresh.
+    if (bootstrapState) {
+      reportedStartupSnapshotRef.current = true;
+      void window.invoker.reportUiPerf?.('startup_snapshot_skipped_bootstrap_complete', {
+        bootstrapTaskCount: bootstrapState.tasks?.length ?? 0,
+        bootstrapWorkflowCount: bootstrapState.workflows?.length ?? 0,
+        elapsedMs: Math.round(performance.now()),
+        processElapsedMs: bootstrapState.appStartedAtEpochMs
+          ? Date.now() - bootstrapState.appStartedAtEpochMs
+          : undefined,
+      });
+      // Still kick off background PR-status check that fetchAll() would have done.
+      window.invoker.checkPrStatuses?.();
+    } else {
+      fetchAll();
+    }
 
     deltaPipelineRef.current = createTaskDeltaPipeline({
       flushMs: 100,
       onBatch: (batch) => {
+        // Decide whether to refresh workflows synchronously from the batch —
+        // React 18 may defer the setTasks updater until the next render, so the
+        // outer fetchAll() call must not depend on flags mutated inside it.
         let shouldRefreshWorkflows = false;
+        for (const delta of batch) {
+          if (
+            delta.type === 'created' &&
+            delta.task?.config.workflowId &&
+            !workflowsRef.current.has(delta.task.config.workflowId)
+          ) {
+            shouldRefreshWorkflows = true;
+            break;
+          }
+        }
 
         setTasks((prev) => {
           const t0 = performance.now();
@@ -175,13 +207,6 @@ export function useTasks(): UseTasksResult {
               }
             }
             next = applyDelta(next, delta);
-            if (
-              delta.type === 'created' &&
-              delta.task?.config.workflowId &&
-              !workflowsRef.current.has(delta.task.config.workflowId)
-            ) {
-              shouldRefreshWorkflows = true;
-            }
           }
 
           const dt = performance.now() - t0;

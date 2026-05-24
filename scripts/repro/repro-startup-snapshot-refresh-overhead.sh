@@ -60,9 +60,13 @@ if [[ ! -f packages/app/dist/main.js ]]; then
 fi
 
 TMP_DIR="$(mktemp -d -t invoker-snapshot-refresh-repro-XXXXXX)"
-trap 'rm -rf "$TMP_DIR"' EXIT
+# Driver must live inside the workspace so node's ESM resolver can find
+# @playwright/test in node_modules; the rest stays in $TMP_DIR.
+DRIVER_DIR="$ROOT_DIR/packages/app"
+DRIVER_BASENAME=".repro-snapshot-refresh-driver-$$.mjs"
+DRIVER="$DRIVER_DIR/$DRIVER_BASENAME"
+trap 'rm -rf "$TMP_DIR" "$DRIVER"' EXIT
 
-DRIVER="$TMP_DIR/driver.mjs"
 OBSERVATIONS="$TMP_DIR/observations.json"
 
 cat > "$DRIVER" <<'NODE_EOF'
@@ -195,9 +199,12 @@ try {
     }
     const seeded = await page.evaluate(() => window.invoker.getTasks(true));
     const seededTasks = Array.isArray(seeded) ? seeded : seeded.tasks;
-    const expected = workflowCount * tasksPerWorkflow;
-    if (seededTasks.length !== expected) {
-      throw new Error(`seed phase: expected ${expected} tasks, got ${seededTasks.length}`);
+    // The orchestrator may add a per-workflow __merge__ gate node, so accept
+    // either the bare task count or task count + one merge node per workflow.
+    const baseExpected = workflowCount * tasksPerWorkflow;
+    const withMerge = baseExpected + workflowCount;
+    if (seededTasks.length !== baseExpected && seededTasks.length !== withMerge) {
+      throw new Error(`seed phase: expected ${baseExpected} or ${withMerge} tasks, got ${seededTasks.length}`);
     }
   } finally {
     await seedApp.close();
