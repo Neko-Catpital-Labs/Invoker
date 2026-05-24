@@ -231,6 +231,32 @@ export interface InvokerConfig {
    * preserved while the dispatcher matures.
    */
   launchOutboxMode?: LaunchOutboxMode;
+  /**
+   * Optional hook for routing failed workflows to an external recovery
+   * script (e.g. a supervisor that restages or notifies humans).
+   *
+   * The launcher only fires when `enabled` is true AND `command` is a
+   * non-empty string. When set, the configured command is spawned as a
+   * detached process and receives the failure context via environment
+   * variables (see external-failure-recovery.ts). The manual "Fix with
+   * AI" flow is unaffected.
+   */
+  externalFailureRecovery?: ExternalFailureRecoveryConfig;
+}
+
+export interface ExternalFailureRecoveryConfig {
+  /** Master switch; when false the launcher is a no-op. */
+  enabled?: boolean;
+  /** Shell command to invoke when a task fails. Required to launch. */
+  command?: string;
+  /** Working directory for the spawned command. Defaults to inheriting. */
+  cwd?: string;
+  /**
+   * Minimum gap between successive launches, in seconds. When set to a
+   * positive value, repeated failures within the window are skipped.
+   * Default: 0 (no throttling).
+   */
+  cooldownSeconds?: number;
 }
 
 export type LaunchOutboxMode = 'disabled' | 'observe' | 'active';
