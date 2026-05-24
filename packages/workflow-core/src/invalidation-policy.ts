@@ -1,5 +1,5 @@
 
-import type { TaskState } from '@invoker/workflow-graph';
+import { getTransitiveDependents, type TaskState } from '@invoker/workflow-graph';
 export type InvalidationAction =
   | 'none'
   | 'scheduleOnly'
@@ -113,6 +113,14 @@ export type InvalidationStage =
   | 'applyPrimitive'
   | 'cascadeAcrossWorkflows';
 
+export type InvalidationMode = 'retry' | 'recreate' | 'scheduleOnly';
+
+export interface InvalidationPlanningContext {
+  targetId: string;
+  tasks: readonly TaskState[];
+  retryStatuses?: ReadonlySet<TaskState['status']>;
+}
+
 export interface ActionSpec {
   /** Required `scope` for this action. */
   readonly scope: InvalidationScope;
@@ -125,6 +133,19 @@ export interface ActionSpec {
    * in `invalidation-policy.test.ts`.
    */
   readonly cascadesAcrossWorkflows: boolean;
+  /**
+   * Planning fields used by `planInvalidation` (in `invalidation-plan.ts`).
+   * Set on actions with planning support; absent for `'none'`,
+   * `'fixApprove'`, `'fixReject'`, `'workflowFork'`. `planInvalidation`
+   * throws when called with an action that lacks `selectAffectedTasks`.
+   */
+  readonly mode?: InvalidationMode;
+  readonly reason?: string;
+  readonly selectAffectedTasks?: (context: InvalidationPlanningContext) => TaskState[];
+  readonly selectInitialEnqueueCandidates?: (
+    context: InvalidationPlanningContext,
+    affectedTasks: readonly TaskState[],
+  ) => string[];
 }
 
 const NON_INVALIDATING_TASK_STAGES: readonly InvalidationStage[] = [
@@ -139,17 +160,136 @@ const INVALIDATING_STAGES: readonly InvalidationStage[] = [
   'cascadeAcrossWorkflows',
 ];
 
+// ── Planning helpers (used by `selectAffectedTasks` callbacks below) ──
+
+function taskMap(tasks: readonly TaskState[]): Map<string, TaskState> {
+  return new Map(tasks.map((task) => [task.id, task]));
+}
+
+function descendantsOf(
+  taskId: string,
+  tasksById: ReadonlyMap<string, TaskState>,
+  stop?: (task: TaskState) => boolean,
+): TaskState[] {
+  return getTransitiveDependents(taskId, tasksById, stop ?? (() => false))
+    .map((id) => tasksById.get(id))
+    .filter((task): task is TaskState => !!task);
+}
+
+function taskAndDescendants(
+  taskId: string,
+  tasks: readonly TaskState[],
+  stop?: (task: TaskState) => boolean,
+): TaskState[] {
+  const byId = taskMap(tasks);
+  const root = byId.get(taskId);
+  if (!root) return [];
+  return [root, ...descendantsOf(taskId, byId, stop)];
+}
+
+function retryStop(task: TaskState): boolean {
+  return task.status === 'completed' || task.status === 'stale';
+}
+
+function defaultRetryStatuses(): ReadonlySet<TaskState['status']> {
+  return new Set<TaskState['status']>([
+    'failed',
+    'needs_input',
+    'blocked',
+    'stale',
+    'fixing_with_ai',
+    'awaiting_approval',
+    'review_ready',
+  ]);
+}
+
 export const ACTION_SPECS: Readonly<Record<InvalidationAction, ActionSpec>> = Object.freeze({
-  none:                          { scope: 'none',     stages: ['validateScope'] as const, cascadesAcrossWorkflows: false },
-  scheduleOnly:                  { scope: 'task',     stages: NON_INVALIDATING_TASK_STAGES, cascadesAcrossWorkflows: false },
-  fixApprove:                    { scope: 'task',     stages: NON_INVALIDATING_TASK_STAGES, cascadesAcrossWorkflows: false },
-  fixReject:                     { scope: 'task',     stages: NON_INVALIDATING_TASK_STAGES, cascadesAcrossWorkflows: false },
-  retryTask:                     { scope: 'task',     stages: INVALIDATING_STAGES,         cascadesAcrossWorkflows: true  },
-  recreateTask:                  { scope: 'task',     stages: INVALIDATING_STAGES,         cascadesAcrossWorkflows: true  },
-  retryWorkflow:                 { scope: 'workflow', stages: INVALIDATING_STAGES,         cascadesAcrossWorkflows: true  },
-  recreateWorkflow:              { scope: 'workflow', stages: INVALIDATING_STAGES,         cascadesAcrossWorkflows: true  },
-  recreateWorkflowFromFreshBase: { scope: 'workflow', stages: INVALIDATING_STAGES,         cascadesAcrossWorkflows: true  },
-  workflowFork:                  { scope: 'workflow', stages: INVALIDATING_STAGES,         cascadesAcrossWorkflows: true  },
+  none: {
+    scope: 'none',
+    stages: ['validateScope'] as const,
+    cascadesAcrossWorkflows: false,
+  },
+  scheduleOnly: {
+    scope: 'task',
+    stages: NON_INVALIDATING_TASK_STAGES,
+    cascadesAcrossWorkflows: false,
+    mode: 'scheduleOnly',
+    reason: 'externalGatePolicy',
+    selectAffectedTasks: ({ targetId, tasks }) => {
+      const task = tasks.find((item) => item.id === targetId);
+      return task ? [task] : [];
+    },
+    selectInitialEnqueueCandidates: (_context, affectedTasks) => affectedTasks.map((task) => task.id),
+  },
+  fixApprove: {
+    scope: 'task',
+    stages: NON_INVALIDATING_TASK_STAGES,
+    cascadesAcrossWorkflows: false,
+  },
+  fixReject: {
+    scope: 'task',
+    stages: NON_INVALIDATING_TASK_STAGES,
+    cascadesAcrossWorkflows: false,
+  },
+  retryTask: {
+    scope: 'task',
+    stages: INVALIDATING_STAGES,
+    cascadesAcrossWorkflows: true,
+    mode: 'retry',
+    reason: 'task.retry',
+    selectAffectedTasks: ({ targetId, tasks }) => taskAndDescendants(targetId, tasks, retryStop),
+  },
+  recreateTask: {
+    scope: 'task',
+    stages: INVALIDATING_STAGES,
+    cascadesAcrossWorkflows: true,
+    mode: 'recreate',
+    reason: 'task.recreate',
+    selectAffectedTasks: ({ targetId, tasks }) => taskAndDescendants(targetId, tasks),
+  },
+  retryWorkflow: {
+    scope: 'workflow',
+    stages: INVALIDATING_STAGES,
+    cascadesAcrossWorkflows: true,
+    mode: 'retry',
+    reason: 'workflow.retry',
+    selectAffectedTasks: ({ targetId, tasks, retryStatuses }) => {
+      const statuses = retryStatuses ?? defaultRetryStatuses();
+      const byId = taskMap(tasks);
+      const affectedIds = new Set<string>();
+      for (const task of tasks) {
+        if (task.config.workflowId !== targetId || !statuses.has(task.status)) continue;
+        affectedIds.add(task.id);
+        for (const descendant of descendantsOf(task.id, byId, retryStop)) {
+          affectedIds.add(descendant.id);
+        }
+      }
+      return Array.from(affectedIds)
+        .map((id) => byId.get(id))
+        .filter((task): task is TaskState => !!task);
+    },
+  },
+  recreateWorkflow: {
+    scope: 'workflow',
+    stages: INVALIDATING_STAGES,
+    cascadesAcrossWorkflows: true,
+    mode: 'recreate',
+    reason: 'workflow.recreate',
+    selectAffectedTasks: ({ targetId, tasks }) => tasks.filter((task) => task.config.workflowId === targetId),
+  },
+  recreateWorkflowFromFreshBase: {
+    scope: 'workflow',
+    stages: INVALIDATING_STAGES,
+    cascadesAcrossWorkflows: true,
+    mode: 'recreate',
+    reason: 'workflow.recreateFromFreshBase',
+    selectAffectedTasks: ({ targetId, tasks }) => tasks.filter((task) => task.config.workflowId === targetId),
+  },
+  workflowFork: {
+    scope: 'workflow',
+    stages: INVALIDATING_STAGES,
+    cascadesAcrossWorkflows: true,
+  },
 });
 
 interface PipelineCtx {
