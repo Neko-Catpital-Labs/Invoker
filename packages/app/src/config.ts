@@ -231,6 +231,28 @@ export interface InvokerConfig {
    * preserved while the dispatcher matures.
    */
   launchOutboxMode?: LaunchOutboxMode;
+  /**
+   * Optional external failure recovery hook. When enabled and a non-empty
+   * command is configured, a failed task can be routed to an external
+   * supervisor script via {@link launchExternalFailureRecovery}. The helper
+   * is dormant until callers wire it into failed-task delta handling.
+   */
+  externalFailureRecovery?: ExternalFailureRecoveryConfig;
+}
+
+export interface ExternalFailureRecoveryConfig {
+  /** Master switch. When false (or omitted), the helper is a no-op. */
+  enabled?: boolean;
+  /** Executable to spawn. When empty/whitespace-only, the helper skips. */
+  command?: string;
+  /** Working directory for the spawned process. Defaults to process.cwd(). */
+  cwd?: string;
+  /**
+   * Minimum interval, in seconds, between successive launches. The helper
+   * skips when the previous launch occurred less than this many seconds ago.
+   * Default: 0 (no cooldown).
+   */
+  cooldownSeconds?: number;
 }
 
 export type LaunchOutboxMode = 'disabled' | 'observe' | 'active';
