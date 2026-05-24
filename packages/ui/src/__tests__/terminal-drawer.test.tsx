@@ -11,11 +11,22 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
+import { getMockTerminalInstances, resetMockTerminalInstances } from './helpers/mock-xterm.js';
 import type { WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
   return createReactFlowMock();
+});
+
+vi.mock('xterm', async () => {
+  const { createXTermMock } = await import('./helpers/mock-xterm.js');
+  return createXTermMock();
+});
+
+vi.mock('xterm-addon-fit', async () => {
+  const { createFitAddonMock } = await import('./helpers/mock-xterm.js');
+  return createFitAddonMock();
 });
 
 const { App } = await import('../App.js');
@@ -49,6 +60,7 @@ describe('Terminal drawer (component)', () => {
   let mock: MockInvoker;
 
   beforeEach(() => {
+    resetMockTerminalInstances();
     mock = createMockInvoker();
     mock.install();
   });
@@ -171,5 +183,92 @@ describe('Terminal drawer (component)', () => {
       expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
     });
     expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha');
+  });
+
+  it('writes the session output snapshot into xterm when seeded', async () => {
+    const snapshot = 'early-replay-bytes\r\n';
+    (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      opened: true,
+      session: {
+        sessionId: 'mock-session-task-alpha',
+        taskId: 'task-alpha',
+        status: 'running',
+        mode: 'spawn',
+        attached: false,
+        createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+        outputSnapshot: snapshot,
+      },
+    });
+
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      expect(getMockTerminalInstances().length).toBeGreaterThan(0);
+    });
+    const instance = getMockTerminalInstances().at(-1);
+    expect(instance).toBeDefined();
+    expect(instance!.write).toHaveBeenCalledWith(snapshot);
+  });
+
+  it('does not duplicate snapshot writes when the pane re-renders for the same session', async () => {
+    const snapshot = 'replay-once\r\n';
+    (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      opened: true,
+      session: {
+        sessionId: 'mock-session-task-alpha',
+        taskId: 'task-alpha',
+        status: 'running',
+        mode: 'spawn',
+        attached: false,
+        createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+        outputSnapshot: snapshot,
+      },
+    });
+
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
+    });
+
+    // Re-render by toggling the tab selection back to the same session. This
+    // does not unmount the pane, so the seeding ref must still suppress a
+    // second write.
+    fireEvent.click(
+      screen.getByRole('tab', { selected: true }),
+    );
+
+    const instance = getMockTerminalInstances().at(-1);
+    expect(instance).toBeDefined();
+    const matchingWrites = instance!.write.mock.calls.filter(([data]) => data === snapshot);
+    expect(matchingWrites).toHaveLength(1);
+  });
+
+  it('skips snapshot replay when openTerminal does not return one', async () => {
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(getMockTerminalInstances().length).toBeGreaterThan(0);
+    });
+
+    const instance = getMockTerminalInstances().at(-1);
+    expect(instance).toBeDefined();
+    expect(instance!.write).not.toHaveBeenCalled();
   });
 });

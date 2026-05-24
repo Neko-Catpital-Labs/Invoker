@@ -44,6 +44,7 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const seededSessionsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     const host = containerRef.current;
@@ -68,6 +69,21 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
     }
     termRef.current = term;
     fitRef.current = fit;
+
+    // Replay the bounded snapshot captured by the backend before any live
+    // output subscription runs, so the pane shows bytes that arrived between
+    // session spawn and the renderer attaching. Tracked per-sessionId so a
+    // React re-render that re-runs the effect on the same session never
+    // duplicates the replay.
+    const snapshot = session.outputSnapshot;
+    if (snapshot && !seededSessionsRef.current.has(session.sessionId)) {
+      seededSessionsRef.current.add(session.sessionId);
+      try {
+        term.write(snapshot);
+      } catch {
+        /* terminal disposed */
+      }
+    }
 
     const inputDisposable = term.onData((data) => {
       void window.invoker?.terminalWrite?.(session.sessionId, data);
