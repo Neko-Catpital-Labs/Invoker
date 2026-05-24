@@ -75,10 +75,13 @@ BARE_REPO="$TMP_DIR/seed-remote.git"
 SEED_CLONE="$TMP_DIR/seed-clone"
 CONFIG_PATH="$TMP_DIR/config.json"
 REPORT_PATH="$TMP_DIR/report.json"
-HELPER_PATH="$TMP_DIR/probe.mjs"
+# Helper.mjs must live inside packages/app so Node ESM resolution can find
+# @playwright/test via the app's node_modules. NODE_PATH does not work for ESM.
+HELPER_PATH="$REPO_ROOT/packages/app/.repro-startup-snapshot-probe.mjs"
 HELPER_LOG="$TMP_DIR/probe.log"
 
 cleanup() {
+  rm -f "$HELPER_PATH"
   if [[ "$KEEP_TMP" = "1" ]]; then
     echo "repro: KEEP_TMP=1 -- leaving $TMP_DIR in place"
     return
@@ -251,8 +254,11 @@ const uiPerf = observed.activityLogs
   })
   .filter((entry) => entry.payload && typeof entry.payload === 'object');
 
-const bootstrap = uiPerf.find((e) => e.payload.metric === 'preload_bootstrap_sync');
-const graphVisible = uiPerf.find((e) => e.payload.metric === 'startup_workflow_graph_visible');
+// Use findLast so we capture phase 2's bootstrap (the measurement
+// relaunch), not phase 1's seed-phase bootstrap which precedes it in
+// the shared activity_log.
+const bootstrap = uiPerf.findLast((e) => e.payload.metric === 'preload_bootstrap_sync');
+const graphVisible = uiPerf.findLast((e) => e.payload.metric === 'startup_workflow_graph_visible');
 
 const snapshotReplacesAfterBootstrap = uiPerf
   .filter((e) => e.payload.metric === 'useTasks_snapshot_replace')
