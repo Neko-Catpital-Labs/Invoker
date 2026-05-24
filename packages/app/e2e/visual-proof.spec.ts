@@ -569,6 +569,47 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'workflow-context-menu-organization');
   });
 
+  test('context-menu-keyboard-navigation — ArrowDown moves the active highlight', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+
+    const menu = await openContextMenu(page, page.locator('[data-testid^="workflow-node-"]'));
+    // Park the cursor off the menu so onMouseEnter cannot reseed the active index
+    // between the read and the ArrowDown press.
+    await page.mouse.move(5, 5);
+
+    const readActive = () =>
+      menu.evaluate((root) => {
+        const items = Array.from(root.querySelectorAll('[role="menuitem"]'));
+        const activeIndices = items
+          .map((el, index) =>
+            el.className.split(/\s+/).includes('bg-gray-700') ? index : -1,
+          )
+          .filter((index) => index >= 0);
+        return {
+          count: items.length,
+          activeIndices,
+          activeLabel: items[activeIndices[0]]?.textContent?.trim() ?? null,
+        };
+      });
+
+    await expect.poll(async () => (await readActive()).activeIndices.length).toBe(1);
+    const before = await readActive();
+    expect(before.activeLabel).not.toBeNull();
+
+    await menu.press('ArrowDown');
+
+    await expect
+      .poll(async () => (await readActive()).activeIndices[0])
+      .toBe((before.activeIndices[0] + 1) % before.count);
+
+    const after = await readActive();
+    expect(after.activeIndices).toHaveLength(1);
+    expect(after.count).toBe(before.count);
+    expect(after.activeLabel).not.toBe(before.activeLabel);
+
+    await captureScreenshot(page, 'context-menu-keyboard-navigation');
+  });
+
   test('context menu keeps danger separator when cancel action is absent', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     await injectTaskStates(page, [
