@@ -63,6 +63,12 @@ import { trackWorkflow } from './headless-watch.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import type { RuntimeServices } from '@invoker/runtime-service';
+import {
+  createExternalFailureRecoveryLauncher,
+  type ExternalFailureRecoveryLauncher,
+} from './external-failure-recovery.js';
+import { handleFailedTaskDelta } from './failure-recovery-delta.js';
+import { resolveInvokerHomeRoot } from './delete-all-snapshot.js';
 
 export { bumpGenerationAndRecreate } from './workflow-actions.js';
 export {
@@ -281,72 +287,40 @@ export function createHeadlessExecutor(
 }
 
 export function wireHeadlessAutoFix(
-  deps: Pick<HeadlessDeps, 'messageBus' | 'orchestrator' | 'persistence'>,
-  taskExecutor: Pick<TaskRunner, 'executeTasks' | 'fixWithAgent' | 'resolveConflict'>,
-  invokeAutoFix: (taskId: string) => Promise<void> = async (taskId) => {
-    const { autoFixOnFailure } = await import('./workflow-actions.js');
-    await autoFixOnFailure(taskId, {
-      orchestrator: deps.orchestrator,
-      persistence: deps.persistence,
-      taskExecutor: taskExecutor as TaskRunner,
-      getAutoFixAgent: () => loadConfig().autoFixAgent,
-      getAutoApproveAIFixes: () => loadConfig().autoApproveAIFixes,
-    });
-  },
-  onError: (taskId: string, err: unknown) => void = (taskId, err) => {
-    process.stderr.write(`[auto-fix] "${taskId}": ${err}\n`);
-  },
+  deps: Pick<HeadlessDeps, 'messageBus' | 'persistence' | 'repoRoot' | 'invokerConfig'>,
+  _taskExecutor?: Pick<TaskRunner, 'executeTasks' | 'fixWithAgent' | 'resolveConflict'>,
+  launcher: ExternalFailureRecoveryLauncher =
+    createExternalFailureRecoveryLauncher(deps.invokerConfig.externalFailureRecovery),
 ): HeadlessAutoFixController {
-  const autoFixInProgress = new Set<string>();
-  const logHeadlessAutoFixDebug = (
-    taskId: string,
-    phase: string,
-    details: Record<string, unknown> = {},
-  ): void => {
-    const getTask = (deps.orchestrator as { getTask?: (id: string) => unknown }).getTask;
-    const task = getTask?.(taskId) as
-      | { status?: string; execution?: { autoFixAttempts?: number | null } }
-      | undefined;
-    const payload = {
-      phase,
-      status: task?.status ?? 'missing',
-      autoFixAttempts: task?.execution?.autoFixAttempts ?? null,
-      inProgressCount: autoFixInProgress.size,
-      inProgressForTask: autoFixInProgress.has(taskId),
-      ...details,
-    };
-    deps.persistence.logEvent?.(taskId, 'debug.auto-fix', payload);
-    process.stderr.write(`[auto-fix-debug][headless] task="${taskId}" phase=${phase} payload=${JSON.stringify(payload)}\n`);
+  const workflowIdForTask = (taskId: string): string | undefined => {
+    const loadTask = (deps.persistence as { loadTask?: (id: string) => { config?: { workflowId?: string } } | undefined }).loadTask;
+    const task = typeof loadTask === 'function' ? loadTask(taskId) : undefined;
+    if (task?.config?.workflowId) return task.config.workflowId;
+    const slashIndex = taskId.indexOf('/');
+    return slashIndex > 0 ? taskId.slice(0, slashIndex) : undefined;
   };
 
+  const dbDir = resolveInvokerHomeRoot();
   const unsubscribe = deps.messageBus.subscribe<TaskDelta>(Channels.TASK_DELTA, (delta) => {
-    if (delta.type !== 'updated' || delta.changes.status !== 'failed') return;
-    const inProgress = autoFixInProgress.has(delta.taskId);
-    const shouldAutoFix = deps.orchestrator.shouldAutoFix(delta.taskId);
-    logHeadlessAutoFixDebug(delta.taskId, 'delta-failed', { shouldAutoFix, inProgress });
-    if (inProgress || !shouldAutoFix) {
-      logHeadlessAutoFixDebug(delta.taskId, 'schedule-skip', {
-        reason: !shouldAutoFix ? 'shouldAutoFix-false' : 'already-in-progress',
-      });
-      return;
+    const outcome = handleFailedTaskDelta(delta, {
+      persistence: deps.persistence,
+      launcher,
+      context: {
+        repoRoot: deps.repoRoot,
+        dbDir,
+        workflowIdForTask,
+      },
+    });
+    if (outcome.handled) {
+      process.stderr.write(
+        `[external-recovery][headless] task="${delta.taskId}" launched=${outcome.result.launched}` +
+        `${outcome.result.launched ? '' : ` reason=${outcome.result.reason}`}\n`,
+      );
     }
-    autoFixInProgress.add(delta.taskId);
-    logHeadlessAutoFixDebug(delta.taskId, 'dispatch');
-    void invokeAutoFix(delta.taskId)
-      .catch((err) => {
-        logHeadlessAutoFixDebug(delta.taskId, 'dispatch-error', {
-          error: err instanceof Error ? err.stack ?? err.message : String(err),
-        });
-        onError(delta.taskId, err);
-      })
-      .finally(() => {
-        autoFixInProgress.delete(delta.taskId);
-        logHeadlessAutoFixDebug(delta.taskId, 'dispatch-finished');
-      });
   });
   return {
     unsubscribe,
-    isBusy: () => autoFixInProgress.size > 0,
+    isBusy: () => false,
   };
 }
 
