@@ -231,6 +231,34 @@ export interface InvokerConfig {
    * preserved while the dispatcher matures.
    */
   launchOutboxMode?: LaunchOutboxMode;
+  /**
+   * Optional external failure recovery hook. When enabled, the orchestrator
+   * may invoke a configured command after a task transitions to `failed`,
+   * passing context via environment variables (see `external-failure-recovery.ts`).
+   *
+   * This config is dormant: declaring it here surfaces the typed shape and
+   * lets the launcher helper consume it, but failed-delta wiring is intentionally
+   * left out and added in a follow-up task.
+   */
+  externalFailureRecovery?: ExternalFailureRecoveryConfig;
+}
+
+export interface ExternalFailureRecoveryConfig {
+  /** When false (or undefined), the launcher is a no-op. */
+  enabled?: boolean;
+  /**
+   * Shell command line to invoke. When empty/whitespace, the launcher
+   * skips even if `enabled` is true. Executed via the system shell so
+   * operators can pass arguments inline (e.g. `/usr/local/bin/recover.sh --verbose`).
+   */
+  command?: string;
+  /** Working directory for the spawned process. Defaults to the orchestrator cwd. */
+  cwd?: string;
+  /**
+   * Minimum seconds between launches. While the cooldown is active the
+   * launcher skips with reason `cooldown`. Defaults to `0` (no cooldown).
+   */
+  cooldownSeconds?: number;
 }
 
 export type LaunchOutboxMode = 'disabled' | 'observe' | 'active';
