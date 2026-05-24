@@ -158,4 +158,94 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
+
+  // ── Keyboard navigation regressions ─────────────────────────────
+  // An open context menu must respond to ArrowUp/ArrowDown/Enter/Space at the
+  // active keyboard target. Before the keyboard-nav fix, the workflow menu had
+  // no keyboard handler and the task menu's handler only fired when the menu
+  // itself was focused — neither happened from a natural keyboard target.
+  function pressKey(name: string) {
+    const target =
+      document.activeElement && document.activeElement !== document.body
+        ? (document.activeElement as Element)
+        : document;
+    fireEvent.keyDown(target, { key: name });
+  }
+
+  it('workflow context menu: ArrowDown x3 + Enter copies workflow id', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    await screen.findByRole('menu');
+
+    pressKey('ArrowDown');
+    pressKey('ArrowDown');
+    pressKey('ArrowDown');
+    pressKey('Enter');
+
+    await waitFor(() => {
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1');
+    });
+  });
+
+  it('workflow context menu: ArrowUp wraps to last menuitem and Enter expands More', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    await screen.findByRole('menu');
+
+    pressKey('ArrowUp');
+    pressKey('Enter');
+
+    expect(await screen.findByText('Rebase and Retry')).toBeInTheDocument();
+  });
+
+  it('workflow context menu: Space activates the highlighted item', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    await screen.findByRole('menu');
+
+    pressKey('ArrowDown');
+    pressKey('ArrowDown');
+    pressKey('ArrowDown');
+    pressKey(' ');
+
+    await waitFor(() => {
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1');
+    });
+  });
+
+  it('task context menu: ArrowDown + Enter activates next enabled item', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    await screen.findByRole('menu');
+
+    // task-alpha is pending: items are Restart Task (idx 0), Open Terminal (idx 1).
+    // ArrowDown moves focus to Open Terminal, Enter activates it.
+    pressKey('ArrowDown');
+    pressKey('Enter');
+
+    await waitFor(() => {
+      expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha');
+    });
+  });
+
+  it('task context menu: Space activates the highlighted item', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    await screen.findByRole('menu');
+
+    pressKey('ArrowDown');
+    pressKey(' ');
+
+    await waitFor(() => {
+      expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha');
+    });
+  });
 });
