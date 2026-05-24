@@ -488,6 +488,91 @@ describe('EmbeddedTerminalManager', () => {
 
     expect(session.outputSnapshot).toBeUndefined();
   });
+
+  // ── PTY race regression: synchronous backend output during spawn ──
+  // These tests pin the behavior covered by
+  // scripts/repro-gui-open-terminal-pty-race.sh — they fail on the pre-fix
+  // baseline (no replay buffer) and pass once openOrReuse returns a descriptor
+  // whose outputSnapshot includes output emitted before the call returns.
+
+  it('PTY race regression: FIRST_FRAME_FROM_PTY emitted synchronously during spawn appears in the returned descriptor', () => {
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: vi.fn((opts) => {
+        opts.emitOutput('FIRST_FRAME_FROM_PTY\n');
+        return { write: vi.fn(), resize: vi.fn(), close: vi.fn() };
+      }),
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.openOrReuse({ taskId: 'task-pty-race', spec: {}, cwd: '/tmp' });
+
+    expect(session.status).toBe('running');
+    expect(session.outputSnapshot).toBeDefined();
+    expect(session.outputSnapshot).toContain('FIRST_FRAME_FROM_PTY\n');
+  });
+
+  it('PTY race regression: late consumer can seed FIRST_FRAME_FROM_PTY from outputSnapshot in returned descriptor', () => {
+    let lateEmitOutput: ((data: string) => void) | null = null;
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: vi.fn((opts) => {
+        // Emit the first frame synchronously, before openOrReuse() returns and
+        // before any renderer-style consumer could possibly subscribe.
+        opts.emitOutput('FIRST_FRAME_FROM_PTY\n');
+        lateEmitOutput = opts.emitOutput;
+        return { write: vi.fn(), resize: vi.fn(), close: vi.fn() };
+      }),
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.openOrReuse({ taskId: 'task-pty-late', spec: {}, cwd: '/tmp' });
+
+    // Late consumer simulates a renderer terminal pane subscribing only after
+    // openOrReuse() has returned and React has mounted the pane.
+    const lateConsumerFrames: string[] = [];
+    const seed = session.outputSnapshot;
+    if (seed) lateConsumerFrames.push(seed);
+    mgr.on('output', (e) => {
+      if (e.sessionId === session.sessionId) lateConsumerFrames.push(e.data);
+    });
+
+    // Subsequent live output flows through the event channel as normal.
+    lateEmitOutput!('SECOND_FRAME_FROM_PTY\n');
+
+    expect(lateConsumerFrames.join('')).toBe(
+      'FIRST_FRAME_FROM_PTY\nSECOND_FRAME_FROM_PTY\n',
+    );
+    // The same snapshot is also visible to a late list()/get() reload.
+    expect(mgr.get(session.sessionId)?.outputSnapshot).toContain('FIRST_FRAME_FROM_PTY\n');
+  });
+
+  it('PTY race regression: synchronous backend exit during spawn with FIRST_FRAME_FROM_PTY does not throw and finalizes the session', () => {
+    const closed = vi.fn();
+    const exits: Array<{ exitCode?: number }> = [];
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: vi.fn((opts) => {
+        opts.emitOutput('FIRST_FRAME_FROM_PTY\n');
+        opts.emitExit(42);
+        return { write: vi.fn(), resize: vi.fn(), close: closed };
+      }),
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+    mgr.on('exit', (e) => exits.push({ exitCode: e.exitCode }));
+
+    let session: ReturnType<typeof mgr.openOrReuse> | undefined;
+    expect(() => {
+      session = mgr.openOrReuse({ taskId: 'task-sync-exit-pty', spec: {}, cwd: '/tmp' });
+    }).not.toThrow();
+
+    expect(session?.status).toBe('exited');
+    expect(session?.exitCode).toBe(42);
+    expect(session?.outputSnapshot).toContain('FIRST_FRAME_FROM_PTY\n');
+    expect(exits).toEqual([{ exitCode: 42 }]);
+    expect(closed).toHaveBeenCalledTimes(1);
+    expect(mgr.list()).toHaveLength(0);
+  });
 });
 
 // ── Deterministic GUI route: resolveTaskTerminalSpec + EmbeddedTerminalManager ──
