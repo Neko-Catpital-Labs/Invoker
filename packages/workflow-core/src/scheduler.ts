@@ -1,7 +1,7 @@
 /**
  * Priority queue with simple maxConcurrency limit for task scheduling.
  *
- * No I/O, no Docker, no Git — just a sorted queue and concurrency tracking.
+ * INV-143 proof anchor: no I/O, no Docker, no Git — just a sorted queue and concurrency tracking.
  * Higher priority numbers are dequeued first.
  */
 

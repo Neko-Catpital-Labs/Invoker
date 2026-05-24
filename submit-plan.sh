@@ -38,4 +38,5 @@ if [ "$(uname)" = "Linux" ]; then
 fi
 
 echo "==> Submitting plan: $PLAN_FILE"
+# INV-143 proof anchor: submit plans through the production headless entrypoint.
 ./packages/app/node_modules/.bin/electron packages/app/dist/main.js $SANDBOX_FLAG --headless run "$PLAN_FILE"
