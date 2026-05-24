@@ -1807,13 +1807,16 @@ async function headlessRecreateWorkflow(workflowId: string, deps: HeadlessDeps):
     context: 'headless.recreate-workflow',
     mutationTiming: deps.mutationTiming,
   });
-  const started = deps.mutationTiming
+  const recreateWfEnvelope = makeEnvelope('recreate-workflow', 'headless', 'workflow', { workflowId });
+  const recreateWfResult = deps.mutationTiming
     ? await deps.mutationTiming.span(
-      'headless.recreate-workflow.sharedRecreateWorkflow',
+      'headless.recreate-workflow.commandService.recreateWorkflow',
       undefined,
-      async () => sharedRecreateWorkflow(workflowId, { persistence: deps.persistence, orchestrator: deps.orchestrator }),
+      () => deps.commandService.recreateWorkflow(recreateWfEnvelope),
     )
-    : sharedRecreateWorkflow(workflowId, { persistence: deps.persistence, orchestrator: deps.orchestrator });
+    : await deps.commandService.recreateWorkflow(recreateWfEnvelope);
+  if (!recreateWfResult.ok) throw new Error(recreateWfResult.error.message);
+  const started = recreateWfResult.data;
   const runnable = started.filter(isDispatchableLaunch);
   if (runnable.length > 0) {
     const te = createHeadlessExecutor(deps);
@@ -1871,13 +1874,16 @@ async function headlessRecreateTask(taskId: string, deps: HeadlessDeps): Promise
     await preemptTaskSubgraph(taskId, deps);
   }
 
-  const started = deps.mutationTiming
+  const recreateTaskEnvelope = makeEnvelope('recreate-task', 'headless', 'task', { taskId });
+  const recreateTaskResult = deps.mutationTiming
     ? await deps.mutationTiming.span(
-      'headless.recreate-task.sharedRecreateTask',
+      'headless.recreate-task.commandService.recreateTask',
       { taskId },
-      async () => sharedRecreateTask(taskId, { persistence: deps.persistence, orchestrator: deps.orchestrator }),
+      () => deps.commandService.recreateTask(recreateTaskEnvelope),
     )
-    : sharedRecreateTask(taskId, { persistence: deps.persistence, orchestrator: deps.orchestrator });
+    : await deps.commandService.recreateTask(recreateTaskEnvelope);
+  if (!recreateTaskResult.ok) throw new Error(recreateTaskResult.error.message);
+  const started = recreateTaskResult.data;
   const runnable = started.filter(isDispatchableLaunch);
   const workflowId = deps.orchestrator.getTask(taskId)?.config.workflowId;
   process.stdout.write(`Recreate task "${taskId}" (+ downstream) — ${runnable.length} task(s) to execute (pool fetch skipped)\n`);
