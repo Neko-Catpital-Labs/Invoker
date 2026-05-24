@@ -13,10 +13,16 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: {
-          // Split large vendor chunks to reduce memory pressure
-          react: ['react', 'react-dom'],
+          // Pull heavy vendor libs into named chunks so the cold-start entry
+          // stays small. React stays in the main chunk (it is required on
+          // first paint and Rollup would emit a near-empty file otherwise).
           xyflow: ['@xyflow/react'],
-          xterm: ['xterm', 'xterm-addon-fit'],
+          // elkjs is only needed by the lazy mini-DAG; pinning it to its own
+          // chunk keeps it out of the entry even though it is also pulled in
+          // by the lazy TaskDAG import.
+          elkjs: ['elkjs/lib/elk.bundled.js'],
+          // js-yaml is only used inside the lazy plan-load handler.
+          'js-yaml': ['js-yaml'],
         },
       },
     },
