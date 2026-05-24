@@ -510,6 +510,98 @@ describe('EmbeddedTerminalManager', () => {
   });
 });
 
+// ── GUI open-terminal PTY race regression ─────────────────────
+//
+// These tests reproduce the renderer-vs-backend PTY race that motivated the
+// per-session output replay buffer: an embedded PTY emits its first frame
+// synchronously inside spawn(), but the renderer terminal pane only subscribes
+// to invoker:terminal-output after openTerminal returns and React mounts the
+// pane. Without the replay snapshot on the returned descriptor, that first
+// frame is lost. The dedicated FIRST_FRAME_FROM_PTY marker lets the
+// repro-gui-open-terminal-pty-race.sh script target this block with `-t`.
+
+describe('GUI open-terminal PTY race regression', () => {
+  it('returns FIRST_FRAME_FROM_PTY in the descriptor when the backend emits it during spawn()', () => {
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: ({ emitOutput }) => {
+        // The PTY prints its first frame *before* spawn() returns — i.e.
+        // before the renderer has any sessionId to subscribe with.
+        emitOutput('FIRST_FRAME_FROM_PTY\n');
+        return { write: vi.fn(), resize: vi.fn(), close: vi.fn() };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.openOrReuse({ taskId: 'pty-race', spec: {}, cwd: '/tmp' });
+
+    expect(session.status).toBe('running');
+    expect(session.outputSnapshot).toBe('FIRST_FRAME_FROM_PTY\n');
+  });
+
+  it('lets a late renderer-style consumer seed its terminal from the descriptor snapshot', () => {
+    // Models the renderer: it doesn't have a sessionId until openOrReuse
+    // returns, so any output the backend emitted during spawn() is missed by
+    // the live `output` event. The renderer must seed its terminal pane from
+    // descriptor.outputSnapshot before attaching its live listener — that is
+    // exactly what this test exercises end-to-end.
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: ({ emitOutput }) => {
+        emitOutput('FIRST_FRAME_FROM_PTY\n');
+        emitOutput('prompt$ ');
+        return { write: vi.fn(), resize: vi.fn(), close: vi.fn() };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const liveEvents: string[] = [];
+    // Capture only output emitted *after* this listener attaches.
+    const session = mgr.openOrReuse({ taskId: 'pty-race', spec: {}, cwd: '/tmp' });
+    mgr.on('output', (e) => {
+      if (e.sessionId === session.sessionId) liveEvents.push(e.data);
+    });
+
+    // The renderer seeds from the descriptor, then attaches its listener. With
+    // the broken baseline (no replay buffer), seed is empty and the first
+    // frame is gone forever; with the fix, seed contains the missing prefix.
+    const seed = session.outputSnapshot ?? '';
+    const rendered = seed + liveEvents.join('');
+
+    expect(seed).toContain('FIRST_FRAME_FROM_PTY');
+    expect(rendered).toContain('FIRST_FRAME_FROM_PTY');
+    // mgr.get() / list() must report the same snapshot for terminalList() reloads.
+    expect(mgr.get(session.sessionId)?.outputSnapshot).toBe('FIRST_FRAME_FROM_PTY\nprompt$ ');
+    expect(mgr.list()[0]?.outputSnapshot).toBe('FIRST_FRAME_FROM_PTY\nprompt$ ');
+  });
+
+  it('does not throw when the backend emits FIRST_FRAME_FROM_PTY and exits synchronously during spawn()', () => {
+    // Synchronous exit during spawn() previously hit a TDZ on the closed-over
+    // session state. The manager now resolves state by id, so this must not
+    // throw and the descriptor must still carry the first-frame snapshot.
+    const close = vi.fn();
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: ({ emitOutput, emitExit }) => {
+        emitOutput('FIRST_FRAME_FROM_PTY\n');
+        emitExit(0);
+        return { write: vi.fn(), resize: vi.fn(), close };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    let session!: ReturnType<typeof mgr.openOrReuse>;
+    expect(() => {
+      session = mgr.openOrReuse({ taskId: 'pty-race', spec: {}, cwd: '/tmp' });
+    }).not.toThrow();
+
+    expect(session.status).toBe('exited');
+    expect(session.exitCode).toBe(0);
+    expect(session.outputSnapshot).toBe('FIRST_FRAME_FROM_PTY\n');
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+});
+
 // ── Deterministic GUI route: resolveTaskTerminalSpec + EmbeddedTerminalManager ──
 
 describe('GUI open-terminal embedded route', () => {
