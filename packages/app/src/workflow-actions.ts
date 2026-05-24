@@ -14,7 +14,11 @@ import type {
   InvalidationScope,
   TaskState,
 } from '@invoker/workflow-core';
-import { OrchestratorError, OrchestratorErrorCode } from '@invoker/workflow-core';
+import {
+  OrchestratorError,
+  OrchestratorErrorCode,
+  buildCancelInFlight as buildCoreCancelInFlight,
+} from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { TaskRunner, ReviewGateCiFailureTrigger } from '@invoker/execution-engine';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
@@ -520,18 +524,14 @@ export interface BuildCancelInFlightDeps {
 }
 
 export function buildCancelInFlight(deps: BuildCancelInFlightDeps): CancelInFlightFn {
-  return async (scope: InvalidationScope, id: string): Promise<void> => {
-    if (scope === 'none') return;
-    const result =
-      scope === 'task'
-        ? deps.orchestrator.cancelTask(id)
-        : deps.orchestrator.cancelWorkflow(id);
-    const taskExecutor = resolveTaskExecutor(deps.taskExecutor);
-    if (!taskExecutor) return;
-    for (const runningId of result.runningCancelled) {
-      await taskExecutor.killActiveExecution(runningId);
-    }
-  };
+  return buildCoreCancelInFlight({
+    orchestrator: deps.orchestrator,
+    killActiveExecution: async (id) => {
+      const taskExecutor = resolveTaskExecutor(deps.taskExecutor);
+      if (!taskExecutor) return;
+      await taskExecutor.killActiveExecution(id);
+    },
+  });
 }
 
 export type BuildInvalidationDepsArgs = Omit<
