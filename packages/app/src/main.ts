@@ -159,6 +159,11 @@ import {
   WorkflowMetadataInvalidator,
 } from './workflow-metadata-invalidation.js';
 import { shouldSkipAutoFixForError } from './auto-fix-gating.js';
+import {
+  createExternalFailureRecoveryLauncher,
+  type ExternalFailureRecoveryContext,
+  type ExternalFailureRecoveryLauncher,
+} from './external-failure-recovery.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
 import { LaunchDispatcher, type LaunchDispatcherMode } from './launch-dispatcher.js';
@@ -1603,57 +1608,40 @@ function createEmbeddedTerminalBackendFromConfig(
     return result.started;
   };
 
-  const scheduleAutoFix = (taskId: string): void => {
-    logAutoFixDebug(taskId, 'schedule-enter');
-    if (!workflowMutationCoordinator) {
-      logAutoFixDebug(taskId, 'schedule-skip', { reason: 'no-workflow-mutation-coordinator' });
-      return;
-    }
-    if (!workflowMutationDispatcher.has('invoker:fix-with-agent')) {
-      logAutoFixDebug(taskId, 'schedule-skip', { reason: 'fix-handler-not-ready' });
-      return;
-    }
+  const externalFailureRecoveryLauncher: ExternalFailureRecoveryLauncher =
+    createExternalFailureRecoveryLauncher(invokerConfig.externalFailureRecovery);
+
+  const logExternalRecoveryDebug = (
+    taskId: string,
+    phase: string,
+    details: Record<string, unknown> = {},
+  ): void => {
+    const payload = { phase, ...details };
+    persistence.logEvent?.(taskId, 'debug.external-recovery', payload);
+    logger.info(
+      `[external-recovery] task="${taskId}" phase=${phase} payload=${JSON.stringify(payload)}`,
+      { module: 'external-recovery' },
+    );
+  };
+
+  const launchExternalFailureRecovery = (taskId: string): void => {
     const workflowId = workflowIdForTaskArg(taskId);
     if (!workflowId) {
-      logAutoFixDebug(taskId, 'schedule-skip', { reason: 'workflow-not-found' });
+      logExternalRecoveryDebug(taskId, 'skip', { reason: 'workflow-not-found' });
       return;
     }
-    const shouldAutoFixNow = orchestrator.shouldAutoFix(taskId);
-    if (!shouldAutoFixNow) {
-      logAutoFixDebug(taskId, 'schedule-skip', {
-        reason: 'shouldAutoFix-false',
-        shouldAutoFix: shouldAutoFixNow,
-      });
-      return;
-    }
-    const openIntents = persistence.listWorkflowMutationIntents(workflowId, ['queued', 'running']);
-    const openTaskFixIntents = listOpenFixIntentsForTask(openIntents, taskId);
-    if (openTaskFixIntents.length > 0) {
-      logAutoFixDebug(taskId, 'schedule-skip', {
-        reason: 'already-queued-intent',
-        existingIntentIds: openTaskFixIntents.map((intent) => intent.id),
-      });
-      return;
-    }
-    const configuredAgent = loadConfig().autoFixAgent?.trim();
-    const selectedAgent = configuredAgent && configuredAgent.length > 0 ? configuredAgent : undefined;
-    logAutoFixDebug(taskId, 'schedule-enqueue');
-    logAutoFixDebug(taskId, 'schedule-enqueued');
-    void runWorkflowMutation(
+    const context: ExternalFailureRecoveryContext = {
+      taskId,
       workflowId,
-      'normal',
-      'invoker:fix-with-agent',
-      [taskId, selectedAgent],
-      async () => executeFixWithAgentMutation(taskId, selectedAgent, 'auto-fix'),
-    )
-      .then(() => {
-        logAutoFixDebug(taskId, 'schedule-dispatch-finished');
-      })
-      .catch((err) => {
-        logAutoFixDebug(taskId, 'schedule-dispatch-error', {
-          error: err instanceof Error ? err.stack ?? err.message : String(err),
-        });
-      });
+      repoRoot,
+      dbDir: resolveInvokerHomeRoot(),
+    };
+    const outcome = externalFailureRecoveryLauncher.launch(context);
+    if (outcome.launched) {
+      logExternalRecoveryDebug(taskId, 'launched', { workflowId });
+    } else {
+      logExternalRecoveryDebug(taskId, 'skip', { reason: outcome.reason, workflowId });
+    }
   };
 
   const parseExecutionDate = (value: unknown): Date | undefined => {
@@ -2898,16 +2886,12 @@ function createEmbeddedTerminalBackendFromConfig(
       const deltaTaskId = d.type === 'updated' || d.type === 'removed'
         ? d.taskId
         : undefined;
-      if (d.type === 'updated' && d.changes.status === 'failed') {
+      if (d.type === 'updated' && d.changes.status === 'failed' && deltaTaskId) {
         const cancellationError = shouldSkipAutoFixForError(d.changes.execution?.error);
-        const shouldAutoFixFromOrchestrator = orchestrator.shouldAutoFix(d.taskId);
-        logAutoFixDebug(d.taskId, 'delta-failed', {
-          shouldSkipForCancellation: cancellationError,
-          shouldAutoFixFromOrchestrator,
-        });
-        if (!cancellationError && shouldAutoFixFromOrchestrator && deltaTaskId) {
-          logAutoFixDebug(deltaTaskId, 'delta-trigger-schedule');
-          scheduleAutoFix(deltaTaskId);
+        if (cancellationError) {
+          logExternalRecoveryDebug(deltaTaskId, 'skip', { reason: 'cancellation-error' });
+        } else {
+          launchExternalFailureRecovery(deltaTaskId);
         }
       }
 
