@@ -11,7 +11,9 @@
  *    for straighter edges.
  */
 
-import ELK from 'elkjs/lib/elk.bundled.js';
+// elkjs is dynamically imported below so its ~1.5MB bundle does not
+// ship in the renderer entry chunk; layout is async and the cold-start
+// empty state never calls it.
 
 import type { TaskState } from '../types.js';
 
@@ -88,7 +90,13 @@ export async function layoutTaskGraph(
     .sort((a, b) => edgeLayoutId(a).localeCompare(edgeLayoutId(b)));
 
   try {
-    const elk = options?.elk ?? new ELK();
+    let elk: ElkLayoutEngine;
+    if (options?.elk) {
+      elk = options.elk;
+    } else {
+      const { default: ELK } = await import('elkjs/lib/elk.bundled.js');
+      elk = new ELK();
+    }
     const graph = {
       id: 'task-dag',
       layoutOptions: {

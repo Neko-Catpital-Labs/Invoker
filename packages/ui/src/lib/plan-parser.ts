@@ -2,25 +2,24 @@
  * Plan text parser — validates YAML/JSON plan input.
  *
  * Shared by plan loading controls.
+ *
+ * js-yaml is dynamically imported so it does not ship in the cold-start
+ * entry chunk; it only loads the first time the user opens a plan file.
  */
 
-import yaml from 'js-yaml';
+export async function parsePlanText(text: string, fileExtension?: string): Promise<unknown> {
+  if (fileExtension === '.json') {
+    return JSON.parse(text);
+  }
 
-/**
- * Parse text as YAML first, then fall back to JSON.
- * Returns the parsed object or throws with a descriptive message.
- */
-export function parsePlanText(text: string, fileExtension?: string): unknown {
+  const { default: yaml } = await import('js-yaml');
+
   if (fileExtension === '.yaml' || fileExtension === '.yml') {
     const result = yaml.load(text);
     if (result === undefined || result === null) {
       throw new Error('YAML file parsed to empty value.');
     }
     return result;
-  }
-
-  if (fileExtension === '.json') {
-    return JSON.parse(text);
   }
 
   // No extension hint (pasted text): try YAML first (superset of JSON)
