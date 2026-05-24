@@ -280,6 +280,8 @@ declare global {
       workflows?: WorkflowMeta[];
       initialWorkflowId?: string | null;
       appStartedAtEpochMs?: number;
+      /** True when the payload was sourced from the main process (not the empty preload fallback). */
+      complete?: boolean;
     };
   }
 }

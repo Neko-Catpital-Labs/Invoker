@@ -34,6 +34,12 @@ const bootstrapState = ipcRenderer.sendSync('invoker:get-bootstrap-state-sync') 
   | { tasks?: unknown[]; workflows?: unknown[]; appStartedAtEpochMs?: number }
   | undefined;
 const bootstrapDurationMs = Date.now() - bootstrapStartedAt;
+// `complete: true` tells the renderer that the bootstrap payload was sourced
+// from main (not the empty fallback below), so it can skip the redundant
+// post-mount getTasks() snapshot.
+const exposedBootstrap = bootstrapState
+  ? { ...bootstrapState, complete: true }
+  : { tasks: [], workflows: [] };
 
 // Invoke channels: each becomes (...args) => ipcRenderer.invoke(channel, ...args)
 for (const channel of Object.keys(IpcChannels)) {
@@ -79,7 +85,7 @@ for (const channel of Object.keys(IpcEventChannels)) {
 }
 
 contextBridge.exposeInMainWorld('invoker', api as InvokerAPI);
-contextBridge.exposeInMainWorld('__INVOKER_BOOTSTRAP__', bootstrapState ?? { tasks: [], workflows: [] });
+contextBridge.exposeInMainWorld('__INVOKER_BOOTSTRAP__', exposedBootstrap);
 
 setTimeout(() => {
   ipcRenderer.invoke('invoker:report-ui-perf', 'preload_bootstrap_sync', {

@@ -155,7 +155,23 @@ export function useTasks(): UseTasksResult {
       });
     }
 
-    fetchAll();
+    if (bootstrapState?.complete) {
+      // Preload synchronously delivered the full task/workflow state from main, so
+      // the post-mount non-forced getTasks() snapshot would just re-fetch the same
+      // data. Skip it. Forced refreshes via refreshTasks(true) and delta-driven
+      // workflow refreshes below still call fetchAll().
+      void window.invoker.reportUiPerf?.('startup_snapshot_skipped_bootstrap_complete', {
+        bootstrapTaskCount: bootstrapState.tasks?.length ?? 0,
+        bootstrapWorkflowCount: bootstrapState.workflows?.length ?? 0,
+        elapsedMs: Math.round(performance.now()),
+        processElapsedMs: bootstrapState.appStartedAtEpochMs
+          ? Date.now() - bootstrapState.appStartedAtEpochMs
+          : undefined,
+      });
+      window.invoker.checkPrStatuses?.();
+    } else {
+      fetchAll();
+    }
 
     deltaPipelineRef.current = createTaskDeltaPipeline({
       flushMs: 100,

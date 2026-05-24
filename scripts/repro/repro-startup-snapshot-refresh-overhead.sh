@@ -120,7 +120,12 @@ export INVOKER_DB_DIR="$DB_DIR"
 export INVOKER_REPO_CONFIG_PATH="$CONFIG_PATH"
 export INVOKER_HEADLESS_STANDALONE=1
 export INVOKER_ALLOW_DELETE_ALL=1
-export NODE_ENV=test
+# NODE_ENV=test is intentionally NOT exported globally:
+#  - The workflow-id generator is deterministic in test mode (`wf-test-N`), so
+#    multiple seed processes would all produce `wf-test-1` and collide on the
+#    second insert.
+#  - It is re-applied only on the Electron launch below so the GUI can skip the
+#    single-instance lock and coexist with the developer's normal Invoker app.
 
 echo "repro: seeding $WORKFLOW_COUNT workflows ($TASKS_PER_WORKFLOW tasks each) into $DB_DIR ..."
 for idx in $(seq 1 "$WORKFLOW_COUNT"); do
@@ -161,6 +166,7 @@ if [[ "$(uname)" == "Linux" ]]; then
 fi
 
 echo "repro: launching Electron GUI against isolated DB ..."
+NODE_ENV=test \
 INVOKER_STARTUP_POLL_DELAY_MS=0 \
 ELECTRON_ENABLE_LOGGING=1 \
   "${ELECTRON_PREFIX[@]}" "$ELECTRON_BIN" \
