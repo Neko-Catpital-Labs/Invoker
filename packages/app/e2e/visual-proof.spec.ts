@@ -551,6 +551,30 @@ test.describe('Visual proof capture', () => {
     await assertPageScreenshot(page, 'context-menu-failed-organization');
   });
 
+  test('context-menu-keyboard-navigation — ArrowDown highlights next workflow menu item', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+
+    const menu = await openContextMenu(page, page.locator('[data-testid^="workflow-node-"]'));
+
+    // Move the cursor away from the menu so subsequent hover events don't fight
+    // the keyboard highlight before the screenshot is captured.
+    await page.mouse.move(0, 0);
+
+    const openWorkflow = page.getByRole('menuitem', { name: 'Open Workflow' });
+    const openPr = page.getByRole('menuitem', { name: 'Open PR' });
+
+    // The implementation marks the active item with a standalone `bg-gray-700`
+    // class — distinct from `hover:bg-gray-700` which every menuitem carries.
+    await expect(openWorkflow).toHaveClass(/\sbg-gray-700/);
+
+    await menu.press('ArrowDown');
+
+    await expect(openPr).toHaveClass(/\sbg-gray-700/);
+    await expect(openWorkflow).not.toHaveClass(/\sbg-gray-700/);
+
+    await captureScreenshot(page, 'context-menu-keyboard-navigation');
+  });
+
   test('workflow context menu organization', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
 
