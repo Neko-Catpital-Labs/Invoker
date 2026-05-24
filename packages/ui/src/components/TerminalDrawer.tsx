@@ -44,6 +44,10 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  // Tracks which session id has had its replay snapshot written into xterm so a
+  // subsequent re-render (or strict-mode double effect) cannot re-seed the same
+  // session and duplicate the prefix on screen.
+  const seededSessionIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     const host = containerRef.current;
@@ -68,6 +72,19 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
     }
     termRef.current = term;
     fitRef.current = fit;
+
+    // Replay any bounded output the main process captured before this pane
+    // subscribed to `invoker:terminal-output`. This must happen before the
+    // live subscription is wired so the prefix lands ahead of any new chunks.
+    const snapshot = session.outputSnapshot;
+    if (snapshot && seededSessionIdRef.current !== session.sessionId) {
+      seededSessionIdRef.current = session.sessionId;
+      try {
+        term.write(snapshot);
+      } catch {
+        /* terminal disposed */
+      }
+    }
 
     const inputDisposable = term.onData((data) => {
       void window.invoker?.terminalWrite?.(session.sessionId, data);

@@ -11,6 +11,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
+import {
+  getMockTerminals,
+  resetMockTerminals,
+} from './helpers/mock-xterm.js';
+import type { TerminalSessionDescriptor } from '@invoker/contracts';
 import type { WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
@@ -18,7 +23,18 @@ vi.mock('@xyflow/react', async () => {
   return createReactFlowMock();
 });
 
+vi.mock('xterm', async () => {
+  const { createXtermMock } = await import('./helpers/mock-xterm.js');
+  return createXtermMock();
+});
+
+vi.mock('xterm-addon-fit', async () => {
+  const { createXtermAddonFitMock } = await import('./helpers/mock-xterm.js');
+  return createXtermAddonFitMock();
+});
+
 const { App } = await import('../App.js');
+const { TerminalDrawer } = await import('../components/TerminalDrawer.js');
 
 const workflows: WorkflowMeta[] = [{ id: 'wf-a', name: 'Workflow A', status: 'completed' }];
 const taskAlpha = makeUITask({
@@ -51,6 +67,7 @@ describe('Terminal drawer (component)', () => {
   beforeEach(() => {
     mock = createMockInvoker();
     mock.install();
+    resetMockTerminals();
   });
 
   afterEach(() => {
@@ -171,5 +188,103 @@ describe('Terminal drawer (component)', () => {
       expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
     });
     expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha');
+  });
+
+  it('seeds xterm with the session replay snapshot when a terminal opens', async () => {
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      expect(getMockTerminals().length).toBeGreaterThan(0);
+    });
+    const term = getMockTerminals().at(-1)!;
+    expect(term.write).toHaveBeenCalledWith('mock-replay[task-alpha]');
+  });
+});
+
+describe('TerminalDrawer replay seeding (unit)', () => {
+  let mock: MockInvoker;
+
+  beforeEach(() => {
+    mock = createMockInvoker();
+    mock.install();
+    resetMockTerminals();
+  });
+
+  afterEach(() => {
+    mock.cleanup();
+    vi.restoreAllMocks();
+  });
+
+  function makeSession(overrides: Partial<TerminalSessionDescriptor> = {}): TerminalSessionDescriptor {
+    return {
+      sessionId: 'session-1',
+      taskId: 'task-x',
+      status: 'running',
+      mode: 'spawn',
+      attached: false,
+      createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+      outputSnapshot: 'replay-prefix',
+      ...overrides,
+    };
+  }
+
+  it('writes the snapshot once before live output and not again on re-render of the same session', () => {
+    const session = makeSession();
+    const { rerender } = render(
+      <TerminalDrawer
+        collapsed={false}
+        onToggle={() => {}}
+        sessions={[session]}
+        activeSessionId={session.sessionId}
+        onSelectSession={() => {}}
+        onCloseSession={() => {}}
+      />,
+    );
+
+    const terms = getMockTerminals();
+    expect(terms).toHaveLength(1);
+    const term = terms[0];
+    expect(term.write).toHaveBeenCalledTimes(1);
+    expect(term.write).toHaveBeenCalledWith('replay-prefix');
+
+    // Re-render with a new session object reference but the same sessionId
+    // (e.g. status flipped to 'exited'). The pane must not re-seed.
+    rerender(
+      <TerminalDrawer
+        collapsed={false}
+        onToggle={() => {}}
+        sessions={[{ ...session, status: 'exited', exitCode: 0 }]}
+        activeSessionId={session.sessionId}
+        onSelectSession={() => {}}
+        onCloseSession={() => {}}
+      />,
+    );
+
+    expect(getMockTerminals()).toHaveLength(1);
+    expect(term.write).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not seed when the descriptor has no outputSnapshot', () => {
+    const session = makeSession({ outputSnapshot: undefined });
+    render(
+      <TerminalDrawer
+        collapsed={false}
+        onToggle={() => {}}
+        sessions={[session]}
+        activeSessionId={session.sessionId}
+        onSelectSession={() => {}}
+        onCloseSession={() => {}}
+      />,
+    );
+
+    const term = getMockTerminals().at(-1)!;
+    expect(term.write).not.toHaveBeenCalled();
   });
 });
