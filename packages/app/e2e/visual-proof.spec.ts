@@ -569,6 +569,42 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'workflow-context-menu-organization');
   });
 
+  test('context-menu-keyboard-navigation — ArrowDown moves active highlight', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+
+    const menu = await openContextMenu(page, page.locator('[data-testid^="workflow-node-"]'));
+
+    // Standalone `bg-gray-700` token marks the keyboard-active menu item.
+    // The Tailwind `hover:bg-gray-700` token is always present on hoverable
+    // items, so we explicitly require a whitespace/edge boundary before
+    // `bg-gray-700` to distinguish active from hover-capable.
+    const activeClassRegex = /(?:^|\s)bg-gray-700(?:\s|$)/;
+
+    const openWorkflowItem = page.getByRole('menuitem', { name: 'Open Workflow' });
+    const openPrItem = page.getByRole('menuitem', { name: 'Open PR' });
+    await expect(openWorkflowItem).toBeVisible();
+    await expect(openPrItem).toBeVisible();
+
+    // On open the first enabled item is the active row.
+    await expect(openWorkflowItem).toHaveClass(activeClassRegex);
+    await expect(openPrItem).not.toHaveClass(activeClassRegex);
+
+    // Park the pointer outside the menu so `onMouseEnter` cannot re-stamp the
+    // active index after the keyboard moves it.
+    const menuBox = await menu.boundingBox();
+    if (!menuBox) throw new Error('Workflow context menu has no bounding box');
+    const parkX = Math.max(0, menuBox.x - 16);
+    const parkY = Math.max(0, menuBox.y - 16);
+    await page.mouse.move(parkX, parkY);
+
+    await page.keyboard.press('ArrowDown');
+
+    await expect(openPrItem).toHaveClass(activeClassRegex);
+    await expect(openWorkflowItem).not.toHaveClass(activeClassRegex);
+
+    await captureScreenshot(page, 'context-menu-keyboard-navigation');
+  });
+
   test('context menu keeps danger separator when cancel action is absent', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     await injectTaskStates(page, [
