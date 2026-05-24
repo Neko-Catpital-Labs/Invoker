@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { createTaskState, type TaskState } from '@invoker/workflow-graph';
 import {
-  INVALIDATION_POLICIES,
   planInvalidation,
   withSchedulerEnqueueCandidates,
 } from '../invalidation-plan.js';
+import { ACTION_SPECS } from '../invalidation-policy.js';
 
 function task(
   id: string,
@@ -23,28 +23,23 @@ function task(
 
 describe('InvalidationPlan policy registry', () => {
   it('registers invalidating recreate/retry and schedule-only policies', () => {
-    expect(INVALIDATION_POLICIES.recreateWorkflow).toMatchObject({
-      action: 'recreateWorkflow',
+    expect(ACTION_SPECS.recreateWorkflow).toMatchObject({
       scope: 'workflow',
       mode: 'recreate',
     });
-    expect(INVALIDATION_POLICIES.recreateTask).toMatchObject({
-      action: 'recreateTask',
+    expect(ACTION_SPECS.recreateTask).toMatchObject({
       scope: 'task',
       mode: 'recreate',
     });
-    expect(INVALIDATION_POLICIES.retryWorkflow).toMatchObject({
-      action: 'retryWorkflow',
+    expect(ACTION_SPECS.retryWorkflow).toMatchObject({
       scope: 'workflow',
       mode: 'retry',
     });
-    expect(INVALIDATION_POLICIES.retryTask).toMatchObject({
-      action: 'retryTask',
+    expect(ACTION_SPECS.retryTask).toMatchObject({
       scope: 'task',
       mode: 'retry',
     });
-    expect(INVALIDATION_POLICIES.scheduleOnly).toMatchObject({
-      action: 'scheduleOnly',
+    expect(ACTION_SPECS.scheduleOnly).toMatchObject({
       scope: 'task',
       mode: 'scheduleOnly',
     });
