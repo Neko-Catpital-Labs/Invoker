@@ -569,6 +569,30 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'workflow-context-menu-organization');
   });
 
+  test('context menu keyboard navigation highlights selected item', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+
+    const menu = await openContextMenu(page, page.locator('[data-testid^="workflow-node-"]'));
+
+    // Both menus share the same active-item marker: the focused button gets the
+    // `bg-gray-700` class as a standalone token (un-focused buttons keep
+    // `hover:bg-gray-700` instead, which the regex anchors below rule out).
+    const activeClass = /(^|\s)bg-gray-700($|\s)/;
+    const openWorkflow = page.getByRole('menuitem', { name: 'Open Workflow' });
+    const openPr = page.getByRole('menuitem', { name: 'Open PR' });
+
+    // Auto-focus lands on the first enabled menuitem.
+    await expect(openWorkflow).toHaveClass(activeClass);
+    await expect(openPr).not.toHaveClass(activeClass);
+
+    // ArrowDown moves the highlight to the next enabled menuitem.
+    await menu.press('ArrowDown');
+    await expect(openPr).toHaveClass(activeClass);
+    await expect(openWorkflow).not.toHaveClass(activeClass);
+
+    await captureScreenshot(page, 'context-menu-keyboard-navigation');
+  });
+
   test('context menu keeps danger separator when cancel action is absent', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     await injectTaskStates(page, [
