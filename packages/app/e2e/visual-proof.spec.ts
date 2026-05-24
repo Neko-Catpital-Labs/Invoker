@@ -114,6 +114,22 @@ const REVIEW_READY_WORKFLOW_PR_PLAN = {
   ],
 };
 
+/** Workflow with a merge gate so its rollup status can be driven via injectTaskStates. */
+const STATUS_COLOR_PARITY_PLAN = {
+  name: 'Status color parity workflow',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'pull_request' as const,
+  mergeMode: 'external_review',
+  tasks: [
+    {
+      id: 'scp-work',
+      description: 'Work that feeds the merge gate',
+      command: 'echo scp',
+      dependencies: [] as string[],
+    },
+  ],
+};
+
 /** Plan for queue-action-surface hardening: combines canonical states, dependency relationships, and destructive actions. */
 const QUEUE_HARDENING_PLAN = {
   name: 'Queue Hardening Visual Proof',
@@ -490,6 +506,46 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByRole('link', { name: reviewUrl })).toHaveAttribute('href', reviewUrl);
 
     await captureScreenshot(page, 'review-ready-workflow-pr-sidebar');
+  });
+
+  test('workflow-task-status-color-parity — workflow and task review_ready share palette', async ({ page }) => {
+    const workflowId = await loadPlanAndSelectWorkflow(page, STATUS_COLOR_PARITY_PLAN);
+    await page
+      .locator('.react-flow__node[data-testid$="scp-work"]')
+      .first()
+      .waitFor({ state: 'visible', timeout: 15000 });
+
+    const now = new Date();
+    const earlier = new Date(Date.now() - 5000);
+    await injectTaskStates(page, [
+      {
+        taskId: 'scp-work',
+        changes: {
+          status: 'completed',
+          execution: { startedAt: earlier, completedAt: now },
+        },
+      },
+      {
+        taskId: `__merge__${workflowId}`,
+        changes: {
+          status: 'review_ready',
+          execution: { startedAt: now, reviewUrl: 'https://github.com/Neko-Catpital-Labs/Invoker/pull/626' },
+        },
+      },
+    ]);
+
+    // Workflow-level surface: workflow node rolls up to review_ready.
+    const wfNode = workflowNode(page, workflowId);
+    await expect(wfNode).toBeVisible();
+    await expect(wfNode.getByText('review ready')).toBeVisible();
+    await expect(page.getByTestId('workflow-inspector-status-label')).toContainText('review ready');
+
+    // Task-level surface: merge gate task node renders the task review_ready label.
+    const miniDag = page.getByTestId('selected-workflow-mini-dag');
+    await expect(miniDag).toBeVisible();
+    await expect(miniDag.getByText('REVIEW READY')).toBeVisible();
+
+    await captureScreenshot(page, 'workflow-task-status-color-parity');
   });
 
   test('interactive-status-hues — fixing-with-ai, needs-input, awaiting-approval', async ({ page }) => {
