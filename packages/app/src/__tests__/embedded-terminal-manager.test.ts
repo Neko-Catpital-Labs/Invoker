@@ -502,6 +502,55 @@ describe('EmbeddedTerminalManager', () => {
       expect(mgr.get(session.sessionId)).toBeUndefined();
       expect(mgr.list()).toHaveLength(0);
     });
+
+    // Regression coverage for the GUI PTY race documented in
+    // scripts/repro/repro-gui-open-terminal-pty-race.sh. The renderer pane
+    // subscribes to `invoker:terminal-output` only after `openTerminal`
+    // resolves and React mounts the pane. Any frame emitted by the backend
+    // before that point used to be dropped on the floor — the regression
+    // here pins the contract that the bounded replay snapshot returned with
+    // the descriptor lets a late consumer seed itself.
+    it('replays FIRST_FRAME_FROM_PTY emitted synchronously during spawn and lets a late consumer seed from the snapshot', () => {
+      const FIRST_FRAME = 'FIRST_FRAME_FROM_PTY\n';
+      let emitFromBackend: ((data: string) => void) | undefined;
+      const backend: EmbeddedTerminalBackend = {
+        name: 'pty',
+        spawn: (opts) => {
+          // Capture the manager-supplied emit so the test can drive
+          // subsequent frames after openOrReuse resolves.
+          emitFromBackend = opts.emitOutput;
+          // Emit synchronously, before spawn() returns — this is the worst
+          // case: even an in-process listener attached immediately after
+          // openOrReuse would have missed this frame without the buffer.
+          opts.emitOutput(FIRST_FRAME);
+          return { write: () => {}, resize: () => {}, close: () => {} };
+        },
+      };
+      const mgr = new EmbeddedTerminalManager({ backend });
+
+      const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+
+      // A late consumer (renderer-style) attaches AFTER openOrReuse resolves.
+      const lateEvents: string[] = [];
+      mgr.on('output', (e) => lateEvents.push(e.data));
+
+      // The first frame was emitted before the consumer attached, so live
+      // events cannot deliver it — this is the race the buffer guards.
+      expect(lateEvents).toEqual([]);
+
+      // The descriptor carries the bounded replay snapshot the consumer
+      // uses to seed its terminal pane.
+      expect(session.outputSnapshot).toBe(FIRST_FRAME);
+
+      // Once seeded from the snapshot, subsequent live events arrive
+      // through the normal output channel.
+      emitFromBackend?.('post-mount-frame\n');
+      expect(lateEvents).toEqual(['post-mount-frame\n']);
+
+      // The late consumer's full reconstructed view = seed + live frames.
+      const reconstructed = (session.outputSnapshot ?? '') + lateEvents.join('');
+      expect(reconstructed).toBe(`${FIRST_FRAME}post-mount-frame\n`);
+    });
   });
 });
 
