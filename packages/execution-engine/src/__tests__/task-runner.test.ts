@@ -1136,6 +1136,8 @@ describe('TaskRunner', () => {
     it('suppresses metadata write and failed response when selectedAttemptId has advanced', async () => {
       const handleWorkerResponse = vi.fn();
       const updateTask = vi.fn();
+      const appendTaskOutput = vi.fn();
+      const logEvent = vi.fn();
       // Orchestrator returns a task whose selectedAttemptId has moved forward
       const orchestrator = {
         getTask: () => makeTask({
@@ -1162,7 +1164,7 @@ describe('TaskRunner', () => {
 
       const runner = new TaskRunner({
         orchestrator: orchestrator as any,
-        persistence: { updateTask } as any,
+        persistence: { updateTask, appendTaskOutput, logEvent } as any,
         executorRegistry: registry as any,
         cwd: '/tmp',
       });
@@ -1185,6 +1187,20 @@ describe('TaskRunner', () => {
       );
       // Failed WorkResponse must NOT be emitted
       expect(handleWorkerResponse).not.toHaveBeenCalled();
+      expect(appendTaskOutput).toHaveBeenCalledWith(
+        'stale-1',
+        expect.stringContaining('Executor startup failed (ssh): SSH connection refused'),
+      );
+      expect(logEvent).toHaveBeenCalledWith('stale-1', 'task.executor.startup-failure-stale', {
+        attemptId: 'attempt-1',
+        generation: 0,
+        runnerKind: 'ssh',
+        workspacePath: '/tmp/stale-worktree',
+        branch: 'experiment/stale-branch',
+        agentSessionId: undefined,
+        containerId: undefined,
+        error: 'SSH connection refused',
+      });
     });
 
     it('suppresses metadata write and failed response when generation has advanced', async () => {

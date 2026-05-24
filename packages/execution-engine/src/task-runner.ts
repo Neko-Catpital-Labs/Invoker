@@ -528,7 +528,7 @@ export class TaskRunner {
     this.launchingAttemptIds.add(attemptId);
     this.callbacks.onLaunchAccepted?.(task.id);
     try {
-      await this.executeTaskInner(task, attemptId, bench, dispatchOpts);
+      await this.executeTaskInner(task, attemptId, startGeneration, bench, dispatchOpts);
       bench('executeTask.innerReturned');
     } catch (err) {
       bench('executeTask.failed', {
@@ -608,6 +608,7 @@ export class TaskRunner {
   private async executeTaskInner(
     task: TaskState,
     attemptId: string,
+    startGeneration: number = task.execution.generation ?? 0,
     bench: (phase: string, metadata?: Record<string, unknown>) => void = () => {},
     dispatchOpts?: LaunchDispatchOptions,
   ): Promise<void> {
@@ -744,7 +745,6 @@ export class TaskRunner {
     // on the attempt row. Reconciliation paths can then observe the branch
     // even if the executor crashes mid-startup.
     let branchPersistedEarly = false;
-    const startGeneration = task.execution.generation ?? 0;
     const onBranchResolved = (branch: string): void => {
       if (!branch || branchPersistedEarly) return;
       // Skip if the task has moved to a newer attempt/generation.
@@ -913,10 +913,23 @@ export class TaskRunner {
         // current.  If the task has moved to a newer attempt or generation
         // (e.g. via recreate-task), writing old workspace/branch metadata
         // would corrupt the live attempt's state.
-        if (
-          (meta.workspacePath || meta.branch || meta.agentSessionId || meta.containerId)
-          && !this.isLaunchStale(task.id, attemptId, task.execution.generation ?? 0)
-        ) {
+        const hasStartupFailureMetadata = Boolean(
+          meta.workspacePath || meta.branch || meta.agentSessionId || meta.containerId,
+        );
+        const staleStartupFailure = this.isLaunchStale(task.id, attemptId, startGeneration);
+        if (hasStartupFailureMetadata && staleStartupFailure) {
+          this.persistence.logEvent?.(task.id, 'task.executor.startup-failure-stale', {
+            attemptId,
+            generation: startGeneration,
+            runnerKind: executor.type,
+            workspacePath: meta.workspacePath,
+            branch: meta.branch,
+            agentSessionId: meta.agentSessionId,
+            containerId: meta.containerId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+        if (hasStartupFailureMetadata && !staleStartupFailure) {
           const execution: Record<string, string> = {};
           if (meta.workspacePath) execution.workspacePath = meta.workspacePath;
           if (meta.branch) execution.branch = meta.branch;

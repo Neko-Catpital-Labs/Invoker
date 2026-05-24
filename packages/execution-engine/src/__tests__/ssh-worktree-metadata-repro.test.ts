@@ -144,4 +144,94 @@ describe('SSH worktree metadata repro', () => {
       }),
     }));
   });
+
+  it('does not attach stale SSH startup failure metadata after selected attempt advances', async () => {
+    const ownerPath = '/home/invoker/.invoker/worktrees/049de5b865cc/experiment-wf-1-test-execution-engine-old';
+    const branch = 'experiment/wf-1/test-execution-engine-old';
+
+    const startupError = Object.assign(
+      new Error(
+        'SSH remote script failed (exit=128)\n' +
+          `STDERR:\nfatal: '${branch}' is already used by worktree at '${ownerPath}'\n`,
+      ),
+      { workspacePath: ownerPath, branch },
+    );
+    const failingExecutor = {
+      type: 'ssh',
+      start: vi.fn().mockRejectedValue(startupError),
+      onComplete: vi.fn(),
+      onOutput: vi.fn(),
+      onHeartbeat: vi.fn(),
+      kill: vi.fn(),
+      destroyAll: vi.fn(),
+    };
+
+    const launchedAttempt = makeTask({
+      id: 'wf-1/test-execution-engine',
+      status: 'running',
+      config: { command: 'pnpm test', runnerKind: 'ssh' },
+      execution: { selectedAttemptId: 'attempt-1', generation: 0 },
+    });
+    const currentAttempt = makeTask({
+      id: 'wf-1/test-execution-engine',
+      status: 'running',
+      config: { command: 'pnpm test', runnerKind: 'ssh' },
+      execution: {
+        selectedAttemptId: 'attempt-2',
+        generation: 0,
+        workspacePath: '/home/invoker/.invoker/worktrees/live-attempt-2',
+        branch: 'experiment/wf-1/test-execution-engine-new',
+      },
+    });
+
+    const updateTask = vi.fn();
+    const appendTaskOutput = vi.fn();
+    const logEvent = vi.fn();
+    const handleWorkerResponse = vi.fn();
+
+    const runner = new TaskRunner({
+      orchestrator: {
+        getTask: () => currentAttempt,
+        getAllTasks: () => [currentAttempt],
+        handleWorkerResponse,
+      } as any,
+      persistence: {
+        updateTask,
+        appendTaskOutput,
+        logEvent,
+      } as any,
+      executorRegistry: {
+        getDefault: () => failingExecutor,
+        get: () => failingExecutor,
+        getAll: () => [failingExecutor],
+      } as any,
+      cwd: '/tmp',
+    });
+
+    await runner.executeTask(launchedAttempt);
+
+    expect(updateTask).not.toHaveBeenCalledWith(
+      'wf-1/test-execution-engine',
+      expect.objectContaining({
+        execution: expect.objectContaining({
+          workspacePath: ownerPath,
+          branch,
+        }),
+      }),
+    );
+    expect(handleWorkerResponse).not.toHaveBeenCalled();
+    expect(appendTaskOutput).toHaveBeenCalledWith(
+      'wf-1/test-execution-engine',
+      expect.stringContaining('Executor startup failed (ssh): SSH remote script failed'),
+    );
+    expect(logEvent).toHaveBeenCalledWith(
+      'wf-1/test-execution-engine',
+      'task.executor.startup-failure-stale',
+      expect.objectContaining({
+        attemptId: 'attempt-1',
+        workspacePath: ownerPath,
+        branch,
+      }),
+    );
+  });
 });
