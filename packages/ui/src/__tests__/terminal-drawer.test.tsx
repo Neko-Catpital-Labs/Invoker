@@ -11,11 +11,22 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
+import { getMockTerminals, resetMockTerminals } from './helpers/mock-xterm.js';
 import type { WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
   return createReactFlowMock();
+});
+
+vi.mock('xterm', async () => {
+  const { createXtermMock } = await import('./helpers/mock-xterm.js');
+  return createXtermMock();
+});
+
+vi.mock('xterm-addon-fit', async () => {
+  const { createXtermAddonFitMock } = await import('./helpers/mock-xterm.js');
+  return createXtermAddonFitMock();
 });
 
 const { App } = await import('../App.js');
@@ -51,11 +62,13 @@ describe('Terminal drawer (component)', () => {
   beforeEach(() => {
     mock = createMockInvoker();
     mock.install();
+    resetMockTerminals();
   });
 
   afterEach(() => {
     mock.cleanup();
     vi.restoreAllMocks();
+    resetMockTerminals();
   });
 
   it('starts collapsed with no terminal pane visible', async () => {
@@ -155,6 +168,109 @@ describe('Terminal drawer (component)', () => {
       expect(alertSpy).toHaveBeenCalledWith('Task is still running.');
     });
     expect(screen.queryByTestId('terminal-tab-task-alpha')).not.toBeInTheDocument();
+  });
+
+  it('writes the session replay snapshot into xterm when the pane mounts', async () => {
+    const snapshot = 'previously-captured backend output\r\n';
+    (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      opened: true,
+      session: {
+        sessionId: 'mock-session-task-alpha',
+        taskId: 'task-alpha',
+        status: 'running',
+        mode: 'spawn',
+        attached: false,
+        createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+        outputSnapshot: snapshot,
+      },
+    });
+
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      expect(getMockTerminals()).toHaveLength(1);
+    });
+    const [term] = getMockTerminals();
+    expect(term.opened).toHaveLength(1);
+    expect(term.writeCalls).toEqual([snapshot]);
+    // Snapshot must be written before any subscription to live output, so the
+    // first (and only) write so far is the snapshot itself.
+    expect(term.writtenText()).toBe(snapshot);
+  });
+
+  it('does not write the snapshot again when the same pane re-renders', async () => {
+    const snapshot = 'snapshot-once\r\n';
+    (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      opened: true,
+      session: {
+        sessionId: 'mock-session-task-alpha',
+        taskId: 'task-alpha',
+        status: 'running',
+        mode: 'spawn',
+        attached: false,
+        createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+        outputSnapshot: snapshot,
+      },
+    });
+
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(getMockTerminals()).toHaveLength(1);
+    });
+
+    const [term] = getMockTerminals();
+    expect(term.writeCalls).toEqual([snapshot]);
+
+    // Trigger a parent re-render by firing a task delta that touches an
+    // unrelated piece of UI. The terminal session itself stays the same.
+    act(() => {
+      mock.fireDelta({
+        type: 'updated',
+        taskId: 'task-alpha',
+        changes: { description: 'Alpha description updated' },
+        taskStateVersion: 2,
+        previousTaskStateVersion: 1,
+      });
+    });
+
+    // Same xterm instance, no additional write — the snapshot must not
+    // duplicate.
+    expect(getMockTerminals()).toHaveLength(1);
+    expect(term.writeCalls).toEqual([snapshot]);
+    expect(term.writtenText()).toBe(snapshot);
+  });
+
+  it('opens xterm with no extra writes when the session descriptor has no snapshot', async () => {
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(getMockTerminals()).toHaveLength(1);
+    });
+
+    const [term] = getMockTerminals();
+    expect(term.opened).toHaveLength(1);
+    expect(term.writeCalls).toEqual([]);
   });
 
   it('opens the drawer when the context-menu Open Terminal action is used', async () => {

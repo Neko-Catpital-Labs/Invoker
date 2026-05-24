@@ -21,6 +21,7 @@ import {
   EmbeddedTerminalManager,
   createBashTerminalBackend,
   createPtyTerminalBackend,
+  TERMINAL_REPLAY_BUFFER_MAX_BYTES,
   type EmbeddedTerminalBackend,
   type BashSpawnFn,
   type PtyLike,
@@ -381,6 +382,167 @@ describe('EmbeddedTerminalManager', () => {
     // Close unsubscribes from the executor
     mgr.close(session.sessionId);
     expect(unsubscribed).toBe(1);
+  });
+
+  // ── Replay buffer: bounded snapshot for late renderer subscribers ──
+
+  it('captures output emitted synchronously during backend spawn in the returned descriptor', () => {
+    // A backend that mimics fast PTY startup: it writes a startup banner
+    // synchronously inside spawn(), before openOrReuse() returns. Without the
+    // replay buffer this data is lost to any subscriber that mounts later.
+    const earlyBanner = 'welcome to the embedded terminal\n';
+    const backend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: ({ emitOutput }) => {
+        emitOutput(earlyBanner);
+        return { write: () => {}, resize: () => {}, close: () => {} };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.openOrReuse({ taskId: 't-early', spec: {}, cwd: '/tmp' });
+
+    expect(session.outputSnapshot).toBe(earlyBanner);
+    expect(session.status).toBe('running');
+  });
+
+  it('terminal-list descriptors include the same replay snapshot for live sessions', () => {
+    const earlyBanner = 'startup-line-1\nstartup-line-2\n';
+    const backend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: ({ emitOutput }) => {
+        emitOutput(earlyBanner);
+        return { write: () => {}, resize: () => {}, close: () => {} };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+    const session = mgr.openOrReuse({ taskId: 't-list', spec: {}, cwd: '/tmp' });
+
+    const listed = mgr.list();
+
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.sessionId).toBe(session.sessionId);
+    expect(listed[0]?.outputSnapshot).toBe(earlyBanner);
+  });
+
+  it('appends post-spawn output to the same buffer surfaced by list()', () => {
+    const child = createFakeChild();
+    const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+    const mgr = new EmbeddedTerminalManager({
+      backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+    });
+
+    const session = mgr.openOrReuse({ taskId: 't-append', spec: {}, cwd: '/tmp' });
+    child.stdout.emit('data', Buffer.from('after-mount-1\n'));
+    child.stderr.emit('data', Buffer.from('after-mount-2\n'));
+
+    const listed = mgr.list();
+    expect(listed[0]?.sessionId).toBe(session.sessionId);
+    expect(listed[0]?.outputSnapshot).toBe('after-mount-1\nafter-mount-2\n');
+  });
+
+  it('does not throw when the backend signals exit synchronously during spawn', () => {
+    // The pre-replay-buffer manager closed over a still-uninitialized `state`
+    // variable when handing emitExit to the backend, so a synchronous
+    // emitExit() during spawn() crashed with a ReferenceError. This test
+    // guards that ordering bug.
+    let receivedSession: ReturnType<EmbeddedTerminalManager['openOrReuse']> | undefined;
+    const backend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: ({ emitOutput, emitExit }) => {
+        emitOutput('partial-output-before-exit\n');
+        emitExit(0);
+        return { write: () => {}, resize: () => {}, close: () => {} };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    expect(() => {
+      receivedSession = mgr.openOrReuse({ taskId: 't-sync-exit', spec: {}, cwd: '/tmp' });
+    }).not.toThrow();
+
+    // The descriptor should reflect the synchronous exit AND retain the
+    // output that was emitted before exit, so a late-mounting pane can still
+    // see what the process printed.
+    expect(receivedSession?.status).toBe('exited');
+    expect(receivedSession?.exitCode).toBe(0);
+    expect(receivedSession?.outputSnapshot).toBe('partial-output-before-exit\n');
+    // Sessions exiting synchronously must not stay in the live list.
+    expect(mgr.list()).toHaveLength(0);
+  });
+
+  it('closes the real backend process if it returned after a synchronous exit', () => {
+    const realClose = vi.fn();
+    const backend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: ({ emitExit }) => {
+        emitExit(0);
+        return { write: () => {}, resize: () => {}, close: realClose };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    mgr.openOrReuse({ taskId: 't-sync-exit-close', spec: {}, cwd: '/tmp' });
+
+    expect(realClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounds the replay buffer to TERMINAL_REPLAY_BUFFER_MAX_BYTES', () => {
+    const child = createFakeChild();
+    const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+    const mgr = new EmbeddedTerminalManager({
+      backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+    });
+
+    const session = mgr.openOrReuse({ taskId: 't-bound', spec: {}, cwd: '/tmp' });
+
+    // Emit ~3x the buffer budget so the rolling window must drop the head.
+    const chunk = 'A'.repeat(8 * 1024);
+    const chunkCount = Math.ceil((TERMINAL_REPLAY_BUFFER_MAX_BYTES * 3) / chunk.length);
+    for (let i = 0; i < chunkCount; i += 1) {
+      child.stdout.emit('data', Buffer.from(chunk));
+    }
+    // Then emit a unique tail marker we expect to still be present.
+    const tailMarker = 'TAIL-MARKER-XYZ';
+    child.stdout.emit('data', Buffer.from(tailMarker));
+
+    const snapshot = mgr.get(session.sessionId)?.outputSnapshot ?? '';
+    expect(snapshot.length).toBeLessThanOrEqual(TERMINAL_REPLAY_BUFFER_MAX_BYTES);
+    expect(snapshot.endsWith(tailMarker)).toBe(true);
+    // And we should have actually exceeded a chunk's worth of growth before
+    // trimming, i.e. the buffer is meaningfully filled, not empty.
+    expect(snapshot.length).toBeGreaterThan(chunk.length);
+  });
+
+  it('attached-mode descriptor exposes a replay snapshot accumulated from executor output', () => {
+    const outputCallbacks: Array<(data: string) => void> = [];
+    const executor: Pick<Executor, 'onOutput' | 'sendInput'> & { type: string } = {
+      type: 'fake',
+      onOutput(_handle: ExecutorHandle, cb: (data: string) => void) {
+        outputCallbacks.push(cb);
+        return () => {};
+      },
+      sendInput() {},
+    };
+    const handle: ExecutorHandle = { executionId: 'exec-rep', taskId: 'task-rep' };
+    const mgr = new EmbeddedTerminalManager({
+      backend: createBashTerminalBackend({
+        spawnFn: () => {
+          throw new Error('bash should not be spawned in attached mode');
+        },
+      }),
+    });
+
+    const session = mgr.openOrReuse({
+      taskId: 'task-rep',
+      spec: { cwd: '/tmp/wt' },
+      cwd: '/tmp/wt',
+      attach: { handle, executor: executor as Executor },
+    });
+    outputCallbacks[0]?.('attached-output-line\n');
+
+    expect(mgr.get(session.sessionId)?.outputSnapshot).toBe('attached-output-line\n');
+    expect(mgr.list()[0]?.outputSnapshot).toBe('attached-output-line\n');
   });
 
   it('write() rejects unknown sessions', () => {
