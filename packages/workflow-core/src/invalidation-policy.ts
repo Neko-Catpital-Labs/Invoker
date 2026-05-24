@@ -144,98 +144,157 @@ export interface InvalidationDeps {
   ) => TaskState[] | Promise<TaskState[]>;
 }
 
-const TASK_ACTIONS = new Set<InvalidationAction>(['retryTask', 'recreateTask']);
-const WORKFLOW_ACTIONS = new Set<InvalidationAction>([
-  'retryWorkflow',
-  'recreateWorkflow',
-  'recreateWorkflowFromFreshBase',
-  'workflowFork',
-]);
+// `applyInvalidation` is a reducer over a per-action ordered list of
+// `Stage`s declared in `ACTION_SPECS`. Adding a new
+// `InvalidationAction` is a single table entry; "cancel-first" and
+// "every invalidating action cascades across workflows" are asserted
+// as property tests over the spec table.
+//
+//   validateScope            → reject mismatched (scope, action) combos
+//   cancelInFlight           → run `deps.cancelInFlight(scope, id)`
+//   applyPrimitive           → dispatch to the matching dep and capture
+//                              its returned `TaskState[]`
+//   cascadeAcrossWorkflows   → run `deps.cascadeDownstream` if provided
 
-export async function applyInvalidation(
-  scope: InvalidationScope,
-  action: InvalidationAction,
-  id: string,
+export type InvalidationStage =
+  | 'validateScope'
+  | 'cancelInFlight'
+  | 'applyPrimitive'
+  | 'cascadeAcrossWorkflows';
+
+export interface ActionSpec {
+  /** Required `scope` for this action. */
+  readonly scope: InvalidationScope;
+  /** Ordered list of stages executed by `applyInvalidation`. */
+  readonly stages: readonly InvalidationStage[];
+  /**
+   * True iff this action propagates to transitive downstream
+   * workflows. Asserted to be equivalent to
+   * `stages.includes('cascadeAcrossWorkflows')` by the property tests
+   * in `invalidation-policy.test.ts`.
+   */
+  readonly cascadesAcrossWorkflows: boolean;
+}
+
+const NON_INVALIDATING_TASK_STAGES: readonly InvalidationStage[] = [
+  'validateScope',
+  'applyPrimitive',
+];
+
+const INVALIDATING_STAGES: readonly InvalidationStage[] = [
+  'validateScope',
+  'cancelInFlight',
+  'applyPrimitive',
+  'cascadeAcrossWorkflows',
+];
+
+export const ACTION_SPECS: Readonly<Record<InvalidationAction, ActionSpec>> = Object.freeze({
+  none:                          { scope: 'none',     stages: ['validateScope'] as const, cascadesAcrossWorkflows: false },
+  scheduleOnly:                  { scope: 'task',     stages: NON_INVALIDATING_TASK_STAGES, cascadesAcrossWorkflows: false },
+  fixApprove:                    { scope: 'task',     stages: NON_INVALIDATING_TASK_STAGES, cascadesAcrossWorkflows: false },
+  fixReject:                     { scope: 'task',     stages: NON_INVALIDATING_TASK_STAGES, cascadesAcrossWorkflows: false },
+  retryTask:                     { scope: 'task',     stages: INVALIDATING_STAGES,         cascadesAcrossWorkflows: true  },
+  recreateTask:                  { scope: 'task',     stages: INVALIDATING_STAGES,         cascadesAcrossWorkflows: true  },
+  retryWorkflow:                 { scope: 'workflow', stages: INVALIDATING_STAGES,         cascadesAcrossWorkflows: true  },
+  recreateWorkflow:              { scope: 'workflow', stages: INVALIDATING_STAGES,         cascadesAcrossWorkflows: true  },
+  recreateWorkflowFromFreshBase: { scope: 'workflow', stages: INVALIDATING_STAGES,         cascadesAcrossWorkflows: true  },
+  workflowFork:                  { scope: 'workflow', stages: INVALIDATING_STAGES,         cascadesAcrossWorkflows: true  },
+});
+
+interface PipelineCtx {
+  readonly scope: InvalidationScope;
+  readonly action: InvalidationAction;
+  readonly id: string;
+  /**
+   * Holds the array reference returned by `applyPrimitive`. Stays a
+   * mutable array (the type the public `applyInvalidation` returns
+   * verbatim) so callers that compare via `===` to the dep's return
+   * value keep observing the same reference, matching the historical
+   * imperative implementation.
+   */
+  readonly started: TaskState[];
+}
+
+type StageHandler = (ctx: PipelineCtx, deps: InvalidationDeps) => Promise<PipelineCtx>;
+
+const STAGE_HANDLERS: Readonly<Record<InvalidationStage, StageHandler>> = Object.freeze({
+  validateScope: async (ctx) => {
+    const expected = ACTION_SPECS[ctx.action].scope;
+    if (ctx.scope === expected) return ctx;
+    // Preserve the historical 'none' message so existing tests keep
+    // matching it verbatim.
+    if (ctx.action === 'none') {
+      throw new Error(
+        `applyInvalidation: scope must be 'none' when action is 'none' (got scope='${ctx.scope}')`,
+      );
+    }
+    throw new Error(
+      `applyInvalidation: action '${ctx.action}' requires scope '${expected}' (got '${ctx.scope}')`,
+    );
+  },
+  cancelInFlight: async (ctx, deps) => {
+    await deps.cancelInFlight(ctx.scope, ctx.id);
+    return ctx;
+  },
+  applyPrimitive: async (ctx, deps) => {
+    const started = await invokePrimitive(ctx, deps);
+    // Preserve referential identity with the dep's return value:
+    // tests (and callers) rely on `out === deps.<action>(id)`.
+    return { ...ctx, started: started as TaskState[] };
+  },
+  cascadeAcrossWorkflows: async (ctx, deps) => {
+    if (deps.cascadeDownstream) {
+      await deps.cascadeDownstream(ctx.scope, ctx.id);
+    }
+    return ctx;
+  },
+});
+
+async function invokePrimitive(
+  ctx: PipelineCtx,
   deps: InvalidationDeps,
 ): Promise<TaskState[]> {
-  if (action === 'none') {
-    if (scope !== 'none') {
-      throw new Error(
-        `applyInvalidation: scope must be 'none' when action is 'none' (got scope='${scope}')`,
-      );
+  switch (ctx.action) {
+    case 'none':
+      // `'none'` declares no `applyPrimitive` stage in `ACTION_SPECS`,
+      // so this branch is unreachable. Keep it for exhaustiveness.
+      return [];
+    case 'scheduleOnly': {
+      if (!deps.scheduleOnly) {
+        // Step 15: production callers wire this dep via
+        // `buildInvalidationDeps` (`packages/app/src/workflow-actions.ts`)
+        // to `Orchestrator.autoStartExternallyUnblockedReadyTasks`. This
+        // branch is reachable only from focused unit tests that build a
+        // partial `InvalidationDeps` without the scheduler dep.
+        throw new Error(
+          "applyInvalidation: 'scheduleOnly' dep is missing. " +
+            'Production callers wire this via buildInvalidationDeps in ' +
+            '@invoker/app/workflow-actions; tests must supply ' +
+            'deps.scheduleOnly to use this action.',
+        );
+      }
+      return await deps.scheduleOnly(ctx.id);
     }
-    return [];
-  }
-
-  if (action === 'scheduleOnly') {
-    if (scope !== 'task') {
-      throw new Error(
-        `applyInvalidation: action 'scheduleOnly' requires scope 'task' (got '${scope}')`,
-      );
+    case 'fixApprove':
+    case 'fixReject': {
+      const dep = ctx.action === 'fixApprove' ? deps.fixApprove : deps.fixReject;
+      if (!dep) {
+        throw new Error(
+          `applyInvalidation: '${ctx.action}' dep is missing. ` +
+            'Production callers wire this via buildInvalidationDeps in ' +
+            '@invoker/app/workflow-actions; tests must supply the dep to use this action.',
+        );
+      }
+      return await dep(ctx.id);
     }
-    if (!deps.scheduleOnly) {
-      // Step 15: production callers wire this dep via
-      // `buildInvalidationDeps` (`packages/app/src/workflow-actions.ts`)
-      // to `Orchestrator.autoStartExternallyUnblockedReadyTasks`. This
-      // branch is reachable only from focused unit tests that build a
-      // partial `InvalidationDeps` without the scheduler dep.
-      throw new Error(
-        "applyInvalidation: 'scheduleOnly' dep is missing. " +
-          'Production callers wire this via buildInvalidationDeps in ' +
-          '@invoker/app/workflow-actions; tests must supply ' +
-          'deps.scheduleOnly to use this action.',
-      );
-    }
-    // Per chart's "Change external gate policy" row: scheduling
-    // edits do NOT cancel active work and do NOT bump generation.
-    // We deliberately skip `deps.cancelInFlight` here.
-    return await deps.scheduleOnly(id);
-  }
-
-  if (action === 'fixApprove' || action === 'fixReject') {
-    if (scope !== 'task') {
-      throw new Error(
-        `applyInvalidation: action '${action}' requires scope 'task' (got '${scope}')`,
-      );
-    }
-    const dep = action === 'fixApprove' ? deps.fixApprove : deps.fixReject;
-    if (!dep) {
-      throw new Error(
-        `applyInvalidation: '${action}' dep is missing. ` +
-          'Production callers wire this via buildInvalidationDeps in ' +
-          '@invoker/app/workflow-actions; tests must supply the dep to use this action.',
-      );
-    }
-    return await dep(id);
-  }
-
-  if (TASK_ACTIONS.has(action) && scope !== 'task') {
-    throw new Error(
-      `applyInvalidation: action '${action}' requires scope 'task' (got '${scope}')`,
-    );
-  }
-  if (WORKFLOW_ACTIONS.has(action) && scope !== 'workflow') {
-    throw new Error(
-      `applyInvalidation: action '${action}' requires scope 'workflow' (got '${scope}')`,
-    );
-  }
-
-  await deps.cancelInFlight(scope, id);
-
-  let started: TaskState[];
-  switch (action) {
     case 'retryTask':
-      started = await deps.retryTask(id);
-      break;
+      return await deps.retryTask(ctx.id);
     case 'recreateTask':
-      started = await deps.recreateTask(id);
-      break;
+      return await deps.recreateTask(ctx.id);
     case 'retryWorkflow':
-      started = await deps.retryWorkflow(id);
-      break;
+      return await deps.retryWorkflow(ctx.id);
     case 'recreateWorkflow':
-      started = await deps.recreateWorkflow(id);
-      break;
+      return await deps.recreateWorkflow(ctx.id);
     case 'recreateWorkflowFromFreshBase': {
       if (!deps.recreateWorkflowFromFreshBase) {
         throw new Error(
@@ -243,8 +302,7 @@ export async function applyInvalidation(
             'Provide deps.recreateWorkflowFromFreshBase to use this action.',
         );
       }
-      started = await deps.recreateWorkflowFromFreshBase(id);
-      break;
+      return await deps.recreateWorkflowFromFreshBase(ctx.id);
     }
     case 'workflowFork': {
       if (!deps.workflowFork) {
@@ -259,20 +317,21 @@ export async function applyInvalidation(
             'deps.workflowFork to use this action.',
         );
       }
-      started = await deps.workflowFork(id);
-      break;
+      return await deps.workflowFork(ctx.id);
     }
   }
+}
 
-  // Cross-workflow cascade: every invalidating action above (six in
-  // total) must propagate to transitive downstream workflows so their
-  // tasks are cancel-cancel-then-reset-to-pending and re-blocked by
-  // the existing external-dependency gate. Non-invalidating actions
-  // (`'none'`, `'scheduleOnly'`, `'fixApprove'`, `'fixReject'`)
-  // already returned above and never reach this point. The dep is
-  // optional so partial test wiring keeps working.
-  if (deps.cascadeDownstream) {
-    await deps.cascadeDownstream(scope, id);
+export async function applyInvalidation(
+  scope: InvalidationScope,
+  action: InvalidationAction,
+  id: string,
+  deps: InvalidationDeps,
+): Promise<TaskState[]> {
+  const spec = ACTION_SPECS[action];
+  let ctx: PipelineCtx = { scope, action, id, started: [] };
+  for (const stage of spec.stages) {
+    ctx = await STAGE_HANDLERS[stage](ctx, deps);
   }
-  return started;
+  return ctx.started;
 }
