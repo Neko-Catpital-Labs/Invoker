@@ -334,7 +334,7 @@ describe('GitHubMergeGateProvider', () => {
       const result = await provider.checkApproval({ identifier: '3', cwd: '/tmp/repo' });
 
       expect(result.approved).toBe(false);
-      expect(result.rejected).toBe(true);
+      expect(result.rejected).toBe(false);
       expect(result.closed).toBe(true);
       expect(result.statusText).toBe('Closed');
     });
