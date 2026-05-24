@@ -390,6 +390,75 @@ describe('EmbeddedTerminalManager', () => {
     const res = mgr.write('not-a-session', 'x');
     expect(res).toEqual({ ok: false, reason: expect.stringContaining('Unknown session') });
   });
+
+  it('captures backend output emitted synchronously during spawn in the returned descriptor snapshot', () => {
+    const backend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: (opts) => {
+        opts.emitOutput('early-output\n');
+        opts.emitOutput('more\n');
+        return { write: () => {}, resize: () => {}, close: () => {} };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+
+    expect(session.outputSnapshot).toBe('early-output\nmore\n');
+  });
+
+  it('list() exposes the same replay snapshot for live sessions', () => {
+    const backend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: (opts) => {
+        opts.emitOutput('seed');
+        return { write: () => {}, resize: () => {}, close: () => {} };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+    const list = mgr.list();
+
+    expect(list).toHaveLength(1);
+    expect(list[0]?.sessionId).toBe(session.sessionId);
+    expect(list[0]?.outputSnapshot).toBe('seed');
+  });
+
+  it('does not throw when the backend emits exit synchronously during spawn', () => {
+    const backend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: (opts) => {
+        opts.emitExit(0);
+        return { write: () => {}, resize: () => {}, close: () => {} };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    expect(() => mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' })).not.toThrow();
+    // Synchronous exit removes the session from the live list immediately.
+    expect(mgr.list()).toHaveLength(0);
+  });
+
+  it('bounds the replay snapshot so it cannot grow without limit', () => {
+    const chunk = 'x'.repeat(40 * 1024); // 40 KiB chunks, ~200 KiB total
+    const backend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: (opts) => {
+        for (let i = 0; i < 5; i += 1) opts.emitOutput(chunk);
+        opts.emitOutput('TAIL');
+        return { write: () => {}, resize: () => {}, close: () => {} };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+
+    expect(session.outputSnapshot).toBeDefined();
+    expect(session.outputSnapshot!.length).toBeLessThanOrEqual(64 * 1024);
+    // Trimming keeps the most recent bytes — the tail marker must survive.
+    expect(session.outputSnapshot!.endsWith('TAIL')).toBe(true);
+  });
 });
 
 // ── Deterministic GUI route: resolveTaskTerminalSpec + EmbeddedTerminalManager ──
