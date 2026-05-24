@@ -13,10 +13,10 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: {
-          // Split large vendor chunks to reduce memory pressure
-          react: ['react', 'react-dom'],
+          // Keep @xyflow/react in its own vendor chunk so the startup
+          // entry stays focused on app code; elkjs is dynamically imported
+          // by lib/layout.ts so Rollup splits it automatically.
           xyflow: ['@xyflow/react'],
-          xterm: ['xterm', 'xterm-addon-fit'],
         },
       },
     },
