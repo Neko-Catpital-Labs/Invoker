@@ -126,19 +126,17 @@ export interface EmbeddedTerminalManagerOptions {
   defaultShell?: string;
 }
 
-function describeSession(state: SessionState): TerminalSessionDescriptor {
-  return {
-    sessionId: state.sessionId,
-    taskId: state.taskId,
-    status: state.status,
-    exitCode: state.exitCode,
-    cwd: state.cwd,
-    command: state.spec.command,
-    args: state.spec.args,
-    mode: state.mode,
-    attached: state.mode === 'attached',
-    createdAt: state.createdAt,
-  };
+/**
+ * Maximum byte length of the per-session replay snapshot. The most recent
+ * output is preserved when this limit is exceeded so the buffer can never
+ * grow without bound, regardless of how chatty the backend is.
+ */
+const REPLAY_BUFFER_MAX_BYTES = 64 * 1024;
+
+function appendBounded(prev: string, data: string): string {
+  const next = prev + data;
+  if (next.length <= REPLAY_BUFFER_MAX_BYTES) return next;
+  return next.slice(next.length - REPLAY_BUFFER_MAX_BYTES);
 }
 
 class BashTerminalBackend implements EmbeddedTerminalBackend {
@@ -244,6 +242,13 @@ export function createPtyTerminalBackend(
 export class EmbeddedTerminalManager extends EventEmitter {
   private readonly sessions = new Map<string, SessionState>();
   private readonly targetIndex = new Map<string, string>();
+  /**
+   * Per-session replay buffer. Initialized to `''` before the backend is
+   * spawned so any output emitted synchronously during `spawn()` is captured
+   * and included in the descriptor returned by `openOrReuse()`. Trimmed to
+   * `REPLAY_BUFFER_MAX_BYTES` so memory stays bounded for live sessions.
+   */
+  private readonly outputSnapshots = new Map<string, string>();
   private readonly backend: EmbeddedTerminalBackend;
   private readonly defaultShell: string;
 
@@ -265,10 +270,11 @@ export class EmbeddedTerminalManager extends EventEmitter {
     if (existingId) {
       const existing = this.sessions.get(existingId);
       if (existing && existing.status === 'running') {
-        return describeSession(existing);
+        return this.describeSession(existing);
       }
       this.targetIndex.delete(targetKey);
       if (existing) this.sessions.delete(existingId);
+      this.outputSnapshots.delete(existingId);
     }
 
     const sessionId = randomUUID();
@@ -283,7 +289,24 @@ export class EmbeddedTerminalManager extends EventEmitter {
       status: 'running' as const,
     };
 
-    let state: SessionState;
+    // Initialize the replay buffer before the backend can emit anything so
+    // synchronous output during spawn is recorded.
+    this.outputSnapshots.set(sessionId, '');
+
+    // The backend may synchronously emit exit before we have assigned `state`.
+    // Defer the finalize call until state exists; record the exit so we can
+    // run it immediately after assignment. A holder object keeps the field
+    // mutable from the closure without confusing TypeScript flow analysis.
+    let state: SessionState | undefined;
+    const pending: { exit: { exitCode: number | undefined } | null } = { exit: null };
+    const handleExit = (exitCode: number | undefined) => {
+      if (state) {
+        this.finalizeSession(state, exitCode);
+      } else {
+        pending.exit = { exitCode };
+      }
+    };
+
     if (opts.attach) {
       const unsubscribe = opts.attach.executor.onOutput(opts.attach.handle, (data) => {
         this.emitOutput(sessionId, opts.taskId, data);
@@ -300,7 +323,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
         cwd: opts.cwd,
         defaultShell: this.defaultShell,
         emitOutput: (data) => this.emitOutput(sessionId, opts.taskId, data),
-        emitExit: (exitCode) => this.finalizeSession(state, exitCode),
+        emitExit: handleExit,
       });
       state = {
         ...base,
@@ -312,16 +335,26 @@ export class EmbeddedTerminalManager extends EventEmitter {
 
     this.sessions.set(sessionId, state);
     this.targetIndex.set(targetKey, sessionId);
-    return describeSession(state);
+
+    // Capture the descriptor — including the replay snapshot — before any
+    // deferred finalize, so the caller always sees output emitted during
+    // spawn even when the backend exited synchronously.
+    const descriptor = this.describeSession(state);
+
+    if (pending.exit !== null) {
+      this.finalizeSession(state, pending.exit.exitCode);
+    }
+
+    return descriptor;
   }
 
   list(): TerminalSessionDescriptor[] {
-    return Array.from(this.sessions.values()).map(describeSession);
+    return Array.from(this.sessions.values()).map((state) => this.describeSession(state));
   }
 
   get(sessionId: string): TerminalSessionDescriptor | undefined {
     const state = this.sessions.get(sessionId);
-    return state ? describeSession(state) : undefined;
+    return state ? this.describeSession(state) : undefined;
   }
 
   write(sessionId: string, data: string): { ok: boolean; reason?: string } {
@@ -374,6 +407,23 @@ export class EmbeddedTerminalManager extends EventEmitter {
     }
   }
 
+  private describeSession(state: SessionState): TerminalSessionDescriptor {
+    const outputSnapshot = this.outputSnapshots.get(state.sessionId);
+    return {
+      sessionId: state.sessionId,
+      taskId: state.taskId,
+      status: state.status,
+      exitCode: state.exitCode,
+      cwd: state.cwd,
+      command: state.spec.command,
+      args: state.spec.args,
+      mode: state.mode,
+      attached: state.mode === 'attached',
+      createdAt: state.createdAt,
+      outputSnapshot,
+    };
+  }
+
   private finalizeSession(state: SessionState, exitCode: number | undefined): void {
     if (state.status === 'exited') return;
     state.status = 'exited';
@@ -393,6 +443,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
       this.targetIndex.delete(state.targetKey);
     }
     this.sessions.delete(state.sessionId);
+    this.outputSnapshots.delete(state.sessionId);
 
     const payload: TerminalExitEvent = {
       sessionId: state.sessionId,
@@ -403,6 +454,10 @@ export class EmbeddedTerminalManager extends EventEmitter {
   }
 
   private emitOutput(sessionId: string, taskId: string, data: string): void {
+    const prev = this.outputSnapshots.get(sessionId);
+    if (prev !== undefined) {
+      this.outputSnapshots.set(sessionId, appendBounded(prev, data));
+    }
     const payload: TerminalOutputEvent = { sessionId, taskId, data };
     this.emit('output', payload);
   }
