@@ -126,7 +126,41 @@ export interface EmbeddedTerminalManagerOptions {
   defaultShell?: string;
 }
 
-function describeSession(state: SessionState): TerminalSessionDescriptor {
+/**
+ * Hard cap on the per-session replay buffer in characters. Sized so the
+ * snapshot covers typical startup banners and a few screens of scrollback
+ * while staying small enough to ship cheaply across IPC. The buffer is
+ * trimmed from the head once this cap is exceeded so memory stays bounded.
+ */
+const MAX_REPLAY_CHARS = 64 * 1024;
+
+class OutputBuffer {
+  private chunks: string[] = [];
+  private totalChars = 0;
+
+  append(data: string): void {
+    if (!data) return;
+    this.chunks.push(data);
+    this.totalChars += data.length;
+    while (this.totalChars > MAX_REPLAY_CHARS && this.chunks.length > 0) {
+      const oldest = this.chunks[0]!;
+      const excess = this.totalChars - MAX_REPLAY_CHARS;
+      if (oldest.length <= excess) {
+        this.chunks.shift();
+        this.totalChars -= oldest.length;
+      } else {
+        this.chunks[0] = oldest.slice(excess);
+        this.totalChars -= excess;
+      }
+    }
+  }
+
+  snapshot(): string {
+    return this.chunks.length === 1 ? this.chunks[0]! : this.chunks.join('');
+  }
+}
+
+function describeSession(state: SessionState, snapshot: string | undefined): TerminalSessionDescriptor {
   return {
     sessionId: state.sessionId,
     taskId: state.taskId,
@@ -138,6 +172,7 @@ function describeSession(state: SessionState): TerminalSessionDescriptor {
     mode: state.mode,
     attached: state.mode === 'attached',
     createdAt: state.createdAt,
+    outputSnapshot: snapshot,
   };
 }
 
@@ -244,6 +279,7 @@ export function createPtyTerminalBackend(
 export class EmbeddedTerminalManager extends EventEmitter {
   private readonly sessions = new Map<string, SessionState>();
   private readonly targetIndex = new Map<string, string>();
+  private readonly outputBuffers = new Map<string, OutputBuffer>();
   private readonly backend: EmbeddedTerminalBackend;
   private readonly defaultShell: string;
 
@@ -265,10 +301,13 @@ export class EmbeddedTerminalManager extends EventEmitter {
     if (existingId) {
       const existing = this.sessions.get(existingId);
       if (existing && existing.status === 'running') {
-        return describeSession(existing);
+        return describeSession(existing, this.getSnapshot(existing.sessionId));
       }
       this.targetIndex.delete(targetKey);
-      if (existing) this.sessions.delete(existingId);
+      if (existing) {
+        this.sessions.delete(existingId);
+        this.outputBuffers.delete(existingId);
+      }
     }
 
     const sessionId = randomUUID();
@@ -283,7 +322,14 @@ export class EmbeddedTerminalManager extends EventEmitter {
       status: 'running' as const,
     };
 
-    let state: SessionState;
+    // Initialize the replay buffer before the backend spawns so any output
+    // emitted synchronously during spawn is captured for late subscribers.
+    this.outputBuffers.set(sessionId, new OutputBuffer());
+
+    let state: SessionState | undefined;
+    let pendingExitCode: number | undefined;
+    let pendingExit = false;
+
     if (opts.attach) {
       const unsubscribe = opts.attach.executor.onOutput(opts.attach.handle, (data) => {
         this.emitOutput(sessionId, opts.taskId, data);
@@ -300,7 +346,17 @@ export class EmbeddedTerminalManager extends EventEmitter {
         cwd: opts.cwd,
         defaultShell: this.defaultShell,
         emitOutput: (data) => this.emitOutput(sessionId, opts.taskId, data),
-        emitExit: (exitCode) => this.finalizeSession(state, exitCode),
+        emitExit: (exitCode) => {
+          // Backend exit may fire synchronously from spawn() before `state`
+          // is assigned. Defer the finalization until after the state lands
+          // in the session map so we never call finalizeSession(undefined).
+          if (!state) {
+            pendingExitCode = exitCode;
+            pendingExit = true;
+            return;
+          }
+          this.finalizeSession(state, exitCode);
+        },
       });
       state = {
         ...base,
@@ -312,16 +368,25 @@ export class EmbeddedTerminalManager extends EventEmitter {
 
     this.sessions.set(sessionId, state);
     this.targetIndex.set(targetKey, sessionId);
-    return describeSession(state);
+
+    const descriptor = describeSession(state, this.getSnapshot(sessionId));
+
+    if (pendingExit) {
+      this.finalizeSession(state, pendingExitCode);
+    }
+
+    return descriptor;
   }
 
   list(): TerminalSessionDescriptor[] {
-    return Array.from(this.sessions.values()).map(describeSession);
+    return Array.from(this.sessions.values()).map((state) =>
+      describeSession(state, this.getSnapshot(state.sessionId)),
+    );
   }
 
   get(sessionId: string): TerminalSessionDescriptor | undefined {
     const state = this.sessions.get(sessionId);
-    return state ? describeSession(state) : undefined;
+    return state ? describeSession(state, this.getSnapshot(sessionId)) : undefined;
   }
 
   write(sessionId: string, data: string): { ok: boolean; reason?: string } {
@@ -393,6 +458,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
       this.targetIndex.delete(state.targetKey);
     }
     this.sessions.delete(state.sessionId);
+    this.outputBuffers.delete(state.sessionId);
 
     const payload: TerminalExitEvent = {
       sessionId: state.sessionId,
@@ -403,8 +469,18 @@ export class EmbeddedTerminalManager extends EventEmitter {
   }
 
   private emitOutput(sessionId: string, taskId: string, data: string): void {
+    // Record into the replay buffer first so a descriptor returned in the
+    // same tick already reflects this chunk (covers output emitted
+    // synchronously during backend spawn, before openOrReuse() returns).
+    this.outputBuffers.get(sessionId)?.append(data);
     const payload: TerminalOutputEvent = { sessionId, taskId, data };
     this.emit('output', payload);
+  }
+
+  private getSnapshot(sessionId: string): string | undefined {
+    const buffer = this.outputBuffers.get(sessionId);
+    if (!buffer) return undefined;
+    return buffer.snapshot();
   }
 }
 
