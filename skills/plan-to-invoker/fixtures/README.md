@@ -56,6 +56,8 @@ Negative fixtures demonstrate anti-patterns and validation errors:
 - **anti-pattern-g-monolithic-prompt-edit-bridge.yaml** - Monolithic `wf-1777929074509-8`-shaped workflow missing required layer/state decomposition metadata (**fails `skill-doctor` lint, not YAML schema**)
 - **anti-pattern-h-layer-order-violation.yaml** - Lower architectural layer depends on a higher layer without `Layer exception: allowed` (**fails `skill-doctor` lint, not YAML schema**)
 - **anti-pattern-i-final-regression-not-test-all.yaml** - Standalone implementation workflow missing the terminal `pnpm run test:all` regression gate (**fails `skill-doctor` lint, not YAML schema**)
+- **anti-pattern-j-zero-context-missing-metadata.yaml** - Prompt task omits strict zero-context handoff metadata (**fails `skill-doctor` lint, not YAML schema**)
+- **anti-pattern-k-missing-review-compression.yaml** - Implementation task omits review-compression metadata (**fails `skill-doctor` lint, not YAML schema**)
 
 ### Edge Cases (specific validation errors)
 
