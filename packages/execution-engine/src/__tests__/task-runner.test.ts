@@ -4991,6 +4991,100 @@ console.log(JSON.stringify(out));
         expect(orchestrator.approve).not.toHaveBeenCalled();
         expect(executeTasks).not.toHaveBeenCalled();
       });
+
+      it('closed PR transitions an awaiting_approval gate to closed on refresh', async () => {
+        const closingTask = makeTask({
+          id: 'merge-awaiting-closed',
+          status: 'awaiting_approval',
+          config: { isMergeNode: true },
+          execution: {
+            reviewId: 'owner/repo#206',
+            workspacePath: '/workspace/awaiting-closed-gate',
+          },
+        });
+        const orchestrator = {
+          getTask: (id: string) => (id === closingTask.id ? closingTask : undefined),
+          getAllTasks: () => [closingTask],
+          approve: vi.fn(),
+        };
+        const persistence = { updateTask: vi.fn() };
+        const mergeGateProvider = {
+          checkApproval: vi.fn().mockResolvedValue({
+            approved: false,
+            rejected: false,
+            closed: true,
+            statusText: 'Closed',
+          }),
+        };
+
+        const executor = new TaskRunner({
+          orchestrator: orchestrator as any,
+          persistence: persistence as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          cwd: '/runner-base-cwd',
+          mergeGateProvider: mergeGateProvider as any,
+        });
+        const executeTasks = vi.spyOn(executor, 'executeTasks').mockResolvedValue(undefined);
+
+        await executor.checkMergeGateStatuses();
+
+        expect(persistence.updateTask).toHaveBeenCalledWith('merge-awaiting-closed', {
+          status: 'closed',
+          execution: { reviewStatus: 'Closed' },
+        });
+        expect(orchestrator.approve).not.toHaveBeenCalled();
+        expect(executeTasks).not.toHaveBeenCalled();
+      });
+
+      it('stops polling a closed merge gate on subsequent refresh passes', async () => {
+        const task = makeTask({
+          id: 'merge-closed-stops-polling',
+          status: 'review_ready',
+          config: { isMergeNode: true },
+          execution: {
+            reviewId: 'owner/repo#207',
+            workspacePath: '/workspace/closed-stop-poll',
+          },
+        });
+        const orchestrator = {
+          getTask: (id: string) => (id === task.id ? task : undefined),
+          getAllTasks: () => [task],
+          approve: vi.fn(),
+        };
+        const persistence = {
+          updateTask: vi.fn((id: string, changes: any) => {
+            if (id === task.id && changes.status) {
+              (task as any).status = changes.status;
+            }
+          }),
+        };
+        const mergeGateProvider = {
+          checkApproval: vi.fn().mockResolvedValue({
+            approved: false,
+            rejected: false,
+            closed: true,
+            statusText: 'Closed',
+          }),
+        };
+
+        const executor = new TaskRunner({
+          orchestrator: orchestrator as any,
+          persistence: persistence as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          cwd: '/runner-base-cwd',
+          mergeGateProvider: mergeGateProvider as any,
+        });
+        vi.spyOn(executor, 'executeTasks').mockResolvedValue(undefined);
+
+        await executor.checkMergeGateStatuses();
+        expect(mergeGateProvider.checkApproval).toHaveBeenCalledTimes(1);
+        expect(task.status).toBe('closed');
+
+        await executor.checkMergeGateStatuses();
+        // Closed status falls outside the (review_ready || awaiting_approval) polling filter,
+        // so no additional provider call should happen on the second refresh pass.
+        expect(mergeGateProvider.checkApproval).toHaveBeenCalledTimes(1);
+      });
     });
   });
 
