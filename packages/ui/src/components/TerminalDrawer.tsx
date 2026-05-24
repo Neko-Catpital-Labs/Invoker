@@ -44,6 +44,7 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const seededSessionIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     const host = containerRef.current;
@@ -68,6 +69,18 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
     }
     termRef.current = term;
     fitRef.current = fit;
+
+    // Replay any output the backend buffered before the renderer subscribed.
+    // Guard so the same session is never seeded twice (React StrictMode double-mount,
+    // session prop reference changes, etc.).
+    if (session.outputSnapshot && seededSessionIdRef.current !== session.sessionId) {
+      seededSessionIdRef.current = session.sessionId;
+      try {
+        term.write(session.outputSnapshot);
+      } catch {
+        /* terminal disposed */
+      }
+    }
 
     const inputDisposable = term.onData((data) => {
       void window.invoker?.terminalWrite?.(session.sessionId, data);

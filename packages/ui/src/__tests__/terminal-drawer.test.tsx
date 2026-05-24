@@ -10,12 +10,63 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
+import type { TerminalOutputEvent } from '@invoker/contracts';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
   return createReactFlowMock();
+});
+
+interface XTermInstanceRecord {
+  writeCalls: string[];
+  opened: boolean;
+  disposed: boolean;
+  inputCallbacks: Array<(data: string) => void>;
+}
+
+const xtermInstances: XTermInstanceRecord[] = [];
+
+vi.mock('xterm', () => {
+  class MockTerminal {
+    cols = 80;
+    rows = 24;
+    private readonly record: XTermInstanceRecord;
+    constructor() {
+      this.record = { writeCalls: [], opened: false, disposed: false, inputCallbacks: [] };
+      xtermInstances.push(this.record);
+    }
+    loadAddon(): void {
+      /* no-op */
+    }
+    open(): void {
+      this.record.opened = true;
+    }
+    write(data: string): void {
+      this.record.writeCalls.push(data);
+    }
+    onData(cb: (data: string) => void): { dispose: () => void } {
+      this.record.inputCallbacks.push(cb);
+      return { dispose: () => {} };
+    }
+    focus(): void {
+      /* no-op */
+    }
+    dispose(): void {
+      this.record.disposed = true;
+    }
+  }
+  return { Terminal: MockTerminal };
+});
+
+vi.mock('xterm-addon-fit', () => {
+  class MockFitAddon {
+    fit(): void {
+      /* no-op */
+    }
+  }
+  return { FitAddon: MockFitAddon };
 });
 
 const { App } = await import('../App.js');
@@ -49,11 +100,13 @@ describe('Terminal drawer (component)', () => {
   let mock: MockInvoker;
 
   beforeEach(() => {
+    xtermInstances.length = 0;
     mock = createMockInvoker();
     mock.install();
   });
 
   afterEach(() => {
+    delete (window as { __INVOKER_TEST_ON_TERMINAL_OUTPUT__?: unknown }).__INVOKER_TEST_ON_TERMINAL_OUTPUT__;
     mock.cleanup();
     vi.restoreAllMocks();
   });
@@ -171,5 +224,89 @@ describe('Terminal drawer (component)', () => {
       expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
     });
     expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha');
+  });
+
+  it('seeds xterm with the session output snapshot before live output, and only once', async () => {
+    const sessionWithSnapshot = {
+      sessionId: 'mock-session-task-alpha',
+      taskId: 'task-alpha',
+      status: 'running' as const,
+      mode: 'spawn' as const,
+      attached: false,
+      createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+      outputSnapshot: 'replayed initial output\r\n',
+    };
+    (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValue({
+      opened: true,
+      session: sessionWithSnapshot,
+    });
+
+    let liveOutputCallback: ((event: TerminalOutputEvent) => void) | undefined;
+    (window as {
+      __INVOKER_TEST_ON_TERMINAL_OUTPUT__?: (cb: (event: TerminalOutputEvent) => void) => () => void;
+    }).__INVOKER_TEST_ON_TERMINAL_OUTPUT__ = (cb) => {
+      liveOutputCallback = cb;
+      return () => {
+        liveOutputCallback = undefined;
+      };
+    };
+
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(xtermInstances).toHaveLength(1);
+      expect(xtermInstances[0].opened).toBe(true);
+    });
+    await waitFor(() => {
+      expect(xtermInstances[0].writeCalls).toEqual(['replayed initial output\r\n']);
+    });
+
+    // Live output after seeding lands in the same xterm as a separate write
+    // following the snapshot, in order.
+    act(() => {
+      liveOutputCallback?.({
+        sessionId: 'mock-session-task-alpha',
+        taskId: 'task-alpha',
+        data: 'live event payload\r\n',
+      });
+    });
+    expect(xtermInstances[0].writeCalls).toEqual([
+      'replayed initial output\r\n',
+      'live event payload\r\n',
+    ]);
+
+    // Re-opening the same task re-renders the pane with a fresh session prop
+    // (same sessionId) but must not re-seed the snapshot into the same xterm.
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+    await waitFor(() => {
+      expect(mock.api.openTerminal).toHaveBeenCalledTimes(2);
+    });
+    expect(xtermInstances).toHaveLength(1);
+    const alphaSnapshotWrites = xtermInstances[0].writeCalls.filter(
+      (data) => data === 'replayed initial output\r\n',
+    );
+    expect(alphaSnapshotWrites).toHaveLength(1);
+  });
+
+  it('skips snapshot seeding when the session has no outputSnapshot', async () => {
+    // The default openTerminal mock returns a session without outputSnapshot.
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(xtermInstances).toHaveLength(1);
+      expect(xtermInstances[0].opened).toBe(true);
+    });
+    expect(xtermInstances[0].writeCalls).toEqual([]);
   });
 });
