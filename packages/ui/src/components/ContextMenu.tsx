@@ -10,9 +10,10 @@
  * - Labeled separators for task and danger zones
  */
 
-import { useEffect, useRef, useState, useLayoutEffect } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { TaskState } from '../types.js';
 import { getMenuItems, type MenuItem } from '../lib/context-menu-items.js';
+import { buildMenuKeyHandler } from '../lib/menu-keyboard.js';
 import { EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE } from '../isExperimentSpawnPivot.js';
 
 interface ContextMenuProps {
@@ -27,6 +28,17 @@ interface ContextMenuProps {
   onCancel?: (taskId: string) => void;
   onClose: () => void;
 }
+
+const MORE_ITEM_ID = '__more__';
+
+interface MoreSentinel {
+  id: typeof MORE_ITEM_ID;
+  label: 'More';
+  enabled: true;
+  isMore: true;
+}
+
+type NavItem = (MenuItem & { isMore?: false }) | MoreSentinel;
 
 export function ContextMenu({
   x,
@@ -58,18 +70,40 @@ export function ContextMenu({
 
   const safeItems = availableItems.filter((item) => item.variant !== 'danger');
   const dangerItems = availableItems.filter((item) => item.variant === 'danger');
-  const hasMoreButton = dangerItems.length > 0 && !showMore;
-  const renderedItems: MenuItem[] = showMore ? [...safeItems, ...dangerItems] : safeItems;
+  const hasMoreItem = dangerItems.length > 0 && !showMore;
 
-  // Find first enabled item index
-  const firstEnabledIndex = renderedItems.findIndex((item) => item.enabled);
+  const moreSentinel: MoreSentinel = {
+    id: MORE_ITEM_ID,
+    label: 'More',
+    enabled: true,
+    isMore: true,
+  };
 
-  // Auto-focus first enabled item on mount
+  const renderedItems: NavItem[] = showMore
+    ? [...safeItems, ...dangerItems]
+    : hasMoreItem
+      ? [...safeItems, moreSentinel]
+      : [...safeItems];
+
+  // Auto-focus the menu on mount and set initial highlight.
   useEffect(() => {
-    if (firstEnabledIndex >= 0) {
-      setFocusedIndex(firstEnabledIndex);
-    }
-  }, [firstEnabledIndex]);
+    menuRef.current?.focus({ preventScroll: true });
+    const firstEnabled = renderedItems.findIndex((item) => item.enabled);
+    if (firstEnabled >= 0) setFocusedIndex(firstEnabled);
+    // Intentionally only runs on mount; later focus moves are explicit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // When More expands, jump highlight to the first newly-revealed item
+  // (the first danger item, which sits right after the safe items) and
+  // restore focus to the menu container so keyboard nav keeps working
+  // even if the user activated More with the mouse.
+  useEffect(() => {
+    if (!showMore) return;
+    setFocusedIndex(safeItems.length);
+    menuRef.current?.focus({ preventScroll: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showMore]);
 
   // Viewport clamping: flip if menu overflows bottom or right
   useLayoutEffect(() => {
@@ -97,7 +131,7 @@ export function ContextMenu({
     top = Math.max(0, Math.min(top, viewportHeight - rect.height));
 
     setPosition({ left, top });
-  }, [x, y]);
+  }, [x, y, showMore]);
 
   // Capture-phase outside dismissal stays reliable even if graph layers stop
   // bubbling on mouse/pointer events before they reach document listeners.
@@ -133,32 +167,11 @@ export function ContextMenu({
     };
   }, [onClose]);
 
-  // Keyboard navigation
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    const enabledIndices = renderedItems
-      .map((item, idx) => (item.enabled ? idx : -1))
-      .filter((idx) => idx >= 0);
-
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const nextPos = (currentPos + 1) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[nextPos]);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const prevPos = (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[prevPos]);
-    } else if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      const item = renderedItems[focusedIndex];
-      if (item?.enabled) {
-        handleItemClick(item);
-      }
-    }
+  const expandMore = () => {
+    setShowMore(true);
   };
 
-  // Handle menu item click
+  // Handle a real menu item activation (not the "More" sentinel)
   const handleItemClick = (item: MenuItem) => {
     if (!item.enabled) return;
 
@@ -186,6 +199,19 @@ export function ContextMenu({
     }
     onClose();
   };
+
+  const handleKeyDown = buildMenuKeyHandler<NavItem>({
+    items: renderedItems,
+    focusedIndex,
+    setFocusedIndex,
+    onActivate: (item) => {
+      if ('isMore' in item && item.isMore) {
+        expandMore();
+        return;
+      }
+      handleItemClick(item);
+    },
+  });
 
   // Get variant styles
   const getVariantClasses = (variant?: MenuItem['variant'], enabled?: boolean) => {
@@ -224,43 +250,52 @@ export function ContextMenu({
     >
       {renderedItems.map((item, idx) => {
         const isFocused = idx === focusedIndex;
-        const tooltip = !item.enabled && item.id === 'open-terminal'
-          ? EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE
-          : undefined;
+
+        if ('isMore' in item && item.isMore) {
+          return (
+            <Fragment key={item.id}>
+              <div className="border-t border-gray-600 my-1" />
+              <button
+                role="menuitem"
+                className={`w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 ${
+                  isFocused ? 'bg-gray-700' : ''
+                }`}
+                onClick={expandMore}
+                onMouseEnter={() => setFocusedIndex(idx)}
+              >
+                More
+              </button>
+            </Fragment>
+          );
+        }
+
+        const menuItem = item;
+        const tooltip =
+          !menuItem.enabled && menuItem.id === 'open-terminal'
+            ? EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE
+            : undefined;
 
         return (
-          <div key={item.id}>
-            {item.separator === 'task' && renderSeparator('Task')}
-            {item.separator === 'danger' && renderSeparator('Danger')}
+          <Fragment key={menuItem.id}>
+            {menuItem.separator === 'task' && renderSeparator('Task')}
+            {menuItem.separator === 'danger' && renderSeparator('Danger')}
             <button
               role="menuitem"
-              aria-disabled={!item.enabled}
+              aria-disabled={!menuItem.enabled}
               className={`w-full text-left px-3 py-1.5 text-sm ${getVariantClasses(
-                item.variant,
-                item.enabled
+                menuItem.variant,
+                menuItem.enabled,
               )} ${isFocused ? 'bg-gray-700' : ''}`}
-              onClick={() => handleItemClick(item)}
+              onClick={() => handleItemClick(menuItem)}
               onMouseEnter={() => setFocusedIndex(idx)}
-              disabled={!item.enabled}
+              disabled={!menuItem.enabled}
               title={tooltip}
             >
-              {item.label}
+              {menuItem.label}
             </button>
-          </div>
+          </Fragment>
         );
       })}
-      {hasMoreButton && (
-        <div>
-          <div className="border-t border-gray-600 my-1" />
-          <button
-            role="menuitem"
-            className="w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
-            onClick={() => setShowMore(true)}
-          >
-            More
-          </button>
-        </div>
-      )}
     </div>
   );
 }
