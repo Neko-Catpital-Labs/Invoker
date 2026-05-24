@@ -529,6 +529,61 @@ test.describe('Visual proof capture', () => {
     await assertPageScreenshot(page, 'interactive-status-hues');
   });
 
+  test('workflow-task-status-color-parity — workflow and task review_ready share canonical hue', async ({ page }) => {
+    // Load a small plan so the sidebar workflow node and the mini-DAG task nodes
+    // are visible side by side. The workflow status is derived from task counts;
+    // a single review_ready task with the rest completed drives the workflow to
+    // review_ready too (see computeWorkflowStatusFromCounts).
+    await loadPlan(page, TEST_PLAN);
+    const now = new Date();
+    const earlier = new Date(Date.now() - 5000);
+    await injectTaskStates(page, [
+      {
+        taskId: 'task-alpha',
+        changes: {
+          status: 'review_ready',
+          execution: { startedAt: earlier },
+        },
+      },
+      {
+        taskId: 'task-beta',
+        changes: {
+          status: 'completed',
+          execution: { startedAt: earlier, completedAt: now },
+        },
+      },
+      {
+        taskId: 'task-gamma',
+        changes: {
+          status: 'completed',
+          execution: { startedAt: earlier, completedAt: now },
+        },
+      },
+    ]);
+
+    const workflowId = await page.evaluate(async () => {
+      const workflows = await window.invoker.listWorkflows();
+      return workflows[0]?.id ?? null;
+    });
+    expect(workflowId).toBeTruthy();
+
+    // Re-select the workflow so the inspector reflects the derived workflow status.
+    await workflowNode(page, workflowId!).dispatchEvent('click', { bubbles: true });
+
+    // Workflow-level surface: sidebar workflow node displays the workflow-status hue.
+    await expect(workflowNode(page, workflowId!).getByText('review ready')).toBeVisible();
+
+    // Workflow-level surface: inspector header reflects the derived workflow status.
+    await expect(page.getByTestId('workflow-inspector-status-label')).toContainText('review ready');
+
+    // Task-level surface: mini-DAG task node displays the task-status hue.
+    await expect(
+      page.locator('.react-flow__node[data-testid$="task-alpha"]').getByText('REVIEW_READY'),
+    ).toBeVisible();
+
+    await captureScreenshot(page, 'workflow-task-status-color-parity');
+  });
+
   test('context menu organization for failed task', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
     await injectTaskStates(page, [
