@@ -277,6 +277,14 @@ export interface TerminalSessionDescriptor {
   mode: 'spawn' | 'attached';
   attached: boolean;
   createdAt: string;
+  /**
+   * Bounded recent terminal output snapshot. The renderer uses this to seed
+   * newly mounted terminal panes that subscribe to `invoker:terminal-output`
+   * after the session has already emitted bytes (fast PTY startup output).
+   * Capped by the main process to a fixed byte budget; oldest bytes are
+   * dropped on overflow. Absent when the session has produced no output.
+   */
+  outputSnapshot?: string;
 }
 
 export interface TerminalOutputEvent {

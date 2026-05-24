@@ -19,6 +19,7 @@ import { mkdirSync, rmSync } from 'node:fs';
 
 import {
   EmbeddedTerminalManager,
+  TERMINAL_REPLAY_BUFFER_MAX_BYTES,
   createBashTerminalBackend,
   createPtyTerminalBackend,
   type EmbeddedTerminalBackend,
@@ -389,6 +390,142 @@ describe('EmbeddedTerminalManager', () => {
     });
     const res = mgr.write('not-a-session', 'x');
     expect(res).toEqual({ ok: false, reason: expect.stringContaining('Unknown session') });
+  });
+
+  // ── Replay buffer (bounded output snapshot for late renderer subscribers) ──
+
+  it('captures output emitted synchronously during spawn into the returned descriptor', () => {
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: ({ emitOutput }) => {
+        // Backend that emits before openOrReuse() returns — mirrors a PTY
+        // that pushes startup bytes inside its spawn() call.
+        emitOutput('boot-1\r\n');
+        emitOutput('boot-2\r\n');
+        return { write: vi.fn(), resize: vi.fn(), close: vi.fn() };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+
+    expect(session.outputSnapshot).toBe('boot-1\r\nboot-2\r\n');
+  });
+
+  it('terminal list() exposes the same replay snapshot for live sessions', () => {
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: ({ emitOutput }) => {
+        emitOutput('hello-from-spawn');
+        return { write: vi.fn(), resize: vi.fn(), close: vi.fn() };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+    const listed = mgr.list();
+
+    expect(listed).toHaveLength(1);
+    expect(listed[0].sessionId).toBe(session.sessionId);
+    expect(listed[0].outputSnapshot).toBe('hello-from-spawn');
+    expect(mgr.get(session.sessionId)?.outputSnapshot).toBe('hello-from-spawn');
+  });
+
+  it('appends post-spawn async output to the snapshot returned by list()', () => {
+    const child = createFakeChild();
+    const mgr = new EmbeddedTerminalManager({
+      backend: createBashTerminalBackend({ spawnFn: vi.fn(() => child) as unknown as BashSpawnFn }),
+    });
+
+    const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+    expect(session.outputSnapshot).toBeUndefined();
+
+    child.stdout.emit('data', Buffer.from('line-1\n'));
+    child.stderr.emit('data', Buffer.from('line-2\n'));
+
+    const listed = mgr.list();
+    expect(listed[0].outputSnapshot).toBe('line-1\nline-2\n');
+  });
+
+  it('bounds the replay snapshot to TERMINAL_REPLAY_BUFFER_MAX_BYTES, keeping the most recent bytes', () => {
+    const child = createFakeChild();
+    const mgr = new EmbeddedTerminalManager({
+      backend: createBashTerminalBackend({ spawnFn: vi.fn(() => child) as unknown as BashSpawnFn }),
+    });
+
+    const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+
+    // Overflow the buffer with deterministic content. Each chunk has a known
+    // suffix so we can assert that the tail (most-recent bytes) is preserved.
+    const chunkSize = 8 * 1024;
+    const overflowChunks = 10; // 80 KiB total, > 64 KiB cap
+    for (let i = 0; i < overflowChunks; i += 1) {
+      child.stdout.emit('data', Buffer.from('X'.repeat(chunkSize - 1) + String.fromCharCode(65 + i)));
+    }
+
+    const snapshot = mgr.get(session.sessionId)?.outputSnapshot ?? '';
+    expect(snapshot.length).toBe(TERMINAL_REPLAY_BUFFER_MAX_BYTES);
+    // Last emitted byte ('A' + 9 = 'J') must still be present at the tail.
+    expect(snapshot.endsWith('J')).toBe(true);
+  });
+
+  it('omits outputSnapshot when no output has been emitted', () => {
+    const child = createFakeChild();
+    const mgr = new EmbeddedTerminalManager({
+      backend: createBashTerminalBackend({ spawnFn: vi.fn(() => child) as unknown as BashSpawnFn }),
+    });
+
+    const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+
+    expect(session.outputSnapshot).toBeUndefined();
+    expect(mgr.list()[0].outputSnapshot).toBeUndefined();
+  });
+
+  it('synchronous backend exit during spawn finalizes safely and does not throw', () => {
+    const exits: Array<{ sessionId: string; exitCode?: number }> = [];
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: ({ emitOutput, emitExit }) => {
+        // Emit some output then exit, all before backend.spawn() returns.
+        emitOutput('startup\r\n');
+        emitExit(7);
+        return { write: vi.fn(), resize: vi.fn(), close: vi.fn() };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+    mgr.on('exit', (e) => exits.push({ sessionId: e.sessionId, exitCode: e.exitCode }));
+
+    const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+
+    // Synchronous output captured into the returned descriptor.
+    expect(session.outputSnapshot).toBe('startup\r\n');
+    // Synchronous exit was applied — descriptor reflects the exited status.
+    expect(session.status).toBe('exited');
+    expect(session.exitCode).toBe(7);
+    // Exit event fired once for this session.
+    expect(exits).toEqual([{ sessionId: session.sessionId, exitCode: 7 }]);
+    // Session and buffer were cleaned up by finalize.
+    expect(mgr.list()).toHaveLength(0);
+    expect(mgr.get(session.sessionId)).toBeUndefined();
+  });
+
+  it('finalizing a session releases its replay buffer', () => {
+    const child = createFakeChild();
+    const mgr = new EmbeddedTerminalManager({
+      backend: createBashTerminalBackend({ spawnFn: vi.fn(() => child) as unknown as BashSpawnFn }),
+    });
+    const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+    child.stdout.emit('data', Buffer.from('some-output'));
+    expect(mgr.get(session.sessionId)?.outputSnapshot).toBe('some-output');
+
+    mgr.close(session.sessionId);
+
+    expect(mgr.get(session.sessionId)).toBeUndefined();
+    expect(mgr.list()).toHaveLength(0);
+
+    // Late output from the dead child must not throw, even though the buffer
+    // for this session was cleared as part of finalize.
+    expect(() => child.stdout.emit('data', Buffer.from('post-mortem'))).not.toThrow();
   });
 });
 
