@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { Orchestrator } from '../orchestrator.js';
 import {
+  applyInvalidation,
+  buildOrchestratorOnlyInvalidationDeps,
+} from '../invalidation-policy.js';
+import {
   InMemoryPersistence,
   makeOrchestrator,
   makeResponse,
@@ -8,7 +12,7 @@ import {
   type ChainContext,
 } from './helpers/cross-workflow-cascade-helpers.js';
 
-describe('cross-workflow cascade — primitives invoked directly (no applyInvalidation)', () => {
+describe('cross-workflow cascade — applyInvalidation pipeline', () => {
   let persistence: InMemoryPersistence;
   let orchestrator: Orchestrator;
 
@@ -16,6 +20,10 @@ describe('cross-workflow cascade — primitives invoked directly (no applyInvali
     persistence = new InMemoryPersistence();
     orchestrator = makeOrchestrator(persistence);
   });
+
+  function deps() {
+    return buildOrchestratorOnlyInvalidationDeps(orchestrator);
+  }
 
   function expectDownstreamPending(ctx: ChainContext, label: string): void {
     for (const id of [
@@ -31,10 +39,10 @@ describe('cross-workflow cascade — primitives invoked directly (no applyInvali
     }
   }
 
-  it('orchestrator.recreateWorkflow(upstream) cascades to downstream', () => {
+  it('applyInvalidation(recreateWorkflow, upstream) cascades to downstream', async () => {
     const ctx = setupChain(orchestrator);
 
-    orchestrator.recreateWorkflow(ctx.upstreamWfId);
+    await applyInvalidation('workflow', 'recreateWorkflow', ctx.upstreamWfId, deps());
 
     expectDownstreamPending(ctx, 'recreateWorkflow');
 
@@ -51,7 +59,7 @@ describe('cross-workflow cascade — primitives invoked directly (no applyInvali
     expect(upstreamMarkers.length).toBeGreaterThan(0);
   });
 
-  it('orchestrator.retryWorkflow(upstream) cascades to downstream', () => {
+  it('applyInvalidation(retryWorkflow, upstream) cascades to downstream', async () => {
     const ctx = setupChain(orchestrator);
 
     orchestrator.handleWorkerResponse(makeResponse({
@@ -60,20 +68,20 @@ describe('cross-workflow cascade — primitives invoked directly (no applyInvali
       outputs: { exitCode: 1, error: 'boom' },
     }));
 
-    orchestrator.retryWorkflow(ctx.upstreamWfId);
+    await applyInvalidation('workflow', 'retryWorkflow', ctx.upstreamWfId, deps());
 
     expectDownstreamPending(ctx, 'retryWorkflow');
   });
 
-  it('orchestrator.recreateTask(upstream task) cascades to downstream', () => {
+  it('applyInvalidation(recreateTask, upstream task) cascades to downstream', async () => {
     const ctx = setupChain(orchestrator);
 
-    orchestrator.recreateTask(ctx.upstreamTaskId);
+    await applyInvalidation('task', 'recreateTask', ctx.upstreamTaskId, deps());
 
     expectDownstreamPending(ctx, 'recreateTask');
   });
 
-  it('orchestrator.retryTask(upstream merge gate) cascades to downstream', () => {
+  it('applyInvalidation(retryTask, upstream merge gate) cascades to downstream', async () => {
     const ctx = setupChain(orchestrator);
 
     orchestrator.handleWorkerResponse(makeResponse({
@@ -82,22 +90,31 @@ describe('cross-workflow cascade — primitives invoked directly (no applyInvali
       outputs: { exitCode: 1, error: 'boom' },
     }));
 
-    orchestrator.retryTask(ctx.upstreamMergeId);
+    await applyInvalidation('task', 'retryTask', ctx.upstreamMergeId, deps());
 
     expectDownstreamPending(ctx, 'retryTask');
   });
 
-  it('orchestrator.recreateWorkflowFromFreshBase(upstream) cascades to downstream', async () => {
+  it('applyInvalidation(recreateWorkflowFromFreshBase, upstream) cascades to downstream', async () => {
     const ctx = setupChain(orchestrator);
 
-    await orchestrator.recreateWorkflowFromFreshBase(ctx.upstreamWfId, {
-      refreshBase: async () => ({ commit: 'fresh-sha' }),
-    });
+    await applyInvalidation(
+      'workflow',
+      'recreateWorkflowFromFreshBase',
+      ctx.upstreamWfId,
+      {
+        ...deps(),
+        recreateWorkflowFromFreshBase: (id) =>
+          orchestrator.recreateWorkflowFromFreshBase(id, {
+            refreshBase: async () => ({ commit: 'fresh-sha' }),
+          }),
+      },
+    );
 
     expectDownstreamPending(ctx, 'recreateWorkflowFromFreshBase');
   });
 
-  it('orchestrator.forkWorkflow(upstream) cascades to downstream', () => {
+  it('forkWorkflow(upstream) cascades to downstream (still primitive — fork keeps Phase-0 cascade)', () => {
     const ctx = setupChain(orchestrator);
 
     orchestrator.forkWorkflow(ctx.upstreamWfId, { autoStart: false });
@@ -105,8 +122,7 @@ describe('cross-workflow cascade — primitives invoked directly (no applyInvali
     expectDownstreamPending(ctx, 'forkWorkflow');
   });
 
-  it('cascade is transitive when invoked directly: A → B → C, primitives only', () => {
-    // Workflow A
+  it('cascade is transitive: A → B → C via applyInvalidation', async () => {
     orchestrator.loadPlan({
       name: 'wf-a',
       baseBranch: 'master',
@@ -157,12 +173,12 @@ describe('cross-workflow cascade — primitives invoked directly (no applyInvali
 
     expect(orchestrator.getTask(cTaskId)!.status).toBe('running');
 
-    orchestrator.recreateWorkflow(aWfId);
+    await applyInvalidation('workflow', 'recreateWorkflow', aWfId, deps());
 
     for (const id of [bTaskId, bMergeId, cTaskId, cMergeId]) {
       expect(
         orchestrator.getTask(id)!.status,
-        `${id} should be pending after transitive primitive-only cascade`,
+        `${id} should be pending after transitive applyInvalidation cascade`,
       ).toBe('pending');
     }
   });
