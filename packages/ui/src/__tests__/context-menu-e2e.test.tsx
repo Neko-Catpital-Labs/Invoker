@@ -158,4 +158,102 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
+
+  // ── Keyboard navigation regressions ─────────────────────────────
+  //
+  // A local repro proved that opening the workflow context menu, pressing
+  // ArrowDown three times, and pressing Enter did NOT call
+  // navigator.clipboard.writeText('wf-1'): the workflow menu shipped without
+  // any keyboard navigation, and the task menu wired onKeyDown onto its root
+  // without focusing it, so document-level key events never reached the
+  // handlers. These tests dispatch from the active element (falling back to
+  // document) so they pass for either fix shape — a document-level listener
+  // or auto-focusing the menu — and fail on the pre-fix wiring either way.
+
+  function dispatchMenuKey(keyName: string) {
+    const active = document.activeElement;
+    const target =
+      active && active !== document.body ? active : document;
+    fireEvent.keyDown(target, { key: keyName });
+  }
+
+  it('workflow menu: ArrowDown ×3 + Enter copies the workflow id', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    // Visible items in order: Open Workflow, Open PR, Retry Workflow,
+    // Copy Workflow ID, More. ArrowDown three times from the first item
+    // lands on "Copy Workflow ID".
+    await waitFor(() => {
+      expect(screen.getByText('Copy Workflow ID')).toBeInTheDocument();
+    });
+
+    dispatchMenuKey('ArrowDown');
+    dispatchMenuKey('ArrowDown');
+    dispatchMenuKey('ArrowDown');
+    dispatchMenuKey('Enter');
+
+    await waitFor(() => {
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1');
+    });
+  });
+
+  it('workflow menu: ArrowUp from the first item wraps to the last item', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    // "More" is the last visible item before expansion; wrapping from the
+    // first item lands on it. Activating it expands the danger group,
+    // which reveals "Recreate Workflow" — a deterministic proof of wrap.
+    await waitFor(() => {
+      expect(screen.getByText('More')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Recreate Workflow')).not.toBeInTheDocument();
+
+    dispatchMenuKey('ArrowUp');
+    dispatchMenuKey('Enter');
+
+    await waitFor(() => {
+      expect(screen.getByText('Recreate Workflow')).toBeInTheDocument();
+    });
+  });
+
+  it('task menu in mini DAG: ArrowDown + Enter fires the next enabled action', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    // Pending task safe items: Restart Task (focused), Open Terminal.
+    await waitFor(() => {
+      expect(screen.getByText('Restart Task')).toBeInTheDocument();
+      expect(screen.getByText('Open Terminal')).toBeInTheDocument();
+    });
+
+    dispatchMenuKey('ArrowDown');
+    dispatchMenuKey('Enter');
+
+    await waitFor(() => {
+      expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha');
+    });
+  });
+
+  it('task menu in mini DAG: Space activates the highlighted item like Enter', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    await waitFor(() => {
+      expect(screen.getByText('Restart Task')).toBeInTheDocument();
+    });
+
+    // The first enabled item (Restart Task) is highlighted on open; Space
+    // must activate it the same way Enter would.
+    dispatchMenuKey(' ');
+
+    await waitFor(() => {
+      expect(mock.api.restartTask).toHaveBeenCalledWith('task-alpha');
+    });
+  });
 });
