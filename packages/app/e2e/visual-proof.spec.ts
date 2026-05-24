@@ -569,6 +569,34 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'workflow-context-menu-organization');
   });
 
+  test('context-menu-keyboard-navigation — ArrowDown highlights next workflow menu item', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+
+    const menu = await openContextMenu(page, page.locator('[data-testid^="workflow-node-"]'));
+
+    // Move the cursor away from the menu so `:hover` doesn't compete with the
+    // keyboard-driven highlight in the screenshot.
+    await page.mouse.move(1, 1);
+
+    const items = menu.getByRole('menuitem');
+    await expect(items.nth(0)).toHaveText('Open Workflow');
+    await expect(items.nth(1)).toHaveText('Open PR');
+
+    // ArrowDown is dispatched to the focused menu container, which owns the
+    // roving handler while the menu is open (App-level graph shortcuts must
+    // not steal it).
+    await page.keyboard.press('ArrowDown');
+
+    // Focused items receive a standalone `bg-gray-700` token alongside the
+    // base `hover:bg-gray-700`. A whitespace-bounded regex matches only the
+    // standalone (focus) form, not the `hover:`-prefixed variant.
+    const activeHighlight = /(^|\s)bg-gray-700(\s|$)/;
+    await expect(items.nth(1)).toHaveClass(activeHighlight);
+    await expect(items.nth(0)).not.toHaveClass(activeHighlight);
+
+    await captureScreenshot(page, 'context-menu-keyboard-navigation');
+  });
+
   test('context menu keeps danger separator when cancel action is absent', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     await injectTaskStates(page, [
