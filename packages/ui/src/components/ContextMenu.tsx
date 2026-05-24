@@ -13,7 +13,15 @@
 import { useEffect, useRef, useState, useLayoutEffect } from 'react';
 import type { TaskState } from '../types.js';
 import { getMenuItems, type MenuItem } from '../lib/context-menu-items.js';
+import {
+  firstEnabledIndex,
+  isMenuActivationKey,
+  moveEnabledIndex,
+  type NavigableItem,
+} from '../lib/menu-keyboard.js';
 import { EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE } from '../isExperimentSpawnPivot.js';
+
+const MORE_ITEM_ID = '__more__';
 
 interface ContextMenuProps {
   x: number;
@@ -61,15 +69,29 @@ export function ContextMenu({
   const hasMoreButton = dangerItems.length > 0 && !showMore;
   const renderedItems: MenuItem[] = showMore ? [...safeItems, ...dangerItems] : safeItems;
 
-  // Find first enabled item index
-  const firstEnabledIndex = renderedItems.findIndex((item) => item.enabled);
+  // Navigable list includes the synthetic "More" entry when collapsed so
+  // ArrowDown/Up can reach it and Enter/Space can activate it.
+  const navigableItems: NavigableItem[] = hasMoreButton
+    ? [...renderedItems, { enabled: true }]
+    : renderedItems;
+  const moreIndex = hasMoreButton ? renderedItems.length : -1;
 
-  // Auto-focus first enabled item on mount
+  // Seed the highlight on the first enabled item on mount. After expand the
+  // expandMore handler sets focus deterministically, so we don't re-seed on
+  // structural changes.
   useEffect(() => {
-    if (firstEnabledIndex >= 0) {
-      setFocusedIndex(firstEnabledIndex);
+    const first = firstEnabledIndex(navigableItems);
+    if (first >= 0) {
+      setFocusedIndex(first);
     }
-  }, [firstEnabledIndex]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Focus the menu container so it owns keyboard input. preventScroll keeps
+  // the surrounding graph from jumping when the menu opens off-viewport.
+  useEffect(() => {
+    menuRef.current?.focus({ preventScroll: true });
+  }, []);
 
   // Viewport clamping: flip if menu overflows bottom or right
   useLayoutEffect(() => {
@@ -133,24 +155,33 @@ export function ContextMenu({
     };
   }, [onClose]);
 
+  // Expand More and move highlight to the first newly-revealed danger item.
+  const expandMore = () => {
+    setShowMore(true);
+    // After re-render, the safe items keep their indices and the first danger
+    // item lands at safeItems.length — deterministic focus target.
+    setFocusedIndex(safeItems.length);
+  };
+
   // Keyboard navigation
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    const enabledIndices = renderedItems
-      .map((item, idx) => (item.enabled ? idx : -1))
-      .filter((idx) => idx >= 0);
-
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const nextPos = (currentPos + 1) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[nextPos]);
+      e.stopPropagation();
+      const next = moveEnabledIndex(navigableItems, focusedIndex, 1);
+      if (next >= 0) setFocusedIndex(next);
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const prevPos = (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[prevPos]);
-    } else if (e.key === 'Enter' || e.key === ' ') {
+      e.stopPropagation();
+      const prev = moveEnabledIndex(navigableItems, focusedIndex, -1);
+      if (prev >= 0) setFocusedIndex(prev);
+    } else if (isMenuActivationKey(e.key)) {
       e.preventDefault();
+      e.stopPropagation();
+      if (focusedIndex === moreIndex) {
+        expandMore();
+        return;
+      }
       const item = renderedItems[focusedIndex];
       if (item?.enabled) {
         handleItemClick(item);
@@ -216,7 +247,7 @@ export function ContextMenu({
     <div
       ref={menuRef}
       role="menu"
-      className="fixed z-50 bg-gray-800 border border-gray-600 rounded-lg shadow-xl py-1 min-w-[160px]"
+      className="fixed z-50 bg-gray-800 border border-gray-600 rounded-lg shadow-xl py-1 min-w-[160px] outline-none"
       style={{ left: position.left, top: position.top }}
       onKeyDown={handleKeyDown}
       onClick={(event) => event.stopPropagation()}
@@ -250,12 +281,13 @@ export function ContextMenu({
         );
       })}
       {hasMoreButton && (
-        <div>
+        <div key={MORE_ITEM_ID}>
           <div className="border-t border-gray-600 my-1" />
           <button
             role="menuitem"
-            className="w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
-            onClick={() => setShowMore(true)}
+            className={`w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 ${focusedIndex === moreIndex ? 'bg-gray-700' : ''}`}
+            onClick={expandMore}
+            onMouseEnter={() => setFocusedIndex(moreIndex)}
           >
             More
           </button>
