@@ -94,6 +94,29 @@ export interface OpenSessionOptions {
   attach?: AttachContext;
 }
 
+/** Maximum characters retained in the per-session replay buffer (~64 KiB). */
+const MAX_OUTPUT_SNAPSHOT_CHARS = 64 * 1024;
+
+interface OutputBuffer {
+  append(data: string): void;
+  snapshot(): string;
+}
+
+function createOutputBuffer(maxChars: number = MAX_OUTPUT_SNAPSHOT_CHARS): OutputBuffer {
+  let buffer = '';
+  return {
+    append(data: string): void {
+      buffer = buffer.length === 0 ? data : buffer + data;
+      if (buffer.length > maxChars) {
+        buffer = buffer.slice(buffer.length - maxChars);
+      }
+    },
+    snapshot(): string {
+      return buffer;
+    },
+  };
+}
+
 interface BaseSessionState {
   sessionId: string;
   taskId: string;
@@ -103,12 +126,15 @@ interface BaseSessionState {
   createdAt: string;
   status: 'running' | 'exited';
   exitCode?: number;
+  outputBuffer: OutputBuffer;
 }
 
 interface SpawnSessionState extends BaseSessionState {
   mode: 'spawn';
   backend: EmbeddedTerminalBackendName;
-  process: SpawnedTerminalProcess;
+  // Optional because the backend may finish (and thus emit exit) synchronously
+  // during spawn(), before we can capture the returned process handle.
+  process?: SpawnedTerminalProcess;
 }
 
 interface AttachedSessionState extends BaseSessionState {
@@ -138,6 +164,7 @@ function describeSession(state: SessionState): TerminalSessionDescriptor {
     mode: state.mode,
     attached: state.mode === 'attached',
     createdAt: state.createdAt,
+    outputSnapshot: state.outputBuffer.snapshot(),
   };
 }
 
@@ -281,38 +308,63 @@ export class EmbeddedTerminalManager extends EventEmitter {
       cwd: opts.cwd,
       createdAt,
       status: 'running' as const,
+      outputBuffer: createOutputBuffer(),
     };
 
-    let state: SessionState;
     if (opts.attach) {
-      const unsubscribe = opts.attach.executor.onOutput(opts.attach.handle, (data) => {
-        this.emitOutput(sessionId, opts.taskId, data);
-      });
-      state = {
+      const attachState: AttachedSessionState = {
         ...base,
         mode: 'attached',
         attach: opts.attach,
-        unsubscribeOutput: unsubscribe,
+        unsubscribeOutput: () => {},
       };
-    } else {
-      const process = this.backend.spawn({
-        spec: opts.spec,
-        cwd: opts.cwd,
-        defaultShell: this.defaultShell,
-        emitOutput: (data) => this.emitOutput(sessionId, opts.taskId, data),
-        emitExit: (exitCode) => this.finalizeSession(state, exitCode),
-      });
-      state = {
-        ...base,
-        mode: 'spawn',
-        backend: this.backend.name,
-        process,
-      };
+      // Register before subscribing so any synchronous output emitted from
+      // executor.onOutput() can find the session in the map.
+      this.sessions.set(sessionId, attachState);
+      this.targetIndex.set(targetKey, sessionId);
+      attachState.unsubscribeOutput = opts.attach.executor.onOutput(
+        opts.attach.handle,
+        (data) => this.emitOutput(sessionId, opts.taskId, data),
+      );
+      return describeSession(attachState);
     }
 
-    this.sessions.set(sessionId, state);
+    const spawnState: SpawnSessionState = {
+      ...base,
+      mode: 'spawn',
+      backend: this.backend.name,
+      process: undefined,
+    };
+    // Register the session *before* invoking the backend so output and exit
+    // emitted synchronously inside spawn() find the bookkeeping (and the
+    // output buffer) already in place. finalizeSession resolves state by id
+    // rather than relying on a closed-over `state` reference that would still
+    // be in its TDZ if exit fires inside spawn().
+    this.sessions.set(sessionId, spawnState);
     this.targetIndex.set(targetKey, sessionId);
-    return describeSession(state);
+
+    const process = this.backend.spawn({
+      spec: opts.spec,
+      cwd: opts.cwd,
+      defaultShell: this.defaultShell,
+      emitOutput: (data) => this.emitOutput(sessionId, opts.taskId, data),
+      emitExit: (exitCode) => this.finalizeSessionById(sessionId, exitCode),
+    });
+
+    if (spawnState.status === 'running') {
+      spawnState.process = process;
+    } else {
+      // Backend exited synchronously during spawn(); the session has already
+      // been finalized and removed. Close the orphaned process handle so the
+      // backend can release any resources it returned.
+      try {
+        process.close();
+      } catch {
+        /* best-effort cleanup */
+      }
+    }
+
+    return describeSession(spawnState);
   }
 
   list(): TerminalSessionDescriptor[] {
@@ -338,6 +390,9 @@ export class EmbeddedTerminalManager extends EventEmitter {
         return { ok: false, reason: err instanceof Error ? err.message : String(err) };
       }
     }
+    if (!state.process) {
+      return { ok: false, reason: `Session "${sessionId}" is still starting.` };
+    }
     try {
       state.process.write(data);
       return { ok: true };
@@ -353,6 +408,9 @@ export class EmbeddedTerminalManager extends EventEmitter {
       return { ok: false, reason: `Session "${sessionId}" has already exited.` };
     }
     if (state.mode === 'attached') return { ok: true };
+    if (!state.process) {
+      return { ok: false, reason: `Session "${sessionId}" is still starting.` };
+    }
     try {
       state.process.resize(cols, rows);
       return { ok: true };
@@ -374,13 +432,25 @@ export class EmbeddedTerminalManager extends EventEmitter {
     }
   }
 
+  private finalizeSessionById(sessionId: string, exitCode: number | undefined): void {
+    const state = this.sessions.get(sessionId);
+    if (!state) return;
+    this.finalizeSession(state, exitCode);
+  }
+
   private finalizeSession(state: SessionState, exitCode: number | undefined): void {
     if (state.status === 'exited') return;
     state.status = 'exited';
     state.exitCode = exitCode;
 
     if (state.mode === 'spawn') {
-      state.process.close();
+      // process is undefined only when the backend exited synchronously inside
+      // spawn() before the handle was assigned; there is nothing to close.
+      try {
+        state.process?.close();
+      } catch {
+        /* close is best-effort */
+      }
     } else {
       try {
         state.unsubscribeOutput();
@@ -403,6 +473,11 @@ export class EmbeddedTerminalManager extends EventEmitter {
   }
 
   private emitOutput(sessionId: string, taskId: string, data: string): void {
+    const state = this.sessions.get(sessionId);
+    // Append to the replay buffer before emitting the live event so a renderer
+    // that subscribes between emit() returning and its next descriptor fetch
+    // will still see the data on the next list() / openOrReuse() snapshot.
+    state?.outputBuffer.append(data);
     const payload: TerminalOutputEvent = { sessionId, taskId, data };
     this.emit('output', payload);
   }

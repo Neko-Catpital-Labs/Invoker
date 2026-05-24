@@ -277,6 +277,13 @@ export interface TerminalSessionDescriptor {
   mode: 'spawn' | 'attached';
   attached: boolean;
   createdAt: string;
+  /**
+   * Bounded snapshot of recent terminal output captured by the main process,
+   * used by the renderer to seed a newly mounted terminal pane that subscribed
+   * after early PTY output was already emitted. Trimmed to a fixed maximum so
+   * the descriptor stays small.
+   */
+  outputSnapshot?: string;
 }
 
 export interface TerminalOutputEvent {
