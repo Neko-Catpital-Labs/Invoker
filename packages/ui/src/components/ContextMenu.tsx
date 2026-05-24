@@ -28,6 +28,8 @@ interface ContextMenuProps {
   onClose: () => void;
 }
 
+const MORE_NAV_KEY = '__more__';
+
 export function ContextMenu({
   x,
   y,
@@ -41,7 +43,7 @@ export function ContextMenu({
   onClose,
 }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
-  const [focusedIndex, setFocusedIndex] = useState(0);
+  const [focusedKey, setFocusedKey] = useState<string>('');
   const [position, setPosition] = useState({ left: x, top: y });
   const [showMore, setShowMore] = useState(false);
 
@@ -61,15 +63,39 @@ export function ContextMenu({
   const hasMoreButton = dangerItems.length > 0 && !showMore;
   const renderedItems: MenuItem[] = showMore ? [...safeItems, ...dangerItems] : safeItems;
 
-  // Find first enabled item index
-  const firstEnabledIndex = renderedItems.findIndex((item) => item.enabled);
+  // Build a keyboard-navigation list that includes the More button as a
+  // first-class navigable entry. The "key" is the item id, or MORE_NAV_KEY for
+  // the More button.
+  const navKeys: string[] = [
+    ...renderedItems.filter((item) => item.enabled).map((item) => item.id),
+    ...(hasMoreButton ? [MORE_NAV_KEY] : []),
+  ];
 
-  // Auto-focus first enabled item on mount
+  // Initialize focused key and reset it after expanding "More" so focus lands
+  // on a deterministic enabled entry (the first newly-revealed item).
   useEffect(() => {
-    if (firstEnabledIndex >= 0) {
-      setFocusedIndex(firstEnabledIndex);
+    if (showMore) {
+      const firstDanger = dangerItems.find((item) => item.enabled);
+      if (firstDanger) {
+        setFocusedKey(firstDanger.id);
+        return;
+      }
     }
-  }, [firstEnabledIndex]);
+    if (navKeys.length === 0) {
+      setFocusedKey('');
+      return;
+    }
+    if (!navKeys.includes(focusedKey)) {
+      setFocusedKey(navKeys[0]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showMore]);
+
+  // Focus the menu container on mount and after expanding "More" so it owns
+  // keyboard events even if the More button was the last DOM-focused element.
+  useLayoutEffect(() => {
+    menuRef.current?.focus({ preventScroll: true });
+  }, [showMore]);
 
   // Viewport clamping: flip if menu overflows bottom or right
   useLayoutEffect(() => {
@@ -133,25 +159,32 @@ export function ContextMenu({
     };
   }, [onClose]);
 
+  const expandMore = () => {
+    setShowMore(true);
+    const firstDanger = dangerItems.find((item) => item.enabled);
+    if (firstDanger) setFocusedKey(firstDanger.id);
+  };
+
   // Keyboard navigation
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    const enabledIndices = renderedItems
-      .map((item, idx) => (item.enabled ? idx : -1))
-      .filter((idx) => idx >= 0);
-
-    if (e.key === 'ArrowDown') {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      if (navKeys.length === 0) return;
       e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const nextPos = (currentPos + 1) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[nextPos]);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const prevPos = (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[prevPos]);
+      e.stopPropagation();
+      const currentPos = navKeys.indexOf(focusedKey);
+      const offset = e.key === 'ArrowDown' ? 1 : -1;
+      const nextPos = currentPos < 0
+        ? (offset > 0 ? 0 : navKeys.length - 1)
+        : (currentPos + offset + navKeys.length) % navKeys.length;
+      setFocusedKey(navKeys[nextPos]);
     } else if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
-      const item = renderedItems[focusedIndex];
+      e.stopPropagation();
+      if (focusedKey === MORE_NAV_KEY) {
+        expandMore();
+        return;
+      }
+      const item = renderedItems.find((entry) => entry.id === focusedKey);
       if (item?.enabled) {
         handleItemClick(item);
       }
@@ -222,8 +255,8 @@ export function ContextMenu({
       onClick={(event) => event.stopPropagation()}
       tabIndex={-1}
     >
-      {renderedItems.map((item, idx) => {
-        const isFocused = idx === focusedIndex;
+      {renderedItems.map((item) => {
+        const isFocused = item.id === focusedKey;
         const tooltip = !item.enabled && item.id === 'open-terminal'
           ? EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE
           : undefined;
@@ -240,7 +273,7 @@ export function ContextMenu({
                 item.enabled
               )} ${isFocused ? 'bg-gray-700' : ''}`}
               onClick={() => handleItemClick(item)}
-              onMouseEnter={() => setFocusedIndex(idx)}
+              onMouseEnter={() => item.enabled && setFocusedKey(item.id)}
               disabled={!item.enabled}
               title={tooltip}
             >
@@ -254,8 +287,11 @@ export function ContextMenu({
           <div className="border-t border-gray-600 my-1" />
           <button
             role="menuitem"
-            className="w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
-            onClick={() => setShowMore(true)}
+            className={`w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 ${
+              focusedKey === MORE_NAV_KEY ? 'bg-gray-700' : ''
+            }`}
+            onClick={expandMore}
+            onMouseEnter={() => setFocusedKey(MORE_NAV_KEY)}
           >
             More
           </button>
