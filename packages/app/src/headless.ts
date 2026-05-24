@@ -28,6 +28,11 @@ import {
   type AgentRegistry,
 } from '@invoker/execution-engine';
 import { loadConfig, resolveSecretsFilePath, type InvokerConfig } from './config.js';
+import { resolveInvokerHomeRoot } from './delete-all-snapshot.js';
+import {
+  ExternalFailureRecoveryLauncher,
+  type RecoveryLaunchOutcome,
+} from './external-failure-recovery.js';
 import { backupPlan } from './plan-backup.js';
 import { startApiServer } from './api-server.js';
 import { WorkflowMutationFacade } from './workflow-mutation-facade.js';
@@ -280,73 +285,68 @@ export function createHeadlessExecutor(
   return executor;
 }
 
-export function wireHeadlessAutoFix(
+export interface HeadlessExternalRecoveryOptions {
+  /** Repo root passed to the launcher as INVOKER_REPO_ROOT. */
+  repoRoot: string;
+  /** Db directory passed to the launcher as INVOKER_DB_DIR. */
+  dbDir?: string;
+  /** Resolves the workflow id for a failed task. Defaults to orchestrator.getTask. */
+  resolveWorkflowId?: (taskId: string) => string | undefined;
+  /** Provides the current InvokerConfig at launch time. Defaults to loadConfig(). */
+  configProvider?: () => InvokerConfig;
+  /** Override launcher (visible for tests). Defaults to a fresh ExternalFailureRecoveryLauncher. */
+  launcher?: ExternalFailureRecoveryLauncher;
+}
+
+export function wireHeadlessExternalRecovery(
   deps: Pick<HeadlessDeps, 'messageBus' | 'orchestrator' | 'persistence'>,
-  taskExecutor: Pick<TaskRunner, 'executeTasks' | 'fixWithAgent' | 'resolveConflict'>,
-  invokeAutoFix: (taskId: string) => Promise<void> = async (taskId) => {
-    const { autoFixOnFailure } = await import('./workflow-actions.js');
-    await autoFixOnFailure(taskId, {
-      orchestrator: deps.orchestrator,
-      persistence: deps.persistence,
-      taskExecutor: taskExecutor as TaskRunner,
-      getAutoFixAgent: () => loadConfig().autoFixAgent,
-      getAutoApproveAIFixes: () => loadConfig().autoApproveAIFixes,
-    });
-  },
-  onError: (taskId: string, err: unknown) => void = (taskId, err) => {
-    process.stderr.write(`[auto-fix] "${taskId}": ${err}\n`);
-  },
-): HeadlessAutoFixController {
-  const autoFixInProgress = new Set<string>();
-  const logHeadlessAutoFixDebug = (
+  options: HeadlessExternalRecoveryOptions,
+): HeadlessExternalRecoveryController {
+  const launcher = options.launcher ?? new ExternalFailureRecoveryLauncher();
+  const configProvider = options.configProvider ?? (() => loadConfig());
+  const resolveWorkflowId = options.resolveWorkflowId ?? ((taskId: string) => {
+    const task = deps.orchestrator.getTask?.(taskId) as
+      | { config?: { workflowId?: string } }
+      | undefined;
+    return task?.config?.workflowId;
+  });
+
+  const logRecoveryDebug = (
     taskId: string,
     phase: string,
     details: Record<string, unknown> = {},
   ): void => {
-    const getTask = (deps.orchestrator as { getTask?: (id: string) => unknown }).getTask;
-    const task = getTask?.(taskId) as
-      | { status?: string; execution?: { autoFixAttempts?: number | null } }
-      | undefined;
-    const payload = {
-      phase,
-      status: task?.status ?? 'missing',
-      autoFixAttempts: task?.execution?.autoFixAttempts ?? null,
-      inProgressCount: autoFixInProgress.size,
-      inProgressForTask: autoFixInProgress.has(taskId),
-      ...details,
-    };
-    deps.persistence.logEvent?.(taskId, 'debug.auto-fix', payload);
-    process.stderr.write(`[auto-fix-debug][headless] task="${taskId}" phase=${phase} payload=${JSON.stringify(payload)}\n`);
+    const payload = { phase, ...details };
+    deps.persistence.logEvent?.(taskId, 'debug.external-recovery', payload);
+    process.stderr.write(
+      `[external-recovery][headless] task="${taskId}" phase=${phase} payload=${JSON.stringify(payload)}\n`,
+    );
   };
 
   const unsubscribe = deps.messageBus.subscribe<TaskDelta>(Channels.TASK_DELTA, (delta) => {
     if (delta.type !== 'updated' || delta.changes.status !== 'failed') return;
-    const inProgress = autoFixInProgress.has(delta.taskId);
-    const shouldAutoFix = deps.orchestrator.shouldAutoFix(delta.taskId);
-    logHeadlessAutoFixDebug(delta.taskId, 'delta-failed', { shouldAutoFix, inProgress });
-    if (inProgress || !shouldAutoFix) {
-      logHeadlessAutoFixDebug(delta.taskId, 'schedule-skip', {
-        reason: !shouldAutoFix ? 'shouldAutoFix-false' : 'already-in-progress',
-      });
+    const workflowId = resolveWorkflowId(delta.taskId);
+    if (!workflowId) {
+      logRecoveryDebug(delta.taskId, 'skip', { reason: 'workflow-not-found' });
       return;
     }
-    autoFixInProgress.add(delta.taskId);
-    logHeadlessAutoFixDebug(delta.taskId, 'dispatch');
-    void invokeAutoFix(delta.taskId)
-      .catch((err) => {
-        logHeadlessAutoFixDebug(delta.taskId, 'dispatch-error', {
-          error: err instanceof Error ? err.stack ?? err.message : String(err),
-        });
-        onError(delta.taskId, err);
-      })
-      .finally(() => {
-        autoFixInProgress.delete(delta.taskId);
-        logHeadlessAutoFixDebug(delta.taskId, 'dispatch-finished');
-      });
+    const outcome: RecoveryLaunchOutcome = launcher.launch(
+      configProvider(),
+      {
+        failedTaskId: delta.taskId,
+        failedWorkflowId: workflowId,
+        repoRoot: options.repoRoot,
+        dbDir: options.dbDir ?? resolveInvokerHomeRoot(),
+      },
+    );
+    logRecoveryDebug(delta.taskId, outcome.launched ? 'launched' : 'skip', {
+      workflowId,
+      ...(outcome.launched ? {} : { reason: outcome.reason, detail: outcome.detail }),
+    });
   });
   return {
     unsubscribe,
-    isBusy: () => autoFixInProgress.size > 0,
+    isBusy: () => false,
   };
 }
 
@@ -387,7 +387,7 @@ export interface QueryFlags {
   positional: string[];
 }
 
-export interface HeadlessAutoFixController {
+export interface HeadlessExternalRecoveryController {
   unsubscribe: () => void;
   isBusy: () => boolean;
 }
@@ -1344,7 +1344,7 @@ async function headlessRun(
 
   const taskExecutor = createHeadlessExecutor(deps);
   wireHeadlessApproveHook(deps, taskExecutor);
-  const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
+  const autoFix = wireHeadlessExternalRecovery(deps, { repoRoot: deps.repoRoot });
 
   const api = startApiServer({
     logger: deps.logger,
@@ -1409,7 +1409,7 @@ async function headlessResume(
 
   const taskExecutor = createHeadlessExecutor(deps);
   wireHeadlessApproveHook(deps, taskExecutor);
-  const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
+  const autoFix = wireHeadlessExternalRecovery(deps, { repoRoot: deps.repoRoot });
 
   const api = startApiServer({
     logger: deps.logger,
@@ -1466,7 +1466,7 @@ async function headlessApprove(taskId: string, deps: HeadlessDeps): Promise<void
     taskId = restored.resolvedTaskId;
     const te = createHeadlessExecutor(deps);
     wireHeadlessApproveHook(deps, te);
-    const autoFix = wireHeadlessAutoFix(deps, te);
+    const autoFix = wireHeadlessExternalRecovery(deps, { repoRoot: deps.repoRoot });
     const approveTaskAction = buildHeadlessApproveAction(deps, te);
     const beforeStatus = deps.orchestrator.getWorkflowStatus(restored.workflowId);
     const { started } = await approveTaskAction(taskId);
@@ -1545,7 +1545,7 @@ async function headlessSelect(taskId: string, experimentId: string, deps: Headle
     process.stdout.write(`Selected experiment ${experimentId} for task: ${resolvedTaskId}\n`);
 
     const taskExecutor = createHeadlessExecutor(deps);
-    const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
+    const autoFix = wireHeadlessExternalRecovery(deps, { repoRoot: deps.repoRoot });
     const started = deps.orchestrator.resumeWorkflow(workflowId);
     void started;
     await trackHeadlessWorkflow(workflowId, deps, {
@@ -1585,7 +1585,7 @@ async function headlessRetryTask(taskId: string, deps: HeadlessDeps): Promise<vo
     process.stdout.write(`Restarted task "${taskId}" — ${runnable.length} task(s) to execute\n`);
 
     const taskExecutor = createHeadlessExecutor(deps);
-    const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
+    const autoFix = wireHeadlessExternalRecovery(deps, { repoRoot: deps.repoRoot });
     const { topup } = await dispatchStartedTasksWithGlobalTopup({
       orchestrator: deps.orchestrator,
       taskExecutor,
@@ -1616,7 +1616,7 @@ async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string
   taskId = restored.resolvedTaskId;
 
   const te = createHeadlessExecutor(deps);
-  const autoFix = wireHeadlessAutoFix(deps, te);
+  const autoFix = wireHeadlessExternalRecovery(deps, { repoRoot: deps.repoRoot });
   const agent = (agentArg ?? 'claude').toLowerCase();
   try {
     const result = await fixWithAgentAction(taskId, {
@@ -1673,7 +1673,7 @@ async function headlessResolveConflict(taskId: string, deps: HeadlessDeps, agent
   taskId = restored.resolvedTaskId;
 
   const te = createHeadlessExecutor(deps);
-  const autoFix = wireHeadlessAutoFix(deps, te);
+  const autoFix = wireHeadlessExternalRecovery(deps, { repoRoot: deps.repoRoot });
   const agent = (agentArg ?? 'claude').toLowerCase();
   try {
     const result = await resolveConflictAction(taskId, {
@@ -1720,7 +1720,7 @@ async function headlessRebaseRetry(target: string, deps: HeadlessDeps): Promise<
   });
 
   const te = createHeadlessExecutor(deps);
-  const autoFix = wireHeadlessAutoFix(deps, te);
+  const autoFix = wireHeadlessExternalRecovery(deps, { repoRoot: deps.repoRoot });
   const started = await rebaseRetry(target, { ...deps, taskExecutor: te, mutationTiming: deps.mutationTiming });
   const runnable = started.filter(isDispatchableLaunch);
   const { topup } = await dispatchStartedTasksWithGlobalTopup({
@@ -1764,7 +1764,7 @@ async function headlessRebaseRecreate(workflowTarget: string, deps: HeadlessDeps
   });
 
   const te = createHeadlessExecutor(deps);
-  const autoFix = wireHeadlessAutoFix(deps, te);
+  const autoFix = wireHeadlessExternalRecovery(deps, { repoRoot: deps.repoRoot });
   const started = await rebaseRecreate(workflowTarget, { ...deps, taskExecutor: te, mutationTiming: deps.mutationTiming });
   const runnable = started.filter(isDispatchableLaunch);
   const { topup } = await dispatchStartedTasksWithGlobalTopup({
@@ -1820,7 +1820,7 @@ async function headlessRecreateWorkflow(workflowId: string, deps: HeadlessDeps):
   const runnable = started.filter(isDispatchableLaunch);
   if (runnable.length > 0) {
     const te = createHeadlessExecutor(deps);
-    const autoFix = wireHeadlessAutoFix(deps, te);
+    const autoFix = wireHeadlessExternalRecovery(deps, { repoRoot: deps.repoRoot });
     remoteFetchForPool.enabled = false;
     let topup: TaskState[] = [];
     try {
@@ -1888,7 +1888,7 @@ async function headlessRecreateTask(taskId: string, deps: HeadlessDeps): Promise
   const workflowId = deps.orchestrator.getTask(taskId)?.config.workflowId;
   process.stdout.write(`Recreate task "${taskId}" (+ downstream) — ${runnable.length} task(s) to execute (pool fetch skipped)\n`);
   const te = createHeadlessExecutor(deps);
-  const autoFix = wireHeadlessAutoFix(deps, te);
+  const autoFix = wireHeadlessExternalRecovery(deps, { repoRoot: deps.repoRoot });
   remoteFetchForPool.enabled = false;
   let topup: TaskState[] = [];
   try {
@@ -2048,7 +2048,7 @@ async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Pr
   }
 
   const te = createHeadlessExecutor(deps);
-  const autoFix = wireHeadlessAutoFix(deps, te);
+  const autoFix = wireHeadlessExternalRecovery(deps, { repoRoot: deps.repoRoot });
   remoteFetchForPool.enabled = false;
   let topup: TaskState[] = [];
   try {
@@ -2120,7 +2120,7 @@ async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDe
   if (!restored) return;
   taskId = restored.resolvedTaskId;
   const taskExecutor = createHeadlessExecutor(deps);
-  const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
+  const autoFix = wireHeadlessExternalRecovery(deps, { repoRoot: deps.repoRoot });
 
   const envelope = makeEnvelope('edit-task-command', 'headless', 'task', { taskId, newCommand });
   const result = await deps.commandService.editTaskCommand(envelope);
@@ -2154,7 +2154,7 @@ async function headlessEditPrompt(taskId: string, newPrompt: string, deps: Headl
   const restored = restoreWorkflowForTask(taskId, deps);
   taskId = restored.resolvedTaskId;
   const taskExecutor = createHeadlessExecutor(deps);
-  const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
+  const autoFix = wireHeadlessExternalRecovery(deps, { repoRoot: deps.repoRoot });
 
   const envelope = makeEnvelope('edit-task-prompt', 'headless', 'task', { taskId, newPrompt });
   const result = await deps.commandService.editTaskPrompt(envelope);
@@ -2198,7 +2198,7 @@ async function headlessEditExecutor(
   if (!restored) return;
   taskId = restored.resolvedTaskId;
   const taskExecutor = createHeadlessExecutor(deps);
-  const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
+  const autoFix = wireHeadlessExternalRecovery(deps, { repoRoot: deps.repoRoot });
 
   const envelope = makeEnvelope('edit-task-type', 'headless', 'task', { taskId, runnerKind, poolMemberId });
   const result = await deps.commandService.editTaskType(envelope);
@@ -2236,7 +2236,7 @@ async function headlessEditAgent(taskId: string, agentName: string, deps: Headle
   if (!restored) return;
   taskId = restored.resolvedTaskId;
   const taskExecutor = createHeadlessExecutor(deps);
-  const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
+  const autoFix = wireHeadlessExternalRecovery(deps, { repoRoot: deps.repoRoot });
 
   const envelope = makeEnvelope('edit-task-agent', 'headless', 'task', { taskId, agentName });
   const result = await deps.commandService.editTaskAgent(envelope);
@@ -2678,7 +2678,7 @@ async function headlessSetFixContext(
   const restored = restoreWorkflowForTask(taskId, deps);
   taskId = restored.resolvedTaskId;
   const taskExecutor = createHeadlessExecutor(deps);
-  const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
+  const autoFix = wireHeadlessExternalRecovery(deps, { repoRoot: deps.repoRoot });
 
   const envelope = makeEnvelope('edit-task-fix-context', 'headless', 'task', {
     taskId,

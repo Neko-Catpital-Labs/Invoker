@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Group 2.17 — owner-mode auto-fix must enqueue persisted fix mutation intents.
+# Group 2.17 — owner-mode failed deltas must route through external recovery
+# and must not auto-enqueue an invoker:fix-with-agent intent.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -60,15 +61,15 @@ if [ "$READY" -ne 1 ]; then
 fi
 
 cat > "$PLAN_PATH" <<EOF
-name: e2e-dry-run group2 2.17 auto-fix persisted intent
+name: e2e-dry-run group2 2.17 external recovery on failure
 repoUrl: $(python3 - <<'PY' "$REPO_ROOT"
 import pathlib, sys
 print(pathlib.Path(sys.argv[1]).resolve().as_uri())
 PY
 )
 tasks:
-  - id: fail-for-autofix
-    description: Fail to trigger auto-fix
+  - id: fail-for-recovery
+    description: Fail to trigger external-recovery routing
     command: bash -lc 'exit 1'
 EOF
 
@@ -86,9 +87,9 @@ if [ -z "$WF_ID" ]; then
   cat "$SUBMIT_LOG"
   exit 1
 fi
-TASK_ID="$WF_ID/fail-for-autofix"
+TASK_ID="$WF_ID/fail-for-recovery"
 
-echo "==> case 2.17: verify failed delta enqueued persisted fix intent"
+echo "==> case 2.17: verify failed delta emits external-recovery skip and no fix intent"
 FOUND=0
 for i in $(seq 1 90); do
   if python3 - <<'PY' "$DB_PATH" "$TASK_ID"
@@ -106,13 +107,13 @@ events = conn.execute(
 ).fetchall()
 
 has_failed = any(row["event_type"] == "task.failed" for row in events)
-has_schedule_enqueued = False
+has_recovery_skip = False
 for row in events:
-    if row["event_type"] != "debug.auto-fix":
+    if row["event_type"] != "debug.external-recovery":
         continue
     payload = json.loads(row["payload"]) if row["payload"] else {}
-    if payload.get("phase") == "schedule-enqueued":
-        has_schedule_enqueued = True
+    if payload.get("phase") == "skip" and payload.get("reason") == "disabled":
+        has_recovery_skip = True
         break
 
 intents = conn.execute(
@@ -124,11 +125,11 @@ for row in intents:
     if row["channel"] != "invoker:fix-with-agent":
         continue
     args = json.loads(row["args_json"]) if row["args_json"] else []
-    if len(args) > 0 and args[0] == task_id and row["status"] in ("queued", "running", "completed", "failed"):
+    if len(args) > 0 and args[0] == task_id:
         has_fix_intent = True
         break
 
-raise SystemExit(0 if (has_failed and has_schedule_enqueued and has_fix_intent) else 1)
+raise SystemExit(0 if (has_failed and has_recovery_skip and not has_fix_intent) else 1)
 PY
   then
     FOUND=1
@@ -138,7 +139,7 @@ PY
 done
 
 if [ "$FOUND" -ne 1 ]; then
-  echo "FAIL case 2.17: expected task.failed + debug.auto-fix schedule-enqueued + persisted invoker:fix-with-agent intent"
+  echo "FAIL case 2.17: expected task.failed + debug.external-recovery skip(disabled) + no invoker:fix-with-agent intent"
   python3 - <<'PY' "$DB_PATH" "$TASK_ID"
 import sqlite3, sys
 db_path, task_id = sys.argv[1], sys.argv[2]
@@ -153,4 +154,4 @@ PY
   exit 1
 fi
 
-echo "PASS case 2.17 (owner-mode auto-fix intent persisted and observed in workflow_mutation_intents)"
+echo "PASS case 2.17 (owner-mode failed delta routes through external-recovery skip and does not enqueue auto-fix intent)"
