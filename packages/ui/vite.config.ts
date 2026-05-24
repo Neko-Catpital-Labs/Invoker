@@ -13,10 +13,11 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: {
-          // Split large vendor chunks to reduce memory pressure
-          react: ['react', 'react-dom'],
+          // Keep @xyflow/react in its own chunk so the cold-start entry
+          // chunk only carries the lightweight shell + WorkflowGraph code
+          // path. Other vendor splits are left to Rollup's dynamic-import
+          // code splitting (TaskDAG → elkjs, modals, secondary views).
           xyflow: ['@xyflow/react'],
-          xterm: ['xterm', 'xterm-addon-fit'],
         },
       },
     },
