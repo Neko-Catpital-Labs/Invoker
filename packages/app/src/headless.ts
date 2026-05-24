@@ -28,6 +28,8 @@ import {
   type AgentRegistry,
 } from '@invoker/execution-engine';
 import { loadConfig, resolveSecretsFilePath, type InvokerConfig } from './config.js';
+import { ExternalFailureRecoveryLauncher } from './external-failure-recovery.js';
+import { resolveInvokerHomeRoot } from './delete-all-snapshot.js';
 import { backupPlan } from './plan-backup.js';
 import { startApiServer } from './api-server.js';
 import { WorkflowMutationFacade } from './workflow-mutation-facade.js';
@@ -281,74 +283,70 @@ export function createHeadlessExecutor(
 }
 
 export function wireHeadlessAutoFix(
-  deps: Pick<HeadlessDeps, 'messageBus' | 'orchestrator' | 'persistence'>,
-  taskExecutor: Pick<TaskRunner, 'executeTasks' | 'fixWithAgent' | 'resolveConflict'>,
-  invokeAutoFix: (taskId: string) => Promise<void> = async (taskId) => {
-    const { autoFixOnFailure } = await import('./workflow-actions.js');
-    await autoFixOnFailure(taskId, {
-      orchestrator: deps.orchestrator,
-      persistence: deps.persistence,
-      taskExecutor: taskExecutor as TaskRunner,
-      getAutoFixAgent: () => loadConfig().autoFixAgent,
-      getAutoApproveAIFixes: () => loadConfig().autoApproveAIFixes,
+  deps: Pick<HeadlessDeps, 'messageBus' | 'orchestrator' | 'persistence' | 'repoRoot'>,
+  _taskExecutor: Pick<TaskRunner, 'executeTasks' | 'fixWithAgent' | 'resolveConflict'>,
+  invokeRecovery: (taskId: string) => void = (taskId) => {
+    const orch = deps.orchestrator as { getTask?: (id: string) => { config?: { workflowId?: string } } | undefined };
+    const workflowId = orch.getTask?.(taskId)?.config?.workflowId;
+    if (!workflowId) {
+      deps.persistence.logEvent?.(taskId, 'debug.external-recovery', {
+        phase: 'skip',
+        reason: 'workflow-not-found',
+      });
+      return;
+    }
+    const result = headlessExternalFailureRecoveryLauncher.launch(loadConfig(), {
+      failedTaskId: taskId,
+      failedWorkflowId: workflowId,
+      repoRoot: deps.repoRoot,
+      dbDir: resolveInvokerHomeRoot(),
+    });
+    deps.persistence.logEvent?.(taskId, 'debug.external-recovery', {
+      phase: result.launched ? 'launched' : 'skipped',
+      reason: result.reason,
+      ...(result.error ? { error: result.error } : {}),
     });
   },
   onError: (taskId: string, err: unknown) => void = (taskId, err) => {
-    process.stderr.write(`[auto-fix] "${taskId}": ${err}\n`);
+    process.stderr.write(`[external-recovery] "${taskId}": ${err}\n`);
   },
 ): HeadlessAutoFixController {
-  const autoFixInProgress = new Set<string>();
-  const logHeadlessAutoFixDebug = (
+  const logHeadlessExternalRecoveryDebug = (
     taskId: string,
     phase: string,
     details: Record<string, unknown> = {},
   ): void => {
     const getTask = (deps.orchestrator as { getTask?: (id: string) => unknown }).getTask;
-    const task = getTask?.(taskId) as
-      | { status?: string; execution?: { autoFixAttempts?: number | null } }
-      | undefined;
+    const task = getTask?.(taskId) as { status?: string } | undefined;
     const payload = {
       phase,
       status: task?.status ?? 'missing',
-      autoFixAttempts: task?.execution?.autoFixAttempts ?? null,
-      inProgressCount: autoFixInProgress.size,
-      inProgressForTask: autoFixInProgress.has(taskId),
       ...details,
     };
-    deps.persistence.logEvent?.(taskId, 'debug.auto-fix', payload);
-    process.stderr.write(`[auto-fix-debug][headless] task="${taskId}" phase=${phase} payload=${JSON.stringify(payload)}\n`);
+    deps.persistence.logEvent?.(taskId, 'debug.external-recovery', payload);
+    process.stderr.write(`[external-recovery-debug][headless] task="${taskId}" phase=${phase} payload=${JSON.stringify(payload)}\n`);
   };
 
   const unsubscribe = deps.messageBus.subscribe<TaskDelta>(Channels.TASK_DELTA, (delta) => {
     if (delta.type !== 'updated' || delta.changes.status !== 'failed') return;
-    const inProgress = autoFixInProgress.has(delta.taskId);
-    const shouldAutoFix = deps.orchestrator.shouldAutoFix(delta.taskId);
-    logHeadlessAutoFixDebug(delta.taskId, 'delta-failed', { shouldAutoFix, inProgress });
-    if (inProgress || !shouldAutoFix) {
-      logHeadlessAutoFixDebug(delta.taskId, 'schedule-skip', {
-        reason: !shouldAutoFix ? 'shouldAutoFix-false' : 'already-in-progress',
+    logHeadlessExternalRecoveryDebug(delta.taskId, 'delta-failed');
+    try {
+      invokeRecovery(delta.taskId);
+      logHeadlessExternalRecoveryDebug(delta.taskId, 'dispatch-finished');
+    } catch (err) {
+      logHeadlessExternalRecoveryDebug(delta.taskId, 'dispatch-error', {
+        error: err instanceof Error ? err.stack ?? err.message : String(err),
       });
-      return;
+      onError(delta.taskId, err);
     }
-    autoFixInProgress.add(delta.taskId);
-    logHeadlessAutoFixDebug(delta.taskId, 'dispatch');
-    void invokeAutoFix(delta.taskId)
-      .catch((err) => {
-        logHeadlessAutoFixDebug(delta.taskId, 'dispatch-error', {
-          error: err instanceof Error ? err.stack ?? err.message : String(err),
-        });
-        onError(delta.taskId, err);
-      })
-      .finally(() => {
-        autoFixInProgress.delete(delta.taskId);
-        logHeadlessAutoFixDebug(delta.taskId, 'dispatch-finished');
-      });
   });
   return {
     unsubscribe,
-    isBusy: () => autoFixInProgress.size > 0,
+    isBusy: () => false,
   };
 }
+
+const headlessExternalFailureRecoveryLauncher = new ExternalFailureRecoveryLauncher();
 
 export function wireHeadlessApproveHook(deps: HeadlessDeps, te: TaskRunner): void {
   deps.orchestrator.setBeforeApproveHook(async (task) => {
