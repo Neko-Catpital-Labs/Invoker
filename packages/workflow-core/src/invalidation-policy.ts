@@ -53,26 +53,11 @@ export const MUTATION_POLICIES: Readonly<Record<MutationKey, TaskMutationPolicy>
   mergeMode:             { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'retryTask' as const },
   fixContext:            { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'retryTask' as const },
   rebaseAndRetry:        { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateWorkflowFromFreshBase' as const },
-  // Step 15 (`docs/architecture/task-invalidation-roadmap.md`): the
-  // chart's Decision Table row "Change external gate policy" is the
-  // intentional non-invalidating outlier — it's a scheduling policy
-  // edit, not an execution-spec edit. Action is now the explicit
-  // `'scheduleOnly'` (was `'none'` in Step 1) so the lock-in is
-  // encoded in the policy table itself: `applyInvalidation` skips
-  // `cancelInFlight` for this action and routes to a `scheduleOnly`
-  // dep that triggers an unblock-pass (e.g.
-  // `Orchestrator.autoStartExternallyUnblockedReadyTasks`). Per chart:
-  //   - `invalidatesExecutionSpec: false` (no ABI change)
-  //   - `invalidateIfActive: false`       (in-flight work survives)
+  // Non-invalidating: scheduling-policy edit, not execution-spec edit.
   externalGatePolicy:    { invalidatesExecutionSpec: false, invalidateIfActive: false, action: 'scheduleOnly' as const },
   fixApprove:            { invalidatesExecutionSpec: false, invalidateIfActive: false, action: 'fixApprove' as const },
   fixReject:             { invalidatesExecutionSpec: false, invalidateIfActive: false, action: 'fixReject' as const },
-  // Step 11 (`docs/architecture/task-invalidation-roadmap.md`): graph
-  // topology mutations (e.g. `replaceTask`, `addTask` that changes
-  // parent edges) are fork-class / workflow scope. They must NOT
-  // mutate a live workflow in place; they fork a new workflow rooted
-  // from the relevant node/result. Step 12 wires the matching
-  // `forkWorkflow*` lifecycle dep on `applyInvalidation`.
+  // Topology mutations fork rather than mutate live workflows.
   topology:              { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'workflowFork' as const },
 });
 
@@ -88,42 +73,14 @@ export interface InvalidationDeps {
   retryWorkflow: (workflowId: string) => TaskState[] | Promise<TaskState[]>;
   recreateWorkflow: (workflowId: string) => TaskState[] | Promise<TaskState[]>;
   recreateWorkflowFromFreshBase?: (workflowId: string) => TaskState[] | Promise<TaskState[]>;
-  /**
-   * Step 11 surfaced `'workflowFork'` as the topology-class action;
-   * Step 14 (`docs/architecture/task-invalidation-roadmap.md`) wires
-   * the implementation. Production callers (`buildInvalidationDeps`
-   * in `packages/app/src/workflow-actions.ts`) supply
-   * `Orchestrator.forkWorkflow` here, so the "not yet wired" error
-   * path below is now dead code in production — it only fires for
-   * focused unit tests that build a partial `InvalidationDeps`.
-   */
   workflowFork?: (workflowId: string) => TaskState[] | Promise<TaskState[]>;
-  /**
-   * Step 15 (`docs/architecture/task-invalidation-roadmap.md`):
-   * scheduling-only unblock pass for the chart's "Change external
-   * gate policy" row. Production callers wire this to a scheduler
-   * entrypoint (e.g.
-   * `Orchestrator.autoStartExternallyUnblockedReadyTasks`) via
-   * `buildInvalidationDeps` (`packages/app/src/workflow-actions.ts`).
-   * Unlike retry/recreate deps, this is invoked WITHOUT a
-   * preceding `cancelInFlight` call — gate-policy edits MUST NOT
-   * cancel active work. The dep takes the affected task id so it
-   * can scope the scheduling pass if desired; today's
-   * implementation re-evaluates all externally-unblocked ready
-   * tasks across the orchestrator.
-   */
+  /** Scheduling-only unblock pass; invoked WITHOUT a preceding `cancelInFlight`. */
   scheduleOnly?: (taskId: string) => TaskState[] | Promise<TaskState[]>;
   fixApprove?: (taskId: string) => TaskState[] | Promise<TaskState[]>;
   fixReject?: (taskId: string) => TaskState[] | Promise<TaskState[]>;
   /**
-   * Cross-workflow cascade hook. Invoked by `applyInvalidation` after
-   * an invalidating action's dep returns, so any transitive downstream
-   * workflow that depends on the invalidated upstream is itself
-   * cancel-and-reset-to-pending. The downstream's existing external
-   * dependency gate then re-blocks the freshly-pending tasks until
-   * the upstream re-completes.
-   *
-   * Only invoked for actions that change execution state:
+   * Cross-workflow cascade hook. Invoked only for actions that change
+   * execution state:
    *   - task scope:     `retryTask`, `recreateTask`
    *   - workflow scope: `retryWorkflow`, `recreateWorkflow`,
    *                     `recreateWorkflowFromFreshBase`, `workflowFork`
@@ -131,12 +88,6 @@ export interface InvalidationDeps {
    * Skipped for `'none'`, `'scheduleOnly'`, `'fixApprove'`, and
    * `'fixReject'` — these are non-invalidating per `MUTATION_POLICIES`
    * and must not reset downstream lineage.
-   *
-   * Production callers wire this via `buildInvalidationDeps`
-   * (`packages/app/src/workflow-actions.ts`) to
-   * `Orchestrator.cascadeInvalidationToDownstream`. The dep is
-   * optional so unit tests that build a partial `InvalidationDeps`
-   * keep working without supplying the cascade.
    */
   cascadeDownstream?: (
     scope: InvalidationScope,
@@ -261,11 +212,6 @@ async function invokePrimitive(
       return [];
     case 'scheduleOnly': {
       if (!deps.scheduleOnly) {
-        // Step 15: production callers wire this dep via
-        // `buildInvalidationDeps` (`packages/app/src/workflow-actions.ts`)
-        // to `Orchestrator.autoStartExternallyUnblockedReadyTasks`. This
-        // branch is reachable only from focused unit tests that build a
-        // partial `InvalidationDeps` without the scheduler dep.
         throw new Error(
           "applyInvalidation: 'scheduleOnly' dep is missing. " +
             'Production callers wire this via buildInvalidationDeps in ' +
@@ -306,10 +252,6 @@ async function invokePrimitive(
     }
     case 'workflowFork': {
       if (!deps.workflowFork) {
-        // Step 14 wires this dep in production via
-        // `buildInvalidationDeps` (`packages/app/src/workflow-actions.ts`).
-        // This branch is reachable only from focused unit tests that
-        // build a partial `InvalidationDeps` without the topology dep.
         throw new Error(
           "applyInvalidation: 'workflowFork' dep is missing. " +
             'Production callers wire this via buildInvalidationDeps in ' +
