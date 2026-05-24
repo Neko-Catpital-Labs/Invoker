@@ -500,9 +500,23 @@ export async function rebaseRecreate(
   return started;
 }
 
+/**
+ * Reference to a TaskRunner. Either a direct instance or a getter that
+ * returns the current instance — the latter is required when the dep
+ * builder runs before `taskExecutor` is constructed (the executor is
+ * built lazily by `rebuildTaskRunner` after `commandService`).
+ */
+export type TaskExecutorRef = TaskRunner | (() => TaskRunner | null | undefined);
+
+function resolveTaskExecutor(ref: TaskExecutorRef | undefined): TaskRunner | undefined {
+  if (!ref) return undefined;
+  if (typeof ref === 'function') return ref() ?? undefined;
+  return ref;
+}
+
 export interface BuildCancelInFlightDeps {
   orchestrator: Orchestrator;
-  taskExecutor?: TaskRunner;
+  taskExecutor?: TaskExecutorRef;
 }
 
 export function buildCancelInFlight(deps: BuildCancelInFlightDeps): CancelInFlightFn {
@@ -512,7 +526,7 @@ export function buildCancelInFlight(deps: BuildCancelInFlightDeps): CancelInFlig
       scope === 'task'
         ? deps.orchestrator.cancelTask(id)
         : deps.orchestrator.cancelWorkflow(id);
-    const taskExecutor = deps.taskExecutor;
+    const taskExecutor = resolveTaskExecutor(deps.taskExecutor);
     if (!taskExecutor) return;
     for (const runningId of result.runningCancelled) {
       await taskExecutor.killActiveExecution(runningId);
@@ -520,9 +534,12 @@ export function buildCancelInFlight(deps: BuildCancelInFlightDeps): CancelInFlig
   };
 }
 
-export function buildInvalidationDeps(
-  deps: Pick<ActionDeps, 'logger' | 'orchestrator' | 'persistence' | 'taskExecutor' | 'mutationTiming'>,
-): InvalidationDeps {
+export type BuildInvalidationDepsArgs = Omit<
+  Pick<ActionDeps, 'logger' | 'orchestrator' | 'persistence' | 'mutationTiming'>,
+  'taskExecutor'
+> & { taskExecutor?: TaskExecutorRef };
+
+export function buildInvalidationDeps(deps: BuildInvalidationDepsArgs): InvalidationDeps {
   const cancelInFlight = buildCancelInFlight({
     orchestrator: deps.orchestrator,
     taskExecutor: deps.taskExecutor,
@@ -543,7 +560,7 @@ export function buildInvalidationDeps(
         logger: deps.logger,
         orchestrator: deps.orchestrator,
         persistence: deps.persistence,
-        taskExecutor: deps.taskExecutor,
+        taskExecutor: resolveTaskExecutor(deps.taskExecutor),
         mutationTiming: deps.mutationTiming,
       }),
     workflowFork: (workflowId: string) => {
@@ -554,23 +571,15 @@ export function buildInvalidationDeps(
       );
       return result.started;
     },
-    // Step 15 wiring (`docs/architecture/task-invalidation-roadmap.md`,
-    // chart row "Change external gate policy"). The dep is invoked
-    // by `applyInvalidation` for action `'scheduleOnly'` WITHOUT a
-    // preceding `cancelInFlight` call — gate-policy edits are
-    // non-invalidating per the chart. The orchestrator's existing
-    // `autoStartExternallyUnblockedReadyTasks` primitive is the
-    // right scheduler entrypoint: it re-evaluates every task with
-    // external dependencies whose blocker has cleared. Today's
-    // primitive is workflow-agnostic; the `taskId` argument is
-    // accepted for future scoping but ignored by the underlying
-    // method.
+    // `scheduleOnly` is invoked by applyInvalidation WITHOUT a
+    // preceding cancelInFlight; the underlying primitive is
+    // workflow-agnostic and ignores the taskId argument.
     scheduleOnly: (_taskId: string) =>
       deps.orchestrator.autoStartExternallyUnblockedReadyTasks(),
     fixApprove: async (taskId: string) => {
       const result = await approveTask(taskId, {
         orchestrator: deps.orchestrator,
-        taskExecutor: deps.taskExecutor,
+        taskExecutor: resolveTaskExecutor(deps.taskExecutor),
       });
       return result.started;
     },
