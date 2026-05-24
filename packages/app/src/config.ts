@@ -231,6 +231,26 @@ export interface InvokerConfig {
    * preserved while the dispatcher matures.
    */
   launchOutboxMode?: LaunchOutboxMode;
+  /**
+   * Optional external failure recovery launcher.
+   *
+   * When `enabled` is true and `command` is a non-empty string, the helper
+   * in `external-failure-recovery.ts` spawns the configured command as a
+   * detached process and forwards failed-task context through environment
+   * variables. Operators use this to route failures into their own
+   * supervisor scripts while preserving the manual "Fix with AI" flow.
+   *
+   * `cwd` (optional) overrides the spawn working directory.
+   * `cooldownSeconds` (optional) suppresses launches that occur within the
+   * given window after the previous successful launch. Defaults to 0 (no
+   * cooldown) when omitted.
+   */
+  externalFailureRecovery?: {
+    enabled?: boolean;
+    command?: string;
+    cwd?: string;
+    cooldownSeconds?: number;
+  };
 }
 
 export type LaunchOutboxMode = 'disabled' | 'observe' | 'active';
