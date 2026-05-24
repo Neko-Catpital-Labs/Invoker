@@ -53,11 +53,14 @@ TMP_DIR="$(mktemp -d -t invoker-startup-snapshot-XXXXXX)"
 DB_DIR="$TMP_DIR/db"
 REMOTE_REPO="$TMP_DIR/remote.git"
 CONFIG_PATH="$TMP_DIR/config.json"
-HELPER_MJS="$TMP_DIR/helper.mjs"
+# Helper.mjs must live inside packages/app so Node ESM resolution can find
+# @playwright/test via the app's node_modules. NODE_PATH does not work for ESM.
+HELPER_MJS="$APP_DIR/.repro-startup-snapshot-helper.mjs"
 RESULT_JSON="$TMP_DIR/result.json"
 
 cleanup() {
   rm -rf "$TMP_DIR"
+  rm -f "$HELPER_MJS"
 }
 trap cleanup EXIT
 
@@ -144,9 +147,12 @@ async function seed() {
     }
     const seeded = await page.evaluate(() => window.invoker.getTasks(true));
     const tasks = Array.isArray(seeded) ? seeded : seeded.tasks;
+    // The orchestrator inserts a hidden __merge__ task per workflow regardless
+    // of onFinish; count only the plan tasks to assert the seed shape.
+    const planTasks = tasks.filter((t) => !t.config?.isMergeNode);
     const expected = WORKFLOWS * TASKS_PER_WORKFLOW;
-    if (tasks.length !== expected) {
-      throw new Error(`seed: expected ${expected} tasks, got ${tasks.length}`);
+    if (planTasks.length !== expected) {
+      throw new Error(`seed: expected ${expected} plan tasks, got ${planTasks.length} (total tasks=${tasks.length})`);
     }
     const logs = await page.evaluate(() => window.invoker.getActivityLogs());
     const maxLogId = logs.reduce((acc, entry) => (entry.id > acc ? entry.id : acc), 0);

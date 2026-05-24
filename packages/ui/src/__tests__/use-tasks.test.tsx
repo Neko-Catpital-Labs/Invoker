@@ -126,6 +126,11 @@ describe('useTasks', () => {
 
     const { result } = renderHook(() => useTasks());
 
+    // First refresh triggers the still-pending getTasks call.
+    await act(async () => {
+      result.current.refreshTasks();
+    });
+    // Second refresh triggers the resolving getTasks call that returns t1.
     await act(async () => {
       result.current.refreshTasks();
     });
@@ -143,19 +148,18 @@ describe('useTasks', () => {
     expect(result.current.tasks.get('t1')?.id).toBe('t1');
   });
 
-  it('does not replace a full bootstrap with a smaller initial snapshot', async () => {
+  it('skips the initial getTasks snapshot when preload bootstrap state is provided', async () => {
     const bootA = makeUITask({ id: 'boot-a', description: 'Bootstrap A' });
     const bootB = makeUITask({ id: 'boot-b', description: 'Bootstrap B' });
-    const smaller = makeUITask({ id: 'boot-a', description: 'Smaller A' });
+    const getTasks = vi.fn().mockResolvedValue({ tasks: [], workflows: [] });
+    const checkPrStatuses = vi.fn();
     (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
       tasks: [bootA, bootB],
       workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'running' }],
     };
     (window as unknown as { invoker: Record<string, unknown> }).invoker = {
-      getTasks: vi.fn().mockResolvedValue({
-        tasks: [smaller],
-        workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'running' }],
-      }),
+      getTasks,
+      checkPrStatuses,
       reportUiPerf: vi.fn(),
       onTaskDelta: vi.fn(() => () => {}),
       onWorkflowsChanged: vi.fn(() => () => {}),
@@ -163,20 +167,39 @@ describe('useTasks', () => {
 
     const { result } = renderHook(() => useTasks());
 
-    await waitFor(() => {
-      expect(window.invoker.getTasks).toHaveBeenCalled();
+    // Allow effects and any queued microtasks to flush.
+    await act(async () => {
+      await Promise.resolve();
     });
 
+    expect(getTasks).not.toHaveBeenCalled();
+    expect(checkPrStatuses).toHaveBeenCalled();
     expect(result.current.tasks.size).toBe(2);
     expect(result.current.tasks.get('boot-a')?.description).toBe('Bootstrap A');
     expect(result.current.tasks.get('boot-b')?.description).toBe('Bootstrap B');
-    expect(window.invoker.reportUiPerf).toHaveBeenCalledWith(
-      'startup_snapshot_skipped_smaller_than_bootstrap',
-      expect.objectContaining({
-        bootstrapTaskCount: 2,
-        snapshotTaskCount: 1,
-      }),
-    );
+    expect(result.current.workflows.get('wf-1')?.name).toBe('Workflow 1');
+  });
+
+  it('falls back to an initial getTasks fetch when no preload bootstrap is present', async () => {
+    delete (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__;
+    const fetched = makeUITask({ id: 'fetched-1', description: 'Fetched' });
+    const getTasks = vi.fn().mockResolvedValue({ tasks: [fetched], workflows: [] });
+    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
+      getTasks,
+      checkPrStatuses: vi.fn(),
+      onTaskDelta: vi.fn(() => () => {}),
+      onWorkflowsChanged: vi.fn(() => () => {}),
+    };
+
+    const { result } = renderHook(() => useTasks());
+
+    await waitFor(() => {
+      expect(getTasks).toHaveBeenCalled();
+      expect(getTasks).toHaveBeenLastCalledWith(false);
+    });
+    await waitFor(() => {
+      expect(result.current.tasks.get('fetched-1')?.description).toBe('Fetched');
+    });
   });
 
   it('passes forceRefresh flag to getTasks when requested', async () => {

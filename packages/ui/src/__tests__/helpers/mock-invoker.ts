@@ -158,9 +158,13 @@ export function createMockInvoker(
 
   function setTasks(tasks: TaskState[], workflows?: WorkflowMeta[]) {
     taskSnapshot = tasks;
-    if (workflows) workflowSnapshot = workflows;
+    if (workflows) {
+      workflowSnapshot = workflows;
+      // Mirror production: main fires workflows-changed when the workflow set changes.
+      // Required so the UI sees workflows without relying on a post-mount snapshot fetch.
+      workflowsCallback?.(workflows);
+    }
 
-    // Fire created deltas for each task
     for (const task of tasks) {
       deltaCallback?.({ type: 'created', task });
     }
