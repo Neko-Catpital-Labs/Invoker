@@ -97,4 +97,17 @@ describe('workflow rollup', () => {
     expect(rollup.countsByStatus.failed).toBe(0);
     expect(rollup.failedTasks).toEqual([]);
   });
+
+  it('regression: a workflow whose only terminal task is closed never rolls up to completed', () => {
+    const rollup = computeWorkflowRollupFromSummaries([
+      task('feature', 'completed'),
+      task('__merge__wf', 'closed', ['feature']),
+    ]);
+
+    expect(rollup.status).toBe('closed');
+    expect(rollup.status).not.toBe('completed');
+    expect(rollup.countsByStatus.closed).toBe(1);
+    expect(rollup.countsByStatus.completed).toBe(1);
+    expect(rollup.failedTasks).toEqual([]);
+  });
 });

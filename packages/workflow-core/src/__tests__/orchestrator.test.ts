@@ -1894,6 +1894,56 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask(reviewLeafId)!.status).toBe('pending');
     });
 
+    it('regression: closed upstream merge gate is terminal-neutral (downstream not completed, not failed)', () => {
+      orchestrator.loadPlan({
+        name: 'prereq-workflow-tn',
+        tasks: [{ id: 'verify-tn', description: 'Prereq task' }],
+      });
+      const prereqTaskId = sid(orchestrator, 0, 'verify-tn');
+      const prereqWfId = prereqTaskId.split('/')[0]!;
+      const prereqMergeId = `__merge__${prereqWfId}`;
+
+      orchestrator.loadPlan({
+        name: 'workflow-tn',
+        tasks: [
+          {
+            id: 'completed-policy-leaf',
+            description: 'leaf with default completed gate policy',
+            externalDependencies: [{ workflowId: prereqWfId, gatePolicy: 'completed' }],
+          },
+          {
+            id: 'review-ready-policy-leaf',
+            description: 'leaf with review_ready gate policy',
+            externalDependencies: [{ workflowId: prereqWfId, gatePolicy: 'review_ready' }],
+          },
+        ],
+      });
+      const completedLeafId = sid(orchestrator, 1, 'completed-policy-leaf');
+      const reviewReadyLeafId = sid(orchestrator, 1, 'review-ready-policy-leaf');
+
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(makeResponse({ actionId: prereqTaskId, status: 'completed' }));
+      persistence.updateTask(prereqMergeId, { status: 'closed' });
+      orchestrator.syncAllFromDb();
+
+      orchestrator.startExecution();
+      orchestrator.startExecution();
+
+      const completedLeaf = orchestrator.getTask(completedLeafId)!;
+      const reviewReadyLeaf = orchestrator.getTask(reviewReadyLeafId)!;
+
+      expect(completedLeaf.status).toBe('pending');
+      expect(completedLeaf.status).not.toBe('completed');
+      expect(completedLeaf.status).not.toBe('failed');
+      expect(completedLeaf.status).not.toBe('running');
+      expect(reviewReadyLeaf.status).toBe('pending');
+      expect(reviewReadyLeaf.status).not.toBe('completed');
+      expect(reviewReadyLeaf.status).not.toBe('failed');
+      expect(reviewReadyLeaf.status).not.toBe('running');
+
+      expect(orchestrator.getTask(prereqMergeId)!.status).toBe('closed');
+    });
+
     it('setTaskExternalGatePolicies can unblock pending task immediately', () => {
       orchestrator.loadPlan({
         name: 'prereq-workflow',

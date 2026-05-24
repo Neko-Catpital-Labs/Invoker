@@ -339,6 +339,31 @@ describe('GitHubMergeGateProvider', () => {
       expect(result.statusText).toBe('Closed');
     });
 
+    it('regression: closed-unmerged result is terminal-neutral (not approved, separate from rejected discriminant)', async () => {
+      process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      spawnMock.mockImplementation(((cmd: string) => {
+        if (cmd === 'gh') {
+          return mockSpawnResult(JSON.stringify({
+            state: 'CLOSED',
+            reviewDecision: null,
+            url: 'https://github.com/owner/repo/pull/77',
+          }), 0);
+        }
+        return mockSpawnResult('', 0);
+      }) as any);
+
+      const result = await provider.checkApproval({ identifier: '77', cwd: '/tmp/repo' });
+
+      expect(result.closed).toBe(true);
+      expect(result.approved).toBe(false);
+      expect(result.statusText).toBe('Closed');
+      expect(result.statusText).not.toBe('Changes requested');
+      expect(result.statusText).not.toBe('Merged');
+    });
+
     it('returns PR head metadata and failed checks for review-gate auto-fix', async () => {
       process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
       const { spawn } = await import('node:child_process');
