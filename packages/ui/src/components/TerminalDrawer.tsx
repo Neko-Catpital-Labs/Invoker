@@ -44,6 +44,10 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  // Guards against writing the same replay snapshot into xterm twice when
+  // the parent re-renders with an updated `session` prop whose sessionId
+  // (and therefore the live xterm instance) has not changed.
+  const seededSessionRef = useRef<string | null>(null);
 
   useEffect(() => {
     const host = containerRef.current;
@@ -68,6 +72,20 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
     }
     termRef.current = term;
     fitRef.current = fit;
+
+    // Seed the freshly mounted xterm with the bounded replay snapshot the
+    // main process captured between spawn and `openTerminal` returning, so
+    // early PTY output that arrived before live output subscription is not
+    // dropped. Live event streaming below continues to provide new output.
+    const replaySnapshot = session.outputSnapshot;
+    if (replaySnapshot && seededSessionRef.current !== session.sessionId) {
+      try {
+        term.write(replaySnapshot);
+      } catch {
+        /* terminal disposed */
+      }
+      seededSessionRef.current = session.sessionId;
+    }
 
     const inputDisposable = term.onData((data) => {
       void window.invoker?.terminalWrite?.(session.sessionId, data);
