@@ -277,6 +277,13 @@ export interface TerminalSessionDescriptor {
   mode: 'spawn' | 'attached';
   attached: boolean;
   createdAt: string;
+  /**
+   * Bounded snapshot of recent terminal output retained by the main process so
+   * the renderer can seed a newly mounted pane with output that was emitted
+   * before the renderer subscribed to `invoker:terminal-output`. The snapshot
+   * is trimmed to a fixed byte limit so it does not grow without bound.
+   */
+  outputSnapshot?: string;
 }
 
 export interface TerminalOutputEvent {
