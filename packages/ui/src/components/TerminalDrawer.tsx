@@ -44,6 +44,9 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  // Snapshot string most recently seeded into the current xterm instance, used
+  // to suppress duplicate replay writes when React re-renders the same session.
+  const seededSnapshotRef = useRef<string | null>(null);
 
   useEffect(() => {
     const host = containerRef.current;
@@ -68,6 +71,19 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
     }
     termRef.current = term;
     fitRef.current = fit;
+
+    // Replay any startup output the main process buffered before this pane
+    // subscribed to `invoker:terminal-output`. Written before the live
+    // subscription below so users see early output in chronological order.
+    const snapshot = session.outputSnapshot;
+    if (snapshot && snapshot.length > 0 && seededSnapshotRef.current !== snapshot) {
+      try {
+        term.write(snapshot);
+        seededSnapshotRef.current = snapshot;
+      } catch {
+        /* terminal disposed */
+      }
+    }
 
     const inputDisposable = term.onData((data) => {
       void window.invoker?.terminalWrite?.(session.sessionId, data);
@@ -123,6 +139,7 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
       }
       termRef.current = null;
       fitRef.current = null;
+      seededSnapshotRef.current = null;
     };
   }, [onOutput, session.sessionId]);
 
