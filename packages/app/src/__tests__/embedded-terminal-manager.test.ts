@@ -390,6 +390,117 @@ describe('EmbeddedTerminalManager', () => {
     const res = mgr.write('not-a-session', 'x');
     expect(res).toEqual({ ok: false, reason: expect.stringContaining('Unknown session') });
   });
+
+  it('captures output emitted synchronously during spawn in the returned descriptor', () => {
+    const backend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: (opts) => {
+        opts.emitOutput('boot-line-1\n');
+        opts.emitOutput('boot-line-2\n');
+        return { write() {}, resize() {}, close() {} };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+
+    expect(session.outputSnapshot).toBe('boot-line-1\nboot-line-2\n');
+  });
+
+  it('terminalList() descriptors include the replay snapshot for live sessions', () => {
+    const backend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: (opts) => {
+        opts.emitOutput('startup-output');
+        return { write() {}, resize() {}, close() {} };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+
+    const listed = mgr.list();
+    expect(listed).toHaveLength(1);
+    expect(listed[0].outputSnapshot).toBe('startup-output');
+  });
+
+  it('appends post-spawn output to the replay snapshot for late list() callers', () => {
+    let captured: ((data: string) => void) | undefined;
+    const backend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: (opts) => {
+        captured = opts.emitOutput;
+        opts.emitOutput('sync-');
+        return { write() {}, resize() {}, close() {} };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+    captured?.('async');
+
+    const listed = mgr.list();
+    expect(listed[0].outputSnapshot).toBe('sync-async');
+  });
+
+  it('does not throw when the backend emits exit synchronously during spawn', () => {
+    const backend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: (opts) => {
+        opts.emitOutput('quick-output');
+        opts.emitExit(7);
+        return { write() {}, resize() {}, close() {} };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+    const exits: Array<{ sessionId: string; exitCode?: number }> = [];
+    mgr.on('exit', (e) => exits.push({ sessionId: e.sessionId, exitCode: e.exitCode }));
+
+    let session: ReturnType<typeof mgr.openOrReuse> | undefined;
+    expect(() => {
+      session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+    }).not.toThrow();
+
+    expect(session).toBeDefined();
+    expect(session?.outputSnapshot).toBe('quick-output');
+    expect(exits).toEqual([{ sessionId: session!.sessionId, exitCode: 7 }]);
+    expect(mgr.list()).toHaveLength(0);
+  });
+
+  it('bounds the replay snapshot to at most 64 KiB by keeping the most recent output', () => {
+    const chunk = 'x'.repeat(40 * 1024);
+    const backend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: (opts) => {
+        // 120 KiB of 'x' followed by a tail marker — total exceeds the bound.
+        opts.emitOutput(chunk);
+        opts.emitOutput(chunk);
+        opts.emitOutput(chunk);
+        opts.emitOutput('TAIL-MARKER');
+        return { write() {}, resize() {}, close() {} };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+
+    expect(session.outputSnapshot).toBeDefined();
+    expect(session.outputSnapshot!.length).toBeLessThanOrEqual(64 * 1024);
+    // The tail marker (most recent output) must be preserved.
+    expect(session.outputSnapshot!.endsWith('TAIL-MARKER')).toBe(true);
+  });
+
+  it('omits outputSnapshot when no output has been emitted yet', () => {
+    const child = createFakeChild();
+    const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+    const mgr = new EmbeddedTerminalManager({
+      backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+    });
+
+    const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+
+    expect(session.outputSnapshot).toBeUndefined();
+  });
 });
 
 // ── Deterministic GUI route: resolveTaskTerminalSpec + EmbeddedTerminalManager ──
