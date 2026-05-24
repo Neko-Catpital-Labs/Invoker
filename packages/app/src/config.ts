@@ -231,6 +231,30 @@ export interface InvokerConfig {
    * preserved while the dispatcher matures.
    */
   launchOutboxMode?: LaunchOutboxMode;
+  /**
+   * Optional external failure-recovery launcher. When enabled, Invoker can
+   * invoke an operator-supplied script in response to task failures so that
+   * remediation runs outside of the GUI's manual "Fix with AI" path.
+   *
+   * The launcher remains dormant until something actually wires task-failure
+   * deltas to it. Defining the config alone has no effect.
+   */
+  externalFailureRecovery?: ExternalFailureRecoveryConfig;
+}
+
+export interface ExternalFailureRecoveryConfig {
+  /** When false (or omitted), the launcher is a no-op. */
+  enabled: boolean;
+  /** Shell command line to run on task failure. Treated as missing if blank. */
+  command: string;
+  /** Working directory for the spawned process. Defaults to process.cwd(). */
+  cwd?: string;
+  /**
+   * Minimum seconds between consecutive launches. The launcher is skipped
+   * when this window has not elapsed since the previous successful launch.
+   * Default: 0 (no cooldown).
+   */
+  cooldownSeconds?: number;
 }
 
 export type LaunchOutboxMode = 'disabled' | 'observe' | 'active';
