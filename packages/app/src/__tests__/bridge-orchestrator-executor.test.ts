@@ -67,7 +67,7 @@ const INDEPENDENT_TWO_TASK_PLAN: PlanDefinition = {
 };
 
 describe('global top-up dispatch', () => {
-  it('dispatches only newly started tasks and skips duplicates', async () => {
+  it('returns only newly started tasks in the top-up and skips duplicates', async () => {
     const duplicate = {
       id: 'wf-1/task-a',
       status: 'running',
@@ -101,8 +101,7 @@ describe('global top-up dispatch', () => {
     });
 
     expect(orchestrator.startExecution).toHaveBeenCalledTimes(1);
-    expect(taskExecutor.executeTasks).toHaveBeenCalledTimes(1);
-    expect(taskExecutor.executeTasks).toHaveBeenCalledWith([newTask]);
+    expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
     expect(topup.map((task) => task.id)).toEqual(['wf-2/task-b']);
   });
 
@@ -153,9 +152,7 @@ describe('global top-up dispatch', () => {
     });
 
     expect(topup.map((task) => task.id)).toEqual([taskB.id]);
-    expect(taskExecutor.executeTasks).toHaveBeenCalledWith([
-      expect.objectContaining({ id: taskB.id, status: 'running' }),
-    ]);
+    expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
   });
 });
 

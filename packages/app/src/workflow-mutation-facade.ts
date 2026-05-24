@@ -351,6 +351,10 @@ export class WorkflowMutationFacade {
       logger: this.deps.logger,
     });
     const runnable = result.started.filter(isDispatchableLaunch);
+    // The orchestrator now always enqueues a task_launch_dispatch row
+    // for each runnable, so this in-process call coexists with the
+    // dispatcher. Removing it needs a proven double-dispatch repro and
+    // belongs in a separate PR; left in place to preserve master behaviour.
     await this.deps.taskExecutor.executeTasks(runnable);
     const topup = await this.topupOnly('facade.fork-workflow');
     return {

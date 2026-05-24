@@ -245,11 +245,10 @@ export interface OrchestratorPersistence {
   /** Delete all workflows and tasks from the DB. */
   deleteAllWorkflows?(): void;
   /**
-   * Optional launch-handoff outbox sink. When provided AND
-   * `OrchestratorConfig.launchOutboxMode` is `'observe'` or `'active'`,
-   * `drainScheduler` writes a `task_launch_dispatch` row alongside the
-   * legacy claim path. The orchestrator does not take a hard dependency
-   * on this method; it is observer-only in Phase A. See
+   * Launch-handoff outbox sink. When the persistence layer implements
+   * this method, `drainScheduler` writes a `task_launch_dispatch` row
+   * alongside the durable claim event so the `LaunchDispatcher` poll
+   * loop can take ownership of the launch. See
    * `docs/incidents/2026-05-22-launch-handoff-architecture-proposal.md`.
    */
   enqueueLaunchDispatch?(input: {
@@ -735,16 +734,6 @@ export interface OrchestratorConfig {
    * scheduler dequeue time).
    */
   deferRunningUntilLaunch?: boolean;
-  /**
-   * Launch-handoff outbox mode. When set to `'observe'` or `'active'` (and
-   * the persistence layer implements `enqueueLaunchDispatch`),
-   * `drainScheduler` writes a durable `task_launch_dispatch` row alongside
-   * the existing claim path and emits a `task.dispatch_enqueued` event.
-   *
-   * Default `'disabled'` preserves existing behaviour. See
-   * `docs/incidents/2026-05-22-launch-handoff-architecture-proposal.md`.
-   */
-  launchOutboxMode?: 'disabled' | 'observe' | 'active';
 }
 
 // ── Orchestrator ────────────────────────────────────────────
@@ -765,7 +754,6 @@ export class Orchestrator {
   private readonly defaultPoolId: string | undefined;
   private readonly defaultAutoFixRetries: number;
   private readonly deferRunningUntilLaunch: boolean;
-  private readonly launchOutboxMode: 'disabled' | 'observe' | 'active';
 
   private activeWorkflowIds = new Set<string>();
   private deferredTaskIds = new Set<string>();
@@ -838,7 +826,6 @@ export class Orchestrator {
     this.defaultPoolId = config.defaultPoolId;
     this.defaultAutoFixRetries = Math.min(Math.max(0, Math.floor(config.defaultAutoFixRetries ?? 0)), 10);
     this.deferRunningUntilLaunch = config.deferRunningUntilLaunch ?? false;
-    this.launchOutboxMode = config.launchOutboxMode ?? 'disabled';
 
     this.stateMachine = new TaskStateMachine(new ActionGraph());
     this.responseHandler = new ResponseHandler();
@@ -5101,8 +5088,7 @@ export class Orchestrator {
         changes,
       );
       if (
-        this.launchOutboxMode !== 'disabled'
-        && typeof this.persistence.enqueueLaunchDispatch === 'function'
+        typeof this.persistence.enqueueLaunchDispatch === 'function'
         && task.config.workflowId
       ) {
         try {

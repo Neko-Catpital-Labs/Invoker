@@ -152,7 +152,6 @@ function makeOrchestrator(
   opts: {
     deferRunningUntilLaunch?: boolean;
     maxConcurrency?: number;
-    launchOutboxMode?: 'disabled' | 'observe' | 'active';
     enqueueLaunchDispatchEnabled?: boolean;
   } = {},
 ): { orchestrator: Orchestrator; persistence: InMemoryPersistence } {
@@ -163,7 +162,6 @@ function makeOrchestrator(
     messageBus: new InMemoryBus(),
     maxConcurrency: opts.maxConcurrency ?? 4,
     deferRunningUntilLaunch: opts.deferRunningUntilLaunch,
-    launchOutboxMode: opts.launchOutboxMode,
   });
   return { orchestrator, persistence };
 }
@@ -507,43 +505,24 @@ describe('Orchestrator launch claims', () => {
     expect(started.map((task) => task.id)).toEqual([taskId]);
   });
 
-  describe('launch-outbox observer wiring (Phase A)', () => {
+  describe('launch-outbox wiring', () => {
     function loadPlanForLaunchOutbox(orchestrator: Orchestrator): { taskId: string } {
       orchestrator.loadPlan({
-        name: 'launch-outbox-observer',
+        name: 'launch-outbox',
         onFinish: 'none',
         tasks: [{ id: 't1', description: 'one', command: 'echo one' }],
       });
       return { taskId: taskIdBySuffix(orchestrator, 't1') };
     }
 
-    it("does not write outbox rows when launchOutboxMode='disabled'", () => {
+    it('writes one outbox row per claimed attempt and emits task.launch_claimed', () => {
       const { orchestrator, persistence } = makeOrchestrator({
         deferRunningUntilLaunch: true,
         enqueueLaunchDispatchEnabled: true,
-        launchOutboxMode: 'disabled',
-      });
-      loadPlanForLaunchOutbox(orchestrator);
-      orchestrator.startExecution();
-
-      expect(persistence.launchDispatchRows).toEqual([]);
-      expect(
-        persistence.events.find((event) => event.eventType === 'task.dispatch_enqueued'),
-      ).toBeUndefined();
-      expect(
-        persistence.events.find((event) => event.eventType === 'task.launch_claimed'),
-      ).toBeDefined();
-    });
-
-    it("writes one outbox row per claimed attempt when launchOutboxMode='observe' and still emits task.launch_claimed", () => {
-      const { orchestrator, persistence } = makeOrchestrator({
-        deferRunningUntilLaunch: true,
-        enqueueLaunchDispatchEnabled: true,
-        launchOutboxMode: 'observe',
         maxConcurrency: 4,
       });
       orchestrator.loadPlan({
-        name: 'launch-outbox-observer',
+        name: 'launch-outbox',
         onFinish: 'none',
         tasks: [
           { id: 't1', description: 'one', command: 'echo one' },
@@ -572,31 +551,18 @@ describe('Orchestrator launch claims', () => {
       }
     });
 
-    it("treats launchOutboxMode='active' the same as observe in Phase A (active behavior lands in CB)", () => {
-      const { orchestrator, persistence } = makeOrchestrator({
-        deferRunningUntilLaunch: true,
-        enqueueLaunchDispatchEnabled: true,
-        launchOutboxMode: 'active',
-      });
-      loadPlanForLaunchOutbox(orchestrator);
-      orchestrator.startExecution();
-
-      expect(persistence.launchDispatchRows).toHaveLength(1);
-      expect(
-        persistence.events.find((event) => event.eventType === 'task.dispatch_enqueued'),
-      ).toBeDefined();
-    });
-
-    it("tolerates missing enqueueLaunchDispatch without throwing when launchOutboxMode='observe'", () => {
+    it('still claims tasks when the persistence layer is missing enqueueLaunchDispatch', () => {
       const { orchestrator, persistence } = makeOrchestrator({
         deferRunningUntilLaunch: true,
         enqueueLaunchDispatchEnabled: false,
-        launchOutboxMode: 'observe',
       });
       (persistence as unknown as { enqueueLaunchDispatch?: unknown }).enqueueLaunchDispatch = undefined;
       loadPlanForLaunchOutbox(orchestrator);
       expect(() => orchestrator.startExecution()).not.toThrow();
       expect(persistence.launchDispatchRows).toEqual([]);
+      expect(
+        persistence.events.find((event) => event.eventType === 'task.launch_claimed'),
+      ).toBeDefined();
     });
   });
 

@@ -625,21 +625,18 @@ describe('headless delegation enforcement', () => {
           config: { workflowId: 'wf-1' },
           execution: {},
         } as any;
-        mockDeps.commandService.approve = vi.fn(async () => ({ ok: true as const, data: [runnableTask] }));
-
-        const executeTasksSpy = vi
-          .spyOn(TaskRunner.prototype, 'executeTasks')
-          .mockImplementation(async () => {
+        mockDeps.commandService.approve = vi.fn(async () => {
+          // Stand in for the LaunchDispatcher settling the row.
+          setTimeout(() => {
             taskBStatus = 'completed';
-          });
+          }, 5);
+          return { ok: true as const, data: [runnableTask] };
+        });
 
         await runHeadless(['approve', 'wf-1/task-a'], mockDeps);
 
-        expect(executeTasksSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
-        expect(executeTasksSpy).toHaveBeenCalledWith([runnableTask]);
         expect(mockDeps.commandService.approve).toHaveBeenCalled();
-
-        executeTasksSpy.mockRestore();
+        expect(taskBStatus).toBe('completed');
       });
 
       // Step 16: pin headless approve/reject routing.
@@ -752,20 +749,17 @@ describe('headless delegation enforcement', () => {
           config: { workflowId: 'wf-1' },
           execution: {},
         } as any;
-        mockDeps.commandService.approve = vi.fn(async () => ({ ok: true as const, data: [runnableTask] }));
-
-        const executeTasksSpy = vi
-          .spyOn(TaskRunner.prototype, 'executeTasks')
-          .mockImplementation(async () => {
-            taskBStatus = 'pending';
-          });
+        mockDeps.commandService.approve = vi.fn(async () => {
+          // Stand in for the LaunchDispatcher draining the row.
+          taskBStatus = 'pending';
+          return { ok: true as const, data: [runnableTask] };
+        });
 
         await expect(runHeadless(['approve', 'wf-1/task-a'], mockDeps)).resolves.toBeUndefined();
 
-        expect(executeTasksSpy).toHaveBeenCalledTimes(1);
+        expect(mockDeps.commandService.approve).toHaveBeenCalled();
         expect(mockDeps.orchestrator.getReadyTasks).toHaveBeenCalled();
-
-        executeTasksSpy.mockRestore();
+        expect(taskBStatus).toBe('pending');
       });
 
       it('headless retry with deps.noTrack=true can defer runnable execution to the caller', async () => {
