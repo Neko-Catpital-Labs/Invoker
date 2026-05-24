@@ -335,3 +335,68 @@ export async function applyInvalidation(
   }
   return ctx.started;
 }
+
+// Structural type to avoid a circular import on the full
+// `Orchestrator` class (which imports `applyInvalidation` from here).
+export interface InvalidationDepsOrchestrator {
+  cancelTask(taskId: string): unknown;
+  cancelWorkflow(workflowId: string): unknown;
+  retryTask(taskId: string): TaskState[];
+  recreateTask(taskId: string): TaskState[];
+  retryWorkflow(workflowId: string): TaskState[];
+  recreateWorkflow(workflowId: string): TaskState[];
+  recreateWorkflowFromFreshBase(workflowId: string): Promise<TaskState[]>;
+  forkWorkflow(workflowId: string): { started: TaskState[] };
+  autoStartExternallyUnblockedReadyTasks(): TaskState[];
+  approve(taskId: string): Promise<TaskState[]>;
+  reject(taskId: string, reason?: string): void;
+  getTask(taskId: string): { config?: { workflowId?: string } } | undefined;
+  cascadeInvalidationToDownstream(workflowId: string): TaskState[];
+}
+
+const TERMINAL_CANCEL_ERROR_CODES = new Set([
+  'TASK_ALREADY_TERMINAL',
+  'WORKFLOW_ALREADY_TERMINAL',
+]);
+
+export function buildOrchestratorOnlyInvalidationDeps(
+  orchestrator: InvalidationDepsOrchestrator,
+): InvalidationDeps {
+  return {
+    cancelInFlight: async (scope, id) => {
+      if (scope === 'none') return;
+      try {
+        if (scope === 'task') orchestrator.cancelTask(id);
+        else orchestrator.cancelWorkflow(id);
+      } catch (e) {
+        // Already-terminal targets have nothing to cancel; the rest
+        // of the pipeline still runs.
+        const code = (e as { code?: string })?.code;
+        if (code && TERMINAL_CANCEL_ERROR_CODES.has(code)) return;
+        throw e;
+      }
+    },
+    retryTask: (taskId) => orchestrator.retryTask(taskId),
+    recreateTask: (taskId) => orchestrator.recreateTask(taskId),
+    retryWorkflow: (workflowId) => orchestrator.retryWorkflow(workflowId),
+    recreateWorkflow: (workflowId) => orchestrator.recreateWorkflow(workflowId),
+    recreateWorkflowFromFreshBase: (workflowId) =>
+      orchestrator.recreateWorkflowFromFreshBase(workflowId),
+    workflowFork: (workflowId) => orchestrator.forkWorkflow(workflowId).started,
+    scheduleOnly: () => orchestrator.autoStartExternallyUnblockedReadyTasks(),
+    fixApprove: (taskId) => orchestrator.approve(taskId),
+    fixReject: (taskId) => {
+      orchestrator.reject(taskId);
+      return [];
+    },
+    cascadeDownstream: (scope, id) => {
+      const workflowId =
+        scope === 'workflow'
+          ? id
+          : orchestrator.getTask(id)?.config?.workflowId;
+      if (!workflowId) return [];
+      return orchestrator.cascadeInvalidationToDownstream(workflowId);
+    },
+  };
+}
+
