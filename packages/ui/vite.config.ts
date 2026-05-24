@@ -12,11 +12,24 @@ export default defineConfig({
     minify: 'esbuild', // esbuild is faster and uses less memory than terser
     rollupOptions: {
       output: {
-        manualChunks: {
-          // Split large vendor chunks to reduce memory pressure
-          react: ['react', 'react-dom'],
-          xyflow: ['@xyflow/react'],
-          xterm: ['xterm', 'xterm-addon-fit'],
+        // Function form is required so vendor matchers actually catch the
+        // sub-paths (e.g. `react-dom/client`, `react/jsx-runtime`,
+        // `elkjs/lib/elk.bundled.js`). The previous array form silently
+        // emitted empty chunks because Rollup only matched the exact
+        // package entry id.
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined;
+          if (id.includes('/elkjs/')) return 'vendor-elk';
+          if (id.includes('/@xyflow/')) return 'vendor-xyflow';
+          if (id.includes('/js-yaml/')) return 'vendor-yaml';
+          if (
+            id.includes('/react-dom/') ||
+            id.includes('/react/') ||
+            id.includes('/scheduler/')
+          ) {
+            return 'vendor-react';
+          }
+          return undefined;
         },
       },
     },
