@@ -125,6 +125,10 @@ export function createMockInvoker(
     replaceTask: vi.fn(async () => []),
     getActivityLogs: vi.fn(async () => []),
     getEvents: vi.fn(async () => []),
+    // `outputSnapshot` is intentionally absent on the default response so
+    // existing tests behave identically to the pre-replay-buffer descriptor.
+    // Tests that need to exercise replay seeding override the response via
+    // `mockResolvedValueOnce` and set `outputSnapshot`.
     openTerminal: vi.fn(async (taskId: string) => ({
       opened: true,
       session: {
