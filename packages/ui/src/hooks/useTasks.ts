@@ -84,16 +84,6 @@ export function useTasks(): UseTasksResult {
       }
       const taskList = result.tasks ?? [];
       const wfList = result.workflows ?? [];
-      const bootstrapTaskCount = bootstrapState?.tasks?.length ?? 0;
-      if (!forceRefresh && bootstrapTaskCount > taskList.length) {
-        void window.invoker?.reportUiPerf?.('startup_snapshot_skipped_smaller_than_bootstrap', {
-          bootstrapTaskCount,
-          snapshotTaskCount: taskList.length,
-          workflowCount: wfList.length,
-          requestDurationMs,
-        });
-        return;
-      }
       const replaceStartedAt = performance.now();
       // Always replace from server snapshot — empty lists mean "no tasks/workflows" (e.g. after delete).
       setTasks(() => {
@@ -139,15 +129,15 @@ export function useTasks(): UseTasksResult {
   useEffect(() => {
     if (typeof window === 'undefined' || !window.invoker) return;
 
-    if (
-      !reportedStartupBootstrapRef.current &&
-      bootstrapState &&
-      ((bootstrapState.tasks?.length ?? 0) > 0 || (bootstrapState.workflows?.length ?? 0) > 0)
-    ) {
+    const bootstrapTaskCount = bootstrapState?.tasks?.length ?? 0;
+    const bootstrapWorkflowCount = bootstrapState?.workflows?.length ?? 0;
+    const bootstrapHasState = bootstrapTaskCount > 0 || bootstrapWorkflowCount > 0;
+
+    if (!reportedStartupBootstrapRef.current && bootstrapState && bootstrapHasState) {
       reportedStartupBootstrapRef.current = true;
       void window.invoker.reportUiPerf?.('startup_bootstrap_state', {
-        taskCount: bootstrapState.tasks?.length ?? 0,
-        workflowCount: bootstrapState.workflows?.length ?? 0,
+        taskCount: bootstrapTaskCount,
+        workflowCount: bootstrapWorkflowCount,
         elapsedMs: Math.round(performance.now()),
         processElapsedMs: bootstrapState.appStartedAtEpochMs
           ? Date.now() - bootstrapState.appStartedAtEpochMs
@@ -155,7 +145,23 @@ export function useTasks(): UseTasksResult {
       });
     }
 
-    fetchAll();
+    // Preload bootstrap already hydrated tasks/workflows synchronously, so
+    // the immediate non-forced snapshot would be a redundant full payload.
+    // Skip it when bootstrap is populated; deltas keep state live, and
+    // explicit refreshTasks() / refreshTasks(true) callers still run fetchAll.
+    if (bootstrapHasState) {
+      reportedStartupSnapshotRef.current = true;
+      void window.invoker.reportUiPerf?.('startup_snapshot_skipped_bootstrap_complete', {
+        bootstrapTaskCount,
+        bootstrapWorkflowCount,
+        elapsedMs: Math.round(performance.now()),
+        processElapsedMs: bootstrapState?.appStartedAtEpochMs
+          ? Date.now() - bootstrapState.appStartedAtEpochMs
+          : undefined,
+      });
+    } else {
+      fetchAll();
+    }
 
     deltaPipelineRef.current = createTaskDeltaPipeline({
       flushMs: 100,
