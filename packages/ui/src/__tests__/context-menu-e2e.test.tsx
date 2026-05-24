@@ -158,4 +158,97 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
+
+  // ── Keyboard navigation regression tests ───────────────────────
+  //
+  // A local repro proved that opening a workflow context menu, pressing
+  // ArrowDown three times, and pressing Enter does NOT call
+  // navigator.clipboard.writeText('wf-1') on the unfixed build. The
+  // workflow menu (App.tsx WorkflowContextMenu) has no keyboard handler
+  // at all, and the task ContextMenu listens on its own div which is
+  // never focused — so document-level key events are ignored by both.
+  //
+  // These tests dispatch keys from the active/document target (what a
+  // real user does after the menu pops up). They must fail on the
+  // pre-fix behavior and pass once keyboard activation is wired up.
+
+  function pressKey(key: string) {
+    const target = document.activeElement ?? document.body;
+    fireEvent.keyDown(target, { key });
+  }
+
+  it('workflow context menu: ArrowDown x3 + Enter activates Copy Workflow ID', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByText('Copy Workflow ID')).toBeInTheDocument();
+    });
+
+    // Visible items (initial): Open Workflow (0), Open PR (1),
+    // Retry Workflow (2), Copy Workflow ID (3), More (4).
+    // ArrowDown x3 from initial focus 0 lands on Copy Workflow ID (3).
+    pressKey('ArrowDown');
+    pressKey('ArrowDown');
+    pressKey('ArrowDown');
+    pressKey('Enter');
+
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('workflow context menu: ArrowUp wraps deterministically from first to last', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByText('Copy Workflow ID')).toBeInTheDocument();
+    });
+
+    // ArrowUp from index 0 must wrap to the last visible item (More, idx 4).
+    // ArrowUp again moves to Copy Workflow ID (idx 3). Enter activates it.
+    // If wrap is non-deterministic (e.g. focus left at -1 or NaN), the
+    // wrong item — or no item — would fire.
+    pressKey('ArrowUp');
+    pressKey('ArrowUp');
+    pressKey('Enter');
+
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('task context menu: ArrowDown + Enter activates next enabled task action', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    await waitFor(() => {
+      expect(screen.getByText('Restart Task')).toBeInTheDocument();
+      expect(screen.getByText('Open Terminal')).toBeInTheDocument();
+    });
+
+    // Pending task safe items: Restart Task (0, primary), Open Terminal (1).
+    // ArrowDown from initial 0 moves focus to Open Terminal (1); Enter fires it.
+    pressKey('ArrowDown');
+    pressKey('Enter');
+
+    await waitFor(() => expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'));
+    expect(mock.api.restartTask).not.toHaveBeenCalled();
+  });
+
+  it('task context menu: Space activates the highlighted item like Enter', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    await waitFor(() => {
+      expect(screen.getByText('Restart Task')).toBeInTheDocument();
+    });
+
+    // Initial focus is on Restart Task (the primary item).
+    // Space alone — no navigation — must activate it just like Enter would.
+    pressKey(' ');
+
+    await waitFor(() => expect(mock.api.restartTask).toHaveBeenCalledWith('task-alpha'));
+  });
 });
