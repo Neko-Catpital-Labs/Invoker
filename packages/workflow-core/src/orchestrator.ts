@@ -79,6 +79,10 @@ import {
   type InvalidationPlan,
 } from './invalidation-plan.js';
 import {
+  MUTATION_POLICIES,
+  type InvalidationAction,
+} from './invalidation-policy.js';
+import {
   isActiveAttempt,
   isDiscardedAttempt,
   isOutcomeTerminalAttempt,
@@ -2894,6 +2898,40 @@ export class Orchestrator {
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
   }
 
+  /**
+   * Sync dispatch for an edit primitive's post-cancel reset stage.
+   *
+   * Each `editTask*` method shares the same shape: validate, optional
+   * cancel-first when the task is active, persist the new spec, then
+   * apply the post-edit invalidation primitive (`recreateTask` or
+   * `retryTask`) selected by `MUTATION_POLICIES`. Routing the final
+   * dispatch through this helper keeps the action source-of-truth in
+   * the policy table rather than hard-coded literals at each site, so
+   * a chart change (e.g. flipping `command` from `recreateTask` to
+   * `retryTask`) propagates without touching `editTask*` bodies.
+   *
+   * Sync by design: the public `editTask*` API is sync and most
+   * callers (api-server, headless, tests) consume the returned
+   * `TaskState[]` synchronously. The async `applyInvalidation`
+   * pipeline is reserved for the higher-level CommandService /
+   * facade routing where cross-workflow cascade fires.
+   */
+  private dispatchPostMutation(
+    action: InvalidationAction,
+    taskId: string,
+  ): TaskState[] {
+    switch (action) {
+      case 'recreateTask':
+        return this.recreateTask(taskId);
+      case 'retryTask':
+        return this.retryTask(taskId);
+      default:
+        throw new Error(
+          `dispatchPostMutation: unsupported action '${action}' for orchestrator edit primitives`,
+        );
+    }
+  }
+
   editTaskCommand(taskId: string, newCommand: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
@@ -2911,7 +2949,7 @@ export class Orchestrator {
     this.persistence.logEvent?.(taskId, 'task.updated', cmdChanges);
     this.messageBus.publish(TASK_DELTA_CHANNEL, cmdDelta);
 
-    return this.recreateTask(taskId);
+    return this.dispatchPostMutation(MUTATION_POLICIES.command.action, taskId);
   }
 
     editTaskPrompt(taskId: string, newPrompt: string): TaskState[] {
@@ -2931,7 +2969,7 @@ export class Orchestrator {
     this.persistence.logEvent?.(taskId, 'task.updated', promptChanges);
     this.messageBus.publish(TASK_DELTA_CHANNEL, promptDelta);
 
-    return this.recreateTask(taskId);
+    return this.dispatchPostMutation(MUTATION_POLICIES.prompt.action, taskId);
   }
 
     editTaskType(taskId: string, runnerKind: string, poolMemberId?: string): TaskState[] {
@@ -2980,7 +3018,10 @@ export class Orchestrator {
     this.persistence.logEvent?.(taskId, 'task.updated', typeChanges);
     this.messageBus.publish(TASK_DELTA_CHANNEL, typeDelta);
 
-    return hostChanged ? this.recreateTask(taskId) : this.retryTask(taskId);
+    const typeAction = hostChanged
+      ? MUTATION_POLICIES.poolMemberId.action
+      : MUTATION_POLICIES.runnerKind.action;
+    return this.dispatchPostMutation(typeAction, taskId);
   }
 
     editTaskPool(taskId: string, poolId: string): TaskState[] {
@@ -3012,7 +3053,7 @@ export class Orchestrator {
     this.persistence.logEvent?.(taskId, 'task.updated', poolChanges);
     this.messageBus.publish(TASK_DELTA_CHANNEL, poolDelta);
 
-    return this.recreateTask(taskId);
+    return this.dispatchPostMutation(MUTATION_POLICIES.poolMemberId.action, taskId);
   }
 
     editTaskAgent(taskId: string, agentName: string): TaskState[] {
@@ -3032,7 +3073,7 @@ export class Orchestrator {
     this.persistence.logEvent?.(taskId, 'task.updated', agentChanges);
     this.messageBus.publish(TASK_DELTA_CHANNEL, agentDelta);
 
-    return this.recreateTask(taskId);
+    return this.dispatchPostMutation(MUTATION_POLICIES.executionAgent.action, taskId);
   }
 
   /**
@@ -3164,14 +3205,12 @@ export class Orchestrator {
     // attempt picks up the new policy when restartTask reschedules it.
     this.persistence.updateWorkflow?.(workflowId, { mergeMode });
 
-    // Step 9 retry-class reset: restartTask is today's `retryTask`
-    // compatibility wire (`buildInvalidationDeps` →
-    // `orchestrator.restartTask`). It resets the merge node to
-    // `pending`, clears volatile attempt state, and bumps execution
-    // generation exactly once via `withBumpedExecutionGeneration`
-    // while preserving branch/workspacePath lineage — the chart's
-    // retry-class semantics for merge-mode mutations.
-    return this.retryTask(taskId);
+    // Retry-class reset via the policy table — `restartTask` is the
+    // current `retryTask` compatibility wire. Routing through
+    // `MUTATION_POLICIES.mergeMode` keeps merge-mode dispatch
+    // table-driven so a chart change propagates without touching this
+    // method body.
+    return this.dispatchPostMutation(MUTATION_POLICIES.mergeMode.action, taskId);
   }
 
   /**
@@ -3308,16 +3347,12 @@ export class Orchestrator {
     this.persistence.logEvent?.(taskId, 'task.updated', fixContextChanges);
     this.messageBus.publish(TASK_DELTA_CHANNEL, fixContextDelta);
 
-    // Step 10 retry-class reset: restartTask is today's `retryTask`
-    // compatibility wire (`buildInvalidationDeps` →
-    // `orchestrator.restartTask`). It resets the task to `pending`,
-    // clears volatile attempt state (`agentSessionId`, `containerId`,
-    // transient `error`/`exitCode`/timing fields), and bumps
-    // execution generation exactly once via
-    // `withBumpedExecutionGeneration` while preserving branch /
-    // workspacePath lineage — the chart's "retry from reverted
-    // failed state" baseline for fix-context mutations.
-    return this.retryTask(taskId);
+    // Retry-class reset via the policy table — `restartTask` is the
+    // current `retryTask` compatibility wire. Routing through
+    // `MUTATION_POLICIES.fixContext` keeps fix-context dispatch
+    // table-driven so a chart change propagates without touching this
+    // method body.
+    return this.dispatchPostMutation(MUTATION_POLICIES.fixContext.action, taskId);
   }
 
   /**
