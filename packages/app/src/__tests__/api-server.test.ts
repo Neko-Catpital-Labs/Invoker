@@ -97,6 +97,9 @@ function createMocks() {
       beginConflictResolution: vi.fn(() => ({ savedError: 'saved-error' })),
       setFixAwaitingApproval: vi.fn(),
       retryTask: vi.fn(() => [makeTask()]),
+      recreateTask: vi.fn(() => [makeTask()]),
+      retryWorkflow: vi.fn(() => [makeTask()]),
+      recreateWorkflow: vi.fn(() => [makeTask()]),
       editTaskCommand: vi.fn(() => [makeTask()]),
       editTaskPrompt: vi.fn(() => [makeTask()]),
       editTaskType: vi.fn(() => [makeTask()]),
@@ -137,6 +140,49 @@ function createMocks() {
       runSerializedForWorkflow: vi.fn(async (_workflowId: string, fn: () => unknown) => {
         await fn();
         return { ok: true, data: undefined };
+      }),
+      // Production CommandService routes through applyInvalidation which
+      // ultimately invokes orchestrator.{retry,recreate}{Task,Workflow}
+      // and (for recreateWorkflow) bumpGenerationAndRecreate which calls
+      // persistence.loadWorkflow first. Mocks below preserve the same
+      // observable behavior (orchestrator is still called, generation
+      // bump persisted, WORKFLOW_NOT_FOUND surfaced) so existing
+      // assertions keep working after the facade routes through
+      // CommandService.
+      retryTask: vi.fn(async (envelope: { payload: { taskId: string } }) => {
+        try {
+          return { ok: true, data: mocks.orchestrator.retryTask(envelope.payload.taskId) };
+        } catch (err) {
+          return { ok: false, error: { code: 'RETRY_TASK_FAILED', message: (err as Error).message } };
+        }
+      }),
+      recreateTask: vi.fn(async (envelope: { payload: { taskId: string } }) => {
+        try {
+          return { ok: true, data: mocks.orchestrator.recreateTask(envelope.payload.taskId) };
+        } catch (err) {
+          return { ok: false, error: { code: 'RECREATE_TASK_FAILED', message: (err as Error).message } };
+        }
+      }),
+      retryWorkflow: vi.fn(async (envelope: { payload: { workflowId: string } }) => {
+        try {
+          return { ok: true, data: mocks.orchestrator.retryWorkflow(envelope.payload.workflowId) };
+        } catch (err) {
+          return { ok: false, error: { code: 'RETRY_WORKFLOW_FAILED', message: (err as Error).message } };
+        }
+      }),
+      recreateWorkflow: vi.fn(async (envelope: { payload: { workflowId: string } }) => {
+        const workflowId = envelope.payload.workflowId;
+        const wf = mocks.persistence.loadWorkflow(workflowId);
+        if (!wf) {
+          return { ok: false, error: { code: 'WORKFLOW_NOT_FOUND', message: `Workflow ${workflowId} not found` } };
+        }
+        const nextGen = (wf.generation ?? 0) + 1;
+        mocks.persistence.updateWorkflow(workflowId, { generation: nextGen });
+        try {
+          return { ok: true, data: mocks.orchestrator.recreateWorkflow(workflowId) };
+        } catch (err) {
+          return { ok: false, error: { code: 'RECREATE_WORKFLOW_FAILED', message: (err as Error).message } };
+        }
       }),
     },
     taskExecutor: {
