@@ -60,9 +60,14 @@ export function ContextMenu({
   const dangerItems = availableItems.filter((item) => item.variant === 'danger');
   const hasMoreButton = dangerItems.length > 0 && !showMore;
   const renderedItems: MenuItem[] = showMore ? [...safeItems, ...dangerItems] : safeItems;
+  const moreIndex = hasMoreButton ? renderedItems.length : -1;
 
-  // Find first enabled item index
-  const firstEnabledIndex = renderedItems.findIndex((item) => item.enabled);
+  // Find first enabled item index (the More button is always considered enabled when shown)
+  const firstEnabledIndex = (() => {
+    const idx = renderedItems.findIndex((item) => item.enabled);
+    if (idx >= 0) return idx;
+    return hasMoreButton ? moreIndex : -1;
+  })();
 
   // Auto-focus first enabled item on mount
   useEffect(() => {
@@ -70,6 +75,11 @@ export function ContextMenu({
       setFocusedIndex(firstEnabledIndex);
     }
   }, [firstEnabledIndex]);
+
+  // Move keyboard focus to the menu container on open so Arrow/Enter/Space land here.
+  useEffect(() => {
+    menuRef.current?.focus({ preventScroll: true });
+  }, []);
 
   // Viewport clamping: flip if menu overflows bottom or right
   useLayoutEffect(() => {
@@ -133,24 +143,44 @@ export function ContextMenu({
     };
   }, [onClose]);
 
-  // Keyboard navigation
+  // Activate either a regular menu item or the More button.
+  const expandMore = () => {
+    setShowMore(true);
+    // Deterministically highlight the first newly revealed item (first danger entry).
+    setFocusedIndex(safeItems.length);
+  };
+
+  // Keyboard navigation. Treats the More button as a virtual trailing item at `moreIndex`.
   const handleKeyDown = (e: React.KeyboardEvent) => {
     const enabledIndices = renderedItems
       .map((item, idx) => (item.enabled ? idx : -1))
       .filter((idx) => idx >= 0);
+    if (hasMoreButton) enabledIndices.push(moreIndex);
+
+    if (enabledIndices.length === 0) return;
 
     if (e.key === 'ArrowDown') {
       e.preventDefault();
+      e.stopPropagation();
       const currentPos = enabledIndices.indexOf(focusedIndex);
-      const nextPos = (currentPos + 1) % enabledIndices.length;
+      const nextPos = currentPos < 0 ? 0 : (currentPos + 1) % enabledIndices.length;
       setFocusedIndex(enabledIndices[nextPos]);
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
+      e.stopPropagation();
       const currentPos = enabledIndices.indexOf(focusedIndex);
-      const prevPos = (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
+      const prevPos =
+        currentPos < 0
+          ? enabledIndices.length - 1
+          : (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
       setFocusedIndex(enabledIndices[prevPos]);
     } else if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
+      e.stopPropagation();
+      if (focusedIndex === moreIndex) {
+        expandMore();
+        return;
+      }
       const item = renderedItems[focusedIndex];
       if (item?.enabled) {
         handleItemClick(item);
@@ -254,8 +284,11 @@ export function ContextMenu({
           <div className="border-t border-gray-600 my-1" />
           <button
             role="menuitem"
-            className="w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
-            onClick={() => setShowMore(true)}
+            className={`w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 ${
+              focusedIndex === moreIndex ? 'bg-gray-700' : ''
+            }`}
+            onClick={expandMore}
+            onMouseEnter={() => setFocusedIndex(moreIndex)}
           >
             More
           </button>
