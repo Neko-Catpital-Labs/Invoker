@@ -94,6 +94,18 @@ export interface OpenSessionOptions {
   attach?: AttachContext;
 }
 
+/**
+ * Maximum total bytes retained in a session's replay buffer. Older bytes are
+ * trimmed from the head when this is exceeded so memory stays bounded even for
+ * very chatty processes.
+ */
+const MAX_REPLAY_BUFFER_BYTES = 64 * 1024;
+
+interface OutputReplayBuffer {
+  chunks: string[];
+  bytes: number;
+}
+
 interface BaseSessionState {
   sessionId: string;
   taskId: string;
@@ -103,7 +115,14 @@ interface BaseSessionState {
   createdAt: string;
   status: 'running' | 'exited';
   exitCode?: number;
+  outputBuffer: OutputReplayBuffer;
 }
+
+const NOOP_SPAWNED_PROCESS: SpawnedTerminalProcess = {
+  write: () => {},
+  resize: () => {},
+  close: () => {},
+};
 
 interface SpawnSessionState extends BaseSessionState {
   mode: 'spawn';
@@ -127,6 +146,9 @@ export interface EmbeddedTerminalManagerOptions {
 }
 
 function describeSession(state: SessionState): TerminalSessionDescriptor {
+  const snapshot = state.outputBuffer.chunks.length > 0
+    ? state.outputBuffer.chunks.join('')
+    : undefined;
   return {
     sessionId: state.sessionId,
     taskId: state.taskId,
@@ -138,7 +160,24 @@ function describeSession(state: SessionState): TerminalSessionDescriptor {
     mode: state.mode,
     attached: state.mode === 'attached',
     createdAt: state.createdAt,
+    outputSnapshot: snapshot,
   };
+}
+
+function appendToReplayBuffer(buffer: OutputReplayBuffer, data: string): void {
+  const dataBytes = Buffer.byteLength(data, 'utf8');
+  buffer.chunks.push(data);
+  buffer.bytes += dataBytes;
+  while (buffer.bytes > MAX_REPLAY_BUFFER_BYTES && buffer.chunks.length > 1) {
+    const oldest = buffer.chunks.shift()!;
+    buffer.bytes -= Buffer.byteLength(oldest, 'utf8');
+  }
+  if (buffer.chunks.length === 1 && buffer.bytes > MAX_REPLAY_BUFFER_BYTES) {
+    const only = Buffer.from(buffer.chunks[0], 'utf8');
+    const truncated = only.subarray(only.length - MAX_REPLAY_BUFFER_BYTES).toString('utf8');
+    buffer.chunks[0] = truncated;
+    buffer.bytes = Buffer.byteLength(truncated, 'utf8');
+  }
 }
 
 class BashTerminalBackend implements EmbeddedTerminalBackend {
@@ -281,37 +320,66 @@ export class EmbeddedTerminalManager extends EventEmitter {
       cwd: opts.cwd,
       createdAt,
       status: 'running' as const,
+      outputBuffer: { chunks: [] as string[], bytes: 0 },
     };
 
     let state: SessionState;
     if (opts.attach) {
-      const unsubscribe = opts.attach.executor.onOutput(opts.attach.handle, (data) => {
-        this.emitOutput(sessionId, opts.taskId, data);
-      });
-      state = {
+      // Register state before subscribing so output emitted synchronously
+      // during onOutput() lands in the replay buffer.
+      const placeholder: AttachedSessionState = {
         ...base,
         mode: 'attached',
         attach: opts.attach,
-        unsubscribeOutput: unsubscribe,
+        unsubscribeOutput: () => {},
       };
+      this.sessions.set(sessionId, placeholder);
+      this.targetIndex.set(targetKey, sessionId);
+      const unsubscribe = opts.attach.executor.onOutput(opts.attach.handle, (data) => {
+        this.emitOutput(sessionId, opts.taskId, data);
+      });
+      placeholder.unsubscribeOutput = unsubscribe;
+      state = placeholder;
     } else {
-      const process = this.backend.spawn({
+      // Register state with a no-op process placeholder before calling
+      // backend.spawn(). This lets emitOutput find the replay buffer and
+      // emitExit find the session even when the backend fires either of them
+      // synchronously during spawn().
+      const spawnState: SpawnSessionState = {
+        ...base,
+        mode: 'spawn',
+        backend: this.backend.name,
+        process: NOOP_SPAWNED_PROCESS,
+      };
+      this.sessions.set(sessionId, spawnState);
+      this.targetIndex.set(targetKey, sessionId);
+
+      const realProcess = this.backend.spawn({
         spec: opts.spec,
         cwd: opts.cwd,
         defaultShell: this.defaultShell,
         emitOutput: (data) => this.emitOutput(sessionId, opts.taskId, data),
-        emitExit: (exitCode) => this.finalizeSession(state, exitCode),
+        emitExit: (exitCode) => {
+          const current = this.sessions.get(sessionId);
+          if (current) this.finalizeSession(current, exitCode);
+        },
       });
-      state = {
-        ...base,
-        mode: 'spawn',
-        backend: this.backend.name,
-        process,
-      };
+
+      if (spawnState.status === 'running') {
+        spawnState.process = realProcess;
+      } else {
+        // Spawn exited synchronously; finalize already ran with the no-op
+        // placeholder, so close the real process to release any backend
+        // resources it allocated before exiting.
+        try {
+          realProcess.close();
+        } catch {
+          /* best effort */
+        }
+      }
+      state = spawnState;
     }
 
-    this.sessions.set(sessionId, state);
-    this.targetIndex.set(targetKey, sessionId);
     return describeSession(state);
   }
 
@@ -403,6 +471,10 @@ export class EmbeddedTerminalManager extends EventEmitter {
   }
 
   private emitOutput(sessionId: string, taskId: string, data: string): void {
+    const state = this.sessions.get(sessionId);
+    if (state) {
+      appendToReplayBuffer(state.outputBuffer, data);
+    }
     const payload: TerminalOutputEvent = { sessionId, taskId, data };
     this.emit('output', payload);
   }

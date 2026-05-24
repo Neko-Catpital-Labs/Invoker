@@ -390,6 +390,104 @@ describe('EmbeddedTerminalManager', () => {
     const res = mgr.write('not-a-session', 'x');
     expect(res).toEqual({ ok: false, reason: expect.stringContaining('Unknown session') });
   });
+
+  it('captures output emitted synchronously during backend.spawn() in the returned descriptor', () => {
+    const backend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: vi.fn((opts) => {
+        opts.emitOutput('boot-line-1\n');
+        opts.emitOutput('boot-line-2\n');
+        return { write: vi.fn(), resize: vi.fn(), close: vi.fn() };
+      }),
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.openOrReuse({ taskId: 'task-sync', spec: {}, cwd: '/tmp' });
+
+    expect(session.outputSnapshot).toBe('boot-line-1\nboot-line-2\n');
+    expect(session.status).toBe('running');
+  });
+
+  it('exposes the replay snapshot via list() for live sessions', () => {
+    const backend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: vi.fn((opts) => {
+        opts.emitOutput('hello-from-list\n');
+        return { write: vi.fn(), resize: vi.fn(), close: vi.fn() };
+      }),
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    mgr.openOrReuse({ taskId: 'task-list', spec: {}, cwd: '/tmp' });
+
+    const sessions = mgr.list();
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].outputSnapshot).toBe('hello-from-list\n');
+  });
+
+  it('survives backend exit fired synchronously during spawn()', () => {
+    const exits: Array<{ exitCode?: number }> = [];
+    const closed = vi.fn();
+    const backend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: vi.fn((opts) => {
+        opts.emitOutput('startup-noise\n');
+        opts.emitExit(7);
+        return { write: vi.fn(), resize: vi.fn(), close: closed };
+      }),
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+    mgr.on('exit', (e) => exits.push({ exitCode: e.exitCode }));
+
+    const session = mgr.openOrReuse({ taskId: 'task-sync-exit', spec: {}, cwd: '/tmp' });
+
+    expect(session.status).toBe('exited');
+    expect(session.exitCode).toBe(7);
+    expect(session.outputSnapshot).toBe('startup-noise\n');
+    expect(exits).toEqual([{ exitCode: 7 }]);
+    expect(closed).toHaveBeenCalledTimes(1);
+    expect(mgr.list()).toHaveLength(0);
+  });
+
+  it('caps the replay buffer to ~64 KiB by trimming the head of the stream', () => {
+    let emitOutput: ((data: string) => void) | null = null;
+    const backend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: vi.fn((opts) => {
+        emitOutput = opts.emitOutput;
+        return { write: vi.fn(), resize: vi.fn(), close: vi.fn() };
+      }),
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+    const session = mgr.openOrReuse({ taskId: 'task-large', spec: {}, cwd: '/tmp' });
+
+    const chunkSize = 4 * 1024;
+    const totalChunks = 40; // 160 KiB of output, well over the 64 KiB cap
+    for (let i = 0; i < totalChunks; i += 1) {
+      const marker = String.fromCharCode('A'.charCodeAt(0) + (i % 26));
+      emitOutput!(marker.repeat(chunkSize));
+    }
+
+    const snapshot = mgr.get(session.sessionId)?.outputSnapshot ?? '';
+    expect(Buffer.byteLength(snapshot, 'utf8')).toBeLessThanOrEqual(64 * 1024);
+    // Tail of the stream is retained: the very last chunk is fully present.
+    const lastMarker = String.fromCharCode('A'.charCodeAt(0) + ((totalChunks - 1) % 26));
+    expect(snapshot.endsWith(lastMarker.repeat(chunkSize))).toBe(true);
+    // The earliest chunk (marker 'A') has been trimmed out.
+    expect(snapshot.startsWith('A')).toBe(false);
+  });
+
+  it('omits outputSnapshot when no output has been buffered yet', () => {
+    const child = createFakeChild();
+    const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+    const mgr = new EmbeddedTerminalManager({
+      backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+    });
+
+    const session = mgr.openOrReuse({ taskId: 'task-quiet', spec: {}, cwd: '/tmp' });
+
+    expect(session.outputSnapshot).toBeUndefined();
+  });
 });
 
 // ── Deterministic GUI route: resolveTaskTerminalSpec + EmbeddedTerminalManager ──
