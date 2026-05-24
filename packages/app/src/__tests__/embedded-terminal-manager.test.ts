@@ -496,6 +496,78 @@ describe('EmbeddedTerminalManager', () => {
     expect(mgr.get(session.sessionId)).toBeUndefined();
     expect(mgr.list()).toHaveLength(0);
   });
+
+  // ── PTY race regression (FIRST_FRAME_FROM_PTY) ──────────────
+  //
+  // Models the production race: a real node-pty already has output buffered
+  // before the renderer (or any consumer) can subscribe to terminal-output
+  // IPC events. The PTY backend subscribes via `pty.onData(emitOutput)`, so a
+  // fake PtyLike that invokes its data listener synchronously inside
+  // `onData()` reproduces the "output emitted before any consumer attached"
+  // condition deterministically — no sleeps required.
+
+  it('replays FIRST_FRAME_FROM_PTY emitted synchronously during spawn to a late consumer', () => {
+    const fakePty: PtyLike = {
+      onData(listener) {
+        listener('FIRST_FRAME_FROM_PTY\n');
+        return { dispose: () => {} };
+      },
+      onExit() {
+        return { dispose: () => {} };
+      },
+      write() {},
+      resize() {},
+      kill() {},
+    };
+    const ptySpawnFn = vi.fn(() => fakePty) as unknown as PtySpawnFn;
+    const mgr = new EmbeddedTerminalManager({
+      backend: createPtyTerminalBackend({ spawnFn: ptySpawnFn }),
+    });
+
+    // The descriptor returned by openOrReuse() must carry the synchronous
+    // first frame; on the broken baseline (no replay buffer) it was lost.
+    const session = mgr.openOrReuse({ taskId: 't-pty-race', spec: {}, cwd: '/tmp' });
+    expect(session.outputSnapshot).toBe('FIRST_FRAME_FROM_PTY\n');
+
+    // A late consumer — modeling a renderer terminal pane that mounts after
+    // openTerminal returns — looks the session up and seeds its terminal
+    // buffer from the descriptor snapshot. The same bytes must be visible.
+    const lateConsumerView = mgr.get(session.sessionId);
+    expect(lateConsumerView?.outputSnapshot).toBe('FIRST_FRAME_FROM_PTY\n');
+    expect(mgr.list()[0]?.outputSnapshot).toBe('FIRST_FRAME_FROM_PTY\n');
+  });
+
+  it('does not throw when the PTY backend exits synchronously during spawn', () => {
+    const fakePty: PtyLike = {
+      onData(listener) {
+        listener('boot\n');
+        return { dispose: () => {} };
+      },
+      onExit(listener) {
+        listener({ exitCode: 7 });
+        return { dispose: () => {} };
+      },
+      write() {},
+      resize() {},
+      kill() {},
+    };
+    const ptySpawnFn = vi.fn(() => fakePty) as unknown as PtySpawnFn;
+    const mgr = new EmbeddedTerminalManager({
+      backend: createPtyTerminalBackend({ spawnFn: ptySpawnFn }),
+    });
+    const exits: Array<{ sessionId: string; exitCode?: number }> = [];
+    mgr.on('exit', (e) => exits.push({ sessionId: e.sessionId, exitCode: e.exitCode }));
+
+    let session!: ReturnType<typeof mgr.openOrReuse>;
+    expect(() => {
+      session = mgr.openOrReuse({ taskId: 't-pty-sync-exit', spec: {}, cwd: '/tmp' });
+    }).not.toThrow();
+
+    expect(session.status).toBe('exited');
+    expect(session.exitCode).toBe(7);
+    expect(session.outputSnapshot).toBe('boot\n');
+    expect(exits).toEqual([{ sessionId: session.sessionId, exitCode: 7 }]);
+  });
 });
 
 // ── Deterministic GUI route: resolveTaskTerminalSpec + EmbeddedTerminalManager ──
