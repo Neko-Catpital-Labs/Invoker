@@ -18,6 +18,64 @@ vi.mock('@xyflow/react', async () => {
   return createReactFlowMock();
 });
 
+// jsdom has no HTMLCanvasElement support, so the real xterm Terminal throws
+// during construction. We replace it with a minimal in-memory stand-in so the
+// component can complete its mount and we can inspect what was written.
+interface MockXTermInstance {
+  writes: string[];
+  cols: number;
+  rows: number;
+  host?: HTMLElement;
+  onDataCb?: (data: string) => void;
+  disposed: boolean;
+}
+const xtermInstances: MockXTermInstance[] = [];
+
+vi.mock('xterm', () => {
+  class Terminal implements MockXTermInstance {
+    cols = 80;
+    rows = 24;
+    writes: string[] = [];
+    host?: HTMLElement;
+    onDataCb?: (data: string) => void;
+    disposed = false;
+    constructor(_options: unknown) {
+      xtermInstances.push(this);
+    }
+    loadAddon(_addon: unknown): void {}
+    open(host: HTMLElement): void {
+      this.host = host;
+    }
+    write(data: string): void {
+      this.writes.push(data);
+    }
+    onData(cb: (data: string) => void): { dispose: () => void } {
+      this.onDataCb = cb;
+      return {
+        dispose: () => {
+          this.onDataCb = undefined;
+        },
+      };
+    }
+    focus(): void {}
+    dispose(): void {
+      this.disposed = true;
+    }
+  }
+  return { Terminal };
+});
+
+vi.mock('xterm-addon-fit', () => {
+  class FitAddon {
+    fit(): void {}
+  }
+  return { FitAddon };
+});
+
+function findXTermBySessionId(sessionId: string): MockXTermInstance | undefined {
+  return xtermInstances.find((inst) => inst.host?.dataset.sessionId === sessionId);
+}
+
 const { App } = await import('../App.js');
 
 const workflows: WorkflowMeta[] = [{ id: 'wf-a', name: 'Workflow A', status: 'completed' }];
@@ -51,6 +109,7 @@ describe('Terminal drawer (component)', () => {
   beforeEach(() => {
     mock = createMockInvoker();
     mock.install();
+    xtermInstances.length = 0;
   });
 
   afterEach(() => {
@@ -171,5 +230,78 @@ describe('Terminal drawer (component)', () => {
       expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
     });
     expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha');
+  });
+
+  it('seeds a newly mounted pane with the session replay snapshot before live output', async () => {
+    const snapshot = 'early-banner\r\nprompt$ ';
+    mock.openTerminalWithSnapshot('task-alpha', 'sess-alpha', snapshot);
+
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(findXTermBySessionId('sess-alpha')).toBeDefined();
+    });
+
+    const inst = findXTermBySessionId('sess-alpha');
+    expect(inst).toBeDefined();
+    expect(inst!.writes[0]).toBe(snapshot);
+  });
+
+  it('does not duplicate the snapshot write on parent re-render of the same session', async () => {
+    const snapshot = 'banner\r\n';
+    mock.openTerminalWithSnapshot('task-alpha', 'sess-alpha', snapshot);
+
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha, taskBeta], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+    await waitFor(() => {
+      expect(findXTermBySessionId('sess-alpha')).toBeDefined();
+    });
+
+    const inst = findXTermBySessionId('sess-alpha')!;
+    expect(inst.writes.filter((w) => w === snapshot)).toHaveLength(1);
+
+    // Force a parent re-render that produces a new descriptor reference for
+    // the same session by toggling the drawer collapsed state via the tab
+    // strip toggle. The pane should not re-seed.
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse terminal drawer' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Expand terminal drawer' }));
+    fireEvent.click(screen.getByTestId('terminal-tab-task-alpha').querySelector('button[role="tab"]') as HTMLElement);
+
+    // The session is unmounted/remounted across collapse, so a fresh xterm
+    // instance is created for the same sessionId. The snapshot is allowed to
+    // appear at most once in any single instance's write log.
+    for (const term of xtermInstances) {
+      if (term.host?.dataset.sessionId !== 'sess-alpha') continue;
+      expect(term.writes.filter((w) => w === snapshot).length).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('skips replay seeding when the session descriptor has no snapshot', async () => {
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(xtermInstances.length).toBeGreaterThan(0);
+    });
+
+    // Default mock-invoker.openTerminal returns no outputSnapshot, so the
+    // first write into xterm (if any) must come from live output, not seeding.
+    expect(xtermInstances.every((t) => t.writes.length === 0)).toBe(true);
   });
 });

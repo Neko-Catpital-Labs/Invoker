@@ -25,6 +25,11 @@ export interface MockInvoker {
   fireDelta: (delta: TaskDelta) => void;
   /** Fire a workflows-changed event. */
   fireWorkflowsChanged: (workflows: WorkflowMeta[]) => void;
+  /**
+   * Queue a single openTerminal response that carries a replay snapshot so
+   * the renderer can seed xterm before live output begins streaming.
+   */
+  openTerminalWithSnapshot: (taskId: string, sessionId: string, snapshot: string) => void;
   /** Install the mock on window.invoker. */
   install: () => void;
   /** Remove window.invoker. */
@@ -191,6 +196,21 @@ export function createMockInvoker(
     workflowsCallback?.(workflows);
   }
 
+  function openTerminalWithSnapshot(taskId: string, sessionId: string, snapshot: string) {
+    (api.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      opened: true,
+      session: {
+        sessionId,
+        taskId,
+        status: 'running',
+        mode: 'spawn',
+        attached: false,
+        createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+        outputSnapshot: snapshot,
+      },
+    });
+  }
+
   function install() {
     (window as unknown as { invoker: InvokerAPI }).invoker = api;
     (window as unknown as { __INVOKER_BOOTSTRAP__?: { tasks: TaskState[]; workflows: WorkflowMeta[] } }).__INVOKER_BOOTSTRAP__ = {
@@ -204,7 +224,7 @@ export function createMockInvoker(
     delete (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__;
   }
 
-  return { api, setTasks, fireDelta, fireWorkflowsChanged, install, cleanup };
+  return { api, setTasks, fireDelta, fireWorkflowsChanged, openTerminalWithSnapshot, install, cleanup };
 }
 
 /** Create a minimal TaskState for testing. */
