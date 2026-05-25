@@ -13,10 +13,15 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: {
-          // Split large vendor chunks to reduce memory pressure
+          // Split large vendor chunks to reduce memory pressure and keep the
+          // startup entry chunk small. elkjs is ~1.5MB and is only needed once
+          // the user opens the task DAG; js-yaml is only needed when a plan is
+          // parsed locally.
           react: ['react', 'react-dom'],
           xyflow: ['@xyflow/react'],
           xterm: ['xterm', 'xterm-addon-fit'],
+          elkjs: ['elkjs/lib/elk.bundled.js'],
+          'js-yaml': ['js-yaml'],
         },
       },
     },

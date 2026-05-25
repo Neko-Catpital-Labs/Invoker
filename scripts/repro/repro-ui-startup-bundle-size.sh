@@ -60,8 +60,14 @@ if [[ ! -d "$DIST_DIR" ]]; then
 fi
 
 # --- Identify chunks ---
-# Entry chunk: the largest .js file that is NOT a known vendor chunk name.
-# Vendor chunks from manualChunks config: react, xyflow, xterm.
+# Entry chunk: Vite emits the application entry as `index-<hash>.js`.
+# All other top-level `.js` files in dist/assets are either:
+#   - vendor chunks declared in vite.config.ts `manualChunks` (react, xyflow,
+#     xterm, elkjs, js-yaml, ...), or
+#   - dynamic-import chunks for lazy-loaded views/modals.
+# Treat any file whose name does NOT start with "index-" as non-entry, then
+# pick the largest remaining candidate (defensive — there should be exactly
+# one `index-*.js`).
 ENTRY_CHUNK=""
 ENTRY_SIZE=0
 
@@ -80,16 +86,9 @@ for f in "$DIST_DIR"/*.js; do
 
   printf "%-50s %12s %12s\n" "$basename_f" "$raw_human" "$gzip_human"
 
-  # Identify entry chunk: skip known vendor chunks
-  is_vendor=0
-  for vendor in react xyflow xterm; do
-    if [[ "$basename_f" == *"${vendor}"* ]]; then
-      is_vendor=1
-      break
-    fi
-  done
-
-  if [[ $is_vendor -eq 0 && $raw_size -gt $ENTRY_SIZE ]]; then
+  # Entry chunk = Vite's "index-*.js"; everything else is a vendor or
+  # async chunk and does not count toward the cold-start budget.
+  if [[ "$basename_f" == index-*.js && $raw_size -gt $ENTRY_SIZE ]]; then
     ENTRY_CHUNK="$basename_f"
     ENTRY_SIZE=$raw_size
   fi
