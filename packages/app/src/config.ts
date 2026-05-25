@@ -231,9 +231,35 @@ export interface InvokerConfig {
    * preserved while the dispatcher matures.
    */
   launchOutboxMode?: LaunchOutboxMode;
+  /**
+   * Optional external failure-recovery hook. When enabled and a command is
+   * configured, failed task deltas can route to an external process (e.g. a
+   * supervisor script) while still preserving the in-app manual "Fix with AI"
+   * flow. Dormant until a caller wires it in; see
+   * `external-failure-recovery.ts` for the launcher helper.
+   */
+  externalFailureRecovery?: ExternalFailureRecoveryConfig;
 }
 
 export type LaunchOutboxMode = 'disabled' | 'observe' | 'active';
+
+export interface ExternalFailureRecoveryConfig {
+  /** Master switch. When false, the launcher is a no-op. */
+  enabled: boolean;
+  /**
+   * Command line to run when a failed task is observed. Executed via the
+   * platform shell, so simple values like `/path/to/supervisor.sh` and
+   * `bash /path/to/supervisor.sh --flag` both work.
+   */
+  command: string;
+  /** Working directory for the spawned process. Defaults to process cwd. */
+  cwd?: string;
+  /**
+   * Minimum seconds between successive launches; further failures within the
+   * window are skipped. Default: 0 (no cooldown).
+   */
+  cooldownSeconds?: number;
+}
 
 function readJsonSafe(path: string): InvokerConfig {
   if (!existsSync(path)) {
