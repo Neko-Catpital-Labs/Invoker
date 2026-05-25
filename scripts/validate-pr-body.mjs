@@ -4,6 +4,46 @@ import { readFileSync } from 'node:fs';
 
 const REQUIRED_SECTIONS = ['## Summary', '## Test Plan', '## Revert Plan'];
 const DISCOURAGED_HEADINGS = ['## Testing', '## Notes'];
+const SUMMARY_WORD_LIMIT = 30;
+
+function getSectionBody(body, heading) {
+  const lines = body.split(/\r?\n/);
+  const start = lines.findIndex((line) => line.trim() === heading);
+  if (start === -1) return '';
+
+  const sectionLines = [];
+  for (const line of lines.slice(start + 1)) {
+    if (/^##\s+/.test(line.trim())) break;
+    sectionLines.push(line);
+  }
+
+  return sectionLines.join('\n').trim();
+}
+
+function countWords(text) {
+  return text
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
+}
+
+export function getPrBodyWarnings(body) {
+  const warnings = [];
+  const summary = getSectionBody(body, '## Summary');
+  if (!summary) return warnings;
+
+  const paragraphs = summary.split(/\n\s*\n/).map((paragraph) => paragraph.trim()).filter(Boolean);
+  paragraphs.forEach((paragraph, index) => {
+    const wordCount = countWords(paragraph);
+    if (wordCount > SUMMARY_WORD_LIMIT) {
+      warnings.push(
+        `Summary paragraph ${index + 1} is ${wordCount} words. Keep each Summary paragraph under ${SUMMARY_WORD_LIMIT} words.`,
+      );
+    }
+  });
+
+  return warnings;
+}
 
 export function validatePrBody(body) {
   const errors = [];
@@ -82,6 +122,7 @@ function main() {
   const args = parseArgs(process.argv.slice(2));
   const body = args.bodyFile ? readFileSync(args.bodyFile, 'utf-8') : args.body;
   const errors = validatePrBody(body);
+  const warnings = getPrBodyWarnings(body);
 
   if (errors.length > 0) {
     console.error('PR body validation failed:');
@@ -89,6 +130,13 @@ function main() {
       console.error(`- ${error}`);
     }
     process.exit(1);
+  }
+
+  if (warnings.length > 0) {
+    console.error('PR body validation warnings:');
+    for (const warning of warnings) {
+      console.error(`- ${warning}`);
+    }
   }
 
   console.log('PR body validation passed.');

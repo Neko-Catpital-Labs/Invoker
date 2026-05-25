@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { validatePrBody } from './validate-pr-body.mjs';
+import { getPrBodyWarnings, validatePrBody } from './validate-pr-body.mjs';
 
 function assert(condition, message) {
   if (!condition) {
@@ -71,6 +71,7 @@ None.
 
 assert(validatePrBody(validMinimal).length === 0, 'valid minimal body should pass');
 assert(validatePrBody(validArchitecture).length === 0, 'valid architecture body should pass');
+assert(getPrBodyWarnings(validMinimal).length === 0, 'short summary should produce no warnings');
 
 const lightweightErrors = validatePrBody(lightweight);
 assert(lightweightErrors.some((error) => error.includes('Unsupported section: ## Testing')), 'lightweight format should reject ## Testing');
@@ -114,5 +115,25 @@ graph TD
 - Data migration? No
 `);
 assert(malformedArchitectureErrors.some((error) => error.includes('Architecture section is missing required subsection: ### After')), 'missing architecture after section should fail');
+
+const longSummary = `## Summary
+
+This summary paragraph uses too many words because it tries to explain several related implementation details at the same time instead of giving a tired reviewer one clear idea they can understand immediately.
+
+## Test Plan
+
+- [ ] \`pnpm test\`
+
+## Revert Plan
+
+- Safe to revert? Yes
+- Revert command: \`git revert <sha>\`
+- Post-revert steps: None
+- Data migration? No
+`;
+
+const longSummaryWarnings = getPrBodyWarnings(longSummary);
+assert(validatePrBody(longSummary).length === 0, 'summary readability warnings should not fail validation');
+assert(longSummaryWarnings.some((warning) => warning.includes('Summary paragraph 1')), 'long summary paragraph should warn');
 
 console.log('OK: PR body validator checks passed');
