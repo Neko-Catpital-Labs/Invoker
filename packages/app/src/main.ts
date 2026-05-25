@@ -413,20 +413,20 @@ interface InitServicesOptions {
   startupSyncMode?: 'all' | 'none';
 }
 
-function getBundledSkillsStatus() {
-  return resolveBundledSkillsStatus({
+function buildBundledSkillsContext() {
+  return {
     isPackaged: app.isPackaged,
     repoRoot,
     resourcesPath: process.resourcesPath,
-  });
+  };
+}
+
+function getBundledSkillsStatus() {
+  return resolveBundledSkillsStatus(buildBundledSkillsContext());
 }
 
 function installPackagedSkills(mode: import('@invoker/contracts').BundledSkillsInstallMode = 'install') {
-  return installBundledSkills({
-    isPackaged: app.isPackaged,
-    repoRoot,
-    resourcesPath: process.resourcesPath,
-  }, mode);
+  return installBundledSkills(buildBundledSkillsContext(), mode);
 }
 
 async function initServices(options?: InitServicesOptions): Promise<void> {
