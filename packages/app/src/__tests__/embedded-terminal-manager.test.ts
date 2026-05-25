@@ -519,6 +519,99 @@ describe('EmbeddedTerminalManager replay buffer', () => {
   });
 });
 
+// ── PTY first-frame race regression ───────────────────────────
+//
+// These tests pin the fix for the embedded PTY race where the renderer
+// terminal pane subscribed to output events only after `openOrReuse()`
+// returned the descriptor and React mounted the pane. Any output emitted by
+// the backend during spawn (the "first frame") was dropped on the floor.
+//
+// The regression script `scripts/repro-gui-open-terminal-pty-race.sh` runs
+// this describe block and exits non-zero on the broken baseline behavior.
+
+describe('EmbeddedTerminalManager PTY first-frame race regression', () => {
+  it('replays the first frame emitted synchronously during spawn via outputSnapshot', () => {
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn(opts) {
+        // Emit before spawn() returns — the renderer has no chance to
+        // subscribe before this fires, so the snapshot is the only path
+        // by which this byte stream survives.
+        opts.emitOutput('FIRST_FRAME_FROM_PTY\n');
+        return { write() {}, resize() {}, close() {} };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.openOrReuse({ taskId: 'pty-task', spec: {}, cwd: '/tmp' });
+
+    expect(session.outputSnapshot).toBe('FIRST_FRAME_FROM_PTY\n');
+  });
+
+  it('allows a late consumer to seed from the descriptor snapshot and then receive new output', () => {
+    let lateEmit: ((data: string) => void) | undefined;
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn(opts) {
+        lateEmit = opts.emitOutput;
+        opts.emitOutput('FIRST_FRAME_FROM_PTY\n');
+        return { write() {}, resize() {}, close() {} };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    // Simulate the renderer flow: openTerminal returns, then React mounts
+    // the pane and attaches the output listener some ticks later. The
+    // pane seeds itself from the descriptor's outputSnapshot, then
+    // subscribes for live deltas.
+    const session = mgr.openOrReuse({ taskId: 'pty-task', spec: {}, cwd: '/tmp' });
+
+    const seen: string[] = [];
+    if (session.outputSnapshot) seen.push(session.outputSnapshot);
+    mgr.on('output', (e) => seen.push(e.data));
+
+    // Backend keeps emitting after the late subscriber attaches.
+    lateEmit!('after subscribe\n');
+
+    expect(seen).toEqual(['FIRST_FRAME_FROM_PTY\n', 'after subscribe\n']);
+  });
+
+  it('replays the first frame via terminalList() after the pane reloads', () => {
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn(opts) {
+        opts.emitOutput('FIRST_FRAME_FROM_PTY\n');
+        return { write() {}, resize() {}, close() {} };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+    mgr.openOrReuse({ taskId: 'pty-task', spec: {}, cwd: '/tmp' });
+
+    const listed = mgr.list();
+
+    expect(listed).toHaveLength(1);
+    expect(listed[0].outputSnapshot).toBe('FIRST_FRAME_FROM_PTY\n');
+  });
+
+  it('does not throw when the backend exits synchronously during spawn', () => {
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn(opts) {
+        opts.emitOutput('FIRST_FRAME_FROM_PTY\n');
+        opts.emitExit(0);
+        return { write() {}, resize() {}, close() {} };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.openOrReuse({ taskId: 'pty-task', spec: {}, cwd: '/tmp' });
+
+    expect(session.outputSnapshot).toBe('FIRST_FRAME_FROM_PTY\n');
+    expect(session.status).toBe('exited');
+    expect(session.exitCode).toBe(0);
+  });
+});
+
 // ── Deterministic GUI route: resolveTaskTerminalSpec + EmbeddedTerminalManager ──
 
 describe('GUI open-terminal embedded route', () => {
