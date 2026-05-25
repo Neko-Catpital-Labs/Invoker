@@ -94,6 +94,8 @@ export interface OpenSessionOptions {
   attach?: AttachContext;
 }
 
+const MAX_REPLAY_BUFFER_BYTES = 64 * 1024;
+
 interface BaseSessionState {
   sessionId: string;
   taskId: string;
@@ -103,6 +105,7 @@ interface BaseSessionState {
   createdAt: string;
   status: 'running' | 'exited';
   exitCode?: number;
+  replayBuffer: string;
 }
 
 interface SpawnSessionState extends BaseSessionState {
@@ -124,21 +127,6 @@ export interface EmbeddedTerminalManagerOptions {
   backend?: EmbeddedTerminalBackend;
   /** Default shell for `spawn`-mode sessions when the spec has no command. */
   defaultShell?: string;
-}
-
-function describeSession(state: SessionState): TerminalSessionDescriptor {
-  return {
-    sessionId: state.sessionId,
-    taskId: state.taskId,
-    status: state.status,
-    exitCode: state.exitCode,
-    cwd: state.cwd,
-    command: state.spec.command,
-    args: state.spec.args,
-    mode: state.mode,
-    attached: state.mode === 'attached',
-    createdAt: state.createdAt,
-  };
 }
 
 class BashTerminalBackend implements EmbeddedTerminalBackend {
@@ -265,7 +253,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
     if (existingId) {
       const existing = this.sessions.get(existingId);
       if (existing && existing.status === 'running') {
-        return describeSession(existing);
+        return this.describeSession(existing);
       }
       this.targetIndex.delete(targetKey);
       if (existing) this.sessions.delete(existingId);
@@ -281,47 +269,56 @@ export class EmbeddedTerminalManager extends EventEmitter {
       cwd: opts.cwd,
       createdAt,
       status: 'running' as const,
+      replayBuffer: '',
     };
 
-    let state: SessionState;
     if (opts.attach) {
       const unsubscribe = opts.attach.executor.onOutput(opts.attach.handle, (data) => {
         this.emitOutput(sessionId, opts.taskId, data);
       });
-      state = {
+      const state: SessionState = {
         ...base,
         mode: 'attached',
         attach: opts.attach,
         unsubscribeOutput: unsubscribe,
       };
-    } else {
-      const process = this.backend.spawn({
-        spec: opts.spec,
-        cwd: opts.cwd,
-        defaultShell: this.defaultShell,
-        emitOutput: (data) => this.emitOutput(sessionId, opts.taskId, data),
-        emitExit: (exitCode) => this.finalizeSession(state, exitCode),
-      });
-      state = {
-        ...base,
-        mode: 'spawn',
-        backend: this.backend.name,
-        process,
-      };
+      this.sessions.set(sessionId, state);
+      this.targetIndex.set(targetKey, sessionId);
+      return this.describeSession(state);
     }
 
+    // Register session with a placeholder process before spawning so that
+    // synchronous output and exit callbacks find a valid session in the map.
+    const state: SpawnSessionState = {
+      ...base,
+      mode: 'spawn',
+      backend: this.backend.name,
+      process: { write() {}, resize() {}, close() {} },
+    };
     this.sessions.set(sessionId, state);
     this.targetIndex.set(targetKey, sessionId);
-    return describeSession(state);
+
+    state.process = this.backend.spawn({
+      spec: opts.spec,
+      cwd: opts.cwd,
+      defaultShell: this.defaultShell,
+      emitOutput: (data) => this.emitOutput(sessionId, opts.taskId, data),
+      emitExit: (exitCode) => {
+        const s = this.sessions.get(sessionId);
+        if (s) this.finalizeSession(s, exitCode);
+      },
+    });
+
+    return this.describeSession(state);
   }
 
   list(): TerminalSessionDescriptor[] {
-    return Array.from(this.sessions.values()).map(describeSession);
+    return Array.from(this.sessions.values()).map((s) => this.describeSession(s));
   }
 
   get(sessionId: string): TerminalSessionDescriptor | undefined {
     const state = this.sessions.get(sessionId);
-    return state ? describeSession(state) : undefined;
+    return state ? this.describeSession(state) : undefined;
   }
 
   write(sessionId: string, data: string): { ok: boolean; reason?: string } {
@@ -402,7 +399,32 @@ export class EmbeddedTerminalManager extends EventEmitter {
     this.emit('exit', payload);
   }
 
+  private describeSession(state: SessionState): TerminalSessionDescriptor {
+    return {
+      sessionId: state.sessionId,
+      taskId: state.taskId,
+      status: state.status,
+      exitCode: state.exitCode,
+      cwd: state.cwd,
+      command: state.spec.command,
+      args: state.spec.args,
+      mode: state.mode,
+      attached: state.mode === 'attached',
+      createdAt: state.createdAt,
+      outputSnapshot: state.replayBuffer || undefined,
+    };
+  }
+
   private emitOutput(sessionId: string, taskId: string, data: string): void {
+    const state = this.sessions.get(sessionId);
+    if (state) {
+      state.replayBuffer += data;
+      if (state.replayBuffer.length > MAX_REPLAY_BUFFER_BYTES) {
+        state.replayBuffer = state.replayBuffer.slice(
+          state.replayBuffer.length - MAX_REPLAY_BUFFER_BYTES,
+        );
+      }
+    }
     const payload: TerminalOutputEvent = { sessionId, taskId, data };
     this.emit('output', payload);
   }
