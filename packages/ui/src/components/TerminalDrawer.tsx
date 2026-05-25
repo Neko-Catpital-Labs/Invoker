@@ -69,6 +69,15 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
     termRef.current = term;
     fitRef.current = fit;
 
+    if (session.outputSnapshot) {
+      onOutput(session.sessionId, session.outputSnapshot);
+      try {
+        term.write(session.outputSnapshot);
+      } catch {
+        /* terminal disposed */
+      }
+    }
+
     const inputDisposable = term.onData((data) => {
       void window.invoker?.terminalWrite?.(session.sessionId, data);
     });
