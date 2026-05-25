@@ -27,7 +27,15 @@ Default to this structure:
 ```md
 ## Summary
 
-Short explanation of what changed and why.
+Plain-English explanation of what changed and why.
+
+Write this for a burnt out developer who needs the point quickly.
+
+Use paragraphs, not bullets. Keep each paragraph under 30 words.
+
+Put one idea in each paragraph. If one idea leads to another, split them into separate short paragraphs.
+
+Avoid implementation jargon unless it is necessary for understanding the change.
 
 ## Architecture
 

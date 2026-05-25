@@ -1,6 +1,10 @@
 ## Summary
 
-Describe what changed and why. Keep this concrete and outcome-focused.
+Describe what changed and why in plain English.
+
+Write paragraphs, not bullets. Keep each paragraph under 30 words.
+
+Put one idea in each paragraph. If one idea leads to another, split them into separate short paragraphs.
 
 ## Architecture
 

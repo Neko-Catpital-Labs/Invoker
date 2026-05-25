@@ -31,7 +31,7 @@ import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { execSync } from 'node:child_process';
 import aws4 from 'aws4';
-import { validatePrBody } from './validate-pr-body.mjs';
+import { getPrBodyWarnings, validatePrBody } from './validate-pr-body.mjs';
 
 const DEFAULT_PARENT_REMOTE = process.env.INVOKER_PARENT_REMOTE || 'upstream';
 
@@ -163,6 +163,16 @@ function assertValidPrBody(body) {
       '  node scripts/validate-pr-body.mjs --body-file <file>',
     ].join('\n'),
   );
+}
+
+function printPrBodyWarnings(body) {
+  const warnings = getPrBodyWarnings(body);
+  if (warnings.length === 0) return;
+
+  console.error('PR body validation warnings:');
+  for (const warning of warnings) {
+    console.error(`- ${warning}`);
+  }
 }
 
 // ── Image injection ─────────────────────────────────────────────────────────
@@ -370,6 +380,7 @@ async function main() {
   }
 
   assertValidPrBody(body);
+  printPrBodyWarnings(body);
 
   // Inject images
   body = await injectImages(body, args.dryRun);
