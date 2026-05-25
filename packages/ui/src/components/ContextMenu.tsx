@@ -14,6 +14,7 @@ import { useEffect, useRef, useState, useLayoutEffect } from 'react';
 import type { TaskState } from '../types.js';
 import { getMenuItems, type MenuItem } from '../lib/context-menu-items.js';
 import { EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE } from '../isExperimentSpawnPivot.js';
+import { useMenuKeyboard } from '../lib/menu-keyboard.js';
 
 interface ContextMenuProps {
   x: number;
@@ -41,7 +42,6 @@ export function ContextMenu({
   onClose,
 }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
-  const [focusedIndex, setFocusedIndex] = useState(0);
   const [position, setPosition] = useState({ left: x, top: y });
   const [showMore, setShowMore] = useState(false);
 
@@ -61,15 +61,22 @@ export function ContextMenu({
   const hasMoreButton = dangerItems.length > 0 && !showMore;
   const renderedItems: MenuItem[] = showMore ? [...safeItems, ...dangerItems] : safeItems;
 
-  // Find first enabled item index
-  const firstEnabledIndex = renderedItems.findIndex((item) => item.enabled);
-
-  // Auto-focus first enabled item on mount
-  useEffect(() => {
-    if (firstEnabledIndex >= 0) {
-      setFocusedIndex(firstEnabledIndex);
+  const totalCount = renderedItems.length + (hasMoreButton ? 1 : 0);
+  const isItemEnabled = (index: number): boolean => {
+    if (hasMoreButton && index === renderedItems.length) return true;
+    return renderedItems[index]?.enabled ?? false;
+  };
+  const handleActivate = (index: number) => {
+    if (hasMoreButton && index === renderedItems.length) {
+      setShowMore(true);
+      return;
     }
-  }, [firstEnabledIndex]);
+    const item = renderedItems[index];
+    if (item?.enabled) handleItemClick(item);
+  };
+  const { focusedIndex, setFocusedIndex, handleKeyDown } = useMenuKeyboard(
+    totalCount, isItemEnabled, handleActivate, menuRef,
+  );
 
   // Viewport clamping: flip if menu overflows bottom or right
   useLayoutEffect(() => {
@@ -132,31 +139,6 @@ export function ContextMenu({
       document.removeEventListener('keydown', handleKey);
     };
   }, [onClose]);
-
-  // Keyboard navigation
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    const enabledIndices = renderedItems
-      .map((item, idx) => (item.enabled ? idx : -1))
-      .filter((idx) => idx >= 0);
-
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const nextPos = (currentPos + 1) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[nextPos]);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const prevPos = (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[prevPos]);
-    } else if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      const item = renderedItems[focusedIndex];
-      if (item?.enabled) {
-        handleItemClick(item);
-      }
-    }
-  };
 
   // Handle menu item click
   const handleItemClick = (item: MenuItem) => {
@@ -254,8 +236,11 @@ export function ContextMenu({
           <div className="border-t border-gray-600 my-1" />
           <button
             role="menuitem"
-            className="w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
+            className={`w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 ${
+              focusedIndex === renderedItems.length ? 'bg-gray-700' : ''
+            }`}
             onClick={() => setShowMore(true)}
+            onMouseEnter={() => setFocusedIndex(renderedItems.length)}
           >
             More
           </button>
