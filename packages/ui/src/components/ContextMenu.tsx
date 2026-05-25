@@ -71,6 +71,11 @@ export function ContextMenu({
     }
   }, [firstEnabledIndex]);
 
+  const renderedItemsRef = useRef(renderedItems);
+  renderedItemsRef.current = renderedItems;
+  const focusedIndexRef = useRef(focusedIndex);
+  focusedIndexRef.current = focusedIndex;
+
   // Viewport clamping: flip if menu overflows bottom or right
   useLayoutEffect(() => {
     if (!menuRef.current) return;
@@ -118,7 +123,36 @@ export function ContextMenu({
       dismissFromOutsideTarget(e.target, e.button);
     };
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') {
+        onClose();
+        return;
+      }
+      if (menuRef.current?.contains(e.target as Node)) return;
+
+      const items = renderedItemsRef.current;
+      const enabledIndices = items
+        .map((item, idx) => (item.enabled ? idx : -1))
+        .filter((idx) => idx >= 0);
+
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setFocusedIndex((prev) => {
+          const pos = enabledIndices.indexOf(prev);
+          return enabledIndices[(pos + 1) % enabledIndices.length];
+        });
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setFocusedIndex((prev) => {
+          const pos = enabledIndices.indexOf(prev);
+          return enabledIndices[(pos - 1 + enabledIndices.length) % enabledIndices.length];
+        });
+      } else if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        const item = items[focusedIndexRef.current];
+        if (item?.enabled) {
+          handleItemClick(item);
+        }
+      }
     };
 
     document.addEventListener('pointerdown', handlePointerDownCapture, true);

@@ -158,4 +158,80 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
+
+  describe('keyboard navigation within open context menu', () => {
+    it('ArrowDown×3 + Enter on workflow context menu copies workflow ID', async () => {
+      await setup();
+      fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+      await waitFor(() => {
+        expect(screen.getByText('Copy Workflow ID')).toBeInTheDocument();
+      });
+
+      // Visible items: Open Workflow (0), Open PR (1), Retry Workflow (2), Copy Workflow ID (3)
+      // ArrowDown×3 from first item should land on Copy Workflow ID
+      fireEvent.keyDown(document, { key: 'ArrowDown' });
+      fireEvent.keyDown(document, { key: 'ArrowDown' });
+      fireEvent.keyDown(document, { key: 'ArrowDown' });
+      fireEvent.keyDown(document, { key: 'Enter' });
+
+      await waitFor(() => {
+        expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1');
+      });
+    });
+
+    it('ArrowUp wraps from first to last visible item in workflow context menu', async () => {
+      await setup();
+      fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+      await waitFor(() => {
+        expect(screen.getByText('Copy Workflow ID')).toBeInTheDocument();
+      });
+
+      // ArrowUp from the first item should wrap to the last visible item (Copy Workflow ID)
+      fireEvent.keyDown(document, { key: 'ArrowUp' });
+      fireEvent.keyDown(document, { key: 'Enter' });
+
+      await waitFor(() => {
+        expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1');
+      });
+    });
+
+    it('ArrowDown + Enter on task context menu activates the next enabled action', async () => {
+      await setup();
+      fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+      await waitFor(() => {
+        expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+      });
+
+      fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+      await waitFor(() => {
+        expect(screen.getByText('Restart Task')).toBeInTheDocument();
+      });
+
+      // Pending task items: Restart Task (0, primary), Open Terminal (1)
+      // ArrowDown from Restart Task → Open Terminal; Enter activates it
+      fireEvent.keyDown(document, { key: 'ArrowDown' });
+      fireEvent.keyDown(document, { key: 'Enter' });
+
+      await waitFor(() => {
+        expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha');
+      });
+    });
+
+    it('Space activates the highlighted item in the context menu', async () => {
+      await setup();
+      fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+      await waitFor(() => {
+        expect(screen.getByText('Copy Workflow ID')).toBeInTheDocument();
+      });
+
+      fireEvent.keyDown(document, { key: 'ArrowDown' });
+      fireEvent.keyDown(document, { key: 'ArrowDown' });
+      fireEvent.keyDown(document, { key: 'ArrowDown' });
+      fireEvent.keyDown(document, { key: ' ' });
+
+      await waitFor(() => {
+        expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1');
+      });
+    });
+  });
 });
