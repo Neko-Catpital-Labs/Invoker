@@ -22,7 +22,7 @@ interface WorkflowGraphProps {
   tasks: Map<string, TaskState>;
   workflows: Map<string, WorkflowMeta>;
   selectedWorkflowId: string | null;
-  centerWorkflowId?: string | null;
+  centerWorkflowRequest?: { id: string; requestId: number } | null;
   statusFilters: Set<WorkflowStatus>;
   onSelectWorkflow: (workflowId: string) => void;
   onWorkflowContextMenu: (event: MouseEvent, workflowId: string) => void;
@@ -68,13 +68,14 @@ function WorkflowGraphInner({
   tasks,
   workflows,
   selectedWorkflowId,
-  centerWorkflowId,
+  centerWorkflowRequest,
   statusFilters,
   onSelectWorkflow,
   onWorkflowContextMenu,
 }: WorkflowGraphProps): JSX.Element {
   const { fitView, setCenter } = useReactFlow();
   const prevNodeCount = useRef(0);
+  const lastHandledRequestRef = useRef(-1);
   const reportedVisibleRef = useRef(false);
   const graphMetricsRef = useRef({ deriveMs: 0, layoutMs: 0, objectsMs: 0 });
   const graph = useMemo(() => {
@@ -132,12 +133,6 @@ function WorkflowGraphInner({
     },
   })), [graph.edges]);
 
-  const graphSignature = useMemo(() => {
-    const nodeIds = graph.nodes.map((node) => node.id).join('|');
-    const edgeIds = graph.edges.map((edge) => `${edge.source}->${edge.target}`).join('|');
-    return `${nodeIds}::${edgeIds}`;
-  }, [graph.edges, graph.nodes]);
-
   const onInitHandler = useCallback(() => {
     requestAnimationFrame(() => fitView({ padding: 0.2 }));
   }, [fitView]);
@@ -184,17 +179,11 @@ function WorkflowGraphInner({
   }, [graph.edges.length, graph.nodes.length]);
 
   useEffect(() => {
-    if (graph.nodes.length === 0 || typeof window === 'undefined') return;
-    const frame = requestAnimationFrame(() => {
-      requestAnimationFrame(() => fitView({ padding: 0.2 }));
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [fitView, graph.nodes.length, graphSignature]);
-
-  useEffect(() => {
-    if (!centerWorkflowId || nodes.length === 0) return;
-    const node = nodes.find((candidate) => candidate.id === centerWorkflowId);
+    if (!centerWorkflowRequest || nodes.length === 0) return;
+    if (centerWorkflowRequest.requestId === lastHandledRequestRef.current) return;
+    const node = nodes.find((candidate) => candidate.id === centerWorkflowRequest.id);
     if (!node) return;
+    lastHandledRequestRef.current = centerWorkflowRequest.requestId;
     const frame = requestAnimationFrame(() => {
       if (typeof setCenter === 'function') {
         setCenter(node.position.x + 110, node.position.y + 45, { zoom: 1, duration: 180 });
@@ -203,7 +192,7 @@ function WorkflowGraphInner({
       }
     });
     return () => cancelAnimationFrame(frame);
-  }, [centerWorkflowId, fitView, nodes, setCenter]);
+  }, [centerWorkflowRequest, fitView, nodes, setCenter]);
 
   useEffect(() => {
     if (nodes.length === 0) return;
@@ -238,7 +227,6 @@ function WorkflowGraphInner({
     >
       <div data-testid="workflow-graph-react-flow" className="h-full w-full">
         <ReactFlow
-          key={graphSignature}
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}

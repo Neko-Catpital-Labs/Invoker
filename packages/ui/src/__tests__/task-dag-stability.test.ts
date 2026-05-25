@@ -27,6 +27,25 @@ describe('TaskDAG stability', () => {
     });
   });
 
+  describe('one-shot centering via centerTaskRequest', () => {
+    it('accepts centerTaskRequest as a typed request object', () => {
+      expect(source).toContain('centerTaskRequest?: { id: string; requestId: number } | null;');
+    });
+
+    it('tracks last handled request via ref', () => {
+      expect(source).toContain('lastHandledRequestRef');
+      expect(source).toContain('useRef(-1)');
+    });
+
+    it('skips re-centering when requestId matches last handled', () => {
+      expect(source).toContain('centerTaskRequest.requestId === lastHandledRequestRef.current');
+    });
+
+    it('records handled requestId after processing', () => {
+      expect(source).toContain('lastHandledRequestRef.current = centerTaskRequest.requestId');
+    });
+  });
+
   // ── fitView prop removal ──────────────────────────────────
   describe('fitView prop removal', () => {
     it('does not pass fitView as a prop to ReactFlow', () => {
