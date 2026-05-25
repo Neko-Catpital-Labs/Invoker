@@ -37,6 +37,7 @@ import * as path from 'node:path';
 import { existsSync, mkdirSync } from 'node:fs';
 
 const enableTestCompositor = process.env.INVOKER_E2E_ENABLE_COMPOSITOR === '1' || Boolean(process.env.CAPTURE_MODE);
+const hideE2eWindow = process.env.NODE_ENV === 'test' && process.env.INVOKER_E2E_HIDE_WINDOW !== '0';
 
 // Prevent desktop-wide freezes on Linux (Chromium GPU + X11/Wayland compositors).
 // Defense-in-depth: API-level disable, command-line flags, and env var (LIBGL_ALWAYS_SOFTWARE).
@@ -2264,6 +2265,7 @@ function createEmbeddedTerminalBackendFromConfig(
     mainWindow = new BrowserWindow({
       width: 1200,
       height: 800,
+      ...(hideE2eWindow ? { x: -32000, y: -32000, skipTaskbar: true } : {}),
       // Show explicitly after load/timeout rather than relying on Electron's
       // implicit initial map behavior, which has regressed on some Linux/X11
       // sessions and leaves the BrowserWindow unmapped.
@@ -2324,8 +2326,12 @@ function createEmbeddedTerminalBackendFromConfig(
         showTriggered = true;
         logger.info('main window show()', { module: 'window' });
         recordStartupMark('window.show');
-        mainWindow.show();
-        mainWindow.focus();
+        if (hideE2eWindow) {
+          mainWindow.showInactive();
+        } else {
+          mainWindow.show();
+          mainWindow.focus();
+        }
         uiInteractive = true;
         recordStartupMark('ui.interactive');
         startDeferredStartupWork();
