@@ -18,6 +18,48 @@ vi.mock('@xyflow/react', async () => {
   return createReactFlowMock();
 });
 
+// Mock xterm so we can observe seeding into the freshly opened terminal.
+// jsdom can construct the real xterm Terminal but it pulls in canvas/DOM
+// features we do not need for these tests, and we want a stable hook into
+// `write()` so we can assert the replay snapshot is delivered.
+interface XTermMockInstance {
+  write: ReturnType<typeof vi.fn>;
+  onData: ReturnType<typeof vi.fn>;
+  loadAddon: ReturnType<typeof vi.fn>;
+  open: ReturnType<typeof vi.fn>;
+  focus: ReturnType<typeof vi.fn>;
+  dispose: ReturnType<typeof vi.fn>;
+  cols: number;
+  rows: number;
+}
+const xtermInstances: XTermMockInstance[] = [];
+
+vi.mock('xterm', () => {
+  class Terminal implements XTermMockInstance {
+    cols = 80;
+    rows = 24;
+    write = vi.fn();
+    onData = vi.fn(() => ({ dispose: vi.fn() }));
+    loadAddon = vi.fn();
+    open = vi.fn();
+    focus = vi.fn();
+    dispose = vi.fn();
+    constructor() {
+      xtermInstances.push(this);
+    }
+  }
+  return { Terminal };
+});
+
+vi.mock('xterm-addon-fit', () => {
+  class FitAddon {
+    fit = vi.fn();
+    activate = vi.fn();
+    dispose = vi.fn();
+  }
+  return { FitAddon };
+});
+
 const { App } = await import('../App.js');
 
 const workflows: WorkflowMeta[] = [{ id: 'wf-a', name: 'Workflow A', status: 'completed' }];
@@ -49,6 +91,7 @@ describe('Terminal drawer (component)', () => {
   let mock: MockInvoker;
 
   beforeEach(() => {
+    xtermInstances.length = 0;
     mock = createMockInvoker();
     mock.install();
   });
@@ -171,5 +214,69 @@ describe('Terminal drawer (component)', () => {
       expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
     });
     expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha');
+  });
+
+  it('seeds xterm with the session replay snapshot and does not duplicate on re-render', async () => {
+    const replaySnapshot = 'pre-subscribe banner output\r\n$ ';
+    (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      opened: true,
+      session: {
+        sessionId: 'mock-session-task-alpha',
+        taskId: 'task-alpha',
+        status: 'running',
+        mode: 'spawn',
+        attached: false,
+        createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+        outputSnapshot: replaySnapshot,
+      },
+    });
+
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha, taskBeta], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
+    });
+
+    // Exactly one xterm instance for the new alpha pane.
+    expect(xtermInstances).toHaveLength(1);
+    const term = xtermInstances[0]!;
+    const writeMock = term.write as ReturnType<typeof vi.fn>;
+    expect(writeMock).toHaveBeenCalledWith(replaySnapshot);
+    expect(writeMock.mock.calls.filter((args) => args[0] === replaySnapshot)).toHaveLength(1);
+    const seedingCallCount = writeMock.mock.calls.length;
+
+    // Force a parent re-render that does not change session.sessionId: open a
+    // second task. The alpha pane should not re-seed its snapshot.
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-beta'));
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-beta')).toBeInTheDocument();
+    });
+
+    expect(writeMock.mock.calls.filter((args) => args[0] === replaySnapshot)).toHaveLength(1);
+    expect(writeMock.mock.calls.length).toBe(seedingCallCount);
+
+    // Switch active tab back to alpha — still no re-seeding.
+    fireEvent.click(screen.getByRole('tab', { name: /Alpha description/i }));
+    expect(writeMock.mock.calls.filter((args) => args[0] === replaySnapshot)).toHaveLength(1);
+  });
+
+  it('mounts a terminal pane without seeding when the session has no replay snapshot', async () => {
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
+    });
+
+    expect(xtermInstances).toHaveLength(1);
+    const writeMock = xtermInstances[0]!.write as ReturnType<typeof vi.fn>;
+    expect(writeMock).not.toHaveBeenCalled();
   });
 });

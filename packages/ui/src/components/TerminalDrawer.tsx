@@ -44,6 +44,11 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  // Tracks which (sessionId, snapshot) pair has already been seeded into the
+  // current xterm instance so that React re-renders do not replay the same
+  // initial buffer twice. Keyed by sessionId; value is the exact snapshot
+  // string most recently written.
+  const seededSnapshotRef = useRef<{ sessionId: string; snapshot: string } | null>(null);
 
   useEffect(() => {
     const host = containerRef.current;
@@ -68,6 +73,25 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
     }
     termRef.current = term;
     fitRef.current = fit;
+
+    // Seed the freshly-opened xterm with the replay snapshot captured by the
+    // main process before live output streaming continues. This recovers
+    // output emitted during the gap between `openTerminal` returning a
+    // session descriptor and the renderer subscribing to
+    // `invoker:terminal-output`. Guarded so re-renders that recreate the
+    // effect do not duplicate the same snapshot.
+    const snapshot = session.outputSnapshot;
+    if (snapshot) {
+      const seeded = seededSnapshotRef.current;
+      if (!seeded || seeded.sessionId !== session.sessionId || seeded.snapshot !== snapshot) {
+        try {
+          term.write(snapshot);
+        } catch {
+          /* terminal disposed */
+        }
+        seededSnapshotRef.current = { sessionId: session.sessionId, snapshot };
+      }
+    }
 
     const inputDisposable = term.onData((data) => {
       void window.invoker?.terminalWrite?.(session.sessionId, data);
