@@ -46,6 +46,8 @@ type ModalState =
   | { type: 'replace'; task: TaskState };
 
 type KeyboardRegion = 'workflowGraph' | 'taskGraph' | 'inspector' | 'bottomBar';
+type CenterRequest = { id: string; requestId: number };
+
 type SearchResult =
   | { kind: 'workflow'; id: string; title: string; subtitle: string }
   | { kind: 'task'; id: string; workflowId: string | null; title: string; subtitle: string };
@@ -294,8 +296,9 @@ export function App() {
   const [workflowContextMenu, setWorkflowContextMenu] = useState<{ x: number; y: number; workflowId: string } | null>(null);
   const [keyboardRegion, setKeyboardRegion] = useState<KeyboardRegion>('workflowGraph');
   const [previousGraphRegion, setPreviousGraphRegion] = useState<KeyboardRegion>('workflowGraph');
-  const [centerWorkflowId, setCenterWorkflowId] = useState<string | null>(null);
-  const [centerTaskId, setCenterTaskId] = useState<string | null>(null);
+  const [centerWorkflowRequest, setCenterWorkflowRequest] = useState<CenterRequest | null>(null);
+  const [centerTaskRequest, setCenterTaskRequest] = useState<CenterRequest | null>(null);
+  const centerRequestIdRef = useRef(0);
   const [bottomStatusIndex, setBottomStatusIndex] = useState(0);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -604,7 +607,7 @@ export function App() {
     setSelectedTaskId(null);
     setContextMenu(null);
     setWorkflowContextMenu(null);
-    setCenterWorkflowId(workflowId);
+    setCenterWorkflowRequest({ id: workflowId, requestId: ++centerRequestIdRef.current });
     focusKeyboardRegion('workflowGraph');
   }, [focusKeyboardRegion]);
 
@@ -615,11 +618,11 @@ export function App() {
     setWorkflowSelectionDismissed(false);
     if (task.config.workflowId) {
       setSelectedWorkflowId(task.config.workflowId);
-      setCenterWorkflowId(task.config.workflowId);
+      setCenterWorkflowRequest({ id: task.config.workflowId, requestId: ++centerRequestIdRef.current });
     }
     setContextMenu(null);
     setWorkflowContextMenu(null);
-    setCenterTaskId(task.id);
+    setCenterTaskRequest({ id: task.id, requestId: ++centerRequestIdRef.current });
     focusKeyboardRegion('taskGraph');
   }, [focusKeyboardRegion, tasks]);
 
@@ -1620,7 +1623,7 @@ export function App() {
                     tasks={tasks}
                     workflows={workflows}
                     selectedWorkflowId={selectedWorkflow?.id ?? null}
-                    centerWorkflowId={centerWorkflowId}
+                    centerWorkflowRequest={centerWorkflowRequest}
                     statusFilters={statusFilters}
                     onSelectWorkflow={handleWorkflowClick}
                     onWorkflowContextMenu={handleWorkflowContextMenu}
@@ -1644,7 +1647,7 @@ export function App() {
                           tasks={miniDagTasks}
                           workflows={selectedTaskDagWorkflows}
                           selectedTaskId={selectedTaskId}
-                          centerTaskId={centerTaskId}
+                          centerTaskRequest={centerTaskRequest}
                           onTaskClick={handleTaskClick}
                           onTaskDoubleClick={handleTaskDoubleClick}
                           onTaskContextMenu={handleTaskContextMenu}

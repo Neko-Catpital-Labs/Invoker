@@ -274,6 +274,27 @@ describe('TaskDAG stability', () => {
     });
   });
 
+  // ── one-shot centerTaskRequest ─────────────────────────────
+  describe('one-shot centerTaskRequest', () => {
+    it('uses centerTaskRequest prop instead of centerTaskId', () => {
+      expect(source).toContain('centerTaskRequest?: { id: string; requestId: number } | null;');
+    });
+
+    it('tracks last handled requestId to prevent duplicate setCenter calls', () => {
+      expect(source).toContain('lastHandledCenterRequestRef');
+      expect(source).toContain('centerTaskRequest.requestId === lastHandledCenterRequestRef.current');
+    });
+
+    it('stamps lastHandledCenterRequestRef before calling setCenter', () => {
+      expect(source).toContain('lastHandledCenterRequestRef.current = centerTaskRequest.requestId');
+    });
+
+    it('restricts fitView to first non-empty render via initialFitDoneRef', () => {
+      expect(source).toContain('initialFitDoneRef');
+      expect(source).toContain('if (!initialFitDoneRef.current)');
+    });
+  });
+
   // ── onNodesChange handler is wired up ─────────────────────
   describe('onNodesChange handler wiring', () => {
     it('passes onNodesChange to ReactFlow', () => {

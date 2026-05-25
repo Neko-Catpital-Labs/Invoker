@@ -1,5 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { WorkflowGraph } from '../components/WorkflowGraph.js';
 import type { TaskState, WorkflowMeta, WorkflowStatus } from '../types.js';
 import * as ReactFlowModule from '@xyflow/react';
@@ -109,7 +111,7 @@ describe('WorkflowGraph', () => {
     expect(screen.getByTestId('mock-react-flow')).toBeInTheDocument();
   });
 
-  it('re-fits after a non-empty workflow snapshot replacement', async () => {
+  it('does not re-fit after topology changes once initial fit is done', async () => {
     const workflows = new Map([
       ['wf-a', wf('wf-a', 'running')],
     ]);
@@ -128,6 +130,9 @@ describe('WorkflowGraph', () => {
       />,
     );
 
+    await vi.waitFor(() => {
+      expect(fitViewMock).toHaveBeenCalled();
+    });
     fitViewMock.mockClear();
 
     const refreshedWorkflows = new Map([
@@ -150,9 +155,135 @@ describe('WorkflowGraph', () => {
       />,
     );
 
-    await vi.waitFor(() => {
-      expect(fitViewMock).toHaveBeenCalledWith({ padding: 0.2 });
-    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(fitViewMock).not.toHaveBeenCalled();
     expect(screen.getByTestId('workflow-node-wf-b')).toBeInTheDocument();
+  });
+
+  describe('one-shot centerWorkflowRequest', () => {
+    const setCenterMock = (ReactFlowModule as unknown as { __setCenterMock: Mock }).__setCenterMock;
+
+    beforeEach(() => {
+      setCenterMock.mockClear();
+      fitViewMock.mockClear();
+    });
+
+    it('calls setCenter once for a new centerWorkflowRequest', async () => {
+      const workflows = new Map([['wf-a', wf('wf-a', 'running')]]);
+      const tasks = new Map([['t1', task('t1', 'wf-a')]]);
+
+      render(
+        <WorkflowGraph
+          tasks={tasks}
+          workflows={workflows}
+          selectedWorkflowId={null}
+          centerWorkflowRequest={{ id: 'wf-a', requestId: 1 }}
+          statusFilters={new Set()}
+          onSelectWorkflow={() => {}}
+          onWorkflowContextMenu={() => {}}
+        />,
+      );
+
+      await vi.waitFor(() => {
+        expect(setCenterMock).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it('does not repeat setCenter for the same requestId on re-render', async () => {
+      const workflows = new Map([['wf-a', wf('wf-a', 'running')]]);
+      const tasks = new Map([['t1', task('t1', 'wf-a')]]);
+      const request = { id: 'wf-a', requestId: 1 };
+
+      const { rerender } = render(
+        <WorkflowGraph
+          tasks={tasks}
+          workflows={workflows}
+          selectedWorkflowId={null}
+          centerWorkflowRequest={request}
+          statusFilters={new Set()}
+          onSelectWorkflow={() => {}}
+          onWorkflowContextMenu={() => {}}
+        />,
+      );
+
+      await vi.waitFor(() => {
+        expect(setCenterMock).toHaveBeenCalledTimes(1);
+      });
+
+      setCenterMock.mockClear();
+
+      rerender(
+        <WorkflowGraph
+          tasks={tasks}
+          workflows={workflows}
+          selectedWorkflowId={'wf-a'}
+          centerWorkflowRequest={request}
+          statusFilters={new Set()}
+          onSelectWorkflow={() => {}}
+          onWorkflowContextMenu={() => {}}
+        />,
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(setCenterMock).not.toHaveBeenCalled();
+    });
+
+    it('calls setCenter again for a new requestId', async () => {
+      const workflows = new Map([['wf-a', wf('wf-a', 'running')]]);
+      const tasks = new Map([['t1', task('t1', 'wf-a')]]);
+
+      const { rerender } = render(
+        <WorkflowGraph
+          tasks={tasks}
+          workflows={workflows}
+          selectedWorkflowId={null}
+          centerWorkflowRequest={{ id: 'wf-a', requestId: 1 }}
+          statusFilters={new Set()}
+          onSelectWorkflow={() => {}}
+          onWorkflowContextMenu={() => {}}
+        />,
+      );
+
+      await vi.waitFor(() => {
+        expect(setCenterMock).toHaveBeenCalledTimes(1);
+      });
+
+      setCenterMock.mockClear();
+
+      rerender(
+        <WorkflowGraph
+          tasks={tasks}
+          workflows={workflows}
+          selectedWorkflowId={null}
+          centerWorkflowRequest={{ id: 'wf-a', requestId: 2 }}
+          statusFilters={new Set()}
+          onSelectWorkflow={() => {}}
+          onWorkflowContextMenu={() => {}}
+        />,
+      );
+
+      await vi.waitFor(() => {
+        expect(setCenterMock).toHaveBeenCalledTimes(1);
+      });
+    });
+  });
+
+  describe('graphSignature key removal', () => {
+    const wfgSource = readFileSync(
+      resolve(__dirname, '..', 'components', 'WorkflowGraph.tsx'),
+      'utf-8',
+    );
+
+    it('does not pass key={graphSignature} to ReactFlow', () => {
+      const reactFlowBlock = wfgSource.slice(
+        wfgSource.indexOf('<ReactFlow'),
+        wfgSource.indexOf('</ReactFlow>'),
+      );
+      expect(reactFlowBlock).not.toContain('key={graphSignature}');
+    });
+
+    it('does not compute graphSignature', () => {
+      expect(wfgSource).not.toContain('graphSignature');
+    });
   });
 });
