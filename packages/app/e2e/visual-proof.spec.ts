@@ -636,6 +636,40 @@ test.describe('Visual proof capture', () => {
     await expect(menu).not.toBeVisible();
   });
 
+  test('context menu keyboard navigation highlights active item', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+
+    const menu = await openContextMenu(page, page.locator('.react-flow__node[data-testid$="task-alpha"]'));
+
+    // Pending task menu: Restart Task (focused on mount) → Open Terminal → More
+    const restartItem = page.getByRole('menuitem', { name: 'Restart Task' });
+    const openTerminalItem = page.getByRole('menuitem', { name: 'Open Terminal' });
+    await expect(restartItem).toBeVisible();
+    await expect(openTerminalItem).toBeVisible();
+
+    // Initial focus is on first enabled item (Restart Task)
+    // Use space-prefix regex to match standalone bg-gray-700 (not hover:bg-gray-700)
+    await expect(restartItem).toHaveClass(/ bg-gray-700/);
+
+    // ArrowDown moves highlight to Open Terminal
+    await page.keyboard.press('ArrowDown');
+    await expect(openTerminalItem).toHaveClass(/ bg-gray-700/);
+    await expect(restartItem).not.toHaveClass(/ bg-gray-700/);
+
+    // ArrowDown again moves highlight to More
+    await page.keyboard.press('ArrowDown');
+    const moreItem = page.getByRole('menuitem', { name: 'More' });
+    await expect(moreItem).toHaveClass(/ bg-gray-700/);
+    await expect(openTerminalItem).not.toHaveClass(/ bg-gray-700/);
+
+    // ArrowUp goes back to Open Terminal
+    await page.keyboard.press('ArrowUp');
+    await expect(openTerminalItem).toHaveClass(/ bg-gray-700/);
+
+    await captureScreenshot(page, 'context-menu-keyboard-navigation');
+    await assertPageScreenshot(page, 'context-menu-keyboard-navigation');
+  });
+
   test('status filter dims non-matching nodes', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     const now = new Date();
