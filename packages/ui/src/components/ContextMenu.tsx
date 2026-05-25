@@ -64,12 +64,22 @@ export function ContextMenu({
   // Find first enabled item index
   const firstEnabledIndex = renderedItems.findIndex((item) => item.enabled);
 
-  // Auto-focus first enabled item on mount
+  // Auto-focus first enabled item on mount and focus the menu element
   useEffect(() => {
     if (firstEnabledIndex >= 0) {
       setFocusedIndex(firstEnabledIndex);
     }
+    menuRef.current?.focus({ preventScroll: true });
   }, [firstEnabledIndex]);
+
+  // After "More" expands, move focus to the first newly-visible danger item
+  useEffect(() => {
+    if (!showMore) return;
+    const firstDangerIndex = renderedItems.findIndex((item) => item.variant === 'danger' && item.enabled);
+    if (firstDangerIndex >= 0) {
+      setFocusedIndex(firstDangerIndex);
+    }
+  }, [showMore]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Viewport clamping: flip if menu overflows bottom or right
   useLayoutEffect(() => {
@@ -135,22 +145,30 @@ export function ContextMenu({
 
   // Keyboard navigation
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    const moreIndex = renderedItems.length;
     const enabledIndices = renderedItems
       .map((item, idx) => (item.enabled ? idx : -1))
       .filter((idx) => idx >= 0);
+    if (hasMoreButton) enabledIndices.push(moreIndex);
+
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      e.stopPropagation();
+    }
 
     if (e.key === 'ArrowDown') {
-      e.preventDefault();
       const currentPos = enabledIndices.indexOf(focusedIndex);
       const nextPos = (currentPos + 1) % enabledIndices.length;
       setFocusedIndex(enabledIndices[nextPos]);
     } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
       const currentPos = enabledIndices.indexOf(focusedIndex);
       const prevPos = (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
       setFocusedIndex(enabledIndices[prevPos]);
     } else if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
+      if (hasMoreButton && focusedIndex === moreIndex) {
+        setShowMore(true);
+        return;
+      }
       const item = renderedItems[focusedIndex];
       if (item?.enabled) {
         handleItemClick(item);
@@ -254,8 +272,9 @@ export function ContextMenu({
           <div className="border-t border-gray-600 my-1" />
           <button
             role="menuitem"
-            className="w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
+            className={`w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 ${focusedIndex === renderedItems.length ? 'bg-gray-700' : ''}`}
             onClick={() => setShowMore(true)}
+            onMouseEnter={() => setFocusedIndex(renderedItems.length)}
           >
             More
           </button>

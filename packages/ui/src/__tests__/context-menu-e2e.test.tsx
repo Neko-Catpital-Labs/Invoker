@@ -158,4 +158,134 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
+
+  // ── Keyboard navigation ──────────────────────────────────
+
+  it('workflow menu: ArrowDown x3 + Enter activates Copy Workflow ID', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+
+    // Items: Open Workflow (0), Open PR (1), Retry Workflow (2), Copy Workflow ID (3)
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'Enter' });
+
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('workflow menu: ArrowUp wraps to last item (More)', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+
+    // From index 0 (Open Workflow), ArrowUp wraps to More button
+    fireEvent.keyDown(menu, { key: 'ArrowUp' });
+    fireEvent.keyDown(menu, { key: 'Enter' });
+
+    // More was activated, danger items should appear
+    expect(await screen.findByText('Rebase and Retry')).toBeInTheDocument();
+  });
+
+  it('workflow menu: Space activates highlighted item', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+
+    // ArrowDown twice → Retry Workflow
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: ' ' });
+
+    await waitFor(() => expect(mock.api.retryWorkflow).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('workflow menu: keyboard Enter on More expands, then navigate to danger item', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+
+    // Navigate to More: 4 ArrowDown from index 0
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'Enter' });
+
+    // More expanded; focus should be on first expanded item (Rebase and Retry)
+    expect(await screen.findByText('Cancel Workflow')).toBeInTheDocument();
+
+    // Navigate down to Cancel Workflow (index 4→5→6→7 = Rebase and Retry, Rebase and Recreate, Recreate Workflow, Cancel Workflow)
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'Enter' });
+
+    await waitFor(() => expect(mock.api.cancelWorkflow).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('task menu: ArrowDown + Enter activates next enabled action', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    const menu = await screen.findByRole('menu');
+
+    // For a pending task, items are: Restart Task (enabled, primary), Open Terminal (enabled)
+    // First enabled is index 0 (Restart Task). ArrowDown → index 1 (Open Terminal).
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'Enter' });
+
+    // Open Terminal should have been called
+    await waitFor(() => expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'));
+  });
+
+  it('task menu: ArrowUp from first wraps to last enabled item', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    const menu = await screen.findByRole('menu');
+
+    // ArrowUp from first item wraps to last enabled item (More button)
+    fireEvent.keyDown(menu, { key: 'ArrowUp' });
+    fireEvent.keyDown(menu, { key: 'Enter' });
+
+    // More was activated, danger items should appear
+    expect(await screen.findByText('Terminate Task')).toBeInTheDocument();
+  });
+
+  it('Escape closes the workflow context menu', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    expect(await screen.findByText('Open Workflow')).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByText('Open Workflow')).not.toBeInTheDocument();
+    });
+  });
+
+  it('click actions still work after keyboard navigation', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+
+    // Navigate with keyboard first
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+
+    // Then click a different item
+    fireEvent.click(screen.getByText('Open PR'));
+
+    // Menu should close (no error thrown)
+    await waitFor(() => {
+      expect(screen.queryByText('Open PR')).not.toBeInTheDocument();
+    });
+  });
 });
