@@ -158,4 +158,33 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
+
+  it('workflow context menu does not show Recreate Downstream', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByText('Retry Workflow')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Recreate Downstream')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('More'));
+    await waitFor(() => {
+      expect(screen.getByText('Rebase and Retry')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Recreate Downstream')).not.toBeInTheDocument();
+  });
+
+  it('task context menu Recreate Downstream calls recreateDownstream', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    await waitFor(() => {
+      expect(screen.getByText('More')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText('More'));
+    fireEvent.click(await screen.findByText('Recreate Downstream'));
+    await waitFor(() => expect(mock.api.recreateDownstream).toHaveBeenCalledWith('task-alpha'));
+  });
 });
