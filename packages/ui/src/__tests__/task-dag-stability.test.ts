@@ -274,6 +274,26 @@ describe('TaskDAG stability', () => {
     });
   });
 
+  // ── one-shot center request ────────────────────────────────
+  describe('one-shot center request', () => {
+    it('uses centerTaskRequest prop instead of centerTaskId', () => {
+      expect(source).toContain('centerTaskRequest?: { id: string; requestId: number } | null;');
+      expect(source).not.toContain('centerTaskId?: string | null;');
+    });
+
+    it('tracks last handled requestId with a ref', () => {
+      expect(source).toContain('lastHandledCenterRequestId');
+    });
+
+    it('skips setCenter when requestId matches last handled', () => {
+      expect(source).toContain('centerTaskRequest.requestId === lastHandledCenterRequestId.current');
+    });
+
+    it('records requestId after handling a center request', () => {
+      expect(source).toContain('lastHandledCenterRequestId.current = centerTaskRequest.requestId');
+    });
+  });
+
   // ── onNodesChange handler is wired up ─────────────────────
   describe('onNodesChange handler wiring', () => {
     it('passes onNodesChange to ReactFlow', () => {
