@@ -66,21 +66,19 @@ bash skills/plan-to-invoker/scripts/skill-doctor.sh \
 
 For policy-matrix inputs, `skill-doctor` now fails if the coverage map or stack manifest is missing.
 
-### Phase 1b — Runtime verification (three lanes)
+### Phase 1b — Runtime verification (planning lanes)
 
 **Required** when the investigation claims something about **executed** behavior (not just “this string appears in a file”). **Phase 1b has three parts; use all that apply.**
 
-#### Phase 1b-unit — Package tests (agent shell)
+#### Phase 1b-unit (optional) — Focused local reproducer
 
-- Run **`cd packages/<pkg> && pnpm test`**, optionally scoped to a test file that encodes the hypothesis.
-- **Alternative:** `node scripts/verify-<slug>.mjs` (or `tsx`) that imports production modules and asserts output — must follow repo environment rules.
+- Run a focused reproducer only when it is needed to prove or debug the planning hypothesis.
+- Prefer lightweight scripted reproductions (`node scripts/verify-<slug>.mjs`, `tsx`, or existing targeted checks) over broad package test runs during planning.
 - **Record** pass/fail and what each result proves.
-
-**When:** Always appropriate for logic that can be expressed in Vitest (components, pure functions, parsers).
 
 #### Phase 1b-invoker — Headless Invoker (`submit-plan.sh`)
 
-- **Actually execute** `./submit-plan.sh plans/verify-<slug>.yaml` after `pnpm --filter @invoker/app build` if `packages/app/dist/main.js` is missing.
+- **Actually execute** `./submit-plan.sh plans/verify-<slug>.yaml` once local headless prerequisites are available.
 - Optionally wrap with `./run.sh --headless delete-all` first to avoid duplicate task IDs.
 - **Record** exit code and relevant log lines (e.g. `tee /tmp/invoker-verify.txt`).
 - **Authoring** a verify YAML or running **`validate-plan.sh` only** does **not** satisfy Phase 1b-invoker — those do not run the orchestrator or write SQLite.
@@ -99,7 +97,7 @@ For policy-matrix inputs, `skill-doctor` now fails if the coverage map or stack 
 
 #### Combine Phase 1a + 1b in YAML
 
-Submit **one** verification plan YAML that includes **static** tasks (Phase 1a) **and** **runtime** tasks: at least `pnpm test` **and/or** commands that only run when the verify plan is **submitted** via `submit-plan.sh` (e.g. SQLite assertions after a minimal task). **Anti-pattern:** verify plan with **only** `rg`/`test -f` and **no** `pnpm test` and **no** path that exercises Invoker when Phase 1b-invoker applies.
+Submit **one** verification plan YAML that includes **static** tasks (Phase 1a) **and** runtime tasks that run only when the verify plan is **submitted** via `submit-plan.sh` (for example SQLite assertions after a minimal task). **Anti-pattern:** verify plan with **only** `rg`/`test -f` and no path that exercises Invoker when Phase 1b-invoker applies.
 
 #### Validate YAML shape (not behavior)
 
@@ -127,7 +125,7 @@ bash skills/plan-to-invoker/scripts/parse-results.sh < /tmp/invoker-verify.txt
 #### Interpret results
 
 - **Static tasks passed** → files/patterns OK.
-- **Unit tests passed** → in-package hypothesis holds.
+- **Focused reproducer passed** → the planning hypothesis holds for the exercised path.
 - **Invoker run exited 0** → orchestration/persistence/headless path holds.
 - **Any failed** → revise assumptions or add a failing repro before implementation.
 
@@ -195,7 +193,7 @@ Generate the implementation plan, validate with `scripts/validate-plan.sh`, pres
 - **Skipping verification for plans that reference 3+ specific files** — these are exactly the plans most likely to have stale assumptions.
 - **Static-only verification for behavioral claims** — `rg`/`test -f` prove presence of text, not runtime behavior.
 - **Treating `validate-plan.sh` as proof** — it only validates YAML structure.
-- **Stopping at `pnpm test` when Phase 1b-invoker is mandatory** — Invoker path unverified.
+- **Stopping at static checks when Phase 1b-invoker is mandatory** — Invoker path unverified.
 - **Not cleaning up verification workflow** — Invoker may still have the verify plan running. Use `delete-all` before submitting implementation when needed.
 - **Trusting file paths from a plan without checking** — plans can reference moved, renamed, or deleted files. Verify first.
 - **Proceeding after verification failures without adjusting** — the whole point of Phase 1 is to inform Phase 2.

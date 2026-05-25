@@ -18,7 +18,7 @@ When **any** of these apply for the current user message, treat the linked **ski
 Until the user confirms the workflow is complete:
 
 1. Do **not** edit application or library code under `packages/` (or other product paths) for the substantive request.
-2. Follow the skill: scope → Phase 1a → Phase 1b (`pnpm test` / headless as applicable) → implementation YAML from facts → `bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` → present plan → **wait for user confirmation** before `./submit-plan.sh` or before coding.
+2. Follow the skill: scope → Phase 1a → Phase 1b (headless runtime verification as applicable; defer package-test commands unless repro/debug requires them) → implementation YAML from facts → `bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` → present plan → **wait for user confirmation** before `./submit-plan.sh` or before coding.
 
 Treat free text after `/plan-to-invoker` as **input to the skill workflow**, not a directive to implement immediately.
 

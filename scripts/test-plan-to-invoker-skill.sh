@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Contract tests for the plan-to-invoker skill: runtime verification must stay documented.
+# Contract tests for the plan-to-invoker skill: planning/runtime guidance must stay documented.
 # Run from repo root: bash scripts/test-plan-to-invoker-skill.sh
 set -euo pipefail
 
@@ -53,11 +53,11 @@ if [[ -e "$CODEX_LINK" ]]; then
   esac
 fi
 
-# SKILL.md — runtime verification + Invoker headless as complementary lane
+# SKILL.md — runtime verification + Invoker headless as planning lane
 must_contain "$SKILL_MD" "## Intended flow (do not skip steps)" "SKILL must document the full flow"
 must_contain "$SKILL_MD" "Runtime verification (Phase 1b)" "SKILL must require runtime behavioral verification"
 must_contain "$SKILL_MD" "Invoker headless" "SKILL must mention Invoker headless as a verification lane"
-must_contain "$SKILL_MD" "pnpm test" "SKILL must mention pnpm test for behavioral proof"
+must_contain "$SKILL_MD" "deferred to implementation verification" "SKILL must defer planning-time package test runs unless repro/debug requires them"
 must_contain "$SKILL_MD" "terminal stack workflows must end with" "SKILL must require the final full-suite regression gate for standalone plans and terminal stack workflows"
 must_contain "$SKILL_MD" "Grep-only checks" "SKILL must separate grep from behavioral verification"
 must_contain "$SKILL_MD" "see playbook" "SKILL Execution must reference the playbook"
@@ -69,11 +69,11 @@ must_contain "$SKILL_MD" "Review compression" "SKILL must require review compres
 must_contain "$SKILL_MD" "Review claim:" "SKILL must require review claim metadata"
 must_contain "$SKILL_MD" "Safety invariant:" "SKILL must require safety invariant metadata"
 
-# Playbook — Phase 1a / 1b (three lanes) and anti-patterns
+# Playbook — Phase 1a / 1b planning lanes and anti-patterns
 must_contain "$PLAYBOOK" "### Phase 1a — Static analysis" "Playbook must define Phase 1a"
 must_contain "$PLAYBOOK" "### Phase 1b — Runtime verification" "Playbook must define runtime behavioral verification"
 must_contain "$PLAYBOOK" "Phase 1b-invoker" "Playbook must define Invoker headless verification lane"
-must_contain "$PLAYBOOK" "pnpm test" "Playbook must document pnpm test for behavioral verification"
+must_contain "$PLAYBOOK" "Prefer lightweight scripted reproductions" "Playbook must prefer lightweight repro checks during planning"
 must_contain "$PLAYBOOK" "pnpm run test:all" "Playbook must document the final full-suite regression gate"
 must_contain "$PLAYBOOK" "Invoker is mandatory" "Playbook must warn when Invoker verification is mandatory"
 must_contain "$PLAYBOOK" "coverageItems" "Playbook must document row-level coverage for policy-matrix sources"

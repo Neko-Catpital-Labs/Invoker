@@ -14,12 +14,12 @@ Minimal controller skill. Keep policy short here; use deterministic scripts and 
 
 1. Discuss scope/risk with the user.
 2. Phase 1a static analysis.
-3. Runtime verification (Phase 1b): run targeted `pnpm test`, plus Invoker headless when applicable.
+3. Runtime verification (Phase 1b): run Invoker headless verification when applicable; defer package-test commands to implementation verification unless a reproduction specifically needs them.
 4. Generate implementation YAML from verified facts.
 5. Validate with deterministic scripts.
 6. Present plan and submit on confirmation.
 
-Grep-only checks are Phase 1a only; behavioral claims require executed Phase 1b evidence.
+Grep-only checks are Phase 1a only; behavioral claims require executed Phase 1b headless evidence.
 
 **Review compression (required for implementation plans):** Before authoring any plan with `onFinish != none`, apply `skills/review-compression/SKILL.md`. Split by reviewer cognition, not file count: one local review claim, one safety invariant, one slice rationale, and one architectural effect per implementation task. This applies to Invoker and non-Invoker target repos.
 
@@ -115,12 +115,12 @@ If `skill-doctor.sh` fails, run individual checks to isolate the problem:
 
 ## Runtime verification (Phase 1b)
 
-- Unit/package lane: `cd packages/<pkg> && pnpm test`
 - Invoker headless lane: run `./submit-plan.sh plans/verify-<slug>.yaml` when flow involves orchestrator/executor/persistence/headless behavior
 - Visual proof lane when UI changes apply
+- Package tests are optional in planning and should be deferred to implementation verification unless needed to reproduce/debug a specific hypothesis
 - Implementation-plan full-suite gate: standalone implementation plans and terminal stack workflows must end with `pnpm run test:all` from the repo root and depend on every earlier task. Non-terminal stack workflows should end with focused verification; validate them with `skill-doctor --stack-manifest <file>` so the stack position is explicit.
 
-When Invoker config enables heavyweight command routing, keep `pnpm ...` commands in the plan as normal command tasks unless a specific remote target must be declared explicitly. Runtime config may auto-route those commands to SSH.
+When Invoker config enables heavyweight command routing, keep implementation-phase `pnpm ...` commands in the plan as normal command tasks unless a specific remote target must be declared explicitly. Runtime config may auto-route those commands to SSH.
 
 Authoring YAML is not verification; execution is verification.
 
