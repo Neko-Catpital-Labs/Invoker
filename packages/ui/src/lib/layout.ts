@@ -11,8 +11,6 @@
  *    for straighter edges.
  */
 
-import ELK from 'elkjs/lib/elk.bundled.js';
-
 import type { TaskState } from '../types.js';
 
 export interface NodePosition {
@@ -88,7 +86,13 @@ export async function layoutTaskGraph(
     .sort((a, b) => edgeLayoutId(a).localeCompare(edgeLayoutId(b)));
 
   try {
-    const elk = options?.elk ?? new ELK();
+    let elk: ElkLayoutEngine;
+    if (options?.elk) {
+      elk = options.elk;
+    } else {
+      const { default: ELK } = await import('elkjs/lib/elk.bundled.js');
+      elk = new ELK();
+    }
     const graph = {
       id: 'task-dag',
       layoutOptions: {

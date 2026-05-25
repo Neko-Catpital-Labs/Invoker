@@ -13,10 +13,11 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: {
-          // Split large vendor chunks to reduce memory pressure
           react: ['react', 'react-dom'],
           xyflow: ['@xyflow/react'],
           xterm: ['xterm', 'xterm-addon-fit'],
+          'js-yaml': ['js-yaml'],
+          elkjs: ['elkjs/lib/elk.bundled.js'],
         },
       },
     },
