@@ -488,6 +488,47 @@ describe('EmbeddedTerminalManager', () => {
     expect(fresh.outputSnapshot).toBe('');
   });
 
+  // PTY race: renderer subscribes after openOrReuse() returns, so the first
+  // frame must round-trip via outputSnapshot. `FIRST_FRAME_FROM_PTY` is the
+  // marker that scripts/repro-gui-open-terminal-pty-race.sh greps for.
+  it('replays FIRST_FRAME_FROM_PTY emitted synchronously by the backend so a late consumer can seed from the descriptor', () => {
+    const FIRST_FRAME = 'FIRST_FRAME_FROM_PTY\n';
+    const firstFrameBackend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: ({ emitOutput }) => {
+        // Emit synchronously inside spawn(), mimicking node-pty when the child
+        // writes its prompt banner before the JS event loop yields back to the
+        // renderer.
+        emitOutput(FIRST_FRAME);
+        return { write: vi.fn(), resize: vi.fn(), close: vi.fn() };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend: firstFrameBackend });
+
+    // Subscribe a "late consumer" only after openOrReuse() returns — this is
+    // the renderer's behavior (mount terminal pane → subscribe). On the
+    // broken baseline this consumer would receive nothing, and the descriptor
+    // would have no outputSnapshot to seed from.
+    const liveEvents: string[] = [];
+    const session = mgr.openOrReuse({ taskId: 't-first-frame', spec: {}, cwd: '/tmp' });
+    mgr.on('output', (e) => liveEvents.push(e.data));
+
+    // The descriptor returned to the renderer must include the first frame so
+    // a freshly mounted pane can write the snapshot into xterm before any
+    // live events arrive.
+    expect(session.outputSnapshot).toBe(FIRST_FRAME);
+
+    // Late consumer reconstructs the terminal view by concatenating the
+    // snapshot with any subsequent live events — no loss of first frame.
+    const reconstructed = (session.outputSnapshot ?? '') + liveEvents.join('');
+    expect(reconstructed).toBe(FIRST_FRAME);
+
+    // terminalList() reloads must surface the same snapshot for late
+    // subscribers that re-enumerate sessions after a remount.
+    const listed = mgr.list();
+    expect(listed.find((s) => s.sessionId === session.sessionId)?.outputSnapshot).toBe(FIRST_FRAME);
+  });
+
   it('captures attached-mode output emitted synchronously during onOutput subscription', () => {
     const handle: ExecutorHandle = { executionId: 'exec-attach', taskId: 'task-attach' };
     const executor: Pick<Executor, 'onOutput' | 'sendInput'> & { type: string } = {
