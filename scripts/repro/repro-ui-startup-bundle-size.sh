@@ -61,7 +61,7 @@ fi
 
 # --- Identify chunks ---
 # Entry chunk: the largest .js file that is NOT a known vendor chunk name.
-# Vendor chunks from manualChunks config: react, xyflow, xterm.
+# Vendor chunks from manualChunks config: react, xyflow, xterm, elkjs.
 ENTRY_CHUNK=""
 ENTRY_SIZE=0
 
@@ -82,7 +82,7 @@ for f in "$DIST_DIR"/*.js; do
 
   # Identify entry chunk: skip known vendor chunks
   is_vendor=0
-  for vendor in react xyflow xterm; do
+  for vendor in react xyflow xterm elkjs; do
     if [[ "$basename_f" == *"${vendor}"* ]]; then
       is_vendor=1
       break
