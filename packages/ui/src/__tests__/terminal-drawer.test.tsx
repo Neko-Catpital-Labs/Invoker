@@ -11,11 +11,20 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
+import { getXTermInstances, resetXTermInstances } from './helpers/mock-xterm.js';
 import type { WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
   return createReactFlowMock();
+});
+vi.mock('xterm', async () => {
+  const { createXTermMock } = await import('./helpers/mock-xterm.js');
+  return createXTermMock();
+});
+vi.mock('xterm-addon-fit', async () => {
+  const { createFitAddonMock } = await import('./helpers/mock-xterm.js');
+  return createFitAddonMock();
 });
 
 const { App } = await import('../App.js');
@@ -56,6 +65,7 @@ describe('Terminal drawer (component)', () => {
   afterEach(() => {
     mock.cleanup();
     vi.restoreAllMocks();
+    resetXTermInstances();
   });
 
   it('starts collapsed with no terminal pane visible', async () => {
@@ -171,5 +181,91 @@ describe('Terminal drawer (component)', () => {
       expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
     });
     expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha');
+  });
+
+  it('seeds replay snapshot into xterm before live output', async () => {
+    (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      opened: true,
+      session: {
+        sessionId: 'mock-session-task-alpha',
+        taskId: 'task-alpha',
+        status: 'running',
+        mode: 'spawn',
+        attached: false,
+        createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+        command: 'echo',
+        args: ['hello'],
+        outputSnapshot: 'first line\nsecond line\nfinal line\n',
+      },
+    });
+
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-session-output-preview')).toHaveTextContent('final line');
+    });
+
+    const activeTerminals = getXTermInstances().filter((t) => !t.disposed);
+    expect(activeTerminals.length).toBeGreaterThanOrEqual(1);
+    const terminal = activeTerminals[activeTerminals.length - 1];
+    expect(terminal.writtenData).toContain('first line\nsecond line\nfinal line\n');
+  });
+
+  it('does not re-seed snapshot when switching between tabs', async () => {
+    (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      opened: true,
+      session: {
+        sessionId: 'mock-session-task-alpha',
+        taskId: 'task-alpha',
+        status: 'running',
+        mode: 'spawn',
+        attached: false,
+        createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+        outputSnapshot: 'alpha snapshot\n',
+      },
+    });
+    (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      opened: true,
+      session: {
+        sessionId: 'mock-session-task-beta',
+        taskId: 'task-beta',
+        status: 'running',
+        mode: 'spawn',
+        attached: false,
+        createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+      },
+    });
+
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha, taskBeta], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+    await waitFor(() => expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument());
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-beta'));
+    await waitFor(() => expect(screen.getByTestId('terminal-tab-task-beta')).toBeInTheDocument());
+
+    const alphaPane = screen.getByTestId('terminal-pane-task-alpha');
+    const alphaSessionId = alphaPane.getAttribute('data-session-id');
+    const alphaTerminal = getXTermInstances().find(
+      (t) => !t.disposed && t.writtenData.includes('alpha snapshot\n'),
+    );
+    expect(alphaTerminal).toBeDefined();
+    expect(alphaTerminal!.writtenData.filter((d) => d === 'alpha snapshot\n')).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole('tab', { name: /Alpha/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /Beta/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /Alpha/i }));
+
+    expect(alphaTerminal!.writtenData.filter((d) => d === 'alpha snapshot\n')).toHaveLength(1);
   });
 });
