@@ -5845,6 +5845,163 @@ describe('Orchestrator', () => {
       expect(x.execution.workspacePath).toBe('/tmp/x');
     });
 
+    it('recreateDownstream preserves A and recreates only B -> C descendants', () => {
+      const p = new InMemoryPersistence();
+      const b = new InMemoryBus();
+      const wf = 'wf-recreate-downstream-a';
+      const createdAt = new Date();
+
+      for (const [id, deps] of [
+        ['A', []],
+        ['B', ['A']],
+        ['C', ['B']],
+      ] as const) {
+        const attemptId = `${id}-attempt-1`;
+        p.saveAttempt({
+          id: attemptId,
+          nodeId: id,
+          queuePriority: 0,
+          status: 'completed',
+          upstreamAttemptIds: [],
+          createdAt,
+          branch: `br-${id}`,
+          commit: `commit-${id}`,
+          workspacePath: `/tmp/${id}`,
+        });
+        p.saveTask(wf, {
+          id,
+          description: id,
+          status: 'completed',
+          dependencies: deps,
+          createdAt,
+          config: { workflowId: wf, summary: `summary-${id}` },
+          execution: {
+            branch: `br-${id}`,
+            commit: `commit-${id}`,
+            workspacePath: `/tmp/${id}`,
+            selectedAttemptId: attemptId,
+            generation: id === 'A' ? 7 : 2,
+            exitCode: 0,
+          },
+        });
+      }
+
+      const o = new Orchestrator({ persistence: p, messageBus: b, maxConcurrency: 3 });
+      o.syncFromDb(wf);
+      const beforeA = o.getTask('A')!;
+
+      const started = o.recreateDownstream('A');
+
+      const a = o.getTask('A')!;
+      const bTask = o.getTask('B')!;
+      const c = o.getTask('C')!;
+
+      expect(started.some((task) => task.id === 'B')).toBe(true);
+      expect(started.some((task) => task.id === 'A')).toBe(false);
+      expect(a.status).toBe(beforeA.status);
+      expect(a.execution.branch).toBe(beforeA.execution.branch);
+      expect(a.execution.commit).toBe(beforeA.execution.commit);
+      expect(a.execution.workspacePath).toBe(beforeA.execution.workspacePath);
+      expect(a.execution.selectedAttemptId).toBe(beforeA.execution.selectedAttemptId);
+      expect(a.execution.generation).toBe(beforeA.execution.generation);
+
+      expect(['running', 'pending']).toContain(bTask.status);
+      expect(c.status).toBe('pending');
+      expect(bTask.execution.branch).toBeUndefined();
+      expect(bTask.execution.commit).toBeUndefined();
+      expect(bTask.execution.workspacePath).toBeUndefined();
+      expect(c.execution.branch).toBeUndefined();
+      expect(c.execution.commit).toBeUndefined();
+      expect(c.execution.workspacePath).toBeUndefined();
+      expect(bTask.execution.selectedAttemptId).not.toBe('B-attempt-1');
+      expect(c.execution.selectedAttemptId).not.toBe('C-attempt-1');
+      expect(bTask.execution.generation).toBe(3);
+      expect(c.execution.generation).toBe(3);
+    });
+
+    it('recreateDownstream from B recreates C only', () => {
+      const p = new InMemoryPersistence();
+      const bus = new InMemoryBus();
+      const wf = 'wf-recreate-downstream-b';
+      const createdAt = new Date();
+
+      for (const [id, deps] of [
+        ['A', []],
+        ['B', ['A']],
+        ['C', ['B']],
+      ] as const) {
+        p.saveTask(wf, {
+          id,
+          description: id,
+          status: 'completed',
+          dependencies: deps,
+          createdAt,
+          config: { workflowId: wf },
+          execution: {
+            branch: `br-${id}`,
+            commit: `commit-${id}`,
+            workspacePath: `/tmp/${id}`,
+            selectedAttemptId: `${id}-attempt-1`,
+            generation: id === 'B' ? 5 : 1,
+          },
+        });
+      }
+
+      const o = new Orchestrator({ persistence: p, messageBus: bus, maxConcurrency: 3 });
+      o.syncFromDb(wf);
+      const beforeB = o.getTask('B')!;
+
+      o.recreateDownstream('B');
+
+      expect(o.getTask('A')!.execution.branch).toBe('br-A');
+      expect(o.getTask('A')!.execution.generation).toBe(1);
+      expect(o.getTask('B')!.status).toBe(beforeB.status);
+      expect(o.getTask('B')!.execution.branch).toBe(beforeB.execution.branch);
+      expect(o.getTask('B')!.execution.commit).toBe(beforeB.execution.commit);
+      expect(o.getTask('B')!.execution.workspacePath).toBe(beforeB.execution.workspacePath);
+      expect(o.getTask('B')!.execution.selectedAttemptId).toBe(beforeB.execution.selectedAttemptId);
+      expect(o.getTask('B')!.execution.generation).toBe(beforeB.execution.generation);
+      expect(o.getTask('C')!.status).toBe('running');
+      expect(o.getTask('C')!.execution.branch).toBeUndefined();
+      expect(o.getTask('C')!.execution.generation).toBe(2);
+    });
+
+    it('recreateDownstream on a leaf is a no-op', () => {
+      const p = new InMemoryPersistence();
+      const bus = new InMemoryBus();
+      const wf = 'wf-recreate-downstream-leaf';
+      const createdAt = new Date();
+
+      p.saveTask(wf, {
+        id: 'C',
+        description: 'leaf',
+        status: 'completed',
+        dependencies: [],
+        createdAt,
+        config: { workflowId: wf, summary: 'keep' },
+        execution: {
+          branch: 'br-C',
+          commit: 'commit-C',
+          workspacePath: '/tmp/C',
+          selectedAttemptId: 'C-attempt-1',
+          generation: 11,
+        },
+      });
+
+      const o = new Orchestrator({ persistence: p, messageBus: bus, maxConcurrency: 3 });
+      o.syncFromDb(wf);
+      const started = o.recreateDownstream('C');
+      const c = o.getTask('C')!;
+
+      expect(started).toEqual([]);
+      expect(c.status).toBe('completed');
+      expect(c.execution.branch).toBe('br-C');
+      expect(c.execution.commit).toBe('commit-C');
+      expect(c.execution.workspacePath).toBe('/tmp/C');
+      expect(c.execution.selectedAttemptId).toBe('C-attempt-1');
+      expect(c.execution.generation).toBe(11);
+    });
+
     it('drainScheduler sets lastHeartbeatAt when starting a task', () => {
       orchestrator.loadPlan({
         name: 'heartbeat-start-test',
