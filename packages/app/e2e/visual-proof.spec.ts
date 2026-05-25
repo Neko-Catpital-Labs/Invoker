@@ -1275,4 +1275,14 @@ test.describe('Visual proof capture', () => {
     await expect(miniDag.locator('.react-flow__node[data-testid$="task-beta"]')).toBeVisible();
     await captureScreenshot(page, 'task-graph-keyboard-controls-selected');
   });
+
+  test('graph-viewport-one-shot-centering — workflow graph and mini DAG after navigation', async ({ page }) => {
+    const workflowId = await loadPlanAndSelectWorkflow(page, DAG_DETERMINISM_PLAN);
+    await expect(workflowNode(page, workflowId)).toBeVisible();
+    const miniDag = page.getByTestId('selected-workflow-mini-dag');
+    await expect(miniDag).toBeVisible();
+    await expect(miniDag.locator('.react-flow__node[data-testid$="task-a"]')).toBeVisible();
+    await expect(miniDag.locator('.react-flow__node[data-testid$="task-e"]')).toBeVisible();
+    await captureScreenshot(page, 'graph-viewport-one-shot-centering');
+  });
 });
