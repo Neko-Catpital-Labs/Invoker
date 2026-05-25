@@ -277,6 +277,8 @@ export interface TerminalSessionDescriptor {
   mode: 'spawn' | 'attached';
   attached: boolean;
   createdAt: string;
+  /** Bounded recent terminal output snapshot for renderer replay. */
+  outputSnapshot?: string;
 }
 
 export interface TerminalOutputEvent {
