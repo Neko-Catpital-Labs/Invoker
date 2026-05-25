@@ -114,6 +114,25 @@ const REVIEW_READY_WORKFLOW_PR_PLAN = {
   ],
 };
 
+/**
+ * Manual-merge workflow whose gate has no GitHub review URL — used to prove the
+ * workflow-level External review (GitHub) control is visible in the inspector.
+ */
+const WORKFLOW_GITHUB_REVIEW_GATE_CONTROL_PLAN = {
+  name: 'Workflow GitHub review gate control proof',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'merge' as const,
+  mergeMode: 'manual',
+  tasks: [
+    {
+      id: 'wf-gate-work',
+      description: 'Sole task before the convertible merge gate',
+      command: 'echo ok',
+      dependencies: [] as string[],
+    },
+  ],
+};
+
 /** Plan for queue-action-surface hardening: combines canonical states, dependency relationships, and destructive actions. */
 const QUEUE_HARDENING_PLAN = {
   name: 'Queue Hardening Visual Proof',
@@ -490,6 +509,45 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByRole('link', { name: reviewUrl })).toHaveAttribute('href', reviewUrl);
 
     await captureScreenshot(page, 'review-ready-workflow-pr-sidebar');
+  });
+
+  test('workflow-github-review-gate-control — workflow inspector exposes External review (GitHub) conversion', async ({ page }) => {
+    const workflowId = await loadPlanAndSelectWorkflow(page, WORKFLOW_GITHUB_REVIEW_GATE_CONTROL_PLAN);
+    await page
+      .locator('.react-flow__node[data-testid$="wf-gate-work"]')
+      .first()
+      .waitFor({ state: 'visible', timeout: 15000 });
+
+    const mergeGateTaskId = await page.evaluate(async () => {
+      const result = await window.invoker.getTasks();
+      const tasks = Array.isArray(result) ? result : result.tasks;
+      const mergeTask = tasks.find((task: { id: string }) => task.id.includes('__merge__'));
+      return mergeTask?.id ?? null;
+    });
+    expect(mergeGateTaskId).toBeTruthy();
+
+    await injectTaskStates(page, [
+      {
+        taskId: mergeGateTaskId!,
+        changes: { status: 'review_ready', execution: { startedAt: new Date() } },
+      },
+    ]);
+
+    await workflowNode(page, workflowId).dispatchEvent('click', { bubbles: true });
+    await expect(page.getByTestId('workflow-inspector-title')).toHaveText('Workflow GitHub review gate control proof');
+
+    const mergeModeSelect = page.getByTestId('workflow-merge-mode-select');
+    await expect(mergeModeSelect).toBeVisible();
+    await expect(mergeModeSelect).toHaveValue('manual');
+    await expect(mergeModeSelect.locator('option[value="external_review"]')).toHaveText('External review (GitHub)');
+
+    const convertButton = page.getByTestId('workflow-convert-external-review');
+    await expect(convertButton).toBeVisible();
+    await expect(convertButton).toHaveText('Convert to External review (GitHub)');
+
+    await expect(page.getByRole('link', { name: /github\.com.*pull/ })).toHaveCount(0);
+
+    await captureScreenshot(page, 'workflow-github-review-gate-control');
   });
 
   test('interactive-status-hues — fixing-with-ai, needs-input, awaiting-approval', async ({ page }) => {
