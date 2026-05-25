@@ -69,6 +69,7 @@ export function ContextMenu({
     if (firstEnabledIndex >= 0) {
       setFocusedIndex(firstEnabledIndex);
     }
+    menuRef.current?.focus();
   }, [firstEnabledIndex]);
 
   // Viewport clamping: flip if menu overflows bottom or right
