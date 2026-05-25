@@ -159,3 +159,130 @@ describe('Context menu (component)', () => {
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
 });
+
+/**
+ * Regression: an open context menu must be keyboard-navigable.
+ *
+ * A local repro proved that after opening the workflow context menu on
+ * workflow-node-wf-1, pressing ArrowDown three times and then Enter does NOT
+ * call navigator.clipboard.writeText('wf-1'). The same gap affects the task
+ * context menu in the mini DAG. These tests render the real App + menu
+ * components and dispatch real keyboard events so the fix has to actually
+ * route keys to the open menu (auto-focus + key handling), not just keep the
+ * existing click handlers working.
+ *
+ * These tests are expected to fail on the pre-fix behavior and pass once the
+ * menus auto-focus on mount and handle ArrowDown/ArrowUp/Enter/Space.
+ */
+describe('Context menu (open menu keyboard activation regression)', () => {
+  let mock: MockInvoker;
+
+  beforeEach(() => {
+    mock = createMockInvoker();
+    mock.install();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: vi.fn(async () => undefined) },
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    mock.cleanup();
+  });
+
+  async function setupApp() {
+    render(<App />);
+    act(() => mock.setTasks([alpha, beta, merge], workflows));
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-wf-1')).toBeInTheDocument();
+    });
+  }
+
+  async function openWorkflowMenu(): Promise<HTMLElement> {
+    await setupApp();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    return screen.findByRole('menu');
+  }
+
+  async function openTaskMenu(): Promise<HTMLElement> {
+    await setupApp();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    return screen.findByRole('menu');
+  }
+
+  // Dispatch a real keydown at the natural keyboard target: the focused
+  // element if the menu auto-focused (post-fix), otherwise the document
+  // (which only matters if the fix uses a document-level listener).
+  function sendKey(key: string): void {
+    const active = document.activeElement;
+    const target: Document | Element =
+      active && active !== document.body ? active : document;
+    fireEvent.keyDown(target, { key });
+  }
+
+  it('workflow menu: ArrowDown x3 + Enter activates Copy Workflow ID', async () => {
+    // Items in order: Open Workflow (0), Open PR (1), Retry Workflow (2),
+    // Copy Workflow ID (3), More (4). Initial focus on 0; three ArrowDown
+    // presses land on index 3.
+    await openWorkflowMenu();
+
+    sendKey('ArrowDown');
+    sendKey('ArrowDown');
+    sendKey('ArrowDown');
+    sendKey('Enter');
+
+    await waitFor(() =>
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'),
+    );
+  });
+
+  it('workflow menu: ArrowUp wraps deterministically to the last enabled item', async () => {
+    // With wrap, two ArrowUp presses from initial focus 0 land on:
+    //   0 -> 4 (More) -> 3 (Copy Workflow ID).
+    // If wrap is missing or stops at 0, Enter would activate Open Workflow
+    // (index 0) and clipboard.writeText would not be called with 'wf-1'.
+    await openWorkflowMenu();
+
+    sendKey('ArrowUp');
+    sendKey('ArrowUp');
+    sendKey('Enter');
+
+    await waitFor(() =>
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'),
+    );
+  });
+
+  it('workflow menu: Space activates the highlighted item like Enter', async () => {
+    await openWorkflowMenu();
+
+    sendKey('ArrowDown');
+    sendKey('ArrowDown');
+    sendKey('ArrowDown');
+    sendKey(' ');
+
+    await waitFor(() =>
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'),
+    );
+  });
+
+  it('task menu in mini DAG: ArrowDown + Enter activates the next enabled action', async () => {
+    // For a pending task, the visible (non-danger) items are
+    //   Restart Task (0), Open Terminal (1).
+    // Initial focus on 0; ArrowDown moves to 1; Enter activates Open
+    // Terminal, which routes through window.invoker.openTerminal(taskId).
+    await openTaskMenu();
+
+    sendKey('ArrowDown');
+    sendKey('Enter');
+
+    await waitFor(() =>
+      expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'),
+    );
+  });
+});
