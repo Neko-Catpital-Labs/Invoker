@@ -71,7 +71,7 @@ if [[ ${#JS_FILES[@]} -eq 0 ]]; then
 fi
 
 # Known vendor chunk prefixes from vite.config.ts manualChunks.
-VENDOR_PREFIXES=("react-" "xyflow-" "xterm-")
+VENDOR_PREFIXES=("react-" "xyflow-" "xterm-" "elkjs-")
 
 is_vendor_chunk() {
   local basename="$1"
