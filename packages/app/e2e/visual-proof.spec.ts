@@ -1266,4 +1266,24 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'completed-ssh-terminal-resume');
     await assertPageScreenshot(page, 'completed-ssh-terminal-resume');
   });
+
+  test('graph-viewport-one-shot-centering — stable viewport after status update', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, DAG_DETERMINISM_PLAN);
+
+    await expect(page.locator('[data-testid^="workflow-node-"]').first()).toBeVisible();
+    const miniDag = page.getByTestId('selected-workflow-mini-dag');
+    await expect(miniDag).toBeVisible();
+    await expect(miniDag.locator('.react-flow__node[data-testid$="task-a"]')).toBeVisible();
+    await expect(miniDag.locator('.react-flow__node[data-testid$="task-e"]')).toBeVisible();
+
+    await injectTaskStates(page, [
+      { taskId: 'task-a', changes: { status: 'running', execution: { startedAt: new Date() } } },
+    ]);
+
+    await expect(page.locator('[data-testid^="workflow-node-"]').first()).toBeVisible();
+    await expect(miniDag).toBeVisible();
+    await expect(miniDag.locator('.react-flow__node[data-testid$="task-a"]')).toBeVisible();
+
+    await captureScreenshot(page, 'graph-viewport-one-shot-centering');
+  });
 });
