@@ -636,6 +636,33 @@ test.describe('Visual proof capture', () => {
     await expect(menu).not.toBeVisible();
   });
 
+  test('context-menu-keyboard-navigation — ArrowDown highlights next enabled item', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+    await injectTaskStates(page, [
+      {
+        taskId: 'task-alpha',
+        changes: {
+          status: 'failed',
+          execution: { exitCode: 1, stderr: 'keyboard nav proof' },
+        },
+      },
+    ]);
+
+    const menu = await openContextMenu(page, page.locator('.react-flow__node[data-testid$="task-alpha"]'));
+
+    const fixClaude = page.getByRole('menuitem', { name: 'Fix with Claude' });
+    await expect(fixClaude).toBeVisible();
+    expect(await fixClaude.evaluate((el) => el.classList.contains('bg-gray-700'))).toBe(true);
+
+    await page.keyboard.press('ArrowDown');
+
+    const fixCodex = page.getByRole('menuitem', { name: 'Fix with Codex' });
+    expect(await fixCodex.evaluate((el) => el.classList.contains('bg-gray-700'))).toBe(true);
+    expect(await fixClaude.evaluate((el) => el.classList.contains('bg-gray-700'))).toBe(false);
+
+    await captureScreenshot(page, 'context-menu-keyboard-navigation');
+  });
+
   test('status filter dims non-matching nodes', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     const now = new Date();
