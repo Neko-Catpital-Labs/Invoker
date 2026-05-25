@@ -198,6 +198,34 @@ describe('WorkflowInspector', () => {
     expect(onSetMergeMode).toHaveBeenCalledWith('wf-1', 'external_review');
   });
 
+  it('hides the workflow-level conversion button when the merge gate already has a PR URL but keeps the merge-mode selector visible', () => {
+    const onSetMergeMode = vi.fn(async () => {});
+    const mergeTask = makeTask({
+      id: '__merge__wf-1',
+      description: 'Merge gate',
+      status: 'review_ready',
+      config: { workflowId: 'wf-1', isMergeNode: true },
+      execution: { reviewUrl: 'https://github.com/org/repo/pull/77' },
+    });
+
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'review_ready', mergeMode: 'manual' }}
+        task={null}
+        workflowTasks={new Map([[mergeTask.id, mergeTask]])}
+        collapsed={false}
+        advancedExpanded={false}
+        onSetMergeMode={onSetMergeMode}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Convert to External review (GitHub)' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('workflow-convert-external-review')).not.toBeInTheDocument();
+    expect(screen.getByTestId('workflow-merge-mode-select')).toBeInTheDocument();
+  });
+
   it('can be collapsed and restored', () => {
     const { rerender } = render(
       <WorkflowInspector
