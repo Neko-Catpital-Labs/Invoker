@@ -32,3 +32,11 @@ packages/app/test-results/
 .claude.json.backup*
 tmp/plans/
 release/
+
+# Generated local analysis outputs (regenerate, do not commit)
+/reports/
+cache-hit-audit-codex-*.csv
+cache-hit-audit-report.json
+planning-session-*-user-prompts.txt
+planning-session-*-quick-summary.txt
+planning-session-cost-breakdown.json
