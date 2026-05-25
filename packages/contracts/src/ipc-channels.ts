@@ -277,6 +277,15 @@ export interface TerminalSessionDescriptor {
   mode: 'spawn' | 'attached';
   attached: boolean;
   createdAt: string;
+  /**
+   * Bounded recent terminal output captured by the main process for this
+   * session. Used by the renderer to seed newly mounted panes so that output
+   * emitted before the renderer subscribed to `invoker:terminal-output` is not
+   * lost. The buffer is trimmed to a fixed maximum (see
+   * `EmbeddedTerminalManager`), so consumers must not rely on it containing
+   * the full session history.
+   */
+  outputSnapshot?: string;
 }
 
 export interface TerminalOutputEvent {

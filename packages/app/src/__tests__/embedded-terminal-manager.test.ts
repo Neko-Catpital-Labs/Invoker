@@ -19,6 +19,7 @@ import { mkdirSync, rmSync } from 'node:fs';
 
 import {
   EmbeddedTerminalManager,
+  MAX_REPLAY_BUFFER_BYTES,
   createBashTerminalBackend,
   createPtyTerminalBackend,
   type EmbeddedTerminalBackend,
@@ -389,6 +390,133 @@ describe('EmbeddedTerminalManager', () => {
     });
     const res = mgr.write('not-a-session', 'x');
     expect(res).toEqual({ ok: false, reason: expect.stringContaining('Unknown session') });
+  });
+
+  it('captures output emitted synchronously during spawn in the returned descriptor snapshot', () => {
+    const syncBackend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: ({ emitOutput }) => {
+        emitOutput('boot-banner ');
+        emitOutput('ready>');
+        return { write: vi.fn(), resize: vi.fn(), close: vi.fn() };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend: syncBackend });
+
+    const session = mgr.openOrReuse({ taskId: 't-sync', spec: {}, cwd: '/tmp' });
+
+    expect(session.outputSnapshot).toBe('boot-banner ready>');
+  });
+
+  it('includes the same replay snapshot in terminalList descriptors for live sessions', () => {
+    const child = createFakeChild();
+    const mgr = new EmbeddedTerminalManager({
+      backend: createBashTerminalBackend({ spawnFn: vi.fn(() => child) as unknown as BashSpawnFn }),
+    });
+
+    const session = mgr.openOrReuse({ taskId: 't-list', spec: {}, cwd: '/tmp' });
+    child.stdout.emit('data', Buffer.from('line-1\n'));
+    child.stderr.emit('data', Buffer.from('warn-1\n'));
+
+    const listed = mgr.list();
+    expect(listed).toHaveLength(1);
+    expect(listed[0]!.sessionId).toBe(session.sessionId);
+    expect(listed[0]!.outputSnapshot).toBe('line-1\nwarn-1\n');
+  });
+
+  it('does not throw when the backend exits synchronously during spawn', () => {
+    const closeFn = vi.fn();
+    const syncExitBackend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: ({ emitOutput, emitExit }) => {
+        emitOutput('boom\n');
+        emitExit(2);
+        return { write: vi.fn(), resize: vi.fn(), close: closeFn };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend: syncExitBackend });
+    const exits: Array<{ sessionId: string; exitCode?: number }> = [];
+    mgr.on('exit', (e) => exits.push({ sessionId: e.sessionId, exitCode: e.exitCode }));
+
+    const session = mgr.openOrReuse({ taskId: 't-sync-exit', spec: {}, cwd: '/tmp' });
+
+    // Returned descriptor still includes the snapshot captured before exit.
+    expect(session.outputSnapshot).toBe('boom\n');
+    // Exit was finalized after state assignment, so the session is gone and
+    // the exit event fired exactly once.
+    expect(exits).toEqual([{ sessionId: session.sessionId, exitCode: 2 }]);
+    expect(mgr.list()).toHaveLength(0);
+    expect(closeFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounds the replay buffer to MAX_REPLAY_BUFFER_BYTES', () => {
+    const child = createFakeChild();
+    const mgr = new EmbeddedTerminalManager({
+      backend: createBashTerminalBackend({ spawnFn: vi.fn(() => child) as unknown as BashSpawnFn }),
+    });
+
+    const session = mgr.openOrReuse({ taskId: 't-bound', spec: {}, cwd: '/tmp' });
+    // Emit well past the cap to confirm trimming keeps only the tail.
+    child.stdout.emit('data', Buffer.from('A'.repeat(MAX_REPLAY_BUFFER_BYTES)));
+    child.stdout.emit('data', Buffer.from('B'.repeat(MAX_REPLAY_BUFFER_BYTES)));
+    child.stdout.emit('data', Buffer.from('C'.repeat(1024)));
+
+    const snapshot = mgr.get(session.sessionId)?.outputSnapshot ?? '';
+    expect(snapshot.length).toBe(MAX_REPLAY_BUFFER_BYTES);
+    // The tail must contain the most recent chunk.
+    expect(snapshot.endsWith('C'.repeat(1024))).toBe(true);
+    // The earliest 'A' chunk should have been dropped entirely.
+    expect(snapshot.includes('A')).toBe(false);
+  });
+
+  it('clears the replay buffer when the session is finalized', () => {
+    const child = createFakeChild();
+    const mgr = new EmbeddedTerminalManager({
+      backend: createBashTerminalBackend({ spawnFn: vi.fn(() => child) as unknown as BashSpawnFn }),
+    });
+
+    const session = mgr.openOrReuse({ taskId: 't-cleanup', spec: {}, cwd: '/tmp' });
+    child.stdout.emit('data', Buffer.from('hello'));
+    expect(mgr.get(session.sessionId)?.outputSnapshot).toBe('hello');
+
+    child.emit('exit', 0);
+
+    expect(mgr.get(session.sessionId)).toBeUndefined();
+    // Reopening spawns a fresh session with an empty snapshot.
+    const fresh = mgr.openOrReuse({ taskId: 't-cleanup', spec: {}, cwd: '/tmp' });
+    expect(fresh.sessionId).not.toBe(session.sessionId);
+    expect(fresh.outputSnapshot).toBe('');
+  });
+
+  it('captures attached-mode output emitted synchronously during onOutput subscription', () => {
+    const handle: ExecutorHandle = { executionId: 'exec-attach', taskId: 'task-attach' };
+    const executor: Pick<Executor, 'onOutput' | 'sendInput'> & { type: string } = {
+      type: 'fake',
+      onOutput(_handle, cb) {
+        cb('attached-banner ');
+        cb('prompt>');
+        return () => {};
+      },
+      sendInput() {
+        /* unused */
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({
+      backend: createBashTerminalBackend({
+        spawnFn: () => {
+          throw new Error('attached path must not spawn');
+        },
+      }),
+    });
+
+    const session = mgr.openOrReuse({
+      taskId: 'task-attach',
+      spec: { cwd: '/tmp/wt' },
+      cwd: '/tmp/wt',
+      attach: { handle, executor: executor as Executor },
+    });
+
+    expect(session.outputSnapshot).toBe('attached-banner prompt>');
   });
 });
 
