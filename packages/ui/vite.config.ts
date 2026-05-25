@@ -13,10 +13,15 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: {
-          // Split large vendor chunks to reduce memory pressure
+          // Pin the largest vendors to dedicated chunks so the renderer can
+          // start without parsing them. xyflow stays in the cold-start path
+          // (WorkflowGraph), but react-dom and elkjs are big enough to merit
+          // their own files. xterm is intentionally absent: nothing in the
+          // current UI bundle imports it, so listing it produces an empty
+          // chunk that masks dead-dep regressions.
           react: ['react', 'react-dom'],
           xyflow: ['@xyflow/react'],
-          xterm: ['xterm', 'xterm-addon-fit'],
+          elk: ['elkjs/lib/elk.bundled.js'],
         },
       },
     },
