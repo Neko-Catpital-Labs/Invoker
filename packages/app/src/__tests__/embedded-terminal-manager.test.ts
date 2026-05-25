@@ -390,6 +390,104 @@ describe('EmbeddedTerminalManager', () => {
     const res = mgr.write('not-a-session', 'x');
     expect(res).toEqual({ ok: false, reason: expect.stringContaining('Unknown session') });
   });
+
+  describe('replay buffer', () => {
+    it('includes output emitted before openOrReuse returns in the session descriptor', () => {
+      const backend: EmbeddedTerminalBackend = {
+        name: 'bash',
+        spawn(opts) {
+          opts.emitOutput('sync-line-1\n');
+          opts.emitOutput('sync-line-2\n');
+          return { write: vi.fn(), resize: vi.fn(), close: vi.fn() };
+        },
+      };
+      const mgr = new EmbeddedTerminalManager({ backend });
+
+      const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+
+      expect(session.outputSnapshot).toBe('sync-line-1\nsync-line-2\n');
+    });
+
+    it('includes the replay snapshot in list() descriptors', () => {
+      const child = createFakeChild();
+      const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+      const mgr = new EmbeddedTerminalManager({
+        backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+      });
+
+      mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+      child.stdout.emit('data', Buffer.from('hello'));
+      child.stderr.emit('data', Buffer.from(' world'));
+
+      const listed = mgr.list();
+      expect(listed).toHaveLength(1);
+      expect(listed[0].outputSnapshot).toBe('hello world');
+    });
+
+    it('trims the replay buffer to the 64 KiB limit', () => {
+      const child = createFakeChild();
+      const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+      const mgr = new EmbeddedTerminalManager({
+        backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+      });
+
+      const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+      const bigChunk = 'x'.repeat(70_000);
+      child.stdout.emit('data', Buffer.from(bigChunk));
+
+      const desc = mgr.get(session.sessionId);
+      expect(desc).toBeDefined();
+      expect(desc!.outputSnapshot!.length).toBe(64 * 1024);
+      expect(desc!.outputSnapshot).toBe(bigChunk.slice(bigChunk.length - 64 * 1024));
+    });
+
+    it('handles synchronous backend exit without throwing', () => {
+      const backend: EmbeddedTerminalBackend = {
+        name: 'bash',
+        spawn(opts) {
+          opts.emitOutput('fast output\n');
+          opts.emitExit(0);
+          return { write: vi.fn(), resize: vi.fn(), close: vi.fn() };
+        },
+      };
+      const mgr = new EmbeddedTerminalManager({ backend });
+      const exits: number[] = [];
+      mgr.on('exit', (e) => exits.push(e.exitCode));
+
+      const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+
+      expect(session.outputSnapshot).toBe('fast output\n');
+      expect(exits).toEqual([0]);
+      expect(mgr.list()).toHaveLength(0);
+    });
+
+    it('clears the replay buffer on session finalization', () => {
+      const child = createFakeChild();
+      const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+      const mgr = new EmbeddedTerminalManager({
+        backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+      });
+
+      const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+      child.stdout.emit('data', Buffer.from('data'));
+      mgr.close(session.sessionId);
+
+      expect(mgr.get(session.sessionId)).toBeUndefined();
+      expect(mgr.list()).toHaveLength(0);
+    });
+
+    it('returns undefined outputSnapshot when no output has been emitted', () => {
+      const child = createFakeChild();
+      const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+      const mgr = new EmbeddedTerminalManager({
+        backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+      });
+
+      const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+
+      expect(session.outputSnapshot).toBeUndefined();
+    });
+  });
 });
 
 // ── Deterministic GUI route: resolveTaskTerminalSpec + EmbeddedTerminalManager ──
