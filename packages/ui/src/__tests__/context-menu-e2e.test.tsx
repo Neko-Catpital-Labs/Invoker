@@ -158,4 +158,65 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
+
+  describe('keyboard navigation', () => {
+    it('ArrowDown×3 + Enter activates Copy Workflow ID', async () => {
+      await setup();
+      fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+      const menu = await screen.findByRole('menu');
+
+      fireEvent.keyDown(menu, { key: 'ArrowDown' });
+      fireEvent.keyDown(menu, { key: 'ArrowDown' });
+      fireEvent.keyDown(menu, { key: 'ArrowDown' });
+      fireEvent.keyDown(menu, { key: 'Enter' });
+
+      await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
+    });
+
+    it('ArrowUp from first item wraps to last', async () => {
+      await setup();
+      fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+      const menu = await screen.findByRole('menu');
+
+      // Focus starts at index 0 (Open Workflow). ArrowUp wraps to More (last navigable item).
+      fireEvent.keyDown(menu, { key: 'ArrowUp' });
+      fireEvent.keyDown(menu, { key: 'Enter' });
+
+      // More was activated — danger items should now be visible
+      await waitFor(() => {
+        expect(screen.getByText('Cancel Workflow')).toBeInTheDocument();
+      });
+    });
+
+    it('ArrowDown + Enter in task context menu triggers action', async () => {
+      await setup();
+      fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+      await waitFor(() => {
+        expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+      });
+
+      fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+      const menu = await screen.findByRole('menu');
+
+      // Pending task items: Restart Task (index 0), Open Terminal (index 1).
+      // ArrowDown from 0 → 1. Enter activates Open Terminal.
+      fireEvent.keyDown(menu, { key: 'ArrowDown' });
+      fireEvent.keyDown(menu, { key: 'Enter' });
+
+      await waitFor(() => expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'));
+    });
+
+    it('Space activates the focused item like Enter', async () => {
+      await setup();
+      fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+      const menu = await screen.findByRole('menu');
+
+      fireEvent.keyDown(menu, { key: 'ArrowDown' });
+      fireEvent.keyDown(menu, { key: 'ArrowDown' });
+      fireEvent.keyDown(menu, { key: 'ArrowDown' });
+      fireEvent.keyDown(menu, { key: ' ' });
+
+      await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
+    });
+  });
 });

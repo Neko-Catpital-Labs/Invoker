@@ -71,6 +71,10 @@ export function ContextMenu({
     }
   }, [firstEnabledIndex]);
 
+  useEffect(() => {
+    menuRef.current?.focus();
+  }, []);
+
   // Viewport clamping: flip if menu overflows bottom or right
   useLayoutEffect(() => {
     if (!menuRef.current) return;
@@ -141,16 +145,19 @@ export function ContextMenu({
 
     if (e.key === 'ArrowDown') {
       e.preventDefault();
+      e.stopPropagation();
       const currentPos = enabledIndices.indexOf(focusedIndex);
       const nextPos = (currentPos + 1) % enabledIndices.length;
       setFocusedIndex(enabledIndices[nextPos]);
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
+      e.stopPropagation();
       const currentPos = enabledIndices.indexOf(focusedIndex);
       const prevPos = (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
       setFocusedIndex(enabledIndices[prevPos]);
     } else if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
+      e.stopPropagation();
       const item = renderedItems[focusedIndex];
       if (item?.enabled) {
         handleItemClick(item);
