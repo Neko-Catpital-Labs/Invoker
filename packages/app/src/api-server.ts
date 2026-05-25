@@ -46,13 +46,56 @@ import {
   PlanConflictError,
   TopologyForkRequired,
 } from '@invoker/workflow-core';
-import type { Orchestrator } from '@invoker/workflow-core';
+import type { ExternalGatePolicyUpdate, Orchestrator } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { ExecutorRegistry } from '@invoker/execution-engine';
-import type { WorkflowMutationFacade } from './workflow-mutation-facade.js';
+import type {
+  ApproveMutationResult,
+  CancelMutationResult,
+  ForkMutationResult,
+  MutationResult,
+  ResolveConflictMutationResult,
+} from './workflow-mutation-facade.js';
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
-import { parseMetadataPatchBody } from './metadata-setter.js';
+import { parseMetadataPatchBody, type MetadataSetResult } from './metadata-setter.js';
+
+export interface ApiMutationFacade {
+  cancelTask(taskId: string): Promise<CancelMutationResult>;
+  retryTask(taskId: string): Promise<MutationResult>;
+  recreateTask(taskId: string): Promise<MutationResult>;
+  resolveConflict(taskId: string, agentName?: string): Promise<ResolveConflictMutationResult>;
+  approveTask(taskId: string): Promise<ApproveMutationResult>;
+  rejectTask(taskId: string, reason?: string): void;
+  provideInput(taskId: string, text: string): void;
+  editTaskCommand(taskId: string, newCommand: string): Promise<MutationResult>;
+  editTaskPrompt(taskId: string, newPrompt: string): Promise<MutationResult>;
+  editTaskType(taskId: string, runnerKind: string, poolMemberId?: string): Promise<MutationResult>;
+  editTaskAgent(taskId: string, agentName: string): Promise<MutationResult>;
+  setTaskExternalGatePolicies(
+    taskId: string,
+    updates: ExternalGatePolicyUpdate[],
+  ): Promise<MutationResult>;
+  setTaskMetadata(
+    taskId: string,
+    fieldPath: string,
+    value: unknown,
+    options?: { raw?: boolean },
+  ): Promise<MetadataSetResult>;
+  recreateWorkflow(workflowId: string): Promise<MutationResult>;
+  retryWorkflow(workflowId: string): Promise<MutationResult>;
+  rebaseRetry(target: string): Promise<MutationResult>;
+  rebaseRecreate(target: string): Promise<MutationResult>;
+  forkWorkflow(workflowId: string): Promise<ForkMutationResult>;
+  cancelWorkflow(workflowId: string): Promise<CancelMutationResult>;
+  setWorkflowMergeMode(workflowId: string, mergeMode: string): Promise<void>;
+  setWorkflowMetadata(
+    workflowId: string,
+    fieldPath: string,
+    value: unknown,
+    options?: { raw?: boolean },
+  ): Promise<MetadataSetResult>;
+}
 
 export interface ApiServerDeps {
   logger?: Logger;
@@ -60,7 +103,7 @@ export interface ApiServerDeps {
   persistence: SQLiteAdapter;
   executorRegistry: ExecutorRegistry;
   /** All write endpoints delegate to the facade for mutation + dispatch + topup. */
-  mutations: WorkflowMutationFacade;
+  mutations: ApiMutationFacade;
   queueWorkflowMutation?: (
     workflowId: string,
     priority: WorkflowMutationPriority,
