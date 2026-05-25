@@ -207,6 +207,16 @@ export interface InvokerConfig {
     strategy?: 'enforce' | 'route';
   }>;
   /**
+   * Optional external process hook for failed-task recovery.
+   * Dormant: not wired into any failed-task delta path yet.
+   */
+  externalFailureRecovery?: {
+    enabled: boolean;
+    command: string;
+    cwd?: string;
+    cooldownSeconds?: number;
+  };
+  /**
    * Launch-handoff outbox mode (Phase A of the launch-handoff
    * re-architecture). Resolved from the INVOKER_LAUNCH_OUTBOX env var:
    * - "disabled" (default): legacy in-memory dispatch only.
