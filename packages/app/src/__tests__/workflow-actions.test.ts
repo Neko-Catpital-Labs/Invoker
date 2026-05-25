@@ -2207,11 +2207,6 @@ describe('fixWithAgentAction lineage guard', () => {
     const orchestrator = {
       getTask: vi.fn(() => {
         fixCallCount++;
-        // First call: entry point reads task
-        // Second call: entry lineage capture
-        // Third call: post-begin lineage capture
-        // Fourth call: pre-agent lineage checkpoint
-        // Fifth call: lineage check after async fix returns (lineage changed)
         if (fixCallCount <= 4) {
           return makeTask({
             status: 'failed',
