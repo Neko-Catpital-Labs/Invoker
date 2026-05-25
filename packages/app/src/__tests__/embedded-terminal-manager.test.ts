@@ -481,6 +481,81 @@ describe('EmbeddedTerminalManager', () => {
   });
 });
 
+// ── PTY race regression: output emitted before subscriber attaches ──
+
+describe('PTY output race regression', () => {
+  it('replays first-frame output emitted synchronously during spawn', () => {
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: (opts) => {
+        opts.emitOutput('FIRST_FRAME_FROM_PTY\n');
+        return { write: vi.fn(), resize: vi.fn(), close: vi.fn() };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const descriptor = mgr.openOrReuse({ taskId: 'race-1', spec: {}, cwd: '/tmp' });
+
+    expect(descriptor.outputSnapshot).toBe('FIRST_FRAME_FROM_PTY\n');
+    expect(descriptor.status).toBe('running');
+  });
+
+  it('late consumer seeded via get() sees the replay snapshot', () => {
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: (opts) => {
+        opts.emitOutput('FIRST_FRAME_FROM_PTY\n');
+        return { write: vi.fn(), resize: vi.fn(), close: vi.fn() };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const descriptor = mgr.openOrReuse({ taskId: 'race-2', spec: {}, cwd: '/tmp' });
+    const lateRead = mgr.get(descriptor.sessionId);
+
+    expect(lateRead).toBeDefined();
+    expect(lateRead!.outputSnapshot).toBe('FIRST_FRAME_FROM_PTY\n');
+  });
+
+  it('late consumer seeded via list() sees the replay snapshot', () => {
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: (opts) => {
+        opts.emitOutput('FIRST_FRAME_FROM_PTY\n');
+        return { write: vi.fn(), resize: vi.fn(), close: vi.fn() };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+    mgr.openOrReuse({ taskId: 'race-3', spec: {}, cwd: '/tmp' });
+
+    const listed = mgr.list();
+
+    expect(listed).toHaveLength(1);
+    expect(listed[0].outputSnapshot).toBe('FIRST_FRAME_FROM_PTY\n');
+  });
+
+  it('synchronous backend exit during spawn does not throw and preserves output', () => {
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: (opts) => {
+        opts.emitOutput('FIRST_FRAME_FROM_PTY\n');
+        opts.emitExit(0);
+        return { write: vi.fn(), resize: vi.fn(), close: vi.fn() };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+    const exits: Array<{ sessionId: string; exitCode?: number }> = [];
+    mgr.on('exit', (e) => exits.push({ sessionId: e.sessionId, exitCode: e.exitCode }));
+
+    const descriptor = mgr.openOrReuse({ taskId: 'race-exit', spec: {}, cwd: '/tmp' });
+
+    expect(descriptor.outputSnapshot).toBe('FIRST_FRAME_FROM_PTY\n');
+    expect(descriptor.status).toBe('exited');
+    expect(descriptor.exitCode).toBe(0);
+    expect(exits).toHaveLength(1);
+  });
+});
+
 // ── Deterministic GUI route: resolveTaskTerminalSpec + EmbeddedTerminalManager ──
 
 describe('GUI open-terminal embedded route', () => {
