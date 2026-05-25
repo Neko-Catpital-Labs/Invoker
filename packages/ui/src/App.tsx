@@ -9,34 +9,33 @@
  * - Modals overlay when needed
  */
 
-import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect } from 'react';
-import yaml from 'js-yaml';
+import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, lazy, Suspense } from 'react';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowStatus } from './types.js';
 import type { ActionGraphNode } from '@invoker/contracts';
 import { useTasks } from './hooks/useTasks.js';
 import { useInvoker } from './hooks/useInvoker.js';
-import { TaskDAG } from './components/TaskDAG.js';
-import { HistoryView } from './components/HistoryView.js';
-import { TimelineView } from './components/TimelineView.js';
 import { ApprovalModal } from './components/ApprovalModal.js';
 import { InputModal } from './components/InputModal.js';
-import { ExperimentModal } from './components/ExperimentModal.js';
 import { ContextMenu } from './components/ContextMenu.js';
-import { QueueView } from './components/QueueView.js';
-import { ReplaceTaskModal } from './components/ReplaceTaskModal.js';
-import { SystemSetupModal } from './components/SystemSetupModal.js';
 import { WorkflowGraph } from './components/WorkflowGraph.js';
-import { FloatingGraphPanel } from './components/FloatingGraphPanel.js';
 import { WorkflowInspector } from './components/WorkflowInspector.js';
-import { ActionGraphView } from './components/ActionGraphView.js';
 import { StatusBar } from './components/StatusBar.js';
 import { TerminalDrawer } from './components/TerminalDrawer.js';
 import {
   isExperimentSpawnPivotTask,
   EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE,
 } from './isExperimentSpawnPivot.js';
-import { parsePlanText } from './lib/plan-parser.js';
 import type { SystemDiagnostics } from '@invoker/contracts';
+
+const TaskDAG = lazy(() => import('./components/TaskDAG.js').then(m => ({ default: m.TaskDAG })));
+const HistoryView = lazy(() => import('./components/HistoryView.js').then(m => ({ default: m.HistoryView })));
+const TimelineView = lazy(() => import('./components/TimelineView.js').then(m => ({ default: m.TimelineView })));
+const QueueView = lazy(() => import('./components/QueueView.js').then(m => ({ default: m.QueueView })));
+const ActionGraphView = lazy(() => import('./components/ActionGraphView.js').then(m => ({ default: m.ActionGraphView })));
+const FloatingGraphPanel = lazy(() => import('./components/FloatingGraphPanel.js').then(m => ({ default: m.FloatingGraphPanel })));
+const ExperimentModal = lazy(() => import('./components/ExperimentModal.js').then(m => ({ default: m.ExperimentModal })));
+const ReplaceTaskModal = lazy(() => import('./components/ReplaceTaskModal.js').then(m => ({ default: m.ReplaceTaskModal })));
+const SystemSetupModal = lazy(() => import('./components/SystemSetupModal.js').then(m => ({ default: m.SystemSetupModal })));
 
 type ModalState =
   | { type: 'none' }
@@ -648,7 +647,7 @@ export function App() {
         await invoker.loadPlan(planText);
         setWorkflowSelectionDismissed(false);
         setHasLoadedPlan(true);
-        // Parse locally just for UI display state
+        const yaml = await import('js-yaml');
         const parsed = yaml.load(planText) as any;
         setPlanName(parsed?.name ?? 'Untitled Plan');
         setOnFinish(parsed?.onFinish ?? 'merge');
@@ -670,6 +669,7 @@ export function App() {
       const ext = dotIndex >= 0 ? file.name.slice(dotIndex).toLowerCase() : undefined;
 
       try {
+        const { parsePlanText } = await import('./lib/plan-parser.js');
         parsePlanText(text, ext);
         await handleLoadPlan(text);
       } catch (err) {
@@ -1079,27 +1079,7 @@ export function App() {
               className="flex-1 relative overflow-hidden border-r border-gray-800 bg-gray-900"
               onClick={viewMode === 'dag' ? handleDagSurfaceClick : undefined}
             >
-              {viewMode === 'queue' ? (
-                <QueueView
-                  tasks={tasks}
-                  onTaskClick={handleTaskClick}
-                  onCancel={handleCancelTask}
-                  selectedTaskId={selectedTaskId}
-                />
-              ) : viewMode === 'history' ? (
-                <HistoryView onTaskClick={handleTaskClick} selectedTaskId={selectedTaskId} />
-              ) : viewMode === 'timeline' ? (
-                <TimelineView tasks={tasks} onTaskClick={handleTaskClick} selectedTaskId={selectedTaskId} />
-              ) : viewMode === 'actionGraph' ? (
-                <ActionGraphView
-                  selectedNodeId={selectedActionNode?.id ?? null}
-                  onSelectNode={(node) => {
-                    setSelectedActionNode(node);
-                    if (node?.taskId) setSelectedTaskId(node.taskId);
-                    if (node?.workflowId) setSelectedWorkflowId(node.workflowId);
-                  }}
-                />
-              ) : (
+              {viewMode === 'dag' ? (
                 <>
                   <WorkflowGraph
                     tasks={tasks}
@@ -1110,26 +1090,52 @@ export function App() {
                     onWorkflowContextMenu={handleWorkflowContextMenu}
                   />
                   {selectedWorkflow && miniDagTasks.size > 0 && (
-                    <FloatingGraphPanel
-                      key={selectedWorkflow.id}
-                      testId="selected-workflow-mini-dag"
-                      dragHandleTestId="selected-workflow-mini-dag-drag-handle"
-                      title={`${selectedWorkflow.name} task DAG`}
-                      boundsRef={graphSurfaceRef}
-                      contentClassName="h-[250px]"
-                    >
-                      <TaskDAG
-                        tasks={miniDagTasks}
-                        workflows={workflows}
-                        selectedTaskId={selectedTaskId}
-                        onTaskClick={handleTaskClick}
-                        onTaskDoubleClick={handleTaskDoubleClick}
-                        onTaskContextMenu={handleTaskContextMenu}
-                        statusFilters={new Set()}
-                      />
-                    </FloatingGraphPanel>
+                    <Suspense fallback={null}>
+                      <FloatingGraphPanel
+                        key={selectedWorkflow.id}
+                        testId="selected-workflow-mini-dag"
+                        dragHandleTestId="selected-workflow-mini-dag-drag-handle"
+                        title={`${selectedWorkflow.name} task DAG`}
+                        boundsRef={graphSurfaceRef}
+                        contentClassName="h-[250px]"
+                      >
+                        <TaskDAG
+                          tasks={miniDagTasks}
+                          workflows={workflows}
+                          selectedTaskId={selectedTaskId}
+                          onTaskClick={handleTaskClick}
+                          onTaskDoubleClick={handleTaskDoubleClick}
+                          onTaskContextMenu={handleTaskContextMenu}
+                          statusFilters={new Set()}
+                        />
+                      </FloatingGraphPanel>
+                    </Suspense>
                   )}
                 </>
+              ) : (
+                <Suspense fallback={null}>
+                  {viewMode === 'queue' ? (
+                    <QueueView
+                      tasks={tasks}
+                      onTaskClick={handleTaskClick}
+                      onCancel={handleCancelTask}
+                      selectedTaskId={selectedTaskId}
+                    />
+                  ) : viewMode === 'history' ? (
+                    <HistoryView onTaskClick={handleTaskClick} selectedTaskId={selectedTaskId} />
+                  ) : viewMode === 'timeline' ? (
+                    <TimelineView tasks={tasks} onTaskClick={handleTaskClick} selectedTaskId={selectedTaskId} />
+                  ) : viewMode === 'actionGraph' ? (
+                    <ActionGraphView
+                      selectedNodeId={selectedActionNode?.id ?? null}
+                      onSelectNode={(node) => {
+                        setSelectedActionNode(node);
+                        if (node?.taskId) setSelectedTaskId(node.taskId);
+                        if (node?.workflowId) setSelectedWorkflowId(node.workflowId);
+                      }}
+                    />
+                  ) : null}
+                </Suspense>
               )}
             </div>
 
@@ -1192,31 +1198,33 @@ export function App() {
         />
       )}
 
-      {modal.type === 'experiment' && (
-        <ExperimentModal
-          task={modal.task}
-          onSelect={handleSelectExperiment}
-          onClose={closeModal}
-        />
-      )}
+      <Suspense fallback={null}>
+        {modal.type === 'experiment' && (
+          <ExperimentModal
+            task={modal.task}
+            onSelect={handleSelectExperiment}
+            onClose={closeModal}
+          />
+        )}
 
-      {modal.type === 'replace' && (
-        <ReplaceTaskModal
-          task={modal.task}
-          onSubmit={handleReplaceSubmit}
-          onClose={closeModal}
-        />
-      )}
+        {modal.type === 'replace' && (
+          <ReplaceTaskModal
+            task={modal.task}
+            onSubmit={handleReplaceSubmit}
+            onClose={closeModal}
+          />
+        )}
 
-      {showSystemSetup && (
-        <SystemSetupModal
-          diagnostics={systemDiagnostics}
-          installPending={installSkillsPending}
-          installError={installSkillsError}
-          onInstallBundledSkills={handleInstallBundledSkills}
-          onClose={() => setShowSystemSetup(false)}
-        />
-      )}
+        {showSystemSetup && (
+          <SystemSetupModal
+            diagnostics={systemDiagnostics}
+            installPending={installSkillsPending}
+            installError={installSkillsError}
+            onInstallBundledSkills={handleInstallBundledSkills}
+            onClose={() => setShowSystemSetup(false)}
+          />
+        )}
+      </Suspense>
 
       {workflowContextMenu && (
         <WorkflowContextMenu

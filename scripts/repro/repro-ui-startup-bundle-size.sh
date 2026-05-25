@@ -55,28 +55,35 @@ if [[ ! -d "$DIST_ASSETS" ]]; then
 fi
 
 # ── Measure ──────────────────────────────────────────────────────
-# Vite manual-chunk names from vite.config.ts: react, xyflow, xterm.
-# The entry chunk is the JS file that does NOT match a vendor chunk name.
+# Identify the entry chunk from index.html's <script> tag, then classify
+# remaining chunks as vendor (manualChunks names) or lazy-loaded.
 VENDOR_PATTERN="^(react|xyflow|xterm)-"
+INDEX_HTML="$REPO_ROOT/packages/ui/dist/index.html"
 
 entry_file=""
+if [[ -f "$INDEX_HTML" ]]; then
+  entry_basename="$(sed -n 's/.*src="\.\/assets\/\([^"]*\.js\)".*/\1/p' "$INDEX_HTML" | head -1)"
+  if [[ -n "$entry_basename" && -f "$DIST_ASSETS/$entry_basename" ]]; then
+    entry_file="$DIST_ASSETS/$entry_basename"
+  fi
+fi
+
 declare -a vendor_files=()
 declare -a other_files=()
 
 for f in "$DIST_ASSETS"/*.js; do
   [[ -f "$f" ]] || continue
+  [[ "$f" == "$entry_file" ]] && continue
   base="$(basename "$f")"
   if [[ "$base" =~ $VENDOR_PATTERN ]]; then
     vendor_files+=("$f")
-  elif [[ -z "$entry_file" ]]; then
-    entry_file="$f"
   else
     other_files+=("$f")
   fi
 done
 
 if [[ -z "$entry_file" ]]; then
-  echo "repro: FAIL -- no entry JS chunk found in $DIST_ASSETS" >&2
+  echo "repro: FAIL -- no entry JS chunk found (checked index.html in $REPO_ROOT/packages/ui/dist)" >&2
   exit 1
 fi
 
