@@ -59,17 +59,34 @@ export function ContextMenu({
   const safeItems = availableItems.filter((item) => item.variant !== 'danger');
   const dangerItems = availableItems.filter((item) => item.variant === 'danger');
   const hasMoreButton = dangerItems.length > 0 && !showMore;
-  const renderedItems: MenuItem[] = showMore ? [...safeItems, ...dangerItems] : safeItems;
 
-  // Find first enabled item index
-  const firstEnabledIndex = renderedItems.findIndex((item) => item.enabled);
+  type DisplayItem =
+    | { kind: 'item'; item: MenuItem }
+    | { kind: 'more' };
 
-  // Auto-focus first enabled item on mount
+  const displayItems: DisplayItem[] = showMore
+    ? [...safeItems, ...dangerItems].map((item) => ({ kind: 'item' as const, item }))
+    : [
+        ...safeItems.map((item) => ({ kind: 'item' as const, item })),
+        ...(hasMoreButton ? [{ kind: 'more' as const }] : []),
+      ];
+
+  const isFocusable = (entry: DisplayItem) =>
+    entry.kind === 'more' || entry.item.enabled;
+
+  const firstFocusableIndex = displayItems.findIndex(isFocusable);
+
+  // Reset focus to first focusable entry when the focusable layout changes.
   useEffect(() => {
-    if (firstEnabledIndex >= 0) {
-      setFocusedIndex(firstEnabledIndex);
+    if (firstFocusableIndex >= 0) {
+      setFocusedIndex(firstFocusableIndex);
     }
-  }, [firstEnabledIndex]);
+  }, [firstFocusableIndex]);
+
+  // Move keyboard focus onto the menu so arrow/enter/space land here.
+  useEffect(() => {
+    menuRef.current?.focus({ preventScroll: true });
+  }, []);
 
   // Viewport clamping: flip if menu overflows bottom or right
   useLayoutEffect(() => {
@@ -133,27 +150,46 @@ export function ContextMenu({
     };
   }, [onClose]);
 
+  // Expand danger section and move focus to first newly enabled entry.
+  const expandMore = () => {
+    setShowMore(true);
+    const firstDangerEnabledOffset = dangerItems.findIndex((item) => item.enabled);
+    if (firstDangerEnabledOffset >= 0) {
+      setFocusedIndex(safeItems.length + firstDangerEnabledOffset);
+    }
+  };
+
   // Keyboard navigation
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    const enabledIndices = renderedItems
-      .map((item, idx) => (item.enabled ? idx : -1))
+    const focusableIndices = displayItems
+      .map((entry, idx) => (isFocusable(entry) ? idx : -1))
       .filter((idx) => idx >= 0);
+    if (focusableIndices.length === 0) return;
 
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const nextPos = (currentPos + 1) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[nextPos]);
+      e.stopPropagation();
+      const currentPos = focusableIndices.indexOf(focusedIndex);
+      const nextPos = currentPos === -1 ? 0 : (currentPos + 1) % focusableIndices.length;
+      setFocusedIndex(focusableIndices[nextPos]);
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const prevPos = (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[prevPos]);
+      e.stopPropagation();
+      const currentPos = focusableIndices.indexOf(focusedIndex);
+      const prevPos =
+        currentPos === -1
+          ? focusableIndices.length - 1
+          : (currentPos - 1 + focusableIndices.length) % focusableIndices.length;
+      setFocusedIndex(focusableIndices[prevPos]);
     } else if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
-      const item = renderedItems[focusedIndex];
-      if (item?.enabled) {
-        handleItemClick(item);
+      e.stopPropagation();
+      const entry = displayItems[focusedIndex];
+      if (!entry) return;
+      if (entry.kind === 'more') {
+        expandMore();
+      } else if (entry.item.enabled) {
+        handleItemClick(entry.item);
       }
     }
   };
@@ -222,8 +258,24 @@ export function ContextMenu({
       onClick={(event) => event.stopPropagation()}
       tabIndex={-1}
     >
-      {renderedItems.map((item, idx) => {
+      {displayItems.map((entry, idx) => {
         const isFocused = idx === focusedIndex;
+        if (entry.kind === 'more') {
+          return (
+            <div key="__more__">
+              <div className="border-t border-gray-600 my-1" />
+              <button
+                role="menuitem"
+                className={`w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 ${isFocused ? 'bg-gray-700' : ''}`}
+                onClick={() => expandMore()}
+                onMouseEnter={() => setFocusedIndex(idx)}
+              >
+                More
+              </button>
+            </div>
+          );
+        }
+        const item = entry.item;
         const tooltip = !item.enabled && item.id === 'open-terminal'
           ? EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE
           : undefined;
@@ -249,18 +301,6 @@ export function ContextMenu({
           </div>
         );
       })}
-      {hasMoreButton && (
-        <div>
-          <div className="border-t border-gray-600 my-1" />
-          <button
-            role="menuitem"
-            className="w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
-            onClick={() => setShowMore(true)}
-          >
-            More
-          </button>
-        </div>
-      )}
     </div>
   );
 }
