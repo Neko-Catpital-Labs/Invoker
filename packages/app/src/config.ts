@@ -231,6 +231,32 @@ export interface InvokerConfig {
    * preserved while the dispatcher matures.
    */
   launchOutboxMode?: LaunchOutboxMode;
+  /**
+   * Optional external script invoked when a task fails, allowing operators
+   * to route failures to a custom recovery process (e.g. a supervisor
+   * script). The built-in "Fix with AI" path is unaffected.
+   *
+   * The helper that launches this command is dormant: this config is
+   * read but no failed-task hook is wired up in this task.
+   */
+  externalFailureRecovery?: {
+    /** Master switch. When false (default), the launcher does nothing. */
+    enabled: boolean;
+    /**
+     * Absolute path or PATH-resolvable command to invoke. When empty
+     * (or whitespace-only), the launcher skips even if `enabled` is true.
+     */
+    command: string;
+    /** Optional working directory for the spawned process. */
+    cwd?: string;
+    /**
+     * Minimum seconds between consecutive launches. The launcher tracks
+     * the last successful launch time and skips additional launches that
+     * fall inside the cooldown window. When unset or <= 0, no cooldown
+     * is enforced.
+     */
+    cooldownSeconds?: number;
+  };
 }
 
 export type LaunchOutboxMode = 'disabled' | 'observe' | 'active';
