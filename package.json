@@ -38,7 +38,8 @@
     "check:required-builds": "bash scripts/required-builds.sh",
     "check:deps": "depcruise packages --config .dependency-cruiser.js",
     "check:types": "tsc -p tsconfig.typecheck.json",
-    "check:all": "pnpm run check:deps && pnpm run check:types && pnpm run check:required-builds && bash scripts/check-owner-boundary.sh",
+    "check:large-files": "node scripts/check-large-files.mjs",
+    "check:all": "pnpm run check:deps && pnpm run check:types && pnpm run check:required-builds && pnpm run check:large-files && bash scripts/check-owner-boundary.sh",
     "lint": "pnpm run check:all"
   },
   "pnpm": {
