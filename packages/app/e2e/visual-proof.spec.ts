@@ -592,6 +592,36 @@ test.describe('Visual proof capture', () => {
     await assertPageScreenshot(page, 'context-menu-danger-separator-fallback');
   });
 
+  test('recreate-downstream-context-menu — task menu shows Recreate Downstream, workflow menu does not', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+    await injectTaskStates(page, [
+      {
+        taskId: 'task-alpha',
+        changes: {
+          status: 'completed',
+          execution: {
+            startedAt: new Date(Date.now() - 8000),
+            completedAt: new Date(),
+          },
+        },
+      },
+    ]);
+
+    const menu = await openContextMenu(page, page.locator('.react-flow__node[data-testid$="task-alpha"]'));
+    await page.getByRole('menuitem', { name: 'More' }).click();
+    await expect(page.getByRole('menuitem', { name: 'Recreate Downstream' })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: 'Recreate from Task' })).toBeVisible();
+
+    await captureScreenshot(page, 'recreate-downstream-context-menu');
+    await assertPageScreenshot(page, 'recreate-downstream-context-menu');
+
+    await page.keyboard.press('Escape');
+
+    const workflowMenu = await openContextMenu(page, page.locator('[data-testid^="workflow-node-"]'));
+    await page.getByRole('menuitem', { name: 'More' }).click();
+    await expect(page.getByRole('menuitem', { name: 'Recreate Downstream' })).toHaveCount(0);
+  });
+
   test('context menu dismisses on outside left-click even when bubbling is stopped', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     await injectTaskStates(page, [
