@@ -294,8 +294,9 @@ export function App() {
   const [workflowContextMenu, setWorkflowContextMenu] = useState<{ x: number; y: number; workflowId: string } | null>(null);
   const [keyboardRegion, setKeyboardRegion] = useState<KeyboardRegion>('workflowGraph');
   const [previousGraphRegion, setPreviousGraphRegion] = useState<KeyboardRegion>('workflowGraph');
-  const [centerWorkflowId, setCenterWorkflowId] = useState<string | null>(null);
-  const [centerTaskId, setCenterTaskId] = useState<string | null>(null);
+  const centerRequestCounter = useRef(0);
+  const [centerWorkflowRequest, setCenterWorkflowRequest] = useState<{ id: string; requestId: number } | null>(null);
+  const [centerTaskRequest, setCenterTaskRequest] = useState<{ id: string; requestId: number } | null>(null);
   const [bottomStatusIndex, setBottomStatusIndex] = useState(0);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -604,7 +605,8 @@ export function App() {
     setSelectedTaskId(null);
     setContextMenu(null);
     setWorkflowContextMenu(null);
-    setCenterWorkflowId(workflowId);
+    centerRequestCounter.current += 1;
+    setCenterWorkflowRequest({ id: workflowId, requestId: centerRequestCounter.current });
     focusKeyboardRegion('workflowGraph');
   }, [focusKeyboardRegion]);
 
@@ -615,11 +617,13 @@ export function App() {
     setWorkflowSelectionDismissed(false);
     if (task.config.workflowId) {
       setSelectedWorkflowId(task.config.workflowId);
-      setCenterWorkflowId(task.config.workflowId);
+      centerRequestCounter.current += 1;
+      setCenterWorkflowRequest({ id: task.config.workflowId, requestId: centerRequestCounter.current });
     }
     setContextMenu(null);
     setWorkflowContextMenu(null);
-    setCenterTaskId(task.id);
+    centerRequestCounter.current += 1;
+    setCenterTaskRequest({ id: task.id, requestId: centerRequestCounter.current });
     focusKeyboardRegion('taskGraph');
   }, [focusKeyboardRegion, tasks]);
 
@@ -1620,7 +1624,7 @@ export function App() {
                     tasks={tasks}
                     workflows={workflows}
                     selectedWorkflowId={selectedWorkflow?.id ?? null}
-                    centerWorkflowId={centerWorkflowId}
+                    centerWorkflowRequest={centerWorkflowRequest}
                     statusFilters={statusFilters}
                     onSelectWorkflow={handleWorkflowClick}
                     onWorkflowContextMenu={handleWorkflowContextMenu}
@@ -1644,7 +1648,7 @@ export function App() {
                           tasks={miniDagTasks}
                           workflows={selectedTaskDagWorkflows}
                           selectedTaskId={selectedTaskId}
-                          centerTaskId={centerTaskId}
+                          centerTaskRequest={centerTaskRequest}
                           onTaskClick={handleTaskClick}
                           onTaskDoubleClick={handleTaskDoubleClick}
                           onTaskContextMenu={handleTaskContextMenu}
