@@ -488,6 +488,78 @@ describe('EmbeddedTerminalManager', () => {
       expect(session.outputSnapshot).toBeUndefined();
     });
   });
+
+  describe('PTY first-frame race regression', () => {
+    it('replays FIRST_FRAME_FROM_PTY emitted synchronously during spawn', () => {
+      const backend: EmbeddedTerminalBackend = {
+        name: 'pty',
+        spawn(opts) {
+          opts.emitOutput('FIRST_FRAME_FROM_PTY\n');
+          return { write: vi.fn(), resize: vi.fn(), close: vi.fn() };
+        },
+      };
+      const mgr = new EmbeddedTerminalManager({ backend });
+
+      const session = mgr.openOrReuse({ taskId: 'race-task', spec: {}, cwd: '/tmp' });
+
+      expect(session.outputSnapshot).toBe('FIRST_FRAME_FROM_PTY\n');
+    });
+
+    it('late consumer seeds from the replay snapshot via get()', () => {
+      const backend: EmbeddedTerminalBackend = {
+        name: 'pty',
+        spawn(opts) {
+          opts.emitOutput('FIRST_FRAME_FROM_PTY\n');
+          return { write: vi.fn(), resize: vi.fn(), close: vi.fn() };
+        },
+      };
+      const mgr = new EmbeddedTerminalManager({ backend });
+
+      const session = mgr.openOrReuse({ taskId: 'race-task', spec: {}, cwd: '/tmp' });
+      const lateDescriptor = mgr.get(session.sessionId);
+
+      expect(lateDescriptor).toBeDefined();
+      expect(lateDescriptor!.outputSnapshot).toBe('FIRST_FRAME_FROM_PTY\n');
+    });
+
+    it('late consumer seeds from the replay snapshot via list()', () => {
+      const backend: EmbeddedTerminalBackend = {
+        name: 'pty',
+        spawn(opts) {
+          opts.emitOutput('FIRST_FRAME_FROM_PTY\n');
+          return { write: vi.fn(), resize: vi.fn(), close: vi.fn() };
+        },
+      };
+      const mgr = new EmbeddedTerminalManager({ backend });
+
+      mgr.openOrReuse({ taskId: 'race-task', spec: {}, cwd: '/tmp' });
+      const listed = mgr.list();
+
+      expect(listed).toHaveLength(1);
+      expect(listed[0].outputSnapshot).toBe('FIRST_FRAME_FROM_PTY\n');
+    });
+
+    it('synchronous exit during spawn does not throw', () => {
+      const backend: EmbeddedTerminalBackend = {
+        name: 'pty',
+        spawn(opts) {
+          opts.emitOutput('FIRST_FRAME_FROM_PTY\n');
+          opts.emitExit(42);
+          return { write: vi.fn(), resize: vi.fn(), close: vi.fn() };
+        },
+      };
+      const mgr = new EmbeddedTerminalManager({ backend });
+      const exits: Array<{ sessionId: string; exitCode?: number }> = [];
+      mgr.on('exit', (e) => exits.push({ sessionId: e.sessionId, exitCode: e.exitCode }));
+
+      const session = mgr.openOrReuse({ taskId: 'race-task', spec: {}, cwd: '/tmp' });
+
+      expect(session.outputSnapshot).toBe('FIRST_FRAME_FROM_PTY\n');
+      expect(exits).toHaveLength(1);
+      expect(exits[0].exitCode).toBe(42);
+      expect(mgr.list()).toHaveLength(0);
+    });
+  });
 });
 
 // ── Deterministic GUI route: resolveTaskTerminalSpec + EmbeddedTerminalManager ──
