@@ -40,7 +40,7 @@ interface TaskDAGProps {
   tasks: Map<string, TaskState>;
   workflows?: Map<string, WorkflowMeta>;
   selectedTaskId?: string | null;
-  centerTaskId?: string | null;
+  centerTaskRequest?: { id: string; requestId: number } | null;
   onTaskClick?: (task: TaskState) => void;
   onTaskDoubleClick?: (task: TaskState) => void;
   onTaskContextMenu?: (task: TaskState, event: React.MouseEvent) => void;
@@ -143,13 +143,15 @@ function mergeMeasuredNodeState(prevNodes: Node[], nextNodes: Node[]): Node[] {
   });
 }
 
-function TaskDAGInner({ tasks, workflows, selectedTaskId, centerTaskId, onTaskClick, onTaskDoubleClick, onTaskContextMenu, statusFilters }: TaskDAGProps) {
+function TaskDAGInner({ tasks, workflows, selectedTaskId, centerTaskRequest, onTaskClick, onTaskDoubleClick, onTaskContextMenu, statusFilters }: TaskDAGProps) {
   const { fitView, setCenter } = useReactFlow();
   const prevNodeCount = useRef(0);
   const lastNodeClickRef = useRef<{ id: string; at: number } | null>(null);
   const reportedGraphVisibleRef = useRef(false);
   const watchdogMissCountRef = useRef(0);
   const watchdogRecoveryAttemptedRef = useRef(false);
+  const initialFitDoneRef = useRef(false);
+  const lastHandledCenterRequestRef = useRef<number | null>(null);
   const [layoutState, setLayoutState] = useState<LayoutState | null>(null);
   const [flowInstanceKey, setFlowInstanceKey] = useState(0);
 
@@ -409,20 +411,24 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, centerTaskId, onTaskCl
     }
   }, []);
 
-  // Re-fit view when the actual rendered node count changes (includes merge gate)
   useEffect(() => {
     if (nodes.length !== prevNodeCount.current && nodes.length > 0) {
       prevNodeCount.current = nodes.length;
       watchdogMissCountRef.current = 0;
       watchdogRecoveryAttemptedRef.current = false;
+    }
+    if (!initialFitDoneRef.current && nodes.length > 0) {
+      initialFitDoneRef.current = true;
       requestAnimationFrame(() => fitView({ padding: 0.2 }));
     }
   }, [nodes.length, fitView]);
 
   useEffect(() => {
-    if (!centerTaskId || nodes.length === 0) return;
-    const node = nodes.find((candidate) => candidate.id === centerTaskId);
+    if (!centerTaskRequest || nodes.length === 0) return;
+    if (centerTaskRequest.requestId === lastHandledCenterRequestRef.current) return;
+    const node = nodes.find((candidate) => candidate.id === centerTaskRequest.id);
     if (!node) return;
+    lastHandledCenterRequestRef.current = centerTaskRequest.requestId;
     const frame = requestAnimationFrame(() => {
       if (typeof setCenter === 'function') {
         setCenter(node.position.x + 132, node.position.y + 55, { zoom: 1, duration: 180 });
@@ -431,7 +437,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, centerTaskId, onTaskCl
       }
     });
     return () => cancelAnimationFrame(frame);
-  }, [centerTaskId, fitView, nodes, setCenter]);
+  }, [centerTaskRequest, fitView, nodes, setCenter]);
 
   useEffect(() => {
     if (reportedGraphVisibleRef.current || nodes.length === 0 || typeof window === 'undefined') {
