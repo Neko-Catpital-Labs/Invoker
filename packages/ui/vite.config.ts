@@ -13,10 +13,14 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: {
-          // Split large vendor chunks to reduce memory pressure
+          // Split large vendor chunks to reduce memory pressure and to keep
+          // them out of the cold-start entry chunk.
           react: ['react', 'react-dom'],
           xyflow: ['@xyflow/react'],
-          xterm: ['xterm', 'xterm-addon-fit'],
+          // elkjs is several MB; isolating it makes it obvious in build output
+          // even though the actual load is gated by a dynamic import in
+          // src/lib/layout.ts (entry chunk does not depend on it).
+          elkjs: ['elkjs/lib/elk.bundled.js'],
         },
       },
     },
