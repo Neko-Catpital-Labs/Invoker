@@ -69,6 +69,8 @@ jobs:
             command: pnpm run check:deps
           - name: Required Package Builds
             command: pnpm run check:required-builds
+          - name: Large File Guardrail
+            command: pnpm run check:large-files
           - name: TypeScript Types
             command: pnpm run check:types
 
@@ -109,6 +111,7 @@ jobs:
           - name: Guardrails
             command: |
               bash scripts/test-suites/required/05-delete-all-prod-db-guard.sh
+              bash scripts/test-suites/required/06-large-file-guardrail.sh
               bash scripts/test-suites/required/07-invalid-config-json.sh
               bash scripts/test-suites/required/15-owner-boundary-policy.sh
               bash scripts/test-suites/required/50-verify-executor-routing.sh
