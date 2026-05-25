@@ -158,4 +158,97 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
+
+  it('workflow context menu supports ArrowDown/ArrowUp keyboard navigation', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+
+    const items = screen.getAllByRole('menuitem');
+    expect(items[0]).toHaveClass('bg-gray-700');
+
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    await waitFor(() => {
+      expect(items[0]).not.toHaveClass('bg-gray-700');
+      expect(items[1]).toHaveClass('bg-gray-700');
+    });
+
+    fireEvent.keyDown(menu, { key: 'ArrowUp' });
+    await waitFor(() => {
+      expect(items[0]).toHaveClass('bg-gray-700');
+      expect(items[1]).not.toHaveClass('bg-gray-700');
+    });
+  });
+
+  it('workflow context menu activates item with Enter', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'Enter' });
+
+    await waitFor(() => expect(mock.api.retryWorkflow).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('workflow context menu activates item with Space', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: ' ' });
+
+    await waitFor(() => expect(mock.api.retryWorkflow).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('workflow context menu keyboard navigates to More and expands it', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+
+    // Navigate to More (index 4: after Open Workflow, Open PR, Retry Workflow, Copy Workflow ID)
+    for (let i = 0; i < 4; i++) {
+      fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    }
+
+    await waitFor(() => {
+      expect(screen.getByText('More')).toHaveClass('bg-gray-700');
+    });
+
+    fireEvent.keyDown(menu, { key: 'Enter' });
+
+    await waitFor(() => {
+      expect(screen.getByText('Rebase and Retry')).toBeInTheDocument();
+      expect(screen.getByText('Delete Workflow')).toBeInTheDocument();
+    });
+  });
+
+  it('workflow context menu closes on Escape via keyboard', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    expect(menu).toBeInTheDocument();
+
+    fireEvent.keyDown(menu, { key: 'Escape' });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    });
+  });
+
+  it('workflow context menu ArrowUp wraps from first to last item', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+
+    // Focus is on index 0; ArrowUp should wrap to More (last item)
+    fireEvent.keyDown(menu, { key: 'ArrowUp' });
+
+    await waitFor(() => {
+      expect(screen.getByText('More')).toHaveClass('bg-gray-700');
+    });
+  });
 });
