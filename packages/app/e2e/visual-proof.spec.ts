@@ -1161,6 +1161,40 @@ test.describe('Visual proof capture', () => {
     await assertPageScreenshot(page, 'queue-action-surface-hardening');
   });
 
+  test('context-menu-keyboard-navigation — ArrowDown highlights next enabled item', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+    await injectTaskStates(page, [
+      {
+        taskId: 'task-alpha',
+        changes: {
+          status: 'failed',
+          execution: { exitCode: 1, stderr: 'keyboard nav proof' },
+        },
+      },
+    ]);
+
+    const menu = await openContextMenu(page, page.locator('.react-flow__node[data-testid$="task-alpha"]'));
+
+    // First enabled item should already be highlighted on open (has .bg-gray-700 utility class)
+    const highlighted = () => menu.locator('button[role="menuitem"].bg-gray-700');
+    await expect(highlighted()).toHaveCount(1);
+    const firstHighlightedLabel = await highlighted().first().textContent();
+
+    // Press ArrowDown twice to move highlight to a different item
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowDown');
+
+    // Exactly one menu item should have the active highlight after navigation
+    await expect(highlighted()).toHaveCount(1);
+    const newHighlightedLabel = await highlighted().first().textContent();
+    expect(newHighlightedLabel).not.toBe(firstHighlightedLabel);
+
+    // The highlighted item must be enabled
+    await expect(highlighted().first()).not.toHaveAttribute('aria-disabled', 'true');
+
+    await captureScreenshot(page, 'context-menu-keyboard-navigation');
+  });
+
   test('completed SSH task double-click expands terminal drawer with working SSH resume terminal', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, SSH_TERMINAL_RESUME_PLAN);
     const workspacePath = '/home/invoker/.invoker/worktrees/wf-ssh/experiment-ssh-resume';
