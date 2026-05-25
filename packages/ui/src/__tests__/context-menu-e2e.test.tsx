@@ -158,4 +158,76 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
+
+  describe('keyboard navigation', () => {
+    it('ArrowDown×3 + Enter on workflow menu copies workflow ID', async () => {
+      await setup();
+      fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+      const menu = await screen.findByRole('menu');
+
+      act(() => {
+        fireEvent.keyDown(menu, { key: 'ArrowDown' });
+        fireEvent.keyDown(menu, { key: 'ArrowDown' });
+        fireEvent.keyDown(menu, { key: 'ArrowDown' });
+      });
+      act(() => {
+        fireEvent.keyDown(menu, { key: 'Enter' });
+      });
+
+      await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
+    });
+
+    it('ArrowUp wraps from first item to last in workflow menu', async () => {
+      await setup();
+      fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+      const menu = await screen.findByRole('menu');
+
+      act(() => {
+        fireEvent.keyDown(menu, { key: 'ArrowUp' });
+      });
+      act(() => {
+        fireEvent.keyDown(menu, { key: 'Enter' });
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText('Rebase and Retry')).toBeInTheDocument();
+        expect(screen.getByText('Delete Workflow')).toBeInTheDocument();
+      });
+    });
+
+    it('task context menu ArrowDown + Enter activates next enabled item', async () => {
+      await setup();
+      fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+      await waitFor(() => {
+        expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+      });
+      fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+      const menu = await screen.findByRole('menu');
+
+      act(() => {
+        fireEvent.keyDown(menu, { key: 'ArrowDown' });
+      });
+      act(() => {
+        fireEvent.keyDown(menu, { key: 'Enter' });
+      });
+
+      await waitFor(() => expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'));
+    });
+
+    it('Space activates the highlighted item in task context menu', async () => {
+      await setup();
+      fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+      await waitFor(() => {
+        expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+      });
+      fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+      const menu = await screen.findByRole('menu');
+
+      act(() => {
+        fireEvent.keyDown(menu, { key: ' ' });
+      });
+
+      await waitFor(() => expect(mock.api.restartTask).toHaveBeenCalledWith('task-alpha'));
+    });
+  });
 });

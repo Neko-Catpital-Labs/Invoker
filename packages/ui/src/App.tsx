@@ -116,6 +116,7 @@ function WorkflowContextMenu({
   const menuRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: x, top: y });
   const [showMore, setShowMore] = useState(false);
+  const [focusedIndex, setFocusedIndex] = useState(0);
 
   useLayoutEffect(() => {
     if (!menuRef.current) return;
@@ -165,6 +166,10 @@ function WorkflowContextMenu({
     };
   }, [onClose]);
 
+  useEffect(() => {
+    menuRef.current?.focus();
+  }, []);
+
   const runAction = (action: (workflowId: string) => void) => {
     action(workflowId);
     onClose();
@@ -173,6 +178,39 @@ function WorkflowContextMenu({
   const buttonClass = 'w-full px-3 py-1.5 text-left text-sm text-gray-100 hover:bg-gray-700';
   const dangerButtonClass = 'w-full px-3 py-1.5 text-left text-sm text-red-300 hover:bg-gray-700';
 
+  type WfMenuItem = { label: string; perform: () => void; className: string; separator?: boolean };
+
+  const items: WfMenuItem[] = [
+    { label: 'Open Workflow', perform: () => runAction(onOpenWorkflow), className: buttonClass },
+    { label: 'Open PR', perform: () => runAction(onOpenPr), className: buttonClass },
+    { label: 'Retry Workflow', perform: () => runAction(onRetryWorkflow), className: buttonClass },
+    { label: 'Copy Workflow ID', perform: () => runAction(onCopyWorkflowId), className: buttonClass },
+    ...(showMore
+      ? [
+          { label: 'Rebase and Retry', perform: () => runAction(onRebaseRetry), className: buttonClass, separator: true },
+          { label: 'Rebase and Recreate', perform: () => runAction(onRebaseRecreate), className: dangerButtonClass },
+          { label: 'Recreate Workflow', perform: () => runAction(onRecreateWorkflow), className: dangerButtonClass },
+          { label: 'Cancel Workflow', perform: () => runAction(onCancelWorkflow), className: dangerButtonClass },
+          { label: 'Delete Workflow', perform: () => runAction(onDeleteWorkflow), className: dangerButtonClass },
+        ]
+      : [
+          { label: 'More', perform: () => setShowMore(true), className: 'w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-gray-700', separator: true },
+        ]),
+  ];
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setFocusedIndex((i) => (i + 1) % items.length);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setFocusedIndex((i) => (i - 1 + items.length) % items.length);
+    } else if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      items[focusedIndex]?.perform();
+    }
+  };
+
   return (
     <div
       ref={menuRef}
@@ -180,51 +218,22 @@ function WorkflowContextMenu({
       className="fixed z-50 min-w-[200px] rounded-lg border border-gray-600 bg-gray-800 py-1 shadow-xl"
       style={{ left: position.left, top: position.top }}
       tabIndex={-1}
+      onKeyDown={handleKeyDown}
       onClick={(event) => event.stopPropagation()}
     >
-      <button role="menuitem" onClick={() => runAction(onOpenWorkflow)} className={buttonClass}>
-        Open Workflow
-      </button>
-      <button role="menuitem" onClick={() => runAction(onOpenPr)} className={buttonClass}>
-        Open PR
-      </button>
-      <button role="menuitem" onClick={() => runAction(onRetryWorkflow)} className={buttonClass}>
-        Retry Workflow
-      </button>
-      <button role="menuitem" onClick={() => runAction(onCopyWorkflowId)} className={buttonClass}>
-        Copy Workflow ID
-      </button>
-      {!showMore ? (
-        <div>
-          <div className="my-1 border-t border-gray-600" />
+      {items.map((item, idx) => (
+        <div key={item.label}>
+          {item.separator && <div className="my-1 border-t border-gray-600" />}
           <button
             role="menuitem"
-            className="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-gray-700"
-            onClick={() => setShowMore(true)}
+            onClick={item.perform}
+            onMouseEnter={() => setFocusedIndex(idx)}
+            className={`${item.className} ${idx === focusedIndex ? 'bg-gray-700' : ''}`}
           >
-            More
+            {item.label}
           </button>
         </div>
-      ) : (
-        <div>
-          <div className="my-1 border-t border-gray-600" />
-          <button role="menuitem" onClick={() => runAction(onRebaseRetry)} className={buttonClass}>
-            Rebase and Retry
-          </button>
-          <button role="menuitem" onClick={() => runAction(onRebaseRecreate)} className={dangerButtonClass}>
-            Rebase and Recreate
-          </button>
-          <button role="menuitem" onClick={() => runAction(onRecreateWorkflow)} className={dangerButtonClass}>
-            Recreate Workflow
-          </button>
-          <button role="menuitem" onClick={() => runAction(onCancelWorkflow)} className={dangerButtonClass}>
-            Cancel Workflow
-          </button>
-          <button role="menuitem" onClick={() => runAction(onDeleteWorkflow)} className={dangerButtonClass}>
-            Delete Workflow
-          </button>
-        </div>
-      )}
+      ))}
     </div>
   );
 }

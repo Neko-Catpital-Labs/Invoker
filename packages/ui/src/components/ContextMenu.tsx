@@ -71,6 +71,10 @@ export function ContextMenu({
     }
   }, [firstEnabledIndex]);
 
+  useEffect(() => {
+    menuRef.current?.focus();
+  }, []);
+
   // Viewport clamping: flip if menu overflows bottom or right
   useLayoutEffect(() => {
     if (!menuRef.current) return;
