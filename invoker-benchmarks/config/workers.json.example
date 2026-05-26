@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "coordinator": "remote_digital_ocean_1",
+  "workers": [
+    {
+      "name": "remote_digital_ocean_2",
+      "host": "remote_digital_ocean_2",
+      "user": "invoker",
+      "port": 22,
+      "enabled": true
+    },
+    {
+      "name": "remote_digital_ocean_3",
+      "host": "remote_digital_ocean_3",
+      "user": "invoker",
+      "port": 22,
+      "enabled": true
+    },
+    {
+      "name": "remote_digital_ocean_4",
+      "host": "remote_digital_ocean_4",
+      "user": "invoker",
+      "port": 22,
+      "enabled": true
+    },
+    {
+      "name": "remote_linode_1",
+      "host": "remote_linode_1",
+      "user": "invoker",
+      "port": 22,
+      "enabled": true
+    }
+  ]
+}
