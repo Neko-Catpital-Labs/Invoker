@@ -20,7 +20,8 @@
   "dependencies": {
     "@invoker/workflow-graph": "workspace:*",
     "@invoker/contracts": "workspace:*",
-    "neverthrow": "^8.2.0"
+    "neverthrow": "^8.2.0",
+    "yaml": "^2.8.2"
   },
   "devDependencies": {
     "@types/node": "^25.3.3",

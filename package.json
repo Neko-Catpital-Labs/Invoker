@@ -43,7 +43,8 @@
     "check:types": "tsc -p tsconfig.typecheck.json",
     "check:large-files": "node scripts/check-large-files.mjs",
     "check:all": "pnpm run check:deps && pnpm run check:types && pnpm run check:required-builds && pnpm run check:large-files && bash scripts/check-owner-boundary.sh",
-    "lint": "pnpm run check:all"
+    "lint": "pnpm run check:all",
+    "dev:cli": "pnpm --filter @invoker/cli build && node packages/cli/dist/index.js"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
