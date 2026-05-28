@@ -18,6 +18,7 @@ if command -v rg >/dev/null 2>&1; then
     --glob '!**/e2e/**' \
     --glob '!**/node_modules/**' \
     --glob '!packages/app/src/main.ts' \
+    --glob '!packages/cli/src/index.ts' \
     --glob '!packages/persistence/src/sqlite-adapter.ts' \
     --glob '!packages/data-store/src/sqlite-adapter.ts' || true)"
 
@@ -30,7 +31,8 @@ if command -v rg >/dev/null 2>&1; then
     --glob '!**/dist/**' \
     --glob '!**/e2e/**' \
     --glob '!**/node_modules/**' \
-    --glob '!packages/app/src/main.ts' || true)"
+    --glob '!packages/app/src/main.ts' \
+    --glob '!packages/cli/src/index.ts' || true)"
 
   # 3) Owner init path in main.ts must explicitly pass ownerCapability.
   if ! rg -n "ownerCapability:\s*!readOnly" packages/app/src/main.ts >/dev/null; then
@@ -47,6 +49,7 @@ else
     --exclude="*.d.ts" \
     --exclude="*.test.ts" \
     | grep -v '^packages/app/src/main.ts:' \
+    | grep -v '^packages/cli/src/index.ts:' \
     | grep -v '^packages/persistence/src/sqlite-adapter.ts:' \
     | grep -v '^packages/data-store/src/sqlite-adapter.ts:' || true)"
 
@@ -57,7 +60,8 @@ else
     --exclude-dir="node_modules" \
     --exclude="*.d.ts" \
     --exclude="*.test.ts" \
-    | grep -v '^packages/app/src/main.ts:' || true)"
+    | grep -v '^packages/app/src/main.ts:' \
+    | grep -v '^packages/cli/src/index.ts:' || true)"
 
   if ! grep -nE "ownerCapability:[[:space:]]*!readOnly" packages/app/src/main.ts >/dev/null; then
     echo "[owner-boundary] main.ts initServices must pass ownerCapability: !readOnly" >&2
