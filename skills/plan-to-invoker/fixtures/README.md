@@ -69,7 +69,7 @@ Negative fixtures demonstrate anti-patterns and validation errors:
 - **edge-neither-command-nor-prompt.yaml** - Task with neither command nor prompt
 - **edge-invalid-merge-mode.yaml** - Invalid `mergeMode` enum value
 - **edge-invalid-on-finish.yaml** - Invalid `onFinish` enum value
-- **edge-invalid-runner-kind.yaml** - Invalid `runnerKind` enum value
+- **edge-invalid-runner-kind.yaml** - Obsolete `runnerKind` routing field
 - **edge-invalid-dependency-reference.yaml** - Dependency on non-existent task
 - **edge-missing-description-for-pr.yaml** - Missing description when `onFinish: pull_request`
 - **edge-cyclic-dependency.yaml** - Cyclic dependency (may require cycle detection)
@@ -82,6 +82,7 @@ Negative fixtures expect these error types from the validator:
 - `missing_required_field` - Required field is missing
 - `empty_required_field` - Required array/list is empty
 - `invalid_enum_value` - Enum field has invalid value
+- `unsupported_field` - Field is obsolete or not accepted by the current Invoker CLI
 - `command_prompt_exclusive` - Task has both command and prompt
 - `missing_command_or_prompt` - Task has neither command nor prompt
 - `banned_pattern` - Command contains banned pattern (e.g., `npx vitest run`)
