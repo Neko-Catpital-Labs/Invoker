@@ -260,6 +260,8 @@ Types: [packages/workflow-graph/src/types.ts](packages/workflow-graph/src/types.
 | `pnpm run test:all` | Full aggregated test script |
 | `pnpm run check:all` | Deps graph + types + owner boundary |
 
+Run the existing local checks (`pnpm test` and `pnpm run check:all`) before submitting changes.
+
 Layer rules: [ARCHITECTURE.md](ARCHITECTURE.md). Agent/repo conventions: [CLAUDE.md](CLAUDE.md).
 
 ## Documentation
