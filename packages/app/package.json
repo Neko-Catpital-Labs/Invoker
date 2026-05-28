@@ -22,6 +22,14 @@
       {
         "from": "../../skills",
         "to": "skills"
+      },
+      {
+        "from": "../cli/dist",
+        "to": "invoker-cli/dist"
+      },
+      {
+        "from": "../cli/package.json",
+        "to": "invoker-cli/package.json"
       }
     ],
     "files": [
