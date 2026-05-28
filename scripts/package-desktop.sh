@@ -35,6 +35,7 @@ if [ -n "$MAC_ARCH" ] && [ "$TARGET" != "mac" ]; then
 fi
 
 pnpm --filter @invoker/ui build
+pnpm --filter @invoker/cli build
 pnpm --filter @invoker/app build
 
 rm -rf packages/app/dist/ui
