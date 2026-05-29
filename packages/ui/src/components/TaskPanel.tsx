@@ -297,8 +297,11 @@ export function TaskPanel({
     );
   }
 
-  const canEditCommand = task.config.command !== undefined && task.status !== 'running' && onEditCommand;
-  const canEditPrompt = task.config.prompt !== undefined && task.status !== 'running' && onEditPrompt;
+  const isAiPromptTask = !task.config.isMergeNode && Boolean(task.config.prompt);
+  const isCommandTask = !task.config.isMergeNode && !isAiPromptTask && Boolean(task.config.command);
+  const shouldShowTaskContent = isAiPromptTask || isCommandTask;
+  const canEditCommand = isCommandTask && task.status !== 'running' && onEditCommand;
+  const canEditPrompt = isAiPromptTask && task.status !== 'running' && onEditPrompt;
 
   const handleSaveCommand = () => {
     if (onEditCommand && editCommandValue !== task.config.command) {
@@ -514,7 +517,7 @@ export function TaskPanel({
         </div>
       )}
 
-      {task.config.prompt && onEditAgent && (
+      {isAiPromptTask && onEditAgent && (
         <div className="flex items-center justify-between">
           <span className="text-sm text-gray-400">Agent</span>
           <select
@@ -570,21 +573,21 @@ export function TaskPanel({
       )}
 
       {/* Task type + content */}
-      {(task.config.prompt || task.config.command) && (
+      {shouldShowTaskContent && (
         <div>
           <div className="flex items-center justify-between">
             <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-              task.config.prompt
+              isAiPromptTask
                 ? 'bg-blue-900/40 text-blue-300'
                 : 'bg-gray-700 text-gray-300'
             }`}>
-              {task.config.prompt
+              {isAiPromptTask
                 ? capitalize(task.config.executionAgent ?? 'claude') + ' Task'
                 : 'Command'}
             </span>
           </div>
 
-          {isEditingCommand && task.config.command !== undefined ? (
+          {isEditingCommand && isCommandTask ? (
             <div className="mt-2 space-y-2">
               <textarea
                 value={editCommandValue}
@@ -610,7 +613,7 @@ export function TaskPanel({
                 </button>
               </div>
             </div>
-          ) : isEditingPrompt && task.config.prompt !== undefined ? (
+          ) : isEditingPrompt && isAiPromptTask ? (
             <div className="mt-2 space-y-2">
               <textarea
                 value={editPromptValue}
@@ -639,7 +642,7 @@ export function TaskPanel({
           ) : (
             <div
               className={`mt-2 rounded p-3 text-xs select-text ${
-                task.config.prompt
+                isAiPromptTask
                   ? canEditPrompt
                     ? 'bg-blue-900/20 border border-blue-800 cursor-pointer hover:border-blue-600 transition-colors'
                     : 'bg-blue-900/20 border border-blue-800 cursor-text'
@@ -648,10 +651,10 @@ export function TaskPanel({
                     : 'bg-gray-800 border border-gray-700 cursor-text'
               }`}
               onDoubleClick={() => {
-                if (task.config.prompt && canEditPrompt) {
+                if (isAiPromptTask && canEditPrompt) {
                   setEditPromptValue(task.config.prompt);
                   setIsEditingPrompt(true);
-                } else if (canEditCommand) {
+                } else if (isCommandTask && canEditCommand) {
                   setEditCommandValue(task.config.command ?? '');
                   setIsEditingCommand(true);
                 }
@@ -659,7 +662,7 @@ export function TaskPanel({
               data-testid="command-display"
             >
               <div data-testid="prompt-command-display">
-                {task.config.prompt ? (
+                {isAiPromptTask ? (
                   <p className="text-gray-300 whitespace-pre-wrap">{task.config.prompt}</p>
                 ) : (
                   <code className="text-green-300 font-mono whitespace-pre-wrap">{task.config.command}</code>

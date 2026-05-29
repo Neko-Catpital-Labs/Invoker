@@ -406,6 +406,57 @@ describe('TaskPanel double-click editing', () => {
   });
 
   describe('Edge cases and task states', () => {
+    it('does not render command or prompt edit controls for task selections without runnable content', () => {
+      const task = makeTask({
+        config: { workflowId: 'wf-1' } as TaskState['config'],
+        status: 'pending',
+      });
+      render(
+        <TaskPanel
+          task={task}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+          onEditCommand={mockOnEditCommand}
+          onEditPrompt={vi.fn()}
+        />,
+      );
+
+      expect(screen.queryByTestId('command-display')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('edit-prompt-input')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('save-prompt-btn')).not.toBeInTheDocument();
+    });
+
+    it('does not render prompt or command content for merge-node selections', () => {
+      const task = makeTask({
+        config: {
+          command: 'pnpm test',
+          isMergeNode: true,
+          prompt: 'Merge workflow results',
+          workflowId: 'wf-1',
+        } as TaskState['config'],
+        status: 'pending',
+      });
+      render(
+        <TaskPanel
+          task={task}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+          onEditCommand={mockOnEditCommand}
+          onEditPrompt={vi.fn()}
+          onEditAgent={vi.fn()}
+        />,
+      );
+
+      expect(screen.queryByTestId('command-display')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('edit-prompt-input')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('save-prompt-btn')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('execution-agent-select')).not.toBeInTheDocument();
+    });
+
     it('handles double-click on pending tasks', () => {
       const task = makeTask({ command: 'echo pending', status: 'pending' });
       render(
