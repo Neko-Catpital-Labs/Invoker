@@ -12,6 +12,7 @@
 #   --stack-manifest FILE Validate coverage-map workflow labels against a real authored stack manifest
 #   --verbose           Show detailed output from each sub-check
 #   --warn-delegation  Pass through to atomicity lint (prints advisory delegation-hint warnings)
+#                      Experiment artifact handoff validation runs with atomicity linting.
 #
 # Exit codes:
 #   0 = all checks passed
@@ -223,6 +224,248 @@ run_check() {
   return 0
 }
 
+check_experiment_handoff() {
+  local step_id="check-experiment-handoff"
+  local description="Validate experiment artifact handoff consumption contract from docs/context/inv-63/experiment-brief.md"
+  local output_file="$TEMP_DIR/${step_id}.out"
+  local stderr_file="$TEMP_DIR/${step_id}.err"
+
+  if [[ "$VERBOSE" == "true" ]]; then
+    echo "Running check: $step_id - $description" >&2
+  fi
+
+  set +e
+  awk '
+function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+function strip_quotes(s) { gsub(/["\047]/, "", s); return s }
+function first_experiment_artifact(s) {
+  if (match(s, /docs\/context\/[^ ,`"\047\t]+\/experiment-brief\.md/)) {
+    return substr(s, RSTART, RLENGTH)
+  }
+  return ""
+}
+function task_suffix(task_id, prefix,    n) {
+  n = length(prefix)
+  if (substr(task_id, 1, n) == prefix) return substr(task_id, n + 1)
+  return ""
+}
+function csv_has(csv, needle,    parts, i, item) {
+  if (csv == "" || needle == "") return 0
+  split(csv, parts, /,/)
+  for (i in parts) {
+    item = trim(parts[i])
+    if (item == needle) return 1
+  }
+  return 0
+}
+function flush_task(    idx, suffix) {
+  if (!in_task) return
+  idx = ++taskn
+  task_descriptions[idx] = desc
+  task_prompts[idx] = prompt_text
+  task_dependencies[idx] = dependencies_csv
+  task_id_to_index[id] = idx
+
+  if (id ~ /^experiment-/ && has_prompt) {
+    has_experiment_tasks = 1
+    suffix = task_suffix(id, "experiment-")
+    experiment_id_by_suffix[suffix] = id
+    experiment_artifact_by_suffix[suffix] = first_experiment_artifact(desc " " prompt_text)
+  }
+  if (id ~ /^implement-/ && has_prompt) {
+    suffix = task_suffix(id, "implement-")
+    implement_id_by_suffix[suffix] = id
+  }
+}
+BEGIN {
+  in_task = 0
+  in_dep_block = 0
+  in_description_block = 0
+  in_prompt_block = 0
+  taskn = 0
+  errn = 0
+  has_experiment_tasks = 0
+  on_finish = "pull_request"
+  enforce_handoff = 1
+}
+{
+  line = $0
+
+  if (!in_task && line ~ /^[[:space:]]*onFinish:[[:space:]]*/) {
+    on_finish = line
+    sub(/^[[:space:]]*onFinish:[[:space:]]*/, "", on_finish)
+    on_finish = trim(strip_quotes(on_finish))
+    enforce_handoff = (tolower(on_finish) != "none")
+    next
+  }
+
+  if (in_description_block) {
+    if (line ~ /^[[:space:]][[:space:]][[:space:]][[:space:]][[:space:]][[:space:]]*[^[:space:]]/) {
+      desc = desc "\n" trim(line)
+      next
+    }
+    in_description_block = 0
+  }
+
+  if (in_dep_block) {
+    if (line ~ /^[[:space:]][[:space:]][[:space:]][[:space:]][[:space:]][[:space:]]*-[[:space:]]*[^[:space:]]/) {
+      dep = line
+      sub(/^[[:space:]][[:space:]][[:space:]][[:space:]][[:space:]][[:space:]]*-[[:space:]]*/, "", dep)
+      dep = trim(strip_quotes(dep))
+      if (dep != "") {
+        if (dependencies_csv != "") dependencies_csv = dependencies_csv ","
+        dependencies_csv = dependencies_csv dep
+      }
+      next
+    }
+    in_dep_block = 0
+  }
+
+  if (line ~ /^[[:space:]]*-[[:space:]]+id:[[:space:]]*/) {
+    flush_task()
+    in_task = 1
+    in_dep_block = 0
+    in_description_block = 0
+    in_prompt_block = 0
+
+    id = line
+    sub(/^[[:space:]]*-[[:space:]]+id:[[:space:]]*/, "", id)
+    id = trim(strip_quotes(id))
+    desc = ""
+    prompt_text = ""
+    dependencies_csv = ""
+    has_prompt = 0
+    next
+  }
+
+  if (!in_task) next
+
+  if (line ~ /^[[:space:]]+description:[[:space:]]*/) {
+    desc = line
+    sub(/^[[:space:]]+description:[[:space:]]*/, "", desc)
+    desc = trim(strip_quotes(desc))
+    if (desc == "|" || desc == ">") {
+      desc = ""
+      in_description_block = 1
+    }
+    next
+  }
+
+  if (line ~ /^[[:space:]]+dependencies:[[:space:]]*/) {
+    dep_line = line
+    sub(/^[[:space:]]+dependencies:[[:space:]]*/, "", dep_line)
+    dep_line = trim(dep_line)
+    if (dep_line == "" || dep_line == "|" || dep_line == ">") {
+      in_dep_block = 1
+    } else if (dep_line ~ /^\[[^]]*\]$/) {
+      gsub(/^\[/, "", dep_line)
+      gsub(/\]$/, "", dep_line)
+      split(dep_line, dep_parts, /,/)
+      for (k in dep_parts) {
+        dep = trim(strip_quotes(dep_parts[k]))
+        if (dep != "") {
+          if (dependencies_csv != "") dependencies_csv = dependencies_csv ","
+          dependencies_csv = dependencies_csv dep
+        }
+      }
+    }
+    next
+  }
+
+  if (line ~ /^[[:space:]]+prompt:[[:space:]]*/) {
+    has_prompt = 1
+    in_prompt_block = 1
+    p = line
+    sub(/^[[:space:]]+prompt:[[:space:]]*/, "", p)
+    if (p != "|" && p != "") prompt_text = prompt_text " " p
+    next
+  }
+
+  if (in_prompt_block) {
+    if (line ~ /^[[:space:]][[:space:]][[:space:]][[:space:]][[:space:]][[:space:]]*[^[:space:]]/) {
+      prompt_text = prompt_text " " trim(line)
+      next
+    }
+    in_prompt_block = 0
+  }
+}
+END {
+  flush_task()
+  if (enforce_handoff == 1 && has_experiment_tasks == 1) {
+    for (suffix in experiment_id_by_suffix) {
+      experiment_id = experiment_id_by_suffix[suffix]
+      artifact = experiment_artifact_by_suffix[suffix]
+      implement_id = implement_id_by_suffix[suffix]
+      implement_idx = task_id_to_index[implement_id]
+      desc = task_descriptions[implement_idx]
+      prompt = task_prompts[implement_idx]
+      combined_lower = tolower(desc " " prompt)
+
+      if (implement_id == "") {
+        errors[++errn] = "Task \"" experiment_id "\" requires matching implement task \"implement-" suffix "\" to consume experiment artifact"
+        continue
+      }
+      if (!csv_has(task_dependencies[implement_idx], experiment_id)) {
+        errors[++errn] = "Task \"" implement_id "\" must depend on \"" experiment_id "\" for deterministic experiment artifact handoff"
+      }
+      if (artifact == "") {
+        errors[++errn] = "Task \"" experiment_id "\" must name docs/context/<issue>/experiment-brief.md before implementation can consume it"
+        continue
+      }
+      if (index(desc, artifact) == 0) {
+        errors[++errn] = "Task \"" implement_id "\" description must reference exact experiment artifact path " artifact
+      }
+      if (index(prompt, artifact) == 0) {
+        errors[++errn] = "Task \"" implement_id "\" prompt must reference exact experiment artifact path " artifact
+      }
+      if (combined_lower !~ /consum/) {
+        errors[++errn] = "Task \"" implement_id "\" must use explicit consume/consumed/consumes language for experiment artifact " artifact
+      }
+      if (combined_lower !~ /acceptance criteria:/) {
+        errors[++errn] = "Task \"" implement_id "\" must include acceptance language proving it consumed experiment artifact " artifact
+      }
+    }
+  }
+
+  if (errn > 0) {
+    for (i = 1; i <= errn; i++) print "ERROR: " errors[i] > "/dev/stderr"
+    exit 1
+  }
+  print "Experiment artifact handoff validation passed"
+}
+' "$PLAN_FILE" > "$output_file" 2> "$stderr_file"
+  local exit_code=$?
+  set -e
+
+  if [[ "$VERBOSE" == "true" ]]; then
+    if [[ -s "$output_file" ]]; then
+      echo "  Output:" >&2
+      cat "$output_file" >&2
+    fi
+    if [[ -s "$stderr_file" ]]; then
+      echo "  Errors:" >&2
+      cat "$stderr_file" >&2
+    fi
+  fi
+
+  if [[ $exit_code -eq 0 ]]; then
+    add_check_result "$step_id" "passed" "$description" "$output_file"
+    if [[ "$VERBOSE" == "true" ]]; then
+      echo "  PASSED" >&2
+    fi
+  else
+    OVERALL_FAILED=true
+    local error_msg="$description (exit code: $exit_code)"
+    if [[ -s "$stderr_file" ]]; then
+      error_msg="$error_msg - $(head -1 "$stderr_file")"
+    fi
+    add_check_result "$step_id" "failed" "$error_msg" "$stderr_file"
+    if [[ "$VERBOSE" == "true" ]]; then
+      echo "  FAILED (exit code: $exit_code)" >&2
+    fi
+  fi
+}
+
 # Check 1: Extract assumptions (if not skipped)
 ASSUMPTIONS_FILE="$TEMP_DIR/assumptions.json"
 if [[ "$SKIP_ASSUMPTIONS" == "false" ]]; then
@@ -318,6 +561,8 @@ if [[ "$SKIP_ATOMICITY" == "false" ]]; then
       "Lint task atomicity and detail requirements (strict zero-context prompt gating)" \
       bash "$SCRIPT_DIR/lint-task-atomicity.sh" "${atomicity_args[@]}" "$PLAN_FILE"
   fi
+
+  check_experiment_handoff
 fi
 
 # Check 5: Validate parse-results.sh with mock execution output
