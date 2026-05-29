@@ -214,6 +214,36 @@ describe('WorkflowInspector', () => {
     expect(screen.getByText('failed')).toBeInTheDocument();
   });
 
+  it('renders prompt-command-display for actual prompt tasks', () => {
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ config: { workflowId: 'wf-1', prompt: 'Fix failing tests' } })}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId('prompt-command-display')).toHaveTextContent('Fix failing tests');
+  });
+
+  it('renders prompt-command-display for actual command tasks', () => {
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ config: { workflowId: 'wf-1', command: 'pnpm test' } })}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId('prompt-command-display')).toHaveTextContent('pnpm test');
+  });
+
   it('does not render prompt content for workflow-only selection', () => {
     render(
       <WorkflowInspector
