@@ -18,6 +18,15 @@
 #   1 = one or more checks failed
 #   2 = usage/argument error
 #
+# INV-63 experiment-selected deterministic behavior:
+#   Consumes docs/context/inv-63/experiment-brief.md conclusions.
+#   Supported: local experiment artifacts with deterministic commands, expected
+#   outputs, and pass/fail thresholds.
+#   Rejected: upstream workflow branches, commits, external artifact paths, and
+#   informal criteria that cannot be matched through command output.
+#   Deferred: cleanup of temporary experiment artifacts after implementation and
+#   focused verification, plus broader coverage only when the skill surface grows.
+#
 # Output: JSON summary of all checks with pass/fail status
 set -euo pipefail
 
@@ -38,7 +47,16 @@ PLAN_FILE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --help)
-      sed -n '2,18p' "$0" | sed 's/^# \?//'
+      awk '
+        NR == 1 { next }
+        /^#/ {
+          line = $0
+          sub(/^# ?/, "", line)
+          print line
+          next
+        }
+        { exit }
+      ' "$0"
       exit 0
       ;;
     --skip-assumptions)
