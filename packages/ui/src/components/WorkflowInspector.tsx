@@ -31,6 +31,10 @@ function capitalize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
+function hasExecutableText(value: string | undefined): boolean {
+  return Boolean(value?.trim());
+}
+
 function getReviewReadyMergeNodeReviewUrl(
   tasks: Map<string, TaskState> | undefined,
 ): string | undefined {
@@ -107,11 +111,11 @@ export function WorkflowInspector({
     return [...ids].filter(Boolean);
   }, [executionPools, task?.config.poolId]);
   const isTaskBusy = task?.status === 'running' || task?.status === 'fixing_with_ai';
-  const hasPrompt = task?.config.prompt !== undefined;
-  const hasCommand = task?.config.command !== undefined;
+  const hasPrompt = hasExecutableText(task?.config.prompt);
+  const hasCommand = hasExecutableText(task?.config.command);
   const hasExecutableContent = Boolean(hasPrompt || hasCommand);
-  const canEditPrompt = Boolean(task?.config.prompt !== undefined && onEditPrompt && !isTaskBusy);
-  const canEditCommand = Boolean(task?.config.command !== undefined && onEditCommand && !isTaskBusy);
+  const canEditPrompt = Boolean(hasPrompt && onEditPrompt && !isTaskBusy);
+  const canEditCommand = Boolean(hasCommand && onEditCommand && !isTaskBusy);
   const statusBorder = taskColors?.border ?? workflowVisual?.borderClass ?? 'border-gray-700';
   const statusText = taskColors?.text ?? workflowVisual?.textClass ?? 'text-gray-300';
   const statusDot = taskColors?.dot ?? '';
@@ -132,11 +136,12 @@ export function WorkflowInspector({
   };
 
   const startEditingPromptOrCommand = () => {
-    if (task?.config.prompt !== undefined && canEditPrompt) {
-      setEditPromptValue(task.config.prompt);
+    if (!task) return;
+    if (hasPrompt && canEditPrompt) {
+      setEditPromptValue(task.config.prompt ?? '');
       setIsEditingPrompt(true);
-    } else if (task?.config.command !== undefined && canEditCommand) {
-      setEditCommandValue(task.config.command);
+    } else if (hasCommand && canEditCommand) {
+      setEditCommandValue(task.config.command ?? '');
       setIsEditingCommand(true);
     }
   };
@@ -203,7 +208,7 @@ export function WorkflowInspector({
           )}
         </section>
 
-        {task && !task.config.isMergeNode && onEditPool && (
+        {task && hasExecutableContent && !task.config.isMergeNode && onEditPool && (
           <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
             <label className="flex items-center justify-between gap-3">
               <span className="text-xs uppercase tracking-wide text-gray-400">Executor Pool</span>
@@ -225,7 +230,7 @@ export function WorkflowInspector({
           </section>
         )}
 
-        {task?.config.prompt && onEditAgent && (
+        {task && hasPrompt && onEditAgent && (
           <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
             <label className="flex items-center justify-between gap-3">
               <span className="text-xs uppercase tracking-wide text-gray-400">AI Agent</span>
@@ -280,7 +285,7 @@ export function WorkflowInspector({
             <div className="text-[11px] uppercase tracking-wide text-gray-400">
               {hasPrompt ? 'Prompt' : 'Command'}
             </div>
-            {isEditingPrompt && task?.config.prompt !== undefined ? (
+            {isEditingPrompt && hasPrompt ? (
               <div className="mt-2 space-y-2">
                 <textarea
                   value={editPromptValue}
@@ -298,7 +303,7 @@ export function WorkflowInspector({
                   </button>
                 </div>
               </div>
-            ) : isEditingCommand && task?.config.command !== undefined ? (
+            ) : isEditingCommand && hasCommand ? (
               <div className="mt-2 space-y-2">
                 <textarea
                   value={editCommandValue}

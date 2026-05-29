@@ -662,6 +662,33 @@ describe('TaskPanel double-click editing', () => {
       expect(screen.getByTestId('runner-kind-select')).toBeInTheDocument();
     });
 
+    it('does not render prompt/command content or edit controls for non-executable tasks', () => {
+      const task = makeTask({
+        config: { workflowId: 'wf-1', runnerKind: 'worktree' } as TaskState['config'],
+        status: 'pending',
+      });
+      render(
+        <TaskPanel
+          task={task}
+          executionAgents={['claude', 'codex']}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+          onEditCommand={mockOnEditCommand}
+          onEditPrompt={vi.fn()}
+          onEditAgent={vi.fn()}
+          onEditType={vi.fn()}
+        />,
+      );
+
+      expect(screen.queryByTestId('command-display')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('prompt-command-display')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('runner-kind-select')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('execution-agent-select')).not.toBeInTheDocument();
+      expect(screen.queryByText('No prompt or command available.')).not.toBeInTheDocument();
+    });
+
     it('defaults executor select to worktree for prompt-only task when runnerKind unset (orchestrator default)', () => {
       const task = makeTask({
         prompt: 'Write a test',
