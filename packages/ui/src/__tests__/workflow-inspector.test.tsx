@@ -234,9 +234,12 @@ describe('WorkflowInspector', () => {
     render(
       <WorkflowInspector
         workflow={workflow}
-        task={makeTask({ config: { workflowId: 'wf-1', runnerKind: 'merge', isMergeNode: true } })}
+        task={makeTask({ config: { workflowId: 'wf-1', runnerKind: 'worktree' } })}
         collapsed={false}
         advancedExpanded={false}
+        executionPools={['mixed-local-ssh']}
+        onEditPool={vi.fn()}
+        onEditAgent={vi.fn()}
         onToggleCollapsed={() => {}}
         onToggleAdvanced={() => {}}
       />,
@@ -244,6 +247,27 @@ describe('WorkflowInspector', () => {
 
     expect(screen.queryByTestId('prompt-command-display')).not.toBeInTheDocument();
     expect(screen.queryByText('No prompt or command available.')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('executor-pool-select')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('execution-agent-select')).not.toBeInTheDocument();
+  });
+
+  it('does not render an empty prompt or command as executable content', () => {
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ config: { workflowId: 'wf-1', prompt: '', command: '   ' } })}
+        collapsed={false}
+        advancedExpanded={false}
+        onEditPrompt={vi.fn()}
+        onEditCommand={vi.fn()}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.queryByTestId('prompt-command-display')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('edit-prompt-input')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('edit-command-input')).not.toBeInTheDocument();
   });
 
   it('edits AI agent from a dropdown', () => {
