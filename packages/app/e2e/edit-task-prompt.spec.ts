@@ -53,7 +53,45 @@ const EDIT_PROMPT_PLAN = {
   ],
 };
 
+const MERGE_GATE_PROMPT_VISIBILITY_PLAN = {
+  name: 'E2E Merge Gate Prompt Visibility Plan',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'pull_request' as const,
+  mergeMode: 'external_review' as const,
+  tasks: [
+    {
+      id: 'task-before-merge',
+      description: 'Task before merge gate',
+      command: 'echo before-merge',
+      dependencies: [],
+    },
+  ],
+};
+
 test.describe('Edit task prompt', () => {
+  test('does not show prompt editing UI for selected merge gate sidebar target', async ({ page }) => {
+    await loadPlan(page, MERGE_GATE_PROMPT_VISIBILITY_PLAN);
+
+    const mergeGateTaskId = await page.evaluate(async () => {
+      const result = await window.invoker.getTasks();
+      const tasks = Array.isArray(result) ? result : result.tasks;
+      const mergeTask = tasks.find((task: { id: string }) => task.id.includes('__merge__'));
+      return mergeTask?.id ?? null;
+    });
+    expect(mergeGateTaskId).toBeTruthy();
+
+    const mergeGateNode = page
+      .locator(`.react-flow__node[data-testid="${mergeGateTaskId}"], .react-flow__node[data-testid$="${mergeGateTaskId}"]`)
+      .first();
+    await expect(mergeGateNode).toBeVisible({ timeout: 15000 });
+    await mergeGateNode.click();
+
+    await expect(page.getByRole('heading', { name: /(?:Merge|Review) gate for/i })).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('[data-testid="command-display"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="edit-prompt-input"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="save-prompt-btn"]')).toHaveCount(0);
+  });
+
   test('edit a completed prompt task via TaskPanel, verify re-run with new prompt', async ({ page }) => {
     await loadPlan(page, EDIT_PROMPT_PLAN as any);
     await startPlan(page);
