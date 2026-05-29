@@ -28,6 +28,73 @@ describe('TaskPanel double-click editing', () => {
     vi.clearAllMocks();
   });
 
+  describe('Executable content visibility', () => {
+    it('does not render prompt-command-display for workflow-only selection', () => {
+      render(
+        <TaskPanel
+          task={null}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+        />,
+      );
+
+      expect(screen.queryByTestId('prompt-command-display')).not.toBeInTheDocument();
+    });
+
+    it('does not render prompt-command-display for non-AI and non-command tasks', () => {
+      const task = makeTask({
+        config: { workflowId: 'wf-1', runnerKind: 'merge', isMergeNode: true },
+      });
+
+      render(
+        <TaskPanel
+          task={task}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+          onEditCommand={mockOnEditCommand}
+        />,
+      );
+
+      expect(screen.queryByTestId('prompt-command-display')).not.toBeInTheDocument();
+    });
+
+    it('renders prompt-command-display for actual prompt tasks', () => {
+      const task = makeTask({ prompt: 'Create a new feature', status: 'pending' });
+
+      render(
+        <TaskPanel
+          task={task}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+        />,
+      );
+
+      expect(screen.getByTestId('prompt-command-display')).toHaveTextContent('Create a new feature');
+    });
+
+    it('renders prompt-command-display for actual command tasks', () => {
+      const task = makeTask({ command: 'pnpm test', status: 'pending' });
+
+      render(
+        <TaskPanel
+          task={task}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+        />,
+      );
+
+      expect(screen.getByTestId('prompt-command-display')).toHaveTextContent('pnpm test');
+    });
+  });
+
   describe('Edit button removal', () => {
     it('does not render Edit button for editable command tasks', () => {
       const task = makeTask({ command: 'echo test', status: 'pending' });
@@ -474,7 +541,7 @@ describe('TaskPanel double-click editing', () => {
       expect(screen.queryByTestId('edit-command-input')).not.toBeInTheDocument();
     });
 
-    it('does not render command display for empty command string', () => {
+    it('renders command display for empty command string because the command field is present', () => {
       const task = makeTask({ command: '', status: 'pending' });
       render(
         <TaskPanel
@@ -487,8 +554,8 @@ describe('TaskPanel double-click editing', () => {
         />,
       );
 
-      // Empty string is falsy, so command display should not render
-      expect(screen.queryByTestId('command-display')).not.toBeInTheDocument();
+      expect(screen.getByTestId('command-display')).toBeInTheDocument();
+      expect(screen.getByTestId('prompt-command-display')).toBeInTheDocument();
     });
   });
 
