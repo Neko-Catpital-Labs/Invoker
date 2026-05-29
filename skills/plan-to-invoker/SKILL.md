@@ -35,7 +35,9 @@ Grep-only checks are Phase 1a only; behavioral claims require executed Phase 1b 
 
 **Cross-layer dependency direction (required):** Dependency DAGs must flow from lower/foundational layers toward higher/integration layers. If a lower-layer task depends on a higher-layer task, mark an explicit exception in the task description with `Layer exception: allowed` and a rationale.
 
-**Experiment artifact persistence rule (required when prompt tasks design experiments):** Any `experiment-*` prompt task must write a deterministic artifact path (for example `docs/context/<issue>/experiment-brief.md`) and commit it during that task. Any `implement-*` task that depends on that experiment must reference and consume the exact artifact path in both `description` and `prompt` with explicit acceptance language. The workflow must include a dedicated cleanup task (typically `cleanup-experiment-artifacts-*`) that removes the artifact and commits cleanup before that workflow's final verification gate.
+**Experiment artifact persistence rule (required when prompt tasks design experiments):** Any `experiment-*` prompt task must write a deterministic artifact path (for example `docs/context/<issue>/experiment-brief.md`) and commit it during that task. The artifact must record Supported, Rejected, and Deferred verdicts, deterministic commands, expected outputs, and pass/fail thresholds. Any `implement-*` task that depends on that experiment must reference and consume the exact artifact path in both `description` and `prompt` with explicit acceptance language. The workflow must include a dedicated cleanup task (typically `cleanup-experiment-artifacts-*`) that removes the artifact and commits cleanup before that workflow's final verification gate.
+
+**Experiment-selected deterministic design (INV-63):** `docs/context/inv-63/experiment-brief.md` selects the active local handoff for experiment-backed plan-to-invoker changes. Supported: materialize the local brief first, keep implementation scoped to `skills/plan-to-invoker/SKILL.md`, `.cursor/skills/plan-to-invoker/SKILL.md`, and `skills/plan-to-invoker/scripts/skill-doctor.sh`, use repository-local deterministic verification, and preserve fixture behavior while adding INV-63 behavior. Rejected: do not depend on upstream workflow branches, commits, external artifact paths, informal criteria, runtime architecture changes, or same-slice experiment-plus-implementation commits. Deferred: remove the temporary artifact only after implementation and focused verification, and broaden verification or add end-to-end coverage only if the change expands beyond this skill surface. Generated implementation tasks that consume experiment artifacts must carry these Supported/Rejected/Deferred conclusions into their descriptions, prompts, and acceptance criteria.
 
 **Bugfix repro:** For bug/regression plans, a shared `bash scripts/repro-<slug>.sh` (or the same `command:` before and after) is **strongly recommended**; **`skill-doctor` does not require it.** If the fix invalidates the original repro, use another explicit verification task. See `references/task-patterns.md` § *Bugfix repro*.
 
@@ -69,6 +71,7 @@ bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>
 
 This single command runs: assumption extraction, verify plan generation, YAML validation, atomicity linting, and parse-results validation. Use this for deterministic pass/fail before submitting any plan.
 For policy-matrix inputs, it also checks that row-level coverage was extracted and that verify-plan generation did not degrade to `verify-noop`. When validating a plan against a separate policy source, pass `--source-file`, `--coverage-map`, and `--stack-manifest`; policy-matrix inputs now fail without a coverage map and a real authored stack manifest.
+When validating INV-63-style experiment handoffs, keep the proof surface local and deterministic: `bash skills/plan-to-invoker/scripts/skill-doctor.sh --help` must expose the documented option and exit-code contract, and `bash skills/plan-to-invoker/scripts/test-fixtures.sh` must preserve the fixture regression contract. Do not activate upstream artifacts, top-level/task-level `externalDependencies`, or deferred end-to-end coverage unless a later artifact marks them Supported.
 
 ### Fallback commands (for debugging individual checks)
 
@@ -132,7 +135,7 @@ Authoring YAML is not verification; execution is verification.
 bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>
 ```
 
-Runs all validation checks (assumption extraction, verify plan generation, schema validation, atomicity linting, parse-results validation) and produces deterministic pass/fail output. Exit code 0 = all checks pass.
+Runs all validation checks (assumption extraction, verify plan generation, schema validation, atomicity linting, parse-results validation) and produces deterministic pass/fail output. Exit code 0 = all checks pass. INV-63 focused verification additionally uses the help contract and fixture regression contract recorded in `docs/context/inv-63/experiment-brief.md`.
 
 **Individual check commands (for debugging only):**
 
