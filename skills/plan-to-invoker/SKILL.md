@@ -74,6 +74,8 @@ When converting from an existing conversation, transcript, or plan document, alw
 
 For portable command-only smoke plans, avoid nested `sh -c`, `bash -c`, or `bash -lc` quoting when the nested command string contains shell variables such as `$value` or `${value}`. Prefer literal smoke commands like `printf '%s\n' 'Supported: deterministic command-only smoke' && test 1 -eq 1` or `test 1 -eq 1`, or use a direct command without the nested shell wrapper.
 
+Command tasks run under the platform default shell unless the command explicitly invokes another shell. Keep generated commands POSIX-shell portable; if a command needs bash-only behavior such as `set -o pipefail` or `set -euo pipefail`, write it as an explicit bash command, for example `bash -lc 'set -euo pipefail; ...'`.
+
 ### Fallback commands (for debugging individual checks)
 
 If `skill-doctor.sh` fails, run individual checks to isolate the problem:
