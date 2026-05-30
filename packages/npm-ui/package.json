@@ -1,0 +1,22 @@
+{
+  "name": "@neko-catpital-labs/invoker-ui",
+  "version": "0.0.3",
+  "description": "Invoker desktop UI launcher",
+  "type": "module",
+  "bin": {
+    "invoker-ui": "bin/invoker-ui.js"
+  },
+  "files": [
+    "bin/**/*",
+    "scripts/**/*",
+    "vendor/.gitkeep",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/install.js"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

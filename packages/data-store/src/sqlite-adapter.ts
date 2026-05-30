@@ -30,6 +30,7 @@ import type {
   WorkflowRollupTaskSummary,
 } from '@invoker/workflow-core';
 import { DISPATCH_LEASE_MS } from '@invoker/contracts';
+import type { SearchResultItem, SearchOptions } from '@invoker/contracts';
 import {
   computeWorkflowRollupFromSummaries,
   isDiscardedAttempt,
@@ -1123,6 +1124,86 @@ export class SQLiteAdapter implements PersistenceAdapter {
     const workflowIds = rows.map((row: any) => String(row.id));
     const rollups = this.loadWorkflowRollups(workflowIds);
     return rows.map((row: any) => this.rowToWorkflow(row, rollups.get(String(row.id))));
+  }
+
+  searchWorkflowsAndTasks(query: string, opts?: SearchOptions): SearchResultItem[] {
+    if (!query.trim()) {
+      return [];
+    }
+    const safeQuery = `%${query.replace(/%/g, '\\%').replace(/_/g, '\\_')}%`;
+    const type = opts?.type ?? 'all';
+    const limit = Math.min(opts?.limit ?? 20, 50);
+    const offset = opts?.offset ?? 0;
+    
+    const results: SearchResultItem[] = [];
+    
+    if (type === 'workflows' || type === 'all') {
+      const workflows = this.queryAll(
+        `SELECT id, name, description, plan_file, repo_url, branch, created_at FROM workflows 
+         WHERE name LIKE ? OR description LIKE ? OR plan_file LIKE ? OR repo_url LIKE ? OR branch LIKE ? 
+         LIMIT ? OFFSET ?`,
+        [safeQuery, safeQuery, safeQuery, safeQuery, safeQuery, limit, offset]
+      ) as Array<{ id: string; name?: string | null; created_at: string }>;
+      // Batch load rollups for status
+      const workflowIds = workflows.map((row) => row.id);
+      const rollups = workflowIds.length > 0 ? this.loadWorkflowRollups(workflowIds) : new Map();
+      for (const row of workflows) {
+        const rollup = rollups.get(row.id);
+        const status = rollup?.status ?? 'pending';
+        results.push({
+          kind: 'workflow',
+          id: row.id,
+          workflowId: undefined,
+          title: row.name || 'Unnamed workflow',
+          subtitle: `Workflow · ${status}`,
+          status,
+          createdAt: row.created_at,
+        });
+      }
+    }
+    
+    if (type === 'tasks' || type === 'all') {
+      const tasks = this.queryAll(
+        `SELECT id, workflow_id, description, command, prompt, summary, problem, approach, test_plan, repro_command, status, created_at FROM tasks 
+         WHERE description LIKE ? OR command LIKE ? OR prompt LIKE ? OR summary LIKE ? OR problem LIKE ? OR approach LIKE ? OR test_plan LIKE ? OR repro_command LIKE ? 
+         LIMIT ? OFFSET ?`,
+        [safeQuery, safeQuery, safeQuery, safeQuery, safeQuery, safeQuery, safeQuery, safeQuery, limit, offset]
+      ) as Array<{
+        id: string;
+        workflow_id?: string | null;
+        description?: string | null;
+        status?: string | null;
+        created_at: string;
+      }>;
+      // Map workflow IDs to names for subtitle
+      const workflowIds = [...new Set(tasks.map((task) => task.workflow_id).filter((id): id is string => typeof id === 'string' && id.length > 0))];
+      const workflowNameMap = new Map<string, string>();
+      if (workflowIds.length > 0) {
+        const placeholders = workflowIds.map(() => '?').join(',');
+        const workflowRows = this.queryAll(
+          `SELECT id, name FROM workflows WHERE id IN (${placeholders})`,
+          workflowIds
+        ) as Array<{ id: string; name?: string | null }>;
+        for (const wf of workflowRows) {
+          workflowNameMap.set(wf.id, wf.name || 'Unnamed workflow');
+        }
+      }
+      for (const row of tasks) {
+        const workflowName = row.workflow_id ? workflowNameMap.get(row.workflow_id) : undefined;
+        results.push({
+          kind: 'task',
+          id: row.id,
+          workflowId: row.workflow_id || undefined,
+          title: row.description || 'Unnamed task',
+          subtitle: workflowName ? `Task · ${workflowName}` : '',
+          status: row.status || '',
+          createdAt: row.created_at,
+        });
+      }
+    }
+    
+    // Return workflows first, then tasks (preserving order within each category)
+    return results;
   }
 
   loadWorkflowTaskSnapshot(): WorkflowTaskSnapshot {
