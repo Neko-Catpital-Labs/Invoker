@@ -24,9 +24,9 @@ Standard pattern: **implement → test → verify**. Uses `onFinish: merge` to a
 
 ---
 
-## 3. Multi-Step Refactor with Worktrees
+## 3. Multi-Step Refactor with Default Worktree Routing
 
-Multi-step refactor with `runnerKind: worktree` for isolation. Each task runs in its own worktree.
+Multi-step refactor using the configured default worktree/pool routing. Each task runs in its own isolated worktree by default.
 
 **See**: `fixtures/positive/03-multi-step-refactor-worktrees.yaml`
 
@@ -136,7 +136,7 @@ Use this pattern when a change is too large for a single reviewable workflow. Fo
 **Positive patterns**:
 - Verification-only → `onFinish: none`, command tasks
 - Feature implementation → implement → test → verify, `onFinish: merge`
-- Multi-step refactors → `runnerKind: worktree`, chained dependencies
+- Multi-step refactors → omit routing fields for default worktree execution, chained dependencies
 - Large refactors → `onFinish: pull_request`, diamond DAGs
 - Invoker-on-Invoker PR publication → keep `mergeMode: github`, then use `mergify stack push` as the repo-specific publication step
 - Policy matrix / architecture docs → preserve row-level coverage with `coverage-map.json` and `stack-manifest.json`
