@@ -33,8 +33,6 @@
     "build:tsc": "tsc -b tsconfig.build.json",
     "build:tsc:clean": "tsc -b tsconfig.build.json --clean",
     "clean": "pnpm -r clean",
-    "setup:cursor-skills": "bash scripts/setup-agent-skills.sh",
-    "setup:codex-skills": "bash scripts/setup-agent-skills.sh",
     "setup:agent-skills": "bash scripts/setup-agent-skills.sh",
     "dev": "pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && pnpm --filter @invoker/app start",
     "dev:hot": "concurrently \"pnpm --filter @invoker/ui dev\" \"sleep 3 && VITE_DEV_SERVER_URL=http://localhost:5173 pnpm --filter @invoker/app build && VITE_DEV_SERVER_URL=http://localhost:5173 pnpm --filter @invoker/app start\"",

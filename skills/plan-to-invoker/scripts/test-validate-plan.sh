@@ -305,6 +305,149 @@ EOF
   return 0
 }
 
+# Test: nested shell command strings must not use shell variables
+test_nested_shell_variable_expansion_fails() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: nested-shell-variable-test
+repoUrl: git@github.com:user/repo.git
+onFinish: none
+tasks:
+  - id: unsafe-smoke
+    description: Exact failed nightly command
+    command: >-
+      sh -c "value='Supported: deterministic command-only smoke'; printf '%s\n' \"$value\"; test \"$value\" = 'Supported: deterministic command-only smoke'"
+EOF
+
+  local output
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected non-zero exit code for nested shell variable command" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "unsafe_shell_variable_expansion" and .field == "command" and .taskId == "unsafe-smoke")] | length == 1' &>/dev/null; then
+    echo "Expected unsafe_shell_variable_expansion for unsafe-smoke command" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+# Test: simple literal command-only smoke plans should still validate
+test_literal_smoke_command_validates() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: literal-smoke-test
+repoUrl: git@github.com:user/repo.git
+onFinish: none
+tasks:
+  - id: literal-smoke
+    description: Literal smoke command
+    command: "printf '%s\n' 'Supported: deterministic command-only smoke' && test 1 -eq 1"
+EOF
+
+  local output
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+
+  if [[ $exit_code -ne 0 ]]; then
+    echo "Expected exit code 0, got $exit_code" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if ! echo "$output" | grep -q '"valid"[[:space:]]*:[[:space:]]*true'; then
+    echo "Expected valid:true in output, got: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+# Test: direct shell variables remain valid when no nested sh -c/bash -c is used
+test_direct_shell_variable_command_validates() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: direct-shell-variable-test
+repoUrl: git@github.com:user/repo.git
+onFinish: none
+tasks:
+  - id: direct-variable
+    description: Direct shell variable command
+    command: >-
+      value=ok; printf '%s\n' "$value"
+EOF
+
+  local output
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+
+  if [[ $exit_code -ne 0 ]]; then
+    echo "Expected exit code 0, got $exit_code" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+# Test: experiment variant commands use the same nested shell guard
+test_experiment_variant_nested_shell_variable_expansion_fails() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: experiment-variant-shell-variable-test
+repoUrl: git@github.com:user/repo.git
+onFinish: none
+tasks:
+  - id: experiment-task
+    description: Experiment variant with unsafe command
+    prompt: "Compare variants"
+    experimentVariants:
+      - name: unsafe
+        command: >-
+          bash -lc "value='variant'; printf '%s\n' \"$value\""
+EOF
+
+  local output
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected non-zero exit code for unsafe experiment variant command" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "unsafe_shell_variable_expansion" and .field == "experimentVariants[0].command" and .taskId == "experiment-task")] | length == 1' &>/dev/null; then
+    echo "Expected unsafe_shell_variable_expansion for experiment variant command" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
 # Test: Verify error has required fields with correct types
 test_error_field_structure() {
   local output
@@ -359,6 +502,10 @@ run_test "Minimal invalid plan should report missing fields" test_minimal_invali
 run_test "Command+prompt conflict should be detected" test_command_prompt_conflict
 run_test "Invalid dependency should be detected" test_invalid_dependency
 run_test "Banned pattern (npx vitest run) should be detected" test_banned_pattern
+run_test "Nested shell variable expansion should be rejected" test_nested_shell_variable_expansion_fails
+run_test "Literal smoke command should validate" test_literal_smoke_command_validates
+run_test "Direct shell variable command should validate" test_direct_shell_variable_command_validates
+run_test "Experiment variant nested shell variable expansion should be rejected" test_experiment_variant_nested_shell_variable_expansion_fails
 run_test "Error objects should have correct field structure" test_error_field_structure
 
 echo ""

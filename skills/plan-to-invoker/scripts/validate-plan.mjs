@@ -48,9 +48,67 @@ const { parse: parseYaml } = await import(yamlPath);
 
 const VALID_ON_FINISH = ['none', 'merge', 'pull_request'];
 const VALID_MERGE_MODE = ['manual', 'automatic', 'github', 'external_review'];
-const VALID_EXECUTOR_TYPE = ['worktree', 'docker', 'ssh'];
 const VALID_REQUIRED_STATUS = ['completed', 'review_ready'];
 const VALID_GATE_POLICY = ['completed', 'review_ready'];
+
+const NESTED_SHELL_INVOCATION = /\b(?:sh|bash)\s+-(?:c|lc)\b/g;
+const SHELL_VARIABLE_REFERENCE = /\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})/;
+
+function hasUnsafeNestedShellVariableExpansion(command) {
+  NESTED_SHELL_INVOCATION.lastIndex = 0;
+
+  for (let match = NESTED_SHELL_INVOCATION.exec(command); match !== null; match = NESTED_SHELL_INVOCATION.exec(command)) {
+    const nestedCommand = extractNestedShellCommand(command, match.index + match[0].length);
+    if (nestedCommand !== null && SHELL_VARIABLE_REFERENCE.test(nestedCommand)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function extractNestedShellCommand(command, startIndex) {
+  let index = startIndex;
+  while (index < command.length && /\s/.test(command[index])) {
+    index += 1;
+  }
+
+  const quote = command[index];
+  if (quote !== '"' && quote !== "'") {
+    return null;
+  }
+
+  let nestedCommand = '';
+  index += 1;
+
+  for (; index < command.length; index += 1) {
+    const char = command[index];
+    if (char === quote && !hasOddBackslashRun(command, index)) {
+      return nestedCommand;
+    }
+    nestedCommand += char;
+  }
+
+  return nestedCommand;
+}
+
+function hasOddBackslashRun(value, index) {
+  let count = 0;
+  for (let cursor = index - 1; cursor >= 0 && value[cursor] === '\\'; cursor -= 1) {
+    count += 1;
+  }
+  return count % 2 === 1;
+}
+
+function pushUnsafeCommandError(errors, taskId, field, command) {
+  errors.push({
+    errorType: 'unsafe_shell_variable_expansion',
+    field,
+    taskId,
+    message: `Task "${taskId}" uses a nested shell command with shell variable references. Avoid sh -c/bash -c quoting with variables in plan command fields; use a direct command or literal smoke command instead.`,
+    value: command,
+  });
+}
 
 /**
  * Validate a single externalDependencies array (reused for both plan-level and task-level).
@@ -191,11 +249,11 @@ function validatePlan(yamlContent) {
     });
   }
 
-  if (raw.runnerKind !== undefined && !VALID_EXECUTOR_TYPE.includes(raw.runnerKind)) {
+  if (raw.runnerKind !== undefined) {
     errors.push({
-      errorType: 'invalid_enum_value',
+      errorType: 'unsupported_field',
       field: 'runnerKind',
-      message: `"runnerKind" must be one of: ${VALID_EXECUTOR_TYPE.join(', ')}`,
+      message: '"runnerKind" is no longer supported. Omit it for the default worktree executor, use "poolId" for configured execution pools, or use "dockerImage" for Docker tasks.',
       value: raw.runnerKind,
     });
   }
@@ -316,13 +374,17 @@ function validatePlan(yamlContent) {
       });
     }
 
-    // Validate runnerKind enum
-    if (task.runnerKind !== undefined && !VALID_EXECUTOR_TYPE.includes(task.runnerKind)) {
+    if (typeof task.command === 'string' && hasUnsafeNestedShellVariableExpansion(task.command)) {
+      pushUnsafeCommandError(errors, taskId, 'command', task.command);
+    }
+
+    // Validate obsolete executor routing fields.
+    if (task.runnerKind !== undefined) {
       errors.push({
-        errorType: 'invalid_enum_value',
+        errorType: 'unsupported_field',
         field: 'runnerKind',
         taskId,
-        message: `Task "${taskId}" runnerKind must be one of: ${VALID_EXECUTOR_TYPE.join(', ')}`,
+        message: `Task "${taskId}" uses unsupported "runnerKind". Omit it for the default worktree executor, use "poolId" for configured execution pools, or use "dockerImage" for Docker tasks.`,
         value: task.runnerKind,
       });
     }
@@ -373,6 +435,10 @@ function validatePlan(yamlContent) {
               taskId,
               message: `Task "${taskId}" experimentVariants[${varIndex}] cannot define both "command" and "prompt"`,
             });
+          }
+
+          if (typeof variant.command === 'string' && hasUnsafeNestedShellVariableExpansion(variant.command)) {
+            pushUnsafeCommandError(errors, taskId, `experimentVariants[${varIndex}].command`, variant.command);
           }
         });
       }
