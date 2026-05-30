@@ -4,12 +4,12 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SKILL_DIR="$REPO_ROOT/.claude/skills/plan-to-invoker"
+SKILL_DIR="$REPO_ROOT/skills/plan-to-invoker"
 SKILL_MD="$SKILL_DIR/SKILL.md"
 PLAYBOOK="$SKILL_DIR/playbooks/verify-then-build.md"
 TASK_PATTERNS="$SKILL_DIR/references/task-patterns.md"
-CURSOR_LINK="$REPO_ROOT/.cursor/skills/plan-to-invoker"
-CODEX_LINK="$HOME/.codex/skills/plan-to-invoker"
+CODEX_INSTALLED="$HOME/.codex/skills/invoker-plan-to-invoker"
+CLAUDE_INSTALLED="$HOME/.claude/skills/invoker-plan-to-invoker"
 
 fail() {
   echo "FAIL: $*" >&2
@@ -29,29 +29,14 @@ must_contain() {
 [[ -f "$PLAYBOOK" ]] || fail "expected $PLAYBOOK"
 [[ -f "$TASK_PATTERNS" ]] || fail "expected $TASK_PATTERNS"
 
-# Cursor skill symlink points at canonical copy (optional but catches drift)
-if [[ -e "$CURSOR_LINK" ]]; then
-  if [[ ! -L "$CURSOR_LINK" ]]; then
-    fail ".cursor/skills/plan-to-invoker should be a symlink to the canonical skill"
+# Installed agent skills use managed invoker-* copies, not legacy unprefixed symlinks.
+for installed in "$CODEX_INSTALLED" "$CLAUDE_INSTALLED"; do
+  if [[ -e "$installed" ]]; then
+    [[ -d "$installed" ]] || fail "$installed should be an installed skill directory"
+    [[ ! -L "$installed" ]] || fail "$installed should not be a symlink"
+    [[ -f "$installed/SKILL.md" ]] || fail "expected $installed/SKILL.md"
   fi
-  resolved="$(cd "$(dirname "$CURSOR_LINK")" && cd "$(readlink plan-to-invoker)" && pwd)"
-  case "$resolved" in
-    *"/.claude/skills/plan-to-invoker"|*"/skills/plan-to-invoker") ;;
-    *) fail "symlink $CURSOR_LINK should resolve to .claude/skills/... or skills/... plan-to-invoker (got: $resolved)" ;;
-  esac
-fi
-
-# Codex skill symlink points at canonical copy (optional but catches drift)
-if [[ -e "$CODEX_LINK" ]]; then
-  if [[ ! -L "$CODEX_LINK" ]]; then
-    fail "~/.codex/skills/plan-to-invoker should be a symlink to the canonical skill"
-  fi
-  resolved="$(cd "$(dirname "$CODEX_LINK")" && cd "$(readlink plan-to-invoker)" && pwd)"
-  case "$resolved" in
-    *"/.claude/skills/plan-to-invoker"|*"/skills/plan-to-invoker") ;;
-    *) fail "symlink $CODEX_LINK should resolve to .claude/skills/... or skills/... plan-to-invoker (got: $resolved)" ;;
-  esac
-fi
+done
 
 # SKILL.md — runtime verification + Invoker headless as complementary lane
 must_contain "$SKILL_MD" "## Intended flow (do not skip steps)" "SKILL must document the full flow"
