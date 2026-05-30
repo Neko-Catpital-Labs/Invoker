@@ -17,6 +17,9 @@ importers:
       electron-builder:
         specifier: ^26.0.12
         version: 26.8.1(electron-builder-squirrel-windows@26.8.1)
+      postject:
+        specifier: 1.0.0-alpha.6
+        version: 1.0.0-alpha.6
       tsup:
         specifier: ^8.5.1
         version: 8.5.1(jiti@2.6.1)(postcss@8.5.8)(typescript@5.9.3)(yaml@2.8.2)
@@ -29,6 +32,9 @@ importers:
 
   packages/app:
     dependencies:
+      '@invoker/cli':
+        specifier: workspace:*
+        version: link:../cli
       '@invoker/contracts':
         specifier: workspace:*
         version: link:../contracts
@@ -238,6 +244,10 @@ importers:
       vitest:
         specifier: ^3.0.0
         version: 3.2.4(@types/debug@4.1.13)(@types/node@25.3.3)(jiti@2.6.1)(jsdom@25.0.1)(yaml@2.8.2)
+
+  packages/npm-cli: {}
+
+  packages/npm-ui: {}
 
   packages/persistence:
     dependencies:
@@ -5319,8 +5329,7 @@ snapshots:
 
   commander@5.1.0: {}
 
-  commander@9.5.0:
-    optional: true
+  commander@9.5.0: {}
 
   compare-version@0.1.2: {}
 
@@ -6649,7 +6658,6 @@ snapshots:
   postject@1.0.0-alpha.6:
     dependencies:
       commander: 9.5.0
-    optional: true
 
   pretty-format@27.5.1:
     dependencies:

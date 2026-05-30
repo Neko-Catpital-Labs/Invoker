@@ -6,7 +6,7 @@
 
 **Persisted workflow orchestration: a DAG of tasks in isolated workspaces, composed through git branches, merge gates, and review.**
 
-Current version: `0.0.2`. Version history lives in [CHANGELOG.md](CHANGELOG.md).
+Current version: `0.0.3`. Version history lives in [CHANGELOG.md](CHANGELOG.md).
 
 ## Overview
 
@@ -39,15 +39,78 @@ Invoker does not provision machines for you. You are responsible for bringing yo
 
 If pnpm skips Electron's dependency install hook and you hit `Electron failed to install correctly`, rerun `pnpm install` or any normal launch command after allowing Electron's build script. Recent pnpm versions may require `pnpm approve-builds`.
 
-For packaged installs, the repo includes an installer script and a tag-driven release workflow:
+For packaged installs, the repo includes npm launchers, direct GitHub Release downloads, an installer script, and a tag-driven release workflow.
+
+### Standalone CLI
+
+The standalone CLI does not require Node after installation. It can run plans directly, or delegate to a running Invoker desktop owner when one is available.
+
+Install with npm:
+
+```bash
+npm install -g @neko-catpital-labs/invoker-cli
+invoker-cli --version
+invoker-cli doctor
+invoker-cli run plans/fixtures/hello-world.yaml --standalone
+```
+
+Or download the platform binary from GitHub Releases:
+
+```bash
+version=0.0.3
+case "$(uname -s)" in
+  Darwin) platform=darwin ;;
+  Linux) platform=linux ;;
+  *) echo "Unsupported OS" >&2; exit 1 ;;
+esac
+case "$(uname -m)" in
+  arm64|aarch64) arch=arm64 ;;
+  x86_64|amd64) arch=x64 ;;
+  *) echo "Unsupported architecture" >&2; exit 1 ;;
+esac
+curl -L -o invoker-cli "https://github.com/Neko-Catpital-Labs/Invoker/releases/download/v${version}/invoker-cli-${version}-${platform}-${arch}"
+chmod +x invoker-cli
+./invoker-cli --version
+./invoker-cli run plans/fixtures/hello-world.yaml --standalone
+```
+
+Release checksums are published as `SHA256SUMS`. To verify a downloaded binary:
+
+```bash
+curl -L -O "https://github.com/Neko-Catpital-Labs/Invoker/releases/download/v0.0.3/SHA256SUMS"
+shasum -a 256 -c SHA256SUMS --ignore-missing
+```
+
+`invoker-cli doctor --fix` can install some missing runtime tools on a best-effort basis using Homebrew on macOS, apt on Linux, or npm for npm-based CLIs. Authentication-dependent setup, such as `gh auth login` and provider CLI login, remains manual.
+
+`invoker-cli run <plan.yaml>` defaults to `auto` mode: it submits the plan to a running desktop owner over IPC when one is reachable, and otherwise runs the plan in a standalone CLI database at `~/.invoker-cli`. Use `--live` to require the desktop owner, `--standalone` to force isolated CLI execution, `--db-dir <path>` to choose a different standalone database directory, and `--json` for a machine-readable result summary.
+
+### Desktop UI
+
+Install the desktop UI launcher with npm:
+
+```bash
+npm install -g @neko-catpital-labs/invoker-ui
+invoker-ui
+invoker-ui doctor
+```
+
+Direct desktop downloads are also available from GitHub Releases:
+- macOS: `.dmg` and `.zip`
+- Linux: `.deb` and `.AppImage`
+
+The macOS npm launcher uses the `.zip` app bundle asset so it does not need to mount a `.dmg`.
+
+For source-based packaged installs, the repo includes an installer script:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Neko-Catpital-Labs/Invoker/master/scripts/install.sh | bash
 ```
 
 Tagged releases are configured to publish:
-- macOS: `.dmg`
-- Linux: `.deb` and `.AppImage`
+- standalone CLI binaries and `.tar.gz` archives for macOS and Linux on x64 and arm64
+- desktop `.dmg`, `.zip`, `.deb`, and `.AppImage`
+- `SHA256SUMS` covering release assets
 
 Packaged installs bundle the first-party Invoker skills inside the app. On first GUI launch, Invoker prompts you to install those skills into the supported global skill directories for Codex, Claude, and Cursor using `invoker-`-prefixed names so they do not overwrite existing skills. For headless/package-only usage, install the same bundled skills explicitly with:
 
@@ -100,7 +163,7 @@ More examples: [docs/invoker-config-example.json](docs/invoker-config-example.js
 
 ### Multiple SSH Executors
 
-Define multiple entries under `remoteTargets`, then select them per task with `runnerKind: ssh` and `poolMemberId`.
+Define multiple entries under `remoteTargets`, then select them per task with `poolId`.
 
 ```yaml
 name: multi-remote-example
@@ -110,14 +173,12 @@ tasks:
   - id: test-a
     description: Run checks on remote target A
     command: pnpm test
-    runnerKind: ssh
-    poolMemberId: staging-a
+    poolId: staging-a
 
   - id: test-b
     description: Run checks on remote target B
     command: pnpm test
-    runnerKind: ssh
-    poolMemberId: staging-b
+    poolId: staging-b
 ```
 
 Use this when you want Invoker to spread work across machines you already manage. The SSH executor does not provision the hosts for you; it connects to the target you name and runs there.
@@ -201,7 +262,6 @@ tasks:
   - id: api
     description: Implement the API slice in an isolated worktree
     command: pnpm --filter @your-org/api test
-    runnerKind: worktree
     dependencies: [plan]
 
   - id: ui
@@ -210,14 +270,12 @@ tasks:
       Implement the UI affordance described by the plan. Preserve audit
       state so a failed task can be reopened, edited, and replayed.
     executionAgent: codex
-    runnerKind: worktree
     dependencies: [plan]
 
   - id: tests
     description: Run the final regression suite on a configured SSH executor
     command: pnpm run test:all
-    runnerKind: ssh
-    poolMemberId: staging-a
+    poolId: staging-a
     dependencies: [api, ui]
 ```
 

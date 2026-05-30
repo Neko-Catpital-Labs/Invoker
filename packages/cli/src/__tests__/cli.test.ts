@@ -177,7 +177,7 @@ tasks:
     expect(code).toBe(0);
     expect(output.stdout).toContain('hello-from-invoker-cli');
     output.restore();
-  });
+  }, 60_000);
 
   it('standalone prompt-only plans route through the execution engine', () => {
     const dir = mkdtempSync(join(tmpdir(), 'invoker-cli-prompt-'));

@@ -1,6 +1,6 @@
 {
   "name": "@invoker/graph",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "deprecated": "Use @invoker/workflow-graph instead",
   "description": "Pure action graph data structure — nodes, edges, DAG ops, mutations (compatibility layer)",
   "type": "module",
@@ -20,9 +20,9 @@
     "clean": "rm -rf dist"
   },
   "devDependencies": {
+    "tsup": "^8.0.0",
     "typescript": "^5.7.0",
-    "vitest": "^3.0.0",
-    "tsup": "^8.0.0"
+    "vitest": "^3.0.0"
   },
   "dependencies": {
     "@invoker/workflow-graph": "workspace:*"
