@@ -11,6 +11,12 @@ const repoRoot = resolve(__dirname, '../../../..');
 const cliPath = resolve(repoRoot, 'packages/cli/dist/index.js');
 const fixturePlan = resolve(repoRoot, 'plans/fixtures/hello-world.yaml');
 
+function writeStandalonePlan(dir: string, body: string): string {
+  const planPath = join(dir, 'plan.yaml');
+  writeFileSync(planPath, body.replace('__REPO_ROOT__', JSON.stringify(repoRoot)), 'utf8');
+  return planPath;
+}
+
 function runCli(args: string[]) {
   return spawnSync(process.execPath, [cliPath, ...args], {
     cwd: repoRoot,
@@ -109,13 +115,22 @@ describe('invoker-cli', () => {
 
   it('--standalone never opens IPC and still runs hello-world', async () => {
     const output = captureProcessOutput();
-    const dbDir = mkdtempSync(join(tmpdir(), 'invoker-cli-standalone-db-'));
+    const dir = mkdtempSync(join(tmpdir(), 'invoker-cli-standalone-'));
+    const dbDir = join(dir, 'db');
+    const planPath = writeStandalonePlan(dir, `name: Standalone in process
+repoUrl: __REPO_ROOT__
+onFinish: none
+tasks:
+  - id: hello
+    description: Print hello from the standalone CLI.
+    command: echo hello-from-invoker-cli
+`);
     const createMessageBus = vi.fn(() => {
       throw new Error('unexpected IPC');
     });
 
     const code = await main(
-      ['run', fixturePlan, '--standalone', '--db-dir', dbDir],
+      ['run', planPath, '--standalone', '--db-dir', dbDir],
       { createMessageBus },
     );
 
@@ -143,16 +158,44 @@ describe('invoker-cli', () => {
   it('auto mode falls back to standalone when no GUI owner exists', async () => {
     const output = captureProcessOutput();
     const bus = new LocalBus();
-    const dbDir = mkdtempSync(join(tmpdir(), 'invoker-cli-auto-db-'));
+    const dir = mkdtempSync(join(tmpdir(), 'invoker-cli-auto-'));
+    const dbDir = join(dir, 'db');
+    const planPath = writeStandalonePlan(dir, `name: Auto fallback in process
+repoUrl: __REPO_ROOT__
+onFinish: none
+tasks:
+  - id: hello
+    description: Print hello from the standalone CLI.
+    command: echo hello-from-invoker-cli
+`);
 
     const code = await main(
-      ['run', fixturePlan, '--db-dir', dbDir],
+      ['run', planPath, '--db-dir', dbDir],
       { createMessageBus: () => bus },
     );
 
     expect(code).toBe(0);
     expect(output.stdout).toContain('hello-from-invoker-cli');
     output.restore();
+  });
+
+  it('standalone prompt-only plans route through the execution engine', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'invoker-cli-prompt-'));
+    const planPath = writeStandalonePlan(dir, `name: Prompt-only standalone
+repoUrl: __REPO_ROOT__
+onFinish: none
+tasks:
+  - id: prompt
+    description: Exercise prompt-only execution.
+    prompt: Say hello.
+    executionAgent: missing-agent
+`);
+
+    const result = runCli(['run', planPath, '--standalone', '--db-dir', join(dir, 'db'), '--json']);
+
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).not.toContain('Standalone CLI v1 supports command tasks only');
+    expect(`${result.stdout}\n${result.stderr}`).toContain('No execution agent registered with name "missing-agent"');
   });
 
   it('rejects --db-dir with --live', async () => {
