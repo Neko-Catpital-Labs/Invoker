@@ -70,6 +70,8 @@ bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>
 This single command runs: assumption extraction, verify plan generation, YAML validation, atomicity linting, and parse-results validation. Use this for deterministic pass/fail before submitting any plan.
 For policy-matrix inputs, it also checks that row-level coverage was extracted and that verify-plan generation did not degrade to `verify-noop`. When validating a plan against a separate policy source, pass `--source-file`, `--coverage-map`, and `--stack-manifest`; policy-matrix inputs now fail without a coverage map and a real authored stack manifest.
 
+When converting from an existing conversation, transcript, or plan document, always pass that original artifact as `--source-file <source>`. If the source already contains a concrete Invoker YAML plan, `skill-doctor` rejects generated plans that drop or replace its task IDs, including generic smoke plans.
+
 ### Fallback commands (for debugging individual checks)
 
 If `skill-doctor.sh` fails, run individual checks to isolate the problem:

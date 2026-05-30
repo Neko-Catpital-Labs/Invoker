@@ -260,6 +260,13 @@ if [[ "$SKIP_ASSUMPTIONS" == "false" && -f "$ASSUMPTIONS_FILE" ]]; then
     bash "$SCRIPT_DIR/check-policy-coverage.sh" "$ASSUMPTIONS_FILE" "$VERIFY_PLAN_FILE"
 fi
 
+if [[ -n "$SOURCE_FILE" ]]; then
+  run_check \
+    "check-source-plan-coverage" \
+    "Validate generated plan preserves concrete task IDs from source plan" \
+    bash "$SCRIPT_DIR/check-source-plan-coverage.sh" "$SOURCE_FILE" "$PLAN_FILE"
+fi
+
 if [[ "$SKIP_ASSUMPTIONS" == "false" && -f "$ASSUMPTIONS_FILE" ]]; then
   ASSUMPTIONS_SOURCE_KIND="$(jq -r '.sourceKind // "generic"' "$ASSUMPTIONS_FILE" 2>/dev/null || echo generic)"
   if [[ "$ASSUMPTIONS_SOURCE_KIND" == "policy_matrix" && -z "$COVERAGE_MAP_FILE" ]]; then
