@@ -270,6 +270,22 @@ test_stacked_basebranch_master() {
   return 0
 }
 
+test_runner_kind_is_unsupported() {
+  local fixture="$NEGATIVE_DIR/edge-invalid-executor-type.yaml"
+  local output
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$fixture" 2>&1)
+  set -e
+
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "unsupported_field" and .field == "runnerKind")] | length > 0' &>/dev/null; then
+    echo "Expected unsupported_field error for runnerKind" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
 test_lint_valid_final_test_all() {
   local temp_plan
   temp_plan=$(mktemp)
@@ -1096,6 +1112,7 @@ run_test "Edge: empty_required_field for tasks" test_edge_empty_tasks
 run_test "Edge: invalid_dependency_reference" test_edge_invalid_dependency
 run_test "Edge: unrendered_template_placeholder" test_unrendered_template_placeholder
 run_test "Edge: stacked_basebranch_default" test_stacked_basebranch_master
+run_test "Edge: unsupported runnerKind field" test_runner_kind_is_unsupported
 run_test "Lint: valid final pnpm run test:all gate" test_lint_valid_final_test_all
 run_test "Lint: reject non-test:all final gate" test_lint_rejects_non_test_all_final_gate
 run_test "Lint: allow non-terminal stack workflow without test:all" test_lint_allows_nonterminal_stack_workflow_without_test_all

@@ -1,14 +1,15 @@
-# Edge case: Invalid runnerKind enum value (task level)
-# Expected error: invalid_enum_value (field: runnerKind)
+# Edge case: Obsolete runnerKind field (task level)
+# Expected error: unsupported_field (field: runnerKind)
 #
-# runnerKind must be one of: worktree, ssh, docker
+# Omit runnerKind for default worktree execution. Use poolId for configured
+# pools or dockerImage for Docker tasks.
 
-name: "Invalid runnerKind enum"
+name: "Unsupported runnerKind field"
 repoUrl: git@github.com:example-org/acme-repo.git
 
 tasks:
   - id: invalid-executor
-    description: "Task with invalid runnerKind"
+    description: "Task with obsolete runnerKind"
     command: "echo test"
-    runnerKind: invalid_type
+    runnerKind: worktree
     dependencies: []
