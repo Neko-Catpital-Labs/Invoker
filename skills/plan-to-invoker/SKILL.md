@@ -72,6 +72,8 @@ For policy-matrix inputs, it also checks that row-level coverage was extracted a
 
 When converting from an existing conversation, transcript, or plan document, always pass that original artifact as `--source-file <source>`. If the source already contains a concrete Invoker YAML plan, `skill-doctor` rejects generated plans that drop or replace its task IDs, including generic smoke plans.
 
+For portable command-only smoke plans, avoid nested `sh -c`, `bash -c`, or `bash -lc` quoting when the nested command string contains shell variables such as `$value` or `${value}`. Prefer literal smoke commands like `printf '%s\n' 'Supported: deterministic command-only smoke' && test 1 -eq 1` or `test 1 -eq 1`, or use a direct command without the nested shell wrapper.
+
 ### Fallback commands (for debugging individual checks)
 
 If `skill-doctor.sh` fails, run individual checks to isolate the problem:
