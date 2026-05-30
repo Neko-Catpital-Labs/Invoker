@@ -53,6 +53,7 @@ const VALID_GATE_POLICY = ['completed', 'review_ready'];
 
 const NESTED_SHELL_INVOCATION = /\b(?:sh|bash)\s+-(?:c|lc)\b/g;
 const SHELL_VARIABLE_REFERENCE = /\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})/;
+const EXPLICIT_BASH_COMMAND = /^\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)\s+)*bash\s+-(?:lc|cl|c)\b/;
 
 function hasUnsafeNestedShellVariableExpansion(command) {
   NESTED_SHELL_INVOCATION.lastIndex = 0;
@@ -65,6 +66,16 @@ function hasUnsafeNestedShellVariableExpansion(command) {
   }
 
   return false;
+}
+
+function usesPipefailSetCommand(command) {
+  return command
+    .split(/[;&|()\n]/)
+    .some((segment) => /^\s*set\s+/.test(segment) && /\bpipefail\b/.test(segment));
+}
+
+function isExplicitBashCommand(command) {
+  return EXPLICIT_BASH_COMMAND.test(command);
 }
 
 function extractNestedShellCommand(command, startIndex) {
@@ -106,6 +117,16 @@ function pushUnsafeCommandError(errors, taskId, field, command) {
     field,
     taskId,
     message: `Task "${taskId}" uses a nested shell command with shell variable references. Avoid sh -c/bash -c quoting with variables in plan command fields; use a direct command or literal smoke command instead.`,
+    value: command,
+  });
+}
+
+function pushNonPortablePipefailError(errors, taskId, field, command) {
+  errors.push({
+    errorType: 'non_portable_pipefail',
+    field,
+    taskId,
+    message: `Task "${taskId}" uses bash-only pipefail without explicitly running the command through bash. Use bash -lc 'set -euo pipefail; ...' or write POSIX-compatible shell for Invoker command tasks.`,
     value: command,
   });
 }
@@ -378,6 +399,10 @@ function validatePlan(yamlContent) {
       pushUnsafeCommandError(errors, taskId, 'command', task.command);
     }
 
+    if (typeof task.command === 'string' && usesPipefailSetCommand(task.command) && !isExplicitBashCommand(task.command)) {
+      pushNonPortablePipefailError(errors, taskId, 'command', task.command);
+    }
+
     // Validate obsolete executor routing fields.
     if (task.runnerKind !== undefined) {
       errors.push({
@@ -439,6 +464,10 @@ function validatePlan(yamlContent) {
 
           if (typeof variant.command === 'string' && hasUnsafeNestedShellVariableExpansion(variant.command)) {
             pushUnsafeCommandError(errors, taskId, `experimentVariants[${varIndex}].command`, variant.command);
+          }
+
+          if (typeof variant.command === 'string' && usesPipefailSetCommand(variant.command) && !isExplicitBashCommand(variant.command)) {
+            pushNonPortablePipefailError(errors, taskId, `experimentVariants[${varIndex}].command`, variant.command);
           }
         });
       }

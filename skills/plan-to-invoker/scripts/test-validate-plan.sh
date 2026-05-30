@@ -407,6 +407,80 @@ EOF
   return 0
 }
 
+# Test: command tasks using pipefail must explicitly run through bash
+test_pipefail_without_bash_fails() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: pipefail-portability-test
+repoUrl: git@github.com:user/repo.git
+onFinish: none
+tasks:
+  - id: unsafe-pipefail
+    description: Command uses bash-only pipefail under the default shell
+    command: |
+      set -euo pipefail
+      echo ok | tee /tmp/invoker-pipefail-proof
+EOF
+
+  local output
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected non-zero exit code for pipefail command without bash" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "non_portable_pipefail" and .field == "command" and .taskId == "unsafe-pipefail")] | length == 1' &>/dev/null; then
+    echo "Expected non_portable_pipefail for unsafe-pipefail command" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+# Test: bash-wrapped pipefail commands remain valid
+test_pipefail_with_bash_validates() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: pipefail-bash-test
+repoUrl: git@github.com:user/repo.git
+onFinish: none
+tasks:
+  - id: bash-pipefail
+    description: Command explicitly runs bash for pipefail support
+    command: >-
+      bash -lc 'set -euo pipefail; echo ok | tee /tmp/invoker-pipefail-proof'
+EOF
+
+  local output
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+
+  if [[ $exit_code -ne 0 ]]; then
+    echo "Expected exit code 0, got $exit_code" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if ! echo "$output" | grep -q '"valid"[[:space:]]*:[[:space:]]*true'; then
+    echo "Expected valid:true in output, got: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
 # Test: experiment variant commands use the same nested shell guard
 test_experiment_variant_nested_shell_variable_expansion_fails() {
   local temp_plan
@@ -505,6 +579,8 @@ run_test "Banned pattern (npx vitest run) should be detected" test_banned_patter
 run_test "Nested shell variable expansion should be rejected" test_nested_shell_variable_expansion_fails
 run_test "Literal smoke command should validate" test_literal_smoke_command_validates
 run_test "Direct shell variable command should validate" test_direct_shell_variable_command_validates
+run_test "Pipefail without bash should be rejected" test_pipefail_without_bash_fails
+run_test "Pipefail with bash should validate" test_pipefail_with_bash_validates
 run_test "Experiment variant nested shell variable expansion should be rejected" test_experiment_variant_nested_shell_variable_expansion_fails
 run_test "Error objects should have correct field structure" test_error_field_structure
 

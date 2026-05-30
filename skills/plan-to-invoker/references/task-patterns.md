@@ -23,6 +23,8 @@ Source of truth: `packages/surfaces/src/slack/plan-conversation.ts:100-116`
 | **Capture visual proof (after)** | `command` | `pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && bash scripts/ui-visual-proof.sh --label after` — depends on **all** implementation tasks |
 | **Invoker-on-Invoker PR publication** | repo-level workflow note | Keep `onFinish: pull_request` + `mergeMode: github`, then publish/update the commit stack with `mergify stack push` once the branch is ready |
 
+Command tasks run under the platform default shell unless the command explicitly invokes another shell. Keep commands POSIX-shell portable by default. If a command needs bash-only options such as `set -o pipefail` or `set -euo pipefail`, wrap it explicitly, for example `bash -lc 'set -euo pipefail; ...'`.
+
 ## Dependency Rules
 
 These are constraints, not guidelines. Violating them produces broken plans.
