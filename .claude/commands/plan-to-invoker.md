@@ -3,7 +3,9 @@ description: Convert a plan into Invoker YAML tasks via the plan-to-invoker skil
 argument-hint: [plan text or file path]
 ---
 
-Use the `plan-to-invoker` skill for this request.
+Use the `plan-to-invoker` skill for this request. Read `skills/plan-to-invoker/SKILL.md` before doing anything else.
+
+If `$ARGUMENTS` contains benchmark/direct-output signals such as `For this benchmark`, `Required output path:`, `Write the final YAML plan to`, or `Do not submit the plan`, follow the skill's benchmark/direct-output mode immediately. In that mode, write a complete YAML document to the literal required path. The file must start with top-level `name:` and include top-level `onFinish:`, `mergeMode:`, `repoUrl:`, and `tasks:` before any task content; do not write `version:` or `metadata:` wrappers.
 
 If `$ARGUMENTS` is provided:
 - Treat it as the input plan context (free text or path to a plan file).

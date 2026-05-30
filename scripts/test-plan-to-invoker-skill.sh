@@ -8,6 +8,8 @@ SKILL_DIR="$REPO_ROOT/skills/plan-to-invoker"
 SKILL_MD="$SKILL_DIR/SKILL.md"
 PLAYBOOK="$SKILL_DIR/playbooks/verify-then-build.md"
 TASK_PATTERNS="$SKILL_DIR/references/task-patterns.md"
+CLAUDE_COMMAND="$REPO_ROOT/.claude/commands/plan-to-invoker.md"
+CLAUDE_MD="$REPO_ROOT/CLAUDE.md"
 CODEX_INSTALLED="$HOME/.codex/skills/invoker-plan-to-invoker"
 CLAUDE_INSTALLED="$HOME/.claude/skills/invoker-plan-to-invoker"
 
@@ -28,6 +30,8 @@ must_contain() {
 [[ -f "$SKILL_MD" ]] || fail "expected $SKILL_MD"
 [[ -f "$PLAYBOOK" ]] || fail "expected $PLAYBOOK"
 [[ -f "$TASK_PATTERNS" ]] || fail "expected $TASK_PATTERNS"
+[[ -f "$CLAUDE_COMMAND" ]] || fail "expected $CLAUDE_COMMAND"
+[[ -f "$CLAUDE_MD" ]] || fail "expected $CLAUDE_MD"
 
 # Installed agent skills use managed invoker-* copies, not legacy unprefixed symlinks.
 for installed in "$CODEX_INSTALLED" "$CLAUDE_INSTALLED"; do
@@ -53,6 +57,36 @@ must_contain "$SKILL_MD" "zero-context executable" "SKILL must require zero-cont
 must_contain "$SKILL_MD" "Review compression" "SKILL must require review compression for implementation plans"
 must_contain "$SKILL_MD" "Review claim:" "SKILL must require review claim metadata"
 must_contain "$SKILL_MD" "Safety invariant:" "SKILL must require safety invariant metadata"
+must_contain "$SKILL_MD" "For benchmark/direct-output prompts with" "SKILL frontmatter must expose benchmark mode before body loading"
+must_contain "$SKILL_MD" "never version or metadata wrappers" "SKILL frontmatter must reject legacy benchmark YAML wrappers"
+must_contain "$SKILL_MD" "## Benchmark/direct-output mode" "SKILL must document benchmark/direct-output mode"
+must_contain "$SKILL_MD" "Treat the literal absolute output path" "SKILL must require literal output path handling"
+must_contain "$SKILL_MD" "Do not run \`env\`, \`printenv\`, \`set\`, repeated shell probes, or \`AskUserQuestion\` to discover \`GENERATED_PLAN\`" "SKILL must forbid env discovery for GENERATED_PLAN"
+must_contain "$SKILL_MD" "Do not scan the repository, schema, examples, references, or scripts unless the prompt explicitly asks for those files." "SKILL must avoid repo scan requirements in benchmark mode"
+must_contain "$SKILL_MD" "Do not self-run \`skill-doctor\`, validation loops, or submit commands." "SKILL must avoid self-validation loops in benchmark mode"
+must_contain "$SKILL_MD" "Compact YAML skeleton for common benchmark plans" "SKILL must include a compact benchmark YAML skeleton"
+must_contain "$SKILL_MD" "Always include the skeleton's required top-level fields" "SKILL must require complete top-level YAML fields in benchmark mode"
+must_contain "$SKILL_MD" "The YAML must start with \`name:\`" "SKILL must require benchmark YAML to start with name"
+must_contain "$SKILL_MD" "Treat any YAML found in the session text as source material only" "SKILL must not treat session YAML as direct-output YAML"
+must_contain "$SKILL_MD" "The first byte of the file must be the \`n\` in top-level \`name:\`." "SKILL must require a complete top-level benchmark plan"
+must_contain "$SKILL_MD" "A benchmark output that begins with \`version:\`, wraps fields under \`metadata:\`, or omits top-level \`repoUrl:\` is invalid." "SKILL must reject the legacy benchmark YAML envelope"
+must_contain "$SKILL_MD" "first five non-comment top-level keys exactly this envelope order" "SKILL must require the benchmark YAML envelope order"
+must_contain "$SKILL_MD" "generate a command-only verification plan" "SKILL must keep isolated benchmark plans command-only"
+must_contain "$SKILL_MD" "Do not generate prompt tasks, nested \`steps:\`, or implementation tasks that would call an agent or autofix." "SKILL must prevent autofix-triggering benchmark tasks"
+must_contain "$SKILL_MD" "deterministic local smoke commands" "SKILL must require local benchmark commands"
+must_contain "$SKILL_MD" "https://github.com/Neko-Catpital-Labs/Invoker.git" "SKILL must provide a non-probing Invoker repoUrl fallback"
+
+# Claude slash command — must load the skill before acting and preserve direct-output contract.
+must_contain "$CLAUDE_COMMAND" "Read \`skills/plan-to-invoker/SKILL.md\` before doing anything else." "Claude command must force skill loading before execution"
+must_contain "$CLAUDE_COMMAND" "benchmark/direct-output signals" "Claude command must route benchmark prompts to direct-output mode"
+must_contain "$CLAUDE_COMMAND" "The file must start with top-level \`name:\`" "Claude command must preserve benchmark YAML top-level name contract"
+must_contain "$CLAUDE_COMMAND" "do not write \`version:\` or \`metadata:\` wrappers." "Claude command must reject legacy benchmark YAML wrappers"
+
+# Claude initial repo context — must block first-turn benchmark probes before skill listing is loaded.
+must_contain "$CLAUDE_MD" "Benchmark direct output" "CLAUDE.md must document benchmark direct-output behavior"
+must_contain "$CLAUDE_MD" "Do not run \`git remote\`, \`env\`, \`printenv\`, \`set\`" "CLAUDE.md must forbid benchmark discovery probes"
+must_contain "$CLAUDE_MD" "Do not write \`version:\` or \`metadata:\` wrappers." "CLAUDE.md must reject legacy benchmark YAML wrappers"
+must_contain "$CLAUDE_MD" "anything that can trigger an agent/autofix" "CLAUDE.md must prevent benchmark autofix-triggering tasks"
 
 # Playbook — Phase 1a / 1b (three lanes) and anti-patterns
 must_contain "$PLAYBOOK" "### Phase 1a — Static analysis" "Playbook must define Phase 1a"
