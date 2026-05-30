@@ -325,6 +325,17 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         return;
       }
 
+      // GET /api/search
+      if (method === 'GET' && path === '/api/search') {
+        const q = query.q || '';
+        const type = query.type === 'workflows' || query.type === 'tasks' ? query.type : 'all';
+        const limit = query.limit ? Math.min(parseInt(query.limit, 10), 50) : 20;
+        const offset = query.offset ? parseInt(query.offset, 10) : 0;
+        const results = persistence.searchWorkflowsAndTasks(q, { type, limit, offset });
+        json(res, 200, results);
+        return;
+      }
+
       // POST /api/workflows/:id/recreate  (legacy: /api/workflows/:id/restart)
       const wfRecreateMatch = path.match(/^\/api\/workflows\/([^/]+)\/recreate$/);
       const wfRestartMatch = path.match(/^\/api\/workflows\/([^/]+)\/restart$/);

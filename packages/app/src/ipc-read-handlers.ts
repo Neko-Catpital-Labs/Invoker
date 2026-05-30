@@ -1,5 +1,5 @@
 import type { BrowserWindow, IpcMain } from 'electron';
-import type { Logger } from '@invoker/contracts';
+import type { Logger, SearchOptions } from '@invoker/contracts';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { AgentRegistry } from '@invoker/execution-engine';
 import type { Orchestrator, TaskDelta, TaskState } from '@invoker/workflow-core';
