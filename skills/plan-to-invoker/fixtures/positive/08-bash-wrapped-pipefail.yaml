@@ -1,0 +1,8 @@
+name: "Bash-wrapped pipefail command"
+repoUrl: git@github.com:example-org/acme-repo.git
+onFinish: none
+tasks:
+  - id: bash-pipefail
+    description: "Command explicitly runs bash for pipefail support"
+    command: >-
+      bash -lc 'set -euo pipefail; echo ok | tee /tmp/invoker-pipefail-proof'
