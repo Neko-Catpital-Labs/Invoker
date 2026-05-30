@@ -21,7 +21,6 @@ interface ValidationError {
 
 const VALID_ON_FINISH = ['none', 'merge', 'pull_request'] as const;
 const VALID_MERGE_MODE = ['manual', 'automatic', 'github', 'external_review'] as const;
-const VALID_EXECUTOR_TYPE = ['worktree', 'docker', 'ssh'] as const;
 const VALID_REQUIRED_STATUS = ['completed', 'review_ready'] as const;
 const VALID_GATE_POLICY = ['completed', 'review_ready'] as const;
 
@@ -174,11 +173,11 @@ function validatePlan(yamlContent: string): ValidationError[] {
     });
   }
 
-  if (raw.runnerKind !== undefined && !VALID_EXECUTOR_TYPE.includes(raw.runnerKind as any)) {
+  if (raw.runnerKind !== undefined) {
     errors.push({
-      errorType: 'invalid_enum_value',
+      errorType: 'unsupported_field',
       field: 'runnerKind',
-      message: `"runnerKind" must be one of: ${VALID_EXECUTOR_TYPE.join(', ')}`,
+      message: '"runnerKind" is no longer supported. Omit it for the default worktree executor, use "poolId" for configured execution pools, or use "dockerImage" for Docker tasks.',
       value: raw.runnerKind,
     });
   }
@@ -299,13 +298,13 @@ function validatePlan(yamlContent: string): ValidationError[] {
       });
     }
 
-    // Validate runnerKind enum
-    if (task.runnerKind !== undefined && !VALID_EXECUTOR_TYPE.includes(task.runnerKind as any)) {
+    // Validate obsolete executor routing fields.
+    if (task.runnerKind !== undefined) {
       errors.push({
-        errorType: 'invalid_enum_value',
+        errorType: 'unsupported_field',
         field: 'runnerKind',
         taskId,
-        message: `Task "${taskId}" runnerKind must be one of: ${VALID_EXECUTOR_TYPE.join(', ')}`,
+        message: `Task "${taskId}" uses unsupported "runnerKind". Omit it for the default worktree executor, use "poolId" for configured execution pools, or use "dockerImage" for Docker tasks.`,
         value: task.runnerKind,
       });
     }
