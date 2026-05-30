@@ -1,10 +1,15 @@
-import { spawn } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve, join } from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
-import type { Logger, WorkResponse } from '@invoker/contracts';
+import type { Logger } from '@invoker/contracts';
 import { SQLiteAdapter, SqliteTaskRepository } from '@invoker/data-store';
+import {
+  ExecutorRegistry,
+  TaskRunner,
+  WorktreeExecutor,
+  registerBuiltinAgents,
+} from '@invoker/execution-engine';
 import {
   IpcBus,
   TransportError,
@@ -15,6 +20,7 @@ import {
   Orchestrator,
   parsePlanFile,
   type OrchestratorMessageBus,
+  type PlanDefinition,
   type TaskState,
 } from '@invoker/workflow-core';
 
@@ -48,6 +54,42 @@ type LiveSubmissionResult = {
 
 type CliDeps = {
   createMessageBus?: () => Promise<MessageBus> | MessageBus;
+};
+
+type CliRuntimeConfig = {
+  defaultBranch?: string;
+  maxConcurrency?: number;
+  docker?: {
+    imageName?: string;
+    secretsFile?: string;
+  };
+  remoteTargets?: Record<string, {
+    host: string;
+    user: string;
+    sshKeyPath: string;
+    port?: number;
+    managedWorkspaces?: boolean;
+    remoteInvokerHome?: string;
+    provisionCommand?: string;
+    use_api_key?: boolean;
+    secretsFile?: string;
+    remoteHeartbeatIntervalSeconds?: number;
+  }>;
+  executionPools?: Record<string, {
+    members: Array<
+      | { type: 'ssh'; id: string; maxConcurrentTasks?: number }
+      | { type: 'worktree'; id: string; maxConcurrentTasks?: number }
+    >;
+    selectionStrategy?: 'roundRobin' | 'leastLoaded';
+    maxConcurrentTasksPerMember?: number;
+  }>;
+  defaultPoolId?: string;
+  executorRoutingRules?: Array<{
+    pattern?: string;
+    regex?: string;
+    poolId: string;
+    strategy?: 'enforce' | 'route';
+  }>;
 };
 
 const silentLogger: Logger = {
@@ -207,79 +249,68 @@ async function submitPlanToLiveOwner(
   };
 }
 
-async function runShellCommand(command: string, cwd: string): Promise<{ exitCode: number; output: string }> {
-  return new Promise((resolveCommand) => {
-    let output = '';
-    const child = spawn(command, {
-      cwd,
-      shell: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: process.env,
-    });
-
-    child.stdout.on('data', (chunk: Buffer) => {
-      const text = chunk.toString();
-      output += text;
-      process.stdout.write(text);
-    });
-    child.stderr.on('data', (chunk: Buffer) => {
-      const text = chunk.toString();
-      output += text;
-      process.stderr.write(text);
-    });
-    child.on('error', (err) => {
-      output += `${err.message}\n`;
-      resolveCommand({ exitCode: 1, output });
-    });
-    child.on('close', (code) => {
-      resolveCommand({ exitCode: code ?? 1, output });
-    });
-  });
+function loadRuntimeConfig(configPath?: string): CliRuntimeConfig {
+  if (!configPath) return {};
+  const resolvedPath = resolve(configPath);
+  if (!existsSync(resolvedPath)) {
+    throw new Error(`Config file does not exist: ${resolvedPath}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(resolvedPath, 'utf8'));
+  } catch (err) {
+    throw new Error(`Invalid Invoker config JSON at ${resolvedPath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`Invalid Invoker config at ${resolvedPath}: expected a JSON object`);
+  }
+  return parsed as CliRuntimeConfig;
 }
 
-function responseForTask(
-  task: TaskState,
-  status: WorkResponse['status'],
-  outputs: WorkResponse['outputs'],
-): WorkResponse {
+function isTerminalTaskStatus(status: TaskState['status']): boolean {
+  return status === 'completed'
+    || status === 'failed'
+    || status === 'closed'
+    || status === 'needs_input'
+    || status === 'review_ready'
+    || status === 'awaiting_approval'
+    || status === 'stale';
+}
+
+function resolvePlanLocalPath(value: string | undefined, cwd: string): string | undefined {
+  if (!value || /^[a-z][a-z0-9+.-]*:/i.test(value)) return value;
+  return resolve(cwd, value);
+}
+
+function normalizePlanRuntimePaths(plan: PlanDefinition, cwd: string): PlanDefinition {
   return {
-    requestId: `cli-${task.id}`,
-    actionId: task.id,
-    attemptId: task.execution.selectedAttemptId,
-    executionGeneration: task.execution.generation ?? 0,
-    status,
-    outputs,
+    ...plan,
+    repoUrl: resolvePlanLocalPath(plan.repoUrl, cwd) ?? plan.repoUrl,
+    intermediateRepoUrl: resolvePlanLocalPath(plan.intermediateRepoUrl, cwd),
   };
 }
 
-async function executeStartedTasks(orchestrator: Orchestrator, tasks: TaskState[], cwd: string): Promise<void> {
-  const queue = [...tasks];
-  while (queue.length > 0) {
-    const task = queue.shift()!;
-    if (task.config.isMergeNode) {
-      queue.push(...orchestrator.handleWorkerResponse(responseForTask(task, 'completed', {
-        exitCode: 0,
-        summary: 'No merge action configured for standalone CLI run.',
-      })));
-      continue;
+async function waitForWorkflowToSettle(
+  orchestrator: Orchestrator,
+  workflowId: string,
+  timeoutMs = 24 * 60 * 60 * 1000,
+): Promise<TaskState[]> {
+  const startedAt = Date.now();
+  while (true) {
+    const tasks = orchestrator.getAllTasks().filter((task) => task.config.workflowId === workflowId);
+    if (tasks.length > 0 && tasks.every((task) => isTerminalTaskStatus(task.status))) {
+      return tasks;
     }
-
-    if (!task.config.command) {
-      queue.push(...orchestrator.handleWorkerResponse(responseForTask(task, 'failed', {
-        exitCode: 1,
-        error: 'Standalone CLI v1 supports command tasks only.',
-      })));
-      continue;
+    if (
+      tasks.some((task) => task.status === 'failed')
+      && tasks.every((task) => task.status !== 'running' && task.status !== 'fixing_with_ai')
+    ) {
+      return tasks;
     }
-
-    const result = await runShellCommand(task.config.command, cwd);
-    queue.push(...orchestrator.handleWorkerResponse(responseForTask(
-      task,
-      result.exitCode === 0 ? 'completed' : 'failed',
-      result.exitCode === 0
-        ? { exitCode: 0, summary: result.output }
-        : { exitCode: result.exitCode, error: result.output || `Command exited with code ${result.exitCode}` },
-    )));
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error(`Timed out waiting for standalone workflow ${workflowId} to settle`);
+    }
+    await new Promise((resolveTimer) => setTimeout(resolveTimer, 250));
   }
 }
 
@@ -288,9 +319,14 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
   const dbDir = resolve(options.dbDir ?? join(homedir(), '.invoker-cli'));
   mkdirSync(dbDir, { recursive: true });
 
+  const previousInvokerDbDir = process.env.INVOKER_DB_DIR;
   if (options.config) {
     process.env.INVOKER_CONFIG = resolve(options.config);
+    process.env.INVOKER_REPO_CONFIG_PATH = resolve(options.config);
   }
+  process.env.INVOKER_DB_DIR = dbDir;
+  const runtimeConfig = loadRuntimeConfig(options.config);
+  const maxConcurrency = runtimeConfig.maxConcurrency ?? 1;
 
   const persistence = await SQLiteAdapter.create(join(dbDir, 'invoker.db'), {
     ownerCapability: true,
@@ -298,21 +334,57 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
   });
 
   try {
+    const executionAgentRegistry = registerBuiltinAgents();
+    const executorRegistry = new ExecutorRegistry();
+    executorRegistry.register('worktree', new WorktreeExecutor({
+      worktreeBaseDir: join(dbDir, 'worktrees'),
+      cacheDir: join(dbDir, 'repos'),
+      maxWorktrees: maxConcurrency,
+      agentRegistry: executionAgentRegistry,
+    }));
     const orchestrator = new Orchestrator({
       persistence,
       taskRepository: new SqliteTaskRepository(persistence),
       messageBus: noopBus,
       logger: silentLogger,
-      maxConcurrency: 1,
+      maxConcurrency,
+      executorRoutingRules: runtimeConfig.executorRoutingRules ?? [],
+      defaultPoolId: runtimeConfig.defaultPoolId,
+      availablePoolIds: Object.keys(runtimeConfig.executionPools ?? {}),
       launchOutboxMode: 'disabled',
     });
-    const plan = await parsePlanFile(absolutePlanPath);
+    const taskRunner = new TaskRunner({
+      orchestrator,
+      persistence,
+      executorRegistry,
+      cwd: dirname(absolutePlanPath),
+      defaultBranch: runtimeConfig.defaultBranch,
+      dockerConfig: {
+        imageName: runtimeConfig.docker?.imageName,
+        secretsFile: runtimeConfig.docker?.secretsFile,
+      },
+      remoteTargetsProvider: () => loadRuntimeConfig(options.config).remoteTargets ?? {},
+      executionPoolsProvider: () => loadRuntimeConfig(options.config).executionPools ?? {},
+      executionAgentRegistry,
+      callbacks: {
+        onOutput: (taskId, data) => {
+          process.stdout.write(data);
+          try {
+            persistence.appendTaskOutput(taskId, data);
+          } catch {
+            // Output is best effort for standalone CLI summaries.
+          }
+        },
+      },
+      logger: silentLogger,
+    });
+    const plan = normalizePlanRuntimePaths(await parsePlanFile(absolutePlanPath), process.cwd());
     orchestrator.loadPlan(plan);
     const started = orchestrator.startExecution();
-    await executeStartedTasks(orchestrator, started, dirname(absolutePlanPath));
+    await taskRunner.executeTasks(started);
 
     const workflow = persistence.listWorkflows()[0];
-    const tasks = orchestrator.getAllTasks().filter((task) => task.config.workflowId === workflow?.id);
+    const tasks = workflow ? await waitForWorkflowToSettle(orchestrator, workflow.id) : [];
     const failedTasks = tasks.filter((task) => task.status === 'failed').length;
     const completedTasks = tasks.filter((task) => task.status === 'completed').length;
     return {
@@ -323,6 +395,11 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
       mode: 'standalone',
     };
   } finally {
+    if (previousInvokerDbDir === undefined) {
+      delete process.env.INVOKER_DB_DIR;
+    } else {
+      process.env.INVOKER_DB_DIR = previousInvokerDbDir;
+    }
     persistence.close();
   }
 }
