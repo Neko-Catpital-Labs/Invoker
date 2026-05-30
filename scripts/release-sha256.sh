@@ -6,14 +6,18 @@ cd "$ROOT"
 
 OUT_FILE="${1:-release/SHA256SUMS}"
 shift || true
+if [ -d "$OUT_FILE" ]; then
+  OUT_FILE="$OUT_FILE/SHA256SUMS"
+fi
 
 if [ "$#" -gt 0 ]; then
   FILES=("$@")
 else
+  release_dir="$(dirname "$OUT_FILE")"
   FILES=()
   while IFS= read -r file; do
     FILES+=("$file")
-  done < <(find release -maxdepth 1 -type f \( -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' \) | sort)
+  done < <(find "$release_dir" -maxdepth 1 -type f ! -name SHA256SUMS | sort)
 fi
 
 if [ "${#FILES[@]}" -eq 0 ]; then

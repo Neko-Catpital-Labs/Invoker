@@ -1,6 +1,6 @@
 {
   "name": "@invoker/workflow-core",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
@@ -18,8 +18,8 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@invoker/workflow-graph": "workspace:*",
     "@invoker/contracts": "workspace:*",
+    "@invoker/workflow-graph": "workspace:*",
     "neverthrow": "^8.2.0",
     "yaml": "^2.8.2"
   },

@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { dirname, resolve, join } from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
@@ -24,7 +25,7 @@ import {
   type TaskState,
 } from '@invoker/workflow-core';
 
-const VERSION = '0.0.2';
+const VERSION = '0.0.3';
 
 type CliOptions = {
   dbDir?: string;
@@ -55,6 +56,27 @@ type LiveSubmissionResult = {
 type CliDeps = {
   createMessageBus?: () => Promise<MessageBus> | MessageBus;
 };
+
+type DoctorCheck = {
+  name: string;
+  command: string;
+  requiredFor: string;
+  install?: {
+    brew?: string[];
+    apt?: string[];
+    npm?: string[];
+  };
+};
+
+const doctorChecks: DoctorCheck[] = [
+  { name: 'git', command: 'git', requiredFor: 'repository checkout, branches, and merges', install: { brew: ['git'], apt: ['git'] } },
+  { name: 'pnpm', command: 'pnpm', requiredFor: 'workspace dependency installs and local builds', install: { brew: ['pnpm'], npm: ['pnpm'] } },
+  { name: 'gh', command: 'gh', requiredFor: 'GitHub PR and release workflows', install: { brew: ['gh'], apt: ['gh'] } },
+  { name: 'Docker', command: 'docker', requiredFor: 'container executors', install: { brew: ['docker'], apt: ['docker.io'] } },
+  { name: 'Codex CLI', command: 'codex', requiredFor: 'Codex-backed task execution', install: { npm: ['@openai/codex'] } },
+  { name: 'Claude CLI', command: 'claude', requiredFor: 'Claude-backed task execution', install: { npm: ['@anthropic-ai/claude-code'] } },
+  { name: 'ssh', command: 'ssh', requiredFor: 'remote SSH executors', install: { apt: ['openssh-client'] } },
+];
 
 type CliRuntimeConfig = {
   defaultBranch?: string;
@@ -108,11 +130,13 @@ function usage(): string {
   return [
     'Usage:',
     '  invoker-cli run <plan.yaml> [--live|--standalone] [--db-dir <path>] [--config <path>] [--json]',
+    '  invoker-cli doctor [--fix] [--json]',
     '  invoker-cli --help',
     '  invoker-cli --version',
     '',
     'Commands:',
     '  run <plan.yaml>  Submit to a live Invoker UI when available, otherwise run standalone.',
+    '  doctor          Check external runtime tools used by Invoker executors.',
     '',
     'Options:',
     '  --live           Require a running Invoker UI owner and submit over IPC.',
@@ -120,9 +144,87 @@ function usage(): string {
     '  --db-dir <path>  Runtime database directory. Defaults to ~/.invoker-cli',
     '  --config <path>  Optional config path reserved for CLI runtime configuration.',
     '  --json           Emit a machine-readable result summary.',
+    '  --fix            Best-effort install of missing doctor tools.',
     '  --help           Show this help text.',
     '  --version        Show the CLI version.',
   ].join('\n');
+}
+
+function commandExists(command: string): boolean {
+  return spawnSync('sh', ['-c', `command -v ${command} >/dev/null 2>&1`], {
+    stdio: 'ignore',
+  }).status === 0;
+}
+
+function runInstall(command: string, args: string[]): number {
+  const result = spawnSync(command, args, { stdio: 'inherit' });
+  return result.status ?? 1;
+}
+
+function installDoctorTool(check: DoctorCheck): { attempted: boolean; ok: boolean; detail: string } {
+  if (process.platform === 'darwin' && commandExists('brew') && check.install?.brew?.length) {
+    const code = runInstall('brew', ['install', ...check.install.brew]);
+    return { attempted: true, ok: code === 0, detail: `brew install ${check.install.brew.join(' ')}` };
+  }
+  if (process.platform === 'linux' && commandExists('apt-get') && check.install?.apt?.length) {
+    const runner = typeof process.getuid === 'function' && process.getuid() === 0 ? 'apt-get' : commandExists('sudo') ? 'sudo' : '';
+    if (runner) {
+      const args = runner === 'sudo'
+        ? ['apt-get', 'install', '-y', ...check.install.apt]
+        : ['install', '-y', ...check.install.apt];
+      const code = runInstall(runner, args);
+      return { attempted: true, ok: code === 0, detail: `${runner} ${args.join(' ')}` };
+    }
+  }
+  if (commandExists('npm') && check.install?.npm?.length) {
+    const code = runInstall('npm', ['install', '-g', ...check.install.npm]);
+    return { attempted: true, ok: code === 0, detail: `npm install -g ${check.install.npm.join(' ')}` };
+  }
+  return { attempted: false, ok: false, detail: 'No supported installer available' };
+}
+
+function parseDoctorArgs(argv: string[]): { fix: boolean; json: boolean } {
+  const options = { fix: false, json: false };
+  for (const arg of argv) {
+    if (arg === '--fix') options.fix = true;
+    else if (arg === '--json') options.json = true;
+    else throw new Error(`Unknown doctor option: ${arg}`);
+  }
+  return options;
+}
+
+function runDoctor(argv: string[]): number {
+  const options = parseDoctorArgs(argv);
+  const results = doctorChecks.map((check) => {
+    let available = commandExists(check.command);
+    let fix: ReturnType<typeof installDoctorTool> | undefined;
+    if (!available && options.fix) {
+      fix = installDoctorTool(check);
+      available = commandExists(check.command);
+    }
+    return {
+      name: check.name,
+      command: check.command,
+      requiredFor: check.requiredFor,
+      available,
+      fix,
+    };
+  });
+
+  if (options.json) {
+    process.stdout.write(`${JSON.stringify({ ok: results.every((result) => result.available), checks: results })}\n`);
+  } else {
+    for (const result of results) {
+      const status = result.available ? 'ok' : 'missing';
+      const fix = result.fix ? ` (${result.fix.detail}: ${result.fix.ok ? 'ok' : 'failed'})` : '';
+      process.stdout.write(`${status.padEnd(7)} ${result.command.padEnd(8)} ${result.requiredFor}${fix}\n`);
+    }
+    if (results.some((result) => !result.available)) {
+      process.stdout.write('\nAuthentication-dependent setup, such as gh auth login and provider CLI login, remains manual.\n');
+    }
+  }
+
+  return results.every((result) => result.available) ? 0 : 1;
 }
 
 function parseArgs(argv: string[]): { command?: string; planPath?: string; options: CliOptions } {
@@ -421,6 +523,9 @@ async function createDefaultMessageBus(): Promise<MessageBus> {
 export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps = {}): Promise<number> {
   let bus: MessageBus | undefined;
   try {
+    if (argv[0] === 'doctor') {
+      return runDoctor(argv.slice(1));
+    }
     const parsed = parseArgs(argv);
     if (!parsed.command || parsed.command === '--help') {
       process.stdout.write(`${usage()}\n`);
@@ -477,6 +582,14 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
-  process.exitCode = await main();
+const entrypointUrl = (import.meta as { url?: string }).url;
+if (!entrypointUrl || entrypointUrl === pathToFileURL(process.argv[1] ?? '').href) {
+  main()
+    .then((code) => {
+      process.exitCode = code;
+    })
+    .catch((err) => {
+      process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+      process.exitCode = 1;
+    });
 }

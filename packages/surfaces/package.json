@@ -1,6 +1,6 @@
 {
   "name": "@invoker/surfaces",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
@@ -10,10 +10,10 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@invoker/workflow-core": "workspace:*",
-    "@invoker/data-store": "workspace:*",
     "@invoker/contracts": "workspace:*",
+    "@invoker/data-store": "workspace:*",
     "@invoker/transport": "workspace:*",
+    "@invoker/workflow-core": "workspace:*",
     "@slack/bolt": "^4.6.0",
     "yaml": "^2.7.0"
   },
