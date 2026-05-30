@@ -2,7 +2,7 @@
   "name": "@invoker/app",
   "productName": "Invoker",
   "desktopName": "invoker.desktop",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Invoker desktop app",
   "homepage": "https://github.com/Neko-Catpital-Labs/Invoker",
   "author": {
@@ -24,12 +24,8 @@
         "to": "skills"
       },
       {
-        "from": "../cli/dist",
-        "to": "invoker-cli/dist"
-      },
-      {
-        "from": "../cli/package.json",
-        "to": "invoker-cli/package.json"
+        "from": "../../release/embedded-cli/invoker-cli",
+        "to": "invoker-cli/invoker-cli"
       }
     ],
     "files": [
@@ -44,7 +40,8 @@
     "publish": null,
     "mac": {
       "target": [
-        "dmg"
+        "dmg",
+        "zip"
       ],
       "category": "public.app-category.developer-tools",
       "icon": "assets/icons/mac/icon.icns"
@@ -73,14 +70,15 @@
     "test:e2e:quiet": "pnpm run test:e2e"
   },
   "dependencies": {
-    "@invoker/workflow-core": "workspace:*",
-    "@invoker/execution-engine": "workspace:*",
-    "@invoker/data-store": "workspace:*",
+    "@invoker/cli": "workspace:*",
     "@invoker/contracts": "workspace:*",
+    "@invoker/data-store": "workspace:*",
+    "@invoker/execution-engine": "workspace:*",
     "@invoker/runtime-adapters": "workspace:*",
     "@invoker/runtime-service": "workspace:*",
     "@invoker/surfaces": "workspace:*",
     "@invoker/transport": "workspace:*",
+    "@invoker/workflow-core": "workspace:*",
     "@slack/bolt": "^4.6.0",
     "dockerode": "^4.0.0",
     "sql.js": "^1.12.0",

@@ -1,6 +1,6 @@
 {
   "name": "@invoker/test-kit",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "private": true,
   "type": "module",
   "main": "src/index.ts",
@@ -16,9 +16,9 @@
     "test": "echo 'test-kit: no tests (utility-only package)'"
   },
   "dependencies": {
-    "@invoker/workflow-core": "workspace:*",
+    "@invoker/contracts": "workspace:*",
     "@invoker/execution-engine": "workspace:*",
-    "@invoker/contracts": "workspace:*"
+    "@invoker/workflow-core": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^25.3.3",

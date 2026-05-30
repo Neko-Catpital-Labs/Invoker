@@ -1,6 +1,6 @@
 {
   "name": "@invoker/persistence",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
@@ -23,8 +23,8 @@
   },
   "devDependencies": {
     "@types/sql.js": "^1.4.0",
+    "tsup": "^8.0.0",
     "typescript": "^5.7.0",
-    "vitest": "^3.0.0",
-    "tsup": "^8.0.0"
+    "vitest": "^3.0.0"
   }
 }

@@ -298,6 +298,24 @@ export interface OpenTerminalResponse {
   session?: TerminalSessionDescriptor;
 }
 
+// ── Search types ────────────────────────────────────────────
+
+export interface SearchResultItem {
+  kind: 'workflow' | 'task';
+  id: string;
+  workflowId?: string;      // populated for task results
+  title: string;            // workflow name or task description
+  subtitle: string;         // "Workflow · <status>" or "Task · <workflowName>"
+  status: string;
+  createdAt: string;
+}
+
+export interface SearchOptions {
+  type?: 'workflows' | 'tasks' | 'all';
+  limit?: number;
+  offset?: number;
+}
+
 // ── Invoke Channel Registry ─────────────────────────────────
 // Each key is the channel name string; value is { request, response }.
 // `request` is a tuple of the arguments passed after the channel name.
@@ -576,6 +594,10 @@ export const IpcChannels = {
   'invoker:get-bundled-skills-status': {} as {
     request: [];
     response: BundledSkillsStatus;
+  },
+  'invoker:search': {} as {
+    request: [query: string, options?: SearchOptions];
+    response: SearchResultItem[];
   },
   'invoker:install-bundled-skills': {} as {
     request: [mode?: BundledSkillsInstallMode];
