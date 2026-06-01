@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# The exit-code contract (only 0, 1, or 2) is load-bearing per the
+# INV-63 experiment brief at docs/context/inv-63/experiment-brief.md
+# (EXP-5). The brief also records the single-orchestrator design
+# (EXP-1, EXP-2) against the rejected multi-script alternative ALT-A.
+# Any change that introduces an out-of-band exit code or removes a
+# documented run_check call must reopen the brief.
 # skill-doctor.sh: Deterministic orchestrator for plan validation scripts
 # Usage: bash skill-doctor.sh [OPTIONS] <plan-file>
 #
