@@ -132,6 +132,7 @@ import {
   buildInvalidationDeps,
   deleteAllWorkflows as sharedDeleteAllWorkflows,
   deleteAllWorkflowsBulk as sharedDeleteAllWorkflowsBulk,
+  applyAutoFixAccounting,
   fixWithAgentAction,
   rebaseRetry,
   rebaseRecreate,
@@ -173,7 +174,12 @@ import {
 import { computeDeferredLaunchTiming } from './deferred-runnable.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import { evaluateExecutingStall } from './executing-stall.js';
-import { listOpenFixIntentsForTask } from './auto-fix-intents.js';
+import {
+  AUTO_FIX_CONTEXT,
+  fixRequestTaskId,
+  isAutoFixContext,
+  listOpenFixIntentsForTask,
+} from './auto-fix-intents.js';
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
 import {
   buildActionGraphDiagnostics,
@@ -1500,6 +1506,39 @@ function createEmbeddedTerminalBackendFromConfig(
     workflowMetadataPublisher?.requestPublish(reason);
   };
 
+  /**
+   * Open (queued|running) fix intents already enqueued for `taskId`,
+   * recognizing BOTH the `invoker:fix-with-agent` and `headless.exec fix`
+   * shapes (via {@link listOpenFixIntentsForTask}). This is the single
+   * source of truth for duplicate-fix suppression: every accept seam
+   * (manual IPC fix, headless `fix`, and the auto-fix scheduler) consults
+   * it before enqueuing a new fix request.
+   */
+  const findOpenFixIntentsForTask = (taskId: string) => {
+    const workflowId = workflowIdForTaskArg(taskId);
+    if (!workflowId) return [];
+    const openIntents = persistence.listWorkflowMutationIntents(workflowId, ['queued', 'running']);
+    return listOpenFixIntentsForTask(openIntents, taskId);
+  };
+
+  /**
+   * Centralized duplicate-fix suppression check used at accept time. Returns
+   * true (and logs) when an incoming fix request — in either the
+   * `invoker:fix-with-agent` or `headless.exec fix` shape — targets a task
+   * that already has an open fix intent, so the caller should skip enqueue.
+   */
+  const shouldSuppressDuplicateFixRequest = (channel: string, args: unknown[]): boolean => {
+    const taskId = fixRequestTaskId(channel, args);
+    if (!taskId) return false;
+    const openTaskFixIntents = findOpenFixIntentsForTask(taskId);
+    if (openTaskFixIntents.length === 0) return false;
+    logAutoFixDebug(taskId, 'accept-skip-duplicate', {
+      channel,
+      existingIntentIds: openTaskFixIntents.map((intent) => intent.id),
+    });
+    return true;
+  };
+
   const buildAutoFixQueueSnapshot = (taskId: string): Record<string, unknown> => {
     const workflowId = workflowIdForTaskArg(taskId);
     if (!workflowId) {
@@ -1570,21 +1609,38 @@ function createEmbeddedTerminalBackendFromConfig(
     }
     const savedError = task.execution.error ?? '';
     const recoveryRoute = selectFailureRecoveryRoute(task, savedError);
+
+    // When the explicit auto-fix context is present, apply auto-fix
+    // accounting (re-check the retry budget, increment autoFixAttempts once,
+    // select the configured auto-fix agent) through the SAME shared helper
+    // the headless `fix --auto-fix` command uses, so an accepted auto-fix
+    // submission increments exactly once. Manual fixes (source==='ipc')
+    // skip this entirely and never consume auto-fix budget.
+    let effectiveAgent = agentName;
+    if (source === 'auto-fix') {
+      const accounting = applyAutoFixAccounting(taskId, {
+        orchestrator,
+        persistence,
+        getAutoFixAgent: () => loadConfig().autoFixAgent,
+      });
+      if (!accounting.accepted) {
+        logAutoFixDebug(taskId, 'dispatch-skip-budget-exhausted', {
+          attempts: accounting.attempts,
+          max: accounting.max,
+        });
+        return [];
+      }
+      effectiveAgent = effectiveAgent ?? accounting.agentName;
+      logAutoFixDebug(taskId, 'dispatch-attempt-bumped', {
+        attemptsBefore: accounting.attempts - 1,
+        attemptsAfter: accounting.attempts,
+      });
+    }
     logger.info(
-      `fix-with-agent: "${taskId}" agent=${agentName ?? 'claude'} source=${source} route=${recoveryRoute.kind}`,
+      `fix-with-agent: "${taskId}" agent=${effectiveAgent ?? 'claude'} source=${source} route=${recoveryRoute.kind}`,
       { module: 'ipc' },
     );
 
-    if (source === 'auto-fix') {
-      const attemptsBefore = task?.execution.autoFixAttempts ?? 0;
-      const attemptsAfter = attemptsBefore + 1;
-      persistence.updateTask(taskId, {
-        execution: {
-          autoFixAttempts: attemptsAfter,
-        },
-      });
-      logAutoFixDebug(taskId, 'dispatch-attempt-bumped', { attemptsBefore, attemptsAfter });
-    }
     const result = await fixWithAgentAction(
       taskId,
       {
@@ -1594,10 +1650,10 @@ function createEmbeddedTerminalBackendFromConfig(
         autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
       },
       {
-        agentName,
+        agentName: effectiveAgent,
         recoveryRoute,
         recreateOutputLabel: source === 'auto-fix' ? 'Auto-fix' : 'Fix with AI',
-        failureOutputLabel: source === 'auto-fix' ? 'Auto-fix' : `Fix with ${agentName ?? 'Claude'}`,
+        failureOutputLabel: source === 'auto-fix' ? 'Auto-fix' : `Fix with ${effectiveAgent ?? 'Claude'}`,
         signal: activeMutationContext?.signal,
       },
     );
@@ -1627,8 +1683,7 @@ function createEmbeddedTerminalBackendFromConfig(
       });
       return;
     }
-    const openIntents = persistence.listWorkflowMutationIntents(workflowId, ['queued', 'running']);
-    const openTaskFixIntents = listOpenFixIntentsForTask(openIntents, taskId);
+    const openTaskFixIntents = findOpenFixIntentsForTask(taskId);
     if (openTaskFixIntents.length > 0) {
       logAutoFixDebug(taskId, 'schedule-skip', {
         reason: 'already-queued-intent',
@@ -1640,11 +1695,15 @@ function createEmbeddedTerminalBackendFromConfig(
     const selectedAgent = configuredAgent && configuredAgent.length > 0 ? configuredAgent : undefined;
     logAutoFixDebug(taskId, 'schedule-enqueue');
     logAutoFixDebug(taskId, 'schedule-enqueued');
+    // Carry the explicit auto-fix context as a third positional arg so the
+    // PERSISTED intent dispatches with auto-fix semantics even after a
+    // restart/replay — the in-memory `op` closure below is dropped by the
+    // coordinator, which dispatches purely from the persisted (channel, args).
     void runWorkflowMutation(
       workflowId,
       'normal',
       'invoker:fix-with-agent',
-      [taskId, selectedAgent],
+      [taskId, selectedAgent, AUTO_FIX_CONTEXT],
       async () => executeFixWithAgentMutation(taskId, selectedAgent, 'auto-fix'),
     )
       .then(() => {
@@ -2250,9 +2309,23 @@ function createEmbeddedTerminalBackendFromConfig(
     resolveWorkflowId: (...args: unknown[]) => string | undefined,
     priority: WorkflowMutationPriority,
     handler: (...args: unknown[]) => Promise<TResult>,
+    options?: {
+      /**
+       * Optional accept-time guard run BEFORE the request is enqueued. When
+       * it returns `{ skip: true }` the request is dropped (returning
+       * `result`) and never reaches the coordinator. Used to suppress
+       * duplicate fix requests. Not consulted on the dispatch path, so a
+       * persisted intent always runs.
+       */
+      skipAccept?: (...args: unknown[]) => { skip: boolean; result?: TResult };
+    },
   ): void {
     workflowMutationDispatcher.set(channel, (...args: unknown[]) => handler(...args));
     registerGuiMutationHandler(channel, async (...args: unknown[]) => {
+      const decision = options?.skipAccept?.(...args);
+      if (decision?.skip) {
+        return decision.result as TResult;
+      }
       const workflowId = resolveWorkflowId(...args);
       return runWorkflowMutation(workflowId, priority, channel, args, () => handler(...args));
     });
@@ -2834,6 +2907,12 @@ function createEmbeddedTerminalBackendFromConfig(
           traceId,
         };
         logHeadlessExecReceived(payload, 'gui');
+        // Centralized duplicate suppression for the `headless.exec fix`
+        // shape: skip a worker-submitted fix when an open fix intent already
+        // exists for the target task (covers both shapes via fixRequestTaskId).
+        if (shouldSuppressDuplicateFixRequest('headless.exec', [payload])) {
+          return { ok: true, suppressed: 'duplicate-fix-intent' };
+        }
         const { workflowId, priority } = classifyHeadlessExecMutation(payload);
         const acknowledgement = acknowledgeNoTrackHeadlessExec(payload, workflowId, priority, 'gui');
         if (acknowledgement) return acknowledgement;
@@ -3762,16 +3841,21 @@ function createEmbeddedTerminalBackendFromConfig(
       'invoker:fix-with-agent',
       (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
       'normal',
-      async (taskIdArg: unknown, agentNameArg?: unknown) => {
+      async (taskIdArg: unknown, agentNameArg?: unknown, autoFixArg?: unknown) => {
       const taskId = String(taskIdArg);
       const agentName = agentNameArg === undefined ? undefined : String(agentNameArg);
+      // An explicit auto-fix context (carried in the persisted intent args by
+      // scheduleAutoFix) selects auto-fix semantics; its absence preserves
+      // manual right-click "Fix with AI" behaviour unchanged.
+      const source: 'ipc' | 'auto-fix' = isAutoFixContext(autoFixArg) ? 'auto-fix' : 'ipc';
+      const context = source === 'auto-fix' ? 'ipc.fix-with-agent.auto-fix' : 'ipc.fix-with-agent';
       try {
-        const started = await executeFixWithAgentMutation(taskId, agentName, 'ipc');
+        const started = await executeFixWithAgentMutation(taskId, agentName, source);
         await finalizeMutationWithGlobalTopup({
           orchestrator,
           taskExecutor: requireTaskExecutor(),
           logger,
-          context: 'ipc.fix-with-agent',
+          context,
           started,
           mutationTiming: activeMutationContext?.mutationTiming,
           scopedTaskIds: [taskId],
@@ -3781,12 +3865,20 @@ function createEmbeddedTerminalBackendFromConfig(
           orchestrator,
           taskExecutor: requireTaskExecutor(),
           logger,
-          context: 'ipc.fix-with-agent.failure',
+          context: `${context}.failure`,
           mutationTiming: activeMutationContext?.mutationTiming,
         });
         logger.error(`fix-with-agent failed: ${err}`, { module: 'ipc' });
         throw err;
       }
+      },
+      {
+        // Centralized duplicate suppression: skip a new manual/IPC fix
+        // request when an open fix intent already exists for the task.
+        skipAccept: (...args: unknown[]) =>
+          shouldSuppressDuplicateFixRequest('invoker:fix-with-agent', args)
+            ? { skip: true, result: undefined }
+            : { skip: false },
       },
     );
 

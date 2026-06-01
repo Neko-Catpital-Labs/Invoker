@@ -1020,6 +1020,64 @@ function selectAutoFixPostRouteStrategy(task: TaskState): AutoFixPostRouteStrate
   return task.config.isMergeNode ? 'resume_from_fixed_tip' : 'rerun_task';
 }
 
+export interface AutoFixAccounting {
+  /** True when the retry budget allowed the submission and the attempt was counted. */
+  accepted: boolean;
+  /** Configured auto-fix agent (trimmed) or undefined to fall back to the executor default. */
+  agentName?: string;
+  /** autoFixAttempts AFTER this accounting (== attemptsBefore when not accepted). */
+  attempts: number;
+  /** Retry budget from {@link Orchestrator.getAutoFixRetryBudget}. */
+  max: number;
+}
+
+/**
+ * Apply auto-fix accounting for a fix submission that carries an explicit
+ * auto-fix context. This is the single seam that both the GUI mutation
+ * handler (`executeFixWithAgentMutation`) and the headless `fix --auto-fix`
+ * command share, so an accepted auto-fix submission increments
+ * `autoFixAttempts` EXACTLY ONCE regardless of entry point:
+ *
+ *   1. re-check the retry budget via `orchestrator.shouldAutoFix(taskId)`;
+ *   2. increment `autoFixAttempts` once (budget permitting);
+ *   3. select the configured auto-fix agent (empty config → undefined so
+ *      the executor default applies).
+ *
+ * Returns `accepted: false` WITHOUT incrementing when the budget is
+ * exhausted. Manual "Fix with AI" never calls this, so manual fixes never
+ * consume auto-fix budget.
+ */
+export function applyAutoFixAccounting(
+  taskId: string,
+  deps: {
+    orchestrator: Pick<Orchestrator, 'shouldAutoFix' | 'getTask' | 'getAutoFixRetryBudget'>;
+    persistence: Pick<SQLiteAdapter, 'updateTask' | 'logEvent'>;
+    getAutoFixAgent?: () => string | undefined;
+  },
+): AutoFixAccounting {
+  const max = deps.orchestrator.getAutoFixRetryBudget(taskId);
+  const attemptsBefore = deps.orchestrator.getTask(taskId)?.execution.autoFixAttempts ?? 0;
+  if (!deps.orchestrator.shouldAutoFix(taskId)) {
+    return { accepted: false, attempts: attemptsBefore, max };
+  }
+  const attempts = attemptsBefore + 1;
+  // Increment FIRST (before any delta can re-trigger), matching autoFixOnFailure.
+  deps.persistence.updateTask(taskId, { execution: { autoFixAttempts: attempts } });
+  deps.persistence.logEvent?.(taskId, 'debug.auto-fix', {
+    phase: 'auto-fix-accounting-applied',
+    attemptsBefore,
+    attemptsAfter: attempts,
+    maxRetries: max,
+  });
+  const configured = deps.getAutoFixAgent?.()?.trim();
+  return {
+    accepted: true,
+    agentName: configured && configured.length > 0 ? configured : undefined,
+    attempts,
+    max,
+  };
+}
+
 async function recordFixedIntegrationAnchor(
   taskId: string,
   task: TaskState,

@@ -37,6 +37,7 @@ import {
   setWorkflowMetadata,
 } from './metadata-setter.js';
 import {
+  applyAutoFixAccounting,
   approveTask,
   autoFixOnReviewGateFailure,
   deleteAllWorkflows as sharedDeleteAllWorkflows,
@@ -49,6 +50,7 @@ import {
   forkWorkflow as sharedForkWorkflow,
   setWorkflowMergeMode,
 } from './workflow-actions.js';
+import { parseAutoFixArgs } from './auto-fix-intents.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 import type { CostGroupDimension } from './cost-rollup.js';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
@@ -1052,9 +1054,14 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'rebase-recreate':
       await headlessRebaseRecreate(args[1], deps);
       break;
-    case 'fix':
-      await headlessFix(args[1], deps, args[2]);
+    case 'fix': {
+      // `fix <taskId> [claude|codex] [--auto-fix]` — the optional --auto-fix
+      // flag (any position) tags a worker-submitted auto-fix so it runs with
+      // retry-budget/attempt-counting/auto-fix-label semantics.
+      const { autoFix, rest } = parseAutoFixArgs(args.slice(2));
+      await headlessFix(args[1], deps, rest[0], autoFix);
       break;
+    }
     case 'resolve-conflict':
       await headlessResolveConflict(args[1], deps, args[2]);
       break;
@@ -1609,15 +1616,43 @@ async function headlessRetryTask(taskId: string, deps: HeadlessDeps): Promise<vo
   });
 }
 
-async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string): Promise<void> {
-  if (!taskId) throw new Error('Missing taskId. Usage: --headless fix <taskId> [claude|codex]');
+async function headlessFix(
+  taskId: string,
+  deps: HeadlessDeps,
+  agentArg?: string,
+  isAutoFix = false,
+): Promise<void> {
+  if (!taskId) throw new Error('Missing taskId. Usage: --headless fix <taskId> [claude|codex] [--auto-fix]');
   const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'fix');
   if (!restored) return;
   taskId = restored.resolvedTaskId;
 
   const te = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, te);
-  const agent = (agentArg ?? 'claude').toLowerCase();
+
+  // When the explicit --auto-fix context is present, run the SAME fix route
+  // as manual "Fix with AI" but with auto-fix semantics: re-check the retry
+  // budget, increment autoFixAttempts exactly once, select the configured
+  // auto-fix agent, and use 'Auto-fix' labels. Manual fixes skip this and
+  // never consume auto-fix budget.
+  let selectedAgent = agentArg?.toLowerCase();
+  if (isAutoFix) {
+    const accounting = applyAutoFixAccounting(taskId, {
+      orchestrator: deps.orchestrator,
+      persistence: deps.persistence,
+      getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
+    });
+    if (!accounting.accepted) {
+      process.stdout.write(
+        `Auto-fix skipped for task: ${taskId} (retry budget exhausted: ${accounting.attempts}/${accounting.max}).\n`,
+      );
+      autoFix.unsubscribe();
+      return;
+    }
+    selectedAgent = selectedAgent ?? accounting.agentName;
+  }
+  const agent = selectedAgent ?? 'claude';
+  const label = isAutoFix ? 'Auto-fix' : 'Fix with AI';
   try {
     const result = await fixWithAgentAction(taskId, {
       orchestrator: deps.orchestrator,
@@ -1626,8 +1661,8 @@ async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string
       autoApproveAIFixes: deps.invokerConfig.autoApproveAIFixes,
     }, {
       agentName: agent,
-      recreateOutputLabel: 'Fix with AI',
-      failureOutputLabel: 'Fix with AI',
+      recreateOutputLabel: label,
+      failureOutputLabel: label,
       signal: deps.signal,
     });
     await finalizeMutationWithGlobalTopup({

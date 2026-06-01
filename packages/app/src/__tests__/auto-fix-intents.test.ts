@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type { WorkflowMutationIntent } from '@invoker/data-store';
-import { isFixIntentForTask, listOpenFixIntentsForTask } from '../auto-fix-intents.js';
+import {
+  AUTO_FIX_CONTEXT,
+  AUTO_FIX_FLAG,
+  fixRequestTaskId,
+  isAutoFixContext,
+  isFixIntentForTask,
+  listOpenFixIntentsForTask,
+  parseAutoFixArgs,
+} from '../auto-fix-intents.js';
 
 function makeIntent(overrides: Partial<WorkflowMutationIntent>): WorkflowMutationIntent {
   return {
@@ -52,6 +60,55 @@ describe('auto-fix-intents', () => {
     ];
 
     expect(listOpenFixIntentsForTask(intents, 'wf-1/task-1').map((intent) => intent.id)).toEqual([1, 2]);
+  });
+
+  it('still matches a fix intent that carries an auto-fix context or --auto-fix flag', () => {
+    const withContext = makeIntent({ args: ['wf-1/task-1', 'claude', AUTO_FIX_CONTEXT] });
+    const withFlag = makeIntent({
+      channel: 'headless.exec',
+      args: [{ args: ['fix', 'wf-1/task-1', 'claude', AUTO_FIX_FLAG] }],
+    });
+    expect(isFixIntentForTask(withContext, 'wf-1/task-1')).toBe(true);
+    expect(isFixIntentForTask(withFlag, 'wf-1/task-1')).toBe(true);
+  });
+});
+
+describe('isAutoFixContext', () => {
+  it('recognizes the canonical context and rejects everything else', () => {
+    expect(isAutoFixContext(AUTO_FIX_CONTEXT)).toBe(true);
+    expect(isAutoFixContext({ autoFix: true })).toBe(true);
+    expect(isAutoFixContext({ autoFix: false })).toBe(false);
+    expect(isAutoFixContext('claude')).toBe(false);
+    expect(isAutoFixContext(undefined)).toBe(false);
+    expect(isAutoFixContext(null)).toBe(false);
+  });
+});
+
+describe('parseAutoFixArgs', () => {
+  it('extracts the --auto-fix flag and preserves positional args', () => {
+    expect(parseAutoFixArgs([])).toEqual({ autoFix: false, rest: [] });
+    expect(parseAutoFixArgs(['claude'])).toEqual({ autoFix: false, rest: ['claude'] });
+    expect(parseAutoFixArgs(['claude', AUTO_FIX_FLAG])).toEqual({ autoFix: true, rest: ['claude'] });
+    expect(parseAutoFixArgs([AUTO_FIX_FLAG, 'codex'])).toEqual({ autoFix: true, rest: ['codex'] });
+    expect(parseAutoFixArgs([AUTO_FIX_FLAG])).toEqual({ autoFix: true, rest: [] });
+  });
+});
+
+describe('fixRequestTaskId', () => {
+  it('extracts the task id from the invoker:fix-with-agent shape', () => {
+    expect(fixRequestTaskId('invoker:fix-with-agent', ['wf-1/task-1', 'claude'])).toBe('wf-1/task-1');
+    expect(fixRequestTaskId('invoker:fix-with-agent', ['wf-1/task-1', 'claude', AUTO_FIX_CONTEXT])).toBe('wf-1/task-1');
+    expect(fixRequestTaskId('invoker:fix-with-agent', [])).toBeNull();
+  });
+
+  it('extracts the task id from the headless.exec fix shape', () => {
+    expect(fixRequestTaskId('headless.exec', [{ args: ['fix', 'wf-1/task-1'] }])).toBe('wf-1/task-1');
+    expect(fixRequestTaskId('headless.exec', [{ args: ['fix', 'wf-1/task-1', 'claude', AUTO_FIX_FLAG] }])).toBe('wf-1/task-1');
+  });
+
+  it('returns null for non-fix requests', () => {
+    expect(fixRequestTaskId('headless.exec', [{ args: ['retry-task', 'wf-1/task-1'] }])).toBeNull();
+    expect(fixRequestTaskId('invoker:approve', ['wf-1/task-1'])).toBeNull();
   });
 });
 
