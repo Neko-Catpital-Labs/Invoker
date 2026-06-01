@@ -36,6 +36,7 @@ import {
   EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE,
 } from './isExperimentSpawnPivot.js';
 import { parsePlanText } from './lib/plan-parser.js';
+import { isMenuNavKey, moveFocus, type NavRow } from './lib/menu-keyboard.js';
 import type { SystemDiagnostics } from '@invoker/contracts';
 
 type ModalState =
@@ -116,6 +117,7 @@ function WorkflowContextMenu({
   const menuRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: x, top: y });
   const [showMore, setShowMore] = useState(false);
+  const [focusedIndex, setFocusedIndex] = useState(0);
 
   useLayoutEffect(() => {
     if (!menuRef.current) return;
@@ -165,6 +167,11 @@ function WorkflowContextMenu({
     };
   }, [onClose]);
 
+  // Focus the menu on open so it owns keyboard input immediately.
+  useEffect(() => {
+    menuRef.current?.focus({ preventScroll: true });
+  }, []);
+
   const runAction = (action: (workflowId: string) => void) => {
     action(workflowId);
     onClose();
@@ -172,6 +179,63 @@ function WorkflowContextMenu({
 
   const buttonClass = 'w-full px-3 py-1.5 text-left text-sm text-gray-100 hover:bg-gray-700';
   const dangerButtonClass = 'w-full px-3 py-1.5 text-left text-sm text-red-300 hover:bg-gray-700';
+  const moreButtonClass = 'w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-gray-700';
+
+  // Data-driven rows so keyboard navigation and click share one model.
+  interface WorkflowMenuRow extends NavRow {
+    id: string;
+    label: string;
+    className: string;
+    activate: () => void;
+  }
+
+  const safeRows: WorkflowMenuRow[] = [
+    { id: 'open-workflow', label: 'Open Workflow', enabled: true, className: buttonClass, activate: () => runAction(onOpenWorkflow) },
+    { id: 'open-pr', label: 'Open PR', enabled: true, className: buttonClass, activate: () => runAction(onOpenPr) },
+    { id: 'retry-workflow', label: 'Retry Workflow', enabled: true, className: buttonClass, activate: () => runAction(onRetryWorkflow) },
+    { id: 'copy-workflow-id', label: 'Copy Workflow ID', enabled: true, className: buttonClass, activate: () => runAction(onCopyWorkflowId) },
+  ];
+
+  // Expand the danger zone and move the highlight to its first row.
+  const expandMore = () => {
+    setShowMore(true);
+    setFocusedIndex(safeRows.length);
+  };
+
+  const dangerRows: WorkflowMenuRow[] = [
+    { id: 'rebase-retry', label: 'Rebase and Retry', enabled: true, className: buttonClass, activate: () => runAction(onRebaseRetry) },
+    { id: 'rebase-recreate', label: 'Rebase and Recreate', enabled: true, className: dangerButtonClass, activate: () => runAction(onRebaseRecreate) },
+    { id: 'recreate-workflow', label: 'Recreate Workflow', enabled: true, className: dangerButtonClass, activate: () => runAction(onRecreateWorkflow) },
+    { id: 'cancel-workflow', label: 'Cancel Workflow', enabled: true, className: dangerButtonClass, activate: () => runAction(onCancelWorkflow) },
+    { id: 'delete-workflow', label: 'Delete Workflow', enabled: true, className: dangerButtonClass, activate: () => runAction(onDeleteWorkflow) },
+  ];
+
+  const moreRow: WorkflowMenuRow = {
+    id: 'more',
+    label: 'More',
+    enabled: true,
+    className: moreButtonClass,
+    activate: expandMore,
+  };
+
+  const navRows: WorkflowMenuRow[] = showMore
+    ? [...safeRows, ...dangerRows]
+    : [...safeRows, moreRow];
+
+  // The danger zone (or the More button) is visually separated from the safe rows.
+  const separatorIndex = safeRows.length;
+
+  const handleKeyDown = (event: React.KeyboardEvent) => {
+    if (!isMenuNavKey(event.key)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      setFocusedIndex((current) => moveFocus(navRows, current, event.key === 'ArrowDown' ? 1 : -1));
+      return;
+    }
+    // Enter or Space activates the highlighted row.
+    navRows[focusedIndex]?.activate();
+  };
 
   return (
     <div
@@ -180,51 +244,22 @@ function WorkflowContextMenu({
       className="fixed z-50 min-w-[200px] rounded-lg border border-gray-600 bg-gray-800 py-1 shadow-xl"
       style={{ left: position.left, top: position.top }}
       tabIndex={-1}
+      onKeyDown={handleKeyDown}
       onClick={(event) => event.stopPropagation()}
     >
-      <button role="menuitem" onClick={() => runAction(onOpenWorkflow)} className={buttonClass}>
-        Open Workflow
-      </button>
-      <button role="menuitem" onClick={() => runAction(onOpenPr)} className={buttonClass}>
-        Open PR
-      </button>
-      <button role="menuitem" onClick={() => runAction(onRetryWorkflow)} className={buttonClass}>
-        Retry Workflow
-      </button>
-      <button role="menuitem" onClick={() => runAction(onCopyWorkflowId)} className={buttonClass}>
-        Copy Workflow ID
-      </button>
-      {!showMore ? (
-        <div>
-          <div className="my-1 border-t border-gray-600" />
+      {navRows.map((row, idx) => (
+        <div key={row.id}>
+          {idx === separatorIndex && <div className="my-1 border-t border-gray-600" />}
           <button
             role="menuitem"
-            className="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-gray-700"
-            onClick={() => setShowMore(true)}
+            className={`${row.className} ${focusedIndex === idx ? 'bg-gray-700' : ''}`}
+            onClick={row.activate}
+            onMouseEnter={() => setFocusedIndex(idx)}
           >
-            More
+            {row.label}
           </button>
         </div>
-      ) : (
-        <div>
-          <div className="my-1 border-t border-gray-600" />
-          <button role="menuitem" onClick={() => runAction(onRebaseRetry)} className={buttonClass}>
-            Rebase and Retry
-          </button>
-          <button role="menuitem" onClick={() => runAction(onRebaseRecreate)} className={dangerButtonClass}>
-            Rebase and Recreate
-          </button>
-          <button role="menuitem" onClick={() => runAction(onRecreateWorkflow)} className={dangerButtonClass}>
-            Recreate Workflow
-          </button>
-          <button role="menuitem" onClick={() => runAction(onCancelWorkflow)} className={dangerButtonClass}>
-            Cancel Workflow
-          </button>
-          <button role="menuitem" onClick={() => runAction(onDeleteWorkflow)} className={dangerButtonClass}>
-            Delete Workflow
-          </button>
-        </div>
-      )}
+      ))}
     </div>
   );
 }
@@ -738,6 +773,13 @@ export function App() {
 
       if (isEditableKeyboardTarget(event.target) || modal.type !== 'none') return;
 
+      // An open context menu owns Arrow/Enter/Space navigation; don't let those
+      // keys drive graph movement underneath it. The menu itself handles them
+      // (and stops propagation), but guard here in case focus is elsewhere.
+      if ((contextMenu || workflowContextMenu) && isMenuNavKey(event.key)) {
+        return;
+      }
+
       if (event.key === 'Tab') {
         event.preventDefault();
         const currentIndex = KEYBOARD_REGION_ORDER.indexOf(keyboardRegion);
@@ -842,9 +884,11 @@ export function App() {
   }, [
     activateSearchResult,
     bottomStatusIndex,
+    contextMenu,
     focusKeyboardRegion,
     handleStatusClick,
     keyboardRegion,
+    workflowContextMenu,
     miniDagTasks,
     modal.type,
     openSelectedContextMenu,
