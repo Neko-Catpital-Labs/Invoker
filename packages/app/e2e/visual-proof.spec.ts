@@ -569,6 +569,36 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'workflow-context-menu-organization');
   });
 
+  test('context-menu-keyboard-navigation — ArrowDown highlights the next menu item', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+
+    const menu = await openContextMenu(page, page.locator('[data-testid^="workflow-node-"]'));
+
+    // Opening the menu must hand keyboard focus to the menu itself so it owns
+    // ArrowUp/ArrowDown/Enter/Space instead of leaking them to graph shortcuts.
+    await expect
+      .poll(() => page.evaluate(() => document.activeElement?.getAttribute('role')))
+      .toBe('menu');
+
+    // The keyboard-active item carries the literal `bg-gray-700` highlight class
+    // (distinct from every item's `hover:bg-gray-700`), so it is the only
+    // menuitem matched by the bare `.bg-gray-700` selector.
+    const activeItem = menu.locator('button[role="menuitem"].bg-gray-700');
+
+    // Establish a deterministic baseline highlight on the first item, then drive
+    // the highlight with the keyboard only.
+    await menu.getByRole('menuitem', { name: 'Open Workflow' }).hover();
+    await expect(activeItem).toHaveText('Open Workflow');
+
+    await page.keyboard.press('ArrowDown');
+
+    // ArrowDown moves the highlight to the next enabled menu item.
+    await expect(activeItem).toHaveCount(1);
+    await expect(activeItem).toHaveText('Open PR');
+
+    await captureScreenshot(page, 'context-menu-keyboard-navigation');
+  });
+
   test('context menu keeps danger separator when cancel action is absent', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     await injectTaskStates(page, [
