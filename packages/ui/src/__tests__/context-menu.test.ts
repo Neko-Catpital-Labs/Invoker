@@ -124,6 +124,54 @@ describe('ContextMenu getMenuItems', () => {
     });
   });
 
+  describe('Recreate Downstream visibility', () => {
+    it('is shown for workflow-owned tasks', () => {
+      const task = makeTask({ status: 'failed', workflowId: 'wf-1' });
+      const items = getMenuItems(task);
+
+      const recreateDownstream = items.find((item) => item.id === 'recreate-downstream');
+      expect(recreateDownstream).toBeDefined();
+      expect(recreateDownstream?.label).toBe('Recreate Downstream');
+      expect(recreateDownstream?.action).toBe('onRecreateDownstream');
+      expect(recreateDownstream?.variant).toBe('danger');
+    });
+
+    it('is hidden for tasks without a workflow', () => {
+      const task = makeTask({ status: 'failed' });
+      const items = getMenuItems(task);
+
+      expect(items.find((item) => item.id === 'recreate-downstream')).toBeUndefined();
+    });
+
+    it('is enabled when task is not running', () => {
+      for (const status of ['pending', 'failed', 'completed', 'blocked', 'stale'] as const) {
+        const task = makeTask({ status, workflowId: 'wf-1' });
+        const items = getMenuItems(task);
+        const recreateDownstream = items.find((item) => item.id === 'recreate-downstream');
+        expect(recreateDownstream?.enabled).toBe(true);
+      }
+    });
+
+    it('is disabled while task is running', () => {
+      const task = makeTask({ status: 'running', workflowId: 'wf-1' });
+      const items = getMenuItems(task);
+
+      const recreateDownstream = items.find((item) => item.id === 'recreate-downstream');
+      expect(recreateDownstream).toBeDefined();
+      expect(recreateDownstream?.enabled).toBe(false);
+    });
+
+    it('appears after Recreate from Task in the danger group', () => {
+      const task = makeTask({ status: 'failed', workflowId: 'wf-1' });
+      const items = getMenuItems(task);
+
+      const recreateTaskIdx = items.findIndex((item) => item.id === 'recreate-task');
+      const recreateDownstreamIdx = items.findIndex((item) => item.id === 'recreate-downstream');
+      expect(recreateTaskIdx).toBeGreaterThanOrEqual(0);
+      expect(recreateDownstreamIdx).toBeGreaterThan(recreateTaskIdx);
+    });
+  });
+
   describe('Restart visibility', () => {
     it('allows restart for non-running tasks', () => {
       const task = makeTask({ status: 'failed' });
