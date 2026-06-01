@@ -339,6 +339,103 @@ describe('startAutoFixWorker', () => {
     expect(delegateExec).not.toHaveBeenCalled();
   });
 
+  it('submits a fix for a review-gate task with persisted CI failure when autoFixCi is true', async () => {
+    const messageBus = new LocalBus() as MessageBus;
+    const delegateExec = vi.fn(async () => ({ kind: 'delegated' } as DelegationOutcome));
+    const failedTask = makeTask('wf-1/merge-ci', 'review_ready');
+    (failedTask as any).execution = {
+      reviewId: '42',
+      autoFixAttempts: 0,
+      reviewCiFailure: {
+        headSha: 'abc',
+        statusText: 'CI failed',
+        failedChecks: [{ name: 'unit' }],
+      },
+    };
+    const shouldAutoFix = vi.fn(() => false);
+
+    worker = startAutoFixWorker({
+      logger,
+      shouldAutoFix,
+      getAutoFixRetryBudget: () => 3,
+      loadTasks: () => [failedTask],
+      messageBus,
+      loadConfig: () => ({ autoFixCi: true }),
+      intervalMs: 60_000,
+      delegateExec,
+      discoverOwner: async () => makeStandaloneOwner(),
+    });
+
+    await worker.tick();
+
+    expect(delegateExec).toHaveBeenCalledWith(['fix', 'wf-1/merge-ci', '--auto-fix']);
+    // `shouldAutoFix` only governs the `failed` branch; review-gate eligibility
+    // uses `getAutoFixRetryBudget` instead so manual auto-fix attempt budget
+    // accounting matches the merge-gate path.
+    expect(shouldAutoFix).not.toHaveBeenCalled();
+  });
+
+  it('skips review-gate tasks when autoFixCi is false', async () => {
+    const messageBus = new LocalBus() as MessageBus;
+    const delegateExec = vi.fn(async () => ({ kind: 'delegated' } as DelegationOutcome));
+    const reviewTask = makeTask('wf-1/merge-ci', 'review_ready');
+    (reviewTask as any).execution = {
+      reviewId: '42',
+      reviewCiFailure: {
+        headSha: 'abc',
+        statusText: 'CI failed',
+        failedChecks: [{ name: 'unit' }],
+      },
+    };
+
+    worker = startAutoFixWorker({
+      logger,
+      shouldAutoFix: () => false,
+      getAutoFixRetryBudget: () => 3,
+      loadTasks: () => [reviewTask],
+      messageBus,
+      loadConfig: () => ({ autoFixCi: false }),
+      intervalMs: 60_000,
+      delegateExec,
+      discoverOwner: async () => makeStandaloneOwner(),
+    });
+
+    await worker.tick();
+
+    expect(delegateExec).not.toHaveBeenCalled();
+  });
+
+  it('skips review-gate tasks whose retry budget is already exhausted', async () => {
+    const messageBus = new LocalBus() as MessageBus;
+    const delegateExec = vi.fn(async () => ({ kind: 'delegated' } as DelegationOutcome));
+    const reviewTask = makeTask('wf-1/merge-ci', 'awaiting_approval');
+    (reviewTask as any).execution = {
+      reviewId: '42',
+      autoFixAttempts: 3,
+      reviewCiFailure: {
+        headSha: 'abc',
+        statusText: 'CI failed',
+        failedChecks: [{ name: 'unit' }],
+      },
+    };
+
+    worker = startAutoFixWorker({
+      logger,
+      shouldAutoFix: () => false,
+      getAutoFixRetryBudget: () => 3,
+      loadTasks: () => [reviewTask],
+      messageBus,
+      loadConfig: () => ({ autoFixCi: true }),
+      intervalMs: 60_000,
+      delegateExec,
+      discoverOwner: async () => makeStandaloneOwner(),
+    });
+
+    await worker.tick();
+
+    expect(delegateExec).not.toHaveBeenCalled();
+  });
+
   it('logs a protocol-error outcome at error level', async () => {
     const messageBus = new LocalBus() as MessageBus;
     const delegateExec = vi.fn(async () => ({ kind: 'protocol-error', message: 'bad shape' } as DelegationOutcome));

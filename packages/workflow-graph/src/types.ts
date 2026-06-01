@@ -137,6 +137,15 @@ export interface TaskExecution {
   readonly reviewId?: string;
   readonly reviewStatus?: string;
   readonly reviewProviderId?: string;
+  /**
+   * Snapshot of the last observed CI failure on the review-gate PR. Set by the
+   * owner's review-gate status refresh when the PR's checks are red, and
+   * cleared when the PR's checks are no longer in a failure state. Drives the
+   * auto-fix worker's review-gate eligibility and lets the owner's fix
+   * handler reconstruct the CI saved-error / fix-context without re-querying
+   * the merge gate provider.
+   */
+  readonly reviewCiFailure?: ReviewCiFailureSnapshot;
   readonly phase?: TaskRunPhase;
   readonly launchStartedAt?: Date;
   readonly launchCompletedAt?: Date;
@@ -146,6 +155,20 @@ export interface TaskExecution {
   };
   readonly selectedAttemptId?: string;
   readonly autoFixAttempts?: number;
+}
+
+export interface ReviewCiFailedCheckSnapshot {
+  readonly name: string;
+  readonly conclusion?: string;
+  readonly detailsUrl?: string;
+  readonly summary?: string;
+}
+
+export interface ReviewCiFailureSnapshot {
+  readonly headSha?: string;
+  readonly headRef?: string;
+  readonly statusText: string;
+  readonly failedChecks: readonly ReviewCiFailedCheckSnapshot[];
 }
 
 // ── Task State ──────────────────────────────────────────────

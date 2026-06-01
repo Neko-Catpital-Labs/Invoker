@@ -133,6 +133,7 @@ import {
   deleteAllWorkflows as sharedDeleteAllWorkflows,
   deleteAllWorkflowsBulk as sharedDeleteAllWorkflowsBulk,
   applyAutoFixAccounting,
+  deriveReviewGateCiTriggerFromTask,
   fixWithAgentAction,
   rebaseRetry,
   rebaseRecreate,
@@ -1607,6 +1608,31 @@ function createEmbeddedTerminalBackendFromConfig(
     if (!task) {
       throw new Error(`Task ${taskId} not found`);
     }
+
+    // Worker-submitted auto-fix for a review-gate task whose persisted
+    // `reviewCiFailure` snapshot is set routes to the review-gate handler so
+    // the saved-error / fix-context derived from the CI failure reach the
+    // agent. Manual right-click fixes (source==='ipc') never hit this path.
+    if (source === 'auto-fix') {
+      const reviewTrigger = deriveReviewGateCiTriggerFromTask(task);
+      if (reviewTrigger) {
+        logAutoFixDebug(taskId, 'dispatch-review-gate-ci', {
+          reviewId: reviewTrigger.reviewId,
+          headSha: reviewTrigger.headSha ?? null,
+          failedCheckCount: reviewTrigger.failedChecks.length,
+        });
+        await autoFixOnReviewGateFailure(reviewTrigger, {
+          orchestrator,
+          persistence,
+          taskExecutor: requireTaskExecutor(),
+          getAutoFixAgent: () => loadConfig().autoFixAgent,
+          getAutoApproveAIFixes: () => loadConfig().autoApproveAIFixes,
+          signal: activeMutationContext?.signal,
+        });
+        return [];
+      }
+    }
+
     const savedError = task.execution.error ?? '';
     const recoveryRoute = selectFailureRecoveryRoute(task, savedError);
 
@@ -1763,21 +1789,6 @@ function createEmbeddedTerminalBackendFromConfig(
       },
       remoteTargetsProvider: () => loadConfig().remoteTargets ?? {},
       executionPoolsProvider: () => loadConfig().executionPools ?? {},
-      onReviewGateCiFailure: invokerConfig.autoFixCi
-        ? async (trigger) => {
-            const currentTaskExecutor = taskExecutor;
-            if (!currentTaskExecutor) {
-              throw new Error('Task executor is not initialized for review-gate CI auto-fix');
-            }
-            await autoFixOnReviewGateFailure(trigger, {
-              orchestrator,
-              persistence,
-              taskExecutor: currentTaskExecutor,
-              getAutoFixAgent: () => loadConfig().autoFixAgent,
-              getAutoApproveAIFixes: () => loadConfig().autoApproveAIFixes,
-            });
-          }
-        : undefined,
       mergeGateProvider: new GitHubMergeGateProvider(),
       reviewProviderRegistry: (() => {
         const registry = new ReviewProviderRegistry();

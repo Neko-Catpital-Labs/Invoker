@@ -41,6 +41,7 @@ import {
   approveTask,
   autoFixOnReviewGateFailure,
   deleteAllWorkflows as sharedDeleteAllWorkflows,
+  deriveReviewGateCiTriggerFromTask,
   fixWithAgentAction,
   rebaseRetry,
   rebaseRecreate,
@@ -249,17 +250,6 @@ export function createHeadlessExecutor(
     },
     remoteTargetsProvider: () => loadConfig().remoteTargets ?? {},
     executionPoolsProvider: () => deps.invokerConfig.executionPools ?? {},
-    onReviewGateCiFailure: deps.invokerConfig.autoFixCi
-      ? async (trigger) => {
-          await autoFixOnReviewGateFailure(trigger, {
-            orchestrator: deps.orchestrator,
-            persistence: deps.persistence,
-            taskExecutor: executor,
-            getAutoFixAgent: () => loadConfig().autoFixAgent,
-            getAutoApproveAIFixes: () => loadConfig().autoApproveAIFixes,
-          });
-        }
-      : undefined,
     mergeGateProvider: new GitHubMergeGateProvider(),
     reviewProviderRegistry: (() => {
       const registry = new ReviewProviderRegistry();
@@ -1220,6 +1210,7 @@ async function headlessAutoFixWorker(
   const worker = startAutoFixWorker({
     logger: deps.logger,
     shouldAutoFix: (taskId) => deps.orchestrator.shouldAutoFix(taskId),
+    getAutoFixRetryBudget: (taskId) => deps.orchestrator.getAutoFixRetryBudget(taskId),
     loadTasks,
     messageBus: deps.messageBus,
     loadConfig: () => loadConfig(),
@@ -1677,11 +1668,53 @@ async function headlessFix(
   const te = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, te);
 
-  // When the explicit --auto-fix context is present, run the SAME fix route
-  // as manual "Fix with AI" but with auto-fix semantics: re-check the retry
-  // budget, increment autoFixAttempts exactly once, select the configured
-  // auto-fix agent, and use 'Auto-fix' labels. Manual fixes skip this and
-  // never consume auto-fix budget.
+  // When the explicit --auto-fix context is present and the task carries a
+  // persisted review-gate CI failure snapshot, route to the shared
+  // review-gate auto-fix handler so the saved error/fix-context derived from
+  // the CI failure reach the agent. The worker submits the same `fix
+  // --auto-fix` IPC route for both failed tasks and review-gate CI failures;
+  // we route by current persisted state here rather than by intent shape.
+  if (isAutoFix) {
+    const task = deps.orchestrator.getTask(taskId);
+    const trigger = task ? deriveReviewGateCiTriggerFromTask(task) : undefined;
+    if (trigger) {
+      try {
+        await autoFixOnReviewGateFailure(trigger, {
+          orchestrator: deps.orchestrator,
+          persistence: deps.persistence,
+          taskExecutor: te,
+          getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
+          getAutoApproveAIFixes: () => deps.invokerConfig.autoApproveAIFixes,
+          signal: deps.signal,
+        });
+        await finalizeMutationWithGlobalTopup({
+          orchestrator: deps.orchestrator,
+          taskExecutor: te,
+          logger: deps.logger,
+          context: 'headless.fix-with-agent.review-gate-ci',
+          mutationTiming: deps.mutationTiming,
+          scopedTaskIds: [taskId],
+        });
+        process.stdout.write(`Review-gate CI auto-fix submitted for task: ${taskId}.\n`);
+      } catch (err) {
+        await finalizeMutationWithGlobalTopup({
+          orchestrator: deps.orchestrator,
+          taskExecutor: te,
+          logger: deps.logger,
+          context: 'headless.fix-with-agent.review-gate-ci.failure',
+          mutationTiming: deps.mutationTiming,
+        });
+        throw err;
+      } finally {
+        autoFix.unsubscribe();
+      }
+      return;
+    }
+  }
+
+  // Normal-failure auto-fix and manual paths share fixWithAgentAction. The
+  // `--auto-fix` flag triggers the shared retry-budget check and increments
+  // autoFixAttempts exactly once before delegating.
   let selectedAgent = agentArg?.toLowerCase();
   if (isAutoFix) {
     const accounting = applyAutoFixAccounting(taskId, {

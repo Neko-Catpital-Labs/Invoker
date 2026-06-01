@@ -909,6 +909,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE attempts ADD COLUMN claimed_at TEXT',
       'ALTER TABLE attempts ADD COLUMN lease_expires_at TEXT',
       'ALTER TABLE tasks ADD COLUMN task_state_version INTEGER NOT NULL DEFAULT 1',
+      'ALTER TABLE tasks ADD COLUMN review_ci_failure TEXT',
     ];
     for (const sql of migrations) {
       try {
@@ -1275,6 +1276,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         created_at, launch_phase, launch_started_at, launch_completed_at, started_at, completed_at, last_heartbeat_at,
         utilization, pending_fix_error,
         review_url, review_id, review_status, review_provider_id,
+        review_ci_failure,
         is_fixing_with_ai,
         execution_generation,
         pool_member_id,
@@ -1297,6 +1299,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?, ?, ?,
         ?, ?,
         ?, ?, ?, ?,
+        ?,
         ?,
         ?,
         ?,
@@ -1352,6 +1355,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       exec.reviewId ?? null,
       exec.reviewStatus ?? null,
       exec.reviewProviderId ?? null,
+      exec.reviewCiFailure ? JSON.stringify(exec.reviewCiFailure) : null,
       exec.isFixingWithAI ? 1 : 0,
       exec.generation ?? 0,
       (cfg as { poolMemberId?: string }).poolMemberId ?? null,
@@ -1471,6 +1475,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         experiments: 'experiments',
         selectedExperiments: 'selected_experiments',
         experimentResults: 'experiment_results',
+        reviewCiFailure: 'review_ci_failure',
       };
 
       for (const [key, col] of Object.entries(execMap)) {
@@ -2499,6 +2504,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         reviewId: row.review_id ?? undefined,
         reviewStatus: row.review_status ?? undefined,
         reviewProviderId: row.review_provider_id ?? undefined,
+        reviewCiFailure: row.review_ci_failure ? JSON.parse(row.review_ci_failure) : undefined,
         phase: row.launch_phase ?? undefined,
         launchStartedAt: row.launch_started_at ? new Date(row.launch_started_at) : undefined,
         launchCompletedAt: row.launch_completed_at ? new Date(row.launch_completed_at) : undefined,

@@ -1372,6 +1372,44 @@ function assertReviewGateTriggerCurrent(
   }
 }
 
+/**
+ * Reconstruct a {@link ReviewGateCiFailureTrigger} from the persisted
+ * `reviewCiFailure` snapshot on a task. Returns `undefined` when the task is
+ * not currently in a review-gate auto-fixable state (no snapshot, no review
+ * id, or wrong status). The auto-fix worker submits ordinary `fix --auto-fix`
+ * commands and the fix-handler invokes this to decide whether the submission
+ * should run through {@link autoFixOnReviewGateFailure}.
+ */
+export function deriveReviewGateCiTriggerFromTask(
+  task: TaskState,
+): ReviewGateCiFailureTrigger | undefined {
+  if (!task.execution.reviewCiFailure) return undefined;
+  if (!task.config.workflowId || !task.execution.reviewId) return undefined;
+  if (
+    task.status !== 'review_ready' &&
+    task.status !== 'awaiting_approval' &&
+    task.status !== 'failed'
+  ) return undefined;
+  return {
+    taskId: task.id,
+    workflowId: task.config.workflowId,
+    reviewId: task.execution.reviewId,
+    reviewUrl: task.execution.reviewUrl ?? '',
+    headSha: task.execution.reviewCiFailure.headSha,
+    headRef: task.execution.reviewCiFailure.headRef,
+    branch: task.execution.branch,
+    selectedAttemptId: task.execution.selectedAttemptId,
+    generation: task.execution.generation ?? 0,
+    failedChecks: task.execution.reviewCiFailure.failedChecks.map((check) => ({
+      name: check.name,
+      conclusion: check.conclusion,
+      detailsUrl: check.detailsUrl,
+      summary: check.summary,
+    })),
+    statusText: task.execution.reviewCiFailure.statusText,
+  };
+}
+
 export async function autoFixOnReviewGateFailure(
   trigger: ReviewGateCiFailureTrigger,
   deps: {

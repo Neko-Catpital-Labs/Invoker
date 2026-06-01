@@ -34,6 +34,13 @@ export const AUTOFIX_WORKER_INTERVAL_ENV = 'INVOKER_AUTOFIX_WORKER_INTERVAL_MS';
 export interface AutoFixWorkerConfigSource {
   /** Configured auto-fix agent (e.g. "claude", "codex"); empty/whitespace → no agent arg. */
   autoFixAgent?: string;
+  /**
+   * When true, the worker submits an auto-fix for review-gate merge tasks
+   * whose persisted CI failure snapshot indicates failed checks. Mirrors the
+   * old `onReviewGateCiFailure` gate, but evaluated per-tick from persisted
+   * state instead of fired from a TaskRunner callback.
+   */
+  autoFixCi?: boolean;
 }
 
 export interface AutoFixWorkerOptions {
@@ -43,6 +50,14 @@ export interface AutoFixWorkerOptions {
    * and runtime eligibility (same rules manual fix uses).
    */
   readonly shouldAutoFix: (taskId: string) => boolean;
+  /**
+   * Auto-fix retry budget for a task. Used to gate review-gate CI auto-fix
+   * submissions because `shouldAutoFix` only handles `status === 'failed'`.
+   * Defaults to a permissive `() => Number.POSITIVE_INFINITY` so existing
+   * tests stay unaffected; production wires it to
+   * `orchestrator.getAutoFixRetryBudget`.
+   */
+  readonly getAutoFixRetryBudget?: (taskId: string) => number;
   /**
    * Read-side surface: returns the current task snapshot the worker
    * scans on each tick. The headless wrapper provides a function that
@@ -110,11 +125,17 @@ function selectAgentArgs(autoFixAgent: string | undefined): string[] {
  * Each tick:
  *   1. Discover a writable (standalone-capable) owner. If none is
  *      reachable, log once per transition and skip submission.
- *   2. Walk `loadTasks()` and pick `failed` tasks that pass
- *      `shouldAutoFix(...)` and are not reconciliation or child tasks.
+ *   2. Walk `loadTasks()` and pick eligible tasks:
+ *        - `failed` tasks that pass `shouldAutoFix(...)`, OR
+ *        - merge-gate tasks in `review_ready`/`awaiting_approval` with a
+ *          persisted `reviewCiFailure` snapshot, when `autoFixCi` is true
+ *          and the retry budget is not exhausted.
+ *      Reconciliation/child tasks are excluded.
  *   3. For each eligible task, submit `fix <taskId> [agent] --auto-fix`
  *      via `tryDelegateExec`. Duplicate suppression at the mutation
- *      boundary discards repeats from the same task.
+ *      boundary discards repeats from the same task; the owner handler
+ *      routes review-gate submissions to the shared review-gate auto-fix
+ *      path by inspecting persisted state.
  */
 export function startAutoFixWorker(options: AutoFixWorkerOptions): AutoFixWorker {
   const intervalMs = options.intervalMs ?? resolveAutoFixWorkerIntervalMs();
@@ -177,14 +198,33 @@ export function startAutoFixWorker(options: AutoFixWorkerOptions): AutoFixWorker
     }
   };
 
+  const getRetryBudget = options.getAutoFixRetryBudget ?? ((): number => Number.POSITIVE_INFINITY);
+
+  const isReviewGateCiEligible = (task: TaskState, autoFixCi: boolean): boolean => {
+    if (!autoFixCi) return false;
+    if (!task.execution.reviewCiFailure) return false;
+    if (!task.config.workflowId || !task.execution.reviewId) return false;
+    if (task.status !== 'review_ready' && task.status !== 'awaiting_approval') return false;
+    const budget = getRetryBudget(task.id);
+    if (budget <= 0) return false;
+    return (task.execution.autoFixAttempts ?? 0) < budget;
+  };
+
   const eligibleTasks = (): TaskState[] => {
     const candidates = options.loadTasks();
+    const cfg = options.loadConfig();
+    const autoFixCi = cfg.autoFixCi === true;
     const out: TaskState[] = [];
     for (const task of candidates) {
-      if (task.status !== 'failed') continue;
       if (isReconciliationLike(task)) continue;
-      if (!options.shouldAutoFix(task.id)) continue;
-      out.push(task);
+      if (task.status === 'failed') {
+        if (!options.shouldAutoFix(task.id)) continue;
+        out.push(task);
+        continue;
+      }
+      if (isReviewGateCiEligible(task, autoFixCi)) {
+        out.push(task);
+      }
     }
     return out;
   };

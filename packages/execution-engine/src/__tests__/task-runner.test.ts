@@ -4991,6 +4991,123 @@ console.log(JSON.stringify(out));
         expect(orchestrator.approve).not.toHaveBeenCalled();
         expect(executeTasks).not.toHaveBeenCalled();
       });
+
+      it('persists reviewCiFailure snapshot when the PR has failing checks', async () => {
+        const allTasks = [
+          makeTask({
+            id: 'merge-ci-red',
+            status: 'review_ready',
+            config: { workflowId: 'wf-ci-red', isMergeNode: true },
+            execution: {
+              reviewId: 'owner/repo#310',
+              workspacePath: '/workspace/ci-red-gate',
+              branch: 'feature/ci-red',
+              selectedAttemptId: 'att-1',
+              generation: 2,
+            },
+          }),
+        ];
+        const orchestrator = {
+          getTask: (id: string) => allTasks.find(t => t.id === id),
+          getAllTasks: () => allTasks,
+          approve: vi.fn(),
+        };
+        const persistence = { updateTask: vi.fn() };
+        const mergeGateProvider = {
+          checkApproval: vi.fn().mockResolvedValue({
+            approved: false,
+            rejected: false,
+            statusText: 'CI failed',
+            url: 'https://github.com/owner/repo/pull/310',
+            headSha: 'abc123',
+            headRef: 'feature/ci-red',
+            checks: {
+              state: 'failure',
+              failed: [
+                { name: 'test-all', conclusion: 'FAILURE', detailsUrl: 'https://github.com/owner/repo/actions/runs/1' },
+              ],
+            },
+          }),
+        };
+
+        const executor = new TaskRunner({
+          orchestrator: orchestrator as any,
+          persistence: persistence as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          cwd: '/runner-base-cwd',
+          mergeGateProvider: mergeGateProvider as any,
+        });
+
+        await executor.checkMergeGateStatuses();
+
+        const reviewCiCall = persistence.updateTask.mock.calls.find(
+          ([_id, changes]) => 'reviewCiFailure' in (changes?.execution ?? {}),
+        );
+        expect(reviewCiCall).toBeDefined();
+        expect(reviewCiCall?.[1]).toEqual({
+          execution: {
+            reviewCiFailure: {
+              headSha: 'abc123',
+              headRef: 'feature/ci-red',
+              statusText: 'CI failed',
+              failedChecks: [
+                { name: 'test-all', conclusion: 'FAILURE', detailsUrl: 'https://github.com/owner/repo/actions/runs/1', summary: undefined },
+              ],
+            },
+          },
+        });
+      });
+
+      it('clears a stale reviewCiFailure snapshot when CI returns to non-failure', async () => {
+        const allTasks = [
+          makeTask({
+            id: 'merge-ci-cleared',
+            status: 'review_ready',
+            config: { workflowId: 'wf-ci-cleared', isMergeNode: true },
+            execution: {
+              reviewId: 'owner/repo#311',
+              workspacePath: '/workspace/ci-cleared-gate',
+              reviewCiFailure: {
+                statusText: 'CI failed',
+                failedChecks: [{ name: 'unit', conclusion: 'FAILURE' }],
+              },
+            },
+          }),
+        ];
+        const orchestrator = {
+          getTask: (id: string) => allTasks.find(t => t.id === id),
+          getAllTasks: () => allTasks,
+          approve: vi.fn(),
+        };
+        const persistence = { updateTask: vi.fn() };
+        const mergeGateProvider = {
+          checkApproval: vi.fn().mockResolvedValue({
+            approved: false,
+            rejected: false,
+            statusText: 'Pending',
+            url: 'https://github.com/owner/repo/pull/311',
+            checks: { state: 'pending', failed: [] },
+          }),
+        };
+
+        const executor = new TaskRunner({
+          orchestrator: orchestrator as any,
+          persistence: persistence as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          cwd: '/runner-base-cwd',
+          mergeGateProvider: mergeGateProvider as any,
+        });
+
+        await executor.checkMergeGateStatuses();
+
+        const reviewCiCall = persistence.updateTask.mock.calls.find(
+          ([_id, changes]) => 'reviewCiFailure' in (changes?.execution ?? {}),
+        );
+        expect(reviewCiCall).toBeDefined();
+        expect(reviewCiCall?.[1]).toEqual({
+          execution: { reviewCiFailure: undefined },
+        });
+      });
     });
   });
 

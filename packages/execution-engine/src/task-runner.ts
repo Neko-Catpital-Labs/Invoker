@@ -209,7 +209,6 @@ export interface TaskRunnerConfig {
   callbacks?: TaskRunnerCallbacks;
   mergeGateProvider?: MergeGateProvider;
   reviewProviderRegistry?: ReviewProviderRegistry;
-  onReviewGateCiFailure?: (trigger: ReviewGateCiFailureTrigger) => Promise<void>;
   /**
    * Provider that returns remote SSH targets keyed by target ID.
    * Called at task-execution time so config file changes take effect on retry.
@@ -257,8 +256,6 @@ export class TaskRunner {
   /** @internal */ callbacks: TaskRunnerCallbacks;
   /** @internal */ mergeGateProvider?: MergeGateProvider;
   /** @internal */ reviewProviderRegistry?: ReviewProviderRegistry;
-  private onReviewGateCiFailure?: (trigger: ReviewGateCiFailureTrigger) => Promise<void>;
-  private reviewGateCiFixInFlight = new Set<string>();
   private getRemoteTargets: () => Record<string, RemoteTargetDisplay>;
   private getExecutionPools: () => Record<string, ExecutionPoolConfig>;
   private dockerConfig: { imageName?: string; secretsFile?: string };
@@ -361,7 +358,6 @@ export class TaskRunner {
     this.callbacks = config.callbacks ?? {};
     this.mergeGateProvider = config.mergeGateProvider;
     this.reviewProviderRegistry = config.reviewProviderRegistry;
-    this.onReviewGateCiFailure = config.onReviewGateCiFailure;
     this.getRemoteTargets = config.remoteTargetsProvider ?? (() => ({}));
     this.getExecutionPools = config.executionPoolsProvider ?? (() => ({}));
     this.dockerConfig = config.dockerConfig ?? {};
@@ -2307,7 +2303,7 @@ export class TaskRunner {
             this.persistence.updateTask(task.id, {
               execution: { reviewStatus: status.statusText },
             });
-            await this.maybeTriggerReviewGateCiFix(task, status);
+            this.syncReviewCiFailureSnapshot(task, status);
           }
         } catch (err) {
           this.logger.error(`[merge-gate] PR status check error for ${task.id}`, { err });
@@ -2346,47 +2342,48 @@ export class TaskRunner {
         this.persistence.updateTask(taskId, {
           execution: { reviewStatus: status.statusText },
         });
-        await this.maybeTriggerReviewGateCiFix(task, status);
+        this.syncReviewCiFailureSnapshot(task, status);
       }
     } catch (err) {
       this.logger.error(`[merge-gate] Manual PR check error for ${taskId}`, { err });
     }
   }
 
-  private async maybeTriggerReviewGateCiFix(
+  /**
+   * Reconcile the persisted review-gate CI failure snapshot from the latest
+   * merge-gate status. The owner only writes persisted state here; fix
+   * scheduling is the auto-fix worker's job (see `autofix-worker.ts`). Sets
+   * `reviewCiFailure` when checks are red and a workflow/review id is
+   * present, clears it on any non-failure state so a passing PR doesn't
+   * retain stale failure context for the worker.
+   */
+  private syncReviewCiFailureSnapshot(
     task: TaskState,
     status: MergeGateApprovalStatus,
-  ): Promise<void> {
-    if (!this.onReviewGateCiFailure) return;
+  ): void {
     if (!task.config.workflowId || !task.execution.reviewId) return;
-    if (status.checks?.state !== 'failure' || status.checks.failed.length === 0) return;
-
-    const key = [
-      task.id,
-      task.execution.selectedAttemptId ?? 'no-attempt',
-      task.execution.generation ?? 0,
-      status.headSha ?? 'no-head-sha',
-    ].join(':');
-    if (this.reviewGateCiFixInFlight.has(key)) return;
-
-    this.reviewGateCiFixInFlight.add(key);
-    try {
-      await this.onReviewGateCiFailure({
-        taskId: task.id,
-        workflowId: task.config.workflowId,
-        reviewId: task.execution.reviewId,
-        reviewUrl: status.url,
-        headSha: status.headSha,
-        headRef: status.headRef,
-        branch: task.execution.branch,
-        selectedAttemptId: task.execution.selectedAttemptId,
-        generation: task.execution.generation ?? 0,
-        failedChecks: status.checks.failed,
-        statusText: status.statusText,
-      });
-    } finally {
-      this.reviewGateCiFixInFlight.delete(key);
+    const isFailure = status.checks?.state === 'failure' && status.checks.failed.length > 0;
+    if (!isFailure) {
+      if (task.execution.reviewCiFailure) {
+        this.persistence.updateTask(task.id, { execution: { reviewCiFailure: undefined } });
+      }
+      return;
     }
+    this.persistence.updateTask(task.id, {
+      execution: {
+        reviewCiFailure: {
+          headSha: status.headSha,
+          headRef: status.headRef,
+          statusText: status.statusText,
+          failedChecks: status.checks!.failed.map((check) => ({
+            name: check.name,
+            conclusion: check.conclusion,
+            detailsUrl: check.detailsUrl,
+            summary: check.summary,
+          })),
+        },
+      },
+    });
   }
 
   spawnAgentFix(
