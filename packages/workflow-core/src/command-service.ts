@@ -166,6 +166,23 @@ export class CommandService {
   }
 
   /**
+   * Recreate only a task's downstream dependents. The selected task is
+   * preserved exactly (status, branch, commit, workspacePath,
+   * selectedAttemptId, agent/session/container metadata, and
+   * generation); descendants receive recreate-class fresh lineage and
+   * are auto-started through the existing dispatch path.
+   */
+  async recreateDownstream(
+    envelope: CommandEnvelope<{ taskId: string }>,
+  ): Promise<CommandResult<TaskState[]>> {
+    return this.executeCommand<TaskState[]>(
+      'RECREATE_DOWNSTREAM_FAILED',
+      () => applyInvalidation('task', 'recreateDownstream', envelope.payload.taskId, this.invalidationDeps),
+      this.workflowIdForTask(envelope.payload.taskId),
+    );
+  }
+
+  /**
    * @deprecated Step 13 (`docs/architecture/task-invalidation-roadmap.md`):
    * `restartTask` was the overloaded "retry-or-recreate" verb the
    * chart's "Naming inconsistency" section flagged. Use the explicit

@@ -481,6 +481,16 @@ export const IpcChannels = {
     request: [taskId: string];
     response: void;
   },
+  /**
+   * Recreate only a task's downstream dependents. The target task
+   * itself is preserved (status, branch, commit, workspacePath,
+   * selectedAttemptId, generation); descendants receive recreate-class
+   * fresh lineage and are auto-started.
+   */
+  'invoker:recreate-downstream': {} as {
+    request: [taskId: string];
+    response: void;
+  },
   'invoker:retry-workflow': {} as {
     request: [workflowId: string];
     response: void;
