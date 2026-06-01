@@ -114,6 +114,52 @@ const REVIEW_READY_WORKFLOW_PR_PLAN = {
   ],
 };
 
+const TASK_STATUS_PROOF_SPECS = [
+  { status: 'pending', taskId: 'proof-task-pending', description: 'Pending', label: 'PENDING' },
+  { status: 'running', taskId: 'proof-task-running', description: 'Running', label: 'RUNNING' },
+  { status: 'fixing_with_ai', taskId: 'proof-task-fixing', description: 'Fixing with AI', label: 'FIXING WITH AI' },
+  { status: 'completed', taskId: 'proof-task-completed', description: 'Completed', label: 'COMPLETED' },
+  { status: 'failed', taskId: 'proof-task-failed', description: 'Failed', label: 'FAILED' },
+  { status: 'closed', taskId: 'proof-task-closed', description: 'Closed', label: 'CLOSED' },
+  { status: 'needs_input', taskId: 'proof-task-needs-input', description: 'Needs input', label: 'NEEDS_INPUT' },
+  { status: 'blocked', taskId: 'proof-task-blocked', description: 'Blocked', label: 'BLOCKED' },
+  { status: 'review_ready', taskId: 'proof-task-review-ready', description: 'Review ready', label: 'REVIEW_READY' },
+  { status: 'awaiting_approval', taskId: 'proof-task-awaiting-approval', description: 'Await approval', label: 'APPROVE' },
+  { status: 'stale', taskId: 'proof-task-stale', description: 'Stale', label: 'STALE' },
+] as const;
+
+const WORKFLOW_STATUS_PROOF_STATUSES = [
+  'pending',
+  'running',
+  'fixing_with_ai',
+  'completed',
+  'failed',
+  'closed',
+  'blocked',
+  'review_ready',
+  'awaiting_approval',
+  'stale',
+] as const;
+
+const TASK_STATUS_PROOF_PLAN = {
+  name: 'Task status all states proof',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'none' as const,
+  tasks: [
+    { id: 'proof-task-pending', description: 'Pending', command: 'echo pending', dependencies: [] as string[] },
+    { id: 'proof-task-running', description: 'Running', command: 'echo running', dependencies: [] as string[] },
+    { id: 'proof-task-fixing', description: 'Fixing with AI', command: 'echo fixing', dependencies: [] as string[] },
+    { id: 'proof-task-completed', description: 'Completed', command: 'echo completed', dependencies: ['proof-task-pending'] },
+    { id: 'proof-task-failed', description: 'Failed', command: 'echo failed', dependencies: ['proof-task-running'] },
+    { id: 'proof-task-closed', description: 'Closed', command: 'echo closed', dependencies: ['proof-task-fixing'] },
+    { id: 'proof-task-needs-input', description: 'Needs input', command: 'echo input', dependencies: ['proof-task-completed'] },
+    { id: 'proof-task-blocked', description: 'Blocked', command: 'echo blocked', dependencies: ['proof-task-failed'] },
+    { id: 'proof-task-stale', description: 'Stale', command: 'echo stale', dependencies: ['proof-task-closed'] },
+    { id: 'proof-task-review-ready', description: 'Review ready', command: 'echo review', dependencies: ['proof-task-closed', 'proof-task-stale'] },
+    { id: 'proof-task-awaiting-approval', description: 'Await approval', command: 'echo approval', dependencies: ['proof-task-needs-input'] },
+  ],
+};
+
 /** Plan for queue-action-surface hardening: combines canonical states, dependency relationships, and destructive actions. */
 const QUEUE_HARDENING_PLAN = {
   name: 'Queue Hardening Visual Proof',
@@ -155,6 +201,76 @@ function workflowNode(page: Page, workflowId: string) {
 
 function taskNodeCard(page: Page, taskIdSuffix: string) {
   return page.locator(`.react-flow__node[data-testid$="${taskIdSuffix}"] > div`).first();
+}
+
+function statusProofWorkflowTaskId(status: string) {
+  return `workflow-status-${status.replaceAll('_', '-')}`;
+}
+
+function statusProofLabel(status: string) {
+  return status.replaceAll('_', ' ');
+}
+
+function taskStatusExecution(status: string, now: Date, earlier: Date) {
+  switch (status) {
+    case 'running':
+      return { startedAt: earlier };
+    case 'fixing_with_ai':
+      return { startedAt: earlier, isFixingWithAI: true };
+    case 'completed':
+      return { startedAt: earlier, completedAt: now, exitCode: 0 };
+    case 'failed':
+      return { startedAt: earlier, completedAt: now, exitCode: 1, error: 'status proof failure' };
+    case 'needs_input':
+      return { startedAt: earlier, inputPrompt: 'Choose a status proof option' };
+    case 'blocked':
+      return { blockedBy: 'proof-task-failed' };
+    case 'review_ready':
+      return { startedAt: earlier, reviewUrl: 'https://example.test/status-proof' };
+    case 'awaiting_approval':
+      return { startedAt: earlier };
+    case 'stale':
+      return { startedAt: earlier, completedAt: now };
+    case 'closed':
+      return { completedAt: now };
+    default:
+      return {};
+  }
+}
+
+async function minimizeInspectorIfVisible(page: Page) {
+  const minimize = page.getByRole('button', { name: 'Minimize inspector' });
+  if (await minimize.isVisible({ timeout: 1000 }).catch(() => false)) {
+    await minimize.click();
+    await expect(page.getByRole('button', { name: 'Maximize inspector' })).toBeVisible({ timeout: 5000 });
+  }
+}
+
+async function expandSelectedWorkflowMiniDagForProof(page: Page) {
+  const panel = page.getByTestId('selected-workflow-mini-dag');
+  await expect(panel).toBeVisible({ timeout: 10000 });
+  await panel.evaluate((element) => {
+    const panelElement = element as HTMLElement;
+    panelElement.style.left = '12px';
+    panelElement.style.right = 'auto';
+    panelElement.style.top = '12px';
+    panelElement.style.width = '1040px';
+    panelElement.style.height = '620px';
+    panelElement.style.backgroundColor = '#111827';
+    const content = panelElement.children.item(1) as HTMLElement | null;
+    if (content) content.style.height = '590px';
+  });
+  await panel.getByRole('button', { name: 'Fit View' }).click();
+  await page.waitForTimeout(300);
+}
+
+async function hideSelectedWorkflowMiniDagIfVisible(page: Page) {
+  const panel = page.getByTestId('selected-workflow-mini-dag');
+  if (await panel.isVisible({ timeout: 1000 }).catch(() => false)) {
+    await panel.evaluate((element) => {
+      (element as HTMLElement).style.display = 'none';
+    });
+  }
 }
 
 async function openContextMenu(page: Page, locator: Locator) {
@@ -582,6 +698,117 @@ test.describe('Visual proof capture', () => {
     ).toBeVisible();
 
     await captureScreenshot(page, 'workflow-task-status-color-parity');
+  });
+
+  test('task-status-all-states — task nodes render every persisted status', async ({ page }) => {
+    await loadPlan(page, TASK_STATUS_PROOF_PLAN);
+    await minimizeInspectorIfVisible(page);
+    await expandSelectedWorkflowMiniDagForProof(page);
+
+    const now = new Date();
+    const earlier = new Date(Date.now() - 5000);
+    await injectTaskStates(
+      page,
+      TASK_STATUS_PROOF_SPECS.map((spec) => ({
+        taskId: spec.taskId,
+        changes: {
+          status: spec.status,
+          execution: taskStatusExecution(spec.status, now, earlier),
+        },
+      })),
+    );
+    await page.getByTestId('selected-workflow-mini-dag').getByRole('button', { name: 'Fit View' }).click();
+    await page.waitForTimeout(300);
+
+    for (const spec of TASK_STATUS_PROOF_SPECS) {
+      const node = taskNodeCard(page, spec.taskId);
+      await expect(node).toBeVisible({ timeout: 10000 });
+      await expect(node).toBeInViewport({ timeout: 10000 });
+      await expect(node.getByText(spec.label, { exact: true })).toBeVisible();
+    }
+
+    await captureScreenshot(page, 'task-status-all-states');
+  });
+
+  test('workflow-status-all-states — workflow nodes render every persisted status', async ({ page }) => {
+    const workflowIds = new Map<string, string>();
+    const loadStatusWorkflow = async (
+      status: (typeof WORKFLOW_STATUS_PROOF_STATUSES)[number],
+      dependencies: readonly string[] = [],
+    ) => {
+      const workflowId = await loadPlanAndSelectWorkflow(page, {
+        name: `Status proof ${statusProofLabel(status)}`,
+        repoUrl: E2E_REPO_URL,
+        onFinish: 'none' as const,
+        externalDependencies: dependencies.map((workflowId) => ({
+          workflowId,
+          gatePolicy: 'review_ready' as const,
+        })),
+        tasks: [
+          {
+            id: statusProofWorkflowTaskId(status),
+            description: `${statusProofLabel(status)} workflow task`,
+            command: `echo ${status}`,
+            dependencies: [] as string[],
+          },
+        ],
+      });
+      workflowIds.set(status, workflowId);
+      return workflowId;
+    };
+
+    const pendingId = await loadStatusWorkflow('pending');
+    const runningId = await loadStatusWorkflow('running');
+    const fixingId = await loadStatusWorkflow('fixing_with_ai');
+    const completedId = await loadStatusWorkflow('completed', [pendingId]);
+    const failedId = await loadStatusWorkflow('failed', [runningId]);
+    const closedId = await loadStatusWorkflow('closed', [fixingId]);
+    const blockedId = await loadStatusWorkflow('blocked', [completedId]);
+    await loadStatusWorkflow('review_ready', [failedId]);
+    await loadStatusWorkflow('awaiting_approval', [closedId]);
+    await loadStatusWorkflow('stale', [blockedId]);
+
+    const now = new Date();
+    const earlier = new Date(Date.now() - 5000);
+    for (const status of WORKFLOW_STATUS_PROOF_STATUSES) {
+      expect(workflowIds.get(status)).toBeTruthy();
+    }
+    await injectTaskStates(
+      page,
+      [
+        ...WORKFLOW_STATUS_PROOF_STATUSES.map((status) => ({
+          taskId: statusProofWorkflowTaskId(status),
+          changes: {
+            status,
+            execution: taskStatusExecution(status, now, earlier),
+          },
+        })),
+        ...WORKFLOW_STATUS_PROOF_STATUSES.map((status) => ({
+          taskId: `__merge__${workflowIds.get(status)!}`,
+          changes: {
+            ...(status === 'stale' ? { dependencies: [] as string[] } : {}),
+            status,
+            execution: taskStatusExecution(status, now, earlier),
+          },
+        })),
+      ],
+    );
+
+    await hideSelectedWorkflowMiniDagIfVisible(page);
+    await minimizeInspectorIfVisible(page);
+    await page.getByTestId('workflow-graph-react-flow').getByRole('button', { name: 'Fit View' }).click();
+    await page.waitForTimeout(500);
+
+    for (const status of WORKFLOW_STATUS_PROOF_STATUSES) {
+      const workflowId = workflowIds.get(status);
+      expect(workflowId).toBeTruthy();
+      const node = workflowNode(page, workflowId!);
+      await expect(node).toBeVisible({ timeout: 10000 });
+      await expect(node).toBeInViewport({ timeout: 10000 });
+      await expect(node.getByText(statusProofLabel(status), { exact: true })).toBeVisible();
+    }
+
+    await captureScreenshot(page, 'workflow-status-all-states');
   });
 
   test('context menu organization for failed task', async ({ page }) => {
