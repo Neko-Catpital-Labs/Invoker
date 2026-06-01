@@ -158,4 +158,84 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
+
+  it('task context menu (danger group) exposes Recreate Downstream for workflow-owned tasks', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+
+    const moreButton = await screen.findByText('More');
+    fireEvent.click(moreButton);
+    expect(await screen.findByText('Recreate Downstream')).toBeInTheDocument();
+    expect(screen.getByText('Recreate from Task')).toBeInTheDocument();
+  });
+
+  it('clicking Recreate Downstream invokes window.invoker.recreateDownstream with the task id', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-beta')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-beta'));
+    fireEvent.click(await screen.findByText('More'));
+    fireEvent.click(await screen.findByText('Recreate Downstream'));
+
+    await waitFor(() => expect(mock.api.recreateDownstream).toHaveBeenCalledWith('task-beta'));
+    expect(mock.api.recreateTask).not.toHaveBeenCalled();
+  });
+
+  it('disables Recreate Downstream while task is running', async () => {
+    mock = createMockInvoker();
+    mock.install();
+    render(<App />);
+    const runningAlpha = makeUITask({
+      id: 'task-alpha',
+      description: 'First test task',
+      status: 'running',
+      command: 'echo hello-alpha',
+      workflowId: 'wf-1',
+    });
+    act(() => mock.setTasks([runningAlpha], workflows));
+
+    await waitFor(() => expect(screen.getByTestId('workflow-node-wf-1')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    fireEvent.click(await screen.findByText('More'));
+
+    const button = (await screen.findByText('Recreate Downstream')).closest('button');
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute('aria-disabled', 'true');
+
+    if (button) fireEvent.click(button);
+    expect(mock.api.recreateDownstream).not.toHaveBeenCalled();
+  });
+
+  it('workflow context menu does not surface the task-scoped Recreate Downstream action', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => expect(screen.getByText('Open Workflow')).toBeInTheDocument());
+    expect(screen.queryByText('Recreate Downstream')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('More'));
+    expect(await screen.findByText('Rebase and Recreate')).toBeInTheDocument();
+    expect(screen.queryByText('Recreate Downstream')).not.toBeInTheDocument();
+  });
+
+  it('still shows the existing Restart Task, Recreate from Task, and Cancel Task items for workflow-owned tasks', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    await waitFor(() => expect(screen.getByText('Restart Task')).toBeInTheDocument());
+    fireEvent.click(await screen.findByText('More'));
+    expect(await screen.findByText('Terminate Task')).toBeInTheDocument();
+    expect(screen.getByText('Recreate from Task')).toBeInTheDocument();
+  });
 });
