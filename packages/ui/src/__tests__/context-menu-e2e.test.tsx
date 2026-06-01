@@ -158,4 +158,85 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
+
+  // Keyboard navigation regressions: an open context menu must intercept
+  // arrow / Enter / Space at the document level. Pre-fix, the workflow
+  // context menu has no keyboard handler at all, and the task context menu
+  // only listens via React onKeyDown on the menu div — so document-level
+  // events fall through to the App graph navigation handlers and never
+  // activate the highlighted item.
+
+  function keyDown(key: string) {
+    fireEvent.keyDown(document, { key });
+  }
+
+  it('workflow menu: ArrowDown x3 + Enter from document copies workflow id', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    await screen.findByText('Copy Workflow ID');
+
+    // Items: Open Workflow (0) → Open PR (1) → Retry Workflow (2) → Copy Workflow ID (3)
+    keyDown('ArrowDown');
+    keyDown('ArrowDown');
+    keyDown('ArrowDown');
+    keyDown('Enter');
+
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('workflow menu: ArrowUp from first item wraps deterministically to last item', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    await screen.findByText('More');
+    expect(screen.queryByText('Rebase and Retry')).not.toBeInTheDocument();
+
+    // Initial focus is index 0 (Open Workflow). One ArrowUp must wrap to the
+    // last visible item ("More"). Enter must then expand the danger group.
+    keyDown('ArrowUp');
+    keyDown('Enter');
+
+    expect(await screen.findByText('Rebase and Retry')).toBeInTheDocument();
+    expect(screen.getByText('Recreate Workflow')).toBeInTheDocument();
+    expect(screen.getByText('Cancel Workflow')).toBeInTheDocument();
+    expect(screen.getByText('Delete Workflow')).toBeInTheDocument();
+    // navigator.clipboard.writeText must not be called: this path activates
+    // "More", not "Copy Workflow ID".
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+  });
+
+  it('task menu in mini DAG: ArrowDown + Enter activates the next enabled item', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    await screen.findByText('Open Terminal');
+
+    // For a pending task: Restart Task (0) → Open Terminal (1) before the
+    // danger items hidden under "More". ArrowDown should highlight Open
+    // Terminal; Enter should invoke it via the real handler chain.
+    keyDown('ArrowDown');
+    keyDown('Enter');
+
+    await waitFor(() => expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'));
+    expect(mock.api.restartTask).not.toHaveBeenCalled();
+  });
+
+  it('task menu in mini DAG: Space activates the highlighted item like Enter', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    await screen.findByText('Restart Task');
+
+    // Default focus is on the first enabled item (Restart Task). Space must
+    // activate it the same way Enter does.
+    keyDown(' ');
+
+    await waitFor(() => expect(mock.api.restartTask).toHaveBeenCalledWith('task-alpha'));
+    expect(mock.api.openTerminal).not.toHaveBeenCalled();
+  });
 });
