@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { getStatusColor, getStatusInlineColors, matchesStatusFilter } from '../lib/colors.js';
+import { getStatusColor, getStatusInlineColors, matchesStatusFilter, formatStatusLabel } from '../lib/colors.js';
 import { getStatusVisual, STATUS_VISUALS } from '../lib/status-colors.js';
 import type { TaskStatus } from '../types.js';
 
@@ -86,6 +86,23 @@ describe('getStatusColor', () => {
     expect(fixingWithAI.border).toBe(needsInput.border);
     expect(awaitingApproval.dot).not.toBe(needsInput.dot);
     expect(awaitingApproval.border).not.toBe(needsInput.border);
+  });
+
+  it('registers closed in the status visual map with a neutral palette distinct from failed and review_ready', () => {
+    expect(STATUS_VISUALS).toHaveProperty('closed');
+    const closed = getStatusColor('closed');
+    const failed = getStatusColor('failed');
+    const reviewReady = getStatusColor('review_ready');
+    expect(closed.border).not.toBe(failed.border);
+    expect(closed.dot).not.toBe(failed.dot);
+    expect(closed.border).not.toBe(reviewReady.border);
+    expect(closed.dot).not.toBe(reviewReady.dot);
+  });
+});
+
+describe('formatStatusLabel', () => {
+  it('formats closed as "Closed"', () => {
+    expect(formatStatusLabel('closed')).toBe('Closed');
   });
 });
 

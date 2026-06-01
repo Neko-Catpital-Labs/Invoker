@@ -63,6 +63,19 @@ describe('formatTaskStatus', () => {
     expect(output).toContain('[closed]');
   });
 
+  it('renders closed with the closed icon and a color distinct from failed and review_ready', () => {
+    const closed = formatTaskStatus(makeTask({ status: 'closed' }));
+    const failed = formatTaskStatus(makeTask({ status: 'failed' }));
+    const reviewReady = formatTaskStatus(makeTask({ status: 'review_ready' }));
+
+    expect(closed).toContain('◼');
+    expect(closed).toContain('[closed]');
+    expect(closed).not.toContain(RED);
+    expect(closed).not.toContain(CYAN);
+    expect(failed).not.toContain('[closed]');
+    expect(reviewReady).not.toContain('[closed]');
+  });
+
   it('shows correct color for running status', () => {
     const task = makeTask({ status: 'running' });
     const output = formatTaskStatus(task);

@@ -41,4 +41,23 @@ describe('workflow-status', () => {
     }
   });
 
+  it('normalizes closed as a supported workflow status', () => {
+    expect(normalizeWorkflowStatus('closed')).toBe('closed');
+    expect(normalizeWorkflowStatus('CLOSED')).toBe('closed');
+    expect(normalizeWorkflowStatus('Closed')).toBe('closed');
+  });
+
+  it('renders closed with a settled, non-pulsing visual distinct from failed and review_ready', () => {
+    const closed = workflowStatusVisual('closed');
+    const failed = workflowStatusVisual('failed');
+    const reviewReady = workflowStatusVisual('review_ready');
+    expect(closed.pulse).toBe(false);
+    expect(closed.borderClass).not.toBe(failed.borderClass);
+    expect(closed.textClass).not.toBe(failed.textClass);
+    expect(closed.railClass).not.toBe(failed.railClass);
+    expect(closed.borderClass).not.toBe(reviewReady.borderClass);
+    expect(closed.textClass).not.toBe(reviewReady.textClass);
+    expect(closed.railClass).not.toBe(reviewReady.railClass);
+  });
+
 });
