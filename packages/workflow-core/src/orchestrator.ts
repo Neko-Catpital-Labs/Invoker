@@ -4197,7 +4197,15 @@ export class Orchestrator {
    * Defer a running task back to pending when a resource limit is hit.
    * The task is re-enqueued when another task completes and frees a slot.
    */
-  deferTask(taskId: string): void {
+  deferTask(
+    taskId: string,
+    reason?: {
+      reason?: string;
+      message?: string;
+      attemptId?: string;
+      phase?: string;
+    },
+  ): void {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) return;
@@ -4210,7 +4218,14 @@ export class Orchestrator {
     };
     const deferUpdated = this.writeAndSync(id, changes);
     const delta: TaskDelta = this.buildUpdateDelta(task, deferUpdated, changes);
-    this.persistence.logEvent?.(id, 'task.deferred', changes);
+    this.persistence.logEvent?.(id, 'task.deferred', {
+      ...changes,
+      deferredAt: new Date(),
+      reason: reason?.reason,
+      message: reason?.message,
+      attemptId: reason?.attemptId,
+      phase: reason?.phase,
+    });
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
 
     // Remove any queued re-dispatch for this task; persisted attempt state now

@@ -258,7 +258,9 @@ async function tryDelegate(
       return { kind: 'timeout' };
     }
     if (err instanceof TransportError && err.code === TransportErrorCode.NO_HANDLER) {
-      delegationLog(`${traceId} no-handler channel=${channel}`);
+      delegationLog(
+        `${traceId} no-handler channel=${channel}; owner handler unavailable (owner not running or stale IPC socket); CLI only submits and does not run scheduler drain`,
+      );
       return { kind: 'no-handler' };
     }
     delegationLog(`${traceId} error channel=${channel} ${(err instanceof Error ? err.message : String(err))}`);

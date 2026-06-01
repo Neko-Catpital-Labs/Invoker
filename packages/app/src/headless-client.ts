@@ -267,7 +267,7 @@ async function ensureStandaloneOwnerViaBootstrap(bus: MessageBus): Promise<void>
   delegationClientLog(`bootstrap begin lockAcquired=${bootstrapLock ? 'true' : 'false'} home=${invokerHomeRoot}`);
   try {
     if (bootstrapLock) {
-      delegationClientLog('bootstrap spawning detached standalone owner');
+      delegationClientLog('bootstrap spawning detached standalone owner (long-lived scheduler/task-runner owner; drain runs inside that owner, not inside this CLI process)');
       spawnDetachedStandaloneOwner(repoRoot);
     }
     const deadline = Date.now() + standaloneOwnerBootstrapTimeoutMs();
@@ -465,7 +465,8 @@ export async function runHeadlessClientCommand(
   }
 
   process.stderr.write(
-    `${RED}Error:${RESET} Mutation command "${args[0] ?? ''}" could not reach a standalone shared owner after bootstrap.\n`,
+    `${RED}Error:${RESET} Mutation command "${args[0] ?? ''}" could not reach a standalone shared owner after bootstrap.\n` +
+    `The headless client is only a submitter. Scheduler drain runs inside the long-lived owner process, so no tasks can be claimed until an owner is reachable.\n`,
   );
   return 1;
 }

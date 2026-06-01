@@ -765,6 +765,7 @@ if (isHeadless) {
         if (!standaloneMode) {
           process.stderr.write(
             `${RED}Error:${RESET} Mutation command "${command}" requires a running owner process.\n` +
+            `The headless command is only a submitter. Scheduler drain runs inside the long-lived owner process.\n` +
             `\n${BOLD}Options:${RESET}\n` +
             `  1. Start the interactive process: ${BOLD}electron dist/main.js${RESET}\n` +
             `  2. Run in standalone mode: ${BOLD}INVOKER_HEADLESS_STANDALONE=1 electron dist/main.js --headless ${cliArgs.join(' ')}${RESET}\n` +
@@ -2682,7 +2683,10 @@ function createEmbeddedTerminalBackendFromConfig(
         });
         return results;
       });
-      logger.info(`owner-ipc-ready ownerId=${workflowMutationOwnerId}`, { module: 'ipc-delegate' });
+      logger.info(
+        `owner-ipc-ready ownerId=${workflowMutationOwnerId} pid=${process.pid} mode=gui handlers=headless.owner-ping,headless.exec,headless.query`,
+        { module: 'ipc-delegate' },
+      );
       recordStartupMark('owner-ipc-ready');
     }
 
