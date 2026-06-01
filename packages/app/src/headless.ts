@@ -51,6 +51,7 @@ import {
   setWorkflowMergeMode,
 } from './workflow-actions.js';
 import { parseAutoFixArgs } from './auto-fix-intents.js';
+import { startAutoFixWorker } from './autofix-worker.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 import type { CostGroupDimension } from './cost-rollup.js';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
@@ -998,6 +999,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'owner-serve':
       await headlessOwnerServe(deps);
       break;
+    case 'autofix-worker':
+      await headlessAutoFixWorker(deps);
+      break;
     // ── New grouped commands ──
     case 'query':
       await headlessQuery(args.slice(1), deps);
@@ -1190,6 +1194,48 @@ async function headlessOwnerServe(deps: Pick<HeadlessDeps, 'isStandaloneOwnerIdl
   });
 }
 
+async function headlessAutoFixWorker(
+  deps: Pick<HeadlessDeps, 'logger' | 'orchestrator' | 'persistence' | 'messageBus'>,
+): Promise<void> {
+  process.stdout.write('[headless] auto-fix worker starting; polling for failed tasks.\n');
+  // Walk every persisted workflow each tick so the worker stays correct
+  // when workflows are created after the worker started. We syncFromDb to
+  // pick up writes made by the owner process; the worker is read-only on
+  // local state.
+  const loadTasks = (): TaskState[] => {
+    const workflows = deps.persistence.listWorkflows();
+    for (const workflow of workflows) {
+      try {
+        deps.orchestrator.syncFromDb(workflow.id);
+      } catch (err) {
+        deps.logger.error(
+          `auto-fix worker syncFromDb failed workflow=${workflow.id}`,
+          { module: 'auto-fix-worker', err },
+        );
+      }
+    }
+    return deps.orchestrator.getAllTasks();
+  };
+
+  const worker = startAutoFixWorker({
+    logger: deps.logger,
+    shouldAutoFix: (taskId) => deps.orchestrator.shouldAutoFix(taskId),
+    loadTasks,
+    messageBus: deps.messageBus,
+    loadConfig: () => loadConfig(),
+  });
+
+  await new Promise<void>((resolve) => {
+    const finish = () => {
+      worker.stop();
+      resolve();
+    };
+    process.once('SIGTERM', finish);
+    process.once('SIGINT', finish);
+  });
+  process.stdout.write('[headless] auto-fix worker stopped.\n');
+}
+
 function printHeadlessUsage(): void {
   process.stdout.write(`${BOLD}invoker${RESET} — Headless workflow runner (Electron)
 
@@ -1251,6 +1297,7 @@ ${BOLD}Lifecycle:${RESET}
   delete-all                                          Delete all workflows (requires INVOKER_ALLOW_DELETE_ALL=1)
   open-terminal <taskId>                              Open OS terminal for a task
   slack                                               Start Slack bot (long-running)
+  autofix-worker                                      Start auto-fix submitter loop (long-running)
 
 ${BOLD}Deprecated${RESET} (use new names above):
   list → query workflows       status → query tasks       task-status → query task
