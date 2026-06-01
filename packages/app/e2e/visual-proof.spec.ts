@@ -569,6 +569,26 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'workflow-context-menu-organization');
   });
 
+  test('context-menu-keyboard-navigation — ArrowDown highlights the next menu item', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+
+    const menu = await openContextMenu(page, page.locator('[data-testid^="workflow-node-"]'));
+    const items = menu.getByRole('menuitem');
+
+    // Keyboard focus adds a standalone `bg-gray-700` token; the `:hover` variant
+    // (`hover:bg-gray-700`) is a distinct class, so whitespace boundaries are
+    // required to distinguish keyboard focus from CSS hover styling.
+    const focusedRe = /(?:^|\s)bg-gray-700(?:\s|$)/;
+    await expect(items.nth(0)).toHaveClass(focusedRe);
+
+    await page.keyboard.press('ArrowDown');
+
+    await expect(items.nth(0)).not.toHaveClass(focusedRe);
+    await expect(items.nth(1)).toHaveClass(focusedRe);
+
+    await captureScreenshot(page, 'context-menu-keyboard-navigation');
+  });
+
   test('context menu keeps danger separator when cancel action is absent', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     await injectTaskStates(page, [
