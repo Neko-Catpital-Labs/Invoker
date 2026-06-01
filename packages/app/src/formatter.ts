@@ -115,6 +115,7 @@ export function formatWorkflowList(
     running: YELLOW,
     completed: GREEN,
     failed: RED,
+    closed: DIM,
   };
 
   const lines = workflows.map((wf) => {
@@ -209,6 +210,7 @@ export function formatWorkflowStats(stats: {
   totalWorkflows: number;
   completed: number;
   failed: number;
+  closed?: number;
   running: number;
   successRate: number;
   avgDurationMs: number | null;
@@ -221,6 +223,7 @@ export function formatWorkflowStats(stats: {
   lines.push(`  Total      ${BOLD}${stats.totalWorkflows}${RESET}`);
   lines.push(`  ${GREEN}Completed  ${stats.completed}${RESET}`);
   lines.push(`  ${RED}Failed     ${stats.failed}${RESET}`);
+  lines.push(`  ${DIM}Closed     ${stats.closed ?? 0}${RESET}`);
   lines.push(`  ${YELLOW}Running    ${stats.running}${RESET}`);
   lines.push(`  Success    ${BOLD}${stats.successRate.toFixed(1)}%${RESET}`);
 
