@@ -92,6 +92,65 @@ describe('InvalidationPlan policy registry', () => {
     });
   });
 
+  it('plans task recreate-downstream as descendants only, excluding the target', () => {
+    const tasks = [
+      task('wf-1/root', 'wf-1'),
+      task('wf-1/child', 'wf-1', ['wf-1/root']),
+      task('wf-1/grandchild', 'wf-1', ['wf-1/child']),
+      task('wf-1/sibling', 'wf-1'),
+    ];
+
+    const plan = planInvalidation({
+      action: 'recreateDownstream',
+      targetId: 'wf-1/root',
+      tasks,
+    });
+
+    expect(plan).toMatchObject({
+      action: 'recreateDownstream',
+      scope: 'task',
+      mode: 'recreate',
+      affectedWorkflowIds: ['wf-1'],
+      // Target 'wf-1/root' is preserved; siblings are untouched.
+      affectedTaskIds: ['wf-1/child', 'wf-1/grandchild'],
+      lockPlan: { workflowIds: ['wf-1'] },
+    });
+  });
+
+  it('plans recreate-downstream of a mid-chain task as the strictly-downstream tail', () => {
+    const tasks = [
+      task('wf-1/a', 'wf-1'),
+      task('wf-1/b', 'wf-1', ['wf-1/a']),
+      task('wf-1/c', 'wf-1', ['wf-1/b']),
+    ];
+
+    const plan = planInvalidation({
+      action: 'recreateDownstream',
+      targetId: 'wf-1/b',
+      tasks,
+    });
+
+    // recreateDownstream(B) over A -> B -> C affects C only.
+    expect(plan.affectedTaskIds).toEqual(['wf-1/c']);
+  });
+
+  it('plans recreate-downstream of a leaf as an empty affected set (no-op)', () => {
+    const tasks = [
+      task('wf-1/a', 'wf-1'),
+      task('wf-1/b', 'wf-1', ['wf-1/a']),
+      task('wf-1/c', 'wf-1', ['wf-1/b']),
+    ];
+
+    const plan = planInvalidation({
+      action: 'recreateDownstream',
+      targetId: 'wf-1/c',
+      tasks,
+    });
+
+    expect(plan.affectedTaskIds).toEqual([]);
+    expect(plan.affectedWorkflowIds).toEqual([]);
+  });
+
   it('plans task retry as the task plus non-completed descendants', () => {
     const tasks = [
       task('wf-1/root', 'wf-1', [], 'failed'),

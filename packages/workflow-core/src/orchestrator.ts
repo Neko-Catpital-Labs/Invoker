@@ -1093,6 +1093,7 @@ export class Orchestrator {
   private cancelActiveBeforeInvalidation(
     scope: 'task' | 'workflow',
     id: string,
+    opts?: { excludeRoot?: boolean },
   ): string[] {
     let candidates: TaskState[];
     if (scope === 'task') {
@@ -1105,8 +1106,11 @@ export class Orchestrator {
         taskMap,
         (t) => t.status === 'completed' || t.status === 'stale',
       );
+      // `recreateDownstream` preserves the target task, so its
+      // cancel-first pass must skip the root and only interrupt
+      // active attempts in the downstream subgraph.
       candidates = [
-        root,
+        ...(opts?.excludeRoot ? [] : [root]),
         ...descendantIds
           .map((d) => taskMap.get(d))
           .filter((t): t is TaskState => !!t),
@@ -2514,6 +2518,100 @@ export class Orchestrator {
     };
 
     this.logger.info('[orchestrator] recreateTask reset', {
+      taskId: rootId,
+      resetCount: toResetIds.length,
+    });
+
+    for (const id of toResetIds) {
+      const current = this.stateGetTask(id);
+      if (!current) continue;
+      const changesWithGeneration = this.withBumpedExecutionGeneration(current, resetChanges);
+      const recreateUpdated = this.writeAndSync(id, changesWithGeneration);
+      const priorAttemptId = current.execution.selectedAttemptId;
+      this.replaceSelectedAttempt(current);
+      this.persistence.logEvent?.(id, 'task.pending', changesWithGeneration);
+      this.messageBus.publish(TASK_DELTA_CHANNEL, this.buildUpdateDelta(current, recreateUpdated, changesWithGeneration));
+
+      this.deferredTaskIds.delete(id);
+      this.clearQueuedSchedulerEntries(id, priorAttemptId);
+    }
+
+    const readyIds = this.stateMachine
+      .getReadyTasks()
+      .map((t) => t.id)
+      .filter((id) => toResetSet.has(id));
+    plan = withSchedulerEnqueueCandidates(plan, readyIds);
+    this.lastInvalidationPlan = plan;
+    return this.autoStartReadyTasks(readyIds, Orchestrator.EXPEDITED_PRIORITY);
+  }
+
+  /**
+   * Task-scoped downstream recreate: reset the target's transitive
+   * downstream dependents to pending with recreate-style execution
+   * clearing, leaving the target task itself untouched, then auto-start
+   * newly-ready descendants within that affected subgraph.
+   *
+   * Differs from `recreateTask` only in that the target is preserved:
+   * the affected set is `descendantsOf(target)` (the target is never
+   * included). A leaf target has no descendants, so this is a no-op
+   * that returns no started tasks.
+   */
+  recreateDownstream(taskId: string): TaskState[] {
+    this.refreshFromDb();
+    const task = this.stateGetTask(taskId);
+    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
+
+    const rootId = task.id;
+
+    // Step 18 cancel-first invariant, scoped to the downstream subgraph:
+    // interrupt active attempts on the dependents BEFORE the recreate
+    // reset, but never touch the preserved target task. Defense-in-depth
+    // for direct callers; a no-op when invoked through `applyInvalidation`.
+    this.cancelActiveBeforeInvalidation('task', rootId, { excludeRoot: true });
+    let plan = planInvalidation({
+      action: 'recreateDownstream',
+      targetId: rootId,
+      tasks: this.stateMachine.getAllTasks(),
+    });
+    this.lastInvalidationPlan = plan;
+    const toResetIds = plan.affectedTaskIds;
+    const toResetSet = new Set(toResetIds);
+
+    // Leaf target: no downstream dependents → preserve the target and
+    // start nothing.
+    if (toResetIds.length === 0) {
+      this.logger.info('[orchestrator] recreateDownstream no-op (leaf target)', {
+        taskId: rootId,
+      });
+      return [];
+    }
+
+    const resetChanges: TaskStateChanges = {
+      status: 'pending',
+      config: { summary: undefined },
+      execution: {
+        autoFixAttempts: 0,
+        startedAt: undefined,
+        completedAt: undefined,
+        error: undefined,
+        exitCode: undefined,
+        commit: undefined,
+        branch: undefined,
+        workspacePath: undefined,
+        lastHeartbeatAt: undefined,
+        phase: undefined,
+        launchStartedAt: undefined,
+        launchCompletedAt: undefined,
+        reviewUrl: undefined,
+        reviewId: undefined,
+        reviewStatus: undefined,
+        reviewProviderId: undefined,
+        agentSessionId: undefined,
+        containerId: undefined,
+      },
+    };
+
+    this.logger.info('[orchestrator] recreateDownstream reset', {
       taskId: rootId,
       resetCount: toResetIds.length,
     });
