@@ -150,10 +150,18 @@ export function TimelineView({ tasks, onTaskClick, selectedTaskId }: TimelineVie
             : null;
 
           return (
-            <button
+            <div
               key={task.id}
+              role="button"
+              tabIndex={0}
               data-testid={`timeline-bar-${task.id}`}
               onClick={() => onTaskClick(task)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  if (e.key === ' ') e.preventDefault();
+                  onTaskClick(task);
+                }
+              }}
               className={`w-full text-left rounded transition-all ${
                 isSelected ? 'ring-2 ring-indigo-400 ring-offset-1 ring-offset-gray-900' : ''
               }`}
@@ -161,11 +169,11 @@ export function TimelineView({ tasks, onTaskClick, selectedTaskId }: TimelineVie
             >
               <div className="flex items-center gap-3 px-2 py-1.5">
                 {/* Task label */}
-                <div className="w-40 shrink-0 truncate text-xs text-gray-300" title={task.description}>
+                <div className="w-40 shrink-0 truncate text-xs text-gray-300 select-text cursor-text" title={task.description}>
                   {task.id}
                 </div>
                 {phaseLabel && (
-                  <div className="w-20 shrink-0 text-xs text-amber-300 uppercase">
+                  <div className="w-20 shrink-0 text-xs text-amber-300 uppercase select-text cursor-text">
                     {phaseLabel}
                   </div>
                 )}
@@ -188,11 +196,11 @@ export function TimelineView({ tasks, onTaskClick, selectedTaskId }: TimelineVie
                 </div>
 
                 {/* Duration label */}
-                <div className="w-16 shrink-0 text-right text-xs tabular-nums" style={{ color: colors.bg }}>
+                <div className="w-16 shrink-0 text-right text-xs tabular-nums select-text cursor-text" style={{ color: colors.bg }}>
                   {elapsed ?? '—'}
                 </div>
               </div>
-            </button>
+            </div>
           );
         })}
       </div>
