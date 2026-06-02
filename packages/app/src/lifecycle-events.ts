@@ -5,6 +5,9 @@ export const WorkerLifecycleEventKinds = {
   TASK_UPDATED: 'task.updated',
   TASK_COMPLETED: 'task.completed',
   TASK_FAILED: 'task.failed',
+  TASK_REVIEW_READY: 'task.review_ready',
+  TASK_AWAITING_APPROVAL: 'task.awaiting_approval',
+  TASK_NEEDS_INPUT: 'task.needs_input',
   TASK_REMOVED: 'task.removed',
   REVIEW_GATE_CI_FAILED: 'review_gate.ci_failed',
   WORKFLOW_WAKEUP: 'workflow.wakeup',
@@ -57,6 +60,30 @@ export interface TaskFailedLifecycleEvent extends WorkerLifecycleEventBase {
   readonly previousTaskStateVersion: number;
 }
 
+export interface TaskReviewReadyLifecycleEvent extends WorkerLifecycleEventBase {
+  readonly kind: typeof WorkerLifecycleEventKinds.TASK_REVIEW_READY;
+  readonly taskId: string;
+  readonly status: 'review_ready';
+  readonly taskStateVersion: number;
+  readonly previousTaskStateVersion: number;
+}
+
+export interface TaskAwaitingApprovalLifecycleEvent extends WorkerLifecycleEventBase {
+  readonly kind: typeof WorkerLifecycleEventKinds.TASK_AWAITING_APPROVAL;
+  readonly taskId: string;
+  readonly status: 'awaiting_approval';
+  readonly taskStateVersion: number;
+  readonly previousTaskStateVersion: number;
+}
+
+export interface TaskNeedsInputLifecycleEvent extends WorkerLifecycleEventBase {
+  readonly kind: typeof WorkerLifecycleEventKinds.TASK_NEEDS_INPUT;
+  readonly taskId: string;
+  readonly status: 'needs_input';
+  readonly taskStateVersion: number;
+  readonly previousTaskStateVersion: number;
+}
+
 export interface TaskRemovedLifecycleEvent extends WorkerLifecycleEventBase {
   readonly kind: typeof WorkerLifecycleEventKinds.TASK_REMOVED;
   readonly taskId: string;
@@ -91,6 +118,9 @@ export type WorkerLifecycleEvent =
   | TaskUpdatedLifecycleEvent
   | TaskCompletedLifecycleEvent
   | TaskFailedLifecycleEvent
+  | TaskReviewReadyLifecycleEvent
+  | TaskAwaitingApprovalLifecycleEvent
+  | TaskNeedsInputLifecycleEvent
   | TaskRemovedLifecycleEvent
   | ReviewGateCiFailedLifecycleEvent
   | WorkflowWakeupLifecycleEvent;
@@ -157,11 +187,7 @@ export function createTaskLifecycleEventFromDelta(
 
   const workflowId = requireWorkflowId(options.workflowId, delta.taskId);
   const status = delta.changes.status;
-  const kind = status === 'completed'
-    ? WorkerLifecycleEventKinds.TASK_COMPLETED
-    : status === 'failed'
-      ? WorkerLifecycleEventKinds.TASK_FAILED
-      : WorkerLifecycleEventKinds.TASK_UPDATED;
+  const kind = lifecycleKindForStatus(status);
   const createdAt = normalizeCreatedAt(options.createdAt);
   const base = {
     key: lifecycleEventKey(
@@ -191,6 +217,15 @@ export function createTaskLifecycleEventFromDelta(
   }
   if (kind === WorkerLifecycleEventKinds.TASK_FAILED) {
     return { ...base, kind, status: 'failed' };
+  }
+  if (kind === WorkerLifecycleEventKinds.TASK_REVIEW_READY) {
+    return { ...base, kind, status: 'review_ready' };
+  }
+  if (kind === WorkerLifecycleEventKinds.TASK_AWAITING_APPROVAL) {
+    return { ...base, kind, status: 'awaiting_approval' };
+  }
+  if (kind === WorkerLifecycleEventKinds.TASK_NEEDS_INPUT) {
+    return { ...base, kind, status: 'needs_input' };
   }
   return { ...base, kind };
 }
@@ -314,6 +349,23 @@ function normalizeCreatedAt(createdAt: Date | string | undefined): string {
   if (createdAt instanceof Date) return createdAt.toISOString();
   if (typeof createdAt === 'string') return createdAt;
   return new Date().toISOString();
+}
+
+function lifecycleKindForStatus(status: TaskStatus | undefined): WorkerLifecycleEventKind {
+  switch (status) {
+    case 'completed':
+      return WorkerLifecycleEventKinds.TASK_COMPLETED;
+    case 'failed':
+      return WorkerLifecycleEventKinds.TASK_FAILED;
+    case 'review_ready':
+      return WorkerLifecycleEventKinds.TASK_REVIEW_READY;
+    case 'awaiting_approval':
+      return WorkerLifecycleEventKinds.TASK_AWAITING_APPROVAL;
+    case 'needs_input':
+      return WorkerLifecycleEventKinds.TASK_NEEDS_INPUT;
+    default:
+      return WorkerLifecycleEventKinds.TASK_UPDATED;
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

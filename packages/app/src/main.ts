@@ -188,6 +188,7 @@ import {
   type HeadlessBatchExecRequest,
   type HeadlessExecMutationPayload,
 } from './headless-batch-exec.js';
+import { startLifecycleEventBridge } from './lifecycle-event-bridge.js';
 
 function isTaskInFlightForForcedStop(task: TaskState): boolean {
   return task.status === 'running'
@@ -510,6 +511,11 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     deferRunningUntilLaunch: true,
     launchOutboxMode: invokerConfig.launchOutboxMode,
   });
+  if (!readOnly) {
+    startLifecycleEventBridge(messageBus, {
+      resolveWorkflowId: (taskId) => orchestrator.getTask(taskId)?.config.workflowId,
+    });
+  }
   commandService = new CommandService(
     orchestrator,
     buildInvalidationDeps({
