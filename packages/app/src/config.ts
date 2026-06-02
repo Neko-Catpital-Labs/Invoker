@@ -231,7 +231,34 @@ export interface InvokerConfig {
    * preserved while the dispatcher matures.
    */
   launchOutboxMode?: LaunchOutboxMode;
+  /**
+   * Dormant external failure-recovery hook.
+   *
+   * Describes an out-of-process supervisor that *may* be launched when a task
+   * fails, before Invoker's own failed-task routing runs. This block is
+   * intentionally inert: parsing it exposes the config, but no failed-task
+   * delta path activates the launcher yet. It exists so the external process
+   * contract can be reviewed in isolation ahead of any behavior change.
+   */
+  externalFailureRecovery?: {
+    /** Master switch. When false/unset the launcher is a no-op (returns "disabled"). */
+    enabled?: boolean;
+    /** Shell command line executed via `shell: true` when recovery launches. */
+    command?: string;
+    /** Working directory for the launched command. Defaults to the process cwd. */
+    cwd?: string;
+    /**
+     * Minimum gap between launches from a single launcher instance, in seconds.
+     * Launch attempts inside the window return "cooldown" instead of spawning.
+     * Unset/0 disables throttling.
+     */
+    cooldownSeconds?: number;
+  };
 }
+
+export type ExternalFailureRecoveryConfig = NonNullable<
+  InvokerConfig['externalFailureRecovery']
+>;
 
 export type LaunchOutboxMode = 'disabled' | 'observe' | 'active';
 

@@ -220,6 +220,26 @@ describe('loadConfig', () => {
     expect(config.defaultPoolId).toBe('mixed-local-ssh');
   });
 
+  it('reads externalFailureRecovery from user config', () => {
+    const externalFailureRecovery = {
+      enabled: true,
+      command: 'node ./scripts/supervisor.js',
+      cwd: '/srv/invoker',
+      cooldownSeconds: 30,
+    };
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ externalFailureRecovery }),
+    );
+    const config = loadConfig();
+    expect(config.externalFailureRecovery).toEqual(externalFailureRecovery);
+  });
+
+  it('leaves externalFailureRecovery undefined when not configured', () => {
+    const config = loadConfig();
+    expect(config.externalFailureRecovery).toBeUndefined();
+  });
+
 });
 
 describe('resolveEmbeddedTerminalBackendConfig', () => {
