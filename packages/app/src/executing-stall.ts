@@ -35,12 +35,13 @@ export function evaluateExecutingStall(input: ExecutingStallEvaluationInput): Ex
   const heartbeatStale =
     !heartbeatSource || now.getTime() - heartbeatSource.getTime() >= executingStallTimeoutMs;
   const leaseExpired = !!leaseExpiresAt && leaseExpiresAt.getTime() < now.getTime();
+  const leaseStillValid = !!leaseExpiresAt && leaseExpiresAt.getTime() >= now.getTime();
   const executingAgeMs = executingStartedAt ? now.getTime() - executingStartedAt.getTime() : 0;
   const executingStalled =
     phase === 'executing'
     && executingStartedAt !== undefined
     && executingAgeMs >= executingStallTimeoutMs
-    && (leaseExpired || heartbeatStale);
+    && (leaseExpired || (!leaseStillValid && heartbeatStale));
 
   const staleReason = leaseExpired
     ? 'attempt lease expired'
