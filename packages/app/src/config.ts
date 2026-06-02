@@ -231,9 +231,40 @@ export interface InvokerConfig {
    * preserved while the dispatcher matures.
    */
   launchOutboxMode?: LaunchOutboxMode;
+  /**
+   * Optional external failure-recovery hook. When enabled with a non-empty
+   * command, failed-task handling can route the failure to an external script
+   * (preserving the manual "Fix with AI" path). The helper that launches the
+   * command lives in `external-failure-recovery.ts`; this task only adds the
+   * config shape and launcher and intentionally does NOT wire it to failed
+   * task deltas yet.
+   */
+  externalFailureRecovery?: ExternalFailureRecoveryConfig;
 }
 
 export type LaunchOutboxMode = 'disabled' | 'observe' | 'active';
+
+/**
+ * Configuration for the external failure-recovery launcher.
+ */
+export interface ExternalFailureRecoveryConfig {
+  /** Master switch. When false/unset the launcher never runs. */
+  enabled?: boolean;
+  /**
+   * Command line to launch as an external process when a task fails.
+   * An empty/whitespace-only command is treated as "not configured" and is
+   * skipped even when `enabled` is true.
+   */
+  command: string;
+  /** Working directory for the launched process. Defaults to the repo root. */
+  cwd?: string;
+  /**
+   * Minimum number of seconds between successive launches. A launch attempt
+   * that arrives before the cooldown elapses is skipped. Default: 0 (no
+   * cooldown).
+   */
+  cooldownSeconds?: number;
+}
 
 function readJsonSafe(path: string): InvokerConfig {
   if (!existsSync(path)) {
