@@ -1642,8 +1642,13 @@ export class Orchestrator {
           return [];
         }
         const activeGeneration = this.getExecutionGeneration(earlyTask);
+        // Validate generation lineage whenever the response carries it. Older
+        // producers may omit either the attempt id or the generation, so we
+        // only reject on a field that is actually present — but when both are
+        // present they must both match the live task. (Previously this check
+        // was gated on a missing attempt id, letting a response with the live
+        // attempt id but a stale generation slip through.)
         if (
-          !response.attemptId &&
           response.executionGeneration !== undefined &&
           response.executionGeneration !== activeGeneration
         ) {
