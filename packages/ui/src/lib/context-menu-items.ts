@@ -129,6 +129,17 @@ export function getMenuItems(
       separator: !canCancel ? 'danger' : undefined,
     });
 
+    // Downstream-only recreate preserves the selected task and reruns only its
+    // dependents, so it is hidden while the selected task is still running.
+    if (task.status !== 'running') {
+      items.push({
+        id: 'recreate-downstream',
+        label: 'Recreate Downstream',
+        enabled: true,
+        action: 'onRecreateDownstream',
+        variant: 'danger',
+      });
+    }
   }
 
   return items;

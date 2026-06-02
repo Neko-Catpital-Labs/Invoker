@@ -105,6 +105,28 @@ describe('Context menu (component)', () => {
     expect(screen.queryByText('Delete Workflow')).not.toBeInTheDocument();
   });
 
+  it('task context menu recreates downstream for the selected task', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    // Recreate Downstream lives in the collapsed danger section.
+    fireEvent.click(await screen.findByText('More'));
+    fireEvent.click(await screen.findByText('Recreate Downstream'));
+    await waitFor(() =>
+      expect(mock.api.recreateDownstream).toHaveBeenCalledWith('task-alpha'),
+    );
+  });
+
+  it('workflow context menu does not offer Recreate Downstream', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    fireEvent.click(await screen.findByText('More'));
+    expect(screen.queryByText('Recreate Downstream')).not.toBeInTheDocument();
+  });
+
   it('workflow context menu retries workflow', async () => {
     await setup();
     fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));

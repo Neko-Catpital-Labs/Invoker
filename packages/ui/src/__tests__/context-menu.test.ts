@@ -124,6 +124,53 @@ describe('ContextMenu getMenuItems', () => {
     });
   });
 
+  describe('Recreate Downstream visibility', () => {
+    it('is visible for a non-running workflow-owned task', () => {
+      const task = makeTask({ status: 'failed', workflowId: 'wf-1' });
+      const items = getMenuItems(task);
+
+      const downstream = items.find((item) => item.id === 'recreate-downstream');
+      expect(downstream).toBeDefined();
+      expect(downstream?.label).toBe('Recreate Downstream');
+      expect(downstream?.action).toBe('onRecreateDownstream');
+      expect(downstream?.enabled).toBe(true);
+    });
+
+    it('is visible for non-running statuses', () => {
+      for (const status of ['pending', 'failed', 'completed', 'stale', 'blocked'] as const) {
+        const task = makeTask({ status, workflowId: 'wf-1' });
+        const items = getMenuItems(task);
+        expect(items.find((item) => item.id === 'recreate-downstream')).toBeDefined();
+      }
+    });
+
+    it('is hidden for running tasks', () => {
+      const task = makeTask({ status: 'running', workflowId: 'wf-1' });
+      const items = getMenuItems(task);
+      expect(items.find((item) => item.id === 'recreate-downstream')).toBeUndefined();
+    });
+
+    it('is hidden for tasks without a workflowId', () => {
+      const task = makeTask({ status: 'failed' });
+      const items = getMenuItems(task);
+      expect(items.find((item) => item.id === 'recreate-downstream')).toBeUndefined();
+    });
+
+    it('is a danger-section item placed immediately after Recreate from Task', () => {
+      const task = makeTask({ status: 'completed', workflowId: 'wf-1' });
+      const items = getMenuItems(task);
+
+      const downstream = items.find((item) => item.id === 'recreate-downstream');
+      expect(downstream?.variant).toBe('danger');
+
+      const recreateIdx = items.findIndex((item) => item.id === 'recreate-task');
+      const downstreamIdx = items.findIndex((item) => item.id === 'recreate-downstream');
+      expect(downstreamIdx).toBe(recreateIdx + 1);
+      // The downstream item follows recreate-task and does not start a new separator.
+      expect(downstream?.separator).toBeUndefined();
+    });
+  });
+
   describe('Restart visibility', () => {
     it('allows restart for non-running tasks', () => {
       const task = makeTask({ status: 'failed' });
