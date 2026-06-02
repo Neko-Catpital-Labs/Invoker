@@ -1035,6 +1035,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'recreate-task':
       await headlessRecreateTask(args[1], deps);
       break;
+    case 'recreate-downstream':
+      await headlessRecreateDownstream(args[1], deps);
+      break;
     case 'replace-task':
       throw new Error(
         'Headless replace-task is disabled because it is not a safe supported CLI flow. ' +
@@ -1909,6 +1912,72 @@ async function headlessRecreateTask(taskId: string, deps: HeadlessDeps): Promise
   }
   if (deps.noTrack) {
     process.stdout.write('[headless] --no-track enabled: recreate-task accepted; exiting without tracking.\n');
+    autoFix.unsubscribe();
+    return;
+  }
+  if (workflowId) {
+    await trackHeadlessWorkflow(workflowId, deps, {
+      hasBackgroundWork: autoFix.isBusy,
+      printSummary: false,
+      printTaskOutput: true,
+      setExitCodeOnFailure: false,
+    });
+  }
+  autoFix.unsubscribe();
+}
+
+async function headlessRecreateDownstream(taskId: string, deps: HeadlessDeps): Promise<void> {
+  if (!taskId) {
+    throw new Error('Missing arguments. Usage: --headless recreate-downstream <taskId>');
+  }
+  const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'recreate-downstream');
+  if (!restored) return;
+  taskId = restored.resolvedTaskId;
+  if (deps.mutationTiming) {
+    await deps.mutationTiming.span(
+      'headless.recreate-downstream.preemptTaskSubgraph',
+      { taskId },
+      () => preemptTaskSubgraph(taskId, deps),
+    );
+  } else {
+    await preemptTaskSubgraph(taskId, deps);
+  }
+
+  const recreateDownstreamEnvelope = makeEnvelope('recreate-downstream', 'headless', 'task', { taskId });
+  const recreateDownstreamResult = deps.mutationTiming
+    ? await deps.mutationTiming.span(
+      'headless.recreate-downstream.commandService.recreateDownstream',
+      { taskId },
+      () => deps.commandService.recreateDownstream(recreateDownstreamEnvelope),
+    )
+    : await deps.commandService.recreateDownstream(recreateDownstreamEnvelope);
+  if (!recreateDownstreamResult.ok) throw new Error(recreateDownstreamResult.error.message);
+  const started = recreateDownstreamResult.data;
+  const runnable = started.filter(isDispatchableLaunch);
+  const workflowId = deps.orchestrator.getTask(taskId)?.config.workflowId;
+  process.stdout.write(`Recreate downstream of "${taskId}" — ${runnable.length} task(s) to execute (pool fetch skipped)\n`);
+  const te = createHeadlessExecutor(deps);
+  const autoFix = wireHeadlessAutoFix(deps, te);
+  remoteFetchForPool.enabled = false;
+  let topup: TaskState[] = [];
+  try {
+    ({ topup } = await dispatchStartedTasksWithGlobalTopup({
+      orchestrator: deps.orchestrator,
+      taskExecutor: te,
+      logger: deps.logger,
+      context: 'headless.recreate-downstream',
+      started,
+      mutationTiming: deps.mutationTiming,
+    }));
+  } finally {
+    remoteFetchForPool.enabled = true;
+  }
+  if (runnable.length + topup.length === 0) {
+    autoFix.unsubscribe();
+    return;
+  }
+  if (deps.noTrack) {
+    process.stdout.write('[headless] --no-track enabled: recreate-downstream accepted; exiting without tracking.\n');
     autoFix.unsubscribe();
     return;
   }
