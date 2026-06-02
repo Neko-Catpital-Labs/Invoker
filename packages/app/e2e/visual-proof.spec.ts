@@ -130,6 +130,26 @@ const REVIEW_READY_WORKFLOW_PR_PLAN = {
   ],
 };
 
+/**
+ * Manual-merge plan whose merge gate has no GitHub review URL, so the
+ * workflow inspector exposes the workflow-level External review (GitHub)
+ * conversion affordance without selecting the hidden merge-node task.
+ */
+const WORKFLOW_GITHUB_REVIEW_GATE_PLAN = {
+  name: 'Workflow GitHub review gate proof',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'merge' as const,
+  mergeMode: 'manual' as const,
+  tasks: [
+    {
+      id: 'wg-review-gate-work',
+      description: 'Sole task before the manual merge gate',
+      command: 'echo ok',
+      dependencies: [] as string[],
+    },
+  ],
+};
+
 const TASK_STATUS_PROOF_SPECS = [
   { status: 'pending', taskId: 'proof-task-pending', description: 'Pending', label: 'PENDING' },
   { status: 'running', taskId: 'proof-task-running', description: 'Running', label: 'RUNNING' },
@@ -666,6 +686,30 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByRole('link', { name: reviewUrl })).toHaveAttribute('href', reviewUrl);
 
     await captureScreenshot(page, 'review-ready-workflow-pr-sidebar');
+  });
+
+  test('workflow-github-review-gate-control — workflow-level External review (GitHub) affordance', async ({ page }) => {
+    // Select a workflow whose manual merge gate has no GitHub review URL.
+    const workflowId = await loadPlanAndSelectWorkflow(page, WORKFLOW_GITHUB_REVIEW_GATE_PLAN);
+    await page
+      .locator('.react-flow__node[data-testid$="wg-review-gate-work"]')
+      .first()
+      .waitFor({ state: 'visible', timeout: 15000 });
+
+    // Re-select the workflow node so the inspector renders the workflow-level
+    // surface (no merge-node task selected).
+    await workflowNode(page, workflowId).dispatchEvent('click', { bubbles: true });
+    await expect(page.getByTestId('workflow-inspector-title')).toHaveText('Workflow GitHub review gate proof');
+
+    // The workflow-level Merge mode control exposes the External review (GitHub) option...
+    const mergeModeSelect = page.getByTestId('workflow-merge-mode-select');
+    await expect(mergeModeSelect).toBeVisible();
+    await expect(mergeModeSelect.getByRole('option', { name: 'External review (GitHub)' })).toHaveCount(1);
+
+    // ...and because the gate has no PR yet, the direct conversion affordance is offered.
+    await expect(page.getByTestId('convert-workflow-merge-mode-external-review')).toBeVisible();
+
+    await captureScreenshot(page, 'workflow-github-review-gate-control');
   });
 
   test('interactive-status-hues — fixing-with-ai, needs-input, awaiting-approval', async ({ page }) => {
