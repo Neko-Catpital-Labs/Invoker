@@ -976,6 +976,43 @@ export class TaskRunner {
       hasWorkspacePath: Boolean(handle.workspacePath),
       hasAgentSessionId: Boolean(handle.agentSessionId),
     });
+    // Lineage guard: `markTaskRunningAfterLaunch` only rejects on a
+    // mismatched `selectedAttemptId` and does not validate that the
+    // generation captured at launch time still matches. A regeneration
+    // (e.g. recreate-task) that keeps the same attempt id would otherwise
+    // let this launch persist `workspacePath` / `branch` /
+    // `agentSessionId` / `containerId` onto the live attempt and register
+    // an active execution for an already-superseded generation. Mirror
+    // the rejected-launch path: kill the handle and bail before any
+    // post-start metadata write.
+    if (this.isLaunchStale(task.id, attemptId, startGeneration)) {
+      this.logger.warn(
+        `[TaskRunner] launch lineage advanced after executor.start; killing spawned process ` +
+          `task=${task.id} attemptId=${attemptId} startGeneration=${startGeneration}`,
+      );
+      try {
+        await executor.kill(handle);
+      } catch (killErr) {
+        this.logger.warn(
+          `[TaskRunner] failed to kill stale-lineage launch for task=${task.id}`,
+          { killErr },
+        );
+      }
+      this.persistence.logEvent?.(task.id, 'task.executor.post-start-lineage-stale', {
+        attemptId,
+        startGeneration,
+        runnerKind: executor.type,
+        workspacePath: handle.workspacePath,
+        branch: handle.branch,
+        agentSessionId: handle.agentSessionId,
+        containerId: handle.containerId,
+      });
+      this.releasePoolSelectionLease(this.pendingPoolSelections.get(task.id));
+      this.pendingPoolSelections.delete(task.id);
+      await this.cleanupPerTaskDockerExecutor(task);
+      bench('postStartLineage.stale');
+      return;
+    }
     const launchAccepted =
       this.orchestrator.markTaskRunningAfterLaunch?.(task.id, attemptId) ?? true;
     if (!launchAccepted) {

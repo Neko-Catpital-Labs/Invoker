@@ -392,11 +392,14 @@ describe('TaskRunner', () => {
       get: () => executorImpl,
       getAll: () => [executorImpl],
     };
+    // selectedAttemptId advances as each launch runs so the post-start
+    // lineage guard sees the launching attempt as current (matches what
+    // the orchestrator would report while a launch is in flight).
     const currentTask = makeTask({
       id: 'kill-selected-task',
       status: 'running',
       config: { command: 'echo current' },
-      execution: { selectedAttemptId: 'kill-selected-task-a2' },
+      execution: { selectedAttemptId: 'kill-selected-task-a1' },
     });
     const orchestrator = {
       getTask: (id: string) => id === currentTask.id ? currentTask : undefined,
@@ -423,6 +426,9 @@ describe('TaskRunner', () => {
     });
 
     const oldExecution = runner.executeTask(oldAttemptTask);
+    await vi.waitFor(() => expect(executorImpl.start).toHaveBeenCalledTimes(1));
+    // Advance to a2 once a1 has registered as an active execution.
+    currentTask.execution.selectedAttemptId = 'kill-selected-task-a2';
     const selectedExecution = runner.executeTask(selectedAttemptTask);
     await vi.waitFor(() => expect(executorImpl.start).toHaveBeenCalledTimes(2));
 
@@ -479,11 +485,15 @@ describe('TaskRunner', () => {
       get: () => executorImpl,
       getAll: () => [executorImpl],
     };
+    // selectedAttemptId starts aligned with the launching attempt (a1)
+    // so the launch passes the post-start lineage guard and registers
+    // as an active execution, then advances to a2 (no live a2 launch)
+    // to model the "selected attempt has no live execution" scenario.
     const currentTask = makeTask({
       id: 'stale-active-task',
       status: 'running',
       config: { command: 'echo current' },
-      execution: { selectedAttemptId: 'stale-active-task-a2' },
+      execution: { selectedAttemptId: 'stale-active-task-a1' },
     });
     const orchestrator = {
       getTask: (id: string) => id === currentTask.id ? currentTask : undefined,
@@ -503,6 +513,10 @@ describe('TaskRunner', () => {
       execution: { selectedAttemptId: 'stale-active-task-a1' },
     }));
     await vi.waitFor(() => expect(executorImpl.start).toHaveBeenCalledTimes(1));
+    // Wait for the launch to register before advancing — otherwise the
+    // post-start lineage guard fires and kills the launch.
+    await vi.waitFor(() => expect((runner as any).activeExecutions.has('stale-active-task-a1')).toBe(true));
+    currentTask.execution.selectedAttemptId = 'stale-active-task-a2';
 
     await runner.killActiveExecution(currentTask.id);
     expect(kill).not.toHaveBeenCalled();
@@ -1364,6 +1378,255 @@ describe('TaskRunner', () => {
         }),
       );
       expect(handleWorkerResponse).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('post-start lineage guard', () => {
+    // Lineage protection between executor.start() resolving and the
+    // post-start metadata block. markTaskRunningAfterLaunch only rejects
+    // attemptId mismatches; if generation advances while executor.start()
+    // is in flight (recreate-task that preserves attemptId), we must
+    // suppress the metadata write, skip activeExecutions registration,
+    // and kill the spawned handle.
+    function buildPostStartEnv(opts: {
+      taskId: string;
+      attemptId: string;
+      startGeneration: number;
+      currentGenerationAtPostStart: number;
+      currentAttemptIdAtPostStart?: string;
+    }) {
+      let signalStartEntered: (() => void) | undefined;
+      const startEntered = new Promise<void>((resolve) => {
+        signalStartEntered = resolve;
+      });
+      let resolveStart!: (handle: any) => void;
+      const startPromise = new Promise<any>((resolve) => {
+        resolveStart = resolve;
+      });
+
+      const updateTask = vi.fn();
+      const updateAttempt = vi.fn();
+      const appendTaskOutput = vi.fn();
+      const logEvent = vi.fn();
+      const handleWorkerResponse = vi.fn(() => []);
+      const markTaskRunningAfterLaunch = vi.fn(() => true);
+      const kill = vi.fn().mockResolvedValue(undefined);
+
+      // The orchestrator returns the *current* task each call so we can
+      // bump generation between executor.start() and the post-start
+      // guard read. The runner snapshots `startGeneration` at the top of
+      // executeTask, so mutating the return value after start() resolves
+      // exercises the lineage-stale path.
+      const taskRef = {
+        current: makeTask({
+          id: opts.taskId,
+          status: 'running',
+          config: { command: 'echo hi', runnerKind: 'worktree' as any },
+          execution: { selectedAttemptId: opts.attemptId, generation: opts.startGeneration },
+        }),
+      };
+
+      const orchestrator = {
+        getTask: () => taskRef.current,
+        getAllTasks: () => [taskRef.current],
+        handleWorkerResponse,
+        markTaskRunningAfterLaunch,
+        deferTask: vi.fn(),
+      };
+
+      let completeCallback: ((response: WorkResponse) => void) | undefined;
+      const executorImpl = {
+        type: 'worktree',
+        start: vi.fn().mockImplementation(async () => {
+          signalStartEntered?.();
+          return startPromise;
+        }),
+        kill,
+        onComplete: vi.fn().mockImplementation((_handle: any, cb: any) => {
+          completeCallback = cb;
+          return () => {};
+        }),
+        onOutput: vi.fn().mockReturnValue(() => {}),
+        onHeartbeat: vi.fn().mockReturnValue(() => {}),
+        destroyAll: vi.fn(),
+      };
+      const registry = {
+        getDefault: () => executorImpl,
+        get: () => executorImpl,
+        getAll: () => [['worktree', executorImpl]],
+      };
+
+      const runner = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: { updateTask, updateAttempt, appendTaskOutput, logEvent } as any,
+        executorRegistry: registry as any,
+        cwd: '/tmp',
+      });
+
+      return {
+        runner,
+        taskRef,
+        executorImpl,
+        updateTask,
+        updateAttempt,
+        logEvent,
+        markTaskRunningAfterLaunch,
+        kill,
+        triggerComplete(response: WorkResponse) {
+          completeCallback?.(response);
+        },
+        async releasePostStart(handle: any) {
+          await startEntered;
+          // Mutate orchestrator state so the post-start lineage check
+          // observes the advanced generation (or new attempt id) after
+          // executor.start() resolves but before any metadata persists.
+          taskRef.current = makeTask({
+            id: opts.taskId,
+            status: 'running',
+            config: { command: 'echo hi', runnerKind: 'worktree' as any },
+            execution: {
+              selectedAttemptId: opts.currentAttemptIdAtPostStart ?? opts.attemptId,
+              generation: opts.currentGenerationAtPostStart,
+            },
+          });
+          resolveStart(handle);
+        },
+      };
+    }
+
+    it('blocks post-start metadata + activeExecutions when generation advances during executor.start, same attemptId', async () => {
+      const env = buildPostStartEnv({
+        taskId: 'lineage-gen',
+        attemptId: 'lineage-gen-a1',
+        startGeneration: 3,
+        currentGenerationAtPostStart: 4,
+      });
+
+      const handle = {
+        executionId: 'exec-lineage-gen',
+        taskId: 'lineage-gen',
+        workspacePath: '/tmp/stale-post-start',
+        branch: 'experiment/lineage-gen-stale',
+        agentSessionId: 'sess-stale',
+        containerId: 'container-stale',
+      };
+
+      const task = makeTask({
+        id: 'lineage-gen',
+        status: 'running',
+        config: { command: 'echo hi', runnerKind: 'worktree' as any },
+        execution: { selectedAttemptId: 'lineage-gen-a1', generation: 3 },
+      });
+
+      const done = env.runner.executeTask(task);
+      await env.releasePostStart(handle);
+      await done;
+
+      // executor.start was awaited to completion (resolved post-advance).
+      expect(env.executorImpl.start).toHaveBeenCalledTimes(1);
+
+      // markTaskRunningAfterLaunch must NOT be reached for a stale
+      // generation: the lineage guard short-circuits before it so the
+      // orchestrator never marks an already-superseded launch as
+      // running.
+      expect(env.markTaskRunningAfterLaunch).not.toHaveBeenCalled();
+
+      // No post-start metadata persisted to the task row.
+      expect(env.updateTask).not.toHaveBeenCalledWith(
+        'lineage-gen',
+        expect.objectContaining({
+          execution: expect.objectContaining({ workspacePath: '/tmp/stale-post-start' }),
+        }),
+      );
+      expect(env.updateTask).not.toHaveBeenCalledWith(
+        'lineage-gen',
+        expect.objectContaining({
+          execution: expect.objectContaining({ agentSessionId: 'sess-stale' }),
+        }),
+      );
+
+      // Attempt row must not gain stale workspacePath/branch.
+      expect(env.updateAttempt).not.toHaveBeenCalledWith(
+        'lineage-gen-a1',
+        expect.objectContaining({ workspacePath: '/tmp/stale-post-start' }),
+      );
+
+      // Spawned handle is killed consistently with the existing stale
+      // markTaskRunningAfterLaunch rejection path.
+      expect(env.kill).toHaveBeenCalledWith(handle);
+
+      // Lineage-stale event logged for forensics.
+      expect(env.logEvent).toHaveBeenCalledWith(
+        'lineage-gen',
+        'task.executor.post-start-lineage-stale',
+        expect.objectContaining({
+          attemptId: 'lineage-gen-a1',
+          startGeneration: 3,
+          workspacePath: '/tmp/stale-post-start',
+        }),
+      );
+
+      // No active execution registered for the stale launch.
+      expect((env.runner as any).activeExecutions.size).toBe(0);
+    });
+
+    it('persists metadata + registers active execution on the current-lineage launch path', async () => {
+      const env = buildPostStartEnv({
+        taskId: 'lineage-current',
+        attemptId: 'lineage-current-a1',
+        startGeneration: 2,
+        currentGenerationAtPostStart: 2,
+      });
+
+      const handle = {
+        executionId: 'exec-lineage-current',
+        taskId: 'lineage-current',
+        workspacePath: '/tmp/current-post-start',
+        branch: 'experiment/lineage-current',
+        agentSessionId: 'sess-current',
+      };
+
+      const task = makeTask({
+        id: 'lineage-current',
+        status: 'running',
+        config: { command: 'echo hi', runnerKind: 'worktree' as any },
+        execution: { selectedAttemptId: 'lineage-current-a1', generation: 2 },
+      });
+
+      const done = env.runner.executeTask(task);
+      await env.releasePostStart(handle);
+      // Wait for the post-start path to register the active execution
+      // before triggering completion (which tears it down).
+      await vi.waitFor(() =>
+        expect((env.runner as any).activeExecutions.has('lineage-current-a1')).toBe(true),
+      );
+
+      expect(env.markTaskRunningAfterLaunch).toHaveBeenCalledWith(
+        'lineage-current',
+        'lineage-current-a1',
+      );
+      expect(env.kill).not.toHaveBeenCalled();
+      expect(env.updateTask).toHaveBeenCalledWith(
+        'lineage-current',
+        expect.objectContaining({
+          execution: expect.objectContaining({
+            workspacePath: '/tmp/current-post-start',
+            branch: 'experiment/lineage-current',
+            agentSessionId: 'sess-current',
+          }),
+        }),
+      );
+
+      // Drive the executor to completion so executeTask resolves.
+      env.triggerComplete({
+        requestId: 'req-lineage-current',
+        actionId: 'lineage-current',
+        attemptId: 'lineage-current-a1',
+        executionGeneration: 2,
+        status: 'completed',
+        outputs: { exitCode: 0 },
+      });
+      await done;
     });
   });
 
