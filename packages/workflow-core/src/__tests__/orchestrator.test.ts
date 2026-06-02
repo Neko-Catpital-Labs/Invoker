@@ -1894,6 +1894,26 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask(reviewLeafId)!.status).toBe('pending');
     });
 
+    it('closed task does not satisfy a regular non-reconciliation downstream dependency', () => {
+      orchestrator.loadPlan({
+        name: 'closed-dep-workflow',
+        tasks: [
+          { id: 'upstream', description: 'Upstream task' },
+          { id: 'downstream', description: 'Downstream task', dependencies: ['upstream'] },
+        ],
+      });
+      const upstreamId = sid(orchestrator, 0, 'upstream');
+      const downstreamId = sid(orchestrator, 0, 'downstream');
+
+      orchestrator.startExecution();
+      persistence.updateTask(upstreamId, { status: 'closed' });
+      orchestrator.syncAllFromDb();
+
+      const startedAfterClose = orchestrator.startExecution();
+      expect(startedAfterClose.map((t) => t.id)).not.toContain(downstreamId);
+      expect(orchestrator.getTask(downstreamId)!.status).toBe('pending');
+    });
+
     it('setTaskExternalGatePolicies can unblock pending task immediately', () => {
       orchestrator.loadPlan({
         name: 'prereq-workflow',
