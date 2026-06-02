@@ -20,6 +20,22 @@ export type TaskStatus =
   | 'awaiting_approval'
   | 'stale';
 
+// ── Viewport Navigation ─────────────────────────────────────
+
+/**
+ * One-shot request to center the viewport on a specific node.
+ *
+ * `requestId` is a monotonically increasing token. A graph component handles
+ * each `requestId` exactly once (tracking the last value it processed), so
+ * re-renders triggered by live task/status updates — which reuse the same
+ * `requestId` — never re-center and fight a manual pan or zoom. Only explicit
+ * navigation paths mint a new `requestId`.
+ */
+export interface CenterRequest {
+  readonly id: string;
+  readonly requestId: number;
+}
+
 // ── Experiment Types ────────────────────────────────────────
 
 export interface ExperimentVariant {

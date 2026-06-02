@@ -60,6 +60,31 @@ describe('TaskDAG stability', () => {
     });
   });
 
+  // ── One-shot navigation centering ─────────────────────────
+  describe('one-shot center request', () => {
+    it('accepts a centerTaskRequest object instead of a persistent string', () => {
+      expect(source).toContain('centerTaskRequest?: CenterRequest | null;');
+      expect(source).not.toContain('centerTaskId');
+    });
+
+    it('handles each requestId exactly once via a last-handled ref', () => {
+      expect(source).toContain('lastCenteredRequestRef');
+      expect(source).toContain(
+        'if (lastCenteredRequestRef.current === centerTaskRequest.requestId) return;',
+      );
+      expect(source).toContain('lastCenteredRequestRef.current = centerTaskRequest.requestId;');
+    });
+
+    it('still falls back to fitView when setCenter is unavailable', () => {
+      const centerEffect = source.slice(
+        source.indexOf('if (!centerTaskRequest'),
+        source.indexOf('}, [centerTaskRequest'),
+      );
+      expect(centerEffect).toContain("typeof setCenter === 'function'");
+      expect(centerEffect).toContain('fitView({ padding: 0.2 })');
+    });
+  });
+
   // ── onNodesChange filtering ───────────────────────────────
   describe('onNodesChange filtering', () => {
     const baseNode: Node = {

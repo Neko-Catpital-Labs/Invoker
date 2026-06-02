@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect } from 'react';
 import yaml from 'js-yaml';
-import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
+import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus, CenterRequest } from './types.js';
 import type { ActionGraphNode, TerminalSessionDescriptor } from '@invoker/contracts';
 import { useTasks } from './hooks/useTasks.js';
 import { useInvoker } from './hooks/useInvoker.js';
@@ -294,8 +294,9 @@ export function App() {
   const [workflowContextMenu, setWorkflowContextMenu] = useState<{ x: number; y: number; workflowId: string } | null>(null);
   const [keyboardRegion, setKeyboardRegion] = useState<KeyboardRegion>('workflowGraph');
   const [previousGraphRegion, setPreviousGraphRegion] = useState<KeyboardRegion>('workflowGraph');
-  const [centerWorkflowId, setCenterWorkflowId] = useState<string | null>(null);
-  const [centerTaskId, setCenterTaskId] = useState<string | null>(null);
+  const [centerWorkflowRequest, setCenterWorkflowRequest] = useState<CenterRequest | null>(null);
+  const [centerTaskRequest, setCenterTaskRequest] = useState<CenterRequest | null>(null);
+  const centerRequestCounterRef = useRef(0);
   const [bottomStatusIndex, setBottomStatusIndex] = useState(0);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -598,15 +599,24 @@ export function App() {
     return { x: Math.max(24, window.innerWidth / 2), y: Math.max(24, window.innerHeight / 2) };
   }, []);
 
+  // Mint a fresh, monotonically increasing token for an explicit center
+  // request. Only navigation paths that intend to move the viewport call this;
+  // ordinary clicks select without centering, so live task/status re-renders
+  // never recycle a token and snap the graph back under a manual pan or zoom.
+  const nextCenterRequestId = useCallback(() => {
+    centerRequestCounterRef.current += 1;
+    return centerRequestCounterRef.current;
+  }, []);
+
   const selectWorkflowById = useCallback((workflowId: string) => {
     setWorkflowSelectionDismissed(false);
     setSelectedWorkflowId(workflowId);
     setSelectedTaskId(null);
     setContextMenu(null);
     setWorkflowContextMenu(null);
-    setCenterWorkflowId(workflowId);
+    setCenterWorkflowRequest({ id: workflowId, requestId: nextCenterRequestId() });
     focusKeyboardRegion('workflowGraph');
-  }, [focusKeyboardRegion]);
+  }, [focusKeyboardRegion, nextCenterRequestId]);
 
   const selectTaskById = useCallback((taskId: string) => {
     const task = tasks.get(taskId);
@@ -615,13 +625,13 @@ export function App() {
     setWorkflowSelectionDismissed(false);
     if (task.config.workflowId) {
       setSelectedWorkflowId(task.config.workflowId);
-      setCenterWorkflowId(task.config.workflowId);
+      setCenterWorkflowRequest({ id: task.config.workflowId, requestId: nextCenterRequestId() });
     }
     setContextMenu(null);
     setWorkflowContextMenu(null);
-    setCenterTaskId(task.id);
+    setCenterTaskRequest({ id: task.id, requestId: nextCenterRequestId() });
     focusKeyboardRegion('taskGraph');
-  }, [focusKeyboardRegion, tasks]);
+  }, [focusKeyboardRegion, nextCenterRequestId, tasks]);
 
   const selectRelativeNode = useCallback((direction: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight') => {
     const inTaskGraph = keyboardRegion === 'taskGraph';
@@ -1620,7 +1630,7 @@ export function App() {
                     tasks={tasks}
                     workflows={workflows}
                     selectedWorkflowId={selectedWorkflow?.id ?? null}
-                    centerWorkflowId={centerWorkflowId}
+                    centerWorkflowRequest={centerWorkflowRequest}
                     statusFilters={statusFilters}
                     onSelectWorkflow={handleWorkflowClick}
                     onWorkflowContextMenu={handleWorkflowContextMenu}
@@ -1644,7 +1654,7 @@ export function App() {
                           tasks={miniDagTasks}
                           workflows={selectedTaskDagWorkflows}
                           selectedTaskId={selectedTaskId}
-                          centerTaskId={centerTaskId}
+                          centerTaskRequest={centerTaskRequest}
                           onTaskClick={handleTaskClick}
                           onTaskDoubleClick={handleTaskDoubleClick}
                           onTaskContextMenu={handleTaskContextMenu}
