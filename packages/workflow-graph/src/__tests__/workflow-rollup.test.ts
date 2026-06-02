@@ -97,4 +97,17 @@ describe('workflow rollup', () => {
     expect(rollup.countsByStatus.failed).toBe(0);
     expect(rollup.failedTasks).toEqual([]);
   });
+
+  it('does not roll up to completed when a closed task is mixed with completed tasks', () => {
+    const rollup = computeWorkflowRollupFromSummaries([
+      task('alpha', 'completed'),
+      task('beta', 'completed'),
+      task('gamma', 'closed'),
+    ]);
+
+    expect(rollup.status).toBe('closed');
+    expect(rollup.status).not.toBe('completed');
+    expect(rollup.countsByStatus.completed).toBe(2);
+    expect(rollup.countsByStatus.closed).toBe(1);
+  });
 });
