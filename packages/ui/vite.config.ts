@@ -12,11 +12,22 @@ export default defineConfig({
     minify: 'esbuild', // esbuild is faster and uses less memory than terser
     rollupOptions: {
       output: {
-        manualChunks: {
-          // Split large vendor chunks to reduce memory pressure
-          react: ['react', 'react-dom'],
-          xyflow: ['@xyflow/react'],
-          xterm: ['xterm', 'xterm-addon-fit'],
+        // Split large vendor chunks to reduce memory pressure and keep the
+        // startup entry chunk small. A function form is used because the array
+        // form did not reliably capture the pnpm-hoisted react modules.
+        // elkjs is intentionally NOT listed here: it is dynamically imported in
+        // src/lib/layout.ts so Rollup already emits it as a lazy async chunk
+        // that stays out of the startup entry.
+        manualChunks(id) {
+          if (id.includes('node_modules/@xyflow/')) return 'xyflow';
+          if (
+            id.includes('node_modules/react-dom/') ||
+            id.includes('node_modules/react/') ||
+            id.includes('node_modules/scheduler/')
+          ) {
+            return 'react';
+          }
+          return undefined;
         },
       },
     },

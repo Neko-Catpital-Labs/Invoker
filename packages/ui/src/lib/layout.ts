@@ -11,9 +11,34 @@
  *    for straighter edges.
  */
 
-import ELK from 'elkjs/lib/elk.bundled.js';
-
 import type { TaskState } from '../types.js';
+
+/**
+ * elkjs ships a ~1.5MB bundled worker. It is only needed to *refine* an already
+ * painted DAG (callers render the synchronous fallback layout first and swap in
+ * ELK positions when this resolves), so it must never sit in the startup entry
+ * chunk. Load it through a dynamic import so Vite emits it as a separate async
+ * chunk that is fetched lazily the first time a graph is laid out.
+ */
+type ElkConstructor = new () => ElkLayoutEngine;
+
+let elkConstructorPromise: Promise<ElkConstructor> | null = null;
+
+function loadElkConstructor(): Promise<ElkConstructor> {
+  if (!elkConstructorPromise) {
+    elkConstructorPromise = import('elkjs/lib/elk.bundled.js')
+      .then((mod) => (mod.default ?? mod) as unknown as ElkConstructor)
+      .catch((error) => {
+        // The bundled engine is a separately fetched async chunk now, so the
+        // import can fail transiently (flaky network). Don't cache the
+        // rejection — clear it so the next layout attempt re-fetches instead of
+        // wedging on fallback positions for the rest of the session.
+        elkConstructorPromise = null;
+        throw error;
+      });
+  }
+  return elkConstructorPromise;
+}
 
 export interface NodePosition {
   x: number;
@@ -88,7 +113,8 @@ export async function layoutTaskGraph(
     .sort((a, b) => edgeLayoutId(a).localeCompare(edgeLayoutId(b)));
 
   try {
-    const elk = options?.elk ?? new ELK();
+    const ElkCtor = options?.elk ? null : await loadElkConstructor();
+    const elk = options?.elk ?? new ElkCtor!();
     const graph = {
       id: 'task-dag',
       layoutOptions: {
