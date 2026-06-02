@@ -158,13 +158,15 @@ export interface WorkflowMeta {
   baseBranch?: string;
   featureBranch?: string;
   onFinish?: string;
-  mergeMode?: string;
+  mergeMode?: MergeMode;
   repoUrl?: string;
   intermediateRepoUrl?: string;
   reviewProvider?: string;
   createdAt?: string;
   updatedAt?: string;
 }
+
+export type MergeMode = 'manual' | 'automatic' | 'external_review';
 
 export type WorkflowStatus =
   | 'pending'
@@ -250,7 +252,7 @@ export interface PlanDefinition {
   tasks: PlanTask[];
   onFinish?: 'none' | 'merge' | 'pull_request';
   baseBranch?: string;
-  mergeMode?: 'manual' | 'automatic' | 'external_review';
+  mergeMode?: MergeMode;
 }
 
 // ── Task Replacement ────────────────────────────────────────
