@@ -73,6 +73,14 @@ describe('Context menu (component)', () => {
     });
   }
 
+  async function openTaskContextMenu(taskId = 'task-alpha') {
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId(`rf__node-${taskId}`)).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId(`rf__node-${taskId}`));
+  }
+
   it('right-clicking a workflow shows workflow actions', async () => {
     await setup();
     fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
@@ -87,15 +95,12 @@ describe('Context menu (component)', () => {
     fireEvent.click(screen.getByText('More'));
     expect(await screen.findByText('Rebase and Retry')).toBeInTheDocument();
     expect(screen.getByText('Rebase and Recreate')).toBeInTheDocument();
+    expect(screen.queryByText('Recreate Downstream')).not.toBeInTheDocument();
   });
 
   it('task context menu still works in mini DAG', async () => {
     await setup();
-    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
-    await waitFor(() => {
-      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
-    });
-    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    await openTaskContextMenu();
     await waitFor(() => {
       expect(screen.getByText('Open Terminal')).toBeInTheDocument();
       expect(screen.getByText('Restart Task')).toBeInTheDocument();
@@ -103,6 +108,35 @@ describe('Context menu (component)', () => {
     expect(screen.queryByText('Retry Workflow')).not.toBeInTheDocument();
     expect(screen.queryByText('Cancel Workflow')).not.toBeInTheDocument();
     expect(screen.queryByText('Delete Workflow')).not.toBeInTheDocument();
+  });
+
+  it('task context menu recreates downstream through the app bridge', async () => {
+    await setup();
+    await openTaskContextMenu();
+
+    fireEvent.click(await screen.findByText('More'));
+    fireEvent.click(await screen.findByText('Recreate Downstream'));
+
+    await waitFor(() => expect(mock.api.recreateDownstream).toHaveBeenCalledWith('task-alpha'));
+    expect(mock.api.recreateTask).not.toHaveBeenCalled();
+    expect(mock.api.restartTask).not.toHaveBeenCalled();
+    expect(mock.api.cancelTask).not.toHaveBeenCalled();
+  });
+
+  it('disables Recreate Downstream for running tasks', async () => {
+    render(<App />);
+    act(() => mock.setTasks([{ ...alpha, status: 'running' }], workflows));
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-wf-1')).toBeInTheDocument();
+    });
+    await openTaskContextMenu();
+
+    fireEvent.click(await screen.findByText('More'));
+    const item = await screen.findByRole('menuitem', { name: 'Recreate Downstream' });
+
+    expect(item).toBeDisabled();
+    fireEvent.click(item);
+    expect(mock.api.recreateDownstream).not.toHaveBeenCalled();
   });
 
   it('workflow context menu retries workflow', async () => {
