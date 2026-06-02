@@ -15,6 +15,7 @@ import type {
   TaskConfig,
   TaskExecution,
 } from '../../types.js';
+import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 export interface MockInvoker {
   /** The mock InvokerAPI object installed on window.invoker. */
@@ -127,14 +128,7 @@ export function createMockInvoker(
     getEvents: vi.fn(async () => []),
     openTerminal: vi.fn(async (taskId: string) => ({
       opened: true,
-      session: {
-        sessionId: `mock-session-${taskId}`,
-        taskId,
-        status: 'running',
-        mode: 'spawn',
-        attached: false,
-        createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
-      },
+      session: makeTerminalSession({ taskId }),
     })),
     terminalList: vi.fn(async () => []),
     terminalWrite: vi.fn(async () => ({ ok: true })),
@@ -205,6 +199,29 @@ export function createMockInvoker(
   }
 
   return { api, setTasks, fireDelta, fireWorkflowsChanged, install, cleanup };
+}
+
+/**
+ * Build a TerminalSessionDescriptor for tests. `outputSnapshot` is supported
+ * so tests can drive renderer-side replay seeding.
+ */
+export function makeTerminalSession(
+  overrides: Partial<TerminalSessionDescriptor> & { taskId?: string } = {},
+): TerminalSessionDescriptor {
+  const taskId = overrides.taskId ?? 'task-1';
+  return {
+    sessionId: overrides.sessionId ?? `mock-session-${taskId}`,
+    taskId,
+    status: overrides.status ?? 'running',
+    mode: overrides.mode ?? 'spawn',
+    attached: overrides.attached ?? false,
+    createdAt: overrides.createdAt ?? new Date('2025-01-01T00:00:00Z').toISOString(),
+    ...(overrides.exitCode !== undefined ? { exitCode: overrides.exitCode } : {}),
+    ...(overrides.cwd !== undefined ? { cwd: overrides.cwd } : {}),
+    ...(overrides.command !== undefined ? { command: overrides.command } : {}),
+    ...(overrides.args !== undefined ? { args: overrides.args } : {}),
+    ...(overrides.outputSnapshot !== undefined ? { outputSnapshot: overrides.outputSnapshot } : {}),
+  };
 }
 
 /** Create a minimal TaskState for testing. */

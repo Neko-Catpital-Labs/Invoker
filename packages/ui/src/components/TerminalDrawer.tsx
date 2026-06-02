@@ -44,6 +44,13 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  // Tracks which (sessionId, snapshot) pair has been seeded into the *current*
+  // xterm. Cleared on cleanup so a fresh terminal (e.g., after pane remount)
+  // gets re-seeded, while re-renders against the same xterm skip duplicate
+  // writes. The snapshot is the bounded replay text included on the session
+  // descriptor by the app bridge.
+  const seededRef = useRef<{ sessionId: string; snapshot: string } | null>(null);
+  const snapshotForEffect = session.outputSnapshot;
 
   useEffect(() => {
     const host = containerRef.current;
@@ -68,6 +75,18 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
     }
     termRef.current = term;
     fitRef.current = fit;
+
+    if (snapshotForEffect) {
+      const already = seededRef.current;
+      if (!already || already.sessionId !== session.sessionId || already.snapshot !== snapshotForEffect) {
+        try {
+          term.write(snapshotForEffect);
+        } catch {
+          /* terminal disposed */
+        }
+        seededRef.current = { sessionId: session.sessionId, snapshot: snapshotForEffect };
+      }
+    }
 
     const inputDisposable = term.onData((data) => {
       void window.invoker?.terminalWrite?.(session.sessionId, data);
@@ -123,7 +142,14 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
       }
       termRef.current = null;
       fitRef.current = null;
+      seededRef.current = null;
     };
+    // snapshotForEffect is intentionally read at mount time via the closure
+    // and not in the dep array: when later live output extends the recent
+    // history the descriptor may carry a fresh snapshot, but re-running this
+    // effect would tear down xterm and double-write history alongside live
+    // output. We only seed once per xterm instance.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onOutput, session.sessionId]);
 
   useEffect(() => {
