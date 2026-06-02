@@ -277,6 +277,15 @@ export interface TerminalSessionDescriptor {
   mode: 'spawn' | 'attached';
   attached: boolean;
   createdAt: string;
+  /**
+   * Bounded recent terminal output snapshot used by the renderer to seed
+   * newly mounted panes. Early PTY output can be emitted before the renderer
+   * mounts `TerminalDrawer`/`TerminalSessionPane` and subscribes to
+   * `invoker:terminal-output`; this snapshot lets late subscribers replay that
+   * output so the GUI terminal is not blank. Capped to a fixed maximum, so it
+   * holds only the most recent output. Omitted when no output has been seen.
+   */
+  outputSnapshot?: string;
 }
 
 export interface TerminalOutputEvent {
