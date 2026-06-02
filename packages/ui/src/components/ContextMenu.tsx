@@ -64,6 +64,10 @@ export function ContextMenu({
   // Find first enabled item index
   const firstEnabledIndex = renderedItems.findIndex((item) => item.enabled);
 
+  useEffect(() => {
+    menuRef.current?.focus();
+  }, []);
+
   // Auto-focus first enabled item on mount
   useEffect(() => {
     if (firstEnabledIndex >= 0) {
@@ -141,20 +145,27 @@ export function ContextMenu({
 
     if (e.key === 'ArrowDown') {
       e.preventDefault();
+      e.stopPropagation();
       const currentPos = enabledIndices.indexOf(focusedIndex);
       const nextPos = (currentPos + 1) % enabledIndices.length;
       setFocusedIndex(enabledIndices[nextPos]);
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
+      e.stopPropagation();
       const currentPos = enabledIndices.indexOf(focusedIndex);
       const prevPos = (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
       setFocusedIndex(enabledIndices[prevPos]);
     } else if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
+      e.stopPropagation();
       const item = renderedItems[focusedIndex];
       if (item?.enabled) {
         handleItemClick(item);
       }
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      onClose();
     }
   };
 
@@ -216,7 +227,7 @@ export function ContextMenu({
     <div
       ref={menuRef}
       role="menu"
-      className="fixed z-50 bg-gray-800 border border-gray-600 rounded-lg shadow-xl py-1 min-w-[160px]"
+      className="fixed z-50 bg-gray-800 border border-gray-600 rounded-lg shadow-xl py-1 min-w-[160px] focus:outline-none"
       style={{ left: position.left, top: position.top }}
       onKeyDown={handleKeyDown}
       onClick={(event) => event.stopPropagation()}

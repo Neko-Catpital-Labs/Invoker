@@ -73,6 +73,31 @@ describe('Context menu (component)', () => {
     });
   }
 
+  function sendMenuKey(key: string) {
+    const target = document.activeElement instanceof HTMLElement && document.activeElement !== document.body
+      ? document.activeElement
+      : document;
+
+    fireEvent.keyDown(target, {
+      key,
+      code: key === ' ' ? 'Space' : key,
+    });
+  }
+
+  async function openWorkflowContextMenu() {
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    return screen.findByRole('menu');
+  }
+
+  async function openTaskContextMenu() {
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    return screen.findByRole('menu');
+  }
+
   it('right-clicking a workflow shows workflow actions', async () => {
     await setup();
     fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
@@ -157,5 +182,41 @@ describe('Context menu (component)', () => {
     fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('workflow context menu keyboard navigation copies workflow id with Enter', async () => {
+    await setup();
+    await openWorkflowContextMenu();
+
+    sendMenuKey('ArrowDown');
+    sendMenuKey('ArrowDown');
+    sendMenuKey('ArrowDown');
+    sendMenuKey('Enter');
+
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('workflow context menu ArrowUp wraps to More deterministically', async () => {
+    await setup();
+    await openWorkflowContextMenu();
+
+    sendMenuKey('ArrowUp');
+    sendMenuKey('Enter');
+
+    expect(await screen.findByText('Rebase and Retry')).toBeInTheDocument();
+    expect(screen.getByText('Rebase and Recreate')).toBeInTheDocument();
+  });
+
+  it.each([
+    ['Enter', 'Enter'],
+    ['Space', ' '],
+  ])('task context menu keyboard navigation activates the highlighted item with %s', async (_label, key) => {
+    await setup();
+    await openTaskContextMenu();
+
+    sendMenuKey('ArrowDown');
+    sendMenuKey(key);
+
+    await waitFor(() => expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'));
   });
 });
