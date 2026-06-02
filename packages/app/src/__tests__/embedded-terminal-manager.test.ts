@@ -261,6 +261,36 @@ describe('EmbeddedTerminalManager', () => {
     expect(events).toEqual(['startup line\n']);
   });
 
+  it('replays first-frame PTY output emitted synchronously during spawn', () => {
+    const pty = createFakePty();
+    const originalOnData = pty.onData.bind(pty);
+    pty.onData = (listener) => {
+      const disposable = originalOnData(listener);
+      listener('FIRST_FRAME_FROM_PTY\n');
+      return disposable;
+    };
+    const ptySpawnFn = vi.fn(() => pty) as unknown as PtySpawnFn;
+    const mgr = new EmbeddedTerminalManager({
+      backend: createPtyTerminalBackend({ spawnFn: ptySpawnFn }),
+    });
+
+    const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+    const listedSession = mgr.list().find((entry) => entry.sessionId === session.sessionId);
+    const lateConsumerChunks = [session.outputSnapshot ?? ''];
+    mgr.on('output', (event) => {
+      if (event.sessionId === session.sessionId) {
+        lateConsumerChunks.push(event.data);
+      }
+    });
+    pty.emit('data', 'SECOND_FRAME_FROM_PTY\n');
+
+    expect(session.outputSnapshot).toBe('FIRST_FRAME_FROM_PTY\n');
+    expect(listedSession?.outputSnapshot).toBe('FIRST_FRAME_FROM_PTY\n');
+    expect(lateConsumerChunks.join('')).toBe(
+      'FIRST_FRAME_FROM_PTY\nSECOND_FRAME_FROM_PTY\n',
+    );
+  });
+
   it('keeps replay snapshots bounded to recent output', () => {
     const prefix = 'x'.repeat(8 * 1024);
     const tail = 'y'.repeat(64 * 1024);
@@ -311,6 +341,32 @@ describe('EmbeddedTerminalManager', () => {
     expect(spawned.close).toHaveBeenCalledTimes(1);
     expect(mgr.list()).toHaveLength(0);
     expect(exits).toEqual([{ sessionId: session.sessionId, exitCode: 7 }]);
+  });
+
+  it('does not throw when the PTY backend exits synchronously during spawn', () => {
+    const pty = createFakePty();
+    pty.onExit = (listener) => {
+      pty.on('exit', listener);
+      listener({ exitCode: 17 });
+      return { dispose: () => pty.off('exit', listener) };
+    };
+    const ptySpawnFn = vi.fn(() => pty) as unknown as PtySpawnFn;
+    const mgr = new EmbeddedTerminalManager({
+      backend: createPtyTerminalBackend({ spawnFn: ptySpawnFn }),
+    });
+    const exits: Array<{ sessionId: string; exitCode?: number }> = [];
+    mgr.on('exit', (e) => exits.push({ sessionId: e.sessionId, exitCode: e.exitCode }));
+
+    let session: ReturnType<EmbeddedTerminalManager['openOrReuse']> | undefined;
+    expect(() => {
+      session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+    }).not.toThrow();
+
+    expect(session?.status).toBe('exited');
+    expect(session?.exitCode).toBe(17);
+    expect(pty.killed).toBe(true);
+    expect(mgr.list()).toHaveLength(0);
+    expect(exits).toEqual([{ sessionId: session?.sessionId, exitCode: 17 }]);
   });
 
   it('write() forwards data to bash stdin in spawn mode', () => {
