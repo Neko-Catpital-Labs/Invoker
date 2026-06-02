@@ -5865,6 +5865,218 @@ describe('Orchestrator', () => {
       expect(x.execution.workspacePath).toBe('/tmp/x');
     });
 
+    it('recreateDownstream preserves A while recreating B and C in A -> B -> C', () => {
+      const testPersistence = new InMemoryPersistence();
+      const testBus = new InMemoryBus();
+      const wf = 'wf-recreate-downstream-a';
+
+      testPersistence.saveTask(wf, {
+        id: 'A',
+        description: 'Selected',
+        status: 'completed',
+        dependencies: [],
+        createdAt: new Date(),
+        config: { workflowId: wf, summary: 'keep selected summary' },
+        execution: {
+          branch: 'br-a',
+          commit: 'a1',
+          workspacePath: '/tmp/a',
+          selectedAttemptId: 'attempt-A',
+          generation: 7,
+          exitCode: 0,
+        },
+      });
+      testPersistence.saveTask(wf, {
+        id: 'B',
+        description: 'Downstream',
+        status: 'completed',
+        dependencies: ['A'],
+        createdAt: new Date(),
+        config: { workflowId: wf, summary: 'old B summary' },
+        execution: {
+          branch: 'br-b',
+          commit: 'b1',
+          workspacePath: '/tmp/b',
+          selectedAttemptId: 'attempt-B',
+          generation: 2,
+          reviewUrl: 'https://review/b',
+          reviewId: 'review-b',
+          agentSessionId: 'session-b',
+          containerId: 'container-b',
+          startedAt: new Date('2026-01-01T00:00:00Z'),
+          completedAt: new Date('2026-01-01T00:01:00Z'),
+          error: 'old error',
+          exitCode: 1,
+        },
+      });
+      testPersistence.saveTask(wf, {
+        id: 'C',
+        description: 'Grandchild',
+        status: 'completed',
+        dependencies: ['B'],
+        createdAt: new Date(),
+        config: { workflowId: wf, summary: 'old C summary' },
+        execution: {
+          branch: 'br-c',
+          commit: 'c1',
+          workspacePath: '/tmp/c',
+          selectedAttemptId: 'attempt-C',
+          generation: 4,
+          startedAt: new Date('2026-01-01T00:00:00Z'),
+          completedAt: new Date('2026-01-01T00:01:00Z'),
+          exitCode: 0,
+        },
+      });
+
+      const testOrchestrator = new Orchestrator({
+        persistence: testPersistence,
+        messageBus: testBus,
+        maxConcurrency: 3,
+      });
+
+      testOrchestrator.syncFromDb(wf);
+      const beforeA = testOrchestrator.getTask('A')!;
+      const started = testOrchestrator.recreateDownstream('A');
+
+      const a = testOrchestrator.getTask('A')!;
+      const b = testOrchestrator.getTask('B')!;
+      const c = testOrchestrator.getTask('C')!;
+
+      expect(a.status).toBe(beforeA.status);
+      expect(a.execution.branch).toBe(beforeA.execution.branch);
+      expect(a.execution.commit).toBe(beforeA.execution.commit);
+      expect(a.execution.workspacePath).toBe(beforeA.execution.workspacePath);
+      expect(a.execution.selectedAttemptId).toBe(beforeA.execution.selectedAttemptId);
+      expect(a.execution.generation).toBe(beforeA.execution.generation);
+
+      expect(started.some((t) => t.id === 'B')).toBe(true);
+      expect(b.status === 'running' || b.status === 'pending').toBe(true);
+      expect(c.status).toBe('pending');
+      expect(b.config.summary).toBeUndefined();
+      expect(c.config.summary).toBeUndefined();
+      expect(b.execution.branch).toBeUndefined();
+      expect(b.execution.commit).toBeUndefined();
+      expect(b.execution.workspacePath).toBeUndefined();
+      expect(b.execution.reviewUrl).toBeUndefined();
+      expect(b.execution.reviewId).toBeUndefined();
+      expect(b.execution.agentSessionId).toBeUndefined();
+      expect(b.execution.containerId).toBeUndefined();
+      expect(b.execution.completedAt).toBeUndefined();
+      expect(b.execution.error).toBeUndefined();
+      expect(b.execution.exitCode).toBeUndefined();
+      expect(b.execution.selectedAttemptId).toBeTruthy();
+      expect(b.execution.selectedAttemptId).not.toBe('attempt-B');
+      expect(b.execution.generation).toBe(3);
+      expect(c.execution.branch).toBeUndefined();
+      expect(c.execution.commit).toBeUndefined();
+      expect(c.execution.workspacePath).toBeUndefined();
+      expect(c.execution.startedAt).toBeUndefined();
+      expect(c.execution.completedAt).toBeUndefined();
+      expect(c.execution.selectedAttemptId).toBeTruthy();
+      expect(c.execution.selectedAttemptId).not.toBe('attempt-C');
+      expect(c.execution.generation).toBe(5);
+    });
+
+    it('recreateDownstream from B recreates only C and preserves B', () => {
+      const testPersistence = new InMemoryPersistence();
+      const testBus = new InMemoryBus();
+      const wf = 'wf-recreate-downstream-b';
+
+      for (const task of [
+        { id: 'A', dependencies: [], branch: 'br-a', commit: 'a1', workspacePath: '/tmp/a', attempt: 'attempt-A', generation: 1 },
+        { id: 'B', dependencies: ['A'], branch: 'br-b', commit: 'b1', workspacePath: '/tmp/b', attempt: 'attempt-B', generation: 6 },
+        { id: 'C', dependencies: ['B'], branch: 'br-c', commit: 'c1', workspacePath: '/tmp/c', attempt: 'attempt-C', generation: 9 },
+      ]) {
+        testPersistence.saveTask(wf, {
+          id: task.id,
+          description: task.id,
+          status: 'completed',
+          dependencies: task.dependencies,
+          createdAt: new Date(),
+          config: { workflowId: wf, summary: `${task.id} summary` },
+          execution: {
+            branch: task.branch,
+            commit: task.commit,
+            workspacePath: task.workspacePath,
+            selectedAttemptId: task.attempt,
+            generation: task.generation,
+            exitCode: 0,
+          },
+        });
+      }
+
+      const testOrchestrator = new Orchestrator({
+        persistence: testPersistence,
+        messageBus: testBus,
+        maxConcurrency: 3,
+      });
+
+      testOrchestrator.syncFromDb(wf);
+      const beforeB = testOrchestrator.getTask('B')!;
+      testOrchestrator.recreateDownstream('B');
+
+      const a = testOrchestrator.getTask('A')!;
+      const b = testOrchestrator.getTask('B')!;
+      const c = testOrchestrator.getTask('C')!;
+
+      expect(a.status).toBe('completed');
+      expect(a.execution.branch).toBe('br-a');
+      expect(b.status).toBe(beforeB.status);
+      expect(b.execution.branch).toBe(beforeB.execution.branch);
+      expect(b.execution.commit).toBe(beforeB.execution.commit);
+      expect(b.execution.workspacePath).toBe(beforeB.execution.workspacePath);
+      expect(b.execution.selectedAttemptId).toBe(beforeB.execution.selectedAttemptId);
+      expect(b.execution.generation).toBe(beforeB.execution.generation);
+      expect(c.status === 'running' || c.status === 'pending').toBe(true);
+      expect(c.execution.branch).toBeUndefined();
+      expect(c.execution.commit).toBeUndefined();
+      expect(c.execution.workspacePath).toBeUndefined();
+      expect(c.execution.selectedAttemptId).not.toBe('attempt-C');
+      expect(c.execution.generation).toBe(10);
+    });
+
+    it('recreateDownstream from a leaf is a no-op and preserves the selected task', () => {
+      const testPersistence = new InMemoryPersistence();
+      const testBus = new InMemoryBus();
+      const wf = 'wf-recreate-downstream-leaf';
+
+      testPersistence.saveTask(wf, {
+        id: 'A',
+        description: 'Selected leaf',
+        status: 'completed',
+        dependencies: [],
+        createdAt: new Date(),
+        config: { workflowId: wf, summary: 'leaf summary' },
+        execution: {
+          branch: 'br-a',
+          commit: 'a1',
+          workspacePath: '/tmp/a',
+          selectedAttemptId: 'attempt-A',
+          generation: 11,
+          exitCode: 0,
+        },
+      });
+
+      const testOrchestrator = new Orchestrator({
+        persistence: testPersistence,
+        messageBus: testBus,
+        maxConcurrency: 3,
+      });
+
+      testOrchestrator.syncFromDb(wf);
+      const before = testOrchestrator.getTask('A')!;
+      const started = testOrchestrator.recreateDownstream('A');
+      const after = testOrchestrator.getTask('A')!;
+
+      expect(started).toEqual([]);
+      expect(after.status).toBe(before.status);
+      expect(after.execution.branch).toBe(before.execution.branch);
+      expect(after.execution.commit).toBe(before.execution.commit);
+      expect(after.execution.workspacePath).toBe(before.execution.workspacePath);
+      expect(after.execution.selectedAttemptId).toBe(before.execution.selectedAttemptId);
+      expect(after.execution.generation).toBe(before.execution.generation);
+    });
+
     it('drainScheduler sets lastHeartbeatAt when starting a task', () => {
       orchestrator.loadPlan({
         name: 'heartbeat-start-test',
