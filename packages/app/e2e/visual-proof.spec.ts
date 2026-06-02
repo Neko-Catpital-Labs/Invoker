@@ -851,6 +851,36 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'workflow-context-menu-organization');
   });
 
+  test('context-menu-keyboard-navigation — ArrowDown moves the highlighted menu item', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+
+    const menu = await openContextMenu(page, page.locator('[data-testid^="workflow-node-"]'));
+
+    // The roving highlight is the standalone `bg-gray-700` class the
+    // implementation toggles on the active item. The leading word boundary
+    // excludes the always-present `hover:bg-gray-700`, so this matches only the
+    // keyboard-driven highlight and never hover styling.
+    const activeHighlight = /(?:^|\s)bg-gray-700(?:\s|$)/;
+    const openWorkflow = menu.getByRole('menuitem', { name: 'Open Workflow' });
+    const openPr = menu.getByRole('menuitem', { name: 'Open PR' });
+
+    // Anchor the active index deterministically on the first item via hover so
+    // the ArrowDown assertion does not depend on where the cursor landed when
+    // the menu opened.
+    await openWorkflow.hover();
+    await expect(openWorkflow).toHaveClass(activeHighlight);
+    await expect(openPr).not.toHaveClass(activeHighlight);
+
+    // ArrowDown pressed on the focused menu advances the roving highlight to the
+    // next enabled item; App graph shortcuts must not steal the key.
+    await menu.press('ArrowDown');
+
+    await expect(openPr).toHaveClass(activeHighlight);
+    await expect(openWorkflow).not.toHaveClass(activeHighlight);
+
+    await captureScreenshot(page, 'context-menu-keyboard-navigation');
+  });
+
   test('context menu keeps danger separator when cancel action is absent', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     await injectTaskStates(page, [
