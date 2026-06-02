@@ -1512,6 +1512,36 @@ describe('SQLiteAdapter', () => {
       expect(adapter.listWorkflows()).toHaveLength(1);
     });
 
+    it('deletes workflow with mutation intents, leases, and launch dispatch rows', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+
+      const attempt = createAttempt('t1', { status: 'running' });
+      adapter.saveAttempt(attempt);
+
+      const intentId = adapter.enqueueWorkflowMutationIntent(
+        'wf-1', 'test-channel', [{ action: 'delete' }], 'normal',
+      );
+      adapter.claimWorkflowMutationLease('wf-1', 'owner-1', {
+        activeIntentId: intentId,
+        activeMutationKind: 'delete',
+      });
+      adapter.enqueueLaunchDispatch({
+        taskId: 't1',
+        attemptId: attempt.id,
+        workflowId: 'wf-1',
+        generation: 1,
+      });
+
+      expect(() => adapter.deleteWorkflow('wf-1')).not.toThrow();
+
+      expect(adapter.loadWorkflow('wf-1')).toBeUndefined();
+      expect(adapter.loadTasks('wf-1')).toEqual([]);
+      expect(sqliteScalar(adapter, "SELECT COUNT(*) FROM workflow_mutation_intents WHERE workflow_id = 'wf-1'")).toBe(0);
+      expect(sqliteScalar(adapter, "SELECT COUNT(*) FROM workflow_mutation_leases WHERE workflow_id = 'wf-1'")).toBe(0);
+      expect(sqliteScalar(adapter, "SELECT COUNT(*) FROM task_launch_dispatch WHERE workflow_id = 'wf-1'")).toBe(0);
+    });
+
     it('removes output spool rows and tail cache only for deleted workflow tasks', () => {
       adapter.saveWorkflow({
         id: 'wf-delete-target',
