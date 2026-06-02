@@ -64,6 +64,8 @@ For implementation benchmark plans, switch `onFinish` and `mergeMode` only when 
 
 Grep-only checks are Phase 1a only; behavioral claims require executed Phase 1b evidence.
 
+**Deterministic validation gate:** Use `skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` as the primary deterministic proof surface, backed by `bash scripts/test-plan-to-invoker-skill.sh` for regression coverage. Schema-only validation or ad hoc individual script checks are not sufficient as the review gate, because they can miss strict atomicity, zero-context prompt, policy coverage, and final-gate failures. Individual validator scripts remain fallback diagnostics only; they are not submission proof unless `skill-doctor.sh` has already passed or a waiver is explicitly recorded.
+
 **Review compression (required for implementation plans):** Before authoring any plan with `onFinish != none`, apply `skills/review-compression/SKILL.md`. Split by reviewer cognition, not file count: one local review claim, one safety invariant, one slice rationale, and one architectural effect per implementation task. This applies to Invoker and non-Invoker target repos.
 
 **Policy-matrix documents:** When the source is an architecture or policy document with a decision table, exception rules, or cross-cutting invariants, you must preserve row-level coverage before authoring workflows. Do not stop at files/functions/packages; every required policy row must map to a workflow step or an explicit waiver.
@@ -110,7 +112,7 @@ bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>
 - `--verbose` — show detailed output from each sub-check
 - `--help` — show usage information
 
-This single command runs: assumption extraction, verify plan generation, YAML validation, atomicity linting, and parse-results validation. Use this for deterministic pass/fail before submitting any plan.
+This single command runs: assumption extraction, verify plan generation, YAML validation, strict atomicity linting, and parse-results validation. Use this as the required deterministic pass/fail gate before submitting any plan.
 For policy-matrix inputs, it also checks that row-level coverage was extracted and that verify-plan generation did not degrade to `verify-noop`. When validating a plan against a separate policy source, pass `--source-file`, `--coverage-map`, and `--stack-manifest`; policy-matrix inputs now fail without a coverage map and a real authored stack manifest.
 
 When converting from an existing conversation, transcript, or plan document, always pass that original artifact as `--source-file <source>`. If the source already contains a concrete Invoker YAML plan, `skill-doctor` rejects generated plans that drop or replace its task IDs, including generic smoke plans.
@@ -181,7 +183,7 @@ Authoring YAML is not verification; execution is verification.
 bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>
 ```
 
-Runs all validation checks (assumption extraction, verify plan generation, schema validation, atomicity linting, parse-results validation) and produces deterministic pass/fail output. Exit code 0 = all checks pass.
+Runs all validation checks (assumption extraction, verify plan generation, schema validation, strict atomicity linting, parse-results validation) and produces deterministic pass/fail output. Exit code 0 = all checks pass.
 
 **Individual check commands (for debugging only):**
 
