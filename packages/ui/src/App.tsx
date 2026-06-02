@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect } from 'react';
 import yaml from 'js-yaml';
-import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
+import type { MergeMode, TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
 import type { ActionGraphNode, TerminalSessionDescriptor } from '@invoker/contracts';
 import { useTasks } from './hooks/useTasks.js';
 import { useInvoker } from './hooks/useInvoker.js';
@@ -1388,6 +1388,19 @@ export function App() {
     [invoker, refreshTasks],
   );
 
+  const handleSetMergeMode = useCallback(
+    async (workflowId: string, mergeMode: MergeMode) => {
+      if (!invoker) return;
+      try {
+        await invoker.setMergeMode(workflowId, mergeMode);
+        refreshTasks();
+      } catch (err) {
+        console.error('Failed to set merge mode:', err);
+      }
+    },
+    [invoker, refreshTasks],
+  );
+
   // ── Modal triggers ────────────────────────────────────────
   const openInputModal = useCallback((task: TaskState) => {
     setModal({ type: 'input', task });
@@ -1705,6 +1718,7 @@ export function App() {
               onEditPrompt={handleEditPrompt}
               onEditCommand={handleEditCommand}
               onSetMergeBranch={handleSetMergeBranch}
+              onSetMergeMode={handleSetMergeMode}
               onToggleCollapsed={() => setInspectorCollapsed((prev) => !prev)}
               onToggleAdvanced={() => setAdvancedMetadataExpanded((prev) => !prev)}
             />
