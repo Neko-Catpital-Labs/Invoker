@@ -471,6 +471,93 @@ describe('EmbeddedTerminalManager', () => {
   });
 });
 
+// ── PTY first-frame race regression ────────────────────────────────────────
+//
+// Reproduces the embedded PTY output race: the backend flushes its first frame
+// synchronously during spawn — before `openOrReuse()` returns and before any
+// renderer-style subscriber attaches. A late consumer that only listens to the
+// live `output` event would miss that frame; it must instead be able to seed
+// from the descriptor's bounded replay snapshot. These tests fail on the
+// pre-fix behavior (no `outputSnapshot`) and pass once the replay buffer exists.
+
+describe('embedded terminal PTY first-frame race regression', () => {
+  const FIRST_FRAME = 'FIRST_FRAME_FROM_PTY\n';
+
+  /**
+   * A fake PTY-style backend that emits its first frame synchronously inside
+   * `spawn()`, mirroring a real PTY that prints a prompt/banner immediately.
+   */
+  function firstFrameBackend(): EmbeddedTerminalBackend {
+    return {
+      name: 'pty',
+      spawn: (opts) => {
+        // Emitted before openOrReuse() returns — the racy window.
+        opts.emitOutput(FIRST_FRAME);
+        return { write: vi.fn(), resize: vi.fn(), close: vi.fn() };
+      },
+    };
+  }
+
+  it('replays first-frame output emitted before openOrReuse() returns', () => {
+    const mgr = new EmbeddedTerminalManager({ backend: firstFrameBackend() });
+
+    // A renderer-style subscriber attaches only after openOrReuse() returns the
+    // descriptor and the pane mounts — too late to see the live first frame.
+    const liveEvents: string[] = [];
+    const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+    mgr.on('output', (e) => liveEvents.push(e.data));
+
+    // The live listener missed the first frame entirely…
+    expect(liveEvents).toEqual([]);
+    // …but the descriptor carries it in the bounded replay snapshot.
+    expect(session.outputSnapshot).toBe(FIRST_FRAME);
+  });
+
+  it('lets a late consumer seed missed output from the descriptor snapshot', () => {
+    const mgr = new EmbeddedTerminalManager({ backend: firstFrameBackend() });
+    const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+
+    // Simulate the renderer terminal pane: seed from the snapshot first, then
+    // attach the live subscriber. The seeded buffer must contain the first frame.
+    const seen: string[] = [];
+    if (session.outputSnapshot) seen.push(session.outputSnapshot);
+    mgr.on('output', (e) => seen.push(e.data));
+
+    expect(seen.join('')).toContain('FIRST_FRAME_FROM_PTY');
+
+    // terminalList() reloads must expose the same snapshot for live sessions.
+    const listed = mgr.list().find((s) => s.sessionId === session.sessionId);
+    expect(listed?.outputSnapshot).toBe(FIRST_FRAME);
+  });
+
+  it('does not throw when the backend exits synchronously during spawn', () => {
+    const exits: Array<{ sessionId: string; exitCode?: number }> = [];
+    // Backend that emits its first frame and then exits synchronously, before
+    // the session state is assigned inside openOrReuse().
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: (opts) => {
+        opts.emitOutput(FIRST_FRAME);
+        opts.emitExit(0);
+        return { write: vi.fn(), resize: vi.fn(), close: vi.fn() };
+      },
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+    mgr.on('exit', (e) => exits.push({ sessionId: e.sessionId, exitCode: e.exitCode }));
+
+    let session: ReturnType<typeof mgr.openOrReuse> | undefined;
+    expect(() => {
+      session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+    }).not.toThrow();
+
+    // The descriptor still captured the first frame from before the exit…
+    expect(session?.outputSnapshot).toBe(FIRST_FRAME);
+    // …and the synchronous exit was applied: session torn down, exit emitted.
+    expect(exits).toEqual([{ sessionId: session?.sessionId, exitCode: 0 }]);
+    expect(mgr.list()).toHaveLength(0);
+  });
+});
+
 // ── Deterministic GUI route: resolveTaskTerminalSpec + EmbeddedTerminalManager ──
 
 describe('GUI open-terminal embedded route', () => {
