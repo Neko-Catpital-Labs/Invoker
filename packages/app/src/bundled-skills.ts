@@ -148,8 +148,12 @@ function buildTargetStatus(
   };
 }
 
+function managedSkillName(skillName: string): string {
+  return `${MANAGED_PREFIX}${skillName}`;
+}
+
 function prefixedSkillNames(skillNames: string[]): string[] {
-  return skillNames.map((name) => `${MANAGED_PREFIX}${name}`);
+  return skillNames.map(managedSkillName);
 }
 
 export function resolveBundledSkillsStatus(context: BundledSkillsContext): BundledSkillsStatus {
@@ -205,7 +209,7 @@ export function installBundledSkills(
     mkdirSync(target.path, { recursive: true });
     for (const skillName of bundledSkillNames) {
       const sourceDir = path.join(sourceRoot, skillName);
-      const targetDir = path.join(target.path, `${MANAGED_PREFIX}${skillName}`);
+      const targetDir = path.join(target.path, managedSkillName(skillName));
       rmSync(targetDir, { recursive: true, force: true });
       cpSync(sourceDir, targetDir, { recursive: true, force: true });
     }
@@ -232,5 +236,5 @@ export function installBundledSkills(
 }
 
 export function resolveInstalledBundledSkillDir(skillName: string): string {
-  return path.join(homedir(), '.codex', 'skills', `${MANAGED_PREFIX}${skillName}`);
+  return path.join(homedir(), '.codex', 'skills', managedSkillName(skillName));
 }
