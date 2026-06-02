@@ -10,8 +10,10 @@ import {
 
 type MockedDeps = InvalidationDeps & {
   cancelInFlight: ReturnType<typeof vi.fn>;
+  cancelDownstreamInFlight?: ReturnType<typeof vi.fn>;
   retryTask: ReturnType<typeof vi.fn>;
   recreateTask: ReturnType<typeof vi.fn>;
+  recreateDownstream?: ReturnType<typeof vi.fn>;
   retryWorkflow: ReturnType<typeof vi.fn>;
   recreateWorkflow: ReturnType<typeof vi.fn>;
   recreateWorkflowFromFreshBase?: ReturnType<typeof vi.fn>;
@@ -23,8 +25,10 @@ type MockedDeps = InvalidationDeps & {
 function makeDeps(overrides: Partial<MockedDeps> = {}): MockedDeps {
   return {
     cancelInFlight: vi.fn(async () => undefined),
+    cancelDownstreamInFlight: vi.fn(async () => undefined),
     retryTask: vi.fn(async () => []),
     recreateTask: vi.fn(async () => []),
+    recreateDownstream: vi.fn(async () => []),
     retryWorkflow: vi.fn(async () => []),
     recreateWorkflow: vi.fn(async () => []),
     ...overrides,
@@ -133,6 +137,17 @@ describe('applyInvalidation: cancel-first ordering (Hard Invariant)', () => {
     expect(deps.cancelInFlight).toHaveBeenCalledWith('task', 'task-a');
     expect(deps.cancelInFlight.mock.invocationCallOrder[0]).toBeLessThan(
       deps.recreateTask.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('calls downstream-only cancel before recreateDownstream without cancelling the selected task', async () => {
+    const deps = makeDeps();
+    await applyInvalidation('task', 'recreateDownstream', 'task-a', deps);
+    expect(deps.cancelInFlight).not.toHaveBeenCalled();
+    expect(deps.cancelDownstreamInFlight).toHaveBeenCalledWith('task-a');
+    expect(deps.recreateDownstream).toHaveBeenCalledWith('task-a');
+    expect(deps.cancelDownstreamInFlight!.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.recreateDownstream!.mock.invocationCallOrder[0],
     );
   });
 
@@ -525,6 +540,7 @@ const ALL_INVALIDATION_ACTIONS: readonly InvalidationAction[] = [
   'fixReject',
   'retryTask',
   'recreateTask',
+  'recreateDownstream',
   'retryWorkflow',
   'recreateWorkflow',
   'recreateWorkflowFromFreshBase',
@@ -534,6 +550,7 @@ const ALL_INVALIDATION_ACTIONS: readonly InvalidationAction[] = [
 const INVALIDATING_ACTIONS: readonly InvalidationAction[] = [
   'retryTask',
   'recreateTask',
+  'recreateDownstream',
   'retryWorkflow',
   'recreateWorkflow',
   'recreateWorkflowFromFreshBase',
