@@ -1483,8 +1483,13 @@ function createEmbeddedTerminalBackendFromConfig(
   const taskDeltaStream = createTaskDeltaStreamSequence();
   const getTaskDeltaStreamSequence = (): number => taskDeltaStream.current();
 
-  const sendTaskDeltaToRenderer = (delta: TaskDelta): void => {
-    workflowMetadataInvalidator?.markFromTaskDelta(delta);
+  const sendTaskDeltaToRenderer = (
+    delta: TaskDelta,
+    options: { markWorkflowMetadata?: boolean } = {},
+  ): void => {
+    if (options.markWorkflowMetadata !== false) {
+      workflowMetadataInvalidator?.markFromTaskDelta(delta);
+    }
     if (!mainWindow || mainWindow.isDestroyed() || !uiInteractive) {
       return;
     }
@@ -2903,9 +2908,8 @@ function createEmbeddedTerminalBackendFromConfig(
       if (traceUiDeltaFlow) {
         logger.debug(`delta→ui: ${JSON.stringify(delta)}`, { module: 'ui' });
       }
-      sendTaskDeltaToRenderer(delta as TaskDelta);
-
       const d = delta as TaskDelta;
+      workflowMetadataInvalidator?.markFromTaskDelta(d);
       const deltaTaskId = d.type === 'updated' || d.type === 'removed'
         ? d.taskId
         : undefined;
@@ -2923,6 +2927,9 @@ function createEmbeddedTerminalBackendFromConfig(
       }
 
       const { quarantined } = applyDelta(d, lastKnownTaskStates);
+      if (quarantined.length === 0) {
+        sendTaskDeltaToRenderer(d, { markWorkflowMetadata: false });
+      }
       for (const taskId of quarantined) {
         logger.info(`[gap-detect] quarantined task="${taskId}" — triggering authoritative reload`, { module: 'delta-merge' });
         const { rendererDelta } = recoverQuarantinedTask(lastKnownTaskStates, taskId, {
