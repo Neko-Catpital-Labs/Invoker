@@ -56,11 +56,16 @@ describe('formatTaskStatus', () => {
     expect(output).toContain('[failed]');
   });
 
-  it('shows correct label for closed status', () => {
+  it('shows correct label, icon, and color for closed status', () => {
     const task = makeTask({ status: 'closed' });
     const output = formatTaskStatus(task);
     expect(output).toContain(DIM);
+    expect(output).toContain('◼');
     expect(output).toContain('[closed]');
+    // Closed is terminal-neutral, not failed: it must not borrow the failed icon/color.
+    expect(output).not.toContain(RED);
+    expect(output).not.toContain('✗');
+    expect(output).not.toContain('[failed]');
   });
 
   it('shows correct color for running status', () => {
