@@ -47,7 +47,9 @@ if [[ ! -f "$file" ]]; then
 fi
 
 require_final_test_all=1
+stack_manifest_provided=0
 if [[ -n "$stack_manifest_file" ]]; then
+  stack_manifest_provided=1
   if [[ ! -f "$stack_manifest_file" ]]; then
     echo "ERROR: Stack manifest not found: $stack_manifest_file" >&2
     exit 1
@@ -116,7 +118,7 @@ PY
   )"
 fi
 
-awk -v warnDelegation="$warn_delegation" -v strictDelegation="$strict_delegation" -v requireFinalTestAll="$require_final_test_all" '
+awk -v warnDelegation="$warn_delegation" -v strictDelegation="$strict_delegation" -v requireFinalTestAll="$require_final_test_all" -v stackManifestProvided="$stack_manifest_provided" '
 function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
 function strip_quotes(s) { gsub(/["'\''"]/, "", s); return s }
 function normalize_command(s) {
@@ -232,6 +234,7 @@ function flush_task(    wc, and_count, valid_id, d, desc_lower, idx) {
   }
 
   if (has_prompt) {
+    prompt_task_count++
     if (length(prompt_text) < 120) {
       errors[++errn] = "Task \"" id "\" prompt too short (<120 chars); include file paths + explicit acceptance criteria"
     }
@@ -389,6 +392,9 @@ BEGIN {
   warnn = 0
   taskn = 0
   has_experiment_tasks = 0
+  has_external_dependencies = 0
+  prompt_task_count = 0
+  standalone_workflow_waiver = 0
   on_finish = "pull_request"
   enforce_layering = 1
 }
@@ -396,12 +402,20 @@ BEGIN {
 {
   line = $0
 
+  if (tolower(line) ~ /standalone workflow waiver:/) {
+    standalone_workflow_waiver = 1
+  }
+
   if (!in_task && line ~ /^[[:space:]]*onFinish:[[:space:]]*/) {
     on_finish = line
     sub(/^[[:space:]]*onFinish:[[:space:]]*/, "", on_finish)
     on_finish = trim(strip_quotes(on_finish))
     enforce_layering = (tolower(on_finish) != "none")
     next
+  }
+
+  if (line ~ /^[[:space:]]*externalDependencies:[[:space:]]*$/) {
+    has_external_dependencies = 1
   }
 
   if (in_description_block) {
@@ -552,6 +566,10 @@ END {
   }
 
   if (enforce_layering == 1) {
+    if (stackManifestProvided == 0 && has_external_dependencies == 0 && prompt_task_count > 1 && standalone_workflow_waiver == 0) {
+      errors[++errn] = "Standalone implementation workflow has multiple prompt tasks but no stack context; split into a workflow chain or add \"Standalone workflow waiver:\" with the reason"
+    }
+
     for (idx = 1; idx <= taskn; idx++) {
       deps_csv = task_dependencies[idx]
       if (deps_csv == "") continue
