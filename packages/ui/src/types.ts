@@ -150,6 +150,18 @@ export type TaskDelta =
 
 // ── Workflow Metadata ────────────────────────────────────────
 
+/**
+ * One-shot viewport centering request. `requestId` increments only from
+ * explicit navigation paths that intend to center the viewport (keyboard
+ * navigation, search). Graph components center once per new `requestId`,
+ * so live status/topology refreshes that re-render with the same request
+ * never re-snap the viewport while the user pans or drags.
+ */
+export interface CenterRequest {
+  id: string;
+  requestId: number;
+}
+
 export interface WorkflowMeta {
   id: string;
   name: string;
