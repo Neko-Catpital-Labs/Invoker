@@ -6991,6 +6991,73 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask(taskId)?.status).toBe('running');
     });
 
+    it('rejects a response carrying the current attempt id but a stale executionGeneration', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        orchestrator.loadPlan({
+          name: 'reject-current-attempt-stale-generation',
+          tasks: [{ id: 't1', description: 'Task 1' }],
+        });
+        orchestrator.startExecution();
+
+        const taskId = sid(orchestrator, 0, 't1');
+        // Fail then retry so the live task advances its execution generation while
+        // selecting a fresh attempt — the setup needed to construct a response
+        // whose attemptId is current but whose generation is stale.
+        orchestrator.handleWorkerResponse(
+          makeResponse({ actionId: taskId, status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
+        );
+        orchestrator.retryWorkflow(orchestrator.getWorkflowIds()[0]!);
+
+        const liveTask = orchestrator.getTask(taskId)!;
+        const liveAttemptId = liveTask.execution.selectedAttemptId!;
+        const liveGeneration = liveTask.execution.generation ?? 0;
+        expect(liveAttemptId).toBeTruthy();
+        expect(liveGeneration).toBeGreaterThan(0);
+
+        // Seed durable lineage so we can prove the stale response leaves it intact.
+        persistence.updateTask(taskId, {
+          status: 'running',
+          execution: { branch: 'feature/live-branch', workspacePath: '/tmp/live-workspace' },
+        });
+        orchestrator.refreshFromDb();
+
+        const staleResult = orchestrator.handleWorkerResponse(
+          makeResponse({
+            actionId: taskId,
+            attemptId: liveAttemptId, // current attempt id — passes the attempt guard
+            executionGeneration: liveGeneration - 1, // stale generation — must be rejected
+            status: 'completed',
+            outputs: {
+              exitCode: 0,
+              branch: 'feature/stale-branch',
+              workspacePath: '/tmp/stale-workspace',
+            },
+          }),
+        );
+
+        // The stale response must be rejected and must not mutate the live task.
+        expect(staleResult).toEqual([]);
+        const after = orchestrator.getTask(taskId)!;
+        expect(after.status).toBe('running');
+        expect(after.execution.selectedAttemptId).toBe(liveAttemptId);
+        expect(after.execution.branch).toBe('feature/live-branch');
+        expect(after.execution.workspacePath).toBe('/tmp/live-workspace');
+
+        expect(warnSpy).toHaveBeenCalledWith(
+          '[worker-response] STALE_GENERATION_REJECTED',
+          expect.objectContaining({
+            taskId,
+            responseGeneration: liveGeneration - 1,
+            activeGeneration: liveGeneration,
+            workerResponseStatus: 'completed',
+          }),
+        );
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
     it('recreateWorkflow selects a fresh persisted attempt for recreated tasks', () => {
       orchestrator.loadPlan({
         name: 'recreate-attempt-refresh',
