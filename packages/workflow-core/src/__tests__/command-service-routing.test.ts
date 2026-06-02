@@ -40,9 +40,11 @@ function makeOrchestrator(): Orchestrator {
   return {
     getTask: vi.fn(() => makeTask()),
     cancelTask: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+    cancelDownstreamBeforeInvalidation: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
     cancelWorkflow: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
     retryTask: vi.fn(() => [makeTask()]),
     recreateTask: vi.fn(() => [makeTask()]),
+    recreateDownstream: vi.fn(() => [makeTask()]),
     retryWorkflow: vi.fn(() => [makeTask()]),
     recreateWorkflow: vi.fn(() => [makeTask()]),
     recreateWorkflowFromFreshBase: vi.fn(async () => [makeTask()]),
@@ -64,12 +66,19 @@ function makeSpiedDeps(): {
     cancelInFlight: vi.fn(async (scope, id) => {
       events.push({ stage: 'cancelInFlight', scope, id });
     }),
+    cancelDownstreamInFlight: vi.fn(async (id) => {
+      events.push({ stage: 'cancelDownstreamInFlight', id });
+    }),
     retryTask: vi.fn((id) => {
       events.push({ stage: 'retryTask', id });
       return result;
     }),
     recreateTask: vi.fn((id) => {
       events.push({ stage: 'recreateTask', id });
+      return result;
+    }),
+    recreateDownstream: vi.fn((id) => {
+      events.push({ stage: 'recreateDownstream', id });
       return result;
     }),
     retryWorkflow: vi.fn((id) => {
@@ -175,6 +184,22 @@ describe('CommandService → applyInvalidation routing', () => {
     });
   }
 
+  it("recreateDownstream: routes through downstream-only cancel, primitive, and cascade", async () => {
+    const { deps, events } = makeSpiedDeps();
+    const cs = new CommandService(orchestrator, deps);
+
+    const result = await cs.recreateDownstream(makeEnvelope({ taskId: 'task-1' }, 'rc-ds'));
+
+    expect(result).toEqual({ ok: true, data: [] });
+    expect(events).toEqual([
+      { stage: 'cancelDownstreamInFlight', id: 'task-1' },
+      { stage: 'recreateDownstream', id: 'task-1' },
+      { stage: 'cascadeDownstream', scope: 'task', id: 'task-1' },
+    ]);
+    expect(orchestrator.cancelTask).not.toHaveBeenCalled();
+    expect(orchestrator.cancelWorkflow).not.toHaveBeenCalled();
+  });
+
   it('falls back to orchestrator-only deps when none are injected', async () => {
     const cs = new CommandService(orchestrator);
 
@@ -183,6 +208,18 @@ describe('CommandService → applyInvalidation routing', () => {
     expect(result).toEqual({ ok: true, data: [makeTask()] });
     expect(orchestrator.cancelTask).toHaveBeenCalledWith('task-1');
     expect(orchestrator.retryTask).toHaveBeenCalledWith('task-1');
+    expect(orchestrator.cascadeInvalidationToDownstream).toHaveBeenCalledWith('wf-1');
+  });
+
+  it('fallback recreateDownstream preserves selected-task cancel scope', async () => {
+    const cs = new CommandService(orchestrator);
+
+    const result = await cs.recreateDownstream(makeEnvelope({ taskId: 'task-1' }));
+
+    expect(result).toEqual({ ok: true, data: [makeTask()] });
+    expect(orchestrator.cancelTask).not.toHaveBeenCalled();
+    expect(orchestrator.cancelDownstreamBeforeInvalidation).toHaveBeenCalledWith('task-1');
+    expect(orchestrator.recreateDownstream).toHaveBeenCalledWith('task-1');
     expect(orchestrator.cascadeInvalidationToDownstream).toHaveBeenCalledWith('wf-1');
   });
 });
