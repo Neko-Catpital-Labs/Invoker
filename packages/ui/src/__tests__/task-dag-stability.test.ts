@@ -210,6 +210,47 @@ describe('TaskDAG stability', () => {
     });
   });
 
+  // ── One-shot centering ────────────────────────────────────
+  describe('one-shot centering', () => {
+    it('accepts a centerTaskRequest prop (not a persistent centerTaskId string)', () => {
+      expect(source).toContain('centerTaskRequest?: CenterRequest | null;');
+      expect(source).not.toContain('centerTaskId');
+    });
+
+    it('handles each center request id exactly once via a ref guard', () => {
+      // The guard bails when the incoming requestId matches the last handled one,
+      // so re-renders that recreate `nodes` with the same request never re-center.
+      expect(source).toContain('lastHandledCenterRequestRef');
+      expect(source).toContain(
+        'lastHandledCenterRequestRef.current === centerTaskRequest.requestId',
+      );
+      expect(source).toContain(
+        'lastHandledCenterRequestRef.current = centerTaskRequest.requestId',
+      );
+    });
+
+    it('calls setCenter for the requested node', () => {
+      expect(source).toContain('setCenter(node.position.x + 132, node.position.y + 55');
+    });
+  });
+
+  // ── First-render fit only ─────────────────────────────────
+  describe('fit-once behavior', () => {
+    it('fits only on the first non-empty render via hasFitOnceRef', () => {
+      expect(source).toContain('hasFitOnceRef');
+      expect(source).toContain('if (!hasFitOnceRef.current)');
+      expect(source).toContain('hasFitOnceRef.current = true');
+    });
+
+    it('still resets the watchdog when the node count changes', () => {
+      // Topology growth must give the watchdog a fresh recovery cycle even though
+      // it no longer re-fits the viewport.
+      expect(source).toContain('nodes.length !== prevNodeCount.current');
+      expect(source).toContain('watchdogMissCountRef.current = 0');
+      expect(source).toContain('watchdogRecoveryAttemptedRef.current = false');
+    });
+  });
+
   // ── Watchdog detection logic ──────────────────────────────
   describe('watchdog detection logic', () => {
     function shouldTrigger(
