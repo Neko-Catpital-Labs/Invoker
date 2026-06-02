@@ -31,6 +31,10 @@ describe('InvalidationPlan policy registry', () => {
       scope: 'task',
       mode: 'recreate',
     });
+    expect(ACTION_SPECS.recreateDownstream).toMatchObject({
+      scope: 'task',
+      mode: 'recreate',
+    });
     expect(ACTION_SPECS.retryWorkflow).toMatchObject({
       scope: 'workflow',
       mode: 'retry',
@@ -90,6 +94,63 @@ describe('InvalidationPlan policy registry', () => {
       affectedTaskIds: ['wf-1/child', 'wf-1/grandchild', 'wf-1/root'],
       lockPlan: { workflowIds: ['wf-1'] },
     });
+  });
+
+  it('plans downstream recreate as descendants only', () => {
+    const tasks = [
+      task('wf-1/a', 'wf-1'),
+      task('wf-1/b', 'wf-1', ['wf-1/a']),
+      task('wf-1/c', 'wf-1', ['wf-1/b']),
+      task('wf-1/x', 'wf-1'),
+    ];
+
+    const plan = planInvalidation({
+      action: 'recreateDownstream',
+      targetId: 'wf-1/a',
+      tasks,
+    });
+
+    expect(plan).toMatchObject({
+      action: 'recreateDownstream',
+      scope: 'task',
+      mode: 'recreate',
+      affectedWorkflowIds: ['wf-1'],
+      affectedTaskIds: ['wf-1/b', 'wf-1/c'],
+      lockPlan: { workflowIds: ['wf-1'] },
+    });
+  });
+
+  it('plans downstream recreate from an intermediate task without the selected task', () => {
+    const tasks = [
+      task('wf-1/a', 'wf-1'),
+      task('wf-1/b', 'wf-1', ['wf-1/a']),
+      task('wf-1/c', 'wf-1', ['wf-1/b']),
+    ];
+
+    const plan = planInvalidation({
+      action: 'recreateDownstream',
+      targetId: 'wf-1/b',
+      tasks,
+    });
+
+    expect(plan.affectedTaskIds).toEqual(['wf-1/c']);
+  });
+
+  it('plans downstream recreate on a leaf as a no-op', () => {
+    const tasks = [
+      task('wf-1/a', 'wf-1'),
+      task('wf-1/b', 'wf-1', ['wf-1/a']),
+    ];
+
+    const plan = planInvalidation({
+      action: 'recreateDownstream',
+      targetId: 'wf-1/b',
+      tasks,
+    });
+
+    expect(plan.affectedWorkflowIds).toEqual([]);
+    expect(plan.affectedTaskIds).toEqual([]);
+    expect(plan.lockPlan.workflowIds).toEqual([]);
   });
 
   it('plans task retry as the task plus non-completed descendants', () => {

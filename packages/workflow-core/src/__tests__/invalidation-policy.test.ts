@@ -12,6 +12,7 @@ type MockedDeps = InvalidationDeps & {
   cancelInFlight: ReturnType<typeof vi.fn>;
   retryTask: ReturnType<typeof vi.fn>;
   recreateTask: ReturnType<typeof vi.fn>;
+  recreateDownstream?: ReturnType<typeof vi.fn>;
   retryWorkflow: ReturnType<typeof vi.fn>;
   recreateWorkflow: ReturnType<typeof vi.fn>;
   recreateWorkflowFromFreshBase?: ReturnType<typeof vi.fn>;
@@ -25,6 +26,7 @@ function makeDeps(overrides: Partial<MockedDeps> = {}): MockedDeps {
     cancelInFlight: vi.fn(async () => undefined),
     retryTask: vi.fn(async () => []),
     recreateTask: vi.fn(async () => []),
+    recreateDownstream: vi.fn(async () => []),
     retryWorkflow: vi.fn(async () => []),
     recreateWorkflow: vi.fn(async () => []),
     ...overrides,
@@ -525,6 +527,7 @@ const ALL_INVALIDATION_ACTIONS: readonly InvalidationAction[] = [
   'fixReject',
   'retryTask',
   'recreateTask',
+  'recreateDownstream',
   'retryWorkflow',
   'recreateWorkflow',
   'recreateWorkflowFromFreshBase',
@@ -534,6 +537,7 @@ const ALL_INVALIDATION_ACTIONS: readonly InvalidationAction[] = [
 const INVALIDATING_ACTIONS: readonly InvalidationAction[] = [
   'retryTask',
   'recreateTask',
+  'recreateDownstream',
   'retryWorkflow',
   'recreateWorkflow',
   'recreateWorkflowFromFreshBase',

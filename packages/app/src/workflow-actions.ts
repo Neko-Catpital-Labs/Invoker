@@ -9,6 +9,7 @@
 import type { Logger } from '@invoker/contracts';
 import type { Orchestrator, ExternalGatePolicyUpdate } from '@invoker/workflow-core';
 import type {
+  CancelDownstreamInFlightFn,
   CancelInFlightFn,
   InvalidationDeps,
   InvalidationScope,
@@ -17,6 +18,7 @@ import type {
 import {
   OrchestratorError,
   OrchestratorErrorCode,
+  buildCancelDownstreamInFlight as buildCoreCancelDownstreamInFlight,
   buildCancelInFlight as buildCoreCancelInFlight,
 } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
@@ -534,6 +536,19 @@ export function buildCancelInFlight(deps: BuildCancelInFlightDeps): CancelInFlig
   });
 }
 
+export function buildCancelDownstreamInFlight(
+  deps: BuildCancelInFlightDeps,
+): CancelDownstreamInFlightFn {
+  return buildCoreCancelDownstreamInFlight({
+    orchestrator: deps.orchestrator,
+    killActiveExecution: async (id) => {
+      const taskExecutor = resolveTaskExecutor(deps.taskExecutor);
+      if (!taskExecutor) return;
+      await taskExecutor.killActiveExecution(id);
+    },
+  });
+}
+
 export type BuildInvalidationDepsArgs = Omit<
   Pick<ActionDeps, 'logger' | 'orchestrator' | 'persistence' | 'mutationTiming'>,
   'taskExecutor'
@@ -544,10 +559,16 @@ export function buildInvalidationDeps(deps: BuildInvalidationDepsArgs): Invalida
     orchestrator: deps.orchestrator,
     taskExecutor: deps.taskExecutor,
   });
+  const cancelDownstreamInFlight = buildCancelDownstreamInFlight({
+    orchestrator: deps.orchestrator,
+    taskExecutor: deps.taskExecutor,
+  });
   return {
     cancelInFlight,
+    cancelDownstreamInFlight,
     retryTask: (taskId: string) => deps.orchestrator.retryTask(taskId),
     recreateTask: (taskId: string) => deps.orchestrator.recreateTask(taskId),
+    recreateDownstream: (taskId: string) => deps.orchestrator.recreateDownstream(taskId),
     retryWorkflow: (workflowId: string) => deps.orchestrator.retryWorkflow(workflowId),
     recreateWorkflow: (workflowId: string) =>
       bumpGenerationAndRecreate(workflowId, {
