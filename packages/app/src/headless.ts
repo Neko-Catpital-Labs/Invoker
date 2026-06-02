@@ -59,6 +59,14 @@ import {
   isDispatchableLaunch,
 } from './global-topup.js';
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
+import {
+  hasOpenFixIntentForTask,
+  recordAutoFixAttempt,
+  selectFixAgent,
+  AUTO_FIX_CONTEXT,
+  MANUAL_FIX_CONTEXT,
+  type FixSubmissionContext,
+} from './auto-fix-intents.js';
 import { trackWorkflow } from './headless-watch.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
@@ -111,6 +119,12 @@ export interface HeadlessDeps {
   installBundledSkills?: (mode?: BundledSkillsInstallMode) => BundledSkillsStatus;
   /** Abort signal from the workflow mutation coordinator, if running inside a coordinated mutation. */
   signal?: AbortSignal;
+  /**
+   * Intent id of the coordinator mutation currently executing this command, if
+   * any. Used by idempotent commands (e.g. `fix`) to exclude their own intent
+   * when checking for duplicate open intents targeting the same task.
+   */
+  currentMutationIntentId?: number;
   mutationTiming?: WorkflowMutationTiming;
   runtimeServices?: RuntimeServices;
   /**
@@ -1052,9 +1066,16 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'rebase-recreate':
       await headlessRebaseRecreate(args[1], deps);
       break;
-    case 'fix':
-      await headlessFix(args[1], deps, args[2]);
+    case 'fix': {
+      // Worker-submitted fixes pass `--auto-fix` to request auto-fix semantics
+      // (retry-budget check, attempt accounting, auto-fix labels/logs). Manual
+      // `fix <taskId> [agent]` invocations omit it and behave exactly as before.
+      const fixRest = args.slice(2);
+      const autoFix = fixRest.includes('--auto-fix');
+      const fixAgent = fixRest.find((arg) => !arg.startsWith('--'));
+      await headlessFix(args[1], deps, fixAgent, { autoFix });
       break;
+    }
     case 'resolve-conflict':
       await headlessResolveConflict(args[1], deps, args[2]);
       break;
@@ -1609,16 +1630,53 @@ async function headlessRetryTask(taskId: string, deps: HeadlessDeps): Promise<vo
   });
 }
 
-async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string): Promise<void> {
-  if (!taskId) throw new Error('Missing taskId. Usage: --headless fix <taskId> [claude|codex]');
+async function headlessFix(
+  taskId: string,
+  deps: HeadlessDeps,
+  agentArg?: string,
+  options: { autoFix?: boolean } = {},
+): Promise<void> {
+  if (!taskId) throw new Error('Missing taskId. Usage: --headless fix <taskId> [claude|codex] [--auto-fix]');
   const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'fix');
   if (!restored) return;
   taskId = restored.resolvedTaskId;
+  const { workflowId } = restored;
+
+  const context: FixSubmissionContext = options.autoFix ? AUTO_FIX_CONTEXT : MANUAL_FIX_CONTEXT;
+
+  // Centralized idempotency: skip when another fix intent (of either the
+  // `invoker:fix-with-agent` or `headless.exec fix` shape) is already open for
+  // this task, excluding this command's own coordinator intent. This makes the
+  // `fix` command safe for workers to retry without double-dispatching.
+  const openIntents = deps.persistence.listWorkflowMutationIntents?.(workflowId, ['queued', 'running']) ?? [];
+  if (hasOpenFixIntentForTask(openIntents, taskId, deps.currentMutationIntentId)) {
+    process.stdout.write(`Fix already in progress for task: ${taskId}; skipping duplicate request.\n`);
+    return;
+  }
+
+  // Auto-fix submissions consume retry budget; bail out (idempotently) when the
+  // task is no longer eligible. Manual submissions never check the budget.
+  if (context.autoFix && !deps.orchestrator.shouldAutoFix(taskId)) {
+    process.stdout.write(`Auto-fix skipped for task: ${taskId}; retry budget exhausted or task not eligible.\n`);
+    return;
+  }
 
   const te = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, te);
-  const agent = (agentArg ?? 'claude').toLowerCase();
+  // Explicit agent wins; otherwise auto-fix falls back to the configured agent.
+  const selectedAgent = selectFixAgent(context, agentArg, deps.invokerConfig.autoFixAgent);
+  const agent = (selectedAgent ?? 'claude').toLowerCase();
+  const outputLabel = context.autoFix ? 'Auto-fix' : 'Fix with AI';
   try {
+    // Count the attempt exactly once, only after the submission is accepted.
+    if (context.autoFix) {
+      const { attemptsBefore, attemptsAfter } = recordAutoFixAttempt(taskId, deps.orchestrator, deps.persistence);
+      deps.persistence.logEvent?.(taskId, 'debug.auto-fix', {
+        phase: 'headless-dispatch-attempt-bumped',
+        attemptsBefore,
+        attemptsAfter,
+      });
+    }
     const result = await fixWithAgentAction(taskId, {
       orchestrator: deps.orchestrator,
       persistence: deps.persistence,
@@ -1626,8 +1684,8 @@ async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string
       autoApproveAIFixes: deps.invokerConfig.autoApproveAIFixes,
     }, {
       agentName: agent,
-      recreateOutputLabel: 'Fix with AI',
-      failureOutputLabel: 'Fix with AI',
+      recreateOutputLabel: outputLabel,
+      failureOutputLabel: outputLabel,
       signal: deps.signal,
     });
     await finalizeMutationWithGlobalTopup({

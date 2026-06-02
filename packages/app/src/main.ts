@@ -174,7 +174,12 @@ import {
 import { computeDeferredLaunchTiming } from './deferred-runnable.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import { evaluateExecutingStall } from './executing-stall.js';
-import { listOpenFixIntentsForTask } from './auto-fix-intents.js';
+import {
+  listOpenFixIntentsForTask,
+  recordAutoFixAttempt,
+  selectFixAgent,
+  AUTO_FIX_CONTEXT,
+} from './auto-fix-intents.js';
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
 import {
   buildActionGraphDiagnostics,
@@ -1577,13 +1582,7 @@ function createEmbeddedTerminalBackendFromConfig(
     );
 
     if (source === 'auto-fix') {
-      const attemptsBefore = task?.execution.autoFixAttempts ?? 0;
-      const attemptsAfter = attemptsBefore + 1;
-      persistence.updateTask(taskId, {
-        execution: {
-          autoFixAttempts: attemptsAfter,
-        },
-      });
+      const { attemptsBefore, attemptsAfter } = recordAutoFixAttempt(taskId, orchestrator, persistence);
       logAutoFixDebug(taskId, 'dispatch-attempt-bumped', { attemptsBefore, attemptsAfter });
     }
     const result = await fixWithAgentAction(
@@ -1637,8 +1636,7 @@ function createEmbeddedTerminalBackendFromConfig(
       });
       return;
     }
-    const configuredAgent = loadConfig().autoFixAgent?.trim();
-    const selectedAgent = configuredAgent && configuredAgent.length > 0 ? configuredAgent : undefined;
+    const selectedAgent = selectFixAgent(AUTO_FIX_CONTEXT, undefined, loadConfig().autoFixAgent);
     logAutoFixDebug(taskId, 'schedule-enqueue');
     logAutoFixDebug(taskId, 'schedule-enqueued');
     void runWorkflowMutation(
@@ -1951,6 +1949,7 @@ function createEmbeddedTerminalBackendFromConfig(
       commandService,
       repoRoot, invokerConfig, initServices, wireSlackBot,
       signal: activeMutationContext?.signal,
+      currentMutationIntentId: activeMutationContext?.intentId,
       mutationTiming: activeMutationContext?.mutationTiming,
       cancelTask: (taskId: string) => performCancelTask(taskId),
       cancelWorkflow: (workflowId: string) => performCancelWorkflow(workflowId),
