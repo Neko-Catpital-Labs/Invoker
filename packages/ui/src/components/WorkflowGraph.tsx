@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import type { MouseEvent } from 'react';
 import type { TaskState, WorkflowMeta, WorkflowStatus } from '../types.js';
+import type { GraphCameraCommand } from '../lib/graph-camera.js';
 import { deriveWorkflowGraph, layoutWorkflowGraph } from '../lib/workflow-graph.js';
 import { WorkflowNode } from './WorkflowNode.js';
 import {
@@ -22,7 +23,10 @@ interface WorkflowGraphProps {
   tasks: Map<string, TaskState>;
   workflows: Map<string, WorkflowMeta>;
   selectedWorkflowId: string | null;
-  centerWorkflowId?: string | null;
+  /** Latest typed camera command for the workflow scope; consumed once by sequence. */
+  cameraCommand?: GraphCameraCommand | null;
+  /** Invoked when the user manually pans or wheel-zooms the viewport. */
+  onManualViewportChange?: () => void;
   statusFilters: Set<WorkflowStatus>;
   onSelectWorkflow: (workflowId: string) => void;
   onWorkflowContextMenu: (event: MouseEvent, workflowId: string) => void;
@@ -68,13 +72,15 @@ function WorkflowGraphInner({
   tasks,
   workflows,
   selectedWorkflowId,
-  centerWorkflowId,
+  cameraCommand,
+  onManualViewportChange,
   statusFilters,
   onSelectWorkflow,
   onWorkflowContextMenu,
 }: WorkflowGraphProps): JSX.Element {
-  const { fitView, setCenter } = useReactFlow();
-  const prevNodeCount = useRef(0);
+  const { fitView, setCenter, getZoom } = useReactFlow();
+  const didInitialFitRef = useRef(false);
+  const lastCameraSequenceRef = useRef(0);
   const reportedVisibleRef = useRef(false);
   const graphMetricsRef = useRef({ deriveMs: 0, layoutMs: 0, objectsMs: 0 });
   const graph = useMemo(() => {
@@ -132,24 +138,27 @@ function WorkflowGraphInner({
     },
   })), [graph.edges]);
 
-  const graphSignature = useMemo(() => {
-    const nodeIds = graph.nodes.map((node) => node.id).join('|');
-    const edgeIds = graph.edges.map((edge) => `${edge.source}->${edge.target}`).join('|');
-    return `${nodeIds}::${edgeIds}`;
-  }, [graph.edges, graph.nodes]);
-
   const onInitHandler = useCallback(() => {
     requestAnimationFrame(() => fitView({ padding: 0.2 }));
   }, [fitView]);
 
+  // Frame the graph once, on the first non-empty render. Ordinary status or
+  // topology updates never re-fit — that would fight a user who has panned.
   useEffect(() => {
-    if (nodes.length !== prevNodeCount.current && nodes.length > 0) {
-      prevNodeCount.current = nodes.length;
-      const frame = requestAnimationFrame(() => fitView({ padding: 0.2 }));
-      return () => cancelAnimationFrame(frame);
-    }
-    return undefined;
+    if (didInitialFitRef.current || nodes.length === 0) return;
+    didInitialFitRef.current = true;
+    const frame = requestAnimationFrame(() => fitView({ padding: 0.2 }));
+    return () => cancelAnimationFrame(frame);
   }, [fitView, nodes.length]);
+
+  // A user-initiated pan or wheel zoom carries a DOM event; programmatic moves
+  // (setCenter / fitView) pass `null`. Only the former hands control to the user.
+  const onMoveStart = useCallback(
+    (event: globalThis.MouseEvent | globalThis.TouchEvent | null) => {
+      if (event) onManualViewportChange?.();
+    },
+    [onManualViewportChange],
+  );
 
   const onNodeClick = useCallback((_event: MouseEvent, node: Node) => {
     onSelectWorkflow(node.id);
@@ -183,27 +192,34 @@ function WorkflowGraphInner({
     return () => cancelAnimationFrame(frame);
   }, [graph.edges.length, graph.nodes.length]);
 
+  // Consume each typed camera command exactly once, keyed by its monotonic
+  // sequence. Centering preserves the current zoom so it never yanks the user's
+  // zoom level; `fitInitial` re-frames. The sequence is only marked consumed
+  // once the target node exists, so a command issued before its node mounts is
+  // applied on a later render rather than dropped.
   useEffect(() => {
-    if (graph.nodes.length === 0 || typeof window === 'undefined') return;
-    const frame = requestAnimationFrame(() => {
-      requestAnimationFrame(() => fitView({ padding: 0.2 }));
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [fitView, graph.nodes.length, graphSignature]);
-
-  useEffect(() => {
-    if (!centerWorkflowId || nodes.length === 0) return;
-    const node = nodes.find((candidate) => candidate.id === centerWorkflowId);
+    if (!cameraCommand || cameraCommand.sequence <= lastCameraSequenceRef.current) return;
+    if (nodes.length === 0) return;
+    if (cameraCommand.style === 'fitInitial') {
+      lastCameraSequenceRef.current = cameraCommand.sequence;
+      const frame = requestAnimationFrame(() => fitView({ padding: 0.2 }));
+      return () => cancelAnimationFrame(frame);
+    }
+    const node = cameraCommand.target
+      ? nodes.find((candidate) => candidate.id === cameraCommand.target)
+      : null;
     if (!node) return;
+    lastCameraSequenceRef.current = cameraCommand.sequence;
     const frame = requestAnimationFrame(() => {
       if (typeof setCenter === 'function') {
-        setCenter(node.position.x + 110, node.position.y + 45, { zoom: 1, duration: 180 });
+        const zoom = typeof getZoom === 'function' ? getZoom() : 1;
+        setCenter(node.position.x + 110, node.position.y + 45, { zoom, duration: 180 });
       } else {
         fitView({ padding: 0.2 });
       }
     });
     return () => cancelAnimationFrame(frame);
-  }, [centerWorkflowId, fitView, nodes, setCenter]);
+  }, [cameraCommand, fitView, getZoom, nodes, setCenter]);
 
   useEffect(() => {
     if (nodes.length === 0) return;
@@ -238,12 +254,12 @@ function WorkflowGraphInner({
     >
       <div data-testid="workflow-graph-react-flow" className="h-full w-full">
         <ReactFlow
-          key={graphSignature}
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
           onNodeClick={onNodeClick}
           onNodeContextMenu={onNodeContextMenu}
+          onMoveStart={onMoveStart}
           onInit={onInitHandler}
           zoomOnDoubleClick={false}
           minZoom={0.3}

@@ -19,6 +19,8 @@ import { vi } from 'vitest';
 export function createReactFlowMock() {
   const fitView = vi.fn();
   const setCenter = vi.fn();
+  const getZoom = vi.fn(() => 1);
+  const getViewport = vi.fn(() => ({ x: 0, y: 0, zoom: 1 }));
   const MockReactFlow = React.forwardRef(function MockReactFlow(
     props: {
       nodes?: Array<{
@@ -32,12 +34,13 @@ export function createReactFlowMock() {
       onNodeClick?: (event: React.MouseEvent, node: any) => void;
       onNodeContextMenu?: (event: React.MouseEvent, node: any) => void;
       onNodeDoubleClick?: (event: React.MouseEvent, node: any) => void;
+      onMoveStart?: (event: unknown, viewport: unknown) => void;
       onInit?: () => void;
       children?: React.ReactNode;
     },
     _ref: React.Ref<unknown>,
   ) {
-    const { nodes = [], nodeTypes = {}, onNodeClick, onNodeContextMenu, onNodeDoubleClick, children } = props;
+    const { nodes = [], nodeTypes = {}, onNodeClick, onNodeContextMenu, onNodeDoubleClick, onMoveStart, children } = props;
 
     React.useEffect(() => {
       props.onInit?.();
@@ -45,6 +48,18 @@ export function createReactFlowMock() {
 
     return (
       <div data-testid="mock-react-flow" className="react-flow">
+        {/*
+          A stand-in for the React Flow pane. Manual pan/wheel gestures carry a
+          DOM event, mirroring real React Flow's onMoveStart(event, viewport).
+          Tests can fire mousedown/wheel here to exercise manual suppression;
+          programmatic moves (setCenter/fitView) never route through this.
+        */}
+        <div
+          data-testid="mock-react-flow-pane"
+          className="react-flow__pane"
+          onMouseDown={(event) => onMoveStart?.(event.nativeEvent, { x: 0, y: 0, zoom: 1 })}
+          onWheel={(event) => onMoveStart?.(event.nativeEvent, { x: 0, y: 0, zoom: 1 })}
+        />
         {props.edges?.map((edge: any) => (
           <div
             key={edge.id}
@@ -87,9 +102,11 @@ export function createReactFlowMock() {
   return {
     ReactFlow: MockReactFlow,
     ReactFlowProvider: MockReactFlowProvider,
-    useReactFlow: () => ({ fitView, setCenter }),
+    useReactFlow: () => ({ fitView, setCenter, getZoom, getViewport }),
     __setCenterMock: setCenter,
     __fitViewMock: fitView,
+    __getZoomMock: getZoom,
+    __getViewportMock: getViewport,
     applyNodeChanges: vi.fn((changes: unknown[], nodes: unknown[]) => nodes),
     Background: () => null,
     Controls: () => null,

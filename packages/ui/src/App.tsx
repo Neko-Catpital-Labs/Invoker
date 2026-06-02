@@ -36,6 +36,14 @@ import {
   EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE,
 } from './isExperimentSpawnPivot.js';
 import { parsePlanText } from './lib/plan-parser.js';
+import {
+  createGraphCameraIssuer,
+  loadCameraLockPreference,
+  saveCameraLockPreference,
+  type CameraLockPreference,
+  type GraphCameraCommand,
+  type GraphCameraCommandInput,
+} from './lib/graph-camera.js';
 import type { SystemDiagnostics } from '@invoker/contracts';
 
 type ModalState =
@@ -294,8 +302,19 @@ export function App() {
   const [workflowContextMenu, setWorkflowContextMenu] = useState<{ x: number; y: number; workflowId: string } | null>(null);
   const [keyboardRegion, setKeyboardRegion] = useState<KeyboardRegion>('workflowGraph');
   const [previousGraphRegion, setPreviousGraphRegion] = useState<KeyboardRegion>('workflowGraph');
-  const [centerWorkflowId, setCenterWorkflowId] = useState<string | null>(null);
-  const [centerTaskId, setCenterTaskId] = useState<string | null>(null);
+  // ── Graph camera model ───────────────────────────────────
+  // App owns the typed camera contract: a single monotonic command issuer
+  // (shared across both graph scopes), the persisted lock preference, a
+  // temporary manual-suppression flag, and the latest command per scope.
+  // Graphs consume commands by sequence; status/topology re-renders never
+  // mint a command, so they never move the viewport.
+  const cameraIssuerRef = useRef(createGraphCameraIssuer());
+  const [cameraPreference, setCameraPreference] = useState<CameraLockPreference>(() =>
+    loadCameraLockPreference(),
+  );
+  const [cameraSuppressed, setCameraSuppressed] = useState(false);
+  const [workflowCameraCommand, setWorkflowCameraCommand] = useState<GraphCameraCommand | null>(null);
+  const [taskCameraCommand, setTaskCameraCommand] = useState<GraphCameraCommand | null>(null);
   const [bottomStatusIndex, setBottomStatusIndex] = useState(0);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -303,6 +322,30 @@ export function App() {
   const uiPerfThrottleRef = useRef<Record<string, number>>({});
   const lastShiftAtRef = useRef(0);
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Persist the lock preference whenever the user changes it (F1 toggle).
+  useEffect(() => {
+    saveCameraLockPreference(cameraPreference);
+  }, [cameraPreference]);
+
+  // Sole entry point for minting a camera command. Routes the typed command to
+  // the graph scope it targets; the issuer guarantees a single monotonic
+  // sequence so consumers can dedupe by `sequence` alone.
+  const issueCameraCommand = useCallback((input: GraphCameraCommandInput): GraphCameraCommand => {
+    const command = cameraIssuerRef.current.issue(input);
+    if (input.scope === 'workflow') {
+      setWorkflowCameraCommand(command);
+    } else {
+      setTaskCameraCommand(command);
+    }
+    return command;
+  }, []);
+
+  // A manual background drag or wheel zoom hands the viewport to the user:
+  // suppress the lock so nothing autofocuses until the next explicit selection.
+  const handleManualViewportChange = useCallback(() => {
+    setCameraSuppressed(true);
+  }, []);
 
   const refreshSystemDiagnostics = useCallback(() => {
     window.invoker?.getSystemDiagnostics?.().then((diagnostics) => {
@@ -473,6 +516,15 @@ export function App() {
     }
   }, [selectedWorkflowId, selectedWorkflowTaskCount, workflows]);
 
+  // When the selected task disappears from the live set (e.g. a topology
+  // change drops the node), clear the stale selection. No camera command is
+  // issued, so the viewport is preserved exactly where the user left it.
+  useEffect(() => {
+    if (selectedTaskId && !tasks.has(selectedTaskId)) {
+      setSelectedTaskId(null);
+    }
+  }, [selectedTaskId, tasks]);
+
   useEffect(() => {
     if (selectedTask?.config.workflowId) {
       setWorkflowSelectionDismissed(false);
@@ -598,30 +650,54 @@ export function App() {
     return { x: Math.max(24, window.innerWidth / 2), y: Math.max(24, window.innerHeight / 2) };
   }, []);
 
+  // Center the camera on whatever is currently selected, honoring the active
+  // keyboard region. Used by the F1 camera-lock command; issues a command only
+  // when there is something to center on.
+  const centerCurrentSelection = useCallback((reason: string) => {
+    if (keyboardRegion === 'taskGraph' && selectedTaskId) {
+      issueCameraCommand({ style: 'centerSelection', scope: 'task', target: selectedTaskId, reason });
+      return;
+    }
+    const workflowId = selectedWorkflow?.id ?? selectedWorkflowId;
+    if (workflowId) {
+      issueCameraCommand({ style: 'centerSelection', scope: 'workflow', target: workflowId, reason });
+    }
+  }, [issueCameraCommand, keyboardRegion, selectedTaskId, selectedWorkflow, selectedWorkflowId]);
+
   const selectWorkflowById = useCallback((workflowId: string) => {
     setWorkflowSelectionDismissed(false);
     setSelectedWorkflowId(workflowId);
     setSelectedTaskId(null);
     setContextMenu(null);
     setWorkflowContextMenu(null);
-    setCenterWorkflowId(workflowId);
+    // A deliberate node selection clears any manual suppression and, when the
+    // lock is enabled, recenters on the new selection.
+    setCameraSuppressed(false);
+    if (cameraPreference.enabled) {
+      issueCameraCommand({ style: 'centerSelection', scope: 'workflow', target: workflowId, reason: 'selection' });
+    }
     focusKeyboardRegion('workflowGraph');
-  }, [focusKeyboardRegion]);
+  }, [cameraPreference.enabled, focusKeyboardRegion, issueCameraCommand]);
 
   const selectTaskById = useCallback((taskId: string) => {
     const task = tasks.get(taskId);
     if (!task) return;
     setSelectedTaskId(task.id);
     setWorkflowSelectionDismissed(false);
+    setCameraSuppressed(false);
     if (task.config.workflowId) {
       setSelectedWorkflowId(task.config.workflowId);
-      setCenterWorkflowId(task.config.workflowId);
+      if (cameraPreference.enabled) {
+        issueCameraCommand({ style: 'centerSelection', scope: 'workflow', target: task.config.workflowId, reason: 'selection' });
+      }
     }
     setContextMenu(null);
     setWorkflowContextMenu(null);
-    setCenterTaskId(task.id);
+    if (cameraPreference.enabled) {
+      issueCameraCommand({ style: 'centerSelection', scope: 'task', target: task.id, reason: 'selection' });
+    }
     focusKeyboardRegion('taskGraph');
-  }, [focusKeyboardRegion, tasks]);
+  }, [cameraPreference.enabled, focusKeyboardRegion, issueCameraCommand, tasks]);
 
   const selectRelativeNode = useCallback((direction: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight') => {
     const inTaskGraph = keyboardRegion === 'taskGraph';
@@ -738,6 +814,25 @@ export function App() {
 
       if (isEditableKeyboardTarget(event.target) || modal.type !== 'none') return;
 
+      // F1 — camera lock. Keyboard-only; already gated above against editable,
+      // modal, terminal, and search targets. `toggle` mode flips the persisted
+      // lock and recenters on enable; `once` recenters a single time without
+      // changing the stored preference.
+      if (event.key === 'F1') {
+        event.preventDefault();
+        setCameraSuppressed(false);
+        if (cameraPreference.mode === 'once') {
+          centerCurrentSelection('cameraLockOnce');
+          return;
+        }
+        const nextEnabled = !cameraPreference.enabled;
+        setCameraPreference({ ...cameraPreference, enabled: nextEnabled });
+        if (nextEnabled) {
+          centerCurrentSelection('cameraLockEnabled');
+        }
+        return;
+      }
+
       if (event.key === 'Tab') {
         event.preventDefault();
         const currentIndex = KEYBOARD_REGION_ORDER.indexOf(keyboardRegion);
@@ -842,6 +937,8 @@ export function App() {
   }, [
     activateSearchResult,
     bottomStatusIndex,
+    cameraPreference,
+    centerCurrentSelection,
     focusKeyboardRegion,
     handleStatusClick,
     keyboardRegion,
@@ -870,7 +967,12 @@ export function App() {
       setSelectedWorkflowId(task.config.workflowId);
     }
     setWorkflowContextMenu(null);
-  }, []);
+    // Mouse selection clears manual suppression and recenters when locked.
+    setCameraSuppressed(false);
+    if (cameraPreference.enabled) {
+      issueCameraCommand({ style: 'centerSelection', scope: 'task', target: task.id, reason: 'selection' });
+    }
+  }, [cameraPreference.enabled, issueCameraCommand]);
 
   const openTerminalForTaskId = useCallback(async (taskId: string) => {
     const task = tasks.get(taskId);
@@ -921,7 +1023,12 @@ export function App() {
     setSelectedTaskId(null);
     setContextMenu(null);
     setWorkflowContextMenu(null);
-  }, []);
+    // Mouse selection clears manual suppression and recenters when locked.
+    setCameraSuppressed(false);
+    if (cameraPreference.enabled) {
+      issueCameraCommand({ style: 'centerSelection', scope: 'workflow', target: workflowId, reason: 'selection' });
+    }
+  }, [cameraPreference.enabled, issueCameraCommand]);
 
   const handleWorkflowContextMenu = useCallback((event: React.MouseEvent<HTMLDivElement>, workflowId: string) => {
     event.preventDefault();
@@ -1591,6 +1698,7 @@ export function App() {
               data-keyboard-region="workflowGraph"
               tabIndex={0}
               data-keyboard-active={keyboardRegion === 'workflowGraph' ? 'true' : 'false'}
+              data-camera-suppressed={cameraSuppressed ? 'true' : 'false'}
               className={`flex-1 relative overflow-hidden border-r border-gray-800 bg-gray-900 outline-none ${keyboardRegion === 'workflowGraph' ? 'ring-2 ring-inset ring-blue-400/50' : ''}`}
               onClick={viewMode === 'dag' ? handleDagSurfaceClick : undefined}
             >
@@ -1620,7 +1728,8 @@ export function App() {
                     tasks={tasks}
                     workflows={workflows}
                     selectedWorkflowId={selectedWorkflow?.id ?? null}
-                    centerWorkflowId={centerWorkflowId}
+                    cameraCommand={workflowCameraCommand}
+                    onManualViewportChange={handleManualViewportChange}
                     statusFilters={statusFilters}
                     onSelectWorkflow={handleWorkflowClick}
                     onWorkflowContextMenu={handleWorkflowContextMenu}
@@ -1644,7 +1753,8 @@ export function App() {
                           tasks={miniDagTasks}
                           workflows={selectedTaskDagWorkflows}
                           selectedTaskId={selectedTaskId}
-                          centerTaskId={centerTaskId}
+                          cameraCommand={taskCameraCommand}
+                          onManualViewportChange={handleManualViewportChange}
                           onTaskClick={handleTaskClick}
                           onTaskDoubleClick={handleTaskDoubleClick}
                           onTaskContextMenu={handleTaskContextMenu}
