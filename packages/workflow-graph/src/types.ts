@@ -44,6 +44,14 @@ export interface BaseTaskConfig {
   readonly executionAgent?: string;
   /** Cross-workflow prerequisites for this task. */
   readonly externalDependencies?: readonly ExternalDependency[];
+  /**
+   * Read-only provenance of external dependencies that were removed by
+   * `detachWorkflow`. Never consulted for scheduling or blocker
+   * evaluation (that is `externalDependencies`' job) — this exists only
+   * so the UI can distinguish a genuinely independent workflow from one
+   * that was explicitly detached from an upstream stack edge.
+   */
+  readonly detachedExternalDependencies?: readonly DetachedExternalDependency[];
   /** Execution pool identifier for shared queue/drain scheduling across substrates. */
   readonly poolId?: string;
   /** Legacy direct SSH pool member selection used by editable runner controls. */
@@ -94,6 +102,23 @@ export interface ExternalDependency {
   readonly requiredStatus: 'completed';
   /** review_ready (default): merge gate review_ready/awaiting_approval/completed count as satisfied. completed: strict — only 'completed' satisfies. */
   readonly gatePolicy?: 'completed' | 'review_ready';
+}
+
+/**
+ * Provenance for an external dependency that `detachWorkflow` removed from a
+ * task's active `externalDependencies`. Mirrors the fields of the original
+ * dependency plus the moment it was detached, so the UI can render who/what
+ * was detached without re-deriving it from audit events. Purely informational
+ * — never consulted by scheduling or blocker evaluation.
+ */
+export interface DetachedExternalDependency {
+  readonly workflowId: string;
+  /** Optional task selector that the detached dependency targeted. */
+  readonly taskId?: string;
+  readonly requiredStatus: 'completed';
+  readonly gatePolicy?: 'completed' | 'review_ready';
+  /** ISO-8601 timestamp of when the dependency was detached. */
+  readonly detachedAt: string;
 }
 
 // ── Task Execution (runtime state) ─────────────────────────
