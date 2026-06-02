@@ -68,6 +68,10 @@ Grep-only checks are Phase 1a only; behavioral claims require executed Phase 1b 
 
 **Review compression (required for implementation plans):** Before authoring any plan with `onFinish != none`, apply `skills/review-compression/SKILL.md`. Split by reviewer cognition, not file count: one local review claim, one safety invariant, one slice rationale, and one architectural effect per implementation task. This applies to Invoker and non-Invoker target repos.
 
+**Stack-first authoring (default for implementation plans):** For any plan with `onFinish != none`, default to an authored Invoker workflow stack, not one YAML with many implementation tasks. In Invoker, one YAML file is one workflow; `tasks:` are only tasks inside that workflow. If the implementation has more than one review slice, layer, implementation prompt task, package boundary, UI+non-UI boundary, or PR-worthy commit, write multiple `step-N` YAML files and submit them with `scripts/submit-workflow-chain.sh`. Later workflow templates must depend on the previous workflow's merge gate with `externalDependencies` using `workflowId: "__UPSTREAM_WORKFLOW_ID__"`, `taskId: "__merge__"`, `requiredStatus: completed`, and `gatePolicy: review_ready` unless the user explicitly requests a different gate.
+
+**Standalone workflow waiver (exception, not default):** A single implementation workflow is allowed only when the whole change is one review claim that fits in one implementation prompt task plus verification, or when the user explicitly asks for a single workflow. Any standalone implementation YAML with multiple prompt tasks must include a top-level `description` section headed `Standalone workflow waiver:` explaining why it is not split. Without that waiver, `lint-task-atomicity.sh` rejects multi-prompt standalone implementation workflows.
+
 **Policy-matrix documents:** When the source is an architecture or policy document with a decision table, exception rules, or cross-cutting invariants, you must preserve row-level coverage before authoring workflows. Do not stop at files/functions/packages; every required policy row must map to a workflow step or an explicit waiver.
 
 **Delegated task hints (hard requirement for implementation plans):** For plans with `onFinish != none`, every prompt task must include `Files:`, `Change types:`, and `Acceptance criteria:` sections in `description`. Prompt text must be zero-context executable: assume no prior chat knowledge, include deterministic pass/fail expectations, and keep instructions self-contained. Verify-only plans (`onFinish: none`) keep delegation hints advisory.
@@ -147,8 +151,8 @@ If `skill-doctor.sh` fails, run individual checks to isolate the problem:
    `bash scripts/ui-visual-proof.sh --label before` and `--label after`
 9. `step-remote-ci-verify` (high-risk changes)
    `bash skills/remote-ci-verify/scripts/run-remote-ci-verify.sh`
-10. `step-submit` (no stacking)
-    Use when the plan has NO `externalDependencies`.
+10. `step-submit-standalone-waived` (exception path)
+    Use only for verify-only plans, explicitly requested single-workflow plans, or implementation plans that satisfy the `Standalone workflow waiver:` rule.
     `./submit-plan.sh <plan-file>`
     If the target repo is Invoker itself, finish the PR publication step with `mergify stack push` from the working branch after the stack of commits is ready.
 10a. `step-submit-stacked` (single plan with upstream dependency)
@@ -159,10 +163,10 @@ If `skill-doctor.sh` fails, run individual checks to isolate the problem:
      4. Submit: `./submit-plan.sh <plan-file>`
      5. If the target repo is Invoker itself, publish/update the resulting PR stack with `mergify stack push` after submission-side commits are ready.
 10b. `step-submit-chain` (batch stacking, multiple template plans)
-     Use when submitting an entire dependency chain at once.
+     Default path for implementation work with more than one review slice.
      `./scripts/submit-workflow-chain.sh [--gate-policy completed|review_ready] <plan1.yaml> <plan2.template.yaml> ...`
      The chain script handles: template rendering, baseBranch rewrite, merge-gate injection, sequential submission. For Invoker-on-Invoker work only, publish the resulting GitHub PR stack with `mergify stack push` once the chain's commits are prepared.
-     Strict default: when `--gate-policy` is omitted, chain submission enforces `taskId: "__merge__"` + `requiredStatus: completed` + `gatePolicy: completed` for upstream workflow dependencies.
+     Strict default: when `--gate-policy` is omitted, chain submission enforces `taskId: "__merge__"` + `requiredStatus: completed` + `gatePolicy: review_ready` for upstream workflow dependencies.
 
 ## Runtime verification (Phase 1b)
 

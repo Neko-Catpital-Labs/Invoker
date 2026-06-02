@@ -293,7 +293,10 @@ test_lint_valid_final_test_all() {
 
   cat > "$temp_plan" <<'EOF'
 name: "Valid final test-all gate"
-description: "Implementation plan with terminal full-suite regression"
+description: |
+  Implementation plan with terminal full-suite regression.
+  Standalone workflow waiver:
+  - This fixture intentionally exercises standalone final-gate lint behavior.
 onFinish: pull_request
 mergeMode: github
 repoUrl: git@github.com:example-org/acme-repo.git
@@ -371,6 +374,104 @@ tasks:
 EOF
 
   bash "$LINT_SCRIPT" "$temp_plan" >/dev/null
+}
+
+test_lint_rejects_multi_prompt_standalone_without_waiver() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: "Invalid multi-prompt standalone workflow"
+description: "Implementation workflow with multiple prompt slices but no stack context."
+onFinish: pull_request
+mergeMode: github
+repoUrl: git@github.com:example-org/acme-repo.git
+tasks:
+  - id: implement-surface
+    description: |
+      Goal:
+      - Implement the contact surface slice.
+      Motivation:
+      - Keep the first implementation step reviewable.
+      Alternative considerations:
+      - Option A (chosen): implement directly.
+      - Option B: defer implementation.
+      Implementation details:
+      - Update packages/foo/src/surface.ts.
+      Layer: contact_surface
+      Feature state: active
+    prompt: |
+      Goal:
+      - Implement the contact surface slice.
+      Motivation:
+      - Keep execution deterministic.
+      Alternative considerations:
+      - Option A (chosen): update packages/foo/src/surface.ts.
+      - Option B: do nothing.
+      Implementation details:
+      - Modify packages/foo/src/surface.ts for the new behavior.
+      Acceptance criteria:
+      - Verify the first implementation slice is present.
+    dependencies: []
+  - id: implement-bridge
+    description: |
+      Goal:
+      - Implement the bridge slice.
+      Motivation:
+      - Keep the second implementation step reviewable.
+      Alternative considerations:
+      - Option A (chosen): implement directly.
+      - Option B: defer implementation.
+      Implementation details:
+      - Update packages/foo/src/bridge.ts.
+      Layer: app_bridge
+      Feature state: active
+    prompt: |
+      Goal:
+      - Implement the bridge slice.
+      Motivation:
+      - Keep execution deterministic.
+      Alternative considerations:
+      - Option A (chosen): update packages/foo/src/bridge.ts.
+      - Option B: do nothing.
+      Implementation details:
+      - Modify packages/foo/src/bridge.ts for the new behavior.
+      Acceptance criteria:
+      - Verify the second implementation slice is present.
+    dependencies: [implement-surface]
+  - id: final-regression
+    description: |
+      Goal:
+      - Run final full-suite regression gate.
+      Motivation:
+      - Validate all standalone tasks together.
+      Alternative considerations:
+      - Option A (chosen): root full-suite verification.
+      - Option B: package-only checks.
+      Implementation details:
+      - Execute the repository test gate.
+      Layer: e2e_regression
+      Feature state: active
+    command: "pnpm run test:all"
+    dependencies: [implement-surface, implement-bridge]
+EOF
+
+  local output
+  set +e
+  output=$(bash "$LINT_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected lint to reject multi-prompt standalone workflow without waiver" >&2
+    return 1
+  fi
+
+  if ! grep -q 'Standalone implementation workflow has multiple prompt tasks but no stack context' <<<"$output"; then
+    echo "Expected standalone stack-context lint error, got: $output" >&2
+    return 1
+  fi
 }
 
 test_lint_rejects_non_test_all_final_gate() {
@@ -1114,6 +1215,7 @@ run_test "Edge: unrendered_template_placeholder" test_unrendered_template_placeh
 run_test "Edge: stacked_basebranch_default" test_stacked_basebranch_master
 run_test "Edge: unsupported runnerKind field" test_runner_kind_is_unsupported
 run_test "Lint: valid final pnpm run test:all gate" test_lint_valid_final_test_all
+run_test "Lint: reject multi-prompt standalone without waiver" test_lint_rejects_multi_prompt_standalone_without_waiver
 run_test "Lint: reject non-test:all final gate" test_lint_rejects_non_test_all_final_gate
 run_test "Lint: allow non-terminal stack workflow without test:all" test_lint_allows_nonterminal_stack_workflow_without_test_all
 run_test "Lint: reject final gate missing dependencies" test_lint_rejects_final_gate_missing_dependencies
