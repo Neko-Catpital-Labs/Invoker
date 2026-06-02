@@ -13,6 +13,7 @@
 import { useEffect, useRef, useState, useLayoutEffect } from 'react';
 import type { TaskState } from '../types.js';
 import { getMenuItems, type MenuItem } from '../lib/context-menu-items.js';
+import { cycleEnabledIndex, isMenuNavigationKey } from '../lib/menu-keyboard.js';
 import { EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE } from '../isExperimentSpawnPivot.js';
 
 interface ContextMenuProps {
@@ -61,6 +62,16 @@ export function ContextMenu({
   const hasMoreButton = dangerItems.length > 0 && !showMore;
   const renderedItems: MenuItem[] = showMore ? [...safeItems, ...dangerItems] : safeItems;
 
+  // The "More" disclosure is a keyboard-navigable row that lives just past the
+  // last rendered item. -1 when there is nothing to disclose.
+  const moreIndex = hasMoreButton ? renderedItems.length : -1;
+
+  // Indices the highlight can land on: enabled items, plus More when present.
+  const enabledNavIndices = renderedItems
+    .map((item, idx) => (item.enabled ? idx : -1))
+    .filter((idx) => idx >= 0);
+  if (moreIndex >= 0) enabledNavIndices.push(moreIndex);
+
   // Find first enabled item index
   const firstEnabledIndex = renderedItems.findIndex((item) => item.enabled);
 
@@ -70,6 +81,23 @@ export function ContextMenu({
       setFocusedIndex(firstEnabledIndex);
     }
   }, [firstEnabledIndex]);
+
+  // Focus the menu itself on open so it owns ArrowUp/ArrowDown/Enter/Space
+  // before they can reach the App-level graph shortcut handler. preventScroll
+  // keeps the graph viewport from jumping when the menu mounts.
+  useEffect(() => {
+    menuRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  // Reveal the danger items and move the highlight to the first enabled one so
+  // keyboard users land on a deterministic, actionable row after "More".
+  const expandMore = () => {
+    setShowMore(true);
+    const firstDangerEnabled = dangerItems.findIndex((item) => item.enabled);
+    if (firstDangerEnabled >= 0) {
+      setFocusedIndex(safeItems.length + firstDangerEnabled);
+    }
+  };
 
   // Viewport clamping: flip if menu overflows bottom or right
   useLayoutEffect(() => {
@@ -133,24 +161,25 @@ export function ContextMenu({
     };
   }, [onClose]);
 
-  // Keyboard navigation
+  // Keyboard navigation. Handled keys are fully owned by the menu —
+  // preventDefault stops page scroll, stopPropagation keeps the App-level
+  // graph shortcuts from also acting on the same key.
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    const enabledIndices = renderedItems
-      .map((item, idx) => (item.enabled ? idx : -1))
-      .filter((idx) => idx >= 0);
+    if (!isMenuNavigationKey(e.key)) return;
+
+    e.preventDefault();
+    e.stopPropagation();
 
     if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const nextPos = (currentPos + 1) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[nextPos]);
+      setFocusedIndex(cycleEnabledIndex(enabledNavIndices, focusedIndex, 1));
     } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const prevPos = (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[prevPos]);
-    } else if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
+      setFocusedIndex(cycleEnabledIndex(enabledNavIndices, focusedIndex, -1));
+    } else {
+      // Enter or Space activates the highlighted row.
+      if (focusedIndex === moreIndex) {
+        expandMore();
+        return;
+      }
       const item = renderedItems[focusedIndex];
       if (item?.enabled) {
         handleItemClick(item);
@@ -254,8 +283,11 @@ export function ContextMenu({
           <div className="border-t border-gray-600 my-1" />
           <button
             role="menuitem"
-            className="w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
-            onClick={() => setShowMore(true)}
+            className={`w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 ${
+              focusedIndex === moreIndex ? 'bg-gray-700' : ''
+            }`}
+            onClick={expandMore}
+            onMouseEnter={() => setFocusedIndex(moreIndex)}
           >
             More
           </button>

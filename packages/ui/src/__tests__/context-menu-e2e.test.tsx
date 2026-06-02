@@ -158,4 +158,56 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
+
+  it('workflow menu focuses itself on open and activates highlighted item with Enter', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    await waitFor(() => expect(menu).toHaveFocus());
+
+    // Highlight starts on the first row; move down to "Retry Workflow".
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'Enter' });
+
+    await waitFor(() => expect(mock.api.retryWorkflow).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('workflow menu reaches More with the keyboard and activates a danger item with Space', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+
+    // ArrowUp from the first row wraps to "More"; Enter expands the danger group
+    // and lands the highlight on the first revealed item ("Rebase and Retry").
+    fireEvent.keyDown(menu, { key: 'ArrowUp' });
+    fireEvent.keyDown(menu, { key: 'Enter' });
+    expect(await screen.findByText('Delete Workflow')).toBeInTheDocument();
+
+    // Walk down to "Delete Workflow" and activate it with Space.
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: ' ' });
+
+    await waitFor(() => expect(mock.api.deleteWorkflow).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('task context menu focuses itself on open and activates with the keyboard', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+
+    const menu = await screen.findByRole('menu');
+    await waitFor(() => expect(menu).toHaveFocus());
+    expect(screen.getByText('Restart Task')).toBeInTheDocument();
+
+    // Highlight starts on the first enabled item ("Restart Task"); activate it.
+    fireEvent.keyDown(menu, { key: 'Enter' });
+    await waitFor(() => expect(mock.api.restartTask).toHaveBeenCalledWith('task-alpha'));
+  });
 });
