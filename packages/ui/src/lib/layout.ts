@@ -11,8 +11,6 @@
  *    for straighter edges.
  */
 
-import ELK from 'elkjs/lib/elk.bundled.js';
-
 import type { TaskState } from '../types.js';
 
 export interface NodePosition {
@@ -43,6 +41,33 @@ interface ElkLayoutEngine {
     children?: Array<{ id?: string; x?: number; y?: number }>;
     edges?: unknown[];
   }>;
+}
+
+type ElkConstructor = new () => ElkLayoutEngine;
+
+let elkConstructorPromise: Promise<ElkConstructor> | undefined;
+
+/**
+ * Lazily loads the elkjs constructor via a cached dynamic import.
+ *
+ * `elkjs/lib/elk.bundled.js` is ~1.5 MB; importing it at module top level pulls
+ * it into the synchronous startup entry chunk and dominates cold-start parse
+ * cost. ELK is only used to *refine* an already-painted DAG — TaskDAG renders a
+ * synchronous fallback layout (`makeFallbackLayout`/`layoutNodes`) on first
+ * paint and swaps in ELK positions from an async effect — so it is safe to defer
+ * until the async layout pass actually runs. The promise is cached so the chunk
+ * is fetched and evaluated at most once.
+ *
+ * Do NOT restore a top-level `import ELK from 'elkjs/...'`: it would re-bloat the
+ * entry chunk. Guarded by `scripts/repro/repro-ui-startup-bundle-size.sh`.
+ */
+function loadElkConstructor(): Promise<ElkConstructor> {
+  if (!elkConstructorPromise) {
+    elkConstructorPromise = import('elkjs/lib/elk.bundled.js').then(
+      (module) => (module.default ?? module) as ElkConstructor,
+    );
+  }
+  return elkConstructorPromise;
 }
 
 const NODE_WIDTH = 280;
@@ -88,7 +113,7 @@ export async function layoutTaskGraph(
     .sort((a, b) => edgeLayoutId(a).localeCompare(edgeLayoutId(b)));
 
   try {
-    const elk = options?.elk ?? new ELK();
+    const elk = options?.elk ?? new (await loadElkConstructor())();
     const graph = {
       id: 'task-dag',
       layoutOptions: {
