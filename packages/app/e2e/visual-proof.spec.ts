@@ -98,6 +98,22 @@ const MERGE_GATE_NO_INLINE_APPROVE_PLAN = {
   ],
 };
 
+/** External-review plan whose merge gate is driven to the terminal `closed` status. */
+const MERGE_GATE_CLOSED_PLAN = {
+  name: 'Merge gate closed status proof',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'pull_request' as const,
+  mergeMode: 'external_review',
+  tasks: [
+    {
+      id: 'mg-closed-work',
+      description: 'Sole task before closed merge gate',
+      command: 'echo ok',
+      dependencies: [] as string[],
+    },
+  ],
+};
+
 /** Pull-request workflow for proving workflow selection exposes the merge gate PR in the inspector. */
 const REVIEW_READY_WORKFLOW_PR_PLAN = {
   name: 'Review ready workflow PR proof',
@@ -567,6 +583,50 @@ test.describe('Visual proof capture', () => {
 
     await captureScreenshot(page, 'merge-gate-no-inline-approve');
     await assertPageScreenshot(page, 'merge-gate-no-inline-approve');
+  });
+
+  test('closed-status-merge-gate — merge gate renders the terminal Closed status', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MERGE_GATE_CLOSED_PLAN);
+    await page
+      .locator('.react-flow__node[data-testid$="mg-closed-work"]')
+      .first()
+      .waitFor({ state: 'visible', timeout: 15000 });
+
+    const mergeGateTaskId = await page.evaluate(async () => {
+      const result = await window.invoker.getTasks();
+      const tasks = Array.isArray(result) ? result : result.tasks;
+      const mergeTask = tasks.find((task: { id: string }) => task.id.includes('__merge__'));
+      return mergeTask?.id ?? null;
+    });
+    expect(mergeGateTaskId).toBeTruthy();
+
+    // Deterministic setup: drive the merge gate to `closed` directly — no real GitHub PR.
+    await injectTaskStates(page, [
+      {
+        taskId: mergeGateTaskId!,
+        changes: {
+          status: 'closed',
+          execution: {
+            startedAt: new Date(Date.now() - 5000),
+            completedAt: new Date(),
+            reviewStatus: 'Closed without merge',
+            reviewUrl: 'https://github.com/Neko-Catpital-Labs/Invoker/pull/123',
+          },
+        },
+      },
+    ]);
+
+    const mergeGateNode = page
+      .locator(`.react-flow__node[data-testid="${mergeGateTaskId}"], .react-flow__node[data-testid$="${mergeGateTaskId}"]`)
+      .first();
+    await expect(mergeGateNode).toBeVisible({ timeout: 15000 });
+
+    // Closed is the terminal status the gate displays — distinct from Failed (BLOCKED) and Review Ready.
+    await expect(mergeGateNode.getByText('CLOSED', { exact: true })).toBeVisible();
+    await expect(mergeGateNode.getByText('BLOCKED', { exact: true })).toHaveCount(0);
+    await expect(mergeGateNode.getByText('REVIEW READY', { exact: true })).toHaveCount(0);
+
+    await captureScreenshot(page, 'closed-status-merge-gate');
   });
 
   test('workflow inspector captures review-ready and not-review-ready pull request states', async ({ page }) => {
