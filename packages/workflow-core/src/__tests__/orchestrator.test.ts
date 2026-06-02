@@ -134,6 +134,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
         ...(changes.dependencies !== undefined ? { dependencies: changes.dependencies } : {}),
         config: { ...entry.task.config, ...changes.config },
         execution: { ...entry.task.execution, ...changes.execution },
+        taskStateVersion: (entry.task.taskStateVersion ?? 1) + 1,
       } as TaskState;
     }
   }
@@ -301,6 +302,52 @@ describe('Orchestrator', () => {
       messageBus: bus,
       maxConcurrency: 3,
       logger: consoleLogger,
+    });
+  });
+
+  describe('recordTaskHeartbeat', () => {
+    it('persists heartbeat metadata and publishes a versioned task delta', () => {
+      orchestrator.loadPlan({
+        name: 'heartbeat-owner',
+        onFinish: 'none',
+        tasks: [
+          { id: 'task-a', description: 'Task A', command: 'echo a' },
+        ],
+      });
+      publishedDeltas = [];
+      const taskId = sid(orchestrator, 0, 'task-a');
+      const before = orchestrator.getTask(taskId)!;
+      const at = new Date('2026-06-02T12:00:00.000Z');
+
+      const updated = orchestrator.recordTaskHeartbeat(taskId, {
+        at,
+        source: 'remote_workload',
+      });
+
+      expect(updated?.execution.lastHeartbeatAt).toEqual(at);
+      expect(updated?.execution.remoteHeartbeatAt).toEqual(at);
+      expect(updated?.execution.heartbeatSource).toBe('remote_workload');
+      expect(updated?.taskStateVersion).toBe(before.taskStateVersion + 1);
+
+      const persisted = persistence.getTaskEntry(taskId)?.task;
+      expect(persisted?.execution.lastHeartbeatAt).toEqual(at);
+      expect(persisted?.execution.remoteHeartbeatAt).toEqual(at);
+      expect(persisted?.execution.heartbeatSource).toBe('remote_workload');
+
+      expect(publishedDeltas).toHaveLength(1);
+      expect(publishedDeltas[0]).toMatchObject({
+        type: 'updated',
+        taskId,
+        changes: {
+          execution: {
+            lastHeartbeatAt: at,
+            remoteHeartbeatAt: at,
+            heartbeatSource: 'remote_workload',
+          },
+        },
+        previousTaskStateVersion: before.taskStateVersion,
+        taskStateVersion: before.taskStateVersion + 1,
+      });
     });
   });
 
