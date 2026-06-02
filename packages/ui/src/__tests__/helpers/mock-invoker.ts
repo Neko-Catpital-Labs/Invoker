@@ -25,6 +25,8 @@ export interface MockInvoker {
   fireDelta: (delta: TaskDelta) => void;
   /** Fire a workflows-changed event. */
   fireWorkflowsChanged: (workflows: WorkflowMeta[]) => void;
+  /** Fire an embedded terminal output event. */
+  fireTerminalOutput: (event: { sessionId: string; taskId: string; data: string }) => void;
   /** Install the mock on window.invoker. */
   install: () => void;
   /** Remove window.invoker. */
@@ -39,6 +41,7 @@ export function createMockInvoker(
   let workflowSnapshot = initialWorkflows;
   let deltaCallback: ((delta: TaskDelta) => void) | undefined;
   let workflowsCallback: ((workflows: unknown[]) => void) | undefined;
+  let terminalOutputCallback: ((event: { sessionId: string; taskId: string; data: string }) => void) | undefined;
 
   const api: InvokerAPI = {
     // Defer resolution one microtask so snapshot is read after synchronous setTasks()
@@ -140,7 +143,10 @@ export function createMockInvoker(
     terminalWrite: vi.fn(async () => ({ ok: true })),
     terminalResize: vi.fn(async () => ({ ok: true })),
     terminalClose: vi.fn(async () => ({ ok: true })),
-    onTerminalOutput: vi.fn(() => () => {}),
+    onTerminalOutput: vi.fn((cb: (event: { sessionId: string; taskId: string; data: string }) => void) => {
+      terminalOutputCallback = cb;
+      return () => { terminalOutputCallback = undefined; };
+    }),
     onTerminalExit: vi.fn(() => () => {}),
     resumeWorkflow: vi.fn(async () => null),
     listWorkflows: vi.fn(async () => []),
@@ -191,6 +197,10 @@ export function createMockInvoker(
     workflowsCallback?.(workflows);
   }
 
+  function fireTerminalOutput(event: { sessionId: string; taskId: string; data: string }) {
+    terminalOutputCallback?.(event);
+  }
+
   function install() {
     (window as unknown as { invoker: InvokerAPI }).invoker = api;
     (window as unknown as { __INVOKER_BOOTSTRAP__?: { tasks: TaskState[]; workflows: WorkflowMeta[] } }).__INVOKER_BOOTSTRAP__ = {
@@ -204,7 +214,7 @@ export function createMockInvoker(
     delete (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__;
   }
 
-  return { api, setTasks, fireDelta, fireWorkflowsChanged, install, cleanup };
+  return { api, setTasks, fireDelta, fireWorkflowsChanged, fireTerminalOutput, install, cleanup };
 }
 
 /** Create a minimal TaskState for testing. */

@@ -44,6 +44,21 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const seededSnapshotRef = useRef<{ sessionId: string; outputSnapshot: string } | null>(null);
+
+  const seedOutputSnapshot = (term: XTermTerminal) => {
+    const outputSnapshot = session.outputSnapshot;
+    if (!outputSnapshot) return;
+    const seeded = seededSnapshotRef.current;
+    if (seeded?.sessionId === session.sessionId && seeded.outputSnapshot === outputSnapshot) return;
+    try {
+      term.write(outputSnapshot);
+      onOutput(session.sessionId, outputSnapshot);
+      seededSnapshotRef.current = { sessionId: session.sessionId, outputSnapshot };
+    } catch {
+      /* terminal disposed */
+    }
+  };
 
   useEffect(() => {
     const host = containerRef.current;
@@ -72,6 +87,8 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
     const inputDisposable = term.onData((data) => {
       void window.invoker?.terminalWrite?.(session.sessionId, data);
     });
+
+    seedOutputSnapshot(term);
 
     const subscribeToOutput = window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__ ?? window.invoker?.onTerminalOutput;
     const unsubscribeOutput = subscribeToOutput?.((event) => {
@@ -125,6 +142,12 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
       fitRef.current = null;
     };
   }, [onOutput, session.sessionId]);
+
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    seedOutputSnapshot(term);
+  }, [onOutput, session.outputSnapshot, session.sessionId]);
 
   useEffect(() => {
     if (!isActive) return;
