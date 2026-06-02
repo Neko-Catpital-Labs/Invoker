@@ -132,6 +132,70 @@ describe('SQLiteAdapter', () => {
       });
     });
 
+    it('round-trips detached external dependency provenance through save and load', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const task = makeTask('t-prov', {
+        config: {
+          workflowId: 'wf-1',
+          externalDependencies: [
+            { workflowId: 'wf-up-b', requiredStatus: 'completed', gatePolicy: 'review_ready' },
+          ],
+          detachedExternalDependencies: [
+            {
+              workflowId: 'wf-up-a',
+              taskId: 'verify-a',
+              requiredStatus: 'completed',
+              gatePolicy: 'completed',
+              detachedAt: '2026-06-02T08:57:38.000Z',
+            },
+          ],
+        },
+      });
+      adapter.saveTask('wf-1', task);
+
+      const loaded = adapter.loadTask('t-prov')!;
+      // Active dependency stays intact for scheduling.
+      expect(loaded.config.externalDependencies).toEqual([
+        { workflowId: 'wf-up-b', requiredStatus: 'completed', gatePolicy: 'review_ready' },
+      ]);
+      // Provenance round-trips with full metadata.
+      expect(loaded.config.detachedExternalDependencies).toEqual([
+        {
+          workflowId: 'wf-up-a',
+          taskId: 'verify-a',
+          requiredStatus: 'completed',
+          gatePolicy: 'completed',
+          detachedAt: '2026-06-02T08:57:38.000Z',
+        },
+      ]);
+    });
+
+    it('persists detached external dependency provenance through updateTask config changes', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t-detach', {
+        config: {
+          workflowId: 'wf-1',
+          externalDependencies: [{ workflowId: 'wf-up', requiredStatus: 'completed' }],
+        },
+      }));
+
+      // Mirror detachWorkflow: drop the active edge, record provenance.
+      adapter.updateTask('t-detach', {
+        config: {
+          externalDependencies: undefined,
+          detachedExternalDependencies: [
+            { workflowId: 'wf-up', requiredStatus: 'completed', detachedAt: '2026-06-02T08:57:38.000Z' },
+          ],
+        },
+      });
+
+      const loaded = adapter.loadTask('t-detach')!;
+      expect(loaded.config.externalDependencies).toBeUndefined();
+      expect(loaded.config.detachedExternalDependencies).toEqual([
+        { workflowId: 'wf-up', requiredStatus: 'completed', detachedAt: '2026-06-02T08:57:38.000Z' },
+      ]);
+    });
+
     it('loads all workflows and tasks in one startup snapshot', () => {
       const wf2: Workflow = {
         ...testWorkflow,

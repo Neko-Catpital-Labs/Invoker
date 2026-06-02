@@ -43,6 +43,16 @@ export interface ExternalDependency {
   readonly gatePolicy?: 'completed' | 'review_ready';
 }
 
+/**
+ * Read-only provenance for an external dependency removed by `detachWorkflow`.
+ * Lets the UI distinguish a genuinely independent workflow from one detached
+ * from an upstream stack edge. Never used for scheduling.
+ */
+export interface DetachedExternalDependency extends ExternalDependency {
+  /** ISO-8601 timestamp recorded when this dependency was detached. */
+  readonly detachedAt: string;
+}
+
 export interface ExternalGatePolicyUpdate {
   workflowId: string;
   taskId?: string;
@@ -76,6 +86,11 @@ export interface TaskConfig {
   readonly testPlan?: string;
   readonly reproCommand?: string;
   readonly externalDependencies?: readonly ExternalDependency[];
+  /**
+   * Read-only provenance of external dependencies removed by `detachWorkflow`.
+   * Append-only; never consulted by scheduling. See {@link DetachedExternalDependency}.
+   */
+  readonly detachedExternalDependencies?: readonly DetachedExternalDependency[];
 }
 
 // ── Task Execution (runtime fields) ────────────────────────

@@ -19,7 +19,7 @@ import { TaskStateMachine } from './state-machine.js';
 import { ResponseHandler } from './response-handler.js';
 import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
-import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, Attempt, ExternalDependency, TaskStatus } from '@invoker/workflow-graph';
+import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, Attempt, ExternalDependency, DetachedExternalDependency, TaskStatus } from '@invoker/workflow-graph';
 import type { RunnerKind } from '@invoker/workflow-graph';
 import { createTaskState, createAttempt } from '@invoker/workflow-graph';
 import type { WorkflowDerivedStatus } from '@invoker/workflow-graph';
@@ -4944,6 +4944,36 @@ export class Orchestrator {
       .filter((t): t is TaskState => !!t);
   }
 
+  /**
+   * Merge removed external dependencies into a task's read-only detach
+   * provenance, stamping each newly-recorded edge with the detach time.
+   *
+   * Idempotent: a dependency already present in `existing` (matched on
+   * workflow id, task selector, required status, and gate policy) is not
+   * re-appended, so repeated detach attempts and sync/reload cycles never
+   * introduce duplicate provenance entries. Returns a fresh array; the
+   * inputs are not mutated.
+   */
+  private appendDetachedProvenance(
+    existing: readonly DetachedExternalDependency[],
+    removed: readonly ExternalDependency[],
+  ): DetachedExternalDependency[] {
+    const provenance = [...existing];
+    const detachedAt = workflowTimestamp().toISOString();
+    for (const dep of removed) {
+      const alreadyRecorded = provenance.some(
+        (entry) =>
+          entry.workflowId === dep.workflowId
+          && entry.taskId === dep.taskId
+          && entry.requiredStatus === dep.requiredStatus
+          && entry.gatePolicy === dep.gatePolicy,
+      );
+      if (alreadyRecorded) continue;
+      provenance.push({ ...dep, detachedAt });
+    }
+    return provenance;
+  }
+
   private detachWorkflowInternal(
     workflowId: string,
     upstreamWorkflowId: string,
@@ -4972,8 +5002,17 @@ export class Orchestrator {
       if (nextDeps.length === deps.length) continue;
 
       removedDependency = true;
+      const removed = deps.filter((dep) => dep.workflowId === upstreamWorkflowId);
+      const detachedProvenance = this.appendDetachedProvenance(
+        task.config.detachedExternalDependencies ?? [],
+        removed,
+      );
       const changes: TaskStateChanges = {
-        config: { externalDependencies: nextDeps.length > 0 ? nextDeps : undefined },
+        config: {
+          externalDependencies: nextDeps.length > 0 ? nextDeps : undefined,
+          detachedExternalDependencies:
+            detachedProvenance.length > 0 ? detachedProvenance : undefined,
+        },
       };
       const updated = this.writeAndSync(task.id, changes);
       this.persistence.logEvent?.(task.id, 'task.external_dependency_detached', {
