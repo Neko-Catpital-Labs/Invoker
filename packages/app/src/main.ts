@@ -1054,6 +1054,7 @@ if (isHeadless) {
               noTrack: payload.noTrack,
               signal: activeMutationContext?.signal,
               mutationTiming: activeMutationContext?.mutationTiming,
+              currentIntentId: activeMutationContext?.intentId,
             });
             return { ok: true };
           });
@@ -1190,6 +1191,7 @@ if (isHeadless) {
               noTrack: delegatedNoTrack,
               signal: activeMutationContext?.signal,
               mutationTiming: activeMutationContext?.mutationTiming,
+              currentIntentId: activeMutationContext?.intentId,
             });
           });
           return { ok: true };
@@ -1952,6 +1954,7 @@ function createEmbeddedTerminalBackendFromConfig(
       repoRoot, invokerConfig, initServices, wireSlackBot,
       signal: activeMutationContext?.signal,
       mutationTiming: activeMutationContext?.mutationTiming,
+      currentIntentId: activeMutationContext?.intentId,
       cancelTask: (taskId: string) => performCancelTask(taskId),
       cancelWorkflow: (workflowId: string) => performCancelWorkflow(workflowId),
       waitForApproval: payload.waitForApproval,
