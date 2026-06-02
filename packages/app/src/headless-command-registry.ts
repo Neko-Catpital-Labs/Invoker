@@ -26,6 +26,7 @@ export const HEADLESS_COMMANDS = [
   { name: 'migrate-compat', kind: 'write' },
   { name: 'install-skills', kind: 'special' },
   { name: 'watch', kind: 'read' },
+  { name: 'worker', kind: 'special' },
   { name: 'run', kind: 'write' },
   { name: 'resume', kind: 'write' },
   { name: 'retry', kind: 'write' },

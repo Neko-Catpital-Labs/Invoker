@@ -46,6 +46,22 @@ describe('headless-client', () => {
     expect(ownerHandler).toHaveBeenCalledTimes(1);
   });
 
+  it('routes worker commands directly to the Electron headless process', async () => {
+    const bus = new LocalBus();
+    const runElectronHeadless = vi.fn(async () => 0);
+    const ensureStandaloneOwner = vi.fn(async () => {});
+
+    const exitCode = await runHeadlessClientCommand(['worker', 'autofix'], {
+      messageBus: bus,
+      ensureStandaloneOwner,
+      runElectronHeadless,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(runElectronHeadless).toHaveBeenCalledWith(['worker', 'autofix']);
+    expect(ensureStandaloneOwner).not.toHaveBeenCalled();
+  });
+
   it('uses a longer no-track delegation timeout for an already-running standalone owner under load', async () => {
     const bus = new LocalBus();
     bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'standalone' }));

@@ -227,7 +227,7 @@ export function createTaskLifecycleEventFromDelta(
   if (kind === WorkerLifecycleEventKinds.TASK_NEEDS_INPUT) {
     return { ...base, kind, status: 'needs_input' };
   }
-  return { ...base, kind };
+  return { ...base, kind: WorkerLifecycleEventKinds.TASK_UPDATED };
 }
 
 export function createTaskCreatedLifecycleEvent(

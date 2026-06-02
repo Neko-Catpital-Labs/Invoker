@@ -63,6 +63,7 @@ import { trackWorkflow } from './headless-watch.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import type { RuntimeServices } from '@invoker/runtime-service';
+import { startWorkerRuntime } from './worker-runtime.js';
 
 export { bumpGenerationAndRecreate } from './workflow-actions.js';
 export {
@@ -132,6 +133,9 @@ export interface HeadlessDeps {
 const RESET = '\x1b[0m';
 const BOLD = '\x1b[1m';
 const YELLOW = '\x1b[33m';
+
+const HEADLESS_WORKER_NAMES = ['autofix', 'external-recovery', 'all'] as const;
+type HeadlessWorkerName = (typeof HEADLESS_WORKER_NAMES)[number];
 
 // ── Shared Helpers ───────────────────────────────────────────
 
@@ -987,6 +991,36 @@ async function headlessInstallSkills(
   }
 }
 
+function parseHeadlessWorkerName(value: string | undefined): HeadlessWorkerName {
+  if (HEADLESS_WORKER_NAMES.includes(value as HeadlessWorkerName)) {
+    return value as HeadlessWorkerName;
+  }
+  throw new Error('Missing or invalid worker name. Usage: --headless worker <autofix|external-recovery|all>');
+}
+
+function expandHeadlessWorkerName(name: HeadlessWorkerName): readonly Exclude<HeadlessWorkerName, 'all'>[] {
+  if (name === 'all') return ['autofix', 'external-recovery'];
+  return [name];
+}
+
+async function headlessWorker(
+  workerNameArg: string | undefined,
+  deps: Pick<HeadlessDeps, 'logger' | 'messageBus'>,
+): Promise<void> {
+  const workerName = parseHeadlessWorkerName(workerNameArg);
+  const targetWorkers = expandHeadlessWorkerName(workerName);
+  const runtimes = targetWorkers.map((targetWorker) => startWorkerRuntime<unknown>({
+    name: targetWorker,
+    messageBus: deps.messageBus,
+    logger: deps.logger,
+    scan: async () => [],
+    submit: async () => {},
+  }));
+
+  process.stdout.write(`[headless] worker ${workerName} started (${targetWorkers.join(', ')}). Press Ctrl-C to stop.\n`);
+  await Promise.all(runtimes.map((runtime) => runtime.stopped));
+}
+
 // ── Headless Command Router ──────────────────────────────────
 
 export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<void> {
@@ -1014,6 +1048,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       break;
     case 'watch':
       await headlessWatch(args[1], deps);
+      break;
+    case 'worker':
+      await headlessWorker(args[1], deps);
       break;
 
     // ── Execute (unchanged) ──
@@ -1203,6 +1240,7 @@ ${BOLD}Query${RESET} (read-only, all support --output text|label|json|jsonl):
 
 ${BOLD}Execute:${RESET}
   watch [<workflowId>]                                Watch workflow status until settled or Ctrl-C
+  worker <autofix|external-recovery|all>              Run explicit recovery worker process
   run <plan.yaml>                                     Load and execute plan
   resume <id>                                         Resume incomplete workflow
   retry <workflowId>                                  Retry workflow: rerun failed, keep completed
