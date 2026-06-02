@@ -11,6 +11,7 @@ RESUME="${INVOKER_TEST_ALL_RESUME:-0}"
 FORCE_RERUN="${INVOKER_TEST_ALL_FORCE_RERUN:-0}"
 JOBS="${INVOKER_TEST_ALL_JOBS:-1}"
 PROOF="${INVOKER_TEST_ALL_PROOF:-0}"
+PROOF_LABEL="INV-117"
 
 if [ "$PROOF" = "1" ]; then
   FORCE_RERUN=1
@@ -310,6 +311,9 @@ print_summary() {
   echo ""
   echo "======== Summary ========"
   echo "Mode: $MODE_KEY"
+  if [ "$PROOF" = "1" ]; then
+    echo "Proof: $PROOF_LABEL"
+  fi
   echo "State file: $STATE_FILE"
   echo "Executed: ${#EXECUTED[@]}"
   echo "Failed: ${#FAILED[@]}"
@@ -345,34 +349,34 @@ validate_proof_thresholds() {
   expected_executed="$(expected_executed_for_mode)"
 
   if [ "${#EXECUTED[@]}" -ne "$expected_executed" ]; then
-    echo "ERROR: INV-67 proof expected Executed=$expected_executed, got ${#EXECUTED[@]}" >&2
+    echo "ERROR: $PROOF_LABEL proof expected Executed=$expected_executed, got ${#EXECUTED[@]}" >&2
     return 1
   fi
 
   if [ "${#FAILED[@]}" -ne 0 ]; then
-    echo "ERROR: INV-67 proof expected Failed=0, got ${#FAILED[@]}" >&2
+    echo "ERROR: $PROOF_LABEL proof expected Failed=0, got ${#FAILED[@]}" >&2
     return 1
   fi
 
   if [ "${#SKIPPED_CHECKPOINT[@]}" -ne 0 ]; then
-    echo "ERROR: INV-67 proof expected Skipped by checkpoint=0, got ${#SKIPPED_CHECKPOINT[@]}" >&2
+    echo "ERROR: $PROOF_LABEL proof expected Skipped by checkpoint=0, got ${#SKIPPED_CHECKPOINT[@]}" >&2
     return 1
   fi
 
   case "$MODE_KEY" in
     required|extended)
       if [ "${#SKIPPED_UNAVAILABLE[@]}" -ne 0 ]; then
-        echo "ERROR: INV-67 proof expected Skipped unavailable=0, got ${#SKIPPED_UNAVAILABLE[@]}" >&2
+        echo "ERROR: $PROOF_LABEL proof expected Skipped unavailable=0, got ${#SKIPPED_UNAVAILABLE[@]}" >&2
         return 1
       fi
       ;;
     dangerous)
       if [ "${#SKIPPED_UNAVAILABLE[@]}" -gt 1 ]; then
-        echo "ERROR: INV-67 proof expected at most one unavailable skip, got ${#SKIPPED_UNAVAILABLE[@]}" >&2
+        echo "ERROR: $PROOF_LABEL proof expected at most one unavailable skip, got ${#SKIPPED_UNAVAILABLE[@]}" >&2
         return 1
       fi
       if [ "${#SKIPPED_UNAVAILABLE[@]}" -eq 1 ] && [ "${SKIPPED_UNAVAILABLE[0]}" != "dangerous/10-docker-comprehensive.sh" ]; then
-        echo "ERROR: INV-67 proof only allows unavailable skip for dangerous/10-docker-comprehensive.sh" >&2
+        echo "ERROR: $PROOF_LABEL proof only allows unavailable skip for dangerous/10-docker-comprehensive.sh" >&2
         return 1
       fi
       ;;
