@@ -19,7 +19,7 @@ import { TaskStateMachine } from './state-machine.js';
 import { ResponseHandler } from './response-handler.js';
 import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
-import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, Attempt, ExternalDependency, TaskStatus } from '@invoker/workflow-graph';
+import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, Attempt, ExternalDependency, DetachedExternalDependency, TaskStatus } from '@invoker/workflow-graph';
 import type { RunnerKind } from '@invoker/workflow-graph';
 import { createTaskState, createAttempt } from '@invoker/workflow-graph';
 import type { WorkflowDerivedStatus } from '@invoker/workflow-graph';
@@ -4968,12 +4968,41 @@ export class Orchestrator {
     let removedDependency = false;
     for (const task of targetTasks) {
       const deps = task.config.externalDependencies ?? [];
+      const removedDeps = deps.filter((dep) => dep.workflowId === upstreamWorkflowId);
+      if (removedDeps.length === 0) continue;
       const nextDeps = deps.filter((dep) => dep.workflowId !== upstreamWorkflowId);
-      if (nextDeps.length === deps.length) continue;
 
       removedDependency = true;
+
+      // Preserve read-only provenance of the removed edge so the UI can tell a
+      // detached workflow apart from a genuinely independent one. Active
+      // `externalDependencies` stay removed so scheduling is unaffected.
+      const detachedAt = workflowTimestamp().toISOString();
+      const existingProvenance = task.config.detachedExternalDependencies ?? [];
+      const provenanceKey = (dep: ExternalDependency) =>
+        `${dep.workflowId} ${dep.taskId ?? ''} ${dep.requiredStatus} ${dep.gatePolicy ?? ''}`;
+      const seen = new Set(existingProvenance.map(provenanceKey));
+      const additions: DetachedExternalDependency[] = [];
+      for (const dep of removedDeps) {
+        const key = provenanceKey(dep);
+        if (seen.has(key)) continue; // de-dupe repeated detach attempts / reload cycles
+        seen.add(key);
+        additions.push({
+          workflowId: dep.workflowId,
+          ...(dep.taskId !== undefined ? { taskId: dep.taskId } : {}),
+          requiredStatus: dep.requiredStatus,
+          ...(dep.gatePolicy !== undefined ? { gatePolicy: dep.gatePolicy } : {}),
+          detachedAt,
+        });
+      }
+
       const changes: TaskStateChanges = {
-        config: { externalDependencies: nextDeps.length > 0 ? nextDeps : undefined },
+        config: {
+          externalDependencies: nextDeps.length > 0 ? nextDeps : undefined,
+          ...(additions.length > 0
+            ? { detachedExternalDependencies: [...existingProvenance, ...additions] }
+            : {}),
+        },
       };
       const updated = this.writeAndSync(task.id, changes);
       this.persistence.logEvent?.(task.id, 'task.external_dependency_detached', {
