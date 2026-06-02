@@ -1642,8 +1642,13 @@ export class Orchestrator {
           return [];
         }
         const activeGeneration = this.getExecutionGeneration(earlyTask);
+        // Lineage check: a response is only accepted when every lineage field
+        // it carries still matches the live task. Older producers may omit
+        // attemptId or executionGeneration, so each field is validated only
+        // when present — but when both are present they must both match.
+        // (The attemptId match is enforced above; here we additionally reject a
+        // response that carries the current attemptId yet a stale generation.)
         if (
-          !response.attemptId &&
           response.executionGeneration !== undefined &&
           response.executionGeneration !== activeGeneration
         ) {
