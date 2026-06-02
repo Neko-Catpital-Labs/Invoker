@@ -497,6 +497,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
 
     child.on('close', async (code, signal) => {
       const exitCode = code ?? (signal ? 1 : 0);
+      entry.finalizingAfterClose = true;
       try {
         if (driver && entry.rawStdout) {
           // Extract real backend session/thread ID BEFORE writing the file,
@@ -539,6 +540,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       } finally {
         const ent = this.entries.get(executionId);
         if (ent) {
+          ent.finalizingAfterClose = false;
           ent.process = null;
           ent.phase = 'completed';
           this.softReleasePoolSlot(ent);
