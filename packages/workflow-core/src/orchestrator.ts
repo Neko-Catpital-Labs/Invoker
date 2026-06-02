@@ -1123,10 +1123,22 @@ export class Orchestrator {
         .filter((t) => t.config.workflowId === id);
     }
 
+    return this.cancelActiveCandidates(candidates, `${scope}-scope`);
+  }
+
+  /**
+   * Mark each actively-running candidate as `failed` with an explicit
+   * cancel marker, clearing its deferred-set / queued scheduler entries.
+   * Pending / blocked / failed / completed / etc. tasks are skipped so a
+   * subsequent reset path sees the expected lineage. Shared by the
+   * scope-based `cancelActiveBeforeInvalidation` and the downstream-only
+   * `recreateDownstream` (which must leave its selected task untouched).
+   */
+  private cancelActiveCandidates(candidates: TaskState[], label: string): string[] {
     const cancelled: string[] = [];
     for (const t of candidates) {
       if (!isActiveForInvalidation(t.status)) continue;
-      const error = `Cancelled before ${scope}-scope invalidation`;
+      const error = `Cancelled before ${label} invalidation`;
       const completedAt = new Date();
       const changes: TaskStateChanges = {
         status: 'failed',
@@ -2525,6 +2537,111 @@ export class Orchestrator {
     };
 
     this.logger.info('[orchestrator] recreateTask reset', {
+      taskId: rootId,
+      resetCount: toResetIds.length,
+    });
+
+    for (const id of toResetIds) {
+      const current = this.stateGetTask(id);
+      if (!current) continue;
+      const changesWithGeneration = this.withBumpedExecutionGeneration(current, resetChanges);
+      const recreateUpdated = this.writeAndSync(id, changesWithGeneration);
+      const priorAttemptId = current.execution.selectedAttemptId;
+      this.replaceSelectedAttempt(current);
+      this.persistence.logEvent?.(id, 'task.pending', changesWithGeneration);
+      this.messageBus.publish(TASK_DELTA_CHANNEL, this.buildUpdateDelta(current, recreateUpdated, changesWithGeneration));
+
+      this.deferredTaskIds.delete(id);
+      this.clearQueuedSchedulerEntries(id, priorAttemptId);
+    }
+
+    const readyIds = this.stateMachine
+      .getReadyTasks()
+      .map((t) => t.id)
+      .filter((id) => toResetSet.has(id));
+    plan = withSchedulerEnqueueCandidates(plan, readyIds);
+    this.lastInvalidationPlan = plan;
+    return this.autoStartReadyTasks(readyIds, Orchestrator.EXPEDITED_PRIORITY);
+  }
+
+  /**
+   * Task-scoped downstream recreate: leave the SELECTED task fully intact
+   * (status, branch, commit, workspacePath, selectedAttemptId,
+   * agent/session/container metadata, and execution generation all
+   * unchanged) and reset every transitive descendant with recreate-class
+   * semantics — fresh lineage, stale attempt/session/container metadata
+   * cleared, and execution generation bumped — then auto-start the newly
+   * ready descendants for dispatch.
+   *
+   * A leaf task (no downstream dependents) is a no-op: nothing is reset
+   * and no tasks are started.
+   *
+   * Shares the recreate reset shape with `recreateTask`; the only
+   * difference is the affected-task footprint — descendants ONLY, never
+   * the target — sourced from the `recreateDownstream` action spec via
+   * `planInvalidation`.
+   */
+  recreateDownstream(taskId: string): TaskState[] {
+    this.refreshFromDb();
+    const task = this.stateGetTask(taskId);
+    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
+
+    const rootId = task.id;
+
+    let plan = planInvalidation({
+      action: 'recreateDownstream',
+      targetId: rootId,
+      tasks: this.stateMachine.getAllTasks(),
+    });
+    this.lastInvalidationPlan = plan;
+    // Descendants only — `planInvalidation` never includes `rootId` for
+    // the `recreateDownstream` action, guaranteeing the selected task is
+    // left untouched below.
+    const toResetIds = plan.affectedTaskIds;
+    const toResetSet = new Set(toResetIds);
+
+    // Leaf no-op: no downstream dependents → nothing to reset or start.
+    if (toResetIds.length === 0) {
+      this.logger.info('[orchestrator] recreateDownstream no-op (leaf)', { taskId: rootId });
+      return [];
+    }
+
+    // Step 18 cancel-first invariant: interrupt active attempts on the
+    // downstream subgraph BEFORE the recreate reset writes pending
+    // state, while leaving the selected task untouched. Defense-in-depth
+    // for direct callers that bypass `applyInvalidation`'s upstream
+    // cancel; a no-op when invoked through `applyInvalidation`.
+    const descendantCandidates = toResetIds
+      .map((id) => this.stateGetTask(id))
+      .filter((t): t is TaskState => !!t);
+    this.cancelActiveCandidates(descendantCandidates, 'downstream-scope');
+
+    const resetChanges: TaskStateChanges = {
+      status: 'pending',
+      config: { summary: undefined },
+      execution: {
+        autoFixAttempts: 0,
+        startedAt: undefined,
+        completedAt: undefined,
+        error: undefined,
+        exitCode: undefined,
+        commit: undefined,
+        branch: undefined,
+        workspacePath: undefined,
+        lastHeartbeatAt: undefined,
+        phase: undefined,
+        launchStartedAt: undefined,
+        launchCompletedAt: undefined,
+        reviewUrl: undefined,
+        reviewId: undefined,
+        reviewStatus: undefined,
+        reviewProviderId: undefined,
+        agentSessionId: undefined,
+        containerId: undefined,
+      },
+    };
+
+    this.logger.info('[orchestrator] recreateDownstream reset', {
       taskId: rootId,
       resetCount: toResetIds.length,
     });

@@ -12,6 +12,7 @@ type MockedDeps = InvalidationDeps & {
   cancelInFlight: ReturnType<typeof vi.fn>;
   retryTask: ReturnType<typeof vi.fn>;
   recreateTask: ReturnType<typeof vi.fn>;
+  recreateDownstream?: ReturnType<typeof vi.fn>;
   retryWorkflow: ReturnType<typeof vi.fn>;
   recreateWorkflow: ReturnType<typeof vi.fn>;
   recreateWorkflowFromFreshBase?: ReturnType<typeof vi.fn>;
@@ -274,6 +275,45 @@ describe('applyInvalidation: recreateWorkflowFromFreshBase optional dep', () => 
   });
 });
 
+describe('applyInvalidation: recreateDownstream optional dep', () => {
+  it('throws an explicit missing-dep error when dep is absent', async () => {
+    const deps = makeDeps();
+    await expect(
+      applyInvalidation('task', 'recreateDownstream', 'task-a', deps),
+    ).rejects.toThrow(/'recreateDownstream' dep is missing/);
+  });
+
+  it('routes to the provided dep when present', async () => {
+    const recreateDownstream = vi.fn(async () => []);
+    const deps = makeDeps({ recreateDownstream });
+    await applyInvalidation('task', 'recreateDownstream', 'task-a', deps);
+    expect(recreateDownstream).toHaveBeenCalledWith('task-a');
+  });
+
+  it('rejects workflow-scoped invocation with recreateDownstream action', async () => {
+    const recreateDownstream = vi.fn(async () => []);
+    const deps = makeDeps({ recreateDownstream });
+    await expect(
+      applyInvalidation('workflow', 'recreateDownstream', 'wf-1', deps),
+    ).rejects.toThrow(/requires scope 'task'/);
+    expect(deps.cancelInFlight).not.toHaveBeenCalled();
+  });
+
+  it('cancel-first ordering and cross-workflow cascade apply to recreateDownstream', async () => {
+    const recreateDownstream = vi.fn(async () => []);
+    const cascadeDownstream = vi.fn(async () => []);
+    const deps = makeDeps({ recreateDownstream, cascadeDownstream });
+    await applyInvalidation('task', 'recreateDownstream', 'task-a', deps);
+    expect(deps.cancelInFlight).toHaveBeenCalledWith('task', 'task-a');
+    expect(deps.cancelInFlight.mock.invocationCallOrder[0]).toBeLessThan(
+      recreateDownstream.mock.invocationCallOrder[0],
+    );
+    expect(recreateDownstream.mock.invocationCallOrder[0]).toBeLessThan(
+      cascadeDownstream.mock.invocationCallOrder[0],
+    );
+  });
+});
+
 describe('applyInvalidation: workflowFork optional dep', () => {
   it('throws an explicit missing-dep error when dep is absent', async () => {
     const deps = makeDeps();
@@ -525,6 +565,7 @@ const ALL_INVALIDATION_ACTIONS: readonly InvalidationAction[] = [
   'fixReject',
   'retryTask',
   'recreateTask',
+  'recreateDownstream',
   'retryWorkflow',
   'recreateWorkflow',
   'recreateWorkflowFromFreshBase',
@@ -534,6 +575,7 @@ const ALL_INVALIDATION_ACTIONS: readonly InvalidationAction[] = [
 const INVALIDATING_ACTIONS: readonly InvalidationAction[] = [
   'retryTask',
   'recreateTask',
+  'recreateDownstream',
   'retryWorkflow',
   'recreateWorkflow',
   'recreateWorkflowFromFreshBase',

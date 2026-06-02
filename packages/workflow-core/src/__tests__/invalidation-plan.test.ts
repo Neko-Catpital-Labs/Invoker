@@ -31,6 +31,10 @@ describe('InvalidationPlan policy registry', () => {
       scope: 'task',
       mode: 'recreate',
     });
+    expect(ACTION_SPECS.recreateDownstream).toMatchObject({
+      scope: 'task',
+      mode: 'recreate',
+    });
     expect(ACTION_SPECS.retryWorkflow).toMatchObject({
       scope: 'workflow',
       mode: 'retry',
@@ -90,6 +94,66 @@ describe('InvalidationPlan policy registry', () => {
       affectedTaskIds: ['wf-1/child', 'wf-1/grandchild', 'wf-1/root'],
       lockPlan: { workflowIds: ['wf-1'] },
     });
+  });
+
+  it('plans downstream recreate as the descendants only, excluding the target', () => {
+    const tasks = [
+      task('wf-1/root', 'wf-1'),
+      task('wf-1/child', 'wf-1', ['wf-1/root']),
+      task('wf-1/grandchild', 'wf-1', ['wf-1/child']),
+      task('wf-1/sibling', 'wf-1'),
+    ];
+
+    const plan = planInvalidation({
+      action: 'recreateDownstream',
+      targetId: 'wf-1/root',
+      tasks,
+    });
+
+    expect(plan).toMatchObject({
+      action: 'recreateDownstream',
+      scope: 'task',
+      mode: 'recreate',
+      affectedWorkflowIds: ['wf-1'],
+      // root and sibling are NOT reset — only the transitive descendants.
+      affectedTaskIds: ['wf-1/child', 'wf-1/grandchild'],
+      lockPlan: { workflowIds: ['wf-1'] },
+    });
+  });
+
+  it('plans downstream recreate from a mid-chain task as that task’s descendants only', () => {
+    const tasks = [
+      task('wf-1/a', 'wf-1'),
+      task('wf-1/b', 'wf-1', ['wf-1/a']),
+      task('wf-1/c', 'wf-1', ['wf-1/b']),
+    ];
+
+    const plan = planInvalidation({
+      action: 'recreateDownstream',
+      targetId: 'wf-1/b',
+      tasks,
+    });
+
+    // B preserved; only C is reset.
+    expect(plan.affectedTaskIds).toEqual(['wf-1/c']);
+  });
+
+  it('plans downstream recreate of a leaf as an empty (no-op) footprint', () => {
+    const tasks = [
+      task('wf-1/a', 'wf-1'),
+      task('wf-1/leaf', 'wf-1', ['wf-1/a']),
+    ];
+
+    const plan = planInvalidation({
+      action: 'recreateDownstream',
+      targetId: 'wf-1/leaf',
+      tasks,
+    });
+
+    expect(plan.affectedTaskIds).toEqual([]);
+    expect(plan.affectedWorkflowIds).toEqual([]);
+    expect(plan.lockPlan.workflowIds).toEqual([]);
+    expect(plan.schedulerEnqueueCandidates).toEqual([]);
   });
 
   it('plans task retry as the task plus non-completed descendants', () => {
