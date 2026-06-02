@@ -35,22 +35,17 @@
 import { app, BrowserWindow, ipcMain, nativeImage, shell } from 'electron';
 import * as path from 'node:path';
 import { existsSync, mkdirSync } from 'node:fs';
+import {
+  configureEarlyElectronApp,
+  registerGuiLifecycleHandlers,
+  runElectronReadyBootstrap,
+  startGuiModeBootstrap,
+} from './bootstrap/app-bootstrap.js';
 
 const enableTestCompositor = process.env.INVOKER_E2E_ENABLE_COMPOSITOR === '1' || Boolean(process.env.CAPTURE_MODE);
 const hideE2eWindow = process.env.NODE_ENV === 'test' && process.env.INVOKER_E2E_HIDE_WINDOW !== '0';
 
-// Prevent desktop-wide freezes on Linux (Chromium GPU + X11/Wayland compositors).
-// Defense-in-depth: API-level disable, command-line flags, and env var (LIBGL_ALWAYS_SOFTWARE).
-if (process.platform === 'linux' && !enableTestCompositor) {
-  app.disableHardwareAcceleration();
-  app.commandLine.appendSwitch('no-sandbox');
-  app.commandLine.appendSwitch('no-zygote');
-  app.commandLine.appendSwitch('disable-dev-shm-usage');
-  app.commandLine.appendSwitch('disable-gpu');
-  app.commandLine.appendSwitch('disable-gpu-compositing');
-  app.commandLine.appendSwitch('disable-gpu-sandbox');
-  app.commandLine.appendSwitch('disable-software-rasterizer');
-}
+configureEarlyElectronApp({ app, enableTestCompositor });
 
 import { Orchestrator, CommandService, OrchestratorErrorCode } from '@invoker/workflow-core';
 import type {
@@ -64,7 +59,7 @@ import { makeEnvelope, CommandError } from '@invoker/contracts';
 import type { WorkResponse } from '@invoker/contracts';
 import { resolveRepoRoot } from '@invoker/contracts';
 import { SQLiteAdapter, ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
-import { IpcBus, Channels, TransportError, TransportErrorCode } from '@invoker/transport';
+import { IpcBus, Channels } from '@invoker/transport';
 import {
   WorkspaceProbeAdapter,
   ContainerProbeAdapter,
@@ -181,6 +176,14 @@ import {
   resolveActionDiagnosticsStallThresholdMs,
 } from './action-graph-diagnostics.js';
 import { registerReadOnlyIpcHandlers } from './ipc-read-handlers.js';
+import {
+  registerBootstrapStateIpc,
+  registerGuiMutationHandler as registerGuiMutationIpcHandler,
+  registerWorkflowScopedGuiMutationHandler as registerWorkflowScopedGuiMutationIpcHandler,
+  type GuiMutationPayload,
+  type GuiMutationRegistrationContext,
+  type WorkflowScopedGuiMutationRegistrationContext,
+} from './ipc/ipc-registration.js';
 import { createTaskDeltaStreamSequence } from './task-delta-stream-sequence.js';
 import { startReviewGateStatusWorker, type ReviewGateStatusWorker } from './review-gate-status-worker.js';
 import {
@@ -227,14 +230,6 @@ if (noTrack) {
   cliArgs = [...cliArgs.slice(0, noTrackIndex), ...cliArgs.slice(noTrackIndex + 1)];
 }
 
-// Set app name early so Electron uses "invoker" as WM_CLASS (X11) and app_id (Wayland).
-// --class tells Chromium to set WM_CLASS explicitly, preventing GNOME from
-// grouping Invoker with other Electron apps (e.g. Slack).
-app.name = 'invoker';
-if (process.platform === 'linux') {
-  app.commandLine.appendSwitch('class', 'invoker');
-}
-
 // ── Shared state ─────────────────────────────────────────────
 
 let messageBus: MessageBus;
@@ -261,11 +256,6 @@ let hourlyBackupInterval: ReturnType<typeof setInterval> | null = null;
 let writerLock: DbWriterLockResult | null = null;
 const workflowMutationOwnerId = `owner-${process.pid}-${Date.now()}`;
 const appProcessStartedAt = Date.now();
-
-interface GuiMutationPayload {
-  channel: string;
-  args: unknown[];
-}
 
 interface HeadlessRunMutationPayload {
   planPath: string;
@@ -687,7 +677,7 @@ const RED = '\x1b[31m';
 // ══════════════════════════════════════════════════════════════
 
 if (isHeadless) {
-  app.whenReady().then(async () => {
+  const runHeadlessMain = async (): Promise<void> => {
     const agentRegistry = registerBuiltinAgents();
     const command = cliArgs[0];
     const readOnlyMode = isHeadlessReadOnlyCommand(cliArgs);
@@ -1231,24 +1221,25 @@ if (isHeadless) {
       if (messageBus) messageBus.disconnect();
     }
     process.exit(exitCode);
-  }).catch((err) => {
-    process.stderr.write(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
-    process.exit(1);
+  };
+
+  runElectronReadyBootstrap({
+    app,
+    run: runHeadlessMain,
+    onError: (err) => {
+      process.stderr.write(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(1);
+    },
   });
 } else {
   // ══════════════════════════════════════════════════════════════
   // GUI MODE
   // ══════════════════════════════════════════════════════════════
-  if (process.env.NODE_ENV !== 'test') {
-    const gotTheLock = app.requestSingleInstanceLock();
-    if (!gotTheLock) {
-      app.quit();
-    } else {
-      setupGuiMode();
-    }
-  } else {
-    setupGuiMode();
-  }
+  startGuiModeBootstrap({
+    app,
+    isTest: process.env.NODE_ENV === 'test',
+    setupGuiMode,
+  });
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -2226,28 +2217,25 @@ function createEmbeddedTerminalBackendFromConfig(
     });
   }
 
+  const guiMutationRegistrationContext: GuiMutationRegistrationContext = {
+    ipcMain,
+    getOwnerMode: () => ownerMode,
+    getMessageBus: () => messageBus,
+    translateGuiMutationToHeadless,
+    guiMutationHandlers,
+  };
+
+  const workflowScopedGuiMutationRegistrationContext: WorkflowScopedGuiMutationRegistrationContext = {
+    ...guiMutationRegistrationContext,
+    workflowMutationDispatcher,
+    runWorkflowMutation,
+  };
+
   function registerGuiMutationHandler<TResult = unknown>(
     channel: string,
     handler: (...args: unknown[]) => Promise<TResult>,
   ): void {
-    guiMutationHandlers.set(channel, handler as (...args: unknown[]) => Promise<unknown>);
-    ipcMain.handle(channel, async (_event, ...args: unknown[]) => {
-      if (ownerMode) {
-        return handler(...args);
-      }
-      const translated = translateGuiMutationToHeadless({ channel, args });
-      if (!translated) {
-        throw new Error(`No owner delegation route is available for ${channel}`);
-      }
-      try {
-        return await messageBus.request<typeof translated.request, TResult>(translated.channel, translated.request);
-      } catch (err) {
-        if (err instanceof TransportError && err.code === TransportErrorCode.NO_HANDLER) {
-          throw new Error('No mutation owner is available');
-        }
-        throw err;
-      }
-    });
+    registerGuiMutationIpcHandler(guiMutationRegistrationContext, channel, handler);
   }
 
   function registerWorkflowScopedGuiMutationHandler<TResult = unknown>(
@@ -2256,11 +2244,13 @@ function createEmbeddedTerminalBackendFromConfig(
     priority: WorkflowMutationPriority,
     handler: (...args: unknown[]) => Promise<TResult>,
   ): void {
-    workflowMutationDispatcher.set(channel, (...args: unknown[]) => handler(...args));
-    registerGuiMutationHandler(channel, async (...args: unknown[]) => {
-      const workflowId = resolveWorkflowId(...args);
-      return runWorkflowMutation(workflowId, priority, channel, args, () => handler(...args));
-    });
+    registerWorkflowScopedGuiMutationIpcHandler(
+      workflowScopedGuiMutationRegistrationContext,
+      channel,
+      resolveWorkflowId,
+      priority,
+      handler,
+    );
   }
 
   function createWindow(): void {
@@ -2699,7 +2689,7 @@ function createEmbeddedTerminalBackendFromConfig(
     }, 0);
   }
 
-  app.whenReady().then(async () => {
+  const runGuiReadyBootstrap = async (): Promise<void> => {
     recordStartupMark('app.whenReady');
     ownerMode = true;
     try {
@@ -2955,25 +2945,14 @@ function createEmbeddedTerminalBackendFromConfig(
     });
 
     // Register IPC handlers
-    ipcMain.on('invoker:get-bootstrap-state-sync', (event) => {
-      const startedAtMs = Date.now();
-      const tasks = orchestrator.getAllTasks();
-      const workflows = listWorkflowsByStartupRecency();
-      const streamSequence = getTaskDeltaStreamSequence();
-      const payload = {
-        tasks,
-        workflows,
-        initialWorkflowId: startupWorkflowId,
-        appStartedAtEpochMs: appProcessStartedAt,
-        streamSequence,
-      };
-      const jsonSizeBytes = Buffer.byteLength(JSON.stringify(payload), 'utf8');
-      recordStartupDuration('bootstrap-ipc.serialize-return', startedAtMs, {
-        taskCount: tasks.length,
-        workflowCount: workflows.length,
-        jsonSizeBytes,
-      });
-      event.returnValue = payload;
+    registerBootstrapStateIpc({
+      ipcMain,
+      getTasks: () => orchestrator.getAllTasks(),
+      getWorkflows: () => listWorkflowsByStartupRecency(),
+      getInitialWorkflowId: () => startupWorkflowId,
+      appStartedAtEpochMs: appProcessStartedAt,
+      getTaskDeltaStreamSequence,
+      recordStartupDuration,
     });
     registerGuiMutationHandler('invoker:load-plan', async (planTextArg: unknown) => {
       const planText = String(planTextArg);
@@ -4054,71 +4033,78 @@ function createEmbeddedTerminalBackendFromConfig(
         createWindow();
       }
     });
-  }).catch((err) => {
-    process.stderr.write(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
-    app.quit();
-  });
+  };
 
-  app.on('window-all-closed', () => {
-    logger.info('window-all-closed', { module: 'window' });
-    if (process.platform !== 'darwin') {
+  runElectronReadyBootstrap({
+    app,
+    run: runGuiReadyBootstrap,
+    onError: (err) => {
+      process.stderr.write(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
       app.quit();
-    }
+    },
   });
 
   let isQuitting = false;
-  app.on('before-quit', async (event) => {
-    if (isQuitting) return;
-    isQuitting = true;
-    logger.info('before-quit begin', { module: 'process' });
-    event.preventDefault();
-
-    const safetyTimer = setTimeout(() => {
-      console.error('[quit] Cleanup timed out after 10s, forcing exit');
-      process.exit(1);
-    }, 10_000);
-
-    try {
-      if (apiServer) await apiServer.close().catch(() => {});
-      reviewGateStatusWorker?.stop();
-      reviewGateStatusWorker = null;
-      if (dbPollInterval) clearInterval(dbPollInterval);
-      if (activityPollInterval) clearInterval(activityPollInterval);
-      if (uiPerfLogInterval) clearInterval(uiPerfLogInterval);
-      if (hourlyBackupInterval) {
-        clearInterval(hourlyBackupInterval);
-        hourlyBackupInterval = null;
+  registerGuiLifecycleHandlers(app, {
+    onWindowAllClosed: () => {
+      logger.info('window-all-closed', { module: 'window' });
+      if (process.platform !== 'darwin') {
+        app.quit();
       }
-      embeddedTerminalManager.closeAll();
-      if (executorRegistry) {
-        await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));
-      }
-      if (orchestrator) {
-        for (const task of orchestrator.getAllTasks()) {
-          if (task.status === 'running' || task.status === 'fixing_with_ai') {
-            if (persistence) {
-              persistShutdownDiagnostic(task, persistence, {
-                flushPendingOutput: flushTaskOutput,
+    },
+    onBeforeQuit: async (event) => {
+      if (isQuitting) return;
+      isQuitting = true;
+      logger.info('before-quit begin', { module: 'process' });
+      event.preventDefault();
+
+      const safetyTimer = setTimeout(() => {
+        console.error('[quit] Cleanup timed out after 10s, forcing exit');
+        process.exit(1);
+      }, 10_000);
+
+      try {
+        if (apiServer) await apiServer.close().catch(() => {});
+        reviewGateStatusWorker?.stop();
+        reviewGateStatusWorker = null;
+        if (dbPollInterval) clearInterval(dbPollInterval);
+        if (activityPollInterval) clearInterval(activityPollInterval);
+        if (uiPerfLogInterval) clearInterval(uiPerfLogInterval);
+        if (hourlyBackupInterval) {
+          clearInterval(hourlyBackupInterval);
+          hourlyBackupInterval = null;
+        }
+        embeddedTerminalManager.closeAll();
+        if (executorRegistry) {
+          await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));
+        }
+        if (orchestrator) {
+          for (const task of orchestrator.getAllTasks()) {
+            if (task.status === 'running' || task.status === 'fixing_with_ai') {
+              if (persistence) {
+                persistShutdownDiagnostic(task, persistence, {
+                  flushPendingOutput: flushTaskOutput,
+                });
+              }
+              orchestrator.handleWorkerResponse({
+                requestId: `quit-${task.id}`,
+                actionId: task.id,
+                executionGeneration: task.execution.generation ?? 0,
+                status: 'failed',
+                outputs: { exitCode: 1, error: 'Application quit' },
               });
             }
-            orchestrator.handleWorkerResponse({
-              requestId: `quit-${task.id}`,
-              actionId: task.id,
-              executionGeneration: task.execution.generation ?? 0,
-              status: 'failed',
-              outputs: { exitCode: 1, error: 'Application quit' },
-            });
           }
         }
+        if (persistence) persistence.close();
+        if (writerLock) writerLock.release();
+        if (messageBus) messageBus.disconnect();
+      } finally {
+        clearTimeout(safetyTimer);
+        logger.info('before-quit end -> app.exit(0)', { module: 'process' });
+        app.exit(0);
       }
-      if (persistence) persistence.close();
-      if (writerLock) writerLock.release();
-      if (messageBus) messageBus.disconnect();
-    } finally {
-      clearTimeout(safetyTimer);
-      logger.info('before-quit end -> app.exit(0)', { module: 'process' });
-      app.exit(0);
-    }
+    },
   });
 
   // ── Slack Bot (embedded in GUI process) ──────────────────
