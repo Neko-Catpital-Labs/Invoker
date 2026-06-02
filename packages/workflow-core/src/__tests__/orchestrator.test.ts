@@ -5865,6 +5865,217 @@ describe('Orchestrator', () => {
       expect(x.execution.workspacePath).toBe('/tmp/x');
     });
 
+    // ── recreateDownstream (task-scope, descendants only) ──────────
+    //
+    // Shared A → B → C → merge chain plus an unrelated root X, matching
+    // the `recreateTask` scope fixture above. `recreateDownstream`
+    // differs from `recreateTask` in one way: the TARGET task is
+    // preserved; only its transitive dependents are reset.
+    function buildDownstreamChain() {
+      const testPersistence = new InMemoryPersistence();
+      const testBus = new InMemoryBus();
+      const wf = 'wf-recreate-downstream';
+
+      testPersistence.saveTask(wf, {
+        id: 'A',
+        description: 'Root',
+        status: 'completed',
+        dependencies: [],
+        createdAt: new Date(),
+        config: { workflowId: wf },
+        execution: {
+          branch: 'br-a',
+          commit: 'a1',
+          workspacePath: '/tmp/a',
+          agentSessionId: 'sess-a',
+          containerId: 'ctr-a',
+          exitCode: 0,
+        },
+      });
+      testPersistence.saveTask(wf, {
+        id: 'B',
+        description: 'Middle',
+        status: 'completed',
+        dependencies: ['A'],
+        createdAt: new Date(),
+        config: { workflowId: wf },
+        execution: {
+          branch: 'br-b',
+          commit: 'b1',
+          workspacePath: '/tmp/b',
+          agentSessionId: 'sess-b',
+          containerId: 'ctr-b',
+          exitCode: 0,
+        },
+      });
+      testPersistence.saveTask(wf, {
+        id: 'C',
+        description: 'Leaf',
+        status: 'completed',
+        dependencies: ['B'],
+        createdAt: new Date(),
+        config: { workflowId: wf },
+        execution: {
+          branch: 'br-c',
+          commit: 'c1',
+          workspacePath: '/tmp/c',
+          agentSessionId: 'sess-c',
+          containerId: 'ctr-c',
+          exitCode: 0,
+        },
+      });
+
+      const testOrchestrator = new Orchestrator({
+        persistence: testPersistence,
+        messageBus: testBus,
+        maxConcurrency: 3,
+      });
+      testOrchestrator.syncFromDb(wf);
+      return testOrchestrator;
+    }
+
+    it('recreateDownstream(A) preserves the root and resets B and C (recreate-class)', () => {
+      const o = buildDownstreamChain();
+
+      const aBefore = o.getTask('A')!;
+      const aGenBefore = aBefore.execution.generation ?? 0;
+      const aAttemptBefore = aBefore.execution.selectedAttemptId;
+      const cGenBefore = o.getTask('C')!.execution.generation ?? 0;
+
+      o.recreateDownstream('A');
+
+      // Root A is untouched: status, lineage, agent/session/container,
+      // selected attempt, and execution generation all preserved.
+      const a = o.getTask('A')!;
+      expect(a.status).toBe('completed');
+      expect(a.execution.branch).toBe('br-a');
+      expect(a.execution.commit).toBe('a1');
+      expect(a.execution.workspacePath).toBe('/tmp/a');
+      expect(a.execution.agentSessionId).toBe('sess-a');
+      expect(a.execution.containerId).toBe('ctr-a');
+      expect(a.execution.selectedAttemptId).toBe(aAttemptBefore);
+      expect(a.execution.generation ?? 0).toBe(aGenBefore);
+
+      // Descendants B and C are recreate-reset: pending (or auto-started
+      // running for the now-ready B), fresh lineage, cleared metadata,
+      // bumped generation.
+      const b = o.getTask('B')!;
+      const c = o.getTask('C')!;
+      expect(b.status === 'running' || b.status === 'pending').toBe(true);
+      expect(c.status).toBe('pending');
+
+      expect(b.execution.branch).toBeUndefined();
+      expect(b.execution.commit).toBeUndefined();
+      expect(b.execution.workspacePath).toBeUndefined();
+      expect(b.execution.agentSessionId).toBeUndefined();
+      expect(b.execution.containerId).toBeUndefined();
+
+      expect(c.execution.branch).toBeUndefined();
+      expect(c.execution.commit).toBeUndefined();
+      expect(c.execution.workspacePath).toBeUndefined();
+      expect(c.execution.agentSessionId).toBeUndefined();
+      expect(c.execution.containerId).toBeUndefined();
+      expect(c.execution.generation ?? 0).toBeGreaterThan(cGenBefore);
+    });
+
+    it('recreateDownstream(B) resets C only, leaving A and B unchanged', () => {
+      const o = buildDownstreamChain();
+
+      const started = o.recreateDownstream('B');
+
+      const a = o.getTask('A')!;
+      const b = o.getTask('B')!;
+      const c = o.getTask('C')!;
+
+      // A and B preserved verbatim.
+      expect(a.status).toBe('completed');
+      expect(a.execution.branch).toBe('br-a');
+      expect(a.execution.workspacePath).toBe('/tmp/a');
+      expect(b.status).toBe('completed');
+      expect(b.execution.branch).toBe('br-b');
+      expect(b.execution.workspacePath).toBe('/tmp/b');
+
+      // Only C is reset.
+      expect(c.status === 'running' || c.status === 'pending').toBe(true);
+      expect(c.execution.branch).toBeUndefined();
+      expect(c.execution.workspacePath).toBeUndefined();
+
+      // Any started task must be a descendant — never the preserved A/B.
+      for (const t of started) {
+        expect(t.id === 'A' || t.id === 'B').toBe(false);
+      }
+    });
+
+    it('recreateDownstream on a leaf is a no-op and returns no started tasks', () => {
+      const o = buildDownstreamChain();
+
+      const cBefore = o.getTask('C')!;
+      const cGenBefore = cBefore.execution.generation ?? 0;
+      const cAttemptBefore = cBefore.execution.selectedAttemptId;
+
+      const started = o.recreateDownstream('C');
+
+      expect(started).toEqual([]);
+
+      // Whole chain is untouched.
+      const a = o.getTask('A')!;
+      const b = o.getTask('B')!;
+      const c = o.getTask('C')!;
+      expect(a.status).toBe('completed');
+      expect(b.status).toBe('completed');
+      expect(c.status).toBe('completed');
+      expect(c.execution.branch).toBe('br-c');
+      expect(c.execution.workspacePath).toBe('/tmp/c');
+      expect(c.execution.selectedAttemptId).toBe(cAttemptBefore);
+      expect(c.execution.generation ?? 0).toBe(cGenBefore);
+    });
+
+    it('recreateDownstream preserves an ACTIVE (running) target while resetting descendants', () => {
+      const testPersistence = new InMemoryPersistence();
+      const testBus = new InMemoryBus();
+      const wf = 'wf-recreate-downstream-active';
+
+      testPersistence.saveTask(wf, {
+        id: 'A',
+        description: 'Running root',
+        status: 'running',
+        dependencies: [],
+        createdAt: new Date(),
+        config: { workflowId: wf },
+        execution: { branch: 'br-a', commit: 'a1', workspacePath: '/tmp/a' },
+      });
+      testPersistence.saveTask(wf, {
+        id: 'B',
+        description: 'Downstream',
+        status: 'pending',
+        dependencies: ['A'],
+        createdAt: new Date(),
+        config: { workflowId: wf },
+        execution: { branch: 'br-b', commit: 'b1', workspacePath: '/tmp/b' },
+      });
+
+      const o = new Orchestrator({
+        persistence: testPersistence,
+        messageBus: testBus,
+        maxConcurrency: 3,
+      });
+      o.syncFromDb(wf);
+
+      o.recreateDownstream('A');
+
+      // The running target is NOT cancelled by the descendant-scoped
+      // cancel-first pass.
+      const a = o.getTask('A')!;
+      expect(a.status).toBe('running');
+      expect(a.execution.branch).toBe('br-a');
+
+      // B is reset; it stays pending because A is still running (not ready).
+      const b = o.getTask('B')!;
+      expect(b.status).toBe('pending');
+      expect(b.execution.branch).toBeUndefined();
+      expect(b.execution.workspacePath).toBeUndefined();
+    });
+
     it('drainScheduler sets lastHeartbeatAt when starting a task', () => {
       orchestrator.loadPlan({
         name: 'heartbeat-start-test',

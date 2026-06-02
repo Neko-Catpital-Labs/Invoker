@@ -31,6 +31,10 @@ describe('InvalidationPlan policy registry', () => {
       scope: 'task',
       mode: 'recreate',
     });
+    expect(ACTION_SPECS.recreateDownstream).toMatchObject({
+      scope: 'task',
+      mode: 'recreate',
+    });
     expect(ACTION_SPECS.retryWorkflow).toMatchObject({
       scope: 'workflow',
       mode: 'retry',
@@ -90,6 +94,48 @@ describe('InvalidationPlan policy registry', () => {
       affectedTaskIds: ['wf-1/child', 'wf-1/grandchild', 'wf-1/root'],
       lockPlan: { workflowIds: ['wf-1'] },
     });
+  });
+
+  it('plans downstream recreate as descendants only, excluding the target', () => {
+    const tasks = [
+      task('wf-1/root', 'wf-1'),
+      task('wf-1/child', 'wf-1', ['wf-1/root']),
+      task('wf-1/grandchild', 'wf-1', ['wf-1/child']),
+      task('wf-1/sibling', 'wf-1'),
+    ];
+
+    const plan = planInvalidation({
+      action: 'recreateDownstream',
+      targetId: 'wf-1/root',
+      tasks,
+    });
+
+    expect(plan).toMatchObject({
+      action: 'recreateDownstream',
+      scope: 'task',
+      mode: 'recreate',
+      affectedWorkflowIds: ['wf-1'],
+      // Target 'wf-1/root' is NOT in the affected set; siblings are untouched.
+      affectedTaskIds: ['wf-1/child', 'wf-1/grandchild'],
+      lockPlan: { workflowIds: ['wf-1'] },
+    });
+  });
+
+  it('plans downstream recreate on a leaf as an empty affected set', () => {
+    const tasks = [
+      task('wf-1/root', 'wf-1'),
+      task('wf-1/leaf', 'wf-1', ['wf-1/root']),
+    ];
+
+    const plan = planInvalidation({
+      action: 'recreateDownstream',
+      targetId: 'wf-1/leaf',
+      tasks,
+    });
+
+    expect(plan.affectedTaskIds).toEqual([]);
+    expect(plan.affectedWorkflowIds).toEqual([]);
+    expect(plan.lockPlan.workflowIds).toEqual([]);
   });
 
   it('plans task retry as the task plus non-completed descendants', () => {

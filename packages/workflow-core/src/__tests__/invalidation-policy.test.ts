@@ -308,6 +308,51 @@ describe('applyInvalidation: workflowFork optional dep', () => {
   });
 });
 
+describe('applyInvalidation: recreateDownstream optional dep', () => {
+  it('throws an explicit missing-dep error when dep is absent', async () => {
+    const deps = makeDeps();
+    await expect(
+      applyInvalidation('task', 'recreateDownstream', 'task-a', deps),
+    ).rejects.toThrow(/'recreateDownstream' dep is missing/);
+  });
+
+  it('routes to the provided dep when present', async () => {
+    const recreateDownstream = vi.fn(async () => []);
+    const deps = makeDeps({ recreateDownstream });
+    await applyInvalidation('task', 'recreateDownstream', 'task-a', deps);
+    expect(recreateDownstream).toHaveBeenCalledWith('task-a');
+  });
+
+  it('rejects workflow-scoped invocation with recreateDownstream action', async () => {
+    const deps = makeDeps({ recreateDownstream: vi.fn(async () => []) });
+    await expect(
+      applyInvalidation('workflow', 'recreateDownstream', 'wf-1', deps),
+    ).rejects.toThrow(/requires scope 'task'/);
+    expect(deps.cancelInFlight).not.toHaveBeenCalled();
+  });
+
+  it('cancel-first ordering applies to recreateDownstream', async () => {
+    const recreateDownstream = vi.fn(async () => []);
+    const deps = makeDeps({ recreateDownstream });
+    await applyInvalidation('task', 'recreateDownstream', 'task-a', deps);
+    expect(deps.cancelInFlight).toHaveBeenCalledWith('task', 'task-a');
+    expect(deps.cancelInFlight.mock.invocationCallOrder[0]).toBeLessThan(
+      recreateDownstream.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('cascadeDownstream runs after recreateDownstream', async () => {
+    const cascadeDownstream = vi.fn(async () => []);
+    const recreateDownstream = vi.fn(async () => []);
+    const deps = makeDeps({ cascadeDownstream, recreateDownstream });
+    await applyInvalidation('task', 'recreateDownstream', 'task-a', deps);
+    expect(cascadeDownstream).toHaveBeenCalledWith('task', 'task-a');
+    expect(recreateDownstream.mock.invocationCallOrder[0]).toBeLessThan(
+      cascadeDownstream.mock.invocationCallOrder[0],
+    );
+  });
+});
+
 // Step 15 (`docs/architecture/task-invalidation-roadmap.md`): the
 // `'scheduleOnly'` action represents the chart's intentional
 // non-invalidating outlier — "Change external gate policy" is a
@@ -525,6 +570,7 @@ const ALL_INVALIDATION_ACTIONS: readonly InvalidationAction[] = [
   'fixReject',
   'retryTask',
   'recreateTask',
+  'recreateDownstream',
   'retryWorkflow',
   'recreateWorkflow',
   'recreateWorkflowFromFreshBase',
@@ -534,6 +580,7 @@ const ALL_INVALIDATION_ACTIONS: readonly InvalidationAction[] = [
 const INVALIDATING_ACTIONS: readonly InvalidationAction[] = [
   'retryTask',
   'recreateTask',
+  'recreateDownstream',
   'retryWorkflow',
   'recreateWorkflow',
   'recreateWorkflowFromFreshBase',
