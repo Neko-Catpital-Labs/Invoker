@@ -7,7 +7,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { TaskState, WorkflowMeta } from '../types.js';
+import type { MergeMode, TaskState, WorkflowMeta } from '../types.js';
 import { applyDelta } from '../lib/delta.js';
 import { normalizeWorkflowStatus } from '../lib/workflow-status.js';
 import {
@@ -20,6 +20,10 @@ export interface UseTasksResult {
   workflows: Map<string, WorkflowMeta>;
   clearTasks: () => void;
   refreshTasks: (forceRefresh?: boolean) => void;
+}
+
+function normalizeMergeMode(value: string | undefined): MergeMode | undefined {
+  return value === 'manual' || value === 'automatic' || value === 'external_review' ? value : undefined;
 }
 
 export function useTasks(): UseTasksResult {
@@ -49,6 +53,7 @@ export function useTasks(): UseTasksResult {
       next.set(workflow.id, {
         ...workflow,
         status: normalizeWorkflowStatus((workflow as { status?: string }).status),
+        mergeMode: normalizeMergeMode((workflow as { mergeMode?: string }).mergeMode),
       });
     }
     if (typeof window !== 'undefined' && window.invoker) {
@@ -99,6 +104,7 @@ export function useTasks(): UseTasksResult {
           wfMap.set(wf.id, {
             ...wf,
             status: normalizeWorkflowStatus((wf as { status?: string }).status),
+            mergeMode: normalizeMergeMode((wf as { mergeMode?: string }).mergeMode),
           });
         }
         return wfMap;
@@ -266,6 +272,7 @@ export function useTasks(): UseTasksResult {
             wfMap.set(wf.id, {
               ...wf,
               status: normalizeWorkflowStatus((wf as { status?: string }).status),
+              mergeMode: normalizeMergeMode((wf as { mergeMode?: string }).mergeMode),
             });
           }
           return wfMap;

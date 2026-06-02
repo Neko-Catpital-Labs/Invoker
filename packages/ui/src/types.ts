@@ -158,13 +158,15 @@ export interface WorkflowMeta {
   baseBranch?: string;
   featureBranch?: string;
   onFinish?: string;
-  mergeMode?: string;
+  mergeMode?: MergeMode;
   repoUrl?: string;
   intermediateRepoUrl?: string;
   reviewProvider?: string;
   createdAt?: string;
   updatedAt?: string;
 }
+
+export type MergeMode = 'manual' | 'automatic' | 'external_review';
 
 export type WorkflowStatus =
   | 'pending'
