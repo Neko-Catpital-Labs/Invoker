@@ -29,6 +29,23 @@ Command tasks run under the platform default shell unless the command explicitly
 
 These are constraints, not guidelines. Violating them produces broken plans.
 
+## Workflow Stack Default
+
+For implementation work (`onFinish != none`), default to a stack of workflow YAML
+files. One YAML file is one Invoker workflow; multiple `tasks:` entries inside
+that file are not a workflow stack.
+
+Split into multiple workflow files when the plan has more than one review slice,
+layer, implementation prompt task, package boundary, UI+non-UI boundary, or
+PR-worthy commit. Submit the resulting chain with
+`scripts/submit-workflow-chain.sh`, using `__UPSTREAM_WORKFLOW_ID__` in later
+templates so each workflow depends on the previous workflow's `__merge__` task.
+
+Standalone implementation workflows are exceptions. If a standalone
+implementation workflow contains multiple prompt tasks, it must include
+`Standalone workflow waiver:` in the top-level description with the reason it is
+not split.
+
 ### Must be sequential (add dependency)
 - **Same file modified by two tasks** → one depends on the other. Order by logical sequence.
 - **Test task** → depends on the implementation task it verifies.
