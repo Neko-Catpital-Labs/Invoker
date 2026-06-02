@@ -10,8 +10,10 @@ import {
 
 type MockedDeps = InvalidationDeps & {
   cancelInFlight: ReturnType<typeof vi.fn>;
+  cancelDownstreamInFlight?: ReturnType<typeof vi.fn>;
   retryTask: ReturnType<typeof vi.fn>;
   recreateTask: ReturnType<typeof vi.fn>;
+  recreateDownstream?: ReturnType<typeof vi.fn>;
   retryWorkflow: ReturnType<typeof vi.fn>;
   recreateWorkflow: ReturnType<typeof vi.fn>;
   recreateWorkflowFromFreshBase?: ReturnType<typeof vi.fn>;
@@ -133,6 +135,18 @@ describe('applyInvalidation: cancel-first ordering (Hard Invariant)', () => {
     expect(deps.cancelInFlight).toHaveBeenCalledWith('task', 'task-a');
     expect(deps.cancelInFlight.mock.invocationCallOrder[0]).toBeLessThan(
       deps.recreateTask.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('calls downstream-only cancel before recreateDownstream', async () => {
+    const cancelDownstreamInFlight = vi.fn(async () => undefined);
+    const recreateDownstream = vi.fn(async () => []);
+    const deps = makeDeps({ cancelDownstreamInFlight, recreateDownstream });
+    await applyInvalidation('task', 'recreateDownstream', 'task-a', deps);
+    expect(deps.cancelInFlight).not.toHaveBeenCalled();
+    expect(cancelDownstreamInFlight).toHaveBeenCalledWith('task-a');
+    expect(cancelDownstreamInFlight.mock.invocationCallOrder[0]).toBeLessThan(
+      recreateDownstream.mock.invocationCallOrder[0],
     );
   });
 
@@ -525,6 +539,7 @@ const ALL_INVALIDATION_ACTIONS: readonly InvalidationAction[] = [
   'fixReject',
   'retryTask',
   'recreateTask',
+  'recreateDownstream',
   'retryWorkflow',
   'recreateWorkflow',
   'recreateWorkflowFromFreshBase',
@@ -534,6 +549,7 @@ const ALL_INVALIDATION_ACTIONS: readonly InvalidationAction[] = [
 const INVALIDATING_ACTIONS: readonly InvalidationAction[] = [
   'retryTask',
   'recreateTask',
+  'recreateDownstream',
   'retryWorkflow',
   'recreateWorkflow',
   'recreateWorkflowFromFreshBase',

@@ -546,8 +546,17 @@ export function buildInvalidationDeps(deps: BuildInvalidationDepsArgs): Invalida
   });
   return {
     cancelInFlight,
+    cancelDownstreamInFlight: async (taskId: string) => {
+      const result = deps.orchestrator.cancelDownstream(taskId);
+      const taskExecutor = resolveTaskExecutor(deps.taskExecutor);
+      if (!taskExecutor) return;
+      for (const id of result.runningCancelled) {
+        await taskExecutor.killActiveExecution(id);
+      }
+    },
     retryTask: (taskId: string) => deps.orchestrator.retryTask(taskId),
     recreateTask: (taskId: string) => deps.orchestrator.recreateTask(taskId),
+    recreateDownstream: (taskId: string) => deps.orchestrator.recreateDownstream(taskId),
     retryWorkflow: (workflowId: string) => deps.orchestrator.retryWorkflow(workflowId),
     recreateWorkflow: (workflowId: string) =>
       bumpGenerationAndRecreate(workflowId, {

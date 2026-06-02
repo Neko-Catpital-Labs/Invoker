@@ -92,6 +92,69 @@ describe('InvalidationPlan policy registry', () => {
     });
   });
 
+  it('plans downstream recreate as only transitive descendants in A -> B -> C', () => {
+    const tasks = [
+      task('wf-1/A', 'wf-1'),
+      task('wf-1/B', 'wf-1', ['wf-1/A']),
+      task('wf-1/C', 'wf-1', ['wf-1/B']),
+    ];
+
+    const plan = planInvalidation({
+      action: 'recreateDownstream',
+      targetId: 'wf-1/A',
+      tasks,
+    });
+
+    expect(plan).toMatchObject({
+      action: 'recreateDownstream',
+      scope: 'task',
+      mode: 'recreate',
+      affectedWorkflowIds: ['wf-1'],
+      affectedTaskIds: ['wf-1/B', 'wf-1/C'],
+      lockPlan: { workflowIds: ['wf-1'] },
+    });
+  });
+
+  it('plans downstream recreate from B as C-only in A -> B -> C', () => {
+    const tasks = [
+      task('wf-1/A', 'wf-1'),
+      task('wf-1/B', 'wf-1', ['wf-1/A']),
+      task('wf-1/C', 'wf-1', ['wf-1/B']),
+    ];
+
+    const plan = planInvalidation({
+      action: 'recreateDownstream',
+      targetId: 'wf-1/B',
+      tasks,
+    });
+
+    expect(plan).toMatchObject({
+      action: 'recreateDownstream',
+      affectedTaskIds: ['wf-1/C'],
+    });
+  });
+
+  it('plans downstream recreate as a leaf no-op', () => {
+    const tasks = [
+      task('wf-1/A', 'wf-1'),
+      task('wf-1/B', 'wf-1', ['wf-1/A']),
+    ];
+
+    const plan = planInvalidation({
+      action: 'recreateDownstream',
+      targetId: 'wf-1/B',
+      tasks,
+    });
+
+    expect(plan).toMatchObject({
+      action: 'recreateDownstream',
+      affectedWorkflowIds: [],
+      affectedTaskIds: [],
+      schedulerEnqueueCandidates: [],
+      lockPlan: { workflowIds: [] },
+    });
+  });
+
   it('plans task retry as the task plus non-completed descendants', () => {
     const tasks = [
       task('wf-1/root', 'wf-1', [], 'failed'),

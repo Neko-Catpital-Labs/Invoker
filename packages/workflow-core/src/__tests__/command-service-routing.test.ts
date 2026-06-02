@@ -41,8 +41,10 @@ function makeOrchestrator(): Orchestrator {
     getTask: vi.fn(() => makeTask()),
     cancelTask: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
     cancelWorkflow: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+    cancelDownstream: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
     retryTask: vi.fn(() => [makeTask()]),
     recreateTask: vi.fn(() => [makeTask()]),
+    recreateDownstream: vi.fn(() => [makeTask()]),
     retryWorkflow: vi.fn(() => [makeTask()]),
     recreateWorkflow: vi.fn(() => [makeTask()]),
     recreateWorkflowFromFreshBase: vi.fn(async () => [makeTask()]),
@@ -64,12 +66,19 @@ function makeSpiedDeps(): {
     cancelInFlight: vi.fn(async (scope, id) => {
       events.push({ stage: 'cancelInFlight', scope, id });
     }),
+    cancelDownstreamInFlight: vi.fn(async (id) => {
+      events.push({ stage: 'cancelDownstreamInFlight', id });
+    }),
     retryTask: vi.fn((id) => {
       events.push({ stage: 'retryTask', id });
       return result;
     }),
     recreateTask: vi.fn((id) => {
       events.push({ stage: 'recreateTask', id });
+      return result;
+    }),
+    recreateDownstream: vi.fn((id) => {
+      events.push({ stage: 'recreateDownstream', id });
       return result;
     }),
     retryWorkflow: vi.fn((id) => {
@@ -100,7 +109,7 @@ describe('CommandService → applyInvalidation routing', () => {
   });
 
   type RoutedCase = {
-    method: 'retryTask' | 'recreateTask' | 'retryWorkflow' | 'recreateWorkflow' | 'recreateWorkflowFromFreshBase';
+    method: 'retryTask' | 'recreateTask' | 'recreateDownstream' | 'retryWorkflow' | 'recreateWorkflow' | 'recreateWorkflowFromFreshBase';
     scope: InvalidationScope;
     action: InvalidationAction;
     id: string;
@@ -121,6 +130,13 @@ describe('CommandService → applyInvalidation routing', () => {
       action: 'recreateTask',
       id: 'task-1',
       invoke: (cs) => cs.recreateTask(makeEnvelope({ taskId: 'task-1' }, 'rc-task')),
+    },
+    {
+      method: 'recreateDownstream',
+      scope: 'task',
+      action: 'recreateDownstream',
+      id: 'task-1',
+      invoke: (cs) => cs.recreateDownstream(makeEnvelope({ taskId: 'task-1' }, 'rc-downstream')),
     },
     {
       method: 'retryWorkflow',
@@ -158,12 +174,18 @@ describe('CommandService → applyInvalidation routing', () => {
       expect(result).toEqual({ ok: true, data: [] });
 
       const stages = events.map((e) => e.stage);
-      expect(stages).toEqual(['cancelInFlight', c.action, 'cascadeDownstream']);
+      const expectedCancelStage =
+        c.action === 'recreateDownstream' ? 'cancelDownstreamInFlight' : 'cancelInFlight';
+      expect(stages).toEqual([expectedCancelStage, c.action, 'cascadeDownstream']);
 
       const cancel = events[0];
       const dispatch = events[1];
       const cascade = events[2];
-      expect(cancel.scope).toBe(c.scope);
+      if (c.action === 'recreateDownstream') {
+        expect(cancel.scope).toBeUndefined();
+      } else {
+        expect(cancel.scope).toBe(c.scope);
+      }
       expect(cancel.id).toBe(c.id);
       expect(dispatch.id).toBe(c.id);
       expect(cascade.scope).toBe(c.scope);
@@ -171,6 +193,7 @@ describe('CommandService → applyInvalidation routing', () => {
 
       expect(orchestrator.cancelTask).not.toHaveBeenCalled();
       expect(orchestrator.cancelWorkflow).not.toHaveBeenCalled();
+      expect(orchestrator.cancelDownstream).not.toHaveBeenCalled();
       expect(orchestrator.cascadeInvalidationToDownstream).not.toHaveBeenCalled();
     });
   }
