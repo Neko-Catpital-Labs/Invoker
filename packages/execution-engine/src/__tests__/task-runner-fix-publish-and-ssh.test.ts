@@ -4270,8 +4270,8 @@ describe('TaskRunner', () => {
     });
   });
 
-  describe('SSH heartbeat persistence metadata', () => {
-    it('stores remote workload heartbeat metadata for SSH executors', async () => {
+  describe('SSH heartbeat owner callback metadata', () => {
+    it('passes remote workload heartbeat metadata to the owner callback', async () => {
       const runningTask = makeTask({
         id: 'task-ssh-heartbeat',
         status: 'running',
@@ -4306,6 +4306,7 @@ describe('TaskRunner', () => {
         }),
       } as any;
 
+      const onHeartbeat = vi.fn();
       const runner = new TaskRunner({
         orchestrator: {
           getTask: vi.fn((id: string) => (id === runningTask.id ? runningTask : undefined)),
@@ -4325,7 +4326,7 @@ describe('TaskRunner', () => {
           getAll: vi.fn(() => []),
         } as any,
         cwd: '/tmp',
-        callbacks: { onHeartbeat: vi.fn() },
+        callbacks: { onHeartbeat },
       });
 
       const pending = runner.executeTask(runningTask);
@@ -4339,14 +4340,19 @@ describe('TaskRunner', () => {
       });
       await pending;
 
-      expect(updateTask).toHaveBeenCalledWith(
+      expect(updateTask).not.toHaveBeenCalledWith(
         runningTask.id,
         expect.objectContaining({
           execution: expect.objectContaining({
             lastHeartbeatAt: expect.any(Date),
-            remoteHeartbeatAt: expect.any(Date),
-            heartbeatSource: 'remote_workload',
           }),
+        }),
+      );
+      expect(onHeartbeat).toHaveBeenCalledWith(
+        runningTask.id,
+        expect.objectContaining({
+          at: expect.any(Date),
+          source: 'remote_workload',
         }),
       );
       expect(updateAttempt).toHaveBeenCalledWith(

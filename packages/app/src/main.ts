@@ -1764,8 +1764,8 @@ function createEmbeddedTerminalBackendFromConfig(
             { module: 'exec' },
           );
         },
-        onHeartbeat: (taskId) => {
-          const now = new Date();
+        onHeartbeat: (taskId, event) => {
+          const now = event.at;
           const task = orchestrator.getTask(taskId);
           const previousHeartbeat = task?.execution.lastHeartbeatAt instanceof Date
             ? task.execution.lastHeartbeatAt
@@ -1773,12 +1773,7 @@ function createEmbeddedTerminalBackendFromConfig(
               ? new Date(task.execution.lastHeartbeatAt)
               : undefined;
           const heartbeatGapMs = previousHeartbeat ? now.getTime() - previousHeartbeat.getTime() : undefined;
-          try { persistence.updateTask(taskId, { execution: { lastHeartbeatAt: now } }); } catch { /* db locked */ }
-          messageBus.publish(Channels.TASK_DELTA, {
-            type: 'updated' as const,
-            taskId,
-            changes: { execution: { lastHeartbeatAt: now } },
-          });
+          orchestrator.recordTaskHeartbeat(taskId, { at: now, source: event.source });
           logger.info(
             `Heartbeat for "${taskId}" (status: ${task?.status ?? 'unknown'}, generation: ${task?.execution.generation ?? 'unknown'}, gapMs: ${heartbeatGapMs ?? 'first'})`,
             { module: 'heartbeat' },
