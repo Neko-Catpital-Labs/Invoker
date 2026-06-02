@@ -51,6 +51,28 @@ export interface InvokerConfig {
    */
   autoFixCi?: boolean;
   /**
+   * Dormant external failure-recovery hook.
+   *
+   * When present and `enabled`, an external supervisor process can be launched
+   * via the standalone launcher helper in `external-failure-recovery.ts` to react
+   * to failed tasks. This config is intentionally inert: no failed-task delta path
+   * activates it yet. It exists so the external process contract can be reviewed
+   * before failed-task routing is wired up.
+   */
+  externalFailureRecovery?: {
+    /** Set true to permit the launcher to spawn the recovery command. Default: false. */
+    enabled?: boolean;
+    /** Shell command line executed (with `shell: true`) when recovery is launched. */
+    command?: string;
+    /** Working directory for the spawned recovery process. Defaults to the launcher's process cwd. */
+    cwd?: string;
+    /**
+     * Minimum number of seconds between launches for a single launcher instance.
+     * Launches requested within the cooldown window are skipped. Default: 0 (no cooldown).
+     */
+    cooldownSeconds?: number;
+  };
+  /**
    * Read-only diagnostics tuning for the Action Graph view.
    * Default stall threshold: 60000ms. Env fallback:
    * INVOKER_ACTION_STALL_THRESHOLD_MS.
