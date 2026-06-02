@@ -5,6 +5,7 @@ export interface HeadlessExecMutationPayload {
   waitForApproval?: boolean;
   noTrack?: boolean;
   traceId?: string;
+  acceptedAutoFixTaskId?: string;
 }
 
 export interface HeadlessBatchExecItem {

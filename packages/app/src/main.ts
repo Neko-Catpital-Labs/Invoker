@@ -17,7 +17,7 @@
  *   electron dist/main.js --headless retry <workflowId>
  *   electron dist/main.js --headless rebase-retry <workflowId|mergeTaskId|taskId>
  *   electron dist/main.js --headless rebase-recreate <workflowId|mergeTaskId|taskId>
- *   electron dist/main.js --headless fix <taskId>
+ *   electron dist/main.js --headless fix <taskId> [--auto-fix]
  *   electron dist/main.js --headless resolve-conflict <taskId>
  *   electron dist/main.js --headless edit <taskId> <newCommand>
  *   electron dist/main.js --headless edit-executor <taskId> <runnerKind>
@@ -174,7 +174,16 @@ import {
 import { computeDeferredLaunchTiming } from './deferred-runnable.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import { evaluateExecutingStall } from './executing-stall.js';
-import { listOpenFixIntentsForTask } from './auto-fix-intents.js';
+import {
+  appendAutoFixFlag,
+  isAutoFixHeadlessFixArgs,
+  listOpenFixIntentsForTask,
+  makeAutoFixContext,
+  normalizeFixWithAgentOptions,
+  parseHeadlessFixArgs,
+  type AutoFixContext,
+  type FixWithAgentOptionsArg,
+} from './auto-fix-intents.js';
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
 import {
   buildActionGraphDiagnostics,
@@ -335,6 +344,95 @@ function acknowledgeNoTrackHeadlessExec(
     { module: 'ipc-delegate' },
   );
   throw new Error(`Fire-and-forget headless.exec could not be queued: ${reason}`);
+}
+
+function logAutoFixSubmissionDebug(
+  deps: { orchestrator: Orchestrator; persistence: SQLiteAdapter; logger?: Logger },
+  taskId: string,
+  phase: string,
+  details: Record<string, unknown> = {},
+): void {
+  const task = deps.orchestrator.getTask(taskId);
+  const payload = {
+    phase,
+    status: task?.status ?? 'missing',
+    autoFixAttempts: task?.execution.autoFixAttempts ?? null,
+    ...details,
+  };
+  deps.persistence.logEvent?.(taskId, 'debug.auto-fix', payload);
+  deps.logger?.info(
+    `[auto-fix-debug] task="${taskId}" phase=${phase} payload=${JSON.stringify(payload)}`,
+    { module: 'auto-fix' },
+  );
+}
+
+function acceptAutoFixSubmissionAtCommandBoundary(
+  taskId: string,
+  workflowId: string,
+  deps: { orchestrator: Orchestrator; persistence: SQLiteAdapter; logger?: Logger },
+  details: Record<string, unknown> = {},
+): AutoFixContext | null {
+  const openIntents = deps.persistence.listWorkflowMutationIntents(workflowId, ['queued', 'running']);
+  const openTaskFixIntents = listOpenFixIntentsForTask(openIntents, taskId);
+  if (openTaskFixIntents.length > 0) {
+    logAutoFixSubmissionDebug(deps, taskId, 'submission-suppressed', {
+      reason: 'already-queued-intent',
+      existingIntentIds: openTaskFixIntents.map((intent) => intent.id),
+      ...details,
+    });
+    return null;
+  }
+
+  const task = deps.orchestrator.getTask(taskId);
+  if (!task || !deps.orchestrator.shouldAutoFix(taskId)) {
+    logAutoFixSubmissionDebug(deps, taskId, 'submission-suppressed', {
+      reason: !task ? 'task-not-found' : 'shouldAutoFix-false',
+      ...details,
+    });
+    return null;
+  }
+
+  const attemptsBefore = task.execution.autoFixAttempts ?? 0;
+  const attemptsAfter = attemptsBefore + 1;
+  deps.persistence.updateTask(taskId, {
+    execution: {
+      autoFixAttempts: attemptsAfter,
+    },
+  });
+  logAutoFixSubmissionDebug(deps, taskId, 'submission-accepted', {
+    attemptsBefore,
+    attemptsAfter,
+    ...details,
+  });
+  return makeAutoFixContext(true);
+}
+
+function acceptHeadlessAutoFixSubmissionAtCommandBoundary(
+  payload: HeadlessExecMutationPayload,
+  workflowId: string | undefined,
+  deps: { orchestrator: Orchestrator; persistence: SQLiteAdapter; logger?: Logger },
+): { accepted: boolean; response?: { ok: true; suppressed?: true; reason?: string } } {
+  if (!isAutoFixHeadlessFixArgs(payload.args)) {
+    return { accepted: true };
+  }
+  if (!workflowId) {
+    return { accepted: false, response: { ok: true, suppressed: true, reason: 'workflow-not-resolved' } };
+  }
+  const { taskId } = parseHeadlessFixArgs(payload.args);
+  if (!taskId) {
+    return { accepted: false, response: { ok: true, suppressed: true, reason: 'missing-task-id' } };
+  }
+  const resolvedTarget = resolveHeadlessTarget(taskId, deps.persistence);
+  const resolvedTaskId = resolvedTarget.kind === 'task' ? resolvedTarget.resolvedTaskId : taskId;
+  const acceptedContext = acceptAutoFixSubmissionAtCommandBoundary(resolvedTaskId, workflowId, deps, {
+    channel: 'headless.exec',
+    args: payload.args,
+  });
+  if (!acceptedContext) {
+    return { accepted: false, response: { ok: true, suppressed: true, reason: 'duplicate-or-budget' } };
+  }
+  payload.acceptedAutoFixTaskId = resolvedTaskId;
+  return { accepted: true };
 }
 
 // Root logger: created early in initServices() once persistence is available.
@@ -1058,6 +1156,7 @@ if (isHeadless) {
               ...headlessDeps,
               waitForApproval: payload.waitForApproval,
               noTrack: payload.noTrack,
+              acceptedAutoFixTaskId: payload.acceptedAutoFixTaskId,
               signal: activeMutationContext?.signal,
               mutationTiming: activeMutationContext?.mutationTiming,
             });
@@ -1187,6 +1286,12 @@ if (isHeadless) {
           };
           logHeadlessExecReceived(payload, 'standalone');
           const { workflowId, priority } = classifyStandaloneHeadlessExecMutation(payload);
+          const autoFixAcceptance = acceptHeadlessAutoFixSubmissionAtCommandBoundary(payload, workflowId, {
+            orchestrator,
+            persistence,
+            logger,
+          });
+          if (!autoFixAcceptance.accepted) return autoFixAcceptance.response ?? { ok: true, suppressed: true };
           const acknowledgement = acknowledgeNoTrackHeadlessExec(payload, workflowId, priority, 'standalone');
           if (acknowledgement) return acknowledgement;
           await runStandaloneWorkflowMutation(workflowId, priority, 'headless.exec', [payload], async () => {
@@ -1194,6 +1299,7 @@ if (isHeadless) {
               ...headlessDeps,
               waitForApproval: delegatedWait,
               noTrack: delegatedNoTrack,
+              acceptedAutoFixTaskId: payload.acceptedAutoFixTaskId,
               signal: activeMutationContext?.signal,
               mutationTiming: activeMutationContext?.mutationTiming,
             });
@@ -1566,11 +1672,36 @@ function createEmbeddedTerminalBackendFromConfig(
     );
   };
 
+  const acceptAutoFixSubmission = (
+    taskId: string,
+    workflowId: string,
+    details: Record<string, unknown> = {},
+  ): AutoFixContext | null => {
+    return acceptAutoFixSubmissionAtCommandBoundary(taskId, workflowId, {
+      orchestrator,
+      persistence,
+      logger,
+    }, details);
+  };
+
+  const acceptHeadlessAutoFixSubmission = (
+    payload: HeadlessExecMutationPayload,
+    workflowId: string | undefined,
+  ): { accepted: boolean; response?: { ok: true; suppressed?: true; reason?: string } } => {
+    return acceptHeadlessAutoFixSubmissionAtCommandBoundary(payload, workflowId, {
+      orchestrator,
+      persistence,
+      logger,
+    });
+  };
+
   const executeFixWithAgentMutation = async (
     taskId: string,
     agentName?: string,
-    source: 'ipc' | 'auto-fix' = 'ipc',
+    optionsArg?: unknown,
   ): Promise<TaskState[]> => {
+    const options = normalizeFixWithAgentOptions(optionsArg);
+    const autoFixContext = options.autoFixContext;
     const task = orchestrator.getTask(taskId);
     if (!task) {
       throw new Error(`Task ${taskId} not found`);
@@ -1578,20 +1709,10 @@ function createEmbeddedTerminalBackendFromConfig(
     const savedError = task.execution.error ?? '';
     const recoveryRoute = selectFailureRecoveryRoute(task, savedError);
     logger.info(
-      `fix-with-agent: "${taskId}" agent=${agentName ?? 'claude'} source=${source} route=${recoveryRoute.kind}`,
+      `fix-with-agent: "${taskId}" agent=${agentName ?? 'claude'} source=${autoFixContext ? 'auto-fix' : 'ipc'} route=${recoveryRoute.kind}`,
       { module: 'ipc' },
     );
 
-    if (source === 'auto-fix') {
-      const attemptsBefore = task?.execution.autoFixAttempts ?? 0;
-      const attemptsAfter = attemptsBefore + 1;
-      persistence.updateTask(taskId, {
-        execution: {
-          autoFixAttempts: attemptsAfter,
-        },
-      });
-      logAutoFixDebug(taskId, 'dispatch-attempt-bumped', { attemptsBefore, attemptsAfter });
-    }
     const result = await fixWithAgentAction(
       taskId,
       {
@@ -1603,8 +1724,9 @@ function createEmbeddedTerminalBackendFromConfig(
       {
         agentName,
         recoveryRoute,
-        recreateOutputLabel: source === 'auto-fix' ? 'Auto-fix' : 'Fix with AI',
-        failureOutputLabel: source === 'auto-fix' ? 'Auto-fix' : `Fix with ${agentName ?? 'Claude'}`,
+        recreateOutputLabel: autoFixContext ? 'Auto-fix' : 'Fix with AI',
+        failureOutputLabel: autoFixContext ? 'Auto-fix' : `Fix with ${agentName ?? 'Claude'}`,
+        autoFixContext,
         signal: activeMutationContext?.signal,
       },
     );
@@ -1634,25 +1756,25 @@ function createEmbeddedTerminalBackendFromConfig(
       });
       return;
     }
-    const openIntents = persistence.listWorkflowMutationIntents(workflowId, ['queued', 'running']);
-    const openTaskFixIntents = listOpenFixIntentsForTask(openIntents, taskId);
-    if (openTaskFixIntents.length > 0) {
-      logAutoFixDebug(taskId, 'schedule-skip', {
-        reason: 'already-queued-intent',
-        existingIntentIds: openTaskFixIntents.map((intent) => intent.id),
-      });
-      return;
-    }
     const configuredAgent = loadConfig().autoFixAgent?.trim();
     const selectedAgent = configuredAgent && configuredAgent.length > 0 ? configuredAgent : undefined;
+    const autoFixContext = acceptAutoFixSubmission(taskId, workflowId, {
+      channel: 'invoker:fix-with-agent',
+      agent: selectedAgent ?? null,
+    });
+    if (!autoFixContext) {
+      logAutoFixDebug(taskId, 'schedule-skip', { reason: 'auto-fix-submission-suppressed' });
+      return;
+    }
+    const fixOptions: FixWithAgentOptionsArg = { autoFixContext };
     logAutoFixDebug(taskId, 'schedule-enqueue');
     logAutoFixDebug(taskId, 'schedule-enqueued');
     void runWorkflowMutation(
       workflowId,
       'normal',
       'invoker:fix-with-agent',
-      [taskId, selectedAgent],
-      async () => executeFixWithAgentMutation(taskId, selectedAgent, 'auto-fix'),
+      [taskId, selectedAgent, fixOptions],
+      async () => executeFixWithAgentMutation(taskId, selectedAgent, fixOptions),
     )
       .then(() => {
         logAutoFixDebug(taskId, 'schedule-dispatch-finished');
@@ -1962,6 +2084,7 @@ function createEmbeddedTerminalBackendFromConfig(
       cancelWorkflow: (workflowId: string) => performCancelWorkflow(workflowId),
       waitForApproval: payload.waitForApproval,
       noTrack: payload.noTrack,
+      acceptedAutoFixTaskId: payload.acceptedAutoFixTaskId,
       preemptTaskSubgraph: (taskId: string) => preemptTaskSubgraph(taskId),
       preemptWorkflowExecution: (workflowId: string) => preemptWorkflowExecution(workflowId),
       deferRunnableTasks: (tasks: TaskState[], workflowId?: string) => {
@@ -2175,10 +2298,16 @@ function createEmbeddedTerminalBackendFromConfig(
         return arg1 === undefined
           ? { channel: 'headless.exec', request: { args: ['resolve-conflict', String(arg0)] } }
           : { channel: 'headless.exec', request: { args: ['resolve-conflict', String(arg0), String(arg1)] } };
-      case 'invoker:fix-with-agent':
-        return arg1 === undefined
-          ? { channel: 'headless.exec', request: { args: ['fix', String(arg0)] } }
-          : { channel: 'headless.exec', request: { args: ['fix', String(arg0), String(arg1)] } };
+      case 'invoker:fix-with-agent': {
+        const args = arg1 === undefined
+          ? ['fix', String(arg0)]
+          : ['fix', String(arg0), String(arg1)];
+        const autoFixContext = normalizeFixWithAgentOptions(arg2).autoFixContext;
+        return {
+          channel: 'headless.exec',
+          request: { args: appendAutoFixFlag(args, autoFixContext) },
+        };
+      }
       case 'invoker:edit-task-command':
         return { channel: 'headless.exec', request: { args: ['set', 'command', String(arg0), String(arg1)] } };
       case 'invoker:edit-task-prompt':
@@ -2846,6 +2975,8 @@ function createEmbeddedTerminalBackendFromConfig(
         };
         logHeadlessExecReceived(payload, 'gui');
         const { workflowId, priority } = classifyHeadlessExecMutation(payload);
+        const autoFixAcceptance = acceptHeadlessAutoFixSubmission(payload, workflowId);
+        if (!autoFixAcceptance.accepted) return autoFixAcceptance.response ?? { ok: true, suppressed: true };
         const acknowledgement = acknowledgeNoTrackHeadlessExec(payload, workflowId, priority, 'gui');
         if (acknowledgement) return acknowledgement;
         return runWorkflowMutation(workflowId, priority, 'headless.exec', [payload], async () => executeHeadlessExec(payload));
@@ -3773,39 +3904,70 @@ function createEmbeddedTerminalBackendFromConfig(
       },
     );
 
-    registerWorkflowScopedGuiMutationHandler(
+    workflowMutationDispatcher.set(
       'invoker:fix-with-agent',
-      (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
-      'normal',
-      async (taskIdArg: unknown, agentNameArg?: unknown) => {
-      const taskId = String(taskIdArg);
-      const agentName = agentNameArg === undefined ? undefined : String(agentNameArg);
-      try {
-        const started = await executeFixWithAgentMutation(taskId, agentName, 'ipc');
-        await finalizeMutationWithGlobalTopup({
-          orchestrator,
-          taskExecutor: requireTaskExecutor(),
-          logger,
-          context: 'ipc.fix-with-agent',
-          started,
-          mutationTiming: activeMutationContext?.mutationTiming,
-          scopedTaskIds: [taskId],
-        });
-      } catch (err) {
-        if (err instanceof StaleLineageError) {
-          logger.info(`fix-with-agent discarded stale result for "${taskId}": ${err.message}`, { module: 'ipc' });
-          return;
+      async (taskIdArg: unknown, agentNameArg?: unknown, optionsArg?: unknown) => {
+        const taskId = String(taskIdArg);
+        const agentName = agentNameArg === undefined ? undefined : String(agentNameArg);
+        const options = normalizeFixWithAgentOptions(optionsArg);
+        return executeFixWithAgentMutation(taskId, agentName, options);
+      },
+    );
+    registerGuiMutationHandler(
+      'invoker:fix-with-agent',
+      async (taskIdArg: unknown, agentNameArg?: unknown, optionsArg?: unknown) => {
+        const taskId = String(taskIdArg);
+        const agentName = agentNameArg === undefined ? undefined : String(agentNameArg);
+        const options = normalizeFixWithAgentOptions(optionsArg);
+        const workflowId = workflowIdForTaskArg(taskIdArg);
+        const autoFixContext = options.autoFixContext && !options.autoFixContext.attemptAccepted && workflowId
+          ? acceptAutoFixSubmission(taskId, workflowId, {
+            channel: 'invoker:fix-with-agent',
+            agent: agentName ?? null,
+          })
+          : options.autoFixContext;
+        if (options.autoFixContext && !autoFixContext) {
+          return [];
         }
-        await finalizeMutationWithGlobalTopup({
-          orchestrator,
-          taskExecutor: requireTaskExecutor(),
-          logger,
-          context: 'ipc.fix-with-agent.failure',
-          mutationTiming: activeMutationContext?.mutationTiming,
-        });
-        logger.error(`fix-with-agent failed: ${err}`, { module: 'ipc' });
-        throw err;
-      }
+        const acceptedOptions: FixWithAgentOptionsArg | undefined = autoFixContext ? { autoFixContext } : undefined;
+        const baseArgs = agentNameArg === undefined
+          ? [taskId]
+          : [taskId, agentName];
+        const mutationArgs = acceptedOptions
+          ? [taskId, agentNameArg === undefined ? undefined : agentName, acceptedOptions]
+          : baseArgs;
+        try {
+          const started = await runWorkflowMutation(
+            workflowId,
+            'normal',
+            'invoker:fix-with-agent',
+            mutationArgs,
+            () => executeFixWithAgentMutation(taskId, agentName, acceptedOptions),
+          );
+          await finalizeMutationWithGlobalTopup({
+            orchestrator,
+            taskExecutor: requireTaskExecutor(),
+            logger,
+            context: 'ipc.fix-with-agent',
+            started,
+            mutationTiming: activeMutationContext?.mutationTiming,
+            scopedTaskIds: [taskId],
+          });
+        } catch (err) {
+          if (err instanceof StaleLineageError) {
+            logger.info(`fix-with-agent discarded stale result for "${taskId}": ${err.message}`, { module: 'ipc' });
+            return;
+          }
+          await finalizeMutationWithGlobalTopup({
+            orchestrator,
+            taskExecutor: requireTaskExecutor(),
+            logger,
+            context: 'ipc.fix-with-agent.failure',
+            mutationTiming: activeMutationContext?.mutationTiming,
+          });
+          logger.error(`fix-with-agent failed: ${err}`, { module: 'ipc' });
+          throw err;
+        }
       },
     );
 

@@ -39,6 +39,7 @@ import {
   captureTaskLineage,
   assertLineageCurrent,
 } from '../workflow-actions.js';
+import { makeAutoFixContext } from '../auto-fix-intents.js';
 
 vi.mock('../delete-all-snapshot.js', () => ({
   createDeleteAllSnapshot: () => '/tmp/fake-snapshot',
@@ -1296,6 +1297,7 @@ describe('fixWithAgentAction', () => {
     const persistence = {
       getTaskOutput: vi.fn(() => 'test output'),
       appendTaskOutput: vi.fn(),
+      updateTask: vi.fn(),
     };
     const taskExecutor = {
       fixWithAgent: vi.fn().mockResolvedValue(undefined),
@@ -1313,7 +1315,122 @@ describe('fixWithAgentAction', () => {
     expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'codex', 'boom');
     expect(taskExecutor.resolveConflict).not.toHaveBeenCalled();
     expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'boom');
+    expect(persistence.updateTask).not.toHaveBeenCalled();
     expect(result).toEqual({ kind: 'fixWithAgent', autoApproved: false, started: [] });
+  });
+
+  it('increments auto-fix attempts once when explicit auto-fix context is accepted by the action', async () => {
+    const orchestrator = {
+      shouldAutoFix: vi.fn(() => true),
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        config: { workflowId: 'wf-1' },
+        execution: { autoFixAttempts: 1, error: 'boom' },
+      })),
+      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      setFixAwaitingApproval: vi.fn(),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      updateTask: vi.fn(),
+      logEvent: vi.fn(),
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn(),
+    };
+
+    const result = await fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    }, {
+      agentName: 'codex',
+      autoFixContext: makeAutoFixContext(false),
+    });
+
+    expect(orchestrator.shouldAutoFix).toHaveBeenCalledWith('task-a');
+    expect(persistence.updateTask).toHaveBeenCalledTimes(1);
+    expect(persistence.updateTask).toHaveBeenCalledWith('task-a', {
+      execution: { autoFixAttempts: 2 },
+    });
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'codex', 'boom');
+    expect(result).toEqual({ kind: 'fixWithAgent', autoApproved: false, started: [] });
+  });
+
+  it('does not increment auto-fix attempts again when the command boundary already accepted the attempt', async () => {
+    const orchestrator = {
+      shouldAutoFix: vi.fn(() => true),
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        config: { workflowId: 'wf-1' },
+        execution: { autoFixAttempts: 1, error: 'boom' },
+      })),
+      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      setFixAwaitingApproval: vi.fn(),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      updateTask: vi.fn(),
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn(),
+    };
+
+    await fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    }, {
+      agentName: 'codex',
+      autoFixContext: makeAutoFixContext(true),
+    });
+
+    expect(orchestrator.shouldAutoFix).not.toHaveBeenCalled();
+    expect(persistence.updateTask).not.toHaveBeenCalled();
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'codex', 'boom');
+  });
+
+  it('suppresses auto-fix context when the retry budget is unavailable', async () => {
+    const orchestrator = {
+      shouldAutoFix: vi.fn(() => false),
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        config: { workflowId: 'wf-1' },
+        execution: { autoFixAttempts: 3, error: 'boom' },
+      })),
+      beginConflictResolution: vi.fn(),
+      setFixAwaitingApproval: vi.fn(),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      updateTask: vi.fn(),
+      logEvent: vi.fn(),
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn(),
+      resolveConflict: vi.fn(),
+    };
+
+    const result = await fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    }, {
+      autoFixContext: makeAutoFixContext(false),
+    });
+
+    expect(result).toEqual({ kind: 'autoFixSuppressed', reason: 'shouldAutoFix-false', started: [] });
+    expect(persistence.updateTask).not.toHaveBeenCalled();
+    expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
+    expect(orchestrator.beginConflictResolution).not.toHaveBeenCalled();
   });
 
   it('dispatches merge conflicts with a workspace to taskExecutor.resolveConflict', async () => {

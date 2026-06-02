@@ -25,6 +25,7 @@ import { normalizeMergeModeForPersistence } from './merge-mode.js';
 import { createDeleteAllSnapshot } from './delete-all-snapshot.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import { isDispatchableLaunch } from './global-topup.js';
+import type { AutoFixContext } from './auto-fix-intents.js';
 
 type LoadedWorkflow = NonNullable<ReturnType<SQLiteAdapter['loadWorkflow']>>;
 
@@ -820,7 +821,8 @@ export async function resolveConflictAction(
 
 export type FixWithAgentActionResult =
   | { kind: 'fixWithAgent' | 'resolveConflict'; autoApproved: boolean; started: TaskState[] }
-  | { kind: 'recreateWorkflowFromFreshBase'; workflowId: string; started: TaskState[] };
+  | { kind: 'recreateWorkflowFromFreshBase'; workflowId: string; started: TaskState[] }
+  | { kind: 'autoFixSuppressed'; reason: string; started: TaskState[] };
 
 export async function fixWithAgentAction(
   taskId: string,
@@ -830,12 +832,32 @@ export async function fixWithAgentAction(
     recoveryRoute?: FailureRecoveryRoute;
     recreateOutputLabel?: string;
     failureOutputLabel?: string;
+    autoFixContext?: AutoFixContext;
     signal?: AbortSignal;
   } = {},
 ): Promise<FixWithAgentActionResult> {
   const { orchestrator, persistence, taskExecutor } = deps;
   const task = orchestrator.getTask(taskId);
   if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
+
+  if (options.autoFixContext && !options.autoFixContext.attemptAccepted) {
+    if (!orchestrator.shouldAutoFix(taskId)) {
+      persistence.logEvent?.(taskId, 'debug.auto-fix', {
+        phase: 'fix-with-agent-auto-fix-suppressed',
+        reason: 'shouldAutoFix-false',
+        autoFixAttempts: task.execution.autoFixAttempts ?? 0,
+      });
+      return { kind: 'autoFixSuppressed', reason: 'shouldAutoFix-false', started: [] };
+    }
+    const attemptsBefore = task.execution.autoFixAttempts ?? 0;
+    const attemptsAfter = attemptsBefore + 1;
+    persistence.updateTask(taskId, { execution: { autoFixAttempts: attemptsAfter } });
+    persistence.logEvent?.(taskId, 'debug.auto-fix', {
+      phase: 'fix-with-agent-auto-fix-attempt-accepted',
+      attemptsBefore,
+      attemptsAfter,
+    });
+  }
 
   const savedError = task.execution.error ?? '';
   const recoveryRoute = options.recoveryRoute ?? selectFailureRecoveryRoute(task, savedError);

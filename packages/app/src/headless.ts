@@ -63,6 +63,11 @@ import { trackWorkflow } from './headless-watch.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import type { RuntimeServices } from '@invoker/runtime-service';
+import {
+  makeAutoFixContext,
+  parseHeadlessFixArgs,
+  type AutoFixContext,
+} from './auto-fix-intents.js';
 
 export { bumpGenerationAndRecreate } from './workflow-actions.js';
 export {
@@ -112,6 +117,7 @@ export interface HeadlessDeps {
   /** Abort signal from the workflow mutation coordinator, if running inside a coordinated mutation. */
   signal?: AbortSignal;
   mutationTiming?: WorkflowMutationTiming;
+  acceptedAutoFixTaskId?: string;
   runtimeServices?: RuntimeServices;
   /**
    * CB.7: provider for the owner's long-lived TaskRunner. When the
@@ -284,14 +290,24 @@ export function wireHeadlessAutoFix(
   deps: Pick<HeadlessDeps, 'messageBus' | 'orchestrator' | 'persistence'>,
   taskExecutor: Pick<TaskRunner, 'executeTasks' | 'fixWithAgent' | 'resolveConflict'>,
   invokeAutoFix: (taskId: string) => Promise<void> = async (taskId) => {
-    const { autoFixOnFailure } = await import('./workflow-actions.js');
-    await autoFixOnFailure(taskId, {
+    const config = loadConfig();
+    const configuredAgent = config.autoFixAgent?.trim();
+    const selectedAgent = configuredAgent && configuredAgent.length > 0 ? configuredAgent : undefined;
+    const result = await fixWithAgentAction(taskId, {
       orchestrator: deps.orchestrator,
       persistence: deps.persistence,
       taskExecutor: taskExecutor as TaskRunner,
-      getAutoFixAgent: () => loadConfig().autoFixAgent,
-      getAutoApproveAIFixes: () => loadConfig().autoApproveAIFixes,
+      autoApproveAIFixes: config.autoApproveAIFixes ?? true,
+    }, {
+      agentName: selectedAgent ?? 'claude',
+      recreateOutputLabel: 'Auto-fix',
+      failureOutputLabel: 'Auto-fix',
+      autoFixContext: makeAutoFixContext(false),
     });
+    const runnable = result.started.filter(isDispatchableLaunch);
+    if (runnable.length > 0) {
+      await taskExecutor.executeTasks(runnable);
+    }
   },
   onError: (taskId: string, err: unknown) => void = (taskId, err) => {
     process.stderr.write(`[auto-fix] "${taskId}": ${err}\n`);
@@ -1052,9 +1068,13 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'rebase-recreate':
       await headlessRebaseRecreate(args[1], deps);
       break;
-    case 'fix':
-      await headlessFix(args[1], deps, args[2]);
+    case 'fix': {
+      const fixArgs = parseHeadlessFixArgs(args);
+      await headlessFix(fixArgs.taskId, deps, fixArgs.agentName, {
+        autoFixContext: fixArgs.autoFixContext,
+      });
       break;
+    }
     case 'resolve-conflict':
       await headlessResolveConflict(args[1], deps, args[2]);
       break;
@@ -1213,7 +1233,7 @@ ${BOLD}Execute:${RESET}
   detach-workflow <workflowId> <upstreamWorkflowId>  Detach one upstream workflow and void downstream to pending
   rebase-retry <workflowId|mergeTaskId|taskId>        Refresh pool base, then retry incomplete work
   rebase-recreate <workflowId|mergeTaskId|taskId>     Refresh pool base, then recreate workflow
-  fix <taskId> [claude|codex]                         Fix a failed task (default: claude)
+  fix <taskId> [claude|codex] [--auto-fix]            Fix a failed task (default: claude)
   resolve-conflict <taskId> [claude|codex]            Resolve merge conflict + restart
 
 ${BOLD}Respond:${RESET}
@@ -1609,8 +1629,13 @@ async function headlessRetryTask(taskId: string, deps: HeadlessDeps): Promise<vo
   });
 }
 
-async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string): Promise<void> {
-  if (!taskId) throw new Error('Missing taskId. Usage: --headless fix <taskId> [claude|codex]');
+async function headlessFix(
+  taskId: string | undefined,
+  deps: HeadlessDeps,
+  agentArg?: string,
+  options: { autoFixContext?: AutoFixContext } = {},
+): Promise<void> {
+  if (!taskId) throw new Error('Missing taskId. Usage: --headless fix <taskId> [claude|codex] [--auto-fix]');
   const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'fix');
   if (!restored) return;
   taskId = restored.resolvedTaskId;
@@ -1618,6 +1643,9 @@ async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string
   const te = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, te);
   const agent = (agentArg ?? 'claude').toLowerCase();
+  const autoFixContext = options.autoFixContext
+    ? makeAutoFixContext(deps.acceptedAutoFixTaskId === taskId)
+    : undefined;
   try {
     const result = await fixWithAgentAction(taskId, {
       orchestrator: deps.orchestrator,
@@ -1626,10 +1654,15 @@ async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string
       autoApproveAIFixes: deps.invokerConfig.autoApproveAIFixes,
     }, {
       agentName: agent,
-      recreateOutputLabel: 'Fix with AI',
-      failureOutputLabel: 'Fix with AI',
+      recreateOutputLabel: autoFixContext ? 'Auto-fix' : 'Fix with AI',
+      failureOutputLabel: autoFixContext ? 'Auto-fix' : 'Fix with AI',
+      autoFixContext,
       signal: deps.signal,
     });
+    if (result.kind === 'autoFixSuppressed') {
+      process.stdout.write(`Auto-fix skipped for task: ${taskId} (${result.reason}).\n`);
+      return;
+    }
     await finalizeMutationWithGlobalTopup({
       orchestrator: deps.orchestrator,
       taskExecutor: te,
