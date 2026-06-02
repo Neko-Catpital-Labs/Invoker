@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect } from 'react';
 import yaml from 'js-yaml';
-import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
+import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus, ViewportCenterRequest } from './types.js';
 import type { ActionGraphNode, TerminalSessionDescriptor } from '@invoker/contracts';
 import { useTasks } from './hooks/useTasks.js';
 import { useInvoker } from './hooks/useInvoker.js';
@@ -294,8 +294,8 @@ export function App() {
   const [workflowContextMenu, setWorkflowContextMenu] = useState<{ x: number; y: number; workflowId: string } | null>(null);
   const [keyboardRegion, setKeyboardRegion] = useState<KeyboardRegion>('workflowGraph');
   const [previousGraphRegion, setPreviousGraphRegion] = useState<KeyboardRegion>('workflowGraph');
-  const [centerWorkflowId, setCenterWorkflowId] = useState<string | null>(null);
-  const [centerTaskId, setCenterTaskId] = useState<string | null>(null);
+  const [centerWorkflowRequest, setCenterWorkflowRequest] = useState<ViewportCenterRequest | null>(null);
+  const [centerTaskRequest, setCenterTaskRequest] = useState<ViewportCenterRequest | null>(null);
   const [bottomStatusIndex, setBottomStatusIndex] = useState(0);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -604,7 +604,8 @@ export function App() {
     setSelectedTaskId(null);
     setContextMenu(null);
     setWorkflowContextMenu(null);
-    setCenterWorkflowId(workflowId);
+    // Explicit navigation: bump requestId so the graph centers exactly once.
+    setCenterWorkflowRequest((prev) => ({ id: workflowId, requestId: (prev?.requestId ?? 0) + 1 }));
     focusKeyboardRegion('workflowGraph');
   }, [focusKeyboardRegion]);
 
@@ -613,13 +614,16 @@ export function App() {
     if (!task) return;
     setSelectedTaskId(task.id);
     setWorkflowSelectionDismissed(false);
-    if (task.config.workflowId) {
-      setSelectedWorkflowId(task.config.workflowId);
-      setCenterWorkflowId(task.config.workflowId);
+    const workflowId = task.config.workflowId;
+    if (workflowId) {
+      setSelectedWorkflowId(workflowId);
+      // Explicit navigation: bump requestId so the graph centers exactly once.
+      setCenterWorkflowRequest((prev) => ({ id: workflowId, requestId: (prev?.requestId ?? 0) + 1 }));
     }
     setContextMenu(null);
     setWorkflowContextMenu(null);
-    setCenterTaskId(task.id);
+    // Explicit navigation: bump requestId so the mini DAG centers exactly once.
+    setCenterTaskRequest((prev) => ({ id: task.id, requestId: (prev?.requestId ?? 0) + 1 }));
     focusKeyboardRegion('taskGraph');
   }, [focusKeyboardRegion, tasks]);
 
@@ -1620,7 +1624,7 @@ export function App() {
                     tasks={tasks}
                     workflows={workflows}
                     selectedWorkflowId={selectedWorkflow?.id ?? null}
-                    centerWorkflowId={centerWorkflowId}
+                    centerWorkflowRequest={centerWorkflowRequest}
                     statusFilters={statusFilters}
                     onSelectWorkflow={handleWorkflowClick}
                     onWorkflowContextMenu={handleWorkflowContextMenu}
@@ -1644,7 +1648,7 @@ export function App() {
                           tasks={miniDagTasks}
                           workflows={selectedTaskDagWorkflows}
                           selectedTaskId={selectedTaskId}
-                          centerTaskId={centerTaskId}
+                          centerTaskRequest={centerTaskRequest}
                           onTaskClick={handleTaskClick}
                           onTaskDoubleClick={handleTaskDoubleClick}
                           onTaskContextMenu={handleTaskContextMenu}

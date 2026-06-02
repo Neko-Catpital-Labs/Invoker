@@ -5,6 +5,21 @@
  * importing Electron dependencies into the renderer process.
  */
 
+// ── Viewport Navigation ─────────────────────────────────────
+
+/**
+ * A one-shot request to center the viewport on a node.
+ *
+ * `requestId` increments only on explicit navigation (keyboard nav, search,
+ * programmatic selection) so graph components can center exactly once per
+ * request. Live task/status updates recreate node objects but reuse the same
+ * `requestId`, so they must NOT re-trigger centering and fight a manual pan.
+ */
+export interface ViewportCenterRequest {
+  readonly id: string;
+  readonly requestId: number;
+}
+
 // ── Task Status ─────────────────────────────────────────────
 
 export type TaskStatus =

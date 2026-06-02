@@ -274,6 +274,44 @@ describe('TaskDAG stability', () => {
     });
   });
 
+  // ── One-shot navigation centering ─────────────────────────
+  describe('one-shot center requests', () => {
+    it('accepts a centerTaskRequest prop instead of a persistent centerTaskId', () => {
+      expect(source).toContain('centerTaskRequest?: ViewportCenterRequest | null;');
+      expect(source).not.toContain('centerTaskId');
+    });
+
+    it('handles each center request exactly once via a handled-request ref', () => {
+      expect(source).toContain('handledCenterTaskRequestRef');
+      expect(source).toContain(
+        'handledCenterTaskRequestRef.current === centerTaskRequest.requestId',
+      );
+    });
+
+    it('still centers via setCenter for the requested node', () => {
+      expect(source).toContain('setCenter(node.position.x + 132, node.position.y + 55');
+    });
+  });
+
+  // ── fitView restricted to first render + watchdog ─────────
+  describe('fitView is restricted to first render and watchdog recovery', () => {
+    it('guards the initial fit behind a one-time ref', () => {
+      expect(source).toContain('didInitialFitRef');
+      expect(source).toContain('if (didInitialFitRef.current) return;');
+    });
+
+    it('re-arms the watchdog on count change without an unconditional re-fit', () => {
+      // A node-count change resets the watchdog refs, but the fitView call sits
+      // after the didInitialFitRef guard so it only fires on the first render.
+      const countChangeBranch = source.slice(
+        source.indexOf('if (nodes.length !== prevNodeCount.current)'),
+        source.indexOf('if (didInitialFitRef.current) return;'),
+      );
+      expect(countChangeBranch).toContain('watchdogMissCountRef.current = 0;');
+      expect(countChangeBranch).not.toContain('fitView');
+    });
+  });
+
   // ── onNodesChange handler is wired up ─────────────────────
   describe('onNodesChange handler wiring', () => {
     it('passes onNodesChange to ReactFlow', () => {

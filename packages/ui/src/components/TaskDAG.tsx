@@ -21,7 +21,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
-import type { TaskState, WorkflowMeta } from '../types.js';
+import type { TaskState, ViewportCenterRequest, WorkflowMeta } from '../types.js';
 import { layoutNodes, layoutTaskGraph, type LayoutEdge, type TaskGraphLayout } from '../lib/layout.js';
 import { getEdgeStyle, getEffectiveVisualStatus, matchesStatusFilter } from '../lib/colors.js';
 import { TaskNode } from './TaskNode.js';
@@ -40,7 +40,7 @@ interface TaskDAGProps {
   tasks: Map<string, TaskState>;
   workflows?: Map<string, WorkflowMeta>;
   selectedTaskId?: string | null;
-  centerTaskId?: string | null;
+  centerTaskRequest?: ViewportCenterRequest | null;
   onTaskClick?: (task: TaskState) => void;
   onTaskDoubleClick?: (task: TaskState) => void;
   onTaskContextMenu?: (task: TaskState, event: React.MouseEvent) => void;
@@ -143,9 +143,11 @@ function mergeMeasuredNodeState(prevNodes: Node[], nextNodes: Node[]): Node[] {
   });
 }
 
-function TaskDAGInner({ tasks, workflows, selectedTaskId, centerTaskId, onTaskClick, onTaskDoubleClick, onTaskContextMenu, statusFilters }: TaskDAGProps) {
+function TaskDAGInner({ tasks, workflows, selectedTaskId, centerTaskRequest, onTaskClick, onTaskDoubleClick, onTaskContextMenu, statusFilters }: TaskDAGProps) {
   const { fitView, setCenter } = useReactFlow();
   const prevNodeCount = useRef(0);
+  const didInitialFitRef = useRef(false);
+  const handledCenterTaskRequestRef = useRef<number | null>(null);
   const lastNodeClickRef = useRef<{ id: string; at: number } | null>(null);
   const reportedGraphVisibleRef = useRef(false);
   const watchdogMissCountRef = useRef(0);
@@ -409,20 +411,35 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, centerTaskId, onTaskCl
     }
   }, []);
 
-  // Re-fit view when the actual rendered node count changes (includes merge gate)
+  // Fit once when the DAG first becomes non-empty (this component remounts per
+  // selected workflow, so "first render" is per-workflow). On any node-count
+  // change, re-arm the watchdog so hidden/missing-node recovery stays accurate,
+  // but do NOT re-fit — that would snap the viewport back during a manual pan.
   useEffect(() => {
-    if (nodes.length !== prevNodeCount.current && nodes.length > 0) {
+    if (nodes.length === 0) {
+      didInitialFitRef.current = false;
+      prevNodeCount.current = 0;
+      return;
+    }
+    if (nodes.length !== prevNodeCount.current) {
       prevNodeCount.current = nodes.length;
       watchdogMissCountRef.current = 0;
       watchdogRecoveryAttemptedRef.current = false;
-      requestAnimationFrame(() => fitView({ padding: 0.2 }));
     }
+    if (didInitialFitRef.current) return;
+    didInitialFitRef.current = true;
+    requestAnimationFrame(() => fitView({ padding: 0.2 }));
   }, [nodes.length, fitView]);
 
+  // One-shot navigation centering. Each centerTaskRequest.requestId is handled
+  // at most once; re-renders from live status updates reuse the same requestId
+  // and must not call setCenter again (which would fight a drag).
   useEffect(() => {
-    if (!centerTaskId || nodes.length === 0) return;
-    const node = nodes.find((candidate) => candidate.id === centerTaskId);
+    if (!centerTaskRequest || nodes.length === 0) return;
+    if (handledCenterTaskRequestRef.current === centerTaskRequest.requestId) return;
+    const node = nodes.find((candidate) => candidate.id === centerTaskRequest.id);
     if (!node) return;
+    handledCenterTaskRequestRef.current = centerTaskRequest.requestId;
     const frame = requestAnimationFrame(() => {
       if (typeof setCenter === 'function') {
         setCenter(node.position.x + 132, node.position.y + 55, { zoom: 1, duration: 180 });
@@ -431,7 +448,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, centerTaskId, onTaskCl
       }
     });
     return () => cancelAnimationFrame(frame);
-  }, [centerTaskId, fitView, nodes, setCenter]);
+  }, [centerTaskRequest, fitView, nodes, setCenter]);
 
   useEffect(() => {
     if (reportedGraphVisibleRef.current || nodes.length === 0 || typeof window === 'undefined') {
