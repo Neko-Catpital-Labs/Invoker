@@ -13,6 +13,7 @@
 import { useEffect, useRef, useState, useLayoutEffect } from 'react';
 import type { TaskState } from '../types.js';
 import { getMenuItems, type MenuItem } from '../lib/context-menu-items.js';
+import { cycleIndex } from '../lib/menu-keyboard.js';
 import { EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE } from '../isExperimentSpawnPivot.js';
 
 interface ContextMenuProps {
@@ -64,12 +65,44 @@ export function ContextMenu({
   // Find first enabled item index
   const firstEnabledIndex = renderedItems.findIndex((item) => item.enabled);
 
+  // The "More" button participates in keyboard navigation as a virtual entry
+  // positioned after the rendered items.
+  const moreIndex = renderedItems.length;
+
+  // Indices reachable by ArrowUp/ArrowDown: enabled items plus the More button.
+  const navigableIndices = [
+    ...renderedItems.map((item, idx) => (item.enabled ? idx : -1)).filter((idx) => idx >= 0),
+    ...(hasMoreButton ? [moreIndex] : []),
+  ];
+
   // Auto-focus first enabled item on mount
   useEffect(() => {
     if (firstEnabledIndex >= 0) {
       setFocusedIndex(firstEnabledIndex);
     }
   }, [firstEnabledIndex]);
+
+  // Focus the menu itself on open so it owns keyboard events (preventScroll so
+  // opening a menu near the viewport edge doesn't jump the page).
+  useEffect(() => {
+    menuRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  // After "More" expands the menu loses DOM focus if it was clicked; refocus so
+  // keyboard navigation keeps working over the newly revealed items.
+  useEffect(() => {
+    if (showMore) {
+      menuRef.current?.focus({ preventScroll: true });
+    }
+  }, [showMore]);
+
+  // Expand the danger zone and move the highlight to the first enabled danger
+  // item so the next keystroke acts on a deterministic, reachable entry.
+  const expandMore = () => {
+    const firstDangerEnabled = dangerItems.findIndex((item) => item.enabled);
+    setShowMore(true);
+    setFocusedIndex(firstDangerEnabled >= 0 ? safeItems.length + firstDangerEnabled : firstEnabledIndex);
+  };
 
   // Viewport clamping: flip if menu overflows bottom or right
   useLayoutEffect(() => {
@@ -135,22 +168,21 @@ export function ContextMenu({
 
   // Keyboard navigation
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    const enabledIndices = renderedItems
-      .map((item, idx) => (item.enabled ? idx : -1))
-      .filter((idx) => idx >= 0);
-
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const nextPos = (currentPos + 1) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[nextPos]);
+      e.stopPropagation();
+      setFocusedIndex(cycleIndex(navigableIndices, focusedIndex, 1));
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const prevPos = (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[prevPos]);
+      e.stopPropagation();
+      setFocusedIndex(cycleIndex(navigableIndices, focusedIndex, -1));
     } else if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
+      e.stopPropagation();
+      if (focusedIndex === moreIndex && hasMoreButton) {
+        expandMore();
+        return;
+      }
       const item = renderedItems[focusedIndex];
       if (item?.enabled) {
         handleItemClick(item);
@@ -254,8 +286,11 @@ export function ContextMenu({
           <div className="border-t border-gray-600 my-1" />
           <button
             role="menuitem"
-            className="w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
-            onClick={() => setShowMore(true)}
+            className={`w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 ${
+              focusedIndex === moreIndex ? 'bg-gray-700' : ''
+            }`}
+            onClick={expandMore}
+            onMouseEnter={() => setFocusedIndex(moreIndex)}
           >
             More
           </button>
