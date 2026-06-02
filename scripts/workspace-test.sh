@@ -6,6 +6,8 @@ cd "$ROOT"
 
 if [ -n "${INVOKER_WORKSPACE_TEST_CONCURRENCY:-}" ]; then
   CONCURRENCY="$INVOKER_WORKSPACE_TEST_CONCURRENCY"
+elif [ "${INVOKER_TEST_ALL_PROOF:-0}" = "1" ]; then
+  CONCURRENCY=1
 elif [ -n "${CI:-}" ]; then
   CONCURRENCY=1
 else
