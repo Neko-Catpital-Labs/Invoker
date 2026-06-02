@@ -124,7 +124,7 @@ export class MergeGateExecutor extends BaseExecutor<MergeGateEntry> {
     try {
       this.emitOutput(handle.executionId, `[merge] Starting merge gate action: ${task.id}\n`);
       const result = await runMergeGateActionImpl(this.host, task, { gateWorkspacePath });
-      if (result.taskChanges.execution) {
+      if (result.taskChanges.execution && !this.isRequestLineageStale(task.id, entry.request)) {
         this.host.persistence.updateTask(task.id, {
           execution: result.taskChanges.execution,
         });
@@ -154,5 +154,32 @@ export class MergeGateExecutor extends BaseExecutor<MergeGateEntry> {
       attemptId: response.attemptId ?? request.attemptId,
       executionGeneration: request.executionGeneration,
     };
+  }
+
+  private isRequestLineageStale(taskId: string, request: WorkRequest): boolean {
+    const current = this.host.orchestrator.getTask(taskId);
+    if (!current) return false;
+
+    if (
+      request.attemptId !== undefined &&
+      current.execution.selectedAttemptId !== request.attemptId
+    ) {
+      console.warn(
+        `[merge-gate] suppressing stale executor metadata for task=${taskId} ` +
+          `requestAttempt=${request.attemptId} currentAttempt=${current.execution.selectedAttemptId ?? 'none'}`,
+      );
+      return true;
+    }
+
+    const currentGeneration = current.execution.generation ?? 0;
+    if (request.executionGeneration !== undefined && currentGeneration !== request.executionGeneration) {
+      console.warn(
+        `[merge-gate] suppressing stale executor metadata for task=${taskId} ` +
+          `requestGeneration=${request.executionGeneration} currentGeneration=${currentGeneration}`,
+      );
+      return true;
+    }
+
+    return false;
   }
 }

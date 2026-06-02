@@ -87,6 +87,67 @@ function setMergeGateReviewReady(
   orchestrator.setTaskAwaitingApproval?.(taskId, changes);
 }
 
+export function isMergeGateLineageStale(host: MergeRunnerHost, task: TaskState): boolean {
+  const getTask = (host.orchestrator as { getTask?: (id: string) => TaskState | undefined }).getTask;
+  if (typeof getTask !== 'function') return false;
+  const current = getTask.call(host.orchestrator, task.id);
+  if (!current) return false;
+
+  const expectedAttemptId = task.execution.selectedAttemptId;
+  const currentAttemptId = current.execution.selectedAttemptId;
+  if (expectedAttemptId !== undefined && currentAttemptId !== expectedAttemptId) {
+    return true;
+  }
+
+  const expectedGeneration = task.execution.generation ?? 0;
+  const currentGeneration = current.execution.generation ?? 0;
+  return currentGeneration !== expectedGeneration;
+}
+
+function logStaleMergeGateSideEffect(
+  taskId: string,
+  sideEffect: string,
+  task: TaskState,
+  current: TaskState | undefined,
+): void {
+  console.warn(
+    `[merge-gate] suppressing stale ${sideEffect} for task=${taskId} ` +
+      `expectedAttempt=${task.execution.selectedAttemptId ?? 'none'} ` +
+      `currentAttempt=${current?.execution.selectedAttemptId ?? 'none'} ` +
+      `expectedGeneration=${task.execution.generation ?? 0} ` +
+      `currentGeneration=${current?.execution.generation ?? 'none'}`,
+  );
+}
+
+function persistCurrentMergeGateTask(
+  host: MergeRunnerHost,
+  task: TaskState,
+  changes: TaskStateChanges,
+  sideEffect: string,
+): boolean {
+  if (isMergeGateLineageStale(host, task)) {
+    logStaleMergeGateSideEffect(task.id, sideEffect, task, host.orchestrator.getTask(task.id));
+    return false;
+  }
+  host.persistence.updateTask(task.id, changes);
+  return true;
+}
+
+async function setCurrentMergeGateReviewReady(
+  host: MergeRunnerHost,
+  task: TaskState,
+  changes: TaskStateChanges,
+  sideEffect: string,
+): Promise<boolean> {
+  if (isMergeGateLineageStale(host, task)) {
+    logStaleMergeGateSideEffect(task.id, sideEffect, task, host.orchestrator.getTask(task.id));
+    return false;
+  }
+  setMergeGateReviewReady(host, task.id, changes);
+  await startReviewReadyDependents(host);
+  return true;
+}
+
 function buildMergeConflictJson(errorText: string, failedBranch: string): string | undefined {
   const hasConflictMarkers =
     errorText.includes('CONFLICT (') ||
@@ -441,13 +502,13 @@ export async function runMergeGateActionImpl(
       `mergeMode=${mergeMode} onFinish=${onFinish} dbWorkspacePath=${safeGetWorkspacePath(host.persistence, task.id) ?? 'NULL'}`,
   );
 
-  host.persistence.updateTask(task.id, {
+  persistCurrentMergeGateTask(host, task, {
     execution: {
       reviewUrl: undefined,
       reviewId: undefined,
       reviewStatus: undefined,
     },
-  });
+  }, 'review metadata reset');
 
   // Create a persistent gate worktree so workspacePath is never the main repo.
   // Use baseBranch as the ref because featureBranch may not exist yet
@@ -686,7 +747,11 @@ export async function executeMergeNodeImpl(
   task: TaskState,
 ): Promise<void> {
   const result = await runMergeGateActionImpl(host, task);
-  const { response } = result;
+  const response = {
+    ...result.response,
+    attemptId: result.response.attemptId ?? task.execution.selectedAttemptId,
+    executionGeneration: task.execution.generation ?? 0,
+  };
   const legacyConfig = {
     ...(result.taskChanges.config ?? {}),
     runnerKind: 'worktree',
@@ -698,12 +763,15 @@ export async function executeMergeNodeImpl(
     config: legacyConfig,
   };
 
-  host.persistence.updateTask(task.id, legacyChanges);
+  if (!persistCurrentMergeGateTask(host, task, legacyChanges, 'legacy execution metadata')) {
+    host.callbacks.onComplete?.(task.id, response);
+    host.orchestrator.handleWorkerResponse(response);
+    return;
+  }
   host.callbacks.onComplete?.(task.id, response);
 
   if (response.status === 'review_ready') {
-    setMergeGateReviewReady(host, task.id, legacyChanges);
-    await startReviewReadyDependents(host);
+    await setCurrentMergeGateReviewReady(host, task, legacyChanges, 'legacy review-ready metadata');
   } else {
     const newlyStarted = host.orchestrator.handleWorkerResponse(response) ?? [];
     if (newlyStarted.length > 0) {
@@ -871,7 +939,7 @@ export async function publishAfterFixImpl(
         `[merge-gate-workspace] publishAfterFix early return (no featureBranch) task=${task.id} ` +
           `will persist workspacePath=${gateWorkspacePath ?? 'NULL'}`,
       );
-      setMergeGateReviewReady(host, task.id, {
+      await setCurrentMergeGateReviewReady(host, task, {
         config: { runnerKind: 'worktree', summary },
         execution: {
           workspacePath: gateWorkspacePath,
@@ -879,8 +947,7 @@ export async function publishAfterFixImpl(
           fixedIntegrationRecordedAt: undefined,
           fixedIntegrationSource: undefined,
         },
-      });
-      await startReviewReadyDependents(host);
+      }, 'post-fix review-ready metadata');
       return;
     }
 
@@ -1079,7 +1146,7 @@ export async function publishAfterFixImpl(
 
 
 
-      setMergeGateReviewReady(host, task.id, {
+      await setCurrentMergeGateReviewReady(host, task, {
         config: { runnerKind: 'worktree', summary },
         execution: {
           branch: featureBranch,
@@ -1091,8 +1158,7 @@ export async function publishAfterFixImpl(
           fixedIntegrationRecordedAt: undefined,
           fixedIntegrationSource: undefined,
         },
-      });
-      await startReviewReadyDependents(host);
+      }, 'post-fix external-review metadata');
       return;
     }
 
@@ -1113,13 +1179,13 @@ export async function publishAfterFixImpl(
       });
       const reviewUrl = await host.execPr(baseBranch, featureBranch, workflow?.name ?? 'Workflow', prBody, consolidateDir);
       console.log(`[merge] Post-fix: created pull request ${reviewUrl}`);
-      host.persistence.updateTask(task.id, {
+      persistCurrentMergeGateTask(host, task, {
         config: { summary },
         execution: { reviewUrl },
-      });
+      }, 'post-fix pull-request metadata');
     }
 
-    setMergeGateReviewReady(host, task.id, {
+    await setCurrentMergeGateReviewReady(host, task, {
       config: { runnerKind: 'worktree', summary },
       execution: {
         branch: featureBranch,
@@ -1128,8 +1194,7 @@ export async function publishAfterFixImpl(
         fixedIntegrationRecordedAt: undefined,
         fixedIntegrationSource: undefined,
       },
-    });
-    await startReviewReadyDependents(host);
+    }, 'post-fix review-ready metadata');
     mergeTrace('PUBLISH_AFTER_FIX_DONE', { taskId: task.id });
   } catch (err) {
     // Clean up any in-progress merge in the gate clone
