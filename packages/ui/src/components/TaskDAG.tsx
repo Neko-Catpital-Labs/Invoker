@@ -21,7 +21,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
-import type { TaskState, WorkflowMeta } from '../types.js';
+import type { CenterRequest, TaskState, WorkflowMeta } from '../types.js';
 import { layoutNodes, layoutTaskGraph, type LayoutEdge, type TaskGraphLayout } from '../lib/layout.js';
 import { getEdgeStyle, getEffectiveVisualStatus, matchesStatusFilter } from '../lib/colors.js';
 import { TaskNode } from './TaskNode.js';
@@ -40,7 +40,7 @@ interface TaskDAGProps {
   tasks: Map<string, TaskState>;
   workflows?: Map<string, WorkflowMeta>;
   selectedTaskId?: string | null;
-  centerTaskId?: string | null;
+  centerTaskRequest?: CenterRequest | null;
   onTaskClick?: (task: TaskState) => void;
   onTaskDoubleClick?: (task: TaskState) => void;
   onTaskContextMenu?: (task: TaskState, event: React.MouseEvent) => void;
@@ -143,9 +143,10 @@ function mergeMeasuredNodeState(prevNodes: Node[], nextNodes: Node[]): Node[] {
   });
 }
 
-function TaskDAGInner({ tasks, workflows, selectedTaskId, centerTaskId, onTaskClick, onTaskDoubleClick, onTaskContextMenu, statusFilters }: TaskDAGProps) {
+function TaskDAGInner({ tasks, workflows, selectedTaskId, centerTaskRequest, onTaskClick, onTaskDoubleClick, onTaskContextMenu, statusFilters }: TaskDAGProps) {
   const { fitView, setCenter } = useReactFlow();
   const prevNodeCount = useRef(0);
+  const handledCenterRequestRef = useRef<number | null>(null);
   const lastNodeClickRef = useRef<{ id: string; at: number } | null>(null);
   const reportedGraphVisibleRef = useRef(false);
   const watchdogMissCountRef = useRef(0);
@@ -419,10 +420,17 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, centerTaskId, onTaskCl
     }
   }, [nodes.length, fitView]);
 
+  // One-shot explicit navigation centering. Each centerTaskRequest.requestId is
+  // processed at most once; re-renders triggered by live status/topology
+  // refreshes carry the same requestId and must not re-center, so manual pan or
+  // zoom in the mini DAG is never overridden by background updates.
   useEffect(() => {
-    if (!centerTaskId || nodes.length === 0) return;
-    const node = nodes.find((candidate) => candidate.id === centerTaskId);
+    const request = centerTaskRequest;
+    if (!request || nodes.length === 0) return;
+    if (handledCenterRequestRef.current === request.requestId) return;
+    const node = nodes.find((candidate) => candidate.id === request.id);
     if (!node) return;
+    handledCenterRequestRef.current = request.requestId;
     const frame = requestAnimationFrame(() => {
       if (typeof setCenter === 'function') {
         setCenter(node.position.x + 132, node.position.y + 55, { zoom: 1, duration: 180 });
@@ -431,7 +439,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, centerTaskId, onTaskCl
       }
     });
     return () => cancelAnimationFrame(frame);
-  }, [centerTaskId, fitView, nodes, setCenter]);
+  }, [centerTaskRequest, fitView, nodes, setCenter]);
 
   useEffect(() => {
     if (reportedGraphVisibleRef.current || nodes.length === 0 || typeof window === 'undefined') {

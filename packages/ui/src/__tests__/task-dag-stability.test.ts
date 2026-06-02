@@ -274,6 +274,57 @@ describe('TaskDAG stability', () => {
     });
   });
 
+  // ── One-shot navigation centering ─────────────────────────
+  describe('one-shot centering', () => {
+    it('accepts a centerTaskRequest prop instead of a persistent centerTaskId', () => {
+      expect(source).toContain('centerTaskRequest?: CenterRequest | null;');
+      expect(source).not.toContain('centerTaskId');
+    });
+
+    it('tracks the last handled requestId with a ref', () => {
+      expect(source).toContain('handledCenterRequestRef');
+      expect(source).toContain('handledCenterRequestRef.current === request.requestId');
+      expect(source).toContain('handledCenterRequestRef.current = request.requestId');
+    });
+
+    // Simulate the guard logic from TaskDAGInner's centering effect: a request
+    // is acted on at most once, while a fresh requestId centers again.
+    function makeCenterRunner() {
+      let handled: number | null = null;
+      let centerCalls = 0;
+      return (request: { id: string; requestId: number } | null, hasNode: boolean) => {
+        if (!request || !hasNode) return centerCalls;
+        if (handled === request.requestId) return centerCalls;
+        handled = request.requestId;
+        centerCalls += 1;
+        return centerCalls;
+      };
+    }
+
+    it('does not repeat setCenter for the same requestId across re-renders', () => {
+      const run = makeCenterRunner();
+      expect(run({ id: 'task-1', requestId: 1 }, true)).toBe(1);
+      // Live status refresh re-renders with an equal request object.
+      expect(run({ id: 'task-1', requestId: 1 }, true)).toBe(1);
+      expect(run({ id: 'task-1', requestId: 1 }, true)).toBe(1);
+    });
+
+    it('centers again when a new requestId arrives', () => {
+      const run = makeCenterRunner();
+      expect(run({ id: 'task-1', requestId: 1 }, true)).toBe(1);
+      expect(run({ id: 'task-2', requestId: 2 }, true)).toBe(2);
+    });
+
+    it('defers centering until the requested node exists, without consuming the request', () => {
+      const run = makeCenterRunner();
+      // Node not yet laid out: request is not consumed.
+      expect(run({ id: 'task-1', requestId: 1 }, false)).toBe(0);
+      // Once the node appears, the same request centers exactly once.
+      expect(run({ id: 'task-1', requestId: 1 }, true)).toBe(1);
+      expect(run({ id: 'task-1', requestId: 1 }, true)).toBe(1);
+    });
+  });
+
   // ── onNodesChange handler is wired up ─────────────────────
   describe('onNodesChange handler wiring', () => {
     it('passes onNodesChange to ReactFlow', () => {

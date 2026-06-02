@@ -20,6 +20,20 @@ export type TaskStatus =
   | 'awaiting_approval'
   | 'stale';
 
+// ── Viewport Centering ──────────────────────────────────────
+
+/**
+ * One-shot request to center the viewport on a node. `requestId` is a
+ * monotonically increasing counter incremented only by explicit navigation
+ * (selectWorkflowById / selectTaskById). Graph components process each
+ * `requestId` exactly once, so live status/topology refreshes that re-render
+ * with the same request do not repeatedly snap the viewport back.
+ */
+export interface CenterRequest {
+  readonly id: string;
+  readonly requestId: number;
+}
+
 // ── Experiment Types ────────────────────────────────────────
 
 export interface ExperimentVariant {

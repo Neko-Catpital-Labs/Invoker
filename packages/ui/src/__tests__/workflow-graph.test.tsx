@@ -1,7 +1,9 @@
 import { fireEvent, render, screen } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 import { WorkflowGraph } from '../components/WorkflowGraph.js';
-import type { TaskState, WorkflowMeta, WorkflowStatus } from '../types.js';
+import type { CenterRequest, TaskState, WorkflowMeta, WorkflowStatus } from '../types.js';
 import * as ReactFlowModule from '@xyflow/react';
 
 vi.mock('@xyflow/react', async () => {
@@ -10,6 +12,7 @@ vi.mock('@xyflow/react', async () => {
 });
 
 const fitViewMock = (ReactFlowModule as unknown as { __fitViewMock: Mock }).__fitViewMock;
+const setCenterMock = (ReactFlowModule as unknown as { __setCenterMock: Mock }).__setCenterMock;
 
 function wf(id: string, status: WorkflowStatus): WorkflowMeta {
   return { id, name: id, status };
@@ -30,6 +33,7 @@ function task(id: string, workflowId: string): TaskState {
 describe('WorkflowGraph', () => {
   beforeEach(() => {
     fitViewMock.mockClear();
+    setCenterMock.mockClear();
   });
 
   it('calls selection and context menu handlers', () => {
@@ -154,5 +158,59 @@ describe('WorkflowGraph', () => {
       expect(fitViewMock).toHaveBeenCalledWith({ padding: 0.2 });
     });
     expect(screen.getByTestId('workflow-node-wf-b')).toBeInTheDocument();
+  });
+
+  it('centers once per navigation request and not on same-request re-renders', async () => {
+    const workflows = new Map([
+      ['wf-a', wf('wf-a', 'running')],
+      ['wf-b', wf('wf-b', 'pending')],
+    ]);
+    const tasks = new Map([
+      ['t1', task('t1', 'wf-a')],
+      ['t2', task('t2', 'wf-b')],
+    ]);
+
+    const renderWith = (centerWorkflowRequest: CenterRequest | null) => (
+      <WorkflowGraph
+        tasks={tasks}
+        workflows={workflows}
+        selectedWorkflowId={null}
+        centerWorkflowRequest={centerWorkflowRequest}
+        statusFilters={new Set()}
+        onSelectWorkflow={() => {}}
+        onWorkflowContextMenu={() => {}}
+      />
+    );
+
+    // First explicit navigation request → centers once.
+    const { rerender } = render(renderWith({ id: 'wf-a', requestId: 1 }));
+    await vi.waitFor(() => {
+      expect(setCenterMock).toHaveBeenCalledTimes(1);
+    });
+
+    // Re-rendering with the SAME requestId (e.g. a live status refresh that
+    // recreates node objects) must not re-center.
+    rerender(renderWith({ id: 'wf-a', requestId: 1 }));
+    await Promise.resolve();
+    expect(setCenterMock).toHaveBeenCalledTimes(1);
+
+    // A NEW requestId from explicit navigation centers again.
+    rerender(renderWith({ id: 'wf-b', requestId: 2 }));
+    await vi.waitFor(() => {
+      expect(setCenterMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it('does not pass key={graphSignature} to ReactFlow', () => {
+    const source = readFileSync(
+      resolve(__dirname, '..', 'components', 'WorkflowGraph.tsx'),
+      'utf-8',
+    );
+    const reactFlowBlock = source.slice(
+      source.indexOf('<ReactFlow'),
+      source.indexOf('</ReactFlow>'),
+    );
+    expect(reactFlowBlock).not.toContain('key={graphSignature}');
+    expect(source).not.toContain('graphSignature');
   });
 });
