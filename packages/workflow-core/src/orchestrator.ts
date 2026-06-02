@@ -1641,9 +1641,14 @@ export class Orchestrator {
           });
           return [];
         }
+        // Lineage validation: a worker response is accepted only when the
+        // fields it carries still match the live task. The attempt id is
+        // checked above; here we also validate executionGeneration whenever
+        // the response provides it. Older producers may omit one field — when
+        // only one is present we validate just that field — but when both are
+        // present they must both match for the response to be applied.
         const activeGeneration = this.getExecutionGeneration(earlyTask);
         if (
-          !response.attemptId &&
           response.executionGeneration !== undefined &&
           response.executionGeneration !== activeGeneration
         ) {

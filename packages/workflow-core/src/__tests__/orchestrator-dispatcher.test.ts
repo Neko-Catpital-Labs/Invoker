@@ -341,6 +341,49 @@ describe('Orchestrator launch claims', () => {
     expect(orchestrator.getTask(taskId)?.status).toBe('pending');
   });
 
+  it('rejects a response carrying the live attempt id but a stale executionGeneration', () => {
+    const { orchestrator, persistence } = makeOrchestrator({ deferRunningUntilLaunch: true });
+    orchestrator.loadPlan({
+      name: 'stale-generation-live-attempt',
+      onFinish: 'none',
+      tasks: [{ id: 't1', description: 'one', command: 'echo one' }],
+    });
+
+    const taskId = taskIdBySuffix(orchestrator, 't1');
+    const [claim] = orchestrator.startExecution();
+    const attemptId = claim!.execution.selectedAttemptId!;
+    expect(orchestrator.markTaskRunningAfterLaunch(taskId, attemptId)).toBe(true);
+
+    // Advance the live execution generation while keeping the SAME selected
+    // attempt id, and pin a known branch/workspacePath so we can prove the
+    // stale response never overwrites live lineage.
+    const staleGeneration = orchestrator.getTask(taskId)?.execution.generation ?? 0;
+    const liveGeneration = staleGeneration + 1;
+    persistence.updateTask(taskId, {
+      execution: { generation: liveGeneration, branch: 'live-branch', workspacePath: '/live/ws' },
+    });
+    orchestrator.syncAllFromDb();
+
+    const liveTask = orchestrator.getTask(taskId)!;
+    expect(liveTask.execution.selectedAttemptId).toBe(attemptId);
+    expect(liveTask.execution.generation).toBe(liveGeneration);
+
+    // Response presents the live attempt id (passes the attempt guard) but a
+    // stale generation — both fields are present, so both must match.
+    const staleResult = orchestrator.handleWorkerResponse({
+      ...makeResponse(taskId, 'completed', staleGeneration),
+      attemptId,
+      outputs: { exitCode: 0, branch: 'stale-branch' },
+    });
+
+    expect(staleResult).toEqual([]);
+    const afterTask = orchestrator.getTask(taskId)!;
+    expect(afterTask.status).toBe('running');
+    expect(afterTask.execution.selectedAttemptId).toBe(attemptId);
+    expect(afterTask.execution.branch).toBe('live-branch');
+    expect(afterTask.execution.workspacePath).toBe('/live/ws');
+  });
+
   it('clears stale launch metadata from dependency-blocked tasks during recreateWorkflow reset', () => {
     const { orchestrator, persistence } = makeOrchestrator();
     orchestrator.loadPlan({
