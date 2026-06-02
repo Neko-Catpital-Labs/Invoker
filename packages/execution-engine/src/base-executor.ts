@@ -932,7 +932,6 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     },
   ): Promise<void> {
     const entry = this.entries.get(executionId);
-    if (entry) entry.completed = true;
     const bufferedOutput = entry?.outputBuffer.join('') ?? '';
     const semanticFailure = this.detectSemanticFailure(request, bufferedOutput, exitCode);
     const effectiveExitCode = (exitCode === 0 && semanticFailure)

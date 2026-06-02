@@ -453,20 +453,25 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
       child.on('close', (code, signal) => {
         void this.containerContext.run(container.id, async () => {
           const exitCode = code ?? (signal ? 1 : 0);
+          entry.finalizingAfterClose = true;
 
-          await this.handleProcessExit(executionId, request, CONTAINER_CWD, exitCode, {
-            signal,
-            branch: handle.branch,
-            agentSessionId: entry.agentSessionId,
-            agentName: request.actionType === 'ai_task' ? executionAgent : undefined,
-          });
-
-          // Stop the idle container after git finalize completes
           try {
-            const c = docker.getContainer(container.id);
-            await c.stop({ t: CONTAINER_STOP_TIMEOUT_S });
-          } catch {
-            // Container may already be stopped
+            await this.handleProcessExit(executionId, request, CONTAINER_CWD, exitCode, {
+              signal,
+              branch: handle.branch,
+              agentSessionId: entry.agentSessionId,
+              agentName: request.actionType === 'ai_task' ? executionAgent : undefined,
+            });
+
+            // Stop the idle container after git finalize completes
+            try {
+              const c = docker.getContainer(container.id);
+              await c.stop({ t: CONTAINER_STOP_TIMEOUT_S });
+            } catch {
+              // Container may already be stopped
+            }
+          } finally {
+            entry.finalizingAfterClose = false;
           }
         });
       });
