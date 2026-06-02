@@ -17,6 +17,7 @@ import type {
 import {
   OrchestratorError,
   OrchestratorErrorCode,
+  buildCancelDownstreamInFlight as buildCoreCancelDownstreamInFlight,
   buildCancelInFlight as buildCoreCancelInFlight,
 } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
@@ -544,10 +545,20 @@ export function buildInvalidationDeps(deps: BuildInvalidationDepsArgs): Invalida
     orchestrator: deps.orchestrator,
     taskExecutor: deps.taskExecutor,
   });
+  const cancelDownstreamInFlight = buildCoreCancelDownstreamInFlight({
+    orchestrator: deps.orchestrator,
+    killActiveExecution: async (id) => {
+      const taskExecutor = resolveTaskExecutor(deps.taskExecutor);
+      if (!taskExecutor) return;
+      await taskExecutor.killActiveExecution(id);
+    },
+  });
   return {
     cancelInFlight,
+    cancelDownstreamInFlight,
     retryTask: (taskId: string) => deps.orchestrator.retryTask(taskId),
     recreateTask: (taskId: string) => deps.orchestrator.recreateTask(taskId),
+    recreateDownstream: (taskId: string) => deps.orchestrator.recreateDownstream(taskId),
     retryWorkflow: (workflowId: string) => deps.orchestrator.retryWorkflow(workflowId),
     recreateWorkflow: (workflowId: string) =>
       bumpGenerationAndRecreate(workflowId, {

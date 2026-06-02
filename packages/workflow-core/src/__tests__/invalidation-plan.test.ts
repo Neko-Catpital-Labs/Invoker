@@ -31,6 +31,10 @@ describe('InvalidationPlan policy registry', () => {
       scope: 'task',
       mode: 'recreate',
     });
+    expect(ACTION_SPECS.recreateDownstream).toMatchObject({
+      scope: 'task',
+      mode: 'recreate',
+    });
     expect(ACTION_SPECS.retryWorkflow).toMatchObject({
       scope: 'workflow',
       mode: 'retry',
@@ -90,6 +94,66 @@ describe('InvalidationPlan policy registry', () => {
       affectedTaskIds: ['wf-1/child', 'wf-1/grandchild', 'wf-1/root'],
       lockPlan: { workflowIds: ['wf-1'] },
     });
+  });
+
+  it('plans downstream recreate as only transitive descendants in A -> B -> C', () => {
+    const tasks = [
+      task('wf-1/A', 'wf-1'),
+      task('wf-1/B', 'wf-1', ['wf-1/A']),
+      task('wf-1/C', 'wf-1', ['wf-1/B']),
+    ];
+
+    const plan = planInvalidation({
+      action: 'recreateDownstream',
+      targetId: 'wf-1/A',
+      tasks,
+    });
+
+    expect(plan).toMatchObject({
+      action: 'recreateDownstream',
+      scope: 'task',
+      mode: 'recreate',
+      affectedWorkflowIds: ['wf-1'],
+      affectedTaskIds: ['wf-1/B', 'wf-1/C'],
+      lockPlan: { workflowIds: ['wf-1'] },
+    });
+    expect(plan.affectedTaskIds).not.toContain('wf-1/A');
+  });
+
+  it('plans downstream recreate from B as C only in A -> B -> C', () => {
+    const tasks = [
+      task('wf-1/A', 'wf-1'),
+      task('wf-1/B', 'wf-1', ['wf-1/A']),
+      task('wf-1/C', 'wf-1', ['wf-1/B']),
+    ];
+
+    const plan = planInvalidation({
+      action: 'recreateDownstream',
+      targetId: 'wf-1/B',
+      tasks,
+    });
+
+    expect(plan.affectedTaskIds).toEqual(['wf-1/C']);
+    expect(plan.affectedTaskIds).not.toContain('wf-1/B');
+  });
+
+  it('plans downstream recreate from a leaf as a no-op', () => {
+    const tasks = [
+      task('wf-1/A', 'wf-1'),
+      task('wf-1/B', 'wf-1', ['wf-1/A']),
+      task('wf-1/C', 'wf-1', ['wf-1/B']),
+    ];
+
+    const plan = planInvalidation({
+      action: 'recreateDownstream',
+      targetId: 'wf-1/C',
+      tasks,
+    });
+
+    expect(plan.affectedWorkflowIds).toEqual([]);
+    expect(plan.affectedTaskIds).toEqual([]);
+    expect(plan.lockPlan.workflowIds).toEqual([]);
+    expect(plan.schedulerEnqueueCandidates).toEqual([]);
   });
 
   it('plans task retry as the task plus non-completed descendants', () => {

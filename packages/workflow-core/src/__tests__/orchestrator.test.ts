@@ -5865,6 +5865,177 @@ describe('Orchestrator', () => {
       expect(x.execution.workspacePath).toBe('/tmp/x');
     });
 
+    describe('recreateDownstream', () => {
+      function saveTaskWithAttempt(
+        p: InMemoryPersistence,
+        wf: string,
+        id: string,
+        status: TaskState['status'],
+        dependencies: string[],
+        generation: number,
+      ): void {
+        const attemptStatus = status === 'running' ? 'running' : status === 'completed' ? 'completed' : 'pending';
+        const attempt: Attempt = {
+          id: `${id}-attempt`,
+          nodeId: id,
+          queuePriority: 0,
+          status: attemptStatus,
+          upstreamAttemptIds: [],
+          createdAt: new Date(),
+          branch: `br-${id.toLowerCase()}`,
+          commit: `${id.toLowerCase()}1`,
+          workspacePath: `/tmp/${id.toLowerCase()}`,
+        };
+        p.saveTask(wf, {
+          id,
+          description: `Task ${id}`,
+          status,
+          dependencies,
+          createdAt: new Date(),
+          config: { workflowId: wf, summary: `summary-${id}` },
+          execution: {
+            selectedAttemptId: attempt.id,
+            generation,
+            branch: attempt.branch,
+            commit: attempt.commit,
+            workspacePath: attempt.workspacePath,
+            agentSessionId: `session-${id}`,
+            containerId: `container-${id}`,
+            reviewUrl: `https://reviews.test/${id}`,
+            reviewId: `review-${id}`,
+            reviewStatus: 'open',
+            reviewProviderId: `provider-${id}`,
+            startedAt: new Date(),
+            completedAt: status === 'completed' ? new Date() : undefined,
+            exitCode: status === 'completed' ? 0 : undefined,
+          },
+        });
+        p.saveAttempt(attempt);
+      }
+
+      function setupLinearWorkflow(statusA: TaskState['status'] = 'completed'): {
+        o: Orchestrator;
+        p: InMemoryPersistence;
+        wf: string;
+      } {
+        const p = new InMemoryPersistence();
+        const b = new InMemoryBus();
+        const wf = 'wf-recreate-downstream';
+        saveTaskWithAttempt(p, wf, 'A', statusA, [], 5);
+        saveTaskWithAttempt(p, wf, 'B', 'completed', ['A'], 7);
+        saveTaskWithAttempt(p, wf, 'C', 'completed', ['B'], 11);
+        const o = new Orchestrator({ persistence: p, messageBus: b, maxConcurrency: 3 });
+        o.syncFromDb(wf);
+        return { o, p, wf };
+      }
+
+      it('recreates only downstream descendants in A -> B -> C and preserves selected A metadata', () => {
+        const { o } = setupLinearWorkflow();
+        const selectedBefore = o.getTask('A')!;
+        const bAttemptBefore = o.getTask('B')!.execution.selectedAttemptId;
+        const cAttemptBefore = o.getTask('C')!.execution.selectedAttemptId;
+
+        o.recreateDownstream('A');
+
+        const a = o.getTask('A')!;
+        const b = o.getTask('B')!;
+        const c = o.getTask('C')!;
+
+        expect(a.status).toBe(selectedBefore.status);
+        expect(a.execution.branch).toBe('br-a');
+        expect(a.execution.commit).toBe('a1');
+        expect(a.execution.workspacePath).toBe('/tmp/a');
+        expect(a.execution.selectedAttemptId).toBe('A-attempt');
+        expect(a.execution.generation).toBe(5);
+
+        expect(['running', 'pending']).toContain(b.status);
+        expect(c.status).toBe('pending');
+        expect(b.execution.selectedAttemptId).not.toBe(bAttemptBefore);
+        expect(c.execution.selectedAttemptId).not.toBe(cAttemptBefore);
+        expect(b.execution.generation).toBe(8);
+        expect(c.execution.generation).toBe(12);
+        for (const task of [b, c]) {
+          expect(task.config.summary).toBeUndefined();
+          expect(task.execution.branch).toBeUndefined();
+          expect(task.execution.commit).toBeUndefined();
+          expect(task.execution.workspacePath).toBeUndefined();
+          expect(task.execution.reviewUrl).toBeUndefined();
+          expect(task.execution.reviewId).toBeUndefined();
+          expect(task.execution.reviewStatus).toBeUndefined();
+          expect(task.execution.reviewProviderId).toBeUndefined();
+          expect(task.execution.agentSessionId).toBeUndefined();
+          expect(task.execution.containerId).toBeUndefined();
+        }
+      });
+
+      it('recreates B downstream as C only and preserves selected B', () => {
+        const { o } = setupLinearWorkflow();
+        const aBefore = o.getTask('A')!;
+        const bBefore = o.getTask('B')!;
+        const cAttemptBefore = o.getTask('C')!.execution.selectedAttemptId;
+
+        o.recreateDownstream('B');
+
+        const a = o.getTask('A')!;
+        const b = o.getTask('B')!;
+        const c = o.getTask('C')!;
+
+        expect(a.status).toBe(aBefore.status);
+        expect(a.execution.generation).toBe(aBefore.execution.generation);
+        expect(a.execution.selectedAttemptId).toBe(aBefore.execution.selectedAttemptId);
+        expect(a.execution.branch).toBe('br-a');
+
+        expect(b.status).toBe(bBefore.status);
+        expect(b.execution.branch).toBe('br-b');
+        expect(b.execution.commit).toBe('b1');
+        expect(b.execution.workspacePath).toBe('/tmp/b');
+        expect(b.execution.selectedAttemptId).toBe('B-attempt');
+        expect(b.execution.generation).toBe(7);
+
+        expect(['running', 'pending']).toContain(c.status);
+        expect(c.execution.selectedAttemptId).not.toBe(cAttemptBefore);
+        expect(c.execution.generation).toBe(12);
+        expect(c.execution.branch).toBeUndefined();
+        expect(c.execution.commit).toBeUndefined();
+        expect(c.execution.workspacePath).toBeUndefined();
+      });
+
+      it('is a no-op for a leaf task', () => {
+        const { o } = setupLinearWorkflow();
+        const before = o.getTask('C')!;
+
+        const started = o.recreateDownstream('C');
+
+        const after = o.getTask('C')!;
+        expect(started).toEqual([]);
+        expect(after.status).toBe(before.status);
+        expect(after.execution.branch).toBe(before.execution.branch);
+        expect(after.execution.commit).toBe(before.execution.commit);
+        expect(after.execution.workspacePath).toBe(before.execution.workspacePath);
+        expect(after.execution.selectedAttemptId).toBe(before.execution.selectedAttemptId);
+        expect(after.execution.generation).toBe(before.execution.generation);
+      });
+
+      it('does not cancel or reset the selected task even when it is active', () => {
+        const { o, p } = setupLinearWorkflow('running');
+        const selectedBefore = o.getTask('A')!;
+
+        o.recreateDownstream('A');
+
+        const selectedAfter = o.getTask('A')!;
+        expect(selectedAfter.status).toBe('running');
+        expect(selectedAfter.execution.branch).toBe(selectedBefore.execution.branch);
+        expect(selectedAfter.execution.commit).toBe(selectedBefore.execution.commit);
+        expect(selectedAfter.execution.workspacePath).toBe(selectedBefore.execution.workspacePath);
+        expect(selectedAfter.execution.selectedAttemptId).toBe(selectedBefore.execution.selectedAttemptId);
+        expect(selectedAfter.execution.generation).toBe(selectedBefore.execution.generation);
+        expect(p.loadAttempt('A-attempt')?.status).toBe('running');
+
+        expect(o.getTask('B')!.status).toBe('pending');
+        expect(o.getTask('C')!.status).toBe('pending');
+      });
+    });
+
     it('drainScheduler sets lastHeartbeatAt when starting a task', () => {
       orchestrator.loadPlan({
         name: 'heartbeat-start-test',
