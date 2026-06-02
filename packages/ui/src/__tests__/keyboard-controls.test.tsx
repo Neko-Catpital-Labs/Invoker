@@ -5,16 +5,21 @@
  * Dropped: Ctrl+Backtick terminal toggle, terminal toggle bar (Electron shell features).
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, type Mock } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { vi } from 'vitest';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { WorkflowMeta } from '../types.js';
+import { CAMERA_LOCK_PREFERENCE_STORAGE_KEY } from '../lib/graph-camera.js';
+import * as ReactFlowModule from '@xyflow/react';
 
 vi.mock('@xyflow/react', async () => {
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
   return createReactFlowMock();
 });
+
+const setCenterMock = (ReactFlowModule as unknown as { __setCenterMock: Mock }).__setCenterMock;
+const fitViewMock = (ReactFlowModule as unknown as { __fitViewMock: Mock }).__fitViewMock;
 
 const { App } = await import('../App.js');
 
@@ -232,5 +237,236 @@ describe('Side rail controls (component)', () => {
 
     expect(screen.getByTestId('keyboard-search-overlay')).toBeInTheDocument();
     expect(screen.getByTestId('workflow-graph-surface')).toHaveAttribute('data-keyboard-active', 'true');
+  });
+});
+
+// ── Graph camera lock + viewport ownership, exercised through the App ──
+//
+// These assert the App-owned camera contract end to end: F1 lock toggling,
+// once-mode, manual-pan suppression, selection-driven recentering gated on the
+// lock, and persistence across a simulated reload. The React Flow mock exposes
+// setCenter/fitView so we can prove *when* the viewport actually moves.
+
+/** In-memory Storage so the App can load/persist the camera lock preference. */
+function makeMemoryStorage(): Storage {
+  const map = new Map<string, string>();
+  return {
+    get length() {
+      return map.size;
+    },
+    clear: () => map.clear(),
+    getItem: (k: string) => (map.has(k) ? (map.get(k) as string) : null),
+    key: (i: number) => [...map.keys()][i] ?? null,
+    removeItem: (k: string) => map.delete(k),
+    setItem: (k: string, v: string) => void map.set(k, String(v)),
+  } as Storage;
+}
+
+function readStoredPreference(storage: Storage): unknown {
+  const raw = storage.getItem(CAMERA_LOCK_PREFERENCE_STORAGE_KEY);
+  return raw === null ? null : JSON.parse(raw);
+}
+
+function fireKey(keyName: string, init: Partial<KeyboardEvent> = {}) {
+  fireEvent.keyDown(document, { key: keyName, ...init });
+}
+
+/** Resolve after the camera command rAF has had a chance to flush. */
+async function flushFrames(): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 30));
+}
+
+describe('Graph camera lock (App integration)', () => {
+  let mock: MockInvoker;
+  let storage: Storage;
+
+  const cameraWorkflows: WorkflowMeta[] = [
+    { id: 'wf-a', name: 'Alpha Workflow', status: 'running' },
+    { id: 'wf-b', name: 'Beta Workflow', status: 'pending' },
+  ];
+  const cameraTasks = [
+    makeUITask({ id: 'wf-a/task-a', description: 'Alpha Task', workflowId: 'wf-a', command: 'echo a' }),
+    makeUITask({ id: 'wf-b/task-c', description: 'Beta Task', workflowId: 'wf-b', command: 'echo b' }),
+  ];
+
+  beforeEach(() => {
+    mock = createMockInvoker();
+    mock.install();
+    storage = makeMemoryStorage();
+    (globalThis as { localStorage?: Storage }).localStorage = storage;
+    setCenterMock.mockClear();
+    fitViewMock.mockClear();
+  });
+
+  afterEach(() => {
+    mock.cleanup();
+    delete (globalThis as { localStorage?: Storage }).localStorage;
+  });
+
+  async function renderApp() {
+    mock.setTasks(cameraTasks, cameraWorkflows);
+    const result = render(<App />);
+    await screen.findByTestId('workflow-node-wf-a');
+    await screen.findByTestId('selected-workflow-mini-dag');
+    return result;
+  }
+
+  it('F1 toggle mode is on by default, toggles off then on, and centers on enable', async () => {
+    await renderApp();
+    // Selection auto-lands on the first workflow; let the initial fit settle.
+    await flushFrames();
+    setCenterMock.mockClear();
+
+    // First F1: lock was on by default, so this turns it OFF — no recenter.
+    fireKey('F1');
+    await flushFrames();
+    expect(setCenterMock).not.toHaveBeenCalled();
+
+    // Second F1: turning the lock back ON immediately centers the current selection.
+    fireKey('F1');
+    await waitFor(() => expect(setCenterMock).toHaveBeenCalled());
+  });
+
+  it('F1 once mode centers a single time without changing the persisted lock preference', async () => {
+    storage.setItem(
+      CAMERA_LOCK_PREFERENCE_STORAGE_KEY,
+      JSON.stringify({ mode: 'once', enabled: true }),
+    );
+    await renderApp();
+    await flushFrames();
+    setCenterMock.mockClear();
+
+    fireKey('F1');
+    await waitFor(() => expect(setCenterMock).toHaveBeenCalled());
+
+    // once mode never flips the stored preference — it stays exactly as loaded.
+    expect(readStoredPreference(storage)).toEqual({ mode: 'once', enabled: true });
+  });
+
+  it('persists the lock preference across a simulated reload', async () => {
+    // Default is on: selecting a different workflow recenters.
+    const first = await renderApp();
+    await flushFrames();
+    setCenterMock.mockClear();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-b'));
+    await waitFor(() => expect(setCenterMock).toHaveBeenCalled());
+
+    // Disable via F1; the new preference is written to storage.
+    fireKey('F1');
+    await waitFor(() => {
+      expect(readStoredPreference(storage)).toEqual({ mode: 'toggle', enabled: false });
+    });
+    first.unmount();
+
+    // "Reload": a fresh App loads the disabled preference, so selection no longer recenters.
+    setCenterMock.mockClear();
+    await renderApp();
+    await flushFrames();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-b'));
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Beta Workflow task DAG');
+    });
+    await flushFrames();
+    expect(setCenterMock).not.toHaveBeenCalled();
+  });
+
+  it('manual pan suppresses the lock and does not autofocus the graph', async () => {
+    await renderApp();
+    await flushFrames();
+    setCenterMock.mockClear();
+    fitViewMock.mockClear();
+
+    expect(screen.getByTestId('workflow-graph-surface')).toHaveAttribute(
+      'data-camera-suppressed',
+      'false',
+    );
+
+    // A background drag on the workflow pane hands the viewport to the user.
+    fireEvent.mouseDown(screen.getAllByTestId('mock-react-flow-pane')[0]);
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-graph-surface')).toHaveAttribute(
+        'data-camera-suppressed',
+        'true',
+      );
+    });
+    // The gesture itself must not re-frame or center the graph.
+    await flushFrames();
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(fitViewMock).not.toHaveBeenCalled();
+  });
+
+  it('a node click clears suppression and recenters while the lock is enabled', async () => {
+    await renderApp();
+    await flushFrames();
+
+    // Suppress first via a manual gesture.
+    fireEvent.mouseDown(screen.getAllByTestId('mock-react-flow-pane')[0]);
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-graph-surface')).toHaveAttribute(
+        'data-camera-suppressed',
+        'true',
+      );
+    });
+    setCenterMock.mockClear();
+
+    // Clicking a workflow node selects it, clears suppression, and recenters.
+    fireEvent.click(screen.getByTestId('workflow-node-wf-b'));
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-graph-surface')).toHaveAttribute(
+        'data-camera-suppressed',
+        'false',
+      );
+    });
+    await waitFor(() => expect(setCenterMock).toHaveBeenCalled());
+  });
+
+  it('does not recenter on node selection while the lock is disabled', async () => {
+    await renderApp();
+    await flushFrames();
+
+    fireKey('F1'); // disable the lock
+    await flushFrames();
+    setCenterMock.mockClear();
+
+    fireEvent.click(screen.getByTestId('workflow-node-wf-b'));
+    // Selection still changes…
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Beta Workflow task DAG');
+    });
+    // …but with the lock off, the camera stays where the user left it.
+    await flushFrames();
+    expect(setCenterMock).not.toHaveBeenCalled();
+  });
+
+  it('arrow navigation selects a neighbor and recenters through the active lock', async () => {
+    await renderApp();
+    await flushFrames();
+    setCenterMock.mockClear();
+
+    fireKey('ArrowRight');
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Beta Workflow task DAG');
+    });
+    await waitFor(() => expect(setCenterMock).toHaveBeenCalled());
+  });
+
+  it('arrow navigation stays put and does not recenter when there is no neighbor', async () => {
+    await renderApp();
+    await flushFrames();
+
+    // Move to the last workflow first, and let its recenter fully flush.
+    fireKey('ArrowRight');
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Beta Workflow task DAG');
+    });
+    await waitFor(() => expect(setCenterMock).toHaveBeenCalled());
+    await flushFrames();
+    setCenterMock.mockClear();
+
+    // No further node in that direction — selection holds and the camera does not move.
+    fireKey('ArrowRight');
+    await flushFrames();
+    expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Beta Workflow task DAG');
+    expect(setCenterMock).not.toHaveBeenCalled();
   });
 });

@@ -210,6 +210,78 @@ describe('TaskDAG stability', () => {
     });
   });
 
+  // ── Camera command consumption + viewport ownership ──────
+  describe('camera command consumption', () => {
+    function reactFlowBlock(): string {
+      return source.slice(source.indexOf('<ReactFlow'), source.indexOf('</ReactFlow>'));
+    }
+
+    it('accepts a typed cameraCommand prop and a manual-viewport callback', () => {
+      expect(source).toContain('cameraCommand?: GraphCameraCommand | null;');
+      expect(source).toContain('onManualViewportChange?: () => void;');
+    });
+
+    it('consumes each command once, keyed by a monotonic sequence', () => {
+      expect(source).toContain('lastCameraSequenceRef');
+      expect(source).toContain(
+        'cameraCommand.sequence <= lastCameraSequenceRef.current',
+      );
+      expect(source).toContain('lastCameraSequenceRef.current = cameraCommand.sequence');
+    });
+
+    it('preserves the current zoom when centering (never resets to 1)', () => {
+      // The zoom is read from the live viewport, not hardcoded, and forwarded to setCenter.
+      expect(source).toContain('getZoom()');
+      expect(source).toContain('{ zoom, duration: 180 }');
+      expect(source).not.toMatch(/setCenter\([^)]*zoom:\s*1\b/);
+    });
+
+    it('honors the fitInitial command style by re-framing', () => {
+      expect(source).toContain("cameraCommand.style === 'fitInitial'");
+    });
+
+    it('defers a command whose target node is absent rather than dropping it', () => {
+      // When the node is missing, the effect returns before advancing the
+      // consumed-sequence ref, so a later render re-applies the command.
+      const effect = source.slice(
+        source.indexOf('if (!cameraCommand'),
+        source.indexOf('if (!cameraCommand') + 900,
+      );
+      expect(effect).toContain('if (!node) return;');
+      const guardIndex = effect.indexOf('if (!node) return;');
+      // The centerSelection branch advances the consumed sequence only AFTER the
+      // !node guard, so a command for a not-yet-mounted node is retried later.
+      const consumeAfterGuard = effect.indexOf(
+        'lastCameraSequenceRef.current = cameraCommand.sequence',
+        guardIndex,
+      );
+      expect(consumeAfterGuard).toBeGreaterThan(guardIndex);
+    });
+
+    it('treats only event-bearing onMoveStart as a manual gesture', () => {
+      expect(source).toContain('if (event) onManualViewportChange?.();');
+      expect(reactFlowBlock()).toContain('onMoveStart={onMoveStart}');
+    });
+
+    it('does not reintroduce data-driven centering props or graphSignature remounting', () => {
+      // The old viewport-fighting API is gone: no persistent center*Id / requestId
+      // props and no key={graphSignature} remount keyed on data.
+      expect(source).not.toContain('graphSignature');
+      expect(source).not.toContain('centerWorkflowId');
+      expect(source).not.toContain('centerTaskId');
+      expect(source).not.toMatch(/\brequestId\b/);
+    });
+  });
+
+  // ── Initial fit happens once ──────────────────────────────
+  describe('initial fit framing', () => {
+    it('fits once on the first non-empty render and never on later updates', () => {
+      // prevNodeCount guards the single initial fit; subsequent renders bail out.
+      expect(source).toContain('if (prevNodeCount.current !== 0 || nodes.length === 0) return;');
+      expect(source).toContain('prevNodeCount.current = nodes.length;');
+    });
+  });
+
   // ── Watchdog detection logic ──────────────────────────────
   describe('watchdog detection logic', () => {
     function shouldTrigger(
