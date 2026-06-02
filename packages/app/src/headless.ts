@@ -1317,7 +1317,7 @@ async function headlessWatch(workflowId: string | undefined, deps: HeadlessDeps)
     syncFromDb: true,
     setExitCodeOnFailure: true,
   });
-  process.stdout.write(`\n[watch] done — ${result.status.completed} completed, ${result.status.failed} failed\n`);
+  process.stdout.write(`\n[watch] done — ${result.status.completed} completed, ${result.status.failed} failed, ${result.status.closed} closed\n`);
 }
 
 // ── Headless Commands ────────────────────────────────────────
@@ -2920,8 +2920,8 @@ async function waitForCompletion(
       readyTasks = readyTasks.filter((t) => t.config.workflowId === workflowId);
     }
     const settledStatuses = waitForApproval
-      ? ['completed', 'failed', 'needs_input', 'blocked', 'stale']
-      : ['completed', 'failed', 'needs_input', 'awaiting_approval', 'review_ready', 'blocked', 'stale'];
+      ? ['completed', 'failed', 'closed', 'needs_input', 'blocked', 'stale']
+      : ['completed', 'failed', 'closed', 'needs_input', 'awaiting_approval', 'review_ready', 'blocked', 'stale'];
     const allSettled = tasks.every((t) => settledStatuses.includes(t.status));
     if (allSettled && !hasBackgroundWork?.()) return;
     // Also settle if nothing is running and at least one task awaits human action.
