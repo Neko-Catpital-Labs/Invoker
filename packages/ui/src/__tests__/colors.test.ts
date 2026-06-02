@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { getStatusColor, getStatusInlineColors, matchesStatusFilter } from '../lib/colors.js';
+import { getStatusColor, getStatusInlineColors, matchesStatusFilter, formatStatusLabel } from '../lib/colors.js';
 import { getStatusVisual, STATUS_VISUALS } from '../lib/status-colors.js';
 import type { TaskStatus } from '../types.js';
 
@@ -77,6 +77,32 @@ describe('getStatusColor', () => {
     expect(colors.bg).toBe(defaultColors.bg);
   });
 
+  it('includes closed in every status color map', () => {
+    expect(STATUS_VISUALS).toHaveProperty('closed');
+
+    const closed = getStatusColor('closed');
+    expect(closed.bg.length).toBeGreaterThan(0);
+    expect(closed.border.length).toBeGreaterThan(0);
+    expect(closed.text.length).toBeGreaterThan(0);
+    expect(closed.dot.length).toBeGreaterThan(0);
+
+    // Closed must resolve to its own visual, not the pending/default fallback.
+    const pending = getStatusColor('pending');
+    expect(closed.dot).not.toBe(pending.dot);
+    expect(getStatusInlineColors('closed')).toEqual(getStatusVisual('closed').inline);
+  });
+
+  it('keeps closed visually distinct from failed and review_ready', () => {
+    const closed = getStatusColor('closed');
+    const failed = getStatusColor('failed');
+    const reviewReady = getStatusColor('review_ready');
+
+    expect(closed.border).not.toBe(failed.border);
+    expect(closed.dot).not.toBe(failed.dot);
+    expect(closed.border).not.toBe(reviewReady.border);
+    expect(closed.dot).not.toBe(reviewReady.dot);
+  });
+
   it('uses shared urgency color for fix and input states while keeping approval distinct', () => {
     const fixingWithAI = getStatusColor('fixing_with_ai');
     const needsInput = getStatusColor('needs_input');
@@ -86,6 +112,19 @@ describe('getStatusColor', () => {
     expect(fixingWithAI.border).toBe(needsInput.border);
     expect(awaitingApproval.dot).not.toBe(needsInput.dot);
     expect(awaitingApproval.border).not.toBe(needsInput.border);
+  });
+});
+
+describe('formatStatusLabel', () => {
+  it('formats closed as "Closed"', () => {
+    expect(formatStatusLabel('closed')).toBe('Closed');
+  });
+
+  it('keeps closed label distinct from failed and review_ready labels', () => {
+    expect(formatStatusLabel('closed')).not.toBe(formatStatusLabel('failed'));
+    expect(formatStatusLabel('closed')).not.toBe(formatStatusLabel('review_ready'));
+    expect(formatStatusLabel('failed')).toBe('Failed');
+    expect(formatStatusLabel('review_ready')).toBe('Review Ready');
   });
 });
 
