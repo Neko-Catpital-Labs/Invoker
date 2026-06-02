@@ -1557,4 +1557,25 @@ test.describe('Visual proof capture', () => {
     await expect(miniDag.locator('.react-flow__node[data-testid$="task-beta"]')).toBeVisible();
     await captureScreenshot(page, 'task-graph-keyboard-controls-selected');
   });
+
+  test('graph-viewport-one-shot-centering — main graph and selected mini DAG share the viewport', async ({ page }) => {
+    // Viewport ownership moved to one-shot navigation requests: after the initial
+    // render the main workflow graph and the selected workflow mini DAG must stay
+    // put so manual pan/zoom is not overridden by repeated auto-centering. Render
+    // both surfaces from a non-empty graph and capture them together as proof.
+    const workflowId = await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+
+    // Main workflow graph surface: the selected workflow node is visible.
+    const mainGraph = page.getByTestId('workflow-graph-react-flow');
+    await expect(mainGraph).toBeVisible();
+    await expect(workflowNode(page, workflowId)).toBeVisible();
+
+    // Selected workflow mini DAG surface: task nodes are visible alongside it.
+    const miniDag = page.getByTestId('selected-workflow-mini-dag');
+    await expect(miniDag).toBeVisible();
+    await expect(miniDag.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
+    await expect(miniDag.locator('.react-flow__node[data-testid$="task-beta"]')).toBeVisible();
+
+    await captureScreenshot(page, 'graph-viewport-one-shot-centering');
+  });
 });
