@@ -41,6 +41,7 @@ export function ContextMenu({
   onClose,
 }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
+  const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [position, setPosition] = useState({ left: x, top: y });
   const [showMore, setShowMore] = useState(false);
@@ -70,6 +71,13 @@ export function ContextMenu({
       setFocusedIndex(firstEnabledIndex);
     }
   }, [firstEnabledIndex]);
+
+  // Roving focus: keep the DOM focus on the highlighted item so keyboard events
+  // dispatched from the document / active element reach onKeyDown below. Without
+  // this the menu never owns focus and Arrow/Enter/Space are silently dropped.
+  useEffect(() => {
+    itemRefs.current[focusedIndex]?.focus();
+  }, [focusedIndex]);
 
   // Viewport clamping: flip if menu overflows bottom or right
   useLayoutEffect(() => {
@@ -233,8 +241,12 @@ export function ContextMenu({
             {item.separator === 'task' && renderSeparator('Task')}
             {item.separator === 'danger' && renderSeparator('Danger')}
             <button
+              ref={(el) => {
+                itemRefs.current[idx] = el;
+              }}
               role="menuitem"
               aria-disabled={!item.enabled}
+              tabIndex={isFocused ? 0 : -1}
               className={`w-full text-left px-3 py-1.5 text-sm ${getVariantClasses(
                 item.variant,
                 item.enabled

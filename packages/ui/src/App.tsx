@@ -10,6 +10,7 @@
  */
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect } from 'react';
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import yaml from 'js-yaml';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
 import type { ActionGraphNode, TerminalSessionDescriptor } from '@invoker/contracts';
@@ -82,6 +83,13 @@ function normalizedSearchText(value: string | undefined): string {
   return (value ?? '').toLowerCase();
 }
 
+interface WorkflowMenuItem {
+  key: string;
+  label: string;
+  className: string;
+  activate: () => void;
+}
+
 interface WorkflowContextMenuProps {
   x: number;
   y: number;
@@ -114,8 +122,10 @@ function WorkflowContextMenu({
   onClose,
 }: WorkflowContextMenuProps): JSX.Element {
   const menuRef = useRef<HTMLDivElement>(null);
+  const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [position, setPosition] = useState({ left: x, top: y });
   const [showMore, setShowMore] = useState(false);
+  const [focusedIndex, setFocusedIndex] = useState(0);
 
   useLayoutEffect(() => {
     if (!menuRef.current) return;
@@ -172,6 +182,70 @@ function WorkflowContextMenu({
 
   const buttonClass = 'w-full px-3 py-1.5 text-left text-sm text-gray-100 hover:bg-gray-700';
   const dangerButtonClass = 'w-full px-3 py-1.5 text-left text-sm text-red-300 hover:bg-gray-700';
+  const moreButtonClass = 'w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-gray-700';
+
+  // Flat, ordered list of keyboard-navigable items. The "More" disclosure is
+  // itself navigable; activating it swaps the danger actions in place.
+  const baseItems: WorkflowMenuItem[] = [
+    { key: 'open-workflow', label: 'Open Workflow', className: buttonClass, activate: () => runAction(onOpenWorkflow) },
+    { key: 'open-pr', label: 'Open PR', className: buttonClass, activate: () => runAction(onOpenPr) },
+    { key: 'retry-workflow', label: 'Retry Workflow', className: buttonClass, activate: () => runAction(onRetryWorkflow) },
+    { key: 'copy-workflow-id', label: 'Copy Workflow ID', className: buttonClass, activate: () => runAction(onCopyWorkflowId) },
+  ];
+  const moreItems: WorkflowMenuItem[] = [
+    { key: 'rebase-retry', label: 'Rebase and Retry', className: buttonClass, activate: () => runAction(onRebaseRetry) },
+    { key: 'rebase-recreate', label: 'Rebase and Recreate', className: dangerButtonClass, activate: () => runAction(onRebaseRecreate) },
+    { key: 'recreate-workflow', label: 'Recreate Workflow', className: dangerButtonClass, activate: () => runAction(onRecreateWorkflow) },
+    { key: 'cancel-workflow', label: 'Cancel Workflow', className: dangerButtonClass, activate: () => runAction(onCancelWorkflow) },
+    { key: 'delete-workflow', label: 'Delete Workflow', className: dangerButtonClass, activate: () => runAction(onDeleteWorkflow) },
+  ];
+  const expandItem: WorkflowMenuItem = {
+    key: 'more',
+    label: 'More',
+    className: moreButtonClass,
+    activate: () => {
+      setShowMore(true);
+      setFocusedIndex(baseItems.length);
+    },
+  };
+  const tailItems: WorkflowMenuItem[] = showMore ? moreItems : [expandItem];
+  const navItems: WorkflowMenuItem[] = [...baseItems, ...tailItems];
+
+  // Roving focus: keep the DOM focus on the active item so keyboard events
+  // dispatched from the document / active element reach onKeyDown below. Without
+  // this the menu never owns focus and Arrow/Enter/Space are silently dropped.
+  useEffect(() => {
+    itemRefs.current[focusedIndex]?.focus();
+  }, [focusedIndex, showMore]);
+
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setFocusedIndex((prev) => (prev + 1) % navItems.length);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setFocusedIndex((prev) => (prev - 1 + navItems.length) % navItems.length);
+    } else if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      navItems[focusedIndex]?.activate();
+    }
+  };
+
+  const renderItem = (item: WorkflowMenuItem, index: number) => (
+    <button
+      key={item.key}
+      ref={(el) => {
+        itemRefs.current[index] = el;
+      }}
+      role="menuitem"
+      tabIndex={focusedIndex === index ? 0 : -1}
+      onClick={item.activate}
+      onMouseEnter={() => setFocusedIndex(index)}
+      className={`${item.className}${focusedIndex === index ? ' bg-gray-700' : ''}`}
+    >
+      {item.label}
+    </button>
+  );
 
   return (
     <div
@@ -180,51 +254,12 @@ function WorkflowContextMenu({
       className="fixed z-50 min-w-[200px] rounded-lg border border-gray-600 bg-gray-800 py-1 shadow-xl"
       style={{ left: position.left, top: position.top }}
       tabIndex={-1}
+      onKeyDown={handleKeyDown}
       onClick={(event) => event.stopPropagation()}
     >
-      <button role="menuitem" onClick={() => runAction(onOpenWorkflow)} className={buttonClass}>
-        Open Workflow
-      </button>
-      <button role="menuitem" onClick={() => runAction(onOpenPr)} className={buttonClass}>
-        Open PR
-      </button>
-      <button role="menuitem" onClick={() => runAction(onRetryWorkflow)} className={buttonClass}>
-        Retry Workflow
-      </button>
-      <button role="menuitem" onClick={() => runAction(onCopyWorkflowId)} className={buttonClass}>
-        Copy Workflow ID
-      </button>
-      {!showMore ? (
-        <div>
-          <div className="my-1 border-t border-gray-600" />
-          <button
-            role="menuitem"
-            className="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-gray-700"
-            onClick={() => setShowMore(true)}
-          >
-            More
-          </button>
-        </div>
-      ) : (
-        <div>
-          <div className="my-1 border-t border-gray-600" />
-          <button role="menuitem" onClick={() => runAction(onRebaseRetry)} className={buttonClass}>
-            Rebase and Retry
-          </button>
-          <button role="menuitem" onClick={() => runAction(onRebaseRecreate)} className={dangerButtonClass}>
-            Rebase and Recreate
-          </button>
-          <button role="menuitem" onClick={() => runAction(onRecreateWorkflow)} className={dangerButtonClass}>
-            Recreate Workflow
-          </button>
-          <button role="menuitem" onClick={() => runAction(onCancelWorkflow)} className={dangerButtonClass}>
-            Cancel Workflow
-          </button>
-          <button role="menuitem" onClick={() => runAction(onDeleteWorkflow)} className={dangerButtonClass}>
-            Delete Workflow
-          </button>
-        </div>
-      )}
+      {baseItems.map((item, idx) => renderItem(item, idx))}
+      <div className="my-1 border-t border-gray-600" />
+      {tailItems.map((item, offset) => renderItem(item, baseItems.length + offset))}
     </div>
   );
 }

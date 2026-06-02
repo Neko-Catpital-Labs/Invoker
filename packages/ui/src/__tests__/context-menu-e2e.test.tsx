@@ -159,3 +159,121 @@ describe('Context menu (component)', () => {
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
 });
+
+/**
+ * Regression: keyboard navigation + activation inside an OPEN context menu.
+ *
+ * A local repro proved that opening a workflow context menu, pressing ArrowDown
+ * three times, and pressing Enter did NOT call navigator.clipboard.writeText('wf-1')
+ * — the menu never owned DOM focus, so key events dispatched from the document /
+ * active element were silently dropped. These tests render the real App + menu
+ * components and dispatch keyboard events from the active keyboard target, so they
+ * fail on the pre-fix (no roving-focus / no keyboard handler) behavior.
+ */
+describe('Context menu keyboard navigation (regression)', () => {
+  let mock: MockInvoker;
+
+  beforeEach(() => {
+    mock = createMockInvoker();
+    mock.install();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: vi.fn(async () => undefined) },
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    mock.cleanup();
+  });
+
+  async function setup() {
+    render(<App />);
+    act(() => mock.setTasks([alpha, beta, merge], workflows));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-wf-1')).toBeInTheDocument();
+    });
+  }
+
+  // Dispatch a key from whatever the document considers the active keyboard
+  // target, mirroring how a real keypress is delivered after the menu opens.
+  function pressActiveKey(key: string) {
+    const target = (document.activeElement as HTMLElement | null) ?? document.body;
+    fireEvent.keyDown(target, { key });
+  }
+
+  async function openWorkflowMenu() {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    await screen.findByRole('menu');
+    // The menu auto-focuses its first item once it mounts.
+    await waitFor(() => expect(screen.getByText('Open Workflow')).toHaveFocus());
+  }
+
+  async function openTaskMenu() {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    await screen.findByText('Open Terminal');
+    // Pending task → "Restart Task" is the first enabled item and takes focus.
+    await waitFor(() => expect(screen.getByText('Restart Task')).toHaveFocus());
+  }
+
+  it('ArrowDown x3 + Enter activates the 4th workflow item (Copy Workflow ID)', async () => {
+    await openWorkflowMenu();
+
+    pressActiveKey('ArrowDown');
+    pressActiveKey('ArrowDown');
+    pressActiveKey('ArrowDown');
+    pressActiveKey('Enter');
+
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('ArrowUp from the first item wraps deterministically to the last item', async () => {
+    await openWorkflowMenu();
+
+    // Items: Open Workflow, Open PR, Retry Workflow, Copy Workflow ID, More.
+    pressActiveKey('ArrowUp');
+    await waitFor(() => expect(screen.getByText('More')).toHaveFocus());
+
+    // A second ArrowUp steps to the item just above "More".
+    pressActiveKey('ArrowUp');
+    await waitFor(() => expect(screen.getByText('Copy Workflow ID')).toHaveFocus());
+  });
+
+  it('Space activates the highlighted workflow item just like Enter', async () => {
+    await openWorkflowMenu();
+
+    pressActiveKey('ArrowDown');
+    pressActiveKey('ArrowDown');
+    pressActiveKey('ArrowDown');
+    pressActiveKey(' ');
+
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('ArrowDown + Enter activates the next enabled task action in the mini DAG', async () => {
+    await openTaskMenu();
+
+    // Restart Task (focused) → ArrowDown → Open Terminal → Enter.
+    pressActiveKey('ArrowDown');
+    pressActiveKey('Enter');
+
+    await waitFor(() => expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'));
+  });
+
+  it('Space activates the highlighted task action just like Enter', async () => {
+    await openTaskMenu();
+
+    pressActiveKey('ArrowDown');
+    pressActiveKey(' ');
+
+    await waitFor(() => expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'));
+  });
+});
