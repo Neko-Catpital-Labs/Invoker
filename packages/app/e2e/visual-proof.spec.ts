@@ -592,6 +592,35 @@ test.describe('Visual proof capture', () => {
     await assertPageScreenshot(page, 'context-menu-danger-separator-fallback');
   });
 
+  test('recreate-downstream-context-menu — task danger section exposes Recreate Downstream', async ({ page }) => {
+    // A completed, workflow-scoped task surfaces the danger section's recreate
+    // actions. This proves the "Recreate Downstream" action is reachable from
+    // the task context menu, beside the pre-existing "Recreate from Task".
+    await loadPlan(page, TEST_PLAN);
+    await injectTaskStates(page, [
+      {
+        taskId: 'task-alpha',
+        changes: {
+          status: 'completed',
+          execution: {
+            startedAt: new Date(Date.now() - 8000),
+            completedAt: new Date(),
+          },
+        },
+      },
+    ]);
+
+    const menu = await openContextMenu(page, page.locator('.react-flow__node[data-testid$="task-alpha"]'));
+    await page.getByRole('menuitem', { name: 'More' }).click();
+
+    // Both recreate actions live in the task danger section; assert ordering so
+    // the captured proof shows the new action beside the existing one.
+    await expect(page.getByRole('menuitem', { name: 'Recreate from Task' })).toBeVisible();
+    await expect(menu.getByRole('menuitem', { name: 'Recreate Downstream' })).toBeVisible();
+
+    await captureScreenshot(page, 'recreate-downstream-context-menu');
+  });
+
   test('context menu dismisses on outside left-click even when bubbling is stopped', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     await injectTaskStates(page, [
