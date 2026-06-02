@@ -4968,12 +4968,33 @@ export class Orchestrator {
     let removedDependency = false;
     for (const task of targetTasks) {
       const deps = task.config.externalDependencies ?? [];
+      const removedDeps = deps.filter((dep) => dep.workflowId === upstreamWorkflowId);
+      if (removedDeps.length === 0) continue;
       const nextDeps = deps.filter((dep) => dep.workflowId !== upstreamWorkflowId);
-      if (nextDeps.length === deps.length) continue;
 
       removedDependency = true;
+
+      // Preserve read-only provenance of the detached edge(s) so the UI can tell
+      // an explicitly detached workflow apart from a genuinely independent one.
+      // The active externalDependencies entry is still removed, so scheduling and
+      // blocker behavior are unchanged. Dedup against existing provenance by the
+      // (workflowId, taskId) edge identity so repeated detach attempts and
+      // sync/reload cycles never introduce duplicate entries.
+      const detachedAt = workflowTimestamp().toISOString();
+      const existingProvenance = task.config.detachedExternalDependencies ?? [];
+      const newProvenance = removedDeps.filter(
+        (dep) => !existingProvenance.some(
+          (prev) => prev.workflowId === dep.workflowId && prev.taskId === dep.taskId,
+        ),
+      ).map((dep) => ({ ...dep, detachedAt }));
+
       const changes: TaskStateChanges = {
-        config: { externalDependencies: nextDeps.length > 0 ? nextDeps : undefined },
+        config: {
+          externalDependencies: nextDeps.length > 0 ? nextDeps : undefined,
+          ...(newProvenance.length > 0
+            ? { detachedExternalDependencies: [...existingProvenance, ...newProvenance] }
+            : {}),
+        },
       };
       const updated = this.writeAndSync(task.id, changes);
       this.persistence.logEvent?.(task.id, 'task.external_dependency_detached', {

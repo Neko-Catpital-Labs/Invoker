@@ -47,6 +47,12 @@ export interface TaskConfig {
   readonly executionAgent?: string;
   /** Cross-workflow prerequisites for this task. */
   readonly externalDependencies?: readonly ExternalDependency[];
+  /**
+   * Read-only provenance of external dependencies removed by `detachWorkflow`.
+   * Never used for scheduling — lets the UI distinguish an explicitly detached
+   * workflow from a genuinely independent one.
+   */
+  readonly detachedExternalDependencies?: readonly DetachedExternalDependency[];
 }
 
 export interface ExternalDependency {
@@ -56,6 +62,15 @@ export interface ExternalDependency {
   readonly requiredStatus: 'completed';
   /** review_ready (default): merge gate review_ready/awaiting_approval/completed count as satisfied. completed: strict — only 'completed' satisfies. */
   readonly gatePolicy?: 'completed' | 'review_ready';
+}
+
+/**
+ * Provenance for an external dependency removed by `detachWorkflow`. Read-only;
+ * never used for scheduling.
+ */
+export interface DetachedExternalDependency extends ExternalDependency {
+  /** ISO-8601 timestamp recorded when the edge was detached. */
+  readonly detachedAt: string;
 }
 
 // ── Task Execution (runtime state) ─────────────────────────

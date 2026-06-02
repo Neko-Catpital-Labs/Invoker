@@ -44,6 +44,13 @@ export interface BaseTaskConfig {
   readonly executionAgent?: string;
   /** Cross-workflow prerequisites for this task. */
   readonly externalDependencies?: readonly ExternalDependency[];
+  /**
+   * Read-only provenance of external dependencies that were removed by
+   * `detachWorkflow`. This is never consulted for scheduling or blocker
+   * evaluation — its sole purpose is letting the UI distinguish a genuinely
+   * independent workflow from one explicitly detached from an upstream edge.
+   */
+  readonly detachedExternalDependencies?: readonly DetachedExternalDependency[];
   /** Execution pool identifier for shared queue/drain scheduling across substrates. */
   readonly poolId?: string;
   /** Legacy direct SSH pool member selection used by editable runner controls. */
@@ -94,6 +101,17 @@ export interface ExternalDependency {
   readonly requiredStatus: 'completed';
   /** review_ready (default): merge gate review_ready/awaiting_approval/completed count as satisfied. completed: strict — only 'completed' satisfies. */
   readonly gatePolicy?: 'completed' | 'review_ready';
+}
+
+/**
+ * Provenance for an external dependency removed by `detachWorkflow`. Carries
+ * the full upstream edge metadata (workflow id, optional task selector,
+ * required status, gate policy) plus the moment it was detached, so the UI can
+ * render who/what was detached. Read-only: never used for scheduling.
+ */
+export interface DetachedExternalDependency extends ExternalDependency {
+  /** ISO-8601 timestamp recorded when the edge was detached. */
+  readonly detachedAt: string;
 }
 
 // ── Task Execution (runtime state) ─────────────────────────
