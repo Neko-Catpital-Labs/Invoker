@@ -398,6 +398,29 @@ describe('headless-client', () => {
     ).rejects.toThrow(/requires a running shared owner process/);
   }, 30_000);
 
+  it('delegates recreate-downstream as a mutating command to a standalone-capable owner', async () => {
+    const bus = new LocalBus();
+    const ownerHandler = vi.fn(async () => ({ ok: true }));
+    bus.onRequest('headless.exec', ownerHandler);
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'standalone' }));
+
+    const runElectronHeadless = vi.fn(async () => 0);
+
+    const exitCode = await runHeadlessClientCommand(['recreate-downstream', 'wf-1/task-1', '--no-track'], {
+      messageBus: bus,
+      ensureStandaloneOwner: vi.fn(async () => {}),
+      runElectronHeadless,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(ownerHandler).toHaveBeenCalledTimes(1);
+    expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
+      args: ['recreate-downstream', 'wf-1/task-1'],
+      noTrack: true,
+    }));
+    expect(runElectronHeadless).not.toHaveBeenCalled();
+  });
+
   it('delegates query queue to a reachable owner endpoint', async () => {
     const bus = new LocalBus();
     bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));

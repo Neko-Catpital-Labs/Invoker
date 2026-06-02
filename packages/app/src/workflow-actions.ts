@@ -260,6 +260,13 @@ export function recreateTask(
   return deps.orchestrator.recreateTask(taskId);
 }
 
+export function recreateDownstream(
+  taskId: string,
+  deps: Pick<ActionDeps, 'orchestrator'>,
+): TaskState[] {
+  return deps.orchestrator.recreateDownstream(taskId);
+}
+
 export function cancelWorkflow(
   workflowId: string,
   deps: Pick<ActionDeps, 'orchestrator'>,

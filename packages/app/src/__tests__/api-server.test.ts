@@ -98,6 +98,7 @@ function createMocks() {
       setFixAwaitingApproval: vi.fn(),
       retryTask: vi.fn(() => [makeTask()]),
       recreateTask: vi.fn(() => [makeTask()]),
+      recreateDownstream: vi.fn(() => [makeTask()]),
       retryWorkflow: vi.fn(() => [makeTask()]),
       recreateWorkflow: vi.fn(() => [makeTask()]),
       editTaskCommand: vi.fn(() => [makeTask()]),
@@ -161,6 +162,13 @@ function createMocks() {
           return { ok: true, data: mocks.orchestrator.recreateTask(envelope.payload.taskId) };
         } catch (err) {
           return { ok: false, error: { code: 'RECREATE_TASK_FAILED', message: (err as Error).message } };
+        }
+      }),
+      recreateDownstream: vi.fn(async (envelope: { payload: { taskId: string } }) => {
+        try {
+          return { ok: true, data: mocks.orchestrator.recreateDownstream(envelope.payload.taskId) };
+        } catch (err) {
+          return { ok: false, error: { code: 'RECREATE_DOWNSTREAM_FAILED', message: (err as Error).message } };
         }
       }),
       retryWorkflow: vi.fn(async (envelope: { payload: { workflowId: string } }) => {
@@ -256,6 +264,8 @@ beforeEach(() => {
   mocks.orchestrator.getTask.mockImplementation((id: string) => (id === 'task-1' ? makeTask() : undefined));
   mocks.orchestrator.approve.mockResolvedValue([]);
   mocks.orchestrator.retryTask.mockReturnValue([makeTask()]);
+  mocks.orchestrator.recreateTask.mockReturnValue([makeTask()]);
+  mocks.orchestrator.recreateDownstream.mockReturnValue([makeTask()]);
   mocks.orchestrator.beginConflictResolution.mockReturnValue({ savedError: 'saved-error' });
   mocks.orchestrator.editTaskCommand.mockReturnValue([makeTask()]);
   mocks.orchestrator.editTaskPrompt.mockReturnValue([makeTask()]);
@@ -461,6 +471,31 @@ describe('POST /api/tasks/:id/restart', () => {
     expect(res.status).toBe(200);
     expect(mocks.taskExecutor.executeTasks).toHaveBeenCalledTimes(1);
     expect(mocks.taskExecutor.executeTasks).toHaveBeenCalledWith([scoped]);
+  });
+});
+
+describe('POST /api/tasks/:id/recreate-downstream', () => {
+  it('routes through commandService.recreateDownstream and not recreateTask', async () => {
+    const res = await request(port, 'POST', '/api/tasks/task-1/recreate-downstream');
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.action).toBe('recreated_downstream');
+    expect(mocks.commandService.recreateDownstream).toHaveBeenCalledTimes(1);
+    expect(mocks.commandService.recreateDownstream).toHaveBeenCalledWith(
+      expect.objectContaining({ payload: { taskId: 'task-1' } }),
+    );
+    expect(mocks.orchestrator.recreateDownstream).toHaveBeenCalledWith('task-1');
+    expect(mocks.commandService.recreateTask).not.toHaveBeenCalled();
+    expect(mocks.orchestrator.recreateTask).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 with the underlying error message on failure', async () => {
+    mocks.orchestrator.recreateDownstream.mockImplementation(() => {
+      throw new Error('downstream reset failed');
+    });
+    const res = await request(port, 'POST', '/api/tasks/task-1/recreate-downstream');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('downstream reset failed');
   });
 });
 

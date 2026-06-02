@@ -40,6 +40,7 @@ describe('headless-command-classification', () => {
     expect(isHeadlessMutatingCommand(['run'])).toBe(true);
     expect(isHeadlessMutatingCommand(['migrate-compat'])).toBe(true);
     expect(isHeadlessMutatingCommand(['cancel-workflow'])).toBe(true);
+    expect(isHeadlessMutatingCommand(['recreate-downstream'])).toBe(true);
     expect(isHeadlessMutatingCommand(['set', 'prompt'])).toBe(true);
     expect(isHeadlessMutatingCommand(['set', 'agent'])).toBe(true);
     expect(isHeadlessMutatingCommand(['set', 'fix-context'])).toBe(true);
