@@ -1641,9 +1641,13 @@ export class Orchestrator {
           });
           return [];
         }
+        // Lineage validation is per-field: an attempt id (checked above) and an
+        // execution generation are validated independently so older producers that
+        // omit one field stay compatible. When BOTH are present, both must match —
+        // a response carrying the live attempt id but a stale generation is still
+        // stale and must be rejected.
         const activeGeneration = this.getExecutionGeneration(earlyTask);
         if (
-          !response.attemptId &&
           response.executionGeneration !== undefined &&
           response.executionGeneration !== activeGeneration
         ) {
