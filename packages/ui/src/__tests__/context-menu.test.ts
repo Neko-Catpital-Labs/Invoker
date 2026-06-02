@@ -1,6 +1,13 @@
-import { describe, it, expect } from 'vitest';
+import { createElement } from 'react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import type { TaskState } from '../types.js';
 import { getMenuItems } from '../lib/context-menu-items.js';
+import { WorkflowContextMenu } from '../components/WorkflowContextMenu.js';
+
+afterEach(() => {
+  cleanup();
+});
 
 function makeTask(overrides: Partial<TaskState> & { workflowId?: string; isMergeNode?: boolean } = {}): TaskState {
   const { workflowId, isMergeNode, ...rest } = overrides;
@@ -122,6 +129,63 @@ describe('ContextMenu getMenuItems', () => {
       expect(recreateTask).toBeDefined();
       expect(recreateTask?.action).toBe('onRecreateTask');
     });
+
+    it('shows Recreate Downstream for workflow-owned tasks that are not running', () => {
+      const task = makeTask({ status: 'pending', workflowId: 'wf-1' });
+      const items = getMenuItems(task);
+
+      const recreateDownstream = items.find((item) => item.id === 'recreate-downstream');
+      expect(recreateDownstream).toBeDefined();
+      expect(recreateDownstream?.label).toBe('Recreate Downstream');
+      expect(recreateDownstream?.action).toBe('onRecreateDownstream');
+      expect(recreateDownstream?.variant).toBe('danger');
+      expect(recreateDownstream?.enabled).toBe(true);
+    });
+
+    it('hides Recreate Downstream for running and non-workflow tasks', () => {
+      const runningWorkflowTask = makeTask({ status: 'running', workflowId: 'wf-1' });
+      const standaloneTask = makeTask({ status: 'pending' });
+
+      expect(getMenuItems(runningWorkflowTask).find((item) => item.id === 'recreate-downstream')).toBeUndefined();
+      expect(getMenuItems(standaloneTask).find((item) => item.id === 'recreate-downstream')).toBeUndefined();
+    });
+
+    it('places Recreate Downstream immediately after Recreate from Task in the danger section', () => {
+      const task = makeTask({ status: 'failed', workflowId: 'wf-1' });
+      const items = getMenuItems(task);
+      const recreateTaskIndex = items.findIndex((item) => item.id === 'recreate-task');
+      const recreateDownstreamIndex = items.findIndex((item) => item.id === 'recreate-downstream');
+
+      expect(recreateTaskIndex).toBeGreaterThan(-1);
+      expect(recreateDownstreamIndex).toBe(recreateTaskIndex + 1);
+      expect(items[recreateDownstreamIndex].separator).toBeUndefined();
+      expect(items[recreateDownstreamIndex].variant).toBe('danger');
+    });
+  });
+
+  describe('Workflow context menu absence', () => {
+    it('does not show Recreate Downstream in workflow context menus', () => {
+      const noop = vi.fn();
+      render(createElement(WorkflowContextMenu, {
+        x: 0,
+        y: 0,
+        workflowId: 'wf-1',
+        onOpenWorkflow: noop,
+        onOpenPr: noop,
+        onRetryWorkflow: noop,
+        onRebaseRetry: noop,
+        onRebaseRecreate: noop,
+        onRecreateWorkflow: noop,
+        onCancelWorkflow: noop,
+        onDeleteWorkflow: noop,
+        onCopyWorkflowId: noop,
+        onClose: noop,
+      }));
+
+      expect(screen.queryByText('Recreate Downstream')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByText('More'));
+      expect(screen.queryByText('Recreate Downstream')).not.toBeInTheDocument();
+    });
   });
 
   describe('Restart visibility', () => {
@@ -226,7 +290,7 @@ describe('ContextMenu getMenuItems', () => {
       const task = makeTask({ status: 'failed', workflowId: 'wf-1' });
       const items = getMenuItems(task);
 
-      const dangerIds = ['cancel-task', 'recreate-task'];
+      const dangerIds = ['cancel-task', 'recreate-task', 'recreate-downstream'];
       dangerIds.forEach((id) => {
         const item = items.find((i) => i.id === id);
         expect(item?.variant).toBe('danger');

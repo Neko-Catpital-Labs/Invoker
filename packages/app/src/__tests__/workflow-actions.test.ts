@@ -12,6 +12,7 @@ import {
   bumpGenerationAndRecreate,
   recreateWorkflow,
   recreateTask,
+  recreateDownstream,
   cancelWorkflow,
   retryTask,
   retryWorkflow,
@@ -171,6 +172,23 @@ describe('recreateTask', () => {
         orchestrator: orchestrator as unknown as Orchestrator,
       }),
     ).toThrow('Task missing-task not found');
+  });
+});
+
+describe('recreateDownstream', () => {
+  it('delegates to orchestrator.recreateDownstream', () => {
+    const orchestrator = {
+      recreateDownstream: vi.fn(() => [makeRunningTask()]),
+      recreateTask: vi.fn(() => []),
+    };
+
+    const result = recreateDownstream('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+    });
+
+    expect(orchestrator.recreateDownstream).toHaveBeenCalledWith('task-a');
+    expect(orchestrator.recreateTask).not.toHaveBeenCalled();
+    expect(result).toHaveLength(1);
   });
 });
 
@@ -374,9 +392,10 @@ describe('rebaseRecreate', () => {
 // canonical lifecycle wrappers (or routing a new one through a
 // legacy compat layer like `restartTask`).
 describe('Step 17: app-layer wrappers expose the 5-cell lifecycle matrix', () => {
-  it('exports retryTask, recreateTask, retryWorkflow, recreateWorkflow, recreateWorkflowFromFreshBase', () => {
+  it('exports retryTask, recreateTask, recreateDownstream, retryWorkflow, recreateWorkflow, recreateWorkflowFromFreshBase', () => {
     expect(typeof retryTask).toBe('function');
     expect(typeof recreateTask).toBe('function');
+    expect(typeof recreateDownstream).toBe('function');
     expect(typeof retryWorkflow).toBe('function');
     expect(typeof recreateWorkflow).toBe('function');
     expect(typeof recreateWorkflowFromFreshBase).toBe('function');
@@ -386,6 +405,7 @@ describe('Step 17: app-layer wrappers expose the 5-cell lifecycle matrix', () =>
     const orchestrator = {
       retryTask: vi.fn(() => []),
       recreateTask: vi.fn(() => []),
+      recreateDownstream: vi.fn(() => []),
       retryWorkflow: vi.fn(() => []),
       recreateWorkflow: vi.fn(() => []),
       recreateWorkflowFromFreshBase: vi.fn(async () => []),
@@ -401,6 +421,7 @@ describe('Step 17: app-layer wrappers expose the 5-cell lifecycle matrix', () =>
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
     });
+    recreateDownstream('task-a', { orchestrator: orchestrator as unknown as Orchestrator });
     retryWorkflow('wf-1', { orchestrator: orchestrator as unknown as Orchestrator });
     recreateWorkflow('wf-1', {
       orchestrator: orchestrator as unknown as Orchestrator,
@@ -413,6 +434,7 @@ describe('Step 17: app-layer wrappers expose the 5-cell lifecycle matrix', () =>
 
     expect(orchestrator.retryTask).toHaveBeenCalledWith('task-a');
     expect(orchestrator.recreateTask).toHaveBeenCalledWith('task-a');
+    expect(orchestrator.recreateDownstream).toHaveBeenCalledWith('task-a');
     expect(orchestrator.retryWorkflow).toHaveBeenCalledWith('wf-1');
     expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
     expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(

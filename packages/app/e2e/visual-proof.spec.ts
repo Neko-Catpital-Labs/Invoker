@@ -934,6 +934,19 @@ test.describe('Visual proof capture', () => {
     await assertPageScreenshot(page, 'context-menu-danger-separator-fallback');
   });
 
+  test('recreate-downstream-context-menu — task menu exposes downstream recreate', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+
+    const menu = await openContextMenu(page, page.locator('.react-flow__node[data-testid$="task-alpha"]'));
+    await page.getByRole('menuitem', { name: 'More' }).click();
+
+    await expect(menu).toContainText('Recreate from Task');
+    await expect(menu).toContainText('Recreate Downstream');
+    await expect(page.getByRole('menuitem', { name: 'Recreate Downstream' })).toBeVisible();
+
+    await captureScreenshot(page, 'recreate-downstream-context-menu');
+  });
+
   test('context menu dismisses on outside left-click even when bubbling is stopped', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     await injectTaskStates(page, [
