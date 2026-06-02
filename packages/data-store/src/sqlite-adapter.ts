@@ -1720,6 +1720,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
   deleteAllTasks(workflowId: string): void {
     const taskIds = this.getTaskIdsForWorkflow(workflowId);
     this.runTransaction(() => {
+      this.db.run('DELETE FROM workflow_mutation_leases WHERE workflow_id = ?', [workflowId]);
+      this.db.run('DELETE FROM workflow_mutation_intents WHERE workflow_id = ?', [workflowId]);
+      this.db.run('DELETE FROM task_launch_dispatch WHERE workflow_id = ?', [workflowId]);
       this.db.run(`
         DELETE FROM events WHERE task_id IN (
           SELECT id FROM tasks WHERE workflow_id = ?
