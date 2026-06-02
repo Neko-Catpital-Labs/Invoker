@@ -29,6 +29,7 @@ import {
   retryWorkflow as sharedRetryWorkflow,
   recreateWorkflow as sharedRecreateWorkflow,
   recreateTask as sharedRecreateTask,
+  recreateDownstream as sharedRecreateDownstream,
   recreateWorkflowFromFreshBase as sharedRecreateWorkflowFromFreshBase,
   rebaseRetry as sharedRebaseRetry,
   rebaseRecreate as sharedRebaseRecreate,
@@ -173,6 +174,18 @@ export class WorkflowMutationFacade {
       }),
     );
     return this.finalizeWithTopup(started, 'facade.recreate-task', { scopedTaskIds: [taskId] });
+  }
+
+  async recreateDownstream(taskId: string): Promise<MutationResult> {
+    const started = await this.runViaCommandService(
+      'task',
+      taskId,
+      (cs) => cs.recreateDownstream(makeEnvelope('facade.recreate-downstream', 'surface', 'task', { taskId })),
+      () => sharedRecreateDownstream(taskId, {
+        orchestrator: this.deps.orchestrator,
+      }),
+    );
+    return this.finalizeWithTopup(started, 'facade.recreate-downstream', { scopedTaskIds: [taskId] });
   }
 
   async selectExperiment(taskId: string, experimentId: string): Promise<MutationResult> {

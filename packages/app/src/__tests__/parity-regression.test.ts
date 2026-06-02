@@ -92,6 +92,7 @@ function makeFacadeDeps(overrides: Partial<WorkflowMutationFacadeDeps> = {}): Wo
     orchestrator: {
       retryTask: vi.fn(() => [makeTask()]),
       recreateTask: vi.fn(() => [makeTask()]),
+      recreateDownstream: vi.fn(() => [makeTask()]),
       retryWorkflow: vi.fn(() => [makeTask()]),
       recreateWorkflow: vi.fn(() => [makeTask()]),
       cancelTask: vi.fn(() => ({ cancelled: ['task-1'], runningCancelled: ['task-1'] })),
@@ -157,6 +158,7 @@ describe('Parity: facade dispatch+topup lifecycle', () => {
   }> = [
     { name: 'retryTask', invoke: (f) => f.retryTask('task-1'), orchestratorMethod: 'retryTask' },
     { name: 'recreateTask', invoke: (f) => f.recreateTask('task-1'), orchestratorMethod: 'recreateTask' },
+    { name: 'recreateDownstream', invoke: (f) => f.recreateDownstream('task-1'), orchestratorMethod: 'recreateDownstream' },
     { name: 'editTaskCommand', invoke: (f) => f.editTaskCommand('task-1', 'echo ok'), orchestratorMethod: 'editTaskCommand' },
     { name: 'editTaskPrompt', invoke: (f) => f.editTaskPrompt('task-1', 'do it'), orchestratorMethod: 'editTaskPrompt' },
     { name: 'editTaskType', invoke: (f) => f.editTaskType('task-1', 'docker'), orchestratorMethod: 'editTaskType' },
@@ -303,6 +305,7 @@ describe('Parity: API endpoints wire to facade methods', () => {
         setFixAwaitingApproval: vi.fn(),
         retryTask: vi.fn(() => [makeTask()]),
         recreateTask: vi.fn(() => [makeTask()]),
+        recreateDownstream: vi.fn(() => [makeTask()]),
         editTaskCommand: vi.fn(() => [makeTask()]),
         editTaskPrompt: vi.fn(() => [makeTask()]),
         editTaskType: vi.fn(() => [makeTask()]),
@@ -495,10 +498,12 @@ describe('Parity: CommandService routes to correct orchestrator primitives', () 
       provideInput: vi.fn(),
       retryTask: vi.fn(() => [makeTask()]),
       recreateTask: vi.fn(() => [makeTask()]),
+      recreateDownstream: vi.fn(() => [makeTask()]),
       retryWorkflow: vi.fn(() => [makeTask()]),
       recreateWorkflow: vi.fn(() => [makeTask()]),
       recreateWorkflowFromFreshBase: vi.fn(() => []),
       cancelTask: vi.fn(() => ({ cancelled: ['task-1'], runningCancelled: [] })),
+      cancelDownstreamBeforeInvalidation: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
       cancelWorkflow: vi.fn(() => ({ cancelled: ['task-1'], runningCancelled: ['task-1'] })),
       deleteWorkflow: vi.fn(),
       detachWorkflow: vi.fn(),
@@ -537,6 +542,7 @@ describe('Parity: CommandService routes to correct orchestrator primitives', () 
     { name: 'approve', invoke: (cs) => cs.approve(envelope({ taskId: 'task-1' })), orchestratorMethod: 'approve' },
     { name: 'retryTask', invoke: (cs) => cs.retryTask(envelope({ taskId: 'task-1' })), orchestratorMethod: 'retryTask' },
     { name: 'recreateTask', invoke: (cs) => cs.recreateTask(envelope({ taskId: 'task-1' })), orchestratorMethod: 'recreateTask' },
+    { name: 'recreateDownstream', invoke: (cs) => cs.recreateDownstream(envelope({ taskId: 'task-1' })), orchestratorMethod: 'recreateDownstream' },
     { name: 'retryWorkflow', invoke: (cs) => cs.retryWorkflow(envelope({ workflowId: 'wf-1' })), orchestratorMethod: 'retryWorkflow' },
     { name: 'recreateWorkflow', invoke: (cs) => cs.recreateWorkflow(envelope({ workflowId: 'wf-1' })), orchestratorMethod: 'recreateWorkflow' },
     { name: 'recreateWorkflowFromFreshBase', invoke: (cs) => cs.recreateWorkflowFromFreshBase(envelope({ workflowId: 'wf-1' })), orchestratorMethod: 'recreateWorkflowFromFreshBase' },
@@ -617,6 +623,7 @@ describe('Parity: cross-surface mutation isolation', () => {
     deps = makeFacadeDeps();
     // Add extra methods to detect cross-contamination
     (deps.orchestrator as any).recreateTask = vi.fn(() => []);
+    (deps.orchestrator as any).recreateDownstream = vi.fn(() => []);
     (deps.orchestrator as any).recreateWorkflow = vi.fn(() => []);
     (deps.orchestrator as any).recreateWorkflowFromFreshBase = vi.fn(async () => []);
     facade = new WorkflowMutationFacade(deps);
@@ -636,6 +643,16 @@ describe('Parity: cross-surface mutation isolation', () => {
     await facade.recreateTask('task-1');
 
     expect((deps.orchestrator as any).recreateTask).toHaveBeenCalled();
+    expect(deps.orchestrator.retryTask).not.toHaveBeenCalled();
+    expect(deps.orchestrator.cancelTask).not.toHaveBeenCalled();
+    expect(deps.orchestrator.cancelWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('recreateDownstream does not trigger recreateTask, retryTask, or cancelTask', async () => {
+    await facade.recreateDownstream('task-1');
+
+    expect((deps.orchestrator as any).recreateDownstream).toHaveBeenCalled();
+    expect((deps.orchestrator as any).recreateTask).not.toHaveBeenCalled();
     expect(deps.orchestrator.retryTask).not.toHaveBeenCalled();
     expect(deps.orchestrator.cancelTask).not.toHaveBeenCalled();
     expect(deps.orchestrator.cancelWorkflow).not.toHaveBeenCalled();
