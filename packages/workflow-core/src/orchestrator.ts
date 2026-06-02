@@ -1641,9 +1641,16 @@ export class Orchestrator {
           });
           return [];
         }
+        // Generation lineage guard. A response is only accepted when its
+        // lineage still matches the live task. The attemptId check above and
+        // this generation check are independent: a response may carry the
+        // current attemptId but a stale executionGeneration (e.g. the task was
+        // re-executed under the same attempt), and must still be rejected.
+        // Backwards compatibility: older producers may omit one of the fields,
+        // so each guard only fires when its field is present. When both are
+        // present they must both match.
         const activeGeneration = this.getExecutionGeneration(earlyTask);
         if (
-          !response.attemptId &&
           response.executionGeneration !== undefined &&
           response.executionGeneration !== activeGeneration
         ) {
