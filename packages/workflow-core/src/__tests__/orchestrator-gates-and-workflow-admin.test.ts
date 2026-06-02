@@ -1311,6 +1311,118 @@ describe('Orchestrator', () => {
       ]);
     });
 
+    it('records read-only detached-dependency provenance while removing the active edge', () => {
+      const prevFixedNow = process.env.INVOKER_TEST_FIXED_NOW;
+      process.env.INVOKER_TEST_FIXED_NOW = '2026-06-02T08:57:38.000Z';
+      try {
+        orchestrator.loadPlan({
+          name: 'prov-upstream',
+          baseBranch: 'master',
+          featureBranch: 'feature/prov-upstream',
+          tasks: [{ id: 'verify-prov', description: 'upstream prerequisite' }],
+        });
+        const upstreamWfId = sid(orchestrator, 0, 'verify-prov').split('/')[0]!;
+
+        orchestrator.loadPlan({
+          name: 'prov-target',
+          baseBranch: 'feature/prov-upstream',
+          featureBranch: 'feature/prov-target',
+          tasks: [
+            {
+              id: 'wait-prov',
+              description: 'target waits on upstream',
+              externalDependencies: [
+                { workflowId: upstreamWfId, taskId: 'verify-prov', gatePolicy: 'completed' },
+              ],
+            },
+          ],
+        });
+        const targetTaskId = sid(orchestrator, 1, 'wait-prov');
+        const targetWfId = targetTaskId.split('/')[0]!;
+
+        const eventsBefore = persistence.events.length;
+        orchestrator.detachWorkflow(targetWfId, upstreamWfId);
+
+        const targetTask = orchestrator.getTask(targetTaskId)!;
+        // Active scheduling dependency is gone (blocker behavior unchanged)...
+        expect(targetTask.config.externalDependencies).toBeUndefined();
+        // ...but provenance preserves who/what was detached, read-only.
+        expect(targetTask.config.detachedExternalDependencies).toEqual([
+          {
+            workflowId: upstreamWfId,
+            taskId: 'verify-prov',
+            requiredStatus: 'completed',
+            gatePolicy: 'completed',
+            detachedAt: '2026-06-02T08:57:38.000Z',
+          },
+        ]);
+
+        // Existing audit events remain intact.
+        const newEvents = persistence.events.slice(eventsBefore);
+        expect(
+          newEvents.some((e) => e.taskId === targetTaskId && e.eventType === 'task.external_dependency_detached'),
+        ).toBe(true);
+        expect(newEvents.some((e) => e.eventType === 'task.workflow_detached')).toBe(true);
+      } finally {
+        if (prevFixedNow === undefined) delete process.env.INVOKER_TEST_FIXED_NOW;
+        else process.env.INVOKER_TEST_FIXED_NOW = prevFixedNow;
+      }
+    });
+
+    it('does not duplicate provenance when the dependency was already detached before (reload cycle)', () => {
+      orchestrator.loadPlan({
+        name: 'dup-upstream',
+        baseBranch: 'master',
+        featureBranch: 'feature/dup-upstream',
+        tasks: [{ id: 'verify-dup', description: 'upstream prerequisite' }],
+      });
+      const upstreamWfId = sid(orchestrator, 0, 'verify-dup').split('/')[0]!;
+
+      orchestrator.loadPlan({
+        name: 'dup-target',
+        baseBranch: 'feature/dup-upstream',
+        featureBranch: 'feature/dup-target',
+        tasks: [
+          {
+            id: 'wait-dup',
+            description: 'target waits on upstream',
+            externalDependencies: [{ workflowId: upstreamWfId, gatePolicy: 'review_ready' }],
+          },
+        ],
+      });
+      const targetTaskId = sid(orchestrator, 1, 'wait-dup');
+      const targetWfId = targetTaskId.split('/')[0]!;
+
+      // Simulate a prior detach whose provenance survived a sync/reload: the task
+      // already carries a provenance entry for this exact upstream edge.
+      persistence.updateTask(targetTaskId, {
+        config: {
+          detachedExternalDependencies: [
+            {
+              workflowId: upstreamWfId,
+              requiredStatus: 'completed',
+              gatePolicy: 'review_ready',
+              detachedAt: '2026-06-01T00:00:00.000Z',
+            },
+          ],
+        },
+      });
+
+      orchestrator.detachWorkflow(targetWfId, upstreamWfId);
+
+      const targetTask = orchestrator.getTask(targetTaskId)!;
+      expect(targetTask.config.externalDependencies).toBeUndefined();
+      // No duplicate: the pre-existing entry is preserved as-is, none appended.
+      expect(targetTask.config.detachedExternalDependencies).toEqual([
+        {
+          workflowId: upstreamWfId,
+          requiredStatus: 'completed',
+          gatePolicy: 'review_ready',
+          detachedAt: '2026-06-01T00:00:00.000Z',
+        },
+      ]);
+    });
+
     it('voids a running target workflow and its descendants back to pending without auto-starting them', () => {
       orchestrator.loadPlan({
         name: 'upstream-runtime',
