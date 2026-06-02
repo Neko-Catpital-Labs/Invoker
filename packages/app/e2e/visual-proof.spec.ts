@@ -911,6 +911,34 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'workflow-context-menu-organization');
   });
 
+  test('context menu keyboard navigation highlights the active workflow action', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+
+    const menu = await openContextMenu(page, page.locator('[data-testid^="workflow-node-"]'));
+    await expect(menu).toBeFocused();
+
+    const openWorkflowItem = page.getByRole('menuitem', { name: 'Open Workflow' });
+    const openPrItem = page.getByRole('menuitem', { name: 'Open PR' });
+    await expect(openWorkflowItem).toHaveClass(/(?:^|\s)bg-gray-700(?:\s|$)/);
+
+    await page.keyboard.press('ArrowDown');
+    await expect(openPrItem).toHaveClass(/(?:^|\s)bg-gray-700(?:\s|$)/);
+
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowDown');
+    const moreItem = page.getByRole('menuitem', { name: 'More' });
+    await expect(moreItem).toHaveClass(/(?:^|\s)bg-gray-700(?:\s|$)/);
+
+    await page.keyboard.press('Enter');
+    const rebaseRetryItem = page.getByRole('menuitem', { name: 'Rebase and Retry' });
+    await expect(rebaseRetryItem).toBeVisible();
+    await expect(rebaseRetryItem).toHaveClass(/(?:^|\s)bg-gray-700(?:\s|$)/);
+    await expect(menu).toBeFocused();
+
+    await captureScreenshot(page, 'context-menu-keyboard-navigation');
+  });
+
   test('context menu keeps danger separator when cancel action is absent', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     await injectTaskStates(page, [
