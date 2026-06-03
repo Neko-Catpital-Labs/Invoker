@@ -998,6 +998,7 @@ describe('POST /api/workflows/:id/detach', () => {
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.action).toBe('detached');
+    expect(res.body.provenanceField).toBe('detachedExternalDependencies');
     expect(mocks.detachWorkflow).toHaveBeenCalledWith('wf-1', 'wf-0');
   });
 
