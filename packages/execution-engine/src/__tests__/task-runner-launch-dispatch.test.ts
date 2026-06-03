@@ -194,6 +194,27 @@ describe('TaskRunner launch-dispatch wiring', () => {
     expect(env.executor.start).toHaveBeenCalled();
   });
 
+  it('does not recursively execute newly-started tasks when launched from the outbox', async () => {
+    const task = makeTask();
+    const child = makeTask({
+      id: 'wf-d/child',
+      description: 'child',
+      execution: { selectedAttemptId: 'child-attempt-1', generation: 0, phase: 'launching' },
+    });
+    const env = buildRunnerEnv(task);
+    env.orchestrator.handleWorkerResponse.mockReturnValue([child]);
+    const launchOutbox = makeLaunchOutbox();
+
+    const run = env.runner.executeTask(task, { dispatchId: 314, launchOutbox });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    env.triggerComplete();
+    await run;
+
+    expect(env.executor.start).toHaveBeenCalledTimes(1);
+    expect(env.executor.start.mock.calls[0]?.[0].actionId).toBe(task.id);
+    expect(launchOutbox.completeCalls).toEqual([314]);
+  });
+
   it('fails the dispatch and short-circuits when the attempt is already launching', async () => {
     const task = makeTask();
     const env = buildRunnerEnv(task, { startThrows: new Error('unused') });

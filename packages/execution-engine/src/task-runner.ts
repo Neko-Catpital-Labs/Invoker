@@ -447,6 +447,20 @@ export class TaskRunner {
     await Promise.all(tasks.map((task) => this.executeTask(task)));
   }
 
+  private executeNewlyStartedTasks(
+    tasks: TaskState[],
+    dispatchOpts?: LaunchDispatchOptions,
+  ): void {
+    if (tasks.length === 0) return;
+    if (dispatchOpts) {
+      this.logger.debug(
+        `[TaskRunner] durable launch outbox owns ${tasks.length} newly-started task(s); skipping recursive executeTasks`,
+      );
+      return;
+    }
+    void this.executeTasks(tasks);
+  }
+
   /**
    * Execute a single task through the executor pipeline.
    *
@@ -596,9 +610,7 @@ export class TaskRunner {
       };
       this.callbacks.onComplete?.(task.id, response);
       const newlyStarted = this.orchestrator.handleWorkerResponse(response) ?? [];
-      if (newlyStarted.length > 0) {
-        this.executeTasks(newlyStarted);
-      }
+      this.executeNewlyStartedTasks(newlyStarted, dispatchOpts);
     } finally {
       this.launchingAttemptIds.delete(attemptId);
       bench('executeTask.settled');
@@ -642,9 +654,7 @@ export class TaskRunner {
         },
       };
       const newlyStarted = this.orchestrator.handleWorkerResponse(response) ?? [];
-      if (newlyStarted.length > 0) {
-        this.executeTasks(newlyStarted);
-      }
+      this.executeNewlyStartedTasks(newlyStarted, dispatchOpts);
       // CD.1 / Issue 13: terminate the parent pivot task's outbox row.
       // Without this, drainScheduler enqueued a launch-dispatch row for
       // the pivot, but executeTaskInner returns here without ever
@@ -1139,10 +1149,7 @@ export class TaskRunner {
             this.callbacks.onComplete?.(task.id, normalizedResponse);
 
             const newlyStarted = this.orchestrator.handleWorkerResponse(normalizedResponse) ?? [];
-
-            if (newlyStarted.length > 0) {
-              this.executeTasks(newlyStarted);
-            }
+            this.executeNewlyStartedTasks(newlyStarted, dispatchOpts);
           } catch (err) {
             this.logger.error(`[TaskRunner] onComplete handler failed for task=${task.id}`, { err });
             const errResponse: WorkResponse = {

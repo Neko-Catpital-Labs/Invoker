@@ -2127,7 +2127,7 @@ async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDe
   const result = await deps.commandService.editTaskCommand(envelope);
   if (!result.ok) throw new Error(result.error.message);
   const runnable = result.data.filter(isDispatchableLaunch);
-  if (runnable.length > 0) {
+  if (runnable.length > 0 && deps.invokerConfig.launchOutboxMode !== 'active') {
     await taskExecutor.executeTasks(runnable);
   }
   process.stdout.write(`Edited task "${taskId}" command → "${newCommand}"\n`);
@@ -2161,7 +2161,7 @@ async function headlessEditPrompt(taskId: string, newPrompt: string, deps: Headl
   const result = await deps.commandService.editTaskPrompt(envelope);
   if (!result.ok) throw new Error(result.error.message);
   const runnable = result.data.filter(isDispatchableLaunch);
-  if (runnable.length > 0) {
+  if (runnable.length > 0 && deps.invokerConfig.launchOutboxMode !== 'active') {
     await taskExecutor.executeTasks(runnable);
   }
   process.stdout.write(`Edited task "${taskId}" prompt → "${newPrompt}"\n`);
@@ -2205,7 +2205,7 @@ async function headlessEditExecutor(
   const result = await deps.commandService.editTaskType(envelope);
   if (!result.ok) throw new Error(result.error.message);
   const runnable = result.data.filter(isDispatchableLaunch);
-  if (runnable.length > 0) {
+  if (runnable.length > 0 && deps.invokerConfig.launchOutboxMode !== 'active') {
     await taskExecutor.executeTasks(runnable);
   }
   process.stdout.write(
@@ -2243,7 +2243,7 @@ async function headlessEditAgent(taskId: string, agentName: string, deps: Headle
   const result = await deps.commandService.editTaskAgent(envelope);
   if (!result.ok) throw new Error(result.error.message);
   const runnable = result.data.filter(isDispatchableLaunch);
-  if (runnable.length > 0) {
+  if (runnable.length > 0 && deps.invokerConfig.launchOutboxMode !== 'active') {
     await taskExecutor.executeTasks(runnable);
   }
   process.stdout.write(`Edited task "${taskId}" agent → "${agentName}"\n`);

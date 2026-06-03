@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SQLiteAdapter } from '@invoker/data-store';
 import type { Logger } from '@invoker/contracts';
+import { InMemoryBus } from '@invoker/test-kit';
+import { Orchestrator } from '@invoker/workflow-core';
 import { LaunchDispatcher } from '../launch-dispatcher.js';
 
 function makeLogger(): Logger & {
@@ -556,7 +558,11 @@ describe('LaunchDispatcher', () => {
   });
 
   describe('active mode dispatch (CB.5)', () => {
-    function seedWorkflowAndTask(taskId: string, workflowId = 'wf-a') {
+    function seedWorkflowAndTask(
+      taskId: string,
+      workflowId = 'wf-a',
+      execution: Record<string, unknown> = {},
+    ) {
       adapter.saveWorkflow({
         id: workflowId,
         name: workflowId,
@@ -571,7 +577,7 @@ describe('LaunchDispatcher', () => {
         dependencies: [],
         createdAt: new Date(),
         config: { workflowId },
-        execution: {},
+        execution,
         taskStateVersion: 1,
       };
       adapter.saveTask(workflowId, task);
@@ -579,7 +585,10 @@ describe('LaunchDispatcher', () => {
     }
 
     it('active mode leases an enqueued row and hands it to the TaskRunner', () => {
-      const task = seedWorkflowAndTask('wf-a/t1');
+      const task = seedWorkflowAndTask('wf-a/t1', 'wf-a', {
+        selectedAttemptId: 'attempt-active-1',
+        generation: 0,
+      });
       const enq = adapter.enqueueLaunchDispatch({
         taskId: task.id,
         attemptId: 'attempt-active-1',
@@ -637,7 +646,10 @@ describe('LaunchDispatcher', () => {
         dependencies: [],
         createdAt: new Date(),
         config: { workflowId: 'wf-a' },
-        execution: {},
+        execution: {
+          selectedAttemptId: `attempt-multi-${id.at(-1)}`,
+          generation: 0,
+        },
         taskStateVersion: 1,
       } as any));
 
@@ -655,6 +667,92 @@ describe('LaunchDispatcher', () => {
       });
       dispatcher.poll();
       expect(executeTask).toHaveBeenCalledTimes(2);
+    });
+
+    it('active mode hydrates the workflow before treating a dispatch row as missing', () => {
+      const writer = new Orchestrator({
+        persistence: adapter as any,
+        messageBus: new InMemoryBus(),
+        maxConcurrency: 1,
+        deferRunningUntilLaunch: true,
+        launchOutboxMode: 'active',
+      });
+      writer.loadPlan({
+        name: 'cold-cache-dispatch',
+        tasks: [
+          {
+            id: 'alpha',
+            description: 'alpha',
+            command: 'echo alpha',
+          },
+        ],
+      });
+      const [started] = writer.startExecution();
+      expect(started).toBeDefined();
+
+      const cold = new Orchestrator({
+        persistence: adapter as any,
+        messageBus: new InMemoryBus(),
+        maxConcurrency: 1,
+        deferRunningUntilLaunch: true,
+        launchOutboxMode: 'active',
+      });
+      expect(cold.getTask(started!.id)).toBeUndefined();
+
+      const executeTask = vi.fn().mockResolvedValue(undefined);
+      const dispatcher = new LaunchDispatcher({
+        persistence: adapter,
+        ownerId: 'owner-a',
+        orchestrator: {
+          prepareTaskForNewAttempt: (taskId, reason) =>
+            cold.prepareTaskForNewAttempt(taskId, reason),
+          syncFromDb: (workflowId) => cold.syncFromDb(workflowId),
+          getTask: (taskId) => cold.getTask(taskId),
+        },
+        taskRunnerProvider: () => ({ executeTask }),
+        mode: 'active',
+        maxConcurrency: 1,
+      });
+
+      dispatcher.poll();
+
+      expect(cold.getTask(started!.id)).toBeDefined();
+      expect(executeTask).toHaveBeenCalledTimes(1);
+      expect(executeTask.mock.calls[0]?.[0].id).toBe(started!.id);
+      expect(adapter.loadLaunchDispatchById(1)?.lastError).toBeUndefined();
+    });
+
+    it('active mode retires a dispatch row when the selected attempt changed', () => {
+      const task = seedWorkflowAndTask('wf-a/t-stale', 'wf-a', {
+        selectedAttemptId: 'attempt-current',
+        generation: 1,
+      });
+      const enq = adapter.enqueueLaunchDispatch({
+        taskId: task.id,
+        attemptId: 'attempt-old',
+        workflowId: 'wf-a',
+        generation: 0,
+      });
+      const executeTask = vi.fn().mockResolvedValue(undefined);
+      const dispatcher = new LaunchDispatcher({
+        persistence: adapter,
+        ownerId: 'owner-a',
+        orchestrator: {
+          prepareTaskForNewAttempt: vi.fn(),
+          getTask: vi.fn().mockReturnValue(task as any),
+        },
+        taskRunnerProvider: () => ({ executeTask }),
+        mode: 'active',
+        maxConcurrency: 4,
+      });
+
+      dispatcher.poll();
+
+      expect(executeTask).not.toHaveBeenCalled();
+      const after = adapter.loadLaunchDispatchById(enq.id);
+      expect(after?.state).toBe('completed');
+      const events = adapter.getEvents(task.id);
+      expect(events.some((event) => event.eventType === 'task.launch_dispatch_superseded')).toBe(true);
     });
 
     it('active mode fails the dispatch when the orchestrator has no matching task', () => {
@@ -705,7 +803,10 @@ describe('LaunchDispatcher', () => {
     });
 
     it('active mode catches runner promise rejections via failDispatch backstop', async () => {
-      const task = seedWorkflowAndTask('wf-a/t-throw');
+      const task = seedWorkflowAndTask('wf-a/t-throw', 'wf-a', {
+        selectedAttemptId: 'attempt-throw',
+        generation: 0,
+      });
       const enq = adapter.enqueueLaunchDispatch({
         taskId: task.id,
         attemptId: 'attempt-throw',
