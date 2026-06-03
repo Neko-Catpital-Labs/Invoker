@@ -653,6 +653,14 @@ export function setTaskExternalGatePolicies(
   return deps.orchestrator.setTaskExternalGatePolicies(taskId, updates);
 }
 
+export function setWorkflowExternalGatePolicies(
+  workflowId: string,
+  updates: ExternalGatePolicyUpdate[],
+  deps: Pick<ActionDeps, 'orchestrator'>,
+): TaskState[] {
+  return deps.orchestrator.setWorkflowExternalGatePolicies(workflowId, updates);
+}
+
 export function selectExperiment(
   taskId: string,
   experimentId: string,
