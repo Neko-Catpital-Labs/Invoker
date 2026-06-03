@@ -4,12 +4,13 @@ export interface WorkflowGraphNode {
   id: string;
   name: string;
   workflow: WorkflowMeta;
+  detachedDependencyCount: number;
 }
 
 export interface WorkflowGraphEdge {
   source: string;
   target: string;
-  kind: 'active' | 'historical';
+  kind: 'active' | 'detached' | 'historical';
 }
 
 export interface WorkflowGraph {
@@ -27,17 +28,10 @@ export function deriveWorkflowGraph(
   workflows: Map<string, WorkflowMeta>,
   tasks: Map<string, TaskState>,
 ): WorkflowGraph {
-  const nodes: WorkflowGraphNode[] = [...workflows.values()].map((workflow) => ({
-    id: workflow.id,
-    name: workflow.name,
-    workflow,
-  }));
-
   const edgeKeys = new Set<string>();
   const edges: WorkflowGraphEdge[] = [];
   const missingDependencies = new Set<string>();
-
-  void tasks;
+  const detachedSourcesByTarget = new Map<string, Set<string>>();
 
   for (const workflow of workflows.values()) {
     const targetWorkflowId = workflow.id;
@@ -53,6 +47,31 @@ export function deriveWorkflowGraph(
       edgeKeys.add(key);
       edges.push({ source: sourceWorkflowId, target: targetWorkflowId, kind: 'active' });
     }
+  }
+
+  for (const task of [...tasks.values()].sort((a, b) => a.id.localeCompare(b.id))) {
+    const targetWorkflowId = task.config.workflowId;
+    if (!targetWorkflowId || !workflows.has(targetWorkflowId)) continue;
+    for (const dep of task.config.detachedExternalDependencies ?? []) {
+      const sourceWorkflowId = dep.workflowId;
+      if (!workflows.has(sourceWorkflowId)) {
+        missingDependencies.add(`${sourceWorkflowId}->${targetWorkflowId}`);
+        continue;
+      }
+      if (sourceWorkflowId === targetWorkflowId) continue;
+      if (edgeKeys.has(`active:${sourceWorkflowId}->${targetWorkflowId}`)) continue;
+      const key = `detached:${sourceWorkflowId}->${targetWorkflowId}`;
+      if (edgeKeys.has(key)) continue;
+      edgeKeys.add(key);
+      edges.push({ source: sourceWorkflowId, target: targetWorkflowId, kind: 'detached' });
+      const sources = detachedSourcesByTarget.get(targetWorkflowId) ?? new Set<string>();
+      sources.add(sourceWorkflowId);
+      detachedSourcesByTarget.set(targetWorkflowId, sources);
+    }
+  }
+
+  for (const workflow of workflows.values()) {
+    const targetWorkflowId = workflow.id;
     for (const change of workflow.externalDependencyChanges ?? []) {
       for (const dependency of [change.before, change.after]) {
         if (!dependency) continue;
@@ -63,6 +82,7 @@ export function deriveWorkflowGraph(
         }
         if (sourceWorkflowId === targetWorkflowId) continue;
         if (edgeKeys.has(`active:${sourceWorkflowId}->${targetWorkflowId}`)) continue;
+        if (edgeKeys.has(`detached:${sourceWorkflowId}->${targetWorkflowId}`)) continue;
         const key = `historical:${sourceWorkflowId}->${targetWorkflowId}`;
         if (edgeKeys.has(key)) continue;
         edgeKeys.add(key);
@@ -70,6 +90,13 @@ export function deriveWorkflowGraph(
       }
     }
   }
+
+  const nodes: WorkflowGraphNode[] = [...workflows.values()].map((workflow) => ({
+    id: workflow.id,
+    name: workflow.name,
+    workflow,
+    detachedDependencyCount: detachedSourcesByTarget.get(workflow.id)?.size ?? 0,
+  }));
 
   return {
     nodes: nodes.sort((a, b) => a.name.localeCompare(b.name)),
