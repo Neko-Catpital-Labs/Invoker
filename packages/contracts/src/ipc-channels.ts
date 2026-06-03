@@ -15,6 +15,8 @@ import type {
   TaskStateChanges,
   WorkflowDerivedStatus,
   WorkflowRollup,
+  ExternalDependency,
+  ExternalDependencyChange,
 } from '@invoker/workflow-graph';
 
 export type { WorkflowDerivedStatus, WorkflowRollup } from '@invoker/workflow-graph';
@@ -44,6 +46,8 @@ export interface WorkflowMeta {
   mergeMode?: string;
   repoUrl?: string;
   intermediateRepoUrl?: string;
+  externalDependencies?: ExternalDependency[];
+  externalDependencyChanges?: ExternalDependencyChange[];
   createdAt?: string;
   updatedAt?: string;
 }
@@ -356,6 +360,10 @@ export const IpcChannels = {
   },
   'invoker:delete-workflow': {} as {
     request: [workflowId: string];
+    response: void;
+  },
+  'invoker:detach-workflow': {} as {
+    request: [workflowId: string, upstreamWorkflowId: string];
     response: void;
   },
   'invoker:load-workflow': {} as {

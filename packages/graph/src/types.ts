@@ -47,6 +47,17 @@ export interface TaskConfig {
   readonly executionAgent?: string;
   /** Cross-workflow prerequisites for this task. */
   readonly externalDependencies?: readonly ExternalDependency[];
+  /**
+   * Read-only provenance for cross-workflow prerequisites removed by
+   * `detachWorkflow`. Ignored by scheduling; preserved so the UI can
+   * distinguish a detached upstream stack edge from independence.
+   */
+  readonly detachedExternalDependencies?: readonly DetachedExternalDependency[];
+}
+
+export interface DetachedExternalDependency extends ExternalDependency {
+  /** ISO-8601 timestamp at which `detachWorkflow` removed this dependency. */
+  readonly detachedAt: string;
 }
 
 export interface ExternalDependency {

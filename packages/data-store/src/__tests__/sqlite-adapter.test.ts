@@ -132,6 +132,43 @@ describe('SQLiteAdapter', () => {
       });
     });
 
+    it('round-trips detached external dependency provenance through saveTask and updateTask', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const provenance = [
+        {
+          workflowId: 'wf-upstream',
+          taskId: '__merge__',
+          requiredStatus: 'completed' as const,
+          gatePolicy: 'review_ready' as const,
+          detachedAt: '2026-06-02T08:57:38.000Z',
+        },
+      ];
+
+      // Persisted via saveTask.
+      adapter.saveTask('wf-1', makeTask('merge-node', {
+        config: { isMergeNode: true, detachedExternalDependencies: provenance },
+      }));
+      expect(adapter.loadTask('merge-node')?.config.detachedExternalDependencies).toEqual(provenance);
+
+      // Appended via updateTask.
+      const appended = [
+        ...provenance,
+        {
+          workflowId: 'wf-upstream-2',
+          taskId: 't5',
+          requiredStatus: 'completed' as const,
+          gatePolicy: 'completed' as const,
+          detachedAt: '2026-06-02T09:00:00.000Z',
+        },
+      ];
+      adapter.updateTask('merge-node', { config: { detachedExternalDependencies: appended } });
+      expect(adapter.loadTask('merge-node')?.config.detachedExternalDependencies).toEqual(appended);
+
+      // Cleared when set back to undefined.
+      adapter.updateTask('merge-node', { config: { detachedExternalDependencies: undefined } });
+      expect(adapter.loadTask('merge-node')?.config.detachedExternalDependencies).toBeUndefined();
+    });
+
     it('loads all workflows and tasks in one startup snapshot', () => {
       const wf2: Workflow = {
         ...testWorkflow,

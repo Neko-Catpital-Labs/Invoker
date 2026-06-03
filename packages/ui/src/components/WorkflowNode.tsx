@@ -6,6 +6,7 @@ interface WorkflowNodeProps {
   workflow: WorkflowMeta;
   selected: boolean;
   dimmed: boolean;
+  detachedDependencyCount?: number;
   onClick: () => void;
   onContextMenu: (event: MouseEvent<HTMLDivElement>) => void;
 }
@@ -18,10 +19,14 @@ export function WorkflowNode({
   workflow,
   selected,
   dimmed,
+  detachedDependencyCount = 0,
   onClick,
   onContextMenu,
 }: WorkflowNodeProps): JSX.Element {
   const visual = workflowStatusVisual(workflow.status);
+  const detachedTitle = detachedDependencyCount === 1
+    ? 'Detached from 1 upstream workflow'
+    : `Detached from ${detachedDependencyCount} upstream workflows`;
 
   return (
     <div
@@ -49,7 +54,18 @@ export function WorkflowNode({
         <div className={`absolute -left-1 top-1/2 h-2 w-2 -translate-y-1/2 rounded-full ${visual.railClass} animate-ping`} />
       )}
 
-      <div className="text-[13px] font-semibold text-gray-100 truncate">{workflow.name || workflow.id}</div>
+      <div className="flex min-w-0 items-center gap-2">
+        <div className="min-w-0 flex-1 text-[13px] font-semibold text-gray-100 truncate">{workflow.name || workflow.id}</div>
+        {detachedDependencyCount > 0 && (
+          <div
+            data-testid={`workflow-node-${workflow.id}-detached-badge`}
+            title={detachedTitle}
+            className="shrink-0 rounded border border-amber-500/35 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-semibold text-amber-300"
+          >
+            Detached
+          </div>
+        )}
+      </div>
       <div className="mt-1 text-[11px] text-gray-400 truncate">{workflow.id}</div>
       <div className={`mt-2 text-[10px] uppercase tracking-wide ${visual.textClass}`}>{statusLabel(workflow.status)}</div>
     </div>

@@ -707,12 +707,22 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
             json(res, 400, { error: 'Missing "upstreamWorkflowId" in request body' });
             return;
           }
-          await detachWorkflow(workflowId, String(upstreamWorkflowId));
+          const upstreamId = String(upstreamWorkflowId);
+          apiLogger?.info(
+            `detach-workflow begin workflow="${workflowId}" upstream="${upstreamId}" provenance="detachedExternalDependencies"`,
+            { module: 'api-server' },
+          );
+          await detachWorkflow(workflowId, upstreamId);
+          apiLogger?.info(
+            `detach-workflow end workflow="${workflowId}" upstream="${upstreamId}" activeExternalDependencies="removed" provenance="detachedExternalDependencies"`,
+            { module: 'api-server' },
+          );
           json(res, 200, {
             ok: true,
             workflowId,
-            upstreamWorkflowId,
+            upstreamWorkflowId: upstreamId,
             action: 'detached',
+            provenanceField: 'detachedExternalDependencies',
           });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });
