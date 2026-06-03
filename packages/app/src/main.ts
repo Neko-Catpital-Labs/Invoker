@@ -1485,8 +1485,11 @@ function createEmbeddedTerminalBackendFromConfig(
   const taskDeltaStream = createTaskDeltaStreamSequence();
   const getTaskDeltaStreamSequence = (): number => taskDeltaStream.current();
 
-  const sendTaskDeltaToRenderer = (delta: TaskDelta): void => {
+  const markWorkflowMetadataFromTaskDelta = (delta: TaskDelta): void => {
     workflowMetadataInvalidator?.markFromTaskDelta(delta);
+  };
+
+  const enqueueTaskDeltaForRenderer = (delta: TaskDelta): void => {
     if (!mainWindow || mainWindow.isDestroyed() || !uiInteractive) {
       return;
     }
@@ -1496,6 +1499,31 @@ function createEmbeddedTerminalBackendFromConfig(
     }
     uiTaskDeltaFlushTimer = setTimeout(() => flushUiTaskDeltas(), 25);
     uiTaskDeltaFlushTimer.unref?.();
+  };
+
+  const sendTaskDeltaToRenderer = (delta: TaskDelta): void => {
+    markWorkflowMetadataFromTaskDelta(delta);
+    enqueueTaskDeltaForRenderer(delta);
+  };
+
+  const applyTaskDeltaToOwnerCacheOrRecover = (delta: TaskDelta): TaskDelta[] => {
+    const { quarantined } = applyDelta(delta, lastKnownTaskStates);
+    if (quarantined.length === 0) {
+      return [delta];
+    }
+
+    const rendererDeltas: TaskDelta[] = [];
+    for (const taskId of quarantined) {
+      logger.info(`[gap-detect] quarantined task="${taskId}" — triggering authoritative reload`, { module: 'delta-merge' });
+      const { rendererDelta } = recoverQuarantinedTask(lastKnownTaskStates, taskId, {
+        loadTask: loadTaskByIdFromPersistence,
+        getMergeNode: (workflowId) => orchestrator.getMergeNode(workflowId),
+      });
+      if (rendererDelta) {
+        rendererDeltas.push(rendererDelta);
+      }
+    }
+    return rendererDeltas;
   };
 
   const requestWorkflowMetadataPublish = (reason: string): void => {
@@ -2731,12 +2759,12 @@ function createEmbeddedTerminalBackendFromConfig(
     // the db-poll doesn't re-emit deltas the messageBus already delivered.
     messageBus.subscribe(Channels.TASK_DELTA, (delta: unknown) => {
       uiPerfStats.mainDeltaToUi += 1;
+      const d = delta as TaskDelta;
       if (traceUiDeltaFlow) {
         logger.debug(`delta→ui: ${JSON.stringify(delta)}`, { module: 'ui' });
       }
-      sendTaskDeltaToRenderer(delta as TaskDelta);
+      markWorkflowMetadataFromTaskDelta(d);
 
-      const d = delta as TaskDelta;
       const deltaTaskId = d.type === 'updated' || d.type === 'removed'
         ? d.taskId
         : undefined;
@@ -2753,16 +2781,8 @@ function createEmbeddedTerminalBackendFromConfig(
         }
       }
 
-      const { quarantined } = applyDelta(d, lastKnownTaskStates);
-      for (const taskId of quarantined) {
-        logger.info(`[gap-detect] quarantined task="${taskId}" — triggering authoritative reload`, { module: 'delta-merge' });
-        const { rendererDelta } = recoverQuarantinedTask(lastKnownTaskStates, taskId, {
-          loadTask: loadTaskByIdFromPersistence,
-          getMergeNode: (workflowId) => orchestrator.getMergeNode(workflowId),
-        });
-        if (rendererDelta) {
-          sendTaskDeltaToRenderer(rendererDelta);
-        }
+      for (const rendererDelta of applyTaskDeltaToOwnerCacheOrRecover(d)) {
+        enqueueTaskDeltaForRenderer(rendererDelta);
       }
     });
 
