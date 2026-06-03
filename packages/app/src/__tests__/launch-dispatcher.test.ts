@@ -738,7 +738,7 @@ describe('LaunchDispatcher', () => {
       expect(adapter.loadLaunchDispatchById(1)?.lastError).toBeUndefined();
     });
 
-    it('active mode retires a dispatch row when the selected attempt changed', () => {
+    it('active mode abandons a dispatch row when the selected attempt changed after lease', () => {
       const task = seedWorkflowAndTask('wf-a/t-stale', 'wf-a', {
         selectedAttemptId: 'attempt-old',
         generation: 0,
@@ -774,12 +774,70 @@ describe('LaunchDispatcher', () => {
 
       expect(executeTask).not.toHaveBeenCalled();
       const after = adapter.loadLaunchDispatchById(enq.id);
-      expect(after?.state).toBe('completed');
+      expect(after?.state).toBe('abandoned');
+      expect(after?.lastError).toMatch(/selected attempt or generation changed/);
       const events = adapter.getEvents(task.id);
-      expect(events.some((event) => event.eventType === 'task.launch_dispatch_superseded')).toBe(true);
+      expect(events.some((event) => event.eventType === 'task.launch_dispatch_invalidated')).toBe(true);
     });
 
-    it('active mode fails the dispatch when the orchestrator has no matching task', () => {
+    it('active mode abandons the dispatch when readiness is blocked', () => {
+      const task = seedWorkflowAndTask('wf-a/t-blocked', 'wf-a', {
+        selectedAttemptId: 'attempt-blocked',
+        generation: 0,
+      });
+      const enq = adapter.enqueueLaunchDispatch({
+        taskId: task.id,
+        attemptId: 'attempt-blocked',
+        workflowId: 'wf-a',
+        generation: 0,
+      });
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:blocked',
+        resourceType: 'ssh',
+        holderId: 'holder-blocked',
+        taskId: task.id,
+      })).toBe(true);
+      const executeTask = vi.fn();
+      const dispatcher = new LaunchDispatcher({
+        persistence: adapter,
+        ownerId: 'owner-a',
+        orchestrator: {
+          prepareTaskForNewAttempt: vi.fn(),
+          getTask: vi.fn().mockReturnValue(task as any),
+          getTaskLaunchReadiness: vi.fn().mockReturnValue({
+            ready: false,
+            reason: 'waiting on wf-a/upstream (pending)',
+            task,
+          }),
+        },
+        taskRunnerProvider: () => ({ executeTask }),
+        mode: 'active',
+        maxConcurrency: 4,
+      });
+
+      dispatcher.poll();
+
+      expect(executeTask).not.toHaveBeenCalled();
+      const after = adapter.loadLaunchDispatchById(enq.id);
+      expect(after?.state).toBe('abandoned');
+      expect(after?.lastError).toMatch(/no longer launch-ready/);
+      expect(adapter.listExecutionResourceLeasesByTask(task.id)).toEqual([]);
+      const events = adapter.getEvents(task.id);
+      const invalidated = events.find((event) => event.eventType === 'task.launch_dispatch_invalidated');
+      expect(JSON.parse(invalidated!.payload!)).toMatchObject({
+        dispatchId: enq.id,
+        reason: 'not_launch_ready',
+        readinessReason: 'waiting on wf-a/upstream (pending)',
+      });
+      const released = events.find((event) => event.eventType === 'task.launch_dispatch_lease_released');
+      expect(JSON.parse(released!.payload!)).toMatchObject({
+        dispatchId: enq.id,
+        reason: 'not_launch_ready',
+        resourceKey: 'ssh:blocked',
+      });
+    });
+
+    it('active mode abandons the dispatch when the orchestrator has no matching task', () => {
       seedWorkflowAndTask('wf-a/t-missing', 'wf-a', {
         selectedAttemptId: 'attempt-missing',
         generation: 0,
@@ -806,9 +864,7 @@ describe('LaunchDispatcher', () => {
 
       expect(executeTask).not.toHaveBeenCalled();
       const after = adapter.loadLaunchDispatchById(enq.id);
-      // failDispatch re-enqueues with last_error set (so the next poll
-      // can try again after the fence expires).
-      expect(after?.state).toBe('enqueued');
+      expect(after?.state).toBe('abandoned');
       expect(after?.lastError).toMatch(/missing from orchestrator state/);
     });
 
