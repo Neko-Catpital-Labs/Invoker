@@ -230,9 +230,46 @@ describe('SQLiteAdapter', () => {
   });
 
   describe('task_launch_dispatch outbox', () => {
-    function setupWorkflowAndTask(workflowId = 'wf-launch', taskId = 'wf-launch/t1'): void {
+    function setupWorkflowAndTask(
+      workflowId = 'wf-launch',
+      taskId = 'wf-launch/t1',
+      opts: {
+        selectedAttemptId?: string;
+        generation?: number;
+        status?: TaskState['status'];
+      } = {},
+    ): void {
       adapter.saveWorkflow({ ...testWorkflow, id: workflowId });
-      adapter.saveTask(workflowId, makeTask(taskId, { config: { workflowId } }));
+      adapter.saveTask(workflowId, makeTask(taskId, {
+        status: opts.status ?? 'pending',
+        config: { workflowId },
+        execution: {
+          generation: opts.generation ?? 0,
+        },
+      }));
+      if (opts.selectedAttemptId) {
+        adapter.updateTask(taskId, {
+          execution: { selectedAttemptId: opts.selectedAttemptId },
+        });
+      }
+    }
+
+    function saveLaunchTask(
+      workflowId: string,
+      taskId: string,
+      attemptId: string,
+      opts: { generation?: number; status?: TaskState['status'] } = {},
+    ): void {
+      adapter.saveTask(workflowId, makeTask(taskId, {
+        status: opts.status ?? 'pending',
+        config: { workflowId },
+        execution: {
+          generation: opts.generation ?? 0,
+        },
+      }));
+      adapter.updateTask(taskId, {
+        execution: { selectedAttemptId: attemptId },
+      });
     }
 
     it('round-trips enqueueLaunchDispatch + load by id and attempt', () => {
@@ -430,7 +467,9 @@ describe('SQLiteAdapter', () => {
 
     describe('claimLaunchDispatchAtomic', () => {
       it('leases the only enqueued row when capacity allows', () => {
-        setupWorkflowAndTask();
+        setupWorkflowAndTask('wf-launch', 'wf-launch/t1', {
+          selectedAttemptId: 'attempt-claim-1',
+        });
         const enqueued = adapter.enqueueLaunchDispatch({
           taskId: 'wf-launch/t1',
           attemptId: 'attempt-claim-1',
@@ -461,7 +500,9 @@ describe('SQLiteAdapter', () => {
       });
 
       it('does not double-lease an already-leased row', () => {
-        setupWorkflowAndTask();
+        setupWorkflowAndTask('wf-launch', 'wf-launch/t1', {
+          selectedAttemptId: 'attempt-conflict',
+        });
         adapter.enqueueLaunchDispatch({
           taskId: 'wf-launch/t1',
           attemptId: 'attempt-conflict',
@@ -483,22 +524,25 @@ describe('SQLiteAdapter', () => {
       });
 
       it('orders by priority (high, normal, low) then by insertion order', () => {
-        setupWorkflowAndTask();
+        adapter.saveWorkflow({ ...testWorkflow, id: 'wf-launch' });
+        saveLaunchTask('wf-launch', 'wf-launch/t-normal', 'attempt-normal-1');
+        saveLaunchTask('wf-launch', 'wf-launch/t-low', 'attempt-low');
+        saveLaunchTask('wf-launch', 'wf-launch/t-high', 'attempt-high');
         const normal1 = adapter.enqueueLaunchDispatch({
-          taskId: 'wf-launch/t1',
+          taskId: 'wf-launch/t-normal',
           attemptId: 'attempt-normal-1',
           workflowId: 'wf-launch',
           generation: 0,
         });
         adapter.enqueueLaunchDispatch({
-          taskId: 'wf-launch/t1',
+          taskId: 'wf-launch/t-low',
           attemptId: 'attempt-low',
           workflowId: 'wf-launch',
           priority: 'low',
           generation: 0,
         });
         const high = adapter.enqueueLaunchDispatch({
-          taskId: 'wf-launch/t1',
+          taskId: 'wf-launch/t-high',
           attemptId: 'attempt-high',
           workflowId: 'wf-launch',
           priority: 'high',
@@ -524,15 +568,17 @@ describe('SQLiteAdapter', () => {
       });
 
       it('enforces maxConcurrency by counting leased + acknowledged rows', () => {
-        setupWorkflowAndTask();
+        adapter.saveWorkflow({ ...testWorkflow, id: 'wf-launch' });
+        saveLaunchTask('wf-launch', 'wf-launch/t-cap-1', 'attempt-cap-1');
+        saveLaunchTask('wf-launch', 'wf-launch/t-cap-2', 'attempt-cap-2');
         adapter.enqueueLaunchDispatch({
-          taskId: 'wf-launch/t1',
+          taskId: 'wf-launch/t-cap-1',
           attemptId: 'attempt-cap-1',
           workflowId: 'wf-launch',
           generation: 0,
         });
         adapter.enqueueLaunchDispatch({
-          taskId: 'wf-launch/t1',
+          taskId: 'wf-launch/t-cap-2',
           attemptId: 'attempt-cap-2',
           workflowId: 'wf-launch',
           generation: 0,
@@ -566,7 +612,9 @@ describe('SQLiteAdapter', () => {
       });
 
       it('returns undefined when maxConcurrency is zero', () => {
-        setupWorkflowAndTask();
+        setupWorkflowAndTask('wf-launch', 'wf-launch/t1', {
+          selectedAttemptId: 'attempt-zero',
+        });
         adapter.enqueueLaunchDispatch({
           taskId: 'wf-launch/t1',
           attemptId: 'attempt-zero',
@@ -579,6 +627,131 @@ describe('SQLiteAdapter', () => {
         });
         expect(claimed).toBeUndefined();
       });
+
+      it('abandons a stale selected-attempt candidate and scans to the next valid row', () => {
+        adapter.saveWorkflow({ ...testWorkflow, id: 'wf-launch' });
+        saveLaunchTask('wf-launch', 'wf-launch/t-stale', 'attempt-current');
+        saveLaunchTask('wf-launch', 'wf-launch/t-valid', 'attempt-valid');
+        const stale = adapter.enqueueLaunchDispatch({
+          taskId: 'wf-launch/t-stale',
+          attemptId: 'attempt-stale',
+          workflowId: 'wf-launch',
+          priority: 'high',
+          generation: 0,
+        });
+        const valid = adapter.enqueueLaunchDispatch({
+          taskId: 'wf-launch/t-valid',
+          attemptId: 'attempt-valid',
+          workflowId: 'wf-launch',
+          priority: 'normal',
+          generation: 0,
+        });
+
+        const claimed = adapter.claimLaunchDispatchAtomic({
+          ownerId: 'runner-scan',
+          maxConcurrency: 4,
+          nowIso: '2026-06-03T00:00:00.000Z',
+        });
+
+        expect(claimed?.id).toBe(valid.id);
+        const staleAfter = adapter.loadLaunchDispatchById(stale.id);
+        expect(staleAfter?.state).toBe('abandoned');
+        expect(staleAfter?.lastError).toMatch(/not the selected attempt/);
+      });
+
+      it('abandons stale generation candidates', () => {
+        setupWorkflowAndTask('wf-launch', 'wf-launch/t1', {
+          selectedAttemptId: 'attempt-generation',
+          generation: 2,
+        });
+        const row = adapter.enqueueLaunchDispatch({
+          taskId: 'wf-launch/t1',
+          attemptId: 'attempt-generation',
+          workflowId: 'wf-launch',
+          generation: 1,
+        });
+
+        const claimed = adapter.claimLaunchDispatchAtomic({
+          ownerId: 'runner-generation',
+          maxConcurrency: 4,
+          nowIso: '2026-06-03T00:01:00.000Z',
+        });
+
+        expect(claimed).toBeUndefined();
+        const after = adapter.loadLaunchDispatchById(row.id);
+        expect(after?.state).toBe('abandoned');
+        expect(after?.lastError).toMatch(/does not match task generation/);
+      });
+
+      it('abandons non-pending task candidates', () => {
+        setupWorkflowAndTask('wf-launch', 'wf-launch/t1', {
+          selectedAttemptId: 'attempt-failed-task',
+          status: 'failed',
+        });
+        const row = adapter.enqueueLaunchDispatch({
+          taskId: 'wf-launch/t1',
+          attemptId: 'attempt-failed-task',
+          workflowId: 'wf-launch',
+          generation: 0,
+        });
+
+        const claimed = adapter.claimLaunchDispatchAtomic({
+          ownerId: 'runner-status',
+          maxConcurrency: 4,
+          nowIso: '2026-06-03T00:02:00.000Z',
+        });
+
+        expect(claimed).toBeUndefined();
+        const after = adapter.loadLaunchDispatchById(row.id);
+        expect(after?.state).toBe('abandoned');
+        expect(after?.lastError).toMatch(/status is failed/);
+      });
+
+      it('abandons missing-task candidates', () => {
+        adapter.saveWorkflow({ ...testWorkflow, id: 'wf-launch' });
+        (adapter as any).db.run('PRAGMA foreign_keys = OFF');
+        (adapter as any).db.run(
+          `INSERT INTO task_launch_dispatch (
+            task_id, attempt_id, workflow_id, state, priority, generation
+          ) VALUES ('wf-launch/missing', 'attempt-missing-task', 'wf-launch', 'enqueued', 'normal', 0)`,
+        );
+        (adapter as any).db.run('PRAGMA foreign_keys = ON');
+        const row = adapter.loadLaunchDispatchByAttempt('attempt-missing-task')!;
+
+        const claimed = adapter.claimLaunchDispatchAtomic({
+          ownerId: 'runner-missing',
+          maxConcurrency: 4,
+          nowIso: '2026-06-03T00:03:00.000Z',
+        });
+
+        expect(claimed).toBeUndefined();
+        const after = adapter.loadLaunchDispatchById(row.id);
+        expect(after?.state).toBe('abandoned');
+        expect(after?.lastError).toMatch(/no longer exists/);
+      });
+    });
+
+    it('deleteWorkflow removes launch dispatches and execution resource leases for deleted tasks', () => {
+      setupWorkflowAndTask('wf-launch', 'wf-launch/t1', {
+        selectedAttemptId: 'attempt-delete-cleanup',
+      });
+      adapter.enqueueLaunchDispatch({
+        taskId: 'wf-launch/t1',
+        attemptId: 'attempt-delete-cleanup',
+        workflowId: 'wf-launch',
+        generation: 0,
+      });
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:delete-cleanup',
+        resourceType: 'ssh',
+        holderId: 'holder-delete-cleanup',
+        taskId: 'wf-launch/t1',
+      })).toBe(true);
+
+      adapter.deleteWorkflow('wf-launch');
+
+      expect(adapter.listLaunchDispatchesByState(['enqueued', 'leased', 'acknowledged'])).toEqual([]);
+      expect(adapter.listExecutionResourceLeases()).toEqual([]);
     });
   });
 
