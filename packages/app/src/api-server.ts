@@ -76,6 +76,10 @@ export interface ApiMutationFacade {
     taskId: string,
     updates: ExternalGatePolicyUpdate[],
   ): Promise<MutationResult>;
+  setWorkflowExternalGatePolicies(
+    workflowId: string,
+    updates: ExternalGatePolicyUpdate[],
+  ): Promise<MutationResult>;
   setTaskMetadata(
     taskId: string,
     fieldPath: string,
@@ -638,6 +642,26 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           }
           const result = await mutations.setTaskExternalGatePolicies(taskId, updates);
           json(res, 200, { ok: true, taskId, action: 'gate_policy_updated', tasksStarted: result.runnable.length });
+        } catch (err) {
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
+        }
+        return;
+      }
+
+      // POST /api/workflows/:id/gate-policy
+      const workflowGatePolicyMatch = path.match(/^\/api\/workflows\/([^/]+)\/gate-policy$/);
+      if (method === 'POST' && workflowGatePolicyMatch) {
+        const workflowId = decodeURIComponent(workflowGatePolicyMatch[1]);
+        try {
+          const body = await readBody(req);
+          const parsed = JSON.parse(body);
+          const updates = Array.isArray(parsed?.updates) ? parsed.updates : [];
+          if (updates.length === 0) {
+            json(res, 400, { error: 'Missing non-empty "updates" array in request body' });
+            return;
+          }
+          const result = await mutations.setWorkflowExternalGatePolicies(workflowId, updates);
+          json(res, 200, { ok: true, workflowId, action: 'workflow_gate_policy_updated', tasksStarted: result.runnable.length });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
