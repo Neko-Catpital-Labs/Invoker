@@ -114,19 +114,22 @@ function WorkflowGraphInner({
   }, [graph.nodes, positions, selectedWorkflowId, statusFilters]);
 
   const edges = useMemo<Edge[]>(() => graph.edges.map((edge) => ({
-    id: `workflow:${edge.source}->${edge.target}`,
+    id: `workflow:${edge.kind}:${edge.source}->${edge.target}`,
     source: edge.source,
     target: edge.target,
     type: 'smoothstep',
     animated: false,
     style: {
-      stroke: 'rgba(148,163,184,0.55)',
-      strokeWidth: 2,
+      stroke: edge.kind === 'historical' ? 'rgba(245,158,11,0.5)' : 'rgba(148,163,184,0.55)',
+      strokeWidth: edge.kind === 'historical' ? 1.5 : 2,
+      strokeDasharray: edge.kind === 'historical' ? '6 6' : undefined,
     },
+    data: { kind: edge.kind },
+    ariaLabel: edge.kind === 'historical' ? 'Historical workflow dependency' : 'Active workflow dependency',
     zIndex: 0,
     markerEnd: {
       type: MarkerType.ArrowClosed,
-      color: 'rgba(148,163,184,0.55)',
+      color: edge.kind === 'historical' ? 'rgba(245,158,11,0.5)' : 'rgba(148,163,184,0.55)',
       width: 16,
       height: 16,
     },
@@ -134,7 +137,7 @@ function WorkflowGraphInner({
 
   const graphSignature = useMemo(() => {
     const nodeIds = graph.nodes.map((node) => node.id).join('|');
-    const edgeIds = graph.edges.map((edge) => `${edge.source}->${edge.target}`).join('|');
+    const edgeIds = graph.edges.map((edge) => `${edge.kind}:${edge.source}->${edge.target}`).join('|');
     return `${nodeIds}::${edgeIds}`;
   }, [graph.edges, graph.nodes]);
 

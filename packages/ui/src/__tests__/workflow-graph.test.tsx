@@ -11,8 +11,8 @@ vi.mock('@xyflow/react', async () => {
 
 const fitViewMock = (ReactFlowModule as unknown as { __fitViewMock: Mock }).__fitViewMock;
 
-function wf(id: string, status: WorkflowStatus): WorkflowMeta {
-  return { id, name: id, status };
+function wf(id: string, status: WorkflowStatus, overrides: Partial<WorkflowMeta> = {}): WorkflowMeta {
+  return { id, name: id, status, ...overrides };
 }
 
 function task(id: string, workflowId: string): TaskState {
@@ -107,6 +107,43 @@ describe('WorkflowGraph', () => {
 
     expect(screen.getByTestId('workflow-graph-react-flow')).toBeInTheDocument();
     expect(screen.getByTestId('mock-react-flow')).toBeInTheDocument();
+  });
+
+  it('renders dependency-change lineage edges separately from active dependency edges', () => {
+    const workflows = new Map([
+      ['wf-a', wf('wf-a', 'review_ready')],
+      [
+        'wf-b',
+        wf('wf-b', 'running', {
+          externalDependencyChanges: [
+            {
+              before: {
+                workflowId: 'wf-a',
+                taskId: '__merge__',
+                requiredStatus: 'completed',
+                gatePolicy: 'completed',
+              },
+              changedAt: '2026-01-01T00:00:00.000Z',
+            },
+          ],
+        }),
+      ],
+    ]);
+
+    render(
+      <WorkflowGraph
+        tasks={new Map()}
+        workflows={workflows}
+        selectedWorkflowId={null}
+        statusFilters={new Set()}
+        onSelectWorkflow={() => {}}
+        onWorkflowContextMenu={() => {}}
+      />,
+    );
+
+    const edge = screen.getByTestId('rf__edge-workflow:historical:wf-a->wf-b');
+    expect(edge).toHaveAttribute('data-source', 'wf-a');
+    expect(edge).toHaveAttribute('data-target', 'wf-b');
   });
 
   it('re-fits after a non-empty workflow snapshot replacement', async () => {

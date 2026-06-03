@@ -936,6 +936,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     if (!this.readOnly) {
       this.migrateTestCommands();
       this.migrateGatePolicyApprovedToCompleted();
+      this.migrateTaskExternalDependenciesToWorkflows();
       this.runCompatibilityMigration();
     }
   }
@@ -1055,6 +1056,100 @@ export class SQLiteAdapter implements PersistenceAdapter {
       }
     } catch {
       // Table may not exist yet on first run
+    }
+  }
+
+  private normalizeExternalDependencies(raw: unknown): ExternalDependency[] {
+    if (!Array.isArray(raw)) return [];
+    const normalized: ExternalDependency[] = [];
+    for (const item of raw) {
+      if (!item || typeof item !== 'object') continue;
+      const dep = item as Record<string, unknown>;
+      if (typeof dep.workflowId !== 'string' || dep.workflowId.trim() === '') continue;
+      const taskId = typeof dep.taskId === 'string' && dep.taskId.trim() !== '' ? dep.taskId.trim() : '__merge__';
+      const gatePolicy = dep.gatePolicy === 'review_ready' ? 'review_ready' : 'completed';
+      normalized.push({
+        workflowId: dep.workflowId.trim(),
+        taskId,
+        requiredStatus: 'completed',
+        gatePolicy,
+      });
+    }
+    return normalized;
+  }
+
+  private mergeExternalDependencySets(existing: ExternalDependency[], incoming: ExternalDependency[]): ExternalDependency[] {
+    const byKey = new Map<string, ExternalDependency>();
+    for (const dep of [...existing, ...incoming]) {
+      const taskId = dep.taskId?.trim() || '__merge__';
+      const key = `${dep.workflowId}::${taskId}`;
+      const previous = byKey.get(key);
+      const gatePolicy =
+        previous?.gatePolicy === 'completed' || dep.gatePolicy === 'completed'
+          ? 'completed'
+          : 'review_ready';
+      byKey.set(key, {
+        workflowId: dep.workflowId,
+        taskId,
+        requiredStatus: 'completed',
+        gatePolicy,
+      });
+    }
+    return Array.from(byKey.values());
+  }
+
+  /**
+   * Promote legacy per-task external dependencies to workflow metadata.
+   * This is intentionally idempotent: once task rows are cleared, later runs
+   * only see the workflow-level source of truth.
+   */
+  private migrateTaskExternalDependenciesToWorkflows(): void {
+    try {
+      const rows = this.queryAll(
+        `SELECT id, workflow_id, external_dependencies FROM tasks WHERE external_dependencies IS NOT NULL AND external_dependencies != ''`,
+      ) as Array<{ id: string; workflow_id: string; external_dependencies: string }>;
+      if (rows.length === 0) return;
+
+      const incomingByWorkflow = new Map<string, ExternalDependency[]>();
+      for (const row of rows) {
+        try {
+          const deps = this.normalizeExternalDependencies(JSON.parse(row.external_dependencies));
+          if (deps.length === 0) continue;
+          incomingByWorkflow.set(row.workflow_id, [
+            ...(incomingByWorkflow.get(row.workflow_id) ?? []),
+            ...deps,
+          ]);
+        } catch {
+          // Skip malformed task JSON; do not clear it.
+        }
+      }
+
+      for (const [workflowId, incoming] of incomingByWorkflow) {
+        const wf = this.queryOne(
+          `SELECT external_dependencies FROM workflows WHERE id = ?`,
+          [workflowId],
+        ) as { external_dependencies?: string | null } | undefined;
+        if (!wf) continue;
+        let existing: ExternalDependency[] = [];
+        if (wf.external_dependencies) {
+          try {
+            existing = this.normalizeExternalDependencies(JSON.parse(wf.external_dependencies));
+          } catch {
+            existing = [];
+          }
+        }
+        const merged = this.mergeExternalDependencySets(existing, incoming);
+        this.execRun(
+          `UPDATE workflows SET external_dependencies = ?, updated_at = ? WHERE id = ?`,
+          [merged.length > 0 ? JSON.stringify(merged) : null, new Date().toISOString(), workflowId],
+        );
+      }
+
+      this.execRun(
+        `UPDATE tasks SET external_dependencies = NULL WHERE external_dependencies IS NOT NULL AND external_dependencies != ''`,
+      );
+    } catch {
+      // Tables/columns may not exist yet on first run.
     }
   }
 
@@ -1331,7 +1426,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       JSON.stringify(task.dependencies),
       cfg.command ?? null, cfg.prompt ?? null, cfg.experimentPrompt ?? null,
       exec.exitCode ?? null, exec.error ?? null, exec.protocolErrorCode ?? null, exec.protocolErrorMessage ?? null, exec.inputPrompt ?? null,
-      cfg.externalDependencies ? JSON.stringify(cfg.externalDependencies) : null,
+      null,
       cfg.summary ?? null, cfg.problem ?? null, cfg.approach ?? null,
       cfg.testPlan ?? null, cfg.reproCommand ?? null, cfg.fixPrompt ?? null, cfg.fixContext ?? null,
       exec.branch ?? null,
