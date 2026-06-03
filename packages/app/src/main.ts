@@ -125,6 +125,8 @@ import {
   deleteAllWorkflows as sharedDeleteAllWorkflows,
   deleteAllWorkflowsBulk as sharedDeleteAllWorkflowsBulk,
   fixWithAgentAction,
+  assertLineageCurrent,
+  captureTaskLineage,
   rebaseRetry,
   rebaseRecreate,
   recreateWorkflow as sharedRecreateWorkflow,
@@ -1599,6 +1601,8 @@ function createEmbeddedTerminalBackendFromConfig(
     if (!task) {
       throw new Error(`Task ${taskId} not found`);
     }
+    const entryLineage = captureTaskLineage(taskId, orchestrator);
+    assertLineageCurrent(entryLineage, orchestrator, activeMutationContext?.signal);
     const savedError = task.execution.error ?? '';
     const recoveryRoute = selectFailureRecoveryRoute(task, savedError);
     logger.info(
@@ -1607,6 +1611,7 @@ function createEmbeddedTerminalBackendFromConfig(
     );
 
     if (source === 'auto-fix') {
+      assertLineageCurrent(entryLineage, orchestrator, activeMutationContext?.signal);
       const attemptsBefore = task?.execution.autoFixAttempts ?? 0;
       const attemptsAfter = attemptsBefore + 1;
       persistence.updateTask(taskId, {

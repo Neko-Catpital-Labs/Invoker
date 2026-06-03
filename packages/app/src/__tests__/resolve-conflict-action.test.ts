@@ -11,6 +11,7 @@ import type { SQLiteAdapter } from '@invoker/data-store';
 import { resolveConflictAction } from '../workflow-actions.js';
 
 describe('resolveConflictAction', () => {
+  const lineage = { taskId: 'task-a', selectedAttemptId: 'att-1', generation: 1 };
   let orchestrator: {
     getTask: ReturnType<typeof vi.fn>;
     beginConflictResolution: ReturnType<typeof vi.fn>;
@@ -49,9 +50,9 @@ describe('resolveConflictAction', () => {
       taskExecutor: taskExecutor as unknown as TaskRunner,
     });
 
-    expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a');
+    expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a', lineage);
     expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', 'saved-err', undefined);
-    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'saved-err');
+    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'saved-err', lineage);
     expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
     expect(persistence.appendTaskOutput).not.toHaveBeenCalled();
   });
@@ -77,7 +78,7 @@ describe('resolveConflictAction', () => {
       autoApproveAIFixes: true,
     });
 
-    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'saved-err');
+    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'saved-err', lineage);
     expect(approve).toHaveBeenCalledWith('task-a');
     expect(taskExecutorWithApprove.executeTasks).not.toHaveBeenCalled();
     expect(taskExecutorWithApprove.publishAfterFix).not.toHaveBeenCalled();
@@ -102,6 +103,7 @@ describe('resolveConflictAction', () => {
       'task-a',
       'saved-err',
       'claude failed',
+      lineage,
     );
     expect(orchestrator.setFixAwaitingApproval).not.toHaveBeenCalled();
   });

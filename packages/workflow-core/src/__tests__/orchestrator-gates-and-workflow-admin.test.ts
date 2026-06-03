@@ -637,6 +637,23 @@ describe('Orchestrator', () => {
       expect(savedError).toBe(mergeConflictError);
     });
 
+    it('beginConflictResolution rejects stale expected lineage without changing task state', () => {
+      const task = orchestrator.getTask('t2')!;
+
+      expect(() => orchestrator.beginConflictResolution('t2', {
+        taskId: 't2',
+        selectedAttemptId: 'stale-attempt',
+        generation: task.execution.generation ?? 0,
+      })).toThrow('lineage is stale');
+
+      const after = orchestrator.getTask('t2')!;
+      expect(after.status).toBe('failed');
+      expect(after.execution.error).toBe(mergeConflictError);
+      expect(after.execution.selectedAttemptId).toBe(task.execution.selectedAttemptId);
+      expect(after.execution.generation ?? 0).toBe(task.execution.generation ?? 0);
+      expect(publishedDeltas).toHaveLength(0);
+    });
+
     it('revertConflictResolution restores failed state with mergeConflict', () => {
       const { savedError } = orchestrator.beginConflictResolution('t2');
       const fixAttemptId = orchestrator.getTask('t2')!.execution.selectedAttemptId;
@@ -662,6 +679,40 @@ describe('Orchestrator', () => {
           d.changes.status === 'failed',
       );
       expect(failedDeltas).toHaveLength(1);
+    });
+
+    it('revertConflictResolution no-ops when the fix-session lineage is stale', () => {
+      const { savedError } = orchestrator.beginConflictResolution('t2');
+      const staleFixTask = orchestrator.getTask('t2')!;
+      const staleLineage = {
+        taskId: staleFixTask.id,
+        selectedAttemptId: staleFixTask.execution.selectedAttemptId,
+        generation: staleFixTask.execution.generation ?? 0,
+      };
+      persistence.updateTask('t2', {
+        status: 'running',
+        execution: {
+          selectedAttemptId: 'newer-attempt',
+          generation: staleLineage.generation + 1,
+          branch: 'newer-branch',
+          workspacePath: '/tmp/newer-workspace',
+          agentSessionId: 'newer-session',
+          error: 'newer execution error',
+        },
+      });
+
+      publishedDeltas = [];
+      orchestrator.revertConflictResolution('t2', savedError, 'late agent failure', staleLineage);
+
+      const task = orchestrator.getTask('t2')!;
+      expect(task.status).toBe('running');
+      expect(task.execution.error).toBe('newer execution error');
+      expect(task.execution.branch).toBe('newer-branch');
+      expect(task.execution.workspacePath).toBe('/tmp/newer-workspace');
+      expect(task.execution.agentSessionId).toBe('newer-session');
+      expect(task.execution.selectedAttemptId).toBe('newer-attempt');
+      expect(task.execution.generation).toBe(staleLineage.generation + 1);
+      expect(publishedDeltas).toHaveLength(0);
     });
 
     it('revertConflictResolution uses agent-agnostic fix failure prefix', () => {
@@ -780,6 +831,39 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('f2')!.execution.agentSessionId).toBe('sess-fix-1');
       expect(orchestrator.getTask('f2')!.execution.lastAgentSessionId).toBe('sess-fix-1');
       expect(orchestrator.getTask('f2')!.execution.lastAgentName).toBe('codex');
+    });
+
+    it('setFixAwaitingApproval no-ops when the fix-session lineage is stale', () => {
+      orchestrator.beginConflictResolution('f2');
+      const staleFixTask = orchestrator.getTask('f2')!;
+      const staleLineage = {
+        taskId: staleFixTask.id,
+        selectedAttemptId: staleFixTask.execution.selectedAttemptId,
+        generation: staleFixTask.execution.generation ?? 0,
+      };
+      persistence.updateTask('f2', {
+        status: 'running',
+        execution: {
+          selectedAttemptId: 'newer-fix-attempt',
+          generation: staleLineage.generation + 1,
+          branch: 'newer-fix-branch',
+          workspacePath: '/tmp/newer-fix-workspace',
+          agentSessionId: 'newer-fix-session',
+        },
+      });
+
+      publishedDeltas = [];
+      orchestrator.setFixAwaitingApproval('f2', 'test failed: expected 1 to be 2', staleLineage);
+
+      const task = orchestrator.getTask('f2')!;
+      expect(task.status).toBe('running');
+      expect(task.execution.pendingFixError).toBeUndefined();
+      expect(task.execution.branch).toBe('newer-fix-branch');
+      expect(task.execution.workspacePath).toBe('/tmp/newer-fix-workspace');
+      expect(task.execution.agentSessionId).toBe('newer-fix-session');
+      expect(task.execution.selectedAttemptId).toBe('newer-fix-attempt');
+      expect(task.execution.generation).toBe(staleLineage.generation + 1);
+      expect(publishedDeltas).toHaveLength(0);
     });
 
     it('pendingFixError is readable via getTask', () => {
