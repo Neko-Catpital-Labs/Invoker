@@ -53,6 +53,42 @@ export function wireTaskRunnerApproveHook(deps: Pick<
   });
 }
 
+const STARTUP_DIAGNOSTIC_TAIL_CHARS = 4_000;
+
+function compactDiagnosticValue(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.length <= STARTUP_DIAGNOSTIC_TAIL_CHARS) return trimmed;
+  return `...${trimmed.slice(trimmed.length - STARTUP_DIAGNOSTIC_TAIL_CHARS)}`;
+}
+
+function startupFailureDetail(error: Error, key: 'stderr' | 'stdout'): string | undefined {
+  const direct = compactDiagnosticValue((error as unknown as Record<string, unknown>)[key]);
+  if (direct) return direct;
+  const cause = error.cause as Record<string, unknown> | undefined;
+  return compactDiagnosticValue(cause?.[key]);
+}
+
+function appendStartupFailureDiagnostic(
+  taskId: string,
+  error: Error,
+  executor: Executor,
+  persistence: SQLiteAdapter,
+): void {
+  const parts = [
+    '\n[Startup Diagnostic]',
+    `executor=${executor.type}`,
+    `message=${error.message}`,
+  ];
+  const stderr = startupFailureDetail(error, 'stderr');
+  const stdout = startupFailureDetail(error, 'stdout');
+  if (stderr) parts.push(`--- startup stderr ---\n${stderr}`);
+  if (stdout) parts.push(`--- startup stdout ---\n${stdout}`);
+  parts.push('--- end startup diagnostic ---\n');
+  persistence.appendTaskOutput(taskId, parts.join('\n'));
+}
+
 export function rebuildTaskRunner(deps: TaskRunnerWiringDeps): TaskRunner {
   const taskRunner = new TaskRunner({
     orchestrator: deps.orchestrator,
@@ -94,6 +130,11 @@ export function rebuildTaskRunner(deps: TaskRunnerWiringDeps): TaskRunner {
       },
       onLaunchFailed: (taskId, error, executor) => {
         deps.assertFatalExecutionCapacity(`launch failed ${taskId}`);
+        try {
+          appendStartupFailureDiagnostic(taskId, error, executor, deps.persistence);
+        } catch {
+          // Best-effort: preserve the original startup failure flow.
+        }
         deps.logger.error(
           `Task "${taskId}" launch failed before spawn (executor: ${executor.type}): ${error.message}`,
           { module: 'exec' },

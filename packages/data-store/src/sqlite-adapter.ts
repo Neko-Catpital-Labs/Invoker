@@ -2184,12 +2184,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   getTaskOutput(taskId: string): string {
     // Prefer the output spool (DB + file) when it has any chunks for this task —
-    // it is the canonical streaming-output store. Otherwise fall back to
-    // task_output (legacy DB rows + diagnostic file), which avoids returning a
-    // duplicated stream when both stores contain the same data.
+    // it is the canonical streaming-output store. File-backed task output is
+    // appended because new diagnostic writes (startup/shutdown/autofix) live
+    // there and should remain visible after persisted retrieval. Legacy
+    // task_output rows are still only used as a fallback to avoid returning
+    // duplicated historical streams.
     const spoolChunks = this.getOutputChunks(taskId);
     if (spoolChunks.length > 0) {
-      return spoolChunks.map((chunk) => chunk.data).join('');
+      return spoolChunks.map((chunk) => chunk.data).join('') + this.readTaskOutputFile(taskId);
     }
     const rows = this.queryAll(
       'SELECT data FROM task_output WHERE task_id = ? ORDER BY id ASC',

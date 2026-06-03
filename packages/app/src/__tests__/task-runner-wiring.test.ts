@@ -85,6 +85,7 @@ describe('task-runner-wiring', () => {
     const persistence = {
       updateTask: vi.fn(),
       loadWorkflow: vi.fn(),
+      appendTaskOutput: vi.fn(),
     };
 
     const runner = rebuildTaskRunner({
@@ -123,6 +124,23 @@ describe('task-runner-wiring', () => {
 
     config.callbacks.onOutput('task-1', 'chunk');
     expect(taskRunnerConstructor.mock.calls[0]?.[0].callbacks.onOutput).toBe(config.callbacks.onOutput);
+
+    const startupCause = Object.assign(new Error('ssh boot failed'), {
+      stderr: 'remote stderr line\nconcrete setup failure',
+    });
+    config.callbacks.onLaunchFailed(
+      'task-1',
+      new Error('Executor startup failed (ssh): ssh boot failed', { cause: startupCause }),
+      { type: 'ssh' },
+    );
+    expect(persistence.appendTaskOutput).toHaveBeenCalledWith(
+      'task-1',
+      expect.stringContaining('[Startup Diagnostic]'),
+    );
+    expect(persistence.appendTaskOutput).toHaveBeenCalledWith(
+      'task-1',
+      expect.stringContaining('concrete setup failure'),
+    );
 
     const handle = { executionId: 'exec-1', workspacePath: '/repo/wt', branch: 'feature' };
     const executor = { type: 'worktree' };

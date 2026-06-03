@@ -19,7 +19,7 @@ export const SHUTDOWN_DIAGNOSTIC_TAIL_CHARS = 4_000;
 export function persistShutdownDiagnostic(
   task: TaskState,
   db: ShutdownDiagnosticDb,
-  opts?: { flushPendingOutput?: (taskId: string) => void },
+  opts?: { flushPendingOutput?: (taskId: string) => void; terminalError?: string },
 ): void {
   try {
     // Flush any buffered output so the spool is up-to-date.
@@ -34,6 +34,9 @@ export function persistShutdownDiagnostic(
 
     const parts: string[] = ['\n[Shutdown Diagnostic]'];
     parts.push(`status=${task.status}`);
+    if (opts?.terminalError) {
+      parts.push(`terminalError=${opts.terminalError}`);
+    }
     if (task.execution.error) {
       parts.push(`error=${task.execution.error}`);
     }

@@ -1978,7 +1978,7 @@ describe('SQLiteAdapter', () => {
       }
     });
 
-    it('prefers output_spool chunks over task_output rows when both exist', async () => {
+    it('returns output_spool chunks plus file-backed diagnostics while ignoring legacy duplicate rows', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-output-prefer-spool-'));
       const dbPath = join(dir, 'invoker.db');
 
@@ -1997,8 +1997,11 @@ describe('SQLiteAdapter', () => {
         // Canonical spool data is what should be returned.
         db.appendOutputChunk('t-both', 'spool line 1\n');
         db.appendOutputChunk('t-both', 'spool line 2\n');
+        db.appendTaskOutput('t-both', '\n[Shutdown Diagnostic]\nterminalError=Application quit\n');
 
-        expect(db.getTaskOutput('t-both')).toBe('spool line 1\nspool line 2\n');
+        expect(db.getTaskOutput('t-both')).toBe(
+          'spool line 1\nspool line 2\n\n[Shutdown Diagnostic]\nterminalError=Application quit\n',
+        );
 
         db.close();
       } finally {

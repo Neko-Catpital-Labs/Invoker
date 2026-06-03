@@ -1217,7 +1217,7 @@ if (isHeadless) {
       if (ownsHeadlessShutdown && orchestrator) {
         for (const task of orchestrator.getAllTasks()) {
           if (isTaskInFlightForForcedStop(task)) {
-            if (persistence) persistShutdownDiagnostic(task, persistence);
+            if (persistence) persistShutdownDiagnostic(task, persistence, { terminalError: 'Application quit' });
             orchestrator.handleWorkerResponse({
               requestId: `quit-${task.id}`,
               actionId: task.id,
@@ -3970,6 +3970,7 @@ function createEmbeddedTerminalBackendFromConfig(
               if (persistence) {
                 persistShutdownDiagnostic(task, persistence, {
                   flushPendingOutput: flushTaskOutput,
+                  terminalError: 'Application quit',
                 });
               }
               orchestrator.handleWorkerResponse({
