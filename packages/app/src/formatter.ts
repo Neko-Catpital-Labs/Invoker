@@ -268,6 +268,8 @@ export function serializeWorkflow(wf: Workflow): Record<string, unknown> {
     ...(wf.featureBranch != null && { featureBranch: wf.featureBranch }),
     ...(wf.mergeMode != null && { mergeMode: wf.mergeMode }),
     ...(wf.reviewProvider != null && { reviewProvider: wf.reviewProvider }),
+    ...(wf.externalDependencies != null && { externalDependencies: wf.externalDependencies }),
+    ...(wf.externalDependencyChanges != null && { externalDependencyChanges: wf.externalDependencyChanges }),
     ...(wf.generation != null && { generation: wf.generation }),
   };
 }
