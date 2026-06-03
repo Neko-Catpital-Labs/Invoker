@@ -147,6 +147,22 @@ export class PlanConflictError extends Error {
 
 // ── Adapter Interfaces ──────────────────────────────────────
 
+export interface LaunchDispatchInvalidationRow {
+  id: number;
+  taskId: string;
+  attemptId: string;
+  workflowId: string;
+  state: string;
+  generation: number;
+}
+
+export interface ExecutionResourceLeaseReleaseRow {
+  resourceKey: string;
+  resourceType: string;
+  holderId: string;
+  taskId?: string;
+}
+
 export interface OrchestratorPersistence {
   saveWorkflow(workflow: {
     id: string;
@@ -245,6 +261,16 @@ export interface OrchestratorPersistence {
     priority?: 'high' | 'normal' | 'low';
     generation: number;
   }): { id: number };
+  abandonLaunchDispatchesForTasks?(
+    taskIds: readonly string[],
+    reason: string,
+    nowIso?: string,
+  ): LaunchDispatchInvalidationRow[];
+  releaseExecutionResourceLeasesForTasks?(
+    taskIds: readonly string[],
+    reason: string,
+    nowIso?: string,
+  ): ExecutionResourceLeaseReleaseRow[];
 }
 
 export interface OrchestratorMessageBus {
@@ -995,6 +1021,44 @@ export class Orchestrator {
     return ids;
   }
 
+  private invalidateLaunchArtifactsForTasks(
+    taskIds: readonly string[],
+    reason: string,
+    now: Date = new Date(),
+  ): void {
+    const ids = Array.from(new Set(taskIds.filter((id) => typeof id === 'string' && id.length > 0)));
+    if (ids.length === 0) return;
+
+    const invalidatedAt = now.toISOString();
+    const invalidatedDispatches =
+      this.persistence.abandonLaunchDispatchesForTasks?.(ids, reason, invalidatedAt) ?? [];
+    const releasedLeases =
+      this.persistence.releaseExecutionResourceLeasesForTasks?.(ids, reason, invalidatedAt) ?? [];
+
+    for (const row of invalidatedDispatches) {
+      this.persistence.logEvent?.(row.taskId, 'task.launch_dispatch_invalidated', {
+        dispatchId: row.id,
+        attemptId: row.attemptId,
+        workflowId: row.workflowId,
+        previousState: row.state,
+        generation: row.generation,
+        reason,
+        invalidatedAt,
+      });
+    }
+
+    for (const row of releasedLeases) {
+      if (!row.taskId) continue;
+      this.persistence.logEvent?.(row.taskId, 'task.execution_resource_lease_released', {
+        resourceKey: row.resourceKey,
+        resourceType: row.resourceType,
+        holderId: row.holderId,
+        reason,
+        invalidatedAt,
+      });
+    }
+  }
+
   /**
    * Reset root tasks and all downstream dependents to pending using the
    * provided reset payload. Returns the affected IDs and currently-ready IDs.
@@ -1011,6 +1075,8 @@ export class Orchestrator {
     const pendingTaskDeltas: TaskDelta[] = [];
 
     this.taskRepository.runInTransaction(() => {
+      this.invalidateLaunchArtifactsForTasks(affectedIds, 'task subgraph reset to pending');
+
       for (const id of affectedIds) {
         const current = this.stateGetTask(id);
         if (!current) continue;
@@ -2516,6 +2582,7 @@ export class Orchestrator {
       taskId: rootId,
       resetCount: toResetIds.length,
     });
+    this.invalidateLaunchArtifactsForTasks(toResetIds, 'task recreation reset');
 
     for (const id of toResetIds) {
       const current = this.stateGetTask(id);
@@ -2596,6 +2663,10 @@ export class Orchestrator {
     });
     this.logger.info(
       '[agent-session-trace] recreateWorkflow: resetChanges.execution clears agentSessionId/containerId (DB NULL before next run)',
+    );
+    this.invalidateLaunchArtifactsForTasks(
+      allTasks.map((task) => task.id),
+      'workflow recreation reset',
     );
     for (const task of allTasks) {
       const prevSess = task.execution.agentSessionId ?? null;
@@ -3674,6 +3745,7 @@ export class Orchestrator {
       taskMap,
       (t) => !!t.config.isMergeNode,
     );
+    this.invalidateLaunchArtifactsForTasks([sourceId, ...descendantIds], 'task replacement');
     for (const id of descendantIds) {
       const staleBefore = this.stateGetTask(id);
       if (!staleBefore) continue;
@@ -4114,6 +4186,7 @@ export class Orchestrator {
     const toCancelIds = [rootId, ...descendantIds];
     const cancelled: string[] = [];
     const runningCancelled: string[] = [];
+    this.invalidateLaunchArtifactsForTasks(toCancelIds, 'task cancellation');
 
     for (const id of toCancelIds) {
       const t = this.stateGetTask(id);
@@ -4180,6 +4253,10 @@ export class Orchestrator {
 
     const cancelled: string[] = [];
     const runningCancelled: string[] = [];
+    this.invalidateLaunchArtifactsForTasks(
+      allTasks.filter((task) => cancellable.has(task.status)).map((task) => task.id),
+      'workflow cancellation',
+    );
 
     for (const task of allTasks) {
       if (!cancellable.has(task.status)) continue;
@@ -4224,6 +4301,7 @@ export class Orchestrator {
     const task = this.stateGetTask(taskId);
     if (!task) return;
     const id = task.id;
+    this.invalidateLaunchArtifactsForTasks([id], 'task deferred');
 
     // Transition running → pending. A deferred launch must not retain the
     // launch-claimed phase; otherwise it can be mistaken for an actively

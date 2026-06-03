@@ -76,6 +76,22 @@ export interface WorkflowTaskSnapshot {
   tasksByWorkflowId: Map<string, TaskState[]>;
 }
 
+export interface LaunchDispatchInvalidationRow {
+  id: number;
+  taskId: string;
+  attemptId: string;
+  workflowId: string;
+  state: string;
+  generation: number;
+}
+
+export interface ExecutionResourceLeaseReleaseRow {
+  resourceKey: string;
+  resourceType: string;
+  holderId: string;
+  taskId?: string;
+}
+
 export interface PersistenceAdapter {
   // Workflows
   saveWorkflow(workflow: Workflow): void;
@@ -134,6 +150,17 @@ export interface PersistenceAdapter {
     taskChanges: TaskStateChanges,
     attemptPatch: Partial<Pick<Attempt, 'status' | 'exitCode' | 'error' | 'completedAt'>>
   ): void;
+
+  abandonLaunchDispatchesForTasks(
+    taskIds: readonly string[],
+    reason: string,
+    nowIso?: string,
+  ): LaunchDispatchInvalidationRow[];
+  releaseExecutionResourceLeasesForTasks(
+    taskIds: readonly string[],
+    reason: string,
+    nowIso?: string,
+  ): ExecutionResourceLeaseReleaseRow[];
 
   // Agent queries
   /** Read the configured execution agent name for a task (e.g. 'claude', 'codex'). */
