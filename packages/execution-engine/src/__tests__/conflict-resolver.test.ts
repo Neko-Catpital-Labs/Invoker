@@ -150,6 +150,41 @@ describe('resolveConflictImpl', () => {
     ).resolves.toBeUndefined();
   });
 
+  it('uses text-form startup merge conflicts to resolve with savedError', async () => {
+    const spawnAgentFix = vi.fn(async () => ({ stdout: '', sessionId: 'sess-text-conflict' }));
+    const execGitIn = vi.fn(async (args: string[]) => {
+      if (args[0] === 'branch') return 'main';
+      if (args[0] === 'merge') throw new Error('conflict reproduced');
+      return '';
+    });
+    const conflictError = 'Executor startup failed (ssh): Merge conflict merging experiment/foo: packages/app/src/headless.ts';
+    const task = {
+      id: 'task-1',
+      status: 'fixing_with_ai',
+      execution: { error: undefined, branch: 'invoker/task-1', workspacePath: createTempWorkspace() },
+      config: {},
+    };
+    const host: ConflictResolverHost = {
+      ...makeHost(task),
+      execGitIn,
+      spawnAgentFix,
+    };
+
+    await expect(
+      resolveConflictImpl(host, 'task-1', conflictError, 'codex'),
+    ).resolves.toBeUndefined();
+
+    expect(execGitIn).toHaveBeenCalledWith(
+      ['merge', '--no-edit', '-m', 'Merge upstream experiment/foo', 'experiment/foo'],
+      task.execution.workspacePath,
+    );
+    expect(spawnAgentFix).toHaveBeenCalledWith(
+      expect.stringContaining('Conflicting files: packages/app/src/headless.ts'),
+      task.execution.workspacePath,
+      'codex',
+    );
+  });
+
   it('threads agentName="codex" to spawnAgentFix when merge fails', async () => {
     const spawnAgentFix = vi.fn<(prompt: string, cwd: string, agentName?: string) => Promise<{ stdout: string; sessionId: string }>>(
       async () => ({ stdout: '', sessionId: 'sess-conflict-codex' }),

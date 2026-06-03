@@ -26,6 +26,7 @@ import type { WorkflowDerivedStatus } from '@invoker/workflow-graph';
 import type { Logger, WorkResponse } from '@invoker/contracts';
 import { ATTEMPT_LEASE_MS } from '@invoker/contracts';
 import { normalizeRunnerKind } from '@invoker/workflow-graph';
+import { parseMergeConflictError } from './merge-conflict-error.js';
 
 const MERGE_TRACE_LOG = resolve(homedir(), '.invoker', 'merge-trace.log');
 function mergeTrace(tag: string, data: Record<string, unknown>): void {
@@ -125,29 +126,6 @@ const noopLogger: Logger = {
 
 function stripFixFailureWrapper(errorText: string): string {
   return errorText.replace(FIX_FAILURE_PREFIX_RE, '');
-}
-
-function tryParseJsonObject(value: string | undefined): Record<string, unknown> | undefined {
-  if (!value) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(value);
-    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function parseMergeConflictError(
-  value: string | undefined,
-): { failedBranch: string; conflictFiles: string[] } | undefined {
-  const obj = tryParseJsonObject(value);
-  if (obj?.type !== 'merge_conflict') return undefined;
-
-  const failedBranch = typeof obj.failedBranch === 'string' ? obj.failedBranch : '';
-  const conflictFiles = Array.isArray(obj.conflictFiles)
-    ? obj.conflictFiles.filter((file): file is string => typeof file === 'string')
-    : [];
-  return { failedBranch, conflictFiles };
 }
 
 function nextLeaseExpiry(from: Date): Date {
