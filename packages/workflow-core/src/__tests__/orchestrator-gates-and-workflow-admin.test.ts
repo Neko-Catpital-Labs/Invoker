@@ -1336,6 +1336,128 @@ describe('Orchestrator', () => {
       ]);
     });
 
+    it('records read-only detach provenance on the merge node while keeping the active dependency removed', () => {
+      orchestrator.loadPlan({
+        name: 'prov-upstream-a',
+        baseBranch: 'master',
+        featureBranch: 'feature/prov-upstream-a',
+        tasks: [{ id: 'verify-a', description: 'upstream A prerequisite' }],
+      });
+      const upstreamAWfId = sid(orchestrator, 0, 'verify-a').split('/')[0]!;
+
+      orchestrator.loadPlan({
+        name: 'prov-upstream-b',
+        baseBranch: 'master',
+        featureBranch: 'feature/prov-upstream-b',
+        tasks: [{ id: 'verify-b', description: 'upstream B prerequisite' }],
+      });
+      const upstreamBWfId = sid(orchestrator, 1, 'verify-b').split('/')[0]!;
+
+      orchestrator.loadPlan({
+        name: 'prov-target',
+        baseBranch: 'master',
+        featureBranch: 'feature/prov-target',
+        tasks: [
+          {
+            id: 'wait-for-upstreams',
+            description: 'target waits for two upstream workflows',
+            externalDependencies: [
+              { workflowId: upstreamAWfId, gatePolicy: 'review_ready' },
+              { workflowId: upstreamBWfId, gatePolicy: 'completed' },
+            ],
+          },
+        ],
+      });
+      const targetTaskId = sid(orchestrator, 2, 'wait-for-upstreams');
+      const targetWfId = targetTaskId.split('/')[0]!;
+
+      orchestrator.detachWorkflow(targetWfId, upstreamAWfId);
+
+      // Active dependency for the detached upstream is removed — scheduling is unchanged.
+      expect(persistence.loadWorkflow(targetWfId)!.externalDependencies).toEqual([
+        { workflowId: upstreamBWfId, taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'completed' },
+      ]);
+
+      // Read-only provenance for the removed edge is preserved on the merge node and persisted.
+      const expectedProvenance = {
+        workflowId: upstreamAWfId,
+        taskId: '__merge__',
+        requiredStatus: 'completed',
+        gatePolicy: 'review_ready',
+        detachedAt: expect.any(String),
+      };
+      const mergeNodeId = orchestrator.getMergeNode(targetWfId)!.id;
+      expect(orchestrator.getMergeNode(targetWfId)!.config.detachedExternalDependencies).toEqual([
+        expectedProvenance,
+      ]);
+      const persistedMergeNode = persistence.loadTasks(targetWfId).find((task) => task.id === mergeNodeId)!;
+      expect(persistedMergeNode.config.detachedExternalDependencies).toEqual([expectedProvenance]);
+
+      // Existing audit-trail change record remains intact.
+      expect(persistence.loadWorkflow(targetWfId)!.externalDependencyChanges).toEqual([
+        {
+          before: {
+            workflowId: upstreamAWfId,
+            taskId: '__merge__',
+            requiredStatus: 'completed',
+            gatePolicy: 'review_ready',
+          },
+          changedAt: expect.any(String),
+        },
+      ]);
+    });
+
+    it('appends detach provenance without introducing duplicates across successive detaches and reloads', () => {
+      orchestrator.loadPlan({
+        name: 'dup-upstream-a',
+        baseBranch: 'master',
+        featureBranch: 'feature/dup-upstream-a',
+        tasks: [{ id: 'verify-a', description: 'upstream A prerequisite' }],
+      });
+      const upstreamAWfId = sid(orchestrator, 0, 'verify-a').split('/')[0]!;
+
+      orchestrator.loadPlan({
+        name: 'dup-upstream-b',
+        baseBranch: 'master',
+        featureBranch: 'feature/dup-upstream-b',
+        tasks: [{ id: 'verify-b', description: 'upstream B prerequisite' }],
+      });
+      const upstreamBWfId = sid(orchestrator, 1, 'verify-b').split('/')[0]!;
+
+      orchestrator.loadPlan({
+        name: 'dup-target',
+        baseBranch: 'master',
+        featureBranch: 'feature/dup-target',
+        tasks: [
+          {
+            id: 'wait-for-upstreams',
+            description: 'target waits for two upstream workflows',
+            externalDependencies: [
+              { workflowId: upstreamAWfId, gatePolicy: 'review_ready' },
+              { workflowId: upstreamBWfId, gatePolicy: 'completed' },
+            ],
+          },
+        ],
+      });
+      const targetWfId = sid(orchestrator, 2, 'wait-for-upstreams').split('/')[0]!;
+
+      orchestrator.detachWorkflow(targetWfId, upstreamAWfId);
+      // The second detach reloads the merge node (provenance for A already persisted),
+      // then appends B without re-adding A.
+      orchestrator.detachWorkflow(targetWfId, upstreamBWfId);
+
+      expect(orchestrator.getMergeNode(targetWfId)!.config.detachedExternalDependencies).toEqual([
+        { workflowId: upstreamAWfId, taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'review_ready', detachedAt: expect.any(String) },
+        { workflowId: upstreamBWfId, taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'completed', detachedAt: expect.any(String) },
+      ]);
+
+      // Re-detaching an already-detached upstream is rejected and never grows provenance.
+      expect(() => orchestrator.detachWorkflow(targetWfId, upstreamAWfId)).toThrow(
+        /does not depend on upstream workflow/,
+      );
+      expect(orchestrator.getMergeNode(targetWfId)!.config.detachedExternalDependencies).toHaveLength(2);
+    });
+
     it('voids a running target workflow and its descendants back to pending without auto-starting them', () => {
       orchestrator.loadPlan({
         name: 'upstream-runtime',

@@ -19,7 +19,7 @@ import { TaskStateMachine } from './state-machine.js';
 import { ResponseHandler } from './response-handler.js';
 import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
-import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, Attempt, ExternalDependency, ExternalDependencyChange, TaskStatus, TaskHeartbeatSource } from '@invoker/workflow-graph';
+import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, Attempt, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency, TaskStatus, TaskHeartbeatSource } from '@invoker/workflow-graph';
 import type { RunnerKind } from '@invoker/workflow-graph';
 import { createTaskState, createAttempt } from '@invoker/workflow-graph';
 import type { WorkflowDerivedStatus } from '@invoker/workflow-graph';
@@ -5141,6 +5141,53 @@ export class Orchestrator {
       .filter((t): t is TaskState => !!t);
   }
 
+  /**
+   * Append read-only detach provenance to a carrier task's config (the
+   * detached workflow's merge-gate node).
+   *
+   * Each removed dependency is normalized exactly like the
+   * `externalDependencyChanges` audit record (empty/absent `taskId` →
+   * `__merge__`) and stamped with `detachedAt`. The list is append-only and
+   * de-duplicated by (upstream workflow, task selector, required status, gate
+   * policy) so repeated detach attempts and sync/reload cycles never grow
+   * duplicate entries. This never participates in scheduling — active
+   * `externalDependencies` are removed separately by the caller.
+   */
+  private recordDetachedDependencyProvenance(
+    carrierTaskId: string,
+    removedDeps: readonly ExternalDependency[],
+    detachedAt: string,
+  ): void {
+    if (removedDeps.length === 0) return;
+    const carrier = this.stateGetTask(carrierTaskId);
+    if (!carrier) return;
+
+    const keyOf = (dep: Pick<ExternalDependency, 'workflowId' | 'taskId' | 'requiredStatus' | 'gatePolicy'>): string =>
+      `${dep.workflowId}::${dep.taskId?.trim() || '__merge__'}::${dep.requiredStatus}::${dep.gatePolicy ?? ''}`;
+
+    const existing = carrier.config.detachedExternalDependencies ?? [];
+    const seen = new Set(existing.map((dep) => keyOf(dep)));
+
+    const additions: DetachedExternalDependency[] = [];
+    for (const dep of removedDeps) {
+      const key = keyOf(dep);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      additions.push({
+        ...dep,
+        taskId: dep.taskId?.trim() || '__merge__',
+        detachedAt,
+      });
+    }
+    if (additions.length === 0) return;
+
+    const changes: TaskStateChanges = {
+      config: { detachedExternalDependencies: [...existing, ...additions] },
+    };
+    const updated = this.writeAndSync(carrierTaskId, changes);
+    this.messageBus.publish(TASK_DELTA_CHANNEL, this.buildUpdateDelta(carrier, updated, changes));
+  }
+
   private detachWorkflowInternal(
     workflowId: string,
     upstreamWorkflowId: string,
@@ -5191,6 +5238,13 @@ export class Orchestrator {
     });
 
     const eventTask = this.getMergeNode(workflowId) ?? targetTasks[0];
+
+    // Persist read-only provenance for the removed edge(s) on the workflow's
+    // merge-gate node. Active externalDependencies stay removed above, so
+    // scheduling/blocker behavior is unchanged; this only lets the renderer
+    // tell a detached workflow apart from a genuinely independent one.
+    this.recordDetachedDependencyProvenance(eventTask.id, removedDeps, now);
+
     this.persistence.logEvent?.(eventTask.id, 'workflow.external_dependency_changed', {
       workflowId,
       upstreamWorkflowId,

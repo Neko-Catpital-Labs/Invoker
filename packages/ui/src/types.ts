@@ -50,6 +50,16 @@ export interface ExternalDependencyChange {
   readonly changedBy?: string;
 }
 
+/**
+ * Read-only provenance for a cross-workflow dependency removed by
+ * `detachWorkflow`. Mirrors `@invoker/workflow-graph`'s
+ * `DetachedExternalDependency`; lets the renderer distinguish a detached
+ * stack edge from a genuinely independent workflow.
+ */
+export interface DetachedExternalDependency extends ExternalDependency {
+  readonly detachedAt: string;
+}
+
 export interface ExternalGatePolicyUpdate {
   workflowId: string;
   taskId?: string;
@@ -83,6 +93,12 @@ export interface TaskConfig {
   readonly testPlan?: string;
   readonly reproCommand?: string;
   readonly externalDependencies?: readonly ExternalDependency[];
+  /**
+   * Read-only provenance for cross-workflow dependencies removed by
+   * `detachWorkflow`, carried on the workflow's merge-gate node. Not used
+   * for scheduling; rendered to mark detached upstream stack edges.
+   */
+  readonly detachedExternalDependencies?: readonly DetachedExternalDependency[];
 }
 
 // ── Task Execution (runtime fields) ────────────────────────
