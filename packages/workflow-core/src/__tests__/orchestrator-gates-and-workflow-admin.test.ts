@@ -1631,6 +1631,34 @@ describe('Orchestrator', () => {
       expect(task.execution.lastHeartbeatAt).toBeUndefined();
     });
 
+    it('clears launch claim metadata when deferring a launch-claimed task', () => {
+      const launchingOrchestrator = new Orchestrator({
+        persistence,
+        messageBus: bus,
+        logger: consoleLogger,
+        maxConcurrency: 3,
+        deferRunningUntilLaunch: true,
+      });
+      launchingOrchestrator.loadPlan({
+        name: 'defer-launch-claim-test',
+        tasks: [{ id: 'task-a', description: 'Task A' }],
+      });
+      const started = launchingOrchestrator.startExecution();
+      expect(started.length).toBe(1);
+      expect(launchingOrchestrator.getTask('task-a')!.status).toBe('pending');
+      expect(launchingOrchestrator.getTask('task-a')!.execution.phase).toBe('launching');
+
+      launchingOrchestrator.deferTask('task-a');
+
+      const task = launchingOrchestrator.getTask('task-a')!;
+      expect(task.status).toBe('pending');
+      expect(task.execution.phase).toBeUndefined();
+      expect(task.execution.launchStartedAt).toBeUndefined();
+      expect(task.execution.launchCompletedAt).toBeUndefined();
+      expect(task.execution.startedAt).toBeUndefined();
+      expect(task.execution.lastHeartbeatAt).toBeUndefined();
+    });
+
     it('replaces the selected attempt when deferring a task', () => {
       orchestrator.loadPlan({
         name: 'defer-attempt-refresh',

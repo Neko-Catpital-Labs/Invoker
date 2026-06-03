@@ -268,7 +268,7 @@ export function loadConfig(): InvokerConfig {
  * Resolve the launch-outbox feature-flag mode from the
  * `INVOKER_LAUNCH_OUTBOX` env var.
  *
- * Returns `'disabled'` when the var is unset, empty, or holds an
+ * Returns `'active'` when the var is unset, empty, or holds an
  * unrecognised value (with a console warning for unknown values so
  * operators notice typos like `INVOKER_LAUNCH_OUTBOX=on`).
  */
@@ -276,15 +276,15 @@ export function resolveLaunchOutboxMode(
   env: NodeJS.ProcessEnv = process.env,
 ): LaunchOutboxMode {
   const raw = env.INVOKER_LAUNCH_OUTBOX;
-  if (typeof raw !== 'string' || raw.trim() === '') return 'disabled';
+  if (typeof raw !== 'string' || raw.trim() === '') return 'active';
   const normalized = raw.trim().toLowerCase();
   if (normalized === 'disabled' || normalized === 'observe' || normalized === 'active') {
     return normalized;
   }
   console.warn(
-    `[config] Unknown INVOKER_LAUNCH_OUTBOX value "${raw}"; falling back to "disabled".`,
+    `[config] Unknown INVOKER_LAUNCH_OUTBOX value "${raw}"; falling back to "active".`,
   );
-  return 'disabled';
+  return 'active';
 }
 
 export type EmbeddedTerminalBackendConfig = 'bash' | 'pty';
