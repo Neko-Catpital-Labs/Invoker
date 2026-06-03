@@ -360,6 +360,19 @@ export class CommandService {
     );
   }
 
+  async setWorkflowExternalGatePolicies(
+    envelope: CommandEnvelope<{ workflowId: string; updates: ExternalGatePolicyUpdate[] }>,
+  ): Promise<CommandResult<TaskState[]>> {
+    return this.executeCommand<TaskState[]>(
+      'SET_GATE_POLICIES_FAILED',
+      () => this.orchestrator.setWorkflowExternalGatePolicies(
+        envelope.payload.workflowId,
+        envelope.payload.updates,
+      ),
+      envelope.payload.workflowId,
+    );
+  }
+
   async replaceTask(
     envelope: CommandEnvelope<{ taskId: string; replacementTasks: TaskReplacementDef[] }>,
   ): Promise<CommandResult<TaskState[]>> {
