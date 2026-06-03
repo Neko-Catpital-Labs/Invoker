@@ -19,7 +19,7 @@ import { TaskStateMachine } from './state-machine.js';
 import { ResponseHandler } from './response-handler.js';
 import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
-import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, Attempt, ExternalDependency, TaskStatus } from '@invoker/workflow-graph';
+import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, Attempt, ExternalDependency, TaskStatus, TaskHeartbeatSource } from '@invoker/workflow-graph';
 import type { RunnerKind } from '@invoker/workflow-graph';
 import { createTaskState, createAttempt } from '@invoker/workflow-graph';
 import type { WorkflowDerivedStatus } from '@invoker/workflow-graph';
@@ -3989,6 +3989,27 @@ export class Orchestrator {
 
   getTask(taskId: string): TaskState | undefined {
     return this.stateGetTask(taskId);
+  }
+
+  recordTaskHeartbeat(
+    taskId: string,
+    options: { at?: Date; source?: TaskHeartbeatSource } = {},
+  ): TaskState | undefined {
+    const task = this.stateGetTask(taskId);
+    if (!task) return undefined;
+
+    const at = options.at ?? new Date();
+    const source = options.source ?? 'executor';
+    const changes: TaskStateChanges = {
+      execution: {
+        lastHeartbeatAt: at,
+        heartbeatSource: source,
+        ...(source === 'remote_workload' ? { remoteHeartbeatAt: at } : {}),
+      },
+    };
+    const updated = this.writeAndSync(task.id, changes, { skipWorkflowStatusSync: true });
+    this.messageBus.publish(TASK_DELTA_CHANNEL, this.buildUpdateDelta(task, updated, changes));
+    return updated;
   }
 
   getAutoFixRetryBudget(taskId: string): number {
