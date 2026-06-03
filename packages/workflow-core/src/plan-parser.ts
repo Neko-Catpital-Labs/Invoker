@@ -222,11 +222,12 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       throw new PlanParseError(`Task "${task.id}" uses 'npx vitest run' which may not resolve correctly. Use 'pnpm test' instead.`);
     }
 
-    const taskExternalDependencies = parseExternalDependencies(`Task "${task.id}"`, task.externalDependencies);
-    const externalDependencies = mergeExternalDependencies(
-      (task.dependencies?.length ?? 0) === 0 ? topLevelExternalDependencies : undefined,
-      taskExternalDependencies,
-    );
+    if (task.externalDependencies !== undefined) {
+      throw new PlanParseError(
+        `Task "${task.id}" uses task-level "externalDependencies", which is no longer supported. ` +
+        'Put cross-workflow dependencies at the plan/workflow level.',
+      );
+    }
 
     return {
       id: task.id,
@@ -234,7 +235,6 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       command: task.command,
       prompt: task.prompt,
       dependencies: task.dependencies ?? [],
-      externalDependencies,
       pivot: task.pivot,
       experimentVariants: task.experimentVariants?.map((variant) => ({
         id: variant.id ?? '',
@@ -261,6 +261,7 @@ export function parsePlan(yamlContent: string): PlanDefinition {
     reviewProvider,
     repoUrl: raw.repoUrl,
     intermediateRepoUrl: raw.intermediateRepoUrl,
+    externalDependencies: topLevelExternalDependencies,
     tasks,
   });
 }

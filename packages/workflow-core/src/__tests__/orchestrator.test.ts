@@ -4,7 +4,7 @@ import { rid, sid } from './scoped-test-helpers.js';
 import { Orchestrator, PlanConflictError, descriptionForMergeNode } from '../orchestrator.js';
 import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
 import { computeWorkflowRollup } from '../task-types.js';
-import type { TaskState, TaskDelta, TaskStateChanges, Attempt } from '../task-types.js';
+import type { TaskState, TaskDelta, TaskStateChanges, Attempt, ExternalDependency, ExternalDependencyChange } from '../task-types.js';
 import type { Logger, WorkResponse } from '@invoker/contracts';
 
 // ── In-Memory Persistence Mock ──────────────────────────────
@@ -20,6 +20,8 @@ class InMemoryPersistence implements OrchestratorPersistence {
     baseBranch?: string;
     featureBranch?: string;
     mergeMode?: 'manual' | 'automatic' | 'external_review';
+    externalDependencies?: ExternalDependency[];
+    externalDependencyChanges?: ExternalDependencyChange[];
   }>();
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
   private attempts = new Map<string, Attempt[]>();
@@ -34,6 +36,8 @@ class InMemoryPersistence implements OrchestratorPersistence {
     baseBranch?: string;
     featureBranch?: string;
     mergeMode?: 'manual' | 'automatic' | 'external_review';
+    externalDependencies?: ExternalDependency[];
+    externalDependencyChanges?: ExternalDependencyChange[];
   }): void {
     const now = new Date().toISOString();
     this.workflows.set(workflow.id, {
@@ -56,6 +60,8 @@ class InMemoryPersistence implements OrchestratorPersistence {
       updatedAt?: string;
       baseBranch?: string;
       mergeMode?: 'manual' | 'automatic' | 'external_review';
+      externalDependencies?: ExternalDependency[];
+      externalDependencyChanges?: ExternalDependencyChange[];
     },
   ): void {
     const wf = this.workflows.get(workflowId);
@@ -72,6 +78,12 @@ class InMemoryPersistence implements OrchestratorPersistence {
     if (wf && changes.baseBranch !== undefined) {
       wf.baseBranch = changes.baseBranch;
     }
+    if (wf && 'externalDependencies' in changes) {
+      wf.externalDependencies = changes.externalDependencies;
+    }
+    if (wf && 'externalDependencyChanges' in changes) {
+      wf.externalDependencyChanges = changes.externalDependencyChanges;
+    }
   }
 
   loadWorkflow(workflowId: string): {
@@ -79,6 +91,8 @@ class InMemoryPersistence implements OrchestratorPersistence {
     baseBranch?: string;
     featureBranch?: string;
     mergeMode?: 'manual' | 'automatic' | 'external_review';
+    externalDependencies?: ExternalDependency[];
+    externalDependencyChanges?: ExternalDependencyChange[];
   } | undefined {
     const wf = this.workflows.get(workflowId);
     if (!wf) return undefined;
@@ -1982,6 +1996,7 @@ describe('Orchestrator', () => {
         ],
       });
       const leafId = sid(orchestrator, 1, 'leaf-a');
+      const leafWfId = leafId.split('/')[0]!;
 
       orchestrator.startExecution();
       orchestrator.handleWorkerResponse(makeResponse({ actionId: prereqTaskId, status: 'completed' }));
@@ -1993,7 +2008,7 @@ describe('Orchestrator', () => {
         { workflowId: prereqWfId, gatePolicy: 'review_ready' },
       ]);
 
-      expect(orchestrator.getTask(leafId)!.config.externalDependencies?.[0]?.gatePolicy).toBe('review_ready');
+      expect(persistence.loadWorkflow(leafWfId)!.externalDependencies?.[0]?.gatePolicy).toBe('review_ready');
       expect(started.map((t) => t.id)).toContain(leafId);
       expect(orchestrator.getTask(leafId)!.status).toBe('running');
     });
@@ -2025,16 +2040,17 @@ describe('Orchestrator', () => {
       });
 
       const leafId = sid(orchestrator, 2, 'leaf-a');
+      const leafWfId = leafId.split('/')[0]!;
       orchestrator.setTaskExternalGatePolicies(leafId, [
         { workflowId: wfB, gatePolicy: 'review_ready' },
       ]);
 
-      const deps = orchestrator.getTask(leafId)!.config.externalDependencies!;
+      const deps = persistence.loadWorkflow(leafWfId)!.externalDependencies!;
       expect(deps.find((d) => d.workflowId === wfA)!.gatePolicy).toBe('completed');
       expect(deps.find((d) => d.workflowId === wfB)!.gatePolicy).toBe('review_ready');
     });
 
-    it('repro: deleting upstream workflow detaches downstream external dependency on restart', () => {
+    it('repro: deleting upstream workflow records downstream external dependency removal on restart', () => {
       orchestrator.loadPlan({
         name: 'upstream-workflow',
         baseBranch: 'master',
@@ -2061,7 +2077,7 @@ describe('Orchestrator', () => {
 
       orchestrator.startExecution();
       expect(orchestrator.getTask(downstreamTaskId)!.status).toBe('pending');
-      expect(orchestrator.getTask(downstreamTaskId)!.config.externalDependencies).toHaveLength(1);
+      expect(persistence.loadWorkflow(downstreamWfId)!.externalDependencies).toHaveLength(1);
 
       // Repro condition: upstream workflow is deleted after downstream was created.
       orchestrator.deleteWorkflow(upstreamWfId);
@@ -2072,6 +2088,19 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask(downstreamTaskId)!.status).toBe('running');
       expect(orchestrator.getTask(downstreamTaskId)!.config.externalDependencies).toBeUndefined();
       expect(persistence.getTaskEntry(downstreamTaskId)!.task.config.externalDependencies).toBeUndefined();
+      const downstreamWorkflow = persistence.loadWorkflow(downstreamWfId)!;
+      expect(downstreamWorkflow.externalDependencies).toBeUndefined();
+      expect(downstreamWorkflow.externalDependencyChanges).toEqual([
+        {
+          before: {
+            workflowId: upstreamWfId,
+            taskId: '__merge__',
+            requiredStatus: 'completed',
+            gatePolicy: 'completed',
+          },
+          changedAt: expect.any(String),
+        },
+      ]);
       expect(persistence.loadWorkflow(downstreamWfId)!.baseBranch).toBe('master');
     });
 

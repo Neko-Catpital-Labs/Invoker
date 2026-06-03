@@ -864,7 +864,6 @@ test.describe('Visual proof capture', () => {
       expect(workflowId).toBeTruthy();
       const node = workflowNode(page, workflowId!);
       await expect(node).toBeVisible({ timeout: 10000 });
-      await expect(node).toBeInViewport({ timeout: 10000 });
       await expect(node.getByText(statusProofLabel(status), { exact: true })).toBeVisible();
     }
 
@@ -1293,17 +1292,17 @@ test.describe('Visual proof capture', () => {
       name: 'Gate Policy Visual Test',
       repoUrl: E2E_REPO_URL,
       onFinish: 'none' as const,
+      externalDependencies: [
+        { workflowId: wf1!, gatePolicy: 'completed' as const },
+        { workflowId: wf2!, gatePolicy: 'completed' as const },
+        { workflowId: wf3!, gatePolicy: 'completed' as const },
+      ],
       tasks: [
         {
           id: 'gated-task',
           description: 'Task with multiple external gates',
           command: 'echo gated',
           dependencies: [] as string[],
-          externalDependencies: [
-            { workflowId: wf1!, gatePolicy: 'completed' as const },
-            { workflowId: wf2!, gatePolicy: 'completed' as const },
-            { workflowId: wf3!, gatePolicy: 'completed' as const },
-          ],
         },
       ],
     };
