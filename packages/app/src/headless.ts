@@ -26,6 +26,7 @@ import {
   registerBuiltinAgents,
   assertPlanExecutionAgentsRegistered,
   type AgentRegistry,
+  type TaskHeartbeatEvent,
 } from '@invoker/execution-engine';
 import { loadConfig, resolveSecretsFilePath, type InvokerConfig } from './config.js';
 import { backupPlan } from './plan-backup.js';
@@ -135,9 +136,12 @@ const YELLOW = '\x1b[33m';
 
 // ── Shared Helpers ───────────────────────────────────────────
 
-function headlessHeartbeat(taskId: string, deps: Pick<HeadlessDeps, 'persistence'>): void {
-  const now = new Date();
-  try { deps.persistence.updateTask(taskId, { execution: { lastHeartbeatAt: now } }); } catch { /* db locked */ }
+function headlessHeartbeat(
+  taskId: string,
+  event: TaskHeartbeatEvent,
+  deps: Pick<HeadlessDeps, 'orchestrator'>,
+): void {
+  deps.orchestrator.recordTaskHeartbeat(taskId, { at: event.at, source: event.source });
 }
 
 function buildHeadlessApiServerDeps(
@@ -273,7 +277,7 @@ export function createHeadlessExecutor(
           deps.logger.error(`Failed to persist output for ${taskId}: ${err}`, { module: 'output' });
         }
       },
-      onHeartbeat: (taskId) => headlessHeartbeat(taskId, deps),
+      onHeartbeat: (taskId, event) => headlessHeartbeat(taskId, event, deps),
       ...callbackOverrides,
     },
   });

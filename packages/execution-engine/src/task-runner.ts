@@ -60,7 +60,7 @@ import {
 } from './pr-authoring.js';
 import { assertNotGitConfigMutation, ensureRemoteUrl } from './git-config-mutation.js';
 
-export type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
+export type { TaskHeartbeatEvent, TaskRunnerCallbacks } from './task-runner-callbacks.js';
 
 /** Keeps `lastHeartbeatAt` fresh while `executor.start()` is awaited (SSH remote setup/provision can take minutes). Matches BaseExecutor default heartbeat cadence. */
 const PRE_START_HEARTBEAT_INTERVAL_MS = 30_000;
@@ -853,7 +853,7 @@ export class TaskRunner {
           lastHeartbeatAt: now,
           leaseExpiresAt: nextLeaseExpiry(now),
         } as any);
-        this.callbacks.onHeartbeat?.(task.id);
+        this.callbacks.onHeartbeat?.(task.id, { at: now, source: 'executor' });
       }, PRE_START_HEARTBEAT_INTERVAL_MS);
       let preStartTimeout: ReturnType<typeof setTimeout> | undefined;
       try {
@@ -1100,15 +1100,10 @@ export class TaskRunner {
         lastHeartbeatAt: now,
         leaseExpiresAt: nextLeaseExpiry(now),
       } as any);
-      this.persistence.updateTask(task.id, {
-        execution: {
-          lastHeartbeatAt: now,
-          ...(isRemoteWorkloadHeartbeat
-            ? { remoteHeartbeatAt: now, heartbeatSource: 'remote_workload' as const }
-            : { heartbeatSource: 'executor' as const }),
-        },
-      } as any);
-      this.callbacks.onHeartbeat?.(task.id);
+      this.callbacks.onHeartbeat?.(task.id, {
+        at: now,
+        source: isRemoteWorkloadHeartbeat ? 'remote_workload' : 'executor',
+      });
     });
 
     // Wait for completion and feed response to orchestrator.
@@ -2222,7 +2217,7 @@ export class TaskRunner {
         lastHeartbeatAt: now,
         leaseExpiresAt: nextLeaseExpiry(now),
       } as any);
-      this.callbacks.onHeartbeat?.(taskId);
+      this.callbacks.onHeartbeat?.(taskId, { at: now, source: 'executor' });
     };
 
     const heartbeatTimer = setInterval(heartbeat, PRE_START_HEARTBEAT_INTERVAL_MS);
