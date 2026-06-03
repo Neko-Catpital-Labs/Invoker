@@ -44,6 +44,7 @@ export type LaunchDispatcherPersistence = Pick<
  */
 export interface LaunchDispatcherOrchestrator {
   prepareTaskForNewAttempt(taskId: string, reason: string): unknown;
+  syncFromDb?(workflowId: string): void;
   getTask?(taskId: string): TaskState | undefined;
 }
 
@@ -179,12 +180,16 @@ export class LaunchDispatcher {
       });
       if (!leased) break;
       dispatched += 1;
-      const task = this.orchestrator?.getTask?.(leased.taskId);
+      const task = this.resolveTaskForDispatch(leased);
       if (!task) {
         this.failDispatch(
           leased.id,
           new Error(`Task ${leased.taskId} missing from orchestrator state at dispatch time`),
         );
+        break;
+      }
+      if (!this.dispatchMatchesTask(leased, task)) {
+        this.retireSupersededDispatch(leased, task);
         continue;
       }
       // Fire-and-forget within the loop: the dispatch row is the durable
@@ -207,6 +212,51 @@ export class LaunchDispatcher {
         module: 'launch-dispatcher',
       });
     }
+  }
+
+  private resolveTaskForDispatch(dispatch: TaskLaunchDispatch): TaskState | undefined {
+    try {
+      this.orchestrator?.syncFromDb?.(dispatch.workflowId);
+    } catch (err) {
+      this.logger?.warn?.('[launch-dispatcher] workflow hydration failed before dispatch', {
+        ownerId: this.ownerId,
+        workflowId: dispatch.workflowId,
+        taskId: dispatch.taskId,
+        dispatchId: dispatch.id,
+        error: err instanceof Error ? err.message : String(err),
+        module: 'launch-dispatcher',
+      });
+    }
+
+    return this.orchestrator?.getTask?.(dispatch.taskId);
+  }
+
+  private dispatchMatchesTask(dispatch: TaskLaunchDispatch, task: TaskState): boolean {
+    return task.execution.selectedAttemptId === dispatch.attemptId
+      && (task.execution.generation ?? 0) === (dispatch.generation ?? 0);
+  }
+
+  private retireSupersededDispatch(dispatch: TaskLaunchDispatch, task: TaskState): void {
+    const accepted = this.persistence.markLaunchDispatchCompleted(dispatch.id);
+    this.persistence.logEvent?.(dispatch.taskId, 'task.launch_dispatch_superseded', {
+      dispatchId: dispatch.id,
+      dispatchAttemptId: dispatch.attemptId,
+      dispatchGeneration: dispatch.generation,
+      selectedAttemptId: task.execution.selectedAttemptId,
+      selectedGeneration: task.execution.generation ?? 0,
+      reason: 'selected_attempt_changed',
+    });
+    this.logger?.warn?.('[launch-dispatcher] retired superseded dispatch', {
+      ownerId: this.ownerId,
+      dispatchId: dispatch.id,
+      taskId: dispatch.taskId,
+      dispatchAttemptId: dispatch.attemptId,
+      dispatchGeneration: dispatch.generation,
+      selectedAttemptId: task.execution.selectedAttemptId,
+      selectedGeneration: task.execution.generation ?? 0,
+      accepted,
+      module: 'launch-dispatcher',
+    });
   }
 
   /**
