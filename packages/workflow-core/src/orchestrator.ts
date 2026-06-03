@@ -4203,10 +4203,18 @@ export class Orchestrator {
     if (!task) return;
     const id = task.id;
 
-    // Transition running → pending
+    // Transition running → pending. A deferred launch must not retain the
+    // launch-claimed phase; otherwise it can be mistaken for an actively
+    // dispatchable launch with no executor owner.
     const changes: TaskStateChanges = {
       status: 'pending',
-      execution: { startedAt: undefined, lastHeartbeatAt: undefined },
+      execution: {
+        startedAt: undefined,
+        lastHeartbeatAt: undefined,
+        phase: undefined,
+        launchStartedAt: undefined,
+        launchCompletedAt: undefined,
+      },
     };
     const deferUpdated = this.writeAndSync(id, changes);
     const delta: TaskDelta = this.buildUpdateDelta(task, deferUpdated, changes);

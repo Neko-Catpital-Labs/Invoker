@@ -30,7 +30,7 @@ vi.mock('node:os', async (importOriginal) => {
 describe('loadConfig', () => {
   it('returns config with default launchOutboxMode when no files exist', () => {
     const config = loadConfig();
-    expect(config).toEqual({ launchOutboxMode: 'disabled' });
+    expect(config).toEqual({ launchOutboxMode: 'active' });
   });
 
   it('reads user-level ~/.invoker/config.json', () => {
@@ -256,8 +256,14 @@ describe('resolveEmbeddedTerminalBackendConfig', () => {
 });
 
 describe('resolveLaunchOutboxMode', () => {
-  it('defaults to disabled when INVOKER_LAUNCH_OUTBOX is unset', () => {
-    expect(resolveLaunchOutboxMode({})).toBe('disabled');
+  it('defaults to active when INVOKER_LAUNCH_OUTBOX is unset', () => {
+    expect(resolveLaunchOutboxMode({})).toBe('active');
+  });
+
+  it('returns disabled when INVOKER_LAUNCH_OUTBOX=disabled', () => {
+    expect(
+      resolveLaunchOutboxMode({ INVOKER_LAUNCH_OUTBOX: 'disabled' }),
+    ).toBe('disabled');
   });
 
   it('returns observe when INVOKER_LAUNCH_OUTBOX=observe', () => {
@@ -272,12 +278,12 @@ describe('resolveLaunchOutboxMode', () => {
     ).toBe('active');
   });
 
-  it('falls back to disabled with a warning for unknown values', () => {
+  it('falls back to active with a warning for unknown values', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       expect(
         resolveLaunchOutboxMode({ INVOKER_LAUNCH_OUTBOX: 'on' }),
-      ).toBe('disabled');
+      ).toBe('active');
       expect(warnSpy).toHaveBeenCalledOnce();
       expect(warnSpy.mock.calls[0]?.[0]).toMatch(/Unknown INVOKER_LAUNCH_OUTBOX/);
     } finally {
