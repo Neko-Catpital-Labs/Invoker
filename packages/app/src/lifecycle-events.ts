@@ -12,6 +12,7 @@ export const WORKFLOW_LIFECYCLE_EVENT_KINDS = [
   'task.failed',
   'task.review_ready',
   'task.awaiting_approval',
+  'task.needs_input',
   'task.removed',
   'review_gate.ci_failed',
   'workflow.wakeup',
@@ -41,6 +42,7 @@ export interface TaskLifecycleEvent extends WorkflowLifecycleEventBase {
     | 'task.failed'
     | 'task.review_ready'
     | 'task.awaiting_approval'
+    | 'task.needs_input'
     | 'task.removed';
   readonly taskId: string;
   readonly status?: TaskStatus;
@@ -153,6 +155,8 @@ export function lifecycleEventKindForTaskStatus(status: TaskStatus): TaskLifecyc
       return 'task.review_ready';
     case 'awaiting_approval':
       return 'task.awaiting_approval';
+    case 'needs_input':
+      return 'task.needs_input';
     default:
       return 'task.updated';
   }
@@ -337,6 +341,7 @@ export function isWorkflowLifecycleEvent(value: unknown): value is WorkflowLifec
     case 'task.failed':
     case 'task.review_ready':
     case 'task.awaiting_approval':
+    case 'task.needs_input':
     case 'task.removed':
       return typeof value.taskId === 'string';
     case 'review_gate.ci_failed':

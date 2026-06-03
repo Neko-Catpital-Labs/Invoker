@@ -130,6 +130,22 @@ describe('lifecycle event helpers', () => {
     expect(reviewReady.kind).toBe('task.review_ready');
   });
 
+  it('maps needs_input status updates to worker lifecycle kinds', () => {
+    const needsInput = buildTaskUpdatedLifecycleEvent({
+      workflowId: 'wf-1',
+      taskId: 'wf-1/task-a',
+      status: 'needs_input',
+      previousStatus: 'running',
+      taskStateVersion: 6,
+      generation: 2,
+      createdAt: CREATED_AT,
+    });
+
+    expect(lifecycleEventKindForTaskStatus('needs_input')).toBe('task.needs_input');
+    expect(needsInput.kind).toBe('task.needs_input');
+    expect(isWorkflowLifecycleEvent(needsInput)).toBe(true);
+  });
+
   it('builds task.removed from removed deltas', () => {
     const event = buildLifecycleEventFromTaskDelta(
       { type: 'removed', taskId: 'wf-1/task-a', previousTaskStateVersion: 9 },
