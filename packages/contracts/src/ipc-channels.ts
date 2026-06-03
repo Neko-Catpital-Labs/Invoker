@@ -481,6 +481,18 @@ export const IpcChannels = {
     request: [taskId: string];
     response: void;
   },
+  /**
+   * Recreate-class invalidation that targets only the transitive
+   * downstream dependents of a task. The task itself is preserved
+   * (branch, commit, workspacePath, agent/session metadata, generation,
+   * selectedAttemptId); descendants are reset like `recreateTask`.
+   * Used by operators who manually update a task's branch and want
+   * to rerun the rest of the chain on top of it.
+   */
+  'invoker:recreate-downstream': {} as {
+    request: [taskId: string];
+    response: void;
+  },
   'invoker:retry-workflow': {} as {
     request: [workflowId: string];
     response: void;
