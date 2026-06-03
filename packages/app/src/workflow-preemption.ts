@@ -6,7 +6,66 @@ export type WorkflowCancelResult = {
   runningCancelled: string[];
 };
 
+export type WorkflowPreemptionFenceKind = 'recreate' | 'delete';
+
 type PreemptWorkflowExecution = (workflowId: string) => Promise<WorkflowCancelResult | void>;
+
+function firstHeadlessArg(args: readonly unknown[]): string {
+  const payload = args[0] as { args?: readonly unknown[] } | undefined;
+  const rawArgs = Array.isArray(payload?.args) ? payload.args : [];
+  return typeof rawArgs[0] === 'string' ? rawArgs[0] : '';
+}
+
+export function hardPreemptFenceKind(
+  channel: string,
+  args: readonly unknown[],
+): WorkflowPreemptionFenceKind | null {
+  if (
+    channel === 'invoker:recreate-workflow'
+    || channel === 'invoker:recreate-task'
+    || channel === 'invoker:rebase-recreate'
+  ) {
+    return 'recreate';
+  }
+  if (
+    channel === 'invoker:delete-workflow'
+    || channel === 'invoker:delete-all-workflows'
+    || channel === 'invoker:delete-all-workflows-bulk'
+  ) {
+    return 'delete';
+  }
+  if (channel !== 'headless.exec') {
+    return null;
+  }
+  const command = firstHeadlessArg(args);
+  if (
+    command === 'recreate'
+    || command === 'recreate-workflow'
+    || command === 'recreate-task'
+    || command === 'rebase-recreate'
+  ) {
+    return 'recreate';
+  }
+  if (
+    command === 'delete'
+    || command === 'delete-workflow'
+    || command === 'delete-all'
+  ) {
+    return 'delete';
+  }
+  return null;
+}
+
+export function isFixLikeWorkflowMutation(channel: string, args: readonly unknown[]): boolean {
+  if (channel === 'invoker:fix-with-agent' || channel === 'invoker:resolve-conflict') {
+    return true;
+  }
+  if (channel !== 'headless.exec') {
+    return false;
+  }
+  const command = firstHeadlessArg(args);
+  return command === 'fix' || command === 'resolve-conflict';
+}
 
 export async function preemptWorkflowBeforeMutation(
   workflowId: string,

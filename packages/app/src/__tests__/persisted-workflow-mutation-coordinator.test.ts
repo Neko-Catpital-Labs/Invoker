@@ -1452,6 +1452,8 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     expect(capturedContext!.signal.aborted).toBe(false);
     expect(capturedContext!.workflowId).toBe('wf-1');
     expect(capturedContext!.intentId).toBe(1);
+    expect(capturedContext!.channel).toBe('invoker:fix-with-agent');
+    expect(capturedContext!.args).toEqual(['wf-1/blocker-task', null]);
 
     const recreateTask = coordinator.enqueue<void>(
       'wf-1',
@@ -1463,6 +1465,71 @@ describe('PersistedWorkflowMutationCoordinator', () => {
 
     expect(capturedContext!.signal.aborted).toBe(true);
     await expect(olderRunning).rejects.toThrow(/superseded by recreate intent/i);
+    gate.resolve();
+  });
+
+  it('prevents stale fix side effects after recreate-task completes', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const allowFixToReturn = deferred();
+    const fixStopped = deferred();
+    const staleWrites: string[] = [];
+    const order: string[] = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async (channel, _args, context) => {
+        if (channel === 'invoker:fix-with-agent') {
+          order.push('fix-started');
+          await allowFixToReturn.promise;
+          if (context.signal.aborted) {
+            order.push('fix-aborted');
+            fixStopped.resolve();
+            return;
+          }
+          staleWrites.push('old-fix-write');
+          order.push('fix-late-write');
+          fixStopped.resolve();
+          return;
+        }
+        order.push(channel);
+      },
+    );
+
+    const olderRunning = coordinator.enqueue<void>(
+      'wf-1',
+      'normal',
+      'invoker:fix-with-agent',
+      ['wf-1/blocker-task', null],
+    );
+    void olderRunning.catch(() => {});
+    await waitFor(() => order.includes('fix-started'));
+
+    const recreateTask = coordinator.enqueue<void>(
+      'wf-1',
+      'high',
+      'invoker:recreate-task',
+      ['wf-1/target-task'],
+    );
+    await recreateTask;
+    allowFixToReturn.resolve();
+    await fixStopped.promise;
+
+    await expect(olderRunning).rejects.toThrow(/superseded by recreate intent/i);
+    expect(staleWrites).toEqual([]);
+    expect(order).toEqual([
+      'fix-started',
+      'invoker:recreate-task',
+      'fix-aborted',
+    ]);
   });
 
   it('aborts the dispatch AbortSignal when delete-workflow preempts a running fix mutation', async () => {
@@ -1510,6 +1577,71 @@ describe('PersistedWorkflowMutationCoordinator', () => {
 
     expect(capturedContext!.signal.aborted).toBe(true);
     await expect(olderRunning).rejects.toThrow(/superseded by delete intent/i);
+    gate.resolve();
+  });
+
+  it('prevents stale fix side effects after delete-workflow completes', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const allowFixToReturn = deferred();
+    const fixStopped = deferred();
+    const staleWrites: string[] = [];
+    const order: string[] = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async (channel, _args, context) => {
+        if (channel === 'invoker:fix-with-agent') {
+          order.push('fix-started');
+          await allowFixToReturn.promise;
+          if (context.signal.aborted) {
+            order.push('fix-aborted');
+            fixStopped.resolve();
+            return;
+          }
+          staleWrites.push('old-fix-write');
+          order.push('fix-late-write');
+          fixStopped.resolve();
+          return;
+        }
+        order.push(channel);
+      },
+    );
+
+    const olderRunning = coordinator.enqueue<void>(
+      'wf-1',
+      'normal',
+      'invoker:fix-with-agent',
+      ['wf-1/blocker-task', null],
+    );
+    void olderRunning.catch(() => {});
+    await waitFor(() => order.includes('fix-started'));
+
+    const deleteWf = coordinator.enqueue<void>(
+      'wf-1',
+      'high',
+      'invoker:delete-workflow',
+      ['wf-1'],
+    );
+    await deleteWf;
+    allowFixToReturn.resolve();
+    await fixStopped.promise;
+
+    await expect(olderRunning).rejects.toThrow(/superseded by delete intent/i);
+    expect(staleWrites).toEqual([]);
+    expect(order).toEqual([
+      'fix-started',
+      'invoker:delete-workflow',
+      'fix-aborted',
+    ]);
   });
 
   it('aborts the dispatch AbortSignal when rebase-recreate preempts a running fix mutation', async () => {
@@ -1557,6 +1689,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
 
     expect(capturedContext!.signal.aborted).toBe(true);
     await expect(olderRunning).rejects.toThrow(/superseded by recreate intent/i);
+    gate.resolve();
   });
 
   it('does not abort the dispatch AbortSignal for non-preempted mutations that complete normally', async () => {
@@ -1624,7 +1757,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     void olderRunning.catch(() => {});
     await waitFor(() => capturedContext !== undefined);
 
-    coordinator.enqueue<void>(
+    const deleteAllBulk = coordinator.enqueue<void>(
       'wf-1',
       'high',
       'invoker:delete-all-workflows-bulk',
@@ -1636,6 +1769,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     expect(reason).toBeInstanceOf(Error);
     expect((reason as Error).name).toBe('WorkflowMutationInvalidatedError');
     expect((reason as Error).message).toContain('Superseded by delete');
+    gate.resolve();
+    await deleteAllBulk;
+    await expect(olderRunning).rejects.toThrow(/superseded by delete intent/i);
   });
 
   it('dispatch handler can observe abort during long-running work and stop early', async () => {
