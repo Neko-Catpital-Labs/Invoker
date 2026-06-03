@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { TaskState } from '@invoker/workflow-core';
 import type { WorkResponse, Logger } from '@invoker/contracts';
 import { TaskRunner, type LaunchOutboxAck } from '../task-runner.js';
+import { ResourceLimitError } from '../repo-pool.js';
 
 function makeLogger(): Logger {
   const noop = () => {};
@@ -179,6 +180,24 @@ describe('TaskRunner launch-dispatch wiring', () => {
     const failArg = launchOutbox.failCalls[0][1];
     expect(failArg).toBeInstanceOf(Error);
     expect((failArg as Error).message).toMatch(/startup explosion/);
+  });
+
+  it('completes the dispatch row when resource-limit defers the launch', async () => {
+    const task = makeTask();
+    const env = buildRunnerEnv(task);
+    const message = 'Execution pool "pnpm-ssh" has no member capacity available';
+    const resourceLimit = new ResourceLimitError(message);
+    (env.runner as any).executeTaskInner = vi.fn().mockRejectedValue(
+      new Error(message, { cause: resourceLimit }),
+    );
+    const launchOutbox = makeLaunchOutbox();
+
+    await env.runner.executeTask(task, { dispatchId: 321, launchOutbox });
+
+    expect(launchOutbox.ackCalls).toHaveLength(1);
+    expect(env.orchestrator.deferTask).toHaveBeenCalledWith(task.id);
+    expect(launchOutbox.completeCalls).toEqual([321]);
+    expect(launchOutbox.failCalls).toHaveLength(0);
   });
 
   it('is a no-op for the outbox when dispatchOpts is omitted', async () => {
