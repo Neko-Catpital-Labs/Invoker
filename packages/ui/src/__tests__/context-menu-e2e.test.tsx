@@ -64,12 +64,16 @@ describe('Context menu (component)', () => {
     mock.cleanup();
   });
 
-  async function setup() {
+  async function setup(
+    nextTasks = [alpha, beta, merge],
+    nextWorkflows = workflows,
+    waitForWorkflowId = 'wf-1',
+  ) {
     render(<App />);
-    act(() => mock.setTasks([alpha, beta, merge], workflows));
+    act(() => mock.setTasks(nextTasks, nextWorkflows));
 
     await waitFor(() => {
-      expect(screen.getByTestId('workflow-node-wf-1')).toBeInTheDocument();
+      expect(screen.getByTestId(`workflow-node-${waitForWorkflowId}`)).toBeInTheDocument();
     });
   }
 
@@ -150,6 +154,62 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('More'));
     fireEvent.click(await screen.findByText('Delete Workflow'));
     await waitFor(() => expect(mock.api.deleteWorkflow).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('workflow context menu confirms before detaching an upstream workflow', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const upstreamTask = makeUITask({ id: 'wf-upstream/root', workflowId: 'wf-upstream' });
+    const downstreamTask = makeUITask({ id: 'wf-child/root', workflowId: 'wf-child' });
+    const detachWorkflows: WorkflowMeta[] = [
+      { id: 'wf-upstream', name: 'Upstream Workflow', status: 'review_ready' },
+      {
+        id: 'wf-child',
+        name: 'Child Workflow',
+        status: 'running',
+        externalDependencies: [
+          { workflowId: 'wf-upstream', requiredStatus: 'completed', gatePolicy: 'completed' },
+        ],
+      },
+    ];
+
+    await setup([upstreamTask, downstreamTask], detachWorkflows, 'wf-child');
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-child'));
+    fireEvent.click(await screen.findByText('More'));
+    fireEvent.click(await screen.findByText('Detach from Upstream Workflow (wf-upstream)'));
+
+    await waitFor(() => expect(mock.api.detachWorkflow).toHaveBeenCalledWith('wf-child', 'wf-upstream'));
+    expect(mock.api.detachWorkflow).toHaveBeenCalledTimes(1);
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Child Workflow (wf-child)'));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Upstream Workflow (wf-upstream)'));
+    expect(await screen.findByTestId('action-feedback')).toHaveTextContent(
+      'Detached Child Workflow (wf-child) from Upstream Workflow (wf-upstream)',
+    );
+  });
+
+  it('workflow context menu does not detach when confirmation is cancelled', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const upstreamTask = makeUITask({ id: 'wf-upstream/root', workflowId: 'wf-upstream' });
+    const downstreamTask = makeUITask({ id: 'wf-child/root', workflowId: 'wf-child' });
+    const detachWorkflows: WorkflowMeta[] = [
+      { id: 'wf-upstream', name: 'Upstream Workflow', status: 'review_ready' },
+      {
+        id: 'wf-child',
+        name: 'Child Workflow',
+        status: 'running',
+        externalDependencies: [
+          { workflowId: 'wf-upstream', requiredStatus: 'completed', gatePolicy: 'completed' },
+        ],
+      },
+    ];
+
+    await setup([upstreamTask, downstreamTask], detachWorkflows, 'wf-child');
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-child'));
+    fireEvent.click(await screen.findByText('More'));
+    fireEvent.click(await screen.findByText('Detach from Upstream Workflow (wf-upstream)'));
+
+    await waitFor(() => expect(window.confirm).toHaveBeenCalled());
+    expect(mock.api.detachWorkflow).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('action-feedback')).not.toBeInTheDocument();
   });
 
   it('workflow context menu copies workflow id', async () => {
