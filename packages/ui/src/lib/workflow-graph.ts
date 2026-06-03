@@ -9,6 +9,7 @@ export interface WorkflowGraphNode {
 export interface WorkflowGraphEdge {
   source: string;
   target: string;
+  kind: 'active' | 'historical';
 }
 
 export interface WorkflowGraph {
@@ -36,21 +37,37 @@ export function deriveWorkflowGraph(
   const edges: WorkflowGraphEdge[] = [];
   const missingDependencies = new Set<string>();
 
-  for (const task of tasks.values()) {
-    const targetWorkflowId = task.config.workflowId;
-    if (!targetWorkflowId) continue;
-    const deps = task.config.externalDependencies ?? [];
-    for (const dep of deps) {
+  void tasks;
+
+  for (const workflow of workflows.values()) {
+    const targetWorkflowId = workflow.id;
+    for (const dep of workflow.externalDependencies ?? []) {
       const sourceWorkflowId = dep.workflowId;
       if (!workflows.has(sourceWorkflowId)) {
         missingDependencies.add(`${sourceWorkflowId}->${targetWorkflowId}`);
         continue;
       }
       if (sourceWorkflowId === targetWorkflowId) continue;
-      const key = `${sourceWorkflowId}->${targetWorkflowId}`;
+      const key = `active:${sourceWorkflowId}->${targetWorkflowId}`;
       if (edgeKeys.has(key)) continue;
       edgeKeys.add(key);
-      edges.push({ source: sourceWorkflowId, target: targetWorkflowId });
+      edges.push({ source: sourceWorkflowId, target: targetWorkflowId, kind: 'active' });
+    }
+    for (const change of workflow.externalDependencyChanges ?? []) {
+      for (const dependency of [change.before, change.after]) {
+        if (!dependency) continue;
+        const sourceWorkflowId = dependency.workflowId;
+        if (!workflows.has(sourceWorkflowId)) {
+          missingDependencies.add(`${sourceWorkflowId}->${targetWorkflowId}`);
+          continue;
+        }
+        if (sourceWorkflowId === targetWorkflowId) continue;
+        if (edgeKeys.has(`active:${sourceWorkflowId}->${targetWorkflowId}`)) continue;
+        const key = `historical:${sourceWorkflowId}->${targetWorkflowId}`;
+        if (edgeKeys.has(key)) continue;
+        edgeKeys.add(key);
+        edges.push({ source: sourceWorkflowId, target: targetWorkflowId, kind: 'historical' });
+      }
     }
   }
 
