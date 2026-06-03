@@ -83,6 +83,7 @@ async function runPoolDeferralScenario(options: { completeDeferredDispatch: bool
   const firstAttemptId = firstClaim!.execution.selectedAttemptId!;
 
   let runnerCalls = 0;
+  let deferredCompleteResult: boolean | undefined;
   const dispatcher = new LaunchDispatcher({
     persistence,
     orchestrator: {
@@ -104,7 +105,7 @@ async function runPoolDeferralScenario(options: { completeDeferredDispatch: bool
           });
           orchestrator.deferTask(task.id);
           if (options.completeDeferredDispatch) {
-            expect(dispatchOpts.launchOutbox.completeDispatch(dispatchOpts.dispatchId)).toBe(true);
+            deferredCompleteResult = dispatchOpts.launchOutbox.completeDispatch(dispatchOpts.dispatchId);
           }
           return;
         }
@@ -141,34 +142,44 @@ async function runPoolDeferralScenario(options: { completeDeferredDispatch: bool
       .listLaunchDispatchesByState(['enqueued', 'leased', 'acknowledged'])
       .filter((row) => row.taskId === taskId)
       .map((row) => ({ attemptId: row.attemptId, state: row.state })),
+    abandonedRows: persistence
+      .listLaunchDispatchesByState(['abandoned'])
+      .filter((row) => row.taskId === taskId)
+      .map((row) => ({ attemptId: row.attemptId, state: row.state })),
     completedRows: persistence
       .listLaunchDispatchesByState(['completed'])
       .filter((row) => row.taskId === taskId)
       .map((row) => ({ attemptId: row.attemptId, state: row.state })),
+    deferredCompleteResult,
   };
 }
 
 describe('launch pool deferral outbox repro', () => {
-  it('proves the root cause: an acknowledged deferred row blocks the replacement launch', async () => {
+  it('invalidates an acknowledged deferred row so it cannot block the replacement launch', async () => {
     const result = await runPoolDeferralScenario({ completeDeferredDispatch: false });
 
-    expect(result.runnerCalls).toBe(1);
-    expect(result.task.status).toBe('pending');
-    expect(result.task.execution.phase).toBe('launching');
-    expect(result.liveRows).toEqual([
-      { attemptId: result.firstAttemptId, state: 'acknowledged' },
-      { attemptId: result.replacementAttemptId, state: 'enqueued' },
+    expect(result.runnerCalls).toBe(2);
+    expect(result.task.status).toBe('completed');
+    expect(result.liveRows).toEqual([]);
+    expect(result.abandonedRows).toEqual([
+      { attemptId: result.firstAttemptId, state: 'abandoned' },
+    ]);
+    expect(result.completedRows).toEqual([
+      { attemptId: result.replacementAttemptId, state: 'completed' },
     ]);
   });
 
-  it('proves the fix: completing the deferred row frees capacity for the replacement launch', async () => {
+  it('rejects late completion of an already-invalidated deferred row', async () => {
     const result = await runPoolDeferralScenario({ completeDeferredDispatch: true });
 
     expect(result.runnerCalls).toBe(2);
     expect(result.task.status).toBe('completed');
     expect(result.liveRows).toEqual([]);
+    expect(result.deferredCompleteResult).toBe(false);
+    expect(result.abandonedRows).toEqual([
+      { attemptId: result.firstAttemptId, state: 'abandoned' },
+    ]);
     expect(result.completedRows).toEqual([
-      { attemptId: result.firstAttemptId, state: 'completed' },
       { attemptId: result.replacementAttemptId, state: 'completed' },
     ]);
   });
