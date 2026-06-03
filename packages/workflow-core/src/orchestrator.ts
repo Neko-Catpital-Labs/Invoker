@@ -19,7 +19,7 @@ import { TaskStateMachine } from './state-machine.js';
 import { ResponseHandler } from './response-handler.js';
 import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
-import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, Attempt, ExternalDependency, ExternalDependencyChange, TaskStatus, TaskHeartbeatSource } from '@invoker/workflow-graph';
+import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, Attempt, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency, TaskStatus, TaskHeartbeatSource } from '@invoker/workflow-graph';
 import type { RunnerKind } from '@invoker/workflow-graph';
 import { createTaskState, createAttempt } from '@invoker/workflow-graph';
 import type { WorkflowDerivedStatus } from '@invoker/workflow-graph';
@@ -185,8 +185,9 @@ export interface OrchestratorPersistence {
     mergeMode?: 'manual' | 'automatic' | 'external_review';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
+    detachedExternalDependencies?: DetachedExternalDependency[];
   }): void;
-  updateWorkflow?(workflowId: string, changes: { updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review'; externalDependencies?: ExternalDependency[]; externalDependencyChanges?: ExternalDependencyChange[] }): void;
+  updateWorkflow?(workflowId: string, changes: { updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review'; externalDependencies?: ExternalDependency[]; externalDependencyChanges?: ExternalDependencyChange[]; detachedExternalDependencies?: DetachedExternalDependency[] }): void;
   saveTask(workflowId: string, task: TaskState): void;
   updateTask(taskId: string, changes: TaskStateChanges): void;
   logEvent?(taskId: string, eventType: string, payload?: unknown): void;
@@ -201,6 +202,7 @@ export interface OrchestratorPersistence {
     mergeMode?: 'manual' | 'automatic' | 'external_review';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
+    detachedExternalDependencies?: DetachedExternalDependency[];
     generation?: number;
   }>;
   loadTasks(workflowId: string): TaskState[];
@@ -216,6 +218,7 @@ export interface OrchestratorPersistence {
       mergeMode?: 'manual' | 'automatic' | 'external_review';
       externalDependencies?: ExternalDependency[];
       externalDependencyChanges?: ExternalDependencyChange[];
+      detachedExternalDependencies?: DetachedExternalDependency[];
       generation?: number;
     }>;
     tasks: TaskState[];
@@ -246,6 +249,7 @@ export interface OrchestratorPersistence {
     mergeMode?: 'manual' | 'automatic' | 'external_review';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
+    detachedExternalDependencies?: DetachedExternalDependency[];
   } | undefined;
   /** Delete a single workflow and its tasks from the DB. */
   deleteWorkflow?(workflowId: string): void;
@@ -5185,9 +5189,31 @@ export class Orchestrator {
         changedAt: now,
       });
     }
+
+    const existingDetached = targetWorkflow?.detachedExternalDependencies ?? [];
+    const detachedKey = (entry: { workflowId: string; taskId?: string }): string =>
+      `${entry.workflowId}::${entry.taskId?.trim() || '__merge__'}`;
+    const seenDetached = new Set(existingDetached.map(detachedKey));
+    const nextDetached: DetachedExternalDependency[] = [...existingDetached];
+    for (const dep of removedDeps) {
+      const taskId = dep.taskId?.trim() || '__merge__';
+      const entry: DetachedExternalDependency = {
+        workflowId: dep.workflowId,
+        taskId,
+        requiredStatus: dep.requiredStatus,
+        ...(dep.gatePolicy !== undefined ? { gatePolicy: dep.gatePolicy } : {}),
+        detachedAt: now,
+      };
+      const key = detachedKey(entry);
+      if (seenDetached.has(key)) continue;
+      seenDetached.add(key);
+      nextDetached.push(entry);
+    }
+
     this.taskRepository.updateWorkflow(workflowId, {
       externalDependencies: nextDeps.length > 0 ? nextDeps : undefined,
       externalDependencyChanges: dependencyChanges,
+      detachedExternalDependencies: nextDetached.length > 0 ? nextDetached : undefined,
     });
 
     const eventTask = this.getMergeNode(workflowId) ?? targetTasks[0];
