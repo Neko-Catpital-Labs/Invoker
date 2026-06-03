@@ -39,6 +39,8 @@ import {
   normalizeRunnerKind,
 } from '@invoker/workflow-core';
 import type {
+  ExecutionResourceLeaseReleaseRow,
+  LaunchDispatchInvalidationRow,
   PersistenceAdapter,
   Workflow,
   WorkflowTaskSnapshot,
@@ -3114,6 +3116,40 @@ export class SQLiteAdapter implements PersistenceAdapter {
     }));
   }
 
+  releaseExecutionResourceLeasesForTasks(
+    taskIds: readonly string[],
+    _reason: string,
+    _nowIso?: string,
+  ): ExecutionResourceLeaseReleaseRow[] {
+    const ids = Array.from(new Set(taskIds.filter((id): id is string => typeof id === 'string' && id.length > 0)));
+    if (ids.length === 0) return [];
+    const placeholders = ids.map(() => '?').join(', ');
+
+    return this.runTransaction(() => {
+      const rows = this.queryAll(
+        `SELECT resource_key, resource_type, holder_id, task_id
+           FROM execution_resource_leases
+          WHERE task_id IN (${placeholders})
+          ORDER BY acquired_at ASC, resource_key ASC`,
+        ids,
+      );
+      if (rows.length === 0) return [];
+
+      this.execRun(
+        `DELETE FROM execution_resource_leases
+          WHERE task_id IN (${placeholders})`,
+        ids,
+      );
+
+      return rows.map((row) => ({
+        resourceKey: String(row.resource_key),
+        resourceType: String(row.resource_type),
+        holderId: String(row.holder_id),
+        taskId: row.task_id ? String(row.task_id) : undefined,
+      }));
+    });
+  }
+
   enqueueLaunchDispatch(input: {
     taskId: string;
     attemptId: string;
@@ -3388,6 +3424,52 @@ export class SQLiteAdapter implements PersistenceAdapter {
       [now, errorMessage, id],
     );
     return (this.db.getRowsModified?.() ?? 0) > 0;
+  }
+
+  abandonLaunchDispatchesForTasks(
+    taskIds: readonly string[],
+    reason: string,
+    nowIso?: string,
+  ): LaunchDispatchInvalidationRow[] {
+    const ids = Array.from(new Set(taskIds.filter((id): id is string => typeof id === 'string' && id.length > 0)));
+    if (ids.length === 0) return [];
+    const now = nowIso ?? new Date().toISOString();
+    const taskPlaceholders = ids.map(() => '?').join(', ');
+
+    return this.runTransaction(() => {
+      const rows = this.queryAll(
+        `SELECT id, task_id, attempt_id, workflow_id, state, generation
+           FROM task_launch_dispatch
+          WHERE task_id IN (${taskPlaceholders})
+            AND state IN ('enqueued', 'leased', 'acknowledged')
+          ORDER BY id ASC`,
+        ids,
+      );
+      if (rows.length === 0) return [];
+
+      const rowIds = rows.map((row) => Number(row.id));
+      const idPlaceholders = rowIds.map(() => '?').join(', ');
+      this.execRun(
+        `UPDATE task_launch_dispatch
+            SET state = 'abandoned',
+                completed_at = ?,
+                last_error = ?,
+                dispatch_owner = NULL,
+                fenced_until = NULL
+          WHERE id IN (${idPlaceholders})
+            AND state IN ('enqueued', 'leased', 'acknowledged')`,
+        [now, reason, ...rowIds],
+      );
+
+      return rows.map((row) => ({
+        id: Number(row.id),
+        taskId: String(row.task_id),
+        attemptId: String(row.attempt_id),
+        workflowId: String(row.workflow_id),
+        state: String(row.state),
+        generation: Number(row.generation ?? 0),
+      }));
+    });
   }
 
   reapExpiredLaunchDispatchLeases(nowIso?: string): TaskLaunchDispatch[] {
