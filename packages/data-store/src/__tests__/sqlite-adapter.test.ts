@@ -115,6 +115,69 @@ describe('SQLiteAdapter', () => {
       expect(loaded[0].status).toBe('pending');
     });
 
+    it('round-trips detachedExternalDependencies provenance through save and load', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1', {
+        config: {
+          detachedExternalDependencies: [
+            {
+              workflowId: 'wf-upstream',
+              taskId: 'verify',
+              requiredStatus: 'completed',
+              gatePolicy: 'completed',
+              detachedAt: '2026-06-02T08:57:38.000Z',
+            },
+          ],
+        },
+      }));
+
+      const [loaded] = adapter.loadTasks('wf-1');
+      expect(loaded.config.detachedExternalDependencies).toEqual([
+        {
+          workflowId: 'wf-upstream',
+          taskId: 'verify',
+          requiredStatus: 'completed',
+          gatePolicy: 'completed',
+          detachedAt: '2026-06-02T08:57:38.000Z',
+        },
+      ]);
+      // Active scheduling dependencies stay independent of provenance.
+      expect(loaded.config.externalDependencies).toBeUndefined();
+    });
+
+    it('persists detachedExternalDependencies provenance through updateTask', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1', {
+        config: {
+          externalDependencies: [{ workflowId: 'wf-upstream', requiredStatus: 'completed' }],
+        },
+      }));
+
+      // Detach removes the active edge and records provenance in one update.
+      adapter.updateTask('t1', {
+        config: {
+          externalDependencies: undefined,
+          detachedExternalDependencies: [
+            {
+              workflowId: 'wf-upstream',
+              requiredStatus: 'completed',
+              detachedAt: '2026-06-02T08:57:38.000Z',
+            },
+          ],
+        },
+      });
+
+      const loaded = adapter.loadTask('t1')!;
+      expect(loaded.config.externalDependencies).toBeUndefined();
+      expect(loaded.config.detachedExternalDependencies).toEqual([
+        {
+          workflowId: 'wf-upstream',
+          requiredStatus: 'completed',
+          detachedAt: '2026-06-02T08:57:38.000Z',
+        },
+      ]);
+    });
+
     it('persists poolMemberId through updateTask and getPoolMemberId', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('ssh-task', {

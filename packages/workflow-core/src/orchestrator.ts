@@ -19,7 +19,7 @@ import { TaskStateMachine } from './state-machine.js';
 import { ResponseHandler } from './response-handler.js';
 import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
-import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, Attempt, ExternalDependency, TaskStatus } from '@invoker/workflow-graph';
+import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, Attempt, ExternalDependency, DetachedExternalDependency, TaskStatus } from '@invoker/workflow-graph';
 import type { RunnerKind } from '@invoker/workflow-graph';
 import { createTaskState, createAttempt } from '@invoker/workflow-graph';
 import type { WorkflowDerivedStatus } from '@invoker/workflow-graph';
@@ -104,6 +104,11 @@ function nextWorkflowId(): string {
   workflowCounter += 1;
   if (process.env.NODE_ENV === 'test') return `wf-test-${workflowCounter}`;
   return `wf-${Date.now()}-${workflowCounter}`;
+}
+
+/** Stable identity for a detached-dependency provenance entry (workflow + optional task selector). */
+function detachedDependencyKey(workflowId: string, taskId?: string): string {
+  return `${workflowId}::${taskId ?? ''}`;
 }
 
 function workflowTimestamp(): Date {
@@ -4973,6 +4978,7 @@ export class Orchestrator {
       throw new OrchestratorError(OrchestratorErrorCode.WORKFLOW_NOT_FOUND, `Workflow ${workflowId} not found`);
     }
 
+    const detachedAt = workflowTimestamp().toISOString();
     let removedDependency = false;
     for (const task of targetTasks) {
       const deps = task.config.externalDependencies ?? [];
@@ -4980,8 +4986,36 @@ export class Orchestrator {
       if (nextDeps.length === deps.length) continue;
 
       removedDependency = true;
+
+      // Capture read-only provenance for each dependency we are about to
+      // remove. Keep active `externalDependencies` pruned so scheduling and
+      // blocker behavior are unchanged, but record who/what was detached so
+      // the UI can tell a detached edge apart from an independent workflow.
+      const removedDeps = deps.filter((dep) => dep.workflowId === upstreamWorkflowId);
+      const existingProvenance = task.config.detachedExternalDependencies ?? [];
+      const provenanceKeys = new Set(
+        existingProvenance.map((entry) => detachedDependencyKey(entry.workflowId, entry.taskId)),
+      );
+      const nextProvenance: DetachedExternalDependency[] = [...existingProvenance];
+      for (const dep of removedDeps) {
+        const key = detachedDependencyKey(dep.workflowId, dep.taskId);
+        // Skip duplicates from repeated detach attempts or sync/reload cycles.
+        if (provenanceKeys.has(key)) continue;
+        provenanceKeys.add(key);
+        nextProvenance.push({
+          workflowId: dep.workflowId,
+          ...(dep.taskId !== undefined ? { taskId: dep.taskId } : {}),
+          requiredStatus: dep.requiredStatus,
+          ...(dep.gatePolicy !== undefined ? { gatePolicy: dep.gatePolicy } : {}),
+          detachedAt,
+        });
+      }
+
       const changes: TaskStateChanges = {
-        config: { externalDependencies: nextDeps.length > 0 ? nextDeps : undefined },
+        config: {
+          externalDependencies: nextDeps.length > 0 ? nextDeps : undefined,
+          detachedExternalDependencies: nextProvenance.length > 0 ? nextProvenance : undefined,
+        },
       };
       const updated = this.writeAndSync(task.id, changes);
       this.persistence.logEvent?.(task.id, 'task.external_dependency_detached', {
