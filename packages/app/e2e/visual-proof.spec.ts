@@ -1427,6 +1427,89 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'stacked-workflows');
   });
 
+  test('detached-lineage-workflow-graph — detached provenance remains visible beside active edges', async ({ page }) => {
+    const rootWorkflowId = await loadPlanAndSelectWorkflow(page, {
+      name: 'Lineage Root Workflow',
+      repoUrl: E2E_REPO_URL,
+      onFinish: 'pull_request' as const,
+      mergeMode: 'external_review',
+      tasks: [
+        { id: 'lineage-root-task', description: 'Root lineage task', command: 'echo root', dependencies: [] as string[] },
+      ],
+    });
+
+    const middleWorkflowId = await loadPlanAndSelectWorkflow(page, {
+      name: 'Detached Middle Workflow',
+      repoUrl: E2E_REPO_URL,
+      onFinish: 'pull_request' as const,
+      mergeMode: 'external_review',
+      externalDependencies: [{ workflowId: rootWorkflowId, gatePolicy: 'review_ready' as const }],
+      tasks: [
+        { id: 'lineage-middle-task', description: 'Detached middle task', command: 'echo middle', dependencies: [] as string[] },
+      ],
+    });
+
+    const leafWorkflowId = await loadPlanAndSelectWorkflow(page, {
+      name: 'Active Leaf Workflow',
+      repoUrl: E2E_REPO_URL,
+      onFinish: 'pull_request' as const,
+      mergeMode: 'external_review',
+      externalDependencies: [{ workflowId: middleWorkflowId, gatePolicy: 'review_ready' as const }],
+      tasks: [
+        { id: 'lineage-leaf-task', description: 'Leaf active dependency task', command: 'echo leaf', dependencies: [] as string[] },
+      ],
+    });
+
+    await injectTaskStates(page, [
+      {
+        taskId: 'lineage-middle-task',
+        changes: {
+          config: {
+            externalDependencies: [] as const,
+            detachedExternalDependencies: [
+              {
+                workflowId: rootWorkflowId,
+                requiredStatus: 'completed' as const,
+                gatePolicy: 'review_ready' as const,
+                detachedAt: '2026-06-02T08:57:38.000Z',
+              },
+            ],
+          },
+        },
+      },
+    ]);
+
+    await hideSelectedWorkflowMiniDagIfVisible(page);
+    await minimizeInspectorIfVisible(page);
+    await page.getByTestId('workflow-graph-react-flow').getByRole('button', { name: 'Fit View' }).click();
+    await page.waitForTimeout(300);
+
+    for (const workflowId of [rootWorkflowId, middleWorkflowId, leafWorkflowId]) {
+      await expect(workflowNode(page, workflowId)).toBeVisible({ timeout: 10000 });
+      await expect(workflowNode(page, workflowId)).toBeInViewport({ timeout: 10000 });
+    }
+
+    const removedActiveEdge = page.getByTestId(`rf__edge-workflow:${rootWorkflowId}->${middleWorkflowId}`);
+    await expect(removedActiveEdge).toHaveCount(0);
+
+    const detachedEdge = page.getByTestId(`rf__edge-workflow:detached:${rootWorkflowId}->${middleWorkflowId}`);
+    await expect(detachedEdge).toHaveCount(1);
+    await expect(detachedEdge).toHaveAttribute(
+      'aria-label',
+      `Detached workflow dependency from ${rootWorkflowId} to ${middleWorkflowId}`,
+    );
+    await expect(page.getByText('Detached', { exact: true })).toBeVisible();
+
+    const activeEdge = page.getByTestId(`rf__edge-workflow:${middleWorkflowId}->${leafWorkflowId}`);
+    await expect(activeEdge).toHaveCount(1);
+    await expect(activeEdge).toHaveAttribute(
+      'aria-label',
+      `Workflow dependency from ${middleWorkflowId} to ${leafWorkflowId}`,
+    );
+
+    await captureScreenshot(page, 'detached-lineage-workflow-graph');
+  });
+
   test('terminate-wording — task-level uses Terminate, workflow-level keeps Cancel', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     const now = new Date();
