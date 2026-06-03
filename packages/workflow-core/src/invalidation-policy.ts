@@ -457,8 +457,14 @@ export interface InvalidationDepsOrchestrator {
   recreateTask(taskId: string): TaskState[];
   recreateDownstream(taskId: string): TaskState[];
   retryWorkflow(workflowId: string): TaskState[];
-  recreateWorkflow(workflowId: string): TaskState[];
-  recreateWorkflowFromFreshBase(workflowId: string): Promise<TaskState[]>;
+  recreateWorkflow(
+    workflowId: string,
+    options?: { cascadeDownstream?: boolean },
+  ): TaskState[];
+  recreateWorkflowFromFreshBase(
+    workflowId: string,
+    options?: { cascadeDownstream?: boolean },
+  ): Promise<TaskState[]>;
   forkWorkflow(workflowId: string): { started: TaskState[] };
   autoStartExternallyUnblockedReadyTasks(): TaskState[];
   approve(taskId: string): Promise<TaskState[]>;
@@ -520,9 +526,13 @@ export function buildOrchestratorOnlyInvalidationDeps(
     recreateTask: (taskId) => orchestrator.recreateTask(taskId),
     recreateDownstream: (taskId) => orchestrator.recreateDownstream(taskId),
     retryWorkflow: (workflowId) => orchestrator.retryWorkflow(workflowId),
-    recreateWorkflow: (workflowId) => orchestrator.recreateWorkflow(workflowId),
+    // Routed callers suppress the orchestrator's direct-caller cascade
+    // so the pipeline's `cascadeAcrossWorkflows` stage performs it
+    // exactly once.
+    recreateWorkflow: (workflowId) =>
+      orchestrator.recreateWorkflow(workflowId, { cascadeDownstream: false }),
     recreateWorkflowFromFreshBase: (workflowId) =>
-      orchestrator.recreateWorkflowFromFreshBase(workflowId),
+      orchestrator.recreateWorkflowFromFreshBase(workflowId, { cascadeDownstream: false }),
     workflowFork: (workflowId) => orchestrator.forkWorkflow(workflowId).started,
     scheduleOnly: () => orchestrator.autoStartExternallyUnblockedReadyTasks(),
     fixApprove: (taskId) => orchestrator.approve(taskId),

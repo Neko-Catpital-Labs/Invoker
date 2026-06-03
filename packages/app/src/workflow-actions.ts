@@ -120,6 +120,7 @@ export interface ApproveTaskResult {
 export function bumpGenerationAndRecreate(
   workflowId: string,
   deps: Pick<ActionDeps, 'logger' | 'persistence' | 'orchestrator'>,
+  options?: { cascadeDownstream?: boolean },
 ): TaskState[] {
   const { persistence, orchestrator } = deps;
   const workflow = persistence.loadWorkflow(workflowId);
@@ -128,7 +129,14 @@ export function bumpGenerationAndRecreate(
   persistence.updateWorkflow(workflowId, { generation: nextGen });
   deps.logger?.info(`bumped generation to ${nextGen} for ${workflowId}`, { module: 'workflow' });
   deps.logger?.info(`bumpGenerationAndRecreate: calling recreateWorkflow(${workflowId})`, { module: 'agent-session-trace' });
-  return orchestrator.recreateWorkflow(workflowId);
+  // Only pass the cascade override when an explicit value is provided
+  // so direct callers still see the bare `recreateWorkflow(workflowId)`
+  // call signature and existing call-arg assertions stay stable.
+  return options?.cascadeDownstream !== undefined
+    ? orchestrator.recreateWorkflow(workflowId, {
+        cascadeDownstream: options.cascadeDownstream,
+      })
+    : orchestrator.recreateWorkflow(workflowId);
 }
 
 export async function approveTask(
@@ -427,6 +435,7 @@ async function prepareWorkflowFreshBase(
 export async function recreateWorkflowFromFreshBase(
   workflowId: string,
   deps: ActionDeps,
+  options?: { cascadeDownstream?: boolean },
 ): Promise<TaskState[]> {
   const { workflow, freshBase } = await prepareWorkflowFreshBase(workflowId, deps);
   const nextGen = (workflow.generation ?? 0) + 1;
@@ -446,13 +455,20 @@ export async function recreateWorkflowFromFreshBase(
     { module: 'agent-session-trace' },
   );
 
-  const recreate = () => deps.orchestrator.recreateWorkflowFromFreshBase(workflowId, {
-    refreshBase: async () => {
-      // Pool preparation already ran above. The callback is kept so the
-      // orchestrator still sees the fresh-base lifecycle entrypoint.
-      return freshBase;
-    },
-  });
+  const recreate = () => deps.orchestrator.recreateWorkflowFromFreshBase(
+    workflowId,
+    options?.cascadeDownstream !== undefined
+      ? {
+          refreshBase: async () => freshBase,
+          cascadeDownstream: options.cascadeDownstream,
+        }
+      : {
+          // Pool preparation already ran above. The callback is kept so
+          // the orchestrator still sees the fresh-base lifecycle
+          // entrypoint.
+          refreshBase: async () => freshBase,
+        },
+  );
   return deps.mutationTiming
     ? deps.mutationTiming.span('workflow-actions.recreateWorkflowFromFreshBase.orchestrator', undefined, recreate)
     : recreate();
@@ -550,19 +566,31 @@ export function buildInvalidationDeps(deps: BuildInvalidationDepsArgs): Invalida
     recreateTask: (taskId: string) => deps.orchestrator.recreateTask(taskId),
     retryWorkflow: (workflowId: string) => deps.orchestrator.retryWorkflow(workflowId),
     recreateWorkflow: (workflowId: string) =>
-      bumpGenerationAndRecreate(workflowId, {
-        logger: deps.logger,
-        orchestrator: deps.orchestrator,
-        persistence: deps.persistence,
-      }),
+      bumpGenerationAndRecreate(
+        workflowId,
+        {
+          logger: deps.logger,
+          orchestrator: deps.orchestrator,
+          persistence: deps.persistence,
+        },
+        // Routed via applyInvalidation; the pipeline's
+        // `cascadeAcrossWorkflows` stage performs the cascade.
+        { cascadeDownstream: false },
+      ),
     recreateWorkflowFromFreshBase: (workflowId: string) =>
-      recreateWorkflowFromFreshBase(workflowId, {
-        logger: deps.logger,
-        orchestrator: deps.orchestrator,
-        persistence: deps.persistence,
-        taskExecutor: resolveTaskExecutor(deps.taskExecutor),
-        mutationTiming: deps.mutationTiming,
-      }),
+      recreateWorkflowFromFreshBase(
+        workflowId,
+        {
+          logger: deps.logger,
+          orchestrator: deps.orchestrator,
+          persistence: deps.persistence,
+          taskExecutor: resolveTaskExecutor(deps.taskExecutor),
+          mutationTiming: deps.mutationTiming,
+        },
+        // Routed via applyInvalidation; the pipeline's
+        // `cascadeAcrossWorkflows` stage performs the cascade.
+        { cascadeDownstream: false },
+      ),
     workflowFork: (workflowId: string) => {
       const result = deps.orchestrator.forkWorkflow(workflowId);
       deps.logger?.info(

@@ -33,10 +33,15 @@ function buildOrchestratorDeps(orchestrator: Orchestrator): InvalidationDeps {
     retryTask: (taskId) => orchestrator.retryTask(taskId),
     recreateTask: (taskId) => orchestrator.recreateTask(taskId),
     retryWorkflow: (workflowId) => orchestrator.retryWorkflow(workflowId),
-    recreateWorkflow: (workflowId) => orchestrator.recreateWorkflow(workflowId),
+    // Routed callers suppress the orchestrator's direct-caller
+    // cross-workflow cascade so the pipeline's `cascadeAcrossWorkflows`
+    // stage performs it exactly once.
+    recreateWorkflow: (workflowId) =>
+      orchestrator.recreateWorkflow(workflowId, { cascadeDownstream: false }),
     recreateWorkflowFromFreshBase: (workflowId) =>
       orchestrator.recreateWorkflowFromFreshBase(workflowId, {
         refreshBase: async () => ({ commit: 'fresh-sha' }),
+        cascadeDownstream: false,
       }),
     workflowFork: (workflowId) => {
       const result = orchestrator.forkWorkflow(workflowId);

@@ -2650,8 +2650,21 @@ export class Orchestrator {
   /**
    * Reset ALL tasks in a workflow to pending and auto-start ready ones.
    * Used when a rebase conflicts and the entire DAG needs to re-execute.
+   *
+   * Direct callers (those that bypass `applyInvalidation`) get the
+   * cross-workflow cascade automatically: after the local reset, this
+   * method calls `cascadeInvalidationToDownstream(workflowId)` so any
+   * transitive downstream workflow is also reset to pending. Routed
+   * callers — `applyInvalidation`'s `applyPrimitive` stage via
+   * `buildOrchestratorOnlyInvalidationDeps` /
+   * `app/workflow-actions.buildInvalidationDeps` — pass
+   * `{ cascadeDownstream: false }` because the pipeline owns the
+   * cascade via its `cascadeAcrossWorkflows` stage.
    */
-  recreateWorkflow(workflowId: string): TaskState[] {
+  recreateWorkflow(
+    workflowId: string,
+    options?: { cascadeDownstream?: boolean },
+  ): TaskState[] {
     this.refreshFromDb();
 
     const allTasks = this.stateMachine.getAllTasks().filter(
@@ -2750,7 +2763,16 @@ export class Orchestrator {
       .filter((id) => this.stateGetTask(id)?.config.workflowId === workflowId);
     plan = withSchedulerEnqueueCandidates(plan, readyIds);
     this.lastInvalidationPlan = plan;
-    return this.autoStartReadyTasks(readyIds, Orchestrator.EXPEDITED_PRIORITY);
+    const started = this.autoStartReadyTasks(readyIds, Orchestrator.EXPEDITED_PRIORITY);
+
+    // Direct-caller cross-workflow cascade. Suppressed by routed callers
+    // (`applyInvalidation` via `buildOrchestratorOnlyInvalidationDeps` /
+    // `buildInvalidationDeps`) so the pipeline's `cascadeAcrossWorkflows`
+    // stage performs the cascade exactly once.
+    if (options?.cascadeDownstream !== false) {
+      this.cascadeInvalidationToDownstream(workflowId);
+    }
+    return started;
   }
 
   /**
@@ -2820,6 +2842,13 @@ export class Orchestrator {
       refreshBase?: (
         workflowId: string,
       ) => Promise<{ commit?: string; branch?: string } | undefined | void>;
+      /**
+       * Pass `false` from routed callers (`applyInvalidation`) so the
+       * pipeline's `cascadeAcrossWorkflows` stage performs the cascade
+       * once. Direct callers default to `true` for safety, matching
+       * `recreateWorkflow`'s behavior.
+       */
+      cascadeDownstream?: boolean;
     },
   ): Promise<TaskState[]> {
     if (options?.refreshBase) {
@@ -2841,7 +2870,9 @@ export class Orchestrator {
         }
       }
     }
-    return this.recreateWorkflow(workflowId);
+    return this.recreateWorkflow(workflowId, {
+      cascadeDownstream: options?.cascadeDownstream,
+    });
   }
 
   /**

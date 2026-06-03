@@ -1720,7 +1720,10 @@ describe('buildInvalidationDeps', () => {
 
     expect(persistence.loadWorkflow).toHaveBeenCalledWith('wf-1');
     expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 1 });
-    expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
+    // Routed callers suppress the orchestrator's direct-caller
+    // cross-workflow cascade so `applyInvalidation`'s pipeline owns
+    // the cascade via `cascadeAcrossWorkflows`.
+    expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1', { cascadeDownstream: false });
   });
 
   it('wires recreateWorkflowFromFreshBase to the orchestrator method', async () => {

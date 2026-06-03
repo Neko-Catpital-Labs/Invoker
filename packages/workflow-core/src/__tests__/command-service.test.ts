@@ -478,10 +478,13 @@ describe('CommandService', () => {
   // ── recreateWorkflow ─────────────────────────────────────
 
   describe('recreateWorkflow', () => {
-    it('delegates to orchestrator.recreateWorkflow', async () => {
+    it('delegates to orchestrator.recreateWorkflow with the routed cascadeDownstream:false option', async () => {
       const result = await service.recreateWorkflow(makeEnvelope({ workflowId: 'wf-1' }));
       expect(result).toEqual({ ok: true, data: [] });
-      expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
+      // Routed callers suppress the orchestrator's direct-caller
+      // cross-workflow cascade so `applyInvalidation`'s pipeline owns
+      // the cascade via `cascadeAcrossWorkflows`.
+      expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1', { cascadeDownstream: false });
     });
 
     it('returns error on exception', async () => {
@@ -496,10 +499,13 @@ describe('CommandService', () => {
   // ── recreateWorkflowFromFreshBase ────────────────────────
 
   describe('recreateWorkflowFromFreshBase', () => {
-    it('delegates to orchestrator.recreateWorkflowFromFreshBase', async () => {
+    it('delegates to orchestrator.recreateWorkflowFromFreshBase with the routed cascadeDownstream:false option', async () => {
       const result = await service.recreateWorkflowFromFreshBase(makeEnvelope({ workflowId: 'wf-1' }));
       expect(result).toEqual({ ok: true, data: [] });
-      expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-1');
+      // Routed callers suppress the orchestrator's direct-caller
+      // cross-workflow cascade so `applyInvalidation`'s pipeline owns
+      // the cascade via `cascadeAcrossWorkflows`.
+      expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-1', { cascadeDownstream: false });
     });
 
     it('returns error on exception', async () => {
@@ -550,8 +556,10 @@ describe('CommandService', () => {
       expect(orchestrator.retryTask).toHaveBeenCalledWith('t-1');
       expect(orchestrator.recreateTask).toHaveBeenCalledWith('t-2');
       expect(orchestrator.retryWorkflow).toHaveBeenCalledWith('wf-1');
-      expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-2');
-      expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-3');
+      // Workflow recreate dispatches with `cascadeDownstream: false`
+      // because the pipeline owns the cross-workflow cascade.
+      expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-2', { cascadeDownstream: false });
+      expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-3', { cascadeDownstream: false });
       expect(restartTaskSpy).not.toHaveBeenCalled();
     });
   });
