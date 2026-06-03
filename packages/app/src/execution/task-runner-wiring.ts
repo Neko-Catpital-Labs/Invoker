@@ -26,7 +26,6 @@ export interface TaskRunnerWiringDeps {
   taskHandles: TaskHandleMap;
   enqueueTaskOutput: (taskId: string, data: string) => void;
   flushTaskOutput: (taskId: string) => void;
-  publishTaskHeartbeat: (taskId: string, lastHeartbeatAt: Date) => void;
   assertFatalExecutionCapacity: (label: string) => void;
   getTaskRunner: () => TaskRunner | null;
   setTaskRunner: (taskRunner: TaskRunner) => void;
@@ -118,8 +117,8 @@ export function rebuildTaskRunner(deps: TaskRunnerWiringDeps): TaskRunner {
           { module: 'exec' },
         );
       },
-      onHeartbeat: (taskId) => {
-        const now = new Date();
+      onHeartbeat: (taskId, event) => {
+        const now = event.at;
         const task = deps.orchestrator.getTask(taskId);
         const previousHeartbeat = task?.execution.lastHeartbeatAt instanceof Date
           ? task.execution.lastHeartbeatAt
@@ -127,8 +126,7 @@ export function rebuildTaskRunner(deps: TaskRunnerWiringDeps): TaskRunner {
             ? new Date(task.execution.lastHeartbeatAt)
             : undefined;
         const heartbeatGapMs = previousHeartbeat ? now.getTime() - previousHeartbeat.getTime() : undefined;
-        try { deps.persistence.updateTask(taskId, { execution: { lastHeartbeatAt: now } }); } catch { /* db locked */ }
-        deps.publishTaskHeartbeat(taskId, now);
+        deps.orchestrator.recordTaskHeartbeat(taskId, { at: now, source: event.source });
         deps.logger.info(
           `Heartbeat for "${taskId}" (status: ${task?.status ?? 'unknown'}, generation: ${task?.execution.generation ?? 'unknown'}, gapMs: ${heartbeatGapMs ?? 'first'})`,
           { module: 'heartbeat' },
