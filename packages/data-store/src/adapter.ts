@@ -5,7 +5,7 @@
  * This allows swapping storage backends (in-memory, SQLite, etc.)
  */
 
-import type { TaskState, TaskStateChanges, PlanDefinition, Attempt, WorkflowDerivedStatus, WorkflowRollup } from '@invoker/workflow-core';
+import type { TaskState, TaskStateChanges, PlanDefinition, Attempt, WorkflowDerivedStatus, WorkflowRollup, ExternalDependency, ExternalDependencyChange } from '@invoker/workflow-core';
 import type { SearchResultItem, SearchOptions } from '@invoker/contracts';
 
 // ── Conversation Types ─────────────────────────────────────
@@ -47,6 +47,8 @@ export interface Workflow {
   featureBranch?: string;
   mergeMode?: 'manual' | 'automatic' | 'external_review';
   reviewProvider?: string;
+  externalDependencies?: ExternalDependency[];
+  externalDependencyChanges?: ExternalDependencyChange[];
   generation?: number;
   createdAt: string;
   updatedAt: string;
@@ -77,7 +79,7 @@ export interface WorkflowTaskSnapshot {
 export interface PersistenceAdapter {
   // Workflows
   saveWorkflow(workflow: Workflow): void;
-  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'name' | 'description' | 'visualProof' | 'planFile' | 'repoUrl' | 'intermediateRepoUrl' | 'branch' | 'onFinish' | 'baseBranch' | 'featureBranch' | 'mergeMode' | 'reviewProvider' | 'generation' | 'updatedAt'>>): void;
+  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'name' | 'description' | 'visualProof' | 'planFile' | 'repoUrl' | 'intermediateRepoUrl' | 'branch' | 'onFinish' | 'baseBranch' | 'featureBranch' | 'mergeMode' | 'reviewProvider' | 'externalDependencies' | 'externalDependencyChanges' | 'generation' | 'updatedAt'>>): void;
   loadWorkflow(workflowId: string): Workflow | undefined;
   listWorkflows(): Workflow[];
   searchWorkflowsAndTasks(query: string, opts?: SearchOptions): SearchResultItem[];
