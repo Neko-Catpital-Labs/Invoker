@@ -28,6 +28,8 @@ import type {
   TaskStatus,
   WorkflowRollup,
   WorkflowRollupTaskSummary,
+  ExternalDependency,
+  ExternalDependencyChange,
 } from '@invoker/workflow-core';
 import { DISPATCH_LEASE_MS } from '@invoker/contracts';
 import type { SearchResultItem, SearchOptions } from '@invoker/contracts';
@@ -582,6 +584,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
         feature_branch TEXT,
         merge_mode TEXT,
         review_provider TEXT,
+        external_dependencies TEXT,
+        external_dependency_changes TEXT,
         generation INTEGER DEFAULT 0,
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
@@ -887,6 +891,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN agent_session_id TEXT',
       'ALTER TABLE attempts ADD COLUMN agent_session_id TEXT',
       'ALTER TABLE workflows ADD COLUMN review_provider TEXT',
+      'ALTER TABLE workflows ADD COLUMN external_dependencies TEXT',
+      'ALTER TABLE workflows ADD COLUMN external_dependency_changes TEXT',
       // execution_agent / agent_name: interchangeable agent support
       'ALTER TABLE tasks ADD COLUMN execution_agent TEXT',
       'ALTER TABLE tasks ADD COLUMN agent_name TEXT',
@@ -960,6 +966,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
         feature_branch TEXT,
         merge_mode TEXT,
         review_provider TEXT,
+        external_dependencies TEXT,
+        external_dependency_changes TEXT,
         generation INTEGER DEFAULT 0,
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
@@ -969,12 +977,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
       INSERT INTO workflows_new (
         id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url,
         branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode,
-        review_provider, generation, created_at, updated_at
+        review_provider, external_dependencies, external_dependency_changes,
+        generation, created_at, updated_at
       )
       SELECT
         id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url,
         branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode,
-        review_provider, generation, created_at, updated_at
+        review_provider, external_dependencies, external_dependency_changes,
+        generation, created_at, updated_at
       FROM workflows
     `);
     this.db.run('DROP TABLE workflows');
@@ -1052,8 +1062,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   saveWorkflow(workflow: Workflow): void {
     this.execRun(`
-      INSERT OR REPLACE INTO workflows (id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url, branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode, review_provider, generation, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO workflows (id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url, branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode, review_provider, external_dependencies, external_dependency_changes, generation, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       workflow.id, workflow.name,
       workflow.description ?? null,
@@ -1062,12 +1072,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
       workflow.onFinish ?? null, workflow.baseBranch ?? null, null, workflow.featureBranch ?? null,
       workflow.mergeMode ?? null,
       workflow.reviewProvider ?? null,
+      workflow.externalDependencies ? JSON.stringify(workflow.externalDependencies) : null,
+      workflow.externalDependencyChanges ? JSON.stringify(workflow.externalDependencyChanges) : null,
       workflow.generation ?? 0,
       workflow.createdAt, workflow.updatedAt,
     ]);
   }
 
-  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'name' | 'description' | 'visualProof' | 'planFile' | 'repoUrl' | 'intermediateRepoUrl' | 'branch' | 'onFinish' | 'baseBranch' | 'featureBranch' | 'mergeMode' | 'reviewProvider' | 'generation' | 'updatedAt'>>): void {
+  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'name' | 'description' | 'visualProof' | 'planFile' | 'repoUrl' | 'intermediateRepoUrl' | 'branch' | 'onFinish' | 'baseBranch' | 'featureBranch' | 'mergeMode' | 'reviewProvider' | 'externalDependencies' | 'externalDependencyChanges' | 'generation' | 'updatedAt'>>): void {
     const setClauses: string[] = [];
     const values: unknown[] = [];
     const columnMap: Record<string, string> = {
@@ -1102,6 +1114,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
     }
     if (changes.mergeMode !== undefined) {
       // handled by columnMap; kept for backward-compatible patch shapes
+    }
+    if (changes.externalDependencies !== undefined) {
+      setClauses.push('external_dependencies = ?');
+      values.push(changes.externalDependencies ? JSON.stringify(changes.externalDependencies) : null);
+    }
+    if (changes.externalDependencyChanges !== undefined) {
+      setClauses.push('external_dependency_changes = ?');
+      values.push(changes.externalDependencyChanges ? JSON.stringify(changes.externalDependencyChanges) : null);
     }
     setClauses.push('updated_at = ?');
     values.push(changes.updatedAt ?? new Date().toISOString());
@@ -2433,6 +2453,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
       featureBranch: row.feature_branch ?? undefined,
       mergeMode: row.merge_mode ?? undefined,
       reviewProvider: row.review_provider ?? undefined,
+      externalDependencies: row.external_dependencies ? JSON.parse(row.external_dependencies) : undefined,
+      externalDependencyChanges: row.external_dependency_changes ? JSON.parse(row.external_dependency_changes) as ExternalDependencyChange[] : undefined,
       generation: row.generation ?? 0,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
