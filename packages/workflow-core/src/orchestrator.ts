@@ -163,6 +163,11 @@ export interface ExecutionResourceLeaseReleaseRow {
   taskId?: string;
 }
 
+export type TaskLaunchReadiness =
+  | { ready: true; task: TaskState }
+  | { ready: false; reason: string; task?: TaskState };
+type LaunchReadinessOptions = { bypassLocalDependencyReadiness?: boolean };
+
 export interface OrchestratorPersistence {
   saveWorkflow(workflow: {
     id: string;
@@ -3816,7 +3821,7 @@ export class Orchestrator {
         return !hasInternalDeps;
       })
       .map((rt) => scopeLocal(rt.id));
-    return this.autoStartReadyTasks(rootIds);
+    return this.autoStartReadyTasks(rootIds, 0, { bypassLocalDependencyReadiness: true });
   }
 
   /**
@@ -4770,7 +4775,7 @@ export class Orchestrator {
     }
   }
 
-  private autoStartReadyTasks(taskIds: string[], priority: number = 0): TaskState[] {
+  private autoStartReadyTasks(taskIds: string[], priority: number = 0, opts?: LaunchReadinessOptions): TaskState[] {
     for (const taskId of taskIds) {
       let task = this.stateGetTask(taskId);
       if (!task) continue;
@@ -4797,13 +4802,13 @@ export class Orchestrator {
         if (!task) continue;
       }
 
-      this.enqueueIfNotScheduled(taskId, priority);
+      this.enqueueIfNotScheduled(taskId, priority, opts);
     }
 
     return this.drainScheduler();
   }
 
-  private enqueueIfNotScheduled(taskId: string, priority: number = 0): void {
+  private enqueueIfNotScheduled(taskId: string, priority: number = 0, opts?: LaunchReadinessOptions): void {
     const task = this.stateGetTask(taskId);
     if (!task) return;
     if (this.getExternalDependencyBlocker(task) !== undefined) return;
@@ -4827,13 +4832,26 @@ export class Orchestrator {
       .getQueuedJobs()
       .find((job) => job.attemptId === attemptId || job.taskId === taskId);
     if (queuedJob) {
-      if (priority > queuedJob.priority) {
+      const shouldReplaceQueuedJob =
+        priority > queuedJob.priority ||
+        (opts?.bypassLocalDependencyReadiness === true && !queuedJob.bypassLocalDependencyReadiness);
+      if (shouldReplaceQueuedJob) {
         this.scheduler.removeJob(queuedJob.attemptId ?? queuedJob.taskId);
-        this.scheduler.enqueue({ taskId, attemptId, priority });
+        this.scheduler.enqueue({
+          taskId,
+          attemptId,
+          priority: Math.max(priority, queuedJob.priority),
+          ...(opts?.bypassLocalDependencyReadiness ? { bypassLocalDependencyReadiness: true } : {}),
+        });
       }
       return;
     }
-    this.scheduler.enqueue({ taskId, attemptId, priority });
+    this.scheduler.enqueue({
+      taskId,
+      attemptId,
+      priority,
+      ...(opts?.bypassLocalDependencyReadiness ? { bypassLocalDependencyReadiness: true } : {}),
+    });
   }
 
   /**
@@ -4888,15 +4906,47 @@ export class Orchestrator {
     return this.drainScheduler();
   }
 
-  private areLocalDependenciesSatisfied(task: TaskState): boolean {
-    return task.dependencies.every((depId) => {
-      const dep = this.stateGetTask(depId);
-      if (!dep) return false;
-      if (task.config?.isReconciliation) {
-        return dep.status === 'completed' || dep.status === 'failed' || dep.status === 'closed' || dep.status === 'stale';
+  getTaskLaunchReadiness(taskId: string, opts?: LaunchReadinessOptions): TaskLaunchReadiness {
+    this.refreshFromDb();
+    const task = this.stateGetTask(taskId);
+    if (!task) {
+      return { ready: false, reason: `task ${taskId} not found` };
+    }
+    if (task.status !== 'pending') {
+      return { ready: false, reason: `task status is ${task.status}`, task };
+    }
+
+    if (!opts?.bypassLocalDependencyReadiness) {
+      const localBlocker = this.getLocalDependencyBlocker(task);
+      if (localBlocker) {
+        return { ready: false, reason: localBlocker, task };
       }
-      return dep.status === 'completed' || dep.status === 'stale';
-    });
+    }
+
+    const externalBlocker = this.getExternalDependencyBlocker(task);
+    if (externalBlocker) {
+      return { ready: false, reason: externalBlocker, task };
+    }
+
+    return { ready: true, task };
+  }
+
+  private areLocalDependenciesSatisfied(task: TaskState): boolean {
+    return this.getLocalDependencyBlocker(task) === undefined;
+  }
+
+  private getLocalDependencyBlocker(task: TaskState): string | undefined {
+    for (const depId of task.dependencies) {
+      const dep = this.stateGetTask(depId);
+      if (!dep) return `missing dependency ${depId}`;
+      const satisfied = task.config?.isReconciliation
+        ? dep.status === 'completed' || dep.status === 'failed' || dep.status === 'closed' || dep.status === 'stale'
+        : dep.status === 'completed' || dep.status === 'stale';
+      if (!satisfied) {
+        return `waiting on ${depId} (${dep.status})`;
+      }
+    }
+    return undefined;
   }
 
   private externalDependencyDisplayId(workflowId: string, taskId?: string): string {
@@ -5204,27 +5254,22 @@ export class Orchestrator {
     });
     let job = availableSlots > 0 ? this.scheduler.takeNext() : null;
     while (job && availableSlots > 0) {
-      const task = this.stateGetTask(job.taskId);
+      const readiness = this.getTaskLaunchReadiness(job.taskId, {
+        bypassLocalDependencyReadiness: job.bypassLocalDependencyReadiness,
+      });
       this.logger.info('[orchestrator] drainScheduler: dequeued', {
         taskId: job.taskId,
-        actualStatus: task?.status ?? 'NOT_FOUND',
+        actualStatus: readiness.task?.status ?? 'NOT_FOUND',
       });
-      if (!task || task.status !== 'pending') {
-        this.logger.info('[orchestrator] drainScheduler: skipping non-pending task', {
+      if (!readiness.ready) {
+        this.logger.info('[orchestrator] drainScheduler: skipping non-ready task', {
           taskId: job.taskId,
+          reason: readiness.reason,
         });
         job = this.scheduler.takeNext();
         continue;
       }
-      const workflowBlocker = this.getExternalDependencyBlocker(task);
-      if (workflowBlocker !== undefined) {
-        this.logger.info('[orchestrator] drainScheduler: skipping externally blocked workflow task', {
-          taskId: job.taskId,
-          blocker: workflowBlocker,
-        });
-        job = this.scheduler.takeNext();
-        continue;
-      }
+      const task = readiness.task;
 
       const now = new Date();
       let attemptId = job.attemptId ?? this.ensureCurrentPendingAttempt(task);
