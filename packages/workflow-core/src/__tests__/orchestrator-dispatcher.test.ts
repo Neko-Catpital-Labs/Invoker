@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { Orchestrator } from '../orchestrator.js';
 import type {
   Attempt,
+  ExecutionResourceLeaseReleaseRow,
+  LaunchDispatchInvalidationRow,
   OrchestratorMessageBus,
   OrchestratorPersistence,
   PlanDefinition,
@@ -20,8 +22,16 @@ interface LaunchDispatchRow {
   taskId: string;
   attemptId: string;
   workflowId: string;
+  state: 'enqueued' | 'leased' | 'acknowledged' | 'completed' | 'abandoned';
   priority: 'high' | 'normal' | 'low';
   generation: number;
+}
+
+interface ExecutionResourceLeaseRow {
+  resourceKey: string;
+  resourceType: string;
+  holderId: string;
+  taskId: string;
 }
 
 class InMemoryPersistence implements OrchestratorPersistence {
@@ -29,6 +39,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
   events: LoggedEvent[] = [];
   launchDispatchRows: LaunchDispatchRow[] = [];
+  executionResourceLeases: ExecutionResourceLeaseRow[] = [];
   enqueueLaunchDispatchEnabled = false;
   private attempts = new Map<string, Attempt[]>();
   private nextDispatchId = 1;
@@ -118,11 +129,48 @@ class InMemoryPersistence implements OrchestratorPersistence {
       taskId: input.taskId,
       attemptId: input.attemptId,
       workflowId: input.workflowId,
+      state: 'enqueued',
       priority: input.priority ?? 'normal',
       generation: input.generation,
     };
     this.launchDispatchRows.push(row);
     return { id: row.id };
+  }
+
+  abandonLaunchDispatchesForTasks(
+    taskIds: readonly string[],
+    _reason: string,
+    _nowIso?: string,
+  ): LaunchDispatchInvalidationRow[] {
+    const taskSet = new Set(taskIds);
+    const rows = this.launchDispatchRows.filter(
+      (row) =>
+        taskSet.has(row.taskId) &&
+        (row.state === 'enqueued' || row.state === 'leased' || row.state === 'acknowledged'),
+    );
+    const invalidated = rows.map((row) => ({
+      id: row.id,
+      taskId: row.taskId,
+      attemptId: row.attemptId,
+      workflowId: row.workflowId,
+      state: row.state,
+      generation: row.generation,
+    }));
+    for (const row of rows) {
+      row.state = 'abandoned';
+    }
+    return invalidated;
+  }
+
+  releaseExecutionResourceLeasesForTasks(
+    taskIds: readonly string[],
+    _reason: string,
+    _nowIso?: string,
+  ): ExecutionResourceLeaseReleaseRow[] {
+    const taskSet = new Set(taskIds);
+    const released = this.executionResourceLeases.filter((lease) => taskSet.has(lease.taskId));
+    this.executionResourceLeases = this.executionResourceLeases.filter((lease) => !taskSet.has(lease.taskId));
+    return released.map((lease) => ({ ...lease }));
   }
 }
 
@@ -417,6 +465,146 @@ describe('Orchestrator launch claims', () => {
     expect(downstream.execution.phase).toBeUndefined();
     expect(downstream.execution.launchStartedAt).toBeUndefined();
     expect(downstream.execution.launchCompletedAt).toBeUndefined();
+  });
+
+  it('invalidates downstream launch dispatches and leases when retryTask resets the subgraph', () => {
+    const { orchestrator, persistence } = makeOrchestrator({
+      deferRunningUntilLaunch: true,
+      enqueueLaunchDispatchEnabled: true,
+      launchOutboxMode: 'observe',
+      maxConcurrency: 4,
+    });
+    orchestrator.loadPlan({
+      name: 'invalidate-retry-task-launch-artifacts',
+      onFinish: 'none',
+      tasks: [
+        { id: 'a', description: 'upstream', command: 'echo a' },
+        { id: 'b', description: 'downstream', command: 'echo b', dependencies: ['a'] },
+      ],
+    });
+
+    const upstreamId = taskIdBySuffix(orchestrator, 'a');
+    const downstreamId = taskIdBySuffix(orchestrator, 'b');
+    const [upstreamClaim] = orchestrator.startExecution();
+    expect(orchestrator.markTaskRunningAfterLaunch(upstreamId, upstreamClaim!.execution.selectedAttemptId!)).toBe(true);
+    respondForTask(orchestrator, upstreamId, 'completed');
+    const downstreamDispatch = persistence.launchDispatchRows.find((row) => row.taskId === downstreamId)!;
+    downstreamDispatch.state = 'leased';
+    persistence.executionResourceLeases.push({
+      resourceKey: 'ssh:downstream',
+      resourceType: 'ssh',
+      holderId: 'holder-downstream',
+      taskId: downstreamId,
+    });
+
+    orchestrator.retryTask(upstreamId);
+
+    expect(downstreamDispatch.state).toBe('abandoned');
+    expect(persistence.executionResourceLeases).toEqual([]);
+    expect(persistence.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          taskId: downstreamId,
+          eventType: 'task.launch_dispatch_invalidated',
+          payload: expect.objectContaining({
+            dispatchId: downstreamDispatch.id,
+            previousState: 'leased',
+            reason: 'task subgraph reset to pending',
+          }),
+        }),
+        expect.objectContaining({
+          taskId: downstreamId,
+          eventType: 'task.execution_resource_lease_released',
+          payload: expect.objectContaining({
+            resourceKey: 'ssh:downstream',
+            holderId: 'holder-downstream',
+            reason: 'task subgraph reset to pending',
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it('invalidates launch dispatches and leases when cancelling a workflow', () => {
+    const { orchestrator, persistence } = makeOrchestrator({
+      deferRunningUntilLaunch: true,
+      enqueueLaunchDispatchEnabled: true,
+      launchOutboxMode: 'observe',
+      maxConcurrency: 4,
+    });
+    orchestrator.loadPlan({
+      name: 'invalidate-cancel-workflow-launch-artifacts',
+      onFinish: 'none',
+      tasks: [
+        { id: 'a', description: 'first', command: 'echo a' },
+        { id: 'b', description: 'second', command: 'echo b' },
+      ],
+    });
+    const workflowId = orchestrator.getWorkflowIds()[0]!;
+    const started = orchestrator.startExecution();
+    for (const task of started) {
+      persistence.executionResourceLeases.push({
+        resourceKey: `ssh:${task.id}`,
+        resourceType: 'ssh',
+        holderId: `holder:${task.id}`,
+        taskId: task.id,
+      });
+    }
+
+    orchestrator.cancelWorkflow(workflowId);
+
+    expect(persistence.launchDispatchRows.map((row) => row.state)).toEqual(['abandoned', 'abandoned']);
+    expect(persistence.executionResourceLeases).toEqual([]);
+    expect(
+      persistence.events.filter((event) => event.eventType === 'task.launch_dispatch_invalidated'),
+    ).toHaveLength(2);
+    expect(
+      persistence.events.filter((event) => event.eventType === 'task.execution_resource_lease_released'),
+    ).toHaveLength(2);
+  });
+
+  it('getTaskLaunchReadiness rejects pending tasks whose local dependencies are not satisfied', () => {
+    const { orchestrator } = makeOrchestrator();
+    orchestrator.loadPlan({
+      name: 'launch-readiness-local-deps',
+      onFinish: 'none',
+      tasks: [
+        { id: 'a', description: 'upstream', command: 'echo a' },
+        { id: 'b', description: 'downstream', command: 'echo b', dependencies: ['a'] },
+      ],
+    });
+
+    const upstreamId = taskIdBySuffix(orchestrator, 'a');
+    const downstreamId = taskIdBySuffix(orchestrator, 'b');
+    const readiness = orchestrator.getTaskLaunchReadiness(downstreamId);
+
+    expect(readiness.ready).toBe(false);
+    expect(readiness.reason).toBe(`waiting on ${upstreamId} (pending)`);
+  });
+
+  it('drainScheduler drops stale queued jobs whose dependencies are not launch-ready', () => {
+    const { orchestrator, persistence } = makeOrchestrator({
+      deferRunningUntilLaunch: true,
+      enqueueLaunchDispatchEnabled: true,
+      launchOutboxMode: 'observe',
+      maxConcurrency: 4,
+    });
+    orchestrator.loadPlan({
+      name: 'scheduler-readiness-gate',
+      onFinish: 'none',
+      tasks: [
+        { id: 'a', description: 'upstream', command: 'echo a' },
+        { id: 'b', description: 'downstream', command: 'echo b', dependencies: ['a'] },
+      ],
+    });
+    const downstreamId = taskIdBySuffix(orchestrator, 'b');
+
+    (orchestrator as any).scheduler.enqueue({ taskId: downstreamId, priority: 10 });
+    const started = (orchestrator as any).drainScheduler() as TaskState[];
+
+    expect(started).toEqual([]);
+    expect(orchestrator.getTask(downstreamId)?.status).toBe('pending');
+    expect(persistence.launchDispatchRows.some((row) => row.taskId === downstreamId)).toBe(false);
   });
 
   it('ignores responses for a selected attempt row that has been superseded', () => {

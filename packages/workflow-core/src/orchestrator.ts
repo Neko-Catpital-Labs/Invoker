@@ -147,6 +147,27 @@ export class PlanConflictError extends Error {
 
 // ── Adapter Interfaces ──────────────────────────────────────
 
+export interface LaunchDispatchInvalidationRow {
+  id: number;
+  taskId: string;
+  attemptId: string;
+  workflowId: string;
+  state: string;
+  generation: number;
+}
+
+export interface ExecutionResourceLeaseReleaseRow {
+  resourceKey: string;
+  resourceType: string;
+  holderId: string;
+  taskId?: string;
+}
+
+export type TaskLaunchReadiness =
+  | { ready: true; task: TaskState }
+  | { ready: false; reason: string; task?: TaskState };
+type LaunchReadinessOptions = { bypassLocalDependencyReadiness?: boolean };
+
 export interface OrchestratorPersistence {
   saveWorkflow(workflow: {
     id: string;
@@ -245,6 +266,16 @@ export interface OrchestratorPersistence {
     priority?: 'high' | 'normal' | 'low';
     generation: number;
   }): { id: number };
+  abandonLaunchDispatchesForTasks?(
+    taskIds: readonly string[],
+    reason: string,
+    nowIso?: string,
+  ): LaunchDispatchInvalidationRow[];
+  releaseExecutionResourceLeasesForTasks?(
+    taskIds: readonly string[],
+    reason: string,
+    nowIso?: string,
+  ): ExecutionResourceLeaseReleaseRow[];
 }
 
 export interface OrchestratorMessageBus {
@@ -995,6 +1026,44 @@ export class Orchestrator {
     return ids;
   }
 
+  private invalidateLaunchArtifactsForTasks(
+    taskIds: readonly string[],
+    reason: string,
+    now: Date = new Date(),
+  ): void {
+    const ids = Array.from(new Set(taskIds.filter((id) => typeof id === 'string' && id.length > 0)));
+    if (ids.length === 0) return;
+
+    const invalidatedAt = now.toISOString();
+    const invalidatedDispatches =
+      this.persistence.abandonLaunchDispatchesForTasks?.(ids, reason, invalidatedAt) ?? [];
+    const releasedLeases =
+      this.persistence.releaseExecutionResourceLeasesForTasks?.(ids, reason, invalidatedAt) ?? [];
+
+    for (const row of invalidatedDispatches) {
+      this.persistence.logEvent?.(row.taskId, 'task.launch_dispatch_invalidated', {
+        dispatchId: row.id,
+        attemptId: row.attemptId,
+        workflowId: row.workflowId,
+        previousState: row.state,
+        generation: row.generation,
+        reason,
+        invalidatedAt,
+      });
+    }
+
+    for (const row of releasedLeases) {
+      if (!row.taskId) continue;
+      this.persistence.logEvent?.(row.taskId, 'task.execution_resource_lease_released', {
+        resourceKey: row.resourceKey,
+        resourceType: row.resourceType,
+        holderId: row.holderId,
+        reason,
+        invalidatedAt,
+      });
+    }
+  }
+
   /**
    * Reset root tasks and all downstream dependents to pending using the
    * provided reset payload. Returns the affected IDs and currently-ready IDs.
@@ -1011,6 +1080,8 @@ export class Orchestrator {
     const pendingTaskDeltas: TaskDelta[] = [];
 
     this.taskRepository.runInTransaction(() => {
+      this.invalidateLaunchArtifactsForTasks(affectedIds, 'task subgraph reset to pending');
+
       for (const id of affectedIds) {
         const current = this.stateGetTask(id);
         if (!current) continue;
@@ -2516,6 +2587,7 @@ export class Orchestrator {
       taskId: rootId,
       resetCount: toResetIds.length,
     });
+    this.invalidateLaunchArtifactsForTasks(toResetIds, 'task recreation reset');
 
     for (const id of toResetIds) {
       const current = this.stateGetTask(id);
@@ -2596,6 +2668,10 @@ export class Orchestrator {
     });
     this.logger.info(
       '[agent-session-trace] recreateWorkflow: resetChanges.execution clears agentSessionId/containerId (DB NULL before next run)',
+    );
+    this.invalidateLaunchArtifactsForTasks(
+      allTasks.map((task) => task.id),
+      'workflow recreation reset',
     );
     for (const task of allTasks) {
       const prevSess = task.execution.agentSessionId ?? null;
@@ -3674,6 +3750,7 @@ export class Orchestrator {
       taskMap,
       (t) => !!t.config.isMergeNode,
     );
+    this.invalidateLaunchArtifactsForTasks([sourceId, ...descendantIds], 'task replacement');
     for (const id of descendantIds) {
       const staleBefore = this.stateGetTask(id);
       if (!staleBefore) continue;
@@ -3744,7 +3821,7 @@ export class Orchestrator {
         return !hasInternalDeps;
       })
       .map((rt) => scopeLocal(rt.id));
-    return this.autoStartReadyTasks(rootIds);
+    return this.autoStartReadyTasks(rootIds, 0, { bypassLocalDependencyReadiness: true });
   }
 
   /**
@@ -4114,6 +4191,7 @@ export class Orchestrator {
     const toCancelIds = [rootId, ...descendantIds];
     const cancelled: string[] = [];
     const runningCancelled: string[] = [];
+    this.invalidateLaunchArtifactsForTasks(toCancelIds, 'task cancellation');
 
     for (const id of toCancelIds) {
       const t = this.stateGetTask(id);
@@ -4180,6 +4258,10 @@ export class Orchestrator {
 
     const cancelled: string[] = [];
     const runningCancelled: string[] = [];
+    this.invalidateLaunchArtifactsForTasks(
+      allTasks.filter((task) => cancellable.has(task.status)).map((task) => task.id),
+      'workflow cancellation',
+    );
 
     for (const task of allTasks) {
       if (!cancellable.has(task.status)) continue;
@@ -4224,6 +4306,7 @@ export class Orchestrator {
     const task = this.stateGetTask(taskId);
     if (!task) return;
     const id = task.id;
+    this.invalidateLaunchArtifactsForTasks([id], 'task deferred');
 
     // Transition running → pending. A deferred launch must not retain the
     // launch-claimed phase; otherwise it can be mistaken for an actively
@@ -4692,7 +4775,7 @@ export class Orchestrator {
     }
   }
 
-  private autoStartReadyTasks(taskIds: string[], priority: number = 0): TaskState[] {
+  private autoStartReadyTasks(taskIds: string[], priority: number = 0, opts?: LaunchReadinessOptions): TaskState[] {
     for (const taskId of taskIds) {
       let task = this.stateGetTask(taskId);
       if (!task) continue;
@@ -4719,13 +4802,13 @@ export class Orchestrator {
         if (!task) continue;
       }
 
-      this.enqueueIfNotScheduled(taskId, priority);
+      this.enqueueIfNotScheduled(taskId, priority, opts);
     }
 
     return this.drainScheduler();
   }
 
-  private enqueueIfNotScheduled(taskId: string, priority: number = 0): void {
+  private enqueueIfNotScheduled(taskId: string, priority: number = 0, opts?: LaunchReadinessOptions): void {
     const task = this.stateGetTask(taskId);
     if (!task) return;
     if (this.getExternalDependencyBlocker(task) !== undefined) return;
@@ -4749,13 +4832,26 @@ export class Orchestrator {
       .getQueuedJobs()
       .find((job) => job.attemptId === attemptId || job.taskId === taskId);
     if (queuedJob) {
-      if (priority > queuedJob.priority) {
+      const shouldReplaceQueuedJob =
+        priority > queuedJob.priority ||
+        (opts?.bypassLocalDependencyReadiness === true && !queuedJob.bypassLocalDependencyReadiness);
+      if (shouldReplaceQueuedJob) {
         this.scheduler.removeJob(queuedJob.attemptId ?? queuedJob.taskId);
-        this.scheduler.enqueue({ taskId, attemptId, priority });
+        this.scheduler.enqueue({
+          taskId,
+          attemptId,
+          priority: Math.max(priority, queuedJob.priority),
+          ...(opts?.bypassLocalDependencyReadiness ? { bypassLocalDependencyReadiness: true } : {}),
+        });
       }
       return;
     }
-    this.scheduler.enqueue({ taskId, attemptId, priority });
+    this.scheduler.enqueue({
+      taskId,
+      attemptId,
+      priority,
+      ...(opts?.bypassLocalDependencyReadiness ? { bypassLocalDependencyReadiness: true } : {}),
+    });
   }
 
   /**
@@ -4810,15 +4906,47 @@ export class Orchestrator {
     return this.drainScheduler();
   }
 
-  private areLocalDependenciesSatisfied(task: TaskState): boolean {
-    return task.dependencies.every((depId) => {
-      const dep = this.stateGetTask(depId);
-      if (!dep) return false;
-      if (task.config?.isReconciliation) {
-        return dep.status === 'completed' || dep.status === 'failed' || dep.status === 'closed' || dep.status === 'stale';
+  getTaskLaunchReadiness(taskId: string, opts?: LaunchReadinessOptions): TaskLaunchReadiness {
+    this.refreshFromDb();
+    const task = this.stateGetTask(taskId);
+    if (!task) {
+      return { ready: false, reason: `task ${taskId} not found` };
+    }
+    if (task.status !== 'pending') {
+      return { ready: false, reason: `task status is ${task.status}`, task };
+    }
+
+    if (!opts?.bypassLocalDependencyReadiness) {
+      const localBlocker = this.getLocalDependencyBlocker(task);
+      if (localBlocker) {
+        return { ready: false, reason: localBlocker, task };
       }
-      return dep.status === 'completed' || dep.status === 'stale';
-    });
+    }
+
+    const externalBlocker = this.getExternalDependencyBlocker(task);
+    if (externalBlocker) {
+      return { ready: false, reason: externalBlocker, task };
+    }
+
+    return { ready: true, task };
+  }
+
+  private areLocalDependenciesSatisfied(task: TaskState): boolean {
+    return this.getLocalDependencyBlocker(task) === undefined;
+  }
+
+  private getLocalDependencyBlocker(task: TaskState): string | undefined {
+    for (const depId of task.dependencies) {
+      const dep = this.stateGetTask(depId);
+      if (!dep) return `missing dependency ${depId}`;
+      const satisfied = task.config?.isReconciliation
+        ? dep.status === 'completed' || dep.status === 'failed' || dep.status === 'closed' || dep.status === 'stale'
+        : dep.status === 'completed' || dep.status === 'stale';
+      if (!satisfied) {
+        return `waiting on ${depId} (${dep.status})`;
+      }
+    }
+    return undefined;
   }
 
   private externalDependencyDisplayId(workflowId: string, taskId?: string): string {
@@ -5126,27 +5254,22 @@ export class Orchestrator {
     });
     let job = availableSlots > 0 ? this.scheduler.takeNext() : null;
     while (job && availableSlots > 0) {
-      const task = this.stateGetTask(job.taskId);
+      const readiness = this.getTaskLaunchReadiness(job.taskId, {
+        bypassLocalDependencyReadiness: job.bypassLocalDependencyReadiness,
+      });
       this.logger.info('[orchestrator] drainScheduler: dequeued', {
         taskId: job.taskId,
-        actualStatus: task?.status ?? 'NOT_FOUND',
+        actualStatus: readiness.task?.status ?? 'NOT_FOUND',
       });
-      if (!task || task.status !== 'pending') {
-        this.logger.info('[orchestrator] drainScheduler: skipping non-pending task', {
+      if (!readiness.ready) {
+        this.logger.info('[orchestrator] drainScheduler: skipping non-ready task', {
           taskId: job.taskId,
+          reason: readiness.reason,
         });
         job = this.scheduler.takeNext();
         continue;
       }
-      const workflowBlocker = this.getExternalDependencyBlocker(task);
-      if (workflowBlocker !== undefined) {
-        this.logger.info('[orchestrator] drainScheduler: skipping externally blocked workflow task', {
-          taskId: job.taskId,
-          blocker: workflowBlocker,
-        });
-        job = this.scheduler.takeNext();
-        continue;
-      }
+      const task = readiness.task;
 
       const now = new Date();
       let attemptId = job.attemptId ?? this.ensureCurrentPendingAttempt(task);

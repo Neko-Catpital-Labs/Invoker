@@ -15,7 +15,7 @@
 
 import type { SQLiteAdapter, TaskLaunchDispatch, TaskLaunchDispatchState } from '@invoker/data-store';
 import type { LaunchOutboxAck } from '@invoker/execution-engine';
-import type { TaskState } from '@invoker/workflow-core';
+import type { TaskLaunchReadiness, TaskState } from '@invoker/workflow-core';
 import { DISPATCH_MAX_ATTEMPTS, type Logger } from '@invoker/contracts';
 
 export type LaunchDispatcherMode = 'observe' | 'active';
@@ -46,6 +46,7 @@ export interface LaunchDispatcherOrchestrator {
   prepareTaskForNewAttempt(taskId: string, reason: string): unknown;
   syncFromDb?(workflowId: string): void;
   getTask?(taskId: string): TaskState | undefined;
+  getTaskLaunchReadiness?(taskId: string): TaskLaunchReadiness;
 }
 
 /**
@@ -180,16 +181,38 @@ export class LaunchDispatcher {
       });
       if (!leased) break;
       dispatched += 1;
-      const task = this.resolveTaskForDispatch(leased);
+      let task = this.resolveTaskForDispatch(leased);
       if (!task) {
-        this.failDispatch(
-          leased.id,
-          new Error(`Task ${leased.taskId} missing from orchestrator state at dispatch time`),
+        this.abandonInvalidDispatch(
+          leased,
+          `Task ${leased.taskId} missing from orchestrator state at dispatch time`,
+          'task_missing',
         );
-        break;
+        continue;
+      }
+      const readiness = this.orchestrator?.getTaskLaunchReadiness?.(leased.taskId);
+      if (readiness) {
+        if (!readiness.ready) {
+          this.abandonInvalidDispatch(
+            leased,
+            `Task ${leased.taskId} is no longer launch-ready: ${readiness.reason}`,
+            'not_launch_ready',
+            { readinessReason: readiness.reason },
+          );
+          continue;
+        }
+        task = readiness.task;
       }
       if (!this.dispatchMatchesTask(leased, task)) {
-        this.retireSupersededDispatch(leased, task);
+        this.abandonInvalidDispatch(
+          leased,
+          `Launch dispatch ${leased.id} is stale: selected attempt or generation changed`,
+          'selected_attempt_changed',
+          {
+            selectedAttemptId: task.execution.selectedAttemptId,
+            selectedGeneration: task.execution.generation ?? 0,
+          },
+        );
         continue;
       }
       // Fire-and-forget within the loop: the dispatch row is the durable
@@ -236,24 +259,32 @@ export class LaunchDispatcher {
       && (task.execution.generation ?? 0) === (dispatch.generation ?? 0);
   }
 
-  private retireSupersededDispatch(dispatch: TaskLaunchDispatch, task: TaskState): void {
-    const accepted = this.persistence.markLaunchDispatchCompleted(dispatch.id);
-    this.persistence.logEvent?.(dispatch.taskId, 'task.launch_dispatch_superseded', {
+  private abandonInvalidDispatch(
+    dispatch: TaskLaunchDispatch,
+    message: string,
+    reason: string,
+    details: Record<string, unknown> = {},
+  ): void {
+    const accepted = this.persistence.markLaunchDispatchAbandoned(dispatch.id, message);
+    if (accepted) {
+      this.releaseTaskResourceLeases(dispatch.taskId, dispatch.id, reason);
+    }
+    this.persistence.logEvent?.(dispatch.taskId, 'task.launch_dispatch_invalidated', {
       dispatchId: dispatch.id,
       dispatchAttemptId: dispatch.attemptId,
       dispatchGeneration: dispatch.generation,
-      selectedAttemptId: task.execution.selectedAttemptId,
-      selectedGeneration: task.execution.generation ?? 0,
-      reason: 'selected_attempt_changed',
+      reason,
+      message,
+      accepted,
+      ...details,
     });
-    this.logger?.warn?.('[launch-dispatcher] retired superseded dispatch', {
+    this.logger?.warn?.('[launch-dispatcher] abandoned invalid dispatch', {
       ownerId: this.ownerId,
       dispatchId: dispatch.id,
       taskId: dispatch.taskId,
       dispatchAttemptId: dispatch.attemptId,
       dispatchGeneration: dispatch.generation,
-      selectedAttemptId: task.execution.selectedAttemptId,
-      selectedGeneration: task.execution.generation ?? 0,
+      reason,
       accepted,
       module: 'launch-dispatcher',
     });
@@ -353,7 +384,11 @@ export class LaunchDispatcher {
    * propagate (abandonStuckLeases must remain idempotent under
    * repeated polls).
    */
-  private releaseTaskResourceLeases(taskId: string, dispatchId: number): void {
+  private releaseTaskResourceLeases(
+    taskId: string,
+    dispatchId: number,
+    reason = 'launch-dispatch-abandoned',
+  ): void {
     let leases: ReadonlyArray<{ resourceKey: string; holderId: string; resourceType: string }> = [];
     try {
       leases = this.persistence.listExecutionResourceLeasesByTask(taskId);
@@ -381,7 +416,7 @@ export class LaunchDispatcher {
           resourceKey: lease.resourceKey,
           resourceType: lease.resourceType,
           holderId: lease.holderId,
-          reason: 'launch-dispatch-abandoned',
+          reason,
         });
       } catch (err) {
         this.logger?.warn?.(

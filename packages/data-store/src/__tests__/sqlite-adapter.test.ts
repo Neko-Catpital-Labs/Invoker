@@ -731,6 +731,108 @@ describe('SQLiteAdapter', () => {
       });
     });
 
+    it('abandonLaunchDispatchesForTasks abandons active rows for the selected task set', () => {
+      adapter.saveWorkflow({ ...testWorkflow, id: 'wf-launch' });
+      saveLaunchTask('wf-launch', 'wf-launch/t1', 'attempt-live-1');
+      saveLaunchTask('wf-launch', 'wf-launch/t2', 'attempt-live-2');
+      const enqueued = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-launch/t1',
+        attemptId: 'attempt-live-1',
+        workflowId: 'wf-launch',
+        generation: 0,
+      });
+      const leased = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-launch/t1',
+        attemptId: 'attempt-live-1b',
+        workflowId: 'wf-launch',
+        generation: 0,
+      });
+      const acknowledged = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-launch/t1',
+        attemptId: 'attempt-live-1c',
+        workflowId: 'wf-launch',
+        generation: 0,
+      });
+      const completed = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-launch/t1',
+        attemptId: 'attempt-completed',
+        workflowId: 'wf-launch',
+        generation: 0,
+      });
+      const unrelated = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-launch/t2',
+        attemptId: 'attempt-live-2',
+        workflowId: 'wf-launch',
+        generation: 0,
+      });
+      (adapter as any).db.run(
+        `UPDATE task_launch_dispatch SET state = 'leased', dispatch_owner = 'owner-1', fenced_until = '2026-06-03T00:05:00.000Z' WHERE id = ?`,
+        [leased.id],
+      );
+      (adapter as any).db.run(
+        `UPDATE task_launch_dispatch SET state = 'acknowledged', dispatch_owner = 'owner-2', fenced_until = '2026-06-03T00:05:00.000Z' WHERE id = ?`,
+        [acknowledged.id],
+      );
+      adapter.markLaunchDispatchCompleted(completed.id, '2026-06-03T00:04:00.000Z');
+
+      const invalidated = adapter.abandonLaunchDispatchesForTasks(
+        ['wf-launch/t1'],
+        'reset invalidated launch dispatch',
+        '2026-06-03T00:06:00.000Z',
+      );
+
+      expect(invalidated.map((row) => ({ id: row.id, state: row.state }))).toEqual([
+        { id: enqueued.id, state: 'enqueued' },
+        { id: leased.id, state: 'leased' },
+        { id: acknowledged.id, state: 'acknowledged' },
+      ]);
+      for (const row of [enqueued, leased, acknowledged]) {
+        const after = adapter.loadLaunchDispatchById(row.id);
+        expect(after?.state).toBe('abandoned');
+        expect(after?.completedAt).toBe('2026-06-03T00:06:00.000Z');
+        expect(after?.lastError).toBe('reset invalidated launch dispatch');
+        expect(after?.dispatchOwner).toBeUndefined();
+        expect(after?.fencedUntil).toBeUndefined();
+      }
+      expect(adapter.loadLaunchDispatchById(completed.id)?.state).toBe('completed');
+      expect(adapter.loadLaunchDispatchById(unrelated.id)?.state).toBe('enqueued');
+    });
+
+    it('releaseExecutionResourceLeasesForTasks releases only leases held by the selected task set', () => {
+      adapter.saveWorkflow({ ...testWorkflow, id: 'wf-launch' });
+      saveLaunchTask('wf-launch', 'wf-launch/t1', 'attempt-lease-1');
+      saveLaunchTask('wf-launch', 'wf-launch/t2', 'attempt-lease-2');
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:lifecycle-1',
+        resourceType: 'ssh',
+        holderId: 'holder-lifecycle-1',
+        taskId: 'wf-launch/t1',
+      })).toBe(true);
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:lifecycle-2',
+        resourceType: 'ssh',
+        holderId: 'holder-lifecycle-2',
+        taskId: 'wf-launch/t2',
+      })).toBe(true);
+
+      const released = adapter.releaseExecutionResourceLeasesForTasks(
+        ['wf-launch/t1'],
+        'reset invalidated resource lease',
+        '2026-06-03T00:07:00.000Z',
+      );
+
+      expect(released).toEqual([
+        {
+          resourceKey: 'ssh:lifecycle-1',
+          resourceType: 'ssh',
+          holderId: 'holder-lifecycle-1',
+          taskId: 'wf-launch/t1',
+        },
+      ]);
+      expect(adapter.listExecutionResourceLeasesByTask('wf-launch/t1')).toEqual([]);
+      expect(adapter.listExecutionResourceLeasesByTask('wf-launch/t2')).toHaveLength(1);
+    });
+
     it('deleteWorkflow removes launch dispatches and execution resource leases for deleted tasks', () => {
       setupWorkflowAndTask('wf-launch', 'wf-launch/t1', {
         selectedAttemptId: 'attempt-delete-cleanup',
