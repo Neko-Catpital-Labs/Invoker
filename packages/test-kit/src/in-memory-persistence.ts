@@ -1,5 +1,5 @@
 import { computeWorkflowRollup } from '@invoker/workflow-core';
-import type { TaskState, TaskStateChanges, OrchestratorPersistence, Attempt } from '@invoker/workflow-core';
+import type { TaskState, TaskStateChanges, OrchestratorPersistence, Attempt, ExternalDependency, ExternalDependencyChange } from '@invoker/workflow-core';
 
 /**
  * In-memory implementation of OrchestratorPersistence for testing.
@@ -11,6 +11,8 @@ export class InMemoryPersistence implements OrchestratorPersistence {
     createdAt: string; updatedAt: string;
     onFinish?: string; baseBranch?: string; featureBranch?: string;
     mergeMode?: 'manual' | 'automatic' | 'external_review';
+    externalDependencies?: ExternalDependency[];
+    externalDependencyChanges?: ExternalDependencyChange[];
     generation?: number;
   }>();
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
@@ -21,6 +23,8 @@ export class InMemoryPersistence implements OrchestratorPersistence {
     createdAt?: string; updatedAt?: string;
     onFinish?: string; baseBranch?: string; featureBranch?: string;
     mergeMode?: 'manual' | 'automatic' | 'external_review';
+    externalDependencies?: ExternalDependency[];
+    externalDependencyChanges?: ExternalDependencyChange[];
     generation?: number;
   }): void {
     const now = new Date().toISOString();
@@ -31,13 +35,15 @@ export class InMemoryPersistence implements OrchestratorPersistence {
     });
   }
 
-  updateWorkflow(workflowId: string, changes: { updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review' }): void {
+  updateWorkflow(workflowId: string, changes: { updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review'; externalDependencies?: ExternalDependency[]; externalDependencyChanges?: ExternalDependencyChange[] }): void {
     const wf = this.workflows.get(workflowId);
     if (wf) {
       if (changes.updatedAt) wf.updatedAt = changes.updatedAt;
       if (changes.baseBranch !== undefined) wf.baseBranch = changes.baseBranch;
       if (changes.generation !== undefined) wf.generation = changes.generation;
       if (changes.mergeMode !== undefined) wf.mergeMode = changes.mergeMode;
+      if ('externalDependencies' in changes) wf.externalDependencies = changes.externalDependencies;
+      if ('externalDependencyChanges' in changes) wf.externalDependencyChanges = changes.externalDependencyChanges;
     }
   }
 
