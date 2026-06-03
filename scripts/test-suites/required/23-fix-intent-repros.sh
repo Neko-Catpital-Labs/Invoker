@@ -7,5 +7,9 @@ cd "$ROOT"
 export REPRO_TIMEOUT_SECONDS="${REPRO_TIMEOUT_SECONDS:-180}"
 export INVOKER_REPRO_TIMEOUT_SECONDS="${INVOKER_REPRO_TIMEOUT_SECONDS:-600}"
 
-exec xvfb-run --auto-servernum \
-  bash "$ROOT/scripts/repro/repro-fix-intent-cancellation-stack.sh" --expect fixed
+if command -v xvfb-run >/dev/null 2>&1; then
+  exec xvfb-run --auto-servernum \
+    bash "$ROOT/scripts/repro/repro-fix-intent-cancellation-stack.sh" --expect fixed
+fi
+
+exec bash "$ROOT/scripts/repro/repro-fix-intent-cancellation-stack.sh" --expect fixed
