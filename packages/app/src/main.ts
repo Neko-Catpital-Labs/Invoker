@@ -1734,13 +1734,6 @@ function createEmbeddedTerminalBackendFromConfig(
       taskHandles,
       enqueueTaskOutput,
       flushTaskOutput,
-      publishTaskHeartbeat: (taskId, lastHeartbeatAt) => {
-        messageBus.publish(Channels.TASK_DELTA, {
-          type: 'updated' as const,
-          taskId,
-          changes: { execution: { lastHeartbeatAt } },
-        });
-      },
       assertFatalExecutionCapacity,
       getTaskRunner: () => taskExecutor,
       setTaskRunner: (runner) => { taskExecutor = runner; },

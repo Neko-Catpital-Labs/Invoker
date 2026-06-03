@@ -85,6 +85,7 @@ export class InMemoryPersistence implements OrchestratorPersistence {
         ...(changes.dependencies !== undefined ? { dependencies: changes.dependencies } : {}),
         config: { ...entry.task.config, ...changes.config },
         execution: { ...entry.task.execution, ...changes.execution },
+        taskStateVersion: (entry.task.taskStateVersion ?? 1) + 1,
       } as TaskState;
     }
   }

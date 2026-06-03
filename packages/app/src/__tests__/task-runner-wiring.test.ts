@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { Channels } from '@invoker/transport';
 import type { TaskState } from '@invoker/workflow-core';
 import { autoFixOnReviewGateFailure } from '../workflow-actions.js';
 import { loadConfig, resolveSecretsFilePath } from '../config.js';
@@ -75,12 +74,12 @@ describe('task-runner-wiring', () => {
     let latestRunner: any = null;
     const taskHandles = new Map();
     const logger = createLogger();
-    const publishTaskHeartbeat = vi.fn();
     const orchestrator = {
       getTask: vi.fn(() => ({
         status: 'running',
         execution: { generation: 2, lastHeartbeatAt: new Date(Date.now() - 1000) },
       })),
+      recordTaskHeartbeat: vi.fn(),
       setBeforeApproveHook: vi.fn(),
     };
     const persistence = {
@@ -103,7 +102,6 @@ describe('task-runner-wiring', () => {
       taskHandles,
       enqueueTaskOutput: vi.fn(),
       flushTaskOutput: vi.fn(),
-      publishTaskHeartbeat,
       assertFatalExecutionCapacity: vi.fn(),
       getTaskRunner: () => currentRunner,
       setTaskRunner: (value) => { currentRunner = value; },
@@ -138,17 +136,20 @@ describe('task-runner-wiring', () => {
     });
     expect(taskHandles.has('task-1')).toBe(false);
 
-    config.callbacks.onHeartbeat('task-1');
-    expect(persistence.updateTask).toHaveBeenCalledWith('task-1', {
-      execution: { lastHeartbeatAt: expect.any(Date) },
+    const heartbeatAt = new Date('2026-06-03T01:02:03.000Z');
+    config.callbacks.onHeartbeat('task-1', { at: heartbeatAt, source: 'remote_workload' });
+    expect(persistence.updateTask).not.toHaveBeenCalled();
+    expect(orchestrator.recordTaskHeartbeat).toHaveBeenCalledWith('task-1', {
+      at: heartbeatAt,
+      source: 'remote_workload',
     });
-    expect(publishTaskHeartbeat).toHaveBeenCalledWith('task-1', expect.any(Date));
   });
 
   it('keeps review-gate auto-fix and approve hook routed through the current TaskRunner', async () => {
     let currentRunner: any = null;
     const orchestrator = {
       getTask: vi.fn(),
+      recordTaskHeartbeat: vi.fn(),
       setBeforeApproveHook: vi.fn(),
     };
     const persistence = {
@@ -166,7 +167,6 @@ describe('task-runner-wiring', () => {
       taskHandles: new Map(),
       enqueueTaskOutput: vi.fn(),
       flushTaskOutput: vi.fn(),
-      publishTaskHeartbeat: vi.fn(),
       assertFatalExecutionCapacity: vi.fn(),
       getTaskRunner: () => currentRunner,
       setTaskRunner: (value) => { currentRunner = value; },
@@ -206,32 +206,37 @@ describe('task-runner-wiring', () => {
     await runner.executeTasks([{ id: 'task-1' }] as any);
     expect(runner.executeTasks).toHaveBeenCalledWith([{ id: 'task-1' }]);
   });
-
-  it('uses the unchanged heartbeat task-delta channel shape', () => {
-    const published: Array<{ channel: string; payload: unknown }> = [];
-    const publishTaskHeartbeat = (taskId: string, lastHeartbeatAt: Date): void => {
-      published.push({
-        channel: Channels.TASK_DELTA,
-        payload: {
-          type: 'updated' as const,
-          taskId,
-          changes: { execution: { lastHeartbeatAt } },
-        },
-      });
+  it('routes heartbeat metadata through orchestrator-owned task deltas', () => {
+    const at = new Date('2026-06-03T02:03:04.000Z');
+    const recordTaskHeartbeat = vi.fn();
+    const orchestrator = {
+      getTask: vi.fn(() => ({ status: 'running', execution: {} })),
+      recordTaskHeartbeat,
+      setBeforeApproveHook: vi.fn(),
     };
-    const at = new Date();
 
-    publishTaskHeartbeat('task-1', at);
+    rebuildTaskRunner({
+      orchestrator: orchestrator as any,
+      persistence: { updateTask: vi.fn(), loadWorkflow: vi.fn() } as any,
+      executorRegistry: {} as any,
+      repoRoot: '/repo',
+      invokerConfig: {},
+      logger: createLogger() as any,
+      taskHandles: new Map(),
+      enqueueTaskOutput: vi.fn(),
+      flushTaskOutput: vi.fn(),
+      assertFatalExecutionCapacity: vi.fn(),
+      getTaskRunner: () => null,
+      setTaskRunner: vi.fn(),
+      setLatestTaskExecutor: vi.fn(),
+    });
 
-    expect(published).toEqual([
-      {
-        channel: Channels.TASK_DELTA,
-        payload: {
-          type: 'updated',
-          taskId: 'task-1',
-          changes: { execution: { lastHeartbeatAt: at } },
-        },
-      },
-    ]);
+    const config = taskRunnerConstructor.mock.calls[0]?.[0] as any;
+    config.callbacks.onHeartbeat('task-1', { at, source: 'executor' });
+
+    expect(recordTaskHeartbeat).toHaveBeenCalledWith('task-1', {
+      at,
+      source: 'executor',
+    });
   });
 });
