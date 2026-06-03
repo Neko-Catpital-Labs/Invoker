@@ -148,16 +148,16 @@ tasks:
     const yaml = `
 name: External Dependency Plan
 repoUrl: git@github.com:test/repo.git
+externalDependencies:
+  - workflowId: wf-123
+    taskId: verify-control-plane-regression
 tasks:
   - id: gated
     description: Wait for prior workflow task
     command: echo "go"
-    externalDependencies:
-      - workflowId: wf-123
-        taskId: verify-control-plane-regression
 `;
     const plan = parsePlan(yaml);
-    expect(plan.tasks[0].externalDependencies).toEqual([
+    expect(plan.externalDependencies).toEqual([
       {
         workflowId: 'wf-123',
         taskId: 'verify-control-plane-regression',
@@ -171,15 +171,15 @@ tasks:
     const yaml = `
 name: External Dependency By Workflow
 repoUrl: git@github.com:test/repo.git
+externalDependencies:
+  - workflowId: wf-123
 tasks:
   - id: gated
     description: Wait for prior workflow merge gate
     command: echo "go"
-    externalDependencies:
-      - workflowId: wf-123
 `;
     const plan = parsePlan(yaml);
-    expect(plan.tasks[0].externalDependencies).toEqual([
+    expect(plan.externalDependencies).toEqual([
       { workflowId: 'wf-123', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'completed' },
     ]);
   });
@@ -188,22 +188,22 @@ tasks:
     const yaml = `
 name: External Dependency Review Ready
 repoUrl: git@github.com:test/repo.git
+externalDependencies:
+  - workflowId: wf-123
+    taskId: __merge__
+    gatePolicy: review_ready
 tasks:
   - id: gated
     description: Wait for prior workflow merge gate to be review-ready
     command: echo "go"
-    externalDependencies:
-      - workflowId: wf-123
-        taskId: __merge__
-        gatePolicy: review_ready
 `;
     const plan = parsePlan(yaml);
-    expect(plan.tasks[0].externalDependencies).toEqual([
+    expect(plan.externalDependencies).toEqual([
       { workflowId: 'wf-123', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'review_ready' },
     ]);
   });
 
-  it('parses top-level externalDependencies and applies them to root tasks', () => {
+  it('parses top-level externalDependencies onto the workflow only', () => {
     const yaml = `
 name: Workflow Chain Step
 repoUrl: git@github.com:test/repo.git
@@ -223,23 +223,18 @@ tasks:
     dependencies: [root-a]
 `;
     const plan = parsePlan(yaml);
-    expect(plan.tasks[0].externalDependencies).toEqual([
+    expect(plan.externalDependencies).toEqual([
       { workflowId: 'wf-123', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'completed' },
     ]);
-    expect(plan.tasks[1].externalDependencies).toEqual([
-      { workflowId: 'wf-123', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'completed' },
-    ]);
+    expect(plan.tasks[0].externalDependencies).toBeUndefined();
+    expect(plan.tasks[1].externalDependencies).toBeUndefined();
     expect(plan.tasks[2].externalDependencies).toBeUndefined();
   });
 
-  it('lets task-level externalDependencies override inherited top-level dependency by workflow+task', () => {
+  it('rejects task-level externalDependencies', () => {
     const yaml = `
-name: Workflow Chain Override
+name: Task-Level External Dependency
 repoUrl: git@github.com:test/repo.git
-externalDependencies:
-  - workflowId: wf-123
-    taskId: __merge__
-    gatePolicy: review_ready
 tasks:
   - id: root
     description: Root
@@ -249,10 +244,10 @@ tasks:
         taskId: __merge__
         gatePolicy: completed
 `;
-    const plan = parsePlan(yaml);
-    expect(plan.tasks[0].externalDependencies).toEqual([
-      { workflowId: 'wf-123', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'completed' },
-    ]);
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow(
+      'task-level "externalDependencies", which is no longer supported',
+    );
   });
 
   it('rejects invalid top-level externalDependencies.gatePolicy', () => {
@@ -276,14 +271,14 @@ tasks:
     const yaml = `
 name: Bad External Dependency Plan
 repoUrl: git@github.com:test/repo.git
+externalDependencies:
+  - workflowId: wf-123
+    taskId: verify-control-plane-regression
+    requiredStatus: running
 tasks:
   - id: gated
     description: Wait
     command: echo "go"
-    externalDependencies:
-      - workflowId: wf-123
-        taskId: verify-control-plane-regression
-        requiredStatus: running
 `;
     expect(() => parsePlan(yaml)).toThrow(PlanParseError);
     expect(() => parsePlan(yaml)).toThrow('"requiredStatus" must be "completed"');
@@ -293,14 +288,14 @@ tasks:
     const yaml = `
 name: Bad External Dependency Gate Policy
 repoUrl: git@github.com:test/repo.git
+externalDependencies:
+  - workflowId: wf-123
+    taskId: __merge__
+    gatePolicy: whenever
 tasks:
   - id: gated
     description: Wait
     command: echo "go"
-    externalDependencies:
-      - workflowId: wf-123
-        taskId: __merge__
-        gatePolicy: whenever
 `;
     expect(() => parsePlan(yaml)).toThrow(PlanParseError);
     expect(() => parsePlan(yaml)).toThrow('"gatePolicy" must be "completed" or "review_ready"');
@@ -310,14 +305,14 @@ tasks:
     const yaml = `
 name: Deprecated Approved Gate Policy
 repoUrl: git@github.com:test/repo.git
+externalDependencies:
+  - workflowId: wf-123
+    taskId: __merge__
+    gatePolicy: approved
 tasks:
   - id: gated
     description: Wait
     command: echo "go"
-    externalDependencies:
-      - workflowId: wf-123
-        taskId: __merge__
-        gatePolicy: approved
 `;
     expect(() => parsePlan(yaml)).toThrow(PlanParseError);
     expect(() => parsePlan(yaml)).toThrow("gatePolicy value 'approved' is no longer supported. Use 'completed' instead.");
