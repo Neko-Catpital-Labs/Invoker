@@ -58,6 +58,7 @@ import {
   finalizeMutationWithGlobalTopup,
   isDispatchableLaunch,
 } from './global-topup.js';
+import { LaunchDispatcher } from './launch-dispatcher.js';
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
 import { trackWorkflow } from './headless-watch.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
@@ -151,6 +152,7 @@ function buildHeadlessApiServerDeps(
       persistence: deps.persistence,
       taskExecutor,
       dispatchMode: deps.mutationTiming ? 'fire-and-forget' : 'await',
+      launchOutboxMode: deps.invokerConfig.launchOutboxMode,
       autoApproveAIFixes: deps.invokerConfig?.autoApproveAIFixes,
       killRunningTask: (taskId: string) => taskExecutor.killActiveExecution(taskId),
       commandService: deps.commandService,
@@ -278,6 +280,52 @@ export function createHeadlessExecutor(
     },
   });
   return executor;
+}
+
+async function dispatchHeadlessRunnableTasks(
+  deps: HeadlessDeps,
+  taskExecutor: TaskRunner,
+  runnable: TaskState[],
+  context: string,
+): Promise<void> {
+  if (runnable.length === 0) return;
+  if (deps.invokerConfig.launchOutboxMode !== 'active') {
+    await taskExecutor.executeTasks(runnable);
+    return;
+  }
+
+  const dispatcher = new LaunchDispatcher({
+    persistence: deps.persistence,
+    orchestrator: {
+      prepareTaskForNewAttempt: (taskId, reason) =>
+        deps.orchestrator.prepareTaskForNewAttempt(taskId, reason),
+      syncFromDb: (workflowId) => deps.orchestrator.syncFromDb(workflowId),
+      getTask: (taskId) => deps.orchestrator.getTask(taskId),
+    },
+    taskRunnerProvider: () => taskExecutor,
+    ownerId: `headless-${process.pid}`,
+    logger: deps.logger,
+    mode: 'active',
+    maxConcurrency: Math.max(1, deps.invokerConfig.maxConcurrency ?? 16),
+  });
+  deps.logger?.debug?.(
+    `[headless] ${context}: launchOutboxMode=active — polling local launch dispatcher for ${runnable.length} runnable task(s)`,
+    { module: 'headless' },
+  );
+  const poll = (): void => {
+    try {
+      dispatcher.poll();
+    } catch (err) {
+      deps.logger?.warn?.(
+        `[headless] ${context}: local launch dispatcher poll failed: ${err instanceof Error ? err.message : String(err)}`,
+        { module: 'headless' },
+      );
+    }
+  };
+  poll();
+  const timer = setInterval(poll, 250);
+  timer.unref?.();
+  await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
 export function wireHeadlessAutoFix(
@@ -2126,9 +2174,7 @@ async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDe
   const result = await deps.commandService.editTaskCommand(envelope);
   if (!result.ok) throw new Error(result.error.message);
   const runnable = result.data.filter(isDispatchableLaunch);
-  if (runnable.length > 0) {
-    await taskExecutor.executeTasks(runnable);
-  }
+  await dispatchHeadlessRunnableTasks(deps, taskExecutor, runnable, 'edit-task-command');
   process.stdout.write(`Edited task "${taskId}" command → "${newCommand}"\n`);
 
   if (deps.noTrack) {
@@ -2160,9 +2206,7 @@ async function headlessEditPrompt(taskId: string, newPrompt: string, deps: Headl
   const result = await deps.commandService.editTaskPrompt(envelope);
   if (!result.ok) throw new Error(result.error.message);
   const runnable = result.data.filter(isDispatchableLaunch);
-  if (runnable.length > 0) {
-    await taskExecutor.executeTasks(runnable);
-  }
+  await dispatchHeadlessRunnableTasks(deps, taskExecutor, runnable, 'edit-task-prompt');
   process.stdout.write(`Edited task "${taskId}" prompt → "${newPrompt}"\n`);
 
   if (deps.noTrack) {
@@ -2204,9 +2248,7 @@ async function headlessEditExecutor(
   const result = await deps.commandService.editTaskType(envelope);
   if (!result.ok) throw new Error(result.error.message);
   const runnable = result.data.filter(isDispatchableLaunch);
-  if (runnable.length > 0) {
-    await taskExecutor.executeTasks(runnable);
-  }
+  await dispatchHeadlessRunnableTasks(deps, taskExecutor, runnable, 'edit-task-type');
   process.stdout.write(
     `Edited task "${taskId}" executor → "${runnerKind}"` +
     `${poolMemberId ? ` (poolMemberId=${poolMemberId})` : ''}\n`,
@@ -2242,9 +2284,7 @@ async function headlessEditAgent(taskId: string, agentName: string, deps: Headle
   const result = await deps.commandService.editTaskAgent(envelope);
   if (!result.ok) throw new Error(result.error.message);
   const runnable = result.data.filter(isDispatchableLaunch);
-  if (runnable.length > 0) {
-    await taskExecutor.executeTasks(runnable);
-  }
+  await dispatchHeadlessRunnableTasks(deps, taskExecutor, runnable, 'edit-task-agent');
   process.stdout.write(`Edited task "${taskId}" agent → "${agentName}"\n`);
 
   if (deps.noTrack) {
