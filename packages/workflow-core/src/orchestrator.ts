@@ -1839,11 +1839,11 @@ export class Orchestrator {
     taskId: string,
     originalError: string,
     expectedLineage?: TaskLineageExpectation,
-  ): void {
+  ): boolean {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
-    if (!this.taskMatchesLineageExpectation(task, expectedLineage)) return;
+    if (!this.taskMatchesLineageExpectation(task, expectedLineage)) return false;
     const tid = task.id;
     if (task.status !== 'running' && task.status !== 'fixing_with_ai') {
       throw new Error(`Task ${tid} is not running or fixing with AI (status: ${task.status})`);
@@ -1887,6 +1887,7 @@ export class Orchestrator {
     const delta: TaskDelta = this.buildUpdateDelta(task, updated, changes);
     this.persistence.logEvent?.(tid, 'task.awaiting_approval', changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+    return true;
   }
 
   setBeforeApproveHook(fn: (task: TaskState) => Promise<void>): void {
@@ -2887,13 +2888,13 @@ export class Orchestrator {
     savedError: string,
     fixError?: string,
     expectedLineage?: TaskLineageExpectation,
-  ): void {
+  ): boolean {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) {
       throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
     }
-    if (!this.taskMatchesLineageExpectation(task, expectedLineage)) return;
+    if (!this.taskMatchesLineageExpectation(task, expectedLineage)) return false;
     const id = task.id;
 
     const normalizedSavedError = stripFixFailureWrapper(savedError);
@@ -2922,6 +2923,7 @@ export class Orchestrator {
     const delta: TaskDelta = this.buildUpdateDelta(task, revertUpdated, changes);
     this.persistence.logEvent?.(id, 'task.failed', changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+    return true;
   }
 
   /**

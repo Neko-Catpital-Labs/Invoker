@@ -384,6 +384,112 @@ describe('agent dispatch — codex vs claude', () => {
         },
       });
     });
+
+    it('discards successful late fix output and session metadata when lineage changed', async () => {
+      const appendTaskOutput = vi.fn();
+      const updateTask = vi.fn();
+      const initialTask = {
+        id: 'task-stale-success',
+        status: 'fixing_with_ai' as const,
+        config: { command: 'pnpm test' },
+        execution: {
+          error: 'test failed',
+          workspacePath: createTempWorkspace(),
+          selectedAttemptId: 'att-1',
+          generation: 5,
+        },
+      };
+      const staleTask = {
+        ...initialTask,
+        status: 'pending' as const,
+        execution: {
+          ...initialTask.execution,
+          selectedAttemptId: 'att-2',
+          generation: 6,
+        },
+      };
+      let currentTask = initialTask;
+      const spawnAgentFix = vi.fn(async () => {
+        currentTask = staleTask;
+        return { stdout: 'late output', sessionId: 'late-session' };
+      });
+      const host: ConflictResolverHost = {
+        orchestrator: {
+          getTask: () => currentTask,
+          getAllTasks: () => [],
+        } as unknown as Orchestrator,
+        persistence: { appendTaskOutput, updateTask } as any,
+        cwd: '/tmp',
+        execGitReadonly: async () => '',
+        execGitIn: async () => '',
+        createMergeWorktree: async () => '/tmp/wt',
+        removeMergeWorktree: async () => {},
+        spawnAgentFix,
+      };
+
+      await expect(
+        fixWithAgentImpl(host, initialTask.id, 'error output', 'codex', undefined, undefined, {
+          taskId: initialTask.id,
+          selectedAttemptId: 'att-1',
+          generation: 5,
+        }),
+      ).rejects.toThrow(/stale/);
+
+      expect(appendTaskOutput).not.toHaveBeenCalled();
+      expect(updateTask).not.toHaveBeenCalled();
+    });
+
+    it('discards failed late fix session metadata when lineage changed', async () => {
+      const updateTask = vi.fn();
+      const initialTask = {
+        id: 'task-stale-failure',
+        status: 'fixing_with_ai' as const,
+        config: { command: 'pnpm test' },
+        execution: {
+          error: 'test failed',
+          workspacePath: createTempWorkspace(),
+          selectedAttemptId: 'att-1',
+          generation: 5,
+        },
+      };
+      const staleTask = {
+        ...initialTask,
+        status: 'pending' as const,
+        execution: {
+          ...initialTask.execution,
+          selectedAttemptId: 'att-2',
+          generation: 6,
+        },
+      };
+      let currentTask = initialTask;
+      const spawnAgentFix = vi.fn(async () => {
+        currentTask = staleTask;
+        throw Object.assign(new Error('agent failed'), { sessionId: 'failed-late-session' });
+      });
+      const host: ConflictResolverHost = {
+        orchestrator: {
+          getTask: () => currentTask,
+          getAllTasks: () => [],
+        } as unknown as Orchestrator,
+        persistence: { updateTask, logEvent: vi.fn() } as any,
+        cwd: '/tmp',
+        execGitReadonly: async () => '',
+        execGitIn: async () => '',
+        createMergeWorktree: async () => '/tmp/wt',
+        removeMergeWorktree: async () => {},
+        spawnAgentFix,
+      };
+
+      await expect(
+        fixWithAgentImpl(host, initialTask.id, 'error output', 'claude', undefined, undefined, {
+          taskId: initialTask.id,
+          selectedAttemptId: 'att-1',
+          generation: 5,
+        }),
+      ).rejects.toThrow(/stale/);
+
+      expect(updateTask).not.toHaveBeenCalled();
+    });
   });
 });
 

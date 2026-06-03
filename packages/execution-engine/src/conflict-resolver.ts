@@ -11,7 +11,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import type { Orchestrator } from '@invoker/workflow-core';
+import type { Orchestrator, TaskLineageExpectation } from '@invoker/workflow-core';
 import { OrchestratorError, OrchestratorErrorCode } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { cleanElectronEnv, resolveExecutableOnCurrentPath } from './process-utils.js';
@@ -52,6 +52,37 @@ export interface ConflictResolverHost {
   removeMergeWorktree(dir: string): Promise<void>;
   spawnAgentFix(prompt: string, cwd: string, agentName?: string): Promise<{ stdout: string; sessionId: string }>;
   getRemoteTargetConfig?(targetId: string): RemoteTargetConfig | undefined;
+}
+
+export type FixLineageGuard = TaskLineageExpectation & {
+  signal?: AbortSignal;
+};
+
+function assertFixLineageCurrent(host: ConflictResolverHost, guard?: FixLineageGuard): void {
+  if (!guard) return;
+  if (guard.signal?.aborted) {
+    throw new Error(
+      `Fix result for ${guard.taskId ?? 'unknown task'} aborted: ${
+        guard.signal.reason instanceof Error
+          ? guard.signal.reason.message
+          : String(guard.signal.reason ?? 'unknown')
+      }`,
+    );
+  }
+  if (!guard.taskId) return;
+  const current = host.orchestrator.getTask(guard.taskId);
+  if (!current) {
+    throw new Error(`Fix result for ${guard.taskId} is stale: task no longer exists`);
+  }
+  if (
+    current.execution.selectedAttemptId !== guard.selectedAttemptId
+    || (
+      guard.generation !== undefined
+      && (current.execution.generation ?? 0) !== guard.generation
+    )
+  ) {
+    throw new Error(`Fix result for ${guard.taskId} is stale`);
+  }
 }
 
 const DEFAULT_MAX_INLINE_PROMPT_BYTES = 64 * 1024;
@@ -466,6 +497,7 @@ export async function fixWithAgentImpl(
   agentName?: string,
   savedError?: string,
   fixContext?: string,
+  lineageGuard?: FixLineageGuard,
 ): Promise<void> {
   host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
     phase: 'fix-with-agent-start',
@@ -503,6 +535,7 @@ export async function fixWithAgentImpl(
     const resolvedWorkspacePath =
       (await resolveRemoteBranchOwnerPath(task.execution.branch, workspacePath, target)) ?? workspacePath;
     if (resolvedWorkspacePath !== workspacePath) {
+      assertFixLineageCurrent(host, lineageGuard);
       host.persistence.updateTask(taskId, {
         execution: {
           workspacePath: resolvedWorkspacePath,
@@ -523,8 +556,10 @@ export async function fixWithAgentImpl(
       host.agentRegistry,
     );
     if (output) {
+      assertFixLineageCurrent(host, lineageGuard);
       host.persistence.appendTaskOutput(taskId, `\n[Fix with ${remoteAgentBin} (remote)] Output:\n${output}`);
     }
+    assertFixLineageCurrent(host, lineageGuard);
     host.persistence.updateTask(taskId, {
       execution: {
         agentSessionId: sessionId,
@@ -571,8 +606,10 @@ export async function fixWithAgentImpl(
     });
     const { stdout: output, sessionId } = await host.spawnAgentFix(prompt, cwd, agentName);
     if (output) {
+      assertFixLineageCurrent(host, lineageGuard);
       host.persistence.appendTaskOutput(taskId, `\n[Fix with ${agentLabel}] Output:\n${output}`);
     }
+    assertFixLineageCurrent(host, lineageGuard);
     host.persistence.updateTask(taskId, {
       execution: {
         agentSessionId: sessionId,
@@ -592,6 +629,7 @@ export async function fixWithAgentImpl(
     // Persist session ID even on failure so the session can be audited
     const failedSessionId = err?.sessionId as string | undefined;
     if (failedSessionId) {
+      assertFixLineageCurrent(host, lineageGuard);
       host.persistence.updateTask(taskId, {
         execution: {
           agentSessionId: failedSessionId,

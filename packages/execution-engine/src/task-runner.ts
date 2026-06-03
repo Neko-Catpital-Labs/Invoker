@@ -48,6 +48,7 @@ import {
   spawnAgentFixViaRegistry,
   resolveRemoteBranchOwnerPath,
   resolveSelectedRemoteTargetId,
+  type FixLineageGuard,
 } from './conflict-resolver.js';
 import { DEFAULT_EXECUTION_AGENT } from './agent.js';
 import {
@@ -2205,7 +2206,13 @@ export class TaskRunner {
    * Resolve a merge conflict by re-creating the merge state and spawning an agent to fix it.
    * After resolution, the task is restarted so it can proceed normally.
    */
-  async resolveConflict(taskId: string, savedError?: string, agentName?: string): Promise<void> {
+  async resolveConflict(
+    taskId: string,
+    savedError?: string,
+    agentName?: string,
+    lineageGuard?: FixLineageGuard,
+  ): Promise<void> {
+    void lineageGuard;
     return this.withAttemptHeartbeat(taskId, () => resolveConflictImpl(this, taskId, savedError, agentName));
   }
 
@@ -2219,10 +2226,11 @@ export class TaskRunner {
     agentName?: string,
     savedError?: string,
     fixContext?: string,
+    lineageGuard?: FixLineageGuard,
   ): Promise<void> {
     return this.withAttemptHeartbeat(
       taskId,
-      () => fixWithAgentImpl(this, taskId, taskOutput, agentName, savedError, fixContext),
+      () => fixWithAgentImpl(this, taskId, taskOutput, agentName, savedError, fixContext, lineageGuard),
     );
   }
 

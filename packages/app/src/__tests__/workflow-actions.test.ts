@@ -791,8 +791,15 @@ describe('autoFixOnFailure', () => {
       taskExecutor: taskExecutor as unknown as TaskRunner,
     });
 
-    expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a');
-    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'claude', 'boom');
+    expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a', expect.any(Object));
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith(
+      'task-a',
+      'test output',
+      'claude',
+      'boom',
+      undefined,
+      expect.any(Object),
+    );
     expect(taskExecutor.resolveConflict).not.toHaveBeenCalled();
     expect(orchestrator.retryTask).toHaveBeenCalledWith('task-a');
     expect(taskExecutor.executeTasks).toHaveBeenCalledWith(started);
@@ -882,8 +889,13 @@ describe('autoFixOnFailure', () => {
       taskExecutor: taskExecutor as unknown as TaskRunner,
     });
 
-    expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a');
-    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'claude');
+    expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a', expect.any(Object));
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith(
+      'task-a',
+      mergeError,
+      'claude',
+      expect.any(Object),
+    );
     expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
     expect(orchestrator.retryTask).toHaveBeenCalledWith('task-a');
     expect(taskExecutor.executeTasks).toHaveBeenCalledWith(started);
@@ -924,7 +936,12 @@ describe('autoFixOnFailure', () => {
       taskExecutor: taskExecutor as unknown as TaskRunner,
     });
 
-    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'claude');
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith(
+      'task-a',
+      mergeError,
+      'claude',
+      expect.any(Object),
+    );
     expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
   });
 
@@ -1109,7 +1126,14 @@ describe('autoFixOnFailure', () => {
       getAutoFixAgent: () => 'codex',
     });
 
-    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'codex', 'boom');
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith(
+      'task-a',
+      'test output',
+      'codex',
+      'boom',
+      undefined,
+      expect.any(Object),
+    );
     expect(logEvent).toHaveBeenCalledWith(
       'task-a',
       'debug.auto-fix',
@@ -1159,7 +1183,14 @@ describe('autoFixOnFailure', () => {
       getAutoFixAgent: () => '   ',
     });
 
-    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'claude', 'boom');
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith(
+      'task-a',
+      'test output',
+      'claude',
+      'boom',
+      undefined,
+      expect.any(Object),
+    );
     expect(logEvent).toHaveBeenCalledWith(
       'task-a',
       'debug.auto-fix',
@@ -1210,7 +1241,12 @@ describe('autoFixOnFailure', () => {
       getAutoFixAgent: () => undefined,
     });
 
-    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'claude');
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith(
+      'task-a',
+      mergeError,
+      'claude',
+      expect.any(Object),
+    );
     expect(logEvent).toHaveBeenCalledWith(
       'task-a',
       'debug.auto-fix',
@@ -1310,9 +1346,16 @@ describe('fixWithAgentAction', () => {
       agentName: 'codex',
     });
 
-    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'codex', 'boom');
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith(
+      'task-a',
+      'test output',
+      'codex',
+      'boom',
+      undefined,
+      expect.any(Object),
+    );
     expect(taskExecutor.resolveConflict).not.toHaveBeenCalled();
-    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'boom');
+    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'boom', expect.any(Object));
     expect(result).toEqual({ kind: 'fixWithAgent', autoApproved: false, started: [] });
   });
 
@@ -1349,9 +1392,14 @@ describe('fixWithAgentAction', () => {
       agentName: 'claude',
     });
 
-    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'claude');
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith(
+      'task-a',
+      mergeError,
+      'claude',
+      expect.any(Object),
+    );
     expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
-    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', mergeError);
+    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', mergeError, expect.any(Object));
     expect(result).toEqual({ kind: 'resolveConflict', autoApproved: false, started: [] });
   });
 
@@ -2352,7 +2400,7 @@ describe('fixWithAgentAction lineage guard', () => {
     });
 
     // Normal path should proceed
-    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'boom');
+    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'boom', expect.any(Object));
     expect(result).toEqual({ kind: 'fixWithAgent', autoApproved: false, started: [] });
   });
 });
@@ -2671,9 +2719,14 @@ describe('autoFixOnReviewGateFailure', () => {
       'codex',
       'Review-gate CI failed',
       expect.stringContaining('This auto-fix was triggered by failed CI'),
+      expect.objectContaining({ taskId: 'merge-a', selectedAttemptId: 'att-1', generation: 7 }),
     );
     expect(taskExecutor.fixWithAgent.mock.calls[0]?.[4]).toContain('test-all');
-    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('merge-a', 'Review-gate CI failed');
+    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith(
+      'merge-a',
+      'Review-gate CI failed',
+      expect.objectContaining({ taskId: 'merge-a', selectedAttemptId: 'att-1', generation: 7 }),
+    );
   });
 
   it('does not start when review-gate lineage is stale', async () => {

@@ -1578,6 +1578,17 @@ function createEmbeddedTerminalBackendFromConfig(
       { module: 'ipc' },
     );
 
+    const mutationSignal = activeMutationContext?.signal;
+    if (mutationSignal?.aborted) {
+      throw new StaleLineageError(
+        `fix-with-agent mutation for "${taskId}" aborted before start: ${
+          mutationSignal.reason instanceof Error
+            ? mutationSignal.reason.message
+            : String(mutationSignal.reason ?? 'unknown')
+        }`,
+      );
+    }
+
     if (source === 'auto-fix') {
       const attemptsBefore = task?.execution.autoFixAttempts ?? 0;
       const attemptsAfter = attemptsBefore + 1;
@@ -1601,7 +1612,7 @@ function createEmbeddedTerminalBackendFromConfig(
         recoveryRoute,
         recreateOutputLabel: source === 'auto-fix' ? 'Auto-fix' : 'Fix with AI',
         failureOutputLabel: source === 'auto-fix' ? 'Auto-fix' : `Fix with ${agentName ?? 'Claude'}`,
-        signal: activeMutationContext?.signal,
+        signal: mutationSignal,
       },
     );
     return result.started;
