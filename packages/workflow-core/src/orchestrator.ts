@@ -2834,7 +2834,10 @@ export class Orchestrator {
    * Clears terminal failure fields on the row so SQLite does not show stale error/exit/completed.
    * Returns the saved error string so the caller can revert on failure.
    */
-  beginConflictResolution(taskId: string, expectedLineage?: TaskLineageExpectation): { savedError: string } {
+  beginConflictResolution(
+    taskId: string,
+    expectedLineage?: TaskLineageExpectation,
+  ): { savedError: string; lineage: { taskId: string; selectedAttemptId: string | undefined; generation: number } } {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
@@ -2879,7 +2882,14 @@ export class Orchestrator {
     this.persistence.logEvent?.(id, 'task.fixing_with_ai', changesWithGeneration);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
 
-    return { savedError };
+    return {
+      savedError,
+      lineage: {
+        taskId: id,
+        selectedAttemptId: attemptId,
+        generation: conflictUpdated.execution.generation ?? 0,
+      },
+    };
   }
 
   /**
@@ -2890,7 +2900,7 @@ export class Orchestrator {
   beginAutoFixSession(
     taskId: string,
     opts: { savedError?: string; expectedLineage?: TaskLineageExpectation } = {},
-  ): { savedError: string } {
+  ): { savedError: string; lineage: { taskId: string; selectedAttemptId: string | undefined; generation: number } } {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
@@ -2939,7 +2949,14 @@ export class Orchestrator {
     const delta: TaskDelta = this.buildUpdateDelta(task, updated, changesWithGeneration);
     this.persistence.logEvent?.(id, 'task.fixing_with_ai', changesWithGeneration);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
-    return { savedError };
+    return {
+      savedError,
+      lineage: {
+        taskId: id,
+        selectedAttemptId: attemptId,
+        generation: updated.execution.generation ?? 0,
+      },
+    };
   }
 
   /**
@@ -4059,7 +4076,10 @@ export class Orchestrator {
 
   private taskMatchesLineageExpectation(task: TaskState, expected?: TaskLineageExpectation): boolean {
     if (!expected) return true;
-    if (expected.taskId !== undefined && expected.taskId !== task.id) return false;
+    if (expected.taskId !== undefined && expected.taskId !== task.id) {
+      const expectedTask = this.stateGetTask(expected.taskId);
+      if (expectedTask?.id !== task.id) return false;
+    }
     if (expected.selectedAttemptId !== task.execution.selectedAttemptId) return false;
     if (expected.generation !== undefined && expected.generation !== (task.execution.generation ?? 0)) return false;
     return true;
