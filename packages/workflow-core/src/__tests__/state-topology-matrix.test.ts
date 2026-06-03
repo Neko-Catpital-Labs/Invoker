@@ -8,25 +8,50 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { Orchestrator } from '../orchestrator.js';
 import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
-import type { TaskState, TaskStateChanges, Attempt } from '../task-types.js';
+import type { TaskState, TaskStateChanges, Attempt, ExternalDependency, ExternalDependencyChange } from '../task-types.js';
 import type { WorkResponse } from '@invoker/contracts';
 import { MUTATION_POLICIES } from '../invalidation-policy.js';
 
 // ── In-Memory Persistence Mock ──────────────────────────────
 
 class InMemoryPersistence implements OrchestratorPersistence {
-  workflows = new Map<string, { id: string; name: string; status: string; createdAt: string; updatedAt: string }>();
+  workflows = new Map<string, {
+    id: string;
+    name: string;
+    status: string;
+    createdAt: string;
+    updatedAt: string;
+    externalDependencies?: ExternalDependency[];
+    externalDependencyChanges?: ExternalDependencyChange[];
+  }>();
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
   private attempts = new Map<string, Attempt[]>();
 
-  saveWorkflow(workflow: { id: string; name: string; status: string }): void {
+  saveWorkflow(workflow: {
+    id: string;
+    name: string;
+    status: string;
+    externalDependencies?: ExternalDependency[];
+    externalDependencyChanges?: ExternalDependencyChange[];
+  }): void {
     const now = new Date().toISOString();
     this.workflows.set(workflow.id, { ...workflow, createdAt: now, updatedAt: now });
   }
 
-  updateWorkflow(workflowId: string, changes: { status?: string }): void {
+  updateWorkflow(
+    workflowId: string,
+    changes: {
+      status?: string;
+      externalDependencies?: ExternalDependency[];
+      externalDependencyChanges?: ExternalDependencyChange[];
+    },
+  ): void {
     const wf = this.workflows.get(workflowId);
     if (wf && changes.status) wf.status = changes.status;
+    if (wf && 'externalDependencies' in changes) wf.externalDependencies = changes.externalDependencies;
+    if (wf && 'externalDependencyChanges' in changes) {
+      wf.externalDependencyChanges = changes.externalDependencyChanges;
+    }
   }
 
   saveTask(workflowId: string, task: TaskState): void {
@@ -48,6 +73,10 @@ class InMemoryPersistence implements OrchestratorPersistence {
 
   listWorkflows() {
     return Array.from(this.workflows.values());
+  }
+
+  loadWorkflow(workflowId: string) {
+    return this.workflows.get(workflowId);
   }
 
   loadTasks(workflowId: string): TaskState[] {
@@ -814,7 +843,7 @@ describe('State × Topology Matrix', () => {
       expect(bTaskAfter.execution.generation ?? 0).toBe(genBefore.B);
 
       // Persistence reflects the new gate policy.
-      const deps = aTaskAfter.config.externalDependencies!;
+      const deps = persistence.loadWorkflow(aTaskAfter.config.workflowId!)!.externalDependencies!;
       expect(deps[0]!.gatePolicy).toBe('review_ready');
     });
   });
