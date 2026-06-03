@@ -539,6 +539,15 @@ export class TaskRunner {
       if (cause instanceof ResourceLimitError) {
         traceExecution(`[TaskRunner] executeTask deferred for task=${task.id}: ${cause.message}`);
         this.orchestrator.deferTask(task.id);
+        if (dispatchOpts) {
+          const completed = dispatchOpts.launchOutbox.completeDispatch(dispatchOpts.dispatchId);
+          bench('executeTask.dispatchCompletedAfterDeferral', { accepted: completed });
+          if (!completed) {
+            this.logger.warn(
+              `[TaskRunner] launch dispatch complete rejected after resource-limit defer for task=${task.id} attempt=${attemptId} dispatchId=${dispatchOpts.dispatchId}`,
+            );
+          }
+        }
         return;
       }
 
