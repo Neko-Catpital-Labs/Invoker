@@ -35,6 +35,8 @@ const WORKFLOW_FIELDS = new Set([
   'featureBranch',
   'mergeMode',
   'reviewProvider',
+  'externalDependencies',
+  'externalDependencyChanges',
 ]);
 
 const TASK_FIELDS = new Set(['description', 'dependencies']);
@@ -59,7 +61,6 @@ const TASK_CONFIG_FIELDS = new Set([
   'approach',
   'testPlan',
   'reproCommand',
-  'externalDependencies',
   'fixPrompt',
   'fixContext',
 ]);
@@ -162,6 +163,10 @@ function validateWorkflowValue(fieldPath: string, value: unknown, raw: boolean):
   if (path === 'mergeMode') {
     return { mergeMode: enumValue<'manual' | 'automatic' | 'external_review'>(path, value, ['manual', 'automatic', 'external_review']) ?? undefined };
   }
+  if (path === 'externalDependencies' || path === 'externalDependencyChanges') {
+    if (value !== null && !Array.isArray(value)) throw new Error(`Field "${fieldPath}" must be an array or null.`);
+    return { [path]: value ?? undefined } as Partial<Workflow>;
+  }
   if (WORKFLOW_STRING_FIELDS.has(path)) {
     return { [path]: nullableString(path, value) ?? undefined } as Partial<Workflow>;
   }
@@ -201,7 +206,7 @@ function validateTaskValue(fieldPath: string, value: unknown, raw: boolean): Tas
   if (key === 'pivot' || key === 'isReconciliation' || key === 'requiresManualApproval') {
     return { config: { [key]: booleanValue(path, value) } as TaskStateChanges['config'] };
   }
-  if (key === 'experimentVariants' || key === 'externalDependencies') {
+  if (key === 'experimentVariants') {
     if (value !== null && !Array.isArray(value)) throw new Error(`Field "${fieldPath}" must be an array or null.`);
     return { config: { [key]: value ?? undefined } as TaskStateChanges['config'] };
   }
