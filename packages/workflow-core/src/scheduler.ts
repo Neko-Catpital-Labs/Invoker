@@ -16,6 +16,9 @@ export interface TaskJob {
   taskId: string;
   attemptId?: string;
   priority: number;
+  // Reserved for replacement-root launches. Normal queued work must pass
+  // dependency readiness at dequeue time.
+  bypassLocalDependencyReadiness?: boolean;
 }
 
 export class TaskScheduler {

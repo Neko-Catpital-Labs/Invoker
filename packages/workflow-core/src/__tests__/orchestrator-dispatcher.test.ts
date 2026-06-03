@@ -563,6 +563,50 @@ describe('Orchestrator launch claims', () => {
     ).toHaveLength(2);
   });
 
+  it('getTaskLaunchReadiness rejects pending tasks whose local dependencies are not satisfied', () => {
+    const { orchestrator } = makeOrchestrator();
+    orchestrator.loadPlan({
+      name: 'launch-readiness-local-deps',
+      onFinish: 'none',
+      tasks: [
+        { id: 'a', description: 'upstream', command: 'echo a' },
+        { id: 'b', description: 'downstream', command: 'echo b', dependencies: ['a'] },
+      ],
+    });
+
+    const upstreamId = taskIdBySuffix(orchestrator, 'a');
+    const downstreamId = taskIdBySuffix(orchestrator, 'b');
+    const readiness = orchestrator.getTaskLaunchReadiness(downstreamId);
+
+    expect(readiness.ready).toBe(false);
+    expect(readiness.reason).toBe(`waiting on ${upstreamId} (pending)`);
+  });
+
+  it('drainScheduler drops stale queued jobs whose dependencies are not launch-ready', () => {
+    const { orchestrator, persistence } = makeOrchestrator({
+      deferRunningUntilLaunch: true,
+      enqueueLaunchDispatchEnabled: true,
+      launchOutboxMode: 'observe',
+      maxConcurrency: 4,
+    });
+    orchestrator.loadPlan({
+      name: 'scheduler-readiness-gate',
+      onFinish: 'none',
+      tasks: [
+        { id: 'a', description: 'upstream', command: 'echo a' },
+        { id: 'b', description: 'downstream', command: 'echo b', dependencies: ['a'] },
+      ],
+    });
+    const downstreamId = taskIdBySuffix(orchestrator, 'b');
+
+    (orchestrator as any).scheduler.enqueue({ taskId: downstreamId, priority: 10 });
+    const started = (orchestrator as any).drainScheduler() as TaskState[];
+
+    expect(started).toEqual([]);
+    expect(orchestrator.getTask(downstreamId)?.status).toBe('pending');
+    expect(persistence.launchDispatchRows.some((row) => row.taskId === downstreamId)).toBe(false);
+  });
+
   it('ignores responses for a selected attempt row that has been superseded', () => {
     const { orchestrator, persistence } = makeOrchestrator();
     orchestrator.loadPlan({

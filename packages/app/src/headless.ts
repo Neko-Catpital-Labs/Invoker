@@ -305,6 +305,7 @@ async function dispatchHeadlessRunnableTasks(
         deps.orchestrator.prepareTaskForNewAttempt(taskId, reason),
       syncFromDb: (workflowId) => deps.orchestrator.syncFromDb(workflowId),
       getTask: (taskId) => deps.orchestrator.getTask(taskId),
+      getTaskLaunchReadiness: (taskId) => deps.orchestrator.getTaskLaunchReadiness(taskId),
     },
     taskRunnerProvider: () => taskExecutor,
     ownerId: `headless-${process.pid}`,
