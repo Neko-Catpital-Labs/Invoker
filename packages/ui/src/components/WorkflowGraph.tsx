@@ -113,28 +113,53 @@ function WorkflowGraphInner({
     return nextNodes;
   }, [graph.nodes, positions, selectedWorkflowId, statusFilters]);
 
-  const edges = useMemo<Edge[]>(() => graph.edges.map((edge) => ({
-    id: `workflow:${edge.source}->${edge.target}`,
-    source: edge.source,
-    target: edge.target,
-    type: 'smoothstep',
-    animated: false,
-    style: {
-      stroke: 'rgba(148,163,184,0.55)',
-      strokeWidth: 2,
-    },
-    zIndex: 0,
-    markerEnd: {
-      type: MarkerType.ArrowClosed,
-      color: 'rgba(148,163,184,0.55)',
-      width: 16,
-      height: 16,
-    },
-  })), [graph.edges]);
+  const edges = useMemo<Edge[]>(() => graph.edges.map((edge) => {
+    const detached = edge.kind === 'detached';
+    const stroke = detached ? 'rgba(217,119,6,0.72)' : 'rgba(148,163,184,0.55)';
+    return {
+      id: detached
+        ? `workflow:detached:${edge.source}->${edge.target}`
+        : `workflow:${edge.source}->${edge.target}`,
+      source: edge.source,
+      target: edge.target,
+      type: 'smoothstep',
+      animated: false,
+      label: detached ? 'Detached' : undefined,
+      ariaLabel: detached
+        ? `Detached workflow dependency from ${edge.source} to ${edge.target}`
+        : `Workflow dependency from ${edge.source} to ${edge.target}`,
+      data: { kind: edge.kind },
+      style: {
+        stroke,
+        strokeWidth: detached ? 1.8 : 2,
+        strokeDasharray: detached ? '6 5' : undefined,
+      },
+      labelStyle: detached
+        ? {
+            fill: '#fbbf24',
+            fontSize: 11,
+            fontWeight: 600,
+          }
+        : undefined,
+      labelBgStyle: detached
+        ? {
+            fill: 'rgba(17,24,39,0.92)',
+            fillOpacity: 0.92,
+          }
+        : undefined,
+      zIndex: detached ? -1 : 0,
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        color: stroke,
+        width: 16,
+        height: 16,
+      },
+    };
+  }), [graph.edges]);
 
   const graphSignature = useMemo(() => {
     const nodeIds = graph.nodes.map((node) => node.id).join('|');
-    const edgeIds = graph.edges.map((edge) => `${edge.source}->${edge.target}`).join('|');
+    const edgeIds = graph.edges.map((edge) => `${edge.kind}:${edge.source}->${edge.target}`).join('|');
     return `${nodeIds}::${edgeIds}`;
   }, [graph.edges, graph.nodes]);
 

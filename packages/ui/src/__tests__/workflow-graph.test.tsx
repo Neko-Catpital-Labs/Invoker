@@ -15,13 +15,17 @@ function wf(id: string, status: WorkflowStatus): WorkflowMeta {
   return { id, name: id, status };
 }
 
-function task(id: string, workflowId: string): TaskState {
+function task(
+  id: string,
+  workflowId: string,
+  config: Partial<TaskState['config']> = {},
+): TaskState {
   return {
     id,
     description: id,
     status: 'pending',
     dependencies: [],
-    config: { workflowId },
+    config: { workflowId, ...config },
     execution: {},
     taskStateVersion: 1,
   };
@@ -107,6 +111,58 @@ describe('WorkflowGraph', () => {
 
     expect(screen.getByTestId('workflow-graph-react-flow')).toBeInTheDocument();
     expect(screen.getByTestId('mock-react-flow')).toBeInTheDocument();
+  });
+
+  it('renders active and detached workflow edges distinctly', () => {
+    const workflows = new Map([
+      ['wf-a', wf('wf-a', 'completed')],
+      ['wf-b', wf('wf-b', 'running')],
+      ['wf-c', wf('wf-c', 'pending')],
+    ]);
+    const tasks = new Map([
+      [
+        't-b',
+        task('t-b', 'wf-b', {
+          detachedExternalDependencies: [
+            {
+              workflowId: 'wf-a',
+              requiredStatus: 'completed',
+              detachedAt: '2026-06-02T08:57:38.000Z',
+            },
+          ],
+        }),
+      ],
+      [
+        't-c',
+        task('t-c', 'wf-c', {
+          externalDependencies: [{ workflowId: 'wf-b', requiredStatus: 'completed' }],
+        }),
+      ],
+    ]);
+
+    render(
+      <WorkflowGraph
+        tasks={tasks}
+        workflows={workflows}
+        selectedWorkflowId={null}
+        statusFilters={new Set()}
+        onSelectWorkflow={() => {}}
+        onWorkflowContextMenu={() => {}}
+      />,
+    );
+
+    const detachedEdge = screen.getByTestId('rf__edge-workflow:detached:wf-a->wf-b');
+    expect(detachedEdge).toHaveAttribute('data-kind', 'detached');
+    expect(detachedEdge).toHaveAttribute('data-label', 'Detached');
+    expect(detachedEdge).toHaveAttribute('data-stroke-dasharray', '6 5');
+    expect(detachedEdge).toHaveAttribute(
+      'aria-label',
+      'Detached workflow dependency from wf-a to wf-b',
+    );
+
+    const activeEdge = screen.getByTestId('rf__edge-workflow:wf-b->wf-c');
+    expect(activeEdge).toHaveAttribute('data-kind', 'active');
+    expect(activeEdge).not.toHaveAttribute('data-stroke-dasharray');
   });
 
   it('re-fits after a non-empty workflow snapshot replacement', async () => {

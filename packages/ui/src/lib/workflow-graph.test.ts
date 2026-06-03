@@ -14,6 +14,7 @@ function makeTask(
   id: string,
   workflowId: string,
   externalDependencies: Array<{ workflowId: string; taskId?: string }> = [],
+  detachedExternalDependencies: Array<{ workflowId: string; taskId?: string; detachedAt?: string }> = [],
 ): TaskState {
   return {
     id,
@@ -26,6 +27,12 @@ function makeTask(
         workflowId: dep.workflowId,
         taskId: dep.taskId,
         requiredStatus: 'completed' as const,
+      })),
+      detachedExternalDependencies: detachedExternalDependencies.map((dep) => ({
+        workflowId: dep.workflowId,
+        taskId: dep.taskId,
+        requiredStatus: 'completed' as const,
+        detachedAt: dep.detachedAt ?? '2026-06-02T08:57:38.000Z',
       })),
     },
     execution: {},
@@ -47,8 +54,8 @@ describe('deriveWorkflowGraph', () => {
 
     const graph = deriveWorkflowGraph(workflows, tasks);
     expect(graph.edges).toEqual([
-      { source: 'A', target: 'B' },
-      { source: 'B', target: 'C' },
+      { source: 'A', target: 'B', kind: 'active' },
+      { source: 'B', target: 'C', kind: 'active' },
     ]);
   });
 
@@ -67,10 +74,45 @@ describe('deriveWorkflowGraph', () => {
 
     const graph = deriveWorkflowGraph(workflows, tasks);
     expect(graph.edges).toEqual([
-      { source: 'A', target: 'B' },
-      { source: 'A', target: 'C' },
-      { source: 'B', target: 'D' },
-      { source: 'C', target: 'D' },
+      { source: 'A', target: 'B', kind: 'active' },
+      { source: 'A', target: 'C', kind: 'active' },
+      { source: 'B', target: 'D', kind: 'active' },
+      { source: 'C', target: 'D', kind: 'active' },
+    ]);
+  });
+
+  it('derives detached workflow lineage from provenance without active dependencies', () => {
+    const workflows = new Map([
+      ['A', makeWorkflow('A')],
+      ['B', makeWorkflow('B')],
+      ['C', makeWorkflow('C')],
+    ]);
+    const tasks = new Map<string, TaskState>([
+      ['b1', makeTask('b1', 'B', [], [{ workflowId: 'A' }])],
+      ['c1', makeTask('c1', 'C', [{ workflowId: 'B' }])],
+    ]);
+
+    const graph = deriveWorkflowGraph(workflows, tasks);
+    expect(graph.edges).toEqual([
+      { source: 'A', target: 'B', kind: 'detached' },
+      { source: 'B', target: 'C', kind: 'active' },
+    ]);
+    expect(tasks.get('b1')?.config.externalDependencies).toEqual([]);
+  });
+
+  it('deduplicates detached provenance and lets active edges take precedence', () => {
+    const workflows = new Map([
+      ['A', makeWorkflow('A')],
+      ['B', makeWorkflow('B')],
+    ]);
+    const tasks = new Map<string, TaskState>([
+      ['b1', makeTask('b1', 'B', [{ workflowId: 'A' }], [{ workflowId: 'A' }])],
+      ['b2', makeTask('b2', 'B', [], [{ workflowId: 'A', taskId: 'leaf' }])],
+    ]);
+
+    const graph = deriveWorkflowGraph(workflows, tasks);
+    expect(graph.edges).toEqual([
+      { source: 'A', target: 'B', kind: 'active' },
     ]);
   });
 
@@ -219,15 +261,36 @@ describe('layoutWorkflowGraph', () => {
     expect(positions.get('y-target')).toEqual({ x: 180, y: 80 });
     expect(positions.get('x-target')).toEqual({ x: 180, y: 130 });
   });
+
+  it('uses detached edges for component grouping and dependency levels', () => {
+    const graph = makeGraph(
+      [
+        makeWorkflow('upstream', 'running', '2026-01-01T00:00:00.000Z'),
+        makeWorkflow('downstream', 'running', '2026-01-01T00:00:00.000Z'),
+        makeWorkflow('new-standalone', 'running', '2026-03-01T00:00:00.000Z'),
+      ],
+      [{ source: 'upstream', target: 'downstream', kind: 'detached' }],
+    );
+
+    const positions = layoutWorkflowGraph(graph, 100, 50, 25);
+
+    expect(positions.get('new-standalone')).toEqual({ x: 80, y: 80 });
+    expect(positions.get('upstream')).toEqual({ x: 80, y: 155 });
+    expect(positions.get('downstream')).toEqual({ x: 180, y: 155 });
+  });
 });
+
+type GraphEdgeInput = Omit<WorkflowGraph['edges'][number], 'kind'> & {
+  kind?: WorkflowGraph['edges'][number]['kind'];
+};
 
 function makeGraph(
   workflows: WorkflowMeta[],
-  edges: WorkflowGraph['edges'],
+  edges: GraphEdgeInput[],
 ): WorkflowGraph {
   return {
     nodes: workflows.map((workflow) => ({ id: workflow.id, name: workflow.name, workflow })),
-    edges,
+    edges: edges.map((edge) => ({ ...edge, kind: edge.kind ?? 'active' })),
     missingDependencies: [],
   };
 }

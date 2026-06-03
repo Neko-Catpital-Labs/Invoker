@@ -9,6 +9,7 @@ export interface WorkflowGraphNode {
 export interface WorkflowGraphEdge {
   source: string;
   target: string;
+  kind: 'active' | 'detached';
 }
 
 export interface WorkflowGraph {
@@ -32,7 +33,8 @@ export function deriveWorkflowGraph(
     workflow,
   }));
 
-  const edgeKeys = new Set<string>();
+  const activeEdgeKeys = new Set<string>();
+  const detachedEdgeKeys = new Set<string>();
   const edges: WorkflowGraphEdge[] = [];
   const missingDependencies = new Set<string>();
 
@@ -48,9 +50,20 @@ export function deriveWorkflowGraph(
       }
       if (sourceWorkflowId === targetWorkflowId) continue;
       const key = `${sourceWorkflowId}->${targetWorkflowId}`;
-      if (edgeKeys.has(key)) continue;
-      edgeKeys.add(key);
-      edges.push({ source: sourceWorkflowId, target: targetWorkflowId });
+      if (activeEdgeKeys.has(key)) continue;
+      activeEdgeKeys.add(key);
+      edges.push({ source: sourceWorkflowId, target: targetWorkflowId, kind: 'active' });
+    }
+
+    const detachedDeps = task.config.detachedExternalDependencies ?? [];
+    for (const dep of detachedDeps) {
+      const sourceWorkflowId = dep.workflowId;
+      if (!workflows.has(sourceWorkflowId)) continue;
+      if (sourceWorkflowId === targetWorkflowId) continue;
+      const key = `${sourceWorkflowId}->${targetWorkflowId}`;
+      if (activeEdgeKeys.has(key) || detachedEdgeKeys.has(key)) continue;
+      detachedEdgeKeys.add(key);
+      edges.push({ source: sourceWorkflowId, target: targetWorkflowId, kind: 'detached' });
     }
   }
 
