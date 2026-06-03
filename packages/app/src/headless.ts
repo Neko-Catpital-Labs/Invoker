@@ -151,6 +151,7 @@ function buildHeadlessApiServerDeps(
       persistence: deps.persistence,
       taskExecutor,
       dispatchMode: deps.mutationTiming ? 'fire-and-forget' : 'await',
+      launchOutboxMode: deps.invokerConfig.launchOutboxMode,
       autoApproveAIFixes: deps.invokerConfig?.autoApproveAIFixes,
       killRunningTask: (taskId: string) => taskExecutor.killActiveExecution(taskId),
       commandService: deps.commandService,
