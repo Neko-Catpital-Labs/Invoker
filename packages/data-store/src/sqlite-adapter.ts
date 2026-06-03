@@ -819,6 +819,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
       CREATE INDEX IF NOT EXISTS idx_task_launch_dispatch_workflow_state
         ON task_launch_dispatch(workflow_id, state);
 
+      CREATE INDEX IF NOT EXISTS idx_task_launch_dispatch_task_state
+        ON task_launch_dispatch(task_id, state);
+
       CREATE TABLE IF NOT EXISTS execution_resource_leases (
         resource_key TEXT NOT NULL,
         resource_type TEXT NOT NULL,
@@ -1839,6 +1842,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
       this.db.run('DELETE FROM workflow_mutation_intents WHERE workflow_id = ?', [workflowId]);
       this.db.run('DELETE FROM task_launch_dispatch WHERE workflow_id = ?', [workflowId]);
       this.db.run(`
+        DELETE FROM execution_resource_leases WHERE task_id IN (
+          SELECT id FROM tasks WHERE workflow_id = ?
+        )
+      `, [workflowId]);
+      this.db.run(`
         DELETE FROM events WHERE task_id IN (
           SELECT id FROM tasks WHERE workflow_id = ?
         )
@@ -1869,6 +1877,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       this.db.run('DELETE FROM workflow_mutation_leases');
       this.db.run('DELETE FROM workflow_mutation_intents');
       this.db.run('DELETE FROM task_launch_dispatch');
+      this.db.run('DELETE FROM execution_resource_leases');
       this.db.run('DELETE FROM events');
       this.db.run('DELETE FROM task_output');
       this.db.run('DELETE FROM attempts');
@@ -1887,6 +1896,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
       this.db.run('DELETE FROM workflow_mutation_leases WHERE workflow_id = ?', [workflowId]);
       this.db.run('DELETE FROM workflow_mutation_intents WHERE workflow_id = ?', [workflowId]);
       this.db.run('DELETE FROM task_launch_dispatch WHERE workflow_id = ?', [workflowId]);
+      this.db.run(`
+        DELETE FROM execution_resource_leases WHERE task_id IN (
+          SELECT id FROM tasks WHERE workflow_id = ?
+        )
+      `, [workflowId]);
 
       this.db.run(`
         DELETE FROM events WHERE task_id IN (
@@ -3200,36 +3214,78 @@ export class SQLiteAdapter implements PersistenceAdapter {
       );
       const active = Number(activeRow?.active ?? 0);
       if (active >= options.maxConcurrency) return undefined;
-      const candidate = this.queryOne(
-        `SELECT id FROM task_launch_dispatch
-           WHERE state = 'enqueued'
-           ORDER BY CASE priority
+      while (true) {
+        const candidate = this.queryOne(
+          `SELECT
+             d.*,
+             t.id AS current_task_id,
+             t.status AS current_task_status,
+             t.selected_attempt_id AS current_selected_attempt_id,
+             t.execution_generation AS current_execution_generation
+           FROM task_launch_dispatch d
+           LEFT JOIN tasks t ON t.id = d.task_id
+           WHERE d.state = 'enqueued'
+           ORDER BY CASE d.priority
              WHEN 'high' THEN 0
              WHEN 'normal' THEN 1
              ELSE 2
-           END, id
+           END, d.id
            LIMIT 1`,
-      );
-      if (!candidate || candidate.id == null) return undefined;
-      const candidateId = Number(candidate.id);
-      this.execRun(
-        `UPDATE task_launch_dispatch
-           SET state = 'leased',
-               dispatch_owner = ?,
-               leased_at = ?,
-               fenced_until = ?,
-               attempts_count = attempts_count + 1
-         WHERE id = ?
-           AND state = 'enqueued'`,
-        [options.ownerId, now, fencedUntil, candidateId],
-      );
-      const updated = (this.db.getRowsModified?.() ?? 0) > 0;
-      if (!updated) return undefined;
-      const row = this.queryOne(
-        'SELECT * FROM task_launch_dispatch WHERE id = ?',
-        [candidateId],
-      );
-      return row ? this.rowToTaskLaunchDispatch(row) : undefined;
+        );
+        if (!candidate || candidate.id == null) return undefined;
+        const candidateId = Number(candidate.id);
+
+        let staleReason: string | undefined;
+        if (!candidate.current_task_id) {
+          staleReason = `Launch dispatch ${candidateId} is stale: task ${String(candidate.task_id)} no longer exists`;
+        } else if (String(candidate.current_task_status) !== 'pending') {
+          staleReason =
+            `Launch dispatch ${candidateId} is stale: task ${String(candidate.task_id)} ` +
+            `status is ${String(candidate.current_task_status)}`;
+        } else if (String(candidate.current_selected_attempt_id ?? '') !== String(candidate.attempt_id)) {
+          staleReason =
+            `Launch dispatch ${candidateId} is stale: attempt ${String(candidate.attempt_id)} ` +
+            `is not the selected attempt ${String(candidate.current_selected_attempt_id ?? 'none')}`;
+        } else if (Number(candidate.current_execution_generation ?? 0) !== Number(candidate.generation ?? 0)) {
+          staleReason =
+            `Launch dispatch ${candidateId} is stale: generation ${String(candidate.generation)} ` +
+            `does not match task generation ${String(candidate.current_execution_generation ?? 0)}`;
+        }
+
+        if (staleReason) {
+          this.execRun(
+            `UPDATE task_launch_dispatch
+               SET state = 'abandoned',
+                   completed_at = ?,
+                   last_error = ?,
+                   dispatch_owner = NULL,
+                   fenced_until = NULL
+             WHERE id = ?
+               AND state = 'enqueued'`,
+            [now, staleReason, candidateId],
+          );
+          continue;
+        }
+
+        this.execRun(
+          `UPDATE task_launch_dispatch
+             SET state = 'leased',
+                 dispatch_owner = ?,
+                 leased_at = ?,
+                 fenced_until = ?,
+                 attempts_count = attempts_count + 1
+           WHERE id = ?
+             AND state = 'enqueued'`,
+          [options.ownerId, now, fencedUntil, candidateId],
+        );
+        const updated = (this.db.getRowsModified?.() ?? 0) > 0;
+        if (!updated) return undefined;
+        const row = this.queryOne(
+          'SELECT * FROM task_launch_dispatch WHERE id = ?',
+          [candidateId],
+        );
+        return row ? this.rowToTaskLaunchDispatch(row) : undefined;
+      }
     });
   }
 
