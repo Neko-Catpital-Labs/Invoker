@@ -4,7 +4,7 @@ import { rid, sid } from './scoped-test-helpers.js';
 import { Orchestrator, PlanConflictError, descriptionForMergeNode } from '../orchestrator.js';
 import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
 import { computeWorkflowRollup } from '../task-types.js';
-import type { TaskState, TaskDelta, TaskStateChanges, Attempt } from '../task-types.js';
+import type { TaskState, TaskDelta, TaskStateChanges, Attempt, ExternalDependency, ExternalDependencyChange } from '../task-types.js';
 import type { Logger, WorkResponse } from '@invoker/contracts';
 
 // ── In-Memory Persistence Mock ──────────────────────────────
@@ -20,6 +20,8 @@ class InMemoryPersistence implements OrchestratorPersistence {
     baseBranch?: string;
     featureBranch?: string;
     mergeMode?: 'manual' | 'automatic' | 'external_review';
+    externalDependencies?: ExternalDependency[];
+    externalDependencyChanges?: ExternalDependencyChange[];
   }>();
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
   private attempts = new Map<string, Attempt[]>();
@@ -34,6 +36,8 @@ class InMemoryPersistence implements OrchestratorPersistence {
     baseBranch?: string;
     featureBranch?: string;
     mergeMode?: 'manual' | 'automatic' | 'external_review';
+    externalDependencies?: ExternalDependency[];
+    externalDependencyChanges?: ExternalDependencyChange[];
   }): void {
     const now = new Date().toISOString();
     this.workflows.set(workflow.id, {
@@ -56,6 +60,8 @@ class InMemoryPersistence implements OrchestratorPersistence {
       updatedAt?: string;
       baseBranch?: string;
       mergeMode?: 'manual' | 'automatic' | 'external_review';
+      externalDependencies?: ExternalDependency[];
+      externalDependencyChanges?: ExternalDependencyChange[];
     },
   ): void {
     const wf = this.workflows.get(workflowId);
@@ -72,6 +78,12 @@ class InMemoryPersistence implements OrchestratorPersistence {
     if (wf && changes.baseBranch !== undefined) {
       wf.baseBranch = changes.baseBranch;
     }
+    if (wf && 'externalDependencies' in changes) {
+      wf.externalDependencies = changes.externalDependencies;
+    }
+    if (wf && 'externalDependencyChanges' in changes) {
+      wf.externalDependencyChanges = changes.externalDependencyChanges;
+    }
   }
 
   loadWorkflow(workflowId: string): {
@@ -79,6 +91,8 @@ class InMemoryPersistence implements OrchestratorPersistence {
     baseBranch?: string;
     featureBranch?: string;
     mergeMode?: 'manual' | 'automatic' | 'external_review';
+    externalDependencies?: ExternalDependency[];
+    externalDependencyChanges?: ExternalDependencyChange[];
   } | undefined {
     const wf = this.workflows.get(workflowId);
     if (!wf) return undefined;
@@ -1296,8 +1310,19 @@ describe('Orchestrator', () => {
 
       const targetTask = orchestrator.getTask(targetTaskId)!;
       expect(targetTask.status).toBe('pending');
-      expect(targetTask.config.externalDependencies).toEqual([
-        { workflowId: upstreamBWfId, requiredStatus: 'completed', gatePolicy: 'review_ready' },
+      expect(persistence.loadWorkflow(targetWfId)!.externalDependencies).toEqual([
+        { workflowId: upstreamBWfId, taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'review_ready' },
+      ]);
+      expect(persistence.loadWorkflow(targetWfId)!.externalDependencyChanges).toEqual([
+        {
+          before: {
+            workflowId: upstreamAWfId,
+            taskId: '__merge__',
+            requiredStatus: 'completed',
+            gatePolicy: 'review_ready',
+          },
+          changedAt: expect.any(String),
+        },
       ]);
       expect(persistence.loadWorkflow(targetWfId)!.baseBranch).toBe('master');
 
@@ -1306,8 +1331,8 @@ describe('Orchestrator', () => {
       expect(childTask.execution.branch).toBeUndefined();
       expect(childTask.execution.commit).toBeUndefined();
       expect(childTask.execution.workspacePath).toBeUndefined();
-      expect(childTask.config.externalDependencies).toEqual([
-        { workflowId: targetWfId, requiredStatus: 'completed', gatePolicy: 'review_ready' },
+      expect(persistence.loadWorkflow(childTaskId.split('/')[0]!)!.externalDependencies).toEqual([
+        { workflowId: targetWfId, taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'review_ready' },
       ]);
     });
 
@@ -1361,6 +1386,17 @@ describe('Orchestrator', () => {
 
       expect(orchestrator.getTask(targetTaskId)!.status).toBe('pending');
       expect(orchestrator.getTask(targetTaskId)!.config.externalDependencies).toBeUndefined();
+      expect(persistence.loadWorkflow(targetWfId)!.externalDependencyChanges).toEqual([
+        {
+          before: {
+            workflowId: upstreamWfId,
+            taskId: '__merge__',
+            requiredStatus: 'completed',
+            gatePolicy: 'review_ready',
+          },
+          changedAt: expect.any(String),
+        },
+      ]);
       expect(orchestrator.getTask(childTaskId)!.status).toBe('pending');
     });
   });
@@ -2019,7 +2055,7 @@ describe('Orchestrator', () => {
       expect(upstreamGenAfter).toBe(upstreamGenBefore);
     });
 
-    it('persists the updated gate-policy field on the task config', () => {
+    it('persists the updated gate-policy field on workflow metadata', () => {
       orchestrator.loadPlan({
         name: 'gate-prereq-persist',
         tasks: [{ id: 'verify', description: 'Prereq task' }],
@@ -2038,15 +2074,15 @@ describe('Orchestrator', () => {
         ],
       });
       const leafId = sid(orchestrator, 1, 'leaf');
+      const leafWfId = leafId.split('/')[0]!;
 
       orchestrator.setTaskExternalGatePolicies(leafId, [
         { workflowId: prereqWfId, gatePolicy: 'review_ready' },
       ]);
 
-      const inMemoryDeps = orchestrator.getTask(leafId)!.config.externalDependencies!;
+      const inMemoryDeps = persistence.loadWorkflow(leafWfId)!.externalDependencies!;
       expect(inMemoryDeps[0]!.gatePolicy).toBe('review_ready');
-      const persisted = persistence.getTaskEntry(leafId)!.task.config.externalDependencies!;
-      expect(persisted[0]!.gatePolicy).toBe('review_ready');
+      expect(persistence.getTaskEntry(leafId)!.task.config.externalDependencies).toBeUndefined();
     });
 
     it('transitions a previously gate-blocked task to runnable via the scheduling pass', () => {
@@ -2099,18 +2135,23 @@ describe('Orchestrator', () => {
           {
             id: 'leaf',
             description: 'leaf waits on upstream completion gate',
-            externalDependencies: [{ workflowId: prereqWfId, gatePolicy: 'completed' }],
           },
         ],
       });
       const busyId = sid(orchestrator, 1, 'busy');
       const leafId = sid(orchestrator, 1, 'leaf');
+      const leafWfId = leafId.split('/')[0]!;
 
       orchestrator.startExecution();
       orchestrator.handleWorkerResponse(makeResponse({ actionId: prereqTaskId, status: 'completed' }));
       orchestrator.setTaskAwaitingApproval(prereqMergeId);
       expect(orchestrator.getTask(busyId)!.status).toBe('running');
       const busyGenBefore = orchestrator.getTask(busyId)!.execution.generation ?? 0;
+      persistence.updateWorkflow(leafWfId, {
+        externalDependencies: [
+          { workflowId: prereqWfId, taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'completed' },
+        ],
+      });
 
       orchestrator.setTaskExternalGatePolicies(leafId, [
         { workflowId: prereqWfId, gatePolicy: 'review_ready' },
