@@ -177,9 +177,17 @@ function buildHeadlessApiServerDeps(
       if (!cmdResult.ok) throw new Error(cmdResult.error.message);
     },
     detachWorkflow: async (workflowId: string, upstreamWorkflowId: string) => {
+      deps.logger.info(
+        `headless API detach-workflow begin workflow="${workflowId}" upstream="${upstreamWorkflowId}" provenance="detachedExternalDependencies"`,
+        { module: 'headless-api' },
+      );
       const envelope = makeEnvelope('detach-workflow', 'headless', 'workflow', { workflowId, upstreamWorkflowId });
       const cmdResult = await deps.commandService.detachWorkflow(envelope);
       if (!cmdResult.ok) throw new Error(cmdResult.error.message);
+      deps.logger.info(
+        `headless API detach-workflow end workflow="${workflowId}" upstream="${upstreamWorkflowId}" activeExternalDependencies="removed" provenance="detachedExternalDependencies"`,
+        { module: 'headless-api' },
+      );
     },
   };
 }
@@ -2608,7 +2616,7 @@ async function headlessDetachWorkflow(
   const result = await deps.commandService.detachWorkflow(envelope);
   if (!result.ok) throw new Error(result.error.message);
   process.stdout.write(
-    `Detached workflow ${workflowId} from upstream workflow ${upstreamWorkflowId}\n`,
+    `Detached workflow ${workflowId} from upstream workflow ${upstreamWorkflowId}; active externalDependencies removed; provenance recorded in detachedExternalDependencies.\n`,
   );
 }
 

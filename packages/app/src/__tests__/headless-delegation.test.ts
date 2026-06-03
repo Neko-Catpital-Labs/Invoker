@@ -1678,5 +1678,28 @@ describe('headless delegation enforcement', () => {
       expect(mockDeps.commandService.deleteWorkflow).toHaveBeenCalled();
       expect(callOrder).toEqual(['preempt', 'delete']);
     });
+
+    it('headless detach-workflow routes through commandService and reports detached provenance', async () => {
+      mockDeps.commandService.detachWorkflow = vi.fn(async () => ({ ok: true as const, data: undefined })) as any;
+      const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      let output = '';
+
+      try {
+        await runHeadless(['detach-workflow', 'wf-child', 'wf-upstream'], mockDeps);
+        output = stdout.mock.calls.map((call) => String(call[0])).join('');
+      } finally {
+        stdout.mockRestore();
+      }
+
+      expect(mockDeps.commandService.detachWorkflow).toHaveBeenCalledWith(expect.objectContaining({
+        payload: {
+          workflowId: 'wf-child',
+          upstreamWorkflowId: 'wf-upstream',
+        },
+      }));
+      expect(output).toContain('wf-child');
+      expect(output).toContain('wf-upstream');
+      expect(output).toContain('detachedExternalDependencies');
+    });
   });
 });
