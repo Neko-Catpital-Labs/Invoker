@@ -126,7 +126,7 @@ describe('LaunchDispatcher', () => {
   });
 
   describe('ack / complete / fail transitions', () => {
-    function seedWorkflowAndTask(): void {
+    function seedWorkflowAndTask(selectedAttemptId?: string): void {
       adapter.saveWorkflow({
         id: 'wf-1',
         name: 'wf-1',
@@ -144,6 +144,11 @@ describe('LaunchDispatcher', () => {
         execution: {},
         taskStateVersion: 1,
       });
+      if (selectedAttemptId) {
+        adapter.updateTask('wf-1/t1', {
+          execution: { selectedAttemptId, generation: 0 },
+        });
+      }
     }
 
     function makeDispatcher(logger = makeLogger()) {
@@ -159,7 +164,7 @@ describe('LaunchDispatcher', () => {
     }
 
     it('ack moves a leased row to acknowledged and logs the transition', () => {
-      seedWorkflowAndTask();
+      seedWorkflowAndTask('attempt-ack');
       const enqueued = adapter.enqueueLaunchDispatch({
         taskId: 'wf-1/t1',
         attemptId: 'attempt-ack',
@@ -230,7 +235,7 @@ describe('LaunchDispatcher', () => {
     });
 
     it('fail re-enqueues a leased row with the error message and clears the owner', () => {
-      seedWorkflowAndTask();
+      seedWorkflowAndTask('attempt-fail');
       const enqueued = adapter.enqueueLaunchDispatch({
         taskId: 'wf-1/t1',
         attemptId: 'attempt-fail',
@@ -253,7 +258,7 @@ describe('LaunchDispatcher', () => {
     });
 
     it('fail coerces a non-Error value to its string form', () => {
-      seedWorkflowAndTask();
+      seedWorkflowAndTask('attempt-fail-string');
       const enqueued = adapter.enqueueLaunchDispatch({
         taskId: 'wf-1/t1',
         attemptId: 'attempt-fail-string',
@@ -581,6 +586,14 @@ describe('LaunchDispatcher', () => {
         taskStateVersion: 1,
       };
       adapter.saveTask(workflowId, task);
+      if (typeof execution.selectedAttemptId === 'string') {
+        adapter.updateTask(taskId, {
+          execution: {
+            selectedAttemptId: execution.selectedAttemptId,
+            generation: typeof execution.generation === 'number' ? execution.generation : 0,
+          },
+        });
+      }
       return task;
     }
 
@@ -628,7 +641,10 @@ describe('LaunchDispatcher', () => {
 
     it('active mode loops until maxLeasesPerPoll is reached', () => {
       for (let i = 0; i < 3; i += 1) {
-        seedWorkflowAndTask(`wf-a/t${i}`);
+        seedWorkflowAndTask(`wf-a/t${i}`, 'wf-a', {
+          selectedAttemptId: `attempt-multi-${i}`,
+          generation: 0,
+        });
       }
       for (let i = 0; i < 3; i += 1) {
         adapter.enqueueLaunchDispatch({
@@ -724,8 +740,8 @@ describe('LaunchDispatcher', () => {
 
     it('active mode retires a dispatch row when the selected attempt changed', () => {
       const task = seedWorkflowAndTask('wf-a/t-stale', 'wf-a', {
-        selectedAttemptId: 'attempt-current',
-        generation: 1,
+        selectedAttemptId: 'attempt-old',
+        generation: 0,
       });
       const enq = adapter.enqueueLaunchDispatch({
         taskId: task.id,
@@ -733,13 +749,21 @@ describe('LaunchDispatcher', () => {
         workflowId: 'wf-a',
         generation: 0,
       });
+      const currentTask = {
+        ...task,
+        execution: {
+          ...task.execution,
+          selectedAttemptId: 'attempt-current',
+          generation: 1,
+        },
+      };
       const executeTask = vi.fn().mockResolvedValue(undefined);
       const dispatcher = new LaunchDispatcher({
         persistence: adapter,
         ownerId: 'owner-a',
         orchestrator: {
           prepareTaskForNewAttempt: vi.fn(),
-          getTask: vi.fn().mockReturnValue(task as any),
+          getTask: vi.fn().mockReturnValue(currentTask as any),
         },
         taskRunnerProvider: () => ({ executeTask }),
         mode: 'active',
@@ -756,7 +780,10 @@ describe('LaunchDispatcher', () => {
     });
 
     it('active mode fails the dispatch when the orchestrator has no matching task', () => {
-      seedWorkflowAndTask('wf-a/t-missing');
+      seedWorkflowAndTask('wf-a/t-missing', 'wf-a', {
+        selectedAttemptId: 'attempt-missing',
+        generation: 0,
+      });
       const enq = adapter.enqueueLaunchDispatch({
         taskId: 'wf-a/t-missing',
         attemptId: 'attempt-missing',
