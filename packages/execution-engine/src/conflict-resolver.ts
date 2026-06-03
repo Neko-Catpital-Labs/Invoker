@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import type { Orchestrator } from '@invoker/workflow-core';
-import { OrchestratorError, OrchestratorErrorCode } from '@invoker/workflow-core';
+import { OrchestratorError, OrchestratorErrorCode, parseMergeConflictError } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { cleanElectronEnv, resolveExecutableOnCurrentPath } from './process-utils.js';
 import type { ExecutionAgent } from './agent.js';
@@ -185,12 +185,8 @@ export async function resolveConflictImpl(
   const errorStr = savedError ?? task.execution.error;
   if (!errorStr) throw new Error(`Task ${taskId} has no error information`);
 
-  let conflictInfo: { failedBranch: string; conflictFiles: string[] };
-  try {
-    const parsed = JSON.parse(errorStr);
-    if (parsed?.type !== 'merge_conflict') throw new Error('not a merge conflict');
-    conflictInfo = { failedBranch: parsed.failedBranch, conflictFiles: parsed.conflictFiles };
-  } catch {
+  const conflictInfo = parseMergeConflictError(errorStr);
+  if (!conflictInfo) {
     host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
       phase: 'resolve-conflict-parse-failed',
       errorPreview: String(errorStr).slice(0, 400),

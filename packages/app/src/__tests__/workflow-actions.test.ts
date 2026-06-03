@@ -520,7 +520,11 @@ describe('approveTask', () => {
       status: 'awaiting_approval',
       config: { workflowId: 'wf-1' },
       execution: {
-        pendingFixError: JSON.stringify({ type: 'merge_conflict', conflictFiles: ['a.ts'] }),
+        pendingFixError: JSON.stringify({
+          type: 'merge_conflict',
+          failedBranch: 'experiment/foo',
+          conflictFiles: ['a.ts'],
+        }),
         workspacePath: '/tmp/task-a',
         branch: 'task-a',
       },
@@ -1268,6 +1272,30 @@ describe('selectFailureRecoveryRoute', () => {
     expect(route).toEqual({ kind: 'resolveConflict' });
   });
 
+  it('uses resolveConflict for parseable text merge conflicts when a workspace exists', () => {
+    const route = selectFailureRecoveryRoute(
+      makeTask({
+        config: { workflowId: 'wf-1' },
+        execution: { workspacePath: '/tmp/task-a' },
+      }) as any,
+      'Executor startup failed (ssh): Merge conflict merging experiment/foo: packages/app/src/headless.ts',
+    );
+
+    expect(route).toEqual({ kind: 'resolveConflict' });
+  });
+
+  it('uses fixWithAgent for conflict-looking text without recoverable metadata', () => {
+    const route = selectFailureRecoveryRoute(
+      makeTask({
+        config: { workflowId: 'wf-1' },
+        execution: { workspacePath: '/tmp/task-a' },
+      }) as any,
+      'CONFLICT (content): Merge conflict in src/foo.ts\nAutomatic merge failed; fix conflicts and commit.',
+    );
+
+    expect(route).toEqual({ kind: 'fixWithAgent' });
+  });
+
   it('uses fixWithAgent for non-merge failures', () => {
     const route = selectFailureRecoveryRoute(
       makeTask({
@@ -1350,6 +1378,41 @@ describe('fixWithAgentAction', () => {
     });
 
     expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'claude');
+    expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
+    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', mergeError);
+    expect(result).toEqual({ kind: 'resolveConflict', autoApproved: false, started: [] });
+  });
+
+  it('dispatches text merge conflicts with a stale workspace to taskExecutor.resolveConflict', async () => {
+    const mergeError = 'Executor startup failed (ssh): Merge conflict merging experiment/foo: packages/app/src/headless.ts';
+    const orchestrator = {
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        config: { workflowId: 'wf-1' },
+        execution: { error: mergeError, workspacePath: '/tmp/stale-task-a' },
+      })),
+      beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
+      setFixAwaitingApproval: vi.fn(),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      getTaskOutput: vi.fn(),
+      appendTaskOutput: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn(),
+      resolveConflict: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const result = await fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    }, {
+      agentName: 'codex',
+    });
+
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'codex');
     expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
     expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', mergeError);
     expect(result).toEqual({ kind: 'resolveConflict', autoApproved: false, started: [] });
