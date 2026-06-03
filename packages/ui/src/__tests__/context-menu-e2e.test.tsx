@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
-import type { WorkflowMeta } from '../../types.js';
+import type { WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
@@ -73,6 +73,26 @@ describe('Context menu (component)', () => {
     });
   }
 
+  function pressDocumentKey(key: string) {
+    fireEvent.keyDown(document, { key });
+  }
+
+  async function openWorkflowContextMenu() {
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const firstItem = await screen.findByRole('menuitem', { name: 'Open Workflow' });
+    await waitFor(() => expect(firstItem).toHaveFocus());
+  }
+
+  async function openTaskContextMenu() {
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    const firstItem = await screen.findByRole('menuitem', { name: 'Restart Task' });
+    await waitFor(() => expect(firstItem).toHaveFocus());
+  }
+
   it('right-clicking a workflow shows workflow actions', async () => {
     await setup();
     fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
@@ -103,6 +123,60 @@ describe('Context menu (component)', () => {
     expect(screen.queryByText('Retry Workflow')).not.toBeInTheDocument();
     expect(screen.queryByText('Cancel Workflow')).not.toBeInTheDocument();
     expect(screen.queryByText('Delete Workflow')).not.toBeInTheDocument();
+  });
+
+  it('workflow context menu keyboard navigation copies the workflow id', async () => {
+    await setup();
+    await openWorkflowContextMenu();
+
+    pressDocumentKey('ArrowDown');
+    pressDocumentKey('ArrowDown');
+    pressDocumentKey('ArrowDown');
+    await waitFor(() => {
+      expect(screen.getByRole('menuitem', { name: 'Copy Workflow ID' })).toHaveFocus();
+    });
+    pressDocumentKey('Enter');
+
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('workflow context menu ArrowUp wraps from the first item to More', async () => {
+    await setup();
+    await openWorkflowContextMenu();
+
+    pressDocumentKey('ArrowUp');
+    await waitFor(() => {
+      expect(screen.getByRole('menuitem', { name: 'More' })).toHaveFocus();
+    });
+    pressDocumentKey('Enter');
+
+    expect(await screen.findByRole('menuitem', { name: 'Rebase and Retry' })).toBeInTheDocument();
+  });
+
+  it('task context menu keyboard navigation activates the next enabled action with Enter', async () => {
+    await setup();
+    await openTaskContextMenu();
+
+    pressDocumentKey('ArrowDown');
+    await waitFor(() => {
+      expect(screen.getByRole('menuitem', { name: 'Open Terminal' })).toHaveFocus();
+    });
+    pressDocumentKey('Enter');
+
+    await waitFor(() => expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'));
+  });
+
+  it('task context menu keyboard navigation activates the highlighted action with Space', async () => {
+    await setup();
+    await openTaskContextMenu();
+
+    pressDocumentKey('ArrowDown');
+    await waitFor(() => {
+      expect(screen.getByRole('menuitem', { name: 'Open Terminal' })).toHaveFocus();
+    });
+    pressDocumentKey(' ');
+
+    await waitFor(() => expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'));
   });
 
   it('workflow context menu retries workflow', async () => {

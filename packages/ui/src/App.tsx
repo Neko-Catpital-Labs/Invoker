@@ -36,6 +36,7 @@ import {
   EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE,
 } from './isExperimentSpawnPivot.js';
 import { parsePlanText } from './lib/plan-parser.js';
+import { focusFirstEnabledMenuButton, handleMenuKeyboardEvent } from './lib/menu-keyboard.js';
 import type { SystemDiagnostics } from '@invoker/contracts';
 
 type ModalState =
@@ -139,6 +140,10 @@ function WorkflowContextMenu({
     setPosition({ left, top });
   }, [x, y, showMore]);
 
+  useLayoutEffect(() => {
+    focusFirstEnabledMenuButton(menuRef.current);
+  }, [showMore]);
+
   useEffect(() => {
     const dismissFromOutsideTarget = (target: EventTarget | null, button?: number) => {
       if (button !== undefined && button !== 0) return;
@@ -150,7 +155,12 @@ function WorkflowContextMenu({
     const handleMouseDownCapture = (event: MouseEvent) => dismissFromOutsideTarget(event.target, event.button);
     const handleClickCapture = (event: MouseEvent) => dismissFromOutsideTarget(event.target, event.button);
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      handleMenuKeyboardEvent(event, menuRef.current);
     };
 
     document.addEventListener('pointerdown', handlePointerDownCapture, true);
@@ -170,8 +180,8 @@ function WorkflowContextMenu({
     onClose();
   };
 
-  const buttonClass = 'w-full px-3 py-1.5 text-left text-sm text-gray-100 hover:bg-gray-700';
-  const dangerButtonClass = 'w-full px-3 py-1.5 text-left text-sm text-red-300 hover:bg-gray-700';
+  const buttonClass = 'w-full px-3 py-1.5 text-left text-sm text-gray-100 hover:bg-gray-700 focus:bg-gray-700 focus:outline-none';
+  const dangerButtonClass = 'w-full px-3 py-1.5 text-left text-sm text-red-300 hover:bg-gray-700 focus:bg-gray-700 focus:outline-none';
 
   return (
     <div
@@ -199,7 +209,7 @@ function WorkflowContextMenu({
           <div className="my-1 border-t border-gray-600" />
           <button
             role="menuitem"
-            className="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-gray-700"
+            className="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-gray-700 focus:bg-gray-700 focus:outline-none"
             onClick={() => setShowMore(true)}
           >
             More
@@ -706,6 +716,8 @@ export function App() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (contextMenu || workflowContextMenu) return;
+
       if (event.key === 'Shift' && !isEditableKeyboardTarget(event.target)) {
         const now = Date.now();
         if (now - lastShiftAtRef.current <= 450) {
@@ -842,6 +854,7 @@ export function App() {
   }, [
     activateSearchResult,
     bottomStatusIndex,
+    contextMenu,
     focusKeyboardRegion,
     handleStatusClick,
     keyboardRegion,
@@ -857,6 +870,7 @@ export function App() {
     selectedWorkflow,
     selectedWorkflowId,
     visibleStatusKeys,
+    workflowContextMenu,
   ]);
   const missingRequiredTool = systemDiagnostics?.tools.find((tool) => tool.required && !tool.installed) ?? null;
   const installedAgentCount = systemDiagnostics?.tools.filter((tool) => (tool.id === 'claude' || tool.id === 'codex') && tool.installed).length ?? 0;
