@@ -18,6 +18,7 @@ import {
   OrchestratorError,
   OrchestratorErrorCode,
   buildCancelInFlight as buildCoreCancelInFlight,
+  parseMergeConflictError,
 } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { TaskRunner, ReviewGateCiFailureTrigger } from '@invoker/execution-engine';
@@ -148,7 +149,7 @@ export async function approveTask(
   const shouldResume =
     fixedTask &&
     task !== undefined &&
-    (task.config.isMergeNode || isMergeConflictError(task.execution.pendingFixError ?? ''));
+    (task.config.isMergeNode || Boolean(parseMergeConflictError(task.execution.pendingFixError ?? '')));
   const started = await (
     shouldResume
       ? (deps.resumeAfterFixApproval ?? deps.orchestrator.resumeTaskAfterFixApproval.bind(deps.orchestrator))
@@ -924,34 +925,11 @@ export type FailureRecoveryRoute =
   | { kind: 'resolveConflict' }
   | { kind: 'recreateWorkflowFromFreshBase'; workflowId: string };
 
-function isMergeConflictError(error: string): boolean {
-  for (const c of [error, error.trim(), error.split('\n\n').at(-1)?.trim() ?? '']) {
-    if (!c) continue;
-    try { if ((JSON.parse(c) as any)?.type === 'merge_conflict') return true; } catch { /* not JSON */ }
-    const jsonStart = c.indexOf('{');
-    if (jsonStart >= 0) {
-      try {
-        if ((JSON.parse(c.slice(jsonStart)) as any)?.type === 'merge_conflict') return true;
-      } catch {
-        /* not parseable JSON tail */
-      }
-    }
-    if (
-      c.includes('CONFLICT (') ||
-      c.includes('Automatic merge failed') ||
-      c.includes('Merge conflict merging ')
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
 export function selectFailureRecoveryRoute(
   task: TaskState,
   savedError: string,
 ): FailureRecoveryRoute {
-  if (!isMergeConflictError(savedError)) {
+  if (!parseMergeConflictError(savedError)) {
     return { kind: 'fixWithAgent' };
   }
 
