@@ -10,8 +10,10 @@ import {
 
 type MockedDeps = InvalidationDeps & {
   cancelInFlight: ReturnType<typeof vi.fn>;
+  cancelDownstreamInFlight?: ReturnType<typeof vi.fn>;
   retryTask: ReturnType<typeof vi.fn>;
   recreateTask: ReturnType<typeof vi.fn>;
+  recreateDownstream?: ReturnType<typeof vi.fn>;
   retryWorkflow: ReturnType<typeof vi.fn>;
   recreateWorkflow: ReturnType<typeof vi.fn>;
   recreateWorkflowFromFreshBase?: ReturnType<typeof vi.fn>;
@@ -25,6 +27,7 @@ function makeDeps(overrides: Partial<MockedDeps> = {}): MockedDeps {
     cancelInFlight: vi.fn(async () => undefined),
     retryTask: vi.fn(async () => []),
     recreateTask: vi.fn(async () => []),
+    recreateDownstream: vi.fn(async () => []),
     retryWorkflow: vi.fn(async () => []),
     recreateWorkflow: vi.fn(async () => []),
     ...overrides,
@@ -133,6 +136,19 @@ describe('applyInvalidation: cancel-first ordering (Hard Invariant)', () => {
     expect(deps.cancelInFlight).toHaveBeenCalledWith('task', 'task-a');
     expect(deps.cancelInFlight.mock.invocationCallOrder[0]).toBeLessThan(
       deps.recreateTask.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('calls descendant-only cancel before recreateDownstream', async () => {
+    const cancelDownstreamInFlight = vi.fn(async () => undefined);
+    const recreateDownstream = vi.fn(async () => []);
+    const deps = makeDeps({ cancelDownstreamInFlight, recreateDownstream });
+    await applyInvalidation('task', 'recreateDownstream', 'task-a', deps);
+    expect(cancelDownstreamInFlight).toHaveBeenCalledWith('task-a');
+    expect(deps.cancelInFlight).not.toHaveBeenCalled();
+    expect(recreateDownstream).toHaveBeenCalledWith('task-a');
+    expect(cancelDownstreamInFlight.mock.invocationCallOrder[0]).toBeLessThan(
+      recreateDownstream.mock.invocationCallOrder[0],
     );
   });
 
@@ -404,6 +420,18 @@ describe('applyInvalidation: cascadeDownstream (cross-workflow cascade)', () => 
     );
   });
 
+  it('calls cascadeDownstream after recreateDownstream', async () => {
+    const cascadeDownstream = vi.fn(async () => []);
+    const cancelDownstreamInFlight = vi.fn(async () => undefined);
+    const recreateDownstream = vi.fn(async () => []);
+    const deps = makeDeps({ cascadeDownstream, cancelDownstreamInFlight, recreateDownstream });
+    await applyInvalidation('task', 'recreateDownstream', 'task-a', deps);
+    expect(cascadeDownstream).toHaveBeenCalledWith('task', 'task-a');
+    expect(recreateDownstream.mock.invocationCallOrder[0]).toBeLessThan(
+      cascadeDownstream.mock.invocationCallOrder[0],
+    );
+  });
+
   it('calls cascadeDownstream after retryWorkflow', async () => {
     const cascadeDownstream = vi.fn(async () => []);
     const deps = makeDeps({ cascadeDownstream });
@@ -525,6 +553,7 @@ const ALL_INVALIDATION_ACTIONS: readonly InvalidationAction[] = [
   'fixReject',
   'retryTask',
   'recreateTask',
+  'recreateDownstream',
   'retryWorkflow',
   'recreateWorkflow',
   'recreateWorkflowFromFreshBase',
@@ -534,6 +563,7 @@ const ALL_INVALIDATION_ACTIONS: readonly InvalidationAction[] = [
 const INVALIDATING_ACTIONS: readonly InvalidationAction[] = [
   'retryTask',
   'recreateTask',
+  'recreateDownstream',
   'retryWorkflow',
   'recreateWorkflow',
   'recreateWorkflowFromFreshBase',
