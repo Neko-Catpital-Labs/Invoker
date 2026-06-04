@@ -31,10 +31,14 @@ function buildOrchestratorDeps(orchestrator: Orchestrator): InvalidationDeps {
     retryTask: (taskId) => orchestrator.retryTask(taskId),
     recreateTask: (taskId) => orchestrator.recreateTask(taskId),
     retryWorkflow: (workflowId) => orchestrator.retryWorkflow(workflowId),
-    recreateWorkflow: (workflowId) => orchestrator.recreateWorkflow(workflowId),
+    // Routed recreates: the `cascadeAcrossWorkflows` stage owns the
+    // downstream cascade, so the primitive must NOT cascade again.
+    recreateWorkflow: (workflowId) =>
+      orchestrator.recreateWorkflow(workflowId, { cascadeDownstream: false }),
     recreateWorkflowFromFreshBase: (workflowId) =>
       orchestrator.recreateWorkflowFromFreshBase(workflowId, {
         refreshBase: async () => ({ commit: 'fresh-sha' }),
+        cascadeDownstream: false,
       }),
     workflowFork: (workflowId) => {
       const result = orchestrator.forkWorkflow(workflowId);
@@ -104,6 +108,22 @@ describe('cross-workflow cascade — CommandService end-to-end', () => {
       (e) => e.eventType === 'task.invalidated_by_upstream',
     );
     expect(upstreamMarkers.length).toBeGreaterThan(0);
+
+    // Exactly-once contract: the routed CommandService path drives the
+    // cascade through the pipeline's `cascadeAcrossWorkflows` stage and
+    // the primitive opts out (`cascadeDownstream: false`), so each
+    // downstream task is invalidated exactly once — never double-bumped.
+    for (const id of [
+      ctx.downstreamRootId,
+      ctx.downstreamMidId,
+      ctx.downstreamLastId,
+      ctx.downstreamMergeId,
+    ]) {
+      const markers = persistence.events.filter(
+        (e) => e.taskId === id && e.eventType === 'task.invalidated_by_upstream',
+      );
+      expect(markers.length, `${id} should be cascaded exactly once`).toBe(1);
+    }
   });
 
   it('CommandService.retryWorkflow on upstream cascades downstream identically', async () => {

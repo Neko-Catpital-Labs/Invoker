@@ -2730,8 +2730,29 @@ export class Orchestrator {
   /**
    * Reset ALL tasks in a workflow to pending and auto-start ready ones.
    * Used when a rebase conflicts and the entire DAG needs to re-execute.
+   *
+   * Downstream cascade (`options.cascadeDownstream`, default `true`):
+   * recreating a workflow discards its committed output, so any
+   * transitive downstream workflow that depends on it is now running or
+   * completed against stale upstream output and must be reset too. The
+   * primitive owns this cascade so DIRECT callers (the bare
+   * `orchestrator.recreateWorkflow(id)` used by
+   * `recreateWorkflowFromFreshBase` and other in-process callers) get
+   * the same safety as routed callers — see
+   * `cascadeInvalidationToDownstream`.
+   *
+   * Routed callers (`applyInvalidation('workflow', 'recreateWorkflow', …)`
+   * and `CommandService.recreateWorkflow`) own the cascade through the
+   * `cascadeAcrossWorkflows` stage / `cascadeDownstream` dep, so they
+   * pass `cascadeDownstream: false` here to avoid a double reset /
+   * double execution-generation bump of the downstream tasks. This is
+   * the "route-owned duplicate suppression" half of the contract: the
+   * primitive cascades by default; the route opts out exactly once.
    */
-  recreateWorkflow(workflowId: string): TaskState[] {
+  recreateWorkflow(
+    workflowId: string,
+    options?: { cascadeDownstream?: boolean },
+  ): TaskState[] {
     this.refreshFromDb();
 
     const allTasks = this.stateMachine.getAllTasks().filter(
@@ -2834,7 +2855,17 @@ export class Orchestrator {
       .filter((id) => this.stateGetTask(id)?.config.workflowId === workflowId);
     plan = withSchedulerEnqueueCandidates(plan, readyIds);
     this.lastInvalidationPlan = plan;
-    return this.autoStartReadyTasks(readyIds, Orchestrator.EXPEDITED_PRIORITY);
+    const started = this.autoStartReadyTasks(readyIds, Orchestrator.EXPEDITED_PRIORITY);
+
+    // Primitive-level downstream cascade. Default ON so direct callers
+    // (including `recreateWorkflowFromFreshBase`) reset stale downstream
+    // workflows; routed callers pass `cascadeDownstream: false` because
+    // they drive the cascade themselves exactly once.
+    if (options?.cascadeDownstream ?? true) {
+      this.cascadeInvalidationToDownstream(workflowId);
+    }
+
+    return started;
   }
 
   /**
@@ -2904,6 +2935,13 @@ export class Orchestrator {
       refreshBase?: (
         workflowId: string,
       ) => Promise<{ commit?: string; branch?: string } | undefined | void>;
+      /**
+       * Forwarded verbatim to the delegated `recreateWorkflow` so this
+       * fresh-base variant inherits the same direct-vs-routed cascade
+       * contract. Default (`undefined`) → `recreateWorkflow` cascades;
+       * routed callers pass `false`.
+       */
+      cascadeDownstream?: boolean;
     },
   ): Promise<TaskState[]> {
     if (options?.refreshBase) {
@@ -2925,7 +2963,9 @@ export class Orchestrator {
         }
       }
     }
-    return this.recreateWorkflow(workflowId);
+    return this.recreateWorkflow(workflowId, {
+      cascadeDownstream: options?.cascadeDownstream,
+    });
   }
 
   /**

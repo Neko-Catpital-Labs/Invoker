@@ -107,6 +107,7 @@ describe('cross-workflow cascade — applyInvalidation pipeline', () => {
         recreateWorkflowFromFreshBase: (id) =>
           orchestrator.recreateWorkflowFromFreshBase(id, {
             refreshBase: async () => ({ commit: 'fresh-sha' }),
+            cascadeDownstream: false,
           }),
       },
     );
@@ -181,5 +182,130 @@ describe('cross-workflow cascade — applyInvalidation pipeline', () => {
         `${id} should be pending after transitive applyInvalidation cascade`,
       ).toBe('pending');
     }
+  });
+});
+
+describe('cross-workflow cascade — direct orchestrator primitives', () => {
+  let persistence: InMemoryPersistence;
+  let orchestrator: Orchestrator;
+
+  beforeEach(() => {
+    persistence = new InMemoryPersistence();
+    orchestrator = makeOrchestrator(persistence);
+  });
+
+  function downstreamIds(ctx: ChainContext): string[] {
+    return [
+      ctx.downstreamRootId,
+      ctx.downstreamMidId,
+      ctx.downstreamLastId,
+      ctx.downstreamMergeId,
+    ];
+  }
+
+  function upstreamMarkerCount(taskId: string): number {
+    return persistence.events.filter(
+      (e) => e.taskId === taskId && e.eventType === 'task.invalidated_by_upstream',
+    ).length;
+  }
+
+  it('direct orchestrator.recreateWorkflow(upstream) cascades to downstream (no routing)', () => {
+    const ctx = setupChain(orchestrator);
+
+    // No applyInvalidation, no explicit cascade call — the bare primitive.
+    orchestrator.recreateWorkflow(ctx.upstreamWfId);
+
+    for (const id of downstreamIds(ctx)) {
+      expect(
+        orchestrator.getTask(id)!.status,
+        `${id} should be pending after a DIRECT recreateWorkflow`,
+      ).toBe('pending');
+    }
+  });
+
+  it('direct orchestrator.recreateWorkflowFromFreshBase(upstream) cascades to downstream', async () => {
+    const ctx = setupChain(orchestrator);
+
+    await orchestrator.recreateWorkflowFromFreshBase(ctx.upstreamWfId, {
+      refreshBase: async () => ({ commit: 'fresh-sha' }),
+    });
+
+    for (const id of downstreamIds(ctx)) {
+      expect(
+        orchestrator.getTask(id)!.status,
+        `${id} should be pending after a DIRECT recreateWorkflowFromFreshBase`,
+      ).toBe('pending');
+    }
+  });
+
+  it('direct recreateWorkflow cascades each downstream task exactly once (no double-bump)', () => {
+    const ctx = setupChain(orchestrator);
+    const before = downstreamIds(ctx).map(
+      (id) => orchestrator.getTask(id)!.execution.generation ?? 0,
+    );
+
+    orchestrator.recreateWorkflow(ctx.upstreamWfId);
+
+    downstreamIds(ctx).forEach((id, i) => {
+      expect(upstreamMarkerCount(id), `${id} cascaded exactly once`).toBe(1);
+      expect(
+        orchestrator.getTask(id)!.execution.generation ?? 0,
+        `${id} execution generation bumped exactly once`,
+      ).toBe(before[i]! + 1);
+    });
+  });
+
+  it('routed applyInvalidation(recreateWorkflow) does NOT double-cascade downstream', async () => {
+    const ctx = setupChain(orchestrator);
+    const before = downstreamIds(ctx).map(
+      (id) => orchestrator.getTask(id)!.execution.generation ?? 0,
+    );
+
+    await applyInvalidation(
+      'workflow',
+      'recreateWorkflow',
+      ctx.upstreamWfId,
+      buildOrchestratorOnlyInvalidationDeps(orchestrator),
+    );
+
+    downstreamIds(ctx).forEach((id, i) => {
+      expect(
+        upstreamMarkerCount(id),
+        `${id} cascaded exactly once via the routed pipeline (the stage owns it; the primitive opts out)`,
+      ).toBe(1);
+      expect(
+        orchestrator.getTask(id)!.execution.generation ?? 0,
+        `${id} execution generation bumped exactly once via routed pipeline`,
+      ).toBe(before[i]! + 1);
+    });
+  });
+
+  it('routed applyInvalidation(recreateWorkflowFromFreshBase) does NOT double-cascade downstream', async () => {
+    const ctx = setupChain(orchestrator);
+    const before = downstreamIds(ctx).map(
+      (id) => orchestrator.getTask(id)!.execution.generation ?? 0,
+    );
+
+    await applyInvalidation(
+      'workflow',
+      'recreateWorkflowFromFreshBase',
+      ctx.upstreamWfId,
+      {
+        ...buildOrchestratorOnlyInvalidationDeps(orchestrator),
+        recreateWorkflowFromFreshBase: (id) =>
+          orchestrator.recreateWorkflowFromFreshBase(id, {
+            refreshBase: async () => ({ commit: 'fresh-sha' }),
+            cascadeDownstream: false,
+          }),
+      },
+    );
+
+    downstreamIds(ctx).forEach((id, i) => {
+      expect(upstreamMarkerCount(id), `${id} cascaded exactly once`).toBe(1);
+      expect(
+        orchestrator.getTask(id)!.execution.generation ?? 0,
+        `${id} execution generation bumped exactly once`,
+      ).toBe(before[i]! + 1);
+    });
   });
 });

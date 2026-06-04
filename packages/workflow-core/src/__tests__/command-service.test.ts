@@ -481,7 +481,10 @@ describe('CommandService', () => {
     it('delegates to orchestrator.recreateWorkflow', async () => {
       const result = await service.recreateWorkflow(makeEnvelope({ workflowId: 'wf-1' }));
       expect(result).toEqual({ ok: true, data: [] });
-      expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
+      // Routed recreates suppress the primitive's built-in downstream
+      // cascade so the pipeline's `cascadeAcrossWorkflows` stage owns it
+      // exactly once.
+      expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1', { cascadeDownstream: false });
     });
 
     it('returns error on exception', async () => {
@@ -499,7 +502,7 @@ describe('CommandService', () => {
     it('delegates to orchestrator.recreateWorkflowFromFreshBase', async () => {
       const result = await service.recreateWorkflowFromFreshBase(makeEnvelope({ workflowId: 'wf-1' }));
       expect(result).toEqual({ ok: true, data: [] });
-      expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-1');
+      expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-1', { cascadeDownstream: false });
     });
 
     it('returns error on exception', async () => {
@@ -550,8 +553,8 @@ describe('CommandService', () => {
       expect(orchestrator.retryTask).toHaveBeenCalledWith('t-1');
       expect(orchestrator.recreateTask).toHaveBeenCalledWith('t-2');
       expect(orchestrator.retryWorkflow).toHaveBeenCalledWith('wf-1');
-      expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-2');
-      expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-3');
+      expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-2', { cascadeDownstream: false });
+      expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-3', { cascadeDownstream: false });
       expect(restartTaskSpy).not.toHaveBeenCalled();
     });
   });
