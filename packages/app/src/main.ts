@@ -166,7 +166,11 @@ import {
 import { computeDeferredLaunchTiming } from './deferred-runnable.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import { evaluateExecutingStall } from './executing-stall.js';
-import { listOpenFixIntentsForTask } from './auto-fix-intents.js';
+import {
+  fixWithAgentMutationArgs,
+  listOpenFixIntentsForTask,
+  parseFixWithAgentMutationOptions,
+} from './auto-fix-intents.js';
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
 import {
   buildActionGraphDiagnostics,
@@ -1594,8 +1598,9 @@ function createEmbeddedTerminalBackendFromConfig(
   const executeFixWithAgentMutation = async (
     taskId: string,
     agentName?: string,
-    source: 'ipc' | 'auto-fix' = 'ipc',
+    options: { autoFix?: boolean } = {},
   ): Promise<TaskState[]> => {
+    const source: 'ipc' | 'auto-fix' = options.autoFix ? 'auto-fix' : 'ipc';
     const task = orchestrator.getTask(taskId);
     if (!task) {
       throw new Error(`Task ${taskId} not found`);
@@ -1676,8 +1681,8 @@ function createEmbeddedTerminalBackendFromConfig(
       workflowId,
       'normal',
       'invoker:fix-with-agent',
-      [taskId, selectedAgent],
-      async () => executeFixWithAgentMutation(taskId, selectedAgent, 'auto-fix'),
+      fixWithAgentMutationArgs(taskId, selectedAgent, { autoFix: true }),
+      async () => executeFixWithAgentMutation(taskId, selectedAgent, { autoFix: true }),
     )
       .then(() => {
         logAutoFixDebug(taskId, 'schedule-dispatch-finished');
@@ -2123,9 +2128,17 @@ function createEmbeddedTerminalBackendFromConfig(
           ? { channel: 'headless.exec', request: { args: ['resolve-conflict', String(arg0)] } }
           : { channel: 'headless.exec', request: { args: ['resolve-conflict', String(arg0), String(arg1)] } };
       case 'invoker:fix-with-agent':
-        return arg1 === undefined
-          ? { channel: 'headless.exec', request: { args: ['fix', String(arg0)] } }
-          : { channel: 'headless.exec', request: { args: ['fix', String(arg0), String(arg1)] } };
+        return {
+          channel: 'headless.exec',
+          request: {
+            args: [
+              'fix',
+              String(arg0),
+              ...(arg1 === undefined ? [] : [String(arg1)]),
+              ...(parseFixWithAgentMutationOptions(arg2).autoFix ? ['--auto-fix'] : []),
+            ],
+          },
+        };
       case 'invoker:edit-task-command':
         return { channel: 'headless.exec', request: { args: ['set', 'command', String(arg0), String(arg1)] } };
       case 'invoker:edit-task-prompt':
@@ -3632,37 +3645,38 @@ function createEmbeddedTerminalBackendFromConfig(
       'invoker:fix-with-agent',
       (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
       'normal',
-      async (taskIdArg: unknown, agentNameArg?: unknown) => {
-      const taskId = String(taskIdArg);
-      const agentName = agentNameArg === undefined ? undefined : String(agentNameArg);
-      try {
-        const started = await executeFixWithAgentMutation(taskId, agentName, 'ipc');
-        await finalizeMutationWithGlobalTopup({
-          orchestrator,
-          taskExecutor: requireTaskExecutor(),
-          logger,
-          context: 'ipc.fix-with-agent',
-          started,
-          mutationTiming: activeMutationContext?.mutationTiming,
-          scopedTaskIds: [taskId],
-          launchOutboxMode: invokerConfig.launchOutboxMode,
-        });
-      } catch (err) {
-        if (err instanceof StaleLineageError) {
-          logger.info(`fix-with-agent discarded stale result for "${taskId}": ${err.message}`, { module: 'ipc' });
-          return;
+      async (taskIdArg: unknown, agentNameArg?: unknown, optionsArg?: unknown) => {
+        const taskId = String(taskIdArg);
+        const agentName = agentNameArg === undefined ? undefined : String(agentNameArg);
+        const options = parseFixWithAgentMutationOptions(optionsArg);
+        try {
+          const started = await executeFixWithAgentMutation(taskId, agentName, options);
+          await finalizeMutationWithGlobalTopup({
+            orchestrator,
+            taskExecutor: requireTaskExecutor(),
+            logger,
+            context: 'ipc.fix-with-agent',
+            started,
+            mutationTiming: activeMutationContext?.mutationTiming,
+            scopedTaskIds: [taskId],
+            launchOutboxMode: invokerConfig.launchOutboxMode,
+          });
+        } catch (err) {
+          if (err instanceof StaleLineageError) {
+            logger.info(`fix-with-agent discarded stale result for "${taskId}": ${err.message}`, { module: 'ipc' });
+            return;
+          }
+          await finalizeMutationWithGlobalTopup({
+            orchestrator,
+            taskExecutor: requireTaskExecutor(),
+            logger,
+            context: 'ipc.fix-with-agent.failure',
+            mutationTiming: activeMutationContext?.mutationTiming,
+            launchOutboxMode: invokerConfig.launchOutboxMode,
+          });
+          logger.error(`fix-with-agent failed: ${err}`, { module: 'ipc' });
+          throw err;
         }
-        await finalizeMutationWithGlobalTopup({
-          orchestrator,
-          taskExecutor: requireTaskExecutor(),
-          logger,
-          context: 'ipc.fix-with-agent.failure',
-          mutationTiming: activeMutationContext?.mutationTiming,
-          launchOutboxMode: invokerConfig.launchOutboxMode,
-        });
-        logger.error(`fix-with-agent failed: ${err}`, { module: 'ipc' });
-        throw err;
-      }
       },
     );
 
