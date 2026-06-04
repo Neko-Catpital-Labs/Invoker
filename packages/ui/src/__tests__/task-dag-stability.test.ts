@@ -6,15 +6,54 @@
  * - rfNodes state preserves measured dimensions from task-derived node updates
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { createElement } from 'react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { applyNodeChanges, type Node, type NodeChange } from '@xyflow/react';
+import * as ReactFlowModule from '@xyflow/react';
+import { TaskDAG } from '../components/TaskDAG.js';
+import { createGraphCameraCommandIssuer } from '../lib/graph-camera.js';
+import type { TaskState } from '../types.js';
+
+vi.mock('@xyflow/react', async () => {
+  const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
+  return createReactFlowMock();
+});
+
+const fitViewMock = (ReactFlowModule as unknown as { __fitViewMock: Mock }).__fitViewMock;
+const setCenterMock = (ReactFlowModule as unknown as { __setCenterMock: Mock }).__setCenterMock;
+const getZoomMock = (ReactFlowModule as unknown as { __getZoomMock: Mock }).__getZoomMock;
 
 const source = readFileSync(
   resolve(__dirname, '..', 'components', 'TaskDAG.tsx'),
   'utf-8',
 );
+
+function dagTask(id: string, overrides: Partial<TaskState> = {}): TaskState {
+  return {
+    id,
+    description: id,
+    status: 'pending',
+    dependencies: [],
+    config: { workflowId: 'wf-a' },
+    execution: {},
+    taskStateVersion: 1,
+    ...overrides,
+  } as TaskState;
+}
+
+/** Mount a TaskDAG (createElement keeps this a .ts file) and wait for the
+ * single first-render fit to settle, then clear the viewport spies so a test
+ * can assert on the calls that happen after the initial mount. */
+async function renderDagAndSettleInitialFit(props: Parameters<typeof TaskDAG>[0]) {
+  const utils = render(createElement(TaskDAG, props));
+  await waitFor(() => expect(fitViewMock).toHaveBeenCalledTimes(1));
+  fitViewMock.mockClear();
+  setCenterMock.mockClear();
+  return utils;
+}
 
 describe('TaskDAG stability', () => {
   describe('selection wiring', () => {
@@ -292,5 +331,176 @@ describe('TaskDAG stability', () => {
       expect(reactFlowBlock).toContain('nodes={rfNodes}');
       expect(reactFlowBlock).not.toMatch(/nodes=\{nodes\}/);
     });
+  });
+});
+
+// ── Camera ownership (viewport-fighting regression) ─────────
+// These assert the runtime camera contract: React Flow owns x/y/zoom after the
+// initial fit, and the DAG only moves the viewport when it consumes a typed,
+// task-scoped command exactly once. Status refreshes and topology changes must
+// never re-fit or re-center, which is what kept the old graph fighting the user.
+describe('TaskDAG camera ownership', () => {
+  beforeEach(() => {
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+    getZoomMock.mockReset();
+    getZoomMock.mockReturnValue(1);
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  /** Build a tasks Map from a list of task ids (all in workflow wf-a). */
+  function tasksMap(...ids: string[]): Map<string, TaskState> {
+    return new Map(ids.map((id) => [id, dagTask(id)] as const));
+  }
+
+  it('fits the viewport exactly once on the first non-empty render', async () => {
+    render(createElement(TaskDAG, { tasks: tasksMap('task-a') }));
+
+    // onInit fires once for the first non-empty render and never re-fits.
+    await waitFor(() => expect(fitViewMock).toHaveBeenCalledTimes(1));
+    expect(fitViewMock).toHaveBeenCalledWith({ padding: 0.2 });
+    expect(setCenterMock).not.toHaveBeenCalled();
+  });
+
+  it('does not move the camera on a status-only update', async () => {
+    const { rerender } = await renderDagAndSettleInitialFit({
+      tasks: tasksMap('task-a'),
+      selectedTaskId: 'task-a',
+    });
+
+    // Same topology, only the task status changes.
+    rerender(
+      createElement(TaskDAG, {
+        tasks: new Map([['task-a', dagTask('task-a', { status: 'running' })]]),
+        selectedTaskId: 'task-a',
+      }),
+    );
+
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+    expect(fitViewMock).not.toHaveBeenCalled();
+    expect(setCenterMock).not.toHaveBeenCalled();
+  });
+
+  it('preserves the camera when the topology changes (a task is added)', async () => {
+    const { rerender } = await renderDagAndSettleInitialFit({ tasks: tasksMap('task-a') });
+
+    rerender(createElement(TaskDAG, { tasks: tasksMap('task-a', 'task-b') }));
+
+    // The new node renders without remounting React Flow or moving the camera.
+    expect(await screen.findByTestId('rf__node-task-b')).toBeInTheDocument();
+    expect(fitViewMock).not.toHaveBeenCalled();
+    expect(setCenterMock).not.toHaveBeenCalled();
+  });
+
+  it('centers the selected task on a centerSelection command, preserving the current zoom', async () => {
+    const issuer = createGraphCameraCommandIssuer();
+    getZoomMock.mockReturnValue(1.5);
+
+    const { rerender } = await renderDagAndSettleInitialFit({
+      tasks: tasksMap('task-a'),
+      selectedTaskId: 'task-a',
+    });
+
+    rerender(
+      createElement(TaskDAG, {
+        tasks: tasksMap('task-a'),
+        selectedTaskId: 'task-a',
+        cameraCommand: issuer.centerSelection('task', 'task-a'),
+      }),
+    );
+
+    await waitFor(() => expect(setCenterMock).toHaveBeenCalledTimes(1));
+    // Centering must preserve the live zoom (not reset to 1).
+    const [, , options] = setCenterMock.mock.calls[0];
+    expect(options).toMatchObject({ zoom: 1.5 });
+    // A center command must never trigger a whole-graph fit.
+    expect(fitViewMock).not.toHaveBeenCalled();
+  });
+
+  it('consumes a fitInitial command by fitting the graph', async () => {
+    const issuer = createGraphCameraCommandIssuer();
+
+    const { rerender } = await renderDagAndSettleInitialFit({
+      tasks: tasksMap('task-a'),
+      selectedTaskId: 'task-a',
+    });
+
+    rerender(
+      createElement(TaskDAG, {
+        tasks: tasksMap('task-a'),
+        selectedTaskId: 'task-a',
+        cameraCommand: issuer.fitInitial('task'),
+      }),
+    );
+
+    await waitFor(() => expect(fitViewMock).toHaveBeenCalledTimes(1));
+    expect(setCenterMock).not.toHaveBeenCalled();
+  });
+
+  it('ignores a camera command scoped to the workflow graph', async () => {
+    const issuer = createGraphCameraCommandIssuer();
+
+    const { rerender } = await renderDagAndSettleInitialFit({
+      tasks: tasksMap('task-a'),
+      selectedTaskId: 'task-a',
+    });
+
+    rerender(
+      createElement(TaskDAG, {
+        tasks: tasksMap('task-a'),
+        selectedTaskId: 'task-a',
+        cameraCommand: issuer.centerSelection('workflow', 'task-a'),
+      }),
+    );
+
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(fitViewMock).not.toHaveBeenCalled();
+  });
+
+  it('consumes each command once by sequence, not on every re-render', async () => {
+    const issuer = createGraphCameraCommandIssuer();
+    const command = issuer.centerSelection('task', 'task-a');
+
+    const { rerender } = await renderDagAndSettleInitialFit({
+      tasks: tasksMap('task-a'),
+      selectedTaskId: 'task-a',
+    });
+
+    const props = {
+      tasks: tasksMap('task-a'),
+      selectedTaskId: 'task-a' as const,
+      cameraCommand: command,
+    };
+    rerender(createElement(TaskDAG, props));
+    await waitFor(() => expect(setCenterMock).toHaveBeenCalledTimes(1));
+
+    // Re-rendering with the SAME command object must not re-fire the move —
+    // this is what prevents data refreshes from fighting the user's camera.
+    rerender(createElement(TaskDAG, props));
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+    expect(setCenterMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports manual viewport interaction on background pan and wheel without autofocusing', async () => {
+    const onManualViewport = vi.fn();
+
+    await renderDagAndSettleInitialFit({
+      tasks: tasksMap('task-a'),
+      selectedTaskId: 'task-a',
+      onManualViewport,
+    });
+
+    const pane = screen.getByTestId('rf__pane');
+    fireEvent.pointerDown(pane);
+    fireEvent.wheel(pane);
+
+    expect(onManualViewport).toHaveBeenCalledTimes(2);
+    // A manual move must never autofocus the graph.
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(fitViewMock).not.toHaveBeenCalled();
   });
 });
