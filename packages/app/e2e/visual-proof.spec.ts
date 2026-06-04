@@ -910,6 +910,33 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'workflow-context-menu-organization');
   });
 
+  test('context menu keyboard navigation highlights active item', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+
+    const menu = await openContextMenu(page, page.locator('.react-flow__node[data-testid$="task-alpha"]'));
+    const activeMenuItemClass = /(^|\s)bg-gray-700($|\s)/;
+    const restartItem = menu.getByRole('menuitem', { name: 'Restart Task' });
+    const openTerminalItem = menu.getByRole('menuitem', { name: 'Open Terminal' });
+    const moreItem = menu.getByRole('menuitem', { name: 'More' });
+
+    await expect(menu).toBeFocused();
+    await expect(restartItem).toHaveClass(activeMenuItemClass);
+
+    await page.keyboard.press('ArrowDown');
+    await expect(openTerminalItem).toHaveClass(activeMenuItemClass);
+    await expect(restartItem).not.toHaveClass(activeMenuItemClass);
+
+    await page.keyboard.press('ArrowDown');
+    await expect(moreItem).toHaveClass(activeMenuItemClass);
+
+    await page.keyboard.press('Enter');
+    const terminateItem = menu.getByRole('menuitem', { name: 'Terminate Task' });
+    await expect(terminateItem).toBeVisible();
+    await expect(terminateItem).toHaveClass(activeMenuItemClass);
+
+    await captureScreenshot(page, 'context-menu-keyboard-navigation');
+  });
+
   test('context menu keeps danger separator when cancel action is absent', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     await injectTaskStates(page, [
