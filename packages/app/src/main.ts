@@ -182,6 +182,7 @@ import {
   type WorkflowScopedGuiMutationRegistrationContext,
 } from './ipc/ipc-registration.js';
 import { createTaskDeltaStreamSequence } from './task-delta-stream-sequence.js';
+import { startLifecycleEventBridge } from './lifecycle-event-bridge.js';
 import { startReviewGateStatusWorker, type ReviewGateStatusWorker } from './review-gate-status-worker.js';
 import {
   executeNoTrackHeadlessBatch,
@@ -2722,6 +2723,14 @@ function createEmbeddedTerminalBackendFromConfig(
     }
 
     bootstrapInitialWorkflowState();
+    if (ownerMode) {
+      startLifecycleEventBridge({
+        messageBus,
+        getInitialTasks: () => orchestrator.getAllTasks(),
+        getTask: (taskId) => orchestrator.getTask(taskId),
+        logger,
+      });
+    }
 
     reviewGateStatusWorker = startReviewGateStatusWorker({
       ownerMode,
