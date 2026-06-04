@@ -908,6 +908,8 @@ describe('Experiment Lifecycle (integration)', () => {
       const recreateSpy = vi.spyOn(orchestrator, 'recreateTask');
 
       // Re-select to a different winner while downstream is active.
+      // INV-55 rejects retry-class here; the policy-selected action must
+      // remain the lineage-clearing recreate path.
       orchestrator.selectExperiment(reconId, expV2Id);
 
       expect(cancelSpy).toHaveBeenCalledWith(downstreamId);
@@ -1141,7 +1143,8 @@ describe('Experiment Lifecycle (integration)', () => {
       const recreateSpy = vi.spyOn(orchestrator, 'recreateTask');
 
       // Re-select to a different merged set while downstream is
-      // active.
+      // active. INV-55 keeps this on the same recreate-class policy
+      // path as single-winner reselection.
       orchestrator.selectExperiments(
         reconId,
         [expV1Id, expV3Id],

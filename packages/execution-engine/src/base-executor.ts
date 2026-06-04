@@ -67,6 +67,23 @@ export interface SemanticFailure {
   syntheticExitCode?: number;
 }
 
+const TRANSIENT_GIT_TRANSPORT_ERROR_PATTERNS = [
+  /could not resolve host/i,
+  /could not resolve hostname/i,
+  /could not resolve proxy/i,
+  /temporary failure in name resolution/i,
+  /name or service not known/i,
+  /nodename nor servname provided/i,
+  /network is unreachable/i,
+  /no route to host/i,
+  /connection timed out/i,
+  /operation timed out/i,
+  /connection reset by peer/i,
+  /connection refused/i,
+  /failed to connect to .* port \d+/i,
+  /the requested url returned error: 5\d\d/i,
+];
+
 export class MergeConflictError extends Error {
   constructor(
     public readonly failedBranch: string,
@@ -860,6 +877,16 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     }
   }
 
+  /**
+   * Transient transport errors should not turn an otherwise successful task into
+   * a failed task. Permission, auth, missing-branch, and missing-repository
+   * push errors are still hard failures because downstream work would be
+   * unable to consume the branch until the configuration is fixed.
+   */
+  protected isTransientGitTransportError(error: string): boolean {
+    return TRANSIENT_GIT_TRANSPORT_ERROR_PATTERNS.some((pattern) => pattern.test(error));
+  }
+
   // ── Shared command building ─────────────────────────────
 
   /**
@@ -964,7 +991,14 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
       pushError = await this.pushBranchToRemote(cwd, opts.branch, executionId);
     }
     if (effectiveExitCode === 0 && pushError !== undefined && opts?.branch) {
-      status = 'failed';
+      if (this.isTransientGitTransportError(pushError)) {
+        this.emitOutput(
+          executionId,
+          `[${this.type}] Branch push failed due to transient git transport error; preserving successful command result.\n`,
+        );
+      } else {
+        status = 'failed';
+      }
     }
 
     if (opts?.originalBranch) {
