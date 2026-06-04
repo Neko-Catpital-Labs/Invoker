@@ -423,7 +423,7 @@ ${runProvisionSection}stop_bootstrap_heartbeat
         const fullPrompt = this.buildFullPrompt(request);
         const spec = agent.buildCommand(fullPrompt);
         agentSessionId = spec.sessionId;
-        payload = `${spec.cmd} ${spec.args.map(a => this.shellQuote(a)).join(' ')}`;
+        payload = this.buildAgentPayloadCommand(spec.cmd, spec.args, agent.stdinMode);
         bench('SshExecutor.payload.built', {
           executionAgent,
           hasAgentSessionId: !!agentSessionId,
@@ -431,7 +431,7 @@ ${runProvisionSection}stop_bootstrap_heartbeat
       } else {
         const session = this.prepareClaudeSession(request);
         agentSessionId = session.sessionId;
-        payload = `claude ${session.cliArgs.map(a => this.shellQuote(a)).join(' ')}`;
+        payload = this.buildAgentPayloadCommand('claude', session.cliArgs, 'ignore');
         bench('SshExecutor.payload.built', {
           executionAgent: 'claude',
           hasAgentSessionId: !!agentSessionId,
@@ -1264,5 +1264,15 @@ ${runProvisionSection}stop_bootstrap_heartbeat
   /** Shell-quote a string for safe inclusion in a remote SSH command. */
   private shellQuote(s: string): string {
     return "'" + s.replace(/'/g, "'\\''") + "'";
+  }
+
+  private buildAgentPayloadCommand(
+    cmd: string,
+    args: string[],
+    stdinMode: 'ignore' | 'pipe',
+  ): string {
+    const argText = args.map(a => this.shellQuote(a)).join(' ');
+    const command = argText ? `${cmd} ${argText}` : cmd;
+    return stdinMode === 'ignore' ? `${command} < /dev/null` : command;
   }
 }
