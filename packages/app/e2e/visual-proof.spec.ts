@@ -312,6 +312,38 @@ async function openContextMenu(page: Page, locator: Locator) {
   return menu;
 }
 
+async function dragMiniDagViewport(page: Page, miniDag: Locator) {
+  const pane = miniDag.locator('.react-flow__pane').first();
+  await expect(pane).toBeVisible({ timeout: 10000 });
+  const box = await pane.boundingBox();
+  if (!box) throw new Error('Mini DAG pane has no bounding box');
+  const startX = box.x + box.width * 0.72;
+  const startY = box.y + box.height * 0.72;
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  await page.mouse.move(startX - 96, startY - 54, { steps: 6 });
+  await page.mouse.up();
+  await page.waitForTimeout(200);
+}
+
+async function miniDagViewportTransform(miniDag: Locator) {
+  return miniDag.locator('.react-flow__viewport').first().evaluate((element) => {
+    return getComputedStyle(element).transform;
+  });
+}
+
+async function seedCameraLockPreference(page: Page) {
+  await page.evaluate(() => {
+    localStorage.setItem(
+      'invoker.ui.cameraLockPreference',
+      JSON.stringify({ mode: 'toggle', enabled: true }),
+    );
+  });
+  await page.reload();
+  await page.waitForLoadState('domcontentloaded');
+  await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10000 });
+}
+
 async function loadPlanAndSelectWorkflow(page: Page, plan: unknown): Promise<string> {
   const beforeIds = await page.evaluate(async () => {
     const workflows = await window.invoker.listWorkflows();
@@ -355,6 +387,57 @@ test.describe('Visual proof capture', () => {
     await expect(miniDag.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
     await expect(miniDag.locator('.react-flow__node[data-testid$="task-beta"]')).toBeVisible();
     await captureScreenshot(page, 'task-graph-keyboard-controls-selected');
+  });
+
+  test('graph-camera-lock-navigation — task graph remains usable after camera and keyboard navigation', async ({ page }) => {
+    await seedCameraLockPreference(page);
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+    await minimizeInspectorIfVisible(page);
+    await expandSelectedWorkflowMiniDagForProof(page);
+
+    const miniDag = page.getByTestId('selected-workflow-mini-dag');
+    const alphaNode = miniDag.locator('.react-flow__node[data-testid$="task-alpha"]').first();
+    const betaNode = miniDag.locator('.react-flow__node[data-testid$="task-beta"]').first();
+    const gammaNode = miniDag.locator('.react-flow__node[data-testid$="task-gamma"]').first();
+    await expect(alphaNode).toBeVisible({ timeout: 10000 });
+    await expect(betaNode).toBeVisible({ timeout: 10000 });
+    await expect(gammaNode).toBeVisible({ timeout: 10000 });
+
+    await page.keyboard.press('Space');
+    await expect(miniDag.locator('[data-keyboard-region="taskGraph"]')).toHaveAttribute('data-keyboard-active', 'true');
+
+    await page.keyboard.press('Home');
+    await expect(page.getByTestId('workflow-inspector-title')).toContainText('First test task');
+
+    await page.keyboard.press('F1');
+    await page.keyboard.press('F1');
+    await page.waitForTimeout(250);
+
+    await page.keyboard.press('ArrowRight');
+    await expect(page.getByTestId('workflow-inspector-title')).toContainText('Second test task');
+
+    await dragMiniDagViewport(page, miniDag);
+    await gammaNode.click();
+    await expect(page.getByTestId('workflow-inspector-title')).toContainText('Reconciliation task for testing');
+    await page.waitForTimeout(250);
+
+    const transformBeforeMenu = await miniDagViewportTransform(miniDag);
+    await page.keyboard.press('Enter');
+    const menu = page.getByRole('menu');
+    await expect(menu).toBeVisible({ timeout: 10000 });
+    await expect(menu).toContainText('Open Terminal');
+    await page.waitForTimeout(150);
+    expect(await miniDagViewportTransform(miniDag)).toBe(transformBeforeMenu);
+
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowUp');
+    await page.keyboard.press('Escape');
+    await expect(menu).toBeHidden({ timeout: 10000 });
+
+    await expect(alphaNode).toBeVisible();
+    await expect(betaNode).toBeVisible();
+    await expect(gammaNode).toBeVisible();
+    await captureScreenshot(page, 'graph-camera-lock-navigation');
   });
 
   test('task running', async ({ page }) => {
