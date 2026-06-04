@@ -6,15 +6,54 @@
  * - rfNodes state preserves measured dimensions from task-derived node updates
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { createElement } from 'react';
+import { cleanup, render, waitFor } from '@testing-library/react';
 import { applyNodeChanges, type Node, type NodeChange } from '@xyflow/react';
+import * as ReactFlowModule from '@xyflow/react';
+import { TaskDAG } from '../components/TaskDAG.js';
+import { createGraphCameraCommandIssuer } from '../lib/graph-camera.js';
+import type { TaskState } from '../types.js';
+
+vi.mock('@xyflow/react', async () => {
+  const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
+  return createReactFlowMock();
+});
+
+const fitViewMock = (ReactFlowModule as unknown as { __fitViewMock: Mock }).__fitViewMock;
+const setCenterMock = (ReactFlowModule as unknown as { __setCenterMock: Mock }).__setCenterMock;
+const getZoomMock = (ReactFlowModule as unknown as { __getZoomMock: Mock }).__getZoomMock;
 
 const source = readFileSync(
   resolve(__dirname, '..', 'components', 'TaskDAG.tsx'),
   'utf-8',
 );
+
+function dagTask(id: string, overrides: Partial<TaskState> = {}): TaskState {
+  return {
+    id,
+    description: id,
+    status: 'pending',
+    dependencies: [],
+    config: { workflowId: 'wf-a' },
+    execution: {},
+    taskStateVersion: 1,
+    ...overrides,
+  } as TaskState;
+}
+
+/** Mount a TaskDAG (createElement keeps this a .ts file) and wait for the
+ * single first-render fit to settle, then clear the viewport spies so a test
+ * can assert on the calls that happen after the initial mount. */
+async function renderDagAndSettleInitialFit(props: Parameters<typeof TaskDAG>[0]) {
+  const utils = render(createElement(TaskDAG, props));
+  await waitFor(() => expect(fitViewMock).toHaveBeenCalledTimes(1));
+  fitViewMock.mockClear();
+  setCenterMock.mockClear();
+  return utils;
+}
 
 describe('TaskDAG stability', () => {
   describe('selection wiring', () => {
