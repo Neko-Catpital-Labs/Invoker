@@ -265,7 +265,11 @@ export interface OrchestratorPersistence {
     workflowId: string;
     priority?: 'high' | 'normal' | 'low';
     generation: number;
-  }): { id: number };
+  }): {
+    id: number;
+    state?: 'enqueued' | 'leased' | 'completed' | 'abandoned';
+    priority?: 'high' | 'normal' | 'low';
+  };
   abandonLaunchDispatchesForTasks?(
     taskIds: readonly string[],
     reason: string,
@@ -3830,20 +3834,33 @@ export class Orchestrator {
    * Resume a previously persisted workflow by restoring tasks
    * and auto-starting ready tasks.
    */
+  private isRecoverableResumeTask(task: TaskState): boolean {
+    if (task.status === 'running') return true;
+    if (task.status !== 'pending' || !task.execution.selectedAttemptId) return false;
+    if (task.execution.phase === 'launching') return true;
+
+    return Boolean(
+      task.execution.startedAt
+      || task.execution.launchStartedAt
+      || task.execution.launchCompletedAt
+      || task.execution.lastHeartbeatAt
+      || task.execution.workspacePath
+      || task.execution.agentSessionId
+      || task.execution.containerId
+      || task.execution.error
+      || task.execution.exitCode !== undefined
+      || task.execution.inputPrompt
+      || task.execution.pendingFixError,
+    );
+  }
+
   resumeWorkflow(workflowId: string): TaskState[] {
     this.syncFromDb(workflowId);
     const workflowTaskIds = new Set(this.persistence.loadTasks(workflowId).map((task) => task.id));
     const tasksToRecover = this.stateMachine
       .getAllTasks()
       .filter((task) => task.config.workflowId === workflowId || workflowTaskIds.has(task.id))
-      .filter((task) =>
-        task.status === 'running'
-        || (
-          task.status === 'pending'
-          && task.execution.phase === 'launching'
-          && !!task.execution.selectedAttemptId
-        )
-      );
+      .filter((task) => this.isRecoverableResumeTask(task));
     for (const task of tasksToRecover) {
       this.prepareTaskForNewAttempt(task.id, 'resume_workflow_recovery');
     }
@@ -5288,6 +5305,20 @@ export class Orchestrator {
           this.persistence.logEvent?.(job.taskId, 'task.dispatch_enqueued', {
             ...changes,
             dispatchId: dispatch.id,
+            attemptId: launchAttemptId,
+            workflowId: task.config.workflowId,
+            generation: this.getExecutionGeneration(task),
+            state: dispatch.state,
+            priority: dispatch.priority,
+          });
+          this.logger.info('[orchestrator] drainScheduler: launch dispatch enqueued', {
+            taskId: job.taskId,
+            attemptId: launchAttemptId,
+            workflowId: task.config.workflowId,
+            generation: this.getExecutionGeneration(task),
+            dispatchId: dispatch.id,
+            state: dispatch.state,
+            priority: dispatch.priority,
           });
         } catch (err) {
           this.logger.warn('[orchestrator] drainScheduler: enqueueLaunchDispatch failed', {
