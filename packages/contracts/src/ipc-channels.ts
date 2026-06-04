@@ -481,6 +481,10 @@ export const IpcChannels = {
     request: [taskId: string];
     response: void;
   },
+  'invoker:recreate-downstream': {} as {
+    request: [taskId: string];
+    response: void;
+  },
   'invoker:retry-workflow': {} as {
     request: [workflowId: string];
     response: void;
