@@ -5,7 +5,7 @@ import type { MessageBus } from '@invoker/transport';
 import { wireHeadlessAutoFix } from '../headless.js';
 
 describe('wireHeadlessAutoFix', () => {
-  it('subscribes auto-fix for failed deltas in generic headless execution paths', async () => {
+  it('does not subscribe auto-fix in generic headless execution paths', async () => {
     const messageBus = new LocalBus() as MessageBus;
     const shouldAutoFix = vi.fn((taskId: string) => taskId === 'wf-1/task-1');
     const invokeAutoFix = vi.fn(async () => {});
@@ -36,10 +36,8 @@ describe('wireHeadlessAutoFix', () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(shouldAutoFix).toHaveBeenCalledWith('wf-1/task-1');
-    expect(shouldAutoFix).toHaveBeenCalledWith('wf-1/task-2');
-    expect(invokeAutoFix).toHaveBeenCalledTimes(1);
-    expect(invokeAutoFix).toHaveBeenCalledWith('wf-1/task-1');
+    expect(shouldAutoFix).not.toHaveBeenCalled();
+    expect(invokeAutoFix).not.toHaveBeenCalled();
     expect(onError).not.toHaveBeenCalled();
   });
 });

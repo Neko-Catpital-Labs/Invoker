@@ -307,8 +307,12 @@ function parseArgs(argv: string[]): { args: string[]; waitForApproval?: boolean;
   return { args, waitForApproval, noTrack };
 }
 
-function shouldUseSharedMutationOwner(args: string[], standaloneMode: boolean, internalOwnerServe: boolean): boolean {
-  return isHeadlessMutatingCommand(args) && !standaloneMode && !internalOwnerServe;
+function isDirectHeadlessProcess(command: string | undefined): boolean {
+  return command === 'owner-serve' || command === 'worker';
+}
+
+function shouldUseSharedMutationOwner(args: string[], standaloneMode: boolean, directHeadlessProcess: boolean): boolean {
+  return isHeadlessMutatingCommand(args) && !standaloneMode && !directHeadlessProcess;
 }
 
 /**
@@ -448,14 +452,14 @@ export async function runHeadlessClientCommand(
 
   const { args, waitForApproval, noTrack } = parseArgs(argv);
   const standaloneMode = process.env.INVOKER_HEADLESS_STANDALONE === '1';
-  const internalOwnerServe = args[0] === 'owner-serve';
+  const directHeadlessProcess = isDirectHeadlessProcess(args[0]);
 
-  if (!standaloneMode && !internalOwnerServe && await delegateReadOnlyQuery(args, deps.messageBus, deps.refreshMessageBus)) {
+  if (!standaloneMode && !directHeadlessProcess && await delegateReadOnlyQuery(args, deps.messageBus, deps.refreshMessageBus)) {
     const exitCode = process.exitCode;
     return typeof exitCode === 'number' ? exitCode : 0;
   }
 
-  if (!shouldUseSharedMutationOwner(args, standaloneMode, internalOwnerServe)) {
+  if (!shouldUseSharedMutationOwner(args, standaloneMode, directHeadlessProcess)) {
     return deps.runElectronHeadless(argv);
   }
 

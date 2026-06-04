@@ -152,7 +152,6 @@ import {
   CoalescedWorkflowMetadataPublisher,
   WorkflowMetadataInvalidator,
 } from './workflow-metadata-invalidation.js';
-import { shouldSkipAutoFixForError } from './auto-fix-gating.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
 import { LaunchDispatcher, type LaunchDispatcherMode } from './launch-dispatcher.js';
@@ -166,7 +165,12 @@ import {
 import { computeDeferredLaunchTiming } from './deferred-runnable.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import { evaluateExecutingStall } from './executing-stall.js';
-import { listOpenFixIntentsForTask } from './auto-fix-intents.js';
+import {
+  encodeAutoFixReviewGateArg,
+  listOpenFixIntentsForTask,
+  parseFixWithAgentMutationOptions,
+  type FixWithAgentMutationOptions,
+} from './auto-fix-intents.js';
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
 import {
   buildActionGraphDiagnostics,
@@ -1594,8 +1598,9 @@ function createEmbeddedTerminalBackendFromConfig(
   const executeFixWithAgentMutation = async (
     taskId: string,
     agentName?: string,
-    source: 'ipc' | 'auto-fix' = 'ipc',
+    options: FixWithAgentMutationOptions = {},
   ): Promise<TaskState[]> => {
+    const source: 'ipc' | 'auto-fix' = options.autoFix ? 'auto-fix' : 'ipc';
     const task = orchestrator.getTask(taskId);
     if (!task) {
       throw new Error(`Task ${taskId} not found`);
@@ -1630,67 +1635,11 @@ function createEmbeddedTerminalBackendFromConfig(
         recoveryRoute,
         recreateOutputLabel: source === 'auto-fix' ? 'Auto-fix' : 'Fix with AI',
         failureOutputLabel: source === 'auto-fix' ? 'Auto-fix' : `Fix with ${agentName ?? 'Claude'}`,
+        autoFixReviewGate: options.reviewGate,
         signal: activeMutationContext?.signal,
       },
     );
     return result.started;
-  };
-
-  const scheduleAutoFix = (taskId: string): void => {
-    logAutoFixDebug(taskId, 'schedule-enter');
-    if (!workflowMutationCoordinator) {
-      logAutoFixDebug(taskId, 'schedule-skip', { reason: 'no-workflow-mutation-coordinator' });
-      return;
-    }
-    if (!workflowMutationDispatcher.has('invoker:fix-with-agent')) {
-      logAutoFixDebug(taskId, 'schedule-skip', { reason: 'fix-handler-not-ready' });
-      return;
-    }
-    const workflowId = workflowIdForTaskArg(taskId);
-    if (!workflowId) {
-      logAutoFixDebug(taskId, 'schedule-skip', { reason: 'workflow-not-found' });
-      return;
-    }
-    const shouldAutoFixNow = orchestrator.shouldAutoFix(taskId);
-    if (!shouldAutoFixNow) {
-      logAutoFixDebug(taskId, 'schedule-skip', {
-        reason: 'shouldAutoFix-false',
-        shouldAutoFix: shouldAutoFixNow,
-      });
-      return;
-    }
-    const openIntents = persistence.listWorkflowMutationIntents(workflowId, ['queued', 'running']);
-    const openTaskFixIntents = listOpenFixIntentsForTask(openIntents, taskId);
-    if (openTaskFixIntents.length > 0) {
-      logAutoFixDebug(taskId, 'schedule-skip', {
-        reason: 'already-queued-intent',
-        existingIntentIds: openTaskFixIntents.map((intent) => intent.id),
-      });
-      return;
-    }
-    const configuredAgent = loadConfig().autoFixAgent?.trim();
-    const selectedAgent = configuredAgent && configuredAgent.length > 0 ? configuredAgent : undefined;
-    logAutoFixDebug(taskId, 'schedule-enqueue');
-    logAutoFixDebug(taskId, 'schedule-enqueued');
-    void runWorkflowMutation(
-      workflowId,
-      'normal',
-      'invoker:fix-with-agent',
-      [taskId, selectedAgent],
-      async () => executeFixWithAgentMutation(taskId, selectedAgent, 'auto-fix'),
-    )
-      .then(() => {
-        logAutoFixDebug(taskId, 'schedule-dispatch-finished');
-      })
-      .catch((err) => {
-        if (err instanceof StaleLineageError) {
-          logger.info(`auto-fix discarded stale result for "${taskId}": ${err.message}`, { module: 'auto-fix' });
-          return;
-        }
-        logAutoFixDebug(taskId, 'schedule-dispatch-error', {
-          error: err instanceof Error ? err.stack ?? err.message : String(err),
-        });
-      });
   };
 
   const parseExecutionDate = (value: unknown): Date | undefined => {
@@ -1727,6 +1676,7 @@ function createEmbeddedTerminalBackendFromConfig(
     rebuildTaskRunnerWiring({
       orchestrator,
       persistence,
+      messageBus,
       executorRegistry,
       executionAgentRegistry: agentRegistry,
       repoRoot,
@@ -2122,10 +2072,21 @@ function createEmbeddedTerminalBackendFromConfig(
         return arg1 === undefined
           ? { channel: 'headless.exec', request: { args: ['resolve-conflict', String(arg0)] } }
           : { channel: 'headless.exec', request: { args: ['resolve-conflict', String(arg0), String(arg1)] } };
-      case 'invoker:fix-with-agent':
-        return arg1 === undefined
-          ? { channel: 'headless.exec', request: { args: ['fix', String(arg0)] } }
-          : { channel: 'headless.exec', request: { args: ['fix', String(arg0), String(arg1)] } };
+      case 'invoker:fix-with-agent': {
+        const fixOptions = parseFixWithAgentMutationOptions(arg2);
+        return {
+          channel: 'headless.exec',
+          request: {
+            args: [
+              'fix',
+              String(arg0),
+              ...(arg1 === undefined ? [] : [String(arg1)]),
+              ...(fixOptions.autoFix ? ['--auto-fix'] : []),
+              ...(fixOptions.reviewGate ? [encodeAutoFixReviewGateArg(fixOptions.reviewGate)] : []),
+            ],
+          },
+        };
+      }
       case 'invoker:edit-task-command':
         return { channel: 'headless.exec', request: { args: ['set', 'command', String(arg0), String(arg1)] } };
       case 'invoker:edit-task-prompt':
@@ -2766,22 +2727,6 @@ function createEmbeddedTerminalBackendFromConfig(
         logger.debug(`delta→ui: ${JSON.stringify(delta)}`, { module: 'ui' });
       }
       markWorkflowMetadataFromTaskDelta(d);
-
-      const deltaTaskId = d.type === 'updated' || d.type === 'removed'
-        ? d.taskId
-        : undefined;
-      if (d.type === 'updated' && d.changes.status === 'failed') {
-        const cancellationError = shouldSkipAutoFixForError(d.changes.execution?.error);
-        const shouldAutoFixFromOrchestrator = orchestrator.shouldAutoFix(d.taskId);
-        logAutoFixDebug(d.taskId, 'delta-failed', {
-          shouldSkipForCancellation: cancellationError,
-          shouldAutoFixFromOrchestrator,
-        });
-        if (!cancellationError && shouldAutoFixFromOrchestrator && deltaTaskId) {
-          logAutoFixDebug(deltaTaskId, 'delta-trigger-schedule');
-          scheduleAutoFix(deltaTaskId);
-        }
-      }
 
       for (const rendererDelta of applyTaskDeltaToOwnerCacheOrRecover(d)) {
         enqueueTaskDeltaForRenderer(rendererDelta);
@@ -3632,37 +3577,38 @@ function createEmbeddedTerminalBackendFromConfig(
       'invoker:fix-with-agent',
       (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
       'normal',
-      async (taskIdArg: unknown, agentNameArg?: unknown) => {
-      const taskId = String(taskIdArg);
-      const agentName = agentNameArg === undefined ? undefined : String(agentNameArg);
-      try {
-        const started = await executeFixWithAgentMutation(taskId, agentName, 'ipc');
-        await finalizeMutationWithGlobalTopup({
-          orchestrator,
-          taskExecutor: requireTaskExecutor(),
-          logger,
-          context: 'ipc.fix-with-agent',
-          started,
-          mutationTiming: activeMutationContext?.mutationTiming,
-          scopedTaskIds: [taskId],
-          launchOutboxMode: invokerConfig.launchOutboxMode,
-        });
-      } catch (err) {
-        if (err instanceof StaleLineageError) {
-          logger.info(`fix-with-agent discarded stale result for "${taskId}": ${err.message}`, { module: 'ipc' });
-          return;
+      async (taskIdArg: unknown, agentNameArg?: unknown, optionsArg?: unknown) => {
+        const taskId = String(taskIdArg);
+        const agentName = agentNameArg === undefined ? undefined : String(agentNameArg);
+        const options = parseFixWithAgentMutationOptions(optionsArg);
+        try {
+          const started = await executeFixWithAgentMutation(taskId, agentName, options);
+          await finalizeMutationWithGlobalTopup({
+            orchestrator,
+            taskExecutor: requireTaskExecutor(),
+            logger,
+            context: 'ipc.fix-with-agent',
+            started,
+            mutationTiming: activeMutationContext?.mutationTiming,
+            scopedTaskIds: [taskId],
+            launchOutboxMode: invokerConfig.launchOutboxMode,
+          });
+        } catch (err) {
+          if (err instanceof StaleLineageError) {
+            logger.info(`fix-with-agent discarded stale result for "${taskId}": ${err.message}`, { module: 'ipc' });
+            return;
+          }
+          await finalizeMutationWithGlobalTopup({
+            orchestrator,
+            taskExecutor: requireTaskExecutor(),
+            logger,
+            context: 'ipc.fix-with-agent.failure',
+            mutationTiming: activeMutationContext?.mutationTiming,
+            launchOutboxMode: invokerConfig.launchOutboxMode,
+          });
+          logger.error(`fix-with-agent failed: ${err}`, { module: 'ipc' });
+          throw err;
         }
-        await finalizeMutationWithGlobalTopup({
-          orchestrator,
-          taskExecutor: requireTaskExecutor(),
-          logger,
-          context: 'ipc.fix-with-agent.failure',
-          mutationTiming: activeMutationContext?.mutationTiming,
-          launchOutboxMode: invokerConfig.launchOutboxMode,
-        });
-        logger.error(`fix-with-agent failed: ${err}`, { module: 'ipc' });
-        throw err;
-      }
       },
     );
 
