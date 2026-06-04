@@ -4,7 +4,7 @@ import { rid, sid } from './scoped-test-helpers.js';
 import { Orchestrator, PlanConflictError, descriptionForMergeNode } from '../orchestrator.js';
 import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
 import { computeWorkflowRollup } from '../task-types.js';
-import type { TaskState, TaskDelta, TaskStateChanges, Attempt, ExternalDependency, ExternalDependencyChange } from '../task-types.js';
+import type { TaskState, TaskDelta, TaskStateChanges, Attempt, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency } from '../task-types.js';
 import type { Logger, WorkResponse } from '@invoker/contracts';
 
 // ── In-Memory Persistence Mock ──────────────────────────────
@@ -22,6 +22,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
     mergeMode?: 'manual' | 'automatic' | 'external_review';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
+    detachedExternalDependencies?: DetachedExternalDependency[];
   }>();
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
   private attempts = new Map<string, Attempt[]>();
@@ -38,6 +39,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
     mergeMode?: 'manual' | 'automatic' | 'external_review';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
+    detachedExternalDependencies?: DetachedExternalDependency[];
   }): void {
     const now = new Date().toISOString();
     this.workflows.set(workflow.id, {
@@ -62,6 +64,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
       mergeMode?: 'manual' | 'automatic' | 'external_review';
       externalDependencies?: ExternalDependency[];
       externalDependencyChanges?: ExternalDependencyChange[];
+      detachedExternalDependencies?: DetachedExternalDependency[];
     },
   ): void {
     const wf = this.workflows.get(workflowId);
@@ -84,6 +87,9 @@ class InMemoryPersistence implements OrchestratorPersistence {
     if (wf && 'externalDependencyChanges' in changes) {
       wf.externalDependencyChanges = changes.externalDependencyChanges;
     }
+    if (wf && 'detachedExternalDependencies' in changes) {
+      wf.detachedExternalDependencies = changes.detachedExternalDependencies;
+    }
   }
 
   loadWorkflow(workflowId: string): {
@@ -93,6 +99,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
     mergeMode?: 'manual' | 'automatic' | 'external_review';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
+    detachedExternalDependencies?: DetachedExternalDependency[];
   } | undefined {
     const wf = this.workflows.get(workflowId);
     if (!wf) return undefined;
