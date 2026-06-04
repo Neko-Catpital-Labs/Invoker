@@ -2075,22 +2075,6 @@ export class Orchestrator {
     this.checkWorkflowCompletion();
   }
 
-  /**
-   * Select a winning experiment for a reconciliation task.
-   *
-   * INV-55 selects the recreate-class reselection architecture recorded in
-   * `docs/context/inv-55/experiment-brief.md`. Initial selection completes
-   * the reconciliation node and unblocks downstream without resetting tasks
-   * that have not consumed a winner yet. A changed selection is different:
-   * active downstream work is cancelled first, the reconciliation node keeps
-   * its identity while recording the new winner lineage, and every direct
-   * downstream consumer is reset through `MUTATION_POLICIES.selectedExperiment`
-   * so stale branch/workspace/session lineage is discarded by `recreateTask`.
-   *
-   * Retry-class downstream reset was explicitly rejected for this path because
-   * it can preserve stale downstream execution lineage after the experiment
-   * decision changes.
-   */
   selectExperiment(taskId: string, experimentId: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
@@ -3189,15 +3173,6 @@ export class Orchestrator {
    * compatible callers continue to use the workflow-scoped
    * `setWorkflowMergeMode` wrapper which translates `workflowId →
    * mergeNodeId` and delegates here.
-   *
-   * NOTE: `recreateTask`'s lineage-discarding reset shape is
-   * deliberately NOT used here. A merge-mode flip does not invalidate
-   * the merge node's accumulated workspace (the merged branch lineage
-   * built from upstream leaf results); only the merge execution
-   * policy changed. That distinction is what makes merge-mode the
-   * single retry-class route alongside the remaining retry-class rows
-   * (`runnerKind`, `fixContext`) in the chart's Decision Table. Experiment
-   * reselection moved to recreate-class in INV-55.
    */
   editTaskMergeMode(
     taskId: string,

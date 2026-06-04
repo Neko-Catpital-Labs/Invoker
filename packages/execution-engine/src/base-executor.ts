@@ -877,12 +877,6 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     }
   }
 
-  /**
-   * Transient transport errors should not turn an otherwise successful task into
-   * a failed task. Permission, auth, missing-branch, and missing-repository
-   * push errors are still hard failures because downstream work would be
-   * unable to consume the branch until the configuration is fixed.
-   */
   protected isTransientGitTransportError(error: string): boolean {
     return TRANSIENT_GIT_TRANSPORT_ERROR_PATTERNS.some((pattern) => pattern.test(error));
   }
