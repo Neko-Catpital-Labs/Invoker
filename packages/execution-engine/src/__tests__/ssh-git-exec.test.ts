@@ -500,6 +500,21 @@ describe('buildRecordAndPushScript', () => {
     expect(script).toContain('git push "$PUSH_URL" "$BR:refs/heads/$BR"');
   });
 
+  it('disables interactive git prompts while recording and pushing', () => {
+    const script = buildRecordAndPushScript({
+      worktreePath: '~/worktree',
+      branch: 'branch',
+      commitMessageChanges: 'msg',
+      commitMessageEmpty: 'empty',
+      gitUserName: 'Invoker Bot',
+      gitUserEmail: 'invoker@local',
+    });
+
+    expect(script).toContain('export GIT_TERMINAL_PROMPT=0');
+    expect(script).toContain('export GCM_INTERACTIVE=never');
+    expect(script).toContain('export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes}"');
+  });
+
   it('commits and pushes successfully without preconfigured git identity', () => {
     const root = mkdtempSync(join(tmpdir(), 'ssh-record-push-'));
     const source = join(root, 'source');
