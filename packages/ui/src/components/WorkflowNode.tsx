@@ -6,6 +6,7 @@ interface WorkflowNodeProps {
   workflow: WorkflowMeta;
   selected: boolean;
   dimmed: boolean;
+  hasDetachedLineage?: boolean;
   onClick: () => void;
   onContextMenu: (event: MouseEvent<HTMLDivElement>) => void;
 }
@@ -18,6 +19,7 @@ export function WorkflowNode({
   workflow,
   selected,
   dimmed,
+  hasDetachedLineage = false,
   onClick,
   onContextMenu,
 }: WorkflowNodeProps): JSX.Element {
@@ -37,7 +39,8 @@ export function WorkflowNode({
         }
       }}
       className={[
-        'relative w-[220px] rounded-lg border bg-gray-900 pl-4 pr-3 py-3 text-left transition-all shadow-sm',
+        'relative w-[220px] rounded-lg border bg-gray-900 pl-4 py-3 text-left transition-all shadow-sm',
+        hasDetachedLineage ? 'pr-[76px]' : 'pr-3',
         visual.borderClass,
         selected ? 'ring-2 ring-blue-400/80' : '',
         dimmed ? 'opacity-35' : 'opacity-100',
@@ -45,6 +48,15 @@ export function WorkflowNode({
       ].join(' ')}
     >
       <div className={`absolute left-0 top-0 h-full w-1 rounded-l-lg ${visual.railClass}`} />
+      {hasDetachedLineage && (
+        <span
+          aria-label="Detached lineage"
+          title="Detached from upstream workflow; not a scheduling blocker"
+          className="absolute right-2 top-2 rounded border border-amber-400/35 bg-amber-950/45 px-1.5 py-0.5 text-[9px] font-semibold uppercase text-amber-200/90"
+        >
+          Detached
+        </span>
+      )}
       {isWorkflowStatusActive(workflow.status) && visual.pulse && (
         <div className={`absolute -left-1 top-1/2 h-2 w-2 -translate-y-1/2 rounded-full ${visual.railClass} animate-ping`} />
       )}
