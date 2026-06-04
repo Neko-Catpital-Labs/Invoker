@@ -284,6 +284,8 @@ export function serializeTask(task: TaskState): Record<string, unknown> {
   if (task.config.command != null) config.command = task.config.command;
   if (task.config.prompt != null) config.prompt = task.config.prompt;
   if (task.config.runnerKind != null) config.runnerKind = task.config.runnerKind;
+  if (task.config.poolId != null) config.poolId = task.config.poolId;
+  if (task.config.poolMemberId != null) config.poolMemberId = task.config.poolMemberId;
   if (task.config.isMergeNode != null) config.isMergeNode = task.config.isMergeNode;
   if (task.config.executionAgent != null) config.executionAgent = task.config.executionAgent;
   if (task.config.featureBranch != null) config.featureBranch = task.config.featureBranch;
@@ -307,6 +309,7 @@ export function serializeTask(task: TaskState): Record<string, unknown> {
   if (task.execution.launchStartedAt != null) execution.launchStartedAt = task.execution.launchStartedAt instanceof Date ? task.execution.launchStartedAt.toISOString() : task.execution.launchStartedAt;
   if (task.execution.launchCompletedAt != null) execution.launchCompletedAt = task.execution.launchCompletedAt instanceof Date ? task.execution.launchCompletedAt.toISOString() : task.execution.launchCompletedAt;
   if (task.execution.lastHeartbeatAt != null) execution.lastHeartbeatAt = task.execution.lastHeartbeatAt instanceof Date ? task.execution.lastHeartbeatAt.toISOString() : task.execution.lastHeartbeatAt;
+  if (task.execution.pendingFixError != null) execution.pendingFixError = task.execution.pendingFixError;
   if (task.execution.mergeConflict != null) {
     execution.mergeConflict = {
       failedBranch: task.execution.mergeConflict.failedBranch,
