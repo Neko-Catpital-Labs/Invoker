@@ -32,6 +32,7 @@ interface WorkflowNodeData extends Record<string, unknown> {
   workflow: WorkflowMeta;
   selected: boolean;
   dimmed: boolean;
+  hasDetachedLineage: boolean;
 }
 
 const nodeTypes = {
@@ -51,6 +52,7 @@ function WorkflowFlowNode({ data }: NodeProps<Node<WorkflowNodeData>>): JSX.Elem
         workflow={data.workflow}
         selected={data.selected}
         dimmed={data.dimmed}
+        hasDetachedLineage={data.hasDetachedLineage}
         onClick={() => {}}
         onContextMenu={() => {}}
       />
@@ -106,6 +108,7 @@ function WorkflowGraphInner({
           workflow: node.workflow,
           selected: selectedWorkflowId === node.id,
           dimmed,
+          hasDetachedLineage: node.hasDetachedLineage,
         },
       };
     });
@@ -113,27 +116,30 @@ function WorkflowGraphInner({
     return nextNodes;
   }, [graph.nodes, positions, selectedWorkflowId, statusFilters]);
 
-  const edges = useMemo<Edge[]>(() => graph.edges.map((edge) => ({
-    id: `workflow:${edge.kind}:${edge.source}->${edge.target}`,
-    source: edge.source,
-    target: edge.target,
-    type: 'smoothstep',
-    animated: false,
-    style: {
-      stroke: edge.kind === 'historical' ? 'rgba(245,158,11,0.5)' : 'rgba(148,163,184,0.55)',
-      strokeWidth: edge.kind === 'historical' ? 1.5 : 2,
-      strokeDasharray: edge.kind === 'historical' ? '6 6' : undefined,
-    },
-    data: { kind: edge.kind },
-    ariaLabel: edge.kind === 'historical' ? 'Historical workflow dependency' : 'Active workflow dependency',
-    zIndex: 0,
-    markerEnd: {
-      type: MarkerType.ArrowClosed,
-      color: edge.kind === 'historical' ? 'rgba(245,158,11,0.5)' : 'rgba(148,163,184,0.55)',
-      width: 16,
-      height: 16,
-    },
-  })), [graph.edges]);
+  const edges = useMemo<Edge[]>(() => graph.edges.map((edge) => {
+    const edgeVisual = workflowEdgeVisual(edge.kind);
+    return {
+      id: `workflow:${edge.kind}:${edge.source}->${edge.target}`,
+      source: edge.source,
+      target: edge.target,
+      type: 'smoothstep',
+      animated: false,
+      style: {
+        stroke: edgeVisual.stroke,
+        strokeWidth: edgeVisual.strokeWidth,
+        strokeDasharray: edgeVisual.strokeDasharray,
+      },
+      data: { kind: edge.kind, label: edgeVisual.label },
+      ariaLabel: edgeVisual.label,
+      zIndex: 0,
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        color: edgeVisual.stroke,
+        width: 16,
+        height: 16,
+      },
+    };
+  }), [graph.edges]);
 
   const graphSignature = useMemo(() => {
     const nodeIds = graph.nodes.map((node) => node.id).join('|');
@@ -268,6 +274,35 @@ function WorkflowGraphInner({
       </div>
     </div>
   );
+}
+
+function workflowEdgeVisual(kind: 'active' | 'historical' | 'detached'): {
+  label: string;
+  stroke: string;
+  strokeWidth: number;
+  strokeDasharray?: string;
+} {
+  if (kind === 'detached') {
+    return {
+      label: 'Detached workflow lineage',
+      stroke: 'rgba(245,158,11,0.62)',
+      strokeWidth: 1.5,
+      strokeDasharray: '4 7',
+    };
+  }
+  if (kind === 'historical') {
+    return {
+      label: 'Historical workflow dependency',
+      stroke: 'rgba(245,158,11,0.5)',
+      strokeWidth: 1.5,
+      strokeDasharray: '6 6',
+    };
+  }
+  return {
+    label: 'Active workflow dependency',
+    stroke: 'rgba(148,163,184,0.55)',
+    strokeWidth: 2,
+  };
 }
 
 export function WorkflowGraph(props: WorkflowGraphProps): JSX.Element {
