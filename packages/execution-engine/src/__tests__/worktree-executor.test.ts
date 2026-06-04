@@ -1768,8 +1768,8 @@ describe('WorktreeExecutor', () => {
 
     it('keeps heartbeats alive while close finalization is pending', async () => {
       (executor as any).heartbeatIntervalMs = 20;
-      const finalizeDeferred = createDeferred<string | null>();
-      vi.spyOn(executor as any, 'recordTaskResult').mockImplementation(() => finalizeDeferred.promise);
+      const finalizeDeferred = createDeferred<{ commitHash: string | null; emptyResultCommit: boolean }>();
+      vi.spyOn(executor as any, 'recordTaskResultWithMetadata').mockImplementation(() => finalizeDeferred.promise);
 
       const { taskProcess } = setupSpawnMock();
       const request = makeRequest();
@@ -1791,7 +1791,7 @@ describe('WorktreeExecutor', () => {
       expect(completed).toBe(false);
       expect(heartbeatCount).toBeGreaterThan(0);
 
-      finalizeDeferred.resolve('abc123');
+      finalizeDeferred.resolve({ commitHash: 'abc123', emptyResultCommit: false });
       await waitForCondition(() => completed);
     });
 

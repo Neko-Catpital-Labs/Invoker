@@ -57,6 +57,12 @@ export interface WorkRequestInputs {
   /** When true, executors must not reuse existing task worktrees for this run. */
   freshWorkspace?: boolean;
   /**
+   * Terminal verification commands may complete successfully even if publishing
+   * their empty audit commit fails. Do not set this when downstream tasks need
+   * the executor branch.
+   */
+  allowUnpublishedEmptyResult?: boolean;
+  /**
    * Persisted worktree metadata for the same task/action, loaded by the
    * orchestrator from storage. Executors may validate this against git before
    * reusing it, but should not infer action identity from branch name patterns.

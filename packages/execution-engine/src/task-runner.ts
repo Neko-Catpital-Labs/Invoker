@@ -836,6 +836,9 @@ export class TaskRunner {
         baseBranch,
         baseCommit,
         freshWorkspace: this.shouldUseFreshWorkspace(task),
+        allowUnpublishedEmptyResult: actionType === 'command' && this.isTerminalCommandLeaf(task)
+          ? true
+          : undefined,
         reusableWorktree: task.execution.branch && task.execution.workspacePath
           ? {
             branch: task.execution.branch,
@@ -1223,6 +1226,17 @@ export class TaskRunner {
     return (task.execution.generation ?? 0) > 0
       && task.execution.branch === undefined
       && task.execution.workspacePath === undefined;
+  }
+
+  private isTerminalCommandLeaf(task: TaskState): boolean {
+    const getAllTasks = this.orchestrator.getAllTasks;
+    if (typeof getAllTasks !== 'function') return false;
+    const workflowId = task.config.workflowId;
+    return !getAllTasks.call(this.orchestrator).some((candidate: TaskState) => {
+      if (candidate.id === task.id) return false;
+      if (workflowId && candidate.config.workflowId !== workflowId) return false;
+      return candidate.dependencies.includes(task.id);
+    });
   }
 
   /**

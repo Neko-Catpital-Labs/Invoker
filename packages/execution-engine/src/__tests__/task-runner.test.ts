@@ -2089,7 +2089,7 @@ describe('TaskRunner', () => {
         type: 'worktree',
         start: async (req: any) => {
           capturedRequest = req;
-          return { executionId: 'exec-branch-repo', taskId: 'task-branch-repo' };
+          return { executionId: 'exec-branch-repo', taskId: 'task-branch-repo', workspacePath: '/tmp/wt', branch: 'experiment/task-branch-repo' };
         },
         onOutput: () => () => {},
         onComplete: (_handle: any, cb: any) => {
@@ -2128,6 +2128,104 @@ describe('TaskRunner', () => {
       expect(capturedRequest).toBeDefined();
       expect(capturedRequest.inputs.branchRepoUrl).toBe('git@example.com:owner/branches.git');
       expect(capturedRequest.inputs.intermediateRepoUrl).toBeUndefined();
+    });
+
+    it('allows unpublished empty results only for terminal command leaves', async () => {
+      let capturedRequest: any;
+      const capturingExecutor = {
+        type: 'worktree',
+        start: async (req: any) => {
+          capturedRequest = req;
+          return { executionId: 'exec-terminal', taskId: 'terminal-command', workspacePath: '/tmp/wt', branch: 'experiment/terminal-command' };
+        },
+        onOutput: () => () => {},
+        onComplete: (_handle: any, cb: any) => {
+          cb({ requestId: 'r', actionId: 'terminal-command', status: 'completed', outputs: { exitCode: 0 } });
+          return () => {};
+        },
+        onHeartbeat: () => () => {},
+      };
+      const terminalTask = makeTask({
+        id: 'terminal-command',
+        status: 'running',
+        config: { command: 'pnpm run test:all', workflowId: 'wf-terminal' },
+      });
+      const registry = {
+        getDefault: () => capturingExecutor,
+        get: () => capturingExecutor,
+        getAll: () => [capturingExecutor],
+      };
+      const persistence = {
+        updateTask: vi.fn(),
+        loadWorkflow: () => ({ generation: 0 }),
+      };
+      const orchestrator = {
+        getTask: (id: string) => id === terminalTask.id ? terminalTask : undefined,
+        getAllTasks: () => [terminalTask],
+        handleWorkerResponse: vi.fn(),
+      };
+      const executor = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        executorRegistry: registry as any,
+        cwd: '/tmp',
+      });
+
+      await executor.executeTask(terminalTask);
+
+      expect(capturedRequest.inputs.allowUnpublishedEmptyResult).toBe(true);
+    });
+
+    it('does not allow unpublished empty results for commands with downstream dependents', async () => {
+      let capturedRequest: any;
+      const capturingExecutor = {
+        type: 'worktree',
+        start: async (req: any) => {
+          capturedRequest = req;
+          return { executionId: 'exec-upstream', taskId: 'upstream-command', workspacePath: '/tmp/wt', branch: 'experiment/upstream-command' };
+        },
+        onOutput: () => () => {},
+        onComplete: (_handle: any, cb: any) => {
+          cb({ requestId: 'r', actionId: 'upstream-command', status: 'completed', outputs: { exitCode: 0 } });
+          return () => {};
+        },
+        onHeartbeat: () => () => {},
+      };
+      const upstreamTask = makeTask({
+        id: 'upstream-command',
+        status: 'running',
+        config: { command: 'pnpm run generate', workflowId: 'wf-terminal' },
+      });
+      const downstreamTask = makeTask({
+        id: 'downstream-command',
+        status: 'pending',
+        dependencies: ['upstream-command'],
+        config: { command: 'pnpm run test', workflowId: 'wf-terminal' },
+      });
+      const registry = {
+        getDefault: () => capturingExecutor,
+        get: () => capturingExecutor,
+        getAll: () => [capturingExecutor],
+      };
+      const persistence = {
+        updateTask: vi.fn(),
+        loadWorkflow: () => ({ generation: 0 }),
+      };
+      const orchestrator = {
+        getTask: (id: string) => id === upstreamTask.id ? upstreamTask : downstreamTask,
+        getAllTasks: () => [upstreamTask, downstreamTask],
+        handleWorkerResponse: vi.fn(),
+      };
+      const executor = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        executorRegistry: registry as any,
+        cwd: '/tmp',
+      });
+
+      await executor.executeTask(upstreamTask);
+
+      expect(capturedRequest.inputs.allowUnpublishedEmptyResult).toBeUndefined();
     });
 
     it('encodes workflow generation, task generation, and attemptId in request lifecycleTag', async () => {

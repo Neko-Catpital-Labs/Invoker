@@ -1028,6 +1028,36 @@ describe('SshExecutor entry lifecycle', () => {
     expect(completed).toBe(true);
   });
 
+  it('keeps terminal command successful when empty remote result push fails', async () => {
+    const request = makeRequest({
+      inputs: {
+        command: 'pnpm run test:all',
+        repoUrl: 'git@github.com:test/repo.git',
+        allowUnpublishedEmptyResult: true,
+      },
+    });
+    vi.spyOn(ssh as any, 'remoteGitRecordAndPush').mockResolvedValue({
+      commitHash: 'abcdef1234567890abcdef1234567890abcdef12',
+      emptyResultCommit: true,
+      error: 'remote commit or push failed (code 128): fatal: unable to access remote',
+    });
+
+    const handle = await ssh.start(request);
+    const responsePromise = new Promise<WorkResponse>((resolve) => {
+      ssh.onComplete(handle, resolve);
+    });
+
+    const sshProcess = spawnedProcesses[spawnedProcesses.length - 1];
+    sshProcess.emit('close', 0, null);
+
+    const response = await responsePromise;
+
+    expect(response.status).toBe('completed');
+    expect(response.outputs.exitCode).toBe(0);
+    expect(response.outputs.error).toBeUndefined();
+    expect(response.outputs.commitHash).toBe('abcdef1234567890abcdef1234567890abcdef12');
+  });
+
   it('filters remote heartbeat markers from output and emits heartbeat events', async () => {
     const request = makeRequest({
       inputs: {

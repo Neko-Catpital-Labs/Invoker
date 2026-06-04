@@ -370,19 +370,31 @@ trap 'rm -f "$M"' EXIT
 GIT_NAME=$(echo ${userNameB} | base64 -d)
 GIT_EMAIL=$(echo ${userEmailB} | base64 -d)
 if git diff --cached --quiet; then
+  RESULT_KIND=empty
   echo ${emB} | base64 -d > "$M"
   GIT_AUTHOR_NAME="$GIT_NAME" GIT_AUTHOR_EMAIL="$GIT_EMAIL" GIT_COMMITTER_NAME="$GIT_NAME" GIT_COMMITTER_EMAIL="$GIT_EMAIL" git commit --allow-empty -F "$M"
 else
+  RESULT_KIND=changes
   echo ${chB} | base64 -d > "$M"
   GIT_AUTHOR_NAME="$GIT_NAME" GIT_AUTHOR_EMAIL="$GIT_EMAIL" GIT_COMMITTER_NAME="$GIT_NAME" GIT_COMMITTER_EMAIL="$GIT_EMAIL" git commit -F "$M"
 fi
 HASH=$(git rev-parse HEAD)
+printf "__INVOKER_RECORD_KIND__=%s\\n" "$RESULT_KIND"
+printf "__INVOKER_COMMIT_HASH__=%s\\n" "$HASH"
 BR=$(echo ${brB} | base64 -d)
 PUSH_URL=$(echo ${pushRemoteUrlB} | base64 -d)
 if [ -n "$PUSH_URL" ]; then
-  git push "$PUSH_URL" "$BR:refs/heads/$BR"
+  git push "$PUSH_URL" "$BR:refs/heads/$BR" || {
+    code=$?
+    printf "__INVOKER_PUSH_FAILED__=%s\\n" "$code"
+    exit "$code"
+  }
 else
-  git push origin "$BR:refs/heads/$BR"
+  git push origin "$BR:refs/heads/$BR" || {
+    code=$?
+    printf "__INVOKER_PUSH_FAILED__=%s\\n" "$code"
+    exit "$code"
+  }
 fi
 printf "%s" "$HASH"
 `;
@@ -391,6 +403,7 @@ printf "%s" "$HASH"
 export interface GitRecordAndPushResult {
   commitHash?: string;
   error?: string;
+  emptyResultCommit?: boolean;
 }
 
 /**
@@ -402,18 +415,37 @@ export function parseRecordAndPushOutput(
   exitCode: number,
   stderr: string,
 ): GitRecordAndPushResult {
+  const lines = stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+  const markerHash = [...lines]
+    .reverse()
+    .find((line) => line.startsWith('__INVOKER_COMMIT_HASH__='))
+    ?.slice('__INVOKER_COMMIT_HASH__='.length);
+  const markerKind = [...lines]
+    .reverse()
+    .find((line) => line.startsWith('__INVOKER_RECORD_KIND__='))
+    ?.slice('__INVOKER_RECORD_KIND__='.length);
+  const validMarkerHash = typeof markerHash === 'string' && /^[0-9a-f]{7,40}$/i.test(markerHash)
+    ? markerHash
+    : undefined;
+
   if (exitCode !== 0) {
-    return { error: `remote commit or push failed (code ${exitCode}): ${stderr.trim() || stdout.trim()}` };
+    return {
+      ...(validMarkerHash ? { commitHash: validMarkerHash } : {}),
+      ...(markerKind === 'empty' ? { emptyResultCommit: true } : {}),
+      error: `remote commit or push failed (code ${exitCode}): ${stderr.trim() || stdout.trim()}`,
+    };
   }
 
-  const lines = stdout.split('\n').map((l) => l.trim()).filter(Boolean);
-  const hash = lines[lines.length - 1] ?? '';
+  const hash = validMarkerHash ?? lines[lines.length - 1] ?? '';
 
   if (!/^[0-9a-f]{7,40}$/i.test(hash)) {
     return { error: `remote commit: unexpected output (last line: ${hash.slice(0, 80)})` };
   }
 
-  return { commitHash: hash };
+  return {
+    commitHash: hash,
+    ...(markerKind === 'empty' ? { emptyResultCommit: true } : {}),
+  };
 }
 
 /**

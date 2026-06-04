@@ -1048,8 +1048,24 @@ ${runProvisionSection}stop_bootstrap_heartbeat
             if (fin.commitHash) commitHash = fin.commitHash;
             if (fin.error) {
               this.emitOutput(executionId, `[SshExecutor] ${fin.error}\n`);
-              if (exitCode === 0) status = 'failed';
-              mappedError = fin.error;
+              const nonBlockingPublishFailure = this.isPublishFailureNonBlocking(
+                request,
+                exitCode,
+                {
+                  commitHash: fin.commitHash ?? null,
+                  emptyResultCommit: fin.emptyResultCommit === true,
+                },
+                fin.error,
+              );
+              if (nonBlockingPublishFailure) {
+                this.emitOutput(
+                  executionId,
+                  '[SshExecutor] Branch publish failed for terminal empty command result; preserving command success.\n',
+                );
+              } else {
+                if (exitCode === 0) status = 'failed';
+                mappedError = fin.error;
+              }
             }
             console.info(
               `[ssh-lifecycle] remote finalize end task=${request.actionId} executionId=${executionId} ` +
