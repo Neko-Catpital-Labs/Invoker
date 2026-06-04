@@ -35,6 +35,14 @@ Alternative: centralize merge-gate behavior in a single execution-engine service
 
 Verdict: rejected. That approach would couple UI derivation and workflow mutation to execution-engine runtime state, making deterministic unit proof harder. The selected design keeps the highest-risk graph changes in pure/in-memory tests, keeps provider behavior mocked at the process boundary, and lets UI helpers be tested with plain task objects.
 
+## Determinism Controls
+
+- Run package-local Vitest commands from the package directory so package dev dependencies resolve consistently.
+- Set `CI=1`.
+- Use one Vitest worker with `--pool=forks --maxWorkers=1 --minWorkers=1`.
+- Treat Vitest `Start at`, `Duration`, and per-test millisecond timings as nondeterministic; assert exit code, pass counts, and named files instead.
+- Run the cross-package typecheck from the repository root.
+
 ## Deterministic Commands
 
 Run commands from the repository root unless a package directory is specified.
@@ -50,12 +58,13 @@ cd packages/workflow-core
 Command:
 
 ```sh
-pnpm exec vitest run src/__tests__/graph-mutation.test.ts
+env CI=1 pnpm exec vitest run src/__tests__/graph-mutation.test.ts --reporter=verbose --pool=forks --maxWorkers=1 --minWorkers=1
 ```
 
-Expected output:
+Expected output fragments:
 
 ```text
+RUN  v3.2.4 .../packages/workflow-core
 Test Files  1 passed (1)
      Tests  5 passed (5)
 ```
@@ -81,12 +90,13 @@ cd packages/execution-engine
 Command:
 
 ```sh
-pnpm exec vitest run src/__tests__/github-merge-gate-provider.test.ts src/__tests__/review-provider-registry.test.ts
+env CI=1 pnpm exec vitest run src/__tests__/github-merge-gate-provider.test.ts src/__tests__/review-provider-registry.test.ts --reporter=verbose --pool=forks --maxWorkers=1 --minWorkers=1
 ```
 
-Expected output:
+Expected output fragments:
 
 ```text
+RUN  v3.2.4 .../packages/execution-engine
 Test Files  2 passed (2)
      Tests  18 passed (18)
 ```
@@ -112,12 +122,13 @@ cd packages/ui
 Command:
 
 ```sh
-pnpm exec vitest run src/__tests__/merge-gate.test.ts
+env CI=1 pnpm exec vitest run src/__tests__/merge-gate.test.ts --reporter=verbose --pool=forks --maxWorkers=1 --minWorkers=1
 ```
 
-Expected output:
+Expected output fragments:
 
 ```text
+RUN  v3.2.4 .../packages/ui
 Test Files  1 passed (1)
      Tests  32 passed (32)
 ```
@@ -146,10 +157,10 @@ Command:
 pnpm run check:types
 ```
 
-Expected output:
+Expected output fragments:
 
 ```text
-> invoker@0.0.3 check:types
+> invoker@0.0.3 check:types .../invoker
 > tsc -p tsconfig.typecheck.json
 ```
 
