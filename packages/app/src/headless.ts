@@ -65,6 +65,7 @@ import { trackWorkflow } from './headless-watch.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import type { RuntimeServices } from '@invoker/runtime-service';
+import { startWorkerRuntime, type WorkerRuntimeController } from './worker-runtime.js';
 
 export { bumpGenerationAndRecreate } from './workflow-actions.js';
 export {
@@ -1040,6 +1041,42 @@ async function headlessInstallSkills(
   }
 }
 
+const HEADLESS_WORKER_NAMES = ['autofix', 'external-recovery', 'all'] as const;
+type HeadlessWorkerName = typeof HEADLESS_WORKER_NAMES[number];
+type ConcreteHeadlessWorkerName = Exclude<HeadlessWorkerName, 'all'>;
+
+const CONCRETE_HEADLESS_WORKERS: readonly ConcreteHeadlessWorkerName[] = ['autofix', 'external-recovery'];
+
+function isHeadlessWorkerName(value: string): value is HeadlessWorkerName {
+  return (HEADLESS_WORKER_NAMES as readonly string[]).includes(value);
+}
+
+function resolveHeadlessWorkerName(name: string | undefined): HeadlessWorkerName {
+  if (!name) {
+    throw new Error('Missing worker name. Usage: --headless worker <autofix|external-recovery|all>');
+  }
+  if (isHeadlessWorkerName(name)) return name;
+  throw new Error(`Unknown worker: ${name}. Usage: --headless worker <autofix|external-recovery|all>`);
+}
+
+async function headlessWorker(
+  workerNameArg: string | undefined,
+  deps: Pick<HeadlessDeps, 'logger' | 'messageBus'>,
+): Promise<void> {
+  const workerName = resolveHeadlessWorkerName(workerNameArg);
+  const selectedWorkers = workerName === 'all' ? CONCRETE_HEADLESS_WORKERS : [workerName];
+  const runtimes: WorkerRuntimeController[] = selectedWorkers.map((name) => startWorkerRuntime<never>({
+    name,
+    messageBus: deps.messageBus,
+    logger: deps.logger,
+    scan: () => [],
+    submit: async () => {},
+  }));
+
+  process.stdout.write(`[headless] worker ${workerName} started (${selectedWorkers.join(', ')}). Press Ctrl+C to stop.\n`);
+  await Promise.all(runtimes.map((runtime) => runtime.waitUntilStopped()));
+}
+
 // ── Headless Command Router ──────────────────────────────────
 
 export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<void> {
@@ -1048,6 +1085,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
   switch (command) {
     case 'owner-serve':
       await headlessOwnerServe(deps);
+      break;
+    case 'worker':
+      await headlessWorker(args[1], deps);
       break;
     // ── New grouped commands ──
     case 'query':
@@ -1268,6 +1308,11 @@ ${BOLD}Execute:${RESET}
   rebase-recreate <workflowId|mergeTaskId|taskId>     Refresh pool base, then recreate workflow
   fix <taskId> [claude|codex]                         Fix a failed task (default: claude)
   resolve-conflict <taskId> [claude|codex]            Resolve merge conflict + restart
+
+${BOLD}Workers:${RESET}
+  worker autofix                                      Run the auto-fix lifecycle worker
+  worker external-recovery                           Run the external recovery lifecycle worker
+  worker all                                         Run all lifecycle workers
 
 ${BOLD}Respond:${RESET}
   approve <taskId>                                    Approve a task

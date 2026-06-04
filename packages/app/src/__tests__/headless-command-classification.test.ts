@@ -36,6 +36,7 @@ describe('headless-command-classification', () => {
     expect(isHeadlessMutatingCommand(['query'])).toBe(false);
     expect(isHeadlessMutatingCommand(['open-terminal'])).toBe(false);
     expect(isHeadlessMutatingCommand(['slack'])).toBe(false);
+    expect(isHeadlessMutatingCommand(['worker', 'autofix'])).toBe(false);
 
     expect(isHeadlessMutatingCommand(['run'])).toBe(true);
     expect(isHeadlessMutatingCommand(['migrate-compat'])).toBe(true);

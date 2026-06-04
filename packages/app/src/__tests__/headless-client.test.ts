@@ -365,6 +365,24 @@ describe('headless-client', () => {
     expect(runElectronHeadless).toHaveBeenCalledWith(['query', 'workflows']);
   });
 
+  it('runs worker commands as explicit local headless processes', async () => {
+    const bus = new LocalBus();
+    const ownerHandler = vi.fn(async () => ({ ok: true }));
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'standalone' }));
+    bus.onRequest('headless.exec', ownerHandler);
+
+    const runElectronHeadless = vi.fn(async () => 0);
+    const exitCode = await runHeadlessClientCommand(['worker', 'autofix'], {
+      messageBus: bus,
+      ensureStandaloneOwner: vi.fn(async () => {}),
+      runElectronHeadless,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(runElectronHeadless).toHaveBeenCalledWith(['worker', 'autofix']);
+    expect(ownerHandler).not.toHaveBeenCalled();
+  });
+
   it('delegates query ui-perf to a reachable owner endpoint', async () => {
     const bus = new LocalBus();
     bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
