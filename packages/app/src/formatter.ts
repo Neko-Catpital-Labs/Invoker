@@ -270,6 +270,7 @@ export function serializeWorkflow(wf: Workflow): Record<string, unknown> {
     ...(wf.reviewProvider != null && { reviewProvider: wf.reviewProvider }),
     ...(wf.externalDependencies != null && { externalDependencies: wf.externalDependencies }),
     ...(wf.externalDependencyChanges != null && { externalDependencyChanges: wf.externalDependencyChanges }),
+    ...(wf.detachedExternalDependencies != null && { detachedExternalDependencies: wf.detachedExternalDependencies }),
     ...(wf.generation != null && { generation: wf.generation }),
   };
 }

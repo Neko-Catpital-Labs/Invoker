@@ -195,6 +195,13 @@ describe('serializeWorkflow', () => {
       mergeMode: 'external_review',
       baseBranch: 'master',
       featureBranch: 'feature/test',
+      detachedExternalDependencies: [
+        {
+          workflowId: 'wf-root',
+          requiredStatus: 'completed',
+          detachedAt: '2026-01-01T00:00:00.000Z',
+        },
+      ],
       generation: 2,
     };
     const result = serializeWorkflow(wf);
@@ -203,6 +210,13 @@ describe('serializeWorkflow', () => {
     expect(result.mergeMode).toBe('external_review');
     expect(result.baseBranch).toBe('master');
     expect(result.featureBranch).toBe('feature/test');
+    expect(result.detachedExternalDependencies).toEqual([
+      {
+        workflowId: 'wf-root',
+        requiredStatus: 'completed',
+        detachedAt: '2026-01-01T00:00:00.000Z',
+      },
+    ]);
     expect(result.generation).toBe(2);
   });
 

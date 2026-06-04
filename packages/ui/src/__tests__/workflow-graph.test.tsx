@@ -109,6 +109,41 @@ describe('WorkflowGraph', () => {
     expect(screen.getByTestId('mock-react-flow')).toBeInTheDocument();
   });
 
+  it('renders active dependency edges with normal dependency styling', () => {
+    const workflows = new Map([
+      ['wf-a', wf('wf-a', 'review_ready')],
+      ['wf-b', wf('wf-b', 'running', {
+        externalDependencies: [
+          {
+            workflowId: 'wf-a',
+            taskId: '__merge__',
+            requiredStatus: 'completed',
+            gatePolicy: 'completed',
+          },
+        ],
+      })],
+    ]);
+
+    render(
+      <WorkflowGraph
+        tasks={new Map()}
+        workflows={workflows}
+        selectedWorkflowId={null}
+        statusFilters={new Set()}
+        onSelectWorkflow={() => {}}
+        onWorkflowContextMenu={() => {}}
+      />,
+    );
+
+    const edge = screen.getByTestId('rf__edge-workflow:active:wf-a->wf-b');
+    expect(edge).toHaveAttribute('data-source', 'wf-a');
+    expect(edge).toHaveAttribute('data-target', 'wf-b');
+    expect(edge).toHaveAttribute('data-kind', 'active');
+    expect(edge).toHaveAttribute('aria-label', 'Active workflow dependency');
+    expect(edge).toHaveAttribute('data-stroke-dasharray', '');
+    expect(edge).toHaveAttribute('data-stroke-width', '2');
+  });
+
   it('renders dependency-change lineage edges separately from active dependency edges', () => {
     const workflows = new Map([
       ['wf-a', wf('wf-a', 'review_ready')],
@@ -144,6 +179,49 @@ describe('WorkflowGraph', () => {
     const edge = screen.getByTestId('rf__edge-workflow:historical:wf-a->wf-b');
     expect(edge).toHaveAttribute('data-source', 'wf-a');
     expect(edge).toHaveAttribute('data-target', 'wf-b');
+  });
+
+  it('renders detached provenance as an explicitly detached relationship', () => {
+    const workflows = new Map([
+      ['wf-a', wf('wf-a', 'review_ready')],
+      [
+        'wf-b',
+        wf('wf-b', 'running', {
+          detachedExternalDependencies: [
+            {
+              workflowId: 'wf-a',
+              taskId: '__merge__',
+              requiredStatus: 'completed',
+              gatePolicy: 'completed',
+              detachedAt: '2026-01-02T00:00:00.000Z',
+            },
+          ],
+        }),
+      ],
+    ]);
+
+    render(
+      <WorkflowGraph
+        tasks={new Map()}
+        workflows={workflows}
+        selectedWorkflowId={null}
+        statusFilters={new Set()}
+        onSelectWorkflow={() => {}}
+        onWorkflowContextMenu={() => {}}
+      />,
+    );
+
+    const edge = screen.getByTestId('rf__edge-workflow:detached:wf-a->wf-b');
+    expect(edge).toHaveAttribute('data-source', 'wf-a');
+    expect(edge).toHaveAttribute('data-target', 'wf-b');
+    expect(edge).toHaveAttribute('data-kind', 'detached');
+    expect(edge).toHaveAttribute('aria-label', 'Detached workflow lineage');
+    expect(edge).toHaveAttribute('data-stroke-dasharray', '4 6');
+    expect(screen.queryByTestId('rf__edge-workflow:active:wf-a->wf-b')).not.toBeInTheDocument();
+
+    const badge = screen.getByTestId('workflow-node-wf-b-detached-badge');
+    expect(badge).toHaveTextContent('Detached');
+    expect(badge).toHaveAttribute('aria-label', 'Detached upstream lineage');
   });
 
   it('re-fits after a non-empty workflow snapshot replacement', async () => {

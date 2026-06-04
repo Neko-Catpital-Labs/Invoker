@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import type { MouseEvent } from 'react';
 import type { TaskState, WorkflowMeta, WorkflowStatus } from '../types.js';
-import { deriveWorkflowGraph, layoutWorkflowGraph } from '../lib/workflow-graph.js';
+import { deriveWorkflowGraph, layoutWorkflowGraph, type WorkflowGraphEdge } from '../lib/workflow-graph.js';
 import { WorkflowNode } from './WorkflowNode.js';
 import {
   Background,
@@ -33,6 +33,31 @@ interface WorkflowNodeData extends Record<string, unknown> {
   selected: boolean;
   dimmed: boolean;
 }
+
+const workflowEdgeVisuals: Record<WorkflowGraphEdge['kind'], {
+  stroke: string;
+  strokeWidth: number;
+  strokeDasharray?: string;
+  ariaLabel: string;
+}> = {
+  active: {
+    stroke: 'rgba(148,163,184,0.55)',
+    strokeWidth: 2,
+    ariaLabel: 'Active workflow dependency',
+  },
+  detached: {
+    stroke: 'rgba(245,158,11,0.65)',
+    strokeWidth: 1.5,
+    strokeDasharray: '4 6',
+    ariaLabel: 'Detached workflow lineage',
+  },
+  historical: {
+    stroke: 'rgba(245,158,11,0.5)',
+    strokeWidth: 1.5,
+    strokeDasharray: '6 6',
+    ariaLabel: 'Historical workflow dependency',
+  },
+};
 
 const nodeTypes = {
   workflowNode: WorkflowFlowNode,
@@ -113,27 +138,30 @@ function WorkflowGraphInner({
     return nextNodes;
   }, [graph.nodes, positions, selectedWorkflowId, statusFilters]);
 
-  const edges = useMemo<Edge[]>(() => graph.edges.map((edge) => ({
-    id: `workflow:${edge.kind}:${edge.source}->${edge.target}`,
-    source: edge.source,
-    target: edge.target,
-    type: 'smoothstep',
-    animated: false,
-    style: {
-      stroke: edge.kind === 'historical' ? 'rgba(245,158,11,0.5)' : 'rgba(148,163,184,0.55)',
-      strokeWidth: edge.kind === 'historical' ? 1.5 : 2,
-      strokeDasharray: edge.kind === 'historical' ? '6 6' : undefined,
-    },
-    data: { kind: edge.kind },
-    ariaLabel: edge.kind === 'historical' ? 'Historical workflow dependency' : 'Active workflow dependency',
-    zIndex: 0,
-    markerEnd: {
-      type: MarkerType.ArrowClosed,
-      color: edge.kind === 'historical' ? 'rgba(245,158,11,0.5)' : 'rgba(148,163,184,0.55)',
-      width: 16,
-      height: 16,
-    },
-  })), [graph.edges]);
+  const edges = useMemo<Edge[]>(() => graph.edges.map((edge) => {
+    const visual = workflowEdgeVisuals[edge.kind];
+    return {
+      id: `workflow:${edge.kind}:${edge.source}->${edge.target}`,
+      source: edge.source,
+      target: edge.target,
+      type: 'smoothstep',
+      animated: false,
+      style: {
+        stroke: visual.stroke,
+        strokeWidth: visual.strokeWidth,
+        strokeDasharray: visual.strokeDasharray,
+      },
+      data: { kind: edge.kind },
+      ariaLabel: visual.ariaLabel,
+      zIndex: 0,
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        color: visual.stroke,
+        width: 16,
+        height: 16,
+      },
+    };
+  }), [graph.edges]);
 
   const graphSignature = useMemo(() => {
     const nodeIds = graph.nodes.map((node) => node.id).join('|');
