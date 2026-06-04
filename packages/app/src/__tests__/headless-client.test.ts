@@ -1,9 +1,23 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LocalBus } from '@invoker/transport';
 
 import { SharedMutationOwnerTimeoutError, runHeadlessClientCommand } from '../headless-client.js';
 
 describe('headless-client', () => {
+  const originalStandaloneEnv = process.env.INVOKER_HEADLESS_STANDALONE;
+
+  beforeEach(() => {
+    delete process.env.INVOKER_HEADLESS_STANDALONE;
+  });
+
+  afterEach(() => {
+    if (originalStandaloneEnv === undefined) {
+      delete process.env.INVOKER_HEADLESS_STANDALONE;
+    } else {
+      process.env.INVOKER_HEADLESS_STANDALONE = originalStandaloneEnv;
+    }
+  });
+
   it('delegates mutating commands to a standalone-capable owner endpoint', async () => {
     const bus = new LocalBus();
     const ownerHandler = vi.fn(async () => ({ ok: true }));
