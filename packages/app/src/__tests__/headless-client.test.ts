@@ -29,6 +29,25 @@ describe('headless-client', () => {
     expect(runElectronHeadless).not.toHaveBeenCalled();
   });
 
+  it('delegates headless fix auto-fix context through the normal exec route', async () => {
+    const bus = new LocalBus();
+    const ownerHandler = vi.fn(async () => ({ ok: true }));
+    bus.onRequest('headless.exec', ownerHandler);
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'standalone' }));
+
+    const exitCode = await runHeadlessClientCommand(['fix', 'wf-1/task-1', 'codex', '--auto-fix', '--no-track'], {
+      messageBus: bus,
+      ensureStandaloneOwner: vi.fn(async () => {}),
+      runElectronHeadless: vi.fn(async () => 0),
+    });
+
+    expect(exitCode).toBe(0);
+    expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
+      args: ['fix', 'wf-1/task-1', 'codex', '--auto-fix'],
+      noTrack: true,
+    }));
+  });
+
   it('delegates mutating commands to an existing non-standalone owner without bootstrapping', async () => {
     const bus = new LocalBus();
     const ownerHandler = vi.fn(async () => ({ ok: true }));

@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { WorkflowMutationIntent } from '@invoker/data-store';
-import { isFixIntentForTask, listOpenFixIntentsForTask } from '../auto-fix-intents.js';
+import {
+  fixWithAgentMutationArgs,
+  isFixIntentForTask,
+  listOpenFixIntentsForTask,
+  parseFixWithAgentMutationOptions,
+  parseHeadlessFixArgs,
+} from '../auto-fix-intents.js';
 
 function makeIntent(overrides: Partial<WorkflowMutationIntent>): WorkflowMutationIntent {
   return {
@@ -28,7 +34,7 @@ describe('auto-fix-intents', () => {
   it('matches headless fix intents for the exact task', () => {
     const headless = makeIntent({
       channel: 'headless.exec',
-      args: [{ args: ['fix', 'wf-1/task-1', 'claude'] }],
+      args: [{ args: ['fix', 'wf-1/task-1', 'claude', '--auto-fix'] }],
     });
     const differentTask = makeIntent({
       channel: 'headless.exec',
@@ -44,6 +50,35 @@ describe('auto-fix-intents', () => {
     expect(isFixIntentForTask(differentCommand, 'wf-1/task-1')).toBe(false);
   });
 
+  it('parses explicit auto-fix context for invoker fix-with-agent args', () => {
+    expect(fixWithAgentMutationArgs('wf-1/task-1', 'codex')).toEqual(['wf-1/task-1', 'codex']);
+    expect(fixWithAgentMutationArgs('wf-1/task-1', 'codex', { autoFix: true })).toEqual([
+      'wf-1/task-1',
+      'codex',
+      { autoFix: true },
+    ]);
+    expect(parseFixWithAgentMutationOptions({ autoFix: true })).toEqual({ autoFix: true });
+    expect(parseFixWithAgentMutationOptions(undefined)).toEqual({ autoFix: false });
+  });
+
+  it('parses headless fix auto-fix context without consuming the agent arg', () => {
+    expect(parseHeadlessFixArgs(['fix', 'wf-1/task-1', 'codex', '--auto-fix'])).toEqual({
+      taskId: 'wf-1/task-1',
+      agentName: 'codex',
+      autoFix: true,
+    });
+    expect(parseHeadlessFixArgs(['fix', 'wf-1/task-1', '--auto-fix'])).toEqual({
+      taskId: 'wf-1/task-1',
+      agentName: undefined,
+      autoFix: true,
+    });
+    expect(parseHeadlessFixArgs(['fix', 'wf-1/task-1', 'claude'])).toEqual({
+      taskId: 'wf-1/task-1',
+      agentName: 'claude',
+      autoFix: false,
+    });
+  });
+
   it('filters open fix intents for a task', () => {
     const intents: WorkflowMutationIntent[] = [
       makeIntent({ id: 1, args: ['wf-1/task-1'] }),
@@ -54,4 +89,3 @@ describe('auto-fix-intents', () => {
     expect(listOpenFixIntentsForTask(intents, 'wf-1/task-1').map((intent) => intent.id)).toEqual([1, 2]);
   });
 });
-
