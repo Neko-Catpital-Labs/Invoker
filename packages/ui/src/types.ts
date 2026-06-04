@@ -50,6 +50,20 @@ export interface ExternalDependencyChange {
   readonly changedBy?: string;
 }
 
+/**
+ * Read-only provenance for a cross-workflow dependency that was
+ * explicitly detached. The renderer uses these entries to tell a
+ * genuinely independent workflow apart from one whose stack edge
+ * was cut.
+ */
+export interface DetachedExternalDependency {
+  readonly workflowId: string;
+  readonly taskId?: string;
+  readonly requiredStatus: 'completed';
+  readonly gatePolicy?: 'completed' | 'review_ready';
+  readonly detachedAt: string;
+}
+
 export interface ExternalGatePolicyUpdate {
   workflowId: string;
   taskId?: string;
@@ -83,6 +97,7 @@ export interface TaskConfig {
   readonly testPlan?: string;
   readonly reproCommand?: string;
   readonly externalDependencies?: readonly ExternalDependency[];
+  readonly detachedExternalDependencies?: readonly DetachedExternalDependency[];
 }
 
 // ── Task Execution (runtime fields) ────────────────────────
@@ -171,6 +186,7 @@ export interface WorkflowMeta {
   reviewProvider?: string;
   externalDependencies?: readonly ExternalDependency[];
   externalDependencyChanges?: readonly ExternalDependencyChange[];
+  detachedExternalDependencies?: readonly DetachedExternalDependency[];
   createdAt?: string;
   updatedAt?: string;
 }

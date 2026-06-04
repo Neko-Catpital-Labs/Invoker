@@ -44,6 +44,13 @@ export interface BaseTaskConfig {
   readonly executionAgent?: string;
   /** Cross-workflow prerequisites for this task. */
   readonly externalDependencies?: readonly ExternalDependency[];
+  /**
+   * Read-only provenance for cross-workflow prerequisites that were
+   * explicitly detached (via `detachWorkflow`). These entries are not
+   * consulted by scheduling; they exist so the UI can distinguish a
+   * genuinely independent workflow from one whose stack edge was cut.
+   */
+  readonly detachedExternalDependencies?: readonly DetachedExternalDependency[];
   /** Execution pool identifier for shared queue/drain scheduling across substrates. */
   readonly poolId?: string;
   /** Legacy direct SSH pool member selection used by editable runner controls. */
@@ -101,6 +108,20 @@ export interface ExternalDependencyChange {
   readonly after?: ExternalDependency;
   readonly changedAt: string;
   readonly changedBy?: string;
+}
+
+/**
+ * Provenance record for an `ExternalDependency` that was removed by an
+ * explicit detach. Mirrors `ExternalDependency`'s shape and adds
+ * `detachedAt` so the UI can render lineage without consulting the
+ * audit log.
+ */
+export interface DetachedExternalDependency {
+  readonly workflowId: string;
+  readonly taskId?: string;
+  readonly requiredStatus: 'completed';
+  readonly gatePolicy?: 'completed' | 'review_ready';
+  readonly detachedAt: string;
 }
 
 // ── Task Execution (runtime state) ─────────────────────────

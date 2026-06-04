@@ -1237,6 +1237,78 @@ describe('SQLiteAdapter', () => {
       const loaded = adapter.loadWorkflow('wf-1');
       expect(loaded!.updatedAt >= before).toBe(true);
     });
+
+    it('round-trips detachedExternalDependencies provenance through save, update, and load', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.updateWorkflow('wf-1', {
+        detachedExternalDependencies: [
+          {
+            workflowId: 'wf-upstream',
+            taskId: '__merge__',
+            requiredStatus: 'completed',
+            gatePolicy: 'review_ready',
+            detachedAt: '2026-06-03T12:00:00.000Z',
+          },
+        ],
+      });
+
+      const afterUpdate = adapter.loadWorkflow('wf-1');
+      expect(afterUpdate!.detachedExternalDependencies).toEqual([
+        {
+          workflowId: 'wf-upstream',
+          taskId: '__merge__',
+          requiredStatus: 'completed',
+          gatePolicy: 'review_ready',
+          detachedAt: '2026-06-03T12:00:00.000Z',
+        },
+      ]);
+
+      adapter.saveWorkflow({
+        ...testWorkflow,
+        id: 'wf-2',
+        name: 'Persistent Detached',
+        detachedExternalDependencies: [
+          {
+            workflowId: 'wf-other',
+            taskId: 'verify',
+            requiredStatus: 'completed',
+            gatePolicy: 'completed',
+            detachedAt: '2026-06-03T13:00:00.000Z',
+          },
+        ],
+      });
+
+      const afterSave = adapter.loadWorkflow('wf-2');
+      expect(afterSave!.detachedExternalDependencies).toEqual([
+        {
+          workflowId: 'wf-other',
+          taskId: 'verify',
+          requiredStatus: 'completed',
+          gatePolicy: 'completed',
+          detachedAt: '2026-06-03T13:00:00.000Z',
+        },
+      ]);
+
+      adapter.updateWorkflow('wf-2', {
+        detachedExternalDependencies: [
+          {
+            workflowId: 'wf-other',
+            taskId: 'verify',
+            requiredStatus: 'completed',
+            gatePolicy: 'completed',
+            detachedAt: '2026-06-03T13:00:00.000Z',
+          },
+          {
+            workflowId: 'wf-extra',
+            taskId: '__merge__',
+            requiredStatus: 'completed',
+            gatePolicy: 'review_ready',
+            detachedAt: '2026-06-03T14:00:00.000Z',
+          },
+        ],
+      });
+      expect(adapter.loadWorkflow('wf-2')!.detachedExternalDependencies).toHaveLength(2);
+    });
   });
 
   describe('logEvent + getEvents', () => {
