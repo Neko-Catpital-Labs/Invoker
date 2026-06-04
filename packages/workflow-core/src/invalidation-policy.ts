@@ -48,6 +48,8 @@ export const MUTATION_POLICIES: Readonly<Record<MutationKey, TaskMutationPolicy>
   executionAgent:        { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const },
   runnerKind:          { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'retryTask' as const },
   poolMemberId:        { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const },
+  // INV-55 selected recreate-class experiment reselection so stale
+  // downstream branch/workspace/session lineage is discarded.
   selectedExperiment:    { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const },
   selectedExperimentSet: { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const },
   mergeMode:             { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'retryTask' as const },
@@ -480,6 +482,7 @@ export function buildCancelInFlight(deps: BuildCancelInFlightDeps): CancelInFlig
   };
 }
 
+
 export function buildOrchestratorOnlyInvalidationDeps(
   orchestrator: InvalidationDepsOrchestrator,
 ): InvalidationDeps {
@@ -508,4 +511,3 @@ export function buildOrchestratorOnlyInvalidationDeps(
     },
   };
 }
-

@@ -9,17 +9,17 @@ Establish deterministic proof for the experiment lifecycle and reselection inval
 ## Files Under Test
 
 - `packages/workflow-core/src/invalidation-policy.ts`
-  - `MUTATION_POLICIES.selectedExperiment` and `selectedExperimentSet` map to `recreateTask` and are active-invalidating (`lines 45-62`).
-  - `ACTION_SPECS.recreateTask` is task-scoped, invalidating, cascades downstream, and selects the target task plus descendants (`lines 242-249`).
-  - `buildOrchestratorOnlyInvalidationDeps` wires `recreateTask` to `orchestrator.recreateTask` (`lines 483-489`).
+  - `MUTATION_POLICIES.selectedExperiment` and `selectedExperimentSet` map to `recreateTask` and are active-invalidating (`lines 45-64`).
+  - `ACTION_SPECS.recreateTask` is task-scoped, invalidating, cascades downstream, and selects the target task plus descendants (`lines 244-250`).
+  - `buildOrchestratorOnlyInvalidationDeps` wires `recreateTask` to `orchestrator.recreateTask` (`lines 485-491`).
 - `packages/workflow-core/src/orchestrator.ts`
-  - `selectExperiment` computes changed selection, cancels active downstream work, writes the new winner lineage, then calls `recreateTask` on direct downstream consumers (`lines 2149-2210`).
-  - `selectExperiments` applies the same cancel-first and recreate reset path for changed multi-selection sets (`lines 2222-2298`).
-  - `handleSpawnExperiments` creates scoped experiment tasks plus one reconciliation output node and rewires downstream through that reconciliation node (`lines 4645-4703`).
-  - `checkExperimentCompletion` records both completed and failed experiment results before reconciliation review (`lines 4730-4768`).
+  - `selectExperiment` computes changed selection, cancels active downstream work, writes the new winner lineage, then dispatches the policy-selected recreate action on direct downstream consumers (`lines 2094-2166`).
+  - `selectExperiments` applies the same cancel-first and policy-selected recreate reset path for changed multi-selection sets (`lines 2168-2254`).
+  - `handleSpawnExperiments` creates scoped experiment tasks plus one reconciliation output node and rewires downstream through that reconciliation node (`lines 4590-4650`).
+  - `checkExperimentCompletion` records both completed and failed experiment results before reconciliation review (`lines 4677-4715`).
 - `packages/workflow-core/src/__tests__/experiment-lifecycle.test.ts`
   - Lifecycle coverage: spawn, reconciliation, selection, downstream unblock, partial failure, five variants, and multi-select (`lines 238-421`, `585-655`, `796-864`).
-  - Reselection invalidation coverage: policy classification, active cancel-before-recreate ordering, inactive reset, initial no-op reset, generation bump, lineage clearing, same-winner no-op, and multi-select set semantics (`lines 892-1049`, `1114-1309`).
+  - Reselection invalidation coverage: policy classification, active cancel-before-recreate ordering, inactive reset, initial no-op reset, generation bump, lineage clearing, same-winner no-op, and multi-select set semantics (`lines 892-1055`, `1116-1319`).
 
 ## Selected Architecture
 
@@ -29,7 +29,7 @@ Evidence:
 
 - Policy table selects `recreateTask` for `selectedExperiment` and `selectedExperimentSet`.
 - Orchestrator implementation preserves the reconciliation node identity while updating `execution.selectedExperiment`, `execution.selectedExperiments`, `branch`, and `commit`.
-- Downstream consumers are reset through `recreateTask` on changed reselection, not on initial selection or same-selection repeats.
+- Downstream consumers are reset through `MUTATION_POLICIES.selectedExperiment*.action` on changed reselection, not on initial selection or same-selection repeats.
 - Tests assert downstream execution generation increases by exactly one and stale downstream lineage fields are cleared after changed reselection.
 
 ## Competing Design Considered
@@ -107,16 +107,24 @@ function ordered(haystack, first, second) {
   return a >= 0 && b >= 0 && a < b;
 }
 
-const singleSelect = section(orchestrator, 'selectExperiment(taskId: string, experimentId: string)', '    selectExperiments(');
-const multiSelect = section(orchestrator, '    selectExperiments(', '  restartTask(');
+const singleSelect = section(orchestrator, 'selectExperiment(taskId: string, experimentId: string)', '  selectExperiments(');
+const multiSelect = section(orchestrator, '  selectExperiments(', '  restartTask(');
 const spawn = section(orchestrator, 'private handleSpawnExperiments', '  private handleSelectExperiment');
 const completion = section(orchestrator, 'private checkExperimentCompletion', '  private checkWorkflowCompletion');
 
 const checks = [
   ['policy selectedExperiment uses recreateTask', /selectedExperiment:\s*\{[^}]*action:\s*'recreateTask'/.test(policy)],
   ['policy selectedExperimentSet uses recreateTask', /selectedExperimentSet:\s*\{[^}]*action:\s*'recreateTask'/.test(policy)],
-  ['single reselection cancels before recreateTask', ordered(singleSelect, 'this.cancelTask(dsId)', 'this.recreateTask(dsId)')],
-  ['multi reselection cancels before recreateTask', ordered(multiSelect, 'this.cancelTask(dsId)', 'this.recreateTask(dsId)')],
+  [
+    'single reselection cancels before policy-selected recreate dispatch',
+    ordered(singleSelect, 'this.cancelTask(dsId)', 'MUTATION_POLICIES.selectedExperiment.action') &&
+      singleSelect.includes('this.dispatchPostMutation(reselectionAction, dsId)'),
+  ],
+  [
+    'multi reselection cancels before policy-selected recreate dispatch',
+    ordered(multiSelect, 'this.cancelTask(dsId)', 'MUTATION_POLICIES.selectedExperimentSet.action') &&
+      multiSelect.includes('this.dispatchPostMutation(reselectionAction, dsId)'),
+  ],
   ['spawn creates experiment tasks and reconciliation output', spawn.includes('isReconciliation: true') && spawn.includes('outputNodeId: reconciliationId')],
   ['completion records completed and failed experiment results', completion.includes("dep.status === 'completed' || dep.status === 'failed'") && completion.includes('execution: { experimentResults }')],
   ['tests assert active cancel then recreate routing', test.includes('re-selecting with ACTIVE downstream cancels first, then routes through recreateTask')],
@@ -137,8 +145,8 @@ Expected output:
 ```text
 PASS policy selectedExperiment uses recreateTask
 PASS policy selectedExperimentSet uses recreateTask
-PASS single reselection cancels before recreateTask
-PASS multi reselection cancels before recreateTask
+PASS single reselection cancels before policy-selected recreate dispatch
+PASS multi reselection cancels before policy-selected recreate dispatch
 PASS spawn creates experiment tasks and reconciliation output
 PASS completion records completed and failed experiment results
 PASS tests assert active cancel then recreate routing
@@ -155,4 +163,4 @@ Threshold:
 
 INV-55 selects the recreate-class reselection architecture for experiment decisions. The runtime suite proves the lifecycle and invalidation behavior end to end, while the static invariant proof confirms that policy, orchestrator implementation, and tests agree on the selected behavior.
 
-Review note: the long comment above `selectExperiment` in `orchestrator.ts` still describes retry-class language, but the executable policy, implementation, and tests prove recreate-class behavior. The comment should be treated as stale documentation until corrected.
+Implementation consumption note: the stale retry-class comment above `selectExperiment` was corrected in the implementation task, and downstream reselection reset now dispatches through `MUTATION_POLICIES.selectedExperiment*.action` so the recreate-class verdict is the executable source of truth.
