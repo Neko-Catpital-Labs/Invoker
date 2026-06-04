@@ -2161,6 +2161,49 @@ describe('BaseExecutor.handleProcessExit push semantics', () => {
     expect(response?.outputs.error).toBe('push denied');
   });
 
+  it('keeps terminal command successful when only its empty audit commit push fails', async () => {
+    execSync('git checkout -b invoker/verify', { cwd: cloneDir });
+
+    const req = makeRequest('verify-task', {
+      command: 'pnpm run test:all',
+      allowUnpublishedEmptyResult: true,
+    });
+    const entry = executor.registerTestEntry('e-verify', req);
+    let response: WorkResponse | undefined;
+    entry.completeListeners.add((r) => { response = r; });
+
+    vi.spyOn(BaseExecutor.prototype as any, 'pushBranchToRemote').mockResolvedValue('push denied');
+
+    await executor.testHandleProcessExit('e-verify', req, cloneDir, 0, { branch: 'invoker/verify' });
+
+    expect(response?.status).toBe('completed');
+    expect(response?.outputs.exitCode).toBe(0);
+    expect(response?.outputs.error).toBeUndefined();
+    expect(response?.outputs.commitHash).toBeDefined();
+    expect(entry.outputBuffer.join('')).toContain('preserving command success');
+  });
+
+  it('still fails terminal command publish errors when the command produced file changes', async () => {
+    execSync('git checkout -b invoker/verify-changes', { cwd: cloneDir });
+    writeFileSync(join(cloneDir, 'generated.txt'), 'changed\n');
+
+    const req = makeRequest('verify-changes-task', {
+      command: 'node scripts/generate.js',
+      allowUnpublishedEmptyResult: true,
+    });
+    const entry = executor.registerTestEntry('e-verify-changes', req);
+    let response: WorkResponse | undefined;
+    entry.completeListeners.add((r) => { response = r; });
+
+    vi.spyOn(BaseExecutor.prototype as any, 'pushBranchToRemote').mockResolvedValue('push denied');
+
+    await executor.testHandleProcessExit('e-verify-changes', req, cloneDir, 0, { branch: 'invoker/verify-changes' });
+
+    expect(response?.status).toBe('failed');
+    expect(response?.outputs.exitCode).toBe(1);
+    expect(response?.outputs.error).toBe('push denied');
+  });
+
   it('marks codex ai_task as failed when semantic sandbox denial appears in output despite exit 0', async () => {
     execSync('git checkout -b invoker/semantic-fail', { cwd: cloneDir });
 

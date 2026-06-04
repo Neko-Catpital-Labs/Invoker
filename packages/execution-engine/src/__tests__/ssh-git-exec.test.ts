@@ -467,6 +467,9 @@ describe('buildRecordAndPushScript', () => {
     expect(script).toContain('git commit --allow-empty -F');
     expect(script).toContain('git commit -F');
     expect(script).toContain('HASH=$(git rev-parse HEAD)');
+    expect(script).toContain('__INVOKER_RECORD_KIND__');
+    expect(script).toContain('__INVOKER_COMMIT_HASH__');
+    expect(script).toContain('__INVOKER_PUSH_FAILED__');
     expect(script).toContain('git push origin "$BR:refs/heads/$BR"');
     expect(script).toContain('printf "%s" "$HASH"');
   });
@@ -580,6 +583,21 @@ describe('parseRecordAndPushOutput', () => {
   it('uses stderr when stdout is empty on failure', () => {
     const result = parseRecordAndPushOutput('', 1, 'fatal: unable to access remote');
     expect(result.error).toContain('unable to access remote');
+  });
+
+  it('recovers empty commit metadata when push fails after commit', () => {
+    const stdout = [
+      '[branch abc123] invoker: verify',
+      '__INVOKER_RECORD_KIND__=empty',
+      '__INVOKER_COMMIT_HASH__=abcdef1234567890abcdef1234567890abcdef12',
+      '__INVOKER_PUSH_FAILED__=128',
+      '',
+    ].join('\n');
+    const result = parseRecordAndPushOutput(stdout, 128, 'fatal: unable to access remote');
+
+    expect(result.error).toContain('remote commit or push failed');
+    expect(result.commitHash).toBe('abcdef1234567890abcdef1234567890abcdef12');
+    expect(result.emptyResultCommit).toBe(true);
   });
 });
 

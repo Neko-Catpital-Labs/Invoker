@@ -46,6 +46,11 @@ interface HeartbeatOptions {
   emitIntervalHeartbeat?: boolean;
 }
 
+export interface TaskResultRecord {
+  commitHash: string | null;
+  emptyResultCommit: boolean;
+}
+
 export interface ClaudeSessionParams {
   sessionId: string;
   cliArgs: string[];
@@ -690,16 +695,41 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     request: WorkRequest,
     exitCode: number,
   ): Promise<string | null> {
+    const result = await this.recordTaskResultWithMetadata(cwd, request, exitCode);
+    return result.commitHash;
+  }
+
+  protected async recordTaskResultWithMetadata(
+    cwd: string,
+    request: WorkRequest,
+    exitCode: number,
+  ): Promise<TaskResultRecord> {
     try {
       const hash = await this.autoCommit(cwd, request);
-      if (hash) return hash;
+      if (hash) return { commitHash: hash, emptyResultCommit: false };
 
       const message = this.buildResultCommitMessage(request, exitCode);
       await this.execGitSimple(['commit', '--allow-empty', '-m', message], cwd);
-      return (await this.execGitSimple(['rev-parse', 'HEAD'], cwd)).trim();
+      return {
+        commitHash: (await this.execGitSimple(['rev-parse', 'HEAD'], cwd)).trim(),
+        emptyResultCommit: true,
+      };
     } catch {
-      return null;
+      return { commitHash: null, emptyResultCommit: false };
     }
+  }
+
+  protected isPublishFailureNonBlocking(
+    request: WorkRequest,
+    exitCode: number,
+    result: TaskResultRecord,
+    publishError: string | undefined,
+  ): boolean {
+    return publishError !== undefined
+      && exitCode === 0
+      && request.actionType === 'command'
+      && request.inputs.allowUnpublishedEmptyResult === true
+      && result.emptyResultCommit;
   }
 
   /**
@@ -949,10 +979,11 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     }
 
     let commitHash: string | undefined;
+    let resultRecord: TaskResultRecord = { commitHash: null, emptyResultCommit: false };
     let status: 'completed' | 'failed' = effectiveExitCode === 0 ? 'completed' : 'failed';
     try {
-      const hash = await this.recordTaskResult(cwd, request, effectiveExitCode);
-      commitHash = hash ?? undefined;
+      resultRecord = await this.recordTaskResultWithMetadata(cwd, request, effectiveExitCode);
+      commitHash = resultRecord.commitHash ?? undefined;
     } catch (err) {
       this.emitOutput(executionId,
         `[${this.type}] recordTaskResult error: ${err}\n`);
@@ -963,7 +994,19 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     if (opts?.branch) {
       pushError = await this.pushBranchToRemote(cwd, opts.branch, executionId);
     }
-    if (effectiveExitCode === 0 && pushError !== undefined && opts?.branch) {
+    const nonBlockingPublishFailure = this.isPublishFailureNonBlocking(
+      request,
+      effectiveExitCode,
+      resultRecord,
+      pushError,
+    );
+    if (nonBlockingPublishFailure) {
+      this.emitOutput(
+        executionId,
+        `[${this.type}] Branch publish failed for terminal empty command result; preserving command success.\n`,
+      );
+    }
+    if (effectiveExitCode === 0 && pushError !== undefined && opts?.branch && !nonBlockingPublishFailure) {
       status = 'failed';
     }
 
