@@ -146,7 +146,7 @@ describe('WorkflowGraph', () => {
     expect(edge).toHaveAttribute('data-target', 'wf-b');
   });
 
-  it('re-fits after a non-empty workflow snapshot replacement', async () => {
+  it('preserves the camera across a non-empty workflow snapshot replacement', async () => {
     const workflows = new Map([
       ['wf-a', wf('wf-a', 'running')],
     ]);
@@ -165,6 +165,8 @@ describe('WorkflowGraph', () => {
       />,
     );
 
+    // Clear the initial first-render fit so we can assert topology changes
+    // afterwards do not move the camera.
     fitViewMock.mockClear();
 
     const refreshedWorkflows = new Map([
@@ -187,9 +189,9 @@ describe('WorkflowGraph', () => {
       />,
     );
 
-    await vi.waitFor(() => {
-      expect(fitViewMock).toHaveBeenCalledWith({ padding: 0.2 });
-    });
-    expect(screen.getByTestId('workflow-node-wf-b')).toBeInTheDocument();
+    // The new workflow renders without remounting React Flow…
+    expect(await screen.findByTestId('workflow-node-wf-b')).toBeInTheDocument();
+    // …and the user-owned camera is preserved (no implicit re-fit).
+    expect(fitViewMock).not.toHaveBeenCalled();
   });
 });
