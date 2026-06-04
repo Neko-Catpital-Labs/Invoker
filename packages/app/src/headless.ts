@@ -1053,7 +1053,11 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       await headlessOwnerServe(deps);
       break;
     case 'worker':
-      await headlessWorker(args[1], deps);
+      if (args[1] === '--help' || args[1] === '-h' || args[2] === '--help' || args[2] === '-h') {
+        printHeadlessUsage();
+      } else {
+        await headlessWorker(args[1], deps);
+      }
       break;
     // ── New grouped commands ──
     case 'query':
