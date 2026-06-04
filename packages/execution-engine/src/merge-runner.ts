@@ -87,6 +87,87 @@ function setMergeGateReviewReady(
   orchestrator.setTaskAwaitingApproval?.(taskId, changes);
 }
 
+export interface MergeGateExecutionLineage {
+  attemptId?: string;
+  executionGeneration: number;
+}
+
+function captureMergeGateLineage(task: TaskState): MergeGateExecutionLineage {
+  return {
+    attemptId: task.execution.selectedAttemptId,
+    executionGeneration: task.execution.generation ?? 0,
+  };
+}
+
+export function isMergeGateLineageCurrent(
+  host: MergeRunnerHost,
+  taskId: string,
+  lineage: MergeGateExecutionLineage,
+): boolean {
+  const current = host.orchestrator.getTask(taskId);
+  if (!current) return true;
+  if (lineage.attemptId && current.execution.selectedAttemptId !== lineage.attemptId) return false;
+  return (current.execution.generation ?? 0) === lineage.executionGeneration;
+}
+
+function logStaleMergeGateSideEffect(
+  host: MergeRunnerHost,
+  taskId: string,
+  lineage: MergeGateExecutionLineage,
+  tag: string,
+): void {
+  const current = host.orchestrator.getTask(taskId);
+  mergeTrace('MERGE_GATE_STALE_SIDE_EFFECT_SKIPPED', {
+    taskId,
+    tag,
+    attemptId: lineage.attemptId ?? null,
+    generation: lineage.executionGeneration,
+    currentAttemptId: current?.execution.selectedAttemptId ?? null,
+    currentGeneration: current?.execution.generation ?? null,
+  });
+  try {
+    host.persistence.logEvent?.(taskId, 'merge-gate.stale-side-effect-skipped', {
+      tag,
+      attemptId: lineage.attemptId,
+      generation: lineage.executionGeneration,
+      currentAttemptId: current?.execution.selectedAttemptId,
+      currentGeneration: current?.execution.generation ?? 0,
+    });
+  } catch {
+    /* diagnostics only */
+  }
+}
+
+export function updateMergeGateTaskIfCurrent(
+  host: MergeRunnerHost,
+  taskId: string,
+  lineage: MergeGateExecutionLineage,
+  changes: TaskStateChanges,
+  tag: string,
+): boolean {
+  if (!isMergeGateLineageCurrent(host, taskId, lineage)) {
+    logStaleMergeGateSideEffect(host, taskId, lineage, tag);
+    return false;
+  }
+  host.persistence.updateTask(taskId, changes);
+  return true;
+}
+
+function setMergeGateReviewReadyIfCurrent(
+  host: MergeRunnerHost,
+  taskId: string,
+  lineage: MergeGateExecutionLineage,
+  changes: TaskStateChanges,
+  tag: string,
+): boolean {
+  if (!isMergeGateLineageCurrent(host, taskId, lineage)) {
+    logStaleMergeGateSideEffect(host, taskId, lineage, tag);
+    return false;
+  }
+  setMergeGateReviewReady(host, taskId, changes);
+  return true;
+}
+
 function buildMergeConflictJson(errorText: string, failedBranch: string): string | undefined {
   const hasConflictMarkers =
     errorText.includes('CONFLICT (') ||
@@ -408,8 +489,9 @@ export interface MergeGateActionResult {
 export async function runMergeGateActionImpl(
   host: MergeRunnerHost,
   task: TaskState,
-  opts: { gateWorkspacePath?: string } = {},
+  opts: { gateWorkspacePath?: string; lineage?: MergeGateExecutionLineage } = {},
 ): Promise<MergeGateActionResult> {
+  const lineage = opts.lineage ?? captureMergeGateLineage(task);
   const workflowId = task.config.workflowId;
   const workflow = workflowId
     ? host.persistence.loadWorkflow(workflowId)
@@ -441,13 +523,19 @@ export async function runMergeGateActionImpl(
       `mergeMode=${mergeMode} onFinish=${onFinish} dbWorkspacePath=${safeGetWorkspacePath(host.persistence, task.id) ?? 'NULL'}`,
   );
 
-  host.persistence.updateTask(task.id, {
-    execution: {
-      reviewUrl: undefined,
-      reviewId: undefined,
-      reviewStatus: undefined,
+  updateMergeGateTaskIfCurrent(
+    host,
+    task.id,
+    lineage,
+    {
+      execution: {
+        reviewUrl: undefined,
+        reviewId: undefined,
+        reviewStatus: undefined,
+      },
     },
-  });
+    'clear-review-metadata',
+  );
 
   // Create a persistent gate worktree so workspacePath is never the main repo.
   // Use baseBranch as the ref because featureBranch may not exist yet
@@ -501,7 +589,8 @@ export async function runMergeGateActionImpl(
         response = {
           requestId: `merge-${task.id}`,
           actionId: task.id,
-          executionGeneration: task.execution.generation ?? 0,
+          attemptId: lineage.attemptId,
+          executionGeneration: lineage.executionGeneration,
           status: 'review_ready',
           outputs: { exitCode: 0, summary, branch: featureBranch ?? undefined },
         };
@@ -575,7 +664,8 @@ export async function runMergeGateActionImpl(
         response = {
           requestId: `merge-${task.id}`,
           actionId: task.id,
-          executionGeneration: task.execution.generation ?? 0,
+          attemptId: lineage.attemptId,
+          executionGeneration: lineage.executionGeneration,
           status: 'review_ready',
           outputs: {
             exitCode: 0,
@@ -603,7 +693,8 @@ export async function runMergeGateActionImpl(
       response = {
         requestId: `merge-${task.id}`,
         actionId: task.id,
-        executionGeneration: task.execution.generation ?? 0,
+        attemptId: lineage.attemptId,
+        executionGeneration: lineage.executionGeneration,
         status: 'completed',
         outputs: { exitCode: 0, summary, branch: featureBranch ?? undefined },
       };
@@ -611,7 +702,8 @@ export async function runMergeGateActionImpl(
       response = {
         requestId: `merge-${task.id}`,
         actionId: task.id,
-        executionGeneration: task.execution.generation ?? 0,
+        attemptId: lineage.attemptId,
+        executionGeneration: lineage.executionGeneration,
         status: 'failed',
         outputs: {
           exitCode: 1,
@@ -633,7 +725,8 @@ export async function runMergeGateActionImpl(
       response = {
         requestId: `merge-${task.id}`,
         actionId: task.id,
-        executionGeneration: task.execution.generation ?? 0,
+        attemptId: lineage.attemptId,
+        executionGeneration: lineage.executionGeneration,
         status: 'review_ready',
         outputs: { exitCode: 0, summary, branch: featureBranch ?? undefined },
       };
@@ -648,7 +741,8 @@ export async function runMergeGateActionImpl(
     response = {
       requestId: `merge-${task.id}`,
       actionId: task.id,
-      executionGeneration: task.execution.generation ?? 0,
+      attemptId: lineage.attemptId,
+      executionGeneration: lineage.executionGeneration,
       status: 'completed',
       outputs: { exitCode: 0, summary, branch: featureBranch ?? undefined },
     };
@@ -685,7 +779,8 @@ export async function executeMergeNodeImpl(
   host: MergeRunnerHost,
   task: TaskState,
 ): Promise<void> {
-  const result = await runMergeGateActionImpl(host, task);
+  const lineage = captureMergeGateLineage(task);
+  const result = await runMergeGateActionImpl(host, task, { lineage });
   const { response } = result;
   const legacyConfig = {
     ...(result.taskChanges.config ?? {}),
@@ -698,11 +793,11 @@ export async function executeMergeNodeImpl(
     config: legacyConfig,
   };
 
-  host.persistence.updateTask(task.id, legacyChanges);
+  updateMergeGateTaskIfCurrent(host, task.id, lineage, legacyChanges, 'legacy-merge-metadata');
   host.callbacks.onComplete?.(task.id, response);
 
   if (response.status === 'review_ready') {
-    setMergeGateReviewReady(host, task.id, legacyChanges);
+    setMergeGateReviewReadyIfCurrent(host, task.id, lineage, legacyChanges, 'legacy-review-ready');
     await startReviewReadyDependents(host);
   } else {
     const newlyStarted = host.orchestrator.handleWorkerResponse(response) ?? [];
@@ -832,6 +927,7 @@ export async function publishAfterFixImpl(
   host: MergeRunnerHost,
   task: TaskState,
 ): Promise<void> {
+  const lineage = captureMergeGateLineage(task);
   const workflowId = task.config.workflowId;
   const workflow = workflowId
     ? host.persistence.loadWorkflow(workflowId)
@@ -871,15 +967,21 @@ export async function publishAfterFixImpl(
         `[merge-gate-workspace] publishAfterFix early return (no featureBranch) task=${task.id} ` +
           `will persist workspacePath=${gateWorkspacePath ?? 'NULL'}`,
       );
-      setMergeGateReviewReady(host, task.id, {
-        config: { runnerKind: 'worktree', summary },
-        execution: {
-          workspacePath: gateWorkspacePath,
-          fixedIntegrationSha: undefined,
-          fixedIntegrationRecordedAt: undefined,
-          fixedIntegrationSource: undefined,
+      setMergeGateReviewReadyIfCurrent(
+        host,
+        task.id,
+        lineage,
+        {
+          config: { runnerKind: 'worktree', summary },
+          execution: {
+            workspacePath: gateWorkspacePath,
+            fixedIntegrationSha: undefined,
+            fixedIntegrationRecordedAt: undefined,
+            fixedIntegrationSource: undefined,
+          },
         },
-      });
+        'post-fix-no-feature-branch',
+      );
       await startReviewReadyDependents(host);
       return;
     }
@@ -1079,19 +1181,25 @@ export async function publishAfterFixImpl(
 
 
 
-      setMergeGateReviewReady(host, task.id, {
-        config: { runnerKind: 'worktree', summary },
-        execution: {
-          branch: featureBranch,
-          workspacePath: gateWorkspacePath,
-          reviewUrl: result.url,
-          reviewId: result.identifier,
-          reviewStatus: 'Awaiting review',
-          fixedIntegrationSha: undefined,
-          fixedIntegrationRecordedAt: undefined,
-          fixedIntegrationSource: undefined,
+      setMergeGateReviewReadyIfCurrent(
+        host,
+        task.id,
+        lineage,
+        {
+          config: { runnerKind: 'worktree', summary },
+          execution: {
+            branch: featureBranch,
+            workspacePath: gateWorkspacePath,
+            reviewUrl: result.url,
+            reviewId: result.identifier,
+            reviewStatus: 'Awaiting review',
+            fixedIntegrationSha: undefined,
+            fixedIntegrationRecordedAt: undefined,
+            fixedIntegrationSource: undefined,
+          },
         },
-      });
+        'post-fix-external-review-ready',
+      );
       await startReviewReadyDependents(host);
       return;
     }
@@ -1113,22 +1221,34 @@ export async function publishAfterFixImpl(
       });
       const reviewUrl = await host.execPr(baseBranch, featureBranch, workflow?.name ?? 'Workflow', prBody, consolidateDir);
       console.log(`[merge] Post-fix: created pull request ${reviewUrl}`);
-      host.persistence.updateTask(task.id, {
-        config: { summary },
-        execution: { reviewUrl },
-      });
+      updateMergeGateTaskIfCurrent(
+        host,
+        task.id,
+        lineage,
+        {
+          config: { summary },
+          execution: { reviewUrl },
+        },
+        'post-fix-review-url',
+      );
     }
 
-    setMergeGateReviewReady(host, task.id, {
-      config: { runnerKind: 'worktree', summary },
-      execution: {
-        branch: featureBranch,
-        workspacePath: gateWorkspacePath,
-        fixedIntegrationSha: undefined,
-        fixedIntegrationRecordedAt: undefined,
-        fixedIntegrationSource: undefined,
+    setMergeGateReviewReadyIfCurrent(
+      host,
+      task.id,
+      lineage,
+      {
+        config: { runnerKind: 'worktree', summary },
+        execution: {
+          branch: featureBranch,
+          workspacePath: gateWorkspacePath,
+          fixedIntegrationSha: undefined,
+          fixedIntegrationRecordedAt: undefined,
+          fixedIntegrationSource: undefined,
+        },
       },
-    });
+      'post-fix-review-ready',
+    );
     await startReviewReadyDependents(host);
     mergeTrace('PUBLISH_AFTER_FIX_DONE', { taskId: task.id });
   } catch (err) {
@@ -1150,7 +1270,8 @@ export async function publishAfterFixImpl(
     const failedResponse: WorkResponse = {
       requestId: `postfix-${task.id}`,
       actionId: task.id,
-      executionGeneration: task.execution.generation ?? 0,
+      attemptId: lineage.attemptId,
+      executionGeneration: lineage.executionGeneration,
       status: 'failed',
       outputs: { exitCode: 1, error: outputError },
     };
