@@ -124,6 +124,23 @@ describe('loadConfig', () => {
     expect(config.autoFixCi).toBe(true);
   });
 
+  it('reads externalFailureRecovery from user config', () => {
+    const externalFailureRecovery = {
+      enabled: true,
+      command: 'bash scripts/prod-recreate-supervisor.sh',
+      cwd: '/srv/invoker',
+      cooldownSeconds: 300,
+      recoverFailedTasks: true,
+      stalledTaskSeconds: 600,
+    };
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ externalFailureRecovery }),
+    );
+    const config = loadConfig();
+    expect(config.externalFailureRecovery).toEqual(externalFailureRecovery);
+  });
+
   it('loadConfig picks up browser field', () => {
     writeFileSync(
       join(fakeHome, '.invoker', 'config.json'),

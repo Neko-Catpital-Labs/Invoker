@@ -64,9 +64,10 @@ import { trackWorkflow } from './headless-watch.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import type { RuntimeServices } from '@invoker/runtime-service';
-import { startWorkerRuntime, type WorkerRuntimeController } from './worker-runtime.js';
+import { type WorkerRuntimeController } from './worker-runtime.js';
 import { parseHeadlessFixArgs } from './auto-fix-intents.js';
 import { startAutoFixWorker } from './autofix-worker.js';
+import { startExternalRecoveryWorker } from './external-recovery-worker.js';
 import { buildReviewGateCiFailedLifecycleEvent } from './lifecycle-events.js';
 
 export { bumpGenerationAndRecreate } from './workflow-actions.js';
@@ -1014,7 +1015,7 @@ function resolveHeadlessWorkerName(name: string | undefined): HeadlessWorkerName
 
 async function headlessWorker(
   workerNameArg: string | undefined,
-  deps: Pick<HeadlessDeps, 'logger' | 'messageBus' | 'persistence' | 'orchestrator' | 'invokerConfig'>,
+  deps: Pick<HeadlessDeps, 'logger' | 'messageBus' | 'persistence' | 'orchestrator' | 'invokerConfig' | 'repoRoot'>,
 ): Promise<void> {
   const workerName = resolveHeadlessWorkerName(workerNameArg);
   const selectedWorkers = workerName === 'all' ? CONCRETE_HEADLESS_WORKERS : [workerName];
@@ -1029,13 +1030,14 @@ async function headlessWorker(
         pollIntervalMs: deps.invokerConfig.workerPollIntervalMs,
       });
     }
-    return startWorkerRuntime<never>({
-      name,
-      messageBus: deps.messageBus,
+    return startExternalRecoveryWorker({
       logger: deps.logger,
+      messageBus: deps.messageBus,
+      persistence: deps.persistence,
+      orchestrator: deps.orchestrator,
+      repoRoot: deps.repoRoot,
+      getConfig: () => loadConfig(),
       pollIntervalMs: deps.invokerConfig.workerPollIntervalMs,
-      scan: () => [],
-      submit: async () => {},
     });
   });
 
