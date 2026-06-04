@@ -521,6 +521,51 @@ export class TaskRunner {
     }
   }
 
+  /**
+   * Narrow post-start lineage check: has the live task advanced to a newer
+   * generation than the one captured when this launch began? Attempt-id
+   * mismatches are already rejected by `markTaskRunningAfterLaunch`, so this
+   * guard covers only the generation dimension that method does not validate.
+   * Returns `false` when the task is no longer visible to the orchestrator —
+   * we cannot confirm the lineage advanced, so we defer to the normal path.
+   */
+  private hasGenerationAdvancedSinceLaunch(taskId: string, startGeneration: number): boolean {
+    const current = this.orchestrator.getTask(taskId);
+    if (!current) return false;
+    return (current.execution.generation ?? 0) !== startGeneration;
+  }
+
+  /**
+   * Emit a diagnostic when a launch that started at generation N resolves
+   * `executor.start()` only after the live task has advanced past it. The
+   * post-start metadata captured on the returned handle is discarded rather
+   * than written; this records what was dropped for post-mortem.
+   */
+  private logStalePostStartLaunch(
+    taskId: string,
+    attemptId: string,
+    startGeneration: number,
+    executorType: string,
+    handle: ExecutorHandle,
+  ): void {
+    try {
+      const current = this.orchestrator.getTask(taskId);
+      this.persistence.logEvent?.(taskId, 'task.executor.post-start-stale', {
+        attemptId,
+        generation: startGeneration,
+        currentAttemptId: current?.execution.selectedAttemptId,
+        currentGeneration: current?.execution.generation ?? 0,
+        runnerKind: executorType,
+        workspacePath: handle.workspacePath,
+        branch: handle.branch,
+        agentSessionId: handle.agentSessionId,
+        containerId: handle.containerId,
+      });
+    } catch {
+      // Diagnostics are best-effort; stale launches must not mutate live execution state.
+    }
+  }
+
   async executeTask(task: TaskState, dispatchOpts?: LaunchDispatchOptions): Promise<void> {
     traceExecution(
       `${RESTART_TO_BRANCH_TRACE} TaskRunner.executeTask BEGIN taskId=${task.id} isMergeNode=${Boolean(task.config.isMergeNode)} status=${task.status}`,
@@ -1013,11 +1058,25 @@ export class TaskRunner {
       hasWorkspacePath: Boolean(handle.workspacePath),
       hasAgentSessionId: Boolean(handle.agentSessionId),
     });
+    // Lineage guard: a launch accepted at generation N must not persist
+    // post-start metadata (workspacePath, branch, agentSessionId, containerId,
+    // heartbeat) or register an active execution once the live task has
+    // advanced to generation N+1 — even when the attemptId is unchanged.
+    // markTaskRunningAfterLaunch already rejects a mismatched selectedAttemptId,
+    // but it does not validate the launch-time generation, so a same-attempt
+    // generation bump (e.g. an in-place restart) would otherwise slip through
+    // and clobber the live attempt's state. Route the stale launch through the
+    // existing kill/cleanup rejection path below.
+    const launchStale = this.hasGenerationAdvancedSinceLaunch(task.id, startGeneration);
+    if (launchStale) {
+      this.logStalePostStartLaunch(task.id, attemptId, startGeneration, executor.type, handle);
+    }
     const launchAccepted =
-      this.orchestrator.markTaskRunningAfterLaunch?.(task.id, attemptId) ?? true;
+      !launchStale && (this.orchestrator.markTaskRunningAfterLaunch?.(task.id, attemptId) ?? true);
     if (!launchAccepted) {
       this.logger.warn(
-        `[TaskRunner] launch rejected as stale/non-executable for task=${task.id} attemptId=${attemptId}; killing spawned process`,
+        `[TaskRunner] launch rejected as stale/non-executable for task=${task.id} attemptId=${attemptId} ` +
+          `generation=${startGeneration} stale=${launchStale}; killing spawned process`,
       );
       try {
         await executor.kill(handle);
@@ -1027,7 +1086,7 @@ export class TaskRunner {
       this.releasePoolSelectionLease(this.pendingPoolSelections.get(task.id));
       this.pendingPoolSelections.delete(task.id);
       await this.cleanupPerTaskDockerExecutor(task);
-      bench('markTaskRunningAfterLaunch.rejected');
+      bench('markTaskRunningAfterLaunch.rejected', { stale: launchStale });
       return;
     }
     bench('markTaskRunningAfterLaunch.accepted');

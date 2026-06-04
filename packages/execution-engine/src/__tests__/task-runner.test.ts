@@ -1424,6 +1424,181 @@ describe('TaskRunner', () => {
     });
   });
 
+  describe('stale post-start lineage guard', () => {
+    it('kills the spawned handle and skips post-start metadata when generation advances while attemptId is unchanged', async () => {
+      const handleWorkerResponse = vi.fn();
+      const updateTask = vi.fn();
+      const updateAttempt = vi.fn();
+      const logEvent = vi.fn();
+      const markTaskRunningAfterLaunch = vi.fn(() => true);
+
+      // The live task object is mutated in place; the orchestrator returns it,
+      // so isLaunchStale observes the bumped generation after start() resolves.
+      const task = makeTask({
+        id: 'post-start-stale',
+        status: 'running',
+        config: { command: 'echo hi', runnerKind: 'worktree' as any },
+        execution: { selectedAttemptId: 'attempt-1', generation: 1 },
+      });
+      const orchestrator = {
+        getTask: () => task,
+        handleWorkerResponse,
+        markTaskRunningAfterLaunch,
+      };
+
+      // executor.start() resolves only after the test advances the generation.
+      let resolveStart!: (handle: any) => void;
+      const startPromise = new Promise<any>((resolve) => { resolveStart = resolve; });
+      const executor = {
+        type: 'worktree',
+        start: vi.fn(async () => await startPromise),
+        onComplete: vi.fn(() => () => {}),
+        onOutput: vi.fn(() => () => {}),
+        onHeartbeat: vi.fn(() => () => {}),
+        kill: vi.fn(async () => {}),
+        destroyAll: vi.fn(),
+      };
+      const registry = {
+        getDefault: () => executor,
+        get: () => executor,
+        getAll: () => [executor],
+      };
+
+      const runner = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: { updateTask, updateAttempt, logEvent } as any,
+        executorRegistry: registry as any,
+        cwd: '/tmp',
+      });
+
+      const run = runner.executeTask(task);
+      await vi.waitFor(() => expect(executor.start).toHaveBeenCalledTimes(1));
+      // Live task advances to generation N+1 while start() is still pending.
+      task.execution.generation = 2;
+      const handle = {
+        executionId: 'exec-post-start-stale',
+        taskId: 'post-start-stale',
+        workspacePath: '/tmp/post-start-stale-ws',
+        branch: 'experiment/post-start-stale',
+        agentSessionId: 'sess-stale',
+        containerId: 'container-stale',
+      };
+      resolveStart(handle);
+      await run;
+
+      // Stale post-start metadata must NOT be written to the task row.
+      expect(updateTask).not.toHaveBeenCalledWith(
+        'post-start-stale',
+        expect.objectContaining({
+          execution: expect.objectContaining({ workspacePath: '/tmp/post-start-stale-ws' }),
+        }),
+      );
+      // A stale launch must not transition the task to running.
+      expect(markTaskRunningAfterLaunch).not.toHaveBeenCalled();
+      // The spawned handle must be killed, consistent with the stale-attempt path.
+      expect(executor.kill).toHaveBeenCalledWith(handle);
+      // No active execution registered: completion/heartbeat wiring happens
+      // only past the guard, so neither callback was attached.
+      expect(executor.onComplete).not.toHaveBeenCalled();
+      expect(executor.onHeartbeat).not.toHaveBeenCalled();
+      // No failed WorkResponse is synthesized for a superseded launch.
+      expect(handleWorkerResponse).not.toHaveBeenCalled();
+      // Diagnostic event records the dropped launch-time metadata.
+      expect(logEvent).toHaveBeenCalledWith(
+        'post-start-stale',
+        'task.executor.post-start-stale',
+        expect.objectContaining({
+          attemptId: 'attempt-1',
+          generation: 1,
+          currentAttemptId: 'attempt-1',
+          currentGeneration: 2,
+          runnerKind: 'worktree',
+          workspacePath: '/tmp/post-start-stale-ws',
+          branch: 'experiment/post-start-stale',
+          agentSessionId: 'sess-stale',
+          containerId: 'container-stale',
+        }),
+      );
+    });
+
+    it('persists post-start metadata and registers the execution when lineage is current', async () => {
+      const updateTask = vi.fn();
+      const updateAttempt = vi.fn();
+      const markTaskRunningAfterLaunch = vi.fn(() => true);
+      const task = makeTask({
+        id: 'post-start-current',
+        status: 'running',
+        config: { command: 'echo hi', runnerKind: 'worktree' as any },
+        execution: { selectedAttemptId: 'attempt-1', generation: 1 },
+      });
+      const orchestrator = {
+        getTask: () => task,
+        handleWorkerResponse: vi.fn(),
+        markTaskRunningAfterLaunch,
+      };
+
+      const handle = {
+        executionId: 'exec-post-start-current',
+        taskId: 'post-start-current',
+        workspacePath: '/tmp/post-start-current-ws',
+        branch: 'experiment/post-start-current',
+        agentSessionId: 'sess-current',
+      };
+      let completeCb: ((response: WorkResponse) => void) | undefined;
+      const executor = {
+        type: 'worktree',
+        start: vi.fn(async () => {
+          // Fire completion on the next tick so executeTask resolves.
+          setTimeout(() => completeCb?.({
+            requestId: 'req-post-start-current',
+            actionId: 'post-start-current',
+            executionGeneration: 1,
+            status: 'completed',
+            outputs: { exitCode: 0 },
+          }), 0);
+          return handle;
+        }),
+        onComplete: vi.fn((_h: any, cb: any) => { completeCb = cb; return () => {}; }),
+        onOutput: vi.fn(() => () => {}),
+        onHeartbeat: vi.fn(() => () => {}),
+        kill: vi.fn(),
+        destroyAll: vi.fn(),
+      };
+      const registry = {
+        getDefault: () => executor,
+        get: () => executor,
+        getAll: () => [executor],
+      };
+
+      const runner = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: { updateTask, updateAttempt } as any,
+        executorRegistry: registry as any,
+        cwd: '/tmp',
+      });
+
+      await runner.executeTask(task);
+
+      // The current launch transitions the task to running...
+      expect(markTaskRunningAfterLaunch).toHaveBeenCalledWith('post-start-current', 'attempt-1');
+      // ...persists the post-start metadata...
+      expect(updateTask).toHaveBeenCalledWith(
+        'post-start-current',
+        expect.objectContaining({
+          execution: expect.objectContaining({
+            workspacePath: '/tmp/post-start-current-ws',
+            branch: 'experiment/post-start-current',
+            agentSessionId: 'sess-current',
+          }),
+        }),
+      );
+      // ...and registers the active execution (completion wiring attached).
+      expect(executor.onComplete).toHaveBeenCalled();
+      // The valid handle is not killed.
+      expect(executor.kill).not.toHaveBeenCalled();
+    });
+  });
+
   describe('upstream branch metadata guard', () => {
     it('fails task when a completed worktree dep has no branch', async () => {
       const tasks = new Map<string, TaskState>();
