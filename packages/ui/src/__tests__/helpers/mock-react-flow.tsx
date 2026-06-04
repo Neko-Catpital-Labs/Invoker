@@ -108,7 +108,24 @@ export function createReactFlowMock() {
     __fitViewMock: fitView,
     __getZoomMock: getZoom,
     __getViewportMock: getViewport,
-    applyNodeChanges: vi.fn((changes: unknown[], nodes: unknown[]) => nodes),
+    // Faithful-enough applyNodeChanges: real @xyflow/react records measured
+    // dimensions on the node (node.measured) for 'dimensions' changes and flips
+    // node.selected for 'select' changes. The TaskDAG relies on measured being
+    // preserved across task-delta re-renders, so the mock must mirror that.
+    applyNodeChanges: vi.fn((changes: Array<Record<string, any>>, nodes: Array<Record<string, any>>) => {
+      const next = nodes.map((node) => ({ ...node }));
+      const byId = new Map(next.map((node) => [node.id as string, node]));
+      for (const change of changes) {
+        const node = byId.get(change.id as string);
+        if (!node) continue;
+        if (change.type === 'dimensions' && change.dimensions) {
+          node.measured = { ...change.dimensions };
+        } else if (change.type === 'select') {
+          node.selected = change.selected;
+        }
+      }
+      return next;
+    }),
     Background: () => null,
     Controls: () => null,
     MarkerType: { ArrowClosed: 'arrowclosed' },
