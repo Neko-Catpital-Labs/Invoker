@@ -225,6 +225,111 @@ describe('SshExecutor managed workspace mode', () => {
     expect(callFinalize).toEqual({ branch: handle.branch, worktreePath: handle.workspacePath });
   });
 
+  it('redirects stdin from /dev/null for SSH agents that ignore stdin', async () => {
+    const agent = {
+      name: 'codex',
+      stdinMode: 'ignore' as const,
+      buildCommand: vi.fn(() => ({
+        cmd: 'codex',
+        args: ['exec', '--json', 'bootstrap prompt'],
+        sessionId: 'codex-session',
+      })),
+      buildResumeArgs: vi.fn(() => ({ cmd: 'codex', args: ['resume', 'codex-session'] })),
+    };
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      agentRegistry: {
+        getOrThrow: () => agent,
+        getSessionDriver: () => undefined,
+      } as any,
+    }) as any;
+
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return [
+          '__INVOKER_BASE_REF__=origin/main',
+          '__INVOKER_BASE_HEAD__=abc123def456abc123def456abc123def456abc1',
+        ].join('\n');
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+    vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
+    const spawnStub = vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any) => handle,
+    );
+
+    await ssh.start(makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'do the task',
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+        executionAgent: 'codex',
+      },
+    }));
+
+    const [, , , callScript] = spawnStub.mock.calls[0];
+    expect(callScript).toContain("codex 'exec' '--json' 'bootstrap prompt' < /dev/null");
+  });
+
+  it('preserves stdin for SSH agents that pipe stdin', async () => {
+    const agent = {
+      name: 'mock-pipe',
+      stdinMode: 'pipe' as const,
+      buildCommand: vi.fn(() => ({
+        cmd: 'mock-agent',
+        args: ['--run'],
+        sessionId: 'pipe-session',
+      })),
+      buildResumeArgs: vi.fn(() => ({ cmd: 'mock-agent', args: ['--resume', 'pipe-session'] })),
+    };
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      agentRegistry: {
+        getOrThrow: () => agent,
+        getSessionDriver: () => undefined,
+      } as any,
+    }) as any;
+
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return [
+          '__INVOKER_BASE_REF__=origin/main',
+          '__INVOKER_BASE_HEAD__=abc123def456abc123def456abc123def456abc1',
+        ].join('\n');
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+    vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
+    const spawnStub = vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any) => handle,
+    );
+
+    await ssh.start(makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'do the task',
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+        executionAgent: 'mock-pipe',
+      },
+    }));
+
+    const [, , , callScript] = spawnStub.mock.calls[0];
+    expect(callScript).toContain("mock-agent '--run'");
+    expect(callScript).not.toContain("mock-agent '--run' < /dev/null");
+  });
+
   it('reuses a managed SSH worktree by actionId when the old base is still compatible', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',
@@ -1006,8 +1111,6 @@ describe('SshExecutor entry lifecycle', () => {
 
     const handle = await ssh.start(request);
     const sshProcess = spawnedProcesses[spawnedProcesses.length - 1];
-    (sshProcess as any).exitCode = 0;
-
     let heartbeatCount = 0;
     let completed = false;
     ssh.onHeartbeat(handle, () => {
