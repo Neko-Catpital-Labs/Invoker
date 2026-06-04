@@ -364,6 +364,9 @@ export function buildRecordAndPushScript(opts: GitRecordAndPushOpts): string {
 WT=$(echo ${wtB} | base64 -d)
 ${bashNormalizeTildePath()}
 cd "$WT"
+export GIT_TERMINAL_PROMPT=0
+export GCM_INTERACTIVE=never
+export GIT_SSH_COMMAND="\${GIT_SSH_COMMAND:-ssh -o BatchMode=yes}"
 git add -A
 M=$(mktemp)
 trap 'rm -f "$M"' EXIT
