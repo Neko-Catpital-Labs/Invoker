@@ -1700,9 +1700,15 @@ export class Orchestrator {
           });
           return [];
         }
+        // Lineage check: when a response carries an executionGeneration it must
+        // match the live task's generation. This applies even when the response
+        // also carries a matching attemptId — a stale generation means the
+        // response belongs to a superseded execution of that attempt. Responses
+        // from older producers that omit executionGeneration remain accepted, so
+        // backwards compatibility is preserved; when both fields are present they
+        // must both match.
         const activeGeneration = this.getExecutionGeneration(earlyTask);
         if (
-          !response.attemptId &&
           response.executionGeneration !== undefined &&
           response.executionGeneration !== activeGeneration
         ) {

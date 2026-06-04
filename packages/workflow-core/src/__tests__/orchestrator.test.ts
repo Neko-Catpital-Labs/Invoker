@@ -7088,6 +7088,55 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask(taskId)?.status).toBe('running');
     });
 
+    it('rejects a response whose attempt id matches but whose execution generation is stale', () => {
+      orchestrator.loadPlan({
+        name: 'attempt-match-stale-generation-rejection',
+        tasks: [{ id: 't1', description: 'Task 1' }],
+      });
+      orchestrator.startExecution();
+
+      const taskId = sid(orchestrator, 0, 't1');
+      const runningTask = orchestrator.getTask(taskId)!;
+      const activeAttemptId = runningTask.execution.selectedAttemptId!;
+      const staleGeneration = runningTask.execution.generation ?? 0;
+
+      // Establish known live lineage, then advance ONLY the execution
+      // generation while keeping the SAME selected attempt. This is the gap
+      // the guard must close: the response's attempt id still matches the
+      // live task, but the generation it was produced under is now stale.
+      persistence.updateTask(taskId, {
+        execution: {
+          branch: 'experiment/live',
+          workspacePath: '/tmp/live-workspace',
+          generation: staleGeneration + 1,
+        },
+      });
+      orchestrator.syncFromDb(taskId.split('/')[0]!);
+
+      const live = orchestrator.getTask(taskId)!;
+      expect(live.execution.selectedAttemptId).toBe(activeAttemptId);
+      expect(live.execution.generation).toBe(staleGeneration + 1);
+
+      const result = orchestrator.handleWorkerResponse(
+        makeResponse({
+          actionId: taskId,
+          attemptId: activeAttemptId,
+          executionGeneration: staleGeneration,
+          status: 'completed',
+          outputs: { exitCode: 0, branch: 'experiment/stale' },
+        }),
+      );
+
+      // Both fields present → both must match. Stale generation ⇒ rejected,
+      // and the stale response leaves the live task untouched.
+      expect(result).toEqual([]);
+      const after = orchestrator.getTask(taskId)!;
+      expect(after.status).toBe('running');
+      expect(after.execution.selectedAttemptId).toBe(activeAttemptId);
+      expect(after.execution.branch).toBe('experiment/live');
+      expect(after.execution.workspacePath).toBe('/tmp/live-workspace');
+    });
+
     it('recreateWorkflow selects a fresh persisted attempt for recreated tasks', () => {
       orchestrator.loadPlan({
         name: 'recreate-attempt-refresh',
