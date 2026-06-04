@@ -441,6 +441,26 @@ test.describe('Visual proof capture', () => {
         },
       },
     ]);
+    await page.evaluate(({ cwd }) => {
+      (window as unknown as { __terminalCalls: string[] }).__terminalCalls = [];
+      window.__INVOKER_TEST_OPEN_TERMINAL__ = async (taskId: string) => {
+        (window as unknown as { __terminalCalls: string[] }).__terminalCalls.push(taskId);
+        return {
+          opened: true,
+          session: {
+            sessionId: `visual-proof-session-${taskId}`,
+            taskId,
+            status: 'running',
+            cwd,
+            command: 'bash',
+            args: ['-lc', 'sleep 5 && echo hello-alpha'],
+            mode: 'spawn',
+            attached: false,
+            createdAt: '2025-01-01T00:00:00.000Z',
+          },
+        };
+      };
+    }, { cwd: workspacePath });
 
     // Drawer starts collapsed.
     await expect(page.getByRole('button', { name: 'Expand terminal drawer' })).toBeVisible();
@@ -458,6 +478,9 @@ test.describe('Visual proof capture', () => {
     await expect(tabs.first()).toHaveAttribute('data-active', 'true');
     await expect(tabs.first()).toContainText('First test task');
     await expect(page.locator('[data-testid^="terminal-pane-"]').first()).toBeVisible();
+    const calls = await page.evaluate(() => (window as unknown as { __terminalCalls: string[] }).__terminalCalls);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain('task-alpha');
 
     await captureScreenshot(page, 'embedded-tabbed-terminal');
   });

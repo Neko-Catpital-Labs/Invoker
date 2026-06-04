@@ -313,8 +313,11 @@ async function ensureScreenshotViewport(page: Page): Promise<void> {
  * the Playwright config's toHaveScreenshot defaults.
  */
 export async function assertPageScreenshot(page: Page, name: string): Promise<void> {
+  // Capture mode writes before/after proof artifacts for review instead of
+  // comparing against committed regression baselines. DOM assertions in the
+  // calling test still run.
+  if (process.env.CAPTURE_MODE) return;
   // Skip pixel-level screenshot comparison on CI (no Linux baselines committed).
-  // DOM assertions in the calling test still run.
   if (process.env.CI) return;
   await ensureScreenshotViewport(page);
   await waitForStableUI(page);
