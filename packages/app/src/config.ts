@@ -51,6 +51,11 @@ export interface InvokerConfig {
    */
   autoFixCi?: boolean;
   /**
+   * Poll interval for explicit lifecycle workers such as `--headless worker autofix`.
+   * Defaults to the shared worker runtime interval.
+   */
+  workerPollIntervalMs?: number;
+  /**
    * Read-only diagnostics tuning for the Action Graph view.
    * Default stall threshold: 60000ms. Env fallback:
    * INVOKER_ACTION_STALL_THRESHOLD_MS.

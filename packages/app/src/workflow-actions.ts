@@ -26,6 +26,7 @@ import { normalizeMergeModeForPersistence } from './merge-mode.js';
 import { createDeleteAllSnapshot } from './delete-all-snapshot.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import { isDispatchableLaunch } from './global-topup.js';
+import type { AutoFixReviewGateContext } from './auto-fix-intents.js';
 
 type LoadedWorkflow = NonNullable<ReturnType<SQLiteAdapter['loadWorkflow']>>;
 
@@ -839,6 +840,7 @@ export async function fixWithAgentAction(
     recoveryRoute?: FailureRecoveryRoute;
     recreateOutputLabel?: string;
     failureOutputLabel?: string;
+    autoFixReviewGate?: AutoFixReviewGateContext;
     signal?: AbortSignal;
   } = {},
 ): Promise<FixWithAgentActionResult> {
@@ -863,9 +865,22 @@ export async function fixWithAgentAction(
     };
   }
 
+  const reviewGateContext = options.autoFixReviewGate;
+  if (reviewGateContext) {
+    assertReviewGateContextCurrent(reviewGateContext, task);
+  }
   const entryLineage = captureTaskLineage(taskId, orchestrator);
   assertLineageCurrent(entryLineage, orchestrator, options.signal);
-  const { savedError: persistedSavedError } = orchestrator.beginConflictResolution(taskId);
+  const { savedError: persistedSavedError } = reviewGateContext
+    ? orchestrator.beginAutoFixSession(taskId, {
+        savedError: formatReviewGateCiSavedError(reviewGateContext),
+        expectedLineage: {
+          taskId,
+          selectedAttemptId: reviewGateContext.selectedAttemptId,
+          generation: reviewGateContext.generation,
+        },
+      })
+    : orchestrator.beginConflictResolution(taskId);
   const lineage = captureTaskLineage(taskId, orchestrator);
   try {
     assertLineageCurrent(lineage, orchestrator, options.signal);
@@ -873,7 +888,17 @@ export async function fixWithAgentAction(
       await taskExecutor.resolveConflict(taskId, persistedSavedError, options.agentName);
     } else {
       const output = persistence.getTaskOutput(taskId);
-      await taskExecutor.fixWithAgent(taskId, output, options.agentName, persistedSavedError);
+      if (reviewGateContext) {
+        await taskExecutor.fixWithAgent(
+          taskId,
+          output,
+          options.agentName,
+          persistedSavedError,
+          formatReviewGateCiFixContext(reviewGateContext),
+        );
+      } else {
+        await taskExecutor.fixWithAgent(taskId, output, options.agentName, persistedSavedError);
+      }
     }
     assertLineageCurrent(lineage, orchestrator, options.signal);
     const result = await finalizeAppliedFix(taskId, persistedSavedError, deps, options.signal, lineage);
@@ -1256,7 +1281,23 @@ export async function autoFixOnFailure(
   }
 }
 
-function formatReviewGateCiSavedError(trigger: ReviewGateCiFailureTrigger): string {
+function assertReviewGateContextCurrent(
+  context: AutoFixReviewGateContext,
+  task: TaskState,
+): void {
+  if (
+    task.id !== context.taskId ||
+    task.config.workflowId !== context.workflowId ||
+    task.execution.selectedAttemptId !== context.selectedAttemptId ||
+    (task.execution.generation ?? 0) !== context.generation ||
+    task.execution.reviewId !== context.reviewId ||
+    task.execution.branch !== context.branch
+  ) {
+    throw new StaleLineageError(`Review-gate CI auto-fix for ${context.taskId} is stale`);
+  }
+}
+
+function formatReviewGateCiSavedError(trigger: ReviewGateCiFailureTrigger | AutoFixReviewGateContext): string {
   const lines = [
     `Review-gate CI failed for PR ${trigger.reviewId}.`,
     `PR: ${trigger.reviewUrl}`,
@@ -1272,7 +1313,7 @@ function formatReviewGateCiSavedError(trigger: ReviewGateCiFailureTrigger): stri
   return lines.join('\n');
 }
 
-function formatReviewGateCiFixContext(trigger: ReviewGateCiFailureTrigger): string {
+function formatReviewGateCiFixContext(trigger: ReviewGateCiFailureTrigger | AutoFixReviewGateContext): string {
   const checkLines = trigger.failedChecks.map((check) => {
     const details = [
       check.conclusion ? `conclusion=${check.conclusion}` : undefined,

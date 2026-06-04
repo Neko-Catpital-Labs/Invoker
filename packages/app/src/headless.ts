@@ -39,7 +39,6 @@ import {
 } from './metadata-setter.js';
 import {
   approveTask,
-  autoFixOnReviewGateFailure,
   deleteAllWorkflows as sharedDeleteAllWorkflows,
   fixWithAgentAction,
   rebaseRetry,
@@ -67,6 +66,8 @@ import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import type { RuntimeServices } from '@invoker/runtime-service';
 import { startWorkerRuntime, type WorkerRuntimeController } from './worker-runtime.js';
 import { parseHeadlessFixArgs } from './auto-fix-intents.js';
+import { startAutoFixWorker } from './autofix-worker.js';
+import { buildReviewGateCiFailedLifecycleEvent } from './lifecycle-events.js';
 
 export { bumpGenerationAndRecreate } from './workflow-actions.js';
 export {
@@ -256,13 +257,22 @@ export function createHeadlessExecutor(
     executionPoolsProvider: () => deps.invokerConfig.executionPools ?? {},
     onReviewGateCiFailure: deps.invokerConfig.autoFixCi
       ? async (trigger) => {
-          await autoFixOnReviewGateFailure(trigger, {
-            orchestrator: deps.orchestrator,
-            persistence: deps.persistence,
-            taskExecutor: executor,
-            getAutoFixAgent: () => loadConfig().autoFixAgent,
-            getAutoApproveAIFixes: () => loadConfig().autoApproveAIFixes,
-          });
+          const task = deps.orchestrator.getTask(trigger.taskId);
+          deps.messageBus.publish(Channels.WORKFLOW_LIFECYCLE, buildReviewGateCiFailedLifecycleEvent({
+            workflowId: trigger.workflowId,
+            taskId: trigger.taskId,
+            status: task?.status ?? 'review_ready',
+            taskStateVersion: task?.taskStateVersion ?? 0,
+            reviewId: trigger.reviewId,
+            reviewUrl: trigger.reviewUrl,
+            ...(trigger.headSha ? { headSha: trigger.headSha } : {}),
+            ...(trigger.headRef ? { headRef: trigger.headRef } : {}),
+            ...(trigger.branch ? { branch: trigger.branch } : {}),
+            generation: trigger.generation,
+            ...(trigger.selectedAttemptId ? { attemptId: trigger.selectedAttemptId } : {}),
+            failedChecks: trigger.failedChecks,
+            statusText: trigger.statusText,
+          }));
         }
       : undefined,
     mergeGateProvider: new GitHubMergeGateProvider(),
@@ -336,72 +346,14 @@ async function dispatchHeadlessRunnableTasks(
 }
 
 export function wireHeadlessAutoFix(
-  deps: Pick<HeadlessDeps, 'messageBus' | 'orchestrator' | 'persistence'>,
-  taskExecutor: Pick<TaskRunner, 'executeTasks' | 'fixWithAgent' | 'resolveConflict'>,
-  invokeAutoFix: (taskId: string) => Promise<void> = async (taskId) => {
-    const { autoFixOnFailure } = await import('./workflow-actions.js');
-    await autoFixOnFailure(taskId, {
-      orchestrator: deps.orchestrator,
-      persistence: deps.persistence,
-      taskExecutor: taskExecutor as TaskRunner,
-      getAutoFixAgent: () => loadConfig().autoFixAgent,
-      getAutoApproveAIFixes: () => loadConfig().autoApproveAIFixes,
-    });
-  },
-  onError: (taskId: string, err: unknown) => void = (taskId, err) => {
-    process.stderr.write(`[auto-fix] "${taskId}": ${err}\n`);
-  },
+  _deps: Pick<HeadlessDeps, 'messageBus' | 'orchestrator' | 'persistence'>,
+  _taskExecutor: Pick<TaskRunner, 'executeTasks' | 'fixWithAgent' | 'resolveConflict'>,
+  _invokeAutoFix?: (taskId: string) => Promise<void>,
+  _onError?: (taskId: string, err: unknown) => void,
 ): HeadlessAutoFixController {
-  const autoFixInProgress = new Set<string>();
-  const logHeadlessAutoFixDebug = (
-    taskId: string,
-    phase: string,
-    details: Record<string, unknown> = {},
-  ): void => {
-    const getTask = (deps.orchestrator as { getTask?: (id: string) => unknown }).getTask;
-    const task = getTask?.(taskId) as
-      | { status?: string; execution?: { autoFixAttempts?: number | null } }
-      | undefined;
-    const payload = {
-      phase,
-      status: task?.status ?? 'missing',
-      autoFixAttempts: task?.execution?.autoFixAttempts ?? null,
-      inProgressCount: autoFixInProgress.size,
-      inProgressForTask: autoFixInProgress.has(taskId),
-      ...details,
-    };
-    deps.persistence.logEvent?.(taskId, 'debug.auto-fix', payload);
-    process.stderr.write(`[auto-fix-debug][headless] task="${taskId}" phase=${phase} payload=${JSON.stringify(payload)}\n`);
-  };
-
-  const unsubscribe = deps.messageBus.subscribe<TaskDelta>(Channels.TASK_DELTA, (delta) => {
-    if (delta.type !== 'updated' || delta.changes.status !== 'failed') return;
-    const inProgress = autoFixInProgress.has(delta.taskId);
-    const shouldAutoFix = deps.orchestrator.shouldAutoFix(delta.taskId);
-    logHeadlessAutoFixDebug(delta.taskId, 'delta-failed', { shouldAutoFix, inProgress });
-    if (inProgress || !shouldAutoFix) {
-      logHeadlessAutoFixDebug(delta.taskId, 'schedule-skip', {
-        reason: !shouldAutoFix ? 'shouldAutoFix-false' : 'already-in-progress',
-      });
-      return;
-    }
-    autoFixInProgress.add(delta.taskId);
-    logHeadlessAutoFixDebug(delta.taskId, 'dispatch');
-    void invokeAutoFix(delta.taskId)
-      .catch((err) => {
-        logHeadlessAutoFixDebug(delta.taskId, 'dispatch-error', {
-          error: err instanceof Error ? err.stack ?? err.message : String(err),
-        });
-        onError(delta.taskId, err);
-      })
-      .finally(() => {
-        autoFixInProgress.delete(delta.taskId);
-        logHeadlessAutoFixDebug(delta.taskId, 'dispatch-finished');
-      });
-  });
   return {
-    unsubscribe,
-    isBusy: () => autoFixInProgress.size > 0,
+    unsubscribe: () => {},
+    isBusy: () => false,
   };
 }
 
@@ -1062,17 +1014,30 @@ function resolveHeadlessWorkerName(name: string | undefined): HeadlessWorkerName
 
 async function headlessWorker(
   workerNameArg: string | undefined,
-  deps: Pick<HeadlessDeps, 'logger' | 'messageBus'>,
+  deps: Pick<HeadlessDeps, 'logger' | 'messageBus' | 'persistence' | 'orchestrator' | 'invokerConfig'>,
 ): Promise<void> {
   const workerName = resolveHeadlessWorkerName(workerNameArg);
   const selectedWorkers = workerName === 'all' ? CONCRETE_HEADLESS_WORKERS : [workerName];
-  const runtimes: WorkerRuntimeController[] = selectedWorkers.map((name) => startWorkerRuntime<never>({
-    name,
-    messageBus: deps.messageBus,
-    logger: deps.logger,
-    scan: () => [],
-    submit: async () => {},
-  }));
+  const runtimes: WorkerRuntimeController[] = selectedWorkers.map((name) => {
+    if (name === 'autofix') {
+      return startAutoFixWorker({
+        logger: deps.logger,
+        messageBus: deps.messageBus,
+        persistence: deps.persistence,
+        orchestrator: deps.orchestrator,
+        getConfig: () => loadConfig(),
+        pollIntervalMs: deps.invokerConfig.workerPollIntervalMs,
+      });
+    }
+    return startWorkerRuntime<never>({
+      name,
+      messageBus: deps.messageBus,
+      logger: deps.logger,
+      pollIntervalMs: deps.invokerConfig.workerPollIntervalMs,
+      scan: () => [],
+      submit: async () => {},
+    });
+  });
 
   process.stdout.write(`[headless] worker ${workerName} started (${selectedWorkers.join(', ')}). Press Ctrl+C to stop.\n`);
   await Promise.all(runtimes.map((runtime) => runtime.waitUntilStopped()));
@@ -1740,6 +1705,7 @@ async function headlessFix(args: string[], deps: HeadlessDeps): Promise<void> {
       agentName: agent,
       recreateOutputLabel: 'Fix with AI',
       failureOutputLabel: 'Fix with AI',
+      autoFixReviewGate: parsed.reviewGate,
       signal: deps.signal,
     });
     await finalizeMutationWithGlobalTopup({

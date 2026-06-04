@@ -2380,6 +2380,20 @@ export class TaskRunner {
     ].join(':');
     if (this.reviewGateCiFixInFlight.has(key)) return;
 
+    this.persistence.logEvent?.(task.id, 'review_gate.ci_failed', {
+      taskId: task.id,
+      workflowId: task.config.workflowId,
+      reviewId: task.execution.reviewId,
+      reviewUrl: status.url,
+      headSha: status.headSha,
+      headRef: status.headRef,
+      branch: task.execution.branch,
+      selectedAttemptId: task.execution.selectedAttemptId,
+      generation: task.execution.generation ?? 0,
+      failedChecks: status.checks.failed,
+      statusText: status.statusText,
+    });
+
     this.reviewGateCiFixInFlight.add(key);
     try {
       await this.onReviewGateCiFailure({
