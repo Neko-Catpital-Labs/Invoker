@@ -4,12 +4,13 @@ export interface WorkflowGraphNode {
   id: string;
   name: string;
   workflow: WorkflowMeta;
+  hasDetachedLineage: boolean;
 }
 
 export interface WorkflowGraphEdge {
   source: string;
   target: string;
-  kind: 'active' | 'historical';
+  kind: 'active' | 'historical' | 'detached';
 }
 
 export interface WorkflowGraph {
@@ -31,11 +32,13 @@ export function deriveWorkflowGraph(
     id: workflow.id,
     name: workflow.name,
     workflow,
+    hasDetachedLineage: (workflow.detachedExternalDependencies?.length ?? 0) > 0,
   }));
 
   const edgeKeys = new Set<string>();
   const edges: WorkflowGraphEdge[] = [];
   const missingDependencies = new Set<string>();
+  const detachedPairs = new Set<string>();
 
   void tasks;
 
@@ -53,16 +56,32 @@ export function deriveWorkflowGraph(
       edgeKeys.add(key);
       edges.push({ source: sourceWorkflowId, target: targetWorkflowId, kind: 'active' });
     }
+    for (const dependency of workflow.detachedExternalDependencies ?? []) {
+      const sourceWorkflowId = dependency.workflowId;
+      const pairKey = `${sourceWorkflowId}->${targetWorkflowId}`;
+      detachedPairs.add(pairKey);
+      if (!workflows.has(sourceWorkflowId)) {
+        missingDependencies.add(pairKey);
+        continue;
+      }
+      if (sourceWorkflowId === targetWorkflowId) continue;
+      if (edgeKeys.has(`active:${pairKey}`)) continue;
+      const key = `detached:${sourceWorkflowId}->${targetWorkflowId}`;
+      if (edgeKeys.has(key)) continue;
+      edgeKeys.add(key);
+      edges.push({ source: sourceWorkflowId, target: targetWorkflowId, kind: 'detached' });
+    }
     for (const change of workflow.externalDependencyChanges ?? []) {
       for (const dependency of [change.before, change.after]) {
         if (!dependency) continue;
         const sourceWorkflowId = dependency.workflowId;
+        const pairKey = `${sourceWorkflowId}->${targetWorkflowId}`;
         if (!workflows.has(sourceWorkflowId)) {
-          missingDependencies.add(`${sourceWorkflowId}->${targetWorkflowId}`);
+          missingDependencies.add(pairKey);
           continue;
         }
         if (sourceWorkflowId === targetWorkflowId) continue;
-        if (edgeKeys.has(`active:${sourceWorkflowId}->${targetWorkflowId}`)) continue;
+        if (edgeKeys.has(`active:${pairKey}`) || detachedPairs.has(pairKey)) continue;
         const key = `historical:${sourceWorkflowId}->${targetWorkflowId}`;
         if (edgeKeys.has(key)) continue;
         edgeKeys.add(key);
