@@ -14,9 +14,9 @@ set -euo pipefail
 # invariant is:
 #
 #   Every `task.launch_claimed` event must be followed within
-#   `2 * DISPATCH_LEASE_MS * DISPATCH_MAX_ATTEMPTS` (180 seconds with
-#   the defaults from packages/contracts) by a terminal launch event for
-#   the same `attempt_id`. Terminal launch events are:
+#   `DISPATCH_LEASE_MS * DISPATCH_MAX_ATTEMPTS + 30s` (2190 seconds with
+#   the defaults from packages/contracts) by a terminal launch event for the
+#   same `attempt_id`. Terminal launch events are:
 #
 #     - task.executor.selected
 #     - task.executor.deferred
@@ -31,9 +31,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 EXPECTATION=""
 TIMEOUT_SECONDS="${REPRO_TIMEOUT_SECONDS:-900}"
-# DISPATCH_LEASE_MS = 30000, DISPATCH_MAX_ATTEMPTS = 3 → 180 seconds.
+# DISPATCH_LEASE_MS = 720000, DISPATCH_MAX_ATTEMPTS = 3, buffer = 30s → 2190 seconds.
 # Override via env if the contracts module bumps these defaults.
-WAIT_BOUND_SECONDS="${REPRO_LAUNCH_INVARIANT_BOUND_SECONDS:-180}"
+WAIT_BOUND_SECONDS="${REPRO_LAUNCH_INVARIANT_BOUND_SECONDS:-2190}"
 
 usage() {
   cat <<'EOF'
@@ -45,7 +45,7 @@ What it proves:
   Every `task.launch_claimed` event recorded during a storm of
   workflow-scope rebase-recreate mutations is paired with a terminal
   launch event for the SAME attempt_id within the dispatch invariant
-  bound (default 2 * DISPATCH_LEASE_MS * DISPATCH_MAX_ATTEMPTS = 180s).
+  bound (default DISPATCH_LEASE_MS * DISPATCH_MAX_ATTEMPTS + 30s = 2190s).
 
   Any claim without a matching terminal event is an orphaned launch —
   the exact failure mode the launch-handoff re-architecture was built
@@ -53,7 +53,7 @@ What it proves:
 
 Environment:
   REPRO_TIMEOUT_SECONDS                 storm timeout (default 900)
-  REPRO_LAUNCH_INVARIANT_BOUND_SECONDS  invariant bound (default 180)
+  REPRO_LAUNCH_INVARIANT_BOUND_SECONDS  invariant bound (default 2190)
   INVOKER_DB_PATH / INVOKER_DB_DIR      same as other repro scripts
 EOF
 }
