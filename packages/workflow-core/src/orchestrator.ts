@@ -4298,9 +4298,11 @@ export class Orchestrator {
         return { task, attemptId, attempt };
       })
       .filter(({ task, attempt }) => this.isTaskExecutionActive(task, attempt, now));
+    const activeTaskIds = new Set(activeAttempts.map(({ task }) => task.id));
     const queuedTasks = this.stateMachine
       .getReadyTasks()
       .filter((task) => task.status === 'pending')
+      .filter((task) => !activeTaskIds.has(task.id))
       .filter((task) => this.getExternalDependencyBlocker(task) === undefined)
       .map((task) => {
         const attempt = task.execution.selectedAttemptId
