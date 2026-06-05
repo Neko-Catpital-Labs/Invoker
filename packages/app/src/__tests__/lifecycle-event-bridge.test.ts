@@ -1,3 +1,7 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { describe, expect, it, vi } from 'vitest';
 import { Channels, LocalBus, type MessageBus } from '@invoker/transport';
 import type { TaskDelta, TaskState } from '@invoker/workflow-core';
@@ -180,6 +184,30 @@ describe('lifecycle event bridge', () => {
     expect(recoverySurface.recreateWorkflowFromFreshBase).not.toHaveBeenCalled();
     expect(recoverySurface.launchExternalRecovery).not.toHaveBeenCalled();
     expect(recoverySurface.resolveConflict).not.toHaveBeenCalled();
+  });
+
+  it('does not retain legacy direct failed-delta recovery trigger names in production app wiring', () => {
+    const appSourceRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+    const productionSources = [
+      join(appSourceRoot, 'main.ts'),
+      join(appSourceRoot, 'headless.ts'),
+      join(appSourceRoot, 'workflow-actions.ts'),
+      join(appSourceRoot, 'lifecycle-event-bridge.ts'),
+      join(appSourceRoot, '..', '..', 'execution-engine', 'src', 'task-runner.ts'),
+    ];
+    const legacyTriggers = [
+      'scheduleAutoFix',
+      'wireHeadlessAutoFix',
+      'autoFixOnFailure',
+      'handleFailedDeltaForExternalRecovery',
+    ];
+
+    for (const sourcePath of productionSources) {
+      const source = readFileSync(sourcePath, 'utf8');
+      for (const trigger of legacyTriggers) {
+        expect(source, `${sourcePath} contains ${trigger}`).not.toContain(trigger);
+      }
+    }
   });
 
   it('unsubscribes cleanly', () => {

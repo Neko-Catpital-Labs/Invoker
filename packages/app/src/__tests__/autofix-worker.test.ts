@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Channels, LocalBus } from '@invoker/transport';
 import type { TaskState } from '@invoker/workflow-core';
+import type { WorkflowMutationIntent } from '@invoker/data-store';
 
 import {
   buildReviewGateCiFailedLifecycleEvent,
@@ -9,6 +10,7 @@ import {
 import { parseHeadlessFixArgs } from '../auto-fix-intents.js';
 import {
   buildAutoFixCommandArgs,
+  scanAutoFixCandidates,
   startAutoFixWorker,
 } from '../autofix-worker.js';
 
@@ -44,11 +46,24 @@ function makeTask(overrides: Partial<TaskState> = {}): TaskState {
   } as TaskState;
 }
 
-function makePersistence(tasks: TaskState[]) {
+function makeIntent(overrides: Partial<WorkflowMutationIntent>): WorkflowMutationIntent {
+  return {
+    id: 1,
+    workflowId: 'wf-1',
+    channel: 'headless.exec',
+    args: [{ args: ['fix', 'wf-1/task-a', 'codex'] }],
+    priority: 'normal',
+    status: 'queued',
+    createdAt: '2026-06-04T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function makePersistence(tasks: TaskState[], intents: WorkflowMutationIntent[] = []) {
   return {
     listWorkflows: vi.fn(() => [{ id: 'wf-1' }]),
     loadTasks: vi.fn(() => tasks),
-    listWorkflowMutationIntents: vi.fn(() => []),
+    listWorkflowMutationIntents: vi.fn(() => intents),
     enqueueWorkflowMutationIntent: vi.fn(() => 1),
   };
 }
@@ -205,6 +220,51 @@ describe('autofix-worker', () => {
     );
 
     await worker.stop();
+  });
+
+  it('does not submit duplicate auto-fix work while a manual fix intent is open', () => {
+    const candidates = scanAutoFixCandidates({
+      logger,
+      persistence: makePersistence([makeTask()], [
+        makeIntent({
+          channel: 'headless.exec',
+          args: [{ args: ['fix', 'wf-1/task-a', 'claude'] }],
+          status: 'running',
+        }),
+      ]),
+      getConfig: () => ({ autoFixRetries: 2, autoFixAgent: 'codex' } as any),
+    }, {
+      workerName: 'autofix',
+      trigger: { kind: 'poll', at: new Date('2026-06-04T00:00:00.000Z') },
+    });
+
+    expect(candidates).toEqual([]);
+  });
+
+  it('keeps manual fix attempts out of the auto-fix retry budget', () => {
+    const candidates = scanAutoFixCandidates({
+      logger,
+      persistence: makePersistence([makeTask({
+        execution: {
+          error: 'boom after an operator-triggered Fix with AI',
+          autoFixAttempts: 0,
+          generation: 1,
+          selectedAttemptId: 'attempt-1',
+        },
+      })]),
+      getConfig: () => ({ autoFixRetries: 1, autoFixAgent: 'codex' } as any),
+    }, {
+      workerName: 'autofix',
+      trigger: { kind: 'poll', at: new Date('2026-06-04T00:00:00.000Z') },
+    });
+
+    expect(candidates).toEqual([
+      {
+        workflowId: 'wf-1',
+        taskId: 'wf-1/task-a',
+        agentName: 'codex',
+      },
+    ]);
   });
 
   it('builds normal fix commands without direct execution APIs', () => {

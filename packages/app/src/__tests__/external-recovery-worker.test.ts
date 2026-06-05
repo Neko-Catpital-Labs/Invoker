@@ -210,11 +210,21 @@ describe('external-recovery-worker', () => {
   });
 
   it('keeps failed-delta producers from importing external recovery launchers', () => {
-    const sourcePath = join(dirname(fileURLToPath(import.meta.url)), '..', 'lifecycle-event-bridge.ts');
-    const source = readFileSync(sourcePath, 'utf8');
+    const sourceRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+    const producerSources = [
+      'lifecycle-event-bridge.ts',
+      'main.ts',
+      'headless.ts',
+      'workflow-actions.ts',
+    ].map((file) => [file, readFileSync(join(sourceRoot, file), 'utf8')] as const);
 
-    expect(source).not.toMatch(/external-failure-recovery/);
-    expect(source).not.toMatch(/external-recovery-worker/);
-    expect(source).not.toMatch(/launchExternalRecovery/);
+    for (const [file, source] of producerSources) {
+      expect(source, file).not.toMatch(/external-failure-recovery/);
+      expect(source, file).not.toMatch(/handleFailedDeltaForExternalRecovery/);
+      if (file !== 'headless.ts') {
+        expect(source, file).not.toMatch(/external-recovery-worker/);
+      }
+      expect(source, file).not.toMatch(/launchExternalRecovery/);
+    }
   });
 });
