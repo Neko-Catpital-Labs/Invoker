@@ -62,6 +62,7 @@ fi
 echo "==> case 2.16: retry-all --follow and observe first 5s"
 bash scripts/retry-failed-and-pending-all-workflows.sh --follow >/tmp/e2e-2.16-retry.log 2>&1 &
 RETRY_PID=$!
+RETRY_EXIT=0
 retry_fail_left_failed=0
 for i in 0 1 2 3 4 5; do
   KEEP_ST="$(invoker_e2e_task_status "$KEEP_TASK_ID" 2>/dev/null || true)"
@@ -78,12 +79,15 @@ for i in 0 1 2 3 4 5; do
   esac
   sleep 1
 done
-wait "$RETRY_PID"
+wait "$RETRY_PID" || RETRY_EXIT=$?
 
 if [ "$retry_fail_left_failed" -ne 1 ]; then
   echo "FAIL case 2.16: retry did not move failed task out of failed within 5s"
   invoker_e2e_run_headless status 2>&1 || true
   exit 1
+fi
+if [ "$RETRY_EXIT" -ne 0 ]; then
+  echo "case 2.16: retry-all exited $RETRY_EXIT after dispatching expected failing retry"
 fi
 
 echo "==> case 2.16: recreate-all --follow and observe first 5s"
