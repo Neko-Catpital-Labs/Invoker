@@ -155,9 +155,9 @@ export class LaunchDispatcher {
    * Active-mode dispatch loop. Lease enqueued rows up to the per-poll
    * batch bound and hand each one to the
    * TaskRunner. The TaskRunner complete/fail flow drives the rest of
-   * the lifecycle; if the JS promise drops mid-flight, the durable
-   * outbox row stays leased and the next poll's `reapExpiredLeases`
-   * reclaims it after `DISPATCH_LEASE_MS`.
+   * the lifecycle; if the JS promise drops mid-flight, the durable outbox
+   * row stays leased until the fixed dispatch crash-recovery TTL expires,
+   * then the next poll's `reapExpiredLeases` reclaims it.
    */
   private dispatchActive(): void {
     const runner = this.taskRunnerProvider?.() ?? null;
