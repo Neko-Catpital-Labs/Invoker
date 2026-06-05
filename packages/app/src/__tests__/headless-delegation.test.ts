@@ -912,6 +912,284 @@ describe('headless delegation enforcement', () => {
         expect(runnable[0]?.id).toBe('wf-1/task-1');
       });
 
+      it('headless workflow retry in no-track active outbox mode waits for owner launch handoff before returning', async () => {
+        const preemptWorkflowExecution = vi.fn(async () => ({ cancelled: [], runningCancelled: [] }));
+        const runnableTask = {
+          id: 'wf-1/task-1',
+          description: 'ready launch',
+          status: 'pending',
+          dependencies: [],
+          config: { workflowId: 'wf-1', runnerKind: 'worktree' },
+          execution: { selectedAttemptId: 'attempt-1', generation: 7, phase: 'launching' },
+        } as any;
+        mockDeps.invokerConfig = {
+          ...mockDeps.invokerConfig,
+          launchOutboxMode: 'active',
+          defaultBranch: 'main',
+        } as any;
+        mockDeps.commandService.retryWorkflow = vi.fn(async () => ({
+          ok: true as const,
+          data: [runnableTask],
+        }));
+        mockDeps.orchestrator.startExecution = vi.fn(() => []);
+        mockDeps.orchestrator.syncFromDb = vi.fn();
+        mockDeps.orchestrator.getTask = vi.fn((taskId: string) =>
+          taskId === runnableTask.id ? runnableTask : undefined,
+        );
+        mockDeps.orchestrator.getTaskLaunchReadiness = vi.fn((taskId: string) =>
+          taskId === runnableTask.id
+            ? { ready: true as const, task: runnableTask }
+            : { ready: false as const, reason: 'missing' },
+        );
+
+        let claimed = false;
+        const launchDispatch = {
+          id: 42,
+          taskId: runnableTask.id,
+          attemptId: 'attempt-1',
+          workflowId: 'wf-1',
+          state: 'leased',
+          priority: 'normal',
+          generation: 7,
+          enqueuedAt: new Date().toISOString(),
+          attemptsCount: 1,
+        };
+        let activeDispatches = [launchDispatch];
+        Object.assign(mockDeps.persistence as any, {
+          reapExpiredLaunchDispatchLeases: vi.fn(() => []),
+          listAbandonableLaunchDispatchLeases: vi.fn(() => []),
+          claimLaunchDispatchAtomic: vi.fn(() => {
+            if (claimed) return undefined;
+            claimed = true;
+            return launchDispatch;
+          }),
+          listLaunchDispatchesByState: vi.fn(() => activeDispatches),
+          markLaunchDispatchCompleted: vi.fn(() => {
+            activeDispatches = [];
+            return true;
+          }),
+          markLaunchDispatchFailed: vi.fn(() => true),
+          markLaunchDispatchAbandoned: vi.fn(() => true),
+          listExecutionResourceLeasesByTask: vi.fn(() => []),
+          releaseExecutionResourceLease: vi.fn(),
+          logEvent: vi.fn(),
+        });
+
+        let capturedDispatchOpts: any;
+        const executeTask = vi.fn(async (_task: any, dispatchOpts?: any) => {
+          capturedDispatchOpts = dispatchOpts;
+          return new Promise<void>(() => {});
+        });
+        const deferRunnableTasks = vi.fn();
+        const depsWithNoTrack: HeadlessDeps = {
+          ...mockDeps,
+          noTrack: true,
+          preemptWorkflowExecution,
+          deferRunnableTasks,
+          ownerTaskRunnerProvider: () => ({ executeTask } as any),
+        } as HeadlessDeps;
+
+        let resolved = false;
+        const runPromise = runHeadless(['retry', 'wf-1'], depsWithNoTrack).then(() => {
+          resolved = true;
+        });
+
+        await vi.waitFor(() => expect(executeTask).toHaveBeenCalledTimes(1));
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(resolved).toBe(false);
+
+        capturedDispatchOpts?.launchOutbox.completeDispatch(capturedDispatchOpts.dispatchId);
+        await runPromise;
+
+        expect((mockDeps.persistence as any).claimLaunchDispatchAtomic).toHaveBeenCalled();
+        expect(executeTask.mock.calls[0]?.[0]?.id).toBe('wf-1/task-1');
+        expect(deferRunnableTasks).not.toHaveBeenCalled();
+        expect((mockDeps.persistence as any).markLaunchDispatchCompleted).toHaveBeenCalledWith(42);
+      });
+
+      it('headless task retry in no-track active outbox mode waits for owner launch handoff before returning', async () => {
+        const preemptTaskSubgraph = vi.fn(async () => {});
+        const runnableTask = {
+          id: 'wf-1/task-1',
+          description: 'ready launch',
+          status: 'pending',
+          dependencies: [],
+          config: { workflowId: 'wf-1', runnerKind: 'worktree' },
+          execution: { selectedAttemptId: 'attempt-1', generation: 9, phase: 'launching' },
+        } as any;
+        mockDeps.invokerConfig = {
+          ...mockDeps.invokerConfig,
+          launchOutboxMode: 'active',
+          defaultBranch: 'main',
+        } as any;
+        mockDeps.orchestrator.getPersistedActiveTaskIds = vi.fn(() => new Set<string>());
+        mockDeps.orchestrator.syncFromDb = vi.fn();
+        mockDeps.persistence.listWorkflows = vi.fn(() => [{
+          id: 'wf-1',
+          name: 'Workflow one',
+          generation: 0,
+          status: 'running' as const,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }]);
+        mockDeps.persistence.loadTasks = vi.fn(() => [{
+          id: 'wf-1/task-1',
+          status: 'failed',
+          config: { workflowId: 'wf-1' },
+          execution: {},
+        } as any]);
+        mockDeps.commandService.retryTask = vi.fn(async () => ({
+          ok: true as const,
+          data: [runnableTask],
+        }));
+        mockDeps.orchestrator.startExecution = vi.fn(() => []);
+        mockDeps.orchestrator.getTask = vi.fn((taskId: string) =>
+          taskId === runnableTask.id ? runnableTask : undefined,
+        );
+        mockDeps.orchestrator.getTaskLaunchReadiness = vi.fn((taskId: string) =>
+          taskId === runnableTask.id
+            ? { ready: true as const, task: runnableTask }
+            : { ready: false as const, reason: 'missing' },
+        );
+
+        let claimed = false;
+        const launchDispatch = {
+          id: 77,
+          taskId: runnableTask.id,
+          attemptId: 'attempt-1',
+          workflowId: 'wf-1',
+          state: 'leased',
+          priority: 'normal',
+          generation: 9,
+          enqueuedAt: new Date().toISOString(),
+          attemptsCount: 1,
+        };
+        let activeDispatches = [launchDispatch];
+        Object.assign(mockDeps.persistence as any, {
+          reapExpiredLaunchDispatchLeases: vi.fn(() => []),
+          listAbandonableLaunchDispatchLeases: vi.fn(() => []),
+          claimLaunchDispatchAtomic: vi.fn(() => {
+            if (claimed) return undefined;
+            claimed = true;
+            return launchDispatch;
+          }),
+          listLaunchDispatchesByState: vi.fn(() => activeDispatches),
+          markLaunchDispatchCompleted: vi.fn(() => {
+            activeDispatches = [];
+            return true;
+          }),
+          markLaunchDispatchFailed: vi.fn(() => true),
+          markLaunchDispatchAbandoned: vi.fn(() => true),
+          listExecutionResourceLeasesByTask: vi.fn(() => []),
+          releaseExecutionResourceLease: vi.fn(),
+          logEvent: vi.fn(),
+        });
+
+        let capturedDispatchOpts: any;
+        const executeTask = vi.fn(async (_task: any, dispatchOpts?: any) => {
+          capturedDispatchOpts = dispatchOpts;
+          return new Promise<void>(() => {});
+        });
+        const deferRunnableTasks = vi.fn();
+        const depsWithNoTrack: HeadlessDeps = {
+          ...mockDeps,
+          noTrack: true,
+          preemptTaskSubgraph,
+          deferRunnableTasks,
+          ownerTaskRunnerProvider: () => ({ executeTask } as any),
+        } as HeadlessDeps;
+
+        let resolved = false;
+        const runPromise = runHeadless(['retry-task', 'wf-1/task-1'], depsWithNoTrack).then(() => {
+          resolved = true;
+        });
+
+        await vi.waitFor(() => expect(executeTask).toHaveBeenCalledTimes(1));
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(resolved).toBe(false);
+
+        capturedDispatchOpts?.launchOutbox.completeDispatch(capturedDispatchOpts.dispatchId);
+        await runPromise;
+
+        expect((mockDeps.persistence as any).claimLaunchDispatchAtomic).toHaveBeenCalled();
+        expect(executeTask.mock.calls[0]?.[0]?.id).toBe('wf-1/task-1');
+        expect(deferRunnableTasks).not.toHaveBeenCalled();
+        expect((mockDeps.persistence as any).markLaunchDispatchCompleted).toHaveBeenCalledWith(77);
+      });
+
+      it('headless task retry in no-track active outbox mode rejects transient launch ownership', async () => {
+        const preemptTaskSubgraph = vi.fn(async () => {});
+        const runnableTask = {
+          id: '__merge__wf-1778826126740-7',
+          description: 'Review gate for Fix build warning noise',
+          status: 'pending',
+          dependencies: ['wf-1778826126740-7/regression-test-all'],
+          config: { workflowId: 'wf-1778826126740-7', runnerKind: 'merge', isMergeNode: true },
+          execution: {
+            selectedAttemptId: '__merge__wf-1778826126740-7-a9e08b36d',
+            generation: 91,
+            phase: 'launching',
+          },
+        } as any;
+        mockDeps.invokerConfig = {
+          ...mockDeps.invokerConfig,
+          launchOutboxMode: 'active',
+          defaultBranch: 'master',
+        } as any;
+        mockDeps.orchestrator.getPersistedActiveTaskIds = vi.fn(() => new Set<string>());
+        mockDeps.orchestrator.syncFromDb = vi.fn();
+        mockDeps.persistence.listWorkflows = vi.fn(() => [{
+          id: 'wf-1778826126740-7',
+          name: 'Fix build warning noise',
+          generation: 73,
+          status: 'running' as const,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }]);
+        mockDeps.persistence.loadTasks = vi.fn(() => [{
+          id: runnableTask.id,
+          status: 'failed',
+          config: { workflowId: 'wf-1778826126740-7', isMergeNode: true, runnerKind: 'merge' },
+          execution: {},
+        } as any]);
+        mockDeps.commandService.retryTask = vi.fn(async () => ({
+          ok: true as const,
+          data: [runnableTask],
+        }));
+        Object.assign(mockDeps.persistence as any, {
+          reapExpiredLaunchDispatchLeases: vi.fn(() => []),
+          listAbandonableLaunchDispatchLeases: vi.fn(() => []),
+          claimLaunchDispatchAtomic: vi.fn(),
+          listLaunchDispatchesByState: vi.fn(() => [{
+            id: 2415,
+            taskId: runnableTask.id,
+            attemptId: runnableTask.execution.selectedAttemptId,
+            workflowId: 'wf-1778826126740-7',
+            state: 'enqueued',
+            priority: 'normal',
+            generation: 91,
+            enqueuedAt: new Date().toISOString(),
+            attemptsCount: 0,
+          }]),
+          markLaunchDispatchCompleted: vi.fn(() => true),
+        });
+        const executeTaskSpy = vi.spyOn(TaskRunner.prototype, 'executeTask');
+        try {
+          await expect(
+            runHeadless(['retry-task', runnableTask.id], {
+              ...mockDeps,
+              noTrack: true,
+              preemptTaskSubgraph,
+            } as HeadlessDeps),
+          ).rejects.toThrow(/refusing to consume launch dispatches with a transient headless runner/);
+          expect((mockDeps.persistence as any).claimLaunchDispatchAtomic).not.toHaveBeenCalled();
+          expect((mockDeps.persistence as any).markLaunchDispatchCompleted).not.toHaveBeenCalled();
+          expect(executeTaskSpy).not.toHaveBeenCalled();
+        } finally {
+          executeTaskSpy.mockRestore();
+        }
+      });
+
       it('headless task retry defers runnable tasks in no-track mode', async () => {
         const deferRunnableTasks = vi.fn();
         const preemptTaskSubgraph = vi.fn(async () => {});
