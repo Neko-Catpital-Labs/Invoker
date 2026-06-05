@@ -15,7 +15,7 @@ import { scopePlanTaskId } from '@invoker/workflow-core';
 import type { Orchestrator, TaskState, ExperimentVariant, RunnerKind } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { WorkRequest, WorkResponse, ActionType, Logger } from '@invoker/contracts';
-import { ATTEMPT_LEASE_MS } from '@invoker/contracts';
+import { ATTEMPT_LEASE_MS, DISPATCH_LEASE_MS } from '@invoker/contracts';
 import type { Executor, ExecutorHandle } from './executor.js';
 import type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
 import { BaseExecutor } from './base-executor.js';
@@ -62,8 +62,12 @@ import { assertNotGitConfigMutation, ensureRemoteUrl } from './git-config-mutati
 
 export type { TaskHeartbeatEvent, TaskRunnerCallbacks } from './task-runner-callbacks.js';
 
-/** Keeps `lastHeartbeatAt` fresh while `executor.start()` is awaited (SSH remote setup/provision can take minutes). Matches BaseExecutor default heartbeat cadence. */
+/** Keeps launch metadata fresh while `executor.start()` is awaited (SSH remote setup/provision can take minutes). */
 const PRE_START_HEARTBEAT_INTERVAL_MS = 30_000;
+const PRE_START_DISPATCH_HEARTBEAT_INTERVAL_MS = Math.max(
+  1_000,
+  Math.min(PRE_START_HEARTBEAT_INTERVAL_MS, Math.floor(DISPATCH_LEASE_MS / 2)),
+);
 const DEFAULT_EXECUTOR_START_TIMEOUT_MS = 10 * 60 * 1000;
 
 type StartupFailureMetadata = {
@@ -186,6 +190,7 @@ const NOOP_LOGGER: Logger = {
 export interface LaunchOutboxAck {
   completeDispatch(dispatchId: number): boolean;
   failDispatch(dispatchId: number, error: unknown): boolean;
+  renewDispatch?(dispatchId: number): boolean;
 }
 
 export interface LaunchDispatchOptions {
@@ -859,6 +864,11 @@ export class TaskRunner {
         } as any);
         this.callbacks.onHeartbeat?.(task.id, { at: now, source: 'executor' });
       }, PRE_START_HEARTBEAT_INTERVAL_MS);
+      const preStartDispatchTimer = dispatchOpts?.launchOutbox.renewDispatch
+        ? setInterval(() => {
+          dispatchOpts.launchOutbox.renewDispatch?.(dispatchOpts.dispatchId);
+        }, PRE_START_DISPATCH_HEARTBEAT_INTERVAL_MS)
+        : undefined;
       let preStartTimeout: ReturnType<typeof setTimeout> | undefined;
       try {
         handle = await Promise.race<ExecutorHandle>([
@@ -951,6 +961,7 @@ export class TaskRunner {
         throw wrapped;
       } finally {
         clearInterval(preStartHeartbeatTimer);
+        if (preStartDispatchTimer) clearInterval(preStartDispatchTimer);
         if (preStartTimeout) clearTimeout(preStartTimeout);
       }
     }

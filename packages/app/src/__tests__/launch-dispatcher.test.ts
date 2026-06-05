@@ -194,6 +194,36 @@ describe('LaunchDispatcher', () => {
       expect(dispatcher.completeDispatch(enqueued.id)).toBe(false);
     });
 
+    it('renewDispatch keeps a slow in-flight launch from being reaped', () => {
+      seedWorkflowAndTask('attempt-renew');
+      const enqueued = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-1/t1',
+        attemptId: 'attempt-renew',
+        workflowId: 'wf-1',
+        generation: 0,
+      });
+      const claimed = adapter.claimLaunchDispatchAtomic({
+        ownerId: 'owner-test',
+        nowIso: '2026-06-04T22:38:44.000Z',
+      });
+      expect(claimed?.id).toBe(enqueued.id);
+
+      const { dispatcher } = makeDispatcher();
+      const beforeFixReaped = adapter.reapExpiredLaunchDispatchLeases({
+        nowIso: '2026-06-04T22:39:15.000Z',
+      });
+      expect(beforeFixReaped.map((row) => row.id)).toEqual([enqueued.id]);
+      const reclaimed = adapter.claimLaunchDispatchAtomic({
+        ownerId: 'owner-test',
+        nowIso: '2026-06-04T22:39:16.000Z',
+      });
+      expect(reclaimed?.id).toBe(enqueued.id);
+
+      expect(dispatcher.renewDispatch(enqueued.id)).toBe(true);
+      expect(dispatcher.reapExpiredLeases('2026-06-04T22:39:47.000Z')).toBe(0);
+      expect(adapter.loadLaunchDispatchById(enqueued.id)?.state).toBe('leased');
+    });
+
     it('fail re-enqueues a leased row with the error message and clears the owner', () => {
       seedWorkflowAndTask('attempt-fail');
       const enqueued = adapter.enqueueLaunchDispatch({
