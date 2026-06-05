@@ -799,6 +799,7 @@ describe('Orchestrator', () => {
       const task = orchestrator.getTask('f2')!;
       expect(task.status === 'pending' || task.status === 'running').toBe(true);
       expect(task.execution.isFixingWithAI).toBeFalsy();
+      expect(task.execution.pendingFixError).toBeUndefined();
     });
 
     it('revertConflictResolution restores failed state', () => {
