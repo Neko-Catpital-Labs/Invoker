@@ -80,10 +80,18 @@ let mocks: {
   killRunningTask: ReturnType<typeof vi.fn>;
   deleteWorkflow: ReturnType<typeof vi.fn>;
   detachWorkflow: ReturnType<typeof vi.fn>;
+  logger: Record<string, ReturnType<typeof vi.fn>>;
 };
 
 function createMocks() {
   return {
+    logger: {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      child: vi.fn(),
+    },
     orchestrator: {
       getWorkflowStatus: vi.fn(() => ({ total: 1, completed: 0, failed: 0, running: 1, pending: 0 })),
       getAllTasks: vi.fn(() => [makeTask()]),
@@ -213,6 +221,7 @@ beforeAll(async () => {
   // Use port 0 for ephemeral port assignment
   process.env.INVOKER_API_PORT = '0';
   api = startApiServer({
+    logger: mocks.logger as any,
     orchestrator: mocks.orchestrator as any,
     persistence: mocks.persistence as any,
     executorRegistry: mocks.executorRegistry as any,
@@ -247,6 +256,9 @@ beforeEach(() => {
   mocks.killRunningTask.mockClear();
   mocks.deleteWorkflow.mockClear();
   mocks.detachWorkflow.mockClear();
+  for (const fn of Object.values(mocks.logger)) {
+    if (typeof fn === 'function' && 'mockClear' in fn) fn.mockClear();
+  }
 
   // Re-apply default return values after clear
   mocks.orchestrator.getWorkflowStatus.mockReturnValue({ total: 1, completed: 0, failed: 0, running: 1, pending: 0 });
@@ -998,7 +1010,12 @@ describe('POST /api/workflows/:id/detach', () => {
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.action).toBe('detached');
+    expect(res.body.message).toBe('Detached workflow: downstream="wf-1" upstream="wf-0" action="detached"');
     expect(mocks.detachWorkflow).toHaveBeenCalledWith('wf-1', 'wf-0');
+    expect(mocks.logger.info).toHaveBeenCalledWith(
+      'api detach-workflow succeeded downstream="wf-1" upstream="wf-0"',
+      { module: 'api-server' },
+    );
   });
 
   it('returns 400 when upstreamWorkflowId is missing', async () => {

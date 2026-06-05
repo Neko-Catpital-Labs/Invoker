@@ -1799,11 +1799,11 @@ function createEmbeddedTerminalBackendFromConfig(
   }
 
   async function performDetachWorkflow(workflowId: string, upstreamWorkflowId: string): Promise<void> {
-    logger.info(`performDetachWorkflow begin workflow="${workflowId}" upstream="${upstreamWorkflowId}"`, { module: 'kill' });
+    logger.info(`performDetachWorkflow begin downstream="${workflowId}" upstream="${upstreamWorkflowId}"`, { module: 'kill' });
     const envelope = makeEnvelope('detach-workflow', 'ui', 'workflow', { workflowId, upstreamWorkflowId });
     const result = await commandService.detachWorkflow(envelope);
     if (!result.ok) throw new Error(result.error.message);
-    logger.info(`performDetachWorkflow end workflow="${workflowId}" upstream="${upstreamWorkflowId}"`, { module: 'kill' });
+    logger.info(`performDetachWorkflow end downstream="${workflowId}" upstream="${upstreamWorkflowId}"`, { module: 'kill' });
   }
 
   /** Orchestrator error codes that preemption treats as benign (cancel is best-effort). */
@@ -3021,13 +3021,13 @@ function createEmbeddedTerminalBackendFromConfig(
         const workflowId = String(workflowIdArg);
         const upstreamWorkflowId = String(upstreamWorkflowIdArg);
         logger.info(
-          `detach-workflow: workflow="${workflowId}" upstream="${upstreamWorkflowId}"`,
+          `detach-workflow: downstream="${workflowId}" upstream="${upstreamWorkflowId}"`,
           { module: 'ipc' },
         );
         try {
           await performDetachWorkflow(workflowId, upstreamWorkflowId);
         } catch (err) {
-          logger.error(`detach-workflow failed: ${err}`, { module: 'ipc' });
+          logger.error(`detach-workflow failed downstream="${workflowId}" upstream="${upstreamWorkflowId}": ${err}`, { module: 'ipc' });
           throw err;
         }
       },

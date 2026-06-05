@@ -49,6 +49,8 @@ type KeyboardRegion = 'workflowGraph' | 'taskGraph' | 'inspector' | 'bottomBar';
 type SearchResult =
   | { kind: 'workflow'; id: string; title: string; subtitle: string }
   | { kind: 'task'; id: string; workflowId: string | null; title: string; subtitle: string };
+type ActionFeedback = { kind: 'success' | 'error'; message: string } | null;
+type UpstreamDetachTarget = { workflowId: string; label: string };
 
 const KEYBOARD_REGION_ORDER: readonly KeyboardRegion[] = ['workflowGraph', 'taskGraph', 'inspector', 'bottomBar'];
 const STATUS_KEY_ORDER: readonly string[] = [
@@ -82,10 +84,16 @@ function normalizedSearchText(value: string | undefined): string {
   return (value ?? '').toLowerCase();
 }
 
+function workflowIdentity(workflow: WorkflowMeta | undefined, fallbackId: string): string {
+  const name = workflow?.name?.trim();
+  return name && name !== fallbackId ? `${name} (${fallbackId})` : fallbackId;
+}
+
 interface WorkflowContextMenuProps {
   x: number;
   y: number;
   workflowId: string;
+  detachTargets: readonly UpstreamDetachTarget[];
   onOpenWorkflow: (workflowId: string) => void;
   onOpenPr: (workflowId: string) => void;
   onRetryWorkflow: (workflowId: string) => void;
@@ -94,6 +102,7 @@ interface WorkflowContextMenuProps {
   onRecreateWorkflow: (workflowId: string) => void;
   onCancelWorkflow: (workflowId: string) => void;
   onDeleteWorkflow: (workflowId: string) => void;
+  onDetachWorkflow: (workflowId: string, upstreamWorkflowId: string) => void;
   onCopyWorkflowId: (workflowId: string) => void;
   onClose: () => void;
 }
@@ -102,6 +111,7 @@ function WorkflowContextMenu({
   x,
   y,
   workflowId,
+  detachTargets,
   onOpenWorkflow,
   onOpenPr,
   onRetryWorkflow,
@@ -110,6 +120,7 @@ function WorkflowContextMenu({
   onRecreateWorkflow,
   onCancelWorkflow,
   onDeleteWorkflow,
+  onDetachWorkflow,
   onCopyWorkflowId,
   onClose,
 }: WorkflowContextMenuProps): JSX.Element {
@@ -211,6 +222,19 @@ function WorkflowContextMenu({
           <button role="menuitem" onClick={() => runAction(onRebaseRetry)} className={buttonClass}>
             Rebase and Retry
           </button>
+          {detachTargets.map((target) => (
+            <button
+              key={target.workflowId}
+              role="menuitem"
+              onClick={() => {
+                onDetachWorkflow(workflowId, target.workflowId);
+                onClose();
+              }}
+              className={dangerButtonClass}
+            >
+              Detach from {target.label}
+            </button>
+          ))}
           <button role="menuitem" onClick={() => runAction(onRebaseRecreate)} className={dangerButtonClass}>
             Rebase and Recreate
           </button>
@@ -300,6 +324,7 @@ export function App() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchActiveIndex, setSearchActiveIndex] = useState(0);
+  const [actionFeedback, setActionFeedback] = useState<ActionFeedback>(null);
   const uiPerfThrottleRef = useRef<Record<string, number>>({});
   const lastShiftAtRef = useRef(0);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -457,6 +482,23 @@ export function App() {
     next.set(selectedWorkflow.id, selectedWorkflow);
     return next;
   }, [selectedWorkflow, workflows]);
+  const workflowDetachTargets = useMemo(() => {
+    const targets = new Map<string, UpstreamDetachTarget[]>();
+    for (const workflow of workflows.values()) {
+      const workflowTargets: UpstreamDetachTarget[] = [];
+      for (const dependency of workflow.externalDependencies ?? []) {
+        const upstreamId = dependency.workflowId;
+        workflowTargets.push({
+          workflowId: upstreamId,
+          label: workflowIdentity(workflows.get(upstreamId), upstreamId),
+        });
+      }
+      if (workflowTargets.length > 0) {
+        targets.set(workflow.id, workflowTargets);
+      }
+    }
+    return targets;
+  }, [workflows]);
 
   useEffect(() => {
     if (!selectedWorkflowId) {
@@ -1077,6 +1119,33 @@ export function App() {
     }
   }, [refreshTasks, selectedWorkflowId]);
 
+  const handleDetachWorkflow = useCallback(async (workflowId: string, upstreamWorkflowId: string) => {
+    setContextMenu(null);
+    setWorkflowContextMenu(null);
+    const downstreamIdentity = workflowIdentity(workflows.get(workflowId), workflowId);
+    const upstreamIdentity = workflowIdentity(workflows.get(upstreamWorkflowId), upstreamWorkflowId);
+    const confirmed = window.confirm(
+      `Detach downstream workflow "${downstreamIdentity}" from upstream workflow "${upstreamIdentity}"?\n\n` +
+      'This changes workflow topology and voids downstream work back to pending where required.',
+    );
+    if (!confirmed) return;
+    try {
+      await window.invoker?.detachWorkflow(workflowId, upstreamWorkflowId);
+      setActionFeedback({
+        kind: 'success',
+        message: `Detached downstream workflow ${downstreamIdentity} from upstream workflow ${upstreamIdentity}.`,
+      });
+      refreshTasks(true);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setActionFeedback({
+        kind: 'error',
+        message: `Failed to detach downstream workflow ${downstreamIdentity} from upstream workflow ${upstreamIdentity}: ${message}`,
+      });
+      console.error('Detach Workflow failed:', err);
+    }
+  }, [refreshTasks, workflows]);
+
   const handleFix = useCallback(async (taskId: string, agentName: string) => {
     setContextMenu(null);
     const task = tasks.get(taskId);
@@ -1452,6 +1521,27 @@ export function App() {
         </div>
       )}
 
+      {actionFeedback && (
+        <div
+          role="status"
+          data-testid="action-feedback"
+          className={`flex items-center justify-between gap-4 border-b px-4 py-2 text-sm ${
+            actionFeedback.kind === 'success'
+              ? 'border-emerald-800 bg-emerald-950/45 text-emerald-100'
+              : 'border-red-800 bg-red-950/45 text-red-100'
+          }`}
+        >
+          <span>{actionFeedback.message}</span>
+          <button
+            type="button"
+            onClick={() => setActionFeedback(null)}
+            className="shrink-0 rounded border border-current/30 px-2 py-1 text-xs hover:bg-white/10"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {/* Main content */}
       <div className="flex-1 flex overflow-hidden">
         <nav className="w-24 border-r border-gray-800 bg-gray-950/60 flex flex-col justify-between py-3">
@@ -1815,6 +1905,7 @@ export function App() {
           x={workflowContextMenu.x}
           y={workflowContextMenu.y}
           workflowId={workflowContextMenu.workflowId}
+          detachTargets={workflowDetachTargets.get(workflowContextMenu.workflowId) ?? []}
           onOpenWorkflow={handleWorkflowClick}
           onOpenPr={handleOpenWorkflowPr}
           onRetryWorkflow={(workflowId) => void handleRetryWorkflow(workflowId)}
@@ -1823,6 +1914,7 @@ export function App() {
           onRecreateWorkflow={(workflowId) => void handleRecreateWorkflow(workflowId)}
           onCancelWorkflow={(workflowId) => void handleCancelWorkflow(workflowId)}
           onDeleteWorkflow={(workflowId) => void handleDeleteWorkflow(workflowId)}
+          onDetachWorkflow={(workflowId, upstreamWorkflowId) => void handleDetachWorkflow(workflowId, upstreamWorkflowId)}
           onCopyWorkflowId={handleCopyWorkflowId}
           onClose={closeContextMenu}
         />

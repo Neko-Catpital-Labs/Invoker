@@ -700,6 +700,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
       const wfDetachMatch = path.match(/^\/api\/workflows\/([^/]+)\/detach$/);
       if (method === 'POST' && wfDetachMatch) {
         const workflowId = decodeURIComponent(wfDetachMatch[1]);
+        let upstreamId: string | undefined;
         try {
           const body = await readBody(req);
           const { upstreamWorkflowId } = JSON.parse(body);
@@ -707,14 +708,28 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
             json(res, 400, { error: 'Missing "upstreamWorkflowId" in request body' });
             return;
           }
-          await detachWorkflow(workflowId, String(upstreamWorkflowId));
+          upstreamId = String(upstreamWorkflowId);
+          apiLogger?.info(
+            `api detach-workflow requested downstream="${workflowId}" upstream="${upstreamId}"`,
+            { module: 'api-server' },
+          );
+          await detachWorkflow(workflowId, upstreamId);
+          apiLogger?.info(
+            `api detach-workflow succeeded downstream="${workflowId}" upstream="${upstreamId}"`,
+            { module: 'api-server' },
+          );
           json(res, 200, {
             ok: true,
             workflowId,
-            upstreamWorkflowId,
+            upstreamWorkflowId: upstreamId,
             action: 'detached',
+            message: `Detached workflow: downstream="${workflowId}" upstream="${upstreamId}" action="detached"`,
           });
         } catch (err) {
+          apiLogger?.error(
+            `api detach-workflow failed downstream="${workflowId}" upstream="${upstreamId ?? '<unknown>'}": ${err}`,
+            { module: 'api-server' },
+          );
           json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
         return;
