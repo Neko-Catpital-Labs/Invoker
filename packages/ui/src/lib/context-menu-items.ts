@@ -129,6 +129,15 @@ export function getMenuItems(
       separator: !canCancel ? 'danger' : undefined,
     });
 
+    if (task.status !== 'running') {
+      items.push({
+        id: 'recreate-downstream',
+        label: 'Recreate Downstream',
+        enabled: true,
+        action: 'onRecreateDownstream',
+        variant: 'danger',
+      });
+    }
   }
 
   return items;
