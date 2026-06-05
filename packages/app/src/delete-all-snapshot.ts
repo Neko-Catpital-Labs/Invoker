@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
 
@@ -39,6 +39,11 @@ function createDbSnapshot(
   const shmPath = `${dbPath}-shm`;
   if (existsSync(walPath)) copyFileSync(walPath, `${snapshotPath}-wal`);
   if (existsSync(shmPath)) copyFileSync(shmPath, `${snapshotPath}-shm`);
+
+  const outputSpoolPath = `${dbPath}.output-spool`;
+  if (existsSync(outputSpoolPath)) {
+    cpSync(outputSpoolPath, `${snapshotPath}.output-spool`, { recursive: true });
+  }
 
   return snapshotPath;
 }

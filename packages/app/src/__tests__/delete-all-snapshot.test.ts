@@ -38,15 +38,19 @@ describe('delete-all-snapshot', () => {
     writeFileSync(dbPath, 'db-main');
     writeFileSync(`${dbPath}-wal`, 'db-wal');
     writeFileSync(`${dbPath}-shm`, 'db-shm');
+    mkdirSync(`${dbPath}.output-spool`, { recursive: true });
+    writeFileSync(join(`${dbPath}.output-spool`, 'task.log'), 'task-output');
 
     const snapshot = createDeleteAllSnapshot(root);
     expect(snapshot).toContain(join(root, 'db-backups', 'invoker.db.before-delete-all-'));
     expect(existsSync(snapshot)).toBe(true);
     expect(existsSync(`${snapshot}-wal`)).toBe(true);
     expect(existsSync(`${snapshot}-shm`)).toBe(true);
+    expect(existsSync(`${snapshot}.output-spool`)).toBe(true);
     expect(readFileSync(snapshot, 'utf-8')).toBe('db-main');
     expect(readFileSync(`${snapshot}-wal`, 'utf-8')).toBe('db-wal');
     expect(readFileSync(`${snapshot}-shm`, 'utf-8')).toBe('db-shm');
+    expect(readFileSync(join(`${snapshot}.output-spool`, 'task.log'), 'utf-8')).toBe('task-output');
   });
 
   it('creates hourly snapshots with hourly-auto label', () => {
