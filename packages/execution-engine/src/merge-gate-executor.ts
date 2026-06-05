@@ -4,7 +4,7 @@ import type { TaskState } from '@invoker/workflow-core';
 import { BaseExecutor, type BaseEntry } from './base-executor.js';
 import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from './executor.js';
 import type { MergeRunnerHost } from './merge-runner.js';
-import { runMergeGateActionImpl } from './merge-runner.js';
+import { runMergeGateActionImpl, updateMergeGateTaskIfCurrent } from './merge-runner.js';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 
 interface MergeGateEntry extends BaseEntry {
@@ -123,11 +123,19 @@ export class MergeGateExecutor extends BaseExecutor<MergeGateEntry> {
 
     try {
       this.emitOutput(handle.executionId, `[merge] Starting merge gate action: ${task.id}\n`);
-      const result = await runMergeGateActionImpl(this.host, task, { gateWorkspacePath });
+      const lineage = {
+        attemptId: entry.request.attemptId,
+        executionGeneration: entry.request.executionGeneration,
+      };
+      const result = await runMergeGateActionImpl(this.host, task, { gateWorkspacePath, lineage });
       if (result.taskChanges.execution) {
-        this.host.persistence.updateTask(task.id, {
-          execution: result.taskChanges.execution,
-        });
+        updateMergeGateTaskIfCurrent(
+          this.host,
+          task.id,
+          lineage,
+          { execution: result.taskChanges.execution },
+          'executor-merge-metadata',
+        );
       }
       this.emitOutput(handle.executionId, `[merge] Merge gate action finished: ${task.id} status=${result.response.status}\n`);
       this.emitComplete(handle.executionId, this.withAttempt(entry.request, result.response));
