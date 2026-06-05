@@ -1306,7 +1306,6 @@ if (isHeadless) {
     messageBus.publish(Channels.TASK_OUTPUT, outputData);
     try {
       persistence.appendTaskOutput(taskId, data);
-      persistence.appendOutputChunk(taskId, data);
     } catch (err) {
       logger.error(`Failed to persist output for ${taskId}: ${err}`, { module: 'output' });
     }

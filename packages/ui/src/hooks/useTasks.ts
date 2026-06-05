@@ -155,7 +155,9 @@ export function useTasks(): UseTasksResult {
       });
     }
 
-    fetchAll();
+    const hasBootstrapSnapshot =
+      ((bootstrapState?.tasks?.length ?? 0) > 0) ||
+      ((bootstrapState?.workflows?.length ?? 0) > 0);
 
     deltaPipelineRef.current = createTaskDeltaPipeline({
       flushMs: 100,
@@ -234,7 +236,19 @@ export function useTasks(): UseTasksResult {
       }
     });
 
+    let initialRefreshFrame: number | null = null;
+    let initialRefreshTimer: number | null = null;
+    if (hasBootstrapSnapshot) {
+      initialRefreshFrame = window.requestAnimationFrame(() => {
+        initialRefreshTimer = window.setTimeout(() => fetchAll(), 500);
+      });
+    } else {
+      fetchAll();
+    }
+
     return () => {
+      if (initialRefreshFrame !== null) window.cancelAnimationFrame(initialRefreshFrame);
+      if (initialRefreshTimer !== null) window.clearTimeout(initialRefreshTimer);
       deltaPipelineRef.current?.dispose();
       deltaPipelineRef.current = null;
       unsub();

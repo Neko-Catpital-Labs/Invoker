@@ -5,7 +5,7 @@
  * so WorktreeExecutor can clone without a network. Sharded CI can override the
  * bare-repo path via INVOKER_E2E_BARE_REPO to avoid cross-shard interference.
  */
-import { execSync } from 'child_process';
+import { execSync, spawn, type ChildProcess } from 'child_process';
 import { existsSync, rmSync } from 'fs';
 import * as path from 'path';
 import { resolveRepoRoot } from '@invoker/contracts';
@@ -22,7 +22,49 @@ const gitEnv = {
 
 const repoRoot = resolveRepoRoot(__dirname);
 
+function startXvfbIfNeeded(): ChildProcess | null {
+  if (process.platform !== 'linux' || process.env.DISPLAY) {
+    return null;
+  }
+
+  try {
+    execSync('command -v Xvfb', { stdio: 'ignore' });
+  } catch {
+    return null;
+  }
+
+  for (let display = 90; display < 110; display += 1) {
+    const child = spawn('Xvfb', [`:${display}`, '-screen', '0', '1280x720x24', '-nolisten', 'tcp'], {
+      detached: false,
+      stdio: 'ignore',
+    });
+    const lockPath = `/tmp/.X${display}-lock`;
+    const started = Date.now();
+    while (Date.now() - started < 1000) {
+      if (child.exitCode !== null) {
+        break;
+      }
+      if (existsSync(lockPath)) {
+        process.env.DISPLAY = `:${display}`;
+        child.unref();
+        return child;
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+    child.kill();
+  }
+
+  return null;
+}
+
 export default function globalSetup(): void {
+  const xvfb = startXvfbIfNeeded();
+  if (xvfb) {
+    process.once('exit', () => {
+      xvfb.kill();
+    });
+  }
+
   // Build dependent packages and the app itself if artifacts are missing.
   if (!existsSync(path.join(repoRoot, 'packages', 'ui', 'dist', 'index.html'))) {
     execSync('pnpm --filter @invoker/ui build', { cwd: repoRoot, stdio: 'inherit' });

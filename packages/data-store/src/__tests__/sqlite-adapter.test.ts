@@ -1113,6 +1113,72 @@ describe('SQLiteAdapter', () => {
       expect(firstIdx).toBeLessThan(secondIdx);
       expect(secondIdx).toBeLessThan(thirdIdx);
     });
+
+    it('keeps file-backed output payloads out of the exported SQLite database', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-output-sidecar-'));
+      const dbPath = join(dir, 'invoker.db');
+      const data = 'x'.repeat(1024 * 1024);
+
+      try {
+        const db1 = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db1.saveWorkflow(testWorkflow);
+        db1.saveTask('wf-1', makeTask('t-sidecar'));
+        db1.appendTaskOutput('t-sidecar', data);
+        db1.close();
+
+        expect(statSync(dbPath).size).toBeLessThan(data.length / 4);
+        expect(readdirSync(`${dbPath}.output-spool`)).toHaveLength(1);
+
+        const db2 = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        expect(db2.getTaskOutput('t-sidecar')).toBe(data);
+        expect(db2.replayOutputFrom('t-sidecar', 0)).toEqual([{ offset: 0, data }]);
+        db2.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('does not let rolled-back sidecar writes corrupt later output appends', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-output-rollback-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db.saveWorkflow(testWorkflow);
+        db.saveTask('wf-1', makeTask('t-rollback-output'));
+
+        expect(() => db.runInTransaction(() => {
+          db.appendTaskOutput('t-rollback-output', 'rolled back');
+          throw new Error('rollback');
+        })).toThrow('rollback');
+
+        db.appendTaskOutput('t-rollback-output', 'committed');
+        db.close();
+
+        const sidecarFiles = readdirSync(`${dbPath}.output-spool`);
+        expect(sidecarFiles).toHaveLength(1);
+        const sidecarFile = join(`${dbPath}.output-spool`, sidecarFiles[0]!);
+        expect(statSync(sidecarFile).size).toBe(Buffer.byteLength('committed', 'utf8'));
+
+        const reopened = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        expect(reopened.getTaskOutput('t-rollback-output')).toBe('committed');
+        reopened.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('reads legacy task_output rows when no spool rows exist', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t-legacy-output'));
+
+      (adapter as any).db.run(
+        'INSERT INTO task_output (task_id, data) VALUES (?, ?), (?, ?)',
+        ['t-legacy-output', 'legacy ', 't-legacy-output', 'output'],
+      );
+
+      expect(adapter.getTaskOutput('t-legacy-output')).toBe('legacy output');
+    });
   });
 
   // ── Conversations ──────────────────────────────────────
