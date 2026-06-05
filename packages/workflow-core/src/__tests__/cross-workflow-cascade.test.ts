@@ -33,10 +33,14 @@ function buildOrchestratorDeps(orchestrator: Orchestrator): InvalidationDeps {
     retryTask: (taskId) => orchestrator.retryTask(taskId),
     recreateTask: (taskId) => orchestrator.recreateTask(taskId),
     retryWorkflow: (workflowId) => orchestrator.retryWorkflow(workflowId),
-    recreateWorkflow: (workflowId) => orchestrator.recreateWorkflow(workflowId),
+    // Routed recreates: the `cascadeAcrossWorkflows` stage owns the
+    // downstream cascade, so the primitive must NOT cascade again.
+    recreateWorkflow: (workflowId) =>
+      orchestrator.recreateWorkflow(workflowId, { cascadeDownstream: false }),
     recreateWorkflowFromFreshBase: (workflowId) =>
       orchestrator.recreateWorkflowFromFreshBase(workflowId, {
         refreshBase: async () => ({ commit: 'fresh-sha' }),
+        cascadeDownstream: false,
       }),
     workflowFork: (workflowId) => {
       const result = orchestrator.forkWorkflow(workflowId);
