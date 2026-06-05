@@ -292,6 +292,60 @@ describe('headless delegation enforcement', () => {
         expect(mockDeps.orchestrator.syncFromDb).toHaveBeenCalledWith('wf-1');
       });
 
+      it('only consumes auto-fix retry budget for explicit auto-fix fix commands', async () => {
+        const failedTask = {
+          id: 'wf-1/task-a',
+          status: 'failed',
+          description: 'Task A',
+          dependencies: [],
+          createdAt: new Date('2026-06-04T00:00:00.000Z'),
+          config: { workflowId: 'wf-1' },
+          execution: {
+            error: 'boom',
+            generation: 1,
+            selectedAttemptId: 'attempt-1',
+            autoFixAttempts: 0,
+          },
+        } as any;
+        const taskExecutor = {
+          fixWithAgent: vi.fn().mockResolvedValue(undefined),
+          resolveConflict: vi.fn(),
+          executeTasks: vi.fn().mockResolvedValue(undefined),
+        };
+        const depsWithFix = {
+          ...mockDeps,
+          invokerConfig: {
+            ...mockDeps.invokerConfig,
+            launchOutboxMode: 'active',
+            autoApproveAIFixes: false,
+          },
+          ownerTaskRunnerProvider: () => taskExecutor,
+        } as unknown as HeadlessDeps;
+        mockDeps.persistence.listWorkflows = vi.fn(() => [{ id: 'wf-1' } as any]);
+        mockDeps.persistence.loadTasks = vi.fn(() => [failedTask]);
+        mockDeps.persistence.updateTask = vi.fn();
+        mockDeps.persistence.getTaskOutput = vi.fn(() => 'failed output');
+        mockDeps.orchestrator.getTask = vi.fn(() => failedTask);
+        mockDeps.orchestrator.beginConflictResolution = vi.fn(() => ({ savedError: 'boom' }));
+        mockDeps.orchestrator.setFixAwaitingApproval = vi.fn();
+        mockDeps.orchestrator.revertConflictResolution = vi.fn();
+        mockDeps.orchestrator.startExecution = vi.fn(() => []);
+        mockDeps.orchestrator.syncFromDb = vi.fn();
+
+        await runHeadless(['fix', 'wf-1/task-a', 'codex'], depsWithFix);
+        expect(mockDeps.persistence.updateTask).not.toHaveBeenCalledWith(
+          'wf-1/task-a',
+          expect.objectContaining({
+            execution: expect.objectContaining({ autoFixAttempts: expect.any(Number) }),
+          }),
+        );
+
+        await runHeadless(['fix', 'wf-1/task-a', 'codex', '--auto-fix'], depsWithFix);
+        expect(mockDeps.persistence.updateTask).toHaveBeenCalledWith('wf-1/task-a', {
+          execution: { autoFixAttempts: 1 },
+        });
+      });
+
       it('allows task mutations in owner mode', async () => {
         mockDeps.orchestrator.getAllTasks = vi.fn(() => [
           {

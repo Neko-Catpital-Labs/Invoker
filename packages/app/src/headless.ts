@@ -64,9 +64,10 @@ import { trackWorkflow } from './headless-watch.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import type { RuntimeServices } from '@invoker/runtime-service';
-import { startWorkerRuntime, type WorkerRuntimeController } from './worker-runtime.js';
+import { type WorkerRuntimeController } from './worker-runtime.js';
 import { parseHeadlessFixArgs } from './auto-fix-intents.js';
 import { startAutoFixWorker } from './autofix-worker.js';
+import { startExternalRecoveryWorker } from './external-recovery-worker.js';
 import { buildReviewGateCiFailedLifecycleEvent } from './lifecycle-events.js';
 
 export { bumpGenerationAndRecreate } from './workflow-actions.js';
@@ -345,18 +346,6 @@ async function dispatchHeadlessRunnableTasks(
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
-export function wireHeadlessAutoFix(
-  _deps: Pick<HeadlessDeps, 'messageBus' | 'orchestrator' | 'persistence'>,
-  _taskExecutor: Pick<TaskRunner, 'executeTasks' | 'fixWithAgent' | 'resolveConflict'>,
-  _invokeAutoFix?: (taskId: string) => Promise<void>,
-  _onError?: (taskId: string, err: unknown) => void,
-): HeadlessAutoFixController {
-  return {
-    unsubscribe: () => {},
-    isBusy: () => false,
-  };
-}
-
 export function wireHeadlessApproveHook(deps: HeadlessDeps, te: TaskRunner): void {
   deps.orchestrator.setBeforeApproveHook(async (task) => {
     if (task.config.isMergeNode && task.config.workflowId && task.execution.pendingFixError === undefined) {
@@ -392,11 +381,6 @@ export interface QueryFlags {
   reset?: boolean;
   groupBy?: string;
   positional: string[];
-}
-
-export interface HeadlessAutoFixController {
-  unsubscribe: () => void;
-  isBusy: () => boolean;
 }
 
 export function parseQueryFlags(args: string[]): QueryFlags {
@@ -1014,7 +998,7 @@ function resolveHeadlessWorkerName(name: string | undefined): HeadlessWorkerName
 
 async function headlessWorker(
   workerNameArg: string | undefined,
-  deps: Pick<HeadlessDeps, 'logger' | 'messageBus' | 'persistence' | 'orchestrator' | 'invokerConfig'>,
+  deps: Pick<HeadlessDeps, 'logger' | 'messageBus' | 'persistence' | 'orchestrator' | 'invokerConfig' | 'repoRoot'>,
 ): Promise<void> {
   const workerName = resolveHeadlessWorkerName(workerNameArg);
   const selectedWorkers = workerName === 'all' ? CONCRETE_HEADLESS_WORKERS : [workerName];
@@ -1029,13 +1013,14 @@ async function headlessWorker(
         pollIntervalMs: deps.invokerConfig.workerPollIntervalMs,
       });
     }
-    return startWorkerRuntime<never>({
-      name,
-      messageBus: deps.messageBus,
+    return startExternalRecoveryWorker({
       logger: deps.logger,
+      messageBus: deps.messageBus,
+      persistence: deps.persistence,
+      orchestrator: deps.orchestrator,
+      repoRoot: deps.repoRoot,
+      getConfig: () => loadConfig(),
       pollIntervalMs: deps.invokerConfig.workerPollIntervalMs,
-      scan: () => [],
-      submit: async () => {},
     });
   });
 
@@ -1412,7 +1397,6 @@ async function headlessRun(
 
   const taskExecutor = createHeadlessExecutor(deps);
   wireHeadlessApproveHook(deps, taskExecutor);
-  const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
 
   const api = startApiServer({
     logger: deps.logger,
@@ -1452,7 +1436,6 @@ async function headlessRun(
   if (currentWorkflowId) {
     await trackHeadlessWorkflow(currentWorkflowId, deps, {
       waitForApproval,
-      hasBackgroundWork: autoFix.isBusy,
       printSnapshot: true,
       printSummary: true,
       printTaskOutput: true,
@@ -1461,7 +1444,6 @@ async function headlessRun(
   }
 
   await api.close().catch(() => {});
-  autoFix.unsubscribe();
 }
 
 async function headlessResume(
@@ -1477,7 +1459,6 @@ async function headlessResume(
 
   const taskExecutor = createHeadlessExecutor(deps);
   wireHeadlessApproveHook(deps, taskExecutor);
-  const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
 
   const api = startApiServer({
     logger: deps.logger,
@@ -1503,13 +1484,11 @@ async function headlessResume(
     }
     process.stdout.write('[headless] --no-track enabled: resume accepted; exiting without tracking.\n');
     await api.close().catch(() => {});
-    autoFix.unsubscribe();
     return;
   }
 
   if (allStarted.length === 0) {
     await api.close().catch(() => {});
-    autoFix.unsubscribe();
     return;
   }
 
@@ -1517,7 +1496,6 @@ async function headlessResume(
 
   await trackHeadlessWorkflow(workflowId, deps, {
     waitForApproval,
-    hasBackgroundWork: autoFix.isBusy,
     printSnapshot: true,
     printSummary: true,
     printTaskOutput: true,
@@ -1525,7 +1503,6 @@ async function headlessResume(
   });
 
   await api.close().catch(() => {});
-  autoFix.unsubscribe();
 }
 
 async function headlessApprove(taskId: string, deps: HeadlessDeps): Promise<void> {
@@ -1534,7 +1511,6 @@ async function headlessApprove(taskId: string, deps: HeadlessDeps): Promise<void
     taskId = restored.resolvedTaskId;
     const te = createHeadlessExecutor(deps);
     wireHeadlessApproveHook(deps, te);
-    const autoFix = wireHeadlessAutoFix(deps, te);
     const approveTaskAction = buildHeadlessApproveAction(deps, te);
     const beforeStatus = deps.orchestrator.getWorkflowStatus(restored.workflowId);
     const { started } = await approveTaskAction(taskId);
@@ -1550,7 +1526,6 @@ async function headlessApprove(taskId: string, deps: HeadlessDeps): Promise<void
     process.stdout.write(`Approved task: ${taskId}\n`);
     if (deps.noTrack) {
       process.stdout.write('[headless] --no-track enabled: approve accepted; exiting without tracking.\n');
-      autoFix.unsubscribe();
       return;
     }
     const afterStatus = deps.orchestrator.getWorkflowStatus(restored.workflowId);
@@ -1569,16 +1544,13 @@ async function headlessApprove(taskId: string, deps: HeadlessDeps): Promise<void
       || afterStatus.pending < beforeStatus.pending
       || readyTasks.length > 0;
     if (!resumedWork) {
-      autoFix.unsubscribe();
       return;
     }
     await trackHeadlessWorkflow(restored.workflowId, deps, {
-      hasBackgroundWork: autoFix.isBusy,
       printSummary: false,
       printTaskOutput: true,
       setExitCodeOnFailure: false,
     });
-    autoFix.unsubscribe();
   });
 }
 
@@ -1613,16 +1585,13 @@ async function headlessSelect(taskId: string, experimentId: string, deps: Headle
     process.stdout.write(`Selected experiment ${experimentId} for task: ${resolvedTaskId}\n`);
 
     const taskExecutor = createHeadlessExecutor(deps);
-    const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
     const started = deps.orchestrator.resumeWorkflow(workflowId);
     void started;
     await trackHeadlessWorkflow(workflowId, deps, {
-      hasBackgroundWork: autoFix.isBusy,
       printSummary: false,
       printTaskOutput: true,
       setExitCodeOnFailure: false,
     });
-    autoFix.unsubscribe();
   });
 }
 
@@ -1653,7 +1622,6 @@ async function headlessRetryTask(taskId: string, deps: HeadlessDeps): Promise<vo
     process.stdout.write(`Restarted task "${taskId}" — ${runnable.length} task(s) to execute\n`);
 
     const taskExecutor = createHeadlessExecutor(deps);
-    const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
     const { topup } = await dispatchStartedTasksWithGlobalTopup({
       orchestrator: deps.orchestrator,
       taskExecutor,
@@ -1664,16 +1632,13 @@ async function headlessRetryTask(taskId: string, deps: HeadlessDeps): Promise<vo
       mutationTiming: deps.mutationTiming,
     });
     if (runnable.length + topup.length === 0) {
-      autoFix.unsubscribe();
       return;
     }
     await trackHeadlessWorkflow(restored.workflowId, deps, {
-      hasBackgroundWork: autoFix.isBusy,
       printSummary: false,
       printTaskOutput: true,
       setExitCodeOnFailure: false,
     });
-    autoFix.unsubscribe();
   });
 }
 
@@ -1688,7 +1653,6 @@ async function headlessFix(args: string[], deps: HeadlessDeps): Promise<void> {
   taskId = restored.resolvedTaskId;
 
   const te = createHeadlessExecutor(deps);
-  const autoFix = wireHeadlessAutoFix(deps, te);
   const agent = (agentArg ?? 'claude').toLowerCase();
   try {
     if (autoFixContext) {
@@ -1744,7 +1708,6 @@ async function headlessFix(args: string[], deps: HeadlessDeps): Promise<void> {
     });
     throw err;
   } finally {
-    autoFix.unsubscribe();
   }
 }
 
@@ -1755,7 +1718,6 @@ async function headlessResolveConflict(taskId: string, deps: HeadlessDeps, agent
   taskId = restored.resolvedTaskId;
 
   const te = createHeadlessExecutor(deps);
-  const autoFix = wireHeadlessAutoFix(deps, te);
   const agent = (agentArg ?? 'claude').toLowerCase();
   try {
     const result = await resolveConflictAction(taskId, {
@@ -1787,7 +1749,6 @@ async function headlessResolveConflict(taskId: string, deps: HeadlessDeps, agent
     });
     throw err;
   } finally {
-    autoFix.unsubscribe();
   }
 }
 
@@ -1802,7 +1763,6 @@ async function headlessRebaseRetry(target: string, deps: HeadlessDeps): Promise<
   });
 
   const te = createHeadlessExecutor(deps);
-  const autoFix = wireHeadlessAutoFix(deps, te);
   const started = await rebaseRetry(target, { ...deps, taskExecutor: te, mutationTiming: deps.mutationTiming });
   const runnable = started.filter(isDispatchableLaunch);
   const { topup } = await dispatchStartedTasksWithGlobalTopup({
@@ -1815,21 +1775,17 @@ async function headlessRebaseRetry(target: string, deps: HeadlessDeps): Promise<
     mutationTiming: deps.mutationTiming,
   });
   if (runnable.length + topup.length === 0) {
-    autoFix.unsubscribe();
     return;
   }
   if (deps.noTrack) {
     process.stdout.write('[headless] --no-track enabled: rebase-retry accepted; exiting without tracking.\n');
-    autoFix.unsubscribe();
     return;
   }
   await trackHeadlessWorkflow(workflowId, deps, {
-    hasBackgroundWork: autoFix.isBusy,
     printSummary: false,
     printTaskOutput: true,
     setExitCodeOnFailure: false,
   });
-  autoFix.unsubscribe();
 
   const tasksStarted = runnable.length;
   process.stdout.write(`Rebase-retry: retried workflow from fresh base (${tasksStarted} task(s))\n`);
@@ -1846,7 +1802,6 @@ async function headlessRebaseRecreate(workflowTarget: string, deps: HeadlessDeps
   });
 
   const te = createHeadlessExecutor(deps);
-  const autoFix = wireHeadlessAutoFix(deps, te);
   const started = await rebaseRecreate(workflowTarget, { ...deps, taskExecutor: te, mutationTiming: deps.mutationTiming });
   const runnable = started.filter(isDispatchableLaunch);
   const { topup } = await dispatchStartedTasksWithGlobalTopup({
@@ -1859,21 +1814,17 @@ async function headlessRebaseRecreate(workflowTarget: string, deps: HeadlessDeps
     mutationTiming: deps.mutationTiming,
   });
   if (runnable.length + topup.length === 0) {
-    autoFix.unsubscribe();
     return;
   }
   if (deps.noTrack) {
     process.stdout.write('[headless] --no-track enabled: rebase-recreate accepted; exiting without tracking.\n');
-    autoFix.unsubscribe();
     return;
   }
   await trackHeadlessWorkflow(workflowId, deps, {
-    hasBackgroundWork: autoFix.isBusy,
     printSummary: false,
     printTaskOutput: true,
     setExitCodeOnFailure: false,
   });
-  autoFix.unsubscribe();
 
   const tasksStarted = runnable.length;
   process.stdout.write(`Rebase-recreate: recreated workflow from fresh base (${tasksStarted} task(s))\n`);
@@ -1902,7 +1853,6 @@ async function headlessRecreateWorkflow(workflowId: string, deps: HeadlessDeps):
   const runnable = started.filter(isDispatchableLaunch);
   if (runnable.length > 0) {
     const te = createHeadlessExecutor(deps);
-    const autoFix = wireHeadlessAutoFix(deps, te);
     remoteFetchForPool.enabled = false;
     let topup: TaskState[] = [];
     try {
@@ -1919,21 +1869,17 @@ async function headlessRecreateWorkflow(workflowId: string, deps: HeadlessDeps):
       remoteFetchForPool.enabled = true;
     }
     if (runnable.length + topup.length === 0) {
-      autoFix.unsubscribe();
       return;
     }
     if (deps.noTrack) {
       process.stdout.write('[headless] --no-track enabled: recreate accepted; exiting without tracking.\n');
-      autoFix.unsubscribe();
       return;
     }
     await trackHeadlessWorkflow(workflowId, deps, {
-      hasBackgroundWork: autoFix.isBusy,
       printSummary: false,
       printTaskOutput: true,
       setExitCodeOnFailure: false,
     });
-    autoFix.unsubscribe();
   }
   const tasksStarted = runnable.length;
   process.stdout.write(`Recreate workflow "${workflowId}" — ${tasksStarted} task(s) to execute (pool fetch skipped)\n`);
@@ -1970,7 +1916,6 @@ async function headlessRecreateTask(taskId: string, deps: HeadlessDeps): Promise
   const workflowId = deps.orchestrator.getTask(taskId)?.config.workflowId;
   process.stdout.write(`Recreate task "${taskId}" (+ downstream) — ${runnable.length} task(s) to execute (pool fetch skipped)\n`);
   const te = createHeadlessExecutor(deps);
-  const autoFix = wireHeadlessAutoFix(deps, te);
   remoteFetchForPool.enabled = false;
   let topup: TaskState[] = [];
   try {
@@ -1986,23 +1931,19 @@ async function headlessRecreateTask(taskId: string, deps: HeadlessDeps): Promise
     remoteFetchForPool.enabled = true;
   }
   if (runnable.length + topup.length === 0) {
-    autoFix.unsubscribe();
     return;
   }
   if (deps.noTrack) {
     process.stdout.write('[headless] --no-track enabled: recreate-task accepted; exiting without tracking.\n');
-    autoFix.unsubscribe();
     return;
   }
   if (workflowId) {
     await trackHeadlessWorkflow(workflowId, deps, {
-      hasBackgroundWork: autoFix.isBusy,
       printSummary: false,
       printTaskOutput: true,
       setExitCodeOnFailure: false,
     });
   }
-  autoFix.unsubscribe();
 }
 
 async function headlessForkWorkflow(
@@ -2130,7 +2071,6 @@ async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Pr
   }
 
   const te = createHeadlessExecutor(deps);
-  const autoFix = wireHeadlessAutoFix(deps, te);
   remoteFetchForPool.enabled = false;
   let topup: TaskState[] = [];
   try {
@@ -2147,16 +2087,13 @@ async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Pr
     remoteFetchForPool.enabled = true;
   }
   if (runnable.length + topup.length === 0) {
-    autoFix.unsubscribe();
     return;
   }
   await trackHeadlessWorkflow(workflowId, deps, {
-    hasBackgroundWork: autoFix.isBusy,
     printSummary: false,
     printTaskOutput: true,
     setExitCodeOnFailure: false,
   });
-  autoFix.unsubscribe();
 }
 
 /** Orchestrator error codes that preemption treats as benign (cancel is best-effort). */
@@ -2202,7 +2139,6 @@ async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDe
   if (!restored) return;
   taskId = restored.resolvedTaskId;
   const taskExecutor = createHeadlessExecutor(deps);
-  const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
 
   const envelope = makeEnvelope('edit-task-command', 'headless', 'task', { taskId, newCommand });
   const result = await deps.commandService.editTaskCommand(envelope);
@@ -2213,20 +2149,16 @@ async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDe
 
   if (deps.noTrack) {
     process.stdout.write('[headless] --no-track enabled: set command accepted; exiting without tracking.\n');
-    autoFix.unsubscribe();
     return;
   }
   if (runnable.length === 0) {
-    autoFix.unsubscribe();
     return;
   }
   await trackHeadlessWorkflow(restored.workflowId, deps, {
-    hasBackgroundWork: autoFix.isBusy,
     printSummary: false,
     printTaskOutput: true,
     setExitCodeOnFailure: false,
   });
-  autoFix.unsubscribe();
 }
 
 async function headlessEditPrompt(taskId: string, newPrompt: string, deps: HeadlessDeps): Promise<void> {
@@ -2234,7 +2166,6 @@ async function headlessEditPrompt(taskId: string, newPrompt: string, deps: Headl
   const restored = restoreWorkflowForTask(taskId, deps);
   taskId = restored.resolvedTaskId;
   const taskExecutor = createHeadlessExecutor(deps);
-  const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
 
   const envelope = makeEnvelope('edit-task-prompt', 'headless', 'task', { taskId, newPrompt });
   const result = await deps.commandService.editTaskPrompt(envelope);
@@ -2245,20 +2176,16 @@ async function headlessEditPrompt(taskId: string, newPrompt: string, deps: Headl
 
   if (deps.noTrack) {
     process.stdout.write('[headless] --no-track enabled: set prompt accepted; exiting without tracking.\n');
-    autoFix.unsubscribe();
     return;
   }
   if (runnable.length === 0) {
-    autoFix.unsubscribe();
     return;
   }
   await trackHeadlessWorkflow(restored.workflowId, deps, {
-    hasBackgroundWork: autoFix.isBusy,
     printSummary: false,
     printTaskOutput: true,
     setExitCodeOnFailure: false,
   });
-  autoFix.unsubscribe();
 }
 
 async function headlessEditExecutor(
@@ -2276,7 +2203,6 @@ async function headlessEditExecutor(
   if (!restored) return;
   taskId = restored.resolvedTaskId;
   const taskExecutor = createHeadlessExecutor(deps);
-  const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
 
   const envelope = makeEnvelope('edit-task-type', 'headless', 'task', { taskId, runnerKind, poolMemberId });
   const result = await deps.commandService.editTaskType(envelope);
@@ -2290,20 +2216,16 @@ async function headlessEditExecutor(
 
   if (deps.noTrack) {
     process.stdout.write('[headless] --no-track enabled: set executor accepted; exiting without tracking.\n');
-    autoFix.unsubscribe();
     return;
   }
   if (runnable.length === 0) {
-    autoFix.unsubscribe();
     return;
   }
   await trackHeadlessWorkflow(restored.workflowId, deps, {
-    hasBackgroundWork: autoFix.isBusy,
     printSummary: false,
     printTaskOutput: true,
     setExitCodeOnFailure: false,
   });
-  autoFix.unsubscribe();
 }
 
 async function headlessEditAgent(taskId: string, agentName: string, deps: HeadlessDeps): Promise<void> {
@@ -2312,7 +2234,6 @@ async function headlessEditAgent(taskId: string, agentName: string, deps: Headle
   if (!restored) return;
   taskId = restored.resolvedTaskId;
   const taskExecutor = createHeadlessExecutor(deps);
-  const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
 
   const envelope = makeEnvelope('edit-task-agent', 'headless', 'task', { taskId, agentName });
   const result = await deps.commandService.editTaskAgent(envelope);
@@ -2323,20 +2244,16 @@ async function headlessEditAgent(taskId: string, agentName: string, deps: Headle
 
   if (deps.noTrack) {
     process.stdout.write('[headless] --no-track enabled: set agent accepted; exiting without tracking.\n');
-    autoFix.unsubscribe();
     return;
   }
   if (runnable.length === 0) {
-    autoFix.unsubscribe();
     return;
   }
   await trackHeadlessWorkflow(restored.workflowId, deps, {
-    hasBackgroundWork: autoFix.isBusy,
     printSummary: false,
     printTaskOutput: true,
     setExitCodeOnFailure: false,
   });
-  autoFix.unsubscribe();
 }
 
 async function headlessQuerySelect(taskId: string, deps: Pick<HeadlessDeps, 'persistence'>): Promise<void> {
@@ -2752,7 +2669,6 @@ async function headlessSetFixContext(
   const restored = restoreWorkflowForTask(taskId, deps);
   taskId = restored.resolvedTaskId;
   const taskExecutor = createHeadlessExecutor(deps);
-  const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
 
   const envelope = makeEnvelope('edit-task-fix-context', 'headless', 'task', {
     taskId,
@@ -2760,7 +2676,6 @@ async function headlessSetFixContext(
   });
   const result = await deps.commandService.editTaskFixContext(envelope);
   if (!result.ok) {
-    autoFix.unsubscribe();
     throw new Error(result.error.message);
   }
   const runnable = result.data.filter(isDispatchableLaunch);
@@ -2772,20 +2687,16 @@ async function headlessSetFixContext(
 
   if (deps.noTrack) {
     process.stdout.write(`[headless] --no-track enabled: set ${which} accepted; exiting without tracking.\n`);
-    autoFix.unsubscribe();
     return;
   }
   if (runnable.length === 0) {
-    autoFix.unsubscribe();
     return;
   }
   await trackHeadlessWorkflow(restored.workflowId, deps, {
-    hasBackgroundWork: autoFix.isBusy,
     printSummary: false,
     printTaskOutput: true,
     setExitCodeOnFailure: false,
   });
-  autoFix.unsubscribe();
 }
 
 async function headlessSetGatePolicy(args: string[], deps: HeadlessDeps): Promise<void> {

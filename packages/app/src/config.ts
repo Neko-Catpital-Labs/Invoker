@@ -51,6 +51,35 @@ export interface InvokerConfig {
    */
   autoFixCi?: boolean;
   /**
+   * Operator-owned external failure recovery hook.
+   *
+   * When enabled, the external recovery lifecycle worker may launch this
+   * command after scanning persisted failed or stalled tasks. State producers
+   * must not launch the command directly.
+   */
+  externalFailureRecovery?: {
+    /** Set true to permit the worker to spawn the recovery command. Default: false. */
+    enabled?: boolean;
+    /** Shell command line executed (with `shell: true`) when recovery is launched. */
+    command?: string;
+    /** Working directory for the spawned recovery process. Defaults to the launcher's process cwd. */
+    cwd?: string;
+    /**
+     * Minimum number of seconds between launches for a single launcher instance.
+     * Launches requested within the cooldown window are skipped. Default: 0 (no cooldown).
+     */
+    cooldownSeconds?: number;
+    /**
+     * Recover persisted failed tasks. Defaults to true when external recovery is enabled.
+     */
+    recoverFailedTasks?: boolean;
+    /**
+     * Recover active tasks whose last heartbeat is older than this many seconds.
+     * Stalled recovery is disabled unless this is a positive number.
+     */
+    stalledTaskSeconds?: number;
+  };
+  /**
    * Poll interval for explicit lifecycle workers such as `--headless worker autofix`.
    * Defaults to the shared worker runtime interval.
    */
