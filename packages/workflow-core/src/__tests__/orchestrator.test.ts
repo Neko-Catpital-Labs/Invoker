@@ -7035,6 +7035,7 @@ describe('Orchestrator', () => {
       expect(queueStatus.runningCount).toBe(1);
       expect(queueStatus.running[0]?.taskId).toBe(taskId);
       expect(queueStatus.running[0]?.attemptId).toBe(selectedAttemptId);
+      expect(queueStatus.queued.map((task) => task.taskId)).not.toContain(taskId);
     });
 
     it('restartTask supersedes a claimed selected attempt before relaunching', () => {
