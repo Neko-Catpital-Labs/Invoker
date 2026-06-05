@@ -202,11 +202,12 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         return;
       }
 
+      if (entry.finalizingAfterClose) {
+        this.emitHeartbeat(executionId);
+        return;
+      }
+
       if (child.exitCode !== null || child.killed) {
-        if (entry.finalizingAfterClose) {
-          this.emitHeartbeat(executionId);
-          return;
-        }
         clearInterval(entry.heartbeatTimer);
         entry.heartbeatTimer = undefined;
 
