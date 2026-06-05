@@ -203,11 +203,12 @@ export class LaunchDispatcher {
         }
         task = readiness.task;
       }
-      if (!this.dispatchMatchesTask(leased, task)) {
+      const lineageMismatch = this.getDispatchLineageMismatch(leased, task);
+      if (lineageMismatch) {
         this.abandonInvalidDispatch(
           leased,
-          `Launch dispatch ${leased.id} is stale: selected attempt or generation changed`,
-          'selected_attempt_changed',
+          lineageMismatch.message,
+          lineageMismatch.reason,
           {
             selectedAttemptId: task.execution.selectedAttemptId,
             selectedGeneration: task.execution.generation ?? 0,
@@ -254,9 +255,29 @@ export class LaunchDispatcher {
     return this.orchestrator?.getTask?.(dispatch.taskId);
   }
 
-  private dispatchMatchesTask(dispatch: TaskLaunchDispatch, task: TaskState): boolean {
-    return task.execution.selectedAttemptId === dispatch.attemptId
-      && (task.execution.generation ?? 0) === (dispatch.generation ?? 0);
+  private getDispatchLineageMismatch(
+    dispatch: TaskLaunchDispatch,
+    task: TaskState,
+  ): { reason: string; message: string } | undefined {
+    if (task.execution.selectedAttemptId !== dispatch.attemptId) {
+      return {
+        reason: 'selected_attempt_mismatch',
+        message:
+          `Launch dispatch ${dispatch.id} is stale: attempt ${dispatch.attemptId} ` +
+          `is not the selected attempt ${task.execution.selectedAttemptId ?? 'none'}`,
+      };
+    }
+    const selectedGeneration = task.execution.generation ?? 0;
+    const dispatchGeneration = dispatch.generation ?? 0;
+    if (selectedGeneration !== dispatchGeneration) {
+      return {
+        reason: 'generation_mismatch',
+        message:
+          `Launch dispatch ${dispatch.id} is stale: generation ${dispatchGeneration} ` +
+          `does not match task generation ${selectedGeneration}`,
+      };
+    }
+    return undefined;
   }
 
   private abandonInvalidDispatch(

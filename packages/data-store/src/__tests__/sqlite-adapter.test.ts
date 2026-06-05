@@ -657,6 +657,17 @@ describe('SQLiteAdapter', () => {
         const staleAfter = adapter.loadLaunchDispatchById(stale.id);
         expect(staleAfter?.state).toBe('abandoned');
         expect(staleAfter?.lastError).toMatch(/not the selected attempt/);
+        const events = adapter.getEvents('wf-launch/t-stale');
+        const invalidated = events.find((event) => event.eventType === 'task.launch_dispatch_invalidated');
+        expect(JSON.parse(invalidated!.payload!)).toMatchObject({
+          source: 'launch-dispatch-claim',
+          dispatchId: stale.id,
+          attemptId: 'attempt-stale',
+          dispatchGeneration: 0,
+          reason: 'selected_attempt_mismatch',
+          selectedAttemptId: 'attempt-current',
+          selectedGeneration: 0,
+        });
       });
 
       it('abandons stale generation candidates', () => {
@@ -681,6 +692,17 @@ describe('SQLiteAdapter', () => {
         const after = adapter.loadLaunchDispatchById(row.id);
         expect(after?.state).toBe('abandoned');
         expect(after?.lastError).toMatch(/does not match task generation/);
+        const events = adapter.getEvents('wf-launch/t1');
+        const invalidated = events.find((event) => event.eventType === 'task.launch_dispatch_invalidated');
+        expect(JSON.parse(invalidated!.payload!)).toMatchObject({
+          source: 'launch-dispatch-claim',
+          dispatchId: row.id,
+          attemptId: 'attempt-generation',
+          dispatchGeneration: 1,
+          reason: 'generation_mismatch',
+          selectedAttemptId: 'attempt-generation',
+          selectedGeneration: 2,
+        });
       });
 
       it('abandons non-pending task candidates', () => {

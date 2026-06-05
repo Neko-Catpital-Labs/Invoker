@@ -754,6 +754,57 @@ describe('LaunchDispatcher', () => {
         execution: {
           ...task.execution,
           selectedAttemptId: 'attempt-current',
+          generation: 0,
+        },
+      };
+      const executeTask = vi.fn().mockResolvedValue(undefined);
+      const dispatcher = new LaunchDispatcher({
+        persistence: adapter,
+        ownerId: 'owner-a',
+        orchestrator: {
+          prepareTaskForNewAttempt: vi.fn(),
+          getTask: vi.fn().mockReturnValue(currentTask as any),
+        },
+        taskRunnerProvider: () => ({ executeTask }),
+        mode: 'active',
+        maxConcurrency: 4,
+      });
+
+      dispatcher.poll();
+
+      expect(executeTask).not.toHaveBeenCalled();
+      const after = adapter.loadLaunchDispatchById(enq.id);
+      expect(after?.state).toBe('abandoned');
+      expect(after?.lastError).toMatch(/not the selected attempt/);
+      const events = adapter.getEvents(task.id);
+      const invalidated = events.find((event) => event.eventType === 'task.launch_dispatch_invalidated');
+      expect(JSON.parse(invalidated!.payload!)).toMatchObject({
+        dispatchId: enq.id,
+        dispatchAttemptId: 'attempt-old',
+        dispatchGeneration: 0,
+        reason: 'selected_attempt_mismatch',
+        selectedAttemptId: 'attempt-current',
+        selectedGeneration: 0,
+        accepted: true,
+      });
+    });
+
+    it('active mode abandons a dispatch row when the generation changed after lease', () => {
+      const task = seedWorkflowAndTask('wf-a/t-stale-generation', 'wf-a', {
+        selectedAttemptId: 'attempt-generation',
+        generation: 0,
+      });
+      const enq = adapter.enqueueLaunchDispatch({
+        taskId: task.id,
+        attemptId: 'attempt-generation',
+        workflowId: 'wf-a',
+        generation: 0,
+      });
+      const currentTask = {
+        ...task,
+        execution: {
+          ...task.execution,
+          selectedAttemptId: 'attempt-generation',
           generation: 1,
         },
       };
@@ -775,9 +826,18 @@ describe('LaunchDispatcher', () => {
       expect(executeTask).not.toHaveBeenCalled();
       const after = adapter.loadLaunchDispatchById(enq.id);
       expect(after?.state).toBe('abandoned');
-      expect(after?.lastError).toMatch(/selected attempt or generation changed/);
+      expect(after?.lastError).toMatch(/does not match task generation/);
       const events = adapter.getEvents(task.id);
-      expect(events.some((event) => event.eventType === 'task.launch_dispatch_invalidated')).toBe(true);
+      const invalidated = events.find((event) => event.eventType === 'task.launch_dispatch_invalidated');
+      expect(JSON.parse(invalidated!.payload!)).toMatchObject({
+        dispatchId: enq.id,
+        dispatchAttemptId: 'attempt-generation',
+        dispatchGeneration: 0,
+        reason: 'generation_mismatch',
+        selectedAttemptId: 'attempt-generation',
+        selectedGeneration: 1,
+        accepted: true,
+      });
     });
 
     it('active mode abandons the dispatch when readiness is blocked', () => {

@@ -3274,20 +3274,25 @@ export class SQLiteAdapter implements PersistenceAdapter {
         const candidateId = Number(candidate.id);
 
         let staleReason: string | undefined;
+        let staleReasonCode: string | undefined;
         if (!candidate.current_task_id) {
           staleReason = `Launch dispatch ${candidateId} is stale: task ${String(candidate.task_id)} no longer exists`;
+          staleReasonCode = 'task_missing';
         } else if (String(candidate.current_task_status) !== 'pending') {
           staleReason =
             `Launch dispatch ${candidateId} is stale: task ${String(candidate.task_id)} ` +
             `status is ${String(candidate.current_task_status)}`;
+          staleReasonCode = 'task_not_pending';
         } else if (String(candidate.current_selected_attempt_id ?? '') !== String(candidate.attempt_id)) {
           staleReason =
             `Launch dispatch ${candidateId} is stale: attempt ${String(candidate.attempt_id)} ` +
             `is not the selected attempt ${String(candidate.current_selected_attempt_id ?? 'none')}`;
+          staleReasonCode = 'selected_attempt_mismatch';
         } else if (Number(candidate.current_execution_generation ?? 0) !== Number(candidate.generation ?? 0)) {
           staleReason =
             `Launch dispatch ${candidateId} is stale: generation ${String(candidate.generation)} ` +
             `does not match task generation ${String(candidate.current_execution_generation ?? 0)}`;
+          staleReasonCode = 'generation_mismatch';
         }
 
         if (staleReason) {
@@ -3302,6 +3307,27 @@ export class SQLiteAdapter implements PersistenceAdapter {
                AND state = 'enqueued'`,
             [now, staleReason, candidateId],
           );
+          if ((this.db.getRowsModified?.() ?? 0) > 0 && candidate.current_task_id) {
+            this.logEvent(String(candidate.task_id), 'task.launch_dispatch_invalidated', {
+              source: 'launch-dispatch-claim',
+              dispatchId: candidateId,
+              attemptId: String(candidate.attempt_id),
+              dispatchAttemptId: String(candidate.attempt_id),
+              workflowId: String(candidate.workflow_id),
+              generation: Number(candidate.generation ?? 0),
+              dispatchGeneration: Number(candidate.generation ?? 0),
+              reason: staleReasonCode ?? 'stale_dispatch',
+              message: staleReason,
+              selectedAttemptId: candidate.current_selected_attempt_id
+                ? String(candidate.current_selected_attempt_id)
+                : undefined,
+              selectedGeneration: Number(candidate.current_execution_generation ?? 0),
+              taskStatus: candidate.current_task_status
+                ? String(candidate.current_task_status)
+                : undefined,
+              invalidatedAt: now,
+            });
+          }
           continue;
         }
 
