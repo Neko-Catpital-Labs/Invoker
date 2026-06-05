@@ -1426,6 +1426,63 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'stacked-workflows');
   });
 
+  test('workflow-detached-lineage — active edge and detached lineage remain distinct', async ({ page }) => {
+    const rootWorkflowId = await loadPlanAndSelectWorkflow(page, {
+      name: 'Detached Lineage Root',
+      repoUrl: E2E_REPO_URL,
+      onFinish: 'pull_request' as const,
+      mergeMode: 'external_review',
+      tasks: [
+        { id: 'lineage-root-task', description: 'Root lineage task', command: 'echo root', dependencies: [] as string[] },
+      ],
+    });
+
+    const activeWorkflowId = await loadPlanAndSelectWorkflow(page, {
+      name: 'Active Lineage Downstream',
+      repoUrl: E2E_REPO_URL,
+      onFinish: 'pull_request' as const,
+      mergeMode: 'external_review',
+      externalDependencies: [{ workflowId: rootWorkflowId, gatePolicy: 'review_ready' as const }],
+      tasks: [
+        { id: 'lineage-active-task', description: 'Still depends on root', command: 'echo active', dependencies: [] as string[] },
+      ],
+    });
+
+    const detachedWorkflowId = await loadPlanAndSelectWorkflow(page, {
+      name: 'Detached Lineage Downstream',
+      repoUrl: E2E_REPO_URL,
+      onFinish: 'pull_request' as const,
+      mergeMode: 'external_review',
+      externalDependencies: [{ workflowId: rootWorkflowId, gatePolicy: 'review_ready' as const }],
+      tasks: [
+        { id: 'lineage-detached-task', description: 'Detached from root', command: 'echo detached', dependencies: [] as string[] },
+      ],
+    });
+
+    await page.evaluate(
+      ({ workflowId, upstreamWorkflowId }) => window.invoker.detachWorkflow(workflowId, upstreamWorkflowId),
+      { workflowId: detachedWorkflowId, upstreamWorkflowId: rootWorkflowId },
+    );
+    await page.getByRole('button', { name: 'Refresh' }).click();
+
+    await hideSelectedWorkflowMiniDagIfVisible(page);
+    await minimizeInspectorIfVisible(page);
+    await page.getByTestId('workflow-graph-react-flow').getByRole('button', { name: 'Fit View' }).click();
+    await page.waitForTimeout(500);
+
+    for (const workflowId of [rootWorkflowId, activeWorkflowId, detachedWorkflowId]) {
+      await expect(workflowNode(page, workflowId)).toBeVisible({ timeout: 10000 });
+      await expect(workflowNode(page, workflowId)).toBeInViewport({ timeout: 10000 });
+    }
+    await expect(workflowNode(page, activeWorkflowId)).not.toContainText('Detached');
+    await expect(workflowNode(page, detachedWorkflowId).getByLabel('Detached lineage')).toBeVisible();
+
+    await expect(page.getByTestId(`rf__edge-workflow:active:${rootWorkflowId}->${activeWorkflowId}`)).toBeAttached();
+    await expect(page.getByTestId(`rf__edge-workflow:detached:${rootWorkflowId}->${detachedWorkflowId}`)).toBeAttached();
+
+    await captureScreenshot(page, 'workflow-detached-lineage');
+  });
+
   test('terminate-wording — task-level uses Terminate, workflow-level keeps Cancel', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     const now = new Date();
