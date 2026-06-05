@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import type { MouseEvent } from 'react';
 import type { TaskState, WorkflowMeta, WorkflowStatus } from '../types.js';
 import { deriveWorkflowGraph, layoutWorkflowGraph } from '../lib/workflow-graph.js';
@@ -142,27 +142,22 @@ function WorkflowGraphInner({
     onWorkflowContextMenu(event, node.id);
   }, [onWorkflowContextMenu]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (reportedVisibleRef.current || graph.nodes.length === 0 || typeof window === 'undefined') {
       return;
     }
-    const frame = requestAnimationFrame(() => {
-      const visibleNode = document.querySelector('[data-testid^="workflow-node-"]');
-      if (!visibleNode) return;
-      reportedVisibleRef.current = true;
-      void window.invoker?.reportUiPerf?.('startup_workflow_graph_visible', {
-        nodeCount: graph.nodes.length,
-        edgeCount: graph.edges.length,
-        deriveMs: graphMetricsRef.current.deriveMs,
-        layoutMs: graphMetricsRef.current.layoutMs,
-        objectsMs: graphMetricsRef.current.objectsMs,
-        elapsedMs: Math.round(performance.now()),
-        processElapsedMs: window.__INVOKER_BOOTSTRAP__?.appStartedAtEpochMs
-          ? Date.now() - window.__INVOKER_BOOTSTRAP__.appStartedAtEpochMs
-          : undefined,
-      });
+    reportedVisibleRef.current = true;
+    void window.invoker?.reportUiPerf?.('startup_workflow_graph_visible', {
+      nodeCount: graph.nodes.length,
+      edgeCount: graph.edges.length,
+      deriveMs: graphMetricsRef.current.deriveMs,
+      layoutMs: graphMetricsRef.current.layoutMs,
+      objectsMs: graphMetricsRef.current.objectsMs,
+      elapsedMs: Math.round(performance.now()),
+      processElapsedMs: window.__INVOKER_BOOTSTRAP__?.appStartedAtEpochMs
+        ? Date.now() - window.__INVOKER_BOOTSTRAP__.appStartedAtEpochMs
+        : undefined,
     });
-    return () => cancelAnimationFrame(frame);
   }, [graph.edges.length, graph.nodes.length]);
 
   if (graph.nodes.length === 0) {
