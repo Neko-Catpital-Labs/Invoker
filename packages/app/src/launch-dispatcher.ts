@@ -26,6 +26,7 @@ export type LaunchDispatcherPersistence = Pick<
   | 'markLaunchDispatchCompleted'
   | 'markLaunchDispatchFailed'
   | 'markLaunchDispatchAbandoned'
+  | 'renewLaunchDispatchLease'
   | 'reapExpiredLaunchDispatchLeases'
   | 'listAbandonableLaunchDispatchLeases'
   | 'claimLaunchDispatchAtomic'
@@ -456,6 +457,21 @@ export class LaunchDispatcher {
       accepted: ok,
       module: 'launch-dispatcher',
     });
+    return ok;
+  }
+
+  renewDispatch(dispatchId: number): boolean {
+    const ok = this.persistence.renewLaunchDispatchLease({
+      id: dispatchId,
+      ownerId: this.ownerId,
+    });
+    if (!ok) {
+      this.logger?.warn?.('[launch-dispatcher] renew rejected', {
+        ownerId: this.ownerId,
+        dispatchId,
+        module: 'launch-dispatcher',
+      });
+    }
     return ok;
   }
 

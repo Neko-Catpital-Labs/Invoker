@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TaskState } from '@invoker/workflow-core';
 import type { WorkResponse, Logger } from '@invoker/contracts';
 import { TaskRunner, type LaunchOutboxAck } from '../task-runner.js';
@@ -50,11 +50,15 @@ interface RunnerEnv {
   triggerComplete: () => void;
 }
 
-function buildRunnerEnv(task: TaskState, options: { startThrows?: Error } = {}): RunnerEnv {
+function buildRunnerEnv(task: TaskState, options: {
+  startThrows?: Error;
+  startImpl?: (request: any) => Promise<any>;
+} = {}): RunnerEnv {
   let completeCallback: ((response: WorkResponse) => void) | undefined;
   const executor = {
     type: 'worktree',
     start: vi.fn().mockImplementation(async (request: any) => {
+      if (options.startImpl) return options.startImpl(request);
       if (options.startThrows) throw options.startThrows;
       return {
         executionId: `exec-${request.actionId}`,
@@ -114,12 +118,15 @@ function buildRunnerEnv(task: TaskState, options: { startThrows?: Error } = {}):
 function makeLaunchOutbox(): LaunchOutboxAck & {
   completeCalls: number[];
   failCalls: Array<[number, unknown]>;
+  renewCalls: number[];
 } {
   const completeCalls: number[] = [];
   const failCalls: Array<[number, unknown]> = [];
+  const renewCalls: number[] = [];
   return {
     completeCalls,
     failCalls,
+    renewCalls,
     completeDispatch(id) {
       completeCalls.push(id);
       return true;
@@ -128,10 +135,18 @@ function makeLaunchOutbox(): LaunchOutboxAck & {
       failCalls.push([id, err]);
       return true;
     },
+    renewDispatch(id) {
+      renewCalls.push(id);
+      return true;
+    },
   };
 }
 
 describe('TaskRunner launch-dispatch wiring', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('keeps dispatch leased and proceeds to executor.start', async () => {
     const task = makeTask();
     const env = buildRunnerEnv(task, { startThrows: new Error('isolated start sentinel') });
@@ -155,6 +170,37 @@ describe('TaskRunner launch-dispatch wiring', () => {
     const failArg = launchOutbox.failCalls[0][1];
     expect(failArg).toBeInstanceOf(Error);
     expect((failArg as Error).message).toMatch(/startup explosion/);
+  });
+
+  it('renews the dispatch lease while executor.start is still pending', async () => {
+    vi.useFakeTimers();
+    const task = makeTask();
+    let resolveStart: ((handle: any) => void) | undefined;
+    const env = buildRunnerEnv(task, {
+      startImpl: async (request) => new Promise((resolve) => {
+        resolveStart = () => resolve({
+          executionId: `exec-${request.actionId}`,
+          taskId: request.actionId,
+          workspacePath: '/tmp/mock-ws',
+          branch: `experiment/${request.actionId}-mock`,
+        });
+      }),
+    });
+    const launchOutbox = makeLaunchOutbox();
+
+    const run = env.runner.executeTask(task, { dispatchId: 99, launchOutbox });
+    await vi.advanceTimersByTimeAsync(16_000);
+
+    expect(launchOutbox.renewCalls).toContain(99);
+    resolveStart?.({
+      executionId: `exec-${task.id}`,
+      taskId: task.id,
+      workspacePath: '/tmp/mock-ws',
+      branch: `experiment/${task.id}-mock`,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    env.triggerComplete();
+    await run;
   });
 
   it('fails the dispatch when markTaskRunningAfterLaunch rejects the launch', async () => {

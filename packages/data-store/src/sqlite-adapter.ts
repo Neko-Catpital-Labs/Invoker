@@ -3460,6 +3460,26 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return (this.db.getRowsModified?.() ?? 0) > 0;
   }
 
+  renewLaunchDispatchLease(options: {
+    id: number;
+    ownerId: string;
+    nowIso?: string;
+  }): boolean {
+    const now = options.nowIso ?? new Date().toISOString();
+    const fencedUntil = new Date(
+      new Date(now).getTime() + DISPATCH_LEASE_MS,
+    ).toISOString();
+    this.execRun(
+      `UPDATE task_launch_dispatch
+         SET fenced_until = ?
+       WHERE id = ?
+         AND state = 'leased'
+         AND dispatch_owner = ?`,
+      [fencedUntil, options.id, options.ownerId],
+    );
+    return (this.db.getRowsModified?.() ?? 0) > 0;
+  }
+
   listAbandonableLaunchDispatchLeases(options: {
     nowIso?: string;
     maxAttempts: number;
