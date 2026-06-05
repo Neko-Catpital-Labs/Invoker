@@ -31,6 +31,10 @@ describe('InvalidationPlan policy registry', () => {
       scope: 'task',
       mode: 'recreate',
     });
+    expect(ACTION_SPECS.recreateDownstream).toMatchObject({
+      scope: 'task',
+      mode: 'recreate',
+    });
     expect(ACTION_SPECS.retryWorkflow).toMatchObject({
       scope: 'workflow',
       mode: 'retry',
@@ -89,6 +93,47 @@ describe('InvalidationPlan policy registry', () => {
       affectedWorkflowIds: ['wf-1'],
       affectedTaskIds: ['wf-1/child', 'wf-1/grandchild', 'wf-1/root'],
       lockPlan: { workflowIds: ['wf-1'] },
+    });
+  });
+
+  it('plans downstream recreate as descendants only for A -> B -> C', () => {
+    const tasks = [
+      task('wf-1/A', 'wf-1'),
+      task('wf-1/B', 'wf-1', ['wf-1/A']),
+      task('wf-1/C', 'wf-1', ['wf-1/B']),
+      task('wf-1/sibling', 'wf-1'),
+    ];
+
+    const fromA = planInvalidation({
+      action: 'recreateDownstream',
+      targetId: 'wf-1/A',
+      tasks,
+    });
+    expect(fromA).toMatchObject({
+      action: 'recreateDownstream',
+      scope: 'task',
+      mode: 'recreate',
+      affectedWorkflowIds: ['wf-1'],
+      affectedTaskIds: ['wf-1/B', 'wf-1/C'],
+      lockPlan: { workflowIds: ['wf-1'] },
+    });
+
+    const fromB = planInvalidation({
+      action: 'recreateDownstream',
+      targetId: 'wf-1/B',
+      tasks,
+    });
+    expect(fromB.affectedTaskIds).toEqual(['wf-1/C']);
+
+    const fromLeaf = planInvalidation({
+      action: 'recreateDownstream',
+      targetId: 'wf-1/C',
+      tasks,
+    });
+    expect(fromLeaf).toMatchObject({
+      affectedWorkflowIds: [],
+      affectedTaskIds: [],
+      lockPlan: { workflowIds: [] },
     });
   });
 
