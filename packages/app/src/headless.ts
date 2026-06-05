@@ -291,6 +291,7 @@ async function dispatchHeadlessRunnableTasks(
   taskExecutor: TaskRunner,
   runnable: TaskState[],
   context: string,
+  options: { waitForLaunchHandoff?: boolean } = {},
 ): Promise<void> {
   if (runnable.length === 0) return;
   if (deps.invokerConfig.launchOutboxMode !== 'active') {
@@ -327,9 +328,74 @@ async function dispatchHeadlessRunnableTasks(
     }
   };
   poll();
+
+  if (options.waitForLaunchHandoff) {
+    const expectedAttemptIds = new Set(
+      runnable
+        .map((task) => task.execution.selectedAttemptId?.trim())
+        .filter((attemptId): attemptId is string => !!attemptId),
+    );
+    const hasLiveExpectedDispatch = (): boolean => {
+      if (expectedAttemptIds.size === 0) return false;
+      const rows = deps.persistence.listLaunchDispatchesByState?.(['enqueued', 'leased']) ?? [];
+      return rows.some((row) => expectedAttemptIds.has(row.attemptId));
+    };
+    if (!hasLiveExpectedDispatch()) return;
+
+    await new Promise<void>((resolve) => {
+      const timer = setInterval(() => {
+        poll();
+        if (!hasLiveExpectedDispatch()) {
+          clearInterval(timer);
+          resolve();
+        }
+      }, 250);
+    });
+    return;
+  }
+
   const timer = setInterval(poll, 250);
   timer.unref?.();
   await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+async function dispatchNoTrackRunnableTasks(
+  deps: HeadlessDeps,
+  runnable: TaskState[],
+  workflowId: string | undefined,
+  context: string,
+  errorLabel: string,
+): Promise<void> {
+  if (deps.invokerConfig.launchOutboxMode === 'active') {
+    const ownerTaskExecutor = deps.ownerTaskRunnerProvider?.() ?? null;
+    if (!ownerTaskExecutor) {
+      throw new Error(
+        'Cannot dispatch --no-track runnable tasks in active launch-outbox mode without ' +
+        'deferRunnableTasks or an owner TaskRunner; refusing to consume launch dispatches ' +
+        'with a transient headless runner.',
+      );
+    }
+    await dispatchHeadlessRunnableTasks(deps, ownerTaskExecutor, runnable, context, {
+      waitForLaunchHandoff: true,
+    });
+    return;
+  }
+
+  if (deps.deferRunnableTasks) {
+    deps.deferRunnableTasks(runnable, workflowId);
+    return;
+  }
+
+  const taskExecutor = createHeadlessExecutor(deps);
+  const launch = setTimeout(() => {
+    void taskExecutor.executeTasks(runnable).catch((err) => {
+      deps.logger.error(
+        `${errorLabel}: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
+        { module: 'headless' },
+      );
+    });
+  }, 25);
+  launch.unref?.();
 }
 
 export function wireHeadlessAutoFix(
@@ -1649,20 +1715,13 @@ async function headlessRetryTask(taskId: string, deps: HeadlessDeps): Promise<vo
         .filter((task) => !scopedKeys.has(runningKey(task)));
       const dispatchable = [...runnable, ...globalTopup];
       if (dispatchable.length > 0) {
-        if (deps.deferRunnableTasks) {
-          deps.deferRunnableTasks(dispatchable, restored.workflowId);
-        } else {
-          const taskExecutor = createHeadlessExecutor(deps);
-          const launch = setTimeout(() => {
-            void taskExecutor.executeTasks(dispatchable).catch((err) => {
-              deps.logger.error(
-                `background no-track task retry failed for ${taskId}: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
-                { module: 'headless' },
-              );
-            });
-          }, 25);
-          launch.unref?.();
-        }
+        await dispatchNoTrackRunnableTasks(
+          deps,
+          dispatchable,
+          restored.workflowId,
+          'headless.retry-task.no-track',
+          `background no-track task retry failed for ${taskId}`,
+        );
       }
       process.stdout.write('[headless] --no-track enabled: retry-task accepted; exiting without tracking.\n');
       return;
@@ -2113,20 +2172,13 @@ async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Pr
   if (dispatchable.length === 0) return;
 
   if (deps.noTrack) {
-    if (deps.deferRunnableTasks) {
-      deps.deferRunnableTasks(dispatchable, workflowId);
-    } else {
-      const te = createHeadlessExecutor(deps);
-      const launch = setTimeout(() => {
-        void te.executeTasks(dispatchable).catch((err) => {
-          deps.logger.error(
-            `background no-track workflow retry failed for ${workflowId}: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
-            { module: 'headless' },
-          );
-        });
-      }, 25);
-      launch.unref?.();
-    }
+    await dispatchNoTrackRunnableTasks(
+      deps,
+      dispatchable,
+      workflowId,
+      'headless.retry-workflow.no-track',
+      `background no-track workflow retry failed for ${workflowId}`,
+    );
     process.stdout.write('[headless] --no-track enabled: retry accepted; exiting without tracking.\n');
     return;
   }

@@ -826,6 +826,7 @@ if (isHeadless) {
 
     let exitCode = 0;
     let reviewGateStatusWorker: ReviewGateStatusWorker | null = null;
+    let headlessLaunchDispatchPollInterval: ReturnType<typeof setInterval> | null = null;
     try {
       // Standalone mode: initialize services and run headless
       await initServices({
@@ -1286,6 +1287,39 @@ if (isHeadless) {
           getTaskExecutor: createStandaloneTaskExecutor,
           logger,
         });
+
+        if (
+          command === 'owner-serve'
+          && !launchDispatcher
+          && invokerConfig.launchOutboxMode
+          && invokerConfig.launchOutboxMode !== 'disabled'
+        ) {
+          const standaloneLaunchTaskExecutor = createStandaloneTaskExecutor();
+          launchDispatcher = new LaunchDispatcher({
+            persistence,
+            orchestrator,
+            taskRunnerProvider: () => standaloneLaunchTaskExecutor,
+            ownerId: workflowMutationOwnerId,
+            logger,
+            mode: invokerConfig.launchOutboxMode as LaunchDispatcherMode,
+          });
+        }
+
+        if (command === 'owner-serve' && launchDispatcher) {
+          const pollHeadlessLaunchDispatcher = (): void => {
+            try {
+              launchDispatcher?.poll();
+            } catch (err) {
+              logger.warn(
+                `[launch-dispatcher] headless poll() failed: ${err instanceof Error ? err.message : String(err)}`,
+                { module: 'headless' },
+              );
+            }
+          };
+          pollHeadlessLaunchDispatcher();
+          headlessLaunchDispatchPollInterval = setInterval(pollHeadlessLaunchDispatcher, 2000);
+          headlessLaunchDispatchPollInterval.unref?.();
+        }
       }
 
       await runHeadless(cliArgs, headlessDeps);
@@ -1293,6 +1327,9 @@ if (isHeadless) {
       process.stderr.write(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
       exitCode = 1;
     } finally {
+      if (headlessLaunchDispatchPollInterval) {
+        clearInterval(headlessLaunchDispatchPollInterval);
+      }
       reviewGateStatusWorker?.stop();
       if (ownsHeadlessShutdown && executorRegistry) {
         await Promise.all(executorRegistry.getAll().map(f => f.destroyAll().catch(() => undefined)));
@@ -1994,6 +2031,7 @@ function createEmbeddedTerminalBackendFromConfig(
       noTrack: payload.noTrack,
       preemptTaskSubgraph: (taskId: string) => preemptTaskSubgraph(taskId),
       preemptWorkflowExecution: (workflowId: string) => preemptWorkflowExecution(workflowId),
+      ownerTaskRunnerProvider: () => requireTaskExecutor(),
       deferRunnableTasks: (tasks: TaskState[], workflowId?: string) => {
         const filteredTasks = tasks;
         const crossWorkflowTasks = workflowId
