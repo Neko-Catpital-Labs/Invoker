@@ -53,6 +53,21 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
     getTaskDeltaStreamSequence,
   } = context;
 
+  async function delegateOwnerQuery<T>(kind: string, request: Record<string, unknown> = {}): Promise<T | null> {
+    if (getOwnerMode?.() !== false) return null;
+    try {
+      return await getMessageBus?.().request<Record<string, unknown>, T>('headless.query', { kind, ...request }) ?? null;
+    } catch (err) {
+      logger.warn(
+        `${kind} owner delegation failed; falling back to local read-only snapshot: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        { module: 'ipc' },
+      );
+      return null;
+    }
+  }
+
   ipcMain.handle('invoker:list-workflows', () => persistence.listWorkflows());
   ipcMain.handle('invoker:get-execution-pools', () => Object.keys(loadConfig().executionPools ?? {}));
 
@@ -76,48 +91,37 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
   ipcMain.handle('invoker:get-tasks', async (_event, forceRefresh?: boolean) => {
     const startedAtMs = Date.now();
     const orchestrator = getOrchestrator();
-    if (forceRefresh && getOwnerMode?.() === false) {
-      try {
-        const delegated = await getMessageBus?.().request<{ kind: string; forceRefresh: boolean }, {
-          tasks: TaskState[];
-          workflows: unknown[];
-          streamSequence: number;
-        }>('headless.query', { kind: 'tasks', forceRefresh: true });
-        if (delegated && Array.isArray(delegated.tasks) && Array.isArray(delegated.workflows)) {
-          const previousTaskIds = new Set(lastKnownTaskStates.keys());
-          lastKnownTaskStates.clear();
-          for (const task of delegated.tasks) {
-            lastKnownTaskStates.set(task.id, JSON.stringify(task));
-            previousTaskIds.delete(task.id);
-            const mainWindow = getMainWindow();
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              sendTaskDeltaToRenderer({ type: 'created', task });
-            }
-          }
-          const mainWindow = getMainWindow();
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            for (const removedTaskId of previousTaskIds) {
-              sendTaskDeltaToRenderer({ type: 'removed', taskId: removedTaskId, previousTaskStateVersion: 0 });
-            }
-            requestWorkflowMetadataPublish('get-tasks-force-refresh-delegated');
-          }
-          setLastKnownWorkflowCount(delegated.workflows.length);
-          recordStartupDuration('get-tasks.force-refresh.delegated-return', startedAtMs, {
-            taskCount: delegated.tasks.length,
-            workflowCount: delegated.workflows.length,
-            jsonSizeBytes: Buffer.byteLength(JSON.stringify(delegated), 'utf8'),
-            streamSequence: delegated.streamSequence,
-          });
-          return delegated;
+    const delegated = await delegateOwnerQuery<{
+      tasks: TaskState[];
+      workflows: unknown[];
+      streamSequence: number;
+    }>('tasks', { forceRefresh: forceRefresh === true });
+    if (delegated && Array.isArray(delegated.tasks) && Array.isArray(delegated.workflows)) {
+      const previousTaskIds = new Set(lastKnownTaskStates.keys());
+      lastKnownTaskStates.clear();
+      for (const task of delegated.tasks) {
+        lastKnownTaskStates.set(task.id, JSON.stringify(task));
+        previousTaskIds.delete(task.id);
+        const mainWindow = getMainWindow();
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          sendTaskDeltaToRenderer({ type: 'created', task });
         }
-      } catch (err) {
-        logger.warn(
-          `get-tasks(forceRefresh=true) owner delegation failed; falling back to local read-only snapshot: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-          { module: 'ipc' },
-        );
       }
+      const mainWindow = getMainWindow();
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        for (const removedTaskId of previousTaskIds) {
+          sendTaskDeltaToRenderer({ type: 'removed', taskId: removedTaskId, previousTaskStateVersion: 0 });
+        }
+        requestWorkflowMetadataPublish(forceRefresh ? 'get-tasks-force-refresh-delegated' : 'get-tasks-delegated');
+      }
+      setLastKnownWorkflowCount(delegated.workflows.length);
+      recordStartupDuration(forceRefresh ? 'get-tasks.force-refresh.delegated-return' : 'get-tasks.delegated-return', startedAtMs, {
+        taskCount: delegated.tasks.length,
+        workflowCount: delegated.workflows.length,
+        jsonSizeBytes: Buffer.byteLength(JSON.stringify(delegated), 'utf8'),
+        streamSequence: delegated.streamSequence,
+      });
+      return delegated;
     }
     if (forceRefresh) {
       timeStartupPhase('get-tasks.force-refresh.syncAllFromDb', () => orchestrator.syncAllFromDb(), () => ({
@@ -163,7 +167,9 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
   });
 
   ipcMain.handle('invoker:get-events', (_event, taskId: string) => persistence.getEvents(taskId));
-  ipcMain.handle('invoker:get-status', () => getOrchestrator().getWorkflowStatus());
+  ipcMain.handle('invoker:get-status', async () => (
+    await delegateOwnerQuery('workflow-status') ?? getOrchestrator().getWorkflowStatus()
+  ));
   ipcMain.handle('invoker:get-task-by-id', (_event, taskId: string) => loadTaskByIdFromPersistence(taskId) ?? null);
   ipcMain.handle('invoker:get-task-output', (_event, taskId: string) => persistence.getTaskOutput(taskId));
   ipcMain.handle('invoker:get-output-chunks', (_event, taskId: string) => persistence.getOutputChunks(taskId));
