@@ -368,17 +368,37 @@ async function dispatchNoTrackRunnableTasks(
 ): Promise<void> {
   if (deps.invokerConfig.launchOutboxMode === 'active') {
     const ownerTaskExecutor = deps.ownerTaskRunnerProvider?.() ?? null;
-    if (!ownerTaskExecutor) {
+    if (ownerTaskExecutor) {
+      await dispatchHeadlessRunnableTasks(deps, ownerTaskExecutor, runnable, context, {
+        waitForLaunchHandoff: true,
+      });
+      return;
+    }
+
+    const expectedAttemptIds = new Set(
+      runnable
+        .map((task) => task.execution.selectedAttemptId?.trim())
+        .filter((attemptId): attemptId is string => !!attemptId),
+    );
+    const hasDurableDispatch = expectedAttemptIds.size > 0
+      && (deps.persistence.listLaunchDispatchesByState?.(['enqueued', 'leased']) ?? [])
+        .some((row) => expectedAttemptIds.has(row.attemptId));
+    if (hasDurableDispatch) {
+      deps.logger.info(
+        `${context}: launchOutboxMode=active and no owner TaskRunner in this process; ` +
+        'leaving durable launch dispatches for the owner dispatcher.',
+        { module: 'headless' },
+      );
+      return;
+    }
+
+    if (!deps.deferRunnableTasks) {
       throw new Error(
         'Cannot dispatch --no-track runnable tasks in active launch-outbox mode without ' +
         'deferRunnableTasks or an owner TaskRunner; refusing to consume launch dispatches ' +
         'with a transient headless runner.',
       );
     }
-    await dispatchHeadlessRunnableTasks(deps, ownerTaskExecutor, runnable, context, {
-      waitForLaunchHandoff: true,
-    });
-    return;
   }
 
   if (deps.deferRunnableTasks) {
@@ -1296,7 +1316,6 @@ async function headlessOwnerServe(deps: Pick<HeadlessDeps, 'isStandaloneOwnerIdl
         finish();
       }
     }, idlePollMs);
-    idleTimer.unref?.();
     process.once('SIGTERM', finish);
     process.once('SIGINT', finish);
   });
