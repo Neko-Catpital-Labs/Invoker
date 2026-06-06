@@ -170,7 +170,11 @@ import sys
 
 db_path = pathlib.Path(sys.argv[1]).expanduser()
 task_id = sys.argv[2]
-conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+try:
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+except sqlite3.Error as exc:
+    print(f"[repro] skipped live diagnostic: unable to open local DB: {exc}")
+    raise SystemExit(0)
 conn.row_factory = sqlite3.Row
 try:
     task = conn.execute(
@@ -210,6 +214,8 @@ try:
     print("[repro] local DB task:", json.dumps(dict(task), sort_keys=True))
     print("[repro] local DB launch_dispatch_rows:", json.dumps([dict(row) for row in dispatch_rows], sort_keys=True))
     print("[repro] local DB recent_events:", json.dumps([dict(row) for row in recent_events], sort_keys=True))
+except sqlite3.Error as exc:
+    print(f"[repro] skipped live diagnostic: unable to read local DB: {exc}")
 finally:
     conn.close()
 PY
