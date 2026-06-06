@@ -4,6 +4,7 @@ import { rid, sid } from './scoped-test-helpers.js';
 import { Orchestrator, PlanConflictError, descriptionForMergeNode } from '../orchestrator.js';
 import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
 import { computeWorkflowRollup } from '../task-types.js';
+import { createAttempt } from '../task-types.js';
 import type { TaskState, TaskDelta, TaskStateChanges, Attempt, ExternalDependency, ExternalDependencyChange } from '../task-types.js';
 import type { Logger, WorkResponse } from '@invoker/contracts';
 
@@ -5940,6 +5941,197 @@ describe('Orchestrator', () => {
       expect(merge.execution.workspacePath).toBeUndefined();
       expect(x.execution.branch).toBe('br-x');
       expect(x.execution.workspacePath).toBe('/tmp/x');
+    });
+
+    describe('recreateDownstream', () => {
+      function seedGraph(): {
+        orchestrator: Orchestrator;
+        attempts: Record<'A' | 'B' | 'C', Attempt>;
+      } {
+        const testPersistence = new InMemoryPersistence();
+        const testBus = new InMemoryBus();
+        const wf = 'wf-recreate-downstream';
+        const attempts = {
+          A: createAttempt('A', { status: 'completed', branch: 'br-a', commit: 'a1', workspacePath: '/tmp/a' }),
+          B: createAttempt('B', { status: 'completed', branch: 'br-b', commit: 'b1', workspacePath: '/tmp/b' }),
+          C: createAttempt('C', { status: 'completed', branch: 'br-c', commit: 'c1', workspacePath: '/tmp/c' }),
+        };
+        for (const attempt of Object.values(attempts)) {
+          testPersistence.saveAttempt(attempt);
+        }
+
+        const oldStartedAt = new Date('2026-01-01T00:00:00.000Z');
+        const oldCompletedAt = new Date('2026-01-01T00:10:00.000Z');
+        const oldHeartbeatAt = new Date('2026-01-01T00:05:00.000Z');
+        testPersistence.saveTask(wf, {
+          id: 'A',
+          description: 'A',
+          status: 'completed',
+          dependencies: [],
+          createdAt: new Date(),
+          config: { workflowId: wf, summary: 'summary-a' },
+          execution: {
+            generation: 7,
+            selectedAttemptId: attempts.A.id,
+            branch: 'br-a',
+            commit: 'a1',
+            workspacePath: '/tmp/a',
+            exitCode: 0,
+          },
+        });
+        testPersistence.saveTask(wf, {
+          id: 'B',
+          description: 'B',
+          status: 'completed',
+          dependencies: ['A'],
+          createdAt: new Date(),
+          config: { workflowId: wf, summary: 'summary-b' },
+          execution: {
+            generation: 11,
+            selectedAttemptId: attempts.B.id,
+            branch: 'br-b',
+            commit: 'b1',
+            workspacePath: '/tmp/b',
+            reviewUrl: 'https://example.test/review-b',
+            reviewId: 'review-b',
+            reviewStatus: 'open',
+            reviewProviderId: 'provider-b',
+            agentSessionId: 'session-b',
+            containerId: 'container-b',
+            startedAt: oldStartedAt,
+            completedAt: oldCompletedAt,
+            lastHeartbeatAt: oldHeartbeatAt,
+            exitCode: 0,
+          },
+        });
+        testPersistence.saveTask(wf, {
+          id: 'C',
+          description: 'C',
+          status: 'completed',
+          dependencies: ['B'],
+          createdAt: new Date(),
+          config: { workflowId: wf, summary: 'summary-c' },
+          execution: {
+            generation: 13,
+            selectedAttemptId: attempts.C.id,
+            branch: 'br-c',
+            commit: 'c1',
+            workspacePath: '/tmp/c',
+            reviewUrl: 'https://example.test/review-c',
+            reviewId: 'review-c',
+            reviewStatus: 'open',
+            reviewProviderId: 'provider-c',
+            agentSessionId: 'session-c',
+            containerId: 'container-c',
+            startedAt: oldStartedAt,
+            completedAt: oldCompletedAt,
+            lastHeartbeatAt: oldHeartbeatAt,
+            exitCode: 0,
+          },
+        });
+
+        const testOrchestrator = new Orchestrator({
+          persistence: testPersistence,
+          messageBus: testBus,
+          maxConcurrency: 3,
+        });
+        testOrchestrator.syncFromDb(wf);
+        return { orchestrator: testOrchestrator, attempts };
+      }
+
+      function preservedFields(task: TaskState): {
+        status: TaskState['status'];
+        branch: string | undefined;
+        commit: string | undefined;
+        workspacePath: string | undefined;
+        selectedAttemptId: string | undefined;
+        generation: number;
+      } {
+        return {
+          status: task.status,
+          branch: task.execution.branch,
+          commit: task.execution.commit,
+          workspacePath: task.execution.workspacePath,
+          selectedAttemptId: task.execution.selectedAttemptId,
+          generation: task.execution.generation ?? 0,
+        };
+      }
+
+      it('recreates descendants for A -> B -> C while preserving selected task lineage', () => {
+        const { orchestrator: testOrchestrator, attempts } = seedGraph();
+        const selectedBefore = preservedFields(testOrchestrator.getTask('A')!);
+        const bGenerationBefore = testOrchestrator.getTask('B')!.execution.generation ?? 0;
+        const cGenerationBefore = testOrchestrator.getTask('C')!.execution.generation ?? 0;
+
+        const started = testOrchestrator.recreateDownstream('A');
+
+        expect(started.map((task) => task.id)).toEqual(['B']);
+        expect(testOrchestrator.getLastInvalidationPlan()?.affectedTaskIds).toEqual(['B', 'C']);
+        expect(testOrchestrator.getLastInvalidationPlan()?.schedulerEnqueueCandidates).toEqual([{ taskId: 'B' }]);
+        expect(preservedFields(testOrchestrator.getTask('A')!)).toEqual(selectedBefore);
+
+        const b = testOrchestrator.getTask('B')!;
+        const c = testOrchestrator.getTask('C')!;
+        expect(b.status).toBe('running');
+        expect(c.status).toBe('pending');
+        expect(b.execution.generation).toBe(bGenerationBefore + 1);
+        expect(c.execution.generation).toBe(cGenerationBefore + 1);
+        expect(b.execution.selectedAttemptId).not.toBe(attempts.B.id);
+        expect(c.execution.selectedAttemptId).not.toBe(attempts.C.id);
+        for (const task of [b, c]) {
+          expect(task.config.summary).toBeUndefined();
+          expect(task.execution.branch).toBeUndefined();
+          expect(task.execution.commit).toBeUndefined();
+          expect(task.execution.workspacePath).toBeUndefined();
+          expect(task.execution.reviewUrl).toBeUndefined();
+          expect(task.execution.reviewId).toBeUndefined();
+          expect(task.execution.reviewStatus).toBeUndefined();
+          expect(task.execution.reviewProviderId).toBeUndefined();
+          expect(task.execution.agentSessionId).toBeUndefined();
+          expect(task.execution.containerId).toBeUndefined();
+          expect(task.execution.completedAt).toBeUndefined();
+          expect(task.execution.exitCode).toBeUndefined();
+        }
+        expect(c.execution.startedAt).toBeUndefined();
+        expect(c.execution.lastHeartbeatAt).toBeUndefined();
+      });
+
+      it('recreates only C when B is selected', () => {
+        const { orchestrator: testOrchestrator, attempts } = seedGraph();
+        const aBefore = preservedFields(testOrchestrator.getTask('A')!);
+        const bBefore = preservedFields(testOrchestrator.getTask('B')!);
+        const cGenerationBefore = testOrchestrator.getTask('C')!.execution.generation ?? 0;
+
+        const started = testOrchestrator.recreateDownstream('B');
+
+        expect(started.map((task) => task.id)).toEqual(['C']);
+        expect(testOrchestrator.getLastInvalidationPlan()?.affectedTaskIds).toEqual(['C']);
+        expect(preservedFields(testOrchestrator.getTask('A')!)).toEqual(aBefore);
+        expect(preservedFields(testOrchestrator.getTask('B')!)).toEqual(bBefore);
+
+        const c = testOrchestrator.getTask('C')!;
+        expect(c.status).toBe('running');
+        expect(c.execution.generation).toBe(cGenerationBefore + 1);
+        expect(c.execution.selectedAttemptId).not.toBe(attempts.C.id);
+        expect(c.execution.branch).toBeUndefined();
+        expect(c.execution.commit).toBeUndefined();
+        expect(c.execution.workspacePath).toBeUndefined();
+      });
+
+      it('is a no-op for a leaf task', () => {
+        const { orchestrator: testOrchestrator } = seedGraph();
+        const before = new Map(
+          ['A', 'B', 'C'].map((id) => [id, preservedFields(testOrchestrator.getTask(id)!)]),
+        );
+
+        const started = testOrchestrator.recreateDownstream('C');
+
+        expect(started).toEqual([]);
+        expect(testOrchestrator.getLastInvalidationPlan()?.affectedTaskIds).toEqual([]);
+        for (const id of ['A', 'B', 'C'] as const) {
+          expect(preservedFields(testOrchestrator.getTask(id)!)).toEqual(before.get(id));
+        }
+      });
     });
 
     it('drainScheduler sets lastHeartbeatAt when starting a task', () => {

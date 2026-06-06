@@ -854,6 +854,31 @@ export class Orchestrator {
     },
   };
 
+  private static readonly TASK_RECREATE_RESET_CHANGES: TaskStateChanges = {
+    status: 'pending',
+    config: { summary: undefined },
+    execution: {
+      autoFixAttempts: 0,
+      startedAt: undefined,
+      completedAt: undefined,
+      error: undefined,
+      exitCode: undefined,
+      commit: undefined,
+      branch: undefined,
+      workspacePath: undefined,
+      lastHeartbeatAt: undefined,
+      phase: undefined,
+      launchStartedAt: undefined,
+      launchCompletedAt: undefined,
+      reviewUrl: undefined,
+      reviewId: undefined,
+      reviewStatus: undefined,
+      reviewProviderId: undefined,
+      agentSessionId: undefined,
+      containerId: undefined,
+    },
+  };
+
   constructor(config: OrchestratorConfig) {
     this.maxConcurrency = config.maxConcurrency ?? 3;
     this.persistence = config.persistence;
@@ -1024,6 +1049,17 @@ export class Orchestrator {
     }
 
     return ids;
+  }
+
+  /**
+   * Return only transitive downstream dependents for a root task.
+   * The root task itself is never included.
+   */
+  private collectDownstreamTaskIds(rootTaskId: string): string[] {
+    const allTasks = this.stateMachine.getAllTasks();
+    const taskMap = new Map(allTasks.map((t) => [t.id, t]));
+    if (!taskMap.has(rootTaskId)) return [];
+    return getTransitiveDependents(rootTaskId, taskMap, () => false);
   }
 
   private invalidateLaunchArtifactsForTasks(
@@ -1204,6 +1240,53 @@ export class Orchestrator {
       cancelled.push(t.id);
     }
     return cancelled;
+  }
+
+  /**
+   * Cancel active descendants of `taskId` without touching `taskId`.
+   *
+   * This is the cancel-first hook for `recreateDownstream`: the selected
+   * task's branch/workspace/attempt lineage must remain intact, while any
+   * in-flight downstream work is interrupted before those descendants are
+   * reset to fresh pending attempts.
+   */
+  cancelDownstreamForInvalidation(taskId: string): { cancelled: string[]; runningCancelled: string[] } {
+    this.refreshFromDb();
+    const task = this.stateGetTask(taskId);
+    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
+
+    const descendantIds = this.collectDownstreamTaskIds(task.id);
+    const cancelled: string[] = [];
+    const runningCancelled: string[] = [];
+    this.invalidateLaunchArtifactsForTasks(descendantIds, 'task downstream invalidation');
+
+    for (const id of descendantIds) {
+      const current = this.stateGetTask(id);
+      if (!current) continue;
+      const selectedAttempt = this.getSelectedAttempt(current);
+      const isActiveLaunch = this.isTaskExecutionActive(current, selectedAttempt);
+      if (!isActiveForInvalidation(current.status) && !isActiveLaunch) continue;
+
+      const wasRunning = current.status === 'running' || current.status === 'fixing_with_ai';
+      if (wasRunning) {
+        runningCancelled.push(id);
+      }
+
+      this.deferredTaskIds.delete(id);
+      this.clearQueuedSchedulerEntries(id, current.execution.selectedAttemptId);
+
+      const error = 'Cancelled before downstream recreation';
+      const changes: TaskStateChanges = {
+        status: 'failed',
+        execution: { error, completedAt: new Date() },
+      };
+      const updated = this.writeAndSync(id, changes);
+      this.persistence.logEvent?.(id, 'task.cancelled', changes);
+      this.messageBus.publish(TASK_DELTA_CHANNEL, this.buildUpdateDelta(current, updated, changes));
+      cancelled.push(id);
+    }
+
+    return { cancelled, runningCancelled };
   }
 
   private getExecutionGeneration(task: TaskState | undefined): number {
@@ -2489,30 +2572,7 @@ export class Orchestrator {
     const toResetIds = plan.affectedTaskIds;
     const toResetSet = new Set(toResetIds);
 
-    const resetChanges: TaskStateChanges = {
-      status: 'pending',
-      config: { summary: undefined },
-      execution: {
-        autoFixAttempts: 0,
-        startedAt: undefined,
-        completedAt: undefined,
-        error: undefined,
-        exitCode: undefined,
-        commit: undefined,
-        branch: undefined,
-        workspacePath: undefined,
-        lastHeartbeatAt: undefined,
-        phase: undefined,
-        launchStartedAt: undefined,
-        launchCompletedAt: undefined,
-        reviewUrl: undefined,
-        reviewId: undefined,
-        reviewStatus: undefined,
-        reviewProviderId: undefined,
-        agentSessionId: undefined,
-        containerId: undefined,
-      },
-    };
+    const resetChanges = Orchestrator.TASK_RECREATE_RESET_CHANGES;
 
     this.logger.info('[orchestrator] recreateTask reset', {
       taskId: rootId,
@@ -2529,6 +2589,63 @@ export class Orchestrator {
       this.replaceSelectedAttempt(current);
       this.persistence.logEvent?.(id, 'task.pending', changesWithGeneration);
       this.messageBus.publish(TASK_DELTA_CHANNEL, this.buildUpdateDelta(current, recreateUpdated, changesWithGeneration));
+
+      this.deferredTaskIds.delete(id);
+      this.clearQueuedSchedulerEntries(id, priorAttemptId);
+    }
+
+    const readyIds = this.stateMachine
+      .getReadyTasks()
+      .map((t) => t.id)
+      .filter((id) => toResetSet.has(id));
+    plan = withSchedulerEnqueueCandidates(plan, readyIds);
+    this.lastInvalidationPlan = plan;
+    return this.autoStartReadyTasks(readyIds, Orchestrator.EXPEDITED_PRIORITY);
+  }
+
+  /**
+   * Recreate only the transitive downstream dependents of a task.
+   *
+   * The selected task itself is preserved exactly; descendants receive the
+   * same recreate-class reset shape as `recreateTask` and ready descendants
+   * are scheduled with expedited priority.
+   */
+  recreateDownstream(taskId: string): TaskState[] {
+    this.refreshFromDb();
+    const task = this.stateGetTask(taskId);
+    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
+
+    const rootId = task.id;
+    this.cancelDownstreamForInvalidation(rootId);
+    let plan = planInvalidation({
+      action: 'recreateDownstream',
+      targetId: rootId,
+      tasks: this.stateMachine.getAllTasks(),
+    });
+    this.lastInvalidationPlan = plan;
+
+    const toResetIds = plan.affectedTaskIds;
+    if (toResetIds.length === 0) {
+      return [];
+    }
+
+    const toResetSet = new Set(toResetIds);
+    const resetChanges = Orchestrator.TASK_RECREATE_RESET_CHANGES;
+    this.logger.info('[orchestrator] recreateDownstream reset', {
+      taskId: rootId,
+      resetCount: toResetIds.length,
+    });
+    this.invalidateLaunchArtifactsForTasks(toResetIds, 'task downstream recreation reset');
+
+    for (const id of toResetIds) {
+      const current = this.stateGetTask(id);
+      if (!current) continue;
+      const changesWithGeneration = this.withBumpedExecutionGeneration(current, resetChanges);
+      const updated = this.writeAndSync(id, changesWithGeneration);
+      const priorAttemptId = current.execution.selectedAttemptId;
+      this.replaceSelectedAttempt(current);
+      this.persistence.logEvent?.(id, 'task.pending', changesWithGeneration);
+      this.messageBus.publish(TASK_DELTA_CHANNEL, this.buildUpdateDelta(current, updated, changesWithGeneration));
 
       this.deferredTaskIds.delete(id);
       this.clearQueuedSchedulerEntries(id, priorAttemptId);
