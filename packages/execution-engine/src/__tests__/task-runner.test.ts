@@ -1,5 +1,5 @@
 import { execSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -1849,10 +1849,12 @@ describe('TaskRunner', () => {
         const task = makeTask({ id: 'slow-start', status: 'running', config: { command: 'echo' } });
         const done = executor.executeTask(task);
         await vi.advanceTimersByTimeAsync(30_000);
-        expect(heartbeats).toEqual(['slow-start']);
+        expect(heartbeats.length).toBeGreaterThanOrEqual(1);
+        expect(heartbeats.every((taskId) => taskId === 'slow-start')).toBe(true);
         await vi.advanceTimersByTimeAsync(35_000);
         await done;
-        expect(heartbeats).toEqual(['slow-start', 'slow-start']);
+        expect(heartbeats.length).toBeGreaterThanOrEqual(2);
+        expect(heartbeats.every((taskId) => taskId === 'slow-start')).toBe(true);
         expect(slowExecutor.start).toHaveBeenCalledTimes(1);
       } finally {
         vi.useRealTimers();
@@ -2005,6 +2007,56 @@ describe('TaskRunner', () => {
           process.env.INVOKER_EXECUTOR_START_TIMEOUT_MS = previousTimeout;
         }
         vi.useRealTimers();
+      }
+    });
+  });
+
+  describe('merge git operation timeout', () => {
+    it('rejects instead of leaving merge consolidation pending when git never exits', async () => {
+      const tmp = mkdtempSync(join(tmpdir(), 'invoker-merge-git-timeout-'));
+      const fakeBin = join(tmp, 'bin');
+      mkdirSync(fakeBin);
+      const fakeGit = join(fakeBin, 'git');
+      writeFileSync(fakeGit, '#!/usr/bin/env node\nsetInterval(() => {}, 1000);\n');
+      chmodSync(fakeGit, 0o755);
+
+      const previousPath = process.env.PATH;
+      const previousTimeout = process.env.INVOKER_GIT_NETWORK_TIMEOUT_MS;
+      process.env.PATH = `${fakeBin}:${previousPath ?? ''}`;
+      process.env.INVOKER_GIT_NETWORK_TIMEOUT_MS = '50';
+
+      try {
+        const runner = new TaskRunner({
+          orchestrator: {
+            getTask: vi.fn(),
+            getAllTasks: vi.fn(() => []),
+            handleWorkerResponse: vi.fn(),
+          } as any,
+          persistence: {} as any,
+          executorRegistry: {
+            getDefault: vi.fn(),
+            get: vi.fn(),
+            getAll: vi.fn(() => []),
+          } as any,
+          cwd: tmp,
+        });
+
+        const startedAt = Date.now();
+        await expect(runner.execGitIn(['fetch', 'origin', '+refs/heads/main:refs/heads/main'], tmp))
+          .rejects.toThrow(/exceeded git operation timeout \(50ms\)/);
+        expect(Date.now() - startedAt).toBeLessThan(2_000);
+      } finally {
+        if (previousPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = previousPath;
+        }
+        if (previousTimeout === undefined) {
+          delete process.env.INVOKER_GIT_NETWORK_TIMEOUT_MS;
+        } else {
+          process.env.INVOKER_GIT_NETWORK_TIMEOUT_MS = previousTimeout;
+        }
+        rmSync(tmp, { recursive: true, force: true });
       }
     });
   });

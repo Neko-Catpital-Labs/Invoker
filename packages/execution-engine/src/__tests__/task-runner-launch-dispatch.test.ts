@@ -203,6 +203,34 @@ describe('TaskRunner launch-dispatch wiring', () => {
     await run;
   });
 
+  it('completes the dispatch only after the completion listener is registered', async () => {
+    const task = makeTask();
+    const env = buildRunnerEnv(task);
+    const originalOnComplete = env.executor.onComplete.getMockImplementation();
+    const order: string[] = [];
+    env.executor.onComplete.mockImplementation((handle: unknown, cb: unknown) => {
+      order.push('onComplete');
+      return originalOnComplete?.(handle, cb);
+    });
+    const launchOutbox: LaunchOutboxAck = {
+      completeDispatch(id) {
+        expect(id).toBe(77);
+        order.push('completeDispatch');
+        return true;
+      },
+      failDispatch: vi.fn().mockReturnValue(true),
+      renewDispatch: vi.fn().mockReturnValue(true),
+    };
+
+    const run = env.runner.executeTask(task, { dispatchId: 77, launchOutbox });
+    await vi.waitFor(() => expect(order).toContain('completeDispatch'));
+
+    expect(order).toEqual(['onComplete', 'completeDispatch']);
+
+    env.triggerComplete();
+    await run;
+  });
+
   it('fails the dispatch when markTaskRunningAfterLaunch rejects the launch', async () => {
     const task = makeTask();
     const env = buildRunnerEnv(task);
