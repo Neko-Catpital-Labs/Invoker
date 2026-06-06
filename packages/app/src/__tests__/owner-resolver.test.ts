@@ -277,6 +277,33 @@ describe('owner-resolver', () => {
       expect(ensureStandaloneOwner).toHaveBeenCalledTimes(1);
     });
 
+    it('uses a standalone owner discovered after refresh without bootstrapping', async () => {
+      const firstBus = new LocalBus();
+      const secondBus = new LocalBus();
+      secondBus.onRequest('headless.owner-ping', async () => ({
+        ok: true,
+        ownerId: 'owner-refreshed',
+        mode: 'standalone',
+      }));
+
+      const ensureStandaloneOwner = vi.fn(async () => {});
+      const refreshMessageBus = vi.fn(async () => secondBus);
+      const resolver = createOwnerResolver({
+        messageBus: firstBus,
+        refreshMessageBus,
+        ensureStandaloneOwner,
+      }, {
+        discoveryTimeoutMs: 100,
+        refreshDiscoveryTimeoutMs: 100,
+      });
+
+      const result = await resolver.resolve();
+      expect(result.owner.ownerId).toBe('owner-refreshed');
+      expect(result.bus).toBe(secondBus);
+      expect(refreshMessageBus).toHaveBeenCalledTimes(1);
+      expect(ensureStandaloneOwner).not.toHaveBeenCalled();
+    });
+
     it('retries bootstrap when the first attempt does not produce a reachable owner', async () => {
       const bus = new LocalBus();
       let bootstrapCalls = 0;
@@ -304,6 +331,38 @@ describe('owner-resolver', () => {
       const result = await resolver.resolve();
       expect(result.owner.ownerId).toBe('owner-retry');
       expect(bootstrapCalls).toBe(2);
+    });
+
+    it('retries configured bootstrap timeout errors', async () => {
+      const bus = new LocalBus();
+      const retryableError = new Error('owner bootstrap timed out');
+      let bootstrapCalls = 0;
+
+      const ensureStandaloneOwner = vi.fn(async () => {
+        bootstrapCalls += 1;
+        if (bootstrapCalls === 1) {
+          throw retryableError;
+        }
+        bus.onRequest('headless.owner-ping', async () => ({
+          ok: true,
+          ownerId: 'owner-after-timeout',
+          mode: 'standalone',
+        }));
+      });
+
+      const resolver = createOwnerResolver({
+        messageBus: bus,
+        ensureStandaloneOwner,
+        isRetryableBootstrapError: (error) => error === retryableError,
+      }, {
+        discoveryTimeoutMs: 100,
+        postBootstrapReadyTimeoutMs: 500,
+        maxBootstrapAttempts: 2,
+      });
+
+      const result = await resolver.resolve();
+      expect(result.owner.ownerId).toBe('owner-after-timeout');
+      expect(ensureStandaloneOwner).toHaveBeenCalledTimes(2);
     });
 
     it('throws after exhausting all bootstrap attempts', async () => {
