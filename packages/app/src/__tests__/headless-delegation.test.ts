@@ -1117,7 +1117,7 @@ describe('headless delegation enforcement', () => {
         expect((mockDeps.persistence as any).markLaunchDispatchCompleted).toHaveBeenCalledWith(77);
       });
 
-      it('headless task retry in no-track active outbox mode rejects transient launch ownership', async () => {
+      it('headless task retry in no-track active outbox mode accepts durable launch handoff without transient launch ownership', async () => {
         const preemptTaskSubgraph = vi.fn(async () => {});
         const runnableTask = {
           id: '__merge__wf-1778826126740-7',
@@ -1181,7 +1181,7 @@ describe('headless delegation enforcement', () => {
               noTrack: true,
               preemptTaskSubgraph,
             } as HeadlessDeps),
-          ).rejects.toThrow(/refusing to consume launch dispatches with a transient headless runner/);
+          ).resolves.toBeUndefined();
           expect((mockDeps.persistence as any).claimLaunchDispatchAtomic).not.toHaveBeenCalled();
           expect((mockDeps.persistence as any).markLaunchDispatchCompleted).not.toHaveBeenCalled();
           expect(executeTaskSpy).not.toHaveBeenCalled();
