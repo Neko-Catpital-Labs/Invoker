@@ -1153,6 +1153,9 @@ if (isHeadless) {
           const hasQueuedOrRunningMutations =
             persistence.listWorkflowMutationIntents(undefined, ['queued', 'running']).length > 0;
           if (hasQueuedOrRunningMutations) return false;
+          const hasActiveLaunchDispatches =
+            persistence.listLaunchDispatchesByState?.(['enqueued', 'leased']).length > 0;
+          if (hasActiveLaunchDispatches) return false;
           return !orchestrator.getAllTasks().some(
             (task) => task.status === 'running' || task.status === 'fixing_with_ai',
           );
