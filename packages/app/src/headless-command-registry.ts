@@ -32,6 +32,7 @@ export const HEADLESS_COMMANDS = [
   { name: 'retry-task', kind: 'write' },
   { name: 'recreate', kind: 'write' },
   { name: 'recreate-task', kind: 'write' },
+  { name: 'recreate-downstream', kind: 'write' },
   { name: 'replace-task', kind: 'special' },
   { name: 'fork-workflow', kind: 'special' },
   { name: 'detach-workflow', kind: 'write' },
