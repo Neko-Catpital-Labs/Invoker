@@ -59,6 +59,7 @@ import {
   type PrAuthoringContext,
 } from './pr-authoring.js';
 import { assertNotGitConfigMutation, ensureRemoteUrl } from './git-config-mutation.js';
+import { killProcessGroup, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 
 export type { TaskHeartbeatEvent, TaskRunnerCallbacks } from './task-runner-callbacks.js';
 
@@ -69,6 +70,7 @@ const PRE_START_DISPATCH_HEARTBEAT_INTERVAL_MS = Math.max(
   Math.min(PRE_START_HEARTBEAT_INTERVAL_MS, Math.floor(DISPATCH_LEASE_MS / 2)),
 );
 const DEFAULT_EXECUTOR_START_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_GIT_OPERATION_TIMEOUT_MS = 15 * 60 * 1000;
 
 type StartupFailureMetadata = {
   workspacePath?: string;
@@ -163,6 +165,70 @@ function getExecutorStartTimeoutMs(): number {
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_EXECUTOR_START_TIMEOUT_MS;
   return parsed;
+}
+
+function getGitOperationTimeoutMs(): number {
+  const raw = process.env.INVOKER_GIT_NETWORK_TIMEOUT_MS?.trim();
+  if (raw === '0') return 0;
+  if (!raw) return DEFAULT_GIT_OPERATION_TIMEOUT_MS;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_GIT_OPERATION_TIMEOUT_MS;
+  return parsed;
+}
+
+function execGitWithTimeout(args: string[], cwd: string): Promise<string> {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn('git', args, {
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
+    });
+    const timeoutMs = getGitOperationTimeoutMs();
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+
+    const finish = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      if (timeout) clearTimeout(timeout);
+      fn();
+    };
+
+    if (timeoutMs > 0) {
+      timeout = setTimeout(() => {
+        killProcessGroup(child, 'SIGTERM');
+        const forceKill = setTimeout(() => {
+          killProcessGroup(child, 'SIGKILL');
+        }, SIGKILL_TIMEOUT_MS);
+        forceKill.unref?.();
+        finish(() => reject(new Error(
+          `git ${args.join(' ')} exceeded git operation timeout (${timeoutMs}ms) in ${cwd}. ` +
+          'Set INVOKER_GIT_NETWORK_TIMEOUT_MS to adjust (0 = unbounded).',
+        )));
+      }, timeoutMs);
+      timeout.unref?.();
+    }
+
+    child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+    child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+    child.on('error', (err) => {
+      finish(() => reject(new Error(`Failed to spawn git: ${err.message}`)));
+    });
+    child.on('close', (code, signal) => {
+      finish(() => {
+        if (code === 0) {
+          resolvePromise(stdout.trim());
+          return;
+        }
+        reject(new Error(
+          `git ${args.join(' ')} failed (code ${code ?? 'null'}${signal ? ` signal ${signal}` : ''}): ` +
+          `${stderr.trim()}${stdout.trim() ? '\n' + stdout.trim() : ''}`,
+        ));
+      });
+    });
+  });
 }
 
 const NOOP_LOGGER: Logger = {
@@ -1002,9 +1068,6 @@ export class TaskRunner {
       return;
     }
     bench('markTaskRunningAfterLaunch.accepted');
-    if (dispatchOpts) {
-      dispatchOpts.launchOutbox.completeDispatch(dispatchOpts.dispatchId);
-    }
 
     // Persist execution metadata immediately at task start — all fields explicit
     {
@@ -1130,7 +1193,7 @@ export class TaskRunner {
     // Wait for completion and feed response to orchestrator.
     // The callback is serialized through completionChain so that concurrent
     // onComplete firings never overlap inside orchestrator mutations.
-    return new Promise<void>((resolvePromise) => {
+    const completionPromise = new Promise<void>((resolvePromise) => {
       executor.onComplete(handle, async (response: WorkResponse) => {
         const work = async () => {
           const normalizedResponse = response.attemptId ? response : { ...response, attemptId };
@@ -1183,6 +1246,10 @@ export class TaskRunner {
         resolvePromise();
       });
     });
+    if (dispatchOpts) {
+      dispatchOpts.launchOutbox.completeDispatch(dispatchOpts.dispatchId);
+    }
+    return completionPromise;
   }
 
   /**
@@ -1877,48 +1944,12 @@ export class TaskRunner {
    */
   execGitReadonly(args: string[], cwd?: string): Promise<string> {
     assertNotGitConfigMutation(args, 'TaskRunner.execGitReadonly');
-    return new Promise((resolvePromise, reject) => {
-      const child = spawn('git', args, {
-        cwd: cwd ?? this.cwd,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      let stdout = '';
-      let stderr = '';
-      child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
-      child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
-      child.on('error', (err) => {
-        reject(new Error(`Failed to spawn git: ${err.message}`));
-      });
-      child.on('close', (code) => {
-        if (code === 0) resolvePromise(stdout.trim());
-        else reject(new Error(
-          `git ${args.join(' ')} failed (code ${code}): ${stderr.trim()}${stdout.trim() ? '\n' + stdout.trim() : ''}`
-        ));
-      });
-    });
+    return execGitWithTimeout(args, cwd ?? this.cwd);
   }
 
   /** @internal */ execGitIn(args: string[], dir: string): Promise<string> {
     assertNotGitConfigMutation(args, 'TaskRunner.execGitIn');
-    return new Promise((resolvePromise, reject) => {
-      const child = spawn('git', args, {
-        cwd: dir,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      let stdout = '';
-      let stderr = '';
-      child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
-      child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
-      child.on('error', (err) => {
-        reject(new Error(`Failed to spawn git: ${err.message}`));
-      });
-      child.on('close', (code) => {
-        if (code === 0) resolvePromise(stdout.trim());
-        else reject(new Error(
-          `git ${args.join(' ')} failed (code ${code}): ${stderr.trim()}${stdout.trim() ? '\n' + stdout.trim() : ''}`
-        ));
-      });
-    });
+    return execGitWithTimeout(args, dir);
   }
 
   /** @internal */ async createMergeWorktree(ref: string, label: string, repoUrl?: string): Promise<string> {
