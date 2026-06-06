@@ -189,6 +189,11 @@ import {
   type HeadlessExecMutationPayload,
 } from './headless-batch-exec.js';
 import {
+  spawnDetachedStandaloneOwner,
+  tryAcquireOwnerBootstrapLock,
+} from './headless-owner-bootstrap.js';
+import { discoverOwner, isStandaloneCapable } from './owner-endpoint.js';
+import {
   rebuildTaskRunner as rebuildTaskRunnerWiring,
   requireWiredTaskRunner,
   type TaskHandleMap,
@@ -295,6 +300,26 @@ interface HeadlessResumeMutationPayload {
 }
 
 type HeadlessOwnerMode = 'standalone' | 'gui';
+type GuiOwnerPreference = 'auto' | 'daemon' | 'gui';
+
+function resolveGuiOwnerPreference(): GuiOwnerPreference {
+  const raw = (process.env.INVOKER_GUI_OWNER_MODE ?? '').trim().toLowerCase();
+  if (raw === 'daemon' || raw === 'client' || raw === 'follower') return 'daemon';
+  if (raw === 'auto') return 'auto';
+  if (raw === 'gui' || raw === 'owner' || raw === 'local') return 'gui';
+  if (process.env.INVOKER_GUI_DAEMON_OWNER === '1') return 'daemon';
+  return 'daemon';
+}
+
+function guiOwnerBootstrapTimeoutMs(): number {
+  const parsed = Number.parseInt(
+    process.env.INVOKER_GUI_OWNER_BOOTSTRAP_TIMEOUT_MS
+      ?? process.env.INVOKER_HEADLESS_OWNER_BOOTSTRAP_TIMEOUT_MS
+      ?? '60000',
+    10,
+  );
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 60000;
+}
 
 function headlessExecLogFields(
   payload: HeadlessExecMutationPayload,
@@ -387,6 +412,49 @@ const invokerConfig: InvokerConfig = (() => {
   }
 })();
 
+async function discoverStandaloneOwnerForGui(waitMs: number): Promise<boolean> {
+  let ownerBus = new IpcBus(undefined, { allowServe: false });
+  try {
+    await ownerBus.ready();
+    const deadline = Date.now() + waitMs;
+    while (Date.now() < deadline) {
+      const owner = await discoverOwner(ownerBus, 500);
+      if (isStandaloneCapable(owner)) {
+        logger.info(`daemon owner ready ownerId=${owner.ownerId}`, { module: 'init' });
+        return true;
+      }
+      ownerBus.disconnect();
+      ownerBus = new IpcBus(undefined, { allowServe: false });
+      await ownerBus.ready();
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    return false;
+  } finally {
+    ownerBus.disconnect();
+  }
+}
+
+async function ensureStandaloneOwnerForGui(): Promise<void> {
+  if (await discoverStandaloneOwnerForGui(2_000)) return;
+
+  const invokerHomeRoot = resolveInvokerHomeRoot();
+  const timeoutMs = guiOwnerBootstrapTimeoutMs();
+  const bootstrapLock = tryAcquireOwnerBootstrapLock(invokerHomeRoot);
+  try {
+    if (bootstrapLock) {
+      logger.info('spawning daemon owner for GUI client mode', { module: 'init' });
+      spawnDetachedStandaloneOwner(repoRoot);
+    } else {
+      logger.info('waiting for daemon owner bootstrap held by another process', { module: 'init' });
+    }
+    if (await discoverStandaloneOwnerForGui(timeoutMs)) return;
+  } finally {
+    bootstrapLock?.release();
+  }
+
+  throw new Error(`Timed out after ${timeoutMs}ms waiting for daemon owner`);
+}
+
 function getSafeInvokerConfigForLogging(config: InvokerConfig): Record<string, unknown> {
   const safeConfig = { ...config } as Record<string, unknown> & {
     docker?: InvokerConfig['docker'];
@@ -448,10 +516,14 @@ function installPackagedSkills(mode: import('@invoker/contracts').BundledSkillsI
 }
 
 async function initServices(options?: InitServicesOptions): Promise<void> {
-  messageBus = new IpcBus();
   const invokerHomeRoot = resolveInvokerHomeRoot();
   mkdirSync(invokerHomeRoot, { recursive: true });
   const readOnly = options?.readOnly === true;
+  const previousMessageBus = typeof messageBus === 'undefined' ? null : messageBus;
+  previousMessageBus?.disconnect();
+  const serviceMessageBus = new IpcBus(undefined, { allowServe: !readOnly });
+  await serviceMessageBus.ready();
+  messageBus = serviceMessageBus;
   const dbPath = path.join(invokerHomeRoot, 'invoker.db');
   if (!readOnly) {
     writerLock = acquireDbWriterLock(dbPath, `main:initServices pid=${process.pid}`);
@@ -906,6 +978,33 @@ if (isHeadless) {
 
       const executeStandaloneGuiMutation = async (payload: GuiMutationPayload): Promise<unknown> => {
         switch (payload.channel) {
+          case 'invoker:clear': {
+            logger.info('clear — stopping all tasks and resetting daemon DAG', { module: 'ipc-delegate' });
+            await sharedDeleteAllWorkflows({ logger, orchestrator, taskExecutor: undefined });
+            await Promise.all(executorRegistry.getAll().map(f => f.destroyAll().catch(() => undefined)));
+            orchestrator = new Orchestrator({
+              persistence,
+              messageBus,
+              taskRepository: new SqliteTaskRepository(persistence),
+              maxConcurrency: effectiveMaxConcurrency,
+              defaultAutoFixRetries: invokerConfig.autoFixRetries,
+              executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
+              defaultPoolId: invokerConfig.defaultPoolId,
+              availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
+              deferRunningUntilLaunch: true,
+              launchOutboxMode: invokerConfig.launchOutboxMode,
+            });
+            commandService = new CommandService(
+              orchestrator,
+              buildInvalidationDeps({
+                logger,
+                orchestrator,
+                persistence,
+                taskExecutor: () => latestTaskExecutor,
+              }),
+            );
+            return undefined;
+          }
           case 'invoker:load-plan': {
             const planText = String(payload.args[0] ?? '');
             const { parsePlan } = await import('./plan-parser.js');
@@ -919,6 +1018,40 @@ if (isHeadless) {
             const started = orchestrator.startExecution();
             await executor.executeTasks(started);
             return started;
+          }
+          case 'invoker:stop': {
+            logger.info('stop — destroying all daemon executors', { module: 'ipc-delegate' });
+            const failInFlightTasks = (): void => {
+              const allTasks = orchestrator.getAllTasks();
+              for (const task of allTasks) {
+                if (isTaskInFlightForForcedStop(task)) {
+                  logger.info(`stop — failing in-flight task "${task.id}" (${task.status})`, { module: 'ipc-delegate' });
+                  orchestrator.handleWorkerResponse({
+                    requestId: `stop-${task.id}`,
+                    actionId: task.id,
+                    attemptId: task.execution.selectedAttemptId,
+                    executionGeneration: task.execution.generation ?? 0,
+                    status: 'failed',
+                    outputs: { exitCode: 1, error: 'Stopped by user' },
+                  });
+                }
+              }
+            };
+            failInFlightTasks();
+            await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));
+            failInFlightTasks();
+            return undefined;
+          }
+          case 'invoker:inject-task-states': {
+            if (process.env.NODE_ENV !== 'test') {
+              throw new Error('inject-task-states is only available in tests');
+            }
+            const updates = payload.args[0] as Array<{ taskId: string; changes: TaskStateChanges }>;
+            for (const { taskId, changes } of updates) {
+              persistence.updateTask(taskId, changes);
+            }
+            orchestrator.syncAllFromDb();
+            return undefined;
           }
           case 'invoker:set-merge-branch': {
             const workflowId = String(payload.args[0]);
@@ -1004,7 +1137,7 @@ if (isHeadless) {
       // In standalone owner mode, serve delegated requests from peer headless processes.
       if (standaloneMode && messageBus) {
         const standaloneOwnerIdleTimeoutMs = Number.parseInt(
-          process.env.INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS ?? '2000',
+          process.env.INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS ?? '0',
           10,
         );
         let standaloneOwnerLastActivityAt = Date.now();
@@ -1012,6 +1145,9 @@ if (isHeadless) {
           standaloneOwnerLastActivityAt = Date.now();
         };
         headlessDeps.isStandaloneOwnerIdle = () => {
+          if (!Number.isFinite(standaloneOwnerIdleTimeoutMs) || standaloneOwnerIdleTimeoutMs <= 0) {
+            return false;
+          }
           const idleForMs = Date.now() - standaloneOwnerLastActivityAt;
           if (idleForMs < standaloneOwnerIdleTimeoutMs) return false;
           const hasQueuedOrRunningMutations =
@@ -1211,6 +1347,9 @@ if (isHeadless) {
           if (kind === 'queue') {
             return orchestrator.getQueueStatus() as unknown as Record<string, unknown>;
           }
+          if (kind === 'workflow-status') {
+            return orchestrator.getWorkflowStatus();
+          }
           if (kind === 'tasks') {
             if ((req as { forceRefresh?: boolean }).forceRefresh) {
               orchestrator.syncAllFromDb();
@@ -1280,6 +1419,10 @@ if (isHeadless) {
             });
           });
           return { ok: true };
+        });
+        messageBus.onRequest('headless.gui-mutation', async (req: unknown) => {
+          noteStandaloneOwnerActivity();
+          return executeStandaloneGuiMutation(req as GuiMutationPayload);
         });
 
         reviewGateStatusWorker = startReviewGateStatusWorker({
@@ -2208,16 +2351,21 @@ function createEmbeddedTerminalBackendFromConfig(
   }
 
   function translateGuiMutationToHeadless(payload: GuiMutationPayload):
+    | { channel: 'headless.gui-mutation'; request: GuiMutationPayload }
     | { channel: 'headless.run'; request: HeadlessRunMutationPayload }
     | { channel: 'headless.resume'; request: HeadlessResumeMutationPayload }
     | { channel: 'headless.exec'; request: HeadlessExecMutationPayload }
     | null {
     const [arg0, arg1, arg2] = payload.args;
     switch (payload.channel) {
+      case 'invoker:load-plan':
+        return { channel: 'headless.gui-mutation', request: payload };
+      case 'invoker:start':
+        return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:stop':
-        return { channel: 'headless.exec', request: { args: ['stop'] } };
+        return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:clear':
-        return { channel: 'headless.exec', request: { args: ['clear'] } };
+        return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:resume-workflow': {
         const workflows = persistence.listWorkflows();
         const workflowId = workflows[0]?.id;
@@ -2714,22 +2862,62 @@ function createEmbeddedTerminalBackendFromConfig(
 
   const runGuiReadyBootstrap = async (): Promise<void> => {
     recordStartupMark('app.whenReady');
-    ownerMode = true;
-    try {
-      recordStartupMark('initServices.start');
-      await initServices({ executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
-      recordStartupMark('initServices.end', { ownerMode: true });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (!message.includes('[db-writer-lock]')) {
+    const guiOwnerPreference = resolveGuiOwnerPreference();
+    let daemonGuiOwner = false;
+    if (guiOwnerPreference === 'daemon') {
+      try {
+        recordStartupMark('daemonOwner.ensure.start');
+        await ensureStandaloneOwnerForGui();
+        recordStartupMark('daemonOwner.ensure.end');
+        daemonGuiOwner = true;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
         process.stderr.write(`${RED}Error:${RESET} ${message}\n`);
         app.quit();
         return;
       }
-      recordStartupMark('initServices.readOnly.start');
-      await initServices({ readOnly: true, executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
+    } else if (guiOwnerPreference === 'auto') {
+      recordStartupMark('daemonOwner.discover.start');
+      try {
+        daemonGuiOwner = await discoverStandaloneOwnerForGui(1_000);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        logger.warn(`daemon owner auto-discovery failed; starting GUI owner locally: ${message}`, { module: 'init' });
+        daemonGuiOwner = false;
+      }
+      recordStartupMark('daemonOwner.discover.end', { daemonOwner: daemonGuiOwner });
+    }
+
+    if (daemonGuiOwner) {
       ownerMode = false;
-      recordStartupMark('initServices.readOnly.end', { ownerMode: false });
+      try {
+        recordStartupMark('initServices.readOnly.start');
+        await initServices({ readOnly: true, executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
+        recordStartupMark('initServices.readOnly.end', { ownerMode: false, daemonOwner: true });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`${RED}Error:${RESET} ${message}\n`);
+        app.quit();
+        return;
+      }
+    } else {
+      ownerMode = true;
+      try {
+        recordStartupMark('initServices.start');
+        await initServices({ executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
+        recordStartupMark('initServices.end', { ownerMode: true });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (!message.includes('[db-writer-lock]')) {
+          process.stderr.write(`${RED}Error:${RESET} ${message}\n`);
+          app.quit();
+          return;
+        }
+        recordStartupMark('initServices.readOnly.start');
+        await initServices({ readOnly: true, executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
+        ownerMode = false;
+        recordStartupMark('initServices.readOnly.end', { ownerMode: false });
+      }
     }
 
     if (ownerMode) {
@@ -2807,6 +2995,9 @@ function createEmbeddedTerminalBackendFromConfig(
         }
         if (kind === 'queue') {
           return orchestrator.getQueueStatus() as unknown as Record<string, unknown>;
+        }
+        if (kind === 'workflow-status') {
+          return orchestrator.getWorkflowStatus();
         }
         if (kind === 'tasks') {
           if ((req as { forceRefresh?: boolean }).forceRefresh) {
@@ -3005,32 +3196,42 @@ function createEmbeddedTerminalBackendFromConfig(
     });
 
     if (process.env.NODE_ENV === 'test') {
+      const injectTaskStates = async (updates: Array<{ taskId: string; changes: TaskStateChanges }>): Promise<void> => {
+        for (const { taskId, changes } of updates) {
+          const before = orchestrator.getTask(taskId);
+          const previousSnapshot = lastKnownTaskStates.get(taskId);
+          const previousTaskStateVersion = previousSnapshot
+            ? (
+                (JSON.parse(previousSnapshot) as { taskStateVersion?: number }).taskStateVersion
+                ?? before?.taskStateVersion
+                ?? 1
+              )
+            : (before?.taskStateVersion ?? 0);
+          persistence.updateTask(taskId, changes);
+          messageBus.publish(Channels.TASK_DELTA, {
+            type: 'updated',
+            taskId,
+            changes,
+            previousTaskStateVersion,
+            taskStateVersion: previousTaskStateVersion + 1,
+          } satisfies TaskDelta);
+        }
+        orchestrator.syncAllFromDb();
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          requestWorkflowMetadataPublish('gap-detect');
+        }
+      };
       ipcMain.handle(
         'invoker:inject-task-states',
         async (_event, updates: Array<{ taskId: string; changes: TaskStateChanges }>) => {
-          for (const { taskId, changes } of updates) {
-            const before = orchestrator.getTask(taskId);
-            const previousSnapshot = lastKnownTaskStates.get(taskId);
-            const previousTaskStateVersion = previousSnapshot
-              ? (
-                  (JSON.parse(previousSnapshot) as { taskStateVersion?: number }).taskStateVersion
-                  ?? before?.taskStateVersion
-                  ?? 1
-                )
-              : (before?.taskStateVersion ?? 0);
-            persistence.updateTask(taskId, changes);
-            messageBus.publish(Channels.TASK_DELTA, {
-              type: 'updated',
-              taskId,
-              changes,
-              previousTaskStateVersion,
-              taskStateVersion: previousTaskStateVersion + 1,
-            } satisfies TaskDelta);
+          if (!ownerMode) {
+            await messageBus.request('headless.gui-mutation', {
+              channel: 'invoker:inject-task-states',
+              args: [updates],
+            } satisfies GuiMutationPayload);
+            return;
           }
-          orchestrator.syncAllFromDb();
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            requestWorkflowMetadataPublish('gap-detect');
-          }
+          await injectTaskStates(updates);
         },
       );
     }
@@ -3108,15 +3309,7 @@ function createEmbeddedTerminalBackendFromConfig(
 
     registerGuiMutationHandler('invoker:clear', async () => {
       logger.info('clear — stopping all tasks and resetting DAG', { module: 'ipc' });
-      const workflows = persistence.listWorkflows();
-
-      for (const workflow of workflows) {
-        try {
-          await performCancelWorkflow(workflow.id);
-        } catch (err) {
-          logger.error(`clear: failed to cancel workflow "${workflow.id}": ${err}`, { module: 'ipc' });
-        }
-      }
+      await sharedDeleteAllWorkflows({ logger, orchestrator, taskExecutor: taskExecutor ?? undefined });
       await Promise.all(executorRegistry.getAll().map(f => f.destroyAll().catch(() => undefined)));
 
       orchestrator = new Orchestrator({
@@ -3142,6 +3335,9 @@ function createEmbeddedTerminalBackendFromConfig(
       );
       rebuildTaskRunner();
       taskHandles.clear();
+      lastKnownTaskStates.clear();
+      lastKnownWorkflowCount = 0;
+      requestWorkflowMetadataPublish('clear');
     });
 
     registerReadOnlyIpcHandlers({

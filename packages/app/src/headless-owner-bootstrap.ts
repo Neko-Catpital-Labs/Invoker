@@ -13,6 +13,7 @@ export function tryAcquireOwnerBootstrapLock(invokerHomeRoot: string): OwnerBoot
   const lockDir = join(invokerHomeRoot, OWNER_BOOTSTRAP_LOCK_DIR);
 
   try {
+    mkdirSync(invokerHomeRoot, { recursive: true });
     mkdirSync(lockDir);
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
@@ -28,10 +29,12 @@ export function tryAcquireOwnerBootstrapLock(invokerHomeRoot: string): OwnerBoot
           return tryAcquireOwnerBootstrapLock(invokerHomeRoot);
         }
       }
+      rmSync(lockDir, { recursive: true, force: true });
+      return tryAcquireOwnerBootstrapLock(invokerHomeRoot);
     } catch {
-      return null;
+      rmSync(lockDir, { recursive: true, force: true });
+      return tryAcquireOwnerBootstrapLock(invokerHomeRoot);
     }
-    return null;
   }
 
   writeFileSync(join(lockDir, 'pid'), String(process.pid), 'utf8');
