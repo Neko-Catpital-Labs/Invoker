@@ -5,15 +5,15 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
 DB_PATH="${INVOKER_DB_PATH:-${HOME:-.}/.invoker/invoker.db}"
-TASK_ID="wf-1780292402489-6/final-regression-test-all"
+TASK_ID="wf-1779680045111-2/final-regression-test-all"
 
-tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/invoker-repro-final-regression-no-lease.XXXXXX")"
+tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/invoker-repro-wf-1779680045111-2.XXXXXX")"
 trap 'rm -rf "$tmpdir"' EXIT
 db="$tmpdir/repro.db"
 
 echo "[repro] task: $TASK_ID"
-echo "[repro] root cause: retry diagnostics misclassified SSH lease state around launch"
-echo "[repro] effect: pending launch leases could be cleaned up, and running SSH tasks without active leases were not investigated"
+echo "[repro] root cause: the SSH task reached running/executing, but no active selected-attempt SSH lease remained."
+echo "[repro] fixed behavior: retry diagnostics route running SSH tasks without active leases to pending investigation."
 
 sqlite3 "$db" <<'SQL'
 CREATE TABLE tasks (
@@ -21,7 +21,8 @@ CREATE TABLE tasks (
   status TEXT,
   runner_kind TEXT,
   pool_member_id TEXT,
-  selected_attempt_id TEXT
+  selected_attempt_id TEXT,
+  last_heartbeat_at TEXT
 );
 
 CREATE TABLE execution_resource_leases (
@@ -39,63 +40,29 @@ CREATE TABLE execution_resource_leases (
 );
 
 INSERT INTO tasks VALUES
-  ('wf-repro/final-regression', 'pending', 'ssh', 'remote_digital_ocean_4', 'wf-repro/final-regression-afea42916'),
-  ('wf-repro/running-no-lease', 'running', 'ssh', 'remote_digital_ocean_4', 'wf-repro/running-no-lease-afea42916');
+  ('wf-repro/final-regression-no-lease', 'running', 'ssh', 'remote_digital_ocean_3', 'wf-repro/final-regression-no-lease-a2680c65c', datetime('now')),
+  ('wf-repro/healthy-running', 'running', 'ssh', 'remote_digital_ocean_4', 'wf-repro/healthy-running-a1', datetime('now'));
 
 INSERT INTO execution_resource_leases
   (resource_key, resource_type, holder_id, task_id, pool_id, pool_member_id,
    acquired_at, last_heartbeat_at, lease_expires_at, metadata_json)
 VALUES
   ('ssh:invoker@138.68.230.225:22', 'ssh',
-   'runner:123:wf-repro/final-regression:wf-repro/final-regression-afea42916',
-   'wf-repro/final-regression', 'pnpm-ssh', 'remote_digital_ocean_4',
+   'runner:123:wf-repro/healthy-running:wf-repro/healthy-running-a1',
+   'wf-repro/healthy-running', 'pnpm-ssh', 'remote_digital_ocean_4',
    datetime('now'), datetime('now'), datetime('now', '+20 minutes'), NULL);
 SQL
 
-old_orphan_count="$(sqlite3 "$db" <<'SQL'
+old_detector_count="$(sqlite3 "$db" <<'SQL'
 SELECT COUNT(*)
-FROM execution_resource_leases l
-LEFT JOIN tasks t ON t.id = l.task_id
-WHERE l.resource_type = 'ssh'
-  AND l.task_id IS NOT NULL
-  AND TRIM(l.task_id) != ''
-  AND l.lease_expires_at IS NOT NULL
-  AND julianday(l.lease_expires_at) > julianday('now')
-  AND (
-    COALESCE(t.status, '<missing>') != 'running'
-    OR t.selected_attempt_id IS NULL
-    OR TRIM(t.selected_attempt_id) = ''
-    OR NOT (
-      l.holder_id = t.selected_attempt_id
-      OR l.holder_id LIKE '%:' || t.selected_attempt_id
-    )
-  );
+FROM tasks t
+WHERE t.status = 'running'
+  AND t.runner_kind = 'ssh'
+  AND t.last_heartbeat_at IS NOT NULL
+  AND julianday(t.last_heartbeat_at) < julianday('now', '-5 minutes');
 SQL
 )"
-
-fixed_orphan_count="$(sqlite3 "$db" <<'SQL'
-SELECT COUNT(*)
-FROM execution_resource_leases l
-LEFT JOIN tasks t ON t.id = l.task_id
-WHERE l.resource_type = 'ssh'
-  AND l.task_id IS NOT NULL
-  AND TRIM(l.task_id) != ''
-  AND l.lease_expires_at IS NOT NULL
-  AND julianday(l.lease_expires_at) > julianday('now')
-  AND (
-    t.id IS NULL
-    OR COALESCE(t.status, '<missing>') NOT IN ('running', 'pending')
-    OR t.selected_attempt_id IS NULL
-    OR TRIM(t.selected_attempt_id) = ''
-    OR NOT (
-      l.holder_id = t.selected_attempt_id
-      OR l.holder_id LIKE '%:' || t.selected_attempt_id
-    )
-  );
-SQL
-)"
-
-running_without_lease_count="$(sqlite3 "$db" <<'SQL'
+fixed_detector_count="$(sqlite3 "$db" <<'SQL'
 SELECT COUNT(*)
 FROM tasks t
 WHERE t.status = 'running'
@@ -117,18 +84,13 @@ WHERE t.status = 'running'
 SQL
 )"
 
-if [ "$old_orphan_count" != "1" ]; then
-  echo "expected old cleanup query to misclassify the pending selected-attempt SSH lease, got $old_orphan_count" >&2
+if [ "$old_detector_count" != "0" ]; then
+  echo "expected pre-fix detector model to miss the no-lease running task, got $old_detector_count" >&2
   exit 1
 fi
 
-if [ "$fixed_orphan_count" != "0" ]; then
-  echo "expected fixed cleanup query to preserve the pending selected-attempt SSH lease, got $fixed_orphan_count" >&2
-  exit 1
-fi
-
-if [ "$running_without_lease_count" != "1" ]; then
-  echo "expected fixed detector to flag one running SSH task without a lease, got $running_without_lease_count" >&2
+if [ "$fixed_detector_count" != "1" ]; then
+  echo "expected fixed detector to flag exactly one running SSH task without a lease, got $fixed_detector_count" >&2
   exit 1
 fi
 
@@ -143,14 +105,14 @@ required = [
     "write_ssh_running_without_lease_file",
     "ssh-running-no-lease=",
     "pending investigation includes SSH running tasks without active leases",
-    "COALESCE(t.status, '<missing>') NOT IN ('running', 'pending')",
+    "pending investigation includes SSH running tasks without active leases: $(count_lines \"$ssh_running_without_lease_file\")",
 ]
 missing = [needle for needle in required if needle not in script]
 if missing:
     raise SystemExit("fixed retry diagnostics are missing: " + ", ".join(missing))
 
-print("[repro] fixed source: pending selected-attempt SSH leases are preserved")
-print("[repro] fixed source: running SSH tasks without active leases are routed to investigation")
+print("[repro] pre-fix model: running SSH task with no active lease was not classified")
+print("[repro] fixed source: no-lease running SSH tasks are counted and routed to investigation")
 PY
 
 if [ -f "$DB_PATH" ]; then
@@ -197,12 +159,8 @@ try:
 
     print("[repro] local DB task:", json.dumps(dict(task), sort_keys=True))
     print("[repro] local DB active_matching_ssh_lease_count:", len(active_leases))
-    if task["status"] == "running" and task["runner_kind"] == "ssh":
-        assert task["selected_attempt_id"]
-        if len(active_leases) == 0:
-            print("[repro] local DB diagnostic confirmed: running SSH task has no active matching lease")
-        else:
-            print("[repro] local DB diagnostic: target currently has an active matching lease")
+    if task["status"] == "running" and task["runner_kind"] == "ssh" and len(active_leases) == 0:
+        print("[repro] local DB diagnostic confirmed: running SSH task has no active matching lease")
 finally:
     conn.close()
 PY

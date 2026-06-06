@@ -20,7 +20,7 @@ task = {
     "id": "wf-1778431095371-43/regression-inv-63",
     "createdAt": "2026-06-03T18:00:00.000Z",
     "status": "pending",
-    "config": {"poolId": "pnpm-ssh", "runnerKind": "worktree"},
+    "config": {"poolId": "pnpm-ssh", "runnerKind": "ssh"},
     "execution": {},
 }
 queue = {
