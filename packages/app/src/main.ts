@@ -3353,6 +3353,54 @@ function createEmbeddedTerminalBackendFromConfig(
     );
 
     registerWorkflowScopedGuiMutationHandler(
+      'invoker:recreate-downstream',
+      (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
+      'high',
+      async (taskIdArg: unknown) => {
+        const taskId = String(taskIdArg);
+        logger.info(`recreate-downstream: "${taskId}"`, { module: 'ipc' });
+        try {
+          if (activeMutationContext?.mutationTiming) {
+            await activeMutationContext.mutationTiming.span(
+              'main.ipc.recreate-downstream.preemptTaskSubgraph',
+              { taskId },
+              () => preemptTaskSubgraph(taskId),
+            );
+          } else {
+            await preemptTaskSubgraph(taskId);
+          }
+          const envelope = makeEnvelope('recreate-downstream', 'ui', 'task', { taskId });
+          const result = activeMutationContext?.mutationTiming
+            ? await activeMutationContext.mutationTiming.span(
+              'main.ipc.recreate-downstream.commandService.recreateDownstream',
+              { taskId },
+              () => commandService.recreateDownstream(envelope),
+            )
+            : await commandService.recreateDownstream(envelope);
+          if (!result.ok) throw new Error(result.error.message);
+          const started = result.data;
+          remoteFetchForPool.enabled = false;
+          try {
+            await dispatchStartedTasksWithGlobalTopup({
+              orchestrator,
+              taskExecutor: requireTaskExecutor(),
+              logger,
+              context: 'ipc.recreate-downstream',
+              started,
+              mutationTiming: activeMutationContext?.mutationTiming,
+              launchOutboxMode: invokerConfig.launchOutboxMode,
+            });
+          } finally {
+            remoteFetchForPool.enabled = true;
+          }
+        } catch (err) {
+          logger.error(`recreate-downstream failed: ${err}`, { module: 'ipc' });
+          throw err;
+        }
+      },
+    );
+
+    registerWorkflowScopedGuiMutationHandler(
       'invoker:retry-workflow',
       (workflowIdArg: unknown) => String(workflowIdArg),
       'high',
