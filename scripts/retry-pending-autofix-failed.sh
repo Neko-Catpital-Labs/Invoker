@@ -253,7 +253,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-STATE_DIR="$(mktemp -d -t invoker-retry-pending-autofix.XXXXXX)"
+STATE_DIR="${INVOKER_RETRY_PENDING_AUTOFIX_STATE_DIR:-}"
+if [ -z "$STATE_DIR" ]; then
+  STATE_DIR="$(mktemp -d -t invoker-retry-pending-autofix.XXXXXX)"
+fi
 SUBMISSIONS_FILE="${INVOKER_RETRY_PENDING_AUTOFIX_STATE_FILE:-${HOME:-.}/.invoker/retry-pending-autofix-failed-submissions.tsv}"
 DB_PATH="${INVOKER_DB_PATH:-${INVOKER_DB_DIR:-${HOME:-.}/.invoker}/invoker.db}"
 HEADLESS_CLIENT_JS="$REPO_ROOT/packages/app/dist/headless-client.js"
@@ -262,7 +265,9 @@ MANAGED_OWNER_LOG="$STATE_DIR/managed-owner.log"
 mkdir -p "$(dirname "$SUBMISSIONS_FILE")"
 touch "$SUBMISSIONS_FILE"
 cleanup() {
-  rm -rf "$STATE_DIR"
+  if [ -z "${INVOKER_RETRY_PENDING_AUTOFIX_STATE_DIR:-}" ]; then
+    rm -rf "$STATE_DIR"
+  fi
 }
 trap cleanup EXIT
 
@@ -296,9 +301,10 @@ start_managed_headless_owner() {
   else
     MANAGED_OWNER_LOG="$STATE_DIR/managed-owner-$(date +%s).log"
     echo "  starting managed standalone owner for retry loop (log: $MANAGED_OWNER_LOG)" >&2
-    INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS="${INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS:-86400000}" \
+    env \
+      INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS="${INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS:-86400000}" \
       INVOKER_HEADLESS_STANDALONE=1 \
-      "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless owner-serve > "$MANAGED_OWNER_LOG" 2>&1 &
+      nohup "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless owner-serve > "$MANAGED_OWNER_LOG" 2>&1 &
     MANAGED_OWNER_PID="$!"
   fi
 
@@ -773,11 +779,13 @@ PY
 write_pool_capacity_blocked_file() {
   local queue_file="$1"
   local pool_capacity_blocked_file="$2"
+  local now_epoch="$3"
+  local defer_cooldown_seconds="$4"
   : > "$pool_capacity_blocked_file"
 
   [ -f "$DB_PATH" ] || return 0
 
-  python3 - "$DB_PATH" "$queue_file" "$pool_capacity_blocked_file" <<'PY'
+  python3 - "$DB_PATH" "$queue_file" "$pool_capacity_blocked_file" "$now_epoch" "$defer_cooldown_seconds" <<'PY'
 import json
 import pathlib
 import sqlite3
@@ -786,6 +794,8 @@ import sys
 db_path = sys.argv[1]
 queue_path = pathlib.Path(sys.argv[2])
 output_path = pathlib.Path(sys.argv[3])
+now_epoch = int(sys.argv[4])
+defer_cooldown_seconds = int(sys.argv[5])
 
 active_queue_task_ids = set()
 
@@ -809,27 +819,38 @@ if queue_path.exists() and queue_path.stat().st_size > 0:
     if isinstance(queue, dict):
         collect_queue_task_ids(queue.get("queued"))
 
-if not active_queue_task_ids:
-    raise SystemExit(0)
-
 conn = None
 blocked = []
 try:
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
-    placeholders = ",".join("?" for _ in active_queue_task_ids)
+    task_args = []
+    active_filter = ""
+    if active_queue_task_ids:
+        placeholders = ",".join("?" for _ in active_queue_task_ids)
+        active_filter = f"OR id IN ({placeholders})"
+        task_args.extend(sorted(active_queue_task_ids))
     tasks = conn.execute(
         f"""
         SELECT id
         FROM tasks
-        WHERE id IN ({placeholders})
-          AND status = 'pending'
+        WHERE status = 'pending'
           AND runner_kind = 'ssh'
           AND pool_id IS NOT NULL
           AND TRIM(pool_id) != ''
+          AND (
+            EXISTS (
+              SELECT 1
+              FROM events e
+              WHERE e.task_id = tasks.id
+                AND e.event_type = 'task.executor.deferred'
+                AND CAST(strftime('%s', e.created_at) AS INTEGER) >= ?
+            )
+            {active_filter}
+          )
         ORDER BY id
         """,
-        tuple(sorted(active_queue_task_ids)),
+        (now_epoch - defer_cooldown_seconds, *task_args),
     ).fetchall()
     for task in tasks:
         task_id = task["id"]
@@ -850,7 +871,7 @@ try:
         ).fetchone()["event_id"]
         latest_defer = conn.execute(
             """
-            SELECT payload
+            SELECT payload, created_at
             FROM events
             WHERE task_id = ?
               AND event_type = 'task.executor.deferred'
@@ -864,7 +885,10 @@ try:
             payload = json.loads(latest_defer["payload"] if latest_defer else "{}")
         except json.JSONDecodeError:
             payload = {}
-        if payload.get("reason") in {"execution-pool-capacity", "ssh-resource-lease-held"}:
+        if payload.get("reason") not in {"execution-pool-capacity", "ssh-resource-lease-held"}:
+            continue
+        defer_epoch = conn.execute("SELECT CAST(strftime('%s', ?) AS INTEGER)", (latest_defer["created_at"],)).fetchone()[0]
+        if task_id in active_queue_task_ids or (defer_epoch is not None and defer_epoch >= now_epoch - defer_cooldown_seconds):
             blocked.append(task_id)
 except sqlite3.Error:
     blocked = []
@@ -942,6 +966,38 @@ finally:
         conn.close()
 
 output_path.write_text("".join(f"{task_id}\n" for task_id in ready), encoding="utf-8")
+PY
+}
+
+filter_ready_pending_capacity_blockers() {
+  local ready_pending_without_dispatch_file="$1"
+  local pool_capacity_blocked_file="$2"
+
+  [ -s "$ready_pending_without_dispatch_file" ] || return 0
+  [ -s "$pool_capacity_blocked_file" ] || return 0
+
+  python3 - "$ready_pending_without_dispatch_file" "$pool_capacity_blocked_file" <<'PY'
+import pathlib
+import sys
+
+ready_path = pathlib.Path(sys.argv[1])
+blocked_path = pathlib.Path(sys.argv[2])
+
+blocked = {
+    line.strip()
+    for line in blocked_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    if line.strip()
+}
+ready = [
+    line.strip()
+    for line in ready_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    if line.strip()
+]
+
+ready_path.write_text(
+    "".join(f"{task_id}\n" for task_id in ready if task_id not in blocked),
+    encoding="utf-8",
+)
 PY
 }
 
@@ -1424,6 +1480,16 @@ count_lines() {
   wc -l < "$file" | tr -d ' '
 }
 
+active_launch_dispatch_count() {
+  if [ ! -f "$DB_PATH" ]; then
+    printf '0'
+    return
+  fi
+  sqlite3 -cmd '.timeout 5000' "$DB_PATH" \
+    "SELECT COUNT(*) FROM task_launch_dispatch WHERE state IN ('enqueued','leased');" 2>/dev/null \
+    || printf '0'
+}
+
 write_pending_investigation_prompt() {
   local target="$1"
   local prompt_file="$2"
@@ -1826,6 +1892,7 @@ run_cycle() {
   local retried_workflows_file="$cycle_dir/retried-workflows.txt"
   local retried_failed_tasks_file="$cycle_dir/retried-failed-tasks.txt"
   local retried_ready_no_dispatch_tasks_file="$cycle_dir/retried-ready-no-dispatch-tasks.txt"
+  local retried_ready_no_dispatch_workflows_file="$cycle_dir/retried-ready-no-dispatch-workflows.txt"
   local localized_failed_tasks_file="$cycle_dir/localized-failed-tasks.txt"
   local localized_workflows_file="$cycle_dir/localized-workflows.txt"
   local cleared_ssh_pin_tasks_file="$cycle_dir/cleared-ssh-pin-tasks.txt"
@@ -1835,6 +1902,7 @@ run_cycle() {
   : > "$retried_workflows_file"
   : > "$retried_failed_tasks_file"
   : > "$retried_ready_no_dispatch_tasks_file"
+  : > "$retried_ready_no_dispatch_workflows_file"
   : > "$localized_failed_tasks_file"
   : > "$localized_workflows_file"
   : > "$cleared_ssh_pin_tasks_file"
@@ -1865,8 +1933,9 @@ run_cycle() {
   write_orphan_ssh_leases_file "$orphan_ssh_leases_file"
   write_ssh_running_without_lease_file "$ssh_running_without_lease_file"
   write_ssh_running_active_lease_file "$ssh_running_active_lease_file"
-  write_pool_capacity_blocked_file "$queue_file" "$pool_capacity_blocked_file"
+  write_pool_capacity_blocked_file "$queue_file" "$pool_capacity_blocked_file" "$now_epoch" "$RESUME_COOLDOWN_SECONDS"
   write_ready_pending_without_dispatch_file "$ready_pending_without_dispatch_file"
+  filter_ready_pending_capacity_blockers "$ready_pending_without_dispatch_file" "$pool_capacity_blocked_file"
   write_exhausted_fixes_file "$failed_tasks_file" "$auto_fix_attempts_file" "$exhausted_fixes_file"
   write_effective_blockers_file "$blocking_tasks_file" "$exhausted_fixes_file" "$effective_blocking_tasks_file"
 
@@ -1895,6 +1964,17 @@ run_cycle() {
 
   local failures=0
   local target=""
+  local active_dispatch_count
+  local managed_owner_started_for_dispatch=false
+  active_dispatch_count="$(active_launch_dispatch_count)"
+  if [ "$DRY_RUN" != true ] && [ "$active_dispatch_count" -gt 0 ] && ! owner_ping_ready; then
+    echo "active launch dispatch rows need an owner dispatcher: $active_dispatch_count"
+    if ! start_managed_headless_owner; then
+      failures=$((failures + 1))
+    else
+      managed_owner_started_for_dispatch=true
+    fi
+  fi
 
   if [ "$LOCALIZE_SSH" = true ] && [ -s "$localize_ssh_file" ]; then
     echo "switching SSH-assigned recovery tasks to local worktrees"
@@ -2009,6 +2089,7 @@ run_cycle() {
       if dispatch_no_track retry-ready-no-dispatch "$target" "$RESUME_COOLDOWN_SECONDS" "$now_epoch" retry-task "$target"; then
         [ "$LAST_DISPATCH_SUBMITTED" = true ] || continue
         printf '%s\n' "$target" >> "$retried_ready_no_dispatch_tasks_file"
+        printf '%s\n' "$(target_workflow_id "$target")" >> "$retried_ready_no_dispatch_workflows_file"
       else
         failures=$((failures + 1))
       fi
@@ -2025,6 +2106,10 @@ run_cycle() {
       fi
       if contains_line "$cleared_ssh_pin_workflows_file" "$target"; then
         echo "  skip retry-workflow $target (stale SSH pin cleared this cycle)"
+        continue
+      fi
+      if contains_line "$retried_ready_no_dispatch_workflows_file" "$target"; then
+        echo "  skip retry-workflow $target (ready missing-dispatch task retried this cycle)"
         continue
       fi
       if ever_submitted retry-workflow "$target"; then
@@ -2177,6 +2262,8 @@ run_cycle() {
       echo "pending investigation deferred (orphan SSH leases released this cycle: $(count_lines "$released_orphan_ssh_leases_file"))"
     elif [ -s "$released_duplicate_ssh_leases_file" ]; then
       echo "pending investigation deferred (duplicate SSH leases released this cycle: $(count_lines "$released_duplicate_ssh_leases_file"))"
+    elif [ "$managed_owner_started_for_dispatch" = true ]; then
+      echo "pending investigation deferred (managed owner dispatcher started for active launch dispatch rows: $active_dispatch_count)"
     else
       local investigation_tasks_file="$pending_tasks_file"
       local investigation_blockers_file="$effective_blocking_tasks_file"
@@ -2212,7 +2299,10 @@ run_cycle() {
           echo "stale task investigation bypasses unrelated blockers: $(count_lines "$effective_blocking_tasks_file")"
         fi
       fi
-      if ! run_pending_investigations "$investigation_tasks_file" "$investigation_blockers_file" "$tasks_file" "$workflow_status_jsonl" "$queue_file" "$status_counts_file" "$now_epoch" "$cycle_dir"; then
+      if [ "$investigation_tasks_file" = "$pending_tasks_file" ] && [ -s "$pool_capacity_blocked_file" ]; then
+        echo "pending investigation excludes active SSH pool capacity blockers: $(count_lines "$pool_capacity_blocked_file")"
+        echo "pending investigation deferred (pool capacity blockers remain: $(count_lines "$pool_capacity_blocked_file"))"
+      elif ! run_pending_investigations "$investigation_tasks_file" "$investigation_blockers_file" "$tasks_file" "$workflow_status_jsonl" "$queue_file" "$status_counts_file" "$now_epoch" "$cycle_dir"; then
         failures=$((failures + 1))
       fi
     fi
@@ -2290,6 +2380,16 @@ SELFTEST_CODEX
     return 0
   }
 
+  owner_ping_ready() {
+    [ "${SELF_TEST_OWNER_READY:-true}" = true ]
+  }
+
+  start_managed_headless_owner() {
+    printf 'start-managed-owner\n' >> "$test_root/owner-starts.log"
+    SELF_TEST_OWNER_READY=true
+    return 0
+  }
+
   self_test_fail() {
     echo "SELF-TEST FAIL: $*" >&2
     return 1
@@ -2321,6 +2421,7 @@ SELFTEST_CODEX
     rm -f "$test_root/invoker.db"
     : > "$commands_file"
     : > "$codex_commands_file"
+    : > "$test_root/owner-starts.log"
     : > "$workflows_label_file"
     : > "$workflows_jsonl_file"
     printf '{"runningCount":0,"fixingCount":0}\n' > "$self_test_queue_file"
@@ -2354,6 +2455,7 @@ SELFTEST_CODEX
     LAST_DISPATCH_SUBMITTED=false
     SKIP_SLEEP_AFTER_CYCLE=false
     SELF_TEST_QUERY_FAIL=""
+    SELF_TEST_OWNER_READY=true
   }
 
   echo "self-test: incomplete workflows retry once and defer duplicate task actions"
@@ -2452,16 +2554,17 @@ PY
   self_test_assert_contains "$test_root/ready-no-dispatch.out" "ready pending tasks missing launch dispatch rows: 1"
   self_test_assert_contains "$test_root/ready-no-dispatch.out" "retrying ready pending tasks missing launch dispatch rows"
   self_test_assert_contains "$test_root/ready-no-dispatch.out" "reset retry state after repair"
-  self_test_assert_contains "$commands_file" "retry wf-1000-24"
+  self_test_assert_not_contains "$commands_file" "retry wf-1000-24"
+  self_test_assert_contains "$test_root/ready-no-dispatch.out" "skip retry-workflow wf-1000-24 (ready missing-dispatch task retried this cycle)"
   self_test_assert_contains "$commands_file" "retry-task wf-1000-24/root"
   self_test_assert_not_contains "$codex_commands_file" "exec --cd"
 
-  echo "self-test: pool-capacity deferred queued task blocks pending investigation"
+  echo "self-test: recent pool-capacity deferred task blocks ready-no-dispatch retries"
   self_test_reset
   printf 'retry-workflow\twf-1000-23\t%s\n' "$now_epoch" > "$SUBMISSIONS_FILE"
   printf '%s\n' "wf-1000-23" > "$workflows_label_file"
   printf '%s\n' '{"id":"wf-1000-23","status":"running"}' > "$workflows_jsonl_file"
-  printf '%s\n' '{"queued":[{"taskId":"wf-1000-23/regression"}],"running":[],"runningCount":0,"maxConcurrency":12}' > "$self_test_queue_file"
+  printf '%s\n' '{"queued":[],"running":[],"runningCount":0,"maxConcurrency":12}' > "$self_test_queue_file"
   printf '%s\n' '{"id":"wf-1000-23/regression","status":"pending","config":{"workflowId":"wf-1000-23","runnerKind":"ssh","poolId":"pnpm-ssh"},"execution":{"selectedAttemptId":"wf-1000-23/regression-a1","lastHeartbeatAt":"2000-01-01T00:00:00Z"}}' > "$tasks_dir/wf-1000-23.jsonl"
   python3 - "$DB_PATH" <<'PY'
 import sqlite3
@@ -2476,19 +2579,23 @@ with conn:
           id TEXT PRIMARY KEY,
           status TEXT,
           runner_kind TEXT,
-          pool_id TEXT
+          pool_id TEXT,
+          dependencies TEXT,
+          selected_attempt_id TEXT,
+          launch_phase TEXT
         );
         CREATE TABLE events (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           task_id TEXT,
           event_type TEXT,
-          payload TEXT
+          payload TEXT,
+          created_at TEXT DEFAULT (datetime('now'))
         );
         """
     )
     conn.execute(
-        "INSERT INTO tasks VALUES (?, ?, ?, ?)",
-        ("wf-1000-23/regression", "pending", "ssh", "pnpm-ssh"),
+        "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("wf-1000-23/regression", "pending", "ssh", "pnpm-ssh", "[]", "wf-1000-23/regression-a1", ""),
     )
     conn.execute(
         "INSERT INTO events (task_id, event_type, payload) VALUES (?, ?, ?)",
@@ -2502,8 +2609,42 @@ conn.close()
 PY
   run_cycle selftest-pool-capacity-blocked > "$test_root/pool-capacity-blocked.out" 2>&1 || { sed -n '1,240p' "$test_root/pool-capacity-blocked.out" >&2; return 1; }
   self_test_assert_contains "$test_root/pool-capacity-blocked.out" "pool-capacity-blocked=1"
+  self_test_assert_contains "$test_root/pool-capacity-blocked.out" "ready-no-dispatch=0"
   self_test_assert_contains "$test_root/pool-capacity-blocked.out" "pending investigation excludes active SSH pool capacity blockers: 1"
   self_test_assert_contains "$test_root/pool-capacity-blocked.out" "pending investigation deferred (pool capacity blockers remain: 1)"
+  self_test_assert_not_contains "$commands_file" "retry-task wf-1000-23/regression"
+  self_test_assert_not_contains "$codex_commands_file" "exec --cd"
+
+  echo "self-test: active launch dispatch rows start managed owner and defer pending investigation"
+  self_test_reset
+  SELF_TEST_OWNER_READY=false
+  printf 'retry-workflow\twf-1000-26\t%s\n' "$now_epoch" > "$SUBMISSIONS_FILE"
+  printf '%s\n' "wf-1000-26" > "$workflows_label_file"
+  printf '%s\n' '{"id":"wf-1000-26","status":"running"}' > "$workflows_jsonl_file"
+  printf '%s\n' '{"running":[{"taskId":"wf-1000-26/regression","attemptId":"wf-1000-26/regression-a1"}],"queued":[],"runningCount":1,"maxConcurrency":12}' > "$self_test_queue_file"
+  printf '%s\n' '{"id":"wf-1000-26/regression","status":"pending","config":{"workflowId":"wf-1000-26","runnerKind":"ssh","poolId":"pnpm-ssh"},"execution":{"selectedAttemptId":"wf-1000-26/regression-a1","lastHeartbeatAt":"2000-01-01T00:00:00Z","launchStartedAt":"2000-01-01T00:00:00Z","phase":"launching"}}' > "$tasks_dir/wf-1000-26.jsonl"
+  python3 - "$DB_PATH" <<'PY'
+import sqlite3
+import sys
+
+db_path = sys.argv[1]
+conn = sqlite3.connect(db_path)
+with conn:
+    conn.executescript(
+        """
+        CREATE TABLE task_launch_dispatch (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          state TEXT
+        );
+        INSERT INTO task_launch_dispatch (state) VALUES ('enqueued');
+        """
+    )
+conn.close()
+PY
+  run_cycle selftest-active-dispatch-owner > "$test_root/active-dispatch-owner.out" 2>&1 || { sed -n '1,220p' "$test_root/active-dispatch-owner.out" >&2; return 1; }
+  self_test_assert_contains "$test_root/owner-starts.log" "start-managed-owner"
+  self_test_assert_contains "$test_root/active-dispatch-owner.out" "active launch dispatch rows need an owner dispatcher: 1"
+  self_test_assert_contains "$test_root/active-dispatch-owner.out" "pending investigation deferred (managed owner dispatcher started for active launch dispatch rows: 1)"
   self_test_assert_not_contains "$codex_commands_file" "exec --cd"
 
   echo "self-test: healthy pending SSH task is investigated without executor switch"
@@ -2940,6 +3081,65 @@ PY
   self_test_assert_contains "$test_root/stale-running.out" "blockers=0"
   self_test_assert_contains "$test_root/stale-running.out" "stale-running=1"
   self_test_assert_contains "$test_root/stale-running.out" "pending investigation includes stale running tasks: 1"
+  self_test_assert_contains "$codex_commands_file" "exec --cd"
+
+  echo "self-test: stale running task is investigated despite SSH pool capacity blockers"
+  self_test_reset
+  RETRY_INCOMPLETE_WORKFLOWS=true
+  printf 'retry-workflow\twf-1000-27\t%s\nretry-workflow\twf-1000-28\t%s\n' "$now_epoch" "$now_epoch" > "$SUBMISSIONS_FILE"
+  printf '%s\n' "wf-1000-27" "wf-1000-28" > "$workflows_label_file"
+  printf '%s\n' \
+    '{"id":"wf-1000-27","status":"running"}' \
+    '{"id":"wf-1000-28","status":"running"}' > "$workflows_jsonl_file"
+  printf '{"id":"wf-1000-27/run","status":"running","config":{"workflowId":"wf-1000-27","runnerKind":"worktree"},"execution":{"lastHeartbeatAt":"%s","startedAt":"%s","phase":"executing"}}\n' "$stale_queue_ts" "$stale_queue_ts" > "$tasks_dir/wf-1000-27.jsonl"
+  printf '%s\n' '{"id":"wf-1000-28/regression","status":"pending","config":{"workflowId":"wf-1000-28","runnerKind":"ssh","poolId":"pnpm-ssh"},"execution":{"selectedAttemptId":"wf-1000-28/regression-a1"}}' > "$tasks_dir/wf-1000-28.jsonl"
+  python3 - "$DB_PATH" <<'PY'
+import sqlite3
+import sys
+
+db_path = sys.argv[1]
+conn = sqlite3.connect(db_path)
+with conn:
+    conn.executescript(
+        """
+        CREATE TABLE tasks (
+          id TEXT PRIMARY KEY,
+          status TEXT,
+          runner_kind TEXT,
+          pool_id TEXT,
+          dependencies TEXT,
+          selected_attempt_id TEXT,
+          launch_phase TEXT
+        );
+        CREATE TABLE events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          task_id TEXT,
+          event_type TEXT,
+          payload TEXT,
+          created_at TEXT DEFAULT (datetime('now'))
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("wf-1000-28/regression", "pending", "ssh", "pnpm-ssh", "[]", "wf-1000-28/regression-a1", ""),
+    )
+    conn.execute(
+        "INSERT INTO events (task_id, event_type, payload) VALUES (?, ?, ?)",
+        (
+            "wf-1000-28/regression",
+            "task.executor.deferred",
+            '{"reason":"execution-pool-capacity","poolId":"pnpm-ssh"}',
+        ),
+    )
+conn.close()
+PY
+  run_cycle selftest-stale-running-with-pool-capacity > "$test_root/stale-running-with-pool-capacity.out" 2>&1 || { sed -n '1,240p' "$test_root/stale-running-with-pool-capacity.out" >&2; return 1; }
+  self_test_assert_contains "$test_root/stale-running-with-pool-capacity.out" "stale-running=1"
+  self_test_assert_contains "$test_root/stale-running-with-pool-capacity.out" "pool-capacity-blocked=1"
+  self_test_assert_contains "$test_root/stale-running-with-pool-capacity.out" "pending investigation includes stale running tasks: 1"
+  self_test_assert_contains "$test_root/stale-running-with-pool-capacity.out" "pending investigation excludes active SSH pool capacity blockers: 1"
+  self_test_assert_not_contains "$test_root/stale-running-with-pool-capacity.out" "pending investigation deferred (pool capacity blockers remain: 1)"
   self_test_assert_contains "$codex_commands_file" "exec --cd"
 
   echo "self-test: stale running task investigation bypasses fresh blockers"
