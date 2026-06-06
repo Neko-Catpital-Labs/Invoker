@@ -2975,7 +2975,7 @@ describe('Orchestrator', () => {
   });
 
   describe('prepareTaskForNewAttempt', () => {
-    it('resets a running launching task to pending with a fresh selected attempt and preserves durable fields', () => {
+    it('resets a running launching task to pending with a fresh selected attempt and clears launch lineage', () => {
       orchestrator.loadPlan({
         name: 'prepare-running-launching',
         tasks: [
@@ -3058,6 +3058,8 @@ describe('Orchestrator', () => {
       expect(prepared.execution.pendingFixError).toBeUndefined();
       expect(prepared.execution.agentSessionId).toBeUndefined();
       expect(prepared.execution.workspacePath).toBeUndefined();
+      expect(prepared.execution.branch).toBeUndefined();
+      expect(prepared.execution.commit).toBeUndefined();
       expect(prepared.execution.containerId).toBeUndefined();
       expect(prepared.execution.isFixingWithAI).toBe(false);
       expect(prepared.config.command).toBe('pnpm test');
@@ -3067,8 +3069,6 @@ describe('Orchestrator', () => {
       expect(prepared.config.approach).toBe('durable approach');
       expect(prepared.config.testPlan).toBe('durable test plan');
       expect(prepared.dependencies).toEqual([sid(orchestrator, 0, 't0')]);
-      expect(prepared.execution.branch).toBe('feature/task');
-      expect(prepared.execution.commit).toBe('abc123');
       expect(prepared.execution.reviewUrl).toBe('https://example.test/review');
       expect(prepared.execution.reviewId).toBe('review-1');
       expect(prepared.execution.reviewStatus).toBe('open');
