@@ -124,7 +124,11 @@ import sys
 
 db_path = pathlib.Path(sys.argv[1]).expanduser()
 task_id = sys.argv[2]
-conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+try:
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+except sqlite3.Error as exc:
+    print(f"[repro] skipped live diagnostic: unable to open local DB: {exc}")
+    raise SystemExit(0)
 conn.row_factory = sqlite3.Row
 try:
     task = conn.execute(
@@ -161,6 +165,8 @@ try:
     print("[repro] local DB active_matching_ssh_lease_count:", len(active_leases))
     if task["status"] == "running" and task["runner_kind"] == "ssh" and len(active_leases) == 0:
         print("[repro] local DB diagnostic confirmed: running SSH task has no active matching lease")
+except sqlite3.Error as exc:
+    print(f"[repro] skipped live diagnostic: unable to read local DB: {exc}")
 finally:
     conn.close()
 PY
