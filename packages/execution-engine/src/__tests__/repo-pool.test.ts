@@ -48,17 +48,17 @@ describe('RepoPool', () => {
     rmSync(localRepoUrl, { recursive: true, force: true });
   });
 
-  it('ensureClone: clones repo on first call', async () => {
-    const path = await pool.ensureClone(localRepoUrl);
+  it('ensureCloneThroughRepoQueue: clones repo on first call', async () => {
+    const path = await pool.ensureCloneThroughRepoQueue(localRepoUrl);
     expect(path).toBeDefined();
     // Verify it's a git repo
     const result = execSync('git rev-parse --is-inside-work-tree', { cwd: path }).toString().trim();
     expect(result).toBe('true');
   });
 
-  it('ensureClone: returns cached path on second call', async () => {
-    const p1 = await pool.ensureClone(localRepoUrl);
-    const p2 = await pool.ensureClone(localRepoUrl);
+  it('ensureCloneThroughRepoQueue: returns cached path on second call', async () => {
+    const p1 = await pool.ensureCloneThroughRepoQueue(localRepoUrl);
+    const p2 = await pool.ensureCloneThroughRepoQueue(localRepoUrl);
     expect(p1).toBe(p2);
   });
 
@@ -78,19 +78,19 @@ describe('RepoPool', () => {
     const httpsUrl = 'https://github.com/Neko-Catpital-Labs/Invoker';
     const sshUrl = 'git@github.com:Neko-Catpital-Labs/Invoker.git';
     const clonePath = githubPool.getClonePath(httpsUrl);
-    const doEnsureClone = vi
-      .spyOn(githubPool as any, 'doEnsureClone')
+    const ensureCloneUnqueued = vi
+      .spyOn(githubPool as any, 'ensureCloneUnqueued')
       .mockImplementation(async (_repoUrl: string) => clonePath);
 
     const [p1, p2] = await Promise.all([
-      githubPool.ensureClone(httpsUrl),
-      githubPool.ensureClone(sshUrl),
+      githubPool.ensureCloneThroughRepoQueue(httpsUrl),
+      githubPool.ensureCloneThroughRepoQueue(sshUrl),
     ]);
 
     expect(p1).toBe(clonePath);
     expect(p2).toBe(clonePath);
-    expect(doEnsureClone).toHaveBeenCalledTimes(1);
-    expect(doEnsureClone).toHaveBeenCalledWith(httpsUrl);
+    expect(ensureCloneUnqueued).toHaveBeenCalledTimes(1);
+    expect(ensureCloneUnqueued).toHaveBeenCalledWith(httpsUrl);
     await githubPool.destroyAll();
   });
 
@@ -131,7 +131,7 @@ describe('RepoPool', () => {
   });
 
   it('destroyAll: removes all worktrees but preserves cache', async () => {
-    const clonePath = await pool.ensureClone(localRepoUrl);
+    const clonePath = await pool.ensureCloneThroughRepoQueue(localRepoUrl);
     await pool.acquireWorktree(localRepoUrl, 'b1');
     await pool.acquireWorktree(localRepoUrl, 'b2');
     await pool.destroyAll();
@@ -391,17 +391,17 @@ describe('RepoPool', () => {
       );
     }
 
-    it('ensureClone succeeds when fetch --all fails', async () => {
-      await pool.ensureClone(localRepoUrl);
+    it('ensureCloneThroughRepoQueue succeeds when fetch --all fails', async () => {
+      await pool.ensureCloneThroughRepoQueue(localRepoUrl);
       spyFetchToFail(pool);
 
-      const path = await pool.ensureClone(localRepoUrl);
+      const path = await pool.ensureCloneThroughRepoQueue(localRepoUrl);
       expect(path).toBeDefined();
       expect(existsSync(path)).toBe(true);
     });
 
     it('refreshMirrorForRebase succeeds when fetch --all fails', async () => {
-      await pool.ensureClone(localRepoUrl);
+      await pool.ensureCloneThroughRepoQueue(localRepoUrl);
       spyFetchToFail(pool);
 
       const dir = await pool.refreshMirrorForRebase(localRepoUrl, 'master');
@@ -410,7 +410,7 @@ describe('RepoPool', () => {
     });
 
     it('skips per-base fetch after a successful full origin ref refresh', async () => {
-      await pool.ensureClone(localRepoUrl);
+      await pool.ensureCloneThroughRepoQueue(localRepoUrl);
       const orig = (pool as any).execGit.bind(pool);
       const execGit = vi.spyOn(pool as any, 'execGit').mockImplementation(
         (...params: unknown[]) => {
@@ -440,7 +440,7 @@ describe('RepoPool', () => {
     });
 
     it('reuses the base commit resolved by the rebase refresh batch', async () => {
-      await pool.ensureClone(localRepoUrl);
+      await pool.ensureCloneThroughRepoQueue(localRepoUrl);
       const orig = (pool as any).execGit.bind(pool);
       const execGit = vi.spyOn(pool as any, 'execGit').mockImplementation(
         (...params: unknown[]) => {
@@ -468,7 +468,7 @@ describe('RepoPool', () => {
     });
 
     it('separate pools sharing cacheDir tolerate fetch failures', async () => {
-      await pool.ensureClone(localRepoUrl);
+      await pool.ensureCloneThroughRepoQueue(localRepoUrl);
 
       const pool2 = new RepoPool({ cacheDir: tmpDir });
       const pool3 = new RepoPool({ cacheDir: tmpDir });
@@ -477,8 +477,8 @@ describe('RepoPool', () => {
 
       try {
         const [r1, r2] = await Promise.all([
-          pool2.ensureClone(localRepoUrl),
-          pool3.ensureClone(localRepoUrl),
+          pool2.ensureCloneThroughRepoQueue(localRepoUrl),
+          pool3.ensureCloneThroughRepoQueue(localRepoUrl),
         ]);
 
         expect(r1).toBe(r2);
@@ -877,8 +877,8 @@ describe('RepoPool', () => {
     });
   });
 
-  it('ensureClone skips network refresh when remoteFetchForPool.enabled is false', async () => {
-    await pool.ensureClone(localRepoUrl);
+  it('ensureCloneThroughRepoQueue skips network refresh when remoteFetchForPool.enabled is false', async () => {
+    await pool.ensureCloneThroughRepoQueue(localRepoUrl);
     const clonePath = pool.getClonePath(localRepoUrl);
     const shaBefore = execSync('git rev-parse origin/master', { cwd: clonePath }).toString().trim();
 
@@ -886,12 +886,12 @@ describe('RepoPool', () => {
     execSync('git add -A && git commit -m "upstream advance"', { cwd: localRepoUrl });
 
     remoteFetchForPool.enabled = false;
-    await pool.ensureClone(localRepoUrl);
+    await pool.ensureCloneThroughRepoQueue(localRepoUrl);
     const shaSkipped = execSync('git rev-parse origin/master', { cwd: clonePath }).toString().trim();
     expect(shaSkipped).toBe(shaBefore);
 
     remoteFetchForPool.enabled = true;
-    await pool.ensureClone(localRepoUrl);
+    await pool.ensureCloneThroughRepoQueue(localRepoUrl);
     const shaFresh = execSync('git rev-parse origin/master', { cwd: clonePath }).toString().trim();
     expect(shaFresh).not.toBe(shaBefore);
   });
