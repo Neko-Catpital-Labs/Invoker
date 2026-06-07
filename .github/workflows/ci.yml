@@ -127,6 +127,8 @@ jobs:
             command: bash scripts/test-suites/required/18-start-running-mece-repros.sh
           - name: Task New Attempt Reset Repro
             command: bash scripts/test-suites/required/19-task-new-attempt-reset-repro.sh
+          - name: Launch Dispatch Queue Repro
+            command: bash scripts/test-suites/required/25-launch-dispatch-queue-handoff-repro.sh
 
     name: required-fast / ${{ matrix.name }}
 
