@@ -156,8 +156,6 @@ describe('launch-claim orphan regression (2026-05-22 storm)', () => {
         ): Promise<void> {
           startedTasks.push(task);
           if (!opts) return;
-          const accepted = opts.launchOutbox.ackDispatch(opts.dispatchId, 'fake-runner');
-          if (!accepted) return;
           // Mark the task as running synchronously: this writes a terminal
           // launch event (`task.running`) which satisfies the invariant.
           const attemptId = task.execution.selectedAttemptId;
@@ -178,7 +176,6 @@ describe('launch-claim orphan regression (2026-05-22 storm)', () => {
         taskRunnerProvider: () => fakeTaskRunner,
         ownerId: 'cb5-test-owner',
         mode: 'active',
-        maxConcurrency: STORM_SIZE,
         maxLeasesPerPoll: STORM_SIZE,
       });
 
