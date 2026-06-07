@@ -178,13 +178,12 @@ const NOOP_LOGGER: Logger = {
  * never depends on the app shell, the app provides this implementation
  * via the LaunchDispatcher.
  *
- * Each method MUST be safe to call even if the dispatch row was reaped
- * between the dispatcher's lease and the runner's call — the
- * persistence layer returns false in that case and the runner bails
- * out without starting the executor.
+ * Each method MUST be safe to call even if the dispatch row was
+ * reaped between the dispatcher's lease and the runner's call — the
+ * persistence layer returns false in that case and the runner treats
+ * it as a benign race.
  */
 export interface LaunchOutboxAck {
-  ackDispatch(dispatchId: number, runnerId: string): boolean;
   completeDispatch(dispatchId: number): boolean;
   failDispatch(dispatchId: number, error: unknown): boolean;
 }
@@ -521,19 +520,6 @@ export class TaskRunner {
       }
       return;
     }
-    if (dispatchOpts) {
-      const accepted = dispatchOpts.launchOutbox.ackDispatch(
-        dispatchOpts.dispatchId,
-        this.runnerInstanceId,
-      );
-      if (!accepted) {
-        this.logger.warn(
-          `[TaskRunner] launch dispatch ack rejected (lease reaped?) for task=${task.id} attempt=${attemptId} dispatchId=${dispatchOpts.dispatchId}`,
-        );
-        bench('executeTask.dispatchAckRejected');
-        return;
-      }
-    }
     this.logger.info(
       `[TaskRunner] launch accepted task=${task.id} attempt=${attemptId} status=${task.status} ` +
         `phase=${task.execution.phase ?? 'none'} generation=${startGeneration} ` +
@@ -667,11 +653,10 @@ export class TaskRunner {
       // CD.1 / Issue 13: terminate the parent pivot task's outbox row.
       // Without this, drainScheduler enqueued a launch-dispatch row for
       // the pivot, but executeTaskInner returns here without ever
-      // calling completeDispatch — so the row stays acknowledged,
-      // gets reaped after DISPATCH_LEASE_MS, and is eventually
-      // abandoned. The spawn_experiments path is the terminal state
-      // for the pivot itself; only the spawned variants should
-      // continue through the outbox.
+      // calling completeDispatch, so the row stays leased and is retried
+      // or abandoned. The spawn_experiments path is the terminal state
+      // for the pivot itself; only the spawned variants should continue
+      // through the outbox.
       if (dispatchOpts) {
         try {
           dispatchOpts.launchOutbox.completeDispatch(dispatchOpts.dispatchId);
@@ -996,6 +981,12 @@ export class TaskRunner {
       this.releasePoolSelectionLease(this.pendingPoolSelections.get(task.id));
       this.pendingPoolSelections.delete(task.id);
       await this.cleanupPerTaskDockerExecutor(task);
+      if (dispatchOpts) {
+        dispatchOpts.launchOutbox.failDispatch(
+          dispatchOpts.dispatchId,
+          new Error('Launch rejected as stale or non-executable after executor start'),
+        );
+      }
       bench('markTaskRunningAfterLaunch.rejected');
       return;
     }
