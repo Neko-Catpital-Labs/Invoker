@@ -156,10 +156,10 @@ base.describe('Task new-attempt reset repro', () => {
         'slow-task',
         (task) =>
           task.status === 'pending'
-          && task.execution?.phase === 'launching'
           && task.execution?.selectedAttemptId === oldAttemptId,
       );
       expect(staleBeforeResume.execution.selectedAttemptId).toBe(oldAttemptId);
+      expect(new Date(staleBeforeResume.execution.startedAt).toISOString()).toBe(staleTs);
 
       await page.evaluate(() => window.invoker.resumeWorkflow());
 
