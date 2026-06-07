@@ -82,14 +82,14 @@ print("[repro] pre-fix evidence: dispatch 4399 was reaped for lease_expired befo
 print("[repro] pre-fix impact: duplicate launch work then hit pnpm-ssh capacity and reset the live task to pending.")
 PY
 
-echo "[repro] Prove the fix: a slow in-flight launch dispatch is reaped without renewal, then survives after renewal."
+echo "[repro] Prove the fix: the fixed dispatch TTL survives normal executor startup and still reaps after expiry."
 pnpm --filter @invoker/app exec vitest run \
   src/__tests__/launch-dispatcher.test.ts \
-  -t "renewDispatch keeps a slow in-flight launch from being reaped"
+  -t "uses a fixed dispatch TTL long enough for normal executor startup"
 
-echo "[repro] Prove TaskRunner applies the fix during executor.start."
+echo "[repro] Prove TaskRunner records where launch startup reached."
 pnpm --filter @invoker/execution-engine exec vitest run \
   src/__tests__/task-runner-launch-dispatch.test.ts \
-  -t "renews the dispatch lease while executor.start is still pending"
+  -t "logs executor start begin with launch-dispatch context while executor.start is pending"
 
 echo "[repro] passed"

@@ -26,7 +26,6 @@ export type LaunchDispatcherPersistence = Pick<
   | 'markLaunchDispatchCompleted'
   | 'markLaunchDispatchFailed'
   | 'markLaunchDispatchAbandoned'
-  | 'renewLaunchDispatchLease'
   | 'reapExpiredLaunchDispatchLeases'
   | 'listAbandonableLaunchDispatchLeases'
   | 'claimLaunchDispatchAtomic'
@@ -156,9 +155,9 @@ export class LaunchDispatcher {
    * Active-mode dispatch loop. Lease enqueued rows up to the per-poll
    * batch bound and hand each one to the
    * TaskRunner. The TaskRunner complete/fail flow drives the rest of
-   * the lifecycle; if the JS promise drops mid-flight, the durable
-   * outbox row stays leased and the next poll's `reapExpiredLeases`
-   * reclaims it after `DISPATCH_LEASE_MS`.
+   * the lifecycle; if the JS promise drops mid-flight, the durable outbox
+   * row stays leased until the fixed dispatch crash-recovery TTL expires,
+   * then the next poll's `reapExpiredLeases` reclaims it.
    */
   private dispatchActive(): void {
     const runner = this.taskRunnerProvider?.() ?? null;
@@ -457,21 +456,6 @@ export class LaunchDispatcher {
       accepted: ok,
       module: 'launch-dispatcher',
     });
-    return ok;
-  }
-
-  renewDispatch(dispatchId: number): boolean {
-    const ok = this.persistence.renewLaunchDispatchLease({
-      id: dispatchId,
-      ownerId: this.ownerId,
-    });
-    if (!ok) {
-      this.logger?.warn?.('[launch-dispatcher] renew rejected', {
-        ownerId: this.ownerId,
-        dispatchId,
-        module: 'launch-dispatcher',
-      });
-    }
     return ok;
   }
 

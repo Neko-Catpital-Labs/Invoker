@@ -13,7 +13,7 @@ db="$tmpdir/repro.db"
 
 echo "[repro] task: $TASK_ID"
 echo "[repro] root cause: retry diagnostics misclassified SSH lease state around launch"
-echo "[repro] effect: pending launch leases could be cleaned up, and running SSH tasks without active leases were not investigated"
+echo "[repro] effect: pending selected-attempt SSH leases could be misclassified, and running SSH tasks without active leases were not investigated"
 
 sqlite3 "$db" <<'SQL'
 CREATE TABLE tasks (
