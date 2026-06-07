@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SQLiteAdapter } from '@invoker/data-store';
-import type { Logger } from '@invoker/contracts';
+import { DISPATCH_LEASE_MS, type Logger } from '@invoker/contracts';
 import { InMemoryBus } from '@invoker/test-kit';
 import { Orchestrator } from '@invoker/workflow-core';
 import { LaunchDispatcher } from '../launch-dispatcher.js';
@@ -192,6 +192,35 @@ describe('LaunchDispatcher', () => {
       const { dispatcher } = makeDispatcher();
       expect(dispatcher.completeDispatch(enqueued.id)).toBe(true);
       expect(dispatcher.completeDispatch(enqueued.id)).toBe(false);
+    });
+
+    it('uses a fixed dispatch TTL long enough for normal executor startup', () => {
+      seedWorkflowAndTask('attempt-fixed-ttl');
+      const enqueued = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-1/t1',
+        attemptId: 'attempt-fixed-ttl',
+        workflowId: 'wf-1',
+        generation: 0,
+      });
+      const claimedAt = '2026-06-04T22:38:44.000Z';
+      const claimed = adapter.claimLaunchDispatchAtomic({
+        ownerId: 'owner-test',
+        nowIso: claimedAt,
+      });
+      expect(claimed?.id).toBe(enqueued.id);
+      expect(claimed?.fencedUntil).toBe(
+        new Date(new Date(claimedAt).getTime() + DISPATCH_LEASE_MS).toISOString(),
+      );
+
+      const { dispatcher } = makeDispatcher();
+      expect(dispatcher.reapExpiredLeases(
+        new Date(new Date(claimedAt).getTime() + DISPATCH_LEASE_MS - 1).toISOString(),
+      )).toBe(0);
+      expect(adapter.loadLaunchDispatchById(enqueued.id)?.state).toBe('leased');
+      expect(dispatcher.reapExpiredLeases(
+        new Date(new Date(claimedAt).getTime() + DISPATCH_LEASE_MS + 1).toISOString(),
+      )).toBe(1);
+      expect(adapter.loadLaunchDispatchById(enqueued.id)?.state).toBe('enqueued');
     });
 
     it('fail re-enqueues a leased row with the error message and clears the owner', () => {
