@@ -26,6 +26,7 @@ const originalShell = process.env.SHELL;
 const originalElectronRunAsNode = process.env.ELECTRON_RUN_AS_NODE;
 const originalElectronNoAsar = process.env.ELECTRON_NO_ASAR;
 const originalElectronNoAttachConsole = process.env.ELECTRON_NO_ATTACH_CONSOLE;
+const originalInvokerRepoConfigPath = process.env.INVOKER_REPO_CONFIG_PATH;
 
 function setPlatform(platform: NodeJS.Platform): void {
   Object.defineProperty(process, 'platform', { value: platform, configurable: true });
@@ -54,6 +55,8 @@ describe('process-utils shell environment resolution', () => {
     else process.env.ELECTRON_NO_ASAR = originalElectronNoAsar;
     if (originalElectronNoAttachConsole === undefined) delete process.env.ELECTRON_NO_ATTACH_CONSOLE;
     else process.env.ELECTRON_NO_ATTACH_CONSOLE = originalElectronNoAttachConsole;
+    if (originalInvokerRepoConfigPath === undefined) delete process.env.INVOKER_REPO_CONFIG_PATH;
+    else process.env.INVOKER_REPO_CONFIG_PATH = originalInvokerRepoConfigPath;
   });
 
   afterEach(() => {
@@ -85,6 +88,7 @@ describe('process-utils shell environment resolution', () => {
     process.env.ELECTRON_RUN_AS_NODE = '1';
     process.env.ELECTRON_NO_ASAR = '1';
     process.env.ELECTRON_NO_ATTACH_CONSOLE = '1';
+    process.env.INVOKER_REPO_CONFIG_PATH = '/tmp/operator-only-repo-config.json';
 
     const { processUtils, mockedSpawn } = await loadProcessUtils();
     const proc = createMockProcess();
@@ -110,6 +114,7 @@ describe('process-utils shell environment resolution', () => {
     expect(processUtils.cleanElectronEnv()).not.toHaveProperty('ELECTRON_RUN_AS_NODE');
     expect(processUtils.cleanElectronEnv()).not.toHaveProperty('ELECTRON_NO_ASAR');
     expect(processUtils.cleanElectronEnv()).not.toHaveProperty('ELECTRON_NO_ATTACH_CONSOLE');
+    expect(processUtils.cleanElectronEnv()).not.toHaveProperty('INVOKER_REPO_CONFIG_PATH');
 
     const second = await processUtils.initializeShellEnvironment();
     expect(second).toEqual(result);

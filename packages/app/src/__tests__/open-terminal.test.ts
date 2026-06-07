@@ -219,7 +219,7 @@ describe('open-terminal integration', () => {
     // Mock the pool to return our temp directory
     Object.defineProperty(executor, 'pool', {
       value: {
-        ensureClone: vi.fn().mockResolvedValue(mockWorktreeDir),
+        ensureCloneThroughRepoQueue: vi.fn().mockResolvedValue(mockWorktreeDir),
         acquireWorktree: vi.fn().mockResolvedValue({
           worktreePath: mockWorktreeDir,
           branch: 'test-branch',
