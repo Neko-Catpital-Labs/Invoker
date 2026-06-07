@@ -62,7 +62,7 @@ import { assertNotGitConfigMutation, ensureRemoteUrl } from './git-config-mutati
 
 export type { TaskHeartbeatEvent, TaskRunnerCallbacks } from './task-runner-callbacks.js';
 
-/** Keeps `lastHeartbeatAt` fresh while `executor.start()` is awaited (SSH remote setup/provision can take minutes). Matches BaseExecutor default heartbeat cadence. */
+/** Keeps launch metadata fresh while `executor.start()` is awaited (SSH remote setup/provision can take minutes). */
 const PRE_START_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_EXECUTOR_START_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -842,6 +842,13 @@ export class TaskRunner {
         `[TaskRunner] executor.start begin task=${task.id} attempt=${attemptId} executor=${executor.type} ` +
           `generation=${task.execution.generation ?? 0}`,
       );
+      this.persistence.logEvent?.(task.id, 'task.executor.start_begin', {
+        dispatchId: dispatchOpts?.dispatchId,
+        attemptId,
+        executorType: executor.type,
+        poolId: poolSelectionForStart?.poolId,
+        poolMemberId: poolSelectionForStart?.member.id,
+      });
       bench('onLaunchStart.before', {
         executorType: executor.type,
       });

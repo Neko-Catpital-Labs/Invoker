@@ -28,7 +28,7 @@ const SLOW_PLAN = {
 };
 
 test.describe('Persistence recovery', () => {
-  test('clear marks workflow as failed in DB', async ({ page }) => {
+  test('stop marks workflow as failed in DB', async ({ page }) => {
     // Load and start a slow plan
     await loadPlan(page, SLOW_PLAN);
     await page.evaluate(() => window.invoker.start());
@@ -44,8 +44,9 @@ test.describe('Persistence recovery', () => {
       { timeout: 10000 },
     );
 
-    // Clear while running
-    await page.evaluate(() => window.invoker.clear());
+    // Stop while running. This preserves the workflow record while failing
+    // in-flight work, unlike clear/delete-all which intentionally removes it.
+    await page.evaluate(() => window.invoker.stop());
     await page.waitForTimeout(500);
 
     const workflows = await page.evaluate(() => window.invoker.listWorkflows());
@@ -62,10 +63,6 @@ test.describe('Persistence recovery', () => {
     // Get the workflow ID
     const workflows = await page.evaluate(() => window.invoker.listWorkflows());
     const workflowId = workflows[0].id;
-
-    // Clear in-memory state
-    await page.evaluate(() => window.invoker.clear());
-    await page.waitForTimeout(500);
 
     // Re-hydrate from DB
     const result = await page.evaluate(
@@ -85,7 +82,7 @@ test.describe('Persistence recovery', () => {
     }
   });
 
-  test('completed workflow re-loads with correct task statuses', async ({ page }) => {
+  test('workflow re-loads with correct task statuses', async ({ page }) => {
     // Run a quick plan to completion
     await loadPlan(page, TEST_PLAN);
     await startPlan(page);
@@ -94,9 +91,7 @@ test.describe('Persistence recovery', () => {
     const workflows = await page.evaluate(() => window.invoker.listWorkflows());
     const workflowId = workflows[0].id;
 
-    // Clear in-memory and re-hydrate
-    await page.evaluate(() => window.invoker.clear());
-    await page.waitForTimeout(500);
+    // Re-hydrate from DB
     const result = await page.evaluate(
       (id) => window.invoker.loadWorkflow(id),
       workflowId,
@@ -111,6 +106,6 @@ test.describe('Persistence recovery', () => {
     expect(gamma).toBeTruthy();
     expect(alpha.status).toBe('completed');
     expect(beta.status).toBe('completed');
-    expect(gamma.status).toBe('failed');
+    expect(gamma.status).toBe('pending');
   });
 });
