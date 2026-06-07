@@ -1007,6 +1007,32 @@ if (isHeadless) {
           };
 
           switch (command) {
+            case 'set': {
+              const [, subCommand, targetArg] = payload.args;
+              switch (subCommand) {
+                case 'workflow':
+                case 'merge-mode':
+                  return {
+                    workflowId: targetArg === undefined ? undefined : String(targetArg),
+                    priority: 'high',
+                  };
+                case 'command':
+                case 'prompt':
+                case 'executor':
+                case 'agent':
+                case 'fix-prompt':
+                case 'fix-context':
+                case 'gate-policy':
+                case 'task':
+                  return {
+                    workflowId: targetArg === undefined ? undefined : standaloneWorkflowIdForTaskArg(targetArg),
+                    priority: 'high',
+                  };
+                default:
+                  return { priority: 'normal' };
+              }
+            }
+            case 'resume':
             case 'retry':
               return {
                 workflowId: arg0 === undefined ? undefined : standaloneWorkflowIdForTaskArg(arg0),
@@ -1019,6 +1045,7 @@ if (isHeadless) {
             case 'rebase-recreate':
               return { workflowId: standaloneWorkflowIdForTaskArg(arg0), priority: 'high' };
             case 'cancel':
+            case 'retry-task':
             case 'recreate-task':
               return { workflowId: standaloneWorkflowIdForTaskArg(arg0), priority: 'high' };
             case 'approve':
@@ -2016,8 +2043,28 @@ function createEmbeddedTerminalBackendFromConfig(
     if (!command) return { priority: 'normal' };
 
     switch (command) {
+      case 'set': {
+        const [, subCommand, targetArg] = payload.args;
+        switch (subCommand) {
+          case 'workflow':
+          case 'merge-mode':
+            return { workflowId: targetArg === undefined ? undefined : String(targetArg), priority: 'high' };
+          case 'command':
+          case 'prompt':
+          case 'executor':
+          case 'agent':
+          case 'fix-prompt':
+          case 'fix-context':
+          case 'gate-policy':
+          case 'task':
+            return { workflowId: workflowIdForTaskArg(targetArg), priority: 'high' };
+          default:
+            return { priority: 'normal' };
+        }
+      }
+      case 'resume':
       case 'retry':
-        return { workflowId: workflowIdForTaskArg(arg0), priority: 'high' };
+        return { workflowId: workflowIdForTargetArg(arg0), priority: 'high' };
       case 'recreate':
       case 'cancel-workflow':
       case 'delete':
@@ -2027,6 +2074,7 @@ function createEmbeddedTerminalBackendFromConfig(
       case 'rebase-recreate':
         return { workflowId: workflowIdForTargetArg(arg0), priority: 'high' };
       case 'cancel':
+      case 'retry-task':
       case 'recreate-task':
         return { workflowId: workflowIdForTaskArg(arg0), priority: 'high' };
       case 'approve':
