@@ -442,8 +442,10 @@ export class RepoPool {
       baseMetadata: { repoUrl },
     });
     bench('RepoPool.ensureClone.begin');
-    // Serialize clone operations per repo to prevent concurrent clone races
     const repoKey = this.repoKey(repoUrl);
+    // Join the per-repo git operation chain so fetch/clone cannot race with
+    // worktree acquisition, rebase refresh, or branch cleanup against the same
+    // shared cache.
     const existing = this.cloneLocks.get(repoKey);
     if (existing) {
       bench('RepoPool.ensureClone.waitForExistingLock.before');
@@ -452,8 +454,14 @@ export class RepoPool {
       return clonePath;
     }
 
-    const promise = this.doEnsureClone(repoUrl);
+    const prev = this.repoChains.get(repoKey) ?? Promise.resolve();
+    const queuedAtMs = Date.now();
+    const promise = prev.then(() => {
+      bench('RepoPool.ensureClone.repoChainWait.after', { durationMs: Date.now() - queuedAtMs });
+      return this.doEnsureClone(repoUrl);
+    });
     this.cloneLocks.set(repoKey, promise);
+    this.repoChains.set(repoKey, promise.catch(() => {}));
     try {
       const clonePath = await promise;
       bench('RepoPool.ensureClone.after', { clonePath });
@@ -680,7 +688,7 @@ export class RepoPool {
       `${RESTART_TO_BRANCH_TRACE} RepoPool.doAcquireWorktree branch=${branch} (bashPreserveOrReset here; BaseExecutor.setupTaskBranch is not used for this path)`,
     );
     bench('RepoPool.doAcquireWorktree.ensureClone.before');
-    const clonePath = await this.ensureClone(repoUrl);
+    const clonePath = await this.doEnsureClone(repoUrl);
     bench('RepoPool.doAcquireWorktree.ensureClone.after', { clonePath });
     const repoKey = this.repoKey(repoUrl);
     const active = this.activeWorktrees.get(repoKey) ?? new Set();

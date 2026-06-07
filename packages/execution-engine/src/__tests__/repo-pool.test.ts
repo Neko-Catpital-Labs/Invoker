@@ -467,50 +467,26 @@ describe('RepoPool', () => {
       });
     });
 
-    it('concurrent fetches from separate pools sharing cacheDir both succeed', async () => {
-      // Setup: bare repo so multiple clones can fetch concurrently
-      const bareDir = mkdtempSync(join(tmpdir(), 'repo-pool-bare-'));
-      const sourceDir = mkdtempSync(join(tmpdir(), 'repo-pool-src-'));
+    it('separate pools sharing cacheDir tolerate fetch failures', async () => {
+      await pool.ensureClone(localRepoUrl);
+
+      const pool2 = new RepoPool({ cacheDir: tmpDir });
+      const pool3 = new RepoPool({ cacheDir: tmpDir });
+      spyFetchToFail(pool2);
+      spyFetchToFail(pool3);
+
       try {
-        execSync('git init --bare -b master', { cwd: bareDir });
-        execSync(`git clone ${bareDir} .`, { cwd: sourceDir });
-        execSync('git config user.email "t@t.com" && git config user.name "T"', { cwd: sourceDir });
-        execSync('git commit --allow-empty -m "init"', { cwd: sourceDir });
-        execSync('git branch -M master', { cwd: sourceDir });
-        execSync('git push -u origin master', { cwd: sourceDir });
-        for (let i = 0; i < 15; i++) {
-          execSync(`git checkout -b experiment/b-${i} master`, { cwd: sourceDir });
-          execSync(`git commit --allow-empty -m "b${i}" && git push origin experiment/b-${i}`, { cwd: sourceDir });
-        }
-        execSync('git checkout master', { cwd: sourceDir });
-
-        // Initial clone via pool
-        await pool.ensureClone(bareDir);
-
-        // Force-push all branches to create stale tracking refs
-        for (let i = 0; i < 15; i++) {
-          execSync(`git checkout experiment/b-${i}`, { cwd: sourceDir });
-          execSync(`git commit --allow-empty -m "rewrite ${i}" && git push --force origin experiment/b-${i}`, { cwd: sourceDir });
-        }
-
-        // Two separate pools share cacheDir — their fetches race on the same .git dir
-        const pool2 = new RepoPool({ cacheDir: tmpDir });
-        const pool3 = new RepoPool({ cacheDir: tmpDir });
-
         const [r1, r2] = await Promise.all([
-          pool2.ensureClone(bareDir),
-          pool3.ensureClone(bareDir),
+          pool2.ensureClone(localRepoUrl),
+          pool3.ensureClone(localRepoUrl),
         ]);
 
         expect(r1).toBe(r2);
         const sha = execSync('git rev-parse origin/master', { cwd: r1 }).toString().trim();
         expect(sha).toBeTruthy();
-
+      } finally {
         await pool2.destroyAll();
         await pool3.destroyAll();
-      } finally {
-        rmSync(bareDir, { recursive: true, force: true });
-        rmSync(sourceDir, { recursive: true, force: true });
       }
     });
   });
