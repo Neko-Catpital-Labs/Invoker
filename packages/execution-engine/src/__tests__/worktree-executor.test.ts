@@ -48,11 +48,11 @@ function makeRequest(overrides: Partial<WorkRequest> = {}): WorkRequest {
 
 /**
  * Mock the RepoPool on a WorktreeExecutor instance so that
- * pool.ensureClone / pool.acquireWorktree bypass real git.
+ * pool.ensureCloneThroughRepoQueue / pool.acquireWorktree bypass real git.
  */
 function mockPool(fam: WorktreeExecutor) {
   const pool = {
-    ensureClone: vi.fn().mockResolvedValue('/fake/cache/clone'),
+    ensureCloneThroughRepoQueue: vi.fn().mockResolvedValue('/fake/cache/clone'),
     reconcileActiveWorktrees: vi.fn(),
     acquireWorktree: vi.fn().mockImplementation((_repoUrl: string, branch: string) => {
       const sanitized = branch.replace(/\//g, '-');
@@ -773,7 +773,7 @@ describe('WorktreeExecutor', () => {
     const branch = 'experiment/action-1-abc12345';
     const worktreePath = '/fake/worktrees/experiment-action-1-abc12345';
     const pool = {
-      ensureClone: vi.fn().mockResolvedValue('/fake/cache/clone'),
+      ensureCloneThroughRepoQueue: vi.fn().mockResolvedValue('/fake/cache/clone'),
       reconcileActiveWorktrees: vi.fn(),
       acquireWorktree: vi.fn().mockResolvedValue({
         clonePath: '/fake/cache/clone',
