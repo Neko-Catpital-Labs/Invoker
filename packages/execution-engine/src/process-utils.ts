@@ -222,6 +222,7 @@ export function cleanElectronEnv(): NodeJS.ProcessEnv {
   delete env.ELECTRON_RUN_AS_NODE;
   delete env.ELECTRON_NO_ASAR;
   delete env.ELECTRON_NO_ATTACH_CONSOLE;
+  delete env.INVOKER_REPO_CONFIG_PATH;
   env.PATH = getEffectivePath();
   return env;
 }
