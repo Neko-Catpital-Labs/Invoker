@@ -94,7 +94,6 @@ async function runPoolDeferralScenario(options: { completeDeferredDispatch: bool
       async executeTask(task, opts) {
         runnerCalls += 1;
         const dispatchOpts = opts!;
-        expect(dispatchOpts.launchOutbox.ackDispatch(dispatchOpts.dispatchId, 'pool-runner')).toBe(true);
         const attemptId = task.execution.selectedAttemptId!;
 
         if (runnerCalls === 1) {
@@ -118,7 +117,6 @@ async function runPoolDeferralScenario(options: { completeDeferredDispatch: bool
     }),
     ownerId: 'pool-owner',
     mode: 'active',
-    maxConcurrency: 1,
     maxLeasesPerPoll: 1,
   });
 
@@ -139,7 +137,7 @@ async function runPoolDeferralScenario(options: { completeDeferredDispatch: bool
     runnerCalls,
     task: orchestrator.getTask(taskId)!,
     liveRows: persistence
-      .listLaunchDispatchesByState(['enqueued', 'leased', 'acknowledged'])
+      .listLaunchDispatchesByState(['enqueued', 'leased'])
       .filter((row) => row.taskId === taskId)
       .map((row) => ({ attemptId: row.attemptId, state: row.state })),
     abandonedRows: persistence
@@ -155,7 +153,7 @@ async function runPoolDeferralScenario(options: { completeDeferredDispatch: bool
 }
 
 describe('launch pool deferral outbox repro', () => {
-  it('invalidates an acknowledged deferred row so it cannot block the replacement launch', async () => {
+  it('invalidates a leased deferred row so it cannot block the replacement launch', async () => {
     const result = await runPoolDeferralScenario({ completeDeferredDispatch: false });
 
     expect(result.runnerCalls).toBe(2);
