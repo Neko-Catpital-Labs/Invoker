@@ -311,7 +311,6 @@ async function dispatchHeadlessRunnableTasks(
     ownerId: `headless-${process.pid}`,
     logger: deps.logger,
     mode: 'active',
-    maxConcurrency: Math.max(1, deps.invokerConfig.maxConcurrency ?? 16),
   });
   deps.logger?.debug?.(
     `[headless] ${context}: launchOutboxMode=active — polling local launch dispatcher for ${runnable.length} runnable task(s)`,
@@ -1021,6 +1020,7 @@ async function headlessMigrateCompatibility(deps: HeadlessDeps): Promise<void> {
   process.stdout.write(`  migratedFixingWithAiStatuses: ${report.migratedFixingWithAiStatuses}\n`);
   process.stdout.write(`  normalizedMergeModes: ${report.normalizedMergeModes}\n`);
   process.stdout.write(`  staleAutoFixExperimentTasks: ${report.staleAutoFixExperimentTasks}\n`);
+  process.stdout.write(`  normalizedLegacyAcknowledgedLaunchDispatches: ${report.normalizedLegacyAcknowledgedLaunchDispatches}\n`);
 }
 
 async function headlessInstallSkills(
