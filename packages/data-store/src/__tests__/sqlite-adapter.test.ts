@@ -297,6 +297,17 @@ describe('SQLiteAdapter', () => {
 
       const byAttempt = adapter.loadLaunchDispatchByAttempt('attempt-1');
       expect(byAttempt?.id).toBe(inserted.id);
+
+      const events = adapter.getEvents('wf-launch/t1');
+      const enqueuedEvent = events.find((event) => event.eventType === 'task.launch_dispatch_enqueued');
+      expect(enqueuedEvent).toBeDefined();
+      expect(JSON.parse(enqueuedEvent!.payload!)).toMatchObject({
+        dispatchId: inserted.id,
+        attemptId: 'attempt-1',
+        workflowId: 'wf-launch',
+        generation: 0,
+        priority: 'normal',
+      });
     });
 
     it('returns existing row instead of creating a duplicate active dispatch for the same attempt', () => {
@@ -534,6 +545,17 @@ describe('SQLiteAdapter', () => {
         expect(claimed?.attemptsCount).toBe(1);
         expect(claimed?.fencedUntil).toBeDefined();
         expect(claimed?.leasedAt).toBeDefined();
+        const events = adapter.getEvents('wf-launch/t1');
+        const claimedEvent = events.find((event) => event.eventType === 'task.launch_dispatch_claimed');
+        expect(claimedEvent).toBeDefined();
+        expect(JSON.parse(claimedEvent!.payload!)).toMatchObject({
+          dispatchId: enqueued.id,
+          ownerId: 'runner-1',
+          attemptId: 'attempt-claim-1',
+          workflowId: 'wf-launch',
+          generation: 0,
+          fencedUntil: claimed?.fencedUntil,
+        });
       });
 
       it('returns undefined when no enqueued rows exist', () => {
