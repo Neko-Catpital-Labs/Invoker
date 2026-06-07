@@ -385,7 +385,10 @@ PY
 # Usage: ST=$(invoker_e2e_task_status <taskId>)
 invoker_e2e_task_status() {
   local task_id="$1"
-  invoker_e2e_run_headless task-status "$task_id" 2>/dev/null | tail -1
+  invoker_e2e_run_headless task-status "$task_id" 2>/dev/null \
+    | sed 's/\x1b\[[0-9;]*m//g' \
+    | grep -E '^(pending|running|completed|failed|awaiting_approval|review_ready|fixing_with_ai|closed|skipped)$' \
+    | tail -1
 }
 
 # Poll until task status equals expected (1s interval). Use after cancel/restart
