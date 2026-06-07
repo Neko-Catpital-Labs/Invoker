@@ -323,7 +323,7 @@ export class TaskRunner {
     const executor = this.executorRegistry.get('worktree');
     if (!(executor instanceof WorktreeExecutor)) return undefined;
     try {
-      return await executor.getRepoPool().ensureClone(trimmed);
+      return await executor.getRepoPool().ensureCloneThroughRepoQueue(trimmed);
     } catch (err) {
       this.logger.warn(`[merge] ensureRepoMirrorPath failed for ${trimmed}`, { err });
       return undefined;
