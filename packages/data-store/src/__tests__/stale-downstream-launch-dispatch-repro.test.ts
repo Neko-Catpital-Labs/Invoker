@@ -137,7 +137,6 @@ describe('stale downstream launch dispatch repro', () => {
 
     const leased = adapter.claimLaunchDispatchAtomic({
       ownerId: 'repro-owner',
-      maxConcurrency: 1,
       nowIso: '2026-06-03T00:02:00.000Z',
     });
 
