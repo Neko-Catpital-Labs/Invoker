@@ -22,7 +22,7 @@ interface LaunchDispatchRow {
   taskId: string;
   attemptId: string;
   workflowId: string;
-  state: 'enqueued' | 'leased' | 'acknowledged' | 'completed' | 'abandoned';
+  state: 'enqueued' | 'leased' | 'completed' | 'abandoned';
   priority: 'high' | 'normal' | 'low';
   generation: number;
 }
@@ -118,12 +118,12 @@ class InMemoryPersistence implements OrchestratorPersistence {
     workflowId: string;
     priority?: 'high' | 'normal' | 'low';
     generation: number;
-  }): { id: number } {
+  }): { id: number; state: LaunchDispatchRow['state']; priority: LaunchDispatchRow['priority'] } {
     if (!this.enqueueLaunchDispatchEnabled) {
       throw new Error('enqueueLaunchDispatch called when not enabled');
     }
     const existing = this.launchDispatchRows.find((row) => row.attemptId === input.attemptId);
-    if (existing) return { id: existing.id };
+    if (existing) return { id: existing.id, state: existing.state, priority: existing.priority };
     const row: LaunchDispatchRow = {
       id: this.nextDispatchId++,
       taskId: input.taskId,
@@ -134,7 +134,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
       generation: input.generation,
     };
     this.launchDispatchRows.push(row);
-    return { id: row.id };
+    return { id: row.id, state: row.state, priority: row.priority };
   }
 
   abandonLaunchDispatchesForTasks(
@@ -146,7 +146,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
     const rows = this.launchDispatchRows.filter(
       (row) =>
         taskSet.has(row.taskId) &&
-        (row.state === 'enqueued' || row.state === 'leased' || row.state === 'acknowledged'),
+        (row.state === 'enqueued' || row.state === 'leased'),
     );
     const invalidated = rows.map((row) => ({
       id: row.id,

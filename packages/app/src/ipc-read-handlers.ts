@@ -3,6 +3,7 @@ import type { Logger, SearchOptions } from '@invoker/contracts';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { AgentRegistry } from '@invoker/execution-engine';
 import type { Orchestrator, TaskDelta, TaskState } from '@invoker/workflow-core';
+import type { MessageBus } from '@invoker/transport';
 import { loadConfig } from './config.js';
 import type { TaskSnapshotCache } from './delta-merge.js';
 
@@ -24,6 +25,8 @@ export interface RegisterReadOnlyIpcHandlersContext {
     agentRegistry: AgentRegistry,
     tasks: TaskState[],
   ) => Promise<unknown>;
+  getOwnerMode?: () => boolean;
+  getMessageBus?: () => Pick<MessageBus, 'request'>;
   timeStartupPhase: <T>(label: string, fn: () => T, fields?: () => Record<string, unknown>) => T;
   recordStartupDuration: (label: string, startedAtMs: number, fields?: Record<string, unknown>) => void;
   getTaskDeltaStreamSequence: () => number;
@@ -43,6 +46,8 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
     setLastKnownWorkflowCount,
     loadTaskByIdFromPersistence,
     resolveAgentSession,
+    getOwnerMode,
+    getMessageBus,
     timeStartupPhase,
     recordStartupDuration,
     getTaskDeltaStreamSequence,
@@ -68,9 +73,52 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
     return { workflow, tasks };
   });
 
-  ipcMain.handle('invoker:get-tasks', (_event, forceRefresh?: boolean) => {
+  ipcMain.handle('invoker:get-tasks', async (_event, forceRefresh?: boolean) => {
     const startedAtMs = Date.now();
     const orchestrator = getOrchestrator();
+    if (forceRefresh && getOwnerMode?.() === false) {
+      try {
+        const delegated = await getMessageBus?.().request<{ kind: string; forceRefresh: boolean }, {
+          tasks: TaskState[];
+          workflows: unknown[];
+          streamSequence: number;
+        }>('headless.query', { kind: 'tasks', forceRefresh: true });
+        if (delegated && Array.isArray(delegated.tasks) && Array.isArray(delegated.workflows)) {
+          const previousTaskIds = new Set(lastKnownTaskStates.keys());
+          lastKnownTaskStates.clear();
+          for (const task of delegated.tasks) {
+            lastKnownTaskStates.set(task.id, JSON.stringify(task));
+            previousTaskIds.delete(task.id);
+            const mainWindow = getMainWindow();
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              sendTaskDeltaToRenderer({ type: 'created', task });
+            }
+          }
+          const mainWindow = getMainWindow();
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            for (const removedTaskId of previousTaskIds) {
+              sendTaskDeltaToRenderer({ type: 'removed', taskId: removedTaskId, previousTaskStateVersion: 0 });
+            }
+            requestWorkflowMetadataPublish('get-tasks-force-refresh-delegated');
+          }
+          setLastKnownWorkflowCount(delegated.workflows.length);
+          recordStartupDuration('get-tasks.force-refresh.delegated-return', startedAtMs, {
+            taskCount: delegated.tasks.length,
+            workflowCount: delegated.workflows.length,
+            jsonSizeBytes: Buffer.byteLength(JSON.stringify(delegated), 'utf8'),
+            streamSequence: delegated.streamSequence,
+          });
+          return delegated;
+        }
+      } catch (err) {
+        logger.warn(
+          `get-tasks(forceRefresh=true) owner delegation failed; falling back to local read-only snapshot: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          { module: 'ipc' },
+        );
+      }
+    }
     if (forceRefresh) {
       timeStartupPhase('get-tasks.force-refresh.syncAllFromDb', () => orchestrator.syncAllFromDb(), () => ({
         taskCount: orchestrator.getAllTasks().length,
