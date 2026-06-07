@@ -205,6 +205,26 @@ function isTaskInFlightForForcedStop(task: TaskState): boolean {
     || (task.status === 'pending' && task.execution.phase === 'launching');
 }
 
+function isTaskRecoverableOnExplicitResume(task: TaskState): boolean {
+  if (task.status === 'running') return true;
+  if (task.status !== 'pending' || !task.execution.selectedAttemptId) return false;
+  if (task.execution.phase === 'launching') return true;
+
+  return Boolean(
+    task.execution.startedAt
+    || task.execution.launchStartedAt
+    || task.execution.launchCompletedAt
+    || task.execution.lastHeartbeatAt
+    || task.execution.workspacePath
+    || task.execution.agentSessionId
+    || task.execution.containerId
+    || task.execution.error
+    || task.execution.exitCode !== undefined
+    || task.execution.inputPrompt
+    || task.execution.pendingFixError,
+  );
+}
+
 declare const __BUILD_SHA__: string | undefined;
 declare const __BUILD_VERSION__: string | undefined;
 
@@ -586,7 +606,7 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
   let repoUrl = process.env.INVOKER_REPO_URL;
   if (!repoUrl) {
     try {
-      repoUrl = execSync('git remote get-url origin', { cwd: repoRoot, encoding: 'utf8' }).trim();
+      repoUrl = execSync('git remote get-url origin', { cwd: repoRoot, encoding: 'utf8', timeout: 5000 }).trim();
     } catch {
       deps.logFn('slack', 'warn', 'Could not detect repoUrl from git remote; plans will require repoUrl in YAML');
     }
@@ -864,15 +884,20 @@ if (isHeadless) {
         return { workflowId, tasks };
       };
 
+      const executeStandaloneResumeStartedTasks = async (
+        executor: ReturnType<typeof createStandaloneTaskExecutor>,
+        started: TaskState[],
+      ): Promise<void> => {
+        if (invokerConfig.launchOutboxMode !== 'active') {
+          await executor.executeTasks(started);
+        }
+      };
+
       const executeStandaloneHeadlessResume = async (payload: HeadlessResumeMutationPayload): Promise<unknown> => {
         const { workflowId } = payload;
         const executor = createStandaloneTaskExecutor();
-        orchestrator.syncFromDb(workflowId);
-        // CC.2: orphan relaunch removed. orchestrator.startExecution()
-        // enqueues into the task_launch_dispatch outbox; the
-        // LaunchDispatcher's poll loop is the single recovery path.
-        const started = orchestrator.startExecution();
-        await executor.executeTasks(started);
+        const started = orchestrator.resumeWorkflow(workflowId);
+        await executeStandaloneResumeStartedTasks(executor, started);
         logger.info(`standalone resumed ${started.length} tasks for workflow "${workflowId}"`, { module: 'ipc-delegate' });
         const tasks = orchestrator.getAllTasks().filter((task) => task.config.workflowId === workflowId);
         return { workflowId, tasks };
@@ -1124,19 +1149,26 @@ if (isHeadless) {
           return { workflowId, tasks };
         };
 
+        const executeStandaloneResumeStartedTasks = (
+          executor: ReturnType<typeof createStandaloneTaskExecutor>,
+          started: TaskState[],
+          workflowId: string,
+        ): void => {
+          if (started.length > 0 && invokerConfig.launchOutboxMode !== 'active') {
+            executor.executeTasks(started).catch(err => {
+              logger.error(`headless.resume: executeTasks failed for "${workflowId}": ${err}`, { module: 'ipc-delegate' });
+            });
+          }
+        };
+
         const executeStandaloneHeadlessResume = async (
           payload: HeadlessResumeMutationPayload,
         ): Promise<{ workflowId: string; tasks: TaskState[] }> => {
           const { workflowId } = payload;
-          orchestrator.syncFromDb(workflowId);
           const executor = createStandaloneTaskExecutor();
 
-          const allStarted = orchestrator.startExecution();
-          if (allStarted.length > 0) {
-            executor.executeTasks(allStarted).catch(err => {
-              logger.error(`headless.resume: executeTasks failed for "${workflowId}": ${err}`, { module: 'ipc-delegate' });
-            });
-          }
+          const allStarted = orchestrator.resumeWorkflow(workflowId);
+          executeStandaloneResumeStartedTasks(executor, allStarted, workflowId);
           const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
           return { workflowId, tasks };
         };
@@ -1177,6 +1209,32 @@ if (isHeadless) {
           }
           if (kind === 'queue') {
             return orchestrator.getQueueStatus() as unknown as Record<string, unknown>;
+          }
+          if (kind === 'tasks') {
+            if ((req as { forceRefresh?: boolean }).forceRefresh) {
+              orchestrator.syncAllFromDb();
+            }
+            return {
+              tasks: orchestrator.getAllTasks(),
+              workflows: persistence.listWorkflows(),
+              streamSequence: 0,
+            };
+          }
+          if (kind === 'action-graph') {
+            orchestrator.syncAllFromDb();
+            const tasks = orchestrator.getAllTasks();
+            const workflows = persistence.listWorkflows();
+            return buildActionGraphDiagnostics({
+              workflows,
+              tasks,
+              attemptsByTaskId: new Map(tasks.map((task) => [task.id, persistence.loadAttempts(task.id)])),
+              queueStatus: orchestrator.getQueueStatus(),
+              mutationIntents: persistence.listWorkflowMutationIntents(),
+              mutationLeases: persistence.listWorkflowMutationLeases(),
+              eventsByTaskId: new Map(tasks.map((task) => [task.id, persistence.getEvents(task.id)])),
+              activityLogs: persistence.getActivityLogs(0, 200),
+              stallThresholdMs: resolveActionDiagnosticsStallThresholdMs(invokerConfig),
+            });
           }
           throw new Error(`Unsupported headless query: ${String(kind)}`);
         });
@@ -1871,6 +1929,17 @@ function createEmbeddedTerminalBackendFromConfig(
     return requireWiredTaskRunner(() => taskExecutor);
   }
 
+  function executeHeadlessResumeStartedTasks(
+    started: TaskState[],
+    workflowId: string,
+  ): void {
+    if (started.length > 0 && invokerConfig.launchOutboxMode !== 'active') {
+      requireTaskExecutor().executeTasks(started).catch(err => {
+        logger.error(`headless.resume: executeTasks failed for "${workflowId}": ${err}`, { module: 'ipc-delegate' });
+      });
+    }
+  }
+
   async function executeHeadlessRun(payload: HeadlessRunMutationPayload): Promise<{ workflowId: string; tasks: TaskState[] }> {
     const { parsePlanFile } = await import('./plan-parser.js');
     const plan = await parsePlanFile(payload.planPath);
@@ -1892,14 +1961,9 @@ function createEmbeddedTerminalBackendFromConfig(
 
   async function executeHeadlessResume(payload: HeadlessResumeMutationPayload): Promise<{ workflowId: string; tasks: TaskState[] }> {
     const { workflowId } = payload;
-    orchestrator.syncFromDb(workflowId);
 
-    const allStarted = orchestrator.startExecution();
-    if (allStarted.length > 0 && invokerConfig.launchOutboxMode !== 'active') {
-      requireTaskExecutor().executeTasks(allStarted).catch(err => {
-        logger.error(`headless.resume: executeTasks failed for "${workflowId}": ${err}`, { module: 'ipc-delegate' });
-      });
-    }
+    const allStarted = orchestrator.resumeWorkflow(workflowId);
+    executeHeadlessResumeStartedTasks(allStarted, workflowId);
     const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
     return { workflowId, tasks };
   }
@@ -2446,9 +2510,20 @@ function createEmbeddedTerminalBackendFromConfig(
         maybeDelayResume: maybeDelayWorkflowResumeForTest,
       });
 
-      startSlackBot(requireTaskExecutor(), taskHandles).catch((err) => {
-        logger.info(`Not started: ${err instanceof Error ? err.message : String(err)}`, { module: 'slack' });
-      });
+      // Skip Slack startup when env vars are missing. Avoids a dynamic
+      // `import('dotenv')` inside wireSlackBot whose promise can stall when
+      // the ESM loader gets stuck behind other startup work (e.g. the docker
+      // CLI hang we observed). startSlackBot would throw on missing env vars
+      // immediately after dotenv anyway.
+      const slackEnvVars = ['SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN', 'SLACK_SIGNING_SECRET', 'SLACK_CHANNEL_ID'];
+      const slackEnvMissing = slackEnvVars.filter((v) => !process.env[v]);
+      if (slackEnvMissing.length > 0) {
+        logger.info(`Slack bot not started (missing env: ${slackEnvMissing.join(', ')})`, { module: 'slack' });
+      } else {
+        startSlackBot(requireTaskExecutor(), taskHandles).catch((err) => {
+          logger.info(`Not started: ${err instanceof Error ? err.message : String(err)}`, { module: 'slack' });
+        });
+      }
 
       setTimeout(() => {
         dbPollInterval = setInterval(() => {
@@ -2649,7 +2724,6 @@ function createEmbeddedTerminalBackendFromConfig(
           ownerId: workflowMutationOwnerId,
           logger,
           mode: invokerConfig.launchOutboxMode as LaunchDispatcherMode,
-          maxConcurrency: effectiveMaxConcurrency,
         });
       }
     } else {
@@ -2695,6 +2769,32 @@ function createEmbeddedTerminalBackendFromConfig(
         }
         if (kind === 'queue') {
           return orchestrator.getQueueStatus() as unknown as Record<string, unknown>;
+        }
+        if (kind === 'tasks') {
+          if ((req as { forceRefresh?: boolean }).forceRefresh) {
+            orchestrator.syncAllFromDb();
+          }
+          return {
+            tasks: orchestrator.getAllTasks(),
+            workflows: persistence.listWorkflows(),
+            streamSequence: getTaskDeltaStreamSequence(),
+          };
+        }
+        if (kind === 'action-graph') {
+          orchestrator.syncAllFromDb();
+          const tasks = orchestrator.getAllTasks();
+          const workflows = persistence.listWorkflows();
+          return buildActionGraphDiagnostics({
+            workflows,
+            tasks,
+            attemptsByTaskId: new Map(tasks.map((task) => [task.id, persistence.loadAttempts(task.id)])),
+            queueStatus: orchestrator.getQueueStatus(),
+            mutationIntents: persistence.listWorkflowMutationIntents(),
+            mutationLeases: persistence.listWorkflowMutationLeases(),
+            eventsByTaskId: new Map(tasks.map((task) => [task.id, persistence.getEvents(task.id)])),
+            activityLogs: persistence.getActivityLogs(0, 200),
+            stallThresholdMs: resolveActionDiagnosticsStallThresholdMs(invokerConfig),
+          });
         }
         throw new Error(`Unsupported headless query: ${String(kind)}`);
       });
@@ -2915,14 +3015,7 @@ function createEmbeddedTerminalBackendFromConfig(
       }
       orchestrator.syncAllFromDb();
 
-      const tasksToRecover = orchestrator.getAllTasks().filter((task) =>
-        task.status === 'running'
-        || (
-          task.status === 'pending'
-          && task.execution.phase === 'launching'
-          && !!task.execution.selectedAttemptId
-        )
-      );
+      const tasksToRecover = orchestrator.getAllTasks().filter(isTaskRecoverableOnExplicitResume);
       for (const task of tasksToRecover) {
         orchestrator.prepareTaskForNewAttempt(task.id, 'resume_workflow_recovery');
       }
@@ -2938,6 +3031,16 @@ function createEmbeddedTerminalBackendFromConfig(
       logger.info(`resume-workflow: ${tasks.length} tasks loaded across ${workflows.length} workflows, ${allStarted.length} started`, { module: 'ipc' });
       if (allStarted.length > 0 && invokerConfig.launchOutboxMode !== 'active') {
         void requireTaskExecutor().executeTasks(allStarted);
+      }
+      if (allStarted.length > 0 && invokerConfig.launchOutboxMode === 'active' && launchDispatcher) {
+        try {
+          launchDispatcher.poll();
+        } catch (err) {
+          logger.warn(
+            `resume-workflow: launch dispatcher poll failed: ${err instanceof Error ? err.message : String(err)}`,
+            { module: 'ipc' },
+          );
+        }
       }
       return { workflow: workflows[0], taskCount: tasks.length, startedCount: allStarted.length };
     });
@@ -3016,6 +3119,8 @@ function createEmbeddedTerminalBackendFromConfig(
       setLastKnownWorkflowCount: (count) => { lastKnownWorkflowCount = count; },
       loadTaskByIdFromPersistence,
       resolveAgentSession,
+      getOwnerMode: () => ownerMode,
+      getMessageBus: () => messageBus,
       timeStartupPhase,
       recordStartupDuration,
       getTaskDeltaStreamSequence,
@@ -3252,7 +3357,19 @@ function createEmbeddedTerminalBackendFromConfig(
       return orchestrator.getQueueStatus();
     });
 
-    ipcMain.handle('invoker:get-action-graph', () => {
+    ipcMain.handle('invoker:get-action-graph', async () => {
+      if (!ownerMode) {
+        try {
+          return await messageBus.request('headless.query', { kind: 'action-graph' });
+        } catch (err) {
+          logger.warn(
+            `get-action-graph owner delegation failed; falling back to local read-only snapshot: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+            { module: 'ipc' },
+          );
+        }
+      }
       orchestrator.syncAllFromDb();
       const tasks = orchestrator.getAllTasks();
       const workflows = persistence.listWorkflows();
