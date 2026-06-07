@@ -112,21 +112,14 @@ function buildRunnerEnv(task: TaskState, options: { startThrows?: Error } = {}):
 }
 
 function makeLaunchOutbox(): LaunchOutboxAck & {
-  ackCalls: Array<[number, string]>;
   completeCalls: number[];
   failCalls: Array<[number, unknown]>;
 } {
-  const ackCalls: Array<[number, string]> = [];
   const completeCalls: number[] = [];
   const failCalls: Array<[number, unknown]> = [];
   return {
-    ackCalls,
     completeCalls,
     failCalls,
-    ackDispatch(id, runnerId) {
-      ackCalls.push([id, runnerId]);
-      return true;
-    },
     completeDispatch(id) {
       completeCalls.push(id);
       return true;
@@ -139,31 +132,14 @@ function makeLaunchOutbox(): LaunchOutboxAck & {
 }
 
 describe('TaskRunner launch-dispatch wiring', () => {
-  it('acks dispatch at the top of executeTask and proceeds to executor.start when accepted', async () => {
+  it('keeps dispatch leased and proceeds to executor.start', async () => {
     const task = makeTask();
     const env = buildRunnerEnv(task, { startThrows: new Error('isolated start sentinel') });
     const launchOutbox = makeLaunchOutbox();
 
     await env.runner.executeTask(task, { dispatchId: 42, launchOutbox });
 
-    expect(launchOutbox.ackCalls).toHaveLength(1);
-    expect(launchOutbox.ackCalls[0][0]).toBe(42);
-    expect(launchOutbox.ackCalls[0][1]).toMatch(/^[0-9a-f-]+$/);
     expect(env.executor.start).toHaveBeenCalledTimes(1);
-  });
-
-  it('does NOT call the executor when ackDispatch returns false', async () => {
-    const task = makeTask();
-    const env = buildRunnerEnv(task);
-    const launchOutbox = makeLaunchOutbox();
-    launchOutbox.ackDispatch = vi.fn().mockReturnValue(false);
-
-    await env.runner.executeTask(task, { dispatchId: 99, launchOutbox });
-
-    expect(env.executor.start).not.toHaveBeenCalled();
-    expect(env.orchestrator.markTaskRunningAfterLaunch).not.toHaveBeenCalled();
-    expect(launchOutbox.completeCalls).toHaveLength(0);
-    expect(launchOutbox.failCalls).toHaveLength(0);
   });
 
   it('calls failDispatch when the executor start throws', async () => {
@@ -173,13 +149,28 @@ describe('TaskRunner launch-dispatch wiring', () => {
 
     await env.runner.executeTask(task, { dispatchId: 7, launchOutbox });
 
-    expect(launchOutbox.ackCalls).toHaveLength(1);
     expect(launchOutbox.completeCalls).toHaveLength(0);
     expect(launchOutbox.failCalls).toHaveLength(1);
     expect(launchOutbox.failCalls[0][0]).toBe(7);
     const failArg = launchOutbox.failCalls[0][1];
     expect(failArg).toBeInstanceOf(Error);
     expect((failArg as Error).message).toMatch(/startup explosion/);
+  });
+
+  it('fails the dispatch when markTaskRunningAfterLaunch rejects the launch', async () => {
+    const task = makeTask();
+    const env = buildRunnerEnv(task);
+    env.orchestrator.markTaskRunningAfterLaunch.mockReturnValue(false);
+    const launchOutbox = makeLaunchOutbox();
+
+    await env.runner.executeTask(task, { dispatchId: 8, launchOutbox });
+
+    expect(env.executor.start).toHaveBeenCalledTimes(1);
+    expect(env.executor.kill).toHaveBeenCalledTimes(1);
+    expect(launchOutbox.completeCalls).toHaveLength(0);
+    expect(launchOutbox.failCalls).toHaveLength(1);
+    expect(launchOutbox.failCalls[0][0]).toBe(8);
+    expect((launchOutbox.failCalls[0][1] as Error).message).toMatch(/Launch rejected/);
   });
 
   it('completes the dispatch row when resource-limit defers the launch', async () => {
@@ -194,7 +185,6 @@ describe('TaskRunner launch-dispatch wiring', () => {
 
     await env.runner.executeTask(task, { dispatchId: 321, launchOutbox });
 
-    expect(launchOutbox.ackCalls).toHaveLength(1);
     expect(env.orchestrator.deferTask).toHaveBeenCalledWith(task.id);
     expect(launchOutbox.completeCalls).toEqual([321]);
     expect(launchOutbox.failCalls).toHaveLength(0);
@@ -207,7 +197,6 @@ describe('TaskRunner launch-dispatch wiring', () => {
 
     await env.runner.executeTask(task);
 
-    expect(launchOutbox.ackCalls).toHaveLength(0);
     expect(launchOutbox.completeCalls).toHaveLength(0);
     expect(launchOutbox.failCalls).toHaveLength(0);
     expect(env.executor.start).toHaveBeenCalled();
@@ -243,7 +232,6 @@ describe('TaskRunner launch-dispatch wiring', () => {
     await env.runner.executeTask(task, { dispatchId: 123, launchOutbox });
 
     expect(env.executor.start).not.toHaveBeenCalled();
-    expect(launchOutbox.ackCalls).toHaveLength(0);
     expect(launchOutbox.failCalls).toHaveLength(1);
     expect(launchOutbox.failCalls[0][0]).toBe(123);
     expect((launchOutbox.failCalls[0][1] as Error).message).toMatch(/Duplicate launch suppressed/);
@@ -254,7 +242,7 @@ describe('TaskRunner launch-dispatch wiring', () => {
     // BEFORE the normal markTaskRunningAfterLaunch completeDispatch
     // path (it synthesises a spawn_experiments WorkResponse and
     // returns). Without an explicit completeDispatch here, the parent
-    // pivot's outbox row stays acknowledged → reaped → abandoned.
+    // pivot's outbox row stays leased and is retried or abandoned.
     const pivotTask = makeTask({
       id: 'wf-pivot/parent',
       config: {
@@ -276,9 +264,6 @@ describe('TaskRunner launch-dispatch wiring', () => {
 
     await env.runner.executeTask(pivotTask, { dispatchId: 555, launchOutbox });
 
-    // ackDispatch fired at the top of executeTask.
-    expect(launchOutbox.ackCalls).toHaveLength(1);
-    expect(launchOutbox.ackCalls[0][0]).toBe(555);
     // The pivot path emits a spawn_experiments WorkResponse and then,
     // critically, terminates the parent's dispatch row.
     expect(env.orchestrator.handleWorkerResponse).toHaveBeenCalled();
