@@ -1637,6 +1637,37 @@ async function headlessRetryTask(taskId: string, deps: HeadlessDeps): Promise<vo
     const runnable = result.data.filter(isDispatchableLaunch);
     process.stdout.write(`Restarted task "${taskId}" — ${runnable.length} task(s) to execute\n`);
 
+    if (deps.noTrack) {
+      const runningKey = (task: TaskState): string => {
+        const attemptId = task.execution.selectedAttemptId?.trim();
+        return attemptId ? `attempt:${attemptId}` : `task:${task.id}`;
+      };
+      const scopedKeys = new Set(runnable.map((task) => runningKey(task)));
+      const globalTopup = deps.orchestrator
+        .startExecution()
+        .filter(isDispatchableLaunch)
+        .filter((task) => !scopedKeys.has(runningKey(task)));
+      const dispatchable = [...runnable, ...globalTopup];
+      if (dispatchable.length > 0) {
+        if (deps.deferRunnableTasks) {
+          deps.deferRunnableTasks(dispatchable, restored.workflowId);
+        } else {
+          const taskExecutor = createHeadlessExecutor(deps);
+          const launch = setTimeout(() => {
+            void taskExecutor.executeTasks(dispatchable).catch((err) => {
+              deps.logger.error(
+                `background no-track task retry failed for ${taskId}: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
+                { module: 'headless' },
+              );
+            });
+          }, 25);
+          launch.unref?.();
+        }
+      }
+      process.stdout.write('[headless] --no-track enabled: retry-task accepted; exiting without tracking.\n');
+      return;
+    }
+
     const taskExecutor = createHeadlessExecutor(deps);
     const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
     const { topup } = await dispatchStartedTasksWithGlobalTopup({
