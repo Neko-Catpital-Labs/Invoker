@@ -606,7 +606,7 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
   let repoUrl = process.env.INVOKER_REPO_URL;
   if (!repoUrl) {
     try {
-      repoUrl = execSync('git remote get-url origin', { cwd: repoRoot, encoding: 'utf8' }).trim();
+      repoUrl = execSync('git remote get-url origin', { cwd: repoRoot, encoding: 'utf8', timeout: 5000 }).trim();
     } catch {
       deps.logFn('slack', 'warn', 'Could not detect repoUrl from git remote; plans will require repoUrl in YAML');
     }
@@ -2510,9 +2510,20 @@ function createEmbeddedTerminalBackendFromConfig(
         maybeDelayResume: maybeDelayWorkflowResumeForTest,
       });
 
-      startSlackBot(requireTaskExecutor(), taskHandles).catch((err) => {
-        logger.info(`Not started: ${err instanceof Error ? err.message : String(err)}`, { module: 'slack' });
-      });
+      // Skip Slack startup when env vars are missing. Avoids a dynamic
+      // `import('dotenv')` inside wireSlackBot whose promise can stall when
+      // the ESM loader gets stuck behind other startup work (e.g. the docker
+      // CLI hang we observed). startSlackBot would throw on missing env vars
+      // immediately after dotenv anyway.
+      const slackEnvVars = ['SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN', 'SLACK_SIGNING_SECRET', 'SLACK_CHANNEL_ID'];
+      const slackEnvMissing = slackEnvVars.filter((v) => !process.env[v]);
+      if (slackEnvMissing.length > 0) {
+        logger.info(`Slack bot not started (missing env: ${slackEnvMissing.join(', ')})`, { module: 'slack' });
+      } else {
+        startSlackBot(requireTaskExecutor(), taskHandles).catch((err) => {
+          logger.info(`Not started: ${err instanceof Error ? err.message : String(err)}`, { module: 'slack' });
+        });
+      }
 
       setTimeout(() => {
         dbPollInterval = setInterval(() => {
