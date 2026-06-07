@@ -3298,7 +3298,15 @@ export class SQLiteAdapter implements PersistenceAdapter {
       if (!inserted) {
         throw new Error('Failed to read back inserted task_launch_dispatch row');
       }
-      return this.rowToTaskLaunchDispatch(inserted);
+      const dispatch = this.rowToTaskLaunchDispatch(inserted);
+      this.logEvent(input.taskId, 'task.launch_dispatch_enqueued', {
+        dispatchId: dispatch.id,
+        attemptId: input.attemptId,
+        workflowId: input.workflowId,
+        generation: input.generation,
+        priority,
+      });
+      return dispatch;
     });
   }
 
@@ -3424,7 +3432,17 @@ export class SQLiteAdapter implements PersistenceAdapter {
           'SELECT * FROM task_launch_dispatch WHERE id = ?',
           [candidateId],
         );
-        return row ? this.rowToTaskLaunchDispatch(row) : undefined;
+        if (!row) return undefined;
+        const dispatch = this.rowToTaskLaunchDispatch(row);
+        this.logEvent(dispatch.taskId, 'task.launch_dispatch_claimed', {
+          dispatchId: dispatch.id,
+          ownerId: options.ownerId,
+          attemptId: dispatch.attemptId,
+          workflowId: dispatch.workflowId,
+          generation: dispatch.generation,
+          fencedUntil: dispatch.fencedUntil,
+        });
+        return dispatch;
       }
     });
   }
