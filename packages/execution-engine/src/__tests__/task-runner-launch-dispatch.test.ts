@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TaskState } from '@invoker/workflow-core';
 import type { WorkResponse, Logger } from '@invoker/contracts';
 import { TaskRunner, type LaunchOutboxAck } from '../task-runner.js';
@@ -32,6 +32,11 @@ function makeTask(overrides: Partial<TaskState> = {}): TaskState {
 
 interface RunnerEnv {
   runner: TaskRunner;
+  persistence: {
+    updateTask: ReturnType<typeof vi.fn>;
+    loadAttempts: ReturnType<typeof vi.fn>;
+    logEvent: ReturnType<typeof vi.fn>;
+  };
   orchestrator: {
     getTask: ReturnType<typeof vi.fn>;
     markTaskRunningAfterLaunch: ReturnType<typeof vi.fn>;
@@ -50,11 +55,15 @@ interface RunnerEnv {
   triggerComplete: () => void;
 }
 
-function buildRunnerEnv(task: TaskState, options: { startThrows?: Error } = {}): RunnerEnv {
+function buildRunnerEnv(task: TaskState, options: {
+  startThrows?: Error;
+  startImpl?: (request: any) => Promise<any>;
+} = {}): RunnerEnv {
   let completeCallback: ((response: WorkResponse) => void) | undefined;
   const executor = {
     type: 'worktree',
     start: vi.fn().mockImplementation(async (request: any) => {
+      if (options.startImpl) return options.startImpl(request);
       if (options.startThrows) throw options.startThrows;
       return {
         executionId: `exec-${request.actionId}`,
@@ -79,13 +88,14 @@ function buildRunnerEnv(task: TaskState, options: { startThrows?: Error } = {}):
     handleWorkerResponse: vi.fn().mockReturnValue([]),
     deferTask: vi.fn(),
   };
+  const persistence = {
+    updateTask: vi.fn(),
+    loadAttempts: vi.fn().mockReturnValue([]),
+    logEvent: vi.fn(),
+  };
   const runner = new TaskRunner({
     orchestrator: orchestrator as any,
-    persistence: {
-      updateTask: vi.fn(),
-      loadAttempts: vi.fn().mockReturnValue([]),
-      logEvent: vi.fn(),
-    } as any,
+    persistence: persistence as any,
     executorRegistry: {
       get: vi.fn().mockReturnValue(executor),
       getAll: vi.fn().mockReturnValue([['worktree', executor]]),
@@ -96,6 +106,7 @@ function buildRunnerEnv(task: TaskState, options: { startThrows?: Error } = {}):
   });
   return {
     runner,
+    persistence,
     orchestrator,
     executor,
     triggerComplete: () => {
@@ -132,6 +143,10 @@ function makeLaunchOutbox(): LaunchOutboxAck & {
 }
 
 describe('TaskRunner launch-dispatch wiring', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('keeps dispatch leased and proceeds to executor.start', async () => {
     const task = makeTask();
     const env = buildRunnerEnv(task, { startThrows: new Error('isolated start sentinel') });
@@ -155,6 +170,38 @@ describe('TaskRunner launch-dispatch wiring', () => {
     const failArg = launchOutbox.failCalls[0][1];
     expect(failArg).toBeInstanceOf(Error);
     expect((failArg as Error).message).toMatch(/startup explosion/);
+  });
+
+  it('logs executor start begin with launch-dispatch context while executor.start is pending', async () => {
+    const task = makeTask();
+    let resolveStart: (() => void) | undefined;
+    const env = buildRunnerEnv(task, {
+      startImpl: async (request) => new Promise((resolve) => {
+        resolveStart = () => resolve({
+          executionId: `exec-${request.actionId}`,
+          taskId: request.actionId,
+          workspacePath: '/tmp/mock-ws',
+          branch: `experiment/${request.actionId}-mock`,
+        });
+      }),
+    });
+    const launchOutbox = makeLaunchOutbox();
+
+    const run = env.runner.executeTask(task, { dispatchId: 99, launchOutbox });
+    await vi.waitFor(() => expect(env.persistence.logEvent).toHaveBeenCalledWith(
+      task.id,
+      'task.executor.start_begin',
+      expect.objectContaining({
+        dispatchId: 99,
+        attemptId: 'attempt-1',
+        executorType: 'worktree',
+      }),
+    ));
+
+    resolveStart?.();
+    await vi.waitFor(() => expect(env.executor.onComplete).toHaveBeenCalled());
+    env.triggerComplete();
+    await run;
   });
 
   it('fails the dispatch when markTaskRunningAfterLaunch rejects the launch', async () => {
