@@ -1,4 +1,4 @@
-import { test as base, _electron as electron, expect, type Page } from '@playwright/test';
+import { test as base, _electron as electron, expect, type ElectronApplication, type Page } from '@playwright/test';
 import { tmpdir } from 'node:os';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
@@ -43,15 +43,20 @@ base.describe('Launch stall watchdog', () => {
   base('fails stuck executing task without execution handle', async () => {
     const testDir = mkdtempSync(path.join(tmpdir(), 'invoker-e2e-executing-watchdog-'));
     const configPath = path.join(testDir, 'e2e-config.json');
+    const ipcSocketPath = path.join(testDir, 'ipc-transport.sock');
+    const electronUserDataDir = path.join(testDir, 'electron-user-data');
     writeFileSync(configPath, JSON.stringify({ autoFixRetries: 0, disableAutoRunOnStartup: true }), 'utf8');
+    let app: ElectronApplication | undefined;
 
     try {
-      const app = await electron.launch({
-        args: launchArgs(),
+      app = await electron.launch({
+        args: [`--user-data-dir=${electronUserDataDir}`, ...launchArgs()],
         env: {
           ...process.env,
           NODE_ENV: 'test',
+          INVOKER_GUI_OWNER_MODE: 'gui',
           INVOKER_DB_DIR: testDir,
+          INVOKER_IPC_SOCKET: ipcSocketPath,
           INVOKER_ALLOW_DELETE_ALL: '1',
           INVOKER_REPO_CONFIG_PATH: configPath,
           INVOKER_EXECUTING_STALL_TIMEOUT_MS: '3000',
@@ -134,8 +139,8 @@ base.describe('Launch stall watchdog', () => {
       }
       expect(sawExecutingStallLog).toBe(true);
 
-      await app.close();
     } finally {
+      await app?.close().catch(() => undefined);
       if (process.env.INVOKER_E2E_KEEP_TMP !== '1') {
         rmSync(testDir, { recursive: true, force: true });
       }
@@ -145,15 +150,20 @@ base.describe('Launch stall watchdog', () => {
   base('fails SSH executing task when remote workload heartbeat is stale', async () => {
     const testDir = mkdtempSync(path.join(tmpdir(), 'invoker-e2e-ssh-executing-watchdog-'));
     const configPath = path.join(testDir, 'e2e-config.json');
+    const ipcSocketPath = path.join(testDir, 'ipc-transport.sock');
+    const electronUserDataDir = path.join(testDir, 'electron-user-data');
     writeFileSync(configPath, JSON.stringify({ autoFixRetries: 0, disableAutoRunOnStartup: true }), 'utf8');
+    let app: ElectronApplication | undefined;
 
     try {
-      const app = await electron.launch({
-        args: launchArgs(),
+      app = await electron.launch({
+        args: [`--user-data-dir=${electronUserDataDir}`, ...launchArgs()],
         env: {
           ...process.env,
           NODE_ENV: 'test',
+          INVOKER_GUI_OWNER_MODE: 'gui',
           INVOKER_DB_DIR: testDir,
+          INVOKER_IPC_SOCKET: ipcSocketPath,
           INVOKER_ALLOW_DELETE_ALL: '1',
           INVOKER_REPO_CONFIG_PATH: configPath,
           INVOKER_EXECUTING_STALL_TIMEOUT_MS: '3000',
@@ -185,7 +195,6 @@ base.describe('Launch stall watchdog', () => {
       }
 
       const staleTs = new Date(Date.now() - 30_000).toISOString();
-      const freshTs = new Date(Date.now() - 500).toISOString();
       await injectTaskStates(page, [{
         taskId: stalled!.id,
         changes: {
@@ -198,10 +207,7 @@ base.describe('Launch stall watchdog', () => {
             phase: 'executing',
             generation: 0,
             startedAt: staleTs,
-            // Transport heartbeat is fresh.
-            lastHeartbeatAt: freshTs,
-            // Workload heartbeat is stale.
-            remoteHeartbeatAt: staleTs,
+            lastHeartbeatAt: staleTs,
             selectedAttemptId: `${stalled!.id}-attempt`,
           },
         },
@@ -233,8 +239,8 @@ base.describe('Launch stall watchdog', () => {
         /^Execution stalled: task remained in running\/executing for \d+s without a live execution handle and no completion signal from executor \(remote workload heartbeat stale\)\.$/,
       );
 
-      await app.close();
     } finally {
+      await app?.close().catch(() => undefined);
       if (process.env.INVOKER_E2E_KEEP_TMP !== '1') {
         rmSync(testDir, { recursive: true, force: true });
       }
