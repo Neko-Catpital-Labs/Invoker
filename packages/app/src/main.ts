@@ -2490,6 +2490,7 @@ function createEmbeddedTerminalBackendFromConfig(
       case 'cancel':
       case 'retry-task':
       case 'recreate-task':
+      case 'recreate-downstream':
         return { workflowId: workflowIdForTaskArg(arg0), priority: 'high' };
       case 'approve':
       case 'reject':
@@ -2570,6 +2571,8 @@ function createEmbeddedTerminalBackendFromConfig(
         return { channel: 'headless.exec', request: { args: ['recreate', String(arg0)] } };
       case 'invoker:recreate-task':
         return { channel: 'headless.exec', request: { args: ['recreate-task', String(arg0)] } };
+      case 'invoker:recreate-downstream':
+        return { channel: 'headless.exec', request: { args: ['recreate-downstream', String(arg0)] } };
       case 'invoker:retry-workflow':
         return { channel: 'headless.exec', request: { args: ['retry', String(arg0)] } };
       case 'invoker:rebase-retry':
@@ -3921,6 +3924,45 @@ function createEmbeddedTerminalBackendFromConfig(
         }
       } catch (err) {
         logger.error(`recreate-task failed: ${err}`, { module: 'ipc' });
+        throw err;
+      }
+      },
+    );
+
+    registerWorkflowScopedGuiMutationHandler(
+      'invoker:recreate-downstream',
+      (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
+      'high',
+      async (taskIdArg: unknown) => {
+      const taskId = String(taskIdArg);
+      logger.info(`recreate-downstream: "${taskId}"`, { module: 'ipc' });
+      try {
+        const envelope = makeEnvelope('recreate-downstream', 'ui', 'task', { taskId });
+        const result = activeMutationContext?.mutationTiming
+          ? await activeMutationContext.mutationTiming.span(
+            'main.ipc.recreate-downstream.commandService.recreateDownstream',
+            { taskId },
+            () => commandService.recreateDownstream(envelope),
+          )
+          : await commandService.recreateDownstream(envelope);
+        if (!result.ok) throw new Error(result.error.message);
+        const started = result.data;
+        remoteFetchForPool.enabled = false;
+        try {
+          await dispatchStartedTasksWithGlobalTopup({
+            orchestrator,
+            taskExecutor: requireTaskExecutor(),
+            logger,
+            context: 'ipc.recreate-downstream',
+            started,
+            mutationTiming: activeMutationContext?.mutationTiming,
+            launchOutboxMode: invokerConfig.launchOutboxMode,
+          });
+        } finally {
+          remoteFetchForPool.enabled = true;
+        }
+      } catch (err) {
+        logger.error(`recreate-downstream failed: ${err}`, { module: 'ipc' });
         throw err;
       }
       },

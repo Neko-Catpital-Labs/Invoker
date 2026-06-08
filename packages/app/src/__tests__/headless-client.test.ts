@@ -1,9 +1,23 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LocalBus } from '@invoker/transport';
 
 import { SharedMutationOwnerTimeoutError, runHeadlessClientCommand } from '../headless-client.js';
 
 describe('headless-client', () => {
+  const originalStandalone = process.env.INVOKER_HEADLESS_STANDALONE;
+
+  beforeEach(() => {
+    delete process.env.INVOKER_HEADLESS_STANDALONE;
+  });
+
+  afterEach(() => {
+    if (originalStandalone === undefined) {
+      delete process.env.INVOKER_HEADLESS_STANDALONE;
+    } else {
+      process.env.INVOKER_HEADLESS_STANDALONE = originalStandalone;
+    }
+  });
+
   it('delegates mutating commands to a standalone-capable owner endpoint', async () => {
     const bus = new LocalBus();
     const ownerHandler = vi.fn(async () => ({ ok: true }));
@@ -26,6 +40,28 @@ describe('headless-client', () => {
       waitForApproval: false,
     }));
     expect(ensureStandaloneOwner).not.toHaveBeenCalled();
+    expect(runElectronHeadless).not.toHaveBeenCalled();
+  });
+
+  it('delegates recreate-downstream with no-track preserved', async () => {
+    const bus = new LocalBus();
+    const ownerHandler = vi.fn(async () => ({ ok: true }));
+    bus.onRequest('headless.exec', ownerHandler);
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'standalone' }));
+
+    const runElectronHeadless = vi.fn(async () => 0);
+
+    const exitCode = await runHeadlessClientCommand(['recreate-downstream', 'task-1', '--no-track'], {
+      messageBus: bus,
+      ensureStandaloneOwner: vi.fn(async () => {}),
+      runElectronHeadless,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
+      args: ['recreate-downstream', 'task-1'],
+      noTrack: true,
+    }));
     expect(runElectronHeadless).not.toHaveBeenCalled();
   });
 

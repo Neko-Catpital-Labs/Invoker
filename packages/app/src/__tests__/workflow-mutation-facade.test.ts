@@ -34,6 +34,7 @@ function makeDeps(overrides: Partial<WorkflowMutationFacadeDeps> = {}): Workflow
     orchestrator: {
       retryTask: vi.fn(() => [makeRunningTask()]),
       recreateTask: vi.fn(() => [makeRunningTask()]),
+      recreateDownstream: vi.fn(() => [makeRunningTask({ id: 'task-b' })]),
       cancelTask: vi.fn(() => ({ cancelled: ['task-a'], runningCancelled: [] })),
       cancelWorkflow: vi.fn(() => ({ cancelled: ['task-a'], runningCancelled: ['task-a'] })),
       deleteWorkflow: vi.fn(),
@@ -99,6 +100,17 @@ describe('WorkflowMutationFacade', () => {
       const result = await facade.recreateTask('task-a');
 
       expect(deps.orchestrator.recreateTask).toHaveBeenCalledWith('task-a');
+      expect(result.started).toHaveLength(1);
+      expect(deps.taskExecutor.executeTasks).toHaveBeenCalled();
+    });
+  });
+
+  describe('recreateDownstream', () => {
+    it('calls orchestrator.recreateDownstream and not recreateTask', async () => {
+      const result = await facade.recreateDownstream('task-a');
+
+      expect(deps.orchestrator.recreateDownstream).toHaveBeenCalledWith('task-a');
+      expect(deps.orchestrator.recreateTask).not.toHaveBeenCalled();
       expect(result.started).toHaveLength(1);
       expect(deps.taskExecutor.executeTasks).toHaveBeenCalled();
     });

@@ -31,6 +31,10 @@ describe('InvalidationPlan policy registry', () => {
       scope: 'task',
       mode: 'recreate',
     });
+    expect(ACTION_SPECS.recreateDownstream).toMatchObject({
+      scope: 'task',
+      mode: 'recreate',
+    });
     expect(ACTION_SPECS.retryWorkflow).toMatchObject({
       scope: 'workflow',
       mode: 'retry',
@@ -90,6 +94,64 @@ describe('InvalidationPlan policy registry', () => {
       affectedTaskIds: ['wf-1/child', 'wf-1/grandchild', 'wf-1/root'],
       lockPlan: { workflowIds: ['wf-1'] },
     });
+  });
+
+  it('plans downstream recreate as descendants only for A -> B -> C', () => {
+    const tasks = [
+      task('A', 'wf-1'),
+      task('B', 'wf-1', ['A']),
+      task('C', 'wf-1', ['B']),
+    ];
+
+    const plan = planInvalidation({
+      action: 'recreateDownstream',
+      targetId: 'A',
+      tasks,
+    });
+
+    expect(plan).toMatchObject({
+      action: 'recreateDownstream',
+      scope: 'task',
+      mode: 'recreate',
+      affectedWorkflowIds: ['wf-1'],
+      affectedTaskIds: ['B', 'C'],
+      lockPlan: { workflowIds: ['wf-1'] },
+    });
+    expect(plan.affectedTaskIds).not.toContain('A');
+  });
+
+  it('plans downstream recreate from B as C only in A -> B -> C', () => {
+    const tasks = [
+      task('A', 'wf-1'),
+      task('B', 'wf-1', ['A']),
+      task('C', 'wf-1', ['B']),
+    ];
+
+    const plan = planInvalidation({
+      action: 'recreateDownstream',
+      targetId: 'B',
+      tasks,
+    });
+
+    expect(plan.affectedTaskIds).toEqual(['C']);
+  });
+
+  it('plans downstream recreate on a leaf as a no-op affected set', () => {
+    const tasks = [
+      task('A', 'wf-1'),
+      task('B', 'wf-1', ['A']),
+      task('C', 'wf-1', ['B']),
+    ];
+
+    const plan = planInvalidation({
+      action: 'recreateDownstream',
+      targetId: 'C',
+      tasks,
+    });
+
+    expect(plan.affectedTaskIds).toEqual([]);
+    expect(plan.affectedWorkflowIds).toEqual([]);
+    expect(plan.lockPlan.workflowIds).toEqual([]);
   });
 
   it('plans task retry as the task plus non-completed descendants', () => {
