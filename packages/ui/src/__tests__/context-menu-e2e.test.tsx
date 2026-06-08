@@ -158,4 +158,76 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
+
+  it('workflow context menu activates highlighted item via arrow keys and Enter', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    // First item (Open Workflow) is highlighted on open; move down to Retry Workflow.
+    fireEvent.keyDown(menu, { key: 'ArrowDown' }); // Open PR
+    fireEvent.keyDown(menu, { key: 'ArrowDown' }); // Retry Workflow
+    fireEvent.keyDown(menu, { key: 'Enter' });
+    await waitFor(() => expect(mock.api.retryWorkflow).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('workflow context menu reaches More and danger actions by keyboard', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    // ArrowUp from the first item wraps to the last entry (More).
+    fireEvent.keyDown(menu, { key: 'ArrowUp' });
+    fireEvent.keyDown(menu, { key: 'Enter' }); // activate More
+    // After expansion the highlight lands on the first revealed item.
+    expect(await screen.findByText('Delete Workflow')).toBeInTheDocument();
+    // Rebase and Retry -> Rebase and Recreate -> Recreate -> Cancel -> Delete.
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: ' ' }); // Space activates Delete Workflow
+    await waitFor(() => expect(mock.api.deleteWorkflow).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('task context menu activates the highlighted item via Enter', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    const menu = await screen.findByRole('menu');
+    // Restart Task is highlighted first for a pending task; Enter activates it.
+    fireEvent.keyDown(menu, { key: 'Enter' });
+    await waitFor(() => expect(mock.api.restartTask).toHaveBeenCalledWith('task-alpha'));
+  });
+
+  it('task context menu reaches danger actions through More by keyboard', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    const menu = await screen.findByRole('menu');
+    // Entries collapsed: Restart Task, Open Terminal, More. Wrap up to More.
+    fireEvent.keyDown(menu, { key: 'ArrowUp' });
+    fireEvent.keyDown(menu, { key: 'Enter' }); // expand danger zone
+    expect(await screen.findByText('Recreate from Task')).toBeInTheDocument();
+    // Highlight lands on Terminate Task; move down to Recreate from Task.
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: ' ' }); // Space activates Recreate from Task
+    await waitFor(() => expect(mock.api.recreateTask).toHaveBeenCalledWith('task-alpha'));
+  });
+
+  it('keeps the context menu open when arrow keys arrive at the document', async () => {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    // The App-level graph shortcut handler must defer to an open menu: a
+    // document-level ArrowDown/Enter must not dismiss it or hijack navigation.
+    fireEvent.keyDown(document, { key: 'ArrowDown' });
+    fireEvent.keyDown(document, { key: 'ArrowUp' });
+    expect(screen.getByRole('menu')).toBe(menu);
+    expect(screen.getByText('Open Workflow')).toBeInTheDocument();
+  });
 });

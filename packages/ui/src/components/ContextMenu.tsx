@@ -13,7 +13,17 @@
 import { useEffect, useRef, useState, useLayoutEffect } from 'react';
 import type { TaskState } from '../types.js';
 import { getMenuItems, type MenuItem } from '../lib/context-menu-items.js';
+import { focusMenuElement, isMenuNavKey, resolveMenuKey } from '../lib/menu-keyboard.js';
 import { EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE } from '../isExperimentSpawnPivot.js';
+
+/**
+ * A keyboard-navigable entry: either a real menu action or the synthetic
+ * "More" toggle that reveals the danger zone. The synthetic entry is always
+ * enabled so it can be reached and activated by keyboard.
+ */
+type NavEntry =
+  | { kind: 'item'; item: MenuItem; enabled: boolean }
+  | { kind: 'more'; enabled: true };
 
 interface ContextMenuProps {
   x: number;
@@ -61,15 +71,30 @@ export function ContextMenu({
   const hasMoreButton = dangerItems.length > 0 && !showMore;
   const renderedItems: MenuItem[] = showMore ? [...safeItems, ...dangerItems] : safeItems;
 
-  // Find first enabled item index
-  const firstEnabledIndex = renderedItems.findIndex((item) => item.enabled);
+  // Flat list of keyboard-navigable entries, including the synthetic "More"
+  // toggle so it is reachable and activatable by keyboard. focusedIndex always
+  // indexes into this array.
+  const navEntries: NavEntry[] = [
+    ...renderedItems.map((item): NavEntry => ({ kind: 'item', item, enabled: item.enabled })),
+    ...(hasMoreButton ? [{ kind: 'more', enabled: true } as NavEntry] : []),
+  ];
 
-  // Auto-focus first enabled item on mount
+  // Find first enabled entry index
+  const firstEnabled = navEntries.findIndex((entry) => entry.enabled);
+
+  // Auto-highlight first enabled entry on mount
   useEffect(() => {
-    if (firstEnabledIndex >= 0) {
-      setFocusedIndex(firstEnabledIndex);
+    if (firstEnabled >= 0) {
+      setFocusedIndex(firstEnabled);
     }
-  }, [firstEnabledIndex]);
+  }, [firstEnabled]);
+
+  // Focus the menu container on open so it owns keyboard events (arrows, Enter,
+  // Space) instead of the App-level graph shortcuts. preventScroll keeps the
+  // graph viewport from jumping when the menu mounts.
+  useEffect(() => {
+    focusMenuElement(menuRef.current);
+  }, []);
 
   // Viewport clamping: flip if menu overflows bottom or right
   useLayoutEffect(() => {
@@ -133,28 +158,47 @@ export function ContextMenu({
     };
   }, [onClose]);
 
-  // Keyboard navigation
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    const enabledIndices = renderedItems
-      .map((item, idx) => (item.enabled ? idx : -1))
-      .filter((idx) => idx >= 0);
+  // Reveal the danger zone and move the highlight to a deterministic enabled
+  // item — the first enabled danger action, falling back to the first enabled
+  // safe item.
+  const expandMore = () => {
+    setShowMore(true);
+    const firstEnabledDanger = dangerItems.findIndex((item) => item.enabled);
+    const target =
+      firstEnabledDanger >= 0
+        ? safeItems.length + firstEnabledDanger
+        : safeItems.findIndex((item) => item.enabled);
+    if (target >= 0) setFocusedIndex(target);
+  };
 
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const nextPos = (currentPos + 1) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[nextPos]);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const prevPos = (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[prevPos]);
-    } else if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      const item = renderedItems[focusedIndex];
-      if (item?.enabled) {
-        handleItemClick(item);
-      }
+  // Activate a navigable entry by index (menu action or the More toggle).
+  const activateEntry = (index: number) => {
+    const entry = navEntries[index];
+    if (!entry) return;
+    if (entry.kind === 'more') {
+      expandMore();
+    } else if (entry.enabled) {
+      handleItemClick(entry.item);
+    }
+  };
+
+  // Keyboard navigation. Handled keys are fully owned by the menu: we
+  // preventDefault and stopPropagation so App-level graph shortcuts never see
+  // them while the menu is open.
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (!isMenuNavKey(e.key)) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    const result = resolveMenuKey(
+      e.key,
+      focusedIndex,
+      navEntries.map((entry) => entry.enabled),
+    );
+    if (result.type === 'move') {
+      setFocusedIndex(result.index);
+    } else if (result.type === 'activate') {
+      activateEntry(result.index);
     }
   };
 
@@ -254,8 +298,11 @@ export function ContextMenu({
           <div className="border-t border-gray-600 my-1" />
           <button
             role="menuitem"
-            className="w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
-            onClick={() => setShowMore(true)}
+            className={`w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 ${
+              focusedIndex === renderedItems.length ? 'bg-gray-700' : ''
+            }`}
+            onClick={expandMore}
+            onMouseEnter={() => setFocusedIndex(renderedItems.length)}
           >
             More
           </button>

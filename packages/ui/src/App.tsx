@@ -36,6 +36,7 @@ import {
   EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE,
 } from './isExperimentSpawnPivot.js';
 import { parsePlanText } from './lib/plan-parser.js';
+import { focusMenuElement, isMenuNavKey, resolveMenuKey } from './lib/menu-keyboard.js';
 import type { SystemDiagnostics } from '@invoker/contracts';
 
 type ModalState =
@@ -116,6 +117,7 @@ function WorkflowContextMenu({
   const menuRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: x, top: y });
   const [showMore, setShowMore] = useState(false);
+  const [focusedIndex, setFocusedIndex] = useState(0);
 
   useLayoutEffect(() => {
     if (!menuRef.current) return;
@@ -165,6 +167,12 @@ function WorkflowContextMenu({
     };
   }, [onClose]);
 
+  // Focus the menu container on open so it owns arrow/activation keys instead
+  // of the App-level graph shortcuts. preventScroll avoids a viewport jump.
+  useEffect(() => {
+    focusMenuElement(menuRef.current);
+  }, []);
+
   const runAction = (action: (workflowId: string) => void) => {
     action(workflowId);
     onClose();
@@ -172,6 +180,50 @@ function WorkflowContextMenu({
 
   const buttonClass = 'w-full px-3 py-1.5 text-left text-sm text-gray-100 hover:bg-gray-700';
   const dangerButtonClass = 'w-full px-3 py-1.5 text-left text-sm text-red-300 hover:bg-gray-700';
+  const moreButtonClass = 'w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-gray-700';
+
+  const baseEntries = [
+    { id: 'open', label: 'Open Workflow', className: buttonClass, onSelect: () => runAction(onOpenWorkflow) },
+    { id: 'open-pr', label: 'Open PR', className: buttonClass, onSelect: () => runAction(onOpenPr) },
+    { id: 'retry', label: 'Retry Workflow', className: buttonClass, onSelect: () => runAction(onRetryWorkflow) },
+    { id: 'copy', label: 'Copy Workflow ID', className: buttonClass, onSelect: () => runAction(onCopyWorkflowId) },
+  ];
+  const moreEntries = [
+    { id: 'rebase-retry', label: 'Rebase and Retry', className: buttonClass, onSelect: () => runAction(onRebaseRetry) },
+    { id: 'rebase-recreate', label: 'Rebase and Recreate', className: dangerButtonClass, onSelect: () => runAction(onRebaseRecreate) },
+    { id: 'recreate', label: 'Recreate Workflow', className: dangerButtonClass, onSelect: () => runAction(onRecreateWorkflow) },
+    { id: 'cancel', label: 'Cancel Workflow', className: dangerButtonClass, onSelect: () => runAction(onCancelWorkflow) },
+    { id: 'delete', label: 'Delete Workflow', className: dangerButtonClass, onSelect: () => runAction(onDeleteWorkflow) },
+  ];
+
+  // Reveal the danger zone and move the highlight to the first revealed item.
+  const expandMore = () => {
+    setShowMore(true);
+    setFocusedIndex(baseEntries.length);
+  };
+
+  // Visible entries in keyboard order. The synthetic "More" toggle is the last
+  // entry while the danger zone is collapsed. Every workflow action is enabled.
+  const actionEntries = showMore
+    ? [...baseEntries, ...moreEntries]
+    : [...baseEntries, { id: 'more', label: 'More', className: moreButtonClass, onSelect: expandMore }];
+  // Keyboard navigation. Handled keys are fully owned by the menu via
+  // preventDefault + stopPropagation so App-level graph shortcuts never see them.
+  const handleMenuKeyDown = (event: React.KeyboardEvent) => {
+    if (!isMenuNavKey(event.key)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const result = resolveMenuKey(
+      event.key,
+      focusedIndex,
+      actionEntries.map(() => true),
+    );
+    if (result.type === 'move') {
+      setFocusedIndex(result.index);
+    } else if (result.type === 'activate') {
+      actionEntries[result.index]?.onSelect();
+    }
+  };
 
   return (
     <div
@@ -180,51 +232,22 @@ function WorkflowContextMenu({
       className="fixed z-50 min-w-[200px] rounded-lg border border-gray-600 bg-gray-800 py-1 shadow-xl"
       style={{ left: position.left, top: position.top }}
       tabIndex={-1}
+      onKeyDown={handleMenuKeyDown}
       onClick={(event) => event.stopPropagation()}
     >
-      <button role="menuitem" onClick={() => runAction(onOpenWorkflow)} className={buttonClass}>
-        Open Workflow
-      </button>
-      <button role="menuitem" onClick={() => runAction(onOpenPr)} className={buttonClass}>
-        Open PR
-      </button>
-      <button role="menuitem" onClick={() => runAction(onRetryWorkflow)} className={buttonClass}>
-        Retry Workflow
-      </button>
-      <button role="menuitem" onClick={() => runAction(onCopyWorkflowId)} className={buttonClass}>
-        Copy Workflow ID
-      </button>
-      {!showMore ? (
-        <div>
-          <div className="my-1 border-t border-gray-600" />
+      {actionEntries.map((entry, idx) => (
+        <div key={entry.id}>
+          {idx === baseEntries.length && <div className="my-1 border-t border-gray-600" />}
           <button
             role="menuitem"
-            className="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-gray-700"
-            onClick={() => setShowMore(true)}
+            className={`${entry.className}${idx === focusedIndex ? ' bg-gray-700' : ''}`}
+            onClick={entry.onSelect}
+            onMouseEnter={() => setFocusedIndex(idx)}
           >
-            More
+            {entry.label}
           </button>
         </div>
-      ) : (
-        <div>
-          <div className="my-1 border-t border-gray-600" />
-          <button role="menuitem" onClick={() => runAction(onRebaseRetry)} className={buttonClass}>
-            Rebase and Retry
-          </button>
-          <button role="menuitem" onClick={() => runAction(onRebaseRecreate)} className={dangerButtonClass}>
-            Rebase and Recreate
-          </button>
-          <button role="menuitem" onClick={() => runAction(onRecreateWorkflow)} className={dangerButtonClass}>
-            Recreate Workflow
-          </button>
-          <button role="menuitem" onClick={() => runAction(onCancelWorkflow)} className={dangerButtonClass}>
-            Cancel Workflow
-          </button>
-          <button role="menuitem" onClick={() => runAction(onDeleteWorkflow)} className={dangerButtonClass}>
-            Delete Workflow
-          </button>
-        </div>
-      )}
+      ))}
     </div>
   );
 }
@@ -738,6 +761,18 @@ export function App() {
 
       if (isEditableKeyboardTarget(event.target) || modal.type !== 'none') return;
 
+      // An open context menu owns arrow/activation keys — let it move its own
+      // highlight and activate items instead of driving the graph selection.
+      if (
+        (contextMenu !== null || workflowContextMenu !== null) &&
+        (event.key === 'ArrowUp' ||
+          event.key === 'ArrowDown' ||
+          event.key === 'Enter' ||
+          event.key === ' ')
+      ) {
+        return;
+      }
+
       if (event.key === 'Tab') {
         event.preventDefault();
         const currentIndex = KEYBOARD_REGION_ORDER.indexOf(keyboardRegion);
@@ -842,11 +877,13 @@ export function App() {
   }, [
     activateSearchResult,
     bottomStatusIndex,
+    contextMenu,
     focusKeyboardRegion,
     handleStatusClick,
     keyboardRegion,
     miniDagTasks,
     modal.type,
+    workflowContextMenu,
     openSelectedContextMenu,
     previousGraphRegion,
     searchActiveIndex,
