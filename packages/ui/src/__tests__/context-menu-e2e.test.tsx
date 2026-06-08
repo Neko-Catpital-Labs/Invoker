@@ -64,9 +64,9 @@ describe('Context menu (component)', () => {
     mock.cleanup();
   });
 
-  async function setup() {
+  async function setup(tasks = [alpha, beta, merge]) {
     render(<App />);
-    act(() => mock.setTasks([alpha, beta, merge], workflows));
+    act(() => mock.setTasks(tasks, workflows));
 
     await waitFor(() => {
       expect(screen.getByTestId('workflow-node-wf-1')).toBeInTheDocument();
@@ -237,5 +237,31 @@ describe('Context menu (component)', () => {
     pressMenuKey(' ');
 
     await waitFor(() => expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'));
+  });
+
+  it('task context menu skips disabled actions during keyboard navigation', async () => {
+    const failedPivot = makeUITask({
+      id: 'task-disabled-terminal',
+      description: 'Failed pivot task',
+      status: 'failed',
+      workflowId: 'wf-1',
+      config: {
+        workflowId: 'wf-1',
+        pivot: true,
+        experimentVariants: [{ id: 'exp-a', description: 'Experiment A' }],
+      },
+    });
+    await setup([failedPivot]);
+    await openTaskContextMenu('task-disabled-terminal');
+
+    await expectHighlightedMenuItem('Fix with Claude');
+    pressMenuKey('ArrowDown');
+    await expectHighlightedMenuItem('Fix with Codex');
+    pressMenuKey('ArrowDown');
+    await expectHighlightedMenuItem('Restart Task');
+    pressMenuKey('Enter');
+
+    await waitFor(() => expect(mock.api.restartTask).toHaveBeenCalledWith('task-disabled-terminal'));
+    expect(mock.api.openTerminal).not.toHaveBeenCalled();
   });
 });
