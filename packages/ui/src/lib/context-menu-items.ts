@@ -40,6 +40,7 @@ export function getMenuItems(
   const canOpenTerminal = !isExperimentSpawnPivotTask(task);
   const canFix = task.status === 'failed';
   const canCancel = task.status !== 'completed' && task.status !== 'stale';
+  const canRecreateDownstream = Boolean(task.config.workflowId) && task.status !== 'running';
 
   // ── Fix actions (top, only for failed) ────────────────────────
   if (canFix) {
@@ -128,7 +129,16 @@ export function getMenuItems(
       variant: 'danger',
       separator: !canCancel ? 'danger' : undefined,
     });
+  }
 
+  if (canRecreateDownstream) {
+    items.push({
+      id: 'recreate-downstream',
+      label: 'Recreate Downstream',
+      enabled: true,
+      action: 'onRecreateDownstream',
+      variant: 'danger',
+    });
   }
 
   return items;

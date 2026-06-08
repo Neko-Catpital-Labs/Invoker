@@ -23,6 +23,7 @@ interface ContextMenuProps {
   onReplace: (taskId: string) => void;
   onOpenTerminal: (taskId: string) => void;
   onRecreateTask?: (taskId: string) => void;
+  onRecreateDownstream?: (taskId: string) => void;
   onFix?: (taskId: string, agentName: string) => void;
   onCancel?: (taskId: string) => void;
   onClose: () => void;
@@ -36,6 +37,7 @@ export function ContextMenu({
   onReplace,
   onOpenTerminal,
   onRecreateTask,
+  onRecreateDownstream,
   onFix,
   onCancel,
   onClose,
@@ -51,6 +53,7 @@ export function ContextMenu({
   // Filter items based on available handlers
   const availableItems = items.filter((item) => {
     if (item.action === 'onRecreateTask' && !onRecreateTask) return false;
+    if (item.action === 'onRecreateDownstream' && !onRecreateDownstream) return false;
     if (item.action === 'onFix' && !onFix) return false;
     if (item.action === 'onCancel' && !onCancel) return false;
     return true;
@@ -174,6 +177,9 @@ export function ContextMenu({
         break;
       case 'onRecreateTask':
         onRecreateTask?.(task.id);
+        break;
+      case 'onRecreateDownstream':
+        onRecreateDownstream?.(task.id);
         break;
       case 'onFix':
         if (item.agentName) {
