@@ -66,6 +66,7 @@ export function ContextMenu({
 
   // Auto-focus first enabled item on mount
   useEffect(() => {
+    menuRef.current?.focus();
     if (firstEnabledIndex >= 0) {
       setFocusedIndex(firstEnabledIndex);
     }
@@ -141,16 +142,19 @@ export function ContextMenu({
 
     if (e.key === 'ArrowDown') {
       e.preventDefault();
+      e.stopPropagation();
       const currentPos = enabledIndices.indexOf(focusedIndex);
       const nextPos = (currentPos + 1) % enabledIndices.length;
       setFocusedIndex(enabledIndices[nextPos]);
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
+      e.stopPropagation();
       const currentPos = enabledIndices.indexOf(focusedIndex);
       const prevPos = (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
       setFocusedIndex(enabledIndices[prevPos]);
     } else if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
+      e.stopPropagation();
       const item = renderedItems[focusedIndex];
       if (item?.enabled) {
         handleItemClick(item);
