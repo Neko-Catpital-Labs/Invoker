@@ -166,7 +166,7 @@ function WorkflowContextMenu({
   }, [x, y, showMore]);
 
   useEffect(() => {
-    menuRef.current?.focus();
+    menuRef.current?.focus({ preventScroll: true });
     setFocusedIndex(0);
   }, []);
 
@@ -756,6 +756,19 @@ export function App() {
 
       if (isEditableKeyboardTarget(event.target) || modal.type !== 'none') return;
 
+      // An open context menu owns navigation/activation keys. Let the menu's own
+      // handler drive ArrowUp/ArrowDown/Enter/Space so graph shortcuts never steal
+      // them, even if the focused menu element ever fails to stop propagation.
+      if (
+        (contextMenu || workflowContextMenu) &&
+        (event.key === 'ArrowUp' ||
+          event.key === 'ArrowDown' ||
+          event.key === 'Enter' ||
+          event.key === ' ')
+      ) {
+        return;
+      }
+
       if (event.key === 'Tab') {
         event.preventDefault();
         const currentIndex = KEYBOARD_REGION_ORDER.indexOf(keyboardRegion);
@@ -860,9 +873,11 @@ export function App() {
   }, [
     activateSearchResult,
     bottomStatusIndex,
+    contextMenu,
     focusKeyboardRegion,
     handleStatusClick,
     keyboardRegion,
+    workflowContextMenu,
     miniDagTasks,
     modal.type,
     openSelectedContextMenu,
