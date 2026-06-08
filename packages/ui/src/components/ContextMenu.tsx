@@ -14,6 +14,12 @@ import { useEffect, useRef, useState, useLayoutEffect } from 'react';
 import type { TaskState } from '../types.js';
 import { getMenuItems, type MenuItem } from '../lib/context-menu-items.js';
 import { EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE } from '../isExperimentSpawnPivot.js';
+import {
+  isMenuActivationKey,
+  isMenuNavigationKey,
+  nextEnabledIndex,
+  useFocusMenuOnOpen,
+} from '../lib/menu-keyboard.js';
 
 interface ContextMenuProps {
   x: number;
@@ -61,6 +67,9 @@ export function ContextMenu({
   const hasMoreButton = dangerItems.length > 0 && !showMore;
   const renderedItems: MenuItem[] = showMore ? [...safeItems, ...dangerItems] : safeItems;
 
+  // The "More" button is navigable too; it sits just past the rendered items.
+  const moreIndex = renderedItems.length;
+
   // Find first enabled item index
   const firstEnabledIndex = renderedItems.findIndex((item) => item.enabled);
 
@@ -70,6 +79,20 @@ export function ContextMenu({
       setFocusedIndex(firstEnabledIndex);
     }
   }, [firstEnabledIndex]);
+
+  // Focus the menu container on open so it owns keyboard input. preventScroll
+  // keeps the graph from jumping when a menu opens near the viewport edge.
+  useFocusMenuOnOpen(menuRef);
+
+  // Reveal the danger zone and move the highlight onto its first enabled item so
+  // keyboard users land somewhere deterministic after activating "More".
+  const expandMore = () => {
+    setShowMore(true);
+    const firstDangerEnabled = dangerItems.findIndex((item) => item.enabled);
+    if (firstDangerEnabled >= 0) {
+      setFocusedIndex(safeItems.length + firstDangerEnabled);
+    }
+  };
 
   // Viewport clamping: flip if menu overflows bottom or right
   useLayoutEffect(() => {
@@ -133,28 +156,36 @@ export function ContextMenu({
     };
   }, [onClose]);
 
-  // Keyboard navigation
+  // Activate whatever the highlight is on: a menu item, or the "More" button.
+  const activateIndex = (index: number) => {
+    if (hasMoreButton && index === moreIndex) {
+      expandMore();
+      return;
+    }
+    const item = renderedItems[index];
+    if (item?.enabled) {
+      handleItemClick(item);
+    }
+  };
+
+  // Keyboard navigation. Handled keys stop propagation so App-level graph
+  // shortcuts never also act on them while the menu is open.
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (!isMenuNavigationKey(e.key)) return;
+    e.preventDefault();
+    e.stopPropagation();
+
     const enabledIndices = renderedItems
       .map((item, idx) => (item.enabled ? idx : -1))
       .filter((idx) => idx >= 0);
+    if (hasMoreButton) enabledIndices.push(moreIndex);
 
     if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const nextPos = (currentPos + 1) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[nextPos]);
+      setFocusedIndex(nextEnabledIndex(enabledIndices, focusedIndex, 1));
     } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const prevPos = (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[prevPos]);
-    } else if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      const item = renderedItems[focusedIndex];
-      if (item?.enabled) {
-        handleItemClick(item);
-      }
+      setFocusedIndex(nextEnabledIndex(enabledIndices, focusedIndex, -1));
+    } else if (isMenuActivationKey(e.key)) {
+      activateIndex(focusedIndex);
     }
   };
 
@@ -254,8 +285,11 @@ export function ContextMenu({
           <div className="border-t border-gray-600 my-1" />
           <button
             role="menuitem"
-            className="w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
-            onClick={() => setShowMore(true)}
+            className={`w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 ${
+              focusedIndex === moreIndex ? 'bg-gray-700' : ''
+            }`}
+            onClick={expandMore}
+            onMouseEnter={() => setFocusedIndex(moreIndex)}
           >
             More
           </button>

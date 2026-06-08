@@ -158,4 +158,62 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
+
+  describe('keyboard navigation', () => {
+    it('focuses the workflow menu on open so it owns key input', async () => {
+      await setup();
+      fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+      const menu = await screen.findByRole('menu');
+      expect(menu).toHaveFocus();
+    });
+
+    it('ArrowDown then Enter activates the highlighted workflow item', async () => {
+      await setup();
+      fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+      const menu = await screen.findByRole('menu');
+      // Highlight starts on "Open Workflow"; two steps down lands on "Retry Workflow".
+      fireEvent.keyDown(menu, { key: 'ArrowDown' });
+      fireEvent.keyDown(menu, { key: 'ArrowDown' });
+      fireEvent.keyDown(menu, { key: 'Enter' });
+      await waitFor(() => expect(mock.api.retryWorkflow).toHaveBeenCalledWith('wf-1'));
+    });
+
+    it('Space activates the highlighted workflow item', async () => {
+      await setup();
+      fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+      const menu = await screen.findByRole('menu');
+      // Open Workflow(0) → Open PR(1) → Retry(2) → Copy Workflow ID(3).
+      fireEvent.keyDown(menu, { key: 'ArrowDown' });
+      fireEvent.keyDown(menu, { key: 'ArrowDown' });
+      fireEvent.keyDown(menu, { key: 'ArrowDown' });
+      fireEvent.keyDown(menu, { key: ' ' });
+      await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
+    });
+
+    it('ArrowUp wraps to the More item, which expands and is keyboard-activatable', async () => {
+      await setup();
+      fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+      const menu = await screen.findByRole('menu');
+      // From the first item, ArrowUp wraps to the last entry — the More button.
+      fireEvent.keyDown(menu, { key: 'ArrowUp' });
+      fireEvent.keyDown(menu, { key: 'Enter' });
+      // More expands the danger zone and lands the highlight on "Rebase and Retry".
+      expect(await screen.findByText('Rebase and Retry')).toBeInTheDocument();
+      fireEvent.keyDown(menu, { key: 'Enter' });
+      await waitFor(() => expect(mock.api.rebaseRetry).toHaveBeenCalledWith('wf-1'));
+    });
+
+    it('task context menu activates the highlighted item via Enter', async () => {
+      await setup();
+      fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+      await waitFor(() => {
+        expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+      });
+      fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+      const menu = await screen.findByRole('menu');
+      // Highlight starts on the first enabled item ("Restart Task").
+      fireEvent.keyDown(menu, { key: 'Enter' });
+      await waitFor(() => expect(mock.api.restartTask).toHaveBeenCalledWith('task-alpha'));
+    });
+  });
 });
