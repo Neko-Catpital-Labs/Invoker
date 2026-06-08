@@ -73,6 +73,30 @@ describe('Context menu (component)', () => {
     });
   }
 
+  function expectOnlyWorkflowApiCalled(
+    called:
+      | 'retryWorkflow'
+      | 'recreateWorkflow'
+      | 'rebaseRetry'
+      | 'rebaseRecreate'
+      | 'cancelWorkflow',
+  ) {
+    const actions = {
+      retryWorkflow: mock.api.retryWorkflow,
+      recreateWorkflow: mock.api.recreateWorkflow,
+      rebaseRetry: mock.api.rebaseRetry,
+      rebaseRecreate: mock.api.rebaseRecreate,
+      cancelWorkflow: mock.api.cancelWorkflow,
+    };
+    for (const [name, action] of Object.entries(actions)) {
+      if (name === called) {
+        expect(action).toHaveBeenCalledWith('wf-1');
+      } else {
+        expect(action).not.toHaveBeenCalled();
+      }
+    }
+  }
+
   it('right-clicking a workflow shows workflow actions', async () => {
     await setup();
     fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
@@ -110,6 +134,7 @@ describe('Context menu (component)', () => {
     fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
     fireEvent.click(await screen.findByText('Retry Workflow'));
     await waitFor(() => expect(mock.api.retryWorkflow).toHaveBeenCalledWith('wf-1'));
+    expectOnlyWorkflowApiCalled('retryWorkflow');
   });
 
   it('workflow context menu recreates workflow', async () => {
@@ -118,6 +143,7 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('More'));
     fireEvent.click(await screen.findByText('Recreate Workflow'));
     await waitFor(() => expect(mock.api.recreateWorkflow).toHaveBeenCalledWith('wf-1'));
+    expectOnlyWorkflowApiCalled('recreateWorkflow');
   });
 
   it('workflow context menu retries workflow with rebase', async () => {
@@ -126,6 +152,7 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('More'));
     fireEvent.click(await screen.findByText('Rebase and Retry'));
     await waitFor(() => expect(mock.api.rebaseRetry).toHaveBeenCalledWith('wf-1'));
+    expectOnlyWorkflowApiCalled('rebaseRetry');
   });
 
   it('workflow context menu recreates workflow with rebase', async () => {
@@ -134,6 +161,7 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('More'));
     fireEvent.click(await screen.findByText('Rebase and Recreate'));
     await waitFor(() => expect(mock.api.rebaseRecreate).toHaveBeenCalledWith('wf-1'));
+    expectOnlyWorkflowApiCalled('rebaseRecreate');
   });
 
   it('workflow context menu cancels workflow', async () => {
@@ -142,6 +170,7 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('More'));
     fireEvent.click(await screen.findByText('Cancel Workflow'));
     await waitFor(() => expect(mock.api.cancelWorkflow).toHaveBeenCalledWith('wf-1'));
+    expectOnlyWorkflowApiCalled('cancelWorkflow');
   });
 
   it('workflow context menu deletes workflow', async () => {
