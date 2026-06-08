@@ -429,6 +429,7 @@ export class PersistedWorkflowMutationCoordinator {
     if (
       channel === 'invoker:recreate-workflow'
       || channel === 'invoker:recreate-task'
+      || channel === 'invoker:recreate-downstream'
       || channel === 'invoker:rebase-recreate'
     ) {
       return 'recreate';
@@ -441,7 +442,7 @@ export class PersistedWorkflowMutationCoordinator {
     }
     const payload = args[0] as { args?: unknown[] } | undefined;
     const rawArgs = Array.isArray(payload?.args) ? payload.args : [];
-    if (rawArgs[0] === 'recreate' || rawArgs[0] === 'recreate-task' || rawArgs[0] === 'rebase-recreate') {
+    if (rawArgs[0] === 'recreate' || rawArgs[0] === 'recreate-task' || rawArgs[0] === 'recreate-downstream' || rawArgs[0] === 'rebase-recreate') {
       return 'recreate';
     }
     if (rawArgs[0] === 'delete' || rawArgs[0] === 'delete-workflow' || rawArgs[0] === 'delete-all') {
@@ -455,6 +456,7 @@ export class PersistedWorkflowMutationCoordinator {
       intent.channel === 'invoker:retry-workflow'
       || intent.channel === 'invoker:recreate-workflow'
       || intent.channel === 'invoker:recreate-task'
+      || intent.channel === 'invoker:recreate-downstream'
       || intent.channel === 'invoker:rebase-retry'
       || intent.channel === 'invoker:rebase-recreate'
       || intent.channel === 'invoker:delete-workflow'
@@ -470,7 +472,7 @@ export class PersistedWorkflowMutationCoordinator {
     const rawArgs = Array.isArray(payload?.args) ? payload.args : [];
     const command = typeof rawArgs[0] === 'string' ? rawArgs[0] : '';
     const target = typeof rawArgs[1] === 'string' ? rawArgs[1] : '';
-    if (command === 'recreate-task') {
+    if (command === 'recreate-task' || command === 'recreate-downstream') {
       return true;
     }
     if (command === 'delete' || command === 'delete-workflow' || command === 'delete-all') {
