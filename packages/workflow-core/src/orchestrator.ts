@@ -1404,6 +1404,8 @@ export class Orchestrator {
         lastHeartbeatAt: undefined,
         error: undefined,
         exitCode: undefined,
+        branch: undefined,
+        commit: undefined,
         inputPrompt: undefined,
         pendingFixError: undefined,
         agentSessionId: undefined,
