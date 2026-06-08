@@ -29,7 +29,7 @@ Current version: `0.0.3`. Version history lives in [CHANGELOG.md](CHANGELOG.md).
 ## Installation
 
 ```bash
-git clone <repository-url> invoker && cd invoker
+git clone https://github.com/Neko-Catpital-Labs/Invoker.git invoker && cd invoker
 pnpm install
 bash scripts/setup-agent-skills.sh
 pnpm run build
