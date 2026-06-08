@@ -2292,6 +2292,7 @@ export class Orchestrator {
         completedAt: undefined,
         error: undefined,
         exitCode: undefined,
+        pendingFixError: undefined,
         commit: undefined,
         lastHeartbeatAt: undefined,
         launchStartedAt: undefined,
