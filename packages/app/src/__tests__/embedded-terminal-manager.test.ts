@@ -156,7 +156,8 @@ describe('EmbeddedTerminalManager', () => {
     }));
   });
 
-  it('returns synchronous backend output in the opened descriptor replay snapshot', () => {
+  it('replays PTY first-frame output emitted before openOrReuse returns', () => {
+    const firstFrame = 'FIRST_FRAME_FROM_PTY\n';
     const spawned = {
       write: vi.fn(),
       resize: vi.fn(),
@@ -165,25 +166,24 @@ describe('EmbeddedTerminalManager', () => {
     const backend: EmbeddedTerminalBackend = {
       name: 'pty',
       spawn: vi.fn((opts) => {
-        opts.emitOutput('early output\n');
+        opts.emitOutput(firstFrame);
         return spawned;
       }),
     };
     const mgr = new EmbeddedTerminalManager({ backend });
-    const events: string[] = [];
-    mgr.on('output', (e) => events.push(e.data));
 
     const session = mgr.openOrReuse({ taskId: 'task-early', spec: {}, cwd: '/tmp/wt' });
+    const latePaneOutput = [session.outputSnapshot ?? ''];
+    mgr.on('output', (e) => latePaneOutput.push(e.data));
 
-    expect(session.outputSnapshot).toBe('early output\n');
-    expect(events).toEqual(['early output\n']);
+    expect(latePaneOutput).toEqual([firstFrame]);
     expect(mgr.list()).toMatchObject([
-      { sessionId: session.sessionId, outputSnapshot: 'early output\n' },
+      { sessionId: session.sessionId, outputSnapshot: firstFrame },
     ]);
 
     const reused = mgr.openOrReuse({ taskId: 'task-early', spec: {}, cwd: '/tmp/wt' });
     expect(reused.sessionId).toBe(session.sessionId);
-    expect(reused.outputSnapshot).toBe('early output\n');
+    expect(reused.outputSnapshot).toBe(firstFrame);
   });
 
   it('opens a distinct session when the same task resolves to a different terminal target', () => {
