@@ -8,6 +8,7 @@ export type InvalidationAction =
   | 'retryTask'
   | 'retryWorkflow'
   | 'recreateTask'
+  | 'recreateDownstream'
   | 'recreateWorkflow'
   | 'recreateWorkflowFromFreshBase'
   | 'workflowFork';
@@ -68,8 +69,10 @@ export type CancelInFlightFn = (
 
 export interface InvalidationDeps {
   cancelInFlight: CancelInFlightFn;
+  cancelDownstreamInFlight?: CancelInFlightFn;
   retryTask: (taskId: string) => TaskState[] | Promise<TaskState[]>;
   recreateTask: (taskId: string) => TaskState[] | Promise<TaskState[]>;
+  recreateDownstream?: (taskId: string) => TaskState[] | Promise<TaskState[]>;
   retryWorkflow: (workflowId: string) => TaskState[] | Promise<TaskState[]>;
   recreateWorkflow: (workflowId: string) => TaskState[] | Promise<TaskState[]>;
   recreateWorkflowFromFreshBase?: (workflowId: string) => TaskState[] | Promise<TaskState[]>;
@@ -110,6 +113,7 @@ export interface InvalidationDeps {
 export type InvalidationStage =
   | 'validateScope'
   | 'cancelInFlight'
+  | 'cancelDownstreamInFlight'
   | 'applyPrimitive'
   | 'cascadeAcrossWorkflows';
 
@@ -160,6 +164,13 @@ const INVALIDATING_STAGES: readonly InvalidationStage[] = [
   'cascadeAcrossWorkflows',
 ];
 
+const DOWNSTREAM_INVALIDATING_STAGES: readonly InvalidationStage[] = [
+  'validateScope',
+  'cancelDownstreamInFlight',
+  'applyPrimitive',
+  'cascadeAcrossWorkflows',
+];
+
 // ── Planning helpers (used by `selectAffectedTasks` callbacks below) ──
 
 function taskMap(tasks: readonly TaskState[]): Map<string, TaskState> {
@@ -185,6 +196,13 @@ function taskAndDescendants(
   const root = byId.get(taskId);
   if (!root) return [];
   return [root, ...descendantsOf(taskId, byId, stop)];
+}
+
+function taskDescendantsOnly(
+  taskId: string,
+  tasks: readonly TaskState[],
+): TaskState[] {
+  return descendantsOf(taskId, taskMap(tasks));
 }
 
 function retryStop(task: TaskState): boolean {
@@ -246,6 +264,14 @@ export const ACTION_SPECS: Readonly<Record<InvalidationAction, ActionSpec>> = Ob
     mode: 'recreate',
     reason: 'task.recreate',
     selectAffectedTasks: ({ targetId, tasks }) => taskAndDescendants(targetId, tasks),
+  },
+  recreateDownstream: {
+    scope: 'task',
+    stages: DOWNSTREAM_INVALIDATING_STAGES,
+    cascadesAcrossWorkflows: true,
+    mode: 'recreate',
+    reason: 'task.recreateDownstream',
+    selectAffectedTasks: ({ targetId, tasks }) => taskDescendantsOnly(targetId, tasks),
   },
   retryWorkflow: {
     scope: 'workflow',
@@ -327,6 +353,16 @@ const STAGE_HANDLERS: Readonly<Record<InvalidationStage, StageHandler>> = Object
     await deps.cancelInFlight(ctx.scope, ctx.id);
     return ctx;
   },
+  cancelDownstreamInFlight: async (ctx, deps) => {
+    if (!deps.cancelDownstreamInFlight) {
+      throw new Error(
+        "applyInvalidation: 'cancelDownstreamInFlight' dep is missing for recreateDownstream. " +
+          'Provide deps.cancelDownstreamInFlight so the selected task is preserved.',
+      );
+    }
+    await deps.cancelDownstreamInFlight(ctx.scope, ctx.id);
+    return ctx;
+  },
   applyPrimitive: async (ctx, deps) => {
     const started = await invokePrimitive(ctx, deps);
     // Preserve referential identity with the dep's return value:
@@ -377,6 +413,17 @@ async function invokePrimitive(
       return await deps.retryTask(ctx.id);
     case 'recreateTask':
       return await deps.recreateTask(ctx.id);
+    case 'recreateDownstream': {
+      if (!deps.recreateDownstream) {
+        throw new Error(
+          "applyInvalidation: 'recreateDownstream' dep is missing. " +
+            'Production callers wire this via buildInvalidationDeps in ' +
+            '@invoker/app/workflow-actions; tests must supply ' +
+            'deps.recreateDownstream to use this action.',
+        );
+      }
+      return await deps.recreateDownstream(ctx.id);
+    }
     case 'retryWorkflow':
       return await deps.retryWorkflow(ctx.id);
     case 'recreateWorkflow':
@@ -425,6 +472,8 @@ export interface InvalidationDepsOrchestrator {
   cancelWorkflow(workflowId: string): { runningCancelled: string[] };
   retryTask(taskId: string): TaskState[];
   recreateTask(taskId: string): TaskState[];
+  recreateDownstream(taskId: string): TaskState[];
+  cancelTaskDependentsForInvalidation(taskId: string): { runningCancelled: string[] };
   retryWorkflow(workflowId: string): TaskState[];
   recreateWorkflow(workflowId: string): TaskState[];
   recreateWorkflowFromFreshBase(workflowId: string): Promise<TaskState[]>;
@@ -485,8 +534,15 @@ export function buildOrchestratorOnlyInvalidationDeps(
 ): InvalidationDeps {
   return {
     cancelInFlight: buildCancelInFlight({ orchestrator }),
+    cancelDownstreamInFlight: buildCancelInFlight({
+      orchestrator: {
+        cancelTask: (taskId) => orchestrator.cancelTaskDependentsForInvalidation(taskId),
+        cancelWorkflow: (workflowId) => orchestrator.cancelWorkflow(workflowId),
+      },
+    }),
     retryTask: (taskId) => orchestrator.retryTask(taskId),
     recreateTask: (taskId) => orchestrator.recreateTask(taskId),
+    recreateDownstream: (taskId) => orchestrator.recreateDownstream(taskId),
     retryWorkflow: (workflowId) => orchestrator.retryWorkflow(workflowId),
     recreateWorkflow: (workflowId) => orchestrator.recreateWorkflow(workflowId),
     recreateWorkflowFromFreshBase: (workflowId) =>

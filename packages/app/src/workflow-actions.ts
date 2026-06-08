@@ -545,10 +545,23 @@ export function buildInvalidationDeps(deps: BuildInvalidationDepsArgs): Invalida
     orchestrator: deps.orchestrator,
     taskExecutor: deps.taskExecutor,
   });
+  const cancelDownstreamInFlight = buildCoreCancelInFlight({
+    orchestrator: {
+      cancelTask: (taskId: string) => deps.orchestrator.cancelTaskDependentsForInvalidation(taskId),
+      cancelWorkflow: (workflowId: string) => deps.orchestrator.cancelWorkflow(workflowId),
+    },
+    killActiveExecution: async (id) => {
+      const taskExecutor = resolveTaskExecutor(deps.taskExecutor);
+      if (!taskExecutor) return;
+      await taskExecutor.killActiveExecution(id);
+    },
+  });
   return {
     cancelInFlight,
+    cancelDownstreamInFlight,
     retryTask: (taskId: string) => deps.orchestrator.retryTask(taskId),
     recreateTask: (taskId: string) => deps.orchestrator.recreateTask(taskId),
+    recreateDownstream: (taskId: string) => deps.orchestrator.recreateDownstream(taskId),
     retryWorkflow: (workflowId: string) => deps.orchestrator.retryWorkflow(workflowId),
     recreateWorkflow: (workflowId: string) =>
       bumpGenerationAndRecreate(workflowId, {
