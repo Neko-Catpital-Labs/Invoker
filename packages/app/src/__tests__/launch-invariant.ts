@@ -22,6 +22,7 @@
  */
 
 import type { PersistenceAdapter, TaskEvent } from '@invoker/data-store';
+import { DISPATCH_LEASE_MS, DISPATCH_MAX_ATTEMPTS } from '@invoker/contracts';
 
 export const LAUNCH_CLAIM_EVENT_TYPE = 'task.launch_claimed';
 
@@ -35,13 +36,13 @@ export const TERMINAL_LAUNCH_EVENT_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Default upper bound on the gap between `task.launch_claimed` and the
- * next terminal launch event. Matches `3 * DISPATCH_LEASE_MS *
- * DISPATCH_MAX_ATTEMPTS` (= 270 s with the proposed dispatch defaults of
- * 30 s lease and 3 attempts). Tests that drive a deterministic in-memory
+ * Default upper bound on the gap between `task.launch_claimed` and the next
+ * terminal launch event. It follows the fixed dispatch crash-recovery window
+ * with a small scheduler buffer. Tests that drive a deterministic in-memory
  * scenario should pass a tighter bound.
  */
-export const DEFAULT_LAUNCH_INVARIANT_MAX_GAP_MS = 270_000;
+export const DEFAULT_LAUNCH_INVARIANT_MAX_GAP_MS =
+  DISPATCH_LEASE_MS * DISPATCH_MAX_ATTEMPTS + 30_000;
 
 export type LaunchInvariantPersistence = Pick<
   PersistenceAdapter,

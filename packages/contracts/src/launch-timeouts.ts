@@ -12,6 +12,6 @@
 
 export const ATTEMPT_LEASE_MS = 20 * 60 * 1000;
 
-export const DISPATCH_LEASE_MS = 30_000;
+export const DISPATCH_LEASE_MS = 12 * 60 * 1000;
 
 export const DISPATCH_MAX_ATTEMPTS = 3;
