@@ -66,10 +66,24 @@ export function ContextMenu({
 
   // Auto-focus first enabled item on mount
   useEffect(() => {
+    menuRef.current?.focus({ preventScroll: true });
     if (firstEnabledIndex >= 0) {
       setFocusedIndex(firstEnabledIndex);
     }
   }, [firstEnabledIndex]);
+
+  // The "More" entry sits after the rendered items in the keyboard navigation
+  // order, so ArrowDown reaches it and ArrowUp wraps to it.
+  const moreIndex = hasMoreButton ? renderedItems.length : -1;
+
+  // Expand the danger zone and move the highlight to the first enabled danger
+  // action so the keyboard user lands on a deterministic, actionable item.
+  const expandMore = () => {
+    setShowMore(true);
+    const firstDangerEnabled = dangerItems.findIndex((item) => item.enabled);
+    const target = firstDangerEnabled >= 0 ? safeItems.length + firstDangerEnabled : firstEnabledIndex;
+    setFocusedIndex(target >= 0 ? target : 0);
+  };
 
   // Viewport clamping: flip if menu overflows bottom or right
   useLayoutEffect(() => {
@@ -138,19 +152,29 @@ export function ContextMenu({
     const enabledIndices = renderedItems
       .map((item, idx) => (item.enabled ? idx : -1))
       .filter((idx) => idx >= 0);
+    if (moreIndex >= 0) {
+      enabledIndices.push(moreIndex);
+    }
 
     if (e.key === 'ArrowDown') {
       e.preventDefault();
+      e.stopPropagation();
       const currentPos = enabledIndices.indexOf(focusedIndex);
       const nextPos = (currentPos + 1) % enabledIndices.length;
       setFocusedIndex(enabledIndices[nextPos]);
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
+      e.stopPropagation();
       const currentPos = enabledIndices.indexOf(focusedIndex);
       const prevPos = (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
       setFocusedIndex(enabledIndices[prevPos]);
     } else if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
+      e.stopPropagation();
+      if (focusedIndex === moreIndex) {
+        expandMore();
+        return;
+      }
       const item = renderedItems[focusedIndex];
       if (item?.enabled) {
         handleItemClick(item);
@@ -254,8 +278,11 @@ export function ContextMenu({
           <div className="border-t border-gray-600 my-1" />
           <button
             role="menuitem"
-            className="w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
-            onClick={() => setShowMore(true)}
+            className={`w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 ${
+              focusedIndex === moreIndex ? 'bg-gray-700' : ''
+            }`}
+            onClick={expandMore}
+            onMouseEnter={() => setFocusedIndex(moreIndex)}
           >
             More
           </button>
