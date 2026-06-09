@@ -82,7 +82,7 @@ query_action_graph_value() {
 sqlite_schema_ready() {
   [[ -f "$DB_DIR/invoker.db" ]] || return 1
   local exists
-  exists="$(sqlite3 -noheader "$DB_DIR/invoker.db" "select count(*) from sqlite_master where type='table' and name='tasks';" 2>/dev/null || true)"
+  exists="$(query_sqlite_value "select count(*) from sqlite_master where type='table' and name='tasks';" 2>/dev/null || true)"
   [[ "$exists" == "1" ]]
 }
 
@@ -215,12 +215,12 @@ EOF
 
   case "$mode" in
     recreate)
-      HOME="$HOME_DIR" INVOKER_DB_DIR="$DB_DIR" INVOKER_IPC_SOCKET="$IPC_SOCKET_PATH" NODE_ENV=test "$ELECTRON_BIN" "$MAIN_JS" --headless recreate "$WORKFLOW_ID" \
+      HOME="$HOME_DIR" INVOKER_DB_DIR="$DB_DIR" INVOKER_IPC_SOCKET="$IPC_SOCKET_PATH" NODE_ENV=test "$ELECTRON_BIN" "$MAIN_JS" --headless --no-track recreate "$WORKFLOW_ID" \
         >"$RESET_STDOUT" 2>"$RESET_STDERR" &
       RESET_WRAPPER_PID=$!
       ;;
     retry-task)
-      HOME="$HOME_DIR" INVOKER_DB_DIR="$DB_DIR" INVOKER_IPC_SOCKET="$IPC_SOCKET_PATH" NODE_ENV=test "$ELECTRON_BIN" "$MAIN_JS" --headless retry-task "$PREPARE_ID" \
+      HOME="$HOME_DIR" INVOKER_DB_DIR="$DB_DIR" INVOKER_IPC_SOCKET="$IPC_SOCKET_PATH" NODE_ENV=test "$ELECTRON_BIN" "$MAIN_JS" --headless --no-track retry-task "$PREPARE_ID" \
         >"$RESET_STDOUT" 2>"$RESET_STDERR" &
       RESET_WRAPPER_PID=$!
       ;;
@@ -234,7 +234,11 @@ EOF
 
   local observed=0
   local deadline
-  deadline=$(( $(date +%s) + TIMEOUT_SECONDS ))
+  local observation_timeout="$TIMEOUT_SECONDS"
+  if [[ "$EXPECT" == "fixed" && "$TIMEOUT_SECONDS" -gt 15 ]]; then
+    observation_timeout=15
+  fi
+  deadline=$(( $(date +%s) + observation_timeout ))
   while (( $(date +%s) < deadline )); do
     local late_status mid_status
     late_status="$(query_action_graph_value task-status "$LATE_ID" || true)"
