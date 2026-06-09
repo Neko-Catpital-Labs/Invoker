@@ -35,10 +35,19 @@ function delegationClientLog(message: string): void {
   process.stderr.write(`[headless-client] ${message}\n`);
 }
 
-function electronCommandArgs(args: string[]): string[] {
+export function electronCommandArgs(args: string[], platform: NodeJS.Platform = process.platform): string[] {
   const mainJs = resolve(__dirname, 'main.js');
   return [
-    ...(process.platform === 'linux' ? ['--no-sandbox'] : []),
+    ...(platform === 'linux'
+      ? [
+          '--no-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
+          '--disable-gpu-compositing',
+          '--disable-gpu-sandbox',
+          '--disable-software-rasterizer',
+        ]
+      : []),
     mainJs,
     '--headless',
     ...args,

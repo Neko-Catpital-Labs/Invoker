@@ -460,10 +460,12 @@ describe('TaskRunner', () => {
           mergeTask,
         ];
         const setTaskReviewReady = vi.fn();
+        const autoStartExternallyUnblockedReadyTasksMock = vi.fn(() => []);
         const orchestrator = {
           getTask: (id: string) => allTasks.find(t => t.id === id),
           getAllTasks: () => allTasks,
           setTaskReviewReady,
+          autoStartExternallyUnblockedReadyTasks: autoStartExternallyUnblockedReadyTasksMock,
           startExecution: vi.fn(() => []),
         };
         const updateAttempt = vi.fn();
@@ -520,6 +522,7 @@ describe('TaskRunner', () => {
             }),
           }),
         );
+        expect(autoStartExternallyUnblockedReadyTasksMock).toHaveBeenCalled();
       } finally {
         vi.useRealTimers();
       }
@@ -1610,6 +1613,8 @@ describe('TaskRunner', () => {
         getAllTasks: () => allTasks,
         handleWorkerResponse: vi.fn(),
         setTaskAwaitingApproval: vi.fn(),
+        setTaskReviewReady: vi.fn(),
+        autoStartExternallyUnblockedReadyTasks: vi.fn(() => []),
       };
 
       const persistence = {
@@ -1994,6 +1999,8 @@ describe('TaskRunner', () => {
         getAllTasks: () => allTasks,
         handleWorkerResponse: vi.fn(),
         setTaskAwaitingApproval: vi.fn(),
+        setTaskReviewReady: vi.fn(),
+        autoStartExternallyUnblockedReadyTasks: vi.fn(() => []),
       };
 
       const persistence = {
@@ -2114,8 +2121,8 @@ describe('TaskRunner', () => {
         }),
       );
 
-      // Task set to awaiting_approval with PR metadata
-      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-pub', expect.objectContaining({
+      // Task set to review_ready with PR metadata
+      expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-pub', expect.objectContaining({
         execution: expect.objectContaining({
           branch: 'plan/feature',
           reviewUrl: 'https://github.com/owner/repo/pull/99',
@@ -2154,11 +2161,11 @@ describe('TaskRunner', () => {
       expect(persistence.updateTask).toHaveBeenCalledWith('__merge__wf-pub', expect.objectContaining({
         execution: expect.objectContaining({ reviewUrl: 'https://github.com/owner/repo/pull/100' }),
       }));
-      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalled();
+      expect(orchestrator.setTaskReviewReady).toHaveBeenCalled();
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
     });
 
-    it('no featureBranch: early exit with setTaskAwaitingApproval', async () => {
+    it('no featureBranch: early exit with setTaskReviewReady', async () => {
       const { executor, mergeTask, orchestrator, gitCalls } = setupPublishAfterFix({
         featureBranch: undefined,
         gateWorkspacePath: '/tmp/gate-clone',
@@ -2166,7 +2173,7 @@ describe('TaskRunner', () => {
 
       await executor.publishAfterFix(mergeTask);
 
-      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-pub', expect.objectContaining({
+      expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-pub', expect.objectContaining({
         config: expect.objectContaining({ runnerKind: 'worktree' }),
         execution: expect.objectContaining({ workspacePath: '/tmp/gate-clone' }),
       }));
@@ -2214,7 +2221,7 @@ describe('TaskRunner', () => {
           }),
         }),
       }));
-      expect(orchestrator.setTaskAwaitingApproval).not.toHaveBeenCalled();
+      expect(orchestrator.setTaskReviewReady).not.toHaveBeenCalled();
     });
 
     it('detach-HEAD sequence: exact order regression test', async () => {
@@ -3962,6 +3969,8 @@ describe('TaskRunner', () => {
         getAllTasks: () => allTasks,
         handleWorkerResponse: vi.fn(() => []),
         setTaskAwaitingApproval: vi.fn(),
+        setTaskReviewReady: vi.fn(),
+        autoStartExternallyUnblockedReadyTasks: vi.fn(() => []),
       };
       const persistence = {
         loadWorkflow: () => ({
@@ -4037,6 +4046,8 @@ describe('TaskRunner', () => {
         getAllTasks: () => allTasks,
         handleWorkerResponse: vi.fn(() => []),
         setTaskAwaitingApproval: vi.fn(),
+        setTaskReviewReady: vi.fn(),
+        autoStartExternallyUnblockedReadyTasks: vi.fn(() => []),
       };
       const persistence = {
         loadWorkflow: () => ({
