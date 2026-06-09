@@ -140,7 +140,8 @@ async function delegateReadOnlyQuery(
 ): Promise<boolean> {
   const isUiPerf = args[0] === 'query' && args[1] === 'ui-perf';
   const isQueue = (args[0] === 'query' && args[1] === 'queue') || args[0] === 'queue';
-  if (!isUiPerf && !isQueue) {
+  const isActionGraph = args[0] === 'query' && args[1] === 'action-graph';
+  if (!isUiPerf && !isQueue && !isActionGraph) {
     return false;
   }
 
@@ -153,7 +154,9 @@ async function delegateReadOnlyQuery(
   if (!ownerResult.resolved) {
     throw new Error(isUiPerf
       ? 'query ui-perf requires a running shared owner process'
-      : 'query queue requires a running shared owner process');
+      : isActionGraph
+        ? 'query action-graph requires a running shared owner process'
+        : 'query queue requires a running shared owner process');
   }
 
   let messageBus = ownerResult.bus;
@@ -163,6 +166,8 @@ async function delegateReadOnlyQuery(
     if (isUiPerf) {
       const reset = args.includes('--reset');
       response = await tryDelegateQueryUiPerf(messageBus, reset, READ_ONLY_QUERY_REQUEST_TIMEOUT_MS);
+    } else if (isActionGraph) {
+      response = await tryDelegateQuery(messageBus, { kind: 'action-graph' }, READ_ONLY_QUERY_REQUEST_TIMEOUT_MS);
     } else {
       response = await tryDelegateQuery(messageBus, { kind: 'queue' }, READ_ONLY_QUERY_REQUEST_TIMEOUT_MS);
     }
@@ -175,9 +180,11 @@ async function delegateReadOnlyQuery(
   if (!response) {
     throw new Error(isUiPerf
       ? 'Live owner is present but did not serve ui-perf query'
-      : 'Live owner is present but did not serve queue query');
+      : isActionGraph
+        ? 'Live owner is present but did not serve action-graph query'
+        : 'Live owner is present but did not serve queue query');
   }
-  if (isUiPerf) {
+  if (isUiPerf || isActionGraph) {
     process.stdout.write(`${JSON.stringify(response)}\n`);
     return true;
   }
