@@ -10,7 +10,7 @@ if (!dbPath || sqlParts.length === 0) {
 }
 
 const sql = sqlParts.join(' ');
-const require = createRequire(new URL('../../packages/data-store/package.json', import.meta.url));
+const require = createRequire(new URL('../../packages/app/package.json', import.meta.url));
 const initSqlJs = require('sql.js');
 const SQL = await initSqlJs();
 const db = new SQL.Database(readFileSync(dbPath));
