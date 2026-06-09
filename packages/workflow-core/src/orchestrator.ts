@@ -63,6 +63,37 @@ function isActiveForInvalidation(status: TaskStatus): boolean {
   );
 }
 
+// Shared shape for transitions that make a task runnable again.
+function pendingResetChanges(changes: Omit<TaskStateChanges, 'status'> = {}): TaskStateChanges {
+  return {
+    status: 'pending',
+    ...(changes.config !== undefined ? { config: changes.config } : {}),
+    ...(changes.dependencies !== undefined ? { dependencies: changes.dependencies } : {}),
+    execution: {
+      blockedBy: undefined,
+      autoFixAttempts: 0,
+      startedAt: undefined,
+      completedAt: undefined,
+      error: undefined,
+      exitCode: undefined,
+      commit: undefined,
+      branch: undefined,
+      workspacePath: undefined,
+      lastHeartbeatAt: undefined,
+      phase: undefined,
+      launchStartedAt: undefined,
+      launchCompletedAt: undefined,
+      reviewUrl: undefined,
+      reviewId: undefined,
+      reviewStatus: undefined,
+      reviewProviderId: undefined,
+      agentSessionId: undefined,
+      containerId: undefined,
+      ...changes.execution,
+    },
+  };
+}
+
 import { getTransitiveDependents } from '@invoker/workflow-graph';
 import { ActionGraph } from '@invoker/workflow-graph';
 import {
@@ -826,37 +857,17 @@ export class Orchestrator {
    */
   private knownFreshBaseCommits = new Map<string, string>();
 
-  private static readonly DETACH_RESET_CHANGES: TaskStateChanges = {
-    status: 'pending',
+  private static readonly DETACH_RESET_CHANGES: TaskStateChanges = pendingResetChanges({
     config: { summary: undefined },
     execution: {
-      autoFixAttempts: 0,
-      blockedBy: undefined,
-      startedAt: undefined,
-      completedAt: undefined,
-      error: undefined,
-      exitCode: undefined,
-      commit: undefined,
-      branch: undefined,
-      workspacePath: undefined,
       pendingFixError: undefined,
       inputPrompt: undefined,
-      lastHeartbeatAt: undefined,
-      phase: undefined,
-      launchStartedAt: undefined,
-      launchCompletedAt: undefined,
       isFixingWithAI: false,
-      reviewUrl: undefined,
-      reviewId: undefined,
-      reviewStatus: undefined,
-      reviewProviderId: undefined,
       fixedIntegrationSha: undefined,
       fixedIntegrationRecordedAt: undefined,
       fixedIntegrationSource: undefined,
-      agentSessionId: undefined,
-      containerId: undefined,
     },
-  };
+  });
 
   constructor(config: OrchestratorConfig) {
     this.maxConcurrency = config.maxConcurrency ?? 3;
@@ -1392,28 +1403,14 @@ export class Orchestrator {
       supersedesAttemptId: activeAttempt?.id,
     });
 
-    const changes = this.withBumpedExecutionGeneration(task, {
-      status: 'pending',
+    const changes = this.withBumpedExecutionGeneration(task, pendingResetChanges({
       execution: {
         selectedAttemptId: freshAttempt.id,
-        phase: undefined,
-        startedAt: undefined,
-        completedAt: undefined,
-        launchStartedAt: undefined,
-        launchCompletedAt: undefined,
-        lastHeartbeatAt: undefined,
-        error: undefined,
-        exitCode: undefined,
-        branch: undefined,
-        commit: undefined,
         inputPrompt: undefined,
         pendingFixError: undefined,
-        agentSessionId: undefined,
-        workspacePath: undefined,
-        containerId: undefined,
         isFixingWithAI: false,
       },
-    });
+    }));
 
     let updated!: TaskState;
     this.taskRepository.runInTransaction(() => {
@@ -2285,31 +2282,18 @@ export class Orchestrator {
       });
     }
 
-    const resetChanges: TaskStateChanges = {
-      status: 'pending',
+    const resetChanges: TaskStateChanges = pendingResetChanges({
       config: { summary: undefined },
       execution: {
-        autoFixAttempts: 0,
-        startedAt: undefined,
-        completedAt: undefined,
-        error: undefined,
-        exitCode: undefined,
         pendingFixError: undefined,
-        commit: undefined,
-        lastHeartbeatAt: undefined,
-        launchStartedAt: undefined,
-        launchCompletedAt: undefined,
-        phase: undefined,
         isFixingWithAI: false,
-        agentSessionId: undefined,
-        containerId: undefined,
       },
-    };
+    });
     const t0 = this.stateGetTask(id)!;
     this.logger.info('[agent-session-trace] retryTask: before writeAndSync', {
       taskId: id,
       agentSessionId: t0.execution.agentSessionId ?? 'null',
-      note: 'reset clears agentSessionId/containerId; branch/workspacePath unchanged',
+      note: 'reset clears stale launch/session/workspace metadata',
     });
     const { affectedIds } = this.resetSubgraphToPending([id], resetChanges, {
       forceResetIds: new Set([id]),
@@ -2409,24 +2393,13 @@ export class Orchestrator {
     });
     this.lastInvalidationPlan = plan;
 
-    const resetChanges: TaskStateChanges = {
-      status: 'pending',
+    const resetChanges: TaskStateChanges = pendingResetChanges({
       config: { summary: undefined },
       execution: {
-        autoFixAttempts: 0,
-        startedAt: undefined,
-        completedAt: undefined,
-        error: undefined,
-        exitCode: undefined,
         pendingFixError: undefined,
-        phase: undefined,
-        launchStartedAt: undefined,
-        launchCompletedAt: undefined,
         isFixingWithAI: false,
-        // Preserve branch/commit/workspacePath — they contain valid work context
-        // Only clear error-related and timing fields
       },
-    };
+    });
 
     const retryRootIds = allTasks
       .filter((task) => retryStatuses.has(task.status))
@@ -2496,30 +2469,9 @@ export class Orchestrator {
     const toResetIds = plan.affectedTaskIds;
     const toResetSet = new Set(toResetIds);
 
-    const resetChanges: TaskStateChanges = {
-      status: 'pending',
+    const resetChanges: TaskStateChanges = pendingResetChanges({
       config: { summary: undefined },
-      execution: {
-        autoFixAttempts: 0,
-        startedAt: undefined,
-        completedAt: undefined,
-        error: undefined,
-        exitCode: undefined,
-        commit: undefined,
-        branch: undefined,
-        workspacePath: undefined,
-        lastHeartbeatAt: undefined,
-        phase: undefined,
-        launchStartedAt: undefined,
-        launchCompletedAt: undefined,
-        reviewUrl: undefined,
-        reviewId: undefined,
-        reviewStatus: undefined,
-        reviewProviderId: undefined,
-        agentSessionId: undefined,
-        containerId: undefined,
-      },
-    };
+    });
 
     this.logger.info('[orchestrator] recreateTask reset', {
       taskId: rootId,
@@ -2575,30 +2527,9 @@ export class Orchestrator {
     });
     this.lastInvalidationPlan = plan;
 
-    const resetChanges: TaskStateChanges = {
-      status: 'pending',
+    const resetChanges: TaskStateChanges = pendingResetChanges({
       config: { summary: undefined, poolMemberId: undefined },
-      execution: {
-        autoFixAttempts: 0,
-        startedAt: undefined,
-        completedAt: undefined,
-        error: undefined,
-        exitCode: undefined,
-        commit: undefined,
-        branch: undefined,
-        workspacePath: undefined,
-        lastHeartbeatAt: undefined,
-        phase: undefined,
-        launchStartedAt: undefined,
-        launchCompletedAt: undefined,
-        reviewUrl: undefined,
-        reviewId: undefined,
-        reviewStatus: undefined,
-        reviewProviderId: undefined,
-        agentSessionId: undefined,
-        containerId: undefined,
-      },
-    };
+    });
 
     this.logger.info('[orchestrator] recreateWorkflow reset', {
       workflowId,
@@ -4731,17 +4662,7 @@ export class Orchestrator {
           taskId,
         });
         this.replaceSelectedAttempt(task, { status: 'pending' });
-        this.writeAndSync(taskId, {
-          status: 'pending',
-          execution: {
-            startedAt: undefined,
-            completedAt: undefined,
-            lastHeartbeatAt: undefined,
-            launchStartedAt: undefined,
-            launchCompletedAt: undefined,
-            phase: undefined,
-          },
-        });
+        this.writeAndSync(taskId, pendingResetChanges());
         task = this.stateGetTask(taskId);
         if (!task) continue;
       }
@@ -4836,18 +4757,7 @@ export class Orchestrator {
       if (this.getExternalDependencyBlocker(task) !== undefined) continue;
 
       this.replaceSelectedAttempt(task, { status: 'pending' });
-      this.writeAndSync(task.id, {
-        status: 'pending',
-        execution: {
-          blockedBy: undefined,
-          startedAt: undefined,
-          completedAt: undefined,
-          lastHeartbeatAt: undefined,
-          launchStartedAt: undefined,
-          launchCompletedAt: undefined,
-          phase: undefined,
-        },
-      });
+      this.writeAndSync(task.id, pendingResetChanges());
       this.enqueueIfNotScheduled(task.id);
     }
     return this.drainScheduler();

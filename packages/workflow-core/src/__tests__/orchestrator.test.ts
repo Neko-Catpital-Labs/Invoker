@@ -3014,6 +3014,7 @@ describe('Orchestrator', () => {
           testPlan: 'durable test plan',
         },
         execution: {
+          blockedBy: 'stale external blocker',
           phase: 'launching',
           startedAt,
           completedAt,
@@ -3047,6 +3048,7 @@ describe('Orchestrator', () => {
       expect(persistence.loadAttempt(newAttemptId)?.status).toBe('pending');
       expect(persistence.loadAttempt(newAttemptId)?.supersedesAttemptId).toBe(oldAttemptId);
       expect(prepared.execution.phase).toBeUndefined();
+      expect(prepared.execution.blockedBy).toBeUndefined();
       expect(prepared.execution.startedAt).toBeUndefined();
       expect(prepared.execution.completedAt).toBeUndefined();
       expect(prepared.execution.launchStartedAt).toBeUndefined();
@@ -3069,10 +3071,10 @@ describe('Orchestrator', () => {
       expect(prepared.config.approach).toBe('durable approach');
       expect(prepared.config.testPlan).toBe('durable test plan');
       expect(prepared.dependencies).toEqual([sid(orchestrator, 0, 't0')]);
-      expect(prepared.execution.reviewUrl).toBe('https://example.test/review');
-      expect(prepared.execution.reviewId).toBe('review-1');
-      expect(prepared.execution.reviewStatus).toBe('open');
-      expect(prepared.execution.reviewProviderId).toBe('provider-1');
+      expect(prepared.execution.reviewUrl).toBeUndefined();
+      expect(prepared.execution.reviewId).toBeUndefined();
+      expect(prepared.execution.reviewStatus).toBeUndefined();
+      expect(prepared.execution.reviewProviderId).toBeUndefined();
       expect(persistence.loadAttempt(newAttemptId)?.upstreamAttemptIds).toEqual([depAttemptId]);
       expect(persistence.events.at(-1)).toEqual({
         taskId,
@@ -3996,7 +3998,7 @@ describe('Orchestrator', () => {
       retrySpy.mockRestore();
     });
 
-    it('preserves valid lineage (branch / workspacePath) — retry-class does NOT discard substrate lineage', () => {
+    it('clears lineage when retry-class reset prepares a fresh task run', () => {
       orchestrator.loadPlan({
         name: 'edit-type-lineage-test',
         tasks: [{ id: 't1', description: 'Task 1', command: 'echo old' , dockerImage: 'node:20' }],
@@ -4022,10 +4024,10 @@ describe('Orchestrator', () => {
       orchestrator.editTaskType(taskId, 'worktree');
 
       const task = orchestrator.getTask(taskId)!;
-      // ── Preserved (chart says substrate-only change keeps these) ──
-      expect(task.execution.branch).toBe('experiment/preserved-branch');
-      expect(task.execution.workspacePath).toBe('/tmp/preserved-workspace');
-      // ── Cleared (volatile attempt state per retryTask reset shape) ──
+      // ── Cleared by the shared pending reset shape ──
+      expect(task.execution.branch).toBeUndefined();
+      expect(task.execution.workspacePath).toBeUndefined();
+      expect(task.execution.commit).toBeUndefined();
       expect(task.execution.agentSessionId).toBeUndefined();
       expect(task.execution.containerId).toBeUndefined();
       expect(task.execution.error).toBeUndefined();
@@ -4287,7 +4289,7 @@ describe('Orchestrator', () => {
       expect(task.execution.workspacePath).toBeUndefined();
     });
 
-    it('same-host ssh:A → ssh:A is RETRY-class — preserves branch/workspacePath (regression of Step 5)', () => {
+    it('same-host ssh:A → ssh:A is RETRY-class and clears stale branch/workspacePath', () => {
       orchestrator.loadPlan({
         name: 'edit-type-step6-same-ssh',
         tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', poolId: 'ssh-light' }],
@@ -4319,12 +4321,9 @@ describe('Orchestrator', () => {
       const task = orchestrator.getTask(taskId)!;
       expect(task.config.runnerKind).toBe('ssh');
       expect(task.config.poolMemberId).toBe('remote_a');
-      // Same host (ssh:A → ssh:A) — substrate-only retry-class
-      // preserves workspace lineage even though the call exercised the
-      // SSH path.
-      expect(task.execution.branch).toBe('experiment/preserved-branch');
-      expect(task.execution.workspacePath).toBe('/remote/preserved-workspace');
-      // ── Volatile attempt state still cleared by the retry reset ──
+      expect(task.execution.branch).toBeUndefined();
+      expect(task.execution.workspacePath).toBeUndefined();
+      expect(task.execution.commit).toBeUndefined();
       expect(task.execution.agentSessionId).toBeUndefined();
       expect(task.execution.containerId).toBeUndefined();
     });
@@ -5620,7 +5619,7 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('t1')!.status).toBe('running');
     });
 
-    it('restartTask clears commit but preserves branch and workspacePath', () => {
+    it('restartTask clears stale workspace lineage', () => {
       const hydratePersistence = new InMemoryPersistence();
       const hydrateBus = new InMemoryBus();
 
@@ -5651,8 +5650,8 @@ describe('Orchestrator', () => {
 
       const task = testOrchestrator.getTask('t1')!;
       expect(task.execution.commit).toBeUndefined();
-      expect(task.execution.branch).toBe('feature/test');
-      expect(task.execution.workspacePath).toBe('/tmp/workspace');
+      expect(task.execution.branch).toBeUndefined();
+      expect(task.execution.workspacePath).toBeUndefined();
     });
 
     it('fan-in C stays pending when only one failed root is restarted', () => {
@@ -6259,7 +6258,7 @@ describe('Orchestrator', () => {
       p.saveTask(wfId, {
         id: 'b', description: 'Task B', status: 'blocked',
         dependencies: ['a'], createdAt: new Date(),
-        config: { workflowId: wfId }, execution: {},
+        config: { workflowId: wfId }, execution: { blockedBy: 'waiting on old gate' },
       });
       p.saveTask(wfId, {
         id: `__merge__${wfId}`, description: 'Merge gate', status: 'pending',
@@ -6275,6 +6274,7 @@ describe('Orchestrator', () => {
       // B was blocked but its dep (A) is completed → should become running
       const bTask = o.getTask('b')!;
       expect(bTask.status).toBe('running');
+      expect(bTask.execution.blockedBy).toBeUndefined();
       expect(started.some(t => t.id === 'b')).toBe(true);
     });
 
@@ -6561,7 +6561,7 @@ describe('Orchestrator', () => {
       expect(o.getTask('root-exp-fix-conservative-exp-fix-refactor')!.status).toBe('pending');
     });
 
-    it('preserves branch/commit/workspacePath on reset tasks', () => {
+    it('clears branch/commit/workspacePath on reset tasks', () => {
       const p = new InMemoryPersistence();
       const b = new InMemoryBus();
       const wfId = 'wf-retry-preserve';
@@ -6584,11 +6584,9 @@ describe('Orchestrator', () => {
       o.retryWorkflow(wfId);
 
       const a = o.getTask('a')!;
-      // Branch/commit/workspacePath should be preserved
-      expect(a.execution.branch).toBe('br-a');
-      expect(a.execution.commit).toBe('abc123');
-      expect(a.execution.workspacePath).toBe('/tmp/ws');
-      // Error/exitCode should be cleared
+      expect(a.execution.branch).toBeUndefined();
+      expect(a.execution.commit).toBeUndefined();
+      expect(a.execution.workspacePath).toBeUndefined();
       expect(a.execution.error).toBeUndefined();
       expect(a.execution.exitCode).toBeUndefined();
     });
@@ -6656,8 +6654,8 @@ describe('Orchestrator', () => {
       });
     }
 
-    describe('retryWorkflow preserves lineage and bumps per-task execution generation', () => {
-      it('keeps branch/workspacePath on the reset task', () => {
+    describe('retryWorkflow clears reset lineage and bumps per-task execution generation', () => {
+      it('clears branch/workspacePath on the reset task', () => {
         const p = new InMemoryPersistence();
         const b = new InMemoryBus();
         const wfId = 'wf-step12-retry-lineage';
@@ -6668,9 +6666,9 @@ describe('Orchestrator', () => {
         o.retryWorkflow(wfId);
 
         const bTask = o.getTask('b')!;
-        expect(bTask.execution.branch).toBe('br-b');
-        expect(bTask.execution.workspacePath).toBe('/wt/b');
-        expect(bTask.execution.commit).toBe('bbb');
+        expect(bTask.execution.branch).toBeUndefined();
+        expect(bTask.execution.workspacePath).toBeUndefined();
+        expect(bTask.execution.commit).toBeUndefined();
         expect(bTask.execution.error).toBeUndefined();
       });
 
@@ -6915,8 +6913,7 @@ describe('Orchestrator', () => {
         });
 
         expect(order).toEqual(['cancelInFlight', 'retryWorkflow']);
-        // Retry-class lineage preserved.
-        expect(o.getTask('b')!.execution.branch).toBe('br-b');
+        expect(o.getTask('b')!.execution.branch).toBeUndefined();
       });
     });
   });
