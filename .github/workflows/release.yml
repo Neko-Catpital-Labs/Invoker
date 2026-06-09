@@ -211,12 +211,22 @@ jobs:
 
       - name: Publish npm packages
         if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          publish_args=(--access public)
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            publish_args+=(--provenance)
-          fi
-          npm publish ./packages/npm-cli "${publish_args[@]}"
-          npm publish ./packages/npm-ui "${publish_args[@]}"
+          publish_if_missing() {
+            local package_dir="$1"
+            local name
+            local version
+
+            name="$(node -p "require('./${package_dir}/package.json').name")"
+            version="$(node -p "require('./${package_dir}/package.json').version")"
+
+            if npm view "${name}@${version}" version >/dev/null 2>&1; then
+              echo "${name}@${version} is already published; skipping"
+              return
+            fi
+
+            npm publish "./${package_dir}" --access public
+          }
+
+          publish_if_missing packages/npm-cli
+          publish_if_missing packages/npm-ui
