@@ -551,6 +551,10 @@ rows = conn.execute(
 def parse_ts(value):
     if not value:
         return None
+    if "T" in value:
+        normalized = value.replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(normalized)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
     return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
 
 stuck = []
