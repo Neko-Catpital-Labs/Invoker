@@ -1662,6 +1662,9 @@ if (isHeadless) {
           }
         }
       }
+      if (ownsHeadlessShutdown && persistence) {
+        persistence.requeueRunningWorkflowMutationIntents();
+      }
       if (persistence) persistence.close();
       if (writerLock) writerLock.release();
       if (messageBus) messageBus.disconnect();
@@ -4551,7 +4554,10 @@ function createEmbeddedTerminalBackendFromConfig(
             }
           }
         }
-        if (persistence) persistence.close();
+        if (persistence) {
+          persistence.requeueRunningWorkflowMutationIntents();
+          persistence.close();
+        }
         if (writerLock) writerLock.release();
         if (messageBus) messageBus.disconnect();
       } finally {

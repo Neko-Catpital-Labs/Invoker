@@ -52,7 +52,7 @@ trap cleanup EXIT
 
 query_sqlite_value() {
   local sql="$1"
-  sqlite3 -noheader "$DB_DIR/invoker.db" "$sql"
+  node "$ROOT_DIR/scripts/repro/sqljs-query.mjs" "$DB_DIR/invoker.db" "$sql"
 }
 
 sqlite_schema_ready() {
@@ -113,6 +113,7 @@ wait_for_intent_status() {
 mkdir -p "$DB_DIR" "$REPO_FIXTURE_DIR"
 
 pushd "$ROOT_DIR" >/dev/null
+export INVOKER_SQLITE_FLUSH_DEBOUNCE_MS=0
 
 if [[ ! -f packages/app/dist/main.js ]]; then
   pnpm --filter @invoker/app build >/dev/null
