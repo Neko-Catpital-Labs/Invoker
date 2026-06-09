@@ -6,7 +6,7 @@
 
 **Persisted workflow orchestration: a DAG of tasks in isolated workspaces, composed through git branches, merge gates, and review.**
 
-Current version: `0.0.3`. Version history lives in [CHANGELOG.md](CHANGELOG.md).
+Current version: `0.0.4`. Version history lives in [CHANGELOG.md](CHANGELOG.md).
 
 ## Overview
 
@@ -57,7 +57,7 @@ invoker-cli run plans/fixtures/hello-world.yaml --standalone
 Or download the platform binary from GitHub Releases:
 
 ```bash
-version=0.0.3
+version=0.0.4
 case "$(uname -s)" in
   Darwin) platform=darwin ;;
   Linux) platform=linux ;;
@@ -77,7 +77,7 @@ chmod +x invoker-cli
 Release checksums are published as `SHA256SUMS`. To verify a downloaded binary:
 
 ```bash
-curl -L -O "https://github.com/Neko-Catpital-Labs/Invoker/releases/download/v0.0.3/SHA256SUMS"
+curl -L -O "https://github.com/Neko-Catpital-Labs/Invoker/releases/download/v0.0.4/SHA256SUMS"
 shasum -a 256 -c SHA256SUMS --ignore-missing
 ```
 
