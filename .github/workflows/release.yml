@@ -211,6 +211,12 @@ jobs:
 
       - name: Publish npm packages
         if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          npm publish ./packages/npm-cli --access public --provenance
-          npm publish ./packages/npm-ui --access public --provenance
+          publish_args=(--access public)
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            publish_args+=(--provenance)
+          fi
+          npm publish ./packages/npm-cli "${publish_args[@]}"
+          npm publish ./packages/npm-ui "${publish_args[@]}"
