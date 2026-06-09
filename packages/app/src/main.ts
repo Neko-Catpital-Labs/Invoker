@@ -44,8 +44,11 @@ import {
 
 const enableTestCompositor = process.env.INVOKER_E2E_ENABLE_COMPOSITOR === '1' || Boolean(process.env.CAPTURE_MODE);
 const hideE2eWindow = process.env.NODE_ENV === 'test' && process.env.INVOKER_E2E_HIDE_WINDOW !== '0';
+const earlyHeadlessMode = process.argv.includes('--headless')
+  || process.argv.includes('--install-skills')
+  || process.argv.slice(2).includes('install-skills');
 
-configureEarlyElectronApp({ app, enableTestCompositor });
+configureEarlyElectronApp({ app, enableTestCompositor, isHeadless: earlyHeadlessMode });
 
 import { Orchestrator, CommandService, OrchestratorErrorCode } from '@invoker/workflow-core';
 import type {
