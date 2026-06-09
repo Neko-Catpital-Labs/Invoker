@@ -25,7 +25,7 @@ import {
   type TaskState,
 } from '@invoker/workflow-core';
 
-const VERSION = '0.0.3';
+const VERSION = '0.0.4';
 
 type CliOptions = {
   dbDir?: string;
