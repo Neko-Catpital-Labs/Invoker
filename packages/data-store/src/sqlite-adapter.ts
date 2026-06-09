@@ -2878,7 +2878,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       ) VALUES (?, ?, ?, ?, 'queued')`,
       [workflowId, channel, JSON.stringify(args), priority],
     );
-    const row = this.queryOne('SELECT last_insert_rowid() AS id');
+    const row = this.queryOne('SELECT MAX(id) AS id FROM workflow_mutation_intents');
     return Number(row?.id ?? 0);
   }
 
