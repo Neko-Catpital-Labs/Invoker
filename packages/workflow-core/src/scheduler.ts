@@ -1,12 +1,12 @@
 /**
  * Priority queue for task scheduling.
  *
- * CC.3: this used to also track a `running` Set + `maxConcurrency`
- * gate, but the durable `task_launch_dispatch` outbox is now the
- * single source of truth for occupancy. The scheduler is reduced to
- * a sorted enqueue / takeNext priority queue plus inspection
- * helpers; concurrency is enforced by `claimLaunchDispatchAtomic`
- * in the SQLite adapter.
+ * INV-143 consumes docs/context/inv-143/experiment-brief.md: the
+ * rejected design kept process-local running state here. The durable
+ * `task_launch_dispatch` outbox is now the single source of truth for
+ * occupancy, so this class stays a sorted enqueue / takeNext priority
+ * queue plus inspection helpers. Concurrency is enforced by
+ * `claimLaunchDispatchAtomic` in the SQLite adapter.
  *
  * No I/O, no Docker, no Git — just a sorted queue.
  * Higher priority numbers come out first.

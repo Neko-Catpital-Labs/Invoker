@@ -76,19 +76,24 @@ describe('headless-client', () => {
 
   // --- Regression: owner endpoint scope for headless.run ---
 
-  it('delegates headless.run to a standalone-capable owner endpoint', async () => {
+  it('delegates submit-plan-compatible headless.run to a standalone-capable owner endpoint', async () => {
     const bus = new LocalBus();
     const runHandler = vi.fn(async () => ({ ok: true }));
     bus.onRequest('headless.run', runHandler);
     bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'standalone' }));
 
+    const ensureStandaloneOwner = vi.fn(async () => {});
+    const runElectronHeadless = vi.fn(async () => 0);
+
     const exitCode = await runHeadlessClientCommand(['run', '/tmp/plan.yaml', '--no-track'], {
       messageBus: bus,
-      ensureStandaloneOwner: vi.fn(async () => {}),
-      runElectronHeadless: vi.fn(async () => 0),
+      ensureStandaloneOwner,
+      runElectronHeadless,
     });
 
     expect(exitCode).toBe(0);
+    expect(ensureStandaloneOwner).not.toHaveBeenCalled();
+    expect(runElectronHeadless).not.toHaveBeenCalled();
     expect(runHandler).toHaveBeenCalledTimes(1);
     expect(runHandler).toHaveBeenCalledWith(expect.objectContaining({ planPath: expect.stringContaining('plan.yaml') }));
   });
