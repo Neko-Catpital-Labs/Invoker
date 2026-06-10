@@ -2609,6 +2609,10 @@ function createEmbeddedTerminalBackendFromConfig(
         if (!mergeTask) return null;
         return { channel: 'headless.exec', request: { args: ['approve', mergeTask.id] } };
       }
+      case 'invoker:check-pr-statuses':
+        return { channel: 'headless.gui-mutation', request: payload };
+      case 'invoker:check-pr-status':
+        return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:resolve-conflict':
         return arg1 === undefined
           ? { channel: 'headless.exec', request: { args: ['resolve-conflict', String(arg0)] } }
