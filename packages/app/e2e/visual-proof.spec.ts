@@ -1608,7 +1608,7 @@ test.describe('Visual proof capture', () => {
     const workspacePath = '/home/invoker/.invoker/worktrees/wf-ssh/experiment-ssh-resume';
     const sessionId = 'codex-session-ssh-123';
     const terminalSessionId = 'visual-proof-ssh-session';
-    const sshInnerCommand = `cd '${workspacePath}' && codex resume ${sessionId}`;
+    const sshInnerCommand = `cd '${workspacePath}' && codex resume --dangerously-bypass-approvals-and-sandbox ${sessionId}`;
     const sshArgs = ['-i', '/tmp/e2e_id_rsa', '-t', 'invoker@remote-do-1', sshInnerCommand];
     const terminalOutput = [
       '$ ssh -i /tmp/e2e_id_rsa -t invoker@remote-do-1\r\n',
@@ -1684,7 +1684,7 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByTestId('terminal-tab-wf-test-1/ssh-resume')).toHaveAttribute('data-active', 'true');
     await expect(page.getByTestId('terminal-session-command')).toContainText('ssh');
     await expect(page.getByTestId('terminal-session-command')).toContainText(workspacePath);
-    await expect(page.getByTestId('terminal-session-command')).toContainText(`codex resume ${sessionId}`);
+    await expect(page.getByTestId('terminal-session-command')).toContainText(`codex resume --dangerously-bypass-approvals-and-sandbox ${sessionId}`);
     await expect(page.getByTestId('terminal-pane-wf-test-1/ssh-resume')).toBeVisible();
     const terminalPane = page.getByTestId('terminal-pane-wf-test-1/ssh-resume');
     await page.waitForFunction(() => {
