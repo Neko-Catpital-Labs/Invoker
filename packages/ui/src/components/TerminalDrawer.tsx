@@ -69,8 +69,11 @@ function seedTerminalOutputSnapshot(
         snapshot: outputSnapshot,
         term,
       };
-    } catch {
-      /* terminal disposed */
+    } catch (err) {
+      console.warn(
+        `Failed to seed output snapshot for terminal session ${session.sessionId}:`,
+        err,
+      );
     }
   }
 }
