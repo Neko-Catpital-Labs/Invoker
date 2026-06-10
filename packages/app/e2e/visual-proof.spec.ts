@@ -311,6 +311,14 @@ function selectedTaskCard(miniDag: Locator, taskIdSuffix: string): Locator {
   return miniDag.locator(`.react-flow__node[data-testid$="${taskIdSuffix}"] > div[data-selected="true"]`).first();
 }
 
+/** Every DAG_DETERMINISM_PLAN task node must stay visible — the DAG also
+ * renders a merge-gate node, so assert the named tasks instead of a count. */
+async function expectDeterminismTasksVisible(miniDag: Locator) {
+  for (const suffix of ['task-a', 'task-b', 'task-c', 'task-d', 'task-e']) {
+    await expect(miniDag.locator(`.react-flow__node[data-testid$="${suffix}"]`)).toBeVisible();
+  }
+}
+
 async function openContextMenu(page: Page, locator: Locator) {
   const target = locator.first();
   await expect(target).toBeVisible({ timeout: 10000 });
@@ -425,11 +433,11 @@ test.describe('Visual proof capture', () => {
     await pane.hover();
     await page.mouse.wheel(0, 420);
     await page.waitForTimeout(300);
-    await expect(miniDag.locator('.react-flow__node:visible')).toHaveCount(5);
+    await expectDeterminismTasksVisible(miniDag);
 
     await miniDag.locator('.react-flow__node[data-testid$="task-e"]').click();
     await expect(selectedTaskCard(miniDag, 'task-e')).toBeVisible({ timeout: 5000 });
-    await expect(miniDag.locator('.react-flow__node:visible')).toHaveCount(5);
+    await expectDeterminismTasksVisible(miniDag);
 
     const beforeKeyboardMenu = await waitForStableViewportTransform(page, viewport);
     await page.keyboard.press('Enter');
