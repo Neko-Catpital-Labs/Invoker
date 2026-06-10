@@ -948,6 +948,8 @@ describe('merge gate commit topology (real git)', () => {
       getAllTasks: () => tasks,
       handleWorkerResponse: () => [],
       setTaskAwaitingApproval: () => {},
+      setTaskReviewReady: () => {},
+      autoStartExternallyUnblockedReadyTasks: () => [],
     };
     const persistence = {
       loadWorkflow: () => workflow,

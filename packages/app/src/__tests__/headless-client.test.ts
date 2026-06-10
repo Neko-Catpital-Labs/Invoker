@@ -1,9 +1,25 @@
 import { describe, expect, it, vi } from 'vitest';
 import { LocalBus } from '@invoker/transport';
 
-import { SharedMutationOwnerTimeoutError, runHeadlessClientCommand } from '../headless-client.js';
+import { SharedMutationOwnerTimeoutError, electronCommandArgs, runHeadlessClientCommand } from '../headless-client.js';
 
 describe('headless-client', () => {
+  it('passes Linux headless stability flags before the app entry point', () => {
+    const args = electronCommandArgs(['query', 'workflows'], 'linux');
+    const mainIndex = args.findIndex((arg) => arg.endsWith('/main.js'));
+
+    expect(mainIndex).toBeGreaterThan(0);
+    expect(args.slice(0, mainIndex)).toEqual([
+      '--no-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--disable-gpu-compositing',
+      '--disable-gpu-sandbox',
+      '--disable-software-rasterizer',
+    ]);
+    expect(args.slice(mainIndex + 1)).toEqual(['--headless', 'query', 'workflows']);
+  });
+
   it('delegates mutating commands to a standalone-capable owner endpoint', async () => {
     const bus = new LocalBus();
     const ownerHandler = vi.fn(async () => ({ ok: true }));
