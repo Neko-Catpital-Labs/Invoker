@@ -182,7 +182,7 @@ import {
   type WorkflowScopedGuiMutationRegistrationContext,
 } from './ipc/ipc-registration.js';
 import { createTaskDeltaStreamSequence } from './task-delta-stream-sequence.js';
-import { startLifecycleEventBridge } from './lifecycle-event-bridge.js';
+import { startLifecycleEventBridge, type LifecycleEventBridge } from './lifecycle-event-bridge.js';
 import { startReviewGateStatusWorker, type ReviewGateStatusWorker } from './review-gate-status-worker.js';
 import {
   executeNoTrackHeadlessBatch,
@@ -807,6 +807,7 @@ if (isHeadless) {
 
     let exitCode = 0;
     let reviewGateStatusWorker: ReviewGateStatusWorker | null = null;
+    let lifecycleEventBridge: LifecycleEventBridge | null = null;
     try {
       // Standalone mode: initialize services and run headless
       await initServices({
@@ -1197,6 +1198,13 @@ if (isHeadless) {
           return { ok: true };
         });
 
+        lifecycleEventBridge = startLifecycleEventBridge({
+          messageBus,
+          getInitialTasks: () => orchestrator.getAllTasks(),
+          getTask: (taskId) => orchestrator.getTask(taskId),
+          logger,
+        });
+
         reviewGateStatusWorker = startReviewGateStatusWorker({
           ownerMode: true,
           getTaskExecutor: createStandaloneTaskExecutor,
@@ -1209,6 +1217,7 @@ if (isHeadless) {
       process.stderr.write(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
       exitCode = 1;
     } finally {
+      lifecycleEventBridge?.stop();
       reviewGateStatusWorker?.stop();
       if (ownsHeadlessShutdown && executorRegistry) {
         await Promise.all(executorRegistry.getAll().map(f => f.destroyAll().catch(() => undefined)));
