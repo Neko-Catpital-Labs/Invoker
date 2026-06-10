@@ -41,6 +41,7 @@ export interface MessageBus {
 export const Channels = {
   TASK_DELTA: 'task.delta',
   TASK_OUTPUT: 'task.output',
+  WORKFLOW_LIFECYCLE: 'workflow.lifecycle',
   WORKFLOW_LOADED: 'workflow.loaded',
   EXPERIMENT_SPAWNED: 'experiment.spawned',
   EXPERIMENT_SELECTED: 'experiment.selected',
