@@ -94,7 +94,13 @@ exit 64
 `, 'utf8');
     chmodSync(codexStub, 0o755);
     const pathEnv = `${stubDir}${path.delimiter}${process.env.PATH ?? ''}`;
+    // Playwright's `use.video` option only applies to browser contexts, so the
+    // Electron walkthrough video must be requested at launch time.
+    const recordVideo = process.env.CAPTURE_VIDEO
+      ? { recordVideo: { dir: path.resolve(__dirname, '..', 'test-results', 'videos') } }
+      : {};
     const app = await electron.launch({
+      ...recordVideo,
       args: [
         ...(process.platform === 'linux'
           ? ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--disable-gpu-compositing', '--disable-gpu-sandbox', '--disable-software-rasterizer']
