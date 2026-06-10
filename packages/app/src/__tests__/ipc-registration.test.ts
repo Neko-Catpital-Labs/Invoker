@@ -104,6 +104,34 @@ describe('ipc-registration', () => {
     );
   });
 
+  it('refreshes and retries follower delegation when the owner route is gone', async () => {
+    const { ipcMain, handleHandlers } = createFakeIpcMain();
+    const refreshOwnerRoute = vi.fn(async () => undefined);
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new TransportError(TransportErrorCode.NO_HANDLER, 'missing'))
+      .mockResolvedValueOnce('delegated');
+
+    registerGuiMutationHandler(
+      {
+        ipcMain,
+        getOwnerMode: () => false,
+        getMessageBus: () => ({ request }),
+        refreshOwnerRoute,
+        translateGuiMutationToHeadless: () => ({
+          channel: 'headless.gui-mutation',
+          request: { channel: 'invoker:start', args: [] },
+        }),
+      },
+      'invoker:start',
+      vi.fn(async () => 'local'),
+    );
+
+    await expect(handleHandlers.get('invoker:start')?.({})).resolves.toBe('delegated');
+    expect(refreshOwnerRoute).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
   it('registers workflow-scoped handlers with the same dispatcher and enqueue shape', async () => {
     const { ipcMain, handleHandlers } = createFakeIpcMain();
     const workflowMutationDispatcher = new Map<string, (...args: unknown[]) => Promise<unknown>>();

@@ -235,7 +235,6 @@ export interface WorkflowMutationLease {
 export type TaskLaunchDispatchState =
   | 'enqueued'
   | 'leased'
-  | 'acknowledged'
   | 'completed'
   | 'abandoned';
 
@@ -251,7 +250,6 @@ export interface TaskLaunchDispatch {
   dispatchOwner?: string;
   enqueuedAt: string;
   leasedAt?: string;
-  acknowledgedAt?: string;
   completedAt?: string;
   fencedUntil?: string;
   attemptsCount: number;
@@ -420,6 +418,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     normalizedMergeModes: number;
     staleAutoFixExperimentTasks: number;
     normalizedStaleLaunchMetadata: number;
+    normalizedLegacyAcknowledgedLaunchDispatches: number;
     backfilledMissingSshPoolMemberIds: number;
   } {
     const report = {
@@ -427,6 +426,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       normalizedMergeModes: 0,
       staleAutoFixExperimentTasks: 0,
       normalizedStaleLaunchMetadata: 0,
+      normalizedLegacyAcknowledgedLaunchDispatches: 0,
       backfilledMissingSshPoolMemberIds: 0,
     };
     this.runTransaction(() => {
@@ -495,6 +495,113 @@ export class SQLiteAdapter implements PersistenceAdapter {
            AND (julianday(started_at) - julianday(launch_started_at)) * 86400.0 > 3600.0`,
       );
       report.normalizedStaleLaunchMetadata = this.db.getRowsModified();
+
+      const nowIso = new Date().toISOString();
+      const stalePendingLaunchRows = this.queryAll(
+        `SELECT t.id, t.selected_attempt_id
+           FROM tasks t
+           LEFT JOIN attempts a ON a.id = t.selected_attempt_id
+          WHERE t.status = 'pending'
+            AND t.launch_phase = 'launching'
+            AND t.selected_attempt_id IS NOT NULL
+            AND TRIM(t.selected_attempt_id) != ''
+            AND NOT EXISTS (
+              SELECT 1
+                FROM task_launch_dispatch live
+               WHERE live.task_id = t.id
+                 AND live.attempt_id = t.selected_attempt_id
+                 AND live.state IN ('enqueued', 'leased')
+            )
+            AND (
+              a.id IS NULL
+              OR a.lease_expires_at IS NULL
+              OR a.lease_expires_at <= ?
+            )`,
+        [nowIso],
+      ) as Array<{ id: string; selected_attempt_id?: string | null }>;
+      if (stalePendingLaunchRows.length > 0) {
+        const taskIds = stalePendingLaunchRows.map((row) => String(row.id));
+        const taskPlaceholders = taskIds.map(() => '?').join(', ');
+        this.db.run(
+          `UPDATE tasks
+              SET launch_phase = NULL,
+                  launch_started_at = NULL,
+                  launch_completed_at = NULL,
+                  last_heartbeat_at = NULL
+            WHERE id IN (${taskPlaceholders})`,
+          taskIds,
+        );
+
+        const attemptIds = stalePendingLaunchRows
+          .map((row) => row.selected_attempt_id)
+          .filter((id): id is string => typeof id === 'string' && id.trim().length > 0);
+        if (attemptIds.length > 0) {
+          const attemptPlaceholders = attemptIds.map(() => '?').join(', ');
+          this.db.run(
+            `UPDATE attempts
+                SET status = 'pending',
+                    claimed_at = NULL,
+                    last_heartbeat_at = NULL,
+                    lease_expires_at = NULL
+              WHERE id IN (${attemptPlaceholders})
+                AND status = 'claimed'`,
+            attemptIds,
+          );
+        }
+        report.normalizedStaleLaunchMetadata += stalePendingLaunchRows.length;
+      }
+
+      this.db.run(
+        `UPDATE task_launch_dispatch
+         SET state = 'abandoned',
+             completed_at = ?,
+             last_error = 'Legacy acknowledged launch dispatch is stale after acknowledgement removal',
+             dispatch_owner = NULL,
+             fenced_until = NULL
+         WHERE state = 'acknowledged'
+           AND (
+             NOT EXISTS (
+               SELECT 1
+               FROM tasks t
+               WHERE t.id = task_launch_dispatch.task_id
+                 AND t.status = 'pending'
+                 AND COALESCE(t.selected_attempt_id, '') = task_launch_dispatch.attempt_id
+                 AND COALESCE(t.execution_generation, 0) = task_launch_dispatch.generation
+             )
+             OR EXISTS (
+               SELECT 1
+               FROM task_launch_dispatch live
+               WHERE live.attempt_id = task_launch_dispatch.attempt_id
+                 AND live.id != task_launch_dispatch.id
+                 AND live.state IN ('enqueued', 'leased')
+             )
+           )`,
+        [nowIso],
+      );
+      report.normalizedLegacyAcknowledgedLaunchDispatches += this.db.getRowsModified();
+
+      this.db.run(
+        `UPDATE task_launch_dispatch
+         SET state = 'leased',
+             leased_at = COALESCE(leased_at, acknowledged_at, ?),
+             acknowledged_at = NULL
+         WHERE state = 'acknowledged'
+           AND fenced_until IS NOT NULL
+           AND fenced_until >= ?`,
+        [nowIso, nowIso],
+      );
+      report.normalizedLegacyAcknowledgedLaunchDispatches += this.db.getRowsModified();
+
+      this.db.run(
+        `UPDATE task_launch_dispatch
+         SET state = 'enqueued',
+             dispatch_owner = NULL,
+             leased_at = NULL,
+             acknowledged_at = NULL,
+             fenced_until = NULL
+         WHERE state = 'acknowledged'`,
+      );
+      report.normalizedLegacyAcknowledgedLaunchDispatches += this.db.getRowsModified();
 
       // One-time compatibility backfill for SSH tasks created before
       // pool_member_id was durably written to tasks. Runtime routing must use
@@ -812,7 +919,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
       CREATE UNIQUE INDEX IF NOT EXISTS idx_task_launch_dispatch_active_attempt
         ON task_launch_dispatch(attempt_id)
-        WHERE state IN ('enqueued', 'leased', 'acknowledged');
+        WHERE state IN ('enqueued', 'leased');
 
       CREATE INDEX IF NOT EXISTS idx_task_launch_dispatch_ready
         ON task_launch_dispatch(state, priority, id)
@@ -937,6 +1044,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.db.run('DROP INDEX IF EXISTS idx_attempts_node');
     this.db.run('CREATE INDEX IF NOT EXISTS idx_attempts_node_created ON attempts(node_id, created_at)');
     this.db.run('CREATE INDEX IF NOT EXISTS idx_tasks_workflow_id ON tasks(workflow_id)');
+    this.db.run('DROP INDEX IF EXISTS idx_task_launch_dispatch_active_attempt');
+    this.db.run(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_task_launch_dispatch_active_attempt
+        ON task_launch_dispatch(attempt_id)
+        WHERE state IN ('enqueued', 'leased')
+    `);
 
     if (!this.readOnly) {
       this.migrateTestCommands();
@@ -2765,7 +2878,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       ) VALUES (?, ?, ?, ?, 'queued')`,
       [workflowId, channel, JSON.stringify(args), priority],
     );
-    const row = this.queryOne('SELECT last_insert_rowid() AS id');
+    const row = this.queryOne('SELECT MAX(id) AS id FROM workflow_mutation_intents');
     return Number(row?.id ?? 0);
   }
 
@@ -3162,7 +3275,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       const existing = this.queryOne(
         `SELECT * FROM task_launch_dispatch
            WHERE attempt_id = ?
-             AND state IN ('enqueued', 'leased', 'acknowledged')
+             AND state IN ('enqueued', 'leased')
            LIMIT 1`,
         [input.attemptId],
       );
@@ -3178,14 +3291,22 @@ export class SQLiteAdapter implements PersistenceAdapter {
       const inserted = this.queryOne(
         `SELECT * FROM task_launch_dispatch
            WHERE attempt_id = ?
-             AND state IN ('enqueued', 'leased', 'acknowledged')
+             AND state IN ('enqueued', 'leased')
            LIMIT 1`,
         [input.attemptId],
       );
       if (!inserted) {
         throw new Error('Failed to read back inserted task_launch_dispatch row');
       }
-      return this.rowToTaskLaunchDispatch(inserted);
+      const dispatch = this.rowToTaskLaunchDispatch(inserted);
+      this.logEvent(input.taskId, 'task.launch_dispatch_enqueued', {
+        dispatchId: dispatch.id,
+        attemptId: input.attemptId,
+        workflowId: input.workflowId,
+        generation: input.generation,
+        priority,
+      });
+      return dispatch;
     });
   }
 
@@ -3201,7 +3322,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     const row = this.queryOne(
       `SELECT * FROM task_launch_dispatch
          WHERE attempt_id = ?
-           AND state IN ('enqueued', 'leased', 'acknowledged')
+           AND state IN ('enqueued', 'leased')
          ORDER BY id DESC
          LIMIT 1`,
       [attemptId],
@@ -3224,32 +3345,23 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   /**
-   * Atomic capacity-gated lease of the next enqueued dispatch row.
+   * Atomic lease of the next enqueued dispatch row.
    *
    * Selects the oldest enqueued row (priority high < normal < low, then id
-   * ascending) and transitions it to `leased` only if the current count of
-   * `leased | acknowledged` rows is below `maxConcurrency`. Wrapped in an
-   * IMMEDIATE transaction so concurrent dispatchers cannot double-lease.
-   * Returns the freshly leased row or `undefined` when nothing is enqueued,
-   * capacity is exhausted, or another dispatcher beat us to it.
+   * ascending) and transitions it to `leased`. Wrapped in an IMMEDIATE
+   * transaction so concurrent dispatchers cannot double-lease. Returns the
+   * freshly leased row or `undefined` when nothing is enqueued or another
+   * dispatcher beat us to it.
    */
   claimLaunchDispatchAtomic(options: {
     ownerId: string;
-    maxConcurrency: number;
     nowIso?: string;
   }): TaskLaunchDispatch | undefined {
-    if (options.maxConcurrency <= 0) return undefined;
     const now = options.nowIso ?? new Date().toISOString();
     const fencedUntil = new Date(
       new Date(now).getTime() + DISPATCH_LEASE_MS,
     ).toISOString();
     return this.runTransaction(() => {
-      const activeRow = this.queryOne(
-        `SELECT COUNT(*) AS active FROM task_launch_dispatch
-           WHERE state IN ('leased', 'acknowledged')`,
-      );
-      const active = Number(activeRow?.active ?? 0);
-      if (active >= options.maxConcurrency) return undefined;
       while (true) {
         const candidate = this.queryOne(
           `SELECT
@@ -3320,31 +3432,19 @@ export class SQLiteAdapter implements PersistenceAdapter {
           'SELECT * FROM task_launch_dispatch WHERE id = ?',
           [candidateId],
         );
-        return row ? this.rowToTaskLaunchDispatch(row) : undefined;
+        if (!row) return undefined;
+        const dispatch = this.rowToTaskLaunchDispatch(row);
+        this.logEvent(dispatch.taskId, 'task.launch_dispatch_claimed', {
+          dispatchId: dispatch.id,
+          ownerId: options.ownerId,
+          attemptId: dispatch.attemptId,
+          workflowId: dispatch.workflowId,
+          generation: dispatch.generation,
+          fencedUntil: dispatch.fencedUntil,
+        });
+        return dispatch;
       }
     });
-  }
-
-  markLaunchDispatchAcknowledged(
-    id: number,
-    runnerId: string,
-    nowIso?: string,
-  ): boolean {
-    const now = nowIso ?? new Date().toISOString();
-    const fencedUntil = new Date(
-      new Date(now).getTime() + DISPATCH_LEASE_MS,
-    ).toISOString();
-    this.execRun(
-      `UPDATE task_launch_dispatch
-         SET state = 'acknowledged',
-             acknowledged_at = ?,
-             dispatch_owner = ?,
-             fenced_until = ?
-       WHERE id = ?
-         AND state = 'leased'`,
-      [now, runnerId, fencedUntil, id],
-    );
-    return (this.db.getRowsModified?.() ?? 0) > 0;
   }
 
   markLaunchDispatchCompleted(id: number, nowIso?: string): boolean {
@@ -3378,21 +3478,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return (this.db.getRowsModified?.() ?? 0) > 0;
   }
 
-  /**
-   * Return the dispatch rows in `acknowledged` whose fence has expired AND
-   * whose `attempts_count` has reached `maxAttempts`. These are the rows
-   * that the dispatcher should abandon and report to the orchestrator —
-   * they have already burned through their retry budget without the
-   * TaskRunner finishing the launch.
-   */
-  listAbandonableAcknowledgedLeases(options: {
+  listAbandonableLaunchDispatchLeases(options: {
     nowIso?: string;
     maxAttempts: number;
   }): TaskLaunchDispatch[] {
     const now = options.nowIso ?? new Date().toISOString();
     const rows = this.queryAll(
       `SELECT * FROM task_launch_dispatch
-         WHERE state = 'acknowledged'
+         WHERE state = 'leased'
            AND fenced_until IS NOT NULL
            AND fenced_until < ?
            AND attempts_count >= ?
@@ -3441,7 +3534,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         `SELECT id, task_id, attempt_id, workflow_id, state, generation
            FROM task_launch_dispatch
           WHERE task_id IN (${taskPlaceholders})
-            AND state IN ('enqueued', 'leased', 'acknowledged')
+            AND state IN ('enqueued', 'leased')
           ORDER BY id ASC`,
         ids,
       );
@@ -3457,7 +3550,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
                 dispatch_owner = NULL,
                 fenced_until = NULL
           WHERE id IN (${idPlaceholders})
-            AND state IN ('enqueued', 'leased', 'acknowledged')`,
+            AND state IN ('enqueued', 'leased')`,
         [now, reason, ...rowIds],
       );
 
@@ -3472,15 +3565,20 @@ export class SQLiteAdapter implements PersistenceAdapter {
     });
   }
 
-  reapExpiredLaunchDispatchLeases(nowIso?: string): TaskLaunchDispatch[] {
-    const now = nowIso ?? new Date().toISOString();
+  reapExpiredLaunchDispatchLeases(options: {
+    nowIso?: string;
+    maxAttempts?: number;
+  } = {}): TaskLaunchDispatch[] {
+    const now = options.nowIso ?? new Date().toISOString();
+    const maxAttempts = options.maxAttempts ?? Number.MAX_SAFE_INTEGER;
     return this.runTransaction(() => {
       const expired = this.queryAll(
         `SELECT * FROM task_launch_dispatch
            WHERE state = 'leased'
              AND fenced_until IS NOT NULL
-             AND fenced_until < ?`,
-        [now],
+             AND fenced_until < ?
+             AND attempts_count < ?`,
+        [now, maxAttempts],
       );
       if (expired.length === 0) return [];
       this.execRun(
@@ -3490,8 +3588,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
                fenced_until = NULL
          WHERE state = 'leased'
            AND fenced_until IS NOT NULL
-           AND fenced_until < ?`,
-        [now],
+           AND fenced_until < ?
+           AND attempts_count < ?`,
+        [now, maxAttempts],
       );
       return expired.map((row) => {
         const reset = { ...row, state: 'enqueued', dispatch_owner: null, fenced_until: null };
@@ -3514,7 +3613,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
       dispatchOwner: row.dispatch_owner ? String(row.dispatch_owner) : undefined,
       enqueuedAt: String(row.enqueued_at),
       leasedAt: row.leased_at ? String(row.leased_at) : undefined,
-      acknowledgedAt: row.acknowledged_at ? String(row.acknowledged_at) : undefined,
       completedAt: row.completed_at ? String(row.completed_at) : undefined,
       fencedUntil: row.fenced_until ? String(row.fenced_until) : undefined,
       attemptsCount: Number(row.attempts_count ?? 0),

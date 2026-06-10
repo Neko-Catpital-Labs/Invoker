@@ -23,6 +23,7 @@ for arg in "$@"; do
 done
 
 pushd "$ROOT_DIR" >/dev/null
+export INVOKER_SQLITE_FLUSH_DEBOUNCE_MS=0
 
 if [[ ! -f packages/app/dist/main.js ]]; then
   pnpm --filter @invoker/app build >/dev/null
@@ -30,6 +31,7 @@ fi
 
 ELECTRON_BIN="$ROOT_DIR/scripts/electron.cjs"
 MAIN_JS="$ROOT_DIR/packages/app/dist/main.js"
+HEADLESS_CLIENT_JS="$ROOT_DIR/packages/app/dist/headless-client.js"
 
 cleanup_mode() {
   if [[ -n "${RESET_WRAPPER_PID:-}" ]]; then
@@ -53,16 +55,8 @@ wait_for_query_status() {
   local started_at
   started_at="$(date +%s)"
   while true; do
-    if ! sqlite_schema_ready; then
-      if (( $(date +%s) - started_at >= timeout )); then
-        echo "repro: timed out waiting for sqlite schema before polling $task_id" >&2
-        return 1
-      fi
-      sleep 0.2
-      continue
-    fi
     local status
-    status="$(query_sqlite_value "select coalesce(status,'') from tasks where id = '$task_id' limit 1;")"
+    status="$(query_action_graph_value task-status "$task_id" || true)"
     if [[ "$status" == "$expected_status" ]]; then
       return 0
     fi
@@ -76,7 +70,13 @@ wait_for_query_status() {
 
 query_sqlite_value() {
   local sql="$1"
-  sqlite3 -noheader "$DB_DIR/invoker.db" "$sql"
+  node "$ROOT_DIR/scripts/repro/sqljs-query.mjs" "$DB_DIR/invoker.db" "$sql"
+}
+
+query_action_graph_value() {
+  HOME="$HOME_DIR" INVOKER_DB_DIR="$DB_DIR" INVOKER_IPC_SOCKET="$IPC_SOCKET_PATH" NODE_ENV=test \
+    node "$HEADLESS_CLIENT_JS" query action-graph --output json 2>/dev/null \
+    | node "$ROOT_DIR/scripts/repro/action-graph-query.mjs" "$@"
 }
 
 sqlite_schema_ready() {
@@ -237,8 +237,8 @@ EOF
   deadline=$(( $(date +%s) + TIMEOUT_SECONDS ))
   while (( $(date +%s) < deadline )); do
     local late_status mid_status
-    late_status="$(query_sqlite_value "select coalesce(status,'') from tasks where id = '$LATE_ID' limit 1;")"
-    mid_status="$(query_sqlite_value "select coalesce(status,'') from tasks where id = '$MID_ID' limit 1;")"
+    late_status="$(query_action_graph_value task-status "$LATE_ID" || true)"
+    mid_status="$(query_action_graph_value task-status "$MID_ID" || true)"
     if [[ "$late_status" == "completed" && "$mid_status" == "pending" ]]; then
       observed=1
       break
@@ -247,17 +247,17 @@ EOF
   done
 
   local reset_at completed_at running_between
-  reset_at="$(query_sqlite_value "select created_at from events where task_id = '$LATE_ID' and event_type = 'task.pending' and created_at >= '$RESET_STARTED_AT' order by created_at asc limit 1;")"
-  completed_at="$(query_sqlite_value "select created_at from events where task_id = '$LATE_ID' and event_type = 'task.completed' and created_at >= '$RESET_STARTED_AT' order by created_at asc limit 1;")"
+  reset_at="$(query_action_graph_value task-event-time-since "$LATE_ID" task.pending "$RESET_STARTED_AT" || true)"
+  completed_at="$(query_action_graph_value task-event-time-since "$LATE_ID" task.completed "$RESET_STARTED_AT" || true)"
   running_between=""
   if [[ -n "$reset_at" && -n "$completed_at" ]]; then
-    running_between="$(query_sqlite_value "select count(*) from events where task_id = '$LATE_ID' and event_type = 'task.running' and created_at > '$reset_at' and created_at < '$completed_at';")"
+    running_between="$(query_action_graph_value task-event-count-between "$LATE_ID" task.running "$reset_at" "$completed_at" || true)"
   fi
 
   local current_prepare current_mid current_late
-  current_prepare="$(query_sqlite_value "select coalesce(status,'') from tasks where id = '$PREPARE_ID' limit 1;")"
-  current_mid="$(query_sqlite_value "select coalesce(status,'') from tasks where id = '$MID_ID' limit 1;")"
-  current_late="$(query_sqlite_value "select coalesce(status,'') from tasks where id = '$LATE_ID' limit 1;")"
+  current_prepare="$(query_action_graph_value task-status "$PREPARE_ID" || true)"
+  current_mid="$(query_action_graph_value task-status "$MID_ID" || true)"
+  current_late="$(query_action_graph_value task-status "$LATE_ID" || true)"
 
   local violation_observed=0
   if [[ "$observed" == "1" && -n "$reset_at" && -n "$completed_at" && "${running_between:-1}" == "0" ]]; then
@@ -276,9 +276,9 @@ EOF
     echo "--- reset stderr ---" >&2
     cat "$RESET_STDERR" >&2 || true
     echo "--- task rows ---" >&2
-    sqlite3 "$DB_DIR/invoker.db" "select id,status,dependencies from tasks where workflow_id='$WORKFLOW_ID' order by id;" >&2 || true
+    query_sqlite_value "select id,status,dependencies from tasks where workflow_id='$WORKFLOW_ID' order by id;" >&2 || true
     echo "--- event timeline ---" >&2
-    sqlite3 "$DB_DIR/invoker.db" "select task_id,event_type,created_at from events where task_id in ('$PREPARE_ID','$MID_ID','$LATE_ID') order by created_at;" >&2 || true
+    query_sqlite_value "select task_id,event_type,created_at from events where task_id in ('$PREPARE_ID','$MID_ID','$LATE_ID') order by created_at;" >&2 || true
     return 1
   fi
 
@@ -294,9 +294,9 @@ EOF
     echo "--- reset stderr ---" >&2
     cat "$RESET_STDERR" >&2 || true
     echo "--- task rows ---" >&2
-    sqlite3 "$DB_DIR/invoker.db" "select id,status,dependencies from tasks where workflow_id='$WORKFLOW_ID' order by id;" >&2 || true
+    query_sqlite_value "select id,status,dependencies from tasks where workflow_id='$WORKFLOW_ID' order by id;" >&2 || true
     echo "--- event timeline ---" >&2
-    sqlite3 "$DB_DIR/invoker.db" "select task_id,event_type,created_at from events where task_id in ('$PREPARE_ID','$MID_ID','$LATE_ID') order by created_at;" >&2 || true
+    query_sqlite_value "select task_id,event_type,created_at from events where task_id in ('$PREPARE_ID','$MID_ID','$LATE_ID') order by created_at;" >&2 || true
     return 1
   fi
 

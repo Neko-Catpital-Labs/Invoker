@@ -66,6 +66,7 @@ base.describe('Orphan task relaunch on restart', () => {
       env: {
         ...process.env,
         NODE_ENV: 'test',
+        INVOKER_GUI_OWNER_MODE: process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'gui',
         INVOKER_DB_DIR: testDir,
         INVOKER_ALLOW_DELETE_ALL: '1',
         INVOKER_E2E_ENABLE_COMPOSITOR: '1',

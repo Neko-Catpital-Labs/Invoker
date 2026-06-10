@@ -948,6 +948,8 @@ describe('merge gate commit topology (real git)', () => {
       getAllTasks: () => tasks,
       handleWorkerResponse: () => [],
       setTaskAwaitingApproval: () => {},
+      setTaskReviewReady: () => {},
+      autoStartExternallyUnblockedReadyTasks: () => [],
     };
     const persistence = {
       loadWorkflow: () => workflow,
@@ -2159,6 +2161,28 @@ describe('BaseExecutor.handleProcessExit push semantics', () => {
     expect(response?.status).toBe('failed');
     expect(response?.outputs.exitCode).toBe(1);
     expect(response?.outputs.error).toBe('push denied');
+  });
+
+  it('keeps task completed when exit 0 but push fails due to transient network transport', async () => {
+    execSync('git checkout -b invoker/transient-push', { cwd: cloneDir });
+    writeFileSync(join(cloneDir, 't.txt'), 'x');
+    execSync('git add -A && git commit -m task', { cwd: cloneDir });
+
+    const req = makeRequest('task-transient-push', { description: 'x' });
+    const entry = executor.registerTestEntry('e-transient-push', req);
+    let response: WorkResponse | undefined;
+    entry.completeListeners.add((r) => { response = r; });
+
+    vi.spyOn(BaseExecutor.prototype as any, 'pushBranchToRemote').mockResolvedValue(
+      "git push --force-with-lease invoker-branches invoker/transient-push:refs/heads/invoker/transient-push failed (code 128): fatal: unable to access 'https://github.com/EdbertChan/Invoker/': Could not resolve host: github.com",
+    );
+
+    await executor.testHandleProcessExit('e-transient-push', req, cloneDir, 0, { branch: 'invoker/transient-push' });
+
+    expect(response?.status).toBe('completed');
+    expect(response?.outputs.exitCode).toBe(0);
+    expect(response?.outputs.error).toBeUndefined();
+    expect(entry.outputBuffer.join('')).toContain('transient git transport error');
   });
 
   it('marks codex ai_task as failed when semantic sandbox denial appears in output despite exit 0', async () => {
