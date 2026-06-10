@@ -127,7 +127,7 @@ jobs:
             .node-version
 
       - name: Install test system packages
-        run: apt-get update && apt-get install -y unzip xvfb
+        run: apt-get update && apt-get install -y unzip xvfb jq make g++ python3
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -155,7 +155,11 @@ jobs:
         env:
           INVOKER_TEST_ALL_PROOF: '1'
           INVOKER_TEST_ALL_JOBS: '1'
-        run: bash scripts/run-all-tests.sh
+          TMPDIR: ${{ runner.temp }}/invoker-tmp
+        run: |
+          mkdir -p "$TMPDIR"
+          chmod 1777 "$TMPDIR"
+          bash scripts/run-all-tests.sh
 
   required-fast:
     needs: build-artifacts
