@@ -1065,6 +1065,7 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
       const spec = wt.getRestoredTerminalSpec(meta);
       expect(spec.command).toBe('codex');
       expect(spec.args).toContain('resume');
+      expect(spec.args).toContain('--dangerously-bypass-approvals-and-sandbox');
       expect(spec.args).toContain('codex-sess-123');
       // Must NOT be claude
       expect(spec.command).not.toBe('claude');
@@ -1136,6 +1137,7 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
       const innerCmd = spec.args![spec.args!.length - 1];
       expect(innerCmd).toContain('codex');
       expect(innerCmd).toContain('resume');
+      expect(innerCmd).toContain('--dangerously-bypass-approvals-and-sandbox');
       expect(innerCmd).toContain('codex-remote-sess');
       // Must NOT be claude --resume
       expect(innerCmd).not.toContain('claude --resume');
@@ -1183,6 +1185,7 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
       expect(scriptArg).toContain('codex');
       expect(scriptArg).toContain('exec');
       expect(scriptArg).toContain('resume');
+      expect(scriptArg).toContain('--dangerously-bypass-approvals-and-sandbox');
       expect(scriptArg).toContain('codex-docker-sess');
       expect(scriptArg).not.toContain('claude --resume');
     });
@@ -1364,6 +1367,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
     expect(resolved.spec.command).toBe('codex');
     expect(resolved.spec.args).toEqual([
       'resume',
+      '--dangerously-bypass-approvals-and-sandbox',
       '019e386c-87c7-71e1-80bb-eb649ae99b82',
     ]);
     expect(resolved.spec.command).not.toBe('claude');

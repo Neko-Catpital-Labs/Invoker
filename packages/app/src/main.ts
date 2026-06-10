@@ -591,11 +591,18 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
   // Compose runtime services from persistence-backed adapters.
   // Headless startup routes through composeHeadlessStartup so the
   // headless path has an explicit composition entry point.
+  const executionAgentRegistry = options?.executionAgentRegistry ?? registerBuiltinAgents();
   const runtimeServiceDeps = {
     workspaceProbe: new WorkspaceProbeAdapter(persistence),
     containerProbe: new ContainerProbeAdapter(persistence),
     sessionProbe: new SessionProbeAdapter(persistence),
-    terminalLauncher: new TerminalLauncherAdapter(),
+    terminalLauncher: new TerminalLauncherAdapter({
+      resumeCommandResolver: (agentName, sessionId) => {
+        const agent = executionAgentRegistry.getOrThrow(agentName);
+        const resume = agent.buildResumeArgs(sessionId);
+        return { command: resume.cmd, args: resume.args };
+      },
+    }),
   };
   runtimeServices = isHeadless
     ? composeHeadlessStartup(runtimeServiceDeps)
@@ -608,7 +615,7 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
       worktreeBaseDir: path.resolve(invokerHomeRoot, 'worktrees'),
       cacheDir: path.resolve(invokerHomeRoot, 'repos'),
       maxWorktrees: effectiveMaxConcurrency,
-      agentRegistry: options?.executionAgentRegistry,
+      agentRegistry: executionAgentRegistry,
     }),
   );
   const taskRepository = new SqliteTaskRepository(persistence);
