@@ -1066,18 +1066,22 @@ export class Orchestrator {
 
   /**
    * Reset root tasks and all downstream dependents to pending using the
-   * provided reset payload. Returns the affected IDs and currently-ready IDs.
+   * provided reset payload. Returns the affected IDs, currently-ready IDs,
+   * and `resetIds` — the subset of affected IDs whose reset predicate
+   * actually fired (forced, non-pending, or holding an active attempt
+   * lease) and therefore had their state rewritten and generation bumped.
    */
   private resetSubgraphToPending(
     rootTaskIds: string[],
     resetChanges: TaskStateChanges,
     opts?: { forceResetIds?: Set<string> },
-  ): { affectedIds: string[]; readyIds: string[] } {
+  ): { affectedIds: string[]; readyIds: string[]; resetIds: string[] } {
     const forceResetIds = opts?.forceResetIds ?? new Set<string>();
     const affectedIds = this.collectSubgraphTaskIds(rootTaskIds);
     const affectedSet = new Set(affectedIds);
     const workflowsToSync = new Set<string>();
     const pendingTaskDeltas: TaskDelta[] = [];
+    const resetIds: string[] = [];
 
     this.taskRepository.runInTransaction(() => {
       this.invalidateLaunchArtifactsForTasks(affectedIds, 'task subgraph reset to pending');
@@ -1099,6 +1103,7 @@ export class Orchestrator {
           this.clearQueuedSchedulerEntries(id, current.execution.selectedAttemptId);
           continue;
         }
+        resetIds.push(id);
 
         const changesWithGeneration = this.withBumpedExecutionGeneration(current, resetChanges);
         const updated = this.writeAndSync(id, changesWithGeneration, { skipWorkflowStatusSync: true });
@@ -1123,7 +1128,7 @@ export class Orchestrator {
       .getReadyTasks()
       .map((t) => t.id)
       .filter((id) => affectedSet.has(id));
-    return { affectedIds, readyIds };
+    return { affectedIds, readyIds, resetIds };
   }
 
   /**
@@ -5235,12 +5240,53 @@ export class Orchestrator {
   }
 
   /**
+   * A task is "pristine pending" when an upstream-invalidation reset
+   * would be observationally a no-op: it is already `pending`, none of
+   * the execution lineage fields cleared by `DETACH_RESET_CHANGES` are
+   * set, and its selected attempt holds no active lease.
+   * `cascadeInvalidationToDownstream` skips such tasks so repeated
+   * cascades neither bump execution generations nor emit duplicate
+   * `task.invalidated_by_upstream` events.
+   */
+  private isPristinePending(task: TaskState): boolean {
+    if (task.status !== 'pending') return false;
+    const execution = task.execution;
+    if (
+      execution.branch !== undefined
+      || execution.commit !== undefined
+      || execution.startedAt !== undefined
+      || execution.completedAt !== undefined
+      || execution.workspacePath !== undefined
+      || execution.agentSessionId !== undefined
+      || execution.containerId !== undefined
+      || execution.error !== undefined
+      || execution.exitCode !== undefined
+      || execution.lastHeartbeatAt !== undefined
+      || execution.launchStartedAt !== undefined
+    ) {
+      return false;
+    }
+    return !this.isAttemptLeaseActive(this.getSelectedAttempt(task));
+  }
+
+  /**
    * Cascade an upstream invalidation to every transitive downstream
    * workflow. For each downstream workflow:
    *   1. Cancel any in-flight task (`cancelActiveBeforeInvalidation`).
-   *   2. Reset every task in the workflow to `pending` (with bumped
-   *      execution generation to supersede prior attempts) using the
-   *      same shape as `detachWorkflowInternal`'s reset payload.
+   *   2. Reset every task with observable execution lineage to
+   *      `pending` (with bumped execution generation to supersede
+   *      prior attempts) using the same shape as
+   *      `detachWorkflowInternal`'s reset payload.
+   *
+   * Idempotent and cheap by construction: workflows with no downstream
+   * dependents return before the global DB refresh (the dependency
+   * edges come straight from `persistence.listWorkflows()`), and
+   * pristine-pending downstream tasks (`isPristinePending`) are
+   * skipped entirely — a repeated cascade over an unchanged downstream
+   * bumps no generations and emits no events. This lets every
+   * invalidating primitive call the cascade unconditionally, even in
+   * loops (autofix retries, `selectExperiment` re-dispatch), without
+   * double-resetting downstream work.
    *
    * The downstream's existing external-dependency gate
    * (`getExternalDependencyBlocker`) re-evaluates at scheduling time
@@ -5255,9 +5301,13 @@ export class Orchestrator {
    * `fixReject`, `none`) skip the cascade per `MUTATION_POLICIES`.
    */
   cascadeInvalidationToDownstream(workflowId: string): TaskState[] {
-    this.refreshFromDb();
     const downstreamWorkflowIds = this.collectDownstreamWorkflowIds(workflowId);
     if (downstreamWorkflowIds.length === 0) return [];
+
+    this.refreshFromDb();
+    for (const dwfId of downstreamWorkflowIds) {
+      this.refreshWorkflowFromDb(dwfId);
+    }
 
     this.logger.info('[orchestrator] cascadeInvalidationToDownstream', {
       upstreamWorkflowId: workflowId,
@@ -5277,21 +5327,28 @@ export class Orchestrator {
     );
     if (affectedTaskIds.length === 0) return [];
 
-    const forceResetIds = new Set(affectedTaskIds);
-    const { affectedIds } = this.resetSubgraphToPending(
+    const forceResetIds = new Set(
+      affectedTaskIds.filter((id) => {
+        const task = this.stateGetTask(id);
+        return !!task && !this.isPristinePending(task);
+      }),
+    );
+    if (forceResetIds.size === 0) return [];
+
+    const { resetIds } = this.resetSubgraphToPending(
       affectedTaskIds,
       Orchestrator.DETACH_RESET_CHANGES,
       { forceResetIds },
     );
 
-    for (const taskId of affectedIds) {
+    for (const taskId of resetIds) {
       this.persistence.logEvent?.(taskId, 'task.invalidated_by_upstream', {
         upstreamWorkflowId: workflowId,
         downstreamWorkflowIds,
       });
     }
 
-    return affectedIds
+    return resetIds
       .map((id) => this.stateGetTask(id))
       .filter((t): t is TaskState => !!t);
   }

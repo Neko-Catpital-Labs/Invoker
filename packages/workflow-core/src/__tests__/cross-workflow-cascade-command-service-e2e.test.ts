@@ -112,18 +112,28 @@ describe('cross-workflow cascade — CommandService end-to-end', () => {
     // Exactly-once contract: the routed CommandService path drives the
     // cascade through the pipeline's `cascadeAcrossWorkflows` stage and
     // the primitive opts out (`cascadeDownstream: false`), so each
-    // downstream task is invalidated exactly once — never double-bumped.
+    // progressed downstream task is invalidated exactly once — never
+    // double-bumped.
     for (const id of [
       ctx.downstreamRootId,
       ctx.downstreamMidId,
       ctx.downstreamLastId,
-      ctx.downstreamMergeId,
     ]) {
       const markers = persistence.events.filter(
         (e) => e.taskId === id && e.eventType === 'task.invalidated_by_upstream',
       );
       expect(markers.length, `${id} should be cascaded exactly once`).toBe(1);
     }
+
+    // The downstream merge node never started, so the cascade's pristine
+    // guard skips it: no event, no generation bump, still pending.
+    const mergeMarkers = persistence.events.filter(
+      (e) => e.taskId === ctx.downstreamMergeId && e.eventType === 'task.invalidated_by_upstream',
+    );
+    expect(mergeMarkers.length, `${ctx.downstreamMergeId} stays pristine`).toBe(0);
+    const mergeTask = orchestrator.getTask(ctx.downstreamMergeId)!;
+    expect(mergeTask.execution.generation ?? 0).toBe(0);
+    expect(mergeTask.status).toBe('pending');
   });
 
   it('CommandService.retryWorkflow on upstream cascades downstream identically', async () => {

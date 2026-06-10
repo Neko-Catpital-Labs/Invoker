@@ -203,10 +203,21 @@ describe('cross-workflow cascade — direct orchestrator primitives', () => {
     ];
   }
 
+  // The chain fixture progresses root/mid/last (completed/completed/running)
+  // but never starts the downstream merge node, so the cascade's pristine
+  // guard must reset only these three.
+  function progressedDownstreamIds(ctx: ChainContext): string[] {
+    return [ctx.downstreamRootId, ctx.downstreamMidId, ctx.downstreamLastId];
+  }
+
   function upstreamMarkerCount(taskId: string): number {
     return persistence.events.filter(
       (e) => e.taskId === taskId && e.eventType === 'task.invalidated_by_upstream',
     ).length;
+  }
+
+  function generationOf(id: string): number {
+    return orchestrator.getTask(id)!.execution.generation ?? 0;
   }
 
   it('direct orchestrator.recreateWorkflow(upstream) cascades to downstream (no routing)', () => {
@@ -238,28 +249,32 @@ describe('cross-workflow cascade — direct orchestrator primitives', () => {
     }
   });
 
-  it('direct recreateWorkflow cascades each downstream task exactly once (no double-bump)', () => {
+  it('direct recreateWorkflow cascades each progressed downstream task exactly once (no double-bump)', () => {
     const ctx = setupChain(orchestrator);
-    const before = downstreamIds(ctx).map(
-      (id) => orchestrator.getTask(id)!.execution.generation ?? 0,
-    );
+    const before = downstreamIds(ctx).map(generationOf);
 
     orchestrator.recreateWorkflow(ctx.upstreamWfId);
 
-    downstreamIds(ctx).forEach((id, i) => {
+    progressedDownstreamIds(ctx).forEach((id, i) => {
       expect(upstreamMarkerCount(id), `${id} cascaded exactly once`).toBe(1);
       expect(
-        orchestrator.getTask(id)!.execution.generation ?? 0,
+        generationOf(id),
         `${id} execution generation bumped exactly once`,
       ).toBe(before[i]! + 1);
     });
+
+    const mergeId = ctx.downstreamMergeId;
+    expect(upstreamMarkerCount(mergeId), `pristine ${mergeId} emits no cascade event`).toBe(0);
+    expect(
+      generationOf(mergeId),
+      `pristine ${mergeId} keeps its execution generation`,
+    ).toBe(before[3]!);
+    expect(orchestrator.getTask(mergeId)!.status).toBe('pending');
   });
 
   it('routed applyInvalidation(recreateWorkflow) does NOT double-cascade downstream', async () => {
     const ctx = setupChain(orchestrator);
-    const before = downstreamIds(ctx).map(
-      (id) => orchestrator.getTask(id)!.execution.generation ?? 0,
-    );
+    const before = downstreamIds(ctx).map(generationOf);
 
     await applyInvalidation(
       'workflow',
@@ -268,16 +283,21 @@ describe('cross-workflow cascade — direct orchestrator primitives', () => {
       buildOrchestratorOnlyInvalidationDeps(orchestrator),
     );
 
-    downstreamIds(ctx).forEach((id, i) => {
+    progressedDownstreamIds(ctx).forEach((id, i) => {
       expect(
         upstreamMarkerCount(id),
         `${id} cascaded exactly once via the routed pipeline (the stage owns it; the primitive opts out)`,
       ).toBe(1);
       expect(
-        orchestrator.getTask(id)!.execution.generation ?? 0,
+        generationOf(id),
         `${id} execution generation bumped exactly once via routed pipeline`,
       ).toBe(before[i]! + 1);
     });
+
+    const mergeId = ctx.downstreamMergeId;
+    expect(upstreamMarkerCount(mergeId), `pristine ${mergeId} emits no cascade event`).toBe(0);
+    expect(generationOf(mergeId)).toBe(before[3]!);
+    expect(orchestrator.getTask(mergeId)!.status).toBe('pending');
   });
 
   it('routed applyInvalidation(recreateWorkflowFromFreshBase) does NOT double-cascade downstream', async () => {
@@ -300,12 +320,91 @@ describe('cross-workflow cascade — direct orchestrator primitives', () => {
       },
     );
 
-    downstreamIds(ctx).forEach((id, i) => {
+    progressedDownstreamIds(ctx).forEach((id, i) => {
       expect(upstreamMarkerCount(id), `${id} cascaded exactly once`).toBe(1);
       expect(
-        orchestrator.getTask(id)!.execution.generation ?? 0,
+        generationOf(id),
         `${id} execution generation bumped exactly once`,
       ).toBe(before[i]! + 1);
+    });
+
+    const mergeId = ctx.downstreamMergeId;
+    expect(upstreamMarkerCount(mergeId), `pristine ${mergeId} emits no cascade event`).toBe(0);
+    expect(generationOf(mergeId)).toBe(before[3]!);
+    expect(orchestrator.getTask(mergeId)!.status).toBe('pending');
+  });
+
+  it('repeated cascadeInvalidationToDownstream over an unchanged downstream is a no-op', () => {
+    const ctx = setupChain(orchestrator);
+
+    const first = orchestrator.cascadeInvalidationToDownstream(ctx.upstreamWfId);
+    expect(first.map((t) => t.id).sort()).toEqual(progressedDownstreamIds(ctx).sort());
+
+    const eventCountAfterFirst = persistence.events.length;
+    const generationsAfterFirst = downstreamIds(ctx).map(generationOf);
+
+    const second = orchestrator.cascadeInvalidationToDownstream(ctx.upstreamWfId);
+
+    expect(second, 'second cascade resets nothing').toEqual([]);
+    expect(
+      persistence.events.length,
+      'second cascade emits no events of any kind',
+    ).toBe(eventCountAfterFirst);
+    downstreamIds(ctx).forEach((id, i) => {
+      expect(
+        generationOf(id),
+        `${id} generation unchanged by the second cascade`,
+      ).toBe(generationsAfterFirst[i]!);
+      expect(orchestrator.getTask(id)!.status).toBe('pending');
+    });
+  });
+
+  it('after a cascade, only a re-progressed downstream task is reset by the next cascade', () => {
+    const ctx = setupChain(orchestrator);
+
+    orchestrator.cascadeInvalidationToDownstream(ctx.upstreamWfId);
+
+    // Re-progress only the downstream root: the upstream merge gate is
+    // still completed, so root is the lone ready task.
+    const started = orchestrator.startExecution();
+    expect(started.map((t) => t.id)).toEqual([ctx.downstreamRootId]);
+
+    orchestrator.handleWorkerResponse(makeResponse({
+      actionId: ctx.downstreamRootId,
+      status: 'completed',
+      executionGeneration:
+        orchestrator.getTask(ctx.downstreamRootId)!.execution.generation ?? 0,
+    }));
+    expect(orchestrator.getTask(ctx.downstreamRootId)!.status).toBe('completed');
+
+    // Completing root auto-starts mid; defer it so the cascade sees a
+    // single re-progressed task among otherwise-pristine siblings.
+    expect(orchestrator.getTask(ctx.downstreamMidId)!.status).toBe('running');
+    orchestrator.deferTask(ctx.downstreamMidId);
+    expect(orchestrator.getTask(ctx.downstreamMidId)!.status).toBe('pending');
+
+    const markerCountsBefore = downstreamIds(ctx).map(upstreamMarkerCount);
+    const generationsBefore = downstreamIds(ctx).map(generationOf);
+
+    const reset = orchestrator.cascadeInvalidationToDownstream(ctx.upstreamWfId);
+
+    expect(
+      reset.map((t) => t.id),
+      'only the re-progressed root is reset',
+    ).toEqual([ctx.downstreamRootId]);
+    expect(upstreamMarkerCount(ctx.downstreamRootId)).toBe(markerCountsBefore[0]! + 1);
+    expect(generationOf(ctx.downstreamRootId)).toBe(generationsBefore[0]! + 1);
+
+    [ctx.downstreamMidId, ctx.downstreamLastId, ctx.downstreamMergeId].forEach((id, i) => {
+      expect(
+        upstreamMarkerCount(id),
+        `pristine sibling ${id} gets no new cascade event`,
+      ).toBe(markerCountsBefore[i + 1]!);
+      expect(
+        generationOf(id),
+        `pristine sibling ${id} keeps its generation`,
+      ).toBe(generationsBefore[i + 1]!);
+      expect(orchestrator.getTask(id)!.status).toBe('pending');
     });
   });
 });
