@@ -4812,11 +4812,12 @@ export class Orchestrator {
    * same chart-mandated unblock-pass without cancelling any
    * in-flight work.
    *
-   * Was `private` before Step 15; exposed publicly so
-   * `applyInvalidation`'s `'scheduleOnly'` dep can invoke it
-   * type-safely. No other behavior changes.
+   * Also rehydrates already-blocked tasks whose external gate has
+   * since cleared; review-ready merge runners use this path after
+   * moving an upstream gate out of `running`.
    */
   autoStartExternallyUnblockedReadyTasks(): TaskState[] {
+    const started = this.autoStartUnblockedTasks();
     const readyTasks = this.stateMachine
       .getReadyTasks()
       .filter((task) => this.getExternalDependencyBlocker(task) === undefined);
@@ -4824,7 +4825,8 @@ export class Orchestrator {
     for (const task of readyTasks) {
       this.enqueueIfNotScheduled(task.id);
     }
-    return this.drainScheduler();
+    started.push(...this.drainScheduler());
+    return started;
   }
 
   private autoStartUnblockedTasks(): TaskState[] {
@@ -4837,6 +4839,7 @@ export class Orchestrator {
       this.writeAndSync(task.id, {
         status: 'pending',
         execution: {
+          blockedBy: undefined,
           startedAt: undefined,
           completedAt: undefined,
           lastHeartbeatAt: undefined,

@@ -91,6 +91,8 @@ function makeHost(hostDir: string, gateDir: string, allTasks: TaskState[]): Merg
       getAllTasks: () => allTasks,
       handleWorkerResponse: vi.fn(),
       setTaskAwaitingApproval: vi.fn(),
+      setTaskReviewReady: vi.fn(),
+      autoStartExternallyUnblockedReadyTasks: vi.fn(() => []),
     } as any,
     callbacks: {} as any,
     async execGitReadonly(args: string[]) {
@@ -170,8 +172,8 @@ describe('publishAfterFixImpl integration (real git)', () => {
     // Feature branch should contain Claude's fix file
     expect(existsSync(join(sandbox.hostDir, 'fix.txt'))).toBe(true);
 
-    // orchestrator.setTaskAwaitingApproval should have been called
-    expect(host.orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-int', expect.objectContaining({
+    // orchestrator.setTaskReviewReady should have been called
+    expect(host.orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-int', expect.objectContaining({
       execution: expect.objectContaining({ branch: 'plan/feature' }),
     }));
   });
@@ -212,7 +214,7 @@ describe('publishAfterFixImpl integration (real git)', () => {
     git('checkout plan/feature', sandbox.hostDir);
     expect(existsSync(join(sandbox.hostDir, 'fix.txt'))).toBe(true);
     expect(existsSync(join(sandbox.hostDir, 'late-change.txt'))).toBe(false);
-    expect(host.orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith(
+    expect(host.orchestrator.setTaskReviewReady).toHaveBeenCalledWith(
       '__merge__wf-int',
       expect.objectContaining({
         execution: expect.objectContaining({
@@ -362,8 +364,8 @@ describe('publishAfterFixImpl integration (real git)', () => {
     const isAncestor = gitSilent(`merge-base --is-ancestor ${headBeforePublish} ${featureSha}`, sandbox.hostDir);
     expect(isAncestor).toBe('');
 
-    // The merge gate must reach awaiting_approval state.
-    expect(host.orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith(
+    // The merge gate must reach review_ready state.
+    expect(host.orchestrator.setTaskReviewReady).toHaveBeenCalledWith(
       '__merge__wf-int',
       expect.objectContaining({
         execution: expect.objectContaining({ branch: 'plan/feature' }),

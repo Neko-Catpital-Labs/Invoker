@@ -60,13 +60,16 @@ if [ -z "$MERGE_ID" ]; then
 fi
 echo "==> case 4.3: merge gate ID=$MERGE_ID"
 
-# headlessApprove exits before the merge gate finishes (it only awaits the
-# directly started tasks, not cascading merge nodes). The merge gate is left in
-# "running" state with its work interrupted. Resume the workflow so the merge
-# gate is detected as orphaned, restarted, and runs to completion.
+# headlessApprove may exit before the cascading merge node finishes. Resume only
+# when the gate still needs recovery; it may already be review_ready here.
 WF_ID="${MERGE_ID#__merge__}"
-echo "==> case 4.3: resume workflow $WF_ID to let merge gate run"
-invoker_e2e_run_headless resume "$WF_ID"
+STM=$(invoker_e2e_task_status "$MERGE_ID")
+if [ "$STM" != "awaiting_approval" ] && [ "$STM" != "review_ready" ]; then
+  echo "==> case 4.3: resume workflow $WF_ID to let merge gate run"
+  invoker_e2e_run_headless resume "$WF_ID"
+else
+  echo "==> case 4.3: merge gate already $STM; resume not needed"
+fi
 invoker_e2e_wait_settled "$MERGE_ID"
 
 STM=$(invoker_e2e_task_status "$MERGE_ID")
