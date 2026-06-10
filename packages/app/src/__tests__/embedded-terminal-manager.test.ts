@@ -135,22 +135,27 @@ describe('EmbeddedTerminalManager', () => {
       spawn: vi.fn(() => spawned),
     };
     const mgr = new EmbeddedTerminalManager({ backend });
+    const codexResumeArgs = [
+      'resume',
+      '--dangerously-bypass-approvals-and-sandbox',
+      'session-1',
+    ];
 
     const first = mgr.openOrReuse({
       taskId: 'task-injected',
-      spec: { command: 'codex', args: ['resume', 'session-1'] },
+      spec: { command: 'codex', args: codexResumeArgs },
       cwd: '/tmp/wt',
     });
     const second = mgr.openOrReuse({
       taskId: 'task-injected',
-      spec: { command: 'codex', args: ['resume', 'session-1'] },
+      spec: { command: 'codex', args: codexResumeArgs },
       cwd: '/tmp/wt',
     });
 
     expect(second.sessionId).toBe(first.sessionId);
     expect(backend.spawn).toHaveBeenCalledTimes(1);
     expect(backend.spawn).toHaveBeenCalledWith(expect.objectContaining({
-      spec: { command: 'codex', args: ['resume', 'session-1'] },
+      spec: { command: 'codex', args: codexResumeArgs },
       cwd: '/tmp/wt',
       defaultShell: expect.any(String),
     }));
@@ -230,16 +235,24 @@ describe('EmbeddedTerminalManager', () => {
 
     const session = mgr.openOrReuse({
       taskId: 'task-1',
-      spec: { command: 'codex', args: ['resume', 'codex-session-1'], cwd: '/tmp/wt' },
+      spec: {
+        command: 'codex',
+        args: ['resume', '--dangerously-bypass-approvals-and-sandbox', 'codex-session-1'],
+        cwd: '/tmp/wt',
+      },
       cwd: '/tmp/wt',
     });
 
     expect(session.command).toBe('codex');
-    expect(session.args).toEqual(['resume', 'codex-session-1']);
+    expect(session.args).toEqual([
+      'resume',
+      '--dangerously-bypass-approvals-and-sandbox',
+      'codex-session-1',
+    ]);
     expect(session.cwd).toBe('/tmp/wt');
     expect(bashSpawnFn).toHaveBeenCalledWith(
       'codex',
-      ['resume', 'codex-session-1'],
+      ['resume', '--dangerously-bypass-approvals-and-sandbox', 'codex-session-1'],
       expect.objectContaining({ cwd: '/tmp/wt', stdio: ['pipe', 'pipe', 'pipe'] }),
     );
   });

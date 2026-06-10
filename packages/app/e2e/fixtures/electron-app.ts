@@ -79,8 +79,9 @@ if [[ "\${1:-}" == "resume" ]]; then
     echo "stdin is not a terminal" >&2
     exit 12
   fi
+  session_id="\${@: -1}"
   sleep 1
-  echo "TTY OK: codex resume \${2:-}"
+  echo "TTY OK: codex resume \${session_id:-}"
   exit 0
 fi
 if [[ "\${1:-}" == "exec" ]]; then
