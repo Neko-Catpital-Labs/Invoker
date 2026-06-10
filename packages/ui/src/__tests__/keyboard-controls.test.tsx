@@ -317,6 +317,10 @@ describe('Camera lock controls (component)', () => {
     return new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
   }
 
+  function keyFromActiveElement(keyName: string) {
+    fireEvent.keyDown(document.activeElement ?? document, { key: keyName });
+  }
+
   /**
    * Stub getBoundingClientRect by data-testid so arrow navigation sees real
    * geometry (jsdom otherwise reports every rect as 0×0). `lefts` maps a node
@@ -425,6 +429,86 @@ describe('Camera lock controls (component)', () => {
     await waitFor(() => expect(setCenterMock).toHaveBeenCalledTimes(1));
   });
 
+  it('keyboard-opened workflow menu handles arrows and restores workflow graph control', async () => {
+    await renderAndSettle();
+    await flushFrame();
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+
+    key('Enter');
+
+    expect(await screen.findByRole('menu')).toHaveTextContent('Open Workflow');
+    const openWorkflow = screen.getByRole('menuitem', { name: 'Open Workflow' });
+    await waitFor(() => expect(openWorkflow).toHaveFocus());
+    await flushFrame();
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(fitViewMock).not.toHaveBeenCalled();
+
+    keyFromActiveElement('ArrowDown');
+
+    await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Open PR' })).toHaveFocus());
+    await flushFrame();
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(fitViewMock).not.toHaveBeenCalled();
+
+    keyFromActiveElement('Escape');
+
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('workflow-graph-surface')).toHaveFocus());
+
+    key('ArrowRight');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Beta Workflow task DAG');
+    });
+    await waitFor(() => expect(setCenterMock).toHaveBeenCalledTimes(1));
+  });
+
+  it('keyboard-opened task menu handles arrows and restores task graph control', async () => {
+    await renderAndSettle();
+
+    key('Tab');
+    key('ArrowRight');
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Second Task');
+    });
+    await waitFor(() => expect(setCenterMock).toHaveBeenCalledTimes(1));
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+
+    key('Enter');
+
+    expect(await screen.findByRole('menu')).toHaveTextContent('Open Terminal');
+    const restartTask = screen.getByRole('menuitem', { name: 'Restart Task' });
+    await waitFor(() => expect(restartTask).toHaveFocus());
+    await flushFrame();
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(fitViewMock).not.toHaveBeenCalled();
+
+    keyFromActiveElement('ArrowDown');
+
+    await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Open Terminal' })).toHaveFocus());
+    await flushFrame();
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(fitViewMock).not.toHaveBeenCalled();
+
+    keyFromActiveElement('Escape');
+
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+    const taskGraphRegion = screen
+      .getByTestId('selected-workflow-mini-dag')
+      .querySelector<HTMLElement>('[data-keyboard-region="taskGraph"]');
+    expect(taskGraphRegion).not.toBeNull();
+    await waitFor(() => expect(taskGraphRegion).toHaveFocus());
+
+    key('ArrowLeft');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Alpha Task');
+    });
+    await waitFor(() => expect(setCenterMock).toHaveBeenCalledTimes(1));
+  });
+
   it('arrow navigation selects the geometrically nearest node, not the alphabetical neighbor', async () => {
     await renderAndSettle(threeWorkflows, threeTasks);
 
@@ -472,4 +556,5 @@ describe('Camera lock controls (component)', () => {
     expect(setCenterMock).not.toHaveBeenCalled();
     expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Gamma Workflow task DAG');
   });
+
 });
