@@ -525,6 +525,7 @@ const ALL_INVALIDATION_ACTIONS: readonly InvalidationAction[] = [
   'fixReject',
   'retryTask',
   'recreateTask',
+  'recreateDownstream',
   'retryWorkflow',
   'recreateWorkflow',
   'recreateWorkflowFromFreshBase',
@@ -534,6 +535,7 @@ const ALL_INVALIDATION_ACTIONS: readonly InvalidationAction[] = [
 const INVALIDATING_ACTIONS: readonly InvalidationAction[] = [
   'retryTask',
   'recreateTask',
+  'recreateDownstream',
   'retryWorkflow',
   'recreateWorkflow',
   'recreateWorkflowFromFreshBase',
