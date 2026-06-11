@@ -1328,11 +1328,16 @@ export class SQLiteAdapter implements PersistenceAdapter {
     if (changes.mergeMode !== undefined) {
       // handled by columnMap; kept for backward-compatible patch shapes
     }
-    if (changes.externalDependencies !== undefined) {
+    // Presence semantics (matching updateTask's config.externalDependencies):
+    // key present with undefined ⇒ clear the column; key absent ⇒ unchanged.
+    // detachWorkflowInternal clears a dependent's last dependency by passing
+    // `externalDependencies: undefined` — a skip-if-undefined check here left
+    // dangling dependencies behind after upstream workflow deletion.
+    if ('externalDependencies' in changes) {
       setClauses.push('external_dependencies = ?');
       values.push(changes.externalDependencies ? JSON.stringify(changes.externalDependencies) : null);
     }
-    if (changes.externalDependencyChanges !== undefined) {
+    if ('externalDependencyChanges' in changes) {
       setClauses.push('external_dependency_changes = ?');
       values.push(changes.externalDependencyChanges ? JSON.stringify(changes.externalDependencyChanges) : null);
     }
