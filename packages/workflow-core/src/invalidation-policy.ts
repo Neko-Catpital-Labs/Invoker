@@ -71,12 +71,7 @@ export interface InvalidationDeps {
   cancelInFlight: CancelInFlightFn;
   retryTask: (taskId: string) => TaskState[] | Promise<TaskState[]>;
   recreateTask: (taskId: string) => TaskState[] | Promise<TaskState[]>;
-  /**
-   * Recreate every transitive downstream dependent of a task while
-   * leaving the task itself untouched. Optional like `workflowFork` /
-   * `scheduleOnly`: production callers wire it via the orchestrator;
-   * tests must supply it to route the action.
-   */
+  /** Recreate a task's transitive downstream dependents while leaving the task itself untouched. */
   recreateDownstream?: (taskId: string) => TaskState[] | Promise<TaskState[]>;
   retryWorkflow: (workflowId: string) => TaskState[] | Promise<TaskState[]>;
   recreateWorkflow: (workflowId: string) => TaskState[] | Promise<TaskState[]>;
@@ -256,9 +251,6 @@ export const ACTION_SPECS: Readonly<Record<InvalidationAction, ActionSpec>> = Ob
     selectAffectedTasks: ({ targetId, tasks }) => taskAndDescendants(targetId, tasks),
   },
   recreateDownstream: {
-    // Like `recreateTask`, but the target itself is preserved: only its
-    // transitive downstream dependents are recreated. The affected set
-    // therefore excludes the target and is empty for a leaf (no-op).
     scope: 'task',
     stages: INVALIDATING_STAGES,
     cascadesAcrossWorkflows: true,
