@@ -19,6 +19,8 @@ import { vi } from 'vitest';
 export function createReactFlowMock() {
   const fitView = vi.fn();
   const setCenter = vi.fn();
+  const getZoom = vi.fn(() => 1);
+  const getViewport = vi.fn(() => ({ x: 0, y: 0, zoom: 1 }));
   const MockReactFlow = React.forwardRef(function MockReactFlow(
     props: {
       nodes?: Array<{
@@ -32,19 +34,33 @@ export function createReactFlowMock() {
       onNodeClick?: (event: React.MouseEvent, node: any) => void;
       onNodeContextMenu?: (event: React.MouseEvent, node: any) => void;
       onNodeDoubleClick?: (event: React.MouseEvent, node: any) => void;
+      onMoveStart?: (event: unknown, viewport: { x: number; y: number; zoom: number }) => void;
       onInit?: () => void;
       children?: React.ReactNode;
     },
     _ref: React.Ref<unknown>,
   ) {
-    const { nodes = [], nodeTypes = {}, onNodeClick, onNodeContextMenu, onNodeDoubleClick, children } = props;
+    const { nodes = [], nodeTypes = {}, onNodeClick, onNodeContextMenu, onNodeDoubleClick, onMoveStart, children } = props;
 
     React.useEffect(() => {
       props.onInit?.();
     }, []);
 
+    // Background pane: panning or wheel-zooming here simulates a user-driven
+    // viewport move, forwarding a non-null event to onMoveStart (mirroring real
+    // React Flow, which passes null for programmatic moves). It is a sibling of
+    // the node elements, so node clicks do not trigger manual-viewport events.
+    const emitManualMove = (event: unknown) =>
+      onMoveStart?.(event, { x: 0, y: 0, zoom: getZoom() });
+
     return (
       <div data-testid="mock-react-flow" className="react-flow">
+        <div
+          data-testid="rf__pane"
+          className="react-flow__pane"
+          onPointerDown={(e) => emitManualMove(e.nativeEvent)}
+          onWheel={(e) => emitManualMove(e.nativeEvent)}
+        />
         {props.edges?.map((edge: any) => (
           <div
             key={edge.id}
@@ -87,10 +103,29 @@ export function createReactFlowMock() {
   return {
     ReactFlow: MockReactFlow,
     ReactFlowProvider: MockReactFlowProvider,
-    useReactFlow: () => ({ fitView, setCenter }),
+    useReactFlow: () => ({ fitView, setCenter, getZoom, getViewport }),
     __setCenterMock: setCenter,
     __fitViewMock: fitView,
-    applyNodeChanges: vi.fn((changes: unknown[], nodes: unknown[]) => nodes),
+    __getZoomMock: getZoom,
+    __getViewportMock: getViewport,
+    // Faithful-enough applyNodeChanges: real @xyflow/react records measured
+    // dimensions on the node (node.measured) for 'dimensions' changes and flips
+    // node.selected for 'select' changes. The TaskDAG relies on measured being
+    // preserved across task-delta re-renders, so the mock must mirror that.
+    applyNodeChanges: vi.fn((changes: Array<Record<string, any>>, nodes: Array<Record<string, any>>) => {
+      const next = nodes.map((node) => ({ ...node }));
+      const byId = new Map(next.map((node) => [node.id as string, node]));
+      for (const change of changes) {
+        const node = byId.get(change.id as string);
+        if (!node) continue;
+        if (change.type === 'dimensions' && change.dimensions) {
+          node.measured = { ...change.dimensions };
+        } else if (change.type === 'select') {
+          node.selected = change.selected;
+        }
+      }
+      return next;
+    }),
     Background: () => null,
     Controls: () => null,
     MarkerType: { ArrowClosed: 'arrowclosed' },

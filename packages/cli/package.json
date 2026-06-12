@@ -1,6 +1,6 @@
 {
   "name": "@invoker/cli",
-  "version": "0.0.3",
+  "version": "0.0.5",
   "description": "Standalone Invoker command-line runner",
   "type": "module",
   "bin": {

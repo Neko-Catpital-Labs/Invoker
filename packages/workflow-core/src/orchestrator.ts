@@ -27,6 +27,14 @@ import type { Logger, WorkResponse } from '@invoker/contracts';
 import { ATTEMPT_LEASE_MS } from '@invoker/contracts';
 import { normalizeRunnerKind } from '@invoker/workflow-graph';
 import { parseMergeConflictError } from './merge-conflict-error.js';
+import {
+  buildExecutorRoutedPayload,
+  buildHeavyweightRoutingRules,
+  resolveExecutorRouting,
+  type ExecutorRoutingReason,
+  type ExecutorRoutingRule,
+  type HeavyweightCommandRoutingPolicy,
+} from './executor-routing.js';
 
 const MERGE_TRACE_LOG = resolve(homedir(), '.invoker', 'merge-trace.log');
 function mergeTrace(tag: string, data: Record<string, unknown>): void {
@@ -113,6 +121,32 @@ function workflowTimestamp(): Date {
   }
   return new Date();
 }
+/** Recreate-class reset: fresh lineage, cleared attempt/session/container metadata. */
+const RECREATE_RESET_CHANGES: TaskStateChanges = {
+  status: 'pending',
+  config: { summary: undefined },
+  execution: {
+    autoFixAttempts: 0,
+    startedAt: undefined,
+    completedAt: undefined,
+    error: undefined,
+    exitCode: undefined,
+    commit: undefined,
+    branch: undefined,
+    workspacePath: undefined,
+    lastHeartbeatAt: undefined,
+    phase: undefined,
+    launchStartedAt: undefined,
+    launchCompletedAt: undefined,
+    reviewUrl: undefined,
+    reviewId: undefined,
+    reviewStatus: undefined,
+    reviewProviderId: undefined,
+    agentSessionId: undefined,
+    containerId: undefined,
+  },
+};
+
 const FIX_FAILURE_PREFIX_RE = /^\[Fix with (?:Claude|Agent) failed\] [^\n]*\n\n/;
 const TRACE_PERSIST_SYNC = process.env.INVOKER_TRACE_PERSIST_SYNC === '1';
 const TRACE_WORKER_RESPONSE = process.env.INVOKER_TRACE_WORKER_RESPONSE === '1';
@@ -265,7 +299,11 @@ export interface OrchestratorPersistence {
     workflowId: string;
     priority?: 'high' | 'normal' | 'low';
     generation: number;
-  }): { id: number };
+  }): {
+    id: number;
+    state?: 'enqueued' | 'leased' | 'completed' | 'abandoned';
+    priority?: 'high' | 'normal' | 'low';
+  };
   abandonLaunchDispatchesForTasks?(
     taskIds: readonly string[],
     reason: string,
@@ -451,243 +489,13 @@ export interface ExternalGatePolicyUpdate {
   gatePolicy: 'completed' | 'review_ready';
 }
 
-/**
- * A single routing rule that validates task pool placement against command patterns.
- * When a rule matches a task command, the orchestrator validates that the task's
- * pool destination conforms to the rule's requirements.
- */
-export interface ExecutorRoutingRule {
-  /** Substring to match against the task command. */
-  pattern?: string;
-  /** Regular expression matched against the task command; compiled with new RegExp(regex). */
-  regex?: string;
-  /** Required execution pool ID for matching commands. */
-  poolId: string;
-  /**
-   * Rule behavior:
-   * - enforce (default): task must already declare matching executor/destination
-   * - route: auto-apply rule executor/destination when omitted, and reject conflicts
-   */
-  strategy?: 'enforce' | 'route';
-}
-
-export interface CommandRoutingMatcher {
-  pattern?: string;
-  regex?: string;
-}
-
-export interface HeavyweightCommandRoutingPolicy {
-  enabled?: boolean;
-  poolId: string;
-  matchers?: CommandRoutingMatcher[];
-}
-
-const DEFAULT_HEAVYWEIGHT_COMMAND_MATCHERS: CommandRoutingMatcher[] = [
-  { regex: '\\bpnpm(?:\\s|$)' },
-];
-
-function validateRoutingDestinationAvailability(
-  taskId: string,
-  command: string,
-  sourceLabel: string,
-  poolId: string | undefined,
-  availablePoolIds: Set<string>,
-): void {
-  if (availablePoolIds.size > 0 && (!poolId || !availablePoolIds.has(poolId))) {
-    throw new Error(
-      `Task "${taskId}" with command "${command}" matched ${sourceLabel}, ` +
-      `but config poolId="${poolId}" is not defined in executionPools.`,
-    );
-  }
-  if (availablePoolIds.size === 0) {
-    throw new Error(
-      `Task "${taskId}" with command "${command}" matched ${sourceLabel}, ` +
-      'but no executionPools are configured.',
-    );
-  }
-}
-
-function buildHeavyweightRoutingRules(
-  taskId: string,
-  policy: HeavyweightCommandRoutingPolicy | undefined,
-): ExecutorRoutingRule[] {
-  if (!policy || policy.enabled === false) {
-    return [];
-  }
-
-  const matchers = policy.matchers?.length ? policy.matchers : DEFAULT_HEAVYWEIGHT_COMMAND_MATCHERS;
-  if (!policy.poolId) {
-    throw new Error(
-      `Task "${taskId}" matched heavyweight command routing, ` +
-      'but config is missing destination: set poolId.',
-    );
-  }
-
-  return matchers.map((matcher) => ({
-    pattern: matcher.pattern,
-    regex: matcher.regex,
-    poolId: policy.poolId,
-    strategy: 'route',
-  }));
-}
-
-function applyRoutingRule(
-  taskId: string,
-  command: string,
-  planPoolId: string | undefined,
-  rule: ExecutorRoutingRule,
-  sourceLabel: string,
-  availablePoolIds: Set<string>,
-): { poolId?: string } | undefined {
-  validateRoutingDestinationAvailability(
-    taskId,
-    command,
-    sourceLabel,
-    rule.poolId,
-    availablePoolIds,
-  );
-  if (planPoolId !== undefined && planPoolId !== rule.poolId) {
-    throw new Error(
-      `Task "${taskId}" with command "${command}" matched ${sourceLabel} and must use ` +
-      `poolId="${rule.poolId}", but plan declares poolId="${planPoolId}"`,
-    );
-  }
-  return {
-    poolId: rule.poolId ?? planPoolId,
-  };
-}
-
-/**
- * Finds the first executor routing rule that matches the given command.
- * A rule matches when `pattern` is a substring of `command`, `regex` compiles and tests
- * true against `command`, or both (either is sufficient).
- * Returns the matching rule or undefined if no rule matches.
- */
-export function findMatchingExecutorRoutingRule(
-  command: string,
-  rules: ExecutorRoutingRule[],
-): ExecutorRoutingRule | undefined {
-  for (const rule of rules) {
-    const patternMatch = rule.pattern !== undefined && command.includes(rule.pattern);
-    const regexMatch = rule.regex !== undefined && new RegExp(rule.regex).test(command);
-    if (patternMatch || regexMatch) {
-      return rule;
-    }
-  }
-  return undefined;
-}
-
-/**
- * Validates that a task's routing conforms to pool routing rules.
- * Returns immediately if the task has no command or no rules are configured.
- * When a rule matches the task command, throws if the task's poolId does not
- * match the rule's requirements.
- */
-export function assertExecutorRoutingConforms(
-  taskId: string,
-  command: string | undefined,
-  planPoolId: string | undefined,
-  rules: ExecutorRoutingRule[],
-): void {
-  if (!command || rules.length === 0) {
-    return;
-  }
-
-  const matchingRule = findMatchingExecutorRoutingRule(command, rules);
-  if (!matchingRule) {
-    return;
-  }
-
-  if (planPoolId !== matchingRule.poolId) {
-    throw new Error(
-      `Task "${taskId}" with command "${command}" requires poolId="${matchingRule.poolId}" ` +
-      `but plan declares poolId="${planPoolId ?? '(undefined)'}"`
-    );
-  }
-}
-
-function resolveExecutorRouting(
-  taskId: string,
-  command: string | undefined,
-  planPoolId: string | undefined,
-  defaultPoolId: string | undefined,
-  rules: ExecutorRoutingRule[],
-  availablePoolIds: Set<string>,
-): { poolId?: string; reason: ExecutorRoutingReason } {
-  if (defaultPoolId && availablePoolIds.size > 0 && !availablePoolIds.has(defaultPoolId)) {
-    throw new Error(
-      `Task "${taskId}" cannot use defaultPoolId="${defaultPoolId}" because it is not defined in executionPools.`,
-    );
-  }
-
-  const initialPoolId = planPoolId ?? defaultPoolId;
-  const initialReason: ExecutorRoutingReason = initialPoolId
-    ? { type: 'poolId', poolId: initialPoolId }
-    : { type: 'defaultWorktree' };
-
-  if (!command || rules.length === 0) {
-    return {
-      poolId: initialPoolId,
-      reason: initialReason,
-    };
-  }
-
-  let effectivePoolId = initialPoolId;
-  let reason: ExecutorRoutingReason = initialReason;
-
-  const routingRules = rules.filter((rule) => (rule.strategy ?? 'enforce') === 'route');
-  const matchingRoutingRule = findMatchingExecutorRoutingRule(command, routingRules);
-  if (matchingRoutingRule) {
-    const routed = applyRoutingRule(
-      taskId,
-      command,
-      planPoolId,
-      matchingRoutingRule,
-      'routing rule',
-      availablePoolIds,
-    );
-    effectivePoolId = routed?.poolId ?? effectivePoolId;
-    if (routed?.poolId) {
-      reason = {
-        type: 'routingRule',
-        poolId: routed.poolId,
-        ...(matchingRoutingRule.pattern !== undefined ? { pattern: matchingRoutingRule.pattern } : {}),
-        ...(matchingRoutingRule.regex !== undefined ? { regex: matchingRoutingRule.regex } : {}),
-      };
-    }
-  }
-
-  const enforcementRules = rules.filter((rule) => (rule.strategy ?? 'enforce') === 'enforce');
-  assertExecutorRoutingConforms(
-    taskId,
-    command,
-    effectivePoolId,
-    enforcementRules,
-  );
-
-  return {
-    poolId: effectivePoolId,
-    reason,
-  };
-}
-
-type ExecutorRoutingReason =
-  | { type: 'dockerImage' }
-  | { type: 'poolId'; poolId: string }
-  | { type: 'routingRule'; poolId: string; pattern?: string; regex?: string }
-  | { type: 'defaultWorktree' };
-
-function buildExecutorRoutedPayload(
-  runnerKind: RunnerKind,
-  poolId: string | undefined,
-  reason: ExecutorRoutingReason,
-): Record<string, unknown> {
-  return {
-    runnerKind,
-    ...(poolId ? { poolId } : {}),
-    reason,
-  };
-}
+export {
+  findMatchingExecutorRoutingRule,
+  assertExecutorRoutingConforms,
+  type ExecutorRoutingRule,
+  type CommandRoutingMatcher,
+  type HeavyweightCommandRoutingPolicy,
+} from './executor-routing.js';
 
 /**
  * Adapt an OrchestratorPersistence into the TaskRepository port.
@@ -1187,6 +995,14 @@ export class Orchestrator {
         .filter((t) => t.config.workflowId === id);
     }
 
+    return this.cancelActiveCandidates(candidates, scope);
+  }
+
+  /** Mark every actively-running task in `candidates` as `failed` with a cancel marker, freeing its scheduler slot. */
+  private cancelActiveCandidates(
+    candidates: readonly TaskState[],
+    scope: 'task' | 'workflow',
+  ): string[] {
     const cancelled: string[] = [];
     for (const t of candidates) {
       if (!isActiveForInvalidation(t.status)) continue;
@@ -1400,6 +1216,8 @@ export class Orchestrator {
         lastHeartbeatAt: undefined,
         error: undefined,
         exitCode: undefined,
+        branch: undefined,
+        commit: undefined,
         inputPrompt: undefined,
         pendingFixError: undefined,
         agentSessionId: undefined,
@@ -2075,77 +1893,6 @@ export class Orchestrator {
     this.checkWorkflowCompletion();
   }
 
-  /**
-   * Select a winning experiment for a reconciliation task — **retry-class**
-   * invalidation route per Step 7 of
-   * `docs/architecture/task-invalidation-roadmap.md` and the Decision Table
-   * row "Edit selected experiment" in
-   * `docs/architecture/task-invalidation-chart.md`
-   * (`MUTATION_POLICIES.selectedExperiment` → `retryTask` / task scope).
-   *
-   * Why retry-class (not recreate-class). The chart classifies single
-   * experiment selection as a downstream-input mutation: the
-   * reconciliation task's *result* (its selected branch/commit) is the
-   * execution input that downstream consumers use, so changing the
-   * winner invalidates downstream attempts but does NOT change the
-   * reconciliation task's own spec. The chart's "Why" column reads
-   * "Downstream execution inputs changed". `applyInvalidation('task',
-   * 'retryTask', reconId, deps)` is wired to today's
-   * `Orchestrator.restartTask` via `buildInvalidationDeps` (the
-   * compatibility seam Step 1 introduced; Step 13 will rename
-   * `restartTask` → `retryTask` to close the matrix).
-   *
-   * Sequence (mirrors `applyInvalidation`'s contract for the
-   * synchronous orchestrator-internal seam — see `invalidation-policy.ts`
-   * and the Step 5/6 `editTaskType` precedent):
-   *   1. **Cancel-first (Hard Invariant).** Compute the transitive
-   *      downstream subgraph of the reconciliation task and cancel any
-   *      member that is actively executing (`running` or
-   *      `fixing_with_ai`) BEFORE we mutate the recon's
-   *      `selectedExperiment`. This is the "any AFFECTED in-flight
-   *      work" guarantee from the chart: stale downstream attempts
-   *      cannot survive a re-selection because they would consume the
-   *      OLD winner's lineage. For the common initial-selection path
-   *      (recon `needs_input` → `completed` with downstream blocked at
-   *      `pending`) this loop is a no-op — there is nothing active.
-   *   2. **Persist new winner.** `writeAndSync` updates
-   *      `execution.selectedExperiment` (and the recon's
-   *      `branch`/`commit` to mirror the winner's lineage) and emits a
-   *      `task.completed` delta. The reconciliation task's status
-   *      transitions to `completed`; this matches the existing
-   *      "Behavior Today" column in the chart ("completes
-   *      reconciliation task and unblocks downstream").
-   *   3. **Retry-class reset of downstream (re-selection only).** When
-   *      the recon was previously completed with a *different* winner,
-   *      every direct downstream consumer is reset via `restartTask`,
-   *      which is the current `retryTask` compatibility wire.
-   *      `restartTask` cascades to its own descendants and bumps each
-   *      affected task's execution generation exactly once via
-   *      `withBumpedExecutionGeneration` (single source of truth for the
-   *      retry reset shape — Step 7 deliberately reuses it instead of
-   *      duplicating the field list here, mirroring Steps 5/6). For
-   *      the initial-selection path no downstream reset is needed
-   *      because nothing has executed yet against the recon's result.
-   *   4. **Auto-start newly ready tasks.** Existing behavior:
-   *      `findNewlyReadyTasks(reconId)` plus `autoStartReadyTasks`
-   *      unblocks downstream that just became ready due to recon
-   *      completing.
-   *
-   * Public surface is unchanged: same `(taskId, experimentId)` signature
-   * returning `TaskState[]` of newly-started tasks. Active downstream is
-   * NO LONGER silently overwritten with a new winner — that's the whole
-   * point of cancel-first per the chart's Hard Invariant. Prior to
-   * Step 7 there was no general active invalidation model for selection
-   * (per the chart's "Behavior Today" column); this method introduces
-   * one.
-   *
-   * NOTE: `recreateTask`'s lineage-discarding reset shape is
-   * deliberately NOT used here. Downstream tasks may still hold valid
-   * workspace lineage (their own branch, their own workspacePath) that
-   * the executor can reuse when the new winner's branch is rebased onto
-   * theirs; that is what makes selection retry-class rather than
-   * recreate-class in the chart's Decision Table.
-   */
   selectExperiment(taskId: string, experimentId: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
@@ -2204,8 +1951,9 @@ export class Orchestrator {
       const directDownstream = allTasksBefore
         .filter((t) => t.dependencies.includes(reconId))
         .map((t) => t.id);
+      const reselectionAction = MUTATION_POLICIES.selectedExperiment.action;
       for (const dsId of directDownstream) {
-        this.recreateTask(dsId);
+        this.dispatchPostMutation(reselectionAction, dsId);
       }
     }
     const readyTaskIds = this.stateMachine.findNewlyReadyTasks(reconId);
@@ -2219,7 +1967,7 @@ export class Orchestrator {
     return started;
   }
 
-    selectExperiments(
+  selectExperiments(
     taskId: string,
     experimentIds: string[],
     combinedBranch?: string,
@@ -2288,9 +2036,10 @@ export class Orchestrator {
         .getAllTasks()
         .filter((t) => t.dependencies.includes(reconId))
         .map((t) => t.id);
+      const reselectionAction = MUTATION_POLICIES.selectedExperimentSet.action;
       for (const dsId of directDownstreamAfter) {
         if (this.stateGetTask(dsId)) {
-          this.recreateTask(dsId);
+          this.dispatchPostMutation(reselectionAction, dsId);
         }
       }
     }
@@ -2357,6 +2106,7 @@ export class Orchestrator {
         completedAt: undefined,
         error: undefined,
         exitCode: undefined,
+        pendingFixError: undefined,
         commit: undefined,
         lastHeartbeatAt: undefined,
         launchStartedAt: undefined,
@@ -2549,50 +2299,33 @@ export class Orchestrator {
     // Defense-in-depth for direct callers (CommandService.recreateTask
     // wired in Step 17); a no-op when invoked through `applyInvalidation`.
     this.cancelActiveBeforeInvalidation('task', rootId);
-    let plan = planInvalidation({
+    const plan = planInvalidation({
       action: 'recreateTask',
       targetId: rootId,
       tasks: this.stateMachine.getAllTasks(),
     });
     this.lastInvalidationPlan = plan;
-    const toResetIds = plan.affectedTaskIds;
-    const toResetSet = new Set(toResetIds);
-
-    const resetChanges: TaskStateChanges = {
-      status: 'pending',
-      config: { summary: undefined },
-      execution: {
-        autoFixAttempts: 0,
-        startedAt: undefined,
-        completedAt: undefined,
-        error: undefined,
-        exitCode: undefined,
-        commit: undefined,
-        branch: undefined,
-        workspacePath: undefined,
-        lastHeartbeatAt: undefined,
-        phase: undefined,
-        launchStartedAt: undefined,
-        launchCompletedAt: undefined,
-        reviewUrl: undefined,
-        reviewId: undefined,
-        reviewStatus: undefined,
-        reviewProviderId: undefined,
-        agentSessionId: undefined,
-        containerId: undefined,
-      },
-    };
-
     this.logger.info('[orchestrator] recreateTask reset', {
       taskId: rootId,
-      resetCount: toResetIds.length,
+      resetCount: plan.affectedTaskIds.length,
     });
-    this.invalidateLaunchArtifactsForTasks(toResetIds, 'task recreation reset');
+    return this.applyRecreateReset(plan, 'task recreation reset');
+  }
+
+  /**
+   * Shared tail of the recreate-class mutations: apply `RECREATE_RESET_CHANGES`
+   * to every task in `plan.affectedTaskIds`, then auto-start the ones that
+   * become ready.
+   */
+  private applyRecreateReset(plan: InvalidationPlan, artifactReason: string): TaskState[] {
+    const toResetIds = plan.affectedTaskIds;
+    const toResetSet = new Set(toResetIds);
+    this.invalidateLaunchArtifactsForTasks(toResetIds, artifactReason);
 
     for (const id of toResetIds) {
       const current = this.stateGetTask(id);
       if (!current) continue;
-      const changesWithGeneration = this.withBumpedExecutionGeneration(current, resetChanges);
+      const changesWithGeneration = this.withBumpedExecutionGeneration(current, RECREATE_RESET_CHANGES);
       const recreateUpdated = this.writeAndSync(id, changesWithGeneration);
       const priorAttemptId = current.execution.selectedAttemptId;
       this.replaceSelectedAttempt(current);
@@ -2607,9 +2340,46 @@ export class Orchestrator {
       .getReadyTasks()
       .map((t) => t.id)
       .filter((id) => toResetSet.has(id));
-    plan = withSchedulerEnqueueCandidates(plan, readyIds);
-    this.lastInvalidationPlan = plan;
+    this.lastInvalidationPlan = withSchedulerEnqueueCandidates(plan, readyIds);
     return this.autoStartReadyTasks(readyIds, Orchestrator.EXPEDITED_PRIORITY);
+  }
+
+  /**
+   * Reset a task's transitive downstream dependents to pending (recreate-style)
+   * and auto-start the ones that become ready, leaving the task itself untouched.
+   * Calling it on a leaf is a no-op.
+   */
+  recreateDownstream(taskId: string): TaskState[] {
+    this.refreshFromDb();
+    const task = this.stateGetTask(taskId);
+    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
+
+    const rootId = task.id;
+
+    const plan = planInvalidation({
+      action: 'recreateDownstream',
+      targetId: rootId,
+      tasks: this.stateMachine.getAllTasks(),
+    });
+    this.lastInvalidationPlan = plan;
+    const toResetIds = plan.affectedTaskIds;
+
+    if (toResetIds.length === 0) {
+      this.logger.info('[orchestrator] recreateDownstream no-op (leaf)', { taskId: rootId });
+      return [];
+    }
+
+    // Cancel only descendants so the preserved target's active attempt is never interrupted.
+    const descendants = toResetIds
+      .map((id) => this.stateGetTask(id))
+      .filter((t): t is TaskState => !!t);
+    this.cancelActiveCandidates(descendants, 'task');
+
+    this.logger.info('[orchestrator] recreateDownstream reset', {
+      taskId: rootId,
+      resetCount: toResetIds.length,
+    });
+    return this.applyRecreateReset(plan, 'downstream recreation reset');
   }
 
   /**
@@ -2638,28 +2408,8 @@ export class Orchestrator {
     this.lastInvalidationPlan = plan;
 
     const resetChanges: TaskStateChanges = {
-      status: 'pending',
+      ...RECREATE_RESET_CHANGES,
       config: { summary: undefined, poolMemberId: undefined },
-      execution: {
-        autoFixAttempts: 0,
-        startedAt: undefined,
-        completedAt: undefined,
-        error: undefined,
-        exitCode: undefined,
-        commit: undefined,
-        branch: undefined,
-        workspacePath: undefined,
-        lastHeartbeatAt: undefined,
-        phase: undefined,
-        launchStartedAt: undefined,
-        launchCompletedAt: undefined,
-        reviewUrl: undefined,
-        reviewId: undefined,
-        reviewStatus: undefined,
-        reviewProviderId: undefined,
-        agentSessionId: undefined,
-        containerId: undefined,
-      },
     };
 
     this.logger.info('[orchestrator] recreateWorkflow reset', {
@@ -3242,15 +2992,6 @@ export class Orchestrator {
    * compatible callers continue to use the workflow-scoped
    * `setWorkflowMergeMode` wrapper which translates `workflowId →
    * mergeNodeId` and delegates here.
-   *
-   * NOTE: `recreateTask`'s lineage-discarding reset shape is
-   * deliberately NOT used here. A merge-mode flip does not invalidate
-   * the merge node's accumulated workspace (the merged branch lineage
-   * built from upstream leaf results); only the merge execution
-   * policy changed. That distinction is what makes merge-mode the
-   * single retry-class route alongside the other retry-class rows
-   * (`runnerKind`, `selectedExperiment`, `selectedExperimentSet`)
-   * in the chart's Decision Table.
    */
   editTaskMergeMode(
     taskId: string,
@@ -3908,20 +3649,33 @@ export class Orchestrator {
    * Resume a previously persisted workflow by restoring tasks
    * and auto-starting ready tasks.
    */
+  private isRecoverableResumeTask(task: TaskState): boolean {
+    if (task.status === 'running') return true;
+    if (task.status !== 'pending' || !task.execution.selectedAttemptId) return false;
+    if (task.execution.phase === 'launching') return true;
+
+    return Boolean(
+      task.execution.startedAt
+      || task.execution.launchStartedAt
+      || task.execution.launchCompletedAt
+      || task.execution.lastHeartbeatAt
+      || task.execution.workspacePath
+      || task.execution.agentSessionId
+      || task.execution.containerId
+      || task.execution.error
+      || task.execution.exitCode !== undefined
+      || task.execution.inputPrompt
+      || task.execution.pendingFixError,
+    );
+  }
+
   resumeWorkflow(workflowId: string): TaskState[] {
     this.syncFromDb(workflowId);
     const workflowTaskIds = new Set(this.persistence.loadTasks(workflowId).map((task) => task.id));
     const tasksToRecover = this.stateMachine
       .getAllTasks()
       .filter((task) => task.config.workflowId === workflowId || workflowTaskIds.has(task.id))
-      .filter((task) =>
-        task.status === 'running'
-        || (
-          task.status === 'pending'
-          && task.execution.phase === 'launching'
-          && !!task.execution.selectedAttemptId
-        )
-      );
+      .filter((task) => this.isRecoverableResumeTask(task));
     for (const task of tasksToRecover) {
       this.prepareTaskForNewAttempt(task.id, 'resume_workflow_recovery');
     }
@@ -4358,9 +4112,11 @@ export class Orchestrator {
         return { task, attemptId, attempt };
       })
       .filter(({ task, attempt }) => this.isTaskExecutionActive(task, attempt, now));
+    const activeTaskIds = new Set(activeAttempts.map(({ task }) => task.id));
     const queuedTasks = this.stateMachine
       .getReadyTasks()
       .filter((task) => task.status === 'pending')
+      .filter((task) => !activeTaskIds.has(task.id))
       .filter((task) => this.getExternalDependencyBlocker(task) === undefined)
       .map((task) => {
         const attempt = task.execution.selectedAttemptId
@@ -4868,11 +4624,12 @@ export class Orchestrator {
    * same chart-mandated unblock-pass without cancelling any
    * in-flight work.
    *
-   * Was `private` before Step 15; exposed publicly so
-   * `applyInvalidation`'s `'scheduleOnly'` dep can invoke it
-   * type-safely. No other behavior changes.
+   * Also rehydrates already-blocked tasks whose external gate has
+   * since cleared; review-ready merge runners use this path after
+   * moving an upstream gate out of `running`.
    */
   autoStartExternallyUnblockedReadyTasks(): TaskState[] {
+    const started = this.autoStartUnblockedTasks();
     const readyTasks = this.stateMachine
       .getReadyTasks()
       .filter((task) => this.getExternalDependencyBlocker(task) === undefined);
@@ -4880,7 +4637,8 @@ export class Orchestrator {
     for (const task of readyTasks) {
       this.enqueueIfNotScheduled(task.id);
     }
-    return this.drainScheduler();
+    started.push(...this.drainScheduler());
+    return started;
   }
 
   private autoStartUnblockedTasks(): TaskState[] {
@@ -4893,6 +4651,7 @@ export class Orchestrator {
       this.writeAndSync(task.id, {
         status: 'pending',
         execution: {
+          blockedBy: undefined,
           startedAt: undefined,
           completedAt: undefined,
           lastHeartbeatAt: undefined,
@@ -5366,6 +5125,20 @@ export class Orchestrator {
           this.persistence.logEvent?.(job.taskId, 'task.dispatch_enqueued', {
             ...changes,
             dispatchId: dispatch.id,
+            attemptId: launchAttemptId,
+            workflowId: task.config.workflowId,
+            generation: this.getExecutionGeneration(task),
+            state: dispatch.state,
+            priority: dispatch.priority,
+          });
+          this.logger.info('[orchestrator] drainScheduler: launch dispatch enqueued', {
+            taskId: job.taskId,
+            attemptId: launchAttemptId,
+            workflowId: task.config.workflowId,
+            generation: this.getExecutionGeneration(task),
+            dispatchId: dispatch.id,
+            state: dispatch.state,
+            priority: dispatch.priority,
           });
         } catch (err) {
           this.logger.warn('[orchestrator] drainScheduler: enqueueLaunchDispatch failed', {

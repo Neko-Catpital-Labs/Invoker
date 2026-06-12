@@ -59,16 +59,11 @@ async function resolveBaseCheckoutRef(
  * Start any newly-ready downstream tasks (e.g., cross-workflow review_ready deps).
  */
 async function startReviewReadyDependents(host: MergeRunnerHost): Promise<void> {
-  const orchestrator = host.orchestrator as unknown as {
-    startExecution?: () => TaskState[];
-  };
-  if (typeof orchestrator.startExecution !== 'function') {
+  const newlyStarted = host.orchestrator.autoStartExternallyUnblockedReadyTasks();
+  if (newlyStarted.length === 0) {
     return;
   }
-  const newlyStarted = orchestrator.startExecution();
-  if (newlyStarted.length > 0) {
-    await host.executeTasks(newlyStarted);
-  }
+  await host.executeTasks(newlyStarted);
 }
 
 function setMergeGateReviewReady(
@@ -76,15 +71,7 @@ function setMergeGateReviewReady(
   taskId: string,
   changes: TaskStateChanges,
 ): void {
-  const orchestrator = host.orchestrator as unknown as {
-    setTaskReviewReady?: (id: string, c?: TaskStateChanges) => void;
-    setTaskAwaitingApproval?: (id: string, c?: TaskStateChanges) => void;
-  };
-  if (typeof orchestrator.setTaskReviewReady === 'function') {
-    orchestrator.setTaskReviewReady(taskId, changes);
-    return;
-  }
-  orchestrator.setTaskAwaitingApproval?.(taskId, changes);
+  host.orchestrator.setTaskReviewReady(taskId, changes);
 }
 
 function buildMergeConflictJson(errorText: string, failedBranch: string): string | undefined {

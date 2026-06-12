@@ -95,6 +95,19 @@ export class PersistedWorkflowMutationCoordinator {
     args: unknown[],
     options?: { deferDrain?: boolean },
   ): number {
+    const coalesced = this.findOpenCoalescibleRetryIntent(workflowId, channel, args);
+    if (coalesced) {
+      this.trace(
+        `submit coalesced workflow=${workflowId} channel=${channel} into intent=${coalesced.id} status=${coalesced.status}`,
+      );
+      if (options?.deferDrain) {
+        this.scheduleWorkflowDrainDeferred(workflowId);
+      } else {
+        this.scheduleWorkflowDrain(workflowId);
+      }
+      return coalesced.id;
+    }
+
     const intentId = this.persistence.enqueueWorkflowMutationIntent(workflowId, channel, args, priority);
     this.enqueueStartedAtMs.set(intentId, Date.now());
     this.createTiming(workflowId, channel, intentId, args)
@@ -112,6 +125,35 @@ export class PersistedWorkflowMutationCoordinator {
       this.scheduleWorkflowDrain(workflowId);
     }
     return intentId;
+  }
+
+  private findOpenCoalescibleRetryIntent(
+    workflowId: string,
+    channel: string,
+    args: unknown[],
+  ): WorkflowMutationIntent | undefined {
+    const key = this.coalescibleRetryKey(channel, args);
+    if (!key) return undefined;
+    const open = this.persistence.listWorkflowMutationIntents(workflowId, ['queued', 'running']);
+    return open.find((intent) => this.coalescibleRetryKey(intent.channel, intent.args) === key);
+  }
+
+  private coalescibleRetryKey(channel: string, args: unknown[]): string | null {
+    if (channel === 'invoker:retry-workflow') {
+      const target = typeof args[0] === 'string' ? args[0] : '';
+      return /^wf-[^/]+$/.test(target) ? `retry-workflow:${target}` : null;
+    }
+    if (channel !== 'headless.exec') {
+      return null;
+    }
+    const payload = args[0] as { args?: unknown[] } | undefined;
+    const rawArgs = Array.isArray(payload?.args) ? payload.args : [];
+    const command = typeof rawArgs[0] === 'string' ? rawArgs[0] : '';
+    const target = typeof rawArgs[1] === 'string' ? rawArgs[1] : '';
+    if (command !== 'retry' || !/^wf-[^/]+$/.test(target)) {
+      return null;
+    }
+    return `retry-workflow:${target}`;
   }
 
   async resumePending(): Promise<void> {
@@ -359,28 +401,38 @@ export class PersistedWorkflowMutationCoordinator {
     }
     const activeLease = this.persistence.listWorkflowMutationLeases()
       .find((lease) => lease.workflowId === workflowId);
-    const activeIntentId = activeLease?.activeIntentId;
-    if (!activeIntentId || activeIntentId >= newIntentId) {
+    const activeIntentIds = new Set<number>();
+    if (activeLease?.activeIntentId && activeLease.activeIntentId < newIntentId) {
+      activeIntentIds.add(activeLease.activeIntentId);
+    }
+    for (const runningIntent of this.persistence.listWorkflowMutationIntents(workflowId, ['running'])) {
+      if (runningIntent.id < newIntentId) {
+        activeIntentIds.add(runningIntent.id);
+      }
+    }
+    if (activeIntentIds.size === 0) {
       return;
     }
-    const activeIntent = this.persistence.loadWorkflowMutationIntent(activeIntentId);
-    if (!activeIntent || activeIntent.status !== 'running') {
-      return;
+    for (const activeIntentId of activeIntentIds) {
+      const activeIntent = this.persistence.loadWorkflowMutationIntent(activeIntentId);
+      if (!activeIntent || activeIntent.status !== 'running') {
+        continue;
+      }
+      const reason = `Superseded by ${fenceKind} intent #${newIntentId}`;
+      this.persistence.failWorkflowMutationIntent(activeIntentId, reason);
+      this.createTiming(workflowId, activeIntent.channel, activeIntent.id, activeIntent.args)
+        .mark('PersistedWorkflowMutationCoordinator.invalidateSupersededRunningIntent', 'invalidated', {
+          newIntentId,
+          channel,
+          reason,
+        });
+      const invalidation = this.runningIntentInvalidations.get(activeIntentId);
+      invalidation?.abortController.abort(new WorkflowMutationInvalidatedError(reason));
+      invalidation?.reject(new WorkflowMutationInvalidatedError(reason));
+      process.stderr.write(
+        `[workflow-mutation-coordinator] invalidated running intent ${activeIntentId} for ${workflowId} via ${fenceKind}#${newIntentId}\n`,
+      );
     }
-    const reason = `Superseded by ${fenceKind} intent #${newIntentId}`;
-    this.persistence.failWorkflowMutationIntent(activeIntentId, reason);
-    this.createTiming(workflowId, activeIntent.channel, activeIntent.id, activeIntent.args)
-      .mark('PersistedWorkflowMutationCoordinator.invalidateSupersededRunningIntent', 'invalidated', {
-        newIntentId,
-        channel,
-        reason,
-      });
-    const invalidation = this.runningIntentInvalidations.get(activeIntentId);
-    invalidation?.abortController.abort(new WorkflowMutationInvalidatedError(reason));
-    invalidation?.reject(new WorkflowMutationInvalidatedError(reason));
-    process.stderr.write(
-      `[workflow-mutation-coordinator] invalidated running intent ${activeIntentId} for ${workflowId} via ${fenceKind}#${newIntentId}\n`,
-    );
   }
 
   private hardPreemptFenceKind(channel: string, args: unknown[]): string | null {

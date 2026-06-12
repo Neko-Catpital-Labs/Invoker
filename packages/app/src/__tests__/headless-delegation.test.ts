@@ -912,6 +912,60 @@ describe('headless delegation enforcement', () => {
         expect(runnable[0]?.id).toBe('wf-1/task-1');
       });
 
+      it('headless task retry defers runnable tasks in no-track mode', async () => {
+        const deferRunnableTasks = vi.fn();
+        const preemptTaskSubgraph = vi.fn(async () => {});
+        mockDeps.orchestrator.getPersistedActiveTaskIds = vi.fn(() => new Set<string>());
+        mockDeps.orchestrator.syncFromDb = vi.fn();
+        mockDeps.persistence.listWorkflows = vi.fn(() => [{
+          id: 'wf-1',
+          name: 'Workflow one',
+          generation: 0,
+          status: 'running' as const,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }]);
+        mockDeps.persistence.loadTasks = vi.fn(() => [{
+          id: 'wf-1/task-1',
+          status: 'failed',
+          config: { workflowId: 'wf-1' },
+          execution: {},
+        } as any]);
+        mockDeps.commandService.retryTask = vi.fn(async () => ({
+          ok: true,
+          data: [
+            {
+              id: 'wf-1/task-1',
+              status: 'running',
+              config: { workflowId: 'wf-1' },
+              execution: { selectedAttemptId: 'attempt-1' },
+            },
+          ],
+        }));
+        mockDeps.orchestrator.startExecution = vi.fn(() => [
+          {
+            id: 'wf-2/task-9',
+            status: 'running',
+            config: { workflowId: 'wf-2' },
+            execution: { selectedAttemptId: 'attempt-9' },
+          } as any,
+        ]);
+
+        const depsWithNoTrack: HeadlessDeps = {
+          ...mockDeps,
+          noTrack: true,
+          deferRunnableTasks,
+          preemptTaskSubgraph,
+        } as HeadlessDeps;
+
+        await runHeadless(['retry-task', 'wf-1/task-1'], depsWithNoTrack);
+
+        expect(deferRunnableTasks).toHaveBeenCalledTimes(1);
+        const [runnable] = deferRunnableTasks.mock.calls[0] ?? [];
+        expect(runnable).toHaveLength(2);
+        expect(runnable.map((task: any) => task.id)).toEqual(['wf-1/task-1', 'wf-2/task-9']);
+      });
+
       it('headless retry always preempts, even when the workflow has no active execution', async () => {
         const preemptWorkflowExecution = vi.fn(async () => {});
         const depsWithNoTrack: HeadlessDeps = {
