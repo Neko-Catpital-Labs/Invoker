@@ -55,6 +55,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Check release version sync
+        run: pnpm run check:versions
+
       - name: Build standalone CLI
         env:
           INVOKER_TARGET_PLATFORM: ${{ matrix.platform }}
@@ -225,7 +228,11 @@ jobs:
               return
             fi
 
-            npm publish "./${package_dir}" --access public
+            # Pack with pnpm (rewrites workspace:* deps to the exact version),
+            # then publish the tarball with npm (which would not rewrite them).
+            local tarball
+            tarball="$(pnpm --filter "${name}" pack --pack-destination "${RUNNER_TEMP}" | tail -n 1)"
+            npm publish "${tarball}" --access public
           }
 
           publish_if_missing packages/npm-cli

@@ -371,6 +371,8 @@ export function App() {
   const [showSystemBanner, setShowSystemBanner] = useState(false);
   const [installSkillsPending, setInstallSkillsPending] = useState(false);
   const [installSkillsError, setInstallSkillsError] = useState<string | null>(null);
+  const [updateCliPending, setUpdateCliPending] = useState(false);
+  const [updateCliError, setUpdateCliError] = useState<string | null>(null);
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const [advancedMetadataExpanded, setAdvancedMetadataExpanded] = useState(false);
   const [terminalCollapsed, setTerminalCollapsed] = useState(true);
@@ -1589,6 +1591,22 @@ export function App() {
     }
   }, [refreshSystemDiagnostics]);
 
+  const handleUpdateInvokerCli = useCallback(async () => {
+    try {
+      setUpdateCliPending(true);
+      setUpdateCliError(null);
+      const result = await window.invoker?.updateInvokerCli?.();
+      if (result && !result.ok) {
+        setUpdateCliError(result.error ?? 'invoker-cli update failed.');
+      }
+      refreshSystemDiagnostics();
+    } catch (err) {
+      setUpdateCliError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setUpdateCliPending(false);
+    }
+  }, [refreshSystemDiagnostics]);
+
   return (
     <div className="h-screen flex flex-col bg-gray-900 text-gray-100" onClick={() => closeContextMenu()}>
       {showSystemBanner && (
@@ -1975,6 +1993,9 @@ export function App() {
           installPending={installSkillsPending}
           installError={installSkillsError}
           onInstallBundledSkills={handleInstallBundledSkills}
+          updateCliPending={updateCliPending}
+          updateCliError={updateCliError}
+          onUpdateInvokerCli={handleUpdateInvokerCli}
           onClose={() => setShowSystemSetup(false)}
         />
       )}
