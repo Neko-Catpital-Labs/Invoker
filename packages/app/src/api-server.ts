@@ -20,6 +20,7 @@
  * Write endpoints:
  *   POST   /api/tasks/:id/cancel
  *   POST   /api/tasks/:id/restart
+ *   POST   /api/tasks/:id/recreate-downstream
  *   POST   /api/tasks/:id/resolve-conflict  body: { agent? }
  *   POST   /api/tasks/:id/approve
  *   POST   /api/tasks/:id/reject       body: { reason? }
@@ -64,6 +65,7 @@ export interface ApiMutationFacade {
   cancelTask(taskId: string): Promise<CancelMutationResult>;
   retryTask(taskId: string): Promise<MutationResult>;
   recreateTask(taskId: string): Promise<MutationResult>;
+  recreateDownstream(taskId: string): Promise<MutationResult>;
   resolveConflict(taskId: string, agentName?: string): Promise<ResolveConflictMutationResult>;
   approveTask(taskId: string): Promise<ApproveMutationResult>;
   rejectTask(taskId: string, reason?: string): void;
@@ -299,6 +301,19 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         try {
           const result = await mutations.recreateTask(taskId);
           json(res, 200, { ok: true, taskId, action: 'recreated', tasksStarted: result.runnable.length });
+        } catch (err) {
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
+        }
+        return;
+      }
+
+      // POST /api/tasks/:id/recreate-downstream
+      const recreateDownstreamMatch = path.match(/^\/api\/tasks\/([^/]+)\/recreate-downstream$/);
+      if (method === 'POST' && recreateDownstreamMatch) {
+        const taskId = decodeURIComponent(recreateDownstreamMatch[1]);
+        try {
+          const result = await mutations.recreateDownstream(taskId);
+          json(res, 200, { ok: true, taskId, action: 'recreated_downstream', tasksStarted: result.runnable.length });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
