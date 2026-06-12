@@ -184,7 +184,12 @@ import {
 import { computeDeferredLaunchTiming } from './deferred-runnable.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import { evaluateExecutingStall } from './executing-stall.js';
-import { listOpenFixIntentsForTask } from './auto-fix-intents.js';
+import {
+  buildHeadlessFixArgs,
+  listOpenFixIntentsForTask,
+  parseFixWithAgentMutationOptions,
+  type FixWithAgentMutationOptions,
+} from './auto-fix-intents.js';
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
 import {
   buildActionGraphDiagnostics,
@@ -1320,11 +1325,9 @@ if (isHeadless) {
           });
         }
         if (!workflowMutationDispatcher.has('invoker:fix-with-agent')) {
-          workflowMutationDispatcher.set('invoker:fix-with-agent', async (taskIdArg: unknown, agentNameArg?: unknown) => {
-            const args = ['fix', String(taskIdArg)];
-            if (typeof agentNameArg === 'string' && agentNameArg.length > 0) {
-              args.push(agentNameArg);
-            }
+          workflowMutationDispatcher.set('invoker:fix-with-agent', async (taskIdArg: unknown, agentNameArg?: unknown, optionsArg?: unknown) => {
+            const agentName = typeof agentNameArg === 'string' && agentNameArg.length > 0 ? agentNameArg : undefined;
+            const args = buildHeadlessFixArgs(String(taskIdArg), agentName, parseFixWithAgentMutationOptions(optionsArg));
             await runHeadless(args, {
               ...headlessDeps,
               waitForApproval: false,
@@ -1450,11 +1453,12 @@ if (isHeadless) {
           const selectedAgent = configuredAgent && configuredAgent.length > 0 ? configuredAgent : undefined;
           logStandaloneAutoFixDebug(taskId, 'schedule-enqueue');
           logStandaloneAutoFixDebug(taskId, 'schedule-enqueued');
+          const autoFixOptions: FixWithAgentMutationOptions = { autoFix: true };
           void workflowMutationCoordinator.enqueue(
             workflowId,
             'normal',
             'invoker:fix-with-agent',
-            [taskId, selectedAgent],
+            [taskId, selectedAgent, autoFixOptions],
           )
             .then(() => {
               logStandaloneAutoFixDebug(taskId, 'schedule-dispatch-finished');
@@ -2102,12 +2106,13 @@ function createEmbeddedTerminalBackendFromConfig(
   const executeFixWithAgentMutation = async (
     taskId: string,
     agentName?: string,
-    source: 'ipc' | 'auto-fix' = 'ipc',
+    options: FixWithAgentMutationOptions = {},
   ): Promise<TaskState[]> => {
     const task = orchestrator.getTask(taskId);
     if (!task) {
       throw new Error(`Task ${taskId} not found`);
     }
+    const source = options.autoFix ? 'auto-fix' : 'ipc';
     const savedError = task.execution.error ?? '';
     const recoveryRoute = selectFailureRecoveryRoute(task, savedError);
     logger.info(
@@ -2115,7 +2120,9 @@ function createEmbeddedTerminalBackendFromConfig(
       { module: 'ipc' },
     );
 
-    if (source === 'auto-fix') {
+    // Only requests explicitly marked auto-fix consume retry budget;
+    // manual fixes never touch autoFixAttempts.
+    if (options.autoFix) {
       const attemptsBefore = task?.execution.autoFixAttempts ?? 0;
       const attemptsAfter = attemptsBefore + 1;
       persistence.updateTask(taskId, {
@@ -2135,9 +2142,10 @@ function createEmbeddedTerminalBackendFromConfig(
       },
       {
         agentName,
-        recoveryRoute,
-        recreateOutputLabel: source === 'auto-fix' ? 'Auto-fix' : 'Fix with AI',
-        failureOutputLabel: source === 'auto-fix' ? 'Auto-fix' : `Fix with ${agentName ?? 'Claude'}`,
+        recoveryRoute: options.reviewGateCi ? undefined : recoveryRoute,
+        recreateOutputLabel: options.autoFix ? 'Auto-fix' : 'Fix with AI',
+        failureOutputLabel: options.autoFix ? 'Auto-fix' : `Fix with ${agentName ?? 'Claude'}`,
+        reviewGateCi: options.reviewGateCi,
         signal: activeMutationContext?.signal,
       },
     );
@@ -2180,12 +2188,13 @@ function createEmbeddedTerminalBackendFromConfig(
     const selectedAgent = configuredAgent && configuredAgent.length > 0 ? configuredAgent : undefined;
     logAutoFixDebug(taskId, 'schedule-enqueue');
     logAutoFixDebug(taskId, 'schedule-enqueued');
+    const autoFixOptions: FixWithAgentMutationOptions = { autoFix: true };
     void runWorkflowMutation(
       workflowId,
       'normal',
       'invoker:fix-with-agent',
-      [taskId, selectedAgent],
-      async () => executeFixWithAgentMutation(taskId, selectedAgent, 'auto-fix'),
+      [taskId, selectedAgent, autoFixOptions],
+      async () => executeFixWithAgentMutation(taskId, selectedAgent, autoFixOptions),
     )
       .then(() => {
         logAutoFixDebug(taskId, 'schedule-dispatch-finished');
@@ -2671,9 +2680,16 @@ function createEmbeddedTerminalBackendFromConfig(
           ? { channel: 'headless.exec', request: { args: ['resolve-conflict', String(arg0)] } }
           : { channel: 'headless.exec', request: { args: ['resolve-conflict', String(arg0), String(arg1)] } };
       case 'invoker:fix-with-agent':
-        return arg1 === undefined
-          ? { channel: 'headless.exec', request: { args: ['fix', String(arg0)] } }
-          : { channel: 'headless.exec', request: { args: ['fix', String(arg0), String(arg1)] } };
+        return {
+          channel: 'headless.exec',
+          request: {
+            args: buildHeadlessFixArgs(
+              String(arg0),
+              arg1 === undefined ? undefined : String(arg1),
+              parseFixWithAgentMutationOptions(arg2),
+            ),
+          },
+        };
       case 'invoker:edit-task-command':
         return { channel: 'headless.exec', request: { args: ['set', 'command', String(arg0), String(arg1)] } };
       case 'invoker:edit-task-prompt':
@@ -4334,11 +4350,12 @@ function createEmbeddedTerminalBackendFromConfig(
       'invoker:fix-with-agent',
       (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
       'normal',
-      async (taskIdArg: unknown, agentNameArg?: unknown) => {
+      async (taskIdArg: unknown, agentNameArg?: unknown, optionsArg?: unknown) => {
       const taskId = String(taskIdArg);
       const agentName = agentNameArg === undefined ? undefined : String(agentNameArg);
+      const fixOptions = parseFixWithAgentMutationOptions(optionsArg);
       try {
-        const started = await executeFixWithAgentMutation(taskId, agentName, 'ipc');
+        const started = await executeFixWithAgentMutation(taskId, agentName, fixOptions);
         await finalizeMutationWithGlobalTopup({
           orchestrator,
           taskExecutor: requireTaskExecutor(),

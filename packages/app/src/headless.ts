@@ -50,6 +50,7 @@ import {
   forkWorkflow as sharedForkWorkflow,
   setWorkflowMergeMode,
 } from './workflow-actions.js';
+import { parseHeadlessFixArgs, type ParsedHeadlessFixArgs } from './auto-fix-intents.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 import type { CostGroupDimension } from './cost-rollup.js';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
@@ -1109,7 +1110,7 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       await headlessRebaseRecreate(args[1], deps);
       break;
     case 'fix':
-      await headlessFix(args[1], deps, args[2]);
+      await headlessFix(parseHeadlessFixArgs(args.slice(1)), deps);
       break;
     case 'resolve-conflict':
       await headlessResolveConflict(args[1], deps, args[2]);
@@ -1697,15 +1698,30 @@ async function headlessRetryTask(taskId: string, deps: HeadlessDeps): Promise<vo
   });
 }
 
-async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string): Promise<void> {
-  if (!taskId) throw new Error('Missing taskId. Usage: --headless fix <taskId> [claude|codex]');
+async function headlessFix(request: ParsedHeadlessFixArgs, deps: HeadlessDeps): Promise<void> {
+  let taskId = request.taskId ?? '';
+  if (!taskId) throw new Error('Missing taskId. Usage: --headless fix <taskId> [claude|codex] [--auto-fix]');
   const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'fix');
   if (!restored) return;
   taskId = restored.resolvedTaskId;
 
   const te = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, te);
-  const agent = (agentArg ?? 'claude').toLowerCase();
+  const agent = (request.agentName ?? 'claude').toLowerCase();
+  // The accepted fix command owns auto-fix accounting: only requests
+  // explicitly marked --auto-fix consume retry budget; manual fixes never do.
+  if (request.autoFix) {
+    const task = deps.orchestrator.getTask(taskId);
+    const attemptsBefore = task?.execution.autoFixAttempts ?? 0;
+    const attemptsAfter = attemptsBefore + 1;
+    deps.persistence.updateTask(taskId, { execution: { autoFixAttempts: attemptsAfter } });
+    deps.persistence.logEvent?.(taskId, 'debug.auto-fix', {
+      phase: 'headless-fix-attempt-bumped',
+      attemptsBefore,
+      attemptsAfter,
+    });
+  }
+  const outputLabel = request.autoFix ? 'Auto-fix' : 'Fix with AI';
   try {
     const result = await fixWithAgentAction(taskId, {
       orchestrator: deps.orchestrator,
@@ -1714,8 +1730,9 @@ async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string
       autoApproveAIFixes: deps.invokerConfig.autoApproveAIFixes,
     }, {
       agentName: agent,
-      recreateOutputLabel: 'Fix with AI',
-      failureOutputLabel: 'Fix with AI',
+      recreateOutputLabel: outputLabel,
+      failureOutputLabel: outputLabel,
+      reviewGateCi: request.reviewGateCi,
       signal: deps.signal,
     });
     await finalizeMutationWithGlobalTopup({

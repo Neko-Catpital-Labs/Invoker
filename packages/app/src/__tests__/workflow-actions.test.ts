@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Orchestrator } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import type { TaskRunner } from '@invoker/execution-engine';
+import type { ReviewGateCiFailureTrigger, TaskRunner } from '@invoker/execution-engine';
 import {
   bumpGenerationAndRecreate,
   recreateWorkflow,
@@ -1338,7 +1338,7 @@ describe('fixWithAgentAction', () => {
       agentName: 'codex',
     });
 
-    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'codex', 'boom');
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'codex', 'boom', undefined);
     expect(taskExecutor.resolveConflict).not.toHaveBeenCalled();
     expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'boom');
     expect(result).toEqual({ kind: 'fixWithAgent', autoApproved: false, started: [] });
@@ -1459,6 +1459,169 @@ describe('fixWithAgentAction', () => {
       workflowId: 'wf-1',
       started: [expect.objectContaining({ id: 'task-a', status: 'running' })],
     });
+  });
+
+  it('never consumes auto-fix retry budget for manual fixes', async () => {
+    const orchestrator = {
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        config: { workflowId: 'wf-1' },
+        execution: { error: 'boom', autoFixAttempts: 1 },
+      })),
+      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      setFixAwaitingApproval: vi.fn(),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+      updateTask: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn(),
+    };
+
+    await fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    }, { agentName: 'claude' });
+
+    expect(persistence.updateTask).not.toHaveBeenCalled();
+  });
+});
+
+describe('fixWithAgentAction review-gate CI context', () => {
+  function makeReviewGateTrigger(overrides: Record<string, unknown> = {}) {
+    return {
+      taskId: 'task-a',
+      workflowId: 'wf-1',
+      reviewId: '12',
+      reviewUrl: 'https://github.com/acme/repo/pull/12',
+      headSha: 'abc123',
+      branch: 'experiment/x',
+      selectedAttemptId: 'attempt-1',
+      generation: 2,
+      failedChecks: [{ name: 'ci', conclusion: 'failure' }],
+      statusText: '1 failing check',
+      ...overrides,
+    };
+  }
+
+  function makeReviewReadyTask() {
+    return makeTask({
+      status: 'review_ready',
+      config: { workflowId: 'wf-1' },
+      execution: {
+        reviewId: '12',
+        branch: 'experiment/x',
+        selectedAttemptId: 'attempt-1',
+        generation: 2,
+      },
+    });
+  }
+
+  it('begins an auto-fix session and forwards the CI fix context to the agent', async () => {
+    const trigger = makeReviewGateTrigger();
+    const orchestrator = {
+      getTask: vi.fn(() => makeReviewReadyTask()),
+      beginAutoFixSession: vi.fn(() => ({ savedError: 'persisted-review-gate-error' })),
+      beginConflictResolution: vi.fn(),
+      setFixAwaitingApproval: vi.fn(),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn(),
+    };
+
+    const result = await fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    }, {
+      agentName: 'claude',
+      reviewGateCi: trigger as unknown as ReviewGateCiFailureTrigger,
+    });
+
+    expect(orchestrator.beginAutoFixSession).toHaveBeenCalledWith('task-a', {
+      savedError: expect.stringContaining('Review-gate CI failed for PR 12'),
+      expectedLineage: {
+        taskId: 'task-a',
+        selectedAttemptId: 'attempt-1',
+        generation: 2,
+      },
+    });
+    expect(orchestrator.beginConflictResolution).not.toHaveBeenCalled();
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith(
+      'task-a',
+      'test output',
+      'claude',
+      'persisted-review-gate-error',
+      expect.stringContaining('https://github.com/acme/repo/pull/12'),
+    );
+    expect(result).toEqual({ kind: 'fixWithAgent', autoApproved: false, started: [] });
+  });
+
+  it('rejects stale review-gate context before fixing', async () => {
+    const trigger = makeReviewGateTrigger({ generation: 1 });
+    const orchestrator = {
+      getTask: vi.fn(() => makeReviewReadyTask()),
+      beginAutoFixSession: vi.fn(),
+      beginConflictResolution: vi.fn(),
+      setFixAwaitingApproval: vi.fn(),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      getTaskOutput: vi.fn(),
+      appendTaskOutput: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn(),
+      resolveConflict: vi.fn(),
+    };
+
+    await expect(fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    }, {
+      reviewGateCi: trigger as unknown as ReviewGateCiFailureTrigger,
+    })).rejects.toThrow(StaleLineageError);
+
+    expect(orchestrator.beginAutoFixSession).not.toHaveBeenCalled();
+    expect(orchestrator.beginConflictResolution).not.toHaveBeenCalled();
+    expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
+  });
+
+  it('rejects review-gate context that targets a different task', async () => {
+    const trigger = makeReviewGateTrigger({ taskId: 'task-b' });
+    const orchestrator = {
+      getTask: vi.fn(() => makeReviewReadyTask()),
+      beginAutoFixSession: vi.fn(),
+      beginConflictResolution: vi.fn(),
+      setFixAwaitingApproval: vi.fn(),
+      revertConflictResolution: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn(),
+      resolveConflict: vi.fn(),
+    };
+
+    await expect(fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: { getTaskOutput: vi.fn(), appendTaskOutput: vi.fn() } as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    }, {
+      reviewGateCi: trigger as unknown as ReviewGateCiFailureTrigger,
+    })).rejects.toThrow(StaleLineageError);
+
+    expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
   });
 });
 

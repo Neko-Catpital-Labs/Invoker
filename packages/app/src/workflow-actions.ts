@@ -847,6 +847,7 @@ export async function fixWithAgentAction(
     recoveryRoute?: FailureRecoveryRoute;
     recreateOutputLabel?: string;
     failureOutputLabel?: string;
+    reviewGateCi?: ReviewGateCiFailureTrigger;
     signal?: AbortSignal;
   } = {},
 ): Promise<FixWithAgentActionResult> {
@@ -854,7 +855,18 @@ export async function fixWithAgentAction(
   const task = orchestrator.getTask(taskId);
   if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
 
-  const savedError = task.execution.error ?? '';
+  if (options.reviewGateCi) {
+    if (options.reviewGateCi.taskId !== taskId) {
+      throw new StaleLineageError(
+        `Review-gate CI context targets ${options.reviewGateCi.taskId} but fix was requested for ${taskId}`,
+      );
+    }
+    assertReviewGateTriggerCurrent(options.reviewGateCi, orchestrator);
+  }
+
+  const savedError = options.reviewGateCi
+    ? formatReviewGateCiSavedError(options.reviewGateCi)
+    : task.execution.error ?? '';
   const recoveryRoute = options.recoveryRoute ?? selectFailureRecoveryRoute(task, savedError);
   if (recoveryRoute.kind === 'recreateWorkflowFromFreshBase') {
     if (options.recreateOutputLabel) {
@@ -873,7 +885,19 @@ export async function fixWithAgentAction(
 
   const entryLineage = captureTaskLineage(taskId, orchestrator);
   assertLineageCurrent(entryLineage, orchestrator, options.signal);
-  const { savedError: persistedSavedError } = orchestrator.beginConflictResolution(taskId);
+  // Review-gate CI fixes target review_ready/awaiting_approval tasks, so
+  // they begin via beginAutoFixSession with the formatted CI failure as the
+  // saved error; ordinary fixes begin from the failed state.
+  const { savedError: persistedSavedError } = options.reviewGateCi
+    ? orchestrator.beginAutoFixSession(taskId, {
+      savedError,
+      expectedLineage: {
+        taskId,
+        selectedAttemptId: options.reviewGateCi.selectedAttemptId,
+        generation: options.reviewGateCi.generation,
+      },
+    })
+    : orchestrator.beginConflictResolution(taskId);
   const lineage = captureTaskLineage(taskId, orchestrator);
   try {
     assertLineageCurrent(lineage, orchestrator, options.signal);
@@ -881,7 +905,10 @@ export async function fixWithAgentAction(
       await taskExecutor.resolveConflict(taskId, persistedSavedError, options.agentName);
     } else {
       const output = persistence.getTaskOutput(taskId);
-      await taskExecutor.fixWithAgent(taskId, output, options.agentName, persistedSavedError);
+      const reviewGateFixContext = options.reviewGateCi
+        ? formatReviewGateCiFixContext(options.reviewGateCi)
+        : undefined;
+      await taskExecutor.fixWithAgent(taskId, output, options.agentName, persistedSavedError, reviewGateFixContext);
     }
     assertLineageCurrent(lineage, orchestrator, options.signal);
     const result = await finalizeAppliedFix(taskId, persistedSavedError, deps, options.signal, lineage);

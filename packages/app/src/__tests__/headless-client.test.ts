@@ -45,6 +45,50 @@ describe('headless-client', () => {
     expect(runElectronHeadless).not.toHaveBeenCalled();
   });
 
+  it('delegates fix commands through headless.exec preserving explicit auto-fix context flags', async () => {
+    const bus = new LocalBus();
+    const ownerHandler = vi.fn(async () => ({ ok: true }));
+    bus.onRequest('headless.exec', ownerHandler);
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-fix', mode: 'standalone' }));
+
+    const exitCode = await runHeadlessClientCommand(
+      ['fix', 'wf-1/task-1', 'claude', '--auto-fix', '--review-gate-ci', 'encoded-context', '--no-track'],
+      {
+        messageBus: bus,
+        ensureStandaloneOwner: vi.fn(async () => {}),
+        runElectronHeadless: vi.fn(async () => 0),
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(ownerHandler).toHaveBeenCalledTimes(1);
+    expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
+      args: ['fix', 'wf-1/task-1', 'claude', '--auto-fix', '--review-gate-ci', 'encoded-context'],
+      noTrack: true,
+      waitForApproval: false,
+    }));
+  });
+
+  it('delegates manual fix commands without adding auto-fix flags', async () => {
+    const bus = new LocalBus();
+    const ownerHandler = vi.fn(async () => ({ ok: true }));
+    bus.onRequest('headless.exec', ownerHandler);
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-fix-manual', mode: 'standalone' }));
+
+    const exitCode = await runHeadlessClientCommand(['fix', 'wf-1/task-1', '--no-track'], {
+      messageBus: bus,
+      ensureStandaloneOwner: vi.fn(async () => {}),
+      runElectronHeadless: vi.fn(async () => 0),
+    });
+
+    expect(exitCode).toBe(0);
+    expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
+      args: ['fix', 'wf-1/task-1'],
+      noTrack: true,
+      waitForApproval: false,
+    }));
+  });
+
   it('delegates recreate-downstream as a mutating command through headless.exec, honoring --no-track', async () => {
     const bus = new LocalBus();
     const ownerHandler = vi.fn(async () => ({ ok: true }));
