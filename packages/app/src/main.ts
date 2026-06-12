@@ -32,9 +32,10 @@
  * Using the same Electron binary for both modes provides a consistent runtime.
  */
 
-import { app, ipcMain, type BrowserWindow } from 'electron';
+import { app, dialog, ipcMain, Menu, type BrowserWindow } from 'electron';
 import * as path from 'node:path';
 import { mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import {
   configureEarlyElectronApp,
   registerGuiLifecycleHandlers,
@@ -49,6 +50,12 @@ const earlyHeadlessMode = process.argv.includes('--headless')
   || process.argv.slice(2).includes('install-skills');
 
 configureEarlyElectronApp({ app, enableTestCompositor, isHeadless: earlyHeadlessMode });
+
+// Isolate userData (and with it the single-instance lock) for e2e runs so a
+// test instance can launch alongside a normally running Invoker.
+if (process.env.INVOKER_USER_DATA_DIR) {
+  app.setPath('userData', process.env.INVOKER_USER_DATA_DIR);
+}
 
 import { Orchestrator, CommandService, OrchestratorErrorCode } from '@invoker/workflow-core';
 import type {
@@ -148,6 +155,14 @@ import {
 } from './embedded-terminal-manager.js';
 import { collectSystemDiagnostics } from './system-diagnostics.js';
 import { installBundledSkills, resolveBundledSkillsStatus } from './bundled-skills.js';
+import {
+  maybeAutoInstallCli,
+  resolveCliInstallerStatus,
+  updateInvokerCli,
+  type CliInstallerContext,
+} from './cli-installer.js';
+import { resolveBundledCliPath } from './cli-helper.js';
+import { buildAppMenuTemplate } from './app-menu.js';
 import { createRequire } from 'node:module';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
 import { applyDelta, recoverQuarantinedTask, TaskSnapshotCache } from './delta-merge.js';
@@ -537,6 +552,31 @@ function getBundledSkillsStatus() {
 
 function installPackagedSkills(mode: import('@invoker/contracts').BundledSkillsInstallMode = 'install') {
   return installBundledSkills(buildBundledSkillsContext(), mode);
+}
+
+function buildCliInstallerContext(): CliInstallerContext {
+  return {
+    isPackaged: app.isPackaged,
+    bundledCliPath: resolveBundledCliPath({ isPackaged: app.isPackaged }),
+    appVersion: app.getVersion(),
+    platform: process.platform,
+    env: process.env,
+    homeDir: homedir(),
+  };
+}
+
+function updateInvokerCliFromMenu(): void {
+  const result = updateInvokerCli(buildCliInstallerContext());
+  const detail = result.ok
+    ? result.updated
+      ? `invoker-cli ${app.getVersion()} installed to ${result.installedTo}.${result.status.warning ? `\n\n${result.status.warning}` : ''}`
+      : `invoker-cli is already up to date (${app.getVersion()}) at ${result.installedTo}.`
+    : `Update failed: ${result.error}`;
+  void dialog.showMessageBox({
+    type: result.ok ? 'info' : 'error',
+    message: 'Update invoker-cli',
+    detail,
+  });
 }
 
 async function initServices(options?: InitServicesOptions): Promise<void> {
@@ -4423,6 +4463,7 @@ function createEmbeddedTerminalBackendFromConfig(
         platform: process.platform,
         arch: process.arch,
         bundledSkills: getBundledSkillsStatus(),
+        cliInstaller: resolveCliInstallerStatus(buildCliInstallerContext()),
       });
     });
 
@@ -4432,6 +4473,10 @@ function createEmbeddedTerminalBackendFromConfig(
 
     ipcMain.handle('invoker:install-bundled-skills', (_event, mode = 'install') => {
       return installPackagedSkills(mode);
+    });
+
+    ipcMain.handle('invoker:update-invoker-cli', () => {
+      return updateInvokerCli(buildCliInstallerContext());
     });
 
     registerGuiMutationHandler('invoker:replace-task', async (taskIdArg: unknown, replacementTasksArg: unknown) => {
@@ -4515,9 +4560,31 @@ function createEmbeddedTerminalBackendFromConfig(
       return embeddedTerminalManager.close(sessionId);
     });
 
+    Menu.setApplicationMenu(
+      Menu.buildFromTemplate(
+        buildAppMenuTemplate({
+          isMac: process.platform === 'darwin',
+          onUpdateInvokerCli: updateInvokerCliFromMenu,
+        }),
+      ),
+    );
+
     seedUiSnapshotCache();
     createWindow();
     recordStartupMark('createWindow.end');
+
+    // Auto-install/update the bundled invoker-cli onto the user's PATH.
+    // Deferred past first paint; the version probe spawnSync still blocks
+    // briefly, so it must never run before the window is up.
+    setTimeout(() => {
+      try {
+        maybeAutoInstallCli(buildCliInstallerContext(), (message) =>
+          logger.info(message, { module: 'cli-installer' }),
+        );
+      } catch (err) {
+        logger.warn(`invoker-cli auto-install failed: ${err}`, { module: 'cli-installer' });
+      }
+    }, 0);
 
     registerMainWindowActivateHandler({
       app,
