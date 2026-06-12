@@ -22,6 +22,7 @@ import {
 import '@xyflow/react/dist/style.css';
 
 import type { TaskState, WorkflowMeta } from '../types.js';
+import type { GraphCameraCommand } from '../lib/graph-camera.js';
 import { layoutNodes, layoutTaskGraph, type LayoutEdge, type TaskGraphLayout } from '../lib/layout.js';
 import { getEdgeStyle, getEffectiveVisualStatus, matchesStatusFilter } from '../lib/colors.js';
 import { TaskNode } from './TaskNode.js';
@@ -40,10 +41,17 @@ interface TaskDAGProps {
   tasks: Map<string, TaskState>;
   workflows?: Map<string, WorkflowMeta>;
   selectedTaskId?: string | null;
-  centerTaskId?: string | null;
+  /**
+   * Latest typed camera command. The DAG consumes each command once by
+   * sequence; commands scoped to other graphs are ignored. React Flow keeps
+   * owning x/y/zoom locally — this is intent, not a controlled viewport.
+   */
+  cameraCommand?: GraphCameraCommand | null;
   onTaskClick?: (task: TaskState) => void;
   onTaskDoubleClick?: (task: TaskState) => void;
   onTaskContextMenu?: (task: TaskState, event: React.MouseEvent) => void;
+  /** Fired when the user manually pans or zooms the viewport. */
+  onManualViewport?: () => void;
   statusFilters?: Set<string>;
 }
 
@@ -143,19 +151,25 @@ function mergeMeasuredNodeState(prevNodes: Node[], nextNodes: Node[]): Node[] {
   });
 }
 
-function TaskDAGInner({ tasks, workflows, selectedTaskId, centerTaskId, onTaskClick, onTaskDoubleClick, onTaskContextMenu, statusFilters }: TaskDAGProps) {
-  const { fitView, setCenter } = useReactFlow();
+function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskClick, onTaskDoubleClick, onTaskContextMenu, onManualViewport, statusFilters }: TaskDAGProps) {
+  const { fitView, setCenter, getZoom } = useReactFlow();
   const prevNodeCount = useRef(0);
   const lastNodeClickRef = useRef<{ id: string; at: number } | null>(null);
   const reportedGraphVisibleRef = useRef(false);
   const watchdogMissCountRef = useRef(0);
   const watchdogRecoveryAttemptedRef = useRef(false);
+  const lastHandledCameraSeqRef = useRef(0);
+  const initFitFrameRef = useRef(0);
   const [layoutState, setLayoutState] = useState<LayoutState | null>(null);
   const [flowInstanceKey, setFlowInstanceKey] = useState(0);
 
   const onInitHandler = useCallback(() => {
-    requestAnimationFrame(() => fitView({ padding: 0.2 }));
+    initFitFrameRef.current = requestAnimationFrame(() => fitView({ padding: 0.2 }));
   }, [fitView]);
+
+  // Cancel a pending first-fit frame on unmount so it never fires against a
+  // torn-down graph after the component has gone away.
+  useEffect(() => () => cancelAnimationFrame(initFitFrameRef.current), []);
 
   const rawGraph = useMemo(() => {
     const taskArray = [...tasks.values()];
@@ -409,29 +423,56 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, centerTaskId, onTaskCl
     }
   }, []);
 
-  // Re-fit view when the actual rendered node count changes (includes merge gate)
+  // Topology changes (added/removed nodes) reset the watchdog recovery state but
+  // preserve the camera — a status refresh or new task must never re-fit or
+  // re-center. The initial fit is owned by onInit (first non-empty mount).
   useEffect(() => {
     if (nodes.length !== prevNodeCount.current && nodes.length > 0) {
       prevNodeCount.current = nodes.length;
       watchdogMissCountRef.current = 0;
       watchdogRecoveryAttemptedRef.current = false;
-      requestAnimationFrame(() => fitView({ padding: 0.2 }));
     }
-  }, [nodes.length, fitView]);
+  }, [nodes.length]);
 
+  // Manual pan/zoom from the user. React Flow passes a non-null DOM event for
+  // user-driven moves and null for programmatic setCenter/fitView, so this only
+  // reports genuine manual interaction.
+  const onMoveStart = useCallback(
+    (event: unknown) => {
+      if (event) onManualViewport?.();
+    },
+    [onManualViewport],
+  );
+
+  // Consume each task-scoped camera command exactly once, by sequence. Centering
+  // preserves the current zoom so ordinary refreshes never zoom the graph; only
+  // an explicit fitInitial command refits.
   useEffect(() => {
-    if (!centerTaskId || nodes.length === 0) return;
-    const node = nodes.find((candidate) => candidate.id === centerTaskId);
+    const command = cameraCommand;
+    if (!command || command.scope !== 'task') return;
+    if (command.sequence <= lastHandledCameraSeqRef.current) return;
+    lastHandledCameraSeqRef.current = command.sequence;
+    if (nodes.length === 0) return;
+
+    if (command.kind === 'fitInitial') {
+      const frame = requestAnimationFrame(() => fitView({ padding: 0.2 }));
+      return () => cancelAnimationFrame(frame);
+    }
+
+    const targetId = command.target;
+    if (!targetId) return;
+    const node = nodes.find((candidate) => candidate.id === targetId);
     if (!node) return;
     const frame = requestAnimationFrame(() => {
       if (typeof setCenter === 'function') {
-        setCenter(node.position.x + 132, node.position.y + 55, { zoom: 1, duration: 180 });
+        const zoom = typeof getZoom === 'function' ? getZoom() : 1;
+        setCenter(node.position.x + 132, node.position.y + 55, { zoom, duration: 180 });
       } else {
         fitView({ padding: 0.2 });
       }
     });
     return () => cancelAnimationFrame(frame);
-  }, [centerTaskId, fitView, nodes, setCenter]);
+  }, [cameraCommand, fitView, getZoom, nodes, setCenter]);
 
   useEffect(() => {
     if (reportedGraphVisibleRef.current || nodes.length === 0 || typeof window === 'undefined') {
@@ -559,6 +600,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, centerTaskId, onTaskCl
         onNodeClick={onNodeClick}
         onNodeDoubleClick={onNodeDoubleClick}
         onNodeContextMenu={onNodeContextMenu}
+        onMoveStart={onMoveStart}
         onInit={onInitHandler}
         zoomOnDoubleClick={false}
         minZoom={0.3}

@@ -32,9 +32,10 @@
  * Using the same Electron binary for both modes provides a consistent runtime.
  */
 
-import { app, ipcMain, type BrowserWindow } from 'electron';
+import { app, dialog, ipcMain, Menu, type BrowserWindow } from 'electron';
 import * as path from 'node:path';
 import { mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import {
   configureEarlyElectronApp,
   registerGuiLifecycleHandlers,
@@ -44,8 +45,17 @@ import {
 
 const enableTestCompositor = process.env.INVOKER_E2E_ENABLE_COMPOSITOR === '1' || Boolean(process.env.CAPTURE_MODE);
 const hideE2eWindow = process.env.NODE_ENV === 'test' && process.env.INVOKER_E2E_HIDE_WINDOW !== '0';
+const earlyHeadlessMode = process.argv.includes('--headless')
+  || process.argv.includes('--install-skills')
+  || process.argv.slice(2).includes('install-skills');
 
-configureEarlyElectronApp({ app, enableTestCompositor });
+configureEarlyElectronApp({ app, enableTestCompositor, isHeadless: earlyHeadlessMode });
+
+// Isolate userData (and with it the single-instance lock) for e2e runs so a
+// test instance can launch alongside a normally running Invoker.
+if (process.env.INVOKER_USER_DATA_DIR) {
+  app.setPath('userData', process.env.INVOKER_USER_DATA_DIR);
+}
 
 import { Orchestrator, CommandService, OrchestratorErrorCode } from '@invoker/workflow-core';
 import type {
@@ -145,6 +155,14 @@ import {
 } from './embedded-terminal-manager.js';
 import { collectSystemDiagnostics } from './system-diagnostics.js';
 import { installBundledSkills, resolveBundledSkillsStatus } from './bundled-skills.js';
+import {
+  maybeAutoInstallCli,
+  resolveCliInstallerStatus,
+  updateInvokerCli,
+  type CliInstallerContext,
+} from './cli-installer.js';
+import { resolveBundledCliPath } from './cli-helper.js';
+import { buildAppMenuTemplate } from './app-menu.js';
 import { createRequire } from 'node:module';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
 import { applyDelta, recoverQuarantinedTask, TaskSnapshotCache } from './delta-merge.js';
@@ -182,6 +200,7 @@ import {
   type WorkflowScopedGuiMutationRegistrationContext,
 } from './ipc/ipc-registration.js';
 import { createTaskDeltaStreamSequence } from './task-delta-stream-sequence.js';
+import { startLifecycleEventBridge, type LifecycleEventBridge } from './lifecycle-event-bridge.js';
 import { startReviewGateStatusWorker, type ReviewGateStatusWorker } from './review-gate-status-worker.js';
 import {
   executeNoTrackHeadlessBatch,
@@ -535,6 +554,31 @@ function installPackagedSkills(mode: import('@invoker/contracts').BundledSkillsI
   return installBundledSkills(buildBundledSkillsContext(), mode);
 }
 
+function buildCliInstallerContext(): CliInstallerContext {
+  return {
+    isPackaged: app.isPackaged,
+    bundledCliPath: resolveBundledCliPath({ isPackaged: app.isPackaged }),
+    appVersion: app.getVersion(),
+    platform: process.platform,
+    env: process.env,
+    homeDir: homedir(),
+  };
+}
+
+function updateInvokerCliFromMenu(): void {
+  const result = updateInvokerCli(buildCliInstallerContext());
+  const detail = result.ok
+    ? result.updated
+      ? `invoker-cli ${app.getVersion()} installed to ${result.installedTo}.${result.status.warning ? `\n\n${result.status.warning}` : ''}`
+      : `invoker-cli is already up to date (${app.getVersion()}) at ${result.installedTo}.`
+    : `Update failed: ${result.error}`;
+  void dialog.showMessageBox({
+    type: result.ok ? 'info' : 'error',
+    message: 'Update invoker-cli',
+    detail,
+  });
+}
+
 async function initServices(options?: InitServicesOptions): Promise<void> {
   const invokerHomeRoot = resolveInvokerHomeRoot();
   mkdirSync(invokerHomeRoot, { recursive: true });
@@ -587,11 +631,18 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
   // Compose runtime services from persistence-backed adapters.
   // Headless startup routes through composeHeadlessStartup so the
   // headless path has an explicit composition entry point.
+  const executionAgentRegistry = options?.executionAgentRegistry ?? registerBuiltinAgents();
   const runtimeServiceDeps = {
     workspaceProbe: new WorkspaceProbeAdapter(persistence),
     containerProbe: new ContainerProbeAdapter(persistence),
     sessionProbe: new SessionProbeAdapter(persistence),
-    terminalLauncher: new TerminalLauncherAdapter(),
+    terminalLauncher: new TerminalLauncherAdapter({
+      resumeCommandResolver: (agentName, sessionId) => {
+        const agent = executionAgentRegistry.getOrThrow(agentName);
+        const resume = agent.buildResumeArgs(sessionId);
+        return { command: resume.cmd, args: resume.args };
+      },
+    }),
   };
   runtimeServices = isHeadless
     ? composeHeadlessStartup(runtimeServiceDeps)
@@ -604,7 +655,7 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
       worktreeBaseDir: path.resolve(invokerHomeRoot, 'worktrees'),
       cacheDir: path.resolve(invokerHomeRoot, 'repos'),
       maxWorktrees: effectiveMaxConcurrency,
-      agentRegistry: options?.executionAgentRegistry,
+      agentRegistry: executionAgentRegistry,
     }),
   );
   const taskRepository = new SqliteTaskRepository(persistence);
@@ -918,6 +969,7 @@ if (isHeadless) {
 
     let exitCode = 0;
     let reviewGateStatusWorker: ReviewGateStatusWorker | null = null;
+    let lifecycleEventBridge: LifecycleEventBridge | null = null;
     try {
       // Standalone mode: initialize services and run headless
       await initServices({
@@ -1631,6 +1683,13 @@ if (isHeadless) {
           return executeStandaloneGuiMutation(req as GuiMutationPayload);
         });
 
+        lifecycleEventBridge = startLifecycleEventBridge({
+          messageBus,
+          getInitialTasks: () => orchestrator.getAllTasks(),
+          getTask: (taskId) => orchestrator.getTask(taskId),
+          logger,
+        });
+
         reviewGateStatusWorker = startReviewGateStatusWorker({
           ownerMode: true,
           getTaskExecutor: createStandaloneTaskExecutor,
@@ -1643,6 +1702,7 @@ if (isHeadless) {
       process.stderr.write(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
       exitCode = 1;
     } finally {
+      lifecycleEventBridge?.stop();
       reviewGateStatusWorker?.stop();
       if (ownsHeadlessShutdown && executorRegistry) {
         await Promise.all(executorRegistry.getAll().map(f => f.destroyAll().catch(() => undefined)));
@@ -1661,6 +1721,9 @@ if (isHeadless) {
             });
           }
         }
+      }
+      if (ownsHeadlessShutdown && persistence) {
+        persistence.requeueRunningWorkflowMutationIntents();
       }
       if (persistence) persistence.close();
       if (writerLock) writerLock.release();
@@ -2586,6 +2649,10 @@ function createEmbeddedTerminalBackendFromConfig(
         if (!mergeTask) return null;
         return { channel: 'headless.exec', request: { args: ['approve', mergeTask.id] } };
       }
+      case 'invoker:check-pr-statuses':
+        return { channel: 'headless.gui-mutation', request: payload };
+      case 'invoker:check-pr-status':
+        return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:resolve-conflict':
         return arg1 === undefined
           ? { channel: 'headless.exec', request: { args: ['resolve-conflict', String(arg0)] } }
@@ -3274,6 +3341,14 @@ function createEmbeddedTerminalBackendFromConfig(
     }
 
     bootstrapInitialWorkflowState();
+    if (ownerMode) {
+      startLifecycleEventBridge({
+        messageBus,
+        getInitialTasks: () => orchestrator.getAllTasks(),
+        getTask: (taskId) => orchestrator.getTask(taskId),
+        logger,
+      });
+    }
 
     reviewGateStatusWorker = startReviewGateStatusWorker({
       ownerMode,
@@ -4388,6 +4463,7 @@ function createEmbeddedTerminalBackendFromConfig(
         platform: process.platform,
         arch: process.arch,
         bundledSkills: getBundledSkillsStatus(),
+        cliInstaller: resolveCliInstallerStatus(buildCliInstallerContext()),
       });
     });
 
@@ -4397,6 +4473,10 @@ function createEmbeddedTerminalBackendFromConfig(
 
     ipcMain.handle('invoker:install-bundled-skills', (_event, mode = 'install') => {
       return installPackagedSkills(mode);
+    });
+
+    ipcMain.handle('invoker:update-invoker-cli', () => {
+      return updateInvokerCli(buildCliInstallerContext());
     });
 
     registerGuiMutationHandler('invoker:replace-task', async (taskIdArg: unknown, replacementTasksArg: unknown) => {
@@ -4480,9 +4560,31 @@ function createEmbeddedTerminalBackendFromConfig(
       return embeddedTerminalManager.close(sessionId);
     });
 
+    Menu.setApplicationMenu(
+      Menu.buildFromTemplate(
+        buildAppMenuTemplate({
+          isMac: process.platform === 'darwin',
+          onUpdateInvokerCli: updateInvokerCliFromMenu,
+        }),
+      ),
+    );
+
     seedUiSnapshotCache();
     createWindow();
     recordStartupMark('createWindow.end');
+
+    // Auto-install/update the bundled invoker-cli onto the user's PATH.
+    // Deferred past first paint; the version probe spawnSync still blocks
+    // briefly, so it must never run before the window is up.
+    setTimeout(() => {
+      try {
+        maybeAutoInstallCli(buildCliInstallerContext(), (message) =>
+          logger.info(message, { module: 'cli-installer' }),
+        );
+      } catch (err) {
+        logger.warn(`invoker-cli auto-install failed: ${err}`, { module: 'cli-installer' });
+      }
+    }, 0);
 
     registerMainWindowActivateHandler({
       app,
@@ -4551,7 +4653,10 @@ function createEmbeddedTerminalBackendFromConfig(
             }
           }
         }
-        if (persistence) persistence.close();
+        if (persistence) {
+          persistence.requeueRunningWorkflowMutationIntents();
+          persistence.close();
+        }
         if (writerLock) writerLock.release();
         if (messageBus) messageBus.disconnect();
       } finally {

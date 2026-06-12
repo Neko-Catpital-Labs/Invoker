@@ -34,7 +34,17 @@ describe('CodexExecutionAgent', () => {
     const agent = new CodexExecutionAgent({ command: 'codex-cli' });
     const resume = agent.buildResumeArgs('sess-123');
     expect(resume.cmd).toBe('codex-cli');
-    expect(resume.args).toEqual(['resume', 'sess-123']);
+    expect(resume.args).toEqual([
+      'resume',
+      '--dangerously-bypass-approvals-and-sandbox',
+      'sess-123',
+    ]);
+  });
+
+  it('buildResumeArgs preserves plain resume when bypass is disabled', () => {
+    const agent = new CodexExecutionAgent({ bypassApprovalsAndSandbox: false, fullAuto: true });
+    const resume = agent.buildResumeArgs('sess-plain');
+    expect(resume.args).toEqual(['resume', 'sess-plain']);
   });
 
   it('buildFixCommand uses sandbox/approval bypass by default', () => {

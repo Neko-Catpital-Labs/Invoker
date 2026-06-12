@@ -73,6 +73,8 @@ jobs:
             command: pnpm run check:large-files
           - name: TypeScript Types
             command: pnpm run check:types
+          - name: Release Version Sync
+            command: pnpm run check:versions
 
     name: quality / ${{ matrix.name }}
 
@@ -99,6 +101,67 @@ jobs:
 
       - name: Run quality check
         run: ${{ matrix.command }}
+
+  inv117-proof:
+    needs: build-artifacts
+    runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright:v1.58.2-noble
+    timeout-minutes: 120
+    name: inv117 / deterministic proof
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
+
+      - name: Install test system packages
+        run: apt-get update && apt-get install -y unzip xvfb jq make g++ python3
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: app-build-dist
+          path: /tmp/invoker-build-artifacts
+
+      - name: Extract build artifacts
+        run: tar -xzf /tmp/invoker-build-artifacts/app-build-dist.tgz -C .
+
+      - name: Configure git identity and HTTPS auth
+        run: |
+          git config --global user.name "CI Bot"
+          git config --global user.email "ci@invoker.dev"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "git@github.com:"
+          git config --global --add url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
+          git update-ref refs/heads/main refs/remotes/origin/master || true
+          git update-ref refs/remotes/origin/main refs/remotes/origin/master || true
+
+      - name: Run INV-117 required proof contract
+        env:
+          INVOKER_TEST_ALL_PROOF: '1'
+          INVOKER_TEST_ALL_JOBS: '1'
+          TMPDIR: ${{ runner.temp }}/invoker-tmp
+        run: |
+          mkdir -p "$TMPDIR"
+          chmod 1777 "$TMPDIR"
+          bash scripts/run-all-tests.sh
 
   required-fast:
     needs: build-artifacts
@@ -166,6 +229,7 @@ jobs:
         run: |
           git config --global user.name "CI Bot"
           git config --global user.email "ci@invoker.dev"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "git@github.com:"
           git config --global --add url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
           git update-ref refs/heads/main refs/remotes/origin/master || true
@@ -218,6 +282,7 @@ jobs:
         run: |
           git config --global user.name "CI Bot"
           git config --global user.email "ci@invoker.dev"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "git@github.com:"
           git config --global --add url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
           git update-ref refs/heads/main refs/remotes/origin/master || true
@@ -285,6 +350,7 @@ jobs:
         run: |
           git config --global user.name "CI Bot"
           git config --global user.email "ci@invoker.dev"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "git@github.com:"
           git config --global --add url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
           git update-ref refs/heads/main refs/remotes/origin/master || true
@@ -349,6 +415,7 @@ jobs:
         run: |
           git config --global user.name "CI Bot"
           git config --global user.email "ci@invoker.dev"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Run Playwright shard
         env:
@@ -422,6 +489,7 @@ jobs:
         run: |
           git config --global user.name "CI Bot"
           git config --global user.email "ci@invoker.dev"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "git@github.com:"
           git config --global --add url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
           git update-ref refs/heads/main refs/remotes/origin/master || true
@@ -533,6 +601,7 @@ jobs:
         run: |
           git config --global user.name "CI Bot"
           git config --global user.email "ci@invoker.dev"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "git@github.com:"
           git config --global --add url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
           git update-ref refs/heads/main refs/remotes/origin/master || true

@@ -2120,6 +2120,42 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask(leafId)!.status).toBe('running');
     });
 
+    it('transitions an already-blocked review_ready dependent to runnable via the external gate pass', () => {
+      orchestrator.loadPlan({
+        name: 'gate-prereq-review-ready',
+        tasks: [{ id: 'verify', description: 'Prereq task' }],
+      });
+      const prereqTaskId = sid(orchestrator, 0, 'verify');
+      const prereqWfId = prereqTaskId.split('/')[0]!;
+      const prereqMergeId = `__merge__${prereqWfId}`;
+
+      orchestrator.loadPlan({
+        name: 'gate-downstream-blocked-review-ready',
+        externalDependencies: [
+          { workflowId: prereqWfId, taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'review_ready' },
+        ],
+        tasks: [{ id: 'leaf', description: 'leaf waits on upstream review-ready gate' }],
+      });
+      const leafId = sid(orchestrator, 1, 'leaf');
+
+      persistence.updateTask(prereqTaskId, { status: 'completed', execution: { completedAt: new Date() } });
+      persistence.updateTask(prereqMergeId, {
+        status: 'review_ready',
+        execution: { reviewUrl: 'https://example.invalid/pull/1', reviewStatus: 'Awaiting review' },
+      });
+      persistence.updateTask(leafId, {
+        status: 'blocked',
+        execution: { blockedBy: `waiting on ${prereqMergeId} (running)` },
+      });
+      orchestrator.syncAllFromDb();
+
+      const started = orchestrator.autoStartExternallyUnblockedReadyTasks();
+
+      expect(started.map((t) => t.id)).toContain(leafId);
+      expect(orchestrator.getTask(leafId)!.status).toBe('running');
+      expect(orchestrator.getTask(leafId)!.execution.blockedBy).toBeUndefined();
+    });
+
     it('does NOT cancel an already-running task on the same workflow', () => {
       orchestrator.loadPlan({
         name: 'gate-prereq-running',

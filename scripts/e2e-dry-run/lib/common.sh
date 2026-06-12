@@ -292,7 +292,9 @@ invoker_e2e_run_headless() {
       return 0
     fi
     case "$status" in
-      124|137|143)
+      # 133 is SIGTRAP from transient headless Electron startup failures in
+      # constrained Linux CI containers.
+      124|133|137|143)
         if [ "$attempt" -lt "$max_attempts" ]; then
           echo "WARN: headless command interrupted (exit=$status), retrying once: $*" >&2
           attempt=$((attempt + 1))
@@ -323,7 +325,9 @@ invoker_e2e_submit_plan() {
       return 0
     fi
     case "$status" in
-      124|137|143)
+      # 133 is SIGTRAP from transient headless Electron startup failures in
+      # constrained Linux CI containers.
+      124|133|137|143)
         if [ "$attempt" -lt "$max_attempts" ]; then
           echo "WARN: submit-plan interrupted (exit=$status), retrying once: $plan_path $*" >&2
           attempt=$((attempt + 1))
@@ -551,6 +555,10 @@ rows = conn.execute(
 def parse_ts(value):
     if not value:
         return None
+    if "T" in value:
+        normalized = value.replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(normalized)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
     return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
 
 stuck = []

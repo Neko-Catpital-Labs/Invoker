@@ -1969,8 +1969,7 @@ export class TaskRunner {
       }
     }
 
-    // Clone with hard-linked objects — near-instant, fully isolated refs
-    await this.execGitReadonly(['clone', '--local', '--no-checkout', cloneSource, clonePath]);
+    await this.cloneMergeWorktree(cloneSource, clonePath);
     // Detach HEAD so the fetch can overwrite all branch refs (including the default branch)
     const headSha = (await this.execGitIn(['rev-parse', 'HEAD'], clonePath)).trim();
     await this.execGitIn(['update-ref', '--no-deref', 'HEAD', headSha], clonePath);
@@ -2088,6 +2087,26 @@ export class TaskRunner {
     }
     await this.execGitIn(['checkout', '--detach', refSha], clonePath);
     return clonePath;
+  }
+
+  /** @internal */ async cloneMergeWorktree(cloneSource: string, clonePath: string): Promise<void> {
+    try {
+      // Hard-linked objects make local pool clones near-instant while keeping refs isolated.
+      await this.execGitReadonly(['clone', '--local', '--no-checkout', cloneSource, clonePath]);
+    } catch (err) {
+      const message = err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err);
+      if (!message.includes('Invalid cross-device link') && !message.includes('EXDEV')) {
+        throw err;
+      }
+
+      // CI may place the repo/mirror and temp merge clone on different mounts,
+      // where Git's hardlink-based local clone fails with EXDEV.
+      this.logger.warn(
+        `[createMergeWorktree] Local clone crossed filesystems; retrying without hardlinks: ${message.split('\n')[0]}`,
+      );
+      rmSync(clonePath, { recursive: true, force: true });
+      await this.execGitReadonly(['clone', '--no-local', '--no-checkout', cloneSource, clonePath]);
+    }
   }
 
   /** @internal */ async removeMergeWorktree(dir: string): Promise<void> {

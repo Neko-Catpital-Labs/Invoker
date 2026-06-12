@@ -55,7 +55,13 @@ trap cleanup EXIT
 
 query_sqlite_value() {
   local sql="$1"
-  sqlite3 -noheader "$DB_DIR/invoker.db" "$sql"
+  node "$ROOT_DIR/scripts/repro/sqljs-query.mjs" "$DB_DIR/invoker.db" "$sql"
+}
+
+query_action_graph_value() {
+  HOME="$HOME_DIR" INVOKER_DB_DIR="$DB_DIR" INVOKER_IPC_SOCKET="$IPC_SOCKET_PATH" NODE_ENV=test \
+    node "$HEADLESS_CLIENT_JS" query action-graph --output json 2>/dev/null \
+    | node "$ROOT_DIR/scripts/repro/action-graph-query.mjs" "$@"
 }
 
 sqlite_schema_ready() {
@@ -72,16 +78,8 @@ wait_for_query_status() {
   local started_at
   started_at="$(date +%s)"
   while true; do
-    if ! sqlite_schema_ready; then
-      if (( $(date +%s) - started_at >= timeout )); then
-        echo "repro: timed out waiting for sqlite schema before polling $task_id" >&2
-        return 1
-      fi
-      sleep 0.2
-      continue
-    fi
     local status
-    status="$(query_sqlite_value "select coalesce(status,'') from tasks where id = '$task_id' limit 1;")"
+    status="$(query_action_graph_value task-status "$task_id" || true)"
     if [[ "$status" == "$expected_status" ]]; then
       return 0
     fi
@@ -101,7 +99,7 @@ wait_for_intent_status() {
   started_at="$(date +%s)"
   while true; do
     local status
-    status="$(query_sqlite_value "select coalesce(status,'') from workflow_mutation_intents where id = $intent_id limit 1;")"
+    status="$(query_action_graph_value intent-status "$intent_id" || true)"
     if [[ "$status" == "$expected_status" ]]; then
       return 0
     fi
@@ -132,6 +130,7 @@ wait_for_owner_ready() {
 mkdir -p "$DB_DIR" "$REPO_FIXTURE_DIR"
 
 pushd "$ROOT_DIR" >/dev/null
+export INVOKER_SQLITE_FLUSH_DEBOUNCE_MS=0
 
 if [[ ! -f packages/app/dist/main.js ]]; then
   pnpm --filter @invoker/app build >/dev/null
@@ -233,7 +232,7 @@ BLOCKER_RECREATE_PID=$!
 
 BLOCKER_RECREATE_INTENT_ID=""
 for _ in {1..100}; do
-  BLOCKER_RECREATE_INTENT_ID="$(query_sqlite_value "select coalesce(max(id),'') from workflow_mutation_intents where workflow_id = '$WORKFLOW_ID' and args_json like '%\"recreate-task\",\"$BLOCKER_ID\"%';")"
+  BLOCKER_RECREATE_INTENT_ID="$(query_action_graph_value intent-id "$WORKFLOW_ID" "\"recreate-task\",\"$BLOCKER_ID\"" || true)"
   if [[ -n "$BLOCKER_RECREATE_INTENT_ID" && "$BLOCKER_RECREATE_INTENT_ID" != "0" ]]; then
     break
   fi
@@ -254,7 +253,7 @@ TARGET_RECREATE_PID=$!
 
 TARGET_RECREATE_INTENT_ID=""
 for _ in {1..100}; do
-  TARGET_RECREATE_INTENT_ID="$(query_sqlite_value "select coalesce(max(id),'') from workflow_mutation_intents where workflow_id = '$WORKFLOW_ID' and args_json like '%\"recreate-task\",\"$TARGET_ID\"%';")"
+  TARGET_RECREATE_INTENT_ID="$(query_action_graph_value intent-id "$WORKFLOW_ID" "\"recreate-task\",\"$TARGET_ID\"" "$BLOCKER_RECREATE_INTENT_ID" || true)"
   if [[ -n "$TARGET_RECREATE_INTENT_ID" && "$TARGET_RECREATE_INTENT_ID" != "$BLOCKER_RECREATE_INTENT_ID" ]]; then
     break
   fi
@@ -269,11 +268,11 @@ fi
 
 sleep 3
 
-BLOCKER_RECREATE_STATUS="$(query_sqlite_value "select status from workflow_mutation_intents where id = $BLOCKER_RECREATE_INTENT_ID;")"
-TARGET_RECREATE_STATUS="$(query_sqlite_value "select status from workflow_mutation_intents where id = $TARGET_RECREATE_INTENT_ID;")"
-TARGET_PENDING_EVENTS="$(query_sqlite_value "select count(*) from events where task_id = '$TARGET_ID' and event_type = 'task.pending' and created_at >= (select created_at from workflow_mutation_intents where id = $TARGET_RECREATE_INTENT_ID);")"
-TARGET_STATUS_AFTER_SECOND="$(query_sqlite_value "select status from tasks where id = '$TARGET_ID';")"
-BLOCKER_STATUS_AFTER_SECOND="$(query_sqlite_value "select status from tasks where id = '$BLOCKER_ID';")"
+BLOCKER_RECREATE_STATUS="$(query_action_graph_value intent-status "$BLOCKER_RECREATE_INTENT_ID")"
+TARGET_RECREATE_STATUS="$(query_action_graph_value intent-status "$TARGET_RECREATE_INTENT_ID")"
+TARGET_PENDING_EVENTS="$(query_action_graph_value task-event-count-since-intent "$TARGET_ID" task.pending "$TARGET_RECREATE_INTENT_ID")"
+TARGET_STATUS_AFTER_SECOND="$(query_action_graph_value task-status "$TARGET_ID")"
+BLOCKER_STATUS_AFTER_SECOND="$(query_action_graph_value task-status "$BLOCKER_ID")"
 
 if [[ "$EXPECTATION" == "bug" ]]; then
   if [[ "$BLOCKER_RECREATE_STATUS" != "running" ]]; then
