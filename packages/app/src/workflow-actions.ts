@@ -260,15 +260,6 @@ export function recreateTask(
   return deps.orchestrator.recreateTask(taskId);
 }
 
-/**
- * Recreate only the transitive downstream dependents of a task: the
- * selected task is preserved (branch, commit, workspacePath, generation,
- * agent metadata, selectedAttemptId), while every descendant is reset
- * exactly as recreateTask resets a task subgraph.
- *
- * Fallback path used by the WorkflowMutationFacade when no
- * CommandService is wired (legacy entrypoints / tests).
- */
 export function recreateDownstream(
   taskId: string,
   deps: Pick<ActionDeps, 'orchestrator'>,

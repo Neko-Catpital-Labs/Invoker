@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TaskEvent } from '@invoker/data-store';
+import { DISPATCH_LEASE_MS, DISPATCH_MAX_ATTEMPTS } from '@invoker/contracts';
 import {
   DEFAULT_LAUNCH_INVARIANT_MAX_GAP_MS,
   LaunchInvariantViolationError,
@@ -130,6 +131,8 @@ describe('assertLaunchInvariant', () => {
   });
 
   it('exposes a default maxGapMs anchored to the dispatch lease budget', () => {
-    expect(DEFAULT_LAUNCH_INVARIANT_MAX_GAP_MS).toBe(270_000);
+    expect(DEFAULT_LAUNCH_INVARIANT_MAX_GAP_MS).toBe(
+      DISPATCH_LEASE_MS * DISPATCH_MAX_ATTEMPTS + 30_000,
+    );
   });
 });

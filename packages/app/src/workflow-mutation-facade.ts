@@ -186,10 +186,8 @@ export class WorkflowMutationFacade {
       (cs) => cs.recreateDownstream(makeEnvelope('facade.recreate-downstream', 'surface', 'task', { taskId })),
       () => sharedRecreateDownstream(taskId, { orchestrator: this.deps.orchestrator }),
     );
-    // The target task is preserved, so `started` only contains descendants.
-    // Scope dispatch by their ids so they are reported as runnable launches
-    // rather than being filtered out by a target-task scope that can never
-    // match.
+    // `started` contains only descendants (the target is preserved), so a
+    // [taskId] dispatch scope would filter every launch out.
     const scopedTaskIds = started.map((task) => task.id);
     return this.finalizeWithTopup(started, 'facade.recreate-downstream', { scopedTaskIds });
   }

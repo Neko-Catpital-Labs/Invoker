@@ -1,8 +1,13 @@
 {
   "name": "@neko-catpital-labs/invoker-cli",
-  "version": "0.0.3",
+  "version": "0.0.5",
   "description": "Invoker standalone CLI installer",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Neko-Catpital-Labs/Invoker.git",
+    "directory": "packages/npm-cli"
+  },
   "bin": {
     "invoker-cli": "bin/invoker-cli.js"
   },

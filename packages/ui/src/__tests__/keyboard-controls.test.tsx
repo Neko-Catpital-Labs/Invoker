@@ -5,16 +5,22 @@
  * Dropped: Ctrl+Backtick terminal toggle, terminal toggle bar (Electron shell features).
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, type Mock } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { vi } from 'vitest';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
+import { CAMERA_LOCK_PREFERENCE_STORAGE_KEY } from '../lib/graph-camera.js';
 import type { WorkflowMeta } from '../types.js';
+import * as ReactFlowModule from '@xyflow/react';
 
 vi.mock('@xyflow/react', async () => {
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
   return createReactFlowMock();
 });
+
+const fitViewMock = (ReactFlowModule as unknown as { __fitViewMock: Mock }).__fitViewMock;
+const setCenterMock = (ReactFlowModule as unknown as { __setCenterMock: Mock }).__setCenterMock;
+const getZoomMock = (ReactFlowModule as unknown as { __getZoomMock: Mock }).__getZoomMock;
 
 const { App } = await import('../App.js');
 
@@ -233,4 +239,322 @@ describe('Side rail controls (component)', () => {
     expect(screen.getByTestId('keyboard-search-overlay')).toBeInTheDocument();
     expect(screen.getByTestId('workflow-graph-surface')).toHaveAttribute('data-keyboard-active', 'true');
   });
+});
+
+/**
+ * Camera-lock keyboard/mouse contract at the App level. These prove the App
+ * owns camera intent (selection, active scope, lock preference, suppression)
+ * and that React Flow only moves when the App issues a typed command. Each
+ * setCenter call here flows from App → the correctly-scoped graph component.
+ */
+describe('Camera lock controls (component)', () => {
+  let mock: MockInvoker;
+  /** Active getBoundingClientRect spy, restored after each test. */
+  let rectSpy: ReturnType<typeof vi.spyOn> | null = null;
+
+  const threeWorkflows: WorkflowMeta[] = [
+    { id: 'wf-a', name: 'Alpha Workflow', status: 'running' },
+    { id: 'wf-b', name: 'Beta Workflow', status: 'pending' },
+    { id: 'wf-c', name: 'Gamma Workflow', status: 'pending' },
+  ];
+
+  const threeTasks = [
+    makeUITask({ id: 'wf-a/t', description: 'Alpha Task', workflowId: 'wf-a', command: 'echo a' }),
+    makeUITask({ id: 'wf-b/t', description: 'Beta Task', workflowId: 'wf-b', command: 'echo b' }),
+    makeUITask({ id: 'wf-c/t', description: 'Gamma Task', workflowId: 'wf-c', command: 'echo c' }),
+  ];
+
+  beforeEach(() => {
+    // jsdom in this project ships without localStorage, but the App persists
+    // the camera-lock preference there. Install a fresh in-memory shim so seeded
+    // preferences load and toggles round-trip within a test.
+    const store = new Map<string, string>();
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+        setItem: (k: string, v: string) => { store.set(k, String(v)); },
+        removeItem: (k: string) => { store.delete(k); },
+        clear: () => { store.clear(); },
+        key: (i: number) => [...store.keys()][i] ?? null,
+        get length() { return store.size; },
+      },
+    });
+    mock = createMockInvoker();
+    mock.install();
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+    getZoomMock.mockReset();
+    getZoomMock.mockReturnValue(1);
+  });
+
+  afterEach(() => {
+    rectSpy?.mockRestore();
+    rectSpy = null;
+    mock.cleanup();
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+  });
+
+  /**
+   * Render the App, wait for the first workflow node and the single initial
+   * fit, then clear the viewport spies so a test asserts only on post-mount
+   * camera moves. Seed localStorage BEFORE calling this to control the lock.
+   */
+  async function renderAndSettle(
+    wfs: WorkflowMeta[] = workflows,
+    tks = tasks,
+  ) {
+    mock.setTasks(tks, wfs);
+    render(<App />);
+    await screen.findByTestId(`workflow-node-${wfs[0].id}`);
+    await waitFor(() => expect(fitViewMock).toHaveBeenCalled());
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+  }
+
+  /** Flush a single animation frame so any scheduled camera move can run. */
+  function flushFrame() {
+    return new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+  }
+
+  function keyFromActiveElement(keyName: string) {
+    fireEvent.keyDown(document.activeElement ?? document, { key: keyName });
+  }
+
+  /**
+   * Stub getBoundingClientRect by data-testid so arrow navigation sees real
+   * geometry (jsdom otherwise reports every rect as 0×0). `lefts` maps a node
+   * testid to its left edge; each node is 200×80, so center.x = left + 100.
+   */
+  function stubNodeRects(lefts: Record<string, number>) {
+    rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
+      function (this: HTMLElement) {
+        const testId = this.getAttribute('data-testid') ?? '';
+        const left = lefts[testId];
+        if (left === undefined) {
+          return {
+            x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0,
+            toJSON() {},
+          } as DOMRect;
+        }
+        return {
+          x: left, y: 100, top: 100, left, right: left + 200, bottom: 180,
+          width: 200, height: 80, toJSON() {},
+        } as DOMRect;
+      },
+    );
+  }
+
+  it('F1 toggle mode defaults on, toggles off then on, and re-centers the selection when re-enabled', async () => {
+    await renderAndSettle();
+
+    // Default region is the workflow graph with wf-a selected. The lock is on
+    // by default, so the first F1 toggles it OFF (no camera move).
+    key('F1');
+    await flushFrame();
+    expect(setCenterMock).not.toHaveBeenCalled();
+
+    // The second F1 toggles the lock back ON and immediately centers wf-a.
+    key('F1');
+    await waitFor(() => expect(setCenterMock).toHaveBeenCalledTimes(1));
+    // Lock-driven centering preserves zoom; it never whole-graph fits.
+    expect(fitViewMock).not.toHaveBeenCalled();
+    // The toggled preference is persisted.
+    expect(JSON.parse(localStorage.getItem(CAMERA_LOCK_PREFERENCE_STORAGE_KEY)!)).toEqual({
+      mode: 'toggle',
+      enabled: true,
+    });
+  });
+
+  it('F1 once mode centers once without changing the lock preference', async () => {
+    localStorage.setItem(
+      CAMERA_LOCK_PREFERENCE_STORAGE_KEY,
+      JSON.stringify({ mode: 'once', enabled: true }),
+    );
+    await renderAndSettle();
+
+    key('F1');
+    await waitFor(() => expect(setCenterMock).toHaveBeenCalledTimes(1));
+    // Once mode must not rewrite the persisted preference.
+    expect(JSON.parse(localStorage.getItem(CAMERA_LOCK_PREFERENCE_STORAGE_KEY)!)).toEqual({
+      mode: 'once',
+      enabled: true,
+    });
+
+    // Once mode re-centers on each press (it never disables the lock).
+    key('F1');
+    await waitFor(() => expect(setCenterMock).toHaveBeenCalledTimes(2));
+  });
+
+  it('a manual background pan or wheel does not autofocus the graph', async () => {
+    await renderAndSettle();
+
+    const pane = screen.getAllByTestId('rf__pane')[0];
+    fireEvent.pointerDown(pane);
+    fireEvent.wheel(pane);
+
+    await flushFrame();
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(fitViewMock).not.toHaveBeenCalled();
+  });
+
+  it('clicking a workflow node centers it when the lock is enabled', async () => {
+    await renderAndSettle();
+
+    fireEvent.click(screen.getByTestId('workflow-node-wf-b'));
+
+    // Selecting wf-b re-centers the workflow graph on it. (A fresh mini-dag for
+    // wf-b legitimately fits once on mount, so we assert only the recenter.)
+    await waitFor(() => expect(setCenterMock).toHaveBeenCalledTimes(1));
+  });
+
+  it('clicking a workflow node does not center when the lock is disabled', async () => {
+    localStorage.setItem(
+      CAMERA_LOCK_PREFERENCE_STORAGE_KEY,
+      JSON.stringify({ mode: 'toggle', enabled: false }),
+    );
+    await renderAndSettle();
+
+    fireEvent.click(screen.getByTestId('workflow-node-wf-b'));
+
+    await flushFrame();
+    expect(setCenterMock).not.toHaveBeenCalled();
+  });
+
+  it('arrow navigation re-centers the newly selected node when the lock is enabled', async () => {
+    await renderAndSettle();
+
+    key('ArrowRight');
+
+    await waitFor(() => expect(setCenterMock).toHaveBeenCalledTimes(1));
+  });
+
+  it('keyboard-opened workflow menu handles arrows and restores workflow graph control', async () => {
+    await renderAndSettle();
+    await flushFrame();
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+
+    key('Enter');
+
+    expect(await screen.findByRole('menu')).toHaveTextContent('Open Workflow');
+    const openWorkflow = screen.getByRole('menuitem', { name: 'Open Workflow' });
+    await waitFor(() => expect(openWorkflow).toHaveFocus());
+    await flushFrame();
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(fitViewMock).not.toHaveBeenCalled();
+
+    keyFromActiveElement('ArrowDown');
+
+    await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Open PR' })).toHaveFocus());
+    await flushFrame();
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(fitViewMock).not.toHaveBeenCalled();
+
+    keyFromActiveElement('Escape');
+
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('workflow-graph-surface')).toHaveFocus());
+
+    key('ArrowRight');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Beta Workflow task DAG');
+    });
+    await waitFor(() => expect(setCenterMock).toHaveBeenCalledTimes(1));
+  });
+
+  it('keyboard-opened task menu handles arrows and restores task graph control', async () => {
+    await renderAndSettle();
+
+    key('Tab');
+    key('ArrowRight');
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Second Task');
+    });
+    await waitFor(() => expect(setCenterMock).toHaveBeenCalledTimes(1));
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+
+    key('Enter');
+
+    expect(await screen.findByRole('menu')).toHaveTextContent('Open Terminal');
+    const restartTask = screen.getByRole('menuitem', { name: 'Restart Task' });
+    await waitFor(() => expect(restartTask).toHaveFocus());
+    await flushFrame();
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(fitViewMock).not.toHaveBeenCalled();
+
+    keyFromActiveElement('ArrowDown');
+
+    await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Open Terminal' })).toHaveFocus());
+    await flushFrame();
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(fitViewMock).not.toHaveBeenCalled();
+
+    keyFromActiveElement('Escape');
+
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+    const taskGraphRegion = screen
+      .getByTestId('selected-workflow-mini-dag')
+      .querySelector<HTMLElement>('[data-keyboard-region="taskGraph"]');
+    expect(taskGraphRegion).not.toBeNull();
+    await waitFor(() => expect(taskGraphRegion).toHaveFocus());
+
+    key('ArrowLeft');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Alpha Task');
+    });
+    await waitFor(() => expect(setCenterMock).toHaveBeenCalledTimes(1));
+  });
+
+  it('arrow navigation selects the geometrically nearest node, not the alphabetical neighbor', async () => {
+    await renderAndSettle(threeWorkflows, threeTasks);
+
+    // wf-a is current (center 100). To its right, wf-c (center 200) is nearer
+    // than wf-b (center 300). The alphabetical neighbor would be wf-b, so
+    // landing on wf-c proves arrow nav uses geometry.
+    stubNodeRects({
+      'workflow-node-wf-a': 0,
+      'workflow-node-wf-b': 200,
+      'workflow-node-wf-c': 100,
+    });
+
+    key('ArrowRight');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Gamma Workflow task DAG');
+    });
+  });
+
+  it('arrow navigation stays put when there is no node further in that direction', async () => {
+    await renderAndSettle(threeWorkflows, threeTasks);
+
+    // Lay nodes left→right as wf-a, wf-b, wf-c so wf-c is both the rightmost
+    // node and the alphabetically-last one — the boundary where ArrowRight has
+    // nowhere to go and must not move the selection.
+    stubNodeRects({
+      'workflow-node-wf-a': 0,
+      'workflow-node-wf-b': 200,
+      'workflow-node-wf-c': 400,
+    });
+
+    // Select the rightmost node first, and wait for its recenter to fire so the
+    // pending animation frame can't leak into the assertion below.
+    fireEvent.click(screen.getByTestId('workflow-node-wf-c'));
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Gamma Workflow task DAG');
+    });
+    await waitFor(() => expect(setCenterMock).toHaveBeenCalled());
+    setCenterMock.mockClear();
+
+    key('ArrowRight');
+
+    await flushFrame();
+    // Selection unchanged and no recenter was issued.
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Gamma Workflow task DAG');
+  });
+
 });

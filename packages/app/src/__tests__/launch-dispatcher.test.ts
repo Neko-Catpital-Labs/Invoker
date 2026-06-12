@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SQLiteAdapter } from '@invoker/data-store';
-import type { Logger } from '@invoker/contracts';
+import { DISPATCH_LEASE_MS, type Logger } from '@invoker/contracts';
 import { InMemoryBus } from '@invoker/test-kit';
 import { Orchestrator } from '@invoker/workflow-core';
 import { LaunchDispatcher } from '../launch-dispatcher.js';
@@ -83,7 +83,6 @@ describe('LaunchDispatcher', () => {
     const counts = observed?.fields?.counts as Record<string, number> | undefined;
     expect(counts?.enqueued).toBe(1);
     expect(counts?.leased).toBe(0);
-    expect(counts?.acknowledged).toBe(0);
 
     const afterPoll = adapter.loadLaunchDispatchById(enqueued.id);
     expect(afterPoll).toMatchObject({ state: 'enqueued' });
@@ -125,7 +124,7 @@ describe('LaunchDispatcher', () => {
     expect(observed?.fields?.total).toBe(0);
   });
 
-  describe('ack / complete / fail transitions', () => {
+  describe('complete / fail transitions', () => {
     function seedWorkflowAndTask(selectedAttemptId?: string): void {
       adapter.saveWorkflow({
         id: 'wf-1',
@@ -163,46 +162,7 @@ describe('LaunchDispatcher', () => {
       };
     }
 
-    it('ack moves a leased row to acknowledged and logs the transition', () => {
-      seedWorkflowAndTask('attempt-ack');
-      const enqueued = adapter.enqueueLaunchDispatch({
-        taskId: 'wf-1/t1',
-        attemptId: 'attempt-ack',
-        workflowId: 'wf-1',
-        generation: 0,
-      });
-      const leased = adapter.claimLaunchDispatchAtomic({
-        ownerId: 'owner-test',
-        maxConcurrency: 4,
-      });
-      expect(leased?.id).toBe(enqueued.id);
-
-      const { dispatcher, logger } = makeDispatcher();
-      expect(dispatcher.ackDispatch(enqueued.id, 'runner-1')).toBe(true);
-
-      const after = adapter.loadLaunchDispatchById(enqueued.id);
-      expect(after?.state).toBe('acknowledged');
-      expect(after?.dispatchOwner).toBe('runner-1');
-
-      const ackLog = logger.records.find((entry) => entry.msg.includes('ack'));
-      expect(ackLog?.fields?.accepted).toBe(true);
-      expect(ackLog?.fields?.dispatchId).toBe(enqueued.id);
-    });
-
-    it('ack returns false when the row is no longer leased', () => {
-      seedWorkflowAndTask();
-      const enqueued = adapter.enqueueLaunchDispatch({
-        taskId: 'wf-1/t1',
-        attemptId: 'attempt-ack-stale',
-        workflowId: 'wf-1',
-        generation: 0,
-      });
-
-      const { dispatcher } = makeDispatcher();
-      expect(dispatcher.ackDispatch(enqueued.id, 'runner-1')).toBe(false);
-    });
-
-    it('complete moves an acknowledged row to completed', () => {
+    it('complete moves a live row to completed', () => {
       seedWorkflowAndTask();
       const enqueued = adapter.enqueueLaunchDispatch({
         taskId: 'wf-1/t1',
@@ -234,6 +194,35 @@ describe('LaunchDispatcher', () => {
       expect(dispatcher.completeDispatch(enqueued.id)).toBe(false);
     });
 
+    it('uses a fixed dispatch TTL long enough for normal executor startup', () => {
+      seedWorkflowAndTask('attempt-fixed-ttl');
+      const enqueued = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-1/t1',
+        attemptId: 'attempt-fixed-ttl',
+        workflowId: 'wf-1',
+        generation: 0,
+      });
+      const claimedAt = '2026-06-04T22:38:44.000Z';
+      const claimed = adapter.claimLaunchDispatchAtomic({
+        ownerId: 'owner-test',
+        nowIso: claimedAt,
+      });
+      expect(claimed?.id).toBe(enqueued.id);
+      expect(claimed?.fencedUntil).toBe(
+        new Date(new Date(claimedAt).getTime() + DISPATCH_LEASE_MS).toISOString(),
+      );
+
+      const { dispatcher } = makeDispatcher();
+      expect(dispatcher.reapExpiredLeases(
+        new Date(new Date(claimedAt).getTime() + DISPATCH_LEASE_MS - 1).toISOString(),
+      )).toBe(0);
+      expect(adapter.loadLaunchDispatchById(enqueued.id)?.state).toBe('leased');
+      expect(dispatcher.reapExpiredLeases(
+        new Date(new Date(claimedAt).getTime() + DISPATCH_LEASE_MS + 1).toISOString(),
+      )).toBe(1);
+      expect(adapter.loadLaunchDispatchById(enqueued.id)?.state).toBe('enqueued');
+    });
+
     it('fail re-enqueues a leased row with the error message and clears the owner', () => {
       seedWorkflowAndTask('attempt-fail');
       const enqueued = adapter.enqueueLaunchDispatch({
@@ -244,7 +233,6 @@ describe('LaunchDispatcher', () => {
       });
       adapter.claimLaunchDispatchAtomic({
         ownerId: 'owner-test',
-        maxConcurrency: 4,
       });
 
       const { dispatcher } = makeDispatcher();
@@ -267,7 +255,6 @@ describe('LaunchDispatcher', () => {
       });
       adapter.claimLaunchDispatchAtomic({
         ownerId: 'owner-test',
-        maxConcurrency: 4,
       });
 
       const { dispatcher } = makeDispatcher();
@@ -359,7 +346,7 @@ describe('LaunchDispatcher', () => {
       expect(dispatcher.reapExpiredLeases()).toBe(0);
     });
 
-    it('abandonStuckLeases abandons acknowledged rows past max attempts and calls prepareTaskForNewAttempt', () => {
+    it('abandonStuckLeases abandons leased rows past max attempts and calls prepareTaskForNewAttempt', () => {
       seed();
       const row = adapter.enqueueLaunchDispatch({
         taskId: 'wf-r/t1',
@@ -370,7 +357,7 @@ describe('LaunchDispatcher', () => {
       const pastIso = new Date(Date.now() - 60_000).toISOString();
       (adapter as any).db.run(
         `UPDATE task_launch_dispatch
-           SET state = 'acknowledged', dispatch_owner = 'owner-x',
+           SET state = 'leased', dispatch_owner = 'owner-x',
                fenced_until = ?, attempts_count = 2, last_error = 'startup error'
          WHERE id = ?`,
         [pastIso, row.id],
@@ -405,7 +392,7 @@ describe('LaunchDispatcher', () => {
       const pastIso = new Date(Date.now() - 60_000).toISOString();
       (adapter as any).db.run(
         `UPDATE task_launch_dispatch
-           SET state = 'acknowledged', dispatch_owner = 'owner-x',
+           SET state = 'leased', dispatch_owner = 'owner-x',
                fenced_until = ?, attempts_count = 2, last_error = 'ssh-selection stuck'
          WHERE id = ?`,
         [pastIso, row.id],
@@ -488,7 +475,7 @@ describe('LaunchDispatcher', () => {
       const pastIso = new Date(Date.now() - 60_000).toISOString();
       (adapter as any).db.run(
         `UPDATE task_launch_dispatch
-           SET state = 'acknowledged', fenced_until = ?, attempts_count = 2,
+           SET state = 'leased', fenced_until = ?, attempts_count = 2,
                dispatch_owner = 'owner-x'
          WHERE id = ?`,
         [pastIso, row.id],
@@ -513,7 +500,7 @@ describe('LaunchDispatcher', () => {
       const futureIso = new Date(Date.now() + 60_000).toISOString();
       (adapter as any).db.run(
         `UPDATE task_launch_dispatch
-           SET state = 'acknowledged', fenced_until = ?, attempts_count = 5
+           SET state = 'leased', fenced_until = ?, attempts_count = 5
          WHERE id = ?`,
         [futureIso, futureRow.id],
       );
@@ -527,7 +514,7 @@ describe('LaunchDispatcher', () => {
       const pastIso = new Date(Date.now() - 60_000).toISOString();
       (adapter as any).db.run(
         `UPDATE task_launch_dispatch
-           SET state = 'acknowledged', fenced_until = ?, attempts_count = 1
+           SET state = 'leased', fenced_until = ?, attempts_count = 1
          WHERE id = ?`,
         [pastIso, underAttemptRow.id],
       );
@@ -621,7 +608,6 @@ describe('LaunchDispatcher', () => {
         },
         taskRunnerProvider: () => ({ executeTask }),
         mode: 'active',
-        maxConcurrency: 4,
       });
       dispatcher.poll();
 
@@ -633,7 +619,7 @@ describe('LaunchDispatcher', () => {
       expect(optsArg.launchOutbox).toBe(dispatcher);
 
       // Row is leased on this poll; the runner will transition it via
-      // ackDispatch/completeDispatch (those are unit-tested elsewhere).
+      // completeDispatch/failDispatch (those are unit-tested elsewhere).
       const after = adapter.loadLaunchDispatchById(enq.id);
       expect(after?.state).toBe('leased');
       expect(after?.dispatchOwner).toBe('owner-a');
@@ -678,7 +664,6 @@ describe('LaunchDispatcher', () => {
         },
         taskRunnerProvider: () => ({ executeTask }),
         mode: 'active',
-        maxConcurrency: 10,
         maxLeasesPerPoll: 2,
       });
       dispatcher.poll();
@@ -727,7 +712,6 @@ describe('LaunchDispatcher', () => {
         },
         taskRunnerProvider: () => ({ executeTask }),
         mode: 'active',
-        maxConcurrency: 1,
       });
 
       dispatcher.poll();
@@ -767,7 +751,6 @@ describe('LaunchDispatcher', () => {
         },
         taskRunnerProvider: () => ({ executeTask }),
         mode: 'active',
-        maxConcurrency: 4,
       });
 
       dispatcher.poll();
@@ -812,7 +795,6 @@ describe('LaunchDispatcher', () => {
         },
         taskRunnerProvider: () => ({ executeTask }),
         mode: 'active',
-        maxConcurrency: 4,
       });
 
       dispatcher.poll();
@@ -858,7 +840,6 @@ describe('LaunchDispatcher', () => {
         },
         taskRunnerProvider: () => ({ executeTask }),
         mode: 'active',
-        maxConcurrency: 4,
       });
       dispatcher.poll();
 
@@ -879,7 +860,6 @@ describe('LaunchDispatcher', () => {
         },
         taskRunnerProvider: () => ({ executeTask }),
         mode: 'active',
-        maxConcurrency: 4,
       });
       dispatcher.poll();
       expect(executeTask).not.toHaveBeenCalled();
@@ -906,7 +886,6 @@ describe('LaunchDispatcher', () => {
         },
         taskRunnerProvider: () => ({ executeTask }),
         mode: 'active',
-        maxConcurrency: 4,
       });
       dispatcher.poll();
       // Wait one microtask tick for the .catch backstop to run.

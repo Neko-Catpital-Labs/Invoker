@@ -2925,10 +2925,57 @@ describe('Orchestrator', () => {
       expect(resumePersistence.loadAttempt(oldAttempt.id)?.status).toBe('superseded');
       expect(resumePersistence.loadAttempt(newAttemptId!)?.status).toBe('running');
     });
+
+    it('recovers normalized stale pending tasks that still carry selected-attempt runtime state', () => {
+      const resumePersistence = new InMemoryPersistence();
+      const oldAttempt: Attempt = {
+        id: 't1-aold',
+        nodeId: 't1',
+        queuePriority: 0,
+        status: 'pending',
+        upstreamAttemptIds: [],
+        createdAt: new Date('2025-01-01T00:00:00.000Z'),
+      };
+      resumePersistence.saveTask('wf-resume', {
+        id: 't1',
+        description: 'Pending task with stale launch metadata',
+        status: 'pending',
+        dependencies: [],
+        createdAt: new Date(),
+        config: {},
+        execution: {
+          startedAt: new Date('2025-01-01T00:00:00.000Z'),
+          selectedAttemptId: oldAttempt.id,
+          workspacePath: '/tmp/stale-workspace',
+          agentSessionId: 'stale-session',
+          error: 'stale launch error',
+        },
+      });
+      resumePersistence.saveAttempt(oldAttempt);
+
+      const resumeOrchestrator = new Orchestrator({
+        persistence: resumePersistence,
+        messageBus: bus,
+        maxConcurrency: 3,
+      });
+
+      const started = resumeOrchestrator.resumeWorkflow('wf-resume');
+
+      expect(started).toHaveLength(1);
+      const resumed = resumeOrchestrator.getTask('t1')!;
+      expect(resumed.status).toBe('running');
+      expect(resumed.execution.selectedAttemptId).toBeTruthy();
+      expect(resumed.execution.selectedAttemptId).not.toBe(oldAttempt.id);
+      expect(resumed.execution.workspacePath).toBeUndefined();
+      expect(resumed.execution.agentSessionId).toBeUndefined();
+      expect(resumed.execution.error).toBeUndefined();
+      expect(resumePersistence.loadAttempt(oldAttempt.id)?.status).toBe('superseded');
+      expect(resumePersistence.loadAttempt(resumed.execution.selectedAttemptId!)?.status).toBe('running');
+    });
   });
 
   describe('prepareTaskForNewAttempt', () => {
-    it('resets a running launching task to pending with a fresh selected attempt and preserves durable fields', () => {
+    it('resets a running launching task to pending with a fresh selected attempt and clears launch lineage', () => {
       orchestrator.loadPlan({
         name: 'prepare-running-launching',
         tasks: [
@@ -3011,6 +3058,8 @@ describe('Orchestrator', () => {
       expect(prepared.execution.pendingFixError).toBeUndefined();
       expect(prepared.execution.agentSessionId).toBeUndefined();
       expect(prepared.execution.workspacePath).toBeUndefined();
+      expect(prepared.execution.branch).toBeUndefined();
+      expect(prepared.execution.commit).toBeUndefined();
       expect(prepared.execution.containerId).toBeUndefined();
       expect(prepared.execution.isFixingWithAI).toBe(false);
       expect(prepared.config.command).toBe('pnpm test');
@@ -3020,8 +3069,6 @@ describe('Orchestrator', () => {
       expect(prepared.config.approach).toBe('durable approach');
       expect(prepared.config.testPlan).toBe('durable test plan');
       expect(prepared.dependencies).toEqual([sid(orchestrator, 0, 't0')]);
-      expect(prepared.execution.branch).toBe('feature/task');
-      expect(prepared.execution.commit).toBe('abc123');
       expect(prepared.execution.reviewUrl).toBe('https://example.test/review');
       expect(prepared.execution.reviewId).toBe('review-1');
       expect(prepared.execution.reviewStatus).toBe('open');
@@ -6012,7 +6059,6 @@ describe('Orchestrator', () => {
       o.recreateDownstream('A');
 
       const a = o.getTask('A')!;
-      // A (the selected task) is left entirely unchanged.
       expect(a.status).toBe('completed');
       expect(a.execution.branch).toBe('br-a');
       expect(a.execution.commit).toBe('a1');
@@ -6021,7 +6067,6 @@ describe('Orchestrator', () => {
       expect(a.execution.containerId).toBe('ct-a');
       expect(a.execution.generation).toBe(3);
 
-      // B and C are recreated with fresh lineage and bumped generation.
       const b = o.getTask('B')!;
       const c = o.getTask('C')!;
       expect(b.status === 'running' || b.status === 'pending').toBe(true);
@@ -6049,7 +6094,6 @@ describe('Orchestrator', () => {
       expect(a.execution.branch).toBe('br-a');
       expect(a.execution.generation).toBe(3);
 
-      // B is the selected task here — fully preserved.
       expect(b.status).toBe('completed');
       expect(b.execution.branch).toBe('br-b');
       expect(b.execution.commit).toBe('b1');
@@ -6058,7 +6102,6 @@ describe('Orchestrator', () => {
       expect(b.execution.containerId).toBe('ct-b');
       expect(b.execution.generation).toBe(2);
 
-      // Only C is recreated.
       expect(c.status === 'running' || c.status === 'pending').toBe(true);
       expect(c.execution.branch).toBeUndefined();
       expect(c.execution.workspacePath).toBeUndefined();
@@ -6076,7 +6119,6 @@ describe('Orchestrator', () => {
       const a = o.getTask('A')!;
       const b = o.getTask('B')!;
       const c = o.getTask('C')!;
-      // Nothing changed anywhere — including the leaf itself.
       expect(a.status).toBe('completed');
       expect(b.status).toBe('completed');
       expect(c.status).toBe('completed');
@@ -6092,15 +6134,11 @@ describe('Orchestrator', () => {
       const o = loadRecreateDownstreamChain('wf-recreate-downstream-dispatch');
       const started = o.recreateDownstream('A');
 
-      // A stays completed, so B becomes ready; C is gated behind B and
-      // is not yet ready. The invalidation plan records exactly the
-      // ready descendant set handed to the scheduler.
       const plan = o.getLastInvalidationPlan()!;
       expect(plan.action).toBe('recreateDownstream');
       expect(plan.affectedTaskIds).toEqual(['B', 'C']);
       expect(plan.schedulerEnqueueCandidates.map((c) => c.taskId)).toEqual(['B']);
 
-      // The preserved target is never returned as a started task.
       expect(started.map((t) => t.id)).not.toContain('A');
       expect(started.map((t) => t.id)).not.toContain('C');
     });
@@ -7151,6 +7189,7 @@ describe('Orchestrator', () => {
       expect(queueStatus.runningCount).toBe(1);
       expect(queueStatus.running[0]?.taskId).toBe(taskId);
       expect(queueStatus.running[0]?.attemptId).toBe(selectedAttemptId);
+      expect(queueStatus.queued.map((task) => task.taskId)).not.toContain(taskId);
     });
 
     it('restartTask supersedes a claimed selected attempt before relaunching', () => {

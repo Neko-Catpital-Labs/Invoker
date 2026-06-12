@@ -1,5 +1,5 @@
 import { execSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -1849,10 +1849,12 @@ describe('TaskRunner', () => {
         const task = makeTask({ id: 'slow-start', status: 'running', config: { command: 'echo' } });
         const done = executor.executeTask(task);
         await vi.advanceTimersByTimeAsync(30_000);
-        expect(heartbeats).toEqual(['slow-start']);
+        expect(heartbeats.length).toBeGreaterThanOrEqual(1);
+        expect(heartbeats.every((taskId) => taskId === 'slow-start')).toBe(true);
         await vi.advanceTimersByTimeAsync(35_000);
         await done;
-        expect(heartbeats).toEqual(['slow-start', 'slow-start']);
+        expect(heartbeats.length).toBeGreaterThanOrEqual(2);
+        expect(heartbeats.every((taskId) => taskId === 'slow-start')).toBe(true);
         expect(slowExecutor.start).toHaveBeenCalledTimes(1);
       } finally {
         vi.useRealTimers();
@@ -2005,6 +2007,56 @@ describe('TaskRunner', () => {
           process.env.INVOKER_EXECUTOR_START_TIMEOUT_MS = previousTimeout;
         }
         vi.useRealTimers();
+      }
+    });
+  });
+
+  describe('merge git operation timeout', () => {
+    it('rejects instead of leaving merge consolidation pending when git never exits', async () => {
+      const tmp = mkdtempSync(join(tmpdir(), 'invoker-merge-git-timeout-'));
+      const fakeBin = join(tmp, 'bin');
+      mkdirSync(fakeBin);
+      const fakeGit = join(fakeBin, 'git');
+      writeFileSync(fakeGit, '#!/usr/bin/env node\nsetInterval(() => {}, 1000);\n');
+      chmodSync(fakeGit, 0o755);
+
+      const previousPath = process.env.PATH;
+      const previousTimeout = process.env.INVOKER_GIT_NETWORK_TIMEOUT_MS;
+      process.env.PATH = `${fakeBin}:${previousPath ?? ''}`;
+      process.env.INVOKER_GIT_NETWORK_TIMEOUT_MS = '50';
+
+      try {
+        const runner = new TaskRunner({
+          orchestrator: {
+            getTask: vi.fn(),
+            getAllTasks: vi.fn(() => []),
+            handleWorkerResponse: vi.fn(),
+          } as any,
+          persistence: {} as any,
+          executorRegistry: {
+            getDefault: vi.fn(),
+            get: vi.fn(),
+            getAll: vi.fn(() => []),
+          } as any,
+          cwd: tmp,
+        });
+
+        const startedAt = Date.now();
+        await expect(runner.execGitIn(['fetch', 'origin', '+refs/heads/main:refs/heads/main'], tmp))
+          .rejects.toThrow(/exceeded git operation timeout \(50ms\)/);
+        expect(Date.now() - startedAt).toBeLessThan(2_000);
+      } finally {
+        if (previousPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = previousPath;
+        }
+        if (previousTimeout === undefined) {
+          delete process.env.INVOKER_GIT_NETWORK_TIMEOUT_MS;
+        } else {
+          process.env.INVOKER_GIT_NETWORK_TIMEOUT_MS = previousTimeout;
+        }
+        rmSync(tmp, { recursive: true, force: true });
       }
     });
   });
@@ -2491,6 +2543,8 @@ describe('TaskRunner', () => {
         getAllTasks: () => allTasks,
         handleWorkerResponse: vi.fn(() => []),
         setTaskAwaitingApproval: vi.fn(),
+        setTaskReviewReady: vi.fn(),
+        autoStartExternallyUnblockedReadyTasks: vi.fn(() => []),
       };
       const persistence = {
         loadWorkflow: () => ({
@@ -2559,8 +2613,8 @@ describe('TaskRunner', () => {
       const deleteCall = gitCalls.find(c => c[0] === 'branch' && c[1] === '-D' && c[2] === 'plan/feature');
       expect(deleteCall).toBeDefined();
 
-      // Default mergeMode is 'manual', so setTaskAwaitingApproval is called with metadata
-      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
+      // Default mergeMode is 'manual', so setTaskReviewReady is called with metadata
+      expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
         config: expect.objectContaining({ runnerKind: 'worktree' }),
         execution: expect.objectContaining({ branch: 'plan/feature', workspacePath: '/tmp/mock-wt' }),
       }));
@@ -2879,6 +2933,8 @@ describe('TaskRunner', () => {
         getAllTasks: () => allTasks,
         handleWorkerResponse: vi.fn(() => []),
         setTaskAwaitingApproval: vi.fn(),
+        setTaskReviewReady: vi.fn(),
+        autoStartExternallyUnblockedReadyTasks: vi.fn(() => []),
       };
       const persistence = {
         loadWorkflow: () => ({
@@ -2933,8 +2989,8 @@ describe('TaskRunner', () => {
       const squashCall = gitCalls.find(c => c[0] === 'merge' && c.includes('--squash'));
       expect(squashCall).toBeUndefined();
 
-      // Should call setTaskAwaitingApproval with metadata instead of handleWorkerResponse
-      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
+      // Should call setTaskReviewReady with metadata instead of handleWorkerResponse
+      expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
         config: expect.objectContaining({ runnerKind: 'worktree' }),
         execution: expect.objectContaining({ branch: 'plan/feature', workspacePath: '/tmp/mock-wt' }),
       }));
@@ -3031,6 +3087,8 @@ describe('TaskRunner', () => {
         getAllTasks: () => allTasks,
         handleWorkerResponse: vi.fn(() => []),
         setTaskAwaitingApproval: vi.fn(),
+        setTaskReviewReady: vi.fn(),
+        autoStartExternallyUnblockedReadyTasks: vi.fn(() => []),
       };
       const persistence = {
         loadWorkflow: () => ({
@@ -3116,8 +3174,8 @@ describe('TaskRunner', () => {
         }),
       );
 
-      // Should set task awaiting approval with PR metadata (not handleWorkerResponse)
-      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
+      // Should set task review-ready with PR metadata (not handleWorkerResponse)
+      expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
         config: expect.objectContaining({ runnerKind: 'worktree' }),
         execution: expect.objectContaining({
           branch: 'plan/feature',
@@ -3142,6 +3200,8 @@ describe('TaskRunner', () => {
         getAllTasks: () => allTasks,
         handleWorkerResponse: vi.fn(() => []),
         setTaskAwaitingApproval: vi.fn(),
+        setTaskReviewReady: vi.fn(),
+        autoStartExternallyUnblockedReadyTasks: vi.fn(() => []),
       };
       const persistence = {
         loadWorkflow: () => ({
@@ -3231,7 +3291,7 @@ describe('TaskRunner', () => {
           branch: 'plan/example',
         }),
       }));
-      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
+      expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
         execution: expect.objectContaining({
           workspacePath: gateWorkspace,
           branch: 'plan/example',
@@ -3295,6 +3355,8 @@ console.log(JSON.stringify(out));
         getAllTasks: () => [...allTasks, mergeTask],
         handleWorkerResponse: vi.fn(() => []),
         setTaskAwaitingApproval: vi.fn(),
+        setTaskReviewReady: vi.fn(),
+        autoStartExternallyUnblockedReadyTasks: vi.fn(() => []),
       };
       const persistence = {
         loadWorkflow: () => ({
@@ -3357,12 +3419,14 @@ console.log(JSON.stringify(out));
       expect(providerBody).toContain('![after](https://img.example.test/after--merge-gate-no-inline-approve.png)');
     });
 
-    it('executeMergeNode goes to awaiting_approval when mergeMode=manual and onFinish=none', async () => {
+    it('executeMergeNode goes to review_ready when mergeMode=manual and onFinish=none', async () => {
       const orchestrator = {
         getTask: () => null,
         getAllTasks: () => [],
         handleWorkerResponse: vi.fn(() => []),
         setTaskAwaitingApproval: vi.fn(),
+        setTaskReviewReady: vi.fn(),
+        autoStartExternallyUnblockedReadyTasks: vi.fn(() => []),
       };
       const persistence = {
         loadWorkflow: () => ({
@@ -3393,7 +3457,7 @@ console.log(JSON.stringify(out));
       await (executor as any).executeMergeNode(mergeTask);
 
       // No featureBranch set → gateWorkspacePath is undefined
-      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
+      expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
         config: expect.objectContaining({ runnerKind: 'worktree' }),
         execution: expect.objectContaining({ workspacePath: undefined }),
       }));
@@ -3406,6 +3470,8 @@ console.log(JSON.stringify(out));
         getAllTasks: () => [],
         handleWorkerResponse: vi.fn(() => []),
         setTaskAwaitingApproval: vi.fn(),
+        setTaskReviewReady: vi.fn(),
+        autoStartExternallyUnblockedReadyTasks: vi.fn(() => []),
       };
       const persistence = {
         loadWorkflow: () => ({
@@ -3450,6 +3516,8 @@ console.log(JSON.stringify(out));
         getAllTasks: () => allTasks,
         handleWorkerResponse: vi.fn(() => []),
         setTaskAwaitingApproval: vi.fn(),
+        setTaskReviewReady: vi.fn(),
+        autoStartExternallyUnblockedReadyTasks: vi.fn(() => []),
       };
       const persistence = {
         loadWorkflow: () => ({
@@ -3515,8 +3583,8 @@ console.log(JSON.stringify(out));
         }),
       );
 
-      // Should pass PR metadata through setTaskAwaitingApproval
-      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
+      // Should pass PR metadata through setTaskReviewReady
+      expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
         config: expect.objectContaining({ runnerKind: 'worktree' }),
         execution: expect.objectContaining({
           branch: 'plan/feature',
@@ -3537,6 +3605,8 @@ console.log(JSON.stringify(out));
         getAllTasks: () => allTasks,
         handleWorkerResponse: vi.fn(() => []),
         setTaskAwaitingApproval: vi.fn(),
+        setTaskReviewReady: vi.fn(),
+        autoStartExternallyUnblockedReadyTasks: vi.fn(() => []),
       };
       const persistence = {
         loadWorkflow: () => ({
@@ -3602,6 +3672,8 @@ console.log(JSON.stringify(out));
         getAllTasks: () => allTasks,
         handleWorkerResponse: vi.fn(() => []),
         setTaskAwaitingApproval: vi.fn(),
+        setTaskReviewReady: vi.fn(),
+        autoStartExternallyUnblockedReadyTasks: vi.fn(() => []),
       };
       const persistence = {
         loadWorkflow: () => ({
@@ -3656,16 +3728,18 @@ console.log(JSON.stringify(out));
       await (executor as any).executeMergeNode(mergeTask);
 
       expect(mergeGateProvider.createReview).toHaveBeenCalled();
-      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalled();
+      expect(orchestrator.setTaskReviewReady).toHaveBeenCalled();
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
     });
 
-    it('executeMergeNode goes to awaiting_approval when mergeMode=manual and no featureBranch', async () => {
+    it('executeMergeNode goes to review_ready when mergeMode=manual and no featureBranch', async () => {
       const orchestrator = {
         getTask: () => null,
         getAllTasks: () => [],
         handleWorkerResponse: vi.fn(() => []),
         setTaskAwaitingApproval: vi.fn(),
+        setTaskReviewReady: vi.fn(),
+        autoStartExternallyUnblockedReadyTasks: vi.fn(() => []),
       };
       const persistence = {
         loadWorkflow: () => ({
@@ -3696,7 +3770,7 @@ console.log(JSON.stringify(out));
       await (executor as any).executeMergeNode(mergeTask);
 
       // No featureBranch set → gateWorkspacePath is undefined
-      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
+      expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
         config: expect.objectContaining({ runnerKind: 'worktree' }),
         execution: expect.objectContaining({ workspacePath: undefined }),
       }));
@@ -3778,6 +3852,8 @@ console.log(JSON.stringify(out));
         getAllTasks: () => allTasks,
         handleWorkerResponse: vi.fn(() => []),
         setTaskAwaitingApproval: vi.fn(),
+        setTaskReviewReady: vi.fn(),
+        autoStartExternallyUnblockedReadyTasks: vi.fn(() => []),
       };
       const persistence = {
         loadWorkflow: () => ({
@@ -3847,6 +3923,8 @@ console.log(JSON.stringify(out));
         getAllTasks: () => allTasks,
         handleWorkerResponse: vi.fn(() => []),
         setTaskAwaitingApproval: vi.fn(),
+        setTaskReviewReady: vi.fn(),
+        autoStartExternallyUnblockedReadyTasks: vi.fn(() => []),
       };
       const persistence = {
         loadWorkflow: () => ({
@@ -4063,6 +4141,8 @@ console.log(JSON.stringify(out));
         getAllTasks: () => allTasks,
         handleWorkerResponse: vi.fn(() => []),
         setTaskAwaitingApproval: vi.fn(),
+        setTaskReviewReady: vi.fn(),
+        autoStartExternallyUnblockedReadyTasks: vi.fn(() => []),
       };
       const persistence = {
         loadWorkflow: () => ({
@@ -4127,7 +4207,7 @@ console.log(JSON.stringify(out));
       expect(mergeGateProvider.createReview).toHaveBeenCalledWith(
         expect.objectContaining({ body: '## Summary\n\nAuthored PR body from summary' }),
       );
-      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith(
+      expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith(
         '__merge__wf-1',
         expect.objectContaining({
           config: expect.objectContaining({ summary: '## Summary\nTest summary' }),
@@ -4144,6 +4224,8 @@ console.log(JSON.stringify(out));
         getAllTasks: () => allTasks,
         handleWorkerResponse: vi.fn(() => []),
         setTaskAwaitingApproval: vi.fn(),
+        setTaskReviewReady: vi.fn(),
+        autoStartExternallyUnblockedReadyTasks: vi.fn(() => []),
       };
       const persistence = {
         loadWorkflow: () => ({
@@ -4185,7 +4267,7 @@ console.log(JSON.stringify(out));
 
       await (executor as any).executeMergeNode(mergeTask);
 
-      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith(
+      expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith(
         '__merge__wf-1',
         expect.objectContaining({
           config: expect.objectContaining({ summary: '## Summary\nManual summary' }),

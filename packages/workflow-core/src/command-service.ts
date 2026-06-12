@@ -166,12 +166,10 @@ export class CommandService {
   }
 
   /**
-   * Recreate only the transitive downstream dependents of a task, leaving
-   * the target task itself untouched. Recreate-class invalidation
-   * (`task.recreateDownstream`) — the selected task's branch, commit,
-   * workspacePath, generation, agent/session/container metadata, and
-   * selectedAttemptId are preserved; descendants are reset and the
-   * ready subset is auto-started by the orchestrator.
+   * Recreate only the transitive downstream dependents of a task —
+   * **recreate-class** invalidation that leaves the target task itself
+   * untouched. Descendants are reset like `recreateTask` and the ready
+   * subset is auto-started by the orchestrator.
    */
   async recreateDownstream(
     envelope: CommandEnvelope<{ taskId: string }>,

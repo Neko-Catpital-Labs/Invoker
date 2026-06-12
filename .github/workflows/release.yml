@@ -16,6 +16,7 @@ env:
 
 jobs:
   build-cli:
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -26,7 +27,7 @@ jobs:
           - runner: ubuntu-24.04-arm
             platform: linux
             arch: arm64
-          - runner: macos-13
+          - runner: macos-15-intel
             platform: darwin
             arch: x64
           - runner: macos-latest
@@ -54,6 +55,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Check release version sync
+        run: pnpm run check:versions
+
       - name: Build standalone CLI
         env:
           INVOKER_TARGET_PLATFORM: ${{ matrix.platform }}
@@ -69,13 +73,20 @@ jobs:
           if-no-files-found: error
 
   build-desktop:
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         include:
           - runner: ubuntu-latest
             build_command: pnpm run dist:desktop:linux
-            artifact_name: desktop-linux
+            artifact_name: desktop-linux-x64
+            artifact_glob: |
+              release/*.AppImage
+              release/*.deb
+          - runner: ubuntu-24.04-arm
+            build_command: pnpm run dist:desktop:linux
+            artifact_name: desktop-linux-arm64
             artifact_glob: |
               release/*.AppImage
               release/*.deb
@@ -85,7 +96,7 @@ jobs:
             artifact_glob: |
               release/*.dmg
               release/*.zip
-          - runner: macos-13
+          - runner: macos-15-intel
             build_command: pnpm run dist:desktop:mac:x64
             artifact_name: desktop-mac-x64
             artifact_glob: |
@@ -144,6 +155,33 @@ jobs:
       - name: Generate combined checksums
         run: bash scripts/release-sha256.sh
 
+      - name: Verify complete release asset set
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          required=(
+            "invoker-cli-${version}-linux-x64.tar.gz"
+            "invoker-cli-${version}-linux-arm64.tar.gz"
+            "invoker-cli-${version}-darwin-x64.tar.gz"
+            "invoker-cli-${version}-darwin-arm64.tar.gz"
+            "Invoker-${version}-x86_64.AppImage"
+            "Invoker-${version}-arm64.AppImage"
+            "Invoker-${version}-amd64.deb"
+            "Invoker-${version}-arm64.deb"
+            "Invoker-${version}-x64.dmg"
+            "Invoker-${version}-arm64.dmg"
+            "Invoker-${version}-x64.zip"
+            "Invoker-${version}-arm64.zip"
+            "SHA256SUMS"
+          )
+          missing=0
+          for asset in "${required[@]}"; do
+            if [ ! -f "release/${asset}" ]; then
+              echo "Missing release asset: ${asset}" >&2
+              missing=1
+            fi
+          done
+          exit "$missing"
+
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v2
         with:
@@ -176,8 +214,26 @@ jobs:
 
       - name: Publish npm packages
         if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          pnpm --filter @neko-catpital-labs/invoker-cli publish --access public --no-git-checks
-          pnpm --filter @neko-catpital-labs/invoker-ui publish --access public --no-git-checks
+          publish_if_missing() {
+            local package_dir="$1"
+            local name
+            local version
+
+            name="$(node -p "require('./${package_dir}/package.json').name")"
+            version="$(node -p "require('./${package_dir}/package.json').version")"
+
+            if npm view "${name}@${version}" version >/dev/null 2>&1; then
+              echo "${name}@${version} is already published; skipping"
+              return
+            fi
+
+            # Pack with pnpm (rewrites workspace:* deps to the exact version),
+            # then publish the tarball with npm (which would not rewrite them).
+            local tarball
+            tarball="$(pnpm --filter "${name}" pack --pack-destination "${RUNNER_TEMP}" | tail -n 1)"
+            npm publish "${tarball}" --access public
+          }
+
+          publish_if_missing packages/npm-cli
+          publish_if_missing packages/npm-ui
