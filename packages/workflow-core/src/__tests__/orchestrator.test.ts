@@ -6012,7 +6012,6 @@ describe('Orchestrator', () => {
       o.recreateDownstream('A');
 
       const a = o.getTask('A')!;
-      // A (the selected task) is left entirely unchanged.
       expect(a.status).toBe('completed');
       expect(a.execution.branch).toBe('br-a');
       expect(a.execution.commit).toBe('a1');
@@ -6021,7 +6020,6 @@ describe('Orchestrator', () => {
       expect(a.execution.containerId).toBe('ct-a');
       expect(a.execution.generation).toBe(3);
 
-      // B and C are recreated with fresh lineage and bumped generation.
       const b = o.getTask('B')!;
       const c = o.getTask('C')!;
       expect(b.status === 'running' || b.status === 'pending').toBe(true);
@@ -6049,7 +6047,6 @@ describe('Orchestrator', () => {
       expect(a.execution.branch).toBe('br-a');
       expect(a.execution.generation).toBe(3);
 
-      // B is the selected task here — fully preserved.
       expect(b.status).toBe('completed');
       expect(b.execution.branch).toBe('br-b');
       expect(b.execution.commit).toBe('b1');
@@ -6058,7 +6055,6 @@ describe('Orchestrator', () => {
       expect(b.execution.containerId).toBe('ct-b');
       expect(b.execution.generation).toBe(2);
 
-      // Only C is recreated.
       expect(c.status === 'running' || c.status === 'pending').toBe(true);
       expect(c.execution.branch).toBeUndefined();
       expect(c.execution.workspacePath).toBeUndefined();
@@ -6076,7 +6072,6 @@ describe('Orchestrator', () => {
       const a = o.getTask('A')!;
       const b = o.getTask('B')!;
       const c = o.getTask('C')!;
-      // Nothing changed anywhere — including the leaf itself.
       expect(a.status).toBe('completed');
       expect(b.status).toBe('completed');
       expect(c.status).toBe('completed');
@@ -6092,15 +6087,11 @@ describe('Orchestrator', () => {
       const o = loadRecreateDownstreamChain('wf-recreate-downstream-dispatch');
       const started = o.recreateDownstream('A');
 
-      // A stays completed, so B becomes ready; C is gated behind B and
-      // is not yet ready. The invalidation plan records exactly the
-      // ready descendant set handed to the scheduler.
       const plan = o.getLastInvalidationPlan()!;
       expect(plan.action).toBe('recreateDownstream');
       expect(plan.affectedTaskIds).toEqual(['B', 'C']);
       expect(plan.schedulerEnqueueCandidates.map((c) => c.taskId)).toEqual(['B']);
 
-      // The preserved target is never returned as a started task.
       expect(started.map((t) => t.id)).not.toContain('A');
       expect(started.map((t) => t.id)).not.toContain('C');
     });

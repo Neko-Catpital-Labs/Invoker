@@ -71,6 +71,7 @@ export interface InvalidationDeps {
   cancelInFlight: CancelInFlightFn;
   retryTask: (taskId: string) => TaskState[] | Promise<TaskState[]>;
   recreateTask: (taskId: string) => TaskState[] | Promise<TaskState[]>;
+  /** Recreate a task's transitive downstream dependents while leaving the task itself untouched. */
   recreateDownstream?: (taskId: string) => TaskState[] | Promise<TaskState[]>;
   retryWorkflow: (workflowId: string) => TaskState[] | Promise<TaskState[]>;
   recreateWorkflow: (workflowId: string) => TaskState[] | Promise<TaskState[]>;
