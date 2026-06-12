@@ -6267,6 +6267,48 @@ console.log(JSON.stringify(out));
 
       expect((executor as any).runVisualProofCapture).not.toHaveBeenCalled();
     });
+
+    it('accepts an equivalent remote branch after a concurrent force-push race', async () => {
+      const orchestrator = {
+        getTask: () => undefined,
+        getAllTasks: () => [],
+      };
+      const persistence = {
+        loadWorkflow: () => ({ id: 'wf-race', name: 'Race Test' }),
+        updateTask: vi.fn(),
+      };
+      const executor = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      const calls: string[][] = [];
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        calls.push([...args]);
+        if (args[0] === 'push') {
+          throw new Error(
+            "git push --force origin plan/race:refs/heads/plan/race failed (code 1): " +
+            "cannot lock ref 'refs/heads/plan/race': is at remote but expected local",
+          );
+        }
+        if (args[0] === 'rev-parse' && args[1]?.endsWith('^{tree}')) return 'same-tree\n';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
+
+      await expect(
+        executor.consolidateAndMerge('none', 'master', 'plan/race', 'wf-race', 'Race Test'),
+      ).resolves.toBeUndefined();
+
+      expect(calls).toContainEqual([
+        'fetch',
+        'origin',
+        '+refs/heads/plan/race:refs/remotes/origin/plan/race',
+      ]);
+    });
   });
 
 });

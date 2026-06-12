@@ -7,7 +7,7 @@
  *
  * Pattern: bare remote + working clone + TaskRunner with real git.
  */
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -137,6 +137,35 @@ describe('createMergeWorktree isolation (real git)', { timeout: 30_000 }, () => 
     } catch {
       // Expected — detached HEAD
     }
+
+    await executor.removeMergeWorktree(clonePath);
+  });
+
+  it('retries without local hardlinks when local clone crosses filesystems', async () => {
+    const sandbox = createSandbox();
+    root = sandbox.root;
+
+    const executor = buildExecutor(sandbox.host);
+    const originalExecGitReadonly = executor.execGitReadonly.bind(executor);
+    const cloneCalls: string[][] = [];
+    executor.execGitReadonly = vi.fn(async (args: string[], cwd?: string) => {
+      if (args[0] === 'clone') {
+        cloneCalls.push(args);
+        if (args.includes('--local')) {
+          throw new Error("git clone --local --no-checkout failed (code 128): fatal: failed to create link 'objects/aa/bb': Invalid cross-device link");
+        }
+      }
+      return originalExecGitReadonly(args, cwd);
+    });
+
+    const clonePath = await executor.createMergeWorktree('master', 'test-cross-device');
+
+    expect(cloneCalls).toHaveLength(2);
+    expect(cloneCalls[0].slice(0, 3)).toEqual(['clone', '--local', '--no-checkout']);
+    expect(cloneCalls[1].slice(0, 2)).toEqual(['clone', '--no-checkout']);
+    expect(cloneCalls[1][2]).toBe(sandbox.host);
+    expect(cloneCalls[1][3]).toBe(cloneCalls[0][4]);
+    expect(git(clonePath, 'rev-parse HEAD')).toBe(git(sandbox.host, 'rev-parse master'));
 
     await executor.removeMergeWorktree(clonePath);
   });

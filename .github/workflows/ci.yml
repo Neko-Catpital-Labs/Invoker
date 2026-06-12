@@ -127,7 +127,7 @@ jobs:
             .node-version
 
       - name: Install test system packages
-        run: apt-get update && apt-get install -y unzip xvfb
+        run: apt-get update && apt-get install -y jq unzip xvfb
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

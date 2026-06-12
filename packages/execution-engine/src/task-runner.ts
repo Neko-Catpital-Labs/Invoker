@@ -172,6 +172,14 @@ function getGitOperationTimeoutMs(): number {
   return parsed;
 }
 
+function isLocalCloneLinkFailure(err: unknown): boolean {
+  const message = err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err);
+  const lower = message.toLowerCase();
+  return lower.includes('cross-device link')
+    || lower.includes('invalid cross-device link')
+    || (lower.includes('failed to create link') && lower.includes('clone --local'));
+}
+
 function execGitWithTimeout(args: string[], cwd: string): Promise<string> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn('git', args, {
@@ -1969,8 +1977,16 @@ export class TaskRunner {
       }
     }
 
-    // Clone with hard-linked objects — near-instant, fully isolated refs
-    await this.execGitReadonly(['clone', '--local', '--no-checkout', cloneSource, clonePath]);
+    // Prefer hard-linked objects for speed, but fall back when source and
+    // destination live on filesystems that cannot hardlink across devices.
+    try {
+      await this.execGitReadonly(['clone', '--local', '--no-checkout', cloneSource, clonePath]);
+    } catch (err) {
+      if (!isLocalCloneLinkFailure(err)) throw err;
+      rmSync(clonePath, { recursive: true, force: true });
+      this.logger.warn(`[createMergeWorktree] Local clone failed for ${label}; retrying without hardlinks`);
+      await this.execGitReadonly(['clone', '--no-checkout', cloneSource, clonePath]);
+    }
     // Detach HEAD so the fetch can overwrite all branch refs (including the default branch)
     const headSha = (await this.execGitIn(['rev-parse', 'HEAD'], clonePath)).trim();
     await this.execGitIn(['update-ref', '--no-deref', 'HEAD', headSha], clonePath);

@@ -30,7 +30,7 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     const targetRepo = await this.resolveTargetRepo(cwd);
     console.log(`[merge-gate] createReview: ghBase=${ghBase} apiHead=${ghHead} cwd=${cwd}`);
 
-    await this.exec('git', ['push', '--force', 'origin', `${featureBranch}:refs/heads/${featureBranch}`], cwd);
+    await this.pushBranchAllowEquivalent(cwd, featureBranch);
 
     const listOutput = await this.exec('gh', [
       'pr', 'list',
@@ -164,6 +164,34 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
   private parseGitHubRepoNwo(url: string): string | undefined {
     const m = url.trim().match(/github\.com[:/]([^/]+\/[^/.]+?)(?:\.git)?\/?$/i);
     return m?.[1];
+  }
+
+  private async pushBranchAllowEquivalent(cwd: string, featureBranch: string): Promise<void> {
+    try {
+      await this.exec('git', ['push', '--force', 'origin', `${featureBranch}:refs/heads/${featureBranch}`], cwd);
+      return;
+    } catch (err) {
+      const remoteTrackingRef = `refs/remotes/origin/${featureBranch}`;
+      try {
+        await this.exec('git', ['fetch', 'origin', `+refs/heads/${featureBranch}:${remoteTrackingRef}`], cwd);
+        const localTree = await this.exec('git', ['rev-parse', `${featureBranch}^{tree}`], cwd);
+        const remoteTree = await this.exec('git', ['rev-parse', `${remoteTrackingRef}^{tree}`], cwd);
+        if (localTree.trim() === remoteTree.trim()) {
+          console.log(
+            `[merge-gate] push skipped for ${featureBranch}: remote already has equivalent tree ` +
+            `${remoteTree.trim().slice(0, 12)}`,
+          );
+          return;
+        }
+      } catch (verifyErr) {
+        console.log(
+          `[merge-gate] push equivalence check failed for ${featureBranch}: ${
+            verifyErr instanceof Error ? verifyErr.message : String(verifyErr)
+          }`,
+        );
+      }
+      throw err;
+    }
   }
 
   private async exec(cmd: string, args: string[], cwd: string): Promise<string> {
