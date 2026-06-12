@@ -299,7 +299,11 @@ export interface OrchestratorPersistence {
     workflowId: string;
     priority?: 'high' | 'normal' | 'low';
     generation: number;
-  }): { id: number };
+  }): {
+    id: number;
+    state?: 'enqueued' | 'leased' | 'completed' | 'abandoned';
+    priority?: 'high' | 'normal' | 'low';
+  };
   abandonLaunchDispatchesForTasks?(
     taskIds: readonly string[],
     reason: string,
@@ -1212,6 +1216,8 @@ export class Orchestrator {
         lastHeartbeatAt: undefined,
         error: undefined,
         exitCode: undefined,
+        branch: undefined,
+        commit: undefined,
         inputPrompt: undefined,
         pendingFixError: undefined,
         agentSessionId: undefined,
@@ -1887,77 +1893,6 @@ export class Orchestrator {
     this.checkWorkflowCompletion();
   }
 
-  /**
-   * Select a winning experiment for a reconciliation task — **retry-class**
-   * invalidation route per Step 7 of
-   * `docs/architecture/task-invalidation-roadmap.md` and the Decision Table
-   * row "Edit selected experiment" in
-   * `docs/architecture/task-invalidation-chart.md`
-   * (`MUTATION_POLICIES.selectedExperiment` → `retryTask` / task scope).
-   *
-   * Why retry-class (not recreate-class). The chart classifies single
-   * experiment selection as a downstream-input mutation: the
-   * reconciliation task's *result* (its selected branch/commit) is the
-   * execution input that downstream consumers use, so changing the
-   * winner invalidates downstream attempts but does NOT change the
-   * reconciliation task's own spec. The chart's "Why" column reads
-   * "Downstream execution inputs changed". `applyInvalidation('task',
-   * 'retryTask', reconId, deps)` is wired to today's
-   * `Orchestrator.restartTask` via `buildInvalidationDeps` (the
-   * compatibility seam Step 1 introduced; Step 13 will rename
-   * `restartTask` → `retryTask` to close the matrix).
-   *
-   * Sequence (mirrors `applyInvalidation`'s contract for the
-   * synchronous orchestrator-internal seam — see `invalidation-policy.ts`
-   * and the Step 5/6 `editTaskType` precedent):
-   *   1. **Cancel-first (Hard Invariant).** Compute the transitive
-   *      downstream subgraph of the reconciliation task and cancel any
-   *      member that is actively executing (`running` or
-   *      `fixing_with_ai`) BEFORE we mutate the recon's
-   *      `selectedExperiment`. This is the "any AFFECTED in-flight
-   *      work" guarantee from the chart: stale downstream attempts
-   *      cannot survive a re-selection because they would consume the
-   *      OLD winner's lineage. For the common initial-selection path
-   *      (recon `needs_input` → `completed` with downstream blocked at
-   *      `pending`) this loop is a no-op — there is nothing active.
-   *   2. **Persist new winner.** `writeAndSync` updates
-   *      `execution.selectedExperiment` (and the recon's
-   *      `branch`/`commit` to mirror the winner's lineage) and emits a
-   *      `task.completed` delta. The reconciliation task's status
-   *      transitions to `completed`; this matches the existing
-   *      "Behavior Today" column in the chart ("completes
-   *      reconciliation task and unblocks downstream").
-   *   3. **Retry-class reset of downstream (re-selection only).** When
-   *      the recon was previously completed with a *different* winner,
-   *      every direct downstream consumer is reset via `restartTask`,
-   *      which is the current `retryTask` compatibility wire.
-   *      `restartTask` cascades to its own descendants and bumps each
-   *      affected task's execution generation exactly once via
-   *      `withBumpedExecutionGeneration` (single source of truth for the
-   *      retry reset shape — Step 7 deliberately reuses it instead of
-   *      duplicating the field list here, mirroring Steps 5/6). For
-   *      the initial-selection path no downstream reset is needed
-   *      because nothing has executed yet against the recon's result.
-   *   4. **Auto-start newly ready tasks.** Existing behavior:
-   *      `findNewlyReadyTasks(reconId)` plus `autoStartReadyTasks`
-   *      unblocks downstream that just became ready due to recon
-   *      completing.
-   *
-   * Public surface is unchanged: same `(taskId, experimentId)` signature
-   * returning `TaskState[]` of newly-started tasks. Active downstream is
-   * NO LONGER silently overwritten with a new winner — that's the whole
-   * point of cancel-first per the chart's Hard Invariant. Prior to
-   * Step 7 there was no general active invalidation model for selection
-   * (per the chart's "Behavior Today" column); this method introduces
-   * one.
-   *
-   * NOTE: `recreateTask`'s lineage-discarding reset shape is
-   * deliberately NOT used here. Downstream tasks may still hold valid
-   * workspace lineage (their own branch, their own workspacePath) that
-   * the executor can reuse when the new winner's branch is rebased onto
-   * theirs; that is what makes selection retry-class rather than
-   * recreate-class in the chart's Decision Table.
-   */
   selectExperiment(taskId: string, experimentId: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
@@ -2016,8 +1951,9 @@ export class Orchestrator {
       const directDownstream = allTasksBefore
         .filter((t) => t.dependencies.includes(reconId))
         .map((t) => t.id);
+      const reselectionAction = MUTATION_POLICIES.selectedExperiment.action;
       for (const dsId of directDownstream) {
-        this.recreateTask(dsId);
+        this.dispatchPostMutation(reselectionAction, dsId);
       }
     }
     const readyTaskIds = this.stateMachine.findNewlyReadyTasks(reconId);
@@ -2031,7 +1967,7 @@ export class Orchestrator {
     return started;
   }
 
-    selectExperiments(
+  selectExperiments(
     taskId: string,
     experimentIds: string[],
     combinedBranch?: string,
@@ -2100,9 +2036,10 @@ export class Orchestrator {
         .getAllTasks()
         .filter((t) => t.dependencies.includes(reconId))
         .map((t) => t.id);
+      const reselectionAction = MUTATION_POLICIES.selectedExperimentSet.action;
       for (const dsId of directDownstreamAfter) {
         if (this.stateGetTask(dsId)) {
-          this.recreateTask(dsId);
+          this.dispatchPostMutation(reselectionAction, dsId);
         }
       }
     }
@@ -2169,6 +2106,7 @@ export class Orchestrator {
         completedAt: undefined,
         error: undefined,
         exitCode: undefined,
+        pendingFixError: undefined,
         commit: undefined,
         lastHeartbeatAt: undefined,
         launchStartedAt: undefined,
@@ -3054,15 +2992,6 @@ export class Orchestrator {
    * compatible callers continue to use the workflow-scoped
    * `setWorkflowMergeMode` wrapper which translates `workflowId →
    * mergeNodeId` and delegates here.
-   *
-   * NOTE: `recreateTask`'s lineage-discarding reset shape is
-   * deliberately NOT used here. A merge-mode flip does not invalidate
-   * the merge node's accumulated workspace (the merged branch lineage
-   * built from upstream leaf results); only the merge execution
-   * policy changed. That distinction is what makes merge-mode the
-   * single retry-class route alongside the other retry-class rows
-   * (`runnerKind`, `selectedExperiment`, `selectedExperimentSet`)
-   * in the chart's Decision Table.
    */
   editTaskMergeMode(
     taskId: string,
@@ -3720,20 +3649,33 @@ export class Orchestrator {
    * Resume a previously persisted workflow by restoring tasks
    * and auto-starting ready tasks.
    */
+  private isRecoverableResumeTask(task: TaskState): boolean {
+    if (task.status === 'running') return true;
+    if (task.status !== 'pending' || !task.execution.selectedAttemptId) return false;
+    if (task.execution.phase === 'launching') return true;
+
+    return Boolean(
+      task.execution.startedAt
+      || task.execution.launchStartedAt
+      || task.execution.launchCompletedAt
+      || task.execution.lastHeartbeatAt
+      || task.execution.workspacePath
+      || task.execution.agentSessionId
+      || task.execution.containerId
+      || task.execution.error
+      || task.execution.exitCode !== undefined
+      || task.execution.inputPrompt
+      || task.execution.pendingFixError,
+    );
+  }
+
   resumeWorkflow(workflowId: string): TaskState[] {
     this.syncFromDb(workflowId);
     const workflowTaskIds = new Set(this.persistence.loadTasks(workflowId).map((task) => task.id));
     const tasksToRecover = this.stateMachine
       .getAllTasks()
       .filter((task) => task.config.workflowId === workflowId || workflowTaskIds.has(task.id))
-      .filter((task) =>
-        task.status === 'running'
-        || (
-          task.status === 'pending'
-          && task.execution.phase === 'launching'
-          && !!task.execution.selectedAttemptId
-        )
-      );
+      .filter((task) => this.isRecoverableResumeTask(task));
     for (const task of tasksToRecover) {
       this.prepareTaskForNewAttempt(task.id, 'resume_workflow_recovery');
     }
@@ -4170,9 +4112,11 @@ export class Orchestrator {
         return { task, attemptId, attempt };
       })
       .filter(({ task, attempt }) => this.isTaskExecutionActive(task, attempt, now));
+    const activeTaskIds = new Set(activeAttempts.map(({ task }) => task.id));
     const queuedTasks = this.stateMachine
       .getReadyTasks()
       .filter((task) => task.status === 'pending')
+      .filter((task) => !activeTaskIds.has(task.id))
       .filter((task) => this.getExternalDependencyBlocker(task) === undefined)
       .map((task) => {
         const attempt = task.execution.selectedAttemptId
@@ -4680,11 +4624,12 @@ export class Orchestrator {
    * same chart-mandated unblock-pass without cancelling any
    * in-flight work.
    *
-   * Was `private` before Step 15; exposed publicly so
-   * `applyInvalidation`'s `'scheduleOnly'` dep can invoke it
-   * type-safely. No other behavior changes.
+   * Also rehydrates already-blocked tasks whose external gate has
+   * since cleared; review-ready merge runners use this path after
+   * moving an upstream gate out of `running`.
    */
   autoStartExternallyUnblockedReadyTasks(): TaskState[] {
+    const started = this.autoStartUnblockedTasks();
     const readyTasks = this.stateMachine
       .getReadyTasks()
       .filter((task) => this.getExternalDependencyBlocker(task) === undefined);
@@ -4692,7 +4637,8 @@ export class Orchestrator {
     for (const task of readyTasks) {
       this.enqueueIfNotScheduled(task.id);
     }
-    return this.drainScheduler();
+    started.push(...this.drainScheduler());
+    return started;
   }
 
   private autoStartUnblockedTasks(): TaskState[] {
@@ -4705,6 +4651,7 @@ export class Orchestrator {
       this.writeAndSync(task.id, {
         status: 'pending',
         execution: {
+          blockedBy: undefined,
           startedAt: undefined,
           completedAt: undefined,
           lastHeartbeatAt: undefined,
@@ -5178,6 +5125,20 @@ export class Orchestrator {
           this.persistence.logEvent?.(job.taskId, 'task.dispatch_enqueued', {
             ...changes,
             dispatchId: dispatch.id,
+            attemptId: launchAttemptId,
+            workflowId: task.config.workflowId,
+            generation: this.getExecutionGeneration(task),
+            state: dispatch.state,
+            priority: dispatch.priority,
+          });
+          this.logger.info('[orchestrator] drainScheduler: launch dispatch enqueued', {
+            taskId: job.taskId,
+            attemptId: launchAttemptId,
+            workflowId: task.config.workflowId,
+            generation: this.getExecutionGeneration(task),
+            dispatchId: dispatch.id,
+            state: dispatch.state,
+            priority: dispatch.priority,
           });
         } catch (err) {
           this.logger.warn('[orchestrator] drainScheduler: enqueueLaunchDispatch failed', {

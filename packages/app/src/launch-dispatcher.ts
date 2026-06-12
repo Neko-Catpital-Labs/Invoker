@@ -23,12 +23,11 @@ export type LaunchDispatcherMode = 'observe' | 'active';
 export type LaunchDispatcherPersistence = Pick<
   SQLiteAdapter,
   | 'listLaunchDispatchesByState'
-  | 'markLaunchDispatchAcknowledged'
   | 'markLaunchDispatchCompleted'
   | 'markLaunchDispatchFailed'
   | 'markLaunchDispatchAbandoned'
   | 'reapExpiredLaunchDispatchLeases'
-  | 'listAbandonableAcknowledgedLeases'
+  | 'listAbandonableLaunchDispatchLeases'
   | 'claimLaunchDispatchAtomic'
   | 'listExecutionResourceLeasesByTask'
   | 'releaseExecutionResourceLease'
@@ -77,14 +76,12 @@ export interface LaunchDispatcherOptions {
   logger?: Logger;
   mode: LaunchDispatcherMode;
   maxAttempts?: number;
-  maxConcurrency?: number;
   maxLeasesPerPoll?: number;
 }
 
 const OBSERVED_STATES: readonly TaskLaunchDispatchState[] = [
   'enqueued',
   'leased',
-  'acknowledged',
 ];
 
 export class LaunchDispatcher {
@@ -95,7 +92,6 @@ export class LaunchDispatcher {
   private readonly logger?: Logger;
   private readonly mode: LaunchDispatcherMode;
   private readonly maxAttempts: number;
-  private readonly maxConcurrency: number;
   private readonly maxLeasesPerPoll: number;
 
   constructor(options: LaunchDispatcherOptions) {
@@ -106,7 +102,6 @@ export class LaunchDispatcher {
     this.logger = options.logger;
     this.mode = options.mode;
     this.maxAttempts = options.maxAttempts ?? DISPATCH_MAX_ATTEMPTS;
-    this.maxConcurrency = options.maxConcurrency ?? 16;
     // Bound a single poll's work so the dispatcher cannot starve other
     // owner-loop ticks; the leftover rows are picked up on the next tick.
     this.maxLeasesPerPoll = options.maxLeasesPerPoll ?? 32;
@@ -124,11 +119,11 @@ export class LaunchDispatcher {
    * Single dispatcher tick:
    *
    *   1. Reap any leased rows whose dispatch lease expired (TaskRunner
-   *      never acked — we want to try again).
-   *   2. Abandon any acknowledged rows whose dispatch lease expired AND
-   *      that have exhausted their retry budget (TaskRunner accepted
-   *      ownership but never completed; report the failure and let the
-   *      orchestrator prepare a fresh attempt).
+   *      never completed startup — we want to try again).
+   *   2. Abandon any leased rows whose dispatch lease expired AND that
+   *      have exhausted their retry budget (TaskRunner accepted ownership
+   *      but never completed; report the failure and let the orchestrator
+   *      prepare a fresh attempt).
    *   3. In observe mode, log the aggregate state counts. In active mode,
    *      (CB.5) lease and dispatch new work.
    *
@@ -157,12 +152,12 @@ export class LaunchDispatcher {
   }
 
   /**
-   * Active-mode dispatch loop. Lease as many enqueued rows as capacity
-   * allows (bounded by `maxLeasesPerPoll`) and hand each one to the
-   * TaskRunner. The TaskRunner ack/complete/fail flow drives the rest
-   * of the lifecycle; if the JS promise drops mid-flight, the durable
-   * outbox row stays leased and the next poll's `reapExpiredLeases`
-   * reclaims it after `DISPATCH_LEASE_MS`.
+   * Active-mode dispatch loop. Lease enqueued rows up to the per-poll
+   * batch bound and hand each one to the
+   * TaskRunner. The TaskRunner complete/fail flow drives the rest of
+   * the lifecycle; if the JS promise drops mid-flight, the durable outbox
+   * row stays leased until the fixed dispatch crash-recovery TTL expires,
+   * then the next poll's `reapExpiredLeases` reclaims it.
    */
   private dispatchActive(): void {
     const runner = this.taskRunnerProvider?.() ?? null;
@@ -177,7 +172,6 @@ export class LaunchDispatcher {
     while (dispatched < this.maxLeasesPerPoll) {
       const leased = this.persistence.claimLaunchDispatchAtomic({
         ownerId: this.ownerId,
-        maxConcurrency: this.maxConcurrency,
       });
       if (!leased) break;
       dispatched += 1;
@@ -297,7 +291,10 @@ export class LaunchDispatcher {
    * Returns the number of rows reaped.
    */
   reapExpiredLeases(nowIso?: string): number {
-    const reaped = this.persistence.reapExpiredLaunchDispatchLeases(nowIso);
+    const reaped = this.persistence.reapExpiredLaunchDispatchLeases({
+      nowIso,
+      maxAttempts: this.maxAttempts,
+    });
     for (const row of reaped) {
       this.persistence.logEvent?.(row.taskId, 'task.launch_dispatch_reaped', {
         dispatchId: row.id,
@@ -318,14 +315,14 @@ export class LaunchDispatcher {
   }
 
   /**
-   * For every `acknowledged` row whose fence has expired AND whose
+   * For every `leased` row whose fence has expired AND whose
    * attempts_count has reached `maxAttempts`, transition it to
    * `abandoned`, ask the orchestrator to prepare a fresh attempt, and
    * emit a real `task.failed` event with a concrete error message.
    * Returns the number of rows abandoned.
    */
   abandonStuckLeases(nowIso?: string): number {
-    const candidates = this.persistence.listAbandonableAcknowledgedLeases({
+    const candidates = this.persistence.listAbandonableLaunchDispatchLeases({
       nowIso,
       maxAttempts: this.maxAttempts,
     });
@@ -446,26 +443,7 @@ export class LaunchDispatcher {
   }
 
   /**
-   * Transition a leased dispatch row to acknowledged. Called by the
-   * TaskRunner at the top of {@link executeTask} once it has accepted
-   * ownership of the launch. Returns false when the row is no longer
-   * in `leased` (e.g. it was reaped first), in which case the runner
-   * should bail out without starting the executor.
-   */
-  ackDispatch(dispatchId: number, runnerId: string): boolean {
-    const ok = this.persistence.markLaunchDispatchAcknowledged(dispatchId, runnerId);
-    this.logger?.info?.('[launch-dispatcher] ack', {
-      ownerId: this.ownerId,
-      dispatchId,
-      runnerId,
-      accepted: ok,
-      module: 'launch-dispatcher',
-    });
-    return ok;
-  }
-
-  /**
-   * Transition an acknowledged dispatch row to completed. Called by the
+   * Transition a live dispatch row to completed. Called by the
    * TaskRunner once {@link markTaskRunningAfterLaunch} has succeeded
    * (the executor handle is live and the task is in the executing
    * phase). Returns false when the row is already terminal.
@@ -508,7 +486,6 @@ function countByState(
   const counts: Record<TaskLaunchDispatchState, number> = {
     enqueued: 0,
     leased: 0,
-    acknowledged: 0,
     completed: 0,
     abandoned: 0,
   };

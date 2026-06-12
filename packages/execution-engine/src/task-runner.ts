@@ -59,12 +59,14 @@ import {
   type PrAuthoringContext,
 } from './pr-authoring.js';
 import { assertNotGitConfigMutation, ensureRemoteUrl } from './git-config-mutation.js';
+import { killProcessGroup, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 
 export type { TaskHeartbeatEvent, TaskRunnerCallbacks } from './task-runner-callbacks.js';
 
-/** Keeps `lastHeartbeatAt` fresh while `executor.start()` is awaited (SSH remote setup/provision can take minutes). Matches BaseExecutor default heartbeat cadence. */
+/** Keeps launch metadata fresh while `executor.start()` is awaited (SSH remote setup/provision can take minutes). */
 const PRE_START_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_EXECUTOR_START_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_GIT_OPERATION_TIMEOUT_MS = 15 * 60 * 1000;
 
 type StartupFailureMetadata = {
   workspacePath?: string;
@@ -161,6 +163,70 @@ function getExecutorStartTimeoutMs(): number {
   return parsed;
 }
 
+function getGitOperationTimeoutMs(): number {
+  const raw = process.env.INVOKER_GIT_NETWORK_TIMEOUT_MS?.trim();
+  if (raw === '0') return 0;
+  if (!raw) return DEFAULT_GIT_OPERATION_TIMEOUT_MS;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_GIT_OPERATION_TIMEOUT_MS;
+  return parsed;
+}
+
+function execGitWithTimeout(args: string[], cwd: string): Promise<string> {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn('git', args, {
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
+    });
+    const timeoutMs = getGitOperationTimeoutMs();
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+
+    const finish = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      if (timeout) clearTimeout(timeout);
+      fn();
+    };
+
+    if (timeoutMs > 0) {
+      timeout = setTimeout(() => {
+        killProcessGroup(child, 'SIGTERM');
+        const forceKill = setTimeout(() => {
+          killProcessGroup(child, 'SIGKILL');
+        }, SIGKILL_TIMEOUT_MS);
+        forceKill.unref?.();
+        finish(() => reject(new Error(
+          `git ${args.join(' ')} exceeded git operation timeout (${timeoutMs}ms) in ${cwd}. ` +
+          'Set INVOKER_GIT_NETWORK_TIMEOUT_MS to adjust (0 = unbounded).',
+        )));
+      }, timeoutMs);
+      timeout.unref?.();
+    }
+
+    child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+    child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+    child.on('error', (err) => {
+      finish(() => reject(new Error(`Failed to spawn git: ${err.message}`)));
+    });
+    child.on('close', (code, signal) => {
+      finish(() => {
+        if (code === 0) {
+          resolvePromise(stdout.trim());
+          return;
+        }
+        reject(new Error(
+          `git ${args.join(' ')} failed (code ${code ?? 'null'}${signal ? ` signal ${signal}` : ''}): ` +
+          `${stderr.trim()}${stdout.trim() ? '\n' + stdout.trim() : ''}`,
+        ));
+      });
+    });
+  });
+}
+
 const NOOP_LOGGER: Logger = {
   debug: () => {},
   info: () => {},
@@ -178,13 +244,12 @@ const NOOP_LOGGER: Logger = {
  * never depends on the app shell, the app provides this implementation
  * via the LaunchDispatcher.
  *
- * Each method MUST be safe to call even if the dispatch row was reaped
- * between the dispatcher's lease and the runner's call — the
- * persistence layer returns false in that case and the runner bails
- * out without starting the executor.
+ * Each method MUST be safe to call even if the dispatch row was
+ * reaped between the dispatcher's lease and the runner's call — the
+ * persistence layer returns false in that case and the runner treats
+ * it as a benign race.
  */
 export interface LaunchOutboxAck {
-  ackDispatch(dispatchId: number, runnerId: string): boolean;
   completeDispatch(dispatchId: number): boolean;
   failDispatch(dispatchId: number, error: unknown): boolean;
 }
@@ -323,7 +388,7 @@ export class TaskRunner {
     const executor = this.executorRegistry.get('worktree');
     if (!(executor instanceof WorktreeExecutor)) return undefined;
     try {
-      return await executor.getRepoPool().ensureClone(trimmed);
+      return await executor.getRepoPool().ensureCloneThroughRepoQueue(trimmed);
     } catch (err) {
       this.logger.warn(`[merge] ensureRepoMirrorPath failed for ${trimmed}`, { err });
       return undefined;
@@ -521,19 +586,6 @@ export class TaskRunner {
       }
       return;
     }
-    if (dispatchOpts) {
-      const accepted = dispatchOpts.launchOutbox.ackDispatch(
-        dispatchOpts.dispatchId,
-        this.runnerInstanceId,
-      );
-      if (!accepted) {
-        this.logger.warn(
-          `[TaskRunner] launch dispatch ack rejected (lease reaped?) for task=${task.id} attempt=${attemptId} dispatchId=${dispatchOpts.dispatchId}`,
-        );
-        bench('executeTask.dispatchAckRejected');
-        return;
-      }
-    }
     this.logger.info(
       `[TaskRunner] launch accepted task=${task.id} attempt=${attemptId} status=${task.status} ` +
         `phase=${task.execution.phase ?? 'none'} generation=${startGeneration} ` +
@@ -667,11 +719,10 @@ export class TaskRunner {
       // CD.1 / Issue 13: terminate the parent pivot task's outbox row.
       // Without this, drainScheduler enqueued a launch-dispatch row for
       // the pivot, but executeTaskInner returns here without ever
-      // calling completeDispatch — so the row stays acknowledged,
-      // gets reaped after DISPATCH_LEASE_MS, and is eventually
-      // abandoned. The spawn_experiments path is the terminal state
-      // for the pivot itself; only the spawned variants should
-      // continue through the outbox.
+      // calling completeDispatch, so the row stays leased and is retried
+      // or abandoned. The spawn_experiments path is the terminal state
+      // for the pivot itself; only the spawned variants should continue
+      // through the outbox.
       if (dispatchOpts) {
         try {
           dispatchOpts.launchOutbox.completeDispatch(dispatchOpts.dispatchId);
@@ -857,6 +908,13 @@ export class TaskRunner {
         `[TaskRunner] executor.start begin task=${task.id} attempt=${attemptId} executor=${executor.type} ` +
           `generation=${task.execution.generation ?? 0}`,
       );
+      this.persistence.logEvent?.(task.id, 'task.executor.start_begin', {
+        dispatchId: dispatchOpts?.dispatchId,
+        attemptId,
+        executorType: executor.type,
+        poolId: poolSelectionForStart?.poolId,
+        poolMemberId: poolSelectionForStart?.member.id,
+      });
       bench('onLaunchStart.before', {
         executorType: executor.type,
       });
@@ -996,13 +1054,16 @@ export class TaskRunner {
       this.releasePoolSelectionLease(this.pendingPoolSelections.get(task.id));
       this.pendingPoolSelections.delete(task.id);
       await this.cleanupPerTaskDockerExecutor(task);
+      if (dispatchOpts) {
+        dispatchOpts.launchOutbox.failDispatch(
+          dispatchOpts.dispatchId,
+          new Error('Launch rejected as stale or non-executable after executor start'),
+        );
+      }
       bench('markTaskRunningAfterLaunch.rejected');
       return;
     }
     bench('markTaskRunningAfterLaunch.accepted');
-    if (dispatchOpts) {
-      dispatchOpts.launchOutbox.completeDispatch(dispatchOpts.dispatchId);
-    }
 
     // Persist execution metadata immediately at task start — all fields explicit
     {
@@ -1128,7 +1189,7 @@ export class TaskRunner {
     // Wait for completion and feed response to orchestrator.
     // The callback is serialized through completionChain so that concurrent
     // onComplete firings never overlap inside orchestrator mutations.
-    return new Promise<void>((resolvePromise) => {
+    const completionPromise = new Promise<void>((resolvePromise) => {
       executor.onComplete(handle, async (response: WorkResponse) => {
         const work = async () => {
           const normalizedResponse = response.attemptId ? response : { ...response, attemptId };
@@ -1181,6 +1242,10 @@ export class TaskRunner {
         resolvePromise();
       });
     });
+    if (dispatchOpts) {
+      dispatchOpts.launchOutbox.completeDispatch(dispatchOpts.dispatchId);
+    }
+    return completionPromise;
   }
 
   /**
@@ -1875,48 +1940,12 @@ export class TaskRunner {
    */
   execGitReadonly(args: string[], cwd?: string): Promise<string> {
     assertNotGitConfigMutation(args, 'TaskRunner.execGitReadonly');
-    return new Promise((resolvePromise, reject) => {
-      const child = spawn('git', args, {
-        cwd: cwd ?? this.cwd,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      let stdout = '';
-      let stderr = '';
-      child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
-      child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
-      child.on('error', (err) => {
-        reject(new Error(`Failed to spawn git: ${err.message}`));
-      });
-      child.on('close', (code) => {
-        if (code === 0) resolvePromise(stdout.trim());
-        else reject(new Error(
-          `git ${args.join(' ')} failed (code ${code}): ${stderr.trim()}${stdout.trim() ? '\n' + stdout.trim() : ''}`
-        ));
-      });
-    });
+    return execGitWithTimeout(args, cwd ?? this.cwd);
   }
 
   /** @internal */ execGitIn(args: string[], dir: string): Promise<string> {
     assertNotGitConfigMutation(args, 'TaskRunner.execGitIn');
-    return new Promise((resolvePromise, reject) => {
-      const child = spawn('git', args, {
-        cwd: dir,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      let stdout = '';
-      let stderr = '';
-      child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
-      child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
-      child.on('error', (err) => {
-        reject(new Error(`Failed to spawn git: ${err.message}`));
-      });
-      child.on('close', (code) => {
-        if (code === 0) resolvePromise(stdout.trim());
-        else reject(new Error(
-          `git ${args.join(' ')} failed (code ${code}): ${stderr.trim()}${stdout.trim() ? '\n' + stdout.trim() : ''}`
-        ));
-      });
-    });
+    return execGitWithTimeout(args, dir);
   }
 
   /** @internal */ async createMergeWorktree(ref: string, label: string, repoUrl?: string): Promise<string> {
@@ -1940,8 +1969,7 @@ export class TaskRunner {
       }
     }
 
-    // Clone with hard-linked objects — near-instant, fully isolated refs
-    await this.execGitReadonly(['clone', '--local', '--no-checkout', cloneSource, clonePath]);
+    await this.cloneMergeWorktree(cloneSource, clonePath);
     // Detach HEAD so the fetch can overwrite all branch refs (including the default branch)
     const headSha = (await this.execGitIn(['rev-parse', 'HEAD'], clonePath)).trim();
     await this.execGitIn(['update-ref', '--no-deref', 'HEAD', headSha], clonePath);
@@ -2059,6 +2087,26 @@ export class TaskRunner {
     }
     await this.execGitIn(['checkout', '--detach', refSha], clonePath);
     return clonePath;
+  }
+
+  /** @internal */ async cloneMergeWorktree(cloneSource: string, clonePath: string): Promise<void> {
+    try {
+      // Hard-linked objects make local pool clones near-instant while keeping refs isolated.
+      await this.execGitReadonly(['clone', '--local', '--no-checkout', cloneSource, clonePath]);
+    } catch (err) {
+      const message = err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err);
+      if (!message.includes('Invalid cross-device link') && !message.includes('EXDEV')) {
+        throw err;
+      }
+
+      // CI may place the repo/mirror and temp merge clone on different mounts,
+      // where Git's hardlink-based local clone fails with EXDEV.
+      this.logger.warn(
+        `[createMergeWorktree] Local clone crossed filesystems; retrying without hardlinks: ${message.split('\n')[0]}`,
+      );
+      rmSync(clonePath, { recursive: true, force: true });
+      await this.execGitReadonly(['clone', '--no-local', '--no-checkout', cloneSource, clonePath]);
+    }
   }
 
   /** @internal */ async removeMergeWorktree(dir: string): Promise<void> {

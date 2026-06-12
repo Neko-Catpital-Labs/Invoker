@@ -569,6 +569,85 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     ]);
   });
 
+  it('coalesces duplicate fire-and-forget headless workflow retries while queued or running', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    adapter.saveWorkflow({
+      id: 'wf-2',
+      name: 'wf-2',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const runningGate = deferred();
+    const order: string[] = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async (_channel, args) => {
+        const payload = args[0] as { args?: string[] } | undefined;
+        const command = payload?.args?.join(' ') ?? String(args[0]);
+        order.push(command);
+        if (command === 'retry wf-2') {
+          await runningGate.promise;
+        }
+      },
+    );
+
+    const firstQueued = coordinator.submit(
+      'wf-1',
+      'high',
+      'headless.exec',
+      [{ args: ['retry', 'wf-1'], noTrack: true }],
+      { deferDrain: true },
+    );
+    const queuedDuplicates = Array.from({ length: 25 }, () =>
+      coordinator.submit(
+        'wf-1',
+        'high',
+        'headless.exec',
+        [{ args: ['retry', 'wf-1'], noTrack: true }],
+        { deferDrain: true },
+      ),
+    );
+
+    expect(new Set([firstQueued, ...queuedDuplicates])).toEqual(new Set([firstQueued]));
+
+    const firstRunning = coordinator.submit(
+      'wf-2',
+      'high',
+      'headless.exec',
+      [{ args: ['retry', 'wf-2'], noTrack: true }],
+    );
+    await waitFor(() => order.includes('retry wf-2'));
+
+    const runningDuplicates = Array.from({ length: 25 }, () =>
+      coordinator.submit(
+        'wf-2',
+        'high',
+        'headless.exec',
+        [{ args: ['retry', 'wf-2'], noTrack: true }],
+      ),
+    );
+
+    expect(new Set([firstRunning, ...runningDuplicates])).toEqual(new Set([firstRunning]));
+    runningGate.resolve();
+
+    await waitFor(() => adapter.listWorkflowMutationIntents(undefined, ['completed']).length === 2);
+
+    expect(order.sort()).toEqual(['retry wf-1', 'retry wf-2']);
+    expect(adapter.listWorkflowMutationIntents('wf-1')).toHaveLength(1);
+    expect(adapter.listWorkflowMutationIntents('wf-2')).toHaveLength(1);
+  });
+
   it('requeues interrupted running workflow mutations on restart and drains persisted queued work', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
