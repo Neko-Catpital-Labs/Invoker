@@ -1192,10 +1192,7 @@ export class Orchestrator {
 
   /**
    * Mark every actively-running task in `candidates` as `failed` with a
-   * cancel marker, freeing its scheduler slot. Shared by
-   * `cancelActiveBeforeInvalidation` (task/workflow scope) and the
-   * downstream-only recreate path, which must interrupt descendants
-   * WITHOUT touching the preserved target task.
+   * cancel marker, freeing its scheduler slot.
    */
   private cancelActiveCandidates(
     candidates: readonly TaskState[],
@@ -2627,21 +2624,10 @@ export class Orchestrator {
   }
 
   /**
-   * Downstream-only recreate: leave the selected task untouched and
-   * reset all of its transitive downstream dependents to pending with
-   * recreate-style execution clearing, then auto-start the descendants
-   * that become ready. For a chain A -> B -> C, `recreateDownstream(A)`
-   * resets B and C; `recreateDownstream(B)` resets C. Calling it on a
-   * leaf is a no-op that returns no started tasks.
-   *
-   * This is the task-preserving sibling of `recreateTask`: it reuses the
-   * `recreateDownstream` action-table entry (whose affected set is the
-   * target's descendants, excluding the target) and the same
-   * recreate-class reset payload, so descendants get fresh lineage,
-   * cleared attempt/session/container metadata, and a bumped execution
-   * generation, while the target's status, branch, commit, workspace,
-   * selected attempt, agent/session/container metadata, and generation
-   * stay exactly as they were.
+   * Downstream-only recreate: leave the target task untouched and reset all
+   * of its transitive downstream dependents to pending with recreate-style
+   * execution clearing, then auto-start newly ready descendants. No-op on a
+   * leaf task.
    */
   recreateDownstream(taskId: string): TaskState[] {
     this.refreshFromDb();
@@ -2650,7 +2636,6 @@ export class Orchestrator {
 
     const rootId = task.id;
 
-    // Descendant-only affected set (target preserved); empty for a leaf.
     let plan = planInvalidation({
       action: 'recreateDownstream',
       targetId: rootId,
@@ -2660,14 +2645,13 @@ export class Orchestrator {
     const toResetIds = plan.affectedTaskIds;
     const toResetSet = new Set(toResetIds);
 
-    // Leaf no-op: nothing downstream to recreate, nothing to dispatch.
     if (toResetIds.length === 0) {
       this.logger.info('[orchestrator] recreateDownstream no-op (leaf)', { taskId: rootId });
       return [];
     }
 
-    // Step 18 cancel-first invariant, scoped to the descendants only so
-    // the preserved target's active attempt is never interrupted.
+    // Step 18 cancel-first invariant, scoped to descendants only so the
+    // preserved target's active attempt is never interrupted.
     const descendants = toResetIds
       .map((id) => this.stateGetTask(id))
       .filter((t): t is TaskState => !!t);
