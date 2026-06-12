@@ -19,6 +19,8 @@ import { stringify as yamlStringify } from 'yaml';
 export type ElectronFixtures = {
   electronApp: ElectronApplication;
   guiOwnerMode: string;
+  /** When true, the app's embedded terminal backend throws on spawn (fault injection). */
+  breakTerminalSpawn: boolean;
   page: Page;
   testDir: string;
 };
@@ -45,6 +47,7 @@ async function removeTestDir(dir: string): Promise<void> {
 
 export const test = base.extend<ElectronFixtures>({
   guiOwnerMode: [process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'gui', { option: true }],
+  breakTerminalSpawn: [false, { option: true }],
 
   testDir: async ({}, use) => {
     const dir = mkdtempSync(path.join(tmpdir(), 'invoker-e2e-'));
@@ -54,7 +57,7 @@ export const test = base.extend<ElectronFixtures>({
     }
   },
 
-  electronApp: async ({ guiOwnerMode, testDir }, use) => {
+  electronApp: async ({ guiOwnerMode, breakTerminalSpawn, testDir }, use) => {
     // Dummy `claude` on PATH + fix command — same as scripts/e2e-dry-run (no real CLI).
     const claudeMarker = path.join(repoRoot, 'scripts', 'e2e-dry-run', 'fixtures', 'claude-marker.sh');
     const stubDir = path.join(testDir, 'claude-stub');
@@ -127,6 +130,7 @@ exit 64
         INVOKER_TEST_FIXED_NOW: '2025-01-01T00:00:00.000Z',
         INVOKER_CLAUDE_COMMAND: claudeMarker,
         INVOKER_CLAUDE_FIX_COMMAND: claudeMarker,
+        ...(breakTerminalSpawn ? { INVOKER_E2E_BREAK_TERMINAL_SPAWN: '1' } : {}),
         PATH: pathEnv,
       },
     });
