@@ -1758,6 +1758,17 @@ if (isHeadless) {
 function createEmbeddedTerminalBackendFromConfig(
   backend: EmbeddedTerminalBackendConfig,
 ): EmbeddedTerminalBackend {
+  // E2E fault injection: reproduce node-pty's synchronous spawn throw (e.g.
+  // a spawn-helper binary without its exec bit) without mutating the shared
+  // node_modules that parallel tests rely on.
+  if (process.env.INVOKER_E2E_BREAK_TERMINAL_SPAWN === '1') {
+    return {
+      name: 'pty',
+      spawn() {
+        throw new Error('posix_spawnp failed. (injected by INVOKER_E2E_BREAK_TERMINAL_SPAWN)');
+      },
+    };
+  }
   if (backend === 'bash') return createBashTerminalBackend();
   return createPtyTerminalBackend();
 }
@@ -4586,13 +4597,22 @@ function createEmbeddedTerminalBackendFromConfig(
       if (!resolved.ok) {
         return { opened: false, reason: resolved.reason };
       }
-      const session = embeddedTerminalManager.openOrReuse({
-        taskId,
-        spec: resolved.spec,
-        cwd: resolved.cwd,
-        attach: liveHandle ? { handle: liveHandle.handle, executor: liveHandle.executor } : undefined,
-      });
-      return { opened: true, session };
+      try {
+        const session = embeddedTerminalManager.openOrReuse({
+          taskId,
+          spec: resolved.spec,
+          cwd: resolved.cwd,
+          attach: liveHandle ? { handle: liveHandle.handle, executor: liveHandle.executor } : undefined,
+        });
+        return { opened: true, session };
+      } catch (err) {
+        // A backend spawn failure (e.g. node-pty's spawn-helper missing its
+        // exec bit) must surface as a visible refusal, not a rejected IPC
+        // promise the renderer drops silently.
+        const reason = err instanceof Error ? err.message : String(err);
+        logger.warn(`terminal session spawn failed for task="${taskId}": ${reason}`, { module: 'open-terminal' });
+        return { opened: false, reason: `Failed to start terminal session: ${reason}` };
+      }
     });
 
     ipcMain.handle('invoker:terminal-list', async () => {
