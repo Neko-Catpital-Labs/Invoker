@@ -237,6 +237,17 @@ jobs:
             command: bash scripts/test-suites/required/19-task-new-attempt-reset-repro.sh
           - name: Launch Dispatch Queue Repro
             command: bash scripts/test-suites/required/25-launch-dispatch-queue-handoff-repro.sh
+          - name: State Hardening Script Checks
+            command: |
+              for script in \
+                scripts/test-suites/required/28-state-invariants-proof.sh \
+                scripts/test-suites/required/30-workflow-consistency-checker.sh \
+                scripts/test-suites/required/31-mutation-boundary-gate.sh; do
+                if [ -x "$script" ]; then
+                  bash "$script"
+                fi
+              done
+            needs_playwright_deps: false
 
     name: required-fast / ${{ matrix.name }}
 
@@ -281,7 +292,84 @@ jobs:
           git update-ref refs/remotes/origin/main refs/remotes/origin/master || true
 
       - name: Install Playwright system dependencies
+        if: ${{ matrix.needs_playwright_deps != false }}
         run: pnpm --filter @invoker/app exec playwright install-deps chromium
+
+      - name: Run suite group
+        run: ${{ matrix.command }}
+
+  state-hardening-dry-run:
+    needs: build-artifacts
+    runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright:v1.58.2-noble
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Reset and Adapter Repros
+            command: |
+              for script in \
+                scripts/test-suites/required/26-reset-rulebook-proof.sh \
+                scripts/test-suites/required/27-reset-assertions-proof.sh \
+                scripts/test-suites/required/29-adapter-validation-proof.sh; do
+                if [ -x "$script" ]; then
+                  bash "$script"
+                fi
+              done
+          - name: Mutation Migration Repro
+            command: |
+              for script in \
+                scripts/test-suites/required/32-mutation-migration.sh; do
+                if [ -x "$script" ]; then
+                  bash "$script"
+                fi
+              done
+
+    name: state-hardening-dry-run / ${{ matrix.name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
+      - name: Install native build tools
+        run: apt-get update && apt-get install -y unzip make g++ python3
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: app-build-dist
+          path: /tmp/invoker-build-artifacts
+
+      - name: Extract build artifacts
+        run: tar -xzf /tmp/invoker-build-artifacts/app-build-dist.tgz -C .
+
+      - name: Configure git identity and HTTPS auth
+        run: |
+          git config --global user.name "CI Bot"
+          git config --global user.email "ci@invoker.dev"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "git@github.com:"
+          git config --global --add url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
+          git update-ref refs/heads/main refs/remotes/origin/master || true
+          git update-ref refs/remotes/origin/main refs/remotes/origin/master || true
 
       - name: Run suite group
         run: ${{ matrix.command }}
