@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { TaskExecution } from '@invoker/workflow-graph';
+import { createTaskState, type TaskExecution, type TaskState } from '@invoker/workflow-graph';
 import {
   TASK_EXECUTION_RESET_RULES,
+  assertResetComplete,
   buildTaskResetChanges,
   buildTaskResetExecutionPatch,
 } from '../task-reset-policy.js';
-
 const _compileTimeCoversEveryExecutionField: Record<keyof TaskExecution, unknown> = TASK_EXECUTION_RESET_RULES;
 void _compileTimeCoversEveryExecutionField;
 
@@ -52,6 +52,29 @@ const expectedExecutionFields = [
   'autoFixAttempts',
 ].sort();
 
+
+
+function taskWithExecution(status: TaskState['status'], execution: Partial<TaskExecution>): TaskState {
+  const task = createTaskState('task-1', 'Task 1', []);
+  return {
+    ...task,
+    status,
+    execution: { ...task.execution, ...execution },
+  };
+}
+
+function applyReset(
+  before: TaskState,
+  changes: ReturnType<typeof buildTaskResetChanges>,
+): TaskState {
+  return {
+    ...before,
+    status: changes.status ?? before.status,
+    config: { ...before.config, ...changes.config },
+    execution: { ...before.execution, ...changes.execution },
+    taskStateVersion: before.taskStateVersion + 1,
+  };
+}
 
 describe('task reset policy', () => {
   it('has a rule for every TaskExecution field', () => {
@@ -198,4 +221,77 @@ describe('task reset policy', () => {
       launchCompletedAt: undefined,
     });
   });
+
+  it('throws with the reset kind and field name when a cleared field survives', () => {
+    const before = taskWithExecution('failed', {
+      generation: 1,
+      error: 'boom',
+      agentSessionId: 'session-stale',
+    });
+    const after = applyReset(before, buildTaskResetChanges('retryTask', {
+      execution: { generation: 2 },
+    }));
+    const badAfter = {
+      ...after,
+      execution: { ...after.execution, error: 'boom' },
+    };
+
+    expect(() => assertResetComplete(before, badAfter, 'retryTask', { execution: { generation: 2 } }))
+      .toThrow(/retryTask.*execution\.error/);
+  });
+
+  it('throws with the reset kind and field name when status is not pending', () => {
+    const before = taskWithExecution('failed', { generation: 1, error: 'boom' });
+    const after = applyReset(before, buildTaskResetChanges('retryTask', {
+      execution: { generation: 2 },
+    }));
+    const badAfter = { ...after, status: 'failed' as const };
+
+    expect(() => assertResetComplete(before, badAfter, 'retryTask', { execution: { generation: 2 } }))
+      .toThrow(/retryTask.*status/);
+  });
+
+  it('accepts a complete retry reset with a generation override', () => {
+    const before = taskWithExecution('failed', {
+      generation: 4,
+      branch: 'feature',
+      workspacePath: '/tmp/work',
+      error: 'boom',
+      exitCode: 1,
+      pendingFixError: 'fix failed',
+      isFixingWithAI: true,
+      agentSessionId: 'session-stale',
+      containerId: 'container-stale',
+      autoFixAttempts: 3,
+    });
+    const changes = buildTaskResetChanges('retryTask', {
+      execution: { generation: 5 },
+    });
+    const after = applyReset(before, changes);
+
+    expect(() => assertResetComplete(before, after, 'retryTask', { execution: changes.execution }))
+      .not.toThrow();
+  });
+
+  it('accepts a newAttempt reset with fresh selectedAttemptId and generation overrides', () => {
+    const before = taskWithExecution('running', {
+      generation: 7,
+      selectedAttemptId: 'attempt-old',
+      inputPrompt: 'question',
+      branch: 'old-branch',
+      workspacePath: '/tmp/old',
+      isFixingWithAI: true,
+    });
+    const changes = buildTaskResetChanges('newAttempt', {
+      execution: {
+        generation: 8,
+        selectedAttemptId: 'attempt-new',
+      },
+    });
+    const after = applyReset(before, changes);
+
+    expect(() => assertResetComplete(before, after, 'newAttempt', { execution: changes.execution }))
+      .not.toThrow();
+  });
 });
+

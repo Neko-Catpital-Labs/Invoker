@@ -96,7 +96,7 @@ import {
   isDiscardedAttempt,
   isOutcomeTerminalAttempt,
 } from './attempt-policy.js';
-import { buildTaskResetChanges } from './task-reset-policy.js';
+import { assertResetComplete, buildTaskResetChanges, type TaskResetKind } from './task-reset-policy.js';
 
 // ── Channel Constants ───────────────────────────────────────
 
@@ -708,6 +708,27 @@ export class Orchestrator {
     return updated;
   }
 
+  private writeResetAndSync(
+    before: TaskState,
+    kind: TaskResetKind,
+    changes: TaskStateChanges,
+    opts?: { skipWorkflowStatusSync?: boolean },
+  ): TaskState {
+    const updated = this.writeAndSync(before.id, changes, opts);
+    assertResetComplete(before, updated, kind, { execution: changes.execution });
+    return updated;
+  }
+
+  private resetUnblockedTask(
+    task: TaskState,
+    kind: Extract<TaskResetKind, 'readyUnblock' | 'externalUnblock'>,
+  ): TaskState | undefined {
+    this.replaceSelectedAttempt(task, { status: 'pending' });
+    const resetBefore = this.stateGetTask(task.id);
+    if (!resetBefore) return undefined;
+    return this.writeResetAndSync(resetBefore, kind, buildTaskResetChanges(kind));
+  }
+
   /**
    * Build an 'updated' TaskDelta with task-state continuity metadata.
    * `before` is the task state before the mutation, `after` is the state
@@ -830,6 +851,7 @@ export class Orchestrator {
    */
   private resetSubgraphToPending(
     rootTaskIds: string[],
+    kind: TaskResetKind,
     resetChanges: TaskStateChanges,
     opts?: { forceResetIds?: Set<string> },
   ): { affectedIds: string[]; readyIds: string[] } {
@@ -861,7 +883,7 @@ export class Orchestrator {
         }
 
         const changesWithGeneration = this.withBumpedExecutionGeneration(current, resetChanges);
-        const updated = this.writeAndSync(id, changesWithGeneration, { skipWorkflowStatusSync: true });
+        const updated = this.writeResetAndSync(current, kind, changesWithGeneration, { skipWorkflowStatusSync: true });
         const priorAttemptId = current.execution.selectedAttemptId;
         this.replaceSelectedAttempt(current, {}, { skipWorkflowStatusSync: true });
         this.persistence.logEvent?.(id, 'task.pending', changesWithGeneration);
@@ -1166,7 +1188,7 @@ export class Orchestrator {
         this.taskRepository.updateAttempt(activeAttempt.id, { status: 'superseded' });
       }
       this.taskRepository.saveAttempt(freshAttempt);
-      updated = this.writeAndSync(task.id, changes);
+      updated = this.writeResetAndSync(task, 'newAttempt', changes);
     });
     this.clearQueuedSchedulerEntries(task.id, task.execution.selectedAttemptId);
     this.persistence.logEvent?.(task.id, 'task.prepared_for_new_attempt', {
@@ -2039,10 +2061,9 @@ export class Orchestrator {
       agentSessionId: t0.execution.agentSessionId ?? 'null',
       note: 'reset clears agentSessionId/containerId; branch/workspacePath unchanged',
     });
-    const { affectedIds } = this.resetSubgraphToPending([id], resetChanges, {
+    const { affectedIds } = this.resetSubgraphToPending([id], 'retryTask', resetChanges, {
       forceResetIds: new Set([id]),
     });
-    plan = withSchedulerEnqueueCandidates(plan, affectedIds);
     this.lastInvalidationPlan = plan;
     const afterRt = this.stateGetTask(id)!;
     this.logger.info('[agent-session-trace] retryTask: after writeAndSync', {
@@ -2144,7 +2165,7 @@ export class Orchestrator {
     const retryRootIds = allTasks
       .filter((task) => retryStatuses.has(task.status))
       .map((task) => task.id);
-    const { affectedIds } = this.resetSubgraphToPending(retryRootIds, resetChanges);
+    const { affectedIds } = this.resetSubgraphToPending(retryRootIds, 'retryWorkflow', resetChanges);
     plan = withSchedulerEnqueueCandidates(plan, affectedIds);
     this.lastInvalidationPlan = plan;
     const afterResetMs = Date.now();
@@ -2227,7 +2248,7 @@ export class Orchestrator {
       const current = this.stateGetTask(id);
       if (!current) continue;
       const changesWithGeneration = this.withBumpedExecutionGeneration(current, RECREATE_RESET_CHANGES);
-      const recreateUpdated = this.writeAndSync(id, changesWithGeneration);
+      const recreateUpdated = this.writeResetAndSync(current, 'recreate', changesWithGeneration);
       const priorAttemptId = current.execution.selectedAttemptId;
       this.replaceSelectedAttempt(current);
       this.persistence.logEvent?.(id, 'task.pending', changesWithGeneration);
@@ -2349,7 +2370,7 @@ export class Orchestrator {
         containerId: prevCt ?? 'null',
       });
       const changesWithGeneration = this.withBumpedExecutionGeneration(task, resetChanges);
-      const after = this.writeAndSync(task.id, changesWithGeneration);
+      const after = this.writeResetAndSync(task, 'recreate', changesWithGeneration);
       const priorAttemptId = task.execution.selectedAttemptId;
       this.replaceSelectedAttempt(task);
     this.logger.info('[agent-session-trace] recreateWorkflow: after writeAndSync', {
@@ -3966,7 +3987,7 @@ export class Orchestrator {
     // launch-claimed phase; otherwise it can be mistaken for an actively
     // dispatchable launch with no executor owner.
     const changes: TaskStateChanges = buildTaskResetChanges('defer');
-    const deferUpdated = this.writeAndSync(id, changes);
+    const deferUpdated = this.writeResetAndSync(task, 'defer', changes);
     const delta: TaskDelta = this.buildUpdateDelta(task, deferUpdated, changes);
     this.persistence.logEvent?.(id, 'task.deferred', changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
@@ -4433,9 +4454,7 @@ export class Orchestrator {
         this.logger.info('[orchestrator] autoStartReadyTasks: unblocking blocked task', {
           taskId,
         });
-        this.replaceSelectedAttempt(task, { status: 'pending' });
-        this.writeAndSync(taskId, buildTaskResetChanges('readyUnblock'));
-        task = this.stateGetTask(taskId);
+        task = this.resetUnblockedTask(task, 'readyUnblock');
         if (!task) continue;
       }
 
@@ -4528,8 +4547,8 @@ export class Orchestrator {
       if (!this.areLocalDependenciesSatisfied(task)) continue;
       if (this.getExternalDependencyBlocker(task) !== undefined) continue;
 
-      this.replaceSelectedAttempt(task, { status: 'pending' });
-      this.writeAndSync(task.id, buildTaskResetChanges('externalUnblock'));
+      const unblocked = this.resetUnblockedTask(task, 'externalUnblock');
+      if (!unblocked) continue;
       this.enqueueIfNotScheduled(task.id);
     }
     return this.drainScheduler();
@@ -4754,6 +4773,7 @@ export class Orchestrator {
     const forceResetIds = new Set(affectedTaskIds);
     const { affectedIds } = this.resetSubgraphToPending(
       affectedTaskIds,
+      'detach',
       Orchestrator.DETACH_RESET_CHANGES,
       { forceResetIds },
     );
@@ -4858,6 +4878,7 @@ export class Orchestrator {
     const forceResetIds = new Set(affectedTaskIds);
     const { affectedIds } = this.resetSubgraphToPending(
       affectedTaskIds,
+      'detach',
       Orchestrator.DETACH_RESET_CHANGES,
       { forceResetIds },
     );

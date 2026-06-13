@@ -1,4 +1,4 @@
-import type { TaskExecution, TaskStateChanges } from '@invoker/workflow-graph';
+import type { TaskExecution, TaskState, TaskStateChanges } from '@invoker/workflow-graph';
 
 export const TASK_RESET_KINDS = [
   'recreate',
@@ -113,6 +113,42 @@ export function buildTaskResetExecutionPatch(
     }
   }
   return overrides ? { ...execution, ...overrides } : execution;
+}
+
+export function assertResetComplete(
+  before: TaskState,
+  after: TaskState,
+  kind: TaskResetKind,
+  options?: { execution?: Partial<TaskExecution> },
+): void {
+  if (after.status !== 'pending') {
+    throw new Error(`Incomplete ${kind} reset for status: expected pending, got ${after.status}`);
+  }
+
+  const overrides = options?.execution;
+  const hasOverride = (field: keyof TaskExecution) =>
+    Object.prototype.hasOwnProperty.call(overrides ?? {}, field);
+
+  for (const [field, rules] of Object.entries(TASK_EXECUTION_RESET_RULES) as Array<[
+    keyof TaskExecution,
+    Record<TaskResetKind, ResetRule>,
+  ]>) {
+    const expected = hasOverride(field)
+      ? overrides?.[field]
+      : rules[kind] === 'clear'
+        ? undefined
+        : rules[kind] === 'false'
+          ? false
+          : rules[kind] === 'zero'
+            ? 0
+            : before.execution[field];
+
+    if (!Object.is(after.execution[field], expected)) {
+      throw new Error(
+        `Incomplete ${kind} reset for execution.${String(field)}: expected ${String(expected)}, got ${String(after.execution[field])}`,
+      );
+    }
+  }
 }
 
 export function buildTaskResetChanges(
