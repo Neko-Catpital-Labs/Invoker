@@ -234,7 +234,7 @@ describe('applyGraphMutation', () => {
     expect(orchestrator.getTask('B-v2')).toBeUndefined();
   });
 
-  it('no downstream: fork is a no-op', () => {
+  it('no downstream: fork is a no-op and merge gate is reconciled', () => {
     orchestrator.loadPlan({
       name: 'test',
       tasks: [
@@ -247,6 +247,8 @@ describe('applyGraphMutation', () => {
     completeTask(orchestrator, 'B');
 
     const s = (l: string) => sid(orchestrator, 0, l);
+    const wfId = orchestrator.getTask('B')!.config.workflowId!;
+    const mergeId = `__merge__${wfId}`;
     const deltas = applyMutation(orchestrator, {
       sourceNodeId: s('B'),
       sourceDisposition: 'stale',
@@ -255,7 +257,7 @@ describe('applyGraphMutation', () => {
           id: s('fix'),
           description: 'Fix',
           dependencies: [s('A')],
-          workflowId: orchestrator.getTask('B')!.config.workflowId!,
+          workflowId: wfId,
         },
       ],
       outputNodeId: s('fix'),
@@ -268,6 +270,18 @@ describe('applyGraphMutation', () => {
 
     expect(orchestrator.getTask(s('B'))!.status).toBe('stale');
     expect(orchestrator.getTask(s('fix'))).toBeDefined();
+    expect(orchestrator.getTask(mergeId)!.dependencies).toEqual([s('fix')]);
+
+    const mergeDelta = deltas.find((d) => d.type === 'updated' && d.taskId === mergeId);
+    expect(mergeDelta).toMatchObject({
+      type: 'updated',
+      taskId: mergeId,
+      changes: {
+        dependencies: [s('fix')],
+        status: 'pending',
+        execution: {},
+      },
+    });
   });
 
   it('emits deltas in correct order: fork, source, new nodes', () => {
