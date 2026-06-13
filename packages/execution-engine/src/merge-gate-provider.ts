@@ -3,6 +3,29 @@ export interface MergeGateProviderResult {
   identifier: string;
 }
 
+export interface MergeGateCreateReviewOptions {
+  baseBranch: string;
+  featureBranch: string;
+  title: string;
+  cwd: string;
+  body?: string;
+}
+
+export interface MergeGateCheckApprovalOptions {
+  identifier: string;
+  cwd: string;
+}
+
+export interface MergeGateCloseReviewOptions {
+  identifier: string;
+  cwd: string;
+}
+
+export interface MergeGateCheckSummary {
+  state: 'pending' | 'success' | 'failure';
+  failed: MergeGateFailedCheck[];
+}
+
 export interface MergeGateApprovalStatus {
   approved: boolean;
   rejected: boolean;
@@ -12,10 +35,7 @@ export interface MergeGateApprovalStatus {
   headSha?: string;
   headRef?: string;
   mergeState?: 'clean' | 'dirty' | 'unknown';
-  checks?: {
-    state: 'pending' | 'success' | 'failure';
-    failed: MergeGateFailedCheck[];
-  };
+  checks?: MergeGateCheckSummary;
 }
 
 export interface MergeGateFailedCheck {
@@ -28,21 +48,11 @@ export interface MergeGateFailedCheck {
 export interface MergeGateProvider {
   readonly name: string;
 
-  createReview(opts: {
-    baseBranch: string;
-    featureBranch: string;
-    title: string;
-    cwd: string;
-    body?: string;
-  }): Promise<MergeGateProviderResult>;
+  // INV-77 selected boundary: execution-engine owns provider IO and exposes
+  // typed review creation, polling, closure, check, and merge-state metadata.
+  createReview(opts: MergeGateCreateReviewOptions): Promise<MergeGateProviderResult>;
 
-  checkApproval(opts: {
-    identifier: string;
-    cwd: string;
-  }): Promise<MergeGateApprovalStatus>;
+  checkApproval(opts: MergeGateCheckApprovalOptions): Promise<MergeGateApprovalStatus>;
 
-  closeReview?(opts: {
-    identifier: string;
-    cwd: string;
-  }): Promise<void>;
+  closeReview?(opts: MergeGateCloseReviewOptions): Promise<void>;
 }
