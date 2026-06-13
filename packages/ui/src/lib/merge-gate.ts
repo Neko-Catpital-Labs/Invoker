@@ -7,7 +7,9 @@ import type { TaskState, TaskStatus, WorkflowMeta } from '../types.js';
 /** How the terminal merge task finishes — drives a single primary label on the graph node. */
 export type MergeGateKind = 'external_review' | 'pull_request' | 'merge' | 'workflow';
 
-const MERGE_DESC_PREFIXES: readonly { readonly prefix: string; readonly kind: MergeGateKind }[] = [
+// INV-77 selected boundary: UI derives merge-gate labels and grouping from
+// task/workflow metadata only; provider side effects stay in execution-engine.
+export const MERGE_GATE_DESCRIPTION_PREFIXES: readonly { readonly prefix: string; readonly kind: MergeGateKind }[] = [
   { prefix: 'Review gate for ', kind: 'external_review' },
   { prefix: 'Pull request gate for ', kind: 'pull_request' },
   { prefix: 'Merge gate for ', kind: 'merge' },
@@ -16,7 +18,7 @@ const MERGE_DESC_PREFIXES: readonly { readonly prefix: string; readonly kind: Me
 
 /** Detect gate kind from orchestrator merge-task description (stable without workflow metadata). */
 export function mergeGateKindFromDescription(description: string): MergeGateKind | undefined {
-  for (const { prefix, kind } of MERGE_DESC_PREFIXES) {
+  for (const { prefix, kind } of MERGE_GATE_DESCRIPTION_PREFIXES) {
     if (description.startsWith(prefix)) return kind;
   }
   return undefined;
@@ -24,7 +26,7 @@ export function mergeGateKindFromDescription(description: string): MergeGateKind
 
 /** Plan title only (strip orchestrator prefix) for subtitle under the primary gate label. */
 export function mergeGatePlanTitle(description: string): string {
-  for (const { prefix } of MERGE_DESC_PREFIXES) {
+  for (const { prefix } of MERGE_GATE_DESCRIPTION_PREFIXES) {
     if (description.startsWith(prefix)) return description.slice(prefix.length);
   }
   return description;
@@ -33,11 +35,20 @@ export function mergeGatePlanTitle(description: string): string {
 /** Case-insensitive strip of known gate prefixes (for stale rows / casing drift). */
 export function mergeGatePlanTitleInsensitive(description: string): string {
   const lower = description.toLowerCase();
-  for (const { prefix } of MERGE_DESC_PREFIXES) {
+  for (const { prefix } of MERGE_GATE_DESCRIPTION_PREFIXES) {
     const p = prefix.toLowerCase();
     if (lower.startsWith(p)) return description.slice(prefix.length);
   }
   return description;
+}
+
+function hasKnownMergeGatePrefix(description: string): boolean {
+  const lower = description.toLowerCase();
+  return MERGE_GATE_DESCRIPTION_PREFIXES.some(({ prefix }) => lower.startsWith(prefix.toLowerCase()));
+}
+
+function shouldUseExternalReviewHeading(task: TaskState, mergeMode?: string): boolean {
+  return mergeMode === 'external_review' || Boolean(task.execution?.reviewUrl);
 }
 
 /**
@@ -47,11 +58,8 @@ export function mergeGatePlanTitleInsensitive(description: string): string {
  */
 export function mergeGatePanelHeading(task: TaskState, mergeMode?: string): string {
   if (!task.config.isMergeNode) return task.description;
-  const externalReviewUi = mergeMode === 'external_review' || Boolean(task.execution?.reviewUrl);
-  if (!externalReviewUi) return task.description;
-  const lower = task.description.toLowerCase();
-  const hadPrefix = MERGE_DESC_PREFIXES.some(p => lower.startsWith(p.prefix.toLowerCase()));
-  if (hadPrefix) {
+  if (!shouldUseExternalReviewHeading(task, mergeMode)) return task.description;
+  if (hasKnownMergeGatePrefix(task.description)) {
     return `Review gate for ${mergeGatePlanTitleInsensitive(task.description)}`;
   }
   return task.description;
