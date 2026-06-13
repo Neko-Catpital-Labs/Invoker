@@ -96,12 +96,10 @@ describe('cli-installer', () => {
     expect(readFileSync(existing, 'utf8')).toBe(before);
   });
 
-  it('falls back to the next candidate when the first dir is unwritable', () => {
-    const locked = path.join(scratchDir, 'locked-bin');
+  it('falls back to the next candidate when the first candidate is not a writable directory', () => {
+    const locked = path.join(scratchDir, 'not-a-dir');
     const fallback = path.join(scratchDir, 'fallback-bin');
-    mkdirSync(locked);
-    chmodSync(locked, 0o555);
-    lockedDirs.push(locked);
+    writeFileSync(locked, 'nope', 'utf8');
     const context = makeContext({ candidateInstallDirs: [locked, fallback] });
 
     const result = updateInvokerCli(context);
