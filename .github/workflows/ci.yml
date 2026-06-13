@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && startsWith(github.head_ref, 'mergify/merge-queue/') && format('merge-queue-{0}', github.base_ref) || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && startsWith(github.head_ref, 'mergify/merge-queue/') && format('merge-queue-{0}', github.head_ref) || github.ref }}
   cancel-in-progress: true
 
 permissions:
