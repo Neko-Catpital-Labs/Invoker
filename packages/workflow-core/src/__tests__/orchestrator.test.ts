@@ -22,11 +22,21 @@ class InMemoryPersistence implements OrchestratorPersistence {
     mergeMode?: 'manual' | 'automatic' | 'external_review';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
+    generation?: number;
   }>();
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
   private attempts = new Map<string, Attempt[]>();
   events: Array<{ taskId: string; eventType: string; payload?: unknown }> = [];
   updateWorkflowCalls = new Map<string, number>();
+  updateWorkflowHistory: Array<{ workflowId: string; changes: {
+    status?: string;
+    updatedAt?: string;
+    baseBranch?: string;
+    mergeMode?: 'manual' | 'automatic' | 'external_review';
+    externalDependencies?: ExternalDependency[];
+    externalDependencyChanges?: ExternalDependencyChange[];
+    generation?: number;
+  } }> = [];
 
   saveWorkflow(workflow: {
     id: string;
@@ -38,6 +48,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
     mergeMode?: 'manual' | 'automatic' | 'external_review';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
+    generation?: number;
   }): void {
     const now = new Date().toISOString();
     this.workflows.set(workflow.id, {
@@ -50,6 +61,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
       featureBranch: workflow.featureBranch,
       createdAt: (workflow as any).createdAt ?? now,
       updatedAt: (workflow as any).updatedAt ?? now,
+      generation: (workflow as any).generation ?? 0,
     });
   }
 
@@ -62,9 +74,11 @@ class InMemoryPersistence implements OrchestratorPersistence {
       mergeMode?: 'manual' | 'automatic' | 'external_review';
       externalDependencies?: ExternalDependency[];
       externalDependencyChanges?: ExternalDependencyChange[];
+      generation?: number;
     },
   ): void {
     const wf = this.workflows.get(workflowId);
+    this.updateWorkflowHistory.push({ workflowId, changes: { ...changes } });
     this.updateWorkflowCalls.set(workflowId, (this.updateWorkflowCalls.get(workflowId) ?? 0) + 1);
     if (wf && changes.status) {
       wf.status = changes.status;
@@ -78,12 +92,17 @@ class InMemoryPersistence implements OrchestratorPersistence {
     if (wf && changes.baseBranch !== undefined) {
       wf.baseBranch = changes.baseBranch;
     }
+
     if (wf && 'externalDependencies' in changes) {
       wf.externalDependencies = changes.externalDependencies;
     }
     if (wf && 'externalDependencyChanges' in changes) {
       wf.externalDependencyChanges = changes.externalDependencyChanges;
     }
+    if (wf && changes.generation !== undefined) {
+      wf.generation = changes.generation;
+    }
+
   }
 
   loadWorkflow(workflowId: string): {
@@ -93,6 +112,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
     mergeMode?: 'manual' | 'automatic' | 'external_review';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
+    generation?: number;
   } | undefined {
     const wf = this.workflows.get(workflowId);
     if (!wf) return undefined;
@@ -238,6 +258,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
     this.tasks.clear();
   }
 }
+
 
 class CountingPersistence extends InMemoryPersistence {
   loadTasksCalls: string[] = [];
@@ -493,6 +514,58 @@ describe('Orchestrator', () => {
 
       expect(restarted.some((task) => task.id === taskId && task.status === 'running')).toBe(true);
       expect(persistence.listWorkflows().find((workflow) => workflow.id === workflowId)?.status).toBe('running');
+    });
+
+    it('bumps workflow generation exactly once when a workflow is recreated', () => {
+      orchestrator.loadPlan({
+        name: 'Recreate workflow generation',
+        onFinish: 'none',
+        tasks: [
+          { id: 't1', description: 'First', command: 'echo 1' },
+          { id: 't2', description: 'Second', command: 'echo 2', dependencies: ['t1'] },
+        ],
+      });
+
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+      expect(persistence.loadWorkflow(workflowId)?.generation).toBe(0);
+
+      orchestrator.recreateWorkflow(workflowId);
+
+      expect(persistence.loadWorkflow(workflowId)?.generation).toBe(1);
+      const generationWrites = persistence.updateWorkflowHistory.filter(
+        (entry) => entry.workflowId === workflowId && entry.changes.generation !== undefined,
+      );
+      expect(generationWrites).toEqual([
+        { workflowId, changes: { generation: 1 } },
+      ]);
+    });
+
+    it('does not bump workflow generation when a workflow is retried', () => {
+      orchestrator.loadPlan({
+        name: 'Retry workflow generation',
+        onFinish: 'none',
+        tasks: [
+          { id: 't1', description: 'First', command: 'exit 1' },
+          { id: 't2', description: 'Second', command: 'echo 2', dependencies: ['t1'] },
+        ],
+      });
+
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+      const taskId = orchestrator.getAllTasks().find(
+        (task) => task.config.workflowId === workflowId && task.id.endsWith('/t1'),
+      )!.id;
+
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: taskId, status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
+      );
+
+      orchestrator.retryWorkflow(workflowId);
+
+      expect(persistence.loadWorkflow(workflowId)?.generation).toBe(0);
+      expect(persistence.updateWorkflowHistory.some(
+        (entry) => entry.workflowId === workflowId && entry.changes.generation !== undefined,
+      )).toBe(false);
     });
 
     it('clears stale failed workflow status when a workflow is recreated', () => {
@@ -6960,6 +7033,35 @@ describe('Orchestrator', () => {
         });
 
         expect(updateWorkflowSpy).toHaveBeenCalledWith(wfId, { baseBranch: 'main' });
+      });
+
+      it('bumps workflow generation exactly once when recreating from a fresh base', async () => {
+        const p = new InMemoryPersistence();
+        const b = new InMemoryBus();
+        const wfId = 'wf-step12-fresh-base-generation';
+        p.saveWorkflow({
+          id: wfId,
+          name: 'wf',
+          status: 'running',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          generation: 6,
+        } as any);
+        seedSimpleWorkflow(p, wfId);
+        const o = new Orchestrator({ persistence: p, messageBus: b, maxConcurrency: 2 });
+        o.syncFromDb(wfId);
+
+        await o.recreateWorkflowFromFreshBase(wfId, {
+          refreshBase: async () => ({ branch: 'main', commit: 'sha-x' }),
+        });
+
+        expect(p.loadWorkflow(wfId)?.generation).toBe(7);
+        const generationWrites = p.updateWorkflowHistory.filter(
+          (entry) => entry.workflowId === wfId && entry.changes.generation !== undefined,
+        );
+        expect(generationWrites).toEqual([
+          { workflowId: wfId, changes: { generation: 7 } },
+        ]);
       });
 
       it('skips refreshBase invocation when no callback is supplied (degenerate caller path) and still resets', async () => {

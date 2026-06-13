@@ -82,14 +82,14 @@ describe('bumpGenerationAndRecreate', () => {
     };
   });
 
-  it('loads workflow, bumps generation, calls orchestrator.recreateWorkflow', () => {
+  it('loads workflow for the public not-found guard and delegates generation bumping to orchestrator.recreateWorkflow', () => {
     const result = bumpGenerationAndRecreate('wf-1', {
       persistence: persistence as unknown as SQLiteAdapter,
       orchestrator: orchestrator as unknown as Orchestrator,
     });
 
     expect(persistence.loadWorkflow).toHaveBeenCalledWith('wf-1');
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 3 });
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
     expect(result).toHaveLength(1);
     expect(result[0].status).toBe('running');
@@ -105,18 +105,18 @@ describe('bumpGenerationAndRecreate', () => {
     ).toThrow('Workflow missing not found');
   });
 
-  it('handles undefined generation (defaults to 0 + 1 = 1)', () => {
+  it('does not write workflow generation when generation is undefined', () => {
     persistence.loadWorkflow.mockReturnValue({ id: 'wf-1' });
     bumpGenerationAndRecreate('wf-1', {
       persistence: persistence as unknown as SQLiteAdapter,
       orchestrator: orchestrator as unknown as Orchestrator,
     });
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 1 });
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
   });
 });
 
 describe('recreateWorkflow', () => {
-  it('delegates to bumpGenerationAndRecreate', () => {
+  it('delegates to bumpGenerationAndRecreate without app-layer generation writes', () => {
     const orchestrator = { recreateWorkflow: vi.fn(() => [makeRunningTask()]) };
     const persistence = {
       loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 0 })),
@@ -128,7 +128,7 @@ describe('recreateWorkflow', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
     });
 
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 1 });
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
     expect(result).toHaveLength(1);
   });
@@ -218,7 +218,7 @@ describe('retryWorkflow', () => {
 });
 
 describe('recreateWorkflowFromFreshBase', () => {
-  it('bumps generation and delegates to orchestrator.recreateWorkflowFromFreshBase with refreshBase callback', async () => {
+  it('delegates to orchestrator.recreateWorkflowFromFreshBase with refreshBase callback without app-layer generation writes', async () => {
     const tasks = [makeRunningTask()];
     const orchestrator = {
       recreateWorkflowFromFreshBase: vi.fn(async (_id: string, opts?: { refreshBase?: () => Promise<unknown> }) => {
@@ -246,7 +246,7 @@ describe('recreateWorkflowFromFreshBase', () => {
       taskExecutor,
     });
 
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 5 });
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledTimes(1);
     expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(
       'wf-1',
@@ -343,7 +343,7 @@ describe('rebaseRecreate', () => {
       taskExecutor,
     });
 
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 3 });
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
     expect(taskExecutor.preparePoolForRebaseRetry).toHaveBeenCalledWith(
       'wf-1',
@@ -1452,7 +1452,7 @@ describe('fixWithAgentAction', () => {
       'task-a',
       expect.stringContaining('Startup merge conflict detected; recreating workflow wf-1 from a fresh base.'),
     );
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 3 });
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-1', expect.any(Object));
     expect(result).toEqual({
       kind: 'recreateWorkflowFromFreshBase',
@@ -1771,7 +1771,7 @@ describe('buildInvalidationDeps', () => {
     expect(orchestrator.retryWorkflow).toHaveBeenCalledWith('wf-1');
   });
 
-  it('routes recreateWorkflow through bumpGenerationAndRecreate', async () => {
+  it('routes recreateWorkflow through bumpGenerationAndRecreate without app-layer generation writes', async () => {
     const orchestrator = makeBaseOrchestrator();
     const persistence = makePersistence();
 
@@ -1782,7 +1782,7 @@ describe('buildInvalidationDeps', () => {
     await deps.recreateWorkflow('wf-1');
 
     expect(persistence.loadWorkflow).toHaveBeenCalledWith('wf-1');
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 1 });
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
   });
 
@@ -1820,8 +1820,8 @@ describe('buildInvalidationDeps', () => {
 
     const result = await deps.recreateWorkflowFromFreshBase!('wf-1');
 
-    // Workflow generation bumped (matches recreateWorkflow's wrapper semantics).
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 5 });
+    // Workflow generation is owned by the orchestrator method, not this app-layer wire.
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     // Pool prep ran before delegating to the orchestrator's first-class method.
     expect(taskExecutor.preparePoolForRebaseRetry).toHaveBeenCalledWith(
       'wf-1',

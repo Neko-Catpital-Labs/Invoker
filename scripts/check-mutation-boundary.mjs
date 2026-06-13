@@ -117,8 +117,13 @@ const DEFAULT_ALLOWLIST = [
     file: 'packages/app/src/workflow-actions.ts',
   },
   {
-    match: '\\b(?:deps\\.)?persistence\\.update(?:Task|Workflow)\\s*\\(',
-    reason: 'Legacy workflow action helpers still patch generation, attempt, and autofix metadata directly around orchestrator retries.',
+    match: '\\bdeps\\.persistence\\.updateWorkflow\\(workflowId, \\{ mergeMode: normalized \\}\\);',
+    reason: 'Legacy workflow action helper preserves the mergeMode fallback for workflows without a merge task pending facade migration.',
+    file: 'packages/app/src/workflow-actions.ts',
+  },
+  {
+    match: '\\b(?:deps\\.)?persistence\\.updateTask\\s*\\(',
+    reason: 'Legacy workflow action helpers still patch task-level autofix and integration metadata directly pending CommandService migration.',
     file: 'packages/app/src/workflow-actions.ts',
   },
   {

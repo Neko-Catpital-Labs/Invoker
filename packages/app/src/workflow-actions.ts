@@ -125,9 +125,6 @@ export function bumpGenerationAndRecreate(
   const { persistence, orchestrator } = deps;
   const workflow = persistence.loadWorkflow(workflowId);
   if (!workflow) throw new OrchestratorError(OrchestratorErrorCode.WORKFLOW_NOT_FOUND, `Workflow ${workflowId} not found`);
-  const nextGen = (workflow.generation ?? 0) + 1;
-  persistence.updateWorkflow(workflowId, { generation: nextGen });
-  deps.logger?.info(`bumped generation to ${nextGen} for ${workflowId}`, { module: 'workflow' });
   deps.logger?.info(`bumpGenerationAndRecreate: calling recreateWorkflow(${workflowId})`, { module: 'agent-session-trace' });
   return orchestrator.recreateWorkflow(workflowId);
 }
@@ -378,10 +375,7 @@ export async function deleteAllWorkflowsBulk(
  * the composite implementation is preserved semantically — replacing
  * it with a single primitive is a follow-up):
  *
- *   1. Bump the workflow's generation counter (matches
- *      `bumpGenerationAndRecreate` so any downstream observers that
- *      key off `workflow.generation` notice the new round).
- *   2. Delegate to `Orchestrator.recreateWorkflowFromFreshBase` with
+ *   1. Delegate to `Orchestrator.recreateWorkflowFromFreshBase` with
  *      a `refreshBase` callback that runs
  *      `taskExecutor.preparePoolForRebaseRetry` when both
  *      `taskExecutor` and `workflow.repoUrl` are available. The
@@ -436,19 +430,7 @@ export async function recreateWorkflowFromFreshBase(
   workflowId: string,
   deps: ActionDeps,
 ): Promise<TaskState[]> {
-  const { workflow, freshBase } = await prepareWorkflowFreshBase(workflowId, deps);
-  const nextGen = (workflow.generation ?? 0) + 1;
-  deps.mutationTiming?.mark('workflow-actions.recreateWorkflowFromFreshBase.bumpGeneration', 'started', {
-    nextGeneration: nextGen,
-  });
-  deps.persistence.updateWorkflow(workflowId, { generation: nextGen });
-  deps.mutationTiming?.mark('workflow-actions.recreateWorkflowFromFreshBase.bumpGeneration', 'completed', {
-    nextGeneration: nextGen,
-  });
-  deps.logger?.info(
-    `recreateWorkflowFromFreshBase: workflowId=${workflowId} bumped generation to ${nextGen}`,
-    { module: 'workflow' },
-  );
+  const { freshBase } = await prepareWorkflowFreshBase(workflowId, deps);
   deps.logger?.info(
     `recreateWorkflowFromFreshBase: workflowId=${workflowId} → orchestrator.recreateWorkflowFromFreshBase`,
     { module: 'agent-session-trace' },

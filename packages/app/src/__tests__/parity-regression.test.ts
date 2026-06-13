@@ -474,7 +474,7 @@ describe('Parity: API endpoints wire to facade methods', () => {
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(mocks.persistence.loadWorkflow).toHaveBeenCalledWith('wf-1');
-    expect(mocks.persistence.updateWorkflow).toHaveBeenCalled();
+    expect(mocks.persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(mocks.orchestrator.recreateWorkflow).toHaveBeenCalled();
   });
 });

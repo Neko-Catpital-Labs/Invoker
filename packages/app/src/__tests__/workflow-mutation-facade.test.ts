@@ -283,11 +283,11 @@ describe('WorkflowMutationFacade', () => {
   });
 
   describe('recreateWorkflow', () => {
-    it('bumps generation and calls orchestrator.recreateWorkflow', async () => {
+    it('delegates generation bumping to orchestrator.recreateWorkflow', async () => {
       const result = await facade.recreateWorkflow('wf-1');
 
       expect(deps.persistence.loadWorkflow).toHaveBeenCalledWith('wf-1');
-      expect(deps.persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 2 });
+      expect(deps.persistence.updateWorkflow).not.toHaveBeenCalled();
       expect(deps.orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
       expect(result.started).toHaveLength(1);
     });
