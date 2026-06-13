@@ -141,9 +141,7 @@ export function reconcileMergeLeavesImpl(host: GraphMutationHost, workflowId: st
 export function applyGraphMutationImpl(host: GraphMutationHost, mutation: GraphMutation): TaskDelta[] {
   const allDeltas: TaskDelta[] = [];
   const sourceTaskBefore = host.stateMachine.getTask(mutation.sourceNodeId);
-  const sourceWorkflowId =
-    sourceTaskBefore?.config.workflowId ??
-    mutation.newNodes.find((node) => node.workflowId)?.workflowId;
+  const sourceWorkflowId = sourceTaskBefore?.config.workflowId;
 
   // 1. Remap downstream dependencies: sourceNode → outputNode
   const allTasks = host.stateMachine.getAllTasks();
