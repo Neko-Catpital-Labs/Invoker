@@ -297,6 +297,7 @@ export interface OrchestratorPersistence {
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
     detachedExternalDependencies?: DetachedExternalDependency[];
+    generation?: number;
   } | undefined;
   /** Delete a single workflow and its tasks from the DB. */
   deleteWorkflow?(workflowId: string): void;
@@ -2411,6 +2412,17 @@ export class Orchestrator {
     return this.applyRecreateReset(plan, 'downstream recreation reset');
   }
 
+  private bumpWorkflowGeneration(workflowId: string): void {
+    if (!this.persistence.updateWorkflow) return;
+    const workflow = this.persistence.loadWorkflow?.(workflowId);
+    const nextGeneration = (workflow?.generation ?? 0) + 1;
+    this.persistence.updateWorkflow(workflowId, { generation: nextGeneration });
+    this.logger.info('[orchestrator] bumped workflow generation for recreate', {
+      workflowId,
+      generation: nextGeneration,
+    });
+  }
+
   /**
    * Reset ALL tasks in a workflow to pending and auto-start ready ones.
    * Used when a rebase conflicts and the entire DAG needs to re-execute.
@@ -2435,6 +2447,8 @@ export class Orchestrator {
       tasks: this.stateMachine.getAllTasks(),
     });
     this.lastInvalidationPlan = plan;
+
+    this.bumpWorkflowGeneration(workflowId);
 
     const resetChanges: TaskStateChanges = buildTaskResetChanges('recreate', {
       config: { summary: undefined, poolMemberId: undefined },
@@ -2523,8 +2537,8 @@ export class Orchestrator {
    * this distinction out as previously hidden: today the only
    * primitive carrying the fresh-base semantic is the composite
    * `rebaseAndRetry()` flow in `packages/app/src/workflow-actions.ts`
-   * (`preparePoolForRebaseRetry → bumpGenerationAndRecreate →
-   * recreateWorkflow`). Step 12 promotes the fresh-base step to a
+   * (`preparePoolForRebaseRetry → recreateWorkflowFromFreshBase`).
+   * Step 12 promotes the fresh-base step to a
    * first-class orchestrator method so the three workflow-scope
    * paths (`retryWorkflow`, `recreateWorkflow`,
    * `recreateWorkflowFromFreshBase`) are individually testable and

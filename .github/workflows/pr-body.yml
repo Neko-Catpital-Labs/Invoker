@@ -5,7 +5,7 @@ on:
     types: [opened, edited, synchronize, reopened, ready_for_review]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ startsWith(github.head_ref, 'mergify/merge-queue/') && format('merge-queue-{0}', github.base_ref) || format('pr-{0}', github.event.pull_request.number) }}
+  group: ${{ github.workflow }}-${{ startsWith(github.head_ref, 'mergify/merge-queue/') && format('merge-queue-{0}', github.head_ref) || format('pr-{0}', github.event.pull_request.number) }}
   cancel-in-progress: true
 
 permissions:
