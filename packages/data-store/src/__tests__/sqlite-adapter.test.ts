@@ -99,6 +99,21 @@ describe('SQLiteAdapter', () => {
         rmSync(dir, { recursive: true, force: true });
       }
     });
+
+    it('enforces low-risk workflow schema checks on fresh databases', () => {
+      expect(() => (adapter as any).db.run(
+        `INSERT INTO workflows (id, name, generation, created_at, updated_at)
+         VALUES ('wf-negative-generation', 'bad generation', -1, '2026-06-13T00:00:00.000Z', '2026-06-13T00:00:00.000Z')`,
+      )).toThrow();
+      expect(() => (adapter as any).db.run(
+        `INSERT INTO workflows (id, name, external_dependencies, created_at, updated_at)
+         VALUES ('wf-bad-json', 'bad json', 'not-json', '2026-06-13T00:00:00.000Z', '2026-06-13T00:00:00.000Z')`,
+      )).toThrow();
+      expect(() => (adapter as any).db.run(
+        `INSERT INTO workflows (id, name, external_dependency_changes, created_at, updated_at)
+         VALUES ('wf-bad-changes-json', 'bad changes json', 'not-json', '2026-06-13T00:00:00.000Z', '2026-06-13T00:00:00.000Z')`,
+      )).toThrow();
+    });
   });
 
   describe('saveTask + loadTasks', () => {
@@ -1260,17 +1275,35 @@ describe('SQLiteAdapter', () => {
       expect(loaded!.updatedAt >= before).toBe(true);
     });
 
-    it('clears externalDependencies when the key is present with undefined', () => {
+    it('rejects clearing externalDependencies without removal history', () => {
+      const deps = [
+        { workflowId: 'wf-upstream', taskId: '__merge__', requiredStatus: 'completed' as const },
+      ];
       adapter.saveWorkflow({
         ...testWorkflow,
-        externalDependencies: [
-          { workflowId: 'wf-upstream', taskId: '__merge__', requiredStatus: 'completed' },
-        ],
+        externalDependencies: deps,
       });
 
-      adapter.updateWorkflow('wf-1', { externalDependencies: undefined });
+      expect(() => adapter.updateWorkflow('wf-1', { externalDependencies: undefined })).toThrow(/without externalDependencyChanges/);
+      expect(adapter.loadWorkflow('wf-1')!.externalDependencies).toEqual(deps);
+    });
 
-      expect(adapter.loadWorkflow('wf-1')!.externalDependencies).toBeUndefined();
+    it('clears externalDependencies when detach-style removal history is present', () => {
+      const dep = { workflowId: 'wf-upstream', taskId: '__merge__', requiredStatus: 'completed' as const };
+      const changedAt = '2026-06-13T00:00:00.000Z';
+      adapter.saveWorkflow({
+        ...testWorkflow,
+        externalDependencies: [dep],
+      });
+
+      adapter.updateWorkflow('wf-1', {
+        externalDependencies: undefined,
+        externalDependencyChanges: [{ before: dep, changedAt }],
+      });
+
+      const loaded = adapter.loadWorkflow('wf-1')!;
+      expect(loaded.externalDependencies).toBeUndefined();
+      expect(loaded.externalDependencyChanges).toEqual([{ before: dep, changedAt }]);
     });
 
     it('leaves externalDependencies untouched when the key is absent', () => {
@@ -2528,6 +2561,24 @@ describe('SQLiteAdapter', () => {
 
       const workflows = adapter.listWorkflows();
       expect(workflows[0].generation).toBe(2);
+    });
+
+    it('rejects invalid generation values before writing', () => {
+      expect(() => adapter.saveWorkflow({ ...testWorkflow, generation: -1 })).toThrow(/generation/);
+      adapter.saveWorkflow(testWorkflow);
+
+      expect(() => adapter.updateWorkflow('wf-1', { generation: -1 })).toThrow(/generation/);
+      expect(adapter.loadWorkflow('wf-1')!.generation).toBe(0);
+    });
+
+    it('rejects invalid saved external dependency shapes before writing', () => {
+      expect(() => adapter.saveWorkflow({
+        ...testWorkflow,
+        externalDependencies: [
+          { workflowId: 'wf-upstream', taskId: '__merge__', requiredStatus: 'review_ready' },
+        ],
+      } as unknown as Workflow)).toThrow(/requiredStatus/);
+      expect(adapter.loadWorkflow('wf-1')).toBeUndefined();
     });
   });
 

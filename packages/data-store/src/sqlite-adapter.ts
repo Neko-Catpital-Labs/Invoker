@@ -34,6 +34,9 @@ import type {
 import { DISPATCH_LEASE_MS } from '@invoker/contracts';
 import type { SearchResultItem, SearchOptions } from '@invoker/contracts';
 import {
+  assertTaskConsistent,
+  assertWorkflowConsistent,
+  assertWorkflowPatchConsistent,
   computeWorkflowRollupFromSummaries,
   isDiscardedAttempt,
   normalizeRunnerKind,
@@ -49,6 +52,27 @@ import type {
   Conversation,
   ConversationMessage,
 } from './adapter.js';
+type WorkflowMetadataChanges = Partial<
+  Pick<
+    Workflow,
+    | 'name'
+    | 'description'
+    | 'visualProof'
+    | 'planFile'
+    | 'repoUrl'
+    | 'intermediateRepoUrl'
+    | 'branch'
+    | 'onFinish'
+    | 'baseBranch'
+    | 'featureBranch'
+    | 'mergeMode'
+    | 'reviewProvider'
+    | 'externalDependencies'
+    | 'externalDependencyChanges'
+    | 'generation'
+    | 'updatedAt'
+  >
+>;
 
 type NativeSqlite = typeof import('node:sqlite');
 
@@ -693,9 +717,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
         feature_branch TEXT,
         merge_mode TEXT,
         review_provider TEXT,
-        external_dependencies TEXT,
-        external_dependency_changes TEXT,
-        generation INTEGER DEFAULT 0,
+        external_dependencies TEXT CHECK (external_dependencies IS NULL OR json_valid(external_dependencies)),
+        external_dependency_changes TEXT CHECK (external_dependency_changes IS NULL OR json_valid(external_dependency_changes)),
+        generation INTEGER DEFAULT 0 CHECK (typeof(generation) = 'integer' AND generation >= 0),
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
       );
@@ -714,7 +738,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         protocol_error_code TEXT,
         protocol_error_message TEXT,
         input_prompt TEXT,
-        external_dependencies TEXT,
+        external_dependencies TEXT CHECK (external_dependencies IS NULL OR json_valid(external_dependencies)),
 
         -- Context
         summary TEXT,
@@ -1085,9 +1109,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
         feature_branch TEXT,
         merge_mode TEXT,
         review_provider TEXT,
-        external_dependencies TEXT,
-        external_dependency_changes TEXT,
-        generation INTEGER DEFAULT 0,
+        external_dependencies TEXT CHECK (external_dependencies IS NULL OR json_valid(external_dependencies)),
+        external_dependency_changes TEXT CHECK (external_dependency_changes IS NULL OR json_valid(external_dependency_changes)),
+        generation INTEGER DEFAULT 0 CHECK (typeof(generation) = 'integer' AND generation >= 0),
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
       )
@@ -1216,6 +1240,39 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return Array.from(byKey.values());
   }
 
+  private buildWorkflowAfterChanges(
+    before: Workflow,
+    changes: WorkflowMetadataChanges,
+    updatedAt: string,
+  ): Workflow {
+    const after: Workflow = { ...before, updatedAt };
+    const applyPatchKeyToValidationCopy = <K extends keyof WorkflowMetadataChanges>(key: K): void => {
+      if (Object.prototype.hasOwnProperty.call(changes, key)) {
+        (after as WorkflowMetadataChanges)[key] = changes[key];
+      }
+    };
+
+    // Mirror updateWorkflow patch semantics before writing: missing key means
+    // unchanged; present key, even undefined, means apply the clear and validate it.
+    applyPatchKeyToValidationCopy('name');
+    applyPatchKeyToValidationCopy('description');
+    applyPatchKeyToValidationCopy('visualProof');
+    applyPatchKeyToValidationCopy('planFile');
+    applyPatchKeyToValidationCopy('repoUrl');
+    applyPatchKeyToValidationCopy('intermediateRepoUrl');
+    applyPatchKeyToValidationCopy('branch');
+    applyPatchKeyToValidationCopy('onFinish');
+    applyPatchKeyToValidationCopy('baseBranch');
+    applyPatchKeyToValidationCopy('featureBranch');
+    applyPatchKeyToValidationCopy('mergeMode');
+    applyPatchKeyToValidationCopy('reviewProvider');
+    applyPatchKeyToValidationCopy('externalDependencies');
+    applyPatchKeyToValidationCopy('externalDependencyChanges');
+    applyPatchKeyToValidationCopy('generation');
+
+    return after;
+  }
+
   /**
    * Promote legacy per-task external dependencies to workflow metadata.
    * This is intentionally idempotent: once task rows are cleared, later runs
@@ -1274,6 +1331,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Workflows ─────────────────────────────────────────
 
   saveWorkflow(workflow: Workflow): void {
+    assertWorkflowConsistent(workflow);
     this.execRun(`
       INSERT OR REPLACE INTO workflows (id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url, branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode, review_provider, external_dependencies, external_dependency_changes, generation, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1292,7 +1350,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     ]);
   }
 
-  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'name' | 'description' | 'visualProof' | 'planFile' | 'repoUrl' | 'intermediateRepoUrl' | 'branch' | 'onFinish' | 'baseBranch' | 'featureBranch' | 'mergeMode' | 'reviewProvider' | 'externalDependencies' | 'externalDependencyChanges' | 'generation' | 'updatedAt'>>): void {
+  updateWorkflow(workflowId: string, changes: WorkflowMetadataChanges): void {
     const setClauses: string[] = [];
     const values: unknown[] = [];
     const columnMap: Record<string, string> = {
@@ -1341,9 +1399,16 @@ export class SQLiteAdapter implements PersistenceAdapter {
       setClauses.push('external_dependency_changes = ?');
       values.push(changes.externalDependencyChanges ? JSON.stringify(changes.externalDependencyChanges) : null);
     }
+    const updatedAt = changes.updatedAt ?? new Date().toISOString();
     setClauses.push('updated_at = ?');
-    values.push(changes.updatedAt ?? new Date().toISOString());
+    values.push(updatedAt);
     if (setClauses.length === 0) return;
+
+    const before = this.loadWorkflow(workflowId);
+    if (!before) return;
+    const after = this.buildWorkflowAfterChanges(before, changes, updatedAt);
+    assertWorkflowPatchConsistent(before, after, changes);
+
     values.push(workflowId);
     this.execRun(`UPDATE workflows SET ${setClauses.join(', ')} WHERE id = ?`, values);
   }
@@ -1495,6 +1560,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Tasks ─────────────────────────────────────────────
 
   saveTask(workflowId: string, task: TaskState): void {
+    assertTaskConsistent(task);
     const cfg = task.config;
     const exec = task.execution;
     this.execRun(`
@@ -1741,6 +1807,16 @@ export class SQLiteAdapter implements PersistenceAdapter {
         }
       }
     }
+
+
+    const beforeTask = this.loadTask(taskId);
+    if (!beforeTask) return;
+    assertTaskConsistent({
+      ...beforeTask,
+      ...changes,
+      config: changes.config ? ({ ...beforeTask.config, ...changes.config } as TaskState['config']) : beforeTask.config,
+      execution: changes.execution ? { ...beforeTask.execution, ...changes.execution } : beforeTask.execution,
+    });
 
     if (setClauses.length === 0) return;
 

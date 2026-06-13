@@ -77,16 +77,16 @@ expected_executed_for_mode() {
   if [ "$PROOF" = "1" ] && [ -f "$PROOF_MANIFEST" ]; then manifest_count; return; fi
   case "$MODE_KEY" in
     required)
-      printf '21'
+      printf '22'
       ;;
     extended)
-      printf '28'
+      printf '29'
       ;;
     dangerous)
       if [ "${#SKIPPED_UNAVAILABLE[@]}" -eq 1 ] && [ "${SKIPPED_UNAVAILABLE[0]}" = "dangerous/10-docker-comprehensive.sh" ]; then
-        printf '28'
-      else
         printf '29'
+      else
+        printf '30'
       fi
       ;;
   esac
@@ -96,13 +96,13 @@ expected_discovered_for_mode() {
   if [ "$PROOF" = "1" ] && [ -f "$PROOF_MANIFEST" ]; then manifest_count; return; fi
   case "$MODE_KEY" in
     required)
-      printf '21'
+      printf '22'
       ;;
     extended)
-      printf '28'
+      printf '29'
       ;;
     dangerous)
-      printf '29'
+      printf '30'
       ;;
   esac
 }
