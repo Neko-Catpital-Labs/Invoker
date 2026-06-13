@@ -23,10 +23,10 @@ export const SCHEMA_DDL = `
         feature_branch TEXT,
         merge_mode TEXT,
         review_provider TEXT,
-        external_dependencies TEXT,
-        external_dependency_changes TEXT,
-        detached_external_dependencies TEXT,
-        generation INTEGER DEFAULT 0,
+        external_dependencies TEXT CHECK (external_dependencies IS NULL OR json_valid(external_dependencies)),
+        external_dependency_changes TEXT CHECK (external_dependency_changes IS NULL OR json_valid(external_dependency_changes)),
+        detached_external_dependencies TEXT CHECK (detached_external_dependencies IS NULL OR json_valid(detached_external_dependencies)),
+        generation INTEGER DEFAULT 0 CHECK (typeof(generation) = 'integer' AND generation >= 0),
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
       );
@@ -45,7 +45,7 @@ export const SCHEMA_DDL = `
         protocol_error_code TEXT,
         protocol_error_message TEXT,
         input_prompt TEXT,
-        external_dependencies TEXT,
+        external_dependencies TEXT CHECK (external_dependencies IS NULL OR json_valid(external_dependencies)),
 
         -- Context
         summary TEXT,
@@ -450,9 +450,9 @@ export const WORKFLOWS_REBUILD_TABLE_DDL = `
         feature_branch TEXT,
         merge_mode TEXT,
         review_provider TEXT,
-        external_dependencies TEXT,
-        external_dependency_changes TEXT,
-        generation INTEGER DEFAULT 0,
+        external_dependencies TEXT CHECK (external_dependencies IS NULL OR json_valid(external_dependencies)),
+        external_dependency_changes TEXT CHECK (external_dependency_changes IS NULL OR json_valid(external_dependency_changes)),
+        generation INTEGER DEFAULT 0 CHECK (typeof(generation) = 'integer' AND generation >= 0),
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
       )
