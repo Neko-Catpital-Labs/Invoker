@@ -43,8 +43,9 @@
     "check:types": "tsc -p tsconfig.typecheck.json",
     "check:large-files": "node scripts/check-large-files.mjs",
     "check:versions": "node scripts/check-version-sync.mjs",
+    "check:mutation-boundary": "node scripts/check-mutation-boundary.mjs",
     "bump-version": "node scripts/bump-version.mjs",
-    "check:all": "pnpm run check:deps && pnpm run check:types && pnpm run check:required-builds && pnpm run check:large-files && pnpm run check:versions && bash scripts/check-owner-boundary.sh",
+    "check:all": "pnpm run check:deps && pnpm run check:types && pnpm run check:required-builds && pnpm run check:large-files && pnpm run check:versions && bash scripts/check-owner-boundary.sh && pnpm run check:mutation-boundary",
     "lint": "pnpm run check:all"
   },
   "pnpm": {
