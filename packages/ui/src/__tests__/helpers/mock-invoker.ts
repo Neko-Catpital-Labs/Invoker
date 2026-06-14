@@ -158,6 +158,7 @@ export function createMockInvoker(
     cleanupWorktrees: vi.fn(async () => ({ removed: [], errors: [] })),
     recreateWorkflow: vi.fn(async () => {}),
     recreateTask: vi.fn(async () => {}),
+    recreateDownstream: vi.fn(async () => {}),
     retryWorkflow: vi.fn(async () => {}),
     rebaseRetry: vi.fn(async () => ({ success: true, rebasedBranches: [], errors: [] })),
     rebaseRecreate: vi.fn(async () => ({ success: true, rebasedBranches: [], errors: [] })),

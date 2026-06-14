@@ -1227,6 +1227,15 @@ export function App() {
     }
   }, []);
 
+  const handleRecreateDownstream = useCallback(async (taskId: string) => {
+    setContextMenu(null);
+    try {
+      await window.invoker?.recreateDownstream(taskId);
+    } catch (err) {
+      console.error('Recreate Downstream failed:', err);
+    }
+  }, []);
+
   const handleDeleteWorkflow = useCallback(async (workflowId: string) => {
     setContextMenu(null);
     const confirmed = window.confirm(
@@ -2033,6 +2042,7 @@ export function App() {
           onReplace={handleReplaceTask}
           onOpenTerminal={handleOpenTerminal}
           onRecreateTask={handleRecreateTask}
+          onRecreateDownstream={handleRecreateDownstream}
           onFix={handleFix}
           onCancel={handleCancelTask}
           onClose={closeContextMenu}

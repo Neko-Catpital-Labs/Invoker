@@ -1758,6 +1758,17 @@ if (isHeadless) {
 function createEmbeddedTerminalBackendFromConfig(
   backend: EmbeddedTerminalBackendConfig,
 ): EmbeddedTerminalBackend {
+  // E2E fault injection: reproduce node-pty's synchronous spawn throw (e.g.
+  // a spawn-helper binary without its exec bit) without mutating the shared
+  // node_modules that parallel tests rely on.
+  if (process.env.INVOKER_E2E_BREAK_TERMINAL_SPAWN === '1') {
+    return {
+      name: 'pty',
+      spawn() {
+        throw new Error('posix_spawnp failed. (injected by INVOKER_E2E_BREAK_TERMINAL_SPAWN)');
+      },
+    };
+  }
   if (backend === 'bash') return createBashTerminalBackend();
   return createPtyTerminalBackend();
 }
@@ -2633,6 +2644,8 @@ function createEmbeddedTerminalBackendFromConfig(
         return { channel: 'headless.exec', request: { args: ['recreate', String(arg0)] } };
       case 'invoker:recreate-task':
         return { channel: 'headless.exec', request: { args: ['recreate-task', String(arg0)] } };
+      case 'invoker:recreate-downstream':
+        return { channel: 'headless.exec', request: { args: ['recreate-downstream', String(arg0)] } };
       case 'invoker:retry-workflow':
         return { channel: 'headless.exec', request: { args: ['retry', String(arg0)] } };
       case 'invoker:rebase-retry':
@@ -4002,6 +4015,55 @@ function createEmbeddedTerminalBackendFromConfig(
     );
 
     registerWorkflowScopedGuiMutationHandler(
+      'invoker:recreate-downstream',
+      (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
+      'high',
+      async (taskIdArg: unknown) => {
+      const taskId = String(taskIdArg);
+      logger.info(`recreate-downstream: "${taskId}"`, { module: 'ipc' });
+      try {
+        if (activeMutationContext?.mutationTiming) {
+          await activeMutationContext.mutationTiming.span(
+            'main.ipc.recreate-downstream.preemptTaskSubgraph',
+            { taskId },
+            () => preemptTaskSubgraph(taskId),
+          );
+        } else {
+          await preemptTaskSubgraph(taskId);
+        }
+        const recreateDownstreamEnvelope = makeEnvelope('recreate-downstream', 'ui', 'task', { taskId });
+        const recreateDownstreamResult = activeMutationContext?.mutationTiming
+          ? await activeMutationContext.mutationTiming.span(
+            'main.ipc.recreate-downstream.commandService.recreateDownstream',
+            { taskId },
+            () => commandService.recreateDownstream(recreateDownstreamEnvelope),
+          )
+          : await commandService.recreateDownstream(recreateDownstreamEnvelope);
+        if (!recreateDownstreamResult.ok) throw new Error(recreateDownstreamResult.error.message);
+        const started = recreateDownstreamResult.data;
+        remoteFetchForPool.enabled = false;
+        try {
+          await dispatchStartedTasksWithGlobalTopup({
+            orchestrator,
+            taskExecutor: requireTaskExecutor(),
+            logger,
+            context: 'ipc.recreate-downstream',
+            started,
+            scopedTaskIds: [taskId],
+            mutationTiming: activeMutationContext?.mutationTiming,
+            launchOutboxMode: invokerConfig.launchOutboxMode,
+          });
+        } finally {
+          remoteFetchForPool.enabled = true;
+        }
+      } catch (err) {
+        logger.error(`recreate-downstream failed: ${err}`, { module: 'ipc' });
+        throw err;
+      }
+      },
+    );
+
+    registerWorkflowScopedGuiMutationHandler(
       'invoker:retry-workflow',
       (workflowIdArg: unknown) => String(workflowIdArg),
       'high',
@@ -4535,13 +4597,22 @@ function createEmbeddedTerminalBackendFromConfig(
       if (!resolved.ok) {
         return { opened: false, reason: resolved.reason };
       }
-      const session = embeddedTerminalManager.openOrReuse({
-        taskId,
-        spec: resolved.spec,
-        cwd: resolved.cwd,
-        attach: liveHandle ? { handle: liveHandle.handle, executor: liveHandle.executor } : undefined,
-      });
-      return { opened: true, session };
+      try {
+        const session = embeddedTerminalManager.openOrReuse({
+          taskId,
+          spec: resolved.spec,
+          cwd: resolved.cwd,
+          attach: liveHandle ? { handle: liveHandle.handle, executor: liveHandle.executor } : undefined,
+        });
+        return { opened: true, session };
+      } catch (err) {
+        // A backend spawn failure (e.g. node-pty's spawn-helper missing its
+        // exec bit) must surface as a visible refusal, not a rejected IPC
+        // promise the renderer drops silently.
+        const reason = err instanceof Error ? err.message : String(err);
+        logger.warn(`terminal session spawn failed for task="${taskId}": ${reason}`, { module: 'open-terminal' });
+        return { opened: false, reason: `Failed to start terminal session: ${reason}` };
+      }
     });
 
     ipcMain.handle('invoker:terminal-list', async () => {

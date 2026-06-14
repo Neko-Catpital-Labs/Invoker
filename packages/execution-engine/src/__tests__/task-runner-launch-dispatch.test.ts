@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TaskState } from '@invoker/workflow-core';
 import type { WorkResponse, Logger } from '@invoker/contracts';
-import { TaskRunner, type LaunchOutboxAck } from '../task-runner.js';
+import { TaskRunner, type LaunchOutboxAck, type TaskRunnerCallbacks } from '../task-runner.js';
 import { ResourceLimitError } from '../repo-pool.js';
 
 function makeLogger(): Logger {
@@ -52,12 +52,13 @@ interface RunnerEnv {
     destroyAll: ReturnType<typeof vi.fn>;
     type: string;
   };
-  triggerComplete: () => void;
+  triggerComplete: (response?: Partial<WorkResponse>) => void;
 }
 
 function buildRunnerEnv(task: TaskState, options: {
   startThrows?: Error;
   startImpl?: (request: any) => Promise<any>;
+  callbacks?: TaskRunnerCallbacks;
 } = {}): RunnerEnv {
   let completeCallback: ((response: WorkResponse) => void) | undefined;
   const executor = {
@@ -103,13 +104,14 @@ function buildRunnerEnv(task: TaskState, options: {
     } as any,
     cwd: '/tmp/test-runner-dispatch',
     logger: makeLogger(),
+    callbacks: options.callbacks,
   });
   return {
     runner,
     persistence,
     orchestrator,
     executor,
-    triggerComplete: () => {
+    triggerComplete: (response?: Partial<WorkResponse>) => {
       completeCallback?.({
         requestId: 'req',
         actionId: task.id,
@@ -117,6 +119,7 @@ function buildRunnerEnv(task: TaskState, options: {
         executionGeneration: task.execution.generation ?? 0,
         status: 'completed',
         outputs: { exitCode: 0 },
+        ...response,
       });
     },
   };
@@ -268,6 +271,35 @@ describe('TaskRunner launch-dispatch wiring', () => {
     expect(env.executor.start).toHaveBeenCalledTimes(1);
     expect(env.executor.start.mock.calls[0]?.[0].actionId).toBe(task.id);
     expect(launchOutbox.completeCalls).toEqual([314]);
+  });
+
+  it('commits review_ready before app completion observers can fail', async () => {
+    const task = makeTask({
+      id: 'wf-d/review-gate-response',
+      description: 'review gate response',
+      status: 'running',
+      config: { workflowId: 'wf-d' },
+      execution: { selectedAttemptId: 'review-attempt-1', generation: 2, phase: 'launching' },
+    });
+    const onComplete = vi.fn(() => {
+      throw new Error('observer failed after output flush');
+    });
+    const env = buildRunnerEnv(task, { callbacks: { onComplete } });
+
+    const run = env.runner.executeTask(task);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    env.triggerComplete({
+      status: 'review_ready',
+      outputs: { exitCode: 0, summary: 'ready for review' },
+    });
+    await run;
+
+    const statuses = env.orchestrator.handleWorkerResponse.mock.calls.map(([response]) => response.status);
+    expect(statuses).toEqual(['review_ready']);
+    expect(onComplete).toHaveBeenCalledWith(
+      task.id,
+      expect.objectContaining({ status: 'review_ready' }),
+    );
   });
 
   it('fails the dispatch and short-circuits when the attempt is already launching', async () => {
