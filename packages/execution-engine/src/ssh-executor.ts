@@ -1133,33 +1133,6 @@ ${runProvisionSection}stop_bootstrap_heartbeat
     return handle;
   }
 
-  async kill(handle: ExecutorHandle): Promise<void> {
-    const entry = this.entries.get(handle.executionId);
-    if (!entry || entry.completed || !entry.process) return;
-
-    await new Promise<void>((resolve) => {
-      const child = entry.process!;
-
-      const killTimer = setTimeout(() => {
-        if (!entry.completed) {
-          killProcessGroup(child, 'SIGKILL');
-        }
-      }, SIGKILL_TIMEOUT_MS);
-
-      child.on('close', () => {
-        clearTimeout(killTimer);
-        resolve();
-      });
-
-      if (entry.completed) {
-        clearTimeout(killTimer);
-        resolve();
-        return;
-      }
-
-      killProcessGroup(child, 'SIGTERM');
-    });
-  }
 
   sendInput(handle: ExecutorHandle, input: string): void {
     const entry = this.entries.get(handle.executionId);

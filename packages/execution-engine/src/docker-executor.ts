@@ -4,7 +4,7 @@ import type { WorkRequest, WorkResponse } from '@invoker/contracts';
 import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from './executor.js';
 import { BaseExecutor, type BaseEntry } from './base-executor.js';
 import { loadSecretsFile } from './secrets-loader.js';
-import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
+import { killProcessGroup, cleanElectronEnv } from './process-utils.js';
 import { computeContentHash, buildExperimentBranchName } from './branch-utils.js';
 import type { AgentRegistry } from './agent-registry.js';
 import { traceExecution } from './exec-trace.js';
@@ -485,30 +485,7 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
     const entry = this.entries.get(handle.executionId);
     if (!entry || entry.completed) return;
 
-    // Kill the task process (docker exec) if running
-    if (entry.process && !entry.process.killed) {
-      await new Promise<void>((resolve) => {
-        const child = entry.process!;
-        const killTimer = setTimeout(() => {
-          if (!entry.completed) {
-            killProcessGroup(child, 'SIGKILL');
-          }
-        }, SIGKILL_TIMEOUT_MS);
-
-        child.on('close', () => {
-          clearTimeout(killTimer);
-          resolve();
-        });
-
-        if (entry.completed) {
-          clearTimeout(killTimer);
-          resolve();
-          return;
-        }
-
-        killProcessGroup(child, 'SIGTERM');
-      });
-    }
+    await super.kill(handle);
 
     // Stop and remove the container
     const docker = await this.getDocker();

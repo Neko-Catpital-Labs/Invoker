@@ -161,3 +161,65 @@ describe('process-utils shell environment resolution', () => {
     }
   });
 });
+
+describe('childProcessHasExited', () => {
+  it('treats unset mock exit fields as still running', async () => {
+    const { processUtils } = await loadProcessUtils();
+    const child = createMockProcess();
+
+    expect(processUtils.childProcessHasExited(child)).toBe(false);
+  });
+
+  it('detects exited and signaled child processes', async () => {
+    const { processUtils } = await loadProcessUtils();
+    const exited = createMockProcess();
+    const signaled = createMockProcess();
+    (exited as any).exitCode = 0;
+    (signaled as any).exitCode = null;
+    (signaled as any).signalCode = 'SIGTERM';
+
+    expect(processUtils.childProcessHasExited(exited)).toBe(true);
+    expect(processUtils.childProcessHasExited(signaled)).toBe(true);
+  });
+});
+
+describe('terminateChildProcessGroup', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('returns without signaling an already exited child process', async () => {
+    const { processUtils } = await loadProcessUtils();
+    const child = createMockProcess();
+    (child as any).exitCode = 0;
+
+    await processUtils.terminateChildProcessGroup(child, () => false);
+
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it('sends SIGTERM and resolves when the child closes', async () => {
+    const { processUtils } = await loadProcessUtils();
+    const child = createMockProcess();
+
+    const killed = processUtils.terminateChildProcessGroup(child, () => false);
+
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    child.emit('close', null, 'SIGTERM');
+    await expect(killed).resolves.toBeUndefined();
+  });
+
+  it('escalates to SIGKILL when the child does not close', async () => {
+    vi.useFakeTimers();
+    const { processUtils } = await loadProcessUtils();
+    const child = createMockProcess();
+
+    const killed = processUtils.terminateChildProcessGroup(child, () => false);
+
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    await vi.advanceTimersByTimeAsync(processUtils.SIGKILL_TIMEOUT_MS);
+    expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+    child.emit('close', null, 'SIGKILL');
+    await expect(killed).resolves.toBeUndefined();
+  });
+});
