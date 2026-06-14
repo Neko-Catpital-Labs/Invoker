@@ -101,7 +101,9 @@ export function findInstalledCli(
 
 function isWritableDir(dir: string): boolean {
   try {
-    if (!statSync(dir).isDirectory()) return false;
+    const stats = statSync(dir);
+    if (!stats.isDirectory()) return false;
+    if ((stats.mode & 0o222) === 0) return false;
     accessSync(dir, constants.W_OK);
     return true;
   } catch {
