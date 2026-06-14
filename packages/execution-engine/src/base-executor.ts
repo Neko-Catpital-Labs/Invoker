@@ -7,6 +7,7 @@ import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
 import type { AgentRegistry } from './agent-registry.js';
 import { checkStaleness } from './git-staleness-detector.js';
 import { assertNotGitConfigMutation, ensureRemoteUrl } from './git-config-mutation.js';
+import { childProcessHasExited, terminateChildProcessGroup } from './process-utils.js';
 
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
@@ -40,6 +41,8 @@ export interface BaseEntry {
    * orchestrator lease does not expire in this post-close window.
    */
   finalizingAfterClose?: boolean;
+  /** Child process owned by process-backed executors. */
+  process?: ChildProcess | null;
 }
 
 interface HeartbeatOptions {
@@ -219,7 +222,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         return;
       }
 
-      if (child.exitCode !== null || child.killed) {
+      if (childProcessHasExited(child) || child.killed) {
         if (entry.finalizingAfterClose) {
           this.emitHeartbeat(executionId);
           return;
@@ -1109,9 +1112,15 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     return { sessionId, cliArgs, fullPrompt };
   }
 
+  async kill(handle: ExecutorHandle): Promise<void> {
+    const entry = this.getEntry(handle);
+    if (!entry || entry.completed || !entry.process) return;
+
+    await terminateChildProcessGroup(entry.process, () => entry.completed);
+  }
+
   // Abstract methods that subclasses must implement
   abstract start(request: WorkRequest): Promise<ExecutorHandle>;
-  abstract kill(handle: ExecutorHandle): Promise<void>;
   abstract sendInput(handle: ExecutorHandle, input: string): void;
   abstract getTerminalSpec(handle: ExecutorHandle): TerminalSpec | null;
   abstract getRestoredTerminalSpec(meta: PersistedTaskMeta): TerminalSpec;
