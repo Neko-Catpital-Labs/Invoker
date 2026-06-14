@@ -408,6 +408,21 @@ describe('WorktreeExecutor', () => {
     vi.mocked(process.kill).mockRestore();
   });
 
+  it('kill returns when process close already fired during finalization', async () => {
+    const { taskProcess } = setupSpawnMock();
+
+    const request = makeRequest({ inputs: { command: 'echo done' } });
+    const handle = await executor.start(request);
+
+    (taskProcess as any).exitCode = 0;
+    taskProcess.emit('close', 0, null);
+
+    await expect(Promise.race([
+      executor.kill(handle).then(() => 'resolved'),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('kill hung')), 50)),
+    ])).resolves.toBe('resolved');
+  });
+
   it('destroyAll kills processes without removing worktrees', async () => {
     const taskProcesses: Array<ChildProcess & EventEmitter> = [];
 
