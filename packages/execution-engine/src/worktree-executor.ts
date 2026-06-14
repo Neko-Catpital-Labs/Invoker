@@ -559,33 +559,9 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
 
   async kill(handle: ExecutorHandle): Promise<void> {
     const entry = this.entries.get(handle.executionId);
-    if (!entry || entry.completed) return;
+    if (!entry || entry.completed || !entry.process) return;
 
-    if (!entry.process) return;
-
-    await new Promise<void>((resolve) => {
-      const child = entry.process!;
-
-      const killTimer = setTimeout(() => {
-        if (!entry.completed) {
-          killProcessGroup(child, 'SIGKILL');
-        }
-      }, SIGKILL_TIMEOUT_MS);
-
-      child.on('close', () => {
-        clearTimeout(killTimer);
-        resolve();
-      });
-
-      if (entry.completed) {
-        clearTimeout(killTimer);
-        this.softReleasePoolSlot(entry);
-        resolve();
-        return;
-      }
-
-      killProcessGroup(child, 'SIGTERM');
-    });
+    await super.kill(handle);
 
     this.softReleasePoolSlot(entry);
   }

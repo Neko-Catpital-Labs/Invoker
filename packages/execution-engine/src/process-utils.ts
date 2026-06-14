@@ -47,6 +47,41 @@ export function killProcessGroup(child: ChildProcess, signal: NodeJS.Signals): b
   }
 }
 
+export function childProcessHasExited(child: ChildProcess): boolean {
+  return child.exitCode != null || child.signalCode != null;
+}
+
+export async function terminateChildProcessGroup(
+  child: ChildProcess,
+  isComplete: () => boolean,
+): Promise<void> {
+  if (childProcessHasExited(child) || isComplete()) return;
+
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const killTimer = setTimeout(() => {
+      if (!isComplete()) {
+        killProcessGroup(child, 'SIGKILL');
+      }
+    }, SIGKILL_TIMEOUT_MS);
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(killTimer);
+      resolve();
+    };
+
+    child.once('close', finish);
+
+    if (childProcessHasExited(child) || isComplete()) {
+      finish();
+      return;
+    }
+
+    killProcessGroup(child, 'SIGTERM');
+  });
+}
+
 function splitPathEntries(rawPath?: string): string[] {
   if (!rawPath) return [];
   return rawPath.split(':').map((entry) => entry.trim()).filter(Boolean);
