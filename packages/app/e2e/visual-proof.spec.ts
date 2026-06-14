@@ -1011,6 +1011,25 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'workflow-context-menu-organization');
   });
 
+  test('task context menu shows Recreate Downstream action', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+
+    const taskMenu = await openContextMenu(page, page.locator('.react-flow__node[data-testid$="task-alpha"]'));
+    await page.getByRole('menuitem', { name: 'More' }).click();
+    await expect(taskMenu.getByRole('menuitem', { name: 'Recreate from Task' })).toBeVisible();
+    await expect(taskMenu.getByRole('menuitem', { name: 'Recreate Downstream' })).toBeVisible();
+
+    await captureScreenshot(page, 'task-context-menu-recreate-downstream');
+
+    await page.keyboard.press('Escape');
+    await expect(taskMenu).toBeHidden();
+
+    const workflowMenu = await openContextMenu(page, page.locator('[data-testid^="workflow-node-"]'));
+    await page.getByRole('menuitem', { name: 'More' }).click();
+    await expect(workflowMenu.getByRole('menuitem', { name: 'Recreate Workflow' })).toBeVisible();
+    await expect(workflowMenu.getByRole('menuitem', { name: 'Recreate Downstream' })).toHaveCount(0);
+  });
+
   test('context menu keeps danger separator when cancel action is absent', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     await injectTaskStates(page, [
