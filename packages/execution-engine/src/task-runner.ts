@@ -669,8 +669,12 @@ export class TaskRunner {
           error: err instanceof Error ? (err.stack ?? err.message) : String(err),
         },
       };
-      this.callbacks.onComplete?.(task.id, response);
       const newlyStarted = this.orchestrator.handleWorkerResponse(response) ?? [];
+      try {
+        this.callbacks.onComplete?.(task.id, response);
+      } catch (callbackErr) {
+        this.logger.error(`[TaskRunner] completion callback observer failed for task=${task.id}`, { err: callbackErr });
+      }
       this.executeNewlyStartedTasks(newlyStarted, dispatchOpts);
     } finally {
       this.launchingAttemptIds.delete(attemptId);
@@ -1203,36 +1207,57 @@ export class TaskRunner {
               `status=${normalizedResponse.status} exitCode=${normalizedResponse.outputs.exitCode ?? 'none'} ` +
               `executionId=${handle.executionId} activeExecutions=${this.activeExecutions.size}`,
           );
+          let newlyStarted: TaskState[] = [];
           try {
-            traceExecution(
-              `[task-runner] onComplete taskId=${task.id} responseStatus=${response.status} ` +
-                `responseAttemptId=${normalizedResponse.attemptId ?? attemptId} responseGeneration=${response.executionGeneration} executionId=${handle.executionId}`,
-            );
-            traceExecution(
-              `${RESTART_TO_BRANCH_TRACE} resolvePromise | task.config.isMergeNode = ${task.config.isMergeNode}`,
-            );
-            this.callbacks.onComplete?.(task.id, normalizedResponse);
+            try {
+              traceExecution(
+                `[task-runner] onComplete taskId=${task.id} responseStatus=${response.status} ` +
+                  `responseAttemptId=${normalizedResponse.attemptId ?? attemptId} responseGeneration=${response.executionGeneration} executionId=${handle.executionId}`,
+              );
+              traceExecution(
+                `${RESTART_TO_BRANCH_TRACE} resolvePromise | task.config.isMergeNode = ${task.config.isMergeNode}`,
+              );
+              newlyStarted = this.orchestrator.handleWorkerResponse(normalizedResponse) ?? [];
+            } catch (err) {
+              this.logger.error(`[TaskRunner] worker response handling failed for task=${task.id}`, { err });
+              const errResponse: WorkResponse = {
+                requestId: response.requestId,
+                actionId: task.id,
+                attemptId,
+                executionGeneration: task.execution.generation ?? 0,
+                status: 'failed',
+                outputs: {
+                  exitCode: 1,
+                  error: err instanceof Error ? (err.stack ?? err.message) : String(err),
+                },
+              };
+              try {
+                this.orchestrator.handleWorkerResponse(errResponse);
+              } catch (fallbackErr) {
+                this.logger.error(`[TaskRunner] fallback failure response handling failed for task=${task.id}`, { err: fallbackErr });
+              }
+              try {
+                this.callbacks.onComplete?.(task.id, errResponse);
+              } catch (callbackErr) {
+                this.logger.error(`[TaskRunner] completion callback observer failed for task=${task.id}`, { err: callbackErr });
+              }
+              return;
+            }
 
-            const newlyStarted = this.orchestrator.handleWorkerResponse(normalizedResponse) ?? [];
+            try {
+              this.callbacks.onComplete?.(task.id, normalizedResponse);
+            } catch (err) {
+              this.logger.error(`[TaskRunner] completion callback observer failed for task=${task.id}`, { err });
+            }
+
             this.executeNewlyStartedTasks(newlyStarted, dispatchOpts);
-          } catch (err) {
-            this.logger.error(`[TaskRunner] onComplete handler failed for task=${task.id}`, { err });
-            const errResponse: WorkResponse = {
-              requestId: response.requestId,
-              actionId: task.id,
-              attemptId,
-              executionGeneration: task.execution.generation ?? 0,
-              status: 'failed',
-              outputs: {
-                exitCode: 1,
-                error: err instanceof Error ? (err.stack ?? err.message) : String(err),
-              },
-            };
-            this.callbacks.onComplete?.(task.id, errResponse);
-            this.orchestrator.handleWorkerResponse(errResponse);
           } finally {
             // Clean up per-task Docker executor to avoid resource leaks
-            await this.cleanupPerTaskDockerExecutor(task);
+            try {
+              await this.cleanupPerTaskDockerExecutor(task);
+            } catch (cleanupErr) {
+              this.logger.warn(`[TaskRunner] completion cleanup failed for task=${task.id}`, { err: cleanupErr });
+            }
           }
         };
 

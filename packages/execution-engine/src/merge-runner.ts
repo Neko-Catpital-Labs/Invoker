@@ -686,7 +686,6 @@ export async function executeMergeNodeImpl(
   };
 
   host.persistence.updateTask(task.id, legacyChanges);
-  host.callbacks.onComplete?.(task.id, response);
 
   if (response.status === 'review_ready') {
     setMergeGateReviewReady(host, task.id, legacyChanges);
@@ -696,6 +695,14 @@ export async function executeMergeNodeImpl(
     if (newlyStarted.length > 0) {
       host.executeTasks(newlyStarted);
     }
+  }
+
+  try {
+    host.callbacks.onComplete?.(task.id, response);
+  } catch (err) {
+    console.warn(
+      `[merge] completion callback observer failed for ${task.id}: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 }
 
