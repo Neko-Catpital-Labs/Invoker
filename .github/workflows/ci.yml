@@ -192,6 +192,8 @@ jobs:
             command: bash scripts/test-suites/required/19-task-new-attempt-reset-repro.sh
           - name: Launch Dispatch Queue Repro
             command: bash scripts/test-suites/required/25-launch-dispatch-queue-handoff-repro.sh
+          - name: Fix Intent Coordinator Repro
+            command: bash scripts/repro/repro-workflow-mutation-coordinator-cancellation.sh --expect fixed
 
     name: required-fast / ${{ matrix.name }}
 
