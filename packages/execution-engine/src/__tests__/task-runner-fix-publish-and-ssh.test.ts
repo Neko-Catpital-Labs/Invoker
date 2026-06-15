@@ -1070,6 +1070,37 @@ describe('TaskRunner', () => {
       expect(editCall).toBeUndefined();
     });
 
+    it('execPr still creates a PR when the existing PR lookup is unavailable', async () => {
+      const executor = new TaskRunner({
+        orchestrator: { getTask: () => null } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      const ghCalls: string[][] = [];
+      (executor as any).execGh = async (args: string[]) => {
+        ghCalls.push(args);
+        if (args[0] === 'pr' && args[1] === 'list') {
+          throw new Error('gh pr list failed (code 1): GraphQL: API rate limit already exceeded');
+        }
+        if (args[0] === 'pr' && args[1] === 'create') {
+          return 'https://github.com/owner/repo/pull/100';
+        }
+        return '';
+      };
+
+      const url = await (executor as any).execPr('main', 'feature/rate-limited', 'Rate Limited Workflow');
+      expect(url).toBe('https://github.com/owner/repo/pull/100');
+
+      const listCall = ghCalls.find(c => c[0] === 'pr' && c[1] === 'list');
+      expect(listCall).toBeDefined();
+      const createCall = ghCalls.find(c => c[0] === 'pr' && c[1] === 'create');
+      expect(createCall).toBeDefined();
+      expect(createCall).toContain('main');
+      expect(createCall).toContain('feature/rate-limited');
+    });
+
     it('execPr passes normalized branch names to gh when base uses origin/ remote-tracking form', async () => {
       const executor = new TaskRunner({
         orchestrator: { getTask: () => null } as any,

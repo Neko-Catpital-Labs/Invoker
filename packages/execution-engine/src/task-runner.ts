@@ -2182,12 +2182,20 @@ export class TaskRunner {
     const ghBase = normalizeBranchForGithubCli(baseBranch);
     const ghHead = normalizeBranchForGithubCli(featureBranch);
 
-    const listOutput = await this.execGh([
-      'pr', 'list', '--head', ghHead, '--base', ghBase,
-      '--state', 'open', '--json', 'url,number', '--limit', '1',
-    ], cwd);
+    let existing: Array<{ url: string; number: number }> = [];
+    try {
+      const listOutput = await this.execGh([
+        'pr', 'list', '--head', ghHead, '--base', ghBase,
+        '--state', 'open', '--json', 'url,number', '--limit', '1',
+      ], cwd);
+      existing = JSON.parse(listOutput || '[]');
+    } catch (err) {
+      this.logger.warn(
+        `[merge-gate] Existing PR lookup failed for ${ghHead}; attempting PR creation`,
+        { err },
+      );
+    }
 
-    const existing: Array<{ url: string; number: number }> = JSON.parse(listOutput || '[]');
     if (existing.length > 0) {
       const pr = existing[0];
       const editArgs = ['pr', 'edit', String(pr.number), '--title', title];
