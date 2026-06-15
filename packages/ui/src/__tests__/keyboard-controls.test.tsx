@@ -149,15 +149,121 @@ describe('Side rail controls (component)', () => {
     expect(await screen.findByRole('menu')).toHaveTextContent('Open Terminal');
   });
 
-  it('expands and collapses the inspector with region arrow keys', async () => {
+  it('tabs into the inspector onto the first sidebar navigation item and roves with Up/Down', async () => {
     await renderKeyboardFixture(mock);
 
     key('Tab');
     key('Tab');
-    key('ArrowRight');
+
+    // Tab into the inspector lands on the first marked sidebar item, not the
+    // region container.
+    const minimize = screen.getByLabelText('Minimize inspector');
+    await waitFor(() => expect(minimize).toHaveFocus());
+    expect(minimize).toHaveAttribute('data-sidebar-nav-item');
+
+    // With no task selected the visible items are [Minimize, Advanced metadata].
+    const advanced = screen.getByTestId('inspector-advanced-disclosure');
+    key('ArrowDown');
+    await waitFor(() => expect(advanced).toHaveFocus());
+
+    // ArrowDown stops on the last item (no wrap back to the first).
+    key('ArrowDown');
+    expect(advanced).toHaveFocus();
+
+    // ArrowUp returns to the first item and stops there (no wrap to the last).
+    key('ArrowUp');
+    await waitFor(() => expect(minimize).toHaveFocus());
+    key('ArrowUp');
+    expect(minimize).toHaveFocus();
+  });
+
+  it('makes the sidebar a keyboard destination: first item, PR link without opening, no wrap, Right toggles Advanced', async () => {
+    // A review-ready workflow whose merge node carries a PR URL, so the
+    // inspector renders the Pull Request link as a sidebar navigation item.
+    const reviewWorkflows: WorkflowMeta[] = [
+      { id: 'wf-pr', name: 'Review Workflow', status: 'review_ready' },
+    ];
+    const reviewTasks = [
+      makeUITask({ id: 'wf-pr/build', description: 'Build Task', workflowId: 'wf-pr', command: 'echo build' }),
+      makeUITask({
+        id: 'wf-pr/merge',
+        description: 'Merge Task',
+        workflowId: 'wf-pr',
+        isMergeNode: true,
+        status: 'review_ready',
+        command: 'merge',
+        execution: { reviewUrl: 'https://github.com/acme/repo/pull/7' },
+      }),
+    ];
+
+    // Arrow navigation must only highlight the PR link; it must never follow it.
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    try {
+      mock.setTasks(reviewTasks, reviewWorkflows);
+      render(<App />);
+      await screen.findByTestId('workflow-node-wf-pr');
+      await screen.findByTestId('selected-workflow-mini-dag');
+
+      // Tab from the workflow graph to the task graph, then into the inspector.
+      key('Tab');
+      key('Tab');
+
+      // Focus lands on the first marked sidebar item, not just the container.
+      const inspectorRegion = document.querySelector('[data-keyboard-region="inspector"]');
+      const minimize = screen.getByLabelText('Minimize inspector');
+      await waitFor(() => expect(minimize).toHaveFocus());
+      expect(minimize).toHaveAttribute('data-sidebar-nav-item');
+      expect(document.activeElement).not.toBe(inspectorRegion);
+
+      // Visible items are [Minimize, Pull Request link, Advanced metadata].
+      const prLink = screen.getByTestId('inspector-pr-link');
+      const advanced = screen.getByTestId('inspector-advanced-disclosure');
+
+      // ArrowDown reaches the PR link and only focuses it — no open/navigation.
+      key('ArrowDown');
+      await waitFor(() => expect(prLink).toHaveFocus());
+      expect(document.activeElement).toBe(prLink);
+      expect(openSpy).not.toHaveBeenCalled();
+
+      // ArrowDown stops on the last item (no wrap back to the first).
+      key('ArrowDown');
+      await waitFor(() => expect(advanced).toHaveFocus());
+      key('ArrowDown');
+      expect(advanced).toHaveFocus();
+
+      // ArrowUp roves back and stops on the first item (no wrap to the last).
+      key('ArrowUp');
+      await waitFor(() => expect(prLink).toHaveFocus());
+      key('ArrowUp');
+      await waitFor(() => expect(minimize).toHaveFocus());
+      key('ArrowUp');
+      expect(minimize).toHaveFocus();
+
+      // Right toggles the focused expandable item (Advanced metadata).
+      key('ArrowDown');
+      key('ArrowDown');
+      await waitFor(() => expect(advanced).toHaveFocus());
+      expect(advanced).toHaveAttribute('aria-expanded', 'false');
+      expect(screen.queryByText(/workflow id:/)).not.toBeInTheDocument();
+
+      key('ArrowRight');
+      await waitFor(() => expect(advanced).toHaveAttribute('aria-expanded', 'true'));
+      expect(screen.getByText(/workflow id:/)).toBeInTheDocument();
+
+      // No arrow interaction ever opened the PR link.
+      expect(openSpy).not.toHaveBeenCalled();
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  it('collapses and expands the inspector from its sidebar buttons', async () => {
+    await renderKeyboardFixture(mock);
+
+    fireEvent.click(screen.getByLabelText('Minimize inspector'));
     expect(await screen.findByLabelText('Maximize inspector')).toBeInTheDocument();
 
-    key('ArrowLeft');
+    fireEvent.click(screen.getByLabelText('Maximize inspector'));
     expect(await screen.findByLabelText('Minimize inspector')).toBeInTheDocument();
   });
 
@@ -257,6 +363,143 @@ describe('Side rail controls (component)', () => {
 
     expect(screen.getByTestId('keyboard-search-overlay')).toBeInTheDocument();
     expect(screen.getByTestId('workflow-graph-surface')).toHaveAttribute('data-keyboard-active', 'true');
+  });
+});
+
+/**
+ * Sidebar keyboard navigation. A review-ready workflow whose merge node carries
+ * a reviewUrl renders a Pull Request link in the inspector. These prove the
+ * inspector is a real keyboard destination: Tab lands on the first sidebar item,
+ * Up/Down rove without wrapping, arrow focus never opens the PR link, and Right
+ * toggles the focused Advanced metadata disclosure.
+ */
+describe('Sidebar keyboard navigation (component)', () => {
+  let mock: MockInvoker;
+
+  const reviewWorkflows: WorkflowMeta[] = [
+    { id: 'wf-r', name: 'Review Workflow', status: 'review_ready' },
+  ];
+
+  const reviewUrl = 'https://github.com/acme/repo/pull/42';
+  const reviewTasks = [
+    makeUITask({
+      id: 'wf-r/build',
+      description: 'Build Task',
+      workflowId: 'wf-r',
+      command: 'echo build',
+    }),
+    makeUITask({
+      id: 'wf-r/merge',
+      description: 'Merge Task',
+      workflowId: 'wf-r',
+      isMergeNode: true,
+      status: 'review_ready',
+      dependencies: ['wf-r/build'],
+      execution: { reviewUrl },
+    }),
+  ];
+
+  beforeEach(() => {
+    mock = createMockInvoker();
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+    getZoomMock.mockReset();
+    getZoomMock.mockReturnValue(1);
+    mock.install();
+  });
+
+  afterEach(() => {
+    mock.cleanup();
+  });
+
+  async function renderReviewFixture() {
+    mock.setTasks(reviewTasks, reviewWorkflows);
+    render(<App />);
+    await screen.findByTestId('workflow-node-wf-r');
+    await screen.findByTestId('selected-workflow-mini-dag');
+    // The review-ready merge node surfaces the PR link in the inspector.
+    await screen.findByTestId('inspector-pr-link');
+  }
+
+  it('tabs from the task graph onto the first sidebar item, then arrows to the PR link without opening it', async () => {
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(null);
+    try {
+      await renderReviewFixture();
+
+      // workflowGraph -> taskGraph -> inspector.
+      key('Tab');
+      key('Tab');
+
+      // Focus lands on the first marked sidebar item, not the region container.
+      const minimize = screen.getByLabelText('Minimize inspector');
+      await waitFor(() => expect(minimize).toHaveFocus());
+      expect(document.querySelector('[data-keyboard-region="inspector"]')).not.toHaveFocus();
+
+      // ArrowDown roves down to the Pull Request link.
+      const prLink = screen.getByTestId('inspector-pr-link');
+      key('ArrowDown');
+      await waitFor(() => expect(prLink).toHaveFocus());
+
+      // Arrow navigation only focuses — it must not open the PR link.
+      expect(openSpy).not.toHaveBeenCalled();
+      expect(prLink).toHaveFocus();
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  it('stops at the last item on ArrowDown and the first item on ArrowUp without wrapping', async () => {
+    await renderReviewFixture();
+
+    key('Tab');
+    key('Tab');
+
+    const minimize = screen.getByLabelText('Minimize inspector');
+    const prLink = screen.getByTestId('inspector-pr-link');
+    const advanced = screen.getByTestId('inspector-advanced-disclosure');
+    await waitFor(() => expect(minimize).toHaveFocus());
+
+    // Visible items are [Minimize, PR link, Advanced metadata].
+    key('ArrowDown');
+    await waitFor(() => expect(prLink).toHaveFocus());
+    key('ArrowDown');
+    await waitFor(() => expect(advanced).toHaveFocus());
+    // Last item: ArrowDown does not wrap back to the first.
+    key('ArrowDown');
+    expect(advanced).toHaveFocus();
+
+    // Walk back up and stop on the first item.
+    key('ArrowUp');
+    await waitFor(() => expect(prLink).toHaveFocus());
+    key('ArrowUp');
+    await waitFor(() => expect(minimize).toHaveFocus());
+    key('ArrowUp');
+    expect(minimize).toHaveFocus();
+  });
+
+  it('Right toggles the focused Advanced metadata disclosure', async () => {
+    await renderReviewFixture();
+
+    key('Tab');
+    key('Tab');
+
+    const advanced = screen.getByTestId('inspector-advanced-disclosure');
+    await waitFor(() => expect(screen.getByLabelText('Minimize inspector')).toHaveFocus());
+
+    // Rove down to the Advanced metadata disclosure.
+    key('ArrowDown');
+    key('ArrowDown');
+    await waitFor(() => expect(advanced).toHaveFocus());
+    expect(advanced).toHaveAttribute('aria-expanded', 'false');
+
+    // Right expands it.
+    key('ArrowRight');
+    await waitFor(() => expect(advanced).toHaveAttribute('aria-expanded', 'true'));
+    expect(screen.getByText(/workflow id:/)).toBeInTheDocument();
+
+    // Right again collapses it.
+    key('ArrowRight');
+    await waitFor(() => expect(advanced).toHaveAttribute('aria-expanded', 'false'));
   });
 });
 
