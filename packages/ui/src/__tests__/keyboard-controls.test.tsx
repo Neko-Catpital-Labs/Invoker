@@ -78,13 +78,12 @@ describe('Side rail controls (component)', () => {
     mock.cleanup();
   });
 
-  it('Refresh button calls getTasks with forceRefresh=true', async () => {
+  it('Refresh button calls refreshTaskGraph', async () => {
     render(<App />);
     fireEvent.click(screen.getByTestId('rail-refresh'));
 
     await waitFor(() => {
-      expect(mock.api.getTasks).toHaveBeenCalled();
-      expect(mock.api.getTasks).toHaveBeenLastCalledWith(true);
+      expect(mock.api.refreshTaskGraph).toHaveBeenCalled();
     });
   });
 
@@ -96,7 +95,7 @@ describe('Side rail controls (component)', () => {
     fireEvent.click(screen.getByTestId('rail-refresh'));
 
     await waitFor(() => {
-      expect(mock.api.getTasks).toHaveBeenLastCalledWith(true);
+      expect(mock.api.refreshTaskGraph).toHaveBeenCalled();
     });
     await waitFor(() => {
       expect(fitViewMock.mock.calls.length).toBeGreaterThanOrEqual(2);
