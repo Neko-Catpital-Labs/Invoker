@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 import type { MouseEvent } from 'react';
 import type { TaskState, WorkflowMeta, WorkflowStatus } from '../types.js';
 import type { GraphCameraCommand } from '../lib/graph-camera.js';
-import { deriveWorkflowGraph, layoutWorkflowGraph } from '../lib/workflow-graph.js';
+import { deriveWorkflowGraph, layoutWorkflowGraph, type WorkflowGraphEdge } from '../lib/workflow-graph.js';
 import { WorkflowNode } from './WorkflowNode.js';
 import {
   Background,
@@ -45,6 +45,35 @@ interface WorkflowNodeData extends Record<string, unknown> {
 const nodeTypes = {
   workflowNode: WorkflowFlowNode,
 };
+
+function workflowEdgeVisual(kind: WorkflowGraphEdge['kind']): {
+  stroke: string;
+  strokeWidth: number;
+  strokeDasharray?: string;
+  ariaLabel: string;
+} {
+  if (kind === 'detached') {
+    return {
+      stroke: 'rgba(217,119,6,0.58)',
+      strokeWidth: 1.5,
+      strokeDasharray: '5 6',
+      ariaLabel: 'Detached workflow lineage',
+    };
+  }
+  if (kind === 'historical') {
+    return {
+      stroke: 'rgba(245,158,11,0.5)',
+      strokeWidth: 1.5,
+      strokeDasharray: '6 6',
+      ariaLabel: 'Historical workflow dependency',
+    };
+  }
+  return {
+    stroke: 'rgba(148,163,184,0.55)',
+    strokeWidth: 2,
+    ariaLabel: 'Active workflow dependency',
+  };
+}
 
 function WorkflowFlowNode({ data }: NodeProps<Node<WorkflowNodeData>>): JSX.Element {
   return (
@@ -123,27 +152,30 @@ function WorkflowGraphInner({
     return nextNodes;
   }, [graph.nodes, positions, selectedWorkflowId, statusFilters]);
 
-  const edges = useMemo<Edge[]>(() => graph.edges.map((edge) => ({
-    id: `workflow:${edge.kind}:${edge.source}->${edge.target}`,
-    source: edge.source,
-    target: edge.target,
-    type: 'smoothstep',
-    animated: false,
-    style: {
-      stroke: edge.kind === 'historical' ? 'rgba(245,158,11,0.5)' : 'rgba(148,163,184,0.55)',
-      strokeWidth: edge.kind === 'historical' ? 1.5 : 2,
-      strokeDasharray: edge.kind === 'historical' ? '6 6' : undefined,
-    },
-    data: { kind: edge.kind },
-    ariaLabel: edge.kind === 'historical' ? 'Historical workflow dependency' : 'Active workflow dependency',
-    zIndex: 0,
-    markerEnd: {
-      type: MarkerType.ArrowClosed,
-      color: edge.kind === 'historical' ? 'rgba(245,158,11,0.5)' : 'rgba(148,163,184,0.55)',
-      width: 16,
-      height: 16,
-    },
-  })), [graph.edges]);
+  const edges = useMemo<Edge[]>(() => graph.edges.map((edge) => {
+    const visual = workflowEdgeVisual(edge.kind);
+    return {
+      id: `workflow:${edge.kind}:${edge.source}->${edge.target}`,
+      source: edge.source,
+      target: edge.target,
+      type: 'smoothstep',
+      animated: false,
+      style: {
+        stroke: visual.stroke,
+        strokeWidth: visual.strokeWidth,
+        strokeDasharray: visual.strokeDasharray,
+      },
+      data: { kind: edge.kind },
+      ariaLabel: visual.ariaLabel,
+      zIndex: 0,
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        color: visual.stroke,
+        width: 16,
+        height: 16,
+      },
+    };
+  }), [graph.edges]);
 
   // First non-empty render fits the whole graph once. React Flow only mounts
   // when there is at least one node (the empty state short-circuits below), so
