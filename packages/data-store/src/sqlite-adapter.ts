@@ -30,6 +30,7 @@ import type {
   WorkflowRollupTaskSummary,
   ExternalDependency,
   ExternalDependencyChange,
+  DetachedExternalDependency,
 } from '@invoker/workflow-core';
 import { DISPATCH_LEASE_MS } from '@invoker/contracts';
 import type { SearchResultItem, SearchOptions } from '@invoker/contracts';
@@ -695,6 +696,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         review_provider TEXT,
         external_dependencies TEXT,
         external_dependency_changes TEXT,
+        detached_external_dependencies TEXT,
         generation INTEGER DEFAULT 0,
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
@@ -1005,6 +1007,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE workflows ADD COLUMN review_provider TEXT',
       'ALTER TABLE workflows ADD COLUMN external_dependencies TEXT',
       'ALTER TABLE workflows ADD COLUMN external_dependency_changes TEXT',
+      // detached_external_dependencies: read-only provenance for deps removed by detachWorkflow
+      'ALTER TABLE workflows ADD COLUMN detached_external_dependencies TEXT',
       // execution_agent / agent_name: interchangeable agent support
       'ALTER TABLE tasks ADD COLUMN execution_agent TEXT',
       'ALTER TABLE tasks ADD COLUMN agent_name TEXT',
@@ -1275,8 +1279,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   saveWorkflow(workflow: Workflow): void {
     this.execRun(`
-      INSERT OR REPLACE INTO workflows (id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url, branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode, review_provider, external_dependencies, external_dependency_changes, generation, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO workflows (id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url, branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode, review_provider, external_dependencies, external_dependency_changes, detached_external_dependencies, generation, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       workflow.id, workflow.name,
       workflow.description ?? null,
@@ -1287,12 +1291,13 @@ export class SQLiteAdapter implements PersistenceAdapter {
       workflow.reviewProvider ?? null,
       workflow.externalDependencies ? JSON.stringify(workflow.externalDependencies) : null,
       workflow.externalDependencyChanges ? JSON.stringify(workflow.externalDependencyChanges) : null,
+      workflow.detachedExternalDependencies ? JSON.stringify(workflow.detachedExternalDependencies) : null,
       workflow.generation ?? 0,
       workflow.createdAt, workflow.updatedAt,
     ]);
   }
 
-  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'name' | 'description' | 'visualProof' | 'planFile' | 'repoUrl' | 'intermediateRepoUrl' | 'branch' | 'onFinish' | 'baseBranch' | 'featureBranch' | 'mergeMode' | 'reviewProvider' | 'externalDependencies' | 'externalDependencyChanges' | 'generation' | 'updatedAt'>>): void {
+  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'name' | 'description' | 'visualProof' | 'planFile' | 'repoUrl' | 'intermediateRepoUrl' | 'branch' | 'onFinish' | 'baseBranch' | 'featureBranch' | 'mergeMode' | 'reviewProvider' | 'externalDependencies' | 'externalDependencyChanges' | 'detachedExternalDependencies' | 'generation' | 'updatedAt'>>): void {
     const setClauses: string[] = [];
     const values: unknown[] = [];
     const columnMap: Record<string, string> = {
@@ -1340,6 +1345,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
     if ('externalDependencyChanges' in changes) {
       setClauses.push('external_dependency_changes = ?');
       values.push(changes.externalDependencyChanges ? JSON.stringify(changes.externalDependencyChanges) : null);
+    }
+    if ('detachedExternalDependencies' in changes) {
+      setClauses.push('detached_external_dependencies = ?');
+      values.push(changes.detachedExternalDependencies ? JSON.stringify(changes.detachedExternalDependencies) : null);
     }
     setClauses.push('updated_at = ?');
     values.push(changes.updatedAt ?? new Date().toISOString());
@@ -2684,6 +2693,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       reviewProvider: row.review_provider ?? undefined,
       externalDependencies: row.external_dependencies ? JSON.parse(row.external_dependencies) : undefined,
       externalDependencyChanges: row.external_dependency_changes ? JSON.parse(row.external_dependency_changes) as ExternalDependencyChange[] : undefined,
+      detachedExternalDependencies: row.detached_external_dependencies ? JSON.parse(row.detached_external_dependencies) as DetachedExternalDependency[] : undefined,
       generation: row.generation ?? 0,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
