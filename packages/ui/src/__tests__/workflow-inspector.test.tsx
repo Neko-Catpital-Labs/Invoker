@@ -386,4 +386,60 @@ describe('WorkflowInspector', () => {
     fireEvent.click(convertButton);
     expect(onSetMergeMode).toHaveBeenCalledWith('wf-1', 'external_review');
   });
+
+  it('hides the conversion button when the merge gate already has a review URL but keeps the merge-mode selector', () => {
+    const onSetMergeMode = vi.fn(async () => {});
+    const mergeTask = makeTask({
+      id: '__merge__wf-1',
+      description: 'Merge gate',
+      status: 'review_ready',
+      config: { workflowId: 'wf-1', isMergeNode: true },
+      execution: { reviewUrl: 'https://github.com/org/repo/pull/77' },
+    });
+
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, mergeMode: 'manual' }}
+        task={null}
+        workflowTasks={new Map([[mergeTask.id, mergeTask]])}
+        collapsed={false}
+        advancedExpanded={false}
+        onSetMergeMode={onSetMergeMode}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    // Gate already has a PR, so the direct conversion prompt must not appear.
+    expect(screen.queryByTestId('workflow-convert-external-review')).not.toBeInTheDocument();
+    // Mode visibility is still allowed: the selector stays available.
+    expect(screen.getByTestId('workflow-merge-mode-select')).toBeInTheDocument();
+  });
+
+  it('hides the conversion button once the workflow is already in external_review mode', () => {
+    const onSetMergeMode = vi.fn(async () => {});
+    const mergeTask = makeTask({
+      id: '__merge__wf-1',
+      description: 'Merge gate',
+      status: 'review_ready',
+      config: { workflowId: 'wf-1', isMergeNode: true },
+      execution: {},
+    });
+
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, mergeMode: 'external_review' }}
+        task={null}
+        workflowTasks={new Map([[mergeTask.id, mergeTask]])}
+        collapsed={false}
+        advancedExpanded={false}
+        onSetMergeMode={onSetMergeMode}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.queryByTestId('workflow-convert-external-review')).not.toBeInTheDocument();
+    expect(screen.getByTestId('workflow-merge-mode-select')).toHaveValue('external_review');
+  });
 });
