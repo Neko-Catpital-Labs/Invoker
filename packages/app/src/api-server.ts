@@ -412,7 +412,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
               'true; reason="Use /api/workflows/:id/recreate"',
             );
           }
-          const tasksStarted = result.started.filter(t => t.status === 'running').length;
+          const tasksStarted = result.runnable.length;
           json(res, 200, {
             ok: true,
             workflowId,
@@ -432,7 +432,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         const workflowId = decodeURIComponent(wfRetryMatch[1]);
         try {
           const result = await mutations.retryWorkflow(workflowId);
-          const tasksStarted = result.started.filter(t => t.status === 'running').length;
+          const tasksStarted = result.runnable.length;
           json(res, 200, { ok: true, workflowId, action: 'retried', tasksStarted });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });
@@ -447,7 +447,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         try {
           const workflowId = resolveHeadlessTargetWorkflowId(workflowTarget, persistence);
           const result = await mutations.rebaseRetry(workflowId);
-          const tasksStarted = result.started.filter(t => t.status === 'running').length;
+          const tasksStarted = result.runnable.length;
           json(res, 200, {
             ok: true,
             workflowId,
@@ -479,7 +479,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
             return;
           }
           const result = await mutations.rebaseRecreate(workflowId);
-          const tasksStarted = result.started.filter(t => t.status === 'running').length;
+          const tasksStarted = result.runnable.length;
           json(res, 200, {
             ok: true,
             workflowId,

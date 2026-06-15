@@ -217,6 +217,14 @@ function buildFacade(m: typeof mocks) {
   });
 }
 
+function mutationResult(runnable = [makeTask()]) {
+  return {
+    started: runnable,
+    runnable,
+    topup: [],
+  };
+}
+
 beforeAll(async () => {
   mocks = createMocks();
   // Use port 0 for ephemeral port assignment
@@ -411,6 +419,60 @@ describe('POST /api/workflows/:id/cancel', () => {
     expect(res.body.ok).toBe(true);
     expect(mocks.orchestrator.cancelWorkflow).toHaveBeenCalledWith('wf-1');
     expect(mocks.orchestrator.startExecution).toHaveBeenCalled();
+  });
+});
+
+describe('workflow HTTP mutation boundary', () => {
+  it('delegates workflow mutations to the facade without route-level orchestrator dispatch', async () => {
+    const localMocks = createMocks();
+    const mutations = {
+      recreateWorkflow: vi.fn(async () => mutationResult()),
+      retryWorkflow: vi.fn(async () => mutationResult()),
+      rebaseRetry: vi.fn(async () => mutationResult()),
+      rebaseRecreate: vi.fn(async () => mutationResult()),
+      cancelWorkflow: vi.fn(async () => ({
+        cancelled: ['task-1'],
+        runningCancelled: [],
+        topup: [],
+      })),
+    };
+    const localApi = startApiServer({
+      orchestrator: localMocks.orchestrator as any,
+      persistence: localMocks.persistence as any,
+      executorRegistry: localMocks.executorRegistry as any,
+      mutations: mutations as any,
+      deleteWorkflow: localMocks.deleteWorkflow,
+      detachWorkflow: localMocks.detachWorkflow,
+    });
+    await new Promise<void>((resolve) => {
+      if (localApi.server.listening) resolve();
+      else localApi.server.on('listening', resolve);
+    });
+    const addr = localApi.server.address();
+    const localPort = typeof addr === 'object' && addr ? addr.port : localApi.port;
+
+    try {
+      const routes: Array<[string, ReturnType<typeof vi.fn>]> = [
+        ['/api/workflows/wf-1/recreate', mutations.recreateWorkflow],
+        ['/api/workflows/wf-1/retry', mutations.retryWorkflow],
+        ['/api/workflows/wf-1/rebase-retry', mutations.rebaseRetry],
+        ['/api/workflows/wf-1/rebase-recreate', mutations.rebaseRecreate],
+        ['/api/workflows/wf-1/cancel', mutations.cancelWorkflow],
+      ];
+
+      for (const [path, spy] of routes) {
+        const res = await request(localPort, 'POST', path);
+        expect(res.status).toBe(200);
+        expect(spy).toHaveBeenCalledWith('wf-1');
+      }
+
+      expect(localMocks.orchestrator.recreateWorkflow).not.toHaveBeenCalled();
+      expect(localMocks.orchestrator.retryWorkflow).not.toHaveBeenCalled();
+      expect(localMocks.orchestrator.cancelWorkflow).not.toHaveBeenCalled();
+      expect(localMocks.orchestrator.startExecution).not.toHaveBeenCalled();
+    } finally {
+      await localApi.close();
+    }
   });
 });
 
@@ -908,6 +970,7 @@ describe('POST /api/workflows/:id/restart', () => {
 
     const res = await request(port, 'POST', '/api/workflows/wf-1/restart');
     expect(res.status).toBe(200);
+    expect(res.body.tasksStarted).toBe(1);
     expect(mocks.taskExecutor.executeTasks).toHaveBeenCalledTimes(2);
     expect(mocks.taskExecutor.executeTasks).toHaveBeenNthCalledWith(1, [scoped]);
     expect(mocks.taskExecutor.executeTasks).toHaveBeenNthCalledWith(2, [topup]);
@@ -1022,6 +1085,7 @@ describe('POST /api/workflows/:id/rebase-recreate', () => {
     const res = await request(port, 'POST', '/api/workflows/wf-1/rebase-recreate');
 
     expect(res.status).toBe(200);
+    expect(res.body.tasksStarted).toBe(1);
     expect(mocks.taskExecutor.executeTasks).toHaveBeenCalledTimes(2);
     expect(mocks.taskExecutor.executeTasks).toHaveBeenNthCalledWith(1, [scoped]);
     expect(mocks.taskExecutor.executeTasks).toHaveBeenNthCalledWith(2, [crossWorkflow]);
