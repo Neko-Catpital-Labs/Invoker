@@ -30,7 +30,7 @@ import { FloatingGraphPanel } from './components/FloatingGraphPanel.js';
 import { WorkflowInspector } from './components/WorkflowInspector.js';
 import { ActionGraphView } from './components/ActionGraphView.js';
 import { StatusBar } from './components/StatusBar.js';
-import { TerminalDrawer } from './components/TerminalDrawer.js';
+import { TerminalDrawer, type TerminalDrawerState } from './components/TerminalDrawer.js';
 import {
   isExperimentSpawnPivotTask,
   EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE,
@@ -381,7 +381,7 @@ export function App() {
   const [updateCliError, setUpdateCliError] = useState<string | null>(null);
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const [advancedMetadataExpanded, setAdvancedMetadataExpanded] = useState(false);
-  const [terminalCollapsed, setTerminalCollapsed] = useState(true);
+  const [terminalDrawerState, setTerminalDrawerState] = useState<TerminalDrawerState>('minimized');
   const [terminalSessions, setTerminalSessions] = useState<TerminalSessionDescriptor[]>([]);
   const [activeTerminalSessionId, setActiveTerminalSessionId] = useState<string | null>(null);
   const [workflowContextMenu, setWorkflowContextMenu] = useState<WorkflowContextMenuState | null>(null);
@@ -980,10 +980,10 @@ export function App() {
       if (keyboardRegion === 'bottomBar') {
         if (event.key === 'ArrowUp') {
           event.preventDefault();
-          setTerminalCollapsed(false);
+          setTerminalDrawerState('partial');
         } else if (event.key === 'ArrowDown') {
           event.preventDefault();
-          setTerminalCollapsed(true);
+          setTerminalDrawerState('minimized');
         } else if (event.key === 'ArrowRight') {
           event.preventDefault();
           setBottomStatusIndex((index) => Math.min(visibleStatusKeys.length - 1, index + 1));
@@ -1046,7 +1046,7 @@ export function App() {
       window.alert(EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE);
       return;
     }
-    setTerminalCollapsed(false);
+    setTerminalDrawerState('partial');
     const result = await (window.__INVOKER_TEST_OPEN_TERMINAL__ ?? window.invoker?.openTerminal)?.(taskId);
     if (!result) return;
     if (!result.opened) {
@@ -1875,8 +1875,12 @@ export function App() {
                   onStatusClick={(filterKey, event) => handleStatusClick(filterKey as WorkflowStatus, event)}
                 />
                 <TerminalDrawer
-                  collapsed={terminalCollapsed}
-                  onToggle={() => setTerminalCollapsed((prev) => !prev)}
+                  state={terminalDrawerState}
+                  onCycle={() =>
+                    setTerminalDrawerState((prev) =>
+                      prev === 'minimized' ? 'partial' : prev === 'partial' ? 'maximized' : 'minimized',
+                    )
+                  }
                   sessions={terminalSessions}
                   activeSessionId={activeTerminalSessionId}
                   onSelectSession={setActiveTerminalSessionId}
