@@ -5,8 +5,8 @@
   "description": "Auditable multi-agent orchestration with a mutating action graph",
   "scripts": {
     "postinstall": "node scripts/electron.cjs --install-only && node scripts/fix-node-pty-spawn-helper.mjs",
-    "test": "bash scripts/test-plan-to-invoker-skill.sh && bash scripts/workspace-test.sh",
-    "test:high-resource": "bash scripts/test-plan-to-invoker-skill.sh && INVOKER_VITEST_HIGH_RESOURCE=1 bash scripts/workspace-test.sh",
+    "test": "bash scripts/test-plan-to-invoker-skill.sh && bash scripts/test-invoker-ops-skill.sh && bash scripts/workspace-test.sh",
+    "test:high-resource": "bash scripts/test-plan-to-invoker-skill.sh && bash scripts/test-invoker-ops-skill.sh && INVOKER_VITEST_HIGH_RESOURCE=1 bash scripts/workspace-test.sh",
     "test:low-resource": "pnpm run test",
     "test:low-resource:packages": "bash scripts/workspace-test.sh",
     "test:guarded": "bash scripts/run-with-resource-guard.sh bash scripts/workspace-test.sh",
