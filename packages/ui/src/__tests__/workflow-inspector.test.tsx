@@ -196,6 +196,87 @@ describe('WorkflowInspector', () => {
     expect(onSetMergeMode).toHaveBeenCalledWith('wf-1', 'external_review');
   });
 
+  it('keeps the merge-mode selector but hides the conversion button when the merge gate already has a PR URL', () => {
+    const onSetMergeMode = vi.fn(async () => {});
+    const mergeTask = makeTask({
+      id: '__merge__wf-1',
+      description: 'Merge gate',
+      status: 'review_ready',
+      config: { workflowId: 'wf-1', isMergeNode: true },
+      execution: { reviewUrl: 'https://github.com/org/repo/pull/34' },
+    });
+
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'review_ready', mergeMode: 'manual' }}
+        task={null}
+        workflowTasks={new Map([[mergeTask.id, mergeTask]])}
+        collapsed={false}
+        advancedExpanded={false}
+        onSetMergeMode={onSetMergeMode}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId('workflow-merge-mode-select')).toHaveValue('manual');
+    expect(screen.queryByTestId('convert-to-external-review-btn')).not.toBeInTheDocument();
+  });
+
+  it('hides the conversion button when the workflow is already in external review mode', () => {
+    const onSetMergeMode = vi.fn(async () => {});
+    const mergeTask = makeTask({
+      id: '__merge__wf-1',
+      description: 'Merge gate',
+      status: 'review_ready',
+      config: { workflowId: 'wf-1', isMergeNode: true },
+      execution: {},
+    });
+
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'review_ready', mergeMode: 'external_review' }}
+        task={null}
+        workflowTasks={new Map([[mergeTask.id, mergeTask]])}
+        collapsed={false}
+        advancedExpanded={false}
+        onSetMergeMode={onSetMergeMode}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId('workflow-merge-mode-select')).toHaveValue('external_review');
+    expect(screen.queryByTestId('convert-to-external-review-btn')).not.toBeInTheDocument();
+  });
+
+  it('does not expose the workflow merge-mode control when a task is selected', () => {
+    const onSetMergeMode = vi.fn(async () => {});
+    const mergeTask = makeTask({
+      id: '__merge__wf-1',
+      description: 'Merge gate',
+      status: 'review_ready',
+      config: { workflowId: 'wf-1', isMergeNode: true },
+      execution: {},
+    });
+
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'review_ready', mergeMode: 'manual' }}
+        task={mergeTask}
+        workflowTasks={new Map([[mergeTask.id, mergeTask]])}
+        collapsed={false}
+        advancedExpanded={false}
+        onSetMergeMode={onSetMergeMode}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.queryByTestId('workflow-merge-mode-select')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('convert-to-external-review-btn')).not.toBeInTheDocument();
+  });
+
   it('can be collapsed and restored', () => {
     const { rerender } = render(
       <WorkflowInspector
