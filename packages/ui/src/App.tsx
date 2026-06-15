@@ -195,6 +195,11 @@ function WorkflowContextMenu({
     };
   }, [onClose]);
 
+  useEffect(() => {
+    menuRef.current?.focus({ preventScroll: true });
+    setFocusedIndex(0);
+  }, []);
+
   const runAction = (action: (workflowId: string) => void) => {
     action(workflowId);
     onClose({ restoreFocus: autoFocus });

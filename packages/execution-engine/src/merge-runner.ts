@@ -117,6 +117,35 @@ async function execGitInMergeSafe(
   return host.execGitIn(args, dir);
 }
 
+async function pushFeatureBranchWithRefLockRetry(
+  host: MergeRunnerHost,
+  dir: string,
+  featureBranch: string,
+): Promise<void> {
+  const pushArgs = ['push', '--force', 'origin', `${featureBranch}:refs/heads/${featureBranch}`];
+  try {
+    await execGitInMergeSafe(host, pushArgs, dir);
+  } catch (err) {
+    if (!isGitRefAlreadyExistsLockRace(err)) throw err;
+    mergeTrace('GIT_PUSH_REF_LOCK_RACE_RETRY', {
+      featureBranch,
+      dir,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    await execGitInMergeSafe(host, [
+      'fetch',
+      'origin',
+      `+refs/heads/${featureBranch}:refs/remotes/origin/${featureBranch}`,
+    ], dir);
+    await execGitInMergeSafe(host, pushArgs, dir);
+  }
+}
+
+function isGitRefAlreadyExistsLockRace(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /cannot lock ref\b/i.test(message) && /reference already exists/i.test(message);
+}
+
 async function syncGateWorkspaceToFeatureBranch(
   host: MergeRunnerHost,
   gateWorkspacePath: string | undefined,
@@ -781,7 +810,7 @@ export async function approveMergeImpl(
     try {
       mergeTrace('GIT_PUSH', { featureBranch, worktreeDir });
       // Push feature branch directly to origin (GitHub) from the clone
-      await execGitInMergeSafe(host, ['push', '--force', 'origin', `${featureBranch}:refs/heads/${featureBranch}`], worktreeDir);
+      await pushFeatureBranchWithRefLockRetry(host, worktreeDir, featureBranch);
       const prBody = await authorPrBodyForMerge(host, {
         workflowId,
         mergeNodeTaskId: mergeTaskId,
@@ -1029,7 +1058,7 @@ export async function publishAfterFixImpl(
     }
 
     // Push feature branch directly to origin (GitHub) from the gate clone
-    await execGitInMergeSafe(host, ['push', '--force', 'origin', `${featureBranch}:refs/heads/${featureBranch}`], consolidateDir);
+    await pushFeatureBranchWithRefLockRetry(host, consolidateDir, featureBranch);
 
     let fullSummary = summary;
     let vpMarkdownCapture2: string | undefined;
@@ -1388,7 +1417,7 @@ export async function consolidateAndMergeImpl(
     // Push feature branch to origin so other clones (e.g., the gate clone used
     // by external review providers can access it. The consolidation clone is removed
     // in the finally block, so without this push the branch would be lost.
-    await execGitInMergeSafe(host, ['push', '--force', 'origin', `${featureBranch}:refs/heads/${featureBranch}`], worktreeDir);
+    await pushFeatureBranchWithRefLockRetry(host, worktreeDir, featureBranch);
 
     if (visualProof && onFinish === 'pull_request' && host.runVisualProofCapture) {
       const slug = (featureBranch ?? 'workflow').replace(/\//g, '-');
@@ -1420,7 +1449,7 @@ export async function consolidateAndMergeImpl(
       }
     } else if (onFinish === 'pull_request') {
       // Push feature branch directly to origin (GitHub) from the clone
-      await execGitInMergeSafe(host, ['push', '--force', 'origin', `${featureBranch}:refs/heads/${featureBranch}`], worktreeDir);
+      await pushFeatureBranchWithRefLockRetry(host, worktreeDir, featureBranch);
       const structuredCtx3 = workflowId
         ? await buildPrAuthoringContext(host, workflowId)
         : undefined;

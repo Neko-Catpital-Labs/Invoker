@@ -30,7 +30,7 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     const targetRepo = await this.resolveTargetRepo(cwd);
     console.log(`[merge-gate] createReview: ghBase=${ghBase} apiHead=${ghHead} cwd=${cwd}`);
 
-    await this.exec('git', ['push', '--force', 'origin', `${featureBranch}:refs/heads/${featureBranch}`], cwd);
+    await this.pushFeatureBranch(cwd, featureBranch);
 
     const listOutput = await this.exec('gh', [
       'pr', 'list',
@@ -161,6 +161,21 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     );
   }
 
+  private async pushFeatureBranch(cwd: string, featureBranch: string): Promise<void> {
+    const pushArgs = ['push', '--force', 'origin', `${featureBranch}:refs/heads/${featureBranch}`];
+    try {
+      await this.exec('git', pushArgs, cwd);
+    } catch (err) {
+      if (!isGitRefAlreadyExistsLockRace(err)) throw err;
+      await this.exec('git', [
+        'fetch',
+        'origin',
+        `+refs/heads/${featureBranch}:refs/remotes/origin/${featureBranch}`,
+      ], cwd);
+      await this.exec('git', pushArgs, cwd);
+    }
+  }
+
   private parseGitHubRepoNwo(url: string): string | undefined {
     const m = url.trim().match(/github\.com[:/]([^/]+\/[^/.]+?)(?:\.git)?\/?$/i);
     return m?.[1];
@@ -180,6 +195,11 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       });
     });
   }
+}
+
+function isGitRefAlreadyExistsLockRace(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /cannot lock ref\b/i.test(message) && /reference already exists/i.test(message);
 }
 
 function normalizeMergeState(value: string | undefined): 'clean' | 'dirty' | 'unknown' {
