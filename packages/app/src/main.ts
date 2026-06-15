@@ -71,7 +71,7 @@ import {
   resolveInvokerIpcSocketPath,
   resolveRepoRoot,
 } from '@invoker/contracts';
-import type { TaskGraphEvent, WorkResponse } from '@invoker/contracts';
+import type { TaskGraphEvent, WorkflowMeta, WorkResponse } from '@invoker/contracts';
 import { SQLiteAdapter, ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
 import { IpcBus, Channels } from '@invoker/transport';
 import {
@@ -2022,6 +2022,20 @@ function createEmbeddedTerminalBackendFromConfig(
       delta: taskDeltaStream.stamp(delta),
     });
   };
+  const enqueueTaskGraphSnapshotForRenderer = (
+    reason: string,
+    tasks: TaskState[],
+    workflows: WorkflowMeta[],
+  ): void => {
+    enqueueTaskGraphEventForRenderer({
+      type: 'snapshot',
+      tasks: tasks as Extract<TaskGraphEvent, { type: 'snapshot' }>['tasks'],
+      workflows,
+      reason,
+      streamSequence: getTaskDeltaStreamSequence(),
+    });
+  };
+
 
   const sendTaskDeltaToRenderer = (delta: TaskDelta): void => {
     markWorkflowMetadataFromTaskDelta(delta);
@@ -3619,6 +3633,53 @@ function createEmbeddedTerminalBackendFromConfig(
       requestWorkflowMetadataPublish('clear');
     });
 
+
+    ipcMain.handle('invoker:refresh-task-graph', async () => {
+      const startedAtMs = Date.now();
+      let tasks: TaskState[];
+      let workflows: WorkflowMeta[];
+
+      if (!ownerMode) {
+        const delegated = await messageBus.request('headless.query', {
+          kind: 'tasks',
+          forceRefresh: true,
+        }) as unknown;
+        if (!delegated || typeof delegated !== 'object') {
+          throw new Error('refresh-task-graph owner delegation returned no snapshot');
+        }
+        const snapshot = delegated as {
+          tasks?: unknown[];
+          workflows?: unknown[];
+          invokerHomeRoot?: string;
+        };
+        if (!Array.isArray(snapshot.tasks) || !Array.isArray(snapshot.workflows)) {
+          throw new Error('refresh-task-graph owner delegation returned an invalid snapshot');
+        }
+        const localInvokerHomeRoot = resolveInvokerHomeRoot();
+        if (snapshot.invokerHomeRoot && snapshot.invokerHomeRoot !== localInvokerHomeRoot) {
+          throw new Error(
+            `refresh-task-graph owner home mismatch: owner=${snapshot.invokerHomeRoot} local=${localInvokerHomeRoot}`,
+          );
+        }
+        tasks = snapshot.tasks as TaskState[];
+        workflows = snapshot.workflows as WorkflowMeta[];
+      } else {
+        orchestrator.syncAllFromDb();
+        tasks = orchestrator.getAllTasks();
+        workflows = persistence.listWorkflows() as WorkflowMeta[];
+      }
+
+      enqueueTaskGraphSnapshotForRenderer(
+        ownerMode ? 'refresh-task-graph' : 'refresh-task-graph-delegated',
+        tasks,
+        workflows,
+      );
+      recordStartupDuration('refresh-task-graph.return', startedAtMs, {
+        taskCount: tasks.length,
+        workflowCount: workflows.length,
+        streamSequence: getTaskDeltaStreamSequence(),
+      });
+    });
     registerReadOnlyIpcHandlers({
       ipcMain,
       logger,
