@@ -259,9 +259,11 @@ tasks:
     dependencies: [api, ui]
 ```
 
-If you need to turn a product or implementation plan into an Invoker workflow, use the `invoker-plan-to-invoker` skill. Source checkouts can install prefixed skill copies with `bash scripts/setup-agent-skills.sh`. Packaged installs can install the bundled `invoker-plan-to-invoker` copy from the first-run System Setup prompt or, for npm launcher installs, with `invoker-ui --install-skills`.
+If you need to turn a product or implementation plan into an Invoker workflow, use the `invoker-plan-to-invoker` skill. If you need to operate existing workflows or tasks, use the `invoker-ops` skill.
 
-Use `--output text|label|json|jsonl` on headless `query` commands. Only **one** process should **write** the workflow database at a time; see [docs/persistence-architecture-single-writer.md](docs/persistence-architecture-single-writer.md).
+Source checkouts can install prefixed skill copies with `bash scripts/setup-agent-skills.sh`. Packaged installs can install bundled skills from the first-run System Setup prompt or, for npm launcher installs, with `invoker-ui --install-skills`.
+
+Use `--output text|label|json|jsonl` on headless `query` commands. Use `./run.sh --headless retry-tasks --status pending|failed --parallel 8` for bulk safe retries. Only **one** process should **write** the workflow database at a time; see [docs/persistence-architecture-single-writer.md](docs/persistence-architecture-single-writer.md).
 
 ## Architecture (at a glance)
 
