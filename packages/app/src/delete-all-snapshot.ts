@@ -1,16 +1,8 @@
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
-import { homedir } from 'node:os';
 import * as path from 'node:path';
+import { resolveInvokerHomeRoot } from '@invoker/contracts';
 
-/** Single root for DB, repos cache, and worktrees (must stay consistent). */
-export function resolveInvokerHomeRoot(): string {
-  return (
-    process.env.INVOKER_DB_DIR
-    ?? (process.env.NODE_ENV === 'test'
-      ? path.join(homedir(), '.invoker', 'test')
-      : path.join(homedir(), '.invoker'))
-  );
-}
+export { resolveInvokerHomeRoot };
 
 function utcTimestampCompact(): string {
   // 2026-04-06T12:34:56.789Z -> 20260406-123456-789Z

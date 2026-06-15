@@ -16,6 +16,9 @@
     "test": "vitest run",
     "clean": "rm -rf dist"
   },
+  "dependencies": {
+    "@invoker/contracts": "workspace:*"
+  },
   "devDependencies": {
     "@types/node": "^25.3.3",
     "tsup": "^8.0.0",

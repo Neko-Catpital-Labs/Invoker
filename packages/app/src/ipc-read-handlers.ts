@@ -1,5 +1,6 @@
 import type { BrowserWindow, IpcMain } from 'electron';
 import type { Logger, SearchOptions } from '@invoker/contracts';
+import { resolveInvokerHomeRoot } from '@invoker/contracts';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { AgentRegistry } from '@invoker/execution-engine';
 import type { Orchestrator, TaskDelta, TaskState } from '@invoker/workflow-core';
@@ -30,6 +31,27 @@ export interface RegisterReadOnlyIpcHandlersContext {
   timeStartupPhase: <T>(label: string, fn: () => T, fields?: () => Record<string, unknown>) => T;
   recordStartupDuration: (label: string, startedAtMs: number, fields?: Record<string, unknown>) => void;
   getTaskDeltaStreamSequence: () => number;
+}
+
+type DelegatedTasksSnapshot = {
+  tasks: TaskState[];
+  workflows: unknown[];
+  streamSequence: number;
+  invokerHomeRoot?: string;
+};
+
+function asDelegatedTasksSnapshot(value: unknown): DelegatedTasksSnapshot | null {
+  if (!value || typeof value !== 'object') return null;
+
+  const snapshot = value as Partial<DelegatedTasksSnapshot>;
+  if (!Array.isArray(snapshot.tasks) || !Array.isArray(snapshot.workflows)) {
+    return null;
+  }
+  return snapshot as DelegatedTasksSnapshot;
+}
+
+function hasInvokerHomeMismatch(snapshot: DelegatedTasksSnapshot, localInvokerHomeRoot: string): boolean {
+  return Boolean(snapshot.invokerHomeRoot && snapshot.invokerHomeRoot !== localInvokerHomeRoot);
 }
 
 export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlersContext): void {
@@ -91,15 +113,18 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
   ipcMain.handle('invoker:get-tasks', async (_event, forceRefresh?: boolean) => {
     const startedAtMs = Date.now();
     const orchestrator = getOrchestrator();
-    const delegated = await delegateOwnerQuery<{
-      tasks: TaskState[];
-      workflows: unknown[];
-      streamSequence: number;
-    }>('tasks', { forceRefresh: forceRefresh === true });
-    if (delegated && Array.isArray(delegated.tasks) && Array.isArray(delegated.workflows)) {
+    const delegatedSnapshot = asDelegatedTasksSnapshot(await delegateOwnerQuery<DelegatedTasksSnapshot>(
+      'tasks',
+      { forceRefresh: forceRefresh === true },
+    ));
+    const localInvokerHomeRoot = resolveInvokerHomeRoot();
+    const delegatedHomeMismatch = delegatedSnapshot
+      ? hasInvokerHomeMismatch(delegatedSnapshot, localInvokerHomeRoot)
+      : false;
+    if (delegatedSnapshot && !delegatedHomeMismatch) {
       const previousTaskIds = new Set(lastKnownTaskStates.keys());
       lastKnownTaskStates.clear();
-      for (const task of delegated.tasks) {
+      for (const task of delegatedSnapshot.tasks) {
         lastKnownTaskStates.set(task.id, JSON.stringify(task));
         previousTaskIds.delete(task.id);
         const mainWindow = getMainWindow();
@@ -114,14 +139,20 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
         }
         requestWorkflowMetadataPublish(forceRefresh ? 'get-tasks-force-refresh-delegated' : 'get-tasks-delegated');
       }
-      setLastKnownWorkflowCount(delegated.workflows.length);
+      setLastKnownWorkflowCount(delegatedSnapshot.workflows.length);
       recordStartupDuration(forceRefresh ? 'get-tasks.force-refresh.delegated-return' : 'get-tasks.delegated-return', startedAtMs, {
-        taskCount: delegated.tasks.length,
-        workflowCount: delegated.workflows.length,
-        jsonSizeBytes: Buffer.byteLength(JSON.stringify(delegated), 'utf8'),
-        streamSequence: delegated.streamSequence,
+        taskCount: delegatedSnapshot.tasks.length,
+        workflowCount: delegatedSnapshot.workflows.length,
+        jsonSizeBytes: Buffer.byteLength(JSON.stringify(delegatedSnapshot), 'utf8'),
+        streamSequence: delegatedSnapshot.streamSequence,
       });
-      return delegated;
+      return delegatedSnapshot;
+    }
+    if (delegatedSnapshot && delegatedHomeMismatch) {
+      logger.error(
+        `tasks owner delegation ignored mismatched home root: owner="${delegatedSnapshot.invokerHomeRoot}" local="${localInvokerHomeRoot}"`,
+        { module: 'ipc' },
+      );
     }
     if (forceRefresh) {
       timeStartupPhase('get-tasks.force-refresh.syncAllFromDb', () => orchestrator.syncAllFromDb(), () => ({

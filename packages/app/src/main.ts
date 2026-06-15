@@ -65,9 +65,13 @@ import type {
   TaskState,
   TaskStateChanges,
 } from '@invoker/workflow-core';
-import { makeEnvelope, CommandError } from '@invoker/contracts';
+import {
+  makeEnvelope,
+  CommandError,
+  resolveInvokerIpcSocketPath,
+  resolveRepoRoot,
+} from '@invoker/contracts';
 import type { WorkResponse } from '@invoker/contracts';
-import { resolveRepoRoot } from '@invoker/contracts';
 import { SQLiteAdapter, ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
 import { IpcBus, Channels } from '@invoker/transport';
 import {
@@ -1616,6 +1620,7 @@ if (isHeadless) {
               tasks: orchestrator.getAllTasks(),
               workflows: persistence.listWorkflows(),
               streamSequence: 0,
+              invokerHomeRoot: resolveInvokerHomeRoot(),
             };
           }
           if (kind === 'action-graph') {
@@ -3262,6 +3267,7 @@ function createEmbeddedTerminalBackendFromConfig(
             tasks: orchestrator.getAllTasks(),
             workflows: persistence.listWorkflows(),
             streamSequence: getTaskDeltaStreamSequence(),
+            invokerHomeRoot: resolveInvokerHomeRoot(),
           };
         }
         if (kind === 'action-graph') {
@@ -3382,6 +3388,7 @@ function createEmbeddedTerminalBackendFromConfig(
     }
 
     const dbPath = path.join(resolveInvokerHomeRoot(), 'invoker.db');
+    logger.info(`IPC socket: ${resolveInvokerIpcSocketPath()}`, { module: 'init' });
     logger.info(`Database: ${dbPath}`, { module: 'init' });
     logger.info(`Repo root: ${repoRoot}`, { module: 'init' });
     logger.info(`Config: disableAutoRunOnStartup=${invokerConfig.disableAutoRunOnStartup ?? false}`, { module: 'init' });
@@ -3889,6 +3896,16 @@ function createEmbeddedTerminalBackendFromConfig(
         metric,
         ...(data ?? {}),
       };
+      if (
+        metric === 'startup_bootstrap_state' ||
+        metric === 'startup_snapshot_applied' ||
+        metric === 'startup_snapshot_skipped_bootstrap_complete' ||
+        metric === 'startup_workflow_graph_visible' ||
+        metric === 'ui_delta_stream_gap_detected' ||
+        (metric === 'useTasks_snapshot_replace' && data?.workflowCount === 0)
+      ) {
+        logger.info(`ui metric ${metric} ${JSON.stringify(data ?? {})}`, { module: 'ui-state' });
+      }
       if (metric === 'renderer_event_loop_lag' && typeof data?.lagMs === 'number') {
         const hiddenOrUnfocused = data.visibilityState === 'hidden' || data.hasFocus === false;
         if (hiddenOrUnfocused) {
