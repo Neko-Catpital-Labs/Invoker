@@ -184,7 +184,12 @@ import {
 import { computeDeferredLaunchTiming } from './deferred-runnable.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import { evaluateExecutingStall } from './executing-stall.js';
-import { listOpenFixIntentsForTask } from './auto-fix-intents.js';
+import {
+  listOpenFixIntentsForTask,
+  decodeFixMutationOptions,
+  buildHeadlessFixArgs,
+  type FixMutationOptions,
+} from './auto-fix-intents.js';
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
 import {
   buildActionGraphDiagnostics,
@@ -1320,11 +1325,10 @@ if (isHeadless) {
           });
         }
         if (!workflowMutationDispatcher.has('invoker:fix-with-agent')) {
-          workflowMutationDispatcher.set('invoker:fix-with-agent', async (taskIdArg: unknown, agentNameArg?: unknown) => {
-            const args = ['fix', String(taskIdArg)];
-            if (typeof agentNameArg === 'string' && agentNameArg.length > 0) {
-              args.push(agentNameArg);
-            }
+          workflowMutationDispatcher.set('invoker:fix-with-agent', async (taskIdArg: unknown, agentNameArg?: unknown, optionsArg?: unknown) => {
+            const agentName = typeof agentNameArg === 'string' && agentNameArg.length > 0 ? agentNameArg : undefined;
+            const fixOptions = decodeFixMutationOptions(optionsArg);
+            const args = buildHeadlessFixArgs(String(taskIdArg), agentName, fixOptions);
             await runHeadless(args, {
               ...headlessDeps,
               waitForApproval: false,
@@ -2102,8 +2106,9 @@ function createEmbeddedTerminalBackendFromConfig(
   const executeFixWithAgentMutation = async (
     taskId: string,
     agentName?: string,
-    source: 'ipc' | 'auto-fix' = 'ipc',
+    options: { source?: 'ipc' | 'auto-fix'; reviewGateCi?: FixMutationOptions['reviewGateCi'] } = {},
   ): Promise<TaskState[]> => {
+    const source = options.source ?? 'ipc';
     const task = orchestrator.getTask(taskId);
     if (!task) {
       throw new Error(`Task ${taskId} not found`);
@@ -2138,6 +2143,7 @@ function createEmbeddedTerminalBackendFromConfig(
         recoveryRoute,
         recreateOutputLabel: source === 'auto-fix' ? 'Auto-fix' : 'Fix with AI',
         failureOutputLabel: source === 'auto-fix' ? 'Auto-fix' : `Fix with ${agentName ?? 'Claude'}`,
+        reviewGateCi: options.reviewGateCi,
         signal: activeMutationContext?.signal,
       },
     );
@@ -2185,7 +2191,7 @@ function createEmbeddedTerminalBackendFromConfig(
       'normal',
       'invoker:fix-with-agent',
       [taskId, selectedAgent],
-      async () => executeFixWithAgentMutation(taskId, selectedAgent, 'auto-fix'),
+      async () => executeFixWithAgentMutation(taskId, selectedAgent, { source: 'auto-fix' }),
     )
       .then(() => {
         logAutoFixDebug(taskId, 'schedule-dispatch-finished');
@@ -4334,11 +4340,15 @@ function createEmbeddedTerminalBackendFromConfig(
       'invoker:fix-with-agent',
       (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
       'normal',
-      async (taskIdArg: unknown, agentNameArg?: unknown) => {
+      async (taskIdArg: unknown, agentNameArg?: unknown, optionsArg?: unknown) => {
       const taskId = String(taskIdArg);
       const agentName = agentNameArg === undefined ? undefined : String(agentNameArg);
+      const fixOptions = decodeFixMutationOptions(optionsArg);
       try {
-        const started = await executeFixWithAgentMutation(taskId, agentName, 'ipc');
+        const started = await executeFixWithAgentMutation(taskId, agentName, {
+          source: fixOptions.autoFix ? 'auto-fix' : 'ipc',
+          reviewGateCi: fixOptions.reviewGateCi,
+        });
         await finalizeMutationWithGlobalTopup({
           orchestrator,
           taskExecutor: requireTaskExecutor(),

@@ -847,12 +847,22 @@ export async function fixWithAgentAction(
     recoveryRoute?: FailureRecoveryRoute;
     recreateOutputLabel?: string;
     failureOutputLabel?: string;
+    /**
+     * Review-gate CI failure that triggered this fix, when the request came from
+     * the review-gate auto-fix path.  Rejected up front if it has gone stale so
+     * a superseded attempt/generation never overwrites a fresher one.
+     */
+    reviewGateCi?: ReviewGateCiFailureTrigger;
     signal?: AbortSignal;
   } = {},
 ): Promise<FixWithAgentActionResult> {
   const { orchestrator, persistence, taskExecutor } = deps;
   const task = orchestrator.getTask(taskId);
   if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
+
+  if (options.reviewGateCi) {
+    assertReviewGateTriggerCurrent(options.reviewGateCi, orchestrator);
+  }
 
   const savedError = task.execution.error ?? '';
   const recoveryRoute = options.recoveryRoute ?? selectFailureRecoveryRoute(task, savedError);

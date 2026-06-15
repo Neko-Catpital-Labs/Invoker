@@ -698,6 +698,107 @@ describe('finalizeAppliedFix', () => {
   });
 });
 
+describe('fixWithAgentAction', () => {
+  const reviewGateLineage = {
+    selectedAttemptId: 'att-7',
+    generation: 2,
+    reviewId: 'review-9',
+    branch: 'inv/task-1',
+  };
+
+  function makeReviewGateTrigger(overrides: Record<string, unknown> = {}) {
+    return {
+      taskId: 'task-a',
+      workflowId: 'wf-1',
+      reviewId: 'review-9',
+      reviewUrl: 'https://example.test/pr/9',
+      generation: 2,
+      selectedAttemptId: 'att-7',
+      branch: 'inv/task-1',
+      failedChecks: [{ name: 'ci', conclusion: 'failure' }],
+      statusText: 'failing',
+      ...overrides,
+    } as Parameters<typeof autoFixOnReviewGateFailure>[0];
+  }
+
+  function makeFixDeps(taskOverrides: Record<string, unknown> = {}) {
+    const task = makeTask({
+      status: 'failed',
+      execution: { error: 'boom', autoFixAttempts: 1, ...reviewGateLineage },
+      ...taskOverrides,
+    });
+    const orchestrator = {
+      getTask: vi.fn(() => task),
+      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      revertConflictResolution: vi.fn(),
+      setFixAwaitingApproval: vi.fn(),
+      approve: vi.fn(),
+    };
+    const persistence = {
+      updateTask: vi.fn(),
+      getTaskOutput: vi.fn(() => 'task output'),
+      appendTaskOutput: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn(),
+      commitApprovedFix: vi.fn(),
+      publishAfterFix: vi.fn(),
+      executeTasks: vi.fn(),
+    };
+    return { orchestrator, persistence, taskExecutor };
+  }
+
+  it('does not spend the auto-fix retry budget on a manual fix', async () => {
+    const { orchestrator, persistence, taskExecutor } = makeFixDeps();
+
+    await fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+      autoApproveAIFixes: false,
+    }, { agentName: 'claude' });
+
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'task output', 'claude', 'boom');
+    // The shared fix boundary never bumps autoFixAttempts itself; only an
+    // explicitly auto-fix request does (in headless/main).
+    const bumpedAttempts = persistence.updateTask.mock.calls.some(
+      ([, patch]) => (patch as { execution?: { autoFixAttempts?: number } })?.execution?.autoFixAttempts !== undefined,
+    );
+    expect(bumpedAttempts).toBe(false);
+  });
+
+  it('rejects a stale review-gate CI context before fixing', async () => {
+    const { orchestrator, persistence, taskExecutor } = makeFixDeps();
+
+    await expect(
+      fixWithAgentAction('task-a', {
+        orchestrator: orchestrator as unknown as Orchestrator,
+        persistence: persistence as unknown as SQLiteAdapter,
+        taskExecutor: taskExecutor as unknown as TaskRunner,
+        autoApproveAIFixes: false,
+      }, { agentName: 'claude', reviewGateCi: makeReviewGateTrigger({ generation: 99 }) }),
+    ).rejects.toBeInstanceOf(StaleLineageError);
+
+    expect(orchestrator.beginConflictResolution).not.toHaveBeenCalled();
+    expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
+  });
+
+  it('proceeds when the review-gate CI context is still current', async () => {
+    const { orchestrator, persistence, taskExecutor } = makeFixDeps();
+
+    await fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+      autoApproveAIFixes: false,
+    }, { agentName: 'claude', reviewGateCi: makeReviewGateTrigger() });
+
+    expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a');
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'task output', 'claude', 'boom');
+  });
+});
+
 describe('autoFixOnFailure', () => {
   it('routes startup merge conflicts without a workspace to workflow fresh-base recreate', async () => {
     const started = [

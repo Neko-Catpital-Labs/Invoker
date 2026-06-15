@@ -14,6 +14,7 @@ import { makeEnvelope } from '@invoker/contracts';
 import type { AgentSessionData } from '@invoker/contracts';
 import { OrchestratorErrorCode } from '@invoker/workflow-core';
 import type { Attempt, Orchestrator, CommandService, TaskDelta, TaskState } from '@invoker/workflow-core';
+import { parseHeadlessFixArgs, type ParsedHeadlessFixArgs } from './auto-fix-intents.js';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { Channels } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
@@ -1109,7 +1110,7 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       await headlessRebaseRecreate(args[1], deps);
       break;
     case 'fix':
-      await headlessFix(args[1], deps, args[2]);
+      await headlessFix(parseHeadlessFixArgs(args), deps);
       break;
     case 'resolve-conflict':
       await headlessResolveConflict(args[1], deps, args[2]);
@@ -1697,16 +1698,28 @@ async function headlessRetryTask(taskId: string, deps: HeadlessDeps): Promise<vo
   });
 }
 
-async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string): Promise<void> {
-  if (!taskId) throw new Error('Missing taskId. Usage: --headless fix <taskId> [claude|codex]');
+async function headlessFix(parsed: ParsedHeadlessFixArgs, deps: HeadlessDeps): Promise<void> {
+  let taskId = parsed.taskId;
+  if (!taskId) throw new Error('Missing taskId. Usage: --headless fix <taskId> [claude|codex] [--auto-fix]');
   const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'fix');
   if (!restored) return;
   taskId = restored.resolvedTaskId;
 
   const te = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, te);
-  const agent = (agentArg ?? 'claude').toLowerCase();
+  const agent = (parsed.agent ?? 'claude').toLowerCase();
+  const isAutoFix = parsed.autoFix === true;
   try {
+    // Auto-fix requests spend a retry from the task's budget; manual fixes do
+    // not.  The accepted command boundary owns this accounting so workers never
+    // bump attempts directly.
+    if (isAutoFix) {
+      const task = deps.orchestrator.getTask(taskId);
+      const attemptsBefore = task?.execution.autoFixAttempts ?? 0;
+      deps.persistence.updateTask(taskId, {
+        execution: { autoFixAttempts: attemptsBefore + 1 },
+      });
+    }
     const result = await fixWithAgentAction(taskId, {
       orchestrator: deps.orchestrator,
       persistence: deps.persistence,
@@ -1714,8 +1727,9 @@ async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string
       autoApproveAIFixes: deps.invokerConfig.autoApproveAIFixes,
     }, {
       agentName: agent,
-      recreateOutputLabel: 'Fix with AI',
-      failureOutputLabel: 'Fix with AI',
+      recreateOutputLabel: isAutoFix ? 'Auto-fix' : 'Fix with AI',
+      failureOutputLabel: isAutoFix ? 'Auto-fix' : 'Fix with AI',
+      reviewGateCi: parsed.reviewGateCi,
       signal: deps.signal,
     });
     await finalizeMutationWithGlobalTopup({
