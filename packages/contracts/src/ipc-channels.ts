@@ -108,7 +108,7 @@ export interface QueueStatus {
   queued: Array<{ taskId: string; priority: number; description: string }>;
 }
 
-export type ActionGraphNodeType =
+export type UIActionGraphNodeType =
   | 'user-action'
   | 'mutation-intent'
   | 'mutation-lease'
@@ -147,7 +147,7 @@ export interface ActionGraphNodeDurations {
 
 export interface ActionGraphNode {
   id: string;
-  type: ActionGraphNodeType;
+  type: UIActionGraphNodeType;
   label: string;
   status: ActionGraphNodeStatus;
   workflowId?: string;
