@@ -178,6 +178,72 @@ describe('publishAfterFixImpl integration (real git)', () => {
     }));
   });
 
+  it('retries feature branch push after a remote ref lock already-exists race', async () => {
+    const sandbox = createSandbox();
+    root = sandbox.root;
+
+    const mergeTask: TaskState = {
+      id: '__merge__wf-int',
+      description: 'Merge gate',
+      status: 'running',
+      dependencies: ['t1'],
+      createdAt: new Date(),
+      config: { isMergeNode: true, workflowId: 'wf-int' } as any,
+      execution: {} as any,
+    };
+
+    const taskT1: TaskState = {
+      id: 't1',
+      description: 'Task 1',
+      status: 'completed',
+      dependencies: [],
+      createdAt: new Date(),
+      config: { workflowId: 'wf-int' } as any,
+      execution: { branch: 'invoker/t1' } as any,
+    };
+
+    const host = makeHost(sandbox.hostDir, sandbox.gateDir, [mergeTask, taskT1]);
+    const originalExecGitIn = host.execGitIn.bind(host);
+    let pushAttempts = 0;
+    const gitCalls: string[][] = [];
+    host.execGitIn = vi.fn(async (args: string[], dir: string) => {
+      gitCalls.push(args);
+      if (
+        args[0] === 'push' &&
+        args[1] === '--force' &&
+        args[2] === 'origin' &&
+        args[3] === 'plan/feature:refs/heads/plan/feature'
+      ) {
+        pushAttempts++;
+        if (pushAttempts === 1) {
+          throw new Error(
+            "git push --force origin plan/feature:refs/heads/plan/feature failed (code 1): " +
+              "remote rejected: cannot lock ref 'refs/heads/plan/feature': reference already exists",
+          );
+        }
+      }
+      if (args[0] === 'fetch' && args[2] === '+refs/heads/plan/feature:refs/remotes/origin/plan/feature') {
+        return '';
+      }
+      return originalExecGitIn(args, dir);
+    });
+
+    await publishAfterFixImpl(host, mergeTask);
+
+    expect(host.orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
+    expect(pushAttempts).toBe(2);
+    expect(gitCalls).toContainEqual([
+      'fetch',
+      'origin',
+      '+refs/heads/plan/feature:refs/remotes/origin/plan/feature',
+    ]);
+
+    git('fetch origin', sandbox.hostDir);
+    git('checkout plan/feature', sandbox.hostDir);
+    expect(existsSync(join(sandbox.hostDir, 't1.txt'))).toBe(true);
+    expect(existsSync(join(sandbox.hostDir, 'fix.txt'))).toBe(true);
+  });
+
   it('uses fixedIntegrationSha anchor when present instead of current gate HEAD', async () => {
     const sandbox = createSandbox();
     root = sandbox.root;

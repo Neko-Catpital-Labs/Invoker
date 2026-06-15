@@ -1011,6 +1011,21 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'workflow-context-menu-organization');
   });
 
+  test('context menu keyboard navigation highlight', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+
+    const menu = await openContextMenu(page, page.locator('[data-testid^="workflow-node-"]'));
+    await expect(menu).toBeFocused();
+    await expect(page.getByRole('menuitem', { name: 'Open Workflow' })).toHaveClass(/\bbg-gray-700\b/);
+
+    await page.keyboard.press('ArrowDown');
+    const activeItem = page.getByRole('menuitem', { name: 'Open PR' });
+    await expect(activeItem).toBeVisible();
+    await expect(activeItem).toHaveClass(/\bbg-gray-700\b/);
+
+    await captureScreenshot(page, 'context-menu-keyboard-navigation');
+  });
+
   test('task context menu shows Recreate Downstream action', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
 

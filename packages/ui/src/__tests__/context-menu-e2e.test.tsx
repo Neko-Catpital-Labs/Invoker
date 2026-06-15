@@ -76,6 +76,38 @@ describe('Context menu (component)', () => {
     });
   }
 
+  async function openWorkflowContextMenu() {
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    await waitFor(() => expect(menu).toHaveFocus());
+    return menu;
+  }
+
+  async function openTaskContextMenu(taskId = 'task-alpha') {
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId(`rf__node-${taskId}`)).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId(`rf__node-${taskId}`));
+    const menu = await screen.findByRole('menu');
+    await waitFor(() => expect(menu).toHaveFocus());
+    return menu;
+  }
+
+  function pressMenuKey(key: string) {
+    const target =
+      document.activeElement instanceof HTMLElement && document.activeElement.getAttribute('role') === 'menu'
+        ? document.activeElement
+        : document;
+    fireEvent.keyDown(target, { key });
+  }
+
+  async function expectHighlightedMenuItem(name: RegExp | string) {
+    await waitFor(() => {
+      expect(screen.getByRole('menuitem', { name })).toHaveClass('bg-gray-700');
+    });
+  }
+
   it('right-clicking a workflow shows workflow actions', async () => {
     await setup();
     fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
@@ -220,5 +252,79 @@ describe('Context menu (component)', () => {
     fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('workflow context menu copies workflow id with ArrowDown navigation and Enter', async () => {
+    await setup();
+    await openWorkflowContextMenu();
+
+    pressMenuKey('ArrowDown');
+    pressMenuKey('ArrowDown');
+    pressMenuKey('ArrowDown');
+    await expectHighlightedMenuItem('Copy Workflow ID');
+    pressMenuKey('Enter');
+
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('workflow context menu ArrowUp wraps to More deterministically', async () => {
+    await setup();
+    await openWorkflowContextMenu();
+
+    pressMenuKey('ArrowUp');
+    await expectHighlightedMenuItem('More');
+    pressMenuKey('Enter');
+
+    expect(await screen.findByRole('menuitem', { name: 'Rebase and Retry' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Delete Workflow' })).toBeInTheDocument();
+  });
+
+  it('task context menu activates the next enabled task action with ArrowDown and Enter', async () => {
+    await setup();
+    await openTaskContextMenu();
+
+    await expectHighlightedMenuItem('Restart Task');
+    pressMenuKey('ArrowDown');
+    await expectHighlightedMenuItem('Open Terminal');
+    pressMenuKey('Enter');
+
+    await waitFor(() => expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'));
+  });
+
+  it('task context menu activates the highlighted item with Space', async () => {
+    await setup();
+    await openTaskContextMenu();
+
+    pressMenuKey('ArrowDown');
+    await expectHighlightedMenuItem('Open Terminal');
+    pressMenuKey(' ');
+
+    await waitFor(() => expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'));
+  });
+
+  it('task context menu skips disabled actions during keyboard navigation', async () => {
+    const failedPivot = makeUITask({
+      id: 'task-disabled-terminal',
+      description: 'Failed pivot task',
+      status: 'failed',
+      workflowId: 'wf-1',
+      config: {
+        workflowId: 'wf-1',
+        pivot: true,
+        experimentVariants: [{ id: 'exp-a', description: 'Experiment A' }],
+      },
+    });
+    await setup([failedPivot]);
+    await openTaskContextMenu('task-disabled-terminal');
+
+    await expectHighlightedMenuItem('Fix with Claude');
+    pressMenuKey('ArrowDown');
+    await expectHighlightedMenuItem('Fix with Codex');
+    pressMenuKey('ArrowDown');
+    await expectHighlightedMenuItem('Restart Task');
+    pressMenuKey('Enter');
+
+    await waitFor(() => expect(mock.api.restartTask).toHaveBeenCalledWith('task-disabled-terminal'));
+    expect(mock.api.openTerminal).not.toHaveBeenCalled();
   });
 });

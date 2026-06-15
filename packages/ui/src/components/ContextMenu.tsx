@@ -88,6 +88,10 @@ export function ContextMenu({
   // Find first enabled item index
   const firstEnabledIndex = focusableIndices[0] ?? -1;
 
+  useEffect(() => {
+    menuRef.current?.focus({ preventScroll: true });
+  }, []);
+
   // Auto-focus first enabled item on mount
   useEffect(() => {
     if (firstEnabledIndex >= 0 && !focusableIndices.includes(focusedIndex)) {
