@@ -1,9 +1,25 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LocalBus } from '@invoker/transport';
 
 import { SharedMutationOwnerTimeoutError, electronCommandArgs, runHeadlessClientCommand } from '../headless-client.js';
 
 describe('headless-client', () => {
+  // These tests exercise the *client* delegation path, which only runs when the
+  // process is not itself a standalone owner. A leaked `INVOKER_HEADLESS_STANDALONE=1`
+  // from the surrounding shell would short-circuit delegation to the local runtime
+  // and make every owner-delegation assertion fail, so pin it off for the suite.
+  const savedStandalone = process.env.INVOKER_HEADLESS_STANDALONE;
+  beforeEach(() => {
+    delete process.env.INVOKER_HEADLESS_STANDALONE;
+  });
+  afterEach(() => {
+    if (savedStandalone === undefined) {
+      delete process.env.INVOKER_HEADLESS_STANDALONE;
+    } else {
+      process.env.INVOKER_HEADLESS_STANDALONE = savedStandalone;
+    }
+  });
+
   it('passes Linux headless stability flags before the app entry point', () => {
     const args = electronCommandArgs(['query', 'workflows'], 'linux');
     const mainIndex = args.findIndex((arg) => arg.endsWith('/main.js'));
@@ -43,6 +59,26 @@ describe('headless-client', () => {
     }));
     expect(ensureStandaloneOwner).not.toHaveBeenCalled();
     expect(runElectronHeadless).not.toHaveBeenCalled();
+  });
+
+  it('delegates an auto-fix command, preserving the --auto-fix flag and stripping --no-track', async () => {
+    const bus = new LocalBus();
+    const ownerHandler = vi.fn(async () => ({ ok: true }));
+    bus.onRequest('headless.exec', ownerHandler);
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-af', mode: 'standalone' }));
+
+    const exitCode = await runHeadlessClientCommand(['fix', 'wf-1/task-1', 'claude', '--auto-fix', '--no-track'], {
+      messageBus: bus,
+      ensureStandaloneOwner: vi.fn(async () => {}),
+      runElectronHeadless: vi.fn(async () => 0),
+    });
+
+    expect(exitCode).toBe(0);
+    expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
+      args: ['fix', 'wf-1/task-1', 'claude', '--auto-fix'],
+      noTrack: true,
+      waitForApproval: false,
+    }));
   });
 
   it('delegates recreate-downstream as a mutating command through headless.exec, honoring --no-track', async () => {
