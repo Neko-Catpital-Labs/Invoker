@@ -24,7 +24,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # INV-63 selected `skill-doctor.sh` as the deterministic primary validation
-# surface. Keep these semantics explicit in both exit behavior and JSON output.
+# surface and rejected reconstructing proof from individual validator scripts.
+# Keep these semantics explicit in both exit behavior and JSON output so
+# docs/context/inv-63/experiment-brief.md remains consumed by implementation.
 VALIDATION_SURFACE="skill-doctor"
 EXIT_ALL_CHECKS_PASSED=0
 EXIT_VALIDATION_FAILURE=1

@@ -21,6 +21,8 @@ Minimal controller skill. Keep policy short here; use deterministic scripts and 
 
 Grep-only checks are Phase 1a only; behavioral claims require executed Phase 1b evidence.
 
+**Deterministic validation gate:** Use `skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` as the primary deterministic proof surface, backed by `bash scripts/test-plan-to-invoker-skill.sh` for regression coverage. Schema-only validation or ad hoc individual script checks are not sufficient as the review gate, because they can miss strict atomicity, zero-context prompt, policy coverage, and final-gate failures. Individual validator scripts remain fallback diagnostics only; they are not submission proof unless `skill-doctor.sh` has already passed or a waiver is explicitly recorded.
+
 **Review compression (required for implementation plans):** Before authoring any plan with `onFinish != none`, apply `skills/review-compression/SKILL.md`. Split by reviewer cognition, not file count: one local review claim, one safety invariant, one slice rationale, and one architectural effect per implementation task. This applies to Invoker and non-Invoker target repos.
 
 **Policy-matrix documents:** When the source is an architecture or policy document with a decision table, exception rules, or cross-cutting invariants, you must preserve row-level coverage before authoring workflows. Do not stop at files/functions/packages; every required policy row must map to a workflow step or an explicit waiver.
@@ -58,6 +60,12 @@ bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>
 
 **INV-63 experiment contract:** The selected design in `docs/context/inv-63/experiment-brief.md` makes `skill-doctor.sh` the primary deterministic proof surface. Its JSON output must preserve `validationSurface`, `exitCodeSemantics`, `allPassed`, `firstFailedStep`, and ordered `checks[]`; individual scripts remain fallback diagnostics after the doctor identifies the failing step.
 
+The implementation consumes the experiment thresholds as hard contract points:
+- The mirrored skill entrypoints must compare equal with `cmp` exit `0`.
+- `skill-doctor.sh` must pass `bash -n` and keep exit code `2` for usage or argument errors.
+- The non-atomicity lane on `fixtures/positive/01-minimal-verification.yaml` must return `allPassed: true`, `firstFailedStep: null`, and the five ordered checks `extract-assumptions`, `generate-verify-plan`, `check-policy-coverage`, `validate-plan`, `parse-results`.
+- The strict lane must report validation failures through JSON and exit `1`, preserving `firstFailedStep` for reviewer triage.
+
 **Optional flags:**
 - `--skip-assumptions` — skip assumption extraction and verify plan generation
 - `--skip-atomicity` — skip task atomicity linting
@@ -69,7 +77,7 @@ bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>
 - `--verbose` — show detailed output from each sub-check
 - `--help` — show usage information
 
-This single command runs: assumption extraction, verify plan generation, YAML validation, atomicity linting, and parse-results validation. Use this for deterministic pass/fail before submitting any plan.
+This single command runs: assumption extraction, verify plan generation, YAML validation, strict atomicity linting, and parse-results validation. Use this as the required deterministic pass/fail gate before submitting any plan.
 For policy-matrix inputs, it also checks that row-level coverage was extracted and that verify-plan generation did not degrade to `verify-noop`. When validating a plan against a separate policy source, pass `--source-file`, `--coverage-map`, and `--stack-manifest`; policy-matrix inputs now fail without a coverage map and a real authored stack manifest.
 
 ### Fallback commands (for debugging individual checks)
