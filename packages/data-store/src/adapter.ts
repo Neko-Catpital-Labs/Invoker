@@ -139,7 +139,7 @@ export interface PersistenceAdapter {
   saveAttempt(attempt: Attempt): void;
   loadAttempts(nodeId: string): Attempt[];
   loadAttempt(attemptId: string): Attempt | undefined;
-  updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'branch' | 'commit' | 'summary' | 'queuePriority' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void;
+  updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'branch' | 'commit' | 'summary' | 'queuePriority' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'remoteLeaseMetadata' | 'mergeConflict'>>): void;
 
   /**
    * Atomically update a task's state and fail its running attempt (if any).
