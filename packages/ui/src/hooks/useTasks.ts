@@ -21,8 +21,12 @@ export interface UseTasksResult {
   clearTasks: () => void;
   refreshTasks: (forceRefresh?: boolean) => Promise<void>;
 }
+export interface UseTasksOptions {
+  onForcedRefreshApplied?: () => void;
+}
 
-export function useTasks(): UseTasksResult {
+
+export function useTasks({ onForcedRefreshApplied }: UseTasksOptions = {}): UseTasksResult {
   const traceTaskDeltas =
     typeof window !== 'undefined' &&
     window.location.search.includes('traceTaskDeltas=1');
@@ -116,6 +120,9 @@ export function useTasks(): UseTasksResult {
         replaceDurationMs,
         jsonSizeBytes: new Blob([JSON.stringify(result)]).size,
       });
+      if (forceRefresh) {
+        onForcedRefreshApplied?.();
+      }
       if (!reportedStartupSnapshotRef.current) {
         reportedStartupSnapshotRef.current = true;
         void window.invoker.reportUiPerf?.('startup_snapshot_applied', {
@@ -131,7 +138,7 @@ export function useTasks(): UseTasksResult {
     });
     window.invoker.checkPrStatuses?.();
     return request.then(() => undefined);
-  }, []);
+  }, [onForcedRefreshApplied]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.invoker) return;

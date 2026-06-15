@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, type Mock } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { vi } from 'vitest';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import { CAMERA_LOCK_PREFERENCE_STORAGE_KEY } from '../lib/graph-camera.js';
@@ -102,6 +102,31 @@ describe('Side rail controls (component)', () => {
       expect(fitViewMock.mock.calls.length).toBeGreaterThanOrEqual(2);
     });
   });
+  it('stream gap recovery remounts both graph surfaces after the forced snapshot', async () => {
+    await renderKeyboardFixture(mock);
+    await waitFor(() => expect(fitViewMock).toHaveBeenCalled());
+    fitViewMock.mockClear();
+
+    await act(async () => {
+      mock.fireDelta({
+        type: 'updated',
+        taskId: 'wf-a/task-a',
+        changes: { status: 'running' },
+        taskStateVersion: 2,
+        previousTaskStateVersion: 1,
+        streamSequence: 2,
+      });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(mock.api.getTasks).toHaveBeenLastCalledWith(true);
+    });
+    await waitFor(() => {
+      expect(fitViewMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
 
   it('Clear button calls clear', async () => {
     render(<App />);

@@ -90,7 +90,7 @@ describe('useTasks stream-sequence gap-detect', () => {
     expect(reportUiPerfMock.mock.calls.filter((c) => c[0] === 'ui_delta_stream_gap_detected')).toHaveLength(0);
   });
 
-  it('detects a 1,2,4 gap and triggers exactly one re-sync via getTasks(true)', async () => {
+  it('detects a 1,2,4 gap, re-syncs, and reports that a forced refresh applied', async () => {
     const initial = [
       makeUITask({ id: 't1', status: 'pending' }),
       makeUITask({ id: 't2', status: 'pending' }),
@@ -108,8 +108,10 @@ describe('useTasks stream-sequence gap-detect', () => {
         { tasks: post, workflows: [], streamSequence: 4 },
       ],
     });
+    const onForcedRefreshApplied = vi.fn();
 
-    const { result } = renderHook(() => useTasks());
+
+    const { result } = renderHook(() => useTasks({ onForcedRefreshApplied }));
 
     await waitFor(() => {
       expect(onTaskDeltaMock).toHaveBeenCalledTimes(1);
@@ -127,6 +129,10 @@ describe('useTasks stream-sequence gap-detect', () => {
       expect(getTasksMock).toHaveBeenCalledTimes(1);
       expect(getTasksMock).toHaveBeenLastCalledWith(true);
     });
+    await waitFor(() => {
+      expect(onForcedRefreshApplied).toHaveBeenCalledTimes(1);
+    });
+
 
     const gapReports = reportUiPerfMock.mock.calls.filter((c) => c[0] === 'ui_delta_stream_gap_detected');
     expect(gapReports).toHaveLength(1);
