@@ -39,6 +39,7 @@ const typeOrder: Record<ActionGraphNode['type'], number> = {
   'user-action': 0,
   'mutation-intent': 1,
   'mutation-lease': 2,
+  'launch-dispatch': 2,
   'scheduler-job': 2,
   'task-attempt': 3,
   blocker: 4,

@@ -112,6 +112,7 @@ export type ActionGraphNodeType =
   | 'user-action'
   | 'mutation-intent'
   | 'mutation-lease'
+  | 'launch-dispatch'
   | 'scheduler-job'
   | 'task-attempt'
   | 'blocker';
