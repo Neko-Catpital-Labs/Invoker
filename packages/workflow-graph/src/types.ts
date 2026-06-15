@@ -103,6 +103,34 @@ export interface ExternalDependencyChange {
   readonly changedBy?: string;
 }
 
+// ── Remote Lease Metadata ──────────────────────────────────
+// Durable record of a remote target lease (e.g. a Crabbox box) backing an
+// SSH task. Persisted on tasks and attempts so cleanup and terminal restore
+// can reconnect to — or tear down — the leased box after a GUI/headless
+// restart. Provider-tagged so future remote providers can add their own shape.
+
+export interface CrabboxRemoteLeaseMetadata {
+  readonly provider: 'crabbox';
+  /** Provider lease handle used for status/stop calls. */
+  readonly leaseId: string;
+  /** Human-readable box slug. */
+  readonly slug?: string;
+  /** Configured target identifier the lease was created against. */
+  readonly targetId?: string;
+  /** SSH endpoint resolved from the lease, used for terminal restore. */
+  readonly sshHost?: string;
+  readonly sshUser?: string;
+  readonly sshPort?: number;
+  readonly sshKeyPath?: string;
+  /** ISO timestamp when the lease expires. */
+  readonly expiresAt?: string;
+  /** Idle/stop policy carried for cleanup decisions. */
+  readonly stopAfter?: string;
+  readonly keepOnFailure?: boolean;
+}
+
+export type RemoteLeaseMetadata = CrabboxRemoteLeaseMetadata;
+
 // ── Task Execution (runtime state) ─────────────────────────
 // Never copied when cloning. Reset on restart.
 
@@ -153,6 +181,8 @@ export interface TaskExecution {
   };
   readonly selectedAttemptId?: string;
   readonly autoFixAttempts?: number;
+  /** Durable remote-target lease backing this run (e.g. a Crabbox box). */
+  readonly remoteLeaseMetadata?: RemoteLeaseMetadata;
 }
 
 // ── Task State ──────────────────────────────────────────────
@@ -274,6 +304,8 @@ export interface Attempt {
   readonly workspacePath?: string;
   readonly agentSessionId?: string;
   readonly containerId?: string;
+  /** Durable remote-target lease backing this attempt (e.g. a Crabbox box). */
+  readonly remoteLeaseMetadata?: RemoteLeaseMetadata;
 
   // ── Lineage ──
   readonly supersedesAttemptId?: string;
