@@ -24,4 +24,23 @@ describe('GUI mutation translation', () => {
       ),
     );
   });
+  it.each([
+    ['invoker:restart-task', 'retry-task'],
+    ['invoker:cancel-task', 'cancel'],
+    ['invoker:cancel-workflow', 'cancel-workflow'],
+    ['invoker:recreate-workflow', 'recreate'],
+    ['invoker:recreate-task', 'recreate-task'],
+    ['invoker:recreate-downstream', 'recreate-downstream'],
+    ['invoker:retry-workflow', 'retry'],
+    ['invoker:rebase-retry', 'rebase-retry'],
+    ['invoker:rebase-recreate', 'rebase-recreate'],
+  ])('routes %s as a no-track owner command', (channel, command) => {
+    const translatorSource = getTranslatorSource();
+    expect(translatorSource).toMatch(
+      new RegExp(
+        `case '${channel}':\\s*return \\{ channel: 'headless\\.exec', request: \\{ args: \\['${command}', String\\(arg0\\)\\], noTrack: true \\} \\};`,
+      ),
+    );
+  });
+
 });

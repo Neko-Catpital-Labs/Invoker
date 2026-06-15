@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Attempt, TaskState } from '@invoker/workflow-core';
-import type { Workflow } from '@invoker/data-store';
+import type { TaskLaunchDispatch, Workflow } from '@invoker/data-store';
 import {
   buildActionGraphDiagnostics,
   resolveActionDiagnosticsStallThresholdMs,
@@ -96,6 +96,48 @@ describe('buildActionGraphDiagnostics', () => {
     const lease = graph.nodes.find((node) => node.id === 'lease:wf-1');
     expect(lease?.status).toBe('stalled');
     expect(lease?.durations?.heartbeatAgeMs).toBe(2 * 60_000);
+  });
+
+  it('shows unaccepted launch dispatches as queued diagnostic nodes', () => {
+    const graph = buildActionGraphDiagnostics({
+      workflows: [workflow],
+      tasks: [task({ id: 'task-a', execution: { selectedAttemptId: 'attempt-a1' } })],
+      attemptsByTaskId: new Map([
+        ['task-a', [attempt({ id: 'attempt-a1', nodeId: 'task-a' })]],
+      ]),
+      queueStatus: { maxConcurrency: 1, runningCount: 0, running: [], queued: [] },
+      mutationIntents: [],
+      mutationLeases: [],
+      launchDispatches: [{
+        id: 42,
+        taskId: 'task-a',
+        attemptId: 'attempt-a1',
+        workflowId: 'wf-1',
+        state: 'enqueued',
+        priority: 'high',
+        enqueuedAt: '2026-05-14T11:56:00.000Z',
+        attemptsCount: 0,
+        generation: 3,
+      } satisfies TaskLaunchDispatch],
+      eventsByTaskId: new Map(),
+      activityLogs: [],
+      stallThresholdMs: 60_000,
+      now,
+    });
+
+    const dispatch = graph.nodes.find((node) => node.id === 'launch-dispatch:42');
+    expect(dispatch).toEqual(expect.objectContaining({
+      type: 'launch-dispatch',
+      status: 'queued',
+      taskId: 'task-a',
+      suggestedNextAction: 'The task is queued for launch, but no owner has accepted it yet.',
+    }));
+    expect(dispatch?.durations?.queuedMs).toBe(4 * 60_000);
+    expect(graph.edges).toContainEqual(expect.objectContaining({
+      source: 'launch-dispatch:42',
+      target: 'attempt:attempt-a1',
+      label: 'launch',
+    }));
   });
 
   it('links pending downstream task attempts to upstream blocker nodes', () => {
