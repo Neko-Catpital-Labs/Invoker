@@ -56,6 +56,8 @@ bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>
 **Exit codes:** 0 = all checks pass, 1 = one or more failures, 2 = usage error
 **Output:** JSON summary with per-check pass/fail status
 
+**INV-63 experiment contract:** The selected design in `docs/context/inv-63/experiment-brief.md` makes `skill-doctor.sh` the primary deterministic proof surface. Its JSON output must preserve `validationSurface`, `exitCodeSemantics`, `allPassed`, `firstFailedStep`, and ordered `checks[]`; individual scripts remain fallback diagnostics after the doctor identifies the failing step.
+
 **Optional flags:**
 - `--skip-assumptions` — skip assumption extraction and verify plan generation
 - `--skip-atomicity` — skip task atomicity linting

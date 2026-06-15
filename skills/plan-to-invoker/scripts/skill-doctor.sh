@@ -23,6 +23,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# INV-63 selected `skill-doctor.sh` as the deterministic primary validation
+# surface. Keep these semantics explicit in both exit behavior and JSON output.
+VALIDATION_SURFACE="skill-doctor"
+EXIT_ALL_CHECKS_PASSED=0
+EXIT_VALIDATION_FAILURE=1
+EXIT_USAGE_ERROR=2
+
 # Default mode flags
 SKIP_ASSUMPTIONS=false
 SKIP_ATOMICITY=false
@@ -39,7 +46,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --help)
       sed -n '2,18p' "$0" | sed 's/^# \?//'
-      exit 0
+      exit "$EXIT_ALL_CHECKS_PASSED"
       ;;
     --skip-assumptions)
       SKIP_ASSUMPTIONS=true
@@ -61,7 +68,7 @@ while [[ $# -gt 0 ]]; do
       COVERAGE_MAP_FILE="${2:-}"
       if [[ -z "$COVERAGE_MAP_FILE" ]]; then
         echo "ERROR: --coverage-map requires a file path" >&2
-        exit 2
+        exit "$EXIT_USAGE_ERROR"
       fi
       shift 2
       ;;
@@ -69,7 +76,7 @@ while [[ $# -gt 0 ]]; do
       STACK_MANIFEST_FILE="${2:-}"
       if [[ -z "$STACK_MANIFEST_FILE" ]]; then
         echo "ERROR: --stack-manifest requires a file path" >&2
-        exit 2
+        exit "$EXIT_USAGE_ERROR"
       fi
       shift 2
       ;;
@@ -77,7 +84,7 @@ while [[ $# -gt 0 ]]; do
       SOURCE_FILE="${2:-}"
       if [[ -z "$SOURCE_FILE" ]]; then
         echo "ERROR: --source-file requires a file path" >&2
-        exit 2
+        exit "$EXIT_USAGE_ERROR"
       fi
       shift 2
       ;;
@@ -88,14 +95,14 @@ while [[ $# -gt 0 ]]; do
     -*)
       echo "ERROR: Unknown option: $1" >&2
       echo "Run with --help for usage information" >&2
-      exit 2
+      exit "$EXIT_USAGE_ERROR"
       ;;
     *)
       if [[ -z "$PLAN_FILE" ]]; then
         PLAN_FILE="$1"
       else
         echo "ERROR: Multiple plan files specified" >&2
-        exit 2
+        exit "$EXIT_USAGE_ERROR"
       fi
       shift
       ;;
@@ -106,27 +113,27 @@ if [[ -z "$PLAN_FILE" ]]; then
   echo "ERROR: Plan file argument required" >&2
   echo "Usage: bash skill-doctor.sh [OPTIONS] <plan-file>" >&2
   echo "Run with --help for more information" >&2
-  exit 2
+  exit "$EXIT_USAGE_ERROR"
 fi
 
 if [[ ! -f "$PLAN_FILE" ]]; then
   echo "ERROR: Plan file not found: $PLAN_FILE" >&2
-  exit 2
+  exit "$EXIT_USAGE_ERROR"
 fi
 
 if [[ -n "$SOURCE_FILE" && ! -f "$SOURCE_FILE" ]]; then
   echo "ERROR: Source file not found: $SOURCE_FILE" >&2
-  exit 2
+  exit "$EXIT_USAGE_ERROR"
 fi
 
 if [[ -n "$COVERAGE_MAP_FILE" && ! -f "$COVERAGE_MAP_FILE" ]]; then
   echo "ERROR: Coverage map file not found: $COVERAGE_MAP_FILE" >&2
-  exit 2
+  exit "$EXIT_USAGE_ERROR"
 fi
 
 if [[ -n "$STACK_MANIFEST_FILE" && ! -f "$STACK_MANIFEST_FILE" ]]; then
   echo "ERROR: Stack manifest file not found: $STACK_MANIFEST_FILE" >&2
-  exit 2
+  exit "$EXIT_USAGE_ERROR"
 fi
 
 # Temp files for collecting check results
@@ -337,10 +344,20 @@ if command -v jq &>/dev/null; then
   SUMMARY=$(jq -n \
     --argjson checks "$(cat "$CHECKS_FILE")" \
     --arg planFile "$PLAN_FILE" \
+    --arg validationSurface "$VALIDATION_SURFACE" \
+    --argjson allChecksPassedExit "$EXIT_ALL_CHECKS_PASSED" \
+    --argjson validationFailureExit "$EXIT_VALIDATION_FAILURE" \
+    --argjson usageErrorExit "$EXIT_USAGE_ERROR" \
     --argjson allPassed "$(if [[ "$OVERALL_FAILED" == "false" ]]; then echo true; else echo false; fi)" \
     --arg firstFailedStep "${FIRST_FAILED_STEP:-null}" \
     '{
       planFile: $planFile,
+      validationSurface: $validationSurface,
+      exitCodeSemantics: {
+        allChecksPassed: $allChecksPassedExit,
+        validationFailure: $validationFailureExit,
+        usageError: $usageErrorExit
+      },
       allPassed: $allPassed,
       firstFailedStep: ($firstFailedStep | if . == "null" then null else . end),
       checks: $checks
@@ -349,7 +366,7 @@ if command -v jq &>/dev/null; then
   echo "$SUMMARY"
 else
   # Fallback without jq - minimal JSON
-  echo '{"planFile":"'"$PLAN_FILE"'","allPassed":false,"error":"jq not available for full report"}'
+  echo '{"planFile":"'"$PLAN_FILE"'","validationSurface":"'"$VALIDATION_SURFACE"'","allPassed":false,"error":"jq not available for full report"}'
 fi
 
 # Exit with appropriate code
@@ -357,7 +374,7 @@ if [[ "$OVERALL_FAILED" == "true" ]]; then
   if [[ -n "$FIRST_FAILED_STEP" ]]; then
     echo "ERROR: First failed step: $FIRST_FAILED_STEP" >&2
   fi
-  exit 1
+  exit "$EXIT_VALIDATION_FAILURE"
 fi
 
-exit 0
+exit "$EXIT_ALL_CHECKS_PASSED"
