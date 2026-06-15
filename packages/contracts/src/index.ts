@@ -8,3 +8,4 @@ export * from './ipc-channels.js';
 export * from './repo-root.js';
 export * from './cost-types.js';
 export * from './launch-timeouts.js';
+export * from './invoker-home.js';
