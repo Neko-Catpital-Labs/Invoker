@@ -220,6 +220,66 @@ describe('loadConfig', () => {
     expect(config.defaultPoolId).toBe('mixed-local-ssh');
   });
 
+  it('treats a remote target with no type as a static SSH target', () => {
+    const staticTarget = {
+      host: '10.0.0.5',
+      user: 'invoker',
+      sshKeyPath: '/tmp/id_ed25519',
+      port: 2222,
+      managedWorkspaces: true,
+      remoteInvokerHome: '/home/invoker/.invoker',
+      provisionCommand: 'pnpm install --frozen-lockfile',
+      use_api_key: true,
+      secretsFile: '/tmp/secrets.env',
+      remoteHeartbeatIntervalSeconds: 45,
+    };
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ remoteTargets: { ci1: staticTarget } }),
+    );
+    const config = loadConfig();
+    const target = config.remoteTargets?.ci1;
+    expect(target).toEqual(staticTarget);
+    // Missing `type` means static SSH.
+    expect((target as { type?: string }).type).toBeUndefined();
+    expect(target?.host).toBe('10.0.0.5');
+  });
+
+  it('reads a typed crabbox remote target with lease and SSH fields', () => {
+    const crabboxTarget = {
+      type: 'crabbox',
+      crabboxCommand: 'crabbox',
+      provider: 'fly',
+      class: 'performance-2x',
+      ttl: '30m',
+      idleTimeout: '10m',
+      network: 'invoker-net',
+      target: 'ubuntu-22.04',
+      stopAfter: '5m',
+      keepOnFailure: true,
+      warmupArgs: ['--warm'],
+      statusArgs: ['--json'],
+      stopArgs: ['--force'],
+      // Preserved SSH overrides
+      sshKeyPath: '/tmp/crabbox_key',
+      remoteHeartbeatIntervalSeconds: 30,
+    };
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ remoteTargets: { box1: crabboxTarget } }),
+    );
+    const config = loadConfig();
+    expect(config.remoteTargets?.box1).toEqual(crabboxTarget);
+    const target = config.remoteTargets?.box1;
+    if (target?.type === 'crabbox') {
+      expect(target.provider).toBe('fly');
+      expect(target.keepOnFailure).toBe(true);
+      expect(target.warmupArgs).toEqual(['--warm']);
+    } else {
+      throw new Error('expected a crabbox target');
+    }
+  });
+
 });
 
 describe('resolveEmbeddedTerminalBackendConfig', () => {

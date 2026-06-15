@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
 import type { Workflow, Conversation } from '../adapter.js';
 import { createAttempt } from '@invoker/workflow-core';
-import type { TaskState, TaskStateChanges } from '@invoker/workflow-core';
+import type { TaskState, TaskStateChanges, RemoteLeaseMetadata } from '@invoker/workflow-core';
 
 describe('SQLiteAdapter', () => {
   let adapter: SQLiteAdapter;
@@ -169,6 +169,86 @@ describe('SQLiteAdapter', () => {
       const result = (adapter as any).db.exec('PRAGMA index_list(tasks)') as Array<{ values: unknown[][] }>;
       const indexNames = (result[0]?.values ?? []).map((row) => String(row[1]));
       expect(indexNames).toContain('idx_tasks_workflow_id');
+    });
+  });
+
+  describe('remote lease metadata persistence', () => {
+    const crabboxLease: RemoteLeaseMetadata = {
+      provider: 'crabbox',
+      leaseId: 'lease-abc123',
+      slug: 'happy-otter',
+      targetId: 'ubuntu-22.04',
+      sshHost: '203.0.113.7',
+      sshUser: 'invoker',
+      sshPort: 2222,
+      sshKeyPath: '/tmp/crabbox_key',
+      expiresAt: '2026-06-15T12:00:00.000Z',
+      stopAfter: '5m',
+      keepOnFailure: true,
+    };
+
+    it('round-trips remoteLeaseMetadata on a task through save and load', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('ssh-task', {
+        config: { runnerKind: 'ssh' },
+        execution: { remoteLeaseMetadata: crabboxLease },
+      }));
+
+      expect(adapter.loadTask('ssh-task')?.execution.remoteLeaseMetadata).toEqual(crabboxLease);
+    });
+
+    it('sets and clears remoteLeaseMetadata through updateTask', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('ssh-task', { config: { runnerKind: 'ssh' } }));
+
+      adapter.updateTask('ssh-task', { execution: { remoteLeaseMetadata: crabboxLease } });
+      expect(adapter.loadTask('ssh-task')?.execution.remoteLeaseMetadata).toEqual(crabboxLease);
+
+      adapter.updateTask('ssh-task', { execution: { remoteLeaseMetadata: undefined } });
+      expect(adapter.loadTask('ssh-task')?.execution.remoteLeaseMetadata).toBeUndefined();
+    });
+
+    it('round-trips remoteLeaseMetadata on an attempt and updates it', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('ssh-task', { config: { runnerKind: 'ssh' } }));
+      const attempt = createAttempt('ssh-task', {
+        status: 'running',
+        remoteLeaseMetadata: crabboxLease,
+      });
+      adapter.saveAttempt(attempt);
+
+      expect(adapter.loadAttempt(attempt.id)?.remoteLeaseMetadata).toEqual(crabboxLease);
+
+      const renewedLease: RemoteLeaseMetadata = {
+        ...crabboxLease,
+        expiresAt: '2026-06-15T13:00:00.000Z',
+      };
+      adapter.updateAttempt(attempt.id, { remoteLeaseMetadata: renewedLease });
+      expect(adapter.loadAttempt(attempt.id)?.remoteLeaseMetadata).toEqual(renewedLease);
+    });
+
+    it('getRemoteLeaseMetadata reads the task lease for terminal restore', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('ssh-task', {
+        config: { runnerKind: 'ssh' },
+        execution: { remoteLeaseMetadata: crabboxLease },
+      }));
+
+      expect(adapter.getRemoteLeaseMetadata('ssh-task')).toEqual(crabboxLease);
+      expect(adapter.getRemoteLeaseMetadata('missing-task')).toBeNull();
+    });
+
+    it('getRemoteLeaseMetadata falls back to the selected attempt lease', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const attempt = createAttempt('ssh-task', {
+        status: 'running',
+        remoteLeaseMetadata: crabboxLease,
+      });
+      adapter.saveTask('wf-1', makeTask('ssh-task', { config: { runnerKind: 'ssh' } }));
+      adapter.updateTask('ssh-task', { execution: { selectedAttemptId: attempt.id } });
+      adapter.saveAttempt(attempt);
+
+      expect(adapter.getRemoteLeaseMetadata('ssh-task')).toEqual(crabboxLease);
     });
   });
 

@@ -103,6 +103,38 @@ export interface ExternalDependencyChange {
   readonly changedBy?: string;
 }
 
+// ── Remote lease metadata ──────────────────────────────────
+// Durable record of an on-demand remote lease backing a task/attempt.
+// Provider-tagged so future providers can extend the union without breaking
+// existing consumers. Used for cleanup and terminal restore after restarts.
+
+export interface CrabboxRemoteLeaseMetadata {
+  readonly provider: 'crabbox';
+  /** Crabbox lease identifier used for status/stop calls. */
+  readonly leaseId: string;
+  /** Human-readable lease slug. */
+  readonly slug: string;
+  /** Crabbox target identifier the lease was created from. */
+  readonly targetId: string;
+  /** SSH host of the leased box. */
+  readonly sshHost: string;
+  /** SSH user for the leased box. */
+  readonly sshUser: string;
+  /** SSH port for the leased box. */
+  readonly sshPort: number;
+  /** Path to the SSH identity file used to reach the leased box. */
+  readonly sshKeyPath: string;
+  /** ISO timestamp at which the lease expires. */
+  readonly expiresAt: string;
+  /** When to stop the box after the task finishes (e.g. `'5m'`). */
+  readonly stopAfter?: string;
+  /** When true, the box is kept alive on task failure for debugging. */
+  readonly keepOnFailure?: boolean;
+}
+
+/** Durable metadata for an on-demand remote lease. Provider-tagged union. */
+export type RemoteLeaseMetadata = CrabboxRemoteLeaseMetadata;
+
 // ── Task Execution (runtime state) ─────────────────────────
 // Never copied when cloning. Reset on restart.
 
@@ -153,6 +185,11 @@ export interface TaskExecution {
   };
   readonly selectedAttemptId?: string;
   readonly autoFixAttempts?: number;
+  /**
+   * Durable record of the remote lease backing this task's execution, if any.
+   * Survives restarts so the lease can be cleaned up and the terminal restored.
+   */
+  readonly remoteLeaseMetadata?: RemoteLeaseMetadata;
 }
 
 // ── Task State ──────────────────────────────────────────────
@@ -274,6 +311,8 @@ export interface Attempt {
   readonly workspacePath?: string;
   readonly agentSessionId?: string;
   readonly containerId?: string;
+  /** Durable record of the remote lease backing this attempt, if any. */
+  readonly remoteLeaseMetadata?: RemoteLeaseMetadata;
 
   // ── Lineage ──
   readonly supersedesAttemptId?: string;

@@ -30,6 +30,7 @@ import type {
   WorkflowRollupTaskSummary,
   ExternalDependency,
   ExternalDependencyChange,
+  RemoteLeaseMetadata,
 } from '@invoker/workflow-core';
 import { DISPATCH_LEASE_MS } from '@invoker/contracts';
 import type { SearchResultItem, SearchOptions } from '@invoker/contracts';
@@ -762,6 +763,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
         execution_generation INTEGER DEFAULT 0,
         docker_image TEXT,
 
+        -- Remote lease (durable JSON; provider-tagged)
+        remote_lease_metadata TEXT,
+
         FOREIGN KEY (workflow_id) REFERENCES workflows(id)
       );
 
@@ -850,6 +854,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
         workspace_path TEXT,
         claude_session_id TEXT,
         container_id TEXT,
+
+        -- Remote lease (durable JSON; provider-tagged)
+        remote_lease_metadata TEXT,
 
         -- Lineage
         supersedes_attempt_id TEXT,
@@ -1027,6 +1034,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE attempts ADD COLUMN claimed_at TEXT',
       'ALTER TABLE attempts ADD COLUMN lease_expires_at TEXT',
       'ALTER TABLE tasks ADD COLUMN task_state_version INTEGER NOT NULL DEFAULT 1',
+      'ALTER TABLE tasks ADD COLUMN remote_lease_metadata TEXT',
+      'ALTER TABLE attempts ADD COLUMN remote_lease_metadata TEXT',
     ];
     for (const sql of migrations) {
       try {
@@ -1519,7 +1528,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
         docker_image,
         execution_agent,
         agent_name,
-        task_state_version
+        task_state_version,
+        remote_lease_metadata
       ) VALUES (
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -1535,6 +1545,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?, ?, ?,
         ?, ?,
         ?, ?, ?, ?,
+        ?,
         ?,
         ?,
         ?,
@@ -1597,6 +1608,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       cfg.executionAgent ?? null,
       exec.agentName ?? null,
       task.taskStateVersion ?? 1,
+      exec.remoteLeaseMetadata ? JSON.stringify(exec.remoteLeaseMetadata) : null,
     ]);
   }
 
@@ -1709,6 +1721,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         experiments: 'experiments',
         selectedExperiments: 'selected_experiments',
         experimentResults: 'experiment_results',
+        remoteLeaseMetadata: 'remote_lease_metadata',
       };
 
       for (const [key, col] of Object.entries(execMap)) {
@@ -2172,6 +2185,32 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return (row?.pool_member_id as string) ?? null;
   }
 
+  /**
+   * Durable remote-lease metadata for a task, used by terminal restore to
+   * reconnect to the leased box after a restart. Falls back to the task's
+   * selected attempt when the task row has no lease recorded.
+   */
+  getRemoteLeaseMetadata(taskId: string): RemoteLeaseMetadata | null {
+    const row = this.queryOne(
+      'SELECT remote_lease_metadata AS taskMeta, selected_attempt_id AS attemptId FROM tasks WHERE id = ?',
+      [taskId],
+    ) as { taskMeta?: string | null; attemptId?: string | null } | undefined;
+    if (!row) return null;
+    if (row.taskMeta) {
+      return JSON.parse(row.taskMeta) as RemoteLeaseMetadata;
+    }
+    if (row.attemptId) {
+      const attemptRow = this.queryOne(
+        'SELECT remote_lease_metadata AS meta FROM attempts WHERE id = ?',
+        [row.attemptId],
+      ) as { meta?: string | null } | undefined;
+      if (attemptRow?.meta) {
+        return JSON.parse(attemptRow.meta) as RemoteLeaseMetadata;
+      }
+    }
+    return null;
+  }
+
   // ── Conversations ───────────────────────────────────────
 
   saveConversation(conversation: Conversation): void {
@@ -2440,6 +2479,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         command_override, prompt_override,
         claimed_at, started_at, completed_at, exit_code, error, last_heartbeat_at, lease_expires_at,
         branch, commit_hash, summary, workspace_path, agent_session_id, container_id,
+        remote_lease_metadata,
         supersedes_attempt_id, created_at, merge_conflict
       ) VALUES (
         ?, ?, ?, ?, ?, ?, ?,
@@ -2447,6 +2487,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?,
         ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?,
+        ?,
         ?, ?, ?
       )
     `, [
@@ -2463,6 +2504,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       attempt.branch ?? null, attempt.commit ?? null, attempt.summary ?? null,
       attempt.workspacePath ?? null, attempt.agentSessionId ?? null,
       attempt.containerId ?? null,
+      attempt.remoteLeaseMetadata ? JSON.stringify(attempt.remoteLeaseMetadata) : null,
       attempt.supersedesAttemptId ?? null,
       attempt.createdAt.toISOString(),
       attempt.mergeConflict ? JSON.stringify(attempt.mergeConflict) : null,
@@ -2486,7 +2528,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return this.rowToAttempt(row);
   }
 
-  updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'branch' | 'commit' | 'summary' | 'queuePriority' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void {
+  updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'branch' | 'commit' | 'summary' | 'queuePriority' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'remoteLeaseMetadata' | 'mergeConflict'>>): void {
     const setClauses: string[] = [];
     const values: any[] = [];
 
@@ -2505,6 +2547,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     if (changes.workspacePath !== undefined) { setClauses.push('workspace_path = ?'); values.push(changes.workspacePath); }
     if (changes.agentSessionId !== undefined) { setClauses.push('agent_session_id = ?'); values.push(changes.agentSessionId); }
     if (changes.containerId !== undefined) { setClauses.push('container_id = ?'); values.push(changes.containerId); }
+    if (changes.remoteLeaseMetadata !== undefined) { setClauses.push('remote_lease_metadata = ?'); values.push(changes.remoteLeaseMetadata ? JSON.stringify(changes.remoteLeaseMetadata) : null); }
     if (changes.mergeConflict !== undefined) { setClauses.push('merge_conflict = ?'); values.push(changes.mergeConflict ? JSON.stringify(changes.mergeConflict) : null); }
 
     if (setClauses.length === 0) return;
@@ -2761,6 +2804,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
         generation: row.execution_generation ?? 0,
         selectedAttemptId: row.selected_attempt_id ?? undefined,
         autoFixAttempts: row.auto_fix_attempts ?? undefined,
+        remoteLeaseMetadata: row.remote_lease_metadata
+          ? (JSON.parse(row.remote_lease_metadata) as RemoteLeaseMetadata)
+          : undefined,
       },
       taskStateVersion: row.task_state_version ?? 1,
     };
@@ -2865,6 +2911,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
       workspacePath: row.workspace_path ?? undefined,
       agentSessionId: row.agent_session_id || undefined,
       containerId: row.container_id ?? undefined,
+      remoteLeaseMetadata: row.remote_lease_metadata
+        ? (JSON.parse(row.remote_lease_metadata) as RemoteLeaseMetadata)
+        : undefined,
       supersedesAttemptId: row.supersedes_attempt_id ?? undefined,
       createdAt: new Date(row.created_at),
       mergeConflict: row.merge_conflict ? JSON.parse(row.merge_conflict) : undefined,
