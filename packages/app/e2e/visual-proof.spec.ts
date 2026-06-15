@@ -1732,8 +1732,9 @@ test.describe('Visual proof capture', () => {
     }, { output: terminalOutput, terminalId: terminalSessionId });
     await expect(terminalPane.getByText('Connection established: remote-do-1')).toBeVisible();
     await expect(terminalPane.getByText(`Resumed Codex session ${sessionId}`)).toBeVisible();
+    // Live output reaches the xterm pane; the duplicate preview row is gone.
     await expect(terminalPane.getByText('Terminal stream ready for input.')).toBeVisible();
-    await expect(page.getByTestId('terminal-session-output-preview')).toContainText('Terminal stream ready for input.');
+    await expect(page.getByTestId('terminal-session-output-preview')).toHaveCount(0);
 
     const calls = await page.evaluate(() => (window as unknown as { __terminalCalls: string[] }).__terminalCalls);
     expect(calls).toHaveLength(1);
