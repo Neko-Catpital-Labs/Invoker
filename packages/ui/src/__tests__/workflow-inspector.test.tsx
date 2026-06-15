@@ -326,4 +326,64 @@ describe('WorkflowInspector', () => {
     expect(onEditPool).toHaveBeenCalledWith('task-1', 'pnpm-ssh');
     expect(screen.queryByText(/executor:/i)).not.toBeInTheDocument();
   });
+
+  it('sets workflow merge mode to external review from the workflow-level selector', () => {
+    const onSetMergeMode = vi.fn(async () => {});
+    const mergeTask = makeTask({
+      id: '__merge__wf-1',
+      description: 'Merge gate',
+      status: 'pending',
+      config: { workflowId: 'wf-1', isMergeNode: true },
+      execution: {},
+    });
+
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, mergeMode: 'manual' }}
+        task={null}
+        workflowTasks={new Map([[mergeTask.id, mergeTask]])}
+        collapsed={false}
+        advancedExpanded={false}
+        onSetMergeMode={onSetMergeMode}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    fireEvent.change(screen.getByTestId('workflow-merge-mode-select'), {
+      target: { value: 'external_review' },
+    });
+
+    expect(onSetMergeMode).toHaveBeenCalledWith('wf-1', 'external_review');
+  });
+
+  it('shows a workflow-level external review conversion button for a review-ready merge gate without a PR', () => {
+    const onSetMergeMode = vi.fn(async () => {});
+    const mergeTask = makeTask({
+      id: '__merge__wf-1',
+      description: 'Merge gate',
+      status: 'review_ready',
+      config: { workflowId: 'wf-1', isMergeNode: true },
+      execution: {},
+    });
+
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, mergeMode: 'manual' }}
+        task={null}
+        workflowTasks={new Map([[mergeTask.id, mergeTask]])}
+        collapsed={false}
+        advancedExpanded={false}
+        onSetMergeMode={onSetMergeMode}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    const convertButton = screen.getByTestId('workflow-convert-external-review');
+    expect(convertButton).toBeVisible();
+
+    fireEvent.click(convertButton);
+    expect(onSetMergeMode).toHaveBeenCalledWith('wf-1', 'external_review');
+  });
 });
