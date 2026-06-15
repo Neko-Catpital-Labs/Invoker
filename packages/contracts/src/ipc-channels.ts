@@ -47,6 +47,19 @@ export interface WorkflowMeta {
   createdAt?: string;
   updatedAt?: string;
 }
+export type TaskGraphEvent =
+  | {
+      type: 'delta';
+      delta: TaskDelta;
+    }
+  | {
+      type: 'snapshot';
+      tasks: TaskState[];
+      workflows: WorkflowMeta[];
+      reason: string;
+      streamSequence: number;
+    };
+
 
 export interface WorkflowStatus {
   total: number;
@@ -655,6 +668,9 @@ export const IpcTestOnlyChannels = {
 export const IpcEventChannels = {
   'invoker:task-delta': {} as {
     payload: TaskDelta;
+  },
+  'invoker:task-graph-event': {} as {
+    payload: TaskGraphEvent;
   },
   'invoker:task-output': {} as {
     payload: TaskOutputData;
