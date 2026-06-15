@@ -7,11 +7,18 @@ import type {
   MergeGateFailedCheck,
 } from './merge-gate-provider.js';
 import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
+import {
+  GITHUB_TARGET_REPO_ENV,
+  githubRepoOwner,
+  isGitHubApiRateLimitError,
+  parseGitHubPullListOutput,
+  parseGitHubRepoNwo,
+} from './github-pr-utils.js';
 
 export class GitHubMergeGateProvider implements MergeGateProvider {
   readonly name = 'github';
 
-  private static readonly TARGET_REPO_ENV = 'INVOKER_GITHUB_TARGET_REPO';
+  private static readonly TARGET_REPO_ENV = GITHUB_TARGET_REPO_ENV;
 
   async createReview(opts: {
     baseBranch: string;
@@ -32,17 +39,10 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
 
     await this.pushFeatureBranch(cwd, featureBranch);
 
-    const listOutput = await this.exec('gh', [
-      'pr', 'list',
-      '--repo', targetRepo,
-      '--head', ghHead,
-      '--state', 'open',
-      '--json', 'url,number',
-      '--limit', '1',
-    ], cwd);
+    const listOutput = await this.listOpenPullRequests(targetRepo, ghHead, cwd);
     console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview listOutput=${listOutput}`);
 
-    const existing = JSON.parse(listOutput) as { url: string; number: number }[];
+    const existing = parseGitHubPullListOutput(listOutput);
     console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview existing=${existing}`);
 
     if (existing.length > 0) {
@@ -150,7 +150,7 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
 
     try {
       const url = await this.exec('git', ['remote', 'get-url', 'origin'], cwd);
-      const parsed = this.parseGitHubRepoNwo(url);
+      const parsed = parseGitHubRepoNwo(url);
       if (parsed) return parsed;
     } catch {
       // fall through to error
@@ -176,9 +176,30 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     }
   }
 
-  private parseGitHubRepoNwo(url: string): string | undefined {
-    const m = url.trim().match(/github\.com[:/]([^/]+\/[^/.]+?)(?:\.git)?\/?$/i);
-    return m?.[1];
+  private async listOpenPullRequests(targetRepo: string, ghHead: string, cwd: string): Promise<string> {
+    try {
+      return await this.exec('gh', [
+        'pr', 'list',
+        '--repo', targetRepo,
+        '--head', ghHead,
+        '--state', 'open',
+        '--json', 'url,number',
+        '--limit', '1',
+      ], cwd);
+    } catch (err) {
+      if (!isGitHubApiRateLimitError(err)) throw err;
+      console.warn(
+        `[merge-gate] gh pr list hit GitHub API rate limit; ` +
+        `falling back to REST pull listing for ${targetRepo}:${ghHead}`,
+      );
+      return this.exec('gh', [
+        'api', `repos/${targetRepo}/pulls`,
+        '--method', 'GET',
+        '-f', `head=${githubRepoOwner(targetRepo)}:${ghHead}`,
+        '-f', 'state=open',
+        '-f', 'per_page=1',
+      ], cwd);
+    }
   }
 
   private async exec(cmd: string, args: string[], cwd: string): Promise<string> {

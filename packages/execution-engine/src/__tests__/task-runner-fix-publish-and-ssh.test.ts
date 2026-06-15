@@ -1070,6 +1070,58 @@ describe('TaskRunner', () => {
       expect(editCall).toBeUndefined();
     });
 
+    it('execPr falls back to REST when gh pr list exhausts GraphQL rate limit', async () => {
+      const executor = new TaskRunner({
+        orchestrator: { getTask: () => null } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      const ghCalls: string[][] = [];
+      (executor as any).execGitReadonly = async (args: string[]) => {
+        if (args[0] === 'remote' && args[1] === 'get-url' && args[2] === 'origin') {
+          return 'git@github.com:owner/repo.git';
+        }
+        return '';
+      };
+      (executor as any).execGh = async (args: string[]) => {
+        ghCalls.push(args);
+        if (args[0] === 'pr' && args[1] === 'list') {
+          throw new Error('gh pr list failed (code 1): GraphQL: API rate limit already exceeded for user ID 1916223.');
+        }
+        if (args[0] === 'api' && args[1] === 'repos/owner/repo/pulls' && args.includes('GET')) {
+          return '[{"html_url":"https://github.com/owner/repo/pull/42","number":42}]';
+        }
+        if (args[0] === 'api' && args[1] === 'repos/owner/repo/pulls/42') {
+          return '';
+        }
+        return '';
+      };
+
+      const url = await (executor as any).execPr('main', 'feature/test', 'My Workflow', 'Body');
+      expect(url).toBe('https://github.com/owner/repo/pull/42');
+
+      const restListCall = ghCalls.find(c => c[0] === 'api' && c[1] === 'repos/owner/repo/pulls' && c.includes('GET'));
+      expect(restListCall).toEqual([
+        'api', 'repos/owner/repo/pulls',
+        '--method', 'GET',
+        '-f', 'head=owner:feature/test',
+        '-f', 'state=open',
+        '-f', 'per_page=1',
+      ]);
+      const patchCall = ghCalls.find(c => c[0] === 'api' && c[1] === 'repos/owner/repo/pulls/42');
+      expect(patchCall).toEqual([
+        'api', 'repos/owner/repo/pulls/42',
+        '--method', 'PATCH',
+        '-f', 'base=main',
+        '-f', 'title=My Workflow',
+        '-f', 'body=Body',
+      ]);
+      expect(ghCalls.find(c => c[0] === 'pr' && c[1] === 'create')).toBeUndefined();
+      expect(ghCalls.find(c => c[0] === 'pr' && c[1] === 'edit')).toBeUndefined();
+    });
+
     it('execPr passes normalized branch names to gh when base uses origin/ remote-tracking form', async () => {
       const executor = new TaskRunner({
         orchestrator: { getTask: () => null } as any,

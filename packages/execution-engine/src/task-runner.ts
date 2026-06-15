@@ -60,6 +60,13 @@ import {
 } from './pr-authoring.js';
 import { assertNotGitConfigMutation, ensureRemoteUrl } from './git-config-mutation.js';
 import { killProcessGroup, SIGKILL_TIMEOUT_MS } from './process-utils.js';
+import {
+  GITHUB_TARGET_REPO_ENV,
+  githubRepoOwner,
+  isGitHubApiRateLimitError,
+  parseGitHubPullListOutput,
+  parseGitHubRepoNwo,
+} from './github-pr-utils.js';
 
 export type { TaskHeartbeatEvent, TaskRunnerCallbacks } from './task-runner-callbacks.js';
 
@@ -2182,24 +2189,81 @@ export class TaskRunner {
     const ghBase = normalizeBranchForGithubCli(baseBranch);
     const ghHead = normalizeBranchForGithubCli(featureBranch);
 
-    const listOutput = await this.execGh([
-      'pr', 'list', '--head', ghHead, '--base', ghBase,
-      '--state', 'open', '--json', 'url,number', '--limit', '1',
-    ], cwd);
+    const fallbackTargetRepo = await this.resolveGitHubTargetRepo(cwd);
+    let listedViaRestFallback = false;
+    let listOutput: string;
+    try {
+      listOutput = await this.execGh([
+        'pr', 'list', '--head', ghHead, '--base', ghBase,
+        '--state', 'open', '--json', 'url,number', '--limit', '1',
+      ], cwd);
+    } catch (err) {
+      if (!isGitHubApiRateLimitError(err) || !fallbackTargetRepo) throw err;
+      listedViaRestFallback = true;
+      this.logger.warn(
+        `[merge] gh pr list hit GitHub API rate limit; ` +
+        `falling back to REST pull listing for ${fallbackTargetRepo}:${ghHead}`,
+      );
+      listOutput = await this.execGh([
+        'api', `repos/${fallbackTargetRepo}/pulls`,
+        '--method', 'GET',
+        '-f', `head=${githubRepoOwner(fallbackTargetRepo)}:${ghHead}`,
+        '-f', 'state=open',
+        '-f', 'per_page=1',
+      ], cwd);
+    }
 
-    const existing: Array<{ url: string; number: number }> = JSON.parse(listOutput || '[]');
+    const existing = parseGitHubPullListOutput(listOutput);
     if (existing.length > 0) {
       const pr = existing[0];
-      const editArgs = ['pr', 'edit', String(pr.number), '--title', title];
-      if (body) editArgs.push('--body', body);
-      await this.execGh(editArgs, cwd);
+      if (listedViaRestFallback && fallbackTargetRepo) {
+        const patchArgs = [
+          'api', `repos/${fallbackTargetRepo}/pulls/${pr.number}`,
+          '--method', 'PATCH',
+          '-f', `base=${ghBase}`,
+          '-f', `title=${title}`,
+        ];
+        if (body) patchArgs.push('-f', `body=${body}`);
+        await this.execGh(patchArgs, cwd);
+      } else {
+        const editArgs = ['pr', 'edit', String(pr.number), '--title', title];
+        if (body) editArgs.push('--body', body);
+        await this.execGh(editArgs, cwd);
+      }
       return pr.url;
+    }
+
+    if (listedViaRestFallback && fallbackTargetRepo) {
+      const stdout = await this.execGh([
+        'api', `repos/${fallbackTargetRepo}/pulls`,
+        '--method', 'POST',
+        '-f', `base=${ghBase}`,
+        '-f', `head=${ghHead}`,
+        '-f', `title=${title}`,
+        '-f', `body=${body ?? ''}`,
+      ], cwd);
+      const pr = JSON.parse(stdout) as { html_url?: string };
+      if (!pr.html_url) {
+        throw new Error(`gh api repos/${fallbackTargetRepo}/pulls did not return html_url`);
+      }
+      return pr.html_url;
     }
 
     return this.execGh([
       'pr', 'create', '--base', ghBase,
       '--head', ghHead, '--title', title, '--body', body ?? '',
     ], cwd);
+  }
+
+  private async resolveGitHubTargetRepo(cwd?: string): Promise<string | undefined> {
+    const explicitTarget = process.env[GITHUB_TARGET_REPO_ENV]?.trim();
+    if (explicitTarget && /^[^/\s]+\/[^/\s]+$/.test(explicitTarget)) return explicitTarget;
+    try {
+      const remoteUrl = await this.execGitReadonly(['remote', 'get-url', 'origin'], cwd);
+      return parseGitHubRepoNwo(remoteUrl);
+    } catch {
+      return undefined;
+    }
   }
 
   // ── Experiment Branch Merging ────────────────────────────
