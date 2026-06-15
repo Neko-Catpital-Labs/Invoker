@@ -9,6 +9,99 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
+/**
+ * SSH connection + workspace fields shared by every remote target. For a
+ * static target these are fixed in config; for a Crabbox target the host/user/
+ * port are resolved from the lease at runtime, so they are optional here.
+ */
+export interface RemoteTargetSshFields {
+  host: string;
+  user: string;
+  /** Path to SSH identity file (private key). */
+  sshKeyPath: string;
+  /** SSH port. Default: 22. */
+  port?: number;
+  /**
+   * When true, use managed workspace mode: clone/fetch repo, create/reset worktrees,
+   * and provision per-task workspaces. When false (default), BYO mode: user provides
+   * pre-cloned repo path and handles all git/setup operations.
+   */
+  managedWorkspaces?: boolean;
+  /**
+   * Remote invoker home directory (e.g., ~/.invoker). Only used in managed mode.
+   * Default: ~/.invoker
+   */
+  remoteInvokerHome?: string;
+  /**
+   * Optional provision command to run in the worktree after creation (e.g., pnpm install).
+   * Only used in managed mode. Default: pnpm install --frozen-lockfile
+   */
+  provisionCommand?: string;
+  /**
+   * When true, export agent API keys from the local secrets file into SSH task/fix
+   * shells. Default false so remote Claude/Codex CLI account auth is preserved.
+   */
+  use_api_key?: boolean;
+  /**
+   * Optional local KEY=value secrets file used when use_api_key is true.
+   * Defaults to docker.secretsFile/fallback when unset.
+   */
+  secretsFile?: string;
+  /**
+   * Remote workload heartbeat interval (seconds) emitted by the SSH payload wrapper.
+   * Used for SSH executing-stall liveness checks. Default: 30.
+   */
+  remoteHeartbeatIntervalSeconds?: number;
+  /**
+   * Max concurrent tasks allowed on this target when used inside an execution pool.
+   * Default for pooled SSH members: 1.
+   */
+  maxConcurrentTasks?: number;
+}
+
+/**
+ * Static SSH target: connection details are fixed in config. The absence of a
+ * `type` field is treated as a static target for backward compatibility.
+ */
+export interface StaticRemoteTargetConfig extends RemoteTargetSshFields {
+  type?: 'static';
+}
+
+/**
+ * Crabbox target: leases a remote box on demand via the `crabboxCommand` CLI.
+ * SSH connection details are resolved from the lease at runtime, so the
+ * inherited SSH fields are optional and may be used as overrides/fallbacks.
+ */
+export interface CrabboxRemoteTargetConfig extends Partial<RemoteTargetSshFields> {
+  type: 'crabbox';
+  /** Command (path or executable name) used to drive the Crabbox CLI. */
+  crabboxCommand: string;
+  /** Crabbox provider/backend to request the box from. */
+  provider: string;
+  /** Box class/size to request. */
+  class: string;
+  /** Lease time-to-live (e.g. "1h" or seconds). */
+  ttl: string | number;
+  /** Idle timeout before the box is reaped (e.g. "20m" or seconds). */
+  idleTimeout: string | number;
+  /** Network the box should be attached to. */
+  network: string;
+  /** Target machine/image identifier to lease. */
+  target: string;
+  /** Stop policy once the task completes (e.g. "idle" or a duration). */
+  stopAfter: string | number;
+  /** When true, leave the box running after a failed task for inspection. */
+  keepOnFailure?: boolean;
+  /** Extra args appended to the warmup invocation. */
+  warmupArgs?: string[];
+  /** Extra args appended to the status invocation. */
+  statusArgs?: string[];
+  /** Extra args appended to the stop invocation. */
+  stopArgs?: string[];
+}
+
+export type RemoteTargetConfig = StaticRemoteTargetConfig | CrabboxRemoteTargetConfig;
+
 export interface InvokerConfig {
   defaultBranch?: string;
   /**
@@ -96,51 +189,15 @@ export interface InvokerConfig {
      */
     secretsFile?: string;
   };
-  /** Named remote SSH targets for running tasks on remote machines via SSH key auth. */
-  remoteTargets?: Record<string, {
-    host: string;
-    user: string;
-    /** Path to SSH identity file (private key). */
-    sshKeyPath: string;
-    /** SSH port. Default: 22. */
-    port?: number;
-    /**
-     * When true, use managed workspace mode: clone/fetch repo, create/reset worktrees,
-     * and provision per-task workspaces. When false (default), BYO mode: user provides
-     * pre-cloned repo path and handles all git/setup operations.
-     */
-    managedWorkspaces?: boolean;
-    /**
-     * Remote invoker home directory (e.g., ~/.invoker). Only used in managed mode.
-     * Default: ~/.invoker
-     */
-    remoteInvokerHome?: string;
-    /**
-     * Optional provision command to run in the worktree after creation (e.g., pnpm install).
-     * Only used in managed mode. Default: pnpm install --frozen-lockfile
-     */
-    provisionCommand?: string;
-    /**
-     * When true, export agent API keys from the local secrets file into SSH task/fix
-     * shells. Default false so remote Claude/Codex CLI account auth is preserved.
-     */
-    use_api_key?: boolean;
-    /**
-     * Optional local KEY=value secrets file used when use_api_key is true.
-     * Defaults to docker.secretsFile/fallback when unset.
-     */
-    secretsFile?: string;
-    /**
-     * Remote workload heartbeat interval (seconds) emitted by the SSH payload wrapper.
-     * Used for SSH executing-stall liveness checks. Default: 30.
-     */
-    remoteHeartbeatIntervalSeconds?: number;
-    /**
-     * Max concurrent tasks allowed on this target when used inside an execution pool.
-     * Default for pooled SSH members: 1.
-     */
-    maxConcurrentTasks?: number;
-  }>;
+  /**
+   * Named remote targets for running tasks on remote machines.
+   *
+   * A target with no `type` (or `type: 'static'`) is a static SSH target
+   * whose connection details are fixed in config. A target with
+   * `type: 'crabbox'` leases a remote box on demand; its SSH endpoint is
+   * resolved at runtime and recorded as durable lease metadata.
+   */
+  remoteTargets?: Record<string, RemoteTargetConfig>;
   /**
    * Named execution pools used by routing rules.
    * Pools provide shared queue + drain semantics with per-member capacity limits.
