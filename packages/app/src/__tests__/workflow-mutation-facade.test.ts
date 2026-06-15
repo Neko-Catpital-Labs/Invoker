@@ -318,4 +318,48 @@ describe('WorkflowMutationFacade', () => {
       expect(deps.taskExecutor.executeTasks).toHaveBeenCalled();
     });
   });
+
+  describe('workflow scoped dispatch', () => {
+    it('keeps cross-workflow starts in topup for retry-class workflow mutations', async () => {
+      const scoped = makeRunningTask({
+        id: 'wf-1/task-a',
+        config: { workflowId: 'wf-1' },
+        execution: { selectedAttemptId: 'attempt-a' },
+      });
+      const crossWorkflow = makeRunningTask({
+        id: 'wf-2/task-b',
+        config: { workflowId: 'wf-2' },
+        execution: { selectedAttemptId: 'attempt-b' },
+      });
+      (deps.orchestrator.retryWorkflow as ReturnType<typeof vi.fn>).mockReturnValue([scoped, crossWorkflow]);
+
+      const result = await facade.retryWorkflow('wf-1');
+
+      expect(result.runnable).toEqual([scoped]);
+      expect(result.topup).toEqual([crossWorkflow]);
+      expect(deps.taskExecutor.executeTasks).toHaveBeenNthCalledWith(1, [scoped]);
+      expect(deps.taskExecutor.executeTasks).toHaveBeenNthCalledWith(2, [crossWorkflow]);
+    });
+
+    it('keeps cross-workflow starts in topup for rebase-recreate', async () => {
+      const scoped = makeRunningTask({
+        id: 'wf-1/task-a',
+        config: { workflowId: 'wf-1' },
+        execution: { selectedAttemptId: 'attempt-a' },
+      });
+      const crossWorkflow = makeRunningTask({
+        id: 'wf-2/task-b',
+        config: { workflowId: 'wf-2' },
+        execution: { selectedAttemptId: 'attempt-b' },
+      });
+      (deps.orchestrator.recreateWorkflow as ReturnType<typeof vi.fn>).mockReturnValue([scoped, crossWorkflow]);
+
+      const result = await facade.rebaseRecreate('wf-1');
+
+      expect(result.runnable).toEqual([scoped]);
+      expect(result.topup).toEqual([crossWorkflow]);
+      expect(deps.taskExecutor.executeTasks).toHaveBeenNthCalledWith(1, [scoped]);
+      expect(deps.taskExecutor.executeTasks).toHaveBeenNthCalledWith(2, [crossWorkflow]);
+    });
+  });
 });

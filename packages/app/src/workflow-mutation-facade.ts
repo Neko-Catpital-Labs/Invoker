@@ -68,6 +68,7 @@ import {
 
 export interface MutationResult {
   started: TaskState[];
+  /** Mutation-primary runnable tasks after facade scope filtering. */
   runnable: TaskState[];
   topup: TaskState[];
 }
@@ -492,6 +493,7 @@ export class WorkflowMutationFacade {
     context: string,
     scope: DispatchScope = {},
   ): Promise<{ runnable: TaskState[]; topup: TaskState[] }> {
+    this.assertSingleDispatchScope(scope);
     return dispatchStartedTasksWithGlobalTopup({
       orchestrator: this.deps.orchestrator,
       taskExecutor: this.deps.taskExecutor,
@@ -540,6 +542,12 @@ export class WorkflowMutationFacade {
       return result.data;
     }
     return Promise.resolve(fallback());
+  }
+
+  private assertSingleDispatchScope(scope: DispatchScope): void {
+    if (scope.scopedWorkflowId && scope.scopedTaskIds?.length) {
+      throw new Error('WorkflowMutationFacade dispatch scope cannot be both workflow-scoped and task-scoped.');
+    }
   }
 
   private async topupOnly(context: string): Promise<TaskState[]> {
