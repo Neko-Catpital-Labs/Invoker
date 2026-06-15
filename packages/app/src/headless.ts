@@ -61,6 +61,7 @@ import {
 } from './global-topup.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
+import { parseHeadlessFixArgs } from './auto-fix-intents.js';
 import { trackWorkflow } from './headless-watch.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
@@ -1109,7 +1110,7 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       await headlessRebaseRecreate(args[1], deps);
       break;
     case 'fix':
-      await headlessFix(args[1], deps, args[2]);
+      await headlessFix(deps, args.slice(1));
       break;
     case 'resolve-conflict':
       await headlessResolveConflict(args[1], deps, args[2]);
@@ -1697,16 +1698,28 @@ async function headlessRetryTask(taskId: string, deps: HeadlessDeps): Promise<vo
   });
 }
 
-async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string): Promise<void> {
-  if (!taskId) throw new Error('Missing taskId. Usage: --headless fix <taskId> [claude|codex]');
-  const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'fix');
+async function headlessFix(deps: HeadlessDeps, fixArgs: string[]): Promise<void> {
+  const parsed = parseHeadlessFixArgs(fixArgs);
+  if (!parsed.taskId) {
+    throw new Error('Missing taskId. Usage: --headless fix <taskId> [claude|codex] [--auto-fix]');
+  }
+  const restored = restoreWorkflowForTaskUnlessDeleteAllWon(parsed.taskId, deps, 'fix');
   if (!restored) return;
-  taskId = restored.resolvedTaskId;
+  const taskId = restored.resolvedTaskId;
 
   const te = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, te);
-  const agent = (agentArg ?? 'claude').toLowerCase();
+  const agent = (parsed.agentName ?? 'claude').toLowerCase();
   try {
+    // The accepted command boundary owns auto-fix accounting: only an explicit
+    // `--auto-fix` request consumes the retry budget. Manual fixes do not.
+    if (parsed.options.autoFix) {
+      const current = deps.orchestrator.getTask(taskId);
+      const attemptsBefore = current?.execution.autoFixAttempts ?? 0;
+      deps.persistence.updateTask(taskId, {
+        execution: { autoFixAttempts: attemptsBefore + 1 },
+      });
+    }
     const result = await fixWithAgentAction(taskId, {
       orchestrator: deps.orchestrator,
       persistence: deps.persistence,
@@ -1714,6 +1727,7 @@ async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string
       autoApproveAIFixes: deps.invokerConfig.autoApproveAIFixes,
     }, {
       agentName: agent,
+      reviewGateCiContext: parsed.options.reviewGateCiContext,
       recreateOutputLabel: 'Fix with AI',
       failureOutputLabel: 'Fix with AI',
       signal: deps.signal,

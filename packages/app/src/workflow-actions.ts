@@ -845,6 +845,13 @@ export async function fixWithAgentAction(
   options: {
     agentName?: string;
     recoveryRoute?: FailureRecoveryRoute;
+    /**
+     * When set, this fix stands in for a review-gate CI auto-fix. The context
+     * is rejected if stale (lineage moved on) before any work happens, and its
+     * formatted saved error / fix context drive the agent instead of the
+     * task's recorded execution error.
+     */
+    reviewGateCiContext?: ReviewGateCiFailureTrigger;
     recreateOutputLabel?: string;
     failureOutputLabel?: string;
     signal?: AbortSignal;
@@ -854,8 +861,20 @@ export async function fixWithAgentAction(
   const task = orchestrator.getTask(taskId);
   if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
 
-  const savedError = task.execution.error ?? '';
-  const recoveryRoute = options.recoveryRoute ?? selectFailureRecoveryRoute(task, savedError);
+  const reviewGateCiContext = options.reviewGateCiContext;
+  if (reviewGateCiContext) {
+    // Reject a stale review-gate CI fix before touching task state.
+    assertReviewGateTriggerCurrent(reviewGateCiContext, orchestrator);
+  }
+  const savedError = reviewGateCiContext
+    ? formatReviewGateCiSavedError(reviewGateCiContext)
+    : task.execution.error ?? '';
+  // A review-gate CI fix is always a code fix on the task branch, never a
+  // conflict/fresh-base recreate, so pin the route to fixWithAgent.
+  const recoveryRoute = options.recoveryRoute
+    ?? (reviewGateCiContext
+      ? ({ kind: 'fixWithAgent' } as const)
+      : selectFailureRecoveryRoute(task, savedError));
   if (recoveryRoute.kind === 'recreateWorkflowFromFreshBase') {
     if (options.recreateOutputLabel) {
       persistence.appendTaskOutput(
@@ -877,14 +896,27 @@ export async function fixWithAgentAction(
   const lineage = captureTaskLineage(taskId, orchestrator);
   try {
     assertLineageCurrent(lineage, orchestrator, options.signal);
+    // For a review-gate CI fix the formatted saved error / fix context drive
+    // the agent and the surfaced pending-fix error, not the recorded one.
+    const effectiveSavedError = reviewGateCiContext ? savedError : persistedSavedError;
     if (recoveryRoute.kind === 'resolveConflict') {
-      await taskExecutor.resolveConflict(taskId, persistedSavedError, options.agentName);
+      await taskExecutor.resolveConflict(taskId, effectiveSavedError, options.agentName);
     } else {
       const output = persistence.getTaskOutput(taskId);
-      await taskExecutor.fixWithAgent(taskId, output, options.agentName, persistedSavedError);
+      if (reviewGateCiContext) {
+        await taskExecutor.fixWithAgent(
+          taskId,
+          output,
+          options.agentName,
+          effectiveSavedError,
+          formatReviewGateCiFixContext(reviewGateCiContext),
+        );
+      } else {
+        await taskExecutor.fixWithAgent(taskId, output, options.agentName, effectiveSavedError);
+      }
     }
     assertLineageCurrent(lineage, orchestrator, options.signal);
-    const result = await finalizeAppliedFix(taskId, persistedSavedError, deps, options.signal, lineage);
+    const result = await finalizeAppliedFix(taskId, effectiveSavedError, deps, options.signal, lineage);
     return {
       kind: recoveryRoute.kind,
       autoApproved: result.autoApproved,

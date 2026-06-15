@@ -1460,6 +1460,155 @@ describe('fixWithAgentAction', () => {
       started: [expect.objectContaining({ id: 'task-a', status: 'running' })],
     });
   });
+
+  it('never increments autoFixAttempts: the shared fix routine consumes no retry budget', async () => {
+    // A manual fix must not spend the auto-fix budget — accounting is owned by
+    // the accepted command boundary (headless `fix --auto-fix` / IPC source),
+    // not by fixWithAgentAction itself.
+    const orchestrator = {
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        config: { workflowId: 'wf-1' },
+        execution: { error: 'boom', autoFixAttempts: 0 },
+      })),
+      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      setFixAwaitingApproval: vi.fn(),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+      updateTask: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn(),
+    };
+
+    await fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    }, { agentName: 'claude' });
+
+    expect(persistence.updateTask).not.toHaveBeenCalled();
+  });
+
+  it('drives a review-gate CI context fix with the formatted saved error and fix context', async () => {
+    const reviewGateCiContext = {
+      taskId: 'task-a',
+      workflowId: 'wf-1',
+      reviewId: 'review-42',
+      reviewUrl: 'https://example.test/pr/42',
+      generation: 3,
+      selectedAttemptId: 'att-1',
+      branch: 'experiment/foo',
+      statusText: 'failure',
+      failedChecks: [{ name: 'unit', conclusion: 'failure' }],
+    };
+    const matchingTask = makeTask({
+      status: 'review_ready',
+      config: { workflowId: 'wf-1' },
+      execution: {
+        selectedAttemptId: 'att-1',
+        generation: 3,
+        reviewId: 'review-42',
+        branch: 'experiment/foo',
+        autoFixAttempts: 1,
+      },
+    });
+    const orchestrator = {
+      getTask: vi.fn(() => matchingTask),
+      beginConflictResolution: vi.fn(() => ({ savedError: 'ignored' })),
+      setFixAwaitingApproval: vi.fn(),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+      updateTask: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn(),
+    };
+
+    const result = await fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    }, {
+      agentName: 'claude',
+      reviewGateCiContext: reviewGateCiContext as never,
+    });
+
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith(
+      'task-a',
+      'test output',
+      'claude',
+      expect.stringContaining('Review-gate CI failed for PR review-42'),
+      expect.stringContaining('external review gate'),
+    );
+    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith(
+      'task-a',
+      expect.stringContaining('Review-gate CI failed for PR review-42'),
+    );
+    // The fix routine still owns no budget accounting, even for review-gate fixes.
+    expect(persistence.updateTask).not.toHaveBeenCalled();
+    expect(result).toEqual({ kind: 'fixWithAgent', autoApproved: false, started: [] });
+  });
+
+  it('rejects a stale review-gate CI context before fixing', async () => {
+    const reviewGateCiContext = {
+      taskId: 'task-a',
+      workflowId: 'wf-1',
+      reviewId: 'review-42',
+      reviewUrl: 'https://example.test/pr/42',
+      generation: 3,
+      selectedAttemptId: 'att-1',
+      branch: 'experiment/foo',
+      statusText: 'failure',
+      failedChecks: [{ name: 'unit', conclusion: 'failure' }],
+    };
+    // Lineage moved on: selectedAttemptId no longer matches the trigger.
+    const staleTask = makeTask({
+      status: 'review_ready',
+      config: { workflowId: 'wf-1' },
+      execution: {
+        selectedAttemptId: 'att-9',
+        generation: 3,
+        reviewId: 'review-42',
+        branch: 'experiment/foo',
+      },
+    });
+    const orchestrator = {
+      getTask: vi.fn(() => staleTask),
+      beginConflictResolution: vi.fn(),
+      setFixAwaitingApproval: vi.fn(),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+      updateTask: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn(),
+    };
+
+    await expect(fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    }, {
+      agentName: 'claude',
+      reviewGateCiContext: reviewGateCiContext as never,
+    })).rejects.toThrow(StaleLineageError);
+
+    expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
+    expect(orchestrator.beginConflictResolution).not.toHaveBeenCalled();
+  });
 });
 
 describe('editTaskCommand', () => {

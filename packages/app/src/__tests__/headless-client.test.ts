@@ -66,6 +66,32 @@ describe('headless-client', () => {
     }));
   });
 
+  it('delegates an auto-fix `fix` command through headless.exec, carrying the --auto-fix flag', async () => {
+    const bus = new LocalBus();
+    const ownerHandler = vi.fn(async () => ({ ok: true }));
+    bus.onRequest('headless.exec', ownerHandler);
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-fix', mode: 'standalone' }));
+
+    const exitCode = await runHeadlessClientCommand(
+      ['fix', 'wf-1/task-1', 'claude', '--auto-fix', '--no-track'],
+      {
+        messageBus: bus,
+        ensureStandaloneOwner: vi.fn(async () => {}),
+        runElectronHeadless: vi.fn(async () => 0),
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(ownerHandler).toHaveBeenCalledTimes(1);
+    // The accepted command boundary on the owner side must see the explicit
+    // auto-fix flag so it consumes the retry budget exactly once.
+    expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
+      args: ['fix', 'wf-1/task-1', 'claude', '--auto-fix'],
+      noTrack: true,
+      waitForApproval: false,
+    }));
+  });
+
   it('does not use an existing non-standalone owner as a mutation target', async () => {
     const firstBus = new LocalBus();
     const secondBus = new LocalBus();

@@ -184,7 +184,12 @@ import {
 import { computeDeferredLaunchTiming } from './deferred-runnable.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import { evaluateExecutingStall } from './executing-stall.js';
-import { listOpenFixIntentsForTask } from './auto-fix-intents.js';
+import {
+  buildFixWithAgentMutationArgs,
+  buildHeadlessFixArgs,
+  listOpenFixIntentsForTask,
+  parseFixWithAgentMutationArgs,
+} from './auto-fix-intents.js';
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
 import {
   buildActionGraphDiagnostics,
@@ -1320,11 +1325,13 @@ if (isHeadless) {
           });
         }
         if (!workflowMutationDispatcher.has('invoker:fix-with-agent')) {
-          workflowMutationDispatcher.set('invoker:fix-with-agent', async (taskIdArg: unknown, agentNameArg?: unknown) => {
-            const args = ['fix', String(taskIdArg)];
-            if (typeof agentNameArg === 'string' && agentNameArg.length > 0) {
-              args.push(agentNameArg);
-            }
+          workflowMutationDispatcher.set('invoker:fix-with-agent', async (...mutationArgs: unknown[]) => {
+            // Carry structured fix options (auto-fix accounting, review-gate CI
+            // context) across the owner-delegation hop by re-encoding them onto
+            // the headless `fix` argv. The headless boundary then owns the
+            // retry-budget increment for explicit auto-fix requests.
+            const { taskId, agentName, options } = parseFixWithAgentMutationArgs(mutationArgs);
+            const args = buildHeadlessFixArgs(taskId, agentName, options);
             await runHeadless(args, {
               ...headlessDeps,
               waitForApproval: false,
@@ -1454,7 +1461,9 @@ if (isHeadless) {
             workflowId,
             'normal',
             'invoker:fix-with-agent',
-            [taskId, selectedAgent],
+            // Mark as an explicit auto-fix so the headless `fix` boundary
+            // consumes the retry budget once, instead of the worker doing it.
+            buildFixWithAgentMutationArgs(taskId, selectedAgent, { autoFix: true }),
           )
             .then(() => {
               logStandaloneAutoFixDebug(taskId, 'schedule-dispatch-finished');
