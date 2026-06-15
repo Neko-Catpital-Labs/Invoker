@@ -106,6 +106,10 @@ type DispatchScope = {
   scopedTaskIds?: string[];
 };
 
+function downstreamDispatchScope(started: TaskState[]): DispatchScope {
+  return { scopedTaskIds: started.map((task) => task.id) };
+}
+
 // ── Facade deps ──────────────────────────────────────────────
 
 export interface WorkflowMutationFacadeDeps {
@@ -189,8 +193,7 @@ export class WorkflowMutationFacade {
     );
     // `started` contains only descendants (the target is preserved), so a
     // [taskId] dispatch scope would filter every launch out.
-    const scopedTaskIds = started.map((task) => task.id);
-    return this.finalizeWithTopup(started, 'facade.recreate-downstream', { scopedTaskIds });
+    return this.finalizeWithTopup(started, 'facade.recreate-downstream', downstreamDispatchScope(started));
   }
 
   async selectExperiment(taskId: string, experimentId: string): Promise<MutationResult> {

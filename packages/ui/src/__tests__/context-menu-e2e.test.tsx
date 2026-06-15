@@ -132,6 +132,17 @@ describe('Context menu (component)', () => {
     }
   }
 
+  function expectOnlyTaskRecreationApiCalled(called: 'recreateTask' | 'recreateDownstream') {
+    if (called === 'recreateTask') {
+      expect(mock.api.recreateTask).toHaveBeenCalledWith('task-alpha');
+      expect(mock.api.recreateDownstream).not.toHaveBeenCalled();
+    } else {
+      expect(mock.api.recreateDownstream).toHaveBeenCalledWith('task-alpha');
+      expect(mock.api.recreateTask).not.toHaveBeenCalled();
+    }
+    expect(mock.api.recreateWorkflow).not.toHaveBeenCalled();
+  }
+
   it('right-clicking a workflow shows workflow actions', async () => {
     await setup();
     fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
@@ -182,7 +193,7 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Recreate Downstream'));
 
     await waitFor(() => expect(mock.api.recreateDownstream).toHaveBeenCalledWith('task-alpha'));
-    expect(mock.api.recreateTask).not.toHaveBeenCalled();
+    expectOnlyTaskRecreationApiCalled('recreateDownstream');
   });
 
   it('task context menu disables Recreate Downstream while the task is running', async () => {
@@ -221,7 +232,7 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Recreate from Task'));
 
     await waitFor(() => expect(mock.api.recreateTask).toHaveBeenCalledWith('task-alpha'));
-    expect(mock.api.recreateDownstream).not.toHaveBeenCalled();
+    expectOnlyTaskRecreationApiCalled('recreateTask');
   });
 
   it('workflow context menu retries workflow', async () => {
