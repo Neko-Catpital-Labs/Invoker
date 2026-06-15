@@ -1,8 +1,13 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, it, expect } from 'vitest';
-import { LocalBus } from '@invoker/transport';
+import { IpcBus, LocalBus } from '@invoker/transport';
 
 import {
   discoverOwner,
+  discoverStandaloneOwner,
   isOwnerReachable,
   isStandaloneCapable,
   type OwnerEndpointInfo,
@@ -69,6 +74,52 @@ describe('owner-endpoint contract', () => {
       expect(result).not.toBeNull();
       expect(result!.ownerId).toBe('');
       expect(result!.canAcceptStandaloneMutations).toBe(true);
+    });
+
+    it('discovers a standalone peer when a GUI owner is the IPC server', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'owner-endpoint-'));
+      const socketPath = join(dir, 'ipc.sock');
+      const guiServer = new IpcBus(socketPath);
+      let standalonePeer: IpcBus | null = null;
+      let client: IpcBus | null = null;
+
+      try {
+        await guiServer.ready();
+        guiServer.onRequest('headless.owner-ping', async () => ({
+          ok: true,
+          ownerId: 'owner-gui',
+          mode: 'gui',
+        }));
+
+        standalonePeer = new IpcBus(socketPath);
+        await standalonePeer.ready();
+        standalonePeer.onRequest('headless.owner-ping', async () => ({
+          ok: true,
+          ownerId: 'owner-daemon',
+          mode: 'standalone',
+        }));
+        standalonePeer.onRequest('headless.owner-ping.standalone', async () => ({
+          ok: true,
+          ownerId: 'owner-daemon',
+          mode: 'standalone',
+        }));
+
+        client = new IpcBus(socketPath, { allowServe: false });
+        await client.ready();
+
+        const generic = await discoverOwner(client, 1_000);
+        expect(generic?.ownerId).toBe('owner-gui');
+        expect(generic?.canAcceptStandaloneMutations).toBe(false);
+
+        const standalone = await discoverStandaloneOwner(client, 1_000);
+        expect(standalone?.ownerId).toBe('owner-daemon');
+        expect(standalone?.canAcceptStandaloneMutations).toBe(true);
+      } finally {
+        client?.disconnect();
+        standalonePeer?.disconnect();
+        guiServer.disconnect();
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
   });
 

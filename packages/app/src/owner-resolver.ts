@@ -14,6 +14,7 @@ import type { MessageBus } from '@invoker/transport';
 
 import {
   discoverOwner,
+  discoverStandaloneOwner,
   isOwnerReachable,
   isStandaloneCapable,
   type OwnerDiscoveryResult,
@@ -144,13 +145,13 @@ export function createOwnerResolver(
 
   const resolver: OwnerResolver = {
     async discover(): Promise<OwnerResolveResult> {
-      const owner = await discoverOwner(currentBus, discoveryTimeoutMs);
+      const owner = await discoverStandaloneOwner(currentBus, discoveryTimeoutMs);
       return toStandaloneResult(owner, currentBus);
     },
 
     async refreshAndDiscover(): Promise<OwnerResolveResult> {
       const bus = await refreshBus();
-      const owner = await discoverOwner(bus, refreshDiscoveryTimeoutMs);
+      const owner = await discoverStandaloneOwner(bus, refreshDiscoveryTimeoutMs);
       return toStandaloneResult(owner, bus);
     },
 
@@ -175,7 +176,7 @@ export function createOwnerResolver(
     async waitForStandalone(timeoutMs: number): Promise<OwnerResolveResult> {
       const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline) {
-        const owner = await discoverOwner(currentBus, 1_000);
+        const owner = await discoverStandaloneOwner(currentBus, 1_000);
         if (isStandaloneCapable(owner)) {
           return { resolved: true, owner, bus: currentBus };
         }
@@ -187,7 +188,9 @@ export function createOwnerResolver(
 
     async resolve(requireStandalone = true): Promise<ResolvedOwner> {
       // Phase 1: Try immediate discovery
-      const immediate = await discoverOwner(currentBus, discoveryTimeoutMs);
+      const immediate = requireStandalone
+        ? await discoverStandaloneOwner(currentBus, discoveryTimeoutMs)
+        : await discoverOwner(currentBus, discoveryTimeoutMs);
       if (acceptsOwner(immediate, requireStandalone)) {
         return { owner: immediate, bus: currentBus };
       }
@@ -195,7 +198,9 @@ export function createOwnerResolver(
       // Phase 2: Refresh and retry
       if (deps.refreshMessageBus) {
         currentBus = await deps.refreshMessageBus();
-        const refreshed = await discoverOwner(currentBus, refreshDiscoveryTimeoutMs);
+        const refreshed = requireStandalone
+          ? await discoverStandaloneOwner(currentBus, refreshDiscoveryTimeoutMs)
+          : await discoverOwner(currentBus, refreshDiscoveryTimeoutMs);
         if (acceptsOwner(refreshed, requireStandalone)) {
           return { owner: refreshed, bus: currentBus };
         }

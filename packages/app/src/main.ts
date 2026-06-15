@@ -1592,6 +1592,14 @@ if (isHeadless) {
             mode: 'standalone',
           };
         });
+        messageBus.onRequest('headless.owner-ping.standalone', async () => {
+          noteStandaloneOwnerActivity();
+          return {
+            ok: true,
+            ownerId: workflowMutationOwnerId,
+            mode: 'standalone',
+          };
+        });
         messageBus.onRequest('headless.query', async (req: unknown) => {
           noteStandaloneOwnerActivity();
           const { kind, reset } = req as { kind?: string; reset?: boolean };
