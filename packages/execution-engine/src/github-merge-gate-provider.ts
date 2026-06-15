@@ -8,6 +8,8 @@ import type {
 } from './merge-gate-provider.js';
 import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
 
+type ExistingPullRequest = { url: string; number: number };
+
 export class GitHubMergeGateProvider implements MergeGateProvider {
   readonly name = 'github';
 
@@ -32,17 +34,7 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
 
     await this.pushFeatureBranch(cwd, featureBranch);
 
-    const listOutput = await this.exec('gh', [
-      'pr', 'list',
-      '--repo', targetRepo,
-      '--head', ghHead,
-      '--state', 'open',
-      '--json', 'url,number',
-      '--limit', '1',
-    ], cwd);
-    console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview listOutput=${listOutput}`);
-
-    const existing = JSON.parse(listOutput) as { url: string; number: number }[];
+    const existing = await this.findExistingOpenPullRequest(cwd, targetRepo, ghHead);
     console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview existing=${existing}`);
 
     if (existing.length > 0) {
@@ -174,6 +166,55 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       ], cwd);
       await this.exec('git', pushArgs, cwd);
     }
+  }
+
+  private async findExistingOpenPullRequest(
+    cwd: string,
+    targetRepo: string,
+    ghHead: string,
+  ): Promise<ExistingPullRequest[]> {
+    try {
+      const listOutput = await this.exec('gh', [
+        'pr', 'list',
+        '--repo', targetRepo,
+        '--head', ghHead,
+        '--state', 'open',
+        '--json', 'url,number',
+        '--limit', '1',
+      ], cwd);
+      console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview listOutput=${listOutput}`);
+      return JSON.parse(listOutput) as ExistingPullRequest[];
+    } catch (err) {
+      console.warn(
+        `[merge-gate] gh pr list failed; falling back to REST pulls lookup: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+      );
+      return this.findExistingOpenPullRequestViaRest(cwd, targetRepo, ghHead);
+    }
+  }
+
+  private async findExistingOpenPullRequestViaRest(
+    cwd: string,
+    targetRepo: string,
+    ghHead: string,
+  ): Promise<ExistingPullRequest[]> {
+    const owner = targetRepo.split('/')[0];
+    if (!owner) throw new Error(`Invalid GitHub target repo "${targetRepo}". Expected format "owner/repo".`);
+    const output = await this.exec('gh', [
+      'api', `repos/${targetRepo}/pulls`,
+      '--method', 'GET',
+      '-f', 'state=open',
+      '-f', `head=${owner}:${ghHead}`,
+      '-f', 'per_page=1',
+    ], cwd);
+    console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview restListOutput=${output}`);
+    const pulls = JSON.parse(output) as Array<{ html_url?: string; url?: string; number: number }>;
+    return pulls
+      .map((pull) => ({
+        url: pull.html_url ?? pull.url ?? '',
+        number: pull.number,
+      }))
+      .filter((pull): pull is ExistingPullRequest => Boolean(pull.url) && Number.isFinite(pull.number));
   }
 
   private parseGitHubRepoNwo(url: string): string | undefined {
