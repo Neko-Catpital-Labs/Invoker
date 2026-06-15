@@ -67,6 +67,10 @@ describe('Side rail controls (component)', () => {
 
   beforeEach(() => {
     mock = createMockInvoker();
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+    getZoomMock.mockReset();
+    getZoomMock.mockReturnValue(1);
     mock.install();
   });
 
@@ -81,6 +85,21 @@ describe('Side rail controls (component)', () => {
     await waitFor(() => {
       expect(mock.api.getTasks).toHaveBeenCalled();
       expect(mock.api.getTasks).toHaveBeenLastCalledWith(true);
+    });
+  });
+
+  it('Refresh button remounts both graph surfaces after the forced snapshot', async () => {
+    await renderKeyboardFixture(mock);
+    await waitFor(() => expect(fitViewMock).toHaveBeenCalled());
+    fitViewMock.mockClear();
+
+    fireEvent.click(screen.getByTestId('rail-refresh'));
+
+    await waitFor(() => {
+      expect(mock.api.getTasks).toHaveBeenLastCalledWith(true);
+    });
+    await waitFor(() => {
+      expect(fitViewMock.mock.calls.length).toBeGreaterThanOrEqual(2);
     });
   });
 
@@ -296,9 +315,9 @@ describe('Camera lock controls (component)', () => {
   });
 
   /**
-   * Render the App, wait for the first workflow node and the single initial
-   * fit, then clear the viewport spies so a test asserts only on post-mount
-   * camera moves. Seed localStorage BEFORE calling this to control the lock.
+   * Render the App, wait for both graph surfaces to finish their initial fit,
+   * then clear the viewport spies so a test asserts only on post-mount camera
+   * moves. Seed localStorage BEFORE calling this to control the lock.
    */
   async function renderAndSettle(
     wfs: WorkflowMeta[] = workflows,
@@ -307,7 +326,8 @@ describe('Camera lock controls (component)', () => {
     mock.setTasks(tks, wfs);
     render(<App />);
     await screen.findByTestId(`workflow-node-${wfs[0].id}`);
-    await waitFor(() => expect(fitViewMock).toHaveBeenCalled());
+    await screen.findByTestId('selected-workflow-mini-dag');
+    await waitFor(() => expect(fitViewMock.mock.calls.length).toBeGreaterThanOrEqual(2));
     fitViewMock.mockClear();
     setCenterMock.mockClear();
   }
