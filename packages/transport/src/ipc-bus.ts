@@ -1,9 +1,8 @@
 /**
  * IpcBus — Cross-process MessageBus over Unix domain sockets.
- *
- * Uses a deterministic socket path (`~/.invoker/ipc-transport.sock`) so all
- * processes in the same user session converge on a single bus without
- * discovery.
+ * Uses a deterministic socket path scoped to the Invoker home directory so
+ * processes for the same DB converge on one bus, while temp/test DBs cannot
+ * attach to the user's live UI.
  *
  * ## Server election
  *
@@ -33,8 +32,7 @@
  */
 
 import { createServer, createConnection, type Server, type Socket } from 'node:net';
-import { homedir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { dirname } from 'node:path';
 import { mkdirSync, unlinkSync } from 'node:fs';
 
 import type {
@@ -43,6 +41,7 @@ import type {
   RequestHandler,
   Unsubscribe,
 } from './message-bus.js';
+import { resolveInvokerIpcSocketPath } from '@invoker/contracts';
 import { TransportError, TransportErrorCode } from './transport-error.js';
 
 // ---------------------------------------------------------------------------
@@ -230,8 +229,11 @@ export const SUBSCRIBER_ERROR_RATE_LIMIT_MS = 1_000;
 // Default socket path
 // ---------------------------------------------------------------------------
 
-export const DEFAULT_SOCKET_PATH =
-  process.env.INVOKER_IPC_SOCKET || join(homedir(), '.invoker', 'ipc-transport.sock');
+export function resolveDefaultSocketPath(): string {
+  return resolveInvokerIpcSocketPath();
+}
+
+export const DEFAULT_SOCKET_PATH = resolveDefaultSocketPath();
 
 /** Default request deadline in milliseconds (30 s). */
 export const DEFAULT_REQUEST_DEADLINE_MS = 30_000;
@@ -290,7 +292,7 @@ export class IpcBus implements MessageBus {
     { source: Socket; awaiting: Set<Socket>; channel: string }
   >();
 
-  constructor(socketPath: string = DEFAULT_SOCKET_PATH, options: IpcBusOptions = {}) {
+  constructor(socketPath: string = resolveDefaultSocketPath(), options: IpcBusOptions = {}) {
     this.socketPath = socketPath;
     this.allowServe = options.allowServe ?? true;
     this.requestDeadlineMs = options.requestDeadlineMs ?? DEFAULT_REQUEST_DEADLINE_MS;
