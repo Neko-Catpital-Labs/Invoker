@@ -21,8 +21,12 @@ export interface UseTasksResult {
   clearTasks: () => void;
   refreshTasks: (forceRefresh?: boolean) => Promise<void>;
 }
+export interface UseTasksOptions {
+  onTaskGraphSnapshotApplied?: () => void;
+}
 
-export function useTasks(): UseTasksResult {
+
+export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): UseTasksResult {
   const traceTaskDeltas =
     typeof window !== 'undefined' &&
     window.location.search.includes('traceTaskDeltas=1');
@@ -132,6 +136,14 @@ export function useTasks(): UseTasksResult {
     window.invoker.checkPrStatuses?.();
     return request.then(() => undefined);
   }, []);
+  const refreshTasks = useCallback((forceRefresh = false): Promise<void> => {
+    if (!forceRefresh) {
+      return fetchAll(false);
+    }
+    if (typeof window === 'undefined' || !window.invoker) return Promise.resolve();
+    return window.invoker.refreshTaskGraph?.() ?? fetchAll(true);
+  }, [fetchAll]);
+
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.invoker) return;
@@ -210,6 +222,7 @@ export function useTasks(): UseTasksResult {
           });
           lastSeenSequenceRef.current = firstEvent.streamSequence;
           isResyncInFlightRef.current = false;
+          onTaskGraphSnapshotApplied?.();
         }
 
         setTasks((prev) => {
@@ -287,7 +300,7 @@ export function useTasks(): UseTasksResult {
           });
           isResyncInFlightRef.current = true;
           graphEventPipelineRef.current?.clear();
-          fetchAll(true);
+          refreshTasks(true);
           return;
         }
         lastSeenSequenceRef.current = seq;
@@ -320,7 +333,7 @@ export function useTasks(): UseTasksResult {
       unsub();
       unsubWf?.();
     };
-  }, [fetchAll]);
+  }, [fetchAll, onTaskGraphSnapshotApplied, refreshTasks]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.invoker) return;
@@ -343,5 +356,5 @@ export function useTasks(): UseTasksResult {
     setWorkflows(new Map());
   }, []);
 
-  return { tasks, workflows, clearTasks, refreshTasks: fetchAll };
+  return { tasks, workflows, clearTasks, refreshTasks };
 }
