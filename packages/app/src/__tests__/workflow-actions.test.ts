@@ -795,7 +795,11 @@ describe('autoFixOnFailure', () => {
       taskExecutor: taskExecutor as unknown as TaskRunner,
     });
 
-    expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a');
+    expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a', {
+      taskId: 'task-a',
+      selectedAttemptId: undefined,
+      generation: 0,
+    });
     expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'claude', 'boom');
     expect(taskExecutor.resolveConflict).not.toHaveBeenCalled();
     expect(orchestrator.retryTask).toHaveBeenCalledWith('task-a');
@@ -886,7 +890,11 @@ describe('autoFixOnFailure', () => {
       taskExecutor: taskExecutor as unknown as TaskRunner,
     });
 
-    expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a');
+    expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a', {
+      taskId: 'task-a',
+      selectedAttemptId: undefined,
+      generation: 0,
+    });
     expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'claude');
     expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
     expect(orchestrator.retryTask).toHaveBeenCalledWith('task-a');
@@ -1340,7 +1348,11 @@ describe('fixWithAgentAction', () => {
 
     expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'codex', 'boom');
     expect(taskExecutor.resolveConflict).not.toHaveBeenCalled();
-    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'boom');
+    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'boom', {
+      taskId: 'task-a',
+      selectedAttemptId: undefined,
+      generation: 0,
+    });
     expect(result).toEqual({ kind: 'fixWithAgent', autoApproved: false, started: [] });
   });
 
@@ -1379,7 +1391,11 @@ describe('fixWithAgentAction', () => {
 
     expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'claude');
     expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
-    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', mergeError);
+    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', mergeError, {
+      taskId: 'task-a',
+      selectedAttemptId: undefined,
+      generation: 0,
+    });
     expect(result).toEqual({ kind: 'resolveConflict', autoApproved: false, started: [] });
   });
 
@@ -1414,7 +1430,11 @@ describe('fixWithAgentAction', () => {
 
     expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'codex');
     expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
-    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', mergeError);
+    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', mergeError, {
+      taskId: 'task-a',
+      selectedAttemptId: undefined,
+      generation: 0,
+    });
     expect(result).toEqual({ kind: 'resolveConflict', autoApproved: false, started: [] });
   });
 
@@ -2415,7 +2435,11 @@ describe('fixWithAgentAction lineage guard', () => {
     });
 
     // Normal path should proceed
-    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'boom');
+    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'boom', {
+      taskId: 'task-a',
+      selectedAttemptId: 'att-1',
+      generation: 5,
+    });
     expect(result).toEqual({ kind: 'fixWithAgent', autoApproved: false, started: [] });
   });
 });
@@ -2736,7 +2760,11 @@ describe('autoFixOnReviewGateFailure', () => {
       expect.stringContaining('This auto-fix was triggered by failed CI'),
     );
     expect(taskExecutor.fixWithAgent.mock.calls[0]?.[4]).toContain('test-all');
-    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('merge-a', 'Review-gate CI failed');
+    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('merge-a', 'Review-gate CI failed', {
+      taskId: 'merge-a',
+      selectedAttemptId: 'att-1',
+      generation: 7,
+    });
   });
 
   it('does not start when review-gate lineage is stale', async () => {

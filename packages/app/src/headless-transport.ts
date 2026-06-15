@@ -22,6 +22,7 @@ import {
   tryDelegateRun,
   tryDelegateResume,
   tryPingHeadlessOwner,
+  tryPingStandaloneHeadlessOwner,
 } from './headless-delegation.js';
 
 // ---------------------------------------------------------------------------
@@ -211,6 +212,14 @@ export class HeadlessTransport {
     return null;
   }
 
+  private async pingStandaloneCompatibleOwner(bus: MessageBus, timeoutMs: number): Promise<boolean> {
+    const standalone = await tryPingStandaloneHeadlessOwner(bus, timeoutMs);
+    if (standalone?.mode === 'standalone') return true;
+
+    const legacy = await tryPingHeadlessOwner(bus, timeoutMs);
+    return legacy?.mode === 'standalone';
+  }
+
   private async delegateMutating(
     args: string[],
     command: string,
@@ -220,6 +229,17 @@ export class HeadlessTransport {
     let bus = this.messageBus;
 
     // Check for an existing standalone owner.
+    const standalone = await tryPingStandaloneHeadlessOwner(bus, 2_000);
+    if (standalone?.mode === 'standalone') {
+      const ok = await this.dispatchToOwner(
+        args,
+        command,
+        bus,
+        { noTrack, waitForApproval, timeoutMs },
+      );
+      if (ok) return { response: { delegated: true } };
+    }
+
     const owner = await tryPingHeadlessOwner(bus, 2_000);
     if (owner?.mode === 'standalone') {
       const ok = await this.dispatchToOwner(
@@ -231,13 +251,11 @@ export class HeadlessTransport {
       if (ok) return { response: { delegated: true } };
     }
 
-    // If a GUI owner responded (not standalone), refresh and look for a
-    // standalone owner (the GUI cannot handle mutations).
+    // If a non-standalone owner responded, refresh and look for a standalone route.
     if (owner && owner.mode !== 'standalone' && this.deps.refreshMessageBus) {
       bus = await this.deps.refreshMessageBus();
       this.messageBus = bus;
-      const refreshed = await tryPingHeadlessOwner(bus, 1_000);
-      if (refreshed?.mode === 'standalone') {
+      if (await this.pingStandaloneCompatibleOwner(bus, 1_000)) {
         const ok = await this.dispatchToOwner(
           args,
           command,
@@ -258,6 +276,9 @@ export class HeadlessTransport {
       if (this.deps.refreshMessageBus) {
         bus = await this.deps.refreshMessageBus();
         this.messageBus = bus;
+      }
+      if (!await this.pingStandaloneCompatibleOwner(bus, 2_000)) {
+        return null;
       }
       const ok = await this.dispatchToOwner(
         args,

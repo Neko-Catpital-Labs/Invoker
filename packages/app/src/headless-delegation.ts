@@ -136,7 +136,22 @@ export async function tryPingHeadlessOwner(
   messageBus: MessageBus,
   timeoutMs = 1_000,
 ): Promise<{ ownerId?: string; mode?: string } | null> {
-  const traceId = createTraceId('headless.owner-ping');
+  return tryPingOwner('headless.owner-ping', messageBus, timeoutMs);
+}
+
+export async function tryPingStandaloneHeadlessOwner(
+  messageBus: MessageBus,
+  timeoutMs = 1_000,
+): Promise<{ ownerId?: string; mode?: string } | null> {
+  return tryPingOwner('headless.owner-ping.standalone', messageBus, timeoutMs);
+}
+
+async function tryPingOwner(
+  channel: 'headless.owner-ping' | 'headless.owner-ping.standalone',
+  messageBus: MessageBus,
+  timeoutMs: number,
+): Promise<{ ownerId?: string; mode?: string } | null> {
+  const traceId = createTraceId(channel);
   const DELEGATION_TIMEOUT = Symbol('delegation-timeout');
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<typeof DELEGATION_TIMEOUT>((_, reject) => {
@@ -148,7 +163,7 @@ export async function tryPingHeadlessOwner(
     const startedAt = Date.now();
     delegationLog(`${traceId} send timeoutMs=${timeoutMs}`);
     const response = await Promise.race([
-      messageBus.request('headless.owner-ping', {}),
+      messageBus.request(channel, {}),
       timeoutPromise,
     ]) as { ownerId?: string; mode?: string } | null;
     if (!response || typeof response !== 'object') {

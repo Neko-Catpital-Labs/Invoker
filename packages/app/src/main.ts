@@ -135,7 +135,9 @@ import {
 } from './headless.js';
 import {
   approveTask as sharedApproveTask,
+  assertLineageCurrent,
   buildInvalidationDeps,
+  captureTaskLineage,
   deleteAllWorkflows as sharedDeleteAllWorkflows,
   deleteAllWorkflowsBulk as sharedDeleteAllWorkflowsBulk,
   fixWithAgentAction,
@@ -1594,6 +1596,14 @@ if (isHeadless) {
             mode: 'standalone',
           };
         });
+        messageBus.onRequest('headless.owner-ping.standalone', async () => {
+          noteStandaloneOwnerActivity();
+          return {
+            ok: true,
+            ownerId: workflowMutationOwnerId,
+            mode: 'standalone',
+          };
+        });
         messageBus.onRequest('headless.query', async (req: unknown) => {
           noteStandaloneOwnerActivity();
           const { kind, reset } = req as { kind?: string; reset?: boolean };
@@ -2113,6 +2123,7 @@ function createEmbeddedTerminalBackendFromConfig(
     if (!task) {
       throw new Error(`Task ${taskId} not found`);
     }
+    const entryLineage = captureTaskLineage(taskId, orchestrator);
     const savedError = task.execution.error ?? '';
     const recoveryRoute = selectFailureRecoveryRoute(task, savedError);
     logger.info(
@@ -2121,6 +2132,7 @@ function createEmbeddedTerminalBackendFromConfig(
     );
 
     if (source === 'auto-fix') {
+      assertLineageCurrent(entryLineage, orchestrator, activeMutationContext?.signal);
       const attemptsBefore = task?.execution.autoFixAttempts ?? 0;
       const attemptsAfter = attemptsBefore + 1;
       persistence.updateTask(taskId, {

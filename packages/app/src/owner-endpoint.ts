@@ -14,7 +14,10 @@
 
 import type { MessageBus } from '@invoker/transport';
 
-import { tryPingHeadlessOwner } from './headless-delegation.js';
+import {
+  tryPingHeadlessOwner,
+  tryPingStandaloneHeadlessOwner,
+} from './headless-delegation.js';
 
 // ── Contract types ──────────────────────────────────────────
 
@@ -54,6 +57,28 @@ export async function discoverOwner(
   timeoutMs?: number,
 ): Promise<OwnerDiscoveryResult> {
   const raw = await tryPingHeadlessOwner(messageBus, timeoutMs);
+  return ownerInfoFromPing(raw);
+}
+
+/**
+ * Discover a standalone-capable owner without being masked by a GUI process
+ * that happens to own the IPC server socket. Standalone owners register this
+ * dedicated probe channel; GUI owners intentionally do not.
+ */
+export async function discoverStandaloneOwner(
+  messageBus: MessageBus,
+  timeoutMs?: number,
+): Promise<OwnerDiscoveryResult> {
+  const standaloneRaw = await tryPingStandaloneHeadlessOwner(messageBus, timeoutMs);
+  if (standaloneRaw) {
+    return ownerInfoFromPing(standaloneRaw);
+  }
+  const raw = await tryPingHeadlessOwner(messageBus, timeoutMs);
+  const owner = ownerInfoFromPing(raw);
+  return isStandaloneCapable(owner) ? owner : null;
+}
+
+function ownerInfoFromPing(raw: { ownerId?: string; mode?: string } | null): OwnerDiscoveryResult {
   if (!raw) return null;
   return {
     ownerId: raw.ownerId ?? '',

@@ -2589,6 +2589,12 @@ export class Orchestrator {
     const task = this.stateGetTask(taskId);
     if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
     if (!this.taskMatchesLineageExpectation(task, expectedLineage)) {
+      this.logger.info('[beginConflictResolution] discarded stale start', {
+        taskId,
+        selectedAttemptId: task.execution.selectedAttemptId,
+        generation: task.execution.generation ?? 0,
+        expectedLineage,
+      });
       throw new Error(`Task ${taskId} lineage is stale for conflict resolution start`);
     }
     if (task.status !== 'failed') throw new Error(`Task ${taskId} is not failed (status: ${task.status})`);
@@ -2645,6 +2651,12 @@ export class Orchestrator {
     const task = this.stateGetTask(taskId);
     if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
     if (!this.taskMatchesLineageExpectation(task, opts.expectedLineage)) {
+      this.logger.info('[beginAutoFixSession] discarded stale start', {
+        taskId,
+        selectedAttemptId: task.execution.selectedAttemptId,
+        generation: task.execution.generation ?? 0,
+        expectedLineage: opts.expectedLineage,
+      });
       throw new Error(`Task ${taskId} lineage is stale for auto-fix start`);
     }
     if (
