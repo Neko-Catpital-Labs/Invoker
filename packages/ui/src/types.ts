@@ -165,7 +165,7 @@ export interface WorkflowMeta {
   baseBranch?: string;
   featureBranch?: string;
   onFinish?: string;
-  mergeMode?: string;
+  mergeMode?: MergeMode;
   repoUrl?: string;
   intermediateRepoUrl?: string;
   reviewProvider?: string;
@@ -186,6 +186,8 @@ export type WorkflowStatus =
   | 'review_ready'
   | 'awaiting_approval'
   | 'stale';
+
+export type MergeMode = 'manual' | 'automatic' | 'external_review';
 
 // ── Workflow Status ─────────────────────────────────────────
 
@@ -259,7 +261,7 @@ export interface PlanDefinition {
   tasks: PlanTask[];
   onFinish?: 'none' | 'merge' | 'pull_request';
   baseBranch?: string;
-  mergeMode?: 'manual' | 'automatic' | 'external_review';
+  mergeMode?: MergeMode;
   externalDependencies?: ExternalDependency[];
 }
 
