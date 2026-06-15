@@ -19,7 +19,7 @@ import { TaskStateMachine } from './state-machine.js';
 import { ResponseHandler } from './response-handler.js';
 import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
-import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, Attempt, ExternalDependency, ExternalDependencyChange, TaskStatus, TaskHeartbeatSource } from '@invoker/workflow-graph';
+import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, Attempt, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency, TaskStatus, TaskHeartbeatSource } from '@invoker/workflow-graph';
 import type { RunnerKind } from '@invoker/workflow-graph';
 import { createTaskState, createAttempt } from '@invoker/workflow-graph';
 import type { WorkflowDerivedStatus } from '@invoker/workflow-graph';
@@ -219,8 +219,9 @@ export interface OrchestratorPersistence {
     mergeMode?: 'manual' | 'automatic' | 'external_review';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
+    detachedExternalDependencies?: DetachedExternalDependency[];
   }): void;
-  updateWorkflow?(workflowId: string, changes: { updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review'; externalDependencies?: ExternalDependency[]; externalDependencyChanges?: ExternalDependencyChange[] }): void;
+  updateWorkflow?(workflowId: string, changes: { updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review'; externalDependencies?: ExternalDependency[]; externalDependencyChanges?: ExternalDependencyChange[]; detachedExternalDependencies?: DetachedExternalDependency[] }): void;
   saveTask(workflowId: string, task: TaskState): void;
   updateTask(taskId: string, changes: TaskStateChanges): void;
   logEvent?(taskId: string, eventType: string, payload?: unknown): void;
@@ -235,6 +236,7 @@ export interface OrchestratorPersistence {
     mergeMode?: 'manual' | 'automatic' | 'external_review';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
+    detachedExternalDependencies?: DetachedExternalDependency[];
     generation?: number;
   }>;
   loadTasks(workflowId: string): TaskState[];
@@ -250,6 +252,7 @@ export interface OrchestratorPersistence {
       mergeMode?: 'manual' | 'automatic' | 'external_review';
       externalDependencies?: ExternalDependency[];
       externalDependencyChanges?: ExternalDependencyChange[];
+      detachedExternalDependencies?: DetachedExternalDependency[];
       generation?: number;
     }>;
     tasks: TaskState[];
@@ -280,6 +283,7 @@ export interface OrchestratorPersistence {
     mergeMode?: 'manual' | 'automatic' | 'external_review';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
+    detachedExternalDependencies?: DetachedExternalDependency[];
   } | undefined;
   /** Delete a single workflow and its tasks from the DB. */
   deleteWorkflow?(workflowId: string): void;
@@ -4944,9 +4948,37 @@ export class Orchestrator {
         changedAt: now,
       });
     }
+
+    // Preserve read-only provenance for the dependencies this detach removes.
+    // Active `externalDependencies` are dropped above so scheduling no longer
+    // waits on the upstream, but the lineage is recorded here so the UI can
+    // distinguish a detached edge from a genuinely-independent workflow.
+    // Dedup by upstream identity (workflowId + taskId + requiredStatus +
+    // gatePolicy) so repeated detach attempts or sync/reload cycles never
+    // append the same provenance entry twice.
+    const existingProvenance = targetWorkflow?.detachedExternalDependencies ?? [];
+    const provenanceKey = (dep: { workflowId: string; taskId?: string; requiredStatus: 'completed'; gatePolicy?: 'completed' | 'review_ready' }) =>
+      `${dep.workflowId} ${dep.taskId?.trim() ?? ''} ${dep.requiredStatus} ${dep.gatePolicy ?? ''}`;
+    const seenProvenance = new Set(existingProvenance.map(provenanceKey));
+    const detachedProvenance: DetachedExternalDependency[] = [...existingProvenance];
+    for (const dep of removedDeps) {
+      const key = provenanceKey(dep);
+      if (seenProvenance.has(key)) continue;
+      seenProvenance.add(key);
+      const entry: DetachedExternalDependency = {
+        workflowId: dep.workflowId,
+        ...(dep.taskId?.trim() ? { taskId: dep.taskId.trim() } : {}),
+        requiredStatus: dep.requiredStatus,
+        ...(dep.gatePolicy ? { gatePolicy: dep.gatePolicy } : {}),
+        detachedAt: now,
+      };
+      detachedProvenance.push(entry);
+    }
+
     this.taskRepository.updateWorkflow(workflowId, {
       externalDependencies: nextDeps.length > 0 ? nextDeps : undefined,
       externalDependencyChanges: dependencyChanges,
+      detachedExternalDependencies: detachedProvenance.length > 0 ? detachedProvenance : undefined,
     });
 
     const eventTask = this.getMergeNode(workflowId) ?? targetTasks[0];
