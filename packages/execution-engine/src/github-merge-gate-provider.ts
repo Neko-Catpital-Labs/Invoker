@@ -32,17 +32,22 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
 
     await this.pushFeatureBranch(cwd, featureBranch);
 
+    const targetOwner = targetRepo.split('/')[0];
     const listOutput = await this.exec('gh', [
-      'pr', 'list',
-      '--repo', targetRepo,
-      '--head', ghHead,
-      '--state', 'open',
-      '--json', 'url,number',
-      '--limit', '1',
+      'api', `repos/${targetRepo}/pulls`,
+      '--method', 'GET',
+      '-f', 'state=open',
+      '-f', `head=${targetOwner}:${ghHead}`,
+      '-f', 'per_page=1',
     ], cwd);
     console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview listOutput=${listOutput}`);
 
-    const existing = JSON.parse(listOutput) as { url: string; number: number }[];
+    const existing = (JSON.parse(listOutput) as { html_url?: string; url?: string; number: number }[])
+      .map((pr) => ({
+        url: pr.html_url ?? pr.url,
+        number: pr.number,
+      }))
+      .filter((pr): pr is { url: string; number: number } => typeof pr.url === 'string' && pr.url.length > 0);
     console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview existing=${existing}`);
 
     if (existing.length > 0) {

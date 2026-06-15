@@ -44,7 +44,17 @@ describe('GitHubMergeGateProvider', () => {
           return mockSpawnResult('https://github.com/Neko-Catpital-Labs/Invoker.git', 0);
         }
         if (cmd === 'git') return mockSpawnResult('', 0);
-        if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'list') return mockSpawnResult('[]', 0);
+        if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'list') {
+          return mockSpawnResult('', 1, 'GraphQL: API rate limit already exceeded');
+        }
+        if (
+          cmd === 'gh' &&
+          args[0] === 'api' &&
+          args[1] === 'repos/Neko-Catpital-Labs/Invoker/pulls' &&
+          args.includes('GET')
+        ) {
+          return mockSpawnResult('[]', 0);
+        }
         return mockSpawnResult('{"html_url":"https://github.com/Neko-Catpital-Labs/Invoker/pull/42","number":42}', 0);
       }) as any);
 
@@ -59,12 +69,11 @@ describe('GitHubMergeGateProvider', () => {
       expect(spawnMock).toHaveBeenCalledWith(
         'gh',
         [
-          'pr', 'list',
-          '--repo', 'Neko-Catpital-Labs/Invoker',
-          '--head', 'feature/test',
-          '--state', 'open',
-          '--json', 'url,number',
-          '--limit', '1',
+          'api', 'repos/Neko-Catpital-Labs/Invoker/pulls',
+          '--method', 'GET',
+          '-f', 'state=open',
+          '-f', 'head=Neko-Catpital-Labs:feature/test',
+          '-f', 'per_page=1',
         ],
         expect.anything(),
       );
@@ -92,7 +101,14 @@ describe('GitHubMergeGateProvider', () => {
           return mockSpawnResult('https://github.com/owner/repo.git', 0);
         }
         if (cmd === 'git') return mockSpawnResult('', 0);
-        if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'list') return mockSpawnResult('[]', 0);
+        if (
+          cmd === 'gh' &&
+          args[0] === 'api' &&
+          args[1] === 'repos/owner/repo/pulls' &&
+          args.includes('GET')
+        ) {
+          return mockSpawnResult('[]', 0);
+        }
         return mockSpawnResult('{"html_url":"https://github.com/owner/repo/pull/42","number":42}', 0);
       }) as any);
 
@@ -113,12 +129,11 @@ describe('GitHubMergeGateProvider', () => {
       expect(spawnMock).toHaveBeenCalledWith(
         'gh',
         [
-          'pr', 'list',
-          '--repo', 'owner/repo',
-          '--head', 'feature/test',
-          '--state', 'open',
-          '--json', 'url,number',
-          '--limit', '1',
+          'api', 'repos/owner/repo/pulls',
+          '--method', 'GET',
+          '-f', 'state=open',
+          '-f', 'head=owner:feature/test',
+          '-f', 'per_page=1',
         ],
         expect.anything(),
       );
@@ -158,7 +173,14 @@ describe('GitHubMergeGateProvider', () => {
           return mockSpawnResult('', 0);
         }
         if (cmd === 'git' && args[0] === 'fetch') return mockSpawnResult('', 0);
-        if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'list') return mockSpawnResult('[]', 0);
+        if (
+          cmd === 'gh' &&
+          args[0] === 'api' &&
+          args[1] === 'repos/owner/repo/pulls' &&
+          args.includes('GET')
+        ) {
+          return mockSpawnResult('[]', 0);
+        }
         return mockSpawnResult('{"html_url":"https://github.com/owner/repo/pull/42","number":42}', 0);
       }) as any);
 
@@ -187,8 +209,13 @@ describe('GitHubMergeGateProvider', () => {
           return mockSpawnResult('https://github.com/owner/repo.git', 0);
         }
         if (cmd === 'git') return mockSpawnResult('', 0);
-        if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'list') {
-          return mockSpawnResult('[{"url":"https://github.com/owner/repo/pull/10","number":10}]', 0);
+        if (
+          cmd === 'gh' &&
+          args[0] === 'api' &&
+          args[1] === 'repos/owner/repo/pulls' &&
+          args.includes('GET')
+        ) {
+          return mockSpawnResult('[{"html_url":"https://github.com/owner/repo/pull/10","number":10}]', 0);
         }
         return mockSpawnResult('', 0);
       }) as any);
@@ -225,7 +252,14 @@ describe('GitHubMergeGateProvider', () => {
           throw new Error('remote lookup should not run when env target is set');
         }
         if (cmd === 'git') return mockSpawnResult('', 0);
-        if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'list') return mockSpawnResult('[]', 0);
+        if (
+          cmd === 'gh' &&
+          args[0] === 'api' &&
+          args[1] === 'repos/Neko-Catpital-Labs/Invoker/pulls' &&
+          args.includes('GET')
+        ) {
+          return mockSpawnResult('[]', 0);
+        }
         return mockSpawnResult('{"html_url":"https://github.com/Neko-Catpital-Labs/Invoker/pull/99","number":99}', 0);
       }) as any);
 
