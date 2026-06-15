@@ -182,6 +182,66 @@ describe('loadConfig', () => {
     expect(config.remoteTargets?.ci1?.maxConcurrentTasks).toBe(2);
   });
 
+  it('reads a static remote target when type is omitted', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({
+        remoteTargets: {
+          ci1: {
+            host: '10.0.0.1',
+            user: 'invoker',
+            sshKeyPath: '/tmp/key',
+            port: 2222,
+            managedWorkspaces: true,
+          },
+        },
+      }),
+    );
+    const config = loadConfig();
+    const target = config.remoteTargets?.ci1;
+    expect(target).toBeDefined();
+    // No `type` means a static SSH target.
+    expect((target as { type?: string }).type).toBeUndefined();
+    expect(target).toMatchObject({
+      host: '10.0.0.1',
+      user: 'invoker',
+      sshKeyPath: '/tmp/key',
+      port: 2222,
+      managedWorkspaces: true,
+    });
+  });
+
+  it('reads a typed crabbox remote target with lease config', () => {
+    const crabbox = {
+      type: 'crabbox',
+      crabboxCommand: 'crabbox',
+      provider: 'fly',
+      class: 'performance-2x',
+      ttl: '1h',
+      idleTimeout: '20m',
+      network: 'invoker-net',
+      target: 'ubuntu-22.04',
+      stopAfter: 'idle',
+      keepOnFailure: true,
+      sshKeyPath: '/tmp/key',
+      warmupArgs: ['--warm'],
+      statusArgs: ['--json'],
+      stopArgs: ['--force'],
+    };
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ remoteTargets: { box1: crabbox } }),
+    );
+    const config = loadConfig();
+    const target = config.remoteTargets?.box1;
+    expect(target?.type).toBe('crabbox');
+    if (target?.type !== 'crabbox') throw new Error('expected crabbox target');
+    expect(target).toEqual(crabbox);
+    expect(target.crabboxCommand).toBe('crabbox');
+    expect(target.keepOnFailure).toBe(true);
+    expect(target.warmupArgs).toEqual(['--warm']);
+  });
+
   it('reads executionPools from user config', () => {
     writeFileSync(
       join(fakeHome, '.invoker', 'config.json'),
