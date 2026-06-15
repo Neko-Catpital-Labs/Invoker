@@ -71,7 +71,7 @@ import {
   resolveInvokerIpcSocketPath,
   resolveRepoRoot,
 } from '@invoker/contracts';
-import type { WorkResponse } from '@invoker/contracts';
+import type { TaskGraphEvent, WorkResponse } from '@invoker/contracts';
 import { SQLiteAdapter, ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
 import { IpcBus, Channels } from '@invoker/transport';
 import {
@@ -1828,8 +1828,8 @@ function createEmbeddedTerminalBackendFromConfig(
   };
   const pendingOutputBuffers = new Map<string, string[]>();
   const outputFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  const pendingUiTaskDeltas: TaskDelta[] = [];
-  let uiTaskDeltaFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  const pendingUiTaskGraphEvents: TaskGraphEvent[] = [];
+  let uiTaskGraphEventFlushTimer: ReturnType<typeof setTimeout> | null = null;
   let workflowMetadataInvalidator: WorkflowMetadataInvalidator | null = null;
   let workflowMetadataPublisher: CoalescedWorkflowMetadataPublisher | null = null;
   let lastKnownWorkflowCount = 0;
@@ -1969,32 +1969,32 @@ function createEmbeddedTerminalBackendFromConfig(
     outputFlushTimers.set(taskId, timer);
   };
 
-  const flushUiTaskDeltas = (): void => {
-    if (uiTaskDeltaFlushTimer) {
-      clearTimeout(uiTaskDeltaFlushTimer);
-      uiTaskDeltaFlushTimer = null;
+  const flushUiTaskGraphEvents = (): void => {
+    if (uiTaskGraphEventFlushTimer) {
+      clearTimeout(uiTaskGraphEventFlushTimer);
+      uiTaskGraphEventFlushTimer = null;
     }
-    if (!mainWindow || mainWindow.isDestroyed() || !uiInteractive || pendingUiTaskDeltas.length === 0) {
-      pendingUiTaskDeltas.length = 0;
+    if (!mainWindow || mainWindow.isDestroyed() || !uiInteractive || pendingUiTaskGraphEvents.length === 0) {
+      pendingUiTaskGraphEvents.length = 0;
       return;
     }
-    const batch = pendingUiTaskDeltas.splice(0, Math.min(pendingUiTaskDeltas.length, 250));
-    if (pendingUiTaskDeltas.length > 0) {
-      uiTaskDeltaFlushTimer = setTimeout(() => flushUiTaskDeltas(), 0);
-      uiTaskDeltaFlushTimer.unref?.();
+    const batch = pendingUiTaskGraphEvents.splice(0, Math.min(pendingUiTaskGraphEvents.length, 250));
+    if (pendingUiTaskGraphEvents.length > 0) {
+      uiTaskGraphEventFlushTimer = setTimeout(() => flushUiTaskGraphEvents(), 0);
+      uiTaskGraphEventFlushTimer.unref?.();
     }
     if (batch.length >= 200) {
       uiPerfStats.largeTaskDeltaBatches += 1;
       uiPerfStats.maxTaskDeltaBatchSize = Math.max(uiPerfStats.maxTaskDeltaBatchSize, batch.length);
-      logger.info(`large task-delta batch chunked size=${batch.length} remaining=${pendingUiTaskDeltas.length}`, {
+      logger.info(`large task-graph-event batch chunked size=${batch.length} remaining=${pendingUiTaskGraphEvents.length}`, {
         module: 'ui-backpressure',
       });
     }
     if (batch.length === 1) {
-      mainWindow.webContents.send('invoker:task-delta', batch[0]);
+      mainWindow.webContents.send('invoker:task-graph-event', batch[0]);
       return;
     }
-    mainWindow.webContents.send('invoker:task-delta-batch', batch);
+    mainWindow.webContents.send('invoker:task-graph-event-batch', batch);
   };
 
   const taskDeltaStream = createTaskDeltaStreamSequence();
@@ -2004,16 +2004,23 @@ function createEmbeddedTerminalBackendFromConfig(
     workflowMetadataInvalidator?.markFromTaskDelta(delta);
   };
 
-  const enqueueTaskDeltaForRenderer = (delta: TaskDelta): void => {
+  const enqueueTaskGraphEventForRenderer = (event: TaskGraphEvent): void => {
     if (!mainWindow || mainWindow.isDestroyed() || !uiInteractive) {
       return;
     }
-    pendingUiTaskDeltas.push(taskDeltaStream.stamp(delta));
-    if (uiTaskDeltaFlushTimer) {
+    pendingUiTaskGraphEvents.push(event);
+    if (uiTaskGraphEventFlushTimer) {
       return;
     }
-    uiTaskDeltaFlushTimer = setTimeout(() => flushUiTaskDeltas(), 25);
-    uiTaskDeltaFlushTimer.unref?.();
+    uiTaskGraphEventFlushTimer = setTimeout(() => flushUiTaskGraphEvents(), 25);
+    uiTaskGraphEventFlushTimer.unref?.();
+  };
+
+  const enqueueTaskDeltaForRenderer = (delta: TaskDelta): void => {
+    enqueueTaskGraphEventForRenderer({
+      type: 'delta',
+      delta: taskDeltaStream.stamp(delta),
+    });
   };
 
   const sendTaskDeltaToRenderer = (delta: TaskDelta): void => {
