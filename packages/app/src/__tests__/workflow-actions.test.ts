@@ -2799,3 +2799,75 @@ describe('finalizeAppliedFix lineage guard', () => {
     expect(result).toEqual({ autoApproved: false, started: [] });
   });
 });
+
+describe('fixWithAgentAction review-gate CI context', () => {
+  function makeReviewGateOrchestrator(execution: Record<string, unknown>) {
+    return {
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        config: { workflowId: 'wf-1' },
+        execution: { error: 'ci failed', ...execution },
+      })),
+      beginConflictResolution: vi.fn(() => ({ savedError: 'ci failed' })),
+      setFixAwaitingApproval: vi.fn(),
+      revertConflictResolution: vi.fn(),
+    };
+  }
+
+  it('rejects a stale review-gate context before mutating', async () => {
+    const orchestrator = makeReviewGateOrchestrator({
+      selectedAttemptId: 'attempt-2',
+      generation: 3,
+      reviewId: 'review-1',
+      branch: 'experiment/foo',
+    });
+    const persistence = { getTaskOutput: vi.fn(() => 'output'), appendTaskOutput: vi.fn() };
+    const taskExecutor = { fixWithAgent: vi.fn(), resolveConflict: vi.fn() };
+
+    await expect(fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    }, {
+      // selectedAttemptId moved on from attempt-1 → attempt-2 since CI failed
+      reviewGateContext: { reviewId: 'review-1', generation: 3, selectedAttemptId: 'attempt-1', branch: 'experiment/foo' },
+    })).rejects.toThrow(StaleLineageError);
+
+    expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
+    expect(orchestrator.beginConflictResolution).not.toHaveBeenCalled();
+  });
+
+  it('fixes with the carried fix context when the review-gate context is current', async () => {
+    const orchestrator = makeReviewGateOrchestrator({
+      selectedAttemptId: 'attempt-1',
+      generation: 3,
+      reviewId: 'review-1',
+      branch: 'experiment/foo',
+    });
+    const persistence = { getTaskOutput: vi.fn(() => 'output'), appendTaskOutput: vi.fn() };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn(),
+    };
+
+    const result = await fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    }, {
+      agentName: 'claude',
+      reviewGateContext: {
+        reviewId: 'review-1',
+        generation: 3,
+        selectedAttemptId: 'attempt-1',
+        branch: 'experiment/foo',
+        fixContext: 'make the failed checks pass',
+      },
+    });
+
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith(
+      'task-a', 'output', 'claude', 'ci failed', 'make the failed checks pass',
+    );
+    expect(result).toEqual({ kind: 'fixWithAgent', autoApproved: false, started: [] });
+  });
+});
