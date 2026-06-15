@@ -19,7 +19,7 @@ export interface UseTasksResult {
   tasks: Map<string, TaskState>;
   workflows: Map<string, WorkflowMeta>;
   clearTasks: () => void;
-  refreshTasks: (forceRefresh?: boolean) => void;
+  refreshTasks: (forceRefresh?: boolean) => Promise<void>;
 }
 
 export function useTasks(): UseTasksResult {
@@ -75,11 +75,11 @@ export function useTasks(): UseTasksResult {
   const lastSeenSequenceRef = useRef<number>(bootstrapState?.streamSequence ?? 0);
   const isResyncInFlightRef = useRef<boolean>(false);
 
-  const fetchAll = useCallback((forceRefresh = false) => {
-    if (typeof window === 'undefined' || !window.invoker) return;
+  const fetchAll = useCallback((forceRefresh = false): Promise<void> => {
+    if (typeof window === 'undefined' || !window.invoker) return Promise.resolve();
     const gen = ++getTasksGenerationRef.current;
     const requestedAt = performance.now();
-    window.invoker.getTasks(forceRefresh).then((result) => {
+    const request = window.invoker.getTasks(forceRefresh).then((result) => {
       const requestDurationMs = performance.now() - requestedAt;
       if (gen !== getTasksGenerationRef.current) {
         return;
@@ -130,6 +130,7 @@ export function useTasks(): UseTasksResult {
       }
     });
     window.invoker.checkPrStatuses?.();
+    return request.then(() => undefined);
   }, []);
 
   useEffect(() => {

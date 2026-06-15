@@ -356,6 +356,7 @@ export function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const graphSurfaceRef = useRef<HTMLDivElement>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [graphRefreshSequence, setGraphRefreshSequence] = useState(0);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
   const [stickySelectedWorkflow, setStickySelectedWorkflow] = useState<WorkflowMeta | null>(null);
   const [workflowSelectionDismissed, setWorkflowSelectionDismissed] = useState(false);
@@ -1330,9 +1331,9 @@ export function App() {
     }
   }, [contextMenu, focusKeyboardRegion, workflowContextMenu]);
 
-  const handleRefresh = useCallback(() => {
-    refreshTasks(true);
-    window.invoker?.checkPrStatuses?.();
+  const handleRefresh = useCallback(async () => {
+    await refreshTasks(true);
+    setGraphRefreshSequence((sequence) => sequence + 1);
   }, [refreshTasks]);
 
   // ── Plan loading ──────────────────────────────────────────
@@ -1816,6 +1817,7 @@ export function App() {
               ) : (
                 <>
                   <WorkflowGraph
+                    key={`workflow-graph-${graphRefreshSequence}`}
                     tasks={tasks}
                     workflows={workflows}
                     selectedWorkflowId={selectedWorkflow?.id ?? null}
@@ -1841,6 +1843,7 @@ export function App() {
                         className={`h-full outline-none ${keyboardRegion === 'taskGraph' ? 'ring-2 ring-inset ring-blue-300/60' : ''}`}
                       >
                         <TaskDAG
+                          key={`task-dag-${selectedWorkflow.id}-${graphRefreshSequence}`}
                           tasks={miniDagTasks}
                           workflows={selectedTaskDagWorkflows}
                           selectedTaskId={selectedTaskId}
