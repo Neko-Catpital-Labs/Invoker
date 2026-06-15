@@ -88,6 +88,10 @@ if [ "$1" = "--headless" ]; then
       exit 1
     fi
   fi
+  if [ "${2:-}" = "retry-tasks" ]; then
+    shift 2
+    exec bash "$REPO_ROOT/scripts/retry-tasks-by-status.sh" "$@"
+  fi
 
   # Build app and dependencies if headless entry point is missing (e.g. fresh worktree).
   if [ ! -f "$REPO_ROOT/packages/app/dist/headless-client.js" ]; then
