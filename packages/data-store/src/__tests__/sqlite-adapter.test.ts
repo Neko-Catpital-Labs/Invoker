@@ -1074,6 +1074,41 @@ describe('SQLiteAdapter', () => {
       expect(loaded!.rollup?.countsByStatus.pending).toBe(0);
     });
 
+    it('round-trips detachedExternalDependencies provenance via save and update', () => {
+      const provenance = [
+        {
+          workflowId: 'wf-upstream',
+          taskId: '__merge__',
+          requiredStatus: 'completed' as const,
+          gatePolicy: 'review_ready' as const,
+          detachedAt: '2026-06-15T00:00:00.000Z',
+        },
+      ];
+      adapter.saveWorkflow({ ...testWorkflow, detachedExternalDependencies: provenance });
+      expect(adapter.loadWorkflow('wf-1')!.detachedExternalDependencies).toEqual(provenance);
+
+      // Update path appends a second detached edge.
+      const next = [
+        ...provenance,
+        {
+          workflowId: 'wf-upstream-2',
+          requiredStatus: 'completed' as const,
+          gatePolicy: 'completed' as const,
+          detachedAt: '2026-06-15T01:00:00.000Z',
+        },
+      ];
+      adapter.updateWorkflow('wf-1', { detachedExternalDependencies: next });
+      expect(adapter.loadWorkflow('wf-1')!.detachedExternalDependencies).toEqual(next);
+
+      // Clearing with an explicit undefined nulls the column.
+      adapter.updateWorkflow('wf-1', { detachedExternalDependencies: undefined });
+      expect(adapter.loadWorkflow('wf-1')!.detachedExternalDependencies).toBeUndefined();
+    });
+
+    it('has a detached_external_dependencies column', () => {
+      expect(workflowColumns(adapter)).toContain('detached_external_dependencies');
+    });
+
     it('derives workflow status and rollup details from task rows', () => {
       adapter.saveWorkflow({ ...testWorkflow, status: 'completed' });
       adapter.saveTask('wf-1', makeTask('t1', {

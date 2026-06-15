@@ -4,7 +4,7 @@ import { rid, sid } from './scoped-test-helpers.js';
 import { Orchestrator, PlanConflictError, descriptionForMergeNode } from '../orchestrator.js';
 import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
 import { computeWorkflowRollup } from '../task-types.js';
-import type { TaskState, TaskDelta, TaskStateChanges, Attempt, ExternalDependency, ExternalDependencyChange } from '../task-types.js';
+import type { TaskState, TaskDelta, TaskStateChanges, Attempt, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency } from '../task-types.js';
 import type { Logger, WorkResponse } from '@invoker/contracts';
 
 // ── In-Memory Persistence Mock ──────────────────────────────
@@ -22,6 +22,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
     mergeMode?: 'manual' | 'automatic' | 'external_review';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
+    detachedExternalDependencies?: DetachedExternalDependency[];
   }>();
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
   private attempts = new Map<string, Attempt[]>();
@@ -62,6 +63,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
       mergeMode?: 'manual' | 'automatic' | 'external_review';
       externalDependencies?: ExternalDependency[];
       externalDependencyChanges?: ExternalDependencyChange[];
+      detachedExternalDependencies?: DetachedExternalDependency[];
     },
   ): void {
     const wf = this.workflows.get(workflowId);
@@ -84,6 +86,9 @@ class InMemoryPersistence implements OrchestratorPersistence {
     if (wf && 'externalDependencyChanges' in changes) {
       wf.externalDependencyChanges = changes.externalDependencyChanges;
     }
+    if (wf && 'detachedExternalDependencies' in changes) {
+      wf.detachedExternalDependencies = changes.detachedExternalDependencies;
+    }
   }
 
   loadWorkflow(workflowId: string): {
@@ -93,6 +98,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
     mergeMode?: 'manual' | 'automatic' | 'external_review';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
+    detachedExternalDependencies?: DetachedExternalDependency[];
   } | undefined {
     const wf = this.workflows.get(workflowId);
     if (!wf) return undefined;
@@ -1399,6 +1405,95 @@ describe('Orchestrator', () => {
         },
       ]);
       expect(orchestrator.getTask(childTaskId)!.status).toBe('pending');
+    });
+
+    it('records read-only provenance for the detached edge while removing it from active scheduling', () => {
+      orchestrator.loadPlan({
+        name: 'prov-upstream',
+        baseBranch: 'master',
+        featureBranch: 'feature/prov-upstream',
+        tasks: [{ id: 'verify-prov', description: 'upstream prerequisite' }],
+      });
+      const upstreamWfId = sid(orchestrator, 0, 'verify-prov').split('/')[0]!;
+
+      orchestrator.loadPlan({
+        name: 'prov-target',
+        baseBranch: 'feature/prov-upstream',
+        featureBranch: 'feature/prov-target',
+        tasks: [
+          {
+            id: 'prov-wait',
+            description: 'target waits on upstream',
+            externalDependencies: [{ workflowId: upstreamWfId, gatePolicy: 'completed' }],
+          },
+        ],
+      });
+      const targetWfId = sid(orchestrator, 1, 'prov-wait').split('/')[0]!;
+
+      orchestrator.detachWorkflow(targetWfId, upstreamWfId);
+
+      const wf = persistence.loadWorkflow(targetWfId)!;
+      // Active dependency removed so scheduling no longer gates on the upstream.
+      expect(wf.externalDependencies).toBeUndefined();
+      // Provenance preserves the removed edge with a timestamp.
+      expect(wf.detachedExternalDependencies).toEqual([
+        {
+          workflowId: upstreamWfId,
+          taskId: '__merge__',
+          requiredStatus: 'completed',
+          gatePolicy: 'completed',
+          detachedAt: expect.any(String),
+        },
+      ]);
+      // Audit events remain intact alongside the new provenance.
+      expect(
+        persistence.events.some((e) => e.eventType === 'task.external_dependency_changed'),
+      ).toBe(true);
+      expect(
+        persistence.events.some((e) => e.eventType === 'workflow.external_dependency_changed'),
+      ).toBe(true);
+    });
+
+    it('does not duplicate provenance across a re-add + detach (reload/sync) cycle', () => {
+      orchestrator.loadPlan({
+        name: 'dup-upstream',
+        baseBranch: 'master',
+        featureBranch: 'feature/dup-upstream',
+        tasks: [{ id: 'verify-dup', description: 'upstream prerequisite' }],
+      });
+      const upstreamWfId = sid(orchestrator, 0, 'verify-dup').split('/')[0]!;
+
+      orchestrator.loadPlan({
+        name: 'dup-target',
+        baseBranch: 'feature/dup-upstream',
+        featureBranch: 'feature/dup-target',
+        tasks: [
+          {
+            id: 'dup-wait',
+            description: 'target waits on upstream',
+            externalDependencies: [{ workflowId: upstreamWfId, gatePolicy: 'completed' }],
+          },
+        ],
+      });
+      const targetWfId = sid(orchestrator, 1, 'dup-wait').split('/')[0]!;
+
+      orchestrator.detachWorkflow(targetWfId, upstreamWfId);
+      expect(persistence.loadWorkflow(targetWfId)!.detachedExternalDependencies).toHaveLength(1);
+
+      // Simulate a reload/sync that re-surfaces the same active edge (e.g. the
+      // upstream re-completes), keeping the existing provenance, then detach again.
+      persistence.updateWorkflow(targetWfId, {
+        externalDependencies: [
+          { workflowId: upstreamWfId, taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'completed' },
+        ],
+      });
+      orchestrator.detachWorkflow(targetWfId, upstreamWfId);
+
+      const wf = persistence.loadWorkflow(targetWfId)!;
+      expect(wf.externalDependencies).toBeUndefined();
+      // Identical upstream edge ⇒ no duplicate provenance entry.
+      expect(wf.detachedExternalDependencies).toHaveLength(1);
+      expect(wf.detachedExternalDependencies![0]!.workflowId).toBe(upstreamWfId);
     });
   });
 

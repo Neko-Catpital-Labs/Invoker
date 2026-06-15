@@ -103,6 +103,23 @@ export interface ExternalDependencyChange {
   readonly changedBy?: string;
 }
 
+/**
+ * Read-only provenance for an external dependency that `detachWorkflow`
+ * removed from a workflow's active `externalDependencies`. Scheduling never
+ * reads these — they exist so the workflow graph can tell a genuinely
+ * independent workflow apart from one explicitly detached from an upstream
+ * stack edge. Detached entries are never re-activated.
+ */
+export interface DetachedExternalDependency {
+  readonly workflowId: string;
+  /** Optional task selector within the upstream workflow (omitted = its merge gate). */
+  readonly taskId?: string;
+  readonly requiredStatus: 'completed';
+  readonly gatePolicy?: 'completed' | 'review_ready';
+  /** ISO timestamp of when the dependency was detached. */
+  readonly detachedAt: string;
+}
+
 // ── Task Execution (runtime state) ─────────────────────────
 // Never copied when cloning. Reset on restart.
 
