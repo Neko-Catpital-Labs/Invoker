@@ -67,6 +67,9 @@ export function createReactFlowMock() {
             data-testid={`rf__edge-${edge.id}`}
             data-source={edge.source}
             data-target={edge.target}
+            data-kind={edge.data?.kind}
+            aria-label={edge.ariaLabel}
+            style={edge.style}
           />
         ))}
         {nodes.map((node) => {

@@ -19,6 +19,27 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
+const workflowEdgeVisual = {
+  active: {
+    stroke: 'rgba(148,163,184,0.55)',
+    strokeWidth: 2,
+    strokeDasharray: undefined,
+    label: 'Active workflow dependency',
+  },
+  detached: {
+    stroke: 'rgba(245,158,11,0.58)',
+    strokeWidth: 1.5,
+    strokeDasharray: '5 6',
+    label: 'Detached workflow lineage',
+  },
+  historical: {
+    stroke: 'rgba(245,158,11,0.5)',
+    strokeWidth: 1.5,
+    strokeDasharray: '6 6',
+    label: 'Historical workflow dependency',
+  },
+} as const;
+
 interface WorkflowGraphProps {
   tasks: Map<string, TaskState>;
   workflows: Map<string, WorkflowMeta>;
@@ -123,27 +144,30 @@ function WorkflowGraphInner({
     return nextNodes;
   }, [graph.nodes, positions, selectedWorkflowId, statusFilters]);
 
-  const edges = useMemo<Edge[]>(() => graph.edges.map((edge) => ({
-    id: `workflow:${edge.kind}:${edge.source}->${edge.target}`,
-    source: edge.source,
-    target: edge.target,
-    type: 'smoothstep',
-    animated: false,
-    style: {
-      stroke: edge.kind === 'historical' ? 'rgba(245,158,11,0.5)' : 'rgba(148,163,184,0.55)',
-      strokeWidth: edge.kind === 'historical' ? 1.5 : 2,
-      strokeDasharray: edge.kind === 'historical' ? '6 6' : undefined,
-    },
-    data: { kind: edge.kind },
-    ariaLabel: edge.kind === 'historical' ? 'Historical workflow dependency' : 'Active workflow dependency',
-    zIndex: 0,
-    markerEnd: {
-      type: MarkerType.ArrowClosed,
-      color: edge.kind === 'historical' ? 'rgba(245,158,11,0.5)' : 'rgba(148,163,184,0.55)',
-      width: 16,
-      height: 16,
-    },
-  })), [graph.edges]);
+  const edges = useMemo<Edge[]>(() => graph.edges.map((edge) => {
+    const visual = workflowEdgeVisual[edge.kind];
+    return {
+      id: `workflow:${edge.kind}:${edge.source}->${edge.target}`,
+      source: edge.source,
+      target: edge.target,
+      type: 'smoothstep',
+      animated: false,
+      style: {
+        stroke: visual.stroke,
+        strokeWidth: visual.strokeWidth,
+        strokeDasharray: visual.strokeDasharray,
+      },
+      data: { kind: edge.kind },
+      ariaLabel: visual.label,
+      zIndex: 0,
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        color: visual.stroke,
+        width: 16,
+        height: 16,
+      },
+    };
+  }), [graph.edges]);
 
   // First non-empty render fits the whole graph once. React Flow only mounts
   // when there is at least one node (the empty state short-circuits below), so

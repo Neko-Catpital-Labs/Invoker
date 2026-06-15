@@ -22,6 +22,7 @@ export function WorkflowNode({
   onContextMenu,
 }: WorkflowNodeProps): JSX.Element {
   const visual = workflowStatusVisual(workflow.status);
+  const detachedDependencyCount = workflow.detachedExternalDependencies?.length ?? 0;
 
   return (
     <div
@@ -47,6 +48,16 @@ export function WorkflowNode({
       <div className={`absolute left-0 top-0 h-full w-1 rounded-l-lg ${visual.railClass}`} />
       {isWorkflowStatusActive(workflow.status) && visual.pulse && (
         <div className={`absolute -left-1 top-1/2 h-2 w-2 -translate-y-1/2 rounded-full ${visual.railClass} animate-ping`} />
+      )}
+      {detachedDependencyCount > 0 && (
+        <span
+          data-testid={`workflow-node-${workflow.id}-detached-badge`}
+          aria-label="Detached upstream lineage"
+          title="Detached upstream lineage"
+          className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full border border-amber-500/40 bg-amber-950/50 text-[11px] font-semibold leading-none text-amber-300"
+        >
+          !
+        </span>
       )}
 
       <div className="text-[13px] font-semibold text-gray-100 truncate">{workflow.name || workflow.id}</div>
