@@ -51,7 +51,7 @@ describe('App launch (component)', () => {
   it('shows workflow status chips and terminal drawer controls in home view', () => {
     render(<App />);
     expect(screen.getByTestId('workflow-status-pill-running')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Expand terminal drawer' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Partial terminal drawer' })).toBeInTheDocument();
   });
 
   it('opens system setup from left rail settings', async () => {
