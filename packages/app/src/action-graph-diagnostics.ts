@@ -7,7 +7,7 @@ import type {
   ActivityLogEntry,
   QueueStatus,
 } from '@invoker/contracts';
-import type { TaskEvent, WorkflowMutationIntent, WorkflowMutationLease } from '@invoker/data-store';
+import type { TaskEvent, TaskLaunchDispatch, WorkflowMutationIntent, WorkflowMutationLease } from '@invoker/data-store';
 import type { Attempt, TaskState } from '@invoker/workflow-core';
 import type { Workflow } from '@invoker/data-store';
 import type { InvokerConfig } from './config.js';
@@ -35,6 +35,7 @@ export interface ActionGraphDiagnosticsInput {
   activityLogs: ActivityLogEntry[];
   stallThresholdMs: number;
   now?: Date;
+  launchDispatches?: TaskLaunchDispatch[];
 }
 
 function iso(value: Date | string | undefined): string | undefined {
@@ -211,6 +212,52 @@ export function buildActionGraphDiagnostics(input: ActionGraphDiagnosticsInput):
     });
     const source = lease.activeIntentId ? `intent:${lease.activeIntentId}` : `action:${lease.workflowId}`;
     edges.push({ id: edgeId(source, id, 'lease'), source, target: id, label: 'lease' });
+  }
+
+  for (const dispatch of input.launchDispatches ?? []) {
+    const status: ActionGraphNodeStatus =
+      dispatch.state === 'enqueued' ? 'queued'
+        : dispatch.state === 'leased' ? 'running'
+          : dispatch.state === 'completed' ? 'completed'
+            : 'failed';
+    const id = `launch-dispatch:${dispatch.id}`;
+    nodes.push({
+      id,
+      type: 'launch-dispatch',
+      label: `Launch ${dispatch.taskId}`,
+      status,
+      workflowId: dispatch.workflowId,
+      taskId: dispatch.taskId,
+      attemptId: dispatch.attemptId,
+      ownerId: dispatch.dispatchOwner,
+      priority: dispatch.priority === 'high' ? 1 : dispatch.priority === 'normal' ? 0 : -1,
+      createdAt: dispatch.enqueuedAt,
+      startedAt: dispatch.leasedAt,
+      completedAt: dispatch.completedAt,
+      leaseExpiresAt: dispatch.fencedUntil,
+      latestError: dispatch.lastError,
+      durations: {
+        queuedMs: dispatch.state === 'enqueued' ? ageMs(nowMs, dispatch.enqueuedAt) : undefined,
+        runningMs: dispatch.state === 'leased' ? ageMs(nowMs, dispatch.leasedAt) : undefined,
+        leaseExpiresInMs: dispatch.fencedUntil ? Date.parse(dispatch.fencedUntil) - nowMs : undefined,
+      },
+      details: {
+        state: dispatch.state,
+        attemptsCount: dispatch.attemptsCount,
+        generation: dispatch.generation,
+      },
+      suggestedNextAction: dispatch.state === 'enqueued'
+        ? 'The task is queued for launch, but no owner has accepted it yet.'
+        : dispatch.state === 'abandoned'
+          ? 'Inspect the launch dispatch error, then retry the task if needed.'
+          : undefined,
+    });
+    edges.push({
+      id: edgeId(id, `attempt:${dispatch.attemptId}`, 'launch'),
+      source: id,
+      target: `attempt:${dispatch.attemptId}`,
+      label: 'launch',
+    });
   }
 
   for (const task of input.tasks) {

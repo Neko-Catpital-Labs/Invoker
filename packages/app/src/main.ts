@@ -1637,6 +1637,7 @@ if (isHeadless) {
               eventsByTaskId: new Map(tasks.map((task) => [task.id, persistence.getEvents(task.id)])),
               activityLogs: persistence.getActivityLogs(0, 200),
               stallThresholdMs: resolveActionDiagnosticsStallThresholdMs(invokerConfig),
+              launchDispatches: persistence.listLaunchDispatchesByState(['enqueued', 'leased', 'abandoned']),
             });
           }
           throw new Error(`Unsupported headless query: ${String(kind)}`);
@@ -2640,23 +2641,23 @@ function createEmbeddedTerminalBackendFromConfig(
         if (Array.isArray(arg1)) return null;
         return { channel: 'headless.exec', request: { args: ['select', String(arg0), String(arg1)] } };
       case 'invoker:restart-task':
-        return { channel: 'headless.exec', request: { args: ['retry-task', String(arg0)] } };
+        return { channel: 'headless.exec', request: { args: ['retry-task', String(arg0)], noTrack: true } };
       case 'invoker:cancel-task':
-        return { channel: 'headless.exec', request: { args: ['cancel', String(arg0)] } };
+        return { channel: 'headless.exec', request: { args: ['cancel', String(arg0)], noTrack: true } };
       case 'invoker:cancel-workflow':
-        return { channel: 'headless.exec', request: { args: ['cancel-workflow', String(arg0)] } };
+        return { channel: 'headless.exec', request: { args: ['cancel-workflow', String(arg0)], noTrack: true } };
       case 'invoker:recreate-workflow':
-        return { channel: 'headless.exec', request: { args: ['recreate', String(arg0)] } };
+        return { channel: 'headless.exec', request: { args: ['recreate', String(arg0)], noTrack: true } };
       case 'invoker:recreate-task':
-        return { channel: 'headless.exec', request: { args: ['recreate-task', String(arg0)] } };
+        return { channel: 'headless.exec', request: { args: ['recreate-task', String(arg0)], noTrack: true } };
       case 'invoker:recreate-downstream':
-        return { channel: 'headless.exec', request: { args: ['recreate-downstream', String(arg0)] } };
+        return { channel: 'headless.exec', request: { args: ['recreate-downstream', String(arg0)], noTrack: true } };
       case 'invoker:retry-workflow':
-        return { channel: 'headless.exec', request: { args: ['retry', String(arg0)] } };
+        return { channel: 'headless.exec', request: { args: ['retry', String(arg0)], noTrack: true } };
       case 'invoker:rebase-retry':
-        return { channel: 'headless.exec', request: { args: ['rebase-retry', String(arg0)] } };
+        return { channel: 'headless.exec', request: { args: ['rebase-retry', String(arg0)], noTrack: true } };
       case 'invoker:rebase-recreate':
-        return { channel: 'headless.exec', request: { args: ['rebase-recreate', String(arg0)] } };
+        return { channel: 'headless.exec', request: { args: ['rebase-recreate', String(arg0)], noTrack: true } };
       case 'invoker:set-merge-branch':
         return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:set-merge-mode':
@@ -3284,6 +3285,7 @@ function createEmbeddedTerminalBackendFromConfig(
             eventsByTaskId: new Map(tasks.map((task) => [task.id, persistence.getEvents(task.id)])),
             activityLogs: persistence.getActivityLogs(0, 200),
             stallThresholdMs: resolveActionDiagnosticsStallThresholdMs(invokerConfig),
+            launchDispatches: persistence.listLaunchDispatchesByState(['enqueued', 'leased', 'abandoned']),
           });
         }
         throw new Error(`Unsupported headless query: ${String(kind)}`);
@@ -3887,6 +3889,7 @@ function createEmbeddedTerminalBackendFromConfig(
         eventsByTaskId: new Map(tasks.map((task) => [task.id, persistence.getEvents(task.id)])),
         activityLogs: persistence.getActivityLogs(0, 200),
         stallThresholdMs: resolveActionDiagnosticsStallThresholdMs(invokerConfig),
+        launchDispatches: persistence.listLaunchDispatchesByState(['enqueued', 'leased', 'abandoned']),
       });
     });
 
