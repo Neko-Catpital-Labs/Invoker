@@ -50,7 +50,7 @@ export class CodexExecutionAgent implements ExecutionAgent {
   buildCommand(fullPrompt: string): AgentCommandSpec {
     const sessionId = randomUUID();
     const args = ['exec', '--json'];
-    if (this.bypassApprovalsAndSandbox) args.push('--dangerously-bypass-approvals-and-sandbox');
+    if (this.bypassApprovalsAndSandbox) args.push(...this.buildBypassArgs());
     else if (this.fullAuto) args.push('--full-auto');
     args.push(fullPrompt);
     return { cmd: this.command, args, sessionId, fullPrompt };
@@ -59,16 +59,22 @@ export class CodexExecutionAgent implements ExecutionAgent {
   buildResumeArgs(sessionId: string): { cmd: string; args: string[] } {
     return {
       cmd: this.command,
-      args: ['resume', sessionId],
+      args: ['resume', ...this.buildBypassArgs(), sessionId],
     };
   }
 
   buildFixCommand(prompt: string): AgentCommandSpec {
     const sessionId = randomUUID();
     const args = ['exec', '--json'];
-    if (this.bypassApprovalsAndSandbox) args.push('--dangerously-bypass-approvals-and-sandbox');
+    if (this.bypassApprovalsAndSandbox) args.push(...this.buildBypassArgs());
     else if (this.fullAuto) args.push('--full-auto');
     args.push(prompt);
     return { cmd: this.command, args, sessionId };
+  }
+
+  private buildBypassArgs(): string[] {
+    return this.bypassApprovalsAndSandbox
+      ? ['--dangerously-bypass-approvals-and-sandbox']
+      : [];
   }
 }

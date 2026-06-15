@@ -29,6 +29,7 @@ import {
   retryWorkflow as sharedRetryWorkflow,
   recreateWorkflow as sharedRecreateWorkflow,
   recreateTask as sharedRecreateTask,
+  recreateDownstream as sharedRecreateDownstream,
   recreateWorkflowFromFreshBase as sharedRecreateWorkflowFromFreshBase,
   rebaseRetry as sharedRebaseRetry,
   rebaseRecreate as sharedRebaseRecreate,
@@ -177,6 +178,19 @@ export class WorkflowMutationFacade {
       }),
     );
     return this.finalizeWithTopup(started, 'facade.recreate-task', { scopedTaskIds: [taskId] });
+  }
+
+  async recreateDownstream(taskId: string): Promise<MutationResult> {
+    const started = await this.runViaCommandService(
+      'task',
+      taskId,
+      (cs) => cs.recreateDownstream(makeEnvelope('facade.recreate-downstream', 'surface', 'task', { taskId })),
+      () => sharedRecreateDownstream(taskId, { orchestrator: this.deps.orchestrator }),
+    );
+    // `started` contains only descendants (the target is preserved), so a
+    // [taskId] dispatch scope would filter every launch out.
+    const scopedTaskIds = started.map((task) => task.id);
+    return this.finalizeWithTopup(started, 'facade.recreate-downstream', { scopedTaskIds });
   }
 
   async selectExperiment(taskId: string, experimentId: string): Promise<MutationResult> {

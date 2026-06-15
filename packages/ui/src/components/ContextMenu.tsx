@@ -10,7 +10,7 @@
  * - Labeled separators for task and danger zones
  */
 
-import { useEffect, useRef, useState, useLayoutEffect } from 'react';
+import { useCallback, useEffect, useRef, useState, useLayoutEffect } from 'react';
 import type { TaskState } from '../types.js';
 import { getMenuItems, type MenuItem } from '../lib/context-menu-items.js';
 import { EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE } from '../isExperimentSpawnPivot.js';
@@ -23,9 +23,21 @@ interface ContextMenuProps {
   onReplace: (taskId: string) => void;
   onOpenTerminal: (taskId: string) => void;
   onRecreateTask?: (taskId: string) => void;
+  onRecreateDownstream?: (taskId: string) => void;
   onFix?: (taskId: string, agentName: string) => void;
   onCancel?: (taskId: string) => void;
-  onClose: () => void;
+  onClose: (options?: { restoreFocus?: boolean }) => void;
+  autoFocus?: boolean;
+}
+
+function stopMenuKeyboardEvent(e: KeyboardEvent | React.KeyboardEvent) {
+  e.preventDefault();
+  e.stopPropagation();
+  if ('stopImmediatePropagation' in e) {
+    e.stopImmediatePropagation();
+  } else {
+    e.nativeEvent.stopImmediatePropagation?.();
+  }
 }
 
 export function ContextMenu({
@@ -36,11 +48,15 @@ export function ContextMenu({
   onReplace,
   onOpenTerminal,
   onRecreateTask,
+  onRecreateDownstream,
   onFix,
   onCancel,
   onClose,
+  autoFocus = false,
 }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
+  const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const moreButtonRef = useRef<HTMLButtonElement | null>(null);
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [position, setPosition] = useState({ left: x, top: y });
   const [showMore, setShowMore] = useState(false);
@@ -51,6 +67,7 @@ export function ContextMenu({
   // Filter items based on available handlers
   const availableItems = items.filter((item) => {
     if (item.action === 'onRecreateTask' && !onRecreateTask) return false;
+    if (item.action === 'onRecreateDownstream' && !onRecreateDownstream) return false;
     if (item.action === 'onFix' && !onFix) return false;
     if (item.action === 'onCancel' && !onCancel) return false;
     return true;
@@ -60,16 +77,39 @@ export function ContextMenu({
   const dangerItems = availableItems.filter((item) => item.variant === 'danger');
   const hasMoreButton = dangerItems.length > 0 && !showMore;
   const renderedItems: MenuItem[] = showMore ? [...safeItems, ...dangerItems] : safeItems;
+  const moreButtonIndex = renderedItems.length;
+  const focusableIndices = [
+    ...renderedItems
+      .map((item, idx) => (item.enabled ? idx : -1))
+      .filter((idx) => idx >= 0),
+    ...(hasMoreButton ? [moreButtonIndex] : []),
+  ];
 
   // Find first enabled item index
-  const firstEnabledIndex = renderedItems.findIndex((item) => item.enabled);
+  const firstEnabledIndex = focusableIndices[0] ?? -1;
+
+  useEffect(() => {
+    menuRef.current?.focus({ preventScroll: true });
+  }, []);
 
   // Auto-focus first enabled item on mount
   useEffect(() => {
-    if (firstEnabledIndex >= 0) {
+    if (firstEnabledIndex >= 0 && !focusableIndices.includes(focusedIndex)) {
       setFocusedIndex(firstEnabledIndex);
     }
-  }, [firstEnabledIndex]);
+  }, [firstEnabledIndex, focusableIndices, focusedIndex]);
+
+  useEffect(() => {
+    if (!autoFocus || firstEnabledIndex < 0) return;
+    const frame = requestAnimationFrame(() => {
+      if (focusedIndex === moreButtonIndex && hasMoreButton) {
+        moreButtonRef.current?.focus();
+        return;
+      }
+      itemRefs.current[focusedIndex]?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [autoFocus, firstEnabledIndex, focusedIndex, hasMoreButton, moreButtonIndex]);
 
   // Viewport clamping: flip if menu overflows bottom or right
   useLayoutEffect(() => {
@@ -97,7 +137,7 @@ export function ContextMenu({
     top = Math.max(0, Math.min(top, viewportHeight - rect.height));
 
     setPosition({ left, top });
-  }, [x, y]);
+  }, [x, y, showMore]);
 
   // Capture-phase outside dismissal stays reliable even if graph layers stop
   // bubbling on mouse/pointer events before they reach document listeners.
@@ -117,49 +157,69 @@ export function ContextMenu({
     const handleClickCapture = (e: MouseEvent) => {
       dismissFromOutsideTarget(e.target, e.button);
     };
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-
     document.addEventListener('pointerdown', handlePointerDownCapture, true);
     document.addEventListener('mousedown', handleMouseDownCapture, true);
     document.addEventListener('click', handleClickCapture, true);
-    document.addEventListener('keydown', handleKey);
     return () => {
       document.removeEventListener('pointerdown', handlePointerDownCapture, true);
       document.removeEventListener('mousedown', handleMouseDownCapture, true);
       document.removeEventListener('click', handleClickCapture, true);
-      document.removeEventListener('keydown', handleKey);
     };
   }, [onClose]);
 
   // Keyboard navigation
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    const enabledIndices = renderedItems
-      .map((item, idx) => (item.enabled ? idx : -1))
-      .filter((idx) => idx >= 0);
+  const handleKeyDown = useCallback((e: KeyboardEvent | React.KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      stopMenuKeyboardEvent(e);
+      onClose({ restoreFocus: autoFocus });
+      return;
+    }
+
+    if (focusableIndices.length === 0) return;
 
     if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const nextPos = (currentPos + 1) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[nextPos]);
+      stopMenuKeyboardEvent(e);
+      const currentPos = Math.max(0, focusableIndices.indexOf(focusedIndex));
+      const nextPos = (currentPos + 1) % focusableIndices.length;
+      setFocusedIndex(focusableIndices[nextPos]);
     } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const prevPos = (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[prevPos]);
+      stopMenuKeyboardEvent(e);
+      const currentPos = Math.max(0, focusableIndices.indexOf(focusedIndex));
+      const prevPos = (currentPos - 1 + focusableIndices.length) % focusableIndices.length;
+      setFocusedIndex(focusableIndices[prevPos]);
     } else if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
+      stopMenuKeyboardEvent(e);
+      if (focusedIndex === moreButtonIndex && hasMoreButton) {
+        setShowMore(true);
+        setFocusedIndex(safeItems.length);
+        return;
+      }
       const item = renderedItems[focusedIndex];
       if (item?.enabled) {
         handleItemClick(item);
       }
     }
-  };
+  }, [autoFocus, focusableIndices, focusedIndex, hasMoreButton, moreButtonIndex, onClose, renderedItems, safeItems.length]);
+
+  useEffect(() => {
+    const handleDocumentKeyDownCapture = (event: KeyboardEvent) => {
+      if (
+        event.key === 'Escape' ||
+        event.key === 'ArrowDown' ||
+        event.key === 'ArrowUp' ||
+        event.key === 'Enter' ||
+        event.key === ' '
+      ) {
+        handleKeyDown(event);
+      }
+    };
+
+    document.addEventListener('keydown', handleDocumentKeyDownCapture, true);
+    return () => document.removeEventListener('keydown', handleDocumentKeyDownCapture, true);
+  }, [handleKeyDown]);
 
   // Handle menu item click
-  const handleItemClick = (item: MenuItem) => {
+  function handleItemClick(item: MenuItem) {
     if (!item.enabled) return;
 
     switch (item.action) {
@@ -175,6 +235,9 @@ export function ContextMenu({
       case 'onRecreateTask':
         onRecreateTask?.(task.id);
         break;
+      case 'onRecreateDownstream':
+        onRecreateDownstream?.(task.id);
+        break;
       case 'onFix':
         if (item.agentName) {
           onFix?.(task.id, item.agentName);
@@ -184,8 +247,8 @@ export function ContextMenu({
         onCancel?.(task.id);
         break;
     }
-    onClose();
-  };
+    onClose({ restoreFocus: autoFocus });
+  }
 
   // Get variant styles
   const getVariantClasses = (variant?: MenuItem['variant'], enabled?: boolean) => {
@@ -233,6 +296,10 @@ export function ContextMenu({
             {item.separator === 'task' && renderSeparator('Task')}
             {item.separator === 'danger' && renderSeparator('Danger')}
             <button
+              ref={(element) => {
+                itemRefs.current[idx] = element;
+              }}
+              type="button"
               role="menuitem"
               aria-disabled={!item.enabled}
               className={`w-full text-left px-3 py-1.5 text-sm ${getVariantClasses(
@@ -253,9 +320,15 @@ export function ContextMenu({
         <div>
           <div className="border-t border-gray-600 my-1" />
           <button
+            ref={moreButtonRef}
+            type="button"
             role="menuitem"
-            className="w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
-            onClick={() => setShowMore(true)}
+            className={`w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 ${focusedIndex === moreButtonIndex ? 'bg-gray-700' : ''}`}
+            onClick={() => {
+              setShowMore(true);
+              setFocusedIndex(safeItems.length);
+            }}
+            onMouseEnter={() => setFocusedIndex(moreButtonIndex)}
           >
             More
           </button>

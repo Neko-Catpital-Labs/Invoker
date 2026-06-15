@@ -21,10 +21,11 @@ const baseUrl = process.env.INVOKER_RELEASE_BASE_URL ?? `https://github.com/${re
 const vendor = join(root, 'vendor');
 
 const arch = process.arch;
+const linuxAssetArch = arch === 'x64' ? 'x86_64' : arch;
 const asset = process.platform === 'darwin'
   ? `Invoker-${pkg.version}-${arch}.zip`
   : process.platform === 'linux'
-    ? `Invoker-${pkg.version}-${arch}.AppImage`
+    ? `Invoker-${pkg.version}-${linuxAssetArch}.AppImage`
     : undefined;
 
 if (!asset) {

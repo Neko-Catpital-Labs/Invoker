@@ -32,6 +32,7 @@ describe('app-bootstrap', () => {
       app,
       platform: 'linux',
       enableTestCompositor: false,
+      isHeadless: false,
     });
 
     expect(disableHardwareAcceleration).toHaveBeenCalledTimes(1);
@@ -46,6 +47,56 @@ describe('app-bootstrap', () => {
       'disable-software-rasterizer',
       'class',
     ]);
+  });
+
+  it('keeps macOS headless mode out of the Dock', () => {
+    const recorder = createCommandLineRecorder();
+    const setActivationPolicy = vi.fn();
+    const hideDock = vi.fn();
+    const app = {
+      disableHardwareAcceleration: vi.fn(),
+      commandLine: recorder.commandLine,
+      name: '',
+      setActivationPolicy,
+      dock: {
+        hide: hideDock,
+      },
+    };
+
+    configureEarlyElectronApp({
+      app,
+      platform: 'darwin',
+      enableTestCompositor: false,
+      isHeadless: true,
+    });
+
+    expect(setActivationPolicy).toHaveBeenCalledWith('accessory');
+    expect(hideDock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not hide the Dock for macOS GUI mode', () => {
+    const recorder = createCommandLineRecorder();
+    const setActivationPolicy = vi.fn();
+    const hideDock = vi.fn();
+    const app = {
+      disableHardwareAcceleration: vi.fn(),
+      commandLine: recorder.commandLine,
+      name: '',
+      setActivationPolicy,
+      dock: {
+        hide: hideDock,
+      },
+    };
+
+    configureEarlyElectronApp({
+      app,
+      platform: 'darwin',
+      enableTestCompositor: false,
+      isHeadless: false,
+    });
+
+    expect(setActivationPolicy).not.toHaveBeenCalled();
+    expect(hideDock).not.toHaveBeenCalled();
   });
 
   it('runs ready bootstrap only after Electron readiness resolves', async () => {

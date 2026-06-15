@@ -1,10 +1,10 @@
 {
   "name": "invoker",
   "private": true,
-  "version": "0.0.3",
+  "version": "0.0.5",
   "description": "Auditable multi-agent orchestration with a mutating action graph",
   "scripts": {
-    "postinstall": "node scripts/electron.cjs --install-only",
+    "postinstall": "node scripts/electron.cjs --install-only && node scripts/fix-node-pty-spawn-helper.mjs",
     "test": "bash scripts/test-plan-to-invoker-skill.sh && bash scripts/workspace-test.sh",
     "test:high-resource": "bash scripts/test-plan-to-invoker-skill.sh && INVOKER_VITEST_HIGH_RESOURCE=1 bash scripts/workspace-test.sh",
     "test:low-resource": "pnpm run test",
@@ -42,7 +42,9 @@
     "check:deps": "depcruise packages --config .dependency-cruiser.js",
     "check:types": "tsc -p tsconfig.typecheck.json",
     "check:large-files": "node scripts/check-large-files.mjs",
-    "check:all": "pnpm run check:deps && pnpm run check:types && pnpm run check:required-builds && pnpm run check:large-files && bash scripts/check-owner-boundary.sh",
+    "check:versions": "node scripts/check-version-sync.mjs",
+    "bump-version": "node scripts/bump-version.mjs",
+    "check:all": "pnpm run check:deps && pnpm run check:types && pnpm run check:required-builds && pnpm run check:large-files && pnpm run check:versions && bash scripts/check-owner-boundary.sh",
     "lint": "pnpm run check:all"
   },
   "pnpm": {

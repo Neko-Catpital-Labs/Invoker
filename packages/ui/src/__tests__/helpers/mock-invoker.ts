@@ -15,6 +15,7 @@ import type {
   TaskConfig,
   TaskExecution,
 } from '../../types.js';
+import type { TerminalOutputEvent } from '@invoker/contracts';
 
 export interface MockInvoker {
   /** The mock InvokerAPI object installed on window.invoker. */
@@ -25,6 +26,8 @@ export interface MockInvoker {
   fireDelta: (delta: TaskDelta) => void;
   /** Fire a workflows-changed event. */
   fireWorkflowsChanged: (workflows: WorkflowMeta[]) => void;
+  /** Fire an embedded terminal output event to subscribers. */
+  fireTerminalOutput: (event: TerminalOutputEvent) => void;
   /** Install the mock on window.invoker. */
   install: () => void;
   /** Remove window.invoker. */
@@ -39,6 +42,7 @@ export function createMockInvoker(
   let workflowSnapshot = initialWorkflows;
   let deltaCallback: ((delta: TaskDelta) => void) | undefined;
   let workflowsCallback: ((workflows: unknown[]) => void) | undefined;
+  const terminalOutputCallbacks = new Set<(event: TerminalOutputEvent) => void>();
 
   const api: InvokerAPI = {
     // Defer resolution one microtask so snapshot is read after synchronous setTasks()
@@ -140,7 +144,10 @@ export function createMockInvoker(
     terminalWrite: vi.fn(async () => ({ ok: true })),
     terminalResize: vi.fn(async () => ({ ok: true })),
     terminalClose: vi.fn(async () => ({ ok: true })),
-    onTerminalOutput: vi.fn(() => () => {}),
+    onTerminalOutput: vi.fn((cb: (event: TerminalOutputEvent) => void) => {
+      terminalOutputCallbacks.add(cb);
+      return () => { terminalOutputCallbacks.delete(cb); };
+    }),
     onTerminalExit: vi.fn(() => () => {}),
     resumeWorkflow: vi.fn(async () => null),
     listWorkflows: vi.fn(async () => []),
@@ -151,6 +158,7 @@ export function createMockInvoker(
     cleanupWorktrees: vi.fn(async () => ({ removed: [], errors: [] })),
     recreateWorkflow: vi.fn(async () => {}),
     recreateTask: vi.fn(async () => {}),
+    recreateDownstream: vi.fn(async () => {}),
     retryWorkflow: vi.fn(async () => {}),
     rebaseRetry: vi.fn(async () => ({ success: true, rebasedBranches: [], errors: [] })),
     rebaseRecreate: vi.fn(async () => ({ success: true, rebasedBranches: [], errors: [] })),
@@ -191,6 +199,12 @@ export function createMockInvoker(
     workflowsCallback?.(workflows);
   }
 
+  function fireTerminalOutput(event: TerminalOutputEvent) {
+    for (const callback of terminalOutputCallbacks) {
+      callback(event);
+    }
+  }
+
   function install() {
     (window as unknown as { invoker: InvokerAPI }).invoker = api;
     (window as unknown as { __INVOKER_BOOTSTRAP__?: { tasks: TaskState[]; workflows: WorkflowMeta[] } }).__INVOKER_BOOTSTRAP__ = {
@@ -200,11 +214,12 @@ export function createMockInvoker(
   }
 
   function cleanup() {
+    terminalOutputCallbacks.clear();
     delete (window as unknown as { invoker?: unknown }).invoker;
     delete (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__;
   }
 
-  return { api, setTasks, fireDelta, fireWorkflowsChanged, install, cleanup };
+  return { api, setTasks, fireDelta, fireWorkflowsChanged, fireTerminalOutput, install, cleanup };
 }
 
 /** Create a minimal TaskState for testing. */

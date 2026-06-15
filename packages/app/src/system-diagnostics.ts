@@ -59,6 +59,7 @@ export function collectSystemDiagnostics(args: {
   platform: NodeJS.Platform;
   arch: string;
   bundledSkills?: SystemDiagnostics['bundledSkills'];
+  cliInstaller?: SystemDiagnostics['cliInstaller'];
 }): SystemDiagnostics {
   return {
     platform: args.platform,
@@ -66,6 +67,7 @@ export function collectSystemDiagnostics(args: {
     appVersion: args.appVersion,
     isPackaged: args.isPackaged,
     bundledSkills: args.bundledSkills,
+    cliInstaller: args.cliInstaller,
     tools: [
       detectTool('git', 'Git', 'git', ['--version'], 'Install Git before running workflows.', true),
       detectTool('node', 'Node.js', 'node', ['--version'], 'Install Node.js 26 for repo-based workflows.'),

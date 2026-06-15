@@ -46,7 +46,14 @@ export interface WorkflowChanges {
   generation?: number;
   mergeMode?: 'manual' | 'automatic' | 'external_review';
   reviewProvider?: string;
+  /**
+   * Presence semantics: a key explicitly set to `undefined` clears the
+   * stored value (NULL column); an absent key leaves it unchanged.
+   * `detachWorkflowInternal` relies on this to clear a dependent's last
+   * external dependency when the upstream workflow is detached or deleted.
+   */
   externalDependencies?: ExternalDependency[];
+  /** Same presence semantics as `externalDependencies`. */
   externalDependencyChanges?: ExternalDependencyChange[];
 }
 

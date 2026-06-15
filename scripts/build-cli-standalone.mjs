@@ -70,12 +70,23 @@ try {
   const bundlePath = join(stage, 'index.js');
   const blobPath = join(stage, 'sea-prep.blob');
   const seaConfigPath = join(stage, 'sea-config.json');
+  const standaloneEntryPath = join(stage, 'index.ts');
   const targetNode = await ensureTargetNode(stage);
+  const cliEntryImportPath = join(root, 'packages/cli/src/index.ts').replaceAll('\\', '/');
+
+  await writeFile(standaloneEntryPath, [
+    `import { main } from ${JSON.stringify(cliEntryImportPath)};`,
+    '',
+    'void main().then((exitCode) => {',
+    '  process.exitCode = exitCode;',
+    '});',
+    '',
+  ].join('\n'));
 
   run('pnpm', [
     'exec',
     'tsup',
-    'packages/cli/src/index.ts',
+    standaloneEntryPath,
     '--format',
     'cjs',
     '--platform',
@@ -89,6 +100,12 @@ try {
     stage,
     '--external',
     'node:sqlite',
+    '--external',
+    'dockerode',
+    '--external',
+    'ssh2',
+    '--external',
+    'cpu-features',
   ]);
 
   await writeFile(seaConfigPath, JSON.stringify({

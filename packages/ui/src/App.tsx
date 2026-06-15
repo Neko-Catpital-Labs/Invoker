@@ -36,6 +36,16 @@ import {
   EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE,
 } from './isExperimentSpawnPivot.js';
 import { parsePlanText } from './lib/plan-parser.js';
+import {
+  createGraphCameraCommandIssuer,
+  loadCameraLockPreference,
+  saveCameraLockPreference,
+  type CameraLockPreference,
+  type GraphCameraCommand,
+  type GraphCameraCommandInput,
+  type GraphCameraCommandIssuer,
+  type GraphScope,
+} from './lib/graph-camera.js';
 import type { SystemDiagnostics } from '@invoker/contracts';
 
 type ModalState =
@@ -46,6 +56,10 @@ type ModalState =
   | { type: 'replace'; task: TaskState };
 
 type KeyboardRegion = 'workflowGraph' | 'taskGraph' | 'inspector' | 'bottomBar';
+type GraphKeyboardRegion = Extract<KeyboardRegion, 'workflowGraph' | 'taskGraph'>;
+type ContextMenuCloseOptions = { restoreFocus?: boolean };
+type ContextMenuState = { x: number; y: number; taskId: string; returnFocusRegion?: GraphKeyboardRegion };
+type WorkflowContextMenuState = { x: number; y: number; workflowId: string; returnFocusRegion?: GraphKeyboardRegion };
 type SearchResult =
   | { kind: 'workflow'; id: string; title: string; subtitle: string }
   | { kind: 'task'; id: string; workflowId: string | null; title: string; subtitle: string };
@@ -95,7 +109,26 @@ interface WorkflowContextMenuProps {
   onCancelWorkflow: (workflowId: string) => void;
   onDeleteWorkflow: (workflowId: string) => void;
   onCopyWorkflowId: (workflowId: string) => void;
-  onClose: () => void;
+  onClose: (options?: ContextMenuCloseOptions) => void;
+  autoFocus?: boolean;
+}
+
+interface WorkflowMenuItem {
+  id: string;
+  label: string;
+  className: string;
+  action: () => void;
+  separator?: boolean;
+}
+
+function stopMenuKeyboardEvent(event: KeyboardEvent | React.KeyboardEvent) {
+  event.preventDefault();
+  event.stopPropagation();
+  if ('stopImmediatePropagation' in event) {
+    event.stopImmediatePropagation();
+  } else {
+    event.nativeEvent.stopImmediatePropagation?.();
+  }
 }
 
 function WorkflowContextMenu({
@@ -112,10 +145,13 @@ function WorkflowContextMenu({
   onDeleteWorkflow,
   onCopyWorkflowId,
   onClose,
+  autoFocus = false,
 }: WorkflowContextMenuProps): JSX.Element {
   const menuRef = useRef<HTMLDivElement>(null);
+  const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [position, setPosition] = useState({ left: x, top: y });
   const [showMore, setShowMore] = useState(false);
+  const [focusedIndex, setFocusedIndex] = useState(0);
 
   useLayoutEffect(() => {
     if (!menuRef.current) return;
@@ -149,29 +185,108 @@ function WorkflowContextMenu({
     const handlePointerDownCapture = (event: PointerEvent) => dismissFromOutsideTarget(event.target, event.button);
     const handleMouseDownCapture = (event: MouseEvent) => dismissFromOutsideTarget(event.target, event.button);
     const handleClickCapture = (event: MouseEvent) => dismissFromOutsideTarget(event.target, event.button);
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-    };
-
     document.addEventListener('pointerdown', handlePointerDownCapture, true);
     document.addEventListener('mousedown', handleMouseDownCapture, true);
     document.addEventListener('click', handleClickCapture, true);
-    document.addEventListener('keydown', handleKeyDown);
     return () => {
       document.removeEventListener('pointerdown', handlePointerDownCapture, true);
       document.removeEventListener('mousedown', handleMouseDownCapture, true);
       document.removeEventListener('click', handleClickCapture, true);
-      document.removeEventListener('keydown', handleKeyDown);
     };
   }, [onClose]);
 
+  useEffect(() => {
+    menuRef.current?.focus({ preventScroll: true });
+    setFocusedIndex(0);
+  }, []);
+
   const runAction = (action: (workflowId: string) => void) => {
     action(workflowId);
-    onClose();
+    onClose({ restoreFocus: autoFocus });
   };
 
   const buttonClass = 'w-full px-3 py-1.5 text-left text-sm text-gray-100 hover:bg-gray-700';
   const dangerButtonClass = 'w-full px-3 py-1.5 text-left text-sm text-red-300 hover:bg-gray-700';
+  const visibleItems: WorkflowMenuItem[] = [
+    { id: 'open-workflow', label: 'Open Workflow', className: buttonClass, action: () => runAction(onOpenWorkflow) },
+    { id: 'open-pr', label: 'Open PR', className: buttonClass, action: () => runAction(onOpenPr) },
+    { id: 'retry-workflow', label: 'Retry Workflow', className: buttonClass, action: () => runAction(onRetryWorkflow) },
+    { id: 'copy-workflow-id', label: 'Copy Workflow ID', className: buttonClass, action: () => runAction(onCopyWorkflowId) },
+    ...(!showMore
+      ? [{
+          id: 'more',
+          label: 'More',
+          className: 'w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-gray-700',
+          separator: true,
+          action: () => {
+            setShowMore(true);
+            setFocusedIndex(4);
+          },
+        }]
+      : [
+          { id: 'rebase-retry', label: 'Rebase and Retry', className: buttonClass, separator: true, action: () => runAction(onRebaseRetry) },
+          { id: 'rebase-recreate', label: 'Rebase and Recreate', className: dangerButtonClass, action: () => runAction(onRebaseRecreate) },
+          { id: 'recreate-workflow', label: 'Recreate Workflow', className: dangerButtonClass, action: () => runAction(onRecreateWorkflow) },
+          { id: 'cancel-workflow', label: 'Cancel Workflow', className: dangerButtonClass, action: () => runAction(onCancelWorkflow) },
+          { id: 'delete-workflow', label: 'Delete Workflow', className: dangerButtonClass, action: () => runAction(onDeleteWorkflow) },
+        ]),
+  ];
+
+  useEffect(() => {
+    if (focusedIndex >= visibleItems.length) {
+      setFocusedIndex(Math.max(0, visibleItems.length - 1));
+    }
+  }, [focusedIndex, visibleItems.length]);
+
+  useEffect(() => {
+    if (!autoFocus || visibleItems.length === 0) return;
+    const frame = requestAnimationFrame(() => {
+      itemRefs.current[focusedIndex]?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [autoFocus, focusedIndex, visibleItems.length]);
+
+  const handleKeyDown = useCallback((event: KeyboardEvent | React.KeyboardEvent) => {
+    if (event.key === 'Escape') {
+      stopMenuKeyboardEvent(event);
+      onClose({ restoreFocus: autoFocus });
+      return;
+    }
+
+    if (visibleItems.length === 0) return;
+
+    if (event.key === 'ArrowDown') {
+      stopMenuKeyboardEvent(event);
+      setFocusedIndex((index) => (index + 1) % visibleItems.length);
+      return;
+    }
+    if (event.key === 'ArrowUp') {
+      stopMenuKeyboardEvent(event);
+      setFocusedIndex((index) => (index - 1 + visibleItems.length) % visibleItems.length);
+      return;
+    }
+    if (event.key === 'Enter' || event.key === ' ') {
+      stopMenuKeyboardEvent(event);
+      visibleItems[focusedIndex]?.action();
+    }
+  }, [autoFocus, focusedIndex, onClose, visibleItems]);
+
+  useEffect(() => {
+    const handleDocumentKeyDownCapture = (event: KeyboardEvent) => {
+      if (
+        event.key === 'Escape' ||
+        event.key === 'ArrowDown' ||
+        event.key === 'ArrowUp' ||
+        event.key === 'Enter' ||
+        event.key === ' '
+      ) {
+        handleKeyDown(event);
+      }
+    };
+
+    document.addEventListener('keydown', handleDocumentKeyDownCapture, true);
+    return () => document.removeEventListener('keydown', handleDocumentKeyDownCapture, true);
+  }, [handleKeyDown]);
 
   return (
     <div
@@ -180,51 +295,26 @@ function WorkflowContextMenu({
       className="fixed z-50 min-w-[200px] rounded-lg border border-gray-600 bg-gray-800 py-1 shadow-xl"
       style={{ left: position.left, top: position.top }}
       tabIndex={-1}
+      onKeyDown={handleKeyDown}
       onClick={(event) => event.stopPropagation()}
     >
-      <button role="menuitem" onClick={() => runAction(onOpenWorkflow)} className={buttonClass}>
-        Open Workflow
-      </button>
-      <button role="menuitem" onClick={() => runAction(onOpenPr)} className={buttonClass}>
-        Open PR
-      </button>
-      <button role="menuitem" onClick={() => runAction(onRetryWorkflow)} className={buttonClass}>
-        Retry Workflow
-      </button>
-      <button role="menuitem" onClick={() => runAction(onCopyWorkflowId)} className={buttonClass}>
-        Copy Workflow ID
-      </button>
-      {!showMore ? (
-        <div>
-          <div className="my-1 border-t border-gray-600" />
+      {visibleItems.map((item, index) => (
+        <div key={item.id}>
+          {item.separator && <div className="my-1 border-t border-gray-600" />}
           <button
+            ref={(element) => {
+              itemRefs.current[index] = element;
+            }}
+            type="button"
             role="menuitem"
-            className="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-gray-700"
-            onClick={() => setShowMore(true)}
+            onClick={item.action}
+            onMouseEnter={() => setFocusedIndex(index)}
+            className={`${item.className} ${index === focusedIndex ? 'bg-gray-700' : ''}`}
           >
-            More
+            {item.label}
           </button>
         </div>
-      ) : (
-        <div>
-          <div className="my-1 border-t border-gray-600" />
-          <button role="menuitem" onClick={() => runAction(onRebaseRetry)} className={buttonClass}>
-            Rebase and Retry
-          </button>
-          <button role="menuitem" onClick={() => runAction(onRebaseRecreate)} className={dangerButtonClass}>
-            Rebase and Recreate
-          </button>
-          <button role="menuitem" onClick={() => runAction(onRecreateWorkflow)} className={dangerButtonClass}>
-            Recreate Workflow
-          </button>
-          <button role="menuitem" onClick={() => runAction(onCancelWorkflow)} className={dangerButtonClass}>
-            Cancel Workflow
-          </button>
-          <button role="menuitem" onClick={() => runAction(onDeleteWorkflow)} className={dangerButtonClass}>
-            Delete Workflow
-          </button>
-        </div>
-      )}
+      ))}
     </div>
   );
 }
@@ -276,7 +366,7 @@ export function App() {
   const [onFinish, setOnFinish] = useState<'none' | 'merge' | 'pull_request'>('merge');
   const [viewMode, setViewMode] = useState<'dag' | 'history' | 'timeline' | 'queue' | 'actionGraph'>('dag');
   const [selectedActionNode, setSelectedActionNode] = useState<ActionGraphNode | null>(null);
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; taskId: string } | null>(null);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [remoteTargets, setRemoteTargets] = useState<string[]>([]);
   const [executionPools, setExecutionPools] = useState<string[]>([]);
   const [executionAgents, setExecutionAgents] = useState<string[]>([]);
@@ -286,16 +376,36 @@ export function App() {
   const [showSystemBanner, setShowSystemBanner] = useState(false);
   const [installSkillsPending, setInstallSkillsPending] = useState(false);
   const [installSkillsError, setInstallSkillsError] = useState<string | null>(null);
+  const [updateCliPending, setUpdateCliPending] = useState(false);
+  const [updateCliError, setUpdateCliError] = useState<string | null>(null);
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const [advancedMetadataExpanded, setAdvancedMetadataExpanded] = useState(false);
   const [terminalCollapsed, setTerminalCollapsed] = useState(true);
   const [terminalSessions, setTerminalSessions] = useState<TerminalSessionDescriptor[]>([]);
   const [activeTerminalSessionId, setActiveTerminalSessionId] = useState<string | null>(null);
-  const [workflowContextMenu, setWorkflowContextMenu] = useState<{ x: number; y: number; workflowId: string } | null>(null);
+  const [workflowContextMenu, setWorkflowContextMenu] = useState<WorkflowContextMenuState | null>(null);
   const [keyboardRegion, setKeyboardRegion] = useState<KeyboardRegion>('workflowGraph');
   const [previousGraphRegion, setPreviousGraphRegion] = useState<KeyboardRegion>('workflowGraph');
-  const [centerWorkflowId, setCenterWorkflowId] = useState<string | null>(null);
-  const [centerTaskId, setCenterTaskId] = useState<string | null>(null);
+  // Typed graph camera state. The graph viewport is user-owned after the
+  // initial render: only explicit navigation commands (issued through the
+  // central factory) move it. No per-handler event++/requestId++ counters.
+  const cameraIssuerRef = useRef<GraphCameraCommandIssuer | null>(null);
+  if (!cameraIssuerRef.current) {
+    cameraIssuerRef.current = createGraphCameraCommandIssuer();
+  }
+  const [cameraCommand, setCameraCommand] = useState<GraphCameraCommand | null>(null);
+  const [cameraPreference, setCameraPreference] = useState<CameraLockPreference>(() =>
+    loadCameraLockPreference(),
+  );
+  // Mirror preference into a ref so event handlers read the live value without
+  // being re-created on every preference change.
+  const cameraPreferenceRef = useRef(cameraPreference);
+  useEffect(() => {
+    cameraPreferenceRef.current = cameraPreference;
+  }, [cameraPreference]);
+  // Temporary, non-persisted suppression of the camera lock after a manual pan
+  // or wheel zoom. The next explicit node selection clears it.
+  const cameraSuppressedRef = useRef(false);
   const [bottomStatusIndex, setBottomStatusIndex] = useState(0);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -598,15 +708,38 @@ export function App() {
     return { x: Math.max(24, window.innerWidth / 2), y: Math.max(24, window.innerHeight / 2) };
   }, []);
 
+  // The only path that mints camera commands. The issuer owns the monotonic
+  // sequence, so no selection handler keeps its own counter.
+  const issueCameraCommand = useCallback((input: GraphCameraCommandInput): GraphCameraCommand => {
+    const command = cameraIssuerRef.current!.issue(input);
+    setCameraCommand(command);
+    return command;
+  }, []);
+
+  // An explicit node selection (mouse click or arrow key) clears any temporary
+  // manual suppression and re-centers the targeted graph when the lock is on.
+  const recenterForSelection = useCallback((scope: GraphScope, target: string) => {
+    cameraSuppressedRef.current = false;
+    if (cameraPreferenceRef.current.enabled) {
+      issueCameraCommand({ kind: 'centerSelection', scope, target, reason: 'selection' });
+    }
+  }, [issueCameraCommand]);
+
+  // A manual pan or wheel zoom temporarily suppresses the lock and must not
+  // autofocus the graph — no camera command is issued here.
+  const handleManualViewport = useCallback(() => {
+    cameraSuppressedRef.current = true;
+  }, []);
+
   const selectWorkflowById = useCallback((workflowId: string) => {
     setWorkflowSelectionDismissed(false);
     setSelectedWorkflowId(workflowId);
     setSelectedTaskId(null);
     setContextMenu(null);
     setWorkflowContextMenu(null);
-    setCenterWorkflowId(workflowId);
+    recenterForSelection('workflow', workflowId);
     focusKeyboardRegion('workflowGraph');
-  }, [focusKeyboardRegion]);
+  }, [focusKeyboardRegion, recenterForSelection]);
 
   const selectTaskById = useCallback((taskId: string) => {
     const task = tasks.get(taskId);
@@ -615,13 +748,12 @@ export function App() {
     setWorkflowSelectionDismissed(false);
     if (task.config.workflowId) {
       setSelectedWorkflowId(task.config.workflowId);
-      setCenterWorkflowId(task.config.workflowId);
     }
     setContextMenu(null);
     setWorkflowContextMenu(null);
-    setCenterTaskId(task.id);
+    recenterForSelection('task', task.id);
     focusKeyboardRegion('taskGraph');
-  }, [focusKeyboardRegion, tasks]);
+  }, [focusKeyboardRegion, recenterForSelection, tasks]);
 
   const selectRelativeNode = useCallback((direction: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight') => {
     const inTaskGraph = keyboardRegion === 'taskGraph';
@@ -681,7 +813,7 @@ export function App() {
         .find((candidate) => (candidate.getAttribute('data-testid') ?? '') === `rf__node-${selectedTaskId}`);
       const point = nodeCenter(element ?? null);
       setWorkflowContextMenu(null);
-      setContextMenu({ x: point.x, y: point.y, taskId: selectedTaskId });
+      setContextMenu({ x: point.x, y: point.y, taskId: selectedTaskId, returnFocusRegion: 'taskGraph' });
       return;
     }
     const workflowId = selectedWorkflow?.id ?? selectedWorkflowId;
@@ -689,7 +821,7 @@ export function App() {
       const element = document.querySelector<HTMLElement>(`[data-testid="workflow-node-${workflowId}"]`);
       const point = nodeCenter(element);
       setContextMenu(null);
-      setWorkflowContextMenu({ x: point.x, y: point.y, workflowId });
+      setWorkflowContextMenu({ x: point.x, y: point.y, workflowId, returnFocusRegion: 'workflowGraph' });
     }
   }, [keyboardRegion, nodeCenter, selectedTaskId, selectedWorkflow?.id, selectedWorkflowId, tasks, workflows]);
 
@@ -706,6 +838,10 @@ export function App() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (contextMenu || workflowContextMenu) {
+        return;
+      }
+
       if (event.key === 'Shift' && !isEditableKeyboardTarget(event.target)) {
         const now = Date.now();
         if (now - lastShiftAtRef.current <= 450) {
@@ -737,6 +873,32 @@ export function App() {
       }
 
       if (isEditableKeyboardTarget(event.target) || modal.type !== 'none') return;
+
+      // F1 is the keyboard-only camera lock control. It is already ignored for
+      // input/modal/terminal/editable targets by the guard above.
+      if (event.key === 'F1') {
+        event.preventDefault();
+        const inTaskGraph = keyboardRegion === 'taskGraph';
+        const scope: GraphScope = inTaskGraph ? 'task' : 'workflow';
+        const target = inTaskGraph ? selectedTaskId : (selectedWorkflow?.id ?? selectedWorkflowId);
+        const preference = cameraPreferenceRef.current;
+        cameraSuppressedRef.current = false;
+        if (preference.mode === 'toggle') {
+          // Toggle mode flips the lock; enabling it immediately centers the
+          // current selection.
+          const nextEnabled = !preference.enabled;
+          const nextPreference: CameraLockPreference = { mode: preference.mode, enabled: nextEnabled };
+          setCameraPreference(nextPreference);
+          saveCameraLockPreference(nextPreference);
+          if (nextEnabled && target) {
+            issueCameraCommand({ kind: 'centerSelection', scope, target, reason: 'f1-toggle-enable' });
+          }
+        } else if (target) {
+          // Once mode centers a single time without changing the preference.
+          issueCameraCommand({ kind: 'centerSelection', scope, target, reason: 'f1-once' });
+        }
+        return;
+      }
 
       if (event.key === 'Tab') {
         event.preventDefault();
@@ -842,8 +1004,10 @@ export function App() {
   }, [
     activateSearchResult,
     bottomStatusIndex,
+    contextMenu,
     focusKeyboardRegion,
     handleStatusClick,
+    issueCameraCommand,
     keyboardRegion,
     miniDagTasks,
     modal.type,
@@ -854,9 +1018,11 @@ export function App() {
     searchResults,
     selectRelativeNode,
     selectTaskById,
+    selectedTaskId,
     selectedWorkflow,
     selectedWorkflowId,
     visibleStatusKeys,
+    workflowContextMenu,
   ]);
   const missingRequiredTool = systemDiagnostics?.tools.find((tool) => tool.required && !tool.installed) ?? null;
   const installedAgentCount = systemDiagnostics?.tools.filter((tool) => (tool.id === 'claude' || tool.id === 'codex') && tool.installed).length ?? 0;
@@ -870,7 +1036,8 @@ export function App() {
       setSelectedWorkflowId(task.config.workflowId);
     }
     setWorkflowContextMenu(null);
-  }, []);
+    recenterForSelection('task', task.id);
+  }, [recenterForSelection]);
 
   const openTerminalForTaskId = useCallback(async (taskId: string) => {
     const task = tasks.get(taskId);
@@ -921,7 +1088,8 @@ export function App() {
     setSelectedTaskId(null);
     setContextMenu(null);
     setWorkflowContextMenu(null);
-  }, []);
+    recenterForSelection('workflow', workflowId);
+  }, [recenterForSelection]);
 
   const handleWorkflowContextMenu = useCallback((event: React.MouseEvent<HTMLDivElement>, workflowId: string) => {
     event.preventDefault();
@@ -1059,6 +1227,15 @@ export function App() {
     }
   }, []);
 
+  const handleRecreateDownstream = useCallback(async (taskId: string) => {
+    setContextMenu(null);
+    try {
+      await window.invoker?.recreateDownstream(taskId);
+    } catch (err) {
+      console.error('Recreate Downstream failed:', err);
+    }
+  }, []);
+
   const handleDeleteWorkflow = useCallback(async (workflowId: string) => {
     setContextMenu(null);
     const confirmed = window.confirm(
@@ -1142,10 +1319,16 @@ export function App() {
     setWorkflowContextMenu(null);
   }, []);
 
-  const closeContextMenu = useCallback(() => {
+  const closeContextMenu = useCallback((options?: ContextMenuCloseOptions) => {
+    const returnFocusRegion = options?.restoreFocus
+      ? contextMenu?.returnFocusRegion ?? workflowContextMenu?.returnFocusRegion
+      : undefined;
     setContextMenu(null);
     setWorkflowContextMenu(null);
-  }, []);
+    if (returnFocusRegion) {
+      focusKeyboardRegion(returnFocusRegion);
+    }
+  }, [contextMenu, focusKeyboardRegion, workflowContextMenu]);
 
   const handleRefresh = useCallback(() => {
     refreshTasks(true);
@@ -1422,8 +1605,24 @@ export function App() {
     }
   }, [refreshSystemDiagnostics]);
 
+  const handleUpdateInvokerCli = useCallback(async () => {
+    try {
+      setUpdateCliPending(true);
+      setUpdateCliError(null);
+      const result = await window.invoker?.updateInvokerCli?.();
+      if (result && !result.ok) {
+        setUpdateCliError(result.error ?? 'invoker-cli update failed.');
+      }
+      refreshSystemDiagnostics();
+    } catch (err) {
+      setUpdateCliError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setUpdateCliPending(false);
+    }
+  }, [refreshSystemDiagnostics]);
+
   return (
-    <div className="h-screen flex flex-col bg-gray-900 text-gray-100" onClick={closeContextMenu}>
+    <div className="h-screen flex flex-col bg-gray-900 text-gray-100" onClick={() => closeContextMenu()}>
       {showSystemBanner && (
         <div className="px-4 py-3 border-b border-amber-700 bg-amber-950/50 flex items-center justify-between gap-4">
           <div className="text-sm text-amber-100">
@@ -1620,10 +1819,11 @@ export function App() {
                     tasks={tasks}
                     workflows={workflows}
                     selectedWorkflowId={selectedWorkflow?.id ?? null}
-                    centerWorkflowId={centerWorkflowId}
+                    cameraCommand={cameraCommand}
                     statusFilters={statusFilters}
                     onSelectWorkflow={handleWorkflowClick}
                     onWorkflowContextMenu={handleWorkflowContextMenu}
+                    onManualViewport={handleManualViewport}
                   />
                   {selectedWorkflow && miniDagTasks.size > 0 && (
                     <FloatingGraphPanel
@@ -1644,10 +1844,11 @@ export function App() {
                           tasks={miniDagTasks}
                           workflows={selectedTaskDagWorkflows}
                           selectedTaskId={selectedTaskId}
-                          centerTaskId={centerTaskId}
+                          cameraCommand={cameraCommand}
                           onTaskClick={handleTaskClick}
                           onTaskDoubleClick={handleTaskDoubleClick}
                           onTaskContextMenu={handleTaskContextMenu}
+                          onManualViewport={handleManualViewport}
                           statusFilters={new Set()}
                         />
                       </div>
@@ -1806,6 +2007,9 @@ export function App() {
           installPending={installSkillsPending}
           installError={installSkillsError}
           onInstallBundledSkills={handleInstallBundledSkills}
+          updateCliPending={updateCliPending}
+          updateCliError={updateCliError}
+          onUpdateInvokerCli={handleUpdateInvokerCli}
           onClose={() => setShowSystemSetup(false)}
         />
       )}
@@ -1825,6 +2029,7 @@ export function App() {
           onDeleteWorkflow={(workflowId) => void handleDeleteWorkflow(workflowId)}
           onCopyWorkflowId={handleCopyWorkflowId}
           onClose={closeContextMenu}
+          autoFocus={Boolean(workflowContextMenu.returnFocusRegion)}
         />
       )}
 
@@ -1837,9 +2042,11 @@ export function App() {
           onReplace={handleReplaceTask}
           onOpenTerminal={handleOpenTerminal}
           onRecreateTask={handleRecreateTask}
+          onRecreateDownstream={handleRecreateDownstream}
           onFix={handleFix}
           onCancel={handleCancelTask}
           onClose={closeContextMenu}
+          autoFocus={Boolean(contextMenu.returnFocusRegion)}
         />
       )}
     </div>

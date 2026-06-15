@@ -245,6 +245,26 @@ export interface BundledSkillsStatus {
 
 export type BundledSkillsInstallMode = 'install' | 'update' | 'reinstall';
 
+export interface CliInstallerStatus {
+  /** Packaged app + bundled binary present + darwin/linux. */
+  supported: boolean;
+  bundledVersion: string;
+  installedVersion?: string;
+  installedPath?: string;
+  upToDate: boolean;
+  /** e.g. the chosen install dir is not on the user's PATH. */
+  warning?: string;
+  lastInstallError?: string;
+}
+
+export interface CliInstallResult {
+  ok: boolean;
+  updated: boolean;
+  installedTo?: string;
+  error?: string;
+  status: CliInstallerStatus;
+}
+
 export interface SystemDiagnostics {
   platform: string;
   arch: string;
@@ -252,6 +272,7 @@ export interface SystemDiagnostics {
   isPackaged: boolean;
   tools: SystemToolStatus[];
   bundledSkills?: BundledSkillsStatus;
+  cliInstaller?: CliInstallerStatus;
 }
 
 // ── Embedded terminal session types ─────────────────────────
@@ -277,6 +298,8 @@ export interface TerminalSessionDescriptor {
   mode: 'spawn' | 'attached';
   attached: boolean;
   createdAt: string;
+  /** Bounded recent terminal output snapshot used to seed newly mounted panes. */
+  outputSnapshot?: string;
 }
 
 export interface TerminalOutputEvent {
@@ -481,6 +504,10 @@ export const IpcChannels = {
     request: [taskId: string];
     response: void;
   },
+  'invoker:recreate-downstream': {} as {
+    request: [taskId: string];
+    response: void;
+  },
   'invoker:retry-workflow': {} as {
     request: [workflowId: string];
     response: void;
@@ -602,6 +629,10 @@ export const IpcChannels = {
   'invoker:install-bundled-skills': {} as {
     request: [mode?: BundledSkillsInstallMode];
     response: BundledSkillsStatus;
+  },
+  'invoker:update-invoker-cli': {} as {
+    request: [];
+    response: CliInstallResult;
   },
 
 } as const;

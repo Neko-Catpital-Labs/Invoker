@@ -1,9 +1,25 @@
 import { describe, expect, it, vi } from 'vitest';
 import { LocalBus } from '@invoker/transport';
 
-import { SharedMutationOwnerTimeoutError, runHeadlessClientCommand } from '../headless-client.js';
+import { SharedMutationOwnerTimeoutError, electronCommandArgs, runHeadlessClientCommand } from '../headless-client.js';
 
 describe('headless-client', () => {
+  it('passes Linux headless stability flags before the app entry point', () => {
+    const args = electronCommandArgs(['query', 'workflows'], 'linux');
+    const mainIndex = args.findIndex((arg) => arg.endsWith('/main.js'));
+
+    expect(mainIndex).toBeGreaterThan(0);
+    expect(args.slice(0, mainIndex)).toEqual([
+      '--no-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--disable-gpu-compositing',
+      '--disable-gpu-sandbox',
+      '--disable-software-rasterizer',
+    ]);
+    expect(args.slice(mainIndex + 1)).toEqual(['--headless', 'query', 'workflows']);
+  });
+
   it('delegates mutating commands to a standalone-capable owner endpoint', async () => {
     const bus = new LocalBus();
     const ownerHandler = vi.fn(async () => ({ ok: true }));
@@ -27,6 +43,27 @@ describe('headless-client', () => {
     }));
     expect(ensureStandaloneOwner).not.toHaveBeenCalled();
     expect(runElectronHeadless).not.toHaveBeenCalled();
+  });
+
+  it('delegates recreate-downstream as a mutating command through headless.exec, honoring --no-track', async () => {
+    const bus = new LocalBus();
+    const ownerHandler = vi.fn(async () => ({ ok: true }));
+    bus.onRequest('headless.exec', ownerHandler);
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-rd', mode: 'standalone' }));
+
+    const exitCode = await runHeadlessClientCommand(['recreate-downstream', 'wf-1/A', '--no-track'], {
+      messageBus: bus,
+      ensureStandaloneOwner: vi.fn(async () => {}),
+      runElectronHeadless: vi.fn(async () => 0),
+    });
+
+    expect(exitCode).toBe(0);
+    expect(ownerHandler).toHaveBeenCalledTimes(1);
+    expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
+      args: ['recreate-downstream', 'wf-1/A'],
+      noTrack: true,
+      waitForApproval: false,
+    }));
   });
 
   it('does not use an existing non-standalone owner as a mutation target', async () => {

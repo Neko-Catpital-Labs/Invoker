@@ -289,6 +289,36 @@ async function hideSelectedWorkflowMiniDagIfVisible(page: Page) {
   }
 }
 
+async function viewportTransform(viewport: Locator): Promise<string> {
+  return viewport.evaluate((element) => {
+    const htmlElement = element as HTMLElement;
+    return htmlElement.style.transform || getComputedStyle(htmlElement).transform || '';
+  });
+}
+
+async function waitForStableViewportTransform(page: Page, viewport: Locator): Promise<string> {
+  let previous = await viewportTransform(viewport);
+  for (let i = 0; i < 10; i += 1) {
+    await page.waitForTimeout(120);
+    const current = await viewportTransform(viewport);
+    if (current === previous) return current;
+    previous = current;
+  }
+  return previous;
+}
+
+function selectedTaskCard(miniDag: Locator, taskIdSuffix: string): Locator {
+  return miniDag.locator(`.react-flow__node[data-testid$="${taskIdSuffix}"] > div[data-selected="true"]`).first();
+}
+
+/** Every DAG_DETERMINISM_PLAN task node must stay visible — the DAG also
+ * renders a merge-gate node, so assert the named tasks instead of a count. */
+async function expectDeterminismTasksVisible(miniDag: Locator) {
+  for (const suffix of ['task-a', 'task-b', 'task-c', 'task-d', 'task-e']) {
+    await expect(miniDag.locator(`.react-flow__node[data-testid$="${suffix}"]`)).toBeVisible();
+  }
+}
+
 async function openContextMenu(page: Page, locator: Locator) {
   const target = locator.first();
   await expect(target).toBeVisible({ timeout: 10000 });
@@ -355,6 +385,77 @@ test.describe('Visual proof capture', () => {
     await expect(miniDag.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
     await expect(miniDag.locator('.react-flow__node[data-testid$="task-beta"]')).toBeVisible();
     await captureScreenshot(page, 'task-graph-keyboard-controls-selected');
+  });
+
+  test('graph-camera-lock-navigation — task graph remains usable after keyboard and manual camera moves', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, DAG_DETERMINISM_PLAN);
+    await minimizeInspectorIfVisible(page);
+    await expandSelectedWorkflowMiniDagForProof(page);
+
+    const miniDag = page.getByTestId('selected-workflow-mini-dag');
+    const taskGraphRegion = miniDag.locator('[data-keyboard-region="taskGraph"]');
+    const viewport = miniDag.locator('.react-flow__viewport').first();
+    const pane = miniDag.locator('.react-flow__pane').first();
+
+    await expect(miniDag.locator('.react-flow__node[data-testid$="task-a"]')).toBeVisible();
+    await expect(miniDag.locator('.react-flow__node[data-testid$="task-b"]')).toBeVisible();
+    await expect(miniDag.locator('.react-flow__node[data-testid$="task-c"]')).toBeVisible();
+    await expect(miniDag.locator('.react-flow__node[data-testid$="task-d"]')).toBeVisible();
+    await expect(miniDag.locator('.react-flow__node[data-testid$="task-e"]')).toBeVisible();
+
+    await page.keyboard.press(' ');
+    await expect(taskGraphRegion).toHaveAttribute('data-keyboard-active', 'true');
+
+    await page.keyboard.press('Home');
+    await expect(selectedTaskCard(miniDag, 'task-a')).toBeVisible({ timeout: 5000 });
+
+    await page.keyboard.press('F1');
+    await page.waitForTimeout(300);
+    const enabledAfterFirstF1 = await page.evaluate(() => {
+      const raw = localStorage.getItem('invoker.ui.cameraLockPreference');
+      if (!raw) return true;
+      try {
+        return JSON.parse(raw)?.enabled !== false;
+      } catch {
+        return true;
+      }
+    });
+    if (!enabledAfterFirstF1) {
+      await page.keyboard.press('F1');
+      await page.waitForTimeout(300);
+    }
+    await expect(selectedTaskCard(miniDag, 'task-a')).toBeVisible();
+
+    await page.keyboard.press('ArrowRight');
+    await expect(selectedTaskCard(miniDag, 'task-a')).toHaveCount(0);
+    await expect(miniDag.locator('.react-flow__node > div[data-selected="true"]')).toBeVisible();
+
+    await pane.hover();
+    await page.mouse.wheel(0, 420);
+    await page.waitForTimeout(300);
+    await expectDeterminismTasksVisible(miniDag);
+
+    await miniDag.locator('.react-flow__node[data-testid$="task-e"]').click();
+    await expect(selectedTaskCard(miniDag, 'task-e')).toBeVisible({ timeout: 5000 });
+    await expectDeterminismTasksVisible(miniDag);
+
+    const beforeKeyboardMenu = await waitForStableViewportTransform(page, viewport);
+    await page.keyboard.press('Enter');
+    const menu = page.getByRole('menu');
+    await expect(menu).toBeVisible({ timeout: 5000 });
+    await expect(menu).toContainText('Open Terminal');
+    expect(await waitForStableViewportTransform(page, viewport)).toBe(beforeKeyboardMenu);
+
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowUp');
+    await expect(menu).toBeVisible();
+    expect(await waitForStableViewportTransform(page, viewport)).toBe(beforeKeyboardMenu);
+
+    await captureScreenshot(page, 'graph-camera-lock-navigation');
+
+    await page.keyboard.press('Escape');
+    await expect(menu).not.toBeVisible();
+    expect(await waitForStableViewportTransform(page, viewport)).toBe(beforeKeyboardMenu);
   });
 
   test('task running', async ({ page }) => {
@@ -908,6 +1009,40 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByRole('menuitem', { name: 'Delete Workflow' })).toBeVisible();
 
     await captureScreenshot(page, 'workflow-context-menu-organization');
+  });
+
+  test('context menu keyboard navigation highlight', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+
+    const menu = await openContextMenu(page, page.locator('[data-testid^="workflow-node-"]'));
+    await expect(menu).toBeFocused();
+    await expect(page.getByRole('menuitem', { name: 'Open Workflow' })).toHaveClass(/\bbg-gray-700\b/);
+
+    await page.keyboard.press('ArrowDown');
+    const activeItem = page.getByRole('menuitem', { name: 'Open PR' });
+    await expect(activeItem).toBeVisible();
+    await expect(activeItem).toHaveClass(/\bbg-gray-700\b/);
+
+    await captureScreenshot(page, 'context-menu-keyboard-navigation');
+  });
+
+  test('task context menu shows Recreate Downstream action', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+
+    const taskMenu = await openContextMenu(page, page.locator('.react-flow__node[data-testid$="task-alpha"]'));
+    await page.getByRole('menuitem', { name: 'More' }).click();
+    await expect(taskMenu.getByRole('menuitem', { name: 'Recreate from Task' })).toBeVisible();
+    await expect(taskMenu.getByRole('menuitem', { name: 'Recreate Downstream' })).toBeVisible();
+
+    await captureScreenshot(page, 'task-context-menu-recreate-downstream');
+
+    await page.keyboard.press('Escape');
+    await expect(taskMenu).toBeHidden();
+
+    const workflowMenu = await openContextMenu(page, page.locator('[data-testid^="workflow-node-"]'));
+    await page.getByRole('menuitem', { name: 'More' }).click();
+    await expect(workflowMenu.getByRole('menuitem', { name: 'Recreate Workflow' })).toBeVisible();
+    await expect(workflowMenu.getByRole('menuitem', { name: 'Recreate Downstream' })).toHaveCount(0);
   });
 
   test('context menu keeps danger separator when cancel action is absent', async ({ page }) => {
@@ -1507,7 +1642,7 @@ test.describe('Visual proof capture', () => {
     const workspacePath = '/home/invoker/.invoker/worktrees/wf-ssh/experiment-ssh-resume';
     const sessionId = 'codex-session-ssh-123';
     const terminalSessionId = 'visual-proof-ssh-session';
-    const sshInnerCommand = `cd '${workspacePath}' && codex resume ${sessionId}`;
+    const sshInnerCommand = `cd '${workspacePath}' && codex resume --dangerously-bypass-approvals-and-sandbox ${sessionId}`;
     const sshArgs = ['-i', '/tmp/e2e_id_rsa', '-t', 'invoker@remote-do-1', sshInnerCommand];
     const terminalOutput = [
       '$ ssh -i /tmp/e2e_id_rsa -t invoker@remote-do-1\r\n',
@@ -1583,7 +1718,7 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByTestId('terminal-tab-wf-test-1/ssh-resume')).toHaveAttribute('data-active', 'true');
     await expect(page.getByTestId('terminal-session-command')).toContainText('ssh');
     await expect(page.getByTestId('terminal-session-command')).toContainText(workspacePath);
-    await expect(page.getByTestId('terminal-session-command')).toContainText(`codex resume ${sessionId}`);
+    await expect(page.getByTestId('terminal-session-command')).toContainText(`codex resume --dangerously-bypass-approvals-and-sandbox ${sessionId}`);
     await expect(page.getByTestId('terminal-pane-wf-test-1/ssh-resume')).toBeVisible();
     const terminalPane = page.getByTestId('terminal-pane-wf-test-1/ssh-resume');
     await page.waitForFunction(() => {

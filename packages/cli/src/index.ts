@@ -25,7 +25,7 @@ import {
   type TaskState,
 } from '@invoker/workflow-core';
 
-const VERSION = '0.0.3';
+const VERSION = '0.0.5';
 
 type CliOptions = {
   dbDir?: string;
@@ -584,5 +584,7 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
-  process.exitCode = await main();
+  void main().then((exitCode) => {
+    process.exitCode = exitCode;
+  });
 }

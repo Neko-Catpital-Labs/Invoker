@@ -5,6 +5,9 @@ interface SystemSetupModalProps {
   installPending?: boolean;
   installError?: string | null;
   onInstallBundledSkills?: (mode?: 'install' | 'update' | 'reinstall') => void;
+  updateCliPending?: boolean;
+  updateCliError?: string | null;
+  onUpdateInvokerCli?: () => void;
   onClose: () => void;
 }
 
@@ -13,10 +16,14 @@ export function SystemSetupModal({
   installPending = false,
   installError = null,
   onInstallBundledSkills,
+  updateCliPending = false,
+  updateCliError = null,
+  onUpdateInvokerCli,
   onClose,
 }: SystemSetupModalProps) {
   const installedAgents = diagnostics?.tools.filter((tool) => (tool.id === 'claude' || tool.id === 'codex') && tool.installed) ?? [];
   const bundledSkills = diagnostics?.bundledSkills;
+  const cliInstaller = diagnostics?.cliInstaller;
   const canInstallBundledSkills = Boolean(bundledSkills?.available && onInstallBundledSkills);
   const installActionLabel = bundledSkills?.targets.some((target) => target.installed && !target.upToDate)
     ? 'Update Skills'
@@ -117,6 +124,49 @@ export function SystemSetupModal({
                     </button>
                   )}
                 </div>
+              )}
+            </div>
+          )}
+
+          {cliInstaller?.supported && (
+            <div className="rounded border border-indigo-700/60 bg-indigo-950/30 px-4 py-4 space-y-3">
+              <div>
+                <div className="text-sm font-medium text-indigo-100">Invoker CLI</div>
+                <div className="text-sm text-indigo-200/80 mt-1">
+                  The `invoker-cli` command is installed onto your PATH and kept at the app&apos;s version.
+                </div>
+              </div>
+
+              <div className="text-sm text-gray-300">
+                {cliInstaller.installedVersion
+                  ? `Installed ${cliInstaller.installedVersion} at ${cliInstaller.installedPath} — app version ${cliInstaller.bundledVersion}`
+                  : 'Not installed'}
+                {' '}
+                <span className={cliInstaller.upToDate ? 'text-green-400' : cliInstaller.installedVersion ? 'text-yellow-300' : 'text-amber-300'}>
+                  {cliInstaller.upToDate ? 'Up to date' : cliInstaller.installedVersion ? 'Update available' : ''}
+                </span>
+              </div>
+
+              {cliInstaller.warning && (
+                <div className="rounded border border-amber-600/50 bg-amber-950/40 px-3 py-2 text-sm text-amber-100">
+                  {cliInstaller.warning}
+                </div>
+              )}
+
+              {(cliInstaller.lastInstallError || updateCliError) && (
+                <div className="rounded border border-red-700/50 bg-red-950/30 px-3 py-2 text-sm text-red-200">
+                  {updateCliError ?? cliInstaller.lastInstallError}
+                </div>
+              )}
+
+              {onUpdateInvokerCli && !cliInstaller.upToDate && (
+                <button
+                  onClick={() => onUpdateInvokerCli()}
+                  disabled={updateCliPending}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-900 disabled:text-indigo-200 text-white rounded text-sm font-medium transition-colors"
+                >
+                  {updateCliPending ? 'Updating…' : cliInstaller.installedVersion ? 'Update invoker-cli' : 'Install invoker-cli'}
+                </button>
               )}
             </div>
           )}

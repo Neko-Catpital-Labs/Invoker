@@ -247,7 +247,11 @@ importers:
 
   packages/npm-cli: {}
 
-  packages/npm-ui: {}
+  packages/npm-ui:
+    dependencies:
+      '@neko-catpital-labs/invoker-cli':
+        specifier: workspace:*
+        version: link:../npm-cli
 
   packages/persistence:
     dependencies:

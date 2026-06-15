@@ -27,6 +27,14 @@ import type { Logger, WorkResponse } from '@invoker/contracts';
 import { ATTEMPT_LEASE_MS } from '@invoker/contracts';
 import { normalizeRunnerKind } from '@invoker/workflow-graph';
 import { parseMergeConflictError } from './merge-conflict-error.js';
+import {
+  buildExecutorRoutedPayload,
+  buildHeavyweightRoutingRules,
+  resolveExecutorRouting,
+  type ExecutorRoutingReason,
+  type ExecutorRoutingRule,
+  type HeavyweightCommandRoutingPolicy,
+} from './executor-routing.js';
 
 const MERGE_TRACE_LOG = resolve(homedir(), '.invoker', 'merge-trace.log');
 function mergeTrace(tag: string, data: Record<string, unknown>): void {
@@ -113,6 +121,32 @@ function workflowTimestamp(): Date {
   }
   return new Date();
 }
+/** Recreate-class reset: fresh lineage, cleared attempt/session/container metadata. */
+const RECREATE_RESET_CHANGES: TaskStateChanges = {
+  status: 'pending',
+  config: { summary: undefined },
+  execution: {
+    autoFixAttempts: 0,
+    startedAt: undefined,
+    completedAt: undefined,
+    error: undefined,
+    exitCode: undefined,
+    commit: undefined,
+    branch: undefined,
+    workspacePath: undefined,
+    lastHeartbeatAt: undefined,
+    phase: undefined,
+    launchStartedAt: undefined,
+    launchCompletedAt: undefined,
+    reviewUrl: undefined,
+    reviewId: undefined,
+    reviewStatus: undefined,
+    reviewProviderId: undefined,
+    agentSessionId: undefined,
+    containerId: undefined,
+  },
+};
+
 const FIX_FAILURE_PREFIX_RE = /^\[Fix with (?:Claude|Agent) failed\] [^\n]*\n\n/;
 const TRACE_PERSIST_SYNC = process.env.INVOKER_TRACE_PERSIST_SYNC === '1';
 const TRACE_WORKER_RESPONSE = process.env.INVOKER_TRACE_WORKER_RESPONSE === '1';
@@ -455,243 +489,13 @@ export interface ExternalGatePolicyUpdate {
   gatePolicy: 'completed' | 'review_ready';
 }
 
-/**
- * A single routing rule that validates task pool placement against command patterns.
- * When a rule matches a task command, the orchestrator validates that the task's
- * pool destination conforms to the rule's requirements.
- */
-export interface ExecutorRoutingRule {
-  /** Substring to match against the task command. */
-  pattern?: string;
-  /** Regular expression matched against the task command; compiled with new RegExp(regex). */
-  regex?: string;
-  /** Required execution pool ID for matching commands. */
-  poolId: string;
-  /**
-   * Rule behavior:
-   * - enforce (default): task must already declare matching executor/destination
-   * - route: auto-apply rule executor/destination when omitted, and reject conflicts
-   */
-  strategy?: 'enforce' | 'route';
-}
-
-export interface CommandRoutingMatcher {
-  pattern?: string;
-  regex?: string;
-}
-
-export interface HeavyweightCommandRoutingPolicy {
-  enabled?: boolean;
-  poolId: string;
-  matchers?: CommandRoutingMatcher[];
-}
-
-const DEFAULT_HEAVYWEIGHT_COMMAND_MATCHERS: CommandRoutingMatcher[] = [
-  { regex: '\\bpnpm(?:\\s|$)' },
-];
-
-function validateRoutingDestinationAvailability(
-  taskId: string,
-  command: string,
-  sourceLabel: string,
-  poolId: string | undefined,
-  availablePoolIds: Set<string>,
-): void {
-  if (availablePoolIds.size > 0 && (!poolId || !availablePoolIds.has(poolId))) {
-    throw new Error(
-      `Task "${taskId}" with command "${command}" matched ${sourceLabel}, ` +
-      `but config poolId="${poolId}" is not defined in executionPools.`,
-    );
-  }
-  if (availablePoolIds.size === 0) {
-    throw new Error(
-      `Task "${taskId}" with command "${command}" matched ${sourceLabel}, ` +
-      'but no executionPools are configured.',
-    );
-  }
-}
-
-function buildHeavyweightRoutingRules(
-  taskId: string,
-  policy: HeavyweightCommandRoutingPolicy | undefined,
-): ExecutorRoutingRule[] {
-  if (!policy || policy.enabled === false) {
-    return [];
-  }
-
-  const matchers = policy.matchers?.length ? policy.matchers : DEFAULT_HEAVYWEIGHT_COMMAND_MATCHERS;
-  if (!policy.poolId) {
-    throw new Error(
-      `Task "${taskId}" matched heavyweight command routing, ` +
-      'but config is missing destination: set poolId.',
-    );
-  }
-
-  return matchers.map((matcher) => ({
-    pattern: matcher.pattern,
-    regex: matcher.regex,
-    poolId: policy.poolId,
-    strategy: 'route',
-  }));
-}
-
-function applyRoutingRule(
-  taskId: string,
-  command: string,
-  planPoolId: string | undefined,
-  rule: ExecutorRoutingRule,
-  sourceLabel: string,
-  availablePoolIds: Set<string>,
-): { poolId?: string } | undefined {
-  validateRoutingDestinationAvailability(
-    taskId,
-    command,
-    sourceLabel,
-    rule.poolId,
-    availablePoolIds,
-  );
-  if (planPoolId !== undefined && planPoolId !== rule.poolId) {
-    throw new Error(
-      `Task "${taskId}" with command "${command}" matched ${sourceLabel} and must use ` +
-      `poolId="${rule.poolId}", but plan declares poolId="${planPoolId}"`,
-    );
-  }
-  return {
-    poolId: rule.poolId ?? planPoolId,
-  };
-}
-
-/**
- * Finds the first executor routing rule that matches the given command.
- * A rule matches when `pattern` is a substring of `command`, `regex` compiles and tests
- * true against `command`, or both (either is sufficient).
- * Returns the matching rule or undefined if no rule matches.
- */
-export function findMatchingExecutorRoutingRule(
-  command: string,
-  rules: ExecutorRoutingRule[],
-): ExecutorRoutingRule | undefined {
-  for (const rule of rules) {
-    const patternMatch = rule.pattern !== undefined && command.includes(rule.pattern);
-    const regexMatch = rule.regex !== undefined && new RegExp(rule.regex).test(command);
-    if (patternMatch || regexMatch) {
-      return rule;
-    }
-  }
-  return undefined;
-}
-
-/**
- * Validates that a task's routing conforms to pool routing rules.
- * Returns immediately if the task has no command or no rules are configured.
- * When a rule matches the task command, throws if the task's poolId does not
- * match the rule's requirements.
- */
-export function assertExecutorRoutingConforms(
-  taskId: string,
-  command: string | undefined,
-  planPoolId: string | undefined,
-  rules: ExecutorRoutingRule[],
-): void {
-  if (!command || rules.length === 0) {
-    return;
-  }
-
-  const matchingRule = findMatchingExecutorRoutingRule(command, rules);
-  if (!matchingRule) {
-    return;
-  }
-
-  if (planPoolId !== matchingRule.poolId) {
-    throw new Error(
-      `Task "${taskId}" with command "${command}" requires poolId="${matchingRule.poolId}" ` +
-      `but plan declares poolId="${planPoolId ?? '(undefined)'}"`
-    );
-  }
-}
-
-function resolveExecutorRouting(
-  taskId: string,
-  command: string | undefined,
-  planPoolId: string | undefined,
-  defaultPoolId: string | undefined,
-  rules: ExecutorRoutingRule[],
-  availablePoolIds: Set<string>,
-): { poolId?: string; reason: ExecutorRoutingReason } {
-  if (defaultPoolId && availablePoolIds.size > 0 && !availablePoolIds.has(defaultPoolId)) {
-    throw new Error(
-      `Task "${taskId}" cannot use defaultPoolId="${defaultPoolId}" because it is not defined in executionPools.`,
-    );
-  }
-
-  const initialPoolId = planPoolId ?? defaultPoolId;
-  const initialReason: ExecutorRoutingReason = initialPoolId
-    ? { type: 'poolId', poolId: initialPoolId }
-    : { type: 'defaultWorktree' };
-
-  if (!command || rules.length === 0) {
-    return {
-      poolId: initialPoolId,
-      reason: initialReason,
-    };
-  }
-
-  let effectivePoolId = initialPoolId;
-  let reason: ExecutorRoutingReason = initialReason;
-
-  const routingRules = rules.filter((rule) => (rule.strategy ?? 'enforce') === 'route');
-  const matchingRoutingRule = findMatchingExecutorRoutingRule(command, routingRules);
-  if (matchingRoutingRule) {
-    const routed = applyRoutingRule(
-      taskId,
-      command,
-      planPoolId,
-      matchingRoutingRule,
-      'routing rule',
-      availablePoolIds,
-    );
-    effectivePoolId = routed?.poolId ?? effectivePoolId;
-    if (routed?.poolId) {
-      reason = {
-        type: 'routingRule',
-        poolId: routed.poolId,
-        ...(matchingRoutingRule.pattern !== undefined ? { pattern: matchingRoutingRule.pattern } : {}),
-        ...(matchingRoutingRule.regex !== undefined ? { regex: matchingRoutingRule.regex } : {}),
-      };
-    }
-  }
-
-  const enforcementRules = rules.filter((rule) => (rule.strategy ?? 'enforce') === 'enforce');
-  assertExecutorRoutingConforms(
-    taskId,
-    command,
-    effectivePoolId,
-    enforcementRules,
-  );
-
-  return {
-    poolId: effectivePoolId,
-    reason,
-  };
-}
-
-type ExecutorRoutingReason =
-  | { type: 'dockerImage' }
-  | { type: 'poolId'; poolId: string }
-  | { type: 'routingRule'; poolId: string; pattern?: string; regex?: string }
-  | { type: 'defaultWorktree' };
-
-function buildExecutorRoutedPayload(
-  runnerKind: RunnerKind,
-  poolId: string | undefined,
-  reason: ExecutorRoutingReason,
-): Record<string, unknown> {
-  return {
-    runnerKind,
-    ...(poolId ? { poolId } : {}),
-    reason,
-  };
-}
+export {
+  findMatchingExecutorRoutingRule,
+  assertExecutorRoutingConforms,
+  type ExecutorRoutingRule,
+  type CommandRoutingMatcher,
+  type HeavyweightCommandRoutingPolicy,
+} from './executor-routing.js';
 
 /**
  * Adapt an OrchestratorPersistence into the TaskRepository port.
@@ -1191,6 +995,14 @@ export class Orchestrator {
         .filter((t) => t.config.workflowId === id);
     }
 
+    return this.cancelActiveCandidates(candidates, scope);
+  }
+
+  /** Mark every actively-running task in `candidates` as `failed` with a cancel marker, freeing its scheduler slot. */
+  private cancelActiveCandidates(
+    candidates: readonly TaskState[],
+    scope: 'task' | 'workflow',
+  ): string[] {
     const cancelled: string[] = [];
     for (const t of candidates) {
       if (!isActiveForInvalidation(t.status)) continue;
@@ -2487,50 +2299,33 @@ export class Orchestrator {
     // Defense-in-depth for direct callers (CommandService.recreateTask
     // wired in Step 17); a no-op when invoked through `applyInvalidation`.
     this.cancelActiveBeforeInvalidation('task', rootId);
-    let plan = planInvalidation({
+    const plan = planInvalidation({
       action: 'recreateTask',
       targetId: rootId,
       tasks: this.stateMachine.getAllTasks(),
     });
     this.lastInvalidationPlan = plan;
-    const toResetIds = plan.affectedTaskIds;
-    const toResetSet = new Set(toResetIds);
-
-    const resetChanges: TaskStateChanges = {
-      status: 'pending',
-      config: { summary: undefined },
-      execution: {
-        autoFixAttempts: 0,
-        startedAt: undefined,
-        completedAt: undefined,
-        error: undefined,
-        exitCode: undefined,
-        commit: undefined,
-        branch: undefined,
-        workspacePath: undefined,
-        lastHeartbeatAt: undefined,
-        phase: undefined,
-        launchStartedAt: undefined,
-        launchCompletedAt: undefined,
-        reviewUrl: undefined,
-        reviewId: undefined,
-        reviewStatus: undefined,
-        reviewProviderId: undefined,
-        agentSessionId: undefined,
-        containerId: undefined,
-      },
-    };
-
     this.logger.info('[orchestrator] recreateTask reset', {
       taskId: rootId,
-      resetCount: toResetIds.length,
+      resetCount: plan.affectedTaskIds.length,
     });
-    this.invalidateLaunchArtifactsForTasks(toResetIds, 'task recreation reset');
+    return this.applyRecreateReset(plan, 'task recreation reset');
+  }
+
+  /**
+   * Shared tail of the recreate-class mutations: apply `RECREATE_RESET_CHANGES`
+   * to every task in `plan.affectedTaskIds`, then auto-start the ones that
+   * become ready.
+   */
+  private applyRecreateReset(plan: InvalidationPlan, artifactReason: string): TaskState[] {
+    const toResetIds = plan.affectedTaskIds;
+    const toResetSet = new Set(toResetIds);
+    this.invalidateLaunchArtifactsForTasks(toResetIds, artifactReason);
 
     for (const id of toResetIds) {
       const current = this.stateGetTask(id);
       if (!current) continue;
-      const changesWithGeneration = this.withBumpedExecutionGeneration(current, resetChanges);
+      const changesWithGeneration = this.withBumpedExecutionGeneration(current, RECREATE_RESET_CHANGES);
       const recreateUpdated = this.writeAndSync(id, changesWithGeneration);
       const priorAttemptId = current.execution.selectedAttemptId;
       this.replaceSelectedAttempt(current);
@@ -2545,9 +2340,46 @@ export class Orchestrator {
       .getReadyTasks()
       .map((t) => t.id)
       .filter((id) => toResetSet.has(id));
-    plan = withSchedulerEnqueueCandidates(plan, readyIds);
-    this.lastInvalidationPlan = plan;
+    this.lastInvalidationPlan = withSchedulerEnqueueCandidates(plan, readyIds);
     return this.autoStartReadyTasks(readyIds, Orchestrator.EXPEDITED_PRIORITY);
+  }
+
+  /**
+   * Reset a task's transitive downstream dependents to pending (recreate-style)
+   * and auto-start the ones that become ready, leaving the task itself untouched.
+   * Calling it on a leaf is a no-op.
+   */
+  recreateDownstream(taskId: string): TaskState[] {
+    this.refreshFromDb();
+    const task = this.stateGetTask(taskId);
+    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
+
+    const rootId = task.id;
+
+    const plan = planInvalidation({
+      action: 'recreateDownstream',
+      targetId: rootId,
+      tasks: this.stateMachine.getAllTasks(),
+    });
+    this.lastInvalidationPlan = plan;
+    const toResetIds = plan.affectedTaskIds;
+
+    if (toResetIds.length === 0) {
+      this.logger.info('[orchestrator] recreateDownstream no-op (leaf)', { taskId: rootId });
+      return [];
+    }
+
+    // Cancel only descendants so the preserved target's active attempt is never interrupted.
+    const descendants = toResetIds
+      .map((id) => this.stateGetTask(id))
+      .filter((t): t is TaskState => !!t);
+    this.cancelActiveCandidates(descendants, 'task');
+
+    this.logger.info('[orchestrator] recreateDownstream reset', {
+      taskId: rootId,
+      resetCount: toResetIds.length,
+    });
+    return this.applyRecreateReset(plan, 'downstream recreation reset');
   }
 
   /**
@@ -2576,28 +2408,8 @@ export class Orchestrator {
     this.lastInvalidationPlan = plan;
 
     const resetChanges: TaskStateChanges = {
-      status: 'pending',
+      ...RECREATE_RESET_CHANGES,
       config: { summary: undefined, poolMemberId: undefined },
-      execution: {
-        autoFixAttempts: 0,
-        startedAt: undefined,
-        completedAt: undefined,
-        error: undefined,
-        exitCode: undefined,
-        commit: undefined,
-        branch: undefined,
-        workspacePath: undefined,
-        lastHeartbeatAt: undefined,
-        phase: undefined,
-        launchStartedAt: undefined,
-        launchCompletedAt: undefined,
-        reviewUrl: undefined,
-        reviewId: undefined,
-        reviewStatus: undefined,
-        reviewProviderId: undefined,
-        agentSessionId: undefined,
-        containerId: undefined,
-      },
     };
 
     this.logger.info('[orchestrator] recreateWorkflow reset', {
@@ -4812,11 +4624,12 @@ export class Orchestrator {
    * same chart-mandated unblock-pass without cancelling any
    * in-flight work.
    *
-   * Was `private` before Step 15; exposed publicly so
-   * `applyInvalidation`'s `'scheduleOnly'` dep can invoke it
-   * type-safely. No other behavior changes.
+   * Also rehydrates already-blocked tasks whose external gate has
+   * since cleared; review-ready merge runners use this path after
+   * moving an upstream gate out of `running`.
    */
   autoStartExternallyUnblockedReadyTasks(): TaskState[] {
+    const started = this.autoStartUnblockedTasks();
     const readyTasks = this.stateMachine
       .getReadyTasks()
       .filter((task) => this.getExternalDependencyBlocker(task) === undefined);
@@ -4824,7 +4637,8 @@ export class Orchestrator {
     for (const task of readyTasks) {
       this.enqueueIfNotScheduled(task.id);
     }
-    return this.drainScheduler();
+    started.push(...this.drainScheduler());
+    return started;
   }
 
   private autoStartUnblockedTasks(): TaskState[] {
@@ -4837,6 +4651,7 @@ export class Orchestrator {
       this.writeAndSync(task.id, {
         status: 'pending',
         execution: {
+          blockedBy: undefined,
           startedAt: undefined,
           completedAt: undefined,
           lastHeartbeatAt: undefined,

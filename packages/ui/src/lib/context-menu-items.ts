@@ -129,6 +129,13 @@ export function getMenuItems(
       separator: !canCancel ? 'danger' : undefined,
     });
 
+    items.push({
+      id: 'recreate-downstream',
+      label: 'Recreate Downstream',
+      enabled: task.status !== 'running',
+      action: 'onRecreateDownstream',
+      variant: 'danger',
+    });
   }
 
   return items;

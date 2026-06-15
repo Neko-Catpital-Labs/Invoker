@@ -1,9 +1,10 @@
 import type { App } from 'electron';
 
 export interface EarlyElectronAppOptions {
-  app: Pick<App, 'disableHardwareAcceleration' | 'commandLine' | 'name'>;
+  app: Pick<App, 'disableHardwareAcceleration' | 'commandLine' | 'name'> & Partial<Pick<App, 'setActivationPolicy' | 'dock'>>;
   platform?: NodeJS.Platform;
   enableTestCompositor: boolean;
+  isHeadless: boolean;
 }
 
 export function configureEarlyElectronApp(options: EarlyElectronAppOptions): void {
@@ -28,6 +29,11 @@ export function configureEarlyElectronApp(options: EarlyElectronAppOptions): voi
   options.app.name = 'invoker';
   if (platform === 'linux') {
     options.app.commandLine.appendSwitch('class', 'invoker');
+  }
+
+  if (platform === 'darwin' && options.isHeadless) {
+    options.app.setActivationPolicy?.('accessory');
+    options.app.dock?.hide();
   }
 }
 

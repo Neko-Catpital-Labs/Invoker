@@ -3,7 +3,7 @@ import { GitHubMergeGateProvider } from '../github-merge-gate-provider.js';
 
 vi.mock('node:child_process');
 
-function mockSpawnResult(stdoutData: string, exitCode: number) {
+function mockSpawnResult(stdoutData: string, exitCode: number, stderrData = '') {
   const { EventEmitter } = require('events');
   const stdout = new EventEmitter();
   const stderr = new EventEmitter();
@@ -13,6 +13,7 @@ function mockSpawnResult(stdoutData: string, exitCode: number) {
 
   setTimeout(() => {
     if (stdoutData) stdout.emit('data', Buffer.from(stdoutData));
+    if (stderrData) stderr.emit('data', Buffer.from(stderrData));
     child.emit('close', exitCode);
   }, 0);
 
@@ -132,6 +133,48 @@ describe('GitHubMergeGateProvider', () => {
           '-f', 'body=',
         ],
         expect.anything(),
+      );
+    });
+
+    it('retries branch push after GitHub reports a ref lock already-exists race', async () => {
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+      let pushAttempts = 0;
+
+      spawnMock.mockImplementation(((cmd: string, _args: string[]) => {
+        const args = _args;
+        if (cmd === 'git' && args[0] === 'remote' && args[1] === 'get-url' && args[2] === 'origin') {
+          return mockSpawnResult('https://github.com/owner/repo.git', 0);
+        }
+        if (cmd === 'git' && args[0] === 'push') {
+          pushAttempts++;
+          if (pushAttempts === 1) {
+            return mockSpawnResult('', 1, [
+              'To github.com:owner/repo.git',
+              " ! [remote rejected] feature/test -> feature/test (cannot lock ref 'refs/heads/feature/test': reference already exists)",
+              "error: failed to push some refs to 'github.com:owner/repo.git'",
+            ].join('\n'));
+          }
+          return mockSpawnResult('', 0);
+        }
+        if (cmd === 'git' && args[0] === 'fetch') return mockSpawnResult('', 0);
+        if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'list') return mockSpawnResult('[]', 0);
+        return mockSpawnResult('{"html_url":"https://github.com/owner/repo/pull/42","number":42}', 0);
+      }) as any);
+
+      const result = await provider.createReview({
+        baseBranch: 'main',
+        featureBranch: 'feature/test',
+        title: 'Test PR',
+        cwd: '/tmp/repo',
+      });
+
+      expect(result.url).toBe('https://github.com/owner/repo/pull/42');
+      expect(pushAttempts).toBe(2);
+      expect(spawnMock).toHaveBeenCalledWith(
+        'git',
+        ['fetch', 'origin', '+refs/heads/feature/test:refs/remotes/origin/feature/test'],
+        expect.objectContaining({ cwd: '/tmp/repo' }),
       );
     });
 

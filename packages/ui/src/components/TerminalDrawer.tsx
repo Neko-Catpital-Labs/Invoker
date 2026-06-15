@@ -34,16 +34,55 @@ interface TerminalSessionPaneProps {
   onOutput: (sessionId: string, data: string) => void;
 }
 
+type SeededOutputSnapshot = {
+  sessionId: string;
+  snapshot: string;
+  term: XTermTerminal;
+};
+
 function lastNonEmptyLine(data: string): string {
   const clean = data.replace(ANSI_PATTERN, '').replace(/\r/g, '\n');
   const lines = clean.split('\n').map((line) => line.trim()).filter(Boolean);
   return lines.at(-1) ?? '';
 }
 
+function seedTerminalOutputSnapshot(
+  term: XTermTerminal,
+  session: TerminalSessionDescriptor,
+  seededSnapshotRef: { current: SeededOutputSnapshot | null },
+): void {
+  const outputSnapshot = session.outputSnapshot;
+  const seededSnapshot = seededSnapshotRef.current;
+  if (
+    outputSnapshot &&
+    (
+      !seededSnapshot ||
+      seededSnapshot.sessionId !== session.sessionId ||
+      seededSnapshot.snapshot !== outputSnapshot ||
+      seededSnapshot.term !== term
+    )
+  ) {
+    try {
+      term.write(outputSnapshot);
+      seededSnapshotRef.current = {
+        sessionId: session.sessionId,
+        snapshot: outputSnapshot,
+        term,
+      };
+    } catch (err) {
+      console.warn(
+        `Failed to seed output snapshot for terminal session ${session.sessionId}:`,
+        err,
+      );
+    }
+  }
+}
+
 function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: TerminalSessionPaneProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const seededSnapshotRef = useRef<SeededOutputSnapshot | null>(null);
 
   useEffect(() => {
     const host = containerRef.current;
@@ -68,6 +107,8 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
     }
     termRef.current = term;
     fitRef.current = fit;
+
+    seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
 
     const inputDisposable = term.onData((data) => {
       void window.invoker?.terminalWrite?.(session.sessionId, data);
@@ -125,6 +166,12 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
       fitRef.current = null;
     };
   }, [onOutput, session.sessionId]);
+
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
+  }, [session.outputSnapshot, session.sessionId]);
 
   useEffect(() => {
     if (!isActive) return;

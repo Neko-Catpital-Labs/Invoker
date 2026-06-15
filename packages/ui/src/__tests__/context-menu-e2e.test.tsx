@@ -64,12 +64,47 @@ describe('Context menu (component)', () => {
     mock.cleanup();
   });
 
-  async function setup() {
+  async function setup(
+    tasks = [alpha, beta, merge],
+    workflowList = workflows,
+  ) {
     render(<App />);
-    act(() => mock.setTasks([alpha, beta, merge], workflows));
+    act(() => mock.setTasks(tasks, workflowList));
 
     await waitFor(() => {
       expect(screen.getByTestId('workflow-node-wf-1')).toBeInTheDocument();
+    });
+  }
+
+  async function openWorkflowContextMenu() {
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    await waitFor(() => expect(menu).toHaveFocus());
+    return menu;
+  }
+
+  async function openTaskContextMenu(taskId = 'task-alpha') {
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId(`rf__node-${taskId}`)).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId(`rf__node-${taskId}`));
+    const menu = await screen.findByRole('menu');
+    await waitFor(() => expect(menu).toHaveFocus());
+    return menu;
+  }
+
+  function pressMenuKey(key: string) {
+    const target =
+      document.activeElement instanceof HTMLElement && document.activeElement.getAttribute('role') === 'menu'
+        ? document.activeElement
+        : document;
+    fireEvent.keyDown(target, { key });
+  }
+
+  async function expectHighlightedMenuItem(name: RegExp | string) {
+    await waitFor(() => {
+      expect(screen.getByRole('menuitem', { name })).toHaveClass('bg-gray-700');
     });
   }
 
@@ -107,10 +142,12 @@ describe('Context menu (component)', () => {
       expect(screen.getByText('Copy Workflow ID')).toBeInTheDocument();
       expect(screen.getByText('More')).toBeInTheDocument();
     });
+    expect(screen.queryByText('Recreate Downstream')).not.toBeInTheDocument();
     expect(screen.queryByText('Recreate Workflow')).not.toBeInTheDocument();
     fireEvent.click(screen.getByText('More'));
     expect(await screen.findByText('Rebase and Retry')).toBeInTheDocument();
     expect(screen.getByText('Rebase and Recreate')).toBeInTheDocument();
+    expect(screen.queryByText('Recreate Downstream')).not.toBeInTheDocument();
   });
 
   it('task context menu still works in mini DAG', async () => {
@@ -127,6 +164,64 @@ describe('Context menu (component)', () => {
     expect(screen.queryByText('Retry Workflow')).not.toBeInTheDocument();
     expect(screen.queryByText('Cancel Workflow')).not.toBeInTheDocument();
     expect(screen.queryByText('Delete Workflow')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('More'));
+    expect(await screen.findByText('Recreate from Task')).toBeInTheDocument();
+    expect(screen.getByText('Recreate Downstream')).toBeInTheDocument();
+    expect(screen.getByText('Terminate Task')).toBeInTheDocument();
+  });
+
+  it('task context menu calls recreateDownstream for workflow-owned tasks', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    fireEvent.click(await screen.findByText('More'));
+    fireEvent.click(await screen.findByText('Recreate Downstream'));
+
+    await waitFor(() => expect(mock.api.recreateDownstream).toHaveBeenCalledWith('task-alpha'));
+    expect(mock.api.recreateTask).not.toHaveBeenCalled();
+  });
+
+  it('task context menu disables Recreate Downstream while the task is running', async () => {
+    const runningTask = makeUITask({
+      id: 'task-running',
+      description: 'Running workflow task',
+      status: 'running',
+      command: 'sleep 30',
+      workflowId: 'wf-1',
+    });
+
+    await setup([runningTask]);
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-running')).toBeInTheDocument();
+    });
+
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-running'));
+    fireEvent.click(await screen.findByText('More'));
+    const recreateDownstream = await screen.findByRole('menuitem', { name: 'Recreate Downstream' });
+
+    expect(recreateDownstream).toBeDisabled();
+    fireEvent.click(recreateDownstream);
+    expect(mock.api.recreateDownstream).not.toHaveBeenCalled();
+  });
+
+  it('task context menu keeps Recreate from Task routed to recreateTask', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    fireEvent.click(await screen.findByText('More'));
+    fireEvent.click(await screen.findByText('Recreate from Task'));
+
+    await waitFor(() => expect(mock.api.recreateTask).toHaveBeenCalledWith('task-alpha'));
+    expect(mock.api.recreateDownstream).not.toHaveBeenCalled();
   });
 
   it('workflow context menu retries workflow', async () => {
@@ -186,5 +281,79 @@ describe('Context menu (component)', () => {
     fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('workflow context menu copies workflow id with ArrowDown navigation and Enter', async () => {
+    await setup();
+    await openWorkflowContextMenu();
+
+    pressMenuKey('ArrowDown');
+    pressMenuKey('ArrowDown');
+    pressMenuKey('ArrowDown');
+    await expectHighlightedMenuItem('Copy Workflow ID');
+    pressMenuKey('Enter');
+
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('workflow context menu ArrowUp wraps to More deterministically', async () => {
+    await setup();
+    await openWorkflowContextMenu();
+
+    pressMenuKey('ArrowUp');
+    await expectHighlightedMenuItem('More');
+    pressMenuKey('Enter');
+
+    expect(await screen.findByRole('menuitem', { name: 'Rebase and Retry' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Delete Workflow' })).toBeInTheDocument();
+  });
+
+  it('task context menu activates the next enabled task action with ArrowDown and Enter', async () => {
+    await setup();
+    await openTaskContextMenu();
+
+    await expectHighlightedMenuItem('Restart Task');
+    pressMenuKey('ArrowDown');
+    await expectHighlightedMenuItem('Open Terminal');
+    pressMenuKey('Enter');
+
+    await waitFor(() => expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'));
+  });
+
+  it('task context menu activates the highlighted item with Space', async () => {
+    await setup();
+    await openTaskContextMenu();
+
+    pressMenuKey('ArrowDown');
+    await expectHighlightedMenuItem('Open Terminal');
+    pressMenuKey(' ');
+
+    await waitFor(() => expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'));
+  });
+
+  it('task context menu skips disabled actions during keyboard navigation', async () => {
+    const failedPivot = makeUITask({
+      id: 'task-disabled-terminal',
+      description: 'Failed pivot task',
+      status: 'failed',
+      workflowId: 'wf-1',
+      config: {
+        workflowId: 'wf-1',
+        pivot: true,
+        experimentVariants: [{ id: 'exp-a', description: 'Experiment A' }],
+      },
+    });
+    await setup([failedPivot]);
+    await openTaskContextMenu('task-disabled-terminal');
+
+    await expectHighlightedMenuItem('Fix with Claude');
+    pressMenuKey('ArrowDown');
+    await expectHighlightedMenuItem('Fix with Codex');
+    pressMenuKey('ArrowDown');
+    await expectHighlightedMenuItem('Restart Task');
+    pressMenuKey('Enter');
+
+    await waitFor(() => expect(mock.api.restartTask).toHaveBeenCalledWith('task-disabled-terminal'));
+    expect(mock.api.openTerminal).not.toHaveBeenCalled();
   });
 });

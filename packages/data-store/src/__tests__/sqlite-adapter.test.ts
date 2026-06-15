@@ -1259,6 +1259,60 @@ describe('SQLiteAdapter', () => {
       const loaded = adapter.loadWorkflow('wf-1');
       expect(loaded!.updatedAt >= before).toBe(true);
     });
+
+    it('clears externalDependencies when the key is present with undefined', () => {
+      adapter.saveWorkflow({
+        ...testWorkflow,
+        externalDependencies: [
+          { workflowId: 'wf-upstream', taskId: '__merge__', requiredStatus: 'completed' },
+        ],
+      });
+
+      adapter.updateWorkflow('wf-1', { externalDependencies: undefined });
+
+      expect(adapter.loadWorkflow('wf-1')!.externalDependencies).toBeUndefined();
+    });
+
+    it('leaves externalDependencies untouched when the key is absent', () => {
+      const deps = [
+        { workflowId: 'wf-upstream', taskId: '__merge__', requiredStatus: 'completed' as const },
+      ];
+      adapter.saveWorkflow({ ...testWorkflow, externalDependencies: deps });
+
+      adapter.updateWorkflow('wf-1', { generation: 2 });
+
+      expect(adapter.loadWorkflow('wf-1')!.externalDependencies).toEqual(deps);
+    });
+
+    it('clears externalDependencyChanges when the key is present with undefined', () => {
+      adapter.saveWorkflow({
+        ...testWorkflow,
+        externalDependencyChanges: [
+          {
+            before: { workflowId: 'wf-upstream', taskId: '__merge__', requiredStatus: 'completed' },
+            changedAt: '2026-06-11T00:00:00.000Z',
+          },
+        ],
+      });
+
+      adapter.updateWorkflow('wf-1', { externalDependencyChanges: undefined });
+
+      expect(adapter.loadWorkflow('wf-1')!.externalDependencyChanges).toBeUndefined();
+    });
+
+    it('leaves externalDependencyChanges untouched when the key is absent', () => {
+      const changes = [
+        {
+          before: { workflowId: 'wf-upstream', taskId: '__merge__', requiredStatus: 'completed' as const },
+          changedAt: '2026-06-11T00:00:00.000Z',
+        },
+      ];
+      adapter.saveWorkflow({ ...testWorkflow, externalDependencyChanges: changes });
+
+      adapter.updateWorkflow('wf-1', { generation: 2 });
+
+      expect(adapter.loadWorkflow('wf-1')!.externalDependencyChanges).toEqual(changes);
+    });
   });
 
   describe('logEvent + getEvents', () => {
