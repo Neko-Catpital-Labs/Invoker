@@ -144,4 +144,99 @@ describe('SSH worktree metadata repro', () => {
       }),
     }));
   });
+
+  it('blocks a stale SSH startup failure from writing old metadata or a failed response after the attempt advanced', async () => {
+    const ownerPath = '/home/invoker/.invoker/worktrees/049de5b865cc/experiment-wf-1-test-execution-engine-attempt1';
+    const staleBranch = 'experiment/wf-1/test-execution-engine-attempt1';
+
+    // Live task starts on attempt-1, then advances to attempt-2 (e.g. via
+    // recreate-task) while the slow SSH executor.start() is still in flight.
+    const liveTask = makeTask({
+      id: 'wf-1/test-execution-engine',
+      status: 'running',
+      config: { command: 'pnpm test', runnerKind: 'ssh' },
+      execution: { selectedAttemptId: 'attempt-1', generation: 0 },
+    });
+
+    const failingExecutor = {
+      type: 'ssh',
+      start: vi.fn().mockImplementation(async () => {
+        // Attempt advances mid-launch: the next SSH launch already owns the task.
+        liveTask.execution.selectedAttemptId = 'attempt-2';
+        liveTask.execution.generation = 1;
+        throw Object.assign(
+          new Error(
+            'SSH remote script failed (exit=128)\n' +
+              `fatal: '${staleBranch}' is already used by worktree at '${ownerPath}'\n`,
+          ),
+          { workspacePath: ownerPath, branch: staleBranch },
+        );
+      }),
+      onComplete: vi.fn(),
+      onOutput: vi.fn(),
+      onHeartbeat: vi.fn(),
+      kill: vi.fn(),
+      destroyAll: vi.fn(),
+    };
+
+    const updateSpy = vi.fn();
+    const appendOutputSpy = vi.fn();
+    const logEventSpy = vi.fn();
+    const handleResponseSpy = vi.fn().mockReturnValue([]);
+    const onOutputSpy = vi.fn();
+
+    const runner = new TaskRunner({
+      orchestrator: {
+        getTask: () => liveTask,
+        getAllTasks: () => [liveTask],
+        handleWorkerResponse: handleResponseSpy,
+      } as any,
+      persistence: {
+        updateTask: updateSpy,
+        appendTaskOutput: appendOutputSpy,
+        logEvent: logEventSpy,
+      } as any,
+      executorRegistry: {
+        getDefault: () => failingExecutor,
+        get: () => failingExecutor,
+        getAll: () => [failingExecutor],
+      } as any,
+      cwd: '/tmp',
+      callbacks: { onOutput: onOutputSpy },
+    });
+
+    // The launch captures attempt-1 lineage at the top of executeTask.
+    const launchTask = makeTask({
+      id: 'wf-1/test-execution-engine',
+      status: 'running',
+      config: { command: 'pnpm test', runnerKind: 'ssh' },
+      execution: { selectedAttemptId: 'attempt-1', generation: 0 },
+    });
+
+    await runner.executeTask(launchTask);
+
+    // No stale execution metadata written onto the live (now attempt-2) task row.
+    const staleMetadataWrites = updateSpy.mock.calls.filter(([, changes]) =>
+      changes?.execution?.workspacePath === ownerPath
+      || changes?.execution?.branch === staleBranch,
+    );
+    expect(staleMetadataWrites).toEqual([]);
+
+    // No failed worker response emitted against the newer selected attempt.
+    const failedResponses = handleResponseSpy.mock.calls.filter(([response]) =>
+      response?.status === 'failed',
+    );
+    expect(failedResponses).toEqual([]);
+
+    // The live task row's output stream is not polluted by the stale launch.
+    expect(appendOutputSpy).not.toHaveBeenCalled();
+    expect(onOutputSpy).not.toHaveBeenCalled();
+
+    // Diagnostics are preserved on the append-only, attempt-scoped event log.
+    expect(logEventSpy).toHaveBeenCalledWith(
+      'wf-1/test-execution-engine',
+      'task.executor.startup-failure-stale',
+      expect.objectContaining({ attemptId: 'attempt-1', staleBranch }),
+    );
+  });
 });

@@ -2009,6 +2009,70 @@ describe('TaskRunner', () => {
         vi.useRealTimers();
       }
     });
+
+    it('suppresses the failed worker response when the attempt advances during a failing launch', async () => {
+      const handleWorkerResponse = vi.fn();
+      const onComplete = vi.fn();
+      const updateTask = vi.fn();
+
+      // The task starts on attempt-1 but advances to attempt-2 while the
+      // executor.start() for attempt-1 is still in flight.
+      const liveTask = makeTask({
+        id: 'stale-launch',
+        status: 'running',
+        config: { command: 'echo hi', runnerKind: 'ssh' },
+        execution: { selectedAttemptId: 'stale-launch-a1', generation: 0 },
+      });
+
+      const failingExecutor = {
+        type: 'ssh',
+        start: vi.fn(async () => {
+          liveTask.execution.selectedAttemptId = 'stale-launch-a2';
+          liveTask.execution.generation = 1;
+          throw new Error('SSH transport failed (exit=128)');
+        }),
+        onOutput: vi.fn(),
+        onComplete: vi.fn(),
+        onHeartbeat: vi.fn(),
+        kill: vi.fn(),
+        destroyAll: vi.fn(),
+      };
+
+      const runner = new TaskRunner({
+        orchestrator: {
+          getTask: () => liveTask,
+          getAllTasks: () => [liveTask],
+          handleWorkerResponse,
+        } as any,
+        persistence: {
+          updateTask,
+          updateAttempt: vi.fn(),
+          appendTaskOutput: vi.fn(),
+          logEvent: vi.fn(),
+        } as any,
+        executorRegistry: {
+          getDefault: () => failingExecutor,
+          get: () => failingExecutor,
+          getAll: () => [failingExecutor],
+        } as any,
+        cwd: '/tmp',
+        callbacks: { onComplete },
+      });
+
+      const launchTask = makeTask({
+        id: 'stale-launch',
+        status: 'running',
+        config: { command: 'echo hi', runnerKind: 'ssh' },
+        execution: { selectedAttemptId: 'stale-launch-a1', generation: 0 },
+      });
+
+      await runner.executeTask(launchTask);
+
+      // No failed response and no completion callback against the newer attempt.
+      const failedResponses = handleWorkerResponse.mock.calls.filter(([r]) => r?.status === 'failed');
+      expect(failedResponses).toEqual([]);
+      expect(onComplete).not.toHaveBeenCalled();
+    });
   });
 
   describe('merge git operation timeout', () => {
