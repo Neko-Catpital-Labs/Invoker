@@ -9,6 +9,103 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
+/**
+ * Connection and provisioning fields shared by every remote SSH target,
+ * regardless of how the box itself is provisioned. The SSH executor is the
+ * runtime owner for all remote targets.
+ */
+export interface RemoteTargetConfigBase {
+  host: string;
+  user: string;
+  /** Path to SSH identity file (private key). */
+  sshKeyPath: string;
+  /** SSH port. Default: 22. */
+  port?: number;
+  /**
+   * When true, use managed workspace mode: clone/fetch repo, create/reset worktrees,
+   * and provision per-task workspaces. When false (default), BYO mode: user provides
+   * pre-cloned repo path and handles all git/setup operations.
+   */
+  managedWorkspaces?: boolean;
+  /**
+   * Remote invoker home directory (e.g., ~/.invoker). Only used in managed mode.
+   * Default: ~/.invoker
+   */
+  remoteInvokerHome?: string;
+  /**
+   * Optional provision command to run in the worktree after creation (e.g., pnpm install).
+   * Only used in managed mode. Default: pnpm install --frozen-lockfile
+   */
+  provisionCommand?: string;
+  /**
+   * When true, export agent API keys from the local secrets file into SSH task/fix
+   * shells. Default false so remote Claude/Codex CLI account auth is preserved.
+   */
+  use_api_key?: boolean;
+  /**
+   * Optional local KEY=value secrets file used when use_api_key is true.
+   * Defaults to docker.secretsFile/fallback when unset.
+   */
+  secretsFile?: string;
+  /**
+   * Remote workload heartbeat interval (seconds) emitted by the SSH payload wrapper.
+   * Used for SSH executing-stall liveness checks. Default: 30.
+   */
+  remoteHeartbeatIntervalSeconds?: number;
+  /**
+   * Max concurrent tasks allowed on this target when used inside an execution pool.
+   * Default for pooled SSH members: 1.
+   */
+  maxConcurrentTasks?: number;
+}
+
+/**
+ * A static, always-on remote SSH box. This is the default when `type` is
+ * omitted, so existing single-shape `remoteTargets` entries keep working.
+ */
+export interface StaticRemoteTargetConfig extends RemoteTargetConfigBase {
+  type?: 'static';
+}
+
+/**
+ * An on-demand box leased through the Crabbox provider. The SSH executor still
+ * runs the task; these fields describe how to acquire, inspect, and stop the
+ * lease. Per-lease runtime details are captured in RemoteLeaseMetadata.
+ */
+export interface CrabboxRemoteTargetConfig extends RemoteTargetConfigBase {
+  type: 'crabbox';
+  /** Command that drives the Crabbox CLI for the lease lifecycle. */
+  crabboxCommand: string;
+  /** Crabbox provider/backend identifier. */
+  provider: string;
+  /** Machine class/size requested from Crabbox. */
+  class: string;
+  /** Lease time-to-live (e.g. "1h" or seconds). */
+  ttl: string | number;
+  /** Idle timeout after which Crabbox may reclaim the box. */
+  idleTimeout: string | number;
+  /** Network the leased box should join. */
+  network: string;
+  /** Crabbox target/image to lease. */
+  target: string;
+  /** Idle window after which the box is stopped. */
+  stopAfter: string | number;
+  /** When true, keep the box alive after a failed task for debugging. */
+  keepOnFailure: boolean;
+  /** Optional extra args for the warmup/acquire call. */
+  warmupArgs?: string[];
+  /** Optional extra args for the status/inspect call. */
+  statusArgs?: string[];
+  /** Optional extra args for the stop call. */
+  stopArgs?: string[];
+}
+
+/**
+ * A remote target is a static SSH box (the default) or a Crabbox-leased box.
+ * A missing `type` field means a static SSH target.
+ */
+export type RemoteTargetConfig = StaticRemoteTargetConfig | CrabboxRemoteTargetConfig;
+
 export interface InvokerConfig {
   defaultBranch?: string;
   /**
@@ -97,50 +194,7 @@ export interface InvokerConfig {
     secretsFile?: string;
   };
   /** Named remote SSH targets for running tasks on remote machines via SSH key auth. */
-  remoteTargets?: Record<string, {
-    host: string;
-    user: string;
-    /** Path to SSH identity file (private key). */
-    sshKeyPath: string;
-    /** SSH port. Default: 22. */
-    port?: number;
-    /**
-     * When true, use managed workspace mode: clone/fetch repo, create/reset worktrees,
-     * and provision per-task workspaces. When false (default), BYO mode: user provides
-     * pre-cloned repo path and handles all git/setup operations.
-     */
-    managedWorkspaces?: boolean;
-    /**
-     * Remote invoker home directory (e.g., ~/.invoker). Only used in managed mode.
-     * Default: ~/.invoker
-     */
-    remoteInvokerHome?: string;
-    /**
-     * Optional provision command to run in the worktree after creation (e.g., pnpm install).
-     * Only used in managed mode. Default: pnpm install --frozen-lockfile
-     */
-    provisionCommand?: string;
-    /**
-     * When true, export agent API keys from the local secrets file into SSH task/fix
-     * shells. Default false so remote Claude/Codex CLI account auth is preserved.
-     */
-    use_api_key?: boolean;
-    /**
-     * Optional local KEY=value secrets file used when use_api_key is true.
-     * Defaults to docker.secretsFile/fallback when unset.
-     */
-    secretsFile?: string;
-    /**
-     * Remote workload heartbeat interval (seconds) emitted by the SSH payload wrapper.
-     * Used for SSH executing-stall liveness checks. Default: 30.
-     */
-    remoteHeartbeatIntervalSeconds?: number;
-    /**
-     * Max concurrent tasks allowed on this target when used inside an execution pool.
-     * Default for pooled SSH members: 1.
-     */
-    maxConcurrentTasks?: number;
-  }>;
+  remoteTargets?: Record<string, RemoteTargetConfig>;
   /**
    * Named execution pools used by routing rules.
    * Pools provide shared queue + drain semantics with per-member capacity limits.
@@ -285,6 +339,16 @@ export function resolveLaunchOutboxMode(
     `[config] Unknown INVOKER_LAUNCH_OUTBOX value "${raw}"; falling back to "active".`,
   );
   return 'active';
+}
+
+/**
+ * Resolve a remote target's kind. A missing or 'static' `type` field means a
+ * static SSH target; 'crabbox' selects the Crabbox-leased provider.
+ */
+export function resolveRemoteTargetKind(
+  target: RemoteTargetConfig,
+): 'static' | 'crabbox' {
+  return target.type === 'crabbox' ? 'crabbox' : 'static';
 }
 
 export type EmbeddedTerminalBackendConfig = 'bash' | 'pty';

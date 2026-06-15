@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
 import type { Workflow, Conversation } from '../adapter.js';
 import { createAttempt } from '@invoker/workflow-core';
-import type { TaskState, TaskStateChanges } from '@invoker/workflow-core';
+import type { TaskState, TaskStateChanges, RemoteLeaseMetadata } from '@invoker/workflow-core';
 
 describe('SQLiteAdapter', () => {
   let adapter: SQLiteAdapter;
@@ -169,6 +169,70 @@ describe('SQLiteAdapter', () => {
       const result = (adapter as any).db.exec('PRAGMA index_list(tasks)') as Array<{ values: unknown[][] }>;
       const indexNames = (result[0]?.values ?? []).map((row) => String(row[1]));
       expect(indexNames).toContain('idx_tasks_workflow_id');
+    });
+  });
+
+  describe('remoteLeaseMetadata persistence', () => {
+    const lease: RemoteLeaseMetadata = {
+      provider: 'crabbox',
+      leaseId: 'lease-123',
+      slug: 'sunny-crab',
+      targetId: 'box',
+      sshHost: '10.1.2.3',
+      sshUser: 'invoker',
+      sshPort: 2222,
+      sshKeyPath: '/tmp/key',
+      expiresAt: '2026-06-15T12:00:00.000Z',
+      stopAfter: '30m',
+      keepOnFailure: true,
+    };
+
+    it('round-trips lease metadata on a task through save and load', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('ssh-task', {
+        config: { runnerKind: 'ssh' },
+        execution: { remoteLeaseMetadata: lease },
+      }));
+
+      const [loaded] = adapter.loadTasks('wf-1');
+      expect(loaded.execution.remoteLeaseMetadata).toEqual(lease);
+    });
+
+    it('persists lease metadata through updateTask and getRemoteLeaseMetadata', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('ssh-task', { config: { runnerKind: 'ssh' } }));
+      expect(adapter.getRemoteLeaseMetadata('ssh-task')).toBeNull();
+
+      adapter.updateTask('ssh-task', { execution: { remoteLeaseMetadata: lease } });
+
+      expect(adapter.getRemoteLeaseMetadata('ssh-task')).toEqual(lease);
+      expect(adapter.loadTask('ssh-task')?.execution.remoteLeaseMetadata).toEqual(lease);
+    });
+
+    it('clears lease metadata when updateTask sets it undefined', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('ssh-task', {
+        config: { runnerKind: 'ssh' },
+        execution: { remoteLeaseMetadata: lease },
+      }));
+
+      adapter.updateTask('ssh-task', { execution: { remoteLeaseMetadata: undefined } });
+
+      expect(adapter.getRemoteLeaseMetadata('ssh-task')).toBeNull();
+      expect(adapter.loadTask('ssh-task')?.execution.remoteLeaseMetadata).toBeUndefined();
+    });
+
+    it('round-trips lease metadata on an attempt through save, update, and load', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1', { config: { runnerKind: 'ssh' } }));
+
+      const attempt = createAttempt('t1', { status: 'running', remoteLeaseMetadata: lease });
+      adapter.saveAttempt(attempt);
+      expect(adapter.loadAttempt(attempt.id)?.remoteLeaseMetadata).toEqual(lease);
+
+      const updatedLease: RemoteLeaseMetadata = { ...lease, leaseId: 'lease-456' };
+      adapter.updateAttempt(attempt.id, { remoteLeaseMetadata: updatedLease });
+      expect(adapter.loadAttempt(attempt.id)?.remoteLeaseMetadata).toEqual(updatedLease);
     });
   });
 

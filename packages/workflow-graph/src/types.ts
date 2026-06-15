@@ -103,6 +103,39 @@ export interface ExternalDependencyChange {
   readonly changedBy?: string;
 }
 
+// ── Remote lease metadata ──────────────────────────────────
+// Durable record of a leased remote box. Persisted on tasks and attempts so
+// lease cleanup and terminal restore survive an Invoker restart.
+
+/**
+ * Lease details for a Crabbox-provisioned remote box. Provider-tagged so other
+ * providers can join this as a discriminated union later. The SSH executor
+ * stays the runtime owner; these fields are what it needs to reconnect, restore
+ * a terminal, and stop the lease after a restart.
+ */
+export interface CrabboxRemoteLeaseMetadata {
+  readonly provider: 'crabbox';
+  /** Crabbox-assigned lease identifier used for status/stop calls. */
+  readonly leaseId: string;
+  /** Human-readable lease slug (e.g. for logs and CLI lookups). */
+  readonly slug: string;
+  /** Config key of the remote target that produced this lease. */
+  readonly targetId: string;
+  readonly sshHost: string;
+  readonly sshUser: string;
+  readonly sshPort: number;
+  readonly sshKeyPath: string;
+  /** ISO timestamp when the lease expires. */
+  readonly expiresAt: string;
+  /** Idle window after which the box should be stopped. */
+  readonly stopAfter?: string | number;
+  /** When true, keep the box alive after a failed task for debugging. */
+  readonly keepOnFailure?: boolean;
+}
+
+/** Provider-tagged durable remote lease metadata. */
+export type RemoteLeaseMetadata = CrabboxRemoteLeaseMetadata;
+
 // ── Task Execution (runtime state) ─────────────────────────
 // Never copied when cloning. Reset on restart.
 
@@ -153,6 +186,8 @@ export interface TaskExecution {
   };
   readonly selectedAttemptId?: string;
   readonly autoFixAttempts?: number;
+  /** Durable remote lease details for SSH cleanup and terminal restore. */
+  readonly remoteLeaseMetadata?: RemoteLeaseMetadata;
 }
 
 // ── Task State ──────────────────────────────────────────────
@@ -284,6 +319,10 @@ export interface Attempt {
     readonly failedBranch: string;
     readonly conflictFiles: readonly string[];
   };
+
+  // ── Remote lease ──
+  /** Durable remote lease details for SSH cleanup and terminal restore. */
+  readonly remoteLeaseMetadata?: RemoteLeaseMetadata;
 }
 
 // ── Helper to create a new Attempt ──────────────────────────

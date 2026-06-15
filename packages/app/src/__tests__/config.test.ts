@@ -3,7 +3,9 @@ import {
   loadConfig,
   resolveEmbeddedTerminalBackendConfig,
   resolveLaunchOutboxMode,
+  resolveRemoteTargetKind,
 } from '../config.js';
+import type { CrabboxRemoteTargetConfig } from '../config.js';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -220,6 +222,94 @@ describe('loadConfig', () => {
     expect(config.defaultPoolId).toBe('mixed-local-ssh');
   });
 
+  it('reads a static remote target (no type) preserving every SSH field', () => {
+    const ci1 = {
+      host: '10.0.0.1',
+      user: 'invoker',
+      sshKeyPath: '/tmp/key',
+      port: 2222,
+      managedWorkspaces: true,
+      remoteInvokerHome: '/home/invoker/.invoker',
+      provisionCommand: 'pnpm install --frozen-lockfile',
+      use_api_key: true,
+      secretsFile: '/tmp/secrets.env',
+      remoteHeartbeatIntervalSeconds: 45,
+      maxConcurrentTasks: 3,
+    };
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ remoteTargets: { ci1 } }),
+    );
+    const config = loadConfig();
+    expect(config.remoteTargets?.ci1).toEqual(ci1);
+    expect(resolveRemoteTargetKind(config.remoteTargets!.ci1)).toBe('static');
+  });
+
+  it('reads a typed Crabbox remote target with lease lifecycle fields', () => {
+    const box = {
+      type: 'crabbox',
+      host: 'crabbox.internal',
+      user: 'invoker',
+      sshKeyPath: '/tmp/key',
+      crabboxCommand: 'crabbox',
+      provider: 'fly',
+      class: 'performance-2x',
+      ttl: '1h',
+      idleTimeout: '15m',
+      network: 'invoker-net',
+      target: 'ubuntu-24.04',
+      stopAfter: '30m',
+      keepOnFailure: true,
+      warmupArgs: ['--warm'],
+      statusArgs: ['--json'],
+      stopArgs: ['--force'],
+    };
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ remoteTargets: { box } }),
+    );
+    const config = loadConfig();
+    const target = config.remoteTargets?.box as CrabboxRemoteTargetConfig;
+    expect(target).toEqual(box);
+    expect(resolveRemoteTargetKind(target)).toBe('crabbox');
+    expect(target.crabboxCommand).toBe('crabbox');
+    expect(target.keepOnFailure).toBe(true);
+  });
+
+});
+
+describe('resolveRemoteTargetKind', () => {
+  it('treats a missing type as a static SSH target', () => {
+    expect(
+      resolveRemoteTargetKind({ host: 'h', user: 'u', sshKeyPath: '/k' }),
+    ).toBe('static');
+  });
+
+  it('treats an explicit static type as a static SSH target', () => {
+    expect(
+      resolveRemoteTargetKind({ type: 'static', host: 'h', user: 'u', sshKeyPath: '/k' }),
+    ).toBe('static');
+  });
+
+  it('selects crabbox when type is crabbox', () => {
+    expect(
+      resolveRemoteTargetKind({
+        type: 'crabbox',
+        host: 'h',
+        user: 'u',
+        sshKeyPath: '/k',
+        crabboxCommand: 'crabbox',
+        provider: 'fly',
+        class: 'standard',
+        ttl: '1h',
+        idleTimeout: '10m',
+        network: 'net',
+        target: 'ubuntu',
+        stopAfter: '20m',
+        keepOnFailure: false,
+      }),
+    ).toBe('crabbox');
+  });
 });
 
 describe('resolveEmbeddedTerminalBackendConfig', () => {

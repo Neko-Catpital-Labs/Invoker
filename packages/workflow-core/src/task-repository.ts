@@ -76,6 +76,7 @@ export type AttemptChanges = Partial<
     | 'agentSessionId'
     | 'containerId'
     | 'mergeConflict'
+    | 'remoteLeaseMetadata'
   >
 >;
 

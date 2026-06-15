@@ -5,7 +5,7 @@
  * This allows swapping storage backends (in-memory, SQLite, etc.)
  */
 
-import type { TaskState, TaskStateChanges, PlanDefinition, Attempt, WorkflowDerivedStatus, WorkflowRollup, ExternalDependency, ExternalDependencyChange } from '@invoker/workflow-core';
+import type { TaskState, TaskStateChanges, PlanDefinition, Attempt, WorkflowDerivedStatus, WorkflowRollup, ExternalDependency, ExternalDependencyChange, RemoteLeaseMetadata } from '@invoker/workflow-core';
 import type { SearchResultItem, SearchOptions } from '@invoker/contracts';
 
 // ── Conversation Types ─────────────────────────────────────
@@ -139,7 +139,7 @@ export interface PersistenceAdapter {
   saveAttempt(attempt: Attempt): void;
   loadAttempts(nodeId: string): Attempt[];
   loadAttempt(attemptId: string): Attempt | undefined;
-  updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'branch' | 'commit' | 'summary' | 'queuePriority' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void;
+  updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'branch' | 'commit' | 'summary' | 'queuePriority' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict' | 'remoteLeaseMetadata'>>): void;
 
   /**
    * Atomically update a task's state and fail its running attempt (if any).
@@ -165,6 +165,9 @@ export interface PersistenceAdapter {
   // Agent queries
   /** Read the configured execution agent name for a task (e.g. 'claude', 'codex'). */
   getExecutionAgent?(taskId: string): string | null;
+
+  /** Durable remote lease metadata for terminal restore and lease cleanup. */
+  getRemoteLeaseMetadata?(taskId: string): RemoteLeaseMetadata | null;
 
   // Lifecycle
   close(): void;
