@@ -51,6 +51,7 @@ import {
   setWorkflowMergeMode,
 } from './workflow-actions.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
+import { parseHeadlessFixArgs } from './auto-fix-intents.js';
 import type { CostGroupDimension } from './cost-rollup.js';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
 import {
@@ -1109,7 +1110,7 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       await headlessRebaseRecreate(args[1], deps);
       break;
     case 'fix':
-      await headlessFix(args[1], deps, args[2]);
+      await headlessFix(args, deps);
       break;
     case 'resolve-conflict':
       await headlessResolveConflict(args[1], deps, args[2]);
@@ -1697,15 +1698,26 @@ async function headlessRetryTask(taskId: string, deps: HeadlessDeps): Promise<vo
   });
 }
 
-async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string): Promise<void> {
-  if (!taskId) throw new Error('Missing taskId. Usage: --headless fix <taskId> [claude|codex]');
+async function headlessFix(rawArgs: string[], deps: HeadlessDeps): Promise<void> {
+  const parsed = parseHeadlessFixArgs(rawArgs);
+  let taskId = parsed.taskId;
+  if (!taskId) throw new Error('Missing taskId. Usage: --headless fix <taskId> [claude|codex] [--auto-fix]');
   const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'fix');
   if (!restored) return;
   taskId = restored.resolvedTaskId;
 
+  // The accepted command boundary owns auto-fix attempt accounting: the worker
+  // submits a normal `fix` command tagged `--auto-fix`, and only then does a
+  // retry consume the budget. Manual `fix` never increments.
+  if (parsed.autoFix) {
+    const task = deps.orchestrator.getTask(taskId);
+    const attemptsBefore = task?.execution.autoFixAttempts ?? 0;
+    deps.persistence.updateTask(taskId, { execution: { autoFixAttempts: attemptsBefore + 1 } });
+  }
+
   const te = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, te);
-  const agent = (agentArg ?? 'claude').toLowerCase();
+  const agent = (parsed.agentName ?? 'claude').toLowerCase();
   try {
     const result = await fixWithAgentAction(taskId, {
       orchestrator: deps.orchestrator,
@@ -1716,6 +1728,7 @@ async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string
       agentName: agent,
       recreateOutputLabel: 'Fix with AI',
       failureOutputLabel: 'Fix with AI',
+      reviewGateContext: parsed.reviewGateContext,
       signal: deps.signal,
     });
     await finalizeMutationWithGlobalTopup({

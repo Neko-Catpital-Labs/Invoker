@@ -23,6 +23,10 @@ import {
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { TaskRunner, ReviewGateCiFailureTrigger } from '@invoker/execution-engine';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
+import {
+  isReviewGateCiContextStale,
+  type ReviewGateCiContext,
+} from './auto-fix-intents.js';
 import { createDeleteAllSnapshot } from './delete-all-snapshot.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import { isDispatchableLaunch } from './global-topup.js';
@@ -847,12 +851,22 @@ export async function fixWithAgentAction(
     recoveryRoute?: FailureRecoveryRoute;
     recreateOutputLabel?: string;
     failureOutputLabel?: string;
+    reviewGateContext?: ReviewGateCiContext;
     signal?: AbortSignal;
   } = {},
 ): Promise<FixWithAgentActionResult> {
   const { orchestrator, persistence, taskExecutor } = deps;
   const task = orchestrator.getTask(taskId);
   if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
+
+  // Reject a stale review-gate CI auto-fix before mutating: if the task moved on
+  // (re-selected attempt, new generation/review/branch) since the CI failure was
+  // captured, the carried context is stale and the fix must not clobber newer work.
+  if (options.reviewGateContext && isReviewGateCiContextStale(options.reviewGateContext, task.execution)) {
+    throw new StaleLineageError(
+      `Review-gate CI auto-fix for ${taskId} is stale (review=${options.reviewGateContext.reviewId})`,
+    );
+  }
 
   const savedError = task.execution.error ?? '';
   const recoveryRoute = options.recoveryRoute ?? selectFailureRecoveryRoute(task, savedError);
@@ -881,7 +895,12 @@ export async function fixWithAgentAction(
       await taskExecutor.resolveConflict(taskId, persistedSavedError, options.agentName);
     } else {
       const output = persistence.getTaskOutput(taskId);
-      await taskExecutor.fixWithAgent(taskId, output, options.agentName, persistedSavedError);
+      const fixContext = options.reviewGateContext?.fixContext;
+      if (fixContext !== undefined) {
+        await taskExecutor.fixWithAgent(taskId, output, options.agentName, persistedSavedError, fixContext);
+      } else {
+        await taskExecutor.fixWithAgent(taskId, output, options.agentName, persistedSavedError);
+      }
     }
     assertLineageCurrent(lineage, orchestrator, options.signal);
     const result = await finalizeAppliedFix(taskId, persistedSavedError, deps, options.signal, lineage);
