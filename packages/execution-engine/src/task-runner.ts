@@ -984,11 +984,28 @@ export class TaskRunner {
           }
         }
         const startupErrorMessage = `Executor startup failed (${executor.type}): ${err instanceof Error ? err.message : String(err)}\n`;
-        this.callbacks.onOutput?.(task.id, startupErrorMessage);
-        try {
-          this.persistence.appendTaskOutput(task.id, startupErrorMessage);
-        } catch {
-          // Preserve the original startup failure if output persistence also fails.
+        // If the task has already advanced to a newer attempt/generation this
+        // launch is stale: the live task row (and its output stream) now belong
+        // to the newer attempt. Route the stale launch's diagnostics through the
+        // append-only, attempt-scoped event log instead of streaming/appending
+        // them onto the live task output, so a superseded launch never
+        // contaminates the newer attempt's visible output.
+        const startupFailureStale = this.isLaunchStale(task.id, attemptId, startGeneration);
+        if (startupFailureStale) {
+          this.persistence.logEvent?.(task.id, 'task.executor.stale-startup-failure', {
+            attemptId,
+            executorType: executor.type,
+            error: err instanceof Error ? err.message : String(err),
+            staleWorkspacePath: meta.workspacePath,
+            staleBranch: meta.branch,
+          });
+        } else {
+          this.callbacks.onOutput?.(task.id, startupErrorMessage);
+          try {
+            this.persistence.appendTaskOutput(task.id, startupErrorMessage);
+          } catch {
+            // Preserve the original startup failure if output persistence also fails.
+          }
         }
         // Only persist startup-failure metadata when the launch is still
         // current.  If the task has moved to a newer attempt or generation
@@ -996,7 +1013,7 @@ export class TaskRunner {
         // would corrupt the live attempt's state.
         if (
           (meta.workspacePath || meta.branch || meta.agentSessionId || meta.containerId)
-          && !this.isLaunchStale(task.id, attemptId, task.execution.generation ?? 0)
+          && !startupFailureStale
         ) {
           const execution: Record<string, string> = {};
           if (meta.workspacePath) execution.workspacePath = meta.workspacePath;

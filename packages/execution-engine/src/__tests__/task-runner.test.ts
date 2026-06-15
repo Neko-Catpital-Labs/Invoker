@@ -1349,6 +1349,129 @@ describe('TaskRunner', () => {
       );
       expect(handleWorkerResponse).not.toHaveBeenCalled();
     });
+
+    it('routes stale startup diagnostics to the event log instead of the live task output', async () => {
+      const handleWorkerResponse = vi.fn();
+      const updateTask = vi.fn();
+      const appendTaskOutput = vi.fn();
+      const logEvent = vi.fn();
+      const onOutput = vi.fn();
+      const orchestrator = {
+        getTask: () => makeTask({
+          id: 'stale-diag',
+          status: 'running',
+          execution: { selectedAttemptId: 'attempt-2', generation: 0 },
+        }),
+        handleWorkerResponse,
+      };
+      const startupErr: any = new Error('SSH connection refused');
+      startupErr.workspacePath = '/tmp/stale-diag-ws';
+      startupErr.branch = 'experiment/stale-diag';
+      const throwingExecutor = {
+        type: 'ssh',
+        start: async () => { throw startupErr; },
+        onOutput: () => () => {},
+        onComplete: () => () => {},
+      };
+      const registry = {
+        getDefault: () => throwingExecutor,
+        get: () => throwingExecutor,
+        getAll: () => [throwingExecutor],
+      };
+
+      const runner = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: { updateTask, appendTaskOutput, logEvent } as any,
+        executorRegistry: registry as any,
+        cwd: '/tmp',
+        callbacks: { onOutput },
+      });
+
+      const task = makeTask({
+        id: 'stale-diag',
+        status: 'running',
+        config: { command: 'echo hi', runnerKind: 'ssh' as any },
+        execution: { selectedAttemptId: 'attempt-1', generation: 0 },
+      });
+      await runner.executeTask(task);
+
+      // Stale launch diagnostics must NOT touch the live task's output stream —
+      // that row now belongs to the newer attempt.
+      expect(appendTaskOutput).not.toHaveBeenCalled();
+      expect(onOutput).not.toHaveBeenCalled();
+      // ...but the diagnostic is still preserved through the append-only,
+      // attempt-scoped event log.
+      expect(logEvent).toHaveBeenCalledWith(
+        'stale-diag',
+        'task.executor.stale-startup-failure',
+        expect.objectContaining({
+          attemptId: 'attempt-1',
+          staleWorkspacePath: '/tmp/stale-diag-ws',
+          staleBranch: 'experiment/stale-diag',
+        }),
+      );
+      // Existing guards still hold: no stale metadata, no stale failed response.
+      expect(updateTask).not.toHaveBeenCalledWith(
+        'stale-diag',
+        expect.objectContaining({
+          execution: expect.objectContaining({ workspacePath: '/tmp/stale-diag-ws' }),
+        }),
+      );
+      expect(handleWorkerResponse).not.toHaveBeenCalled();
+    });
+
+    it('still streams startup diagnostics to the live task output when lineage is current', async () => {
+      const handleWorkerResponse = vi.fn();
+      const updateTask = vi.fn();
+      const appendTaskOutput = vi.fn();
+      const onOutput = vi.fn();
+      const orchestrator = {
+        getTask: () => makeTask({
+          id: 'current-diag',
+          status: 'running',
+          execution: { selectedAttemptId: 'attempt-1', generation: 0 },
+        }),
+        handleWorkerResponse,
+      };
+      const startupErr: any = new Error('git clone failed');
+      startupErr.workspacePath = '/tmp/current-diag-ws';
+      startupErr.branch = 'experiment/current-diag';
+      const throwingExecutor = {
+        type: 'ssh',
+        start: async () => { throw startupErr; },
+        onOutput: () => () => {},
+        onComplete: () => () => {},
+      };
+      const registry = {
+        getDefault: () => throwingExecutor,
+        get: () => throwingExecutor,
+        getAll: () => [throwingExecutor],
+      };
+
+      const runner = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: { updateTask, appendTaskOutput } as any,
+        executorRegistry: registry as any,
+        cwd: '/tmp',
+        callbacks: { onOutput },
+      });
+
+      const task = makeTask({
+        id: 'current-diag',
+        status: 'running',
+        config: { command: 'echo hi', runnerKind: 'ssh' as any },
+        execution: { selectedAttemptId: 'attempt-1', generation: 0 },
+      });
+      await runner.executeTask(task);
+
+      // Current lineage: diagnostics still flow to the live output as before.
+      expect(onOutput).toHaveBeenCalledWith('current-diag', expect.stringContaining('Executor startup failed'));
+      expect(appendTaskOutput).toHaveBeenCalledWith('current-diag', expect.stringContaining('Executor startup failed'));
+      // And the failed response is still emitted for the live attempt.
+      expect(handleWorkerResponse).toHaveBeenCalledWith(
+        expect.objectContaining({ actionId: 'current-diag', status: 'failed' }),
+      );
+    });
   });
 
   describe('upstream branch metadata guard', () => {
