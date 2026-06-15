@@ -50,6 +50,15 @@ export interface ExternalDependencyChange {
   readonly changedBy?: string;
 }
 
+/**
+ * Read-only provenance for an external dependency removed by detach. Lets the
+ * renderer distinguish a genuinely independent workflow from one explicitly
+ * detached from an upstream stack edge. Never used for scheduling.
+ */
+export interface DetachedExternalDependency extends ExternalDependency {
+  readonly detachedAt: string;
+}
+
 export interface ExternalGatePolicyUpdate {
   workflowId: string;
   taskId?: string;
@@ -171,6 +180,7 @@ export interface WorkflowMeta {
   reviewProvider?: string;
   externalDependencies?: readonly ExternalDependency[];
   externalDependencyChanges?: readonly ExternalDependencyChange[];
+  detachedExternalDependencies?: readonly DetachedExternalDependency[];
   createdAt?: string;
   updatedAt?: string;
 }

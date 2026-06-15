@@ -103,6 +103,18 @@ export interface ExternalDependencyChange {
   readonly changedBy?: string;
 }
 
+/**
+ * Read-only provenance for an external dependency removed by `detachWorkflow`.
+ * Active scheduling dependencies live in `Workflow.externalDependencies`; this
+ * preserves the removed upstream edge so the UI can distinguish a genuinely
+ * independent workflow from one explicitly detached from an upstream stack
+ * edge. Never consulted by the scheduler.
+ */
+export interface DetachedExternalDependency extends ExternalDependency {
+  /** ISO timestamp of when the dependency was detached. */
+  readonly detachedAt: string;
+}
+
 // ── Task Execution (runtime state) ─────────────────────────
 // Never copied when cloning. Reset on restart.
 

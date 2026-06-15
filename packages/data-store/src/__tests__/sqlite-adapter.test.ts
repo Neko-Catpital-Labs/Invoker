@@ -55,6 +55,10 @@ describe('SQLiteAdapter', () => {
       expect(workflowColumns(adapter)).not.toContain('status');
     });
 
+    it('provisions a detached_external_dependencies column on fresh databases', () => {
+      expect(workflowColumns(adapter)).toContain('detached_external_dependencies');
+    });
+
     it('migrates existing workflow tables by removing status and preserving metadata', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'sqlite-workflow-status-migration-'));
       const dbPath = join(dir, 'invoker.db');
@@ -1072,6 +1076,40 @@ describe('SQLiteAdapter', () => {
       expect(loaded!.name).toBe('Test Workflow');
       expect(loaded!.status).toBe('pending');
       expect(loaded!.rollup?.countsByStatus.pending).toBe(0);
+    });
+
+    it('round-trips detached external dependency provenance via save and update', () => {
+      const detached = [
+        {
+          workflowId: 'wf-upstream',
+          taskId: '__merge__',
+          requiredStatus: 'completed' as const,
+          gatePolicy: 'review_ready' as const,
+          detachedAt: '2026-06-15T00:00:00.000Z',
+        },
+      ];
+
+      // Persisted by saveWorkflow.
+      adapter.saveWorkflow({ ...testWorkflow, detachedExternalDependencies: detached });
+      expect(adapter.loadWorkflow('wf-1')!.detachedExternalDependencies).toEqual(detached);
+
+      // Mutated (appended) by updateWorkflow with the same presence semantics
+      // as externalDependencies.
+      const grown = [
+        ...detached,
+        {
+          workflowId: 'wf-upstream-2',
+          taskId: 'verify',
+          requiredStatus: 'completed' as const,
+          detachedAt: '2026-06-15T01:00:00.000Z',
+        },
+      ];
+      adapter.updateWorkflow('wf-1', { detachedExternalDependencies: grown });
+      expect(adapter.loadWorkflow('wf-1')!.detachedExternalDependencies).toEqual(grown);
+
+      // Explicit undefined clears the column.
+      adapter.updateWorkflow('wf-1', { detachedExternalDependencies: undefined });
+      expect(adapter.loadWorkflow('wf-1')!.detachedExternalDependencies).toBeUndefined();
     });
 
     it('derives workflow status and rollup details from task rows', () => {

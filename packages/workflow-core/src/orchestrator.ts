@@ -19,7 +19,7 @@ import { TaskStateMachine } from './state-machine.js';
 import { ResponseHandler } from './response-handler.js';
 import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
-import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, Attempt, ExternalDependency, ExternalDependencyChange, TaskStatus, TaskHeartbeatSource } from '@invoker/workflow-graph';
+import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, Attempt, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency, TaskStatus, TaskHeartbeatSource } from '@invoker/workflow-graph';
 import type { RunnerKind } from '@invoker/workflow-graph';
 import { createTaskState, createAttempt } from '@invoker/workflow-graph';
 import type { WorkflowDerivedStatus } from '@invoker/workflow-graph';
@@ -219,8 +219,9 @@ export interface OrchestratorPersistence {
     mergeMode?: 'manual' | 'automatic' | 'external_review';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
+    detachedExternalDependencies?: DetachedExternalDependency[];
   }): void;
-  updateWorkflow?(workflowId: string, changes: { updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review'; externalDependencies?: ExternalDependency[]; externalDependencyChanges?: ExternalDependencyChange[] }): void;
+  updateWorkflow?(workflowId: string, changes: { updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review'; externalDependencies?: ExternalDependency[]; externalDependencyChanges?: ExternalDependencyChange[]; detachedExternalDependencies?: DetachedExternalDependency[] }): void;
   saveTask(workflowId: string, task: TaskState): void;
   updateTask(taskId: string, changes: TaskStateChanges): void;
   logEvent?(taskId: string, eventType: string, payload?: unknown): void;
@@ -235,6 +236,7 @@ export interface OrchestratorPersistence {
     mergeMode?: 'manual' | 'automatic' | 'external_review';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
+    detachedExternalDependencies?: DetachedExternalDependency[];
     generation?: number;
   }>;
   loadTasks(workflowId: string): TaskState[];
@@ -250,6 +252,7 @@ export interface OrchestratorPersistence {
       mergeMode?: 'manual' | 'automatic' | 'external_review';
       externalDependencies?: ExternalDependency[];
       externalDependencyChanges?: ExternalDependencyChange[];
+      detachedExternalDependencies?: DetachedExternalDependency[];
       generation?: number;
     }>;
     tasks: TaskState[];
@@ -280,6 +283,7 @@ export interface OrchestratorPersistence {
     mergeMode?: 'manual' | 'automatic' | 'external_review';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
+    detachedExternalDependencies?: DetachedExternalDependency[];
   } | undefined;
   /** Delete a single workflow and its tasks from the DB. */
   deleteWorkflow?(workflowId: string): void;
@@ -3341,6 +3345,9 @@ export class Orchestrator {
       if (Array.isArray(m.externalDependencyChanges)) {
         baseSaveWf.externalDependencyChanges = m.externalDependencyChanges as ExternalDependencyChange[];
       }
+      if (Array.isArray(m.detachedExternalDependencies)) {
+        baseSaveWf.detachedExternalDependencies = m.detachedExternalDependencies as DetachedExternalDependency[];
+      }
     }
     this.persistence.saveWorkflow(baseSaveWf);
     this.persistence.updateWorkflow?.(newWfId, { generation: 1, updatedAt: createdAt });
@@ -4937,16 +4944,35 @@ export class Orchestrator {
     const now = workflowTimestamp().toISOString();
     const existingChanges = targetWorkflow?.externalDependencyChanges ?? [];
     const dependencyChanges: ExternalDependencyChange[] = [...existingChanges];
+
+    // Read-only provenance for the detached upstream edges. The active
+    // dependency is removed from `externalDependencies` above so scheduling is
+    // unchanged; this preserves the removed edge so the UI can tell a genuinely
+    // independent workflow apart from one explicitly detached from a stack edge.
+    // Dedup by upstream workflow + task selector so repeated detach attempts
+    // and sync/reload cycles never append the same edge twice.
+    const detachKey = (dep: ExternalDependency): string =>
+      `${dep.workflowId}::${dep.taskId?.trim() || '__merge__'}`;
+    const existingDetached = targetWorkflow?.detachedExternalDependencies ?? [];
+    const detachedKeys = new Set(existingDetached.map(detachKey));
+    const detachedDeps: DetachedExternalDependency[] = [...existingDetached];
+
     for (const dep of removedDeps) {
       const taskId = dep.taskId?.trim() || '__merge__';
       dependencyChanges.push({
         before: { ...dep, taskId },
         changedAt: now,
       });
+      const key = detachKey(dep);
+      if (!detachedKeys.has(key)) {
+        detachedKeys.add(key);
+        detachedDeps.push({ ...dep, taskId, detachedAt: now });
+      }
     }
     this.taskRepository.updateWorkflow(workflowId, {
       externalDependencies: nextDeps.length > 0 ? nextDeps : undefined,
       externalDependencyChanges: dependencyChanges,
+      detachedExternalDependencies: detachedDeps.length > 0 ? detachedDeps : undefined,
     });
 
     const eventTask = this.getMergeNode(workflowId) ?? targetTasks[0];
