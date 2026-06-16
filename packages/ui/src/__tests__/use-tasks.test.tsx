@@ -10,13 +10,11 @@ import { makeUITask } from './helpers/mock-invoker.js';
 
 describe('useTasks', () => {
   let workflowsChangedHandler: ((wfList: unknown[]) => void) | undefined;
-  let taskDeltaHandler: ((delta: unknown) => void) | undefined;
   let taskGraphEventHandler: ((event: unknown) => void) | undefined;
 
   beforeEach(() => {
     vi.useRealTimers();
     workflowsChangedHandler = undefined;
-    taskDeltaHandler = undefined;
     taskGraphEventHandler = undefined;
     (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
       tasks: [],
@@ -24,10 +22,6 @@ describe('useTasks', () => {
     };
     (window as unknown as { invoker: Record<string, unknown> }).invoker = {
       getTasks: vi.fn().mockResolvedValue({ tasks: [], workflows: [] }),
-      onTaskDelta: vi.fn((cb: (delta: unknown) => void) => {
-        taskDeltaHandler = cb;
-        return () => {};
-      }),
       onTaskGraphEvent: vi.fn((cb: (event: unknown) => void) => {
         taskGraphEventHandler = cb;
         return () => {};
@@ -53,7 +47,7 @@ describe('useTasks', () => {
     };
     (window as unknown as { invoker: Record<string, unknown> }).invoker = {
       getTasks: vi.fn().mockResolvedValue({ tasks: [bootTask], workflows: [] }),
-      onTaskDelta: vi.fn(() => () => {}),
+      onTaskGraphEvent: vi.fn(() => () => {}),
       onWorkflowsChanged: vi.fn(() => () => {}),
     };
 
@@ -156,7 +150,7 @@ describe('useTasks', () => {
         .fn()
         .mockReturnValueOnce(firstPending)
         .mockResolvedValue({ tasks: [t1], workflows: [] }),
-      onTaskDelta: vi.fn(() => () => {}),
+      onTaskGraphEvent: vi.fn(() => () => {}),
       onWorkflowsChanged: vi.fn(() => () => {}),
     };
 
@@ -191,7 +185,7 @@ describe('useTasks', () => {
     (window as unknown as { invoker: Record<string, unknown> }).invoker = {
       getTasks,
       reportUiPerf,
-      onTaskDelta: vi.fn(() => () => {}),
+      onTaskGraphEvent: vi.fn(() => () => {}),
       onWorkflowsChanged: vi.fn(() => () => {}),
     };
 
@@ -228,7 +222,7 @@ describe('useTasks', () => {
     };
     (window as unknown as { invoker: Record<string, unknown> }).invoker = {
       getTasks,
-      onTaskDelta: vi.fn(() => () => {}),
+      onTaskGraphEvent: vi.fn(() => () => {}),
       onWorkflowsChanged: vi.fn(() => () => {}),
     };
 
@@ -269,7 +263,6 @@ describe('useTasks', () => {
         taskGraphEventHandler = cb;
         return () => {};
       }),
-      onTaskDelta: vi.fn(() => () => {}),
       onWorkflowsChanged: vi.fn(() => () => {}),
     };
 
@@ -299,7 +292,7 @@ describe('useTasks', () => {
     };
     (window as unknown as { invoker: Record<string, unknown> }).invoker = {
       getTasks,
-      onTaskDelta: vi.fn(() => () => {}),
+      onTaskGraphEvent: vi.fn(() => () => {}),
       onWorkflowsChanged: vi.fn(() => () => {}),
     };
 
@@ -332,7 +325,7 @@ describe('useTasks', () => {
     (window as unknown as { invoker: Record<string, unknown> }).invoker = {
       getTasks,
       refreshTaskGraph,
-      onTaskDelta: vi.fn(() => () => {}),
+      onTaskGraphEvent: vi.fn(() => () => {}),
       onWorkflowsChanged: vi.fn(() => () => {}),
     };
 
@@ -360,8 +353,8 @@ describe('useTasks', () => {
         tasks: [taskA, taskB],
         workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'failed' }],
       }),
-      onTaskDelta: vi.fn((cb: (delta: unknown) => void) => {
-        taskDeltaHandler = cb;
+      onTaskGraphEvent: vi.fn((cb: (event: unknown) => void) => {
+        taskGraphEventHandler = cb;
         return () => {};
       }),
       onWorkflowsChanged: vi.fn((cb: (wfList: unknown[]) => void) => {
@@ -374,19 +367,25 @@ describe('useTasks', () => {
     expect(result.current.workflows.get('wf-1')?.status).toBe('failed');
 
     await act(async () => {
-      taskDeltaHandler!({
-        type: 'updated',
-        taskId: 'wf-1/task-a',
-        changes: { status: 'pending' },
-        taskStateVersion: 2,
-        previousTaskStateVersion: 1,
+      taskGraphEventHandler!({
+        type: 'delta',
+        delta: {
+          type: 'updated',
+          taskId: 'wf-1/task-a',
+          changes: { status: 'pending' },
+          taskStateVersion: 2,
+          previousTaskStateVersion: 1,
+        },
       });
-      taskDeltaHandler!({
-        type: 'updated',
-        taskId: 'wf-1/task-b',
-        changes: { status: 'pending' },
-        taskStateVersion: 2,
-        previousTaskStateVersion: 1,
+      taskGraphEventHandler!({
+        type: 'delta',
+        delta: {
+          type: 'updated',
+          taskId: 'wf-1/task-b',
+          changes: { status: 'pending' },
+          taskStateVersion: 2,
+          previousTaskStateVersion: 1,
+        },
       });
       await new Promise((resolve) => setTimeout(resolve, 110));
     });
@@ -459,8 +458,8 @@ describe('useTasks', () => {
         tasks: [failedTask, downstreamTask, mergeTask],
         workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'running' }],
       }),
-      onTaskDelta: vi.fn((cb: (delta: unknown) => void) => {
-        taskDeltaHandler = cb;
+      onTaskGraphEvent: vi.fn((cb: (event: unknown) => void) => {
+        taskGraphEventHandler = cb;
         return () => {};
       }),
       onWorkflowsChanged: vi.fn((cb: (wfList: unknown[]) => void) => {
@@ -473,12 +472,15 @@ describe('useTasks', () => {
     expect(result.current.workflows.get('wf-1')?.status).toBe('running');
 
     await act(async () => {
-      taskDeltaHandler!({
-        type: 'updated',
-        taskId: 'wf-1/add-regression-coverage',
-        changes: { status: 'failed' },
-        taskStateVersion: 2,
-        previousTaskStateVersion: 1,
+      taskGraphEventHandler!({
+        type: 'delta',
+        delta: {
+          type: 'updated',
+          taskId: 'wf-1/add-regression-coverage',
+          changes: { status: 'failed' },
+          taskStateVersion: 2,
+          previousTaskStateVersion: 1,
+        },
       });
       await new Promise((resolve) => setTimeout(resolve, 110));
     });
