@@ -52,13 +52,29 @@ export function createMockInvoker(
     // Defer resolution one microtask so snapshot is read after synchronous setTasks()
     // in tests (useTasks fetchAll races mount vs setTasks; real IPC resolves later too).
     getTasks: vi.fn(
-      (_forceRefresh?: boolean) =>
-        new Promise<{ tasks: TaskState[]; workflows: WorkflowMeta[] }>((resolve) => {
+      () =>
+        new Promise<{ tasks: TaskState[]; workflows: WorkflowMeta[]; streamSequence: number }>((resolve) => {
           queueMicrotask(() => {
             resolve({
               tasks: taskSnapshot,
               workflows: workflowSnapshot,
+              streamSequence: 0,
             });
+          });
+        }),
+    ),
+    refreshTaskGraph: vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          queueMicrotask(() => {
+            graphEventCallback?.({
+              type: 'snapshot',
+              tasks: taskSnapshot,
+              workflows: workflowSnapshot,
+              reason: 'mock-refresh',
+              streamSequence: 0,
+            });
+            resolve();
           });
         }),
     ),
@@ -194,12 +210,15 @@ export function createMockInvoker(
 
     // Fire created deltas for each task
     for (const task of tasks) {
-      deltaCallback?.({ type: 'created', task });
+      const delta: TaskDelta = { type: 'created', task };
+      deltaCallback?.(delta);
+      graphEventCallback?.({ type: 'delta', delta });
     }
   }
 
   function fireDelta(delta: TaskDelta) {
     deltaCallback?.(delta);
+    graphEventCallback?.({ type: 'delta', delta });
   }
   function fireGraphEvent(event: TaskGraphEvent) {
     graphEventCallback?.(event);
