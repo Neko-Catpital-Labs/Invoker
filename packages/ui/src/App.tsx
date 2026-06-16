@@ -1254,11 +1254,11 @@ export function App() {
       if (selectedWorkflowId === workflowId) {
         setSelectedWorkflowId(null);
       }
-      refreshTasks();
+      refreshTaskGraph();
     } catch (err) {
       console.error('Delete Workflow failed:', err);
     }
-  }, [refreshTasks, selectedWorkflowId]);
+  }, [refreshTaskGraph, selectedWorkflowId]);
 
   const handleFix = useCallback(async (taskId: string, agentName: string) => {
     setContextMenu(null);
@@ -1279,11 +1279,11 @@ export function App() {
       } else {
         await window.invoker?.fixWithAgent(taskId, agentName);
       }
-      refreshTasks();
+      refreshTaskGraph();
     } catch (err) {
       console.error('Fix failed:', err);
     }
-  }, [tasks, refreshTasks]);
+  }, [tasks, refreshTaskGraph]);
 
   const handleCancelTask = useCallback(async (taskId: string) => {
     setContextMenu(null);
@@ -1352,12 +1352,12 @@ export function App() {
         const parsed = yaml.load(planText) as any;
         setPlanName(parsed?.name ?? 'Untitled Plan');
         setOnFinish(parsed?.onFinish ?? 'merge');
-        refreshTasks();
+        refreshTaskGraph();
       } catch (err) {
         console.error('Failed to load plan:', err);
       }
     },
-    [invoker, refreshTasks],
+    [invoker, refreshTaskGraph],
   );
 
   const handleFileSelect = useCallback(
@@ -1568,12 +1568,12 @@ export function App() {
       if (!invoker) return;
       try {
         await invoker.setMergeBranch(workflowId, baseBranch);
-        refreshTasks();
+        refreshTaskGraph();
       } catch (err) {
         console.error('Failed to set merge branch:', err);
       }
     },
-    [invoker, refreshTasks],
+    [invoker, refreshTaskGraph],
   );
 
   // ── Modal triggers ────────────────────────────────────────
