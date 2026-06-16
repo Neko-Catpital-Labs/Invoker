@@ -4382,4 +4382,183 @@ describe('TaskRunner', () => {
     });
   });
 
+  describe('Crabbox target resolution', () => {
+    // An SSH executor that immediately reports a workspace and auto-completes,
+    // so executeTask runs end-to-end without a real remote.
+    function createAutoCompleteSshExecutor() {
+      let completeCallback: ((response: WorkResponse) => void) | undefined;
+      return {
+        type: 'ssh' as const,
+        start: vi.fn().mockImplementation(async (request: any) => {
+          const handle = {
+            executionId: `exec-${request.actionId}`,
+            taskId: request.actionId,
+            workspacePath: '/remote/work',
+            branch: `experiment/${request.actionId}-mock`,
+          };
+          setTimeout(() => {
+            completeCallback?.({
+              requestId: request.requestId,
+              actionId: request.actionId,
+              attemptId: request.attemptId,
+              executionGeneration: request.executionGeneration,
+              status: 'completed',
+              outputs: { exitCode: 0 },
+            });
+          }, 0);
+          return handle;
+        }),
+        onComplete: vi.fn().mockImplementation((_handle: any, cb: any) => { completeCallback = cb; }),
+        onOutput: vi.fn(),
+        onHeartbeat: vi.fn(),
+        kill: vi.fn(),
+        destroyAll: vi.fn(),
+      };
+    }
+
+    const crabboxTarget = {
+      type: 'crabbox' as const,
+      crabboxCommand: 'crabbox',
+      provider: 'fly',
+      class: 'large',
+      ttl: '1h',
+      idleTimeout: '20m',
+      network: 'invoker-net',
+      target: 'ubuntu-box',
+      stopAfter: 'idle',
+    };
+
+    function resolvedCrabbox() {
+      return {
+        target: { host: '10.0.0.5', user: 'box', sshKeyPath: '/leased/key', port: 2222 },
+        remoteLeaseMetadata: {
+          provider: 'crabbox' as const,
+          leaseId: 'lease-1',
+          slug: 'box-1',
+          targetId: 'cb-1',
+          sshHost: '10.0.0.5',
+          sshUser: 'box',
+          sshPort: 2222,
+          sshKeyPath: '/leased/key',
+        },
+      };
+    }
+
+    function makeRunner(opts: {
+      resolver: any;
+      sshExecutor: any;
+      target: any;
+      claim?: any;
+    }) {
+      const task = makeTask({
+        id: 'cb-task',
+        config: { command: 'echo hi', runnerKind: 'ssh', poolId: 'cb-pool' },
+        execution: { generation: 0 },
+      });
+      const orchestrator = {
+        getTask: () => task,
+        getAllTasks: () => [task],
+        markTaskRunningAfterLaunch: () => true,
+        handleWorkerResponse: () => [],
+        deferTask: vi.fn(),
+      };
+      const persistence = {
+        updateTask: vi.fn(),
+        updateAttempt: vi.fn(),
+        appendTaskOutput: vi.fn(),
+        logEvent: vi.fn(),
+        claimExecutionResourceLease: opts.claim ?? vi.fn(() => true),
+        renewExecutionResourceLease: vi.fn(),
+        releaseExecutionResourceLease: vi.fn(),
+      };
+      const runner = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        executorRegistry: {
+          getDefault: () => opts.sshExecutor,
+          get: (type: string) => (type === 'ssh' ? opts.sshExecutor : null),
+          getAll: () => [opts.sshExecutor],
+          register: vi.fn(),
+        } as any,
+        cwd: '/tmp',
+        remoteTargetsProvider: () => ({ 'cb-1': opts.target }),
+        executionPoolsProvider: () => ({
+          'cb-pool': {
+            selectionStrategy: 'roundRobin',
+            maxConcurrentTasksPerMember: 1,
+            members: [{ type: 'ssh' as const, id: 'cb-1' }],
+          },
+        }),
+        crabboxResolver: opts.resolver,
+      });
+      return { runner, task, persistence };
+    }
+
+    it('does not call the resolver for a static SSH target', async () => {
+      const resolver = vi.fn();
+      const { runner, task } = makeRunner({
+        resolver,
+        sshExecutor: createAutoCompleteSshExecutor(),
+        target: { host: '1.2.3.4', user: 'root', sshKeyPath: '/static/key' },
+      });
+
+      await runner.executeTask(task);
+
+      expect(resolver).not.toHaveBeenCalled();
+    });
+
+    it('resolves a Crabbox target and wires the leased endpoint through the SSH path', async () => {
+      const resolver = vi.fn().mockResolvedValue(resolvedCrabbox());
+      const claim = vi.fn(() => true);
+      const { runner, task, persistence } = makeRunner({
+        resolver,
+        sshExecutor: createAutoCompleteSshExecutor(),
+        target: crabboxTarget,
+        claim,
+      });
+
+      await runner.executeTask(task);
+
+      // Resolver called once, with the Crabbox config mapped from the target.
+      expect(resolver).toHaveBeenCalledTimes(1);
+      expect(resolver).toHaveBeenCalledWith(expect.objectContaining({
+        crabboxCommand: 'crabbox',
+        provider: 'fly',
+        class: 'large',
+        ttl: '1h',
+        idleTimeout: '20m',
+        network: 'invoker-net',
+        target: 'ubuntu-box',
+        stopAfter: 'idle',
+      }));
+
+      // Resource lease keys on the resolved endpoint but keeps the member id.
+      expect(claim).toHaveBeenCalledWith(expect.objectContaining({
+        resourceKey: 'ssh:box@10.0.0.5:2222',
+        poolMemberId: 'cb-1',
+      }));
+
+      // task.executor.selected payload carries the resolved endpoint + lease.
+      const selectedCall = persistence.logEvent.mock.calls.find(
+        (c: any[]) => c[1] === 'task.executor.selected',
+      );
+      expect(selectedCall).toBeDefined();
+      expect(selectedCall[2]).toEqual(expect.objectContaining({
+        remoteHost: '10.0.0.5',
+        remoteUser: 'box',
+        port: 2222,
+        remoteLeaseMetadata: expect.objectContaining({ provider: 'crabbox', leaseId: 'lease-1' }),
+      }));
+
+      // Start metadata persists the lease on the task.
+      const leaseUpdate = persistence.updateTask.mock.calls.find(
+        (c: any[]) => c[1]?.execution?.remoteLeaseMetadata,
+      );
+      expect(leaseUpdate).toBeDefined();
+      expect(leaseUpdate[1].execution.remoteLeaseMetadata).toEqual(
+        expect.objectContaining({ provider: 'crabbox', leaseId: 'lease-1' }),
+      );
+    });
+  });
+
 });
