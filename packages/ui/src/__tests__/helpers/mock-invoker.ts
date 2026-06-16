@@ -21,7 +21,7 @@ import type { TerminalOutputEvent } from '@invoker/contracts';
 export interface MockInvoker {
   /** The mock InvokerAPI object installed on window.invoker. */
   api: InvokerAPI;
-  /** Replace the task snapshot and fire 'created' deltas for each task. */
+  /** Replace the task snapshot and fire matching 'created' graph events. */
   setTasks: (tasks: TaskState[], workflows?: WorkflowMeta[]) => void;
   /** Directly fire a task delta to subscribers. */
   fireDelta: (delta: TaskDelta) => void;
@@ -43,7 +43,6 @@ export function createMockInvoker(
 ): MockInvoker {
   let taskSnapshot = initialTasks;
   let workflowSnapshot = initialWorkflows;
-  let deltaCallback: ((delta: TaskDelta) => void) | undefined;
   let graphEventCallback: ((event: TaskGraphEvent) => void) | undefined;
   let workflowsCallback: ((workflows: unknown[]) => void) | undefined;
   const terminalOutputCallbacks = new Set<(event: TerminalOutputEvent) => void>();
@@ -78,10 +77,6 @@ export function createMockInvoker(
           });
         }),
     ),
-    onTaskDelta: vi.fn((cb: (delta: TaskDelta) => void) => {
-      deltaCallback = cb;
-      return () => { deltaCallback = undefined; };
-    }),
     onTaskGraphEvent: vi.fn((cb: (event: TaskGraphEvent) => void) => {
       graphEventCallback = cb;
       return () => { graphEventCallback = undefined; };
@@ -208,16 +203,13 @@ export function createMockInvoker(
     taskSnapshot = tasks;
     if (workflows) workflowSnapshot = workflows;
 
-    // Fire created deltas for each task
+    // Fire created graph events for each task
     for (const task of tasks) {
-      const delta: TaskDelta = { type: 'created', task };
-      deltaCallback?.(delta);
-      graphEventCallback?.({ type: 'delta', delta });
+      graphEventCallback?.({ type: 'delta', delta: { type: 'created', task } });
     }
   }
 
   function fireDelta(delta: TaskDelta) {
-    deltaCallback?.(delta);
     graphEventCallback?.({ type: 'delta', delta });
   }
   function fireGraphEvent(event: TaskGraphEvent) {

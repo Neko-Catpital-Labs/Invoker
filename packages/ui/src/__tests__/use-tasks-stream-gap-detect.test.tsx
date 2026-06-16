@@ -51,7 +51,6 @@ function installInvoker(opts: {
     refreshTaskGraph: refreshTaskGraphMock,
     reportUiPerf: reportUiPerfMock,
     onTaskGraphEvent: onTaskGraphEventMock,
-    onTaskDelta: vi.fn(() => () => {}),
     onWorkflowsChanged: vi.fn(() => () => {}),
     checkPrStatuses: vi.fn(async () => {}),
   };
