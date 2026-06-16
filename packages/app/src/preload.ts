@@ -52,7 +52,7 @@ if (process.env.NODE_ENV === 'test') {
 // Event channels: each becomes (cb) => { subscribe; return unsubscribe }
 for (const channel of Object.keys(IpcEventChannels)) {
   const method = channelToEventMethod(channel);
-  if (channel === 'invoker:task-delta' || channel === 'invoker:task-graph-event') {
+  if (channel === 'invoker:task-graph-event') {
     api[method] = (cb: (...args: unknown[]) => void) => {
       const pendingBatchItems: unknown[] = [];
       let drainTimer: ReturnType<typeof setTimeout> | null = null;
