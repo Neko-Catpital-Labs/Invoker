@@ -117,7 +117,7 @@ test('non-empty persisted startup stays responsive and avoids initial db-poll re
         }, planYaml);
       }
 
-      const seeded = await page.evaluate(() => window.invoker.getTasks(true));
+      const seeded = await page.evaluate(() => window.invoker.getTasks());
       const seededTasks = Array.isArray(seeded) ? seeded : seeded.tasks;
       expect(seededTasks.length).toBe(expectedTaskCount);
     } finally {
@@ -138,7 +138,7 @@ test('non-empty persisted startup stays responsive and avoids initial db-poll re
       await dragGraphAndAssertViewportMoves(page);
 
       const result = await page.evaluate(async () => {
-        const tasksResult = await window.invoker.getTasks(true);
+        const tasksResult = await window.invoker.getTasks();
         const tasks = Array.isArray(tasksResult) ? tasksResult : tasksResult.tasks;
         const perf = await window.invoker.getUiPerfStats();
         const activityLogs = await window.invoker.getActivityLogs();
