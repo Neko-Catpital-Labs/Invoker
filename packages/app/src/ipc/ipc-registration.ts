@@ -102,6 +102,39 @@ export function registerWorkflowScopedGuiMutationHandler<TResult = unknown>(
   });
 }
 
+export interface GuiMutationRegistrars {
+  registerGuiMutationHandler: <TResult = unknown>(
+    channel: string,
+    handler: (...args: unknown[]) => Promise<TResult>,
+  ) => void;
+  registerWorkflowScopedGuiMutationHandler: <TResult = unknown>(
+    channel: string,
+    resolveWorkflowId: (...args: unknown[]) => string | undefined,
+    priority: WorkflowMutationPriority,
+    handler: (...args: unknown[]) => Promise<TResult>,
+  ) => void;
+}
+
+export function createGuiMutationRegistrars(
+  guiContext: GuiMutationRegistrationContext,
+  workflowScopedContext: WorkflowScopedGuiMutationRegistrationContext,
+): GuiMutationRegistrars {
+  return {
+    registerGuiMutationHandler: (channel, handler) => {
+      registerGuiMutationHandler(guiContext, channel, handler);
+    },
+    registerWorkflowScopedGuiMutationHandler: (channel, resolveWorkflowId, priority, handler) => {
+      registerWorkflowScopedGuiMutationHandler(
+        workflowScopedContext,
+        channel,
+        resolveWorkflowId,
+        priority,
+        handler,
+      );
+    },
+  };
+}
+
 export interface BootstrapStateIpcContext {
   ipcMain: Pick<IpcMain, 'on'>;
   getTasks: () => TaskState[];
