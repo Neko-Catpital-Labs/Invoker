@@ -174,6 +174,19 @@ export interface WorkflowMeta {
   createdAt?: string;
   updatedAt?: string;
 }
+export type TaskGraphEvent =
+  | {
+      readonly type: 'delta';
+      readonly delta: TaskDelta;
+    }
+  | {
+      readonly type: 'snapshot';
+      readonly tasks: readonly TaskState[];
+      readonly workflows: readonly WorkflowMeta[];
+      readonly reason: string;
+      readonly streamSequence: number;
+    };
+
 
 export type WorkflowStatus =
   | 'pending'
