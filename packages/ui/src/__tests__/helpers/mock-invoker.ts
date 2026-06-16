@@ -10,6 +10,7 @@ import type {
   InvokerAPI,
   TaskState,
   TaskDelta,
+  TaskGraphEvent,
   WorkflowMeta,
   TaskStatus,
   TaskConfig,
@@ -24,6 +25,8 @@ export interface MockInvoker {
   setTasks: (tasks: TaskState[], workflows?: WorkflowMeta[]) => void;
   /** Directly fire a task delta to subscribers. */
   fireDelta: (delta: TaskDelta) => void;
+  /** Directly fire a task graph event to subscribers. */
+  fireGraphEvent: (event: TaskGraphEvent) => void;
   /** Fire a workflows-changed event. */
   fireWorkflowsChanged: (workflows: WorkflowMeta[]) => void;
   /** Fire an embedded terminal output event to subscribers. */
@@ -41,6 +44,7 @@ export function createMockInvoker(
   let taskSnapshot = initialTasks;
   let workflowSnapshot = initialWorkflows;
   let deltaCallback: ((delta: TaskDelta) => void) | undefined;
+  let graphEventCallback: ((event: TaskGraphEvent) => void) | undefined;
   let workflowsCallback: ((workflows: unknown[]) => void) | undefined;
   const terminalOutputCallbacks = new Set<(event: TerminalOutputEvent) => void>();
 
@@ -61,6 +65,10 @@ export function createMockInvoker(
     onTaskDelta: vi.fn((cb: (delta: TaskDelta) => void) => {
       deltaCallback = cb;
       return () => { deltaCallback = undefined; };
+    }),
+    onTaskGraphEvent: vi.fn((cb: (event: TaskGraphEvent) => void) => {
+      graphEventCallback = cb;
+      return () => { graphEventCallback = undefined; };
     }),
     onWorkflowsChanged: vi.fn((cb: (workflows: unknown[]) => void) => {
       workflowsCallback = cb;
@@ -193,6 +201,10 @@ export function createMockInvoker(
   function fireDelta(delta: TaskDelta) {
     deltaCallback?.(delta);
   }
+  function fireGraphEvent(event: TaskGraphEvent) {
+    graphEventCallback?.(event);
+  }
+
 
   function fireWorkflowsChanged(workflows: WorkflowMeta[]) {
     workflowSnapshot = workflows;
@@ -219,7 +231,7 @@ export function createMockInvoker(
     delete (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__;
   }
 
-  return { api, setTasks, fireDelta, fireWorkflowsChanged, fireTerminalOutput, install, cleanup };
+  return { api, setTasks, fireDelta, fireGraphEvent, fireWorkflowsChanged, fireTerminalOutput, install, cleanup };
 }
 
 /** Create a minimal TaskState for testing. */
