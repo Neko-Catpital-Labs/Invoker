@@ -11,11 +11,13 @@ import { makeUITask } from './helpers/mock-invoker.js';
 describe('useTasks', () => {
   let workflowsChangedHandler: ((wfList: unknown[]) => void) | undefined;
   let taskDeltaHandler: ((delta: unknown) => void) | undefined;
+  let taskGraphEventHandler: ((event: unknown) => void) | undefined;
 
   beforeEach(() => {
     vi.useRealTimers();
     workflowsChangedHandler = undefined;
     taskDeltaHandler = undefined;
+    taskGraphEventHandler = undefined;
     (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
       tasks: [],
       workflows: [],
@@ -24,6 +26,10 @@ describe('useTasks', () => {
       getTasks: vi.fn().mockResolvedValue({ tasks: [], workflows: [] }),
       onTaskDelta: vi.fn((cb: (delta: unknown) => void) => {
         taskDeltaHandler = cb;
+        return () => {};
+      }),
+      onTaskGraphEvent: vi.fn((cb: (event: unknown) => void) => {
+        taskGraphEventHandler = cb;
         return () => {};
       }),
       onWorkflowsChanged: vi.fn((cb: (wfList: unknown[]) => void) => {
@@ -81,6 +87,36 @@ describe('useTasks', () => {
     });
 
     expect(result.current.workflows.size).toBe(0);
+  });
+
+  it('applies task graph delta events from the graph event channel', async () => {
+    const task = makeUITask({ id: 'wf-1/task-1', workflowId: 'wf-1', status: 'pending' });
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
+      tasks: [task],
+      workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'pending' }],
+    };
+
+    const { result } = renderHook(() => useTasks());
+
+    await waitFor(() => {
+      expect(taskGraphEventHandler).toBeDefined();
+    });
+
+    await act(async () => {
+      taskGraphEventHandler!({
+        type: 'delta',
+        delta: {
+          type: 'updated',
+          taskId: 'wf-1/task-1',
+          changes: { status: 'running' },
+          taskStateVersion: 2,
+          previousTaskStateVersion: 1,
+        },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 110));
+    });
+
+    expect(result.current.tasks.get('wf-1/task-1')?.status).toBe('running');
   });
 
   it('replaces workflows when onWorkflowsChanged receives a non-empty list', async () => {
@@ -200,7 +236,7 @@ describe('useTasks', () => {
 
     await waitFor(() => {
       expect(getTasks).toHaveBeenCalledTimes(1);
-      expect(getTasks).toHaveBeenLastCalledWith(false);
+      expect(getTasks).toHaveBeenLastCalledWith();
     });
 
     await waitFor(() => {
@@ -209,32 +245,43 @@ describe('useTasks', () => {
     });
   });
 
-  it('forced refresh after a hydrated bootstrap still calls getTasks(true) and replaces state', async () => {
+  it('forced refresh after a hydrated bootstrap requests a graph refresh and waits for the snapshot event', async () => {
     const bootTask = makeUITask({ id: 'boot-1', description: 'Boot' });
     const refreshedTask = makeUITask({ id: 'refreshed-1', description: 'Refreshed' });
-    const getTasks = vi.fn().mockResolvedValue({ tasks: [refreshedTask], workflows: [] });
+    let taskGraphEventHandler: ((event: unknown) => void) | undefined;
     (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
       tasks: [bootTask],
       workflows: [{ id: 'wf-1', name: 'WF 1', status: 'running' }],
     };
+    const refreshTaskGraph = vi.fn(async () => {
+      taskGraphEventHandler?.({
+        type: 'snapshot',
+        tasks: [refreshedTask],
+        workflows: [],
+        reason: 'test-refresh',
+        streamSequence: 0,
+      });
+    });
     (window as unknown as { invoker: Record<string, unknown> }).invoker = {
-      getTasks,
+      getTasks: vi.fn().mockResolvedValue({ tasks: [bootTask], workflows: [] }),
+      refreshTaskGraph,
+      onTaskGraphEvent: vi.fn((cb: (event: unknown) => void) => {
+        taskGraphEventHandler = cb;
+        return () => {};
+      }),
       onTaskDelta: vi.fn(() => () => {}),
       onWorkflowsChanged: vi.fn(() => () => {}),
     };
 
     const { result } = renderHook(() => useTasks());
 
-    expect(getTasks).not.toHaveBeenCalled();
+    expect(refreshTaskGraph).not.toHaveBeenCalled();
 
     await act(async () => {
-      result.current.refreshTasks(true);
+      await result.current.refreshTaskGraph();
     });
 
-    await waitFor(() => {
-      expect(getTasks).toHaveBeenCalledTimes(1);
-      expect(getTasks).toHaveBeenLastCalledWith(true);
-    });
+    expect(refreshTaskGraph).toHaveBeenCalledTimes(1);
 
     await waitFor(() => {
       expect(result.current.tasks.has('refreshed-1')).toBe(true);
@@ -266,7 +313,7 @@ describe('useTasks', () => {
 
     await waitFor(() => {
       expect(getTasks).toHaveBeenCalledTimes(1);
-      expect(getTasks).toHaveBeenLastCalledWith(false);
+      expect(getTasks).toHaveBeenLastCalledWith();
     });
 
     await waitFor(() => {
@@ -275,10 +322,16 @@ describe('useTasks', () => {
     });
   });
 
-  it('passes forceRefresh flag to getTasks when requested', async () => {
+  it('forced refresh calls refreshTaskGraph instead of getTasks', async () => {
     const getTasks = vi.fn().mockResolvedValue({ tasks: [], workflows: [] });
+    const refreshTaskGraph = vi.fn(async () => {});
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
+      tasks: [makeUITask({ id: 'boot-1' })],
+      workflows: [],
+    };
     (window as unknown as { invoker: Record<string, unknown> }).invoker = {
       getTasks,
+      refreshTaskGraph,
       onTaskDelta: vi.fn(() => () => {}),
       onWorkflowsChanged: vi.fn(() => () => {}),
     };
@@ -286,12 +339,12 @@ describe('useTasks', () => {
     const { result } = renderHook(() => useTasks());
 
     await act(async () => {
-      result.current.refreshTasks(true);
+      await result.current.refreshTaskGraph();
     });
 
     await waitFor(() => {
-      expect(getTasks).toHaveBeenCalled();
-      expect(getTasks).toHaveBeenLastCalledWith(true);
+      expect(refreshTaskGraph).toHaveBeenCalledTimes(1);
+      expect(getTasks).not.toHaveBeenCalled();
     });
   });
 
