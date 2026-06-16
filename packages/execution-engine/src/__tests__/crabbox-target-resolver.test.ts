@@ -2,7 +2,10 @@ import { describe, it, expect } from 'vitest';
 import {
   buildWarmupArgs,
   buildStatusArgs,
+  buildStopArgs,
   resolveCrabboxTarget,
+  stopCrabboxLease,
+  decideCrabboxCleanup,
   type CommandRunner,
   type CommandRunnerResult,
   type CrabboxResolverConfig,
@@ -81,6 +84,82 @@ describe('buildStatusArgs', () => {
     expect(args).toEqual([
       'status', '--id', 'lease-123', '--json', '--wait', '--timeout', '60',
     ]);
+  });
+});
+
+describe('buildStopArgs', () => {
+  it('builds a positional stop invocation for the lease id plus explicit stopArgs', () => {
+    const args = buildStopArgs({ ...baseConfig, stopArgs: ['--force'] }, 'lease-123');
+    expect(args).toEqual(['stop', 'lease-123', '--force']);
+  });
+
+  it('omits extra args when none are configured', () => {
+    expect(buildStopArgs(baseConfig, 'lease-123')).toEqual(['stop', 'lease-123']);
+  });
+});
+
+describe('stopCrabboxLease', () => {
+  it('runs crabbox stop and resolves on exit 0', async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const runner: CommandRunner = async (command, args) => {
+      calls.push({ command, args: [...args] });
+      return ok('stopped');
+    };
+    await stopCrabboxLease({ ...baseConfig, stopArgs: ['--force'] }, 'lease-123', runner);
+    expect(calls).toEqual([{ command: 'crabbox', args: ['stop', 'lease-123', '--force'] }]);
+  });
+
+  it('throws naming the lease id when stop exits non-zero', async () => {
+    const runner: CommandRunner = async () => ({ stdout: '', stderr: 'no such lease', exitCode: 3 });
+    await expect(stopCrabboxLease(baseConfig, 'lease-123', runner)).rejects.toThrow(
+      /stop failed for lease "lease-123".*no such lease/s,
+    );
+  });
+});
+
+describe('decideCrabboxCleanup', () => {
+  it('stops the box after a successful task under the default policy', () => {
+    expect(decideCrabboxCleanup({ succeeded: true })).toEqual({ stop: true, keepForDebug: false });
+  });
+
+  it('keeps the box after a failed task when keepOnFailure defaults to true', () => {
+    expect(decideCrabboxCleanup({ succeeded: false })).toEqual({ stop: false, keepForDebug: true });
+  });
+
+  it('stops a failed task when keepOnFailure is explicitly false', () => {
+    expect(decideCrabboxCleanup({ succeeded: false, keepOnFailure: false })).toEqual({
+      stop: true,
+      keepForDebug: false,
+    });
+  });
+
+  it('always stops the box regardless of outcome when stopAfter is always', () => {
+    expect(decideCrabboxCleanup({ stopAfter: 'always', succeeded: false })).toEqual({
+      stop: true,
+      keepForDebug: false,
+    });
+    expect(decideCrabboxCleanup({ stopAfter: 'always', succeeded: true })).toEqual({
+      stop: true,
+      keepForDebug: false,
+    });
+  });
+
+  it('never stops the box when stopAfter is never', () => {
+    expect(decideCrabboxCleanup({ stopAfter: 'never', succeeded: true })).toEqual({
+      stop: false,
+      keepForDebug: false,
+    });
+    expect(decideCrabboxCleanup({ stopAfter: 'never', succeeded: false })).toEqual({
+      stop: false,
+      keepForDebug: true,
+    });
+  });
+
+  it('treats an unknown idle policy as never (defer to Crabbox idle reaping)', () => {
+    expect(decideCrabboxCleanup({ stopAfter: 'idle', succeeded: true })).toEqual({
+      stop: false,
+      keepForDebug: false,
+    });
   });
 });
 
