@@ -73,7 +73,7 @@ test.describe('Embedded terminal PTY', () => {
       },
     ]);
 
-    const tasksResult = await page.evaluate(() => window.invoker.getTasks(true));
+    const tasksResult = await page.evaluate(() => window.invoker.getTasks());
     const tasks = Array.isArray(tasksResult) ? tasksResult : tasksResult.tasks;
     const task = tasks.find((candidate) => candidate.id.endsWith('/codex-resume'));
     const fullTaskId = task?.id;
@@ -131,7 +131,7 @@ test.describe('Embedded terminal PTY', () => {
       },
     ]);
 
-    const tasksResult = await page.evaluate(() => window.invoker.getTasks(true));
+    const tasksResult = await page.evaluate(() => window.invoker.getTasks());
     const tasks = Array.isArray(tasksResult) ? tasksResult : tasksResult.tasks;
     const task = tasks.find((candidate) => candidate.id.endsWith('/claude-resume'));
     const fullTaskId = task?.id;

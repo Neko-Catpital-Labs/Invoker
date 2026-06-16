@@ -355,7 +355,7 @@ export function App() {
   const handleTaskGraphSnapshotApplied = useCallback(() => {
     setGraphRefreshSequence((sequence) => sequence + 1);
   }, []);
-  const { tasks, workflows, clearTasks, refreshTasks } = useTasks({
+  const { tasks, workflows, clearTasks, refreshTasks, refreshTaskGraph } = useTasks({
     onTaskGraphSnapshotApplied: handleTaskGraphSnapshotApplied,
   });
   const invoker = useInvoker();
@@ -1337,8 +1337,8 @@ export function App() {
   }, [contextMenu, focusKeyboardRegion, workflowContextMenu]);
 
   const handleRefresh = useCallback(async () => {
-    await refreshTasks(true);
-  }, [refreshTasks]);
+    await refreshTaskGraph();
+  }, [refreshTaskGraph]);
 
   // ── Plan loading ──────────────────────────────────────────
   const handleLoadPlan = useCallback(
