@@ -62,6 +62,21 @@ export function createMockInvoker(
           });
         }),
     ),
+    refreshTaskGraph: vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          queueMicrotask(() => {
+            graphEventCallback?.({
+              type: 'snapshot',
+              tasks: taskSnapshot,
+              workflows: workflowSnapshot,
+              reason: 'mock-refresh',
+              streamSequence: 0,
+            });
+            resolve();
+          });
+        }),
+    ),
     onTaskDelta: vi.fn((cb: (delta: TaskDelta) => void) => {
       deltaCallback = cb;
       return () => { deltaCallback = undefined; };
