@@ -34,9 +34,12 @@ import { formatLifecycleTag, extractAttemptSuffix } from './branch-utils.js';
 import { SshExecutor } from './ssh-executor.js';
 import {
   resolveCrabboxTarget,
+  stopCrabboxLease,
+  decideCrabboxCleanup,
   type CrabboxResolverConfig,
   type CrabboxResolvedTarget,
 } from './crabbox-target-resolver.js';
+import type { CrabboxRemoteLeaseMetadata } from '@invoker/workflow-core';
 import {
   executeMergeNodeImpl,
   approveMergeImpl,
@@ -158,6 +161,7 @@ type RemoteTargetDisplay = {
   keepOnFailure?: boolean;
   warmupArgs?: readonly string[];
   statusArgs?: readonly string[];
+  stopArgs?: readonly string[];
 };
 
 /** A resolved Crabbox SSH endpoint plus the lease metadata that produced it. */
@@ -171,6 +175,18 @@ type ResolvedCrabboxEntry = {
 export type CrabboxResolver = (
   config: CrabboxResolverConfig,
 ) => Promise<CrabboxResolvedTarget>;
+
+/** The injectable stopper that tears down a leased Crabbox box after a task completes. */
+export type CrabboxStopper = (
+  config: CrabboxResolverConfig,
+  leaseId: string,
+) => Promise<void>;
+
+/** Resolver config + resolved lease metadata captured at launch for post-completion cleanup. */
+type CrabboxCleanupContext = {
+  config: CrabboxResolverConfig;
+  leaseMetadata: CrabboxRemoteLeaseMetadata;
+};
 
 export interface ReviewGateCiFailureTrigger {
   taskId: string;
@@ -321,6 +337,12 @@ export interface TaskRunnerConfig {
    * `type: 'crabbox'`. Defaults to the built-in {@link resolveCrabboxTarget}.
    */
   crabboxResolver?: CrabboxResolver;
+  /**
+   * Stopper that tears down a leased Crabbox box via `crabbox stop <leaseId>`.
+   * Called only for Crabbox-backed SSH tasks whose cleanup policy decides the
+   * box should stop. Defaults to the built-in {@link stopCrabboxLease}.
+   */
+  crabboxStopper?: CrabboxStopper;
   executionPoolsProvider?: () => Record<string, {
     members: Array<
       | { type: 'ssh'; id: string; maxConcurrentTasks?: number }
@@ -364,6 +386,8 @@ export class TaskRunner {
   private sshExecutorCache = new Map<string, SshExecutor>();
   /** Resolves Crabbox targets into ready SSH endpoints. Defaults to resolveCrabboxTarget. */
   private crabboxResolver: CrabboxResolver;
+  /** Stops leased Crabbox boxes after a task completes. Defaults to stopCrabboxLease. */
+  private crabboxStopper: CrabboxStopper;
   /** Resolved Crabbox endpoint for an in-flight launch, keyed by taskId. Cleared per launch. */
   private resolvedCrabboxByTask = new Map<string, ResolvedCrabboxEntry>();
   /** Last resolved Crabbox endpoint keyed by targetId, for off-launch lookups (e.g. fix/conflict). */
@@ -465,6 +489,8 @@ export class TaskRunner {
     this.onReviewGateCiFailure = config.onReviewGateCiFailure;
     this.getRemoteTargets = config.remoteTargetsProvider ?? (() => ({}));
     this.crabboxResolver = config.crabboxResolver ?? ((cfg) => resolveCrabboxTarget(cfg));
+    this.crabboxStopper = config.crabboxStopper
+      ?? ((cfg, leaseId) => stopCrabboxLease(cfg, leaseId).then(() => undefined));
     this.getExecutionPools = config.executionPoolsProvider ?? (() => ({}));
     this.dockerConfig = config.dockerConfig ?? {};
     this.executionAgentRegistry = config.executionAgentRegistry;
@@ -1122,6 +1148,10 @@ export class TaskRunner {
     }
     bench('markTaskRunningAfterLaunch.accepted');
 
+    // Captured at launch so the completion callback can apply the Crabbox
+    // cleanup policy after per-launch resolver state has been cleared.
+    let crabboxCleanup: CrabboxCleanupContext | undefined;
+
     // Persist execution metadata immediately at task start — all fields explicit
     {
       // Fail-fast: workspacePath must be provided by all executors
@@ -1148,6 +1178,7 @@ export class TaskRunner {
       // For Crabbox-backed SSH tasks, persist the durable lease metadata so
       // cleanup / terminal restore can reconnect to or tear down the box.
       const resolvedLease = executor.type === 'ssh' ? this.resolvedLeaseForTask(task) : undefined;
+      crabboxCleanup = executor.type === 'ssh' ? this.crabboxCleanupContextForTask(task) : undefined;
       const changes = {
         config: {
           runnerKind: executor.type as RunnerKind,
@@ -1311,6 +1342,12 @@ export class TaskRunner {
 
             this.executeNewlyStartedTasks(newlyStarted, dispatchOpts);
           } finally {
+            // Apply the Crabbox cleanup policy (stop or keep the leased box).
+            try {
+              await this.maybeCleanupCrabboxLease(task.id, crabboxCleanup, normalizedResponse);
+            } catch (cleanupErr) {
+              this.logger.warn(`[TaskRunner] crabbox cleanup raised for task=${task.id}`, { err: cleanupErr });
+            }
             // Clean up per-task Docker executor to avoid resource leaks
             try {
               await this.cleanupPerTaskDockerExecutor(task);
@@ -1648,6 +1685,119 @@ export class TaskRunner {
       ?? (task.config.poolId && remoteTargets[task.config.poolId] ? task.config.poolId : undefined);
   }
 
+  /** Map a Crabbox remote-target config into the resolver/stop CLI config. */
+  private buildCrabboxResolverConfig(
+    target: RemoteTargetDisplay,
+    targetId: string,
+  ): CrabboxResolverConfig {
+    return {
+      crabboxCommand: target.crabboxCommand ?? 'crabbox',
+      provider: target.provider ?? '',
+      class: target.class ?? '',
+      ttl: target.ttl ?? '',
+      idleTimeout: target.idleTimeout ?? '',
+      network: target.network ?? '',
+      target: target.target ?? targetId,
+      ...(target.stopAfter !== undefined ? { stopAfter: target.stopAfter } : {}),
+      ...(target.keepOnFailure !== undefined ? { keepOnFailure: target.keepOnFailure } : {}),
+      ...(target.warmupArgs ? { warmupArgs: target.warmupArgs } : {}),
+      ...(target.statusArgs ? { statusArgs: target.statusArgs } : {}),
+      ...(target.stopArgs ? { stopArgs: target.stopArgs } : {}),
+    };
+  }
+
+  /**
+   * Capture the cleanup context for a Crabbox-backed SSH task at launch time so
+   * the completion callback can stop (or deliberately keep) the leased box even
+   * after per-launch resolver state has been cleared. Returns undefined for
+   * static SSH targets and non-SSH executors.
+   */
+  private crabboxCleanupContextForTask(task: TaskState): CrabboxCleanupContext | undefined {
+    const remoteTargets = this.getRemoteTargets();
+    const targetId = this.sshTargetIdForTask(task, remoteTargets);
+    if (!targetId) return undefined;
+    const target = remoteTargets[targetId];
+    if (!target || target.type !== 'crabbox') return undefined;
+    const resolved = this.resolvedLeaseForTask(task);
+    if (!resolved) return undefined;
+    return {
+      config: this.buildCrabboxResolverConfig(target, targetId),
+      leaseMetadata: resolved.remoteLeaseMetadata,
+    };
+  }
+
+  /**
+   * Apply the Crabbox cleanup policy after an SSH task completes.
+   *
+   * Decides from the lease metadata's `stopAfter`/`keepOnFailure` policy and the
+   * final exit status whether to tear the box down. On a failure that keeps the
+   * box, surfaces the `crabbox ssh` / `crabbox stop` commands for debugging. A
+   * stop-command failure is logged via `task.executor.crabbox-cleanup-failed`
+   * and never rewrites the task's exit code.
+   */
+  private async maybeCleanupCrabboxLease(
+    taskId: string,
+    cleanup: CrabboxCleanupContext | undefined,
+    response: WorkResponse,
+  ): Promise<void> {
+    if (!cleanup) return;
+    const { config, leaseMetadata } = cleanup;
+    const leaseId = leaseMetadata.leaseId;
+    if (!leaseId) return;
+
+    const succeeded = response.status === 'completed' && (response.outputs.exitCode ?? 0) === 0;
+    const decision = decideCrabboxCleanup({
+      stopAfter: leaseMetadata.stopAfter,
+      keepOnFailure: leaseMetadata.keepOnFailure,
+      succeeded,
+    });
+
+    if (!decision.stop) {
+      if (decision.keepForDebug) {
+        const sshCommand = `${config.crabboxCommand} ssh --id ${leaseId}`;
+        const stopCommand = `${config.crabboxCommand} stop ${leaseId}`;
+        const message =
+          `Crabbox box kept for debugging after task failure (lease ${leaseId}).\n` +
+          `  Connect: ${sshCommand}\n` +
+          `  Stop:    ${stopCommand}\n`;
+        try {
+          this.callbacks.onOutput?.(taskId, message);
+        } catch {
+          /* best effort */
+        }
+        try {
+          this.persistence.appendTaskOutput(taskId, message);
+        } catch {
+          /* best effort */
+        }
+        this.persistence.logEvent?.(taskId, 'task.executor.crabbox-cleanup-kept', {
+          leaseId,
+          stopAfter: String(leaseMetadata.stopAfter ?? 'success'),
+          keepOnFailure: leaseMetadata.keepOnFailure ?? true,
+          sshCommand,
+          stopCommand,
+        });
+      }
+      return;
+    }
+
+    try {
+      await this.crabboxStopper(config, leaseId);
+      this.persistence.logEvent?.(taskId, 'task.executor.crabbox-cleanup-stopped', { leaseId });
+    } catch (err) {
+      // Cleanup is best-effort: record the failure but never rewrite the task's
+      // exit code — the task result stands on its own.
+      this.persistence.logEvent?.(taskId, 'task.executor.crabbox-cleanup-failed', {
+        leaseId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      this.logger.warn(
+        `[TaskRunner] crabbox cleanup failed for task=${taskId} lease=${leaseId}`,
+        { err },
+      );
+    }
+  }
+
   /**
    * If the task's selected SSH target is a Crabbox target, warm up the box and
    * resolve its ready SSH endpoint, caching it for the rest of this launch.
@@ -1665,19 +1815,7 @@ export class TaskRunner {
     const existing = this.resolvedCrabboxByTask.get(task.id);
     if (existing && existing.targetId === targetId) return; // already resolved this launch
 
-    const resolverConfig: CrabboxResolverConfig = {
-      crabboxCommand: target.crabboxCommand ?? 'crabbox',
-      provider: target.provider ?? '',
-      class: target.class ?? '',
-      ttl: target.ttl ?? '',
-      idleTimeout: target.idleTimeout ?? '',
-      network: target.network ?? '',
-      target: target.target ?? targetId,
-      ...(target.stopAfter !== undefined ? { stopAfter: target.stopAfter } : {}),
-      ...(target.keepOnFailure !== undefined ? { keepOnFailure: target.keepOnFailure } : {}),
-      ...(target.warmupArgs ? { warmupArgs: target.warmupArgs } : {}),
-      ...(target.statusArgs ? { statusArgs: target.statusArgs } : {}),
-    };
+    const resolverConfig = this.buildCrabboxResolverConfig(target, targetId);
 
     const resolved = await this.crabboxResolver(resolverConfig);
     this.resolvedCrabboxByTask.set(task.id, { targetId, resolved });

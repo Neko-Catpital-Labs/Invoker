@@ -43,6 +43,8 @@ export interface CrabboxResolverConfig {
   readonly warmupArgs?: readonly string[];
   /** Extra args appended to the status invocation. */
   readonly statusArgs?: readonly string[];
+  /** Extra args appended to the stop/cleanup invocation. */
+  readonly stopArgs?: readonly string[];
 }
 
 /** Result of running a Crabbox CLI command. */
@@ -146,6 +148,94 @@ export function buildStatusArgs(
     '--wait',
     ...(config.statusArgs ?? []),
   ];
+}
+
+/** Build the Crabbox stop/cleanup invocation args for a lease id. */
+export function buildStopArgs(
+  config: CrabboxResolverConfig,
+  leaseId: string,
+): string[] {
+  return ['stop', leaseId, ...(config.stopArgs ?? [])];
+}
+
+/**
+ * Stop (tear down) a leased Crabbox box via `crabbox stop <leaseId>`.
+ *
+ * @throws if the stop command exits non-zero so callers can log the failure
+ * without leaving the box silently leaked.
+ */
+export async function stopCrabboxLease(
+  config: CrabboxResolverConfig,
+  leaseId: string,
+  runner: CommandRunner = spawnCommandRunner,
+): Promise<CommandRunnerResult> {
+  const result = await runner(config.crabboxCommand, buildStopArgs(config, leaseId));
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `Crabbox stop failed for lease "${leaseId}" (exit ${result.exitCode}): ${
+        result.stderr.trim() || result.stdout.trim() || 'no output'
+      }`,
+    );
+  }
+  return result;
+}
+
+/**
+ * Cleanup policy applied to a Crabbox lease once its SSH task completes.
+ *
+ * - `success` (default): stop the box only after a successful task; a failed
+ *   task is governed by {@link CrabboxResolverConfig.keepOnFailure}.
+ * - `always`: stop the box regardless of task outcome.
+ * - `never`: never actively stop; leave the box for the Crabbox idle reaper.
+ *
+ * Any other value (e.g. `idle`) is treated as `never` — the caller is opting
+ * into Crabbox's own idle timeout rather than an active stop.
+ */
+export type CrabboxStopAfter = 'success' | 'always' | 'never';
+
+function normalizeStopAfter(value: string | number | undefined): CrabboxStopAfter {
+  if (value === undefined) return 'success';
+  const v = String(value).toLowerCase();
+  if (v === 'always') return 'always';
+  if (v === 'never') return 'never';
+  if (v === 'success') return 'success';
+  // Unknown/idle policies defer to Crabbox idle reaping rather than active stop.
+  return 'never';
+}
+
+/** Outcome of a cleanup decision for a completed Crabbox-backed task. */
+export interface CrabboxCleanupDecision {
+  /** When true, run `crabbox stop <leaseId>` to tear the box down now. */
+  readonly stop: boolean;
+  /** When true, the box stays up after a failure and debug commands should be surfaced. */
+  readonly keepForDebug: boolean;
+}
+
+/**
+ * Decide whether a completed task's Crabbox box should be stopped.
+ *
+ * Defaults: `stopAfter = success`, `keepOnFailure = true` — boxes do not leak
+ * after success, but a failed task keeps its box for inspection by default.
+ */
+export function decideCrabboxCleanup(params: {
+  stopAfter?: string | number;
+  keepOnFailure?: boolean;
+  succeeded: boolean;
+}): CrabboxCleanupDecision {
+  const stopAfter = normalizeStopAfter(params.stopAfter);
+  const keepOnFailure = params.keepOnFailure ?? true;
+
+  let stop: boolean;
+  if (stopAfter === 'never') {
+    stop = false;
+  } else if (stopAfter === 'always') {
+    stop = true;
+  } else {
+    // stopAfter === 'success'
+    stop = params.succeeded ? true : !keepOnFailure;
+  }
+
+  return { stop, keepForDebug: !stop && !params.succeeded };
 }
 
 /**

@@ -4384,8 +4384,11 @@ describe('TaskRunner', () => {
 
   describe('Crabbox target resolution', () => {
     // An SSH executor that immediately reports a workspace and auto-completes,
-    // so executeTask runs end-to-end without a real remote.
-    function createAutoCompleteSshExecutor() {
+    // so executeTask runs end-to-end without a real remote. The completion
+    // status/exit code is configurable to exercise the cleanup policy.
+    function createAutoCompleteSshExecutor(
+      completion: { status?: WorkResponse['status']; exitCode?: number } = {},
+    ) {
       let completeCallback: ((response: WorkResponse) => void) | undefined;
       return {
         type: 'ssh' as const,
@@ -4402,8 +4405,8 @@ describe('TaskRunner', () => {
               actionId: request.actionId,
               attemptId: request.attemptId,
               executionGeneration: request.executionGeneration,
-              status: 'completed',
-              outputs: { exitCode: 0 },
+              status: completion.status ?? 'completed',
+              outputs: { exitCode: completion.exitCode ?? 0 },
             });
           }, 0);
           return handle;
@@ -4428,7 +4431,7 @@ describe('TaskRunner', () => {
       stopAfter: 'idle',
     };
 
-    function resolvedCrabbox() {
+    function resolvedCrabbox(leaseOverrides: Record<string, unknown> = {}) {
       return {
         target: { host: '10.0.0.5', user: 'box', sshKeyPath: '/leased/key', port: 2222 },
         remoteLeaseMetadata: {
@@ -4440,6 +4443,7 @@ describe('TaskRunner', () => {
           sshUser: 'box',
           sshPort: 2222,
           sshKeyPath: '/leased/key',
+          ...leaseOverrides,
         },
       };
     }
@@ -4449,6 +4453,7 @@ describe('TaskRunner', () => {
       sshExecutor: any;
       target: any;
       claim?: any;
+      stopper?: any;
     }) {
       const task = makeTask({
         id: 'cb-task',
@@ -4490,6 +4495,7 @@ describe('TaskRunner', () => {
           },
         }),
         crabboxResolver: opts.resolver,
+        ...(opts.stopper ? { crabboxStopper: opts.stopper } : {}),
       });
       return { runner, task, persistence };
     }
@@ -4558,6 +4564,108 @@ describe('TaskRunner', () => {
       expect(leaseUpdate[1].execution.remoteLeaseMetadata).toEqual(
         expect.objectContaining({ provider: 'crabbox', leaseId: 'lease-1' }),
       );
+    });
+
+    describe('cleanup policy', () => {
+      it('stops the leased box after a successful task (default stopAfter=success)', async () => {
+        const stopper = vi.fn().mockResolvedValue(undefined);
+        const { runner, task, persistence } = makeRunner({
+          resolver: vi.fn().mockResolvedValue(resolvedCrabbox()),
+          sshExecutor: createAutoCompleteSshExecutor({ status: 'completed', exitCode: 0 }),
+          target: crabboxTarget,
+          stopper,
+        });
+
+        await runner.executeTask(task);
+
+        expect(stopper).toHaveBeenCalledTimes(1);
+        expect(stopper).toHaveBeenCalledWith(
+          expect.objectContaining({ crabboxCommand: 'crabbox', target: 'ubuntu-box' }),
+          'lease-1',
+        );
+        expect(persistence.logEvent).toHaveBeenCalledWith(
+          'cb-task', 'task.executor.crabbox-cleanup-stopped', { leaseId: 'lease-1' },
+        );
+      });
+
+      it('keeps the box and surfaces debug commands on failure (keepOnFailure default)', async () => {
+        const stopper = vi.fn().mockResolvedValue(undefined);
+        const { runner, task, persistence } = makeRunner({
+          resolver: vi.fn().mockResolvedValue(resolvedCrabbox()),
+          sshExecutor: createAutoCompleteSshExecutor({ status: 'failed', exitCode: 1 }),
+          target: crabboxTarget,
+          stopper,
+        });
+
+        await runner.executeTask(task);
+
+        expect(stopper).not.toHaveBeenCalled();
+        expect(persistence.appendTaskOutput).toHaveBeenCalledWith(
+          'cb-task', expect.stringContaining('crabbox ssh --id lease-1'),
+        );
+        expect(persistence.appendTaskOutput).toHaveBeenCalledWith(
+          'cb-task', expect.stringContaining('crabbox stop lease-1'),
+        );
+        expect(persistence.logEvent).toHaveBeenCalledWith(
+          'cb-task', 'task.executor.crabbox-cleanup-kept', expect.objectContaining({ leaseId: 'lease-1' }),
+        );
+      });
+
+      it('always stops the box on failure when stopAfter=always', async () => {
+        const stopper = vi.fn().mockResolvedValue(undefined);
+        const { runner, task } = makeRunner({
+          resolver: vi.fn().mockResolvedValue(resolvedCrabbox({ stopAfter: 'always' })),
+          sshExecutor: createAutoCompleteSshExecutor({ status: 'failed', exitCode: 1 }),
+          target: { ...crabboxTarget, stopAfter: 'always' },
+          stopper,
+        });
+
+        await runner.executeTask(task);
+
+        expect(stopper).toHaveBeenCalledTimes(1);
+        expect(stopper).toHaveBeenCalledWith(expect.any(Object), 'lease-1');
+      });
+
+      it('never stops the box on success when stopAfter=never', async () => {
+        const stopper = vi.fn().mockResolvedValue(undefined);
+        const { runner, task } = makeRunner({
+          resolver: vi.fn().mockResolvedValue(resolvedCrabbox({ stopAfter: 'never' })),
+          sshExecutor: createAutoCompleteSshExecutor({ status: 'completed', exitCode: 0 }),
+          target: { ...crabboxTarget, stopAfter: 'never' },
+          stopper,
+        });
+
+        await runner.executeTask(task);
+
+        expect(stopper).not.toHaveBeenCalled();
+      });
+
+      it('logs a cleanup failure without rewriting the task exit code', async () => {
+        const stopper = vi.fn().mockRejectedValue(new Error('crabbox stop blew up'));
+        const onComplete = vi.fn();
+        const { runner, task, persistence } = makeRunner({
+          resolver: vi.fn().mockResolvedValue(resolvedCrabbox()),
+          sshExecutor: createAutoCompleteSshExecutor({ status: 'completed', exitCode: 0 }),
+          target: crabboxTarget,
+          stopper,
+        });
+        (runner as any).callbacks = { onComplete };
+
+        await runner.executeTask(task);
+
+        expect(stopper).toHaveBeenCalledTimes(1);
+        const failedCall = persistence.logEvent.mock.calls.find(
+          (c: any[]) => c[1] === 'task.executor.crabbox-cleanup-failed',
+        );
+        expect(failedCall).toBeDefined();
+        expect(failedCall[2]).toEqual(
+          expect.objectContaining({ leaseId: 'lease-1', error: 'crabbox stop blew up' }),
+        );
+        // The task's own completion is unaffected: success stays success.
+        expect(onComplete).toHaveBeenCalledWith(
+          'cb-task', expect.objectContaining({ status: 'completed', outputs: { exitCode: 0 } }),
+        );
+      });
     });
   });
 
