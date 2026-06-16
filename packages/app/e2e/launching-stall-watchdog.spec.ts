@@ -73,14 +73,14 @@ base.describe('Launch stall watchdog', () => {
       });
       await page.evaluate((planYaml) => window.invoker.loadPlan(planYaml), yamlStringify(WATCHDOG_PLAN));
 
-      const initial = await page.evaluate(() => window.invoker.getTasks(true));
+      const initial = await page.evaluate(() => window.invoker.getTasks());
       const initialTasks = Array.isArray(initial) ? initial : initial.tasks;
       const stalled = findTask(initialTasks, 'stall-task');
       expect(stalled).toBeDefined();
 
       const settleDeadline = Date.now() + 10_000;
       while (Date.now() < settleDeadline) {
-        const snapshot = await page.evaluate(() => window.invoker.getTasks(true));
+        const snapshot = await page.evaluate(() => window.invoker.getTasks());
         const tasks = Array.isArray(snapshot) ? snapshot : snapshot.tasks;
         const current = findTask(tasks, 'stall-task');
         if (current && current.status !== 'running') break;
@@ -105,7 +105,7 @@ base.describe('Launch stall watchdog', () => {
       const deadline = Date.now() + 15_000;
       let stalledTask: any | undefined;
       while (Date.now() < deadline) {
-        const snapshot = await page.evaluate(() => window.invoker.getTasks(true));
+        const snapshot = await page.evaluate(() => window.invoker.getTasks());
         const tasks = Array.isArray(snapshot) ? snapshot : snapshot.tasks;
         stalledTask = findTask(tasks, 'stall-task');
         if (
@@ -180,14 +180,14 @@ base.describe('Launch stall watchdog', () => {
       });
       await page.evaluate((planYaml) => window.invoker.loadPlan(planYaml), yamlStringify(WATCHDOG_PLAN));
 
-      const initial = await page.evaluate(() => window.invoker.getTasks(true));
+      const initial = await page.evaluate(() => window.invoker.getTasks());
       const initialTasks = Array.isArray(initial) ? initial : initial.tasks;
       const stalled = findTask(initialTasks, 'stall-task');
       expect(stalled).toBeDefined();
 
       const settleDeadline = Date.now() + 10_000;
       while (Date.now() < settleDeadline) {
-        const snapshot = await page.evaluate(() => window.invoker.getTasks(true));
+        const snapshot = await page.evaluate(() => window.invoker.getTasks());
         const tasks = Array.isArray(snapshot) ? snapshot : snapshot.tasks;
         const current = findTask(tasks, 'stall-task');
         if (current && current.status !== 'running') break;
@@ -213,7 +213,7 @@ base.describe('Launch stall watchdog', () => {
         },
       }]);
 
-      const postInjectSnapshot = await page.evaluate(() => window.invoker.getTasks(true));
+      const postInjectSnapshot = await page.evaluate(() => window.invoker.getTasks());
       const postInjectTasks = Array.isArray(postInjectSnapshot) ? postInjectSnapshot : postInjectSnapshot.tasks;
       const postInjectTask = findTask(postInjectTasks, 'stall-task');
       expect(postInjectTask?.config?.runnerKind).toBe('ssh');
@@ -221,7 +221,7 @@ base.describe('Launch stall watchdog', () => {
       const deadline = Date.now() + 15_000;
       let stalledTask: any | undefined;
       while (Date.now() < deadline) {
-        const snapshot = await page.evaluate(() => window.invoker.getTasks(true));
+        const snapshot = await page.evaluate(() => window.invoker.getTasks());
         const tasks = Array.isArray(snapshot) ? snapshot : snapshot.tasks;
         stalledTask = findTask(tasks, 'stall-task');
         if (
