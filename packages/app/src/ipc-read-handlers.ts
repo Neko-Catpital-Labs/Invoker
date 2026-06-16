@@ -17,8 +17,6 @@ export interface RegisterReadOnlyIpcHandlersContext {
   lastKnownTaskStates: TaskSnapshotCache;
   getMainWindow: () => BrowserWindow | null;
   sendTaskDeltaToRenderer: (delta: TaskDelta) => void;
-  requestWorkflowMetadataPublish: (reason: string) => void;
-  setLastKnownWorkflowCount: (count: number) => void;
   loadTaskByIdFromPersistence: (taskId: string) => TaskState | undefined;
   resolveAgentSession: (
     sessionId: string,
@@ -28,7 +26,6 @@ export interface RegisterReadOnlyIpcHandlersContext {
   ) => Promise<unknown>;
   getOwnerMode?: () => boolean;
   getMessageBus?: () => Pick<MessageBus, 'request'>;
-  timeStartupPhase: <T>(label: string, fn: () => T, fields?: () => Record<string, unknown>) => T;
   recordStartupDuration: (label: string, startedAtMs: number, fields?: Record<string, unknown>) => void;
   getTaskDeltaStreamSequence: () => number;
 }
@@ -64,13 +61,10 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
     lastKnownTaskStates,
     getMainWindow,
     sendTaskDeltaToRenderer,
-    requestWorkflowMetadataPublish,
-    setLastKnownWorkflowCount,
     loadTaskByIdFromPersistence,
     resolveAgentSession,
     getOwnerMode,
     getMessageBus,
-    timeStartupPhase,
     recordStartupDuration,
     getTaskDeltaStreamSequence,
   } = context;
@@ -110,37 +104,16 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
     return { workflow, tasks };
   });
 
-  ipcMain.handle('invoker:get-tasks', async (_event, forceRefresh?: boolean) => {
+  ipcMain.handle('invoker:get-tasks', async () => {
     const startedAtMs = Date.now();
     const orchestrator = getOrchestrator();
-    const delegatedSnapshot = asDelegatedTasksSnapshot(await delegateOwnerQuery<DelegatedTasksSnapshot>(
-      'tasks',
-      { forceRefresh: forceRefresh === true },
-    ));
+    const delegatedSnapshot = asDelegatedTasksSnapshot(await delegateOwnerQuery<DelegatedTasksSnapshot>('tasks'));
     const localInvokerHomeRoot = resolveInvokerHomeRoot();
     const delegatedHomeMismatch = delegatedSnapshot
       ? hasInvokerHomeMismatch(delegatedSnapshot, localInvokerHomeRoot)
       : false;
     if (delegatedSnapshot && !delegatedHomeMismatch) {
-      const previousTaskIds = new Set(lastKnownTaskStates.keys());
-      lastKnownTaskStates.clear();
-      for (const task of delegatedSnapshot.tasks) {
-        lastKnownTaskStates.set(task.id, JSON.stringify(task));
-        previousTaskIds.delete(task.id);
-        const mainWindow = getMainWindow();
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          sendTaskDeltaToRenderer({ type: 'created', task });
-        }
-      }
-      const mainWindow = getMainWindow();
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        for (const removedTaskId of previousTaskIds) {
-          sendTaskDeltaToRenderer({ type: 'removed', taskId: removedTaskId, previousTaskStateVersion: 0 });
-        }
-        requestWorkflowMetadataPublish(forceRefresh ? 'get-tasks-force-refresh-delegated' : 'get-tasks-delegated');
-      }
-      setLastKnownWorkflowCount(delegatedSnapshot.workflows.length);
-      recordStartupDuration(forceRefresh ? 'get-tasks.force-refresh.delegated-return' : 'get-tasks.delegated-return', startedAtMs, {
+      recordStartupDuration('get-tasks.delegated-return', startedAtMs, {
         taskCount: delegatedSnapshot.tasks.length,
         workflowCount: delegatedSnapshot.workflows.length,
         jsonSizeBytes: Buffer.byteLength(JSON.stringify(delegatedSnapshot), 'utf8'),
@@ -154,46 +127,14 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
         { module: 'ipc' },
       );
     }
-    if (forceRefresh) {
-      timeStartupPhase('get-tasks.force-refresh.syncAllFromDb', () => orchestrator.syncAllFromDb(), () => ({
-        taskCount: orchestrator.getAllTasks().length,
-      }));
-    }
+
     const tasks = orchestrator.getAllTasks();
     const workflows = persistence.listWorkflows();
-    if (forceRefresh) {
-      const previousTaskIds = new Set(lastKnownTaskStates.keys());
-      lastKnownTaskStates.clear();
-      for (const task of tasks) {
-        lastKnownTaskStates.set(task.id, JSON.stringify(task));
-        previousTaskIds.delete(task.id);
-        const mainWindow = getMainWindow();
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          sendTaskDeltaToRenderer({ type: 'created', task });
-        }
-      }
-      const mainWindow = getMainWindow();
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        for (const removedTaskId of previousTaskIds) {
-          sendTaskDeltaToRenderer({ type: 'removed', taskId: removedTaskId, previousTaskStateVersion: 0 });
-        }
-        requestWorkflowMetadataPublish('get-tasks-force-refresh');
-      }
-      setLastKnownWorkflowCount(workflows.length);
-    }
+    const streamSequence = getTaskDeltaStreamSequence();
     logger.info(
-      `get-tasks(forceRefresh=${forceRefresh ? 'true' : 'false'}) returning ${tasks.length} tasks, ${workflows.length} workflows`,
+      `get-tasks returning ${tasks.length} tasks, ${workflows.length} workflows`,
       { module: 'ipc' },
     );
-    const streamSequence = getTaskDeltaStreamSequence();
-    if (forceRefresh) {
-      recordStartupDuration('get-tasks.force-refresh.return', startedAtMs, {
-        taskCount: tasks.length,
-        workflowCount: workflows.length,
-        jsonSizeBytes: Buffer.byteLength(JSON.stringify({ tasks, workflows }), 'utf8'),
-        streamSequence,
-      });
-    }
     return { tasks, workflows, streamSequence };
   });
 
