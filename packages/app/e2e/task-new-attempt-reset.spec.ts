@@ -47,7 +47,7 @@ function findTask(tasks: Array<{ id: string; status: string }>, taskId: string) 
 }
 
 async function getTasks(page: Page): Promise<any[]> {
-  const result = await page.evaluate(() => window.invoker.getTasks(true));
+  const result = await page.evaluate(() => window.invoker.getTasks());
   return Array.isArray(result) ? result : result.tasks;
 }
 
