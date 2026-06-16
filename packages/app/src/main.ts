@@ -71,7 +71,7 @@ import {
   resolveInvokerIpcSocketPath,
   resolveRepoRoot,
 } from '@invoker/contracts';
-import type { TaskGraphEvent, WorkflowMeta, WorkResponse } from '@invoker/contracts';
+import type { WorkflowMeta, WorkResponse } from '@invoker/contracts';
 import { SQLiteAdapter, ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
 import { IpcBus, Channels } from '@invoker/transport';
 import {
@@ -195,6 +195,7 @@ import {
   resolveActionDiagnosticsStallThresholdMs,
 } from './action-graph-diagnostics.js';
 import { registerReadOnlyIpcHandlers } from './ipc-read-handlers.js';
+import { createTaskGraphEventPublisher } from './task-graph-event-publisher.js';
 import {
   registerBootstrapStateIpc,
   registerGuiMutationHandler as registerGuiMutationIpcHandler,
@@ -1828,8 +1829,6 @@ function createEmbeddedTerminalBackendFromConfig(
   };
   const pendingOutputBuffers = new Map<string, string[]>();
   const outputFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  const pendingUiTaskGraphEvents: TaskGraphEvent[] = [];
-  let uiTaskGraphEventFlushTimer: ReturnType<typeof setTimeout> | null = null;
   let workflowMetadataInvalidator: WorkflowMetadataInvalidator | null = null;
   let workflowMetadataPublisher: CoalescedWorkflowMetadataPublisher | null = null;
   let lastKnownWorkflowCount = 0;
@@ -1969,34 +1968,6 @@ function createEmbeddedTerminalBackendFromConfig(
     outputFlushTimers.set(taskId, timer);
   };
 
-  const flushUiTaskGraphEvents = (): void => {
-    if (uiTaskGraphEventFlushTimer) {
-      clearTimeout(uiTaskGraphEventFlushTimer);
-      uiTaskGraphEventFlushTimer = null;
-    }
-    if (!mainWindow || mainWindow.isDestroyed() || !uiInteractive || pendingUiTaskGraphEvents.length === 0) {
-      pendingUiTaskGraphEvents.length = 0;
-      return;
-    }
-    const batch = pendingUiTaskGraphEvents.splice(0, Math.min(pendingUiTaskGraphEvents.length, 250));
-    if (pendingUiTaskGraphEvents.length > 0) {
-      uiTaskGraphEventFlushTimer = setTimeout(() => flushUiTaskGraphEvents(), 0);
-      uiTaskGraphEventFlushTimer.unref?.();
-    }
-    if (batch.length >= 200) {
-      uiPerfStats.largeTaskDeltaBatches += 1;
-      uiPerfStats.maxTaskDeltaBatchSize = Math.max(uiPerfStats.maxTaskDeltaBatchSize, batch.length);
-      logger.info(`large task-graph-event batch chunked size=${batch.length} remaining=${pendingUiTaskGraphEvents.length}`, {
-        module: 'ui-backpressure',
-      });
-    }
-    if (batch.length === 1) {
-      mainWindow.webContents.send('invoker:task-graph-event', batch[0]);
-      return;
-    }
-    mainWindow.webContents.send('invoker:task-graph-event-batch', batch);
-  };
-
   const taskDeltaStream = createTaskDeltaStreamSequence();
   const getTaskDeltaStreamSequence = (): number => taskDeltaStream.current();
 
@@ -2004,42 +1975,23 @@ function createEmbeddedTerminalBackendFromConfig(
     workflowMetadataInvalidator?.markFromTaskDelta(delta);
   };
 
-  const enqueueTaskGraphEventForRenderer = (event: TaskGraphEvent): void => {
-    if (!mainWindow || mainWindow.isDestroyed() || !uiInteractive) {
-      return;
-    }
-    pendingUiTaskGraphEvents.push(event);
-    if (uiTaskGraphEventFlushTimer) {
-      return;
-    }
-    uiTaskGraphEventFlushTimer = setTimeout(() => flushUiTaskGraphEvents(), 25);
-    uiTaskGraphEventFlushTimer.unref?.();
-  };
-
-  const enqueueTaskDeltaForRenderer = (delta: TaskDelta): void => {
-    enqueueTaskGraphEventForRenderer({
-      type: 'delta',
-      delta: taskDeltaStream.stamp(delta),
-    });
-  };
-  const enqueueTaskGraphSnapshotForRenderer = (
-    reason: string,
-    tasks: TaskState[],
-    workflows: WorkflowMeta[],
-  ): void => {
-    enqueueTaskGraphEventForRenderer({
-      type: 'snapshot',
-      tasks: tasks as Extract<TaskGraphEvent, { type: 'snapshot' }>['tasks'],
-      workflows,
-      reason,
-      streamSequence: getTaskDeltaStreamSequence(),
-    });
-  };
-
+  const taskGraphEventPublisher = createTaskGraphEventPublisher({
+    getMainWindow: () => mainWindow,
+    isUiInteractive: () => uiInteractive,
+    stampDelta: (delta) => taskDeltaStream.stamp(delta),
+    getStreamSequence: getTaskDeltaStreamSequence,
+    onLargeBatch: ({ batchSize, remaining }) => {
+      uiPerfStats.largeTaskDeltaBatches += 1;
+      uiPerfStats.maxTaskDeltaBatchSize = Math.max(uiPerfStats.maxTaskDeltaBatchSize, batchSize);
+      logger.info(`large task-graph-event batch chunked size=${batchSize} remaining=${remaining}`, {
+        module: 'ui-backpressure',
+      });
+    },
+  });
 
   const sendTaskDeltaToRenderer = (delta: TaskDelta): void => {
     markWorkflowMetadataFromTaskDelta(delta);
-    enqueueTaskDeltaForRenderer(delta);
+    taskGraphEventPublisher.publishDelta(delta);
   };
 
   const applyTaskDeltaToOwnerCacheOrRecover = (delta: TaskDelta): TaskDelta[] => {
@@ -3445,7 +3397,7 @@ function createEmbeddedTerminalBackendFromConfig(
       }
 
       for (const rendererDelta of applyTaskDeltaToOwnerCacheOrRecover(d)) {
-        enqueueTaskDeltaForRenderer(rendererDelta);
+        taskGraphEventPublisher.publishDelta(rendererDelta);
       }
     });
 
@@ -3668,7 +3620,7 @@ function createEmbeddedTerminalBackendFromConfig(
         workflows = persistence.listWorkflows() as WorkflowMeta[];
       }
 
-      enqueueTaskGraphSnapshotForRenderer(
+      taskGraphEventPublisher.publishSnapshot(
         ownerMode ? 'refresh-task-graph' : 'refresh-task-graph-delegated',
         tasks,
         workflows,
