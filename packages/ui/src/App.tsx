@@ -351,12 +351,17 @@ export function hasMergeConflictExecution(task: TaskState | undefined): boolean 
 }
 
 export function App() {
-  const { tasks, workflows, clearTasks, refreshTasks } = useTasks();
+  const [graphRefreshSequence, setGraphRefreshSequence] = useState(0);
+  const handleTaskGraphSnapshotApplied = useCallback(() => {
+    setGraphRefreshSequence((sequence) => sequence + 1);
+  }, []);
+  const { tasks, workflows, clearTasks, refreshTasks } = useTasks({
+    onTaskGraphSnapshotApplied: handleTaskGraphSnapshotApplied,
+  });
   const invoker = useInvoker();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const graphSurfaceRef = useRef<HTMLDivElement>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const [graphRefreshSequence, setGraphRefreshSequence] = useState(0);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
   const [stickySelectedWorkflow, setStickySelectedWorkflow] = useState<WorkflowMeta | null>(null);
   const [workflowSelectionDismissed, setWorkflowSelectionDismissed] = useState(false);
@@ -1333,7 +1338,6 @@ export function App() {
 
   const handleRefresh = useCallback(async () => {
     await refreshTasks(true);
-    setGraphRefreshSequence((sequence) => sequence + 1);
   }, [refreshTasks]);
 
   // ── Plan loading ──────────────────────────────────────────
