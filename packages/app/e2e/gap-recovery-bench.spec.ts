@@ -133,10 +133,13 @@ async function runIterationOnce(app: ElectronApplication, page: Page, iteration:
 
   await app.evaluate(({ BrowserWindow }) => {
     const win = BrowserWindow.getAllWindows()[0];
-    win?.webContents.send('invoker:task-delta', {
-      type: 'removed',
-      taskId: '__gap_trigger__',
-      streamSequence: Number.MAX_SAFE_INTEGER,
+    win?.webContents.send('invoker:task-graph-event', {
+      type: 'delta',
+      delta: {
+        type: 'removed',
+        taskId: '__gap_trigger__',
+        streamSequence: Number.MAX_SAFE_INTEGER,
+      },
     });
   });
 
@@ -146,14 +149,18 @@ async function runIterationOnce(app: ElectronApplication, page: Page, iteration:
     markers = await getPerfMarkersSince(page, baselineId);
     const gapIdx = markers.findIndex((m) => m.metric === 'ui_delta_stream_gap_detected');
     if (gapIdx !== -1) {
-      const replaceIdx = markers.findIndex((m, i) => i > gapIdx && m.metric === 'useTasks_snapshot_replace');
+      const replaceIdx = markers.findIndex(
+        (m, i) => i > gapIdx && (m.metric === 'useTasks_snapshot_replace' || m.metric === 'ui_delta_apply'),
+      );
       if (replaceIdx !== -1) break;
     }
     await page.waitForTimeout(25);
   }
 
   const gapIdx = markers.findIndex((m) => m.metric === 'ui_delta_stream_gap_detected');
-  const replaceIdx = markers.findIndex((m, i) => i > gapIdx && m.metric === 'useTasks_snapshot_replace');
+  const replaceIdx = markers.findIndex(
+    (m, i) => i > gapIdx && (m.metric === 'useTasks_snapshot_replace' || m.metric === 'ui_delta_apply'),
+  );
   if (gapIdx === -1 || replaceIdx === -1) {
     throw new Error(
       `iteration ${iteration}: missing markers after ${RECOVERY_TIMEOUT_MS}ms. ` +
@@ -188,7 +195,7 @@ test('gap-recovery bench: 5 iterations of synthetic-gap → resync at 30 workflo
         }, planYaml);
       }
 
-      const seeded = await page.evaluate(() => window.invoker.getTasks(true));
+      const seeded = await page.evaluate(() => window.invoker.getTasks());
       const seededTasks = Array.isArray(seeded) ? seeded : seeded.tasks;
       expect(seededTasks.length).toBe(expectedTaskCount);
     } finally {
