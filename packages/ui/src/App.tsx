@@ -697,7 +697,18 @@ export function App() {
       setPreviousGraphRegion(region);
     }
     requestAnimationFrame(() => {
-      document.querySelector<HTMLElement>(`[data-keyboard-region="${region}"]`)?.focus();
+      const root = document.querySelector<HTMLElement>(`[data-keyboard-region="${region}"]`);
+      if (!root) return;
+      // The inspector is a real keyboard destination: Tab into it lands on the
+      // first visible sidebar navigation item (e.g. the Pull Request link),
+      // not just the region container. Fall back to the container when no
+      // navigation items are rendered.
+      if (region === 'inspector') {
+        const firstNavItem = root.querySelector<HTMLElement>('[data-sidebar-nav-item]');
+        (firstNavItem ?? root).focus();
+        return;
+      }
+      root.focus();
     });
   }, []);
 
@@ -964,15 +975,31 @@ export function App() {
       }
 
       if (keyboardRegion === 'inspector') {
-        if (event.key === 'ArrowLeft') {
+        // Roving focus across the explicitly-marked sidebar navigation items.
+        // The editable-target guard above already lets native inputs/selects
+        // keep their own arrow behavior; here Up/Down only move focus between
+        // markers (no wrapping) and never activate a link. Right toggles a
+        // focused expandable item (the Advanced metadata disclosure). Enter and
+        // Space are left to normal browser activation on the focused control.
+        const navItems = [
+          ...document.querySelectorAll<HTMLElement>('[data-keyboard-region="inspector"] [data-sidebar-nav-item]'),
+        ];
+        if (navItems.length === 0) return;
+        const activeIndex = navItems.findIndex((item) => item === document.activeElement);
+        if (event.key === 'ArrowDown') {
           event.preventDefault();
-          setInspectorCollapsed(false);
+          const nextIndex = activeIndex < 0 ? 0 : Math.min(navItems.length - 1, activeIndex + 1);
+          navItems[nextIndex]?.focus();
+        } else if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          const prevIndex = activeIndex < 0 ? 0 : Math.max(0, activeIndex - 1);
+          navItems[prevIndex]?.focus();
         } else if (event.key === 'ArrowRight') {
           event.preventDefault();
-          setInspectorCollapsed(true);
-        } else if (event.key === 'Enter') {
-          event.preventDefault();
-          document.querySelector<HTMLElement>('[data-keyboard-region="inspector"] button, [data-keyboard-region="inspector"] select, [data-keyboard-region="inspector"] input')?.focus();
+          const active = activeIndex >= 0 ? navItems[activeIndex] : null;
+          if (active?.dataset.sidebarExpandable === 'true') {
+            active.click();
+          }
         }
         return;
       }
