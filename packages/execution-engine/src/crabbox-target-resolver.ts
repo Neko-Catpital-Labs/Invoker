@@ -150,6 +150,19 @@ export function buildStatusArgs(
   ];
 }
 
+/**
+ * Build the Crabbox status invocation args used to *refresh* an existing lease
+ * during terminal restore. Unlike {@link buildStatusArgs}, this omits `--wait`:
+ * restore must report a stopped/expired box immediately instead of blocking on
+ * a box that will never come back.
+ */
+export function buildRefreshStatusArgs(
+  config: CrabboxLeaseRefreshConfig,
+  id: string,
+): string[] {
+  return ['status', '--id', id, '--json', ...(config.statusArgs ?? [])];
+}
+
 /** Build the Crabbox stop/cleanup invocation args for a lease id. */
 export function buildStopArgs(
   config: CrabboxResolverConfig,
@@ -360,4 +373,146 @@ export async function resolveCrabboxTarget(
   };
 
   return { target, remoteLeaseMetadata };
+}
+
+/**
+ * Subset of Crabbox config needed to refresh an existing lease. Only the CLI
+ * command and any extra status args matter for a status-only lookup — warmup
+ * fields are irrelevant because the box already exists (or is gone).
+ */
+export interface CrabboxLeaseRefreshConfig {
+  /** Command (path or executable name) used to drive the Crabbox CLI. */
+  readonly crabboxCommand: string;
+  /** Extra args appended to the status invocation. */
+  readonly statusArgs?: readonly string[];
+}
+
+/** Persisted lease handle used to look the box back up after a restart. */
+export interface CrabboxLeaseRef {
+  readonly leaseId: string;
+  readonly slug?: string;
+}
+
+/**
+ * Outcome of refreshing a persisted Crabbox lease for terminal restore. Either
+ * a ready SSH endpoint or a human-readable reason the box cannot be reattached.
+ */
+export type CrabboxLeaseRefreshResult =
+  | {
+      readonly ok: true;
+      readonly target: ResolvedSshTarget;
+      readonly status?: string;
+      readonly expiresAt?: string;
+    }
+  | { readonly ok: false; readonly reason: string };
+
+/** Box statuses where the lease is up and its SSH endpoint is reachable. */
+const READY_STATUSES = new Set(['ready', 'running', 'active', 'online']);
+/** Box statuses where the lease is gone and cannot be reattached. */
+const EXPIRED_STATUSES = new Set([
+  'expired',
+  'stopped',
+  'terminated',
+  'destroyed',
+  'deleted',
+  'gone',
+  'reaped',
+]);
+/** Box statuses where Crabbox has no record of the lease at all. */
+const MISSING_STATUSES = new Set(['not_found', 'notfound', 'missing', 'unknown']);
+
+function isExpiredByTimestamp(expiresAt: string | undefined, now: number): boolean {
+  if (!expiresAt) return false;
+  const at = Date.parse(expiresAt);
+  return Number.isFinite(at) && at <= now;
+}
+
+/**
+ * Refresh a persisted Crabbox lease into a ready SSH endpoint for terminal
+ * restore. Drives `crabbox status --id <id> --json` (no `--wait`) and reads the
+ * report verbatim.
+ *
+ * Returns `ok: false` with a clear reason when the lease is missing, expired,
+ * not yet ready, or does not report SSH connection fields — never throws — so
+ * callers can surface the refusal in the UI instead of silently falling back to
+ * the host repo.
+ */
+export async function refreshCrabboxLease(
+  config: CrabboxLeaseRefreshConfig,
+  lease: CrabboxLeaseRef,
+  runner: CommandRunner = spawnCommandRunner,
+  now: () => number = () => Date.now(),
+): Promise<CrabboxLeaseRefreshResult> {
+  const id = lease.leaseId || lease.slug;
+  if (!id) {
+    return { ok: false, reason: 'Crabbox lease is missing: no leaseId or slug was persisted.' };
+  }
+
+  const status = await runner(config.crabboxCommand, buildRefreshStatusArgs(config, id));
+  if (status.exitCode !== 0) {
+    return {
+      ok: false,
+      reason: `Crabbox lease "${id}" is missing: status exited ${status.exitCode}: ${
+        status.stderr.trim() || status.stdout.trim() || 'no output'
+      }`,
+    };
+  }
+
+  const report = parseJsonObject(status.stdout) as CrabboxStatusReport | null;
+  if (!report) {
+    return {
+      ok: false,
+      reason: `Crabbox lease "${id}" is missing: status returned no parseable JSON. Raw output: ${
+        status.stdout.trim() || '(empty)'
+      }`,
+    };
+  }
+
+  const statusText = typeof report.status === 'string' ? report.status.toLowerCase() : undefined;
+  if (statusText && MISSING_STATUSES.has(statusText)) {
+    return { ok: false, reason: `Crabbox lease "${id}" is missing (status: ${report.status}).` };
+  }
+  if (statusText && EXPIRED_STATUSES.has(statusText)) {
+    return { ok: false, reason: `Crabbox lease "${id}" has expired (status: ${report.status}).` };
+  }
+  if (isExpiredByTimestamp(report.expiresAt, now())) {
+    return {
+      ok: false,
+      reason: `Crabbox lease "${id}" has expired (expiresAt: ${report.expiresAt}).`,
+    };
+  }
+  if (statusText && !READY_STATUSES.has(statusText)) {
+    return {
+      ok: false,
+      reason: `Crabbox lease "${id}" is not ready yet (status: ${report.status}). Try again once the box is running.`,
+    };
+  }
+
+  const missing: string[] = [];
+  if (!report.sshHost) missing.push('sshHost');
+  if (!report.sshUser) missing.push('sshUser');
+  if (!report.sshKey) missing.push('sshKey');
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      reason: `Crabbox lease "${id}" did not report ${missing.join(
+        ', ',
+      )}; cannot rebuild an SSH endpoint.`,
+    };
+  }
+
+  const port = coercePort(report.sshPort);
+  const target: ResolvedSshTarget = {
+    host: report.sshHost as string,
+    user: report.sshUser as string,
+    sshKeyPath: report.sshKey as string,
+    ...(port !== undefined ? { port } : {}),
+  };
+
+  return {
+    ok: true,
+    target,
+    ...(report.status ? { status: report.status } : {}),
+    ...(report.expiresAt ? { expiresAt: report.expiresAt } : {}),
+  };
 }
