@@ -1,12 +1,11 @@
-import type { BrowserWindow, IpcMain } from 'electron';
+import type { IpcMain } from 'electron';
 import type { Logger, SearchOptions } from '@invoker/contracts';
 import { resolveInvokerHomeRoot } from '@invoker/contracts';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { AgentRegistry } from '@invoker/execution-engine';
-import type { Orchestrator, TaskDelta, TaskState } from '@invoker/workflow-core';
+import type { Orchestrator, TaskState } from '@invoker/workflow-core';
 import type { MessageBus } from '@invoker/transport';
 import { loadConfig } from './config.js';
-import type { TaskSnapshotCache } from './delta-merge.js';
 
 export interface RegisterReadOnlyIpcHandlersContext {
   ipcMain: IpcMain;
@@ -14,9 +13,6 @@ export interface RegisterReadOnlyIpcHandlersContext {
   persistence: SQLiteAdapter;
   getOrchestrator: () => Orchestrator;
   agentRegistry: AgentRegistry;
-  lastKnownTaskStates: TaskSnapshotCache;
-  getMainWindow: () => BrowserWindow | null;
-  sendTaskDeltaToRenderer: (delta: TaskDelta) => void;
   loadTaskByIdFromPersistence: (taskId: string) => TaskState | undefined;
   resolveAgentSession: (
     sessionId: string,
@@ -58,9 +54,6 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
     persistence,
     getOrchestrator,
     agentRegistry,
-    lastKnownTaskStates,
-    getMainWindow,
-    sendTaskDeltaToRenderer,
     loadTaskByIdFromPersistence,
     resolveAgentSession,
     getOwnerMode,
@@ -94,13 +87,6 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
     const tasks = persistence.loadTasks(workflowId);
     const workflow = persistence.loadWorkflow(workflowId);
     logger.info(`load-workflow: found ${tasks.length} tasks for "${workflow?.name ?? workflowId}"`, { module: 'ipc' });
-    for (const task of tasks) {
-      lastKnownTaskStates.set(task.id, JSON.stringify(task));
-      const mainWindow = getMainWindow();
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        sendTaskDeltaToRenderer({ type: 'created', task });
-      }
-    }
     return { workflow, tasks };
   });
 
