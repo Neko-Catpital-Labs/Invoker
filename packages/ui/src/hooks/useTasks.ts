@@ -19,7 +19,8 @@ export interface UseTasksResult {
   tasks: Map<string, TaskState>;
   workflows: Map<string, WorkflowMeta>;
   clearTasks: () => void;
-  refreshTasks: (forceRefresh?: boolean) => Promise<void>;
+  refreshTasks: () => Promise<void>;
+  refreshTaskGraph: () => Promise<void>;
 }
 export interface UseTasksOptions {
   onTaskGraphSnapshotApplied?: () => void;
@@ -79,11 +80,11 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
   const lastSeenSequenceRef = useRef<number>(bootstrapState?.streamSequence ?? 0);
   const isResyncInFlightRef = useRef<boolean>(false);
 
-  const fetchAll = useCallback((forceRefresh = false): Promise<void> => {
+  const fetchAll = useCallback((): Promise<void> => {
     if (typeof window === 'undefined' || !window.invoker) return Promise.resolve();
     const gen = ++getTasksGenerationRef.current;
     const requestedAt = performance.now();
-    const request = window.invoker.getTasks(forceRefresh).then((result) => {
+    const request = window.invoker.getTasks().then((result) => {
       const requestDurationMs = performance.now() - requestedAt;
       if (gen !== getTasksGenerationRef.current) {
         return;
@@ -115,7 +116,6 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
       void window.invoker.reportUiPerf?.('useTasks_snapshot_replace', {
         taskCount: taskList.length,
         workflowCount: wfList.length,
-        forceRefresh,
         requestDurationMs,
         replaceDurationMs,
         jsonSizeBytes: new Blob([JSON.stringify(result)]).size,
@@ -125,7 +125,6 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
         void window.invoker.reportUiPerf?.('startup_snapshot_applied', {
           taskCount: taskList.length,
           workflowCount: wfList.length,
-          forceRefresh,
           elapsedMs: Math.round(performance.now()),
           processElapsedMs: bootstrapState?.appStartedAtEpochMs
             ? Date.now() - bootstrapState.appStartedAtEpochMs
@@ -136,12 +135,10 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
     window.invoker.checkPrStatuses?.();
     return request.then(() => undefined);
   }, []);
-  const refreshTasks = useCallback((forceRefresh = false): Promise<void> => {
-    if (!forceRefresh) {
-      return fetchAll(false);
-    }
+  const refreshTasks = useCallback((): Promise<void> => fetchAll(), [fetchAll]);
+  const refreshTaskGraph = useCallback((): Promise<void> => {
     if (typeof window === 'undefined' || !window.invoker) return Promise.resolve();
-    return window.invoker.refreshTaskGraph?.() ?? fetchAll(true);
+    return window.invoker.refreshTaskGraph?.() ?? fetchAll();
   }, [fetchAll]);
 
 
@@ -167,7 +164,7 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
     // Preload bootstrap already hydrated tasks/workflows synchronously, so
     // the immediate non-forced snapshot would be a redundant full payload.
     // Skip it when bootstrap is populated; deltas keep state live, and
-    // explicit refreshTasks() / refreshTasks(true) callers still run fetchAll.
+    // explicit refreshTasks() callers still run fetchAll.
     if (bootstrapHasState) {
       reportedStartupSnapshotRef.current = true;
       void window.invoker.reportUiPerf?.('startup_snapshot_skipped_bootstrap_complete', {
@@ -210,6 +207,7 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
             for (const task of firstEvent.tasks) next.set(task.id, task);
             return next;
           });
+          const replaceStartedAt = performance.now();
           setWorkflows(() => {
             const wfMap = new Map<string, WorkflowMeta>();
             for (const wf of firstEvent.workflows) {
@@ -223,6 +221,14 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
           lastSeenSequenceRef.current = firstEvent.streamSequence;
           isResyncInFlightRef.current = false;
           onTaskGraphSnapshotApplied?.();
+          void window.invoker.reportUiPerf?.('useTasks_snapshot_replace', {
+            taskCount: firstEvent.tasks.length,
+            workflowCount: firstEvent.workflows.length,
+            source: 'task-graph-event',
+            reason: firstEvent.reason,
+            replaceDurationMs: performance.now() - replaceStartedAt,
+            jsonSizeBytes: new Blob([JSON.stringify(firstEvent)]).size,
+          });
         }
 
         setTasks((prev) => {
@@ -300,7 +306,7 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
           });
           isResyncInFlightRef.current = true;
           graphEventPipelineRef.current?.clear();
-          refreshTasks(true);
+          refreshTaskGraph();
           return;
         }
         lastSeenSequenceRef.current = seq;
@@ -333,7 +339,7 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
       unsub();
       unsubWf?.();
     };
-  }, [fetchAll, onTaskGraphSnapshotApplied, refreshTasks]);
+  }, [fetchAll, onTaskGraphSnapshotApplied, refreshTaskGraph]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.invoker) return;
@@ -356,5 +362,5 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
     setWorkflows(new Map());
   }, []);
 
-  return { tasks, workflows, clearTasks, refreshTasks };
+  return { tasks, workflows, clearTasks, refreshTasks, refreshTaskGraph };
 }

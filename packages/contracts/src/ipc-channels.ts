@@ -402,7 +402,7 @@ export const IpcChannels = {
 
   // Task Queries
   'invoker:get-tasks': {} as {
-    request: [forceRefresh?: boolean];
+    request: [];
     response: { tasks: TaskState[]; workflows: WorkflowMeta[]; streamSequence: number };
   },
   'invoker:refresh-task-graph': {} as {
