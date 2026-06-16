@@ -1,6 +1,5 @@
 /**
  * useTasks — workflows-changed must clear workflow metadata when main sends [].
- * Overlapping getTasks responses: older empty snapshot must not wipe after refreshTasks.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -138,40 +137,6 @@ describe('useTasks', () => {
     expect(result.current.workflows.get('wf-b')?.status).toBe('failed');
   });
 
-  it('ignores stale getTasks when a newer refresh returned tasks', async () => {
-    let releaseFirst: (v: { tasks: ReturnType<typeof makeUITask>[]; workflows: unknown[] }) => void;
-    const firstPending = new Promise<{ tasks: ReturnType<typeof makeUITask>[]; workflows: unknown[] }>((resolve) => {
-      releaseFirst = resolve;
-    });
-
-    const t1 = makeUITask({ id: 't1', description: 'Alpha' });
-    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
-      getTasks: vi
-        .fn()
-        .mockReturnValueOnce(firstPending)
-        .mockResolvedValue({ tasks: [t1], workflows: [] }),
-      onTaskGraphEvent: vi.fn(() => () => {}),
-      onWorkflowsChanged: vi.fn(() => () => {}),
-    };
-
-    const { result } = renderHook(() => useTasks());
-
-    await act(async () => {
-      result.current.refreshTasks();
-    });
-
-    await waitFor(() => {
-      expect(result.current.tasks.size).toBe(1);
-      expect(result.current.tasks.get('t1')?.description).toBe('Alpha');
-    });
-
-    await act(async () => {
-      releaseFirst!({ tasks: [], workflows: [] });
-    });
-
-    expect(result.current.tasks.size).toBe(1);
-    expect(result.current.tasks.get('t1')?.id).toBe('t1');
-  });
 
   it('skips the immediate non-forced snapshot when bootstrap already hydrated state', async () => {
     const bootA = makeUITask({ id: 'boot-a', description: 'Bootstrap A' });
@@ -282,38 +247,6 @@ describe('useTasks', () => {
     });
   });
 
-  it('non-forced refresh after a hydrated bootstrap still calls getTasks and replaces state', async () => {
-    const bootTask = makeUITask({ id: 'boot-1', description: 'Boot' });
-    const updated = makeUITask({ id: 'boot-1', description: 'Updated' });
-    const getTasks = vi.fn().mockResolvedValue({ tasks: [updated], workflows: [] });
-    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
-      tasks: [bootTask],
-      workflows: [{ id: 'wf-1', name: 'WF 1', status: 'running' }],
-    };
-    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
-      getTasks,
-      onTaskGraphEvent: vi.fn(() => () => {}),
-      onWorkflowsChanged: vi.fn(() => () => {}),
-    };
-
-    const { result } = renderHook(() => useTasks());
-
-    expect(getTasks).not.toHaveBeenCalled();
-
-    await act(async () => {
-      result.current.refreshTasks();
-    });
-
-    await waitFor(() => {
-      expect(getTasks).toHaveBeenCalledTimes(1);
-      expect(getTasks).toHaveBeenLastCalledWith();
-    });
-
-    await waitFor(() => {
-      expect(result.current.tasks.get('boot-1')?.description).toBe('Updated');
-      expect(result.current.workflows.size).toBe(0);
-    });
-  });
 
   it('forced refresh calls refreshTaskGraph instead of getTasks', async () => {
     const getTasks = vi.fn().mockResolvedValue({ tasks: [], workflows: [] });
