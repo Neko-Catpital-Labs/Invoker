@@ -195,7 +195,7 @@ test('gap-recovery bench: 5 iterations of synthetic-gap → resync at 30 workflo
         }, planYaml);
       }
 
-      const seeded = await page.evaluate(() => window.invoker.getTasks(true));
+      const seeded = await page.evaluate(() => window.invoker.getTasks());
       const seededTasks = Array.isArray(seeded) ? seeded : seeded.tasks;
       expect(seededTasks.length).toBe(expectedTaskCount);
     } finally {
