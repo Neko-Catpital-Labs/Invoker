@@ -2104,6 +2104,41 @@ describe('SQLiteAdapter', () => {
         rmSync(dir, { recursive: true, force: true });
       }
     });
+
+    it('surfaces appendTaskOutput diagnostic content alongside spool stream', async () => {
+      // Regression: synthetic shutdown / executor startup failures append a
+      // diagnostic block via appendTaskOutput. Without this, getTaskOutput
+      // would discard the diagnostic when any spool chunks exist and post-
+      // mortem inspection would see only the coarse synthetic error.
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-output-diag-tail-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db.saveWorkflow(testWorkflow);
+        db.saveTask('wf-1', makeTask('t-diag-tail'));
+
+        db.appendOutputChunk('t-diag-tail', 'FAIL src/foo.test.ts\n');
+        db.appendOutputChunk('t-diag-tail', 'Error: assertion failed\n');
+        db.appendTaskOutput(
+          't-diag-tail',
+          '\n[Shutdown Diagnostic]\nstatus=running\nsyntheticError=Application quit\n--- end shutdown diagnostic ---\n',
+        );
+
+        const output = db.getTaskOutput('t-diag-tail');
+        expect(output).toContain('FAIL src/foo.test.ts');
+        expect(output).toContain('Error: assertion failed');
+        expect(output).toContain('[Shutdown Diagnostic]');
+        expect(output).toContain('syntheticError=Application quit');
+        // Diagnostic block must come after the streaming output, not before.
+        expect(output.indexOf('FAIL src/foo.test.ts'))
+          .toBeLessThan(output.indexOf('[Shutdown Diagnostic]'));
+
+        db.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('pruneDuplicateTaskOutputRows', () => {

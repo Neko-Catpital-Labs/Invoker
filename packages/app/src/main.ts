@@ -1101,6 +1101,7 @@ if (isHeadless) {
               for (const task of allTasks) {
                 if (isTaskInFlightForForcedStop(task)) {
                   logger.info(`stop — failing in-flight task "${task.id}" (${task.status})`, { module: 'ipc-delegate' });
+                  persistShutdownDiagnostic(task, persistence, { syntheticError: 'Stopped by user' });
                   orchestrator.handleWorkerResponse({
                     requestId: `stop-${task.id}`,
                     actionId: task.id,
@@ -1716,7 +1717,9 @@ if (isHeadless) {
       if (ownsHeadlessShutdown && orchestrator) {
         for (const task of orchestrator.getAllTasks()) {
           if (isTaskInFlightForForcedStop(task)) {
-            if (persistence) persistShutdownDiagnostic(task, persistence);
+            if (persistence) {
+              persistShutdownDiagnostic(task, persistence, { syntheticError: 'Application quit' });
+            }
             orchestrator.handleWorkerResponse({
               requestId: `quit-${task.id}`,
               actionId: task.id,
@@ -3563,6 +3566,10 @@ function createEmbeddedTerminalBackendFromConfig(
         for (const task of allTasks) {
           if (isTaskInFlightForForcedStop(task)) {
             logger.info(`stop — failing in-flight task "${task.id}" (${task.status})`, { module: 'ipc' });
+            persistShutdownDiagnostic(task, persistence, {
+              flushPendingOutput: flushTaskOutput,
+              syntheticError: 'Stopped by user',
+            });
             orchestrator.handleWorkerResponse({
               requestId: `stop-${task.id}`,
               actionId: task.id,
@@ -4732,6 +4739,7 @@ function createEmbeddedTerminalBackendFromConfig(
               if (persistence) {
                 persistShutdownDiagnostic(task, persistence, {
                   flushPendingOutput: flushTaskOutput,
+                  syntheticError: 'Application quit',
                 });
               }
               orchestrator.handleWorkerResponse({

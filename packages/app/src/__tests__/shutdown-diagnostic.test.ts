@@ -163,4 +163,56 @@ describe('persistShutdownDiagnostic', () => {
     const output = db.appended[0];
     expect(output).toContain('status=fixing_with_ai');
   });
+
+  it('records syntheticError in the diagnostic block', () => {
+    // Synthetic shutdown errors like "Application quit" or "Stopped by user"
+    // are emitted via handleWorkerResponse after the diagnostic is appended.
+    // Capturing them here preserves the concrete terminal reason in durable
+    // task output for post-mortem retrieval, instead of leaving only a coarse
+    // collapsed marker.
+    const task = makeTask({
+      status: 'running',
+      execution: { error: 'real runtime error message' },
+    });
+    const db = makeDb(['streaming output\n']);
+
+    persistShutdownDiagnostic(task, db, { syntheticError: 'Application quit' });
+
+    const output = db.appended[0];
+    expect(output).toContain('syntheticError=Application quit');
+    expect(output).toContain('error=real runtime error message');
+    expect(output).toContain('streaming output');
+  });
+
+  it('records syntheticError when execution.error is absent', () => {
+    const task = makeTask({ status: 'running', execution: {} });
+    const db = makeDb();
+
+    persistShutdownDiagnostic(task, db, { syntheticError: 'Stopped by user' });
+
+    const output = db.appended[0];
+    expect(output).toContain('syntheticError=Stopped by user');
+    expect(output).not.toContain('error=');
+  });
+
+  it('honours a custom label override', () => {
+    const task = makeTask();
+    const db = makeDb();
+
+    persistShutdownDiagnostic(task, db, { label: 'Startup Failure Diagnostic' });
+
+    const output = db.appended[0];
+    expect(output).toContain('[Startup Failure Diagnostic]');
+  });
+
+  it('omits syntheticError line when not provided', () => {
+    const task = makeTask({ execution: { error: 'real error' } });
+    const db = makeDb();
+
+    persistShutdownDiagnostic(task, db);
+
+    const output = db.appended[0];
+    expect(output).not.toContain('syntheticError=');
+    expect(output).toContain('error=real error');
+  });
 });
