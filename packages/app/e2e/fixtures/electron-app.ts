@@ -231,7 +231,7 @@ export async function loadPlan(page: Page, plan: { tasks: readonly { id: string 
     return created?.id ?? workflows[workflows.length - 1]?.id ?? null;
   }, beforeIds);
   await page.waitForFunction(
-    (expectedTaskCount) => window.invoker.getTasks(true).then((result) => {
+    (expectedTaskCount) => window.invoker.getTasks().then((result) => {
       const tasks = Array.isArray(result) ? result : result.tasks;
       const workflows = Array.isArray(result) ? [] : result.workflows ?? [];
       return tasks.length >= expectedTaskCount && workflows.length > 0;
@@ -309,7 +309,7 @@ export async function waitForTaskStatus(
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const result = await page.evaluate(() => window.invoker.getTasks(true));
+    const result = await page.evaluate(() => window.invoker.getTasks());
     const tasks = Array.isArray(result) ? result : result.tasks;
     const task = tasks.find((t: any) => matchesTaskId(t.id, taskId));
     if (task && task.status === status) return;
@@ -326,7 +326,7 @@ export async function waitForTaskStarted(
 ): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const result = await page.evaluate(() => window.invoker.getTasks(true));
+    const result = await page.evaluate(() => window.invoker.getTasks());
     const tasks = Array.isArray(result) ? result : result.tasks;
     const task = tasks.find((t: any) => matchesTaskId(t.id, taskId));
     if (task && task.status !== 'pending') return task.status;
