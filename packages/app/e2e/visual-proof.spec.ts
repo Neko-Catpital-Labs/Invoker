@@ -507,7 +507,7 @@ test.describe('Visual proof capture', () => {
     await assertPageScreenshot(page, 'task-panel');
   });
 
-  test('embedded-tabbed-terminal — drawer expands with active task tab', async ({ page, testDir }) => {
+  test('embedded-tabbed-terminal — drawer opens partial with active task tab', async ({ page, testDir }) => {
     await loadPlan(page, TEST_PLAN);
 
     // Materialise a real workspace dir so the main-process executor can resolve
@@ -527,16 +527,16 @@ test.describe('Visual proof capture', () => {
       },
     ]);
 
-    // Drawer starts collapsed.
-    await expect(page.getByRole('button', { name: 'Expand terminal drawer' })).toBeVisible();
+    // Drawer starts minimized.
+    await expect(page.getByRole('button', { name: 'Partial terminal drawer' })).toBeVisible();
     await expect(page.getByTestId('terminal-drawer-body')).toHaveCount(0);
 
     const taskCard = page.locator('[title$="task-alpha"]').first();
     await expect(taskCard).toBeVisible({ timeout: 10000 });
     await taskCard.dispatchEvent('dblclick');
 
-    // Drawer expands; one active tab for task-alpha; terminal pane rendered.
-    await expect(page.getByRole('button', { name: 'Collapse terminal drawer' })).toBeVisible({ timeout: 10000 });
+    // Drawer opens partial; one active tab for task-alpha; terminal pane rendered.
+    await expect(page.getByRole('button', { name: 'Maximize terminal drawer' })).toBeVisible({ timeout: 10000 });
     await expect(page.getByTestId('terminal-drawer-body')).toBeVisible();
     const tabs = page.getByTestId('terminal-tab-strip').locator('[data-testid^="terminal-tab-"]');
     await expect(tabs).toHaveCount(1);
