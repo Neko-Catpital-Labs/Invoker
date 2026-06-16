@@ -11,11 +11,13 @@ import { makeUITask } from './helpers/mock-invoker.js';
 describe('useTasks', () => {
   let workflowsChangedHandler: ((wfList: unknown[]) => void) | undefined;
   let taskDeltaHandler: ((delta: unknown) => void) | undefined;
+  let taskGraphEventHandler: ((event: unknown) => void) | undefined;
 
   beforeEach(() => {
     vi.useRealTimers();
     workflowsChangedHandler = undefined;
     taskDeltaHandler = undefined;
+    taskGraphEventHandler = undefined;
     (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
       tasks: [],
       workflows: [],
@@ -24,6 +26,10 @@ describe('useTasks', () => {
       getTasks: vi.fn().mockResolvedValue({ tasks: [], workflows: [] }),
       onTaskDelta: vi.fn((cb: (delta: unknown) => void) => {
         taskDeltaHandler = cb;
+        return () => {};
+      }),
+      onTaskGraphEvent: vi.fn((cb: (event: unknown) => void) => {
+        taskGraphEventHandler = cb;
         return () => {};
       }),
       onWorkflowsChanged: vi.fn((cb: (wfList: unknown[]) => void) => {
@@ -81,6 +87,36 @@ describe('useTasks', () => {
     });
 
     expect(result.current.workflows.size).toBe(0);
+  });
+
+  it('applies task graph delta events from the graph event channel', async () => {
+    const task = makeUITask({ id: 'wf-1/task-1', workflowId: 'wf-1', status: 'pending' });
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
+      tasks: [task],
+      workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'pending' }],
+    };
+
+    const { result } = renderHook(() => useTasks());
+
+    await waitFor(() => {
+      expect(taskGraphEventHandler).toBeDefined();
+    });
+
+    await act(async () => {
+      taskGraphEventHandler!({
+        type: 'delta',
+        delta: {
+          type: 'updated',
+          taskId: 'wf-1/task-1',
+          changes: { status: 'running' },
+          taskStateVersion: 2,
+          previousTaskStateVersion: 1,
+        },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 110));
+    });
+
+    expect(result.current.tasks.get('wf-1/task-1')?.status).toBe('running');
   });
 
   it('replaces workflows when onWorkflowsChanged receives a non-empty list', async () => {
