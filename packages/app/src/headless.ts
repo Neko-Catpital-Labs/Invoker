@@ -63,6 +63,8 @@ import {
 import { LaunchDispatcher } from './launch-dispatcher.js';
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
 import { startWorkerRuntime, type WorkerRuntime } from './worker-runtime.js';
+import { startAutoFixWorker, type AutoFixCandidate } from './autofix-worker.js';
+import { tryDelegateExec, isDelegated } from './headless-delegation.js';
 import { trackWorkflow } from './headless-watch.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
@@ -1255,13 +1257,14 @@ function isHeadlessWorkerKind(value: string | undefined): value is HeadlessWorke
  *
  * Each worker is an explicitly-owned, long-running process (routed like
  * `owner-serve`) rather than a subscription hidden inside another command.
- * `autofix` is a placeholder runtime until its real scan/submit policy lands;
+ * `autofix` recovers failed tasks and failed review-gate CI runs by submitting
+ * the same `fix --auto-fix` command a user action issues;
  * `external-recovery` is a no-op runtime until its worker exists. `all` runs
  * every worker in the same process.
  */
 async function headlessWorker(
   subcommand: string | undefined,
-  deps: Pick<HeadlessDeps, 'logger' | 'messageBus' | 'invokerConfig'>,
+  deps: Pick<HeadlessDeps, 'logger' | 'messageBus' | 'invokerConfig' | 'orchestrator' | 'persistence'>,
 ): Promise<void> {
   if (!isHeadlessWorkerKind(subcommand)) {
     throw new Error(
@@ -1273,15 +1276,29 @@ async function headlessWorker(
   const runtimes: WorkerRuntime[] = [];
 
   const startAutofix = (): void => {
-    runtimes.push(startWorkerRuntime({
-      name: 'autofix-worker',
+    runtimes.push(startAutoFixWorker({
       messageBus: deps.messageBus,
       logger: deps.logger,
       pollIntervalMs,
-      eventKinds: ['task.failed', 'review_gate.ci_failed'],
-      // Placeholder until the auto-fix scan/submit policy lands.
-      scan: () => [],
-      submit: () => {},
+      state: deps.orchestrator,
+      listOpenFixIntents: () =>
+        deps.persistence.listWorkflowMutationIntents(undefined, ['queued', 'running']),
+      config: {
+        autoFixAgent: deps.invokerConfig.autoFixAgent,
+        autoFixCi: deps.invokerConfig.autoFixCi,
+      },
+      // Submit through the accepted-command boundary: delegate a normal
+      // `fix --auto-fix` command to the shared owner, exactly like a user
+      // action. The owner enqueues it and owns attempt accounting.
+      submit: async (candidate: AutoFixCandidate) => {
+        const outcome = await tryDelegateExec(candidate.args, deps.messageBus, false, true);
+        if (!isDelegated(outcome)) {
+          deps.logger.warn(
+            `autofix-worker could not delegate fix for ${candidate.taskId}: ${outcome.kind}`,
+            { module: 'autofix-worker' },
+          );
+        }
+      },
     }));
   };
 
