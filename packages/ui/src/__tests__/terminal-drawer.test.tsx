@@ -305,7 +305,7 @@ describe('Terminal drawer (component)', () => {
     expect(xtermMock.writeLog).toEqual(['replayed once\n']);
   });
 
-  it('keeps live output, input, resize, close, tab selection, and preview wiring intact', async () => {
+  it('keeps live output, input, resize, close, and tab selection intact without an output preview row', async () => {
     (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockImplementation(async (taskId: string) => ({
       opened: true,
       session: makeTerminalSession(taskId, {
@@ -345,8 +345,9 @@ describe('Terminal drawer (component)', () => {
     });
     await waitFor(() => {
       expect(xtermMock.writeLog).toContain('alpha live output\n');
-      expect(screen.getByTestId('terminal-session-output-preview')).toHaveTextContent('alpha live output');
     });
+    // The duplicate output preview row is gone; live output only flows to xterm.
+    expect(screen.queryByTestId('terminal-session-output-preview')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Close terminal for Alpha description' }));
     await waitFor(() => {
