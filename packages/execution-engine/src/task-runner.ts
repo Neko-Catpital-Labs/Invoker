@@ -983,40 +983,55 @@ export class TaskRunner {
             continue;
           }
         }
+        // Resolve lineage staleness once. A launch is stale when the task
+        // advanced to a newer selected attempt or generation while this
+        // executor.start() was in flight (e.g. recreate-task created attempt-2
+        // while attempt-1 was still provisioning an SSH remote). A stale launch
+        // must not touch the live task row at all — not its execution metadata
+        // and not its output stream — or it would reattach the old worktree /
+        // branch to the newer attempt and let the next SSH launch collide on
+        // the wrong worktree owner path. Its diagnostics are still useful, so
+        // they go to the append-only, attempt-scoped event log instead of the
+        // live task's output.
         const startupErrorMessage = `Executor startup failed (${executor.type}): ${err instanceof Error ? err.message : String(err)}\n`;
-        this.callbacks.onOutput?.(task.id, startupErrorMessage);
-        try {
-          this.persistence.appendTaskOutput(task.id, startupErrorMessage);
-        } catch {
-          // Preserve the original startup failure if output persistence also fails.
-        }
-        // Only persist startup-failure metadata when the launch is still
-        // current.  If the task has moved to a newer attempt or generation
-        // (e.g. via recreate-task), writing old workspace/branch metadata
-        // would corrupt the live attempt's state.
-        if (
-          (meta.workspacePath || meta.branch || meta.agentSessionId || meta.containerId)
-          && !this.isLaunchStale(task.id, attemptId, task.execution.generation ?? 0)
-        ) {
-          const execution: Record<string, string> = {};
-          if (meta.workspacePath) execution.workspacePath = meta.workspacePath;
-          if (meta.branch) execution.branch = meta.branch;
-          if (meta.agentSessionId) {
-            execution.agentSessionId = meta.agentSessionId;
-            execution.lastAgentSessionId = meta.agentSessionId;
-          }
-          if (meta.containerId) execution.containerId = meta.containerId;
-          const poolSelection = this.pendingPoolSelections.get(task.id);
-          const selectedSshTargetId = executor.type === 'ssh'
-            ? this.selectedRemoteTargetId(task, poolSelection)
-            : undefined;
-          this.persistence.updateTask(task.id, {
-            config: {
-              runnerKind: executor.type as RunnerKind,
-              ...(selectedSshTargetId ? { poolMemberId: selectedSshTargetId } : {}),
-            },
-            execution: execution as any,
+        const launchIsStale = this.isLaunchStale(task.id, attemptId, task.execution.generation ?? 0);
+        if (launchIsStale) {
+          this.persistence.logEvent?.(task.id, 'task.executor.startup-failure-stale', {
+            attemptId,
+            runnerKind: executor.type,
+            error: err instanceof Error ? err.message : String(err),
+            ...(meta.workspacePath ? { staleWorkspacePath: meta.workspacePath } : {}),
+            ...(meta.branch ? { staleBranch: meta.branch } : {}),
           });
+        } else {
+          this.callbacks.onOutput?.(task.id, startupErrorMessage);
+          try {
+            this.persistence.appendTaskOutput(task.id, startupErrorMessage);
+          } catch {
+            // Preserve the original startup failure if output persistence also fails.
+          }
+          // Persist startup-failure metadata only for a current launch.
+          if (meta.workspacePath || meta.branch || meta.agentSessionId || meta.containerId) {
+            const execution: Record<string, string> = {};
+            if (meta.workspacePath) execution.workspacePath = meta.workspacePath;
+            if (meta.branch) execution.branch = meta.branch;
+            if (meta.agentSessionId) {
+              execution.agentSessionId = meta.agentSessionId;
+              execution.lastAgentSessionId = meta.agentSessionId;
+            }
+            if (meta.containerId) execution.containerId = meta.containerId;
+            const poolSelection = this.pendingPoolSelections.get(task.id);
+            const selectedSshTargetId = executor.type === 'ssh'
+              ? this.selectedRemoteTargetId(task, poolSelection)
+              : undefined;
+            this.persistence.updateTask(task.id, {
+              config: {
+                runnerKind: executor.type as RunnerKind,
+                ...(selectedSshTargetId ? { poolMemberId: selectedSshTargetId } : {}),
+              },
+              execution: execution as any,
+            });
+          }
         }
         this.pendingPoolSelections.delete(task.id);
         this.releasePoolSelectionLease(poolSelectionForStart);
