@@ -2082,6 +2082,57 @@ describe('SQLiteAdapter', () => {
       }
     });
 
+    it('preserves the diagnostic file alongside spool chunks for post-mortem failure context', async () => {
+      // Regression: getTaskOutput previously returned ONLY the spool when it
+      // had any chunks, which silently dropped the diagnostic file written by
+      // appendTaskOutput. That collapsed concrete startup/shutdown failure
+      // details into the coarse terminal error state. The diagnostic file
+      // (executor startup-failure stderr, shutdown synthetic-failure block,
+      // workflow-action notes) must remain visible after the spool data.
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-output-diagnostic-merge-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db.saveWorkflow(testWorkflow);
+        db.saveTask('wf-1', makeTask('t-merge'));
+
+        db.appendOutputChunk('t-merge', 'FAIL src/foo.test.ts > bar\n');
+        db.appendOutputChunk('t-merge', '  expected 1 to be 2\n');
+
+        // Simulate executor startup-failure stderr being appended via the
+        // diagnostic file path (task-runner.ts line ~1009).
+        db.appendTaskOutput(
+          't-merge',
+          'Executor startup failed (ssh): connect ECONNREFUSED 10.0.0.1\n',
+        );
+        // Simulate the shutdown diagnostic block written by the
+        // owner-quit synthetic-failure path.
+        db.appendTaskOutput(
+          't-merge',
+          '\n[Shutdown Diagnostic]\nstatus=running\nsynthetic.error=Application quit\n--- end shutdown diagnostic ---\n',
+        );
+
+        const output = db.getTaskOutput('t-merge');
+        expect(output).toContain('FAIL src/foo.test.ts');
+        expect(output).toContain('expected 1 to be 2');
+        expect(output).toContain('Executor startup failed (ssh): connect ECONNREFUSED 10.0.0.1');
+        expect(output).toContain('[Shutdown Diagnostic]');
+        expect(output).toContain('synthetic.error=Application quit');
+        // Diagnostic must follow spool data so the timeline reads top-down.
+        expect(output.indexOf('FAIL src/foo.test.ts')).toBeLessThan(
+          output.indexOf('Executor startup failed'),
+        );
+        expect(output.indexOf('Executor startup failed')).toBeLessThan(
+          output.indexOf('[Shutdown Diagnostic]'),
+        );
+
+        db.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
     it('falls back to task_output when no output_spool chunks exist', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-output-fallback-'));
       const dbPath = join(dir, 'invoker.db');
