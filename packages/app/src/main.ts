@@ -1612,8 +1612,8 @@ if (isHeadless) {
           if (kind === 'workflow-status') {
             return orchestrator.getWorkflowStatus();
           }
-          if (kind === 'tasks') {
-            if ((req as { forceRefresh?: boolean }).forceRefresh) {
+          if (kind === 'tasks' || kind === 'task-graph-refresh') {
+            if (kind === 'task-graph-refresh') {
               orchestrator.syncAllFromDb();
             }
             return {
@@ -3281,8 +3281,8 @@ function createEmbeddedTerminalBackendFromConfig(
         if (kind === 'workflow-status') {
           return orchestrator.getWorkflowStatus();
         }
-        if (kind === 'tasks') {
-          if ((req as { forceRefresh?: boolean }).forceRefresh) {
+        if (kind === 'tasks' || kind === 'task-graph-refresh') {
+          if (kind === 'task-graph-refresh') {
             orchestrator.syncAllFromDb();
           }
           return {
@@ -3641,8 +3641,7 @@ function createEmbeddedTerminalBackendFromConfig(
 
       if (!ownerMode) {
         const delegated = await messageBus.request('headless.query', {
-          kind: 'tasks',
-          forceRefresh: true,
+          kind: 'task-graph-refresh',
         }) as unknown;
         if (!delegated || typeof delegated !== 'object') {
           throw new Error('refresh-task-graph owner delegation returned no snapshot');
@@ -3689,13 +3688,10 @@ function createEmbeddedTerminalBackendFromConfig(
       lastKnownTaskStates,
       getMainWindow: () => mainWindow,
       sendTaskDeltaToRenderer,
-      requestWorkflowMetadataPublish,
-      setLastKnownWorkflowCount: (count) => { lastKnownWorkflowCount = count; },
       loadTaskByIdFromPersistence,
       resolveAgentSession,
       getOwnerMode: () => ownerMode,
       getMessageBus: () => messageBus,
-      timeStartupPhase,
       recordStartupDuration,
       getTaskDeltaStreamSequence,
     });
