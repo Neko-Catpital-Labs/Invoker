@@ -21,6 +21,7 @@ export const HEADLESS_SET_SUBCOMMANDS = [
 
 export const HEADLESS_COMMANDS = [
   { name: 'owner-serve', kind: 'special' },
+  { name: 'worker', kind: 'special' },
   { name: 'query', kind: 'read' },
   { name: 'set', kind: 'special' },
   { name: 'migrate-compat', kind: 'write' },

@@ -865,8 +865,13 @@ if (isHeadless) {
     const command = cliArgs[0];
     const readOnlyMode = isHeadlessReadOnlyCommand(cliArgs);
     const mutatingMode = isHeadlessMutatingCommand(cliArgs);
-    const standaloneMode = process.env.INVOKER_HEADLESS_STANDALONE === '1' || command === 'owner-serve';
-    const ownsHeadlessShutdown = standaloneMode && !readOnlyMode && command === 'owner-serve';
+    // `worker` is a long-running, directly-owned recovery process like
+    // `owner-serve`: it needs a writable DB, the serving bus, and the
+    // lifecycle-event bridge (which publishes the events the worker consumes),
+    // plus ownership of its own shutdown.
+    const directOwnerCommand = command === 'owner-serve' || command === 'worker';
+    const standaloneMode = process.env.INVOKER_HEADLESS_STANDALONE === '1' || directOwnerCommand;
+    const ownsHeadlessShutdown = standaloneMode && !readOnlyMode && directOwnerCommand;
     const queueQueryMode = command === 'queue' || (command === 'query' && cliArgs[1] === 'queue');
 
     const delegatedQueueOutputFormat = (): 'json' | 'jsonl' | 'label' | 'text' => {
