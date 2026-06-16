@@ -62,6 +62,7 @@ import {
 } from './global-topup.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
+import { startWorkerRuntime, type WorkerRuntime } from './worker-runtime.js';
 import { trackWorkflow } from './headless-watch.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
@@ -1050,6 +1051,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'owner-serve':
       await headlessOwnerServe(deps);
       break;
+    case 'worker':
+      await headlessWorker(args[1], deps);
+      break;
     // ── New grouped commands ──
     case 'query':
       await headlessQuery(args.slice(1), deps);
@@ -1240,6 +1244,67 @@ async function headlessOwnerServe(deps: Pick<HeadlessDeps, 'isStandaloneOwnerIdl
   });
 }
 
+type HeadlessWorkerKind = 'autofix' | 'external-recovery' | 'all';
+
+function isHeadlessWorkerKind(value: string | undefined): value is HeadlessWorkerKind {
+  return value === 'autofix' || value === 'external-recovery' || value === 'all';
+}
+
+/**
+ * Start a recovery worker headlessly and run until SIGINT/SIGTERM.
+ *
+ * Each worker is an explicitly-owned, long-running process (routed like
+ * `owner-serve`) rather than a subscription hidden inside another command.
+ * `autofix` is a placeholder runtime until its real scan/submit policy lands;
+ * `external-recovery` is a no-op runtime until its worker exists. `all` runs
+ * every worker in the same process.
+ */
+async function headlessWorker(
+  subcommand: string | undefined,
+  deps: Pick<HeadlessDeps, 'logger' | 'messageBus' | 'invokerConfig'>,
+): Promise<void> {
+  if (!isHeadlessWorkerKind(subcommand)) {
+    throw new Error(
+      `Unknown worker "${subcommand ?? ''}". Usage: worker <autofix|external-recovery|all>`,
+    );
+  }
+
+  const pollIntervalMs = deps.invokerConfig.workerPollIntervalMs;
+  const runtimes: WorkerRuntime[] = [];
+
+  const startAutofix = (): void => {
+    runtimes.push(startWorkerRuntime({
+      name: 'autofix-worker',
+      messageBus: deps.messageBus,
+      logger: deps.logger,
+      pollIntervalMs,
+      eventKinds: ['task.failed', 'review_gate.ci_failed'],
+      // Placeholder until the auto-fix scan/submit policy lands.
+      scan: () => [],
+      submit: () => {},
+    }));
+  };
+
+  const startExternalRecovery = (): void => {
+    runtimes.push(startWorkerRuntime({
+      name: 'external-recovery-worker',
+      messageBus: deps.messageBus,
+      logger: deps.logger,
+      pollIntervalMs,
+      eventKinds: ['workflow.wakeup'],
+      // No-op runtime until the external-recovery worker exists.
+      scan: () => [],
+      submit: () => {},
+    }));
+  };
+
+  if (subcommand === 'autofix' || subcommand === 'all') startAutofix();
+  if (subcommand === 'external-recovery' || subcommand === 'all') startExternalRecovery();
+
+  process.stdout.write(`[headless] worker "${subcommand}" ready; recovering until SIGINT/SIGTERM.\n`);
+  await Promise.all(runtimes.map((runtime) => runtime.waitUntilStopped()));
+}
+
 function printHeadlessUsage(): void {
   process.stdout.write(`${BOLD}invoker${RESET} — Headless workflow runner (Electron)
 
@@ -1302,6 +1367,7 @@ ${BOLD}Lifecycle:${RESET}
   delete-all                                          Delete all workflows (requires INVOKER_ALLOW_DELETE_ALL=1)
   open-terminal <taskId>                              Open OS terminal for a task
   slack                                               Start Slack bot (long-running)
+  worker <autofix|external-recovery|all>              Start a recovery worker (long-running)
 
 ${BOLD}Deprecated${RESET} (use new names above):
   list → query workflows       status → query tasks       task-status → query task

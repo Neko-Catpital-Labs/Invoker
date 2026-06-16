@@ -368,14 +368,17 @@ export async function runHeadlessClientCommand(
 
   const { args, waitForApproval, noTrack } = parseArgs(argv);
   const standaloneMode = process.env.INVOKER_HEADLESS_STANDALONE === '1';
-  const internalOwnerServe = args[0] === 'owner-serve';
+  // `owner-serve` and `worker` are long-running processes that own their own
+  // runtime. They must run directly in this process, never delegate to (or get
+  // intercepted by) a shared mutation owner.
+  const internalDirectProcess = args[0] === 'owner-serve' || args[0] === 'worker';
 
-  if (!standaloneMode && !internalOwnerServe && await delegateReadOnlyQuery(args, deps.messageBus, deps.refreshMessageBus)) {
+  if (!standaloneMode && !internalDirectProcess && await delegateReadOnlyQuery(args, deps.messageBus, deps.refreshMessageBus)) {
     const exitCode = process.exitCode;
     return typeof exitCode === 'number' ? exitCode : 0;
   }
 
-  if (!shouldUseSharedMutationOwner(args, standaloneMode, internalOwnerServe)) {
+  if (!shouldUseSharedMutationOwner(args, standaloneMode, internalDirectProcess)) {
     return deps.runElectronHeadless(argv);
   }
 

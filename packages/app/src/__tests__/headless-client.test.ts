@@ -435,6 +435,28 @@ describe('headless-client', () => {
     expect(secondExecHandler).toHaveBeenCalledTimes(1);
   }, 15_000);
 
+  it('routes a worker command directly to the host runtime, never delegating', async () => {
+    const bus = new LocalBus();
+    const execHandler = vi.fn(async () => ({ ok: true }));
+    // Even if a standalone owner is reachable, `worker` must run in-process.
+    bus.onRequest('headless.exec', execHandler);
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'standalone' }));
+
+    const runElectronHeadless = vi.fn(async () => 0);
+    const ensureStandaloneOwner = vi.fn(async () => {});
+
+    const exitCode = await runHeadlessClientCommand(['worker', 'autofix'], {
+      messageBus: bus,
+      ensureStandaloneOwner,
+      runElectronHeadless,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(runElectronHeadless).toHaveBeenCalledWith(['worker', 'autofix']);
+    expect(execHandler).not.toHaveBeenCalled();
+    expect(ensureStandaloneOwner).not.toHaveBeenCalled();
+  });
+
   it('falls back to the host runtime for non-mutating commands', async () => {
     const runElectronHeadless = vi.fn(async () => 0);
     const exitCode = await runHeadlessClientCommand(['query', 'workflows'], {
