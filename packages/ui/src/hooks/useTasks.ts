@@ -138,8 +138,8 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
   const refreshTasks = useCallback((): Promise<void> => fetchAll(), [fetchAll]);
   const refreshTaskGraph = useCallback((): Promise<void> => {
     if (typeof window === 'undefined' || !window.invoker) return Promise.resolve();
-    return window.invoker.refreshTaskGraph?.() ?? fetchAll();
-  }, [fetchAll]);
+    return window.invoker.refreshTaskGraph();
+  }, []);
 
 
   useEffect(() => {
@@ -315,8 +315,7 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
       graphEventPipelineRef.current?.push(event);
     };
 
-    const unsub = window.invoker.onTaskGraphEvent?.(handleTaskGraphEvent)
-      ?? window.invoker.onTaskDelta((delta) => handleTaskGraphEvent({ type: 'delta', delta }));
+    const unsub = window.invoker.onTaskGraphEvent(handleTaskGraphEvent);
 
     const unsubWf = window.invoker.onWorkflowsChanged?.((wfList: any[]) => {
       if (Array.isArray(wfList)) {
