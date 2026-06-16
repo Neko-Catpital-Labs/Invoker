@@ -200,6 +200,8 @@ export type WorkflowStatus =
   | 'awaiting_approval'
   | 'stale';
 
+export type MergeMode = 'manual' | 'automatic' | 'external_review';
+
 // ── Workflow Status ─────────────────────────────────────────
 
 export interface WorkflowStatusCounts {
@@ -272,7 +274,7 @@ export interface PlanDefinition {
   tasks: PlanTask[];
   onFinish?: 'none' | 'merge' | 'pull_request';
   baseBranch?: string;
-  mergeMode?: 'manual' | 'automatic' | 'external_review';
+  mergeMode?: MergeMode;
   externalDependencies?: ExternalDependency[];
 }
 
