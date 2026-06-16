@@ -72,20 +72,23 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
     applyTotalMs: 0,
     applyMaxMs: 0,
   });
-  /** Bumps on each refresh so stale getTasks IPC (e.g. mount snapshot before loadPlan) cannot wipe newer state. */
-  const getTasksGenerationRef = useRef(0);
+  /** Bumps when newer UI activity supersedes the startup getTasks snapshot. */
+  const startupSnapshotGenerationRef = useRef(0);
   const reportedStartupBootstrapRef = useRef(false);
   const reportedStartupSnapshotRef = useRef(false);
   const lastSeenSequenceRef = useRef<number>(bootstrapState?.streamSequence ?? 0);
   const isResyncInFlightRef = useRef<boolean>(false);
 
-  const fetchAll = useCallback((): Promise<void> => {
+  const invalidateStartupSnapshot = useCallback(() => {
+    startupSnapshotGenerationRef.current += 1;
+  }, []);
+  const loadStartupSnapshot = useCallback((): Promise<void> => {
     if (typeof window === 'undefined' || !window.invoker) return Promise.resolve();
-    const gen = ++getTasksGenerationRef.current;
+    const gen = ++startupSnapshotGenerationRef.current;
     const requestedAt = performance.now();
     const request = window.invoker.getTasks().then((result) => {
       const requestDurationMs = performance.now() - requestedAt;
-      if (gen !== getTasksGenerationRef.current) {
+      if (gen !== startupSnapshotGenerationRef.current) {
         return;
       }
       const taskList = result.tasks ?? [];
@@ -134,10 +137,33 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
     window.invoker.checkPrStatuses?.();
     return request.then(() => undefined);
   }, []);
+  const refreshWorkflowMetadata = useCallback((): Promise<void> => {
+    if (typeof window === 'undefined' || !window.invoker) return Promise.resolve();
+    const requestedAt = performance.now();
+    const request = window.invoker.listWorkflows().then((wfList) => {
+      setWorkflows(() => {
+        const wfMap = new Map<string, WorkflowMeta>();
+        for (const wf of wfList) {
+          wfMap.set(wf.id, {
+            ...wf,
+            status: normalizeWorkflowStatus((wf as { status?: string }).status),
+          });
+        }
+        return wfMap;
+      });
+      void window.invoker.reportUiPerf?.('useTasks_workflow_metadata_refresh', {
+        workflowCount: wfList.length,
+        requestDurationMs: performance.now() - requestedAt,
+        jsonSizeBytes: new Blob([JSON.stringify(wfList)]).size,
+      });
+    });
+    return request.then(() => undefined);
+  }, []);
   const refreshTaskGraph = useCallback((): Promise<void> => {
     if (typeof window === 'undefined' || !window.invoker) return Promise.resolve();
+    invalidateStartupSnapshot();
     return window.invoker.refreshTaskGraph();
-  }, []);
+  }, [invalidateStartupSnapshot]);
 
 
   useEffect(() => {
@@ -173,7 +199,7 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
           : undefined,
       });
     } else {
-      fetchAll();
+      void loadStartupSnapshot();
     }
 
     graphEventPipelineRef.current = createTaskGraphEventPipeline({
@@ -258,14 +284,14 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
           deltaPerfRef.current.applyMaxMs = Math.max(deltaPerfRef.current.applyMaxMs, dt);
           return next;
         });
-
         if (shouldRefreshWorkflows) {
-          fetchAll();
+          void refreshWorkflowMetadata();
         }
       },
     });
 
     const handleTaskGraphEvent = (event: TaskGraphEvent) => {
+      invalidateStartupSnapshot();
       deltaPerfRef.current.received += 1;
       if (event.type === 'snapshot') {
         graphEventPipelineRef.current?.push(event);
@@ -315,6 +341,7 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
     const unsub = window.invoker.onTaskGraphEvent(handleTaskGraphEvent);
 
     const unsubWf = window.invoker.onWorkflowsChanged?.((wfList: any[]) => {
+      invalidateStartupSnapshot();
       if (Array.isArray(wfList)) {
         setWorkflows(() => {
           const wfMap = new Map<string, WorkflowMeta>();
@@ -335,7 +362,7 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
       unsub();
       unsubWf?.();
     };
-  }, [fetchAll, onTaskGraphSnapshotApplied, refreshTaskGraph]);
+  }, [invalidateStartupSnapshot, loadStartupSnapshot, onTaskGraphSnapshotApplied, refreshTaskGraph, refreshWorkflowMetadata]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.invoker) return;
