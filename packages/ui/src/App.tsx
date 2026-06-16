@@ -355,7 +355,7 @@ export function App() {
   const handleTaskGraphSnapshotApplied = useCallback(() => {
     setGraphRefreshSequence((sequence) => sequence + 1);
   }, []);
-  const { tasks, workflows, clearTasks, refreshTasks, refreshTaskGraph } = useTasks({
+  const { tasks, workflows, clearTasks, refreshTaskGraph } = useTasks({
     onTaskGraphSnapshotApplied: handleTaskGraphSnapshotApplied,
   });
   const invoker = useInvoker();
