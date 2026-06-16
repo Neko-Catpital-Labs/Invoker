@@ -19,7 +19,6 @@ export interface UseTasksResult {
   tasks: Map<string, TaskState>;
   workflows: Map<string, WorkflowMeta>;
   clearTasks: () => void;
-  refreshTasks: () => Promise<void>;
   refreshTaskGraph: () => Promise<void>;
 }
 export interface UseTasksOptions {
@@ -135,7 +134,6 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
     window.invoker.checkPrStatuses?.();
     return request.then(() => undefined);
   }, []);
-  const refreshTasks = useCallback((): Promise<void> => fetchAll(), [fetchAll]);
   const refreshTaskGraph = useCallback((): Promise<void> => {
     if (typeof window === 'undefined' || !window.invoker) return Promise.resolve();
     return window.invoker.refreshTaskGraph();
@@ -162,9 +160,8 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
     }
 
     // Preload bootstrap already hydrated tasks/workflows synchronously, so
-    // the immediate non-forced snapshot would be a redundant full payload.
-    // Skip it when bootstrap is populated; deltas keep state live, and
-    // explicit refreshTasks() callers still run fetchAll.
+    // the immediate startup snapshot would be a redundant full payload.
+    // Skip it when bootstrap is populated; deltas keep state live.
     if (bootstrapHasState) {
       reportedStartupSnapshotRef.current = true;
       void window.invoker.reportUiPerf?.('startup_snapshot_skipped_bootstrap_complete', {
@@ -361,5 +358,5 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
     setWorkflows(new Map());
   }, []);
 
-  return { tasks, workflows, clearTasks, refreshTasks, refreshTaskGraph };
+  return { tasks, workflows, clearTasks, refreshTaskGraph };
 }
