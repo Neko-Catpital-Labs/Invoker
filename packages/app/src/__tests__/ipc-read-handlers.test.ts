@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { RegisterReadOnlyIpcHandlersContext } from '../ipc-read-handlers.js';
 import { registerReadOnlyIpcHandlers } from '../ipc-read-handlers.js';
 
 function makeTask(id: string) {
@@ -12,6 +13,17 @@ function makeTask(id: string) {
     execution: {},
   };
 }
+
+function expectReadContextWriteToolsAreAbsent(): void {
+  const exposesTaskDeltaPublisher: 'sendTaskDeltaToRenderer' extends keyof RegisterReadOnlyIpcHandlersContext ? true : false = false;
+  const exposesMainWindow: 'getMainWindow' extends keyof RegisterReadOnlyIpcHandlersContext ? true : false = false;
+  const exposesTaskSnapshotCache: 'lastKnownTaskStates' extends keyof RegisterReadOnlyIpcHandlersContext ? true : false = false;
+
+  expect(exposesTaskDeltaPublisher).toBe(false);
+  expect(exposesMainWindow).toBe(false);
+  expect(exposesTaskSnapshotCache).toBe(false);
+}
+
 
 describe('registerReadOnlyIpcHandlers', () => {
   it('get-tasks returns a snapshot', async () => {
@@ -55,4 +67,8 @@ describe('registerReadOnlyIpcHandlers', () => {
       streamSequence: 42,
     });
   });
+  it('does not expose renderer write tools to read handlers', () => {
+    expectReadContextWriteToolsAreAbsent();
+  });
+
 });
