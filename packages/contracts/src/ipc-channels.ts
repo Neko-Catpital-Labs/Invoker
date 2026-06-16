@@ -405,6 +405,10 @@ export const IpcChannels = {
     request: [forceRefresh?: boolean];
     response: { tasks: TaskState[]; workflows: WorkflowMeta[]; streamSequence: number };
   },
+  'invoker:refresh-task-graph': {} as {
+    request: [];
+    response: void;
+  },
   'invoker:get-events': {} as {
     request: [taskId: string];
     response: TaskEvent[];
