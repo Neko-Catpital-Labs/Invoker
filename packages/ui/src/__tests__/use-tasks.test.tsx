@@ -245,32 +245,43 @@ describe('useTasks', () => {
     });
   });
 
-  it('forced refresh after a hydrated bootstrap still calls getTasks(true) and replaces state', async () => {
+  it('forced refresh after a hydrated bootstrap requests a graph refresh and waits for the snapshot event', async () => {
     const bootTask = makeUITask({ id: 'boot-1', description: 'Boot' });
     const refreshedTask = makeUITask({ id: 'refreshed-1', description: 'Refreshed' });
-    const getTasks = vi.fn().mockResolvedValue({ tasks: [refreshedTask], workflows: [] });
+    let taskGraphEventHandler: ((event: unknown) => void) | undefined;
     (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
       tasks: [bootTask],
       workflows: [{ id: 'wf-1', name: 'WF 1', status: 'running' }],
     };
+    const refreshTaskGraph = vi.fn(async () => {
+      taskGraphEventHandler?.({
+        type: 'snapshot',
+        tasks: [refreshedTask],
+        workflows: [],
+        reason: 'test-refresh',
+        streamSequence: 0,
+      });
+    });
     (window as unknown as { invoker: Record<string, unknown> }).invoker = {
-      getTasks,
+      getTasks: vi.fn().mockResolvedValue({ tasks: [bootTask], workflows: [] }),
+      refreshTaskGraph,
+      onTaskGraphEvent: vi.fn((cb: (event: unknown) => void) => {
+        taskGraphEventHandler = cb;
+        return () => {};
+      }),
       onTaskDelta: vi.fn(() => () => {}),
       onWorkflowsChanged: vi.fn(() => () => {}),
     };
 
     const { result } = renderHook(() => useTasks());
 
-    expect(getTasks).not.toHaveBeenCalled();
+    expect(refreshTaskGraph).not.toHaveBeenCalled();
 
     await act(async () => {
-      result.current.refreshTasks(true);
+      await result.current.refreshTasks(true);
     });
 
-    await waitFor(() => {
-      expect(getTasks).toHaveBeenCalledTimes(1);
-      expect(getTasks).toHaveBeenLastCalledWith(true);
-    });
+    expect(refreshTaskGraph).toHaveBeenCalledTimes(1);
 
     await waitFor(() => {
       expect(result.current.tasks.has('refreshed-1')).toBe(true);
@@ -311,10 +322,16 @@ describe('useTasks', () => {
     });
   });
 
-  it('passes forceRefresh flag to getTasks when requested', async () => {
+  it('forced refresh calls refreshTaskGraph instead of getTasks', async () => {
     const getTasks = vi.fn().mockResolvedValue({ tasks: [], workflows: [] });
+    const refreshTaskGraph = vi.fn(async () => {});
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
+      tasks: [makeUITask({ id: 'boot-1' })],
+      workflows: [],
+    };
     (window as unknown as { invoker: Record<string, unknown> }).invoker = {
       getTasks,
+      refreshTaskGraph,
       onTaskDelta: vi.fn(() => () => {}),
       onWorkflowsChanged: vi.fn(() => () => {}),
     };
@@ -322,12 +339,12 @@ describe('useTasks', () => {
     const { result } = renderHook(() => useTasks());
 
     await act(async () => {
-      result.current.refreshTasks(true);
+      await result.current.refreshTasks(true);
     });
 
     await waitFor(() => {
-      expect(getTasks).toHaveBeenCalled();
-      expect(getTasks).toHaveBeenLastCalledWith(true);
+      expect(refreshTaskGraph).toHaveBeenCalledTimes(1);
+      expect(getTasks).not.toHaveBeenCalled();
     });
   });
 
