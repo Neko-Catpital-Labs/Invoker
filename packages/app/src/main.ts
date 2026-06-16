@@ -71,7 +71,7 @@ import {
   resolveInvokerIpcSocketPath,
   resolveRepoRoot,
 } from '@invoker/contracts';
-import type { WorkResponse } from '@invoker/contracts';
+import type { TaskGraphEvent, WorkflowMeta, WorkResponse } from '@invoker/contracts';
 import { SQLiteAdapter, ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
 import { IpcBus, Channels } from '@invoker/transport';
 import {
@@ -1612,8 +1612,8 @@ if (isHeadless) {
           if (kind === 'workflow-status') {
             return orchestrator.getWorkflowStatus();
           }
-          if (kind === 'tasks') {
-            if ((req as { forceRefresh?: boolean }).forceRefresh) {
+          if (kind === 'tasks' || kind === 'task-graph-refresh') {
+            if (kind === 'task-graph-refresh') {
               orchestrator.syncAllFromDb();
             }
             return {
@@ -1828,8 +1828,8 @@ function createEmbeddedTerminalBackendFromConfig(
   };
   const pendingOutputBuffers = new Map<string, string[]>();
   const outputFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  const pendingUiTaskDeltas: TaskDelta[] = [];
-  let uiTaskDeltaFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  const pendingUiTaskGraphEvents: TaskGraphEvent[] = [];
+  let uiTaskGraphEventFlushTimer: ReturnType<typeof setTimeout> | null = null;
   let workflowMetadataInvalidator: WorkflowMetadataInvalidator | null = null;
   let workflowMetadataPublisher: CoalescedWorkflowMetadataPublisher | null = null;
   let lastKnownWorkflowCount = 0;
@@ -1969,32 +1969,32 @@ function createEmbeddedTerminalBackendFromConfig(
     outputFlushTimers.set(taskId, timer);
   };
 
-  const flushUiTaskDeltas = (): void => {
-    if (uiTaskDeltaFlushTimer) {
-      clearTimeout(uiTaskDeltaFlushTimer);
-      uiTaskDeltaFlushTimer = null;
+  const flushUiTaskGraphEvents = (): void => {
+    if (uiTaskGraphEventFlushTimer) {
+      clearTimeout(uiTaskGraphEventFlushTimer);
+      uiTaskGraphEventFlushTimer = null;
     }
-    if (!mainWindow || mainWindow.isDestroyed() || !uiInteractive || pendingUiTaskDeltas.length === 0) {
-      pendingUiTaskDeltas.length = 0;
+    if (!mainWindow || mainWindow.isDestroyed() || !uiInteractive || pendingUiTaskGraphEvents.length === 0) {
+      pendingUiTaskGraphEvents.length = 0;
       return;
     }
-    const batch = pendingUiTaskDeltas.splice(0, Math.min(pendingUiTaskDeltas.length, 250));
-    if (pendingUiTaskDeltas.length > 0) {
-      uiTaskDeltaFlushTimer = setTimeout(() => flushUiTaskDeltas(), 0);
-      uiTaskDeltaFlushTimer.unref?.();
+    const batch = pendingUiTaskGraphEvents.splice(0, Math.min(pendingUiTaskGraphEvents.length, 250));
+    if (pendingUiTaskGraphEvents.length > 0) {
+      uiTaskGraphEventFlushTimer = setTimeout(() => flushUiTaskGraphEvents(), 0);
+      uiTaskGraphEventFlushTimer.unref?.();
     }
     if (batch.length >= 200) {
       uiPerfStats.largeTaskDeltaBatches += 1;
       uiPerfStats.maxTaskDeltaBatchSize = Math.max(uiPerfStats.maxTaskDeltaBatchSize, batch.length);
-      logger.info(`large task-delta batch chunked size=${batch.length} remaining=${pendingUiTaskDeltas.length}`, {
+      logger.info(`large task-graph-event batch chunked size=${batch.length} remaining=${pendingUiTaskGraphEvents.length}`, {
         module: 'ui-backpressure',
       });
     }
     if (batch.length === 1) {
-      mainWindow.webContents.send('invoker:task-delta', batch[0]);
+      mainWindow.webContents.send('invoker:task-graph-event', batch[0]);
       return;
     }
-    mainWindow.webContents.send('invoker:task-delta-batch', batch);
+    mainWindow.webContents.send('invoker:task-graph-event-batch', batch);
   };
 
   const taskDeltaStream = createTaskDeltaStreamSequence();
@@ -2004,17 +2004,38 @@ function createEmbeddedTerminalBackendFromConfig(
     workflowMetadataInvalidator?.markFromTaskDelta(delta);
   };
 
-  const enqueueTaskDeltaForRenderer = (delta: TaskDelta): void => {
+  const enqueueTaskGraphEventForRenderer = (event: TaskGraphEvent): void => {
     if (!mainWindow || mainWindow.isDestroyed() || !uiInteractive) {
       return;
     }
-    pendingUiTaskDeltas.push(taskDeltaStream.stamp(delta));
-    if (uiTaskDeltaFlushTimer) {
+    pendingUiTaskGraphEvents.push(event);
+    if (uiTaskGraphEventFlushTimer) {
       return;
     }
-    uiTaskDeltaFlushTimer = setTimeout(() => flushUiTaskDeltas(), 25);
-    uiTaskDeltaFlushTimer.unref?.();
+    uiTaskGraphEventFlushTimer = setTimeout(() => flushUiTaskGraphEvents(), 25);
+    uiTaskGraphEventFlushTimer.unref?.();
   };
+
+  const enqueueTaskDeltaForRenderer = (delta: TaskDelta): void => {
+    enqueueTaskGraphEventForRenderer({
+      type: 'delta',
+      delta: taskDeltaStream.stamp(delta),
+    });
+  };
+  const enqueueTaskGraphSnapshotForRenderer = (
+    reason: string,
+    tasks: TaskState[],
+    workflows: WorkflowMeta[],
+  ): void => {
+    enqueueTaskGraphEventForRenderer({
+      type: 'snapshot',
+      tasks: tasks as Extract<TaskGraphEvent, { type: 'snapshot' }>['tasks'],
+      workflows,
+      reason,
+      streamSequence: getTaskDeltaStreamSequence(),
+    });
+  };
+
 
   const sendTaskDeltaToRenderer = (delta: TaskDelta): void => {
     markWorkflowMetadataFromTaskDelta(delta);
@@ -3260,8 +3281,8 @@ function createEmbeddedTerminalBackendFromConfig(
         if (kind === 'workflow-status') {
           return orchestrator.getWorkflowStatus();
         }
-        if (kind === 'tasks') {
-          if ((req as { forceRefresh?: boolean }).forceRefresh) {
+        if (kind === 'tasks' || kind === 'task-graph-refresh') {
+          if (kind === 'task-graph-refresh') {
             orchestrator.syncAllFromDb();
           }
           return {
@@ -3612,22 +3633,62 @@ function createEmbeddedTerminalBackendFromConfig(
       requestWorkflowMetadataPublish('clear');
     });
 
+
+    ipcMain.handle('invoker:refresh-task-graph', async () => {
+      const startedAtMs = Date.now();
+      let tasks: TaskState[];
+      let workflows: WorkflowMeta[];
+
+      if (!ownerMode) {
+        const delegated = await messageBus.request('headless.query', {
+          kind: 'task-graph-refresh',
+        }) as unknown;
+        if (!delegated || typeof delegated !== 'object') {
+          throw new Error('refresh-task-graph owner delegation returned no snapshot');
+        }
+        const snapshot = delegated as {
+          tasks?: unknown[];
+          workflows?: unknown[];
+          invokerHomeRoot?: string;
+        };
+        if (!Array.isArray(snapshot.tasks) || !Array.isArray(snapshot.workflows)) {
+          throw new Error('refresh-task-graph owner delegation returned an invalid snapshot');
+        }
+        const localInvokerHomeRoot = resolveInvokerHomeRoot();
+        if (snapshot.invokerHomeRoot && snapshot.invokerHomeRoot !== localInvokerHomeRoot) {
+          throw new Error(
+            `refresh-task-graph owner home mismatch: owner=${snapshot.invokerHomeRoot} local=${localInvokerHomeRoot}`,
+          );
+        }
+        tasks = snapshot.tasks as TaskState[];
+        workflows = snapshot.workflows as WorkflowMeta[];
+      } else {
+        orchestrator.syncAllFromDb();
+        tasks = orchestrator.getAllTasks();
+        workflows = persistence.listWorkflows() as WorkflowMeta[];
+      }
+
+      enqueueTaskGraphSnapshotForRenderer(
+        ownerMode ? 'refresh-task-graph' : 'refresh-task-graph-delegated',
+        tasks,
+        workflows,
+      );
+      recordStartupDuration('refresh-task-graph.return', startedAtMs, {
+        taskCount: tasks.length,
+        workflowCount: workflows.length,
+        streamSequence: getTaskDeltaStreamSequence(),
+      });
+    });
     registerReadOnlyIpcHandlers({
       ipcMain,
       logger,
       persistence,
       getOrchestrator: () => orchestrator,
       agentRegistry,
-      lastKnownTaskStates,
-      getMainWindow: () => mainWindow,
-      sendTaskDeltaToRenderer,
-      requestWorkflowMetadataPublish,
-      setLastKnownWorkflowCount: (count) => { lastKnownWorkflowCount = count; },
       loadTaskByIdFromPersistence,
       resolveAgentSession,
       getOwnerMode: () => ownerMode,
       getMessageBus: () => messageBus,
-      timeStartupPhase,
       recordStartupDuration,
       getTaskDeltaStreamSequence,
     });

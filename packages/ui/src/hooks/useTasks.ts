@@ -7,22 +7,27 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { TaskState, WorkflowMeta } from '../types.js';
+import type { TaskGraphEvent, TaskState, WorkflowMeta } from '../types.js';
 import { applyDelta } from '../lib/delta.js';
 import { normalizeWorkflowStatus } from '../lib/workflow-status.js';
 import {
-  createTaskDeltaPipeline,
-  type TaskDeltaPipeline,
-} from '../lib/task-delta-pipeline.js';
+  createTaskGraphEventPipeline,
+  type TaskGraphEventPipeline,
+} from '../lib/task-graph-event-pipeline.js';
 
 export interface UseTasksResult {
   tasks: Map<string, TaskState>;
   workflows: Map<string, WorkflowMeta>;
   clearTasks: () => void;
-  refreshTasks: (forceRefresh?: boolean) => Promise<void>;
+  refreshTasks: () => Promise<void>;
+  refreshTaskGraph: () => Promise<void>;
+}
+export interface UseTasksOptions {
+  onTaskGraphSnapshotApplied?: () => void;
 }
 
-export function useTasks(): UseTasksResult {
+
+export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): UseTasksResult {
   const traceTaskDeltas =
     typeof window !== 'undefined' &&
     window.location.search.includes('traceTaskDeltas=1');
@@ -61,7 +66,7 @@ export function useTasks(): UseTasksResult {
   });
   const workflowsRef = useRef(workflows);
   workflowsRef.current = workflows;
-  const deltaPipelineRef = useRef<TaskDeltaPipeline | null>(null);
+  const graphEventPipelineRef = useRef<TaskGraphEventPipeline | null>(null);
   const deltaPerfRef = useRef({
     received: 0,
     applyCount: 0,
@@ -75,11 +80,11 @@ export function useTasks(): UseTasksResult {
   const lastSeenSequenceRef = useRef<number>(bootstrapState?.streamSequence ?? 0);
   const isResyncInFlightRef = useRef<boolean>(false);
 
-  const fetchAll = useCallback((forceRefresh = false): Promise<void> => {
+  const fetchAll = useCallback((): Promise<void> => {
     if (typeof window === 'undefined' || !window.invoker) return Promise.resolve();
     const gen = ++getTasksGenerationRef.current;
     const requestedAt = performance.now();
-    const request = window.invoker.getTasks(forceRefresh).then((result) => {
+    const request = window.invoker.getTasks().then((result) => {
       const requestDurationMs = performance.now() - requestedAt;
       if (gen !== getTasksGenerationRef.current) {
         return;
@@ -111,7 +116,6 @@ export function useTasks(): UseTasksResult {
       void window.invoker.reportUiPerf?.('useTasks_snapshot_replace', {
         taskCount: taskList.length,
         workflowCount: wfList.length,
-        forceRefresh,
         requestDurationMs,
         replaceDurationMs,
         jsonSizeBytes: new Blob([JSON.stringify(result)]).size,
@@ -121,7 +125,6 @@ export function useTasks(): UseTasksResult {
         void window.invoker.reportUiPerf?.('startup_snapshot_applied', {
           taskCount: taskList.length,
           workflowCount: wfList.length,
-          forceRefresh,
           elapsedMs: Math.round(performance.now()),
           processElapsedMs: bootstrapState?.appStartedAtEpochMs
             ? Date.now() - bootstrapState.appStartedAtEpochMs
@@ -132,6 +135,12 @@ export function useTasks(): UseTasksResult {
     window.invoker.checkPrStatuses?.();
     return request.then(() => undefined);
   }, []);
+  const refreshTasks = useCallback((): Promise<void> => fetchAll(), [fetchAll]);
+  const refreshTaskGraph = useCallback((): Promise<void> => {
+    if (typeof window === 'undefined' || !window.invoker) return Promise.resolve();
+    return window.invoker.refreshTaskGraph?.() ?? fetchAll();
+  }, [fetchAll]);
+
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.invoker) return;
@@ -155,7 +164,7 @@ export function useTasks(): UseTasksResult {
     // Preload bootstrap already hydrated tasks/workflows synchronously, so
     // the immediate non-forced snapshot would be a redundant full payload.
     // Skip it when bootstrap is populated; deltas keep state live, and
-    // explicit refreshTasks() / refreshTasks(true) callers still run fetchAll.
+    // explicit refreshTasks() callers still run fetchAll.
     if (bootstrapHasState) {
       reportedStartupSnapshotRef.current = true;
       void window.invoker.reportUiPerf?.('startup_snapshot_skipped_bootstrap_complete', {
@@ -170,7 +179,7 @@ export function useTasks(): UseTasksResult {
       fetchAll();
     }
 
-    deltaPipelineRef.current = createTaskDeltaPipeline({
+    graphEventPipelineRef.current = createTaskGraphEventPipeline({
       flushMs: 100,
       maxBatchSize: 200,
       onLargeBatch: ({ batchSize, remaining }) => {
@@ -180,13 +189,55 @@ export function useTasks(): UseTasksResult {
         });
       },
       onBatch: (batch) => {
+        let lastSnapshotIndex = -1;
+        for (let index = batch.length - 1; index >= 0; index -= 1) {
+          if (batch[index].type === 'snapshot') {
+            lastSnapshotIndex = index;
+            break;
+          }
+        }
+        const effectiveBatch = lastSnapshotIndex >= 0 ? batch.slice(lastSnapshotIndex) : batch;
+        const firstEvent = effectiveBatch[0];
+        const deltaEvents = firstEvent?.type === 'snapshot' ? effectiveBatch.slice(1) : effectiveBatch;
         let shouldRefreshWorkflows = false;
+
+        if (firstEvent?.type === 'snapshot') {
+          setTasks(() => {
+            const next = new Map<string, TaskState>();
+            for (const task of firstEvent.tasks) next.set(task.id, task);
+            return next;
+          });
+          const replaceStartedAt = performance.now();
+          setWorkflows(() => {
+            const wfMap = new Map<string, WorkflowMeta>();
+            for (const wf of firstEvent.workflows) {
+              wfMap.set(wf.id, {
+                ...wf,
+                status: normalizeWorkflowStatus((wf as { status?: string }).status),
+              });
+            }
+            return wfMap;
+          });
+          lastSeenSequenceRef.current = firstEvent.streamSequence;
+          isResyncInFlightRef.current = false;
+          onTaskGraphSnapshotApplied?.();
+          void window.invoker.reportUiPerf?.('useTasks_snapshot_replace', {
+            taskCount: firstEvent.tasks.length,
+            workflowCount: firstEvent.workflows.length,
+            source: 'task-graph-event',
+            reason: firstEvent.reason,
+            replaceDurationMs: performance.now() - replaceStartedAt,
+            jsonSizeBytes: new Blob([JSON.stringify(firstEvent)]).size,
+          });
+        }
 
         setTasks((prev) => {
           const t0 = performance.now();
           let next = prev;
 
-          for (const delta of batch) {
+          for (const event of deltaEvents) {
+            if (event.type !== 'delta') continue;
+            const delta = event.delta;
             if (delta.type === 'updated' && !next.has(delta.taskId)) {
               if (traceTaskDeltas) {
                 console.warn(
@@ -205,7 +256,7 @@ export function useTasks(): UseTasksResult {
           }
 
           const dt = performance.now() - t0;
-          deltaPerfRef.current.applyCount += batch.length;
+          deltaPerfRef.current.applyCount += effectiveBatch.length;
           deltaPerfRef.current.applyTotalMs += dt;
           deltaPerfRef.current.applyMaxMs = Math.max(deltaPerfRef.current.applyMaxMs, dt);
           return next;
@@ -217,8 +268,13 @@ export function useTasks(): UseTasksResult {
       },
     });
 
-    const unsub = window.invoker.onTaskDelta((delta) => {
+    const handleTaskGraphEvent = (event: TaskGraphEvent) => {
       deltaPerfRef.current.received += 1;
+      if (event.type === 'snapshot') {
+        graphEventPipelineRef.current?.push(event);
+        return;
+      }
+      const delta = event.delta;
       if (traceTaskDeltas) {
         if (delta.type === 'created') {
           console.log(
@@ -249,15 +305,18 @@ export function useTasks(): UseTasksResult {
             gapSize,
           });
           isResyncInFlightRef.current = true;
-          deltaPipelineRef.current?.clear();
-          fetchAll(true);
+          graphEventPipelineRef.current?.clear();
+          refreshTaskGraph();
           return;
         }
         lastSeenSequenceRef.current = seq;
       }
 
-      deltaPipelineRef.current?.push(delta);
-    });
+      graphEventPipelineRef.current?.push(event);
+    };
+
+    const unsub = window.invoker.onTaskGraphEvent?.(handleTaskGraphEvent)
+      ?? window.invoker.onTaskDelta((delta) => handleTaskGraphEvent({ type: 'delta', delta }));
 
     const unsubWf = window.invoker.onWorkflowsChanged?.((wfList: any[]) => {
       if (Array.isArray(wfList)) {
@@ -275,12 +334,12 @@ export function useTasks(): UseTasksResult {
     });
 
     return () => {
-      deltaPipelineRef.current?.dispose();
-      deltaPipelineRef.current = null;
+      graphEventPipelineRef.current?.dispose();
+      graphEventPipelineRef.current = null;
       unsub();
       unsubWf?.();
     };
-  }, [fetchAll]);
+  }, [fetchAll, onTaskGraphSnapshotApplied, refreshTaskGraph]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.invoker) return;
@@ -303,5 +362,5 @@ export function useTasks(): UseTasksResult {
     setWorkflows(new Map());
   }, []);
 
-  return { tasks, workflows, clearTasks, refreshTasks: fetchAll };
+  return { tasks, workflows, clearTasks, refreshTasks, refreshTaskGraph };
 }

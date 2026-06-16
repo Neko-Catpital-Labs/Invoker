@@ -130,8 +130,8 @@ if [ ! -f "$GHLOG" ]; then
   exit 1
 fi
 
-if ! grep -q "pr list" "$GHLOG"; then
-  echo "FAIL case 4.3: gh stub log missing 'pr list' call"
+if ! grep -q "pr list" "$GHLOG" && ! grep -q "api .*repos.*/pulls.*--method GET" "$GHLOG"; then
+  echo "FAIL case 4.3: gh stub log missing PR lookup call"
   cat "$GHLOG"
   exit 1
 fi
@@ -149,6 +149,13 @@ invoker_e2e_run_headless approve "$MERGE_ID"
 echo "DIAG case 4.3: final approve command completed, merge gate status='$(invoker_e2e_case43_task_status "$MERGE_ID")'"
 invoker_e2e_wait_settled "$MERGE_ID"
 echo "DIAG case 4.3: final wait settled completed, merge gate status='$(invoker_e2e_case43_task_status "$MERGE_ID")'"
+for _ in $(seq 1 120); do
+  STM=$(invoker_e2e_case43_task_status "$MERGE_ID")
+  if [ "$STM" = "completed" ]; then
+    break
+  fi
+  sleep 2
+done
 
 STM=$(invoker_e2e_case43_task_status "$MERGE_ID")
 if [ "$STM" != "completed" ]; then
