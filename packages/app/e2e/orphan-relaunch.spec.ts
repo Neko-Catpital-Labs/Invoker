@@ -84,7 +84,7 @@ base.describe('Orphan task relaunch on restart', () => {
 
     // Load the plan and synthesize an orphaned running task with no live handle.
     await page1.evaluate((planYaml) => window.invoker.loadPlan(planYaml), yamlStringify(RELAUNCH_PLAN));
-    const loadedResult = await page1.evaluate(() => window.invoker.getTasks(true));
+    const loadedResult = await page1.evaluate(() => window.invoker.getTasks());
     const loadedTasks = Array.isArray(loadedResult) ? loadedResult : loadedResult.tasks;
     const loadedSlow = findTask(loadedTasks, 'slow-task');
     expect(loadedSlow).toBeDefined();
@@ -112,7 +112,7 @@ base.describe('Orphan task relaunch on restart', () => {
     const deadline2 = Date.now() + 60_000;
     let observedSlow: any;
     while (Date.now() < deadline2) {
-      const snapshot = await page1.evaluate(() => window.invoker.getTasks(true));
+      const snapshot = await page1.evaluate(() => window.invoker.getTasks());
       const tasks = Array.isArray(snapshot) ? snapshot : snapshot.tasks;
       observedSlow = findTask(tasks, 'slow-task');
       if (observedSlow?.status === 'running' && observedSlow?.execution?.phase !== 'launching') {
@@ -124,7 +124,7 @@ base.describe('Orphan task relaunch on restart', () => {
     expect(observedSlow?.status).toBe('running');
     expect(observedSlow?.execution?.phase).not.toBe('launching');
 
-    const postResult = await page1.evaluate(() => window.invoker.getTasks(true));
+    const postResult = await page1.evaluate(() => window.invoker.getTasks());
     const postTasks = Array.isArray(postResult) ? postResult : postResult.tasks;
     const postSlow = findTask(postTasks, 'slow-task');
     expect(postSlow).toBeDefined();
