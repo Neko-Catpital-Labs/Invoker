@@ -194,12 +194,15 @@ export function createMockInvoker(
 
     // Fire created deltas for each task
     for (const task of tasks) {
-      deltaCallback?.({ type: 'created', task });
+      const delta: TaskDelta = { type: 'created', task };
+      deltaCallback?.(delta);
+      graphEventCallback?.({ type: 'delta', delta });
     }
   }
 
   function fireDelta(delta: TaskDelta) {
     deltaCallback?.(delta);
+    graphEventCallback?.({ type: 'delta', delta });
   }
   function fireGraphEvent(event: TaskGraphEvent) {
     graphEventCallback?.(event);
