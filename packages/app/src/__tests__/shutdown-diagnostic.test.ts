@@ -163,4 +163,41 @@ describe('persistShutdownDiagnostic', () => {
     const output = db.appended[0];
     expect(output).toContain('status=fixing_with_ai');
   });
+
+  it('records the synthetic terminal failure that will replace the live state', () => {
+    // The owner shutdown path overwrites the live execution.error with
+    // "Application quit". The diagnostic must preserve both the live
+    // state and the synthetic-failure annotation so a post-mortem can
+    // see the concrete pre-shutdown context alongside the coarse label.
+    const task = makeTask({
+      status: 'running',
+      execution: { error: 'npm test failed (FAIL src/foo.test.ts > broke)' },
+    });
+    const db = makeDb(['some recent output\n']);
+
+    persistShutdownDiagnostic(task, db, {
+      terminalFailure: {
+        error: 'Application quit',
+        exitCode: 1,
+        reason: 'gui before-quit',
+      },
+    });
+
+    const output = db.appended[0];
+    expect(output).toContain('error=npm test failed (FAIL src/foo.test.ts > broke)');
+    expect(output).toContain('synthetic.error=Application quit');
+    expect(output).toContain('synthetic.exitCode=1');
+    expect(output).toContain('synthetic.reason=gui before-quit');
+    expect(output).toContain('some recent output');
+  });
+
+  it('omits synthetic fields when terminalFailure is not provided', () => {
+    const task = makeTask();
+    const db = makeDb();
+
+    persistShutdownDiagnostic(task, db);
+
+    const output = db.appended[0];
+    expect(output).not.toContain('synthetic.');
+  });
 });

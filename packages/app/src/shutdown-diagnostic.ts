@@ -15,11 +15,20 @@ export const SHUTDOWN_DIAGNOSTIC_TAIL_CHARS = 4_000;
  *
  * Called from both headless and GUI shutdown paths before the synthetic
  * failure response is emitted.
+ *
+ * When the caller is about to apply a synthetic terminal failure (e.g. the
+ * owner is quitting and will overwrite `task.execution.error` with a coarse
+ * label like "Application quit"), pass the synthetic context via
+ * `terminalFailure` so the diagnostic block records both the concrete
+ * pre-shutdown state and the synthetic state that will replace it.
  */
 export function persistShutdownDiagnostic(
   task: TaskState,
   db: ShutdownDiagnosticDb,
-  opts?: { flushPendingOutput?: (taskId: string) => void },
+  opts?: {
+    flushPendingOutput?: (taskId: string) => void;
+    terminalFailure?: { error?: string; exitCode?: number | null; reason?: string };
+  },
 ): void {
   try {
     // Flush any buffered output so the spool is up-to-date.
@@ -39,6 +48,14 @@ export function persistShutdownDiagnostic(
     }
     if (task.execution.exitCode !== undefined && task.execution.exitCode !== null) {
       parts.push(`exitCode=${task.execution.exitCode}`);
+    }
+    const synthetic = opts?.terminalFailure;
+    if (synthetic) {
+      if (synthetic.reason) parts.push(`synthetic.reason=${synthetic.reason}`);
+      if (synthetic.error) parts.push(`synthetic.error=${synthetic.error}`);
+      if (synthetic.exitCode !== undefined && synthetic.exitCode !== null) {
+        parts.push(`synthetic.exitCode=${synthetic.exitCode}`);
+      }
     }
     if (tail) {
       parts.push(`--- recent output tail ---\n${tail}`);
