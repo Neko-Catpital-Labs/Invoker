@@ -236,7 +236,7 @@ describe('useTasks', () => {
 
     await waitFor(() => {
       expect(getTasks).toHaveBeenCalledTimes(1);
-      expect(getTasks).toHaveBeenLastCalledWith(false);
+      expect(getTasks).toHaveBeenLastCalledWith();
     });
 
     await waitFor(() => {
@@ -278,7 +278,7 @@ describe('useTasks', () => {
     expect(refreshTaskGraph).not.toHaveBeenCalled();
 
     await act(async () => {
-      await result.current.refreshTasks(true);
+      await result.current.refreshTaskGraph();
     });
 
     expect(refreshTaskGraph).toHaveBeenCalledTimes(1);
@@ -313,7 +313,7 @@ describe('useTasks', () => {
 
     await waitFor(() => {
       expect(getTasks).toHaveBeenCalledTimes(1);
-      expect(getTasks).toHaveBeenLastCalledWith(false);
+      expect(getTasks).toHaveBeenLastCalledWith();
     });
 
     await waitFor(() => {
@@ -339,7 +339,7 @@ describe('useTasks', () => {
     const { result } = renderHook(() => useTasks());
 
     await act(async () => {
-      await result.current.refreshTasks(true);
+      await result.current.refreshTaskGraph();
     });
 
     await waitFor(() => {
