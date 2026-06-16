@@ -670,9 +670,6 @@ export const IpcTestOnlyChannels = {
 // Pushed from main → renderer via webContents.send.
 
 export const IpcEventChannels = {
-  'invoker:task-delta': {} as {
-    payload: TaskDelta;
-  },
   'invoker:task-graph-event': {} as {
     payload: TaskGraphEvent;
   },
