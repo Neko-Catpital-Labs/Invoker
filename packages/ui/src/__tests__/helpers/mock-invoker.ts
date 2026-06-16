@@ -48,8 +48,8 @@ export function createMockInvoker(
   const terminalOutputCallbacks = new Set<(event: TerminalOutputEvent) => void>();
 
   const api: InvokerAPI = {
-    // Defer resolution one microtask so snapshot is read after synchronous setTasks()
-    // in tests (useTasks fetchAll races mount vs setTasks; real IPC resolves later too).
+    // Defer resolution one microtask so the startup snapshot is read after synchronous setTasks()
+    // in tests (real IPC resolves later too).
     getTasks: vi.fn(
       () =>
         new Promise<{ tasks: TaskState[]; workflows: WorkflowMeta[]; streamSequence: number }>((resolve) => {
@@ -169,7 +169,7 @@ export function createMockInvoker(
     }),
     onTerminalExit: vi.fn(() => () => {}),
     resumeWorkflow: vi.fn(async () => null),
-    listWorkflows: vi.fn(async () => []),
+    listWorkflows: vi.fn(async () => workflowSnapshot),
     loadWorkflow: vi.fn(async () => ({ workflow: {}, tasks: [] })),
     deleteAllWorkflows: vi.fn(async () => {}),
     deleteAllWorkflowsBulk: vi.fn(async () => {}),
@@ -201,12 +201,20 @@ export function createMockInvoker(
 
   function setTasks(tasks: TaskState[], workflows?: WorkflowMeta[]) {
     taskSnapshot = tasks;
-    if (workflows) workflowSnapshot = workflows;
-
-    // Fire created graph events for each task
-    for (const task of tasks) {
-      graphEventCallback?.({ type: 'delta', delta: { type: 'created', task } });
+    if (workflows) {
+      workflowSnapshot = workflows;
     }
+
+    queueMicrotask(() => {
+      if (workflows) {
+        workflowsCallback?.(workflows);
+      }
+
+      // Fire created graph events for each task after subscribers attach.
+      for (const task of tasks) {
+        graphEventCallback?.({ type: 'delta', delta: { type: 'created', task } });
+      }
+    });
   }
 
   function fireDelta(delta: TaskDelta) {
