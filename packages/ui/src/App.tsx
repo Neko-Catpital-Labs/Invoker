@@ -1332,8 +1332,8 @@ export function App() {
   }, [contextMenu, focusKeyboardRegion, workflowContextMenu]);
 
   const handleRefresh = useCallback(async () => {
-    await refreshTasks(true);
     setGraphRefreshSequence((sequence) => sequence + 1);
+    await refreshTasks(true);
   }, [refreshTasks]);
 
   // ── Plan loading ──────────────────────────────────────────
