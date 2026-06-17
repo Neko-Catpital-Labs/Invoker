@@ -794,12 +794,9 @@ test.describe('Visual proof capture', () => {
     await workflowNode(page, workflowId).dispatchEvent('click', { bubbles: true });
     await expect(page.getByTestId('inspector-pr-link')).toHaveAttribute('href', reviewUrl);
 
-    // Tab from the workflow graph to the task graph, then into the inspector.
     await page.keyboard.press('Tab');
     await page.keyboard.press('Tab');
 
-    // The inspector is a real keyboard destination: focus lands on the first
-    // marked sidebar item (the Minimize control), not the region container.
     const inspectorRegion = page.locator('[data-keyboard-region="inspector"]');
     const minimize = page.getByRole('button', { name: 'Minimize inspector' });
     await expect(minimize).toBeFocused({ timeout: 5000 });

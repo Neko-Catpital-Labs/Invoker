@@ -715,10 +715,6 @@ export function App() {
     requestAnimationFrame(() => {
       const root = document.querySelector<HTMLElement>(`[data-keyboard-region="${region}"]`);
       if (!root) return;
-      // The inspector is a real keyboard destination: Tab into it lands on the
-      // first ordered sidebar navigation item (e.g. Minimize, PR link, Advanced),
-      // not just the region container. The inspector declares the order on each
-      // item so keyboard traversal is independent of incidental DOM position.
       if (region === 'inspector') {
         const [firstNavItem] = getOrderedSidebarNavItems(root);
         (firstNavItem ?? root).focus();
@@ -991,12 +987,6 @@ export function App() {
       }
 
       if (keyboardRegion === 'inspector') {
-        // Roving focus across the explicitly-marked sidebar navigation items.
-        // The editable-target guard above already lets native inputs/selects
-        // keep their own arrow behavior; here Up/Down only move focus between
-        // markers (no wrapping) and never activate a link. Right toggles a
-        // focused expandable item (the Advanced metadata disclosure). Enter and
-        // Space are left to normal browser activation on the focused control.
         const root = document.querySelector<HTMLElement>('[data-keyboard-region="inspector"]');
         if (!root) return;
         const navItems = getOrderedSidebarNavItems(root);

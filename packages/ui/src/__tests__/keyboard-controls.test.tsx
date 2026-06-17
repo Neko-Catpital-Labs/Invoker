@@ -155,24 +155,19 @@ describe('Side rail controls (component)', () => {
     key('Tab');
     key('Tab');
 
-    // Tab into the inspector lands on the first marked sidebar item, not the
-    // region container.
     const minimize = screen.getByLabelText('Minimize inspector');
     await waitFor(() => expect(minimize).toHaveFocus());
     expect(minimize).toHaveAttribute('data-sidebar-nav-item');
     expect(minimize).toHaveAttribute('data-sidebar-nav-order', '10');
 
-    // With no task selected the visible items are [Minimize, Advanced metadata].
     const advanced = screen.getByTestId('inspector-advanced-disclosure');
     expect(advanced).toHaveAttribute('data-sidebar-nav-order', '90');
     key('ArrowDown');
     await waitFor(() => expect(advanced).toHaveFocus());
 
-    // ArrowDown stops on the last item (no wrap back to the first).
     key('ArrowDown');
     expect(advanced).toHaveFocus();
 
-    // ArrowUp returns to the first item and stops there (no wrap to the last).
     key('ArrowUp');
     await waitFor(() => expect(minimize).toHaveFocus());
     key('ArrowUp');
@@ -180,8 +175,6 @@ describe('Side rail controls (component)', () => {
   });
 
   it('makes the sidebar a keyboard destination: first item, PR link without opening, no wrap, Right toggles Advanced', async () => {
-    // A review-ready workflow whose merge node carries a PR URL, so the
-    // inspector renders the Pull Request link as a sidebar navigation item.
     const reviewWorkflows: WorkflowMeta[] = [
       { id: 'wf-pr', name: 'Review Workflow', status: 'review_ready' },
     ];
@@ -198,7 +191,6 @@ describe('Side rail controls (component)', () => {
       }),
     ];
 
-    // Arrow navigation must only highlight the PR link; it must never follow it.
     const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
     try {
       mock.setTasks(reviewTasks, reviewWorkflows);
@@ -206,11 +198,9 @@ describe('Side rail controls (component)', () => {
       await screen.findByTestId('workflow-node-wf-pr');
       await screen.findByTestId('selected-workflow-mini-dag');
 
-      // Tab from the workflow graph to the task graph, then into the inspector.
       key('Tab');
       key('Tab');
 
-      // Focus lands on the first marked sidebar item, not just the container.
       const inspectorRegion = document.querySelector('[data-keyboard-region="inspector"]');
       const minimize = screen.getByLabelText('Minimize inspector');
       await waitFor(() => expect(minimize).toHaveFocus());
@@ -218,25 +208,21 @@ describe('Side rail controls (component)', () => {
       expect(minimize).toHaveAttribute('data-sidebar-nav-order', '10');
       expect(document.activeElement).not.toBe(inspectorRegion);
 
-      // Visible items are [Minimize, Pull Request link, Advanced metadata].
       const prLink = screen.getByTestId('inspector-pr-link');
       const advanced = screen.getByTestId('inspector-advanced-disclosure');
       expect(prLink).toHaveAttribute('data-sidebar-nav-order', '30');
       expect(advanced).toHaveAttribute('data-sidebar-nav-order', '90');
 
-      // ArrowDown reaches the PR link and only focuses it — no open/navigation.
       key('ArrowDown');
       await waitFor(() => expect(prLink).toHaveFocus());
       expect(document.activeElement).toBe(prLink);
       expect(openSpy).not.toHaveBeenCalled();
 
-      // ArrowDown stops on the last item (no wrap back to the first).
       key('ArrowDown');
       await waitFor(() => expect(advanced).toHaveFocus());
       key('ArrowDown');
       expect(advanced).toHaveFocus();
 
-      // ArrowUp roves back and stops on the first item (no wrap to the last).
       key('ArrowUp');
       await waitFor(() => expect(prLink).toHaveFocus());
       key('ArrowUp');
@@ -244,7 +230,6 @@ describe('Side rail controls (component)', () => {
       key('ArrowUp');
       expect(minimize).toHaveFocus();
 
-      // Right toggles the focused expandable item (Advanced metadata).
       key('ArrowDown');
       key('ArrowDown');
       await waitFor(() => expect(advanced).toHaveFocus());
@@ -255,7 +240,6 @@ describe('Side rail controls (component)', () => {
       await waitFor(() => expect(advanced).toHaveAttribute('aria-expanded', 'true'));
       expect(screen.getByText(/workflow id:/)).toBeInTheDocument();
 
-      // No arrow interaction ever opened the PR link.
       expect(openSpy).not.toHaveBeenCalled();
     } finally {
       openSpy.mockRestore();
@@ -371,13 +355,6 @@ describe('Side rail controls (component)', () => {
   });
 });
 
-/**
- * Sidebar keyboard navigation. A review-ready workflow whose merge node carries
- * a reviewUrl renders a Pull Request link in the inspector. These prove the
- * inspector is a real keyboard destination: Tab lands on the first sidebar item,
- * Up/Down rove without wrapping, arrow focus never opens the PR link, and Right
- * toggles the focused Advanced metadata disclosure.
- */
 describe('Sidebar keyboard navigation (component)', () => {
   let mock: MockInvoker;
 
@@ -422,7 +399,6 @@ describe('Sidebar keyboard navigation (component)', () => {
     render(<App />);
     await screen.findByTestId('workflow-node-wf-r');
     await screen.findByTestId('selected-workflow-mini-dag');
-    // The review-ready merge node surfaces the PR link in the inspector.
     await screen.findByTestId('inspector-pr-link');
   }
 
@@ -431,23 +407,19 @@ describe('Sidebar keyboard navigation (component)', () => {
     try {
       await renderReviewFixture();
 
-      // workflowGraph -> taskGraph -> inspector.
       key('Tab');
       key('Tab');
 
-      // Focus lands on the first marked sidebar item, not the region container.
       const minimize = screen.getByLabelText('Minimize inspector');
       await waitFor(() => expect(minimize).toHaveFocus());
       expect(document.querySelector('[data-keyboard-region="inspector"]')).not.toHaveFocus();
       expect(minimize).toHaveAttribute('data-sidebar-nav-order', '10');
 
-      // ArrowDown roves down to the Pull Request link.
       const prLink = screen.getByTestId('inspector-pr-link');
       expect(prLink).toHaveAttribute('data-sidebar-nav-order', '30');
       key('ArrowDown');
       await waitFor(() => expect(prLink).toHaveFocus());
 
-      // Arrow navigation only focuses — it must not open the PR link.
       expect(openSpy).not.toHaveBeenCalled();
       expect(prLink).toHaveFocus();
     } finally {
@@ -469,16 +441,13 @@ describe('Sidebar keyboard navigation (component)', () => {
     expect(prLink).toHaveAttribute('data-sidebar-nav-order', '30');
     expect(advanced).toHaveAttribute('data-sidebar-nav-order', '90');
 
-    // Visible items are [Minimize, PR link, Advanced metadata].
     key('ArrowDown');
     await waitFor(() => expect(prLink).toHaveFocus());
     key('ArrowDown');
     await waitFor(() => expect(advanced).toHaveFocus());
-    // Last item: ArrowDown does not wrap back to the first.
     key('ArrowDown');
     expect(advanced).toHaveFocus();
 
-    // Walk back up and stop on the first item.
     key('ArrowUp');
     await waitFor(() => expect(prLink).toHaveFocus());
     key('ArrowUp');
@@ -496,18 +465,15 @@ describe('Sidebar keyboard navigation (component)', () => {
     const advanced = screen.getByTestId('inspector-advanced-disclosure');
     await waitFor(() => expect(screen.getByLabelText('Minimize inspector')).toHaveFocus());
 
-    // Rove down to the Advanced metadata disclosure.
     key('ArrowDown');
     key('ArrowDown');
     await waitFor(() => expect(advanced).toHaveFocus());
     expect(advanced).toHaveAttribute('aria-expanded', 'false');
 
-    // Right expands it.
     key('ArrowRight');
     await waitFor(() => expect(advanced).toHaveAttribute('aria-expanded', 'true'));
     expect(screen.getByText(/workflow id:/)).toBeInTheDocument();
 
-    // Right again collapses it.
     key('ArrowRight');
     await waitFor(() => expect(advanced).toHaveAttribute('aria-expanded', 'false'));
   });
