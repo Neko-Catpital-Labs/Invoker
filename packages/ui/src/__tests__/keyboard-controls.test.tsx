@@ -160,9 +160,11 @@ describe('Side rail controls (component)', () => {
     const minimize = screen.getByLabelText('Minimize inspector');
     await waitFor(() => expect(minimize).toHaveFocus());
     expect(minimize).toHaveAttribute('data-sidebar-nav-item');
+    expect(minimize).toHaveAttribute('data-sidebar-nav-order', '10');
 
     // With no task selected the visible items are [Minimize, Advanced metadata].
     const advanced = screen.getByTestId('inspector-advanced-disclosure');
+    expect(advanced).toHaveAttribute('data-sidebar-nav-order', '90');
     key('ArrowDown');
     await waitFor(() => expect(advanced).toHaveFocus());
 
@@ -213,11 +215,14 @@ describe('Side rail controls (component)', () => {
       const minimize = screen.getByLabelText('Minimize inspector');
       await waitFor(() => expect(minimize).toHaveFocus());
       expect(minimize).toHaveAttribute('data-sidebar-nav-item');
+      expect(minimize).toHaveAttribute('data-sidebar-nav-order', '10');
       expect(document.activeElement).not.toBe(inspectorRegion);
 
       // Visible items are [Minimize, Pull Request link, Advanced metadata].
       const prLink = screen.getByTestId('inspector-pr-link');
       const advanced = screen.getByTestId('inspector-advanced-disclosure');
+      expect(prLink).toHaveAttribute('data-sidebar-nav-order', '30');
+      expect(advanced).toHaveAttribute('data-sidebar-nav-order', '90');
 
       // ArrowDown reaches the PR link and only focuses it — no open/navigation.
       key('ArrowDown');
@@ -434,9 +439,11 @@ describe('Sidebar keyboard navigation (component)', () => {
       const minimize = screen.getByLabelText('Minimize inspector');
       await waitFor(() => expect(minimize).toHaveFocus());
       expect(document.querySelector('[data-keyboard-region="inspector"]')).not.toHaveFocus();
+      expect(minimize).toHaveAttribute('data-sidebar-nav-order', '10');
 
       // ArrowDown roves down to the Pull Request link.
       const prLink = screen.getByTestId('inspector-pr-link');
+      expect(prLink).toHaveAttribute('data-sidebar-nav-order', '30');
       key('ArrowDown');
       await waitFor(() => expect(prLink).toHaveFocus());
 
@@ -458,6 +465,9 @@ describe('Sidebar keyboard navigation (component)', () => {
     const prLink = screen.getByTestId('inspector-pr-link');
     const advanced = screen.getByTestId('inspector-advanced-disclosure');
     await waitFor(() => expect(minimize).toHaveFocus());
+    expect(minimize).toHaveAttribute('data-sidebar-nav-order', '10');
+    expect(prLink).toHaveAttribute('data-sidebar-nav-order', '30');
+    expect(advanced).toHaveAttribute('data-sidebar-nav-order', '90');
 
     // Visible items are [Minimize, PR link, Advanced metadata].
     key('ArrowDown');

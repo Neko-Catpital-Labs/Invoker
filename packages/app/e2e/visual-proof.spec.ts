@@ -805,6 +805,7 @@ test.describe('Visual proof capture', () => {
     await expect(minimize).toBeFocused({ timeout: 5000 });
     const isMarkedNavItem = await minimize.evaluate((el) => el.hasAttribute('data-sidebar-nav-item'));
     expect(isMarkedNavItem).toBe(true);
+    await expect(minimize).toHaveAttribute('data-sidebar-nav-order', '10');
     const regionFocused = await inspectorRegion.evaluate(
       (el) => el === document.activeElement,
     );

@@ -65,6 +65,7 @@ type SearchResult =
   | { kind: 'task'; id: string; workflowId: string | null; title: string; subtitle: string };
 
 const KEYBOARD_REGION_ORDER: readonly KeyboardRegion[] = ['workflowGraph', 'taskGraph', 'inspector', 'bottomBar'];
+const SIDEBAR_NAV_ITEM_SELECTOR = '[data-sidebar-nav-item]';
 const STATUS_KEY_ORDER: readonly string[] = [
   'completed',
   'running',
@@ -86,6 +87,21 @@ const EDITABLE_SELECTOR = [
   '[role="dialog"] input',
   '[role="dialog"] textarea',
 ].join(',');
+
+function sidebarNavOrder(item: HTMLElement): number {
+  const order = Number(item.dataset.sidebarNavOrder);
+  return Number.isFinite(order) ? order : Number.POSITIVE_INFINITY;
+}
+
+function getOrderedSidebarNavItems(root: ParentNode): HTMLElement[] {
+  return [...root.querySelectorAll<HTMLElement>(SIDEBAR_NAV_ITEM_SELECTOR)].sort((a, b) => {
+    const aOrder = sidebarNavOrder(a);
+    const bOrder = sidebarNavOrder(b);
+    if (aOrder !== bOrder) return aOrder < bOrder ? -1 : 1;
+    if (a === b) return 0;
+    return a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+  });
+}
 
 function isEditableKeyboardTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -700,11 +716,11 @@ export function App() {
       const root = document.querySelector<HTMLElement>(`[data-keyboard-region="${region}"]`);
       if (!root) return;
       // The inspector is a real keyboard destination: Tab into it lands on the
-      // first visible sidebar navigation item (e.g. the Pull Request link),
-      // not just the region container. Fall back to the container when no
-      // navigation items are rendered.
+      // first ordered sidebar navigation item (e.g. Minimize, PR link, Advanced),
+      // not just the region container. The inspector declares the order on each
+      // item so keyboard traversal is independent of incidental DOM position.
       if (region === 'inspector') {
-        const firstNavItem = root.querySelector<HTMLElement>('[data-sidebar-nav-item]');
+        const [firstNavItem] = getOrderedSidebarNavItems(root);
         (firstNavItem ?? root).focus();
         return;
       }
@@ -981,9 +997,9 @@ export function App() {
         // markers (no wrapping) and never activate a link. Right toggles a
         // focused expandable item (the Advanced metadata disclosure). Enter and
         // Space are left to normal browser activation on the focused control.
-        const navItems = [
-          ...document.querySelectorAll<HTMLElement>('[data-keyboard-region="inspector"] [data-sidebar-nav-item]'),
-        ];
+        const root = document.querySelector<HTMLElement>('[data-keyboard-region="inspector"]');
+        if (!root) return;
+        const navItems = getOrderedSidebarNavItems(root);
         if (navItems.length === 0) return;
         const activeIndex = navItems.findIndex((item) => item === document.activeElement);
         if (event.key === 'ArrowDown') {

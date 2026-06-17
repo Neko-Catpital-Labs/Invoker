@@ -155,6 +155,7 @@ export function WorkflowInspector({
           onClick={onToggleCollapsed}
           aria-label="Maximize inspector"
           data-sidebar-nav-item
+          data-sidebar-nav-order="10"
           className="rounded border border-gray-700 px-2 py-1 text-xs text-gray-300 hover:bg-gray-800"
         >
           Show
@@ -176,6 +177,7 @@ export function WorkflowInspector({
           onClick={onToggleCollapsed}
           aria-label="Minimize inspector"
           data-sidebar-nav-item
+          data-sidebar-nav-order="10"
           className="rounded border border-gray-700 px-2 py-1 text-[11px] text-gray-300 hover:bg-gray-800"
         >
           Minimize
@@ -330,6 +332,7 @@ export function WorkflowInspector({
                 onDoubleClickCapture={startEditingPromptOrCommand}
                 data-testid="command-display"
                 data-sidebar-nav-item
+                data-sidebar-nav-order="20"
                 tabIndex={0}
               >
                 <div data-testid="prompt-command-display" onClick={startEditingPromptOrCommand} onDoubleClick={startEditingPromptOrCommand}>
@@ -353,6 +356,7 @@ export function WorkflowInspector({
               rel="noreferrer"
               data-testid="inspector-pr-link"
               data-sidebar-nav-item
+              data-sidebar-nav-order="30"
               className="mt-1 block text-xs text-blue-300 underline break-all"
             >
               {reviewUrl}
@@ -365,6 +369,7 @@ export function WorkflowInspector({
             onClick={onToggleAdvanced}
             data-testid="inspector-advanced-disclosure"
             data-sidebar-nav-item
+            data-sidebar-nav-order="90"
             data-sidebar-expandable="true"
             aria-expanded={advancedExpanded}
             className="w-full px-3 py-2 text-left text-[11px] uppercase tracking-wide text-gray-300 hover:bg-gray-800"
