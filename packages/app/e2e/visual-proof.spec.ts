@@ -769,6 +769,48 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'review-ready-workflow-pr-sidebar');
   });
 
+  test('sidebar keyboard navigation focuses the first inspector item, not the container', async ({ page }) => {
+    const workflowId = await loadPlanAndSelectWorkflow(page, REVIEW_READY_WORKFLOW_PR_PLAN);
+    await page.locator('.react-flow__node[data-testid$="rr-work"]').first().waitFor({ state: 'visible', timeout: 15000 });
+
+    const reviewUrl = 'https://github.com/Neko-Catpital-Labs/Invoker/pull/729';
+    await injectTaskStates(page, [
+      {
+        taskId: 'rr-work',
+        changes: {
+          status: 'completed',
+          execution: { startedAt: new Date(Date.now() - 5000), completedAt: new Date() },
+        },
+      },
+      {
+        taskId: `__merge__${workflowId}`,
+        changes: {
+          status: 'review_ready',
+          execution: { startedAt: new Date(Date.now() - 3000), reviewUrl },
+        },
+      },
+    ]);
+
+    await workflowNode(page, workflowId).dispatchEvent('click', { bubbles: true });
+    await expect(page.getByTestId('inspector-pr-link')).toHaveAttribute('href', reviewUrl);
+
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Tab');
+
+    const inspectorRegion = page.locator('[data-keyboard-region="inspector"]');
+    const minimize = page.getByRole('button', { name: 'Minimize inspector' });
+    await expect(minimize).toBeFocused({ timeout: 5000 });
+    const isMarkedNavItem = await minimize.evaluate((el) => el.hasAttribute('data-sidebar-nav-item'));
+    expect(isMarkedNavItem).toBe(true);
+    await expect(minimize).toHaveAttribute('data-sidebar-nav-order', '10');
+    const regionFocused = await inspectorRegion.evaluate(
+      (el) => el === document.activeElement,
+    );
+    expect(regionFocused).toBe(false);
+
+    await captureScreenshot(page, 'sidebar-keyboard-first-item-focused');
+  });
+
   test('interactive-status-hues — fixing-with-ai, needs-input, awaiting-approval', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     const now = new Date();
