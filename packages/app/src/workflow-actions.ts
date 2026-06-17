@@ -973,44 +973,12 @@ export function selectFailureRecoveryRoute(
   return { kind: 'recreateWorkflowFromFreshBase', workflowId };
 }
 
-function tailText(value: unknown, maxChars: number = 2000): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  if (value.length <= maxChars) return value;
-  return value.slice(-maxChars);
-}
-
-function formatAutoFixDiagnostics(err: unknown): string | undefined {
-  const e = err as {
-    exitCode?: unknown;
-    cmd?: unknown;
-    args?: unknown;
-    cwd?: unknown;
-    sessionId?: unknown;
-    stdoutTail?: unknown;
-    stderrTail?: unknown;
-  };
-  const parts: string[] = [];
-  if (typeof e.exitCode === 'number') parts.push(`exitCode: ${e.exitCode}`);
-  if (typeof e.cmd === 'string') parts.push(`cmd: ${e.cmd}`);
-  if (Array.isArray(e.args)) parts.push(`args: ${JSON.stringify(e.args)}`);
-  if (typeof e.cwd === 'string') parts.push(`cwd: ${e.cwd}`);
-  if (typeof e.sessionId === 'string') parts.push(`sessionId: ${e.sessionId}`);
-  const stderrTail = tailText(e.stderrTail);
-  if (stderrTail) parts.push(`stderrTail:\n${stderrTail}`);
-  const stdoutTail = tailText(e.stdoutTail);
-  if (stdoutTail) parts.push(`stdoutTail:\n${stdoutTail}`);
-  if (parts.length === 0) return undefined;
-  return parts.join('\n');
-}
-
 type AutoFixAgentSelection = {
   selectedAgent: string;
   selectedAgentSource: 'config' | 'default';
   configuredAutoFixAgent?: string;
   fallbackChain: string;
 };
-
-type AutoFixPostRouteStrategy = 'rerun_task' | 'resume_from_fixed_tip';
 
 function resolveAutoFixAgent(
   configuredAutoFixAgent: string | undefined,
@@ -1030,10 +998,6 @@ function resolveAutoFixAgent(
     configuredAutoFixAgent: undefined,
     fallbackChain: 'config(empty)->default',
   };
-}
-
-function selectAutoFixPostRouteStrategy(task: TaskState): AutoFixPostRouteStrategy {
-  return task.config.isMergeNode ? 'resume_from_fixed_tip' : 'rerun_task';
 }
 
 async function recordFixedIntegrationAnchor(
@@ -1083,203 +1047,6 @@ async function recordFixedIntegrationAnchor(
       workspacePath,
       error: err instanceof Error ? err.message : String(err),
     });
-  }
-}
-
-/**
- * Automatically fix a failed task with an AI agent and restart it.
- * Increments autoFixAttempts; respects the max budget from shouldAutoFix().
- */
-export async function autoFixOnFailure(
-  taskId: string,
-  deps: {
-    orchestrator: Orchestrator;
-    persistence: SQLiteAdapter;
-    taskExecutor: TaskRunner;
-    getAutoFixAgent?: () => string | undefined;
-    getAutoApproveAIFixes?: () => boolean | undefined;
-    signal?: AbortSignal;
-  },
-  inlineRetryDepth = 0,
-): Promise<void> {
-  const { orchestrator, persistence, taskExecutor } = deps;
-  if (!orchestrator.shouldAutoFix(taskId)) return;
-
-  const task = orchestrator.getTask(taskId);
-  if (!task || task.status !== 'failed') return;
-
-  const entryLineage = captureTaskLineage(taskId, orchestrator);
-  assertLineageCurrent(entryLineage, orchestrator, deps.signal);
-  const attempts = (task.execution.autoFixAttempts ?? 0) + 1;
-  const max = orchestrator.getAutoFixRetryBudget(taskId);
-  const savedError = task.execution.error ?? '';
-  const recoveryRoute = selectFailureRecoveryRoute(task, savedError);
-  console.log(`[auto-fix] "${taskId}" attempt ${attempts}/${max}`);
-  persistence.logEvent?.(taskId, 'debug.auto-fix', {
-    phase: 'auto-fix-start',
-    status: task.status,
-    attemptsBefore: task.execution.autoFixAttempts ?? 0,
-    attemptsAfter: attempts,
-    maxRetries: max,
-    hasExecutionError: Boolean(task.execution.error),
-    hasMergeConflict: Boolean(task.execution.mergeConflict),
-  });
-
-  // Increment counter FIRST (before any delta can re-trigger)
-  persistence.updateTask(taskId, { execution: { autoFixAttempts: attempts } });
-
-  const agentSelection = resolveAutoFixAgent(deps.getAutoFixAgent?.());
-  let persistedSavedError: string | undefined;
-  let lineage: TaskLineageSnapshot | undefined;
-  try {
-    persistence.logEvent?.(taskId, 'debug.auto-fix', {
-      phase: 'auto-fix-agent-selected',
-      configuredAutoFixAgent: agentSelection.configuredAutoFixAgent ?? null,
-      selectedAgent: agentSelection.selectedAgent,
-      selectedAgentSource: agentSelection.selectedAgentSource,
-      fallbackChain: agentSelection.fallbackChain,
-    });
-    persistence.appendTaskOutput(
-      taskId,
-      `\n[Auto-fix Agent] selected=${agentSelection.selectedAgent} source=${agentSelection.selectedAgentSource} fallback=${agentSelection.fallbackChain}`,
-    );
-    const route = recoveryRoute.kind;
-    console.log(
-      `[auto-fix-route] task="${taskId}" route=${route} agent=${agentSelection.selectedAgent} source=${agentSelection.selectedAgentSource}`,
-    );
-    persistence.logEvent?.(taskId, 'debug.auto-fix', {
-      phase: 'auto-fix-route-selected',
-      route,
-      agent: agentSelection.selectedAgent,
-      selectedAgentSource: agentSelection.selectedAgentSource,
-      configuredAutoFixAgent: agentSelection.configuredAutoFixAgent ?? null,
-      fallbackChain: agentSelection.fallbackChain,
-      outputLength: recoveryRoute.kind === 'recreateWorkflowFromFreshBase'
-        ? null
-        : persistence.getTaskOutput(taskId).length,
-    });
-    if (recoveryRoute.kind === 'recreateWorkflowFromFreshBase') {
-      persistence.appendTaskOutput(
-        taskId,
-        `\n[Auto-fix] Startup merge conflict detected; recreating workflow ${recoveryRoute.workflowId} from a fresh base.`,
-      );
-      const started = await recreateWorkflowFromFreshBase(recoveryRoute.workflowId, {
-        orchestrator,
-        persistence,
-        taskExecutor,
-      });
-      const runnable = started.filter(isDispatchableLaunch);
-      persistence.logEvent?.(taskId, 'debug.auto-fix', {
-        phase: 'auto-fix-post-route-recreate-workflow',
-        workflowId: recoveryRoute.workflowId,
-        startedCount: started.length,
-        runnableCount: runnable.length,
-        startedStatuses: started.map((candidate) => candidate.status),
-      });
-      if (runnable.length > 0) await taskExecutor.executeTasks(runnable);
-      return;
-    }
-
-    const workspacePath = task.execution.workspacePath?.trim();
-    if (!workspacePath) {
-      const skipReason =
-        `Auto-fix skipped: task "${taskId}" has no valid workspacePath; `
-        + `run recreate-task or recreate-workflow first.`;
-      persistence.logEvent?.(taskId, 'debug.auto-fix', {
-        phase: 'auto-fix-skip-no-workspace',
-        route: recoveryRoute.kind,
-        attempts,
-        maxRetries: max,
-      });
-      persistence.appendTaskOutput(taskId, `\n[Auto-fix] ${skipReason}`);
-      return;
-    }
-
-    ({ savedError: persistedSavedError } = orchestrator.beginConflictResolution(taskId));
-    lineage = captureTaskLineage(taskId, orchestrator);
-    assertLineageCurrent(lineage, orchestrator, deps.signal);
-    persistence.logEvent?.(taskId, 'debug.auto-fix', {
-      phase: 'auto-fix-begin-conflict-resolution',
-      savedErrorLength: persistedSavedError.length,
-    });
-    if (recoveryRoute.kind === 'resolveConflict') {
-      await taskExecutor.resolveConflict(taskId, persistedSavedError, agentSelection.selectedAgent);
-    } else {
-      const output = persistence.getTaskOutput(taskId);
-      await taskExecutor.fixWithAgent(taskId, output, agentSelection.selectedAgent, persistedSavedError);
-    }
-    assertLineageCurrent(lineage, orchestrator, deps.signal);
-    const postRouteStrategy = selectAutoFixPostRouteStrategy(task);
-    persistence.logEvent?.(taskId, 'debug.auto-fix', {
-      phase: 'auto-fix-post-route-strategy-selected',
-      strategy: postRouteStrategy,
-    });
-    if (postRouteStrategy === 'resume_from_fixed_tip') {
-      await recordFixedIntegrationAnchor(taskId, task, {
-        persistence,
-        taskExecutor,
-        orchestrator,
-        lineage,
-        signal: deps.signal,
-      });
-      assertLineageCurrent(lineage, orchestrator, deps.signal);
-      const finalizeResult = await finalizeAppliedFix(taskId, persistedSavedError, {
-        orchestrator,
-        taskExecutor,
-        autoApproveAIFixes: deps.getAutoApproveAIFixes?.() ?? true,
-      }, deps.signal, lineage);
-      persistence.logEvent?.(taskId, 'debug.auto-fix', {
-        phase: 'auto-fix-post-route-finalize',
-        autoApproved: finalizeResult.autoApproved,
-        startedCount: finalizeResult.started.length,
-        startedStatuses: finalizeResult.started.map((t) => t.status),
-      });
-      const latestTask = orchestrator.getTask(taskId);
-      if (latestTask?.status === 'failed' && orchestrator.shouldAutoFix(taskId) && inlineRetryDepth < 1) {
-        persistence.logEvent?.(taskId, 'debug.auto-fix', {
-          phase: 'auto-fix-post-route-inline-retry',
-          reason: 'post-fix-publish-failed',
-          inlineRetryDepth,
-          latestError: latestTask.execution.error ?? null,
-        });
-        await autoFixOnFailure(taskId, deps, inlineRetryDepth + 1);
-      }
-      return;
-    }
-    assertLineageCurrent(lineage, orchestrator, deps.signal);
-    const started = orchestrator.retryTask(taskId);
-    const runnable = started.filter(isDispatchableLaunch);
-    persistence.logEvent?.(taskId, 'debug.auto-fix', {
-      phase: 'auto-fix-post-route-restart',
-      startedCount: started.length,
-      runnableCount: runnable.length,
-      startedStatuses: started.map(t => t.status),
-    });
-    if (runnable.length > 0) await taskExecutor.executeTasks(runnable);
-  } catch (err) {
-    if (err instanceof StaleLineageError) throw err;
-    const msg = err instanceof Error ? err.message : String(err);
-    const diagnostics = formatAutoFixDiagnostics(err);
-    if (lineage) assertLineageCurrent(lineage, orchestrator, deps.signal);
-    persistence.logEvent?.(taskId, 'debug.auto-fix', {
-      phase: 'auto-fix-route-failed',
-      errorType: err instanceof Error ? err.name : typeof err,
-      errorMessage: msg,
-      configuredAutoFixAgent: agentSelection.configuredAutoFixAgent ?? null,
-      selectedAgent: agentSelection.selectedAgent,
-      selectedAgentSource: agentSelection.selectedAgentSource,
-      fallbackChain: agentSelection.fallbackChain,
-      diagnostics: diagnostics ?? null,
-    });
-    if (diagnostics) {
-      persistence.appendTaskOutput(taskId, `\n[Auto-fix Diagnostics]\n${diagnostics}`);
-    }
-    persistence.appendTaskOutput(taskId, `\n[Auto-fix] Agent failed (attempt ${attempts}/${max}): ${msg}`);
-    const detailedMsg = diagnostics ? `${msg}\n\n${diagnostics}` : msg;
-    if (persistedSavedError !== undefined) {
-      if (lineage) assertLineageCurrent(lineage, orchestrator, deps.signal);
-      orchestrator.revertConflictResolution(taskId, persistedSavedError, detailedMsg);
-    }
   }
 }
 

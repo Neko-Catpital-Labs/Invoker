@@ -5,21 +5,25 @@ import type { MessageBus } from '@invoker/transport';
 import { wireHeadlessAutoFix } from '../headless.js';
 
 describe('wireHeadlessAutoFix', () => {
-  it('subscribes auto-fix for failed deltas in generic headless execution paths', async () => {
+  // Failed-task and review-gate CI recovery are now owned by the dedicated
+  // auto-fix worker (`worker autofix`), which reacts to workflow lifecycle
+  // events bridged from task deltas. Headless command processes no longer
+  // recover failed tasks in-process, so wiring auto-fix must NOT install a
+  // hidden TASK_DELTA recovery subscription that duplicates the worker.
+  it('does not schedule fixes off failed deltas; recovery is owned by the worker', async () => {
     const messageBus = new LocalBus() as MessageBus;
-    const shouldAutoFix = vi.fn((taskId: string) => taskId === 'wf-1/task-1');
-    const invokeAutoFix = vi.fn(async () => {});
-    const onError = vi.fn();
+    const subscribe = vi.spyOn(messageBus, 'subscribe');
+    const shouldAutoFix = vi.fn(() => true);
+    const fixWithAgent = vi.fn(async () => {});
+    const resolveConflict = vi.fn(async () => {});
 
     wireHeadlessAutoFix(
       {
         messageBus,
-        orchestrator: { shouldAutoFix } as any,
+        orchestrator: { shouldAutoFix, getTask: vi.fn() } as any,
         persistence: {} as any,
       },
-      {} as any,
-      invokeAutoFix,
-      onError,
+      { executeTasks: vi.fn(), fixWithAgent, resolveConflict } as any,
     );
 
     messageBus.publish(Channels.TASK_DELTA, {
@@ -27,19 +31,28 @@ describe('wireHeadlessAutoFix', () => {
       taskId: 'wf-1/task-1',
       changes: { status: 'failed' },
     });
-    messageBus.publish(Channels.TASK_DELTA, {
-      type: 'updated',
-      taskId: 'wf-1/task-2',
-      changes: { status: 'failed' },
-    });
 
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(shouldAutoFix).toHaveBeenCalledWith('wf-1/task-1');
-    expect(shouldAutoFix).toHaveBeenCalledWith('wf-1/task-2');
-    expect(invokeAutoFix).toHaveBeenCalledTimes(1);
-    expect(invokeAutoFix).toHaveBeenCalledWith('wf-1/task-1');
-    expect(onError).not.toHaveBeenCalled();
+    // No hidden recovery subscription, and no fix executed in-process.
+    expect(subscribe).not.toHaveBeenCalled();
+    expect(shouldAutoFix).not.toHaveBeenCalled();
+    expect(fixWithAgent).not.toHaveBeenCalled();
+    expect(resolveConflict).not.toHaveBeenCalled();
+  });
+
+  it('returns an inert controller with no background work to drive or await', () => {
+    const controller = wireHeadlessAutoFix(
+      {
+        messageBus: new LocalBus() as MessageBus,
+        orchestrator: {} as any,
+        persistence: {} as any,
+      },
+      {} as any,
+    );
+
+    expect(controller.isBusy()).toBe(false);
+    expect(() => controller.unsubscribe()).not.toThrow();
   });
 });
