@@ -65,6 +65,7 @@ type SearchResult =
   | { kind: 'task'; id: string; workflowId: string | null; title: string; subtitle: string };
 
 const KEYBOARD_REGION_ORDER: readonly KeyboardRegion[] = ['workflowGraph', 'taskGraph', 'inspector', 'bottomBar'];
+const SIDEBAR_NAV_ITEM_SELECTOR = '[data-sidebar-nav-item]';
 const STATUS_KEY_ORDER: readonly string[] = [
   'completed',
   'running',
@@ -86,6 +87,21 @@ const EDITABLE_SELECTOR = [
   '[role="dialog"] input',
   '[role="dialog"] textarea',
 ].join(',');
+
+function sidebarNavOrder(item: HTMLElement): number {
+  const order = Number(item.dataset.sidebarNavOrder);
+  return Number.isFinite(order) ? order : Number.POSITIVE_INFINITY;
+}
+
+function getOrderedSidebarNavItems(root: ParentNode): HTMLElement[] {
+  return [...root.querySelectorAll<HTMLElement>(SIDEBAR_NAV_ITEM_SELECTOR)].sort((a, b) => {
+    const aOrder = sidebarNavOrder(a);
+    const bOrder = sidebarNavOrder(b);
+    if (aOrder !== bOrder) return aOrder < bOrder ? -1 : 1;
+    if (a === b) return 0;
+    return a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+  });
+}
 
 function isEditableKeyboardTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -702,7 +718,14 @@ export function App() {
       setPreviousGraphRegion(region);
     }
     requestAnimationFrame(() => {
-      document.querySelector<HTMLElement>(`[data-keyboard-region="${region}"]`)?.focus();
+      const root = document.querySelector<HTMLElement>(`[data-keyboard-region="${region}"]`);
+      if (!root) return;
+      if (region === 'inspector') {
+        const [firstNavItem] = getOrderedSidebarNavItems(root);
+        (firstNavItem ?? root).focus();
+        return;
+      }
+      root.focus();
     });
   }, []);
 
@@ -969,15 +992,25 @@ export function App() {
       }
 
       if (keyboardRegion === 'inspector') {
-        if (event.key === 'ArrowLeft') {
+        const root = document.querySelector<HTMLElement>('[data-keyboard-region="inspector"]');
+        if (!root) return;
+        const navItems = getOrderedSidebarNavItems(root);
+        if (navItems.length === 0) return;
+        const activeIndex = navItems.findIndex((item) => item === document.activeElement);
+        if (event.key === 'ArrowDown') {
           event.preventDefault();
-          setInspectorCollapsed(false);
+          const nextIndex = activeIndex < 0 ? 0 : Math.min(navItems.length - 1, activeIndex + 1);
+          navItems[nextIndex]?.focus();
+        } else if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          const prevIndex = activeIndex < 0 ? 0 : Math.max(0, activeIndex - 1);
+          navItems[prevIndex]?.focus();
         } else if (event.key === 'ArrowRight') {
           event.preventDefault();
-          setInspectorCollapsed(true);
-        } else if (event.key === 'Enter') {
-          event.preventDefault();
-          document.querySelector<HTMLElement>('[data-keyboard-region="inspector"] button, [data-keyboard-region="inspector"] select, [data-keyboard-region="inspector"] input')?.focus();
+          const active = activeIndex >= 0 ? navItems[activeIndex] : null;
+          if (active?.dataset.sidebarExpandable === 'true') {
+            active.click();
+          }
         }
         return;
       }
