@@ -1978,8 +1978,8 @@ export class TaskRunner {
       ? resolve(process.env.INVOKER_DB_DIR)
       : resolve(homedir(), '.invoker');
     const mergeCloneRoot = resolve(invokerHomeRoot, 'merge-clones');
-    const clonePath = resolve(mergeCloneRoot, `${label}-${Date.now()}`);
     mkdirSync(mergeCloneRoot, { recursive: true });
+    const clonePath = mkdtempSync(resolve(mergeCloneRoot, `${label}-`));
 
     // Determine clone source: prefer pool mirror (has latest remote refs), fall back to host repo
     let cloneSource: string = this.cwd;
