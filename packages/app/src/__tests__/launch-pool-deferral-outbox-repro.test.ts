@@ -33,7 +33,6 @@ async function makeHarness(name: string): Promise<Harness> {
     messageBus: new InMemoryBus(),
     maxConcurrency: 1,
     deferRunningUntilLaunch: true,
-    launchOutboxMode: 'active',
   });
   const harness = { dir, persistence, orchestrator };
   harnesses.push(harness);
@@ -116,7 +115,6 @@ async function runPoolDeferralScenario(options: { completeDeferredDispatch: bool
       },
     }),
     ownerId: 'pool-owner',
-    mode: 'active',
     maxLeasesPerPoll: 1,
   });
 
