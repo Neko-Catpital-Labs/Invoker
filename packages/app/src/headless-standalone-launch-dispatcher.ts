@@ -15,9 +15,8 @@ interface StandaloneLaunchDispatcherOptions {
 
 export function startStandaloneLaunchDispatcher(
   options: StandaloneLaunchDispatcherOptions,
-): StandaloneLaunchDispatcherController | null {
+): StandaloneLaunchDispatcherController {
   const { headlessDeps, ownerId, createTaskExecutor, setLatestTaskExecutor } = options;
-  if (headlessDeps.invokerConfig.launchOutboxMode !== 'active') return null;
 
   const originalProvider = headlessDeps.ownerTaskRunnerProvider;
   headlessDeps.ownerTaskRunnerProvider = undefined;
@@ -43,7 +42,6 @@ export function startStandaloneLaunchDispatcher(
     taskRunnerProvider: () => executor,
     ownerId,
     logger: headlessDeps.logger,
-    mode: 'active',
   });
 
   const poll = (): void => {

@@ -42,7 +42,7 @@ echo "==> app launch dispatcher readiness gates"
     --reporter verbose \
     --exclude '**/node_modules/**' \
     src/__tests__/launch-dispatcher.test.ts \
-    -t 'active mode abandons a dispatch row when the selected attempt changed after lease|active mode abandons the dispatch when readiness is blocked|active mode abandons the dispatch when the orchestrator has no matching task'
+    -t 'abandons a dispatch row when the selected attempt changed after lease|abandons the dispatch when readiness is blocked|abandons the dispatch when the orchestrator has no matching task'
 )
 
 echo

@@ -417,16 +417,18 @@ The new architecture can be rolled in incrementally behind a feature flag. Four 
 3. Add `LaunchDispatcher` as a passive observer that reads the outbox and logs but takes no action.
 4. Add the regression-repro test that asserts the launch-claimed → terminal-event invariant. It will fail; we accept that failure as the baseline.
 
-This phase ships with `INVOKER_LAUNCH_OUTBOX=observe`. No code path is replaced. We gather production data on `attempts_count`, lease expiry rates, and `fenced_until` distributions.
+This phase originally shipped as an observer before task launching moved to the
+durable outbox.
 
-**Phase B — Outbox owns dispatch behind a flag.**
+**Phase B — Outbox owns dispatch.**
 
-1. `LaunchDispatcher.poll()` becomes the active dispatcher when `INVOKER_LAUNCH_OUTBOX=active`.
-2. `global-topup.ts:dispatchTasks` is changed to a no-op when the flag is on (the outbox is the dispatcher).
-3. The `[launch-stall]` watchdog in `main.ts` becomes a no-op when the flag is on.
-4. `createHeadlessExecutor`'s `TaskRunner` is replaced by an outbox enqueue when the flag is on.
+1. `LaunchDispatcher.poll()` becomes the active dispatcher.
+2. `global-topup.ts:dispatchTasks` becomes a no-op; the outbox is the dispatcher.
+3. The `[launch-stall]` watchdog in `main.ts` becomes obsolete.
+4. Headless execution reuses the owner TaskRunner for launch-dispatch handoff.
 
-We run with `INVOKER_LAUNCH_OUTBOX=active` in dogfood for one week. Backout is `INVOKER_LAUNCH_OUTBOX=observe`.
+The rollout flag was removed after dogfood. The durable outbox is now the only
+launch path.
 
 **Phase C — Cleanup.**
 
