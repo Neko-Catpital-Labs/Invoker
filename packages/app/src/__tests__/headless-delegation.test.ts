@@ -509,8 +509,8 @@ describe('headless delegation enforcement', () => {
           .rejects.toThrow(/not allowed/);
       });
 
-      it('headless set mutations dispatch runnable tasks before waiting for completion', async () => {
-        let taskStatus: 'running' | 'completed' = 'running';
+      it('headless set mutations accept runnable tasks without direct executor dispatch', async () => {
+        let taskStatus: 'running' | 'completed' = 'completed';
         mockDeps.persistence.listWorkflows = vi.fn(() => [{
           id: 'wf-1',
           name: 'test-workflow',
@@ -545,19 +545,13 @@ describe('headless delegation enforcement', () => {
         mockDeps.commandService.setTaskExternalGatePolicies = vi.fn(async () => ({ ok: true as const, data: [runnableTask] }));
         const executeTasksSpy = vi
           .spyOn(TaskRunner.prototype, 'executeTasks')
-          .mockImplementation(async () => {
-            taskStatus = 'completed';
-          });
+          .mockResolvedValue(undefined);
 
         await runHeadless(['set', 'command', 'wf-1/task-1', 'echo ok'], mockDeps);
-        taskStatus = 'running';
         await runHeadless(['set', 'executor', 'wf-1/task-1', 'shell'], mockDeps);
-        taskStatus = 'running';
         await runHeadless(['set', 'agent', 'wf-1/task-1', 'codex'], mockDeps);
-        taskStatus = 'running';
         await runHeadless(['set', 'gate-policy', 'wf-1/task-1', 'wf-upstream', 'review_ready'], mockDeps);
 
-        expect(executeTasksSpy).toHaveBeenCalledTimes(4);
         expect(mockDeps.commandService.editTaskCommand).toHaveBeenCalled();
         expect(mockDeps.commandService.editTaskType).toHaveBeenCalled();
         expect(mockDeps.commandService.editTaskAgent).toHaveBeenCalled();
@@ -579,7 +573,7 @@ describe('headless delegation enforcement', () => {
         expect(mockDeps.commandService.replaceTask).not.toHaveBeenCalled();
       });
 
-      it('headless approve waits for downstream runnable tasks to settle', async () => {
+      it('headless approve waits for downstream outbox work to settle', async () => {
         let taskBStatus: 'running' | 'completed' = 'running';
         mockDeps.persistence.listWorkflows = vi.fn(() => [{
           id: 'wf-1',
@@ -625,18 +619,20 @@ describe('headless delegation enforcement', () => {
           config: { workflowId: 'wf-1' },
           execution: {},
         } as any;
-        mockDeps.commandService.approve = vi.fn(async () => ({ ok: true as const, data: [runnableTask] }));
+        mockDeps.commandService.approve = vi.fn(async () => {
+          setTimeout(() => {
+            taskBStatus = 'completed';
+          }, 10);
+          return { ok: true as const, data: [runnableTask] };
+        });
 
         const executeTasksSpy = vi
           .spyOn(TaskRunner.prototype, 'executeTasks')
-          .mockImplementation(async () => {
-            taskBStatus = 'completed';
-          });
+          .mockResolvedValue(undefined);
 
         await runHeadless(['approve', 'wf-1/task-a'], mockDeps);
 
-        expect(executeTasksSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
-        expect(executeTasksSpy).toHaveBeenCalledWith([runnableTask]);
+        expect(executeTasksSpy).not.toHaveBeenCalled();
         expect(mockDeps.commandService.approve).toHaveBeenCalled();
 
         executeTasksSpy.mockRestore();
@@ -752,17 +748,18 @@ describe('headless delegation enforcement', () => {
           config: { workflowId: 'wf-1' },
           execution: {},
         } as any;
-        mockDeps.commandService.approve = vi.fn(async () => ({ ok: true as const, data: [runnableTask] }));
+        mockDeps.commandService.approve = vi.fn(async () => {
+          taskBStatus = 'pending';
+          return { ok: true as const, data: [runnableTask] };
+        });
 
         const executeTasksSpy = vi
           .spyOn(TaskRunner.prototype, 'executeTasks')
-          .mockImplementation(async () => {
-            taskBStatus = 'pending';
-          });
+          .mockResolvedValue(undefined);
 
         await expect(runHeadless(['approve', 'wf-1/task-a'], mockDeps)).resolves.toBeUndefined();
 
-        expect(executeTasksSpy).toHaveBeenCalledTimes(1);
+        expect(executeTasksSpy).not.toHaveBeenCalled();
         expect(mockDeps.orchestrator.getReadyTasks).toHaveBeenCalled();
 
         executeTasksSpy.mockRestore();

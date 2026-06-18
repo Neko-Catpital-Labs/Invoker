@@ -156,7 +156,6 @@ function buildHeadlessApiServerDeps(
       persistence: deps.persistence,
       taskExecutor,
       dispatchMode: deps.mutationTiming ? 'fire-and-forget' : 'await',
-      launchOutboxMode: deps.invokerConfig.launchOutboxMode,
       autoApproveAIFixes: deps.invokerConfig?.autoApproveAIFixes,
       killRunningTask: (taskId: string) => taskExecutor.killActiveExecution(taskId),
       commandService: deps.commandService,
@@ -213,31 +212,15 @@ export function createHeadlessExecutor(
   deps: HeadlessDeps,
   callbackOverrides?: Partial<ConstructorParameters<typeof TaskRunner>[0]['callbacks']>,
 ): TaskRunner {
-  // CB.7: in active launch-outbox mode the owner's long-lived
-  // TaskRunner is the single launch path (it services the
-  // task_launch_dispatch outbox via LaunchDispatcher). Reusing it
-  // eliminates the multi-TaskRunner blindness from Issue 6 — every
-  // headless command shares the same launchingAttemptIds Set so
-  // duplicate-suppression and dispatch-row ack/complete/fail accounting
-  // all stay coherent. callbackOverrides are intentionally ignored on
-  // this path because the owner's TaskRunner already has its own
-  // production callbacks (persistence writes, renderer deltas, etc.);
-  // per-command callbacks would either duplicate that work or fight it.
-  if (deps.invokerConfig.launchOutboxMode === 'active') {
-    const owner = deps.ownerTaskRunnerProvider?.() ?? null;
-    if (owner) {
-      if (callbackOverrides) {
-        deps.logger?.debug?.(
-          '[headless] createHeadlessExecutor: ignoring callbackOverrides — launchOutboxMode=active reuses owner TaskRunner',
-          { module: 'headless' },
-        );
-      }
-      return owner;
+  const owner = deps.ownerTaskRunnerProvider?.() ?? null;
+  if (owner) {
+    if (callbackOverrides) {
+      deps.logger?.debug?.(
+        '[headless] createHeadlessExecutor: ignoring callbackOverrides — reusing owner TaskRunner',
+        { module: 'headless' },
+      );
     }
-    deps.logger?.warn?.(
-      '[headless] createHeadlessExecutor: launchOutboxMode=active but ownerTaskRunnerProvider is unavailable — falling back to per-command TaskRunner',
-      { module: 'headless' },
-    );
+    return owner;
   }
   let executor: TaskRunner;
   executor = new TaskRunner({
@@ -293,10 +276,6 @@ async function dispatchHeadlessRunnableTasks(
   context: string,
 ): Promise<void> {
   if (runnable.length === 0) return;
-  if (deps.invokerConfig.launchOutboxMode !== 'active') {
-    await taskExecutor.executeTasks(runnable);
-    return;
-  }
 
   const dispatcher = new LaunchDispatcher({
     persistence: deps.persistence,
@@ -310,10 +289,9 @@ async function dispatchHeadlessRunnableTasks(
     taskRunnerProvider: () => taskExecutor,
     ownerId: `headless-${process.pid}`,
     logger: deps.logger,
-    mode: 'active',
   });
   deps.logger?.debug?.(
-    `[headless] ${context}: launchOutboxMode=active — polling local launch dispatcher for ${runnable.length} runnable task(s)`,
+    `[headless] ${context}: polling local launch dispatcher for ${runnable.length} runnable task(s)`,
     { module: 'headless' },
   );
   const poll = (): void => {

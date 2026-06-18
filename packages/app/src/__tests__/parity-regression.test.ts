@@ -9,7 +9,7 @@
  *
  * Test groups:
  *   1. Facade dispatch+topup lifecycle — every mutation method
- *      filters runnable tasks, dispatches via taskExecutor, then
+ *      filters runnable tasks, records accepted launches, then
  *      calls startExecution for global topup with deduplication.
  *   2. API server → facade wiring — HTTP endpoints call the correct
  *      facade method and return the structured result.
@@ -146,8 +146,7 @@ describe('Parity: facade dispatch+topup lifecycle', () => {
   });
 
   /**
-   * Every mutation that returns a MutationResult must follow the same
-   * lifecycle: call orchestrator → filter runnable → executeTasks →
+   * lifecycle: call orchestrator → filter runnable →
    * startExecution (topup) → return { started, runnable, topup }.
    */
   const mutationCases: Array<{
@@ -173,8 +172,8 @@ describe('Parity: facade dispatch+topup lifecycle', () => {
       // Correct orchestrator method was called
       expect((deps.orchestrator as any)[orchestratorMethod]).toHaveBeenCalled();
 
-      // Runnable tasks dispatched via executor
-      expect(deps.taskExecutor.executeTasks).toHaveBeenCalled();
+      // Runnable tasks are returned for the durable dispatch outbox.
+      expect(result.runnable.length).toBeGreaterThan(0);
 
       // Global topup invoked (startExecution)
       expect(deps.orchestrator.startExecution).toHaveBeenCalled();
@@ -200,9 +199,7 @@ describe('Parity: facade dispatch+topup lifecycle', () => {
     // Only the running task should be dispatched
     expect(result.runnable).toHaveLength(1);
     expect(result.runnable[0].id).toBe('task-1');
-    expect(deps.taskExecutor.executeTasks).toHaveBeenCalledWith([
-      expect.objectContaining({ id: 'task-1', status: 'running' }),
-    ]);
+    expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
   });
 
   it('topup deduplicates tasks already dispatched in scoped phase', async () => {
@@ -220,7 +217,7 @@ describe('Parity: facade dispatch+topup lifecycle', () => {
     const result = await facade.retryTask('task-1');
 
     // Scoped dispatch happens, but topup should NOT re-dispatch
-    expect(deps.taskExecutor.executeTasks).toHaveBeenCalledTimes(1);
+    expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
     expect(result.topup).toHaveLength(0);
   });
 
@@ -240,8 +237,7 @@ describe('Parity: facade dispatch+topup lifecycle', () => {
 
     const result = await facade.retryTask('task-1');
 
-    // Two dispatch calls: scoped + topup
-    expect(deps.taskExecutor.executeTasks).toHaveBeenCalledTimes(2);
+    expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
     expect(result.topup).toHaveLength(1);
     expect(result.topup[0].id).toBe('wf-2/task-9');
   });
