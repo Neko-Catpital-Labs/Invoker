@@ -181,7 +181,7 @@ import {
 import { shouldSkipAutoFixForError } from './auto-fix-gating.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
-import { LaunchDispatcher, type LaunchDispatcherMode } from './launch-dispatcher.js';
+import { LaunchDispatcher } from './launch-dispatcher.js';
 import { recoverWorkflowMutationsOnStartup } from './workflow-mutation-startup.js';
 import {
   dispatchStartedTasksWithGlobalTopup,
@@ -189,7 +189,6 @@ import {
   finalizeMutationWithGlobalTopup,
   isDispatchableLaunch,
 } from './global-topup.js';
-import { computeDeferredLaunchTiming } from './deferred-runnable.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import { evaluateExecutingStall } from './executing-stall.js';
 import { listOpenFixIntentsForTask } from './auto-fix-intents.js';
@@ -677,7 +676,6 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     defaultPoolId: invokerConfig.defaultPoolId,
     availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
     deferRunningUntilLaunch: true,
-    launchOutboxMode: invokerConfig.launchOutboxMode,
   });
   commandService = new CommandService(
     orchestrator,
@@ -817,9 +815,6 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
       }
       case 'select_experiment': {
         const started = orchestrator.selectExperiment(command.taskId, command.experimentId);
-        if (invokerConfig.launchOutboxMode !== 'active') {
-          await deps.executor.executeTasks(started);
-        }
         break;
       }
       case 'provide_input':
@@ -838,9 +833,6 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
         orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
         const started = orchestrator.startExecution();
         deps.logFn('trace', 'info', `slackBot: startExecution returned ${started.length} tasks: [${started.map((t: any) => t.id).join(', ')}]`);
-        if (invokerConfig.launchOutboxMode !== 'active') {
-          await deps.executor.executeTasks(started);
-        }
         break;
       }
     }
@@ -1023,7 +1015,6 @@ if (isHeadless) {
       const executeStandaloneHeadlessRun = async (payload: HeadlessRunMutationPayload): Promise<unknown> => {
         const { parsePlanFile } = await import('./plan-parser.js');
         const plan = await parsePlanFile(payload.planPath);
-        const executor = createStandaloneTaskExecutor();
         backupPlan(plan, undefined, logger);
         const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
         orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
@@ -1032,26 +1023,16 @@ if (isHeadless) {
           throw new Error(`Failed to resolve workflow id for delegated plan: ${payload.planPath}`);
         }
         const started = orchestrator.startExecution();
-        await executor.executeTasks(started);
         logger.info(`standalone started ${started.length} tasks for workflow "${workflowId}"`, { module: 'ipc-delegate' });
         const tasks = orchestrator.getAllTasks().filter((task) => task.config.workflowId === workflowId);
         return { workflowId, tasks };
       };
 
-      const executeStandaloneResumeStartedTasks = async (
-        executor: ReturnType<typeof createStandaloneTaskExecutor>,
-        started: TaskState[],
-      ): Promise<void> => {
-        if (invokerConfig.launchOutboxMode !== 'active') {
-          await executor.executeTasks(started);
-        }
-      };
 
       const executeStandaloneHeadlessResume = async (payload: HeadlessResumeMutationPayload): Promise<unknown> => {
         const { workflowId } = payload;
-        const executor = createStandaloneTaskExecutor();
         const started = orchestrator.resumeWorkflow(workflowId);
-        await executeStandaloneResumeStartedTasks(executor, started);
+        void started;
         logger.info(`standalone resumed ${started.length} tasks for workflow "${workflowId}"`, { module: 'ipc-delegate' });
         const tasks = orchestrator.getAllTasks().filter((task) => task.config.workflowId === workflowId);
         return { workflowId, tasks };
@@ -1073,7 +1054,6 @@ if (isHeadless) {
               defaultPoolId: invokerConfig.defaultPoolId,
               availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
               deferRunningUntilLaunch: true,
-              launchOutboxMode: invokerConfig.launchOutboxMode,
             });
             commandService = new CommandService(
               orchestrator,
@@ -1094,12 +1074,8 @@ if (isHeadless) {
             orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
             return undefined;
           }
-          case 'invoker:start': {
-            const executor = createStandaloneTaskExecutor();
-            const started = orchestrator.startExecution();
-            await executor.executeTasks(started);
-            return started;
-          }
+          case 'invoker:start':
+            return orchestrator.startExecution();
           case 'invoker:stop': {
             logger.info('stop — destroying all daemon executors', { module: 'ipc-delegate' });
             const failInFlightTasks = (): void => {
@@ -1159,11 +1135,6 @@ if (isHeadless) {
             const envelope = makeEnvelope('replace-task', 'ui', 'task', { taskId, replacementTasks });
             const result = await commandService.replaceTask(envelope);
             if (!result.ok) throw new Error(result.error.message);
-            const runnable = result.data.filter(isDispatchableLaunch);
-            if (runnable.length > 0) {
-              const executor = createStandaloneTaskExecutor();
-              await executor.executeTasks(runnable);
-            }
             return result.data;
           }
           case 'invoker:check-pr-statuses': {
@@ -1189,12 +1160,9 @@ if (isHeadless) {
               const envelope = makeEnvelope('select-experiment', 'ui', 'task', { taskId, experimentId: ids[0] });
               const result = await commandService.selectExperiment(envelope);
               if (!result.ok) throw new Error(result.error.message);
-              const runnable = result.data.filter(isDispatchableLaunch);
-              if (runnable.length > 0) await executor.executeTasks(runnable);
               return undefined;
             }
-            const newlyStarted = await sharedSelectExperiments(taskId, ids, { orchestrator, taskExecutor: executor });
-            await executor.executeTasks(newlyStarted);
+            await sharedSelectExperiments(taskId, ids, { orchestrator, taskExecutor: executor });
             return undefined;
           }
           case 'invoker:set-task-external-gate-policies': {
@@ -1203,11 +1171,6 @@ if (isHeadless) {
             const envelope = makeEnvelope('set-gate-policies', 'ui', 'task', { taskId, updates });
             const result = await commandService.setTaskExternalGatePolicies(envelope);
             if (!result.ok) throw new Error(result.error.message);
-            const runnable = result.data.filter(isDispatchableLaunch);
-            if (runnable.length > 0) {
-              const executor = createStandaloneTaskExecutor();
-              await executor.executeTasks(runnable);
-            }
             return undefined;
           }
           default:
@@ -1553,35 +1516,19 @@ if (isHeadless) {
           orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
           const workflowId = orchestrator.getWorkflowIds().find(id => !wfIdsBefore.has(id))!;
           const started = orchestrator.startExecution();
-          createStandaloneTaskExecutor().executeTasks(started).catch(err => {
-            logger.error(`headless.run: executeTasks failed for "${workflowId}": ${err}`, { module: 'ipc-delegate' });
-          });
           startStandaloneAutoFixRecoveryPoll(workflowId);
           logger.info(`started ${started.length} tasks for workflow "${workflowId}"`, { module: 'ipc-delegate' });
           const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
           return { workflowId, tasks };
         };
 
-        const executeStandaloneResumeStartedTasks = (
-          executor: ReturnType<typeof createStandaloneTaskExecutor>,
-          started: TaskState[],
-          workflowId: string,
-        ): void => {
-          if (started.length > 0 && invokerConfig.launchOutboxMode !== 'active') {
-            executor.executeTasks(started).catch(err => {
-              logger.error(`headless.resume: executeTasks failed for "${workflowId}": ${err}`, { module: 'ipc-delegate' });
-            });
-          }
-        };
 
         const executeStandaloneHeadlessResume = async (
           payload: HeadlessResumeMutationPayload,
         ): Promise<{ workflowId: string; tasks: TaskState[] }> => {
           const { workflowId } = payload;
-          const executor = createStandaloneTaskExecutor();
 
           const allStarted = orchestrator.resumeWorkflow(workflowId);
-          executeStandaloneResumeStartedTasks(executor, allStarted, workflowId);
           const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
           return { workflowId, tasks };
         };
@@ -2346,16 +2293,6 @@ function createEmbeddedTerminalBackendFromConfig(
     return requireWiredTaskRunner(() => taskExecutor);
   }
 
-  function executeHeadlessResumeStartedTasks(
-    started: TaskState[],
-    workflowId: string,
-  ): void {
-    if (started.length > 0 && invokerConfig.launchOutboxMode !== 'active') {
-      requireTaskExecutor().executeTasks(started).catch(err => {
-        logger.error(`headless.resume: executeTasks failed for "${workflowId}": ${err}`, { module: 'ipc-delegate' });
-      });
-    }
-  }
 
   async function executeHeadlessRun(payload: HeadlessRunMutationPayload): Promise<{ workflowId: string; tasks: TaskState[] }> {
     const { parsePlanFile } = await import('./plan-parser.js');
@@ -2366,11 +2303,6 @@ function createEmbeddedTerminalBackendFromConfig(
     orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
     const workflowId = orchestrator.getWorkflowIds().find(id => !wfIdsBefore.has(id))!;
     const started = orchestrator.startExecution();
-    if (invokerConfig.launchOutboxMode !== 'active') {
-      requireTaskExecutor().executeTasks(started).catch(err => {
-        logger.error(`headless.run: executeTasks failed for "${workflowId}": ${err}`, { module: 'ipc-delegate' });
-      });
-    }
     logger.info(`started ${started.length} tasks for workflow "${workflowId}"`, { module: 'ipc-delegate' });
     const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
     return { workflowId, tasks };
@@ -2380,7 +2312,6 @@ function createEmbeddedTerminalBackendFromConfig(
     const { workflowId } = payload;
 
     const allStarted = orchestrator.resumeWorkflow(workflowId);
-    executeHeadlessResumeStartedTasks(allStarted, workflowId);
     const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
     return { workflowId, tasks };
   }
@@ -2425,73 +2356,11 @@ function createEmbeddedTerminalBackendFromConfig(
         if (filteredTasks.length === 0) {
           return;
         }
-        if (invokerConfig.launchOutboxMode === 'active') {
-          logger.info(
-            `deferRunnableTasks accepted by launch outbox workflow="${workflowId ?? 'unknown'}" count=${filteredTasks.length}`,
-            { module: 'ipc-delegate' },
-          );
-          return;
-        }
-        // Keep this path timer-based for now: it is a low-blast-radius, mutation-safe
-        // way to decouple no-track command handling from heavy executor startup while
-        // still coalescing rapid restarts. We are considering an RxJS/backpressure
-        // scheduler refactor for richer queue semantics, but that is a broader design
-        // change than this targeted starvation fix.
-        const deferDelayMs = Number.parseInt(process.env.INVOKER_DEFER_RUNNABLE_DELAY_MS ?? '25', 10) || 25;
-        const maxCoalesceMs = Number.parseInt(
-          process.env.INVOKER_DEFER_RUNNABLE_MAX_COALESCE_MS ?? String(Math.max(1000, deferDelayMs)),
-          10,
-        ) || Math.max(1000, deferDelayMs);
-        const launchKey = workflowId ?? filteredTasks.map((task) => task.id).sort().join('|');
-        const existingLaunch = deferredWorkflowLaunches.get(launchKey);
-        const nowMs = Date.now();
-        const timing = computeDeferredLaunchTiming({
-          existingFirstScheduledAtMs: existingLaunch?.firstScheduledAtMs,
-          nowMs,
-          deferDelayMs,
-          maxCoalesceMs,
-        });
-        if (existingLaunch) {
-          clearTimeout(existingLaunch.timer);
-          logger.info(
-            `deferRunnableTasks coalesce workflow="${workflowId ?? 'unknown'}" previousCount=${existingLaunch.taskIds.length} nextCount=${filteredTasks.length} delayMs=${timing.delayMs} maxCoalesceMs=${maxCoalesceMs}`,
-            { module: 'ipc-delegate' },
-          );
-        }
         logger.info(
-          `deferRunnableTasks schedule workflow="${workflowId ?? 'unknown'}" count=${filteredTasks.length} delayMs=${timing.delayMs} ids=${filteredTasks.map((task) => task.id).join(',')}`,
+          `deferRunnableTasks accepted by launch outbox workflow="${workflowId ?? 'unknown'}" count=${filteredTasks.length}`,
           { module: 'ipc-delegate' },
         );
-        const launch = setTimeout(() => {
-          deferredWorkflowLaunches.delete(launchKey);
-          logger.info(
-            `deferRunnableTasks start workflow="${workflowId ?? 'unknown'}" count=${filteredTasks.length}`,
-            { module: 'ipc-delegate' },
-          );
-          remoteFetchForPool.enabled = false;
-          void requireTaskExecutor().executeTasks(filteredTasks)
-            .then(() => {
-              logger.info(
-                `deferRunnableTasks complete workflow="${workflowId ?? 'unknown'}" count=${filteredTasks.length}`,
-                { module: 'ipc-delegate' },
-              );
-            })
-            .catch((err) => {
-              logger.error(
-                `background delegated workflow execution failed for ${workflowId ?? filteredTasks.map((t) => t.id).join(', ')}: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
-                { module: 'ipc-delegate' },
-              );
-            })
-            .finally(() => {
-              remoteFetchForPool.enabled = true;
-            });
-        }, timing.delayMs);
-        launch.unref?.();
-        deferredWorkflowLaunches.set(launchKey, {
-          timer: launch,
-          taskIds: filteredTasks.map((task) => task.id),
-          firstScheduledAtMs: timing.firstScheduledAtMs,
-        });
+        return;
       },
       executionAgentRegistry: registerBuiltinAgents(),
     });
@@ -2922,7 +2791,6 @@ function createEmbeddedTerminalBackendFromConfig(
           commandService,
           taskExecutor: requireTaskExecutor(),
           autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
-          launchOutboxMode: invokerConfig.launchOutboxMode,
           killRunningTask,
         }),
         queueWorkflowMutation: (workflowId, priority, channel, args, options) => {
@@ -3035,21 +2903,7 @@ function createEmbeddedTerminalBackendFromConfig(
                       },
                     };
                     logger.error(`[executing-stall] forcing failure for "${task.id}": ${executingError}`, { module: 'db-poll' });
-                    const startedAfterFailure = orchestrator.handleWorkerResponse(failedResponse);
-                    const runnableAfterFailure = startedAfterFailure.filter(isDispatchableLaunch);
-                    if (runnableAfterFailure.length > 0 && invokerConfig.launchOutboxMode !== 'active') {
-                      logger.info(
-                        `[executing-stall] dispatching ${runnableAfterFailure.length} task(s) started after failing "${task.id}"`,
-                        { module: 'db-poll' },
-                      );
-                      void requireTaskExecutor().executeTasks(runnableAfterFailure).catch((err) => {
-                        logger.error(
-                          `[executing-stall] executeTasks failed after failing "${task.id}": ` +
-                            `${err instanceof Error ? err.stack ?? err.message : String(err)}`,
-                          { module: 'db-poll' },
-                        );
-                      });
-                    }
+                    orchestrator.handleWorkerResponse(failedResponse);
                     continue;
                   }
                 }
@@ -3187,19 +3041,16 @@ function createEmbeddedTerminalBackendFromConfig(
         },
         { logger },
       );
-      if (invokerConfig.launchOutboxMode && invokerConfig.launchOutboxMode !== 'disabled') {
-        launchDispatcher = new LaunchDispatcher({
-          persistence,
-          orchestrator,
-          // taskExecutor is re-built by rebuildTaskRunner(); read via
-          // a provider so the dispatcher always picks up the current
-          // instance instead of capturing a stale reference.
-          taskRunnerProvider: () => taskExecutor,
-          ownerId: workflowMutationOwnerId,
-          logger,
-          mode: invokerConfig.launchOutboxMode as LaunchDispatcherMode,
-        });
-      }
+      launchDispatcher = new LaunchDispatcher({
+        persistence,
+        orchestrator,
+        // taskExecutor is re-built by rebuildTaskRunner(); read via
+        // a provider so the dispatcher always picks up the current
+        // instance instead of capturing a stale reference.
+        taskRunnerProvider: () => taskExecutor,
+        ownerId: workflowMutationOwnerId,
+        logger,
+      });
     } else {
       logger.info('Launched in follower mode; mutation execution is delegated to the current owner', {
         module: 'init',
@@ -3370,10 +3221,7 @@ function createEmbeddedTerminalBackendFromConfig(
     } else if (invokerConfig.disableAutoRunOnStartup) {
       logger.info('auto-run on startup disabled by config', { module: 'init' });
     } else {
-      const allStarted = orchestrator.startExecution();
-      if (allStarted.length > 0 && invokerConfig.launchOutboxMode !== 'active') {
-        requireTaskExecutor().executeTasks(allStarted);
-      }
+      orchestrator.startExecution();
     }
 
     const dbPath = path.join(resolveInvokerHomeRoot(), 'invoker.db');
@@ -3499,9 +3347,6 @@ function createEmbeddedTerminalBackendFromConfig(
       logger.info('start', { module: 'ipc' });
       const started = orchestrator.startExecution();
       logger.info(`startExecution returned ${started.length} tasks: [${started.map(t => t.id).join(', ')}]`, { module: 'ipc' });
-      if (invokerConfig.launchOutboxMode !== 'active') {
-        await requireTaskExecutor().executeTasks(started);
-      }
       return started;
     });
 
@@ -3527,10 +3372,7 @@ function createEmbeddedTerminalBackendFromConfig(
         }
       }
       logger.info(`resume-workflow: ${tasks.length} tasks loaded across ${workflows.length} workflows, ${allStarted.length} started`, { module: 'ipc' });
-      if (allStarted.length > 0 && invokerConfig.launchOutboxMode !== 'active') {
-        void requireTaskExecutor().executeTasks(allStarted);
-      }
-      if (allStarted.length > 0 && invokerConfig.launchOutboxMode === 'active' && launchDispatcher) {
+      if (allStarted.length > 0 && launchDispatcher) {
         try {
           launchDispatcher.poll();
         } catch (err) {
@@ -3581,7 +3423,6 @@ function createEmbeddedTerminalBackendFromConfig(
         defaultPoolId: invokerConfig.defaultPoolId,
         availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
         deferRunningUntilLaunch: true,
-        launchOutboxMode: invokerConfig.launchOutboxMode,
       });
       commandService = new CommandService(
         orchestrator,
@@ -3744,7 +3585,6 @@ function createEmbeddedTerminalBackendFromConfig(
         started,
         mutationTiming: activeMutationContext?.mutationTiming,
         scopedTaskIds: [taskId],
-        launchOutboxMode: invokerConfig.launchOutboxMode,
       });
       },
     );
@@ -3768,16 +3608,9 @@ function createEmbeddedTerminalBackendFromConfig(
           const envelope = makeEnvelope('select-experiment', 'ui', 'task', { taskId, experimentId: ids[0] });
           const result = await commandService.selectExperiment(envelope);
           if (!result.ok) throw new Error(result.error.message);
-          const runnable = result.data.filter(isDispatchableLaunch);
-          if (invokerConfig.launchOutboxMode !== 'active') {
-            await requireTaskExecutor().executeTasks(runnable);
-          }
         } else {
           // Multi-select: needs taskExecutor for branch merge, stays in workflow-actions
-          const newlyStarted = await sharedSelectExperiments(taskId, ids, { orchestrator, taskExecutor: requireTaskExecutor() });
-          if (invokerConfig.launchOutboxMode !== 'active') {
-            await requireTaskExecutor().executeTasks(newlyStarted);
-          }
+          await sharedSelectExperiments(taskId, ids, { orchestrator, taskExecutor: requireTaskExecutor() });
         }
       } catch (err) {
         logger.error(`select-experiment failed: ${err}`, { module: 'ipc' });
@@ -3822,7 +3655,6 @@ function createEmbeddedTerminalBackendFromConfig(
           context: 'ipc.restart-task',
           started,
           scopedTaskIds: [taskId],
-          launchOutboxMode: invokerConfig.launchOutboxMode,
         });
       } catch (err) {
         logger.error(`restart-task failed: ${err}`, { module: 'ipc' });
@@ -3846,7 +3678,6 @@ function createEmbeddedTerminalBackendFromConfig(
           logger,
           context: 'ipc.cancel-task',
           mutationTiming: activeMutationContext?.mutationTiming,
-          launchOutboxMode: invokerConfig.launchOutboxMode,
         });
         return result;
       } catch (err) {
@@ -3876,7 +3707,6 @@ function createEmbeddedTerminalBackendFromConfig(
           logger,
           context: 'ipc.cancel-workflow',
           mutationTiming: activeMutationContext?.mutationTiming,
-          launchOutboxMode: invokerConfig.launchOutboxMode,
         });
         return result;
       } catch (err) {
@@ -4000,7 +3830,6 @@ function createEmbeddedTerminalBackendFromConfig(
             started,
             scopedWorkflowId: workflowId,
             mutationTiming: activeMutationContext?.mutationTiming,
-            launchOutboxMode: invokerConfig.launchOutboxMode,
           });
         } finally {
           remoteFetchForPool.enabled = true;
@@ -4049,7 +3878,6 @@ function createEmbeddedTerminalBackendFromConfig(
             started,
             scopedTaskIds: [taskId],
             mutationTiming: activeMutationContext?.mutationTiming,
-            launchOutboxMode: invokerConfig.launchOutboxMode,
           });
         } finally {
           remoteFetchForPool.enabled = true;
@@ -4098,7 +3926,6 @@ function createEmbeddedTerminalBackendFromConfig(
             started,
             scopedTaskIds: [taskId],
             mutationTiming: activeMutationContext?.mutationTiming,
-            launchOutboxMode: invokerConfig.launchOutboxMode,
           });
         } finally {
           remoteFetchForPool.enabled = true;
@@ -4144,7 +3971,6 @@ function createEmbeddedTerminalBackendFromConfig(
             started: result.data,
             scopedWorkflowId: workflowId,
             mutationTiming: activeMutationContext?.mutationTiming,
-            launchOutboxMode: invokerConfig.launchOutboxMode,
           });
         } finally {
           remoteFetchForPool.enabled = true;
@@ -4189,7 +4015,6 @@ function createEmbeddedTerminalBackendFromConfig(
           started,
           scopedWorkflowId: workflowId,
           mutationTiming: activeMutationContext?.mutationTiming,
-          launchOutboxMode: invokerConfig.launchOutboxMode,
         });
       } catch (err) {
         logger.error(`rebase-retry failed: ${err}`, { module: 'ipc' });
@@ -4232,7 +4057,6 @@ function createEmbeddedTerminalBackendFromConfig(
           started,
           scopedWorkflowId: workflowId,
           mutationTiming: activeMutationContext?.mutationTiming,
-          launchOutboxMode: invokerConfig.launchOutboxMode,
         });
       } catch (err) {
         logger.error(`rebase-recreate failed: ${err}`, { module: 'ipc' });
@@ -4259,7 +4083,6 @@ function createEmbeddedTerminalBackendFromConfig(
             context: 'ipc.set-merge-branch',
             started,
             scopedTaskIds: [mergeTask.id],
-            launchOutboxMode: invokerConfig.launchOutboxMode,
           });
         }
       } catch (err) {
@@ -4306,7 +4129,6 @@ function createEmbeddedTerminalBackendFromConfig(
           started,
           mutationTiming: activeMutationContext?.mutationTiming,
           scopedWorkflowId: workflowId,
-          launchOutboxMode: invokerConfig.launchOutboxMode,
         });
       } catch (err) {
         logger.error(`approve-merge failed: ${err}`, { module: 'ipc' });
@@ -4356,7 +4178,6 @@ function createEmbeddedTerminalBackendFromConfig(
           started: result.started,
           mutationTiming: activeMutationContext?.mutationTiming,
           scopedTaskIds: [taskId],
-          launchOutboxMode: invokerConfig.launchOutboxMode,
         });
       } catch (err) {
         if (err instanceof StaleLineageError) {
@@ -4369,7 +4190,6 @@ function createEmbeddedTerminalBackendFromConfig(
           logger,
           context: 'ipc.resolve-conflict.failure',
           mutationTiming: activeMutationContext?.mutationTiming,
-          launchOutboxMode: invokerConfig.launchOutboxMode,
         });
         logger.error(`resolve-conflict failed: ${err}`, { module: 'ipc' });
         throw err;
@@ -4394,7 +4214,6 @@ function createEmbeddedTerminalBackendFromConfig(
           started,
           mutationTiming: activeMutationContext?.mutationTiming,
           scopedTaskIds: [taskId],
-          launchOutboxMode: invokerConfig.launchOutboxMode,
         });
       } catch (err) {
         if (err instanceof StaleLineageError) {
@@ -4407,7 +4226,6 @@ function createEmbeddedTerminalBackendFromConfig(
           logger,
           context: 'ipc.fix-with-agent.failure',
           mutationTiming: activeMutationContext?.mutationTiming,
-          launchOutboxMode: invokerConfig.launchOutboxMode,
         });
         logger.error(`fix-with-agent failed: ${err}`, { module: 'ipc' });
         throw err;
@@ -4430,7 +4248,6 @@ function createEmbeddedTerminalBackendFromConfig(
           context: 'ipc.edit-task-command',
           started: result.data,
           scopedTaskIds: [taskId],
-          launchOutboxMode: invokerConfig.launchOutboxMode,
         });
       } catch (err) {
         logger.error(`edit-task-command failed: ${err}`, { module: 'ipc' });
@@ -4453,7 +4270,6 @@ function createEmbeddedTerminalBackendFromConfig(
           context: 'ipc.edit-task-prompt',
           started: result.data,
           scopedTaskIds: [taskId],
-          launchOutboxMode: invokerConfig.launchOutboxMode,
         });
       } catch (err) {
         logger.error(`edit-task-prompt failed: ${err}`, { module: 'ipc' });
@@ -4477,7 +4293,6 @@ function createEmbeddedTerminalBackendFromConfig(
           context: 'ipc.edit-task-type',
           started: result.data,
           scopedTaskIds: [taskId],
-          launchOutboxMode: invokerConfig.launchOutboxMode,
         });
       } catch (err) {
         logger.error(`edit-task-type failed: ${err}`, { module: 'ipc' });
@@ -4500,7 +4315,6 @@ function createEmbeddedTerminalBackendFromConfig(
           context: 'ipc.edit-task-pool',
           started: result.data,
           scopedTaskIds: [taskId],
-          launchOutboxMode: invokerConfig.launchOutboxMode,
         });
       } catch (err) {
         logger.error(`edit-task-pool failed: ${err}`, { module: 'ipc' });
@@ -4523,7 +4337,6 @@ function createEmbeddedTerminalBackendFromConfig(
           context: 'ipc.edit-task-agent',
           started: result.data,
           scopedTaskIds: [taskId],
-          launchOutboxMode: invokerConfig.launchOutboxMode,
         });
       } catch (err) {
         logger.error(`edit-task-agent failed: ${err}`, { module: 'ipc' });
@@ -4548,7 +4361,6 @@ function createEmbeddedTerminalBackendFromConfig(
             context: 'ipc.set-task-external-gate-policies',
             started: result.data,
             scopedTaskIds: [taskId],
-            launchOutboxMode: invokerConfig.launchOutboxMode,
           });
         } catch (err) {
           logger.error(`set-task-external-gate-policies failed: ${err}`, { module: 'ipc' });
@@ -4606,7 +4418,6 @@ function createEmbeddedTerminalBackendFromConfig(
           context: 'ipc.replace-task',
           started: result.data,
           scopedTaskIds: [taskId, ...result.data.map((task) => task.id)],
-          launchOutboxMode: invokerConfig.launchOutboxMode,
         });
         return result.data;
       } catch (err) {
