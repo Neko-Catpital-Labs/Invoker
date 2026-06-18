@@ -96,6 +96,19 @@ describe('deriveWorkflowGraph', () => {
     expect(graph.edges).toEqual([]);
   });
 
+  it('keeps workflow nodes visible from tasks when metadata is temporarily missing', () => {
+    const tasks = new Map<string, TaskState>([
+      ['wf-a/task-a', makeTask('wf-a/task-a', 'wf-a')],
+      ['wf-a/task-b', { ...makeTask('wf-a/task-b', 'wf-a'), status: 'failed' }],
+    ]);
+
+    const graph = deriveWorkflowGraph(new Map(), tasks);
+    expect(graph.nodes).toHaveLength(1);
+    expect(graph.nodes[0].id).toBe('wf-a');
+    expect(graph.nodes[0].workflow.status).toBe('failed');
+    expect(graph.edges).toEqual([]);
+  });
+
   it('derives dependency-change lineage separately from active dependency edges', () => {
     const workflows = new Map([
       ['A', makeWorkflow('A')],
