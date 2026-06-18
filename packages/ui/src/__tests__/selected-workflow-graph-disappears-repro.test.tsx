@@ -1,6 +1,6 @@
 /**
- * Regression: the selected workflow mini-DAG remains visible when workflows-changed
- * transiently omits the selected workflow metadata while its tasks remain.
+ * Regression: the workflow graph and selected mini-DAG remain visible when
+ * workflows-changed transiently omits workflow metadata while tasks remain.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -71,8 +71,8 @@ describe('selected workflow graph metadata-gap regression', () => {
     });
 
     expect(screen.getByText('Total:')).toHaveTextContent('Total: 2');
+    expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
     expect(screen.getByTestId('workflow-node-wf-b')).toBeInTheDocument();
-    expect(screen.queryByTestId('workflow-node-wf-a')).not.toBeInTheDocument();
     expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
     expect(screen.getByTestId('rf__node-task-beta')).toBeInTheDocument();
   });
