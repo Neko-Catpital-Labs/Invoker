@@ -53,3 +53,44 @@ function githubKey(owner: string, repo: string): string {
 export function sanitizeBranchForPath(branch: string): string {
   return branch.replace(/\//g, '-');
 }
+
+export function isGitRefLockRace(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /cannot lock ref\b/i.test(message)
+    && (
+      /reference already exists/i.test(message)
+      || /\bis at\b.+\bbut expected\b/i.test(message)
+    );
+}
+
+export function isTransientGitHubCliError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /\bi\/o timeout\b/i.test(message)
+    || /\bcontext deadline exceeded\b/i.test(message)
+    || /\bconnection (?:reset|refused|timed out)\b/i.test(message)
+    || /\bECONNRESET\b|\bETIMEDOUT\b|\bEAI_AGAIN\b|\bENOTFOUND\b/i.test(message)
+    || /\b(?:502|503|504)\b/.test(message)
+    || /\bbad gateway\b|\bservice unavailable\b|\bgateway timeout\b/i.test(message)
+    || /\brate limit\b/i.test(message);
+}
+
+export async function retryTransientGitHubCli<T>(
+  operation: () => Promise<T>,
+  opts: { attempts?: number; delayMs?: number } = {},
+): Promise<T> {
+  const attempts = opts.attempts ?? 3;
+  const delayMs = opts.delayMs ?? 250;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await operation();
+    } catch (err) {
+      lastErr = err;
+      if (attempt >= attempts || !isTransientGitHubCliError(err)) {
+        throw err;
+      }
+      await new Promise(resolve => setTimeout(resolve, delayMs * attempt));
+    }
+  }
+  throw lastErr;
+}
