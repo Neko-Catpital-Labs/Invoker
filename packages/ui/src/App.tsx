@@ -1371,7 +1371,8 @@ export function App() {
 
   const handleRefresh = useCallback(async () => {
     await refreshTaskGraph();
-  }, [refreshTaskGraph]);
+    issueCameraCommand({ kind: 'fitInitial', scope: 'workflow', reason: 'manual-refresh' });
+  }, [issueCameraCommand, refreshTaskGraph]);
 
   // ── Plan loading ──────────────────────────────────────────
   const handleLoadPlan = useCallback(
@@ -1854,7 +1855,6 @@ export function App() {
               ) : (
                 <>
                   <WorkflowGraph
-                    key={`workflow-graph-${graphRefreshSequence}`}
                     tasks={tasks}
                     workflows={workflows}
                     selectedWorkflowId={selectedWorkflow?.id ?? null}
@@ -1880,7 +1880,6 @@ export function App() {
                         className={`h-full outline-none ${keyboardRegion === 'taskGraph' ? 'ring-2 ring-inset ring-blue-300/60' : ''}`}
                       >
                         <TaskDAG
-                          key={`task-dag-${selectedWorkflow.id}-${graphRefreshSequence}`}
                           tasks={miniDagTasks}
                           workflows={selectedTaskDagWorkflows}
                           selectedTaskId={selectedTaskId}
