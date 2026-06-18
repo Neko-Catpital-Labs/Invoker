@@ -11,17 +11,9 @@
  *    before the watchdog failed them with the misleading
  *    "60 seconds" error message.
  *
- * This test reproduces the steady-state shape in-process: 38 single-task
- * plans are loaded, `startExecution()` is called to claim every
- * attempt, and **no TaskRunner is wired in** — exactly the fragile
- * seam the re-architecture is meant to eliminate.
- *
- * The test is marked `it.fails` so CI stays green while the bug is
- * documented. The Phase B definition of done (see
- * .cursor/plans/launch_handoff_rearchitecture_c13d3ffc.plan.md) calls
- * for removing the `.fails` marker once the durable
- * `task_launch_dispatch` outbox dispatcher is active and resolves
- * every claim.
+ * The durable outbox is now always on. The first test proves every
+ * claim gets a dispatch row. The second wires the dispatcher and proves
+ * every claim reaches a terminal launch event.
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
@@ -31,7 +23,6 @@ import { InMemoryBus } from '@invoker/test-kit';
 import { LaunchDispatcher } from '../launch-dispatcher.js';
 import {
   LAUNCH_CLAIM_EVENT_TYPE,
-  LaunchInvariantViolationError,
   TERMINAL_LAUNCH_EVENT_TYPES,
   assertLaunchInvariant,
 } from './launch-invariant.js';
@@ -49,8 +40,8 @@ describe('launch-claim orphan regression (2026-05-22 storm)', () => {
     }
   });
 
-  it.fails(
-    'a 38-claim rebase-recreate storm without a dispatcher orphans every claim',
+  it(
+    'a 38-claim rebase-recreate storm writes one dispatch row per claim',
     async () => {
       const persistence = await SQLiteAdapter.create(':memory:');
       adapters.push(persistence);
@@ -59,9 +50,6 @@ describe('launch-claim orphan regression (2026-05-22 storm)', () => {
         persistence: persistence as any,
         messageBus: new InMemoryBus(),
         maxConcurrency: STORM_SIZE,
-        // Mirror production wiring (packages/app/src/main.ts:502) — without
-        // this flag the orchestrator writes `task.running` directly and skips
-        // the two-phase claim/launch hand-off that the bug lives in.
         deferRunningUntilLaunch: true,
       });
 
@@ -95,40 +83,12 @@ describe('launch-claim orphan regression (2026-05-22 storm)', () => {
           0,
         );
       expect(claimCount).toBe(STORM_SIZE);
-
-      const terminalCount = persistence
-        .getAllTaskIds()
-        .reduce(
-          (acc, taskId) =>
-            acc +
-            persistence
-              .getEvents(taskId)
-              .filter((event) => TERMINAL_LAUNCH_EVENT_TYPES.has(event.eventType))
-              .length,
-          0,
-        );
-      expect(terminalCount).toBe(0);
-
-      try {
-        assertLaunchInvariant(persistence, {
-          maxGapMs: TIGHT_MAX_GAP_MS,
-          nowMs: Date.now() + PRETEND_LATER_MS,
-        });
-      } catch (err) {
-        expect(err).toBeInstanceOf(LaunchInvariantViolationError);
-        const violation = err as LaunchInvariantViolationError;
-        expect(violation.summary.claimCount).toBe(STORM_SIZE);
-        expect(violation.violations).toHaveLength(STORM_SIZE);
-        for (const v of violation.violations) {
-          expect(v.reason).toBe('no_terminal_event');
-        }
-        throw err;
-      }
+      expect(persistence.listLaunchDispatchesByState(['enqueued'])).toHaveLength(STORM_SIZE);
     },
   );
 
   it(
-    'with INVOKER_LAUNCH_OUTBOX=active, the LaunchDispatcher resolves every claim into a terminal event',
+    'the LaunchDispatcher resolves every claim into a terminal event',
     async () => {
       // CB.5 acceptance: wire the same 38-claim storm through the durable
       // outbox dispatcher (orchestrator -> task_launch_dispatch ->
@@ -142,10 +102,8 @@ describe('launch-claim orphan regression (2026-05-22 storm)', () => {
         messageBus: new InMemoryBus(),
         maxConcurrency: STORM_SIZE,
         deferRunningUntilLaunch: true,
-        // Active mode causes drainScheduler to write the outbox row alongside
-        // the durable launch claim — that row is what the LaunchDispatcher
-        // polls below.
-        launchOutboxMode: 'active',
+        // drainScheduler writes the outbox row alongside the durable launch
+        // claim — that row is what the LaunchDispatcher polls below.
       });
 
       const startedTasks: TaskState[] = [];
@@ -175,7 +133,6 @@ describe('launch-claim orphan regression (2026-05-22 storm)', () => {
         },
         taskRunnerProvider: () => fakeTaskRunner,
         ownerId: 'cb5-test-owner',
-        mode: 'active',
         maxLeasesPerPoll: STORM_SIZE,
       });
 

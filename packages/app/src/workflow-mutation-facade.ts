@@ -56,7 +56,6 @@ import {
   dispatchStartedTasksWithGlobalTopup,
   executeGlobalTopup,
   isDispatchableLaunch,
-  type LaunchOutboxMode,
 } from './global-topup.js';
 import {
   setTaskMetadata as sharedSetTaskMetadata,
@@ -115,7 +114,6 @@ export interface WorkflowMutationFacadeDeps {
   commandService?: CommandService;
   taskExecutor: TaskRunner;
   dispatchMode?: 'await' | 'fire-and-forget';
-  launchOutboxMode?: LaunchOutboxMode;
   autoApproveAIFixes?: boolean;
   /** Optional pre-kill hook for active task executions. */
   killRunningTask?: (taskId: string) => Promise<void>;
@@ -379,9 +377,6 @@ export class WorkflowMutationFacade {
       logger: this.deps.logger,
     });
     const runnable = result.started.filter(isDispatchableLaunch);
-    if (this.deps.launchOutboxMode !== 'active') {
-      await this.deps.taskExecutor.executeTasks(runnable);
-    }
     const topup = await this.topupOnly('facade.fork-workflow');
     return {
       forkedWorkflowId: result.forkedWorkflowId,
@@ -501,7 +496,6 @@ export class WorkflowMutationFacade {
       context,
       started,
       dispatchMode: this.deps.dispatchMode,
-      launchOutboxMode: this.deps.launchOutboxMode,
       ...scope,
     });
   }
@@ -557,7 +551,6 @@ export class WorkflowMutationFacade {
       logger: this.deps.logger,
       context,
       dispatchMode: this.deps.dispatchMode,
-      launchOutboxMode: this.deps.launchOutboxMode,
     });
   }
 }
