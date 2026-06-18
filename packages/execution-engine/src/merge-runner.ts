@@ -19,6 +19,7 @@ import type { MergeGateProvider } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 import type { PrAuthoringContext, PrAuthoringTaskEntry } from './pr-authoring.js';
+import { isGitRefLockRace } from './git-utils.js';
 
 // ── Trace logging ────────────────────────────────────────
 
@@ -126,7 +127,7 @@ async function pushFeatureBranchWithRefLockRetry(
   try {
     await execGitInMergeSafe(host, pushArgs, dir);
   } catch (err) {
-    if (!isGitRefAlreadyExistsLockRace(err)) throw err;
+    if (!isGitRefLockRace(err)) throw err;
     mergeTrace('GIT_PUSH_REF_LOCK_RACE_RETRY', {
       featureBranch,
       dir,
@@ -139,11 +140,6 @@ async function pushFeatureBranchWithRefLockRetry(
     ], dir);
     await execGitInMergeSafe(host, pushArgs, dir);
   }
-}
-
-function isGitRefAlreadyExistsLockRace(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err);
-  return /cannot lock ref\b/i.test(message) && /reference already exists/i.test(message);
 }
 
 async function syncGateWorkspaceToFeatureBranch(
