@@ -38,91 +38,25 @@ describe('LaunchDispatcher', () => {
     expect(() => new LaunchDispatcher({
       persistence: adapter,
       ownerId: 'owner-test',
-      mode: 'observe',
     })).not.toThrow();
   });
 
-  it('observer mode logs state counts and does not mutate rows', () => {
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
-    adapter.saveTask('wf-1', {
-      id: 'wf-1/t1',
-      description: 'one',
-      status: 'pending',
-      dependencies: [],
-      createdAt: new Date(),
-      config: { workflowId: 'wf-1' },
-      execution: {},
-      taskStateVersion: 1,
-    });
-    const enqueued = adapter.enqueueLaunchDispatch({
-      taskId: 'wf-1/t1',
-      attemptId: 'attempt-1',
-      workflowId: 'wf-1',
-      generation: 0,
-    });
 
-    const logger = makeLogger();
-    const dispatcher = new LaunchDispatcher({
-      persistence: adapter,
-      ownerId: 'owner-test',
-      logger,
-      mode: 'observe',
-    });
-
-    dispatcher.poll();
-
-    const observed = logger.records.find((entry) => entry.msg.includes('observed'));
-    expect(observed).toBeDefined();
-    expect(observed?.fields?.total).toBe(1);
-    const counts = observed?.fields?.counts as Record<string, number> | undefined;
-    expect(counts?.enqueued).toBe(1);
-    expect(counts?.leased).toBe(0);
-
-    const afterPoll = adapter.loadLaunchDispatchById(enqueued.id);
-    expect(afterPoll).toMatchObject({ state: 'enqueued' });
-  });
-
-  it('active mode without a taskRunnerProvider warns and does not dispatch', () => {
-    const listSpy = vi.spyOn(adapter, 'listLaunchDispatchesByState');
+  it('without a taskRunnerProvider warns and does not dispatch', () => {
     const claimSpy = vi.spyOn(adapter, 'claimLaunchDispatchAtomic');
     const logger = makeLogger();
     const dispatcher = new LaunchDispatcher({
       persistence: adapter,
       ownerId: 'owner-test',
       logger,
-      mode: 'active',
     });
     expect(() => dispatcher.poll()).not.toThrow();
     expect(claimSpy).not.toHaveBeenCalled();
     const warn = logger.records.find((entry) => entry.level === 'warn');
-    expect(warn?.msg).toMatch(/active mode without taskRunner/);
-    // Active mode never observes (no aggregate log) — observation is the
-    // observer-mode tail and the reapers don't need it.
-    expect(listSpy).not.toHaveBeenCalled();
-    listSpy.mockRestore();
+    expect(warn?.msg).toMatch(/without taskRunner/);
     claimSpy.mockRestore();
   });
 
-  it('observer mode reports zero counts when the outbox is empty', () => {
-    const logger = makeLogger();
-    const dispatcher = new LaunchDispatcher({
-      persistence: adapter,
-      ownerId: 'owner-test',
-      logger,
-      mode: 'observe',
-    });
-
-    dispatcher.poll();
-
-    const observed = logger.records.find((entry) => entry.msg.includes('observed'));
-    expect(observed?.fields?.total).toBe(0);
-  });
 
   describe('complete / fail transitions', () => {
     function seedWorkflowAndTask(selectedAttemptId?: string): void {
@@ -157,7 +91,6 @@ describe('LaunchDispatcher', () => {
           persistence: adapter,
           ownerId: 'owner-test',
           logger,
-          mode: 'observe',
         }),
       };
     }
@@ -306,7 +239,6 @@ describe('LaunchDispatcher', () => {
         orchestrator,
         ownerId: 'owner-test',
         logger,
-        mode: 'observe',
         maxAttempts: 2,
       });
       return { dispatcher, logger };
@@ -525,7 +457,7 @@ describe('LaunchDispatcher', () => {
       expect(prepare).not.toHaveBeenCalled();
     });
 
-    it('poll() runs reapers in both observer and active modes', () => {
+    it('poll() runs reapers before dispatching new work', () => {
       seed();
       const row = adapter.enqueueLaunchDispatch({
         taskId: 'wf-r/t1',
@@ -539,17 +471,16 @@ describe('LaunchDispatcher', () => {
         [pastIso, row.id],
       );
 
-      const observer = new LaunchDispatcher({
+      const dispatcher = new LaunchDispatcher({
         persistence: adapter,
-        ownerId: 'observer',
-        mode: 'observe',
+        ownerId: 'owner',
       });
-      observer.poll();
+      dispatcher.poll();
       expect(adapter.loadLaunchDispatchById(row.id)?.state).toBe('enqueued');
     });
   });
 
-  describe('active mode dispatch (CB.5)', () => {
+  describe('dispatch', () => {
     function seedWorkflowAndTask(
       taskId: string,
       workflowId = 'wf-a',
@@ -584,7 +515,7 @@ describe('LaunchDispatcher', () => {
       return task;
     }
 
-    it('active mode leases an enqueued row and hands it to the TaskRunner', () => {
+    it('leases an enqueued row and hands it to the TaskRunner', () => {
       const task = seedWorkflowAndTask('wf-a/t1', 'wf-a', {
         selectedAttemptId: 'attempt-active-1',
         generation: 0,
@@ -607,7 +538,6 @@ describe('LaunchDispatcher', () => {
           getTask,
         },
         taskRunnerProvider: () => ({ executeTask }),
-        mode: 'active',
       });
       dispatcher.poll();
 
@@ -625,7 +555,7 @@ describe('LaunchDispatcher', () => {
       expect(after?.dispatchOwner).toBe('owner-a');
     });
 
-    it('active mode loops until maxLeasesPerPoll is reached', () => {
+    it('loops until maxLeasesPerPoll is reached', () => {
       for (let i = 0; i < 3; i += 1) {
         seedWorkflowAndTask(`wf-a/t${i}`, 'wf-a', {
           selectedAttemptId: `attempt-multi-${i}`,
@@ -663,20 +593,18 @@ describe('LaunchDispatcher', () => {
           getTask,
         },
         taskRunnerProvider: () => ({ executeTask }),
-        mode: 'active',
         maxLeasesPerPoll: 2,
       });
       dispatcher.poll();
       expect(executeTask).toHaveBeenCalledTimes(2);
     });
 
-    it('active mode hydrates the workflow before treating a dispatch row as missing', () => {
+    it('hydrates the workflow before treating a dispatch row as missing', () => {
       const writer = new Orchestrator({
         persistence: adapter as any,
         messageBus: new InMemoryBus(),
         maxConcurrency: 1,
         deferRunningUntilLaunch: true,
-        launchOutboxMode: 'active',
       });
       writer.loadPlan({
         name: 'cold-cache-dispatch',
@@ -696,7 +624,6 @@ describe('LaunchDispatcher', () => {
         messageBus: new InMemoryBus(),
         maxConcurrency: 1,
         deferRunningUntilLaunch: true,
-        launchOutboxMode: 'active',
       });
       expect(cold.getTask(started!.id)).toBeUndefined();
 
@@ -711,7 +638,6 @@ describe('LaunchDispatcher', () => {
           getTask: (taskId) => cold.getTask(taskId),
         },
         taskRunnerProvider: () => ({ executeTask }),
-        mode: 'active',
       });
 
       dispatcher.poll();
@@ -722,7 +648,7 @@ describe('LaunchDispatcher', () => {
       expect(adapter.loadLaunchDispatchById(1)?.lastError).toBeUndefined();
     });
 
-    it('active mode abandons a dispatch row when the selected attempt changed after lease', () => {
+    it('abandons a dispatch row when the selected attempt changed after lease', () => {
       const task = seedWorkflowAndTask('wf-a/t-stale', 'wf-a', {
         selectedAttemptId: 'attempt-old',
         generation: 0,
@@ -750,7 +676,6 @@ describe('LaunchDispatcher', () => {
           getTask: vi.fn().mockReturnValue(currentTask as any),
         },
         taskRunnerProvider: () => ({ executeTask }),
-        mode: 'active',
       });
 
       dispatcher.poll();
@@ -763,7 +688,7 @@ describe('LaunchDispatcher', () => {
       expect(events.some((event) => event.eventType === 'task.launch_dispatch_invalidated')).toBe(true);
     });
 
-    it('active mode abandons the dispatch when readiness is blocked', () => {
+    it('abandons the dispatch when readiness is blocked', () => {
       const task = seedWorkflowAndTask('wf-a/t-blocked', 'wf-a', {
         selectedAttemptId: 'attempt-blocked',
         generation: 0,
@@ -794,7 +719,6 @@ describe('LaunchDispatcher', () => {
           }),
         },
         taskRunnerProvider: () => ({ executeTask }),
-        mode: 'active',
       });
 
       dispatcher.poll();
@@ -819,7 +743,7 @@ describe('LaunchDispatcher', () => {
       });
     });
 
-    it('active mode abandons the dispatch when the orchestrator has no matching task', () => {
+    it('abandons the dispatch when the orchestrator has no matching task', () => {
       seedWorkflowAndTask('wf-a/t-missing', 'wf-a', {
         selectedAttemptId: 'attempt-missing',
         generation: 0,
@@ -839,7 +763,6 @@ describe('LaunchDispatcher', () => {
           getTask: vi.fn().mockReturnValue(undefined),
         },
         taskRunnerProvider: () => ({ executeTask }),
-        mode: 'active',
       });
       dispatcher.poll();
 
@@ -849,7 +772,7 @@ describe('LaunchDispatcher', () => {
       expect(after?.lastError).toMatch(/missing from orchestrator state/);
     });
 
-    it('active mode is a no-op when the queue is empty', () => {
+    it('is a no-op when the queue is empty', () => {
       const executeTask = vi.fn();
       const dispatcher = new LaunchDispatcher({
         persistence: adapter,
@@ -859,13 +782,12 @@ describe('LaunchDispatcher', () => {
           getTask: vi.fn(),
         },
         taskRunnerProvider: () => ({ executeTask }),
-        mode: 'active',
       });
       dispatcher.poll();
       expect(executeTask).not.toHaveBeenCalled();
     });
 
-    it('active mode catches runner promise rejections via failDispatch backstop', async () => {
+    it('catches runner promise rejections via failDispatch backstop', async () => {
       const task = seedWorkflowAndTask('wf-a/t-throw', 'wf-a', {
         selectedAttemptId: 'attempt-throw',
         generation: 0,
@@ -885,7 +807,6 @@ describe('LaunchDispatcher', () => {
           getTask: vi.fn().mockReturnValue(task as any),
         },
         taskRunnerProvider: () => ({ executeTask }),
-        mode: 'active',
       });
       dispatcher.poll();
       // Wait one microtask tick for the .catch backstop to run.
