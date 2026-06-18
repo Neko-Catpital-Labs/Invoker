@@ -286,8 +286,11 @@ invoker_e2e_run_headless() {
   local max_attempts=2
   local status=0
   while :; do
-    invoker_e2e_run_with_timeout "$INVOKER_E2E_REPO_ROOT/run.sh" --headless "$@"
-    status=$?
+    if invoker_e2e_run_with_timeout "$INVOKER_E2E_REPO_ROOT/run.sh" --headless "$@"; then
+      status=0
+    else
+      status=$?
+    fi
     if [ "$status" -eq 0 ]; then
       return 0
     fi
@@ -318,8 +321,11 @@ invoker_e2e_submit_plan() {
   max_attempts=2
   status=0
   while :; do
-    invoker_e2e_run_with_timeout "$INVOKER_E2E_REPO_ROOT/submit-plan.sh" "$patched" "$@"
-    status=$?
+    if invoker_e2e_run_with_timeout "$INVOKER_E2E_REPO_ROOT/submit-plan.sh" "$patched" "$@"; then
+      status=0
+    else
+      status=$?
+    fi
     if [ "$status" -eq 0 ]; then
       rm -f "$patched"
       return 0

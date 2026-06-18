@@ -44,7 +44,10 @@ describe('GitHubMergeGateProvider', () => {
           return mockSpawnResult('https://github.com/Neko-Catpital-Labs/Invoker.git', 0);
         }
         if (cmd === 'git') return mockSpawnResult('', 0);
-        if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'list') return mockSpawnResult('[]', 0);
+        if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'list') {
+          throw new Error('gh pr list should not be used');
+        }
+        if (cmd === 'gh' && args[0] === 'api' && args[1] === 'repos/Neko-Catpital-Labs/Invoker/pulls' && args.includes('--method') && args.includes('GET')) return mockSpawnResult('[]', 0);
         return mockSpawnResult('{"html_url":"https://github.com/Neko-Catpital-Labs/Invoker/pull/42","number":42}', 0);
       }) as any);
 
@@ -59,12 +62,11 @@ describe('GitHubMergeGateProvider', () => {
       expect(spawnMock).toHaveBeenCalledWith(
         'gh',
         [
-          'pr', 'list',
-          '--repo', 'Neko-Catpital-Labs/Invoker',
-          '--head', 'feature/test',
-          '--state', 'open',
-          '--json', 'url,number',
-          '--limit', '1',
+          'api', 'repos/Neko-Catpital-Labs/Invoker/pulls',
+          '--method', 'GET',
+          '-f', 'head=Neko-Catpital-Labs:feature/test',
+          '-f', 'state=open',
+          '-f', 'per_page=1',
         ],
         expect.anything(),
       );
@@ -92,7 +94,10 @@ describe('GitHubMergeGateProvider', () => {
           return mockSpawnResult('https://github.com/owner/repo.git', 0);
         }
         if (cmd === 'git') return mockSpawnResult('', 0);
-        if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'list') return mockSpawnResult('[]', 0);
+        if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'list') {
+          throw new Error('gh pr list should not be used');
+        }
+        if (cmd === 'gh' && args[0] === 'api' && args[1] === 'repos/owner/repo/pulls' && args.includes('--method') && args.includes('GET')) return mockSpawnResult('[]', 0);
         return mockSpawnResult('{"html_url":"https://github.com/owner/repo/pull/42","number":42}', 0);
       }) as any);
 
@@ -113,12 +118,11 @@ describe('GitHubMergeGateProvider', () => {
       expect(spawnMock).toHaveBeenCalledWith(
         'gh',
         [
-          'pr', 'list',
-          '--repo', 'owner/repo',
-          '--head', 'feature/test',
-          '--state', 'open',
-          '--json', 'url,number',
-          '--limit', '1',
+          'api', 'repos/owner/repo/pulls',
+          '--method', 'GET',
+          '-f', 'head=owner:feature/test',
+          '-f', 'state=open',
+          '-f', 'per_page=1',
         ],
         expect.anything(),
       );
@@ -158,7 +162,10 @@ describe('GitHubMergeGateProvider', () => {
           return mockSpawnResult('', 0);
         }
         if (cmd === 'git' && args[0] === 'fetch') return mockSpawnResult('', 0);
-        if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'list') return mockSpawnResult('[]', 0);
+        if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'list') {
+          throw new Error('gh pr list should not be used');
+        }
+        if (cmd === 'gh' && args[0] === 'api' && args[1] === 'repos/owner/repo/pulls' && args.includes('--method') && args.includes('GET')) return mockSpawnResult('[]', 0);
         return mockSpawnResult('{"html_url":"https://github.com/owner/repo/pull/42","number":42}', 0);
       }) as any);
 
@@ -178,6 +185,86 @@ describe('GitHubMergeGateProvider', () => {
       );
     });
 
+    it('retries branch push after GitHub reports a stale expected-sha ref lock race', async () => {
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+      let pushAttempts = 0;
+
+      spawnMock.mockImplementation(((cmd: string, _args: string[]) => {
+        const args = _args;
+        if (cmd === 'git' && args[0] === 'remote' && args[1] === 'get-url' && args[2] === 'origin') {
+          return mockSpawnResult('https://github.com/owner/repo.git', 0);
+        }
+        if (cmd === 'git' && args[0] === 'push') {
+          pushAttempts++;
+          if (pushAttempts === 1) {
+            return mockSpawnResult('', 1, [
+              'To github.com:owner/repo.git',
+              " ! [remote rejected] feature/test -> feature/test (cannot lock ref 'refs/heads/feature/test': is at 1111111 but expected 2222222)",
+              "error: failed to push some refs to 'github.com:owner/repo.git'",
+            ].join('\n'));
+          }
+          return mockSpawnResult('', 0);
+        }
+        if (cmd === 'git' && args[0] === 'fetch') return mockSpawnResult('', 0);
+        if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'list') {
+          throw new Error('gh pr list should not be used');
+        }
+        if (cmd === 'gh' && args[0] === 'api' && args[1] === 'repos/owner/repo/pulls' && args.includes('--method') && args.includes('GET')) return mockSpawnResult('[]', 0);
+        return mockSpawnResult('{"html_url":"https://github.com/owner/repo/pull/42","number":42}', 0);
+      }) as any);
+
+      const result = await provider.createReview({
+        baseBranch: 'main',
+        featureBranch: 'feature/test',
+        title: 'Test PR',
+        cwd: '/tmp/repo',
+      });
+
+      expect(result.url).toBe('https://github.com/owner/repo/pull/42');
+      expect(pushAttempts).toBe(2);
+      expect(spawnMock).toHaveBeenCalledWith(
+        'git',
+        ['fetch', 'origin', '+refs/heads/feature/test:refs/remotes/origin/feature/test'],
+        expect.objectContaining({ cwd: '/tmp/repo' }),
+      );
+    });
+
+    it('retries transient REST PR lookup failures before creating a PR', async () => {
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+      let lookupAttempts = 0;
+
+      spawnMock.mockImplementation(((cmd: string, _args: string[]) => {
+        const args = _args;
+        if (cmd === 'git' && args[0] === 'remote' && args[1] === 'get-url' && args[2] === 'origin') {
+          return mockSpawnResult('https://github.com/owner/repo.git', 0);
+        }
+        if (cmd === 'git') return mockSpawnResult('', 0);
+        if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'list') {
+          throw new Error('gh pr list should not be used');
+        }
+        if (cmd === 'gh' && args[0] === 'api' && args[1] === 'repos/owner/repo/pulls' && args.includes('--method') && args.includes('GET')) {
+          lookupAttempts++;
+          if (lookupAttempts === 1) {
+            return mockSpawnResult('', 1, 'Post "https://api.github.com/graphql": dial tcp: i/o timeout');
+          }
+          return mockSpawnResult('[]', 0);
+        }
+        return mockSpawnResult('{"html_url":"https://github.com/owner/repo/pull/42","number":42}', 0);
+      }) as any);
+
+      const result = await provider.createReview({
+        baseBranch: 'main',
+        featureBranch: 'feature/test',
+        title: 'Test PR',
+        cwd: '/tmp/repo',
+      });
+
+      expect(result.url).toBe('https://github.com/owner/repo/pull/42');
+      expect(lookupAttempts).toBe(2);
+    });
+
     it('reuses an existing open PR by head and retargets its base', async () => {
       const { spawn } = await import('node:child_process');
       const spawnMock = vi.mocked(spawn);
@@ -188,7 +275,10 @@ describe('GitHubMergeGateProvider', () => {
         }
         if (cmd === 'git') return mockSpawnResult('', 0);
         if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'list') {
-          return mockSpawnResult('[{"url":"https://github.com/owner/repo/pull/10","number":10}]', 0);
+          throw new Error('gh pr list should not be used');
+        }
+        if (cmd === 'gh' && args[0] === 'api' && args[1] === 'repos/owner/repo/pulls' && args.includes('--method') && args.includes('GET')) {
+          return mockSpawnResult('[{"html_url":"https://github.com/owner/repo/pull/10","number":10}]', 0);
         }
         return mockSpawnResult('', 0);
       }) as any);
@@ -225,7 +315,10 @@ describe('GitHubMergeGateProvider', () => {
           throw new Error('remote lookup should not run when env target is set');
         }
         if (cmd === 'git') return mockSpawnResult('', 0);
-        if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'list') return mockSpawnResult('[]', 0);
+        if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'list') {
+          throw new Error('gh pr list should not be used');
+        }
+        if (cmd === 'gh' && args[0] === 'api' && args[1] === 'repos/Neko-Catpital-Labs/Invoker/pulls' && args.includes('--method') && args.includes('GET')) return mockSpawnResult('[]', 0);
         return mockSpawnResult('{"html_url":"https://github.com/Neko-Catpital-Labs/Invoker/pull/99","number":99}', 0);
       }) as any);
 

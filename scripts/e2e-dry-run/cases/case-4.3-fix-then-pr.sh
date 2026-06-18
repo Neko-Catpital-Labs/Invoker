@@ -130,8 +130,8 @@ if [ ! -f "$GHLOG" ]; then
   exit 1
 fi
 
-if ! grep -q "pr list" "$GHLOG" && ! grep -q "api .*repos.*/pulls.*--method GET" "$GHLOG"; then
-  echo "FAIL case 4.3: gh stub log missing PR lookup call"
+if ! grep -q "api.*repos.*pulls.*GET" "$GHLOG"; then
+  echo "FAIL case 4.3: gh stub log missing REST PR lookup call"
   cat "$GHLOG"
   exit 1
 fi
