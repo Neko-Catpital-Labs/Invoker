@@ -181,6 +181,27 @@ describe('createMergeWorktree isolation (real git)', { timeout: 30_000 }, () => 
     await executor.removeMergeWorktree(clonePath);
   });
 
+  it('allocates unique clone directories for duplicate labels in the same timestamp', async () => {
+    const sandbox = createSandbox();
+    root = sandbox.root;
+    const dateNow = vi.spyOn(Date, 'now').mockReturnValue(123456789);
+
+    const executor = buildExecutor(sandbox.host);
+    const firstClonePath = await executor.createMergeWorktree('master', 'test-concurrent');
+    const secondClonePath = await executor.createMergeWorktree('master', 'test-concurrent');
+
+    try {
+      expect(firstClonePath).not.toBe(secondClonePath);
+      expect(existsSync(firstClonePath)).toBe(true);
+      expect(existsSync(secondClonePath)).toBe(true);
+      expect(git(firstClonePath, 'rev-parse HEAD')).toBe(git(secondClonePath, 'rev-parse HEAD'));
+    } finally {
+      dateNow.mockRestore();
+      await executor.removeMergeWorktree(firstClonePath);
+      await executor.removeMergeWorktree(secondClonePath);
+    }
+  });
+
   it('prefers freshly fetched origin base over stale local base branch', async () => {
     const sandbox = createSandbox();
     root = sandbox.root;
