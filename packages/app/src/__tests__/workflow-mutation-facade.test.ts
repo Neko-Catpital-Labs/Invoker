@@ -84,43 +84,47 @@ describe('WorkflowMutationFacade', () => {
   });
 
   describe('retryTask', () => {
-    it('calls orchestrator.retryTask and dispatches runnable tasks', async () => {
+    it('calls orchestrator.retryTask and returns accepted runnable tasks', async () => {
       const result = await facade.retryTask('task-a');
 
       expect(deps.orchestrator.retryTask).toHaveBeenCalledWith('task-a');
       expect(result.started).toHaveLength(1);
       expect(result.started[0].status).toBe('running');
-      expect(deps.taskExecutor.executeTasks).toHaveBeenCalled();
+      expect(result.runnable).toHaveLength(1);
+      expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
     });
   });
 
   describe('recreateTask', () => {
-    it('calls orchestrator.recreateTask and dispatches runnable tasks', async () => {
+    it('calls orchestrator.recreateTask and returns accepted runnable tasks', async () => {
       const result = await facade.recreateTask('task-a');
 
       expect(deps.orchestrator.recreateTask).toHaveBeenCalledWith('task-a');
       expect(result.started).toHaveLength(1);
-      expect(deps.taskExecutor.executeTasks).toHaveBeenCalled();
+      expect(result.runnable).toHaveLength(1);
+      expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
     });
   });
 
   describe('editTaskCommand', () => {
-    it('calls orchestrator.editTaskCommand and dispatches runnable tasks', async () => {
+    it('calls orchestrator.editTaskCommand and returns accepted runnable tasks', async () => {
       const result = await facade.editTaskCommand('task-a', 'new-cmd');
 
       expect(deps.orchestrator.editTaskCommand).toHaveBeenCalledWith('task-a', 'new-cmd');
       expect(result.started).toHaveLength(1);
-      expect(deps.taskExecutor.executeTasks).toHaveBeenCalled();
+      expect(result.runnable).toHaveLength(1);
+      expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
     });
   });
 
   describe('editTaskPrompt', () => {
-    it('calls orchestrator.editTaskPrompt and dispatches runnable tasks', async () => {
+    it('calls orchestrator.editTaskPrompt and returns accepted runnable tasks', async () => {
       const result = await facade.editTaskPrompt('task-a', 'new prompt');
 
       expect(deps.orchestrator.editTaskPrompt).toHaveBeenCalledWith('task-a', 'new prompt');
       expect(result.started).toHaveLength(1);
-      expect(deps.taskExecutor.executeTasks).toHaveBeenCalled();
+      expect(result.runnable).toHaveLength(1);
+      expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
     });
   });
 
@@ -134,11 +138,13 @@ describe('WorkflowMutationFacade', () => {
   });
 
   describe('editTaskAgent', () => {
-    it('calls orchestrator.editTaskAgent and dispatches', async () => {
+    it('calls orchestrator.editTaskAgent and returns accepted runnable tasks', async () => {
       const result = await facade.editTaskAgent('task-a', 'claude');
 
       expect(deps.orchestrator.editTaskAgent).toHaveBeenCalledWith('task-a', 'claude');
       expect(result.started).toHaveLength(1);
+      expect(result.runnable).toHaveLength(1);
+      expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
     });
   });
 
@@ -231,14 +237,14 @@ describe('WorkflowMutationFacade', () => {
   });
 
   describe('forkWorkflow', () => {
-    it('forks and dispatches runnable tasks', async () => {
+    it('forks and returns accepted runnable tasks', async () => {
       const result = await facade.forkWorkflow('wf-1');
 
       expect(deps.orchestrator.forkWorkflow).toHaveBeenCalledWith('wf-1');
       expect(result.forkedWorkflowId).toBe('wf-fork');
       expect(result.sourceWorkflowId).toBe('wf-1');
       expect(result.runnable).toHaveLength(1);
-      expect(deps.taskExecutor.executeTasks).toHaveBeenCalled();
+      expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
     });
   });
 
@@ -294,11 +300,13 @@ describe('WorkflowMutationFacade', () => {
   });
 
   describe('retryWorkflow', () => {
-    it('calls orchestrator.retryWorkflow and dispatches', async () => {
+    it('calls orchestrator.retryWorkflow and returns accepted runnable tasks', async () => {
       const result = await facade.retryWorkflow('wf-1');
 
       expect(deps.orchestrator.retryWorkflow).toHaveBeenCalledWith('wf-1');
       expect(result.started).toHaveLength(1);
+      expect(result.runnable).toHaveLength(1);
+      expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
     });
 
     it('can return after launch acceptance without waiting for task runtime', async () => {
@@ -315,7 +323,7 @@ describe('WorkflowMutationFacade', () => {
 
       expect(result.started).toHaveLength(1);
       expect(result.runnable).toHaveLength(1);
-      expect(deps.taskExecutor.executeTasks).toHaveBeenCalled();
+      expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
     });
   });
 
@@ -337,8 +345,7 @@ describe('WorkflowMutationFacade', () => {
 
       expect(result.runnable).toEqual([scoped]);
       expect(result.topup).toEqual([crossWorkflow]);
-      expect(deps.taskExecutor.executeTasks).toHaveBeenNthCalledWith(1, [scoped]);
-      expect(deps.taskExecutor.executeTasks).toHaveBeenNthCalledWith(2, [crossWorkflow]);
+      expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
     });
 
     it('keeps cross-workflow starts in topup for rebase-recreate', async () => {
@@ -358,8 +365,7 @@ describe('WorkflowMutationFacade', () => {
 
       expect(result.runnable).toEqual([scoped]);
       expect(result.topup).toEqual([crossWorkflow]);
-      expect(deps.taskExecutor.executeTasks).toHaveBeenNthCalledWith(1, [scoped]);
-      expect(deps.taskExecutor.executeTasks).toHaveBeenNthCalledWith(2, [crossWorkflow]);
+      expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
     });
   });
 });
