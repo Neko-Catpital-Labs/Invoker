@@ -218,7 +218,7 @@ describe('publishAfterFixImpl integration (real git)', () => {
         if (pushAttempts === 1) {
           throw new Error(
             "git push --force origin plan/feature:refs/heads/plan/feature failed (code 1): " +
-              "remote rejected: cannot lock ref 'refs/heads/plan/feature': reference already exists",
+              "remote rejected: cannot lock ref 'refs/heads/plan/feature': is at 1111111 but expected 2222222",
           );
         }
       }
