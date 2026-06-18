@@ -454,7 +454,6 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
       executorRoutingRules: runtimeConfig.executorRoutingRules ?? [],
       defaultPoolId: runtimeConfig.defaultPoolId,
       availablePoolIds: Object.keys(runtimeConfig.executionPools ?? {}),
-      launchOutboxMode: 'disabled',
     });
     const taskRunner = new TaskRunner({
       orchestrator,

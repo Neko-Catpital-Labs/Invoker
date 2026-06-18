@@ -100,9 +100,7 @@ describe('global top-up dispatch', () => {
       alreadyDispatched: [duplicate],
     });
 
-    expect(orchestrator.startExecution).toHaveBeenCalledTimes(1);
-    expect(taskExecutor.executeTasks).toHaveBeenCalledTimes(1);
-    expect(taskExecutor.executeTasks).toHaveBeenCalledWith([newTask]);
+    expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
     expect(topup.map((task) => task.id)).toEqual(['wf-2/task-b']);
   });
 
@@ -153,9 +151,7 @@ describe('global top-up dispatch', () => {
     });
 
     expect(topup.map((task) => task.id)).toEqual([taskB.id]);
-    expect(taskExecutor.executeTasks).toHaveBeenCalledWith([
-      expect.objectContaining({ id: taskB.id, status: 'running' }),
-    ]);
+    expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
   });
 });
 
