@@ -975,6 +975,7 @@ if (isHeadless) {
     let exitCode = 0;
     let reviewGateStatusWorker: ReviewGateStatusWorker | null = null;
     let lifecycleEventBridge: LifecycleEventBridge | null = null;
+    let standaloneLaunchDispatcherPollInterval: ReturnType<typeof setInterval> | null = null;
     try {
       // Standalone mode: initialize services and run headless
       await initServices({
@@ -1013,6 +1014,54 @@ if (isHeadless) {
         const executor = createHeadlessExecutor(headlessDeps);
         wireHeadlessApproveHook(headlessDeps, executor);
         return executor;
+      };
+      let standaloneOwnerTaskExecutor: TaskRunner | null = null;
+      let standaloneLaunchDispatcher: LaunchDispatcher | null = null;
+      const getStandaloneOwnerTaskExecutor = (): TaskRunner => {
+        if (!standaloneOwnerTaskExecutor) {
+          const originalProvider = headlessDeps.ownerTaskRunnerProvider;
+          headlessDeps.ownerTaskRunnerProvider = undefined;
+          try {
+            standaloneOwnerTaskExecutor = createStandaloneTaskExecutor();
+          } finally {
+            headlessDeps.ownerTaskRunnerProvider = originalProvider;
+          }
+          latestTaskExecutor = standaloneOwnerTaskExecutor;
+        }
+        return standaloneOwnerTaskExecutor;
+      };
+      const pollStandaloneLaunchDispatcher = (): void => {
+        if (!standaloneLaunchDispatcher) return;
+        try {
+          standaloneLaunchDispatcher.poll();
+        } catch (err) {
+          logger.warn(
+            `[launch-dispatcher] standalone poll failed: ${err instanceof Error ? err.message : String(err)}`,
+            { module: 'headless' },
+          );
+        }
+      };
+      const ensureStandaloneLaunchDispatcher = (): void => {
+        if (invokerConfig.launchOutboxMode !== 'active' || standaloneLaunchDispatcher) return;
+        const ownerTaskExecutor = getStandaloneOwnerTaskExecutor();
+        headlessDeps.ownerTaskRunnerProvider = () => ownerTaskExecutor;
+        standaloneLaunchDispatcher = new LaunchDispatcher({
+          persistence,
+          orchestrator: {
+            prepareTaskForNewAttempt: (taskId, reason) =>
+              orchestrator.prepareTaskForNewAttempt(taskId, reason),
+            syncFromDb: (workflowId) => orchestrator.syncFromDb(workflowId),
+            getTask: (taskId) => orchestrator.getTask(taskId),
+            getTaskLaunchReadiness: (taskId) => orchestrator.getTaskLaunchReadiness(taskId),
+          },
+          taskRunnerProvider: () => ownerTaskExecutor,
+          ownerId: workflowMutationOwnerId,
+          logger,
+          mode: 'active',
+        });
+        pollStandaloneLaunchDispatcher();
+        standaloneLaunchDispatcherPollInterval = setInterval(pollStandaloneLaunchDispatcher, 2_000);
+        standaloneLaunchDispatcherPollInterval.unref?.();
       };
 
       const executeStandaloneHeadlessRun = async (payload: HeadlessRunMutationPayload): Promise<unknown> => {
@@ -1212,6 +1261,7 @@ if (isHeadless) {
 
       // In standalone owner mode, serve delegated requests from peer headless processes.
       if (standaloneMode && messageBus) {
+        if (!readOnlyMode) ensureStandaloneLaunchDispatcher();
         const standaloneOwnerIdleTimeoutMs = Number.parseInt(
           process.env.INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS ?? '0',
           10,
@@ -1709,6 +1759,10 @@ if (isHeadless) {
       process.stderr.write(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
       exitCode = 1;
     } finally {
+      if (standaloneLaunchDispatcherPollInterval) {
+        clearInterval(standaloneLaunchDispatcherPollInterval);
+        standaloneLaunchDispatcherPollInterval = null;
+      }
       lifecycleEventBridge?.stop();
       reviewGateStatusWorker?.stop();
       if (ownsHeadlessShutdown && executorRegistry) {
