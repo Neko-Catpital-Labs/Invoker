@@ -157,7 +157,7 @@ jobs:
         env:
           INVOKER_TEST_ALL_PROOF: '1'
           INVOKER_TEST_ALL_JOBS: '1'
-          TMPDIR: ${{ runner.temp }}/invoker-tmp
+          TMPDIR: /tmp/invoker-tmp
         run: |
           mkdir -p "$TMPDIR"
           chmod 1777 "$TMPDIR"

@@ -98,6 +98,7 @@ function createMockLogger(): Logger {
 }
 
 const tempWorkspaces: string[] = [];
+const originalGithubTargetRepo = process.env.INVOKER_GITHUB_TARGET_REPO;
 function createTempWorkspace(): string {
   const dir = mkdtempSync(join(tmpdir(), 'invoker-task-executor-test-'));
   tempWorkspaces.push(dir);
@@ -105,6 +106,11 @@ function createTempWorkspace(): string {
 }
 
 afterEach(() => {
+  if (originalGithubTargetRepo === undefined) {
+    delete process.env.INVOKER_GITHUB_TARGET_REPO;
+  } else {
+    process.env.INVOKER_GITHUB_TARGET_REPO = originalGithubTargetRepo;
+  }
   while (tempWorkspaces.length > 0) {
     const dir = tempWorkspaces.pop();
     if (dir) rmSync(dir, { recursive: true, force: true });
@@ -992,6 +998,7 @@ describe('TaskRunner', () => {
     });
 
     it('execPr reuses existing open PR instead of creating new one', async () => {
+      process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
       const executor = new TaskRunner({
         orchestrator: { getTask: () => null } as any,
         persistence: {} as any,
@@ -1003,9 +1010,12 @@ describe('TaskRunner', () => {
       (executor as any).execGh = async (args: string[]) => {
         ghCalls.push(args);
         if (args[0] === 'pr' && args[1] === 'list') {
-          return JSON.stringify([{ url: 'https://github.com/owner/repo/pull/42', number: 42 }]);
+          throw new Error('gh pr list should not be used');
         }
-        if (args[0] === 'pr' && args[1] === 'edit') {
+        if (args[0] === 'api' && args[1] === 'repos/owner/repo/pulls' && args.includes('GET')) {
+          return JSON.stringify([{ html_url: 'https://github.com/owner/repo/pull/42', number: 42 }]);
+        }
+        if (args[0] === 'api' && args[1] === 'repos/owner/repo/pulls/42' && args.includes('PATCH')) {
           return '';
         }
         return '';
@@ -1014,24 +1024,24 @@ describe('TaskRunner', () => {
       const url = await (executor as any).execPr('main', 'feature/test', 'My Workflow');
       expect(url).toBe('https://github.com/owner/repo/pull/42');
 
-      // Should have called gh pr list with correct args
-      const listCall = ghCalls.find(c => c[0] === 'pr' && c[1] === 'list');
+      // Should have called REST PR lookup with correct args
+      const listCall = ghCalls.find(c => c[0] === 'api' && c[1] === 'repos/owner/repo/pulls');
       expect(listCall).toBeDefined();
-      expect(listCall).toContain('feature/test');
-      expect(listCall).toContain('main');
+      expect(listCall).toContain('head=owner:feature/test');
+      expect(listCall).toContain('state=open');
 
-      // Should have called gh pr edit to update title
-      const editCall = ghCalls.find(c => c[0] === 'pr' && c[1] === 'edit');
+      // Should have called REST PR update to update title
+      const editCall = ghCalls.find(c => c[0] === 'api' && c[1] === 'repos/owner/repo/pulls/42');
       expect(editCall).toBeDefined();
-      expect(editCall).toContain('42');
-      expect(editCall).toContain('My Workflow');
+      expect(editCall).toContain('title=My Workflow');
 
-      // Should NOT have called gh pr create
-      const createCall = ghCalls.find(c => c[0] === 'pr' && c[1] === 'create');
+      // Should NOT have called REST PR create
+      const createCall = ghCalls.find(c => c[0] === 'api' && c[1] === 'repos/owner/repo/pulls' && c.includes('POST'));
       expect(createCall).toBeUndefined();
     });
 
     it('execPr creates new PR when no open PR exists', async () => {
+      process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
       const executor = new TaskRunner({
         orchestrator: { getTask: () => null } as any,
         persistence: {} as any,
@@ -1043,10 +1053,13 @@ describe('TaskRunner', () => {
       (executor as any).execGh = async (args: string[]) => {
         ghCalls.push(args);
         if (args[0] === 'pr' && args[1] === 'list') {
+          throw new Error('gh pr list should not be used');
+        }
+        if (args[0] === 'api' && args[1] === 'repos/owner/repo/pulls' && args.includes('GET')) {
           return '[]';
         }
-        if (args[0] === 'pr' && args[1] === 'create') {
-          return 'https://github.com/owner/repo/pull/99';
+        if (args[0] === 'api' && args[1] === 'repos/owner/repo/pulls' && args.includes('POST')) {
+          return '{"html_url":"https://github.com/owner/repo/pull/99","number":99}';
         }
         return '';
       };
@@ -1054,23 +1067,57 @@ describe('TaskRunner', () => {
       const url = await (executor as any).execPr('main', 'feature/new', 'New Workflow');
       expect(url).toBe('https://github.com/owner/repo/pull/99');
 
-      // Should have called gh pr list
-      const listCall = ghCalls.find(c => c[0] === 'pr' && c[1] === 'list');
+      // Should have called REST PR lookup
+      const listCall = ghCalls.find(c => c[0] === 'api' && c[1] === 'repos/owner/repo/pulls' && c.includes('GET'));
       expect(listCall).toBeDefined();
 
-      // Should have called gh pr create with correct args
-      const createCall = ghCalls.find(c => c[0] === 'pr' && c[1] === 'create');
+      // Should have called REST PR create with correct args
+      const createCall = ghCalls.find(c => c[0] === 'api' && c[1] === 'repos/owner/repo/pulls' && c.includes('POST'));
       expect(createCall).toBeDefined();
-      expect(createCall).toContain('main');
-      expect(createCall).toContain('feature/new');
-      expect(createCall).toContain('New Workflow');
+      expect(createCall).toContain('base=main');
+      expect(createCall).toContain('head=feature/new');
+      expect(createCall).toContain('title=New Workflow');
 
-      // Should NOT have called gh pr edit
-      const editCall = ghCalls.find(c => c[0] === 'pr' && c[1] === 'edit');
+      // Should NOT have called REST PR update
+      const editCall = ghCalls.find(c => c[0] === 'api' && /\/pulls\/\d+$/.test(c[1]));
       expect(editCall).toBeUndefined();
     });
 
+    it('execPr retries transient REST PR lookup failures', async () => {
+      process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
+      const executor = new TaskRunner({
+        orchestrator: { getTask: () => null } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      let lookupAttempts = 0;
+      (executor as any).execGh = async (args: string[]) => {
+        if (args[0] === 'pr' && args[1] === 'list') {
+          throw new Error('gh pr list should not be used');
+        }
+        if (args[0] === 'api' && args[1] === 'repos/owner/repo/pulls' && args.includes('GET')) {
+          lookupAttempts++;
+          if (lookupAttempts === 1) {
+            throw new Error('gh api repos/owner/repo/pulls failed (code 1): GraphQL: API rate limit already exceeded for user ID 1916223.');
+          }
+          return '[]';
+        }
+        if (args[0] === 'api' && args[1] === 'repos/owner/repo/pulls' && args.includes('POST')) {
+          return '{"html_url":"https://github.com/owner/repo/pull/99","number":99}';
+        }
+        return '';
+      };
+
+      const url = await (executor as any).execPr('main', 'feature/new', 'New Workflow');
+
+      expect(url).toBe('https://github.com/owner/repo/pull/99');
+      expect(lookupAttempts).toBe(2);
+    });
+
     it('execPr passes normalized branch names to gh when base uses origin/ remote-tracking form', async () => {
+      process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
       const executor = new TaskRunner({
         orchestrator: { getTask: () => null } as any,
         persistence: {} as any,
@@ -1081,8 +1128,9 @@ describe('TaskRunner', () => {
       const ghCalls: string[][] = [];
       (executor as any).execGh = async (args: string[]) => {
         ghCalls.push(args);
-        if (args[0] === 'pr' && args[1] === 'list') return '[]';
-        if (args[0] === 'pr' && args[1] === 'create') return 'https://github.com/owner/repo/pull/200';
+        if (args[0] === 'pr' && args[1] === 'list') throw new Error('gh pr list should not be used');
+        if (args[0] === 'api' && args[1] === 'repos/owner/repo/pulls' && args.includes('GET')) return '[]';
+        if (args[0] === 'api' && args[1] === 'repos/owner/repo/pulls' && args.includes('POST')) return '{"html_url":"https://github.com/owner/repo/pull/200","number":200}';
         return '';
       };
 
@@ -1093,15 +1141,12 @@ describe('TaskRunner', () => {
         'Body',
       );
 
-      const listCall = ghCalls.find(c => c[0] === 'pr' && c[1] === 'list');
-      expect(listCall?.indexOf('--base')).toBeGreaterThan(-1);
-      expect(listCall?.[listCall.indexOf('--base') + 1]).toBe('fix/my-work');
-      expect(listCall?.[listCall.indexOf('--head') + 1]).toBe('plan/experiment');
+      const listCall = ghCalls.find(c => c[0] === 'api' && c[1] === 'repos/owner/repo/pulls' && c.includes('GET'));
+      expect(listCall).toContain('head=owner:plan/experiment');
 
-      const createCall = ghCalls.find(c => c[0] === 'pr' && c[1] === 'create');
-      expect(createCall?.indexOf('--base')).toBeGreaterThan(-1);
-      expect(createCall?.[createCall.indexOf('--base') + 1]).toBe('fix/my-work');
-      expect(createCall?.[createCall.indexOf('--head') + 1]).toBe('plan/experiment');
+      const createCall = ghCalls.find(c => c[0] === 'api' && c[1] === 'repos/owner/repo/pulls' && c.includes('POST'));
+      expect(createCall).toContain('base=fix/my-work');
+      expect(createCall).toContain('head=plan/experiment');
     });
 
     it('authorPrBodyWithSkill uses the configured workflow agent when available', async () => {
