@@ -13,6 +13,21 @@ JOBS="${INVOKER_TEST_ALL_JOBS:-1}"
 PROOF="${INVOKER_TEST_ALL_PROOF:-0}"
 PROOF_CONTRACT="INV-117"
 
+# In proof mode the suite set is an explicit manifest of true e2e-on-mock-DB
+# suites (not a glob of everything under required/). The manifest is the single
+# reviewable source of what the e2e proof gate runs.
+PROOF_MANIFEST="${INVOKER_TEST_ALL_PROOF_MANIFEST:-$ROOT/scripts/test-suites/proof-e2e.manifest}"
+manifest_count() { grep -cvE '^[[:space:]]*(#|$)' "$PROOF_MANIFEST"; }
+
+# Sharding: each shard runs a disjoint slice of the proof manifest and records
+# its results to its own STATE_FILE; an aggregate run merges the per-shard state
+# and validates the proof contract over the union.
+SHARD_INDEX="${INVOKER_TEST_ALL_SHARD_INDEX:-}"
+SHARD_TOTAL="${INVOKER_TEST_ALL_SHARD_TOTAL:-1}"
+AGGREGATE="${INVOKER_TEST_ALL_AGGREGATE:-0}"
+SHARDED=0
+if [ -n "$SHARD_INDEX" ] && [ "$SHARD_TOTAL" -gt 1 ]; then SHARDED=1; fi
+
 if [ "$PROOF" = "1" ]; then
   FORCE_RERUN=1
   RESUME=0
@@ -59,6 +74,7 @@ declare -a FAILED=()
 declare -a SUITES=()
 
 expected_executed_for_mode() {
+  if [ "$PROOF" = "1" ] && [ -f "$PROOF_MANIFEST" ]; then manifest_count; return; fi
   case "$MODE_KEY" in
     required)
       printf '18'
@@ -77,6 +93,7 @@ expected_executed_for_mode() {
 }
 
 expected_discovered_for_mode() {
+  if [ "$PROOF" = "1" ] && [ -f "$PROOF_MANIFEST" ]; then manifest_count; return; fi
   case "$MODE_KEY" in
     required)
       printf '18'
@@ -297,6 +314,17 @@ flush_parallel() {
 
 collect_suites() {
   local dir
+  # Proof mode: the suite set is the explicit e2e manifest, not the required/ glob.
+  if [ "$PROOF" = "1" ] && [ -f "$PROOF_MANIFEST" ]; then
+    local rel
+    while IFS= read -r rel; do
+      rel="${rel%%#*}"
+      rel="$(printf '%s' "$rel" | tr -d '[:space:]')"
+      [ -n "$rel" ] || continue
+      SUITES+=( "$ROOT/scripts/test-suites/$rel" )
+    done < "$PROOF_MANIFEST"
+    return
+  fi
   for dir in required optional dangerous; do
     case "$dir" in
       required) ;;
@@ -416,8 +444,40 @@ validate_proof_inventory() {
 
 load_state
 collect_suites
-if ! validate_proof_inventory; then
-  exit 1
+
+# Shard mode: run only this shard's disjoint slice of the manifest. Defer all
+# proof validation to the aggregate run, which sees the union of shard state.
+if [ "$SHARDED" = "1" ] && [ "$AGGREGATE" != "1" ]; then
+  shard_suites=()
+  for i in "${!SUITES[@]}"; do
+    if [ $(( i % SHARD_TOTAL )) -eq "$SHARD_INDEX" ]; then
+      shard_suites+=( "${SUITES[$i]}" )
+    fi
+  done
+  SUITES=( "${shard_suites[@]+"${shard_suites[@]}"}" )
+fi
+
+# Aggregate mode: do not execute. Derive results from the merged shard STATE_FILE
+# and validate the proof contract (inventory + thresholds) over the union.
+if [ "$AGGREGATE" = "1" ]; then
+  for suite in "${SUITES[@]}"; do
+    case "$(state_get "$suite")" in
+      passed)              EXECUTED+=( "$suite" );;
+      failed)              EXECUTED+=( "$suite" ); FAILED+=( "$suite" );;
+      skipped-unavailable) SKIPPED_UNAVAILABLE+=( "$(suite_relpath "$suite")" );;
+      *) ;;   # missing from merged state => not executed => threshold check fails (correct)
+    esac
+  done
+  print_summary
+  validate_proof_inventory || exit 1
+  validate_proof_thresholds || exit 1
+  exit 0
+fi
+
+if [ "$SHARDED" != "1" ]; then
+  if ! validate_proof_inventory; then
+    exit 1
+  fi
 fi
 
 if [ "$PROOF" = "1" ]; then
@@ -479,8 +539,10 @@ if [ "${#JOB_SUITE[@]}" -gt 0 ]; then
 fi
 
 print_summary
-if ! validate_proof_thresholds; then
-  exit 1
+if [ "$SHARDED" != "1" ]; then
+  if ! validate_proof_thresholds; then
+    exit 1
+  fi
 fi
 
 if [ "$overall_failed" -ne 0 ]; then

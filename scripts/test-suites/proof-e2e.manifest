@@ -1,0 +1,11 @@
+# True e2e tests on a mock/temp DB — the ONLY suites the e2e proof gate runs.
+# One line per suite, relative to scripts/test-suites/. Blank lines and # comments ignored.
+# Everything else (vitest, static checks, UI playwright, node loaders) is covered by its own
+# dedicated CI job (Vitest Workspace, quality/*, required-fast/*, playwright/*) and is NOT run here.
+required/08-electron-preprovision-repro.sh
+required/15-submit-workflow-chain.sh
+required/20-e2e-dry-run.sh
+required/21-e2e-dry-run-downstream.sh
+required/22-e2e-dry-run-github.sh
+required/23-fix-intent-repros.sh
+required/50-verify-executor-routing.sh

@@ -102,13 +102,17 @@ jobs:
       - name: Run quality check
         run: ${{ matrix.command }}
 
-  inv117-proof:
+  e2e-proof:
     needs: build-artifacts
     runs-on: ubuntu-latest
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble
-    timeout-minutes: 120
-    name: inv117 / deterministic proof
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    name: e2e-proof / shard ${{ matrix.shard }}
 
     steps:
       - name: Checkout
@@ -153,14 +157,55 @@ jobs:
           git update-ref refs/heads/main refs/remotes/origin/master || true
           git update-ref refs/remotes/origin/main refs/remotes/origin/master || true
 
-      - name: Run INV-117 required proof contract
+      - name: Run e2e proof shard
         env:
           INVOKER_TEST_ALL_PROOF: '1'
-          INVOKER_TEST_ALL_JOBS: '1'
+          INVOKER_TEST_ALL_SHARD_INDEX: ${{ matrix.shard }}
+          INVOKER_TEST_ALL_SHARD_TOTAL: '4'
+          INVOKER_TEST_ALL_STATE_FILE: ${{ github.workspace }}/proof-state.tsv
           TMPDIR: ${{ runner.temp }}/invoker-tmp
         run: |
           mkdir -p "$TMPDIR"
           chmod 1777 "$TMPDIR"
+          bash scripts/run-all-tests.sh
+
+      - name: Upload shard proof state
+        uses: actions/upload-artifact@v4
+        with:
+          name: proof-state-${{ matrix.shard }}
+          path: ${{ github.workspace }}/proof-state.tsv
+          if-no-files-found: error
+
+  e2e-proof-aggregate:
+    needs: e2e-proof
+    runs-on: ubuntu-latest
+    # Same container as the shards so $GITHUB_WORKSPACE (and therefore the
+    # absolute suite paths recorded in the shard state) match for state_get.
+    container:
+      image: mcr.microsoft.com/playwright:v1.58.2-noble
+    timeout-minutes: 15
+    name: e2e-proof / aggregate
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure git safe directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Download shard proof state
+        uses: actions/download-artifact@v4
+        with:
+          pattern: proof-state-*
+          path: /tmp/shard-states
+
+      - name: Merge shard state and validate e2e proof contract
+        env:
+          INVOKER_TEST_ALL_PROOF: '1'
+          INVOKER_TEST_ALL_AGGREGATE: '1'
+          INVOKER_TEST_ALL_STATE_FILE: ${{ github.workspace }}/merged-proof-state.tsv
+        run: |
+          cat /tmp/shard-states/proof-state-*/proof-state.tsv > "$INVOKER_TEST_ALL_STATE_FILE"
           bash scripts/run-all-tests.sh
 
   required-fast:
@@ -293,71 +338,6 @@ jobs:
 
       - name: Run fix-intent repro bundle
         run: bash scripts/test-suites/required/23-fix-intent-repros.sh
-
-  dry-run:
-    needs: build-artifacts
-    runs-on: ubuntu-latest
-    container:
-      image: mcr.microsoft.com/playwright:v1.58.2-noble
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: case-1
-            suite: scripts/test-suites/required/20-e2e-dry-run.sh
-          - name: case-2
-            suite: scripts/test-suites/required/21-e2e-dry-run-downstream.sh
-          - name: case-4
-            suite: scripts/test-suites/required/22-e2e-dry-run-github.sh
-
-    name: dry-run / ${{ matrix.name }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Use Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-          cache-dependency-path: |
-            pnpm-lock.yaml
-            .node-version
-
-      - name: Install native build tools
-        run: apt-get update && apt-get install -y unzip make g++ python3
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: app-build-dist
-          path: /tmp/invoker-build-artifacts
-
-      - name: Extract build artifacts
-        run: tar -xzf /tmp/invoker-build-artifacts/app-build-dist.tgz -C .
-
-      - name: Configure git identity and HTTPS auth
-        run: |
-          git config --global user.name "CI Bot"
-          git config --global user.email "ci@invoker.dev"
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "git@github.com:"
-          git config --global --add url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
-          git update-ref refs/heads/main refs/remotes/origin/master || true
-          git update-ref refs/remotes/origin/main refs/remotes/origin/master || true
-
-      - name: Run dry-run shard
-        run: bash ${{ matrix.suite }}
 
   playwright:
     needs: build-artifacts
