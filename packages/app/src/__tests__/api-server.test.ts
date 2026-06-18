@@ -511,9 +511,8 @@ describe('POST /api/tasks/:id/restart', () => {
 
     const res = await request(port, 'POST', '/api/tasks/task-1/restart');
     expect(res.status).toBe(200);
-    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalledTimes(2);
-    expect(mocks.taskExecutor.executeTasks).toHaveBeenNthCalledWith(1, [scoped]);
-    expect(mocks.taskExecutor.executeTasks).toHaveBeenNthCalledWith(2, [topup]);
+    expect(mocks.orchestrator.startExecution).toHaveBeenCalled();
+    expect(mocks.taskExecutor.executeTasks).not.toHaveBeenCalled();
   });
 
   it('does not relaunch duplicate attempt from global top-up', async () => {
@@ -532,8 +531,7 @@ describe('POST /api/tasks/:id/restart', () => {
 
     const res = await request(port, 'POST', '/api/tasks/task-1/restart');
     expect(res.status).toBe(200);
-    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalledTimes(1);
-    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalledWith([scoped]);
+    expect(mocks.taskExecutor.executeTasks).not.toHaveBeenCalled();
   });
 });
 
@@ -569,7 +567,7 @@ describe('POST /api/tasks/:id/recreate-downstream', () => {
     const res = await request(port, 'POST', '/api/tasks/task-1/recreate-downstream');
     expect(res.status).toBe(200);
     expect(res.body.tasksStarted).toBe(1);
-    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalledWith([dispatchable]);
+    expect(mocks.taskExecutor.executeTasks).not.toHaveBeenCalled();
   });
 
   it('returns 400 on domain failure surfaced by CommandService', async () => {
@@ -604,7 +602,7 @@ describe('POST /api/tasks/:id/approve', () => {
     expect(mocks.orchestrator.startExecution).toHaveBeenCalled();
   });
 
-  it('routes downstream merge nodes to executeTasks (not publishAfterFix)', async () => {
+  it('leaves downstream merge-node launches to the dispatch outbox', async () => {
     mocks.orchestrator.approve.mockResolvedValue([
       makeTask({ id: 'merge-1', status: 'running', config: { isMergeNode: true } }),
       makeTask({ id: 'task-2', status: 'running', config: {} }),
@@ -613,12 +611,7 @@ describe('POST /api/tasks/:id/approve', () => {
     const res = await request(port, 'POST', '/api/tasks/task-1/approve');
     expect(res.status).toBe(200);
     expect(mocks.taskExecutor.publishAfterFix).not.toHaveBeenCalled();
-    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalledWith(
-      expect.arrayContaining([
-        expect.objectContaining({ id: 'merge-1' }),
-        expect.objectContaining({ id: 'task-2' }),
-      ]),
-    );
+    expect(mocks.taskExecutor.executeTasks).not.toHaveBeenCalled();
   });
 
   it('routes post-fix merge nodes to publishAfterFix', async () => {
@@ -776,8 +769,8 @@ describe('POST /api/tasks/:id/edit-prompt', () => {
     expect(res.body.action).toBe('prompt_edited');
     expect(mocks.orchestrator.editTaskPrompt).toHaveBeenCalledWith('task-1', 'do the thing');
     expect(mocks.orchestrator.editTaskCommand).not.toHaveBeenCalled();
-    // Facade dispatches any newly-runnable tasks via the executor.
-    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalled();
+    // The launch outbox dispatches newly-runnable tasks.
+    expect(mocks.taskExecutor.executeTasks).not.toHaveBeenCalled();
   });
 
   it('returns 400 when prompt is missing', async () => {
@@ -802,8 +795,7 @@ describe('POST /api/tasks/:id/edit-prompt', () => {
     const res = await request(port, 'POST', '/api/tasks/task-1/edit-prompt', { prompt: 'new prompt' });
     expect(res.status).toBe(200);
     expect(res.body.tasksStarted).toBe(1);
-    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalledTimes(1);
-    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalledWith([running]);
+    expect(mocks.taskExecutor.executeTasks).not.toHaveBeenCalled();
   });
 
   it('does not call editTaskCommand when editing prompt', async () => {
@@ -846,7 +838,7 @@ describe('POST /api/tasks/:id/edit-type', () => {
     expect(res.body.ok).toBe(true);
     expect(res.body.action).toBe('type_edited');
     expect(mocks.orchestrator.editTaskType).toHaveBeenCalledWith('task-1', 'ssh', 'remote-b');
-    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalled();
+    expect(mocks.taskExecutor.executeTasks).not.toHaveBeenCalled();
   });
 });
 
@@ -859,8 +851,8 @@ describe('POST /api/tasks/:id/edit-agent', () => {
     expect(mocks.orchestrator.editTaskAgent).toHaveBeenCalledWith('task-1', 'codex');
     expect(mocks.orchestrator.editTaskCommand).not.toHaveBeenCalled();
     expect(mocks.orchestrator.editTaskPrompt).not.toHaveBeenCalled();
-    // Facade dispatches any newly-runnable tasks via the executor.
-    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalled();
+    // The launch outbox dispatches newly-runnable tasks.
+    expect(mocks.taskExecutor.executeTasks).not.toHaveBeenCalled();
   });
 
   it('returns 400 when agent is missing', async () => {
@@ -884,7 +876,7 @@ describe('POST /api/tasks/:id/gate-policy', () => {
       'task-1',
       [{ workflowId: 'wf-upstream', taskId: '__merge__', gatePolicy: 'review_ready' }],
     );
-    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalled();
+    expect(mocks.taskExecutor.executeTasks).not.toHaveBeenCalled();
   });
 
   it('returns 400 when updates are missing', async () => {
@@ -929,9 +921,6 @@ describe('POST /api/workflows/:id/restart', () => {
 
   it('handles concurrent restart requests independently', async () => {
     mocks.orchestrator.recreateWorkflow = vi.fn(() => [makeTask()]);
-    mocks.taskExecutor.executeTasks.mockImplementation(
-      async () => await new Promise<void>((resolve) => setTimeout(resolve, 100)),
-    );
 
     const [r1, r2] = await Promise.all([
       request(port, 'POST', '/api/workflows/wf-1/restart'),
@@ -944,7 +933,7 @@ describe('POST /api/workflows/:id/restart', () => {
     expect(r2.body.coalesced).toBeUndefined();
     expect(mocks.persistence.updateWorkflow).toHaveBeenCalledTimes(2);
     expect(mocks.orchestrator.recreateWorkflow).toHaveBeenCalledTimes(2);
-    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalledTimes(2);
+    expect(mocks.taskExecutor.executeTasks).not.toHaveBeenCalled();
   });
 
   it('returns 404 when workflow not found', async () => {
@@ -971,9 +960,8 @@ describe('POST /api/workflows/:id/restart', () => {
     const res = await request(port, 'POST', '/api/workflows/wf-1/restart');
     expect(res.status).toBe(200);
     expect(res.body.tasksStarted).toBe(1);
-    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalledTimes(2);
-    expect(mocks.taskExecutor.executeTasks).toHaveBeenNthCalledWith(1, [scoped]);
-    expect(mocks.taskExecutor.executeTasks).toHaveBeenNthCalledWith(2, [topup]);
+    expect(mocks.orchestrator.startExecution).toHaveBeenCalled();
+    expect(mocks.taskExecutor.executeTasks).not.toHaveBeenCalled();
   });
 });
 
@@ -1009,7 +997,7 @@ describe('POST /api/workflows/:id/fork', () => {
     expect(res.body.sourceWorkflowId).toBe('wf-1');
     expect(res.body.forkedWorkflowId).toBe('wf-1-fork');
     expect(mocks.orchestrator.forkWorkflow).toHaveBeenCalledWith('wf-1');
-    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalled();
+    expect(mocks.taskExecutor.executeTasks).not.toHaveBeenCalled();
   });
 
   it('returns an error status when forkWorkflow throws', async () => {
@@ -1086,9 +1074,7 @@ describe('POST /api/workflows/:id/rebase-recreate', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.tasksStarted).toBe(1);
-    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalledTimes(2);
-    expect(mocks.taskExecutor.executeTasks).toHaveBeenNthCalledWith(1, [scoped]);
-    expect(mocks.taskExecutor.executeTasks).toHaveBeenNthCalledWith(2, [crossWorkflow]);
+    expect(mocks.taskExecutor.executeTasks).not.toHaveBeenCalled();
   });
 
   it('old rebase-and-retry route is gone', async () => {
