@@ -272,18 +272,60 @@ cleanup() {
 trap cleanup EXIT
 
 owner_ping_ready() {
-  node --input-type=module <<'NODE' >/dev/null 2>&1
-import { IpcBus } from './packages/transport/dist/index.js';
-const bus = new IpcBus(undefined, { allowServe: false, requestDeadlineMs: 1000 });
-try {
-  await bus.ready();
-  const response = await bus.request('headless.owner-ping', {});
-  if (!response || response.ok !== true) process.exit(1);
-} catch {
-  process.exit(1);
-} finally {
-  bus.disconnect();
+  node <<'NODE' >/dev/null 2>&1
+const net = require('node:net');
+const os = require('node:os');
+const path = require('node:path');
+
+const homeRoot = process.env.INVOKER_DB_DIR
+  ?? (process.env.NODE_ENV === 'test'
+    ? path.join(os.homedir(), '.invoker', 'test')
+    : path.join(os.homedir(), '.invoker'));
+const socketPath = process.env.INVOKER_IPC_SOCKET || path.join(homeRoot, 'ipc-transport.sock');
+const reqId = '0';
+let buffer = Buffer.alloc(0);
+let done = false;
+
+function finish(code) {
+  if (done) return;
+  done = true;
+  clearTimeout(timer);
+  socket.destroy();
+  process.exit(code);
 }
+
+function encode(env) {
+  const json = Buffer.from(JSON.stringify(env), 'utf8');
+  const frame = Buffer.allocUnsafe(4 + json.length);
+  frame.writeUInt32BE(json.length, 0);
+  json.copy(frame, 4);
+  return frame;
+}
+
+const timer = setTimeout(() => finish(1), 1000);
+const socket = net.createConnection({ path: socketPath }, () => {
+  socket.write(encode({ kind: 'req', channel: 'headless.owner-ping', body: {}, reqId }));
+});
+
+socket.on('data', (chunk) => {
+  buffer = Buffer.concat([buffer, chunk]);
+  while (buffer.length >= 4) {
+    const length = buffer.readUInt32BE(0);
+    if (buffer.length < 4 + length) return;
+    const raw = buffer.subarray(4, 4 + length).toString('utf8');
+    buffer = buffer.subarray(4 + length);
+    try {
+      const env = JSON.parse(raw);
+      if (env.reqId !== reqId) continue;
+      finish(env.kind === 'res' && env.body && env.body.ok === true ? 0 : 1);
+    } catch {
+      finish(1);
+    }
+  }
+});
+
+socket.on('error', () => finish(1));
+socket.on('close', () => finish(1));
 NODE
 }
 
@@ -332,45 +374,14 @@ headless_mutation_no_track() {
     return $?
   fi
 
-  local output=""
-  local code=0
-  set +e
-  output="$(node "$IPC_HELPER" exec --no-track -- "$@" 2>&1)"
-  code=$?
-  set -e
-  if [ "$code" -eq 0 ]; then
-    printf '%s\n' "$output"
-    return 0
-  fi
-
-  if [ "$IPC_FALLBACK_TO_STANDALONE" = true ] \
-    && printf '%s\n' "$output" | grep -Eq 'No request handler registered for channel: headless\.exec|NO_HANDLER'; then
-    printf '%s\n' "$output" >&2
-    echo "  IPC headless.exec handler unavailable; ensuring managed standalone owner" >&2
-    if start_managed_headless_owner; then
-      set +e
-      output="$(node "$IPC_HELPER" exec --no-track -- "$@" 2>&1)"
-      code=$?
-      set -e
-      if [ "$code" -eq 0 ]; then
-        printf '%s\n' "$output"
-        return 0
-      fi
-      printf '%s\n' "$output" >&2
-    fi
-    if [ -f "$HEADLESS_CLIENT_JS" ]; then
-      echo "  managed owner path unavailable; falling back to headless-client owner bootstrap" >&2
-      INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS="${INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS:-86400000}" \
-        node "$HEADLESS_CLIENT_JS" --no-track "$@"
-    else
-      echo "  missing built headless client at $HEADLESS_CLIENT_JS; falling back to direct runner" >&2
-      INVOKER_HEADLESS_STANDALONE=1 "$RUNNER" --headless --no-track "$@"
-    fi
+  if [ -f "$HEADLESS_CLIENT_JS" ]; then
+    INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS="${INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS:-86400000}" \
+      node "$HEADLESS_CLIENT_JS" --no-track "$@"
     return $?
   fi
 
-  printf '%s\n' "$output" >&2
-  return "$code"
+  echo "  missing built headless client at $HEADLESS_CLIENT_JS; falling back to direct runner" >&2
+  INVOKER_HEADLESS_STANDALONE=1 "$RUNNER" --headless --no-track "$@"
 }
 
 bounded_headless_query() {
