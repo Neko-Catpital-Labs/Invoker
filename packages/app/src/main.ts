@@ -134,6 +134,10 @@ import {
   type HeadlessDeps,
 } from './headless.js';
 import {
+  startStandaloneLaunchDispatcher,
+  type StandaloneLaunchDispatcherController,
+} from './headless-standalone-launch-dispatcher.js';
+import {
   approveTask as sharedApproveTask,
   buildInvalidationDeps,
   deleteAllWorkflows as sharedDeleteAllWorkflows,
@@ -975,6 +979,7 @@ if (isHeadless) {
     let exitCode = 0;
     let reviewGateStatusWorker: ReviewGateStatusWorker | null = null;
     let lifecycleEventBridge: LifecycleEventBridge | null = null;
+    let standaloneLaunchDispatcherController: StandaloneLaunchDispatcherController | null = null;
     try {
       // Standalone mode: initialize services and run headless
       await initServices({
@@ -1212,6 +1217,14 @@ if (isHeadless) {
 
       // In standalone owner mode, serve delegated requests from peer headless processes.
       if (standaloneMode && messageBus) {
+        if (!readOnlyMode) {
+          standaloneLaunchDispatcherController = startStandaloneLaunchDispatcher({
+            headlessDeps,
+            ownerId: workflowMutationOwnerId,
+            createTaskExecutor: createStandaloneTaskExecutor,
+            setLatestTaskExecutor: (executor) => { latestTaskExecutor = executor; },
+          });
+        }
         const standaloneOwnerIdleTimeoutMs = Number.parseInt(
           process.env.INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS ?? '0',
           10,
@@ -1709,6 +1722,7 @@ if (isHeadless) {
       process.stderr.write(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
       exitCode = 1;
     } finally {
+      standaloneLaunchDispatcherController?.stop();
       lifecycleEventBridge?.stop();
       reviewGateStatusWorker?.stop();
       if (ownsHeadlessShutdown && executorRegistry) {

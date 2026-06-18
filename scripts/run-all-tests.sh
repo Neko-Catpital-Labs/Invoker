@@ -161,6 +161,27 @@ suite_preflight() {
   esac
   return 0
 }
+cleanup_proof_tmp() {
+  [ "$PROOF" = "1" ] || return 0
+  [ "$JOBS" -eq 1 ] || return 0
+  local tmp_root="${TMPDIR:-/tmp}"
+  [ -d "$tmp_root" ] || return 0
+  local state_real=""
+  if [ -n "${STATE_FILE:-}" ] && [ -e "$STATE_FILE" ]; then
+    state_real="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$STATE_FILE")"
+  fi
+  shopt -s nullglob
+  local path real
+  for path in "$tmp_root"/invoker-* "$tmp_root"/verify-exec-routing.*; do
+    [ -e "$path" ] || continue
+    real="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$path")"
+    if [ -n "$state_real" ] && [ "$real" = "$state_real" ]; then
+      continue
+    fi
+    rm -rf "$path" 2>/dev/null || true
+  done
+  shopt -u nullglob
+}
 
 run_suite() {
   local suite="$1"
@@ -431,6 +452,7 @@ for suite in "${SUITES[@]}"; do
   if should_skip_for_resume "$suite"; then
     continue
   fi
+  cleanup_proof_tmp
 
   if [ "$JOBS" -gt 1 ] && is_parallel_safe "$suite"; then
     while [ "${#JOB_SUITE[@]}" -ge "$JOBS" ]; do
