@@ -8,78 +8,102 @@ log_file="$(mktemp "${TMPDIR:-/tmp}/invoker-pending-pool-deferral-repro.XXXXXX.l
 state_file="$(mktemp "${TMPDIR:-/tmp}/invoker-pending-pool-deferral-state.XXXXXX.tsv")"
 trap 'rm -f "$log_file" "$state_file"' EXIT
 
-echo "[repro] wf-1778431095371-43/regression-inv-63 was pending because pnpm-ssh launch attempts were repeatedly deferred by SSH resource leases / pool capacity."
-echo "[repro] After each deferral, deferTask clears launch timestamps and leaves the task pending in the queue."
-echo "[repro] Before the fix, retry-pending-autofix-failed treated that queue-active no-timestamp shape as stale and launched Codex investigation."
-echo "[repro] After the fix, the retry loop treats that shape as an active blocker and waits for capacity instead."
+echo "[repro] wf-1778431095371-43/regression-inv-63 first waited on pnpm-ssh capacity, then claimed an SSH member and emitted task.executor.start_begin."
+echo "[repro] The retry loop escalated it while it was still pending/launching inside TaskRunner's executor.start timeout window."
+echo "[repro] Before the fix, the generic 300s active-queue threshold classified that launch as stale."
+echo "[repro] After the fix, pending/launching queue-active tasks use executor-start-timeout + grace before investigation."
 
 python3 <<'PY'
 import json
 
 task = {
     "id": "wf-1778431095371-43/regression-inv-63",
-    "createdAt": "2026-06-03T18:00:00.000Z",
     "status": "pending",
-    "config": {"poolId": "pnpm-ssh", "runnerKind": "ssh"},
-    "execution": {},
+    "config": {"poolId": "pnpm-ssh", "runnerKind": "ssh", "workflowId": "wf-1778431095371-43"},
+    "execution": {
+        "selectedAttemptId": "wf-1778431095371-43/regression-inv-63-a751c1263",
+        "phase": "launching",
+        "launchStartedAt": "2026-06-16T01:55:15.229Z",
+        "lastHeartbeatAt": "2026-06-16T01:55:15.229Z",
+    },
 }
 queue = {
-    "queued": [{"taskId": "wf-1778431095371-43/regression-inv-63"}],
-    "running": [],
-    "runningCount": 0,
+    "queued": [],
+    "running": [
+        {
+            "taskId": "wf-1778431095371-43/regression-inv-63",
+            "attemptId": "wf-1778431095371-43/regression-inv-63-a751c1263",
+        }
+    ],
+    "runningCount": 1,
 }
 audit = [
-    {
-        "eventType": "task.executor.deferred",
-        "payload": json.dumps({"reason": "ssh-resource-lease-held", "poolId": "pnpm-ssh"}),
-    },
     {
         "eventType": "task.executor.deferred",
         "payload": json.dumps({"reason": "execution-pool-capacity", "poolId": "pnpm-ssh"}),
     },
     {
-        "eventType": "task.deferred",
-        "payload": json.dumps({"status": "pending", "execution": {}}),
+        "eventType": "task.executor.start_begin",
+        "payload": json.dumps(
+            {
+                "attemptId": "wf-1778431095371-43/regression-inv-63-a751c1263",
+                "executorType": "ssh",
+                "poolId": "pnpm-ssh",
+                "poolMemberId": "remote_digital_ocean_3",
+            }
+        ),
     },
 ]
+resource_lease = {
+    "taskId": task["id"],
+    "holderId": "owner:22521:wf-1778431095371-43/regression-inv-63:wf-1778431095371-43/regression-inv-63-a751c1263",
+    "poolMemberId": "remote_digital_ocean_3",
+    "leaseExpiresAt": "2026-06-16T02:15:23.322Z",
+}
 
 task_id = task["id"]
-queued_ids = {row.get("taskId") for row in queue["queued"]}
+queue_ids = {row.get("taskId") for row in queue["queued"]} | {row.get("taskId") for row in queue["running"]}
 defer_reasons = {
     json.loads(row["payload"]).get("reason")
     for row in audit
     if row["eventType"] == "task.executor.deferred"
 }
 assert task["status"] == "pending"
-assert not task["execution"].get("launchStartedAt")
-assert task_id in queued_ids
+assert task["execution"].get("phase") == "launching"
+assert task["execution"].get("launchStartedAt")
+assert task_id in queue_ids
 assert task["config"]["poolId"] == "pnpm-ssh"
-assert {"ssh-resource-lease-held", "execution-pool-capacity"} <= defer_reasons
+assert "execution-pool-capacity" in defer_reasons
+assert any(row["eventType"] == "task.executor.start_begin" for row in audit)
+assert resource_lease["taskId"] == task_id
+assert resource_lease["holderId"].endswith(task["execution"]["selectedAttemptId"])
 
-# Pre-fix retry loop logic treated old queued tasks with no launch metadata as
-# stale, so it selected this capacity-deferred task for local Codex
-# investigation. The fixed classifier first honors the active queue state and
-# only considers launch/heartbeat timestamps for queue-active staleness.
+# At the time the retry loop escalated, the launch was roughly nine minutes old:
+# older than the old generic 300s active-queue threshold, but younger than the
+# fixed 600s executor start timeout plus 120s grace.
+launch_age_seconds = 540
 old_classifier_would_investigate = (
     task["status"] == "pending"
-    and not task["execution"].get("launchStartedAt")
-    and bool(task.get("createdAt"))
+    and task_id in queue_ids
+    and task["execution"].get("phase") == "launching"
+    and launch_age_seconds >= 300
 )
 fixed_classifier_blocks = (
     task["status"] == "pending"
-    and task_id in queued_ids
-    and not task["execution"].get("launchStartedAt")
+    and task_id in queue_ids
+    and task["execution"].get("phase") == "launching"
+    and launch_age_seconds < (600 + 120)
 )
 assert old_classifier_would_investigate
 assert fixed_classifier_blocks
-print("[repro] diagnostic fixture asserts queued pending task plus pnpm-ssh lease/capacity deferrals")
-print("[repro] pre-fix classifier would investigate; fixed classifier blocks on active queue")
+print("[repro] diagnostic fixture asserts queue-running pending/launching SSH task with start_begin and active selected-attempt lease")
+print("[repro] pre-fix 300s classifier would investigate; fixed classifier waits for executor timeout plus grace")
 PY
 
 INVOKER_RETRY_PENDING_AUTOFIX_STATE_FILE="$state_file" \
   scripts/retry-pending-autofix-failed.sh --self-test | tee "$log_file"
 
-grep -Fq "self-test: queue-active pending task after pool deferral is treated as blocker" "$log_file"
+grep -Fq "self-test: launch-active pending task before executor timeout is treated as blocker" "$log_file"
 grep -Fq "self-test: all passed" "$log_file"
 
 echo "[repro] passed"

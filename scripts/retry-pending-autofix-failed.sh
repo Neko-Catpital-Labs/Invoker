@@ -31,6 +31,7 @@ MAX_FIX_ATTEMPTS=3
 RECOVER_STALE_AI_STATES=true
 STALE_AI_STATE_SECONDS=300
 STALE_ACTIVE_QUEUE_SECONDS=300
+STALE_LAUNCH_GRACE_SECONDS="${INVOKER_RETRY_PENDING_AUTOFIX_LAUNCH_STALE_GRACE_SECONDS:-120}"
 INVESTIGATE_PENDING=true
 INVESTIGATE_COOLDOWN_SECONDS=1800
 RESET_STATE_AFTER_REPAIR=true
@@ -107,6 +108,29 @@ positive_int_or_zero() {
 
 positive_int() {
   [[ "$1" =~ ^[1-9][0-9]*$ ]]
+}
+
+executor_start_timeout_seconds() {
+  local raw="${INVOKER_EXECUTOR_START_TIMEOUT_MS:-600000}"
+  if ! [[ "$raw" =~ ^[1-9][0-9]*$ ]]; then
+    raw=600000
+  fi
+  printf '%s\n' $(((raw + 999) / 1000))
+}
+
+launching_active_queue_seconds() {
+  local executor_seconds grace_seconds minimum_seconds
+  executor_seconds="$(executor_start_timeout_seconds)"
+  grace_seconds="$STALE_LAUNCH_GRACE_SECONDS"
+  if ! [[ "$grace_seconds" =~ ^[0-9]+$ ]]; then
+    grace_seconds=120
+  fi
+  minimum_seconds=$((executor_seconds + grace_seconds))
+  if [ "$STALE_ACTIVE_QUEUE_SECONDS" -gt "$minimum_seconds" ]; then
+    printf '%s\n' "$STALE_ACTIVE_QUEUE_SECONDS"
+  else
+    printf '%s\n' "$minimum_seconds"
+  fi
 }
 
 while [[ $# -gt 0 ]]; do
@@ -818,7 +842,7 @@ if queue_path.exists() and queue_path.stat().st_size > 0:
         queue = {}
     if isinstance(queue, dict):
         collect_queue_task_ids(queue.get("queued"))
-
+        collect_queue_task_ids(queue.get("running"))
 conn = None
 blocked = []
 try:
@@ -1204,8 +1228,9 @@ build_targets() {
   local blocking_tasks_file="${14}"
   local status_counts_file="${15}"
   local now_epoch="${16}"
+  local stale_launching_queue_seconds="${17}"
 
-  python3 - "$tasks_file" "$queue_file" "$pending_workflows_file" "$failed_tasks_file" "$approvals_file" "$localize_ssh_file" "$infra_retry_file" "$auto_fix_attempts_file" "$stale_fixing_file" "$stale_active_queue_file" "$stale_running_file" "$stale_ssh_pin_file" "$pending_tasks_file" "$blocking_tasks_file" "$status_counts_file" "$now_epoch" "$INCLUDE_MERGE" "$RECOVER_STALE_AI_STATES" "$STALE_AI_STATE_SECONDS" "$STALE_ACTIVE_QUEUE_SECONDS" <<'PY'
+  python3 - "$tasks_file" "$queue_file" "$pending_workflows_file" "$failed_tasks_file" "$approvals_file" "$localize_ssh_file" "$infra_retry_file" "$auto_fix_attempts_file" "$stale_fixing_file" "$stale_active_queue_file" "$stale_running_file" "$stale_ssh_pin_file" "$pending_tasks_file" "$blocking_tasks_file" "$status_counts_file" "$now_epoch" "$INCLUDE_MERGE" "$RECOVER_STALE_AI_STATES" "$STALE_AI_STATE_SECONDS" "$STALE_ACTIVE_QUEUE_SECONDS" "$stale_launching_queue_seconds" <<'PY'
 import datetime
 import json
 import pathlib
@@ -1232,6 +1257,7 @@ include_merge = sys.argv[17] == "true"
 recover_stale_ai_states = sys.argv[18] == "true"
 stale_ai_state_seconds = int(sys.argv[19])
 stale_active_queue_seconds = int(sys.argv[20])
+stale_launching_queue_seconds = int(sys.argv[21])
 
 pending_workflows = set()
 pending_tasks = []
@@ -1301,8 +1327,8 @@ def is_stale_ai_state(execution: dict) -> bool:
         return True
     return (now_epoch - latest_epoch) >= stale_ai_state_seconds
 
-def is_stale_active_queue(execution: dict) -> bool:
-    if stale_active_queue_seconds <= 0:
+def is_stale_active_queue(execution: dict, threshold_seconds: int = stale_active_queue_seconds) -> bool:
+    if threshold_seconds <= 0:
         return True
     epochs = [
         parse_epoch(execution.get("lastHeartbeatAt")),
@@ -1312,7 +1338,7 @@ def is_stale_active_queue(execution: dict) -> bool:
     latest_epoch = max((epoch for epoch in epochs if epoch is not None), default=None)
     if latest_epoch is None:
         return False
-    return (now_epoch - latest_epoch) >= stale_active_queue_seconds
+    return (now_epoch - latest_epoch) >= threshold_seconds
 
 def collect_queue_task_ids(value):
     if isinstance(value, dict):
@@ -1382,7 +1408,10 @@ for raw in tasks_path.read_text(encoding="utf-8").splitlines():
         stale_ssh_pin.append(task_id)
 
     if task_id in active_queue_task_ids and status_text not in terminal_task_statuses:
-        if status == "pending" and is_stale_active_queue(execution):
+        if status == "pending" and is_stale_active_queue(
+            execution,
+            stale_launching_queue_seconds if has_launch_claim else stale_active_queue_seconds,
+        ):
             if workflow_id:
                 pending_workflows.add(str(workflow_id))
             pending_tasks.append(task_id)
@@ -1928,7 +1957,7 @@ run_cycle() {
     echo "cycle $cycle: failed to collect task states" >&2
     return 1
   fi
-  build_targets "$tasks_file" "$queue_file" "$pending_workflows_file" "$failed_tasks_file" "$approvals_file" "$localize_ssh_file" "$infra_retry_file" "$auto_fix_attempts_file" "$stale_fixing_file" "$stale_active_queue_file" "$stale_running_file" "$stale_ssh_pin_file" "$pending_tasks_file" "$blocking_tasks_file" "$status_counts_file" "$now_epoch"
+  build_targets "$tasks_file" "$queue_file" "$pending_workflows_file" "$failed_tasks_file" "$approvals_file" "$localize_ssh_file" "$infra_retry_file" "$auto_fix_attempts_file" "$stale_fixing_file" "$stale_active_queue_file" "$stale_running_file" "$stale_ssh_pin_file" "$pending_tasks_file" "$blocking_tasks_file" "$status_counts_file" "$now_epoch" "$(launching_active_queue_seconds)"
   write_duplicate_ssh_leases_file "$duplicate_ssh_leases_file"
   write_orphan_ssh_leases_file "$orphan_ssh_leases_file"
   write_ssh_running_without_lease_file "$ssh_running_without_lease_file"
@@ -2284,6 +2313,9 @@ run_cycle() {
         fi
         if [ -s "$ssh_running_without_lease_file" ]; then
           echo "pending investigation includes SSH running tasks without active leases: $(count_lines "$ssh_running_without_lease_file")"
+        fi
+        if [ -s "$ssh_running_active_lease_file" ]; then
+          echo "pending investigation includes running SSH tasks with active leases: $(count_lines "$ssh_running_active_lease_file")"
         fi
         if [ -s "$pool_capacity_blocked_file" ]; then
           echo "pending investigation excludes active SSH pool capacity blockers: $(count_lines "$pool_capacity_blocked_file")"
@@ -2879,6 +2911,67 @@ PY
   self_test_assert_contains "$test_root/ssh-running-no-lease.out" "pending investigation includes SSH running tasks without active leases: 1"
   self_test_assert_contains "$test_root/ssh-running-no-lease.out" "investigated pending task with Codex: wf-1000-22/regression"
 
+  echo "self-test: stale running SSH task with active selected-attempt lease is investigated"
+  self_test_reset
+  RETRY_INCOMPLETE_WORKFLOWS=true
+  printf 'retry-workflow\twf-1000-30\t%s\n' "$now_epoch" > "$SUBMISSIONS_FILE"
+  printf '%s\n' "wf-1000-30" > "$workflows_label_file"
+  printf '%s\n' '{"id":"wf-1000-30","status":"running"}' > "$workflows_jsonl_file"
+  printf '%s\n' '{"running":[{"taskId":"wf-1000-30/regression"}],"queued":[],"runningCount":1,"maxConcurrency":12}' > "$self_test_queue_file"
+  printf '%s\n' '{"id":"wf-1000-30/regression","status":"running","config":{"workflowId":"wf-1000-30","runnerKind":"ssh","poolId":"pnpm-ssh","poolMemberId":"remote-a"},"execution":{"selectedAttemptId":"wf-1000-30/regression-a1","lastHeartbeatAt":"2000-01-01T00:00:00Z","startedAt":"2000-01-01T00:00:00Z","phase":"executing"}}' > "$tasks_dir/wf-1000-30.jsonl"
+  python3 - "$DB_PATH" <<'PY'
+import sqlite3
+import sys
+
+db_path = sys.argv[1]
+conn = sqlite3.connect(db_path)
+with conn:
+    conn.executescript(
+        """
+        CREATE TABLE tasks (
+          id TEXT PRIMARY KEY,
+          status TEXT,
+          runner_kind TEXT,
+          pool_member_id TEXT,
+          selected_attempt_id TEXT
+        );
+        CREATE TABLE execution_resource_leases (
+          resource_key TEXT,
+          resource_type TEXT,
+          holder_id TEXT,
+          task_id TEXT,
+          pool_id TEXT,
+          pool_member_id TEXT,
+          acquired_at TEXT,
+          last_heartbeat_at TEXT,
+          lease_expires_at TEXT,
+          metadata_json TEXT,
+          PRIMARY KEY(resource_key, holder_id)
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO tasks VALUES (?, ?, ?, ?, ?)",
+        ("wf-1000-30/regression", "running", "ssh", "remote-a", "wf-1000-30/regression-a1"),
+    )
+    conn.execute(
+        """
+        INSERT INTO execution_resource_leases
+          (resource_key, resource_type, holder_id, task_id, pool_id, pool_member_id,
+           acquired_at, last_heartbeat_at, lease_expires_at, metadata_json)
+        VALUES ('ssh:invoker@host-a:22', 'ssh', 'owner:123:wf-1000-30/regression:wf-1000-30/regression-a1',
+                'wf-1000-30/regression', 'pnpm-ssh', 'remote-a',
+                '2099-01-01T00:00:00Z', '2099-01-01T00:00:00Z', '2099-01-01T00:20:00Z', NULL)
+        """
+    )
+conn.close()
+PY
+  run_cycle selftest-ssh-running-active-lease > "$test_root/ssh-running-active-lease.out" 2>&1 || { sed -n '1,260p' "$test_root/ssh-running-active-lease.out" >&2; return 1; }
+  self_test_assert_contains "$test_root/ssh-running-active-lease.out" "stale-running=1"
+  self_test_assert_contains "$test_root/ssh-running-active-lease.out" "ssh-running-active-lease=1"
+  self_test_assert_contains "$test_root/ssh-running-active-lease.out" "pending investigation includes running SSH tasks with active leases: 1"
+  self_test_assert_contains "$test_root/ssh-running-active-lease.out" "investigated pending task with Codex: wf-1000-30/regression"
+
   echo "self-test: active SSH lease for old attempt on running task is released"
   self_test_reset
   RETRY_INCOMPLETE_WORKFLOWS=true
@@ -3026,12 +3119,33 @@ PY
   self_test_assert_contains "$test_root/queue-active.out" "stale-queue-pending=0"
   self_test_assert_not_contains "$codex_commands_file" "exec --cd"
 
-  echo "self-test: queue-active pending task after pool deferral is treated as blocker"
+  echo "self-test: launch-active pending task before executor timeout is treated as blocker"
+  self_test_reset
+  RETRY_INCOMPLETE_WORKFLOWS=false
+  local launch_within_timeout_ts
+  launch_within_timeout_ts="$(python3 - "$now_epoch" <<'PY'
+import datetime
+import sys
+
+epoch = int(sys.argv[1]) - 540
+print(datetime.datetime.fromtimestamp(epoch, tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+PY
+)"
+  printf '%s\n' "wf-1000-31" > "$workflows_label_file"
+  printf '%s\n' '{"id":"wf-1000-31","status":"running"}' > "$workflows_jsonl_file"
+  printf '%s\n' '{"running":[{"taskId":"wf-1000-31/regression","attemptId":"wf-1000-31/regression-a1"}],"queued":[],"runningCount":1,"maxConcurrency":12}' > "$self_test_queue_file"
+  printf '{"id":"wf-1000-31/regression","status":"pending","config":{"workflowId":"wf-1000-31","runnerKind":"ssh","poolId":"pnpm-ssh"},"execution":{"selectedAttemptId":"wf-1000-31/regression-a1","lastHeartbeatAt":"%s","launchStartedAt":"%s","phase":"launching"}}\n' "$launch_within_timeout_ts" "$launch_within_timeout_ts" > "$tasks_dir/wf-1000-31.jsonl"
+  run_cycle selftest-launch-before-timeout > "$test_root/launch-before-timeout.out" 2>&1 || { sed -n '1,200p' "$test_root/launch-before-timeout.out" >&2; return 1; }
+  self_test_assert_contains "$test_root/launch-before-timeout.out" "pending-tasks=0 blockers=1"
+  self_test_assert_contains "$test_root/launch-before-timeout.out" "stale-queue-pending=0"
+  self_test_assert_not_contains "$codex_commands_file" "exec --cd"
+
+  echo "self-test: queue-running pool-capacity deferred task blocks stale pending investigation"
   self_test_reset
   RETRY_INCOMPLETE_WORKFLOWS=false
   printf '%s\n' "wf-1000-15" > "$workflows_label_file"
   printf '%s\n' '{"id":"wf-1000-15","status":"running"}' > "$workflows_jsonl_file"
-  printf '%s\n' '{"running":[],"queued":[{"taskId":"wf-1000-15/regression"}],"runningCount":0,"maxConcurrency":12}' > "$self_test_queue_file"
+  printf '%s\n' '{"running":[{"taskId":"wf-1000-15/regression"}],"queued":[],"runningCount":1,"maxConcurrency":12}' > "$self_test_queue_file"
   printf '%s\n' '{"id":"wf-1000-15/regression","status":"pending","config":{"workflowId":"wf-1000-15","runnerKind":"worktree","poolId":"pnpm-ssh"},"execution":{"branch":"experiment/wf-1000-15/regression"}}' > "$tasks_dir/wf-1000-15.jsonl"
   run_cycle selftest-queue-active-pool-deferral > "$test_root/queue-active-pool-deferral.out" 2>&1 || { sed -n '1,200p' "$test_root/queue-active-pool-deferral.out" >&2; return 1; }
   self_test_assert_contains "$test_root/queue-active-pool-deferral.out" "pending-tasks=0 blockers=1"
