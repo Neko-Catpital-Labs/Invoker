@@ -276,6 +276,65 @@ describe('Context menu (component)', () => {
     await waitFor(() => expect(mock.api.deleteWorkflow).toHaveBeenCalledWith('wf-1'));
   });
 
+  it('workflow detach asks for confirmation and repeated confirm calls mutation once', async () => {
+    const workflowList: WorkflowMeta[] = [
+      { id: 'wf-0', name: 'Upstream Workflow', status: 'completed', baseBranch: 'master' },
+      {
+        id: 'wf-1',
+        name: 'Downstream Workflow',
+        status: 'running',
+        baseBranch: 'master',
+        externalDependencies: [{ workflowId: 'wf-0', requiredStatus: 'completed' }],
+      },
+    ];
+    await setup([alpha, beta, merge], workflowList);
+
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    fireEvent.click(await screen.findByText('More'));
+    fireEvent.click(await screen.findByText('Detach from Upstream Workflow (wf-0)'));
+
+    expect(await screen.findByRole('dialog', { name: 'Detach Workflow' })).toBeInTheDocument();
+    expect(screen.getByText('Downstream Workflow (wf-1)')).toBeInTheDocument();
+    expect(screen.getByText('Upstream Workflow (wf-0)')).toBeInTheDocument();
+    expect(mock.api.detachWorkflow).not.toHaveBeenCalled();
+
+    const confirmButton = screen.getByRole('button', { name: 'Detach Workflow' });
+    fireEvent.click(confirmButton);
+    fireEvent.click(confirmButton);
+
+    await waitFor(() => expect(mock.api.detachWorkflow).toHaveBeenCalledTimes(1));
+    expect(mock.api.detachWorkflow).toHaveBeenCalledWith('wf-1', 'wf-0');
+    expect(await screen.findByTestId('workflow-action-feedback')).toHaveTextContent(
+      'Detached Downstream Workflow (wf-1) from upstream Upstream Workflow (wf-0).',
+    );
+  });
+
+  it('workflow detach cancellation does not call mutation', async () => {
+    const workflowList: WorkflowMeta[] = [
+      { id: 'wf-0', name: 'Upstream Workflow', status: 'completed', baseBranch: 'master' },
+      {
+        id: 'wf-1',
+        name: 'Downstream Workflow',
+        status: 'running',
+        baseBranch: 'master',
+        externalDependencies: [{ workflowId: 'wf-0', requiredStatus: 'completed' }],
+      },
+    ];
+    await setup([alpha, beta, merge], workflowList);
+
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    fireEvent.click(await screen.findByText('More'));
+    fireEvent.click(await screen.findByText('Detach from Upstream Workflow (wf-0)'));
+    expect(await screen.findByRole('dialog', { name: 'Detach Workflow' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Detach Workflow' })).not.toBeInTheDocument();
+    });
+    expect(mock.api.detachWorkflow).not.toHaveBeenCalled();
+  });
+
   it('workflow context menu copies workflow id', async () => {
     await setup();
     fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));

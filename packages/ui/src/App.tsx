@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect } from 'react';
 import yaml from 'js-yaml';
-import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
+import type { TaskState, TaskReplacementDef, ExternalDependency, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
 import type { ActionGraphNode, TerminalSessionDescriptor } from '@invoker/contracts';
 import { useTasks } from './hooks/useTasks.js';
 import { useInvoker } from './hooks/useInvoker.js';
@@ -53,13 +53,16 @@ type ModalState =
   | { type: 'input'; task: TaskState }
   | { type: 'approval'; task: TaskState; action: 'approve' | 'reject' }
   | { type: 'experiment'; task: TaskState }
-  | { type: 'replace'; task: TaskState };
+  | { type: 'replace'; task: TaskState }
+  | { type: 'detachWorkflow'; downstreamWorkflowId: string; upstreamWorkflowId: string };
 
 type KeyboardRegion = 'workflowGraph' | 'taskGraph' | 'inspector' | 'bottomBar';
 type GraphKeyboardRegion = Extract<KeyboardRegion, 'workflowGraph' | 'taskGraph'>;
 type ContextMenuCloseOptions = { restoreFocus?: boolean };
 type ContextMenuState = { x: number; y: number; taskId: string; returnFocusRegion?: GraphKeyboardRegion };
 type WorkflowContextMenuState = { x: number; y: number; workflowId: string; returnFocusRegion?: GraphKeyboardRegion };
+type DetachWorkflowMenuItem = { upstreamWorkflowId: string; label: string };
+type ActionFeedback = { tone: 'success' | 'error'; message: string };
 type SearchResult =
   | { kind: 'workflow'; id: string; title: string; subtitle: string }
   | { kind: 'task'; id: string; workflowId: string | null; title: string; subtitle: string };
@@ -108,7 +111,9 @@ interface WorkflowContextMenuProps {
   onRecreateWorkflow: (workflowId: string) => void;
   onCancelWorkflow: (workflowId: string) => void;
   onDeleteWorkflow: (workflowId: string) => void;
+  onDetachWorkflow: (workflowId: string, upstreamWorkflowId: string) => void;
   onCopyWorkflowId: (workflowId: string) => void;
+  detachItems: readonly DetachWorkflowMenuItem[];
   onClose: (options?: ContextMenuCloseOptions) => void;
   autoFocus?: boolean;
 }
@@ -143,7 +148,9 @@ function WorkflowContextMenu({
   onRecreateWorkflow,
   onCancelWorkflow,
   onDeleteWorkflow,
+  onDetachWorkflow,
   onCopyWorkflowId,
+  detachItems,
   onClose,
   autoFocus = false,
 }: WorkflowContextMenuProps): JSX.Element {
@@ -228,6 +235,15 @@ function WorkflowContextMenu({
           { id: 'rebase-recreate', label: 'Rebase and Recreate', className: dangerButtonClass, action: () => runAction(onRebaseRecreate) },
           { id: 'recreate-workflow', label: 'Recreate Workflow', className: dangerButtonClass, action: () => runAction(onRecreateWorkflow) },
           { id: 'cancel-workflow', label: 'Cancel Workflow', className: dangerButtonClass, action: () => runAction(onCancelWorkflow) },
+          ...detachItems.map((item) => ({
+            id: `detach-workflow-${item.upstreamWorkflowId}`,
+            label: `Detach from ${item.label}`,
+            className: dangerButtonClass,
+            action: () => {
+              onDetachWorkflow(workflowId, item.upstreamWorkflowId);
+              onClose({ restoreFocus: autoFocus });
+            },
+          })),
           { id: 'delete-workflow', label: 'Delete Workflow', className: dangerButtonClass, action: () => runAction(onDeleteWorkflow) },
         ]),
   ];
@@ -319,6 +335,84 @@ function WorkflowContextMenu({
   );
 }
 
+function workflowIdentity(workflowId: string, workflows: Map<string, WorkflowMeta>): string {
+  const workflow = workflows.get(workflowId);
+  if (!workflow) return workflowId;
+  return workflow.name === workflow.id ? workflow.id : `${workflow.name} (${workflow.id})`;
+}
+
+function detachWorkflowMenuItems(
+  dependencies: readonly ExternalDependency[] | undefined,
+  workflows: Map<string, WorkflowMeta>,
+): DetachWorkflowMenuItem[] {
+  const seen = new Set<string>();
+  const items: DetachWorkflowMenuItem[] = [];
+  for (const dependency of dependencies ?? []) {
+    if (seen.has(dependency.workflowId)) continue;
+    seen.add(dependency.workflowId);
+    items.push({
+      upstreamWorkflowId: dependency.workflowId,
+      label: workflowIdentity(dependency.workflowId, workflows),
+    });
+  }
+  return items;
+}
+
+interface DetachWorkflowConfirmModalProps {
+  downstreamLabel: string;
+  upstreamLabel: string;
+  pending: boolean;
+  onConfirm: () => void;
+  onClose: () => void;
+}
+
+function DetachWorkflowConfirmModal({
+  downstreamLabel,
+  upstreamLabel,
+  pending,
+  onConfirm,
+  onClose,
+}: DetachWorkflowConfirmModalProps): JSX.Element {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="detach-workflow-title"
+        className="w-full max-w-md rounded-lg border border-gray-700 bg-gray-800 p-6 shadow-xl"
+      >
+        <h2 id="detach-workflow-title" className="mb-2 text-lg font-semibold text-gray-100">
+          Detach Workflow
+        </h2>
+        <p className="mb-4 text-sm text-gray-300">
+          Detach downstream workflow <span className="font-mono text-gray-100">{downstreamLabel}</span> from upstream workflow <span className="font-mono text-gray-100">{upstreamLabel}</span>?
+        </p>
+        <div className="mb-5 rounded border border-amber-700 bg-amber-900/30 p-3 text-sm text-amber-100">
+          This removes the active stack dependency and voids downstream work back to pending.
+        </div>
+        <div className="flex justify-end gap-3">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={pending}
+            className="px-4 py-2 text-sm text-gray-400 transition-colors hover:text-gray-200 disabled:cursor-not-allowed disabled:text-gray-600"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={pending}
+            className="rounded bg-red-700 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-600 disabled:cursor-not-allowed disabled:bg-gray-600"
+          >
+            {pending ? 'Detaching...' : 'Detach Workflow'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function GearIcon(): JSX.Element {
   return (
     <svg
@@ -375,6 +469,9 @@ export function App() {
   const [systemDiagnostics, setSystemDiagnostics] = useState<SystemDiagnostics | null>(null);
   const [showSystemSetup, setShowSystemSetup] = useState(false);
   const [showSystemBanner, setShowSystemBanner] = useState(false);
+  const [actionFeedback, setActionFeedback] = useState<ActionFeedback | null>(null);
+  const [detachWorkflowPending, setDetachWorkflowPending] = useState(false);
+  const detachWorkflowInFlightRef = useRef(false);
   const [installSkillsPending, setInstallSkillsPending] = useState(false);
   const [installSkillsError, setInstallSkillsError] = useState<string | null>(null);
   const [updateCliPending, setUpdateCliPending] = useState(false);
@@ -1306,6 +1403,45 @@ export function App() {
     }
   }, []);
 
+  const requestDetachWorkflow = useCallback((workflowId: string, upstreamWorkflowId: string) => {
+    setWorkflowContextMenu(null);
+    setDetachWorkflowPending(false);
+    detachWorkflowInFlightRef.current = false;
+    setModal({ type: 'detachWorkflow', downstreamWorkflowId: workflowId, upstreamWorkflowId });
+  }, []);
+
+  const handleConfirmDetachWorkflow = useCallback(async (workflowId: string, upstreamWorkflowId: string) => {
+    if (detachWorkflowInFlightRef.current) return;
+    const downstreamLabel = workflowIdentity(workflowId, workflows);
+    const upstreamLabel = workflowIdentity(upstreamWorkflowId, workflows);
+    try {
+      detachWorkflowInFlightRef.current = true;
+      setDetachWorkflowPending(true);
+      if (!window.invoker?.detachWorkflow) {
+        throw new Error('Detach workflow is unavailable');
+      }
+      await window.invoker.detachWorkflow(workflowId, upstreamWorkflowId);
+      setModal({ type: 'none' });
+      setSelectedWorkflowId(workflowId);
+      setWorkflowSelectionDismissed(false);
+      setGraphRefreshSequence((sequence) => sequence + 1);
+      setActionFeedback({
+        tone: 'success',
+        message: `Detached ${downstreamLabel} from upstream ${upstreamLabel}.`,
+      });
+      await refreshTasks(true);
+    } catch (err) {
+      console.error('Detach Workflow failed:', err);
+      setActionFeedback({
+        tone: 'error',
+        message: `Failed to detach ${downstreamLabel} from upstream ${upstreamLabel}.`,
+      });
+    } finally {
+      detachWorkflowInFlightRef.current = false;
+      setDetachWorkflowPending(false);
+    }
+  }, [refreshTasks, workflows]);
+
   const handleOpenWorkflowPr = useCallback((workflowId: string) => {
     const workflowTasks = [...tasks.values()].filter((task) => task.config.workflowId === workflowId);
     const reviewUrl = workflowTasks.find((task) => task.execution.reviewUrl)?.execution.reviewUrl;
@@ -1649,6 +1785,26 @@ export function App() {
               Dismiss
             </button>
           </div>
+        </div>
+      )}
+
+      {actionFeedback && (
+        <div
+          data-testid="workflow-action-feedback"
+          className={`flex items-center justify-between gap-4 border-b px-4 py-2 text-sm ${
+            actionFeedback.tone === 'success'
+              ? 'border-green-800 bg-green-950/45 text-green-100'
+              : 'border-red-800 bg-red-950/45 text-red-100'
+          }`}
+        >
+          <span>{actionFeedback.message}</span>
+          <button
+            type="button"
+            onClick={() => setActionFeedback(null)}
+            className="shrink-0 text-xs text-gray-300 hover:text-white"
+          >
+            Dismiss
+          </button>
         </div>
       )}
 
@@ -2004,6 +2160,16 @@ export function App() {
         />
       )}
 
+      {modal.type === 'detachWorkflow' && (
+        <DetachWorkflowConfirmModal
+          downstreamLabel={workflowIdentity(modal.downstreamWorkflowId, workflows)}
+          upstreamLabel={workflowIdentity(modal.upstreamWorkflowId, workflows)}
+          pending={detachWorkflowPending}
+          onConfirm={() => void handleConfirmDetachWorkflow(modal.downstreamWorkflowId, modal.upstreamWorkflowId)}
+          onClose={closeModal}
+        />
+      )}
+
       {showSystemSetup && (
         <SystemSetupModal
           diagnostics={systemDiagnostics}
@@ -2030,7 +2196,12 @@ export function App() {
           onRecreateWorkflow={(workflowId) => void handleRecreateWorkflow(workflowId)}
           onCancelWorkflow={(workflowId) => void handleCancelWorkflow(workflowId)}
           onDeleteWorkflow={(workflowId) => void handleDeleteWorkflow(workflowId)}
+          onDetachWorkflow={requestDetachWorkflow}
           onCopyWorkflowId={handleCopyWorkflowId}
+          detachItems={detachWorkflowMenuItems(
+            workflows.get(workflowContextMenu.workflowId)?.externalDependencies,
+            workflows,
+          )}
           onClose={closeContextMenu}
           autoFocus={Boolean(workflowContextMenu.returnFocusRegion)}
         />

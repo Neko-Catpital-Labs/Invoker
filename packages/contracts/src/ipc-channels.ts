@@ -382,6 +382,10 @@ export const IpcChannels = {
     request: [workflowId: string];
     response: void;
   },
+  'invoker:detach-workflow': {} as {
+    request: [workflowId: string, upstreamWorkflowId: string];
+    response: void;
+  },
   'invoker:load-workflow': {} as {
     request: [workflowId: string];
     response: { workflow: unknown; tasks: unknown[] };

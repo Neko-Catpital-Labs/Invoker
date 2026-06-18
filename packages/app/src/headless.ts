@@ -2709,7 +2709,7 @@ async function headlessDetachWorkflow(
   const result = await deps.commandService.detachWorkflow(envelope);
   if (!result.ok) throw new Error(result.error.message);
   process.stdout.write(
-    `Detached workflow ${workflowId} from upstream workflow ${upstreamWorkflowId}\n`,
+    `Detached workflow: downstream="${workflowId}" upstream="${upstreamWorkflowId}" action="detach-workflow"\n`,
   );
 }
 

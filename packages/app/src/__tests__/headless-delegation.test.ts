@@ -1733,4 +1733,26 @@ describe('headless delegation enforcement', () => {
       expect(callOrder).toEqual(['preempt', 'delete']);
     });
   });
+
+  describe('detach-workflow lifecycle bridge', () => {
+    it('headless detach-workflow remains available and prints downstream/upstream feedback', async () => {
+      mockDeps.commandService.detachWorkflow = vi.fn(async () => ({ ok: true as const, data: undefined })) as any;
+      const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+
+      try {
+        await runHeadless(['detach-workflow', 'wf-1', 'wf-0'], mockDeps);
+        expect(stdout).toHaveBeenCalledWith(
+          'Detached workflow: downstream="wf-1" upstream="wf-0" action="detach-workflow"\n',
+        );
+      } finally {
+        stdout.mockRestore();
+      }
+
+      expect(mockDeps.commandService.detachWorkflow).toHaveBeenCalledWith(expect.objectContaining({
+        commandId: 'detach-workflow',
+        source: 'headless',
+        payload: { workflowId: 'wf-1', upstreamWorkflowId: 'wf-0' },
+      }));
+    });
+  });
 });
