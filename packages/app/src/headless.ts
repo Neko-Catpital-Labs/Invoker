@@ -1706,9 +1706,6 @@ async function headlessFix(rawArgs: string[], deps: HeadlessDeps): Promise<void>
   if (!restored) return;
   taskId = restored.resolvedTaskId;
 
-  // The accepted command boundary owns auto-fix attempt accounting: the worker
-  // submits a normal `fix` command tagged `--auto-fix`, and only then does a
-  // retry consume the budget. Manual `fix` never increments.
   if (parsed.autoFix) {
     const task = deps.orchestrator.getTask(taskId);
     const attemptsBefore = task?.execution.autoFixAttempts ?? 0;

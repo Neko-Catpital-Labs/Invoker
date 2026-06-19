@@ -1,13 +1,5 @@
 import type { WorkflowMutationIntent } from '@invoker/data-store';
 
-// ── Duplicate fix-intent detection ──────────────────────────
-//
-// A "fix intent" is any queued/running mutation that will run the shared fix
-// behavior for a task, regardless of whether it arrived as a structured IPC
-// mutation (`invoker:fix-with-agent`) or as a headless `fix` command wrapped in
-// a `headless.exec` payload. Detecting duplicates across both shapes lets the
-// auto-fix worker submit a normal fix command and rely on the accepted-command
-// boundary to suppress redundant retries.
 
 type HeadlessExecPayload = {
   args?: unknown[];
@@ -44,30 +36,15 @@ export function hasOpenFixIntentForTask(
   return intents.some((intent) => isFixIntentForTask(intent, taskId));
 }
 
-// ── Review-gate CI auto-fix context ─────────────────────────
-//
-// When a fix is triggered by a failed review-gate CI run, the worker carries an
-// explicit snapshot of the lineage it observed. The accepted-command boundary
-// re-checks that snapshot against the live task before fixing so a stale retry
-// (the task moved on, was re-selected, or got a new review) is rejected instead
-// of clobbering newer work.
-
 export interface ReviewGateCiContext {
-  /** Provider review identifier the CI failure was observed against. */
   reviewId: string;
-  /** Task generation observed when the failure was captured. */
   generation: number;
-  /** Selected attempt observed when the failure was captured. */
   selectedAttemptId?: string;
-  /** Branch observed when the failure was captured. */
   branch?: string;
-  /** Head commit observed when the failure was captured. */
   headSha?: string;
-  /** Pre-formatted fix instructions handed to the executor, if any. */
   fixContext?: string;
 }
 
-/** Lineage fields read off a live task when validating review-gate context. */
 export interface ReviewGateLineageFields {
   generation?: number;
   reviewId?: string;
@@ -106,11 +83,6 @@ export function decodeReviewGateCiContext(encoded: unknown): ReviewGateCiContext
   };
 }
 
-/**
- * True when the captured review-gate context no longer matches the live task —
- * mirrors the lineage fields the review-gate worker guards on (selected attempt,
- * generation, review id, branch).
- */
 export function isReviewGateCiContextStale(
   context: ReviewGateCiContext,
   current: ReviewGateLineageFields,
@@ -123,20 +95,11 @@ export function isReviewGateCiContextStale(
   );
 }
 
-// ── Explicit auto-fix command context ───────────────────────
-//
-// The auto-fix worker submits the same `fix` command a human would, plus a
-// machine-readable marker. Carrying the marker through the command lets the
-// accepted-command boundary (not the worker) own attempt accounting and lets a
-// review-gate failure ride along without a side channel.
-
 const AUTO_FIX_FLAG = '--auto-fix';
 const REVIEW_GATE_CI_FLAG = '--review-gate-ci';
 
 export interface AutoFixCommandContext {
-  /** Whether the fix request was explicitly issued by the auto-fix worker. */
   autoFix: boolean;
-  /** Review-gate CI context, when the fix was triggered by a failed CI run. */
   reviewGateContext?: ReviewGateCiContext;
 }
 
@@ -145,12 +108,6 @@ export interface ParsedHeadlessFixArgs extends AutoFixCommandContext {
   agentName?: string;
 }
 
-/**
- * Parse a headless `fix` command: `fix <taskId> [agent] [--auto-fix]
- * [--review-gate-ci <encoded>]`. Positional order and the manual default agent
- * are unchanged when no auto-fix flags are present, so manual `fix` keeps its
- * existing behavior.
- */
 export function parseHeadlessFixArgs(args: readonly string[]): ParsedHeadlessFixArgs {
   const rest = args[0] === 'fix' ? args.slice(1) : args.slice();
   let taskId: string | undefined;
@@ -185,11 +142,6 @@ export function parseHeadlessFixArgs(args: readonly string[]): ParsedHeadlessFix
   return { taskId, agentName, autoFix, reviewGateContext };
 }
 
-/**
- * Build a headless `fix` command argument vector from structured fix options.
- * Used when converting a structured `invoker:fix-with-agent` mutation into the
- * headless command the shared owner actually runs.
- */
 export function buildHeadlessFixArgs(
   taskId: string,
   agentName: string | undefined,
@@ -208,12 +160,6 @@ export function buildHeadlessFixArgs(
   return args;
 }
 
-// ── Structured IPC mutation options ─────────────────────────
-//
-// `invoker:fix-with-agent` historically carried `[taskId, agentName]`. The
-// auto-fix worker adds a third structured-options argument so explicit auto-fix
-// context survives owner delegation without changing the manual two-argument
-// call shape.
 
 export interface FixWithAgentMutationOptions {
   autoFix?: boolean;

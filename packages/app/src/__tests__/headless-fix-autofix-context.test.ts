@@ -64,7 +64,6 @@ describe('headless fix auto-fix accounting', () => {
 
     await runHeadless(['fix', 'wf-1/task-1', 'claude'], deps);
 
-    // No autoFixAttempts write happened on the manual path.
     expect(updateTask).not.toHaveBeenCalled();
     expect(fixWithAgentActionMock).toHaveBeenCalledTimes(1);
     expect(fixWithAgentActionMock.mock.calls[0][2]).toMatchObject({ reviewGateContext: undefined });

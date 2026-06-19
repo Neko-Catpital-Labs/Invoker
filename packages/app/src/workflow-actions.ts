@@ -26,6 +26,7 @@ import { normalizeMergeModeForPersistence } from './merge-mode.js';
 import {
   isReviewGateCiContextStale,
   type ReviewGateCiContext,
+  type ReviewGateLineageFields,
 } from './auto-fix-intents.js';
 import { createDeleteAllSnapshot } from './delete-all-snapshot.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
@@ -97,6 +98,17 @@ export function assertLineageCurrent(
       + `gen ${snapshot.generation} → ${current.generation})`,
     );
   }
+}
+
+function assertReviewGateCiContextCurrent(
+  taskId: string,
+  context: ReviewGateCiContext,
+  current: ReviewGateLineageFields,
+): void {
+  if (!isReviewGateCiContextStale(context, current)) return;
+  throw new StaleLineageError(
+    `Review-gate CI auto-fix for ${taskId} is stale (review=${context.reviewId})`,
+  );
 }
 
 // ── Deps interfaces ──────────────────────────────────────────
@@ -859,13 +871,8 @@ export async function fixWithAgentAction(
   const task = orchestrator.getTask(taskId);
   if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
 
-  // Reject a stale review-gate CI auto-fix before mutating: if the task moved on
-  // (re-selected attempt, new generation/review/branch) since the CI failure was
-  // captured, the carried context is stale and the fix must not clobber newer work.
-  if (options.reviewGateContext && isReviewGateCiContextStale(options.reviewGateContext, task.execution)) {
-    throw new StaleLineageError(
-      `Review-gate CI auto-fix for ${taskId} is stale (review=${options.reviewGateContext.reviewId})`,
-    );
+  if (options.reviewGateContext) {
+    assertReviewGateCiContextCurrent(taskId, options.reviewGateContext, task.execution);
   }
 
   const savedError = task.execution.error ?? '';
@@ -1332,14 +1339,13 @@ function assertReviewGateTriggerCurrent(
   if (!task) {
     throw new StaleLineageError(`Review-gate CI auto-fix task ${trigger.taskId} no longer exists`);
   }
-  if (
-    task.execution.selectedAttemptId !== trigger.selectedAttemptId ||
-    (task.execution.generation ?? 0) !== trigger.generation ||
-    task.execution.reviewId !== trigger.reviewId ||
-    task.execution.branch !== trigger.branch
-  ) {
-    throw new StaleLineageError(`Review-gate CI auto-fix for ${trigger.taskId} is stale`);
-  }
+  assertReviewGateCiContextCurrent(trigger.taskId, {
+    reviewId: trigger.reviewId,
+    generation: trigger.generation,
+    selectedAttemptId: trigger.selectedAttemptId,
+    branch: trigger.branch,
+    headSha: trigger.headSha,
+  }, task.execution);
 }
 
 export async function autoFixOnReviewGateFailure(

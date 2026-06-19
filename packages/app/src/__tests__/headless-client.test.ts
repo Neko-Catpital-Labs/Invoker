@@ -4,10 +4,6 @@ import { LocalBus } from '@invoker/transport';
 import { SharedMutationOwnerTimeoutError, electronCommandArgs, runHeadlessClientCommand } from '../headless-client.js';
 
 describe('headless-client', () => {
-  // These tests exercise the *client* delegation path, which only runs when the
-  // process is not itself a standalone owner. A leaked `INVOKER_HEADLESS_STANDALONE=1`
-  // from the surrounding shell would short-circuit delegation to the local runtime
-  // and make every owner-delegation assertion fail, so pin it off for the suite.
   const savedStandalone = process.env.INVOKER_HEADLESS_STANDALONE;
   beforeEach(() => {
     delete process.env.INVOKER_HEADLESS_STANDALONE;

@@ -2829,7 +2829,6 @@ describe('fixWithAgentAction review-gate CI context', () => {
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
     }, {
-      // selectedAttemptId moved on from attempt-1 → attempt-2 since CI failed
       reviewGateContext: { reviewId: 'review-1', generation: 3, selectedAttemptId: 'attempt-1', branch: 'experiment/foo' },
     })).rejects.toThrow(StaleLineageError);
 
