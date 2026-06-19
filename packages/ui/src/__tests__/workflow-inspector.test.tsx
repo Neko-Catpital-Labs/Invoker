@@ -383,4 +383,52 @@ describe('WorkflowInspector', () => {
     fireEvent.click(convertButton);
     expect(onSetMergeMode).toHaveBeenCalledWith('wf-1', 'external_review');
   });
+
+  it('hides the direct conversion button when the merge gate already has a PR URL but keeps the merge-mode select', () => {
+    const onSetMergeMode = vi.fn(async () => {});
+    const mergeTask = makeTask({
+      id: '__merge__wf-1',
+      description: 'Merge gate',
+      status: 'review_ready',
+      config: { workflowId: 'wf-1', isMergeNode: true },
+      execution: { reviewUrl: 'https://github.com/org/repo/pull/34' },
+    });
+
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'review_ready', mergeMode: 'manual' }}
+        task={null}
+        workflowTasks={new Map([[mergeTask.id, mergeTask]])}
+        collapsed={false}
+        advancedExpanded={false}
+        onSetMergeMode={onSetMergeMode}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    // Mode is still visible and editable...
+    expect(screen.getByTestId('workflow-merge-mode-select')).toBeInTheDocument();
+    // ...but the direct "convert to GitHub review" prompt is gone because a PR already exists.
+    expect(screen.queryByRole('button', { name: 'Use GitHub review' })).not.toBeInTheDocument();
+    expect(onSetMergeMode).not.toHaveBeenCalled();
+  });
+
+  it('hides the workflow-level merge-mode control entirely when no merge gate or mode is present', () => {
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, mergeMode: undefined }}
+        task={null}
+        workflowTasks={new Map()}
+        collapsed={false}
+        advancedExpanded={false}
+        onSetMergeMode={vi.fn(async () => {})}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.queryByTestId('workflow-merge-mode-select')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Use GitHub review' })).not.toBeInTheDocument();
+  });
 });
