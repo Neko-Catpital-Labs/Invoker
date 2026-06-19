@@ -41,6 +41,7 @@ import {
   registerGuiLifecycleHandlers,
   runElectronReadyBootstrap,
   startGuiModeBootstrap,
+  startMainProcessBootstrap,
 } from './bootstrap/app-bootstrap.js';
 
 const enableTestCompositor = process.env.INVOKER_E2E_ENABLE_COMPOSITOR === '1' || Boolean(process.env.CAPTURE_MODE);
@@ -205,9 +206,8 @@ import {
 import { registerReadOnlyIpcHandlers } from './ipc-read-handlers.js';
 import { createTaskGraphEventPublisher } from './task-graph-event-publisher.js';
 import {
+  createGuiMutationRegistrars,
   registerBootstrapStateIpc,
-  registerGuiMutationHandler as registerGuiMutationIpcHandler,
-  registerWorkflowScopedGuiMutationHandler as registerWorkflowScopedGuiMutationIpcHandler,
   type GuiMutationPayload,
   type GuiMutationRegistrationContext,
   type WorkflowScopedGuiMutationRegistrationContext,
@@ -857,7 +857,7 @@ const RED = '\x1b[31m';
 // HEADLESS MODE
 // ══════════════════════════════════════════════════════════════
 
-if (isHeadless) {
+function startHeadlessMode(): void {
   const runHeadlessMain = async (): Promise<void> => {
     const agentRegistry = registerBuiltinAgents();
     const command = cliArgs[0];
@@ -1715,16 +1715,17 @@ if (isHeadless) {
       process.exit(1);
     },
   });
-} else {
-  // ══════════════════════════════════════════════════════════════
-  // GUI MODE
-  // ══════════════════════════════════════════════════════════════
-  startGuiModeBootstrap({
+}
+
+startMainProcessBootstrap({
+  isHeadless,
+  startHeadlessMode,
+  startGuiMode: () => startGuiModeBootstrap({
     app,
     isTest: process.env.NODE_ENV === 'test',
     setupGuiMode,
-  });
-}
+  }),
+});
 
 // ══════════════════════════════════════════════════════════════
 // GUI MODE
@@ -2611,27 +2612,13 @@ function createEmbeddedTerminalBackendFromConfig(
     runWorkflowMutation,
   };
 
-  function registerGuiMutationHandler<TResult = unknown>(
-    channel: string,
-    handler: (...args: unknown[]) => Promise<TResult>,
-  ): void {
-    registerGuiMutationIpcHandler(guiMutationRegistrationContext, channel, handler);
-  }
-
-  function registerWorkflowScopedGuiMutationHandler<TResult = unknown>(
-    channel: string,
-    resolveWorkflowId: (...args: unknown[]) => string | undefined,
-    priority: WorkflowMutationPriority,
-    handler: (...args: unknown[]) => Promise<TResult>,
-  ): void {
-    registerWorkflowScopedGuiMutationIpcHandler(
-      workflowScopedGuiMutationRegistrationContext,
-      channel,
-      resolveWorkflowId,
-      priority,
-      handler,
-    );
-  }
+  const {
+    registerGuiMutationHandler,
+    registerWorkflowScopedGuiMutationHandler,
+  } = createGuiMutationRegistrars(
+    guiMutationRegistrationContext,
+    workflowScopedGuiMutationRegistrationContext,
+  );
 
   function createWindow(): void {
     createMainWindow({
