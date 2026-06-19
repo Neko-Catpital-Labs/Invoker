@@ -10,7 +10,7 @@
  * inside orchestrator.ts.
  */
 
-import type { TaskState, TaskStateChanges, Attempt, WorkflowDerivedStatus, ExternalDependency, ExternalDependencyChange } from '@invoker/workflow-graph';
+import type { TaskState, TaskStateChanges, Attempt, WorkflowDerivedStatus, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency } from '@invoker/workflow-graph';
 
 // ── Workflow value types (inline in OrchestratorPersistence today) ────
 
@@ -29,6 +29,7 @@ export interface WorkflowRecord {
   mergeMode?: 'manual' | 'automatic' | 'external_review';
   externalDependencies?: ExternalDependency[];
   externalDependencyChanges?: ExternalDependencyChange[];
+  detachedExternalDependencies?: DetachedExternalDependency[];
 }
 
 export interface WorkflowChanges {
@@ -55,6 +56,12 @@ export interface WorkflowChanges {
   externalDependencies?: ExternalDependency[];
   /** Same presence semantics as `externalDependencies`. */
   externalDependencyChanges?: ExternalDependencyChange[];
+  /**
+   * Read-only detach provenance. Same presence semantics as
+   * `externalDependencies`. `detachWorkflowInternal` writes the removed
+   * dependency lineage here while clearing the active dependency.
+   */
+  detachedExternalDependencies?: DetachedExternalDependency[];
 }
 
 export type AttemptChanges = Partial<
