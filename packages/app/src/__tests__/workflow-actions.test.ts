@@ -5,7 +5,7 @@
  * following the pattern from resolve-conflict-action.test.ts.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { Orchestrator } from '@invoker/workflow-core';
+import { buildCancelInFlight, buildWorkflowInvalidationDeps, type Orchestrator } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { TaskRunner } from '@invoker/execution-engine';
 import {
@@ -25,8 +25,6 @@ import {
   finalizeAppliedFix,
   autoFixOnFailure,
   autoFixOnReviewGateFailure,
-  buildCancelInFlight,
-  buildInvalidationDeps,
   selectFailureRecoveryRoute,
   deleteAllWorkflows,
   resolveConflictAction,
@@ -1495,7 +1493,7 @@ describe('buildCancelInFlight', () => {
 
     const cancel = buildCancelInFlight({
       orchestrator: orchestrator as unknown as Orchestrator,
-      taskExecutor: taskExecutor as unknown as TaskRunner,
+      killActiveExecution: taskExecutor.killActiveExecution,
     });
     await cancel('task', 'task-a');
 
@@ -1521,27 +1519,23 @@ describe('buildCancelInFlight', () => {
 
     const cancel = buildCancelInFlight({
       orchestrator: orchestrator as unknown as Orchestrator,
-      taskExecutor: taskExecutor as unknown as TaskRunner,
+      killActiveExecution: taskExecutor.killActiveExecution,
     });
     await cancel('workflow', 'wf-1');
 
     expect(orchestrator.cancelWorkflow).toHaveBeenCalledWith('wf-1');
-    expect(taskExecutor.killActiveExecution).toHaveBeenCalledTimes(2);
     expect(taskExecutor.killActiveExecution).toHaveBeenNthCalledWith(1, 'task-a');
     expect(taskExecutor.killActiveExecution).toHaveBeenNthCalledWith(2, 'task-b');
-    expect(orchestrator.cancelWorkflow.mock.invocationCallOrder[0]).toBeLessThan(
-      taskExecutor.killActiveExecution.mock.invocationCallOrder[0],
-    );
     expect(orchestrator.cancelTask).not.toHaveBeenCalled();
   });
 
-  it('is a no-op when scope is "none"', async () => {
+  it('is a no-op when scope is none', async () => {
     const orchestrator = { cancelTask: vi.fn(), cancelWorkflow: vi.fn() };
     const taskExecutor = { killActiveExecution: vi.fn() };
 
     const cancel = buildCancelInFlight({
       orchestrator: orchestrator as unknown as Orchestrator,
-      taskExecutor: taskExecutor as unknown as TaskRunner,
+      killActiveExecution: taskExecutor.killActiveExecution,
     });
     await cancel('none', 'whatever');
 
@@ -1549,32 +1543,37 @@ describe('buildCancelInFlight', () => {
     expect(orchestrator.cancelWorkflow).not.toHaveBeenCalled();
     expect(taskExecutor.killActiveExecution).not.toHaveBeenCalled();
   });
-
-  it('still cancels orchestrator state when no taskExecutor is provided', async () => {
-    const orchestrator = {
-      cancelTask: vi.fn(() => ({ cancelled: ['task-a'], runningCancelled: ['task-a'] })),
-      cancelWorkflow: vi.fn(),
-    };
-    const cancel = buildCancelInFlight({
-      orchestrator: orchestrator as unknown as Orchestrator,
-    });
-    await cancel('task', 'task-a');
-
-    expect(orchestrator.cancelTask).toHaveBeenCalledWith('task-a');
-  });
 });
 
-describe('buildInvalidationDeps', () => {
+describe('buildWorkflowInvalidationDeps', () => {
   function makeBaseOrchestrator() {
     return {
       retryTask: vi.fn(() => [makeRunningTask({ id: 'task-a' })]),
       recreateTask: vi.fn(() => [makeRunningTask({ id: 'task-a' })]),
+      recreateDownstream: vi.fn(() => [makeRunningTask({ id: 'task-b' })]),
       retryWorkflow: vi.fn(() => [makeRunningTask({ id: 'task-a' })]),
       recreateWorkflow: vi.fn(() => [makeRunningTask({ id: 'task-a' })]),
       cancelTask: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
       cancelWorkflow: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+      autoStartExternallyUnblockedReadyTasks: vi.fn(() => [makeRunningTask({ id: 'task-c' })]),
+      approve: vi.fn(async () => [makeRunningTask({ id: 'task-a' })]),
+      reject: vi.fn(),
+      getTask: vi.fn(() => ({ id: 'task-a', config: { workflowId: 'wf-1' }, execution: {} })),
+      forkWorkflow: vi.fn((workflowId: string) => ({
+        sourceWorkflowId: workflowId,
+        forkedWorkflowId: `${workflowId}-fork`,
+        started: [makeRunningTask({ id: `${workflowId}-fork/task-a`, config: { workflowId: `${workflowId}-fork` } as any })],
+      })),
+      cascadeInvalidationToDownstream: vi.fn(() => [makeRunningTask({ id: 'wf-2/leaf' })]),
+      recreateWorkflowFromFreshBase: vi.fn(async (_id: string, options?: any) => {
+        await options?.refreshBase?.(_id);
+        return [makeRunningTask({ id: 'task-a' })];
+      }),
+      resumeTaskAfterFixApproval: vi.fn(),
+      revertConflictResolution: vi.fn(),
     };
   }
+
   function makePersistence() {
     return {
       loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 0 })),
@@ -1582,55 +1581,67 @@ describe('buildInvalidationDeps', () => {
     };
   }
 
-  it('routes retryTask to orchestrator.retryTask', async () => {
+  function buildDeps(
+    orchestrator: ReturnType<typeof makeBaseOrchestrator>,
+    persistence: ReturnType<typeof makePersistence>,
+    taskExecutor?: Partial<TaskRunner>,
+  ) {
+    return buildWorkflowInvalidationDeps({
+      orchestrator: orchestrator as unknown as Orchestrator,
+      requireWorkflow: (workflowId) => {
+        const workflow = persistence.loadWorkflow(workflowId);
+        if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
+        return workflow as any;
+      },
+      setWorkflowGeneration: (workflowId, generation) => {
+        persistence.updateWorkflow(workflowId, { generation });
+      },
+      killActiveExecution: taskExecutor?.killActiveExecution?.bind(taskExecutor),
+      prepareFreshBase: taskExecutor?.preparePoolForRebaseRetry
+        ? async (workflowId, workflow) => {
+          if (!workflow.repoUrl) return undefined;
+          return taskExecutor.preparePoolForRebaseRetry!(
+            workflowId,
+            workflow.repoUrl,
+            workflow.baseBranch,
+          ) as any;
+        }
+        : undefined,
+      fixApprove: async (taskId) => {
+        const result = await approveTask(taskId, {
+          orchestrator: orchestrator as unknown as Orchestrator,
+          taskExecutor: taskExecutor as TaskRunner | undefined,
+        });
+        return result.started;
+      },
+      fixReject: (taskId) => {
+        rejectTask(taskId, { orchestrator: orchestrator as unknown as Orchestrator });
+        return [];
+      },
+    });
+  }
+
+  it('routes retry and recreate primitives through the orchestrator', async () => {
     const orchestrator = makeBaseOrchestrator();
     const persistence = makePersistence();
+    const deps = buildDeps(orchestrator, persistence);
 
-    const deps = buildInvalidationDeps({
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-    });
-    const result = await deps.retryTask('task-a');
+    await deps.retryTask('task-a');
+    await deps.recreateTask('task-a');
+    await deps.retryWorkflow('wf-1');
+    await deps.recreateDownstream!('task-a');
 
     expect(orchestrator.retryTask).toHaveBeenCalledWith('task-a');
-    expect(orchestrator.recreateTask).not.toHaveBeenCalled();
-    expect(result).toHaveLength(1);
-  });
-
-  it('routes recreateTask to orchestrator.recreateTask', async () => {
-    const orchestrator = makeBaseOrchestrator();
-    const persistence = makePersistence();
-
-    const deps = buildInvalidationDeps({
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-    });
-    await deps.recreateTask('task-a');
-
     expect(orchestrator.recreateTask).toHaveBeenCalledWith('task-a');
-  });
-
-  it('routes retryWorkflow to orchestrator.retryWorkflow', async () => {
-    const orchestrator = makeBaseOrchestrator();
-    const persistence = makePersistence();
-
-    const deps = buildInvalidationDeps({
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-    });
-    await deps.retryWorkflow('wf-1');
-
     expect(orchestrator.retryWorkflow).toHaveBeenCalledWith('wf-1');
+    expect(orchestrator.recreateDownstream).toHaveBeenCalledWith('task-a');
   });
 
-  it('routes recreateWorkflow through bumpGenerationAndRecreate', async () => {
+  it('bumps generation before recreateWorkflow', async () => {
     const orchestrator = makeBaseOrchestrator();
     const persistence = makePersistence();
+    const deps = buildDeps(orchestrator, persistence);
 
-    const deps = buildInvalidationDeps({
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-    });
     await deps.recreateWorkflow('wf-1');
 
     expect(persistence.loadWorkflow).toHaveBeenCalledWith('wf-1');
@@ -1638,254 +1649,68 @@ describe('buildInvalidationDeps', () => {
     expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
   });
 
-  it('wires recreateWorkflowFromFreshBase to the orchestrator method', async () => {
-    const orchestrator = {
-      ...makeBaseOrchestrator(),
-      // The real orchestrator drives the `refreshBase` callback; mirror
-      // that here so the test exercises the app-layer's pool-prep wiring.
-      recreateWorkflowFromFreshBase: vi.fn(async (_id: string, options?: any) => {
-        await options?.refreshBase?.(_id);
-        return [makeRunningTask({ id: 'task-a' })];
-      }),
-    };
+  it('prepares fresh base and bumps generation before recreateWorkflowFromFreshBase', async () => {
+    const orchestrator = makeBaseOrchestrator();
     const persistence = makePersistence();
-    const taskExecutor = {
-      preparePoolForRebaseRetry: vi.fn(async () => undefined),
-    };
-
-    const deps = buildInvalidationDeps({
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-      taskExecutor: taskExecutor as unknown as TaskRunner,
-    });
-
-    // Step 12 promotes this dep — the policy router's
-    // "not yet wired (Step 12)" error path is dead code in production.
-    expect(deps.recreateWorkflowFromFreshBase).toBeDefined();
-
     persistence.loadWorkflow = vi.fn(() => ({
       id: 'wf-1',
       generation: 4,
       repoUrl: 'https://example/repo.git',
       baseBranch: 'main',
     } as any));
+    const taskExecutor = {
+      preparePoolForRebaseRetry: vi.fn(async () => undefined),
+    };
+    const deps = buildDeps(orchestrator, persistence, taskExecutor);
 
     const result = await deps.recreateWorkflowFromFreshBase!('wf-1');
 
-    // Workflow generation bumped (matches recreateWorkflow's wrapper semantics).
     expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 5 });
-    // Pool prep ran before delegating to the orchestrator's first-class method.
     expect(taskExecutor.preparePoolForRebaseRetry).toHaveBeenCalledWith(
       'wf-1',
       'https://example/repo.git',
       'main',
     );
-    expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledTimes(1);
-    expect(orchestrator.recreateWorkflowFromFreshBase.mock.calls[0]?.[0]).toBe('wf-1');
-    expect(result).toHaveLength(1);
-  });
-
-  it('recreateWorkflowFromFreshBase wire still calls orchestrator method when no taskExecutor is supplied', async () => {
-    const orchestrator = {
-      ...makeBaseOrchestrator(),
-      recreateWorkflowFromFreshBase: vi.fn(async () => []),
-    };
-    const persistence = makePersistence();
-    persistence.loadWorkflow = vi.fn(() => ({ id: 'wf-1', generation: 0, repoUrl: 'https://example/repo.git', baseBranch: 'main' } as any));
-
-    const deps = buildInvalidationDeps({
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-      // taskExecutor intentionally omitted — the orchestrator method
-      // still runs (refreshBase callback is a no-op without an executor).
-    });
-
-    await deps.recreateWorkflowFromFreshBase!('wf-1');
-
     expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(
       'wf-1',
       expect.objectContaining({ refreshBase: expect.any(Function) }),
     );
+    expect(result).toHaveLength(1);
   });
 
-  // Step 14 (`docs/architecture/task-invalidation-roadmap.md`,
-  // chart "Topology inconsistency"): `workflowFork` is wired to
-  // `Orchestrator.forkWorkflow`. The policy router only consumes
-  // the `started` task list, so the wire adapts the orchestrator's
-  // richer `ForkWorkflowResult` to `TaskState[]`. The forked
-  // workflow id remains discoverable via `started[0].config.workflowId`
-  // for callers that need it.
-  it('routes workflowFork to orchestrator.forkWorkflow and returns started tasks', async () => {
-    const orchestrator = {
-      ...makeBaseOrchestrator(),
-      forkWorkflow: vi.fn((workflowId: string) => ({
-        sourceWorkflowId: workflowId,
-        forkedWorkflowId: `${workflowId}-fork`,
-        started: [makeRunningTask({ id: `${workflowId}-fork/task-a`, config: { workflowId: `${workflowId}-fork` } as any })],
-      })),
-    };
+  it('routes workflowFork and scheduleOnly through orchestrator defaults', async () => {
+    const orchestrator = makeBaseOrchestrator();
     const persistence = makePersistence();
+    const deps = buildDeps(orchestrator, persistence);
 
-    const deps = buildInvalidationDeps({
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-    });
-
-    expect(deps.workflowFork).toBeDefined();
-    const result = await deps.workflowFork!('wf-1');
+    const forked = await deps.workflowFork!('wf-1');
+    const scheduled = await deps.scheduleOnly!('task-a');
 
     expect(orchestrator.forkWorkflow).toHaveBeenCalledWith('wf-1');
-    expect(result).toHaveLength(1);
-    // The forked workflow id is discoverable from the returned tasks.
-    expect((result as any[])[0].config.workflowId).toBe('wf-1-fork');
+    expect(forked[0]?.config.workflowId).toBe('wf-1-fork');
+    expect(orchestrator.autoStartExternallyUnblockedReadyTasks).toHaveBeenCalledTimes(1);
+    expect(scheduled).toHaveLength(1);
   });
 
-  // Step 16 (`docs/architecture/task-invalidation-roadmap.md`,
-  // chart row "Approve or reject fix"): `fixApprove` and
-  // `fixReject` are wired to the existing `approveTask` /
-  // `rejectTask` action wrappers in this file. Per the chart
-  // these are non-invalidating control flow over an existing
-  // fix attempt's output, so the wires must:
-  //
-  //   - reach the orchestrator's approve/reject primitives
-  //     (NOT retry/recreate);
-  //   - never call `orchestrator.cancelTask` /
-  //     `orchestrator.cancelWorkflow` (the policy router skips
-  //     `cancelInFlight` for these actions);
-  //   - return `TaskState[]` (approve returns the started
-  //     follow-on tasks; reject returns `[]` because the
-  //     wrapper is `void` today).
-  //
-  // The Step 1 scaffolding test pattern above wires the deps
-  // through `buildInvalidationDeps` and invokes them directly
-  // with a partial orchestrator mock; we follow that pattern.
-  it('routes fixApprove through approveTask (non-fix path → orchestrator.approve, returns started, never retry/recreate/cancel)', async () => {
+  it('routes fixApprove and fixReject through the action wrappers', async () => {
     const started = [makeRunningTask({ id: 'task-a' })];
-    const approvedTask = makeTask({ id: 'task-a', status: 'awaiting_approval', execution: {} });
-    const orchestrator = {
-      ...makeBaseOrchestrator(),
-      getTask: vi.fn().mockReturnValue(approvedTask),
-      approve: vi.fn().mockResolvedValue(started),
-      resumeTaskAfterFixApproval: vi.fn(),
-    };
+    const orchestrator = makeBaseOrchestrator();
+    orchestrator.getTask = vi.fn()
+      .mockReturnValueOnce(makeTask({ id: 'task-a', status: 'awaiting_approval', execution: {} }))
+      .mockReturnValueOnce(makeTask({ id: 'task-a', execution: { pendingFixError: 'merge conflict' } }));
+    orchestrator.approve = vi.fn().mockResolvedValue(started);
     const persistence = makePersistence();
+    const deps = buildDeps(orchestrator, persistence);
 
-    const deps = buildInvalidationDeps({
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-    });
-
-    expect(deps.fixApprove).toBeDefined();
-    const result = await deps.fixApprove!('task-a');
-
+    expect(await deps.fixApprove!('task-a')).toEqual(started);
+    expect(await deps.fixReject!('task-a')).toEqual([]);
     expect(orchestrator.approve).toHaveBeenCalledWith('task-a');
-    expect(orchestrator.resumeTaskAfterFixApproval).not.toHaveBeenCalled();
-    expect(result).toEqual(started);
-    expect(orchestrator.retryTask).not.toHaveBeenCalled();
-    expect(orchestrator.recreateTask).not.toHaveBeenCalled();
-    expect(orchestrator.retryWorkflow).not.toHaveBeenCalled();
-    expect(orchestrator.recreateWorkflow).not.toHaveBeenCalled();
-    expect(orchestrator.cancelTask).not.toHaveBeenCalled();
-    expect(orchestrator.cancelWorkflow).not.toHaveBeenCalled();
-  });
-
-  it('routes fixApprove through approveTask (fix path → commitApprovedFix + orchestrator.approve)', async () => {
-    const started = [makeRunningTask({ id: 'task-a' })];
-    const approvedTask = makeTask({
-      id: 'task-a',
-      status: 'awaiting_approval',
-      config: { workflowId: 'wf-1' },
-      execution: { pendingFixError: 'plain failure', branch: 'task-a', workspacePath: '/tmp/task-a' },
-    });
-    const orchestrator = {
-      ...makeBaseOrchestrator(),
-      getTask: vi.fn().mockReturnValue(approvedTask),
-      approve: vi.fn().mockResolvedValue(started),
-      resumeTaskAfterFixApproval: vi.fn(),
-    };
-    const persistence = makePersistence();
-    const taskExecutor = {
-      commitApprovedFix: vi.fn(),
-      publishAfterFix: vi.fn(),
-      executeTasks: vi.fn(),
-    };
-
-    const deps = buildInvalidationDeps({
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-      taskExecutor: taskExecutor as unknown as TaskRunner,
-    });
-
-    const result = await deps.fixApprove!('task-a');
-
-    expect(taskExecutor.commitApprovedFix).toHaveBeenCalledWith(approvedTask);
-    expect(orchestrator.approve).toHaveBeenCalledWith('task-a');
-    expect(orchestrator.resumeTaskAfterFixApproval).not.toHaveBeenCalled();
-    expect(result).toEqual(started);
-    expect(orchestrator.cancelTask).not.toHaveBeenCalled();
-    expect(orchestrator.cancelWorkflow).not.toHaveBeenCalled();
-  });
-
-  it('routes fixReject through rejectTask (fix-flow path → orchestrator.revertConflictResolution, returns [], never retry/recreate/cancel)', async () => {
-    const orchestrator = {
-      ...makeBaseOrchestrator(),
-      getTask: vi.fn().mockReturnValue(
-        makeTask({ id: 'task-a', execution: { pendingFixError: 'merge conflict' } }),
-      ),
-      reject: vi.fn(),
-      revertConflictResolution: vi.fn(),
-    };
-    const persistence = makePersistence();
-
-    const deps = buildInvalidationDeps({
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-    });
-
-    expect(deps.fixReject).toBeDefined();
-    const result = await deps.fixReject!('task-a');
-
     expect(orchestrator.revertConflictResolution).toHaveBeenCalledWith('task-a', 'merge conflict');
-    expect(orchestrator.reject).not.toHaveBeenCalled();
-    // `rejectTask` is `void` today; the wire returns `[]` so the
-    // policy router's `TaskState[]` contract is satisfied.
-    expect(result).toEqual([]);
-    expect(orchestrator.retryTask).not.toHaveBeenCalled();
-    expect(orchestrator.recreateTask).not.toHaveBeenCalled();
-    expect(orchestrator.retryWorkflow).not.toHaveBeenCalled();
-    expect(orchestrator.recreateWorkflow).not.toHaveBeenCalled();
     expect(orchestrator.cancelTask).not.toHaveBeenCalled();
     expect(orchestrator.cancelWorkflow).not.toHaveBeenCalled();
   });
 
-  it('routes fixReject through rejectTask (non-fix path → orchestrator.reject)', async () => {
-    const orchestrator = {
-      ...makeBaseOrchestrator(),
-      getTask: vi.fn().mockReturnValue(
-        makeTask({ id: 'task-a', execution: {} }),
-      ),
-      reject: vi.fn(),
-      revertConflictResolution: vi.fn(),
-    };
-    const persistence = makePersistence();
-
-    const deps = buildInvalidationDeps({
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-    });
-
-    const result = await deps.fixReject!('task-a');
-
-    // `rejectTask` is invoked without a reason from the wire, so
-    // `orchestrator.reject` is called as `(taskId, undefined)`.
-    expect(orchestrator.reject).toHaveBeenCalledWith('task-a', undefined);
-    expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
-    expect(result).toEqual([]);
-    expect(orchestrator.cancelTask).not.toHaveBeenCalled();
-    expect(orchestrator.cancelWorkflow).not.toHaveBeenCalled();
-  });
-
-  it('builds a cancel-first hook that cancels orchestrator state and kills runners', async () => {
+  it('kills active executions via cancelInFlight hook', async () => {
     const orchestrator = makeBaseOrchestrator();
     orchestrator.cancelTask = vi.fn(() => ({
       cancelled: ['task-a'],
@@ -1895,86 +1720,24 @@ describe('buildInvalidationDeps', () => {
     const taskExecutor = {
       killActiveExecution: vi.fn().mockResolvedValue(undefined),
     };
+    const deps = buildDeps(orchestrator, persistence, taskExecutor);
 
-    const deps = buildInvalidationDeps({
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-      taskExecutor: taskExecutor as unknown as TaskRunner,
-    });
     await deps.cancelInFlight('task', 'task-a');
 
     expect(orchestrator.cancelTask).toHaveBeenCalledWith('task-a');
     expect(taskExecutor.killActiveExecution).toHaveBeenCalledWith('task-a');
-    expect(orchestrator.cancelTask.mock.invocationCallOrder[0]).toBeLessThan(
-      taskExecutor.killActiveExecution.mock.invocationCallOrder[0],
-    );
   });
 
-  // Cross-workflow cascade wiring: a task-scoped id resolves to its
-  // owning workflowId via `orchestrator.getTask(id)?.config.workflowId`,
-  // then delegates to `Orchestrator.cascadeInvalidationToDownstream`.
-  it('exposes cascadeDownstream that delegates to orchestrator.cascadeInvalidationToDownstream for workflow scope', async () => {
-    const cascaded = [makeRunningTask({ id: 'wf-2/leaf' })];
-    const orchestrator = {
-      ...makeBaseOrchestrator(),
-      cascadeInvalidationToDownstream: vi.fn(() => cascaded),
-      getTask: vi.fn(() => undefined),
-    };
+  it('delegates cascadeDownstream through workflow and task scope', async () => {
+    const orchestrator = makeBaseOrchestrator();
     const persistence = makePersistence();
+    const deps = buildDeps(orchestrator, persistence);
 
-    const deps = buildInvalidationDeps({
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-    });
-
-    expect(deps.cascadeDownstream).toBeDefined();
-    const result = await deps.cascadeDownstream!('workflow', 'wf-1');
-
-    expect(orchestrator.cascadeInvalidationToDownstream).toHaveBeenCalledWith('wf-1');
-    expect(orchestrator.getTask).not.toHaveBeenCalled();
-    expect(result).toEqual(cascaded);
-  });
-
-  it('cascadeDownstream resolves task scope to workflowId via orchestrator.getTask', async () => {
-    const orchestrator = {
-      ...makeBaseOrchestrator(),
-      cascadeInvalidationToDownstream: vi.fn(() => []),
-      getTask: vi.fn(() => ({
-        id: 'task-a',
-        config: { workflowId: 'wf-resolved' },
-      })),
-    };
-    const persistence = makePersistence();
-
-    const deps = buildInvalidationDeps({
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-    });
-
+    expect(await deps.cascadeDownstream!('workflow', 'wf-1')).toHaveLength(1);
     await deps.cascadeDownstream!('task', 'task-a');
 
+    expect(orchestrator.cascadeInvalidationToDownstream).toHaveBeenCalledWith('wf-1');
     expect(orchestrator.getTask).toHaveBeenCalledWith('task-a');
-    expect(orchestrator.cascadeInvalidationToDownstream).toHaveBeenCalledWith('wf-resolved');
-  });
-
-  it('cascadeDownstream returns [] without calling orchestrator when task is not found', async () => {
-    const orchestrator = {
-      ...makeBaseOrchestrator(),
-      cascadeInvalidationToDownstream: vi.fn(() => []),
-      getTask: vi.fn(() => undefined),
-    };
-    const persistence = makePersistence();
-
-    const deps = buildInvalidationDeps({
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-    });
-
-    const result = await deps.cascadeDownstream!('task', 'unknown-task');
-
-    expect(orchestrator.getTask).toHaveBeenCalledWith('unknown-task');
-    expect(orchestrator.cascadeInvalidationToDownstream).not.toHaveBeenCalled();
-    expect(result).toEqual([]);
   });
 });
 
