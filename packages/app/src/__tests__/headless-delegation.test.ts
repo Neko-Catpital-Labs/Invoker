@@ -31,7 +31,12 @@ describe('headless delegation enforcement', () => {
         listWorkflows: vi.fn(() => []),
         loadTasks: vi.fn(() => []),
       } as unknown as SQLiteAdapter,
-      commandService: {} as CommandService,
+      commandService: {
+        runSerializedForWorkflow: vi.fn(async (_workflowId: string | undefined, fn: () => Promise<unknown> | unknown) => ({
+          ok: true as const,
+          data: await fn(),
+        })),
+      } as unknown as CommandService,
       executorRegistry: {} as any,
       messageBus: new LocalBus() as MessageBus,
       repoRoot: '/fake/repo',
@@ -1188,6 +1193,8 @@ describe('headless delegation enforcement', () => {
           mockDeps.orchestrator.retryWorkflow = vi.fn(() => []);
           mockDeps.orchestrator.recreateWorkflow = vi.fn(() => []);
           mockDeps.orchestrator.recreateWorkflowFromFreshBase = vi.fn(async () => []);
+          mockDeps.orchestrator.cancelWorkflow = vi.fn(() => ({ cancelled: [], runningCancelled: [] }));
+          mockDeps.orchestrator.cascadeInvalidationToDownstream = vi.fn(() => []);
 
           // Spy on `preparePoolForRebaseRetry` to assert the app-layer
           // `recreateWorkflowFromFreshBase` actually invokes pool prep
@@ -1263,7 +1270,7 @@ describe('headless delegation enforcement', () => {
           preparePoolSpy.mockRestore();
         });
 
-        it('headless `rebase-recreate <wfId>` routes to orchestrator.recreateWorkflow with workflowId directly', async () => {
+        it('headless `rebase-recreate <wfId>` routes to orchestrator.recreateWorkflowFromFreshBase with workflowId directly', async () => {
           const { preemptWorkflowExecution, preparePoolSpy } = seedRebaseHappyPath();
 
           const depsWithNoTrack: HeadlessDeps = {
@@ -1275,8 +1282,8 @@ describe('headless delegation enforcement', () => {
           await runHeadless(['rebase-recreate', 'wf-1'], depsWithNoTrack);
 
           expect(preemptWorkflowExecution).toHaveBeenCalledWith('wf-1');
-          expect(mockDeps.orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
-          expect(mockDeps.orchestrator.recreateWorkflowFromFreshBase).not.toHaveBeenCalled();
+          expect(mockDeps.orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-1', expect.any(Object));
+          expect(mockDeps.orchestrator.recreateWorkflow).not.toHaveBeenCalled();
           expect(preparePoolSpy).toHaveBeenCalledWith(
             'wf-1',
             'https://example/repo.git',
@@ -1298,7 +1305,7 @@ describe('headless delegation enforcement', () => {
           await runHeadless(['rebase-recreate', '__merge__wf-1'], depsWithNoTrack);
 
           expect(preemptWorkflowExecution).toHaveBeenCalledWith('wf-1');
-          expect(mockDeps.orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
+          expect(mockDeps.orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-1', expect.any(Object));
 
           preparePoolSpy.mockRestore();
         });
@@ -1315,7 +1322,7 @@ describe('headless delegation enforcement', () => {
           await runHeadless(['rebase-recreate', 'task-1'], depsWithNoTrack);
 
           expect(preemptWorkflowExecution).toHaveBeenCalledWith('wf-1');
-          expect(mockDeps.orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
+          expect(mockDeps.orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-1', expect.any(Object));
 
           preparePoolSpy.mockRestore();
         });
@@ -1428,6 +1435,8 @@ describe('headless delegation enforcement', () => {
               return [];
             },
           ) as any;
+          mockDeps.orchestrator.cancelWorkflow = vi.fn(() => ({ cancelled: [], runningCancelled: [] }));
+          mockDeps.orchestrator.cascadeInvalidationToDownstream = vi.fn(() => []);
           (mockDeps.orchestrator as any).restartTask = vi.fn(() => []);
           mockDeps.commandService.retryTask = vi.fn(async () => ({ ok: true as const, data: [] }));
           mockDeps.commandService.retryWorkflow = vi.fn(async () => ({ ok: true as const, data: [] }));
@@ -1546,7 +1555,7 @@ describe('headless delegation enforcement', () => {
           preparePoolSpy.mockRestore();
         });
 
-        it('headless `rebase-recreate <wfId>` routes to orchestrator.recreateWorkflow after fresh-base prep', async () => {
+        it('headless `rebase-recreate <wfId>` routes to orchestrator.recreateWorkflowFromFreshBase after fresh-base prep', async () => {
           const { preemptWorkflowExecution, preparePoolSpy } = seedHappyPath();
           const depsWithNoTrack: HeadlessDeps = {
             ...mockDeps,
@@ -1556,7 +1565,7 @@ describe('headless delegation enforcement', () => {
 
           await runHeadless(['rebase-recreate', 'wf-1'], depsWithNoTrack);
 
-          expect(mockDeps.orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
+          expect(mockDeps.orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-1', expect.any(Object));
           expect(preparePoolSpy).toHaveBeenCalledWith(
             'wf-1',
             'https://example/repo.git',
@@ -1565,7 +1574,7 @@ describe('headless delegation enforcement', () => {
           expect(mockDeps.commandService.retryTask).not.toHaveBeenCalled();
           expect(mockDeps.commandService.retryWorkflow).not.toHaveBeenCalled();
           expect(mockDeps.orchestrator.recreateTask).not.toHaveBeenCalled();
-          expect(mockDeps.orchestrator.recreateWorkflowFromFreshBase).not.toHaveBeenCalled();
+          expect(mockDeps.orchestrator.recreateWorkflow).not.toHaveBeenCalled();
           expect((mockDeps.orchestrator as any).restartTask).not.toHaveBeenCalled();
           preparePoolSpy.mockRestore();
         });

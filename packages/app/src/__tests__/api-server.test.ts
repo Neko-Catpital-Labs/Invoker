@@ -1048,15 +1048,15 @@ describe('POST /api/workflows/:id/rebase-recreate', () => {
     }
   });
 
-  it('recreates workflow', async () => {
-    mocks.orchestrator.recreateWorkflow = vi.fn(() => [makeTask({ id: 'wf-1/task-a' })]);
+  it('recreates workflow from fresh base', async () => {
+    mocks.orchestrator.recreateWorkflowFromFreshBase = vi.fn(async () => [makeTask({ id: 'wf-1/task-a' })]);
     const res = await request(port, 'POST', '/api/workflows/wf-1/rebase-recreate');
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.action).toBe('rebase_recreated');
     expect(res.body.tasksStarted).toBe(1);
     expect(res.body.deprecated).toBeUndefined();
-    expect(mocks.orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
+    expect(mocks.orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-1', expect.any(Object));
   });
 
   it('keeps cross-workflow started tasks out of the scoped rebase-recreate runnable result', async () => {
@@ -1070,7 +1070,7 @@ describe('POST /api/workflows/:id/rebase-recreate', () => {
       config: { workflowId: 'wf-2' },
       execution: { selectedAttemptId: 'attempt-b' },
     });
-    mocks.orchestrator.recreateWorkflow = vi.fn(() => [scoped, crossWorkflow]);
+    mocks.orchestrator.recreateWorkflowFromFreshBase = vi.fn(async () => [scoped, crossWorkflow]);
     mocks.orchestrator.startExecution.mockReturnValue([]);
 
     const res = await request(port, 'POST', '/api/workflows/wf-1/rebase-recreate');
