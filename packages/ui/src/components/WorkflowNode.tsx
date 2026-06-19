@@ -22,6 +22,7 @@ export function WorkflowNode({
   onContextMenu,
 }: WorkflowNodeProps): JSX.Element {
   const visual = workflowStatusVisual(workflow.status);
+  const detachedDependencyCount = workflow.detachedExternalDependencies?.length ?? 0;
 
   return (
     <div
@@ -48,8 +49,19 @@ export function WorkflowNode({
       {isWorkflowStatusActive(workflow.status) && visual.pulse && (
         <div className={`absolute -left-1 top-1/2 h-2 w-2 -translate-y-1/2 rounded-full ${visual.railClass} animate-ping`} />
       )}
+      {detachedDependencyCount > 0 && (
+        <div
+          data-testid={`workflow-node-${workflow.id}-detached-lineage`}
+          title={`Detached from ${detachedDependencyCount} upstream workflow${detachedDependencyCount === 1 ? '' : 's'}`}
+          className="absolute right-2 top-2 rounded border border-amber-400/35 bg-amber-950/45 px-1.5 py-0.5 text-[9px] font-medium uppercase leading-none text-amber-300"
+        >
+          Detached
+        </div>
+      )}
 
-      <div className="text-[13px] font-semibold text-gray-100 truncate">{workflow.name || workflow.id}</div>
+      <div className={`text-[13px] font-semibold text-gray-100 truncate ${detachedDependencyCount > 0 ? 'pr-16' : ''}`}>
+        {workflow.name || workflow.id}
+      </div>
       <div className="mt-1 text-[11px] text-gray-400 truncate">{workflow.id}</div>
       <div className={`mt-2 text-[10px] uppercase tracking-wide ${visual.textClass}`}>{statusLabel(workflow.status)}</div>
     </div>
