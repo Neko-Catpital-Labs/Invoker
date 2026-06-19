@@ -221,6 +221,7 @@ import {
 } from './headless-owner-bootstrap.js';
 import { discoverOwner, isStandaloneCapable } from './owner-endpoint.js';
 import {
+  killRunningTaskExecution,
   rebuildTaskRunner as rebuildTaskRunnerWiring,
   requireWiredTaskRunner,
   type TaskHandleMap,
@@ -2191,11 +2192,11 @@ function createEmbeddedTerminalBackendFromConfig(
   }
 
   async function killRunningTask(taskId: string): Promise<void> {
-    const entry = taskHandles.get(taskId);
-    if (!entry) return;
-    logger.info(`Killing running task "${taskId}" before restart`, { module: 'kill' });
-    await entry.executor.kill(entry.handle);
-    taskHandles.delete(taskId);
+    await killRunningTaskExecution({
+      getTaskRunner: () => taskExecutor,
+      logger,
+      taskHandles,
+    }, taskId);
   }
 
   /** Cancel a task and cascade-kill all downstream DAG dependents. Shared by IPC, headless, and API. */

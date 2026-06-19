@@ -3,6 +3,7 @@ import type { TaskState } from '@invoker/workflow-core';
 import { autoFixOnReviewGateFailure } from '../workflow-actions.js';
 import { loadConfig, resolveSecretsFilePath } from '../config.js';
 import {
+  killRunningTaskExecution,
   rebuildTaskRunner,
   requireWiredTaskRunner,
 } from '../execution/task-runner-wiring.js';
@@ -193,6 +194,59 @@ describe('task-runner-wiring', () => {
     expect(currentRunner.approveMerge).toHaveBeenCalledTimes(1);
   });
 
+
+  it('kills preempted tasks through TaskRunner so SSH pool capacity is released', async () => {
+    const handle = { executionId: 'exec-1', taskId: 'task-1' };
+    const executor = { type: 'ssh', kill: vi.fn(async () => undefined) };
+    const taskHandles = new Map([[handle.taskId, { handle, executor }]]);
+    const taskRunner = {
+      killActiveExecution: vi.fn(async () => true),
+    };
+
+    await killRunningTaskExecution({
+      getTaskRunner: () => taskRunner as any,
+      logger: createLogger() as any,
+      taskHandles: taskHandles as any,
+    }, handle.taskId);
+
+    expect(taskRunner.killActiveExecution).toHaveBeenCalledWith(handle.taskId);
+    expect(executor.kill).not.toHaveBeenCalled();
+    expect(taskHandles.has(handle.taskId)).toBe(false);
+  });
+
+  it('still asks TaskRunner to kill when the app handle map missed the spawned task', async () => {
+    const taskHandles = new Map();
+    const taskRunner = {
+      killActiveExecution: vi.fn(async () => true),
+    };
+
+    await killRunningTaskExecution({
+      getTaskRunner: () => taskRunner as any,
+      logger: createLogger() as any,
+      taskHandles: taskHandles as any,
+    }, 'task-1');
+
+    expect(taskRunner.killActiveExecution).toHaveBeenCalledWith('task-1');
+  });
+
+  it('falls back to the stored handle when TaskRunner no longer has the active entry', async () => {
+    const handle = { executionId: 'exec-1', taskId: 'task-1' };
+    const executor = { type: 'ssh', kill: vi.fn(async () => undefined) };
+    const taskHandles = new Map([[handle.taskId, { handle, executor }]]);
+    const taskRunner = {
+      killActiveExecution: vi.fn(async () => false),
+    };
+
+    await killRunningTaskExecution({
+      getTaskRunner: () => taskRunner as any,
+      logger: createLogger() as any,
+      taskHandles: taskHandles as any,
+    }, handle.taskId);
+
+    expect(taskRunner.killActiveExecution).toHaveBeenCalledWith(handle.taskId);
+    expect(executor.kill).toHaveBeenCalledWith(handle);
+    expect(taskHandles.has(handle.taskId)).toBe(false);
+  });
   it('throws the existing follower-mode execution error before dispatch', () => {
     expect(() => requireWiredTaskRunner(() => null)).toThrow(
       'Mutation execution is unavailable in read-only follower mode',

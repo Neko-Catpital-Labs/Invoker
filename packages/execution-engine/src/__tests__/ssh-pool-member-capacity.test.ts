@@ -153,6 +153,151 @@ describe('SSH pool member capacity', () => {
     expect(sshExecutor.start).not.toHaveBeenCalled();
   });
 
+
+  it('releases in-memory SSH pool capacity when a preempted task is killed through TaskRunner', async () => {
+    const firstTask = makeTask('wf-1/task-a');
+    const secondTask = makeTask('wf-2/task-b');
+    const thirdTask = makeTask('wf-3/task-c');
+    const tasks = new Map([firstTask, secondTask, thirdTask].map((task) => [task.id, task]));
+    const handlesByTaskId = new Map<string, any>();
+    const completeByTaskId = new Map<string, (response: any) => void>();
+    const sshExecutor = {
+      type: 'ssh',
+      start: vi.fn(async (request: any) => {
+        const handle = {
+          executionId: `exec-${request.actionId}`,
+          taskId: request.actionId,
+          workspacePath: `/remote/${request.actionId}`,
+        };
+        handlesByTaskId.set(request.actionId, handle);
+        return handle;
+      }),
+      onComplete: vi.fn((handle: any, cb: any) => {
+        completeByTaskId.set(handle.taskId, cb);
+      }),
+      onOutput: vi.fn(),
+      onHeartbeat: vi.fn(),
+      kill: vi.fn(async () => undefined),
+      destroyAll: vi.fn(),
+    };
+    const deferTask = vi.fn();
+    const runner = makeRunner({
+      members: [
+        { id: 'remote-a', type: 'ssh', maxConcurrentTasks: 1 },
+        { id: 'remote-b', type: 'ssh', maxConcurrentTasks: 1 },
+      ],
+      sshExecutor,
+      orchestrator: {
+        getTask: (id: string) => tasks.get(id) ?? null,
+        getAllTasks: () => [...tasks.values()],
+        markTaskRunningAfterLaunch: () => true,
+        handleWorkerResponse: () => [],
+        deferTask,
+      },
+      persistence: {
+        logEvent: vi.fn(),
+        updateTask: vi.fn(),
+        updateAttempt: vi.fn(),
+        appendTaskOutput: vi.fn(),
+      },
+    });
+
+    const firstRun = runner.executeTask(firstTask);
+    const secondRun = runner.executeTask(secondTask);
+    await vi.waitFor(() => expect(sshExecutor.start).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(completeByTaskId.has(firstTask.id)).toBe(true));
+    await vi.waitFor(() => expect(completeByTaskId.has(secondTask.id)).toBe(true));
+
+    const firstAttemptId = firstTask.execution.selectedAttemptId;
+    const secondAttemptId = secondTask.execution.selectedAttemptId;
+    await sshExecutor.kill(handlesByTaskId.get(firstTask.id));
+    await sshExecutor.kill(handlesByTaskId.get(secondTask.id));
+    firstTask.execution = { ...firstTask.execution, selectedAttemptId: `${firstTask.id}-retry-attempt` };
+    secondTask.execution = { ...secondTask.execution, selectedAttemptId: `${secondTask.id}-retry-attempt` };
+    await runner.executeTask(thirdTask);
+    expect(deferTask).toHaveBeenCalledWith(thirdTask.id);
+    expect(sshExecutor.start).toHaveBeenCalledTimes(2);
+
+    expect(await runner.killActiveExecution(firstTask.id)).toBe(true);
+    expect(await runner.killActiveExecution(secondTask.id)).toBe(true);
+    completeByTaskId.get(firstTask.id)?.({
+      requestId: `kill-${firstTask.id}`,
+      actionId: firstTask.id,
+      attemptId: firstAttemptId,
+      status: 'failed',
+      outputs: { exitCode: 130 },
+    });
+    completeByTaskId.get(secondTask.id)?.({
+      requestId: `kill-${secondTask.id}`,
+      actionId: secondTask.id,
+      attemptId: secondAttemptId,
+      status: 'failed',
+      outputs: { exitCode: 130 },
+    });
+    await firstRun;
+    await secondRun;
+
+    const thirdRun = runner.executeTask(thirdTask);
+    await vi.waitFor(() => expect(sshExecutor.start).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => expect(completeByTaskId.has(thirdTask.id)).toBe(true));
+    completeByTaskId.get(thirdTask.id)?.({
+      requestId: `complete-${thirdTask.id}`,
+      actionId: thirdTask.id,
+      attemptId: thirdTask.execution.selectedAttemptId,
+      status: 'completed',
+      outputs: { exitCode: 0 },
+    });
+    await thirdRun;
+  });
+
+  it('logs when killActiveExecution cannot kill the executor handle', async () => {
+    const task = makeTask('wf-1/task-a');
+    const killErr = new Error('ssh gone');
+    const sshExecutor = {
+      type: 'ssh',
+      start: vi.fn(),
+      onComplete: vi.fn(),
+      onOutput: vi.fn(),
+      onHeartbeat: vi.fn(),
+      kill: vi.fn(async () => {
+        throw killErr;
+      }),
+      destroyAll: vi.fn(),
+    };
+    const logger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      child: vi.fn(),
+    };
+    const runner = makeRunner({
+      sshExecutor,
+      orchestrator: {
+        getTask: (id: string) => id === task.id ? task : null,
+        getAllTasks: () => [task],
+      },
+      persistence: {
+        logEvent: vi.fn(),
+      },
+    });
+
+    (runner as any).logger = logger;
+    (runner as any).activeExecutions.set(task.execution.selectedAttemptId, {
+      handle: {
+        executionId: 'exec-1',
+        taskId: task.id,
+      },
+      executor: sshExecutor,
+      taskId: task.id,
+    });
+
+    await expect(runner.killActiveExecution(task.id)).resolves.toBe(true);
+    expect(logger.warn).toHaveBeenCalledWith(
+      `[TaskRunner] killActiveExecution failed for task=${task.id}`,
+      { err: killErr },
+    );
+  });
   it('uses execution resource leases to defer across TaskRunner instances', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     try {
