@@ -305,6 +305,60 @@ describe('GitHubMergeGateProvider', () => {
       );
     });
 
+    it('falls back to REST when gh pr list is unavailable', async () => {
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      spawnMock.mockImplementation(((cmd: string, args: string[]) => {
+        if (cmd === 'git' && args[0] === 'remote' && args[1] === 'get-url' && args[2] === 'origin') {
+          return mockSpawnResult('https://github.com/owner/repo.git', 0);
+        }
+        if (cmd === 'git') return mockSpawnResult('', 0);
+        if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'list') {
+          return mockSpawnResult('', 1, 'GraphQL: API rate limit already exceeded');
+        }
+        if (cmd === 'gh' && args[0] === 'api' && args[1] === 'repos/owner/repo/pulls' && args.includes('--method') && args.includes('GET')) {
+          return mockSpawnResult('[{"html_url":"https://github.com/owner/repo/pull/11","number":11}]', 0);
+        }
+        return mockSpawnResult('', 0);
+      }) as any);
+
+      const result = await provider.createReview({
+        baseBranch: 'main',
+        featureBranch: 'feature/test',
+        title: 'Updated PR',
+        cwd: '/tmp/repo',
+        body: '## Summary',
+      });
+
+      expect(result).toEqual({
+        url: 'https://github.com/owner/repo/pull/11',
+        identifier: '11',
+      });
+      expect(spawnMock).toHaveBeenCalledWith(
+        'gh',
+        [
+          'api', 'repos/owner/repo/pulls',
+          '--method', 'GET',
+          '-f', 'state=open',
+          '-f', 'head=owner:feature/test',
+          '-f', 'per_page=1',
+        ],
+        expect.objectContaining({ cwd: '/tmp/repo' }),
+      );
+      expect(spawnMock).toHaveBeenCalledWith(
+        'gh',
+        [
+          'api', 'repos/owner/repo/pulls/11',
+          '--method', 'PATCH',
+          '-f', 'base=main',
+          '-f', 'title=Updated PR',
+          '-f', 'body=## Summary',
+        ],
+        expect.objectContaining({ cwd: '/tmp/repo' }),
+      );
+    });
+
     it('uses explicit target repo from environment when provided', async () => {
       process.env.INVOKER_GITHUB_TARGET_REPO = 'Neko-Catpital-Labs/Invoker';
       const { spawn } = await import('node:child_process');
