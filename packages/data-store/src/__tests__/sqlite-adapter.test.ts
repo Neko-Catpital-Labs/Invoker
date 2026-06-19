@@ -3021,6 +3021,23 @@ describe('SQLiteAdapter', () => {
       expect(adapter.getExecutionAgent('t-agent-3')).toBe('codex');
     });
 
+    it('falls back to lastAgentName when a completed command task keeps only the last session', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const task = makeTask('t-agent-last-only', {
+        status: 'completed',
+        config: { workflowId: 'wf-1', command: 'pnpm test' },
+        execution: {
+          lastAgentSessionId: 'sess-codex-last',
+          lastAgentName: 'codex',
+          workspacePath: '/tmp/worktree-last',
+        },
+      });
+      adapter.saveTask('wf-1', task);
+
+      expect(adapter.getAgentSessionId('t-agent-last-only')).toBe('sess-codex-last');
+      expect(adapter.getExecutionAgent('t-agent-last-only')).toBe('codex');
+    });
+
     it('returns null when neither agent_name nor execution_agent is set', () => {
       adapter.saveWorkflow(testWorkflow);
       const task = makeTask('t-agent-4', {
