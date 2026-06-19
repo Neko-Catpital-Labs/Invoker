@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { TaskState, WorkflowMeta } from '../types.js';
+import type { MergeMode, TaskState, WorkflowMeta } from '../types.js';
 import { getEffectiveVisualStatus, getStatusColor } from '../lib/colors.js';
 import { workflowStatusVisual } from '../lib/workflow-status.js';
 
@@ -19,9 +19,16 @@ interface WorkflowInspectorProps {
   onEditPrompt?: (taskId: string, newPrompt: string) => void;
   onEditCommand?: (taskId: string, newCommand: string) => void;
   onSetMergeBranch?: (workflowId: string, baseBranch: string) => Promise<void>;
+  onSetMergeMode?: (workflowId: string, mergeMode: MergeMode) => Promise<void>;
   onToggleCollapsed: () => void;
   onToggleAdvanced: () => void;
 }
+
+const MERGE_MODES: readonly { value: MergeMode; label: string }[] = [
+  { value: 'manual', label: 'Manual' },
+  { value: 'automatic', label: 'Automatic' },
+  { value: 'external_review', label: 'External review (GitHub)' },
+];
 
 function formatStatus(value: string | undefined): string {
   return value?.replaceAll('_', ' ') ?? 'unknown';
@@ -29,6 +36,28 @@ function formatStatus(value: string | undefined): string {
 
 function capitalize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function normalizeMergeMode(value: WorkflowMeta['mergeMode']): MergeMode {
+  if (value === 'automatic' || value === 'external_review') return value;
+  return 'manual';
+}
+
+function findWorkflowMergeNode(
+  workflow: WorkflowMeta | null,
+  tasks: Map<string, TaskState> | undefined,
+): TaskState | undefined {
+  if (!workflow?.id || !tasks) return undefined;
+  const expectedMergeId = `__merge__${workflow.id}`;
+  const expectedMergeNode = tasks.get(expectedMergeId);
+  if (expectedMergeNode?.config.isMergeNode) return expectedMergeNode;
+
+  for (const candidate of tasks.values()) {
+    if (candidate.config.isMergeNode && candidate.config.workflowId === workflow.id) {
+      return candidate;
+    }
+  }
+  return undefined;
 }
 
 function getReviewReadyMergeNodeReviewUrl(
@@ -60,6 +89,7 @@ export function WorkflowInspector({
   onEditPrompt,
   onEditCommand,
   onSetMergeBranch,
+  onSetMergeMode,
   onToggleCollapsed,
   onToggleAdvanced,
 }: WorkflowInspectorProps): JSX.Element {
@@ -91,6 +121,22 @@ export function WorkflowInspector({
           : undefined
         : getReviewReadyMergeNodeReviewUrl(workflowTasks)
       : undefined;
+  const workflowMergeNode = findWorkflowMergeNode(workflow, workflowTasks);
+  const workflowMergeMode = normalizeMergeMode(workflow?.mergeMode);
+  const showsWorkflowMergeModeControl = Boolean(
+    !task
+      && workflow?.id
+      && onSetMergeMode
+      && (workflowMergeNode || workflow?.mergeMode),
+  );
+  const mergeGateCanConvertToExternalReview = Boolean(
+    showsWorkflowMergeModeControl
+      && workflow?.id
+      && workflowMergeMode !== 'external_review'
+      && workflowMergeNode
+      && (workflowMergeNode.status === 'pending' || workflowMergeNode.status === 'review_ready')
+      && !workflowMergeNode.execution.reviewUrl,
+  );
   const workflowTitle = workflow ? workflow.name || workflow.id : null;
   const nodeTitle = task?.description ?? workflowTitle ?? 'No node selected';
   const showsWorkflowMergeDetails = Boolean(!task && workflow?.id && workflow.onFinish === 'pull_request');
@@ -275,6 +321,35 @@ export function WorkflowInspector({
                   {workflow.repoUrl.replace(/^https?:\/\//, '')}
                 </span>
               </div>
+            )}
+          </section>
+        )}
+
+        {showsWorkflowMergeModeControl && workflow && (
+          <section className="rounded border border-gray-700 bg-gray-800/70 p-3 space-y-3">
+            <label className="flex items-center justify-between gap-3">
+              <span className="text-xs uppercase tracking-wide text-gray-400">Merge mode</span>
+              <select
+                value={workflowMergeMode}
+                onChange={(event) => void onSetMergeMode?.(workflow.id, event.target.value as MergeMode)}
+                disabled={workflowMergeNode?.status === 'running' || workflowMergeNode?.status === 'fixing_with_ai'}
+                className="min-w-0 max-w-[190px] rounded border border-gray-600 bg-gray-700 px-2 py-1 text-xs text-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+                data-testid="workflow-merge-mode-select"
+              >
+                {MERGE_MODES.map((mode) => (
+                  <option key={mode.value} value={mode.value}>{mode.label}</option>
+                ))}
+              </select>
+            </label>
+            {mergeGateCanConvertToExternalReview && (
+              <button
+                type="button"
+                onClick={() => void onSetMergeMode?.(workflow.id, 'external_review')}
+                data-testid="workflow-external-review-btn"
+                className="w-full rounded border border-blue-500/60 bg-blue-600/20 px-2 py-1.5 text-xs font-medium text-blue-100 hover:bg-blue-600/30"
+              >
+                Use GitHub review
+              </button>
             )}
           </section>
         )}
