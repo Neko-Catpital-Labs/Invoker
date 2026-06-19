@@ -54,6 +54,18 @@ describe('invoker-cli', () => {
     const result = runCli(['--help']);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('invoker-cli run <plan.yaml>');
+    expect(result.stdout).toContain('invoker-cli worker autofix');
+  });
+
+  it('lists recovery workers as explicit long-running services', async () => {
+    const output = captureProcessOutput();
+
+    const code = await main(['worker', 'status']);
+
+    expect(code).toBe(0);
+    expect(output.stdout).toContain('Worker kinds');
+    expect(output.stdout).toContain('autofix');
+    output.restore();
   });
 
   it('runs the hello-world fixture with an isolated db dir', () => {

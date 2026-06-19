@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve, join } from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
-import type { Logger } from '@invoker/contracts';
+import { resolveInvokerHomeRoot, type Logger } from '@invoker/contracts';
 import { SQLiteAdapter, SqliteTaskRepository } from '@invoker/data-store';
 import {
   ExecutorRegistry,
@@ -43,6 +43,11 @@ type RunResult = {
 };
 
 type LiveOwnerInfo = {
+  ownerId: string;
+  mode: string;
+};
+
+type OwnerInfo = {
   ownerId: string;
   mode: string;
 };
@@ -130,12 +135,15 @@ function usage(): string {
   return [
     'Usage:',
     '  invoker-cli run <plan.yaml> [--live|--standalone] [--db-dir <path>] [--config <path>] [--json]',
+    '  invoker-cli worker autofix',
+    '  invoker-cli worker [list|status]',
     '  invoker-cli doctor [--fix] [--json]',
     '  invoker-cli --help',
     '  invoker-cli --version',
     '',
     'Commands:',
     '  run <plan.yaml>  Submit to a live Invoker UI when available, otherwise run standalone.',
+    '  worker          Show or run long-running worker services.',
     '  doctor          Check external runtime tools used by Invoker executors.',
     '',
     'Options:',
@@ -148,6 +156,124 @@ function usage(): string {
     '  --help           Show this help text.',
     '  --version        Show the CLI version.',
   ].join('\n');
+}
+
+async function discoverAnyOwner(bus: MessageBus, timeoutMs = 1_000): Promise<OwnerInfo | null> {
+  try {
+    const raw = await withTimeout(
+      bus.request('headless.owner-ping', {}),
+      timeoutMs,
+    );
+    if (!raw || typeof raw !== 'object') return null;
+    const response = raw as Record<string, unknown>;
+    if (typeof response.mode !== 'string') return null;
+    return {
+      ownerId: typeof response.ownerId === 'string' ? response.ownerId : '',
+      mode: response.mode,
+    };
+  } catch (err) {
+    if (err instanceof TransportError && err.code === TransportErrorCode.NO_HANDLER) {
+      return null;
+    }
+    if (err instanceof Error && err.message.startsWith('Timed out after ')) {
+      return null;
+    }
+    return null;
+  }
+}
+
+function failedTaskFingerprint(task: TaskState): string {
+  return [
+    task.execution.generation ?? 0,
+    task.execution.selectedAttemptId ?? '',
+    task.taskStateVersion,
+    task.execution.autoFixAttempts ?? 0,
+  ].join(':');
+}
+
+async function runAutoFixWorker(bus: MessageBus): Promise<number> {
+  const owner = await discoverAnyOwner(bus);
+  if (!owner) {
+    throw new Error('worker autofix requires a running Invoker owner; start the app or packaged headless owner first');
+  }
+
+  const invokerHome = resolve(resolveInvokerHomeRoot());
+  const persistence = await SQLiteAdapter.create(join(invokerHome, 'invoker.db'), {
+    readOnly: true,
+    ownerCapability: false,
+  });
+  const orchestrator = new Orchestrator({
+    persistence,
+    taskRepository: new SqliteTaskRepository(persistence),
+    messageBus: noopBus,
+    logger: silentLogger,
+    maxConcurrency: 1,
+  });
+  const submitted = new Map<string, string>();
+
+  const scan = async (): Promise<void> => {
+    orchestrator.syncAllFromDb();
+    for (const workflow of persistence.listWorkflows()) {
+      for (const task of persistence.loadTasks(workflow.id)) {
+        if (task.status !== 'failed') continue;
+        if (!orchestrator.shouldAutoFix(task.id)) continue;
+        const fingerprint = failedTaskFingerprint(task);
+        if (submitted.get(task.id) === fingerprint) continue;
+        await bus.request('headless.exec', {
+          args: ['fix', task.id, '--auto-fix'],
+          noTrack: true,
+          traceId: createTraceId('invoker-cli.worker.autofix'),
+        });
+        submitted.set(task.id, fingerprint);
+      }
+    }
+  };
+
+  process.stdout.write(`Auto-fix worker connected to ${owner.mode} owner ${owner.ownerId || '<unknown>'}; press Ctrl-C to stop.\n`);
+  const interval = setInterval(() => {
+    void scan().catch((err) => {
+      process.stderr.write(`worker autofix scan failed: ${err instanceof Error ? err.message : String(err)}\n`);
+    });
+  }, 60_000);
+
+  try {
+    await scan();
+    await new Promise<void>((resolveStop) => {
+      const stop = (): void => {
+        process.removeListener('SIGINT', stop);
+        process.removeListener('SIGTERM', stop);
+        resolveStop();
+      };
+      process.once('SIGINT', stop);
+      process.once('SIGTERM', stop);
+    });
+    process.stdout.write('Auto-fix worker stopped.\n');
+    return 0;
+  } finally {
+    clearInterval(interval);
+    persistence.close();
+  }
+}
+
+async function runWorker(argv: string[], deps: CliDeps): Promise<number> {
+  const subCommand = argv[0] ?? 'list';
+  if (subCommand === 'list' || subCommand === 'status') {
+    process.stdout.write([
+      'Worker kinds',
+      '  autofix  long-running service; reconciles failed tasks and submits auto-fix through the owner fix route',
+    ].join('\n') + '\n');
+    return 0;
+  }
+  if (subCommand === 'autofix') {
+    const bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
+    try {
+      return await runAutoFixWorker(bus);
+    } finally {
+      const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
+      disconnect?.call(bus);
+    }
+  }
+  throw new Error(`Unknown worker sub-command: ${subCommand}`);
 }
 
 function commandExists(command: string): boolean {
@@ -525,6 +651,9 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
   try {
     if (argv[0] === 'doctor') {
       return runDoctor(argv.slice(1));
+    }
+    if (argv[0] === 'worker') {
+      return await runWorker(argv.slice(1), deps);
     }
     const parsed = parseArgs(argv);
     if (!parsed.command || parsed.command === '--help') {

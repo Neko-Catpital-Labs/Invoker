@@ -107,6 +107,36 @@ describe('headless delegation enforcement', () => {
       ).resolves.toBeUndefined();
     });
 
+    it('lists explicit long-running worker services in read-only mode', async () => {
+      await expect(
+        runHeadless(['worker', 'status'], mockDeps),
+      ).resolves.toBeUndefined();
+    });
+
+    it('runs the explicit auto-fix worker service without submitting direct local mutations', async () => {
+      const bus = new LocalBus() as MessageBus;
+      const execHandler = vi.fn(async () => ({ ok: true }));
+      bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-worker', mode: 'standalone' }));
+      bus.onRequest('headless.exec', execHandler);
+      mockDeps.messageBus = bus;
+      mockDeps.orchestrator.syncFromDb = vi.fn();
+      mockDeps.orchestrator.getTask = vi.fn();
+      mockDeps.persistence.listWorkflows = vi.fn(() => []);
+      mockDeps.persistence.loadTasks = vi.fn(() => []);
+      const abortController = new AbortController();
+      setTimeout(() => abortController.abort(), 0);
+
+      await expect(
+        runHeadless(
+          ['worker', 'autofix', '--interval-ms', '1000'],
+          { ...mockDeps, signal: abortController.signal } as HeadlessDeps,
+        ),
+      ).resolves.toBeUndefined();
+
+      expect(mockDeps.orchestrator.syncFromDb).toHaveBeenCalled();
+      expect(execHandler).not.toHaveBeenCalled();
+    });
+
       it('allows deprecated list command in read-only mode', async () => {
         await expect(
           runHeadless(['list'], mockDeps)
