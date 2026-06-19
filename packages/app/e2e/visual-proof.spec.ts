@@ -1686,13 +1686,11 @@ test.describe('Visual proof capture', () => {
     const terminalSessionId = 'visual-proof-ssh-session';
     const sshInnerCommand = `cd '${workspacePath}' && codex resume --dangerously-bypass-approvals-and-sandbox ${sessionId}`;
     const sshArgs = ['-i', '/tmp/e2e_id_rsa', '-t', 'invoker@remote-do-1', sshInnerCommand];
-    const terminalOutput = [
-      '$ ssh -i /tmp/e2e_id_rsa -t invoker@remote-do-1\r\n',
+    const outputSnapshot = [
       'Connection established: remote-do-1\r\n',
-      `$ ${sshInnerCommand}\r\n`,
       `Resumed Codex session ${sessionId}\r\n`,
-      'Terminal stream ready for input.\r\n',
     ].join('');
+    const terminalOutput = 'Terminal stream ready for input.\r\n';
 
     await injectTaskStates(page, [
       {
@@ -1713,7 +1711,7 @@ test.describe('Visual proof capture', () => {
       },
     ]);
 
-    await page.evaluate(({ args, cwd, terminalId }) => {
+    await page.evaluate(({ args, cwd, terminalId, outputSnapshot }) => {
       (window as unknown as { __terminalCalls: string[] }).__terminalCalls = [];
       (window as unknown as { __terminalOutputSubscribers: Array<(event: { sessionId: string; taskId: string; data: string }) => void> }).__terminalOutputSubscribers = [];
       window.__INVOKER_TEST_OPEN_TERMINAL__ = async (taskId: string) => {
@@ -1729,6 +1727,7 @@ test.describe('Visual proof capture', () => {
             args,
             mode: 'spawn',
             attached: false,
+            outputSnapshot,
             createdAt: '2025-01-01T00:00:00.000Z',
           },
         };
@@ -1741,7 +1740,7 @@ test.describe('Visual proof capture', () => {
           if (index >= 0) subscribers.splice(index, 1);
         };
       };
-    }, { args: sshArgs, cwd: workspacePath, terminalId: terminalSessionId });
+    }, { args: sshArgs, cwd: workspacePath, terminalId: terminalSessionId, outputSnapshot });
 
     const sshTaskNode = page
       .getByTestId('selected-workflow-mini-dag')
@@ -1775,7 +1774,16 @@ test.describe('Visual proof capture', () => {
     await expect(terminalPane.getByText('Connection established: remote-do-1')).toBeVisible();
     await expect(terminalPane.getByText(`Resumed Codex session ${sessionId}`)).toBeVisible();
     await expect(terminalPane.getByText('Terminal stream ready for input.')).toBeVisible();
-    await expect(page.getByTestId('terminal-session-output-preview')).toContainText('Terminal stream ready for input.');
+
+    const outputPreviewLabel = page
+      .getByTestId('terminal-drawer-body')
+      .getByText('output', { exact: true });
+    if (process.env.CAPTURE_MODE === 'before') {
+      await expect(outputPreviewLabel).toBeVisible();
+    } else {
+      await expect(outputPreviewLabel).toHaveCount(0);
+    }
+    await expect(page.getByTestId('terminal-session-output-preview')).toHaveCount(0);
 
     const calls = await page.evaluate(() => (window as unknown as { __terminalCalls: string[] }).__terminalCalls);
     expect(calls).toHaveLength(1);
