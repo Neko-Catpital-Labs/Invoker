@@ -3,8 +3,8 @@ import type { WorkRequest, WorkResponse } from '@invoker/contracts';
 import type { TaskState } from '@invoker/workflow-core';
 import { BaseExecutor, type BaseEntry } from './base-executor.js';
 import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from './executor.js';
-import type { MergeRunnerHost } from './merge-runner.js';
-import { runMergeGateActionImpl } from './merge-runner.js';
+import type { MergeRunnerHost, MergeGateLineage } from './merge-runner.js';
+import { runMergeGateActionImpl, persistMergeGateExecutionIfCurrent } from './merge-runner.js';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 
 interface MergeGateEntry extends BaseEntry {
@@ -123,11 +123,18 @@ export class MergeGateExecutor extends BaseExecutor<MergeGateEntry> {
 
     try {
       this.emitOutput(handle.executionId, `[merge] Starting merge gate action: ${task.id}\n`);
-      const result = await runMergeGateActionImpl(this.host, task, { gateWorkspacePath });
+      // Lineage this run was launched under. Direct metadata writes are gated on
+      // it so a stale gate run (one whose merge task has since advanced to a
+      // newer selectedAttemptId / executionGeneration) cannot persist branch,
+      // workspacePath, or review metadata. The eventual stale worker response is
+      // still rejected by the orchestrator's worker-response guard.
+      const lineage: MergeGateLineage = {
+        attemptId: entry.request.attemptId,
+        executionGeneration: entry.request.executionGeneration,
+      };
+      const result = await runMergeGateActionImpl(this.host, task, { gateWorkspacePath, lineage });
       if (result.taskChanges.execution) {
-        this.host.persistence.updateTask(task.id, {
-          execution: result.taskChanges.execution,
-        });
+        persistMergeGateExecutionIfCurrent(this.host, task.id, lineage, result.taskChanges.execution);
       }
       this.emitOutput(handle.executionId, `[merge] Merge gate action finished: ${task.id} status=${result.response.status}\n`);
       this.emitComplete(handle.executionId, this.withAttempt(entry.request, result.response));
