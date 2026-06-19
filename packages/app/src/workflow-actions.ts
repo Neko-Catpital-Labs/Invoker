@@ -23,6 +23,11 @@ import {
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { TaskRunner, ReviewGateCiFailureTrigger } from '@invoker/execution-engine';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
+import {
+  isReviewGateCiContextStale,
+  type ReviewGateCiContext,
+  type ReviewGateLineageFields,
+} from './auto-fix-intents.js';
 import { createDeleteAllSnapshot } from './delete-all-snapshot.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import { isDispatchableLaunch } from './global-topup.js';
@@ -93,6 +98,17 @@ export function assertLineageCurrent(
       + `gen ${snapshot.generation} → ${current.generation})`,
     );
   }
+}
+
+function assertReviewGateCiContextCurrent(
+  taskId: string,
+  context: ReviewGateCiContext,
+  current: ReviewGateLineageFields,
+): void {
+  if (!isReviewGateCiContextStale(context, current)) return;
+  throw new StaleLineageError(
+    `Review-gate CI auto-fix for ${taskId} is stale (review=${context.reviewId})`,
+  );
 }
 
 // ── Deps interfaces ──────────────────────────────────────────
@@ -847,12 +863,17 @@ export async function fixWithAgentAction(
     recoveryRoute?: FailureRecoveryRoute;
     recreateOutputLabel?: string;
     failureOutputLabel?: string;
+    reviewGateContext?: ReviewGateCiContext;
     signal?: AbortSignal;
   } = {},
 ): Promise<FixWithAgentActionResult> {
   const { orchestrator, persistence, taskExecutor } = deps;
   const task = orchestrator.getTask(taskId);
   if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
+
+  if (options.reviewGateContext) {
+    assertReviewGateCiContextCurrent(taskId, options.reviewGateContext, task.execution);
+  }
 
   const savedError = task.execution.error ?? '';
   const recoveryRoute = options.recoveryRoute ?? selectFailureRecoveryRoute(task, savedError);
@@ -881,7 +902,12 @@ export async function fixWithAgentAction(
       await taskExecutor.resolveConflict(taskId, persistedSavedError, options.agentName);
     } else {
       const output = persistence.getTaskOutput(taskId);
-      await taskExecutor.fixWithAgent(taskId, output, options.agentName, persistedSavedError);
+      const fixContext = options.reviewGateContext?.fixContext;
+      if (fixContext !== undefined) {
+        await taskExecutor.fixWithAgent(taskId, output, options.agentName, persistedSavedError, fixContext);
+      } else {
+        await taskExecutor.fixWithAgent(taskId, output, options.agentName, persistedSavedError);
+      }
     }
     assertLineageCurrent(lineage, orchestrator, options.signal);
     const result = await finalizeAppliedFix(taskId, persistedSavedError, deps, options.signal, lineage);
@@ -1313,14 +1339,13 @@ function assertReviewGateTriggerCurrent(
   if (!task) {
     throw new StaleLineageError(`Review-gate CI auto-fix task ${trigger.taskId} no longer exists`);
   }
-  if (
-    task.execution.selectedAttemptId !== trigger.selectedAttemptId ||
-    (task.execution.generation ?? 0) !== trigger.generation ||
-    task.execution.reviewId !== trigger.reviewId ||
-    task.execution.branch !== trigger.branch
-  ) {
-    throw new StaleLineageError(`Review-gate CI auto-fix for ${trigger.taskId} is stale`);
-  }
+  assertReviewGateCiContextCurrent(trigger.taskId, {
+    reviewId: trigger.reviewId,
+    generation: trigger.generation,
+    selectedAttemptId: trigger.selectedAttemptId,
+    branch: trigger.branch,
+    headSha: trigger.headSha,
+  }, task.execution);
 }
 
 export async function autoFixOnReviewGateFailure(
