@@ -206,34 +206,7 @@ export interface InvokerConfig {
     /** Routing strategy. Defaults to "enforce". */
     strategy?: 'enforce' | 'route';
   }>;
-  /**
-   * Launch-handoff outbox mode (Phase A of the launch-handoff
-   * re-architecture). Resolved from the INVOKER_LAUNCH_OUTBOX env var:
-   * - "disabled" (default): legacy in-memory dispatch only.
-   * - "observe": orchestrator writes task_launch_dispatch rows alongside
-   *   the existing claim path; LaunchDispatcher polls and logs counts but
-   *   does not own dispatch.
-   * - "active": LaunchDispatcher is the source of truth for dispatch
-   *   (Phase B, default in production).
-   *
-   * Unknown values fall back to "disabled" with a console warning.
-   *
-   * CC.6 deferral: the plan's Phase C calls for removing this flag
-   * entirely once the outbox has dogfooded clean. That deletion is
-   * left as a follow-up because the test surface still flips between
-   * 'observe' / 'active' / 'disabled' to exercise both code paths
-   * (see launch-dispatcher.test.ts active-mode suite,
-   * launch-claim-orphan-regression.test.ts active-mode passing test,
-   * and several headless-delegation parity cases). Each Phase C
-   * cleanup is independently revertable per the plan; CC.6 stays
-   * documented-but-deferred so the production env-var rollout (and
-   * the ability to flip back to observe mode in a hot incident) is
-   * preserved while the dispatcher matures.
-   */
-  launchOutboxMode?: LaunchOutboxMode;
 }
-
-export type LaunchOutboxMode = 'disabled' | 'observe' | 'active';
 
 function readJsonSafe(path: string): InvokerConfig {
   if (!existsSync(path)) {
@@ -257,35 +230,11 @@ function readJsonSafe(path: string): InvokerConfig {
 }
 
 export function loadConfig(): InvokerConfig {
-  const base = process.env.INVOKER_REPO_CONFIG_PATH
+  return process.env.INVOKER_REPO_CONFIG_PATH
     ? readJsonSafe(process.env.INVOKER_REPO_CONFIG_PATH)
     : readJsonSafe(join(homedir(), '.invoker', 'config.json'));
-  base.launchOutboxMode = resolveLaunchOutboxMode();
-  return base;
 }
 
-/**
- * Resolve the launch-outbox feature-flag mode from the
- * `INVOKER_LAUNCH_OUTBOX` env var.
- *
- * Returns `'active'` when the var is unset, empty, or holds an
- * unrecognised value (with a console warning for unknown values so
- * operators notice typos like `INVOKER_LAUNCH_OUTBOX=on`).
- */
-export function resolveLaunchOutboxMode(
-  env: NodeJS.ProcessEnv = process.env,
-): LaunchOutboxMode {
-  const raw = env.INVOKER_LAUNCH_OUTBOX;
-  if (typeof raw !== 'string' || raw.trim() === '') return 'active';
-  const normalized = raw.trim().toLowerCase();
-  if (normalized === 'disabled' || normalized === 'observe' || normalized === 'active') {
-    return normalized;
-  }
-  console.warn(
-    `[config] Unknown INVOKER_LAUNCH_OUTBOX value "${raw}"; falling back to "active".`,
-  );
-  return 'active';
-}
 
 export type EmbeddedTerminalBackendConfig = 'bash' | 'pty';
 

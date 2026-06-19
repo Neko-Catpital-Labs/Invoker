@@ -72,8 +72,7 @@ start_owner() {
 cat > "$TMP_ROOT/config.json" <<'JSON'
 {
   "allowGraphMutation": true,
-  "disableAutoRunOnStartup": true,
-  "launchOutboxMode": "active"
+  "disableAutoRunOnStartup": true
 }
 JSON
 

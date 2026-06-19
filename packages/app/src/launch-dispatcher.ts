@@ -1,28 +1,20 @@
 /**
- * Phase A observer for the launch-handoff outbox.
+ * Active dispatcher for the launch-handoff outbox.
  *
- * In observer mode the dispatcher does not own dispatch. It only reads
- * `task_launch_dispatch` rows and logs an aggregate count by state so we
- * have production data on outbox build-up before the active dispatcher
- * (CB.5) takes over.
- *
- * See:
- * - `docs/incidents/2026-05-22-launch-handoff-architecture-proposal.md`
- *   (the architecture target)
- * - `docs/incidents/2026-05-22-launch-handoff-orphan-architecture.md`
- *   (the investigation that motivated the rewrite)
+ * `drainScheduler` writes ready task attempts into
+ * `task_launch_dispatch`; this dispatcher leases those rows and hands
+ * them to the TaskRunner. Durable rows let a later poll recover from
+ * process exits or missed in-memory handoffs.
  */
 
-import type { SQLiteAdapter, TaskLaunchDispatch, TaskLaunchDispatchState } from '@invoker/data-store';
+import type { SQLiteAdapter, TaskLaunchDispatch } from '@invoker/data-store';
 import type { LaunchOutboxAck } from '@invoker/execution-engine';
 import type { TaskLaunchReadiness, TaskState } from '@invoker/workflow-core';
 import { DISPATCH_MAX_ATTEMPTS, type Logger } from '@invoker/contracts';
 
-export type LaunchDispatcherMode = 'observe' | 'active';
 
 export type LaunchDispatcherPersistence = Pick<
   SQLiteAdapter,
-  | 'listLaunchDispatchesByState'
   | 'markLaunchDispatchCompleted'
   | 'markLaunchDispatchFailed'
   | 'markLaunchDispatchAbandoned'
@@ -74,15 +66,10 @@ export interface LaunchDispatcherOptions {
   taskRunnerProvider?: () => LaunchDispatcherTaskRunner | null;
   ownerId: string;
   logger?: Logger;
-  mode: LaunchDispatcherMode;
   maxAttempts?: number;
   maxLeasesPerPoll?: number;
 }
 
-const OBSERVED_STATES: readonly TaskLaunchDispatchState[] = [
-  'enqueued',
-  'leased',
-];
 
 export class LaunchDispatcher {
   private readonly persistence: LaunchDispatcherPersistence;
@@ -90,7 +77,6 @@ export class LaunchDispatcher {
   private readonly taskRunnerProvider?: () => LaunchDispatcherTaskRunner | null;
   private readonly ownerId: string;
   private readonly logger?: Logger;
-  private readonly mode: LaunchDispatcherMode;
   private readonly maxAttempts: number;
   private readonly maxLeasesPerPoll: number;
 
@@ -100,16 +86,12 @@ export class LaunchDispatcher {
     this.taskRunnerProvider = options.taskRunnerProvider;
     this.ownerId = options.ownerId;
     this.logger = options.logger;
-    this.mode = options.mode;
     this.maxAttempts = options.maxAttempts ?? DISPATCH_MAX_ATTEMPTS;
     // Bound a single poll's work so the dispatcher cannot starve other
     // owner-loop ticks; the leftover rows are picked up on the next tick.
     this.maxLeasesPerPoll = options.maxLeasesPerPoll ?? 32;
   }
 
-  getMode(): LaunchDispatcherMode {
-    return this.mode;
-  }
 
   getOwnerId(): string {
     return this.ownerId;
@@ -118,51 +100,27 @@ export class LaunchDispatcher {
   /**
    * Single dispatcher tick:
    *
-   *   1. Reap any leased rows whose dispatch lease expired (TaskRunner
-   *      never completed startup — we want to try again).
-   *   2. Abandon any leased rows whose dispatch lease expired AND that
-   *      have exhausted their retry budget (TaskRunner accepted ownership
-   *      but never completed; report the failure and let the orchestrator
-   *      prepare a fresh attempt).
-   *   3. In observe mode, log the aggregate state counts. In active mode,
-   *      (CB.5) lease and dispatch new work.
-   *
-   * Steps 1 and 2 run in BOTH observer and active modes. They only mutate
-   * already-stuck rows, so they are safe under observer mode — the goal
-   * is to surface the orphan condition with concrete events rather than
-   * letting it accumulate silently.
+   *   1. Reap any leased rows whose dispatch lease expired.
+   *   2. Abandon expired rows that exhausted their retry budget.
+   *   3. Lease and dispatch enqueued rows.
    */
   poll(): void {
     this.reapExpiredLeases();
     this.abandonStuckLeases();
-
-    if (this.mode === 'observe') {
-      const rows = this.persistence.listLaunchDispatchesByState(OBSERVED_STATES);
-      const counts = countByState(rows);
-      this.logger?.info?.('[launch-dispatcher] observed', {
-        ownerId: this.ownerId,
-        mode: this.mode,
-        counts,
-        total: rows.length,
-        module: 'launch-dispatcher',
-      });
-      return;
-    }
     this.dispatchActive();
   }
 
   /**
-   * Active-mode dispatch loop. Lease enqueued rows up to the per-poll
-   * batch bound and hand each one to the
-   * TaskRunner. The TaskRunner complete/fail flow drives the rest of
-   * the lifecycle; if the JS promise drops mid-flight, the durable outbox
-   * row stays leased until the fixed dispatch crash-recovery TTL expires,
-   * then the next poll's `reapExpiredLeases` reclaims it.
+   * Lease enqueued rows up to the per-poll batch bound and hand each
+   * one to the TaskRunner. The TaskRunner complete/fail flow drives the
+   * rest of the lifecycle; if the JS promise drops mid-flight, the
+   * durable outbox row stays leased until the fixed dispatch
+   * crash-recovery TTL expires, then the next poll reclaims it.
    */
   private dispatchActive(): void {
     const runner = this.taskRunnerProvider?.() ?? null;
     if (!runner) {
-      this.logger?.warn?.('[launch-dispatcher] active mode without taskRunner — skipping dispatch', {
+      this.logger?.warn?.('[launch-dispatcher] without taskRunner — skipping dispatch', {
         ownerId: this.ownerId,
         module: 'launch-dispatcher',
       });
@@ -480,17 +438,3 @@ export class LaunchDispatcher {
   }
 }
 
-function countByState(
-  rows: readonly TaskLaunchDispatch[],
-): Record<TaskLaunchDispatchState, number> {
-  const counts: Record<TaskLaunchDispatchState, number> = {
-    enqueued: 0,
-    leased: 0,
-    completed: 0,
-    abandoned: 0,
-  };
-  for (const row of rows) {
-    counts[row.state] += 1;
-  }
-  return counts;
-}
