@@ -157,7 +157,9 @@ function buildHeadlessApiServerDeps(
       taskExecutor,
       dispatchMode: deps.mutationTiming ? 'fire-and-forget' : 'await',
       autoApproveAIFixes: deps.invokerConfig?.autoApproveAIFixes,
-      killRunningTask: (taskId: string) => taskExecutor.killActiveExecution(taskId),
+      killRunningTask: async (taskId: string) => {
+        await taskExecutor.killActiveExecution(taskId);
+      },
       commandService: deps.commandService,
     }),
     deleteWorkflow: async (workflowId: string) => {
