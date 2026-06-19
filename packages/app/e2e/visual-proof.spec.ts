@@ -130,6 +130,22 @@ const REVIEW_READY_WORKFLOW_PR_PLAN = {
   ],
 };
 
+/** Manual-gate workflow used to prove the workflow-level GitHub review conversion affordance. */
+const WORKFLOW_GITHUB_REVIEW_GATE_PLAN = {
+  name: 'Workflow GitHub review gate proof',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'merge' as const,
+  mergeMode: 'manual',
+  tasks: [
+    {
+      id: 'gh-gate-work',
+      description: 'Sole task before the manual merge gate',
+      command: 'echo ok',
+      dependencies: [] as string[],
+    },
+  ],
+};
+
 const TASK_STATUS_PROOF_SPECS = [
   { status: 'pending', taskId: 'proof-task-pending', description: 'Pending', label: 'PENDING' },
   { status: 'running', taskId: 'proof-task-running', description: 'Running', label: 'RUNNING' },
@@ -767,6 +783,41 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByRole('link', { name: reviewUrl })).toHaveAttribute('href', reviewUrl);
 
     await captureScreenshot(page, 'review-ready-workflow-pr-sidebar');
+  });
+
+  test('workflow-github-review-gate-control — workflow inspector exposes GitHub review conversion for a gate without a PR', async ({ page }) => {
+    const workflowId = await loadPlanAndSelectWorkflow(page, WORKFLOW_GITHUB_REVIEW_GATE_PLAN);
+    await page.locator('.react-flow__node[data-testid$="gh-gate-work"]').first().waitFor({ state: 'visible', timeout: 15000 });
+
+    const mergeGateTaskId = await page.evaluate(async () => {
+      const result = await window.invoker.getTasks();
+      const tasks = Array.isArray(result) ? result : result.tasks;
+      const mergeTask = tasks.find((task: { id: string }) => task.id.includes('__merge__'));
+      return mergeTask?.id ?? null;
+    });
+    expect(mergeGateTaskId).toBeTruthy();
+
+    // Deterministic setup: the gate sits review_ready with no GitHub review URL — the
+    // motivating scenario where a workflow is ready but has no PR and no obvious action.
+    await injectTaskStates(page, [
+      {
+        taskId: mergeGateTaskId!,
+        changes: { status: 'review_ready', execution: { startedAt: new Date(Date.now() - 3000) } },
+      },
+    ]);
+
+    // Re-select the workflow node (no merge-node task selected) so the inspector shows
+    // the workflow-level control, not the TaskPanel merge-node Advanced selector.
+    await workflowNode(page, workflowId).dispatchEvent('click', { bubbles: true });
+    await expect(page.getByTestId('workflow-inspector-title')).toHaveText('Workflow GitHub review gate proof');
+
+    // Workflow-level merge-mode control plus the direct GitHub review conversion affordance.
+    await expect(page.getByTestId('workflow-merge-mode-select')).toBeVisible();
+    const convertButton = page.getByTestId('workflow-external-review-btn');
+    await expect(convertButton).toBeVisible();
+    await expect(convertButton).toHaveText('Use GitHub review');
+
+    await captureScreenshot(page, 'workflow-github-review-gate-control');
   });
 
   test('sidebar keyboard navigation focuses the first inspector item, not the container', async ({ page }) => {
