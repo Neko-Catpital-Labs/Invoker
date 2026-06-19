@@ -421,10 +421,87 @@ export interface MergeGateActionResult {
   taskChanges: TaskStateChanges;
 }
 
+// ── Merge-gate lineage guard ──────────────────────────────
+
+/**
+ * The execution lineage a merge-gate run was launched under. Compared against
+ * the live merge task so a stale run cannot overwrite metadata owned by a newer
+ * launch (e.g. after a recreate/restart bumped the generation or selected a new
+ * attempt).
+ */
+export interface MergeGateLineage {
+  /** selectedAttemptId the gate run was dispatched for, when attempts are used. */
+  attemptId?: string;
+  /** executionGeneration the gate run was dispatched for. */
+  executionGeneration?: number;
+}
+
+/**
+ * True when merge task `taskId` has advanced past `lineage` — i.e. it now
+ * carries a different selectedAttemptId or executionGeneration. This mirrors the
+ * lineage guard in {@link Orchestrator.handleWorkerResponse} so that a direct
+ * merge-gate metadata write and the eventual worker response agree on staleness:
+ * if the response would be rejected as stale, the direct write is skipped too.
+ *
+ * Returns false when the task is no longer visible (we cannot confirm the
+ * lineage advanced), matching the conservative behaviour of the launch guard.
+ */
+export function isMergeGateLineageStale(
+  orchestrator: Orchestrator,
+  taskId: string,
+  lineage: MergeGateLineage,
+): boolean {
+  const current = orchestrator.getTask(taskId);
+  if (!current) return false;
+
+  const activeAttemptId = current.execution.selectedAttemptId;
+  if (lineage.attemptId !== undefined) {
+    if (activeAttemptId === undefined || lineage.attemptId !== activeAttemptId) {
+      return true;
+    }
+  }
+
+  const activeGeneration = current.execution.generation ?? 0;
+  if (
+    lineage.executionGeneration !== undefined &&
+    lineage.executionGeneration !== activeGeneration
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Persist merge-gate execution metadata only when the merge task has not
+ * advanced past `lineage`. Returns true when the write was applied, false when
+ * it was skipped because the run is stale. This is the single seam through which
+ * merge-gate side effects write `branch`, `workspacePath`, review metadata, or
+ * fixed-integration fields directly to persistence, so stale runs cannot clobber
+ * a newer launch's state before the worker-response guard runs.
+ */
+export function persistMergeGateExecutionIfCurrent(
+  host: MergeRunnerHost,
+  taskId: string,
+  lineage: MergeGateLineage,
+  execution: NonNullable<TaskStateChanges['execution']>,
+): boolean {
+  if (isMergeGateLineageStale(host.orchestrator, taskId, lineage)) {
+    mergeTrace('GATE_DIRECT_WRITE_SKIPPED_STALE', {
+      taskId,
+      lineageAttemptId: lineage.attemptId ?? null,
+      lineageGeneration: lineage.executionGeneration ?? null,
+    });
+    return false;
+  }
+  host.persistence.updateTask(taskId, { execution });
+  return true;
+}
+
 export async function runMergeGateActionImpl(
   host: MergeRunnerHost,
   task: TaskState,
-  opts: { gateWorkspacePath?: string } = {},
+  opts: { gateWorkspacePath?: string; lineage?: MergeGateLineage } = {},
 ): Promise<MergeGateActionResult> {
   const workflowId = task.config.workflowId;
   const workflow = workflowId
@@ -457,13 +534,23 @@ export async function runMergeGateActionImpl(
       `mergeMode=${mergeMode} onFinish=${onFinish} dbWorkspacePath=${safeGetWorkspacePath(host.persistence, task.id) ?? 'NULL'}`,
   );
 
-  host.persistence.updateTask(task.id, {
-    execution: {
-      reviewUrl: undefined,
-      reviewId: undefined,
-      reviewStatus: undefined,
-    },
-  });
+  // Clearing prior review metadata is itself a direct write of review fields, so
+  // a stale run must not wipe state owned by a newer launch. Skip it when the
+  // task has already advanced past this run's lineage.
+  if (!opts.lineage || !isMergeGateLineageStale(host.orchestrator, task.id, opts.lineage)) {
+    host.persistence.updateTask(task.id, {
+      execution: {
+        reviewUrl: undefined,
+        reviewId: undefined,
+        reviewStatus: undefined,
+      },
+    });
+  } else {
+    mergeTrace('GATE_REVIEW_CLEAR_SKIPPED_STALE', {
+      taskId: task.id,
+      lineageGeneration: opts.lineage.executionGeneration ?? null,
+    });
+  }
 
   // Create a persistent gate worktree so workspacePath is never the main repo.
   // Use baseBranch as the ref because featureBranch may not exist yet
