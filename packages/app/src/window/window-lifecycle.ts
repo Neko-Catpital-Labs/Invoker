@@ -47,6 +47,8 @@ export function registerMainWindowActivateHandler(deps: MainWindowActivateDeps):
   });
 }
 
+const FALLBACK_WINDOW_HTML = 'data:text/html,<html><body style="background:#1a1a2e;color:#eee;font-family:system-ui;padding:2rem"><h1>Invoker</h1><p>The UI failed to load. Restart Invoker. If this keeps happening, reinstall Invoker or rebuild the UI from a source checkout.</p></body></html>';
+
 export function createMainWindow(deps: MainWindowLifecycleDeps): BrowserWindow {
   deps.recordStartupMark('createWindow.begin');
   const iconPath = path.join(deps.appRootDir, 'assets', 'icons', 'png', '256x256.png');
@@ -75,18 +77,27 @@ export function createMainWindow(deps: MainWindowLifecycleDeps): BrowserWindow {
     if (!icon.isEmpty()) mainWindow.setIcon(icon);
   }
 
+  let fallbackShown = false;
+  const showFallbackWindow = (reason: string): void => {
+    if (mainWindow.isDestroyed() || fallbackShown) return;
+    fallbackShown = true;
+    deps.logger.error(`main window fallback shown: ${reason}`, { module: 'window' });
+    mainWindow.loadURL(FALLBACK_WINDOW_HTML).catch((err) => {
+      deps.logger.error(`main window fallback failed: ${err instanceof Error ? err.message : String(err)}`, { module: 'window' });
+    });
+  };
+
   const devUrl = process.env.VITE_DEV_SERVER_URL;
   if (devUrl) {
-    mainWindow.loadURL(devUrl);
+    mainWindow.loadURL(devUrl).catch((err) => {
+      showFallbackWindow(`dev URL load failed: ${err instanceof Error ? err.message : String(err)}`);
+    });
   } else {
     const packagedUiPath = path.join(deps.appRootDir, 'ui', 'index.html');
     const repoUiPath = path.join(deps.appRootDir, '..', '..', 'ui', 'dist', 'index.html');
     const uiDistPath = existsSync(packagedUiPath) ? packagedUiPath : repoUiPath;
-    mainWindow.loadFile(uiDistPath).catch(() => {
-      if (mainWindow.isDestroyed()) return;
-      mainWindow.loadURL(
-        `data:text/html,<html><body style="background:#1a1a2e;color:#eee;font-family:system-ui;padding:2rem"><h1>Invoker</h1><p>UI not built yet. Run: <code>pnpm --filter @invoker/ui build</code></p></body></html>`,
-      );
+    mainWindow.loadFile(uiDistPath).catch((err) => {
+      showFallbackWindow(`UI file load failed: ${err instanceof Error ? err.message : String(err)}`);
     });
   }
 
@@ -100,6 +111,7 @@ export function createMainWindow(deps: MainWindowLifecycleDeps): BrowserWindow {
       `main window did-fail-load: code=${errorCode} desc=${errorDescription} url=${validatedURL}`,
       { module: 'window' },
     );
+    showFallbackWindow(`did-fail-load code=${errorCode} desc=${errorDescription}`);
   });
 
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
@@ -107,6 +119,7 @@ export function createMainWindow(deps: MainWindowLifecycleDeps): BrowserWindow {
       `main window render-process-gone: reason=${details.reason} exitCode=${details.exitCode}`,
       { module: 'window' },
     );
+    showFallbackWindow(`render-process-gone reason=${details.reason} exitCode=${details.exitCode}`);
   });
 
   const shouldShowWindow = process.env.NODE_ENV !== 'test' || deps.enableTestCompositor;
