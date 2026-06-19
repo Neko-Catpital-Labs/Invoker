@@ -51,7 +51,8 @@ import {
   setWorkflowMergeMode,
 } from './workflow-actions.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
-import { parseHeadlessFixArgs } from './auto-fix-intents.js';
+import { buildHeadlessFixArgs, parseHeadlessFixArgs } from './auto-fix-intents.js';
+import { createAutoFixRecoveryWorker } from './auto-fix-recovery.js';
 import type { CostGroupDimension } from './cost-rollup.js';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
 import {
@@ -62,7 +63,7 @@ import {
 } from './global-topup.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
 import { RECOVERY_WORKER_KIND } from './worker-runtime.js';
-import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
+import { AUTO_FIX_WORKER_COMMAND, resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
 import { trackWorkflow } from './headless-watch.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
@@ -1147,7 +1148,7 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       await headlessQuerySelect(args[1], deps);
       break;
     case 'worker':
-      headlessWorker(args[1]);
+      await headlessWorker(args.slice(1), deps);
       break;
 
     // ── Deprecated aliases → query ──
@@ -1206,21 +1207,95 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
 }
 
 /**
- * Worker kinds exposed to the CLI. Each entry is `available: false` until the
- * worker actually performs work; unavailable kinds are reported as such instead
- * of being silently advertised as functional.
+ * Worker kinds exposed to the CLI.
  */
 const HEADLESS_WORKER_KINDS: ReadonlyArray<{ kind: string; available: boolean; note: string }> = [
   {
-    kind: RECOVERY_WORKER_KIND,
+    kind: AUTO_FIX_WORKER_COMMAND,
     available: true,
-    note: 'reconciles failed tasks and submits auto-fix through the fix command route',
+    note: `${RECOVERY_WORKER_KIND} worker; reconciles failed tasks and submits auto-fix through the fix command route`,
   },
 ];
 
-function headlessWorker(subCommand: string | undefined): void {
+function createWorkerTraceId(channel: string): string {
+  return `${channel}:${process.pid}:${Date.now()}:${Math.random().toString(16).slice(2, 8)}`;
+}
+
+async function waitForWorkerShutdown(
+  worker: { stop: () => Promise<void> },
+  signal?: AbortSignal,
+): Promise<void> {
+  await new Promise<void>((resolve) => {
+    let resolved = false;
+    const finish = (): void => {
+      if (resolved) return;
+      resolved = true;
+      process.removeListener('SIGINT', finish);
+      process.removeListener('SIGTERM', finish);
+      signal?.removeEventListener('abort', finish);
+      resolve();
+    };
+    process.once('SIGINT', finish);
+    process.once('SIGTERM', finish);
+    signal?.addEventListener('abort', finish, { once: true });
+    if (signal?.aborted) finish();
+  });
+  await worker.stop();
+}
+
+function parseWorkerAutofixArgs(args: string[]): { intervalMs?: number } {
+  const options: { intervalMs?: number } = {};
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === '--interval-ms') {
+      const raw = args[++i];
+      const intervalMs = Number.parseInt(raw ?? '', 10);
+      if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
+        throw new Error('Invalid --interval-ms value for worker autofix');
+      }
+      options.intervalMs = intervalMs;
+      continue;
+    }
+    throw new Error(`Unknown worker autofix option: "${arg}"`);
+  }
+  return options;
+}
+
+async function headlessWorkerAutofix(args: string[], deps: HeadlessDeps): Promise<void> {
+  const options = parseWorkerAutofixArgs(args);
+  const ping = await deps.messageBus.request('headless.owner-ping', {});
+  if (!ping || typeof ping !== 'object') {
+    throw new Error('worker autofix requires a running shared owner process');
+  }
+  const worker = createAutoFixRecoveryWorker({
+    logger: deps.logger,
+    orchestrator: deps.orchestrator,
+    persistence: deps.persistence,
+    intervalMs: options.intervalMs,
+    getAutoFixAgent: () => loadConfig().autoFixAgent,
+    submit: async (submission) => {
+      await deps.messageBus.request('headless.exec', {
+        args: buildHeadlessFixArgs(submission.taskId, submission.agentName, { autoFix: true }),
+        noTrack: true,
+        traceId: createWorkerTraceId('headless.worker.autofix'),
+      });
+    },
+  });
+
+  process.stdout.write('[headless] worker autofix started; press Ctrl-C to stop.\n');
+  worker.start();
+  await waitForWorkerShutdown(worker, deps.signal);
+  process.stdout.write('[headless] worker autofix stopped.\n');
+}
+
+async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void> {
+  const subCommand = args[0];
+  if (subCommand === AUTO_FIX_WORKER_COMMAND) {
+    await headlessWorkerAutofix(args.slice(1), deps);
+    return;
+  }
   if (subCommand && subCommand !== 'list' && subCommand !== 'status') {
-    throw new Error(`Unknown worker sub-command: "${subCommand}". Use: list, status`);
+    throw new Error(`Unknown worker sub-command: "${subCommand}". Use: ${AUTO_FIX_WORKER_COMMAND}, list, status`);
   }
   process.stdout.write(`${BOLD}Worker kinds${RESET}\n`);
   for (const worker of HEADLESS_WORKER_KINDS) {
@@ -1310,7 +1385,8 @@ ${BOLD}Lifecycle:${RESET}
   delete-all                                          Delete all workflows (requires INVOKER_ALLOW_DELETE_ALL=1)
   open-terminal <taskId>                              Open OS terminal for a task
   slack                                               Start Slack bot (long-running)
-  worker [list|status]                                List worker kinds and availability (recovery: unavailable)
+  worker autofix [--interval-ms N]                    Run auto-fix recovery as a long-running service
+  worker [list|status]                                List worker kinds and availability
 
 ${BOLD}Deprecated${RESET} (use new names above):
   list → query workflows       status → query tasks       task-status → query task

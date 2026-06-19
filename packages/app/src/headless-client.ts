@@ -6,7 +6,7 @@ import { IpcBus } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
 
 import { resolveInvokerHomeRoot } from './delete-all-snapshot.js';
-import { isHeadlessMutatingCommand } from './headless-command-classification.js';
+import { isAutoFixWorkerCommand, isHeadlessMutatingCommand } from './headless-command-classification.js';
 import {
   resolveDelegationTimeoutMs,
   tryDelegateExec,
@@ -358,6 +358,38 @@ async function resolveOwnerAndDelegate(
   return null; // Could not resolve
 }
 
+async function resolveOwnerForWorker(
+  deps: HeadlessClientDeps,
+): Promise<boolean> {
+  delegationClientLog('resolveOwnerForWorker begin');
+  const resolver = createOwnerResolver(
+    {
+      messageBus: deps.messageBus,
+      refreshMessageBus: deps.refreshMessageBus,
+      ensureStandaloneOwner: deps.ensureStandaloneOwner,
+      isRetryableBootstrapError: isSharedMutationOwnerTimeoutError,
+    },
+    {
+      discoveryTimeoutMs: 3_000,
+      refreshDiscoveryTimeoutMs: 1_000,
+      postBootstrapReadyTimeoutMs: POST_BOOTSTRAP_OWNER_READY_TIMEOUT_MS,
+      maxBootstrapAttempts: POST_BOOTSTRAP_OWNER_RESTART_ATTEMPTS,
+    },
+  );
+
+  try {
+    const resolved = await resolver.resolve(true);
+    delegationClientLog(`resolveOwnerForWorker resolved ownerId=${resolved.owner.ownerId}`);
+    return true;
+  } catch (err) {
+    if (err instanceof Error && /Could not resolve a standalone-capable owner/.test(err.message)) {
+      delegationClientLog(`resolveOwnerForWorker failed: ${err.message}`);
+      return false;
+    }
+    throw err;
+  }
+}
+
 export async function runHeadlessClientCommand(
   argv: string[],
   deps: HeadlessClientDeps,
@@ -369,6 +401,17 @@ export async function runHeadlessClientCommand(
   const { args, waitForApproval, noTrack } = parseArgs(argv);
   const standaloneMode = process.env.INVOKER_HEADLESS_STANDALONE === '1';
   const internalOwnerServe = args[0] === 'owner-serve';
+
+  if (!standaloneMode && !internalOwnerServe && isAutoFixWorkerCommand(args)) {
+    const resolved = await resolveOwnerForWorker(deps);
+    if (!resolved) {
+      process.stderr.write(
+        `${RED}Error:${RESET} Worker command "worker autofix" could not reach a standalone shared owner after bootstrap.\n`,
+      );
+      return 1;
+    }
+    return deps.runElectronHeadless(argv);
+  }
 
   if (!standaloneMode && !internalOwnerServe && await delegateReadOnlyQuery(args, deps.messageBus, deps.refreshMessageBus)) {
     const exitCode = process.exitCode;

@@ -443,6 +443,39 @@ describe('headless-client', () => {
     expect(runElectronHeadless).toHaveBeenCalledWith(['query', 'workflows']);
   });
 
+  it('bootstraps an owner before starting the explicit auto-fix worker service', async () => {
+    const bus = new LocalBus();
+    const ensureStandaloneOwner = vi.fn(async () => {
+      bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'worker-owner', mode: 'standalone' }));
+    });
+    const runElectronHeadless = vi.fn(async () => 0);
+
+    const exitCode = await runHeadlessClientCommand(['worker', 'autofix'], {
+      messageBus: bus,
+      ensureStandaloneOwner,
+      runElectronHeadless,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(ensureStandaloneOwner).toHaveBeenCalledTimes(1);
+    expect(runElectronHeadless).toHaveBeenCalledWith(['worker', 'autofix']);
+  });
+
+  it('does not bootstrap owner loops for worker list/status', async () => {
+    const runElectronHeadless = vi.fn(async () => 0);
+    const ensureStandaloneOwner = vi.fn(async () => {});
+
+    const exitCode = await runHeadlessClientCommand(['worker', 'status'], {
+      messageBus: new LocalBus(),
+      ensureStandaloneOwner,
+      runElectronHeadless,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(ensureStandaloneOwner).not.toHaveBeenCalled();
+    expect(runElectronHeadless).toHaveBeenCalledWith(['worker', 'status']);
+  });
+
   it('delegates query ui-perf to a reachable owner endpoint', async () => {
     const bus = new LocalBus();
     bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));

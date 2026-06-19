@@ -10,6 +10,8 @@ import type { PersistenceAdapter } from '@invoker/data-store';
 import type { TaskState } from '@invoker/workflow-core';
 import { findHeadlessCommandDefinition, isMutatingSetSubcommand } from './headless-command-registry.js';
 
+export const AUTO_FIX_WORKER_COMMAND = 'autofix';
+
 export type HeadlessTargetLookup = Pick<PersistenceAdapter, 'loadWorkflow' | 'listWorkflows' | 'loadTasks'>;
 
 export type HeadlessTargetResolution =
@@ -100,6 +102,10 @@ export function isHeadlessReadOnlyCommand(args: string[]): boolean {
   const command = args[0];
   if (!command || command === '--help' || command === '-h') return true;
   return findHeadlessCommandDefinition(command)?.kind === 'read';
+}
+
+export function isAutoFixWorkerCommand(args: readonly string[]): boolean {
+  return args[0] === 'worker' && args[1] === AUTO_FIX_WORKER_COMMAND;
 }
 
 export function isHeadlessMutatingCommand(args: string[]): boolean {
