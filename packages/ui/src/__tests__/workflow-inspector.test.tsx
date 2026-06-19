@@ -326,4 +326,32 @@ describe('WorkflowInspector', () => {
     expect(onEditPool).toHaveBeenCalledWith('task-1', 'pnpm-ssh');
     expect(screen.queryByText(/executor:/i)).not.toBeInTheDocument();
   });
+
+  it('shows fix approval actions for an awaiting approval fix', () => {
+    const onApprove = vi.fn();
+    const onReject = vi.fn();
+    const task = makeTask({
+      status: 'awaiting_approval',
+      execution: { pendingFixError: 'tests failed' },
+    });
+
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={task}
+        collapsed={false}
+        advancedExpanded={false}
+        onApprove={onApprove}
+        onReject={onReject}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve Fix' }));
+    expect(onApprove).toHaveBeenCalledWith(task);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reject Fix' }));
+    expect(onReject).toHaveBeenCalledWith(task);
+  });
 });
