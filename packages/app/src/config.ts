@@ -64,6 +64,12 @@ export interface InvokerConfig {
   planningHeartbeatIntervalSeconds?: number;
   /** Maximum number of tasks that can run concurrently. Default: 6. */
   maxConcurrency?: number;
+  /**
+   * Polling interval (ms) for lifecycle workers (e.g. auto-fix,
+   * external-recovery). Workers poll on this interval so events dropped while
+   * the worker was busy are still reconciled. Default: 30000.
+   */
+  workerPollIntervalMs?: number;
   /** Browser executable for opening external URLs (e.g. "firefox"). Default: Chrome. */
   browser?: string;
   /** GUI embedded terminal options. Headless open-terminal ignores this. */

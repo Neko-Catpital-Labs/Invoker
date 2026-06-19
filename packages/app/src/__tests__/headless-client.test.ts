@@ -476,6 +476,27 @@ describe('headless-client', () => {
     ).rejects.toThrow(/requires a running shared owner process/);
   }, 30_000);
 
+  it('runs worker commands directly in the host runtime without delegating', async () => {
+    for (const sub of ['autofix', 'external-recovery', 'all']) {
+      const runElectronHeadless = vi.fn(async () => 0);
+      const ensureStandaloneOwner = vi.fn(async () => {});
+      const refreshMessageBus = vi.fn(async () => new LocalBus());
+
+      const exitCode = await runHeadlessClientCommand(['worker', sub], {
+        messageBus: new LocalBus(),
+        ensureStandaloneOwner,
+        refreshMessageBus,
+        runElectronHeadless,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(runElectronHeadless).toHaveBeenCalledTimes(1);
+      expect(runElectronHeadless).toHaveBeenCalledWith(['worker', sub]);
+      expect(ensureStandaloneOwner).not.toHaveBeenCalled();
+      expect(refreshMessageBus).not.toHaveBeenCalled();
+    }
+  });
+
   it('delegates query queue to a reachable owner endpoint', async () => {
     const bus = new LocalBus();
     bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));

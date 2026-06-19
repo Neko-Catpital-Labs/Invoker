@@ -62,6 +62,7 @@ import {
 } from './global-topup.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
+import { startWorkerRuntime, type WorkerRuntime } from './worker-runtime.js';
 import { trackWorkflow } from './headless-watch.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
@@ -1030,6 +1031,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'owner-serve':
       await headlessOwnerServe(deps);
       break;
+    case 'worker':
+      await headlessWorker(args.slice(1), deps);
+      break;
     // ── New grouped commands ──
     case 'query':
       await headlessQuery(args.slice(1), deps);
@@ -1201,6 +1205,72 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
   }
 }
 
+type WorkerName = 'autofix' | 'external-recovery';
+
+const WORKER_SUBCOMMANDS = ['autofix', 'external-recovery', 'all'] as const;
+type WorkerSubcommand = (typeof WORKER_SUBCOMMANDS)[number];
+
+function isWorkerSubcommand(value: string | undefined): value is WorkerSubcommand {
+  return value !== undefined && (WORKER_SUBCOMMANDS as readonly string[]).includes(value);
+}
+
+/**
+ * Start a single lifecycle worker.
+ *
+ * `autofix` is a placeholder until its recovery policy lands in a later
+ * workflow; `external-recovery` runs a no-op runtime until its worker exists.
+ * Both are real {@link startWorkerRuntime} instances so the wakeup/poll/shutdown
+ * mechanics are exercised today — only the `scan`/`submit` policy is empty.
+ */
+function startLifecycleWorker(
+  worker: WorkerName,
+  deps: Pick<HeadlessDeps, 'messageBus' | 'logger' | 'invokerConfig'>,
+): WorkerRuntime {
+  const pollIntervalMs = deps.invokerConfig?.workerPollIntervalMs;
+  if (worker === 'autofix') {
+    return startWorkerRuntime<never>({
+      name: 'autofix',
+      messageBus: deps.messageBus,
+      logger: deps.logger,
+      eventKinds: ['task.failed', 'review_gate.ci_failed'],
+      scan: () => [],
+      submit: () => {},
+      pollIntervalMs,
+    });
+  }
+  return startWorkerRuntime<never>({
+    name: 'external-recovery',
+    messageBus: deps.messageBus,
+    logger: deps.logger,
+    eventKinds: ['workflow.wakeup'],
+    scan: () => [],
+    submit: () => {},
+    pollIntervalMs,
+  });
+}
+
+async function headlessWorker(
+  args: string[],
+  deps: Pick<HeadlessDeps, 'messageBus' | 'logger' | 'invokerConfig'>,
+): Promise<void> {
+  const subcommand = args[0];
+  if (!isWorkerSubcommand(subcommand)) {
+    throw new Error('Usage: --headless worker <autofix|external-recovery|all>');
+  }
+
+  const workers: WorkerName[] =
+    subcommand === 'all' ? ['autofix', 'external-recovery'] : [subcommand];
+  const runtimes = workers.map((worker) => startLifecycleWorker(worker, deps));
+
+  process.stdout.write(
+    `[headless] worker '${subcommand}' running; waiting for lifecycle events. Ctrl-C to stop.\n`,
+  );
+
+  // Block until every runtime stops. Each runtime installs its own
+  // SIGINT/SIGTERM handlers, so the signal triggers a clean shutdown.
+  await Promise.all(runtimes.map((runtime) => runtime.waitUntilStopped()));
+}
+
 async function headlessOwnerServe(deps: Pick<HeadlessDeps, 'isStandaloneOwnerIdle'>): Promise<void> {
   process.stdout.write('[headless] standalone owner ready; waiting for delegated mutations.\n');
   const idlePollMs = 250;
@@ -1282,6 +1352,11 @@ ${BOLD}Lifecycle:${RESET}
   delete-all                                          Delete all workflows (requires INVOKER_ALLOW_DELETE_ALL=1)
   open-terminal <taskId>                              Open OS terminal for a task
   slack                                               Start Slack bot (long-running)
+
+${BOLD}Workers${RESET} (long-running; Ctrl-C to stop):
+  worker autofix                                     Auto-fix recovery worker (placeholder)
+  worker external-recovery                            External-dependency recovery worker
+  worker all                                          Run all lifecycle workers
 
 ${BOLD}Deprecated${RESET} (use new names above):
   list → query workflows       status → query tasks       task-status → query task

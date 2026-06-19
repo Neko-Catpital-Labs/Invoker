@@ -863,8 +863,9 @@ if (isHeadless) {
     const command = cliArgs[0];
     const readOnlyMode = isHeadlessReadOnlyCommand(cliArgs);
     const mutatingMode = isHeadlessMutatingCommand(cliArgs);
-    const standaloneMode = process.env.INVOKER_HEADLESS_STANDALONE === '1' || command === 'owner-serve';
-    const ownsHeadlessShutdown = standaloneMode && !readOnlyMode && command === 'owner-serve';
+    const isWorkerCommand = command === 'worker';
+    const standaloneMode = process.env.INVOKER_HEADLESS_STANDALONE === '1' || command === 'owner-serve' || isWorkerCommand;
+    const ownsHeadlessShutdown = standaloneMode && !readOnlyMode && (command === 'owner-serve' || isWorkerCommand);
     const queueQueryMode = command === 'queue' || (command === 'query' && cliArgs[1] === 'queue');
 
     const delegatedQueueOutputFormat = (): 'json' | 'jsonl' | 'label' | 'text' => {
