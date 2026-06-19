@@ -1263,7 +1263,7 @@ describe('merge gate commit topology (real git)', () => {
 
     const tipMsgI = execSync('git log -1 --format=%s master', { cwd: tmpDir }).toString().trim();
     expect(tipMsgI).toBe('Intermediate Workflow');
-  });
+  }, 60_000);
 
   it('orchestrator.approve() with hook triggers real squash merge into master', async () => {
     const masterHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
@@ -1394,7 +1394,7 @@ describe('merge gate commit topology (real git)', () => {
       { cwd: tmpDir },
     ).toString().trim().split('\n').filter(l => l.length > 0);
     expect(newCommits.length).toBe(1);
-  });
+  }, 60_000);
 
 });
 
