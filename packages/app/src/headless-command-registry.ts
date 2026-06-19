@@ -51,6 +51,7 @@ export const HEADLESS_COMMANDS = [
   { name: 'open-terminal', kind: 'read' },
   { name: 'slack', kind: 'read' },
   { name: 'query-select', kind: 'read' },
+  { name: 'worker', kind: 'read' },
   { name: 'list', kind: 'read' },
   { name: 'status', kind: 'read' },
   { name: 'task-status', kind: 'read' },
