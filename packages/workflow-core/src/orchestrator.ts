@@ -1518,9 +1518,13 @@ export class Orchestrator {
           });
           return [];
         }
+        // Lineage guard: when the response carries an executionGeneration it
+        // must match the live task, regardless of whether an attemptId is also
+        // present. Older producers that omit executionGeneration stay accepted
+        // (backwards compatible), but when both attemptId and
+        // executionGeneration are present, both must match the live task.
         const activeGeneration = this.getExecutionGeneration(earlyTask);
         if (
-          !response.attemptId &&
           response.executionGeneration !== undefined &&
           response.executionGeneration !== activeGeneration
         ) {
