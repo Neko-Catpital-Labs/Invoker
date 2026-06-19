@@ -18,6 +18,8 @@ interface WorkflowInspectorProps {
   onEditAgent?: (taskId: string, agentName: string) => void;
   onEditPrompt?: (taskId: string, newPrompt: string) => void;
   onEditCommand?: (taskId: string, newCommand: string) => void;
+  onApprove?: (task: TaskState) => void;
+  onReject?: (task: TaskState) => void;
   onSetMergeBranch?: (workflowId: string, baseBranch: string) => Promise<void>;
   onToggleCollapsed: () => void;
   onToggleAdvanced: () => void;
@@ -59,6 +61,8 @@ export function WorkflowInspector({
   onEditAgent,
   onEditPrompt,
   onEditCommand,
+  onApprove,
+  onReject,
   onSetMergeBranch,
   onToggleCollapsed,
   onToggleAdvanced,
@@ -115,6 +119,13 @@ export function WorkflowInspector({
   const statusBorder = taskColors?.border ?? workflowVisual?.borderClass ?? 'border-gray-700';
   const statusText = taskColors?.text ?? workflowVisual?.textClass ?? 'text-gray-300';
   const statusDot = taskColors?.dot ?? '';
+  const isFixApproval = Boolean(task?.execution.pendingFixError);
+  const showApprovalActions = Boolean(
+    task
+    && (task.status === 'awaiting_approval' || task.status === 'review_ready')
+    && onApprove
+    && onReject,
+  );
   const statusHeading = task ? 'Task Status' : 'Status';
 
   const savePrompt = () => {
@@ -204,6 +215,30 @@ export function WorkflowInspector({
           )}
           {!task?.execution.error && task?.execution.exitCode !== undefined && task.execution.exitCode !== 0 && (
             <p className="mt-2 text-xs text-red-300">Exit code: {task.execution.exitCode}</p>
+          )}
+          {showApprovalActions && task && (
+            <div className="mt-3 flex gap-2 border-t border-gray-700 pt-3">
+              <button
+                type="button"
+                onClick={() => onApprove?.(task)}
+                data-testid="inspector-approve-button"
+                data-sidebar-nav-item
+                data-sidebar-nav-order="15"
+                className="flex-1 rounded bg-green-600 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-green-500"
+              >
+                {isFixApproval ? 'Approve Fix' : task.config.isMergeNode ? 'Approve Merge' : 'Approve'}
+              </button>
+              <button
+                type="button"
+                onClick={() => onReject?.(task)}
+                data-testid="inspector-reject-button"
+                data-sidebar-nav-item
+                data-sidebar-nav-order="16"
+                className="flex-1 rounded bg-red-600 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-red-500"
+              >
+                {isFixApproval ? 'Reject Fix' : task.config.isMergeNode ? 'Reject Merge' : 'Reject'}
+              </button>
+            </div>
           )}
         </section>
 
