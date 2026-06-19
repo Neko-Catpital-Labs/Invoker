@@ -11,13 +11,12 @@ export const SHUTDOWN_DIAGNOSTIC_TAIL_CHARS = 4_000;
 export interface PersistShutdownDiagnosticOptions {
   flushPendingOutput?: (taskId: string) => void;
   /**
-   * The synthetic terminal-error string that will be written to the task
-   * record alongside this diagnostic (e.g. "Application quit",
-   * "Stopped by user"). Captured here so post-mortem inspection retains
-   * the concrete reason in the durable output even after the coarse
-   * `task.execution.error` field is overwritten.
+   * The forced-stop reason that will be written to the task record alongside
+   * this diagnostic (e.g. "Application quit", "Stopped by user"). Captured
+   * here so post-mortem inspection retains the concrete reason in the durable
+   * output even after the coarse `task.execution.error` field is overwritten.
    */
-  syntheticError?: string;
+  forcedStopReason?: string;
   /**
    * Diagnostic block header label. Defaults to "Shutdown Diagnostic".
    * Use to distinguish e.g. user-stop vs application-quit if needed.
@@ -28,9 +27,9 @@ export interface PersistShutdownDiagnosticOptions {
 /**
  * Persist a compact diagnostic block into durable task output so that
  * post-mortem inspection retains concrete context instead of collapsing
- * to a coarse synthetic error like "Application quit" or "Stopped by user".
+ * to a coarse forced-stop reason like "Application quit" or "Stopped by user".
  *
- * Called from both headless and GUI shutdown paths before the synthetic
+ * Called from both headless and GUI shutdown paths before the forced-stop
  * failure response is emitted.
  */
 export function persistShutdownDiagnostic(
@@ -52,8 +51,8 @@ export function persistShutdownDiagnostic(
     const label = opts?.label ?? 'Shutdown Diagnostic';
     const parts: string[] = [`\n[${label}]`];
     parts.push(`status=${task.status}`);
-    if (opts?.syntheticError) {
-      parts.push(`syntheticError=${opts.syntheticError}`);
+    if (opts?.forcedStopReason) {
+      parts.push(`forcedStopReason=${opts.forcedStopReason}`);
     }
     if (task.execution.error) {
       parts.push(`error=${task.execution.error}`);

@@ -164,9 +164,9 @@ describe('persistShutdownDiagnostic', () => {
     expect(output).toContain('status=fixing_with_ai');
   });
 
-  it('records syntheticError in the diagnostic block', () => {
-    // Synthetic shutdown errors like "Application quit" or "Stopped by user"
-    // are emitted via handleWorkerResponse after the diagnostic is appended.
+  it('records forcedStopReason in the diagnostic block', () => {
+    // Forced-stop reasons like "Application quit" or "Stopped by user" are
+    // emitted via handleWorkerResponse after the diagnostic is appended.
     // Capturing them here preserves the concrete terminal reason in durable
     // task output for post-mortem retrieval, instead of leaving only a coarse
     // collapsed marker.
@@ -176,22 +176,22 @@ describe('persistShutdownDiagnostic', () => {
     });
     const db = makeDb(['streaming output\n']);
 
-    persistShutdownDiagnostic(task, db, { syntheticError: 'Application quit' });
+    persistShutdownDiagnostic(task, db, { forcedStopReason: 'Application quit' });
 
     const output = db.appended[0];
-    expect(output).toContain('syntheticError=Application quit');
+    expect(output).toContain('forcedStopReason=Application quit');
     expect(output).toContain('error=real runtime error message');
     expect(output).toContain('streaming output');
   });
 
-  it('records syntheticError when execution.error is absent', () => {
+  it('records forcedStopReason when execution.error is absent', () => {
     const task = makeTask({ status: 'running', execution: {} });
     const db = makeDb();
 
-    persistShutdownDiagnostic(task, db, { syntheticError: 'Stopped by user' });
+    persistShutdownDiagnostic(task, db, { forcedStopReason: 'Stopped by user' });
 
     const output = db.appended[0];
-    expect(output).toContain('syntheticError=Stopped by user');
+    expect(output).toContain('forcedStopReason=Stopped by user');
     expect(output).not.toContain('error=');
   });
 
@@ -205,14 +205,14 @@ describe('persistShutdownDiagnostic', () => {
     expect(output).toContain('[Startup Failure Diagnostic]');
   });
 
-  it('omits syntheticError line when not provided', () => {
+  it('omits forcedStopReason line when not provided', () => {
     const task = makeTask({ execution: { error: 'real error' } });
     const db = makeDb();
 
     persistShutdownDiagnostic(task, db);
 
     const output = db.appended[0];
-    expect(output).not.toContain('syntheticError=');
+    expect(output).not.toContain('forcedStopReason=');
     expect(output).toContain('error=real error');
   });
 });

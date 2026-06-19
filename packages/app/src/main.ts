@@ -1101,7 +1101,7 @@ if (isHeadless) {
               for (const task of allTasks) {
                 if (isTaskInFlightForForcedStop(task)) {
                   logger.info(`stop — failing in-flight task "${task.id}" (${task.status})`, { module: 'ipc-delegate' });
-                  persistShutdownDiagnostic(task, persistence, { syntheticError: 'Stopped by user' });
+                  persistShutdownDiagnostic(task, persistence, { forcedStopReason: 'Stopped by user' });
                   orchestrator.handleWorkerResponse({
                     requestId: `stop-${task.id}`,
                     actionId: task.id,
@@ -1718,7 +1718,7 @@ if (isHeadless) {
         for (const task of orchestrator.getAllTasks()) {
           if (isTaskInFlightForForcedStop(task)) {
             if (persistence) {
-              persistShutdownDiagnostic(task, persistence, { syntheticError: 'Application quit' });
+              persistShutdownDiagnostic(task, persistence, { forcedStopReason: 'Application quit' });
             }
             orchestrator.handleWorkerResponse({
               requestId: `quit-${task.id}`,
@@ -3568,7 +3568,7 @@ function createEmbeddedTerminalBackendFromConfig(
             logger.info(`stop — failing in-flight task "${task.id}" (${task.status})`, { module: 'ipc' });
             persistShutdownDiagnostic(task, persistence, {
               flushPendingOutput: flushTaskOutput,
-              syntheticError: 'Stopped by user',
+              forcedStopReason: 'Stopped by user',
             });
             orchestrator.handleWorkerResponse({
               requestId: `stop-${task.id}`,
@@ -4739,7 +4739,7 @@ function createEmbeddedTerminalBackendFromConfig(
               if (persistence) {
                 persistShutdownDiagnostic(task, persistence, {
                   flushPendingOutput: flushTaskOutput,
-                  syntheticError: 'Application quit',
+                  forcedStopReason: 'Application quit',
                 });
               }
               orchestrator.handleWorkerResponse({

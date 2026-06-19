@@ -2307,11 +2307,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
     // stores contain the same data.
     //
     // The diagnostic file (written via appendTaskOutput) is always appended.
-    // It is reserved for post-mortem diagnostic blocks (e.g. synthetic shutdown
-    // or executor startup failures); the streaming runner output goes through
-    // the spool. Concatenating it lets retrieval surface concrete failure
-    // details that would otherwise be hidden behind a coarse synthetic error
-    // like "Application quit".
+    // It is reserved for post-mortem diagnostic blocks (e.g. forced stops or
+    // executor startup failures); the streaming runner output goes through the
+    // spool. Concatenating it lets retrieval surface concrete failure details
+    // that would otherwise be hidden behind a coarse forced-stop reason like
+    // "Application quit".
     const diagnosticFile = this.readTaskOutputFile(taskId);
     const spoolChunks = this.getOutputChunks(taskId);
     if (spoolChunks.length > 0) {
