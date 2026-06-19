@@ -2139,6 +2139,35 @@ describe('SQLiteAdapter', () => {
         rmSync(dir, { recursive: true, force: true });
       }
     });
+
+    it('retains concrete executor startup stderr when spool has no streaming chunks', async () => {
+      // Executor startup failures (e.g. SSH transport fault, container spawn
+      // error) write the raw stderr/message via appendTaskOutput before the
+      // synthetic failure response collapses task.execution.error to a coarse
+      // marker. Retrieval must surface the concrete startup message even when
+      // the runner never produced spool chunks.
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-startup-diag-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db.saveWorkflow(testWorkflow);
+        db.saveTask('wf-1', makeTask('t-startup-fail'));
+
+        db.appendTaskOutput(
+          't-startup-fail',
+          'Executor startup failed (ssh): connect ECONNREFUSED 10.0.0.5:22\n',
+        );
+
+        const output = db.getTaskOutput('t-startup-fail');
+        expect(output).toContain('Executor startup failed (ssh)');
+        expect(output).toContain('connect ECONNREFUSED 10.0.0.5:22');
+
+        db.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('pruneDuplicateTaskOutputRows', () => {
