@@ -61,6 +61,7 @@ import {
   isDispatchableLaunch,
 } from './global-topup.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
+import { RECOVERY_WORKER_KIND } from './worker-runtime.js';
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
 import { trackWorkflow } from './headless-watch.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
@@ -1145,6 +1146,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'query-select':
       await headlessQuerySelect(args[1], deps);
       break;
+    case 'worker':
+      headlessWorker(args[1]);
+      break;
 
     // ── Deprecated aliases → query ──
     case 'list':
@@ -1198,6 +1202,30 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       break;
     default:
       throw new Error(`Unknown command: ${command}. Run with --help for usage.`);
+  }
+}
+
+/**
+ * Worker kinds exposed to the CLI. Each entry is `available: false` until the
+ * worker actually performs work; unavailable kinds are reported as such instead
+ * of being silently advertised as functional.
+ */
+const HEADLESS_WORKER_KINDS: ReadonlyArray<{ kind: string; available: boolean; note: string }> = [
+  {
+    kind: RECOVERY_WORKER_KIND,
+    available: false,
+    note: 'no-op in this slice; auto-fix recovery still runs through its existing owner',
+  },
+];
+
+function headlessWorker(subCommand: string | undefined): void {
+  if (subCommand && subCommand !== 'list' && subCommand !== 'status') {
+    throw new Error(`Unknown worker sub-command: "${subCommand}". Use: list, status`);
+  }
+  process.stdout.write(`${BOLD}Worker kinds${RESET}\n`);
+  for (const worker of HEADLESS_WORKER_KINDS) {
+    const status = worker.available ? 'available' : 'unavailable';
+    process.stdout.write(`  ${worker.kind} — ${status} (${worker.note})\n`);
   }
 }
 
@@ -1282,6 +1310,7 @@ ${BOLD}Lifecycle:${RESET}
   delete-all                                          Delete all workflows (requires INVOKER_ALLOW_DELETE_ALL=1)
   open-terminal <taskId>                              Open OS terminal for a task
   slack                                               Start Slack bot (long-running)
+  worker [list|status]                                List worker kinds and availability (recovery: unavailable)
 
 ${BOLD}Deprecated${RESET} (use new names above):
   list → query workflows       status → query tasks       task-status → query task
