@@ -177,6 +177,40 @@ describe('LaunchDispatcher', () => {
       expect(after?.dispatchOwner).toBeUndefined();
       expect(after?.fencedUntil).toBeUndefined();
     });
+    it('fail abandons after fast failures reach the attempt limit', () => {
+      seedWorkflowAndTask('attempt-fast-fail');
+      const enqueued = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-1/t1',
+        attemptId: 'attempt-fast-fail',
+        workflowId: 'wf-1',
+        generation: 0,
+      });
+      adapter.claimLaunchDispatchAtomic({
+        ownerId: 'owner-test',
+      });
+      const prepare = vi.fn();
+      const dispatcher = new LaunchDispatcher({
+        persistence: adapter,
+        ownerId: 'owner-test',
+        maxAttempts: 1,
+        orchestrator: {
+          prepareTaskForNewAttempt: prepare,
+        },
+      });
+
+      expect(dispatcher.failDispatch(enqueued.id, new Error('ssh pool unavailable'))).toBe(true);
+
+      const after = adapter.loadLaunchDispatchById(enqueued.id);
+      expect(after?.state).toBe('abandoned');
+      expect(after?.lastError).toMatch(/ssh pool unavailable/);
+      expect(prepare).toHaveBeenCalledWith('wf-1/t1', 'launch-dispatch-abandoned');
+      const failedEvent = adapter.getEvents('wf-1/t1').find((event) => event.eventType === 'task.failed');
+      expect(JSON.parse(failedEvent!.payload!)).toMatchObject({
+        source: 'launch-dispatcher',
+        dispatchId: enqueued.id,
+        attemptsCount: 1,
+      });
+    });
 
     it('fail coerces a non-Error value to its string form', () => {
       seedWorkflowAndTask('attempt-fail-string');
