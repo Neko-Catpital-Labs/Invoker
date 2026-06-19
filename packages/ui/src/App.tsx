@@ -1616,8 +1616,11 @@ export function App() {
   }, []);
 
   const openApprovalModal = useCallback((task: TaskState) => {
-    console.log(`[openApprovalModal] taskId=${task.id} agentSessionId=${task.execution.agentSessionId} pendingFixError=${!!task.execution.pendingFixError}`);
     setModal({ type: 'approval', task, action: 'approve' });
+  }, []);
+
+  const openRejectModal = useCallback((task: TaskState) => {
+    setModal({ type: 'approval', task, action: 'reject' });
   }, []);
 
   const openExperimentModal = useCallback((task: TaskState) => {
@@ -1948,6 +1951,8 @@ export function App() {
               onEditAgent={handleEditAgent}
               onEditPrompt={handleEditPrompt}
               onEditCommand={handleEditCommand}
+              onApprove={openApprovalModal}
+              onReject={openRejectModal}
               onSetMergeBranch={handleSetMergeBranch}
               onToggleCollapsed={() => setInspectorCollapsed((prev) => !prev)}
               onToggleAdvanced={() => setAdvancedMetadataExpanded((prev) => !prev)}

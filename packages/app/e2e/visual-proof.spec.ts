@@ -674,13 +674,13 @@ test.describe('Visual proof capture', () => {
     await expect(mergeGateNode).toBeVisible({ timeout: 15000 });
     await expect(mergeGateNode.getByText('APPROVE', { exact: true })).toBeVisible();
 
-    // Inline chip button must be gone — approval lives in the TaskPanel now.
+    // Inline chip button must be gone — approval lives in the side panel now.
     await expect(mergeGateNode.locator('[data-testid="approve-merge-button"]')).toHaveCount(0);
 
     await mergeGateNode.click();
     await expect(page.getByRole('heading', { name: /Merge gate for/i })).toBeVisible();
     await expect(page.getByText('Task Status')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Approve Merge' })).toHaveCount(0);
+    await expect(page.getByTestId('inspector-approve-button')).toHaveText('Approve Merge');
 
     await captureScreenshot(page, 'merge-gate-no-inline-approve');
     await assertPageScreenshot(page, 'merge-gate-no-inline-approve');
@@ -1266,7 +1266,7 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'closed-review-pr-status');
   });
 
-  test('approve-fix modal — no Fix Context panel', async ({ page }) => {
+  test('approve-fix task panel — exposes approval controls', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     await injectTaskStates(page, [
       {
@@ -1278,15 +1278,14 @@ test.describe('Visual proof capture', () => {
       },
     ]);
 
-    // Click the task-beta node to open task panel
     await page.locator('.react-flow__node[data-testid$="task-beta"]').click();
     await expect(page.getByRole('heading', { name: 'Second test task depending on alpha' })).toBeVisible();
-
-    await expect(page.getByRole('button', { name: 'Approve Fix' })).toHaveCount(0);
+    await expect(page.getByTestId('inspector-approve-button')).toHaveText('Approve Fix');
+    await expect(page.getByTestId('inspector-reject-button')).toHaveText('Reject Fix');
     await expect(page.getByText('Fix Context')).not.toBeVisible();
 
-    await captureScreenshot(page, 'approve-fix-modal-simplified');
-    await assertPageScreenshot(page, 'approve-fix-modal-simplified');
+    await captureScreenshot(page, 'approve-fix-task-panel-actions');
+    await assertPageScreenshot(page, 'approve-fix-task-panel-actions');
   });
 
   test('approve-fix modal — renders current-cycle session log', async ({ page, testDir }) => {
@@ -1325,8 +1324,10 @@ test.describe('Visual proof capture', () => {
 
     await page.locator('.react-flow__node[data-testid$="task-beta"]').click();
     await expect(page.getByRole('heading', { name: 'Second test task depending on alpha' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Approve Fix' })).toHaveCount(0);
-    await expect(page.getByText('Second test task depending on alpha')).toBeVisible();
+    await expect(page.getByTestId('inspector-approve-button')).toHaveText('Approve Fix');
+    await page.getByTestId('inspector-approve-button').click();
+    await expect(page.getByRole('heading', { name: 'Approve AI Fix' })).toBeVisible();
+    await expect(page.locator('.fixed').getByText('Second test task depending on alpha')).toBeVisible();
 
     await captureScreenshot(page, 'approve-fix-modal-with-session-log');
     await assertPageScreenshot(page, 'approve-fix-modal-with-session-log');
