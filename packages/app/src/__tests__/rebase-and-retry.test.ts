@@ -11,7 +11,7 @@
  * Pattern: sandbox git repo + real WorktreeExecutor + real TaskRunner
  * (follows branch-chain.test.ts).
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -19,7 +19,7 @@ import { execSync } from 'node:child_process';
 import type { WorkResponse } from '@invoker/contracts';
 import type { TaskState } from '@invoker/workflow-core';
 import { TaskRunner, ExecutorRegistry, WorktreeExecutor } from '@invoker/execution-engine';
-import { rebaseRecreate, bumpGenerationAndRecreate } from '../workflow-actions.js';
+import { rebaseRecreate } from '../workflow-actions.js';
 
 function createTempRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), 'rebase-retry-'));
@@ -156,6 +156,12 @@ describe('rebase-recreate: pool mirror cleanup before restart', { timeout: 120_0
         }
         return tasks;
       },
+      recreateWorkflowFromFreshBase: async (workflowId: string, options?: { refreshBase?: () => Promise<unknown> }): Promise<TaskState[]> => {
+        await options?.refreshBase?.();
+        return orchestrator.recreateWorkflow(workflowId);
+      },
+      cancelWorkflow: () => ({ cancelled: [], runningCancelled: [] }),
+      cascadeInvalidationToDownstream: () => [],
     };
 
     const repoUrl = `file://${tmpDir}`;
@@ -243,6 +249,12 @@ describe('rebase-recreate: pool mirror cleanup before restart', { timeout: 120_0
       persistence: persistence as any,
       repoRoot: tmpDir,
       taskExecutor: executor,
+      commandService: {
+        runSerializedForWorkflow: vi.fn(async (_workflowId: string | undefined, fn: () => Promise<unknown> | unknown) => ({
+          ok: true as const,
+          data: await fn(),
+        })),
+      } as any,
     };
     await rebaseRecreate('task-a', deps);
 
@@ -274,10 +286,8 @@ describe('rebase-recreate: pool mirror cleanup before restart', { timeout: 120_0
 
     const commitY = addCommitToMaster(tmpDir, 'new-feature.txt', 'commit Y: new feature');
 
-    bumpGenerationAndRecreate('wf-test', {
-      orchestrator: orchestrator as any,
-      persistence: persistence as any,
-    });
+    persistence.updateWorkflow('wf-test', { generation: 1 });
+    orchestrator.recreateWorkflow('wf-test');
 
     expect(branchExists(clonePath(), branchFirst)).toBe(true);
 

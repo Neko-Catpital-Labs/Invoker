@@ -146,8 +146,6 @@ import {
   fixWithAgentAction,
   rebaseRetry,
   rebaseRecreate,
-  recreateWorkflow as sharedRecreateWorkflow,
-  recreateTask as sharedRecreateTask,
   resolveConflictAction,
   selectFailureRecoveryRoute,
   selectExperiments as sharedSelectExperiments,
@@ -1125,7 +1123,10 @@ function startHeadlessMode(): void {
             const mergeTask = tasks.find((task) => task.config.isMergeNode);
             if (!mergeTask) return undefined;
             const executor = createStandaloneTaskExecutor();
-            const started = orchestrator.retryTask(mergeTask.id);
+            const envelope = makeEnvelope('set-merge-branch', 'ui', 'task', { taskId: mergeTask.id });
+            const result = await commandService.retryTask(envelope);
+            if (!result.ok) throw new Error(result.error.message);
+            const started = result.data;
             await dispatchStartedTasksWithGlobalTopup({
               orchestrator,
               taskExecutor: executor,
@@ -2076,9 +2077,12 @@ function createEmbeddedTerminalBackendFromConfig(
     const result = await fixWithAgentAction(
       taskId,
       {
+        logger,
         orchestrator,
         persistence,
+        commandService,
         taskExecutor: requireTaskExecutor(),
+        mutationTiming: activeMutationContext?.mutationTiming,
         autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
       },
       {
@@ -3999,8 +4003,10 @@ function createEmbeddedTerminalBackendFromConfig(
           mutationTiming: activeMutationContext?.mutationTiming,
         });
         const started = await rebaseRetry(target, {
+          logger,
           orchestrator,
           persistence,
+          commandService,
           repoRoot,
           taskExecutor: requireTaskExecutor(),
           mutationTiming: activeMutationContext?.mutationTiming,
@@ -4041,8 +4047,10 @@ function createEmbeddedTerminalBackendFromConfig(
           mutationTiming: activeMutationContext?.mutationTiming,
         });
         const started = await rebaseRecreate(target, {
+          logger,
           orchestrator,
           persistence,
+          commandService,
           repoRoot,
           taskExecutor: requireTaskExecutor(),
           mutationTiming: activeMutationContext?.mutationTiming,
@@ -4073,7 +4081,10 @@ function createEmbeddedTerminalBackendFromConfig(
         const tasks = persistence.loadTasks(workflowId);
         const mergeTask = tasks.find(t => t.config.isMergeNode);
         if (mergeTask) {
-          const started = orchestrator.retryTask(mergeTask.id);
+          const envelope = makeEnvelope('set-merge-branch', 'ui', 'task', { taskId: mergeTask.id });
+          const result = await commandService.retryTask(envelope);
+          if (!result.ok) throw new Error(result.error.message);
+          const started = result.data;
           await dispatchStartedTasksWithGlobalTopup({
             orchestrator,
             taskExecutor: requireTaskExecutor(),
