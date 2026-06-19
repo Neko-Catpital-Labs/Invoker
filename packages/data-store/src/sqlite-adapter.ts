@@ -2301,19 +2301,23 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   getTaskOutput(taskId: string): string {
-    // Prefer the output spool (DB + file) when it has any chunks for this task —
-    // it is the canonical streaming-output store. Otherwise fall back to
-    // task_output (legacy DB rows + diagnostic file), which avoids returning a
-    // duplicated stream when both stores contain the same data.
+    // The diagnostic file (written via appendTaskOutput) holds explicit
+    // diagnostic writes — synthetic owner-shutdown markers, executor
+    // startup failures, and workflow-action notes — that are intentionally
+    // separate from the streaming output spool. Include it alongside spool
+    // chunks (or the legacy task_output table fallback) so post-mortem
+    // inspection retains the concrete failure context instead of collapsing
+    // to the coarse terminal error state ("Application quit").
+    const diagnosticFile = this.readTaskOutputFile(taskId);
     const spoolChunks = this.getOutputChunks(taskId);
     if (spoolChunks.length > 0) {
-      return spoolChunks.map((chunk) => chunk.data).join('');
+      return spoolChunks.map((chunk) => chunk.data).join('') + diagnosticFile;
     }
     const rows = this.queryAll(
       'SELECT data FROM task_output WHERE task_id = ? ORDER BY id ASC',
       [taskId],
     ) as Array<{ data: string }>;
-    return rows.map((r) => r.data).join('') + this.readTaskOutputFile(taskId);
+    return rows.map((r) => r.data).join('') + diagnosticFile;
   }
 
   /**

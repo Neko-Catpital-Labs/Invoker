@@ -2104,6 +2104,46 @@ describe('SQLiteAdapter', () => {
         rmSync(dir, { recursive: true, force: true });
       }
     });
+
+    it('preserves diagnostic-file appends alongside streaming spool chunks', async () => {
+      // Regression: synthetic owner-shutdown and executor startup failures
+      // append diagnostic blocks via appendTaskOutput (the diagnostic file).
+      // The prior getTaskOutput implementation dropped the diagnostic file
+      // whenever the spool had any chunks, collapsing post-mortem retrieval
+      // to the streaming output and the coarse `execution.error` set by the
+      // synthetic "Application quit" response.
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-output-spool-plus-diag-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db.saveWorkflow(testWorkflow);
+        db.saveTask('wf-1', makeTask('t-spool-plus-diag'));
+
+        // Live streaming output lands in the spool.
+        db.appendOutputChunk('t-spool-plus-diag', 'FAIL src/feature.test.ts\n');
+        db.appendOutputChunk('t-spool-plus-diag', '  expected: ok\n');
+
+        // Owner shutdown / startup-failure diagnostic appended via the
+        // diagnostic-file path.
+        db.appendTaskOutput(
+          't-spool-plus-diag',
+          '\n[Shutdown Diagnostic reason=headless-shutdown]\nstatus=running\n--- end shutdown diagnostic ---\n',
+        );
+
+        const output = db.getTaskOutput('t-spool-plus-diag');
+        expect(output).toContain('FAIL src/feature.test.ts');
+        expect(output).toContain('[Shutdown Diagnostic reason=headless-shutdown]');
+        // Streaming output appears before the diagnostic block.
+        expect(output.indexOf('FAIL src/feature.test.ts')).toBeLessThan(
+          output.indexOf('[Shutdown Diagnostic'),
+        );
+
+        db.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('pruneDuplicateTaskOutputRows', () => {

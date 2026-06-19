@@ -163,4 +163,61 @@ describe('persistShutdownDiagnostic', () => {
     const output = db.appended[0];
     expect(output).toContain('status=fixing_with_ai');
   });
+
+  it('embeds the reason label in the diagnostic header when provided', () => {
+    const task = makeTask();
+    const db = makeDb();
+
+    persistShutdownDiagnostic(task, db, { reason: 'headless-shutdown' });
+
+    const output = db.appended[0];
+    expect(output).toContain('[Shutdown Diagnostic reason=headless-shutdown]');
+  });
+
+  it('includes attemptId, generation, runnerKind, and workspacePath when present', () => {
+    const task = makeTask({
+      config: { runnerKind: 'ssh' } as any,
+      execution: {
+        generation: 7,
+        selectedAttemptId: 'attempt-xyz',
+        workspacePath: '/remote/work/dir',
+      },
+    });
+    const db = makeDb();
+
+    persistShutdownDiagnostic(task, db);
+
+    const output = db.appended[0];
+    expect(output).toContain('attemptId=attempt-xyz');
+    expect(output).toContain('generation=7');
+    expect(output).toContain('runnerKind=ssh');
+    expect(output).toContain('workspacePath=/remote/work/dir');
+  });
+
+  it('omits attempt/runner/workspace fields when they are absent', () => {
+    const task = makeTask({ execution: {} });
+    const db = makeDb();
+
+    persistShutdownDiagnostic(task, db);
+
+    const output = db.appended[0];
+    expect(output).not.toContain('attemptId=');
+    expect(output).not.toContain('runnerKind=');
+    expect(output).not.toContain('workspacePath=');
+  });
+
+  it('includes the explicit startup error message when provided', () => {
+    const task = makeTask();
+    const db = makeDb();
+
+    persistShutdownDiagnostic(task, db, {
+      reason: 'executor-startup-failure',
+      startupError: 'posix_spawnp failed.',
+    });
+
+    const output = db.appended[0];
+    expect(output).toContain('--- startup error ---');
+    expect(output).toContain('posix_spawnp failed.');
+    expect(output).toContain('reason=executor-startup-failure');
+  });
 });
