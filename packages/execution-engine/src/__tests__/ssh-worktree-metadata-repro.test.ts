@@ -144,4 +144,81 @@ describe('SSH worktree metadata repro', () => {
       }),
     }));
   });
+
+  it('blocks a stale SSH startup failure from rewriting metadata once the task advanced to a newer attempt', async () => {
+    const ownerPath = '/home/invoker/.invoker/worktrees/049de5b865cc/experiment-wf-1-test-execution-engine-bc7a0b71';
+    const staleBranch = 'experiment/wf-1/test-execution-engine-b68b146f';
+
+    // Attempt-1's SSH launch fails *after* the task has already advanced to
+    // attempt-2.  Without the lineage guard this stale failure would overwrite
+    // the live task's workspace/branch metadata and emit a failed response
+    // against the newer selected attempt.
+    const failingExecutor = {
+      type: 'ssh',
+      start: vi.fn().mockRejectedValue(Object.assign(
+        new Error(
+          'SSH remote script failed (exit=128)\n' +
+            `STDERR:\nPreparing worktree (checking out '${staleBranch}')\n` +
+            `fatal: '${staleBranch}' is already used by worktree at '${ownerPath}'\n`,
+        ),
+        {
+          workspacePath: ownerPath,
+          branch: staleBranch,
+        },
+      )),
+      onComplete: vi.fn(),
+      onOutput: vi.fn(),
+      onHeartbeat: vi.fn(),
+      kill: vi.fn(),
+      destroyAll: vi.fn(),
+    };
+
+    // The launch we kick off belongs to attempt-1.
+    const staleLaunchTask = makeTask({
+      id: 'wf-1/test-execution-engine',
+      status: 'running',
+      config: { command: 'pnpm test', runnerKind: 'ssh' },
+      execution: { selectedAttemptId: 'attempt-1' },
+    });
+    // The orchestrator's live view has already moved on to attempt-2.
+    const liveTask = makeTask({
+      id: 'wf-1/test-execution-engine',
+      status: 'running',
+      config: { command: 'pnpm test', runnerKind: 'ssh' },
+      execution: { selectedAttemptId: 'attempt-2' },
+    });
+
+    const updateSpy = vi.fn();
+    const handleResponseSpy = vi.fn();
+
+    const runner = new TaskRunner({
+      orchestrator: {
+        getTask: () => liveTask,
+        getAllTasks: () => [liveTask],
+        handleWorkerResponse: handleResponseSpy,
+      } as any,
+      persistence: {
+        updateTask: updateSpy,
+        appendTaskOutput: vi.fn(),
+      } as any,
+      executorRegistry: {
+        getDefault: () => failingExecutor,
+        get: () => failingExecutor,
+        getAll: () => [failingExecutor],
+      } as any,
+      cwd: '/tmp',
+    });
+
+    await runner.executeTask(staleLaunchTask);
+
+    // The stale owner path / branch must never reach the live task row.
+    expect(updateSpy).not.toHaveBeenCalledWith('wf-1/test-execution-engine', expect.objectContaining({
+      execution: expect.objectContaining({ workspacePath: ownerPath }),
+    }));
+    expect(updateSpy).not.toHaveBeenCalledWith('wf-1/test-execution-engine', expect.objectContaining({
+      execution: expect.objectContaining({ branch: staleBranch }),
+    }));
+    // And no failed response may be emitted against the newer selected attempt.
+    expect(handleResponseSpy).not.toHaveBeenCalled();
+  });
 });
