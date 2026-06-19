@@ -132,6 +132,34 @@ describe('SQLiteAdapter', () => {
       });
     });
 
+    it('round-trips detachedExternalDependencies provenance through save and update', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const provenance = [
+        {
+          workflowId: 'wf-upstream',
+          taskId: '__merge__',
+          requiredStatus: 'completed' as const,
+          gatePolicy: 'review_ready' as const,
+          detachedAt: '2026-01-01T00:00:00.000Z',
+        },
+      ];
+
+      // Persisted via saveTask.
+      adapter.saveTask('wf-1', makeTask('prov-save', {
+        config: { workflowId: 'wf-1', detachedExternalDependencies: provenance },
+      }));
+      expect(adapter.loadTask('prov-save')?.config.detachedExternalDependencies).toEqual(provenance);
+
+      // Active externalDependencies stay independent of the provenance field.
+      expect(adapter.loadTask('prov-save')?.config.externalDependencies).toBeUndefined();
+
+      // Persisted via updateTask.
+      adapter.saveTask('wf-1', makeTask('prov-update', { config: { workflowId: 'wf-1' } }));
+      expect(adapter.loadTask('prov-update')?.config.detachedExternalDependencies).toBeUndefined();
+      adapter.updateTask('prov-update', { config: { detachedExternalDependencies: provenance } });
+      expect(adapter.loadTask('prov-update')?.config.detachedExternalDependencies).toEqual(provenance);
+    });
+
     it('loads all workflows and tasks in one startup snapshot', () => {
       const wf2: Workflow = {
         ...testWorkflow,

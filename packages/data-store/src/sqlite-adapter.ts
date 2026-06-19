@@ -715,6 +715,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         protocol_error_message TEXT,
         input_prompt TEXT,
         external_dependencies TEXT,
+        detached_external_dependencies TEXT,
 
         -- Context
         summary TEXT,
@@ -1027,6 +1028,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE attempts ADD COLUMN claimed_at TEXT',
       'ALTER TABLE attempts ADD COLUMN lease_expires_at TEXT',
       'ALTER TABLE tasks ADD COLUMN task_state_version INTEGER NOT NULL DEFAULT 1',
+      // Read-only provenance for external dependencies removed by detachWorkflow.
+      'ALTER TABLE tasks ADD COLUMN detached_external_dependencies TEXT',
     ];
     for (const sql of migrations) {
       try {
@@ -1500,7 +1503,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.execRun(`
       INSERT OR REPLACE INTO tasks (
         id, workflow_id, description, status, blocked_by, dependencies,
-        command, prompt, experiment_prompt, exit_code, error, protocol_error_code, protocol_error_message, input_prompt, external_dependencies,
+        command, prompt, experiment_prompt, exit_code, error, protocol_error_code, protocol_error_message, input_prompt, external_dependencies, detached_external_dependencies,
         summary, problem, approach, test_plan, repro_command, fix_prompt, fix_context,
         branch, commit_hash, fixed_integration_sha, fixed_integration_recorded_at, fixed_integration_source, parent_task,
         pivot, experiment_variants, is_reconciliation, selected_experiment,
@@ -1522,7 +1525,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         task_state_version
       ) VALUES (
         ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
@@ -1550,6 +1553,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       cfg.command ?? null, cfg.prompt ?? null, cfg.experimentPrompt ?? null,
       exec.exitCode ?? null, exec.error ?? null, exec.protocolErrorCode ?? null, exec.protocolErrorMessage ?? null, exec.inputPrompt ?? null,
       null,
+      cfg.detachedExternalDependencies ? JSON.stringify(cfg.detachedExternalDependencies) : null,
       cfg.summary ?? null, cfg.problem ?? null, cfg.approach ?? null,
       cfg.testPlan ?? null, cfg.reproCommand ?? null, cfg.fixPrompt ?? null, cfg.fixContext ?? null,
       exec.branch ?? null,
@@ -1664,6 +1668,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
       if ('externalDependencies' in changes.config) {
         setClauses.push('external_dependencies = ?');
         values.push(changes.config.externalDependencies ? JSON.stringify(changes.config.externalDependencies) : null);
+      }
+      if ('detachedExternalDependencies' in changes.config) {
+        setClauses.push('detached_external_dependencies = ?');
+        values.push(changes.config.detachedExternalDependencies ? JSON.stringify(changes.config.detachedExternalDependencies) : null);
       }
     }
 
@@ -2704,6 +2712,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         command: row.command ?? undefined,
         prompt: row.prompt ?? undefined,
         externalDependencies: row.external_dependencies ? JSON.parse(row.external_dependencies) : undefined,
+        detachedExternalDependencies: row.detached_external_dependencies ? JSON.parse(row.detached_external_dependencies) : undefined,
         experimentPrompt: row.experiment_prompt ?? undefined,
         pivot: row.pivot === 1 ? true : undefined,
         experimentVariants: row.experiment_variants ? JSON.parse(row.experiment_variants) : undefined,

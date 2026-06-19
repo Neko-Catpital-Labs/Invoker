@@ -44,6 +44,11 @@ export interface BaseTaskConfig {
   readonly executionAgent?: string;
   /** Cross-workflow prerequisites for this task. */
   readonly externalDependencies?: readonly ExternalDependency[];
+  /**
+   * Read-only provenance of external dependencies removed by `detachWorkflow`.
+   * Carried for UI/audit only; the scheduler never reads this field.
+   */
+  readonly detachedExternalDependencies?: readonly DetachedExternalDependency[];
   /** Execution pool identifier for shared queue/drain scheduling across substrates. */
   readonly poolId?: string;
   /** Legacy direct SSH pool member selection used by editable runner controls. */
@@ -101,6 +106,24 @@ export interface ExternalDependencyChange {
   readonly after?: ExternalDependency;
   readonly changedAt: string;
   readonly changedBy?: string;
+}
+
+/**
+ * Read-only provenance for an external dependency that `detachWorkflow`
+ * removed from a workflow's active `externalDependencies`. The active
+ * dependency is gone (so scheduling no longer gates on it), but this record
+ * preserves the upstream edge so the UI can tell a genuinely independent
+ * workflow apart from one that was explicitly detached from an upstream stack.
+ * Never consulted by the scheduler.
+ */
+export interface DetachedExternalDependency {
+  readonly workflowId: string;
+  /** Optional task selector within the upstream workflow. Omit for its merge gate. */
+  readonly taskId?: string;
+  readonly requiredStatus: 'completed';
+  readonly gatePolicy?: 'completed' | 'review_ready';
+  /** When the detach removed this dependency. */
+  readonly detachedAt: string;
 }
 
 // ── Task Execution (runtime state) ─────────────────────────

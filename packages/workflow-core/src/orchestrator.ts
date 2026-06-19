@@ -19,7 +19,7 @@ import { TaskStateMachine } from './state-machine.js';
 import { ResponseHandler } from './response-handler.js';
 import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
-import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, Attempt, ExternalDependency, ExternalDependencyChange, TaskStatus, TaskHeartbeatSource } from '@invoker/workflow-graph';
+import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, Attempt, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency, TaskStatus, TaskHeartbeatSource } from '@invoker/workflow-graph';
 import type { RunnerKind } from '@invoker/workflow-graph';
 import { createTaskState, createAttempt } from '@invoker/workflow-graph';
 import type { WorkflowDerivedStatus } from '@invoker/workflow-graph';
@@ -4950,6 +4950,37 @@ export class Orchestrator {
       upstreamWorkflowId,
       action: 'removed',
     });
+
+    // Record read-only provenance for the removed edge(s) on the event task's
+    // config so the UI can tell a detached workflow apart from a genuinely
+    // independent one. The active dependency stays removed — scheduling is
+    // unaffected — and we dedupe so repeated detach/reload cycles never grow
+    // duplicate entries.
+    const provenanceKey = (entry: { workflowId: string; taskId?: string }) =>
+      `${entry.workflowId}::${entry.taskId?.trim() || '__merge__'}`;
+    const existingProvenance = eventTask.config.detachedExternalDependencies ?? [];
+    const seenProvenance = new Set(existingProvenance.map(provenanceKey));
+    const addedProvenance: DetachedExternalDependency[] = [];
+    for (const dep of removedDeps) {
+      const entry: DetachedExternalDependency = {
+        workflowId: dep.workflowId,
+        ...(dep.taskId?.trim() ? { taskId: dep.taskId.trim() } : {}),
+        requiredStatus: dep.requiredStatus ?? 'completed',
+        ...(dep.gatePolicy ? { gatePolicy: dep.gatePolicy } : {}),
+        detachedAt: now,
+      };
+      const key = provenanceKey(entry);
+      if (seenProvenance.has(key)) continue;
+      seenProvenance.add(key);
+      addedProvenance.push(entry);
+    }
+    if (addedProvenance.length > 0) {
+      this.writeAndSync(
+        eventTask.id,
+        { config: { detachedExternalDependencies: [...existingProvenance, ...addedProvenance] } },
+        { skipWorkflowStatusSync: true },
+      );
+    }
 
     const upstreamFeatureBranch = opts?.upstreamWorkflow?.featureBranch?.trim();
     const upstreamBaseBranch = opts?.upstreamWorkflow?.baseBranch?.trim();
