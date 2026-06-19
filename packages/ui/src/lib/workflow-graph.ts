@@ -10,7 +10,7 @@ export interface WorkflowGraphNode {
 export interface WorkflowGraphEdge {
   source: string;
   target: string;
-  kind: 'active' | 'historical';
+  kind: 'active' | 'historical' | 'detached';
 }
 
 export interface WorkflowGraph {
@@ -77,10 +77,17 @@ export function deriveWorkflowGraph(
         continue;
       }
       if (sourceWorkflowId === targetWorkflowId) continue;
-      const key = `active:${sourceWorkflowId}->${targetWorkflowId}`;
-      if (edgeKeys.has(key)) continue;
-      edgeKeys.add(key);
-      edges.push({ source: sourceWorkflowId, target: targetWorkflowId, kind: 'active' });
+      addWorkflowEdge(edges, edgeKeys, 'active', sourceWorkflowId, targetWorkflowId);
+    }
+    for (const dependency of workflow.detachedExternalDependencies ?? []) {
+      const sourceWorkflowId = dependency.workflowId;
+      if (!workflows.has(sourceWorkflowId)) {
+        missingDependencies.add(`${sourceWorkflowId}->${targetWorkflowId}`);
+        continue;
+      }
+      if (sourceWorkflowId === targetWorkflowId) continue;
+      if (hasWorkflowEdge(edgeKeys, 'active', sourceWorkflowId, targetWorkflowId)) continue;
+      addWorkflowEdge(edges, edgeKeys, 'detached', sourceWorkflowId, targetWorkflowId);
     }
     for (const change of workflow.externalDependencyChanges ?? []) {
       for (const dependency of [change.before, change.after]) {
@@ -91,11 +98,9 @@ export function deriveWorkflowGraph(
           continue;
         }
         if (sourceWorkflowId === targetWorkflowId) continue;
-        if (edgeKeys.has(`active:${sourceWorkflowId}->${targetWorkflowId}`)) continue;
-        const key = `historical:${sourceWorkflowId}->${targetWorkflowId}`;
-        if (edgeKeys.has(key)) continue;
-        edgeKeys.add(key);
-        edges.push({ source: sourceWorkflowId, target: targetWorkflowId, kind: 'historical' });
+        if (hasWorkflowEdge(edgeKeys, 'active', sourceWorkflowId, targetWorkflowId)) continue;
+        if (hasWorkflowEdge(edgeKeys, 'detached', sourceWorkflowId, targetWorkflowId)) continue;
+        addWorkflowEdge(edges, edgeKeys, 'historical', sourceWorkflowId, targetWorkflowId);
       }
     }
   }
@@ -105,6 +110,28 @@ export function deriveWorkflowGraph(
     edges,
     missingDependencies: [...missingDependencies].sort(),
   };
+}
+
+function hasWorkflowEdge(
+  edgeKeys: Set<string>,
+  kind: WorkflowGraphEdge['kind'],
+  sourceWorkflowId: string,
+  targetWorkflowId: string,
+): boolean {
+  return edgeKeys.has(`${kind}:${sourceWorkflowId}->${targetWorkflowId}`);
+}
+
+function addWorkflowEdge(
+  edges: WorkflowGraphEdge[],
+  edgeKeys: Set<string>,
+  kind: WorkflowGraphEdge['kind'],
+  sourceWorkflowId: string,
+  targetWorkflowId: string,
+): void {
+  const key = `${kind}:${sourceWorkflowId}->${targetWorkflowId}`;
+  if (edgeKeys.has(key)) return;
+  edgeKeys.add(key);
+  edges.push({ source: sourceWorkflowId, target: targetWorkflowId, kind });
 }
 
 export function layoutWorkflowGraph(

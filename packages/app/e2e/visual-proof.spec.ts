@@ -1604,6 +1604,70 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'stacked-workflows');
   });
 
+  test('detached-workflow-lineage — active edge becomes detached lineage', async ({ page }) => {
+    const upstreamWorkflowId = await loadPlanAndSelectWorkflow(page, {
+      name: 'Detach Upstream Workflow',
+      repoUrl: E2E_REPO_URL,
+      onFinish: 'pull_request' as const,
+      mergeMode: 'external_review',
+      tasks: [
+        { id: 'detach-upstream-task', description: 'Upstream detach prerequisite', command: 'echo upstream', dependencies: [] as string[] },
+      ],
+    });
+
+    const downstreamWorkflowId = await loadPlanAndSelectWorkflow(page, {
+      name: 'Detach Downstream Workflow',
+      repoUrl: E2E_REPO_URL,
+      onFinish: 'pull_request' as const,
+      mergeMode: 'external_review',
+      externalDependencies: [{ workflowId: upstreamWorkflowId, gatePolicy: 'review_ready' as const }],
+      tasks: [
+        { id: 'detach-downstream-task', description: 'Downstream after detachment', command: 'echo downstream', dependencies: [] as string[] },
+      ],
+    });
+
+    await page.getByTestId('selected-workflow-mini-dag').evaluate((element) => {
+      (element as HTMLElement).style.display = 'none';
+    });
+    const minimizeInspector = page.getByRole('button', { name: 'Minimize inspector' });
+    if (await minimizeInspector.isVisible().catch(() => false)) {
+      await minimizeInspector.click();
+      await expect(page.getByRole('button', { name: 'Maximize inspector' })).toBeVisible();
+    }
+    await page.getByRole('button', { name: 'Fit View' }).first().click();
+    await page.waitForTimeout(200);
+
+    await expect(workflowNode(page, upstreamWorkflowId)).toBeInViewport();
+    await expect(workflowNode(page, downstreamWorkflowId)).toBeInViewport();
+    await expect(page.getByTestId(`rf__edge-workflow:active:${upstreamWorkflowId}->${downstreamWorkflowId}`)).toHaveCount(1);
+    await expect(page.getByTestId(`workflow-node-${downstreamWorkflowId}-detached-lineage`)).toHaveCount(0);
+
+    await captureScreenshot(page, 'detached-workflow-lineage-before');
+
+    await page.evaluate(
+      ({ workflowId, upstreamWorkflowId }) => window.invoker.detachWorkflow(workflowId, upstreamWorkflowId),
+      { workflowId: downstreamWorkflowId, upstreamWorkflowId },
+    );
+    await page.getByRole('button', { name: 'Refresh' }).click();
+    await page.waitForFunction(
+      ({ source, target }) => (
+        !document.querySelector(`[data-testid="rf__edge-workflow:active:${source}->${target}"]`)
+        && document.querySelector(`[data-testid="rf__edge-workflow:detached:${source}->${target}"]`)
+        && document.querySelector(`[data-testid="workflow-node-${target}-detached-lineage"]`)
+      ),
+      { source: upstreamWorkflowId, target: downstreamWorkflowId },
+      { timeout: 10000 },
+    );
+    await page.getByRole('button', { name: 'Fit View' }).first().click();
+    await page.waitForTimeout(200);
+
+    await expect(page.getByTestId(`rf__edge-workflow:active:${upstreamWorkflowId}->${downstreamWorkflowId}`)).toHaveCount(0);
+    await expect(page.getByTestId(`rf__edge-workflow:detached:${upstreamWorkflowId}->${downstreamWorkflowId}`)).toHaveCount(1);
+    await expect(page.getByTestId(`workflow-node-${downstreamWorkflowId}-detached-lineage`)).toHaveText('Detached');
+
+    await captureScreenshot(page, 'detached-workflow-lineage-after');
+  });
+
   test('terminate-wording — task-level uses Terminate, workflow-level keeps Cancel', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     const now = new Date();
