@@ -1044,11 +1044,26 @@ export class TaskRunner {
       hasWorkspacePath: Boolean(handle.workspacePath),
       hasAgentSessionId: Boolean(handle.agentSessionId),
     });
+    // Lineage guard: `executor.start()` can resolve minutes after the launch was
+    // accepted (SSH provisioning, slow clones). `markTaskRunningAfterLaunch`
+    // rejects a mismatched `selectedAttemptId` but does NOT validate the
+    // generation captured at launch time, so a recreate that bumps the task to a
+    // newer generation while keeping the same attempt id would still be accepted
+    // — and the post-start writes below would persist this superseded launch's
+    // workspace/branch/session/container metadata over the live attempt and
+    // register a stale active execution. Reject an advanced generation through
+    // the same kill/cleanup path as the stale-attempt rejection, leaving
+    // attempt-id rejection to `markTaskRunningAfterLaunch` as before.
+    const currentForLineage = this.orchestrator.getTask(task.id);
+    const generationAdvanced =
+      currentForLineage !== undefined
+      && (currentForLineage.execution.generation ?? 0) !== startGeneration;
     const launchAccepted =
-      this.orchestrator.markTaskRunningAfterLaunch?.(task.id, attemptId) ?? true;
+      !generationAdvanced && (this.orchestrator.markTaskRunningAfterLaunch?.(task.id, attemptId) ?? true);
     if (!launchAccepted) {
       this.logger.warn(
-        `[TaskRunner] launch rejected as stale/non-executable for task=${task.id} attemptId=${attemptId}; killing spawned process`,
+        `[TaskRunner] launch rejected as stale/non-executable for task=${task.id} attemptId=${attemptId} ` +
+          `startGeneration=${startGeneration} generationAdvanced=${generationAdvanced}; killing spawned process`,
       );
       try {
         await executor.kill(handle);
@@ -1061,10 +1076,14 @@ export class TaskRunner {
       if (dispatchOpts) {
         dispatchOpts.launchOutbox.failDispatch(
           dispatchOpts.dispatchId,
-          new Error('Launch rejected as stale or non-executable after executor start'),
+          new Error(
+            generationAdvanced
+              ? 'Launch rejected: task lineage advanced past launch generation after executor start'
+              : 'Launch rejected as stale or non-executable after executor start',
+          ),
         );
       }
-      bench('markTaskRunningAfterLaunch.rejected');
+      bench('markTaskRunningAfterLaunch.rejected', { generationAdvanced });
       return;
     }
     bench('markTaskRunningAfterLaunch.accepted');
