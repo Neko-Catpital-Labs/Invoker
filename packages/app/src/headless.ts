@@ -1213,8 +1213,8 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
 const HEADLESS_WORKER_KINDS: ReadonlyArray<{ kind: string; available: boolean; note: string }> = [
   {
     kind: RECOVERY_WORKER_KIND,
-    available: false,
-    note: 'no-op in this slice; auto-fix recovery still runs through its existing owner',
+    available: true,
+    note: 'reconciles failed tasks and submits auto-fix through the fix command route',
   },
 ];
 
