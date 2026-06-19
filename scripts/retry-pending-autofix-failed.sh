@@ -259,7 +259,6 @@ if [ -z "$STATE_DIR" ]; then
 fi
 SUBMISSIONS_FILE="${INVOKER_RETRY_PENDING_AUTOFIX_STATE_FILE:-${HOME:-.}/.invoker/retry-pending-autofix-failed-submissions.tsv}"
 DB_PATH="${INVOKER_DB_PATH:-${INVOKER_DB_DIR:-${HOME:-.}/.invoker}/invoker.db}"
-HEADLESS_CLIENT_JS="$REPO_ROOT/packages/app/dist/headless-client.js"
 MANAGED_OWNER_PID=""
 MANAGED_OWNER_LOG="$STATE_DIR/managed-owner.log"
 mkdir -p "$(dirname "$SUBMISSIONS_FILE")"
@@ -271,20 +270,106 @@ cleanup() {
 }
 trap cleanup EXIT
 
-owner_ping_ready() {
-  node --input-type=module <<'NODE' >/dev/null 2>&1
-import { IpcBus } from './packages/transport/dist/index.js';
-const bus = new IpcBus(undefined, { allowServe: false, requestDeadlineMs: 1000 });
-try {
-  await bus.ready();
-  const response = await bus.request('headless.owner-ping', {});
-  if (!response || response.ok !== true) process.exit(1);
-} catch {
-  process.exit(1);
-} finally {
-  bus.disconnect();
+raw_ipc_request() {
+  local channel="$1"
+  local body_json="$2"
+  local timeout_ms="${3:-30000}"
+  local expect_ok="${4:-0}"
+
+  INVOKER_RETRY_IPC_CHANNEL="$channel" \
+    INVOKER_RETRY_IPC_BODY="$body_json" \
+    INVOKER_RETRY_IPC_TIMEOUT_MS="$timeout_ms" \
+    INVOKER_RETRY_IPC_EXPECT_OK="$expect_ok" \
+    node --input-type=module <<'NODE'
+import net from 'node:net';
+import { homedir } from 'node:os';
+import path from 'node:path';
+
+const channel = process.env.INVOKER_RETRY_IPC_CHANNEL;
+const body = JSON.parse(process.env.INVOKER_RETRY_IPC_BODY ?? '{}');
+const timeoutMs = Number.parseInt(process.env.INVOKER_RETRY_IPC_TIMEOUT_MS ?? '30000', 10);
+const expectOk = process.env.INVOKER_RETRY_IPC_EXPECT_OK === '1';
+const socketPath = process.env.INVOKER_IPC_SOCKET
+  || path.join(
+    process.env.INVOKER_DB_DIR
+      || (process.env.NODE_ENV === 'test'
+        ? path.join(homedir(), '.invoker', 'test')
+        : path.join(homedir(), '.invoker')),
+    'ipc-transport.sock',
+  );
+const reqId = `retry-${process.pid}-${Date.now()}`;
+
+function encode(envelope) {
+  const json = Buffer.from(JSON.stringify(envelope), 'utf8');
+  const frame = Buffer.allocUnsafe(4 + json.length);
+  frame.writeUInt32BE(json.length, 0);
+  json.copy(frame, 4);
+  return frame;
 }
+
+let settled = false;
+let buffer = Buffer.alloc(0);
+const socket = net.createConnection({ path: socketPath });
+const timer = setTimeout(() => finish(1, `Timed out after ${timeoutMs}ms`), timeoutMs);
+
+function finish(code, message) {
+  if (settled) return;
+  settled = true;
+  clearTimeout(timer);
+  if (message) console.error(message);
+  socket.destroy();
+  process.exit(code);
+}
+
+socket.on('connect', () => {
+  socket.write(encode({ kind: 'req', channel, body, reqId }));
+});
+socket.on('data', (chunk) => {
+  buffer = Buffer.concat([buffer, chunk]);
+  while (buffer.length >= 4) {
+    const len = buffer.readUInt32BE(0);
+    if (buffer.length < 4 + len) return;
+    const payload = buffer.subarray(4, 4 + len).toString('utf8');
+    buffer = buffer.subarray(4 + len);
+    let envelope;
+    try {
+      envelope = JSON.parse(payload);
+    } catch {
+      continue;
+    }
+    if (envelope.reqId !== reqId) continue;
+    if (envelope.kind === 'res') {
+      if (expectOk && (!envelope.body || envelope.body.ok !== true)) {
+        finish(1, `Unexpected response for ${channel}: ${JSON.stringify(envelope.body)}`);
+        return;
+      }
+      console.log(JSON.stringify(envelope.body));
+      finish(0);
+      return;
+    }
+    if (envelope.kind === 'err') {
+      finish(1, `${envelope.code || 'HANDLER_ERROR'}: ${envelope.message || 'request failed'}`);
+      return;
+    }
+  }
+});
+socket.on('error', (error) => finish(1, error.message));
+socket.on('close', () => {
+  if (!settled) finish(1, 'IPC socket closed before response');
+});
 NODE
+}
+
+json_array_for_args() {
+  python3 - "$@" <<'PY'
+import json
+import sys
+print(json.dumps(sys.argv[1:]))
+PY
+}
+
+owner_ping_ready() {
+  raw_ipc_request headless.owner-ping '{}' 1000 1 >/dev/null 2>&1
 }
 
 managed_owner_alive() {
@@ -328,14 +413,24 @@ start_managed_headless_owner() {
 
 headless_mutation_no_track() {
   if [ "$STANDALONE_MODE" = "1" ]; then
-    INVOKER_HEADLESS_STANDALONE=1 "$RUNNER" --headless --no-track "$@"
+    INVOKER_HEADLESS_STANDALONE=1 "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless --no-track "$@"
     return $?
   fi
+
+  local args_json=""
+  args_json="$(json_array_for_args "$@")"
+  local body_json=""
+  body_json="$(python3 - "$args_json" <<'PY'
+import json
+import sys
+print(json.dumps({"args": json.loads(sys.argv[1]), "noTrack": True}))
+PY
+)"
 
   local output=""
   local code=0
   set +e
-  output="$(node "$IPC_HELPER" exec --no-track -- "$@" 2>&1)"
+  output="$(raw_ipc_request headless.exec "$body_json" 30000 0 2>&1)"
   code=$?
   set -e
   if [ "$code" -eq 0 ]; then
@@ -349,24 +444,14 @@ headless_mutation_no_track() {
     echo "  IPC headless.exec handler unavailable; ensuring managed standalone owner" >&2
     if start_managed_headless_owner; then
       set +e
-      output="$(node "$IPC_HELPER" exec --no-track -- "$@" 2>&1)"
+      output="$(raw_ipc_request headless.exec "$body_json" 30000 0 2>&1)"
       code=$?
       set -e
       if [ "$code" -eq 0 ]; then
         printf '%s\n' "$output"
         return 0
       fi
-      printf '%s\n' "$output" >&2
     fi
-    if [ -f "$HEADLESS_CLIENT_JS" ]; then
-      echo "  managed owner path unavailable; falling back to headless-client owner bootstrap" >&2
-      INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS="${INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS:-86400000}" \
-        node "$HEADLESS_CLIENT_JS" --no-track "$@"
-    else
-      echo "  missing built headless client at $HEADLESS_CLIENT_JS; falling back to direct runner" >&2
-      INVOKER_HEADLESS_STANDALONE=1 "$RUNNER" --headless --no-track "$@"
-    fi
-    return $?
   fi
 
   printf '%s\n' "$output" >&2
@@ -1308,6 +1393,7 @@ def is_stale_active_queue(execution: dict) -> bool:
         parse_epoch(execution.get("lastHeartbeatAt")),
         parse_epoch(execution.get("launchStartedAt")),
         parse_epoch(execution.get("startedAt")),
+        parse_epoch(execution.get("createdAt")),
     ]
     latest_epoch = max((epoch for epoch in epochs if epoch is not None), default=None)
     if latest_epoch is None:
@@ -3054,7 +3140,7 @@ PY
   self_test_assert_contains "$test_root/stale-queue-active.out" "pending investigation includes stale queue-active pending tasks: 1"
   self_test_assert_contains "$codex_commands_file" "exec --cd"
 
-  echo "self-test: old queue-active pending task without launch metadata remains blocked"
+  echo "self-test: old queue-active pending task without launch metadata is investigated"
   self_test_reset
   RETRY_INCOMPLETE_WORKFLOWS=true
   fresh_running_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -3066,9 +3152,10 @@ PY
     '{"id":"wf-1000-22/pending","createdAt":"2000-01-01T00:00:00Z","status":"pending","config":{"workflowId":"wf-1000-22","runnerKind":"worktree","poolId":"pnpm-ssh"},"execution":{}}' \
     "{\"id\":\"wf-1000-22/fresh\",\"status\":\"running\",\"config\":{\"workflowId\":\"wf-1000-22\",\"runnerKind\":\"worktree\"},\"execution\":{\"lastHeartbeatAt\":\"$fresh_running_ts\",\"startedAt\":\"$fresh_running_ts\",\"phase\":\"executing\"}}" > "$tasks_dir/wf-1000-22.jsonl"
   run_cycle selftest-old-queue-active-no-launch > "$test_root/old-queue-active-no-launch.out" 2>&1 || { sed -n '1,220p' "$test_root/old-queue-active-no-launch.out" >&2; return 1; }
-  self_test_assert_contains "$test_root/old-queue-active-no-launch.out" "pending-tasks=0 blockers=2"
-  self_test_assert_contains "$test_root/old-queue-active-no-launch.out" "stale-queue-pending=0"
-  self_test_assert_not_contains "$codex_commands_file" "exec --cd"
+  self_test_assert_contains "$test_root/old-queue-active-no-launch.out" "pending-tasks=1 blockers=1"
+  self_test_assert_contains "$test_root/old-queue-active-no-launch.out" "stale-queue-pending=1"
+  self_test_assert_contains "$test_root/old-queue-active-no-launch.out" "pending investigation includes stale queue-active pending tasks: 1"
+  self_test_assert_contains "$test_root/old-queue-active-no-launch.out" "investigated pending task with Codex: wf-1000-22/pending"
 
   echo "self-test: stale running task is investigated"
   self_test_reset
