@@ -141,6 +141,60 @@ describe('auto-fix recovery worker policy', () => {
     expect(report.skipped).toEqual([{ taskId: 'wf-1/task-1', reason: 'not-eligible' }]);
   });
 
+  it('does not let skip observability change recovery decisions', async () => {
+    const failed = makeTask();
+    const { deps, submit } = makeRecoveryDeps(failed, {
+      orchestrator: {
+        shouldAutoFix: vi.fn(() => false),
+        getTask: vi.fn(() => failed),
+        syncFromDb: vi.fn(),
+      },
+      logSkip: vi.fn(() => {
+        throw new Error('audit unavailable');
+      }),
+    });
+    const scan = createAutoFixRecoveryScan(deps);
+
+    const report = await scan.scan();
+
+    expect(submit).not.toHaveBeenCalled();
+    expect(report.submitted).toEqual([]);
+    expect(report.skipped).toEqual([{ taskId: 'wf-1/task-1', reason: 'not-eligible' }]);
+  });
+
+  it('emits observational scan status with worker ownership and report details', async () => {
+    const task = makeTask();
+    const { deps, submit } = makeRecoveryDeps(task);
+    const observations: unknown[] = [];
+    const runtime = createAutoFixRecoveryWorker({
+      ...deps,
+      logger,
+      instanceId: 'rec-observe',
+      installSignalHandlers: false,
+      observe: (event) => observations.push(event),
+    });
+
+    await runtime.tick('wake');
+    await runtime.stop();
+
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(observations).toEqual([
+      expect.objectContaining({
+        type: 'scan-start',
+        identity: { kind: 'recovery', instanceId: 'rec-observe' },
+        reason: 'wake',
+        tickNumber: 1,
+      }),
+      expect.objectContaining({
+        type: 'scan-complete',
+        identity: { kind: 'recovery', instanceId: 'rec-observe' },
+        reason: 'wake',
+        tickNumber: 1,
+        report: { submitted: ['wf-1/task-1'], skipped: [] },
+      }),
+    ]);
+  });
+
   it('runs a startup scan when the worker starts', async () => {
     const task = makeTask();
     const { deps, submit } = makeRecoveryDeps(task);

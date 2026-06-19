@@ -1148,6 +1148,168 @@ const HEADLESS_WORKER_KINDS: ReadonlyArray<{ kind: string; available: boolean; n
   },
 ];
 
+const AUTO_FIX_WORKER_ACTIVITY_SOURCE = 'worker.autofix';
+const AUTO_FIX_WORKER_SKIP_EVENT = 'worker.autofix.skip';
+const AUTO_FIX_WORKER_SUBMIT_EVENT = 'worker.autofix.submit';
+
+type AutoFixWorkerActivity = {
+  event: 'started' | 'stopped' | 'wakeup' | 'scan-start' | 'scan-complete' | 'skip' | 'submit';
+  at: string;
+  workerId: string;
+  workerKind: string;
+  ownerId?: string;
+  ownerMode?: string;
+  reason?: string;
+  tickNumber?: number;
+  taskId?: string;
+  skipReason?: string;
+  submitted?: string[];
+  skipped?: Array<{ taskId: string; reason: string }>;
+  traceId?: string;
+  intervalMs?: number;
+};
+
+type AutoFixWorkerStatus = {
+  kind: string;
+  workerKind: string;
+  available: boolean;
+  workerId: string | null;
+  ownerId: string | null;
+  ownerMode: string | null;
+  lastStartedAt: string | null;
+  lastStoppedAt: string | null;
+  lastWakeupAt: string | null;
+  lastScanAt: string | null;
+  lastScanReason: string | null;
+  lastSubmittedCount: number;
+  lastSkippedCount: number;
+  lastSubmitAt: string | null;
+  lastSubmittedTaskId: string | null;
+  lastSkipAt: string | null;
+  lastSkippedTaskId: string | null;
+  lastSkipReason: string | null;
+  lastKnownRunning: boolean;
+};
+
+function writeAutoFixWorkerActivity(deps: Pick<HeadlessDeps, 'persistence'>, activity: AutoFixWorkerActivity): void {
+  try {
+    deps.persistence.writeActivityLog(AUTO_FIX_WORKER_ACTIVITY_SOURCE, 'info', JSON.stringify(activity));
+  } catch {
+    // Observability must not affect recovery eligibility or command submission.
+  }
+}
+
+function logAutoFixWorkerTaskEvent(
+  deps: Pick<HeadlessDeps, 'persistence'>,
+  taskId: string,
+  eventType: string,
+  payload: Record<string, unknown>,
+): void {
+  try {
+    deps.persistence.logEvent(taskId, eventType, payload);
+  } catch {
+    // Task audit is observational and must not block recovery.
+  }
+}
+
+function parseAutoFixWorkerActivity(entry: { source: string; message: string }): AutoFixWorkerActivity | null {
+  if (entry.source !== AUTO_FIX_WORKER_ACTIVITY_SOURCE) return null;
+  try {
+    const parsed = JSON.parse(entry.message) as Partial<AutoFixWorkerActivity>;
+    if (!parsed || typeof parsed !== 'object') return null;
+    if (typeof parsed.event !== 'string' || typeof parsed.workerId !== 'string') return null;
+    return {
+      ...parsed,
+      event: parsed.event,
+      workerId: parsed.workerId,
+      workerKind: typeof parsed.workerKind === 'string' ? parsed.workerKind : RECOVERY_WORKER_KIND,
+      at: typeof parsed.at === 'string' ? parsed.at : new Date(0).toISOString(),
+    } as AutoFixWorkerActivity;
+  } catch {
+    return null;
+  }
+}
+
+function readAutoFixWorkerStatus(deps: Pick<HeadlessDeps, 'persistence'>): AutoFixWorkerStatus {
+  const getActivityLogs = (deps.persistence as unknown as {
+    getActivityLogs?: (sinceId?: number, limit?: number) => Array<{ source: string; message: string }>;
+  }).getActivityLogs;
+  const logs = getActivityLogs?.call(deps.persistence, 0, 10_000) ?? [];
+  const status: AutoFixWorkerStatus = {
+    kind: AUTO_FIX_WORKER_COMMAND,
+    workerKind: RECOVERY_WORKER_KIND,
+    available: true,
+    workerId: null,
+    ownerId: null,
+    ownerMode: null,
+    lastStartedAt: null,
+    lastStoppedAt: null,
+    lastWakeupAt: null,
+    lastScanAt: null,
+    lastScanReason: null,
+    lastSubmittedCount: 0,
+    lastSkippedCount: 0,
+    lastSubmitAt: null,
+    lastSubmittedTaskId: null,
+    lastSkipAt: null,
+    lastSkippedTaskId: null,
+    lastSkipReason: null,
+    lastKnownRunning: false,
+  };
+
+  for (const entry of logs) {
+    const activity = parseAutoFixWorkerActivity(entry);
+    if (!activity) continue;
+    status.workerId = activity.workerId;
+    status.workerKind = activity.workerKind;
+    if (activity.ownerId) status.ownerId = activity.ownerId;
+    if (activity.ownerMode) status.ownerMode = activity.ownerMode;
+    if (activity.event === 'started') status.lastStartedAt = activity.at;
+    if (activity.event === 'stopped') status.lastStoppedAt = activity.at;
+    if (activity.event === 'wakeup') status.lastWakeupAt = activity.at;
+    if (activity.event === 'scan-complete') {
+      status.lastScanAt = activity.at;
+      status.lastScanReason = activity.reason ?? null;
+      status.lastSubmittedCount = activity.submitted?.length ?? 0;
+      status.lastSkippedCount = activity.skipped?.length ?? 0;
+    }
+    if (activity.event === 'submit') {
+      status.lastSubmitAt = activity.at;
+      status.lastSubmittedTaskId = activity.taskId ?? null;
+    }
+    if (activity.event === 'skip') {
+      status.lastSkipAt = activity.at;
+      status.lastSkippedTaskId = activity.taskId ?? null;
+      status.lastSkipReason = activity.skipReason ?? null;
+    }
+  }
+  status.lastKnownRunning = !!status.lastStartedAt && (!status.lastStoppedAt || status.lastStoppedAt < status.lastStartedAt);
+  return status;
+}
+
+function formatNullable(value: string | null): string {
+  return value ?? 'never';
+}
+
+function formatAutoFixWorkerStatus(status: AutoFixWorkerStatus): string {
+  const lines = [`${BOLD}Worker kinds${RESET}`];
+  for (const worker of HEADLESS_WORKER_KINDS) {
+    const availability = worker.available ? 'available' : 'unavailable';
+    lines.push(`  ${worker.kind} — ${availability} (${worker.note})`);
+  }
+  lines.push('');
+  lines.push(`${BOLD}Auto-fix worker status${RESET}`);
+  lines.push(`  worker: ${status.workerId ?? 'none recorded'} (${status.workerKind})`);
+  lines.push(`  owner: ${status.ownerId ?? 'none recorded'}${status.ownerMode ? ` (${status.ownerMode})` : ''}`);
+  lines.push(`  last-known-running: ${status.lastKnownRunning ? 'yes' : 'no'}`);
+  lines.push(`  last wakeup: ${formatNullable(status.lastWakeupAt)}`);
+  lines.push(`  last scan: ${formatNullable(status.lastScanAt)}${status.lastScanReason ? ` (${status.lastScanReason})` : ''}`);
+  lines.push(`  last scan result: submitted=${status.lastSubmittedCount} skipped=${status.lastSkippedCount}`);
+  lines.push(`  last submit: ${formatNullable(status.lastSubmitAt)}${status.lastSubmittedTaskId ? ` ${status.lastSubmittedTaskId}` : ''}`);
+  lines.push(`  last skip: ${formatNullable(status.lastSkipAt)}${status.lastSkippedTaskId ? ` ${status.lastSkippedTaskId}` : ''}${status.lastSkipReason ? ` reason=${status.lastSkipReason}` : ''}`);
+  return lines.join('\n');
+}
+
 function createWorkerTraceId(channel: string): string {
   return `${channel}:${process.pid}:${Date.now()}:${Math.random().toString(16).slice(2, 8)}`;
 }
@@ -1198,8 +1360,18 @@ async function headlessWorkerAutofix(args: string[], deps: HeadlessDeps): Promis
   if (!ping || typeof ping !== 'object') {
     throw new Error('worker autofix requires a running shared owner process');
   }
+  const owner = ping as { ownerId?: string; mode?: string };
+  const workerId = `${RECOVERY_WORKER_KIND}-${process.pid}`;
+  const workerKind = RECOVERY_WORKER_KIND;
+  const baseActivity = (): Pick<AutoFixWorkerActivity, 'workerId' | 'workerKind' | 'ownerId' | 'ownerMode'> => ({
+    workerId,
+    workerKind,
+    ...(owner.ownerId ? { ownerId: owner.ownerId } : {}),
+    ...(owner.mode ? { ownerMode: owner.mode } : {}),
+  });
   const worker = createAutoFixRecoveryWorker({
     logger: deps.logger,
+    instanceId: workerId,
     orchestrator: {
       shouldAutoFix: (taskId) => deps.orchestrator.shouldAutoFix(taskId),
       getTask: (taskId) => deps.orchestrator.getTask(taskId),
@@ -1208,17 +1380,78 @@ async function headlessWorkerAutofix(args: string[], deps: HeadlessDeps): Promis
     persistence: deps.persistence,
     intervalMs: options.intervalMs,
     getAutoFixAgent: () => loadConfig().autoFixAgent,
+    logSkip: (taskId, reason, details) => {
+      logAutoFixWorkerTaskEvent(deps, taskId, AUTO_FIX_WORKER_SKIP_EVENT, {
+        workerId,
+        workerKind,
+        reason,
+        ...(details ? { details } : {}),
+      });
+      writeAutoFixWorkerActivity(deps, {
+        event: 'skip',
+        at: new Date().toISOString(),
+        ...baseActivity(),
+        taskId,
+        skipReason: reason,
+      });
+    },
+    observe: (event) => {
+      if (event.type === 'scan-start') {
+        writeAutoFixWorkerActivity(deps, {
+          event: 'scan-start',
+          at: event.at,
+          ...baseActivity(),
+          reason: event.reason,
+          tickNumber: event.tickNumber,
+        });
+        return;
+      }
+      writeAutoFixWorkerActivity(deps, {
+        event: 'scan-complete',
+        at: event.at,
+        ...baseActivity(),
+        reason: event.reason,
+        tickNumber: event.tickNumber,
+        submitted: event.report.submitted,
+        skipped: event.report.skipped,
+      });
+    },
     submit: async (submission) => {
+      const traceId = createWorkerTraceId('headless.worker.autofix');
       await deps.messageBus.request('headless.exec', {
         args: buildHeadlessFixArgs(submission.taskId, submission.agentName, { autoFix: true }),
         noTrack: true,
-        traceId: createWorkerTraceId('headless.worker.autofix'),
+        traceId,
+      });
+      logAutoFixWorkerTaskEvent(deps, submission.taskId, AUTO_FIX_WORKER_SUBMIT_EVENT, {
+        workerId,
+        workerKind,
+        channel: submission.channel,
+        traceId,
+      });
+      writeAutoFixWorkerActivity(deps, {
+        event: 'submit',
+        at: new Date().toISOString(),
+        ...baseActivity(),
+        taskId: submission.taskId,
+        traceId,
       });
     },
   });
 
+  writeAutoFixWorkerActivity(deps, {
+    event: 'started',
+    at: new Date().toISOString(),
+    ...baseActivity(),
+    intervalMs: options.intervalMs,
+  });
   process.stdout.write('[headless] worker autofix started; press Ctrl-C to stop.\n');
   const unsubscribeLifecycle = deps.messageBus.subscribe(Channels.WORKFLOW_LIFECYCLE, () => {
+    writeAutoFixWorkerActivity(deps, {
+      event: 'wakeup',
+      at: new Date().toISOString(),
+      ...baseActivity(),
+    });
     worker.wake('wake');
   });
   worker.start();
@@ -1226,6 +1459,11 @@ async function headlessWorkerAutofix(args: string[], deps: HeadlessDeps): Promis
     await waitForWorkerShutdown(worker, deps.signal);
   } finally {
     unsubscribeLifecycle();
+    writeAutoFixWorkerActivity(deps, {
+      event: 'stopped',
+      at: new Date().toISOString(),
+      ...baseActivity(),
+    });
   }
   process.stdout.write('[headless] worker autofix stopped.\n');
 }
@@ -1238,6 +1476,25 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   }
   if (subCommand && subCommand !== 'list' && subCommand !== 'status') {
     throw new Error(`Unknown worker sub-command: "${subCommand}". Use: ${AUTO_FIX_WORKER_COMMAND}, list, status`);
+  }
+  if (subCommand === 'status') {
+    const flags = parseQueryFlags(args.slice(1));
+    const status = readAutoFixWorkerStatus(deps);
+    switch (flags.output) {
+      case 'json':
+        process.stdout.write(`${JSON.stringify(status)}\n`);
+        break;
+      case 'jsonl':
+        process.stdout.write(`${JSON.stringify(status)}\n`);
+        break;
+      case 'label':
+        process.stdout.write(`${status.workerId ?? ''}\n`);
+        break;
+      default:
+        process.stdout.write(`${formatAutoFixWorkerStatus(status)}\n`);
+        break;
+    }
+    return;
   }
   process.stdout.write(`${BOLD}Worker kinds${RESET}\n`);
   for (const worker of HEADLESS_WORKER_KINDS) {

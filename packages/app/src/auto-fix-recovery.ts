@@ -21,7 +21,7 @@ import type { TaskState } from '@invoker/workflow-core';
 
 import { shouldSkipAutoFixForError } from './auto-fix-gating.js';
 import { buildFixWithAgentMutationArgs } from './auto-fix-intents.js';
-import { createRecoveryWorker, type WorkerRuntime } from './worker-runtime.js';
+import { createRecoveryWorker, type WorkerRuntime, type WorkerTickContext } from './worker-runtime.js';
 
 /**
  * The single command/action route the worker submits through — the same channel
@@ -88,6 +88,8 @@ export interface AutoFixRecoveryDeps {
     reason: AutoFixRecoverySkipReason,
     details?: Record<string, unknown>,
   ) => void;
+  /** Observational hook for operator status/audit surfaces. Must not affect policy. */
+  observe?: (event: AutoFixRecoveryObservation) => void;
   logger?: Logger;
 }
 
@@ -95,6 +97,23 @@ export interface AutoFixRecoveryScanReport {
   readonly submitted: string[];
   readonly skipped: Array<{ taskId: string; reason: AutoFixRecoverySkipReason }>;
 }
+
+export type AutoFixRecoveryObservation =
+  | {
+      readonly type: 'scan-start';
+      readonly identity: WorkerTickContext['identity'];
+      readonly reason: WorkerTickContext['reason'];
+      readonly tickNumber: number;
+      readonly at: string;
+    }
+  | {
+      readonly type: 'scan-complete';
+      readonly identity: WorkerTickContext['identity'];
+      readonly reason: WorkerTickContext['reason'];
+      readonly tickNumber: number;
+      readonly at: string;
+      readonly report: AutoFixRecoveryScanReport;
+    };
 
 export interface AutoFixRecoveryScan {
   /**
@@ -145,7 +164,16 @@ export function createAutoFixRecoveryScan(deps: AutoFixRecoveryDeps): AutoFixRec
     details?: Record<string, unknown>,
   ): void => {
     report.skipped.push({ taskId, reason });
-    deps.logSkip?.(taskId, reason, details);
+    try {
+      deps.logSkip?.(taskId, reason, details);
+    } catch (err) {
+      deps.logger?.warn?.('auto-fix recovery skip observer failed', {
+        module: 'auto-fix-recovery',
+        taskId,
+        reason,
+        err,
+      });
+    }
   };
 
   const considerTask = async (
@@ -235,14 +263,40 @@ export interface AutoFixRecoveryWorkerOptions extends AutoFixRecoveryDeps {
  */
 export function createAutoFixRecoveryWorker(options: AutoFixRecoveryWorkerOptions): WorkerRuntime {
   const scan = createAutoFixRecoveryScan(options);
+  const observe = (event: AutoFixRecoveryObservation): void => {
+    try {
+      options.observe?.(event);
+    } catch (err) {
+      options.logger.warn('auto-fix recovery observer failed', {
+        module: 'auto-fix-recovery',
+        eventType: event.type,
+        err,
+      });
+    }
+  };
   return createRecoveryWorker({
     logger: options.logger,
     instanceId: options.instanceId,
     intervalMs: options.intervalMs,
     installSignalHandlers: options.installSignalHandlers,
     tickOnStart: true,
-    onTick: async () => {
-      await scan.scan();
+    onTick: async (ctx) => {
+      observe({
+        type: 'scan-start',
+        identity: ctx.identity,
+        reason: ctx.reason,
+        tickNumber: ctx.tickNumber,
+        at: new Date().toISOString(),
+      });
+      const report = await scan.scan();
+      observe({
+        type: 'scan-complete',
+        identity: ctx.identity,
+        reason: ctx.reason,
+        tickNumber: ctx.tickNumber,
+        at: new Date().toISOString(),
+        report,
+      });
     },
   });
 }

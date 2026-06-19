@@ -265,6 +265,16 @@ Source checkouts can install prefixed skill copies with `bash scripts/setup-agen
 
 Use `--output text|label|json|jsonl` on headless `query` commands. Use `./run.sh --headless retry-tasks --status pending|failed --parallel 8` for bulk safe retries. Only **one** process should **write** the workflow database at a time; see [docs/persistence-architecture-single-writer.md](docs/persistence-architecture-single-writer.md).
 
+Auto-fix recovery is an explicit worker. Start it only when you want a long-running recovery loop:
+
+```bash
+./run.sh --headless worker autofix
+./run.sh --headless worker status
+./run.sh --headless query audit <taskId>
+```
+
+Normal headless commands such as `run`, `resume`, `retry`, and `fix` execute the requested command and exit; they do not start recovery workers. `worker status` shows the recovery worker id, shared owner, last wakeup, last scan, last submit, and last skip reason. `query audit <taskId>` shows task-level recovery skip and submit events.
+
 ## Architecture (at a glance)
 
 ```mermaid
