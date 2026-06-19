@@ -763,6 +763,156 @@ describe('LaunchDispatcher', () => {
       expect(events.some((event) => event.eventType === 'task.launch_dispatch_invalidated')).toBe(true);
     });
 
+    // Lineage isolation: the SQL claim and the in-memory dispatcher each
+    // validate BOTH the selected attempt and the execution generation. The
+    // combined test above flips both at once, so it would still pass if one
+    // half of `dispatchMatchesTask` were deleted. The next two tests pin each
+    // dimension independently: a generation-only drift and an attempt-only
+    // drift must each block the hand-off to TaskRunner on their own.
+    it('active mode abandons a dispatch whose generation alone drifted from the live task', () => {
+      const task = seedWorkflowAndTask('wf-a/t-gen', 'wf-a', {
+        selectedAttemptId: 'attempt-gen',
+        generation: 0,
+      });
+      const enq = adapter.enqueueLaunchDispatch({
+        taskId: task.id,
+        attemptId: 'attempt-gen',
+        workflowId: 'wf-a',
+        generation: 0,
+      });
+      // Same attempt id, newer generation: the persisted row still matches the
+      // dispatch (so the SQL claim leases it), but the orchestrator's live view
+      // has advanced a generation. Only `dispatchMatchesTask` can catch this.
+      const liveTask = {
+        ...task,
+        execution: { selectedAttemptId: 'attempt-gen', generation: 1 },
+      };
+      const executeTask = vi.fn().mockResolvedValue(undefined);
+      const dispatcher = new LaunchDispatcher({
+        persistence: adapter,
+        ownerId: 'owner-a',
+        orchestrator: {
+          prepareTaskForNewAttempt: vi.fn(),
+          getTask: vi.fn().mockReturnValue(liveTask as any),
+        },
+        taskRunnerProvider: () => ({ executeTask }),
+        mode: 'active',
+      });
+
+      dispatcher.poll();
+
+      expect(executeTask).not.toHaveBeenCalled();
+      const after = adapter.loadLaunchDispatchById(enq.id);
+      expect(after?.state).toBe('abandoned');
+      expect(after?.lastError).toMatch(/selected attempt or generation changed/);
+      const invalidated = adapter
+        .getEvents(task.id)
+        .find((event) => event.eventType === 'task.launch_dispatch_invalidated');
+      expect(invalidated).toBeDefined();
+      expect(JSON.parse(invalidated!.payload!)).toMatchObject({
+        dispatchId: enq.id,
+        reason: 'selected_attempt_changed',
+        dispatchAttemptId: 'attempt-gen',
+        dispatchGeneration: 0,
+        selectedAttemptId: 'attempt-gen',
+        selectedGeneration: 1,
+        accepted: true,
+      });
+    });
+
+    it('active mode abandons a dispatch whose attempt id alone drifted from the live task', () => {
+      const task = seedWorkflowAndTask('wf-a/t-attempt', 'wf-a', {
+        selectedAttemptId: 'attempt-orig',
+        generation: 0,
+      });
+      const enq = adapter.enqueueLaunchDispatch({
+        taskId: task.id,
+        attemptId: 'attempt-orig',
+        workflowId: 'wf-a',
+        generation: 0,
+      });
+      // Same generation, different selected attempt: the row was re-selected to
+      // a new attempt after the dispatch was enqueued. Only the attempt-id half
+      // of the lineage check can reject this.
+      const liveTask = {
+        ...task,
+        execution: { selectedAttemptId: 'attempt-reselected', generation: 0 },
+      };
+      const executeTask = vi.fn().mockResolvedValue(undefined);
+      const dispatcher = new LaunchDispatcher({
+        persistence: adapter,
+        ownerId: 'owner-a',
+        orchestrator: {
+          prepareTaskForNewAttempt: vi.fn(),
+          getTask: vi.fn().mockReturnValue(liveTask as any),
+        },
+        taskRunnerProvider: () => ({ executeTask }),
+        mode: 'active',
+      });
+
+      dispatcher.poll();
+
+      expect(executeTask).not.toHaveBeenCalled();
+      const after = adapter.loadLaunchDispatchById(enq.id);
+      expect(after?.state).toBe('abandoned');
+      expect(after?.lastError).toMatch(/selected attempt or generation changed/);
+      const invalidated = adapter
+        .getEvents(task.id)
+        .find((event) => event.eventType === 'task.launch_dispatch_invalidated');
+      expect(invalidated).toBeDefined();
+      expect(JSON.parse(invalidated!.payload!)).toMatchObject({
+        dispatchId: enq.id,
+        reason: 'selected_attempt_changed',
+        dispatchAttemptId: 'attempt-orig',
+        dispatchGeneration: 0,
+        selectedAttemptId: 'attempt-reselected',
+        selectedGeneration: 0,
+        accepted: true,
+      });
+    });
+
+    it('active mode launches a dispatch whose attempt id and generation both match the live task', () => {
+      // The positive control for the two isolation tests above: identical
+      // attempt id AND generation must still hand the task to TaskRunner and
+      // leave the row leased (the runner drives it to completed/failed).
+      const task = seedWorkflowAndTask('wf-a/t-match', 'wf-a', {
+        selectedAttemptId: 'attempt-match',
+        generation: 3,
+      });
+      const enq = adapter.enqueueLaunchDispatch({
+        taskId: task.id,
+        attemptId: 'attempt-match',
+        workflowId: 'wf-a',
+        generation: 3,
+      });
+      const liveTask = {
+        ...task,
+        execution: { selectedAttemptId: 'attempt-match', generation: 3 },
+      };
+      const executeTask = vi.fn().mockResolvedValue(undefined);
+      const dispatcher = new LaunchDispatcher({
+        persistence: adapter,
+        ownerId: 'owner-a',
+        orchestrator: {
+          prepareTaskForNewAttempt: vi.fn(),
+          getTask: vi.fn().mockReturnValue(liveTask as any),
+        },
+        taskRunnerProvider: () => ({ executeTask }),
+        mode: 'active',
+      });
+
+      dispatcher.poll();
+
+      expect(executeTask).toHaveBeenCalledTimes(1);
+      expect(executeTask.mock.calls[0]![0].id).toBe(task.id);
+      const after = adapter.loadLaunchDispatchById(enq.id);
+      expect(after?.state).toBe('leased');
+      const invalidated = adapter
+        .getEvents(task.id)
+        .find((event) => event.eventType === 'task.launch_dispatch_invalidated');
+      expect(invalidated).toBeUndefined();
+    });
+
     it('active mode abandons the dispatch when readiness is blocked', () => {
       const task = seedWorkflowAndTask('wf-a/t-blocked', 'wf-a', {
         selectedAttemptId: 'attempt-blocked',
