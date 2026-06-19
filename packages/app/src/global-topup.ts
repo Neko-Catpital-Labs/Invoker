@@ -1,35 +1,10 @@
 /**
  * Post-mutation scheduler refill helpers.
  *
- * Phase B (CB.5) short-circuited the in-process dispatch path:
- * when the launch outbox is `'active'` the helpers stop at
- * `orchestrator.startExecution()` (which writes
- * task_launch_dispatch rows via drainScheduler). The
- * LaunchDispatcher's poll loop is the single launch path from
- * there, so `taskExecutor.executeTasks(runnable)` is no longer
- * invoked in that mode.
- *
- * Phase C (CC.4) was meant to delete the legacy fire-and-forget
- * fallback wholesale. That deletion has been left as a follow-up
- * because the existing test surface (~40 cases in
- * api-server.test.ts, parity-regression.test.ts,
- * app-layer-handoff-repro.test.ts, workflow-mutation-facade.test.ts,
- * bridge-orchestrator-executor.test.ts, headless-delegation.test.ts)
- * still asserts on `taskExecutor.executeTasks` being called via
- * these helpers, and CB.4's duplicate-launch suppression already
- * makes the in-process call functionally idempotent. Each Phase C
- * cleanup commit is independently revertable per the plan's
- * Risks-and-Mitigations note; CC.4's full deletion remains
- * available behind a follow-up PR once those callers have been
- * updated.
- *
- * What still happens here, mode-by-mode:
- *   - `'active'`: helpers call `orchestrator.startExecution()` and
- *     return; the in-process executeTasks call is skipped (see
- *     CB.5).
- *   - `'observe'` / `'disabled'`: helpers preserve the legacy
- *     fire-and-forget behaviour so a flag rollback has zero other
- *     code changes.
+ * The durable launch outbox is now the only task launch path. These
+ * helpers still call `orchestrator.startExecution()` so ready tasks are
+ * claimed and written to `task_launch_dispatch`; the LaunchDispatcher
+ * poll loop owns the actual `TaskRunner.executeTask(...)` handoff.
  */
 
 import type { Logger } from '@invoker/contracts';
@@ -38,19 +13,6 @@ import type { TaskRunner } from '@invoker/execution-engine';
 import { createExecutionBench } from '@invoker/execution-engine';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 
-export type LaunchOutboxMode = 'disabled' | 'observe' | 'active';
-
-/**
- * Resolve the launch-outbox mode for a dispatch call. Explicit
- * arguments take precedence over the process-wide env-var fallback so
- * tests can run multiple modes in the same process; the env var is the
- * production wiring (see `resolveLaunchOutboxMode` in config.ts).
- */
-function resolveLaunchOutboxMode(explicit?: LaunchOutboxMode): LaunchOutboxMode {
-  if (explicit) return explicit;
-  const raw = (process.env.INVOKER_LAUNCH_OUTBOX ?? '').toLowerCase().trim();
-  return raw === 'active' || raw === 'observe' ? raw : 'disabled';
-}
 
 type GlobalTopupParams = {
   orchestrator: Orchestrator;
@@ -60,16 +22,6 @@ type GlobalTopupParams = {
   alreadyDispatched?: TaskState[];
   mutationTiming?: WorkflowMutationTiming;
   dispatchMode?: 'await' | 'fire-and-forget';
-  /**
-   * When the durable launch-outbox dispatcher is `'active'`, the
-   * in-process `taskExecutor.executeTasks` call becomes a no-op
-   * because the orchestrator's drainScheduler already enqueues into
-   * `task_launch_dispatch` and the LaunchDispatcher polls and
-   * services that queue. We still walk the rest of the top-up
-   * pipeline (logging, bench marks, return shape) so callers see
-   * the same metadata regardless of mode.
-   */
-  launchOutboxMode?: LaunchOutboxMode;
 };
 
 type MutationTopupParams = {
@@ -82,7 +34,6 @@ type MutationTopupParams = {
   scopedTaskIds?: string[];
   mutationTiming?: WorkflowMutationTiming;
   dispatchMode?: 'await' | 'fire-and-forget';
-  launchOutboxMode?: LaunchOutboxMode;
 };
 
 function runningExecutionKey(task: TaskState): string {
@@ -123,75 +74,37 @@ function matchesScope(
 }
 
 function dispatchTasks({
-  taskExecutor,
   logger,
   context,
   runnable,
-  mutationTiming,
   bench,
-  spanName,
   beforeMark,
   afterMark,
-  dispatchMode,
-  launchOutboxMode,
 }: {
-  taskExecutor: TaskRunner;
   logger?: Logger;
   context: string;
   runnable: TaskState[];
-  mutationTiming?: WorkflowMutationTiming;
   bench: (phase: string, metadata?: Record<string, unknown>) => void;
-  spanName: string;
   beforeMark: string;
   afterMark: string;
-  dispatchMode: 'await' | 'fire-and-forget';
-  launchOutboxMode?: LaunchOutboxMode;
 }): Promise<void> {
   bench(beforeMark);
-  const effectiveMode = resolveLaunchOutboxMode(launchOutboxMode);
-  if (effectiveMode === 'active') {
-    // The durable launch outbox is the dispatcher in active mode. The
-    // orchestrator's drainScheduler already enqueued each runnable into
-    // task_launch_dispatch, and the LaunchDispatcher's poll loop calls
-    // taskExecutor.executeTask(task, dispatchOpts). Calling
-    // taskExecutor.executeTasks(runnable) here would race the outbox.
-    logger?.debug?.(
-      `[global-topup] ${context}: launchOutboxMode=active — outbox dispatcher owns launch (skipping in-process executeTasks)`,
-    );
-    bench(`${afterMark}.skippedForOutbox`, { runnableCount: runnable.length });
-    return Promise.resolve();
-  }
-  const run = () => taskExecutor.executeTasks(runnable);
-  if (dispatchMode === 'await') {
-    return mutationTiming
-      ? mutationTiming.span(spanName, { context, runnableCount: runnable.length }, run)
-        .then(() => bench(afterMark))
-      : Promise.resolve().then(run).then(() => bench(afterMark));
-  }
-
-  const dispatchPromise = mutationTiming
-    ? mutationTiming.span(spanName, { context, runnableCount: runnable.length }, run)
-    : Promise.resolve().then(run);
-  void dispatchPromise
-    .then(() => bench(afterMark))
-    .catch((err) => {
-      const message = err instanceof Error ? err.stack ?? err.message : String(err);
-      logger?.error(`[global-topup] ${context}: asynchronous task dispatch failed: ${message}`);
-  });
-  bench(`${afterMark}.accepted`);
+  // The durable launch outbox owns dispatch. The orchestrator has
+  // already enqueued each runnable task into task_launch_dispatch.
+  // Calling taskExecutor.executeTasks(runnable) here would race the
+  // dispatcher.
+  logger?.debug?.(
+    `[global-topup] ${context}: launch outbox owns launch (skipping in-process executeTasks)`,
+  );
+  bench(`${afterMark}.skippedForOutbox`, { runnableCount: runnable.length });
   return Promise.resolve();
 }
 
 function executeRunnableTasks({
-  taskExecutor,
   logger,
   context,
   runnable,
   dispatchKind,
-  mutationTiming,
-  spanName,
-  dispatchMode,
-  launchOutboxMode,
 }: {
   taskExecutor: TaskRunner;
   logger?: Logger;
@@ -201,24 +114,18 @@ function executeRunnableTasks({
   mutationTiming?: WorkflowMutationTiming;
   spanName: string;
   dispatchMode: 'await' | 'fire-and-forget';
-  launchOutboxMode?: LaunchOutboxMode;
 }): Promise<void> {
   const bench = createDispatchBench(logger, context, runnable, dispatchKind);
   const phasePrefix = dispatchKind === 'scoped'
     ? 'dispatchStartedTasksWithGlobalTopup.scopedExecuteTasks'
     : 'dispatchStartedTasksWithGlobalTopup.prestartedTopupExecuteTasks';
   return dispatchTasks({
-    taskExecutor,
     logger,
     context,
     runnable,
-    mutationTiming,
     bench,
-    spanName,
     beforeMark: `${phasePrefix}.before`,
     afterMark: `${phasePrefix}.after`,
-    dispatchMode,
-    launchOutboxMode,
   });
 }
 
@@ -244,7 +151,6 @@ export async function executeGlobalTopup({
   alreadyDispatched = [],
   mutationTiming,
   dispatchMode = mutationTiming ? 'fire-and-forget' : 'await',
-  launchOutboxMode,
 }: GlobalTopupParams): Promise<TaskState[]> {
   const dedupeKeys = new Set(
     alreadyDispatched
@@ -279,17 +185,12 @@ export async function executeGlobalTopup({
     `[global-topup] ${context}: dispatching ${runnable.length} additional task(s): [${runnable.map((task) => task.id).join(', ')}]`,
   );
   await dispatchTasks({
-    taskExecutor,
     logger,
     context,
     runnable,
-    mutationTiming,
     bench,
-    spanName: 'executeGlobalTopup.taskExecutor.executeTasks',
     beforeMark: 'executeGlobalTopup.taskExecutor.executeTasks.before',
     afterMark: 'executeGlobalTopup.taskExecutor.executeTasks.after',
-    dispatchMode,
-    launchOutboxMode,
   });
   return runnable;
 }
@@ -308,7 +209,6 @@ export async function dispatchStartedTasksWithGlobalTopup({
   scopedTaskIds,
   mutationTiming,
   dispatchMode = mutationTiming ? 'fire-and-forget' : 'await',
-  launchOutboxMode,
 }: MutationTopupParams): Promise<{ runnable: TaskState[]; topup: TaskState[] }> {
   const dispatchable = started.filter(isDispatchableLaunch);
   const scopedTaskIdSet = new Set(scopedTaskIds ?? []);
@@ -334,7 +234,6 @@ export async function dispatchStartedTasksWithGlobalTopup({
       mutationTiming,
       spanName: 'dispatchStartedTasksWithGlobalTopup.scopedExecuteTasks',
       dispatchMode,
-      launchOutboxMode,
     });
   } else {
     bench('dispatchStartedTasksWithGlobalTopup.noScopedRunnable');
@@ -352,7 +251,6 @@ export async function dispatchStartedTasksWithGlobalTopup({
       mutationTiming,
       spanName: 'dispatchStartedTasksWithGlobalTopup.prestartedTopupExecuteTasks',
       dispatchMode,
-      launchOutboxMode,
     });
   }
   bench('dispatchStartedTasksWithGlobalTopup.executeGlobalTopup.before');
@@ -364,7 +262,6 @@ export async function dispatchStartedTasksWithGlobalTopup({
     alreadyDispatched: [...runnable, ...prestartedTopup],
     mutationTiming,
     dispatchMode,
-    launchOutboxMode,
   });
   const topup = [...prestartedTopup, ...additionalTopup];
   bench('dispatchStartedTasksWithGlobalTopup.executeGlobalTopup.after', { topupCount: topup.length });
@@ -386,7 +283,6 @@ export async function finalizeMutationWithGlobalTopup({
   scopedTaskIds,
   mutationTiming,
   dispatchMode,
-  launchOutboxMode,
 }: MutationTopupParams): Promise<{ started: TaskState[]; topup: TaskState[] }> {
   const { topup } = await dispatchStartedTasksWithGlobalTopup({
     orchestrator,
@@ -398,7 +294,6 @@ export async function finalizeMutationWithGlobalTopup({
     scopedTaskIds,
     mutationTiming,
     dispatchMode,
-    launchOutboxMode,
   });
   return { started, topup };
 }

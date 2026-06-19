@@ -7,6 +7,7 @@ import type {
   MergeGateFailedCheck,
 } from './merge-gate-provider.js';
 import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
+import { isGitRefLockRace, retryTransientGitHubCli } from './git-utils.js';
 
 type ExistingPullRequest = { url: string; number: number };
 
@@ -45,10 +46,10 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
         '-f', `title=${title}`,
       ];
       if (body) apiArgs.push('-f', `body=${body}`);
-      const ghResult = await this.exec('gh', apiArgs, cwd);
+      const ghResult = await retryTransientGitHubCli(() => this.exec('gh', apiArgs, cwd));
       console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview update existing gh_result=${ghResult}`);
 
-      return { url: existing[0].url, identifier: String(existing[0].number) };
+      return { url: existing[0].html_url ?? existing[0].url ?? '', identifier: String(existing[0].number) };
     }
 
     const createArgs = [
@@ -70,11 +71,11 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
   }): Promise<void> {
     const { identifier, cwd } = opts;
     const targetRepo = await this.resolveTargetRepo(cwd);
-    await this.exec('gh', [
+    await retryTransientGitHubCli(() => this.exec('gh', [
       'api', `repos/${targetRepo}/pulls/${identifier}`,
       '--method', 'PATCH',
       '-f', 'state=closed',
-    ], cwd);
+    ], cwd));
   }
 
   async checkApproval(opts: {
@@ -84,11 +85,11 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     const { identifier, cwd } = opts;
     const targetRepo = await this.resolveTargetRepo(cwd);
 
-    const stdout = await this.exec('gh', [
+    const stdout = await retryTransientGitHubCli(() => this.exec('gh', [
       'pr', 'view', identifier,
       '--repo', targetRepo,
       '--json', 'state,reviewDecision,url,headRefOid,headRefName,mergeStateStatus,statusCheckRollup',
-    ], cwd);
+    ], cwd));
 
     const data = JSON.parse(stdout) as {
       state: string;
@@ -158,7 +159,7 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     try {
       await this.exec('git', pushArgs, cwd);
     } catch (err) {
-      if (!isGitRefAlreadyExistsLockRace(err)) throw err;
+      if (!isGitRefLockRace(err)) throw err;
       await this.exec('git', [
         'fetch',
         'origin',
@@ -236,11 +237,6 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       });
     });
   }
-}
-
-function isGitRefAlreadyExistsLockRace(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err);
-  return /cannot lock ref\b/i.test(message) && /reference already exists/i.test(message);
 }
 
 function normalizeMergeState(value: string | undefined): 'clean' | 'dirty' | 'unknown' {

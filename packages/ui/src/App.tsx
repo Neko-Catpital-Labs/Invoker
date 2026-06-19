@@ -30,7 +30,7 @@ import { FloatingGraphPanel } from './components/FloatingGraphPanel.js';
 import { WorkflowInspector } from './components/WorkflowInspector.js';
 import { ActionGraphView } from './components/ActionGraphView.js';
 import { StatusBar } from './components/StatusBar.js';
-import { TerminalDrawer } from './components/TerminalDrawer.js';
+import { TerminalDrawer, type TerminalDrawerState } from './components/TerminalDrawer.js';
 import {
   isExperimentSpawnPivotTask,
   EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE,
@@ -65,6 +65,7 @@ type SearchResult =
   | { kind: 'task'; id: string; workflowId: string | null; title: string; subtitle: string };
 
 const KEYBOARD_REGION_ORDER: readonly KeyboardRegion[] = ['workflowGraph', 'taskGraph', 'inspector', 'bottomBar'];
+const SIDEBAR_NAV_ITEM_SELECTOR = '[data-sidebar-nav-item]';
 const STATUS_KEY_ORDER: readonly string[] = [
   'completed',
   'running',
@@ -86,6 +87,21 @@ const EDITABLE_SELECTOR = [
   '[role="dialog"] input',
   '[role="dialog"] textarea',
 ].join(',');
+
+function sidebarNavOrder(item: HTMLElement): number {
+  const order = Number(item.dataset.sidebarNavOrder);
+  return Number.isFinite(order) ? order : Number.POSITIVE_INFINITY;
+}
+
+function getOrderedSidebarNavItems(root: ParentNode): HTMLElement[] {
+  return [...root.querySelectorAll<HTMLElement>(SIDEBAR_NAV_ITEM_SELECTOR)].sort((a, b) => {
+    const aOrder = sidebarNavOrder(a);
+    const bOrder = sidebarNavOrder(b);
+    if (aOrder !== bOrder) return aOrder < bOrder ? -1 : 1;
+    if (a === b) return 0;
+    return a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+  });
+}
 
 function isEditableKeyboardTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -351,12 +367,17 @@ export function hasMergeConflictExecution(task: TaskState | undefined): boolean 
 }
 
 export function App() {
-  const { tasks, workflows, clearTasks, refreshTasks } = useTasks();
+  const [graphRefreshSequence, setGraphRefreshSequence] = useState(0);
+  const handleTaskGraphSnapshotApplied = useCallback(() => {
+    setGraphRefreshSequence((sequence) => sequence + 1);
+  }, []);
+  const { tasks, workflows, clearTasks, refreshTaskGraph } = useTasks({
+    onTaskGraphSnapshotApplied: handleTaskGraphSnapshotApplied,
+  });
   const invoker = useInvoker();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const graphSurfaceRef = useRef<HTMLDivElement>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const [graphRefreshSequence, setGraphRefreshSequence] = useState(0);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
   const [stickySelectedWorkflow, setStickySelectedWorkflow] = useState<WorkflowMeta | null>(null);
   const [workflowSelectionDismissed, setWorkflowSelectionDismissed] = useState(false);
@@ -381,7 +402,7 @@ export function App() {
   const [updateCliError, setUpdateCliError] = useState<string | null>(null);
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const [advancedMetadataExpanded, setAdvancedMetadataExpanded] = useState(false);
-  const [terminalCollapsed, setTerminalCollapsed] = useState(true);
+  const [terminalDrawerState, setTerminalDrawerState] = useState<TerminalDrawerState>('minimized');
   const [terminalSessions, setTerminalSessions] = useState<TerminalSessionDescriptor[]>([]);
   const [activeTerminalSessionId, setActiveTerminalSessionId] = useState<string | null>(null);
   const [workflowContextMenu, setWorkflowContextMenu] = useState<WorkflowContextMenuState | null>(null);
@@ -697,7 +718,14 @@ export function App() {
       setPreviousGraphRegion(region);
     }
     requestAnimationFrame(() => {
-      document.querySelector<HTMLElement>(`[data-keyboard-region="${region}"]`)?.focus();
+      const root = document.querySelector<HTMLElement>(`[data-keyboard-region="${region}"]`);
+      if (!root) return;
+      if (region === 'inspector') {
+        const [firstNavItem] = getOrderedSidebarNavItems(root);
+        (firstNavItem ?? root).focus();
+        return;
+      }
+      root.focus();
     });
   }, []);
 
@@ -964,15 +992,25 @@ export function App() {
       }
 
       if (keyboardRegion === 'inspector') {
-        if (event.key === 'ArrowLeft') {
+        const root = document.querySelector<HTMLElement>('[data-keyboard-region="inspector"]');
+        if (!root) return;
+        const navItems = getOrderedSidebarNavItems(root);
+        if (navItems.length === 0) return;
+        const activeIndex = navItems.findIndex((item) => item === document.activeElement);
+        if (event.key === 'ArrowDown') {
           event.preventDefault();
-          setInspectorCollapsed(false);
+          const nextIndex = activeIndex < 0 ? 0 : Math.min(navItems.length - 1, activeIndex + 1);
+          navItems[nextIndex]?.focus();
+        } else if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          const prevIndex = activeIndex < 0 ? 0 : Math.max(0, activeIndex - 1);
+          navItems[prevIndex]?.focus();
         } else if (event.key === 'ArrowRight') {
           event.preventDefault();
-          setInspectorCollapsed(true);
-        } else if (event.key === 'Enter') {
-          event.preventDefault();
-          document.querySelector<HTMLElement>('[data-keyboard-region="inspector"] button, [data-keyboard-region="inspector"] select, [data-keyboard-region="inspector"] input')?.focus();
+          const active = activeIndex >= 0 ? navItems[activeIndex] : null;
+          if (active?.dataset.sidebarExpandable === 'true') {
+            active.click();
+          }
         }
         return;
       }
@@ -980,10 +1018,10 @@ export function App() {
       if (keyboardRegion === 'bottomBar') {
         if (event.key === 'ArrowUp') {
           event.preventDefault();
-          setTerminalCollapsed(false);
+          setTerminalDrawerState('partial');
         } else if (event.key === 'ArrowDown') {
           event.preventDefault();
-          setTerminalCollapsed(true);
+          setTerminalDrawerState('minimized');
         } else if (event.key === 'ArrowRight') {
           event.preventDefault();
           setBottomStatusIndex((index) => Math.min(visibleStatusKeys.length - 1, index + 1));
@@ -1046,7 +1084,7 @@ export function App() {
       window.alert(EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE);
       return;
     }
-    setTerminalCollapsed(false);
+    setTerminalDrawerState('partial');
     const result = await (window.__INVOKER_TEST_OPEN_TERMINAL__ ?? window.invoker?.openTerminal)?.(taskId);
     if (!result) return;
     if (!result.opened) {
@@ -1249,11 +1287,11 @@ export function App() {
       if (selectedWorkflowId === workflowId) {
         setSelectedWorkflowId(null);
       }
-      refreshTasks();
+      refreshTaskGraph();
     } catch (err) {
       console.error('Delete Workflow failed:', err);
     }
-  }, [refreshTasks, selectedWorkflowId]);
+  }, [refreshTaskGraph, selectedWorkflowId]);
 
   const handleFix = useCallback(async (taskId: string, agentName: string) => {
     setContextMenu(null);
@@ -1274,11 +1312,11 @@ export function App() {
       } else {
         await window.invoker?.fixWithAgent(taskId, agentName);
       }
-      refreshTasks();
+      refreshTaskGraph();
     } catch (err) {
       console.error('Fix failed:', err);
     }
-  }, [tasks, refreshTasks]);
+  }, [tasks, refreshTaskGraph]);
 
   const handleCancelTask = useCallback(async (taskId: string) => {
     setContextMenu(null);
@@ -1332,9 +1370,9 @@ export function App() {
   }, [contextMenu, focusKeyboardRegion, workflowContextMenu]);
 
   const handleRefresh = useCallback(async () => {
-    await refreshTasks(true);
-    setGraphRefreshSequence((sequence) => sequence + 1);
-  }, [refreshTasks]);
+    await refreshTaskGraph();
+    issueCameraCommand({ kind: 'fitInitial', scope: 'workflow', reason: 'manual-refresh' });
+  }, [issueCameraCommand, refreshTaskGraph]);
 
   // ── Plan loading ──────────────────────────────────────────
   const handleLoadPlan = useCallback(
@@ -1348,12 +1386,12 @@ export function App() {
         const parsed = yaml.load(planText) as any;
         setPlanName(parsed?.name ?? 'Untitled Plan');
         setOnFinish(parsed?.onFinish ?? 'merge');
-        refreshTasks();
+        refreshTaskGraph();
       } catch (err) {
         console.error('Failed to load plan:', err);
       }
     },
-    [invoker, refreshTasks],
+    [invoker, refreshTaskGraph],
   );
 
   const handleFileSelect = useCallback(
@@ -1564,12 +1602,12 @@ export function App() {
       if (!invoker) return;
       try {
         await invoker.setMergeBranch(workflowId, baseBranch);
-        refreshTasks();
+        refreshTaskGraph();
       } catch (err) {
         console.error('Failed to set merge branch:', err);
       }
     },
-    [invoker, refreshTasks],
+    [invoker, refreshTaskGraph],
   );
 
   // ── Modal triggers ────────────────────────────────────────
@@ -1817,7 +1855,6 @@ export function App() {
               ) : (
                 <>
                   <WorkflowGraph
-                    key={`workflow-graph-${graphRefreshSequence}`}
                     tasks={tasks}
                     workflows={workflows}
                     selectedWorkflowId={selectedWorkflow?.id ?? null}
@@ -1843,7 +1880,6 @@ export function App() {
                         className={`h-full outline-none ${keyboardRegion === 'taskGraph' ? 'ring-2 ring-inset ring-blue-300/60' : ''}`}
                       >
                         <TaskDAG
-                          key={`task-dag-${selectedWorkflow.id}-${graphRefreshSequence}`}
                           tasks={miniDagTasks}
                           workflows={selectedTaskDagWorkflows}
                           selectedTaskId={selectedTaskId}
@@ -1875,8 +1911,12 @@ export function App() {
                   onStatusClick={(filterKey, event) => handleStatusClick(filterKey as WorkflowStatus, event)}
                 />
                 <TerminalDrawer
-                  collapsed={terminalCollapsed}
-                  onToggle={() => setTerminalCollapsed((prev) => !prev)}
+                  state={terminalDrawerState}
+                  onCycle={() =>
+                    setTerminalDrawerState((prev) =>
+                      prev === 'minimized' ? 'partial' : prev === 'partial' ? 'maximized' : 'minimized',
+                    )
+                  }
                   sessions={terminalSessions}
                   activeSessionId={activeTerminalSessionId}
                   onSelectSession={setActiveTerminalSessionId}

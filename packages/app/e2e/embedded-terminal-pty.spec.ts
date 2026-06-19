@@ -73,7 +73,7 @@ test.describe('Embedded terminal PTY', () => {
       },
     ]);
 
-    const tasksResult = await page.evaluate(() => window.invoker.getTasks(true));
+    const tasksResult = await page.evaluate(() => window.invoker.getTasks());
     const tasks = Array.isArray(tasksResult) ? tasksResult : tasksResult.tasks;
     const task = tasks.find((candidate) => candidate.id.endsWith('/codex-resume'));
     const fullTaskId = task?.id;
@@ -96,7 +96,7 @@ test.describe('Embedded terminal PTY', () => {
 
     await expect(page.getByTestId('terminal-drawer-body')).toBeVisible({ timeout: 10000 });
     await expect(page.getByTestId('terminal-session-command')).toContainText('codex');
-    await expect(page.getByTestId('terminal-session-command')).toContainText(`resume ${agentSessionId}`);
+    await expect(page.getByTestId('terminal-session-command')).toContainText(agentSessionId);
     const terminalPane = page.getByTestId(`terminal-pane-${fullTaskId}`);
     await expect(terminalPane).toBeVisible();
     await expect(terminalPane.getByText(`TTY OK: codex resume ${agentSessionId}`)).toBeVisible({ timeout: 10000 });
@@ -131,7 +131,7 @@ test.describe('Embedded terminal PTY', () => {
       },
     ]);
 
-    const tasksResult = await page.evaluate(() => window.invoker.getTasks(true));
+    const tasksResult = await page.evaluate(() => window.invoker.getTasks());
     const tasks = Array.isArray(tasksResult) ? tasksResult : tasksResult.tasks;
     const task = tasks.find((candidate) => candidate.id.endsWith('/claude-resume'));
     const fullTaskId = task?.id;

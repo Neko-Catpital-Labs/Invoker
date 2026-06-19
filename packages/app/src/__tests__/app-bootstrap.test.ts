@@ -4,6 +4,7 @@ import {
   registerGuiLifecycleHandlers,
   runElectronReadyBootstrap,
   startGuiModeBootstrap,
+  startMainProcessBootstrap,
 } from '../bootstrap/app-bootstrap.js';
 
 function createCommandLineRecorder() {
@@ -163,6 +164,32 @@ describe('app-bootstrap', () => {
 
     expect(requestSingleInstanceLock).not.toHaveBeenCalled();
     expect(setupGuiMode).toHaveBeenCalledTimes(1);
+  });
+
+  it('delegates the composition root to headless or GUI startup without reordering callbacks', () => {
+    const order: string[] = [];
+
+    startMainProcessBootstrap({
+      isHeadless: true,
+      startHeadlessMode: () => {
+        order.push('headless');
+      },
+      startGuiMode: () => {
+        order.push('gui');
+      },
+    });
+
+    startMainProcessBootstrap({
+      isHeadless: false,
+      startHeadlessMode: () => {
+        order.push('headless');
+      },
+      startGuiMode: () => {
+        order.push('gui');
+      },
+    });
+
+    expect(order).toEqual(['headless', 'gui']);
   });
 
   it('registers lifecycle handlers without changing event names', () => {

@@ -1,6 +1,5 @@
 /**
  * useTasks — workflows-changed must clear workflow metadata when main sends [].
- * Overlapping getTasks responses: older empty snapshot must not wipe after refreshTasks.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -10,20 +9,20 @@ import { makeUITask } from './helpers/mock-invoker.js';
 
 describe('useTasks', () => {
   let workflowsChangedHandler: ((wfList: unknown[]) => void) | undefined;
-  let taskDeltaHandler: ((delta: unknown) => void) | undefined;
+  let taskGraphEventHandler: ((event: unknown) => void) | undefined;
 
   beforeEach(() => {
     vi.useRealTimers();
     workflowsChangedHandler = undefined;
-    taskDeltaHandler = undefined;
+    taskGraphEventHandler = undefined;
     (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
       tasks: [],
       workflows: [],
     };
     (window as unknown as { invoker: Record<string, unknown> }).invoker = {
       getTasks: vi.fn().mockResolvedValue({ tasks: [], workflows: [] }),
-      onTaskDelta: vi.fn((cb: (delta: unknown) => void) => {
-        taskDeltaHandler = cb;
+      onTaskGraphEvent: vi.fn((cb: (event: unknown) => void) => {
+        taskGraphEventHandler = cb;
         return () => {};
       }),
       onWorkflowsChanged: vi.fn((cb: (wfList: unknown[]) => void) => {
@@ -47,7 +46,7 @@ describe('useTasks', () => {
     };
     (window as unknown as { invoker: Record<string, unknown> }).invoker = {
       getTasks: vi.fn().mockResolvedValue({ tasks: [bootTask], workflows: [] }),
-      onTaskDelta: vi.fn(() => () => {}),
+      onTaskGraphEvent: vi.fn(() => () => {}),
       onWorkflowsChanged: vi.fn(() => () => {}),
     };
 
@@ -83,6 +82,36 @@ describe('useTasks', () => {
     expect(result.current.workflows.size).toBe(0);
   });
 
+  it('applies task graph delta events from the graph event channel', async () => {
+    const task = makeUITask({ id: 'wf-1/task-1', workflowId: 'wf-1', status: 'pending' });
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
+      tasks: [task],
+      workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'pending' }],
+    };
+
+    const { result } = renderHook(() => useTasks());
+
+    await waitFor(() => {
+      expect(taskGraphEventHandler).toBeDefined();
+    });
+
+    await act(async () => {
+      taskGraphEventHandler!({
+        type: 'delta',
+        delta: {
+          type: 'updated',
+          taskId: 'wf-1/task-1',
+          changes: { status: 'running' },
+          taskStateVersion: 2,
+          previousTaskStateVersion: 1,
+        },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 110));
+    });
+
+    expect(result.current.tasks.get('wf-1/task-1')?.status).toBe('running');
+  });
+
   it('replaces workflows when onWorkflowsChanged receives a non-empty list', async () => {
     const { result } = renderHook(() => useTasks());
 
@@ -108,40 +137,6 @@ describe('useTasks', () => {
     expect(result.current.workflows.get('wf-b')?.status).toBe('failed');
   });
 
-  it('ignores stale getTasks when a newer refresh returned tasks', async () => {
-    let releaseFirst: (v: { tasks: ReturnType<typeof makeUITask>[]; workflows: unknown[] }) => void;
-    const firstPending = new Promise<{ tasks: ReturnType<typeof makeUITask>[]; workflows: unknown[] }>((resolve) => {
-      releaseFirst = resolve;
-    });
-
-    const t1 = makeUITask({ id: 't1', description: 'Alpha' });
-    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
-      getTasks: vi
-        .fn()
-        .mockReturnValueOnce(firstPending)
-        .mockResolvedValue({ tasks: [t1], workflows: [] }),
-      onTaskDelta: vi.fn(() => () => {}),
-      onWorkflowsChanged: vi.fn(() => () => {}),
-    };
-
-    const { result } = renderHook(() => useTasks());
-
-    await act(async () => {
-      result.current.refreshTasks();
-    });
-
-    await waitFor(() => {
-      expect(result.current.tasks.size).toBe(1);
-      expect(result.current.tasks.get('t1')?.description).toBe('Alpha');
-    });
-
-    await act(async () => {
-      releaseFirst!({ tasks: [], workflows: [] });
-    });
-
-    expect(result.current.tasks.size).toBe(1);
-    expect(result.current.tasks.get('t1')?.id).toBe('t1');
-  });
 
   it('skips the immediate non-forced snapshot when bootstrap already hydrated state', async () => {
     const bootA = makeUITask({ id: 'boot-a', description: 'Bootstrap A' });
@@ -155,7 +150,7 @@ describe('useTasks', () => {
     (window as unknown as { invoker: Record<string, unknown> }).invoker = {
       getTasks,
       reportUiPerf,
-      onTaskDelta: vi.fn(() => () => {}),
+      onTaskGraphEvent: vi.fn(() => () => {}),
       onWorkflowsChanged: vi.fn(() => () => {}),
     };
 
@@ -180,7 +175,7 @@ describe('useTasks', () => {
     expect(result.current.workflows.size).toBe(1);
   });
 
-  it('falls back to fetchAll on mount when bootstrap is empty', async () => {
+  it('loads the startup snapshot on mount when bootstrap is empty', async () => {
     const fetched = makeUITask({ id: 'fetched-1', description: 'Fetched' });
     const getTasks = vi.fn().mockResolvedValue({
       tasks: [fetched],
@@ -192,7 +187,7 @@ describe('useTasks', () => {
     };
     (window as unknown as { invoker: Record<string, unknown> }).invoker = {
       getTasks,
-      onTaskDelta: vi.fn(() => () => {}),
+      onTaskGraphEvent: vi.fn(() => () => {}),
       onWorkflowsChanged: vi.fn(() => () => {}),
     };
 
@@ -200,7 +195,7 @@ describe('useTasks', () => {
 
     await waitFor(() => {
       expect(getTasks).toHaveBeenCalledTimes(1);
-      expect(getTasks).toHaveBeenLastCalledWith(false);
+      expect(getTasks).toHaveBeenLastCalledWith();
     });
 
     await waitFor(() => {
@@ -209,32 +204,91 @@ describe('useTasks', () => {
     });
   });
 
-  it('forced refresh after a hydrated bootstrap still calls getTasks(true) and replaces state', async () => {
-    const bootTask = makeUITask({ id: 'boot-1', description: 'Boot' });
-    const refreshedTask = makeUITask({ id: 'refreshed-1', description: 'Refreshed' });
-    const getTasks = vi.fn().mockResolvedValue({ tasks: [refreshedTask], workflows: [] });
+  it('ignores a stale startup snapshot after a graph event arrives first', async () => {
+    let releaseStartupSnapshot: (value: { tasks: ReturnType<typeof makeUITask>[]; workflows: unknown[]; streamSequence: number }) => void;
+    let taskGraphEventHandler: ((event: unknown) => void) | undefined;
+    const startupSnapshot = new Promise<{ tasks: ReturnType<typeof makeUITask>[]; workflows: unknown[]; streamSequence: number }>((resolve) => {
+      releaseStartupSnapshot = resolve;
+    });
+    const liveTask = makeUITask({ id: 'live-1', description: 'Live task' });
     (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
-      tasks: [bootTask],
-      workflows: [{ id: 'wf-1', name: 'WF 1', status: 'running' }],
+      tasks: [],
+      workflows: [],
     };
     (window as unknown as { invoker: Record<string, unknown> }).invoker = {
-      getTasks,
-      onTaskDelta: vi.fn(() => () => {}),
+      getTasks: vi.fn().mockReturnValue(startupSnapshot),
+      onTaskGraphEvent: vi.fn((cb: (event: unknown) => void) => {
+        taskGraphEventHandler = cb;
+        return () => {};
+      }),
       onWorkflowsChanged: vi.fn(() => () => {}),
     };
 
     const { result } = renderHook(() => useTasks());
 
-    expect(getTasks).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(taskGraphEventHandler).toBeDefined();
+    });
 
     await act(async () => {
-      result.current.refreshTasks(true);
+      taskGraphEventHandler!({
+        type: 'snapshot',
+        tasks: [liveTask],
+        workflows: [],
+        reason: 'test-live-snapshot',
+        streamSequence: 7,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 130));
     });
 
     await waitFor(() => {
-      expect(getTasks).toHaveBeenCalledTimes(1);
-      expect(getTasks).toHaveBeenLastCalledWith(true);
+      expect(result.current.tasks.get('live-1')?.description).toBe('Live task');
     });
+
+    await act(async () => {
+      releaseStartupSnapshot!({ tasks: [], workflows: [], streamSequence: 0 });
+    });
+
+    expect(result.current.tasks.get('live-1')?.description).toBe('Live task');
+    expect(result.current.tasks.size).toBe(1);
+  });
+
+  it('forced refresh after a hydrated bootstrap requests a graph refresh and waits for the snapshot event', async () => {
+    const bootTask = makeUITask({ id: 'boot-1', description: 'Boot' });
+    const refreshedTask = makeUITask({ id: 'refreshed-1', description: 'Refreshed' });
+    let taskGraphEventHandler: ((event: unknown) => void) | undefined;
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
+      tasks: [bootTask],
+      workflows: [{ id: 'wf-1', name: 'WF 1', status: 'running' }],
+    };
+    const refreshTaskGraph = vi.fn(async () => {
+      taskGraphEventHandler?.({
+        type: 'snapshot',
+        tasks: [refreshedTask],
+        workflows: [],
+        reason: 'test-refresh',
+        streamSequence: 0,
+      });
+    });
+    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
+      getTasks: vi.fn().mockResolvedValue({ tasks: [bootTask], workflows: [] }),
+      refreshTaskGraph,
+      onTaskGraphEvent: vi.fn((cb: (event: unknown) => void) => {
+        taskGraphEventHandler = cb;
+        return () => {};
+      }),
+      onWorkflowsChanged: vi.fn(() => () => {}),
+    };
+
+    const { result } = renderHook(() => useTasks());
+
+    expect(refreshTaskGraph).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await result.current.refreshTaskGraph();
+    });
+
+    expect(refreshTaskGraph).toHaveBeenCalledTimes(1);
 
     await waitFor(() => {
       expect(result.current.tasks.has('refreshed-1')).toBe(true);
@@ -242,56 +296,74 @@ describe('useTasks', () => {
     });
   });
 
-  it('non-forced refresh after a hydrated bootstrap still calls getTasks and replaces state', async () => {
-    const bootTask = makeUITask({ id: 'boot-1', description: 'Boot' });
-    const updated = makeUITask({ id: 'boot-1', description: 'Updated' });
-    const getTasks = vi.fn().mockResolvedValue({ tasks: [updated], workflows: [] });
+
+  it('forced refresh calls refreshTaskGraph instead of getTasks', async () => {
+    const getTasks = vi.fn().mockResolvedValue({ tasks: [], workflows: [] });
+    const refreshTaskGraph = vi.fn(async () => {});
     (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
-      tasks: [bootTask],
-      workflows: [{ id: 'wf-1', name: 'WF 1', status: 'running' }],
+      tasks: [makeUITask({ id: 'boot-1' })],
+      workflows: [],
     };
     (window as unknown as { invoker: Record<string, unknown> }).invoker = {
       getTasks,
-      onTaskDelta: vi.fn(() => () => {}),
+      refreshTaskGraph,
+      onTaskGraphEvent: vi.fn(() => () => {}),
       onWorkflowsChanged: vi.fn(() => () => {}),
     };
 
     const { result } = renderHook(() => useTasks());
 
-    expect(getTasks).not.toHaveBeenCalled();
-
     await act(async () => {
-      result.current.refreshTasks();
+      await result.current.refreshTaskGraph();
     });
 
     await waitFor(() => {
-      expect(getTasks).toHaveBeenCalledTimes(1);
-      expect(getTasks).toHaveBeenLastCalledWith(false);
-    });
-
-    await waitFor(() => {
-      expect(result.current.tasks.get('boot-1')?.description).toBe('Updated');
-      expect(result.current.workflows.size).toBe(0);
+      expect(refreshTaskGraph).toHaveBeenCalledTimes(1);
+      expect(getTasks).not.toHaveBeenCalled();
     });
   });
 
-  it('passes forceRefresh flag to getTasks when requested', async () => {
+  it('refreshes workflow metadata via listWorkflows when a created delta introduces a new workflow', async () => {
+    let taskGraphEventHandler: ((event: unknown) => void) | undefined;
     const getTasks = vi.fn().mockResolvedValue({ tasks: [], workflows: [] });
+    const listWorkflows = vi.fn().mockResolvedValue([
+      { id: 'wf-2', name: 'Workflow 2', status: 'running' },
+    ]);
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
+      tasks: [makeUITask({ id: 'boot-1', description: 'Boot task' })],
+      workflows: [],
+    };
     (window as unknown as { invoker: Record<string, unknown> }).invoker = {
       getTasks,
-      onTaskDelta: vi.fn(() => () => {}),
+      listWorkflows,
+      onTaskGraphEvent: vi.fn((cb: (event: unknown) => void) => {
+        taskGraphEventHandler = cb;
+        return () => {};
+      }),
       onWorkflowsChanged: vi.fn(() => () => {}),
     };
 
     const { result } = renderHook(() => useTasks());
 
+    await waitFor(() => {
+      expect(taskGraphEventHandler).toBeDefined();
+    });
+
     await act(async () => {
-      result.current.refreshTasks(true);
+      taskGraphEventHandler!({
+        type: 'delta',
+        delta: {
+          type: 'created',
+          task: makeUITask({ id: 'wf-2/task-1', workflowId: 'wf-2', status: 'pending' }),
+        },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 130));
     });
 
     await waitFor(() => {
-      expect(getTasks).toHaveBeenCalled();
-      expect(getTasks).toHaveBeenLastCalledWith(true);
+      expect(listWorkflows).toHaveBeenCalledTimes(1);
+      expect(getTasks).not.toHaveBeenCalled();
+      expect(result.current.workflows.get('wf-2')?.name).toBe('Workflow 2');
     });
   });
 
@@ -307,8 +379,8 @@ describe('useTasks', () => {
         tasks: [taskA, taskB],
         workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'failed' }],
       }),
-      onTaskDelta: vi.fn((cb: (delta: unknown) => void) => {
-        taskDeltaHandler = cb;
+      onTaskGraphEvent: vi.fn((cb: (event: unknown) => void) => {
+        taskGraphEventHandler = cb;
         return () => {};
       }),
       onWorkflowsChanged: vi.fn((cb: (wfList: unknown[]) => void) => {
@@ -321,19 +393,25 @@ describe('useTasks', () => {
     expect(result.current.workflows.get('wf-1')?.status).toBe('failed');
 
     await act(async () => {
-      taskDeltaHandler!({
-        type: 'updated',
-        taskId: 'wf-1/task-a',
-        changes: { status: 'pending' },
-        taskStateVersion: 2,
-        previousTaskStateVersion: 1,
+      taskGraphEventHandler!({
+        type: 'delta',
+        delta: {
+          type: 'updated',
+          taskId: 'wf-1/task-a',
+          changes: { status: 'pending' },
+          taskStateVersion: 2,
+          previousTaskStateVersion: 1,
+        },
       });
-      taskDeltaHandler!({
-        type: 'updated',
-        taskId: 'wf-1/task-b',
-        changes: { status: 'pending' },
-        taskStateVersion: 2,
-        previousTaskStateVersion: 1,
+      taskGraphEventHandler!({
+        type: 'delta',
+        delta: {
+          type: 'updated',
+          taskId: 'wf-1/task-b',
+          changes: { status: 'pending' },
+          taskStateVersion: 2,
+          previousTaskStateVersion: 1,
+        },
       });
       await new Promise((resolve) => setTimeout(resolve, 110));
     });
@@ -406,8 +484,8 @@ describe('useTasks', () => {
         tasks: [failedTask, downstreamTask, mergeTask],
         workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'running' }],
       }),
-      onTaskDelta: vi.fn((cb: (delta: unknown) => void) => {
-        taskDeltaHandler = cb;
+      onTaskGraphEvent: vi.fn((cb: (event: unknown) => void) => {
+        taskGraphEventHandler = cb;
         return () => {};
       }),
       onWorkflowsChanged: vi.fn((cb: (wfList: unknown[]) => void) => {
@@ -420,12 +498,15 @@ describe('useTasks', () => {
     expect(result.current.workflows.get('wf-1')?.status).toBe('running');
 
     await act(async () => {
-      taskDeltaHandler!({
-        type: 'updated',
-        taskId: 'wf-1/add-regression-coverage',
-        changes: { status: 'failed' },
-        taskStateVersion: 2,
-        previousTaskStateVersion: 1,
+      taskGraphEventHandler!({
+        type: 'delta',
+        delta: {
+          type: 'updated',
+          taskId: 'wf-1/add-regression-coverage',
+          changes: { status: 'failed' },
+          taskStateVersion: 2,
+          previousTaskStateVersion: 1,
+        },
       });
       await new Promise((resolve) => setTimeout(resolve, 110));
     });

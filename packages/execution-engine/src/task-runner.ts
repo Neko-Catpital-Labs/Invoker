@@ -60,6 +60,7 @@ import {
 } from './pr-authoring.js';
 import { assertNotGitConfigMutation, ensureRemoteUrl } from './git-config-mutation.js';
 import { killProcessGroup, SIGKILL_TIMEOUT_MS } from './process-utils.js';
+import { retryTransientGitHubCli } from './git-utils.js';
 
 export type { TaskHeartbeatEvent, TaskRunnerCallbacks } from './task-runner-callbacks.js';
 
@@ -67,6 +68,7 @@ export type { TaskHeartbeatEvent, TaskRunnerCallbacks } from './task-runner-call
 const PRE_START_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_EXECUTOR_START_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_GIT_OPERATION_TIMEOUT_MS = 15 * 60 * 1000;
+const GITHUB_TARGET_REPO_ENV = 'INVOKER_GITHUB_TARGET_REPO';
 
 type StartupFailureMetadata = {
   workspacePath?: string;
@@ -437,18 +439,19 @@ export class TaskRunner {
   /**
    * Stop the executor child for a task that is currently in-flight (after orchestrator.cancelTask).
    */
-  async killActiveExecution(taskId: string): Promise<void> {
+  async killActiveExecution(taskId: string): Promise<boolean> {
     const resolved = this.resolveActiveExecution(taskId);
-    if (!resolved) return;
+    if (!resolved) return false;
     this.activeExecutions.delete(resolved.attemptId);
     if (resolved.entry.leaseResourceKey && resolved.entry.leaseHolderId) {
       this.persistence.releaseExecutionResourceLease?.(resolved.entry.leaseResourceKey, resolved.entry.leaseHolderId);
     }
     try {
       await resolved.entry.executor.kill(resolved.entry.handle);
-    } catch {
-      /* process may already have exited */
+    } catch (killErr) {
+      this.logger.warn(`[TaskRunner] killActiveExecution failed for task=${taskId}`, { err: killErr });
     }
+    return true;
   }
 
   private loadLatestAttemptId(taskId: string): string | undefined {
@@ -471,7 +474,6 @@ export class TaskRunner {
     if (selectedAttemptId) {
       const entry = this.activeExecutions.get(selectedAttemptId);
       if (entry) return { attemptId: selectedAttemptId, entry };
-      return undefined;
     }
 
     const latestAttemptId = this.loadLatestAttemptId(taskId);
@@ -1978,8 +1980,8 @@ export class TaskRunner {
       ? resolve(process.env.INVOKER_DB_DIR)
       : resolve(homedir(), '.invoker');
     const mergeCloneRoot = resolve(invokerHomeRoot, 'merge-clones');
-    const clonePath = resolve(mergeCloneRoot, `${label}-${Date.now()}`);
     mkdirSync(mergeCloneRoot, { recursive: true });
+    const clonePath = mkdtempSync(resolve(mergeCloneRoot, `${label}-`));
 
     // Determine clone source: prefer pool mirror (has latest remote refs), fall back to host repo
     let cloneSource: string = this.cwd;
@@ -2181,25 +2183,74 @@ export class TaskRunner {
   /** @internal */ async execPr(baseBranch: string, featureBranch: string, title: string, body?: string, cwd?: string): Promise<string> {
     const ghBase = normalizeBranchForGithubCli(baseBranch);
     const ghHead = normalizeBranchForGithubCli(featureBranch);
+    const effectiveCwd = cwd ?? this.cwd;
+    const targetRepo = await this.resolveGithubTargetRepo(effectiveCwd);
+    const repoOwner = targetRepo.split('/')[0];
 
-    const listOutput = await this.execGh([
-      'pr', 'list', '--head', ghHead, '--base', ghBase,
-      '--state', 'open', '--json', 'url,number', '--limit', '1',
-    ], cwd);
+    const listOutput = await retryTransientGitHubCli(() => this.execGh([
+      'api', `repos/${targetRepo}/pulls`,
+      '--method', 'GET',
+      '-f', `head=${repoOwner}:${ghHead}`,
+      '-f', 'state=open',
+      '-f', 'per_page=1',
+    ], effectiveCwd));
 
-    const existing: Array<{ url: string; number: number }> = JSON.parse(listOutput || '[]');
+    const existing: Array<{ html_url?: string; url?: string; number: number }> = JSON.parse(listOutput || '[]');
     if (existing.length > 0) {
       const pr = existing[0];
-      const editArgs = ['pr', 'edit', String(pr.number), '--title', title];
-      if (body) editArgs.push('--body', body);
-      await this.execGh(editArgs, cwd);
-      return pr.url;
+      const editArgs = [
+        'api', `repos/${targetRepo}/pulls/${pr.number}`,
+        '--method', 'PATCH',
+        '-f', `base=${ghBase}`,
+        '-f', `title=${title}`,
+      ];
+      if (body) editArgs.push('-f', `body=${body}`);
+      await retryTransientGitHubCli(() => this.execGh(editArgs, effectiveCwd));
+      return pr.html_url ?? pr.url ?? '';
     }
 
-    return this.execGh([
-      'pr', 'create', '--base', ghBase,
-      '--head', ghHead, '--title', title, '--body', body ?? '',
-    ], cwd);
+    const createOutput = await this.execGh([
+      'api', `repos/${targetRepo}/pulls`,
+      '--method', 'POST',
+      '-f', `base=${ghBase}`,
+      '-f', `head=${ghHead}`,
+      '-f', `title=${title}`,
+      '-f', `body=${body ?? ''}`,
+    ], effectiveCwd);
+    try {
+      const pr = JSON.parse(createOutput) as { html_url?: string; url?: string };
+      return pr.html_url ?? pr.url ?? createOutput;
+    } catch {
+      return createOutput;
+    }
+  }
+
+  private async resolveGithubTargetRepo(cwd: string): Promise<string> {
+    const explicitTarget = process.env[GITHUB_TARGET_REPO_ENV]?.trim();
+    if (explicitTarget) {
+      if (/^[^/\s]+\/[^/\s]+$/.test(explicitTarget)) return explicitTarget;
+      throw new Error(
+        `Invalid ${GITHUB_TARGET_REPO_ENV}="${explicitTarget}". Expected format "owner/repo".`,
+      );
+    }
+
+    try {
+      const url = await this.execGitIn(['remote', 'get-url', 'origin'], cwd);
+      const parsed = this.parseGitHubRepoNwo(url);
+      if (parsed) return parsed;
+    } catch {
+      // fall through
+    }
+
+    throw new Error(
+      'Unable to resolve GitHub target repo. ' +
+      `Set ${GITHUB_TARGET_REPO_ENV}=owner/repo or configure a parseable origin GitHub remote.`,
+    );
+  }
+
+  private parseGitHubRepoNwo(url: string): string | undefined {
+    const m = url.trim().match(/github\.com[:/]([^/]+\/[^/.]+?)(?:\.git)?\/?$/i);
+    return m?.[1];
   }
 
   // ── Experiment Branch Merging ────────────────────────────

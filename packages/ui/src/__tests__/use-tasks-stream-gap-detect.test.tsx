@@ -15,10 +15,11 @@ function installInvoker(opts: {
 }): {
   getTasksMock: ReturnType<typeof vi.fn>;
   reportUiPerfMock: ReturnType<typeof vi.fn>;
-  onTaskDeltaMock: ReturnType<typeof vi.fn>;
+  onTaskGraphEventMock: ReturnType<typeof vi.fn>;
+  refreshTaskGraphMock: ReturnType<typeof vi.fn>;
   fireDelta: (delta: unknown) => void;
 } {
-  let handler: ((delta: unknown) => void) | undefined;
+  let handler: ((event: unknown) => void) | undefined;
 
   (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = opts.bootstrap
     ? { tasks: opts.bootstrap.tasks, workflows: [], streamSequence: opts.bootstrap.streamSequence }
@@ -28,15 +29,28 @@ function installInvoker(opts: {
   const lastResponse = opts.responses[opts.responses.length - 1];
   const getTasksMock = vi.fn(async () => queue.shift() ?? lastResponse);
   const reportUiPerfMock = vi.fn();
-  const onTaskDeltaMock = vi.fn((cb: (delta: unknown) => void) => {
+  const refreshTaskGraphMock = vi.fn(async () => {
+    const response = queue.shift() ?? lastResponse;
+    queueMicrotask(() => {
+      handler?.({
+        type: 'snapshot',
+        tasks: response.tasks,
+        workflows: response.workflows,
+        reason: 'test-refresh',
+        streamSequence: response.streamSequence,
+      });
+    });
+  });
+  const onTaskGraphEventMock = vi.fn((cb: (event: unknown) => void) => {
     handler = cb;
     return () => { handler = undefined; };
   });
 
   (window as unknown as { invoker: Record<string, unknown> }).invoker = {
     getTasks: getTasksMock,
+    refreshTaskGraph: refreshTaskGraphMock,
     reportUiPerf: reportUiPerfMock,
-    onTaskDelta: onTaskDeltaMock,
+    onTaskGraphEvent: onTaskGraphEventMock,
     onWorkflowsChanged: vi.fn(() => () => {}),
     checkPrStatuses: vi.fn(async () => {}),
   };
@@ -44,8 +58,9 @@ function installInvoker(opts: {
   return {
     getTasksMock,
     reportUiPerfMock,
-    onTaskDeltaMock,
-    fireDelta: (delta) => handler?.(delta),
+    onTaskGraphEventMock,
+    refreshTaskGraphMock,
+    fireDelta: (delta) => handler?.({ type: 'delta', delta }),
   };
 }
 
@@ -64,7 +79,7 @@ describe('useTasks stream-sequence gap-detect', () => {
     const t2 = makeUITask({ id: 't2', status: 'pending' });
     const t3 = makeUITask({ id: 't3', status: 'pending' });
 
-    const { getTasksMock, reportUiPerfMock, onTaskDeltaMock, fireDelta } = installInvoker({
+    const { getTasksMock, reportUiPerfMock, onTaskGraphEventMock, fireDelta } = installInvoker({
       bootstrap: { tasks: [t1, t2, t3], streamSequence: 0 },
       responses: [{ tasks: [t1, t2, t3], workflows: [], streamSequence: 0 }],
     });
@@ -72,7 +87,7 @@ describe('useTasks stream-sequence gap-detect', () => {
     const { result } = renderHook(() => useTasks());
 
     await waitFor(() => {
-      expect(onTaskDeltaMock).toHaveBeenCalledTimes(1);
+      expect(onTaskGraphEventMock).toHaveBeenCalledTimes(1);
     });
     expect(getTasksMock).not.toHaveBeenCalled();
 
@@ -90,7 +105,7 @@ describe('useTasks stream-sequence gap-detect', () => {
     expect(reportUiPerfMock.mock.calls.filter((c) => c[0] === 'ui_delta_stream_gap_detected')).toHaveLength(0);
   });
 
-  it('detects a 1,2,4 gap and triggers exactly one re-sync via getTasks(true)', async () => {
+  it('detects a 1,2,4 gap and triggers exactly one re-sync via refreshTaskGraph', async () => {
     const initial = [
       makeUITask({ id: 't1', status: 'pending' }),
       makeUITask({ id: 't2', status: 'pending' }),
@@ -102,7 +117,7 @@ describe('useTasks stream-sequence gap-detect', () => {
       makeUITask({ id: 't3', status: 'running' }),
     ];
 
-    const { getTasksMock, reportUiPerfMock, onTaskDeltaMock, fireDelta } = installInvoker({
+    const { getTasksMock, refreshTaskGraphMock, reportUiPerfMock, onTaskGraphEventMock, fireDelta } = installInvoker({
       bootstrap: { tasks: initial, streamSequence: 0 },
       responses: [
         { tasks: post, workflows: [], streamSequence: 4 },
@@ -112,7 +127,7 @@ describe('useTasks stream-sequence gap-detect', () => {
     const { result } = renderHook(() => useTasks());
 
     await waitFor(() => {
-      expect(onTaskDeltaMock).toHaveBeenCalledTimes(1);
+      expect(onTaskGraphEventMock).toHaveBeenCalledTimes(1);
     });
     expect(getTasksMock).not.toHaveBeenCalled();
 
@@ -124,8 +139,8 @@ describe('useTasks stream-sequence gap-detect', () => {
     });
 
     await waitFor(() => {
-      expect(getTasksMock).toHaveBeenCalledTimes(1);
-      expect(getTasksMock).toHaveBeenLastCalledWith(true);
+      expect(refreshTaskGraphMock).toHaveBeenCalledTimes(1);
+      expect(getTasksMock).not.toHaveBeenCalled();
     });
 
     const gapReports = reportUiPerfMock.mock.calls.filter((c) => c[0] === 'ui_delta_stream_gap_detected');
@@ -143,7 +158,7 @@ describe('useTasks stream-sequence gap-detect', () => {
     const initial = [makeUITask({ id: 't1', status: 'pending' })];
     const post = [makeUITask({ id: 't1', status: 'completed' })];
 
-    const { getTasksMock, onTaskDeltaMock, fireDelta } = installInvoker({
+    const { getTasksMock, refreshTaskGraphMock, onTaskGraphEventMock, fireDelta } = installInvoker({
       bootstrap: { tasks: initial, streamSequence: 0 },
       responses: [
         { tasks: post, workflows: [], streamSequence: 10 },
@@ -153,7 +168,7 @@ describe('useTasks stream-sequence gap-detect', () => {
     const { result } = renderHook(() => useTasks());
 
     await waitFor(() => {
-      expect(onTaskDeltaMock).toHaveBeenCalledTimes(1);
+      expect(onTaskGraphEventMock).toHaveBeenCalledTimes(1);
     });
     expect(getTasksMock).not.toHaveBeenCalled();
 
@@ -164,7 +179,7 @@ describe('useTasks stream-sequence gap-detect', () => {
     });
 
     await waitFor(() => {
-      expect(getTasksMock).toHaveBeenCalledTimes(1);
+      expect(refreshTaskGraphMock).toHaveBeenCalledTimes(1);
       expect(result.current.tasks.get('t1')?.status).toBe('completed');
     });
 
@@ -174,14 +189,14 @@ describe('useTasks stream-sequence gap-detect', () => {
     });
 
     expect(result.current.tasks.get('t1')?.status).toBe('completed');
-    expect(getTasksMock).toHaveBeenCalledTimes(1);
+    expect(refreshTaskGraphMock).toHaveBeenCalledTimes(1);
   });
 
   it('triggers only ONE re-sync when multiple gaps arrive in quick succession', async () => {
     const initial = [makeUITask({ id: 't1', status: 'pending' })];
     const post = [makeUITask({ id: 't1', status: 'completed' })];
 
-    const { getTasksMock, reportUiPerfMock, onTaskDeltaMock, fireDelta } = installInvoker({
+    const { getTasksMock, refreshTaskGraphMock, reportUiPerfMock, onTaskGraphEventMock, fireDelta } = installInvoker({
       bootstrap: { tasks: initial, streamSequence: 0 },
       responses: [
         { tasks: post, workflows: [], streamSequence: 100 },
@@ -191,7 +206,7 @@ describe('useTasks stream-sequence gap-detect', () => {
     renderHook(() => useTasks());
 
     await waitFor(() => {
-      expect(onTaskDeltaMock).toHaveBeenCalledTimes(1);
+      expect(onTaskGraphEventMock).toHaveBeenCalledTimes(1);
     });
     expect(getTasksMock).not.toHaveBeenCalled();
 
@@ -202,7 +217,7 @@ describe('useTasks stream-sequence gap-detect', () => {
       await new Promise((resolve) => setTimeout(resolve, 150));
     });
 
-    expect(getTasksMock).toHaveBeenCalledTimes(1);
+    expect(refreshTaskGraphMock).toHaveBeenCalledTimes(1);
     const gapReports = reportUiPerfMock.mock.calls.filter((c) => c[0] === 'ui_delta_stream_gap_detected');
     expect(gapReports).toHaveLength(1);
   });
@@ -210,7 +225,7 @@ describe('useTasks stream-sequence gap-detect', () => {
   it('skips gap-check for deltas without a streamSequence (backward compatibility)', async () => {
     const t1 = makeUITask({ id: 't1', status: 'pending' });
 
-    const { getTasksMock, reportUiPerfMock, onTaskDeltaMock, fireDelta } = installInvoker({
+    const { getTasksMock, reportUiPerfMock, onTaskGraphEventMock, fireDelta } = installInvoker({
       bootstrap: { tasks: [t1], streamSequence: 0 },
       responses: [{ tasks: [t1], workflows: [], streamSequence: 0 }],
     });
@@ -218,7 +233,7 @@ describe('useTasks stream-sequence gap-detect', () => {
     const { result } = renderHook(() => useTasks());
 
     await waitFor(() => {
-      expect(onTaskDeltaMock).toHaveBeenCalledTimes(1);
+      expect(onTaskGraphEventMock).toHaveBeenCalledTimes(1);
     });
     expect(getTasksMock).not.toHaveBeenCalled();
 

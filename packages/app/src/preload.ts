@@ -52,7 +52,7 @@ if (process.env.NODE_ENV === 'test') {
 // Event channels: each becomes (cb) => { subscribe; return unsubscribe }
 for (const channel of Object.keys(IpcEventChannels)) {
   const method = channelToEventMethod(channel);
-  if (channel === 'invoker:task-delta') {
+  if (channel === 'invoker:task-graph-event') {
     api[method] = (cb: (...args: unknown[]) => void) => {
       const pendingBatchItems: unknown[] = [];
       let drainTimer: ReturnType<typeof setTimeout> | null = null;
@@ -67,6 +67,7 @@ for (const channel of Object.keys(IpcEventChannels)) {
         }
       };
       const singleHandler = (_event: Electron.IpcRendererEvent, ...data: unknown[]) => cb(...data);
+      const batchChannel = `${channel}-batch`;
       const batchHandler = (_event: Electron.IpcRendererEvent, batch: unknown[]) => {
         if (!Array.isArray(batch)) return;
         pendingBatchItems.push(...batch);
@@ -75,10 +76,10 @@ for (const channel of Object.keys(IpcEventChannels)) {
         }
       };
       ipcRenderer.on(channel, singleHandler);
-      ipcRenderer.on('invoker:task-delta-batch', batchHandler);
+      ipcRenderer.on(batchChannel, batchHandler);
       return () => {
         ipcRenderer.removeListener(channel, singleHandler);
-        ipcRenderer.removeListener('invoker:task-delta-batch', batchHandler);
+        ipcRenderer.removeListener(batchChannel, batchHandler);
         if (drainTimer) {
           clearTimeout(drainTimer);
           drainTimer = null;

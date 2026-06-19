@@ -3,7 +3,9 @@
  *
  * Covers the renderer-side acceptance criteria for the
  * `implement-terminal-drawer-tabs` task:
- *   - opening a terminal expands the drawer
+ *   - the drawer has three explicit states: minimized, partial, maximized
+ *   - opening a terminal puts the drawer in the partial state
+ *   - the single cycling button advances minimized → partial → maximized → minimized
  *   - the same task id reuses a single tab
  *   - failures from openTerminal surface as an alert
  */
@@ -132,15 +134,17 @@ describe('Terminal drawer (component)', () => {
     vi.restoreAllMocks();
   });
 
-  it('starts collapsed with no terminal pane visible', async () => {
+  it('starts minimized: header is shown but no terminal body', async () => {
     render(<App />);
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Expand terminal drawer' })).toBeInTheDocument();
+      // From minimized, the single button's next action is "Partial".
+      expect(screen.getByRole('button', { name: 'Partial terminal drawer' })).toBeInTheDocument();
     });
+    expect(screen.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'minimized');
     expect(screen.queryByTestId('terminal-drawer-body')).not.toBeInTheDocument();
   });
 
-  it('expands the drawer and adds a tab when opening a terminal via double-click', async () => {
+  it('opens the drawer in the partial state (not maximized) when opening a terminal via double-click', async () => {
     render(<App />);
     act(() => mock.setTasks([taskAlpha, taskBeta], workflows));
     await selectWorkflow();
@@ -148,11 +152,42 @@ describe('Terminal drawer (component)', () => {
     fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Collapse terminal drawer' })).toBeInTheDocument();
+      // Partial drawer's next action is "Maximize".
+      expect(screen.getByRole('button', { name: 'Maximize terminal drawer' })).toBeInTheDocument();
       expect(screen.getByTestId('terminal-drawer-body')).toBeInTheDocument();
       expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
     });
+    const drawer = screen.getByTestId('terminal-drawer');
+    expect(drawer).toHaveAttribute('data-state', 'partial');
+    expect(drawer).not.toHaveClass('fixed');
+    // Partial keeps today's 280px body height.
+    expect(screen.getByTestId('terminal-drawer-body')).toHaveStyle({ height: '280px' });
     expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha');
+  });
+
+  it('cycles minimized → partial → maximized → minimized via the single button', async () => {
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    const drawer = screen.getByTestId('terminal-drawer');
+    expect(drawer).toHaveAttribute('data-state', 'minimized');
+
+    // minimized → partial
+    fireEvent.click(screen.getByRole('button', { name: 'Partial terminal drawer' }));
+    expect(drawer).toHaveAttribute('data-state', 'partial');
+    expect(screen.getByTestId('terminal-drawer-body')).toHaveStyle({ height: '280px' });
+
+    // partial → maximized: body covers app content via fixed inset positioning.
+    fireEvent.click(screen.getByRole('button', { name: 'Maximize terminal drawer' }));
+    expect(drawer).toHaveAttribute('data-state', 'maximized');
+    expect(drawer).toHaveClass('fixed');
+    expect(screen.getByTestId('terminal-drawer-body')).toBeInTheDocument();
+
+    // maximized → minimized: body flattens away.
+    fireEvent.click(screen.getByRole('button', { name: 'Minimize terminal drawer' }));
+    expect(drawer).toHaveAttribute('data-state', 'minimized');
+    expect(screen.queryByTestId('terminal-drawer-body')).not.toBeInTheDocument();
   });
 
   it('reuses an existing tab when opening the same task twice', async () => {
@@ -165,12 +200,16 @@ describe('Terminal drawer (component)', () => {
       expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
     });
 
-    // Collapse, then re-open — should not duplicate the tab.
-    fireEvent.click(screen.getByRole('button', { name: 'Collapse terminal drawer' }));
+    // Minimize (cycle partial → maximized → minimized), then re-open —
+    // should not duplicate the tab.
+    fireEvent.click(screen.getByRole('button', { name: 'Maximize terminal drawer' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Minimize terminal drawer' }));
+    expect(screen.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'minimized');
+
     fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Collapse terminal drawer' })).toBeInTheDocument();
+      expect(screen.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'partial');
     });
     const tabs = screen.getAllByTestId('terminal-tab-task-alpha');
     expect(tabs).toHaveLength(1);
@@ -204,9 +243,9 @@ describe('Terminal drawer (component)', () => {
     fireEvent.doubleClick(screen.getByTestId('rf__node-task-beta'));
     await waitFor(() => expect(screen.getByTestId('terminal-tab-task-beta')).toBeInTheDocument());
 
-    // Tab strip and toggle live in the same flex row so the toggle stays visible.
+    // Tab strip and cycle button live in the same flex row so the control stays visible.
     const tabStrip = screen.getByTestId('terminal-tab-strip');
-    const toggle = screen.getByRole('button', { name: 'Collapse terminal drawer' });
+    const toggle = screen.getByRole('button', { name: 'Maximize terminal drawer' });
     expect(tabStrip).toBeInTheDocument();
     expect(toggle).toBeInTheDocument();
     expect(tabStrip.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -241,7 +280,8 @@ describe('Terminal drawer (component)', () => {
     fireEvent.click(openTerminalItem);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Collapse terminal drawer' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Maximize terminal drawer' })).toBeInTheDocument();
+      expect(screen.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'partial');
       expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
     });
     expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha');
@@ -305,7 +345,7 @@ describe('Terminal drawer (component)', () => {
     expect(xtermMock.writeLog).toEqual(['replayed once\n']);
   });
 
-  it('keeps live output, input, resize, close, tab selection, and preview wiring intact', async () => {
+  it('keeps live output, input, resize, close, and tab selection intact without a preview row', async () => {
     (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockImplementation(async (taskId: string) => ({
       opened: true,
       session: makeTerminalSession(taskId, {
@@ -345,8 +385,9 @@ describe('Terminal drawer (component)', () => {
     });
     await waitFor(() => {
       expect(xtermMock.writeLog).toContain('alpha live output\n');
-      expect(screen.getByTestId('terminal-session-output-preview')).toHaveTextContent('alpha live output');
     });
+    // The duplicate preview row is gone; live output only reaches the xterm pane.
+    expect(screen.queryByTestId('terminal-session-output-preview')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Close terminal for Alpha description' }));
     await waitFor(() => {

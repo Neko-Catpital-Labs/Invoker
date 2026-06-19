@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { IpcMain } from 'electron';
 import { TransportError, TransportErrorCode } from '@invoker/transport';
 import {
+  createGuiMutationRegistrars,
   registerBootstrapStateIpc,
   registerGuiMutationHandler,
   registerWorkflowScopedGuiMutationHandler,
@@ -173,6 +174,50 @@ describe('ipc-registration', () => {
         args: ['task-1'],
       },
     ]);
+  });
+
+  it('creates typed registrars that preserve channel registration outputs', async () => {
+    const { ipcMain, handleHandlers } = createFakeIpcMain();
+    const guiMutationHandlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+    const workflowMutationDispatcher = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+    const runWorkflowMutation = vi.fn(async (_workflowId, _priority, _channel, _args, op) => op());
+    const guiContext: GuiMutationRegistrationContext = {
+      ipcMain,
+      getOwnerMode: () => true,
+      getMessageBus: () => ({ request: vi.fn() }),
+      translateGuiMutationToHeadless: vi.fn(),
+      guiMutationHandlers,
+    };
+    const workflowContext: WorkflowScopedGuiMutationRegistrationContext = {
+      ...guiContext,
+      workflowMutationDispatcher,
+      runWorkflowMutation,
+    };
+
+    const {
+      registerGuiMutationHandler: registerGui,
+      registerWorkflowScopedGuiMutationHandler: registerWorkflowScoped,
+    } = createGuiMutationRegistrars(guiContext, workflowContext);
+
+    registerGui('invoker:plain', async (value) => `plain:${String(value)}`);
+    registerWorkflowScoped(
+      'invoker:scoped',
+      (taskId) => `wf:${String(taskId)}`,
+      'normal',
+      async (value) => `scoped:${String(value)}`,
+    );
+
+    await expect(handleHandlers.get('invoker:plain')?.({}, 'a')).resolves.toBe('plain:a');
+    await expect(handleHandlers.get('invoker:scoped')?.({}, 'task-1')).resolves.toBe('scoped:task-1');
+    expect([...guiMutationHandlers.keys()]).toEqual(['invoker:plain', 'invoker:scoped']);
+    expect([...workflowMutationDispatcher.keys()]).toEqual(['invoker:scoped']);
+    expect(runWorkflowMutation).toHaveBeenCalledWith(
+      'wf:task-1',
+      'normal',
+      'invoker:scoped',
+      ['task-1'],
+      expect.any(Function),
+    );
   });
 
   it('registers bootstrap sync IPC with unchanged payload fields', () => {

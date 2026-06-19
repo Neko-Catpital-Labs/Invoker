@@ -507,7 +507,7 @@ test.describe('Visual proof capture', () => {
     await assertPageScreenshot(page, 'task-panel');
   });
 
-  test('embedded-tabbed-terminal — drawer expands with active task tab', async ({ page, testDir }) => {
+  test('embedded-tabbed-terminal — drawer opens partial with active task tab', async ({ page, testDir }) => {
     await loadPlan(page, TEST_PLAN);
 
     // Materialise a real workspace dir so the main-process executor can resolve
@@ -527,16 +527,16 @@ test.describe('Visual proof capture', () => {
       },
     ]);
 
-    // Drawer starts collapsed.
-    await expect(page.getByRole('button', { name: 'Expand terminal drawer' })).toBeVisible();
+    // Drawer starts minimized.
+    await expect(page.getByRole('button', { name: 'Partial terminal drawer' })).toBeVisible();
     await expect(page.getByTestId('terminal-drawer-body')).toHaveCount(0);
 
     const taskCard = page.locator('[title$="task-alpha"]').first();
     await expect(taskCard).toBeVisible({ timeout: 10000 });
     await taskCard.dispatchEvent('dblclick');
 
-    // Drawer expands; one active tab for task-alpha; terminal pane rendered.
-    await expect(page.getByRole('button', { name: 'Collapse terminal drawer' })).toBeVisible({ timeout: 10000 });
+    // Drawer opens partial; one active tab for task-alpha; terminal pane rendered.
+    await expect(page.getByRole('button', { name: 'Maximize terminal drawer' })).toBeVisible({ timeout: 10000 });
     await expect(page.getByTestId('terminal-drawer-body')).toBeVisible();
     const tabs = page.getByTestId('terminal-tab-strip').locator('[data-testid^="terminal-tab-"]');
     await expect(tabs).toHaveCount(1);
@@ -767,6 +767,48 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByRole('link', { name: reviewUrl })).toHaveAttribute('href', reviewUrl);
 
     await captureScreenshot(page, 'review-ready-workflow-pr-sidebar');
+  });
+
+  test('sidebar keyboard navigation focuses the first inspector item, not the container', async ({ page }) => {
+    const workflowId = await loadPlanAndSelectWorkflow(page, REVIEW_READY_WORKFLOW_PR_PLAN);
+    await page.locator('.react-flow__node[data-testid$="rr-work"]').first().waitFor({ state: 'visible', timeout: 15000 });
+
+    const reviewUrl = 'https://github.com/Neko-Catpital-Labs/Invoker/pull/729';
+    await injectTaskStates(page, [
+      {
+        taskId: 'rr-work',
+        changes: {
+          status: 'completed',
+          execution: { startedAt: new Date(Date.now() - 5000), completedAt: new Date() },
+        },
+      },
+      {
+        taskId: `__merge__${workflowId}`,
+        changes: {
+          status: 'review_ready',
+          execution: { startedAt: new Date(Date.now() - 3000), reviewUrl },
+        },
+      },
+    ]);
+
+    await workflowNode(page, workflowId).dispatchEvent('click', { bubbles: true });
+    await expect(page.getByTestId('inspector-pr-link')).toHaveAttribute('href', reviewUrl);
+
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Tab');
+
+    const inspectorRegion = page.locator('[data-keyboard-region="inspector"]');
+    const minimize = page.getByRole('button', { name: 'Minimize inspector' });
+    await expect(minimize).toBeFocused({ timeout: 5000 });
+    const isMarkedNavItem = await minimize.evaluate((el) => el.hasAttribute('data-sidebar-nav-item'));
+    expect(isMarkedNavItem).toBe(true);
+    await expect(minimize).toHaveAttribute('data-sidebar-nav-order', '10');
+    const regionFocused = await inspectorRegion.evaluate(
+      (el) => el === document.activeElement,
+    );
+    expect(regionFocused).toBe(false);
+
+    await captureScreenshot(page, 'sidebar-keyboard-first-item-focused');
   });
 
   test('interactive-status-hues — fixing-with-ai, needs-input, awaiting-approval', async ({ page }) => {
@@ -1644,13 +1686,11 @@ test.describe('Visual proof capture', () => {
     const terminalSessionId = 'visual-proof-ssh-session';
     const sshInnerCommand = `cd '${workspacePath}' && codex resume --dangerously-bypass-approvals-and-sandbox ${sessionId}`;
     const sshArgs = ['-i', '/tmp/e2e_id_rsa', '-t', 'invoker@remote-do-1', sshInnerCommand];
-    const terminalOutput = [
-      '$ ssh -i /tmp/e2e_id_rsa -t invoker@remote-do-1\r\n',
+    const outputSnapshot = [
       'Connection established: remote-do-1\r\n',
-      `$ ${sshInnerCommand}\r\n`,
       `Resumed Codex session ${sessionId}\r\n`,
-      'Terminal stream ready for input.\r\n',
     ].join('');
+    const terminalOutput = 'Terminal stream ready for input.\r\n';
 
     await injectTaskStates(page, [
       {
@@ -1671,7 +1711,7 @@ test.describe('Visual proof capture', () => {
       },
     ]);
 
-    await page.evaluate(({ args, cwd, terminalId }) => {
+    await page.evaluate(({ args, cwd, terminalId, outputSnapshot }) => {
       (window as unknown as { __terminalCalls: string[] }).__terminalCalls = [];
       (window as unknown as { __terminalOutputSubscribers: Array<(event: { sessionId: string; taskId: string; data: string }) => void> }).__terminalOutputSubscribers = [];
       window.__INVOKER_TEST_OPEN_TERMINAL__ = async (taskId: string) => {
@@ -1687,6 +1727,7 @@ test.describe('Visual proof capture', () => {
             args,
             mode: 'spawn',
             attached: false,
+            outputSnapshot,
             createdAt: '2025-01-01T00:00:00.000Z',
           },
         };
@@ -1699,7 +1740,7 @@ test.describe('Visual proof capture', () => {
           if (index >= 0) subscribers.splice(index, 1);
         };
       };
-    }, { args: sshArgs, cwd: workspacePath, terminalId: terminalSessionId });
+    }, { args: sshArgs, cwd: workspacePath, terminalId: terminalSessionId, outputSnapshot });
 
     const sshTaskNode = page
       .getByTestId('selected-workflow-mini-dag')
@@ -1733,7 +1774,16 @@ test.describe('Visual proof capture', () => {
     await expect(terminalPane.getByText('Connection established: remote-do-1')).toBeVisible();
     await expect(terminalPane.getByText(`Resumed Codex session ${sessionId}`)).toBeVisible();
     await expect(terminalPane.getByText('Terminal stream ready for input.')).toBeVisible();
-    await expect(page.getByTestId('terminal-session-output-preview')).toContainText('Terminal stream ready for input.');
+
+    const outputPreviewLabel = page
+      .getByTestId('terminal-drawer-body')
+      .getByText('output', { exact: true });
+    if (process.env.CAPTURE_MODE === 'before') {
+      await expect(outputPreviewLabel).toBeVisible();
+    } else {
+      await expect(outputPreviewLabel).toHaveCount(0);
+    }
+    await expect(page.getByTestId('terminal-session-output-preview')).toHaveCount(0);
 
     const calls = await page.evaluate(() => (window as unknown as { __terminalCalls: string[] }).__terminalCalls);
     expect(calls).toHaveLength(1);

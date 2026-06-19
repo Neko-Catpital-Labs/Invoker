@@ -8,17 +8,33 @@
  * requiring a real terminal backing.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { Terminal as XTermTerminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 const DRAWER_BODY_HEIGHT_PX = 280;
-const ANSI_PATTERN = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+
+/**
+ * The drawer has one explicit state model:
+ *   - `minimized`: only the header/tab strip; no terminal body.
+ *   - `partial`: today's expanded drawer with a fixed 280px body.
+ *   - `maximized`: the drawer covers all app content (graph + side panels)
+ *     from under the title bar to the bottom of the window.
+ * A single button cycles minimized → partial → maximized → minimized.
+ */
+export type TerminalDrawerState = 'minimized' | 'partial' | 'maximized';
+
+/** Label/next-state for the single cycling button, keyed by current state. */
+const NEXT_STATE_BY_STATE: Record<TerminalDrawerState, { next: TerminalDrawerState; label: string }> = {
+  minimized: { next: 'partial', label: 'Partial' },
+  partial: { next: 'maximized', label: 'Maximize' },
+  maximized: { next: 'minimized', label: 'Minimize' },
+};
 
 interface TerminalDrawerProps {
-  collapsed: boolean;
-  onToggle: () => void;
+  state: TerminalDrawerState;
+  onCycle: () => void;
   sessions: TerminalSessionDescriptor[];
   activeSessionId: string | null;
   onSelectSession: (sessionId: string) => void;
@@ -31,7 +47,6 @@ interface TerminalSessionPaneProps {
   session: TerminalSessionDescriptor;
   isActive: boolean;
   hasHeader: boolean;
-  onOutput: (sessionId: string, data: string) => void;
 }
 
 type SeededOutputSnapshot = {
@@ -39,12 +54,6 @@ type SeededOutputSnapshot = {
   snapshot: string;
   term: XTermTerminal;
 };
-
-function lastNonEmptyLine(data: string): string {
-  const clean = data.replace(ANSI_PATTERN, '').replace(/\r/g, '\n');
-  const lines = clean.split('\n').map((line) => line.trim()).filter(Boolean);
-  return lines.at(-1) ?? '';
-}
 
 function seedTerminalOutputSnapshot(
   term: XTermTerminal,
@@ -78,7 +87,7 @@ function seedTerminalOutputSnapshot(
   }
 }
 
-function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: TerminalSessionPaneProps): JSX.Element {
+function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPaneProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -117,7 +126,6 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
     const subscribeToOutput = window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__ ?? window.invoker?.onTerminalOutput;
     const unsubscribeOutput = subscribeToOutput?.((event) => {
       if (event.sessionId !== session.sessionId) return;
-      onOutput(session.sessionId, event.data);
       try {
         term.write(event.data);
       } catch {
@@ -165,7 +173,7 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
       termRef.current = null;
       fitRef.current = null;
     };
-  }, [onOutput, session.sessionId]);
+  }, [session.sessionId]);
 
   useEffect(() => {
     const term = termRef.current;
@@ -192,42 +200,38 @@ function TerminalSessionPane({ session, isActive, hasHeader, onOutput }: Termina
       ref={containerRef}
       data-testid={`terminal-pane-${session.taskId}`}
       data-session-id={session.sessionId}
-      className={hasHeader ? 'absolute bottom-0 left-0 right-0 top-14' : 'absolute inset-0'}
+      className={hasHeader ? 'absolute bottom-0 left-0 right-0 top-9' : 'absolute inset-0'}
       style={{ display: isActive ? 'block' : 'none' }}
     />
   );
 }
 
 export function TerminalDrawer({
-  collapsed,
-  onToggle,
+  state,
+  onCycle,
   sessions,
   activeSessionId,
   onSelectSession,
   onCloseSession,
   taskLabels,
 }: TerminalDrawerProps): JSX.Element {
-  const [latestOutputBySession, setLatestOutputBySession] = useState<Map<string, string>>(() => new Map());
+  const isMaximized = state === 'maximized';
+  const showBody = state !== 'minimized';
+  const cycleLabel = NEXT_STATE_BY_STATE[state].label;
   const activeSession = sessions.find((session) => session.sessionId === activeSessionId) ?? null;
   const activeCommand = activeSession?.command
     ? [activeSession.command, ...(activeSession.args ?? [])].join(' ')
     : null;
-  const activeOutput = activeSession ? latestOutputBySession.get(activeSession.sessionId) ?? null : null;
-
-  const handleOutput = useCallback((sessionId: string, data: string) => {
-    const line = lastNonEmptyLine(data);
-    if (!line) return;
-    setLatestOutputBySession((previous) => {
-      const next = new Map(previous);
-      next.set(sessionId, line);
-      return next;
-    });
-  }, []);
 
   return (
     <div
       data-testid="terminal-drawer"
-      className="border-t border-gray-800 bg-gray-950"
+      data-state={state}
+      className={
+        isMaximized
+          ? 'fixed inset-0 z-40 flex flex-col border-t border-gray-800 bg-gray-950'
+          : 'border-t border-gray-800 bg-gray-950'
+      }
     >
       <div className="flex items-center gap-2 border-b border-gray-800 px-3 py-2">
         <div
@@ -282,18 +286,18 @@ export function TerminalDrawer({
         </div>
         <button
           type="button"
-          onClick={onToggle}
-          aria-label={collapsed ? 'Expand terminal drawer' : 'Collapse terminal drawer'}
+          onClick={onCycle}
+          aria-label={`${cycleLabel} terminal drawer`}
           className="shrink-0 rounded border border-gray-700 px-2 py-1 text-[11px] text-gray-300 hover:bg-gray-800"
         >
-          {collapsed ? 'Expand' : 'Minimize'}
+          {cycleLabel}
         </button>
       </div>
-      {!collapsed && (
+      {showBody && (
         <div
           data-testid="terminal-drawer-body"
-          className="relative bg-black"
-          style={{ height: DRAWER_BODY_HEIGHT_PX }}
+          className={isMaximized ? 'relative flex-1 bg-black' : 'relative bg-black'}
+          style={isMaximized ? undefined : { height: DRAWER_BODY_HEIGHT_PX }}
         >
           {sessions.length === 0 && (
             <div className="absolute inset-0 flex items-center justify-center px-3 text-xs text-gray-500">
@@ -303,22 +307,12 @@ export function TerminalDrawer({
           {activeSession && activeCommand && (
             <div
               data-testid="terminal-session-command"
-              className="absolute left-0 right-0 top-0 z-10 flex h-14 flex-col justify-center gap-1 border-b border-gray-800 bg-gray-950 px-3 text-[11px]"
+              className="absolute left-0 right-0 top-0 z-10 flex h-9 items-center gap-2 border-b border-gray-800 bg-gray-950 px-3 text-[11px]"
             >
-              <div className="flex min-w-0 items-center gap-2">
-                <span className="text-gray-500">SSH</span>
-                <span className="min-w-0 flex-1 truncate font-mono text-emerald-200">
-                  {activeCommand}
-                </span>
-              </div>
-              {activeOutput && (
-                <div className="flex min-w-0 items-center gap-2" data-testid="terminal-session-output-preview">
-                  <span className="text-gray-500">output</span>
-                  <span className="min-w-0 flex-1 truncate font-mono text-sky-200">
-                    {activeOutput}
-                  </span>
-                </div>
-              )}
+              <span className="text-gray-500">SSH</span>
+              <span className="min-w-0 flex-1 truncate font-mono text-emerald-200">
+                {activeCommand}
+              </span>
             </div>
           )}
           {sessions.map((session) => (
@@ -327,7 +321,6 @@ export function TerminalDrawer({
               session={session}
               isActive={session.sessionId === activeSessionId}
               hasHeader={Boolean(session.sessionId === activeSessionId && activeCommand)}
-              onOutput={handleOutput}
             />
           ))}
         </div>
