@@ -9,12 +9,7 @@ import type { Orchestrator } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { TaskRunner } from '@invoker/execution-engine';
 import {
-  bumpGenerationAndRecreate,
-  recreateWorkflow,
-  recreateTask,
   cancelWorkflow,
-  retryTask,
-  retryWorkflow,
   recreateWorkflowFromFreshBase,
   rebaseRetry,
   rebaseRecreate,
@@ -65,167 +60,23 @@ function makeRunningTask(overrides: Record<string, unknown> = {}) {
 
 // ── Tests ────────────────────────────────────────────────────
 
-describe('bumpGenerationAndRecreate', () => {
-  let orchestrator: { recreateWorkflow: ReturnType<typeof vi.fn> };
-  let persistence: {
-    loadWorkflow: ReturnType<typeof vi.fn>;
-    updateWorkflow: ReturnType<typeof vi.fn>;
-  };
 
-  beforeEach(() => {
-    orchestrator = {
-      recreateWorkflow: vi.fn(() => [makeRunningTask()]),
-    };
-    persistence = {
-      loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 2 })),
-      updateWorkflow: vi.fn(),
-    };
-  });
-
-  it('loads workflow, bumps generation, calls orchestrator.recreateWorkflow', () => {
-    const result = bumpGenerationAndRecreate('wf-1', {
-      persistence: persistence as unknown as SQLiteAdapter,
-      orchestrator: orchestrator as unknown as Orchestrator,
-    });
-
-    expect(persistence.loadWorkflow).toHaveBeenCalledWith('wf-1');
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 3 });
-    expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
-    expect(result).toHaveLength(1);
-    expect(result[0].status).toBe('running');
-  });
-
-  it('throws when workflow not found', () => {
-    persistence.loadWorkflow.mockReturnValue(undefined);
-    expect(() =>
-      bumpGenerationAndRecreate('missing', {
-        persistence: persistence as unknown as SQLiteAdapter,
-        orchestrator: orchestrator as unknown as Orchestrator,
-      }),
-    ).toThrow('Workflow missing not found');
-  });
-
-  it('handles undefined generation (defaults to 0 + 1 = 1)', () => {
-    persistence.loadWorkflow.mockReturnValue({ id: 'wf-1' });
-    bumpGenerationAndRecreate('wf-1', {
-      persistence: persistence as unknown as SQLiteAdapter,
-      orchestrator: orchestrator as unknown as Orchestrator,
-    });
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 1 });
-  });
-});
-
-describe('recreateWorkflow', () => {
-  it('delegates to bumpGenerationAndRecreate', () => {
-    const orchestrator = { recreateWorkflow: vi.fn(() => [makeRunningTask()]) };
-    const persistence = {
-      loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 0 })),
-      updateWorkflow: vi.fn(),
-    };
-
-    const result = recreateWorkflow('wf-1', {
-      persistence: persistence as unknown as SQLiteAdapter,
-      orchestrator: orchestrator as unknown as Orchestrator,
-    });
-
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 1 });
-    expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
-    expect(result).toHaveLength(1);
-  });
-});
-
-describe('recreateTask', () => {
-  it('delegates to orchestrator.recreateTask', () => {
-    const orchestrator = {
-      recreateTask: vi.fn(() => [makeRunningTask()]),
-    };
-    const persistence = {
-      loadWorkflow: vi.fn(),
-      updateWorkflow: vi.fn(),
-    };
-
-    const result = recreateTask('task-a', {
-      persistence: persistence as unknown as SQLiteAdapter,
-      orchestrator: orchestrator as unknown as Orchestrator,
-    });
-
-    expect(orchestrator.recreateTask).toHaveBeenCalledWith('task-a');
-    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
-    expect(result).toHaveLength(1);
-  });
-
-  it('passes through orchestrator errors', () => {
-    const orchestrator = {
-      recreateTask: vi.fn(() => {
-        throw new Error('Task missing-task not found');
-      }),
-    };
-    const persistence = {
-      loadWorkflow: vi.fn(),
-      updateWorkflow: vi.fn(),
-    };
-
-    expect(() =>
-      recreateTask('missing-task', {
-        persistence: persistence as unknown as SQLiteAdapter,
-        orchestrator: orchestrator as unknown as Orchestrator,
-      }),
-    ).toThrow('Task missing-task not found');
-  });
-});
-
-describe('cancelWorkflow', () => {
-  it('delegates to orchestrator.cancelWorkflow', () => {
-    const orchestrator = {
-      cancelWorkflow: vi.fn(() => ({ cancelled: ['task-a'], runningCancelled: ['task-a'] })),
-    };
-
-    const result = cancelWorkflow('wf-1', {
-      orchestrator: orchestrator as unknown as Orchestrator,
-    });
-
-    expect(orchestrator.cancelWorkflow).toHaveBeenCalledWith('wf-1');
-    expect(result).toEqual({ cancelled: ['task-a'], runningCancelled: ['task-a'] });
-  });
-});
-
-describe('retryTask', () => {
-  it('calls orchestrator.retryTask and returns result', () => {
-    const tasks = [makeRunningTask()];
-    const orchestrator = { retryTask: vi.fn(() => tasks) };
-
-    const result = retryTask('task-a', {
-      orchestrator: orchestrator as unknown as Orchestrator,
-    });
-
-    expect(orchestrator.retryTask).toHaveBeenCalledWith('task-a');
-    expect(result).toBe(tasks);
-  });
-});
-
-describe('retryWorkflow', () => {
-  it('calls orchestrator.retryWorkflow and returns result', () => {
-    const tasks = [makeRunningTask()];
-    const orchestrator = { retryWorkflow: vi.fn(() => tasks) };
-
-    const result = retryWorkflow('wf-1', {
-      orchestrator: orchestrator as unknown as Orchestrator,
-    });
-
-    expect(orchestrator.retryWorkflow).toHaveBeenCalledWith('wf-1');
-    expect(result).toBe(tasks);
-  });
-});
-
-describe('recreateWorkflowFromFreshBase', () => {
-  it('bumps generation and delegates to orchestrator.recreateWorkflowFromFreshBase with refreshBase callback', async () => {
+function makeCommandService() {
+  return {
+    runSerializedForWorkflow: vi.fn(async (_workflowId: string | undefined, fn: () => Promise<unknown> | unknown) => ({
+      ok: true as const,
+      data: await fn(),
+    })),
+  } as any;
+}
+describe('fresh-base workflow lifecycle helpers', () => {
+  it('routes recreateWorkflowFromFreshBase through CommandService/applyInvalidation', async () => {
     const tasks = [makeRunningTask()];
     const orchestrator = {
-      recreateWorkflowFromFreshBase: vi.fn(async (_id: string, opts?: { refreshBase?: () => Promise<unknown> }) => {
-        // Drive the refresh callback so we exercise pool prep wiring.
-        await opts?.refreshBase?.();
-        return tasks;
-      }),
+      getTask: vi.fn(),
+      cancelWorkflow: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+      recreateWorkflowFromFreshBase: vi.fn(async () => tasks),
+      cascadeInvalidationToDownstream: vi.fn(() => []),
     };
     const persistence = {
       loadWorkflow: vi.fn(() => ({
@@ -238,49 +89,60 @@ describe('recreateWorkflowFromFreshBase', () => {
     };
     const taskExecutor = {
       preparePoolForRebaseRetry: vi.fn(async () => undefined),
+      killActiveExecution: vi.fn(async () => undefined),
     } as unknown as TaskRunner;
+    const commandService = makeCommandService();
 
     const result = await recreateWorkflowFromFreshBase('wf-1', {
+      commandService,
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor,
     });
 
+    expect(commandService.runSerializedForWorkflow).toHaveBeenCalledWith('wf-1', expect.any(Function));
     expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 5 });
-    expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledTimes(1);
     expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(
       'wf-1',
       expect.objectContaining({ refreshBase: expect.any(Function) }),
     );
-    // The whole reason this wrapper exists vs plain recreateWorkflow:
-    // the refreshBase callback runs preparePoolForRebaseRetry.
     expect(taskExecutor.preparePoolForRebaseRetry).toHaveBeenCalledWith(
       'wf-1',
       'https://example/repo.git',
       'main',
     );
+    expect(orchestrator.cascadeInvalidationToDownstream).toHaveBeenCalledWith('wf-1');
     expect(result).toBe(tasks);
   });
 
-  it('throws when workflow not found', async () => {
-    const orchestrator = { recreateWorkflowFromFreshBase: vi.fn(async () => []) };
+  it('throws when workflow not found before direct primitive use', async () => {
+    const commandService = makeCommandService();
+    const orchestrator = {
+      cancelWorkflow: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+      recreateWorkflowFromFreshBase: vi.fn(async () => []),
+      cascadeInvalidationToDownstream: vi.fn(() => []),
+    };
     const persistence = { loadWorkflow: vi.fn(() => undefined), updateWorkflow: vi.fn() };
 
     await expect(
       recreateWorkflowFromFreshBase('missing', {
+        commandService,
         orchestrator: orchestrator as unknown as Orchestrator,
         persistence: persistence as unknown as SQLiteAdapter,
       }),
     ).rejects.toThrow('Workflow missing not found');
+    expect(orchestrator.recreateWorkflowFromFreshBase).not.toHaveBeenCalled();
   });
 });
 
 describe('rebaseRetry', () => {
-  it('translates target → workflowId, prepares fresh base, and delegates to retryWorkflow', async () => {
+  it('serializes through CommandService and cascades after retryWorkflow', async () => {
     const tasks = [makeRunningTask()];
     const orchestrator = {
       getTask: vi.fn(() => makeTask({ config: { workflowId: 'wf-1' } })),
+      cancelWorkflow: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
       retryWorkflow: vi.fn(() => tasks),
+      cascadeInvalidationToDownstream: vi.fn(() => []),
     };
     const persistence = {
       loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 1, repoUrl: 'https://example/repo.git', baseBranch: 'master' })),
@@ -288,14 +150,23 @@ describe('rebaseRetry', () => {
       loadTasks: vi.fn(() => []),
       updateWorkflow: vi.fn(),
     };
+    const taskExecutor = {
+      preparePoolForRebaseRetry: vi.fn(async () => undefined),
+      killActiveExecution: vi.fn(async () => undefined),
+    } as unknown as TaskRunner;
+    const commandService = makeCommandService();
 
     const result = await rebaseRetry('wf-1/task-a', {
+      commandService,
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor,
     });
 
+    expect(commandService.runSerializedForWorkflow).toHaveBeenCalledWith('wf-1', expect.any(Function));
+    expect(taskExecutor.preparePoolForRebaseRetry).toHaveBeenCalled();
     expect(orchestrator.retryWorkflow).toHaveBeenCalledWith('wf-1');
-    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
+    expect(orchestrator.cascadeInvalidationToDownstream).toHaveBeenCalledWith('wf-1');
     expect(result).toBe(tasks);
   });
 
@@ -308,6 +179,7 @@ describe('rebaseRetry', () => {
 
     await expect(
       rebaseRetry('missing-task', {
+        commandService: makeCommandService(),
         orchestrator: orchestrator as unknown as Orchestrator,
         persistence: persistence as unknown as SQLiteAdapter,
       }),
@@ -316,11 +188,13 @@ describe('rebaseRetry', () => {
 });
 
 describe('rebaseRecreate', () => {
-  it('prepares fresh base, then delegates to recreateWorkflow', async () => {
+  it('serializes through CommandService and cascades fresh-base recreate', async () => {
     const tasks = [makeRunningTask()];
     const orchestrator = {
       getTask: vi.fn(() => undefined),
-      recreateWorkflow: vi.fn(() => tasks),
+      cancelWorkflow: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+      recreateWorkflowFromFreshBase: vi.fn(async () => tasks),
+      cascadeInvalidationToDownstream: vi.fn(() => []),
     };
     const persistence = {
       loadWorkflow: vi.fn(() => ({
@@ -335,30 +209,34 @@ describe('rebaseRecreate', () => {
     };
     const taskExecutor = {
       preparePoolForRebaseRetry: vi.fn(async () => undefined),
+      killActiveExecution: vi.fn(async () => undefined),
     } as unknown as TaskRunner;
+    const commandService = makeCommandService();
 
     const result = await rebaseRecreate('wf-1', {
+      commandService,
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor,
     });
 
+    expect(commandService.runSerializedForWorkflow).toHaveBeenCalledWith('wf-1', expect.any(Function));
     expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 3 });
-    expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
-    expect(taskExecutor.preparePoolForRebaseRetry).toHaveBeenCalledWith(
+    expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(
       'wf-1',
-      'https://example/repo.git',
-      'main',
+      expect.objectContaining({ refreshBase: expect.any(Function) }),
     );
+    expect(orchestrator.cascadeInvalidationToDownstream).toHaveBeenCalledWith('wf-1');
     expect(result).toBe(tasks);
   });
 
   it('throws when workflow not found', async () => {
-    const orchestrator = { getTask: vi.fn(() => undefined), recreateWorkflow: vi.fn(() => []) };
+    const orchestrator = { getTask: vi.fn(() => undefined), recreateWorkflowFromFreshBase: vi.fn(async () => []) };
     const persistence = { loadWorkflow: vi.fn(() => undefined), listWorkflows: vi.fn(() => []), loadTasks: vi.fn(() => []), updateWorkflow: vi.fn() };
 
     await expect(
       rebaseRecreate('missing', {
+        commandService: makeCommandService(),
         orchestrator: orchestrator as unknown as Orchestrator,
         persistence: persistence as unknown as SQLiteAdapter,
       }),
@@ -366,62 +244,14 @@ describe('rebaseRecreate', () => {
   });
 });
 
-// Step 17 (`docs/architecture/task-invalidation-roadmap.md` and the
-// chart's "Proposed API Direction"): pin the canonical
-// `{retry, recreate} × {task, workflow}` matrix at the
-// app-layer wrapper surface. This is the lock-in that prevents
-// future refactors from accidentally dropping any of the five
-// canonical lifecycle wrappers (or routing a new one through a
-// legacy compat layer like `restartTask`).
-describe('Step 17: app-layer wrappers expose the 5-cell lifecycle matrix', () => {
-  it('exports retryTask, recreateTask, retryWorkflow, recreateWorkflow, recreateWorkflowFromFreshBase', () => {
-    expect(typeof retryTask).toBe('function');
-    expect(typeof recreateTask).toBe('function');
-    expect(typeof retryWorkflow).toBe('function');
-    expect(typeof recreateWorkflow).toBe('function');
-    expect(typeof recreateWorkflowFromFreshBase).toBe('function');
-  });
-
-  it('each wrapper routes to the matching orchestrator primitive (no restartTask path)', async () => {
-    const orchestrator = {
-      retryTask: vi.fn(() => []),
-      recreateTask: vi.fn(() => []),
-      retryWorkflow: vi.fn(() => []),
-      recreateWorkflow: vi.fn(() => []),
-      recreateWorkflowFromFreshBase: vi.fn(async () => []),
-      restartTask: vi.fn(() => []),
-    };
-    const persistence = {
-      loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 0 })),
-      updateWorkflow: vi.fn(),
-    };
-
-    retryTask('task-a', { orchestrator: orchestrator as unknown as Orchestrator });
-    recreateTask('task-a', {
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-    });
-    retryWorkflow('wf-1', { orchestrator: orchestrator as unknown as Orchestrator });
-    recreateWorkflow('wf-1', {
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-    });
-    await recreateWorkflowFromFreshBase('wf-1', {
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-    });
-
-    expect(orchestrator.retryTask).toHaveBeenCalledWith('task-a');
-    expect(orchestrator.recreateTask).toHaveBeenCalledWith('task-a');
-    expect(orchestrator.retryWorkflow).toHaveBeenCalledWith('wf-1');
-    expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
-    expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(
-      'wf-1',
-      expect.objectContaining({ refreshBase: expect.any(Function) }),
-    );
-    // No production wrapper in the canonical matrix may route
-    // through the deprecated `restartTask` shim.
-    expect(orchestrator.restartTask).not.toHaveBeenCalled();
+describe('workflow lifecycle invariant', () => {
+  it('does not expose direct app-layer retry/recreate wrappers', async () => {
+    const actions = await import('../workflow-actions.js');
+    expect('retryTask' in actions).toBe(false);
+    expect('recreateTask' in actions).toBe(false);
+    expect('retryWorkflow' in actions).toBe(false);
+    expect('recreateWorkflow' in actions).toBe(false);
+    expect('bumpGenerationAndRecreate' in actions).toBe(false);
   });
 });
 
@@ -721,6 +551,8 @@ describe('autoFixOnFailure', () => {
         await options?.refreshBase?.();
         return started;
       }),
+      cancelWorkflow: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+      cascadeInvalidationToDownstream: vi.fn(() => []),
       retryTask: vi.fn(() => []),
       revertConflictResolution: vi.fn(),
     };
@@ -748,6 +580,7 @@ describe('autoFixOnFailure', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
     });
 
     expect(orchestrator.beginConflictResolution).not.toHaveBeenCalled();
@@ -776,6 +609,8 @@ describe('autoFixOnFailure', () => {
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
       retryTask: vi.fn(() => started),
+      cancelTask: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+      cascadeInvalidationToDownstream: vi.fn(() => []),
       revertConflictResolution: vi.fn(),
     };
     const persistence = {
@@ -793,6 +628,7 @@ describe('autoFixOnFailure', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
     });
 
     expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a');
@@ -830,6 +666,7 @@ describe('autoFixOnFailure', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
     });
 
     expect(orchestrator.beginConflictResolution).not.toHaveBeenCalled();
@@ -867,6 +704,8 @@ describe('autoFixOnFailure', () => {
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
       retryTask: vi.fn(() => started),
+      cancelTask: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+      cascadeInvalidationToDownstream: vi.fn(() => []),
       revertConflictResolution: vi.fn(),
     };
     const persistence = {
@@ -884,6 +723,7 @@ describe('autoFixOnFailure', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
     });
 
     expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a');
@@ -926,6 +766,7 @@ describe('autoFixOnFailure', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
     });
 
     expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'claude');
@@ -969,6 +810,7 @@ describe('autoFixOnFailure', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
       getAutoApproveAIFixes: () => true,
     });
 
@@ -1062,6 +904,7 @@ describe('autoFixOnFailure', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
       getAutoApproveAIFixes: () => true,
     });
 
@@ -1110,6 +953,7 @@ describe('autoFixOnFailure', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
       getAutoFixAgent: () => 'codex',
     });
 
@@ -1160,6 +1004,7 @@ describe('autoFixOnFailure', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
       getAutoFixAgent: () => '   ',
     });
 
@@ -1211,6 +1056,7 @@ describe('autoFixOnFailure', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
       getAutoFixAgent: () => undefined,
     });
 
@@ -1334,6 +1180,7 @@ describe('fixWithAgentAction', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
     }, {
       agentName: 'codex',
     });
@@ -1373,6 +1220,7 @@ describe('fixWithAgentAction', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
     }, {
       agentName: 'claude',
     });
@@ -1408,6 +1256,7 @@ describe('fixWithAgentAction', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
     }, {
       agentName: 'codex',
     });
@@ -1429,7 +1278,9 @@ describe('fixWithAgentAction', () => {
       })),
       loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 2 })),
       updateWorkflow: vi.fn(),
-      recreateWorkflowFromFreshBase: vi.fn(() => [makeRunningTask({ id: 'task-a', status: 'running' })]),
+      cancelWorkflow: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+      recreateWorkflowFromFreshBase: vi.fn(async () => [makeRunningTask({ id: 'task-a', status: 'running' })]),
+      cascadeInvalidationToDownstream: vi.fn(() => []),
     };
     const persistence = {
       appendTaskOutput: vi.fn(),
@@ -1444,6 +1295,7 @@ describe('fixWithAgentAction', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
     }, {
       recreateOutputLabel: 'Fix with AI',
     });
@@ -2301,6 +2153,7 @@ describe('fixWithAgentAction lineage guard', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
     })).rejects.toThrow(StaleLineageError);
 
     // Should NOT have called setFixAwaitingApproval (the late write)
@@ -2337,6 +2190,7 @@ describe('fixWithAgentAction lineage guard', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
     }, {
       signal: ac.signal,
     })).rejects.toThrow(StaleLineageError);
@@ -2381,6 +2235,7 @@ describe('fixWithAgentAction lineage guard', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
     })).rejects.toThrow(StaleLineageError);
 
     // revertConflictResolution must NOT be called when lineage is stale
@@ -2412,6 +2267,7 @@ describe('fixWithAgentAction lineage guard', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
     });
 
     // Normal path should proceed
@@ -2558,6 +2414,7 @@ describe('autoFixOnFailure lineage guard', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
     })).rejects.toThrow(StaleLineageError);
 
     expect(orchestrator.setFixAwaitingApproval).not.toHaveBeenCalled();
@@ -2611,6 +2468,7 @@ describe('autoFixOnFailure lineage guard', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
     })).rejects.toThrow(StaleLineageError);
 
     expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
@@ -2659,6 +2517,7 @@ describe('autoFixOnFailure lineage guard', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
       signal: ac.signal,
     })).rejects.toThrow(StaleLineageError);
 
