@@ -68,6 +68,21 @@ export function startGuiModeBootstrap(options: GuiModeBootstrapOptions): void {
   options.setupGuiMode();
 }
 
+export interface MainProcessBootstrapOptions {
+  isHeadless: boolean;
+  startHeadlessMode: () => void;
+  startGuiMode: () => void;
+}
+
+export function startMainProcessBootstrap(options: MainProcessBootstrapOptions): void {
+  if (options.isHeadless) {
+    options.startHeadlessMode();
+    return;
+  }
+
+  options.startGuiMode();
+}
+
 export interface GuiLifecycleHandlers {
   onWindowAllClosed: () => void;
   onBeforeQuit: (event: { preventDefault: () => void }) => void | Promise<void>;
