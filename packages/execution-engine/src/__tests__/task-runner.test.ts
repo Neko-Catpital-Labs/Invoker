@@ -454,14 +454,15 @@ describe('TaskRunner', () => {
     await Promise.all([oldExecution, selectedExecution]);
   });
 
-  it('does not kill an older active attempt when the selected attempt has no live execution', async () => {
+  it('kills an older active attempt when the selected attempt has no live execution', async () => {
     let completeCallback: ((response: WorkResponse) => void) | undefined;
-    const kill = vi.fn();
+    const kill = vi.fn().mockResolvedValue(undefined);
     const executorImpl = {
       type: 'worktree',
       start: vi.fn().mockImplementation(async (request: any) => ({
         executionId: `exec-${request.attemptId}`,
         taskId: request.actionId,
+        attemptId: request.attemptId,
         workspacePath: `/tmp/mock-worktree-${request.attemptId}`,
         branch: `experiment/${request.attemptId}-mock`,
       })),
@@ -504,8 +505,11 @@ describe('TaskRunner', () => {
     }));
     await vi.waitFor(() => expect(executorImpl.start).toHaveBeenCalledTimes(1));
 
-    await runner.killActiveExecution(currentTask.id);
-    expect(kill).not.toHaveBeenCalled();
+    await expect(runner.killActiveExecution(currentTask.id)).resolves.toBe(true);
+    expect(kill).toHaveBeenCalledWith(expect.objectContaining({
+      attemptId: 'stale-active-task-a1',
+      taskId: currentTask.id,
+    }));
 
     completeCallback?.({
       requestId: 'req-stale-active',

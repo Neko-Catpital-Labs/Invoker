@@ -40,6 +40,27 @@ export function requireWiredTaskRunner(getTaskRunner: () => TaskRunner | null): 
   return taskRunner;
 }
 
+export async function killRunningTaskExecution(deps: Pick<
+  TaskRunnerWiringDeps,
+  'getTaskRunner' | 'logger' | 'taskHandles'
+>, taskId: string): Promise<void> {
+  const taskRunner = deps.getTaskRunner();
+  const killedByTaskRunner = taskRunner
+    ? await taskRunner.killActiveExecution(taskId)
+    : false;
+  const entry = deps.taskHandles.get(taskId);
+  if (!killedByTaskRunner && !entry) return;
+  deps.logger.info(`Killing running task "${taskId}" before restart`, { module: 'kill' });
+  if (!killedByTaskRunner && entry) {
+    try {
+      await entry.executor.kill(entry.handle);
+    } catch {
+      /* process may already have exited */
+    }
+  }
+  deps.taskHandles.delete(taskId);
+}
+
 export function wireTaskRunnerApproveHook(deps: Pick<
   TaskRunnerWiringDeps,
   'orchestrator' | 'persistence' | 'getTaskRunner'

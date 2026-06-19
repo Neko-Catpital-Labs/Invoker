@@ -439,18 +439,19 @@ export class TaskRunner {
   /**
    * Stop the executor child for a task that is currently in-flight (after orchestrator.cancelTask).
    */
-  async killActiveExecution(taskId: string): Promise<void> {
+  async killActiveExecution(taskId: string): Promise<boolean> {
     const resolved = this.resolveActiveExecution(taskId);
-    if (!resolved) return;
+    if (!resolved) return false;
     this.activeExecutions.delete(resolved.attemptId);
     if (resolved.entry.leaseResourceKey && resolved.entry.leaseHolderId) {
       this.persistence.releaseExecutionResourceLease?.(resolved.entry.leaseResourceKey, resolved.entry.leaseHolderId);
     }
     try {
       await resolved.entry.executor.kill(resolved.entry.handle);
-    } catch {
-      /* process may already have exited */
+    } catch (killErr) {
+      this.logger.warn(`[TaskRunner] killActiveExecution failed for task=${taskId}`, { err: killErr });
     }
+    return true;
   }
 
   private loadLatestAttemptId(taskId: string): string | undefined {
@@ -473,7 +474,6 @@ export class TaskRunner {
     if (selectedAttemptId) {
       const entry = this.activeExecutions.get(selectedAttemptId);
       if (entry) return { attemptId: selectedAttemptId, entry };
-      return undefined;
     }
 
     const latestAttemptId = this.loadLatestAttemptId(taskId);
