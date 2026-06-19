@@ -2153,8 +2153,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
       `
       SELECT
         CASE
-          WHEN prompt IS NOT NULL AND TRIM(prompt) != '' THEN COALESCE(execution_agent, agent_name)
-          ELSE COALESCE(agent_name, execution_agent)
+          WHEN prompt IS NOT NULL AND TRIM(prompt) != '' THEN COALESCE(execution_agent, agent_name, last_agent_name)
+          ELSE COALESCE(agent_name, last_agent_name, execution_agent)
         END AS agent
       FROM tasks
       WHERE id = ?

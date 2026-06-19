@@ -1222,7 +1222,9 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
       status: string;
       runnerKind: string;
       agentSessionId?: string;
+      lastAgentSessionId?: string;
       agentName?: string;
+      lastAgentName?: string;
       workspacePath?: string;
     }>();
     return {
@@ -1239,8 +1241,14 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
       // Read side — what openExternalTerminalForTask calls
       getTaskStatus(taskId: string) { return store.get(taskId)?.status ?? null; },
       getRunnerKind(taskId: string) { return store.get(taskId)?.runnerKind ?? null; },
-      getAgentSessionId(taskId: string) { return store.get(taskId)?.agentSessionId ?? null; },
-      getExecutionAgent(taskId: string) { return store.get(taskId)?.agentName ?? null; },
+      getAgentSessionId(taskId: string) {
+        const row = store.get(taskId);
+        return row?.agentSessionId ?? row?.lastAgentSessionId ?? null;
+      },
+      getExecutionAgent(taskId: string) {
+        const row = store.get(taskId);
+        return row?.agentName ?? row?.lastAgentName ?? null;
+      },
       getContainerId() { return null; },
       getWorkspacePath(taskId: string) { return store.get(taskId)?.workspacePath ?? null; },
       getBranch() { return null; },
@@ -1288,6 +1296,42 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
     expect(spec.command).toBe('codex');
     expect(spec.args).toContain('resume');
     expect(spec.args).toContain('codex-sess-42');
+    expect(spec.command).not.toBe('claude');
+  });
+
+  it('completed command task with only last agent metadata launches codex resume', () => {
+    vi.mocked(existsSync).mockReturnValue(true);
+    const agentRegistry = registerBuiltinAgents();
+    const wt = new WorktreeExecutor({
+      worktreeBaseDir: '/tmp/wt',
+      cacheDir: '/tmp/cache',
+      agentRegistry,
+    });
+
+    const persistence = createMockPersistence();
+    persistence.store.set('task-completed-last-codex', {
+      status: 'completed',
+      runnerKind: 'worktree',
+      workspacePath: '/tmp/workspace',
+      lastAgentSessionId: 'codex-sess-last',
+      lastAgentName: 'codex',
+    });
+
+    const meta: PersistedTaskMeta = {
+      taskId: 'task-completed-last-codex',
+      runnerKind: persistence.getRunnerKind('task-completed-last-codex') ?? 'worktree',
+      agentSessionId: persistence.getAgentSessionId('task-completed-last-codex') ?? undefined,
+      executionAgent: persistence.getExecutionAgent('task-completed-last-codex') ?? undefined,
+      workspacePath: persistence.getWorkspacePath('task-completed-last-codex') ?? undefined,
+    };
+
+    expect(meta.executionAgent).toBe('codex');
+    expect(meta.agentSessionId).toBe('codex-sess-last');
+
+    const spec = wt.getRestoredTerminalSpec(meta);
+    expect(spec.command).toBe('codex');
+    expect(spec.args).toContain('resume');
+    expect(spec.args).toContain('codex-sess-last');
     expect(spec.command).not.toBe('claude');
   });
 
