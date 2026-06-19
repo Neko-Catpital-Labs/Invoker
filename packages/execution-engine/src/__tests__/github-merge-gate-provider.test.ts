@@ -64,8 +64,8 @@ describe('GitHubMergeGateProvider', () => {
         [
           'api', 'repos/Neko-Catpital-Labs/Invoker/pulls',
           '--method', 'GET',
-          '-f', 'head=Neko-Catpital-Labs:feature/test',
           '-f', 'state=open',
+          '-f', 'head=Neko-Catpital-Labs:feature/test',
           '-f', 'per_page=1',
         ],
         expect.anything(),
@@ -120,8 +120,8 @@ describe('GitHubMergeGateProvider', () => {
         [
           'api', 'repos/owner/repo/pulls',
           '--method', 'GET',
-          '-f', 'head=owner:feature/test',
           '-f', 'state=open',
+          '-f', 'head=owner:feature/test',
           '-f', 'per_page=1',
         ],
         expect.anything(),

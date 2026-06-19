@@ -201,13 +201,13 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
   ): Promise<ExistingPullRequest[]> {
     const owner = targetRepo.split('/')[0];
     if (!owner) throw new Error(`Invalid GitHub target repo "${targetRepo}". Expected format "owner/repo".`);
-    const output = await this.exec('gh', [
+    const output = await retryTransientGitHubCli(() => this.exec('gh', [
       'api', `repos/${targetRepo}/pulls`,
       '--method', 'GET',
       '-f', 'state=open',
       '-f', `head=${owner}:${ghHead}`,
       '-f', 'per_page=1',
-    ], cwd);
+    ], cwd));
     console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview restListOutput=${output}`);
     const pulls = JSON.parse(output) as Array<{ html_url?: string; url?: string; number: number }>;
     return pulls
