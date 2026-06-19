@@ -15,6 +15,7 @@ import { DISPATCH_MAX_ATTEMPTS, type Logger } from '@invoker/contracts';
 
 export type LaunchDispatcherPersistence = Pick<
   SQLiteAdapter,
+  | 'loadLaunchDispatchById'
   | 'markLaunchDispatchCompleted'
   | 'markLaunchDispatchFailed'
   | 'markLaunchDispatchAbandoned'
@@ -287,37 +288,13 @@ export class LaunchDispatcher {
     if (candidates.length === 0) return 0;
     let abandoned = 0;
     for (const row of candidates) {
-      const message =
-        `Launch dispatch abandoned after ${row.attemptsCount} attempt(s); ` +
-        `last error: ${row.lastError ?? 'no concrete error recorded'}`;
-      const ok = this.persistence.markLaunchDispatchAbandoned(row.id, message, nowIso);
-      if (!ok) continue;
+      const message = this.launchDispatchAbandonedMessage(
+        row,
+        row.lastError ?? 'no concrete error recorded',
+      );
+      if (!this.abandonDispatch(row, message, nowIso)) continue;
       abandoned += 1;
-      this.persistence.logEvent?.(row.taskId, 'task.failed', {
-        source: 'launch-dispatcher',
-        dispatchId: row.id,
-        attemptId: row.attemptId,
-        attemptsCount: row.attemptsCount,
-        error: message,
-      });
-      // CD.2 / Issue 14: release any execution-resource leases (SSH
-      // pool slots, worktree pool entries, etc.) the task acquired
-      // during executor selection but never released because the
-      // launch never completed. Without this, a launch abandoned
-      // during SSH selection leaves the pool slot reserved until its
-      // own lease expiry, which can starve the next launch.
-      this.releaseTaskResourceLeases(row.taskId, row.id);
-      try {
-        this.orchestrator?.prepareTaskForNewAttempt(row.taskId, 'launch-dispatch-abandoned');
-      } catch (err) {
-        this.logger?.warn?.('[launch-dispatcher] prepareTaskForNewAttempt failed', {
-          ownerId: this.ownerId,
-          taskId: row.taskId,
-          dispatchId: row.id,
-          error: err instanceof Error ? err.message : String(err),
-          module: 'launch-dispatcher',
-        });
-      }
+      this.recordAbandonedStuckLease(row, message);
     }
     if (abandoned > 0) {
       this.logger?.warn?.('[launch-dispatcher] abandoned', {
@@ -328,6 +305,52 @@ export class LaunchDispatcher {
       });
     }
     return abandoned;
+  }
+
+
+  private shouldAbandonAfterFastFailure(row: TaskLaunchDispatch): boolean {
+    const isTerminal = row.state === 'completed' || row.state === 'abandoned';
+    return !isTerminal && row.attemptsCount >= this.maxAttempts;
+  }
+
+  private launchDispatchAbandonedMessage(
+    row: Pick<TaskLaunchDispatch, 'attemptsCount'>,
+    lastError: string,
+  ): string {
+    return `Launch dispatch abandoned after ${row.attemptsCount} attempt(s); last error: ${lastError}`;
+  }
+
+  private abandonDispatch(row: TaskLaunchDispatch, message: string, nowIso?: string): boolean {
+    const accepted = this.persistence.markLaunchDispatchAbandoned(row.id, message, nowIso);
+    if (!accepted) return false;
+
+    this.releaseTaskResourceLeases(row.taskId, row.id);
+    return true;
+  }
+
+  private recordAbandonedStuckLease(row: TaskLaunchDispatch, message: string): void {
+    this.persistence.logEvent?.(row.taskId, 'task.failed', {
+      source: 'launch-dispatcher',
+      dispatchId: row.id,
+      attemptId: row.attemptId,
+      attemptsCount: row.attemptsCount,
+      error: message,
+    });
+    this.prepareTaskForNewAttempt(row.taskId, row.id);
+  }
+
+  private prepareTaskForNewAttempt(taskId: string, dispatchId: number): void {
+    try {
+      this.orchestrator?.prepareTaskForNewAttempt(taskId, 'launch-dispatch-abandoned');
+    } catch (err) {
+      this.logger?.warn?.('[launch-dispatcher] prepareTaskForNewAttempt failed', {
+        ownerId: this.ownerId,
+        taskId,
+        dispatchId,
+        error: err instanceof Error ? err.message : String(err),
+        module: 'launch-dispatcher',
+      });
+    }
   }
 
   /**
@@ -418,23 +441,41 @@ export class LaunchDispatcher {
   }
 
   /**
-   * Record a launch failure by re-enqueuing the dispatch row and storing
-   * the error message in `last_error`. The dispatcher's reaper /
-   * abandon-after-N-attempts logic decides whether to retry or abandon.
-   * Returns false when the row is already terminal.
+   * Record a launch failure. Normal failures are retried by re-enqueuing
+   * the row. A row that has already used its retry budget is abandoned
+   * instead. The TaskRunner still owns the task failure response, so this
+   * path must not prepare a fresh attempt here.
    */
   failDispatch(dispatchId: number, error: unknown): boolean {
     const message =
       error instanceof Error ? error.message : String(error ?? 'unknown launch error');
-    const ok = this.persistence.markLaunchDispatchFailed(dispatchId, message);
+    const row = this.persistence.loadLaunchDispatchById(dispatchId);
+
+    if (row && this.shouldAbandonAfterFastFailure(row)) {
+      const accepted = this.abandonDispatch(
+        row,
+        this.launchDispatchAbandonedMessage(row, message),
+      );
+      this.logger?.warn?.('[launch-dispatcher] abandoned after fast failures', {
+        ownerId: this.ownerId,
+        dispatchId,
+        attemptsCount: row.attemptsCount,
+        error: message,
+        accepted,
+        module: 'launch-dispatcher',
+      });
+      return accepted;
+    }
+
+    const accepted = this.persistence.markLaunchDispatchFailed(dispatchId, message);
     this.logger?.info?.('[launch-dispatcher] fail', {
       ownerId: this.ownerId,
       dispatchId,
       error: message,
-      accepted: ok,
+      accepted,
       module: 'launch-dispatcher',
     });
-    return ok;
+    return accepted;
   }
 }
 
