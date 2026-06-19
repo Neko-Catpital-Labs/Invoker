@@ -191,7 +191,12 @@ import {
 } from './global-topup.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import { evaluateExecutingStall } from './executing-stall.js';
-import { listOpenFixIntentsForTask } from './auto-fix-intents.js';
+import {
+  buildFixWithAgentMutationArgs,
+  buildHeadlessFixArgs,
+  listOpenFixIntentsForTask,
+  parseFixWithAgentMutationArgs,
+} from './auto-fix-intents.js';
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
 import {
   buildActionGraphDiagnostics,
@@ -1302,11 +1307,9 @@ if (isHeadless) {
           });
         }
         if (!workflowMutationDispatcher.has('invoker:fix-with-agent')) {
-          workflowMutationDispatcher.set('invoker:fix-with-agent', async (taskIdArg: unknown, agentNameArg?: unknown) => {
-            const args = ['fix', String(taskIdArg)];
-            if (typeof agentNameArg === 'string' && agentNameArg.length > 0) {
-              args.push(agentNameArg);
-            }
+          workflowMutationDispatcher.set('invoker:fix-with-agent', async (...fixArgs: unknown[]) => {
+            const { taskId, agentName, context } = parseFixWithAgentMutationArgs(fixArgs);
+            const args = buildHeadlessFixArgs(taskId, agentName, context);
             await runHeadless(args, {
               ...headlessDeps,
               waitForApproval: false,
@@ -1436,7 +1439,7 @@ if (isHeadless) {
             workflowId,
             'normal',
             'invoker:fix-with-agent',
-            [taskId, selectedAgent],
+            buildFixWithAgentMutationArgs(taskId, selectedAgent, { autoFix: true }),
           )
             .then(() => {
               logStandaloneAutoFixDebug(taskId, 'schedule-dispatch-finished');
@@ -2533,10 +2536,10 @@ function createEmbeddedTerminalBackendFromConfig(
         return arg1 === undefined
           ? { channel: 'headless.exec', request: { args: ['resolve-conflict', String(arg0)] } }
           : { channel: 'headless.exec', request: { args: ['resolve-conflict', String(arg0), String(arg1)] } };
-      case 'invoker:fix-with-agent':
-        return arg1 === undefined
-          ? { channel: 'headless.exec', request: { args: ['fix', String(arg0)] } }
-          : { channel: 'headless.exec', request: { args: ['fix', String(arg0), String(arg1)] } };
+      case 'invoker:fix-with-agent': {
+        const { taskId, agentName, context } = parseFixWithAgentMutationArgs(payload.args);
+        return { channel: 'headless.exec', request: { args: buildHeadlessFixArgs(taskId, agentName, context) } };
+      }
       case 'invoker:edit-task-command':
         return { channel: 'headless.exec', request: { args: ['set', 'command', String(arg0), String(arg1)] } };
       case 'invoker:edit-task-prompt':
