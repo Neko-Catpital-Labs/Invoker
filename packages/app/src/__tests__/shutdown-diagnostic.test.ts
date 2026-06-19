@@ -215,4 +215,36 @@ describe('persistShutdownDiagnostic', () => {
     expect(output).not.toContain('forcedStopReason=');
     expect(output).toContain('error=real error');
   });
+
+  it('preserves prior execution.error and recent output tail for executing-stall scenarios', () => {
+    // Executing-stall watchdog synthetically fails a stuck task with a coarse
+    // stall marker that overwrites task.execution.error via handleWorkerResponse.
+    // The diagnostic block is appended beforehand so the durable output retains
+    // the concrete test/output context that triggered the stall investigation.
+    const stallReason =
+      'Execution stalled: task remained in running/executing for 300s ' +
+      'without a live execution handle and no completion signal from executor (remote workload heartbeat stale).';
+    const task = makeTask({
+      status: 'running',
+      execution: { error: 'previously surfaced runtime error', exitCode: undefined },
+    });
+    const db = makeDb([
+      'PASS src/a.test.ts\n',
+      'FAIL src/b.test.ts > stalled-case\n',
+      '  Error: connection reset by peer\n',
+    ]);
+
+    persistShutdownDiagnostic(task, db, {
+      forcedStopReason: stallReason,
+      label: 'Execution Stall Diagnostic',
+    });
+
+    const output = db.appended[0];
+    expect(output).toContain('[Execution Stall Diagnostic]');
+    expect(output).toContain(`forcedStopReason=${stallReason}`);
+    expect(output).toContain('error=previously surfaced runtime error');
+    expect(output).toContain('FAIL src/b.test.ts > stalled-case');
+    expect(output).toContain('connection reset by peer');
+    expect(output).toContain('--- end shutdown diagnostic ---');
+  });
 });

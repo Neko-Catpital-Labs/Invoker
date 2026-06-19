@@ -2897,6 +2897,15 @@ function createEmbeddedTerminalBackendFromConfig(
                       },
                     };
                     logger.error(`[executing-stall] forcing failure for "${task.id}": ${executingError}`, { module: 'db-poll' });
+                    // Persist a diagnostic block before the synthetic failure
+                    // overwrites task.execution.error with the coarse stall
+                    // marker; preserves the recent output tail and prior error
+                    // state for post-mortem retrieval.
+                    persistShutdownDiagnostic(task, persistence, {
+                      flushPendingOutput: flushTaskOutput,
+                      forcedStopReason: executingError,
+                      label: 'Execution Stall Diagnostic',
+                    });
                     orchestrator.handleWorkerResponse(failedResponse);
                     continue;
                   }
