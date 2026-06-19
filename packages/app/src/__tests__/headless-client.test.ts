@@ -98,7 +98,7 @@ describe('headless-client', () => {
     }));
   });
 
-  it('does not use an existing non-standalone owner as a mutation target', async () => {
+  it('delegates mutations to an existing GUI owner', async () => {
     const firstBus = new LocalBus();
     const secondBus = new LocalBus();
     const guiOwnerHandler = vi.fn(async () => ({ ok: true }));
@@ -122,9 +122,10 @@ describe('headless-client', () => {
     });
 
     expect(exitCode).toBe(0);
-    expect(ensureStandaloneOwner).toHaveBeenCalledTimes(1);
-    expect(guiOwnerHandler).not.toHaveBeenCalled();
-    expect(daemonOwnerHandler).toHaveBeenCalledTimes(1);
+    expect(ensureStandaloneOwner).not.toHaveBeenCalled();
+    expect(refreshMessageBus).not.toHaveBeenCalled();
+    expect(guiOwnerHandler).toHaveBeenCalledTimes(1);
+    expect(daemonOwnerHandler).not.toHaveBeenCalled();
   });
 
   it('uses a longer no-track delegation timeout for an already-running standalone owner under load', async () => {
@@ -403,13 +404,13 @@ describe('headless-client', () => {
     expect(refreshMessageBus).toHaveBeenCalled();
   }, 15_000);
 
-  it('refreshes past a non-standalone owner before delegating a mutation', async () => {
+  it('refreshes past a non-mutation owner before delegating a mutation', async () => {
     const firstBus = new LocalBus();
     const secondBus = new LocalBus();
     const firstExecHandler = vi.fn(async () => ({ ok: true }));
     const secondExecHandler = vi.fn(async () => ({ ok: true }));
 
-    firstBus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
+    firstBus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'observer' }));
     firstBus.onRequest('headless.exec', firstExecHandler);
     secondBus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-2', mode: 'standalone' }));
     secondBus.onRequest('headless.exec', secondExecHandler);

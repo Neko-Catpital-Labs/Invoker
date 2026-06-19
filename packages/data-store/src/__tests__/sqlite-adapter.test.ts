@@ -1313,6 +1313,68 @@ describe('SQLiteAdapter', () => {
 
       expect(adapter.loadWorkflow('wf-1')!.externalDependencyChanges).toEqual(changes);
     });
+
+    it('round-trips detachedExternalDependencies provenance through save and load', () => {
+      const provenance = [
+        {
+          workflowId: 'wf-upstream',
+          taskId: '__merge__',
+          requiredStatus: 'completed' as const,
+          gatePolicy: 'review_ready' as const,
+          detachedAt: '2026-06-12T00:00:00.000Z',
+        },
+      ];
+      adapter.saveWorkflow({ ...testWorkflow, detachedExternalDependencies: provenance });
+
+      expect(adapter.loadWorkflow('wf-1')!.detachedExternalDependencies).toEqual(provenance);
+    });
+
+    it('persists detachedExternalDependencies set via updateWorkflow', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const provenance = [
+        {
+          workflowId: 'wf-upstream',
+          requiredStatus: 'completed' as const,
+          detachedAt: '2026-06-13T00:00:00.000Z',
+        },
+      ];
+
+      adapter.updateWorkflow('wf-1', { detachedExternalDependencies: provenance });
+
+      expect(adapter.loadWorkflow('wf-1')!.detachedExternalDependencies).toEqual(provenance);
+    });
+
+    it('clears detachedExternalDependencies when the key is present with undefined', () => {
+      adapter.saveWorkflow({
+        ...testWorkflow,
+        detachedExternalDependencies: [
+          {
+            workflowId: 'wf-upstream',
+            requiredStatus: 'completed',
+            detachedAt: '2026-06-13T00:00:00.000Z',
+          },
+        ],
+      });
+
+      adapter.updateWorkflow('wf-1', { detachedExternalDependencies: undefined });
+
+      expect(adapter.loadWorkflow('wf-1')!.detachedExternalDependencies).toBeUndefined();
+    });
+
+    it('leaves detachedExternalDependencies untouched when the key is absent', () => {
+      const provenance = [
+        {
+          workflowId: 'wf-upstream',
+          requiredStatus: 'completed' as const,
+          detachedAt: '2026-06-13T00:00:00.000Z',
+        },
+      ];
+      adapter.saveWorkflow({ ...testWorkflow, detachedExternalDependencies: provenance });
+
+      adapter.updateWorkflow('wf-1', { generation: 2 });
+
+      expect(adapter.loadWorkflow('wf-1')!.detachedExternalDependencies).toEqual(provenance);
+    });
   });
 
   describe('logEvent + getEvents', () => {
