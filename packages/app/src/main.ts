@@ -236,6 +236,7 @@ import {
   registerMainWindowActivateHandler,
   registerMainWindowSecondInstanceHandler,
 } from './window/window-lifecycle.js';
+import { logProcessError } from './process-error-handling.js';
 
 function isTaskInFlightForForcedStop(task: TaskState): boolean {
   return task.status === 'running'
@@ -419,19 +420,11 @@ const buildVersion = typeof __BUILD_VERSION__ !== 'undefined' ? __BUILD_VERSION_
 logger.info(`Invoker ${buildVersion} (${buildSha})`, { module: 'startup' });
 
 process.on('uncaughtException', (err) => {
-  try {
-    logger.error(`uncaughtException: ${err instanceof Error ? err.stack ?? err.message : String(err)}`, { module: 'process' });
-  } catch {
-    console.error('[process] uncaughtException:', err);
-  }
+  logProcessError('uncaughtException', err, { logger, fallbackConsole: console });
 });
 
 process.on('unhandledRejection', (reason) => {
-  try {
-    logger.error(`unhandledRejection: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}`, { module: 'process' });
-  } catch {
-    console.error('[process] unhandledRejection:', reason);
-  }
+  logProcessError('unhandledRejection', reason, { logger, fallbackConsole: console });
 });
 
 const repoRoot = resolveRepoRoot(__dirname, { fallback: process.resourcesPath });
