@@ -49,7 +49,7 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       const ghResult = await retryTransientGitHubCli(() => this.exec('gh', apiArgs, cwd));
       console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview update existing gh_result=${ghResult}`);
 
-      return { url: existing[0].html_url ?? existing[0].url ?? '', identifier: String(existing[0].number) };
+      return { url: existing[0].url, identifier: String(existing[0].number) };
     }
 
     const createArgs = [
