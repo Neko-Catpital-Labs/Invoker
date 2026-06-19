@@ -47,10 +47,16 @@ export function runElectronReadyBootstrap(options: ElectronReadyBootstrapOptions
   options.app.whenReady().then(options.run).catch(options.onError);
 }
 
+export interface GuiModeLock {
+  release: () => void;
+}
+
 export interface GuiModeBootstrapOptions {
   app: Pick<App, 'requestSingleInstanceLock' | 'quit'>;
   isTest: boolean;
   setupGuiMode: () => void;
+  acquireGuiLock?: () => GuiModeLock | null;
+  notifyGuiAlreadyRunning?: () => void;
 }
 
 export function startGuiModeBootstrap(options: GuiModeBootstrapOptions): void {
@@ -61,11 +67,23 @@ export function startGuiModeBootstrap(options: GuiModeBootstrapOptions): void {
 
   const gotTheLock = options.app.requestSingleInstanceLock();
   if (!gotTheLock) {
+    options.notifyGuiAlreadyRunning?.();
+    options.app.quit();
+    return;
+  }
+  const guiLock = options.acquireGuiLock?.();
+  if (guiLock === null) {
+    options.notifyGuiAlreadyRunning?.();
     options.app.quit();
     return;
   }
 
-  options.setupGuiMode();
+  try {
+    options.setupGuiMode();
+  } catch (err) {
+    guiLock?.release();
+    throw err;
+  }
 }
 
 export interface MainProcessBootstrapOptions {
