@@ -316,6 +316,89 @@ describe('TaskRunner launch-dispatch wiring', () => {
     expect((launchOutbox.failCalls[0][1] as Error).message).toMatch(/Duplicate launch suppressed/);
   });
 
+  it('rejects post-start metadata when the generation advanced while attempt id is unchanged', async () => {
+    // executor.start resolves late; the live task has advanced to the next
+    // generation but kept the same selectedAttemptId. markTaskRunningAfterLaunch
+    // would accept this (it only checks attempt id), so the runner's own
+    // generation lineage guard must reject the superseded launch.
+    const task = makeTask(); // attempt-1, generation 1
+    const advanced = makeTask({
+      execution: { selectedAttemptId: 'attempt-1', generation: 2, phase: 'launching' },
+    });
+    let env: RunnerEnv;
+    env = buildRunnerEnv(task, {
+      startImpl: async (request) => {
+        // Simulate the lineage advancing mid-start (recreate-task) before
+        // executor.start resolves; attempt id stays the same.
+        env.orchestrator.getTask.mockReturnValue(advanced);
+        return {
+          executionId: `exec-${request.actionId}`,
+          taskId: request.actionId,
+          workspacePath: '/tmp/stale-ws',
+          branch: `experiment/${request.actionId}-stale`,
+          agentSessionId: 'sess-stale',
+          containerId: 'container-stale',
+        };
+      },
+    });
+    const launchOutbox = makeLaunchOutbox();
+
+    await env.runner.executeTask(task, { dispatchId: 77, launchOutbox });
+
+    // executor.start ran, but the launch is treated exactly like the
+    // stale-attempt path: markTaskRunningAfterLaunch is short-circuited and the
+    // spawned handle is killed.
+    expect(env.executor.start).toHaveBeenCalledTimes(1);
+    expect(env.orchestrator.markTaskRunningAfterLaunch).not.toHaveBeenCalled();
+    expect(env.executor.kill).toHaveBeenCalledTimes(1);
+
+    // No stale post-start metadata is written to the task row.
+    const wroteStaleMetadata = env.persistence.updateTask.mock.calls.some(
+      ([, changes]: [string, any]) => changes?.execution?.workspacePath !== undefined,
+    );
+    expect(wroteStaleMetadata).toBe(false);
+
+    // The superseded launch is not registered as an active execution.
+    expect((env.runner as any).activeExecutions.has('attempt-1')).toBe(false);
+
+    // Dispatch fails (consistent with the stale path) and is never completed.
+    expect(launchOutbox.completeCalls).toHaveLength(0);
+    expect(launchOutbox.failCalls).toHaveLength(1);
+    expect(launchOutbox.failCalls[0][0]).toBe(77);
+    expect((launchOutbox.failCalls[0][1] as Error).message).toMatch(/lineage advanced past launch generation/);
+  });
+
+  it('persists post-start metadata and registers the execution for a current launch', async () => {
+    // Control test: generation is unchanged at start resolution, so the valid
+    // launch path persists metadata and registers the active execution.
+    const task = makeTask(); // attempt-1, generation 1
+    const env = buildRunnerEnv(task, {
+      startImpl: async (request) => ({
+        executionId: `exec-${request.actionId}`,
+        taskId: request.actionId,
+        workspacePath: '/tmp/live-ws',
+        branch: `experiment/${request.actionId}-live`,
+        agentSessionId: 'sess-live',
+      }),
+    });
+    const launchOutbox = makeLaunchOutbox();
+
+    const run = env.runner.executeTask(task, { dispatchId: 88, launchOutbox });
+    await vi.waitFor(() => expect(env.executor.onComplete).toHaveBeenCalled());
+
+    expect(env.orchestrator.markTaskRunningAfterLaunch).toHaveBeenCalledWith('wf-d/t1', 'attempt-1');
+    expect(env.executor.kill).not.toHaveBeenCalled();
+    const wroteMetadata = env.persistence.updateTask.mock.calls.some(
+      ([, changes]: [string, any]) => changes?.execution?.workspacePath === '/tmp/live-ws',
+    );
+    expect(wroteMetadata).toBe(true);
+    expect((env.runner as any).activeExecutions.has('attempt-1')).toBe(true);
+    expect(launchOutbox.completeCalls).toEqual([88]);
+
+    env.triggerComplete();
+    await run;
+  });
+
   it('CD.1: pivot tasks terminate the dispatch row via completeDispatch', async () => {
     // Issue 13: pivot/spawn-experiments returns from executeTaskInner
     // BEFORE the normal markTaskRunningAfterLaunch completeDispatch
