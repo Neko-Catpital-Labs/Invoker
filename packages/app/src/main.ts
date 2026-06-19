@@ -1892,6 +1892,17 @@ function createEmbeddedTerminalBackendFromConfig(
       enqueueTaskOutput,
       flushTaskOutput,
       assertFatalExecutionCapacity,
+      wakeLaunchDispatcher: (reason) => {
+        if (!launchDispatcher) return;
+        try {
+          launchDispatcher.poll();
+        } catch (err) {
+          logger.warn(
+            `launch dispatcher wakeup failed after ${reason}: ${err instanceof Error ? err.message : String(err)}`,
+            { module: 'exec' },
+          );
+        }
+      },
       getTaskRunner: () => taskExecutor,
       setTaskRunner: (runner) => { taskExecutor = runner; },
       setLatestTaskExecutor: (runner) => { latestTaskExecutor = runner; },

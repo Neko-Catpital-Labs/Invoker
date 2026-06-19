@@ -1,4 +1,5 @@
-import type { TaskRunner } from '@invoker/execution-engine';
+import type { TaskRunner, TaskRunnerCallbacks } from '@invoker/execution-engine';
+import type { WorkResponse } from '@invoker/contracts';
 import type { HeadlessDeps } from './headless.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
 
@@ -53,6 +54,12 @@ export function startStandaloneLaunchDispatcher(
         { module: 'headless' },
       );
     }
+  };
+
+  const originalOnComplete: TaskRunnerCallbacks['onComplete'] = executor.callbacks.onComplete;
+  executor.callbacks.onComplete = (taskId: string, response: WorkResponse): void => {
+    originalOnComplete?.(taskId, response);
+    poll();
   };
 
   poll();

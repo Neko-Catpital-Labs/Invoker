@@ -29,6 +29,7 @@ export interface TaskRunnerWiringDeps {
   enqueueTaskOutput: (taskId: string, data: string) => void;
   flushTaskOutput: (taskId: string) => void;
   assertFatalExecutionCapacity: (label: string) => void;
+  wakeLaunchDispatcher?: (reason: string) => void;
   getTaskRunner: () => TaskRunner | null;
   setTaskRunner: (taskRunner: TaskRunner) => void;
   setLatestTaskExecutor: (taskRunner: TaskRunner) => void;
@@ -142,6 +143,7 @@ export function rebuildTaskRunner(deps: TaskRunnerWiringDeps): TaskRunner {
           `Task "${taskId}" completion callback received (status: ${response.status}, generation: ${response.executionGeneration}, exitCode: ${response.outputs.exitCode ?? 'none'})`,
           { module: 'exec' },
         );
+        deps.wakeLaunchDispatcher?.(`complete ${taskId}`);
       },
       onHeartbeat: (taskId, event) => {
         const now = event.at;

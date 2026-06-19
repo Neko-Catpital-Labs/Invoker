@@ -1703,24 +1703,13 @@ async function headlessRun(
   const started = orchestrator.startExecution();
 
   if (noTrack) {
-    if (started.length > 0) {
-      void Promise.resolve()
-        .then(() => taskExecutor.executeTasks(started))
-        .catch((err) => {
-          deps.logger.error(
-            `background no-track run failed for ${currentWorkflowId ?? 'unknown'}: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
-            { module: 'headless' },
-          );
-        });
-    }
+    await dispatchHeadlessRunnableTasks(deps, taskExecutor, started, 'run.no-track');
     process.stdout.write('[headless] --no-track enabled: submission accepted; exiting without tracking.\n');
     await api.close().catch(() => {});
     return;
   }
 
-  if (started.length > 0) {
-    await taskExecutor.executeTasks(started);
-  }
+  await dispatchHeadlessRunnableTasks(deps, taskExecutor, started, 'run');
 
   if (currentWorkflowId) {
     await trackHeadlessWorkflow(currentWorkflowId, deps, {
