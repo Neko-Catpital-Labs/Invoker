@@ -29,6 +29,10 @@ graph TD
 - [ ] `exact command`
 - [ ] `exact command`
 
+## Visual Proof
+
+Required when the diff changes UI-impacting files. Include before/after screenshots or a video link.
+
 ## Revert Plan
 
 - Safe to revert? Yes/No
