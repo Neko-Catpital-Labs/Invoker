@@ -45,7 +45,6 @@ function makeDeps(overrides: Partial<WorkflowMutationFacadeDeps> = {}): Workflow
     })),
     editTaskCommand: vi.fn(() => [makeRunningTask()]),
     editTaskPrompt: vi.fn(() => [makeRunningTask()]),
-    editTaskType: vi.fn(() => [makeRunningTask()]),
     editTaskAgent: vi.fn(() => [makeRunningTask()]),
     setTaskExternalGatePolicies: vi.fn(() => []),
     selectExperiment: vi.fn(() => [makeRunningTask()]),
@@ -149,14 +148,6 @@ describe('WorkflowMutationFacade', () => {
     });
   });
 
-  describe('editTaskType', () => {
-    it('calls orchestrator.editTaskType with optional poolMemberId', async () => {
-      const result = await facade.editTaskType('task-a', 'docker', 'remote-1');
-
-      expect(deps.orchestrator.editTaskType).toHaveBeenCalledWith('task-a', 'docker', 'remote-1');
-      expect(result.started).toHaveLength(1);
-    });
-  });
 
   describe('editTaskAgent', () => {
     it('calls orchestrator.editTaskAgent and returns accepted runnable tasks', async () => {
