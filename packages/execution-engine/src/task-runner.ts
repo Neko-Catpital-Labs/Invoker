@@ -75,6 +75,8 @@ type StartupFailureMetadata = {
   branch?: string;
   agentSessionId?: string;
   containerId?: string;
+  stdout?: unknown;
+  stderr?: unknown;
 };
 
 type ActiveExecutionHandle = ExecutorHandle & { attemptId?: string };
@@ -98,6 +100,8 @@ type ExecutionPoolConfig = {
   maxConcurrentTasksPerMember?: number;
 };
 
+const STARTUP_DIAGNOSTIC_DETAIL_CHARS = 4_000;
+
 type PoolSelection = {
   poolId: string;
   member: ExecutionPoolMember;
@@ -119,6 +123,41 @@ function isRetryableSshStartupTransportError(err: unknown): boolean {
     || lower.includes('banner exchange')
     || lower.includes('kex_exchange_identification')
     || lower.includes('remote session terminated unexpectedly');
+}
+
+function truncateStartupDiagnosticValue(value: string): string {
+  if (value.length <= STARTUP_DIAGNOSTIC_DETAIL_CHARS) return value;
+  return `...${value.slice(value.length - STARTUP_DIAGNOSTIC_DETAIL_CHARS)}`;
+}
+
+function stringifyStartupDiagnosticValue(value: unknown): string {
+  if (value === undefined || value === null) return '';
+  return Buffer.isBuffer(value) ? value.toString('utf8') : String(value);
+}
+
+function formatStartupFailureDiagnostic(
+  task: TaskState,
+  executorType: string,
+  err: unknown,
+): string {
+  const meta = err as StartupFailureMetadata;
+  const message = err instanceof Error ? err.message : String(err);
+  const stderr = stringifyStartupDiagnosticValue(meta.stderr);
+  const stdout = stringifyStartupDiagnosticValue(meta.stdout);
+  const parts = [
+    '\n[Startup Failure Diagnostic]',
+    `status=${task.status}`,
+    `executor=${executorType}`,
+    `message=${message}`,
+  ];
+  if (stderr) {
+    parts.push(`--- startup stderr ---\n${truncateStartupDiagnosticValue(stderr)}`);
+  }
+  if (stdout) {
+    parts.push(`--- startup stdout ---\n${truncateStartupDiagnosticValue(stdout)}`);
+  }
+  parts.push('--- end startup failure diagnostic ---\n');
+  return parts.join('\n');
 }
 
 type FreshBaseCommit = {
@@ -988,7 +1027,10 @@ export class TaskRunner {
         const startupErrorMessage = `Executor startup failed (${executor.type}): ${err instanceof Error ? err.message : String(err)}\n`;
         this.callbacks.onOutput?.(task.id, startupErrorMessage);
         try {
-          this.persistence.appendTaskOutput(task.id, startupErrorMessage);
+          this.persistence.appendTaskOutput(
+            task.id,
+            formatStartupFailureDiagnostic(task, executor.type, err),
+          );
         } catch {
           // Preserve the original startup failure if output persistence also fails.
         }
