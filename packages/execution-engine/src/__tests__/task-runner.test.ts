@@ -1163,12 +1163,14 @@ describe('TaskRunner', () => {
         get: () => throwingExecutor,
         getAll: () => [throwingExecutor],
       };
+      const onLaunchFailed = vi.fn();
 
       const runner = new TaskRunner({
         orchestrator: orchestrator as any,
-        persistence: { updateTask } as any,
+        persistence: { updateTask, logEvent: vi.fn() } as any,
         executorRegistry: registry as any,
         cwd: '/tmp',
+        callbacks: { onLaunchFailed },
       });
 
       // Task was launched with attempt-1 but orchestrator now shows attempt-2
@@ -1189,6 +1191,7 @@ describe('TaskRunner', () => {
       );
       // Failed WorkResponse must NOT be emitted
       expect(handleWorkerResponse).not.toHaveBeenCalled();
+      expect(onLaunchFailed).not.toHaveBeenCalled();
     });
 
     it('suppresses metadata write and failed response when generation has advanced', async () => {
@@ -1217,12 +1220,14 @@ describe('TaskRunner', () => {
         get: () => throwingExecutor,
         getAll: () => [throwingExecutor],
       };
+      const onLaunchFailed = vi.fn();
 
       const runner = new TaskRunner({
         orchestrator: orchestrator as any,
-        persistence: { updateTask } as any,
+        persistence: { updateTask, logEvent: vi.fn() } as any,
         executorRegistry: registry as any,
         cwd: '/tmp',
+        callbacks: { onLaunchFailed },
       });
 
       const task = makeTask({
@@ -1241,6 +1246,7 @@ describe('TaskRunner', () => {
         }),
       );
       expect(handleWorkerResponse).not.toHaveBeenCalled();
+      expect(onLaunchFailed).not.toHaveBeenCalled();
     });
 
     it('still persists metadata and emits response when lineage is current', async () => {
@@ -1269,12 +1275,14 @@ describe('TaskRunner', () => {
         get: () => throwingExecutor,
         getAll: () => [throwingExecutor],
       };
+      const onLaunchFailed = vi.fn();
 
       const runner = new TaskRunner({
         orchestrator: orchestrator as any,
         persistence: { updateTask } as any,
         executorRegistry: registry as any,
         cwd: '/tmp',
+        callbacks: { onLaunchFailed },
       });
 
       const task = makeTask({
@@ -1299,6 +1307,11 @@ describe('TaskRunner', () => {
           actionId: 'current-1',
           status: 'failed',
         }),
+      );
+      expect(onLaunchFailed).toHaveBeenCalledWith(
+        'current-1',
+        expect.objectContaining({ message: expect.stringContaining('Executor startup failed (ssh)') }),
+        throwingExecutor,
       );
     });
 
@@ -1328,12 +1341,14 @@ describe('TaskRunner', () => {
         get: () => throwingExecutor,
         getAll: () => [throwingExecutor],
       };
+      const onLaunchFailed = vi.fn();
 
       const runner = new TaskRunner({
         orchestrator: orchestrator as any,
-        persistence: { updateTask } as any,
+        persistence: { updateTask, logEvent: vi.fn() } as any,
         executorRegistry: registry as any,
         cwd: '/tmp',
+        callbacks: { onLaunchFailed },
       });
 
       const task = makeTask({
@@ -1352,6 +1367,7 @@ describe('TaskRunner', () => {
         }),
       );
       expect(handleWorkerResponse).not.toHaveBeenCalled();
+      expect(onLaunchFailed).not.toHaveBeenCalled();
     });
   });
 
