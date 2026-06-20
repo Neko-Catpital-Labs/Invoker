@@ -101,7 +101,6 @@ interface TaskPanelProps {
   allTasks?: Map<string, TaskState>;
   baseBranch?: string;
   workflowRepoUrl?: string;
-  remoteTargets?: string[];
   executionAgents?: string[];
   onProvideInput: (task: TaskState) => void;
   onApprove: (task: TaskState) => void;
@@ -109,7 +108,6 @@ interface TaskPanelProps {
   onSelectExperiment: (task: TaskState) => void;
   onEditCommand?: (taskId: string, newCommand: string) => void;
   onEditPrompt?: (taskId: string, newPrompt: string) => void;
-  onEditType?: (taskId: string, runnerKind: string, poolMemberId?: string) => void;
   onEditAgent?: (taskId: string, agentName: string) => void;
   onSetExternalGatePolicies?: (taskId: string, updates: ExternalGatePolicyUpdate[]) => Promise<void>;
   onSetMergeBranch?: (workflowId: string, baseBranch: string) => Promise<void>;
@@ -124,18 +122,6 @@ function formatDate(date?: Date | string): string {
   return d.toLocaleTimeString();
 }
 
-/**
- * Display value when task.config.runnerKind is unset: matches orchestrator
- * loadPlan default worktree. SSH tasks encode the remote target ID as
- * "ssh:<targetId>" for the compound select. Merge nodes hide the selector.
- */
-function effectiveExecutorSelectValue(task: TaskState): string {
-  if (task.config.runnerKind === 'ssh' && task.config.poolMemberId) {
-    return `ssh:${task.config.poolMemberId}`;
-  }
-  if (task.config.runnerKind) return task.config.runnerKind;
-  return 'worktree';
-}
 
 /**
  * Format a repo URL for display. Handles GitHub HTTPS and SSH patterns,
@@ -223,7 +209,6 @@ export function TaskPanel({
   allTasks,
   baseBranch,
   workflowRepoUrl,
-  remoteTargets,
   executionAgents,
   onProvideInput,
   onApprove,
@@ -231,7 +216,6 @@ export function TaskPanel({
   onSelectExperiment,
   onEditCommand,
   onEditPrompt,
-  onEditType,
   onEditAgent,
   onSetExternalGatePolicies,
   onSetMergeBranch,
@@ -329,7 +313,6 @@ export function TaskPanel({
   const phaseLabel = task.status === 'running'
     ? getRunningPhaseLabel(task.execution.phase)
     : null;
-  const executorSelectValue = effectiveExecutorSelectValue(task);
 
   const mergeGateDisplayTitle = mergeGatePanelHeading(task, mergeMode);
   const isFixApproval = Boolean(task.execution.pendingFixError);
@@ -485,34 +468,6 @@ export function TaskPanel({
         </div>
       )}
 
-      {/* Primary execution controls */}
-      {onEditType && !task.config.isMergeNode && (
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-gray-400">Run on</span>
-          <select
-            value={executorSelectValue}
-            onChange={(e) => {
-              const val = e.target.value;
-              if (val.startsWith('ssh:')) {
-                onEditType(task.id, 'ssh', val.slice(4));
-              } else {
-                onEditType(task.id, val);
-              }
-            }}
-            disabled={task.status === 'running' || task.status === 'fixing_with_ai'}
-            className="bg-gray-700 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-            data-testid="runner-kind-select"
-          >
-            <option value="worktree">Worktree</option>
-            <option value="docker">Docker</option>
-            {remoteTargets?.map((targetId) => (
-              <option key={targetId} value={`ssh:${targetId}`}>
-                SSH: {targetId}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
 
       {task.config.prompt && onEditAgent && (
         <div className="flex items-center justify-between">
