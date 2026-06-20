@@ -112,6 +112,22 @@ describe('headless delegation enforcement', () => {
       ).resolves.toBeUndefined();
     });
 
+    it('shows recovery workers as explicit long-running services', async () => {
+      const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+
+      try {
+        await expect(
+          runHeadless(['worker', 'status'], mockDeps),
+        ).resolves.toBeUndefined();
+
+        expect(stdout).toHaveBeenCalledWith(expect.stringContaining('Worker kinds'));
+        expect(stdout).toHaveBeenCalledWith(expect.stringContaining('long-running recovery service'));
+        expect(stdout).toHaveBeenCalledWith(expect.stringContaining('service=stopped'));
+      } finally {
+        stdout.mockRestore();
+      }
+    });
+
       it('allows deprecated list command in read-only mode', async () => {
         await expect(
           runHeadless(['list'], mockDeps)

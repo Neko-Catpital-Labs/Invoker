@@ -28,6 +28,8 @@ describe('headless-command-classification', () => {
     expect(isHeadlessReadOnlyCommand(['list'])).toBe(true);
     expect(isHeadlessReadOnlyCommand(['session'])).toBe(true);
     expect(isHeadlessReadOnlyCommand(['open-terminal'])).toBe(true);
+    expect(isHeadlessReadOnlyCommand(['worker', 'list'])).toBe(true);
+    expect(isHeadlessReadOnlyCommand(['worker', 'autofix'])).toBe(false);
     expect(isHeadlessReadOnlyCommand(['run'])).toBe(false);
   });
 
@@ -44,6 +46,9 @@ describe('headless-command-classification', () => {
     expect(isHeadlessMutatingCommand(['set', 'agent'])).toBe(true);
     expect(isHeadlessMutatingCommand(['set', 'fix-context'])).toBe(true);
     expect(isHeadlessMutatingCommand(['set', 'xyz'])).toBe(false);
+    expect(isHeadlessMutatingCommand(['worker', 'autofix'])).toBe(true);
+    expect(isHeadlessMutatingCommand(['worker', 'list'])).toBe(false);
+    expect(isHeadlessMutatingCommand(['worker', 'status'])).toBe(false);
   });
 
   it('resolves workflow and task targets via lookup', () => {

@@ -54,6 +54,7 @@ describe('invoker-cli', () => {
     const result = runCli(['--help']);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('invoker-cli run <plan.yaml>');
+    expect(result.stdout).toContain('invoker-cli worker autofix');
   });
 
   it('runs the hello-world fixture with an isolated db dir', () => {
@@ -99,6 +100,55 @@ describe('invoker-cli', () => {
     expect(code).toBe(0);
     expect(runHandler).toHaveBeenCalledTimes(1);
     expect(output.stdout).toContain('Delegated to live owner - workflow: wf-live-1');
+    output.restore();
+  });
+
+  it('worker list shows explicit long-running worker services', async () => {
+    const output = captureProcessOutput();
+
+    const code = await main(['worker', 'list']);
+
+    expect(code).toBe(0);
+    expect(output.stdout).toContain('autofix');
+    expect(output.stdout).toContain('long-running auto-fix recovery worker');
+    output.restore();
+  });
+
+  it('worker autofix delegates startup to a reachable shared owner', async () => {
+    const output = captureProcessOutput();
+    const bus = new LocalBus();
+    const workerHandler = vi.fn(async (req: unknown) => {
+      expect(req).toEqual(expect.objectContaining({
+        args: ['worker', 'autofix'],
+        traceId: expect.stringContaining('invoker-cli.headless.exec.worker'),
+      }));
+      return { ok: true };
+    });
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'standalone' }));
+    bus.onRequest('headless.exec', workerHandler);
+
+    const code = await main(['worker', 'autofix'], { createMessageBus: () => bus });
+
+    expect(code).toBe(0);
+    expect(workerHandler).toHaveBeenCalledTimes(1);
+    expect(output.stdout).toContain('Started autofix worker on shared owner owner-1');
+    output.restore();
+  });
+
+  it('run does not start worker services as a side effect', async () => {
+    const output = captureProcessOutput();
+    const bus = new LocalBus();
+    const runHandler = vi.fn(async () => ({ workflowId: 'wf-run-only', tasks: [] }));
+    const workerHandler = vi.fn(async () => ({ ok: true }));
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'gui-1', mode: 'gui' }));
+    bus.onRequest('headless.run', runHandler);
+    bus.onRequest('headless.exec', workerHandler);
+
+    const code = await main(['run', fixturePlan], { createMessageBus: () => bus });
+
+    expect(code).toBe(0);
+    expect(runHandler).toHaveBeenCalledTimes(1);
+    expect(workerHandler).not.toHaveBeenCalled();
     output.restore();
   });
 
