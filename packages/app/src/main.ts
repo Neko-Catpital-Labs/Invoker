@@ -236,6 +236,7 @@ import {
   registerMainWindowActivateHandler,
   registerMainWindowSecondInstanceHandler,
 } from './window/window-lifecycle.js';
+import { tryAcquireGuiInstanceLock, type GuiInstanceLock } from './gui-instance-lock.js';
 import { logProcessError } from './process-error-handling.js';
 
 function isTaskInFlightForForcedStop(task: TaskState): boolean {
@@ -415,6 +416,7 @@ function acknowledgeNoTrackHeadlessExec(
 // Root logger: created early in initServices() once persistence is available.
 // Before initServices(), use the pre-init logger (file-only, no DB).
 let logger: Logger = new FileAndDbLogger({ module: 'main' });
+let guiInstanceLock: GuiInstanceLock | null = null;
 const buildSha = typeof __BUILD_SHA__ !== 'undefined' ? __BUILD_SHA__ : 'dev';
 const buildVersion = typeof __BUILD_VERSION__ !== 'undefined' ? __BUILD_VERSION__ : 'dev';
 logger.info(`Invoker ${buildVersion} (${buildSha})`, { module: 'startup' });
@@ -1716,6 +1718,16 @@ startMainProcessBootstrap({
   startGuiMode: () => startGuiModeBootstrap({
     app,
     isTest: process.env.NODE_ENV === 'test',
+    acquireGuiLock: () => {
+      guiInstanceLock = tryAcquireGuiInstanceLock(resolveInvokerHomeRoot());
+      return guiInstanceLock;
+    },
+    notifyGuiAlreadyRunning: () => {
+      dialog.showErrorBox(
+        'Invoker is already running',
+        'Only one Invoker GUI can run for this Invoker home. Use the existing window, or close it before opening another one.',
+      );
+    },
     setupGuiMode,
   }),
 });
@@ -4578,6 +4590,8 @@ function createEmbeddedTerminalBackendFromConfig(
           persistence.requeueRunningWorkflowMutationIntents();
           persistence.close();
         }
+        guiInstanceLock?.release();
+        guiInstanceLock = null;
         if (writerLock) writerLock.release();
         if (messageBus) messageBus.disconnect();
       } finally {
