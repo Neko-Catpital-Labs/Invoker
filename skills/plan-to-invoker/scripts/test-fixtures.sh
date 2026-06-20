@@ -23,6 +23,8 @@ DOCTOR_NEGATIVE_FIXTURES=(
   "anti-pattern-i-final-regression-not-test-all.yaml"
   "anti-pattern-j-zero-context-missing-metadata.yaml"
   "anti-pattern-k-missing-review-compression.yaml"
+  "anti-pattern-l-behavior-plus-proof.yaml"
+  "anti-pattern-m-refactor-plus-fields.yaml"
 )
 
 is_doctor_negative_fixture() {
@@ -294,28 +296,25 @@ test_lint_valid_final_test_all() {
   cat > "$temp_plan" <<'EOF'
 name: "Valid final test-all gate"
 description: |
-  Implementation plan with terminal full-suite regression.
+  Implementation plan with proper final full-suite regression.
   Standalone workflow waiver:
-  - This fixture intentionally exercises standalone final-gate lint behavior.
+  - This fixture intentionally keeps one behavior prompt and one proof prompt in a single workflow so the final test:all gate can be validated in one place.
 onFinish: pull_request
-mergeMode: github
+mergeMode: external_review
 repoUrl: git@github.com:example-org/acme-repo.git
 tasks:
   - id: implement-surface
     description: |
-      Implement the contact surface wiring.
-      Goal:
-      - Add contact-surface wiring for new behavior.
-      Motivation:
-      - Keep contact contract explicit and reviewable.
-      Alternative considerations:
-      - Option A (chosen): direct contact-surface wiring.
-      - Option B: defer via adapter layer.
-      Implementation details:
-      - Update contact surface and preserve existing contracts.
-      Layer: contact_surface
-      Feature state: active
-    prompt: |
+      Review claim:
+      - Implement contact-surface wiring updates in a typed and deterministic way.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - The change stays inside the contact surface and directly affected tests.
+      Slice rationale:
+      - Behavior lands before proof and cleanup.
+      Architectural effect:
+      - The contact-surface path gains the new wiring without changing unrelated layers.
       Goal:
       - Implement contact-surface wiring updates in a typed and deterministic way.
       Motivation:
@@ -325,12 +324,54 @@ tasks:
       - Option B: defer via adapter layer.
       Implementation details:
       - Modify packages/foo/src/surface.ts and preserve existing contract imports.
+      Non-goals:
+      - Do not add regression proof in this slice.
+      Layer: contact_surface
+      Feature state: active
+      Files:
+      - packages/foo/src/surface.ts
+      Change types:
+      - packages/foo/src/surface.ts: modify
       Acceptance criteria:
       - Ensure the new surface compiles and keeps existing imports intact.
+    prompt: |
+      Review claim:
+      - Implement contact-surface wiring updates in a typed and deterministic way.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - Keep the change focused on packages/foo/src/surface.ts.
+      Slice rationale:
+      - Regression proof belongs in a later workflow task.
+      Architectural effect:
+      - The contact surface exposes the new wiring path.
+      Goal:
+      - Implement contact-surface wiring updates in a typed and deterministic way.
+      Motivation:
+      - Keep task execution intent explicit for delegated AI execution.
+      Alternative considerations:
+      - Option A (chosen): direct contact-surface wiring.
+      - Option B: defer via adapter layer.
+      Implementation details:
+      - Modify packages/foo/src/surface.ts and preserve existing contract imports.
+      Non-goals:
+      - Do not add regression tests or docs in this slice.
+      Acceptance criteria:
+      - Ensure the new surface compiles and keeps existing imports intact.
+      Assume no prior context. Modify packages/foo/src/surface.ts only. Pass condition: exits 0 after the surface compiles cleanly.
     dependencies: []
   - id: add-regression-tests
     description: |
-      Add regression coverage for the new surface.
+      Review claim:
+      - Add regression coverage for the new surface wiring.
+      Review lane:
+      - proof
+      Safety invariant:
+      - This task is proof-only and depends on the behavior slice.
+      Slice rationale:
+      - Keep regression proof separate from behavior wiring.
+      Architectural effect:
+      - No production architecture change; proof documents the contact-surface path.
       Goal:
       - Add regression proof for the surface change.
       Motivation:
@@ -340,9 +381,27 @@ tasks:
       - Option B: only full-suite verification.
       Implementation details:
       - Add focused deterministic regression coverage.
+      Non-goals:
+      - Do not modify production contact-surface code in this slice.
       Layer: app_regression
       Feature state: active
+      Files:
+      - packages/foo/src/__tests__/surface.test.ts
+      Change types:
+      - packages/foo/src/__tests__/surface.test.ts: modify
+      Acceptance criteria:
+      - Verify the regression reproduces the new behavior deterministically.
     prompt: |
+      Review claim:
+      - Add regression coverage for the new surface wiring.
+      Review lane:
+      - proof
+      Safety invariant:
+      - Keep the change inside packages/foo/src/__tests__/surface.test.ts.
+      Slice rationale:
+      - Proof is easier to review separately from behavior wiring.
+      Architectural effect:
+      - No production architecture change; this task only adds proof.
       Goal:
       - Add deterministic regression coverage for the new contact-surface path.
       Motivation:
@@ -352,11 +411,24 @@ tasks:
       - Option B: rely on full-suite tests only.
       Implementation details:
       - Modify packages/foo/src/__tests__/surface.test.ts to cover the new path.
+      Non-goals:
+      - Do not modify production surface wiring in this slice.
       Acceptance criteria:
       - Verify the regression reproduces the new behavior deterministically.
+      Assume no prior context. Modify packages/foo/src/__tests__/surface.test.ts only. Pass condition: exits 0 after the focused regression passes.
     dependencies: [implement-surface]
   - id: final-regression
     description: |
+      Review claim:
+      - Run the terminal full-suite regression gate.
+      Review lane:
+      - proof
+      Safety invariant:
+      - This command changes no production code and only validates earlier slices.
+      Slice rationale:
+      - Keep the terminal full-suite gate separate from implementation and focused proof.
+      Architectural effect:
+      - No architecture change.
       Goal:
       - Run final full-suite regression gate.
       Motivation:
@@ -366,7 +438,8 @@ tasks:
       - Option B: package-only checks.
       Implementation details:
       - Execute root-level test gate after all earlier tasks complete.
-      Run the repository test suite as the terminal regression gate.
+      Non-goals:
+      - Do not modify source files.
       Layer: e2e_regression
       Feature state: active
     command: "pnpm run test:all"
@@ -566,6 +639,16 @@ featureBranch: plan/stack-step-1
 tasks:
   - id: implement-surface
     description: |
+      Review claim:
+      - Implement the first stacked workflow surface change.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - The change stays inside one contact-surface file.
+      Slice rationale:
+      - Keep non-terminal stack workflows fast while preserving focused verification.
+      Architectural effect:
+      - The first stack slice updates the contact-surface behavior only.
       Goal:
       - Implement the first stacked workflow surface change.
       Motivation:
@@ -575,15 +658,27 @@ tasks:
       - Option B: repeat full-suite verification in every stack layer.
       Implementation details:
       - Update packages/foo/src/surface.ts with the stack step one behavior.
+      Non-goals:
+      - Do not add proof-only changes in this slice.
       Layer: contact_surface
       Feature state: active
       Files:
       - packages/foo/src/surface.ts
       Change types:
-      - Implementation update.
+      - packages/foo/src/surface.ts: modify
       Acceptance criteria:
       - The focused package verification task passes.
     prompt: |
+      Review claim:
+      - Implement the first stacked workflow surface change.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - Keep the change scoped to packages/foo/src/surface.ts.
+      Slice rationale:
+      - Focused verification remains separate.
+      Architectural effect:
+      - The first stack slice updates the contact-surface behavior only.
       Goal:
       - Implement the first stacked workflow surface change in packages/foo/src/surface.ts.
       Motivation:
@@ -593,11 +688,23 @@ tasks:
       - Option B: repeat full-suite verification in every stack layer.
       Implementation details:
       - Assume no prior context. Update packages/foo/src/surface.ts with the stack step one behavior.
+      Non-goals:
+      - Do not add proof-only changes in this slice.
       Acceptance criteria:
       - Pass condition: focused package tests exit code 0 after this change.
     dependencies: []
   - id: verify-surface
     description: |
+      Review claim:
+      - Run focused verification for the first stacked workflow.
+      Review lane:
+      - proof
+      Safety invariant:
+      - This command changes no production code.
+      Slice rationale:
+      - Catch local regressions without paying for the stack-level full suite.
+      Architectural effect:
+      - No architecture change.
       Goal:
       - Run focused verification for the first stacked workflow.
       Motivation:
@@ -607,6 +714,8 @@ tasks:
       - Option B: root full-suite test in every stack layer.
       Implementation details:
       - Execute the package test lane for packages/foo.
+      Non-goals:
+      - Do not modify source files.
       Layer: app_regression
       Feature state: active
     command: "cd packages/foo && pnpm test"
@@ -629,6 +738,16 @@ externalDependencies:
 tasks:
   - id: implement-terminal-surface
     description: |
+      Review claim:
+      - Implement the terminal stacked workflow surface change.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - The terminal change stays inside one contact-surface file.
+      Slice rationale:
+      - Validate the integrated stack at the final workflow only.
+      Architectural effect:
+      - The terminal slice updates the final contact-surface behavior.
       Goal:
       - Implement the terminal stacked workflow surface change.
       Motivation:
@@ -638,15 +757,27 @@ tasks:
       - Option B: repeat full-suite verification in every stack layer.
       Implementation details:
       - Update packages/foo/src/terminal-surface.ts with the stack terminal behavior.
+      Non-goals:
+      - Do not add proof-only changes in this slice.
       Layer: contact_surface
       Feature state: active
       Files:
       - packages/foo/src/terminal-surface.ts
       Change types:
-      - Implementation update.
+      - packages/foo/src/terminal-surface.ts: modify
       Acceptance criteria:
       - The terminal full-suite gate passes.
     prompt: |
+      Review claim:
+      - Implement the terminal stacked workflow surface change.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - Keep the change scoped to packages/foo/src/terminal-surface.ts.
+      Slice rationale:
+      - The final workflow still keeps proof separate.
+      Architectural effect:
+      - The terminal slice updates the final contact-surface behavior.
       Goal:
       - Implement the terminal stacked workflow surface change in packages/foo/src/terminal-surface.ts.
       Motivation:
@@ -656,11 +787,23 @@ tasks:
       - Option B: repeat full-suite verification in every stack layer.
       Implementation details:
       - Assume no prior context. Update packages/foo/src/terminal-surface.ts with the stack terminal behavior.
+      Non-goals:
+      - Do not add proof-only changes in this slice.
       Acceptance criteria:
       - Pass condition: the final full-suite gate exits 0.
     dependencies: []
   - id: final-regression
     description: |
+      Review claim:
+      - Run final full-suite regression gate for the stack.
+      Review lane:
+      - proof
+      Safety invariant:
+      - This command changes no production code.
+      Slice rationale:
+      - Validate all stack layers together before publication.
+      Architectural effect:
+      - No architecture change.
       Goal:
       - Run final full-suite regression gate for the stack.
       Motivation:
@@ -670,6 +813,8 @@ tasks:
       - Option B: root full-suite test in every stack layer.
       Implementation details:
       - Execute root-level test gate after all earlier terminal-workflow tasks complete.
+      Non-goals:
+      - Do not modify source files.
       Layer: e2e_regression
       Feature state: active
     command: "pnpm run test:all"
@@ -893,6 +1038,16 @@ repoUrl: git@github.com:example-org/acme-repo.git
 tasks:
   - id: implement-bridge
     description: |
+      Review claim:
+      - Add bridge path for cost query wiring.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - The change stays inside the app bridge and directly affected tests.
+      Slice rationale:
+      - Bridge behavior lands before regression proof.
+      Architectural effect:
+      - Cost query requests gain deterministic app-bridge routing.
       Goal:
       - Add bridge path for cost query wiring.
       Motivation:
@@ -902,11 +1057,29 @@ tasks:
       - Option B: distributed adapters.
       Implementation details:
       - Keep bridge in app layer and add deterministic tests.
+      Non-goals:
+      - Do not add regression-only proof or docs in this slice.
       Layer: app_bridge
       Feature state: active
+      Files:
+      - packages/app/src/main.ts
+      - packages/app/src/headless.ts
+      Change types:
+      - packages/app/src/main.ts: modify
+      - packages/app/src/headless.ts: modify
       Acceptance criteria:
       - Ensure bridge compiles and tests pass.
     prompt: |
+      Review claim:
+      - Add bridge path for cost query wiring.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - Keep the change focused on the app bridge files.
+      Slice rationale:
+      - Regression proof belongs in later proof tasks.
+      Architectural effect:
+      - Cost query requests gain deterministic app-bridge routing.
       Goal:
       - Implement deterministic app-bridge wiring for the cost query path.
       Motivation:
@@ -917,11 +1090,24 @@ tasks:
       Implementation details:
       - Update packages/app/src/main.ts and packages/app/src/headless.ts.
       - Preserve current call contracts and deterministic output expectations.
+      Non-goals:
+      - Do not add regression-only proof or docs in this slice.
       Acceptance criteria:
       - Verify app tests pass and output remains stable.
+      Assume no prior context. Modify packages/app/src/main.ts and packages/app/src/headless.ts only. Pass condition: exits 0 after the bridge tests pass.
     dependencies: []
   - id: final-regression
     description: |
+      Review claim:
+      - Run final full-suite regression gate.
+      Review lane:
+      - proof
+      Safety invariant:
+      - This command changes no production code.
+      Slice rationale:
+      - Keep the terminal full-suite gate separate from implementation.
+      Architectural effect:
+      - No architecture change.
       Goal:
       - Run final full-suite regression gate.
       Motivation:
@@ -931,7 +1117,8 @@ tasks:
       - Option B: package-only checks.
       Implementation details:
       - Execute root-level test gate after implementation task.
-      Run full regression gate.
+      Non-goals:
+      - Do not modify source files.
       Layer: app_regression
       Feature state: active
     command: "pnpm run test:all"
@@ -964,6 +1151,16 @@ tasks:
     dependencies: []
   - id: final-regression
     description: |
+      Review claim:
+      - Run final full-suite regression gate.
+      Review lane:
+      - proof
+      Safety invariant:
+      - This command changes no production behavior.
+      Slice rationale:
+      - Keep final regression separate from implementation steps.
+      Architectural effect:
+      - No architecture change.
       Goal:
       - Run final full-suite regression gate.
       Motivation:
@@ -973,7 +1170,8 @@ tasks:
       - Option B: package-only checks.
       Implementation details:
       - Execute root-level test gate after implementation task.
-      Run full regression gate.
+      Non-goals:
+      - Do not modify source files.
       Layer: app_regression
       Feature state: active
     command: "pnpm run test:all"
@@ -1013,6 +1211,8 @@ tasks:
     description: |
       Review claim:
       - Implement deterministic runtime flow updates in task-runner.
+      Review lane:
+      - behavior
       Safety invariant:
       - The change is scoped to one execution-engine file and verified by package tests.
       Slice rationale:
@@ -1028,15 +1228,27 @@ tasks:
       - Option B: delay updates until a later refactor.
       Implementation details:
       - Apply runtime-flow edits and preserve current behavior contracts.
+      Non-goals:
+      - Do not add proof harness or docs in this slice.
       Layer: transport
       Feature state: active
       Files:
       - packages/execution-engine/src/task-runner.ts
       Change types:
-      - modify
+      - packages/execution-engine/src/task-runner.ts: modify
       Acceptance criteria:
       - `cd packages/execution-engine && pnpm test` exits 0.
     prompt: |
+      Review claim:
+      - Implement deterministic runtime flow updates in task-runner.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - Keep the change scoped to packages/execution-engine/src/task-runner.ts.
+      Slice rationale:
+      - Terminal regression remains separate.
+      Architectural effect:
+      - The runtime path stays deterministic for delegated execution.
       Goal:
       - Implement deterministic runtime flow updates in task-runner.
       Motivation:
@@ -1047,6 +1259,8 @@ tasks:
       Implementation details:
       - Assume no prior context; read packages/execution-engine/src/task-runner.ts and apply the scoped runtime changes.
       - Keep behavior deterministic and document expected output in task notes.
+      Non-goals:
+      - Do not add proof harness or docs in this slice.
       Acceptance criteria:
       - Verify `cd packages/execution-engine && pnpm test` exits 0.
       - Use exit code 0 as the pass condition.
@@ -1055,6 +1269,8 @@ tasks:
     description: |
       Review claim:
       - Run the terminal full-suite regression gate for runtime changes.
+      Review lane:
+      - proof
       Safety invariant:
       - This command changes no production code and depends on runtime implementation.
       Slice rationale:
@@ -1070,6 +1286,8 @@ tasks:
       - Option B: package-only checks.
       Implementation details:
       - Execute root-level test gate after implementation task.
+      Non-goals:
+      - Do not modify source files.
       Layer: app_regression
       Feature state: active
     command: "pnpm run test:all"
@@ -1151,6 +1369,150 @@ EOF
   fi
 }
 
+test_lint_requires_review_lane() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: "Missing review lane"
+description: "Implementation plan missing review lane metadata."
+onFinish: pull_request
+mergeMode: github
+repoUrl: git@github.com:example-org/acme-repo.git
+tasks:
+  - id: implement-owner-fallback
+    description: |
+      Review claim:
+      - Add local fallback when refresh loses the owner bridge.
+      Safety invariant:
+      - The fallback behavior stays local to refresh handling.
+      Slice rationale:
+      - Keep the behavior change isolated from repro proof.
+      Architectural effect:
+      - Refresh can read local state when the owner bridge is gone.
+      Goal:
+      - Implement the local fallback.
+      Motivation:
+      - Prevent stale task graph state.
+      Alternative considerations:
+      - Option A (chosen): keep proof separate.
+      Implementation details:
+      - Modify the refresh path only.
+      Non-goals:
+      - Do not add repro scripts here.
+      Layer: app_bridge
+      Feature state: active
+      Files:
+      - packages/app/src/main.ts
+      Change types:
+      - packages/app/src/main.ts: modify
+      Acceptance criteria:
+      - Pass condition: exits 0 after the fallback compiles.
+    prompt: |
+      Review claim:
+      - Add local fallback when refresh loses the owner bridge.
+      Safety invariant:
+      - Keep the change local.
+      Slice rationale:
+      - Repro proof stays separate.
+      Architectural effect:
+      - Refresh can fall back locally.
+      Goal:
+      - Implement the fallback.
+      Motivation:
+      - Keep the UI current after owner loss.
+      Alternative considerations:
+      - Option A (chosen): behavior only.
+      Implementation details:
+      - Modify packages/app/src/main.ts only.
+      Non-goals:
+      - Do not add repro or docs changes.
+      Assume no prior context. Modify packages/app/src/main.ts only. Pass condition: exits 0 after the fallback compiles.
+    dependencies: []
+  - id: final-regression
+    description: |
+      Review claim:
+      - Run the final regression gate.
+      Review lane:
+      - proof
+      Safety invariant:
+      - This command changes no production behavior.
+      Slice rationale:
+      - Regression stays separate.
+      Architectural effect:
+      - No architecture change.
+      Goal:
+      - Run the full-suite regression gate.
+      Motivation:
+      - Validate the workflow.
+      Alternative considerations:
+      - Option A (chosen): run pnpm run test:all.
+      Implementation details:
+      - Execute the root regression command.
+      Non-goals:
+      - Do not modify code.
+      Layer: app_regression
+      Feature state: active
+    command: "pnpm run test:all"
+    dependencies: [implement-owner-fallback]
+EOF
+
+  local output
+  set +e
+  output=$(bash "$LINT_SCRIPT" --strict-delegation "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected lint to reject missing review lane" >&2
+    return 1
+  fi
+
+  if ! grep -q 'missing required "Review lane:" heading' <<<"$output"; then
+    echo "Expected review lane lint error, got: $output" >&2
+    return 1
+  fi
+}
+
+test_lint_rejects_behavior_plus_proof_files() {
+  local fixture="$NEGATIVE_DIR/anti-pattern-l-behavior-plus-proof.yaml"
+  local output
+  set +e
+  output=$(bash "$LINT_SCRIPT" --strict-delegation "$fixture" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected lint to reject behavior lane mixed with proof files" >&2
+    return 1
+  fi
+
+  if ! grep -q 'mixes Review lane "behavior" with policy/docs/proof files' <<<"$output"; then
+    echo "Expected behavior-plus-proof lint error, got: $output" >&2
+    return 1
+  fi
+}
+
+test_lint_rejects_refactor_plus_fields() {
+  local fixture="$NEGATIVE_DIR/anti-pattern-m-refactor-plus-fields.yaml"
+  local output
+  set +e
+  output=$(bash "$LINT_SCRIPT" --strict-delegation "$fixture" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected lint to reject refactor lane mixed with field additions" >&2
+    return 1
+  fi
+
+  if ! grep -q 'mixes Review lane refactor with new field/schema/behavior language' <<<"$output"; then
+    echo "Expected refactor-plus-fields lint error, got: $output" >&2
+    return 1
+  fi
+}
+
 # Check dependencies
 if ! command -v jq &>/dev/null; then
   fail "jq is required for JSON parsing tests"
@@ -1221,6 +1583,9 @@ run_test "Lint: allow non-terminal stack workflow without test:all" test_lint_al
 run_test "Lint: reject final gate missing dependencies" test_lint_rejects_final_gate_missing_dependencies
 run_test "Lint: reject missing design sections for prompt tasks" test_lint_requires_design_sections_for_prompt_tasks
 run_test "Lint: reject missing review-compression sections" test_lint_requires_review_compression_sections
+run_test "Lint: reject missing review lane" test_lint_requires_review_lane
+run_test "Lint: reject behavior lane mixed with proof files" test_lint_rejects_behavior_plus_proof_files
+run_test "Lint: reject refactor lane mixed with field additions" test_lint_rejects_refactor_plus_fields
 run_test "Lint: accept prompt tasks with design sections" test_lint_accepts_design_sections_for_prompt_tasks
 run_test "Lint: reject missing design sections for command tasks" test_lint_requires_design_sections_for_command_tasks
 run_test "Lint strict: accept zero-context prompt contract" test_lint_strict_accepts_zero_context_prompt_contract
