@@ -58,6 +58,10 @@ Only include this section when the change modifies component interactions, contr
 - [ ] exact command
 - [ ] exact command
 
+## Visual Proof
+
+Required when the diff changes UI-impacting files. Include before/after screenshots or a video link.
+
 ## Revert Plan
 
 - Safe to revert? Yes/No
@@ -68,7 +72,9 @@ Only include this section when the change modifies component interactions, contr
 
 If the change is small and has no architectural impact, omit `## Architecture` rather than forcing filler.
 
-Do not default to a lightweight `## Summary / ## Testing / ## Notes` PR body. That shape is ad hoc drift, not the repo standard. Use `## Summary / ## Test Plan / ## Revert Plan` as the floor, and add `## Architecture` when the change affects component interactions or data/control flow.
+If the change touches UI-impacting files, use `skills/visual-proof/SKILL.md` first and include its screenshot/video markdown in `## Visual Proof`. UI-impacting files include `packages/ui/**`, Electron window lifecycle files, preload, main process window wiring, and app menu changes.
+
+Do not default to a lightweight `## Summary / ## Testing / ## Notes` PR body. That shape is ad hoc drift, not the repo standard. Use `## Summary / ## Test Plan / ## Revert Plan` as the floor, add `## Visual Proof` for UI-impacting diffs, and add `## Architecture` when the change affects component interactions or data/control flow.
 
 ## Command surface
 
@@ -97,7 +103,7 @@ Update an existing PR with:
 node scripts/create-pr.mjs --title "<title>" --base master --body-file /tmp/my-pr.md --update <pr-number>
 ```
 
-This script handles local image path upload/injection when configured.
+This script handles local image path upload/injection when configured. It also rejects UI-impacting diffs unless the body includes visual proof media.
 
 ## Upstream-first workflow
 
@@ -135,6 +141,7 @@ Before creating a PR:
 - ensure test commands are real commands that were actually run when possible
 - ensure revert guidance is honest
 - validate the body with `node scripts/validate-pr-body.mjs --body-file <file>`
+- for UI-impacting diffs, include `## Visual Proof` with screenshot or video proof before `node scripts/create-pr.mjs`
 
 If you include `## Architecture`, keep the diagrams renderable by GitHub Mermaid.
 Reference:
