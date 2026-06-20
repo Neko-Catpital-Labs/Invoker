@@ -37,7 +37,7 @@ Verdict: keep the durable launch-outbox handoff. It is the only option that give
 Run from repo root:
 
 ```bash
-pnpm --filter @invoker/app exec vitest run src/__tests__/app-layer-handoff-repro.test.ts
+cd packages/app && pnpm test -- src/__tests__/app-layer-handoff-repro.test.ts
 ```
 
 Expected summary:
@@ -52,7 +52,7 @@ Observed on 2026-06-20:
 ```text
 Test Files  1 passed (1)
 Tests       8 passed (8)
-Duration    774ms
+Duration    2.72s
 ```
 
 ## Assertions Covered
@@ -87,6 +87,6 @@ This experiment fails if any of the following happens:
 - `dispatchStartedTasksWithGlobalTopup(...)` starts executor work directly, which would surface as unexpected `workspacePath` population for non-merge relaunches.
 - A merge relaunch loses `/tmp/mock-merge-worktree` after `dispatchStartedTasksWithGlobalTopup(...)`.
 
-## Non-Goal Observation
+## Command-Surface Observation
 
-An accidental broader command, `pnpm --filter @invoker/app test -- app-layer-handoff-repro.test.ts`, invoked the app package script and discovered the full app suite. The INV-97 repro still passed inside that run, but the full suite exited non-zero due to unrelated `src/__tests__/cli-installer.test.ts` expectations that resolved `/opt/homebrew/bin/invoker-cli` instead of the temporary test install directory. That is not evidence against INV-97 because the deterministic proof command above isolates the file under test.
+The app package `test` script now normalizes pnpm's leading `--` separator before invoking Vitest. The deterministic proof command above therefore isolates `src/__tests__/app-layer-handoff-repro.test.ts` instead of accidentally discovering the full app suite. A pre-fix package-script run did include the INV-97 repro and pass it, but the run exited non-zero due to unrelated `src/__tests__/cli-installer.test.ts` expectations resolving `/opt/homebrew/bin/invoker-cli` instead of the temporary test install directory.
