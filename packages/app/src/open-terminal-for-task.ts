@@ -11,12 +11,16 @@ import {
   getEffectivePath,
   WorktreeExecutor,
   SshExecutor,
+  refreshCrabboxLease,
   type Executor,
   type ExecutorRegistry,
   type AgentRegistry,
   type PersistedTaskMeta,
   type TerminalSpec,
+  type ResolvedSshTarget,
+  type CommandRunner,
 } from '@invoker/execution-engine';
+import type { RemoteLeaseMetadata } from '@invoker/workflow-core';
 import { loadConfig } from './config.js';
 import {
   buildLinuxXTerminalBashScript,
@@ -37,6 +41,8 @@ export interface OpenTerminalPersistence {
   getWorkspacePath(taskId: string): string | null;
   getBranch(taskId: string): string | null;
   getPoolMemberId?(taskId: string): string | null;
+  /** Durable remote-lease record (e.g. a Crabbox box) backing an SSH task. */
+  getRemoteLeaseMetadata?(taskId: string): RemoteLeaseMetadata | null;
   loadAttempts?(taskId: string): Array<{ id: string; agentSessionId?: string }>;
   updateTask?(taskId: string, changes: { execution?: { agentSessionId?: string; lastAgentSessionId?: string } }): void;
   updateAttempt?(attemptId: string, changes: { agentSessionId?: string }): void;
@@ -50,7 +56,58 @@ export interface OpenExternalTerminalForTaskOptions {
   repoRoot: string;
   /** Shown when task status is `running`. */
   runningTaskReason?: string;
+  /**
+   * Injectable Crabbox CLI runner used to refresh a persisted lease during
+   * restore. Tests inject a stub; production uses the resolver's default spawn.
+   */
+  crabboxCommandRunner?: CommandRunner;
   logger?: Logger;
+}
+
+/**
+ * Outcome of resolving a live SSH endpoint for an SSH task during restore.
+ * - `static`: no Crabbox lease metadata — use the existing static-config path.
+ * - `override`: rebuilt the endpoint from a refreshed Crabbox lease.
+ * - `refuse`: the lease is missing/expired/not ready/lacks SSH fields.
+ */
+type SshRestoreResolution =
+  | { kind: 'static' }
+  | { kind: 'override'; target: ResolvedSshTarget }
+  | { kind: 'refuse'; reason: string };
+
+/**
+ * Rebuild a live SSH endpoint for a Crabbox-backed SSH task from its persisted
+ * lease. Returns `static` for non-SSH tasks or SSH tasks without Crabbox lease
+ * metadata (static restore is unchanged), `override` with the refreshed endpoint
+ * on success, or `refuse` with a clear reason when the box cannot be reattached.
+ */
+async function resolveCrabboxSshRestore(
+  opts: OpenExternalTerminalForTaskOptions,
+): Promise<SshRestoreResolution> {
+  const { taskId, persistence } = opts;
+  if (persistence.getRunnerKind(taskId) !== 'ssh') return { kind: 'static' };
+
+  const lease = persistence.getRemoteLeaseMetadata?.(taskId);
+  if (!lease || lease.provider !== 'crabbox') return { kind: 'static' };
+
+  const targetId = lease.targetId ?? persistence.getPoolMemberId?.(taskId)?.trim() ?? undefined;
+  const targetConfig = targetId ? loadConfig().remoteTargets?.[targetId] : undefined;
+  const crabboxCommand =
+    targetConfig?.type === 'crabbox' ? targetConfig.crabboxCommand : 'crabbox';
+  const statusArgs = targetConfig?.type === 'crabbox' ? targetConfig.statusArgs : undefined;
+
+  const refreshed = await refreshCrabboxLease(
+    { crabboxCommand, ...(statusArgs ? { statusArgs } : {}) },
+    { leaseId: lease.leaseId, ...(lease.slug ? { slug: lease.slug } : {}) },
+    opts.crabboxCommandRunner,
+  );
+  if (!refreshed.ok) {
+    return {
+      kind: 'refuse',
+      reason: `Cannot restore terminal for Crabbox SSH task "${taskId}": ${refreshed.reason}`,
+    };
+  }
+  return { kind: 'override', target: refreshed.target };
 }
 
 /**
@@ -152,6 +209,12 @@ export interface ResolveTaskTerminalSpecOptions {
   runningTaskReason?: string;
   /** When true, allow resolution even if the task status is `running` / `fixing_with_ai` — used by the embedded manager which can attach to a live executor handle. */
   allowRunning?: boolean;
+  /**
+   * Pre-resolved SSH endpoint to build the {@link SshExecutor} from, used for
+   * Crabbox-backed restore where the live SSH host/user/port/key come from a
+   * refreshed lease rather than the static `remoteTargets` config.
+   */
+  sshTargetOverride?: ResolvedSshTarget;
   logger?: Logger;
 }
 
@@ -197,21 +260,26 @@ export function resolveTaskTerminalSpec(
   termLogger?.info(`executorRegistry.get("${repairedMeta.runnerKind}") → ${executor ? executor.type : 'null (will lazy-create)'}`);
 
   if (repairedMeta.runnerKind === 'ssh') {
-    const targetId = persistence.getPoolMemberId?.(taskId)?.trim();
-    const target = targetId ? loadConfig().remoteTargets?.[targetId] : undefined;
-    if (!targetId) {
-      return {
-        ok: false,
-        reason: `Cannot open terminal for SSH task "${taskId}": pool member metadata is missing.`,
-      };
+    if (opts.sshTargetOverride) {
+      // Crabbox restore: connect to the live SSH endpoint refreshed from the lease.
+      executor = new SshExecutor({ ...opts.sshTargetOverride, agentRegistry: opts.executionAgentRegistry });
+    } else {
+      const targetId = persistence.getPoolMemberId?.(taskId)?.trim();
+      const target = targetId ? loadConfig().remoteTargets?.[targetId] : undefined;
+      if (!targetId) {
+        return {
+          ok: false,
+          reason: `Cannot open terminal for SSH task "${taskId}": pool member metadata is missing.`,
+        };
+      }
+      if (!target) {
+        return {
+          ok: false,
+          reason: `Cannot open terminal for SSH task "${taskId}": remote target "${targetId}" is not configured.`,
+        };
+      }
+      executor = new SshExecutor({ ...target, agentRegistry: opts.executionAgentRegistry });
     }
-    if (!target) {
-      return {
-        ok: false,
-        reason: `Cannot open terminal for SSH task "${taskId}": remote target "${targetId}" is not configured.`,
-      };
-    }
-    executor = new SshExecutor({ ...target, agentRegistry: opts.executionAgentRegistry });
   } else if (!executor) {
     if (repairedMeta.runnerKind === 'docker') {
       const docker = new DockerExecutor({
@@ -292,6 +360,11 @@ export async function openExternalTerminalForTask(
 ): Promise<OpenTerminalResult> {
   const { repoRoot, logger: termLogger } = opts;
 
+  const crabboxRestore = await resolveCrabboxSshRestore(opts);
+  if (crabboxRestore.kind === 'refuse') {
+    return { opened: false, reason: crabboxRestore.reason };
+  }
+
   const resolved = resolveTaskTerminalSpec({
     taskId: opts.taskId,
     persistence: opts.persistence,
@@ -299,6 +372,7 @@ export async function openExternalTerminalForTask(
     executionAgentRegistry: opts.executionAgentRegistry,
     repoRoot: opts.repoRoot,
     runningTaskReason: opts.runningTaskReason,
+    ...(crabboxRestore.kind === 'override' ? { sshTargetOverride: crabboxRestore.target } : {}),
     logger: opts.logger,
   });
   if (!resolved.ok) {
