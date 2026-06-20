@@ -1399,9 +1399,9 @@ for raw in tasks_path.read_text(encoding="utf-8").splitlines():
         blocking_tasks.append(task_id)
         failed_tasks.append(task_id)
         auto_fix_attempts[task_id] = parse_attempts(execution.get("autoFixAttempts"))
-        if is_infra_failure(error_text):
+        if is_infra_failure(error_text) and runner_kind != "worktree":
             infra_retry.append(task_id)
-        if runner_kind == "ssh":
+        if runner_kind == "ssh" or (runner_kind == "worktree" and pool_id):
             localize_ssh.append(task_id)
     elif status == "fixing_with_ai" or (status == "running" and execution.get("isFixingWithAI") is True):
         blocking_tasks.append(task_id)
@@ -1980,8 +1980,8 @@ run_cycle() {
     echo "switching SSH-assigned recovery tasks to local worktrees"
     while IFS= read -r target; do
       [ -n "$target" ] || continue
-      if ever_submitted localize-worktree "$target"; then
-        echo "  skip localize-worktree $target (already switched by this loop)"
+      if recently_submitted localize-worktree "$target" "$LOCALIZE_COOLDOWN_SECONDS" "$now_epoch"; then
+        echo "  skip localize-worktree $target (executor switch submitted recently)"
         continue
       fi
       if dispatch_no_track localize-worktree "$target" "$LOCALIZE_COOLDOWN_SECONDS" "$now_epoch" set executor "$target" worktree; then
@@ -1996,6 +1996,9 @@ run_cycle() {
       fi
     done < "$localize_ssh_file"
   fi
+    if [ -s "$localized_failed_tasks_file" ]; then
+      reset_submission_state_after_repair "ssh-to-worktree" "$now_epoch" "$cycle_dir"
+    fi
 
   if [ -s "$stale_ssh_pin_file" ]; then
     echo "clearing stale explicit SSH pool member pins"
