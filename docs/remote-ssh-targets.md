@@ -116,7 +116,7 @@ Reference it from a task exactly like any SSH target — `runnerKind: ssh` plus 
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `type` | yes | Must be `crabbox` |
+| `type` | yes | Must be `crabbox` (`type: crabbox`) |
 | `crabboxCommand` | yes | Path or name of the Crabbox CLI |
 | `provider` | yes | Backend the box is requested from |
 | `class` | yes | Box class/size |
