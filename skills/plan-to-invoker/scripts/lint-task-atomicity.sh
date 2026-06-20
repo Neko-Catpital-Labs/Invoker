@@ -148,9 +148,68 @@ function csv_has(csv, needle,    parts, i, item) {
   }
   return 0
 }
+function reset_file_buckets() {
+  file_has_product = 0
+  file_has_test = 0
+  file_has_proof = 0
+  file_has_policy = 0
+  file_has_docs = 0
+}
+function classify_file_path(path) {
+  if (path == "") return
+  if (path ~ /^scripts\/repro\//) {
+    file_has_proof = 1
+    return
+  }
+  if (path ~ /^skills\// || path ~ /^docs\// || path ~ /\.md$/) {
+    file_has_docs = 1
+    return
+  }
+  if (path ~ /^scripts\//) {
+    file_has_policy = 1
+    return
+  }
+  if (path ~ /^packages\/.*\/(e2e|__tests__)\// || path ~ /\.(spec|test)\.[jt]sx?$/) {
+    file_has_test = 1
+    if (path ~ /(benchmark|performance|visual-proof)/) {
+      file_has_proof = 1
+    }
+    return
+  }
+  if (path ~ /(benchmark|performance|visual-proof)/) {
+    file_has_proof = 1
+    return
+  }
+  if (path ~ /^packages\//) {
+    file_has_product = 1
+    return
+  }
+}
+function parse_file_buckets(desc_text,    lines, i, line, in_files, path) {
+  reset_file_buckets()
+  split(desc_text, lines, /\n/)
+  in_files = 0
+  for (i = 1; i in lines; i++) {
+    line = tolower(trim(lines[i]))
+    if (line ~ /^files:/) {
+      in_files = 1
+      continue
+    }
+    if (in_files == 0) continue
+    if (line ~ /^[a-z][a-z _-]*:/) {
+      in_files = 0
+      continue
+    }
+    path = line
+    sub(/^-+[ \t]*/, "", path)
+    path = trim(path)
+    classify_file_path(path)
+  }
+}
 function parse_metadata(desc_lower,    tmp, parts) {
   layer = ""
   feature_state = ""
+  review_lane = ""
   layer_exception_allowed = 0
   has_acceptance_criteria = (desc_lower ~ /acceptance criteria:/)
   has_goal_heading = (desc_lower ~ /(^|\n)[ \t]*goal:/)
@@ -158,9 +217,19 @@ function parse_metadata(desc_lower,    tmp, parts) {
   has_alternatives_heading = (desc_lower ~ /(^|\n)[ \t]*(alternative considerations|alternatives):/)
   has_implementation_heading = (desc_lower ~ /(^|\n)[ \t]*(implementation details|implementation):/)
   has_review_claim_heading = (desc_lower ~ /(^|\n)[ \t]*review claim:/)
+  has_review_lane_heading = (desc_lower ~ /(^|\n)[ \t]*review lane:/)
   has_safety_invariant_heading = (desc_lower ~ /(^|\n)[ \t]*safety invariant:/)
   has_slice_rationale_heading = (desc_lower ~ /(^|\n)[ \t]*slice rationale:/)
   has_architectural_effect_heading = (desc_lower ~ /(^|\n)[ \t]*architectural effect:/)
+  has_non_goals_heading = (desc_lower ~ /(^|\n)[ \t]*non-goals:/)
+
+  tmp = desc_lower
+  sub(/^.*review lane:[ \t]*/, "", tmp)
+  if (tmp != desc_lower) {
+    gsub(/^[ \t\r\n-]+/, "", tmp)
+    split(tmp, parts, /[^a-z0-9_-]/)
+    review_lane = parts[1]
+  }
 
   tmp = desc_lower
   sub(/^.*layer:[ \t]*/, "", tmp)
@@ -262,12 +331,21 @@ function flush_task(    wc, and_count, valid_id, d, desc_lower, idx) {
       errors[++errn] = "Task \"" id "\" has invalid Feature state \"" feature_state "\"; expected active or dormant"
     }
 
+    if (review_lane == "") {
+      errors[++errn] = "Task \"" id "\" missing required \"Review lane:\" heading in description (expected behavior, refactor, proof, cleanup, policy, or docs)"
+    } else if (review_lane != "behavior" && review_lane != "refactor" && review_lane != "proof" && review_lane != "cleanup" && review_lane != "policy" && review_lane != "docs") {
+      errors[++errn] = "Task \"" id "\" has invalid Review lane \"" review_lane "\"; expected behavior, refactor, proof, cleanup, policy, or docs"
+    }
+
     if (feature_state == "dormant" && has_acceptance_criteria == 0) {
       errors[++errn] = "Task \"" id "\" uses Feature state dormant but omits \"Acceptance criteria:\" in description"
     }
 
     if (strictDelegation == 1 && has_review_claim_heading == 0) {
       errors[++errn] = "Task \"" id "\" missing required \"Review claim:\" section in description for implementation plans"
+    }
+    if (strictDelegation == 1 && has_review_lane_heading == 0) {
+      errors[++errn] = "Task \"" id "\" missing required \"Review lane:\" section in description for implementation plans"
     }
     if (strictDelegation == 1 && has_safety_invariant_heading == 0) {
       errors[++errn] = "Task \"" id "\" missing required \"Safety invariant:\" section in description for implementation plans"
@@ -277,6 +355,9 @@ function flush_task(    wc, and_count, valid_id, d, desc_lower, idx) {
     }
     if (strictDelegation == 1 && has_architectural_effect_heading == 0) {
       errors[++errn] = "Task \"" id "\" missing required \"Architectural effect:\" section in description for implementation plans"
+    }
+    if (strictDelegation == 1 && has_non_goals_heading == 0) {
+      errors[++errn] = "Task \"" id "\" missing required \"Non-goals:\" section in description for implementation plans"
     }
     if (has_goal_heading == 0) {
       errors[++errn] = "Task \"" id "\" missing required \"Goal:\" section in description for implementation plans"
@@ -291,10 +372,32 @@ function flush_task(    wc, and_count, valid_id, d, desc_lower, idx) {
       errors[++errn] = "Task \"" id "\" missing required \"Implementation details:\" (or \"Implementation:\") section in description for implementation plans"
     }
 
+    parse_file_buckets(desc_lower)
+    if (review_lane == "behavior" || review_lane == "refactor" || review_lane == "cleanup") {
+      if (file_has_policy || file_has_docs || file_has_proof) {
+        errors[++errn] = "Task \"" id "\" mixes Review lane \"" review_lane "\" with policy/docs/proof files; split behavior or cleanup from scripts, docs, skills, repros, and benchmarks"
+      }
+    } else if (review_lane == "proof") {
+      if (file_has_product || file_has_policy || file_has_docs) {
+        errors[++errn] = "Task \"" id "\" mixes Review lane \"proof\" with product or policy/docs files; benchmark, repro, and regression proof should be its own slice"
+      }
+    } else if (review_lane == "policy") {
+      if (file_has_product || file_has_proof) {
+        errors[++errn] = "Task \"" id "\" mixes Review lane \"policy\" with product or proof files; keep tooling/runtime policy separate from behavior and proof changes"
+      }
+    } else if (review_lane == "docs") {
+      if (file_has_product || file_has_policy || file_has_proof) {
+        errors[++errn] = "Task \"" id "\" mixes Review lane \"docs\" with product, policy, or proof files; keep docs and skill updates in their own slice"
+      }
+    }
+
     if (has_prompt) {
       prompt_lower = tolower(prompt_text)
       if (prompt_lower !~ /(^|[ \t])goal:/) {
         errors[++errn] = "Task \"" id "\" prompt missing required \"Goal:\" section for AI implementation tasks"
+      }
+      if (prompt_lower !~ /(^|[ \t])review lane:/) {
+        errors[++errn] = "Task \"" id "\" prompt missing required \"Review lane:\" section for AI implementation tasks"
       }
       if (prompt_lower !~ /(^|[ \t])motivation:/) {
         errors[++errn] = "Task \"" id "\" prompt missing required \"Motivation:\" section for AI implementation tasks"
@@ -304,6 +407,17 @@ function flush_task(    wc, and_count, valid_id, d, desc_lower, idx) {
       }
       if (prompt_lower !~ /(^|[ \t])(implementation details|implementation):/) {
         errors[++errn] = "Task \"" id "\" prompt missing required \"Implementation details:\" (or \"Implementation:\") section for AI implementation tasks"
+      }
+      if (prompt_lower !~ /(^|[ \t])non-goals:/) {
+        errors[++errn] = "Task \"" id "\" prompt missing required \"Non-goals:\" section for AI implementation tasks"
+      }
+      if (review_lane == "refactor") {
+        if ((desc_lower " " prompt_lower) !~ /(no behavior change|behavior unchanged|unchanged behavior|pass unchanged)/) {
+          errors[++errn] = "Task \"" id "\" uses Review lane refactor but does not explicitly promise no behavior change"
+        }
+        if ((desc_lower " " prompt_lower) ~ /(add field|new field|extra field|schema|default flip|new behavior|behavior change)/) {
+          errors[++errn] = "Task \"" id "\" mixes Review lane refactor with new field/schema/behavior language; split extraction from behavior changes"
+        }
       }
       if (strictDelegation == 1) {
         if (desc_lower !~ /(^|\n)[ \t]*files:/) {

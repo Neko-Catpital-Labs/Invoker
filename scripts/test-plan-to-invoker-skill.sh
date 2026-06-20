@@ -65,6 +65,8 @@ must_contain "$SKILL_MD" "verify-noop" "SKILL must explain policy-matrix degrada
 must_contain "$SKILL_MD" "zero-context executable" "SKILL must require zero-context executable prompt instructions"
 must_contain "$SKILL_MD" "Review compression" "SKILL must require review compression for implementation plans"
 must_contain "$SKILL_MD" "Review claim:" "SKILL must require review claim metadata"
+must_contain "$SKILL_MD" "Review lane:" "SKILL must require review lane metadata"
+must_contain "$SKILL_MD" "Non-goals:" "SKILL must require non-goals metadata"
 must_contain "$SKILL_MD" "Safety invariant:" "SKILL must require safety invariant metadata"
 must_contain "$SKILL_MD" "For benchmark/direct-output prompts with" "SKILL frontmatter must expose benchmark mode before body loading"
 must_contain "$SKILL_MD" "never version or metadata wrappers" "SKILL frontmatter must reject legacy benchmark YAML wrappers"
