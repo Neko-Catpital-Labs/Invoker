@@ -88,47 +88,67 @@ function httpRequest(
 }
 
 function makeFacadeDeps(overrides: Partial<WorkflowMutationFacadeDeps> = {}): WorkflowMutationFacadeDeps {
+  const orchestrator = {
+    retryTask: vi.fn(() => [makeTask()]),
+    recreateTask: vi.fn(() => [makeTask()]),
+    recreateDownstream: vi.fn(() => [makeTask()]),
+    retryWorkflow: vi.fn(() => [makeTask()]),
+    recreateWorkflow: vi.fn(() => [makeTask()]),
+    recreateWorkflowFromFreshBase: vi.fn(async () => [makeTask()]),
+    cascadeInvalidationToDownstream: vi.fn(() => []),
+    cancelTask: vi.fn(() => ({ cancelled: ['task-1'], runningCancelled: ['task-1'] })),
+    cancelWorkflow: vi.fn(() => ({ cancelled: ['task-1'], runningCancelled: ['task-1'] })),
+    deleteWorkflow: vi.fn(),
+    detachWorkflow: vi.fn(),
+    forkWorkflow: vi.fn(() => ({
+      forkedWorkflowId: 'wf-fork',
+      sourceWorkflowId: 'wf-1',
+      started: [makeTask({ id: 'fork-t1' })],
+    })),
+    editTaskCommand: vi.fn(() => [makeTask()]),
+    editTaskPrompt: vi.fn(() => [makeTask()]),
+    editTaskType: vi.fn(() => [makeTask()]),
+    editTaskAgent: vi.fn(() => [makeTask()]),
+    setTaskExternalGatePolicies: vi.fn(() => []),
+    selectExperiment: vi.fn(() => [makeTask()]),
+    approve: vi.fn(async () => [makeTask()]),
+    reject: vi.fn(),
+    provideInput: vi.fn(),
+    getTask: vi.fn(() => makeTask()),
+    getAllTasks: vi.fn(() => []),
+    startExecution: vi.fn(() => []),
+  };
+  const persistence = {
+    loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 1 })),
+    updateWorkflow: vi.fn(),
+    loadTasks: vi.fn(() => []),
+  };
+  const taskExecutor = {
+    executeTasks: vi.fn().mockResolvedValue(undefined),
+    publishAfterFix: vi.fn().mockResolvedValue(undefined),
+    resolveConflict: vi.fn().mockResolvedValue(undefined),
+    fixWithAgent: vi.fn().mockResolvedValue(undefined),
+    commitApprovedFix: vi.fn().mockResolvedValue(undefined),
+    killActiveExecution: vi.fn().mockResolvedValue(undefined),
+    preparePoolForRebaseRetry: vi.fn().mockResolvedValue(undefined),
+  };
+  const commandService = {
+    retryTask: vi.fn(async (envelope: { payload: { taskId: string } }) => ({ ok: true as const, data: orchestrator.retryTask(envelope.payload.taskId) })),
+    recreateTask: vi.fn(async (envelope: { payload: { taskId: string } }) => ({ ok: true as const, data: orchestrator.recreateTask(envelope.payload.taskId) })),
+    recreateDownstream: vi.fn(async (envelope: { payload: { taskId: string } }) => ({ ok: true as const, data: orchestrator.recreateDownstream(envelope.payload.taskId) })),
+    retryWorkflow: vi.fn(async (envelope: { payload: { workflowId: string } }) => ({ ok: true as const, data: orchestrator.retryWorkflow(envelope.payload.workflowId) })),
+    recreateWorkflow: vi.fn(async (envelope: { payload: { workflowId: string } }) => {
+      const workflow = persistence.loadWorkflow(envelope.payload.workflowId);
+      persistence.updateWorkflow(envelope.payload.workflowId, { generation: (workflow.generation ?? 0) + 1 });
+      return { ok: true as const, data: orchestrator.recreateWorkflow(envelope.payload.workflowId) };
+    }),
+    runSerializedForWorkflow: vi.fn(async (_workflowId: string | undefined, fn: () => Promise<any> | any) => ({ ok: true as const, data: await fn() })),
+  };
   return {
-    orchestrator: {
-      retryTask: vi.fn(() => [makeTask()]),
-      recreateTask: vi.fn(() => [makeTask()]),
-      retryWorkflow: vi.fn(() => [makeTask()]),
-      recreateWorkflow: vi.fn(() => [makeTask()]),
-      cancelTask: vi.fn(() => ({ cancelled: ['task-1'], runningCancelled: ['task-1'] })),
-      cancelWorkflow: vi.fn(() => ({ cancelled: ['task-1'], runningCancelled: ['task-1'] })),
-      deleteWorkflow: vi.fn(),
-      detachWorkflow: vi.fn(),
-      forkWorkflow: vi.fn(() => ({
-        forkedWorkflowId: 'wf-fork',
-        sourceWorkflowId: 'wf-1',
-        started: [makeTask({ id: 'fork-t1' })],
-      })),
-      editTaskCommand: vi.fn(() => [makeTask()]),
-      editTaskPrompt: vi.fn(() => [makeTask()]),
-      editTaskType: vi.fn(() => [makeTask()]),
-      editTaskAgent: vi.fn(() => [makeTask()]),
-      setTaskExternalGatePolicies: vi.fn(() => []),
-      selectExperiment: vi.fn(() => [makeTask()]),
-      approve: vi.fn(async () => [makeTask()]),
-      reject: vi.fn(),
-      provideInput: vi.fn(),
-      getTask: vi.fn(() => makeTask()),
-      getAllTasks: vi.fn(() => []),
-      startExecution: vi.fn(() => []),
-    } as any,
-    persistence: {
-      loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 1 })),
-      updateWorkflow: vi.fn(),
-      loadTasks: vi.fn(() => []),
-    } as any,
-    taskExecutor: {
-      executeTasks: vi.fn().mockResolvedValue(undefined),
-      publishAfterFix: vi.fn().mockResolvedValue(undefined),
-      resolveConflict: vi.fn().mockResolvedValue(undefined),
-      fixWithAgent: vi.fn().mockResolvedValue(undefined),
-      commitApprovedFix: vi.fn().mockResolvedValue(undefined),
-      killActiveExecution: vi.fn().mockResolvedValue(undefined),
-    } as any,
+    orchestrator: orchestrator as any,
+    persistence: persistence as any,
+    commandService: commandService as any,
+    taskExecutor: taskExecutor as any,
     killRunningTask: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
@@ -299,6 +319,10 @@ describe('Parity: API endpoints wire to facade methods', () => {
         setFixAwaitingApproval: vi.fn(),
         retryTask: vi.fn(() => [makeTask()]),
         recreateTask: vi.fn(() => [makeTask()]),
+        recreateDownstream: vi.fn(() => [makeTask()]),
+        retryWorkflow: vi.fn(() => [makeTask()]),
+        recreateWorkflowFromFreshBase: vi.fn(async () => [makeTask()]),
+        cascadeInvalidationToDownstream: vi.fn(() => []),
         editTaskCommand: vi.fn(() => [makeTask()]),
         editTaskPrompt: vi.fn(() => [makeTask()]),
         editTaskType: vi.fn(() => [makeTask()]),
@@ -334,6 +358,8 @@ describe('Parity: API endpoints wire to facade methods', () => {
         resolveConflict: vi.fn().mockResolvedValue(undefined),
         fixWithAgent: vi.fn().mockResolvedValue(undefined),
         commitApprovedFix: vi.fn().mockResolvedValue(undefined),
+        killActiveExecution: vi.fn().mockResolvedValue(undefined),
+        preparePoolForRebaseRetry: vi.fn().mockResolvedValue(undefined),
       },
       killRunningTask: vi.fn().mockResolvedValue(undefined),
       deleteWorkflow: vi.fn().mockResolvedValue(undefined),
@@ -344,9 +370,21 @@ describe('Parity: API endpoints wire to facade methods', () => {
 
   beforeAll(async () => {
     mocks = createApiMocks();
+    const commandService = {
+      retryTask: vi.fn(async (envelope: { payload: { taskId: string } }) => ({ ok: true as const, data: mocks.orchestrator.retryTask(envelope.payload.taskId) })),
+      recreateTask: vi.fn(async (envelope: { payload: { taskId: string } }) => ({ ok: true as const, data: mocks.orchestrator.recreateTask(envelope.payload.taskId) })),
+      retryWorkflow: vi.fn(async (envelope: { payload: { workflowId: string } }) => ({ ok: true as const, data: mocks.orchestrator.retryWorkflow(envelope.payload.workflowId) })),
+      recreateWorkflow: vi.fn(async (envelope: { payload: { workflowId: string } }) => {
+        const workflow = mocks.persistence.loadWorkflow(envelope.payload.workflowId);
+        mocks.persistence.updateWorkflow(envelope.payload.workflowId, { generation: (workflow.generation ?? 0) + 1 });
+        return { ok: true as const, data: mocks.orchestrator.recreateWorkflow(envelope.payload.workflowId) };
+      }),
+      runSerializedForWorkflow: vi.fn(async (_workflowId: string | undefined, fn: () => Promise<any> | any) => ({ ok: true as const, data: await fn() })),
+    };
     const facade = new WorkflowMutationFacade({
       orchestrator: mocks.orchestrator as any,
       persistence: mocks.persistence as any,
+      commandService: commandService as any,
       taskExecutor: mocks.taskExecutor as any,
       killRunningTask: mocks.killRunningTask,
     });
