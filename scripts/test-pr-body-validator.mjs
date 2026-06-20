@@ -136,4 +136,35 @@ const longSummaryWarnings = getPrBodyWarnings(longSummary);
 assert(validatePrBody(longSummary).length === 0, 'summary readability warnings should not fail validation');
 assert(longSummaryWarnings.some((warning) => warning.includes('Summary paragraph 1')), 'long summary paragraph should warn');
 
+
+const missingVisualProofErrors = validatePrBody(validMinimal, { requiresVisualProof: true });
+assert(
+  missingVisualProofErrors.some((error) => error.includes('UI-impacting changes require a ## Visual Proof section')),
+  'UI-impacting changes should require visual proof media',
+);
+
+const validVisualProof = `${validMinimal}
+
+## Visual Proof
+
+| Before | After |
+|--------|-------|
+| ![before](before.png) | ![after](after.png) |
+`;
+assert(
+  validatePrBody(validVisualProof, { requiresVisualProof: true }).length === 0,
+  'visual proof with screenshots should satisfy UI proof requirement',
+);
+
+const warningOnlyVisualProofErrors = validatePrBody(`${validMinimal}
+
+## Visual Proof
+
+> Warning: visual proof capture failed.
+`, { requiresVisualProof: true });
+assert(
+  warningOnlyVisualProofErrors.some((error) => error.includes('UI-impacting changes require a ## Visual Proof section')),
+  'warning-only visual proof should not satisfy UI proof requirement',
+);
+
 console.log('OK: PR body validator checks passed');

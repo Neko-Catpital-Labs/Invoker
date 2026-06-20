@@ -29,7 +29,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import aws4 from 'aws4';
 import { getPrBodyWarnings, validatePrBody } from './validate-pr-body.mjs';
 
@@ -119,6 +119,7 @@ Options:
 PR body schema:
   Required: ## Summary, ## Test Plan, ## Revert Plan
   Optional: ## Architecture (must include ### Before and ### After when present)
+  UI-impacting diffs require ## Visual Proof with screenshot or video proof.
   Template: scripts/pr-body-template.md`);
   process.exit(1);
 }
@@ -150,14 +151,18 @@ function parseArgs() {
   return parsed;
 }
 
-function assertValidPrBody(body) {
-  const errors = validatePrBody(body);
+function assertValidPrBody(body, options = {}) {
+  const errors = validatePrBody(body, options);
   if (errors.length === 0) return;
 
   throw new Error(
     [
       'PR body does not match the canonical schema.',
       ...errors.map((error) => `- ${error}`),
+      '',
+      options.requiresVisualProof
+        ? 'UI-impacting files changed. Add ## Visual Proof with screenshot or video links, or run the visual-proof capture first.'
+        : '',
       '',
       'Start from scripts/pr-body-template.md and validate with:',
       '  node scripts/validate-pr-body.mjs --body-file <file>',
@@ -286,6 +291,34 @@ function shortOneLine(sha) {
   }
 }
 
+export function isUiImpactingPath(filePath) {
+  const path = filePath.replace(/\\/g, '/');
+  if (path.startsWith('packages/ui/')) return true;
+  if (path.startsWith('packages/app/src/window/')) return true;
+  if (path === 'packages/app/src/main.ts') return true;
+  if (path === 'packages/app/src/preload.ts') return true;
+  if (path === 'packages/app/src/app-menu.ts') return true;
+  return false;
+}
+
+export function getUiImpactingFiles(files) {
+  return files.filter(isUiImpactingPath);
+}
+
+function changedFilesSinceBase(baseBranch) {
+  try {
+    const output = execFileSync(
+      'git',
+      ['diff', '--name-only', `${DEFAULT_PARENT_REMOTE}/${baseBranch}...HEAD`],
+      { encoding: 'utf-8' },
+    ).trim();
+    return output ? output.split('\n').filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+
 function assertCleanPrBase(baseBranch) {
   if (!hasRemote(DEFAULT_PARENT_REMOTE)) {
     throw new Error(
@@ -379,7 +412,13 @@ async function main() {
     body = args.body;
   }
 
-  assertValidPrBody(body);
+  const changedFiles = changedFilesSinceBase(args.base);
+  const uiImpactingFiles = getUiImpactingFiles(changedFiles);
+  if (uiImpactingFiles.length > 0) {
+    console.error(`UI-impacting files changed; requiring visual proof: ${uiImpactingFiles.join(', ')}`);
+  }
+
+  assertValidPrBody(body, { requiresVisualProof: uiImpactingFiles.length > 0 });
   printPrBodyWarnings(body);
 
   // Inject images
@@ -402,7 +441,9 @@ async function main() {
   console.log(prUrl);
 }
 
-main().catch((error) => {
-  console.error(`Error: ${error.message}`);
-  process.exit(1);
-});
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((error) => {
+    console.error(`Error: ${error.message}`);
+    process.exit(1);
+  });
+}

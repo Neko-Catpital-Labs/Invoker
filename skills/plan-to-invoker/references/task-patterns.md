@@ -18,7 +18,7 @@ Source of truth: `packages/surfaces/src/slack/plan-conversation.ts:100-116`
 | "Check file exists" | `command` | `test -f <path>` |
 | "Check pattern in file" | `command` | `grep -q '<pattern>' <path>` |
 | **Post-fix / regression** (standalone or terminal stack gate) | `command` | `pnpm run test:all` — keep focused repro commands earlier in the plan, and reserve the full-suite gate for standalone plans or the terminal stack workflow |
-| "Modify UI component" / "Fix layout" | `prompt` + `visualProof: true` | Set `visualProof: true` at plan level; include `description` |
+| "Modify UI component" / "Fix layout" / "Change Electron window UI" | `prompt` + `visualProof: true` | Set `visualProof: true` at plan level; include `description` |
 | **Add visual proof E2E test case** | `prompt` | Add a test to `packages/app/e2e/visual-proof.spec.ts` that sets up the exact UI state being changed and calls `captureScreenshot(page, '<plan-slug>-<state>')`. See `skills/visual-proof/SKILL.md`. |
 | **Capture visual proof (after)** | `command` | `pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && bash scripts/ui-visual-proof.sh --label after` — depends on **all** implementation tasks |
 | **Invoker-on-Invoker PR publication** | repo-level workflow note | Keep `onFinish: pull_request` + `mergeMode: github`, then publish/update the commit stack with `mergify stack push` once the branch is ready |
@@ -229,7 +229,7 @@ When writing `command` fields:
 
 ## UI Change Plans
 
-Plans that modify UI components (`packages/ui/`) must:
+Plans that modify UI-impacting files (`packages/ui/**`, Electron window lifecycle, preload/main window wiring, or app menu surface) must:
 1. Set `visualProof: true` at the plan level
 2. Include a `description` with architecture context
 3. Include a `prompt` task that adds a **plan-specific** E2E test case to `visual-proof.spec.ts`
