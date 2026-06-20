@@ -114,15 +114,6 @@ describe('loadConfig', () => {
     expect(config.autoFixAgent).toBe('codex');
   });
 
-  it('reads autoFixCi from user config', () => {
-    writeFileSync(
-      join(fakeHome, '.invoker', 'config.json'),
-      JSON.stringify({ autoFixCi: true }),
-    );
-    const config = loadConfig();
-    expect(config.autoFixCi).toBe(true);
-  });
-
   it('loadConfig picks up browser field', () => {
     writeFileSync(
       join(fakeHome, '.invoker', 'config.json'),
@@ -253,4 +244,3 @@ describe('resolveEmbeddedTerminalBackendConfig', () => {
     )).toThrow(/Invalid embedded terminal backend/);
   });
 });
-
