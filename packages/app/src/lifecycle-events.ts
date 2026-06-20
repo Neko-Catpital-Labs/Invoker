@@ -89,7 +89,7 @@ export interface LifecycleBuildOptions {
   readonly previousStatus?: TaskStatus;
   readonly generation?: number;
   readonly attemptId?: string;
-  readonly createdAt?: string | Date;
+  readonly createdAt?: Date;
 }
 
 export interface TaskUpdatedLifecycleEventInput extends LifecycleBuildOptions {
@@ -125,7 +125,7 @@ export interface WorkflowWakeupLifecycleEventInput {
   readonly status?: WorkflowDerivedStatus;
   readonly generation?: number;
   readonly reason: WorkflowWakeupReason;
-  readonly createdAt?: string | Date;
+  readonly createdAt?: Date;
 }
 
 const STATUS_VALUES: readonly WorkflowLifecycleStatus[] = [
@@ -232,6 +232,7 @@ export function buildTaskRemovedLifecycleEvent(input: TaskRemovedLifecycleEventI
 export function buildReviewGateCiFailedLifecycleEvent(
   input: ReviewGateCiFailedLifecycleEventInput,
 ): ReviewGateCiFailedLifecycleEvent {
+  const createdAt = lifecycleCreatedAt(input.createdAt);
   const eventKey = buildLifecycleEventKey({
     kind: 'review_gate.ci_failed',
     workflowId: input.workflowId,
@@ -252,7 +253,7 @@ export function buildReviewGateCiFailedLifecycleEvent(
     generation: input.generation ?? 0,
     ...(input.previousStatus ? { previousStatus: input.previousStatus } : {}),
     ...(input.attemptId ? { attemptId: input.attemptId } : {}),
-    createdAt: normalizeCreatedAt(input.createdAt),
+    createdAt,
     reviewId: input.reviewId,
     reviewUrl: input.reviewUrl,
     ...(input.headSha ? { headSha: input.headSha } : {}),
@@ -267,6 +268,7 @@ export function buildWorkflowWakeupLifecycleEvent(
   input: WorkflowWakeupLifecycleEventInput,
 ): WorkflowWakeupLifecycleEvent {
   const generation = input.generation ?? 0;
+  const createdAt = lifecycleCreatedAt(input.createdAt);
   return {
     eventKey: buildLifecycleEventKey({
       kind: 'workflow.wakeup',
@@ -278,7 +280,7 @@ export function buildWorkflowWakeupLifecycleEvent(
     workflowId: input.workflowId,
     ...(input.status ? { status: input.status } : {}),
     generation,
-    createdAt: normalizeCreatedAt(input.createdAt),
+    createdAt,
     reason: input.reason,
   };
 }
@@ -327,6 +329,7 @@ export function isWorkflowLifecycleEvent(value: unknown): value is WorkflowLifec
   if (!isWorkflowLifecycleEventKind(value.kind)) return false;
   if (typeof value.workflowId !== 'string') return false;
   if (typeof value.createdAt !== 'string') return false;
+  if (!isCanonicalUtcIsoTimestamp(value.createdAt)) return false;
   if (typeof value.generation !== 'number') return false;
   if (value.taskId != null && typeof value.taskId !== 'string') return false;
   if (value.status != null && !isWorkflowLifecycleStatus(value.status)) return false;
@@ -372,8 +375,9 @@ function buildTaskLifecycleEvent(input: {
   readonly taskStateVersion: number;
   readonly generation: number;
   readonly attemptId?: string;
-  readonly createdAt?: string | Date;
+  readonly createdAt?: Date;
 }): TaskLifecycleEvent {
+  const createdAt = lifecycleCreatedAt(input.createdAt);
   return {
     eventKey: buildLifecycleEventKey(input),
     kind: input.kind,
@@ -384,13 +388,25 @@ function buildTaskLifecycleEvent(input: {
     taskStateVersion: input.taskStateVersion,
     generation: input.generation,
     ...(input.attemptId ? { attemptId: input.attemptId } : {}),
-    createdAt: normalizeCreatedAt(input.createdAt),
+    createdAt,
   };
 }
 
-function normalizeCreatedAt(createdAt: string | Date | undefined): string {
-  if (createdAt instanceof Date) return createdAt.toISOString();
-  return createdAt ?? new Date().toISOString();
+function lifecycleCreatedAt(createdAt: unknown): string {
+  const value = createdAt ?? new Date();
+  if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
+    throw new Error('createdAt must be a valid Date');
+  }
+  return value.toISOString();
+}
+
+function isCanonicalUtcIsoTimestamp(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) {
+    return false;
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return false;
+  return parsed.toISOString() === value;
 }
 
 function requireWorkflowId(workflowId: string | undefined, taskId: string): string {
