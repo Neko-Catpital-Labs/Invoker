@@ -1559,6 +1559,15 @@ async function headlessApprove(taskId: string, deps: HeadlessDeps): Promise<void
       .filter((task) => task.config.workflowId === restored.workflowId);
     const readyTasks = (deps.orchestrator.getReadyTasks?.() ?? [])
       .filter((task) => task.config.workflowId === restored.workflowId && task.status === 'pending');
+    if (readyTasks.length > 0) {
+      await executeGlobalTopup({
+        orchestrator: deps.orchestrator,
+        taskExecutor: te,
+        logger: deps.logger,
+        context: 'headless.approve.ready-tasks',
+        mutationTiming: deps.mutationTiming,
+      });
+    }
     const hasRunningWork = workflowTasks.some(
       (task) => task.status === 'running' || task.status === 'fixing_with_ai',
     );
