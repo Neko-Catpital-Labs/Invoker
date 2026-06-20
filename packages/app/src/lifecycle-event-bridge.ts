@@ -80,6 +80,7 @@ export function publishReviewGateCiFailedLifecycleEvent(
   const currentTask = options.getTask?.(input.taskId);
   const status = input.status ?? currentTask?.status;
   const taskStateVersion = input.taskStateVersion ?? currentTask?.taskStateVersion;
+  const attemptId = input.selectedAttemptId ?? currentTask?.execution.selectedAttemptId;
   if (!status || taskStateVersion == null) return undefined;
 
   const event = buildReviewGateCiFailedLifecycleEvent({
@@ -95,7 +96,7 @@ export function publishReviewGateCiFailedLifecycleEvent(
     failedChecks: input.failedChecks,
     statusText: input.statusText,
     generation: input.generation,
-    attemptId: input.selectedAttemptId,
+    attemptId,
     createdAt: options.now?.(),
   });
   options.messageBus.publish(Channels.WORKFLOW_LIFECYCLE, event);

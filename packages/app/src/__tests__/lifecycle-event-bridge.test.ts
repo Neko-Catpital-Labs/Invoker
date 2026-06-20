@@ -263,6 +263,49 @@ describe('lifecycle event bridge', () => {
     expect(isWorkflowLifecycleEvent(events[0])).toBe(true);
   });
 
+  it('fills review-gate CI failure attempt context from persisted task state', () => {
+    const bus = new LocalBus();
+    const events = collectLifecycleEvents(bus);
+    const task = makeTask({
+      id: 'wf-1/merge',
+      status: 'review_ready',
+      config: { workflowId: 'wf-1', isMergeNode: true },
+      execution: {
+        generation: 7,
+        selectedAttemptId: 'attempt-persisted',
+        reviewId: '123',
+        branch: 'feature/ci-red',
+      },
+      taskStateVersion: 12,
+    });
+
+    publishReviewGateCiFailedLifecycleEvent({
+      workflowId: 'wf-1',
+      taskId: 'wf-1/merge',
+      reviewId: '123',
+      reviewUrl: 'https://github.com/owner/repo/pull/123',
+      headSha: 'abc123',
+      headRef: 'feature/ci-red',
+      branch: 'feature/ci-red',
+      generation: 7,
+      failedChecks: [
+        { name: 'test-all', conclusion: 'FAILURE', detailsUrl: 'https://github.com/owner/repo/actions/runs/1' },
+      ],
+      statusText: 'CI failed',
+    }, {
+      messageBus: bus,
+      getTask: () => task,
+      now: () => CREATED_AT,
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      eventKey: 'review_gate.ci_failed|workflow:wf-1|task:wf-1/merge|generation:7|attempt:attempt-persisted|task-state:12|review:123:abc123',
+      attemptId: 'attempt-persisted',
+    });
+    expectRecoveryWakeup(events[0], { reason: 'review_gate_failure' });
+  });
+
   it('unsubscribes cleanly', () => {
     const bus = new LocalBus();
     const events = collectLifecycleEvents(bus);
