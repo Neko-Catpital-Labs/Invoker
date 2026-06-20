@@ -61,7 +61,7 @@ import type {
   TaskStateChanges,
 } from '@invoker/workflow-core';
 import { makeEnvelope, CommandError } from '@invoker/contracts';
-import type { WorkResponse } from '@invoker/contracts';
+import type { BundledSkillsInstallMode, WorkResponse } from '@invoker/contracts';
 import { resolveRepoRoot } from '@invoker/contracts';
 import { SQLiteAdapter, ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
 import { IpcBus, Channels, TransportError, TransportErrorCode } from '@invoker/transport';
@@ -151,7 +151,7 @@ import {
   type EmbeddedTerminalBackend,
 } from './embedded-terminal-manager.js';
 import { collectSystemDiagnostics } from './system-diagnostics.js';
-import { installBundledSkills, resolveBundledSkillsStatus } from './bundled-skills.js';
+import { installBundledSkills, resolveBundledSkillsStatus, type BundledSkillsContext } from './bundled-skills.js';
 import { createRequire } from 'node:module';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
 import { applyDelta, recoverQuarantinedTask, TaskSnapshotCache } from './delta-merge.js';
@@ -414,19 +414,19 @@ interface InitServicesOptions {
 }
 
 function getBundledSkillsStatus() {
-  return resolveBundledSkillsStatus({
-    isPackaged: app.isPackaged,
-    repoRoot,
-    resourcesPath: process.resourcesPath,
-  });
+  return resolveBundledSkillsStatus(createBundledSkillsContext());
 }
 
-function installPackagedSkills(mode: import('@invoker/contracts').BundledSkillsInstallMode = 'install') {
-  return installBundledSkills({
+function createBundledSkillsContext(): BundledSkillsContext {
+  return {
     isPackaged: app.isPackaged,
     repoRoot,
     resourcesPath: process.resourcesPath,
-  }, mode);
+  };
+}
+
+function installPackagedSkills(mode: BundledSkillsInstallMode = 'install') {
+  return installBundledSkills(createBundledSkillsContext(), mode);
 }
 
 async function initServices(options?: InitServicesOptions): Promise<void> {

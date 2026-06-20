@@ -18,12 +18,30 @@ interface BundledSkillsManifest {
   targets: Record<string, { path: string; installedSkillNames: string[] }>;
 }
 
-interface BundledSkillsContext {
+export interface BundledSkillsContext {
   isPackaged: boolean;
   repoRoot: string;
   resourcesPath?: string;
   invokerHomeRoot?: string;
 }
+
+const MANAGED_TARGETS = [
+  {
+    id: 'codex',
+    name: 'Codex',
+    path: () => path.join(homedir(), '.codex', 'skills'),
+  },
+  {
+    id: 'claude',
+    name: 'Claude',
+    path: () => path.join(homedir(), '.claude', 'skills'),
+  },
+  {
+    id: 'cursor',
+    name: 'Cursor',
+    path: () => path.join(homedir(), '.cursor', 'skills-cursor'),
+  },
+] as const;
 
 function resolveBundledSkillsSourceRoot(context: BundledSkillsContext): string | null {
   if (context.isPackaged) {
@@ -66,44 +84,16 @@ function hashDirectory(root: string): string {
   return hash.digest('hex');
 }
 
-function resolveCodexTarget(): BundledSkillTargetStatus {
-  return {
-    id: 'codex',
-    name: 'Codex',
-    path: path.join(homedir(), '.codex', 'skills'),
-    available: true,
-    installed: false,
-    upToDate: false,
-    installedSkillNames: [],
-  };
-}
-
-function resolveClaudeTarget(): BundledSkillTargetStatus {
-  return {
-    id: 'claude',
-    name: 'Claude',
-    path: path.join(homedir(), '.claude', 'skills'),
-    available: true,
-    installed: false,
-    upToDate: false,
-    installedSkillNames: [],
-  };
-}
-
-function resolveCursorTarget(): BundledSkillTargetStatus {
-  return {
-    id: 'cursor',
-    name: 'Cursor',
-    path: path.join(homedir(), '.cursor', 'skills-cursor'),
-    available: true,
-    installed: false,
-    upToDate: false,
-    installedSkillNames: [],
-  };
-}
-
 function resolveManagedTargets(): BundledSkillTargetStatus[] {
-  return [resolveCodexTarget(), resolveClaudeTarget(), resolveCursorTarget()];
+  return MANAGED_TARGETS.map((target) => ({
+    id: target.id,
+    name: target.name,
+    path: target.path(),
+    available: true,
+    installed: false,
+    upToDate: false,
+    installedSkillNames: [],
+  }));
 }
 
 function resolveManifestPath(invokerHomeRoot: string): string {
