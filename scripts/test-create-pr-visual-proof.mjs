@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { getUiImpactingFiles, isUiImpactingPath } from './create-pr.mjs';
+import { getUiImpactingFiles, isUiImpactingPath, parsePorcelainChangedFiles } from './create-pr.mjs';
 
 function assert(condition, message) {
   if (!condition) {
@@ -25,4 +25,18 @@ assert(uiFiles.length === 2, 'only UI-impacting files should be returned');
 assert(uiFiles.includes('packages/ui/src/components/TaskPanel.tsx'), 'UI component file should be returned');
 assert(uiFiles.includes('packages/app/src/window/window-lifecycle.ts'), 'window file should be returned');
 
+
+const porcelainFiles = parsePorcelainChangedFiles(` M scripts/validate-pr-body.mjs
+A  scripts/test-pr-body-validator.mjs
+?? packages/app/src/local-refactor.ts
+`);
+const expectedPorcelainFiles = [
+  'scripts/validate-pr-body.mjs',
+  'scripts/test-pr-body-validator.mjs',
+  'packages/app/src/local-refactor.ts',
+];
+assert(
+  JSON.stringify(porcelainFiles) === JSON.stringify(expectedPorcelainFiles),
+  'porcelain parser should return exact changed file paths',
+);
 console.log('OK: create-pr visual proof checks passed');

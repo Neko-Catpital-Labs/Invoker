@@ -170,8 +170,8 @@ function assertValidPrBody(body, options = {}) {
   );
 }
 
-function printPrBodyWarnings(body) {
-  const warnings = getPrBodyWarnings(body);
+function printPrBodyWarnings(body, options = {}) {
+  const warnings = getPrBodyWarnings(body, options);
   if (warnings.length === 0) return;
 
   console.error('PR body validation warnings:');
@@ -305,6 +305,15 @@ export function getUiImpactingFiles(files) {
   return files.filter(isUiImpactingPath);
 }
 
+export function parsePorcelainChangedFiles(statusText) {
+  return statusText
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .map((line) => line.slice(3).replace(/^"|"$/g, ''))
+    .filter(Boolean);
+}
+
 function changedFilesSinceBase(baseBranch) {
   try {
     const output = execFileSync(
@@ -316,6 +325,32 @@ function changedFilesSinceBase(baseBranch) {
   } catch {
     return [];
   }
+}
+
+function uncommittedFiles() {
+  try {
+    const output = execFileSync(
+      'git',
+      ['status', '--porcelain', '--untracked-files=all'],
+      { encoding: 'utf-8' },
+    );
+    return parsePorcelainChangedFiles(output);
+  } catch {
+    return [];
+  }
+}
+
+function assertNoUncommittedFiles() {
+  const files = uncommittedFiles();
+  if (files.length === 0) return;
+
+  throw new Error(
+    [
+      'Refusing to create/update PR with uncommitted changes.',
+      'Commit, split, or stash these files first; uncommitted files are not included in review-lane validation.',
+      ...files.map((file) => `  - ${file}`),
+    ].join('\n'),
+  );
 }
 
 
@@ -363,6 +398,7 @@ function assertCleanPrBase(baseBranch) {
   );
 }
 
+
 async function createPr(nwo, title, base, body, dryRun) {
   const head = getCurrentBranch();
 
@@ -403,6 +439,7 @@ async function main() {
   const args = parseArgs();
 
   assertCleanPrBase(args.base);
+  assertNoUncommittedFiles();
 
   // Read body
   let body = '';
@@ -419,7 +456,7 @@ async function main() {
   }
 
   assertValidPrBody(body, { requiresVisualProof: uiImpactingFiles.length > 0, changedFiles });
-  printPrBodyWarnings(body);
+  printPrBodyWarnings(body, { changedFiles });
 
   // Inject images
   body = await injectImages(body, args.dryRun);
