@@ -8,6 +8,7 @@ import {
   buildWorkflowWakeupLifecycleEvent,
   isTaskLifecycleEvent,
   isWorkflowLifecycleEvent,
+  lifecycleEventMatchesPersistedTask,
   lifecycleEventKindForTaskStatus,
 } from '../lifecycle-events.js';
 
@@ -284,6 +285,40 @@ describe('lifecycle event helpers', () => {
       taskStateVersion: 10,
       authoritative: false,
     });
+  });
+
+  it('requires persisted task generation, attempt, and state version checks for wakeups', () => {
+    const event = buildTaskUpdatedLifecycleEvent({
+      workflowId: 'wf-1',
+      taskId: 'wf-1/task-a',
+      status: 'failed',
+      previousStatus: 'running',
+      taskStateVersion: 10,
+      generation: 5,
+      attemptId: 'attempt-current',
+      createdAt: CREATED_AT,
+    });
+
+    expect(lifecycleEventMatchesPersistedTask(event, makeTask({
+      status: 'failed',
+      taskStateVersion: 10,
+      execution: { generation: 5, selectedAttemptId: 'attempt-current' },
+    }))).toBe(true);
+    expect(lifecycleEventMatchesPersistedTask(event, makeTask({
+      status: 'failed',
+      taskStateVersion: 10,
+      execution: { generation: 6, selectedAttemptId: 'attempt-current' },
+    }))).toBe(false);
+    expect(lifecycleEventMatchesPersistedTask(event, makeTask({
+      status: 'failed',
+      taskStateVersion: 10,
+      execution: { generation: 5, selectedAttemptId: 'attempt-next' },
+    }))).toBe(false);
+    expect(lifecycleEventMatchesPersistedTask(event, makeTask({
+      status: 'failed',
+      taskStateVersion: 11,
+      execution: { generation: 5, selectedAttemptId: 'attempt-current' },
+    }))).toBe(false);
   });
 
   it('rejects malformed lifecycle events', () => {

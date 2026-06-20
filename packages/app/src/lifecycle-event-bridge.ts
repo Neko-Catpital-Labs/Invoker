@@ -1,9 +1,11 @@
 import { Channels, type MessageBus, type Unsubscribe } from '@invoker/transport';
 import type { TaskDelta, TaskState, TaskStatus } from '@invoker/workflow-core';
 import {
+  buildReviewGateCiFailedLifecycleEvent,
   buildTaskCreatedLifecycleEvent,
   buildTaskRemovedLifecycleEvent,
   buildTaskUpdatedLifecycleEvent,
+  type ReviewGateFailedCheck,
   type WorkflowLifecycleEvent,
 } from './lifecycle-events.js';
 
@@ -27,6 +29,22 @@ export interface LifecycleEventBridgeOptions {
 
 export interface LifecycleEventBridge {
   readonly stop: Unsubscribe;
+}
+
+export interface ReviewGateCiFailedWakeupInput {
+  readonly workflowId: string;
+  readonly taskId: string;
+  readonly status?: TaskStatus;
+  readonly taskStateVersion?: number;
+  readonly reviewId: string;
+  readonly reviewUrl: string;
+  readonly headSha?: string;
+  readonly headRef?: string;
+  readonly branch?: string;
+  readonly selectedAttemptId?: string;
+  readonly generation: number;
+  readonly failedChecks: readonly ReviewGateFailedCheck[];
+  readonly statusText: string;
 }
 
 export function startLifecycleEventBridge(options: LifecycleEventBridgeOptions): LifecycleEventBridge {
@@ -53,6 +71,35 @@ export function startLifecycleEventBridge(options: LifecycleEventBridgeOptions):
   });
 
   return { stop };
+}
+
+export function publishReviewGateCiFailedLifecycleEvent(
+  input: ReviewGateCiFailedWakeupInput,
+  options: Pick<LifecycleEventBridgeOptions, 'messageBus' | 'getTask' | 'now'>,
+): WorkflowLifecycleEvent | undefined {
+  const currentTask = options.getTask?.(input.taskId);
+  const status = input.status ?? currentTask?.status;
+  const taskStateVersion = input.taskStateVersion ?? currentTask?.taskStateVersion;
+  if (!status || taskStateVersion == null) return undefined;
+
+  const event = buildReviewGateCiFailedLifecycleEvent({
+    workflowId: input.workflowId,
+    taskId: input.taskId,
+    status,
+    taskStateVersion,
+    reviewId: input.reviewId,
+    reviewUrl: input.reviewUrl,
+    headSha: input.headSha,
+    headRef: input.headRef,
+    branch: input.branch,
+    failedChecks: input.failedChecks,
+    statusText: input.statusText,
+    generation: input.generation,
+    attemptId: input.selectedAttemptId,
+    createdAt: options.now?.(),
+  });
+  options.messageBus.publish(Channels.WORKFLOW_LIFECYCLE, event);
+  return event;
 }
 
 function buildEventForTaskDelta(
