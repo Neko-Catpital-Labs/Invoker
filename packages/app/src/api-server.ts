@@ -19,7 +19,9 @@
  *
  * Write endpoints:
  *   POST   /api/tasks/:id/cancel
+ *   POST   /api/tasks/:id/retry
  *   POST   /api/tasks/:id/restart
+ *   POST   /api/tasks/:id/recreate
  *   POST   /api/tasks/:id/recreate-downstream
  *   POST   /api/tasks/:id/resolve-conflict  body: { agent? }
  *   POST   /api/tasks/:id/approve
@@ -202,6 +204,16 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+type TaskRecreationAction = 'recreated' | 'recreated_downstream';
+
+function taskRecreationResponse(
+  taskId: string,
+  action: TaskRecreationAction,
+  result: MutationResult,
+): Record<string, unknown> {
+  return { ok: true, taskId, action, tasksStarted: result.runnable.length };
+}
+
 export function startApiServer(deps: ApiServerDeps): ApiServer {
   const {
     logger: apiLogger,
@@ -300,7 +312,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         const taskId = decodeURIComponent(recreateTaskMatch[1]);
         try {
           const result = await mutations.recreateTask(taskId);
-          json(res, 200, { ok: true, taskId, action: 'recreated', tasksStarted: result.runnable.length });
+          json(res, 200, taskRecreationResponse(taskId, 'recreated', result));
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
@@ -313,7 +325,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         const taskId = decodeURIComponent(recreateDownstreamMatch[1]);
         try {
           const result = await mutations.recreateDownstream(taskId);
-          json(res, 200, { ok: true, taskId, action: 'recreated_downstream', tasksStarted: result.runnable.length });
+          json(res, 200, taskRecreationResponse(taskId, 'recreated_downstream', result));
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });
         }

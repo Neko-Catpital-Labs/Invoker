@@ -2980,6 +2980,34 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return Number(running?.count ?? 0);
   }
 
+  requeueOrphanedWorkflowMutationIntents(now: Date = new Date()): number {
+    const rows = this.queryAll(
+      `SELECT i.id
+         FROM workflow_mutation_intents i
+         LEFT JOIN workflow_mutation_leases l
+           ON l.workflow_id = i.workflow_id
+          AND l.active_intent_id = i.id
+          AND l.lease_expires_at >= ?
+        WHERE i.status = 'running'
+          AND l.workflow_id IS NULL`,
+      [now.toISOString()],
+    );
+    const ids = rows
+      .map((row) => Number(row.id))
+      .filter((id) => Number.isFinite(id));
+    if (ids.length === 0) {
+      return 0;
+    }
+    this.execRun(
+      `UPDATE workflow_mutation_intents
+         SET status = 'queued', owner_id = NULL, started_at = NULL, completed_at = NULL, error = NULL
+       WHERE status = 'running'
+         AND id IN (${ids.map(() => '?').join(', ')})`,
+      ids,
+    );
+    return ids.length;
+  }
+
   claimNextWorkflowMutationIntent(
     workflowId: string,
     ownerId: string,

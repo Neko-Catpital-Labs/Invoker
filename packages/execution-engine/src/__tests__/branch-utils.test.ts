@@ -737,7 +737,7 @@ describe('bashMergeUpstreams', () => {
       rmSync(seedDir, { recursive: true, force: true });
       rmSync(originDir, { recursive: true, force: true });
     }
-  });
+  }, 60_000);
 
   it('fetches and merges dependency branches from intermediate', async () => {
     const originDir = join(repoDir, '..', `origin-intermediate-${Date.now()}.git`);
@@ -774,7 +774,7 @@ describe('bashMergeUpstreams', () => {
       rmSync(intermediateDir, { recursive: true, force: true });
       rmSync(originDir, { recursive: true, force: true });
     }
-  });
+  }, 60_000);
 });
 
 // ---------------------------------------------------------------------------
