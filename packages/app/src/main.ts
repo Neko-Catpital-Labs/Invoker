@@ -2235,6 +2235,7 @@ function createEmbeddedTerminalBackendFromConfig(
       executionAgentRegistry: agentRegistry,
       repoRoot,
       invokerConfig,
+      messageBus,
       logger,
       taskHandles,
       enqueueTaskOutput,

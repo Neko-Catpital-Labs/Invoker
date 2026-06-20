@@ -44,13 +44,6 @@ export interface InvokerConfig {
    */
   autoFixAgent?: string;
   /**
-   * When true, failed CI checks on Invoker-created review-gate PRs can
-   * trigger the same auto-fix recovery flow used for task failures.
-   *
-   * Default: false.
-   */
-  autoFixCi?: boolean;
-  /**
    * Read-only diagnostics tuning for the Action Graph view.
    * Default stall threshold: 60000ms. Env fallback:
    * INVOKER_ACTION_STALL_THRESHOLD_MS.
