@@ -1511,9 +1511,14 @@ export class Orchestrator {
           });
           return [];
         }
+        // Validate lineage independently for each field that the response carries.
+        // The attempt-id check above already rejects mismatched attempts. Here we
+        // also reject a stale executionGeneration whenever it is present — even when
+        // the attempt id matches the live task — so that when both fields are present
+        // they must both match. Older producers that omit executionGeneration skip
+        // this check, preserving backwards compatibility.
         const activeGeneration = this.getExecutionGeneration(earlyTask);
         if (
-          !response.attemptId &&
           response.executionGeneration !== undefined &&
           response.executionGeneration !== activeGeneration
         ) {
