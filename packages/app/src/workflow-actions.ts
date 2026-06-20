@@ -7,16 +7,20 @@
  */
 
 import type { Logger } from '@invoker/contracts';
-import type { Orchestrator, ExternalGatePolicyUpdate } from '@invoker/workflow-core';
 import type {
-  CancelInFlightFn,
-  InvalidationDeps,
+  CommandService,
+  Orchestrator,
+  ExternalGatePolicyUpdate,
+  InvalidationAction,
   InvalidationScope,
   TaskState,
+  CancelInFlightFn,
+  InvalidationDeps,
 } from '@invoker/workflow-core';
 import {
   OrchestratorError,
   OrchestratorErrorCode,
+  applyInvalidation,
   buildCancelInFlight as buildCoreCancelInFlight,
   parseMergeConflictError,
 } from '@invoker/workflow-core';
@@ -124,6 +128,10 @@ export interface ActionDeps {
   mutationTiming?: WorkflowMutationTiming;
   /** When true, successful AI-applied fixes are approved immediately. */
   autoApproveAIFixes?: boolean;
+}
+
+export interface CommandActionDeps extends ActionDeps {
+  commandService: CommandService;
 }
 
 export interface ApproveTaskResult {

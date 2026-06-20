@@ -101,6 +101,8 @@ function createMocks() {
       recreateDownstream: vi.fn(() => [makeTask()]),
       retryWorkflow: vi.fn(() => [makeTask()]),
       recreateWorkflow: vi.fn(() => [makeTask()]),
+      recreateWorkflowFromFreshBase: vi.fn(async () => [makeTask()]),
+      cascadeInvalidationToDownstream: vi.fn(() => []),
       editTaskCommand: vi.fn(() => [makeTask()]),
       editTaskPrompt: vi.fn(() => [makeTask()]),
       editTaskType: vi.fn(() => [makeTask()]),
@@ -138,10 +140,10 @@ function createMocks() {
     },
     executorRegistry: {},
     commandService: {
-      runSerializedForWorkflow: vi.fn(async (_workflowId: string, fn: () => unknown) => {
-        await fn();
-        return { ok: true, data: undefined };
-      }),
+      runSerializedForWorkflow: vi.fn(async (_workflowId: string, fn: () => Promise<unknown> | unknown) => ({
+        ok: true,
+        data: await fn(),
+      })),
       // Production CommandService routes through applyInvalidation which
       // ultimately invokes orchestrator.{retry,recreate}{Task,Workflow}
       // and (for recreateWorkflow) bumpGenerationAndRecreate which calls
@@ -200,6 +202,8 @@ function createMocks() {
       resolveConflict: vi.fn().mockResolvedValue(undefined),
       fixWithAgent: vi.fn().mockResolvedValue(undefined),
       commitApprovedFix: vi.fn().mockResolvedValue(undefined),
+      killActiveExecution: vi.fn().mockResolvedValue(undefined),
+      preparePoolForRebaseRetry: vi.fn().mockResolvedValue(undefined),
     },
     killRunningTask: vi.fn().mockResolvedValue(undefined),
     deleteWorkflow: vi.fn().mockResolvedValue(undefined),
@@ -291,8 +295,7 @@ beforeEach(() => {
   mocks.persistence.loadTask.mockImplementation((id: string) => (id === 'task-1' ? makeTask() : undefined));
   mocks.persistence.loadTasks.mockReturnValue([makeTask()]);
   mocks.commandService.runSerializedForWorkflow.mockImplementation(async (_workflowId: string, fn: () => unknown) => {
-    await fn();
-    return { ok: true, data: undefined };
+    return { ok: true, data: await fn() };
   });
   mocks.persistence.getEvents.mockReturnValue([{ taskId: 'task-1', eventType: 'started', timestamp: '2024-01-01' }]);
   mocks.persistence.getTaskOutput.mockReturnValue('hello world output');
@@ -1045,8 +1048,8 @@ describe('POST /api/workflows/:id/rebase-recreate', () => {
     }
   });
 
-  it('recreates workflow from fresh base', async () => {
-    mocks.orchestrator.recreateWorkflow = vi.fn(() => [makeTask()]);
+  it('recreates workflow', async () => {
+    mocks.orchestrator.recreateWorkflow = vi.fn(() => [makeTask({ id: 'wf-1/task-a' })]);
     const res = await request(port, 'POST', '/api/workflows/wf-1/rebase-recreate');
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
