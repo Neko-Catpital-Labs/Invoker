@@ -545,7 +545,7 @@ describe('headless delegation enforcement', () => {
           execution: {},
         } as any;
         mockDeps.commandService.editTaskCommand = vi.fn(async () => ({ ok: true as const, data: [runnableTask] }));
-        mockDeps.commandService.editTaskType = vi.fn(async () => ({ ok: true as const, data: [runnableTask] }));
+        mockDeps.commandService.editTaskPool = vi.fn(async () => ({ ok: true as const, data: [runnableTask] }));
         mockDeps.commandService.editTaskAgent = vi.fn(async () => ({ ok: true as const, data: [runnableTask] }));
         mockDeps.commandService.setTaskExternalGatePolicies = vi.fn(async () => ({ ok: true as const, data: [runnableTask] }));
         const executeTasksSpy = vi
@@ -553,12 +553,12 @@ describe('headless delegation enforcement', () => {
           .mockResolvedValue(undefined);
 
         await runHeadless(['set', 'command', 'wf-1/task-1', 'echo ok'], mockDeps);
-        await runHeadless(['set', 'executor', 'wf-1/task-1', 'shell'], mockDeps);
+        await runHeadless(['set', 'pool', 'wf-1/task-1', 'mixed-local-ssh'], mockDeps);
         await runHeadless(['set', 'agent', 'wf-1/task-1', 'codex'], mockDeps);
         await runHeadless(['set', 'gate-policy', 'wf-1/task-1', 'wf-upstream', 'review_ready'], mockDeps);
 
         expect(mockDeps.commandService.editTaskCommand).toHaveBeenCalled();
-        expect(mockDeps.commandService.editTaskType).toHaveBeenCalled();
+        expect(mockDeps.commandService.editTaskPool).toHaveBeenCalled();
         expect(mockDeps.commandService.editTaskAgent).toHaveBeenCalled();
         expect(mockDeps.commandService.setTaskExternalGatePolicies).toHaveBeenCalled();
 

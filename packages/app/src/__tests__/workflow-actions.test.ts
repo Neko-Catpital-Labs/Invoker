@@ -18,7 +18,6 @@ import {
   provideInput,
   editTaskCommand,
   editTaskPrompt,
-  editTaskType,
   selectExperiment,
   setWorkflowMergeMode,
   fixWithAgentAction,
@@ -1354,27 +1353,6 @@ describe('editTaskPrompt', () => {
   });
 });
 
-describe('editTaskType', () => {
-  it('calls orchestrator.editTaskType and returns result', () => {
-    const tasks = [makeRunningTask()];
-    const orchestrator = { editTaskType: vi.fn(() => tasks) };
-
-    const result = editTaskType('task-a', 'docker', {
-      orchestrator: orchestrator as unknown as Orchestrator,
-    });
-
-    expect(orchestrator.editTaskType).toHaveBeenCalledWith('task-a', 'docker', undefined);
-    expect(result).toBe(tasks);
-  });
-
-  it('passes poolMemberId when provided', () => {
-    const orchestrator = { editTaskType: vi.fn(() => []) };
-
-    editTaskType('task-a', 'ssh', { orchestrator: orchestrator as unknown as Orchestrator }, 'remote-1');
-
-    expect(orchestrator.editTaskType).toHaveBeenCalledWith('task-a', 'ssh', 'remote-1');
-  });
-});
 
 describe('selectExperiment', () => {
   it('calls orchestrator.selectExperiment and returns result', () => {

@@ -87,21 +87,6 @@ describe('app-layer handoff repros', () => {
     expect(h.getTask('A')!.status).toBe('running');
   });
 
-  it('edit-task-type records a runnable launch for the outbox', async () => {
-    h.loadAndStart(LINEAR_PLAN);
-    h.failTask('A', 'broken');
-
-    const started = h.orchestrator.editTaskType('A', 'worktree');
-    expect(started.some((task) => task.id.endsWith('/A') && task.status === 'running')).toBe(true);
-    expect(h.getTask('A')!.execution.workspacePath).toBeUndefined();
-
-    const result = await dispatchStarted(h, started, 'test.edit-task-type');
-
-    expect(result.runnable.map((task) => task.id)).toEqual([h.getTask('A')!.id]);
-    expect(result.topup).toEqual([]);
-    expect(h.getTask('A')!.execution.workspacePath).toBeUndefined();
-    expect(h.getTask('A')!.status).toBe('running');
-  });
 
   it('edit-task-agent records a runnable launch for the outbox', async () => {
     h.loadAndStart(LINEAR_PLAN);

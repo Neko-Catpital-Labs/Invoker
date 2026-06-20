@@ -105,7 +105,6 @@ function createMocks() {
       cascadeInvalidationToDownstream: vi.fn(() => []),
       editTaskCommand: vi.fn(() => [makeTask()]),
       editTaskPrompt: vi.fn(() => [makeTask()]),
-      editTaskType: vi.fn(() => [makeTask()]),
       editTaskAgent: vi.fn(() => [makeTask()]),
       setTaskExternalGatePolicies: vi.fn(() => [makeTask()]),
       cancelTask: vi.fn(() => ({ cancelled: ['task-1'], runningCancelled: ['task-1'] })),
@@ -282,7 +281,6 @@ beforeEach(() => {
   mocks.orchestrator.beginConflictResolution.mockReturnValue({ savedError: 'saved-error' });
   mocks.orchestrator.editTaskCommand.mockReturnValue([makeTask()]);
   mocks.orchestrator.editTaskPrompt.mockReturnValue([makeTask()]);
-  mocks.orchestrator.editTaskType.mockReturnValue([makeTask()]);
   mocks.orchestrator.setTaskExternalGatePolicies.mockReturnValue([makeTask()]);
   mocks.orchestrator.cancelTask.mockReturnValue({ cancelled: ['task-1'], runningCancelled: ['task-1'] });
   mocks.orchestrator.cancelWorkflow.mockReturnValue({ cancelled: ['task-1'], runningCancelled: ['task-1'] });
@@ -809,39 +807,10 @@ describe('POST /api/tasks/:id/edit-prompt', () => {
 });
 
 describe('POST /api/tasks/:id/edit-type', () => {
-  it('edits task type', async () => {
+  it('rejects direct executor changes', async () => {
     const res = await request(port, 'POST', '/api/tasks/task-1/edit-type', { runnerKind: 'docker' });
-    expect(res.status).toBe(200);
-    expect(res.body.ok).toBe(true);
-    expect(res.body.action).toBe('type_edited');
-    expect(mocks.orchestrator.editTaskType).toHaveBeenCalledWith('task-1', 'docker', undefined);
-  });
-
-  it('passes poolMemberId when provided', async () => {
-    const res = await request(port, 'POST', '/api/tasks/task-1/edit-type', {
-      runnerKind: 'ssh',
-      poolMemberId: 'remote-1',
-    });
-    expect(res.status).toBe(200);
-    expect(mocks.orchestrator.editTaskType).toHaveBeenCalledWith('task-1', 'ssh', 'remote-1');
-  });
-
-  it('returns 400 when runnerKind is missing', async () => {
-    const res = await request(port, 'POST', '/api/tasks/task-1/edit-type', {});
-    expect(res.status).toBe(400);
-    expect(res.body.error).toContain('Missing "runnerKind"');
-  });
-
-  it('forwards a poolMemberId-only change (host change)', async () => {
-    const res = await request(port, 'POST', '/api/tasks/task-1/edit-type', {
-      runnerKind: 'ssh',
-      poolMemberId: 'remote-b',
-    });
-    expect(res.status).toBe(200);
-    expect(res.body.ok).toBe(true);
-    expect(res.body.action).toBe('type_edited');
-    expect(mocks.orchestrator.editTaskType).toHaveBeenCalledWith('task-1', 'ssh', 'remote-b');
-    expect(mocks.taskExecutor.executeTasks).not.toHaveBeenCalled();
+    expect(res.status).toBe(410);
+    expect(res.body.error).toContain('Executor selection is internal');
   });
 });
 
