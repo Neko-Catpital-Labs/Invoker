@@ -638,6 +638,51 @@ describe('headless delegation enforcement', () => {
         executeTasksSpy.mockRestore();
       });
 
+      it('headless approve tops up ready pending downstream work before tracking', async () => {
+        let taskBStatus: 'pending' | 'completed' = 'pending';
+        let startExecutionCalls = 0;
+        const taskA = {
+          id: 'wf-1/task-a',
+          status: 'completed',
+          config: { workflowId: 'wf-1' },
+          execution: {},
+        } as any;
+        const taskB = () => ({
+          id: 'wf-1/task-b',
+          status: taskBStatus,
+          config: { workflowId: 'wf-1' },
+          execution: {},
+        }) as any;
+
+        mockDeps.persistence.listWorkflows = vi.fn(() => [{
+          id: 'wf-1',
+          name: 'test-workflow',
+          generation: 0,
+          status: 'running' as const,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }]);
+        mockDeps.persistence.loadTasks = vi.fn(() => [taskA, taskB()]);
+        mockDeps.orchestrator.getAllTasks = vi.fn(() => [taskA, taskB()]);
+        mockDeps.orchestrator.getReadyTasks = vi.fn(() => (
+          taskBStatus === 'pending' ? [taskB()] : []
+        ));
+        mockDeps.orchestrator.startExecution = vi.fn(() => {
+          startExecutionCalls += 1;
+          if (startExecutionCalls >= 2) {
+            taskBStatus = 'completed';
+          }
+          return [];
+        });
+        mockDeps.commandService.approve = vi.fn(async () => ({ ok: true as const, data: [] }));
+
+        await runHeadless(['approve', 'wf-1/task-a'], mockDeps);
+
+        expect(mockDeps.commandService.approve).toHaveBeenCalled();
+        expect(mockDeps.orchestrator.getReadyTasks).toHaveBeenCalled();
+        expect(mockDeps.orchestrator.startExecution).toHaveBeenCalledTimes(2);
+      });
+
       // Step 16: pin headless approve/reject routing.
       // Per docs/architecture/task-invalidation-roadmap.md row
       // "Approve or reject fix", these verbs MUST flow through
