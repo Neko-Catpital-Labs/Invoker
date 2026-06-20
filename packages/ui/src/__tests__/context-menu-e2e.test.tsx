@@ -46,6 +46,17 @@ const workflows: WorkflowMeta[] = [
   { id: 'wf-1', name: 'Test Workflow', status: 'running', baseBranch: 'master' },
 ];
 
+const stackedWorkflows: WorkflowMeta[] = [
+  { id: 'wf-0', name: 'Upstream Workflow', status: 'completed', baseBranch: 'master' },
+  {
+    id: 'wf-1',
+    name: 'Downstream Workflow',
+    status: 'running',
+    baseBranch: 'master',
+    externalDependencies: [{ workflowId: 'wf-0', requiredStatus: 'completed' }],
+  },
+];
+
 describe('Context menu (component)', () => {
   let mock: MockInvoker;
 
@@ -114,7 +125,8 @@ describe('Context menu (component)', () => {
       | 'recreateWorkflow'
       | 'rebaseRetry'
       | 'rebaseRecreate'
-      | 'cancelWorkflow',
+      | 'cancelWorkflow'
+      | 'detachWorkflow',
   ) {
     const actions = {
       retryWorkflow: mock.api.retryWorkflow,
@@ -122,10 +134,15 @@ describe('Context menu (component)', () => {
       rebaseRetry: mock.api.rebaseRetry,
       rebaseRecreate: mock.api.rebaseRecreate,
       cancelWorkflow: mock.api.cancelWorkflow,
+      detachWorkflow: mock.api.detachWorkflow,
     };
     for (const [name, action] of Object.entries(actions)) {
       if (name === called) {
-        expect(action).toHaveBeenCalledWith('wf-1');
+        if (name === 'detachWorkflow') {
+          expect(action).toHaveBeenCalledWith('wf-1', 'wf-0');
+        } else {
+          expect(action).toHaveBeenCalledWith('wf-1');
+        }
       } else {
         expect(action).not.toHaveBeenCalled();
       }
@@ -148,6 +165,39 @@ describe('Context menu (component)', () => {
     expect(await screen.findByText('Rebase and Retry')).toBeInTheDocument();
     expect(screen.getByText('Rebase and Recreate')).toBeInTheDocument();
     expect(screen.queryByText('Recreate Downstream')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Detach from/)).not.toBeInTheDocument();
+  });
+
+  it('workflow detach asks for confirmation, calls detach once, and shows feedback', async () => {
+    await setup([alpha, beta, merge], stackedWorkflows);
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    fireEvent.click(await screen.findByText('More'));
+
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Detach from Upstream Workflow \(wf-0\)/ }));
+
+    expect(window.confirm).toHaveBeenCalledWith(
+      expect.stringContaining('Detach downstream workflow "Downstream Workflow" (wf-1) from upstream workflow "Upstream Workflow" (wf-0)?'),
+    );
+    expectOnlyWorkflowApiCalled('detachWorkflow');
+    expect(mock.api.detachWorkflow).toHaveBeenCalledTimes(1);
+    expect(await screen.findByTestId('action-feedback')).toHaveTextContent(
+      'Detached downstream workflow "Downstream Workflow" (wf-1) from upstream workflow "Upstream Workflow" (wf-0).',
+    );
+  });
+
+  it('workflow detach cancellation calls no mutation', async () => {
+    vi.mocked(window.confirm).mockReturnValue(false);
+    await setup([alpha, beta, merge], stackedWorkflows);
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    fireEvent.click(await screen.findByText('More'));
+
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Detach from Upstream Workflow \(wf-0\)/ }));
+
+    expect(window.confirm).toHaveBeenCalledWith(
+      expect.stringContaining('Detach downstream workflow "Downstream Workflow" (wf-1) from upstream workflow "Upstream Workflow" (wf-0)?'),
+    );
+    expect(mock.api.detachWorkflow).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('action-feedback')).not.toBeInTheDocument();
   });
 
   it('task context menu still works in mini DAG', async () => {
