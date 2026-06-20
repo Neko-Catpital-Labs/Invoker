@@ -2,9 +2,19 @@
 
 import { readFileSync } from 'node:fs';
 
-const REQUIRED_SECTIONS = ['## Summary', '## Test Plan', '## Revert Plan'];
+const REQUIRED_SECTIONS = [
+  '## Summary',
+  '## Review Claim',
+  '## Review Lane',
+  '## Safety Invariant',
+  '## Slice Rationale',
+  '## Non-goals',
+  '## Test Plan',
+  '## Revert Plan',
+];
 const DISCOURAGED_HEADINGS = ['## Testing', '## Notes'];
 const SUMMARY_WORD_LIMIT = 30;
+const VALID_REVIEW_LANES = new Set(['behavior', 'refactor', 'proof', 'cleanup', 'policy', 'docs']);
 
 function getSectionBody(body, heading) {
   const lines = body.split(/\r?\n/);
@@ -36,6 +46,90 @@ function hasVisualProofMedia(body) {
     || /\bhttps?:\/\/\S+\.(?:png|jpe?g|gif|webp|webm|mp4)\b/i.test(visualProof);
 }
 
+function normalizeSectionValue(sectionBody) {
+  const firstLine = sectionBody
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean);
+
+  if (!firstLine) return '';
+  return firstLine.replace(/^[-*]\s*/, '').trim().toLowerCase();
+}
+
+function classifyScopeKind(filePath) {
+  const path = filePath.replace(/\\/g, '/');
+
+  if (path.startsWith('scripts/repro/')) return 'proof';
+  if (path.startsWith('skills/') || path.startsWith('docs/') || path.endsWith('.md')) return 'docs';
+  if (path.startsWith('scripts/')) return 'policy';
+  if (
+    path.includes('/e2e/')
+    || path.includes('/__tests__/')
+    || /\.(spec|test)\.[jt]sx?$/.test(path)
+  ) {
+    if (/(benchmark|performance|visual-proof)/.test(path)) return 'proof';
+    return 'product-test';
+  }
+  if (/(benchmark|performance|visual-proof)/.test(path)) return 'proof';
+  if (path.startsWith('packages/')) return 'product';
+  return 'other';
+}
+
+function formatKinds(kinds) {
+  return Array.from(kinds).sort().join(', ');
+}
+
+export function validatePrScope({ changedFiles = [], reviewLane = '', body = '' } = {}) {
+  const errors = [];
+  if (!reviewLane || changedFiles.length === 0) return errors;
+
+  const kinds = new Set(changedFiles.map(classifyScopeKind).filter((kind) => kind !== 'other'));
+  const nonGoals = getSectionBody(body, '## Non-goals').toLowerCase();
+
+  if (reviewLane === 'behavior' || reviewLane === 'refactor' || reviewLane === 'cleanup') {
+    const forbidden = ['docs', 'policy', 'proof'].filter((kind) => kinds.has(kind));
+    if (forbidden.length > 0) {
+      errors.push(
+        `Review lane ${reviewLane} cannot ship with ${forbidden.join(', ')} files in the same PR. Split behavior or cleanup from docs, policy, repro, and benchmark slices.`,
+      );
+    }
+  }
+
+  if (reviewLane === 'proof') {
+    const forbidden = ['product', 'docs', 'policy'].filter((kind) => kinds.has(kind));
+    if (forbidden.length > 0) {
+      errors.push(
+        `Review lane proof cannot ship with ${forbidden.join(', ')} files in the same PR. Keep benchmarks, repros, and regression proof separate from behavior or policy changes.`,
+      );
+    }
+  }
+
+  if (reviewLane === 'policy') {
+    const forbidden = ['product', 'proof'].filter((kind) => kinds.has(kind));
+    if (forbidden.length > 0) {
+      errors.push(
+        `Review lane policy cannot ship with ${forbidden.join(', ')} files in the same PR. Keep tooling/runtime policy separate from behavior and proof changes.`,
+      );
+    }
+  }
+
+  if (reviewLane === 'docs') {
+    const forbidden = ['product', 'policy', 'proof', 'product-test'].filter((kind) => kinds.has(kind));
+    if (forbidden.length > 0) {
+      errors.push(
+        `Review lane docs cannot ship with ${forbidden.join(', ')} files in the same PR. Keep docs and skill updates in their own slice.`,
+      );
+    }
+  }
+
+  if (reviewLane === 'refactor') {
+    if (!/(no behavior change|behavior unchanged|unchanged behavior|pass unchanged)/.test(nonGoals)) {
+      errors.push('Review lane refactor must state in ## Non-goals that behavior stays unchanged.');
+    }
+  }
+
+  return errors;
+}
 
 export function getPrBodyWarnings(body) {
   const warnings = [];
@@ -61,7 +155,7 @@ export function validatePrBody(body, options = {}) {
 
   if (!trimmed) {
     return [
-      'PR body is empty. Use the canonical schema: ## Summary, ## Test Plan, ## Revert Plan, plus optional ## Architecture.',
+      'PR body is empty. Use the canonical schema: ## Summary, ## Review Claim, ## Review Lane, ## Safety Invariant, ## Slice Rationale, ## Non-goals, ## Test Plan, and ## Revert Plan.',
     ];
   }
 
@@ -74,7 +168,7 @@ export function validatePrBody(body, options = {}) {
   for (const heading of DISCOURAGED_HEADINGS) {
     if (trimmed.includes(heading)) {
       errors.push(
-        `Unsupported section: ${heading}. Do not use the lightweight PR format; use ## Test Plan and ## Revert Plan instead.`,
+        `Unsupported section: ${heading}. Do not use the lightweight PR format; use the canonical review-compression schema instead.`,
       );
     }
   }
@@ -87,12 +181,26 @@ export function validatePrBody(body, options = {}) {
     }
   }
 
+  const reviewLane = normalizeSectionValue(getSectionBody(trimmed, '## Review Lane'));
+  if (reviewLane && !VALID_REVIEW_LANES.has(reviewLane)) {
+    errors.push(`Invalid review lane: ${reviewLane}. Expected one of ${Array.from(VALID_REVIEW_LANES).join(', ')}.`);
+  }
+
+  const reviewClaim = getSectionBody(trimmed, '## Review Claim');
+  if (reviewClaim && !reviewClaim.trim()) {
+    errors.push('## Review Claim must not be empty.');
+  }
 
   if (options.requiresVisualProof && !hasVisualProofMedia(trimmed)) {
     errors.push(
       'UI-impacting changes require a ## Visual Proof section with at least one screenshot image or video/walkthrough link.',
     );
   }
+
+  if (reviewLane && options.changedFiles?.length) {
+    errors.push(...validatePrScope({ changedFiles: options.changedFiles, reviewLane, body: trimmed }));
+  }
+
   return errors;
 }
 
@@ -100,7 +208,7 @@ function usage() {
   console.error(`Usage: node scripts/validate-pr-body.mjs (--body-file <file> | --body <markdown>) [--require-visual-proof]
 
 Validates the canonical PR schema:
-  Required: ## Summary, ## Test Plan, ## Revert Plan
+  Required: ## Summary, ## Review Claim, ## Review Lane, ## Safety Invariant, ## Slice Rationale, ## Non-goals, ## Test Plan, ## Revert Plan
   Optional: ## Architecture (must include ### Before and ### After when present)
   UI changes: pass --require-visual-proof to require screenshot or video proof.`);
   process.exit(1);

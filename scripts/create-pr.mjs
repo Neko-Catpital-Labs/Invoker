@@ -117,7 +117,7 @@ Options:
   --help             Show this help
 
 PR body schema:
-  Required: ## Summary, ## Test Plan, ## Revert Plan
+  Required: ## Summary, ## Review Claim, ## Review Lane, ## Safety Invariant, ## Slice Rationale, ## Non-goals, ## Test Plan, ## Revert Plan
   Optional: ## Architecture (must include ### Before and ### After when present)
   UI-impacting diffs require ## Visual Proof with screenshot or video proof.
   Template: scripts/pr-body-template.md`);
@@ -157,7 +157,7 @@ function assertValidPrBody(body, options = {}) {
 
   throw new Error(
     [
-      'PR body does not match the canonical schema.',
+      'PR body does not match the canonical review-compression schema.',
       ...errors.map((error) => `- ${error}`),
       '',
       options.requiresVisualProof
@@ -418,7 +418,7 @@ async function main() {
     console.error(`UI-impacting files changed; requiring visual proof: ${uiImpactingFiles.join(', ')}`);
   }
 
-  assertValidPrBody(body, { requiresVisualProof: uiImpactingFiles.length > 0 });
+  assertValidPrBody(body, { requiresVisualProof: uiImpactingFiles.length > 0, changedFiles });
   printPrBodyWarnings(body);
 
   // Inject images
