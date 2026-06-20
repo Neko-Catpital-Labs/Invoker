@@ -2,14 +2,21 @@
 
 import { readFileSync } from 'node:fs';
 import {
+  formatReviewUnits,
   getMarkdownSection,
-  validateSingleReviewUnitFocus,
+  normalizeReviewUnit,
+  reviewUnitsForChangedFiles,
+  validateReviewLaneUnitCompatibility,
+  validateReviewUnitChangedFiles,
+  validateReviewUnitFocus,
+  validateReviewUnitValue,
 } from './review-unit-rules.mjs';
 
 const REQUIRED_SECTIONS = [
   '## Summary',
   '## Review Claim',
   '## Review Lane',
+  '## Review Unit',
   '## Safety Invariant',
   '## Slice Rationale',
   '## Non-goals',
@@ -41,13 +48,7 @@ function hasVisualProofMedia(body) {
 }
 
 function normalizeSectionValue(sectionBody) {
-  const firstLine = sectionBody
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .find(Boolean);
-
-  if (!firstLine) return '';
-  return firstLine.replace(/^[-*]\s*/, '').trim().toLowerCase();
+  return normalizeReviewUnit(sectionBody);
 }
 
 function classifyScopeKind(filePath) {
@@ -125,20 +126,30 @@ export function validatePrScope({ changedFiles = [], reviewLane = '', body = '' 
   return errors;
 }
 
-export function getPrBodyWarnings(body) {
+export function getPrBodyWarnings(body, options = {}) {
   const warnings = [];
   const summary = getSectionBody(body, '## Summary');
-  if (!summary) return warnings;
+  if (summary) {
+    const paragraphs = summary.split(/\n\s*\n/).map((paragraph) => paragraph.trim()).filter(Boolean);
+    paragraphs.forEach((paragraph, index) => {
+      const wordCount = countWords(paragraph);
+      if (wordCount > SUMMARY_WORD_LIMIT) {
+        warnings.push(
+          `Summary paragraph ${index + 1} is ${wordCount} words. Keep each Summary paragraph under ${SUMMARY_WORD_LIMIT} words.`,
+        );
+      }
+    });
+  }
 
-  const paragraphs = summary.split(/\n\s*\n/).map((paragraph) => paragraph.trim()).filter(Boolean);
-  paragraphs.forEach((paragraph, index) => {
-    const wordCount = countWords(paragraph);
-    if (wordCount > SUMMARY_WORD_LIMIT) {
-      warnings.push(
-        `Summary paragraph ${index + 1} is ${wordCount} words. Keep each Summary paragraph under ${SUMMARY_WORD_LIMIT} words.`,
-      );
-    }
-  });
+  const changedFiles = options.changedFiles ?? [];
+  if (changedFiles.length > 10) {
+    warnings.push(`PR changes ${changedFiles.length} files. Split before review unless this is one mechanical/generated slice.`);
+  }
+
+  const units = reviewUnitsForChangedFiles(changedFiles);
+  if (units.length > 2) {
+    warnings.push(`PR spans ${units.length} review units: ${formatReviewUnits(units)}.`);
+  }
 
   return warnings;
 }
@@ -149,7 +160,7 @@ export function validatePrBody(body, options = {}) {
 
   if (!trimmed) {
     return [
-      'PR body is empty. Use the canonical schema: ## Summary, ## Review Claim, ## Review Lane, ## Safety Invariant, ## Slice Rationale, ## Non-goals, ## Test Plan, and ## Revert Plan.',
+      'PR body is empty. Use the canonical schema: ## Summary, ## Review Claim, ## Review Lane, ## Review Unit, ## Safety Invariant, ## Slice Rationale, ## Non-goals, ## Test Plan, and ## Revert Plan.',
     ];
   }
 
@@ -180,11 +191,20 @@ export function validatePrBody(body, options = {}) {
     errors.push(`Invalid review lane: ${reviewLane}. Expected one of ${Array.from(VALID_REVIEW_LANES).join(', ')}.`);
   }
 
+  const reviewUnit = normalizeReviewUnit(getSectionBody(trimmed, '## Review Unit'));
+  errors.push(...validateReviewUnitValue(reviewUnit, 'PR body'));
+  errors.push(...validateReviewLaneUnitCompatibility({
+    reviewLane,
+    reviewUnit,
+    context: 'PR body',
+  }));
+
   const reviewClaim = getSectionBody(trimmed, '## Review Claim');
   if (reviewClaim && !reviewClaim.trim()) {
     errors.push('## Review Claim must not be empty.');
   }
-  errors.push(...validateSingleReviewUnitFocus({
+  errors.push(...validateReviewUnitFocus({
+    declaredReviewUnit: reviewUnit,
     context: 'PR body',
     texts: [
       getSectionBody(trimmed, '## Summary'),
@@ -201,6 +221,11 @@ export function validatePrBody(body, options = {}) {
 
   if (reviewLane && options.changedFiles?.length) {
     errors.push(...validatePrScope({ changedFiles: options.changedFiles, reviewLane, body: trimmed }));
+    errors.push(...validateReviewUnitChangedFiles({
+      declaredReviewUnit: reviewUnit,
+      changedFiles: options.changedFiles,
+      context: 'PR body',
+    }));
   }
 
   return errors;
@@ -210,7 +235,7 @@ function usage() {
   console.error(`Usage: node scripts/validate-pr-body.mjs (--body-file <file> | --body <markdown>) [--require-visual-proof]
 
 Validates the canonical PR schema:
-  Required: ## Summary, ## Review Claim, ## Review Lane, ## Safety Invariant, ## Slice Rationale, ## Non-goals, ## Test Plan, ## Revert Plan
+  Required: ## Summary, ## Review Claim, ## Review Lane, ## Review Unit, ## Safety Invariant, ## Slice Rationale, ## Non-goals, ## Test Plan, ## Revert Plan
   Optional: ## Architecture (must include ### Before and ### After when present)
   UI changes: pass --require-visual-proof to require screenshot or video proof.`);
   process.exit(1);
@@ -220,6 +245,7 @@ function parseArgs(argv) {
   let body = '';
   let bodyFile = '';
   let requiresVisualProof = false;
+
   for (let i = 0; i < argv.length; i++) {
     switch (argv[i]) {
       case '--body':
