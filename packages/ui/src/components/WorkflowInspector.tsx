@@ -7,13 +7,11 @@ interface WorkflowInspectorProps {
   workflow: WorkflowMeta | null;
   task: TaskState | null;
   workflowTasks?: Map<string, TaskState>;
-  remoteTargets?: string[];
   executionPools?: string[];
   executionAgents?: string[];
   actionNode?: unknown;
   collapsed: boolean;
   advancedExpanded: boolean;
-  onEditType?: (taskId: string, runnerKind: string, poolMemberId?: string) => void;
   onEditPool?: (taskId: string, poolId: string) => void;
   onEditAgent?: (taskId: string, agentName: string) => void;
   onEditPrompt?: (taskId: string, newPrompt: string) => void;
