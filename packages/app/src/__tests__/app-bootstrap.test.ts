@@ -149,6 +149,27 @@ describe('app-bootstrap', () => {
     expect(order).toEqual(['lock', 'setup']);
   });
 
+  it('shows a message and quits before setup when the Invoker-home GUI lock is already held', () => {
+    const setupGuiMode = vi.fn();
+    const quit = vi.fn();
+    const notifyGuiAlreadyRunning = vi.fn();
+
+    startGuiModeBootstrap({
+      app: {
+        requestSingleInstanceLock: vi.fn(() => true),
+        quit,
+      },
+      isTest: false,
+      acquireGuiLock: () => null,
+      notifyGuiAlreadyRunning,
+      setupGuiMode,
+    });
+
+    expect(notifyGuiAlreadyRunning).toHaveBeenCalledTimes(1);
+    expect(quit).toHaveBeenCalledTimes(1);
+    expect(setupGuiMode).not.toHaveBeenCalled();
+  });
+
   it('skips the single-instance lock in tests', () => {
     const requestSingleInstanceLock = vi.fn(() => true);
     const setupGuiMode = vi.fn();
@@ -190,6 +211,30 @@ describe('app-bootstrap', () => {
     });
 
     expect(order).toEqual(['headless', 'gui']);
+  });
+
+  it('does not acquire a GUI lock or start GUI setup in headless mode', () => {
+    const acquireGuiLock = vi.fn();
+    const setupGuiMode = vi.fn();
+    const startHeadlessMode = vi.fn();
+
+    startMainProcessBootstrap({
+      isHeadless: true,
+      startHeadlessMode,
+      startGuiMode: () => startGuiModeBootstrap({
+        app: {
+          requestSingleInstanceLock: vi.fn(() => true),
+          quit: vi.fn(),
+        },
+        isTest: false,
+        acquireGuiLock,
+        setupGuiMode,
+      }),
+    });
+
+    expect(startHeadlessMode).toHaveBeenCalledTimes(1);
+    expect(acquireGuiLock).not.toHaveBeenCalled();
+    expect(setupGuiMode).not.toHaveBeenCalled();
   });
 
   it('registers lifecycle handlers without changing event names', () => {
