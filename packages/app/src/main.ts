@@ -2589,8 +2589,6 @@ function createEmbeddedTerminalBackendFromConfig(
         return { channel: 'headless.exec', request: { args: ['set', 'command', String(arg0), String(arg1)] } };
       case 'invoker:edit-task-prompt':
         return { channel: 'headless.exec', request: { args: ['set', 'prompt', String(arg0), String(arg1)] } };
-      case 'invoker:edit-task-type':
-        return { channel: 'headless.exec', request: { args: ['set', 'executor', String(arg0), String(arg1)] } };
       case 'invoker:edit-task-pool':
         return null;
       case 'invoker:edit-task-agent':
@@ -4295,28 +4293,6 @@ function createEmbeddedTerminalBackendFromConfig(
       }
     });
 
-    registerGuiMutationHandler('invoker:edit-task-type', async (taskIdArg: unknown, runnerKindArg: unknown, poolMemberIdArg?: unknown) => {
-      const taskId = String(taskIdArg);
-      const runnerKind = String(runnerKindArg);
-      const poolMemberId = poolMemberIdArg === undefined ? undefined : String(poolMemberIdArg);
-      logger.info(`edit-task-type: "${taskId}" → "${runnerKind}" poolMemberId=${poolMemberId ?? 'none'}`, { module: 'ipc' });
-      try {
-        const envelope = makeEnvelope('edit-task-type', 'ui', 'task', { taskId, runnerKind, poolMemberId });
-        const result = await commandService.editTaskType(envelope);
-        if (!result.ok) throw new Error(result.error.message);
-        await dispatchStartedTasksWithGlobalTopup({
-          orchestrator,
-          taskExecutor: requireTaskExecutor(),
-          logger,
-          context: 'ipc.edit-task-type',
-          started: result.data,
-          scopedTaskIds: [taskId],
-        });
-      } catch (err) {
-        logger.error(`edit-task-type failed: ${err}`, { module: 'ipc' });
-        throw err;
-      }
-    });
 
     registerGuiMutationHandler('invoker:edit-task-pool', async (taskIdArg: unknown, poolIdArg: unknown) => {
       const taskId = String(taskIdArg);
