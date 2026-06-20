@@ -992,13 +992,14 @@ export class TaskRunner {
         } catch {
           // Preserve the original startup failure if output persistence also fails.
         }
+        const launchStale = this.isLaunchStale(task.id, attemptId, startGeneration);
         // Only persist startup-failure metadata when the launch is still
         // current.  If the task has moved to a newer attempt or generation
         // (e.g. via recreate-task), writing old workspace/branch metadata
         // would corrupt the live attempt's state.
         if (
           (meta.workspacePath || meta.branch || meta.agentSessionId || meta.containerId)
-          && !this.isLaunchStale(task.id, attemptId, task.execution.generation ?? 0)
+          && !launchStale
         ) {
           const execution: Record<string, string> = {};
           if (meta.workspacePath) execution.workspacePath = meta.workspacePath;
@@ -1020,13 +1021,26 @@ export class TaskRunner {
             execution: execution as any,
           });
         }
+        if (launchStale) {
+          this.persistence.logEvent?.(task.id, 'task.executor.stale_startup_failure', {
+            attemptId,
+            executorType: executor.type,
+            error: err instanceof Error ? err.message : String(err),
+            workspacePath: meta.workspacePath,
+            branch: meta.branch,
+            hasAgentSessionId: Boolean(meta.agentSessionId),
+            hasContainerId: Boolean(meta.containerId),
+          });
+        }
         this.pendingPoolSelections.delete(task.id);
         this.releasePoolSelectionLease(poolSelectionForStart);
         const wrapped = new Error(
           `Executor startup failed (${executor.type}): ${err instanceof Error ? err.message : String(err)}`,
           { cause: err },
         );
-        this.callbacks.onLaunchFailed?.(task.id, wrapped, executor);
+        if (!launchStale) {
+          this.callbacks.onLaunchFailed?.(task.id, wrapped, executor);
+        }
         throw wrapped;
       } finally {
         clearInterval(preStartHeartbeatTimer);
