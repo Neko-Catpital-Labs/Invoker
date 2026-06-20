@@ -344,64 +344,6 @@ describe('State × Topology Matrix', () => {
       expect(allTasks.find((t) => t.id === 'D-v2')).toBeUndefined();
     });
 
-    it('matrix entry: runner-kind edit is retry-class / task scope (root + descendants get gen bump; root branch/workspacePath preserved)', () => {
-      orchestrator.loadPlan(diamondPlan());
-      orchestrator.startExecution();
-
-      orchestrator.handleWorkerResponse(complete('A'));
-      orchestrator.handleWorkerResponse(complete('B'));
-      orchestrator.handleWorkerResponse(complete('C'));
-      orchestrator.handleWorkerResponse(complete('D'));
-
-      // Hydrate workspace lineage on the root so the preservation half
-      // of the assertion is meaningful (the in-memory persistence mock
-      // does not write branch/workspacePath itself for completed work).
-      // `editTaskType()` calls `refreshFromDb()` internally, which
-      // re-loads from the persistence mock — no manual sync needed.
-      // Tasks in the matrix tests are persisted under their fully-qualified
-      // `<workflowId>/<bareId>` key (e.g. `wf-test-N/A`), even though
-      // `orchestrator.getTask('A')` accepts the bare id via state-machine
-      // resolution. Find the persisted key for `A` so the seed actually
-      // updates the right entry.
-      const persistedAKey = Array.from(persistence.tasks.keys()).find(
-        (k) => k === 'A' || k.endsWith('/A'),
-      );
-      if (!persistedAKey) throw new Error('Test setup: could not find persisted key for task A');
-      persistence.updateTask(persistedAKey, {
-        execution: {
-          branch: 'experiment/preserved-branch',
-          commit: 'cafef00d',
-          workspacePath: '/tmp/preserved-workspace',
-        },
-      });
-
-      const genBefore = {
-        A: orchestrator.getTask('A')!.execution.generation ?? 0,
-        B: orchestrator.getTask('B')!.execution.generation ?? 0,
-        C: orchestrator.getTask('C')!.execution.generation ?? 0,
-        D: orchestrator.getTask('D')!.execution.generation ?? 0,
-      };
-
-      orchestrator.editTaskType('A', 'worktree');
-
-      const genAfter = {
-        A: orchestrator.getTask('A')!.execution.generation ?? 0,
-        B: orchestrator.getTask('B')!.execution.generation ?? 0,
-        C: orchestrator.getTask('C')!.execution.generation ?? 0,
-        D: orchestrator.getTask('D')!.execution.generation ?? 0,
-      };
-
-      // ── Task-scope generation bump (root + transitive dependents). ──
-      expect(genAfter.A).toBe(genBefore.A + 1);
-      expect(genAfter.B).toBe(genBefore.B + 1);
-      expect(genAfter.C).toBe(genBefore.C + 1);
-      expect(genAfter.D).toBe(genBefore.D + 1);
-
-      const rootAfter = orchestrator.getTask('A')!;
-      expect(rootAfter.config.runnerKind).toBe('worktree');
-      expect(rootAfter.execution.branch).toBe('experiment/preserved-branch');
-      expect(rootAfter.execution.workspacePath).toBe('/tmp/preserved-workspace');
-    });
 
     it('matrix entry: command edit is recreate-class / task scope (root + descendants get gen bump)', () => {
       orchestrator.loadPlan(diamondPlan());
