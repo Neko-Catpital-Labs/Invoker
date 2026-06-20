@@ -4,6 +4,7 @@ import { buildFixWithAgentMutationArgs } from '../auto-fix-intents.js';
 import type { TaskState } from '@invoker/workflow-core';
 import type { WorkflowMutationIntent, WorkflowMutationPriority } from '@invoker/data-store';
 import type { RecoveryWorkerWakeupHint } from '../lifecycle-events.js';
+import type { AutoFixRecoveryActivity } from '../worker-runtime.js';
 
 function makeTask(overrides: Partial<TaskState> = {}): TaskState {
   const { config, execution, ...rest } = overrides;
@@ -30,6 +31,7 @@ function makeRecoveryHarness(task: TaskState = makeTask(), consumeWakeups?: () =
   const workflows = [{ id: 'wf-1' }];
   const tasks = new Map<string, TaskState>([[task.id, task]]);
   const intents: WorkflowMutationIntent[] = [];
+  const activities: AutoFixRecoveryActivity[] = [];
   const logEvent = vi.fn();
   const submit = vi.fn((workflowId: string, priority: WorkflowMutationPriority, channel: string, args: unknown[]) => {
     const id = intents.length + 1;
@@ -59,14 +61,15 @@ function makeRecoveryHarness(task: TaskState = makeTask(), consumeWakeups?: () =
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), trace: vi.fn(), child: vi.fn() },
     defaultAutoFixRetries: 3,
     getAutoFixAgent: () => 'codex',
+    onActivity: (activity) => activities.push(activity),
     ...(consumeWakeups ? { consumeWakeups } : {}),
   });
-  return { tick, submit, logEvent, tasks, intents };
+  return { tick, submit, logEvent, tasks, intents, activities };
 }
 
 describe('auto-fix recovery worker policy', () => {
   it('submits eligible failed tasks discovered by the startup scan through the command route', async () => {
-    const { tick, submit } = makeRecoveryHarness();
+    const { tick, submit, activities } = makeRecoveryHarness();
 
     await tick({
       identity: { kind: 'recovery', instanceId: 'test' },
@@ -81,6 +84,10 @@ describe('auto-fix recovery worker policy', () => {
       'invoker:fix-with-agent',
       buildFixWithAgentMutationArgs('wf-1/task-1', 'codex', { autoFix: true }),
     );
+    expect(activities).toEqual([
+      expect.objectContaining({ type: 'scan', source: 'scan', candidateCount: 1 }),
+      expect.objectContaining({ type: 'submit', taskId: 'wf-1/task-1', intentId: 1 }),
+    ]);
   });
 
   it('deduplicates repeated wakeups for the same failed task', async () => {
@@ -134,6 +141,7 @@ describe('auto-fix recovery worker policy', () => {
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), trace: vi.fn(), child: vi.fn() },
       defaultAutoFixRetries: 3,
       consumeWakeups: () => [wakeup],
+      onActivity: (activity) => harness.activities.push(activity),
     });
 
     await tick({
@@ -152,5 +160,11 @@ describe('auto-fix recovery worker policy', () => {
         latestGeneration: 2,
       }),
     );
+    expect(harness.activities).toContainEqual(expect.objectContaining({
+      type: 'skip',
+      taskId: 'wf-1/task-1',
+      reason: 'stale-generation',
+      source: 'wakeup',
+    }));
   });
 });

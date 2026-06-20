@@ -6,7 +6,7 @@ State transitions publish lifecycle events. Recovery behavior is owned by subscr
 
 The producer of a persisted workflow or task state change is responsible for publishing a lifecycle wakeup after the durable state change is recorded. The producer must not directly auto-fix, recreate, or launch external recovery scripts as part of handling a failed delta. Auto-fix and external recovery are worker responsibilities, and workers must act through the same normal command routes used by operators.
 
-This is a docs-only architecture note. It describes the target contract and does not change runtime behavior.
+Auto-fix recovery is an explicit worker. Normal headless commands do not start recovery loops.
 
 ## Current Overlap
 
@@ -83,6 +83,16 @@ The worker should only act when persisted state shows that:
 4. No incompatible recovery action is already in progress.
 
 When those checks pass, the auto-fix worker submits the normal fix command. It must not be invoked directly by the producer that recorded the failed transition.
+
+Operator commands:
+
+```bash
+invoker-cli worker autofix
+invoker-cli worker status
+invoker-cli query audit <taskId>
+```
+
+`worker status` reports the active owner id, service state, last scan, last wakeup, last submitted command intent, and recent skip reasons. `query audit <taskId>` is the durable trail for per-task skip and submit events. Status reporting is observational and must not affect recovery eligibility or command submission ordering.
 
 ## External Recovery Worker
 

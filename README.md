@@ -85,6 +85,23 @@ shasum -a 256 -c SHA256SUMS --ignore-missing
 
 `invoker-cli run <plan.yaml>` defaults to `auto` mode: it submits the plan to a running desktop owner over IPC when one is reachable, and otherwise runs the plan in a standalone CLI database at `~/.invoker-cli`. Use `--live` to require the desktop owner, `--standalone` to force isolated CLI execution, `--db-dir <path>` to choose a different standalone database directory, and `--json` for a machine-readable result summary.
 
+### Recovery Workers
+
+Recovery loops do not start from normal commands. Start auto-fix recovery explicitly:
+
+```bash
+invoker-cli worker autofix
+```
+
+Inspect ownership and recent activity:
+
+```bash
+invoker-cli worker status
+invoker-cli query audit <taskId>
+```
+
+`worker status` shows the recovery worker id, service state, last scan, last wakeup, last submission, and recent skip reasons. `query audit <taskId>` shows durable auto-fix skip and submit events for that task.
+
 ### Desktop UI
 
 Install the desktop UI launcher with npm:

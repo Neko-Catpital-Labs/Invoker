@@ -135,6 +135,59 @@ describe('invoker-cli', () => {
     output.restore();
   });
 
+  it('worker status reads live owner status without starting workers', async () => {
+    const output = captureProcessOutput();
+    const bus = new LocalBus();
+    const queryHandler = vi.fn(async (req: unknown) => {
+      expect(req).toEqual(expect.objectContaining({
+        kind: 'worker-status',
+        traceId: expect.stringContaining('invoker-cli.headless.query.worker-status'),
+      }));
+      return {
+        workers: [{
+          kind: 'autofix',
+          service: 'running',
+          owner: 'recovery/headless-worker-autofix',
+          note: 'long-running auto-fix recovery worker',
+          snapshot: {
+            recovery: {
+              lastScanAt: '2026-01-01T00:00:00.000Z',
+              lastScanReason: 'startup',
+              lastScanSource: 'scan',
+              lastScanCandidateCount: 1,
+              wakeupCount: 2,
+              lastWakeupAt: '2026-01-01T00:01:00.000Z',
+              lastWakeupTaskId: 'wf-1/task-1',
+              submittedCount: 1,
+              lastSubmittedAt: '2026-01-01T00:02:00.000Z',
+              lastSubmittedTaskId: 'wf-1/task-1',
+              lastSubmittedIntentId: 7,
+              skippedCount: 1,
+              lastSkipReason: 'stale-generation',
+              lastSkipTaskId: 'wf-1/task-2',
+              lastSkipAt: '2026-01-01T00:03:00.000Z',
+              skipReasons: { 'stale-generation': 1 },
+            },
+          },
+        }],
+      };
+    });
+    const execHandler = vi.fn(async () => ({ ok: true }));
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'standalone' }));
+    bus.onRequest('headless.query', queryHandler);
+    bus.onRequest('headless.exec', execHandler);
+
+    const code = await main(['worker', 'status'], { createMessageBus: () => bus });
+
+    expect(code).toBe(0);
+    expect(queryHandler).toHaveBeenCalledTimes(1);
+    expect(execHandler).not.toHaveBeenCalled();
+    expect(output.stdout).toContain('service=running owner=recovery/headless-worker-autofix');
+    expect(output.stdout).toContain('lastScan=2026-01-01T00:00:00.000Z');
+    expect(output.stdout).toContain('skipReasons=stale-generation=1');
+    output.restore();
+  });
+
   it('run does not start worker services as a side effect', async () => {
     const output = captureProcessOutput();
     const bus = new LocalBus();

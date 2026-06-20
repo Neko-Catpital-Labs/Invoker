@@ -73,6 +73,48 @@ describe('worker runtime', () => {
       });
       expect(contexts[1].tickNumber).toBe(2);
     });
+
+    it('reports runtime ownership and last tick/wakeup without changing scheduling', async () => {
+      const onTick = vi.fn().mockResolvedValue(undefined);
+      const runtime = createWorkerRuntime({
+        kind: 'recovery',
+        instanceId: 'status-1',
+        logger,
+        onTick,
+        tickOnStart: false,
+        installSignalHandlers: false,
+      });
+
+      expect(runtime.getStatus()).toMatchObject({
+        identity: { kind: 'recovery', instanceId: 'status-1' },
+        running: false,
+        tickCount: 0,
+        lastTickAt: null,
+        lastWakeupAt: null,
+      });
+
+      runtime.start();
+      runtime.wake();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(onTick).toHaveBeenCalledTimes(1);
+      expect(runtime.getStatus()).toMatchObject({
+        running: true,
+        tickCount: 1,
+        lastTickReason: 'wake',
+        lastWakeupReason: 'wake',
+      });
+      expect(runtime.getStatus().startedAt).toEqual(expect.any(String));
+      expect(runtime.getStatus().lastTickAt).toEqual(expect.any(String));
+      expect(runtime.getStatus().lastWakeupAt).toEqual(expect.any(String));
+
+      await runtime.stop();
+      expect(runtime.getStatus()).toMatchObject({
+        running: false,
+        stoppedAt: expect.any(String),
+      });
+    });
   });
 
   describe('poll', () => {
@@ -368,6 +410,7 @@ describe('worker runtime', () => {
     it('exposes the recovery identity', () => {
       const runtime = createRecoveryWorker({ logger, instanceId: 'rec-1', installSignalHandlers: false });
       expect(runtime.identity).toEqual({ kind: RECOVERY_WORKER_KIND, instanceId: 'rec-1' });
+      expect(runtime.getRecoveryStatus().runtime.identity).toEqual(runtime.identity);
     });
 
     it('is behavior-neutral: its default tick does nothing and does not throw', async () => {

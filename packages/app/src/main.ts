@@ -133,6 +133,7 @@ import {
   createHeadlessExecutor,
   wireHeadlessApproveHook,
   hasRunningHeadlessWorker,
+  getHeadlessWorkerStatuses,
   type HeadlessDeps,
 } from './headless.js';
 import {
@@ -1609,6 +1610,9 @@ function startHeadlessMode(): void {
           }
           if (kind === 'queue') {
             return orchestrator.getQueueStatus() as unknown as Record<string, unknown>;
+          }
+          if (kind === 'worker-status') {
+            return { workers: getHeadlessWorkerStatuses() };
           }
           if (kind === 'workflow-status') {
             return orchestrator.getWorkflowStatus();
@@ -3137,6 +3141,9 @@ function createEmbeddedTerminalBackendFromConfig(
         }
         if (kind === 'queue') {
           return orchestrator.getQueueStatus() as unknown as Record<string, unknown>;
+        }
+        if (kind === 'worker-status') {
+          return { workers: getHeadlessWorkerStatuses() };
         }
         if (kind === 'workflow-status') {
           return orchestrator.getWorkflowStatus();

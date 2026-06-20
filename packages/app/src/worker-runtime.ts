@@ -88,6 +88,22 @@ export interface WorkerRuntime {
   stop(): Promise<void>;
   /** True between `start()` and `stop()`. */
   isRunning(): boolean;
+  /** Read-only operational snapshot for operator status surfaces. */
+  getStatus(): WorkerRuntimeStatus;
+}
+
+export interface WorkerRuntimeStatus {
+  readonly identity: WorkerIdentity;
+  readonly running: boolean;
+  readonly startedAt: string | null;
+  readonly stoppedAt: string | null;
+  readonly tickCount: number;
+  readonly inFlight: boolean;
+  readonly pendingReason: WorkerTickReason | null;
+  readonly lastTickAt: string | null;
+  readonly lastTickReason: WorkerTickReason | null;
+  readonly lastWakeupAt: string | null;
+  readonly lastWakeupReason: WorkerTickReason | null;
 }
 
 const DEFAULT_SHUTDOWN_SIGNALS: NodeJS.Signals[] = ['SIGINT', 'SIGTERM'];
@@ -122,10 +138,18 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
   let inFlight: Promise<void> | null = null;
   let pendingReason: WorkerTickReason | null = null;
   let tickNumber = 0;
+  let startedAt: string | null = null;
+  let stoppedAt: string | null = null;
+  let lastTickAt: string | null = null;
+  let lastTickReason: WorkerTickReason | null = null;
+  let lastWakeupAt: string | null = null;
+  let lastWakeupReason: WorkerTickReason | null = null;
   const signalHandlers = new Map<NodeJS.Signals, () => void>();
 
   const runOnce = async (reason: WorkerTickReason): Promise<void> => {
     tickNumber += 1;
+    lastTickAt = new Date().toISOString();
+    lastTickReason = reason;
     const ctx: WorkerTickContext = { identity, reason, tickNumber };
     try {
       await options.onTick(ctx);
@@ -160,6 +184,8 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
 
   const wake = (reason: WorkerTickReason = 'wake'): void => {
     if (stopped) return;
+    lastWakeupAt = new Date().toISOString();
+    lastWakeupReason = reason;
     void schedule(reason);
   };
 
@@ -171,6 +197,8 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
     }
     if (started) return;
     started = true;
+    startedAt = new Date().toISOString();
+    stoppedAt = null;
     options.logger.info(
       `[worker:${identity.kind}] started intervalMs=${intervalMs} signals=${installSignalHandlers ? shutdownSignals.join(',') : 'none'}`,
       logFields,
@@ -202,6 +230,7 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
       return;
     }
     stopped = true;
+    stoppedAt = new Date().toISOString();
     pendingReason = null;
     if (interval) {
       clearInterval(interval);
@@ -218,7 +247,21 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
 
   const isRunning = (): boolean => started && !stopped;
 
-  return { identity, start, wake, tick, stop, isRunning };
+  const getStatus = (): WorkerRuntimeStatus => ({
+    identity,
+    running: isRunning(),
+    startedAt,
+    stoppedAt,
+    tickCount: tickNumber,
+    inFlight: Boolean(inFlight),
+    pendingReason,
+    lastTickAt,
+    lastTickReason,
+    lastWakeupAt,
+    lastWakeupReason,
+  });
+
+  return { identity, start, wake, tick, stop, isRunning, getStatus };
 }
 
 // ── Recovery worker ──────────────────────────────────────────
@@ -258,7 +301,34 @@ export interface AutoFixRecoveryPolicyOptions {
   getAutoFixAgent?: () => string | undefined;
   getRetryBudget?: (task: TaskState) => number;
   consumeWakeups?: () => RecoveryWorkerWakeupHint[];
+  onActivity?: (activity: AutoFixRecoveryActivity) => void;
 }
+
+export type AutoFixRecoveryActivity =
+  | {
+      type: 'scan';
+      at: string;
+      reason: WorkerTickReason;
+      candidateCount: number;
+      wakeupCount: number;
+      source: 'scan' | 'wakeup';
+    }
+  | {
+      type: 'skip';
+      at: string;
+      taskId: string;
+      workflowId: string;
+      reason: string;
+      source: 'scan' | 'wakeup';
+    }
+  | {
+      type: 'submit';
+      at: string;
+      taskId: string;
+      workflowId: string;
+      intentId: number;
+      channel: string;
+    };
 
 type AutoFixRecoveryCandidate = {
   taskId: string;
@@ -368,6 +438,14 @@ function skipAutoFixCandidate(
   reason: string,
   details: Record<string, unknown> = {},
 ): void {
+  options.onActivity?.({
+    type: 'skip',
+    at: new Date().toISOString(),
+    taskId: candidate.taskId,
+    workflowId: candidate.workflowId,
+    reason,
+    source: candidate.source,
+  });
   logAutoFixWorkerEvent(options, candidate.taskId, 'worker-autofix-skip', {
     reason,
     source: candidate.source,
@@ -440,11 +518,20 @@ export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions)
   return async (ctx) => {
     const wakeups = options.consumeWakeups?.() ?? [];
     const wakeupCandidates = wakeups.map(candidateFromWakeup).filter((c): c is AutoFixRecoveryCandidate => Boolean(c));
+    const source = wakeupCandidates.length > 0 && ctx.reason === 'wake' ? 'wakeup' : 'scan';
     const candidates = dedupeCandidates(
-      wakeupCandidates.length > 0 && ctx.reason === 'wake'
+      source === 'wakeup'
         ? wakeupCandidates
         : listScanCandidates(options),
     );
+    options.onActivity?.({
+      type: 'scan',
+      at: new Date().toISOString(),
+      reason: ctx.reason,
+      candidateCount: candidates.length,
+      wakeupCount: wakeups.length,
+      source,
+    });
     const submittedThisTick = new Set<string>();
 
     for (const candidate of candidates) {
@@ -460,6 +547,14 @@ export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions)
       const args = buildFixWithAgentMutationArgs(latest.id, selectedAgent, { autoFix: true });
       const intentId = options.submitter.submit(candidate.workflowId, 'normal', AUTO_FIX_COMMAND_CHANNEL, args);
       submittedThisTick.add(candidate.taskId);
+      options.onActivity?.({
+        type: 'submit',
+        at: new Date().toISOString(),
+        taskId: candidate.taskId,
+        workflowId: candidate.workflowId,
+        intentId,
+        channel: AUTO_FIX_COMMAND_CHANNEL,
+      });
       logAutoFixWorkerEvent(options, candidate.taskId, 'worker-autofix-submitted', {
         workflowId: candidate.workflowId,
         intentId,
@@ -486,19 +581,90 @@ export interface RecoveryWorkerOptions {
   onTick?: WorkerTick;
 }
 
+export interface RecoveryWorkerStatus {
+  runtime: WorkerRuntimeStatus;
+  recovery: {
+    kind: 'autofix';
+    wakeupCount: number;
+    scanCount: number;
+    submittedCount: number;
+    skippedCount: number;
+    lastScanAt: string | null;
+    lastScanReason: WorkerTickReason | null;
+    lastScanSource: 'scan' | 'wakeup' | null;
+    lastScanCandidateCount: number;
+    lastWakeupAt: string | null;
+    lastWakeupTaskId: string | null;
+    lastSubmittedAt: string | null;
+    lastSubmittedTaskId: string | null;
+    lastSubmittedIntentId: number | null;
+    lastSkipAt: string | null;
+    lastSkipTaskId: string | null;
+    lastSkipReason: string | null;
+    skipReasons: Record<string, number>;
+  };
+}
+
+export interface RecoveryWorkerRuntime extends WorkerRuntime {
+  getRecoveryStatus(): RecoveryWorkerStatus;
+}
+
 /**
  * Create the recovery worker runtime. When auto-fix dependencies are supplied,
  * the tick scans persisted task state and submits normal fix command intents.
  */
-export function createRecoveryWorker(options: RecoveryWorkerOptions): WorkerRuntime {
+export function createRecoveryWorker(options: RecoveryWorkerOptions): RecoveryWorkerRuntime {
   const pendingWakeups: RecoveryWorkerWakeupHint[] = [];
   let lifecycleUnsubscribe: Unsubscribe | undefined;
+  const recoveryStatus: RecoveryWorkerStatus['recovery'] = {
+    kind: 'autofix',
+    wakeupCount: 0,
+    scanCount: 0,
+    submittedCount: 0,
+    skippedCount: 0,
+    lastScanAt: null,
+    lastScanReason: null,
+    lastScanSource: null,
+    lastScanCandidateCount: 0,
+    lastWakeupAt: null,
+    lastWakeupTaskId: null,
+    lastSubmittedAt: null,
+    lastSubmittedTaskId: null,
+    lastSubmittedIntentId: null,
+    lastSkipAt: null,
+    lastSkipTaskId: null,
+    lastSkipReason: null,
+    skipReasons: {},
+  };
+  const recordActivity = (activity: AutoFixRecoveryActivity): void => {
+    if (activity.type === 'scan') {
+      recoveryStatus.scanCount += 1;
+      recoveryStatus.lastScanAt = activity.at;
+      recoveryStatus.lastScanReason = activity.reason;
+      recoveryStatus.lastScanSource = activity.source;
+      recoveryStatus.lastScanCandidateCount = activity.candidateCount;
+      return;
+    }
+    if (activity.type === 'submit') {
+      recoveryStatus.submittedCount += 1;
+      recoveryStatus.lastSubmittedAt = activity.at;
+      recoveryStatus.lastSubmittedTaskId = activity.taskId;
+      recoveryStatus.lastSubmittedIntentId = activity.intentId;
+      return;
+    }
+    recoveryStatus.skippedCount += 1;
+    recoveryStatus.lastSkipAt = activity.at;
+    recoveryStatus.lastSkipTaskId = activity.taskId;
+    recoveryStatus.lastSkipReason = activity.reason;
+    recoveryStatus.skipReasons[activity.reason] = (recoveryStatus.skipReasons[activity.reason] ?? 0) + 1;
+  };
   const onTick = options.onTick ?? (
     options.autoFix
       ? createAutoFixRecoveryTick({
         ...options.autoFix,
         logger: options.logger,
         consumeWakeups: () => pendingWakeups.splice(0),
+        onActivity: recordActivity,
       })
       : (() => {})
   );
@@ -512,7 +678,10 @@ export function createRecoveryWorker(options: RecoveryWorkerOptions): WorkerRunt
     onTick,
   });
   if (!options.messageBus || !options.autoFix || options.onTick) {
-    return runtime;
+    return {
+      ...runtime,
+      getRecoveryStatus: () => ({ runtime: runtime.getStatus(), recovery: { ...recoveryStatus, skipReasons: { ...recoveryStatus.skipReasons } } }),
+    };
   }
 
   const start = (): void => {
@@ -521,6 +690,9 @@ export function createRecoveryWorker(options: RecoveryWorkerOptions): WorkerRunt
         Channels.WORKFLOW_LIFECYCLE,
         (event) => {
           pendingWakeups.push(event.recoveryWakeup);
+          recoveryStatus.wakeupCount += 1;
+          recoveryStatus.lastWakeupAt = new Date().toISOString();
+          recoveryStatus.lastWakeupTaskId = event.recoveryWakeup.taskId ?? null;
           runtime.wake('wake');
         },
       );
@@ -540,5 +712,7 @@ export function createRecoveryWorker(options: RecoveryWorkerOptions): WorkerRunt
     tick: runtime.tick,
     stop,
     isRunning: runtime.isRunning,
+    getStatus: runtime.getStatus,
+    getRecoveryStatus: () => ({ runtime: runtime.getStatus(), recovery: { ...recoveryStatus, skipReasons: { ...recoveryStatus.skipReasons } } }),
   };
 }

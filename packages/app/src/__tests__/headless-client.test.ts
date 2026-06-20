@@ -154,6 +154,21 @@ describe('headless-client', () => {
     expect(runElectronHeadless).toHaveBeenCalledWith(['worker', 'list']);
   });
 
+  it('does not bootstrap recovery when inspecting worker status', async () => {
+    const runElectronHeadless = vi.fn(async () => 0);
+    const ensureStandaloneOwner = vi.fn(async () => {});
+
+    const exitCode = await runHeadlessClientCommand(['worker', 'status'], {
+      messageBus: new LocalBus(),
+      ensureStandaloneOwner,
+      runElectronHeadless,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(ensureStandaloneOwner).not.toHaveBeenCalled();
+    expect(runElectronHeadless).toHaveBeenCalledWith(['worker', 'status']);
+  });
+
   it('delegates mutations to an existing GUI owner', async () => {
     const firstBus = new LocalBus();
     const secondBus = new LocalBus();

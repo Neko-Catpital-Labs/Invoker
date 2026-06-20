@@ -58,6 +58,10 @@ type WorkerStartResult = {
   ok: true;
 };
 
+type WorkerStatusResult = {
+  workers: Array<Record<string, unknown>>;
+};
+
 type CliDeps = {
   createMessageBus?: () => Promise<MessageBus> | MessageBus;
 };
@@ -412,6 +416,76 @@ async function startWorkerOnLiveOwner(
   return validateWorkerStartResponse(raw);
 }
 
+function validateWorkerStatusResponse(raw: unknown): WorkerStatusResult {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error(`Live owner returned invalid worker status response: expected object, got ${raw === null ? 'null' : typeof raw}`);
+  }
+  const response = raw as Record<string, unknown>;
+  if (!Array.isArray(response.workers)) {
+    throw new Error('Live owner returned invalid worker status response: missing workers array');
+  }
+  return { workers: response.workers.filter((worker): worker is Record<string, unknown> => Boolean(worker) && typeof worker === 'object' && !Array.isArray(worker)) };
+}
+
+async function queryWorkerStatusFromLiveOwner(
+  bus: MessageBus,
+  timeoutMs = 5_000,
+): Promise<WorkerStatusResult> {
+  const raw = await withTimeout(
+    bus.request('headless.query', {
+      kind: 'worker-status',
+      traceId: createTraceId('invoker-cli.headless.query.worker-status'),
+    }),
+    timeoutMs,
+  );
+  return validateWorkerStatusResponse(raw);
+}
+
+function renderOptional(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '-';
+  return String(value);
+}
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function renderWorkerStatus(result: WorkerStatusResult, owner?: LiveOwnerInfo): string {
+  const lines = ['Worker services:'];
+  if (!owner) {
+    lines.push('  autofix  service=unknown owner=- (no reachable shared owner)');
+    return lines.join('\n');
+  }
+  for (const worker of result.workers) {
+    const kind = renderOptional(worker.kind);
+    const service = renderOptional(worker.service);
+    const workerOwner = renderOptional(worker.owner);
+    const note = renderOptional(worker.note);
+    lines.push(`  ${kind}  service=${service} owner=${workerOwner} (${note})`);
+    const snapshot = readRecord(worker.snapshot);
+    const recovery = readRecord(snapshot?.recovery);
+    if (!recovery) continue;
+    lines.push(
+      `    lastScan=${renderOptional(recovery.lastScanAt)} reason=${renderOptional(recovery.lastScanReason)} source=${renderOptional(recovery.lastScanSource)} candidates=${renderOptional(recovery.lastScanCandidateCount)}`,
+    );
+    lines.push(
+      `    wakeups=${renderOptional(recovery.wakeupCount)} lastWakeup=${renderOptional(recovery.lastWakeupAt)} task=${renderOptional(recovery.lastWakeupTaskId)}`,
+    );
+    lines.push(
+      `    submissions=${renderOptional(recovery.submittedCount)} lastSubmit=${renderOptional(recovery.lastSubmittedAt)} task=${renderOptional(recovery.lastSubmittedTaskId)} intent=${renderOptional(recovery.lastSubmittedIntentId)}`,
+    );
+    lines.push(
+      `    skips=${renderOptional(recovery.skippedCount)} lastSkip=${renderOptional(recovery.lastSkipReason)} task=${renderOptional(recovery.lastSkipTaskId)} at=${renderOptional(recovery.lastSkipAt)}`,
+    );
+    const skipReasons = readRecord(recovery.skipReasons);
+    const renderedSkipReasons = skipReasons
+      ? Object.entries(skipReasons).map(([reason, count]) => `${reason}=${String(count)}`).join(' ')
+      : '';
+    lines.push(`    skipReasons=${renderedSkipReasons || '-'}; audit=query audit <taskId>`);
+  }
+  return lines.join('\n');
+}
+
 function loadRuntimeConfig(configPath?: string): CliRuntimeConfig {
   if (!configPath) return {};
   const resolvedPath = resolve(configPath);
@@ -608,8 +682,19 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
     }
     if (parsed.command === 'worker') {
       const subcommand = parsed.workerSubcommand;
-      if (!subcommand || subcommand === 'list' || subcommand === 'status') {
+      if (!subcommand || subcommand === 'list') {
         process.stdout.write('Worker services:\n  autofix  long-running auto-fix recovery worker\n');
+        return 0;
+      }
+      if (subcommand === 'status') {
+        bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
+        const owner = await discoverSharedOwner(bus);
+        const status = owner ? await queryWorkerStatusFromLiveOwner(bus) : { workers: [] };
+        if (parsed.options.json) {
+          process.stdout.write(`${JSON.stringify({ ownerId: owner?.ownerId ?? null, ...status })}\n`);
+        } else {
+          process.stdout.write(`${renderWorkerStatus(status, owner ?? undefined)}\n`);
+        }
         return 0;
       }
       if (subcommand !== 'autofix') {

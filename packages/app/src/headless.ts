@@ -57,7 +57,7 @@ import {
   isDispatchableLaunch,
 } from './global-topup.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
-import { createRecoveryWorker, RECOVERY_WORKER_KIND, type WorkerRuntime } from './worker-runtime.js';
+import { createRecoveryWorker, RECOVERY_WORKER_KIND, type RecoveryWorkerRuntime, type RecoveryWorkerStatus } from './worker-runtime.js';
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
 import { trackWorkflow } from './headless-watch.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
@@ -1132,13 +1132,70 @@ const HEADLESS_WORKER_KINDS: ReadonlyArray<{ kind: string; available: boolean; n
   },
 ];
 
-const headlessWorkerRuntimes = new Map<string, WorkerRuntime>();
+const headlessWorkerRuntimes = new Map<string, RecoveryWorkerRuntime>();
+
+export interface HeadlessWorkerStatus {
+  kind: string;
+  available: boolean;
+  note: string;
+  service: 'running' | 'stopped';
+  owner: string | null;
+  snapshot: RecoveryWorkerStatus | null;
+}
 
 export function hasRunningHeadlessWorker(kind?: string): boolean {
   if (kind) {
     return headlessWorkerRuntimes.get(kind)?.isRunning() ?? false;
   }
   return Array.from(headlessWorkerRuntimes.values()).some((worker) => worker.isRunning());
+}
+
+function renderNullable(value: string | number | null | undefined): string {
+  return value == null || value === '' ? '-' : String(value);
+}
+
+export function getHeadlessWorkerStatuses(): HeadlessWorkerStatus[] {
+  return HEADLESS_WORKER_KINDS.map((workerKind) => {
+    const runtime = headlessWorkerRuntimes.get(workerKind.kind);
+    const snapshot = runtime?.getRecoveryStatus() ?? null;
+    return {
+      kind: workerKind.kind,
+      available: workerKind.available,
+      note: workerKind.note,
+      service: runtime?.isRunning() ? 'running' : 'stopped',
+      owner: snapshot ? `${snapshot.runtime.identity.kind}/${snapshot.runtime.identity.instanceId}` : null,
+      snapshot,
+    };
+  });
+}
+
+function renderHeadlessWorkerStatuses(statuses: HeadlessWorkerStatus[]): void {
+  process.stdout.write(`${BOLD}Worker kinds${RESET}\n`);
+  for (const workerStatus of statuses) {
+    const status = workerStatus.available ? 'available' : 'unavailable';
+    process.stdout.write(
+      `  ${workerStatus.kind} — ${status}; service=${workerStatus.service}; owner=${workerStatus.owner ?? '-'} (${workerStatus.note})\n`,
+    );
+    const snapshot = workerStatus.snapshot;
+    if (!snapshot) continue;
+    const recovery = snapshot.recovery;
+    process.stdout.write(
+      `    lastScan=${renderNullable(recovery.lastScanAt)} reason=${renderNullable(recovery.lastScanReason)} source=${renderNullable(recovery.lastScanSource)} candidates=${recovery.lastScanCandidateCount}\n`,
+    );
+    process.stdout.write(
+      `    wakeups=${recovery.wakeupCount} lastWakeup=${renderNullable(recovery.lastWakeupAt)} task=${renderNullable(recovery.lastWakeupTaskId)}\n`,
+    );
+    process.stdout.write(
+      `    submissions=${recovery.submittedCount} lastSubmit=${renderNullable(recovery.lastSubmittedAt)} task=${renderNullable(recovery.lastSubmittedTaskId)} intent=${renderNullable(recovery.lastSubmittedIntentId)}\n`,
+    );
+    process.stdout.write(
+      `    skips=${recovery.skippedCount} lastSkip=${renderNullable(recovery.lastSkipReason)} task=${renderNullable(recovery.lastSkipTaskId)} at=${renderNullable(recovery.lastSkipAt)}\n`,
+    );
+    const skipReasons = Object.entries(recovery.skipReasons)
+      .map(([reason, count]) => `${reason}=${count}`)
+      .join(' ');
+    process.stdout.write(`    skipReasons=${skipReasons || '-'}; audit=query audit <taskId>\n`);
+  }
 }
 
 async function headlessWorker(subCommand: string | undefined, deps: HeadlessDeps): Promise<void> {
@@ -1177,12 +1234,7 @@ async function headlessWorker(subCommand: string | undefined, deps: HeadlessDeps
   if (subCommand && subCommand !== 'list' && subCommand !== 'status') {
     throw new Error(`Unknown worker sub-command: "${subCommand}". Use: autofix, list, status`);
   }
-  process.stdout.write(`${BOLD}Worker kinds${RESET}\n`);
-  for (const worker of HEADLESS_WORKER_KINDS) {
-    const status = worker.available ? 'available' : 'unavailable';
-    const service = hasRunningHeadlessWorker(worker.kind) ? 'running' : 'stopped';
-    process.stdout.write(`  ${worker.kind} — ${status}; service=${service} (${worker.note})\n`);
-  }
+  renderHeadlessWorkerStatuses(getHeadlessWorkerStatuses());
 }
 
 async function headlessOwnerServe(deps: Pick<HeadlessDeps, 'isStandaloneOwnerIdle'>): Promise<void> {
