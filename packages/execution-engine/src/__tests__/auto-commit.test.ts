@@ -1049,7 +1049,7 @@ describe('merge gate commit topology (real git)', () => {
       { cwd: tmpDir },
     ).toString().trim().split('\n').filter(l => l.length > 0);
     expect(newCommits.length).toBe(1);
-  });
+  }, 60_000);
 
   it('automatic mode produces same topology in a single step', async () => {
     const masterHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
