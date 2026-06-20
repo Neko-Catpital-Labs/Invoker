@@ -4,6 +4,7 @@ import type {
   WorkflowMutationIntentStatus,
   WorkflowMutationPriority,
 } from '@invoker/data-store';
+import { Channels, type MessageBus, type Unsubscribe } from '@invoker/transport';
 import type { TaskState } from '@invoker/workflow-core';
 
 import {
@@ -11,6 +12,7 @@ import {
   listOpenFixIntentsForTask,
 } from '../auto-fix-intents.js';
 import { shouldSkipAutoFixForError } from '../auto-fix-gating.js';
+import type { RecoveryWorkerWakeupHint, WorkflowLifecycleEvent } from '../lifecycle-events.js';
 import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../worker-runtime.js';
 
 /** Public worker kind for the auto-fix recovery worker. */
@@ -47,6 +49,7 @@ export interface AutoFixRecoveryPolicyOptions {
   defaultAutoFixRetries?: number;
   getAutoFixAgent?: () => string | undefined;
   getRetryBudget?: (task: TaskState) => number;
+  drainWakeupHints?: () => RecoveryWorkerWakeupHint[];
 }
 
 export type AutoFixRecoveryCandidate = {
@@ -55,7 +58,7 @@ export type AutoFixRecoveryCandidate = {
   generation: number;
   taskStateVersion: number;
   attemptId?: string;
-  source: 'scan';
+  source: 'scan' | 'wakeup';
 };
 
 export type ValidatedAutoFixRecoveryCandidate = AutoFixRecoveryCandidate & {
@@ -121,6 +124,30 @@ function isRuntimeAutoFixEligibleTask(task: TaskState, options: AutoFixRecoveryP
   const max = retryBudgetForTask(task, options);
   if (max <= 0) return false;
   return (task.execution.autoFixAttempts ?? 0) < max;
+}
+
+function candidateFromWakeup(wakeup: RecoveryWorkerWakeupHint): AutoFixRecoveryCandidate | undefined {
+  if (!wakeup.taskId || wakeup.taskStateVersion == null) return undefined;
+  return {
+    taskId: wakeup.taskId,
+    workflowId: wakeup.workflowId,
+    generation: wakeup.generation,
+    taskStateVersion: wakeup.taskStateVersion,
+    attemptId: wakeup.attemptId,
+    source: 'wakeup',
+  };
+}
+
+function dedupeCandidates(candidates: AutoFixRecoveryCandidate[]): AutoFixRecoveryCandidate[] {
+  const seen = new Set<string>();
+  const deduped: AutoFixRecoveryCandidate[] = [];
+  for (const candidate of candidates) {
+    const key = `${candidate.taskId}:${candidate.generation}:${candidate.taskStateVersion}:${candidate.attemptId ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(candidate);
+  }
+  return deduped;
 }
 
 function loadLatestTask(
@@ -256,12 +283,26 @@ export function collectValidatedAutoFixRecoveryCandidates(
 }
 
 export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions): WorkerTick {
-  return async () => {
-    for (const candidate of collectValidatedAutoFixRecoveryCandidates(options)) {
+  return async (ctx) => {
+    const wakeups = options.drainWakeupHints?.() ?? [];
+    const wakeupCandidates = wakeups.map(candidateFromWakeup).filter((c): c is AutoFixRecoveryCandidate => Boolean(c));
+    const candidates = dedupeCandidates(
+      wakeupCandidates.length > 0 && ctx.reason === 'wake'
+        ? wakeupCandidates
+        : listAutoFixRecoveryScanCandidates(options),
+    );
+    const submittedThisTick = new Set<string>();
+
+    for (const candidate of collectValidatedAutoFixRecoveryCandidates(options, candidates)) {
+      if (submittedThisTick.has(candidate.taskId)) {
+        skipAutoFixCandidate(options, candidate, 'duplicate-candidate');
+        continue;
+      }
       const configuredAgent = options.getAutoFixAgent?.()?.trim();
       const selectedAgent = configuredAgent && configuredAgent.length > 0 ? configuredAgent : undefined;
       const args = buildFixWithAgentMutationArgs(candidate.task.id, selectedAgent, { autoFix: true });
       const intentId = options.submitter.submit(candidate.workflowId, 'normal', AUTO_FIX_COMMAND_CHANNEL, args);
+      submittedThisTick.add(candidate.taskId);
       logAutoFixWorkerEvent(options, candidate.taskId, 'worker-autofix-submitted', {
         workflowId: candidate.workflowId,
         intentId,
@@ -283,10 +324,9 @@ export interface RecoveryWorkerOptions {
   intervalMs?: number;
   installSignalHandlers?: boolean;
   tickOnStart?: boolean;
-  autoFix?: Omit<AutoFixRecoveryPolicyOptions, 'logger'>;
-  /**
-   * Test hook or alternate worker policy. Takes precedence over `autoFix`.
-   */
+  messageBus?: MessageBus;
+  autoFix?: Omit<AutoFixRecoveryPolicyOptions, 'logger' | 'drainWakeupHints'>;
+  /** Test hook or alternate worker policy. Takes precedence over `autoFix`. */
   onTick?: WorkerTick;
 }
 
@@ -295,12 +335,18 @@ export interface RecoveryWorkerOptions {
  * `autoFix` installs the dormant auto-fix scan policy.
  */
 export function createRecoveryWorker(options: RecoveryWorkerOptions): WorkerRuntime {
+  const pendingWakeups: RecoveryWorkerWakeupHint[] = [];
+  let lifecycleUnsubscribe: Unsubscribe | undefined;
   const onTick = options.onTick ?? (
     options.autoFix
-      ? createAutoFixRecoveryTick({ ...options.autoFix, logger: options.logger })
+      ? createAutoFixRecoveryTick({
+        ...options.autoFix,
+        logger: options.logger,
+        drainWakeupHints: () => pendingWakeups.splice(0),
+      })
       : (() => {})
   );
-  return createWorkerRuntime({
+  const runtime = createWorkerRuntime({
     kind: RECOVERY_WORKER_KIND,
     instanceId: options.instanceId,
     logger: options.logger,
@@ -309,4 +355,34 @@ export function createRecoveryWorker(options: RecoveryWorkerOptions): WorkerRunt
     installSignalHandlers: options.installSignalHandlers,
     onTick,
   });
+  if (!options.messageBus || !options.autoFix || options.onTick) {
+    return runtime;
+  }
+
+  const start = (): void => {
+    if (!lifecycleUnsubscribe) {
+      lifecycleUnsubscribe = options.messageBus?.subscribe<WorkflowLifecycleEvent>(
+        Channels.WORKFLOW_LIFECYCLE,
+        (event) => {
+          pendingWakeups.push(event.recoveryWakeup);
+          runtime.wake('wake');
+        },
+      );
+    }
+    runtime.start();
+  };
+  const stop = async (): Promise<void> => {
+    lifecycleUnsubscribe?.();
+    lifecycleUnsubscribe = undefined;
+    await runtime.stop();
+  };
+
+  return {
+    identity: runtime.identity,
+    start,
+    wake: runtime.wake,
+    tick: runtime.tick,
+    stop,
+    isRunning: runtime.isRunning,
+  };
 }
