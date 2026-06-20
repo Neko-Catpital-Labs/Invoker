@@ -380,7 +380,7 @@ describe('WorkflowMutationFacade', () => {
         config: { workflowId: 'wf-2' },
         execution: { selectedAttemptId: 'attempt-b' },
       });
-      (deps.orchestrator.recreateWorkflow as ReturnType<typeof vi.fn>).mockReturnValue([scoped, crossWorkflow]);
+      (deps.orchestrator.recreateWorkflowFromFreshBase as ReturnType<typeof vi.fn>).mockResolvedValue([scoped, crossWorkflow]);
 
       const result = await facade.rebaseRecreate('wf-1');
 

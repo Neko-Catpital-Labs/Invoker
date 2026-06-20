@@ -45,8 +45,6 @@ import {
   rebaseRetry,
   rebaseRecreate,
   resolveConflictAction,
-  recreateWorkflow as sharedRecreateWorkflow,
-  recreateTask as sharedRecreateTask,
   forkWorkflow as sharedForkWorkflow,
   setWorkflowMergeMode,
 } from './workflow-actions.js';
@@ -68,7 +66,6 @@ import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './work
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import type { RuntimeServices } from '@invoker/runtime-service';
 
-export { bumpGenerationAndRecreate } from './workflow-actions.js';
 export {
   DEFAULT_DELEGATION_TIMEOUT_MS,
   WORKFLOW_DELEGATION_TIMEOUT_MS,
@@ -315,14 +312,17 @@ async function dispatchHeadlessRunnableTasks(
 }
 
 export function wireHeadlessAutoFix(
-  deps: Pick<HeadlessDeps, 'messageBus' | 'orchestrator' | 'persistence'>,
+  deps: Pick<HeadlessDeps, 'logger' | 'messageBus' | 'orchestrator' | 'persistence' | 'commandService' | 'mutationTiming'>,
   taskExecutor: Pick<TaskRunner, 'executeTasks' | 'fixWithAgent' | 'resolveConflict'>,
   invokeAutoFix: (taskId: string) => Promise<void> = async (taskId) => {
     const { autoFixOnFailure } = await import('./workflow-actions.js');
     await autoFixOnFailure(taskId, {
+      logger: deps.logger,
       orchestrator: deps.orchestrator,
       persistence: deps.persistence,
+      commandService: deps.commandService,
       taskExecutor: taskExecutor as TaskRunner,
+      mutationTiming: deps.mutationTiming,
       getAutoFixAgent: () => loadConfig().autoFixAgent,
       getAutoApproveAIFixes: () => loadConfig().autoApproveAIFixes,
     });
@@ -1735,9 +1735,12 @@ async function headlessFix(rawArgs: string[], deps: HeadlessDeps): Promise<void>
   const agent = (parsed.agentName ?? 'claude').toLowerCase();
   try {
     const result = await fixWithAgentAction(taskId, {
+      logger: deps.logger,
       orchestrator: deps.orchestrator,
       persistence: deps.persistence,
+      commandService: deps.commandService,
       taskExecutor: te,
+      mutationTiming: deps.mutationTiming,
       autoApproveAIFixes: deps.invokerConfig.autoApproveAIFixes,
     }, {
       agentName: agent,
@@ -1834,10 +1837,15 @@ async function headlessRebaseRetry(target: string, deps: HeadlessDeps): Promise<
     context: 'headless.rebase-retry',
     mutationTiming: deps.mutationTiming,
   });
-
   const te = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, te);
-  const started = await rebaseRetry(target, { ...deps, taskExecutor: te, mutationTiming: deps.mutationTiming });
+  const started = await rebaseRetry(target, {
+    ...deps,
+    logger: deps.logger,
+    commandService: deps.commandService,
+    taskExecutor: te,
+    mutationTiming: deps.mutationTiming,
+  });
   const runnable = started.filter(isDispatchableLaunch);
   const { topup } = await dispatchStartedTasksWithGlobalTopup({
     orchestrator: deps.orchestrator,
@@ -1878,10 +1886,15 @@ async function headlessRebaseRecreate(workflowTarget: string, deps: HeadlessDeps
     context: 'headless.rebase-recreate',
     mutationTiming: deps.mutationTiming,
   });
-
   const te = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, te);
-  const started = await rebaseRecreate(workflowTarget, { ...deps, taskExecutor: te, mutationTiming: deps.mutationTiming });
+  const started = await rebaseRecreate(workflowTarget, {
+    ...deps,
+    logger: deps.logger,
+    commandService: deps.commandService,
+    taskExecutor: te,
+    mutationTiming: deps.mutationTiming,
+  });
   const runnable = started.filter(isDispatchableLaunch);
   const { topup } = await dispatchStartedTasksWithGlobalTopup({
     orchestrator: deps.orchestrator,
