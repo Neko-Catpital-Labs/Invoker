@@ -123,9 +123,9 @@ import { startApiServer, type ApiServer } from './api-server.js';
 import { WorkflowMutationFacade } from './workflow-mutation-facade.js';
 import {
   runHeadless,
-  isDelegated,
   tryDelegateRun,
   tryDelegateResume,
+  isDelegated,
   resolveDelegationTimeoutMs,
   tryDelegateExec,
   tryDelegateQuery,
@@ -134,6 +134,7 @@ import {
   wireHeadlessApproveHook,
   type HeadlessDeps,
 } from './headless.js';
+import { resolveRefreshTaskGraphSnapshot } from './refresh-task-graph.js';
 import {
   startStandaloneLaunchDispatcher,
   type StandaloneLaunchDispatcherController,
@@ -3476,46 +3477,23 @@ function createEmbeddedTerminalBackendFromConfig(
 
     ipcMain.handle('invoker:refresh-task-graph', async () => {
       const startedAtMs = Date.now();
-      let tasks: TaskState[];
-      let workflows: WorkflowMeta[];
-
-      if (!ownerMode) {
-        const delegated = await messageBus.request('headless.query', {
-          kind: 'task-graph-refresh',
-        }) as unknown;
-        if (!delegated || typeof delegated !== 'object') {
-          throw new Error('refresh-task-graph owner delegation returned no snapshot');
-        }
-        const snapshot = delegated as {
-          tasks?: unknown[];
-          workflows?: unknown[];
-          invokerHomeRoot?: string;
-        };
-        if (!Array.isArray(snapshot.tasks) || !Array.isArray(snapshot.workflows)) {
-          throw new Error('refresh-task-graph owner delegation returned an invalid snapshot');
-        }
-        const localInvokerHomeRoot = resolveInvokerHomeRoot();
-        if (snapshot.invokerHomeRoot && snapshot.invokerHomeRoot !== localInvokerHomeRoot) {
-          throw new Error(
-            `refresh-task-graph owner home mismatch: owner=${snapshot.invokerHomeRoot} local=${localInvokerHomeRoot}`,
-          );
-        }
-        tasks = snapshot.tasks as TaskState[];
-        workflows = snapshot.workflows as WorkflowMeta[];
-      } else {
-        orchestrator.syncAllFromDb();
-        tasks = orchestrator.getAllTasks();
-        workflows = persistence.listWorkflows() as WorkflowMeta[];
-      }
+      const snapshot = await resolveRefreshTaskGraphSnapshot({
+        ownerMode,
+        messageBus,
+        localInvokerHomeRoot: resolveInvokerHomeRoot(),
+        logger,
+        orchestrator,
+        persistence,
+      });
 
       taskGraphEventPublisher.publishSnapshot(
-        ownerMode ? 'refresh-task-graph' : 'refresh-task-graph-delegated',
-        tasks,
-        workflows,
+        snapshot.delegated ? 'refresh-task-graph-delegated' : 'refresh-task-graph',
+        snapshot.tasks,
+        snapshot.workflows,
       );
       recordStartupDuration('refresh-task-graph.return', startedAtMs, {
-        taskCount: tasks.length,
-        workflowCount: workflows.length,
+        taskCount: snapshot.tasks.length,
+        workflowCount: snapshot.workflows.length,
         streamSequence: getTaskDeltaStreamSequence(),
       });
     });
