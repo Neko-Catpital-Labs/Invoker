@@ -58,7 +58,7 @@ if (process.env.INVOKER_USER_DATA_DIR) {
   app.setPath('userData', process.env.INVOKER_USER_DATA_DIR);
 }
 
-import { Orchestrator, CommandService, OrchestratorErrorCode } from '@invoker/workflow-core';
+import { Orchestrator, CommandService, OrchestratorError, OrchestratorErrorCode, buildWorkflowInvalidationDeps } from '@invoker/workflow-core';
 import type {
   PlanDefinition,
   TaskDelta,
@@ -140,12 +140,12 @@ import {
 } from './headless-standalone-launch-dispatcher.js';
 import {
   approveTask as sharedApproveTask,
-  buildInvalidationDeps,
   deleteAllWorkflows as sharedDeleteAllWorkflows,
   deleteAllWorkflowsBulk as sharedDeleteAllWorkflowsBulk,
   fixWithAgentAction,
   rebaseRetry,
   rebaseRecreate,
+  rejectTask as sharedRejectTask,
   resolveConflictAction,
   selectFailureRecoveryRoute,
   selectExperiments as sharedSelectExperiments,
@@ -306,6 +306,47 @@ let commandService: CommandService;
 // constructed in initServices before TaskRunner exists, so the deps
 // resolve via this getter at cancel-in-flight time.
 let latestTaskExecutor: TaskRunner | null = null;
+
+function buildCommandServiceInvalidationDeps() {
+  return buildWorkflowInvalidationDeps({
+    orchestrator,
+    requireWorkflow: (workflowId) => {
+      const workflow = persistence.loadWorkflow(workflowId);
+      if (!workflow) {
+        throw new OrchestratorError(
+          OrchestratorErrorCode.WORKFLOW_NOT_FOUND,
+          `Workflow ${workflowId} not found`,
+        );
+      }
+      return workflow;
+    },
+    setWorkflowGeneration: (workflowId, generation) => {
+      persistence.updateWorkflow(workflowId, { generation });
+    },
+    killActiveExecution: async (taskId) => {
+      await latestTaskExecutor?.killActiveExecution(taskId);
+    },
+    prepareFreshBase: async (workflowId, workflow) => {
+      if (!latestTaskExecutor || !workflow.repoUrl) return undefined;
+      return latestTaskExecutor.preparePoolForRebaseRetry(
+        workflowId,
+        workflow.repoUrl,
+        workflow.baseBranch,
+      );
+    },
+    fixApprove: async (taskId) => {
+      const result = await sharedApproveTask(taskId, {
+        orchestrator,
+        taskExecutor: latestTaskExecutor ?? undefined,
+      });
+      return result.started;
+    },
+    fixReject: (taskId) => {
+      sharedRejectTask(taskId, { orchestrator });
+      return [];
+    },
+  });
+}
 let runtimeServices: RuntimeServices;
 let workflowMutationCoordinator: PersistedWorkflowMutationCoordinator | null = null;
 let launchDispatcher: LaunchDispatcher | null = null;
@@ -678,12 +719,7 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
   });
   commandService = new CommandService(
     orchestrator,
-    buildInvalidationDeps({
-      logger,
-      orchestrator,
-      persistence,
-      taskExecutor: () => latestTaskExecutor,
-    }),
+    buildCommandServiceInvalidationDeps(),
   );
 
   const startupSyncMode = options?.startupSyncMode ?? 'all';
@@ -1056,12 +1092,7 @@ function startHeadlessMode(): void {
             });
             commandService = new CommandService(
               orchestrator,
-              buildInvalidationDeps({
-                logger,
-                orchestrator,
-                persistence,
-                taskExecutor: () => latestTaskExecutor,
-              }),
+              buildCommandServiceInvalidationDeps(),
             );
             return undefined;
           }
@@ -3433,12 +3464,7 @@ function createEmbeddedTerminalBackendFromConfig(
       });
       commandService = new CommandService(
         orchestrator,
-        buildInvalidationDeps({
-          logger,
-          orchestrator,
-          persistence,
-          taskExecutor: () => latestTaskExecutor,
-        }),
+        buildCommandServiceInvalidationDeps(),
       );
       rebuildTaskRunner();
       taskHandles.clear();
