@@ -1,4 +1,4 @@
-const PRODUCT_REVIEW_UNITS = new Set([
+export const VALID_REVIEW_UNITS = [
   'contract',
   'ownership-refactor',
   'read-path',
@@ -7,6 +7,20 @@ const PRODUCT_REVIEW_UNITS = new Set([
   'routing',
   'activation-surface',
   'tooling-policy',
+  'proof',
+  'docs',
+  'cleanup',
+];
+
+const VALID_REVIEW_UNIT_SET = new Set(VALID_REVIEW_UNITS);
+const PRODUCT_REVIEW_UNITS = new Set([
+  'contract',
+  'ownership-refactor',
+  'read-path',
+  'validation-policy',
+  'write-path',
+  'routing',
+  'activation-surface',
   'cleanup',
 ]);
 
@@ -116,6 +130,7 @@ const ALLOWED_CHANGE_OPERATIONS = new Set([
 ]);
 
 const PATH_LIKE = /^(?:packages|scripts|skills|docs|plans|\.github|[A-Za-z0-9_.-]+\/)[^:]+/;
+const APP_SRC_PREFIX = 'packages/app/src/';
 
 export function firstMeaningfulLine(value = '') {
   return String(value)
@@ -149,6 +164,10 @@ export function getLabelSection(text, label) {
   return (nextHeading ? rest.slice(0, nextHeading.index) : rest).trim();
 }
 
+export function normalizeReviewUnit(value = '') {
+  return firstMeaningfulLine(value).replace(/^[-*]\s*/, '').trim().toLowerCase();
+}
+
 export function detectReviewUnits(text) {
   const haystack = String(text).toLowerCase();
   const detected = new Set();
@@ -180,7 +199,7 @@ export function validateSingleReviewUnitFocus({ texts = [], context }) {
   const detectedProductUnits = Array.from(detected).filter((unit) => PRODUCT_REVIEW_UNITS.has(unit));
   if (detectedProductUnits.length > 1) {
     errors.push(
-      `${context} mentions multiple review units (${detectedProductUnits.sort().join(', ')}); split into one conceptual unit per diff/task.`,
+      `${context} mentions multiple review units (${formatReviewUnits(detectedProductUnits)}); split into one conceptual unit per diff/task.`,
     );
   }
 
@@ -189,6 +208,146 @@ export function validateSingleReviewUnitFocus({ texts = [], context }) {
   }
 
   return errors;
+}
+
+export function validateReviewUnitValue(reviewUnit, context) {
+  if (!reviewUnit) return [];
+  if (VALID_REVIEW_UNIT_SET.has(reviewUnit)) return [];
+
+  return [`Invalid review unit: ${reviewUnit}. Expected one of ${VALID_REVIEW_UNITS.join(', ')}.`];
+}
+
+export function validateReviewLaneUnitCompatibility({ reviewLane = '', reviewUnit = '', context }) {
+  if (!reviewLane || !VALID_REVIEW_UNIT_SET.has(reviewUnit)) return [];
+
+  const productUnits = new Set([
+    'contract',
+    'ownership-refactor',
+    'read-path',
+    'validation-policy',
+    'write-path',
+    'routing',
+    'activation-surface',
+  ]);
+
+  if ((reviewLane === 'behavior' || reviewLane === 'refactor') && productUnits.has(reviewUnit)) return [];
+  if (reviewLane === 'cleanup' && reviewUnit === 'cleanup') return [];
+  if (reviewLane === 'policy' && reviewUnit === 'tooling-policy') return [];
+  if (reviewLane === 'proof' && reviewUnit === 'proof') return [];
+  if (reviewLane === 'docs' && reviewUnit === 'docs') return [];
+
+  return [`${context} Review Lane "${reviewLane}" is not compatible with Review Unit "${reviewUnit}".`];
+}
+
+export function validateReviewUnitFocus({ declaredReviewUnit, texts = [], context }) {
+  const errors = validateSingleReviewUnitFocus({ texts, context });
+  if (!VALID_REVIEW_UNIT_SET.has(declaredReviewUnit)) return errors;
+
+  const detected = new Set();
+  for (const text of texts) {
+    for (const unit of detectReviewUnits(includedWorkText(text))) {
+      detected.add(unit);
+    }
+  }
+
+  const detectedProductUnits = Array.from(detected).filter((unit) => PRODUCT_REVIEW_UNITS.has(unit));
+  if (detectedProductUnits.length === 1 && PRODUCT_REVIEW_UNITS.has(declaredReviewUnit) && detectedProductUnits[0] !== declaredReviewUnit) {
+    errors.push(
+      `${context} Review Unit "${declaredReviewUnit}" does not match the described ${detectedProductUnits[0]} work.`,
+    );
+  }
+
+  return errors;
+}
+
+export function classifyReviewUnitsForPath(filePath) {
+  const path = String(filePath).replace(/\\/g, '/');
+  const lowerPath = path.toLowerCase();
+  const basename = path.split('/').pop() ?? '';
+
+  if (path.startsWith('scripts/repro/')) return ['proof'];
+  if (path === 'scripts/test-create-pr-visual-proof.mjs') return ['tooling-policy'];
+  if (/(benchmark|performance|visual-proof)/.test(lowerPath)) return ['proof'];
+  if (path.startsWith('docs/') || path.startsWith('skills/') || path.endsWith('.md')) return ['docs'];
+  if (path.startsWith('.github/')) return ['tooling-policy'];
+  if (
+    path === 'package.json'
+    || path === 'pnpm-lock.yaml'
+    || path === 'run.sh'
+    || /^tsconfig.*\.json$/.test(path)
+    || /^packages\/[^/]+\/package\.json$/.test(path)
+  ) {
+    return ['tooling-policy'];
+  }
+  if (path.startsWith('scripts/')) return ['tooling-policy'];
+  if (
+    path.startsWith('packages/')
+    && (path.includes('/e2e/') || path.includes('/__tests__/') || /\.(spec|test)\.[^.]+$/.test(path))
+  ) {
+    return [];
+  }
+  if (path.startsWith('packages/contracts/')) return ['contract'];
+  if (
+    path.startsWith('packages/cli/')
+    || path.startsWith('packages/npm-cli/')
+    || path.startsWith('packages/npm-ui/bin/')
+    || path.startsWith('packages/ui/')
+    || path.startsWith('packages/app/src/window/')
+    || path === 'packages/app/src/preload.ts'
+    || path === 'packages/app/src/app-menu.ts'
+    || path === 'packages/app/src/headless.ts'
+    || /^packages\/app\/src\/headless-[^/]+\.ts$/.test(path)
+    || path === 'packages/app/src/api-server.ts'
+    || path === 'packages/app/src/workflow-actions.ts'
+    || path.startsWith('packages/app/src/ipc/')
+  ) {
+    return ['activation-surface'];
+  }
+  if (
+    path.startsWith('packages/workflow-core/')
+    || path.startsWith('packages/execution-engine/')
+    || path === 'packages/app/src/launch-dispatcher.ts'
+    || path === 'packages/app/src/global-topup.ts'
+    || path === 'packages/app/src/main.ts'
+    || path === 'packages/app/src/workflow-mutation-facade.ts'
+    || path === 'packages/app/src/headless-standalone-launch-dispatcher.ts'
+  ) {
+    return ['routing'];
+  }
+  if (path.startsWith(APP_SRC_PREFIX) && /(gating|policy|validator|validation|eligibility|config)/.test(basename)) {
+    return ['validation-policy'];
+  }
+  if (path.startsWith(APP_SRC_PREFIX) && /(recovery|scanner|store|persistence)/.test(basename)) {
+    return ['read-path'];
+  }
+  if (path.startsWith(APP_SRC_PREFIX)) return ['routing'];
+  return [];
+}
+
+export function reviewUnitsForChangedFiles(changedFiles = []) {
+  const units = new Set();
+  for (const changedFile of changedFiles) {
+    for (const unit of classifyReviewUnitsForPath(changedFile)) {
+      units.add(unit);
+    }
+  }
+  return VALID_REVIEW_UNITS.filter((unit) => units.has(unit));
+}
+
+export function formatReviewUnits(units) {
+  const unitSet = new Set(units);
+  return VALID_REVIEW_UNITS.filter((unit) => unitSet.has(unit)).join(', ');
+}
+
+export function validateReviewUnitChangedFiles({ declaredReviewUnit, changedFiles = [], context }) {
+  if (!VALID_REVIEW_UNIT_SET.has(declaredReviewUnit) || changedFiles.length === 0) return [];
+
+  const forbidden = reviewUnitsForChangedFiles(changedFiles).filter((unit) => unit !== declaredReviewUnit);
+  if (forbidden.length === 0) return [];
+
+  return [
+    `${context} Review Unit "${declaredReviewUnit}" cannot ship with ${formatReviewUnits(forbidden)} files in the same PR. Split this into one Review Unit per PR.`,
+  ];
 }
 
 export function parseChangeTypeItems(section) {
