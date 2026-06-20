@@ -12,6 +12,7 @@ import {
 } from '../lifecycle-events.js';
 
 const CREATED_AT = '2026-06-04T00:00:00.000Z';
+const CREATED_AT_DATE = new Date(CREATED_AT);
 
 function makeTask(overrides: Partial<TaskState> = {}): TaskState {
   return {
@@ -39,7 +40,7 @@ describe('lifecycle event helpers', () => {
   it('builds task.created from created deltas', () => {
     const event = buildLifecycleEventFromTaskDelta(
       { type: 'created', task: makeTask() },
-      { createdAt: CREATED_AT },
+      { createdAt: CREATED_AT_DATE },
     );
 
     expect(event).toMatchObject({
@@ -68,7 +69,7 @@ describe('lifecycle event helpers', () => {
     const event = buildLifecycleEventFromTaskDelta(delta, {
       workflowId: 'wf-1',
       previousStatus: 'pending',
-      createdAt: CREATED_AT,
+      createdAt: CREATED_AT_DATE,
     });
 
     expect(event).toMatchObject({
@@ -97,7 +98,7 @@ describe('lifecycle event helpers', () => {
       taskStateVersion: 3,
       generation: 4,
       attemptId: 'attempt-2',
-      createdAt: CREATED_AT,
+      createdAt: CREATED_AT_DATE,
     });
     const failed = buildTaskUpdatedLifecycleEvent({
       workflowId: 'wf-1',
@@ -107,7 +108,7 @@ describe('lifecycle event helpers', () => {
       taskStateVersion: 4,
       generation: 1,
       attemptId: 'attempt-3',
-      createdAt: CREATED_AT,
+      createdAt: CREATED_AT_DATE,
     });
 
     expect(completed.kind).toBe('task.completed');
@@ -124,7 +125,7 @@ describe('lifecycle event helpers', () => {
       previousStatus: 'running',
       taskStateVersion: 5,
       generation: 2,
-      createdAt: CREATED_AT,
+      createdAt: CREATED_AT_DATE,
     });
 
     expect(reviewReady.kind).toBe('task.review_ready');
@@ -138,7 +139,7 @@ describe('lifecycle event helpers', () => {
       previousStatus: 'running',
       taskStateVersion: 6,
       generation: 2,
-      createdAt: CREATED_AT,
+      createdAt: CREATED_AT_DATE,
     });
 
     expect(lifecycleEventKindForTaskStatus('needs_input')).toBe('task.needs_input');
@@ -154,7 +155,7 @@ describe('lifecycle event helpers', () => {
         previousStatus: 'failed',
         generation: 6,
         attemptId: 'attempt-9',
-        createdAt: CREATED_AT,
+        createdAt: CREATED_AT_DATE,
       },
     );
 
@@ -188,7 +189,7 @@ describe('lifecycle event helpers', () => {
       statusText: 'CI failed',
       generation: 7,
       attemptId: 'attempt-merge',
-      createdAt: CREATED_AT,
+      createdAt: CREATED_AT_DATE,
     });
 
     expect(event).toMatchObject({
@@ -218,7 +219,7 @@ describe('lifecycle event helpers', () => {
       status: 'running',
       generation: 8,
       reason: 'stalled_workflow_recovery',
-      createdAt: CREATED_AT,
+      createdAt: CREATED_AT_DATE,
     });
 
     expect(event).toEqual({
@@ -233,13 +234,71 @@ describe('lifecycle event helpers', () => {
     expect(isWorkflowLifecycleEvent(event)).toBe(true);
   });
 
+  it('defaults omitted createdAt values to canonical UTC ISO timestamps', () => {
+    const event = buildWorkflowWakeupLifecycleEvent({
+      workflowId: 'wf-1',
+      generation: 1,
+      reason: 'manual_reconcile',
+    });
+
+    expect(event.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    expect(isWorkflowLifecycleEvent(event)).toBe(true);
+  });
+
+  it('rejects non-Date createdAt values at lifecycle builder boundaries', () => {
+    const invalidCreatedAtValues = [
+      '2026-06-04T00:00:00Z',
+      '2026-06-04T00:00:00.000+00:00',
+      'not-a-date',
+      123,
+      new Date('not-a-date'),
+    ];
+
+    for (const createdAt of invalidCreatedAtValues) {
+      expect(() => buildTaskUpdatedLifecycleEvent({
+        workflowId: 'wf-1',
+        taskId: 'wf-1/task-a',
+        status: 'failed',
+        taskStateVersion: 1,
+        generation: 1,
+        createdAt: createdAt as Date,
+      })).toThrow(/createdAt must be a valid Date/);
+    }
+
+    expect(() => buildReviewGateCiFailedLifecycleEvent({
+      workflowId: 'wf-1',
+      taskId: 'wf-1/merge',
+      status: 'review_ready',
+      taskStateVersion: 12,
+      reviewId: '123',
+      reviewUrl: 'https://github.com/owner/repo/pull/123',
+      failedChecks: [],
+      statusText: 'CI failed',
+      generation: 7,
+      createdAt: '2026-06-04T00:00:00Z' as unknown as Date,
+    })).toThrow(/createdAt must be a valid Date/);
+
+    expect(() => buildWorkflowWakeupLifecycleEvent({
+      workflowId: 'wf-1',
+      generation: 1,
+      reason: 'manual_reconcile',
+      createdAt: '2026-06-04T00:00:00Z' as unknown as Date,
+    })).toThrow(/createdAt must be a valid Date/);
+  });
+
   it('rejects malformed lifecycle events', () => {
     expect(isWorkflowLifecycleEvent({ kind: 'task.failed' })).toBe(false);
     expect(isWorkflowLifecycleEvent({ ...buildWorkflowWakeupLifecycleEvent({
       workflowId: 'wf-1',
       generation: 1,
       reason: 'manual_reconcile',
-      createdAt: CREATED_AT,
+      createdAt: CREATED_AT_DATE,
     }), generation: '1' })).toBe(false);
+    expect(isWorkflowLifecycleEvent({ ...buildWorkflowWakeupLifecycleEvent({
+      workflowId: 'wf-1',
+      generation: 1,
+      reason: 'manual_reconcile',
+      createdAt: CREATED_AT_DATE,
+    }), createdAt: '2026-06-04T00:00:00Z' })).toBe(false);
   });
 });
