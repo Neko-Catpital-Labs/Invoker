@@ -4560,7 +4560,7 @@ function createEmbeddedTerminalBackendFromConfig(
         }
         if (orchestrator) {
           for (const task of orchestrator.getAllTasks()) {
-            if (task.status === 'running' || task.status === 'fixing_with_ai') {
+            if (isTaskInFlightForForcedStop(task)) {
               if (persistence) {
                 persistShutdownDiagnostic(task, persistence, {
                   flushPendingOutput: flushTaskOutput,
