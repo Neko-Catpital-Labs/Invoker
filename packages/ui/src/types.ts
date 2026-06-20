@@ -170,6 +170,8 @@ export type TaskDelta =
 
 // ── Workflow Metadata ────────────────────────────────────────
 
+export type MergeMode = 'manual' | 'automatic' | 'external_review';
+
 export interface WorkflowMeta {
   id: string;
   name: string;
@@ -178,7 +180,7 @@ export interface WorkflowMeta {
   baseBranch?: string;
   featureBranch?: string;
   onFinish?: string;
-  mergeMode?: string;
+  mergeMode?: MergeMode;
   repoUrl?: string;
   intermediateRepoUrl?: string;
   reviewProvider?: string;
@@ -286,7 +288,7 @@ export interface PlanDefinition {
   tasks: PlanTask[];
   onFinish?: 'none' | 'merge' | 'pull_request';
   baseBranch?: string;
-  mergeMode?: 'manual' | 'automatic' | 'external_review';
+  mergeMode?: MergeMode;
   externalDependencies?: ExternalDependency[];
 }
 
