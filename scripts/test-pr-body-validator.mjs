@@ -232,6 +232,92 @@ assert(missingReviewLaneErrors.some((error) => error.includes('Missing required 
 const invalidReviewLaneErrors = validatePrBody(validMinimal.replace('- behavior', '- impossible'));
 assert(invalidReviewLaneErrors.some((error) => error.includes('Invalid review lane: impossible')), 'invalid review lane should fail');
 
+const broad1574Body = `## Summary
+
+This adds the dormant auto-fix recovery policy.
+
+It scans persisted failed tasks, validates retry and stale-state eligibility, suppresses duplicate open fix intents, and submits fix-with-agent mutation intents.
+
+## Review Claim
+
+Auto-fix recovery can scan persisted failed tasks and enqueue the normal fix intent without a CLI surface.
+
+## Review Lane
+
+- behavior
+
+## Safety Invariant
+
+The policy only submits through the existing mutation route and skips stale or already queued candidates.
+
+## Slice Rationale
+
+Durable-state scan behavior is reviewable separately from lifecycle wakeup routing and CLI activation.
+
+## Non-goals
+
+- No lifecycle wakeup routing, CLI exposure, or worker registry.
+
+## Test Plan
+
+- [ ] \`pnpm test\`
+
+## Revert Plan
+
+- Safe to revert? Yes
+- Revert command: \`git revert <sha>\`
+- Post-revert steps: None
+- Data migration? No
+`;
+const broad1574Errors = validatePrBody(broad1574Body);
+assert(
+  broad1574Errors.some((error) => error.includes('mentions multiple review units')),
+  'broad #1574-shaped PR body should fail review-unit focus',
+);
+
+const originalAllInOneBody = `## Summary
+
+This moves the recovery worker out of the generic runtime.
+
+It scans persisted failed tasks, validates candidates, submits fix intents, routes lifecycle wakeups, and exposes the headless worker command.
+
+## Review Claim
+
+The recovery worker owns auto-fix recovery end to end.
+
+## Review Lane
+
+- behavior
+
+## Safety Invariant
+
+Every submitted fix still goes through the existing mutation route.
+
+## Slice Rationale
+
+The complete auto-fix recovery path lands together for one rollout.
+
+## Non-goals
+
+- No worker registry.
+
+## Test Plan
+
+- [ ] \`pnpm test\`
+
+## Revert Plan
+
+- Safe to revert? Yes
+- Revert command: \`git revert <sha>\`
+- Post-revert steps: None
+- Data migration? No
+`;
+const originalAllInOneErrors = validatePrBody(originalAllInOneBody);
+assert(
+  originalAllInOneErrors.some((error) => error.includes('mentions multiple review units')),
+  'original all-in-one auto-fix PR body should fail review-unit focus',
+);
+
 const longSummary = `## Summary
 
 This summary paragraph uses too many words because it tries to explain several related implementation details at the same time instead of giving a tired reviewer one clear idea they can understand immediately.
@@ -396,6 +482,43 @@ assert(
   refactorNonGoalErrors.some((error) => error.includes('Review lane refactor must state in ## Non-goals that behavior stays unchanged')),
   'refactor lane should require an explicit unchanged-behavior non-goal',
 );
+
+const validationPolicyBody = `## Summary
+
+Validate stale recovery candidates.
+
+## Review Claim
+
+Reject stale auto-fix recovery candidates before submission.
+
+## Review Lane
+
+- behavior
+
+## Safety Invariant
+
+The slice returns validated candidates only.
+
+## Slice Rationale
+
+Validation policy stays separate from command submission.
+
+## Non-goals
+
+- Does not submit mutation intents.
+
+## Test Plan
+
+- [ ] \`pnpm test\`
+
+## Revert Plan
+
+- Safe to revert? Yes
+- Revert command: \`git revert <sha>\`
+- Post-revert steps: None
+- Data migration? No
+`;
+assert(validatePrBody(validationPolicyBody).length === 0, 'validation policy non-goal mentioning submit should pass');
 
 const directScopeErrors = validatePrScope({
   reviewLane: 'behavior',

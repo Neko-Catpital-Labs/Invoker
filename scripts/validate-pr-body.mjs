@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 
 import { readFileSync } from 'node:fs';
+import {
+  getMarkdownSection,
+  validateSingleReviewUnitFocus,
+} from './review-unit-rules.mjs';
 
 const REQUIRED_SECTIONS = [
   '## Summary',
@@ -17,17 +21,7 @@ const SUMMARY_WORD_LIMIT = 30;
 const VALID_REVIEW_LANES = new Set(['behavior', 'refactor', 'proof', 'cleanup', 'policy', 'docs']);
 
 function getSectionBody(body, heading) {
-  const lines = body.split(/\r?\n/);
-  const start = lines.findIndex((line) => line.trim() === heading);
-  if (start === -1) return '';
-
-  const sectionLines = [];
-  for (const line of lines.slice(start + 1)) {
-    if (/^##\s+/.test(line.trim())) break;
-    sectionLines.push(line);
-  }
-
-  return sectionLines.join('\n').trim();
+  return getMarkdownSection(body, heading);
 }
 
 function countWords(text) {
@@ -190,6 +184,14 @@ export function validatePrBody(body, options = {}) {
   if (reviewClaim && !reviewClaim.trim()) {
     errors.push('## Review Claim must not be empty.');
   }
+  errors.push(...validateSingleReviewUnitFocus({
+    context: 'PR body',
+    texts: [
+      getSectionBody(trimmed, '## Summary'),
+      reviewClaim,
+      getSectionBody(trimmed, '## Slice Rationale'),
+    ],
+  }));
 
   if (options.requiresVisualProof && !hasVisualProofMedia(trimmed)) {
     errors.push(
