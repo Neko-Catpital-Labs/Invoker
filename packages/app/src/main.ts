@@ -3483,6 +3483,7 @@ function createEmbeddedTerminalBackendFromConfig(
         resolveInvokerHomeRoot,
         orchestrator,
         persistence,
+        logger,
       });
 
       taskGraphEventPublisher.publishSnapshot(
