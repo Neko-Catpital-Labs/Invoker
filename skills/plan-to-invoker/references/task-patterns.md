@@ -204,6 +204,8 @@ For implementation plans (`onFinish != none`), prompt tasks are hard-gated by `s
 2. **`Change types:`** — Per listed path: `create`, `modify`, `delete`, `rename`, `move`, `config-only`, `test-only`, `docs-only`, `generated`, or `none`.
 3. **`Acceptance criteria:`** — Objective deterministic checks with concrete pass/fail language.
 
+Do not put conceptual work such as "add scan validation and submit behavior" in `Change types:`. Keep `Change types:` to per-file operations, and split implementation tasks when the review claim, slice rationale, or implementation details mix multiple conceptual units.
+
 **`prompt` tasks:** The multiline `prompt` must be self-contained for remote execution with no chat context. Include zero-context framing and deterministic expected outcomes directly in the prompt body.
 
 **`command` tasks:** The same headings are still recommended; for verify-only plans they remain advisory.

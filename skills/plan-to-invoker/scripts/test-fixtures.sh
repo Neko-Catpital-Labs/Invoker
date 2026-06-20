@@ -25,6 +25,8 @@ DOCTOR_NEGATIVE_FIXTURES=(
   "anti-pattern-k-missing-review-compression.yaml"
   "anti-pattern-l-behavior-plus-proof.yaml"
   "anti-pattern-m-refactor-plus-fields.yaml"
+  "anti-pattern-n-broad-autofix-policy-review-unit.yaml"
+  "anti-pattern-o-all-in-one-autofix-review-unit.yaml"
 )
 
 is_doctor_negative_fixture() {
@@ -117,6 +119,10 @@ test_negative_fixture() {
 test_doctor_negative_fixture() {
   local fixture_path="$1"
   local fixture_name="$(basename "$fixture_path")"
+  local expected_failed_step="lint-task-atomicity"
+  if [[ "$fixture_name" == "anti-pattern-n-broad-autofix-policy-review-unit.yaml" || "$fixture_name" == "anti-pattern-o-all-in-one-autofix-review-unit.yaml" ]]; then
+    expected_failed_step="lint-review-units"
+  fi
   local output
   local stderr_file
   stderr_file="$(mktemp)"
@@ -134,8 +140,8 @@ test_doctor_negative_fixture() {
     return 1
   fi
 
-  if ! echo "$output" | jq -e '.allPassed == false and .firstFailedStep == "lint-task-atomicity"' &>/dev/null; then
-    echo "Expected firstFailedStep=lint-task-atomicity for $fixture_name" >&2
+  if ! echo "$output" | jq -e --arg expected "$expected_failed_step" '.allPassed == false and .firstFailedStep == $expected' &>/dev/null; then
+    echo "Expected firstFailedStep=$expected_failed_step for $fixture_name" >&2
     echo "Output: $output" >&2
     echo "Errors: $(cat "$stderr_file")" >&2
     rm -f "$stderr_file"

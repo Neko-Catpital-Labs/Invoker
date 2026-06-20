@@ -37,7 +37,9 @@ PR bodies:
 - `Non-goals:` what this slice explicitly does not change.
 
 For mechanical slices, these can be terse. For cross-boundary changes, explain
-the before/after architecture and why the split is acceptable.
+the before/after architecture and why the split is acceptable. Each slice must
+still contain one conceptual unit; validators infer mixed units from the claim,
+rationale, implementation details, and change-type entries.
 
 ## Ordering Rules
 
@@ -103,4 +105,3 @@ Do not summarize the patch file-by-file. Compress the human judgment:
 - describe architectural effect in plain English
 - call out why this slice exists
 - include alternatives for non-obvious or cross-boundary choices
-
