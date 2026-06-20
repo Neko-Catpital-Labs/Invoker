@@ -59,7 +59,7 @@ import {
   isDispatchableLaunch,
 } from './global-topup.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
-import { RECOVERY_WORKER_KIND } from './worker-runtime.js';
+import { RECOVERY_WORKER_KIND } from './workers/auto-fix-recovery.js';
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
 import { trackWorkflow } from './headless-watch.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
