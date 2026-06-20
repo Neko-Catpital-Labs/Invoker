@@ -202,6 +202,7 @@ declare const __BUILD_VERSION__: string | undefined;
 // Electron passes extra args after `--` or interleaves them.
 // We look for `--headless` anywhere in process.argv.
 const headlessIndex = process.argv.indexOf('--headless');
+// Direct skill installation is normalized into the shared headless command router.
 const directInstallSkills = process.argv.includes('--install-skills') || process.argv.slice(2).includes('install-skills');
 const isHeadless = headlessIndex !== -1 || directInstallSkills;
 
@@ -418,6 +419,7 @@ function getBundledSkillsStatus() {
 }
 
 function createBundledSkillsContext(): BundledSkillsContext {
+  // Adapt Electron packaging state once, then share it across GUI and headless callers.
   return {
     isPackaged: app.isPackaged,
     repoRoot,

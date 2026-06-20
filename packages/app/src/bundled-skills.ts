@@ -25,6 +25,7 @@ export interface BundledSkillsContext {
   invokerHomeRoot?: string;
 }
 
+// Keep the managed install target matrix centralized so status and install use identical paths.
 const MANAGED_TARGETS = [
   {
     id: 'codex',
