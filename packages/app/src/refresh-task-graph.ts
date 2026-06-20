@@ -1,4 +1,4 @@
-import type { WorkflowMeta } from '@invoker/contracts';
+import type { Logger, WorkflowMeta } from '@invoker/contracts';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { MessageBus } from '@invoker/transport';
 import type { Orchestrator, TaskState } from '@invoker/workflow-core';
@@ -20,6 +20,7 @@ export interface ResolveRefreshTaskGraphSnapshotDeps {
   resolveInvokerHomeRoot: () => string;
   orchestrator: Pick<Orchestrator, 'syncAllFromDb' | 'getAllTasks'>;
   persistence: Pick<SQLiteAdapter, 'listWorkflows'>;
+  logger: Logger;
 }
 
 function parseDelegatedRefreshTaskGraphSnapshot(
@@ -50,7 +51,19 @@ function parseDelegatedRefreshTaskGraphSnapshot(
 export async function resolveRefreshTaskGraphSnapshot(
   deps: ResolveRefreshTaskGraphSnapshotDeps,
 ): Promise<RefreshTaskGraphSnapshot> {
-  if (!deps.ownerMode) {
+  const readLocalSnapshot = (): RefreshTaskGraphSnapshot => {
+    deps.orchestrator.syncAllFromDb();
+    return {
+      tasks: deps.orchestrator.getAllTasks(),
+      workflows: deps.persistence.listWorkflows() as WorkflowMeta[],
+    };
+  };
+
+  if (deps.ownerMode) {
+    return readLocalSnapshot();
+  }
+
+  try {
     const delegated = parseDelegatedRefreshTaskGraphSnapshot(
       await deps.messageBus.request('headless.query', { kind: 'task-graph-refresh' }) as unknown,
       deps.resolveInvokerHomeRoot(),
@@ -59,11 +72,13 @@ export async function resolveRefreshTaskGraphSnapshot(
       tasks: delegated.tasks,
       workflows: delegated.workflows,
     };
+  } catch (err) {
+    deps.logger.warn(
+      `refresh-task-graph owner delegation failed; falling back to local read-only snapshot: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+      { module: 'ipc' },
+    );
+    return readLocalSnapshot();
   }
-
-  deps.orchestrator.syncAllFromDb();
-  return {
-    tasks: deps.orchestrator.getAllTasks(),
-    workflows: deps.persistence.listWorkflows() as WorkflowMeta[],
-  };
 }
