@@ -25,11 +25,6 @@ import {
   approveTask as sharedApproveTask,
   rejectTask as sharedRejectTask,
   provideInput as sharedProvideInput,
-  retryTask as sharedRetryTask,
-  retryWorkflow as sharedRetryWorkflow,
-  recreateWorkflow as sharedRecreateWorkflow,
-  recreateTask as sharedRecreateTask,
-  recreateDownstream as sharedRecreateDownstream,
   recreateWorkflowFromFreshBase as sharedRecreateWorkflowFromFreshBase,
   rebaseRetry as sharedRebaseRetry,
   rebaseRecreate as sharedRebaseRecreate,
@@ -50,7 +45,7 @@ import {
   deleteAllWorkflows as sharedDeleteAllWorkflows,
   type FailureRecoveryRoute,
   type FixWithAgentActionResult,
-  type ActionDeps,
+  type CommandActionDeps,
 } from './workflow-actions.js';
 import {
   dispatchStartedTasksWithGlobalTopup,
@@ -111,7 +106,7 @@ export interface WorkflowMutationFacadeDeps {
   logger?: Logger;
   orchestrator: Orchestrator;
   persistence: SQLiteAdapter;
-  commandService?: CommandService;
+  commandService: CommandService;
   taskExecutor: TaskRunner;
   dispatchMode?: 'await' | 'fire-and-forget';
   autoApproveAIFixes?: boolean;
@@ -157,33 +152,21 @@ export class WorkflowMutationFacade {
 
   async retryTask(taskId: string): Promise<MutationResult> {
     const started = await this.runViaCommandService(
-      'task',
-      taskId,
       (cs) => cs.retryTask(makeEnvelope('facade.retry-task', 'surface', 'task', { taskId })),
-      () => sharedRetryTask(taskId, { orchestrator: this.deps.orchestrator }),
     );
     return this.finalizeWithTopup(started, 'facade.retry-task', { scopedTaskIds: [taskId] });
   }
 
   async recreateTask(taskId: string): Promise<MutationResult> {
     const started = await this.runViaCommandService(
-      'task',
-      taskId,
       (cs) => cs.recreateTask(makeEnvelope('facade.recreate-task', 'surface', 'task', { taskId })),
-      () => sharedRecreateTask(taskId, {
-        orchestrator: this.deps.orchestrator,
-        persistence: this.deps.persistence,
-      }),
     );
     return this.finalizeWithTopup(started, 'facade.recreate-task', { scopedTaskIds: [taskId] });
   }
 
   async recreateDownstream(taskId: string): Promise<MutationResult> {
     const started = await this.runViaCommandService(
-      'task',
-      taskId,
       (cs) => cs.recreateDownstream(makeEnvelope('facade.recreate-downstream', 'surface', 'task', { taskId })),
-      () => sharedRecreateDownstream(taskId, { orchestrator: this.deps.orchestrator }),
     );
     // `started` contains only descendants (the target is preserved), so a
     // [taskId] dispatch scope would filter every launch out.
@@ -290,24 +273,14 @@ export class WorkflowMutationFacade {
 
   async retryWorkflow(workflowId: string): Promise<MutationResult> {
     const started = await this.runViaCommandService(
-      'workflow',
-      workflowId,
       (cs) => cs.retryWorkflow(makeEnvelope('facade.retry-workflow', 'surface', 'workflow', { workflowId })),
-      () => sharedRetryWorkflow(workflowId, { orchestrator: this.deps.orchestrator }),
     );
     return this.finalizeWithTopup(started, 'facade.retry-workflow', { scopedWorkflowId: workflowId });
   }
 
   async recreateWorkflow(workflowId: string): Promise<MutationResult> {
     const started = await this.runViaCommandService(
-      'workflow',
-      workflowId,
       (cs) => cs.recreateWorkflow(makeEnvelope('facade.recreate-workflow', 'surface', 'workflow', { workflowId })),
-      () => sharedRecreateWorkflow(workflowId, {
-        logger: this.deps.logger,
-        persistence: this.deps.persistence,
-        orchestrator: this.deps.orchestrator,
-      }),
     );
     return this.finalizeWithTopup(started, 'facade.recreate-workflow', { scopedWorkflowId: workflowId });
   }
@@ -473,11 +446,12 @@ export class WorkflowMutationFacade {
 
   // ── Internal helpers ─────────────────────────────────────
 
-  private actionDeps(): ActionDeps {
+  private actionDeps(): CommandActionDeps {
     return {
       logger: this.deps.logger,
       orchestrator: this.deps.orchestrator,
       persistence: this.deps.persistence,
+      commandService: this.deps.commandService,
       taskExecutor: this.deps.taskExecutor,
       autoApproveAIFixes: this.deps.autoApproveAIFixes,
     };
@@ -510,32 +484,22 @@ export class WorkflowMutationFacade {
   }
 
   /**
-   * Route through the production CommandService when available so the
-   * mutation gets mutex serialization, executor kill on cancel-in-flight,
-   * and the cross-workflow cascade. Falls back to the shared action when
-   * no CommandService is wired (legacy entrypoints / tests).
+   * Route lifecycle mutations through CommandService so they get mutex
+   * serialization, executor kill on cancel-in-flight, and cross-workflow
+   * cascade. There is intentionally no direct orchestrator fallback.
    */
   private async runViaCommandService(
-    _scope: 'task' | 'workflow',
-    _id: string,
     routed: (cs: CommandService) => Promise<{ ok: true; data: TaskState[] } | { ok: false; error: { code: string; message: string } }>,
-    fallback: () => TaskState[] | Promise<TaskState[]>,
   ): Promise<TaskState[]> {
-    if (this.deps.commandService) {
-      const result = await routed(this.deps.commandService);
-      if (!result.ok) {
-        // Surface OrchestratorError when CommandService bubbles a known
-        // domain code (e.g. WORKFLOW_NOT_FOUND -> HTTP 404). Plain Error
-        // is the fallback for unmapped codes.
-        const known = (Object.values(OrchestratorErrorCode) as string[]).includes(result.error.code);
-        if (known) {
-          throw new OrchestratorError(result.error.code as OrchestratorErrorCode, result.error.message);
-        }
-        throw new Error(result.error.message);
+    const result = await routed(this.deps.commandService);
+    if (!result.ok) {
+      const known = (Object.values(OrchestratorErrorCode) as string[]).includes(result.error.code);
+      if (known) {
+        throw new OrchestratorError(result.error.code as OrchestratorErrorCode, result.error.message);
       }
-      return result.data;
+      throw new Error(result.error.message);
     }
-    return Promise.resolve(fallback());
+    return result.data;
   }
 
   private assertSingleDispatchScope(scope: DispatchScope): void {
