@@ -6,6 +6,8 @@ import type {
 } from '@invoker/data-store';
 import type { TaskState } from '@invoker/workflow-core';
 
+import { listOpenFixIntentsForTask } from '../auto-fix-intents.js';
+import { shouldSkipAutoFixForError } from '../auto-fix-gating.js';
 import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../worker-runtime.js';
 
 /** Public worker kind for the auto-fix recovery worker. */
@@ -53,6 +55,24 @@ export type AutoFixRecoveryCandidate = {
   source: 'scan';
 };
 
+export type ValidatedAutoFixRecoveryCandidate = AutoFixRecoveryCandidate & {
+  task: TaskState;
+};
+
+type AutoFixCandidateSnapshotMismatchReason =
+  | 'stale-workflow'
+  | 'stale-generation'
+  | 'stale-task-state-version'
+  | 'stale-attempt';
+
+type AutoFixCandidateSnapshotComparison =
+  | { ok: true }
+  | {
+    ok: false;
+    reason: AutoFixCandidateSnapshotMismatchReason;
+    details: Record<string, unknown>;
+  };
+
 function workflowIdForTask(task: TaskState): string | undefined {
   return task.config.workflowId ?? task.id.split('/')[0];
 }
@@ -82,6 +102,154 @@ export function listAutoFixRecoveryScanCandidates(
     }
   }
   return candidates;
+}
+
+function retryBudgetForTask(task: TaskState, options: AutoFixRecoveryPolicyOptions): number {
+  const raw = options.getRetryBudget?.(task) ?? options.defaultAutoFixRetries ?? 0;
+  if (!Number.isFinite(raw)) return 0;
+  return Math.min(Math.max(0, Math.floor(raw)), 10);
+}
+
+function isRuntimeAutoFixEligibleTask(task: TaskState, options: AutoFixRecoveryPolicyOptions): boolean {
+  if (task.status !== 'failed') return false;
+  if (task.config.isReconciliation) return false;
+  if (task.config.parentTask) return false;
+  if (shouldSkipAutoFixForError(task.execution.error)) return false;
+  const max = retryBudgetForTask(task, options);
+  if (max <= 0) return false;
+  return (task.execution.autoFixAttempts ?? 0) < max;
+}
+
+function loadLatestTask(
+  candidate: AutoFixRecoveryCandidate,
+  options: AutoFixRecoveryPolicyOptions,
+): TaskState | undefined {
+  const direct = options.store.loadTask?.(candidate.taskId);
+  if (direct) return direct;
+  return options.store.loadTasks(candidate.workflowId).find((task) => task.id === candidate.taskId);
+}
+
+function logAutoFixWorkerEvent(
+  options: AutoFixRecoveryPolicyOptions,
+  taskId: string,
+  phase: string,
+  details: Record<string, unknown>,
+): void {
+  const payload = { phase, worker: RECOVERY_WORKER_KIND, ...details };
+  options.store.logEvent?.(taskId, 'debug.auto-fix', payload);
+  options.logger.debug?.(`[worker:${RECOVERY_WORKER_KIND}] ${phase}`, {
+    module: 'auto-fix-recovery',
+    taskId,
+    ...details,
+  });
+}
+
+function skipAutoFixCandidate(
+  options: AutoFixRecoveryPolicyOptions,
+  candidate: AutoFixRecoveryCandidate,
+  reason: string,
+  details: Record<string, unknown> = {},
+): void {
+  logAutoFixWorkerEvent(options, candidate.taskId, 'worker-autofix-skip', {
+    reason,
+    source: candidate.source,
+    workflowId: candidate.workflowId,
+    generation: candidate.generation,
+    taskStateVersion: candidate.taskStateVersion,
+    attemptId: candidate.attemptId ?? null,
+    ...details,
+  });
+}
+
+function compareAutoFixCandidateSnapshot(
+  candidate: AutoFixRecoveryCandidate,
+  latest: TaskState,
+): AutoFixCandidateSnapshotComparison {
+  const latestWorkflowId = workflowIdForTask(latest);
+  if (latestWorkflowId !== candidate.workflowId) {
+    return {
+      ok: false,
+      reason: 'stale-workflow',
+      details: { latestWorkflowId: latestWorkflowId ?? null },
+    };
+  }
+
+  const latestGeneration = latest.execution.generation ?? 0;
+  if (latestGeneration !== candidate.generation) {
+    return {
+      ok: false,
+      reason: 'stale-generation',
+      details: { latestGeneration },
+    };
+  }
+
+  if (latest.taskStateVersion !== candidate.taskStateVersion) {
+    return {
+      ok: false,
+      reason: 'stale-task-state-version',
+      details: { latestTaskStateVersion: latest.taskStateVersion },
+    };
+  }
+
+  const latestAttemptId = latest.execution.selectedAttemptId ?? null;
+  if (latestAttemptId !== (candidate.attemptId ?? null)) {
+    return {
+      ok: false,
+      reason: 'stale-attempt',
+      details: { latestAttemptId },
+    };
+  }
+
+  return { ok: true };
+}
+
+function validateAutoFixCandidate(
+  candidate: AutoFixRecoveryCandidate,
+  options: AutoFixRecoveryPolicyOptions,
+): ValidatedAutoFixRecoveryCandidate | undefined {
+  const latest = loadLatestTask(candidate, options);
+  if (!latest) {
+    skipAutoFixCandidate(options, candidate, 'task-not-found');
+    return undefined;
+  }
+
+  const snapshotComparison = compareAutoFixCandidateSnapshot(candidate, latest);
+  if (!snapshotComparison.ok) {
+    skipAutoFixCandidate(options, candidate, snapshotComparison.reason, snapshotComparison.details);
+    return undefined;
+  }
+
+  if (!isRuntimeAutoFixEligibleTask(latest, options)) {
+    skipAutoFixCandidate(options, candidate, 'not-eligible', {
+      status: latest.status,
+      autoFixAttempts: latest.execution.autoFixAttempts ?? 0,
+      maxRetries: retryBudgetForTask(latest, options),
+      isReconciliation: Boolean(latest.config.isReconciliation),
+      hasParentTask: Boolean(latest.config.parentTask),
+      skippedForError: shouldSkipAutoFixForError(latest.execution.error),
+    });
+    return undefined;
+  }
+
+  const openIntents = options.store.listWorkflowMutationIntents(candidate.workflowId, ['queued', 'running']);
+  const openTaskFixIntents = listOpenFixIntentsForTask(openIntents, candidate.taskId);
+  if (openTaskFixIntents.length > 0) {
+    skipAutoFixCandidate(options, candidate, 'already-queued-intent', {
+      existingIntentIds: openTaskFixIntents.map((intent) => intent.id),
+    });
+    return undefined;
+  }
+
+  return { ...candidate, task: latest };
+}
+
+export function collectValidatedAutoFixRecoveryCandidates(
+  options: AutoFixRecoveryPolicyOptions,
+  candidates: AutoFixRecoveryCandidate[] = listAutoFixRecoveryScanCandidates(options),
+): ValidatedAutoFixRecoveryCandidate[] {
+  return candidates
+    .map((candidate) => validateAutoFixCandidate(candidate, options))
+    .filter((candidate): candidate is ValidatedAutoFixRecoveryCandidate => Boolean(candidate));
 }
 
 export interface RecoveryWorkerOptions {
