@@ -81,6 +81,7 @@ const READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS = 20_000;
 const READ_ONLY_QUERY_REQUEST_TIMEOUT_MS = 8_000;
 const POST_BOOTSTRAP_OWNER_RESTART_ATTEMPTS = 3;
 const DEFAULT_STANDALONE_OWNER_BOOTSTRAP_TIMEOUT_MS = 60_000;
+// These read-only queries need live owner state; unrelated read-only commands keep the Electron fallback path.
 const OWNER_BACKED_READ_ONLY_QUERIES = new Set(['query ui-perf', 'query queue', 'queue']);
 
 function standaloneOwnerBootstrapTimeoutMs(): number {
@@ -140,7 +141,6 @@ async function delegateReadOnlyQuery(
     return false;
   }
   const isUiPerf = queryKey === 'query ui-perf';
-  const isQueue = queryKey === 'query queue' || queryKey === 'queue';
 
   // Use the resolver to wait for any reachable owner
   const resolver = createOwnerResolver(
