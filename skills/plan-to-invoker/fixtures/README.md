@@ -58,6 +58,8 @@ Negative fixtures demonstrate anti-patterns and validation errors:
 - **anti-pattern-i-final-regression-not-test-all.yaml** - Standalone implementation workflow missing the terminal `pnpm run test:all` regression gate (**fails `skill-doctor` lint, not YAML schema**)
 - **anti-pattern-j-zero-context-missing-metadata.yaml** - Prompt task omits strict zero-context handoff metadata (**fails `skill-doctor` lint, not YAML schema**)
 - **anti-pattern-k-missing-review-compression.yaml** - Implementation task omits review-compression metadata (**fails `skill-doctor` lint, not YAML schema**)
+- **anti-pattern-n-broad-autofix-policy-review-unit.yaml** - #1574-shaped auto-fix policy task combines scan, validation, duplicate suppression, and submit work (**fails `skill-doctor` review-unit lint**)
+- **anti-pattern-o-all-in-one-autofix-review-unit.yaml** - Original all-in-one auto-fix task combines ownership, policy, wakeups, and CLI activation (**fails `skill-doctor` review-unit lint**)
 
 ### Edge Cases (specific validation errors)
 
