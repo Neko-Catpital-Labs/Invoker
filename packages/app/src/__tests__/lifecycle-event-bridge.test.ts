@@ -29,6 +29,21 @@ function collectLifecycleEvents(bus: MessageBus): WorkflowLifecycleEvent[] {
   return events;
 }
 
+function expectRecoveryWakeup(event: any, expected: Record<string, unknown>): void {
+  expect(event.recoveryWakeup).toEqual({
+    eventKey: event.eventKey,
+    eventKind: event.kind,
+    workflowId: event.workflowId,
+    ...(event.taskId ? { taskId: event.taskId } : {}),
+    ...(event.taskStateVersion != null ? { taskStateVersion: event.taskStateVersion } : {}),
+    generation: event.generation,
+    ...(event.attemptId ? { attemptId: event.attemptId } : {}),
+    createdAt: event.createdAt,
+    authoritative: false,
+    ...expected,
+  });
+}
+
 describe('lifecycle event bridge', () => {
   it('publishes task.created lifecycle events from created deltas', () => {
     const bus = new LocalBus();
@@ -50,6 +65,7 @@ describe('lifecycle event bridge', () => {
       createdAt: CREATED_AT,
     });
     expect(isWorkflowLifecycleEvent(events[0])).toBe(true);
+    expectRecoveryWakeup(events[0], { reason: 'task_lifecycle' });
   });
 
   it.each([
@@ -88,6 +104,9 @@ describe('lifecycle event bridge', () => {
       attemptId: 'attempt-2',
       createdAt: CREATED_AT,
     });
+    expectRecoveryWakeup(events[0], {
+      reason: kind === 'task.failed' ? 'task_failure' : 'task_lifecycle',
+    });
   });
 
   it('publishes task.updated for non-status updates using cached task status', () => {
@@ -120,6 +139,7 @@ describe('lifecycle event bridge', () => {
       attemptId: 'attempt-1',
       createdAt: CREATED_AT,
     });
+    expectRecoveryWakeup(events[0], { reason: 'task_lifecycle' });
   });
 
   it('publishes task.removed lifecycle events from removed deltas', () => {
@@ -150,6 +170,7 @@ describe('lifecycle event bridge', () => {
       attemptId: 'attempt-1',
       createdAt: CREATED_AT,
     });
+    expectRecoveryWakeup(events[0], { reason: 'task_lifecycle' });
   });
 
   it('does not call recovery or TaskRunner methods while publishing wakeups', () => {

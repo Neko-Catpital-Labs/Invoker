@@ -27,6 +27,21 @@ function makeTask(overrides: Partial<TaskState> = {}): TaskState {
   } as TaskState;
 }
 
+function expectRecoveryWakeup(event: any, expected: Record<string, unknown>): void {
+  expect(event.recoveryWakeup).toEqual({
+    eventKey: event.eventKey,
+    eventKind: event.kind,
+    workflowId: event.workflowId,
+    ...(event.taskId ? { taskId: event.taskId } : {}),
+    ...(event.taskStateVersion != null ? { taskStateVersion: event.taskStateVersion } : {}),
+    generation: event.generation,
+    ...(event.attemptId ? { attemptId: event.attemptId } : {}),
+    createdAt: event.createdAt,
+    authoritative: false,
+    ...expected,
+  });
+}
+
 describe('worker lifecycle channel', () => {
   it('adds workflow lifecycle without changing existing task channels', () => {
     expect(Channels.TASK_DELTA).toBe('task.delta');
@@ -54,6 +69,7 @@ describe('lifecycle event helpers', () => {
       createdAt: CREATED_AT,
     });
     expect(isTaskLifecycleEvent(event)).toBe(true);
+    expectRecoveryWakeup(event, { reason: 'task_lifecycle' });
   });
 
   it('builds task.updated from non-terminal status updates', () => {
@@ -83,6 +99,7 @@ describe('lifecycle event helpers', () => {
       attemptId: 'attempt-2',
       createdAt: CREATED_AT,
     });
+    expectRecoveryWakeup(event, { reason: 'task_lifecycle' });
   });
 
   it('maps completed and failed status updates to worker lifecycle kinds', () => {
@@ -114,6 +131,8 @@ describe('lifecycle event helpers', () => {
     expect(failed.kind).toBe('task.failed');
     expect(completed.eventKey).toBe('task.completed|workflow:wf-1|task:wf-1/task-a|generation:4|attempt:attempt-2|task-state:3');
     expect(failed.eventKey).toBe('task.failed|workflow:wf-1|task:wf-1/task-b|generation:1|attempt:attempt-3|task-state:4');
+    expectRecoveryWakeup(completed, { reason: 'task_lifecycle' });
+    expectRecoveryWakeup(failed, { reason: 'task_failure' });
   });
 
   it('maps review readiness status updates to worker lifecycle kinds', () => {
@@ -144,6 +163,7 @@ describe('lifecycle event helpers', () => {
     expect(lifecycleEventKindForTaskStatus('needs_input')).toBe('task.needs_input');
     expect(needsInput.kind).toBe('task.needs_input');
     expect(isWorkflowLifecycleEvent(needsInput)).toBe(true);
+    expectRecoveryWakeup(needsInput, { reason: 'task_lifecycle' });
   });
 
   it('builds task.removed from removed deltas', () => {
@@ -169,6 +189,7 @@ describe('lifecycle event helpers', () => {
       attemptId: 'attempt-9',
       createdAt: CREATED_AT,
     });
+    expectRecoveryWakeup(event, { reason: 'task_lifecycle' });
   });
 
   it('builds review_gate.ci_failed lifecycle wakeups', () => {
@@ -210,6 +231,7 @@ describe('lifecycle event helpers', () => {
       { name: 'test-all', conclusion: 'FAILURE', detailsUrl: 'https://github.com/owner/repo/actions/runs/1' },
     ]);
     expect(isWorkflowLifecycleEvent(event)).toBe(true);
+    expectRecoveryWakeup(event, { reason: 'review_gate_failure' });
   });
 
   it('builds workflow.wakeup events for persisted-state reconciliation', () => {
@@ -228,9 +250,40 @@ describe('lifecycle event helpers', () => {
       status: 'running',
       generation: 8,
       createdAt: CREATED_AT,
+      recoveryWakeup: {
+        eventKey: 'workflow.wakeup|workflow:wf-1|generation:8|reason:stalled_workflow_recovery',
+        eventKind: 'workflow.wakeup',
+        workflowId: 'wf-1',
+        generation: 8,
+        createdAt: CREATED_AT,
+        reason: 'workflow_reconcile',
+        authoritative: false,
+      },
       reason: 'stalled_workflow_recovery',
     });
     expect(isWorkflowLifecycleEvent(event)).toBe(true);
+  });
+
+  it('marks recovery wakeup data as non-authoritative optimization hints', () => {
+    const event = buildTaskUpdatedLifecycleEvent({
+      workflowId: 'wf-1',
+      taskId: 'wf-1/task-a',
+      status: 'failed',
+      previousStatus: 'running',
+      taskStateVersion: 10,
+      generation: 5,
+      attemptId: 'attempt-stale',
+      createdAt: CREATED_AT,
+    });
+
+    expect(event.recoveryWakeup).toMatchObject({
+      workflowId: 'wf-1',
+      taskId: 'wf-1/task-a',
+      generation: 5,
+      attemptId: 'attempt-stale',
+      taskStateVersion: 10,
+      authoritative: false,
+    });
   });
 
   it('rejects malformed lifecycle events', () => {
@@ -241,5 +294,16 @@ describe('lifecycle event helpers', () => {
       reason: 'manual_reconcile',
       createdAt: CREATED_AT,
     }), generation: '1' })).toBe(false);
+    expect(isWorkflowLifecycleEvent({
+      ...buildTaskUpdatedLifecycleEvent({
+        workflowId: 'wf-1',
+        taskId: 'wf-1/task-a',
+        status: 'failed',
+        taskStateVersion: 1,
+        generation: 1,
+        createdAt: CREATED_AT,
+      }),
+      recoveryWakeup: { authoritative: true },
+    })).toBe(false);
   });
 });
