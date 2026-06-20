@@ -482,10 +482,6 @@ export const IpcChannels = {
     request: [taskId: string, newCommand: string];
     response: void;
   },
-  'invoker:edit-task-type': {} as {
-    request: [taskId: string, runnerKind: string, poolMemberId?: string];
-    response: void;
-  },
   'invoker:edit-task-pool': {} as {
     request: [taskId: string, poolId: string];
     response: void;
