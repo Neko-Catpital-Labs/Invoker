@@ -27,6 +27,16 @@ function countWords(text) {
     .filter(Boolean).length;
 }
 
+function hasVisualProofMedia(body) {
+  const visualProof = getSectionBody(body, '## Visual Proof');
+  if (!visualProof) return false;
+
+  return /!\[[^\]]*\]\([^)]+\)/.test(visualProof)
+    || /\[[^\]]*(?:video|walkthrough|recording)[^\]]*\]\([^)]+\)/i.test(visualProof)
+    || /\bhttps?:\/\/\S+\.(?:png|jpe?g|gif|webp|webm|mp4)\b/i.test(visualProof);
+}
+
+
 export function getPrBodyWarnings(body) {
   const warnings = [];
   const summary = getSectionBody(body, '## Summary');
@@ -45,7 +55,7 @@ export function getPrBodyWarnings(body) {
   return warnings;
 }
 
-export function validatePrBody(body) {
+export function validatePrBody(body, options = {}) {
   const errors = [];
   const trimmed = body.trim();
 
@@ -77,22 +87,29 @@ export function validatePrBody(body) {
     }
   }
 
+
+  if (options.requiresVisualProof && !hasVisualProofMedia(trimmed)) {
+    errors.push(
+      'UI-impacting changes require a ## Visual Proof section with at least one screenshot image or video/walkthrough link.',
+    );
+  }
   return errors;
 }
 
 function usage() {
-  console.error(`Usage: node scripts/validate-pr-body.mjs (--body-file <file> | --body <markdown>)
+  console.error(`Usage: node scripts/validate-pr-body.mjs (--body-file <file> | --body <markdown>) [--require-visual-proof]
 
 Validates the canonical PR schema:
   Required: ## Summary, ## Test Plan, ## Revert Plan
-  Optional: ## Architecture (must include ### Before and ### After when present)`);
+  Optional: ## Architecture (must include ### Before and ### After when present)
+  UI changes: pass --require-visual-proof to require screenshot or video proof.`);
   process.exit(1);
 }
 
 function parseArgs(argv) {
   let body = '';
   let bodyFile = '';
-
+  let requiresVisualProof = false;
   for (let i = 0; i < argv.length; i++) {
     switch (argv[i]) {
       case '--body':
@@ -100,6 +117,9 @@ function parseArgs(argv) {
         break;
       case '--body-file':
         bodyFile = argv[++i] || '';
+        break;
+      case '--require-visual-proof':
+        requiresVisualProof = true;
         break;
       case '--help':
         usage();
@@ -115,13 +135,13 @@ function parseArgs(argv) {
     usage();
   }
 
-  return { body, bodyFile };
+  return { body, bodyFile, requiresVisualProof };
 }
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const body = args.bodyFile ? readFileSync(args.bodyFile, 'utf-8') : args.body;
-  const errors = validatePrBody(body);
+  const errors = validatePrBody(body, { requiresVisualProof: args.requiresVisualProof });
   const warnings = getPrBodyWarnings(body);
 
   if (errors.length > 0) {

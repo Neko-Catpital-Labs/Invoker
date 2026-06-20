@@ -8,7 +8,7 @@ Source of truth: `packages/app/src/plan-parser.ts` (interfaces + validation, lin
 |-------|------|---------|-------------|
 | `name` | string | *required* | Always. Short, descriptive. |
 | `description` | string | — | **Required** when onFinish is pull_request or merge. Validator rejects plans without it. 1-3 paragraphs: architecture, motivations, tradeoffs. Include mermaid before/after architecture diagrams when the change modifies component interactions or data flow (GitHub renders them natively in the PR body). See `examples.md` Example 4. |
-| `visualProof` | boolean | false | Set true when plan modifies UI packages (packages/ui/). Triggers automatic before/after screenshot capture in the merge gate. |
+| `visualProof` | boolean | false | Set true when the plan modifies UI-impacting files, including `packages/ui/**` and Electron window/preload/main UI wiring. Triggers automatic before/after screenshot capture in the merge gate. |
 | `onFinish` | `pull_request` \| `merge` \| `none` | `pull_request` | `pull_request` for code changes needing review. `none` for tests/diagnostics/verification. `merge` rarely — auto-merge after completion. |
 | `baseBranch` | string | auto-detected | Omit unless targeting a non-default branch. |
 | `featureBranch` | string | auto-generated from name | Omit — auto-generates as `plan/<slug>`. Set only to target a specific branch. |
