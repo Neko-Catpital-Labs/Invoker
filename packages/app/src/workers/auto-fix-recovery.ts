@@ -6,7 +6,10 @@ import type {
 } from '@invoker/data-store';
 import type { TaskState } from '@invoker/workflow-core';
 
-import { listOpenFixIntentsForTask } from '../auto-fix-intents.js';
+import {
+  buildFixWithAgentMutationArgs,
+  listOpenFixIntentsForTask,
+} from '../auto-fix-intents.js';
 import { shouldSkipAutoFixForError } from '../auto-fix-gating.js';
 import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../worker-runtime.js';
 
@@ -252,26 +255,51 @@ export function collectValidatedAutoFixRecoveryCandidates(
     .filter((candidate): candidate is ValidatedAutoFixRecoveryCandidate => Boolean(candidate));
 }
 
+export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions): WorkerTick {
+  return async () => {
+    for (const candidate of collectValidatedAutoFixRecoveryCandidates(options)) {
+      const configuredAgent = options.getAutoFixAgent?.()?.trim();
+      const selectedAgent = configuredAgent && configuredAgent.length > 0 ? configuredAgent : undefined;
+      const args = buildFixWithAgentMutationArgs(candidate.task.id, selectedAgent, { autoFix: true });
+      const intentId = options.submitter.submit(candidate.workflowId, 'normal', AUTO_FIX_COMMAND_CHANNEL, args);
+      logAutoFixWorkerEvent(options, candidate.taskId, 'worker-autofix-submitted', {
+        workflowId: candidate.workflowId,
+        intentId,
+        channel: AUTO_FIX_COMMAND_CHANNEL,
+        generation: candidate.generation,
+        taskStateVersion: candidate.taskStateVersion,
+        attemptId: candidate.attemptId ?? null,
+        agent: selectedAgent ?? null,
+        autoFixAttempts: candidate.task.execution.autoFixAttempts ?? 0,
+        maxRetries: retryBudgetForTask(candidate.task, options),
+      });
+    }
+  };
+}
+
 export interface RecoveryWorkerOptions {
   logger: Logger;
   instanceId?: string;
   intervalMs?: number;
   installSignalHandlers?: boolean;
   tickOnStart?: boolean;
+  autoFix?: Omit<AutoFixRecoveryPolicyOptions, 'logger'>;
   /**
-   * Behavior-neutral override for the tick. Defaults to a no-op for this slice:
-   * the recovery worker does not submit recovery commands yet, and existing
-   * auto-fix paths continue to run through their current owner.
+   * Test hook or alternate worker policy. Takes precedence over `autoFix`.
    */
   onTick?: WorkerTick;
 }
 
 /**
- * Create the recovery worker runtime. By default its tick is a no-op so that
- * standing up the worker is behavior-neutral: no recovery commands are
- * submitted and no existing auto-fix path is rerouted in this slice.
+ * Create the recovery worker runtime. By default its tick is a no-op; supplying
+ * `autoFix` installs the dormant auto-fix scan policy.
  */
 export function createRecoveryWorker(options: RecoveryWorkerOptions): WorkerRuntime {
+  const onTick = options.onTick ?? (
+    options.autoFix
+      ? createAutoFixRecoveryTick({ ...options.autoFix, logger: options.logger })
+      : (() => {})
+  );
   return createWorkerRuntime({
     kind: RECOVERY_WORKER_KIND,
     instanceId: options.instanceId,
@@ -279,6 +307,6 @@ export function createRecoveryWorker(options: RecoveryWorkerOptions): WorkerRunt
     intervalMs: options.intervalMs ?? DEFAULT_RECOVERY_POLL_INTERVAL_MS,
     tickOnStart: options.tickOnStart ?? false,
     installSignalHandlers: options.installSignalHandlers,
-    onTick: options.onTick ?? (() => {}),
+    onTick,
   });
 }
