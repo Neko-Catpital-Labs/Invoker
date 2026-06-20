@@ -19,7 +19,7 @@ export interface LifecycleEventBridgeOptions {
   readonly messageBus: MessageBus;
   readonly getInitialTasks?: () => readonly TaskState[];
   readonly getTask?: (taskId: string) => TaskState | undefined;
-  readonly now?: () => string | Date;
+  readonly now?: () => Date;
   readonly logger?: {
     warn(message: string, details?: Record<string, unknown>): void;
   };

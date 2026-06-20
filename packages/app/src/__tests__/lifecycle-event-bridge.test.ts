@@ -8,6 +8,7 @@ import {
 import { startLifecycleEventBridge } from '../lifecycle-event-bridge.js';
 
 const CREATED_AT = '2026-06-04T00:00:00.000Z';
+const CREATED_AT_DATE = new Date(CREATED_AT);
 
 function makeTask(overrides: Partial<TaskState> = {}): TaskState {
   return {
@@ -33,7 +34,7 @@ describe('lifecycle event bridge', () => {
   it('publishes task.created lifecycle events from created deltas', () => {
     const bus = new LocalBus();
     const events = collectLifecycleEvents(bus);
-    startLifecycleEventBridge({ messageBus: bus, now: () => CREATED_AT });
+    startLifecycleEventBridge({ messageBus: bus, now: () => CREATED_AT_DATE });
 
     bus.publish<TaskDelta>(Channels.TASK_DELTA, { type: 'created', task: makeTask() });
 
@@ -64,7 +65,7 @@ describe('lifecycle event bridge', () => {
     startLifecycleEventBridge({
       messageBus: bus,
       getInitialTasks: () => [makeTask({ status: 'running', taskStateVersion: 5 })],
-      now: () => CREATED_AT,
+      now: () => CREATED_AT_DATE,
     });
 
     bus.publish<TaskDelta>(Channels.TASK_DELTA, {
@@ -96,7 +97,7 @@ describe('lifecycle event bridge', () => {
     startLifecycleEventBridge({
       messageBus: bus,
       getInitialTasks: () => [makeTask({ status: 'running', taskStateVersion: 8 })],
-      now: () => CREATED_AT,
+      now: () => CREATED_AT_DATE,
     });
 
     bus.publish<TaskDelta>(Channels.TASK_DELTA, {
@@ -128,7 +129,7 @@ describe('lifecycle event bridge', () => {
     startLifecycleEventBridge({
       messageBus: bus,
       getInitialTasks: () => [makeTask({ status: 'failed', taskStateVersion: 9 })],
-      now: () => CREATED_AT,
+      now: () => CREATED_AT_DATE,
     });
 
     bus.publish<TaskDelta>(Channels.TASK_DELTA, {
@@ -164,7 +165,7 @@ describe('lifecycle event bridge', () => {
     startLifecycleEventBridge({
       messageBus: bus,
       getInitialTasks: () => [makeTask({ status: 'running', taskStateVersion: 5 })],
-      now: () => CREATED_AT,
+      now: () => CREATED_AT_DATE,
     });
 
     bus.publish<TaskDelta>(Channels.TASK_DELTA, {
@@ -185,7 +186,7 @@ describe('lifecycle event bridge', () => {
   it('unsubscribes cleanly', () => {
     const bus = new LocalBus();
     const events = collectLifecycleEvents(bus);
-    const bridge = startLifecycleEventBridge({ messageBus: bus, now: () => CREATED_AT });
+    const bridge = startLifecycleEventBridge({ messageBus: bus, now: () => CREATED_AT_DATE });
 
     bridge.stop();
     bus.publish<TaskDelta>(Channels.TASK_DELTA, { type: 'created', task: makeTask() });
