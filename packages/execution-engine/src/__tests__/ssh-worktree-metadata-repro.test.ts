@@ -190,6 +190,8 @@ describe('SSH worktree metadata repro', () => {
 
     const updateSpy = vi.fn();
     const handleResponseSpy = vi.fn();
+    const onLaunchFailed = vi.fn();
+    const logEvent = vi.fn();
 
     const runner = new TaskRunner({
       orchestrator: {
@@ -200,6 +202,7 @@ describe('SSH worktree metadata repro', () => {
       persistence: {
         updateTask: updateSpy,
         appendTaskOutput: vi.fn(),
+        logEvent,
       } as any,
       executorRegistry: {
         getDefault: () => failingExecutor,
@@ -207,6 +210,7 @@ describe('SSH worktree metadata repro', () => {
         getAll: () => [failingExecutor],
       } as any,
       cwd: '/tmp',
+      callbacks: { onLaunchFailed },
     });
 
     await runner.executeTask(staleLaunchTask);
@@ -220,5 +224,15 @@ describe('SSH worktree metadata repro', () => {
     }));
     // And no failed response may be emitted against the newer selected attempt.
     expect(handleResponseSpy).not.toHaveBeenCalled();
+    expect(onLaunchFailed).not.toHaveBeenCalled();
+    expect(logEvent).toHaveBeenCalledWith('wf-1/test-execution-engine', 'task.executor.stale_startup_failure', {
+      attemptId: 'attempt-1',
+      executorType: 'ssh',
+      error: expect.stringContaining('SSH remote script failed'),
+      workspacePath: ownerPath,
+      branch: staleBranch,
+      hasAgentSessionId: false,
+      hasContainerId: false,
+    });
   });
 });
