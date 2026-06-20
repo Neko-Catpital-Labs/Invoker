@@ -32,7 +32,6 @@ function stubOrchestrator(overrides: Partial<Orchestrator> = {}): Orchestrator {
     recreateTask: vi.fn().mockReturnValue([]),
     selectExperiment: vi.fn().mockReturnValue([]),
     editTaskCommand: vi.fn().mockReturnValue([]),
-    editTaskType: vi.fn().mockReturnValue([]),
     editTaskAgent: vi.fn().mockReturnValue([]),
     setTaskExternalGatePolicies: vi.fn().mockReturnValue([]),
     replaceTask: vi.fn().mockReturnValue([]),
@@ -207,29 +206,6 @@ describe('CommandService', () => {
     });
   });
 
-  // ── editTaskType ─────────────────────────────────────────
-
-  describe('editTaskType', () => {
-    it('delegates to orchestrator.editTaskType', async () => {
-      const result = await service.editTaskType(makeEnvelope({ taskId: 't-1', runnerKind: 'docker' }));
-      expect(result).toEqual({ ok: true, data: [] });
-      expect(orchestrator.editTaskType).toHaveBeenCalledWith('t-1', 'docker', undefined);
-    });
-
-    it('passes poolMemberId when provided', async () => {
-      const result = await service.editTaskType(makeEnvelope({ taskId: 't-1', runnerKind: 'ssh', poolMemberId: 'host-1' }));
-      expect(result).toEqual({ ok: true, data: [] });
-      expect(orchestrator.editTaskType).toHaveBeenCalledWith('t-1', 'ssh', 'host-1');
-    });
-
-    it('returns error on exception', async () => {
-      (orchestrator.editTaskType as ReturnType<typeof vi.fn>).mockImplementation(() => {
-        throw new Error('Cannot edit merge node');
-      });
-      const result = await service.editTaskType(makeEnvelope({ taskId: 't-1', runnerKind: 'bad' }));
-      expect(result).toEqual({ ok: false, error: { code: 'EDIT_TASK_TYPE_FAILED', message: 'Cannot edit merge node' } });
-    });
-  });
 
   // ── editTaskAgent ────────────────────────────────────────
 
