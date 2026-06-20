@@ -1,0 +1,91 @@
+name: "Invalid behavior lane mixed with repro"
+description: "Implementation workflow that incorrectly mixes behavior work with repro files."
+onFinish: pull_request
+mergeMode: github
+repoUrl: git@github.com:example-org/acme-repo.git
+tasks:
+  - id: implement-owner-refresh-fallback
+    description: |
+      Review claim:
+      - Add local fallback when owner refresh loses its handler.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - The change is isolated to refresh fallback behavior and directly affected tests.
+      Slice rationale:
+      - This should be one behavior slice, so repro proof must not ride in the same workflow.
+      Architectural effect:
+      - Refresh requests can read local state without a live owner bridge.
+      Goal:
+      - Implement the local refresh fallback.
+      Motivation:
+      - Keep the task graph fresh after owner detach.
+      Alternative considerations:
+      - Option A (chosen): split repro proof into its own workflow.
+      - Option B: mix repro and behavior in one workflow.
+      Implementation details:
+      - Add the fallback helper and keep repro work separate.
+      Non-goals:
+      - Do not add repro scripts or benchmark harness changes in this slice.
+      Layer: app_bridge
+      Feature state: active
+      Files:
+      - packages/app/src/refresh-task-graph.ts
+      - packages/app/src/main.ts
+      - scripts/repro/repro-refresh-task-graph-owner-detach.sh
+      Change types:
+      - packages/app/src/refresh-task-graph.ts: create
+      - packages/app/src/main.ts: modify
+      - scripts/repro/repro-refresh-task-graph-owner-detach.sh: create
+      Acceptance criteria:
+      - Pass condition: the local fallback behavior is implemented.
+    prompt: |
+      Review claim:
+      - Add local fallback when owner refresh loses its handler.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - Keep the change focused on the fallback path.
+      Slice rationale:
+      - Repro proof belongs in a later proof workflow.
+      Architectural effect:
+      - Refresh falls back locally instead of failing on missing owner handlers.
+      Goal:
+      - Implement the local fallback.
+      Motivation:
+      - Prevent stale task graph state after owner detach.
+      Alternative considerations:
+      - Option A (chosen): split repro proof into another workflow.
+      - Option B: keep repro script in this workflow.
+      Implementation details:
+      - Modify packages/app/src/main.ts and create packages/app/src/refresh-task-graph.ts.
+      Non-goals:
+      - Do not add repro scripts in this workflow.
+      Assume no prior context. Modify packages/app/src/main.ts and packages/app/src/refresh-task-graph.ts only. Do not touch scripts/repro/repro-refresh-task-graph-owner-detach.sh. Pass condition: the prompt exits 0 after implementing the fallback and the changed files stay limited to behavior code.
+    dependencies: []
+  - id: verify-full-suite
+    description: |
+      Review claim:
+      - Run the terminal regression gate.
+      Review lane:
+      - proof
+      Safety invariant:
+      - This command changes no production behavior.
+      Slice rationale:
+      - Final regression stays separate from implementation.
+      Architectural effect:
+      - No architecture change.
+      Goal:
+      - Run the final regression gate.
+      Motivation:
+      - Confirm the workflow remains valid.
+      Alternative considerations:
+      - Option A (chosen): run pnpm run test:all last.
+      Implementation details:
+      - Execute the repository-wide regression command.
+      Non-goals:
+      - Do not modify source files.
+      Layer: app_regression
+      Feature state: active
+    command: 'pnpm run test:all'
+    dependencies: [implement-owner-refresh-fallback]
