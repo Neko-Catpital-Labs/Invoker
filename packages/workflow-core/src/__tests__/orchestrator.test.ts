@@ -4091,7 +4091,7 @@ describe('Orchestrator', () => {
       expect(persisted?.task.config.poolMemberId).toBe('remote_digital_ocean');
     });
 
-    it('clears poolMemberId when switching away from ssh', () => {
+    it('clears pool placement when switching away from ssh', () => {
       orchestrator.loadPlan({
         name: 'edit-type-clear-remote',
         tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', poolId: 'ssh-light' }],
@@ -4105,6 +4105,7 @@ describe('Orchestrator', () => {
       orchestrator.editTaskType('t1', 'worktree');
 
       const task = orchestrator.getTask('t1');
+      expect(task?.config.poolId).toBeUndefined();
       expect(task?.config.runnerKind).toBe('worktree');
       expect(task?.config.poolMemberId).toBeUndefined();
     });
@@ -4281,6 +4282,7 @@ describe('Orchestrator', () => {
       orchestrator.editTaskType(taskId, 'worktree');
 
       const task = orchestrator.getTask(taskId)!;
+      expect(task.config.poolId).toBeUndefined();
       expect(task.config.runnerKind).toBe('worktree');
       expect(task.config.poolMemberId).toBeUndefined();
       expect(task.execution.branch).toBeUndefined();

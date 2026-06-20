@@ -2842,6 +2842,7 @@ export class Orchestrator {
     if (effectiveType === 'ssh') {
       configPatch.poolMemberId = poolMemberId;
     } else {
+      configPatch.poolId = undefined;
       configPatch.poolMemberId = undefined;
     }
     const typeChanges: TaskStateChanges = { config: configPatch };
