@@ -1507,9 +1507,15 @@ export class Orchestrator {
           });
           return [];
         }
+        // Lineage check: a response is only fresh when every lineage field it
+        // carries still matches the live task. The attemptId mismatch above
+        // already rejected wrong attempts, so here we also reject a response
+        // whose executionGeneration is stale — even when it carries the
+        // current attemptId. Older producers that omit executionGeneration are
+        // still accepted (field undefined), but when both fields are present
+        // both must match.
         const activeGeneration = this.getExecutionGeneration(earlyTask);
         if (
-          !response.attemptId &&
           response.executionGeneration !== undefined &&
           response.executionGeneration !== activeGeneration
         ) {
