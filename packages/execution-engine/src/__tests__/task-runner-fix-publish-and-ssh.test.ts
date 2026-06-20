@@ -3732,6 +3732,75 @@ describe('TaskRunner', () => {
       // handleWorkerResponse called 3 times: 1st (throws), 2nd (catch re-submit for task-1), 3rd (task-2 normal)
       expect(handleWorkerResponse).toHaveBeenCalledTimes(3);
     });
+
+    it('does not submit fallback failure when completion becomes stale after handler error', async () => {
+      let currentTask = makeTask({
+        id: 'task-stale-completion',
+        status: 'running',
+        config: { command: 'echo hi' },
+        execution: { selectedAttemptId: 'attempt-old', generation: 1 },
+      });
+      const handleWorkerResponse = vi.fn(() => {
+        currentTask = makeTask({
+          id: 'task-stale-completion',
+          status: 'running',
+          config: { command: 'echo hi' },
+          execution: { selectedAttemptId: 'attempt-new', generation: 2 },
+        });
+        throw new Error('stale handler failure');
+      });
+      const onCompleteCb = vi.fn();
+
+      const completeCallbacks = new Map<string, (response: WorkResponse) => void>();
+      const manualExecutor = {
+        type: 'worktree',
+        start: vi.fn(async (request: any) => ({
+          executionId: `exec-${request.actionId}`,
+          taskId: request.actionId,
+          workspacePath: '/tmp/mock-worktree',
+          branch: `invoker/${request.actionId}`,
+        })),
+        onComplete: vi.fn((handle: any, cb: any) => {
+          completeCallbacks.set(handle.taskId, cb);
+        }),
+        onOutput: vi.fn(),
+        onHeartbeat: vi.fn(),
+        kill: vi.fn(),
+      };
+
+      const runner = new TaskRunner({
+        orchestrator: {
+          getTask: () => currentTask,
+          handleWorkerResponse,
+          getAllTasks: () => [currentTask],
+        } as any,
+        persistence: { updateTask: vi.fn() } as any,
+        executorRegistry: {
+          getDefault: () => manualExecutor,
+          get: () => manualExecutor,
+          getAll: () => [manualExecutor],
+        } as any,
+        cwd: '/tmp',
+        callbacks: { onComplete: onCompleteCb },
+      });
+
+      const done = runner.executeTask(currentTask);
+      await flush();
+
+      completeCallbacks.get('task-stale-completion')!({
+        requestId: 'r1',
+        actionId: 'task-stale-completion',
+        attemptId: 'attempt-old',
+        executionGeneration: 1,
+        status: 'completed',
+        outputs: { exitCode: 0 },
+      });
+
+      await done;
+
+      expect(handleWorkerResponse).toHaveBeenCalledTimes(1);
+      expect(onCompleteCb).not.toHaveBeenCalled();
+    });
   });
 
   // ── PR-authoring regression coverage ──────────────────────
