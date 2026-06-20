@@ -11,6 +11,7 @@ RESUME="${INVOKER_TEST_ALL_RESUME:-0}"
 FORCE_RERUN="${INVOKER_TEST_ALL_FORCE_RERUN:-0}"
 JOBS="${INVOKER_TEST_ALL_JOBS:-1}"
 PROOF="${INVOKER_TEST_ALL_PROOF:-0}"
+EXCLUDE_RAW="${INVOKER_TEST_ALL_EXCLUDE:-}"
 PROOF_CONTRACT="INV-117"
 
 if [ "$PROOF" = "1" ]; then
@@ -54,26 +55,37 @@ declare -A JOB_PREFLIGHT=()
 declare -A LOG_FILES=()
 declare -a SKIPPED_CHECKPOINT=()
 declare -a SKIPPED_UNAVAILABLE=()
+declare -a SKIPPED_EXCLUDED=()
 declare -a EXECUTED=()
 declare -a FAILED=()
 declare -a SUITES=()
+declare -a EXCLUDE_PATTERNS=()
+DISCOVERED_TOTAL=0
+
+parse_exclusions() {
+  local raw item
+  raw="${EXCLUDE_RAW//,/ }"
+  for item in $raw; do
+    [ -n "$item" ] || continue
+    EXCLUDE_PATTERNS+=( "$item" )
+  done
+}
+
+suite_is_excluded() {
+  local suite="$1"
+  local relpath
+  local pattern
+  relpath="$(suite_relpath "$suite")"
+  for pattern in "${EXCLUDE_PATTERNS[@]}"; do
+    if [ "$relpath" = "$pattern" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
 
 expected_executed_for_mode() {
-  case "$MODE_KEY" in
-    required)
-      printf '18'
-      ;;
-    extended)
-      printf '25'
-      ;;
-    dangerous)
-      if [ "${#SKIPPED_UNAVAILABLE[@]}" -eq 1 ] && [ "${SKIPPED_UNAVAILABLE[0]}" = "dangerous/10-docker-comprehensive.sh" ]; then
-        printf '25'
-      else
-        printf '26'
-      fi
-      ;;
-  esac
+  printf '%s' "${#SUITES[@]}"
 }
 
 expected_discovered_for_mode() {
@@ -330,6 +342,11 @@ collect_suites() {
     esac
 
     while IFS= read -r suite; do
+      DISCOVERED_TOTAL=$((DISCOVERED_TOTAL + 1))
+      if suite_is_excluded "$suite"; then
+        SKIPPED_EXCLUDED+=( "$(suite_relpath "$suite")" )
+        continue
+      fi
       SUITES+=( "$suite" )
     done < <(find "$ROOT/scripts/test-suites/$dir" -maxdepth 1 -type f -name '*.sh' ! -name '_*' | LC_ALL=C sort)
   done
@@ -359,6 +376,7 @@ print_summary() {
   echo "Failed: ${#FAILED[@]}"
   echo "Skipped by checkpoint: ${#SKIPPED_CHECKPOINT[@]}"
   echo "Skipped unavailable: ${#SKIPPED_UNAVAILABLE[@]}"
+  echo "Skipped by config: ${#SKIPPED_EXCLUDED[@]}"
 
   if [ "${#SKIPPED_CHECKPOINT[@]}" -gt 0 ]; then
     echo ""
@@ -370,6 +388,12 @@ print_summary() {
     echo ""
     echo "Unavailable skips:"
     printf '  %s\n' "${SKIPPED_UNAVAILABLE[@]}"
+  fi
+
+  if [ "${#SKIPPED_EXCLUDED[@]}" -gt 0 ]; then
+    echo ""
+    echo "Config skips:"
+    printf '  %s\n' "${SKIPPED_EXCLUDED[@]}"
   fi
 
   if [ "${#FAILED[@]}" -gt 0 ]; then
@@ -429,13 +453,18 @@ validate_proof_inventory() {
   local expected_discovered
   expected_discovered="$(expected_discovered_for_mode)"
 
-  if [ "${#SUITES[@]}" -ne "$expected_discovered" ]; then
-    echo "ERROR: $PROOF_CONTRACT proof expected suite inventory=$expected_discovered for mode=$MODE_KEY, got ${#SUITES[@]}" >&2
+  if [ "$DISCOVERED_TOTAL" -ne "$expected_discovered" ]; then
+    echo "ERROR: $PROOF_CONTRACT proof expected suite inventory=$expected_discovered for mode=$MODE_KEY, got $DISCOVERED_TOTAL" >&2
+    return 1
+  fi
+  if [ $(( ${#SUITES[@]} + ${#SKIPPED_EXCLUDED[@]} )) -ne "$DISCOVERED_TOTAL" ]; then
+    echo "ERROR: $PROOF_CONTRACT proof exclusion accounting mismatch" >&2
     return 1
   fi
 }
 
 load_state
+parse_exclusions
 collect_suites
 if ! validate_proof_inventory; then
   exit 1
