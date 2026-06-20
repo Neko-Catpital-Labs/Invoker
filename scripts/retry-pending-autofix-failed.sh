@@ -63,7 +63,7 @@ Loop actions:
   - retry infrastructure failures with a cooldown instead of sending them to Codex
   - clear stale explicit SSH pool member pins from pending pool-routed retry work
   - release duplicate active SSH leases held by the same selected task attempt
-  - optionally run `set executor <taskId> worktree` for stale/failed SSH recovery tasks before resume/retry/fix/approve
+  - never changes a task executor directly; routing remains pool-owned
   - run `approve <taskId>` for approval-state tasks that have pendingFixError
   - when only pending nonterminal tasks remain, ask local Codex to investigate why each pending task did not run
 
@@ -90,8 +90,8 @@ Options:
   --query-timeout <seconds>     Read-only headless query timeout; 0 disables it (default: 120)
   --no-ipc-fallback             Do not retry failed IPC mutations in standalone mode
   --no-approve-fixes            Do not approve AI-fix approval tasks
-  --localize-ssh                Switch stale/failed SSH recovery tasks to local worktrees
-  --no-localize-ssh             Do not switch SSH-assigned recovery tasks to local worktrees
+  --localize-ssh                Deprecated no-op; executor selection is pool-owned
+  --no-localize-ssh             Deprecated no-op
   --no-localize-failed-ssh      Deprecated alias for --no-localize-ssh
   --resume-cooldown <seconds>   Per-workflow resume cooldown (default: 60)
   --fix-cooldown <seconds>      Per-task fix cooldown (default: 300)
@@ -210,7 +210,8 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --localize-ssh)
-      LOCALIZE_SSH=true
+      LOCALIZE_SSH=false
+      echo "warning: --localize-ssh is deprecated and ignored; use pool routing instead" >&2
       shift
       ;;
     --no-localize-failed-ssh)
@@ -1399,9 +1400,9 @@ for raw in tasks_path.read_text(encoding="utf-8").splitlines():
         blocking_tasks.append(task_id)
         failed_tasks.append(task_id)
         auto_fix_attempts[task_id] = parse_attempts(execution.get("autoFixAttempts"))
-        if is_infra_failure(error_text):
+        if is_infra_failure(error_text) and runner_kind != "worktree":
             infra_retry.append(task_id)
-        if runner_kind == "ssh":
+        if runner_kind == "ssh" or (runner_kind == "worktree" and pool_id):
             localize_ssh.append(task_id)
     elif status == "fixing_with_ai" or (status == "running" and execution.get("isFixingWithAI") is True):
         blocking_tasks.append(task_id)
@@ -1977,45 +1978,14 @@ run_cycle() {
   fi
 
   if [ "$LOCALIZE_SSH" = true ] && [ -s "$localize_ssh_file" ]; then
-    echo "switching SSH-assigned recovery tasks to local worktrees"
-    while IFS= read -r target; do
-      [ -n "$target" ] || continue
-      if ever_submitted localize-worktree "$target"; then
-        echo "  skip localize-worktree $target (already switched by this loop)"
-        continue
-      fi
-      if dispatch_no_track localize-worktree "$target" "$LOCALIZE_COOLDOWN_SECONDS" "$now_epoch" set executor "$target" worktree; then
-        if [ "$LAST_DISPATCH_SUBMITTED" = true ]; then
-          printf '%s\n' "$target" >> "$localized_failed_tasks_file"
-          if [[ "$target" == */* ]]; then
-            printf '%s\n' "${target%%/*}" >> "$localized_workflows_file"
-          fi
-        fi
-      else
-        failures=$((failures + 1))
-      fi
-    done < "$localize_ssh_file"
+    echo "localize-ssh requested but ignored; executor selection is pool-owned"
+  fi
+  if [ -s "$localized_failed_tasks_file" ]; then
+    reset_submission_state_after_repair "ssh-to-worktree" "$now_epoch" "$cycle_dir"
   fi
 
   if [ -s "$stale_ssh_pin_file" ]; then
-    echo "clearing stale explicit SSH pool member pins"
-    while IFS= read -r target; do
-      [ -n "$target" ] || continue
-      if recently_submitted clear-ssh-pin "$target" "$LOCALIZE_COOLDOWN_SECONDS" "$now_epoch"; then
-        echo "  skip clear-ssh-pin $target (cleared recently)"
-        continue
-      fi
-      if dispatch_no_track clear-ssh-pin "$target" "$LOCALIZE_COOLDOWN_SECONDS" "$now_epoch" set executor "$target" ssh; then
-        if [ "$LAST_DISPATCH_SUBMITTED" = true ]; then
-          printf '%s\n' "$target" >> "$cleared_ssh_pin_tasks_file"
-          if [[ "$target" == */* ]]; then
-            printf '%s\n' "${target%%/*}" >> "$cleared_ssh_pin_workflows_file"
-          fi
-        fi
-      else
-        failures=$((failures + 1))
-      fi
-    done < "$stale_ssh_pin_file"
+    echo "stale explicit SSH pool member pins detected; leaving task pool routing unchanged"
   fi
 
   if [ -s "$orphan_ssh_leases_file" ]; then
@@ -2434,7 +2404,7 @@ SELFTEST_CODEX
     RETRY_FAILED=true
     AUTOFIX_FAILED=true
     APPROVE_FIXES=true
-    LOCALIZE_SSH=true
+    LOCALIZE_SSH=false
     MAX_FIX_ATTEMPTS=3
     RECOVER_STALE_AI_STATES=true
     STALE_AI_STATE_SECONDS=300
@@ -2658,7 +2628,7 @@ PY
   self_test_assert_not_contains "$commands_file" "set executor wf-1000-13/pending ssh"
   self_test_assert_contains "$codex_commands_file" "exec --cd"
 
-  echo "self-test: stale SSH pool member pin is cleared without localizing"
+  echo "self-test: stale SSH pool member pin leaves pool routing unchanged"
   self_test_reset
   RETRY_INCOMPLETE_WORKFLOWS=true
   printf '%s\n' "wf-1000-16" > "$workflows_label_file"
@@ -2667,12 +2637,11 @@ PY
   printf '%s\n' '{"id":"wf-1000-16/regression","status":"pending","config":{"workflowId":"wf-1000-16","runnerKind":"ssh","poolId":"pnpm-ssh","poolMemberId":"remote-a"},"execution":{"workspacePath":"~/.invoker/worktrees/wf-1000-16-regression","branch":"experiment/wf-1000-16/regression"}}' > "$tasks_dir/wf-1000-16.jsonl"
   run_cycle selftest-stale-ssh-pin > "$test_root/stale-ssh-pin.out" 2>&1 || { sed -n '1,220p' "$test_root/stale-ssh-pin.out" >&2; return 1; }
   self_test_assert_contains "$test_root/stale-ssh-pin.out" "stale-ssh-pin=1"
-  self_test_assert_contains "$commands_file" "set executor wf-1000-16/regression ssh"
+  self_test_assert_not_contains "$commands_file" "set executor wf-1000-16/regression ssh"
   self_test_assert_not_contains "$commands_file" "set executor wf-1000-16/regression worktree"
-  self_test_assert_contains "$test_root/stale-ssh-pin.out" "skip retry-workflow wf-1000-16 (stale SSH pin cleared this cycle)"
-  self_test_assert_contains "$test_root/stale-ssh-pin.out" "pending investigation deferred (stale SSH pins cleared this cycle: 1)"
+  self_test_assert_contains "$test_root/stale-ssh-pin.out" "stale explicit SSH pool member pins detected; leaving task pool routing unchanged"
 
-  echo "self-test: stale SSH pin clearing is repeatable after cooldown"
+  echo "self-test: stale SSH pin remains untouched after cooldown"
   self_test_reset
   local old_epoch
   old_epoch=$((now_epoch - LOCALIZE_COOLDOWN_SECONDS - 1))
@@ -2682,7 +2651,7 @@ PY
   printf '%s\n' '{"running":[],"queued":[{"taskId":"wf-1000-17/regression"}],"runningCount":0,"maxConcurrency":12}' > "$self_test_queue_file"
   printf '%s\n' '{"id":"wf-1000-17/regression","status":"pending","config":{"workflowId":"wf-1000-17","runnerKind":"ssh","poolId":"pnpm-ssh","poolMemberId":"remote-a"},"execution":{"workspacePath":"~/.invoker/worktrees/wf-1000-17-regression","branch":"experiment/wf-1000-17/regression"}}' > "$tasks_dir/wf-1000-17.jsonl"
   run_cycle selftest-stale-ssh-pin-repeat > "$test_root/stale-ssh-pin-repeat.out" 2>&1 || { sed -n '1,220p' "$test_root/stale-ssh-pin-repeat.out" >&2; return 1; }
-  self_test_assert_contains "$commands_file" "set executor wf-1000-17/regression ssh"
+  self_test_assert_not_contains "$commands_file" "set executor wf-1000-17/regression ssh"
 
   echo "self-test: duplicate selected-attempt SSH lease releases only non-assigned member"
   self_test_reset
