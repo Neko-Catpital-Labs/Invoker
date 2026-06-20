@@ -3,7 +3,7 @@
  * Lightweight runtime checks (no external schema library).
  */
 
-import type { WorkRequest, WorkResponse } from './types.js';
+import type { WorkRequest, WorkResponse } from './types.ts';
 
 export interface ValidationResult {
   valid: boolean;
