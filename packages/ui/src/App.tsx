@@ -389,7 +389,6 @@ export function App() {
   const [viewMode, setViewMode] = useState<'dag' | 'history' | 'timeline' | 'queue' | 'actionGraph'>('dag');
   const [selectedActionNode, setSelectedActionNode] = useState<ActionGraphNode | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
-  const [remoteTargets, setRemoteTargets] = useState<string[]>([]);
   const [executionPools, setExecutionPools] = useState<string[]>([]);
   const [executionAgents, setExecutionAgents] = useState<string[]>([]);
   const [statusFilters, setStatusFilters] = useState<Set<WorkflowStatus>>(new Set());
@@ -452,7 +451,6 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    window.invoker?.getRemoteTargets?.().then(setRemoteTargets).catch(() => {});
     window.invoker?.getExecutionPools?.().then(setExecutionPools).catch(() => {});
     window.invoker?.getExecutionAgents?.().then(setExecutionAgents).catch(() => {});
     refreshSystemDiagnostics();
@@ -1546,18 +1544,6 @@ export function App() {
     [invoker],
   );
 
-  // ── Edit task executor type ───────────────────────────────
-  const handleEditType = useCallback(
-    async (taskId: string, runnerKind: string, poolMemberId?: string) => {
-      if (!invoker) return;
-      try {
-        await invoker.editTaskType(taskId, runnerKind, poolMemberId);
-      } catch (err) {
-        console.error('Failed to edit task type:', err);
-      }
-    },
-    [invoker],
-  );
 
   // ── Edit task execution pool ─────────────────────────────
   const handleEditPool = useCallback(
@@ -1940,13 +1926,11 @@ export function App() {
               workflow={selectedWorkflow}
               task={selectedTask}
               workflowTasks={miniDagTasks}
-              remoteTargets={remoteTargets}
               executionPools={executionPools}
               executionAgents={executionAgents}
               collapsed={inspectorCollapsed}
               advancedExpanded={advancedMetadataExpanded}
               actionNode={viewMode === 'actionGraph' ? selectedActionNode : null}
-              onEditType={handleEditType}
               onEditPool={handleEditPool}
               onEditAgent={handleEditAgent}
               onEditPrompt={handleEditPrompt}
