@@ -6,6 +6,26 @@ Write paragraphs, not bullets. Keep each paragraph under 30 words.
 
 Put one idea in each paragraph. If one idea leads to another, split them into separate short paragraphs.
 
+## Review Claim
+
+State the one thing the reviewer is being asked to approve.
+
+## Review Lane
+
+Choose exactly one: `behavior`, `refactor`, `proof`, `cleanup`, `policy`, or `docs`.
+
+## Safety Invariant
+
+Explain why this slice is safe to review locally.
+
+## Slice Rationale
+
+Explain why this work is split here instead of bundled elsewhere.
+
+## Non-goals
+
+List what this slice explicitly does not change.
+
 ## Architecture
 
 Only keep this section if the change affects component interactions, control flow, or data flow.
