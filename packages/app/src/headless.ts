@@ -59,7 +59,7 @@ import {
   isDispatchableLaunch,
 } from './global-topup.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
-import { createAutoFixRecoveryTick, RECOVERY_WORKER_KIND } from './worker-runtime.js';
+import { createRecoveryWorker, RECOVERY_WORKER_KIND, type WorkerRuntime } from './worker-runtime.js';
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
 import { trackWorkflow } from './headless-watch.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
@@ -1212,29 +1212,48 @@ const HEADLESS_WORKER_KINDS: ReadonlyArray<{ kind: string; available: boolean; n
   {
     kind: 'autofix',
     available: true,
-    note: 'scans persisted failed tasks and submits normal auto-fix command intents',
+    note: 'long-running recovery service that scans failed tasks and submits normal auto-fix command intents',
   },
 ];
 
+const headlessWorkerRuntimes = new Map<string, WorkerRuntime>();
+
+export function hasRunningHeadlessWorker(kind?: string): boolean {
+  if (kind) {
+    return headlessWorkerRuntimes.get(kind)?.isRunning() ?? false;
+  }
+  return Array.from(headlessWorkerRuntimes.values()).some((worker) => worker.isRunning());
+}
+
 async function headlessWorker(subCommand: string | undefined, deps: HeadlessDeps): Promise<void> {
   if (subCommand === 'autofix') {
-    const tick = createAutoFixRecoveryTick({
-      persistence: deps.persistence,
-      submitter: {
-        submit: (workflowId, priority, channel, args) => (
-          deps.persistence.enqueueWorkflowMutationIntent(workflowId, channel, args, priority)
-        ),
-      },
+    const existing = headlessWorkerRuntimes.get(subCommand);
+    if (existing?.isRunning()) {
+      process.stdout.write('Auto-fix recovery worker is already running.\n');
+      return;
+    }
+
+    const worker = createRecoveryWorker({
       logger: deps.logger,
-      defaultAutoFixRetries: deps.invokerConfig.autoFixRetries,
-      getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
+      instanceId: 'headless-worker-autofix',
+      tickOnStart: true,
+      installSignalHandlers: false,
+      autoFix: {
+        persistence: deps.persistence,
+        submitter: {
+          submit: (workflowId, priority, channel, args) => (
+            deps.persistence.enqueueWorkflowMutationIntent(workflowId, channel, args, priority)
+          ),
+        },
+        defaultAutoFixRetries: deps.invokerConfig.autoFixRetries,
+        getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
+      },
     });
-    await tick({
-      identity: { kind: RECOVERY_WORKER_KIND, instanceId: 'headless-worker-autofix' },
-      reason: 'manual',
-      tickNumber: 1,
-    });
-    process.stdout.write('Auto-fix worker scan completed.\n');
+    headlessWorkerRuntimes.set(subCommand, worker);
+    worker.start();
+    process.stdout.write(
+      `Auto-fix recovery worker started (${RECOVERY_WORKER_KIND}/${worker.identity.instanceId}).\n`,
+    );
     return;
   }
 
@@ -1244,7 +1263,8 @@ async function headlessWorker(subCommand: string | undefined, deps: HeadlessDeps
   process.stdout.write(`${BOLD}Worker kinds${RESET}\n`);
   for (const worker of HEADLESS_WORKER_KINDS) {
     const status = worker.available ? 'available' : 'unavailable';
-    process.stdout.write(`  ${worker.kind} — ${status} (${worker.note})\n`);
+    const service = hasRunningHeadlessWorker(worker.kind) ? 'running' : 'stopped';
+    process.stdout.write(`  ${worker.kind} — ${status}; service=${service} (${worker.note})\n`);
   }
 }
 
@@ -1329,7 +1349,8 @@ ${BOLD}Lifecycle:${RESET}
   delete-all                                          Delete all workflows (requires INVOKER_ALLOW_DELETE_ALL=1)
   open-terminal <taskId>                              Open OS terminal for a task
   slack                                               Start Slack bot (long-running)
-  worker [autofix|list|status]                        Run/list worker kinds (autofix scans failed tasks)
+  worker autofix                                      Start long-running auto-fix recovery worker
+  worker [list|status]                                List worker kinds and service status
 
 ${BOLD}Deprecated${RESET} (use new names above):
   list → query workflows       status → query tasks       task-status → query task

@@ -132,6 +132,7 @@ import {
   resolveAgentSession,
   createHeadlessExecutor,
   wireHeadlessApproveHook,
+  hasRunningHeadlessWorker,
   type HeadlessDeps,
 } from './headless.js';
 import {
@@ -953,7 +954,13 @@ function startHeadlessMode(): void {
           delegated = isDelegated(await tryDelegateResume(workflowId, delegationBus, waitForApproval, noTrack));
         } else {
           const timeoutMs = noTrack ? undefined : await resolveDelegationTimeoutMs(cliArgs);
-          delegated = isDelegated(await tryDelegateExec(cliArgs, delegationBus, waitForApproval, noTrack, timeoutMs));
+          delegated = isDelegated(await tryDelegateExec(
+            cliArgs,
+            delegationBus,
+            waitForApproval,
+            command === 'worker' ? false : noTrack,
+            timeoutMs,
+          ));
         }
 
         if (delegated) {
@@ -1239,6 +1246,7 @@ function startHeadlessMode(): void {
           const hasQueuedOrRunningMutations =
             persistence.listWorkflowMutationIntents(undefined, ['queued', 'running']).length > 0;
           if (hasQueuedOrRunningMutations) return false;
+          if (hasRunningHeadlessWorker()) return false;
           return !orchestrator.getAllTasks().some(
             (task) => task.status === 'running' || task.status === 'fixing_with_ai',
           );

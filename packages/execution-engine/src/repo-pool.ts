@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { mkdirSync, existsSync, rmSync } from 'node:fs';
-import { normalize } from 'node:path';
+import { isAbsolute, normalize } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { bashPreserveOrReset, runBashLocal } from './branch-utils.js';
 import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
 import { createExecutionBench } from './execution-bench.js';
@@ -98,6 +99,25 @@ export class RepoPool {
 
   private repoKey(repoUrl: string): string {
     return computeRepoCacheKey(repoUrl);
+  }
+
+  private isLocalCloneSource(repoUrl: string): boolean {
+    const trimmed = repoUrl.trim();
+    if (!trimmed) return false;
+    if (trimmed.startsWith('file://')) {
+      try {
+        return existsSync(fileURLToPath(trimmed));
+      } catch {
+        return false;
+      }
+    }
+    return isAbsolute(trimmed) && existsSync(trimmed);
+  }
+
+  private cloneArgs(repoUrl: string, dir: string): string[] {
+    return this.isLocalCloneSource(repoUrl)
+      ? ['clone', '--shared', '--no-checkout', repoUrl, dir]
+      : ['clone', repoUrl, dir];
   }
 
   /** Deterministic external worktree path for a branch (requires worktreeBaseDir). */
@@ -343,7 +363,7 @@ export class RepoPool {
     } else {
       mkdirSync(this.cacheDir, { recursive: true });
       await this.time(timing, 'RepoPool.doRefreshMirrorForRebase.gitCloneMirror', { dir, repoUrl }, () =>
-        this.execGit(['clone', repoUrl, dir], this.cacheDir),
+        this.execGit(this.cloneArgs(repoUrl, dir), this.cacheDir),
       );
       originRefsFresh = true;
     }
@@ -612,7 +632,7 @@ export class RepoPool {
     }
     mkdirSync(this.cacheDir, { recursive: true });
     bench('RepoPool.ensureCloneUnqueued.gitClone.before', { dir });
-    await this.execGit(['clone', repoUrl, dir], this.cacheDir);
+    await this.execGit(this.cloneArgs(repoUrl, dir), this.cacheDir);
     bench('RepoPool.ensureCloneUnqueued.gitClone.after', { dir });
     return dir;
   }
