@@ -103,6 +103,7 @@ must_contain "$SKILL_MD" "Deterministic validation gate" "SKILL must document th
 must_contain "$SKILL_MD" 'Use `skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` as the primary deterministic proof surface' "SKILL must record the primary doctor gate"
 must_contain "$SKILL_MD" "Schema-only validation or ad hoc individual script checks are not sufficient as the review gate" "SKILL must reject incomplete primary gates"
 must_contain "$SKILL_MD" "Individual validator scripts remain fallback diagnostics only" "SKILL must preserve fallback diagnostics"
+must_contain "$SKILL_MD" "lint-review-units.mjs" "SKILL must document review-unit lint enforcement"
 
 DOCTOR_SCRIPT="$REPO_ROOT/skills/plan-to-invoker/scripts/skill-doctor.sh"
 DOCTOR_HELP="$(bash "$DOCTOR_SCRIPT" --help)"

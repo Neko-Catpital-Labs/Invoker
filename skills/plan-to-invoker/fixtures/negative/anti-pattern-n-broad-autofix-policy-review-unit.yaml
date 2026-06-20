@@ -1,0 +1,102 @@
+# Expected outcome: skill-doctor passes schema and atomicity, then fails
+# lint-review-units because one prompt combines scan, validation, duplicate
+# suppression, submission, and tests.
+name: "Broad auto-fix policy review unit"
+description: |
+  Standalone workflow waiver:
+  - This fixture intentionally models the oversized #1574-style slice as one workflow so review-unit lint can reject it.
+onFinish: pull_request
+mergeMode: github
+repoUrl: git@github.com:Neko-Catpital-Labs/Invoker.git
+tasks:
+  - id: implement-broad-autofix-recovery-policy
+    description: |
+      Review claim:
+      - The recovery worker should scan failed persisted tasks and submit auto-fix mutation intents for eligible tasks.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - The change only submits through the existing fix-with-agent mutation route and skips stale or already queued task candidates.
+      Slice rationale:
+      - This intentionally combines ports, candidate scan, eligibility validation, stale guards, duplicate-intent checks, submit behavior, and tests to model the historical bloated diff.
+      Architectural effect:
+      - Auto-fix recovery policy moves into the recovery worker and bridges persisted task state to workflow mutation intents.
+      Goal:
+      - Restore auto-fix work for failed tasks discovered by the recovery worker.
+      Motivation:
+      - Persisted failed tasks need a worker-side path that can recover after process restarts.
+      Alternative considerations:
+      - Option A (chosen for fixture): keep the broad slice to prove lint rejects it.
+      - Option B: split ports, scan, validation, submit, and wakeup handling into separate review units.
+      Implementation details:
+      - Add policy contracts, scan failed tasks, validate retry and stale-state eligibility, suppress duplicate open fix intents, submit a fix-with-agent mutation intent, and cover behavior with tests.
+      Non-goals:
+      - Do not add a worker registry or alter non-auto-fix worker behavior.
+      Layer: domain
+      Feature state: active
+      Files:
+      - packages/app/src/workers/auto-fix-recovery.ts
+      - packages/app/src/__tests__/auto-fix-recovery.test.ts
+      Change types:
+      - Add policy contracts
+      - Add failed-task candidate scanning
+      - Add eligibility and stale-state validation
+      - Add mutation intent submission
+      - Add unit tests
+      Acceptance criteria:
+      - Eligible failed tasks submit exactly one fix-with-agent mutation intent.
+      - Stale task candidates do not submit mutation intents.
+      - Tasks with existing queued fix intents do not submit duplicates.
+    prompt: |
+      Review claim:
+      - The recovery worker should scan failed persisted tasks and submit auto-fix mutation intents for eligible tasks.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - The change only submits through the existing fix-with-agent mutation route and skips stale or already queued task candidates.
+      Slice rationale:
+      - This intentionally combines ports, candidate scan, eligibility validation, stale guards, duplicate-intent checks, submit behavior, and tests to model the historical bloated diff.
+      Architectural effect:
+      - Auto-fix recovery policy moves into the recovery worker and bridges persisted task state to workflow mutation intents.
+      Goal:
+      - Restore auto-fix work for failed tasks discovered by the recovery worker.
+      Motivation:
+      - Persisted failed tasks need a worker-side path that can recover after process restarts.
+      Alternative considerations:
+      - Option A (chosen for fixture): keep the broad slice to prove lint rejects it.
+      - Option B: split ports, scan, validation, submit, and wakeup handling into separate review units.
+      Implementation details:
+      - Add policy contracts, scan failed tasks, validate retry and stale-state eligibility, suppress duplicate open fix intents, submit a fix-with-agent mutation intent, and cover behavior with tests.
+      Non-goals:
+      - Do not add a worker registry or alter non-auto-fix worker behavior.
+      Acceptance criteria:
+      - Ensure eligible failed tasks submit exactly one fix-with-agent mutation intent.
+      Assume no prior context. Modify packages/app/src/workers/auto-fix-recovery.ts and packages/app/src/__tests__/auto-fix-recovery.test.ts. Pass condition: pnpm --filter @invoker/app exec vitest run src/__tests__/auto-fix-recovery.test.ts exits 0.
+    dependencies: []
+  - id: final-regression
+    description: |
+      Review claim:
+      - Run the terminal full-suite regression gate.
+      Review lane:
+      - proof
+      Safety invariant:
+      - This command changes no production code and only validates the broad fixture.
+      Slice rationale:
+      - Terminal validation is separate from implementation work.
+      Architectural effect:
+      - No architecture change.
+      Goal:
+      - Run final full-suite regression gate.
+      Motivation:
+      - Ensure implementation updates remain stable.
+      Alternative considerations:
+      - Option A (chosen): full repository regression.
+      - Option B: package-only checks.
+      Implementation details:
+      - Execute root-level test gate after implementation task.
+      Non-goals:
+      - Do not modify source files.
+      Layer: app_regression
+      Feature state: active
+    command: "pnpm run test:all"
+    dependencies: [implement-broad-autofix-recovery-policy]
