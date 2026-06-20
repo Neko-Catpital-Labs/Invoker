@@ -423,8 +423,10 @@ export class WorkflowMutationFacade {
     const detail = await sharedFixWithAgentAction(
       taskId,
       {
+        logger: this.deps.logger,
         orchestrator: this.deps.orchestrator,
         persistence: this.deps.persistence,
+        commandService: this.deps.commandService,
         taskExecutor: this.deps.taskExecutor,
         autoApproveAIFixes: this.deps.autoApproveAIFixes,
       },
