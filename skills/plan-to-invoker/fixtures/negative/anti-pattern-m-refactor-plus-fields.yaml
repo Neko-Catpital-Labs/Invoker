@@ -1,0 +1,89 @@
+name: "Invalid refactor lane with new fields"
+description: "Implementation workflow that incorrectly combines refactor extraction with field additions."
+onFinish: pull_request
+mergeMode: github
+repoUrl: git@github.com:example-org/acme-repo.git
+tasks:
+  - id: extract-refresh-helper
+    description: |
+      Review claim:
+      - Extract refresh-task-graph logic into a helper module.
+      Review lane:
+      - refactor
+      Safety invariant:
+      - The extraction should preserve existing behavior.
+      Slice rationale:
+      - Refactor must land before any new fields or behavior changes.
+      Architectural effect:
+      - Refresh logic moves from main.ts into a helper module.
+      Goal:
+      - Extract the helper without changing behavior.
+      Motivation:
+      - Make later fallback field changes easier to review.
+      Alternative considerations:
+      - Option A (chosen): extract the helper first.
+      - Option B: add new fields during the extraction.
+      Implementation details:
+      - Move the refresh code into packages/app/src/refresh-task-graph.ts and add a new field to the response shape.
+      Non-goals:
+      - Do not change behavior after extraction.
+      Layer: app_bridge
+      Feature state: active
+      Files:
+      - packages/app/src/main.ts
+      - packages/app/src/refresh-task-graph.ts
+      Change types:
+      - packages/app/src/main.ts: modify
+      - packages/app/src/refresh-task-graph.ts: create
+      Acceptance criteria:
+      - Pass condition: the helper extraction is complete.
+    prompt: |
+      Review claim:
+      - Extract refresh-task-graph logic into a helper module.
+      Review lane:
+      - refactor
+      Safety invariant:
+      - Preserve behavior while extracting reusable code.
+      Slice rationale:
+      - Split field additions into a later behavior workflow.
+      Architectural effect:
+      - Refresh logic moves into a helper module.
+      Goal:
+      - Extract the helper with no behavior change.
+      Motivation:
+      - Make later owner-loss behavior work easier to review.
+      Alternative considerations:
+      - Option A (chosen): extract first.
+      - Option B: add a new field during extraction.
+      Implementation details:
+      - Move code from packages/app/src/main.ts into packages/app/src/refresh-task-graph.ts, add field refreshFallbackSource, and keep wiring compiling.
+      Non-goals:
+      - Do not ship a new field in this refactor slice.
+      Assume no prior context. Modify the listed files only. Pass condition: exits 0 after the extraction compiles.
+    dependencies: []
+  - id: verify-full-suite
+    description: |
+      Review claim:
+      - Run the terminal regression gate.
+      Review lane:
+      - proof
+      Safety invariant:
+      - This command changes no production behavior.
+      Slice rationale:
+      - Final regression stays separate from implementation.
+      Architectural effect:
+      - No architecture change.
+      Goal:
+      - Run the final regression gate.
+      Motivation:
+      - Confirm the workflow remains valid.
+      Alternative considerations:
+      - Option A (chosen): run pnpm run test:all last.
+      Implementation details:
+      - Execute the repository-wide regression command.
+      Non-goals:
+      - Do not modify source files.
+      Layer: app_regression
+      Feature state: active
+    command: 'pnpm run test:all'
+    dependencies: [extract-refresh-helper]

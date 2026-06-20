@@ -88,14 +88,18 @@ Apply `skills/review-compression/SKILL.md` before authoring implementation tasks
 Each implementation task must include these description headings:
 
 - `Review claim:` the one sentence a reviewer is being asked to approve.
+- `Review lane:` exactly one of `behavior`, `refactor`, `proof`, `cleanup`,
+  `policy`, or `docs`.
 - `Safety invariant:` why this slice is safe to review locally.
 - `Slice rationale:` why this slice is separate from neighboring work.
 - `Architectural effect:` what changes in control flow, data flow, ownership,
   dependency direction, or public surface.
+- `Non-goals:` what this slice explicitly leaves for later slices.
 
 Keep directly affected tests and compatibility adapters with the change that
 requires them. Split optional cleanup, special cases, behavior-plus-rename,
-default-flip-plus-deletion, and unrelated stale visual refreshes.
+default-flip-plus-deletion, benchmark-before-fix proof, refactor-before-fields,
+and product-code-plus-policy/docs follow-ups.
 
 ### Cross-layer direction
 
