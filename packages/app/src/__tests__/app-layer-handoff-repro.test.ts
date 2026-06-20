@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createTestHarness, type TestHarness } from '@invoker/test-kit';
 import type { PlanDefinition } from '@invoker/workflow-core';
 import { dispatchStartedTasksWithGlobalTopup } from '../global-topup.js';
@@ -29,12 +29,19 @@ const PARALLEL_PLAN: PlanDefinition = {
 };
 
 async function dispatchStarted(h: TestHarness, started: Array<any>, context: string) {
-  return dispatchStartedTasksWithGlobalTopup({
-    orchestrator: h.orchestrator,
-    taskExecutor: h.executor,
-    context,
-    started,
-  });
+  const executeTasksSpy = vi.spyOn(h.executor, 'executeTasks');
+  try {
+    const result = await dispatchStartedTasksWithGlobalTopup({
+      orchestrator: h.orchestrator,
+      taskExecutor: h.executor,
+      context,
+      started,
+    });
+    expect(executeTasksSpy, `${context} must leave launch ownership with the durable outbox`).not.toHaveBeenCalled();
+    return result;
+  } finally {
+    executeTasksSpy.mockRestore();
+  }
 }
 
 describe('app-layer handoff repros', () => {

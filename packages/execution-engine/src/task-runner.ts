@@ -627,6 +627,15 @@ export class TaskRunner {
         this.logger.warn(
           `[TaskRunner] suppressing stale startup-failure metadata/response for task=${task.id} attemptId=${attemptId}`,
         );
+        if (dispatchOpts) {
+          const completed = dispatchOpts.launchOutbox.completeDispatch(dispatchOpts.dispatchId);
+          bench('executeTask.staleDispatchCompleted', { accepted: completed });
+          if (!completed) {
+            this.logger.warn(
+              `[TaskRunner] stale launch dispatch complete rejected for task=${task.id} attempt=${attemptId} dispatchId=${dispatchOpts.dispatchId}`,
+            );
+          }
+        }
         await this.cleanupPerTaskDockerExecutor(task);
         return;
       }

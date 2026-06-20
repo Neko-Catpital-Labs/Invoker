@@ -133,6 +133,7 @@ export interface HeadlessDeps {
 const RESET = '\x1b[0m';
 const BOLD = '\x1b[1m';
 const YELLOW = '\x1b[33m';
+const HEADLESS_LOCAL_LAUNCH_DISPATCH_POLL_MS = 250;
 
 // ── Shared Helpers ───────────────────────────────────────────
 
@@ -306,7 +307,7 @@ async function dispatchHeadlessRunnableTasks(
     }
   };
   poll();
-  const timer = setInterval(poll, 250);
+  const timer = setInterval(poll, HEADLESS_LOCAL_LAUNCH_DISPATCH_POLL_MS);
   timer.unref?.();
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
