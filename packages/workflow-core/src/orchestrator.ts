@@ -269,9 +269,8 @@ export interface OrchestratorPersistence {
     attemptPatch: Partial<Pick<Attempt, 'status' | 'exitCode' | 'error' | 'completedAt'>>
   ): void;
   /**
-   * Load a workflow by ID. Used by:
-   *   - SSH validation in `editTaskType` (`repoUrl`),
-   *   - same-mode no-op detection in `editTaskMergeMode` (`mergeMode`).
+   * Load a workflow by ID. Used by same-mode no-op detection in
+   * `editTaskMergeMode` (`mergeMode`).
    * The interface lists only the fields the orchestrator actually reads;
    * concrete adapters (e.g. `SQLiteAdapter.loadWorkflow`) return more.
    */
@@ -1843,22 +1842,28 @@ export class Orchestrator {
     if (!task || !isApprovalState || task.execution.pendingFixError === undefined) {
       return [];
     }
+    const id = task.id;
+
+    if (!task.config.isMergeNode) {
+      const prepared = this.prepareTaskForNewAttempt(task.id, 'approved fix relaunch');
+      return this.autoStartReadyTasks([prepared.id], Orchestrator.EXPEDITED_PRIORITY);
+    }
 
     const now = new Date();
     const changes: TaskStateChanges = {
       status: 'running',
       execution: { pendingFixError: undefined, startedAt: now, lastHeartbeatAt: now },
     };
-    const updated = this.writeAndSync(taskId, changes);
-    this.updateSelectedAttempt(taskId, {
+    const updated = this.writeAndSync(id, changes);
+    this.updateSelectedAttempt(id, {
       status: 'running',
       startedAt: now,
       lastHeartbeatAt: now,
     });
     const delta: TaskDelta = this.buildUpdateDelta(task, updated, changes);
-    this.persistence.logEvent?.(taskId, 'task.running', changes);
+    this.persistence.logEvent?.(id, 'task.running', changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
-    return [this.stateGetTask(taskId)!];
+    return [this.stateGetTask(id)!];
   }
 
   /**
@@ -2805,57 +2810,6 @@ export class Orchestrator {
     return this.dispatchPostMutation(MUTATION_POLICIES.prompt.action, taskId);
   }
 
-    editTaskType(taskId: string, runnerKind: string, poolMemberId?: string): TaskState[] {
-    this.refreshFromDb();
-    const task = this.stateGetTask(taskId);
-    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
-    if (task.config.isMergeNode) throw new Error(`Cannot change executor type of merge node ${taskId}`);
-
-    const effectiveType = normalizeRunnerKind(runnerKind) ?? runnerKind;
-
-    // SSH requires repoUrl on the workflow to clone onto the remote host
-    if (effectiveType === 'ssh' && task.config.workflowId && this.persistence.loadWorkflow) {
-      const wf = this.persistence.loadWorkflow(task.config.workflowId);
-      if (!wf?.repoUrl) {
-        throw new Error(
-          `Cannot switch task "${taskId}" to SSH: workflow has no repoUrl. ` +
-          `Add repoUrl to the plan YAML.`,
-        );
-      }
-    }
-
-    const oldRunnerKind = task.config.runnerKind;
-    const oldPoolMemberId =
-      oldRunnerKind === 'ssh' ? (task.config as { poolMemberId?: string }).poolMemberId : undefined;
-    const newPoolMemberId = effectiveType === 'ssh' ? poolMemberId : undefined;
-    const hostKey = (et: string | undefined, rid: string | undefined): string =>
-      et === 'ssh' ? `ssh:${rid ?? ''}` : 'local';
-    const hostChanged =
-      hostKey(oldRunnerKind, oldPoolMemberId) !==
-      hostKey(effectiveType, newPoolMemberId);
-
-    if (isActiveForInvalidation(task.status)) {
-      this.cancelTask(taskId);
-    }
-
-    const configPatch: Record<string, unknown> = { runnerKind: effectiveType };
-    if (effectiveType === 'ssh') {
-      configPatch.poolMemberId = poolMemberId;
-    } else {
-      configPatch.poolMemberId = undefined;
-    }
-    const typeChanges: TaskStateChanges = { config: configPatch };
-    const typeBefore = this.stateGetTask(taskId)!;
-    const typeUpdated = this.writeAndSync(taskId, typeChanges);
-    const typeDelta: TaskDelta = this.buildUpdateDelta(typeBefore, typeUpdated, typeChanges);
-    this.persistence.logEvent?.(taskId, 'task.updated', typeChanges);
-    this.messageBus.publish(TASK_DELTA_CHANNEL, typeDelta);
-
-    const typeAction = hostChanged
-      ? MUTATION_POLICIES.poolMemberId.action
-      : MUTATION_POLICIES.runnerKind.action;
-    return this.dispatchPostMutation(typeAction, taskId);
-  }
 
     editTaskPool(taskId: string, poolId: string): TaskState[] {
     this.refreshFromDb();
