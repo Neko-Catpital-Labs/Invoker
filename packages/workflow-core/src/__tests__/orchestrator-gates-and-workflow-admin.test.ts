@@ -27,6 +27,15 @@ class InMemoryPersistence implements OrchestratorPersistence {
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
   private attempts = new Map<string, Attempt[]>();
   events: Array<{ taskId: string; eventType: string; payload?: unknown }> = [];
+  launchDispatchRows: Array<{
+    id: number;
+    taskId: string;
+    attemptId: string;
+    workflowId: string;
+    state: 'enqueued';
+    priority: 'high' | 'normal' | 'low';
+    generation: number;
+  }> = [];
   updateWorkflowCalls = new Map<string, number>();
 
   saveWorkflow(workflow: {
@@ -44,9 +53,8 @@ class InMemoryPersistence implements OrchestratorPersistence {
     const now = new Date().toISOString();
     this.workflows.set(workflow.id, {
       ...workflow,
-      // Synthesize a placeholder repoUrl so SSH-validation tests
-      // (Step 5 `editTaskType` → ssh) keep passing without each
-      // plan having to spell out a remote URL.
+      // Synthesize a placeholder repoUrl so tests with SSH-routed
+      // plans do not need to spell out a remote URL.
       repoUrl: workflow.repoUrl ?? 'memory://test-repo',
       baseBranch: workflow.baseBranch,
       featureBranch: workflow.featureBranch,
@@ -222,7 +230,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
     return undefined;
   }
 
-  updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void {
+  updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void {
     for (const list of this.attempts.values()) {
       const idx = list.findIndex(a => a.id === attemptId);
       if (idx !== -1) {
@@ -230,6 +238,26 @@ class InMemoryPersistence implements OrchestratorPersistence {
         return;
       }
     }
+  }
+
+  enqueueLaunchDispatch(input: {
+    taskId: string;
+    attemptId: string;
+    workflowId: string;
+    priority?: 'high' | 'normal' | 'low';
+    generation: number;
+  }): { id: number; state: 'enqueued'; priority: 'high' | 'normal' | 'low' } {
+    const row = {
+      id: this.launchDispatchRows.length + 1,
+      taskId: input.taskId,
+      attemptId: input.attemptId,
+      workflowId: input.workflowId,
+      state: 'enqueued' as const,
+      priority: input.priority ?? 'normal' as const,
+      generation: input.generation,
+    };
+    this.launchDispatchRows.push(row);
+    return row;
   }
 
   deleteWorkflow(workflowId: string): void {
@@ -818,7 +846,7 @@ describe('Orchestrator', () => {
       expect(task.execution.error).toBe('test failed: expected 1 to be 2');
     });
 
-    it('non-merge merge_conflict JSON pendingFixError resume transitions failed -> fixing_with_ai -> awaiting_approval -> running and clears pendingFixError', async () => {
+    it('non-merge merge_conflict JSON pendingFixError resume relaunches with a fresh attempt', async () => {
       const mergeConflictError = JSON.stringify({
         type: 'merge_conflict',
         failedBranch: 'experiment/non-merge-branch-abc123',
@@ -843,7 +871,83 @@ describe('Orchestrator', () => {
       expect(task.status).toBe('running');
       expect(task.status).not.toBe('completed');
       expect(task.execution.pendingFixError).toBeUndefined();
-      expect(persistence.loadAttempt(fixAttemptId!)?.status).toBe('running');
+      expect(task.execution.selectedAttemptId).not.toBe(fixAttemptId);
+      expect(persistence.loadAttempt(fixAttemptId!)?.status).toBe('superseded');
+      expect(persistence.loadAttempt(task.execution.selectedAttemptId!)?.status).toBe('running');
+    });
+
+    it('non-merge merge_conflict fix approval relaunches through the launch outbox when launch is deferred', async () => {
+      const localPersistence = new InMemoryPersistence();
+      const localBus = new InMemoryBus();
+      const localOrchestrator = new Orchestrator({
+        persistence: localPersistence,
+        messageBus: localBus,
+        maxConcurrency: 3,
+        logger: consoleLogger,
+        deferRunningUntilLaunch: true,
+      });
+      const mergeConflictError = JSON.stringify({
+        type: 'merge_conflict',
+        failedBranch: 'experiment/non-merge-branch-abc123',
+        conflictFiles: ['src/non-merge.ts'],
+      });
+
+      localOrchestrator.loadPlan({
+        name: 'deferred-fix-test',
+        tasks: [
+          { id: 'f1', description: 'Root task' },
+          { id: 'f2', description: 'Failing task', dependencies: ['f1'] },
+        ],
+      });
+      const [f1Claim] = localOrchestrator.startExecution();
+      expect(f1Claim?.status).toBe('pending');
+      expect(f1Claim?.execution.phase).toBe('launching');
+      expect(
+        localOrchestrator.markTaskRunningAfterLaunch('f1', f1Claim!.execution.selectedAttemptId!),
+      ).toBe(true);
+      const [f2Claim] = localOrchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'f1', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      expect(f2Claim?.status).toBe('pending');
+      expect(f2Claim?.execution.phase).toBe('launching');
+      expect(
+        localOrchestrator.markTaskRunningAfterLaunch('f2', f2Claim!.execution.selectedAttemptId!),
+      ).toBe(true);
+      localOrchestrator.handleWorkerResponse(
+        makeResponse({
+          actionId: 'f2',
+          status: 'failed',
+          outputs: { exitCode: 1, error: mergeConflictError },
+        }),
+      );
+
+      const { savedError } = localOrchestrator.beginConflictResolution('f2');
+      localOrchestrator.setFixAwaitingApproval('f2', savedError);
+      const fixAttemptId = localOrchestrator.getTask('f2')!.execution.selectedAttemptId!;
+      const launchRowsBeforeApprove = localPersistence.launchDispatchRows.length;
+
+      const [claim] = await localOrchestrator.resumeTaskAfterFixApproval('f2');
+      const task = localOrchestrator.getTask('f2')!;
+
+      expect(claim?.id).toBe(task.id);
+      expect(task.status).toBe('pending');
+      expect(task.execution.phase).toBe('launching');
+      expect(task.execution.pendingFixError).toBeUndefined();
+      expect(task.execution.selectedAttemptId).not.toBe(fixAttemptId);
+      expect(localPersistence.loadAttempt(fixAttemptId)?.status).toBe('superseded');
+      expect(localPersistence.loadAttempt(task.execution.selectedAttemptId!)?.status).toBe('claimed');
+      const newLaunchRows = localPersistence.launchDispatchRows.slice(launchRowsBeforeApprove);
+      expect(newLaunchRows).toHaveLength(1);
+      expect(newLaunchRows[0]).toMatchObject({
+        taskId: task.id,
+        attemptId: task.execution.selectedAttemptId,
+        state: 'enqueued',
+      });
+      expect(
+        localPersistence.events.some(
+          (event) => event.taskId === task.id && event.eventType === 'task.launch_claimed',
+        ),
+      ).toBe(true);
     });
 
     it('non-merge plain-text pendingFixError approve transitions failed -> fixing_with_ai -> awaiting_approval -> completed', async () => {
