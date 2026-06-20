@@ -72,7 +72,6 @@ export interface ApiMutationFacade {
   provideInput(taskId: string, text: string): void;
   editTaskCommand(taskId: string, newCommand: string): Promise<MutationResult>;
   editTaskPrompt(taskId: string, newPrompt: string): Promise<MutationResult>;
-  editTaskType(taskId: string, runnerKind: string, poolMemberId?: string): Promise<MutationResult>;
   editTaskAgent(taskId: string, agentName: string): Promise<MutationResult>;
   setTaskExternalGatePolicies(
     taskId: string,
@@ -608,19 +607,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
       // POST /api/tasks/:id/edit-type
       const editTypeMatch = path.match(/^\/api\/tasks\/([^/]+)\/edit-type$/);
       if (method === 'POST' && editTypeMatch) {
-        const taskId = decodeURIComponent(editTypeMatch[1]);
-        try {
-          const body = await readBody(req);
-          const { runnerKind, poolMemberId } = JSON.parse(body);
-          if (!runnerKind) {
-            json(res, 400, { error: 'Missing "runnerKind" in request body' });
-            return;
-          }
-          const result = await mutations.editTaskType(taskId, runnerKind, poolMemberId);
-          json(res, 200, { ok: true, taskId, action: 'type_edited', tasksStarted: result.runnable.length });
-        } catch (err) {
-          json(res, httpStatusForError(err), { error: errorMessage(err) });
-        }
+        json(res, 410, { error: 'Executor selection is internal. Assign tasks to an execution pool instead.' });
         return;
       }
 
