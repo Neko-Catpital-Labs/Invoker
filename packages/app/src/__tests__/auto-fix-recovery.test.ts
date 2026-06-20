@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { WorkflowMutationIntent } from '@invoker/data-store';
+import type { WorkflowMutationIntent, WorkflowMutationPriority } from '@invoker/data-store';
 import type { TaskState } from '@invoker/workflow-core';
 
 import { buildFixWithAgentMutationArgs } from '../auto-fix-intents.js';
 import {
   collectValidatedAutoFixRecoveryCandidates,
+  createAutoFixRecoveryTick,
   createRecoveryWorker,
   listAutoFixRecoveryScanCandidates,
   RECOVERY_WORKER_KIND,
@@ -46,6 +47,19 @@ function makeRecoveryPolicyHarness(task: TaskState = makeTask(), existingIntents
   const tasks = new Map<string, TaskState>([[task.id, task]]);
   const intents: WorkflowMutationIntent[] = [...existingIntents];
   const logEvent = vi.fn();
+  const submit = vi.fn((workflowId: string, priority: WorkflowMutationPriority, channel: string, args: unknown[]) => {
+    const id = intents.length + 1;
+    intents.push({
+      id,
+      workflowId,
+      priority,
+      channel,
+      args,
+      status: 'queued',
+      createdAt: new Date().toISOString(),
+    });
+    return id;
+  });
   const options = {
     store: {
       listWorkflows: vi.fn(() => workflows),
@@ -57,12 +71,12 @@ function makeRecoveryPolicyHarness(task: TaskState = makeTask(), existingIntents
       ))),
       logEvent,
     },
-    submitter: { submit: vi.fn() },
+    submitter: { submit },
     logger,
     defaultAutoFixRetries: 3,
     getAutoFixAgent: () => 'codex',
   };
-  return { options, logEvent, tasks, intents };
+  return { options, submit, logEvent, tasks, intents };
 }
 
 describe('auto-fix recovery worker', () => {
@@ -219,6 +233,27 @@ describe('auto-fix recovery candidate validation', () => {
         phase: 'worker-autofix-skip',
         reason: 'already-queued-intent',
       }),
+    );
+  });
+});
+
+describe('auto-fix recovery scan submission', () => {
+  it('submits eligible failed tasks through the command route', async () => {
+    const harness = makeRecoveryPolicyHarness();
+    const tick = createAutoFixRecoveryTick(harness.options);
+
+    await tick({
+      identity: { kind: 'recovery', instanceId: 'test' },
+      reason: 'startup',
+      tickNumber: 1,
+    });
+
+    expect(harness.submit).toHaveBeenCalledTimes(1);
+    expect(harness.submit).toHaveBeenCalledWith(
+      'wf-1',
+      'normal',
+      'invoker:fix-with-agent',
+      buildFixWithAgentMutationArgs('wf-1/task-1', 'codex', { autoFix: true }),
     );
   });
 });
