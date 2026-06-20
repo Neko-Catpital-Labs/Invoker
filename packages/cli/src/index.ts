@@ -10,6 +10,7 @@ import {
   TaskRunner,
   WorktreeExecutor,
   registerBuiltinAgents,
+  remoteFetchForPool,
 } from '@invoker/execution-engine';
 import {
   IpcBus,
@@ -456,10 +457,14 @@ async function waitForWorkflowToSettle(
   orchestrator: Orchestrator,
   workflowId: string,
   timeoutMs = 24 * 60 * 60 * 1000,
+  options: { includeMergeNodes?: boolean } = {},
 ): Promise<TaskState[]> {
   const startedAt = Date.now();
   while (true) {
-    const tasks = orchestrator.getAllTasks().filter((task) => task.config.workflowId === workflowId);
+    const tasks = orchestrator.getAllTasks().filter((task) =>
+      task.config.workflowId === workflowId
+      && (options.includeMergeNodes !== false || !task.config.isMergeNode),
+    );
     if (tasks.length > 0 && tasks.every((task) => isTerminalTaskStatus(task.status))) {
       return tasks;
     }
@@ -482,11 +487,13 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
   mkdirSync(dbDir, { recursive: true });
 
   const previousInvokerDbDir = process.env.INVOKER_DB_DIR;
+  const previousRemoteFetchForPool = remoteFetchForPool.enabled;
   if (options.config) {
     process.env.INVOKER_CONFIG = resolve(options.config);
     process.env.INVOKER_REPO_CONFIG_PATH = resolve(options.config);
   }
   process.env.INVOKER_DB_DIR = dbDir;
+  remoteFetchForPool.enabled = false;
   const runtimeConfig = loadRuntimeConfig(options.config);
   const maxConcurrency = runtimeConfig.maxConcurrency ?? 1;
 
@@ -503,6 +510,8 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
       cacheDir: join(dbDir, 'repos'),
       maxWorktrees: maxConcurrency,
       agentRegistry: executionAgentRegistry,
+      provisionCommand: 'true',
+      publishTaskResults: false,
     }));
     const orchestrator = new Orchestrator({
       persistence,
@@ -514,6 +523,8 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
       defaultPoolId: runtimeConfig.defaultPoolId,
       availablePoolIds: Object.keys(runtimeConfig.executionPools ?? {}),
     });
+    const plan = normalizePlanRuntimePaths(await parsePlanFile(absolutePlanPath), process.cwd());
+    const executeMergeNodes = plan.onFinish !== 'none';
     const taskRunner = new TaskRunner({
       orchestrator,
       persistence,
@@ -527,6 +538,7 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
       remoteTargetsProvider: () => loadRuntimeConfig(options.config).remoteTargets ?? {},
       executionPoolsProvider: () => loadRuntimeConfig(options.config).executionPools ?? {},
       executionAgentRegistry,
+      executeMergeNodes,
       callbacks: {
         onOutput: (taskId, data) => {
           process.stdout.write(data);
@@ -539,13 +551,12 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
       },
       logger: silentLogger,
     });
-    const plan = normalizePlanRuntimePaths(await parsePlanFile(absolutePlanPath), process.cwd());
     orchestrator.loadPlan(plan);
     const started = orchestrator.startExecution();
     await taskRunner.executeTasks(started);
 
     const workflow = persistence.listWorkflows()[0];
-    const tasks = workflow ? await waitForWorkflowToSettle(orchestrator, workflow.id) : [];
+    const tasks = workflow ? await waitForWorkflowToSettle(orchestrator, workflow.id, undefined, { includeMergeNodes: executeMergeNodes }) : [];
     const failedTasks = tasks.filter((task) => task.status === 'failed').length;
     const completedTasks = tasks.filter((task) => task.status === 'completed').length;
     return {
@@ -561,6 +572,7 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
     } else {
       process.env.INVOKER_DB_DIR = previousInvokerDbDir;
     }
+    remoteFetchForPool.enabled = previousRemoteFetchForPool;
     persistence.close();
   }
 }

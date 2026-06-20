@@ -308,6 +308,8 @@ export interface TaskRunnerConfig {
   };
   /** Shared execution agents (Claude, Codex). Passed into lazily constructed executors. */
   executionAgentRegistry?: AgentRegistry;
+  /** Whether completion should auto-launch the workflow merge/finalization node. */
+  executeMergeNodes?: boolean;
   logger?: Logger;
 }
 
@@ -330,6 +332,7 @@ export class TaskRunner {
   private getExecutionPools: () => Record<string, ExecutionPoolConfig>;
   private dockerConfig: { imageName?: string; secretsFile?: string };
   private executionAgentRegistry?: AgentRegistry;
+  private executeMergeNodes: boolean;
   private logger: Logger;
   private readonly runnerInstanceId = randomUUID();
   /** Cache for SSH executors, keyed by poolMemberId. One instance per target for correct git locking. */
@@ -433,6 +436,7 @@ export class TaskRunner {
     this.getExecutionPools = config.executionPoolsProvider ?? (() => ({}));
     this.dockerConfig = config.dockerConfig ?? {};
     this.executionAgentRegistry = config.executionAgentRegistry;
+    this.executeMergeNodes = config.executeMergeNodes ?? true;
     this.logger = config.logger ?? NOOP_LOGGER;
   }
 
@@ -518,14 +522,17 @@ export class TaskRunner {
     tasks: TaskState[],
     dispatchOpts?: LaunchDispatchOptions,
   ): void {
-    if (tasks.length === 0) return;
+    const executableTasks = this.executeMergeNodes
+      ? tasks
+      : tasks.filter((task) => !task.config.isMergeNode);
+    if (executableTasks.length === 0) return;
     if (dispatchOpts) {
       this.logger.debug(
-        `[TaskRunner] durable launch outbox owns ${tasks.length} newly-started task(s); skipping recursive executeTasks`,
+        `[TaskRunner] durable launch outbox owns ${executableTasks.length} newly-started task(s); skipping recursive executeTasks`,
       );
       return;
     }
-    void this.executeTasks(tasks);
+    void this.executeTasks(executableTasks);
   }
 
   /**

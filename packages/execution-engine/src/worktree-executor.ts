@@ -38,6 +38,10 @@ export interface WorktreeExecutorConfig {
   claudeCommand?: string;
   /** Agent registry for pluggable AI agents. When set, overrides claudeCommand. */
   agentRegistry?: import('./agent-registry.js').AgentRegistry;
+  /** Shell command used to provision a newly-created worktree before task execution. */
+  provisionCommand?: string;
+  /** Whether task completion should create and push a result commit. */
+  publishTaskResults?: boolean;
   /** Heartbeat interval in milliseconds. Default: 30000. */
   heartbeatIntervalMs?: number;
   /** Maximum task duration in milliseconds. Default: 4 hours. */
@@ -85,12 +89,16 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
   private readonly worktreeBaseDir: string;
   private readonly claudeCommand: string;
   private readonly agentRegistry?: import('./agent-registry.js').AgentRegistry;
+  private readonly provisionCommand: string;
+  private readonly publishTaskResults: boolean;
   private pool: RepoPool;
 
   constructor(config: WorktreeExecutorConfig) {
     super(config.heartbeatIntervalMs, config.maxDurationMs);
     this.claudeCommand = config.claudeCommand ?? 'claude';
     this.agentRegistry = config.agentRegistry;
+    this.provisionCommand = config.provisionCommand ?? DEFAULT_WORKTREE_PROVISION_COMMAND;
+    this.publishTaskResults = config.publishTaskResults ?? true;
     this.worktreeBaseDir =
       config.worktreeBaseDir ?? resolve(homedir(), '.invoker', 'worktrees');
     this.pool = new RepoPool({
@@ -374,7 +382,10 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         workspacePath: handle.workspacePath,
         branch: handle.branch,
       });
-      await this.handleProcessExit(executionId, request, acquired.worktreePath, 0, { branch });
+      await this.handleProcessExit(executionId, request, acquired.worktreePath, 0, {
+        branch,
+        publishResult: this.publishTaskResults,
+      });
       entry.phase = 'completed';
       this.softReleasePoolSlot(entry);
       bench('WorktreeExecutor.start.noCommand.returning');
@@ -514,6 +525,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
           branch,
           agentSessionId: entry.agentSessionId,
           agentName: request.actionType === 'ai_task' ? executionAgent : undefined,
+          publishResult: this.publishTaskResults,
         });
       } catch (err) {
         const ent = this.entries.get(executionId);
@@ -707,7 +719,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
   private provisionWorktree(dir: string, executionId?: string): { child: ChildProcess; completion: Promise<void> } {
     traceExecution(`[WorktreeExecutor] provisionWorktree begin dir=${dir}`);
     const t0 = Date.now();
-    const cmd = `set -euo pipefail; ${DEFAULT_WORKTREE_PROVISION_COMMAND}`;
+    const cmd = `set -euo pipefail; ${this.provisionCommand}`;
     const child = spawn('/bin/bash', ['-c', cmd], {
       cwd: dir,
       env: cleanElectronEnv(),

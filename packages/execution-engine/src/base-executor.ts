@@ -953,6 +953,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
       originalBranch?: string;
       agentSessionId?: string;
       agentName?: string;
+      publishResult?: boolean;
     },
   ): Promise<void> {
     const entry = this.entries.get(executionId);
@@ -974,17 +975,20 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
 
     let commitHash: string | undefined;
     let status: 'completed' | 'failed' = effectiveExitCode === 0 ? 'completed' : 'failed';
-    try {
-      const hash = await this.recordTaskResult(cwd, request, effectiveExitCode);
-      commitHash = hash ?? undefined;
-    } catch (err) {
-      this.emitOutput(executionId,
-        `[${this.type}] recordTaskResult error: ${err}\n`);
-      if (effectiveExitCode === 0) status = 'failed';
+    const publishResult = opts?.publishResult ?? true;
+    if (publishResult) {
+      try {
+        const hash = await this.recordTaskResult(cwd, request, effectiveExitCode);
+        commitHash = hash ?? undefined;
+      } catch (err) {
+        this.emitOutput(executionId,
+          `[${this.type}] recordTaskResult error: ${err}\n`);
+        if (effectiveExitCode === 0) status = 'failed';
+      }
     }
 
     let pushError: string | undefined;
-    if (opts?.branch) {
+    if (publishResult && opts?.branch) {
       pushError = await this.pushBranchToRemote(cwd, opts.branch, executionId);
     }
     if (effectiveExitCode === 0 && pushError !== undefined && opts?.branch) {
@@ -1034,7 +1038,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         agentName: opts?.agentName,
         branch: opts?.branch,
         ...(error ? { error } : {}),
-        ...(opts?.branch ? { summary: `branch=${opts.branch} commit=${commitHash ?? 'unknown'}` } : {}),
+        ...(publishResult && opts?.branch ? { summary: `branch=${opts.branch} commit=${commitHash ?? 'unknown'}` } : {}),
       },
     };
     this.emitComplete(executionId, response);
