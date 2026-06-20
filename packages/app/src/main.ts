@@ -146,8 +146,6 @@ import {
   fixWithAgentAction,
   rebaseRetry,
   rebaseRecreate,
-  recreateWorkflow as sharedRecreateWorkflow,
-  recreateTask as sharedRecreateTask,
   resolveConflictAction,
   selectFailureRecoveryRoute,
   selectExperiments as sharedSelectExperiments,
@@ -2081,9 +2079,12 @@ function createEmbeddedTerminalBackendFromConfig(
     const result = await fixWithAgentAction(
       taskId,
       {
+        logger,
         orchestrator,
         persistence,
+        commandService,
         taskExecutor: requireTaskExecutor(),
+        mutationTiming: activeMutationContext?.mutationTiming,
         autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
       },
       {
@@ -4004,8 +4005,10 @@ function createEmbeddedTerminalBackendFromConfig(
           mutationTiming: activeMutationContext?.mutationTiming,
         });
         const started = await rebaseRetry(target, {
+          logger,
           orchestrator,
           persistence,
+          commandService,
           repoRoot,
           taskExecutor: requireTaskExecutor(),
           mutationTiming: activeMutationContext?.mutationTiming,
@@ -4046,8 +4049,10 @@ function createEmbeddedTerminalBackendFromConfig(
           mutationTiming: activeMutationContext?.mutationTiming,
         });
         const started = await rebaseRecreate(target, {
+          logger,
           orchestrator,
           persistence,
+          commandService,
           repoRoot,
           taskExecutor: requireTaskExecutor(),
           mutationTiming: activeMutationContext?.mutationTiming,
