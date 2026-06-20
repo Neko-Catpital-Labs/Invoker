@@ -42,6 +42,19 @@
       "remoteInvokerHome": "~/.invoker",
       "provisionCommand": "pnpm install --frozen-lockfile",
       "remoteHeartbeatIntervalSeconds": 30
+    },
+    "crabbox-ci": {
+      "comment": "Crabbox-backed target: leases a box on demand, then runs the normal SSH executor. Recover a kept box with `crabbox ssh --id <lease>` and tear it down with `crabbox stop <lease>`. keepOnFailure does not defeat ttl or idle cleanup.",
+      "type": "crabbox",
+      "crabboxCommand": "crabbox",
+      "provider": "fly",
+      "class": "performance-4x",
+      "ttl": "1h",
+      "idleTimeout": "20m",
+      "network": "default",
+      "target": "ubuntu-22.04",
+      "stopAfter": "success",
+      "keepOnFailure": true
     }
   },
 

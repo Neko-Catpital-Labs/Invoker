@@ -77,6 +77,75 @@ tasks:
 
 This is the supported way to run multiple SSH executors in one workflow: define multiple targets, then attach different tasks to different target IDs.
 
+## Crabbox-backed Targets
+
+Crabbox supplies the machine; Invoker still runs the normal SSH executor. A Crabbox target leases a box on demand, waits for it to report a reachable SSH endpoint, then connects with the same `runnerKind: ssh` path used for static targets. There is no `runnerKind: crabbox` — Crabbox only changes how the SSH endpoint is obtained.
+
+Add a Crabbox target alongside static ones under `remoteTargets`:
+
+```json
+{
+  "remoteTargets": {
+    "crabbox-ci": {
+      "type": "crabbox",
+      "crabboxCommand": "crabbox",
+      "provider": "fly",
+      "class": "performance-4x",
+      "ttl": "1h",
+      "idleTimeout": "20m",
+      "network": "default",
+      "target": "ubuntu-22.04",
+      "stopAfter": "success",
+      "keepOnFailure": true
+    }
+  }
+}
+```
+
+Reference it from a task exactly like any SSH target — `runnerKind: ssh` plus the Crabbox target id as `poolMemberId`:
+
+```yaml
+  - id: ci-on-crabbox
+    description: "Run CI on a leased Crabbox box"
+    command: "pnpm run test:all"
+    runnerKind: ssh
+    poolMemberId: crabbox-ci
+```
+
+### Crabbox fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `type` | yes | Must be `crabbox` |
+| `crabboxCommand` | yes | Path or name of the Crabbox CLI |
+| `provider` | yes | Backend the box is requested from |
+| `class` | yes | Box class/size |
+| `ttl` | yes | Lease time-to-live (e.g. `1h`) |
+| `idleTimeout` | yes | Idle time before Crabbox reaps the box (e.g. `20m`) |
+| `network` | yes | Network the box attaches to |
+| `target` | yes | Machine/image identifier to lease |
+| `stopAfter` | yes | When Invoker tears the box down: `success`, `always`, or `never` |
+| `keepOnFailure` | no | When true, leave the box up after a failed task for inspection (default: true) |
+
+### stopAfter and keepOnFailure
+
+- `stopAfter: success` — stop the box after a passing task. On failure, the box stays up only when `keepOnFailure` is true (the default); set `keepOnFailure: false` to stop it even on failure.
+- `stopAfter: always` — always stop the box when the task ends, pass or fail.
+- `stopAfter: never` — never stop the box; you tear it down yourself.
+
+Stopping runs `crabbox stop <lease>` for you.
+
+### Recovery commands
+
+If a box is kept (failure with `keepOnFailure`, or `stopAfter: never`), use the lease id Invoker recorded:
+
+```bash
+crabbox ssh --id <lease>    # open an interactive shell on the box
+crabbox stop <lease>        # tear the box down when you're done
+```
+
+> **Warning:** `keepOnFailure` does not defeat Crabbox's own `ttl` or idle cleanup. A kept box is still reaped when its lease expires or it sits idle past `idleTimeout`. Inspect it promptly, and don't rely on it staying around.
+
 ## Usage in Plans
 
 Reference a remote target in a plan YAML task:
