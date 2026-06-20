@@ -71,6 +71,58 @@ describe('Visual proof snapshots', () => {
     });
   });
 
+  it('workflow graph shows active edges and detached lineage distinctly', async () => {
+    const workflows: WorkflowMeta[] = [
+      { id: 'wf-alpha', name: 'Alpha', status: 'review_ready' },
+      {
+        id: 'wf-beta',
+        name: 'Beta Detached',
+        status: 'completed',
+        detachedExternalDependencies: [
+          {
+            workflowId: 'wf-alpha',
+            requiredStatus: 'completed',
+            gatePolicy: 'completed',
+            detachedAt: '2026-01-02T00:00:00.000Z',
+          },
+        ],
+      },
+      {
+        id: 'wf-gamma',
+        name: 'Gamma Active',
+        status: 'running',
+        externalDependencies: [
+          {
+            workflowId: 'wf-alpha',
+            requiredStatus: 'completed',
+            gatePolicy: 'completed',
+          },
+        ],
+      },
+    ];
+    const alpha = makeUITask({ id: 'task-alpha', description: 'Root stack task', status: 'review_ready', workflowId: 'wf-alpha' });
+    const beta = makeUITask({ id: 'task-beta', description: 'Detached downstream task', status: 'completed', workflowId: 'wf-beta' });
+    const gamma = makeUITask({ id: 'task-gamma', description: 'Active downstream task', status: 'running', workflowId: 'wf-gamma' });
+
+    render(<App />);
+    act(() => mock.setTasks([alpha, beta, gamma], workflows));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-wf-alpha')).toHaveTextContent('Alpha');
+      expect(screen.getByTestId('workflow-node-wf-beta')).toHaveTextContent('Beta Detached');
+      expect(screen.getByTestId('workflow-node-wf-gamma')).toHaveTextContent('Gamma Active');
+    });
+
+    const activeEdge = screen.getByTestId('rf__edge-workflow:active:wf-alpha->wf-gamma');
+    expect(activeEdge).toHaveAccessibleName('Active workflow dependency');
+    expect(activeEdge).toHaveAttribute('data-stroke-dasharray', '');
+
+    const detachedEdge = screen.getByTestId('rf__edge-workflow:detached:wf-alpha->wf-beta');
+    expect(detachedEdge).toHaveAccessibleName('Detached workflow lineage');
+    expect(detachedEdge).toHaveAttribute('data-stroke-dasharray', '5 6');
+    expect(screen.getByTestId('workflow-node-wf-beta-detached-lineage')).toHaveTextContent('Detached');
+  });
+
   it('workflow and task context menus render', async () => {
     const workflows: WorkflowMeta[] = [{ id: 'wf-alpha', name: 'Alpha', status: 'running' }];
     const alpha = makeUITask({ id: 'task-alpha', description: 'First test task', status: 'running', workflowId: 'wf-alpha' });
