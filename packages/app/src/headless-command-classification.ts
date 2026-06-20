@@ -99,6 +99,9 @@ export function resolveHeadlessTargetWorkflowId(
 export function isHeadlessReadOnlyCommand(args: string[]): boolean {
   const command = args[0];
   if (!command || command === '--help' || command === '-h') return true;
+  if (command === 'worker') {
+    return args[1] !== 'autofix';
+  }
   return findHeadlessCommandDefinition(command)?.kind === 'read';
 }
 
@@ -108,6 +111,10 @@ export function isHeadlessMutatingCommand(args: string[]): boolean {
 
   if (command === 'set') {
     return isMutatingSetSubcommand(args[1]);
+  }
+
+  if (command === 'worker') {
+    return args[1] === 'autofix';
   }
 
   return findHeadlessCommandDefinition(command)?.kind === 'write';

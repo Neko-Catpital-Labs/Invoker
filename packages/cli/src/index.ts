@@ -53,6 +53,10 @@ type LiveSubmissionResult = {
   ownerId?: string;
 };
 
+type WorkerStartResult = {
+  ok: true;
+};
+
 type CliDeps = {
   createMessageBus?: () => Promise<MessageBus> | MessageBus;
 };
@@ -130,12 +134,16 @@ function usage(): string {
   return [
     'Usage:',
     '  invoker-cli run <plan.yaml> [--live|--standalone] [--db-dir <path>] [--config <path>] [--json]',
+    '  invoker-cli worker autofix',
+    '  invoker-cli worker [list|status]',
     '  invoker-cli doctor [--fix] [--json]',
     '  invoker-cli --help',
     '  invoker-cli --version',
     '',
     'Commands:',
     '  run <plan.yaml>  Submit to a live Invoker UI when available, otherwise run standalone.',
+    '  worker autofix  Start the long-running auto-fix recovery worker on the Invoker owner.',
+    '  worker list     List explicit long-running worker services.',
     '  doctor          Check external runtime tools used by Invoker executors.',
     '',
     'Options:',
@@ -228,7 +236,7 @@ function runDoctor(argv: string[]): number {
   return results.every((result) => result.available) ? 0 : 1;
 }
 
-function parseArgs(argv: string[]): { command?: string; planPath?: string; options: CliOptions } {
+function parseArgs(argv: string[]): { command?: string; planPath?: string; workerSubcommand?: string; options: CliOptions } {
   const options: CliOptions = { json: false, mode: 'auto' };
   const positional: string[] = [];
 
@@ -264,6 +272,7 @@ function parseArgs(argv: string[]): { command?: string; planPath?: string; optio
   return {
     command: positional[0],
     planPath: positional[1],
+    workerSubcommand: positional[1],
     options,
   };
 }
@@ -314,6 +323,30 @@ async function discoverLiveOwner(bus: MessageBus, timeoutMs = 1_000): Promise<Li
   }
 }
 
+async function discoverSharedOwner(bus: MessageBus, timeoutMs = 1_000): Promise<LiveOwnerInfo | null> {
+  try {
+    const raw = await withTimeout(
+      bus.request('headless.owner-ping', {}),
+      timeoutMs,
+    );
+    if (!raw || typeof raw !== 'object') return null;
+    const response = raw as Record<string, unknown>;
+    if (response.mode !== 'gui' && response.mode !== 'standalone') return null;
+    return {
+      ownerId: typeof response.ownerId === 'string' ? response.ownerId : '',
+      mode: String(response.mode),
+    };
+  } catch (err) {
+    if (err instanceof TransportError && err.code === TransportErrorCode.NO_HANDLER) {
+      return null;
+    }
+    if (err instanceof Error && err.message.startsWith('Timed out after ')) {
+      return null;
+    }
+    return null;
+  }
+}
+
 function validateLiveSubmissionResponse(raw: unknown): LiveSubmissionResult {
   if (!raw || typeof raw !== 'object') {
     throw new Error(`Live owner returned invalid headless.run response: expected object, got ${raw === null ? 'null' : typeof raw}`);
@@ -350,6 +383,32 @@ async function submitPlanToLiveOwner(
     ...validateLiveSubmissionResponse(raw),
     ownerId: owner.ownerId,
   };
+}
+
+function validateWorkerStartResponse(raw: unknown): WorkerStartResult {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error(`Live owner returned invalid headless.exec response: expected object, got ${raw === null ? 'null' : typeof raw}`);
+  }
+  const response = raw as Record<string, unknown>;
+  if (response.ok !== true) {
+    throw new Error('Live owner returned invalid headless.exec response: missing ok=true');
+  }
+  return { ok: true };
+}
+
+async function startWorkerOnLiveOwner(
+  subcommand: string,
+  bus: MessageBus,
+  timeoutMs = 5_000,
+): Promise<WorkerStartResult> {
+  const raw = await withTimeout(
+    bus.request('headless.exec', {
+      args: ['worker', subcommand],
+      traceId: createTraceId('invoker-cli.headless.exec.worker'),
+    }),
+    timeoutMs,
+  );
+  return validateWorkerStartResponse(raw);
 }
 
 function loadRuntimeConfig(configPath?: string): CliRuntimeConfig {
@@ -535,6 +594,35 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
       process.stdout.write(`${VERSION}\n`);
       return 0;
     }
+    if (parsed.command === 'worker') {
+      const subcommand = parsed.workerSubcommand;
+      if (!subcommand || subcommand === 'list' || subcommand === 'status') {
+        process.stdout.write('Worker services:\n  autofix  long-running auto-fix recovery worker\n');
+        return 0;
+      }
+      if (subcommand !== 'autofix') {
+        throw new Error(`Unknown worker sub-command: ${subcommand}. Usage: invoker-cli worker autofix`);
+      }
+      if (parsed.options.mode === 'standalone') {
+        throw new Error('worker autofix requires a shared Invoker owner; --standalone is not supported');
+      }
+      if (parsed.options.dbDir) {
+        throw new Error('--db-dir cannot be used with worker autofix because the owner database is authoritative');
+      }
+      bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
+      const owner = await discoverSharedOwner(bus);
+      if (!owner) {
+        throw new Error('No running Invoker owner is reachable; start the UI or standalone owner before starting worker autofix');
+      }
+      await startWorkerOnLiveOwner(subcommand, bus);
+      if (parsed.options.json) {
+        process.stdout.write(`${JSON.stringify({ ok: true, worker: subcommand, ownerId: owner.ownerId })}\n`);
+      } else {
+        process.stdout.write(`Started ${subcommand} worker on shared owner ${owner.ownerId}\n`);
+      }
+      return 0;
+    }
+
     if (parsed.command !== 'run') {
       throw new Error(`Unknown command: ${parsed.command}`);
     }

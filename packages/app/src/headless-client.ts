@@ -121,25 +121,26 @@ async function delegateMutation(
   noTrackTimeoutMs: number = DEFAULT_NO_TRACK_DELEGATION_TIMEOUT_MS,
 ): Promise<DelegationOutcome> {
   const command = args[0];
-  const timeoutMs = noTrack
+  const effectiveNoTrack = command === 'worker' ? false : noTrack;
+  const timeoutMs = effectiveNoTrack
     ? noTrackTimeoutMs
     : command === 'run' || command === 'resume'
       ? 5_000
       : await resolveDelegationTimeoutMs(args);
   delegationClientLog(
-    `delegateMutation command=${command ?? '<missing>'} timeoutMs=${timeoutMs} noTrack=${noTrack ? 'true' : 'false'} waitForApproval=${waitForApproval ? 'true' : 'false'}`,
+    `delegateMutation command=${command ?? '<missing>'} timeoutMs=${timeoutMs} noTrack=${effectiveNoTrack ? 'true' : 'false'} waitForApproval=${waitForApproval ? 'true' : 'false'}`,
   );
   if (command === 'run') {
     const planPath = args[1];
     if (!planPath) throw new Error('Missing plan file. Usage: --headless run <plan.yaml>');
-    return tryDelegateRun(planPath, bus, waitForApproval, noTrack, timeoutMs);
+    return tryDelegateRun(planPath, bus, waitForApproval, effectiveNoTrack, timeoutMs);
   }
   if (command === 'resume') {
     const workflowId = args[1];
     if (!workflowId) throw new Error('Missing workflowId. Usage: --headless resume <id>');
-    return tryDelegateResume(workflowId, bus, waitForApproval, noTrack, timeoutMs);
+    return tryDelegateResume(workflowId, bus, waitForApproval, effectiveNoTrack, timeoutMs);
   }
-  return tryDelegateExec(args, bus, waitForApproval, noTrack, timeoutMs);
+  return tryDelegateExec(args, bus, waitForApproval, effectiveNoTrack, timeoutMs);
 }
 
 async function delegateReadOnlyQuery(

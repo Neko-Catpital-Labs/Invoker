@@ -98,6 +98,62 @@ describe('headless-client', () => {
     }));
   });
 
+  it('delegates worker autofix as an explicit owner-backed worker command', async () => {
+    const bus = new LocalBus();
+    const ownerHandler = vi.fn(async () => ({ ok: true }));
+    bus.onRequest('headless.exec', ownerHandler);
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-worker', mode: 'standalone' }));
+
+    const exitCode = await runHeadlessClientCommand(['worker', 'autofix'], {
+      messageBus: bus,
+      ensureStandaloneOwner: vi.fn(async () => {}),
+      runElectronHeadless: vi.fn(async () => 0),
+    });
+
+    expect(exitCode).toBe(0);
+    expect(ownerHandler).toHaveBeenCalledTimes(1);
+    expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
+      args: ['worker', 'autofix'],
+      waitForApproval: false,
+    }));
+  });
+
+  it('bootstraps an owner before delegating worker autofix', async () => {
+    const bus = new LocalBus();
+    const ownerHandler = vi.fn(async () => ({ ok: true }));
+    const ensureStandaloneOwner = vi.fn(async () => {
+      bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-worker-bootstrap', mode: 'standalone' }));
+      bus.onRequest('headless.exec', ownerHandler);
+    });
+
+    const exitCode = await runHeadlessClientCommand(['worker', 'autofix'], {
+      messageBus: bus,
+      ensureStandaloneOwner,
+      runElectronHeadless: vi.fn(async () => 0),
+    });
+
+    expect(exitCode).toBe(0);
+    expect(ensureStandaloneOwner).toHaveBeenCalledTimes(1);
+    expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
+      args: ['worker', 'autofix'],
+    }));
+  });
+
+  it('does not treat worker list as a mutating worker startup command', async () => {
+    const runElectronHeadless = vi.fn(async () => 0);
+    const ensureStandaloneOwner = vi.fn(async () => {});
+
+    const exitCode = await runHeadlessClientCommand(['worker', 'list'], {
+      messageBus: new LocalBus(),
+      ensureStandaloneOwner,
+      runElectronHeadless,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(ensureStandaloneOwner).not.toHaveBeenCalled();
+    expect(runElectronHeadless).toHaveBeenCalledWith(['worker', 'list']);
+  });
+
   it('delegates mutations to an existing GUI owner', async () => {
     const firstBus = new LocalBus();
     const secondBus = new LocalBus();
