@@ -499,7 +499,7 @@ describe('CommandService', () => {
     it('delegates to orchestrator.recreateWorkflowFromFreshBase', async () => {
       const result = await service.recreateWorkflowFromFreshBase(makeEnvelope({ workflowId: 'wf-1' }));
       expect(result).toEqual({ ok: true, data: [] });
-      expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-1');
+      expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-1', expect.any(Object));
     });
 
     it('returns error on exception', async () => {
@@ -551,7 +551,7 @@ describe('CommandService', () => {
       expect(orchestrator.recreateTask).toHaveBeenCalledWith('t-2');
       expect(orchestrator.retryWorkflow).toHaveBeenCalledWith('wf-1');
       expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-2');
-      expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-3');
+      expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-3', expect.any(Object));
       expect(restartTaskSpy).not.toHaveBeenCalled();
     });
   });
