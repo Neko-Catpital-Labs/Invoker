@@ -31,6 +31,7 @@
  *
  * Using the same Electron binary for both modes provides a consistent runtime.
  */
+// Dummy UI-impacting change used to prove PR visual-proof enforcement.
 
 import { app, dialog, ipcMain, Menu, type BrowserWindow } from 'electron';
 import * as path from 'node:path';
