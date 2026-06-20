@@ -1233,9 +1233,21 @@ export class TaskRunner {
               traceExecution(
                 `${RESTART_TO_BRANCH_TRACE} resolvePromise | task.config.isMergeNode = ${task.config.isMergeNode}`,
               );
+              if (this.isLaunchStale(task.id, attemptId, task.execution.generation ?? 0)) {
+                this.logger.warn(
+                  `[TaskRunner] suppressing stale completion response for task=${task.id} attemptId=${attemptId}`,
+                );
+                return;
+              }
               newlyStarted = this.orchestrator.handleWorkerResponse(normalizedResponse) ?? [];
             } catch (err) {
               this.logger.error(`[TaskRunner] worker response handling failed for task=${task.id}`, { err });
+              if (this.isLaunchStale(task.id, attemptId, task.execution.generation ?? 0)) {
+                this.logger.warn(
+                  `[TaskRunner] suppressing fallback failure response for stale completion task=${task.id} attemptId=${attemptId}`,
+                );
+                return;
+              }
               const errResponse: WorkResponse = {
                 requestId: response.requestId,
                 actionId: task.id,
