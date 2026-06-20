@@ -11,13 +11,25 @@
  *                  timer, drops SIGINT/SIGTERM handlers, and awaits the
  *                  in-flight tick before resolving
  *
- * This slice only establishes the contract. The recovery worker built on top
- * of it is intentionally behavior-neutral (its tick is a no-op by default), so
- * existing auto-fix paths keep running exactly as before — nothing is routed
- * through this runtime yet.
+ * The auto-fix recovery worker built on top of this runtime is a reconcile
+ * loop over persisted task state. It discovers eligible failed tasks and
+ * submits the normal fix command route; it never mutates task state directly.
  */
 
 import type { Logger } from '@invoker/contracts';
+import type {
+  WorkflowMutationIntent,
+  WorkflowMutationIntentStatus,
+  WorkflowMutationPriority,
+} from '@invoker/data-store';
+import { Channels, type MessageBus, type Unsubscribe } from '@invoker/transport';
+import type { TaskState } from '@invoker/workflow-core';
+import {
+  buildFixWithAgentMutationArgs,
+  listOpenFixIntentsForTask,
+} from './auto-fix-intents.js';
+import { shouldSkipAutoFixForError } from './auto-fix-gating.js';
+import type { RecoveryWorkerWakeupHint, WorkflowLifecycleEvent } from './lifecycle-events.js';
 
 /** Why a given tick is running. */
 export type WorkerTickReason = 'startup' | 'poll' | 'wake' | 'manual';
@@ -215,6 +227,253 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
 export const RECOVERY_WORKER_KIND = 'recovery';
 
 const DEFAULT_RECOVERY_POLL_INTERVAL_MS = 60_000;
+const AUTO_FIX_COMMAND_CHANNEL = 'invoker:fix-with-agent';
+
+export interface AutoFixRecoveryPersistence {
+  listWorkflows(): ReadonlyArray<{ id: string }>;
+  loadTasks(workflowId: string): TaskState[];
+  loadTask?(taskId: string): TaskState | undefined;
+  listWorkflowMutationIntents(
+    workflowId?: string,
+    statuses?: WorkflowMutationIntentStatus[],
+  ): WorkflowMutationIntent[];
+  logEvent?(taskId: string, eventType: string, payload?: unknown): void;
+}
+
+export interface AutoFixRecoverySubmitter {
+  submit(
+    workflowId: string,
+    priority: WorkflowMutationPriority,
+    channel: string,
+    args: unknown[],
+    options?: { deferDrain?: boolean },
+  ): number;
+}
+
+export interface AutoFixRecoveryPolicyOptions {
+  persistence: AutoFixRecoveryPersistence;
+  submitter: AutoFixRecoverySubmitter;
+  logger: Logger;
+  defaultAutoFixRetries?: number;
+  getAutoFixAgent?: () => string | undefined;
+  getRetryBudget?: (task: TaskState) => number;
+  consumeWakeups?: () => RecoveryWorkerWakeupHint[];
+}
+
+type AutoFixRecoveryCandidate = {
+  taskId: string;
+  workflowId: string;
+  generation: number;
+  taskStateVersion: number;
+  attemptId?: string;
+  source: 'scan' | 'wakeup';
+};
+
+function workflowIdForTask(task: TaskState): string | undefined {
+  return task.config.workflowId ?? task.id.split('/')[0];
+}
+
+function retryBudgetForTask(task: TaskState, options: AutoFixRecoveryPolicyOptions): number {
+  const raw = options.getRetryBudget?.(task) ?? options.defaultAutoFixRetries ?? 0;
+  if (!Number.isFinite(raw)) return 0;
+  return Math.min(Math.max(0, Math.floor(raw)), 10);
+}
+
+function isRuntimeAutoFixEligibleTask(task: TaskState, options: AutoFixRecoveryPolicyOptions): boolean {
+  if (task.status !== 'failed') return false;
+  if (task.config.isReconciliation) return false;
+  if (task.config.parentTask) return false;
+  if (shouldSkipAutoFixForError(task.execution.error)) return false;
+  const max = retryBudgetForTask(task, options);
+  if (max <= 0) return false;
+  return (task.execution.autoFixAttempts ?? 0) < max;
+}
+
+function candidateFromTask(task: TaskState): AutoFixRecoveryCandidate | undefined {
+  const workflowId = workflowIdForTask(task);
+  if (!workflowId) return undefined;
+  return {
+    taskId: task.id,
+    workflowId,
+    generation: task.execution.generation ?? 0,
+    taskStateVersion: task.taskStateVersion,
+    attemptId: task.execution.selectedAttemptId,
+    source: 'scan',
+  };
+}
+
+function candidateFromWakeup(wakeup: RecoveryWorkerWakeupHint): AutoFixRecoveryCandidate | undefined {
+  if (!wakeup.taskId || wakeup.taskStateVersion == null) return undefined;
+  return {
+    taskId: wakeup.taskId,
+    workflowId: wakeup.workflowId,
+    generation: wakeup.generation,
+    taskStateVersion: wakeup.taskStateVersion,
+    attemptId: wakeup.attemptId,
+    source: 'wakeup',
+  };
+}
+
+function dedupeCandidates(candidates: AutoFixRecoveryCandidate[]): AutoFixRecoveryCandidate[] {
+  const seen = new Set<string>();
+  const deduped: AutoFixRecoveryCandidate[] = [];
+  for (const candidate of candidates) {
+    const key = `${candidate.taskId}:${candidate.generation}:${candidate.taskStateVersion}:${candidate.attemptId ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(candidate);
+  }
+  return deduped;
+}
+
+function listScanCandidates(options: AutoFixRecoveryPolicyOptions): AutoFixRecoveryCandidate[] {
+  const candidates: AutoFixRecoveryCandidate[] = [];
+  for (const workflow of options.persistence.listWorkflows()) {
+    for (const task of options.persistence.loadTasks(workflow.id)) {
+      if (task.status !== 'failed') continue;
+      const candidate = candidateFromTask(task);
+      if (candidate) candidates.push(candidate);
+    }
+  }
+  return candidates;
+}
+
+function loadLatestTask(
+  candidate: AutoFixRecoveryCandidate,
+  options: AutoFixRecoveryPolicyOptions,
+): TaskState | undefined {
+  const direct = options.persistence.loadTask?.(candidate.taskId);
+  if (direct) return direct;
+  return options.persistence.loadTasks(candidate.workflowId).find((task) => task.id === candidate.taskId);
+}
+
+function logAutoFixWorkerEvent(
+  options: AutoFixRecoveryPolicyOptions,
+  taskId: string,
+  phase: string,
+  details: Record<string, unknown>,
+): void {
+  const payload = { phase, worker: RECOVERY_WORKER_KIND, ...details };
+  options.persistence.logEvent?.(taskId, 'debug.auto-fix', payload);
+  options.logger.debug?.(`[worker:${RECOVERY_WORKER_KIND}] ${phase}`, {
+    module: 'worker-runtime',
+    taskId,
+    ...details,
+  });
+}
+
+function skipAutoFixCandidate(
+  options: AutoFixRecoveryPolicyOptions,
+  candidate: AutoFixRecoveryCandidate,
+  reason: string,
+  details: Record<string, unknown> = {},
+): void {
+  logAutoFixWorkerEvent(options, candidate.taskId, 'worker-autofix-skip', {
+    reason,
+    source: candidate.source,
+    workflowId: candidate.workflowId,
+    generation: candidate.generation,
+    taskStateVersion: candidate.taskStateVersion,
+    attemptId: candidate.attemptId ?? null,
+    ...details,
+  });
+}
+
+function validateAutoFixCandidate(
+  candidate: AutoFixRecoveryCandidate,
+  options: AutoFixRecoveryPolicyOptions,
+): TaskState | undefined {
+  const latest = loadLatestTask(candidate, options);
+  if (!latest) {
+    skipAutoFixCandidate(options, candidate, 'task-not-found');
+    return undefined;
+  }
+
+  const latestWorkflowId = workflowIdForTask(latest);
+  if (latestWorkflowId !== candidate.workflowId) {
+    skipAutoFixCandidate(options, candidate, 'stale-workflow', { latestWorkflowId: latestWorkflowId ?? null });
+    return undefined;
+  }
+  if ((latest.execution.generation ?? 0) !== candidate.generation) {
+    skipAutoFixCandidate(options, candidate, 'stale-generation', {
+      latestGeneration: latest.execution.generation ?? 0,
+    });
+    return undefined;
+  }
+  if (latest.taskStateVersion !== candidate.taskStateVersion) {
+    skipAutoFixCandidate(options, candidate, 'stale-task-state-version', {
+      latestTaskStateVersion: latest.taskStateVersion,
+    });
+    return undefined;
+  }
+  if ((latest.execution.selectedAttemptId ?? null) !== (candidate.attemptId ?? null)) {
+    skipAutoFixCandidate(options, candidate, 'stale-attempt', {
+      latestAttemptId: latest.execution.selectedAttemptId ?? null,
+    });
+    return undefined;
+  }
+  if (!isRuntimeAutoFixEligibleTask(latest, options)) {
+    skipAutoFixCandidate(options, candidate, 'not-eligible', {
+      status: latest.status,
+      autoFixAttempts: latest.execution.autoFixAttempts ?? 0,
+      maxRetries: retryBudgetForTask(latest, options),
+      isReconciliation: Boolean(latest.config.isReconciliation),
+      hasParentTask: Boolean(latest.config.parentTask),
+      skippedForError: shouldSkipAutoFixForError(latest.execution.error),
+    });
+    return undefined;
+  }
+
+  const openIntents = options.persistence.listWorkflowMutationIntents(candidate.workflowId, ['queued', 'running']);
+  const openTaskFixIntents = listOpenFixIntentsForTask(openIntents, candidate.taskId);
+  if (openTaskFixIntents.length > 0) {
+    skipAutoFixCandidate(options, candidate, 'already-queued-intent', {
+      existingIntentIds: openTaskFixIntents.map((intent) => intent.id),
+    });
+    return undefined;
+  }
+
+  return latest;
+}
+
+export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions): WorkerTick {
+  return async (ctx) => {
+    const wakeups = options.consumeWakeups?.() ?? [];
+    const wakeupCandidates = wakeups.map(candidateFromWakeup).filter((c): c is AutoFixRecoveryCandidate => Boolean(c));
+    const candidates = dedupeCandidates(
+      wakeupCandidates.length > 0 && ctx.reason === 'wake'
+        ? wakeupCandidates
+        : listScanCandidates(options),
+    );
+    const submittedThisTick = new Set<string>();
+
+    for (const candidate of candidates) {
+      if (submittedThisTick.has(candidate.taskId)) {
+        skipAutoFixCandidate(options, candidate, 'duplicate-candidate');
+        continue;
+      }
+      const latest = validateAutoFixCandidate(candidate, options);
+      if (!latest) continue;
+
+      const configuredAgent = options.getAutoFixAgent?.()?.trim();
+      const selectedAgent = configuredAgent && configuredAgent.length > 0 ? configuredAgent : undefined;
+      const args = buildFixWithAgentMutationArgs(latest.id, selectedAgent, { autoFix: true });
+      const intentId = options.submitter.submit(candidate.workflowId, 'normal', AUTO_FIX_COMMAND_CHANNEL, args);
+      submittedThisTick.add(candidate.taskId);
+      logAutoFixWorkerEvent(options, candidate.taskId, 'worker-autofix-submitted', {
+        workflowId: candidate.workflowId,
+        intentId,
+        channel: AUTO_FIX_COMMAND_CHANNEL,
+        generation: candidate.generation,
+        taskStateVersion: candidate.taskStateVersion,
+        attemptId: candidate.attemptId ?? null,
+        agent: selectedAgent ?? null,
+        autoFixAttempts: latest.execution.autoFixAttempts ?? 0,
+        maxRetries: retryBudgetForTask(latest, options),
+      });
+    }
+  };
+}
 
 export interface RecoveryWorkerOptions {
   logger: Logger;
@@ -222,27 +481,64 @@ export interface RecoveryWorkerOptions {
   intervalMs?: number;
   installSignalHandlers?: boolean;
   tickOnStart?: boolean;
-  /**
-   * Behavior-neutral override for the tick. Defaults to a no-op for this slice:
-   * the recovery worker does not submit recovery commands yet, and existing
-   * auto-fix paths continue to run through their current owner.
-   */
+  messageBus?: MessageBus;
+  autoFix?: Omit<AutoFixRecoveryPolicyOptions, 'logger' | 'consumeWakeups'>;
   onTick?: WorkerTick;
 }
 
 /**
- * Create the recovery worker runtime. By default its tick is a no-op so that
- * standing up the worker is behavior-neutral — no recovery commands are
- * submitted and no existing auto-fix path is rerouted in this slice.
+ * Create the recovery worker runtime. When auto-fix dependencies are supplied,
+ * the tick scans persisted task state and submits normal fix command intents.
  */
 export function createRecoveryWorker(options: RecoveryWorkerOptions): WorkerRuntime {
-  return createWorkerRuntime({
+  const pendingWakeups: RecoveryWorkerWakeupHint[] = [];
+  let lifecycleUnsubscribe: Unsubscribe | undefined;
+  const onTick = options.onTick ?? (
+    options.autoFix
+      ? createAutoFixRecoveryTick({
+        ...options.autoFix,
+        logger: options.logger,
+        consumeWakeups: () => pendingWakeups.splice(0),
+      })
+      : (() => {})
+  );
+  const runtime = createWorkerRuntime({
     kind: RECOVERY_WORKER_KIND,
     instanceId: options.instanceId,
     logger: options.logger,
     intervalMs: options.intervalMs ?? DEFAULT_RECOVERY_POLL_INTERVAL_MS,
     tickOnStart: options.tickOnStart ?? false,
     installSignalHandlers: options.installSignalHandlers,
-    onTick: options.onTick ?? (() => {}),
+    onTick,
   });
+  if (!options.messageBus || !options.autoFix || options.onTick) {
+    return runtime;
+  }
+
+  const start = (): void => {
+    if (!lifecycleUnsubscribe) {
+      lifecycleUnsubscribe = options.messageBus?.subscribe<WorkflowLifecycleEvent>(
+        Channels.WORKFLOW_LIFECYCLE,
+        (event) => {
+          pendingWakeups.push(event.recoveryWakeup);
+          runtime.wake('wake');
+        },
+      );
+    }
+    runtime.start();
+  };
+  const stop = async (): Promise<void> => {
+    lifecycleUnsubscribe?.();
+    lifecycleUnsubscribe = undefined;
+    await runtime.stop();
+  };
+
+  return {
+    identity: runtime.identity,
+    start,
+    wake: runtime.wake,
+    tick: runtime.tick,
+    stop,
+    isRunning: runtime.isRunning,
+  };
 }
