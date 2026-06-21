@@ -2705,7 +2705,7 @@ describe('TaskRunner', () => {
       expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
         config: expect.objectContaining({ runnerKind: 'worktree' }),
         execution: expect.objectContaining({ branch: 'plan/feature', workspacePath: '/tmp/mock-wt' }),
-      }));
+      }), expect.objectContaining({ generation: 0 }));
     });
   });
 
@@ -3081,7 +3081,7 @@ describe('TaskRunner', () => {
       expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
         config: expect.objectContaining({ runnerKind: 'worktree' }),
         execution: expect.objectContaining({ branch: 'plan/feature', workspacePath: '/tmp/mock-wt' }),
-      }));
+      }), expect.objectContaining({ generation: 0 }));
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
       expect(onComplete).toHaveBeenCalledWith(
         '__merge__wf-1',
@@ -3270,8 +3270,23 @@ describe('TaskRunner', () => {
           reviewUrl: 'https://github.com/owner/repo/pull/42',
           reviewId: 'owner/repo#42',
           reviewStatus: 'Awaiting review',
+          reviewGate: expect.objectContaining({
+            activeGeneration: 0,
+            completion: { required: 'all', status: 'approved' },
+            artifacts: [expect.objectContaining({
+              id: 'owner/repo#42',
+              title: 'Test Workflow',
+              url: 'https://github.com/owner/repo/pull/42',
+              providerId: 'owner/repo#42',
+              branch: 'plan/feature',
+              baseBranch: 'master',
+              required: true,
+              status: 'open',
+              generation: 0,
+            })],
+          }),
         }),
-      }));
+      }), expect.objectContaining({ generation: 0 }));
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
       expect(onComplete).toHaveBeenCalledWith(
         '__merge__wf-1',
@@ -3384,7 +3399,7 @@ describe('TaskRunner', () => {
           workspacePath: gateWorkspace,
           branch: 'plan/example',
         }),
-      }));
+      }), expect.objectContaining({ generation: 0 }));
     });
 
     it('reproduces wf-1778431030512-12 visual-proof markdown in the merge-gate PR body', async () => {
@@ -3548,7 +3563,7 @@ console.log(JSON.stringify(out));
       expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
         config: expect.objectContaining({ runnerKind: 'worktree' }),
         execution: expect.objectContaining({ workspacePath: undefined }),
-      }));
+      }), expect.objectContaining({ generation: 0 }));
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
     });
 
@@ -3679,8 +3694,23 @@ console.log(JSON.stringify(out));
           reviewUrl: 'https://github.com/owner/repo/pull/55',
           reviewId: 'owner/repo#55',
           reviewStatus: 'Awaiting review',
+          reviewGate: expect.objectContaining({
+            activeGeneration: 0,
+            completion: { required: 'all', status: 'approved' },
+            artifacts: [expect.objectContaining({
+              id: 'owner/repo#55',
+              title: 'Test Workflow',
+              url: 'https://github.com/owner/repo/pull/55',
+              providerId: 'owner/repo#55',
+              branch: 'plan/feature',
+              baseBranch: 'master',
+              required: true,
+              status: 'open',
+              generation: 0,
+            })],
+          }),
         }),
-      }));
+      }), expect.objectContaining({ generation: 0 }));
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
     });
 
@@ -3861,7 +3891,7 @@ console.log(JSON.stringify(out));
       expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
         config: expect.objectContaining({ runnerKind: 'worktree' }),
         execution: expect.objectContaining({ workspacePath: undefined }),
-      }));
+      }), expect.objectContaining({ generation: 0 }));
     });
 
     it('approveMerge performs the final merge step', async () => {
@@ -4300,6 +4330,7 @@ console.log(JSON.stringify(out));
         expect.objectContaining({
           config: expect.objectContaining({ summary: '## Summary\nTest summary' }),
         }),
+        expect.objectContaining({ generation: 0 }),
       );
     });
 
@@ -4360,6 +4391,7 @@ console.log(JSON.stringify(out));
         expect.objectContaining({
           config: expect.objectContaining({ summary: '## Summary\nManual summary' }),
         }),
+        expect.objectContaining({ generation: 0 }),
       );
     });
 
@@ -4936,6 +4968,7 @@ console.log(JSON.stringify(out));
             execution: { reviewId: 'owner/repo#201' },
           }),
         ];
+
         const orchestrator = {
           getTask: (id: string) => allTasks.find(t => t.id === id),
           getAllTasks: () => allTasks,
@@ -4964,6 +4997,148 @@ console.log(JSON.stringify(out));
           identifier: 'owner/repo#201',
           cwd: '/runner-base-cwd',
         });
+      });
+
+      it('polls all current reviewGate artifacts and approves only after every required artifact is approved', async () => {
+        const downstream = makeTask({ id: 'downstream-after-stack', status: 'running' });
+        const reviewGate = {
+          activeGeneration: 4,
+          completion: { required: 'all' as const, status: 'approved' as const },
+          artifacts: [
+            { id: 'contracts', providerId: 'pr-1', required: true, status: 'open' as const, generation: 4 },
+            { id: 'runtime', providerId: 'pr-2', required: true, status: 'open' as const, generation: 4, dependsOn: ['contracts'] },
+          ],
+        };
+        const task = makeTask({
+          id: 'merge-stack',
+          status: 'review_ready',
+          config: { isMergeNode: true },
+          execution: {
+            generation: 4,
+            selectedAttemptId: 'attempt-1',
+            reviewGate,
+            workspacePath: '/workspace/stack-gate',
+          },
+        });
+        const orchestrator = {
+          getTask: (id: string) => (id === task.id ? task : undefined),
+          getAllTasks: () => [task],
+          approve: vi.fn().mockResolvedValue([downstream]),
+        };
+        const persistence = {
+          updateTask: vi.fn((id: string, changes: any) => {
+            if (id === task.id && changes.execution?.reviewGate) {
+              (task as any).execution = { ...task.execution, ...changes.execution };
+            }
+          }),
+        };
+        const mergeGateProvider = {
+          checkApproval: vi.fn()
+            .mockResolvedValueOnce({ approved: true, rejected: false, statusText: 'Approved one' })
+            .mockResolvedValueOnce({ approved: false, rejected: false, statusText: 'Pending second' })
+            .mockResolvedValueOnce({ approved: true, rejected: false, statusText: 'Still approved' })
+            .mockResolvedValueOnce({ approved: true, rejected: false, statusText: 'Approved both' }),
+        };
+
+        const executor = new TaskRunner({
+          orchestrator: orchestrator as any,
+          persistence: persistence as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          cwd: '/runner-base-cwd',
+          mergeGateProvider: mergeGateProvider as any,
+        });
+        const executeTasks = vi.spyOn(executor, 'executeTasks').mockResolvedValue(undefined);
+
+        await executor.checkMergeGateStatuses();
+
+        expect(mergeGateProvider.checkApproval).toHaveBeenNthCalledWith(1, {
+          identifier: 'pr-1',
+          cwd: '/workspace/stack-gate',
+        });
+        expect(mergeGateProvider.checkApproval).toHaveBeenNthCalledWith(2, {
+          identifier: 'pr-2',
+          cwd: '/workspace/stack-gate',
+        });
+        expect(orchestrator.approve).not.toHaveBeenCalled();
+        expect(task.execution.reviewGate?.artifacts).toEqual([
+          expect.objectContaining({ id: 'contracts', status: 'approved' }),
+          expect.objectContaining({ id: 'runtime', status: 'open', rawStatus: 'Pending second' }),
+        ]);
+
+        await executor.checkMergeGateStatuses();
+
+        expect(orchestrator.approve).toHaveBeenCalledTimes(1);
+        expect(orchestrator.approve).toHaveBeenCalledWith('merge-stack');
+        expect(executeTasks).toHaveBeenCalledWith([downstream]);
+        expect(task.execution.reviewGate?.artifacts).toEqual([
+          expect.objectContaining({ id: 'contracts', status: 'approved' }),
+          expect.objectContaining({ id: 'runtime', status: 'approved' }),
+        ]);
+      });
+
+      it('skips stale reviewGate poll results when the task generation changes before applying them', async () => {
+        const initialTask = makeTask({
+          id: 'merge-stale-stack',
+          status: 'review_ready',
+          config: { isMergeNode: true },
+          execution: {
+            generation: 4,
+            selectedAttemptId: 'attempt-1',
+            reviewGate: {
+              activeGeneration: 4,
+              completion: { required: 'all' as const, status: 'approved' as const },
+              artifacts: [
+                { id: 'contracts', providerId: 'pr-1', required: true, status: 'open' as const, generation: 4 },
+              ],
+            },
+          },
+        });
+        const newerTask = makeTask({
+          id: 'merge-stale-stack',
+          status: 'review_ready',
+          config: { isMergeNode: true },
+          execution: {
+            ...initialTask.execution,
+            generation: 5,
+            reviewGate: {
+              activeGeneration: 5,
+              completion: { required: 'all' as const, status: 'approved' as const },
+              artifacts: [
+                { id: 'contracts-v2', providerId: 'pr-2', required: true, status: 'open' as const, generation: 5 },
+              ],
+            },
+          },
+        });
+        const orchestrator = {
+          getTask: vi.fn(() => newerTask),
+          getAllTasks: () => [initialTask],
+          approve: vi.fn(),
+        };
+        const persistence = { updateTask: vi.fn() };
+        const mergeGateProvider = {
+          checkApproval: vi.fn().mockResolvedValue({
+            approved: true,
+            rejected: false,
+            statusText: 'Approved stale',
+          }),
+        };
+
+        const executor = new TaskRunner({
+          orchestrator: orchestrator as any,
+          persistence: persistence as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          cwd: '/runner-base-cwd',
+          mergeGateProvider: mergeGateProvider as any,
+        });
+
+        await executor.checkMergeGateStatuses();
+
+        expect(mergeGateProvider.checkApproval).toHaveBeenCalledWith({
+          identifier: 'pr-1',
+          cwd: '/runner-base-cwd',
+        });
+        expect(persistence.updateTask).not.toHaveBeenCalled();
+        expect(orchestrator.approve).not.toHaveBeenCalled();
       });
 
       it('merged status with workspacePath triggers orchestrator.approve', async () => {
