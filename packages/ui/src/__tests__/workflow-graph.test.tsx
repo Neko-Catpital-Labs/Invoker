@@ -1,5 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { WorkflowGraph } from '../components/WorkflowGraph.js';
 import { createGraphCameraCommandIssuer } from '../lib/graph-camera.js';
 import type { TaskState, WorkflowMeta, WorkflowStatus } from '../types.js';
@@ -13,6 +15,11 @@ vi.mock('@xyflow/react', async () => {
 const fitViewMock = (ReactFlowModule as unknown as { __fitViewMock: Mock }).__fitViewMock;
 const setCenterMock = (ReactFlowModule as unknown as { __setCenterMock: Mock }).__setCenterMock;
 const getZoomMock = (ReactFlowModule as unknown as { __getZoomMock: Mock }).__getZoomMock;
+
+const source = readFileSync(
+  resolve(__dirname, '..', 'components', 'WorkflowGraph.tsx'),
+  'utf-8',
+);
 
 function wf(id: string, status: WorkflowStatus, overrides: Partial<WorkflowMeta> = {}): WorkflowMeta {
   return { id, name: id, status, ...overrides };
@@ -482,5 +489,18 @@ describe('WorkflowGraph', () => {
     // A manual move must never autofocus the graph.
     expect(setCenterMock).not.toHaveBeenCalled();
     expect(fitViewMock).not.toHaveBeenCalled();
+  });
+
+  it('uses a scoped bounded watchdog for React Flow recovery', () => {
+    const reactFlowBlock = source.slice(
+      source.indexOf('<ReactFlow'),
+      source.indexOf('</ReactFlow>'),
+    );
+    expect(source).toContain('const WATCHDOG_RECOVERY_MISS_COUNT = 3;');
+    expect(source).toContain('setFlowInstanceKey((key) => key + 1)');
+    expect(reactFlowBlock).toContain('key={flowInstanceKey}');
+    expect(source).toContain('graphRootRef');
+    expect(source).toContain('graphRootRef.current');
+    expect(source).toContain('root.querySelectorAll');
   });
 });

@@ -252,13 +252,13 @@ describe('TaskDAG stability', () => {
   // ── Watchdog detection logic ──────────────────────────────
   describe('watchdog detection logic', () => {
     function shouldTrigger(
-      domNodeCount: number,
-      hiddenCount: number,
+      renderedNodeElementCount: number,
+      missingRenderedNodeCount: number,
       propsNodeCount: number,
     ): boolean {
       return (
-        (domNodeCount === 0 && propsNodeCount > 0) ||
-        (hiddenCount > 0 && hiddenCount === domNodeCount)
+        (renderedNodeElementCount === 0 && propsNodeCount > 0) ||
+        (missingRenderedNodeCount > 0 && missingRenderedNodeCount === renderedNodeElementCount)
       );
     }
 
@@ -310,6 +310,13 @@ describe('TaskDAG stability', () => {
       expect(source).toContain('const WATCHDOG_RECOVERY_MISS_COUNT = 3;');
       expect(source).toContain('setFlowInstanceKey((key) => key + 1)');
       expect(reactFlowBlock).toContain('key={flowInstanceKey}');
+    });
+
+    it('scopes watchdog DOM queries to the graph root', () => {
+      expect(source).toContain('graphRootRef');
+      expect(source).toContain('graphRootRef.current');
+      expect(source).toContain('root.querySelectorAll');
+      expect(source).not.toContain('document.querySelectorAll');
     });
   });
 
