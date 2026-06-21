@@ -10,11 +10,6 @@
  *   - shutdown   — `stop()` is deterministic and idempotent: it clears the
  *                  timer, drops SIGINT/SIGTERM handlers, and awaits the
  *                  in-flight tick before resolving
- *
- * This slice only establishes the contract. The recovery worker built on top
- * of it is intentionally behavior-neutral (its tick is a no-op by default), so
- * existing auto-fix paths keep running exactly as before — nothing is routed
- * through this runtime yet.
  */
 
 import type { Logger } from '@invoker/contracts';
@@ -207,42 +202,4 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
   const isRunning = (): boolean => started && !stopped;
 
   return { identity, start, wake, tick, stop, isRunning };
-}
-
-// ── Recovery worker ──────────────────────────────────────────
-
-/** Public worker kind for the auto-fix recovery worker. */
-export const RECOVERY_WORKER_KIND = 'recovery';
-
-const DEFAULT_RECOVERY_POLL_INTERVAL_MS = 60_000;
-
-export interface RecoveryWorkerOptions {
-  logger: Logger;
-  instanceId?: string;
-  intervalMs?: number;
-  installSignalHandlers?: boolean;
-  tickOnStart?: boolean;
-  /**
-   * Behavior-neutral override for the tick. Defaults to a no-op for this slice:
-   * the recovery worker does not submit recovery commands yet, and existing
-   * auto-fix paths continue to run through their current owner.
-   */
-  onTick?: WorkerTick;
-}
-
-/**
- * Create the recovery worker runtime. By default its tick is a no-op so that
- * standing up the worker is behavior-neutral — no recovery commands are
- * submitted and no existing auto-fix path is rerouted in this slice.
- */
-export function createRecoveryWorker(options: RecoveryWorkerOptions): WorkerRuntime {
-  return createWorkerRuntime({
-    kind: RECOVERY_WORKER_KIND,
-    instanceId: options.instanceId,
-    logger: options.logger,
-    intervalMs: options.intervalMs ?? DEFAULT_RECOVERY_POLL_INTERVAL_MS,
-    tickOnStart: options.tickOnStart ?? false,
-    installSignalHandlers: options.installSignalHandlers,
-    onTick: options.onTick ?? (() => {}),
-  });
 }
