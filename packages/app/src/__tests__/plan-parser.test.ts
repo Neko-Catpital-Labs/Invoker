@@ -787,6 +787,96 @@ tasks:
     const result = parsePlan(yaml);
     expect(result.visualProof).toBeUndefined();
   });
+
+  it('normalizes github mergeMode to external_review and default reviewGate', () => {
+    const yaml = `
+name: GitHub Review Gate
+repoUrl: git@github.com:test/repo.git
+mergeMode: github
+tasks:
+  - id: task-1
+    description: Do something
+    command: echo hello
+`;
+    const result = parsePlan(yaml);
+    expect(result.mergeMode).toBe('external_review');
+    expect(result.reviewProvider).toBe('github');
+    expect(result.reviewGate).toEqual({
+      type: 'pull_requests',
+      authoring: { mode: 'automatic', preferredShape: 'stacked_diffs' },
+      completion: { required: 'all', state: 'merged' },
+    });
+  });
+
+  it('normalizes partial reviewGate blocks to defaults', () => {
+    const yaml = `
+name: Manual Review Gate
+repoUrl: git@github.com:test/repo.git
+mergeMode: external_review
+reviewGate:
+  authoring:
+    mode: manual
+tasks:
+  - id: task-1
+    description: Do something
+    command: echo hello
+`;
+    const result = parsePlan(yaml);
+    expect(result.reviewGate).toEqual({
+      type: 'pull_requests',
+      authoring: { mode: 'manual', preferredShape: 'stacked_diffs' },
+      completion: { required: 'all', state: 'merged' },
+    });
+  });
+
+  it('rejects numeric reviewGate completion counts', () => {
+    const yaml = `
+name: Numeric Review Gate
+repoUrl: git@github.com:test/repo.git
+mergeMode: external_review
+reviewGate:
+  completion:
+    required: 3
+tasks:
+  - id: task-1
+    description: Do something
+    command: echo hello
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow('reviewGate.completion.required');
+  });
+
+  it('rejects fixed reviewGate PR count fields', () => {
+    const yaml = `
+name: Counted Review Gate
+repoUrl: git@github.com:test/repo.git
+mergeMode: external_review
+reviewGate:
+  requiredPullRequests: 3
+tasks:
+  - id: task-1
+    description: Do something
+    command: echo hello
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow('reviewGate.requiredPullRequests');
+  });
+
+  it('rejects unknown reviewGate fields by field name', () => {
+    const yaml = `
+name: Bad Review Gate
+repoUrl: git@github.com:test/repo.git
+mergeMode: external_review
+reviewGate:
+  type: issues
+tasks:
+  - id: task-1
+    description: Do something
+    command: echo hello
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow('reviewGate.type');
+  });
 });
 
 describe('detectDefaultBranch', () => {
