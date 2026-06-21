@@ -61,7 +61,7 @@ import {
   isDispatchableLaunch,
 } from './global-topup.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
-import { RECOVERY_WORKER_KIND } from './worker-runtime.js';
+import { createRecoveryWorker, RECOVERY_WORKER_KIND } from './worker-runtime.js';
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
 import { trackWorkflow } from './headless-watch.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
@@ -1147,7 +1147,7 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       await headlessQuerySelect(args[1], deps);
       break;
     case 'worker':
-      headlessWorker(args[1]);
+      await headlessWorker(args.slice(1), deps);
       break;
 
     // ── Deprecated aliases → query ──
@@ -1206,26 +1206,77 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
 }
 
 /**
- * Worker kinds exposed to the CLI. Each entry is `available: false` until the
- * worker actually performs work; unavailable kinds are reported as such instead
- * of being silently advertised as functional.
+ * Worker kinds exposed to the CLI. Worker commands are explicit long-running
+ * service surfaces; normal workflow commands do not start them implicitly.
  */
-const HEADLESS_WORKER_KINDS: ReadonlyArray<{ kind: string; available: boolean; note: string }> = [
+const HEADLESS_WORKER_KINDS: ReadonlyArray<{ kind: string; command: string; note: string }> = [
   {
     kind: RECOVERY_WORKER_KIND,
-    available: false,
-    note: 'no-op in this slice; auto-fix recovery still runs through its existing owner',
+    command: 'autofix',
+    note: 'long-running auto-fix recovery worker',
   },
 ];
 
-function headlessWorker(subCommand: string | undefined): void {
+function parseWorkerAutofixArgs(args: string[]): { once: boolean; intervalMs: number | undefined } {
+  let once = false;
+  let intervalMs: number | undefined;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === '--once') {
+      once = true;
+    } else if (arg === '--interval-ms') {
+      const value = args[index + 1];
+      if (!value) throw new Error('Missing value for --interval-ms');
+      const parsed = Number.parseInt(value, 10);
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        throw new Error(`Invalid --interval-ms value: ${value}`);
+      }
+      intervalMs = parsed;
+      index += 1;
+    } else {
+      throw new Error(`Unknown worker autofix option: ${arg}`);
+    }
+  }
+  return { once, intervalMs };
+}
+
+async function runAutofixWorker(args: string[], deps: Pick<HeadlessDeps, 'logger'>): Promise<void> {
+  const options = parseWorkerAutofixArgs(args);
+  const worker = createRecoveryWorker({
+    logger: deps.logger,
+    intervalMs: options.intervalMs,
+    tickOnStart: false,
+    installSignalHandlers: !options.once,
+  });
+  if (options.once) {
+    await worker.tick('manual');
+    await worker.stop();
+    process.stdout.write(`[worker:autofix] tick completed: ${worker.identity.instanceId}\n`);
+    return;
+  }
+
+  worker.start();
+  process.stdout.write(`[worker:autofix] started: ${worker.identity.instanceId}\n`);
+  await new Promise<void>((resolveStop) => {
+    const finish = (): void => resolveStop();
+    process.once('SIGINT', finish);
+    process.once('SIGTERM', finish);
+  });
+  await worker.stop();
+}
+
+async function headlessWorker(args: string[], deps: Pick<HeadlessDeps, 'logger'>): Promise<void> {
+  const subCommand = args[0];
+  if (subCommand === 'autofix') {
+    await runAutofixWorker(args.slice(1), deps);
+    return;
+  }
   if (subCommand && subCommand !== 'list' && subCommand !== 'status') {
-    throw new Error(`Unknown worker sub-command: "${subCommand}". Use: list, status`);
+    throw new Error(`Unknown worker sub-command: "${subCommand}". Use: autofix, list, status`);
   }
   process.stdout.write(`${BOLD}Worker kinds${RESET}\n`);
   for (const worker of HEADLESS_WORKER_KINDS) {
-    const status = worker.available ? 'available' : 'unavailable';
-    process.stdout.write(`  ${worker.kind} — ${status} (${worker.note})\n`);
+    process.stdout.write(`  ${worker.command} — ${worker.note} (kind: ${worker.kind})\n`);
   }
 }
 
@@ -1310,7 +1361,8 @@ ${BOLD}Lifecycle:${RESET}
   delete-all                                          Delete all workflows (requires INVOKER_ALLOW_DELETE_ALL=1)
   open-terminal <taskId>                              Open OS terminal for a task
   slack                                               Start Slack bot (long-running)
-  worker [list|status]                                List worker kinds and availability (recovery: unavailable)
+  worker autofix [--interval-ms N]                    Start auto-fix recovery worker (long-running)
+  worker [list|status]                                List worker service commands
 
 ${BOLD}Deprecated${RESET} (use new names above):
   list → query workflows       status → query tasks       task-status → query task
