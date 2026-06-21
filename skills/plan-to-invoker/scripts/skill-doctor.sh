@@ -339,7 +339,7 @@ fi
 MOCK_RESULTS=$(cat <<'MOCK_EOF'
 [verify-file-test] completed
 task "verify-pattern-foo" completed
-PASS verify-tests-pkg
+PASS verify-package-pkg
 MOCK_EOF
 )
 run_check \
