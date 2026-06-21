@@ -120,6 +120,8 @@ export function createMockInvoker(
           { id: 'claude', name: 'Claude', path: '/tmp/.claude/skills', available: true, installed: false, upToDate: false, installedSkillNames: [] },
           { id: 'cursor', name: 'Cursor', path: '/tmp/.cursor/skills-cursor', available: true, installed: false, upToDate: false, installedSkillNames: [] },
         ],
+        commandTargets: [],
+        mcpTargets: [],
       },
     })),
     getBundledSkillsStatus: vi.fn(async () => ({
@@ -132,6 +134,8 @@ export function createMockInvoker(
         { id: 'claude', name: 'Claude', path: '/tmp/.claude/skills', available: true, installed: false, upToDate: false, installedSkillNames: [] },
         { id: 'cursor', name: 'Cursor', path: '/tmp/.cursor/skills-cursor', available: true, installed: false, upToDate: false, installedSkillNames: [] },
       ],
+      commandTargets: [],
+      mcpTargets: [],
     })),
     installBundledSkills: vi.fn(async () => ({
       available: false,
@@ -143,6 +147,8 @@ export function createMockInvoker(
         { id: 'claude', name: 'Claude', path: '/tmp/.claude/skills', available: true, installed: false, upToDate: false, installedSkillNames: [] },
         { id: 'cursor', name: 'Cursor', path: '/tmp/.cursor/skills-cursor', available: true, installed: false, upToDate: false, installedSkillNames: [] },
       ],
+      commandTargets: [],
+      mcpTargets: [],
     })),
     replaceTask: vi.fn(async () => []),
     getActivityLogs: vi.fn(async () => []),
