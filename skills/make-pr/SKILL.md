@@ -150,7 +150,7 @@ If the target repo is Invoker itself (`EdbertChan/Invoker` or `Neko-Catpital-Lab
 
 - use the preferred PR schema above
 - keep stack publication explicit
-- when the branch stack is ready, publish or update it with:
+- Invoker-on-Invoker review stacks should publish through the repo-local make-pr workflow, then use:
 
 ```bash
 mergify stack push
