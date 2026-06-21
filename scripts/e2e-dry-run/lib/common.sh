@@ -500,25 +500,13 @@ invoker_e2e_count_owned_headless_processes() {
 
 invoker_e2e_assert_no_owned_headless_processes() {
   local allowed="${1:-0}"
-  local settle_secs="${2:-15}"
   local count
-  local waited=0
-  while :; do
-    count="$(invoker_e2e_count_owned_headless_processes)"
-    if [ "$count" -le "$allowed" ]; then
-      return 0
-    fi
-    if [ "$waited" -ge "$settle_secs" ]; then
-      echo "FAIL: expected at most $allowed owned headless process(es), found $count" >&2
-      while IFS= read -r pid; do
-        [ -n "$pid" ] || continue
-        printf '%s %s\n' "$pid" "$(invoker_e2e_pid_cmdline "$pid")" >&2
-      done < <(pgrep -f '(/electron|packages/app/dist/main.js|headless-client.js|run.sh --headless)' 2>/dev/null || true)
-      return 1
-    fi
-    waited=$((waited + 1))
-    sleep 1
-  done
+  count="$(invoker_e2e_count_owned_headless_processes)"
+  if [ "$count" -gt "$allowed" ]; then
+    echo "FAIL: expected at most $allowed owned headless process(es), found $count" >&2
+    pgrep -af '(/electron|packages/app/dist/main.js|headless-client.js|run.sh --headless)' 2>/dev/null || true
+    return 1
+  fi
 }
 
 invoker_e2e_assert_no_stale_running_tasks() {
