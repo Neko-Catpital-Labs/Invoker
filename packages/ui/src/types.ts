@@ -217,6 +217,13 @@ export interface WorkflowMeta {
   createdAt?: string;
   updatedAt?: string;
 }
+export interface QueueStatus {
+  maxConcurrency: number;
+  runningCount: number;
+  running: Array<{ taskId: string; description: string; attemptId?: string }>;
+  queued: Array<{ taskId: string; priority: number; description: string }>;
+}
+
 export type TaskGraphEvent =
   | {
       readonly type: 'delta';
