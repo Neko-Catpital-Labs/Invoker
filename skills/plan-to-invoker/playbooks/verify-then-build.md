@@ -161,17 +161,19 @@ For each failed verification:
 
 ### Final verification task (required)
 
-The implementation plan **must** end with a final **`command`** task that runs:
+The implementation plan **must** end with a final **`command`** task that runs the target repo's discovered final regression gate. For Invoker-on-Invoker plans, that command is:
 
 - `pnpm run test:all`
 
-Use earlier tasks to re-run the focused repro from Phase 1b (`cd packages/<pkg> && pnpm test -- <repro>`, `./submit-plan.sh plans/verify-<slug>.yaml`, or both). The terminal gate for standalone implementation plans and terminal stack workflows is the full repo suite; non-terminal stack workflows use focused verification.
+For external repos, inspect manifests/docs/scripts and use the repo's documented final command. If it differs from `pnpm run test:all`, include `Verification command discovery:` in the final task description so reviewers can see why that command is valid.
 
-**Dependencies:** When present, the final `pnpm run test:all` task **must depend on every earlier task** so it runs last as the terminal regression gate.
+Use earlier tasks to re-run the focused repro from Phase 1b (`cd packages/<pkg> && pnpm test -- <repro>`, `./submit-plan.sh plans/verify-<slug>.yaml`, or both). The terminal gate for standalone implementation plans and terminal stack workflows is the discovered final repo suite; non-terminal stack workflows use focused verification.
+
+**Dependencies:** The final regression task **must depend on every earlier task** so it runs last as the terminal regression gate.
 
 **Naming:** `final-regression`, `regression-test-all`, `final-test-suite`, etc.
 
-**Anti-pattern:** Standalone implementation plan or terminal stack workflow with **no** final `pnpm run test:all` task — you cannot show the submitted workflow or stack passed the full suite end-to-end.
+**Anti-pattern:** Standalone implementation plan or terminal stack workflow with **no** final discovered regression task — you cannot show the submitted workflow or stack passed the suite end-to-end.
 
 ### Visual proof capture task (when `visualProof: true`)
 

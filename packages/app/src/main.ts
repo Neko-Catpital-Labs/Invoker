@@ -38,7 +38,10 @@ import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import {
   configureEarlyElectronApp,
+  formatGuiOwnerBootstrapFallbackMessage,
+  guiOwnerBootstrapTimeoutMs,
   registerGuiLifecycleHandlers,
+  resolveGuiOwnerPreference,
   runElectronReadyBootstrap,
   startGuiModeBootstrap,
   startMainProcessBootstrap,
@@ -375,27 +378,6 @@ interface HeadlessResumeMutationPayload {
 }
 
 type HeadlessOwnerMode = 'standalone' | 'gui';
-type GuiOwnerPreference = 'auto' | 'daemon' | 'gui';
-
-function resolveGuiOwnerPreference(): GuiOwnerPreference {
-  const raw = (process.env.INVOKER_GUI_OWNER_MODE ?? '').trim().toLowerCase();
-  if (raw === 'daemon' || raw === 'client' || raw === 'follower') return 'daemon';
-  if (raw === 'auto') return 'auto';
-  if (raw === 'gui' || raw === 'owner' || raw === 'local') return 'gui';
-  if (process.env.INVOKER_GUI_DAEMON_OWNER === '1') return 'daemon';
-  return 'daemon';
-}
-
-function guiOwnerBootstrapTimeoutMs(): number {
-  const parsed = Number.parseInt(
-    process.env.INVOKER_GUI_OWNER_BOOTSTRAP_TIMEOUT_MS
-      ?? process.env.INVOKER_HEADLESS_OWNER_BOOTSTRAP_TIMEOUT_MS
-      ?? '60000',
-    10,
-  );
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 60000;
-}
-
 function headlessExecLogFields(
   payload: HeadlessExecMutationPayload,
   mode: HeadlessOwnerMode,
@@ -882,6 +864,7 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
 const RESET = '\x1b[0m';
 const BOLD = '\x1b[1m';
 const RED = '\x1b[31m';
+const YELLOW = '\x1b[33m';
 
 // ══════════════════════════════════════════════════════════════
 // HEADLESS MODE
@@ -3009,9 +2992,10 @@ function createEmbeddedTerminalBackendFromConfig(
         daemonGuiOwner = true;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        process.stderr.write(`${RED}Error:${RESET} ${message}\n`);
-        app.quit();
-        return;
+        const fallbackMessage = formatGuiOwnerBootstrapFallbackMessage(message);
+        logger.warn(fallbackMessage, { module: 'init' });
+        process.stderr.write(`${YELLOW}Warning:${RESET} ${fallbackMessage}\n`);
+        daemonGuiOwner = false;
       }
     } else if (guiOwnerPreference === 'auto') {
       recordStartupMark('daemonOwner.discover.start');

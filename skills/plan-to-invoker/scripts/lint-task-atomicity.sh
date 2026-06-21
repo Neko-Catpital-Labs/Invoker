@@ -8,8 +8,8 @@
 # --strict-delegation  For implementation plans (onFinish != none), fail prompt tasks
 #                    that are not self-contained for zero-context remote execution.
 # --stack-manifest FILE
-#                    When validating an authored stack, require the full-suite
-#                    pnpm run test:all gate only on the highest-order workflow.
+#                    When validating an authored stack, require the final
+#                    regression gate only on the highest-order workflow.
 set -euo pipefail
 
 warn_delegation=0
@@ -460,6 +460,7 @@ function flush_task(    wc, and_count, valid_id, d, desc_lower, idx) {
   task_dependencies[idx] = dependencies_csv
   task_has_command[idx] = has_command
   task_command_line[idx] = normalize_command(command_line)
+  task_has_verification_discovery[idx] = (tolower(desc) ~ /verification command discovery:/)
   task_id_to_index[id] = idx
 
   artifact_path = first_experiment_artifact(desc " " prompt_text)
@@ -710,9 +711,9 @@ END {
     final_command = task_command_line[final_idx]
 
     if (task_has_command[final_idx] != 1) {
-      errors[++errn] = "Task \"" final_id "\" must be a command task because standalone implementation plans and terminal stack workflows require a final pnpm run test:all regression gate"
-    } else if (final_command != "pnpm run test:all") {
-      errors[++errn] = "Task \"" final_id "\" must be the final full-suite regression gate and run exactly \"pnpm run test:all\""
+      errors[++errn] = "Task \"" final_id "\" must be a command task because standalone implementation plans and terminal stack workflows require a final discovered regression gate"
+    } else if (final_command != "pnpm run test:all" && task_has_verification_discovery[final_idx] != 1) {
+      errors[++errn] = "Task \"" final_id "\" must run \"pnpm run test:all\" for Invoker plans or include \"Verification command discovery:\" in its description explaining the target repo discovered final regression command"
     }
 
     split(task_dependencies[final_idx], final_dep_ids, /,/)

@@ -144,7 +144,7 @@ Use this pattern when a change is too large for a single reviewable workflow. Fo
 
 **Validation enforces**:
 - Every prompt task must have verification command task
-- Standalone implementation plans and terminal stack workflows must end with `pnpm run test:all` as the final regression gate
+- Standalone implementation plans and terminal stack workflows must end with a discovered final regression gate (`pnpm run test:all` for Invoker plans; documented target-repo command for external repos)
 - Use `pnpm test`, never `npx vitest run`
 - Dependencies field required (even if empty)
 - No dangerous commands without manual approval

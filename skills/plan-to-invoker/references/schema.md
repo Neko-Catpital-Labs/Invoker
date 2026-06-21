@@ -51,7 +51,7 @@ Source of truth: `packages/app/src/plan-parser.ts` (interfaces + validation, lin
 
 ## Implementation plans (convention)
 
-`plan-parser.ts` does not require a special field for this, but **standalone implementation** YAML (not one-off verify-only plans) must reserve the **last** task for the terminal regression gate: a `command` task that runs `pnpm run test:all`. In authored stacks, reserve that full-suite task for the highest-order workflow in the stack manifest; non-terminal stack workflows should end with focused package/headless repro verification. When a final `pnpm run test:all` task is present, it must depend on every earlier task so it runs last. See `references/task-patterns.md` and `playbooks/verify-then-build.md` Phase 2.
+`plan-parser.ts` does not require a special field for this, but **standalone implementation** YAML (not one-off verify-only plans) must reserve the **last** task for the terminal regression gate: a `command` task that runs the target repo's discovered final gate. For Invoker plans, use `pnpm run test:all`. For external repos, inspect manifests/docs and include `Verification command discovery:` in the final task description when the discovered command differs. In authored stacks, reserve that terminal gate for the highest-order workflow in the stack manifest; non-terminal stack workflows should end with focused package/headless repro verification. The final regression task must depend on every earlier task so it runs last. See `references/task-patterns.md` and `playbooks/verify-then-build.md` Phase 2.
 
 ## Banned Patterns
 

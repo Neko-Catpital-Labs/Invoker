@@ -621,10 +621,102 @@ EOF
     return 1
   fi
 
-  if ! grep -q 'must be the final full-suite regression gate and run exactly "pnpm run test:all"' <<<"$output"; then
+  if ! grep -q 'must run "pnpm run test:all" for Invoker plans or include "Verification command discovery:"' <<<"$output"; then
     echo "Expected final gate command error, got: $output" >&2
     return 1
   fi
+}
+
+test_lint_allows_discovered_external_final_gate() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: "External repo final gate"
+description: "Standalone workflow waiver: single review slice for an external repo with a discovered final gate."
+onFinish: pull_request
+mergeMode: github
+repoUrl: git@github.com:example-org/acme-repo.git
+tasks:
+  - id: implement-lint-gate
+    description: |
+      Review claim:
+      - Adds one lint-gate behavior change.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - Existing lint behavior remains unchanged except warning severity.
+      Slice rationale:
+      - Keep the hook behavior in one reviewable unit.
+      Architectural effect:
+      - No new runtime boundary.
+      Non-goals:
+      - Do not alter package manager setup.
+      Goal:
+      - Turn lint warnings into pre-commit errors.
+      Motivation:
+      - Keep local checks aligned with repository policy.
+      Alternative considerations:
+      - Option A (chosen): update the existing hook command.
+      - Option B: add a separate hook.
+      Implementation details:
+      - Modify packages/foo/src/lint-hook.ts and preserve current package scripts.
+      Files:
+      - packages/foo/src/lint-hook.ts
+      Change types:
+      - Behavior
+      Acceptance criteria:
+      - The hook exits non-zero on lint warnings.
+      Layer: contact_surface
+      Feature state: active
+    prompt: |
+      Goal:
+      - Turn lint warnings into pre-commit errors in packages/foo/src/lint-hook.ts.
+      Review lane:
+      - behavior
+      Motivation:
+      - The existing hook should fail deterministically when warnings are reported.
+      Alternative considerations:
+      - Option A (chosen): update the existing hook command.
+      - Option B: add a new hook command.
+      Implementation details:
+      - Assume no prior context. Update packages/foo/src/lint-hook.ts only and keep package manager behavior unchanged.
+      Non-goals:
+      - Do not add new package dependencies or change unrelated scripts.
+      Acceptance criteria:
+      - Expected pass condition: the focused package test exits 0 after the warning-to-error behavior is covered.
+    dependencies: []
+  - id: final-regression
+    description: |
+      Review claim:
+      - Runs the target repo's discovered final regression gate.
+      Review lane:
+      - proof
+      Safety invariant:
+      - Verification uses only commands documented by the target repo.
+      Slice rationale:
+      - Keep proof separate from implementation.
+      Architectural effect:
+      - No product code changes.
+      Non-goals:
+      - Do not impose Invoker-specific scripts.
+      Goal:
+      - Run the external repo's documented final gate.
+      Motivation:
+      - Avoid requiring Invoker's pnpm run test:all script in external repositories.
+      Alternative considerations:
+      - Option A (chosen): use the discovered package test command.
+      - Option B: invent a root full-suite command.
+      Implementation details:
+      - Verification command discovery: package.json documents "test": "vitest run"; no test:all script exists.
+      Layer: e2e_regression
+      Feature state: active
+    command: "pnpm test"
+    dependencies: [implement-lint-gate]
+EOF
+
+  bash "$LINT_SCRIPT" "$temp_plan" >/dev/null
 }
 
 test_lint_allows_nonterminal_stack_workflow_without_test_all() {
@@ -1585,6 +1677,7 @@ run_test "Edge: unsupported runnerKind field" test_runner_kind_is_unsupported
 run_test "Lint: valid final pnpm run test:all gate" test_lint_valid_final_test_all
 run_test "Lint: reject multi-prompt standalone without waiver" test_lint_rejects_multi_prompt_standalone_without_waiver
 run_test "Lint: reject non-test:all final gate" test_lint_rejects_non_test_all_final_gate
+run_test "Lint: allow discovered external final gate" test_lint_allows_discovered_external_final_gate
 run_test "Lint: allow non-terminal stack workflow without test:all" test_lint_allows_nonterminal_stack_workflow_without_test_all
 run_test "Lint: reject final gate missing dependencies" test_lint_rejects_final_gate_missing_dependencies
 run_test "Lint: reject missing design sections for prompt tasks" test_lint_requires_design_sections_for_prompt_tasks
