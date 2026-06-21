@@ -2002,9 +2002,9 @@ function createEmbeddedTerminalBackendFromConfig(
   };
 
   const applyTaskDeltaToOwnerCacheOrRecover = (delta: TaskDelta): TaskDelta[] => {
-    const { quarantined } = applyDelta(delta, lastKnownTaskStates);
+    const { quarantined, accepted } = applyDelta(delta, lastKnownTaskStates);
     if (quarantined.length === 0) {
-      return [delta];
+      return accepted ? [delta] : [];
     }
 
     const rendererDeltas: TaskDelta[] = [];

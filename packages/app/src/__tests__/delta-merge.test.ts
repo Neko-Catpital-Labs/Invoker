@@ -96,11 +96,27 @@ describe('applyDelta', () => {
       const result = applyDelta(delta, cache);
 
       expect(result.quarantined).toEqual([]);
+      expect(result.accepted).toBe(true);
       expect(cache.has('t1')).toBe(true);
       const stored = JSON.parse(cache.get('t1')!);
       expect(stored.id).toBe('t1');
       expect(stored.status).toBe('running');
       expect(cache.getEntry('t1')?.taskStateVersion).toBe(2);
+    });
+    it('drops stale created deltas that would downgrade cache state', () => {
+      const cache = new TaskSnapshotCache();
+      cache.set('t1', JSON.stringify(makeTask('t1', { taskStateVersion: 5, status: 'running' })));
+
+      const result = applyDelta({
+        type: 'created',
+        task: makeTask('t1', { taskStateVersion: 4, status: 'completed' }),
+      }, cache);
+
+      expect(result.accepted).toBe(false);
+      expect(result.quarantined).toEqual([]);
+      expect(cache.getEntry('t1')?.taskStateVersion).toBe(5);
+      const stored = JSON.parse(cache.get('t1')!);
+      expect(stored.status).toBe('running');
     });
   });
 
@@ -121,6 +137,7 @@ describe('applyDelta', () => {
       const result = applyDelta(delta, cache);
 
       expect(result.quarantined).toEqual([]);
+      expect(result.accepted).toBe(true);
       const stored = JSON.parse(cache.get('t1')!);
       expect(stored.status).toBe('completed');
       expect(stored.execution.exitCode).toBe(0);
@@ -180,6 +197,25 @@ describe('applyDelta', () => {
       expect(stored.status).toBe('running');
       expect(stored.taskStateVersion).toBe(1);
     });
+    it('drops stale updated deltas without quarantining', () => {
+      const cache = new TaskSnapshotCache();
+      cache.set('t1', JSON.stringify(makeTask('t1', { taskStateVersion: 5, status: 'running' })));
+
+      const result = applyDelta({
+        type: 'updated',
+        taskId: 't1',
+        changes: { status: 'completed' },
+        taskStateVersion: 4,
+        previousTaskStateVersion: 3,
+      }, cache);
+
+      expect(result.accepted).toBe(false);
+      expect(result.quarantined).toEqual([]);
+      expect(cache.getEntry('t1')?.taskStateVersion).toBe(5);
+      expect(cache.isQuarantined('t1')).toBe(false);
+      const stored = JSON.parse(cache.get('t1')!);
+      expect(stored.status).toBe('running');
+    });
 
     it('quarantines when task is unknown (no prior created)', () => {
       const cache = new TaskSnapshotCache();
@@ -235,9 +271,25 @@ describe('applyDelta', () => {
 
       const delta: TaskDelta = { type: 'removed', taskId: 't1', previousTaskStateVersion: 1 };
 
-      applyDelta(delta, cache);
+      const result = applyDelta(delta, cache);
 
       expect(cache.has('t1')).toBe(false);
+      expect(result.accepted).toBe(true);
+    });
+    it('drops stale removed deltas that would delete newer cache state', () => {
+      const cache = new TaskSnapshotCache();
+      cache.set('t1', JSON.stringify(makeTask('t1', { taskStateVersion: 5 })));
+
+      const result = applyDelta({
+        type: 'removed',
+        taskId: 't1',
+        previousTaskStateVersion: 3,
+      }, cache);
+
+      expect(result.accepted).toBe(false);
+      expect(result.quarantined).toEqual([]);
+      expect(cache.has('t1')).toBe(true);
+      expect(cache.getEntry('t1')?.taskStateVersion).toBe(5);
     });
   });
 
@@ -362,7 +414,10 @@ function simulateMainProcessDeltaHandler(
 ): { rendererDeltas: TaskDelta[] } {
   const rendererDeltas: TaskDelta[] = [];
 
-  const { quarantined } = applyDelta(delta, cache);
+  const { quarantined, accepted } = applyDelta(delta, cache);
+  if (quarantined.length === 0 && accepted) {
+    rendererDeltas.push(delta);
+  }
   for (const taskId of quarantined) {
     const { rendererDelta } = recoverQuarantinedTask(cache, taskId, {
       loadTask: persistence.loadTask,
@@ -688,7 +743,8 @@ describe('regression: out-of-order updates never merge from orchestrator memory'
       previousTaskStateVersion: 2,
     }, cache);
 
-    expect(result.quarantined).toEqual(['t1']);
+    expect(result.accepted).toBe(false);
+    expect(result.quarantined).toEqual([]);
     // Cache still shows taskStateVersion 5, not downgraded
     const stored = JSON.parse(cache.get('t1')!);
     expect(stored.status).toBe('completed');
