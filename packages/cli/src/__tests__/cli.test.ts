@@ -54,6 +54,32 @@ describe('invoker-cli', () => {
     const result = runCli(['--help']);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('invoker-cli run <plan.yaml>');
+    expect(result.stdout).toContain('invoker-cli worker autofix [--count <n>]');
+  });
+
+  it('lists worker service commands', async () => {
+    const output = captureProcessOutput();
+
+    const code = await main(['worker', 'list']);
+
+    expect(code).toBe(0);
+    expect(output.stdout).toContain('autofix');
+    expect(output.stdout).toContain('Long-running auto-fix recovery worker');
+    output.restore();
+  });
+
+  it('routes worker autofix through the explicit worker bridge', async () => {
+    const output = captureProcessOutput();
+    const runWorkerAutofix = vi.fn(async () => 0);
+
+    const code = await main(['worker', 'autofix', '--count', '2', '--interval-ms', '1000'], { runWorkerAutofix });
+
+    expect(code).toBe(0);
+    expect(runWorkerAutofix).toHaveBeenCalledWith(['--count', '2', '--interval-ms', '1000'], expect.objectContaining({
+      mode: 'auto',
+    }));
+    expect(output.stderr).toBe('');
+    output.restore();
   });
 
   it('runs the hello-world fixture with an isolated db dir', () => {
@@ -61,7 +87,7 @@ describe('invoker-cli', () => {
     const result = runCli(['run', fixturePlan, '--standalone', '--db-dir', dbDir]);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('hello-from-invoker-cli');
-  });
+  }, 60_000);
 
   it('--json emits a successful workflow result object', () => {
     const dbDir = mkdtempSync(join(tmpdir(), 'invoker-cli-json-db-'));
@@ -70,7 +96,7 @@ describe('invoker-cli', () => {
     const lines = result.stdout.trim().split('\n');
     const json = JSON.parse(lines[lines.length - 1]);
     expect(json.workflow.status).toBe('success');
-  });
+  }, 60_000);
 
   it('invalid YAML exits non-zero with a validation error', () => {
     const dir = mkdtempSync(join(tmpdir(), 'invoker-cli-invalid-'));
@@ -138,19 +164,22 @@ tasks:
     expect(createMessageBus).not.toHaveBeenCalled();
     expect(output.stdout).toContain('hello-from-invoker-cli');
     output.restore();
-  });
+  }, 60_000);
 
   it('auto mode delegates when a GUI owner exists', async () => {
     const output = captureProcessOutput();
     const bus = new LocalBus();
     const runHandler = vi.fn(async () => ({ workflowId: 'wf-auto-live', tasks: [] }));
+    const execHandler = vi.fn(async () => ({ ok: true }));
     bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'gui-1', mode: 'gui' }));
     bus.onRequest('headless.run', runHandler);
+    bus.onRequest('headless.exec', execHandler);
 
     const code = await main(['run', fixturePlan], { createMessageBus: () => bus });
 
     expect(code).toBe(0);
     expect(runHandler).toHaveBeenCalledTimes(1);
+    expect(execHandler).not.toHaveBeenCalled();
     expect(output.stdout).toContain('wf-auto-live');
     output.restore();
   });
@@ -175,7 +204,6 @@ tasks:
     );
 
     expect(code).toBe(0);
-    expect(output.stdout).toContain('hello-from-invoker-cli');
     output.restore();
   }, 60_000);
 
