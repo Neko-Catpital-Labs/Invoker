@@ -1411,13 +1411,25 @@ test.describe('Visual proof capture', () => {
       },
     ]);
     await page.waitForTimeout(2200);
-    await expect(page.getByTestId('status-bar-pill-running')).toContainText('Running: 0');
-    await expect(page.getByTestId('status-bar-pill-pending')).toContainText('Pending: 1');
+    const captureBefore = process.env.CAPTURE_MODE === 'before';
+
+    if (captureBefore) {
+      await expect(page.getByTestId('status-bar-pill-running')).toContainText('Running: 0');
+      await expect(page.getByTestId('status-bar-pill-pending')).toContainText('Pending: 1');
+    } else {
+      await expect(page.getByTestId('status-bar-pill-running')).toContainText('Running: 1');
+      await expect(page.getByTestId('status-bar-pill-pending')).toContainText('Pending: 0');
+      await expect(page.getByText('Running includes launching and AI-fix work.')).toBeVisible();
+    }
     await captureScreenshot(page, 'running-launching-statusbar');
 
     await page.getByTestId('rail-queue').click();
     const queueRow = page.locator('[data-row-id$=\"launching-task\"]');
     await expect(queueRow).toBeVisible();
+    if (!captureBefore) {
+      await expect(queueRow.getByText('Running', { exact: true })).toBeVisible();
+      await expect(queueRow.getByText('phase: Launching')).toBeVisible();
+    }
     await captureScreenshot(page, 'running-launching-queue');
   });
 
