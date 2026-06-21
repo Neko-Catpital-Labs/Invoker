@@ -1125,6 +1125,21 @@ describe('SQLiteAdapter', () => {
         'failed-newest',
       ]);
     });
+
+    it('keeps a recent cancelled attempt next to the active replacement', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+      const attempts = [
+        attemptAt('old-cancelled', 'superseded', '2026-01-01T00:00:00.000Z'),
+        attemptAt('pending-current', 'pending', '2026-01-01T00:01:00.000Z'),
+      ];
+      for (const attempt of attempts) adapter.saveAttempt(attempt);
+
+      expect(adapter.loadActionGraphAttempts('t1').map((attempt) => attempt.id)).toEqual([
+        'old-cancelled',
+        'pending-current',
+      ]);
+    });
   });
 
   describe('saveWorkflow + loadWorkflow', () => {
