@@ -5,7 +5,7 @@
  * This allows swapping storage backends (in-memory, SQLite, etc.)
  */
 
-import type { TaskState, TaskStateChanges, PlanDefinition, Attempt, WorkflowDerivedStatus, WorkflowRollup, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency } from '@invoker/workflow-core';
+import type { TaskState, TaskStateChanges, PlanDefinition, Attempt, WorkflowDerivedStatus, WorkflowRollup, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency, ReviewGateDefinition } from '@invoker/workflow-core';
 import type { SearchResultItem, SearchOptions } from '@invoker/contracts';
 
 // ── Conversation Types ─────────────────────────────────────
@@ -47,6 +47,7 @@ export interface Workflow {
   featureBranch?: string;
   mergeMode?: 'manual' | 'automatic' | 'external_review';
   reviewProvider?: string;
+  reviewGate?: ReviewGateDefinition;
   externalDependencies?: ExternalDependency[];
   externalDependencyChanges?: ExternalDependencyChange[];
   /** Read-only provenance for dependencies removed by `detachWorkflow`. Never re-read by scheduling. */
