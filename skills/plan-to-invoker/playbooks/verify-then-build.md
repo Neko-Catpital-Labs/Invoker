@@ -66,17 +66,17 @@ bash skills/plan-to-invoker/scripts/skill-doctor.sh \
 
 For policy-matrix inputs, `skill-doctor` now fails if the coverage map or stack manifest is missing.
 
-### Phase 1b — Runtime verification (three lanes)
+### Phase 1b — Runtime verification (focused lanes)
 
-**Required** when the investigation claims something about **executed** behavior (not just “this string appears in a file”). **Phase 1b has three parts; use all that apply.**
+**Required** when the investigation claims something about **executed** behavior (not just “this string appears in a file”). Use the smallest lane that proves the claim.
 
-#### Phase 1b-unit — Package tests (agent shell)
+#### Phase 1b-command — Focused command (agent shell)
 
-- Run **`cd packages/<pkg> && pnpm test`**, optionally scoped to a test file that encodes the hypothesis.
-- **Alternative:** `node scripts/verify-<slug>.mjs` (or `tsx`) that imports production modules and asserts output — must follow repo environment rules.
+- Run the cheapest deterministic command that exercises the behavior. Prefer direct parser checks, focused builds, repo-specific repro scripts, or tiny `node`/`tsx` assertions over package-wide test suites.
+- Avoid mandatory `pnpm test` gates during planning. They are allowed only when they are the smallest real proof for the claim.
 - **Record** pass/fail and what each result proves.
 
-**When:** Always appropriate for logic that can be expressed in Vitest (components, pure functions, parsers).
+**When:** Logic or config behavior can be proven without submitting an Invoker workflow.
 
 #### Phase 1b-invoker — Headless Invoker (`submit-plan.sh`)
 
@@ -87,7 +87,7 @@ For policy-matrix inputs, `skill-doctor` now fails if the coverage map or stack 
 
 **When Invoker is mandatory (not optional):** The assumption or bug involves **any of**: `loadPlan` / plan defaults, **Orchestrator** mutations, **TaskRunner** + **Executor** selection, **SQLite** task rows, **headless** commands (`--headless edit-type`, etc.), **Electron** main process, or **integration** across app + persistence + executor. If in doubt, run Phase 1b-invoker.
 
-**Note:** `./submit-plan.sh` output includes executor/git noise; that is normal. For **renderer-only** UI bugs, Vitest (1b-unit) may suffice **without** Invoker — but if the reported bug reproduces **only** through IPC or persisted state, use 1b-invoker.
+**Note:** `./submit-plan.sh` output includes executor/git noise; that is normal. For **renderer-only** UI bugs, a focused command may suffice **without** Invoker — but if the reported bug reproduces **only** through IPC or persisted state, use 1b-invoker.
 
 #### Phase 1b-visual — Visual proof baseline (capture script)
 
@@ -99,7 +99,7 @@ For policy-matrix inputs, `skill-doctor` now fails if the coverage map or stack 
 
 #### Combine Phase 1a + 1b in YAML
 
-Submit **one** verification plan YAML that includes **static** tasks (Phase 1a) **and** **runtime** tasks: at least `pnpm test` **and/or** commands that only run when the verify plan is **submitted** via `submit-plan.sh` (e.g. SQLite assertions after a minimal task). **Anti-pattern:** verify plan with **only** `rg`/`test -f` and **no** `pnpm test` and **no** path that exercises Invoker when Phase 1b-invoker applies.
+Submit **one** verification plan YAML that includes **static** tasks (Phase 1a) **and**, when behavior is claimed, focused runtime tasks or commands that only run when the verify plan is **submitted** via `submit-plan.sh` (e.g. SQLite assertions after a minimal task). **Anti-pattern:** verify plan with **only** `rg`/`test -f` when Phase 1b-invoker applies.
 
 #### Validate YAML shape (not behavior)
 
@@ -156,22 +156,20 @@ For prompt tasks in implementation plans, write instructions as if the remote ex
 For each failed verification:
 
 - Missing file → add a task to create it before tasks that reference it
-- Failed test → add a task to fix the test or adjust the implementation approach
+- Failed verification → add a task to fix the behavior or adjust the implementation approach
 - Missing function/symbol → adjust prompts to create rather than modify
 
-### Final verification task (required)
+### Final verification task (focused by default)
 
-The implementation plan **must** end with a final **`command`** task that runs:
+The implementation plan should end with the smallest command task that proves the changed behavior, or with Invoker headless / visual proof when those lanes apply.
 
-- `pnpm run test:all`
+Do **not** add a mandatory terminal `pnpm run test:all` task by default. Use a full-suite gate only when the user asks for it or when the change risk makes it the smallest honest proof.
 
-Use earlier tasks to re-run the focused repro from Phase 1b (`cd packages/<pkg> && pnpm test -- <repro>`, `./submit-plan.sh plans/verify-<slug>.yaml`, or both). The terminal gate for standalone implementation plans and terminal stack workflows is the full repo suite; non-terminal stack workflows use focused verification.
+**Dependencies:** A terminal verification task should depend on every task whose output it verifies.
 
-**Dependencies:** When present, the final `pnpm run test:all` task **must depend on every earlier task** so it runs last as the terminal regression gate.
+**Naming:** `verify-<behavior>`, `regression-<bug>`, `capture-visual-proof`, etc.
 
-**Naming:** `final-regression`, `regression-test-all`, `final-test-suite`, etc.
-
-**Anti-pattern:** Standalone implementation plan or terminal stack workflow with **no** final `pnpm run test:all` task — you cannot show the submitted workflow or stack passed the full suite end-to-end.
+**Anti-pattern:** Expensive full-suite gates that do not prove anything more specific than the focused command already proves.
 
 ### Visual proof capture task (when `visualProof: true`)
 
@@ -195,8 +193,8 @@ Generate the implementation plan, validate with `scripts/validate-plan.sh`, pres
 - **Skipping verification for plans that reference 3+ specific files** — these are exactly the plans most likely to have stale assumptions.
 - **Static-only verification for behavioral claims** — `rg`/`test -f` prove presence of text, not runtime behavior.
 - **Treating `validate-plan.sh` as proof** — it only validates YAML structure.
-- **Stopping at `pnpm test` when Phase 1b-invoker is mandatory** — Invoker path unverified.
+- **Skipping Invoker when Phase 1b-invoker is mandatory** — Invoker path unverified.
 - **Not cleaning up verification workflow** — Invoker may still have the verify plan running. Use `delete-all` before submitting implementation when needed.
 - **Trusting file paths from a plan without checking** — plans can reference moved, renamed, or deleted files. Verify first.
 - **Proceeding after verification failures without adjusting** — the whole point of Phase 1 is to inform Phase 2.
-- **Standalone plan or terminal stack workflow without a final `pnpm run test:all` task** — cannot confirm the submitted workflow or stack passed the full suite.
+- **Defaulting to a full-suite gate** — it slows planning and often proves less than a focused command tied to the changed behavior.
