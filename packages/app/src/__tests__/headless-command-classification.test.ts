@@ -1,4 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  HEADLESS_SET_SUBCOMMANDS,
+  formatHeadlessSetSubcommands,
+} from '../headless-command-registry.js';
 import {
   isHeadlessMutatingCommand,
   isHeadlessReadOnlyCommand,
@@ -6,8 +10,13 @@ import {
   resolveHeadlessTargetWorkflowId,
   type HeadlessTargetLookup,
 } from '../headless-command-classification.js';
+import { runHeadless } from '../headless.js';
 
 describe('headless-command-classification', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   const targetLookup: HeadlessTargetLookup = {
     loadWorkflow: (workflowId) => workflowId === 'wf-1' ? { id: workflowId } as any : undefined,
     listWorkflows: () => [{ id: 'wf-1' } as any, { id: 'wf-2' } as any],
@@ -44,6 +53,36 @@ describe('headless-command-classification', () => {
     expect(isHeadlessMutatingCommand(['set', 'agent'])).toBe(true);
     expect(isHeadlessMutatingCommand(['set', 'fix-context'])).toBe(true);
     expect(isHeadlessMutatingCommand(['set', 'xyz'])).toBe(false);
+  });
+
+  it('classifies every registered set subcommand as mutating', () => {
+    for (const subcommand of HEADLESS_SET_SUBCOMMANDS) {
+      expect(isHeadlessMutatingCommand(['set', subcommand])).toBe(true);
+    }
+
+    expect(isHeadlessMutatingCommand(['set', 'xyz'])).toBe(false);
+    expect(isHeadlessMutatingCommand(['set'])).toBe(false);
+  });
+
+  it('derives set subcommand errors from the registry', async () => {
+    await expect(runHeadless(['set'], {} as any)).rejects.toThrow(
+      `Missing set sub-command. Usage: --headless set <${formatHeadlessSetSubcommands('|')}>`,
+    );
+    await expect(runHeadless(['set', 'xyz'], {} as any)).rejects.toThrow(
+      `Unknown set sub-command: "xyz". Use: ${formatHeadlessSetSubcommands(', ')}`,
+    );
+  });
+
+  it('documents registered public set subcommands in help output', async () => {
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+
+    await runHeadless(['--help'], {} as any);
+
+    const help = write.mock.calls.map(([chunk]) => String(chunk)).join('');
+    for (const subcommand of HEADLESS_SET_SUBCOMMANDS) {
+      if (subcommand === 'executor') continue;
+      expect(help).toContain(`set ${subcommand}`);
+    }
   });
 
   it('resolves workflow and task targets via lookup', () => {
