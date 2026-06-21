@@ -1229,14 +1229,6 @@ function startHeadlessMode(): void {
 
       // In standalone owner mode, serve delegated requests from peer headless processes.
       if (standaloneMode && messageBus) {
-        if (!readOnlyMode) {
-          standaloneLaunchDispatcherController = startStandaloneLaunchDispatcher({
-            headlessDeps,
-            ownerId: workflowMutationOwnerId,
-            createTaskExecutor: createStandaloneTaskExecutor,
-            setLatestTaskExecutor: (executor) => { latestTaskExecutor = executor; },
-          });
-        }
         const standaloneOwnerIdleTimeoutMs = Number.parseInt(
           process.env.INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS ?? '0',
           10,
@@ -1695,6 +1687,19 @@ function startHeadlessMode(): void {
           getTaskExecutor: createStandaloneTaskExecutor,
           logger,
         });
+
+        // Start launch-dispatch polling only after the owner discovery (headless.owner-ping)
+        // and exec handlers above are registered. Otherwise the owner can own the IPC socket
+        // and begin dispatching while owner-ping still returns NO_HANDLER, so peer clients
+        // connect but cannot resolve a standalone owner and mutating commands fail closed (INV-192).
+        if (!readOnlyMode) {
+          standaloneLaunchDispatcherController = startStandaloneLaunchDispatcher({
+            headlessDeps,
+            ownerId: workflowMutationOwnerId,
+            createTaskExecutor: createStandaloneTaskExecutor,
+            setLatestTaskExecutor: (executor) => { latestTaskExecutor = executor; },
+          });
+        }
       }
 
       await runHeadless(cliArgs, headlessDeps);
