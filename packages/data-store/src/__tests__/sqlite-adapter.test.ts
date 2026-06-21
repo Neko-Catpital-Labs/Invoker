@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
 import type { Workflow, Conversation } from '../adapter.js';
 import { createAttempt } from '@invoker/workflow-core';
-import type { TaskState, TaskStateChanges } from '@invoker/workflow-core';
+import type { Attempt, TaskState, TaskStateChanges } from '@invoker/workflow-core';
 
 describe('SQLiteAdapter', () => {
   let adapter: SQLiteAdapter;
@@ -169,6 +169,12 @@ describe('SQLiteAdapter', () => {
       const result = (adapter as any).db.exec('PRAGMA index_list(tasks)') as Array<{ values: unknown[][] }>;
       const indexNames = (result[0]?.values ?? []).map((row) => String(row[1]));
       expect(indexNames).toContain('idx_tasks_workflow_id');
+    });
+
+    it('creates an index for task event lookups', () => {
+      const result = (adapter as any).db.exec('PRAGMA index_list(events)') as Array<{ values: unknown[][] }>;
+      const indexNames = (result[0]?.values ?? []).map((row) => String(row[1]));
+      expect(indexNames).toContain('idx_events_task_id_id');
     });
   });
 
@@ -1064,6 +1070,63 @@ describe('SQLiteAdapter', () => {
     });
   });
 
+  describe('loadActionGraphAttempts', () => {
+    function attemptAt(id: string, status: Attempt['status'], createdAt: string, nodeId = 't1'): Attempt {
+      return {
+        ...createAttempt(nodeId, { status }),
+        id,
+        createdAt: new Date(createdAt),
+      };
+    }
+
+    it('returns active attempts plus the selected terminal attempt', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const selected = attemptAt('selected-superseded', 'superseded', '2026-01-01T00:05:00.000Z');
+      adapter.saveTask('wf-1', makeTask('t1', {
+        execution: { selectedAttemptId: selected.id },
+      }));
+      adapter.saveTask('wf-1', makeTask('t2'));
+      const attempts = [
+        attemptAt('old-superseded', 'superseded', '2026-01-01T00:00:00.000Z'),
+        attemptAt('completed', 'completed', '2026-01-01T00:01:00.000Z'),
+        attemptAt('failed', 'failed', '2026-01-01T00:02:00.000Z'),
+        attemptAt('pending', 'pending', '2026-01-01T00:03:00.000Z'),
+        attemptAt('claimed', 'claimed', '2026-01-01T00:04:00.000Z'),
+        selected,
+        attemptAt('running', 'running', '2026-01-01T00:06:00.000Z'),
+        attemptAt('needs-input', 'needs_input', '2026-01-01T00:07:00.000Z'),
+        attemptAt('unrelated-running', 'running', '2026-01-01T00:08:00.000Z', 't2'),
+      ];
+      for (const attempt of attempts) adapter.saveAttempt(attempt);
+
+      expect(adapter.loadActionGraphAttempts('t1', selected.id).map((attempt) => attempt.id)).toEqual([
+        'pending',
+        'claimed',
+        'selected-superseded',
+        'running',
+        'needs-input',
+      ]);
+    });
+
+    it('returns active attempts plus the newest attempt when no selected attempt is present', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+      const attempts = [
+        attemptAt('completed-old', 'completed', '2026-01-01T00:00:00.000Z'),
+        attemptAt('pending-current', 'pending', '2026-01-01T00:01:00.000Z'),
+        attemptAt('running-current', 'running', '2026-01-01T00:02:00.000Z'),
+        attemptAt('failed-newest', 'failed', '2026-01-01T00:03:00.000Z'),
+      ];
+      for (const attempt of attempts) adapter.saveAttempt(attempt);
+
+      expect(adapter.loadActionGraphAttempts('t1').map((attempt) => attempt.id)).toEqual([
+        'pending-current',
+        'running-current',
+        'failed-newest',
+      ]);
+    });
+  });
+
   describe('saveWorkflow + loadWorkflow', () => {
     it('round-trips a workflow', () => {
       adapter.saveWorkflow(testWorkflow);
@@ -1390,6 +1453,37 @@ describe('SQLiteAdapter', () => {
       expect(events[0].eventType).toBe('started');
       expect(events[1].eventType).toBe('completed');
       expect(JSON.parse(events[0].payload!)).toEqual({ attempt: 1 });
+    });
+
+    it('uses the task event lookup index for ordered event reads', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+
+      const planRows = (adapter as any).db
+        .prepare('EXPLAIN QUERY PLAN SELECT * FROM events WHERE task_id = ? ORDER BY id ASC')
+        .all('t1') as Array<{ detail: string }>;
+      const detail = planRows.map((row) => row.detail).join('\n');
+
+      expect(detail).toContain('SEARCH events');
+      expect(detail).toContain('idx_events_task_id_id');
+      expect(detail).not.toContain('SCAN events');
+      expect(detail).not.toContain('USE TEMP B-TREE');
+    });
+
+    it('returns limited task events in the requested order', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+      for (let index = 0; index < 30; index += 1) {
+        adapter.logEvent('t1', `event-${index}`, { index });
+      }
+
+      const events = adapter.getEvents('t1', 'desc', 20);
+
+      expect(events).toHaveLength(20);
+      expect(events.map((event) => event.eventType)).toEqual(
+        Array.from({ length: 20 }, (_value, index) => `event-${29 - index}`),
+      );
+      expect(adapter.getEvents('t1', 'desc', 0)).toEqual([]);
     });
   });
 
