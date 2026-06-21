@@ -72,7 +72,7 @@ import {
   resolveInvokerIpcSocketPath,
   resolveRepoRoot,
 } from '@invoker/contracts';
-import type { WorkflowMeta, WorkResponse } from '@invoker/contracts';
+import type { ActionGraphResponse, WorkflowMeta, WorkResponse } from '@invoker/contracts';
 import { SQLiteAdapter, ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
 import { IpcBus, Channels } from '@invoker/transport';
 import {
@@ -237,6 +237,32 @@ import {
 } from './window/window-lifecycle.js';
 import { tryAcquireGuiInstanceLock, type GuiInstanceLock } from './gui-instance-lock.js';
 import { logProcessError } from './process-error-handling.js';
+
+function buildCurrentActionGraphSnapshot(args: {
+  orchestrator: Orchestrator;
+  persistence: SQLiteAdapter;
+  invokerConfig: InvokerConfig;
+}): ActionGraphResponse {
+  args.orchestrator.syncAllFromDb();
+  const tasks = args.orchestrator.getAllTasks();
+  const workflows = args.persistence.listWorkflows();
+
+  return buildActionGraphDiagnostics({
+    workflows,
+    tasks,
+    attemptsByTaskId: new Map(tasks.map((task) => [
+      task.id,
+      args.persistence.loadActionGraphAttempts(task.id, task.execution.selectedAttemptId),
+    ])),
+    queueStatus: args.orchestrator.getQueueStatus(),
+    mutationIntents: args.persistence.listWorkflowMutationIntents(undefined, ['queued', 'running', 'failed']),
+    mutationLeases: args.persistence.listWorkflowMutationLeases(),
+    eventsByTaskId: new Map(tasks.map((task) => [task.id, args.persistence.getRecentEvents(task.id, 20)])),
+    activityLogs: args.persistence.getActivityLogs(0, 200),
+    stallThresholdMs: resolveActionDiagnosticsStallThresholdMs(args.invokerConfig),
+    launchDispatches: args.persistence.listLaunchDispatchesByState(['enqueued', 'leased']),
+  });
+}
 
 function isTaskInFlightForForcedStop(task: TaskState): boolean {
   return task.status === 'running'
@@ -1616,21 +1642,7 @@ function startHeadlessMode(): void {
             };
           }
           if (kind === 'action-graph') {
-            orchestrator.syncAllFromDb();
-            const tasks = orchestrator.getAllTasks();
-            const workflows = persistence.listWorkflows();
-            return buildActionGraphDiagnostics({
-              workflows,
-              tasks,
-              attemptsByTaskId: new Map(tasks.map((task) => [task.id, persistence.loadAttempts(task.id)])),
-              queueStatus: orchestrator.getQueueStatus(),
-              mutationIntents: persistence.listWorkflowMutationIntents(),
-              mutationLeases: persistence.listWorkflowMutationLeases(),
-              eventsByTaskId: new Map(tasks.map((task) => [task.id, persistence.getEvents(task.id)])),
-              activityLogs: persistence.getActivityLogs(0, 200),
-              stallThresholdMs: resolveActionDiagnosticsStallThresholdMs(invokerConfig),
-              launchDispatches: persistence.listLaunchDispatchesByState(['enqueued', 'leased', 'abandoned']),
-            });
+            return buildCurrentActionGraphSnapshot({ orchestrator, persistence, invokerConfig });
           }
           throw new Error(`Unsupported headless query: ${String(kind)}`);
         });
@@ -3141,21 +3153,7 @@ function createEmbeddedTerminalBackendFromConfig(
           };
         }
         if (kind === 'action-graph') {
-          orchestrator.syncAllFromDb();
-          const tasks = orchestrator.getAllTasks();
-          const workflows = persistence.listWorkflows();
-          return buildActionGraphDiagnostics({
-            workflows,
-            tasks,
-            attemptsByTaskId: new Map(tasks.map((task) => [task.id, persistence.loadAttempts(task.id)])),
-            queueStatus: orchestrator.getQueueStatus(),
-            mutationIntents: persistence.listWorkflowMutationIntents(),
-            mutationLeases: persistence.listWorkflowMutationLeases(),
-            eventsByTaskId: new Map(tasks.map((task) => [task.id, persistence.getEvents(task.id)])),
-            activityLogs: persistence.getActivityLogs(0, 200),
-            stallThresholdMs: resolveActionDiagnosticsStallThresholdMs(invokerConfig),
-            launchDispatches: persistence.listLaunchDispatchesByState(['enqueued', 'leased', 'abandoned']),
-          });
+          return buildCurrentActionGraphSnapshot({ orchestrator, persistence, invokerConfig });
         }
         throw new Error(`Unsupported headless query: ${String(kind)}`);
       });
@@ -3740,21 +3738,7 @@ function createEmbeddedTerminalBackendFromConfig(
           );
         }
       }
-      orchestrator.syncAllFromDb();
-      const tasks = orchestrator.getAllTasks();
-      const workflows = persistence.listWorkflows();
-      return buildActionGraphDiagnostics({
-        workflows,
-        tasks,
-        attemptsByTaskId: new Map(tasks.map((task) => [task.id, persistence.loadAttempts(task.id)])),
-        queueStatus: orchestrator.getQueueStatus(),
-        mutationIntents: persistence.listWorkflowMutationIntents(),
-        mutationLeases: persistence.listWorkflowMutationLeases(),
-        eventsByTaskId: new Map(tasks.map((task) => [task.id, persistence.getEvents(task.id)])),
-        activityLogs: persistence.getActivityLogs(0, 200),
-        stallThresholdMs: resolveActionDiagnosticsStallThresholdMs(invokerConfig),
-        launchDispatches: persistence.listLaunchDispatchesByState(['enqueued', 'leased', 'abandoned']),
-      });
+      return buildCurrentActionGraphSnapshot({ orchestrator, persistence, invokerConfig });
     });
 
     ipcMain.handle('invoker:report-ui-perf', (_event, metric: string, data?: Record<string, unknown>) => {

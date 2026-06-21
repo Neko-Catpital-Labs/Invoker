@@ -779,6 +779,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
         FOREIGN KEY (task_id) REFERENCES tasks(id)
       );
 
+      CREATE INDEX IF NOT EXISTS idx_events_task_id_id
+        ON events(task_id, id);
+
       CREATE TABLE IF NOT EXISTS activity_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         timestamp TEXT NOT NULL DEFAULT (datetime('now')),
@@ -1052,6 +1055,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     // Replace old attempt_number index with created_at index
     this.db.run('DROP INDEX IF EXISTS idx_attempts_node');
     this.db.run('CREATE INDEX IF NOT EXISTS idx_attempts_node_created ON attempts(node_id, created_at)');
+    this.db.run('CREATE INDEX IF NOT EXISTS idx_events_task_id_id ON events(task_id, id)');
     this.db.run('CREATE INDEX IF NOT EXISTS idx_tasks_workflow_id ON tasks(workflow_id)');
     this.db.run('DROP INDEX IF EXISTS idx_task_launch_dispatch_active_attempt');
     this.db.run(`
@@ -2098,6 +2102,23 @@ export class SQLiteAdapter implements PersistenceAdapter {
     }));
   }
 
+  getRecentEvents(taskId: string, limit = 20): TaskEvent[] {
+    if (limit <= 0) return [];
+    const rows = this.queryAll(
+      `SELECT * FROM (
+        SELECT * FROM events WHERE task_id = ? ORDER BY id DESC LIMIT ?
+      ) ORDER BY id ASC`,
+      [taskId, Math.floor(limit)],
+    );
+    return rows.map((row: any) => ({
+      id: row.id,
+      taskId: row.task_id,
+      eventType: row.event_type,
+      payload: row.payload ?? undefined,
+      createdAt: row.created_at,
+    }));
+  }
+
   // ── Queries ─────────────────────────────────────────
 
   getSelectedExperiment(taskId: string): string | null {
@@ -2504,6 +2525,28 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'SELECT * FROM attempts WHERE node_id = ? ORDER BY created_at ASC',
       [nodeId],
     );
+    return rows.map(this.rowToAttempt);
+  }
+
+  loadActionGraphAttempts(nodeId: string, selectedAttemptId?: string): Attempt[] {
+    const rows = selectedAttemptId
+      ? this.queryAll(
+        `SELECT * FROM attempts
+        WHERE node_id = ?
+          AND (status IN ('pending', 'claimed', 'running', 'needs_input') OR id = ?)
+        ORDER BY created_at ASC`,
+        [nodeId, selectedAttemptId],
+      )
+      : this.queryAll(
+        `SELECT * FROM attempts
+        WHERE node_id = ?
+          AND (
+            status IN ('pending', 'claimed', 'running', 'needs_input')
+            OR id = (SELECT id FROM attempts WHERE node_id = ? ORDER BY created_at DESC LIMIT 1)
+          )
+        ORDER BY created_at ASC`,
+        [nodeId, nodeId],
+      );
     return rows.map(this.rowToAttempt);
   }
 
