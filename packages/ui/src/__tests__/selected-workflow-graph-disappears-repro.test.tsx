@@ -70,7 +70,7 @@ describe('selected workflow graph metadata-gap regression', () => {
       expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow A');
     });
 
-    expect(screen.getByText('Total:')).toHaveTextContent('Total: 2');
+    expect(screen.getByTestId('workflow-status-pill-running')).toHaveTextContent('running (1)');
     expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
     expect(screen.getByTestId('workflow-node-wf-b')).toBeInTheDocument();
     expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
@@ -140,7 +140,7 @@ describe('selected workflow graph metadata-gap regression', () => {
     expect(screen.getByTestId('rf__node-__merge__wf-a')).toBeInTheDocument();
     expect(screen.getByTestId('selected-workflow-mini-dag-refreshing')).toBeInTheDocument();
     expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow A');
-    expect(screen.getByText('Total:')).not.toHaveTextContent('Total: 0');
+    expect(screen.getByTestId('workflow-status-pill-running')).toHaveTextContent('running (1)');
 
     await act(async () => {
       mock.fireDelta({ type: 'created', task: alpha });
