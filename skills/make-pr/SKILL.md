@@ -125,6 +125,20 @@ node scripts/create-pr.mjs --title "<title>" --base master --body-file /tmp/my-p
 
 This script handles local image path upload/injection when configured. It also rejects UI-impacting diffs unless the body includes visual proof media.
 
+## Stack PR title schema
+
+For Mergify stacks and manual stacks of diffs, every PR title must start with the same short stack idea and exactly one slice index:
+
+```text
+[Graph Blanking](1) Preserve selected graph while loading
+[Graph Blanking](2) Reconcile graph refresh after task updates
+```
+
+Use the bracketed idea as the shared stack name. Use the parenthesized number as that PR's slice number. Do not chain numbers like `(1)(2)`. `scripts/create-pr.mjs` rejects stacked PR titles that do not start this way.
+
+For single, unstacked PRs against `master`, use a normal clear title.
+
+
 ## Upstream-first workflow
 
 Use the canonical repository as the PR target and an explicit publish remote (typically `origin`) for branch publication.
@@ -150,6 +164,12 @@ If the target repo is Invoker itself (`EdbertChan/Invoker` or `Neko-Catpital-Lab
 mergify stack push
 ```
 
+- after `mergify stack push`, repair PR titles or bodies by rerunning `create-pr` in update mode on the created stack branch; stacked titles must use `[Stack Idea](N)` prefixes
+
+```bash
+node scripts/create-pr.mjs --title "[Graph Blanking](1) Preserve selected graph while loading" --base <base> --body-file /tmp/my-pr.md --update-existing
+```
+
 Do not generalize this to unrelated repos.
 
 ## Validation
@@ -160,6 +180,7 @@ Before creating a PR:
 - ensure the body sections are present and concrete
 - ensure test commands are real commands that were actually run when possible
 - ensure revert guidance is honest
+- ensure stacked PR titles start with `[Stack Idea](N)`, not `[Stack Idea](N)(M)`
 - validate the body with `node scripts/validate-pr-body.mjs --body-file <file>`
 - for UI-impacting diffs, include `## Visual Proof` with screenshot or video proof before `node scripts/create-pr.mjs`
 
