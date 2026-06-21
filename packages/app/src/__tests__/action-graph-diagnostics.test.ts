@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Attempt, TaskState } from '@invoker/workflow-core';
-import type { TaskLaunchDispatch, Workflow } from '@invoker/data-store';
+import type { TaskEvent, TaskLaunchDispatch, Workflow } from '@invoker/data-store';
 import {
   buildActionGraphDiagnostics,
   resolveActionDiagnosticsStallThresholdMs,
@@ -188,6 +188,66 @@ describe('buildActionGraphDiagnostics', () => {
 
     expect(graph.nodes.find((node) => node.id === 'blocker:launch-failed:error')?.label).toBe('Launch failed');
     expect(graph.nodes.find((node) => node.id === 'blocker:launch-failed:workspace')?.label).toBe('Missing workspace');
+  });
+
+  it('keeps only the latest task events in selected attempt history', () => {
+    const selectedAttempt = attempt({ id: 'attempt-a1', nodeId: 'task-a' });
+    const events: TaskEvent[] = Array.from({ length: 30 }, (_value, index) => ({
+      id: index + 1,
+      taskId: 'task-a',
+      eventType: `event-${index}`,
+      payload: `payload-${index}`,
+      createdAt: new Date(Date.UTC(2026, 4, 14, 11, index)).toISOString(),
+    }));
+
+    const graph = buildActionGraphDiagnostics({
+      workflows: [workflow],
+      tasks: [task({ id: 'task-a', execution: { selectedAttemptId: selectedAttempt.id } })],
+      attemptsByTaskId: new Map([['task-a', [selectedAttempt]]]),
+      queueStatus: { maxConcurrency: 1, runningCount: 0, running: [], queued: [] },
+      mutationIntents: [],
+      mutationLeases: [],
+      eventsByTaskId: new Map([['task-a', events]]),
+      activityLogs: [],
+      stallThresholdMs: 60_000,
+      now,
+    });
+
+    const selected = graph.nodes.find((node) => node.id === 'attempt:attempt-a1');
+    expect(selected?.history?.map((entry) => entry.source)).toEqual(
+      Array.from({ length: 20 }, (_value, index) => `event-${index + 10}`),
+    );
+  });
+
+  it('skips upstream attempt edges whose source attempts are omitted', () => {
+    const upstream = task({ id: 'upstream', status: 'failed' });
+    const downstream = task({ id: 'downstream', status: 'pending', dependencies: ['upstream'] });
+    const downstreamAttempt = attempt({
+      id: 'downstream-a1',
+      nodeId: 'downstream',
+      upstreamAttemptIds: ['old-upstream-a1'],
+    });
+
+    const graph = buildActionGraphDiagnostics({
+      workflows: [workflow],
+      tasks: [upstream, downstream],
+      attemptsByTaskId: new Map([['downstream', [downstreamAttempt]]]),
+      queueStatus: { maxConcurrency: 1, runningCount: 0, running: [], queued: [] },
+      mutationIntents: [],
+      mutationLeases: [],
+      eventsByTaskId: new Map(),
+      activityLogs: [],
+      stallThresholdMs: 60_000,
+      now,
+    });
+
+    expect(graph.edges).not.toContainEqual(expect.objectContaining({
+      source: 'attempt:old-upstream-a1',
+      target: 'attempt:downstream-a1',
+    }));
+    expect(graph.nodes.find((node) => node.id === 'blocker:downstream:dependency:upstream')).toEqual(
+      expect.objectContaining({ type: 'blocker', status: 'waiting' }),
+    );
   });
 });
 
