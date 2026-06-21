@@ -47,10 +47,17 @@ export interface WorkflowMeta {
   createdAt?: string;
   updatedAt?: string;
 }
+export interface WorkflowRollupPatch {
+  workflowId: string;
+  status: WorkflowDerivedStatus;
+  rollup: WorkflowRollup;
+}
+
 export type TaskGraphEvent =
   | {
       type: 'delta';
       delta: TaskDelta;
+      workflowRollups: WorkflowRollupPatch[];
     }
   | {
       type: 'snapshot';
