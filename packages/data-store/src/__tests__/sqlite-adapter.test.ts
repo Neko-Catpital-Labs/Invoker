@@ -909,6 +909,87 @@ describe('SQLiteAdapter', () => {
       loaded = adapter.loadTasks('wf-1');
       expect(loaded[0].execution.generation).toBe(5);
     });
+
+    it('round-trips reviewGate through save and load', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const reviewGate = {
+        activeGeneration: 2,
+        completion: { required: 'all', status: 'approved' },
+        artifacts: [
+          {
+            id: 'contracts',
+            title: 'Contracts',
+            providerId: '101',
+            required: true,
+            status: 'approved',
+            generation: 2,
+          },
+          {
+            id: 'runtime',
+            title: 'Runtime',
+            providerId: '102',
+            required: true,
+            status: 'open',
+            dependsOn: ['contracts'],
+            generation: 2,
+          },
+        ],
+      } as const;
+
+      adapter.saveTask('wf-1', makeTask('t-review-gate', { execution: { reviewGate } }));
+
+      const loaded = adapter.loadTask('t-review-gate');
+      expect(loaded?.execution.reviewGate).toEqual(reviewGate);
+    });
+
+    it('clears reviewGate when updateTask receives undefined', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t-review-gate-clear', {
+        execution: {
+          reviewGate: {
+            activeGeneration: 1,
+            completion: { required: 'all', status: 'approved' },
+            artifacts: [
+              { id: 'contracts', required: true, status: 'open', generation: 1 },
+            ],
+          },
+        },
+      }));
+
+      adapter.updateTask('t-review-gate-clear', { execution: { reviewGate: undefined } });
+
+      const loaded = adapter.loadTask('t-review-gate-clear');
+      const stored = (adapter as any).db.exec(
+        "SELECT review_gate FROM tasks WHERE id = 't-review-gate-clear'",
+      ) as Array<{ values: unknown[][] }>;
+      expect(loaded?.execution.reviewGate).toBeUndefined();
+      expect(stored[0]?.values[0]?.[0]).toBeNull();
+    });
+
+    it('keeps reviewGate unchanged when updating another execution field', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const reviewGate = {
+        activeGeneration: 3,
+        completion: { required: 'all', status: 'approved' },
+        artifacts: [
+          { id: 'contracts', required: true, status: 'approved', generation: 3 },
+          {
+            id: 'runtime',
+            required: true,
+            status: 'open',
+            dependsOn: ['contracts'],
+            generation: 3,
+          },
+        ],
+      } as const;
+      adapter.saveTask('wf-1', makeTask('t-review-gate-keep', { execution: { reviewGate } }));
+
+      adapter.updateTask('t-review-gate-keep', { execution: { reviewStatus: 'approved' } });
+
+      const loaded = adapter.loadTask('t-review-gate-keep');
+      expect(loaded?.execution.reviewStatus).toBe('approved');
+      expect(loaded?.execution.reviewGate).toEqual(reviewGate);
+    });
   });
 
   describe('task-state version persistence', () => {
