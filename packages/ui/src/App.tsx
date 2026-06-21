@@ -1610,6 +1610,19 @@ export function App() {
     [invoker, refreshTaskGraph],
   );
 
+  const handleSetMergeMode = useCallback(
+    async (workflowId: string, mergeMode: 'manual' | 'automatic' | 'external_review') => {
+      if (!invoker) return;
+      try {
+        await invoker.setMergeMode(workflowId, mergeMode);
+        refreshTaskGraph();
+      } catch (err) {
+        console.error('Failed to set merge mode:', err);
+      }
+    },
+    [invoker, refreshTaskGraph],
+  );
+
   // ── Modal triggers ────────────────────────────────────────
   const openInputModal = useCallback((task: TaskState) => {
     setModal({ type: 'input', task });
@@ -1954,6 +1967,7 @@ export function App() {
               onApprove={openApprovalModal}
               onReject={openRejectModal}
               onSetMergeBranch={handleSetMergeBranch}
+              onSetMergeMode={handleSetMergeMode}
               onToggleCollapsed={() => setInspectorCollapsed((prev) => !prev)}
               onToggleAdvanced={() => setAdvancedMetadataExpanded((prev) => !prev)}
             />
