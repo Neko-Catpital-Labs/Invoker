@@ -1,45 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
-import { LocalBus } from '@invoker/transport';
-import { Channels } from '@invoker/transport';
-import type { MessageBus } from '@invoker/transport';
-import { wireHeadlessAutoFix } from '../headless.js';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
+import { describe, expect, it } from 'vitest';
 
-describe('wireHeadlessAutoFix', () => {
-  it('subscribes auto-fix for failed deltas in generic headless execution paths', async () => {
-    const messageBus = new LocalBus() as MessageBus;
-    const shouldAutoFix = vi.fn((taskId: string) => taskId === 'wf-1/task-1');
-    const invokeAutoFix = vi.fn(async () => {});
-    const onError = vi.fn();
+const here = dirname(fileURLToPath(import.meta.url));
 
-    wireHeadlessAutoFix(
-      {
-        messageBus,
-        orchestrator: { shouldAutoFix } as any,
-        persistence: {} as any,
-      },
-      {} as any,
-      invokeAutoFix,
-      onError,
-    );
+describe('headless auto-fix ownership', () => {
+  it('does not wire hidden auto-fix subscriptions in normal headless commands', async () => {
+    const source = await readFile(resolve(here, '../headless.ts'), 'utf8');
 
-    messageBus.publish(Channels.TASK_DELTA, {
-      type: 'updated',
-      taskId: 'wf-1/task-1',
-      changes: { status: 'failed' },
-    });
-    messageBus.publish(Channels.TASK_DELTA, {
-      type: 'updated',
-      taskId: 'wf-1/task-2',
-      changes: { status: 'failed' },
-    });
-
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(shouldAutoFix).toHaveBeenCalledWith('wf-1/task-1');
-    expect(shouldAutoFix).toHaveBeenCalledWith('wf-1/task-2');
-    expect(invokeAutoFix).toHaveBeenCalledTimes(1);
-    expect(invokeAutoFix).toHaveBeenCalledWith('wf-1/task-1');
-    expect(onError).not.toHaveBeenCalled();
+    expect(source).not.toContain('wireHeadlessAutoFix');
   });
 });
