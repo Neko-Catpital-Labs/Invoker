@@ -217,8 +217,8 @@ function assertValidStackPrTitle(title) {
   );
 }
 
-function assertValidPrBody(body, options = {}) {
-  const errors = validatePrBody(body, options);
+async function assertValidPrBody(body, options = {}) {
+  const errors = await validatePrBody(body, options);
   if (errors.length === 0) return;
 
   throw new Error(
@@ -663,7 +663,7 @@ async function main() {
     console.error(`UI-impacting files changed; requiring visual proof: ${uiImpactingFiles.join(', ')}`);
   }
 
-  assertValidPrBody(body, { requiresVisualProof: uiImpactingFiles.length > 0, changedFiles });
+  await assertValidPrBody(body, { requiresVisualProof: uiImpactingFiles.length > 0, changedFiles });
   printPrBodyWarnings(body);
   body = await injectImages(body, args.dryRun);
 
