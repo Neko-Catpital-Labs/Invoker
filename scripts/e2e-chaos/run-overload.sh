@@ -558,17 +558,61 @@ ov_stop_owner() {
     wait "${OVERLOAD_OWNER_PID}" 2>/dev/null || true
     unset OVERLOAD_OWNER_PID waited
   fi
-  pkill -TERM -f 'packages/app/dist/main.js --headless owner-serve' >/dev/null 2>&1 || true
+
+  ov_signal_owned_owner_processes TERM
   waited=0
   while [ "$waited" -lt "$wait_secs" ]; do
-    if ! pgrep -f 'packages/app/dist/main.js --headless owner-serve' >/dev/null 2>&1; then
+    if [ "$(ov_count_owned_owner_processes)" -eq 0 ]; then
       return 0
     fi
     waited=$((waited + 1))
     sleep 1
   done
-  pkill -KILL -f 'packages/app/dist/main.js --headless owner-serve' >/dev/null 2>&1 || true
+  ov_signal_owned_owner_processes KILL
   sleep 1
+}
+
+ov_is_owned_owner_pid() {
+  local pid="$1"
+  local cmdline
+  cmdline="$(invoker_e2e_pid_cmdline "$pid")"
+  case "$cmdline" in
+    *"$INVOKER_E2E_REPO_ROOT/packages/app/dist/main.js"*"--headless owner-serve"*)
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+  if [ -n "${INVOKER_DB_DIR:-}" ] && invoker_e2e_pid_has_env "$pid" "INVOKER_DB_DIR" "$INVOKER_DB_DIR"; then
+    return 0
+  fi
+  if [ -n "${INVOKER_API_PORT:-}" ] && invoker_e2e_pid_has_env "$pid" "INVOKER_API_PORT" "$INVOKER_API_PORT"; then
+    return 0
+  fi
+  return 1
+}
+
+ov_count_owned_owner_processes() {
+  local count=0
+  local pid
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    if ov_is_owned_owner_pid "$pid"; then
+      count=$((count + 1))
+    fi
+  done < <(pgrep -f 'packages/app/dist/main.js.*--headless owner-serve' 2>/dev/null || true)
+  printf '%s' "$count"
+}
+
+ov_signal_owned_owner_processes() {
+  local signal="$1"
+  local pid
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    if ov_is_owned_owner_pid "$pid"; then
+      kill "-$signal" "$pid" 2>/dev/null || true
+    fi
+  done < <(pgrep -f 'packages/app/dist/main.js.*--headless owner-serve' 2>/dev/null || true)
 }
 
 ov_cancel_all_workflows() {

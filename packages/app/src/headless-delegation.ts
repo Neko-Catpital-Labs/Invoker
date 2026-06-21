@@ -82,7 +82,10 @@ export async function tryDelegateResume(
 }
 
 function usesExtendedDelegationTimeout(command: string): boolean {
-  return command === 'rebase-retry' || command === 'rebase-recreate' || command === 'restart';
+  return command === 'rebase-retry'
+    || command === 'rebase-recreate'
+    || command === 'recreate-task'
+    || command === 'restart';
 }
 
 function looksLikeWorkflowId(target: unknown): boolean {
@@ -97,6 +100,9 @@ export function delegationTimeoutMs(
   if (!usesExtendedDelegationTimeout(command)) {
     return DEFAULT_DELEGATION_TIMEOUT_MS;
   }
+  if (command === 'recreate-task') {
+    return WORKFLOW_DELEGATION_TIMEOUT_MS;
+  }
 
   const resolvedTarget = resolveHeadlessTarget(args[1], targetLookup);
   if (resolvedTarget.kind === 'workflow') {
@@ -109,6 +115,9 @@ export async function resolveDelegationTimeoutMs(args: string[]): Promise<number
   const command = args[0] ?? '';
   if (!usesExtendedDelegationTimeout(command)) {
     return DEFAULT_DELEGATION_TIMEOUT_MS;
+  }
+  if (command === 'recreate-task') {
+    return WORKFLOW_DELEGATION_TIMEOUT_MS;
   }
   return looksLikeWorkflowId(args[1])
     ? WORKFLOW_DELEGATION_TIMEOUT_MS
@@ -246,7 +255,9 @@ async function tryDelegate(
       `${traceId} send channel=${channel} timeoutMs=${options.timeoutMs ?? DEFAULT_DELEGATION_TIMEOUT_MS}`,
     );
     raw = await Promise.race([
-      messageBus.request(channel, payload),
+      messageBus.request(channel, payload, {
+        timeoutMs: options.timeoutMs ?? DEFAULT_DELEGATION_TIMEOUT_MS,
+      }),
       timeoutPromise,
     ]);
     delegationLog(`${traceId} response channel=${channel} elapsedMs=${Date.now() - startedAt}`);
