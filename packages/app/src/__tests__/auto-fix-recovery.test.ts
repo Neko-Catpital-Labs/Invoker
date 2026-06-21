@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { TaskState } from '@invoker/workflow-core';
+
 import {
   createRecoveryWorker,
+  listAutoFixRecoveryScanCandidates,
   RECOVERY_WORKER_KIND,
 } from '../workers/auto-fix-recovery.js';
 
@@ -13,6 +16,27 @@ const logger = {
   trace: vi.fn(),
   child: vi.fn(),
 };
+
+function makeTask(overrides: Partial<TaskState> = {}): TaskState {
+  const { config, execution, ...rest } = overrides;
+  return {
+    id: 'wf-1/task-1',
+    description: 'failed task',
+    status: 'failed',
+    dependencies: [],
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    config: { workflowId: 'wf-1', ...(config ?? {}) },
+    execution: {
+      error: 'boom',
+      autoFixAttempts: 0,
+      generation: 1,
+      selectedAttemptId: 'attempt-1',
+      ...(execution ?? {}),
+    },
+    taskStateVersion: 4,
+    ...rest,
+  };
+}
 
 describe('auto-fix recovery worker', () => {
   afterEach(() => {
@@ -49,5 +73,31 @@ describe('auto-fix recovery worker', () => {
     await vi.advanceTimersByTimeAsync(1000);
     expect(onTick).toHaveBeenCalledTimes(1);
     await runtime.stop();
+  });
+});
+
+describe('auto-fix recovery scan candidates', () => {
+  it('lists failed persisted tasks with version metadata', () => {
+    const failedTask = makeTask();
+    const completedTask = makeTask({ id: 'wf-1/task-2', status: 'completed' });
+
+    const candidates = listAutoFixRecoveryScanCandidates({
+      store: {
+        listWorkflows: () => [{ id: 'wf-1' }],
+        loadTasks: () => [failedTask, completedTask],
+        listWorkflowMutationIntents: () => [],
+      },
+    });
+
+    expect(candidates).toEqual([
+      {
+        taskId: 'wf-1/task-1',
+        workflowId: 'wf-1',
+        generation: 1,
+        taskStateVersion: 4,
+        attemptId: 'attempt-1',
+        source: 'scan',
+      },
+    ]);
   });
 });
