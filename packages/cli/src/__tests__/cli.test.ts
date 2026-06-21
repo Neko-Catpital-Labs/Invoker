@@ -6,7 +6,7 @@ import { LocalBus } from '@invoker/transport';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { main } from '../index.js';
-import { submitPlanForMcp, validatePlanForMcp, type McpCliRunner } from '../mcp-server.js';
+import { handoffPrompt, submitPlanForMcp, validatePlanForMcp, type McpCliRunner } from '../mcp-server.js';
 
 const repoRoot = resolve(__dirname, '../../../..');
 const cliPath = resolve(repoRoot, 'packages/cli/dist/index.js');
@@ -219,6 +219,14 @@ tasks:
   });
 
 
+
+  it('tells MCP handoff users to trigger PR skills before publication work', () => {
+    const prompt = handoffPrompt('publish this as a PR stack');
+
+    expect(prompt).toContain('skill://make-pr/SKILL.md');
+    expect(prompt).toContain('skill://review-compression/SKILL.md');
+    expect(prompt).toContain('pull requests or PR stacks');
+  });
   it('validates an Invoker plan for MCP without submitting it', async () => {
     const result = await validatePlanForMcp(fixturePlan);
 
