@@ -21,10 +21,18 @@ interface ValidationError {
 
 const VALID_ON_FINISH = ['none', 'merge', 'pull_request'] as const;
 const VALID_MERGE_MODE = ['manual', 'automatic', 'github', 'external_review'] as const;
-const VALID_REQUIRED_STATUS = ['completed', 'review_ready'] as const;
+const VALID_REQUIRED_STATUS = ['completed'] as const;
 const VALID_GATE_POLICY = ['completed', 'review_ready'] as const;
 
 type ExternalDep = { workflowId?: string; taskId?: string; requiredStatus?: string; gatePolicy?: string };
+
+type RawReviewGate = {
+  type?: string;
+  authoring?: { mode?: string; preferredShape?: string };
+  completion?: { required?: unknown; state?: string };
+  requiredPullRequests?: unknown;
+  prCount?: unknown;
+};
 
 const NESTED_SHELL_INVOCATION = /\b(?:sh|bash)\s+-(?:c|lc)\b/g;
 const SHELL_VARIABLE_REFERENCE = /\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})/;
@@ -181,6 +189,46 @@ function validateExternalDeps(
   });
 }
 
+function validateReviewGate(reviewGate: unknown, errors: ValidationError[]): void {
+  if (reviewGate === undefined) return;
+  if (!reviewGate || typeof reviewGate !== 'object' || Array.isArray(reviewGate)) {
+    errors.push({ errorType: 'invalid_field_type', field: 'reviewGate', message: '"reviewGate" must be an object', value: reviewGate });
+    return;
+  }
+  const gate = reviewGate as RawReviewGate;
+  if (gate.requiredPullRequests !== undefined) {
+    errors.push({ errorType: 'unsupported_field', field: 'reviewGate.requiredPullRequests', message: '"reviewGate.requiredPullRequests" is not supported', value: gate.requiredPullRequests });
+  }
+  if (gate.prCount !== undefined) {
+    errors.push({ errorType: 'unsupported_field', field: 'reviewGate.prCount', message: '"reviewGate.prCount" is not supported', value: gate.prCount });
+  }
+  if (gate.type !== undefined && gate.type !== 'pull_requests') {
+    errors.push({ errorType: 'invalid_enum_value', field: 'reviewGate.type', message: '"reviewGate.type" must be "pull_requests"', value: gate.type });
+  }
+  const mode = gate.authoring?.mode;
+  if (mode !== undefined && !['automatic', 'manual', 'external'].includes(mode)) {
+    errors.push({ errorType: 'invalid_enum_value', field: 'reviewGate.authoring.mode', message: '"reviewGate.authoring.mode" must be one of: automatic, manual, external', value: mode });
+  }
+  const preferredShape = gate.authoring?.preferredShape;
+  if (preferredShape !== undefined && !['stacked_diffs', 'independent'].includes(preferredShape)) {
+    errors.push({ errorType: 'invalid_enum_value', field: 'reviewGate.authoring.preferredShape', message: '"reviewGate.authoring.preferredShape" must be one of: stacked_diffs, independent', value: preferredShape });
+  }
+  if (gate.completion && typeof gate.completion !== 'object') {
+    errors.push({ errorType: 'invalid_field_type', field: 'reviewGate.completion', message: '"reviewGate.completion" must be an object', value: gate.completion });
+    return;
+  }
+  const required = gate.completion?.required;
+  if (typeof required === 'number') {
+    errors.push({ errorType: 'invalid_field_type', field: 'reviewGate.completion.required', message: '"reviewGate.completion.required" must be "all"; numeric pull request counts are not supported', value: required });
+  } else if (required !== undefined && required !== 'all') {
+    errors.push({ errorType: 'invalid_enum_value', field: 'reviewGate.completion.required', message: '"reviewGate.completion.required" must be "all"', value: required });
+  }
+  const state = gate.completion?.state;
+  if (state !== undefined && state !== 'merged') {
+    errors.push({ errorType: 'invalid_enum_value', field: 'reviewGate.completion.state', message: '"reviewGate.completion.state" must be "merged"', value: state });
+  }
+}
+
 function validatePlan(yamlContent: string): ValidationError[] {
   const errors: ValidationError[] = [];
 
@@ -262,6 +310,7 @@ function validatePlan(yamlContent: string): ValidationError[] {
       value: raw.mergeMode,
     });
   }
+  validateReviewGate((raw as RawPlan & { reviewGate?: RawReviewGate }).reviewGate, errors);
 
   if (raw.runnerKind !== undefined) {
     errors.push({
@@ -285,7 +334,7 @@ function validatePlan(yamlContent: string): ValidationError[] {
   }
 
   // Validate plan-level externalDependencies structure
-  if (raw.externalDependencies) {
+  if (raw.externalDependencies !== undefined) {
     validateExternalDeps(raw.externalDependencies, 'externalDependencies', errors);
   }
 
@@ -418,8 +467,14 @@ function validatePlan(yamlContent: string): ValidationError[] {
     }
 
     // Validate externalDependencies
-    if (task.externalDependencies) {
-      validateExternalDeps(task.externalDependencies, 'externalDependencies', errors, taskId);
+    if (task.externalDependencies !== undefined) {
+      errors.push({
+        errorType: 'unsupported_field',
+        field: 'externalDependencies',
+        taskId,
+        message: `Task "${taskId}" uses task-level "externalDependencies", which is no longer supported`,
+        value: task.externalDependencies,
+      });
     }
 
     // Validate experimentVariants
