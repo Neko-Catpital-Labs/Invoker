@@ -241,7 +241,7 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
             }
             return wfMap;
           });
-          uiTaskGraphStreamWatermarkRef.current = firstEvent.streamSequence;
+          uiTaskGraphStreamWatermarkRef.current = Math.max(uiTaskGraphStreamWatermarkRef.current, firstEvent.streamSequence);
           isResyncInFlightRef.current = false;
           onTaskGraphSnapshotApplied?.();
           void window.invoker.reportUiPerf?.('useTasks_snapshot_replace', {
@@ -294,6 +294,16 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
       invalidateStartupSnapshot();
       deltaPerfRef.current.received += 1;
       if (event.type === 'snapshot') {
+        const snapshotStreamSequence = event.streamSequence;
+        const currentStreamSequence = uiTaskGraphStreamWatermarkRef.current;
+        if (snapshotStreamSequence < currentStreamSequence) {
+          window.invoker.reportUiPerf?.('ui_task_graph_stale_snapshot_ignored', {
+            current: currentStreamSequence,
+            snapshot: snapshotStreamSequence,
+            reason: event.reason,
+          });
+          return;
+        }
         graphEventPipelineRef.current?.push(event);
         return;
       }
