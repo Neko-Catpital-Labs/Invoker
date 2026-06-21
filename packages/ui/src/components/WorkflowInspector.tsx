@@ -3,6 +3,8 @@ import type { TaskState, WorkflowMeta } from '../types.js';
 import { getEffectiveVisualStatus, getStatusColor } from '../lib/colors.js';
 import { workflowStatusVisual } from '../lib/workflow-status.js';
 
+type MergeMode = 'manual' | 'automatic' | 'external_review';
+
 interface WorkflowInspectorProps {
   workflow: WorkflowMeta | null;
   task: TaskState | null;
@@ -21,6 +23,7 @@ interface WorkflowInspectorProps {
   onApprove?: (task: TaskState) => void;
   onReject?: (task: TaskState) => void;
   onSetMergeBranch?: (workflowId: string, baseBranch: string) => Promise<void>;
+  onSetMergeMode?: (workflowId: string, mergeMode: MergeMode) => Promise<void>;
   onToggleCollapsed: () => void;
   onToggleAdvanced: () => void;
 }
@@ -31,6 +34,10 @@ function formatStatus(value: string | undefined): string {
 
 function capitalize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function mergeModeValue(value: string | undefined): MergeMode {
+  return value === 'automatic' || value === 'external_review' ? value : 'manual';
 }
 
 function getReviewReadyMergeNodeReviewUrl(
@@ -64,6 +71,7 @@ export function WorkflowInspector({
   onApprove,
   onReject,
   onSetMergeBranch,
+  onSetMergeMode,
   onToggleCollapsed,
   onToggleAdvanced,
 }: WorkflowInspectorProps): JSX.Element {
@@ -283,26 +291,44 @@ export function WorkflowInspector({
           </section>
         )}
 
-        {isMergeNode && onSetMergeBranch && (
+        {isMergeNode && (onSetMergeBranch || onSetMergeMode) && (
           <section className="rounded border border-gray-700 bg-gray-800/70 p-3 space-y-3">
-            <label className="flex items-center justify-between gap-3">
-              <span className="text-xs uppercase tracking-wide text-gray-400">Target Branch</span>
-              <input
-                data-testid="target-branch-input"
-                value={branchValue}
-                onChange={(event) => setBranchValue(event.target.value)}
-                onBlur={saveBranch}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    (event.target as HTMLInputElement).blur();
-                  }
-                  if (event.key === 'Escape') {
-                    setBranchValue(workflow?.baseBranch ?? '');
-                  }
-                }}
-                className="min-w-0 max-w-[190px] rounded border border-gray-600 bg-gray-700 px-2 py-1 text-right font-mono text-xs text-gray-100 focus:border-blue-500 focus:outline-none"
-              />
-            </label>
+            {onSetMergeBranch && (
+              <label className="flex items-center justify-between gap-3">
+                <span className="text-xs uppercase tracking-wide text-gray-400">Target Branch</span>
+                <input
+                  data-testid="target-branch-input"
+                  value={branchValue}
+                  onChange={(event) => setBranchValue(event.target.value)}
+                  onBlur={saveBranch}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      (event.target as HTMLInputElement).blur();
+                    }
+                    if (event.key === 'Escape') {
+                      setBranchValue(workflow?.baseBranch ?? '');
+                    }
+                  }}
+                  className="min-w-0 max-w-[190px] rounded border border-gray-600 bg-gray-700 px-2 py-1 text-right font-mono text-xs text-gray-100 focus:border-blue-500 focus:outline-none"
+                />
+              </label>
+            )}
+            {onSetMergeMode && workflow?.id && (
+              <label className="flex items-center justify-between gap-3">
+                <span className="text-xs uppercase tracking-wide text-gray-400">Merge mode</span>
+                <select
+                  value={mergeModeValue(workflow.mergeMode)}
+                  onChange={(event) => void onSetMergeMode(workflow.id, event.target.value as MergeMode)}
+                  disabled={isTaskBusy}
+                  className="min-w-0 max-w-[190px] rounded border border-gray-600 bg-gray-700 px-2 py-1 text-xs text-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  data-testid="merge-mode-select"
+                >
+                  <option value="manual">Manual</option>
+                  <option value="automatic">Automatic</option>
+                  <option value="external_review">External review (GitHub)</option>
+                </select>
+              </label>
+            )}
             {workflow?.repoUrl && (
               <div className="flex items-start justify-between gap-3">
                 <span className="text-xs uppercase tracking-wide text-gray-400">PR target repo</span>
