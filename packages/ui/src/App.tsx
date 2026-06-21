@@ -29,7 +29,7 @@ import { WorkflowGraph } from './components/WorkflowGraph.js';
 import { FloatingGraphPanel } from './components/FloatingGraphPanel.js';
 import { WorkflowInspector } from './components/WorkflowInspector.js';
 import { ActionGraphView } from './components/ActionGraphView.js';
-import { StatusBar } from './components/StatusBar.js';
+import { WorkflowStatusChips } from './components/WorkflowStatusChips.js';
 import { TerminalDrawer, type TerminalDrawerState } from './components/TerminalDrawer.js';
 import {
   isExperimentSpawnPivotTask,
@@ -66,18 +66,17 @@ type SearchResult =
 
 const KEYBOARD_REGION_ORDER: readonly KeyboardRegion[] = ['workflowGraph', 'taskGraph', 'inspector', 'bottomBar'];
 const SIDEBAR_NAV_ITEM_SELECTOR = '[data-sidebar-nav-item]';
-const STATUS_KEY_ORDER: readonly string[] = [
+const STATUS_KEY_ORDER: readonly WorkflowStatus[] = [
   'completed',
   'running',
   'failed',
   'closed',
   'pending',
-  'needs_input',
   'review_ready',
-  'fixing_with_ai',
   'awaiting_approval',
-  'fix_approval',
   'blocked',
+  'fixing_with_ai',
+  'stale',
 ];
 const EDITABLE_SELECTOR = [
   'input',
@@ -696,13 +695,12 @@ export function App() {
   }, []);
 
   const visibleStatusKeys = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const task of tasks.values()) {
-      const key = task.status === 'awaiting_approval' && task.execution.pendingFixError ? 'fix_approval' : task.status;
-      counts.set(key, (counts.get(key) ?? 0) + 1);
+    const counts = new Map<WorkflowStatus, number>();
+    for (const workflow of workflows.values()) {
+      counts.set(workflow.status, (counts.get(workflow.status) ?? 0) + 1);
     }
-    return STATUS_KEY_ORDER.filter(key => (counts.get(key) ?? 0) > 0);
-  }, [tasks]);
+    return STATUS_KEY_ORDER.filter((key) => key === 'completed' || key === 'running' || key === 'failed' || key === 'pending' || (counts.get(key) ?? 0) > 0);
+  }, [workflows]);
 
   const searchResults = useMemo<SearchResult[]>(() => {
     const query = normalizedSearchText(searchQuery.trim());
@@ -1977,12 +1975,11 @@ export function App() {
                 data-keyboard-active={keyboardRegion === 'bottomBar' ? 'true' : 'false'}
                 className={`outline-none ${keyboardRegion === 'bottomBar' ? 'ring-2 ring-inset ring-blue-400/50' : ''}`}
               >
-                <StatusBar
-                  tasks={tasks}
+                <WorkflowStatusChips
+                  workflows={workflows}
                   activeFilters={statusFilters}
-                  visibleKeys={visibleStatusKeys}
                   keyboardActiveKey={keyboardRegion === 'bottomBar' ? visibleStatusKeys[bottomStatusIndex] ?? null : null}
-                  onStatusClick={(filterKey, event) => handleStatusClick(filterKey as WorkflowStatus, event)}
+                  onStatusClick={handleStatusClick}
                 />
                 <TerminalDrawer
                   state={terminalDrawerState}
