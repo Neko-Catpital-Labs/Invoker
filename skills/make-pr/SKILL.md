@@ -20,6 +20,7 @@ Use this skill when the work is already done and the user wants a PR created, up
   - Invoker-on-Invoker stacks may use `mergify stack push`
   - unrelated target repos should keep their own normal PR workflow unless they independently use Mergify Stacks
 
+When an Invoker review gate emits multiple PR artifacts, each PR body still uses this same schema, and Invoker-on-Invoker stacks are still published with `mergify stack push`.
 ## Preferred PR schema
 
 Default to this structure:
