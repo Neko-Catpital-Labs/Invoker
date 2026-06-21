@@ -87,6 +87,7 @@ const EDITABLE_SELECTOR = [
   '[role="dialog"] input',
   '[role="dialog"] textarea',
 ].join(',');
+const SYSTEM_SETUP_AUTO_OPEN_DELAY_MS = 1200;
 
 function sidebarNavOrder(item: HTMLElement): number {
   const order = Number(item.dataset.sidebarNavOrder);
@@ -366,12 +367,6 @@ export function hasMergeConflictExecution(task: TaskState | undefined): boolean 
   }
 }
 
-type SelectedWorkflowGraphSnapshot = {
-  workflowId: string;
-  workflow: WorkflowMeta;
-  tasks: Map<string, TaskState>;
-};
-
 export function App() {
   const [graphRefreshSequence, setGraphRefreshSequence] = useState(0);
   const handleTaskGraphSnapshotApplied = useCallback(() => {
@@ -383,7 +378,6 @@ export function App() {
   const invoker = useInvoker();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const graphSurfaceRef = useRef<HTMLDivElement>(null);
-  const lastGoodSelectedWorkflowGraphRef = useRef<SelectedWorkflowGraphSnapshot | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
   const [stickySelectedWorkflow, setStickySelectedWorkflow] = useState<WorkflowMeta | null>(null);
@@ -440,6 +434,25 @@ export function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchActiveIndex, setSearchActiveIndex] = useState(0);
   const uiPerfThrottleRef = useRef<Record<string, number>>({});
+  const systemSetupAutoOpenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const cancelPendingSystemSetupAutoOpen = useCallback(() => {
+    if (systemSetupAutoOpenTimerRef.current !== null) {
+      clearTimeout(systemSetupAutoOpenTimerRef.current);
+      systemSetupAutoOpenTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleSystemSetupAutoOpen = useCallback(() => {
+    cancelPendingSystemSetupAutoOpen();
+    systemSetupAutoOpenTimerRef.current = setTimeout(() => {
+      systemSetupAutoOpenTimerRef.current = null;
+      setShowSystemSetup(true);
+    }, SYSTEM_SETUP_AUTO_OPEN_DELAY_MS);
+  }, [cancelPendingSystemSetupAutoOpen]);
+
+  useEffect(() => cancelPendingSystemSetupAutoOpen, [cancelPendingSystemSetupAutoOpen]);
+
   const lastShiftAtRef = useRef(0);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -453,10 +466,12 @@ export function App() {
         setShowSystemBanner(true);
       }
       if (needsBundledPrompt) {
-        setShowSystemSetup(true);
+        scheduleSystemSetupAutoOpen();
+      } else {
+        cancelPendingSystemSetupAutoOpen();
       }
     }).catch(() => {});
-  }, []);
+  }, [cancelPendingSystemSetupAutoOpen, scheduleSystemSetupAutoOpen]);
 
   useEffect(() => {
     window.invoker?.getRemoteTargets?.().then(setRemoteTargets).catch(() => {});
@@ -588,59 +603,14 @@ export function App() {
     }
     return next;
   }, [selectedWorkflow, selectedWorkflowId, tasks]);
-  useEffect(() => {
-    if (selectedWorkflow && miniDagTasks.size > 0) {
-      lastGoodSelectedWorkflowGraphRef.current = {
-        workflowId: selectedWorkflow.id,
-        workflow: selectedWorkflow,
-        tasks: miniDagTasks,
-      };
-      return;
-    }
-
-    if (!selectedWorkflowId || workflowSelectionDismissed || tasks.size === 0) {
-      lastGoodSelectedWorkflowGraphRef.current = null;
-    }
-  }, [miniDagTasks, selectedWorkflow, selectedWorkflowId, tasks.size, workflowSelectionDismissed]);
-
-  const displayedSelectedWorkflowGraph = useMemo<SelectedWorkflowGraphSnapshot | null>(() => {
-    if (selectedWorkflow && miniDagTasks.size > 0) {
-      return {
-        workflowId: selectedWorkflow.id,
-        workflow: selectedWorkflow,
-        tasks: miniDagTasks,
-      };
-    }
-
-    const snapshot = lastGoodSelectedWorkflowGraphRef.current;
-    const selectedTaskWorkflowId = selectedTask?.config.workflowId ?? null;
-    const selectedTaskForcesDifferentWorkflow = selectedTaskWorkflowId !== null
-      && snapshot !== null
-      && selectedTaskWorkflowId !== snapshot.workflowId;
-    if (
-      snapshot
-      && selectedWorkflowId === snapshot.workflowId
-      && snapshot.tasks.size > 0
-      && !workflowSelectionDismissed
-      && !selectedTaskForcesDifferentWorkflow
-      && tasks.size > 0
-    ) {
-      return snapshot;
-    }
-
-    return null;
-  }, [miniDagTasks, selectedTask, selectedWorkflow, selectedWorkflowId, tasks.size, workflowSelectionDismissed]);
-  const isSelectedWorkflowGraphRefreshing = displayedSelectedWorkflowGraph !== null
-    && !(selectedWorkflow && miniDagTasks.size > 0);
   const selectedTaskDagWorkflows = useMemo(() => {
-    const workflowForDag = displayedSelectedWorkflowGraph?.workflow ?? selectedWorkflow;
-    if (!workflowForDag || workflows.has(workflowForDag.id)) {
+    if (!selectedWorkflow || workflows.has(selectedWorkflow.id)) {
       return workflows;
     }
     const next = new Map(workflows);
-    next.set(workflowForDag.id, workflowForDag);
+    next.set(selectedWorkflow.id, selectedWorkflow);
     return next;
-  }, [displayedSelectedWorkflowGraph, selectedWorkflow, workflows]);
+  }, [selectedWorkflow, workflows]);
 
   useEffect(() => {
     if (!selectedWorkflowId) {
@@ -1736,20 +1706,20 @@ export function App() {
             {missingRequiredTool
               ? `${missingRequiredTool.name} is missing. Invoker needs it for local workflows.`
               : needsBundledSkillsPrompt
-                ? 'Bundled Invoker skills are ready to install into Codex. Install them before using packaged skill-driven flows.'
+                ? 'Invoker AI helpers are ready to install for Codex, Claude, Cursor, and OMP. Install them before using one-command plan handoff.'
               : installedAgentCount === 0
-                ? 'No Claude or Codex CLI detected yet. Install one before running agent-backed tasks.'
+                ? 'No Claude or Codex CLI detected yet. Install one before running agent-backed execution tasks.'
                 : 'Review local prerequisites before running packaged workflows.'}
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <button
-              onClick={() => setShowSystemSetup(true)}
+              onClick={() => { cancelPendingSystemSetupAutoOpen(); setShowSystemSetup(true); }}
               className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs font-medium transition-colors"
             >
               Open Setup
             </button>
             <button
-              onClick={() => setShowSystemBanner(false)}
+              onClick={() => { cancelPendingSystemSetupAutoOpen(); setShowSystemBanner(false); }}
               className="px-2 py-1 text-amber-200 hover:text-white text-xs"
             >
               Dismiss
@@ -1879,7 +1849,7 @@ export function App() {
           <div className="px-2">
             <button
               data-testid="rail-settings"
-              onClick={() => setShowSystemSetup(true)}
+              onClick={() => { cancelPendingSystemSetupAutoOpen(); setShowSystemSetup(true); }}
               className="flex h-8 w-full items-center justify-center rounded text-gray-300 hover:bg-gray-800/70 hover:text-white"
               aria-label="Settings"
               title="Settings"
@@ -1932,12 +1902,12 @@ export function App() {
                     onWorkflowContextMenu={handleWorkflowContextMenu}
                     onManualViewport={handleManualViewport}
                   />
-                  {displayedSelectedWorkflowGraph !== null && (
+                  {selectedWorkflow && miniDagTasks.size > 0 && (
                     <FloatingGraphPanel
-                      key={displayedSelectedWorkflowGraph.workflow.id}
+                      key={selectedWorkflow.id}
                       testId="selected-workflow-mini-dag"
                       dragHandleTestId="selected-workflow-mini-dag-drag-handle"
-                      title={`${displayedSelectedWorkflowGraph.workflow.name} task DAG`}
+                      title={`${selectedWorkflow.name} task DAG`}
                       boundsRef={graphSurfaceRef}
                       contentClassName="h-[250px]"
                     >
@@ -1947,13 +1917,8 @@ export function App() {
                         data-keyboard-active={keyboardRegion === 'taskGraph' ? 'true' : 'false'}
                         className={`h-full outline-none ${keyboardRegion === 'taskGraph' ? 'ring-2 ring-inset ring-blue-300/60' : ''}`}
                       >
-                        {isSelectedWorkflowGraphRefreshing && (
-                          <div data-testid="selected-workflow-mini-dag-refreshing" className="px-2 py-1 text-xs text-amber-200">
-                            Refreshing graph…
-                          </div>
-                        )}
                         <TaskDAG
-                          tasks={displayedSelectedWorkflowGraph.tasks}
+                          tasks={miniDagTasks}
                           workflows={selectedTaskDagWorkflows}
                           selectedTaskId={selectedTaskId}
                           cameraCommand={cameraCommand}
@@ -2007,9 +1972,9 @@ export function App() {
             className={`${inspectorCollapsed ? 'w-16' : 'w-96'} transition-all duration-150 outline-none ${keyboardRegion === 'inspector' ? 'ring-2 ring-inset ring-blue-400/50' : ''}`}
           >
             <WorkflowInspector
-              workflow={displayedSelectedWorkflowGraph?.workflow ?? selectedWorkflow}
+              workflow={selectedWorkflow}
               task={selectedTask}
-              workflowTasks={displayedSelectedWorkflowGraph?.tasks ?? miniDagTasks}
+              workflowTasks={miniDagTasks}
               remoteTargets={remoteTargets}
               executionPools={executionPools}
               executionAgents={executionAgents}
@@ -2129,7 +2094,7 @@ export function App() {
           updateCliPending={updateCliPending}
           updateCliError={updateCliError}
           onUpdateInvokerCli={handleUpdateInvokerCli}
-          onClose={() => setShowSystemSetup(false)}
+          onClose={() => { cancelPendingSystemSetupAutoOpen(); setShowSystemSetup(false); }}
         />
       )}
 
