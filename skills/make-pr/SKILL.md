@@ -61,16 +61,18 @@ List what this slice explicitly does not change.
 
 Only include this section when the change modifies component interactions, control flow, state flow, or data flow.
 
-### Before
+Quote Mermaid labels when they contain prose, punctuation, or code-ish text. Safe:
 
 ```mermaid
-...
+graph TD
+    A["reviewGate.artifacts[] is pending"]
 ```
 
-### After
+Unsafe:
 
 ```mermaid
-...
+graph TD
+    A[reviewGate.artifacts[] is pending]
 ```
 
 ## Test Plan
@@ -164,6 +166,7 @@ Before creating a PR:
 - for UI-impacting diffs, include `## Visual Proof` with screenshot or video proof before `node scripts/create-pr.mjs`
 
 If you include `## Architecture`, keep the diagrams renderable by GitHub Mermaid.
+Always quote labels that contain prose, punctuation, or code-ish text such as `reviewGate.artifacts[]`.
 Reference:
 
 - `scripts/test-pr-diagrams.sh`
