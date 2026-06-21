@@ -129,6 +129,11 @@ export function buildActionGraphDiagnostics(input: ActionGraphDiagnosticsInput):
   const workflowsById = new Map(input.workflows.map((workflow) => [workflow.id, workflow]));
   const runningQueueIds = new Set(input.queueStatus.running.map((item) => item.taskId));
   const queuedQueueIds = new Set(input.queueStatus.queued.map((item) => item.taskId));
+  const visibleAttemptIds = new Set<string>();
+  for (const attempts of input.attemptsByTaskId.values()) {
+    for (const attempt of attempts) visibleAttemptIds.add(attempt.id);
+  }
+
 
   for (const workflow of input.workflows) {
     const actionId = `action:${workflow.id}`;
@@ -267,6 +272,10 @@ export function buildActionGraphDiagnostics(input: ActionGraphDiagnosticsInput):
     const selectedAttemptId = task.execution.selectedAttemptId ?? attempts.at(-1)?.id ?? task.id;
     const selectedNodeId = `attempt:${selectedAttemptId}`;
     const taskEvents = input.eventsByTaskId.get(task.id) ?? [];
+    if (attempts.length === 0) {
+      visibleAttemptIds.add(selectedAttemptId);
+    }
+
 
     for (const attempt of attempts.length > 0 ? attempts : [{
       id: selectedAttemptId,
@@ -328,12 +337,14 @@ export function buildActionGraphDiagnostics(input: ActionGraphDiagnosticsInput):
       });
 
       for (const upstreamAttemptId of attempt.upstreamAttemptIds) {
-        edges.push({
-          id: edgeId(`attempt:${upstreamAttemptId}`, nodeId, 'upstream'),
-          source: `attempt:${upstreamAttemptId}`,
-          target: nodeId,
-          label: 'upstream',
-        });
+        if (visibleAttemptIds.has(upstreamAttemptId)) {
+          edges.push({
+            id: edgeId(`attempt:${upstreamAttemptId}`, nodeId, 'upstream'),
+            source: `attempt:${upstreamAttemptId}`,
+            target: nodeId,
+            label: 'upstream',
+          });
+        }
       }
     }
 
@@ -414,6 +425,8 @@ export function buildActionGraphDiagnostics(input: ActionGraphDiagnosticsInput):
         selectedNode.durations = { ...selectedNode.durations, waitingMs: ageMs(nowMs, task.createdAt) };
       }
     }
+
+
   }
 
   const uniqueEdges = new Map(edges.map((edge) => [edge.id, edge]));
