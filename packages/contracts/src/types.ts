@@ -102,6 +102,42 @@ export type ResponseStatus =
   | 'spawn_experiments'
   | 'select_experiment';
 
+export type ReviewArtifactType = 'pull_request';
+export type ReviewArtifactStatus = 'open' | 'merged' | 'closed' | 'rejected' | 'unknown';
+export type ReviewGateRelationshipKind = 'stacked_diffs' | 'independent' | 'unknown';
+
+export interface ReviewGateArtifact {
+  readonly id: string;
+  readonly provider: string;
+  readonly type: ReviewArtifactType;
+  readonly url: string;
+  readonly identifier: string;
+  readonly title?: string;
+  readonly baseBranch?: string;
+  readonly headBranch?: string;
+  readonly status?: ReviewArtifactStatus;
+  readonly statusText?: string;
+  readonly headSha?: string;
+  readonly headRef?: string;
+  readonly replacedById?: string;
+}
+
+export interface ReviewGateCompletionPolicy {
+  readonly required: 'all';
+  readonly state: 'merged';
+}
+
+export interface ReviewGateExecution {
+  readonly sealed: boolean;
+  readonly completion: ReviewGateCompletionPolicy;
+  readonly relationship: {
+    readonly kind: ReviewGateRelationshipKind;
+    readonly managedBy: 'external';
+  };
+  readonly artifacts: readonly ReviewGateArtifact[];
+  readonly statusText?: string;
+}
+
 export interface WorkResponseOutputs {
   exitCode?: number;
   error?: string;
@@ -118,6 +154,7 @@ export interface WorkResponseOutputs {
   reviewId?: string;
   /** Human-readable review state produced by merge-gate style actions. */
   reviewStatus?: string;
+  reviewGate?: ReviewGateExecution;
 }
 
 export interface SpawnExperimentsRequest {

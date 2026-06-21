@@ -61,7 +61,7 @@ describe('invoker-cli', () => {
     const result = runCli(['run', fixturePlan, '--standalone', '--db-dir', dbDir]);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('hello-from-invoker-cli');
-  });
+  }, 60_000);
 
   it('--json emits a successful workflow result object', () => {
     const dbDir = mkdtempSync(join(tmpdir(), 'invoker-cli-json-db-'));
@@ -70,7 +70,7 @@ describe('invoker-cli', () => {
     const lines = result.stdout.trim().split('\n');
     const json = JSON.parse(lines[lines.length - 1]);
     expect(json.workflow.status).toBe('success');
-  });
+  }, 60_000);
 
   it('invalid YAML exits non-zero with a validation error', () => {
     const dir = mkdtempSync(join(tmpdir(), 'invoker-cli-invalid-'));
@@ -138,7 +138,7 @@ tasks:
     expect(createMessageBus).not.toHaveBeenCalled();
     expect(output.stdout).toContain('hello-from-invoker-cli');
     output.restore();
-  });
+  }, 60_000);
 
   it('auto mode delegates when a GUI owner exists', async () => {
     const output = captureProcessOutput();

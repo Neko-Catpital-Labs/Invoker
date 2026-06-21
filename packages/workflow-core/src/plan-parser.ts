@@ -15,6 +15,20 @@ export interface RawExperimentVariant {
   prompt?: string;
   command?: string;
 }
+export interface RawReviewGate {
+  type?: string;
+  authoring?: {
+    mode?: string;
+    preferredShape?: string;
+  };
+  completion?: {
+    required?: unknown;
+    state?: string;
+  };
+  requiredPullRequests?: unknown;
+  prCount?: unknown;
+}
+
 
 export interface RawPlanTask {
   id?: string;
@@ -46,6 +60,7 @@ export interface RawPlan {
   featureBranch?: string;
   mergeMode?: string;
   reviewProvider?: string;
+  reviewGate?: RawReviewGate;
   repoUrl?: string;
   intermediateRepoUrl?: string;
   externalDependencies?: Array<{
@@ -158,6 +173,76 @@ function assertNoLegacyRoutingKeys(ownerLabel: string, value: object): void {
     }
   }
 }
+function parseReviewGate(
+  rawReviewGate: RawReviewGate | undefined,
+  mergeMode: PlanDefinition['mergeMode'] | undefined,
+): PlanDefinition['reviewGate'] | undefined {
+  const defaultGate: NonNullable<PlanDefinition['reviewGate']> = {
+    type: 'pull_requests',
+    authoring: { mode: 'automatic', preferredShape: 'stacked_diffs' },
+    completion: { required: 'all', state: 'merged' },
+  };
+  if (rawReviewGate === undefined) {
+    return mergeMode === 'external_review' ? defaultGate : undefined;
+  }
+  if (!rawReviewGate || typeof rawReviewGate !== 'object') {
+    throw new PlanParseError('"reviewGate" must be an object');
+  }
+  const hasOwn = (obj: object, key: string): boolean => Object.prototype.hasOwnProperty.call(obj, key);
+  if (hasOwn(rawReviewGate as object, 'requiredPullRequests')) {
+    throw new PlanParseError('"reviewGate.requiredPullRequests" is not supported; use completion.required: all');
+  }
+  if (hasOwn(rawReviewGate as object, 'prCount')) {
+    throw new PlanParseError('"reviewGate.prCount" is not supported; use completion.required: all');
+  }
+
+  const type = rawReviewGate.type ?? defaultGate.type;
+  if (type !== 'pull_requests') {
+    throw new PlanParseError(`"reviewGate.type" must be "pull_requests". Got: "${String(type)}"`);
+  }
+
+  const rawAuthoring = rawReviewGate.authoring ?? {};
+  if (!rawAuthoring || typeof rawAuthoring !== 'object') {
+    throw new PlanParseError('"reviewGate.authoring" must be an object');
+  }
+  const mode = rawAuthoring.mode ?? defaultGate.authoring.mode;
+  if (mode !== 'automatic' && mode !== 'manual' && mode !== 'external') {
+    throw new PlanParseError(`"reviewGate.authoring.mode" must be one of: automatic, manual, external. Got: "${String(mode)}"`);
+  }
+  const preferredShape = rawAuthoring.preferredShape ?? defaultGate.authoring.preferredShape;
+  if (preferredShape !== 'stacked_diffs' && preferredShape !== 'independent') {
+    throw new PlanParseError(`"reviewGate.authoring.preferredShape" must be one of: stacked_diffs, independent. Got: "${String(preferredShape)}"`);
+  }
+
+  const rawCompletion = rawReviewGate.completion ?? {};
+  if (!rawCompletion || typeof rawCompletion !== 'object') {
+    throw new PlanParseError('"reviewGate.completion" must be an object');
+  }
+  if (hasOwn(rawCompletion as object, 'requiredPullRequests')) {
+    throw new PlanParseError('"reviewGate.completion.requiredPullRequests" is not supported; use completion.required: all');
+  }
+  if (hasOwn(rawCompletion as object, 'prCount')) {
+    throw new PlanParseError('"reviewGate.completion.prCount" is not supported; use completion.required: all');
+  }
+  const required = rawCompletion.required ?? defaultGate.completion.required;
+  if (typeof required === 'number') {
+    throw new PlanParseError('"reviewGate.completion.required" must be "all"; numeric pull request counts are not supported');
+  }
+  if (required !== 'all') {
+    throw new PlanParseError(`"reviewGate.completion.required" must be "all". Got: "${String(required)}"`);
+  }
+  const state = rawCompletion.state ?? defaultGate.completion.state;
+  if (state !== 'merged') {
+    throw new PlanParseError(`"reviewGate.completion.state" must be "merged". Got: "${String(state)}"`);
+  }
+
+  return {
+    type,
+    authoring: { mode, preferredShape },
+    completion: { required, state },
+  };
+}
+
 
 export function parsePlan(yamlContent: string): PlanDefinition {
   let raw: RawPlan;
@@ -188,12 +273,14 @@ export function parsePlan(yamlContent: string): PlanDefinition {
   }
   const onFinish = (raw.onFinish as (typeof validOnFinishValues)[number]) ?? 'pull_request';
 
-  const validMergeModes = ['manual', 'automatic', 'external_review'] as const;
+  const validMergeModes = ['manual', 'automatic', 'external_review', 'github'] as const;
   if (raw.mergeMode !== undefined && !validMergeModes.includes(raw.mergeMode as any)) {
     throw new PlanParseError(`"mergeMode" must be one of: ${validMergeModes.join(', ')}. Got: "${raw.mergeMode}"`);
   }
-  const mergeMode = raw.mergeMode as (typeof validMergeModes)[number] | undefined;
-  const reviewProvider = raw.reviewProvider ?? (raw.mergeMode === 'external_review' ? 'github' : undefined);
+  const rawMergeMode = raw.mergeMode as (typeof validMergeModes)[number] | undefined;
+  const mergeMode = rawMergeMode === 'github' ? 'external_review' : rawMergeMode;
+  const reviewProvider = raw.reviewProvider ?? (mergeMode === 'external_review' ? 'github' : undefined);
+  const reviewGate = parseReviewGate(raw.reviewGate, mergeMode);
 
   if (!raw.repoUrl || typeof raw.repoUrl !== 'string') {
     throw new PlanParseError('Plan must have a "repoUrl" field (e.g. repoUrl: git@github.com:user/repo.git).');
@@ -259,6 +346,7 @@ export function parsePlan(yamlContent: string): PlanDefinition {
     featureBranch: raw.featureBranch,
     mergeMode,
     reviewProvider,
+    reviewGate,
     repoUrl: raw.repoUrl,
     intermediateRepoUrl: raw.intermediateRepoUrl,
     externalDependencies: topLevelExternalDependencies,
