@@ -106,4 +106,51 @@ describe('Merge gate approval flow (integration)', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Approve Fix' }).at(-1)!);
     await waitFor(() => expect(mock.api.approve).toHaveBeenCalledWith('fix-task'));
   });
+
+  it('changes merge mode from the selected merge gate inspector', async () => {
+    const completedTask = makeUITask({
+      id: 'merge-work',
+      description: 'Work before review',
+      status: 'completed',
+      workflowId: 'wf-merge',
+      command: 'echo ready',
+    });
+    const reviewGate = makeUITask({
+      id: '__merge__wf-merge',
+      description: 'Review gate for test plan',
+      status: 'review_ready',
+      workflowId: 'wf-merge',
+      isMergeNode: true,
+      dependencies: ['merge-work'],
+    });
+    const reviewWorkflow: WorkflowMeta = {
+      id: 'wf-merge',
+      name: 'Merge Workflow',
+      status: 'review_ready',
+      baseBranch: 'main',
+      onFinish: 'pull_request',
+      mergeMode: 'manual',
+    };
+
+    render(<App />);
+    act(() => mock.setTasks([completedTask, reviewGate], [reviewWorkflow]));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-wf-merge')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('workflow-node-wf-merge'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-__merge__wf-merge')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('rf__node-__merge__wf-merge'));
+    await waitFor(() => {
+      expect(screen.getByTestId('merge-mode-select')).toHaveValue('manual');
+    });
+
+    fireEvent.change(screen.getByTestId('merge-mode-select'), { target: { value: 'external_review' } });
+    await waitFor(() => expect(mock.api.setMergeMode).toHaveBeenCalledWith('wf-merge', 'external_review'));
+    await waitFor(() => expect(mock.api.refreshTaskGraph).toHaveBeenCalled());
+  });
 });
