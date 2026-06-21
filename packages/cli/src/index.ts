@@ -1,8 +1,8 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve, join } from 'node:path';
 import { homedir } from 'node:os';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { Logger } from '@invoker/contracts';
 import { SQLiteAdapter, SqliteTaskRepository } from '@invoker/data-store';
 import {
@@ -55,6 +55,7 @@ type LiveSubmissionResult = {
 
 type CliDeps = {
   createMessageBus?: () => Promise<MessageBus> | MessageBus;
+  runWorkerAutofix?: (args: string[], options: CliOptions) => Promise<number> | number;
 };
 
 type DoctorCheck = {
@@ -130,13 +131,17 @@ function usage(): string {
   return [
     'Usage:',
     '  invoker-cli run <plan.yaml> [--live|--standalone] [--db-dir <path>] [--config <path>] [--json]',
+    '  invoker-cli worker autofix [--interval-ms <ms>]',
+    '  invoker-cli worker [list|status]',
     '  invoker-cli doctor [--fix] [--json]',
     '  invoker-cli --help',
     '  invoker-cli --version',
     '',
     'Commands:',
-    '  run <plan.yaml>  Submit to a live Invoker UI when available, otherwise run standalone.',
-    '  doctor          Check external runtime tools used by Invoker executors.',
+    '  run <plan.yaml>   Submit to a live Invoker UI when available, otherwise run standalone.',
+    '  worker autofix    Start the long-running auto-fix recovery worker service.',
+    '  worker list       List worker service commands.',
+    '  doctor            Check external runtime tools used by Invoker executors.',
     '',
     'Options:',
     '  --live           Require a running Invoker UI owner and submit over IPC.',
@@ -228,7 +233,7 @@ function runDoctor(argv: string[]): number {
   return results.every((result) => result.available) ? 0 : 1;
 }
 
-function parseArgs(argv: string[]): { command?: string; planPath?: string; options: CliOptions } {
+function parseArgs(argv: string[]): { command?: string; commandArgs: string[]; planPath?: string; options: CliOptions } {
   const options: CliOptions = { json: false, mode: 'auto' };
   const positional: string[] = [];
 
@@ -254,6 +259,8 @@ function parseArgs(argv: string[]): { command?: string; planPath?: string; optio
       positional.push('--help');
     } else if (arg === '--version' || arg === '-v') {
       positional.push('--version');
+    } else if (arg.startsWith('--') && positional[0] === 'worker') {
+      positional.push(arg);
     } else if (arg.startsWith('--')) {
       throw new Error(`Unknown option: ${arg}`);
     } else {
@@ -263,6 +270,7 @@ function parseArgs(argv: string[]): { command?: string; planPath?: string; optio
 
   return {
     command: positional[0],
+    commandArgs: positional.slice(1),
     planPath: positional[1],
     options,
   };
@@ -520,6 +528,64 @@ async function createDefaultMessageBus(): Promise<MessageBus> {
   return bus;
 }
 
+function printWorkerList(): void {
+  process.stdout.write([
+    'Worker services:',
+    '  autofix  Long-running auto-fix recovery worker. Resolves or bootstraps the shared owner before starting.',
+  ].join('\n') + '\n');
+}
+
+function resolveDefaultHeadlessClientPath(): string {
+  const moduleDir = dirname(fileURLToPath(import.meta.url));
+  return resolve(moduleDir, '../../app/dist/headless-client.js');
+}
+
+async function runDefaultWorkerAutofix(args: string[], options: CliOptions): Promise<number> {
+  const headlessClientPath = process.env.INVOKER_HEADLESS_CLIENT_PATH || resolveDefaultHeadlessClientPath();
+  if (!existsSync(headlessClientPath)) {
+    throw new Error(
+      `Cannot start worker autofix because the Invoker headless client was not found at ${headlessClientPath}. ` +
+      'Build @invoker/app or set INVOKER_HEADLESS_CLIENT_PATH.',
+    );
+  }
+
+  const child = spawn(process.execPath, [headlessClientPath, 'worker', 'autofix', ...args], {
+    stdio: 'inherit',
+    env: {
+      ...process.env,
+      ...(options.dbDir ? { INVOKER_DB_DIR: resolve(options.dbDir) } : {}),
+      ...(options.config ? {
+        INVOKER_CONFIG: resolve(options.config),
+        INVOKER_REPO_CONFIG_PATH: resolve(options.config),
+      } : {}),
+    },
+  });
+
+  return await new Promise<number>((resolveExit, reject) => {
+    child.once('error', reject);
+    child.once('exit', (code, signal) => {
+      if (signal) {
+        reject(new Error(`worker autofix exited with signal ${signal}`));
+        return;
+      }
+      resolveExit(code ?? 0);
+    });
+  });
+}
+
+async function runWorkerCommand(args: string[], options: CliOptions, deps: CliDeps): Promise<number> {
+  const subCommand = args[0] ?? 'list';
+  if (subCommand === 'list' || subCommand === 'status') {
+    if (args.length > 1) throw new Error(`Unknown worker ${subCommand} option: ${args[1]}`);
+    printWorkerList();
+    return 0;
+  }
+  if (subCommand !== 'autofix') {
+    throw new Error(`Unknown worker sub-command: ${subCommand}. Use: autofix, list, status`);
+  }
+  return await (deps.runWorkerAutofix?.(args.slice(1), options) ?? runDefaultWorkerAutofix(args.slice(1), options));
+}
+
 export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps = {}): Promise<number> {
   let bus: MessageBus | undefined;
   try {
@@ -534,6 +600,9 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
     if (parsed.command === '--version') {
       process.stdout.write(`${VERSION}\n`);
       return 0;
+    }
+    if (parsed.command === 'worker') {
+      return await runWorkerCommand(parsed.commandArgs, parsed.options, deps);
     }
     if (parsed.command !== 'run') {
       throw new Error(`Unknown command: ${parsed.command}`);
