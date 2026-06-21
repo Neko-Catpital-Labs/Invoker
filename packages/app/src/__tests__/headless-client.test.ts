@@ -477,6 +477,45 @@ describe('headless-client', () => {
     ).rejects.toThrow(/requires a running shared owner process/);
   }, 30_000);
 
+  it('delegates query action-graph to a reachable owner endpoint', async () => {
+    const bus = new LocalBus();
+    const graph = {
+      generatedAt: '2026-05-14T12:00:00.000Z',
+      stallThresholdMs: 60_000,
+      nodes: [],
+      edges: [],
+    };
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
+    bus.onRequest('headless.query', async (payload) => {
+      expect(payload).toEqual({ kind: 'action-graph' });
+      return graph;
+    });
+
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const runElectronHeadless = vi.fn(async () => 0);
+
+    const exitCode = await runHeadlessClientCommand(['query', 'action-graph', '--output', 'json'], {
+      messageBus: bus,
+      ensureStandaloneOwner: vi.fn(async () => {}),
+      runElectronHeadless,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(runElectronHeadless).not.toHaveBeenCalled();
+    expect(stdout).toHaveBeenCalledWith(`${JSON.stringify(graph)}\n`);
+    stdout.mockRestore();
+  });
+
+  it('does not silently fall back for query action-graph when no owner endpoint is reachable', async () => {
+    await expect(
+      runHeadlessClientCommand(['query', 'action-graph', '--output', 'json'], {
+        messageBus: new LocalBus(),
+        ensureStandaloneOwner: vi.fn(async () => {}),
+        runElectronHeadless: vi.fn(async () => 0),
+      }),
+    ).rejects.toThrow(/query action-graph requires a running shared owner process/);
+  }, 30_000);
+
   it('delegates query queue to a reachable owner endpoint', async () => {
     const bus = new LocalBus();
     bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
