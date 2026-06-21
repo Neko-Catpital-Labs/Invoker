@@ -2,6 +2,12 @@
 
 All notable changes to Invoker will be documented in this file.
 
+## Unreleased
+
+- Relaunch non-merge fix approvals through the normal launch queue so approved fixes get a fresh executor dispatch.
+- Allow policy review slices to include docs while still blocking behavior and proof files.
+- Bound Action Graph diagnostics to indexed current task data so large databases return quickly.
+
 ## 0.0.4
 
 - Publish complete CLI and desktop release assets for npm launcher packages.
