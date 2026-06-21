@@ -53,11 +53,13 @@ export type AutoFixRecoveryCandidate = {
   source: 'scan';
 };
 
+type AutoFixRecoveryTaskRef = Omit<AutoFixRecoveryCandidate, 'source'>;
+
 function workflowIdForTask(task: TaskState): string | undefined {
   return task.config.workflowId ?? task.id.split('/')[0];
 }
 
-function candidateFromTask(task: TaskState): AutoFixRecoveryCandidate | undefined {
+function taskRefFromTask(task: TaskState): AutoFixRecoveryTaskRef | undefined {
   const workflowId = workflowIdForTask(task);
   if (!workflowId) return undefined;
   return {
@@ -66,6 +68,14 @@ function candidateFromTask(task: TaskState): AutoFixRecoveryCandidate | undefine
     generation: task.execution.generation ?? 0,
     taskStateVersion: task.taskStateVersion,
     attemptId: task.execution.selectedAttemptId,
+  };
+}
+
+function candidateFromTask(task: TaskState): AutoFixRecoveryCandidate | undefined {
+  const ref = taskRefFromTask(task);
+  if (!ref) return undefined;
+  return {
+    ...ref,
     source: 'scan',
   };
 }
