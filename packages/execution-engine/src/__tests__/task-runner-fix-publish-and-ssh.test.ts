@@ -12,23 +12,6 @@ import { EventEmitter } from 'events';
 import { buildCanonicalPrBody, validateCanonicalPrBody } from '../pr-authoring.js';
 import type { PrAuthoringContext } from '../pr-authoring.js';
 
-function reviewGateResult(url: string, identifier: string) {
-  return {
-    sealed: true,
-    relationship: { kind: 'stacked_diffs' as const, managedBy: 'external' as const },
-    artifacts: [{
-      id: `github:pull_request:${identifier}`,
-      provider: 'github',
-      type: 'pull_request' as const,
-      url,
-      identifier,
-      status: 'open' as const,
-      statusText: 'Awaiting review',
-    }],
-  };
-}
-
-
 /**
  * Creates a mock executor that auto-completes on start().
  * For merge nodes (no command/prompt), this simulates the executor's
@@ -1643,7 +1626,7 @@ describe('TaskRunner', () => {
       expect(result.body).toContain('pnpm run build');
     });
 
-    it('external_review propagates authored PR body to publishReviewGate, not raw summary', async () => {
+    it('external_review propagates authored PR body to createReview, not raw summary', async () => {
       const completedTask = makeTask({
         id: 't1',
         status: 'completed',
@@ -1664,7 +1647,10 @@ describe('TaskRunner', () => {
       const allTasks = [mergeTask, completedTask];
 
       const mergeGateProvider = {
-        publishReviewGate: vi.fn().mockResolvedValue(reviewGateResult('https://github.com/owner/repo/pull/42', 'owner/repo#42')),
+        createReview: vi.fn().mockResolvedValue({
+          url: 'https://github.com/owner/repo/pull/42',
+          identifier: 'owner/repo#42',
+        }),
       };
 
       const orchestrator = {
@@ -1723,15 +1709,15 @@ describe('TaskRunner', () => {
 
       await executor.publishAfterFix(mergeTask);
 
-      // publishReviewGate must receive the authored body, NOT the raw summary
-      expect(mergeGateProvider.publishReviewGate).toHaveBeenCalledWith(
+      // createReview must receive the authored body, NOT the raw summary
+      expect(mergeGateProvider.createReview).toHaveBeenCalledWith(
         expect.objectContaining({
           body: authoredBody,
         }),
       );
       // Verify the raw summary was NOT passed as the body
-      const publishReviewGateCall = mergeGateProvider.publishReviewGate.mock.calls[0][0];
-      expect(publishReviewGateCall.body).not.toBe('Raw summary text only');
+      const createReviewCall = mergeGateProvider.createReview.mock.calls[0][0];
+      expect(createReviewCall.body).not.toBe('Raw summary text only');
     });
 
     it('canonical body retains executed UI verification commands in Test Plan', () => {
@@ -2076,7 +2062,10 @@ describe('TaskRunner', () => {
       };
 
       const mergeGateProvider = {
-        publishReviewGate: vi.fn().mockResolvedValue(reviewGateResult('https://github.com/owner/repo/pull/99', 'owner/repo#99')),
+        createReview: vi.fn().mockResolvedValue({
+          url: 'https://github.com/owner/repo/pull/99',
+          identifier: 'owner/repo#99',
+        }),
       };
 
       const gitCalls: { args: string[]; dir: string }[] = [];
@@ -2167,7 +2156,7 @@ describe('TaskRunner', () => {
       }));
 
       // PR created via mergeGateProvider with authored body (not raw summary)
-      expect(mergeGateProvider.publishReviewGate).toHaveBeenCalledWith(
+      expect(mergeGateProvider.createReview).toHaveBeenCalledWith(
         expect.objectContaining({
           baseBranch: 'master',
           featureBranch: 'plan/feature',
@@ -2181,7 +2170,9 @@ describe('TaskRunner', () => {
       expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-pub', expect.objectContaining({
         execution: expect.objectContaining({
           branch: 'plan/feature',
-          reviewGate: expect.objectContaining({ artifacts: [expect.objectContaining({ identifier: 'owner/repo#99', url: 'https://github.com/owner/repo/pull/99' })] }),
+          reviewUrl: 'https://github.com/owner/repo/pull/99',
+          reviewId: 'owner/repo#99',
+          reviewStatus: 'Awaiting review',
         }),
       }));
 
@@ -4078,7 +4069,7 @@ describe('TaskRunner', () => {
   });
 
   describe('external_review propagation of authored PR body', () => {
-    it('publishReviewGate receives the authored body, not the raw workflowSummary', async () => {
+    it('createReview receives the authored body, not the raw workflowSummary', async () => {
       const allTasks = [
         makeTask({
           id: 't1',
@@ -4107,7 +4098,10 @@ describe('TaskRunner', () => {
         updateTask: vi.fn(),
       };
       const mergeGateProvider = {
-        publishReviewGate: vi.fn().mockResolvedValue(reviewGateResult('https://github.com/owner/repo/pull/99', '99')),
+        createReview: vi.fn().mockResolvedValue({
+          url: 'https://github.com/owner/repo/pull/99',
+          identifier: '99',
+        }),
       };
       const executor = new TaskRunner({
         orchestrator: orchestrator as any,
@@ -4142,12 +4136,12 @@ describe('TaskRunner', () => {
 
       await (executor as any).executeMergeNode(mergeTask);
 
-      // The authored body must be passed to publishReviewGate, not the raw summary
-      expect(mergeGateProvider.publishReviewGate).toHaveBeenCalledWith(
+      // The authored body must be passed to createReview, not the raw summary
+      expect(mergeGateProvider.createReview).toHaveBeenCalledWith(
         expect.objectContaining({ body: authoredBody }),
       );
       // Raw summary must not leak into the PR body
-      const prBodyArg = mergeGateProvider.publishReviewGate.mock.calls[0][0].body;
+      const prBodyArg = mergeGateProvider.createReview.mock.calls[0][0].body;
       expect(prBodyArg).not.toContain('Raw workflow summary — should not appear in PR body');
     });
 
@@ -4182,7 +4176,7 @@ describe('TaskRunner', () => {
         updateTask: vi.fn(),
       };
       const mergeGateProvider = {
-        publishReviewGate: vi.fn().mockResolvedValue(reviewGateResult('https://example.com/pr/1', '1')),
+        createReview: vi.fn().mockResolvedValue({ url: 'https://example.com/pr/1', identifier: '1' }),
       };
       const authorPrSpy = vi.fn().mockResolvedValue({
         body: '## Summary\n\nOK\n\n## Test Plan\n\n- [x] pnpm test\n\n## Revert Plan\n\n- Safe',

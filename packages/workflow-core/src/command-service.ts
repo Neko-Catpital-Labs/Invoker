@@ -7,13 +7,13 @@
 
 import type { CommandEnvelope, CommandResult } from '@invoker/contracts';
 import { OrchestratorError } from './orchestrator.js';
-import type { Orchestrator, ExternalGatePolicyUpdate, TaskReplacementDef, ReviewArtifactInput } from './orchestrator.js';
+import type { Orchestrator, ExternalGatePolicyUpdate, TaskReplacementDef } from './orchestrator.js';
 import {
   applyInvalidation,
   buildOrchestratorOnlyInvalidationDeps,
   type InvalidationDeps,
 } from './invalidation-policy.js';
-import type { ReviewGateExecution, TaskState } from '@invoker/workflow-graph';
+import type { TaskState } from '@invoker/workflow-graph';
 
 // ── Cancel Result ────────────────────────────────────────────
 
@@ -409,29 +409,6 @@ export class CommandService {
       'CANCEL_TASK_FAILED',
       () => this.orchestrator.cancelTask(envelope.payload.taskId),
       this.workflowIdForTask(envelope.payload.taskId),
-    );
-  }
-
-  async attachReviewArtifact(
-    envelope: CommandEnvelope<{ workflowId: string; artifact: ReviewArtifactInput }>,
-  ): Promise<CommandResult<ReviewGateExecution>> {
-    return this.executeCommand<ReviewGateExecution>(
-      'ATTACH_REVIEW_ARTIFACT_FAILED',
-      () => this.orchestrator.attachReviewArtifact(
-        envelope.payload.workflowId,
-        envelope.payload.artifact,
-      ),
-      envelope.payload.workflowId,
-    );
-  }
-
-  async sealReviewGate(
-    envelope: CommandEnvelope<{ workflowId: string }>,
-  ): Promise<CommandResult<ReviewGateExecution>> {
-    return this.executeCommand<ReviewGateExecution>(
-      'SEAL_REVIEW_GATE_FAILED',
-      () => this.orchestrator.sealReviewGate(envelope.payload.workflowId),
-      envelope.payload.workflowId,
     );
   }
 
