@@ -1088,6 +1088,7 @@ describe('POST /api/workflows/:id/detach', () => {
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.action).toBe('detached');
+    expect(res.body.message).toBe('Detached downstream workflow wf-1 from upstream workflow wf-0');
     expect(mocks.detachWorkflow).toHaveBeenCalledWith('wf-1', 'wf-0');
   });
 

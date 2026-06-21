@@ -60,6 +60,7 @@ type GraphKeyboardRegion = Extract<KeyboardRegion, 'workflowGraph' | 'taskGraph'
 type ContextMenuCloseOptions = { restoreFocus?: boolean };
 type ContextMenuState = { x: number; y: number; taskId: string; returnFocusRegion?: GraphKeyboardRegion };
 type WorkflowContextMenuState = { x: number; y: number; workflowId: string; returnFocusRegion?: GraphKeyboardRegion };
+type ActionFeedback = { kind: 'success' | 'error'; message: string } | null;
 type SearchResult =
   | { kind: 'workflow'; id: string; title: string; subtitle: string }
   | { kind: 'task'; id: string; workflowId: string | null; title: string; subtitle: string };
@@ -112,10 +113,18 @@ function normalizedSearchText(value: string | undefined): string {
   return (value ?? '').toLowerCase();
 }
 
+function workflowIdentity(workflow: WorkflowMeta | undefined, fallbackId: string): string {
+  if (workflow?.name && workflow.name !== fallbackId) {
+    return `"${workflow.name}" (${fallbackId})`;
+  }
+  return `"${fallbackId}"`;
+}
+
 interface WorkflowContextMenuProps {
   x: number;
   y: number;
-  workflowId: string;
+  workflow: WorkflowMeta | null;
+  workflows: Map<string, WorkflowMeta>;
   onOpenWorkflow: (workflowId: string) => void;
   onOpenPr: (workflowId: string) => void;
   onRetryWorkflow: (workflowId: string) => void;
@@ -124,6 +133,7 @@ interface WorkflowContextMenuProps {
   onRecreateWorkflow: (workflowId: string) => void;
   onCancelWorkflow: (workflowId: string) => void;
   onDeleteWorkflow: (workflowId: string) => void;
+  onDetachWorkflow: (workflowId: string, upstreamWorkflowId: string) => void;
   onCopyWorkflowId: (workflowId: string) => void;
   onClose: (options?: ContextMenuCloseOptions) => void;
   autoFocus?: boolean;
@@ -150,7 +160,8 @@ function stopMenuKeyboardEvent(event: KeyboardEvent | React.KeyboardEvent) {
 function WorkflowContextMenu({
   x,
   y,
-  workflowId,
+  workflow,
+  workflows,
   onOpenWorkflow,
   onOpenPr,
   onRetryWorkflow,
@@ -159,6 +170,7 @@ function WorkflowContextMenu({
   onRecreateWorkflow,
   onCancelWorkflow,
   onDeleteWorkflow,
+  onDetachWorkflow,
   onCopyWorkflowId,
   onClose,
   autoFocus = false,
@@ -216,13 +228,32 @@ function WorkflowContextMenu({
     setFocusedIndex(0);
   }, []);
 
+  const workflowId = workflow?.id ?? '';
   const runAction = (action: (workflowId: string) => void) => {
+    if (!workflowId) return;
     action(workflowId);
+    onClose({ restoreFocus: autoFocus });
+  };
+  const runDetachAction = (upstreamWorkflowId: string) => {
+    if (!workflowId) return;
+    onDetachWorkflow(workflowId, upstreamWorkflowId);
     onClose({ restoreFocus: autoFocus });
   };
 
   const buttonClass = 'w-full px-3 py-1.5 text-left text-sm text-gray-100 hover:bg-gray-700';
   const dangerButtonClass = 'w-full px-3 py-1.5 text-left text-sm text-red-300 hover:bg-gray-700';
+  const detachItems: WorkflowMenuItem[] = (workflow?.externalDependencies ?? []).map((dependency) => {
+    const upstream = workflows.get(dependency.workflowId);
+    const upstreamLabel = upstream?.name && upstream.name !== dependency.workflowId
+      ? `${upstream.name} (${dependency.workflowId})`
+      : dependency.workflowId;
+    return {
+      id: `detach-workflow-${dependency.workflowId}`,
+      label: `Detach from ${upstreamLabel}`,
+      className: dangerButtonClass,
+      action: () => runDetachAction(dependency.workflowId),
+    };
+  });
   const visibleItems: WorkflowMenuItem[] = [
     { id: 'open-workflow', label: 'Open Workflow', className: buttonClass, action: () => runAction(onOpenWorkflow) },
     { id: 'open-pr', label: 'Open PR', className: buttonClass, action: () => runAction(onOpenPr) },
@@ -243,6 +274,7 @@ function WorkflowContextMenu({
           { id: 'rebase-retry', label: 'Rebase and Retry', className: buttonClass, separator: true, action: () => runAction(onRebaseRetry) },
           { id: 'rebase-recreate', label: 'Rebase and Recreate', className: dangerButtonClass, action: () => runAction(onRebaseRecreate) },
           { id: 'recreate-workflow', label: 'Recreate Workflow', className: dangerButtonClass, action: () => runAction(onRecreateWorkflow) },
+          ...detachItems,
           { id: 'cancel-workflow', label: 'Cancel Workflow', className: dangerButtonClass, action: () => runAction(onCancelWorkflow) },
           { id: 'delete-workflow', label: 'Delete Workflow', className: dangerButtonClass, action: () => runAction(onDeleteWorkflow) },
         ]),
@@ -405,6 +437,7 @@ export function App() {
   const [terminalSessions, setTerminalSessions] = useState<TerminalSessionDescriptor[]>([]);
   const [activeTerminalSessionId, setActiveTerminalSessionId] = useState<string | null>(null);
   const [workflowContextMenu, setWorkflowContextMenu] = useState<WorkflowContextMenuState | null>(null);
+  const [actionFeedback, setActionFeedback] = useState<ActionFeedback>(null);
   const [keyboardRegion, setKeyboardRegion] = useState<KeyboardRegion>('workflowGraph');
   const [previousGraphRegion, setPreviousGraphRegion] = useState<KeyboardRegion>('workflowGraph');
   // Typed graph camera state. The graph viewport is user-owned after the
@@ -1291,6 +1324,35 @@ export function App() {
     }
   }, [refreshTaskGraph, selectedWorkflowId]);
 
+  const handleDetachWorkflow = useCallback(async (workflowId: string, upstreamWorkflowId: string) => {
+    setContextMenu(null);
+    setWorkflowContextMenu(null);
+    const downstreamWorkflow = workflows.get(workflowId);
+    const upstreamWorkflow = workflows.get(upstreamWorkflowId);
+    const downstreamIdentity = workflowIdentity(downstreamWorkflow, workflowId);
+    const upstreamIdentity = workflowIdentity(upstreamWorkflow, upstreamWorkflowId);
+    const confirmed = window.confirm(
+      `Detach downstream workflow ${downstreamIdentity} from upstream workflow ${upstreamIdentity}?\n\n` +
+      'This changes the workflow graph and voids downstream work back to pending.',
+    );
+    if (!confirmed) return;
+
+    try {
+      await window.invoker?.detachWorkflow(workflowId, upstreamWorkflowId);
+      setActionFeedback({
+        kind: 'success',
+        message: `Detached downstream workflow ${downstreamIdentity} from upstream workflow ${upstreamIdentity}.`,
+      });
+      await refreshTaskGraph();
+    } catch (err) {
+      setActionFeedback({
+        kind: 'error',
+        message: `Failed to detach downstream workflow ${downstreamIdentity} from upstream workflow ${upstreamIdentity}.`,
+      });
+      console.error('Detach Workflow failed:', err);
+    }
+  }, [refreshTaskGraph, workflows]);
+
   const handleFix = useCallback(async (taskId: string, agentName: string) => {
     setContextMenu(null);
     const task = tasks.get(taskId);
@@ -1446,6 +1508,7 @@ export function App() {
       setSelectedTaskId(null);
       setSelectedWorkflowId(null);
       setModal({ type: 'none' });
+      setActionFeedback(null);
       setStatusFilters(new Set<WorkflowStatus>());
     } catch (err) {
       console.error('Failed to clear:', err);
@@ -1882,6 +1945,19 @@ export function App() {
                       </div>
                     </FloatingGraphPanel>
                   )}
+                  {actionFeedback && (
+                    <div
+                      role="status"
+                      data-testid="action-feedback"
+                      className={`absolute left-4 top-4 z-20 max-w-[min(560px,calc(100%-2rem))] rounded-md border px-3 py-2 text-sm shadow-lg ${
+                        actionFeedback.kind === 'success'
+                          ? 'border-emerald-500/50 bg-emerald-950/90 text-emerald-100'
+                          : 'border-red-500/50 bg-red-950/90 text-red-100'
+                      }`}
+                    >
+                      {actionFeedback.message}
+                    </div>
+                  )}
                 </>
               )}
             </div>
@@ -2050,7 +2126,8 @@ export function App() {
         <WorkflowContextMenu
           x={workflowContextMenu.x}
           y={workflowContextMenu.y}
-          workflowId={workflowContextMenu.workflowId}
+          workflow={workflows.get(workflowContextMenu.workflowId) ?? null}
+          workflows={workflows}
           onOpenWorkflow={handleWorkflowClick}
           onOpenPr={handleOpenWorkflowPr}
           onRetryWorkflow={(workflowId) => void handleRetryWorkflow(workflowId)}
@@ -2059,6 +2136,7 @@ export function App() {
           onRecreateWorkflow={(workflowId) => void handleRecreateWorkflow(workflowId)}
           onCancelWorkflow={(workflowId) => void handleCancelWorkflow(workflowId)}
           onDeleteWorkflow={(workflowId) => void handleDeleteWorkflow(workflowId)}
+          onDetachWorkflow={(workflowId, upstreamWorkflowId) => void handleDetachWorkflow(workflowId, upstreamWorkflowId)}
           onCopyWorkflowId={handleCopyWorkflowId}
           onClose={closeContextMenu}
           autoFocus={Boolean(workflowContextMenu.returnFocusRegion)}

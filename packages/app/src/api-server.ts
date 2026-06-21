@@ -710,11 +710,14 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
             return;
           }
           await detachWorkflow(workflowId, String(upstreamWorkflowId));
+          const message = `Detached downstream workflow ${workflowId} from upstream workflow ${String(upstreamWorkflowId)}`;
+          apiLogger?.info(message, { module: 'api' });
           json(res, 200, {
             ok: true,
             workflowId,
             upstreamWorkflowId,
             action: 'detached',
+            message,
           });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });
