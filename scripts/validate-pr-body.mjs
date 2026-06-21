@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { readFileSync } from 'node:fs';
+import { JSDOM } from 'jsdom';
 import {
   formatReviewUnits,
   getLabelSection,
@@ -36,6 +37,91 @@ const REQUIRED_METADATA_LABELS = [
 const DISCOURAGED_HEADINGS = ['## Testing', '## Notes'];
 const SUMMARY_WORD_LIMIT = 30;
 const VALID_REVIEW_LANES = new Set(['behavior', 'refactor', 'proof', 'cleanup', 'policy', 'docs']);
+
+const MERMAID_BLOCK_PATTERN = /```mermaid[^\n]*\n([\s\S]*?)```/gi;
+const MERMAID_LABEL_QUOTE_GUIDANCE = 'Quote Mermaid labels that contain prose or code-ish text, for example A["reviewGate.artifacts[] is pending"].';
+
+let mermaidApiPromise;
+let mermaidRenderCounter = 0;
+
+function extractMermaidBlocks(body) {
+  const blocks = [];
+  let match;
+  let index = 0;
+
+  while ((match = MERMAID_BLOCK_PATTERN.exec(body)) !== null) {
+    index += 1;
+    blocks.push({ index, source: match[1].trim() });
+  }
+
+  return blocks;
+}
+
+function summarizeMermaidError(error) {
+  return String(error?.message ?? error)
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+async function getMermaidApi() {
+  if (!mermaidApiPromise) {
+    mermaidApiPromise = (async () => {
+      const { window } = new JSDOM('<body></body>', { pretendToBeVisual: true });
+      globalThis.window = window;
+      globalThis.document = window.document;
+      globalThis.Element = window.Element;
+      globalThis.HTMLElement = window.HTMLElement;
+      globalThis.SVGElement = window.SVGElement;
+      globalThis.Node = window.Node;
+      globalThis.DOMParser = window.DOMParser;
+      globalThis.XMLSerializer = window.XMLSerializer;
+      globalThis.getComputedStyle = window.getComputedStyle;
+      globalThis.CSSStyleSheet = window.CSSStyleSheet;
+
+      if (!window.SVGElement.prototype.getBBox) {
+        window.SVGElement.prototype.getBBox = function getBBox() {
+          const text = this.textContent || '';
+          return { x: 0, y: 0, width: Math.max(10, text.length * 8), height: 16 };
+        };
+      }
+      if (!window.SVGElement.prototype.getComputedTextLength) {
+        window.SVGElement.prototype.getComputedTextLength = function getComputedTextLength() {
+          const text = this.textContent || '';
+          return Math.max(10, text.length * 8);
+        };
+      }
+
+      const mermaid = (await import('mermaid')).default;
+      mermaid.initialize({ startOnLoad: false, securityLevel: 'loose' });
+      return mermaid;
+    })();
+  }
+
+  return mermaidApiPromise;
+}
+
+export async function validateMermaidBlocks(body, options = {}) {
+  const context = options.context ?? 'PR body';
+  const mermaidBlocks = extractMermaidBlocks(body);
+  if (mermaidBlocks.length === 0) return [];
+
+  const mermaid = await getMermaidApi();
+  const errors = [];
+
+  for (const block of mermaidBlocks) {
+    try {
+      await mermaid.parse(block.source);
+      mermaidRenderCounter += 1;
+      await mermaid.render(`pr-body-mermaid-${mermaidRenderCounter}`, block.source);
+    } catch (error) {
+      errors.push(
+        `${context} Mermaid block ${block.index} is invalid: ${summarizeMermaidError(error)} ${MERMAID_LABEL_QUOTE_GUIDANCE}`,
+      );
+    }
+  }
+
+  return errors;
+}
 
 function getSectionBody(body, heading) {
   return getMarkdownSection(body, heading);
@@ -180,7 +266,7 @@ export function getPrBodyWarnings(body, options = {}) {
   return warnings;
 }
 
-export function validatePrBody(body, options = {}) {
+export async function validatePrBody(body, options = {}) {
   const errors = [];
   const trimmed = body.trim();
 
@@ -257,6 +343,8 @@ export function validatePrBody(body, options = {}) {
     ],
   }));
 
+  errors.push(...await validateMermaidBlocks(trimmed, { context: 'PR body' }));
+
   if (options.requiresVisualProof && !hasVisualProofMedia(trimmed)) {
     errors.push(
       'UI-impacting changes require a ## Visual Proof section with at least one screenshot image or video/walkthrough link.',
@@ -318,10 +406,10 @@ function parseArgs(argv) {
   return { body, bodyFile, requiresVisualProof };
 }
 
-function main() {
+async function main() {
   const args = parseArgs(process.argv.slice(2));
   const body = args.bodyFile ? readFileSync(args.bodyFile, 'utf-8') : args.body;
-  const errors = validatePrBody(body, { requiresVisualProof: args.requiresVisualProof });
+  const errors = await validatePrBody(body, { requiresVisualProof: args.requiresVisualProof });
   const warnings = getPrBodyWarnings(body);
 
   if (errors.length > 0) {
@@ -343,5 +431,5 @@ function main() {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  main();
+  await main();
 }

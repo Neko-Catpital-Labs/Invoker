@@ -28,19 +28,20 @@ List what this slice explicitly does not change.
 ## Architecture
 
 Only keep this section if the change affects component interactions, control flow, or data flow.
+Quote Mermaid labels when they contain prose, punctuation, or code-ish text like `reviewGate.artifacts[]`.
 
 ### Before
 
 ```mermaid
 graph TD
-    A[Old flow]
+    A["Old flow"]
 ```
 
 ### After
 
 ```mermaid
 graph TD
-    A[New flow]
+    A["New flow"]
 ```
 
 ## Test Plan
