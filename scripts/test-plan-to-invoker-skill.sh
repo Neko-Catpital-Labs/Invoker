@@ -70,6 +70,7 @@ must_contain "$SKILL_MD" "Policy-matrix documents" "SKILL must document policy-m
 must_contain "$SKILL_MD" "verify-noop" "SKILL must explain policy-matrix degradation checks"
 must_contain "$SKILL_MD" "zero-context executable" "SKILL must require zero-context executable prompt instructions"
 must_contain "$SKILL_MD" "Review compression" "SKILL must require review compression for implementation plans"
+must_contain "$SKILL_MD" "skills/make-pr/SKILL.md" "SKILL handoff mode must trigger the PR skill for PR work"
 must_contain "$SKILL_MD" "Review claim:" "SKILL must require review claim metadata"
 must_contain "$SKILL_MD" "Review lane:" "SKILL must require review lane metadata"
 must_contain "$SKILL_MD" "Non-goals:" "SKILL must require non-goals metadata"
