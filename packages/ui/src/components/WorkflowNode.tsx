@@ -13,6 +13,10 @@ interface WorkflowNodeProps {
 function statusLabel(status: WorkflowStatus): string {
   return status.replaceAll('_', ' ');
 }
+function runningTaskLabel(count: number): string {
+  return count === 1 ? '1 running task' : `${count} running tasks`;
+}
+
 
 export function WorkflowNode({
   workflow,
@@ -23,6 +27,8 @@ export function WorkflowNode({
 }: WorkflowNodeProps): JSX.Element {
   const visual = workflowStatusVisual(workflow.status);
   const detachedDependencyCount = workflow.detachedExternalDependencies?.length ?? 0;
+  const runningCount = workflow.rollup?.countsByStatus.running ?? 0;
+  const showRunningTaskLine = workflow.status !== 'running' && runningCount > 0;
 
   return (
     <div
@@ -64,6 +70,14 @@ export function WorkflowNode({
       </div>
       <div className="mt-1 text-[11px] text-gray-400 truncate">{workflow.id}</div>
       <div className={`mt-2 text-[10px] uppercase tracking-wide ${visual.textClass}`}>{statusLabel(workflow.status)}</div>
+      {showRunningTaskLine && (
+        <div
+          data-testid={`workflow-node-${workflow.id}-running-tasks`}
+          className="mt-1 text-[10px] text-gray-300"
+        >
+          {runningTaskLabel(runningCount)}
+        </div>
+      )}
     </div>
   );
 }
