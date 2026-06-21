@@ -88,36 +88,51 @@ export class TaskSnapshotCache {
 export interface ApplyDeltaResult {
   /** Task IDs that need authoritative reload from persistence. */
   quarantined: string[];
+  /** True when the original delta is current and safe to forward to the renderer. */
+  accepted: boolean;
 }
 
 /**
  * Apply a single TaskDelta to the snapshot cache.
  *
  * Task-state-version-aware semantics:
- * - `created`: unconditionally stores the task snapshot and taskStateVersion.
+ * - `created`: stores new task snapshots, but rejects stale snapshots that
+ *   would downgrade an existing cache entry.
  * - `updated` with matching `previousTaskStateVersion`: merges changes, bumps
  *   the cached taskStateVersion to `delta.taskStateVersion`.
- * - `updated` with a taskStateVersion gap or unknown task: quarantines the task
- *   and returns its id in `result.quarantined`.
- * - `removed`: deletes the cache entry.
+ * - `updated` with a forward taskStateVersion gap or unknown task: quarantines
+ *   the task and returns its id in `result.quarantined`.
+ * - `updated` at or behind the cached taskStateVersion is stale and ignored.
+ * - `removed`: deletes the cache entry unless the remove is stale.
  * - Deltas targeting a quarantined task are silently ignored.
  *
- * @returns IDs of tasks that were quarantined and need authoritative reload.
+ * @returns IDs of tasks that were quarantined and whether the original delta was accepted.
  */
 export function applyDelta(
   delta: TaskDelta,
   cache: TaskSnapshotCache,
 ): ApplyDeltaResult {
-  const result: ApplyDeltaResult = { quarantined: [] };
+  const result: ApplyDeltaResult = { quarantined: [], accepted: false };
 
   if (delta.type === 'created') {
+    const entry = cache.getEntry(delta.task.id);
+    const nextVersion = delta.task.taskStateVersion ?? 1;
+    if (entry && nextVersion < entry.taskStateVersion) {
+      return result;
+    }
+
     cache.set(delta.task.id, JSON.stringify(delta.task));
-    return result;
+    return { quarantined: [], accepted: true };
   }
 
   if (delta.type === 'removed') {
+    const entry = cache.getEntry(delta.taskId);
+    if (entry && delta.previousTaskStateVersion < entry.taskStateVersion) {
+      return result;
+    }
+
     cache.delete(delta.taskId);
-    return result;
+    return { quarantined: [], accepted: true };
   }
 
   // delta.type === 'updated'
@@ -128,13 +143,22 @@ export function applyDelta(
     return result;
   }
 
-  // Unknown task or taskStateVersion gap → quarantine.
-  if (!entry || entry.taskStateVersion !== delta.previousTaskStateVersion) {
-    // Mark as quarantined.  If the entry exists, keep its snapshot but
-    // flag it; if it doesn't, create a placeholder entry.
-    if (entry) {
-      entry.quarantined = true;
-    }
+  // Unknown task → quarantine so persistence can tell the renderer to create
+  // or remove the task authoritatively.
+  if (!entry) {
+    result.quarantined.push(delta.taskId);
+    return result;
+  }
+
+  // Stale/backward delta → drop without quarantining or mutating cache.
+  if (delta.taskStateVersion <= entry.taskStateVersion) {
+    return result;
+  }
+
+  // Forward gap → quarantine. Keep the cached snapshot but block later deltas
+  // until recovery replaces or removes it.
+  if (entry.taskStateVersion !== delta.previousTaskStateVersion) {
+    entry.quarantined = true;
     result.quarantined.push(delta.taskId);
     return result;
   }
@@ -154,7 +178,7 @@ export function applyDelta(
   entry.snapshot = snapshot;
   entry.taskStateVersion = delta.taskStateVersion;
 
-  return result;
+  return { quarantined: [], accepted: true };
 }
 
 /**
