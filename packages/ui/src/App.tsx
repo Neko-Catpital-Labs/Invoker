@@ -87,6 +87,7 @@ const EDITABLE_SELECTOR = [
   '[role="dialog"] input',
   '[role="dialog"] textarea',
 ].join(',');
+const SYSTEM_SETUP_AUTO_OPEN_DELAY_MS = 1200;
 
 function sidebarNavOrder(item: HTMLElement): number {
   const order = Number(item.dataset.sidebarNavOrder);
@@ -440,6 +441,25 @@ export function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchActiveIndex, setSearchActiveIndex] = useState(0);
   const uiPerfThrottleRef = useRef<Record<string, number>>({});
+  const systemSetupAutoOpenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const cancelPendingSystemSetupAutoOpen = useCallback(() => {
+    if (systemSetupAutoOpenTimerRef.current !== null) {
+      clearTimeout(systemSetupAutoOpenTimerRef.current);
+      systemSetupAutoOpenTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleSystemSetupAutoOpen = useCallback(() => {
+    cancelPendingSystemSetupAutoOpen();
+    systemSetupAutoOpenTimerRef.current = setTimeout(() => {
+      systemSetupAutoOpenTimerRef.current = null;
+      setShowSystemSetup(true);
+    }, SYSTEM_SETUP_AUTO_OPEN_DELAY_MS);
+  }, [cancelPendingSystemSetupAutoOpen]);
+
+  useEffect(() => cancelPendingSystemSetupAutoOpen, [cancelPendingSystemSetupAutoOpen]);
+
   const lastShiftAtRef = useRef(0);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -453,10 +473,12 @@ export function App() {
         setShowSystemBanner(true);
       }
       if (needsBundledPrompt) {
-        setShowSystemSetup(true);
+        scheduleSystemSetupAutoOpen();
+      } else {
+        cancelPendingSystemSetupAutoOpen();
       }
     }).catch(() => {});
-  }, []);
+  }, [cancelPendingSystemSetupAutoOpen, scheduleSystemSetupAutoOpen]);
 
   useEffect(() => {
     window.invoker?.getRemoteTargets?.().then(setRemoteTargets).catch(() => {});
@@ -1736,20 +1758,20 @@ export function App() {
             {missingRequiredTool
               ? `${missingRequiredTool.name} is missing. Invoker needs it for local workflows.`
               : needsBundledSkillsPrompt
-                ? 'Bundled Invoker skills are ready to install into Codex. Install them before using packaged skill-driven flows.'
+                ? 'Invoker AI helpers are ready to install for Codex, Claude, Cursor, and OMP. Install them before using one-command plan handoff.'
               : installedAgentCount === 0
-                ? 'No Claude or Codex CLI detected yet. Install one before running agent-backed tasks.'
+                ? 'No Claude or Codex CLI detected yet. Install one before running agent-backed execution tasks.'
                 : 'Review local prerequisites before running packaged workflows.'}
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <button
-              onClick={() => setShowSystemSetup(true)}
+              onClick={() => { cancelPendingSystemSetupAutoOpen(); setShowSystemSetup(true); }}
               className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs font-medium transition-colors"
             >
               Open Setup
             </button>
             <button
-              onClick={() => setShowSystemBanner(false)}
+              onClick={() => { cancelPendingSystemSetupAutoOpen(); setShowSystemBanner(false); }}
               className="px-2 py-1 text-amber-200 hover:text-white text-xs"
             >
               Dismiss
@@ -1879,7 +1901,7 @@ export function App() {
           <div className="px-2">
             <button
               data-testid="rail-settings"
-              onClick={() => setShowSystemSetup(true)}
+              onClick={() => { cancelPendingSystemSetupAutoOpen(); setShowSystemSetup(true); }}
               className="flex h-8 w-full items-center justify-center rounded text-gray-300 hover:bg-gray-800/70 hover:text-white"
               aria-label="Settings"
               title="Settings"
@@ -2129,7 +2151,7 @@ export function App() {
           updateCliPending={updateCliPending}
           updateCliError={updateCliError}
           onUpdateInvokerCli={handleUpdateInvokerCli}
-          onClose={() => setShowSystemSetup(false)}
+          onClose={() => { cancelPendingSystemSetupAutoOpen(); setShowSystemSetup(false); }}
         />
       )}
 
@@ -2171,3 +2193,4 @@ export function App() {
     </div>
   );
 }
+
