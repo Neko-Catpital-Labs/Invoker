@@ -51,14 +51,14 @@ describe('GitHubMergeGateProvider', () => {
         return mockSpawnResult('{"html_url":"https://github.com/Neko-Catpital-Labs/Invoker/pull/42","number":42}', 0);
       }) as any);
 
-      const result = await provider.publishReviewGate({
+      const result = await provider.createReview({
         baseBranch: 'master',
         featureBranch: 'feature/test',
         title: 'Test PR',
         cwd: '/tmp/repo',
       });
 
-      expect(result.artifacts[0]?.url).toBe('https://github.com/Neko-Catpital-Labs/Invoker/pull/42');
+      expect(result.url).toBe('https://github.com/Neko-Catpital-Labs/Invoker/pull/42');
       expect(spawnMock).toHaveBeenCalledWith(
         'gh',
         [
@@ -101,15 +101,15 @@ describe('GitHubMergeGateProvider', () => {
         return mockSpawnResult('{"html_url":"https://github.com/owner/repo/pull/42","number":42}', 0);
       }) as any);
 
-      const result = await provider.publishReviewGate({
+      const result = await provider.createReview({
         baseBranch: 'origin/main',
         featureBranch: 'feature/test',
         title: 'Test PR',
         cwd: '/tmp/repo',
       });
 
-      expect(result.artifacts[0]?.url).toBe('https://github.com/owner/repo/pull/42');
-      expect(result.artifacts[0]?.identifier).toBe('42');
+      expect(result.url).toBe('https://github.com/owner/repo/pull/42');
+      expect(result.identifier).toBe('42');
       expect(spawnMock).toHaveBeenCalledWith(
         'git',
         ['push', '--force', 'origin', 'feature/test:refs/heads/feature/test'],
@@ -169,14 +169,14 @@ describe('GitHubMergeGateProvider', () => {
         return mockSpawnResult('{"html_url":"https://github.com/owner/repo/pull/42","number":42}', 0);
       }) as any);
 
-      const result = await provider.publishReviewGate({
+      const result = await provider.createReview({
         baseBranch: 'main',
         featureBranch: 'feature/test',
         title: 'Test PR',
         cwd: '/tmp/repo',
       });
 
-      expect(result.artifacts[0]?.url).toBe('https://github.com/owner/repo/pull/42');
+      expect(result.url).toBe('https://github.com/owner/repo/pull/42');
       expect(pushAttempts).toBe(2);
       expect(spawnMock).toHaveBeenCalledWith(
         'git',
@@ -214,14 +214,14 @@ describe('GitHubMergeGateProvider', () => {
         return mockSpawnResult('{"html_url":"https://github.com/owner/repo/pull/42","number":42}', 0);
       }) as any);
 
-      const result = await provider.publishReviewGate({
+      const result = await provider.createReview({
         baseBranch: 'main',
         featureBranch: 'feature/test',
         title: 'Test PR',
         cwd: '/tmp/repo',
       });
 
-      expect(result.artifacts[0]?.url).toBe('https://github.com/owner/repo/pull/42');
+      expect(result.url).toBe('https://github.com/owner/repo/pull/42');
       expect(pushAttempts).toBe(2);
       expect(spawnMock).toHaveBeenCalledWith(
         'git',
@@ -254,14 +254,14 @@ describe('GitHubMergeGateProvider', () => {
         return mockSpawnResult('{"html_url":"https://github.com/owner/repo/pull/42","number":42}', 0);
       }) as any);
 
-      const result = await provider.publishReviewGate({
+      const result = await provider.createReview({
         baseBranch: 'main',
         featureBranch: 'feature/test',
         title: 'Test PR',
         cwd: '/tmp/repo',
       });
 
-      expect(result.artifacts[0]?.url).toBe('https://github.com/owner/repo/pull/42');
+      expect(result.url).toBe('https://github.com/owner/repo/pull/42');
       expect(lookupAttempts).toBe(2);
     });
 
@@ -283,7 +283,7 @@ describe('GitHubMergeGateProvider', () => {
         return mockSpawnResult('', 0);
       }) as any);
 
-      const result = await provider.publishReviewGate({
+      const result = await provider.createReview({
         baseBranch: 'main',
         featureBranch: 'feature/test',
         title: 'Updated PR',
@@ -291,7 +291,7 @@ describe('GitHubMergeGateProvider', () => {
         body: '## Summary',
       });
 
-      expect(result.artifacts[0]?.url).toBe('https://github.com/owner/repo/pull/10');
+      expect(result.url).toBe('https://github.com/owner/repo/pull/10');
       expect(spawnMock).toHaveBeenCalledWith(
         'gh',
         [
@@ -323,7 +323,7 @@ describe('GitHubMergeGateProvider', () => {
         return mockSpawnResult('', 0);
       }) as any);
 
-      const result = await provider.publishReviewGate({
+      const result = await provider.createReview({
         baseBranch: 'main',
         featureBranch: 'feature/test',
         title: 'Updated PR',
@@ -331,21 +331,9 @@ describe('GitHubMergeGateProvider', () => {
         body: '## Summary',
       });
 
-      expect(result).toMatchObject({
-        sealed: true,
-        relationship: { kind: 'stacked_diffs', managedBy: 'external' },
-        artifacts: [{
-          id: 'github:pull_request:11',
-          provider: 'github',
-          type: 'pull_request',
-          url: 'https://github.com/owner/repo/pull/11',
-          identifier: '11',
-          title: 'Updated PR',
-          baseBranch: 'main',
-          headBranch: 'feature/test',
-          status: 'open',
-          statusText: 'Awaiting review',
-        }],
+      expect(result).toEqual({
+        url: 'https://github.com/owner/repo/pull/11',
+        identifier: '11',
       });
       expect(spawnMock).toHaveBeenCalledWith(
         'gh',
@@ -388,14 +376,14 @@ describe('GitHubMergeGateProvider', () => {
         return mockSpawnResult('{"html_url":"https://github.com/Neko-Catpital-Labs/Invoker/pull/99","number":99}', 0);
       }) as any);
 
-      const result = await provider.publishReviewGate({
+      const result = await provider.createReview({
         baseBranch: 'master',
         featureBranch: 'feature/test',
         title: 'Env target PR',
         cwd: '/tmp/repo',
       });
 
-      expect(result.artifacts[0]?.url).toBe('https://github.com/Neko-Catpital-Labs/Invoker/pull/99');
+      expect(result.url).toBe('https://github.com/Neko-Catpital-Labs/Invoker/pull/99');
       expect(spawnMock).toHaveBeenCalledWith(
         'gh',
         expect.arrayContaining(['api', 'repos/Neko-Catpital-Labs/Invoker/pulls']),
@@ -414,7 +402,7 @@ describe('GitHubMergeGateProvider', () => {
         return mockSpawnResult('', 0);
       }) as any);
 
-      await expect(provider.publishReviewGate({
+      await expect(provider.createReview({
         baseBranch: 'master',
         featureBranch: 'feature/test',
         title: 'Missing target',
@@ -436,7 +424,7 @@ describe('GitHubMergeGateProvider', () => {
         return mockSpawnResult('', 0);
       }) as any);
 
-      await expect(provider.publishReviewGate({
+      await expect(provider.createReview({
         baseBranch: 'master',
         featureBranch: 'feature/test',
         title: 'Missing origin',
@@ -456,7 +444,7 @@ describe('GitHubMergeGateProvider', () => {
         return mockSpawnResult('', 0);
       }) as any);
 
-      await provider.closeArtifact({ identifier: '42', cwd: '/tmp/repo' });
+      await provider.closeReview({ identifier: '42', cwd: '/tmp/repo' });
 
       expect(spawnMock).toHaveBeenCalledWith(
         'gh',
@@ -487,7 +475,7 @@ describe('GitHubMergeGateProvider', () => {
         return mockSpawnResult('', 0);
       }) as any);
 
-      const result = await provider.checkArtifact({ identifier: '1', cwd: '/tmp/repo' });
+      const result = await provider.checkApproval({ identifier: '1', cwd: '/tmp/repo' });
 
       expect(result.approved).toBe(true);
       expect(result.rejected).toBe(false);
@@ -510,7 +498,7 @@ describe('GitHubMergeGateProvider', () => {
         return mockSpawnResult('', 0);
       }) as any);
 
-      const result = await provider.checkArtifact({ identifier: '2', cwd: '/tmp/repo' });
+      const result = await provider.checkApproval({ identifier: '2', cwd: '/tmp/repo' });
 
       expect(result.approved).toBe(false);
       expect(result.rejected).toBe(false);
@@ -533,7 +521,7 @@ describe('GitHubMergeGateProvider', () => {
         return mockSpawnResult('', 0);
       }) as any);
 
-      const result = await provider.checkArtifact({ identifier: '3', cwd: '/tmp/repo' });
+      const result = await provider.checkApproval({ identifier: '3', cwd: '/tmp/repo' });
 
       expect(result.approved).toBe(false);
       expect(result.rejected).toBe(false);
@@ -581,7 +569,7 @@ describe('GitHubMergeGateProvider', () => {
         return mockSpawnResult('', 0);
       }) as any);
 
-      const result = await provider.checkArtifact({ identifier: '4', cwd: '/tmp/repo' });
+      const result = await provider.checkApproval({ identifier: '4', cwd: '/tmp/repo' });
 
       expect(result.headSha).toBe('abc123');
       expect(result.headRef).toBe('feature/red-ci');
