@@ -23,7 +23,7 @@ describe('task-graph-event-pipeline', () => {
     vi.useFakeTimers();
     const onBatch = vi.fn<(batch: TaskGraphEvent[]) => void>();
     const pipeline = createTaskGraphEventPipeline({ flushMs: 100, onBatch });
-    const deltaEvent: TaskGraphEvent = { type: 'delta', delta: { type: 'created', task: makeTask('t1') } };
+    const deltaEvent: TaskGraphEvent = { type: 'delta', delta: { type: 'created', task: makeTask('t1') }, workflowRollups: [] };
     const snapshotEvent: TaskGraphEvent = {
       type: 'snapshot',
       tasks: [makeTask('t2')],
@@ -47,7 +47,7 @@ describe('task-graph-event-pipeline', () => {
     const onBatch = vi.fn<(batch: TaskGraphEvent[]) => void>();
     const pipeline = createTaskGraphEventPipeline({ flushMs: 100, onBatch });
 
-    pipeline.push({ type: 'delta', delta: { type: 'created', task: makeTask('t1') } });
+    pipeline.push({ type: 'delta', delta: { type: 'created', task: makeTask('t1') }, workflowRollups: [] });
     pipeline.clear();
     vi.advanceTimersByTime(100);
 
