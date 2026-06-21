@@ -75,9 +75,10 @@ const STATUS_KEY_ORDER: readonly string[] = [
   'pending',
   'needs_input',
   'review_ready',
-  'awaiting_approval',
-  'blocked',
   'fixing_with_ai',
+  'awaiting_approval',
+  'fix_approval',
+  'blocked',
 ];
 const EDITABLE_SELECTOR = [
   'input',
@@ -702,7 +703,7 @@ export function App() {
       const key = task.status === 'awaiting_approval' && task.execution.pendingFixError ? 'fix_approval' : task.status;
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
-    return STATUS_KEY_ORDER.filter((key) => key === 'completed' || key === 'running' || key === 'failed' || key === 'pending' || (counts.get(key) ?? 0) > 0);
+    return STATUS_KEY_ORDER.filter(key => (counts.get(key) ?? 0) > 0);
   }, [tasks]);
 
   const searchResults = useMemo<SearchResult[]>(() => {
@@ -1926,7 +1927,6 @@ export function App() {
               ) : (
                 <>
                   <WorkflowGraph
-                    tasks={tasks}
                     workflows={workflows}
                     selectedWorkflowId={selectedWorkflow?.id ?? null}
                     cameraCommand={cameraCommand}
@@ -1984,6 +1984,7 @@ export function App() {
                   tasks={tasks}
                   queueStatus={queueStatus}
                   activeFilters={statusFilters}
+                  visibleKeys={visibleStatusKeys}
                   keyboardActiveKey={keyboardRegion === 'bottomBar' ? visibleStatusKeys[bottomStatusIndex] ?? null : null}
                   onStatusClick={(filterKey, event) => handleStatusClick(filterKey as WorkflowStatus, event)}
                 />
