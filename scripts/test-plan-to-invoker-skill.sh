@@ -9,6 +9,7 @@ SKILL_MD="$SKILL_DIR/SKILL.md"
 PLAYBOOK="$SKILL_DIR/playbooks/verify-then-build.md"
 TASK_PATTERNS="$SKILL_DIR/references/task-patterns.md"
 CLAUDE_COMMAND="$REPO_ROOT/.claude/commands/plan-to-invoker.md"
+CANONICAL_COMMAND_DIR="$SKILL_DIR/commands"
 CLAUDE_MD="$REPO_ROOT/CLAUDE.md"
 CODEX_INSTALLED="$HOME/.codex/skills/invoker-plan-to-invoker"
 CLAUDE_INSTALLED="$HOME/.claude/skills/invoker-plan-to-invoker"
@@ -37,6 +38,20 @@ must_output_contain() {
 }
 
 [[ -f "$SKILL_MD" ]] || fail "expected $SKILL_MD"
+for command_template in \
+  "$CANONICAL_COMMAND_DIR/codex/invoker-plan-to-invoker.md" \
+  "$CANONICAL_COMMAND_DIR/claude/invoker-plan-to-invoker.md" \
+  "$CANONICAL_COMMAND_DIR/cursor/invoker-plan-to-invoker.md" \
+  "$CANONICAL_COMMAND_DIR/omp/invoker-plan-to-invoker.md" \
+  "$REPO_ROOT/.claude/commands/invoker-plan-to-invoker.md" \
+  "$REPO_ROOT/.cursor/commands/invoker-plan-to-invoker.md" \
+  "$REPO_ROOT/.codex/commands/invoker-plan-to-invoker.md" \
+  "$REPO_ROOT/.omp/commands/invoker-plan-to-invoker.md"; do
+  [[ -f "$command_template" ]] || fail "expected $command_template"
+  must_contain "$command_template" "invoker_submit_plan" "Invoker handoff command must submit through MCP"
+  must_contain "$command_template" "plans/invoker-handoff.md" "Invoker handoff command must write Markdown plan"
+  must_contain "$command_template" "plans/invoker-handoff.yaml" "Invoker handoff command must write YAML plan"
+done
 [[ -f "$PLAYBOOK" ]] || fail "expected $PLAYBOOK"
 [[ -f "$TASK_PATTERNS" ]] || fail "expected $TASK_PATTERNS"
 [[ -f "$CLAUDE_COMMAND" ]] || fail "expected $CLAUDE_COMMAND"
@@ -87,11 +102,10 @@ must_contain "$SKILL_MD" "Do not generate prompt tasks, nested \`steps:\`, or im
 must_contain "$SKILL_MD" "deterministic local smoke commands" "SKILL must require local benchmark commands"
 must_contain "$SKILL_MD" "https://github.com/Neko-Catpital-Labs/Invoker.git" "SKILL must provide a non-probing Invoker repoUrl fallback"
 
-# Claude slash command — must load the skill before acting and preserve direct-output contract.
-must_contain "$CLAUDE_COMMAND" "Read \`skills/plan-to-invoker/SKILL.md\` before doing anything else." "Claude command must force skill loading before execution"
-must_contain "$CLAUDE_COMMAND" "benchmark/direct-output signals" "Claude command must route benchmark prompts to direct-output mode"
-must_contain "$CLAUDE_COMMAND" "The file must start with top-level \`name:\`" "Claude command must preserve benchmark YAML top-level name contract"
-must_contain "$CLAUDE_COMMAND" "do not write \`version:\` or \`metadata:\` wrappers." "Claude command must reject legacy benchmark YAML wrappers"
+# Claude slash command — local compatibility command must use the canonical handoff path.
+must_contain "$CLAUDE_COMMAND" "invoker_submit_plan" "Claude command must submit through MCP"
+must_contain "$CLAUDE_COMMAND" "plans/invoker-handoff.md" "Claude command must write Markdown plan"
+must_contain "$CLAUDE_COMMAND" "plans/invoker-handoff.yaml" "Claude command must write YAML plan"
 
 # Claude initial repo context — must block first-turn benchmark probes before skill listing is loaded.
 must_contain "$CLAUDE_MD" "Benchmark direct output" "CLAUDE.md must document benchmark direct-output behavior"

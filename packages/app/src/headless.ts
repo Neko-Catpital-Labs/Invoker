@@ -975,6 +975,9 @@ async function headlessSet(args: string[], deps: HeadlessDeps): Promise<void> {
     case 'agent':
       await headlessEditAgent(args[1], args[2], deps);
       break;
+    case 'model':
+      await headlessEditModel(args[1], args.slice(2).join(' '), deps);
+      break;
     case 'merge-mode':
       await headlessSetMergeMode(args[1], args[2], deps);
       break;
@@ -1012,12 +1015,18 @@ async function headlessInstallSkills(
   deps: Pick<HeadlessDeps, 'installBundledSkills'>,
 ): Promise<void> {
   if (!deps.installBundledSkills) {
-    throw new Error('Bundled skill installation is not available in this runtime.');
+    throw new Error('Bundled AI helper installation is not available in this runtime.');
   }
   const status = deps.installBundledSkills(mode ?? 'install');
-  process.stdout.write(`Installed ${status.bundledSkillNames.length} bundled skills with prefix "${status.managedPrefix}".\n`);
+  process.stdout.write(`Installed ${status.bundledSkillNames.length} bundled AI helpers with prefix "${status.managedPrefix}".\n`);
   for (const target of status.targets) {
-    process.stdout.write(`Target (${target.name}): ${target.path}\n`);
+    process.stdout.write(`Skill target (${target.name}): ${target.path}\n`);
+  }
+  for (const target of status.commandTargets) {
+    process.stdout.write(`Command target (${target.name}): ${target.path}\n`);
+  }
+  for (const target of status.mcpTargets) {
+    process.stdout.write(`MCP target (${target.name}): ${target.path}\n`);
   }
   for (const skillName of status.bundledSkillNames) {
     process.stdout.write(`- ${status.managedPrefix}${skillName}\n`);
@@ -1310,11 +1319,12 @@ ${BOLD}Respond:${RESET}
   select <taskId> <experimentId>                      Select winning experiment
 
 ${BOLD}Configure:${RESET}
-  install-skills [install|update|reinstall]          Install bundled Invoker skills into Codex
+  install-skills [install|update|reinstall]          Install bundled Invoker AI helpers
   set command <taskId> <cmd>                          Edit task command and re-run
   set prompt <taskId> <text>                          Edit task prompt and re-run
   set pool <taskId> <type> [poolMemberId]           Change execution pool (worktree|docker|ssh)
-  set agent <taskId> <agent>                          Change execution agent (claude|codex)
+  set agent <taskId> <agent>                          Change execution agent (claude|codex|omp)
+  set model <taskId> <model|null>                     Change execution model selector
   set merge-mode <workflowId> <mode>                  manual | automatic | external_review
   set fix-prompt <taskId> <text>                      Update fix-session prompt and retry
   set fix-context <taskId> <text>                     Update fix-session context and retry
@@ -2440,8 +2450,42 @@ async function headlessEditExecutor(
   autoFix.unsubscribe();
 }
 
+async function headlessEditModel(taskId: string, executionModelArg: string, deps: HeadlessDeps): Promise<void> {
+  if (!taskId || executionModelArg === '') throw new Error('Missing arguments. Usage: --headless set model <taskId> <model|null>');
+  const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'set model');
+  if (!restored) return;
+  taskId = restored.resolvedTaskId;
+  const taskExecutor = createHeadlessExecutor(deps);
+  const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
+  const executionModel = executionModelArg === 'null' ? null : executionModelArg;
+
+  const envelope = makeEnvelope('edit-task-model', 'headless', 'task', { taskId, executionModel });
+  const result = await deps.commandService.editTaskModel(envelope);
+  if (!result.ok) throw new Error(result.error.message);
+  const runnable = result.data.filter(isDispatchableLaunch);
+  await dispatchHeadlessRunnableTasks(deps, taskExecutor, runnable, 'edit-task-model');
+  process.stdout.write(`Edited task "${taskId}" model → "${executionModel ?? 'default'}"\n`);
+
+  if (deps.noTrack) {
+    process.stdout.write('[headless] --no-track enabled: set model accepted; exiting without tracking.\n');
+    autoFix.unsubscribe();
+    return;
+  }
+  if (runnable.length === 0) {
+    autoFix.unsubscribe();
+    return;
+  }
+  await trackHeadlessWorkflow(restored.workflowId, deps, {
+    hasBackgroundWork: autoFix.isBusy,
+    printSummary: false,
+    printTaskOutput: true,
+    setExitCodeOnFailure: false,
+  });
+  autoFix.unsubscribe();
+}
+
 async function headlessEditAgent(taskId: string, agentName: string, deps: HeadlessDeps): Promise<void> {
-  if (!taskId || !agentName) throw new Error('Missing arguments. Usage: --headless edit-agent <taskId> <claude|codex>');
+  if (!taskId || !agentName) throw new Error('Missing arguments. Usage: --headless set agent <taskId> <claude|codex|omp>');
   const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'set agent');
   if (!restored) return;
   taskId = restored.resolvedTaskId;
