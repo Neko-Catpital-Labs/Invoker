@@ -31,6 +31,13 @@ export type OwnerResolveResult =
   | { resolved: true; owner: OwnerEndpointInfo; bus: MessageBus }
   | { resolved: false };
 
+export class StandaloneOwnerResolutionError extends Error {
+  constructor(message: string = 'Could not resolve a standalone-capable owner after exhausting all bootstrap attempts') {
+    super(message);
+    this.name = 'StandaloneOwnerResolutionError';
+  }
+}
+
 // ── Dependency contract ─────────────────────────────────────
 
 export interface OwnerResolverDeps {
@@ -231,9 +238,7 @@ export function createOwnerResolver(
         }
       }
 
-      throw new Error(
-        'Could not resolve a standalone-capable owner after exhausting all bootstrap attempts',
-      );
+      throw new StandaloneOwnerResolutionError();
     },
   };
 

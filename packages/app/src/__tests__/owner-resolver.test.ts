@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { LocalBus } from '@invoker/transport';
 
-import { createOwnerResolver } from '../owner-resolver.js';
+import { createOwnerResolver, StandaloneOwnerResolutionError } from '../owner-resolver.js';
 
 describe('owner-resolver', () => {
   describe('discover', () => {
@@ -378,9 +378,7 @@ describe('owner-resolver', () => {
         maxBootstrapAttempts: 2,
       });
 
-      await expect(resolver.resolve()).rejects.toThrow(
-        /Could not resolve a standalone-capable owner/,
-      );
+      await expect(resolver.resolve()).rejects.toBeInstanceOf(StandaloneOwnerResolutionError);
       expect(ensureStandaloneOwner).toHaveBeenCalledTimes(2);
     });
 

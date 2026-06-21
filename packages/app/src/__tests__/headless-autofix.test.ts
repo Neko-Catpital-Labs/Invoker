@@ -80,7 +80,7 @@ describe('headless worker autofix', () => {
     const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
 
     try {
-      await runHeadless(['worker', 'autofix'], {
+      await runHeadless(['worker', 'autofix', '--count', '1'], {
         logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), trace: vi.fn(), child: vi.fn() },
         persistence: {
           listWorkflows: vi.fn(() => [{ id: 'wf-1' }]),

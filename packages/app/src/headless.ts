@@ -59,7 +59,7 @@ import {
   isDispatchableLaunch,
 } from './global-topup.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
-import { createRecoveryWorker, RECOVERY_WORKER_KIND } from './worker-runtime.js';
+import { createRecoveryWorker, RECOVERY_WORKER_KIND } from './workers/auto-fix-recovery.js';
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
 import { formatHeadlessSetSubcommands } from './headless-command-registry.js';
 import { trackWorkflow } from './headless-watch.js';
@@ -1155,11 +1155,7 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       await headlessQuerySelect(args[1], deps);
       break;
     case 'worker':
-<<<<<<< HEAD
-      await headlessWorker(args[1], deps);
-=======
       await headlessWorker(args.slice(1), deps);
->>>>>>> 6a5317e83 (Recovery Lifecycle 2e: Headless worker command)
       break;
 
     // ── Deprecated aliases → query ──
@@ -1218,45 +1214,11 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
 }
 
 /**
-<<<<<<< HEAD
- * Worker kinds exposed to the CLI.
-=======
  * Worker kinds exposed to the CLI. Worker commands are explicit long-running
  * service surfaces; normal workflow commands do not start them implicitly.
->>>>>>> 6a5317e83 (Recovery Lifecycle 2e: Headless worker command)
  */
 const HEADLESS_WORKER_KINDS: ReadonlyArray<{ kind: string; command: string; note: string }> = [
   {
-<<<<<<< HEAD
-    kind: 'autofix',
-    available: true,
-    note: 'scans persisted failed tasks and submits normal auto-fix command intents',
-  },
-];
-
-async function headlessWorker(subCommand: string | undefined, deps: HeadlessDeps): Promise<void> {
-  if (subCommand === 'autofix') {
-    const tick = createAutoFixRecoveryTick({
-      store: deps.persistence,
-      submitter: {
-        submit: (workflowId, priority, channel, args) => (
-          deps.persistence.enqueueWorkflowMutationIntent(workflowId, channel, args, priority)
-        ),
-      },
-      logger: deps.logger,
-      defaultAutoFixRetries: deps.invokerConfig.autoFixRetries,
-      getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
-    });
-    await tick({
-      identity: { kind: RECOVERY_WORKER_KIND, instanceId: 'headless-worker-autofix' },
-      reason: 'manual',
-      tickNumber: 1,
-    });
-    process.stdout.write('Auto-fix worker scan completed.\n');
-    return;
-  }
-
-=======
     kind: RECOVERY_WORKER_KIND,
     command: 'autofix',
     note: 'long-running auto-fix recovery worker',
@@ -1299,7 +1261,7 @@ async function runAutofixWorker(args: string[], deps: Pick<HeadlessDeps, 'logger
     logger: deps.logger,
     intervalMs: options.intervalMs,
     tickOnStart: false,
-    installSignalHandlers: options.count === undefined,
+    installSignalHandlers: false,
   });
   if (options.count !== undefined) {
     for (let tick = 0; tick < options.count; tick += 1) {
@@ -1328,7 +1290,6 @@ async function headlessWorker(args: string[], deps: Pick<HeadlessDeps, 'logger'>
     await runAutofixWorker(args.slice(1), deps);
     return;
   }
->>>>>>> 6a5317e83 (Recovery Lifecycle 2e: Headless worker command)
   if (subCommand && subCommand !== 'list' && subCommand !== 'status') {
     throw new Error(`Unknown worker sub-command: "${subCommand}". Use: autofix, list, status`);
   }
@@ -1419,12 +1380,8 @@ ${BOLD}Lifecycle:${RESET}
   delete-all                                          Delete all workflows (requires INVOKER_ALLOW_DELETE_ALL=1)
   open-terminal <taskId>                              Open OS terminal for a task
   slack                                               Start Slack bot (long-running)
-<<<<<<< HEAD
-  worker [autofix|list|status]                        Run/list worker kinds (autofix scans failed tasks)
-=======
   worker autofix [--count N] [--interval-ms N]        Start auto-fix recovery worker (long-running)
   worker [list|status]                                List worker service commands
->>>>>>> 6a5317e83 (Recovery Lifecycle 2e: Headless worker command)
 
 ${BOLD}Deprecated${RESET} (use new names above):
   list → query workflows       status → query tasks       task-status → query task

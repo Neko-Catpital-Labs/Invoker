@@ -25,8 +25,12 @@ import {
   discoverOwner,
   isStandaloneCapable,
 } from './owner-endpoint.js';
-import { createOwnerResolver, type ResolvedOwner } from './owner-resolver.js';
-import { createRecoveryWorker } from './worker-runtime.js';
+import {
+  createOwnerResolver,
+  StandaloneOwnerResolutionError,
+  type ResolvedOwner,
+} from './owner-resolver.js';
+import { createRecoveryWorker } from './workers/auto-fix-recovery.js';
 
 const RED = '\x1b[31m';
 const RESET = '\x1b[0m';
@@ -340,7 +344,7 @@ async function resolveOwnerForAutofixWorker(deps: HeadlessClientDeps): Promise<R
   try {
     return await resolver.resolve(true);
   } catch (err) {
-    if (err instanceof Error && /Could not resolve a standalone-capable owner/.test(err.message)) {
+    if (err instanceof StandaloneOwnerResolutionError) {
       return null;
     }
     throw err;
@@ -433,7 +437,7 @@ async function resolveOwnerAndDelegate(
     try {
       resolved = await resolver.resolve(true);
     } catch (err) {
-      if (err instanceof Error && /Could not resolve a standalone-capable owner/.test(err.message)) {
+      if (err instanceof StandaloneOwnerResolutionError) {
         delegationClientLog(`resolve attempt failed: ${err.message}`);
         return null;
       }
