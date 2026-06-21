@@ -84,6 +84,14 @@ The worker should only act when persisted state shows that:
 
 When those checks pass, the auto-fix worker submits the normal fix command. It must not be invoked directly by the producer that recorded the failed transition.
 
+Operators start the auto-fix worker explicitly:
+
+```bash
+./run.sh --headless worker autofix
+```
+
+Normal commands do not start recovery loops. Use `./run.sh --headless worker status` or `./run.sh --headless query recovery-worker --output json` to inspect worker id, owner id, last scan, last wakeup, last submitted auto-fix decision, and last skipped decision.
+
 ## External Recovery Worker
 
 The external recovery worker owns integration with external recovery automation. It subscribes to lifecycle wakeups, scans persisted state, and decides whether an external recovery command should be submitted or whether an external process should be coordinated through a command route.

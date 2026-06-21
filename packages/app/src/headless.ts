@@ -14,7 +14,7 @@ import { makeEnvelope } from '@invoker/contracts';
 import type { AgentSessionData } from '@invoker/contracts';
 import { OrchestratorErrorCode } from '@invoker/workflow-core';
 import type { Attempt, Orchestrator, CommandService, TaskState } from '@invoker/workflow-core';
-import type { SQLiteAdapter } from '@invoker/data-store';
+import type { SQLiteAdapter, TaskEvent } from '@invoker/data-store';
 import type { MessageBus } from '@invoker/transport';
 import {
   ExecutorRegistry,
@@ -60,6 +60,10 @@ import {
 } from './global-topup.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
 import { createRecoveryWorker, RECOVERY_WORKER_KIND } from './worker-runtime.js';
+import {
+  readRecoveryWorkerStatuses,
+  type RecoveryWorkerRuntimeStatus,
+} from './recovery-worker-observability.js';
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
 import { trackWorkflow } from './headless-watch.js';
 import { publishReviewGateCiFailedLifecycleEvent } from './lifecycle-event-bridge.js';
@@ -386,12 +390,111 @@ export function parseQueryFlags(args: string[]): QueryFlags {
   return flags;
 }
 
+interface RecoveryWorkerDecision {
+  taskId: string;
+  phase: string;
+  reason?: string;
+  createdAt: string;
+  eventId: number;
+}
+
+interface RecoveryWorkerQueryStatus {
+  workers: RecoveryWorkerRuntimeStatus[];
+  lastSubmit: RecoveryWorkerDecision | null;
+  lastSkip: RecoveryWorkerDecision | null;
+  recentDecisions: RecoveryWorkerDecision[];
+}
+
+function parseEventPayload(payload: string | undefined): Record<string, unknown> {
+  if (!payload) return {};
+  try {
+    const parsed = JSON.parse(payload) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function eventToRecoveryDecision(event: TaskEvent): RecoveryWorkerDecision | null {
+  if (event.eventType !== 'debug.auto-fix') return null;
+  const payload = parseEventPayload(event.payload);
+  const phase = typeof payload.phase === 'string' ? payload.phase : undefined;
+  if (!phase) return null;
+  const isSubmit = phase === 'schedule-enqueued' || phase === 'dispatch-attempt-bumped';
+  const isSkip = phase.includes('skip') || typeof payload.reason === 'string';
+  if (!isSubmit && !isSkip) return null;
+  return {
+    taskId: event.taskId,
+    phase,
+    reason: typeof payload.reason === 'string' ? payload.reason : undefined,
+    createdAt: event.createdAt,
+    eventId: event.id,
+  };
+}
+
+function collectRecoveryWorkerDecisions(
+  deps: Pick<HeadlessDeps, 'persistence'>,
+): RecoveryWorkerDecision[] {
+  const decisions: RecoveryWorkerDecision[] = [];
+  for (const workflow of deps.persistence.listWorkflows()) {
+    for (const task of deps.persistence.loadTasks(workflow.id)) {
+      for (const event of deps.persistence.getEvents(task.id) ?? []) {
+        const decision = eventToRecoveryDecision(event);
+        if (decision) decisions.push(decision);
+      }
+    }
+  }
+  return decisions.sort((a, b) => a.eventId - b.eventId);
+}
+
+function recoveryWorkerQueryStatus(deps: Pick<HeadlessDeps, 'persistence'>): RecoveryWorkerQueryStatus {
+  const decisions = collectRecoveryWorkerDecisions(deps);
+  const submitted = decisions.filter((decision) => (
+    decision.phase === 'schedule-enqueued' || decision.phase === 'dispatch-attempt-bumped'
+  ));
+  const skipped = decisions.filter((decision) => (
+    decision.phase.includes('skip') || Boolean(decision.reason)
+  ));
+  return {
+    workers: readRecoveryWorkerStatuses(),
+    lastSubmit: submitted.at(-1) ?? null,
+    lastSkip: skipped.at(-1) ?? null,
+    recentDecisions: decisions.slice(-20).reverse(),
+  };
+}
+
+function formatRecoveryDecision(decision: RecoveryWorkerDecision | null): string {
+  if (!decision) return 'none recorded';
+  const reason = decision.reason ? ` reason=${decision.reason}` : '';
+  return `${decision.createdAt} task=${decision.taskId} phase=${decision.phase}${reason}`;
+}
+
+function formatRecoveryWorkerStatus(status: RecoveryWorkerQueryStatus): string {
+  const lines: string[] = [`${BOLD}Recovery workers${RESET}`];
+  if (status.workers.length === 0) {
+    lines.push('  No recovery worker status recorded.');
+  } else {
+    for (const worker of status.workers) {
+      lines.push(`  ${worker.command} ${worker.instanceId} [${worker.state}] owner=${worker.ownerId ?? 'unknown'} pid=${worker.pid}`);
+      lines.push(`    last scan: ${worker.lastScanAt ?? 'never'}${worker.lastScanReason ? ` (${worker.lastScanReason})` : ''}`);
+      lines.push(`    last wakeup: ${worker.lastWakeupAt ?? 'never'}${worker.lastWakeupReason ? ` (${worker.lastWakeupReason})` : ''}`);
+      lines.push(`    ticks=${worker.tickCount} wakeups=${worker.wakeCount} intervalMs=${worker.intervalMs}`);
+      if (worker.lastError) lines.push(`    last error: ${worker.lastError}`);
+    }
+  }
+  lines.push(`  last submit: ${formatRecoveryDecision(status.lastSubmit)}`);
+  lines.push(`  last skip: ${formatRecoveryDecision(status.lastSkip)}`);
+  return lines.join('\n');
+}
+
 // ── Query Router ────────────────────────────────────────────
 
 async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> {
   const subCommand = args[0];
   if (!subCommand) {
-    throw new Error('Missing query sub-command. Usage: --headless query <workflows|tasks|task|queue|audit|session|cost|cost-events|costs|ui-perf|stats>');
+    throw new Error('Missing query sub-command. Usage: --headless query <workflows|tasks|task|queue|audit|session|recovery-worker|cost|cost-events|costs|ui-perf|stats>');
   }
   const flags = parseQueryFlags(args.slice(1));
 
@@ -539,6 +642,24 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
       await headlessSession(taskId, deps);
       break;
     }
+    case 'recovery-worker': {
+      const status = recoveryWorkerQueryStatus(deps);
+      switch (flags.output) {
+        case 'label':
+          process.stdout.write(status.workers.map((worker) => worker.instanceId).join('\n') + '\n');
+          break;
+        case 'json':
+          process.stdout.write(formatAsJson(status) + '\n');
+          break;
+        case 'jsonl':
+          process.stdout.write(formatAsJsonl(status.workers) + '\n');
+          break;
+        default:
+          process.stdout.write(formatRecoveryWorkerStatus(status) + '\n');
+          break;
+      }
+      break;
+    }
     case 'ui-perf': {
       if (flags.reset) {
         deps.resetUiPerfStats?.();
@@ -636,7 +757,7 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
       break;
     }
     default:
-      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, tasks, task, queue, audit, session, cost, cost-events, costs, ui-perf, stats`);
+      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, tasks, task, queue, audit, session, recovery-worker, cost, cost-events, costs, ui-perf, stats`);
   }
 }
 
@@ -1188,13 +1309,17 @@ async function runAutofixWorker(args: string[], deps: Pick<HeadlessDeps, 'logger
   await worker.stop();
 }
 
-async function headlessWorker(args: string[], deps: Pick<HeadlessDeps, 'logger'>): Promise<void> {
+async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void> {
   const subCommand = args[0];
   if (subCommand === 'autofix') {
     await runAutofixWorker(args.slice(1), deps);
     return;
   }
-  if (subCommand && subCommand !== 'list' && subCommand !== 'status') {
+  if (subCommand === 'status') {
+    await headlessQuery(['recovery-worker', ...args.slice(1)], deps);
+    return;
+  }
+  if (subCommand && subCommand !== 'list') {
     throw new Error(`Unknown worker sub-command: "${subCommand}". Use: autofix, list, status`);
   }
   process.stdout.write(`${BOLD}Worker kinds${RESET}\n`);
@@ -1237,6 +1362,7 @@ ${BOLD}Query${RESET} (read-only, all support --output text|label|json|jsonl):
   query queue [--output F]                            Show queue status
   query audit <taskId> [--output F]                   Print event history
   query session <taskId>                              Print agent session messages
+  query recovery-worker [--output F]                  Show recovery-worker ownership and decisions
   query ui-perf [--output F] [--reset]               Print live UI perf stats
   query stats [--output F]                           Aggregate stats across all workflows
 
@@ -1285,7 +1411,9 @@ ${BOLD}Lifecycle:${RESET}
   open-terminal <taskId>                              Open OS terminal for a task
   slack                                               Start Slack bot (long-running)
   worker autofix [--interval-ms N]                    Start auto-fix recovery worker (long-running)
-  worker [list|status]                                List worker service commands
+  worker autofix --once                               Run one auto-fix worker tick and exit
+  worker status [--output F]                          Show auto-fix worker status
+  worker list                                         List worker service commands
 
 ${BOLD}Deprecated${RESET} (use new names above):
   list → query workflows       status → query tasks       task-status → query task

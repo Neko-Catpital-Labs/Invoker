@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import {
   createRecoveryWorker,
@@ -6,6 +9,7 @@ import {
   RECOVERY_WORKER_KIND,
   type WorkerTickContext,
 } from '../worker-runtime.js';
+import { readRecoveryWorkerStatuses } from '../recovery-worker-observability.js';
 
 const logger = {
   info: vi.fn(),
@@ -375,6 +379,36 @@ describe('worker runtime', () => {
       await expect(runtime.tick()).resolves.toBeUndefined();
       expect(logger.error).not.toHaveBeenCalled();
       await runtime.stop();
+    });
+
+    it('records observational ownership and scan status without changing tick behavior', async () => {
+      const invokerHomeRoot = mkdtempSync(join(tmpdir(), 'invoker-worker-status-'));
+      const onTick = vi.fn();
+      const runtime = createRecoveryWorker({
+        logger,
+        instanceId: 'rec-status',
+        ownerId: 'owner-1',
+        invokerHomeRoot,
+        installSignalHandlers: false,
+        onTick,
+      });
+
+      await runtime.tick();
+      await runtime.stop();
+
+      const statuses = readRecoveryWorkerStatuses(invokerHomeRoot);
+      expect(statuses).toHaveLength(1);
+      expect(statuses[0]).toMatchObject({
+        kind: RECOVERY_WORKER_KIND,
+        command: 'autofix',
+        instanceId: 'rec-status',
+        ownerId: 'owner-1',
+        state: 'stopped',
+        tickCount: 1,
+      });
+      expect(statuses[0].lastScanReason).toBe('manual');
+      expect(onTick).toHaveBeenCalledTimes(1);
+      rmSync(invokerHomeRoot, { recursive: true, force: true });
     });
 
     it('does not auto-run a tick on start', async () => {

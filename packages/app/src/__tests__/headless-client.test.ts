@@ -1,10 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { LocalBus } from '@invoker/transport';
 
 import { SharedMutationOwnerTimeoutError, electronCommandArgs, runHeadlessClientCommand } from '../headless-client.js';
+import { readRecoveryWorkerStatuses } from '../recovery-worker-observability.js';
 
 describe('headless-client', () => {
   const savedStandalone = process.env.INVOKER_HEADLESS_STANDALONE;
+  const savedInvokerDbDir = process.env.INVOKER_DB_DIR;
   beforeEach(() => {
     delete process.env.INVOKER_HEADLESS_STANDALONE;
   });
@@ -13,6 +18,11 @@ describe('headless-client', () => {
       delete process.env.INVOKER_HEADLESS_STANDALONE;
     } else {
       process.env.INVOKER_HEADLESS_STANDALONE = savedStandalone;
+    }
+    if (savedInvokerDbDir === undefined) {
+      delete process.env.INVOKER_DB_DIR;
+    } else {
+      process.env.INVOKER_DB_DIR = savedInvokerDbDir;
     }
   });
 
@@ -445,6 +455,8 @@ describe('headless-client', () => {
   });
 
   it('starts autofix worker only through the explicit worker command after resolving an owner', async () => {
+    const invokerHomeRoot = mkdtempSync(join(tmpdir(), 'invoker-headless-client-worker-'));
+    process.env.INVOKER_DB_DIR = invokerHomeRoot;
     const bus = new LocalBus();
     const ensureStandaloneOwner = vi.fn(async () => {
       bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-worker', mode: 'standalone' }));
@@ -463,7 +475,13 @@ describe('headless-client', () => {
     expect(runElectronHeadless).not.toHaveBeenCalled();
     expect(stdout).toHaveBeenCalledWith(expect.stringContaining('[worker:autofix] owner ready: owner-worker'));
     expect(stdout).toHaveBeenCalledWith(expect.stringContaining('[worker:autofix] tick completed:'));
+    expect(readRecoveryWorkerStatuses(invokerHomeRoot)[0]).toMatchObject({
+      command: 'autofix',
+      ownerId: 'owner-worker',
+      state: 'stopped',
+    });
     stdout.mockRestore();
+    rmSync(invokerHomeRoot, { recursive: true, force: true });
   });
 
   it('does not start worker loops as a side effect of run delegation', async () => {

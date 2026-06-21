@@ -18,6 +18,10 @@
  */
 
 import type { Logger } from '@invoker/contracts';
+import {
+  recordRecoveryWorkerStatus,
+  type RecoveryWorkerRuntimeStatus,
+} from './recovery-worker-observability.js';
 
 /** Why a given tick is running. */
 export type WorkerTickReason = 'startup' | 'poll' | 'wake' | 'manual';
@@ -58,6 +62,14 @@ export interface WorkerRuntimeOptions {
   shutdownSignals?: NodeJS.Signals[];
   /** Install process signal handlers on `start()`. Default `true`. */
   installSignalHandlers?: boolean;
+  /** Optional operator-facing status reporting. Best-effort and observational. */
+  observability?: WorkerRuntimeObservabilityOptions;
+}
+
+export interface WorkerRuntimeObservabilityOptions {
+  command: string;
+  ownerId?: string;
+  invokerHomeRoot?: string;
 }
 
 export interface WorkerRuntime {
@@ -111,14 +123,49 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
   let pendingReason: WorkerTickReason | null = null;
   let tickNumber = 0;
   const signalHandlers = new Map<NodeJS.Signals, () => void>();
+  const status: RecoveryWorkerRuntimeStatus | null = options.observability
+    ? {
+      kind: identity.kind,
+      command: options.observability.command,
+      instanceId: identity.instanceId,
+      ownerId: options.observability.ownerId,
+      pid: typeof process !== 'undefined' && process.pid ? process.pid : 0,
+      state: 'created',
+      intervalMs,
+      tickCount: 0,
+      wakeCount: 0,
+      updatedAt: new Date().toISOString(),
+    }
+    : null;
+
+  const publishStatus = (): void => {
+    if (!status) return;
+    try {
+      recordRecoveryWorkerStatus(status, options.observability?.invokerHomeRoot);
+    } catch (err) {
+      options.logger.warn?.(`[worker:${identity.kind}] status update failed`, { ...logFields, err });
+    }
+  };
 
   const runOnce = async (reason: WorkerTickReason): Promise<void> => {
     tickNumber += 1;
     const ctx: WorkerTickContext = { identity, reason, tickNumber };
+    if (status) {
+      status.tickCount = tickNumber;
+      status.lastScanAt = new Date().toISOString();
+      status.lastScanReason = reason;
+      status.lastError = undefined;
+      publishStatus();
+    }
     try {
       await options.onTick(ctx);
     } catch (err) {
+      if (status) {
+        status.lastError = err instanceof Error ? err.message : String(err);
+      }
       options.logger.error(`[worker:${identity.kind}] tick failed`, { ...logFields, reason, err });
+    } finally {
+      publishStatus();
     }
   };
 
@@ -148,6 +195,12 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
 
   const wake = (reason: WorkerTickReason = 'wake'): void => {
     if (stopped) return;
+    if (status) {
+      status.wakeCount += 1;
+      status.lastWakeupAt = new Date().toISOString();
+      status.lastWakeupReason = reason;
+      publishStatus();
+    }
     void schedule(reason);
   };
 
@@ -159,6 +212,12 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
     }
     if (started) return;
     started = true;
+    if (status) {
+      status.state = 'running';
+      status.startedAt = new Date().toISOString();
+      status.stoppedAt = undefined;
+      publishStatus();
+    }
     options.logger.info(
       `[worker:${identity.kind}] started intervalMs=${intervalMs} signals=${installSignalHandlers ? shutdownSignals.join(',') : 'none'}`,
       logFields,
@@ -201,6 +260,11 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
     signalHandlers.clear();
     // Deterministic shutdown: never resolve while a tick is still running.
     if (inFlight) await inFlight.catch(() => undefined);
+    if (status) {
+      status.state = 'stopped';
+      status.stoppedAt = new Date().toISOString();
+      publishStatus();
+    }
     options.logger.info(`[worker:${identity.kind}] stopped`, logFields);
   };
 
@@ -219,9 +283,11 @@ const DEFAULT_RECOVERY_POLL_INTERVAL_MS = 60_000;
 export interface RecoveryWorkerOptions {
   logger: Logger;
   instanceId?: string;
+  ownerId?: string;
   intervalMs?: number;
   installSignalHandlers?: boolean;
   tickOnStart?: boolean;
+  invokerHomeRoot?: string;
   /**
    * Behavior-neutral override for the tick. Defaults to a no-op for this slice:
    * the recovery worker does not submit recovery commands yet, and existing
@@ -243,6 +309,11 @@ export function createRecoveryWorker(options: RecoveryWorkerOptions): WorkerRunt
     intervalMs: options.intervalMs ?? DEFAULT_RECOVERY_POLL_INTERVAL_MS,
     tickOnStart: options.tickOnStart ?? false,
     installSignalHandlers: options.installSignalHandlers,
+    observability: {
+      command: 'autofix',
+      ownerId: options.ownerId,
+      invokerHomeRoot: options.invokerHomeRoot,
+    },
     onTick: options.onTick ?? (() => {}),
   });
 }

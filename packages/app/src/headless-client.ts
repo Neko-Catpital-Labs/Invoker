@@ -340,6 +340,7 @@ async function runAutofixWorkerCommand(args: string[], deps: HeadlessClientDeps)
 
   const worker = createRecoveryWorker({
     logger: workerLogger,
+    ownerId: resolved.owner.ownerId,
     intervalMs: options.intervalMs,
     installSignalHandlers: !options.once,
     tickOnStart: false,

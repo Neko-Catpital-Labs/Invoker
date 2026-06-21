@@ -211,6 +211,14 @@ Or run a plan through the headless surface:
 ./run.sh --headless run /path/to/plan.yaml
 ```
 
+Auto-fix recovery workers are explicit operator processes. Normal headless commands such as `run`, `resume`, `retry`, and `fix` do not start recovery loops.
+
+```bash
+./run.sh --headless worker autofix
+./run.sh --headless worker status
+./run.sh --headless query recovery-worker --output json
+```
+
 For app development with hot reload:
 
 ```bash
