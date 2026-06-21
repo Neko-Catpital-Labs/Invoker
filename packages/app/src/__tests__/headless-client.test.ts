@@ -444,6 +444,51 @@ describe('headless-client', () => {
     expect(runElectronHeadless).toHaveBeenCalledWith(['query', 'workflows']);
   });
 
+  it('starts autofix worker only through the explicit worker command after resolving an owner', async () => {
+    const bus = new LocalBus();
+    const ensureStandaloneOwner = vi.fn(async () => {
+      bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-worker', mode: 'standalone' }));
+    });
+    const runElectronHeadless = vi.fn(async () => 0);
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+
+    const exitCode = await runHeadlessClientCommand(['worker', 'autofix', '--count', '1'], {
+      messageBus: bus,
+      ensureStandaloneOwner,
+      runElectronHeadless,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(ensureStandaloneOwner).toHaveBeenCalledTimes(1);
+    expect(runElectronHeadless).not.toHaveBeenCalled();
+    expect(stdout).toHaveBeenCalledWith(expect.stringContaining('[worker:autofix] owner ready: owner-worker'));
+    expect(stdout).toHaveBeenCalledWith(expect.stringContaining('[worker:autofix] tick completed:'));
+    stdout.mockRestore();
+  });
+
+  it('does not start worker loops as a side effect of run delegation', async () => {
+    const bus = new LocalBus();
+    const runHandler = vi.fn(async () => ({ ok: true }));
+    const execHandler = vi.fn(async () => ({ ok: true }));
+    const ensureStandaloneOwner = vi.fn(async () => {});
+    const runElectronHeadless = vi.fn(async () => 0);
+    bus.onRequest('headless.run', runHandler);
+    bus.onRequest('headless.exec', execHandler);
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-run', mode: 'standalone' }));
+
+    const exitCode = await runHeadlessClientCommand(['run', '/tmp/plan.yaml', '--no-track'], {
+      messageBus: bus,
+      ensureStandaloneOwner,
+      runElectronHeadless,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(runHandler).toHaveBeenCalledTimes(1);
+    expect(execHandler).not.toHaveBeenCalled();
+    expect(ensureStandaloneOwner).not.toHaveBeenCalled();
+    expect(runElectronHeadless).not.toHaveBeenCalled();
+  });
+
   it('delegates query ui-perf to a reachable owner endpoint', async () => {
     const bus = new LocalBus();
     bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
