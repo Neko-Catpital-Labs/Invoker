@@ -26,6 +26,7 @@ import {
   isStandaloneCapable,
 } from './owner-endpoint.js';
 import { createOwnerResolver, type ResolvedOwner } from './owner-resolver.js';
+import { createRecoveryWorker } from './worker-runtime.js';
 
 const RED = '\x1b[31m';
 const RESET = '\x1b[0m';
@@ -94,6 +95,14 @@ const READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS = 20_000;
 const READ_ONLY_QUERY_REQUEST_TIMEOUT_MS = 8_000;
 const POST_BOOTSTRAP_OWNER_RESTART_ATTEMPTS = 3;
 const DEFAULT_STANDALONE_OWNER_BOOTSTRAP_TIMEOUT_MS = 60_000;
+
+const workerLogger = {
+  debug() {},
+  info(message: string) { process.stderr.write(`${message}\n`); },
+  warn(message: string) { process.stderr.write(`${message}\n`); },
+  error(message: string) { process.stderr.write(`${message}\n`); },
+  child() { return workerLogger; },
+};
 
 function standaloneOwnerBootstrapTimeoutMs(): number {
   const raw = process.env.INVOKER_HEADLESS_OWNER_BOOTSTRAP_TIMEOUT_MS;
@@ -279,6 +288,92 @@ function shouldUseSharedMutationOwner(args: string[], standaloneMode: boolean, i
   return isHeadlessMutatingCommand(args) && !standaloneMode && !internalOwnerServe;
 }
 
+function isAutofixWorkerCommand(args: string[]): boolean {
+  return args[0] === 'worker' && args[1] === 'autofix';
+}
+
+function parseAutofixWorkerOptions(args: string[]): { count: number | undefined; intervalMs: number | undefined } {
+  let count: number | undefined;
+  let intervalMs: number | undefined;
+  for (let index = 2; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === '--count') {
+      const value = args[index + 1];
+      if (!value) throw new Error('Missing value for --count');
+      const parsed = Number(value);
+      if (!Number.isInteger(parsed) || parsed <= 0) {
+        throw new Error(`Invalid --count value: ${value}`);
+      }
+      count = parsed;
+      index += 1;
+    } else if (arg === '--interval-ms') {
+      const value = args[index + 1];
+      if (!value) throw new Error('Missing value for --interval-ms');
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        throw new Error(`Invalid --interval-ms value: ${value}`);
+      }
+      intervalMs = parsed;
+      index += 1;
+    } else {
+      throw new Error(`Unknown worker autofix option: ${arg}`);
+    }
+  }
+  return { count, intervalMs };
+}
+
+async function resolveOwnerForAutofixWorker(deps: HeadlessClientDeps): Promise<ResolvedOwner> {
+  const resolver = createOwnerResolver(
+    {
+      messageBus: deps.messageBus,
+      refreshMessageBus: deps.refreshMessageBus,
+      ensureStandaloneOwner: deps.ensureStandaloneOwner,
+      isRetryableBootstrapError: isSharedMutationOwnerTimeoutError,
+    },
+    {
+      discoveryTimeoutMs: 3_000,
+      refreshDiscoveryTimeoutMs: 1_000,
+      postBootstrapReadyTimeoutMs: POST_BOOTSTRAP_OWNER_READY_TIMEOUT_MS,
+      maxBootstrapAttempts: POST_BOOTSTRAP_OWNER_RESTART_ATTEMPTS,
+    },
+  );
+  return resolver.resolve(true);
+}
+
+async function runAutofixWorkerCommand(args: string[], deps: HeadlessClientDeps): Promise<number> {
+  const options = parseAutofixWorkerOptions(args);
+  const resolved = await resolveOwnerForAutofixWorker(deps);
+  process.stdout.write(`[worker:autofix] owner ready: ${resolved.owner.ownerId}\n`);
+
+  const worker = createRecoveryWorker({
+    logger: workerLogger,
+    intervalMs: options.intervalMs,
+    installSignalHandlers: options.count === undefined,
+    tickOnStart: false,
+  });
+
+  if (options.count !== undefined) {
+    for (let tick = 0; tick < options.count; tick += 1) {
+      await worker.tick('manual');
+    }
+    await worker.stop();
+    process.stdout.write(options.count === 1
+      ? `[worker:autofix] tick completed: ${worker.identity.instanceId}\n`
+      : `[worker:autofix] ticks completed: ${options.count}: ${worker.identity.instanceId}\n`);
+    return 0;
+  }
+
+  worker.start();
+  process.stdout.write(`[worker:autofix] started: ${worker.identity.instanceId}\n`);
+  await new Promise<void>((resolveStop) => {
+    const finish = (): void => resolveStop();
+    process.once('SIGINT', finish);
+    process.once('SIGTERM', finish);
+  });
+  await worker.stop();
+  return 0;
+}
+
 /**
  * Resolve a writable owner endpoint using the resolver, then delegate.
  *
@@ -369,6 +464,10 @@ export async function runHeadlessClientCommand(
   const { args, waitForApproval, noTrack } = parseArgs(argv);
   const standaloneMode = process.env.INVOKER_HEADLESS_STANDALONE === '1';
   const internalOwnerServe = args[0] === 'owner-serve';
+
+  if (isAutofixWorkerCommand(args)) {
+    return runAutofixWorkerCommand(args, deps);
+  }
 
   if (!standaloneMode && !internalOwnerServe && await delegateReadOnlyQuery(args, deps.messageBus, deps.refreshMessageBus)) {
     const exitCode = process.exitCode;
