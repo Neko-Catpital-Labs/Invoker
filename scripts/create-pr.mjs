@@ -7,13 +7,19 @@
  *   node scripts/create-pr.mjs --title "..." --base <branch> [options]
  *
  * Options:
- *   --title <t>        PR title (required)
- *   --base <b>         Base branch (required)
- *   --body-file <f>    Read PR body from file
- *   --body <text>      Inline PR body
- *   --update <num>     Update existing PR instead of creating new
- *   --dry-run          Print what would happen, skip push and API calls
- *   --help             Show this help
+ *   --title <t>          PR title (required)
+ *   --base <b>           Base branch (required)
+ *   --body-file <f>      Read PR body from file
+ *   --body <text>        Inline PR body
+ *   --update <num>       Update existing PR instead of creating new
+ *   --update-existing    Update the PR already attached to the current branch
+ *   --dry-run            Print what would happen, skip push and API calls
+ *   --help               Show this help
+ *
+ * Stack flow:
+ *   1. Publish stack branches with `mergify stack push`
+ *   2. Switch to the created stack branch if needed
+ *   3. Run `node scripts/create-pr.mjs --title "..." --base <branch> --body-file <file> --update-existing`
  *
  * Image injection:
  *   Scans the body for markdown image/link patterns where the URL is a local
@@ -22,18 +28,23 @@
  *
  * PR body validation:
  *   Enforces the canonical PR schema:
- *   ## Summary, ## Test Plan, ## Revert Plan, plus optional ## Architecture.
+ *   ## Summary, ## Review Claim, ## Review Lane, ## Safety Invariant,
+ *   ## Slice Rationale, ## Non-goals, ## Test Plan, ## Revert Plan,
+ *   plus optional ## Architecture and required ## Visual Proof for UI changes.
  */
 
 import { readFileSync, existsSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
-import { execFileSync, execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import aws4 from 'aws4';
 import { getPrBodyWarnings, validatePrBody } from './validate-pr-body.mjs';
 
-const DEFAULT_PARENT_REMOTE = process.env.INVOKER_PARENT_REMOTE || 'upstream';
+const DEFAULT_BASE_REMOTE = process.env.INVOKER_PARENT_REMOTE || 'origin';
+const HAS_EXPLICIT_NON_ORIGIN_BASE_REMOTE = Boolean(
+  process.env.INVOKER_PARENT_REMOTE && process.env.INVOKER_PARENT_REMOTE !== 'origin',
+);
 
 // ── R2 upload (duplicated from upload-pr-images.mjs for standalone use) ─────
 
@@ -67,7 +78,13 @@ function loadR2Config() {
   }
   const { R2_ACCOUNT_ID, R2_BUCKET_NAME, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_PUBLIC_URL_BASE } = process.env;
   if (R2_ACCOUNT_ID && R2_BUCKET_NAME && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY && R2_PUBLIC_URL_BASE) {
-    return { accountId: R2_ACCOUNT_ID, bucketName: R2_BUCKET_NAME, accessKeyId: R2_ACCESS_KEY_ID, secretAccessKey: R2_SECRET_ACCESS_KEY, publicUrlBase: R2_PUBLIC_URL_BASE };
+    return {
+      accountId: R2_ACCOUNT_ID,
+      bucketName: R2_BUCKET_NAME,
+      accessKeyId: R2_ACCESS_KEY_ID,
+      secretAccessKey: R2_SECRET_ACCESS_KEY,
+      publicUrlBase: R2_PUBLIC_URL_BASE,
+    };
   }
   return null;
 }
@@ -86,13 +103,19 @@ async function uploadToR2(filePath, key, config) {
   const path = `/${config.bucketName}/${key}`;
 
   const opts = aws4.sign({
-    host, path, method: 'PUT', body,
+    host,
+    path,
+    method: 'PUT',
+    body,
     headers: { 'Content-Type': contentType, 'Content-Length': body.length },
-    service: 's3', region: 'auto',
+    service: 's3',
+    region: 'auto',
   }, { accessKeyId: config.accessKeyId, secretAccessKey: config.secretAccessKey });
 
   const response = await fetch(`https://${host}${path}`, {
-    method: 'PUT', headers: opts.headers, body,
+    method: 'PUT',
+    headers: opts.headers,
+    body,
   });
   if (!response.ok) {
     const text = await response.text();
@@ -108,13 +131,19 @@ function usage() {
   console.error(`Usage: node scripts/create-pr.mjs --title "..." --base <branch> [options]
 
 Options:
-  --title <t>        PR title (required)
-  --base <b>         Base branch (required)
-  --body-file <f>    Read PR body from file
-  --body <text>      Inline PR body
-  --update <num>     Update existing PR number instead of creating new
-  --dry-run          Print actions without executing
-  --help             Show this help
+  --title <t>          PR title (required)
+  --base <b>           Base branch (required)
+  --body-file <f>      Read PR body from file
+  --body <text>        Inline PR body
+  --update <num>       Update existing PR number instead of creating new
+  --update-existing    Update the PR already attached to the current branch
+  --dry-run            Print actions without executing
+  --help               Show this help
+
+Stack flow:
+  1. Publish stack branches with \`mergify stack push\`
+  2. Switch to the created stack branch if needed
+  3. Run \`node scripts/create-pr.mjs --title "..." --base <branch> --body-file <file> --update-existing\`
 
 PR body schema:
   Required: ## Summary, ## Review Claim, ## Review Lane, ## Safety Invariant, ## Slice Rationale, ## Non-goals, ## Test Plan, ## Revert Plan
@@ -126,7 +155,15 @@ PR body schema:
 
 function parseArgs() {
   const args = process.argv.slice(2);
-  const parsed = { title: '', base: '', body: '', bodyFile: '', update: '', dryRun: false };
+  const parsed = {
+    title: '',
+    base: '',
+    body: '',
+    bodyFile: '',
+    update: '',
+    updateExisting: false,
+    dryRun: false,
+  };
 
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
@@ -137,10 +174,15 @@ function parseArgs() {
       case '--body': parsed.body = args[++i] || ''; break;
       case '--body-file': parsed.bodyFile = args[++i] || ''; break;
       case '--update': parsed.update = args[++i] || ''; break;
+      case '--update-existing': parsed.updateExisting = true; break;
       default:
         console.error(`Unknown option: ${args[i]}`);
         usage();
     }
+  }
+
+  if (parsed.update && parsed.updateExisting) {
+    throw new Error('Use either --update <num> or --update-existing, not both.');
   }
 
   if (!parsed.title || !parsed.base) {
@@ -170,8 +212,8 @@ function assertValidPrBody(body, options = {}) {
   );
 }
 
-function printPrBodyWarnings(body, options = {}) {
-  const warnings = getPrBodyWarnings(body, options);
+function printPrBodyWarnings(body) {
+  const warnings = getPrBodyWarnings(body);
   if (warnings.length === 0) return;
 
   console.error('PR body validation warnings:');
@@ -187,11 +229,9 @@ function printPrBodyWarnings(body, options = {}) {
  * Matches: ![alt](path) and [text](path) where path is not http(s).
  */
 async function injectImages(body, dryRun) {
-  // Match ![...](<path>) or [...](<path>) where path doesn't start with http
   const pattern = /(!?\[[^\]]*\])\(([^)]+)\)/g;
   const localFiles = [];
 
-  // Collect local file paths
   let match;
   while ((match = pattern.exec(body)) !== null) {
     const url = match[2];
@@ -231,7 +271,6 @@ async function injectImages(body, dryRun) {
     }
   }
 
-  // Replace local paths with public URLs
   return body.replace(pattern, (full, bracket, url) => {
     const replacement = urlMap.get(url);
     return replacement ? `${bracket}(${replacement})` : full;
@@ -240,16 +279,44 @@ async function injectImages(body, dryRun) {
 
 // ── Git + GitHub helpers ────────────────────────────────────────────────────
 
-function getRepoNwo() {
-  // Prefer parent remote (fork workflow: PRs target parent, not the fork)
+function runGit(args, options = {}) {
+  return execFileSync('git', args, {
+    encoding: 'utf-8',
+    ...options,
+  });
+}
+
+function runGh(args, options = {}) {
+  return execFileSync('gh', args, {
+    encoding: 'utf-8',
+    ...options,
+  });
+}
+
+function gitText(args, options = {}) {
+  return runGit(args, options).trim();
+}
+
+function gitTextOrEmpty(args, options = {}) {
   try {
-    const url = execSync(`git remote get-url ${DEFAULT_PARENT_REMOTE}`, { encoding: 'utf-8' }).trim();
+    return gitText(args, {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      ...options,
+    });
+  } catch {
+    return '';
+  }
+}
+
+function getRepoNwo() {
+  try {
+    const url = gitText(['remote', 'get-url', DEFAULT_BASE_REMOTE]);
     const match = url.match(/github\.com[:/]([^/]+\/[^/.]+)/);
     if (match) return match[1];
   } catch {
-    // No parent remote; fall back to gh default
+    // No usable base remote; fall back to gh default
   }
-  return execSync('gh repo view --json nameWithOwner -q .nameWithOwner', { encoding: 'utf-8' }).trim();
+  return runGh(['repo', 'view', '--json', 'nameWithOwner', '-q', '.nameWithOwner']);
 }
 
 function gitPush(dryRun) {
@@ -258,16 +325,16 @@ function gitPush(dryRun) {
     return;
   }
   console.error('Pushing branch...');
-  execSync('git push -u origin HEAD', { stdio: 'inherit' });
+  execFileSync('git', ['push', '-u', 'origin', 'HEAD'], { stdio: 'inherit' });
 }
 
 function getCurrentBranch() {
-  return execSync('git branch --show-current', { encoding: 'utf-8' }).trim();
+  return gitText(['branch', '--show-current']);
 }
 
 function hasRemote(name) {
   try {
-    execSync(`git remote get-url ${name}`, { stdio: ['ignore', 'pipe', 'ignore'] });
+    runGit(['remote', 'get-url', name], { stdio: ['ignore', 'pipe', 'ignore'] });
     return true;
   } catch {
     return false;
@@ -275,20 +342,20 @@ function hasRemote(name) {
 }
 
 function revList(range) {
-  try {
-    const out = execSync(`git rev-list ${range}`, { encoding: 'utf-8' }).trim();
-    return out ? out.split('\n').filter(Boolean) : [];
-  } catch {
-    return [];
-  }
+  const out = gitTextOrEmpty(['rev-list', range]);
+  return out ? out.split('\n').filter(Boolean) : [];
 }
 
 function shortOneLine(sha) {
-  try {
-    return execSync(`git show --no-patch --oneline --no-abbrev-commit ${sha}`, { encoding: 'utf-8' }).trim();
-  } catch {
-    return sha;
-  }
+  return gitTextOrEmpty(['show', '--no-patch', '--oneline', '--no-abbrev-commit', sha]) || sha;
+}
+
+function resolveRev(ref) {
+  return gitText(['rev-parse', ref]);
+}
+
+function fetchBranch(remote, branch) {
+  runGit(['fetch', '--quiet', remote, branch], { stdio: 'ignore' });
 }
 
 export function isUiImpactingPath(filePath) {
@@ -305,74 +372,66 @@ export function getUiImpactingFiles(files) {
   return files.filter(isUiImpactingPath);
 }
 
-export function parsePorcelainChangedFiles(statusText) {
-  return statusText
-    .split(/\r?\n/)
-    .map((line) => line.trimEnd())
-    .filter(Boolean)
-    .map((line) => line.slice(3).replace(/^"|"$/g, ''))
-    .filter(Boolean);
-}
-
 function changedFilesSinceBase(baseBranch) {
   try {
-    const output = execFileSync(
-      'git',
-      ['diff', '--name-only', `${DEFAULT_PARENT_REMOTE}/${baseBranch}...HEAD`],
-      { encoding: 'utf-8' },
-    ).trim();
+    const output = runGit(['diff', '--name-only', `${DEFAULT_BASE_REMOTE}/${baseBranch}...HEAD`]).trim();
     return output ? output.split('\n').filter(Boolean) : [];
   } catch {
     return [];
   }
 }
 
-function uncommittedFiles() {
-  try {
-    const output = execFileSync(
-      'git',
-      ['status', '--porcelain', '--untracked-files=all'],
-      { encoding: 'utf-8' },
-    );
-    return parsePorcelainChangedFiles(output);
-  } catch {
-    return [];
-  }
-}
-
-function assertNoUncommittedFiles() {
-  const files = uncommittedFiles();
-  if (files.length === 0) return;
-
-  throw new Error(
-    [
-      'Refusing to create/update PR with uncommitted changes.',
-      'Commit, split, or stash these files first; uncommitted files are not included in review-lane validation.',
-      ...files.map((file) => `  - ${file}`),
-    ].join('\n'),
-  );
-}
-
-
 function assertCleanPrBase(baseBranch) {
-  if (!hasRemote(DEFAULT_PARENT_REMOTE)) {
+  if (!hasRemote(DEFAULT_BASE_REMOTE)) {
     throw new Error(
       [
-        `Missing git parent remote "${DEFAULT_PARENT_REMOTE}".`,
-        `Expected ${DEFAULT_PARENT_REMOTE} to point to the parent repository.`,
-        `Run: git remote add ${DEFAULT_PARENT_REMOTE} <parent-repo-url>`,
+        `Missing git base remote "${DEFAULT_BASE_REMOTE}".`,
+        `Expected ${DEFAULT_BASE_REMOTE} to point to the base repository.`,
+        `Run: git remote add ${DEFAULT_BASE_REMOTE} <base-repo-url>`,
       ].join('\n'),
     );
   }
 
-  // Keep the check deterministic against latest refs.
-  execSync(`git fetch --quiet ${DEFAULT_PARENT_REMOTE} ${baseBranch}`, { stdio: 'ignore' });
-  execSync(`git fetch --quiet origin ${baseBranch}`, { stdio: 'ignore' });
+  if (!hasRemote('origin')) {
+    throw new Error(
+      [
+        'Missing git base remote "origin".',
+        'Expected origin to point to the GitHub repository used for PR publication.',
+        'Run: git remote add origin <github-repo-url>',
+      ].join('\n'),
+    );
+  }
 
-  const originOnly = new Set(revList(`${DEFAULT_PARENT_REMOTE}/${baseBranch}..origin/${baseBranch}`));
+  fetchBranch('origin', baseBranch);
+  const originRef = `origin/${baseBranch}`;
+  const originTip = resolveRev(originRef);
+  const mergeBase = gitText(['merge-base', 'HEAD', originRef]);
+  if (mergeBase !== originTip) {
+    const currentBranch = getCurrentBranch();
+    throw new Error(
+      [
+        `Refusing to create/update PR: current branch is not based on the latest ${originRef}.`,
+        `Rebuild it from ${originRef} and cherry-pick only the intended commits.`,
+        '',
+        'Recovery:',
+        `  git switch -c pr/<name> ${originRef}`,
+        '  git cherry-pick <commit> [<commit> ...]',
+        '  git push -u origin pr/<name>',
+        '',
+        `Current branch: ${currentBranch}`,
+      ].join('\n'),
+    );
+  }
+
+  if (!HAS_EXPLICIT_NON_ORIGIN_BASE_REMOTE || DEFAULT_BASE_REMOTE === 'origin') {
+    return;
+  }
+
+  fetchBranch(DEFAULT_BASE_REMOTE, baseBranch);
+  const originOnly = new Set(revList(`${DEFAULT_BASE_REMOTE}/${baseBranch}..origin/${baseBranch}`));
   if (originOnly.size === 0) return;
 
-  const headOnly = revList(`${DEFAULT_PARENT_REMOTE}/${baseBranch}..HEAD`);
+  const headOnly = revList(`${DEFAULT_BASE_REMOTE}/${baseBranch}..HEAD`);
   const polluted = headOnly.filter((sha) => originOnly.has(sha));
   if (polluted.length === 0) return;
 
@@ -382,22 +441,151 @@ function assertCleanPrBase(baseBranch) {
   throw new Error(
     [
       `Refusing to create/update PR: current branch contains commits unique to origin/${baseBranch}.`,
-      'This would pollute the PR with fork-only history.',
+      'This would pollute the PR with origin-only history.',
       '',
       'Detected commits:',
       ...lines,
       more,
       '',
-      `Fix by creating a clean PR branch from ${DEFAULT_PARENT_REMOTE}/${baseBranch}, then cherry-picking intended commits:`,
-      `  git switch -c pr/<name> ${DEFAULT_PARENT_REMOTE}/${baseBranch}`,
-      `  git cherry-pick <commit> [<commit> ...]`,
-      `  git push -u origin pr/<name>`,
+      `Fix by creating a clean PR branch from ${DEFAULT_BASE_REMOTE}/${baseBranch}, then cherry-picking intended commits:`,
+      `  git switch -c pr/<name> ${DEFAULT_BASE_REMOTE}/${baseBranch}`,
+      '  git cherry-pick <commit> [<commit> ...]',
+      '  git push -u origin pr/<name>',
       '',
       `Current branch: ${currentBranch}`,
     ].join('\n'),
   );
 }
 
+function getBranchMergeRef(branch) {
+  return gitTextOrEmpty(['config', '--get', `branch.${branch}.merge`]);
+}
+
+function getBranchRemote(branch) {
+  return gitTextOrEmpty(['config', '--get', `branch.${branch}.remote`]);
+}
+
+function resolveTrackedBaseRef(branch) {
+  const mergeRef = getBranchMergeRef(branch);
+  if (!mergeRef) return '';
+  const baseBranch = mergeRef.replace(/^refs\/heads\//, '');
+  const remote = getBranchRemote(branch);
+  if (remote) {
+    const remoteRef = `${remote}/${baseBranch}`;
+    if (gitTextOrEmpty(['rev-parse', '--verify', remoteRef])) {
+      return remoteRef;
+    }
+  }
+  if (gitTextOrEmpty(['rev-parse', '--verify', baseBranch])) {
+    return baseBranch;
+  }
+  return baseBranch;
+}
+
+function branchHasChangeId(baseRef) {
+  if (!baseRef) return false;
+  try {
+    const log = runGit(['log', '--format=%B', `${baseRef}..HEAD`]);
+    return /^Change-Id:/m.test(log);
+  } catch {
+    return false;
+  }
+}
+
+
+function getMergifyBranchState(branch = getCurrentBranch()) {
+  if (!branch || ['main', 'master', 'develop'].includes(branch)) {
+    return { managed: false, branch, trackedBaseRef: '' };
+  }
+
+  const trackedBaseRef = resolveTrackedBaseRef(branch);
+  if (branch.startsWith('stack/')) {
+    return { managed: true, branch, trackedBaseRef };
+  }
+
+  const mergeRef = getBranchMergeRef(branch);
+  if (!mergeRef) {
+    return { managed: false, branch, trackedBaseRef: '' };
+  }
+
+  if (!branchHasChangeId(trackedBaseRef)) {
+    return { managed: false, branch, trackedBaseRef };
+  }
+
+  return { managed: true, branch, trackedBaseRef };
+}
+
+function getCurrentUpstream() {
+  return gitTextOrEmpty(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}']);
+}
+
+function assertPublishedMergifyBranch(branch, trackedBaseRef) {
+  let publishedRef = getCurrentUpstream();
+  const originBranchRef = `origin/${branch}`;
+  if ((!publishedRef || publishedRef === trackedBaseRef) && gitTextOrEmpty(['rev-parse', '--verify', originBranchRef])) {
+    publishedRef = originBranchRef;
+  }
+
+  if (!publishedRef) {
+    throw new Error(
+      [
+        `Current branch "${branch}" has no published remote branch.`,
+        'Run `mergify stack push` first, then rerun this command to update the PR title/body.',
+      ].join('\n'),
+    );
+  }
+
+  const unpublished = revList(`${publishedRef}..HEAD`);
+  if (unpublished.length === 0) return;
+
+  throw new Error(
+    [
+      `Current branch "${branch}" has unpublished local commits ahead of ${publishedRef}.`,
+      'Run `mergify stack push` first, then rerun this command to update the PR title/body.',
+    ].join('\n'),
+  );
+}
+
+function listPullRequestsForHead(nwo, branch) {
+  const [owner] = nwo.split('/');
+  const query = new URLSearchParams({
+    state: 'all',
+    head: `${owner}:${branch}`,
+  }).toString();
+  const raw = runGh(['api', `repos/${nwo}/pulls?${query}`]);
+  const prs = JSON.parse(raw);
+  return prs.filter((pr) => pr?.head?.ref === branch && pr?.head?.repo?.full_name === nwo);
+}
+
+function resolveExistingPrNumber(nwo, branch, dryRun) {
+  if (dryRun) {
+    console.error(`[dry-run] Would resolve PR for current branch: ${branch}`);
+    return '0';
+  }
+
+  const prs = listPullRequestsForHead(nwo, branch);
+  if (prs.length === 1) {
+    return String(prs[0].number);
+  }
+
+  if (prs.length === 0) {
+    throw new Error(
+      [
+        `No PR exists for current branch "${branch}" in ${nwo}.`,
+        'Run `mergify stack push` first for stack branches, or create the PR normally for non-stack branches.',
+      ].join('\n'),
+    );
+  }
+
+  const choices = prs.map((pr) => `  - #${pr.number}: ${pr.html_url}`).join('\n');
+  throw new Error(
+    [
+      `Found multiple PRs for current branch "${branch}" in ${nwo}.`,
+      'Refusing to guess. Resolve the duplicate PRs first.',
+      choices,
+    ].join('\n'),
+  );
+}
 
 async function createPr(nwo, title, base, body, dryRun) {
   const head = getCurrentBranch();
@@ -409,10 +597,9 @@ async function createPr(nwo, title, base, body, dryRun) {
   }
 
   const payload = JSON.stringify({ title, body, head, base });
-  const result = execSync(
-    `gh api repos/${nwo}/pulls --method POST --input -`,
-    { input: payload, encoding: 'utf-8' },
-  );
+  const result = runGh(['api', `repos/${nwo}/pulls`, '--method', 'POST', '--input', '-'], {
+    input: payload,
+  });
   const pr = JSON.parse(result);
   return pr.html_url;
 }
@@ -425,10 +612,9 @@ async function updatePr(nwo, prNum, title, body, dryRun) {
   }
 
   const payload = JSON.stringify({ title, body });
-  const result = execSync(
-    `gh api repos/${nwo}/pulls/${prNum} --method PATCH --input -`,
-    { input: payload, encoding: 'utf-8' },
-  );
+  const result = runGh(['api', `repos/${nwo}/pulls/${prNum}`, '--method', 'PATCH', '--input', '-'], {
+    input: payload,
+  });
   const pr = JSON.parse(result);
   return pr.html_url;
 }
@@ -439,9 +625,7 @@ async function main() {
   const args = parseArgs();
 
   assertCleanPrBase(args.base);
-  assertNoUncommittedFiles();
 
-  // Read body
   let body = '';
   if (args.bodyFile) {
     body = readFileSync(args.bodyFile, 'utf-8');
@@ -456,25 +640,41 @@ async function main() {
   }
 
   assertValidPrBody(body, { requiresVisualProof: uiImpactingFiles.length > 0, changedFiles });
-  printPrBodyWarnings(body, { changedFiles });
-
-  // Inject images
+  printPrBodyWarnings(body);
   body = await injectImages(body, args.dryRun);
 
-  // Push
-  gitPush(args.dryRun);
-
-  // Create or update PR
-  const nwo = args.dryRun ? 'OWNER/REPO' : getRepoNwo();
-  let prUrl;
-
-  if (args.update) {
-    prUrl = await updatePr(nwo, args.update, args.title, body, args.dryRun);
-  } else {
-    prUrl = await createPr(nwo, args.title, args.base, body, args.dryRun);
+  const currentBranch = getCurrentBranch();
+  const mergifyState = getMergifyBranchState(currentBranch);
+  const requestedUpdatePath = Boolean(args.update || args.updateExisting);
+  if (mergifyState.managed && !requestedUpdatePath) {
+    throw new Error(
+      [
+        'This branch is managed by Mergify stacks.',
+        'Use `mergify stack push` instead of `git push`.',
+        '',
+        'After the stack branch is published, rerun `create-pr` in update mode on that branch to repair the PR title/body.',
+      ].join('\n'),
+    );
   }
 
-  // Print PR URL to stdout (only useful output to stdout)
+  if (mergifyState.managed && requestedUpdatePath) {
+    assertPublishedMergifyBranch(currentBranch, mergifyState.trackedBaseRef);
+  }
+
+  const nwo = args.dryRun ? 'OWNER/REPO' : getRepoNwo();
+  let updatePrNumber = args.update;
+  if (args.updateExisting) {
+    updatePrNumber = resolveExistingPrNumber(nwo, currentBranch, args.dryRun);
+  }
+
+  if (!(mergifyState.managed && requestedUpdatePath)) {
+    gitPush(args.dryRun);
+  }
+
+  const prUrl = updatePrNumber
+    ? await updatePr(nwo, updatePrNumber, args.title, body, args.dryRun)
+    : await createPr(nwo, args.title, args.base, body, args.dryRun);
+
   console.log(prUrl);
 }
 
