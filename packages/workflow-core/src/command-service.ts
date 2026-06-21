@@ -7,13 +7,13 @@
 
 import type { CommandEnvelope, CommandResult } from '@invoker/contracts';
 import { OrchestratorError } from './orchestrator.js';
-import type { Orchestrator, ExternalGatePolicyUpdate, TaskReplacementDef } from './orchestrator.js';
+import type { Orchestrator, ExternalGatePolicyUpdate, TaskReplacementDef, ReviewArtifactInput } from './orchestrator.js';
 import {
   applyInvalidation,
   buildOrchestratorOnlyInvalidationDeps,
   type InvalidationDeps,
 } from './invalidation-policy.js';
-import type { TaskState } from '@invoker/workflow-graph';
+import type { ReviewGateExecution, TaskState } from '@invoker/workflow-graph';
 
 // ── Cancel Result ────────────────────────────────────────────
 
@@ -231,6 +231,19 @@ export class CommandService {
     );
   }
 
+    async editTaskType(
+    envelope: CommandEnvelope<{ taskId: string; runnerKind: string; poolMemberId?: string }>,
+  ): Promise<CommandResult<TaskState[]>> {
+    return this.executeCommand<TaskState[]>(
+      'EDIT_TASK_TYPE_FAILED',
+      () => this.orchestrator.editTaskType(
+        envelope.payload.taskId,
+        envelope.payload.runnerKind,
+        envelope.payload.poolMemberId,
+      ),
+      this.workflowIdForTask(envelope.payload.taskId),
+    );
+  }
 
     async editTaskPool(
     envelope: CommandEnvelope<{ taskId: string; poolId: string }>,
@@ -257,9 +270,9 @@ export class CommandService {
    * invalidation route per Step 9 of the task-invalidation roadmap
    * (chart Decision Table row "Change merge mode";
    * `MUTATION_POLICIES.mergeMode` → `retryTask` / task scope, scoped
-   * to the merge node). Mirrors the remaining retry-class seams
-   * (`selectExperiment` / `selectExperiments`) rather than the
-   * recreate-class `editTaskCommand` / `editTaskPrompt` /
+   * to the merge node). Mirrors the Step 5/7/8 retry-class seams
+   * (`editTaskType` / `selectExperiment` / `selectExperiments`) rather
+   * than the recreate-class `editTaskCommand` / `editTaskPrompt` /
    * `editTaskAgent` seams: a merge-mode flip changes the merge
    * execution policy but preserves the merge node's branch /
    * workspacePath lineage.
@@ -299,8 +312,8 @@ export class CommandService {
    * invalidation route per Step 10 of the task-invalidation roadmap
    * (chart Decision Table row "Change fix prompt or fix context while
    * `fixing_with_ai`"; `MUTATION_POLICIES.fixContext` → `retryTask` /
-   * task scope, scoped to the failed/fixing task). Mirrors the
-   * remaining retry-class seams (`selectExperiment` /
+   * task scope, scoped to the failed/fixing task). Mirrors the Step
+   * 5/7/8/9 retry-class seams (`editTaskType` / `selectExperiment` /
    * `selectExperiments` / `editTaskMergeMode`) rather than the
    * recreate-class `editTaskCommand` / `editTaskPrompt` /
    * `editTaskAgent` seams: a fix prompt/context edit redirects the
@@ -396,6 +409,29 @@ export class CommandService {
       'CANCEL_TASK_FAILED',
       () => this.orchestrator.cancelTask(envelope.payload.taskId),
       this.workflowIdForTask(envelope.payload.taskId),
+    );
+  }
+
+  async attachReviewArtifact(
+    envelope: CommandEnvelope<{ workflowId: string; artifact: ReviewArtifactInput }>,
+  ): Promise<CommandResult<ReviewGateExecution>> {
+    return this.executeCommand<ReviewGateExecution>(
+      'ATTACH_REVIEW_ARTIFACT_FAILED',
+      () => this.orchestrator.attachReviewArtifact(
+        envelope.payload.workflowId,
+        envelope.payload.artifact,
+      ),
+      envelope.payload.workflowId,
+    );
+  }
+
+  async sealReviewGate(
+    envelope: CommandEnvelope<{ workflowId: string }>,
+  ): Promise<CommandResult<ReviewGateExecution>> {
+    return this.executeCommand<ReviewGateExecution>(
+      'SEAL_REVIEW_GATE_FAILED',
+      () => this.orchestrator.sealReviewGate(envelope.payload.workflowId),
+      envelope.payload.workflowId,
     );
   }
 

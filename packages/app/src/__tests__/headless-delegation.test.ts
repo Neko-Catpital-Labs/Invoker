@@ -321,6 +321,44 @@ describe('headless delegation enforcement', () => {
         await runHeadless(['approve', 'wf-1/task-1'], mockDeps);
         expect(mockDeps.commandService.approve).toHaveBeenCalled();
       });
+
+      it('routes review-gate attach, seal, and check through the new headless commands', async () => {
+        mockDeps.commandService.attachReviewArtifact = vi.fn(async () => ({
+          ok: true as const,
+          data: {
+            sealed: false,
+            completion: { required: 'all', state: 'merged' },
+            relationship: { kind: 'stacked_diffs', managedBy: 'external' },
+            artifacts: [{ id: 'github:pull_request:41', provider: 'github', type: 'pull_request', url: 'https://github.com/acme/repo/pull/41', identifier: '41' }],
+            statusText: 'Waiting for review artifacts',
+          },
+        }));
+        mockDeps.commandService.sealReviewGate = vi.fn(async () => ({
+          ok: true as const,
+          data: {
+            sealed: true,
+            completion: { required: 'all', state: 'merged' },
+            relationship: { kind: 'stacked_diffs', managedBy: 'external' },
+            artifacts: [{ id: 'github:pull_request:41', provider: 'github', type: 'pull_request', url: 'https://github.com/acme/repo/pull/41', identifier: '41' }],
+            statusText: 'Awaiting review',
+          },
+        }));
+        const checkPrApprovalNow = vi.fn(async () => {});
+        mockDeps.ownerTaskRunnerProvider = () => ({ checkPrApprovalNow } as unknown as TaskRunner);
+        mockDeps.orchestrator.getMergeNode = vi.fn(() => ({
+          id: '__merge__wf-1',
+          config: { workflowId: 'wf-1', isMergeNode: true },
+        } as any));
+
+        await runHeadless(['review-gate', 'attach', 'wf-1', 'https://github.com/acme/repo/pull/41'], mockDeps);
+        await runHeadless(['review-gate', 'seal', 'wf-1'], mockDeps);
+        await runHeadless(['review-gate', 'check', 'wf-1'], mockDeps);
+
+        expect(mockDeps.commandService.attachReviewArtifact).toHaveBeenCalled();
+        expect(mockDeps.commandService.sealReviewGate).toHaveBeenCalled();
+        expect(mockDeps.orchestrator.getMergeNode).toHaveBeenCalledWith('wf-1');
+        expect(checkPrApprovalNow).toHaveBeenCalledWith('__merge__wf-1');
+      });
     });
 
     /**
@@ -545,7 +583,7 @@ describe('headless delegation enforcement', () => {
           execution: {},
         } as any;
         mockDeps.commandService.editTaskCommand = vi.fn(async () => ({ ok: true as const, data: [runnableTask] }));
-        mockDeps.commandService.editTaskPool = vi.fn(async () => ({ ok: true as const, data: [runnableTask] }));
+        mockDeps.commandService.editTaskType = vi.fn(async () => ({ ok: true as const, data: [runnableTask] }));
         mockDeps.commandService.editTaskAgent = vi.fn(async () => ({ ok: true as const, data: [runnableTask] }));
         mockDeps.commandService.setTaskExternalGatePolicies = vi.fn(async () => ({ ok: true as const, data: [runnableTask] }));
         const executeTasksSpy = vi
@@ -553,12 +591,12 @@ describe('headless delegation enforcement', () => {
           .mockResolvedValue(undefined);
 
         await runHeadless(['set', 'command', 'wf-1/task-1', 'echo ok'], mockDeps);
-        await runHeadless(['set', 'pool', 'wf-1/task-1', 'mixed-local-ssh'], mockDeps);
+        await runHeadless(['set', 'executor', 'wf-1/task-1', 'shell'], mockDeps);
         await runHeadless(['set', 'agent', 'wf-1/task-1', 'codex'], mockDeps);
         await runHeadless(['set', 'gate-policy', 'wf-1/task-1', 'wf-upstream', 'review_ready'], mockDeps);
 
         expect(mockDeps.commandService.editTaskCommand).toHaveBeenCalled();
-        expect(mockDeps.commandService.editTaskPool).toHaveBeenCalled();
+        expect(mockDeps.commandService.editTaskType).toHaveBeenCalled();
         expect(mockDeps.commandService.editTaskAgent).toHaveBeenCalled();
         expect(mockDeps.commandService.setTaskExternalGatePolicies).toHaveBeenCalled();
 
@@ -1045,7 +1083,7 @@ describe('headless delegation enforcement', () => {
         expect(mockDeps.commandService.recreateWorkflow).toHaveBeenCalled();
       });
 
-      it('headless recreate dispatches runnable tasks before waiting for completion', async () => {
+      it('headless recreate hands runnable tasks to the launch outbox instead of waiting for completion', async () => {
         let taskStatus: 'running' | 'completed' = 'running';
         (mockDeps.commandService as any).recreateWorkflow = vi.fn(async () => ({
           ok: true as const,
@@ -1054,7 +1092,7 @@ describe('headless delegation enforcement', () => {
               id: 'wf-1/task-1',
               status: 'running',
               config: { workflowId: 'wf-1' },
-              execution: {},
+              execution: { selectedAttemptId: 'attempt-1' },
             } as any,
           ],
         }));
@@ -1072,27 +1110,29 @@ describe('headless delegation enforcement', () => {
           id: 'wf-1/task-1',
           status: taskStatus,
           config: { workflowId: 'wf-1' },
-          execution: {},
+          execution: { selectedAttemptId: 'attempt-1' },
         } as any]);
         mockDeps.orchestrator.getAllTasks = vi.fn(() => [{
           id: 'wf-1/task-1',
           status: taskStatus,
           config: { workflowId: 'wf-1' },
-          execution: {},
+          execution: { selectedAttemptId: 'attempt-1' },
         } as any]);
         mockDeps.orchestrator.getReadyTasks = vi.fn(() => []);
 
-        const executeTasksSpy = vi
-          .spyOn(TaskRunner.prototype, 'executeTasks')
-          .mockImplementation(async () => {
-            taskStatus = 'completed';
-          });
+        const executeTasksSpy = vi.spyOn(TaskRunner.prototype, 'executeTasks');
 
-        await runHeadless(['recreate', 'wf-1'], mockDeps);
+        const depsWithNoTrack: HeadlessDeps = {
+          ...mockDeps,
+          noTrack: true,
+        } as HeadlessDeps;
 
-        expect(executeTasksSpy).toHaveBeenCalledTimes(1);
+        await runHeadless(['recreate', 'wf-1'], depsWithNoTrack);
+
+        expect(executeTasksSpy).not.toHaveBeenCalled();
         expect((mockDeps.commandService as any).recreateWorkflow).toHaveBeenCalled();
 
+        taskStatus = 'completed';
         executeTasksSpy.mockRestore();
       });
 

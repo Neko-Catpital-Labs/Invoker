@@ -48,7 +48,9 @@ function hasKnownMergeGatePrefix(description: string): boolean {
 }
 
 function shouldUseExternalReviewHeading(task: TaskState, mergeMode?: string): boolean {
-  return mergeMode === 'external_review' || Boolean(task.execution?.reviewUrl);
+  return mergeMode === 'external_review'
+    || Boolean(task.execution?.reviewGate?.artifacts.length)
+    || Boolean(task.execution?.reviewUrl);
 }
 
 /**
