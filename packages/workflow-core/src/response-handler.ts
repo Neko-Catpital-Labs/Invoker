@@ -6,7 +6,7 @@
  * the Orchestrator what writes to make.
  */
 
-import type { WorkResponse } from '@invoker/contracts';
+import type { ReviewGateExecution, WorkResponse } from '@invoker/contracts';
 import { validateWorkResponse } from '@invoker/contracts';
 
 /** Plan-local id segment for experiment id prefixing (strip `${workflowId}/` when present). */
@@ -40,6 +40,7 @@ export type ParsedResponse =
       reviewUrl?: string;
       reviewId?: string;
       reviewStatus?: string;
+      reviewGate?: ReviewGateExecution;
     }
   | {
       type: 'review_ready';
@@ -50,6 +51,7 @@ export type ParsedResponse =
       reviewUrl?: string;
       reviewId?: string;
       reviewStatus?: string;
+      reviewGate?: ReviewGateExecution;
     }
   | {
       type: 'failed';
@@ -103,6 +105,7 @@ export class ResponseHandler {
           reviewUrl: outputs.reviewUrl,
           reviewId: outputs.reviewId,
           reviewStatus: outputs.reviewStatus,
+          reviewGate: outputs.reviewGate,
         };
 
       case 'review_ready':
@@ -115,6 +118,7 @@ export class ResponseHandler {
           reviewUrl: outputs.reviewUrl,
           reviewId: outputs.reviewId,
           reviewStatus: outputs.reviewStatus,
+          reviewGate: outputs.reviewGate,
         };
 
       case 'failed':

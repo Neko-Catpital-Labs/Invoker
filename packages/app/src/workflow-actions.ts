@@ -627,6 +627,15 @@ export function editTaskPrompt(
   return deps.orchestrator.editTaskPrompt(taskId, newPrompt);
 }
 
+export function editTaskType(
+  taskId: string,
+  runnerKind: string,
+  deps: Pick<ActionDeps, 'orchestrator'>,
+  poolMemberId?: string,
+): TaskState[] {
+  return deps.orchestrator.editTaskType(taskId, runnerKind, poolMemberId);
+}
+
 
 export function editTaskAgent(
   taskId: string,
