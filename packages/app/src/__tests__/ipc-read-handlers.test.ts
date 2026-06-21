@@ -67,6 +67,55 @@ describe('registerReadOnlyIpcHandlers', () => {
       streamSequence: 42,
     });
   });
+
+  it('get-review-gate returns the shared review gate shape', async () => {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    const ipcMain = {
+      handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
+        handlers.set(channel, handler);
+      }),
+    };
+    const mergeTask = {
+      ...makeTask('__merge__wf-1'),
+      status: 'review_ready',
+      config: { workflowId: 'wf-1', isMergeNode: true },
+      execution: {
+        reviewGate: {
+          activeGeneration: 0,
+          completion: { required: 'all', status: 'approved' },
+          artifacts: [
+            { id: 'contracts', required: true, status: 'approved', generation: 0 },
+            { id: 'runtime', required: true, status: 'open', generation: 0, dependsOn: ['contracts'] },
+          ],
+        },
+      },
+    };
+
+    registerReadOnlyIpcHandlers({
+      ipcMain: ipcMain as never,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never,
+      persistence: {
+        listWorkflows: vi.fn(() => []),
+        loadWorkflow: vi.fn(() => ({ id: 'wf-1' })),
+        loadTasks: vi.fn(() => [mergeTask]),
+      } as never,
+      getOrchestrator: () => ({ getAllTasks: () => [mergeTask], getWorkflowStatus: () => ({}) }) as never,
+      agentRegistry: {} as never,
+      loadTaskByIdFromPersistence: () => undefined,
+      resolveAgentSession: vi.fn(async () => null),
+      recordStartupDuration: vi.fn(),
+      getTaskDeltaStreamSequence: () => 1,
+    });
+
+    const result = await handlers.get('invoker:get-review-gate')?.({}, 'wf-1');
+
+    expect(result).toMatchObject({
+      workflowId: 'wf-1',
+      mergeTaskId: '__merge__wf-1',
+      edges: [{ from: 'contracts', to: 'runtime' }],
+      ready: false,
+    });
+  });
   it('does not expose renderer write tools to read handlers', () => {
     expectReadContextWriteToolsAreAbsent();
   });
