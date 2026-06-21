@@ -1,24 +1,24 @@
 /**
  * ReviewProviderRegistry — Registry for pluggable review providers.
  *
- * Maps provider names (e.g. 'github', 'gitlab') to ReviewGateProvider instances.
+ * Maps provider names (e.g. 'github', 'gitlab') to MergeGateProvider instances.
  * Follows the same pattern as AgentRegistry.
  */
 
-import type { ReviewGateProvider } from './merge-gate-provider.js';
+import type { MergeGateProvider } from './merge-gate-provider.js';
 
 export class ReviewProviderRegistry {
-  private providers = new Map<string, ReviewGateProvider>();
+  private providers = new Map<string, MergeGateProvider>();
 
-  register(provider: ReviewGateProvider): void {
+  register(provider: MergeGateProvider): void {
     this.providers.set(provider.name, provider);
   }
 
-  get(name: string): ReviewGateProvider | undefined {
+  get(name: string): MergeGateProvider | undefined {
     return this.providers.get(name);
   }
 
-  getOrThrow(name: string): ReviewGateProvider {
+  getOrThrow(name: string): MergeGateProvider {
     const provider = this.providers.get(name);
     if (!provider) {
       throw new Error(
@@ -28,7 +28,7 @@ export class ReviewProviderRegistry {
     return provider;
   }
 
-  list(): ReviewGateProvider[] {
+  list(): MergeGateProvider[] {
     return [...this.providers.values()];
   }
 }

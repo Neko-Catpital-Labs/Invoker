@@ -31,7 +31,6 @@ import type {
   ExternalDependency,
   ExternalDependencyChange,
   DetachedExternalDependency,
-  ReviewGateExecution,
 } from '@invoker/workflow-core';
 import { DISPATCH_LEASE_MS } from '@invoker/contracts';
 import type { SearchResultItem, SearchOptions } from '@invoker/contracts';
@@ -695,7 +694,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
         feature_branch TEXT,
         merge_mode TEXT,
         review_provider TEXT,
-        review_gate_definition TEXT,
         external_dependencies TEXT,
         external_dependency_changes TEXT,
         detached_external_dependencies TEXT,
@@ -751,7 +749,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
         -- Merge node
         is_merge_node INTEGER DEFAULT 0,
-        review_gate TEXT,
 
         -- Claude session
         claude_session_id TEXT,
@@ -996,7 +993,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN review_id TEXT',
       'ALTER TABLE tasks ADD COLUMN review_status TEXT',
       'ALTER TABLE tasks ADD COLUMN review_provider_id TEXT',
-      'ALTER TABLE tasks ADD COLUMN review_gate TEXT',
       'ALTER TABLE tasks ADD COLUMN is_fixing_with_ai INTEGER DEFAULT 0',
       'ALTER TABLE tasks ADD COLUMN execution_generation INTEGER DEFAULT 0',
       'ALTER TABLE tasks ADD COLUMN docker_image TEXT',
@@ -1009,7 +1005,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN agent_session_id TEXT',
       'ALTER TABLE attempts ADD COLUMN agent_session_id TEXT',
       'ALTER TABLE workflows ADD COLUMN review_provider TEXT',
-      'ALTER TABLE workflows ADD COLUMN review_gate_definition TEXT',
       'ALTER TABLE workflows ADD COLUMN external_dependencies TEXT',
       'ALTER TABLE workflows ADD COLUMN external_dependency_changes TEXT',
       // detached_external_dependencies: read-only provenance for deps removed by detachWorkflow
@@ -1094,7 +1089,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
         feature_branch TEXT,
         merge_mode TEXT,
         review_provider TEXT,
-        review_gate_definition TEXT,
         external_dependencies TEXT,
         external_dependency_changes TEXT,
         generation INTEGER DEFAULT 0,
@@ -1106,13 +1100,13 @@ export class SQLiteAdapter implements PersistenceAdapter {
       INSERT INTO workflows_new (
         id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url,
         branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode,
-        review_provider, review_gate_definition, external_dependencies, external_dependency_changes,
+        review_provider, external_dependencies, external_dependency_changes,
         generation, created_at, updated_at
       )
       SELECT
         id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url,
         branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode,
-        review_provider, review_gate_definition, external_dependencies, external_dependency_changes,
+        review_provider, external_dependencies, external_dependency_changes,
         generation, created_at, updated_at
       FROM workflows
     `);
@@ -1285,8 +1279,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   saveWorkflow(workflow: Workflow): void {
     this.execRun(`
-      INSERT OR REPLACE INTO workflows (id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url, branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode, review_provider, review_gate_definition, external_dependencies, external_dependency_changes, detached_external_dependencies, generation, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO workflows (id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url, branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode, review_provider, external_dependencies, external_dependency_changes, detached_external_dependencies, generation, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       workflow.id, workflow.name,
       workflow.description ?? null,
@@ -1295,7 +1289,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
       workflow.onFinish ?? null, workflow.baseBranch ?? null, null, workflow.featureBranch ?? null,
       workflow.mergeMode ?? null,
       workflow.reviewProvider ?? null,
-      workflow.reviewGate ? JSON.stringify(workflow.reviewGate) : null,
       workflow.externalDependencies ? JSON.stringify(workflow.externalDependencies) : null,
       workflow.externalDependencyChanges ? JSON.stringify(workflow.externalDependencyChanges) : null,
       workflow.detachedExternalDependencies ? JSON.stringify(workflow.detachedExternalDependencies) : null,
@@ -1304,7 +1297,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     ]);
   }
 
-  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'name' | 'description' | 'visualProof' | 'planFile' | 'repoUrl' | 'intermediateRepoUrl' | 'branch' | 'onFinish' | 'baseBranch' | 'featureBranch' | 'mergeMode' | 'reviewProvider' | 'reviewGate' | 'externalDependencies' | 'externalDependencyChanges' | 'detachedExternalDependencies' | 'generation' | 'updatedAt'>>): void {
+  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'name' | 'description' | 'visualProof' | 'planFile' | 'repoUrl' | 'intermediateRepoUrl' | 'branch' | 'onFinish' | 'baseBranch' | 'featureBranch' | 'mergeMode' | 'reviewProvider' | 'externalDependencies' | 'externalDependencyChanges' | 'detachedExternalDependencies' | 'generation' | 'updatedAt'>>): void {
     const setClauses: string[] = [];
     const values: unknown[] = [];
     const columnMap: Record<string, string> = {
@@ -1352,10 +1345,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
     if ('externalDependencyChanges' in changes) {
       setClauses.push('external_dependency_changes = ?');
       values.push(changes.externalDependencyChanges ? JSON.stringify(changes.externalDependencyChanges) : null);
-    }
-    if ('reviewGate' in changes) {
-      setClauses.push('review_gate_definition = ?');
-      values.push(changes.reviewGate ? JSON.stringify(changes.reviewGate) : null);
     }
     if ('detachedExternalDependencies' in changes) {
       setClauses.push('detached_external_dependencies = ?');
@@ -1532,7 +1521,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         action_request_id, experiments,
         created_at, launch_phase, launch_started_at, launch_completed_at, started_at, completed_at, last_heartbeat_at,
         utilization, pending_fix_error,
-        review_url, review_id, review_status, review_provider_id, review_gate,
+        review_url, review_id, review_status, review_provider_id,
         is_fixing_with_ai,
         execution_generation,
         pool_member_id,
@@ -1554,7 +1543,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?,
         ?, ?, ?, ?,
         ?, ?,
-        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?,
         ?,
         ?,
         ?,
@@ -1610,7 +1599,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
       exec.reviewId ?? null,
       exec.reviewStatus ?? null,
       exec.reviewProviderId ?? null,
-      exec.reviewGate ? JSON.stringify(exec.reviewGate) : null,
       exec.isFixingWithAI ? 1 : 0,
       exec.generation ?? 0,
       (cfg as { poolMemberId?: string }).poolMemberId ?? null,
@@ -1730,7 +1718,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
         experiments: 'experiments',
         selectedExperiments: 'selected_experiments',
         experimentResults: 'experiment_results',
-        reviewGate: 'review_gate',
       };
 
       for (const [key, col] of Object.entries(execMap)) {
@@ -2712,41 +2699,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
       featureBranch: row.feature_branch ?? undefined,
       mergeMode: row.merge_mode ?? undefined,
       reviewProvider: row.review_provider ?? undefined,
-      reviewGate: row.review_gate_definition ? JSON.parse(row.review_gate_definition) : undefined,
       externalDependencies: row.external_dependencies ? JSON.parse(row.external_dependencies) : undefined,
       externalDependencyChanges: row.external_dependency_changes ? JSON.parse(row.external_dependency_changes) as ExternalDependencyChange[] : undefined,
       detachedExternalDependencies: row.detached_external_dependencies ? JSON.parse(row.detached_external_dependencies) as DetachedExternalDependency[] : undefined,
       generation: row.generation ?? 0,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
-    };
-  }
-
-  private reviewGateFromRow(row: any): ReviewGateExecution | undefined {
-    if (row.review_gate) {
-      return JSON.parse(row.review_gate) as ReviewGateExecution;
-    }
-    const reviewUrl = row.review_url ?? undefined;
-    const reviewId = row.review_id ?? undefined;
-    if (!reviewUrl && !reviewId) return undefined;
-    const identifier = String(reviewId ?? reviewUrl);
-    const url = String(reviewUrl ?? '');
-    const statusText = row.review_status ?? undefined;
-    return {
-      sealed: true,
-      completion: { required: 'all', state: 'merged' },
-      relationship: { kind: 'unknown', managedBy: 'external' },
-      artifacts: [
-        {
-          id: `github:pull_request:${identifier}`,
-          provider: 'github',
-          type: 'pull_request',
-          url,
-          identifier,
-          statusText,
-        },
-      ],
-      statusText,
     };
   }
 
@@ -2815,7 +2773,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
         reviewId: row.review_id ?? undefined,
         reviewStatus: row.review_status ?? undefined,
         reviewProviderId: row.review_provider_id ?? undefined,
-        reviewGate: this.reviewGateFromRow(row),
         phase: row.launch_phase ?? undefined,
         launchStartedAt: row.launch_started_at ? new Date(row.launch_started_at) : undefined,
         launchCompletedAt: row.launch_completed_at ? new Date(row.launch_completed_at) : undefined,

@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 import type {
-  ReviewGateProvider,
-  ReviewGatePublishResult,
+  MergeGateProvider,
+  MergeGateProviderResult,
   MergeGateApprovalStatus,
   MergeGateFailedCheck,
 } from './merge-gate-provider.js';
@@ -11,33 +11,32 @@ import { isGitRefLockRace, retryTransientGitHubCli } from './git-utils.js';
 
 type ExistingPullRequest = { url: string; number: number };
 
-export class GitHubMergeGateProvider implements ReviewGateProvider {
+export class GitHubMergeGateProvider implements MergeGateProvider {
   readonly name = 'github';
 
   private static readonly TARGET_REPO_ENV = 'INVOKER_GITHUB_TARGET_REPO';
 
-  async publishReviewGate(opts: {
+  async createReview(opts: {
     baseBranch: string;
     featureBranch: string;
     title: string;
     cwd: string;
     body?: string;
-    preferredShape?: 'stacked_diffs' | 'independent';
-  }): Promise<ReviewGatePublishResult> {
+  }): Promise<MergeGateProviderResult> {
     const { baseBranch, featureBranch, title, cwd, body } = opts;
     console.log(
-      `${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.publishReviewGate ` +
+      `${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview ` +
       `baseBranch=${baseBranch} featureBranch=${featureBranch} title=${title} cwd=${cwd} body=${body}`,
     );
     const ghBase = normalizeBranchForGithubCli(baseBranch);
     const ghHead = normalizeBranchForGithubCli(featureBranch);
     const targetRepo = await this.resolveTargetRepo(cwd);
-    console.log(`[merge-gate] publishReviewGate: ghBase=${ghBase} apiHead=${ghHead} cwd=${cwd}`);
+    console.log(`[merge-gate] createReview: ghBase=${ghBase} apiHead=${ghHead} cwd=${cwd}`);
 
     await this.pushFeatureBranch(cwd, featureBranch);
 
     const existing = await this.findExistingOpenPullRequest(cwd, targetRepo, ghHead);
-    console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.publishReviewGate existing=${existing}`);
+    console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview existing=${existing}`);
 
     if (existing.length > 0) {
       const apiArgs = [
@@ -48,31 +47,9 @@ export class GitHubMergeGateProvider implements ReviewGateProvider {
       ];
       if (body) apiArgs.push('-f', `body=${body}`);
       const ghResult = await retryTransientGitHubCli(() => this.exec('gh', apiArgs, cwd));
-      console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.publishReviewGate update existing gh_result=${ghResult}`);
+      console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview update existing gh_result=${ghResult}`);
 
-      const artifact = {
-        id: `github:pull_request:${existing[0].number}`,
-        provider: 'github',
-        type: 'pull_request' as const,
-        url: existing[0].url,
-        identifier: String(existing[0].number),
-        title,
-        baseBranch,
-        headBranch: featureBranch,
-        status: 'open' as const,
-        statusText: 'Awaiting review',
-      };
-      if (!artifact.url || !artifact.identifier) {
-        throw new Error('Review gate publisher returned no pull request artifacts');
-      }
-      return {
-        sealed: true,
-        relationship: {
-          kind: (opts.preferredShape ?? 'stacked_diffs') === 'stacked_diffs' ? 'stacked_diffs' : 'independent',
-          managedBy: 'external',
-        },
-        artifacts: [artifact],
-      };
+      return { url: existing[0].url, identifier: String(existing[0].number) };
     }
 
     const createArgs = [
@@ -82,34 +59,13 @@ export class GitHubMergeGateProvider implements ReviewGateProvider {
       '-f', `body=${body ?? ''}`,
     ];
     const stdout = await this.exec('gh', createArgs, cwd);
-    const pr = JSON.parse(stdout) as { html_url?: string; number?: number };
+    const pr = JSON.parse(stdout) as { html_url: string; number: number };
 
-    console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.publishReviewGate creating stdout=${stdout}`);
-    if (!pr.html_url || pr.number === undefined || pr.number === null) {
-      throw new Error('Review gate publisher returned no pull request artifacts');
-    }
-    return {
-      sealed: true,
-      relationship: {
-        kind: (opts.preferredShape ?? 'stacked_diffs') === 'stacked_diffs' ? 'stacked_diffs' : 'independent',
-        managedBy: 'external',
-      },
-      artifacts: [{
-        id: `github:pull_request:${pr.number}`,
-        provider: 'github',
-        type: 'pull_request',
-        url: pr.html_url,
-        identifier: String(pr.number),
-        title,
-        baseBranch,
-        headBranch: featureBranch,
-        status: 'open',
-        statusText: 'Awaiting review',
-      }],
-    };
+    console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview creating stdout=${stdout}`);
+    return { url: pr.html_url, identifier: String(pr.number) };
   }
 
-  async closeArtifact(opts: {
+  async closeReview(opts: {
     identifier: string;
     cwd: string;
   }): Promise<void> {
@@ -122,7 +78,7 @@ export class GitHubMergeGateProvider implements ReviewGateProvider {
     ], cwd));
   }
 
-  async checkArtifact(opts: {
+  async checkApproval(opts: {
     identifier: string;
     cwd: string;
   }): Promise<MergeGateApprovalStatus> {
@@ -227,7 +183,7 @@ export class GitHubMergeGateProvider implements ReviewGateProvider {
         '--json', 'url,number',
         '--limit', '1',
       ], cwd);
-      console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.publishReviewGate listOutput=${listOutput}`);
+      console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview listOutput=${listOutput}`);
       return JSON.parse(listOutput) as ExistingPullRequest[];
     } catch (err) {
       console.warn(
@@ -252,7 +208,7 @@ export class GitHubMergeGateProvider implements ReviewGateProvider {
       '-f', `head=${owner}:${ghHead}`,
       '-f', 'per_page=1',
     ], cwd));
-    console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.publishReviewGate restListOutput=${output}`);
+    console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview restListOutput=${output}`);
     const pulls = JSON.parse(output) as Array<{ html_url?: string; url?: string; number: number }>;
     return pulls
       .map((pull) => ({

@@ -19,7 +19,7 @@ import { TaskStateMachine } from './state-machine.js';
 import { ResponseHandler } from './response-handler.js';
 import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
-import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, Attempt, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency, TaskStatus, TaskHeartbeatSource, ReviewGateArtifact, ReviewGateExecution } from '@invoker/workflow-graph';
+import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, Attempt, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency, TaskStatus, TaskHeartbeatSource } from '@invoker/workflow-graph';
 import type { RunnerKind } from '@invoker/workflow-graph';
 import { createTaskState, createAttempt } from '@invoker/workflow-graph';
 import type { WorkflowDerivedStatus } from '@invoker/workflow-graph';
@@ -141,7 +141,6 @@ const RECREATE_RESET_CHANGES: TaskStateChanges = {
     reviewUrl: undefined,
     reviewId: undefined,
     reviewStatus: undefined,
-    reviewGate: undefined,
     reviewProviderId: undefined,
     agentSessionId: undefined,
     containerId: undefined,
@@ -218,13 +217,11 @@ export interface OrchestratorPersistence {
     baseBranch?: string;
     featureBranch?: string;
     mergeMode?: 'manual' | 'automatic' | 'external_review';
-    reviewProvider?: string;
-    reviewGate?: ReviewGateDefinition;
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
     detachedExternalDependencies?: DetachedExternalDependency[];
   }): void;
-  updateWorkflow?(workflowId: string, changes: { updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review'; reviewProvider?: string; reviewGate?: ReviewGateDefinition; externalDependencies?: ExternalDependency[]; externalDependencyChanges?: ExternalDependencyChange[]; detachedExternalDependencies?: DetachedExternalDependency[] }): void;
+  updateWorkflow?(workflowId: string, changes: { updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review'; externalDependencies?: ExternalDependency[]; externalDependencyChanges?: ExternalDependencyChange[]; detachedExternalDependencies?: DetachedExternalDependency[] }): void;
   saveTask(workflowId: string, task: TaskState): void;
   updateTask(taskId: string, changes: TaskStateChanges): void;
   logEvent?(taskId: string, eventType: string, payload?: unknown): void;
@@ -284,8 +281,6 @@ export interface OrchestratorPersistence {
     baseBranch?: string;
     featureBranch?: string;
     mergeMode?: 'manual' | 'automatic' | 'external_review';
-    reviewProvider?: string;
-    reviewGate?: ReviewGateDefinition;
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
     detachedExternalDependencies?: DetachedExternalDependency[];
@@ -338,29 +333,6 @@ export interface DeleteAllWorkflowsOptions {
   publishRemovalDeltas?: boolean;
 }
 
-export interface ReviewGateDefinition {
-  type: 'pull_requests';
-  authoring: {
-    mode: 'automatic' | 'manual' | 'external';
-    preferredShape: 'stacked_diffs' | 'independent';
-  };
-  completion: {
-    required: 'all';
-    state: 'merged';
-  };
-}
-
-export interface ReviewArtifactInput {
-  provider?: 'github';
-  type?: 'pull_request';
-  url: string;
-  identifier?: string;
-  title?: string;
-  baseBranch?: string;
-  headBranch?: string;
-  status?: ReviewGateArtifact['status'];
-}
-
 export interface PlanDefinition {
   name: string;
   description?: string;
@@ -370,7 +342,6 @@ export interface PlanDefinition {
   featureBranch?: string;
   mergeMode?: 'manual' | 'automatic' | 'external_review';
   reviewProvider?: string;
-  reviewGate?: ReviewGateDefinition;
   repoUrl?: string;
   intermediateRepoUrl?: string;
   externalDependencies?: Array<{
@@ -676,7 +647,6 @@ export class Orchestrator {
       reviewUrl: undefined,
       reviewId: undefined,
       reviewStatus: undefined,
-      reviewGate: undefined,
       reviewProviderId: undefined,
       fixedIntegrationSha: undefined,
       fixedIntegrationRecordedAt: undefined,
@@ -1449,8 +1419,6 @@ export class Orchestrator {
       baseBranch: plan.baseBranch,
       featureBranch: plan.featureBranch,
       mergeMode: plan.mergeMode,
-      reviewProvider: plan.reviewProvider,
-      reviewGate: plan.reviewGate,
       externalDependencies: workflowExternalDependencies.length > 0 ? workflowExternalDependencies : undefined,
       createdAt,
       updatedAt: createdAt,
@@ -1791,100 +1759,6 @@ export class Orchestrator {
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
   }
 
-  private defaultReviewGateForAttachment(): ReviewGateExecution {
-    return {
-      sealed: false,
-      completion: { required: 'all', state: 'merged' },
-      relationship: { kind: 'stacked_diffs', managedBy: 'external' },
-      artifacts: [],
-      statusText: 'Waiting for review artifacts',
-    };
-  }
-
-  private normalizeReviewArtifactInput(input: ReviewArtifactInput): ReviewGateArtifact {
-    const provider = input.provider ?? 'github';
-    const type = input.type ?? 'pull_request';
-    if (provider !== 'github') throw new Error('Review artifact provider must be "github"');
-    if (type !== 'pull_request') throw new Error('Review artifact type must be "pull_request"');
-    const url = input.url?.trim();
-    if (!url) throw new Error('Review artifact URL is required');
-    const parsedIdentifier = provider === 'github'
-      ? url.match(/\/pull\/(\d+)(?:[/?#].*)?$/)?.[1]
-      : undefined;
-    const identifier = input.identifier?.trim() || parsedIdentifier;
-    if (!identifier) throw new Error('Review artifact identifier is required');
-    return {
-      id: `${provider}:${type}:${identifier}`,
-      provider,
-      type,
-      url,
-      identifier,
-      title: input.title,
-      baseBranch: input.baseBranch,
-      headBranch: input.headBranch,
-      status: input.status,
-    };
-  }
-
-  attachReviewArtifact(workflowId: string, input: ReviewArtifactInput): ReviewGateExecution {
-    this.refreshFromDb();
-    const task = this.getMergeNode(workflowId);
-    if (!task) throw new Error(`Workflow "${workflowId}" has no review gate`);
-    if (task.status !== 'review_ready' && task.status !== 'awaiting_approval') {
-      throw new Error('Review artifacts can only be attached while the review gate is review_ready or awaiting_approval');
-    }
-    const artifact = this.normalizeReviewArtifactInput(input);
-    const current = task.execution.reviewGate ?? this.defaultReviewGateForAttachment();
-    const artifacts = [...current.artifacts];
-    const existingIndex = artifacts.findIndex((candidate) => candidate.id === artifact.id);
-    if (existingIndex >= 0) {
-      const existing = artifacts[existingIndex];
-      artifacts[existingIndex] = {
-        ...existing,
-        ...artifact,
-        status: artifact.status ?? existing.status,
-        statusText: existing.statusText,
-        headSha: existing.headSha,
-        headRef: existing.headRef,
-      };
-    } else {
-      artifacts.push({ ...artifact, status: artifact.status ?? 'open' });
-    }
-    const reviewGate: ReviewGateExecution = {
-      ...current,
-      artifacts,
-      statusText: current.sealed ? current.statusText : 'Waiting for review artifacts',
-    };
-    const changes: TaskStateChanges = { execution: { reviewGate } };
-    const updatedReview = this.writeAndSync(task.id, changes);
-    this.persistence.logEvent?.(task.id, 'review_gate.artifact_attached', { artifact });
-    this.messageBus.publish(TASK_DELTA_CHANNEL, this.buildUpdateDelta(task, updatedReview, changes));
-    return reviewGate;
-  }
-
-  sealReviewGate(workflowId: string): ReviewGateExecution {
-    this.refreshFromDb();
-    const task = this.getMergeNode(workflowId);
-    if (!task) throw new Error(`Workflow "${workflowId}" has no review gate`);
-    if (task.status !== 'review_ready' && task.status !== 'awaiting_approval') {
-      throw new Error('Review gate can only be sealed while it is review_ready or awaiting_approval');
-    }
-    const current = task.execution.reviewGate ?? this.defaultReviewGateForAttachment();
-    if (current.artifacts.length === 0) {
-      throw new Error('Cannot seal review gate without pull request artifacts');
-    }
-    const reviewGate: ReviewGateExecution = {
-      ...current,
-      sealed: true,
-      statusText: current.statusText ?? 'Awaiting review',
-    };
-    const changes: TaskStateChanges = { execution: { reviewGate } };
-    const updatedReview = this.writeAndSync(task.id, changes);
-    this.persistence.logEvent?.(task.id, 'review_gate.sealed', { artifactCount: reviewGate.artifacts.length });
-    this.messageBus.publish(TASK_DELTA_CHANNEL, this.buildUpdateDelta(task, updatedReview, changes));
-    return reviewGate;
-  }
-
   setBeforeApproveHook(fn: (task: TaskState) => Promise<void>): void {
     this.beforeApproveHook = fn;
   }
@@ -1968,11 +1842,6 @@ export class Orchestrator {
     const isApprovalState = task?.status === 'awaiting_approval' || task?.status === 'review_ready';
     if (!task || !isApprovalState || task.execution.pendingFixError === undefined) {
       return [];
-    }
-
-    if (!task.config.isMergeNode) {
-      const prepared = this.prepareTaskForNewAttempt(task.id, 'approved fix relaunch');
-      return this.autoStartReadyTasks([prepared.id], Orchestrator.EXPEDITED_PRIORITY);
     }
 
     const now = new Date();
@@ -4292,7 +4161,6 @@ export class Orchestrator {
       reviewUrl?: string;
       reviewId?: string;
       reviewStatus?: string;
-      reviewGate?: ReviewGateExecution;
     } = {
       exitCode: parsed.exitCode,
       completedAt: new Date(),
@@ -4320,9 +4188,6 @@ export class Orchestrator {
     }
     if (parsed.reviewStatus !== undefined) {
       execution.reviewStatus = parsed.reviewStatus;
-    }
-    if (parsed.reviewGate !== undefined) {
-      execution.reviewGate = parsed.reviewGate;
     }
 
     const changes: TaskStateChanges = {
@@ -4476,7 +4341,6 @@ export class Orchestrator {
         reviewUrl: parsed.reviewUrl,
         reviewId: parsed.reviewId,
         reviewStatus: parsed.reviewStatus,
-        reviewGate: parsed.reviewGate,
       },
     };
     this.setTaskApprovalStatus(taskId, 'review_ready', 'task.review_ready', changes);

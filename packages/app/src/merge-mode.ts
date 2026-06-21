@@ -3,7 +3,7 @@
  */
 export type CanonicalMergeMode = 'manual' | 'automatic' | 'external_review';
 
-const VALID_INPUT = new Set(['manual', 'automatic', 'external_review', 'github']);
+const VALID_INPUT = new Set(['manual', 'automatic', 'external_review']);
 
 /**
  * Normalize user-facing merge mode strings for workflow persistence.
@@ -15,7 +15,7 @@ export function normalizeMergeModeForPersistence(raw: string): CanonicalMergeMod
       `Invalid mergeMode: "${raw}". Expected one of: ${[...VALID_INPUT].join(', ')}`,
     );
   }
-  if (raw === 'external_review' || raw === 'github') return 'external_review';
+  if (raw === 'external_review') return 'external_review';
   if (raw === 'automatic') return 'automatic';
   return 'manual';
 }
