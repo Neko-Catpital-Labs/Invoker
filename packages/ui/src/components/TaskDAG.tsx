@@ -53,6 +53,7 @@ interface TaskDAGProps {
   /** Fired when the user manually pans or zooms the viewport. */
   onManualViewport?: () => void;
   statusFilters?: Set<string>;
+  runningTaskIds?: ReadonlySet<string>;
 }
 
 const nodeTypes = { taskNode: TaskNode, mergeGateNode: MergeGateNode };
@@ -151,7 +152,7 @@ function mergeMeasuredNodeState(prevNodes: Node[], nextNodes: Node[]): Node[] {
   });
 }
 
-function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskClick, onTaskDoubleClick, onTaskContextMenu, onManualViewport, statusFilters }: TaskDAGProps) {
+function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskClick, onTaskDoubleClick, onTaskContextMenu, onManualViewport, statusFilters, runningTaskIds }: TaskDAGProps) {
   const { fitView, setCenter, getZoom } = useReactFlow();
   const prevNodeCount = useRef(0);
   const lastNodeClickRef = useRef<{ id: string; at: number } | null>(null);
@@ -222,7 +223,8 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
     const dimmedNodeIds = new Set<string>();
     if (statusFilters && statusFilters.size > 0) {
       for (const task of taskArray) {
-        const vs = getEffectiveVisualStatus(task.status, task.execution);
+        const runningLike = runningTaskIds?.has(task.id) === true;
+        const vs = getEffectiveVisualStatus(task.status, task.execution, { runningLike });
         if (!Array.from(statusFilters).some((filterKey) => matchesStatusFilter(filterKey, vs))) {
           dimmedNodeIds.add(task.id);
         }
@@ -240,7 +242,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
       fallbackLayout: makeFallbackLayout(taskArray),
       layoutKey: layoutKeyFor(layoutTasks, rawEdges),
     };
-  }, [tasks, statusFilters]);
+  }, [runningTaskIds, tasks, statusFilters]);
 
   useEffect(() => {
     if (rawGraph.taskArray.length === 0) return;
@@ -279,7 +281,8 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
       const wfMeta = workflows?.get(wfGroupId);
       const wfMergeMode = (wfMeta?.mergeMode as 'manual' | 'automatic' | 'external_review') ?? 'manual';
       const pos = activeLayout.positions.get(task.id) ?? { x: 0, y: 0 };
-      const visualStatus = getEffectiveVisualStatus(task.status, task.execution);
+      const runningLike = runningTaskIds?.has(task.id) === true;
+      const visualStatus = getEffectiveVisualStatus(task.status, task.execution, { runningLike });
       const dimmed = statusFilters
         && statusFilters.size > 0
         && !Array.from(statusFilters).some((filterKey) => matchesStatusFilter(filterKey, visualStatus));
@@ -323,6 +326,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
             label: task.description,
             dimmed,
             selected: selectedTaskId === task.id,
+            runningLike,
             ...(onTaskDoubleClick ? { onDoubleClick: onTaskDoubleClick } : {}),
           },
         });
@@ -405,7 +409,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
     });
 
     return { nodes: allNodes, edges: newEdges };
-  }, [activeLayout.positions, onTaskDoubleClick, rawGraph, routedEdgePoints, selectedTaskId, statusFilters, tasks, workflows]);
+  }, [activeLayout.positions, onTaskDoubleClick, rawGraph, routedEdgePoints, runningTaskIds, selectedTaskId, statusFilters, tasks, workflows]);
 
   // Merge task-derived nodes with React Flow's internal dimension state.
   // Without this, each task-delta re-render creates new node objects that discard
