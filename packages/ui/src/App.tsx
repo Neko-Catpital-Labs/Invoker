@@ -389,6 +389,7 @@ export function App() {
   const [viewMode, setViewMode] = useState<'dag' | 'history' | 'timeline' | 'queue' | 'actionGraph'>('dag');
   const [selectedActionNode, setSelectedActionNode] = useState<ActionGraphNode | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [remoteTargets, setRemoteTargets] = useState<string[]>([]);
   const [executionPools, setExecutionPools] = useState<string[]>([]);
   const [executionAgents, setExecutionAgents] = useState<string[]>([]);
   const [statusFilters, setStatusFilters] = useState<Set<WorkflowStatus>>(new Set());
@@ -451,6 +452,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    window.invoker?.getRemoteTargets?.().then(setRemoteTargets).catch(() => {});
     window.invoker?.getExecutionPools?.().then(setExecutionPools).catch(() => {});
     window.invoker?.getExecutionAgents?.().then(setExecutionAgents).catch(() => {});
     refreshSystemDiagnostics();
@@ -649,13 +651,23 @@ export function App() {
     return STATUS_KEY_ORDER.filter((key) => key === 'completed' || key === 'running' || key === 'failed' || key === 'pending' || (counts.get(key) ?? 0) > 0);
   }, [tasks]);
 
+  const getWorkflowReviewUrl = useCallback((workflowId: string) => {
+    const workflowTasks = [...tasks.values()].filter((task) => task.config.workflowId === workflowId);
+    const mergeTask = workflowTasks.find((task) => task.config.isMergeNode);
+    const artifacts = mergeTask?.execution.reviewGate?.artifacts;
+    if (artifacts && artifacts.length > 0) {
+      const artifact = [...artifacts].reverse().find((candidate) => candidate.status !== 'closed') ?? artifacts[artifacts.length - 1];
+      return artifact?.url;
+    }
+    return workflowTasks.find((task) => task.execution.reviewUrl)?.execution.reviewUrl;
+  }, [tasks]);
+
   const searchResults = useMemo<SearchResult[]>(() => {
     const query = normalizedSearchText(searchQuery.trim());
     if (!query) return [];
     const results: SearchResult[] = [];
     for (const workflow of workflows.values()) {
-      const workflowTasks = [...tasks.values()].filter((task) => task.config.workflowId === workflow.id);
-      const reviewUrl = workflowTasks.find((task) => task.execution.reviewUrl)?.execution.reviewUrl;
+      const reviewUrl = getWorkflowReviewUrl(workflow.id);
       const haystack = [
         workflow.id,
         workflow.name,
@@ -696,7 +708,7 @@ export function App() {
       }
     }
     return results.slice(0, 12);
-  }, [searchQuery, tasks, workflows]);
+  }, [getWorkflowReviewUrl, searchQuery, tasks, workflows]);
 
   useEffect(() => {
     setSearchActiveIndex(0);
@@ -1343,13 +1355,12 @@ export function App() {
   }, []);
 
   const handleOpenWorkflowPr = useCallback((workflowId: string) => {
-    const workflowTasks = [...tasks.values()].filter((task) => task.config.workflowId === workflowId);
-    const reviewUrl = workflowTasks.find((task) => task.execution.reviewUrl)?.execution.reviewUrl;
+    const reviewUrl = getWorkflowReviewUrl(workflowId);
     if (reviewUrl) {
       window.open(reviewUrl, '_blank', 'noopener,noreferrer');
     }
     setWorkflowContextMenu(null);
-  }, [tasks]);
+  }, [getWorkflowReviewUrl]);
 
   const handleCopyWorkflowId = useCallback((workflowId: string) => {
     navigator.clipboard?.writeText(workflowId).catch(() => {});
@@ -1544,6 +1555,18 @@ export function App() {
     [invoker],
   );
 
+  // ── Edit task executor type ───────────────────────────────
+  const handleEditType = useCallback(
+    async (taskId: string, runnerKind: string, poolMemberId?: string) => {
+      if (!invoker) return;
+      try {
+        await invoker.editTaskType(taskId, runnerKind, poolMemberId);
+      } catch (err) {
+        console.error('Failed to edit task type:', err);
+      }
+    },
+    [invoker],
+  );
 
   // ── Edit task execution pool ─────────────────────────────
   const handleEditPool = useCallback(
@@ -1926,11 +1949,13 @@ export function App() {
               workflow={selectedWorkflow}
               task={selectedTask}
               workflowTasks={miniDagTasks}
+              remoteTargets={remoteTargets}
               executionPools={executionPools}
               executionAgents={executionAgents}
               collapsed={inspectorCollapsed}
               advancedExpanded={advancedMetadataExpanded}
               actionNode={viewMode === 'actionGraph' ? selectedActionNode : null}
+              onEditType={handleEditType}
               onEditPool={handleEditPool}
               onEditAgent={handleEditAgent}
               onEditPrompt={handleEditPrompt}

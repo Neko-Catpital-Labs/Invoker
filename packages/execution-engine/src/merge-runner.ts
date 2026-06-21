@@ -10,12 +10,12 @@ import { normalize, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 
-import type { Orchestrator, TaskState, TaskStateChanges } from '@invoker/workflow-core';
+import type { Orchestrator, ReviewGateExecution, TaskState, TaskStateChanges } from '@invoker/workflow-core';
 import { OrchestratorError, OrchestratorErrorCode } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { WorkResponse } from '@invoker/contracts';
 import type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
-import type { MergeGateProvider } from './merge-gate-provider.js';
+import type { ReviewGateProvider } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 import type { PrAuthoringContext, PrAuthoringTaskEntry } from './pr-authoring.js';
@@ -45,6 +45,31 @@ function canonicalMergeMode(mode: string | undefined): 'manual' | 'automatic' | 
   if (m === 'external_review') return 'external_review';
   if (m === 'automatic') return 'automatic';
   return 'manual';
+}
+
+function reviewGateExecutionFromPublished(
+  result: { sealed: boolean; relationship: ReviewGateExecution['relationship']; artifacts: ReviewGateExecution['artifacts'] },
+): ReviewGateExecution {
+  if (result.sealed && result.artifacts.length === 0) {
+    throw new Error('Review gate publisher returned no pull request artifacts');
+  }
+  return {
+    sealed: result.sealed,
+    completion: { required: 'all', state: 'merged' },
+    relationship: result.relationship,
+    artifacts: result.artifacts,
+    statusText: result.artifacts.length > 0 ? 'Awaiting review' : undefined,
+  };
+}
+
+function waitingReviewGateExecution(preferredShape: 'stacked_diffs' | 'independent'): ReviewGateExecution {
+  return {
+    sealed: false,
+    completion: { required: 'all', state: 'merged' },
+    relationship: { kind: preferredShape, managedBy: 'external' },
+    artifacts: [],
+    statusText: 'Waiting for review artifacts',
+  };
 }
 
 async function resolveBaseCheckoutRef(
@@ -168,7 +193,7 @@ export interface MergeRunnerHost {
   readonly defaultBranch: string | undefined;
   readonly callbacks: TaskRunnerCallbacks;
   readonly cwd: string;
-  readonly mergeGateProvider?: MergeGateProvider;
+  readonly mergeGateProvider?: ReviewGateProvider;
   readonly reviewProviderRegistry?: ReviewProviderRegistry;
 
   execGitReadonly(args: string[], cwd?: string): Promise<string>;
@@ -458,6 +483,7 @@ export async function runMergeGateActionImpl(
       reviewUrl: undefined,
       reviewId: undefined,
       reviewStatus: undefined,
+      reviewGate: undefined,
     },
   });
 
@@ -526,14 +552,44 @@ export async function runMergeGateActionImpl(
         };
       }
       if (mergeMode === 'external_review') {
-        if (!host.mergeGateProvider) {
-          throw new Error('mergeMode is "external_review" but no review provider configured');
-        }
 
         // The PR branch is pushed from the separate consolidation clone above.
         // Fetch it into the persistent gate workspace and check it out before
         // persisting the workspace handoff used by review terminals.
         await syncGateWorkspaceToFeatureBranch(host, gateWorkspacePath, featureBranch);
+
+        const reviewGateDefinition = workflow?.reviewGate;
+        const preferredShape = reviewGateDefinition?.authoring.preferredShape ?? 'stacked_diffs';
+        const authoringMode = reviewGateDefinition?.authoring.mode ?? 'automatic';
+        if (authoringMode === 'manual' || authoringMode === 'external') {
+          const reviewGate = waitingReviewGateExecution(preferredShape);
+          response = {
+            requestId: `merge-${task.id}`,
+            actionId: task.id,
+            executionGeneration: task.execution.generation ?? 0,
+            status: 'review_ready',
+            outputs: {
+              exitCode: 0,
+              summary,
+              branch: featureBranch,
+              reviewGate,
+            },
+          };
+          return {
+            response,
+            taskChanges: {
+              config: { summary },
+              execution: {
+                branch: featureBranch,
+                workspacePath: gateWorkspacePath,
+                reviewGate,
+              },
+            },
+          };
+        }
+        if (!host.mergeGateProvider) {
+          throw new Error('mergeMode is "external_review" but no review provider configured');
+        }
 
         let fullSummary = summary;
         let vpMarkdownCapture: string | undefined;
@@ -563,22 +619,20 @@ export async function runMergeGateActionImpl(
 
         // Create PR via provider (consolidation already done above).
         // Use the gate clone dir so gh CLI resolves the correct GitHub remote.
-        const result = await host.mergeGateProvider.createReview({
+        const result = await host.mergeGateProvider.publishReviewGate({
           baseBranch,
           featureBranch,
           title: workflow?.name ?? 'Workflow',
           cwd: gateWorkspacePath!,
           body: prBody,
+          preferredShape,
         });
-        console.log(`[merge] Created GitHub PR: ${result.url}`);
-
-        reviewUrl = result.url;
-        reviewId = result.identifier;
-        reviewStatus = 'Awaiting review';
+        const reviewGate = reviewGateExecutionFromPublished(result);
+        console.log(`[merge] Created review artifacts: ${reviewGate.artifacts.map((artifact) => artifact.identifier).join(', ')}`);
         mergeTrace('GATE_WS_PATH_EXTERNAL_REVIEW_AWAIT', {
           taskId: task.id,
           gateWorkspacePath: gateWorkspacePath ?? null,
-          reviewUrl: result.url,
+          reviewUrl: reviewGate.artifacts.at(-1)?.url ?? null,
         });
         console.log(
           `[merge-gate-workspace] setTaskReviewReady path=external_review ` +
@@ -593,9 +647,7 @@ export async function runMergeGateActionImpl(
             exitCode: 0,
             summary,
             branch: featureBranch,
-            reviewUrl,
-            reviewId,
-            reviewStatus,
+            reviewGate,
           },
         };
         return {
@@ -605,9 +657,7 @@ export async function runMergeGateActionImpl(
             execution: {
               branch: featureBranch,
               workspacePath: gateWorkspacePath,
-              reviewUrl,
-              reviewId,
-              reviewStatus,
+              reviewGate,
             },
           },
         };
@@ -1068,6 +1118,25 @@ export async function publishAfterFixImpl(
     }
 
     if (mergeMode === 'external_review') {
+      const reviewGateDefinition = workflow?.reviewGate;
+      const preferredShape = reviewGateDefinition?.authoring.preferredShape ?? 'stacked_diffs';
+      const authoringMode = reviewGateDefinition?.authoring.mode ?? 'automatic';
+      if (authoringMode === 'manual' || authoringMode === 'external') {
+        const reviewGate = waitingReviewGateExecution(preferredShape);
+        setMergeGateReviewReady(host, task.id, {
+          config: { runnerKind: 'worktree', summary },
+          execution: {
+            branch: featureBranch,
+            workspacePath: gateWorkspacePath,
+            reviewGate,
+            fixedIntegrationSha: undefined,
+            fixedIntegrationRecordedAt: undefined,
+            fixedIntegrationSource: undefined,
+          },
+        });
+        await startReviewReadyDependents(host);
+        return;
+      }
       if (!host.mergeGateProvider) {
         throw new Error('mergeMode is "external_review" but no review provider configured');
       }
@@ -1087,25 +1156,23 @@ export async function publishAfterFixImpl(
         cwd: consolidateDir,
       });
 
-      const result = await host.mergeGateProvider.createReview({
+      const result = await host.mergeGateProvider.publishReviewGate({
         baseBranch,
         featureBranch,
         title: workflow?.name ?? 'Workflow',
         cwd: consolidateDir,
         body: prBodyReview,
+        preferredShape,
       });
-      console.log(`[merge] Post-fix: created/updated GitHub PR: ${result.url}`);
-
-
+      const reviewGate = reviewGateExecutionFromPublished(result);
+      console.log(`[merge] Post-fix: created/updated review artifacts: ${reviewGate.artifacts.map((artifact) => artifact.identifier).join(', ')}`);
 
       setMergeGateReviewReady(host, task.id, {
         config: { runnerKind: 'worktree', summary },
         execution: {
           branch: featureBranch,
           workspacePath: gateWorkspacePath,
-          reviewUrl: result.url,
-          reviewId: result.identifier,
-          reviewStatus: 'Awaiting review',
+          reviewGate,
           fixedIntegrationSha: undefined,
           fixedIntegrationRecordedAt: undefined,
           fixedIntegrationSource: undefined,
