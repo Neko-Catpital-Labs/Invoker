@@ -1,24 +1,18 @@
-export interface MergeGateProviderResult {
-  url: string;
-  identifier: string;
-}
+import type { ReviewGateArtifact } from '@invoker/workflow-core';
 
-export interface MergeGateCreateReviewOptions {
+export interface ReviewGatePublishOptions {
   baseBranch: string;
   featureBranch: string;
   title: string;
   cwd: string;
   body?: string;
+  preferredShape: 'stacked_diffs' | 'independent';
 }
 
-export interface MergeGateCheckApprovalOptions {
-  identifier: string;
-  cwd: string;
-}
-
-export interface MergeGateCloseReviewOptions {
-  identifier: string;
-  cwd: string;
+export interface ReviewGatePublishResult {
+  sealed: boolean;
+  relationship: { kind: 'stacked_diffs' | 'independent' | 'unknown'; managedBy: 'external' };
+  artifacts: ReviewGateArtifact[];
 }
 
 export interface MergeGateCheckSummary {
@@ -45,14 +39,14 @@ export interface MergeGateFailedCheck {
   summary?: string;
 }
 
-export interface MergeGateProvider {
+export interface ReviewGateProvider {
   readonly name: string;
 
   // INV-77 selected boundary: execution-engine owns provider IO and exposes
-  // typed review creation, polling, closure, check, and merge-state metadata.
-  createReview(opts: MergeGateCreateReviewOptions): Promise<MergeGateProviderResult>;
+  // typed review publishing, polling, closure, check, and merge-state metadata.
+  publishReviewGate(opts: ReviewGatePublishOptions): Promise<ReviewGatePublishResult>;
 
-  checkApproval(opts: MergeGateCheckApprovalOptions): Promise<MergeGateApprovalStatus>;
+  checkArtifact(opts: { identifier: string; cwd: string }): Promise<MergeGateApprovalStatus>;
 
-  closeReview?(opts: MergeGateCloseReviewOptions): Promise<void>;
+  closeArtifact?(opts: { identifier: string; cwd: string }): Promise<void>;
 }

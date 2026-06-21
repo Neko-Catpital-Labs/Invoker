@@ -1,12 +1,22 @@
 import { describe, it, expect } from 'vitest';
 import { ReviewProviderRegistry } from '../review-provider-registry.js';
-import type { MergeGateProvider } from '../merge-gate-provider.js';
+import type { ReviewGateProvider } from '../merge-gate-provider.js';
 
-function makeFakeProvider(name: string): MergeGateProvider {
+function makeFakeProvider(name: string): ReviewGateProvider {
   return {
     name,
-    createReview: async () => ({ url: `https://example.com/${name}/1`, identifier: `${name}#1` }),
-    checkApproval: async () => ({ approved: false, rejected: false, statusText: 'pending', url: '' }),
+    publishReviewGate: async () => ({
+      sealed: true,
+      relationship: { kind: 'unknown', managedBy: 'external' },
+      artifacts: [{
+        id: `${name}:pull_request:1`,
+        provider: name,
+        type: 'pull_request',
+        url: `https://example.com/${name}/1`,
+        identifier: `${name}#1`,
+      }],
+    }),
+    checkArtifact: async () => ({ approved: false, rejected: false, statusText: 'pending', url: '' }),
   };
 }
 
