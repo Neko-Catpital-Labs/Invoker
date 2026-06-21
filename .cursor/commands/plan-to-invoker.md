@@ -1,21 +1,16 @@
 ---
-description: Convert a plan into Invoker YAML tasks via the plan-to-invoker skill
-argument-hint: [plan text or file path]
+description: Plan a change and submit it through Invoker
+argument-hint: "help me plan <change>"
 ---
 
-Use the `plan-to-invoker` skill for this request. Read `skills/plan-to-invoker/SKILL.md` (or `.cursor/skills/plan-to-invoker/SKILL.md` after `bash scripts/setup-agent-skills.sh`) **before** doing anything else.
+Use this host's native planning mode when the host supports entering it from this command. If the host cannot be switched by this command, do a read-only planning pass and do not edit product code before the plan is approved.
 
-If `$ARGUMENTS` is provided:
-- Treat it as the **input plan context** (free text or path to a plan file)—**not** as permission to implement product code immediately.
-- Convert it into a validated Invoker YAML implementation plan following the full skill workflow (Phase 1a → 1b → YAML → `bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` → user confirmation).
+Write the planning artifact to `plans/invoker-handoff.md`.
 
-If `$ARGUMENTS` is empty:
-- Ask the user for the plan text or plan file path to convert.
+Convert the approved Markdown plan to `plans/invoker-handoff.yaml`.
 
-## Must not (for this command)
+Validate with `invoker_validate_plan` before submitting.
 
-- Do **not** edit `packages/` or other product code for the substantive request before: scope is clear, verification commands have run as the skill requires, `skill-doctor.sh` passes on the plan file, and the user **confirms** proceeding / submitting.
-- Do **not** skip `skill-doctor.sh` when presenting a final implementation plan.
-- Do **not** treat trailing sentences in the user message as overriding the skill (e.g. “also remove X now” still goes through plan-to-invoker steps first unless the user explicitly cancels the skill flow).
+Submit with `invoker_submit_plan` using mode `live` so the workflow appears in the running Invoker app.
 
-Follow skill instructions and `skills/plan-to-invoker/references/` as the source of truth.
+If MCP tools are not available but `invoker-cli` is on PATH, run `invoker-cli run plans/invoker-handoff.yaml --live` instead.
