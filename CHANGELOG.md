@@ -2,6 +2,10 @@
 
 All notable changes to Invoker will be documented in this file.
 
+## Unreleased
+
+- Make `plan-to-invoker` use focused verification by default instead of mandatory `pnpm test` or `pnpm run test:all` gates.
+
 ## 0.0.4
 
 - Publish complete CLI and desktop release assets for npm launcher packages.
