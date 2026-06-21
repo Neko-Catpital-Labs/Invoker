@@ -53,7 +53,9 @@ import {
 import { DEFAULT_EXECUTION_AGENT } from './agent.js';
 import {
   buildCanonicalPrBody,
+  buildMakePrStackPublishPrompt,
   buildMakePrPrompt,
+  parseMakePrStackPublishResult,
   resolveSkillPathViaAgent,
   spawnAgentPrAuthorViaRegistry,
   validateCanonicalPrBody,
@@ -850,7 +852,6 @@ export class TaskRunner {
 
     const actionType = this.determineActionType(task);
     const executionAgent = task.config.executionAgent?.trim() || DEFAULT_EXECUTION_AGENT;
-    const executionModel = task.config.executionModel?.trim() || undefined;
     const request: WorkRequest = {
       requestId: randomUUID(),
       actionId: task.id,
@@ -862,7 +863,6 @@ export class TaskRunner {
         command: task.config.command,
         prompt: task.config.prompt,
         executionAgent,
-        executionModel,
         repoUrl,
         branchRepoUrl,
         featureBranch: task.config.featureBranch,
@@ -2752,6 +2752,68 @@ export class TaskRunner {
       structuredContext: args.structuredContext,
     });
     return { body: canonicalBody, sessionId: 'canonical-fallback', agentName: 'canonical' };
+  }
+
+  async publishReviewStackWithMakePrSkill(args: {
+    workflowId?: string;
+    mergeNodeTaskId?: string;
+    title: string;
+    baseBranch: string;
+    featureBranch: string;
+    workflowSummary: string;
+    cwd: string;
+    reviewGate?: ReviewGateState;
+  }): Promise<{ artifacts: ReviewGateArtifact[]; sessionId: string; agentName: string }> {
+    if (!this.executionAgentRegistry) {
+      throw new Error('make-pr skill is required to publish Invoker review stacks');
+    }
+
+    const preferredName = this.resolvePrAuthoringAgentName(args.workflowId, args.mergeNodeTaskId);
+    const prCapableAgents = this.executionAgentRegistry.listWithCapability('make-pr');
+    const orderedAgents = this.buildAgentFallbackOrder(preferredName, prCapableAgents);
+    const errors: string[] = [];
+
+    for (const agent of orderedAgents) {
+      const skillPath = resolveSkillPathViaAgent(agent, 'make-pr');
+      if (!skillPath) {
+        errors.push(`${agent.name}: skill "invoker-make-pr" not installed`);
+        continue;
+      }
+
+      const driver = this.executionAgentRegistry.getSessionDriver(agent.name);
+      const prompt = buildMakePrStackPublishPrompt({
+        skillPath,
+        title: args.title,
+        baseBranch: args.baseBranch,
+        featureBranch: args.featureBranch,
+        workflowSummary: args.workflowSummary,
+        cwd: args.cwd,
+        reviewGate: args.reviewGate,
+      });
+
+      try {
+        const result = await spawnAgentPrAuthorViaRegistry(prompt, args.cwd, agent, driver);
+        const parsedArtifacts = parseMakePrStackPublishResult(result.body);
+        const nowIso = new Date().toISOString();
+        const generation = args.reviewGate?.activeGeneration ?? 0;
+        const artifacts: ReviewGateArtifact[] = parsedArtifacts.map((artifact) => ({
+          ...artifact,
+          provider: 'github',
+          baseBranch: artifact.baseBranch ?? args.baseBranch,
+          required: true,
+          status: 'open',
+          generation,
+          createdAt: nowIso,
+        }));
+        return { artifacts, sessionId: result.sessionId, agentName: agent.name };
+      } catch (err) {
+        errors.push(`${agent.name}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    throw new Error(
+      `make-pr skill is required to publish Invoker review stacks${errors.length > 0 ? `: ${errors.join(' | ')}` : ''}`,
+    );
   }
 
   /**
