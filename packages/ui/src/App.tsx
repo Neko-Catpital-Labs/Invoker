@@ -1736,9 +1736,9 @@ export function App() {
             {missingRequiredTool
               ? `${missingRequiredTool.name} is missing. Invoker needs it for local workflows.`
               : needsBundledSkillsPrompt
-                ? 'Bundled Invoker skills are ready to install into Codex. Install them before using packaged skill-driven flows.'
+                ? 'Invoker AI helpers are ready to install for Codex, Claude, Cursor, and OMP. Install them before using one-command plan handoff.'
               : installedAgentCount === 0
-                ? 'No Claude or Codex CLI detected yet. Install one before running agent-backed tasks.'
+                ? 'No Claude or Codex CLI detected yet. Install one before running agent-backed execution tasks.'
                 : 'Review local prerequisites before running packaged workflows.'}
           </div>
           <div className="flex items-center gap-2 shrink-0">
