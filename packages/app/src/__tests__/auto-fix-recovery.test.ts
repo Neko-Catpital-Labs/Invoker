@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { WorkflowMutationIntent } from '@invoker/data-store';
 import type { TaskState } from '@invoker/workflow-core';
 
+import { buildFixWithAgentMutationArgs } from '../auto-fix-intents.js';
 import {
+  collectValidatedAutoFixRecoveryCandidates,
   createRecoveryWorker,
   listAutoFixRecoveryScanCandidates,
   RECOVERY_WORKER_KIND,
@@ -36,6 +39,30 @@ function makeTask(overrides: Partial<TaskState> = {}): TaskState {
     taskStateVersion: 4,
     ...rest,
   };
+}
+
+function makeRecoveryPolicyHarness(task: TaskState = makeTask(), existingIntents: WorkflowMutationIntent[] = []) {
+  const workflows = [{ id: 'wf-1' }];
+  const tasks = new Map<string, TaskState>([[task.id, task]]);
+  const intents: WorkflowMutationIntent[] = [...existingIntents];
+  const logEvent = vi.fn();
+  const options = {
+    store: {
+      listWorkflows: vi.fn(() => workflows),
+      loadTasks: vi.fn((workflowId: string) => workflowId === 'wf-1' ? Array.from(tasks.values()) : []),
+      loadTask: vi.fn((taskId: string) => tasks.get(taskId)),
+      listWorkflowMutationIntents: vi.fn((workflowId?: string, statuses?: string[]) => intents.filter((intent) => (
+        (!workflowId || intent.workflowId === workflowId)
+        && (!statuses || statuses.includes(intent.status))
+      ))),
+      logEvent,
+    },
+    submitter: { submit: vi.fn() },
+    logger,
+    defaultAutoFixRetries: 3,
+    getAutoFixAgent: () => 'codex',
+  };
+  return { options, logEvent, tasks, intents };
 }
 
 describe('auto-fix recovery worker', () => {
@@ -99,5 +126,99 @@ describe('auto-fix recovery scan candidates', () => {
         source: 'scan',
       },
     ]);
+  });
+});
+
+describe('auto-fix recovery candidate validation', () => {
+  it('accepts eligible scan candidates after reloading current task state', () => {
+    const harness = makeRecoveryPolicyHarness();
+
+    const candidates = collectValidatedAutoFixRecoveryCandidates(harness.options);
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({
+      taskId: 'wf-1/task-1',
+      workflowId: 'wf-1',
+      generation: 1,
+      taskStateVersion: 4,
+      source: 'scan',
+      task: expect.objectContaining({ id: 'wf-1/task-1' }),
+    });
+  });
+
+  it.each([
+    {
+      name: 'workflow',
+      task: makeTask({ config: { workflowId: 'wf-2' } }),
+      reason: 'stale-workflow',
+      details: { latestWorkflowId: 'wf-2' },
+    },
+    {
+      name: 'generation',
+      task: makeTask({ execution: { error: 'boom', autoFixAttempts: 0, generation: 2, selectedAttemptId: 'attempt-1' } }),
+      reason: 'stale-generation',
+      details: { latestGeneration: 2 },
+    },
+    {
+      name: 'task-state version',
+      task: makeTask({ taskStateVersion: 5 }),
+      reason: 'stale-task-state-version',
+      details: { latestTaskStateVersion: 5 },
+    },
+    {
+      name: 'attempt',
+      task: makeTask({ execution: { error: 'boom', autoFixAttempts: 0, generation: 1, selectedAttemptId: 'attempt-2' } }),
+      reason: 'stale-attempt',
+      details: { latestAttemptId: 'attempt-2' },
+    },
+  ])('skips stale $name candidates before eligibility checks', ({ task, reason, details }) => {
+    const harness = makeRecoveryPolicyHarness(task);
+
+    const candidates = collectValidatedAutoFixRecoveryCandidates(harness.options, [
+      {
+        taskId: 'wf-1/task-1',
+        workflowId: 'wf-1',
+        generation: 1,
+        taskStateVersion: 4,
+        attemptId: 'attempt-1',
+        source: 'scan',
+      },
+    ]);
+
+    expect(candidates).toHaveLength(0);
+    expect(harness.logEvent).toHaveBeenCalledWith(
+      'wf-1/task-1',
+      'debug.auto-fix',
+      expect.objectContaining({
+        phase: 'worker-autofix-skip',
+        reason,
+        ...details,
+      }),
+    );
+  });
+
+  it('skips failed tasks that already have an open fix intent', () => {
+    const existingIntent: WorkflowMutationIntent = {
+      id: 1,
+      workflowId: 'wf-1',
+      priority: 'normal',
+      channel: 'invoker:fix-with-agent',
+      args: buildFixWithAgentMutationArgs('wf-1/task-1', 'codex', { autoFix: true }),
+      status: 'queued',
+      createdAt: new Date().toISOString(),
+    };
+    const harness = makeRecoveryPolicyHarness(makeTask(), [existingIntent]);
+
+    const candidates = collectValidatedAutoFixRecoveryCandidates(harness.options);
+
+    expect(candidates).toHaveLength(0);
+    expect(harness.logEvent).toHaveBeenCalledWith(
+      'wf-1/task-1',
+      'debug.auto-fix',
+      expect.objectContaining({
+        phase: 'worker-autofix-skip',
+        reason: 'already-queued-intent',
+      }),
+    );
   });
 });
