@@ -51,18 +51,19 @@ function searchDirs(context: CliInstallerContext): string[] {
   // one location (used by the hermetic e2e scripts).
   const override = context.env.INVOKER_CLI_INSTALL_DIR;
   if (override) return [override];
-  const dirs = context.candidateInstallDirs
-    ? [
-        ...context.candidateInstallDirs,
-        ...pathDirs(context),
-      ]
-    : [
-        ...defaultCandidateInstallDirs(context),
-        ...pathDirs(context),
-        '/usr/local/bin',
-        '/opt/homebrew/bin',
-        join(context.homeDir, '.local', 'bin'),
-      ];
+  if (context.candidateInstallDirs) {
+    return [...new Set([
+      ...context.candidateInstallDirs,
+      ...pathDirs(context),
+    ])];
+  }
+  const dirs = [
+    ...defaultCandidateInstallDirs(context),
+    ...pathDirs(context),
+    '/usr/local/bin',
+    '/opt/homebrew/bin',
+    join(context.homeDir, '.local', 'bin'),
+  ];
   return [...new Set(dirs)];
 }
 
