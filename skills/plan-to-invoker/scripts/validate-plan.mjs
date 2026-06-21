@@ -47,7 +47,7 @@ const yamlPath = resolveYamlModulePath(__dirname);
 const { parse: parseYaml } = await import(yamlPath);
 
 const VALID_ON_FINISH = ['none', 'merge', 'pull_request'];
-const VALID_MERGE_MODE = ['manual', 'automatic', 'github', 'external_review'];
+const VALID_MERGE_MODE = ['manual', 'automatic', 'external_review'];
 const VALID_REQUIRED_STATUS = ['completed', 'review_ready'];
 const VALID_GATE_POLICY = ['completed', 'review_ready'];
 
@@ -188,6 +188,142 @@ function validateExternalDeps(deps, fieldPrefix, errors, taskId) {
   });
 }
 
+function validateReviewGate(reviewGate, errors) {
+  if (!reviewGate || typeof reviewGate !== 'object' || Array.isArray(reviewGate)) {
+    errors.push({
+      errorType: 'invalid_field_type',
+      field: 'reviewGate',
+      message: 'reviewGate must be an object',
+      value: reviewGate,
+    });
+    return;
+  }
+
+  const artifacts = reviewGate.artifacts;
+  if (!Array.isArray(artifacts)) {
+    errors.push({
+      errorType: 'invalid_field_type',
+      field: 'reviewGate.artifacts',
+      message: 'reviewGate.artifacts must be an array',
+      value: artifacts,
+    });
+    return;
+  }
+
+  const ids = new Set();
+  const normalizedArtifacts = [];
+  artifacts.forEach((artifact, index) => {
+    const field = `reviewGate.artifacts[${index}]`;
+    if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) {
+      errors.push({
+        errorType: 'invalid_field_type',
+        field,
+        message: `${field} must be an object`,
+        value: artifact,
+      });
+      return;
+    }
+    if (typeof artifact.id !== 'string' || artifact.id.trim() === '') {
+      errors.push({
+        errorType: 'missing_required_field',
+        field: `${field}.id`,
+        message: `${field}.id must be a non-empty string`,
+        value: artifact.id,
+      });
+      return;
+    }
+    if (ids.has(artifact.id)) {
+      errors.push({
+        errorType: 'duplicate_id',
+        field: `${field}.id`,
+        message: `${field}.id duplicates artifact "${artifact.id}"`,
+        value: artifact.id,
+      });
+      return;
+    }
+    ids.add(artifact.id);
+    if (artifact.required === undefined) {
+      artifact.required = true;
+    } else if (typeof artifact.required !== 'boolean') {
+      errors.push({
+        errorType: 'invalid_field_type',
+        field: `${field}.required`,
+        message: `${field}.required must be a boolean when provided`,
+        value: artifact.required,
+      });
+    }
+    if (artifact.dependsOn !== undefined && !Array.isArray(artifact.dependsOn)) {
+      errors.push({
+        errorType: 'invalid_field_type',
+        field: `${field}.dependsOn`,
+        message: `${field}.dependsOn must be an array`,
+        value: artifact.dependsOn,
+      });
+      return;
+    }
+    const dependsOn = artifact.dependsOn ?? [];
+    const normalizedDependsOn = [];
+    for (const dependency of dependsOn) {
+      if (typeof dependency !== 'string' || dependency.trim() === '') {
+        errors.push({
+          errorType: 'invalid_field_type',
+          field: `${field}.dependsOn`,
+          message: `${field}.dependsOn must contain non-empty artifact ids`,
+          value: dependency,
+        });
+        return;
+      }
+      normalizedDependsOn.push(dependency);
+    }
+    normalizedArtifacts.push({ id: artifact.id, dependsOn: normalizedDependsOn });
+  });
+
+  normalizedArtifacts.forEach((artifact, index) => {
+    const field = `reviewGate.artifacts[${index}].dependsOn`;
+    for (const dependency of artifact.dependsOn) {
+      if (!ids.has(dependency)) {
+        errors.push({
+          errorType: 'invalid_dependency_reference',
+          field,
+          message: `${field} references unknown artifact "${dependency}"`,
+          value: dependency,
+        });
+      } else if (dependency === artifact.id) {
+        errors.push({
+          errorType: 'invalid_dependency_reference',
+          field,
+          message: `${field} must not reference artifact "${artifact.id}" itself`,
+          value: dependency,
+        });
+      }
+    }
+  });
+
+  normalizedArtifacts.forEach((artifact, index) => {
+    const field = `reviewGate.artifacts[${index}].dependsOn`;
+    if (index === 0) {
+      if (artifact.dependsOn.length > 0) {
+        errors.push({
+          errorType: 'invalid_dependency_reference',
+          field,
+          message: `${field} must be omitted or [] for the first review-gate artifact`,
+          value: artifact.dependsOn,
+        });
+      }
+      return;
+    }
+    const expectedDependency = normalizedArtifacts[index - 1]?.id;
+    if (artifact.dependsOn.length !== 1 || artifact.dependsOn[0] !== expectedDependency) {
+      errors.push({
+        errorType: 'invalid_dependency_reference',
+        field,
+        message: `${field} must be ["${expectedDependency}"] to keep the review-gate stack linear`,
+        value: artifact.dependsOn,
+      });
+    }
+  });
+}
+
 function validatePlan(yamlContent) {
   const errors = [];
 
@@ -294,6 +430,9 @@ function validatePlan(yamlContent) {
   // Validate plan-level externalDependencies structure
   if (raw.externalDependencies) {
     validateExternalDeps(raw.externalDependencies, 'externalDependencies', errors);
+  }
+  if (raw.reviewGate !== undefined) {
+    validateReviewGate(raw.reviewGate, errors);
   }
 
   // Collect all externalDependencies (plan-level + task-level) for cross-checks
