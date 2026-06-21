@@ -1,4 +1,10 @@
 import type { Logger } from '@invoker/contracts';
+import type {
+  WorkflowMutationIntent,
+  WorkflowMutationIntentStatus,
+  WorkflowMutationPriority,
+} from '@invoker/data-store';
+import type { TaskState } from '@invoker/workflow-core';
 
 import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../worker-runtime.js';
 
@@ -6,6 +12,37 @@ import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../wor
 export const RECOVERY_WORKER_KIND = 'recovery';
 
 const DEFAULT_RECOVERY_POLL_INTERVAL_MS = 60_000;
+const AUTO_FIX_COMMAND_CHANNEL = 'invoker:fix-with-agent';
+
+export interface AutoFixRecoveryStore {
+  listWorkflows(): ReadonlyArray<{ id: string }>;
+  loadTasks(workflowId: string): TaskState[];
+  loadTask?(taskId: string): TaskState | undefined;
+  listWorkflowMutationIntents(
+    workflowId?: string,
+    statuses?: WorkflowMutationIntentStatus[],
+  ): WorkflowMutationIntent[];
+  logEvent?(taskId: string, eventType: string, payload?: unknown): void;
+}
+
+export interface AutoFixRecoverySubmitter {
+  submit(
+    workflowId: string,
+    priority: WorkflowMutationPriority,
+    channel: typeof AUTO_FIX_COMMAND_CHANNEL,
+    args: unknown[],
+    options?: { deferDrain?: boolean },
+  ): number;
+}
+
+export interface AutoFixRecoveryPolicyOptions {
+  store: AutoFixRecoveryStore;
+  submitter: AutoFixRecoverySubmitter;
+  logger: Logger;
+  defaultAutoFixRetries?: number;
+  getAutoFixAgent?: () => string | undefined;
+  getRetryBudget?: (task: TaskState) => number;
+}
 
 export interface RecoveryWorkerOptions {
   logger: Logger;
