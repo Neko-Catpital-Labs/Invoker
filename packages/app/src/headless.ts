@@ -59,7 +59,7 @@ import {
   isDispatchableLaunch,
 } from './global-topup.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
-import { RECOVERY_WORKER_KIND } from './workers/auto-fix-recovery.js';
+import { createAutoFixRecoveryTick, RECOVERY_WORKER_KIND } from './workers/auto-fix-recovery.js';
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
 import { formatHeadlessSetSubcommands } from './headless-command-registry.js';
 import { trackWorkflow } from './headless-watch.js';
@@ -1149,7 +1149,7 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       await headlessQuerySelect(args[1], deps);
       break;
     case 'worker':
-      headlessWorker(args[1]);
+      await headlessWorker(args[1], deps);
       break;
 
     // ── Deprecated aliases → query ──
@@ -1208,21 +1208,40 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
 }
 
 /**
- * Worker kinds exposed to the CLI. Each entry is `available: false` until the
- * worker actually performs work; unavailable kinds are reported as such instead
- * of being silently advertised as functional.
+ * Worker kinds exposed to the CLI.
  */
 const HEADLESS_WORKER_KINDS: ReadonlyArray<{ kind: string; available: boolean; note: string }> = [
   {
-    kind: RECOVERY_WORKER_KIND,
-    available: false,
-    note: 'no-op in this slice; auto-fix recovery still runs through its existing owner',
+    kind: 'autofix',
+    available: true,
+    note: 'scans persisted failed tasks and submits normal auto-fix command intents',
   },
 ];
 
-function headlessWorker(subCommand: string | undefined): void {
+async function headlessWorker(subCommand: string | undefined, deps: HeadlessDeps): Promise<void> {
+  if (subCommand === 'autofix') {
+    const tick = createAutoFixRecoveryTick({
+      store: deps.persistence,
+      submitter: {
+        submit: (workflowId, priority, channel, args) => (
+          deps.persistence.enqueueWorkflowMutationIntent(workflowId, channel, args, priority)
+        ),
+      },
+      logger: deps.logger,
+      defaultAutoFixRetries: deps.invokerConfig.autoFixRetries,
+      getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
+    });
+    await tick({
+      identity: { kind: RECOVERY_WORKER_KIND, instanceId: 'headless-worker-autofix' },
+      reason: 'manual',
+      tickNumber: 1,
+    });
+    process.stdout.write('Auto-fix worker scan completed.\n');
+    return;
+  }
+
   if (subCommand && subCommand !== 'list' && subCommand !== 'status') {
-    throw new Error(`Unknown worker sub-command: "${subCommand}". Use: list, status`);
+    throw new Error(`Unknown worker sub-command: "${subCommand}". Use: autofix, list, status`);
   }
   process.stdout.write(`${BOLD}Worker kinds${RESET}\n`);
   for (const worker of HEADLESS_WORKER_KINDS) {
@@ -1312,7 +1331,7 @@ ${BOLD}Lifecycle:${RESET}
   delete-all                                          Delete all workflows (requires INVOKER_ALLOW_DELETE_ALL=1)
   open-terminal <taskId>                              Open OS terminal for a task
   slack                                               Start Slack bot (long-running)
-  worker [list|status]                                List worker kinds and availability (recovery: unavailable)
+  worker [autofix|list|status]                        Run/list worker kinds (autofix scans failed tasks)
 
 ${BOLD}Deprecated${RESET} (use new names above):
   list → query workflows       status → query tasks       task-status → query task
