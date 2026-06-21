@@ -87,7 +87,10 @@ function runRecovery(
   loaders: RecoveryLoaders,
 ): { rendererDeltas: TaskDelta[] } {
   const rendererDeltas: TaskDelta[] = [];
-  const { quarantined } = applyDelta(delta, cache);
+  const { quarantined, accepted } = applyDelta(delta, cache);
+  if (quarantined.length === 0 && accepted) {
+    rendererDeltas.push(delta);
+  }
   for (const taskId of quarantined) {
     const { rendererDelta } = recoverQuarantinedTask(cache, taskId, loaders);
     if (rendererDelta) {
@@ -175,38 +178,46 @@ describe('synthetic __merge__ quarantine-loop repro (graph-blank root cause)', (
     expect((rendererDeltas[0] as { type: 'removed'; taskId: string }).taskId).toBe(SYNTHETIC_ID);
   });
 
-  it('(c) burst of stale out-of-order synthetic deltas each get a recovery delta (no silent loop)', () => {
-    // Models the live-log signature: three `[gap-detect]` events for
-    // `__merge__wf-X` in <1s. Each iteration sends an `updated` delta whose
-    // `previousTaskStateVersion` does not match the (post-recovery) cache,
-    // mirroring the realistic case where the orchestrator races ahead and
-    // multiple stale deltas land in quick succession. Every quarantine MUST
-    // produce exactly one recovery delta — no silent loops.
+  it('(c) burst of stale out-of-order synthetic deltas quarantines once, then drops stale deltas', () => {
+    // First delta is a real forward gap: cache is at v2, the delta expects v3,
+    // and recovery loads the authoritative merge node at v10. Later deltas are
+    // older than that recovered snapshot, so they must be dropped instead of
+    // re-quarantining and re-sending created deltas in a loop.
     const cache = seedCacheWithMergeNode(2);
-    // Orchestrator advances faster than the deltas arriving on the bus.
-    let authoritativeVersion = 10;
     const loaders: RecoveryLoaders = {
       loadTask: loadTaskNeverReturnsSynthetic,
       getMergeNode: (workflowId) =>
-        workflowId === WORKFLOW_ID ? makeMergeNode(WORKFLOW_ID, authoritativeVersion) : undefined,
+        workflowId === WORKFLOW_ID ? makeMergeNode(WORKFLOW_ID, 10) : undefined,
     };
 
     const allRendererDeltas: TaskDelta[] = [];
     let totalQuarantined = 0;
 
-    for (const orchestratorVersion of [10, 11, 12]) {
-      authoritativeVersion = orchestratorVersion;
-      // Each delta is stale (prev=3) relative to whatever the cache holds
-      // after the previous recovery (v=10, then v=11, then v=12) — so all
-      // three deltas hit the gap branch in applyDelta.
-      const delta: TaskDelta = {
+    const deltas: TaskDelta[] = [
+      {
         type: 'updated',
         taskId: SYNTHETIC_ID,
         changes: { status: 'running' },
         taskStateVersion: 4,
         previousTaskStateVersion: 3,
-      };
+      },
+      {
+        type: 'updated',
+        taskId: SYNTHETIC_ID,
+        changes: { status: 'completed' },
+        taskStateVersion: 5,
+        previousTaskStateVersion: 4,
+      },
+      {
+        type: 'updated',
+        taskId: SYNTHETIC_ID,
+        changes: { status: 'failed' },
+        taskStateVersion: 10,
+        previousTaskStateVersion: 9,
+      },
+    ];
 
+    for (const delta of deltas) {
       const beforeQuarantineState = applyDelta(delta, copyCache(cache));
       totalQuarantined += beforeQuarantineState.quarantined.length;
 
@@ -214,10 +225,10 @@ describe('synthetic __merge__ quarantine-loop repro (graph-blank root cause)', (
       allRendererDeltas.push(...rendererDeltas);
     }
 
-    expect(totalQuarantined).toBe(3);
-    expect(allRendererDeltas).toHaveLength(3);
-    expect(allRendererDeltas.every((d) => d.type === 'created')).toBe(true);
-    expect(cache.getEntry(SYNTHETIC_ID)?.taskStateVersion).toBe(12);
+    expect(totalQuarantined).toBe(1);
+    expect(allRendererDeltas).toHaveLength(1);
+    expect(allRendererDeltas[0].type).toBe('created');
+    expect(cache.getEntry(SYNTHETIC_ID)?.taskStateVersion).toBe(10);
   });
 
   it('(d) no implicit drops: non-synthetic ghost task emits removed delta', () => {
