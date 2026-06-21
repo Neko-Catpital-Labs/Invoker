@@ -17,12 +17,14 @@ import {
   injectTaskStates,
   captureScreenshot,
   assertPageScreenshot,
+  getTasks,
   E2E_REPO_URL,
 } from './fixtures/electron-app.js';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { stringify as yamlStringify } from 'yaml';
 import type { Locator, Page } from '@playwright/test';
+import { SQLiteAdapter } from '@invoker/data-store';
 
 /** Plan for queue-semantics visual proof: enough tasks to fill Action Queue and Backlog. */
 const QUEUE_SEMANTICS_PLAN = {
@@ -37,6 +39,14 @@ const QUEUE_SEMANTICS_PLAN = {
     { id: 'qs-approval', description: 'Awaiting approval task', command: 'echo approve', dependencies: [] },
     { id: 'qs-queued', description: 'Queued pending task', command: 'echo queued', dependencies: [] },
     { id: 'qs-blocked', description: 'Blocked by running task', command: 'echo blocked', dependencies: ['qs-running'] },
+  ],
+};
+const QUEUE_RUNNING_LAUNCHING_PLAN = {
+  name: 'Queue running launching proof',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'none' as const,
+  tasks: [
+    { id: 'launching-task', description: 'Launching queue task', command: 'echo launch', dependencies: [] },
   ],
 };
 
@@ -359,6 +369,24 @@ async function loadPlanAndSelectWorkflow(page: Page, plan: unknown): Promise<str
   await node.dispatchEvent('click', { bubbles: true });
   await expect(page.getByTestId('selected-workflow-mini-dag')).toBeVisible({ timeout: 10000 });
   return workflowId!;
+}
+async function seedActiveLaunchAttempt(dbPath: string, taskId: string, attemptId: string, now: Date): Promise<void> {
+  const adapter = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+  try {
+    adapter.saveAttempt({
+      id: attemptId,
+      nodeId: taskId,
+      queuePriority: 0,
+      upstreamAttemptIds: [],
+      status: 'claimed',
+      claimedAt: now,
+      lastHeartbeatAt: now,
+      leaseExpiresAt: new Date(now.getTime() + 60_000),
+      createdAt: now,
+    });
+  } finally {
+    adapter.close();
+  }
 }
 
 test.describe('Visual proof capture', () => {
@@ -1346,6 +1374,63 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByRole('heading', { name: 'Backlog (3)' })).toBeVisible();
     await captureScreenshot(page, 'queue-view-concurrency');
     await assertPageScreenshot(page, 'queue-view-concurrency');
+  });
+  test('queue running launching state', async ({ page, testDir }) => {
+    await loadPlan(page, QUEUE_RUNNING_LAUNCHING_PLAN);
+    const tasks = await getTasks(page);
+    const task = tasks.find((entry: { id: string }) => entry.id.endsWith('/launching-task') || entry.id === 'launching-task');
+    const mergeTask = tasks.find((entry: { id: string }) => entry.id.startsWith('__merge__'));
+    expect(task).toBeTruthy();
+    expect(mergeTask).toBeTruthy();
+    const dbPath = path.join(testDir, 'invoker.db');
+    const now = new Date();
+    const attemptId = `${task!.id}-launching-attempt`;
+    await seedActiveLaunchAttempt(dbPath, task!.id, attemptId, now);
+    await injectTaskStates(page, [
+      {
+        taskId: task!.id,
+        changes: {
+          status: 'pending',
+          execution: {
+            phase: 'launching',
+            selectedAttemptId: attemptId,
+            launchStartedAt: now,
+            lastHeartbeatAt: now,
+          },
+        },
+      },
+      {
+        taskId: mergeTask!.id,
+        changes: {
+          status: 'completed',
+          execution: {
+            startedAt: now,
+            completedAt: now,
+          },
+        },
+      },
+    ]);
+    await page.waitForTimeout(2200);
+    const captureAfter = process.env.CAPTURE_MODE === 'after';
+
+    if (captureAfter) {
+      await expect(page.getByTestId('status-bar-pill-running')).toContainText('Running: 1');
+      await expect(page.getByTestId('status-bar-pill-pending')).toContainText('Pending: 0');
+      await expect(page.getByText('Running includes launching and AI-fix work.')).toBeVisible();
+    } else {
+      await expect(page.getByTestId('status-bar-pill-running')).toContainText('Running: 0');
+      await expect(page.getByTestId('status-bar-pill-pending')).toContainText('Pending: 1');
+    }
+    await captureScreenshot(page, 'running-launching-statusbar');
+
+    await page.getByTestId('rail-queue').click();
+    const queueRow = page.locator('[data-row-id$=\"launching-task\"]');
+    await expect(queueRow).toBeVisible();
+    if (captureAfter) {
+      await expect(queueRow.getByText('Running', { exact: true })).toBeVisible();
+      await expect(queueRow.getByText('phase: Launching')).toBeVisible();
+    }
+    await captureScreenshot(page, 'running-launching-queue');
   });
 
   test('queue-semantics — action queue with canonical task states', async ({ page }) => {
