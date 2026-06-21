@@ -7,6 +7,7 @@
 import type {
   MessageBus,
   MessageHandler,
+  RequestOptions,
   RequestHandler,
   Unsubscribe,
 } from './message-bus.js';
@@ -47,7 +48,7 @@ export class LocalBus implements MessageBus {
     };
   }
 
-  async request<Req, Res>(channel: string, message: Req): Promise<Res> {
+  async request<Req, Res>(channel: string, message: Req, _options?: RequestOptions): Promise<Res> {
     const handler = this.requestHandlers.get(channel);
     if (!handler) {
       throw new TransportError(

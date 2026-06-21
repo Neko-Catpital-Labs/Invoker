@@ -34,7 +34,7 @@
 
 import { app, dialog, ipcMain, Menu, type BrowserWindow } from 'electron';
 import * as path from 'node:path';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import {
   configureEarlyElectronApp,
@@ -900,6 +900,56 @@ if (isHeadless) {
       process.stdout.write(`running=${runningCount}/${maxConcurrency} queued=${queued.length}\n`);
     };
 
+    const tryDelegateCurrentHeadlessMutation = async (delegationBus: MessageBus): Promise<boolean> => {
+      if (command === 'run') {
+        const planPath = cliArgs[1];
+        if (!planPath) throw new Error('Missing plan file. Usage: --headless run <plan.yaml>');
+        return isDelegated(await tryDelegateRun(planPath, delegationBus, waitForApproval, noTrack));
+      }
+      if (command === 'resume') {
+        const workflowId = cliArgs[1];
+        if (!workflowId) throw new Error('Missing workflowId. Usage: --headless resume <id>');
+        return isDelegated(await tryDelegateResume(workflowId, delegationBus, waitForApproval, noTrack));
+      }
+      const timeoutMs = noTrack ? undefined : await resolveDelegationTimeoutMs(cliArgs);
+      return isDelegated(await tryDelegateExec(cliArgs, delegationBus, waitForApproval, noTrack, timeoutMs));
+    };
+
+    const delegateToExistingStandaloneOwnerBeforeWritableInit = async (): Promise<boolean> => {
+      const lockDir = path.join(resolveInvokerHomeRoot(), 'invoker.db.lock');
+      if (!existsSync(lockDir)) return false;
+
+      const deadline = Date.now() + 20_000;
+      while (Date.now() < deadline) {
+        const delegationBus = new IpcBus(undefined, { allowServe: false });
+        try {
+          await delegationBus.ready();
+          const owner = await discoverOwner(delegationBus, 500);
+          if (isStandaloneCapable(owner) && await tryDelegateCurrentHeadlessMutation(delegationBus)) {
+            delegationBus.disconnect();
+            process.exit(process.exitCode ?? 0);
+            return true;
+          }
+        } finally {
+          delegationBus.disconnect();
+        }
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      return false;
+    };
+
+    if (mutatingMode && standaloneMode && !ownsHeadlessShutdown) {
+      try {
+        if (await delegateToExistingStandaloneOwnerBeforeWritableInit()) {
+          return;
+        }
+      } catch (err) {
+        process.stderr.write(`${RED}Delegation error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
+        process.exit(1);
+        return;
+      }
+    }
+
     // Try delegation for mutating commands first (owner mode).
     // In standalone mode we skip delegation and run locally.
     if (mutatingMode && !standaloneMode) {
@@ -910,19 +960,7 @@ if (isHeadless) {
       try {
         await delegationBus.ready();
 
-        let delegated = false;
-        if (command === 'run') {
-          const planPath = cliArgs[1];
-          if (!planPath) throw new Error('Missing plan file. Usage: --headless run <plan.yaml>');
-          delegated = isDelegated(await tryDelegateRun(planPath, delegationBus, waitForApproval, noTrack));
-        } else if (command === 'resume') {
-          const workflowId = cliArgs[1];
-          if (!workflowId) throw new Error('Missing workflowId. Usage: --headless resume <id>');
-          delegated = isDelegated(await tryDelegateResume(workflowId, delegationBus, waitForApproval, noTrack));
-        } else {
-          const timeoutMs = noTrack ? undefined : await resolveDelegationTimeoutMs(cliArgs);
-          delegated = isDelegated(await tryDelegateExec(cliArgs, delegationBus, waitForApproval, noTrack, timeoutMs));
-        }
+        const delegated = await tryDelegateCurrentHeadlessMutation(delegationBus);
 
         if (delegated) {
           // Successfully delegated to owner

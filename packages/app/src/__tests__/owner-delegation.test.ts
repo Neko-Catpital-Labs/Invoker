@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { delegationTimeoutMs, tryDelegateExec, tryDelegateRun, tryDelegateResume } from '../headless.js';
 import { LocalBus } from '@invoker/transport';
-import type { MessageBus } from '@invoker/transport';
+import type { MessageBus, RequestHandler, RequestOptions, Unsubscribe } from '@invoker/transport';
 import type { HeadlessTargetLookup } from '../headless-command-classification.js';
 
 /**
@@ -74,6 +74,10 @@ describe('headless→owner delegation', () => {
       expect(delegationTimeoutMs(['restart', 'wf-123'], targetLookup)).toBe(60_000);
     });
 
+    it('uses 60s timeout for task-scoped recreate-task', () => {
+      expect(delegationTimeoutMs(['recreate-task', 'wf-123/task-1'], targetLookup)).toBe(60_000);
+    });
+
     it('keeps task-scoped rebase-retry at the default timeout', () => {
       expect(delegationTimeoutMs(['rebase-retry', 'wf-123/task-1'], targetLookup)).toBe(5_000);
     });
@@ -84,6 +88,26 @@ describe('headless→owner delegation', () => {
 
     it('keeps unrelated commands at the default timeout', () => {
       expect(delegationTimeoutMs(['approve', 'wf-123/task-1'], targetLookup)).toBe(5_000);
+    });
+
+    it('passes extended recreate-task timeout through to the message bus request', async () => {
+      const request = vi.fn(async () => ({ ok: true }));
+      const bus: MessageBus = {
+        subscribe: vi.fn(() => undefined as unknown as Unsubscribe),
+        publish: vi.fn(),
+        request,
+        onRequest: vi.fn((_channel: string, _handler: RequestHandler) => undefined as unknown as Unsubscribe),
+        disconnect: vi.fn(),
+      };
+
+      const outcome = await tryDelegateExec(['recreate-task', 'wf-123/task-1'], bus);
+
+      expect(outcome.kind).toBe('delegated');
+      expect(request).toHaveBeenCalledWith(
+        'headless.exec',
+        expect.objectContaining({ args: ['recreate-task', 'wf-123/task-1'] }),
+        { timeoutMs: 60_000 } satisfies RequestOptions,
+      );
     });
   });
 

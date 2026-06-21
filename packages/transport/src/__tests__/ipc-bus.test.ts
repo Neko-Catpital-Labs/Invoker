@@ -382,6 +382,30 @@ describe('IpcBus', () => {
     }
   });
 
+  it('uses per-request timeout when provided', async () => {
+    const sock = tempSocketPath();
+
+    const server = new IpcBus(sock, { requestDeadlineMs: 1000 });
+    buses.push(server);
+    await server.ready();
+
+    server.onRequest('black-hole', () => new Promise(() => {}));
+
+    const client = new IpcBus(sock, { requestDeadlineMs: 1000 });
+    buses.push(client);
+    await client.ready();
+    await sleep(50);
+
+    try {
+      await client.request('black-hole', {}, { timeoutMs: 75 });
+      expect.fail('should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(TransportError);
+      expect((err as TransportError).code).toBe(TransportErrorCode.REQUEST_TIMEOUT);
+      expect((err as TransportError).message).toContain('75ms');
+    }
+  });
+
   it('does not timeout when response arrives before the deadline', async () => {
     const sock = tempSocketPath();
 

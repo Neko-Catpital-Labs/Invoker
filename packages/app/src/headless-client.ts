@@ -90,6 +90,8 @@ async function flushOutputStream(stream: NodeJS.WriteStream): Promise<void> {
 const DEFAULT_NO_TRACK_DELEGATION_TIMEOUT_MS = 30_000;
 const POST_BOOTSTRAP_NO_TRACK_DELEGATION_TIMEOUT_MS = 90_000;
 const POST_BOOTSTRAP_OWNER_READY_TIMEOUT_MS = 20_000;
+const EXISTING_OWNER_STANDALONE_READY_TIMEOUT_MS = 20_000;
+const EXISTING_OWNER_DISCOVERY_TIMEOUT_MS = 1_000;
 const READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS = 20_000;
 const READ_ONLY_QUERY_REQUEST_TIMEOUT_MS = 8_000;
 const POST_BOOTSTRAP_OWNER_RESTART_ATTEMPTS = 3;
@@ -304,22 +306,29 @@ async function resolveOwnerAndDelegate(
     return typeof exitCode === 'number' ? exitCode : 0;
   };
 
-  const resolver = createOwnerResolver(
-    {
-      messageBus: deps.messageBus,
-      refreshMessageBus: deps.refreshMessageBus,
-      ensureStandaloneOwner: deps.ensureStandaloneOwner,
-      isRetryableBootstrapError: isSharedMutationOwnerTimeoutError,
-    },
-    {
-      discoveryTimeoutMs: 3_000,
-      refreshDiscoveryTimeoutMs: 1_000,
-      postBootstrapReadyTimeoutMs: POST_BOOTSTRAP_OWNER_READY_TIMEOUT_MS,
-      maxBootstrapAttempts: POST_BOOTSTRAP_OWNER_RESTART_ATTEMPTS,
-    },
-  );
+  let currentBus = deps.messageBus;
+  const refreshMessageBus = deps.refreshMessageBus
+    ? async (): Promise<MessageBus> => {
+      currentBus = await deps.refreshMessageBus!();
+      return currentBus;
+    }
+    : undefined;
 
   for (let attempt = 0; attempt < POST_BOOTSTRAP_OWNER_RESTART_ATTEMPTS; attempt += 1) {
+    const resolver = createOwnerResolver(
+      {
+        messageBus: currentBus,
+        refreshMessageBus,
+        ensureStandaloneOwner: deps.ensureStandaloneOwner,
+        isRetryableBootstrapError: isSharedMutationOwnerTimeoutError,
+      },
+      {
+        discoveryTimeoutMs: 3_000,
+        refreshDiscoveryTimeoutMs: 1_000,
+        postBootstrapReadyTimeoutMs: POST_BOOTSTRAP_OWNER_READY_TIMEOUT_MS,
+        maxBootstrapAttempts: POST_BOOTSTRAP_OWNER_RESTART_ATTEMPTS,
+      },
+    );
     delegationClientLog(`resolve attempt=${attempt + 1}/${POST_BOOTSTRAP_OWNER_RESTART_ATTEMPTS}`);
     let resolved: ResolvedOwner;
     try {
@@ -349,13 +358,66 @@ async function resolveOwnerAndDelegate(
       delegationClientLog(`protocol-error attempt=${attempt + 1}: ${outcome.message}`);
       return null;
     }
-    if (!deps.refreshMessageBus) {
+    if (!refreshMessageBus) {
       break;
     }
+    await refreshMessageBus();
   }
 
   delegationClientLog(`resolveOwnerAndDelegate failed after elapsedMs=${Date.now() - startedAt}`);
   return null; // Could not resolve
+}
+
+async function delegateToExistingStandaloneOwner(
+  args: string[],
+  deps: HeadlessClientDeps,
+  waitForApproval?: boolean,
+  noTrack?: boolean,
+): Promise<number | null> {
+  const startedAt = Date.now();
+  const resolvedExitCode = (): number => {
+    const exitCode = process.exitCode;
+    return typeof exitCode === 'number' ? exitCode : 0;
+  };
+  const resolver = createOwnerResolver(
+    {
+      messageBus: deps.messageBus,
+      refreshMessageBus: deps.refreshMessageBus,
+      ensureStandaloneOwner: async () => {},
+    },
+    {
+      discoveryTimeoutMs: EXISTING_OWNER_DISCOVERY_TIMEOUT_MS,
+      refreshDiscoveryTimeoutMs: EXISTING_OWNER_DISCOVERY_TIMEOUT_MS,
+    },
+  );
+
+  const anyOwner = await resolver.waitForAny(EXISTING_OWNER_DISCOVERY_TIMEOUT_MS);
+  if (!anyOwner.resolved) {
+    return null;
+  }
+
+  const standaloneOwner = anyOwner.owner.canAcceptStandaloneMutations
+    ? anyOwner
+    : await resolver.waitForStandalone(EXISTING_OWNER_STANDALONE_READY_TIMEOUT_MS);
+  if (!standaloneOwner.resolved) {
+    delegationClientLog(
+      `standalone env found owner=${anyOwner.owner.ownerId} but no standalone-capable owner became ready elapsedMs=${Date.now() - startedAt}`,
+    );
+    return null;
+  }
+
+  delegationClientLog(
+    `standalone env delegating to existing ownerId=${standaloneOwner.owner.ownerId} elapsedMs=${Date.now() - startedAt}`,
+  );
+  const outcome = await delegateMutation(
+    args,
+    standaloneOwner.bus,
+    waitForApproval,
+    noTrack,
+    noTrack ? POST_BOOTSTRAP_NO_TRACK_DELEGATION_TIMEOUT_MS : DEFAULT_NO_TRACK_DELEGATION_TIMEOUT_MS,
+  );
+  delegationClientLog(`standalone env delegate outcome=${outcome.kind}`);
+  return outcome.kind === 'delegated' ? resolvedExitCode() : null;
 }
 
 export async function runHeadlessClientCommand(
@@ -370,9 +432,16 @@ export async function runHeadlessClientCommand(
   const standaloneMode = process.env.INVOKER_HEADLESS_STANDALONE === '1';
   const internalOwnerServe = args[0] === 'owner-serve';
 
-  if (!standaloneMode && !internalOwnerServe && await delegateReadOnlyQuery(args, deps.messageBus, deps.refreshMessageBus)) {
+  if (!internalOwnerServe && await delegateReadOnlyQuery(args, deps.messageBus, deps.refreshMessageBus)) {
     const exitCode = process.exitCode;
     return typeof exitCode === 'number' ? exitCode : 0;
+  }
+
+  if (standaloneMode && !internalOwnerServe && isHeadlessMutatingCommand(args)) {
+    const delegatedToExistingOwner = await delegateToExistingStandaloneOwner(args, deps, waitForApproval, noTrack);
+    if (delegatedToExistingOwner !== null) {
+      return delegatedToExistingOwner;
+    }
   }
 
   if (!shouldUseSharedMutationOwner(args, standaloneMode, internalOwnerServe)) {

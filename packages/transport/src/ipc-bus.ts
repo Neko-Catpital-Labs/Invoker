@@ -38,6 +38,7 @@ import { mkdirSync, unlinkSync } from 'node:fs';
 import type {
   MessageBus,
   MessageHandler,
+  RequestOptions,
   RequestHandler,
   Unsubscribe,
 } from './message-bus.js';
@@ -629,7 +630,7 @@ export class IpcBus implements MessageBus {
     };
   }
 
-  async request<Req, Res>(channel: string, message: Req): Promise<Res> {
+  async request<Req, Res>(channel: string, message: Req, options?: RequestOptions): Promise<Res> {
     // Try local handler first.
     const localHandler = this.requestHandlers.get(channel);
     if (localHandler) {
@@ -650,16 +651,17 @@ export class IpcBus implements MessageBus {
 
     const reqId = String(this.nextReqId++);
     const env: ReqEnvelope = { kind: 'req', channel, body: message, reqId };
+    const timeoutMs = options?.timeoutMs ?? this.requestDeadlineMs;
 
     return new Promise<Res>((resolve, reject) => {
       const timer = setTimeout(() => {
         if (this.pendingRequests.delete(reqId)) {
           reject(new TransportError(
             TransportErrorCode.REQUEST_TIMEOUT,
-            `Request on channel "${channel}" timed out after ${this.requestDeadlineMs}ms`,
+            `Request on channel "${channel}" timed out after ${timeoutMs}ms`,
           ));
         }
-      }, this.requestDeadlineMs);
+      }, timeoutMs);
       timer.unref?.();
 
       this.pendingRequests.set(reqId, {

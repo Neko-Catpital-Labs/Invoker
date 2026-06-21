@@ -7,6 +7,9 @@
 export type Unsubscribe = () => void;
 export type MessageHandler<T = unknown> = (message: T) => void;
 export type RequestHandler<Req = unknown, Res = unknown> = (request: Req) => Res | Promise<Res>;
+export type RequestOptions = {
+  timeoutMs?: number;
+};
 
 export interface MessageBus {
   /**
@@ -22,7 +25,7 @@ export interface MessageBus {
   /**
    * Send a request and wait for a response (request/reply pattern).
    */
-  request<Req, Res>(channel: string, message: Req): Promise<Res>;
+  request<Req, Res>(channel: string, message: Req, options?: RequestOptions): Promise<Res>;
 
   /**
    * Register a handler for request/reply on a channel.
