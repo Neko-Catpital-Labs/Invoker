@@ -118,6 +118,7 @@ export interface PersistenceAdapter {
   // Events (audit trail)
   logEvent(taskId: string, eventType: string, payload?: unknown): void;
   getEvents(taskId: string): TaskEvent[];
+  getEvents(taskId: string, sortBy: 'asc' | 'desc', limit: number): TaskEvent[];
 
   // Conversations (Slack thread-based)
   saveConversation(conversation: Conversation): void;
