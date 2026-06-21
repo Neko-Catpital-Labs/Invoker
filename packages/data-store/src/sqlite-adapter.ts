@@ -60,6 +60,8 @@ function loadNativeSqlite(): Promise<NativeSqlite> {
   nativeSqlite ??= import(nativeSqliteSpecifier) as Promise<NativeSqlite>;
   return nativeSqlite;
 }
+const ACTION_GRAPH_RECENT_ATTEMPT_LIMIT = 3;
+
 
 /**
  * Rewrite `pnpm test packages/<pkg>/...` (incorrect root-level invocation)
@@ -2508,25 +2510,28 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return rows.map(this.rowToAttempt);
   }
 
-  loadActionGraphAttempts(nodeId: string, selectedAttemptId?: string): Attempt[] {
-    const rows = selectedAttemptId
-      ? this.queryAll(
-        `SELECT * FROM attempts
-        WHERE node_id = ?
-          AND (status IN ('pending', 'claimed', 'running', 'needs_input') OR id = ?)
-        ORDER BY created_at ASC`,
-        [nodeId, selectedAttemptId],
-      )
-      : this.queryAll(
-        `SELECT * FROM attempts
-        WHERE node_id = ?
-          AND (
-            status IN ('pending', 'claimed', 'running', 'needs_input')
-            OR id = (SELECT id FROM attempts WHERE node_id = ? ORDER BY created_at DESC LIMIT 1)
+  loadActionGraphAttempts(
+    nodeId: string,
+    selectedAttemptId?: string,
+    recentAttemptLimit = ACTION_GRAPH_RECENT_ATTEMPT_LIMIT,
+  ): Attempt[] {
+    const limit = Math.max(0, Math.trunc(recentAttemptLimit));
+    const rows = this.queryAll(
+      `SELECT * FROM attempts
+      WHERE node_id = ?
+        AND (
+          status IN ('pending', 'claimed', 'running', 'needs_input')
+          OR id = ?
+          OR id IN (
+            SELECT id FROM attempts
+            WHERE node_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
           )
-        ORDER BY created_at ASC`,
-        [nodeId, nodeId],
-      );
+        )
+      ORDER BY created_at ASC`,
+      [nodeId, selectedAttemptId ?? null, nodeId, limit],
+    );
     return rows.map(this.rowToAttempt);
   }
 
