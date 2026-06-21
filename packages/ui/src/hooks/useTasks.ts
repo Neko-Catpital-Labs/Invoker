@@ -76,7 +76,7 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
   const startupSnapshotGenerationRef = useRef(0);
   const reportedStartupBootstrapRef = useRef(false);
   const reportedStartupSnapshotRef = useRef(false);
-  const lastSeenSequenceRef = useRef<number>(bootstrapState?.streamSequence ?? 0);
+  const uiTaskGraphStreamWatermarkRef = useRef<number>(bootstrapState?.streamSequence ?? 0);
   const isResyncInFlightRef = useRef<boolean>(false);
 
   const invalidateStartupSnapshot = useCallback(() => {
@@ -111,7 +111,7 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
         return wfMap;
       });
       if (typeof result.streamSequence === 'number') {
-        lastSeenSequenceRef.current = result.streamSequence;
+        uiTaskGraphStreamWatermarkRef.current = result.streamSequence;
       }
       isResyncInFlightRef.current = false;
       const replaceDurationMs = performance.now() - replaceStartedAt;
@@ -241,7 +241,7 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
             }
             return wfMap;
           });
-          lastSeenSequenceRef.current = firstEvent.streamSequence;
+          uiTaskGraphStreamWatermarkRef.current = Math.max(uiTaskGraphStreamWatermarkRef.current, firstEvent.streamSequence);
           isResyncInFlightRef.current = false;
           onTaskGraphSnapshotApplied?.();
           void window.invoker.reportUiPerf?.('useTasks_snapshot_replace', {
@@ -294,6 +294,16 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
       invalidateStartupSnapshot();
       deltaPerfRef.current.received += 1;
       if (event.type === 'snapshot') {
+        const snapshotStreamSequence = event.streamSequence;
+        const currentStreamSequence = uiTaskGraphStreamWatermarkRef.current;
+        if (snapshotStreamSequence < currentStreamSequence) {
+          window.invoker.reportUiPerf?.('ui_task_graph_stale_snapshot_ignored', {
+            current: currentStreamSequence,
+            snapshot: snapshotStreamSequence,
+            reason: event.reason,
+          });
+          return;
+        }
         graphEventPipelineRef.current?.push(event);
         return;
       }
@@ -317,7 +327,7 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
 
       const seq = delta.streamSequence;
       if (typeof seq === 'number') {
-        const lastSeen = lastSeenSequenceRef.current;
+        const lastSeen = uiTaskGraphStreamWatermarkRef.current;
         if (seq <= lastSeen) return;
         if (isResyncInFlightRef.current) return;
         if (seq !== lastSeen + 1) {
@@ -332,7 +342,7 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
           refreshTaskGraph();
           return;
         }
-        lastSeenSequenceRef.current = seq;
+        uiTaskGraphStreamWatermarkRef.current = seq;
       }
 
       graphEventPipelineRef.current?.push(event);
