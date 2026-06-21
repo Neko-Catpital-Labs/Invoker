@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent } from 'react';
 import type { TaskState, WorkflowMeta, WorkflowStatus } from '../types.js';
 import type { GraphCameraCommand } from '../lib/graph-camera.js';
@@ -45,6 +45,8 @@ interface WorkflowNodeData extends Record<string, unknown> {
 const nodeTypes = {
   workflowNode: WorkflowFlowNode,
 };
+const WATCHDOG_RECOVERY_MISS_COUNT = 3;
+
 
 function workflowEdgeVisual(kind: WorkflowGraphEdge['kind']): {
   stroke: string;
@@ -112,9 +114,13 @@ function WorkflowGraphInner({
   onManualViewport,
 }: WorkflowGraphProps): JSX.Element {
   const { fitView, setCenter, getZoom } = useReactFlow();
+  const graphRootRef = useRef<HTMLDivElement>(null);
   const reportedVisibleRef = useRef(false);
   const lastHandledCameraSeqRef = useRef(0);
   const initFitFrameRef = useRef(0);
+  const watchdogMissCountRef = useRef(0);
+  const watchdogRecoveryAttemptedRef = useRef(false);
+  const [flowInstanceKey, setFlowInstanceKey] = useState(0);
   const graphMetricsRef = useRef({ deriveMs: 0, layoutMs: 0, objectsMs: 0 });
   const graph = useMemo(() => {
     const startedAt = performance.now();
@@ -188,6 +194,13 @@ function WorkflowGraphInner({
   // Cancel a pending first-fit frame on unmount so it never fires against a
   // torn-down graph after the component has gone away.
   useEffect(() => () => cancelAnimationFrame(initFitFrameRef.current), []);
+  useEffect(() => {
+    if (nodes.length > 0) {
+      watchdogMissCountRef.current = 0;
+      watchdogRecoveryAttemptedRef.current = false;
+    }
+  }, [nodes.length]);
+
 
   // Manual pan/zoom from the user. React Flow passes a non-null DOM event for
   // user-driven moves and null for programmatic setCenter/fitView, so this only
@@ -264,15 +277,27 @@ function WorkflowGraphInner({
   useEffect(() => {
     if (nodes.length === 0) return;
     const interval = setInterval(() => {
-      const domNodes = document.querySelectorAll('[data-testid^="workflow-node-"]');
-      const hiddenNodes = document.querySelectorAll(
+      const root = graphRootRef.current;
+      if (!root) return;
+      const renderedNodeElements = root.querySelectorAll('[data-testid^="workflow-node-"]');
+      const missingRenderedNodes = root.querySelectorAll(
         '.react-flow__node[style*="visibility: hidden"] [data-testid^="workflow-node-"]',
       );
       if (
-        (domNodes.length === 0 && nodes.length > 0) ||
-        (hiddenNodes.length > 0 && hiddenNodes.length === domNodes.length)
+        (renderedNodeElements.length === 0 && nodes.length > 0) ||
+        (missingRenderedNodes.length > 0 && missingRenderedNodes.length === renderedNodeElements.length)
       ) {
+        watchdogMissCountRef.current += 1;
+        const shouldRecover =
+          watchdogMissCountRef.current >= WATCHDOG_RECOVERY_MISS_COUNT &&
+          !watchdogRecoveryAttemptedRef.current;
         fitView({ padding: 0.2 });
+        if (shouldRecover) {
+          watchdogRecoveryAttemptedRef.current = true;
+          setFlowInstanceKey((key) => key + 1);
+        }
+      } else {
+        watchdogMissCountRef.current = 0;
       }
     }, 2000);
     return () => clearInterval(interval);
@@ -292,8 +317,9 @@ function WorkflowGraphInner({
       className="h-full w-full overflow-hidden"
       style={{ minHeight: '300px' }}
     >
-      <div data-testid="workflow-graph-react-flow" className="h-full w-full">
+      <div ref={graphRootRef} data-testid="workflow-graph-react-flow" className="h-full w-full">
         <ReactFlow
+          key={flowInstanceKey}
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}

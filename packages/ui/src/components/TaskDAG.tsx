@@ -153,6 +153,7 @@ function mergeMeasuredNodeState(prevNodes: Node[], nextNodes: Node[]): Node[] {
 
 function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskClick, onTaskDoubleClick, onTaskContextMenu, onManualViewport, statusFilters }: TaskDAGProps) {
   const { fitView, setCenter, getZoom } = useReactFlow();
+  const graphRootRef = useRef<HTMLDivElement>(null);
   const prevNodeCount = useRef(0);
   const lastNodeClickRef = useRef<{ id: string; at: number } | null>(null);
   const reportedGraphVisibleRef = useRef(false);
@@ -497,14 +498,16 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
   useEffect(() => {
     if (nodes.length === 0) return;
     const interval = setInterval(() => {
-      const domNodes = document.querySelectorAll('.react-flow__node');
-      const hiddenNodes = document.querySelectorAll(
+      const root = graphRootRef.current;
+      if (!root) return;
+      const renderedNodeElements = root.querySelectorAll('.react-flow__node');
+      const missingRenderedNodes = root.querySelectorAll(
         '.react-flow__node[style*="visibility: hidden"]',
       );
 
       if (
-        (domNodes.length === 0 && nodes.length > 0) ||
-        (hiddenNodes.length > 0 && hiddenNodes.length === domNodes.length)
+        (renderedNodeElements.length === 0 && nodes.length > 0) ||
+        (missingRenderedNodes.length > 0 && missingRenderedNodes.length === renderedNodeElements.length)
       ) {
         watchdogMissCountRef.current += 1;
         const shouldRecover =
@@ -517,8 +520,8 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
             : '[DAG-watchdog] Nodes hidden or missing, forcing fitView',
           {
             propsNodeCount: nodes.length,
-            domNodeCount: domNodes.length,
-            hiddenCount: hiddenNodes.length,
+            renderedNodeElementCount: renderedNodeElements.length,
+            missingRenderedNodeCount: missingRenderedNodes.length,
             missCount: watchdogMissCountRef.current,
             recoveryAttempted: watchdogRecoveryAttemptedRef.current,
             recoveryTriggered: shouldRecover,
@@ -589,7 +592,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
   }
 
   return (
-    <div className="h-full w-full" style={{ minHeight: '300px' }}>
+    <div ref={graphRootRef} className="h-full w-full" style={{ minHeight: '300px' }}>
       <ReactFlow
         key={flowInstanceKey}
         nodes={rfNodes}
