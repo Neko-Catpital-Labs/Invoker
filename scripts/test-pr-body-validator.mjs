@@ -644,6 +644,18 @@ assert(
   'refactor lane should require an explicit unchanged-behavior non-goal',
 );
 
+const mixedStackSliceErrors = await validatePrBody(validMinimal, {
+  changedFiles: [
+    'packages/workflow-core/src/orchestrator.ts',
+    'packages/execution-engine/src/task-runner.ts',
+    'packages/app/src/workflow-mutation-facade.ts',
+  ],
+});
+assert(
+  mixedStackSliceErrors.some((error) => error.includes('Review Unit "routing" cannot ship with activation-surface files')),
+  'routing review unit should reject mixed activation-surface stack slices like old #1755',
+);
+
 const validationPolicyBody = `## Summary
 
 Validate stale recovery candidates.
