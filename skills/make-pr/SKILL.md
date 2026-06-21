@@ -2,7 +2,7 @@
 name: make-pr
 description: >
   Create or update a pull request in this repo using the preferred PR schema,
-  upstream-first branch workflow, and repo-specific publication rules. Trigger
+  explicit base/publish remotes, and repo-specific publication rules. Trigger
   when asked to make a PR, update a PR body, prepare PR text, or publish a
   stacked PR branch.
 ---
@@ -15,9 +15,9 @@ Use this skill when the work is already done and the user wants a PR created, up
 
 - PR title/body authoring for Invoker
 - The preferred PR section schema
-- Upstream-first branch/PR workflow (explicit base and publish remotes)
+- Explicit base/publish remote PR workflow
 - Repo-specific publication rules:
-  - Invoker-on-Invoker stacks may use `mergify stack push`
+  - Invoker-on-Invoker stacks use an origin-only Mergify stack workflow
   - unrelated target repos should keep their own normal PR workflow unless they independently use Mergify Stacks
 
 When an Invoker review gate emits multiple PR artifacts, each PR body still uses this same schema, and Invoker-on-Invoker stacks are still published with `mergify stack push`.
@@ -29,6 +29,10 @@ Default to this structure:
 ## Summary
 
 Plain-English explanation of what changed and why.
+
+First paragraph must state the new behavior or contract in simple English.
+
+Do not open with debugging history, investigation notes, or a blow-by-blow narrative.
 
 Write this for a burnt out developer who needs the point quickly.
 
@@ -118,22 +122,26 @@ node scripts/validate-pr-body.mjs --body-file /tmp/my-pr.md
 node scripts/create-pr.mjs --title "<title>" --base master --body-file /tmp/my-pr.md
 ```
 
-Update an existing PR with:
+Update an existing PR by number with:
 
 ```bash
 node scripts/create-pr.mjs --title "<title>" --base master --body-file /tmp/my-pr.md --update <pr-number>
 ```
 
+Update the PR already attached to the current branch with:
+
+```bash
+node scripts/create-pr.mjs --title "<title>" --base master --body-file /tmp/my-pr.md --update-existing
+```
+
 This script handles local image path upload/injection when configured. It also rejects UI-impacting diffs unless the body includes visual proof media.
 
-## Upstream-first workflow
+## Explicit remote workflow
 
-Use the canonical repository as the PR target and an explicit publish remote (typically `origin`) for branch publication.
+Use the canonical repository as the PR target and an explicit publish remote.
 
+- Keep the generic rule for unrelated repos: create branches from `<baseRemote>/<base>`, push to the chosen publish remote, and open PRs against the canonical repository base branch.
 - Do not depend on fork-sync scripts before PR creation.
-- Create branches from `<baseRemote>/<base>` (for example `origin/master` when `origin` is the canonical clone remote).
-- Push branches to the chosen publish remote.
-- Open PRs against the canonical repository base branch.
 
 Reference:
 
@@ -143,13 +151,38 @@ Reference:
 
 If the target repo is Invoker itself (`EdbertChan/Invoker` or `Neko-Catpital-Labs/Invoker`):
 
-- use the preferred PR schema above
-- keep stack publication explicit
-- when the branch stack is ready, publish or update it with:
+- use `origin` as the base remote, publish remote, and PR target repo
+- if the finished work is too large for one PR, use `skills/review-compression/SKILL.md` first to define the slice order before creating any PR branches
+- create the first slice with `bash scripts/create-clean-pr-branch.sh --base-remote origin --publish-remote origin --base-ref <base> pr/<slice-1> <commit ...>`
+- after pushing `pr/<slice-1>`, restore its local target with `git branch --set-upstream-to=origin/<base> pr/<slice-1>`
+- after pushing `pr/<slice-1>`, create `pr/<slice-2>` and later slices with the same helper but `--base-ref pr/<previous-slice>`
+- after pushing each later slice, restore its local target with `git branch --set-upstream-to=origin/pr/<previous-slice> pr/<slice-N>`
+- direct `git push` on a Mergify-managed stack branch is expected to fail because the hook blocks it
+- publish stack branches with `mergify stack push`
+- after `mergify stack push`, repair PR titles or bodies as a second step by rerunning `create-pr` in update mode on the created stack branch
+- do not recreate an existing stack PR by cherry-picking into a fresh `land/*` or ad hoc branch, because GitHub and Mergify will open a new PR instead of updating the existing one
+
+The `git push -u` step points a local stack branch at itself. Reset the local target back to the intended base branch before `mergify stack push`, or Mergify will reject the stack as self-targeting.
+
+Large diff to stack sequence:
+
+1. review-compress the work into ordered slices
+2. create and push `pr/<slice-1>` from `origin/<base>`
+3. run `git branch --set-upstream-to=origin/<base> pr/<slice-1>`
+4. create and push each later `pr/<slice-N>` from `origin/pr/<slice-(N-1)>`
+5. run `git branch --set-upstream-to=origin/pr/<slice-(N-1)> pr/<slice-N>` for each later slice
+6. run `mergify stack push` only after the branch stack exists
+7. rerun `create-pr` in update mode on each stack branch to patch the PR bodies
+
+Stack PR body update example:
 
 ```bash
 mergify stack push
+git switch pr/<slice-name>
+node scripts/create-pr.mjs --title "<title>" --base <base> --body-file /tmp/my-pr.md --update-existing
 ```
+
+For self-authored PRs to `master` that need the repo's admin queue path, add the `admin-bypass` label and then queue the PR with the `admin-bypass` rule.
 
 Do not generalize this to unrelated repos.
 
