@@ -37,20 +37,21 @@ Put one idea in each paragraph. If one idea leads to another, split them into se
 
 Avoid implementation jargon unless it is necessary for understanding the change.
 
-<details>
-<summary>Review metadata</summary>
+## Review Claim
 
-Review Claim: State the one thing the reviewer is being asked to approve.
+State the one thing the reviewer is being asked to approve.
 
-Review Lane: Choose exactly one: `behavior`, `refactor`, `proof`, `cleanup`, `policy`, or `docs`.
+## Review Lane
 
-Review Unit: Choose the matching review unit, such as `tooling-policy`, `routing`, or `docs`.
+Choose exactly one: `behavior`, `refactor`, `proof`, `cleanup`, `policy`, or `docs`.
 
-Safety Invariant: Explain why this slice is safe to review locally.
+## Safety Invariant
 
-Slice Rationale: Explain why this work is split here instead of bundled elsewhere.
+Explain why this slice is safe to review locally.
 
-</details>
+## Slice Rationale
+
+Explain why this work is split here instead of bundled elsewhere.
 
 ## Non-goals
 
@@ -93,7 +94,7 @@ If the change is small and has no architectural impact, omit `## Architecture` r
 
 If the change touches UI-impacting files, use `skills/visual-proof/SKILL.md` first and include its screenshot/video markdown in `## Visual Proof`. UI-impacting files include `packages/ui/**`, Electron window lifecycle files, preload, main process window wiring, and app menu changes.
 
-Do not default to a lightweight `## Summary / ## Testing / ## Notes` PR body. That shape is ad hoc drift, not the repo standard. Use `## Summary` with a collapsed `<details><summary>Review metadata</summary>` block, then `## Non-goals / ## Test Plan / ## Revert Plan` as the floor. Add `## Visual Proof` for UI-impacting diffs, and add `## Architecture` when the change affects component interactions or data/control flow.
+Do not default to a lightweight `## Summary / ## Testing / ## Notes` PR body. That shape is ad hoc drift, not the repo standard. Use `## Summary / ## Review Claim / ## Review Lane / ## Safety Invariant / ## Slice Rationale / ## Non-goals / ## Test Plan / ## Revert Plan` as the floor, add `## Visual Proof` for UI-impacting diffs, and add `## Architecture` when the change affects component interactions or data/control flow.
 
 ## Command surface
 
@@ -124,20 +125,6 @@ node scripts/create-pr.mjs --title "<title>" --base master --body-file /tmp/my-p
 
 This script handles local image path upload/injection when configured. It also rejects UI-impacting diffs unless the body includes visual proof media.
 
-## Stack PR title schema
-
-For Mergify stacks and manual stacks of diffs, every PR title must start with the same short stack idea and exactly one slice index:
-
-```text
-[Graph Blanking](1) Preserve selected graph while loading
-[Graph Blanking](2) Reconcile graph refresh after task updates
-```
-
-Use the bracketed idea as the shared stack name. Use the parenthesized number as that PR's slice number. Do not chain numbers like `(1)(2)`. `scripts/create-pr.mjs` rejects stacked PR titles that do not start this way.
-
-For single, unstacked PRs against `master`, use a normal clear title.
-
-
 ## Upstream-first workflow
 
 Use the canonical repository as the PR target and an explicit publish remote (typically `origin`) for branch publication.
@@ -163,12 +150,6 @@ If the target repo is Invoker itself (`EdbertChan/Invoker` or `Neko-Catpital-Lab
 mergify stack push
 ```
 
-- after `mergify stack push`, repair PR titles or bodies by rerunning `create-pr` in update mode on the created stack branch; stacked titles must use `[Stack Idea](N)` prefixes
-
-```bash
-node scripts/create-pr.mjs --title "[Graph Blanking](1) Preserve selected graph while loading" --base <base> --body-file /tmp/my-pr.md --update-existing
-```
-
 Do not generalize this to unrelated repos.
 
 ## Validation
@@ -179,7 +160,6 @@ Before creating a PR:
 - ensure the body sections are present and concrete
 - ensure test commands are real commands that were actually run when possible
 - ensure revert guidance is honest
-- ensure stacked PR titles start with `[Stack Idea](N)`, not `[Stack Idea](N)(M)`
 - validate the body with `node scripts/validate-pr-body.mjs --body-file <file>`
 - for UI-impacting diffs, include `## Visual Proof` with screenshot or video proof before `node scripts/create-pr.mjs`
 
