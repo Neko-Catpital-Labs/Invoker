@@ -6,6 +6,7 @@ interface WorkflowStatusChipsProps {
   workflows: Map<string, WorkflowMeta>;
   activeFilters: Set<WorkflowStatus>;
   onStatusClick: (status: WorkflowStatus, event: MouseEvent<HTMLButtonElement>) => void;
+  keyboardActiveKey?: WorkflowStatus | null;
 }
 
 const DISPLAY_ORDER: WorkflowStatus[] = [
@@ -13,6 +14,7 @@ const DISPLAY_ORDER: WorkflowStatus[] = [
   'failed',
   'closed',
   'blocked',
+  'fixing_with_ai',
   'awaiting_approval',
   'review_ready',
   'pending',
@@ -24,6 +26,7 @@ export function WorkflowStatusChips({
   workflows,
   activeFilters,
   onStatusClick,
+  keyboardActiveKey = null,
 }: WorkflowStatusChipsProps): JSX.Element {
   const counts = new Map<WorkflowStatus, number>();
   for (const status of DISPLAY_ORDER) counts.set(status, 0);
@@ -47,6 +50,7 @@ export function WorkflowStatusChips({
               visual.borderClass,
               visual.textClass,
               active ? 'bg-gray-800' : 'bg-gray-900/70 hover:bg-gray-800/80',
+              keyboardActiveKey === status ? 'ring-2 ring-blue-300/90 ring-offset-1 ring-offset-gray-800' : '',
             ].join(' ')}
           >
             {status.replaceAll('_', ' ')} ({count})
