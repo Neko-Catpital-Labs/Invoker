@@ -69,9 +69,37 @@ async function runElectronHeadless(args: string[]): Promise<number> {
       LIBGL_ALWAYS_SOFTWARE: process.platform === 'linux' ? '1' : process.env.LIBGL_ALWAYS_SOFTWARE,
     },
   });
+  const noTrack = args.includes('--no-track') || args.includes('--do-not-track');
+  const timeoutMs = noTrack ? standaloneNoTrackElectronTimeoutMs() : 0;
   return await new Promise<number>((resolveExit, reject) => {
-    child.once('error', reject);
+    let timedOut = false;
+    let forceKillTimer: NodeJS.Timeout | undefined;
+    const watchdog = timeoutMs > 0
+      ? setTimeout(() => {
+          timedOut = true;
+          delegationClientLog(
+            `standalone no-track electron timed out after ${timeoutMs}ms; terminating child pid=${child.pid ?? '<unknown>'}`,
+          );
+          child.kill('SIGTERM');
+          forceKillTimer = setTimeout(() => {
+            child.kill('SIGKILL');
+          }, 2_000);
+        }, timeoutMs)
+      : undefined;
+    const clearTimers = () => {
+      if (watchdog) clearTimeout(watchdog);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
+    };
+    child.once('error', (error) => {
+      clearTimers();
+      reject(error);
+    });
     child.once('exit', (code, signal) => {
+      clearTimers();
+      if (timedOut) {
+        resolveExit(124);
+        return;
+      }
       if (signal) {
         reject(new Error(`headless electron exited with signal ${signal}`));
         return;
@@ -94,6 +122,14 @@ const READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS = 20_000;
 const READ_ONLY_QUERY_REQUEST_TIMEOUT_MS = 8_000;
 const POST_BOOTSTRAP_OWNER_RESTART_ATTEMPTS = 3;
 const DEFAULT_STANDALONE_OWNER_BOOTSTRAP_TIMEOUT_MS = 60_000;
+const DEFAULT_STANDALONE_NO_TRACK_ELECTRON_TIMEOUT_MS = 30_000;
+
+function standaloneNoTrackElectronTimeoutMs(): number {
+  const raw = process.env.INVOKER_HEADLESS_ELECTRON_NO_TRACK_TIMEOUT_MS;
+  const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+  if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  return DEFAULT_STANDALONE_NO_TRACK_ELECTRON_TIMEOUT_MS;
+}
 
 function standaloneOwnerBootstrapTimeoutMs(): number {
   const raw = process.env.INVOKER_HEADLESS_OWNER_BOOTSTRAP_TIMEOUT_MS;

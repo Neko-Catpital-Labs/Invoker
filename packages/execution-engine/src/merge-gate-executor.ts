@@ -1,4 +1,6 @@
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
 import type { TaskState } from '@invoker/workflow-core';
 import { BaseExecutor, type BaseEntry } from './base-executor.js';
@@ -23,17 +25,26 @@ export class MergeGateExecutor extends BaseExecutor<MergeGateEntry> {
     const workflow = task.config.workflowId
       ? this.host.persistence.loadWorkflow(task.config.workflowId)
       : undefined;
-    const baseBranch = workflow?.baseBranch ?? this.host.defaultBranch ?? await this.host.detectDefaultBranch();
-    const baseCheckoutRef = normalizeBranchForGithubCli(baseBranch);
-    const workspacePath = await this.host.createMergeWorktree(
-      baseCheckoutRef,
-      'gate-' + task.id.replace(/[^a-zA-Z0-9_-]/g, '-'),
-      workflow?.repoUrl,
-    );
+    const onFinish = workflow?.onFinish ?? 'none';
+    const mergeMode = workflow?.mergeMode ?? 'manual';
+    let workspacePath: string | undefined;
+    if (workflow?.featureBranch && (onFinish !== 'none' || mergeMode === 'external_review')) {
+      const baseBranch = workflow.baseBranch ?? this.host.defaultBranch ?? await this.host.detectDefaultBranch();
+      const baseCheckoutRef = normalizeBranchForGithubCli(baseBranch);
+      workspacePath = await this.host.createMergeWorktree(
+        baseCheckoutRef,
+        'gate-' + task.id.replace(/[^a-zA-Z0-9_-]/g, '-'),
+        workflow.repoUrl,
+      );
+    } else {
+      workspacePath = createNoopGateWorkspace(task.id);
+    }
 
     const handle = this.createHandle(request);
     handle.workspacePath = workspacePath;
-    handle.branch = workflow?.featureBranch ?? undefined;
+    handle.branch = workflow?.featureBranch && (onFinish !== 'none' || mergeMode === 'external_review')
+      ? workflow.featureBranch
+      : undefined;
 
     const entry: MergeGateEntry = {
       request,
@@ -117,7 +128,7 @@ export class MergeGateExecutor extends BaseExecutor<MergeGateEntry> {
     return task;
   }
 
-  private async run(handle: ExecutorHandle, task: TaskState, gateWorkspacePath: string): Promise<void> {
+  private async run(handle: ExecutorHandle, task: TaskState, gateWorkspacePath: string | undefined): Promise<void> {
     const entry = this.getEntry(handle);
     if (!entry || entry.completed || entry.killed) return;
 
@@ -155,4 +166,15 @@ export class MergeGateExecutor extends BaseExecutor<MergeGateEntry> {
       executionGeneration: request.executionGeneration,
     };
   }
+}
+
+function createNoopGateWorkspace(taskId: string): string {
+  const slug = taskId.replace(/[^a-zA-Z0-9_-]/g, '-');
+  const dbDir = process.env.INVOKER_DB_DIR?.trim();
+  if (dbDir) {
+    const dir = join(dbDir, 'merge-gates', slug);
+    mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+  return mkdtempSync(join(tmpdir(), `invoker-merge-gate-${slug}-`));
 }

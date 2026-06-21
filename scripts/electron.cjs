@@ -202,6 +202,27 @@ function withLinuxSandboxFallback(binaryPath, args) {
   return ['--no-sandbox', ...args];
 }
 
+function findElectronAppArgIndex(args) {
+  return args.findIndex((arg) => arg && !arg.startsWith('-'));
+}
+
+function withUserDataDir(args) {
+  const userDataDir = process.env.INVOKER_USER_DATA_DIR;
+  if (!userDataDir) {
+    return args;
+  }
+  if (args.some((arg) => arg === '--user-data-dir' || arg.startsWith('--user-data-dir='))) {
+    return args;
+  }
+
+  const appArgIndex = findElectronAppArgIndex(args);
+  const userDataArg = `--user-data-dir=${userDataDir}`;
+  if (appArgIndex === -1) {
+    return [userDataArg, ...args];
+  }
+  return [...args.slice(0, appArgIndex), userDataArg, ...args.slice(appArgIndex)];
+}
+
 function withMacOSPersistenceIgnoreState(args) {
   if (process.platform !== 'darwin') {
     return args;
@@ -213,9 +234,10 @@ function withMacOSPersistenceIgnoreState(args) {
   // AppKit can show a blocking "reopen windows?" crash-recovery modal before
   // Electron runs our JS, which also stalls headless CLI invocations.
   //
-  // Keep Electron's app path as argv[1]; putting this flag before the script
-  // prevents Electron from loading dist/main.js.
-  const insertAt = args.length > 0 ? 1 : 0;
+  // Keep this native flag after Electron's app path; putting it before the
+  // script prevents Electron from loading dist/main.js.
+  const appArgIndex = findElectronAppArgIndex(args);
+  const insertAt = appArgIndex >= 0 ? appArgIndex + 1 : args.length;
   return [...args.slice(0, insertAt), '-ApplePersistenceIgnoreState', 'YES', ...args.slice(insertAt)];
 }
 
@@ -233,18 +255,48 @@ async function main() {
     return;
   }
 
-  const launchArgs = withMacOSPersistenceIgnoreState(withLinuxSandboxFallback(binaryPath, args));
+  const launchArgs = withMacOSPersistenceIgnoreState(withLinuxSandboxFallback(binaryPath, withUserDataDir(args)));
   const child = spawn(binaryPath, launchArgs, {
     cwd: process.cwd(),
     env: process.env,
     stdio: 'inherit',
   });
+  let childExited = false;
+  const signalHandlers = new Map();
+
+  const forwardSignal = (signal) => {
+    if (childExited) {
+      process.exit(0);
+      return;
+    }
+    try {
+      child.kill(signal);
+    } catch {
+      process.exit(1);
+    }
+  };
+
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+    const handler = () => forwardSignal(signal);
+    signalHandlers.set(signal, handler);
+    process.once(signal, handler);
+  }
+
+  const removeSignalHandlers = () => {
+    for (const [signal, handler] of signalHandlers) {
+      process.off(signal, handler);
+    }
+    signalHandlers.clear();
+  };
 
   child.once('error', (error) => {
+    removeSignalHandlers();
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
   });
   child.once('exit', (code, signal) => {
+    childExited = true;
+    removeSignalHandlers();
     if (signal) {
       process.kill(process.pid, signal);
       return;

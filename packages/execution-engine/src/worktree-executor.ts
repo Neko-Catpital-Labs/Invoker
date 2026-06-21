@@ -42,6 +42,8 @@ export interface WorktreeExecutorConfig {
   heartbeatIntervalMs?: number;
   /** Maximum task duration in milliseconds. Default: 4 hours. */
   maxDurationMs?: number;
+  /** Shell command to provision a worktree before running a task. Defaults to pnpm install when a package manifest exists. */
+  provisionCommand?: string;
 }
 
 const DEFAULT_WORKTREE_PROVISION_TIMEOUT_MS = 15 * 60 * 1000;
@@ -85,12 +87,14 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
   private readonly worktreeBaseDir: string;
   private readonly claudeCommand: string;
   private readonly agentRegistry?: import('./agent-registry.js').AgentRegistry;
+  private readonly provisionCommand: string;
   private pool: RepoPool;
 
   constructor(config: WorktreeExecutorConfig) {
     super(config.heartbeatIntervalMs, config.maxDurationMs);
     this.claudeCommand = config.claudeCommand ?? 'claude';
     this.agentRegistry = config.agentRegistry;
+    this.provisionCommand = config.provisionCommand ?? DEFAULT_WORKTREE_PROVISION_COMMAND;
     this.worktreeBaseDir =
       config.worktreeBaseDir ?? resolve(homedir(), '.invoker', 'worktrees');
     this.pool = new RepoPool({
@@ -707,7 +711,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
   private provisionWorktree(dir: string, executionId?: string): { child: ChildProcess; completion: Promise<void> } {
     traceExecution(`[WorktreeExecutor] provisionWorktree begin dir=${dir}`);
     const t0 = Date.now();
-    const cmd = `set -euo pipefail; ${DEFAULT_WORKTREE_PROVISION_COMMAND}`;
+    const cmd = `set -euo pipefail; ${this.provisionCommand}`;
     const child = spawn('/bin/bash', ['-c', cmd], {
       cwd: dir,
       env: cleanElectronEnv(),

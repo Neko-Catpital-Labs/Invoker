@@ -102,6 +102,9 @@ type CliRuntimeConfig = {
     poolId: string;
     strategy?: 'enforce' | 'route';
   }>;
+  worktree?: {
+    provisionCommand?: string;
+  };
 };
 
 const doctorChecks: DoctorCheck[] = [
@@ -395,12 +398,16 @@ function normalizePlanRuntimePaths(plan: PlanDefinition, cwd: string): PlanDefin
 
 async function waitForWorkflowToSettle(
   orchestrator: Orchestrator,
+  persistence: SQLiteAdapter,
   workflowId: string,
   timeoutMs = 24 * 60 * 60 * 1000,
 ): Promise<TaskState[]> {
   const startedAt = Date.now();
   while (true) {
-    const tasks = orchestrator.getAllTasks().filter((task) => task.config.workflowId === workflowId);
+    const persistedTasks = persistence.loadTasks(workflowId);
+    const tasks = persistedTasks.length > 0
+      ? persistedTasks
+      : orchestrator.getAllTasks().filter((task) => task.config.workflowId === workflowId);
     if (tasks.length > 0 && tasks.every((task) => isTerminalTaskStatus(task.status))) {
       return tasks;
     }
@@ -430,6 +437,9 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
   process.env.INVOKER_DB_DIR = dbDir;
   const runtimeConfig = loadRuntimeConfig(options.config);
   const maxConcurrency = runtimeConfig.maxConcurrency ?? 1;
+  const provisionCommand = process.env.INVOKER_CLI_WORKTREE_PROVISION_COMMAND
+    ?? runtimeConfig.worktree?.provisionCommand
+    ?? ':';
 
   const persistence = await SQLiteAdapter.create(join(dbDir, 'invoker.db'), {
     ownerCapability: true,
@@ -444,6 +454,7 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
       cacheDir: join(dbDir, 'repos'),
       maxWorktrees: maxConcurrency,
       agentRegistry: executionAgentRegistry,
+      provisionCommand,
     }));
     const orchestrator = new Orchestrator({
       persistence,
@@ -486,7 +497,7 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
     await taskRunner.executeTasks(started);
 
     const workflow = persistence.listWorkflows()[0];
-    const tasks = workflow ? await waitForWorkflowToSettle(orchestrator, workflow.id) : [];
+    const tasks = workflow ? await waitForWorkflowToSettle(orchestrator, persistence, workflow.id) : [];
     const failedTasks = tasks.filter((task) => task.status === 'failed').length;
     const completedTasks = tasks.filter((task) => task.status === 'completed').length;
     return {
@@ -584,6 +595,6 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   void main().then((exitCode) => {
-    process.exitCode = exitCode;
+    process.exit(exitCode);
   });
 }

@@ -108,10 +108,6 @@ async function closeApp(app: ElectronApplication): Promise<void> {
   }
 }
 
-async function waitForOwnerCloseSettle(): Promise<void> {
-  await delay(1_500);
-}
-
 async function waitForStandaloneOwnerExit(): Promise<void> {
   await delay(6_000);
 }
@@ -199,7 +195,7 @@ base.describe('Task new-attempt reset repro', () => {
       const staleTs = '2025-01-01T00:00:00.000Z';
       await closeApp(app);
       app = undefined;
-      await waitForOwnerCloseSettle();
+      await waitForStandaloneOwnerExit();
       await seedStaleLaunchAttempt(dbPath, loaded.id, oldAttemptId, new Date(staleTs));
 
       const relaunchedApp = await launchApp(testDir, configPath);

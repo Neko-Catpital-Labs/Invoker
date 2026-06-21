@@ -13,6 +13,7 @@ unset INVOKER_DB_DIR
 TMP_HOME="$(mktemp -d "${TMPDIR:-/tmp}/invoker-e2e-home.XXXXXX")"
 export HOME="$TMP_HOME"
 mkdir -p "$HOME/.invoker"
+export INVOKER_USER_DATA_DIR="$TMP_HOME/electron-user-data"
 git config --global --add safe.directory "$REPO_ROOT"
 export INVOKER_REPO_CONFIG_PATH="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-config.XXXXXX")"
 printf '{\n  "autoFixRetries": 1\n}\n' > "$INVOKER_REPO_CONFIG_PATH"
@@ -23,9 +24,18 @@ PLAN_PATH="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.17-plan.XXXXXX")"
 DB_PATH="$HOME/.invoker/invoker.db"
 OWNER_PID=""
 
+kill_process_tree() {
+  local pid="$1"
+  local child
+  for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+    kill_process_tree "$child"
+  done
+  kill "$pid" 2>/dev/null || true
+}
+
 cleanup() {
   if [ -n "$OWNER_PID" ]; then
-    kill "$OWNER_PID" 2>/dev/null || true
+    kill_process_tree "$OWNER_PID"
     wait "$OWNER_PID" 2>/dev/null || true
   fi
   rm -rf "$TMP_HOME" 2>/dev/null || true

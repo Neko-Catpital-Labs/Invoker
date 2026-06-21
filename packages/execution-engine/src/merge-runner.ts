@@ -465,8 +465,9 @@ export async function runMergeGateActionImpl(
   // Use baseBranch as the ref because featureBranch may not exist yet
   // (it gets created inside consolidateAndMerge). Terminal restore does
   // `git checkout <branch>` to switch to featureBranch anyway.
+  const needsGateWorkspace = Boolean(featureBranch && (onFinish !== 'none' || mergeMode === 'external_review'));
   let gateWorkspacePath: string | undefined = opts.gateWorkspacePath;
-  if (!gateWorkspacePath && featureBranch) {
+  if (!gateWorkspacePath && needsGateWorkspace) {
     const baseCheckoutRef = await resolveBaseCheckoutRef(
       host,
       baseBranch,

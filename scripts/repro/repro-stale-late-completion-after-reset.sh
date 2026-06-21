@@ -24,6 +24,7 @@ done
 
 pushd "$ROOT_DIR" >/dev/null
 export INVOKER_SQLITE_FLUSH_DEBOUNCE_MS=0
+unset INVOKER_HEADLESS_STANDALONE
 
 if [[ ! -f packages/app/dist/main.js ]]; then
   pnpm --filter @invoker/app build >/dev/null
@@ -34,14 +35,25 @@ MAIN_JS="$ROOT_DIR/packages/app/dist/main.js"
 HEADLESS_CLIENT_JS="$ROOT_DIR/packages/app/dist/headless-client.js"
 
 cleanup_mode() {
+  kill_pid_tree() {
+    local pid="$1"
+    if [[ -z "$pid" ]]; then
+      return 0
+    fi
+    while IFS= read -r child_pid; do
+      kill_pid_tree "$child_pid"
+    done < <(pgrep -P "$pid" 2>/dev/null || true)
+    kill "$pid" >/dev/null 2>&1 || true
+  }
+
   if [[ -n "${RESET_WRAPPER_PID:-}" ]]; then
-    kill "$RESET_WRAPPER_PID" >/dev/null 2>&1 || true
+    kill_pid_tree "$RESET_WRAPPER_PID"
   fi
   if [[ -n "${GUI_WRAPPER_PID:-}" ]]; then
-    kill "$GUI_WRAPPER_PID" >/dev/null 2>&1 || true
+    kill_pid_tree "$GUI_WRAPPER_PID"
   fi
   if [[ -n "${GUI_PID:-}" ]]; then
-    kill "$GUI_PID" >/dev/null 2>&1 || true
+    kill_pid_tree "$GUI_PID"
   fi
   if [[ -n "${TMP_DIR:-}" && -d "${TMP_DIR:-}" && "$KEEP_TEMP" != true ]]; then
     rm -rf "$TMP_DIR" >/dev/null 2>&1 || true
@@ -86,6 +98,22 @@ sqlite_schema_ready() {
   [[ "$exists" == "1" ]]
 }
 
+wait_for_owner_ready() {
+  local timeout="$1"
+  local started_at
+  started_at="$(date +%s)"
+  while true; do
+    if [[ -S "$IPC_SOCKET_PATH" ]] || grep -q 'owner-ipc-ready' "$DB_DIR/invoker.log" 2>/dev/null; then
+      return 0
+    fi
+    if (( $(date +%s) - started_at >= timeout )); then
+      echo "repro: timed out waiting for GUI owner IPC readiness" >&2
+      return 1
+    fi
+    sleep 0.1
+  done
+}
+
 submit_workflow_with_retry() {
   local deadline
   deadline=$(( $(date +%s) + TIMEOUT_SECONDS ))
@@ -94,7 +122,7 @@ submit_workflow_with_retry() {
     : >"$SUBMIT_STDOUT"
     : >"$SUBMIT_STDERR"
     set +e
-    HOME="$HOME_DIR" INVOKER_DB_DIR="$DB_DIR" INVOKER_IPC_SOCKET="$IPC_SOCKET_PATH" NODE_ENV=test "$ELECTRON_BIN" "$MAIN_JS" --headless --no-track run "$PLAN_PATH" \
+    HOME="$HOME_DIR" INVOKER_DB_DIR="$DB_DIR" INVOKER_IPC_SOCKET="$IPC_SOCKET_PATH" INVOKER_USER_DATA_DIR="$GUI_USER_DATA_DIR" NODE_ENV=test node "$HEADLESS_CLIENT_JS" --no-track run "$PLAN_PATH" \
       >"$SUBMIT_STDOUT" 2>"$SUBMIT_STDERR"
     local submit_status=$?
     set -e
@@ -114,7 +142,7 @@ submit_workflow_with_retry() {
       continue
     fi
 
-    if rg -q 'requires an owner process|No request handler registered' "$SUBMIT_STDERR"; then
+    if rg -q 'requires an owner process|No request handler registered|Cannot acquire writer lock|could not reach a standalone shared owner' "$SUBMIT_STDERR"; then
       sleep 0.2
       continue
     fi
@@ -140,9 +168,11 @@ run_mode() {
   SUBMIT_STDERR="$TMP_DIR/submit.stderr.log"
   RESET_STDOUT="$TMP_DIR/reset.stdout.log"
   RESET_STDERR="$TMP_DIR/reset.stderr.log"
+  GUI_USER_DATA_DIR="$TMP_DIR/gui-user-data"
   MARKER_PATH="$TMP_DIR/after-reset.marker"
 
   mkdir -p "$DB_DIR"
+  mkdir -p "$GUI_USER_DATA_DIR"
   mkdir -p "$REPO_FIXTURE_DIR"
 
   git -C "$REPO_FIXTURE_DIR" init -b main >/dev/null 2>&1
@@ -178,7 +208,7 @@ tasks:
     dependencies: [mid]
 EOF
 
-  HOME="$HOME_DIR" INVOKER_DB_DIR="$DB_DIR" INVOKER_IPC_SOCKET="$IPC_SOCKET_PATH" NODE_ENV=test "$ELECTRON_BIN" "$MAIN_JS" >"$GUI_STDOUT" 2>"$GUI_STDERR" &
+  HOME="$HOME_DIR" INVOKER_DB_DIR="$DB_DIR" INVOKER_IPC_SOCKET="$IPC_SOCKET_PATH" INVOKER_USER_DATA_DIR="$GUI_USER_DATA_DIR" NODE_ENV=test "$ELECTRON_BIN" "$MAIN_JS" >"$GUI_STDOUT" 2>"$GUI_STDERR" &
   GUI_WRAPPER_PID=$!
 
   for _ in {1..200}; do
@@ -196,6 +226,8 @@ EOF
     cat "$GUI_STDERR" >&2 || true
     return 1
   fi
+
+  wait_for_owner_ready "$TIMEOUT_SECONDS"
 
   if ! submit_workflow_with_retry || [[ -z "${WORKFLOW_ID:-}" ]]; then
     echo "repro: failed to submit workflow for mode=$mode" >&2
@@ -215,12 +247,12 @@ EOF
 
   case "$mode" in
     recreate)
-      HOME="$HOME_DIR" INVOKER_DB_DIR="$DB_DIR" INVOKER_IPC_SOCKET="$IPC_SOCKET_PATH" NODE_ENV=test "$ELECTRON_BIN" "$MAIN_JS" --headless recreate "$WORKFLOW_ID" \
+      HOME="$HOME_DIR" INVOKER_DB_DIR="$DB_DIR" INVOKER_IPC_SOCKET="$IPC_SOCKET_PATH" INVOKER_USER_DATA_DIR="$GUI_USER_DATA_DIR" NODE_ENV=test node "$HEADLESS_CLIENT_JS" --no-track recreate "$WORKFLOW_ID" \
         >"$RESET_STDOUT" 2>"$RESET_STDERR" &
       RESET_WRAPPER_PID=$!
       ;;
     retry-task)
-      HOME="$HOME_DIR" INVOKER_DB_DIR="$DB_DIR" INVOKER_IPC_SOCKET="$IPC_SOCKET_PATH" NODE_ENV=test "$ELECTRON_BIN" "$MAIN_JS" --headless retry-task "$PREPARE_ID" \
+      HOME="$HOME_DIR" INVOKER_DB_DIR="$DB_DIR" INVOKER_IPC_SOCKET="$IPC_SOCKET_PATH" INVOKER_USER_DATA_DIR="$GUI_USER_DATA_DIR" NODE_ENV=test node "$HEADLESS_CLIENT_JS" --no-track retry-task "$PREPARE_ID" \
         >"$RESET_STDOUT" 2>"$RESET_STDERR" &
       RESET_WRAPPER_PID=$!
       ;;
@@ -233,8 +265,12 @@ EOF
   sleep 0.5
 
   local observed=0
-  local deadline
-  deadline=$(( $(date +%s) + TIMEOUT_SECONDS ))
+  local observe_timeout deadline
+  observe_timeout="$TIMEOUT_SECONDS"
+  if [[ "$EXPECT" == "fixed" && "$observe_timeout" -gt 30 ]]; then
+    observe_timeout=30
+  fi
+  deadline=$(( $(date +%s) + observe_timeout ))
   while (( $(date +%s) < deadline )); do
     local late_status mid_status
     late_status="$(query_action_graph_value task-status "$LATE_ID" || true)"
@@ -340,6 +376,7 @@ case "$MODE" in
     run_mode recreate
     cleanup_mode
     TMP_DIR=""
+    RESET_WRAPPER_PID=""
     GUI_WRAPPER_PID=""
     GUI_PID=""
     run_mode retry-task

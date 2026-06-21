@@ -51,6 +51,9 @@ function searchDirs(context: CliInstallerContext): string[] {
   // one location (used by the hermetic e2e scripts).
   const override = context.env.INVOKER_CLI_INSTALL_DIR;
   if (override) return [override];
+  if (context.candidateInstallDirs) {
+    return [...new Set([...context.candidateInstallDirs, ...pathDirs(context)])];
+  }
   const dirs = [
     ...defaultCandidateInstallDirs(context),
     ...pathDirs(context),

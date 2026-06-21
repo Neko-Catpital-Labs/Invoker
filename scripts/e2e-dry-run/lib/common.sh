@@ -71,12 +71,17 @@ invoker_e2e_init() {
   # submit-plan in background + cancel command). The writer lock would block
   # the second process. In production, IPC delegation handles this.
   export INVOKER_UNSAFE_DISABLE_DB_WRITER_LOCK=1
+  # macOS can occasionally park a concurrently launched Electron process before
+  # app JS starts. Let no-track commands retry quickly instead of waiting for the
+  # outer per-case timeout.
+  export INVOKER_HEADLESS_ELECTRON_NO_TRACK_TIMEOUT_MS="${INVOKER_HEADLESS_ELECTRON_NO_TRACK_TIMEOUT_MS:-15000}"
   # Merge-gate review provider requires a strict explicit GitHub target in CI
   # because e2e repos are often local file:// remotes.
   export INVOKER_GITHUB_TARGET_REPO="${INVOKER_GITHUB_TARGET_REPO:-Neko-Catpital-Labs/Invoker}"
   # Isolate each e2e run from other local Invoker instances/tests to avoid API port collisions.
   export INVOKER_API_PORT="${INVOKER_API_PORT:-$((4300 + (RANDOM % 1000)))}"
   export INVOKER_DB_DIR="$(mktemp -d "${TMPDIR:-/tmp}/invoker-e2e-db.XXXXXX")"
+  export INVOKER_E2E_USER_DATA_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/invoker-e2e-user-data.XXXXXX")"
   export INVOKER_IPC_SOCKET="${INVOKER_IPC_SOCKET:-$INVOKER_DB_DIR/ipc-transport.sock}"
   export INVOKER_E2E_MARKER_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/invoker-e2e-marker.XXXXXX")"
   # Template must end with XXXXXX (suffix after X breaks BSD mktemp and can flake).
@@ -95,6 +100,16 @@ invoker_e2e_init() {
   export PATH="$stubdir:$PATH"
   invoker_e2e_allow_repo_git_ops
   invoker_e2e_ensure_branch_aliases
+}
+
+invoker_e2e_make_user_data_dir() {
+  local root="${INVOKER_E2E_USER_DATA_ROOT:-}"
+  if [ -z "$root" ]; then
+    root="$(mktemp -d "${TMPDIR:-/tmp}/invoker-e2e-user-data.XXXXXX")"
+    export INVOKER_E2E_USER_DATA_ROOT="$root"
+  fi
+  mkdir -p "$root"
+  mktemp -d "$root/headless-user-data.XXXXXX"
 }
 
 invoker_e2e_pid_cmdline() {
@@ -150,11 +165,13 @@ invoker_e2e_start_submit_plan_background() {
   local patched
   patched="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-plan.XXXXXX")"
   invoker_e2e_patch_plan_repo_url "$plan_path" "$patched"
+  local user_data_dir
+  user_data_dir="$(invoker_e2e_make_user_data_dir)"
 
   if command -v setsid >/dev/null 2>&1; then
-    setsid "$INVOKER_E2E_REPO_ROOT/submit-plan.sh" "$patched" "$@" &
+    setsid env INVOKER_USER_DATA_DIR="$user_data_dir" "$INVOKER_E2E_REPO_ROOT/submit-plan.sh" "$patched" "$@" &
   else
-    "$INVOKER_E2E_REPO_ROOT/submit-plan.sh" "$patched" "$@" &
+    env INVOKER_USER_DATA_DIR="$user_data_dir" "$INVOKER_E2E_REPO_ROOT/submit-plan.sh" "$patched" "$@" &
   fi
 
   export INVOKER_E2E_BG_SUBMIT_PID="$!"
@@ -188,7 +205,7 @@ invoker_e2e_cleanup() {
   invoker_e2e_kill_owned_headless_processes
   # Clean up worktrees created during the test.
   git -C "$INVOKER_E2E_REPO_ROOT" worktree prune 2>/dev/null || true
-  rm -rf "${INVOKER_DB_DIR:-}" "${INVOKER_E2E_MARKER_ROOT:-}" "${INVOKER_E2E_STUB_DIR:-}" 2>/dev/null || true
+  rm -rf "${INVOKER_DB_DIR:-}" "${INVOKER_E2E_USER_DATA_ROOT:-}" "${INVOKER_E2E_MARKER_ROOT:-}" "${INVOKER_E2E_STUB_DIR:-}" 2>/dev/null || true
   rm -f "${INVOKER_REPO_CONFIG_PATH:-}" 2>/dev/null || true
 
   # Restore original PATH so claude/gh/codex stubs never leak into user shells.
@@ -286,7 +303,9 @@ invoker_e2e_run_headless() {
   local max_attempts=2
   local status=0
   while :; do
-    if invoker_e2e_run_with_timeout "$INVOKER_E2E_REPO_ROOT/run.sh" --headless "$@"; then
+    local user_data_dir
+    user_data_dir="$(invoker_e2e_make_user_data_dir)"
+    if invoker_e2e_run_with_timeout env INVOKER_USER_DATA_DIR="$user_data_dir" "$INVOKER_E2E_REPO_ROOT/run.sh" --headless "$@"; then
       status=0
     else
       status=$?
@@ -321,7 +340,9 @@ invoker_e2e_submit_plan() {
   max_attempts=2
   status=0
   while :; do
-    if invoker_e2e_run_with_timeout "$INVOKER_E2E_REPO_ROOT/submit-plan.sh" "$patched" "$@"; then
+    local user_data_dir
+    user_data_dir="$(invoker_e2e_make_user_data_dir)"
+    if invoker_e2e_run_with_timeout env INVOKER_USER_DATA_DIR="$user_data_dir" "$INVOKER_E2E_REPO_ROOT/submit-plan.sh" "$patched" "$@"; then
       status=0
     else
       status=$?

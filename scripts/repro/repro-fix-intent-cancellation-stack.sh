@@ -70,6 +70,11 @@ fi
 
 cd "$ROOT_DIR"
 
+# This stack exercises GUI/daemon-owner delegation. Some outer e2e harnesses
+# export standalone mode for isolated headless runs; do not let that force these
+# delegated repros into a second local DB writer.
+unset INVOKER_HEADLESS_STANDALONE
+
 queue_args=()
 shared_args=(--expect "$EXPECTATION")
 late_completion_args=()

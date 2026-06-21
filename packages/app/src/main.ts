@@ -1329,6 +1329,7 @@ function startHeadlessMode(): void {
               ...headlessDeps,
               waitForApproval: payload.waitForApproval,
               noTrack: payload.noTrack,
+              queueNoTrackHeadlessExec: undefined,
               signal: activeMutationContext?.signal,
               mutationTiming: activeMutationContext?.mutationTiming,
             });
@@ -1368,6 +1369,19 @@ function startHeadlessMode(): void {
             { logger },
           );
         }
+        headlessDeps.queueNoTrackHeadlessExec = ({ workflowId, priority, args, waitForApproval: queuedWait }) => {
+          if (!workflowMutationCoordinator) {
+            throw new Error('Workflow mutation coordinator is unavailable');
+          }
+          const payload: HeadlessExecMutationPayload = {
+            args,
+            waitForApproval: queuedWait,
+            noTrack: true,
+          };
+          return workflowMutationCoordinator.submit(workflowId, priority, 'headless.exec', [payload], {
+            deferDrain: true,
+          });
+        };
 
         const buildStandaloneAutoFixQueueSnapshot = (taskId: string): Record<string, unknown> => {
           const workflowId = standaloneWorkflowIdForTaskArg(taskId);
@@ -1672,6 +1686,7 @@ function startHeadlessMode(): void {
               ...headlessDeps,
               waitForApproval: delegatedWait,
               noTrack: delegatedNoTrack,
+              queueNoTrackHeadlessExec: undefined,
               signal: activeMutationContext?.signal,
               mutationTiming: activeMutationContext?.mutationTiming,
             });

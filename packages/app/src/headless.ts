@@ -107,6 +107,12 @@ export interface HeadlessDeps {
   cancelWorkflow?: (workflowId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
   waitForApproval?: boolean;
   noTrack?: boolean;
+  queueNoTrackHeadlessExec?: (request: {
+    workflowId: string;
+    priority: 'normal' | 'high';
+    args: string[];
+    waitForApproval?: boolean;
+  }) => number;
   isStandaloneOwnerIdle?: () => boolean;
   getBundledSkillsStatus?: () => BundledSkillsStatus;
   installBundledSkills?: (mode?: BundledSkillsInstallMode) => BundledSkillsStatus;
@@ -1829,9 +1835,31 @@ async function headlessResolveConflict(taskId: string, deps: HeadlessDeps, agent
   }
 }
 
+function queueNoTrackHeadlessExec(
+  command: 'rebase-retry' | 'rebase-recreate',
+  target: string,
+  workflowId: string,
+  deps: HeadlessDeps,
+): boolean {
+  if (!deps.noTrack || !deps.queueNoTrackHeadlessExec) return false;
+  const intentId = deps.queueNoTrackHeadlessExec({
+    workflowId,
+    priority: 'high',
+    args: [command, target],
+    waitForApproval: deps.waitForApproval,
+  });
+  deps.logger.info(
+    `[headless] --no-track queued ${command} workflow="${workflowId}" intent=${intentId}`,
+    { module: 'headless' },
+  );
+  process.stdout.write(`[headless] --no-track enabled: ${command} accepted; exiting without tracking.\n`);
+  return true;
+}
+
 async function headlessRebaseRetry(target: string, deps: HeadlessDeps): Promise<void> {
   if (!target) throw new Error('Missing arguments. Usage: --headless rebase-retry <workflowId|mergeTaskId|taskId>');
   const workflowId = resolveHeadlessTargetWorkflowId(target, deps.persistence);
+  if (queueNoTrackHeadlessExec('rebase-retry', target, workflowId, deps)) return;
   await preemptWorkflowBeforeMutation(workflowId, {
     preemptWorkflowExecution: (id) => preemptWorkflowExecution(id, deps),
     logger: deps.logger,
@@ -1881,6 +1909,7 @@ async function headlessRebaseRetry(target: string, deps: HeadlessDeps): Promise<
 async function headlessRebaseRecreate(workflowTarget: string, deps: HeadlessDeps): Promise<void> {
   if (!workflowTarget) throw new Error('Missing arguments. Usage: --headless rebase-recreate <workflowId|mergeTaskId|taskId>');
   const workflowId = resolveHeadlessTargetWorkflowId(workflowTarget, deps.persistence);
+  if (queueNoTrackHeadlessExec('rebase-recreate', workflowTarget, workflowId, deps)) return;
   await preemptWorkflowBeforeMutation(workflowId, {
     preemptWorkflowExecution: (id) => preemptWorkflowExecution(id, deps),
     logger: deps.logger,
@@ -1954,15 +1983,15 @@ async function headlessRecreateWorkflow(workflowId: string, deps: HeadlessDeps):
     remoteFetchForPool.enabled = false;
     let topup: TaskState[] = [];
     try {
-      await te.executeTasks(runnable);
-      topup = await executeGlobalTopup({
+      ({ topup } = await dispatchStartedTasksWithGlobalTopup({
         orchestrator: deps.orchestrator,
         taskExecutor: te,
         logger: deps.logger,
         context: 'headless.recreate-workflow',
-        alreadyDispatched: runnable,
+        started,
+        scopedWorkflowId: workflowId,
         mutationTiming: deps.mutationTiming,
-      });
+      }));
     } finally {
       remoteFetchForPool.enabled = true;
     }

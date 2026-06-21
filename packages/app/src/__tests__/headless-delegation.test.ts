@@ -1045,8 +1045,7 @@ describe('headless delegation enforcement', () => {
         expect(mockDeps.commandService.recreateWorkflow).toHaveBeenCalled();
       });
 
-      it('headless recreate dispatches runnable tasks before waiting for completion', async () => {
-        let taskStatus: 'running' | 'completed' = 'running';
+      it('headless recreate claims runnable tasks before no-track return', async () => {
         (mockDeps.commandService as any).recreateWorkflow = vi.fn(async () => ({
           ok: true as const,
           data: [
@@ -1060,40 +1059,29 @@ describe('headless delegation enforcement', () => {
         }));
         mockDeps.orchestrator.startExecution = vi.fn(() => []);
         mockDeps.persistence.updateWorkflow = vi.fn();
-        mockDeps.persistence.listWorkflows = vi.fn(() => [{
-          id: 'wf-1',
-          name: 'test-workflow',
-          generation: 0,
-          status: 'running' as const,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        }]);
-        mockDeps.persistence.loadTasks = vi.fn(() => [{
-          id: 'wf-1/task-1',
-          status: taskStatus,
-          config: { workflowId: 'wf-1' },
-          execution: {},
-        } as any]);
-        mockDeps.orchestrator.getAllTasks = vi.fn(() => [{
-          id: 'wf-1/task-1',
-          status: taskStatus,
-          config: { workflowId: 'wf-1' },
-          execution: {},
-        } as any]);
         mockDeps.orchestrator.getReadyTasks = vi.fn(() => []);
 
         const executeTasksSpy = vi
           .spyOn(TaskRunner.prototype, 'executeTasks')
-          .mockImplementation(async () => {
-            taskStatus = 'completed';
-          });
+          .mockImplementation(async () => {});
 
-        await runHeadless(['recreate', 'wf-1'], mockDeps);
+        const depsWithNoTrack: HeadlessDeps = {
+          ...mockDeps,
+          noTrack: true,
+        } as HeadlessDeps;
 
-        expect(executeTasksSpy).toHaveBeenCalledTimes(1);
-        expect((mockDeps.commandService as any).recreateWorkflow).toHaveBeenCalled();
+        try {
+          await runHeadless(['recreate', 'wf-1'], depsWithNoTrack);
 
-        executeTasksSpy.mockRestore();
+          expect((mockDeps.commandService as any).recreateWorkflow).toHaveBeenCalled();
+          expect(mockDeps.orchestrator.startExecution).toHaveBeenCalledTimes(1);
+          expect(mockDeps.logger?.info).toHaveBeenCalledWith(
+            '[global-topup] headless.recreate-workflow: dispatching 1 scoped task(s): [wf-1/task-1]',
+          );
+          expect(executeTasksSpy).not.toHaveBeenCalled();
+        } finally {
+          executeTasksSpy.mockRestore();
+        }
       });
 
       it('headless rebase preempts resolved workflow before rebase mutation', async () => {
@@ -1323,6 +1311,32 @@ describe('headless delegation enforcement', () => {
 
           expect(preemptWorkflowExecution).toHaveBeenCalledWith('wf-1');
           expect(mockDeps.orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-1', expect.any(Object));
+
+          preparePoolSpy.mockRestore();
+        });
+
+        it('headless `rebase-recreate --no-track` queues through the mutation coordinator when available', async () => {
+          const { preemptWorkflowExecution, preparePoolSpy } = seedRebaseHappyPath();
+          const queueNoTrackHeadlessExec = vi.fn(() => 42);
+
+          const depsWithNoTrack: HeadlessDeps = {
+            ...mockDeps,
+            noTrack: true,
+            preemptWorkflowExecution,
+            queueNoTrackHeadlessExec,
+          } as HeadlessDeps;
+
+          await runHeadless(['rebase-recreate', 'task-1'], depsWithNoTrack);
+
+          expect(queueNoTrackHeadlessExec).toHaveBeenCalledWith({
+            workflowId: 'wf-1',
+            priority: 'high',
+            args: ['rebase-recreate', 'task-1'],
+            waitForApproval: undefined,
+          });
+          expect(preemptWorkflowExecution).not.toHaveBeenCalled();
+          expect(mockDeps.orchestrator.recreateWorkflowFromFreshBase).not.toHaveBeenCalled();
+          expect(preparePoolSpy).not.toHaveBeenCalled();
 
           preparePoolSpy.mockRestore();
         });
