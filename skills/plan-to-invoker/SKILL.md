@@ -31,7 +31,7 @@ In benchmark/direct-output mode:
 - Treat any YAML found in the session text as source material only, not as the final output. Do not copy partial YAML fragments from the session text.
 - Synthesize a fresh complete plan using the skeleton below. The first byte of the file must be the `n` in top-level `name:`.
 - A benchmark output that begins with `version:`, wraps fields under `metadata:`, or omits top-level `repoUrl:` is invalid. Do not write it.
-- Before writing, make the first five non-comment top-level keys exactly this envelope order: `name:`, `onFinish:`, `mergeMode:`, `repoUrl:`, then `tasks:`. If the plan needs PR review intent, add `reviewGate:` only after `tasks:` so the direct-output envelope stays stable.
+- Before writing, make the first five non-comment top-level keys exactly this envelope order: `name:`, `onFinish:`, `mergeMode:`, `repoUrl:`, then `tasks:`.
 - If the prompt has Invoker session metadata but no explicit repo URL, use `https://github.com/Neko-Catpital-Labs/Invoker.git` for `repoUrl` without inspecting git remotes.
 - When the benchmark prompt says not to submit and forbids external dependencies, generate a command-only verification plan: use top-level task `command:` fields, `dependencies: []`, and `onFinish: none`. Do not generate prompt tasks, nested `steps:`, or implementation tasks that would call an agent or autofix.
 - For those isolated benchmark plans, encode the session goal in task descriptions and use deterministic local smoke commands such as `printf` or shell checks that do not assume unprovided artifacts exist.
