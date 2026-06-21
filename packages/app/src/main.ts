@@ -2188,6 +2188,7 @@ function createEmbeddedTerminalBackendFromConfig(
     rebuildTaskRunnerWiring({
       orchestrator,
       persistence,
+      messageBus,
       executorRegistry,
       executionAgentRegistry: agentRegistry,
       repoRoot,

@@ -325,7 +325,7 @@ export class TaskRunner {
   /** @internal */ mergeGateProvider?: MergeGateProvider;
   /** @internal */ reviewProviderRegistry?: ReviewProviderRegistry;
   private onReviewGateCiFailure?: (trigger: ReviewGateCiFailureTrigger) => Promise<void>;
-  private reviewGateCiFixInFlight = new Set<string>();
+  private reviewGateCiFailureInFlight = new Set<string>();
   private getRemoteTargets: () => Record<string, RemoteTargetDisplay>;
   private getExecutionPools: () => Record<string, ExecutionPoolConfig>;
   private dockerConfig: { imageName?: string; secretsFile?: string };
@@ -2442,7 +2442,7 @@ export class TaskRunner {
             this.persistence.updateTask(task.id, {
               execution: { reviewStatus: status.statusText },
             });
-            await this.maybeTriggerReviewGateCiFix(task, status);
+            await this.maybePublishReviewGateCiFailure(task, status);
           }
         } catch (err) {
           this.logger.error(`[merge-gate] PR status check error for ${task.id}`, { err });
@@ -2481,14 +2481,14 @@ export class TaskRunner {
         this.persistence.updateTask(taskId, {
           execution: { reviewStatus: status.statusText },
         });
-        await this.maybeTriggerReviewGateCiFix(task, status);
+        await this.maybePublishReviewGateCiFailure(task, status);
       }
     } catch (err) {
       this.logger.error(`[merge-gate] Manual PR check error for ${taskId}`, { err });
     }
   }
 
-  private async maybeTriggerReviewGateCiFix(
+  private async maybePublishReviewGateCiFailure(
     task: TaskState,
     status: MergeGateApprovalStatus,
   ): Promise<void> {
@@ -2502,9 +2502,9 @@ export class TaskRunner {
       task.execution.generation ?? 0,
       status.headSha ?? 'no-head-sha',
     ].join(':');
-    if (this.reviewGateCiFixInFlight.has(key)) return;
+    if (this.reviewGateCiFailureInFlight.has(key)) return;
 
-    this.reviewGateCiFixInFlight.add(key);
+    this.reviewGateCiFailureInFlight.add(key);
     try {
       await this.onReviewGateCiFailure({
         taskId: task.id,
@@ -2520,7 +2520,7 @@ export class TaskRunner {
         statusText: status.statusText,
       });
     } finally {
-      this.reviewGateCiFixInFlight.delete(key);
+      this.reviewGateCiFailureInFlight.delete(key);
     }
   }
 
