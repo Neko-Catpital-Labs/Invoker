@@ -43,6 +43,7 @@ import {
   registerGuiLifecycleHandlers,
   resolveGuiOwnerPreference,
   runElectronReadyBootstrap,
+  shouldRefreshGuiOwnerRoute,
   startGuiModeBootstrap,
   startMainProcessBootstrap,
 } from './bootstrap/app-bootstrap.js';
@@ -310,6 +311,7 @@ let commandService: CommandService;
 // constructed in initServices before TaskRunner exists, so the deps
 // resolve via this getter at cancel-in-flight time.
 let latestTaskExecutor: TaskRunner | null = null;
+let guiUsingDaemonOwner = false;
 
 function buildCommandServiceInvalidationDeps() {
   return buildWorkflowInvalidationDeps({
@@ -508,10 +510,15 @@ async function ensureStandaloneOwnerForGui(): Promise<void> {
 let guiOwnerRouteRefreshPromise: Promise<void> | null = null;
 
 async function refreshGuiMutationOwnerRoute(): Promise<void> {
-  if (resolveGuiOwnerPreference() !== 'daemon') return;
+  const ownerPreference = resolveGuiOwnerPreference();
+  if (!shouldRefreshGuiOwnerRoute(ownerPreference, guiUsingDaemonOwner)) return;
   if (!guiOwnerRouteRefreshPromise) {
     guiOwnerRouteRefreshPromise = (async () => {
-      await ensureStandaloneOwnerForGui();
+      if (ownerPreference === 'daemon') {
+        await ensureStandaloneOwnerForGui();
+      } else if (!await discoverStandaloneOwnerForGui(2_000)) {
+        throw new Error('No mutation owner is available');
+      }
       const previousMessageBus = typeof messageBus === 'undefined' ? null : messageBus;
       const refreshedMessageBus = new IpcBus(undefined, { allowServe: false });
       await refreshedMessageBus.ready();
@@ -3011,6 +3018,7 @@ function createEmbeddedTerminalBackendFromConfig(
 
     if (daemonGuiOwner) {
       ownerMode = false;
+      guiUsingDaemonOwner = true;
       try {
         recordStartupMark('initServices.readOnly.start');
         await initServices({ readOnly: true, executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
@@ -3023,6 +3031,7 @@ function createEmbeddedTerminalBackendFromConfig(
       }
     } else {
       ownerMode = true;
+      guiUsingDaemonOwner = false;
       try {
         recordStartupMark('initServices.start');
         await initServices({ executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
@@ -3037,6 +3046,7 @@ function createEmbeddedTerminalBackendFromConfig(
         recordStartupMark('initServices.readOnly.start');
         await initServices({ readOnly: true, executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
         ownerMode = false;
+        guiUsingDaemonOwner = false;
         recordStartupMark('initServices.readOnly.end', { ownerMode: false });
       }
     }

@@ -627,12 +627,12 @@ EOF
   fi
 }
 
-test_lint_allows_discovered_external_final_gate() {
-  local temp_plan
-  temp_plan=$(mktemp)
-  trap "rm -f $temp_plan" RETURN
+write_discovered_external_final_gate_plan() {
+  local temp_plan="$1"
+  local discovery_details="$2"
+  local final_command="$3"
 
-  cat > "$temp_plan" <<'EOF'
+  cat > "$temp_plan" <<EOF
 name: "External repo final gate"
 description: "Standalone workflow waiver: single review slice for an external repo with a discovered final gate."
 onFinish: pull_request
@@ -709,14 +709,76 @@ tasks:
       - Option A (chosen): use the discovered package test command.
       - Option B: invent a root full-suite command.
       Implementation details:
-      - Verification command discovery: package.json documents "test": "vitest run"; no test:all script exists.
+      - Verification command discovery: ${discovery_details}
       Layer: e2e_regression
       Feature state: active
-    command: "pnpm test"
+    command: "${final_command}"
     dependencies: [implement-lint-gate]
 EOF
+}
+
+test_lint_allows_discovered_external_final_gate() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  write_discovered_external_final_gate_plan \
+    "$temp_plan" \
+    'package.json documents "test": "vitest run", so pnpm test is the final gate; no test:all script exists.' \
+    "pnpm test"
 
   bash "$LINT_SCRIPT" "$temp_plan" >/dev/null
+}
+
+test_lint_rejects_trivial_discovered_final_gate() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  write_discovered_external_final_gate_plan "$temp_plan" "true is documented in the target repo." "true"
+
+  local output
+  set +e
+  output=$(bash "$LINT_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected lint to reject trivial discovered final gate" >&2
+    return 1
+  fi
+
+  if ! grep -q 'final discovered regression gate must be non-trivial; got "true"' <<<"$output"; then
+    echo "Expected non-trivial final gate error, got: $output" >&2
+    return 1
+  fi
+}
+
+test_lint_rejects_unreferenced_discovered_final_gate() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  write_discovered_external_final_gate_plan \
+    "$temp_plan" \
+    'package.json documents "test": "vitest run"; no test:all script exists.' \
+    "pnpm test"
+
+  local output
+  set +e
+  output=$(bash "$LINT_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected lint to reject unreferenced discovered final gate" >&2
+    return 1
+  fi
+
+  if ! grep -q 'Verification command discovery must reference the final command "pnpm test"' <<<"$output"; then
+    echo "Expected final gate discovery reference error, got: $output" >&2
+    return 1
+  fi
 }
 
 test_lint_allows_nonterminal_stack_workflow_without_test_all() {
@@ -1678,6 +1740,8 @@ run_test "Lint: valid final pnpm run test:all gate" test_lint_valid_final_test_a
 run_test "Lint: reject multi-prompt standalone without waiver" test_lint_rejects_multi_prompt_standalone_without_waiver
 run_test "Lint: reject non-test:all final gate" test_lint_rejects_non_test_all_final_gate
 run_test "Lint: allow discovered external final gate" test_lint_allows_discovered_external_final_gate
+run_test "Lint: reject trivial discovered final gate" test_lint_rejects_trivial_discovered_final_gate
+run_test "Lint: reject unreferenced discovered final gate" test_lint_rejects_unreferenced_discovered_final_gate
 run_test "Lint: allow non-terminal stack workflow without test:all" test_lint_allows_nonterminal_stack_workflow_without_test_all
 run_test "Lint: reject final gate missing dependencies" test_lint_rejects_final_gate_missing_dependencies
 run_test "Lint: reject missing design sections for prompt tasks" test_lint_requires_design_sections_for_prompt_tasks

@@ -6,6 +6,7 @@ import {
   registerGuiLifecycleHandlers,
   resolveGuiOwnerPreference,
   runElectronReadyBootstrap,
+  shouldRefreshGuiOwnerRoute,
   startGuiModeBootstrap,
   startMainProcessBootstrap,
 } from '../bootstrap/app-bootstrap.js';
@@ -221,6 +222,13 @@ describe('app-bootstrap', () => {
     expect(resolveGuiOwnerPreference({ INVOKER_GUI_OWNER_MODE: 'daemon' })).toBe('daemon');
     expect(resolveGuiOwnerPreference({ INVOKER_GUI_OWNER_MODE: 'local' })).toBe('gui');
     expect(resolveGuiOwnerPreference({ INVOKER_GUI_DAEMON_OWNER: '1' })).toBe('daemon');
+  });
+
+  it('refreshes GUI owner routing for daemon-backed GUI clients only', () => {
+    expect(shouldRefreshGuiOwnerRoute('daemon', false)).toBe(true);
+    expect(shouldRefreshGuiOwnerRoute('auto', true)).toBe(true);
+    expect(shouldRefreshGuiOwnerRoute('auto', false)).toBe(false);
+    expect(shouldRefreshGuiOwnerRoute('gui', true)).toBe(false);
   });
 
   it('uses a bounded daemon bootstrap timeout and ignores invalid overrides', () => {

@@ -126,6 +126,10 @@ function normalize_command(s) {
   gsub(/[ \t]+/, " ", s)
   return s
 }
+function is_trivial_final_command(s,    cmd) {
+  cmd = tolower(normalize_command(s))
+  return cmd == ":" || cmd == "true" || cmd == "false" || cmd == "exit 0" || cmd ~ /^(echo|printf)([ \t]|$)/
+}
 function first_experiment_artifact(s,    pattern) {
   if (match(s, /docs\/context\/[^ ,`"'\''\t]+\/experiment-brief\.md/)) {
     return substr(s, RSTART, RLENGTH)
@@ -461,6 +465,10 @@ function flush_task(    wc, and_count, valid_id, d, desc_lower, idx) {
   task_has_command[idx] = has_command
   task_command_line[idx] = normalize_command(command_line)
   task_has_verification_discovery[idx] = (tolower(desc) ~ /verification command discovery:/)
+  task_verification_discovery_mentions_command[idx] = 0
+  if (task_has_verification_discovery[idx] == 1 && task_command_line[idx] != "" && index(tolower(desc), tolower(task_command_line[idx])) > 0) {
+    task_verification_discovery_mentions_command[idx] = 1
+  }
   task_id_to_index[id] = idx
 
   artifact_path = first_experiment_artifact(desc " " prompt_text)
@@ -714,6 +722,10 @@ END {
       errors[++errn] = "Task \"" final_id "\" must be a command task because standalone implementation plans and terminal stack workflows require a final discovered regression gate"
     } else if (final_command != "pnpm run test:all" && task_has_verification_discovery[final_idx] != 1) {
       errors[++errn] = "Task \"" final_id "\" must run \"pnpm run test:all\" for Invoker plans or include \"Verification command discovery:\" in its description explaining the target repo discovered final regression command"
+    } else if (final_command != "pnpm run test:all" && is_trivial_final_command(final_command)) {
+      errors[++errn] = "Task \"" final_id "\" final discovered regression gate must be non-trivial; got \"" final_command "\""
+    } else if (final_command != "pnpm run test:all" && task_verification_discovery_mentions_command[final_idx] != 1) {
+      errors[++errn] = "Task \"" final_id "\" Verification command discovery must reference the final command \"" final_command "\""
     }
 
     split(task_dependencies[final_idx], final_dep_ids, /,/)

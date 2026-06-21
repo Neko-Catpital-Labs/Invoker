@@ -11,6 +11,13 @@ export function resolveGuiOwnerPreference(env: NodeJS.ProcessEnv = process.env):
   return 'auto';
 }
 
+export function shouldRefreshGuiOwnerRoute(
+  preference: GuiOwnerPreference,
+  isUsingDaemonOwner: boolean,
+): boolean {
+  return preference === 'daemon' || (preference === 'auto' && isUsingDaemonOwner);
+}
+
 export function guiOwnerBootstrapTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
   const parsed = Number.parseInt(
     env.INVOKER_GUI_OWNER_BOOTSTRAP_TIMEOUT_MS
