@@ -788,6 +788,54 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'closed-status-merge-gate');
   });
 
+  test('review gate stack side panel shows a linear PR chain', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MERGE_GATE_TEXT_VISUAL_PLAN);
+    await page.locator('.react-flow__node[data-testid$="mg-visual-work"]').first().waitFor({ state: 'visible', timeout: 15000 });
+
+    const mergeGateTaskId = await page.evaluate(async () => {
+      const result = await window.invoker.getTasks();
+      const tasks = Array.isArray(result) ? result : result.tasks;
+      const mergeTask = tasks.find((task: { id: string }) => task.id.includes('__merge__'));
+      return mergeTask?.id ?? null;
+    });
+    expect(mergeGateTaskId).toBeTruthy();
+
+    await injectTaskStates(page, [
+      {
+        taskId: mergeGateTaskId!,
+        changes: {
+          status: 'review_ready',
+          execution: {
+            reviewGate: {
+              activeGeneration: 0,
+              completion: { required: 'all', status: 'approved' },
+              artifacts: [
+                { id: 'contracts', title: 'Contracts PR', url: 'https://example.test/contracts', required: true, status: 'open', generation: 0 },
+                { id: 'runtime', title: 'Runtime PR', url: 'https://example.test/runtime', required: true, status: 'open', generation: 0, dependsOn: ['contracts'] },
+                { id: 'ui', title: 'UI PR', url: 'https://example.test/ui', required: true, status: 'open', generation: 0, dependsOn: ['runtime'] },
+              ],
+            },
+          },
+        },
+      },
+    ]);
+
+    const mergeGateNode = page
+      .locator(`.react-flow__node[data-testid="${mergeGateTaskId}"], .react-flow__node[data-testid$="${mergeGateTaskId}"]`)
+      .first();
+    await mergeGateNode.click();
+    const stackSection = page.locator('section').filter({ hasText: 'Pull Request Stack' }).first();
+    await expect(stackSection.getByText('Pull Request Stack')).toBeVisible();
+    await expect(stackSection.getByText('Contracts PR')).toBeVisible();
+    await expect(stackSection.getByText('Runtime PR')).toBeVisible();
+    await expect(stackSection.getByText('UI PR')).toBeVisible();
+    await expect(stackSection.getByTestId('review-gate-connector').first()).toBeVisible();
+    await expect(stackSection.getByText(/depends on/i)).toHaveCount(0);
+
+    await captureScreenshot(page, 'review-gate-stack-side-panel');
+    await assertPageScreenshot(page, 'review-gate-stack-side-panel');
+  });
+
   test('workflow inspector captures review-ready and not-review-ready pull request states', async ({ page }) => {
     const workflowId = await loadPlanAndSelectWorkflow(page, REVIEW_READY_WORKFLOW_PR_PLAN);
     await page.locator('.react-flow__node[data-testid$="rr-work"]').first().waitFor({ state: 'visible', timeout: 15000 });
