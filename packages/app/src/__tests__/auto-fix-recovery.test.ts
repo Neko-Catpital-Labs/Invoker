@@ -11,6 +11,7 @@ import {
   listAutoFixRecoveryScanCandidates,
   RECOVERY_WORKER_KIND,
 } from '../workers/auto-fix-recovery.js';
+import type { RecoveryWorkerWakeupHint } from '../lifecycle-events.js';
 
 const logger = {
   info: vi.fn(),
@@ -42,7 +43,11 @@ function makeTask(overrides: Partial<TaskState> = {}): TaskState {
   };
 }
 
-function makeRecoveryPolicyHarness(task: TaskState = makeTask(), existingIntents: WorkflowMutationIntent[] = []) {
+function makeRecoveryPolicyHarness(
+  task: TaskState = makeTask(),
+  existingIntents: WorkflowMutationIntent[] = [],
+  drainWakeupHints?: () => RecoveryWorkerWakeupHint[],
+) {
   const workflows = [{ id: 'wf-1' }];
   const tasks = new Map<string, TaskState>([[task.id, task]]);
   const intents: WorkflowMutationIntent[] = [...existingIntents];
@@ -75,6 +80,7 @@ function makeRecoveryPolicyHarness(task: TaskState = makeTask(), existingIntents
     logger,
     defaultAutoFixRetries: 3,
     getAutoFixAgent: () => 'codex',
+    ...(drainWakeupHints ? { drainWakeupHints } : {}),
   };
   return { options, submit, logEvent, tasks, intents };
 }
@@ -232,6 +238,66 @@ describe('auto-fix recovery candidate validation', () => {
       expect.objectContaining({
         phase: 'worker-autofix-skip',
         reason: 'already-queued-intent',
+      }),
+    );
+  });
+
+  it('deduplicates repeated wakeups for the same failed task', async () => {
+    const wakeup = {
+      eventKey: 'event-1',
+      eventKind: 'task.failed' as const,
+      workflowId: 'wf-1',
+      taskId: 'wf-1/task-1',
+      taskStateVersion: 4,
+      generation: 1,
+      attemptId: 'attempt-1',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      reason: 'task_failure' as const,
+      authoritative: false as const,
+    };
+    const harness = makeRecoveryPolicyHarness(makeTask(), [], () => [wakeup, wakeup]);
+    const tick = createAutoFixRecoveryTick(harness.options);
+
+    await tick({
+      identity: { kind: 'recovery', instanceId: 'test' },
+      reason: 'wake',
+      tickNumber: 1,
+    });
+
+    expect(harness.submit).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips stale generation wakeups without submitting a command', async () => {
+    const task = makeTask({ execution: { error: 'boom', autoFixAttempts: 0, generation: 2, selectedAttemptId: 'attempt-2' } });
+    const wakeup = {
+      eventKey: 'event-old',
+      eventKind: 'task.failed' as const,
+      workflowId: 'wf-1',
+      taskId: 'wf-1/task-1',
+      taskStateVersion: 4,
+      generation: 1,
+      attemptId: 'attempt-1',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      reason: 'task_failure' as const,
+      authoritative: false as const,
+    };
+    const harness = makeRecoveryPolicyHarness(task, [], () => [wakeup]);
+    const tick = createAutoFixRecoveryTick(harness.options);
+
+    await tick({
+      identity: { kind: 'recovery', instanceId: 'test' },
+      reason: 'wake',
+      tickNumber: 1,
+    });
+
+    expect(harness.submit).not.toHaveBeenCalled();
+    expect(harness.logEvent).toHaveBeenCalledWith(
+      'wf-1/task-1',
+      'debug.auto-fix',
+      expect.objectContaining({
+        phase: 'worker-autofix-skip',
+        reason: 'stale-generation',
+        latestGeneration: 2,
       }),
     );
   });
