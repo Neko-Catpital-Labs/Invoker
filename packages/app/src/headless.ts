@@ -61,6 +61,7 @@ import {
 import { LaunchDispatcher } from './launch-dispatcher.js';
 import { RECOVERY_WORKER_KIND } from './worker-runtime.js';
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
+import { formatHeadlessSetSubcommands } from './headless-command-registry.js';
 import { trackWorkflow } from './headless-watch.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
@@ -957,7 +958,7 @@ async function headlessCostEvents(
 async function headlessSet(args: string[], deps: HeadlessDeps): Promise<void> {
   const subCommand = args[0];
   if (!subCommand) {
-    throw new Error('Missing set sub-command. Usage: --headless set <command|prompt|pool|agent|merge-mode|gate-policy|workflow|task>');
+    throw new Error(`Missing set sub-command. Usage: --headless set <${formatHeadlessSetSubcommands('|')}>`);
   }
 
   switch (subCommand) {
@@ -994,7 +995,7 @@ async function headlessSet(args: string[], deps: HeadlessDeps): Promise<void> {
       await headlessSetTaskMetadata(args[1], args[2], args.slice(3).join(' '), deps);
       break;
     default:
-      throw new Error(`Unknown set sub-command: "${subCommand}". Use: command, prompt, executor, agent, merge-mode, fix-prompt, fix-context, gate-policy, workflow, task`);
+      throw new Error(`Unknown set sub-command: "${subCommand}". Use: ${formatHeadlessSetSubcommands(', ')}`);
   }
 }
 
