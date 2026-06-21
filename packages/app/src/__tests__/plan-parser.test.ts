@@ -370,6 +370,22 @@ tasks:
     expect(() => parsePlan(yaml)).toThrow('must have a "description" field');
   });
 
+  it('rejects plan with duplicate task ids', () => {
+    const yaml = `
+name: Dup Plan
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: build
+    description: First build
+    command: echo "one"
+  - id: build
+    description: Second build
+    command: echo "two"
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow('Duplicate task id "build"');
+  });
+
   it('rejects task commands using npx vitest run', () => {
     const yaml = `
 name: Bad Command Plan
