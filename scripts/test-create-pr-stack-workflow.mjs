@@ -20,7 +20,11 @@ Keep stack publication on the supported path.
 
 ## Review Lane
 
-- behavior
+- policy
+
+## Review Unit
+
+- tooling-policy
 
 ## Safety Invariant
 
@@ -231,6 +235,10 @@ function baseArgs() {
   return ['--title', 'test title', '--base', 'master', '--body-file', 'pr-body.md'];
 }
 
+function stackTitleArgs(base = 'master') {
+  return ['--title', '[Graph Blanking](1) Preserve graph blanking', '--base', base, '--body-file', 'pr-body.md'];
+}
+
 function expectNoPush(harness, label) {
   assert(readLogLines(harness.pushLog).length === 0, `${label}: expected no git push attempt`);
 }
@@ -262,8 +270,8 @@ function testMergifyManagedCreateRefusal() {
     setManagedBranchConfig(work, 'pr/stack-create');
 
     const result = runCreatePr(work, harness, baseArgs());
-    assert(result.status === 1, 'managed stack create should fail');
-    assert(result.stderr.includes('This branch is managed by Mergify stacks.'), 'managed stack create should explain branch state');
+    assert(result.status === 1, `managed stack create should fail\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert(result.stderr.includes('This branch is managed by Mergify stacks.'), `managed stack create should explain branch state\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
     assert(result.stderr.includes('mergify stack push'), 'managed stack create should require mergify stack push');
     expectNoPush(harness, 'managed create refusal');
   } finally {
@@ -281,7 +289,7 @@ function testMergifyManagedUpdateSkipsPush() {
     gitQuiet(work, 'push', '-u', 'origin', branch);
     setManagedBranchConfig(work, branch);
 
-    const result = runCreatePr(work, harness, [...baseArgs(), '--update-existing'], {
+    const result = runCreatePr(work, harness, [...stackTitleArgs(), '--update-existing'], {
       GH_API_PULLS_JSON: JSON.stringify([
         {
           number: 42,
@@ -307,8 +315,58 @@ function testMergifyManagedUpdateSkipsPush() {
     assert(ghCalls.some((call) => call.route.includes('/pulls?')), 'managed update should look up current branch PR');
     const patchCall = ghCalls.find((call) => call.route.endsWith('/pulls/42'));
     assert(Boolean(patchCall), 'managed update should patch the existing PR');
-    assert(patchCall.stdin.includes('"title":"test title"'), 'managed update patch should include title');
+    assert(patchCall.stdin.includes('"title":"[Graph Blanking](1) Preserve graph blanking"'), 'managed update patch should include title');
     assert(patchCall.stdin.includes('## Summary'), 'managed update patch should include PR body');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
+function testMergifyManagedUpdateRejectsPlainTitle() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    const branch = 'stack/test-title-reject';
+    createTrackedBranch(work, branch);
+    commitFile(work, 'stack.txt', 'stack\n', 'stack update\n\nChange-Id: Ititle0001');
+    gitQuiet(work, 'push', '-u', 'origin', branch);
+    setManagedBranchConfig(work, branch);
+
+    const result = runCreatePr(work, harness, [...baseArgs(), '--update-existing']);
+
+    assert(result.status === 1, 'managed stack update should reject a plain title');
+    assert(result.stderr.includes('Stack PR titles must start with a shared idea'), 'stack title error should explain format');
+    expectNoPush(harness, 'managed title rejection');
+    assert(readGhCalls(harness.ghLog).length === 0, 'managed title rejection should fail before GitHub calls');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
+function testMergifyManagedUpdateRejectsNestedTitle() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    const branch = 'stack/test-nested-title-reject';
+    createTrackedBranch(work, branch);
+    commitFile(work, 'stack.txt', 'stack\n', 'stack update\n\nChange-Id: Inested0001');
+    gitQuiet(work, 'push', '-u', 'origin', branch);
+    setManagedBranchConfig(work, branch);
+
+    const result = runCreatePr(work, harness, [
+      '--title',
+      '[Graph Blanking](1)(2) Follow-up slice',
+      '--base',
+      'master',
+      '--body-file',
+      'pr-body.md',
+      '--update-existing',
+    ]);
+
+    assert(result.status === 1, 'managed stack update should reject a nested title');
+    assert(result.stderr.includes('exactly one slice index'), 'nested stack title error should explain format');
+    expectNoPush(harness, 'managed nested title rejection');
+    assert(readGhCalls(harness.ghLog).length === 0, 'managed nested title rejection should fail before GitHub calls');
   } finally {
     rmSync(harness.root, { recursive: true, force: true });
   }
@@ -345,7 +403,7 @@ function testCurrentBranchPrLookupFailure() {
     gitQuiet(work, 'push', '-u', 'origin', branch);
     setManagedBranchConfig(work, branch);
 
-    const result = runCreatePr(work, harness, [...baseArgs(), '--update-existing'], {
+    const result = runCreatePr(work, harness, [...stackTitleArgs(), '--update-existing'], {
       GH_API_PULLS_JSON: '[]',
     });
 
@@ -353,6 +411,26 @@ function testCurrentBranchPrLookupFailure() {
     assert(result.stderr.includes(`No PR exists for current branch "${branch}" in owner/repo.`), 'missing PR lookup should name the current branch');
     assert(result.stderr.includes('Run `mergify stack push` first for stack branches'), 'missing PR lookup should explain next step');
     expectNoPush(harness, 'missing current-branch PR');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
+function testStackedDiffTitleRequiredForNonTrunkBase() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    gitQuiet(work, 'branch', 'pr/previous', 'origin/master');
+    gitQuiet(work, 'push', 'origin', 'pr/previous');
+    createTrackedBranch(work, 'pr/stacked-diff', 'origin/pr/previous');
+    commitFile(work, 'stacked.txt', 'stacked\n', 'stacked diff');
+
+    const result = runCreatePr(work, harness, ['--title', 'plain title', '--base', 'pr/previous', '--body-file', 'pr-body.md']);
+
+    assert(result.status === 1, 'stacked diff PR should reject a plain title');
+    assert(result.stderr.includes('Stack PR titles must start with a shared idea'), 'stacked diff title error should explain format');
+    expectNoPush(harness, 'stacked diff title rejection');
+    assert(readGhCalls(harness.ghLog).length === 0, 'stacked diff title rejection should fail before GitHub calls');
   } finally {
     rmSync(harness.root, { recursive: true, force: true });
   }
@@ -374,8 +452,11 @@ const tests = [
   testStaleBaseDetection,
   testMergifyManagedCreateRefusal,
   testMergifyManagedUpdateSkipsPush,
+  testMergifyManagedUpdateRejectsPlainTitle,
+  testMergifyManagedUpdateRejectsNestedTitle,
   testUnpublishedStackCommitsBlockUpdate,
   testCurrentBranchPrLookupFailure,
+  testStackedDiffTitleRequiredForNonTrunkBase,
   testHelpMentionsStackUpdateFlow,
 ];
 
