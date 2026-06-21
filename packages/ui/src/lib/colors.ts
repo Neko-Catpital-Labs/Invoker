@@ -47,12 +47,16 @@ export function getStatusInlineColors(status: string): {
 export function getEffectiveVisualStatus(
   status: string,
   execution?: { isFixingWithAI?: boolean; pendingFixError?: string; phase?: string },
+  opts?: { runningLike?: boolean },
 ): string {
   if (status === 'fixing_with_ai') return 'fixing_with_ai';
   if (status === 'running' && execution?.isFixingWithAI) return 'fixing_with_ai';
+  if (opts?.runningLike === true && execution?.phase === 'launching') return 'running_launching';
+  if (opts?.runningLike === true && execution?.phase === 'executing') return 'running_executing';
+  if (opts?.runningLike === true) return 'running';
+  if (status === 'awaiting_approval' && execution?.pendingFixError) return 'fix_approval';
   if (status === 'running' && execution?.phase === 'launching') return 'running_launching';
   if (status === 'running' && execution?.phase === 'executing') return 'running_executing';
-  if (status === 'awaiting_approval' && execution?.pendingFixError) return 'fix_approval';
   return status;
 }
 

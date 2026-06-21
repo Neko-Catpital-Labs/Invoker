@@ -6,19 +6,20 @@
  * Status labels are clickable to filter DAG nodes by status.
  */
 
-import type { TaskState } from '../types.js';
+import type { QueueStatus, TaskState } from '../types.js';
 import { getStatusVisual } from '../lib/status-colors.js';
 
 interface StatusBarProps {
   tasks: Map<string, TaskState>;
+  queueStatus?: QueueStatus | null;
   activeFilters?: Set<string>;
   keyboardActiveKey?: string | null;
   onStatusClick?: (filterKey: string, event: React.MouseEvent) => void;
 }
 
-export function StatusBar({ tasks, activeFilters, keyboardActiveKey, onStatusClick }: StatusBarProps) {
+export function StatusBar({ tasks, queueStatus, activeFilters, keyboardActiveKey, onStatusClick }: StatusBarProps) {
   let completed = 0;
-  let running = 0;
+  let running = queueStatus?.runningCount ?? 0;
   let failed = 0;
   let closed = 0;
   let pending = 0;
@@ -28,6 +29,7 @@ export function StatusBar({ tasks, activeFilters, keyboardActiveKey, onStatusCli
   let blocked = 0;
   let fixing = 0;
   let fixApproval = 0;
+  const runningTaskIds = new Set((queueStatus?.running ?? []).map((entry) => entry.taskId));
 
   for (const task of tasks.values()) {
     switch (task.status) {
@@ -37,7 +39,7 @@ export function StatusBar({ tasks, activeFilters, keyboardActiveKey, onStatusCli
       case 'running':
         if (task.execution.isFixingWithAI) {
           fixing++;
-        } else {
+        } else if (!queueStatus) {
           running++;
         }
         break;
@@ -51,7 +53,9 @@ export function StatusBar({ tasks, activeFilters, keyboardActiveKey, onStatusCli
         closed++;
         break;
       case 'pending':
-        pending++;
+        if (!runningTaskIds.has(task.id)) {
+          pending++;
+        }
         break;
       case 'needs_input':
         needsInput++;
@@ -185,6 +189,11 @@ export function StatusBar({ tasks, activeFilters, keyboardActiveKey, onStatusCli
           onClick={(e) => onStatusClick?.('fixing_with_ai', e)}
         >
           Fixing: <span className="font-medium">{fixing}</span>
+        </span>
+      )}
+      {queueStatus && (
+        <span className="text-xs text-gray-400">
+          Running includes launching and AI-fix work.
         </span>
       )}
       {fixApproval > 0 && (
