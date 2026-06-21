@@ -20,7 +20,7 @@ interface ValidationError {
 }
 
 const VALID_ON_FINISH = ['none', 'merge', 'pull_request'] as const;
-const VALID_MERGE_MODE = ['manual', 'automatic', 'github', 'external_review'] as const;
+const VALID_MERGE_MODE = ['manual', 'automatic', 'external_review'] as const;
 const VALID_REQUIRED_STATUS = ['completed', 'review_ready'] as const;
 const VALID_GATE_POLICY = ['completed', 'review_ready'] as const;
 
@@ -181,6 +181,143 @@ function validateExternalDeps(
   });
 }
 
+function validateReviewGate(reviewGate: unknown, errors: ValidationError[]): void {
+  if (!reviewGate || typeof reviewGate !== 'object' || Array.isArray(reviewGate)) {
+    errors.push({
+      errorType: 'invalid_field_type',
+      field: 'reviewGate',
+      message: 'reviewGate must be an object',
+      value: reviewGate,
+    });
+    return;
+  }
+
+  const artifacts = (reviewGate as { artifacts?: unknown }).artifacts;
+  if (!Array.isArray(artifacts)) {
+    errors.push({
+      errorType: 'invalid_field_type',
+      field: 'reviewGate.artifacts',
+      message: 'reviewGate.artifacts must be an array',
+      value: artifacts,
+    });
+    return;
+  }
+
+  const ids = new Set<string>();
+  const normalizedArtifacts: Array<{ id: string; dependsOn: string[] }> = [];
+  artifacts.forEach((artifact, index) => {
+    const field = `reviewGate.artifacts[${index}]`;
+    if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) {
+      errors.push({
+        errorType: 'invalid_field_type',
+        field,
+        message: `${field} must be an object`,
+        value: artifact,
+      });
+      return;
+    }
+    const record = artifact as { id?: unknown; required?: unknown; dependsOn?: unknown };
+    if (typeof record.id !== 'string' || record.id.trim() === '') {
+      errors.push({
+        errorType: 'missing_required_field',
+        field: `${field}.id`,
+        message: `${field}.id must be a non-empty string`,
+        value: record.id,
+      });
+      return;
+    }
+    if (ids.has(record.id)) {
+      errors.push({
+        errorType: 'duplicate_id',
+        field: `${field}.id`,
+        message: `${field}.id duplicates artifact "${record.id}"`,
+        value: record.id,
+      });
+      return;
+    }
+    ids.add(record.id);
+    if (record.required === undefined) {
+      record.required = true;
+    } else if (typeof record.required !== 'boolean') {
+      errors.push({
+        errorType: 'invalid_field_type',
+        field: `${field}.required`,
+        message: `${field}.required must be a boolean when provided`,
+        value: record.required,
+      });
+    }
+    if (record.dependsOn !== undefined && !Array.isArray(record.dependsOn)) {
+      errors.push({
+        errorType: 'invalid_field_type',
+        field: `${field}.dependsOn`,
+        message: `${field}.dependsOn must be an array`,
+        value: record.dependsOn,
+      });
+      return;
+    }
+    const dependsOn = (record.dependsOn ?? []) as unknown[];
+    const normalizedDependsOn: string[] = [];
+    for (const dependency of dependsOn) {
+      if (typeof dependency !== 'string' || dependency.trim() === '') {
+        errors.push({
+          errorType: 'invalid_field_type',
+          field: `${field}.dependsOn`,
+          message: `${field}.dependsOn must contain non-empty artifact ids`,
+          value: dependency,
+        });
+        return;
+      }
+      normalizedDependsOn.push(dependency);
+    }
+    normalizedArtifacts.push({ id: record.id, dependsOn: normalizedDependsOn });
+  });
+
+  normalizedArtifacts.forEach((artifact, index) => {
+    const field = `reviewGate.artifacts[${index}].dependsOn`;
+    for (const dependency of artifact.dependsOn) {
+      if (!ids.has(dependency)) {
+        errors.push({
+          errorType: 'invalid_dependency_reference',
+          field,
+          message: `${field} references unknown artifact "${dependency}"`,
+          value: dependency,
+        });
+      } else if (dependency === artifact.id) {
+        errors.push({
+          errorType: 'invalid_dependency_reference',
+          field,
+          message: `${field} must not reference artifact "${artifact.id}" itself`,
+          value: dependency,
+        });
+      }
+    }
+  });
+
+  const graph = new Map(normalizedArtifacts.map((artifact) => [artifact.id, artifact.dependsOn]));
+  const visitState = new Map<string, 'visiting' | 'visited'>();
+  const visit = (id: string): boolean => {
+    const state = visitState.get(id);
+    if (state === 'visiting') return true;
+    if (state === 'visited') return false;
+    visitState.set(id, 'visiting');
+    for (const dependency of graph.get(id) ?? []) {
+      if (visit(dependency)) return true;
+    }
+    visitState.set(id, 'visited');
+    return false;
+  };
+  for (const artifact of normalizedArtifacts) {
+    if (visit(artifact.id)) {
+      errors.push({
+        errorType: 'cyclic_dependency',
+        field: 'reviewGate.artifacts',
+        message: 'reviewGate.artifacts must not contain dependency cycles',
+      });
+      break;
+    }
+  }
+}
+
 function validatePlan(yamlContent: string): ValidationError[] {
   const errors: ValidationError[] = [];
 
@@ -287,6 +424,9 @@ function validatePlan(yamlContent: string): ValidationError[] {
   // Validate plan-level externalDependencies structure
   if (raw.externalDependencies) {
     validateExternalDeps(raw.externalDependencies, 'externalDependencies', errors);
+  }
+  if ((raw as RawPlan & { reviewGate?: unknown }).reviewGate !== undefined) {
+    validateReviewGate((raw as RawPlan & { reviewGate?: unknown }).reviewGate, errors);
   }
 
   // Collect all externalDependencies (plan-level + task-level) for cross-checks
