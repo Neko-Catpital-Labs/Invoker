@@ -1607,9 +1607,7 @@ function startHeadlessMode(): void {
             return orchestrator.getWorkflowStatus();
           }
           if (kind === 'tasks' || kind === 'task-graph-refresh') {
-            if (kind === 'task-graph-refresh') {
-              orchestrator.syncAllFromDb();
-            }
+            orchestrator.syncAllFromDb();
             return {
               tasks: orchestrator.getAllTasks(),
               workflows: persistence.listWorkflows(),
@@ -3134,9 +3132,7 @@ function createEmbeddedTerminalBackendFromConfig(
           return orchestrator.getWorkflowStatus();
         }
         if (kind === 'tasks' || kind === 'task-graph-refresh') {
-          if (kind === 'task-graph-refresh') {
-            orchestrator.syncAllFromDb();
-          }
+          orchestrator.syncAllFromDb();
           return {
             tasks: orchestrator.getAllTasks(),
             workflows: persistence.listWorkflows(),

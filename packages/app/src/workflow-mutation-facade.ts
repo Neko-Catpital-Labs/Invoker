@@ -18,7 +18,7 @@
 import type { Logger } from '@invoker/contracts';
 import { makeEnvelope } from '@invoker/contracts';
 import { OrchestratorError, OrchestratorErrorCode } from '@invoker/workflow-core';
-import type { CommandService, Orchestrator, ExternalGatePolicyUpdate, TaskState } from '@invoker/workflow-core';
+import type { CommandService, Orchestrator, ExternalGatePolicyUpdate, TaskState, ReviewArtifactInput, ReviewGateExecution } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { TaskRunner } from '@invoker/execution-engine';
 import {
@@ -366,6 +366,22 @@ export class WorkflowMutationFacade {
       persistence: this.deps.persistence,
       taskExecutor: this.deps.taskExecutor,
     });
+  }
+
+  async attachReviewArtifact(workflowId: string, artifact: ReviewArtifactInput): Promise<ReviewGateExecution> {
+    const result = await this.deps.commandService.attachReviewArtifact(
+      makeEnvelope('attach-review-artifact', 'surface', 'workflow', { workflowId, artifact }),
+    );
+    if (!result.ok) throw new Error(result.error.message);
+    return result.data;
+  }
+
+  async sealReviewGate(workflowId: string): Promise<ReviewGateExecution> {
+    const result = await this.deps.commandService.sealReviewGate(
+      makeEnvelope('seal-review-gate', 'surface', 'workflow', { workflowId }),
+    );
+    if (!result.ok) throw new Error(result.error.message);
+    return result.data;
   }
 
   async setWorkflowMetadata(
