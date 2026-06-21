@@ -18,6 +18,7 @@ function installInvoker(opts: {
   onTaskGraphEventMock: ReturnType<typeof vi.fn>;
   refreshTaskGraphMock: ReturnType<typeof vi.fn>;
   fireDelta: (delta: unknown) => void;
+  fireSnapshot: (snapshot: TaskSnapshot & { reason?: string }) => void;
 } {
   let handler: ((event: unknown) => void) | undefined;
 
@@ -61,6 +62,13 @@ function installInvoker(opts: {
     onTaskGraphEventMock,
     refreshTaskGraphMock,
     fireDelta: (delta) => handler?.({ type: 'delta', delta }),
+    fireSnapshot: (snapshot) => handler?.({
+      type: 'snapshot',
+      tasks: snapshot.tasks,
+      workflows: snapshot.workflows,
+      reason: snapshot.reason ?? 'test-snapshot',
+      streamSequence: snapshot.streamSequence,
+    }),
   };
 }
 
@@ -245,5 +253,43 @@ describe('useTasks stream-sequence gap-detect', () => {
     expect(result.current.tasks.get('t1')?.status).toBe('running');
     expect(getTasksMock).not.toHaveBeenCalled();
     expect(reportUiPerfMock.mock.calls.filter((c) => c[0] === 'ui_delta_stream_gap_detected')).toHaveLength(0);
+  });
+
+  it('ignores stale empty snapshots below the current stream watermark', async () => {
+    const t1 = makeUITask({ id: 't1', status: 'running' });
+
+    const {
+      refreshTaskGraphMock,
+      reportUiPerfMock,
+      onTaskGraphEventMock,
+      fireSnapshot,
+    } = installInvoker({
+      bootstrap: { tasks: [t1], streamSequence: 10 },
+      responses: [{ tasks: [t1], workflows: [], streamSequence: 10 }],
+    });
+
+    const { result } = renderHook(() => useTasks());
+
+    await waitFor(() => {
+      expect(onTaskGraphEventMock).toHaveBeenCalledTimes(1);
+    });
+
+    await act(async () => {
+      fireSnapshot({
+        tasks: [],
+        workflows: [],
+        streamSequence: 9,
+        reason: 'stale-empty',
+      });
+      await new Promise((resolve) => setTimeout(resolve, 130));
+    });
+
+    expect(result.current.tasks.has('t1')).toBe(true);
+    expect(refreshTaskGraphMock).not.toHaveBeenCalled();
+    expect(reportUiPerfMock).toHaveBeenCalledWith('ui_task_graph_stale_snapshot_ignored', {
+      current: 10,
+      snapshot: 9,
+      reason: 'stale-empty',
+    });
   });
 });
