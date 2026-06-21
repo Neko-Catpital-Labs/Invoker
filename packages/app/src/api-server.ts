@@ -47,7 +47,7 @@ import {
   PlanConflictError,
   TopologyForkRequired,
 } from '@invoker/workflow-core';
-import type { ExternalGatePolicyUpdate, Orchestrator, ReviewArtifactInput, ReviewGateExecution } from '@invoker/workflow-core';
+import type { ExternalGatePolicyUpdate, Orchestrator } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { ExecutorRegistry } from '@invoker/execution-engine';
 import type {
@@ -95,8 +95,6 @@ export interface ApiMutationFacade {
   forkWorkflow(workflowId: string): Promise<ForkMutationResult>;
   cancelWorkflow(workflowId: string): Promise<CancelMutationResult>;
   setWorkflowMergeMode(workflowId: string, mergeMode: string): Promise<void>;
-  attachReviewArtifact(workflowId: string, artifact: ReviewArtifactInput): Promise<ReviewGateExecution>;
-  sealReviewGate(workflowId: string): Promise<ReviewGateExecution>;
   setWorkflowMetadata(
     workflowId: string,
     fieldPath: string,
@@ -719,34 +717,6 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
             upstreamWorkflowId,
             action: 'detached',
           });
-        } catch (err) {
-          json(res, httpStatusForError(err), { error: errorMessage(err) });
-        }
-        return;
-      }
-
-      // POST /api/workflows/:id/review-artifacts
-      const wfReviewArtifactsMatch = path.match(/^\/api\/workflows\/([^/]+)\/review-artifacts$/);
-      if (method === 'POST' && wfReviewArtifactsMatch) {
-        const workflowId = decodeURIComponent(wfReviewArtifactsMatch[1]);
-        try {
-          const artifact = JSON.parse(await readBody(req)) as ReviewArtifactInput;
-          const reviewGate = await mutations.attachReviewArtifact(workflowId, artifact);
-          json(res, 200, { ok: true, reviewGate });
-        } catch (err) {
-          json(res, httpStatusForError(err), { error: errorMessage(err) });
-        }
-        return;
-      }
-
-      // POST /api/workflows/:id/review-gate/seal
-      const wfReviewGateSealMatch = path.match(/^\/api\/workflows\/([^/]+)\/review-gate\/seal$/);
-      if (method === 'POST' && wfReviewGateSealMatch) {
-        const workflowId = decodeURIComponent(wfReviewGateSealMatch[1]);
-        try {
-          await readBody(req);
-          const reviewGate = await mutations.sealReviewGate(workflowId);
-          json(res, 200, { ok: true, reviewGate });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });
         }

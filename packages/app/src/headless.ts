@@ -13,7 +13,7 @@ import type { BundledSkillsInstallMode, BundledSkillsStatus, Logger } from '@inv
 import { makeEnvelope } from '@invoker/contracts';
 import type { AgentSessionData } from '@invoker/contracts';
 import { OrchestratorErrorCode } from '@invoker/workflow-core';
-import type { Attempt, Orchestrator, CommandService, ReviewArtifactInput, TaskDelta, TaskState } from '@invoker/workflow-core';
+import type { Attempt, Orchestrator, CommandService, TaskDelta, TaskState } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { Channels } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
@@ -998,75 +998,6 @@ async function headlessSet(args: string[], deps: HeadlessDeps): Promise<void> {
   }
 }
 
-function parseReviewGateAttachArgs(args: string[]): { workflowId: string; artifact: ReviewArtifactInput } {
-  const workflowId = args[0];
-  const url = args[1];
-  if (!workflowId || !url) {
-    throw new Error('Usage: --headless review-gate attach <workflowId> <url> [--identifier <id>] [--title <title>] [--base <branch>] [--head <branch>]');
-  }
-  const artifact: ReviewArtifactInput = { url };
-  for (let index = 2; index < args.length; index += 1) {
-    const flag = args[index];
-    const value = args[index + 1];
-    if (!value) throw new Error(`Missing value for ${flag}`);
-    switch (flag) {
-      case '--identifier':
-        artifact.identifier = value;
-        break;
-      case '--title':
-        artifact.title = value;
-        break;
-      case '--base':
-        artifact.baseBranch = value;
-        break;
-      case '--head':
-        artifact.headBranch = value;
-        break;
-      default:
-        throw new Error(`Unknown review-gate attach flag: ${flag}`);
-    }
-    index += 1;
-  }
-  return { workflowId, artifact };
-}
-
-async function headlessReviewGate(args: string[], deps: HeadlessDeps): Promise<void> {
-  const subCommand = args[0];
-  if (!subCommand) {
-    throw new Error('Missing review-gate sub-command. Usage: --headless review-gate <attach|seal|check>');
-  }
-  if (subCommand === 'attach') {
-    const { workflowId, artifact } = parseReviewGateAttachArgs(args.slice(1));
-    const result = await deps.commandService.attachReviewArtifact(
-      makeEnvelope('headless.review-gate.attach', 'headless', 'workflow', { workflowId, artifact }),
-    );
-    if (!result.ok) throw new Error(result.error.message);
-    process.stdout.write(`Attached review artifact to workflow "${workflowId}".\n`);
-    return;
-  }
-  if (subCommand === 'seal') {
-    const workflowId = args[1];
-    if (!workflowId) throw new Error('Usage: --headless review-gate seal <workflowId>');
-    const result = await deps.commandService.sealReviewGate(
-      makeEnvelope('headless.review-gate.seal', 'headless', 'workflow', { workflowId }),
-    );
-    if (!result.ok) throw new Error(result.error.message);
-    process.stdout.write(`Sealed review gate for workflow "${workflowId}".\n`);
-    return;
-  }
-  if (subCommand === 'check') {
-    const workflowId = args[1];
-    if (!workflowId) throw new Error('Usage: --headless review-gate check <workflowId>');
-    const mergeTask = deps.orchestrator.getMergeNode(workflowId);
-    if (!mergeTask) throw new Error(`Workflow "${workflowId}" has no review gate`);
-    const taskExecutor = createHeadlessExecutor(deps);
-    await taskExecutor.checkPrApprovalNow(mergeTask.id);
-    process.stdout.write(`Checked review gate for workflow "${workflowId}".\n`);
-    return;
-  }
-  throw new Error(`Unknown review-gate sub-command: "${subCommand}". Use: attach, seal, check`);
-}
-
 async function headlessMigrateCompatibility(deps: HeadlessDeps): Promise<void> {
   const report = deps.persistence.runCompatibilityMigration();
   process.stdout.write(`${BOLD}Compatibility migration complete.${RESET}\n`);
@@ -1108,9 +1039,6 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       break;
     case 'set':
       await headlessSet(args.slice(1), deps);
-      break;
-    case 'review-gate':
-      await headlessReviewGate(args.slice(1), deps);
       break;
     case 'migrate-compat':
       await headlessMigrateCompatibility(deps);
@@ -2021,39 +1949,41 @@ async function headlessRecreateWorkflow(workflowId: string, deps: HeadlessDeps):
   if (!recreateWfResult.ok) throw new Error(recreateWfResult.error.message);
   const started = recreateWfResult.data;
   const runnable = started.filter(isDispatchableLaunch);
-  const te = createHeadlessExecutor(deps);
-  const autoFix = wireHeadlessAutoFix(deps, te);
-  remoteFetchForPool.enabled = false;
-  let topup: TaskState[] = [];
-  try {
-    ({ topup } = await dispatchStartedTasksWithGlobalTopup({
-      orchestrator: deps.orchestrator,
-      taskExecutor: te,
-      logger: deps.logger,
-      context: 'headless.recreate-workflow',
-      started,
-      mutationTiming: deps.mutationTiming,
-    }));
-  } finally {
-    remoteFetchForPool.enabled = true;
-  }
-  if (runnable.length + topup.length === 0) {
+  if (runnable.length > 0) {
+    const te = createHeadlessExecutor(deps);
+    const autoFix = wireHeadlessAutoFix(deps, te);
+    remoteFetchForPool.enabled = false;
+    let topup: TaskState[] = [];
+    try {
+      await te.executeTasks(runnable);
+      topup = await executeGlobalTopup({
+        orchestrator: deps.orchestrator,
+        taskExecutor: te,
+        logger: deps.logger,
+        context: 'headless.recreate-workflow',
+        alreadyDispatched: runnable,
+        mutationTiming: deps.mutationTiming,
+      });
+    } finally {
+      remoteFetchForPool.enabled = true;
+    }
+    if (runnable.length + topup.length === 0) {
+      autoFix.unsubscribe();
+      return;
+    }
+    if (deps.noTrack) {
+      process.stdout.write('[headless] --no-track enabled: recreate accepted; exiting without tracking.\n');
+      autoFix.unsubscribe();
+      return;
+    }
+    await trackHeadlessWorkflow(workflowId, deps, {
+      hasBackgroundWork: autoFix.isBusy,
+      printSummary: false,
+      printTaskOutput: true,
+      setExitCodeOnFailure: false,
+    });
     autoFix.unsubscribe();
-    return;
   }
-  if (deps.noTrack) {
-    process.stdout.write('[headless] --no-track enabled: recreate accepted; exiting without tracking.\n');
-    autoFix.unsubscribe();
-    return;
-  }
-  await trackHeadlessWorkflow(workflowId, deps, {
-    hasBackgroundWork: autoFix.isBusy,
-    printSummary: false,
-    printTaskOutput: true,
-    setExitCodeOnFailure: false,
-  });
-  autoFix.unsubscribe();
-
   const tasksStarted = runnable.length;
   process.stdout.write(`Recreate workflow "${workflowId}" — ${tasksStarted} task(s) to execute (pool fetch skipped)\n`);
 }
