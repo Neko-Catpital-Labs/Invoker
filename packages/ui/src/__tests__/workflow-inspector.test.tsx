@@ -188,6 +188,132 @@ describe('WorkflowInspector', () => {
     expect(link).toHaveAttribute('href', 'https://github.com/org/repo/pull/34');
   });
 
+  it('shows an empty pull request stack when review gate metadata has no current artifacts', () => {
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'review_ready' }}
+        task={null}
+        reviewGate={{
+          workflowId: 'wf-1',
+          mergeTaskId: '__merge__wf-1',
+          status: 'review_ready',
+          activeGeneration: 0,
+          completion: { required: 'all', status: 'approved' },
+          ready: false,
+          artifacts: [],
+          discardedArtifacts: [],
+          edges: [],
+        }}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('Pull Request Stack')).toBeInTheDocument();
+    expect(screen.getByText('No pull requests yet')).toBeInTheDocument();
+  });
+
+  it('renders a flat pull request stack in artifact order', () => {
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'review_ready' }}
+        task={null}
+        reviewGate={{
+          workflowId: 'wf-1',
+          mergeTaskId: '__merge__wf-1',
+          status: 'review_ready',
+          activeGeneration: 0,
+          completion: { required: 'all', status: 'approved' },
+          ready: false,
+          artifacts: [
+            { id: 'contracts', title: 'Define contracts', url: 'https://example.test/contracts', required: true, status: 'open', generation: 0 },
+            { id: 'runtime', title: 'Wire runtime', url: 'https://example.test/runtime', required: true, status: 'open', generation: 0 },
+          ],
+          discardedArtifacts: [],
+          edges: [],
+        }}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getAllByTestId('inspector-pr-link').map((link) => link.textContent)).toEqual([
+      'Define contracts',
+      'Wire runtime',
+    ]);
+  });
+
+  it('renders a branched pull request stack with connectors', () => {
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'review_ready' }}
+        task={null}
+        reviewGate={{
+          workflowId: 'wf-1',
+          mergeTaskId: '__merge__wf-1',
+          status: 'review_ready',
+          activeGeneration: 0,
+          completion: { required: 'all', status: 'approved' },
+          ready: false,
+          artifacts: [
+            { id: 'contracts', title: 'Contracts', url: 'https://example.test/contracts', required: true, status: 'approved', generation: 0 },
+            { id: 'runtime', title: 'Runtime', url: 'https://example.test/runtime', required: true, status: 'open', generation: 0, dependsOn: ['contracts'] },
+            { id: 'ui', title: 'UI', url: 'https://example.test/ui', required: true, status: 'open', generation: 0, dependsOn: ['contracts'] },
+          ],
+          discardedArtifacts: [],
+          edges: [{ from: 'contracts', to: 'runtime' }, { from: 'contracts', to: 'ui' }],
+        }}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getAllByTestId('review-gate-connector')).toHaveLength(3);
+    expect(screen.getAllByText('depends on contracts')).toHaveLength(2);
+    expect(screen.getAllByTestId('inspector-pr-link').map((link) => link.textContent)).toEqual([
+      'Contracts',
+      'Runtime',
+      'UI',
+    ]);
+  });
+
+  it('hides discarded artifacts from the main pull request stack', () => {
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'review_ready' }}
+        task={null}
+        reviewGate={{
+          workflowId: 'wf-1',
+          mergeTaskId: '__merge__wf-1',
+          status: 'review_ready',
+          activeGeneration: 1,
+          completion: { required: 'all', status: 'approved' },
+          ready: false,
+          artifacts: [
+            { id: 'runtime', title: 'Runtime', url: 'https://example.test/runtime', required: true, status: 'open', generation: 1 },
+          ],
+          discardedArtifacts: [
+            { id: 'contracts', title: 'Discarded contracts', required: true, status: 'discarded', generation: 0, discardedAt: '2024-01-01T00:00:00Z' },
+          ],
+          edges: [],
+        }}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('Runtime')).toBeInTheDocument();
+    expect(screen.queryByText('Discarded contracts')).not.toBeInTheDocument();
+  });
+
   it('can be collapsed and restored', () => {
     const { rerender } = render(
       <WorkflowInspector

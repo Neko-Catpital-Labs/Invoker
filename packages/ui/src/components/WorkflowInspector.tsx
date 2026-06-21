@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { TaskState, WorkflowMeta } from '../types.js';
+import type { ReviewGateArtifact, ReviewGateQueryResponse, TaskState, WorkflowMeta } from '../types.js';
 import { getEffectiveVisualStatus, getStatusColor } from '../lib/colors.js';
 import { workflowStatusVisual } from '../lib/workflow-status.js';
 
@@ -9,6 +9,7 @@ interface WorkflowInspectorProps {
   workflow: WorkflowMeta | null;
   task: TaskState | null;
   workflowTasks?: Map<string, TaskState>;
+  reviewGate?: ReviewGateQueryResponse | null;
   remoteTargets?: string[];
   executionPools?: string[];
   executionAgents?: string[];
@@ -56,10 +57,84 @@ function getReviewReadyMergeNodeReviewUrl(
   return undefined;
 }
 
+function sortArtifactsByDependency(artifacts: readonly ReviewGateArtifact[]): { artifacts: ReviewGateArtifact[]; cyclic: boolean } {
+  const byId = new Map(artifacts.map((artifact) => [artifact.id, artifact]));
+  const emitted = new Set<string>();
+  const sorted: ReviewGateArtifact[] = [];
+  while (sorted.length < artifacts.length) {
+    let progressed = false;
+    for (const artifact of artifacts) {
+      if (emitted.has(artifact.id)) continue;
+      const dependencies = (artifact.dependsOn ?? []).filter((id) => byId.has(id));
+      if (dependencies.every((id) => emitted.has(id))) {
+        emitted.add(artifact.id);
+        sorted.push(artifact);
+        progressed = true;
+      }
+    }
+    if (!progressed) {
+      return { artifacts: [...artifacts], cyclic: true };
+    }
+  }
+  return { artifacts: sorted, cyclic: false };
+}
+
+function artifactLabel(artifact: ReviewGateArtifact): string {
+  return artifact.title || artifact.url || (artifact.providerId ? `#${artifact.providerId}` : artifact.id);
+}
+
+function ReviewGateStackSection({ reviewGate }: { reviewGate: ReviewGateQueryResponse }): JSX.Element {
+  const { artifacts, cyclic } = sortArtifactsByDependency(reviewGate.artifacts);
+  return (
+    <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
+      <div className="text-[11px] uppercase tracking-wide text-gray-400">Pull Request Stack</div>
+      {artifacts.length === 0 ? (
+        <div className="mt-2 text-xs text-gray-500">No pull requests yet</div>
+      ) : (
+        <ol className="mt-2 space-y-2">
+          {artifacts.map((artifact, index) => (
+            <li key={artifact.id} className="relative pl-5 text-xs">
+              {!cyclic && (
+                <span
+                  aria-hidden="true"
+                  data-testid="review-gate-connector"
+                  className="absolute left-1 top-0 h-full border-l border-gray-600 before:absolute before:left-0 before:top-3 before:w-3 before:border-t before:border-gray-600"
+                />
+              )}
+              <div className="rounded border border-gray-700 bg-gray-950/80 px-2 py-1">
+                {artifact.url ? (
+                  <a
+                    href={artifact.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    data-testid="inspector-pr-link"
+                    data-sidebar-nav-item
+                    data-sidebar-nav-order={String(30 + index)}
+                    className="text-blue-300 underline break-words"
+                  >
+                    {artifactLabel(artifact)}
+                  </a>
+                ) : (
+                  <div className="text-gray-200">{artifactLabel(artifact)}</div>
+                )}
+                <div className="mt-1 text-[11px] text-gray-400">{formatStatus(artifact.status)}</div>
+                {(artifact.dependsOn?.length ?? 0) > 0 && (
+                  <div className="mt-1 text-[11px] text-gray-500">depends on {artifact.dependsOn!.join(', ')}</div>
+                )}
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  );
+}
+
 export function WorkflowInspector({
   workflow,
   task,
   workflowTasks,
+  reviewGate,
   executionPools,
   executionAgents,
   collapsed,
@@ -408,7 +483,9 @@ export function WorkflowInspector({
           </section>
         )}
 
-        {reviewUrl && (
+        {reviewGate ? (
+          <ReviewGateStackSection reviewGate={reviewGate} />
+        ) : reviewUrl && (
           <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
             <div className="text-[11px] uppercase tracking-wide text-gray-400">Pull Request</div>
             <a
