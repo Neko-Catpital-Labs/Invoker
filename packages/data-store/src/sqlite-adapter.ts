@@ -3690,6 +3690,18 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return workflowIds.length;
   }
 
+  requeueWorkflowMutationLeasesOwnedByOther(ownerId: string): number {
+    const rows = this.queryAll(
+      'SELECT workflow_id FROM workflow_mutation_leases WHERE owner_id != ?',
+      [ownerId],
+    );
+    const workflowIds = rows.map((row) => String(row.workflow_id));
+    for (const workflowId of workflowIds) {
+      this.requeueWorkflowMutationLease(workflowId);
+    }
+    return workflowIds.length;
+  }
+
   completeWorkflowMutationIntent(id: number): void {
     this.execRun(
       `UPDATE workflow_mutation_intents

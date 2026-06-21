@@ -312,6 +312,89 @@ async function dispatchHeadlessRunnableTasks(
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
+type RestoredTaskReference = {
+  workflowId: string;
+  resolvedTaskId: string;
+};
+
+function workflowIdFromTaskId(taskId: string): string | undefined {
+  const slash = taskId.indexOf('/');
+  return slash > 0 ? taskId.slice(0, slash) : undefined;
+}
+
+function resolveLoadedTask(taskId: string, deps: HeadlessDeps): RestoredTaskReference | undefined {
+  const exact = deps.orchestrator.getTask(taskId);
+  if (exact?.config.workflowId) {
+    return { workflowId: exact.config.workflowId, resolvedTaskId: exact.id };
+  }
+
+  const getAllTasks = (deps.orchestrator as { getAllTasks?: () => TaskState[] }).getAllTasks;
+  if (!getAllTasks || taskId.includes('/')) return undefined;
+
+  const suffix = `/${taskId}`;
+  const matches = getAllTasks()
+    .filter((task) => task.id === taskId || task.id.endsWith(suffix))
+    .filter((task) => task.config.workflowId);
+
+  if (matches.length === 1) {
+    const [task] = matches;
+    return { workflowId: task.config.workflowId!, resolvedTaskId: task.id };
+  }
+  if (matches.length > 1) {
+    throw new Error(`Task "${taskId}" is ambiguous; use a workflow-scoped task id.`);
+  }
+  return undefined;
+}
+
+function restoreWorkflowForTask(taskId: string, deps: HeadlessDeps): RestoredTaskReference {
+  const alreadyLoaded = resolveLoadedTask(taskId, deps);
+  if (alreadyLoaded) return alreadyLoaded;
+
+  const workflows = deps.persistence.listWorkflows();
+  const inferredWorkflowId = workflowIdFromTaskId(taskId);
+  const workflowIds = inferredWorkflowId
+    ? [inferredWorkflowId]
+    : workflows.map((workflow) => workflow.id);
+
+  for (const workflowId of workflowIds) {
+    deps.orchestrator.syncFromDb(workflowId);
+    const restored = resolveLoadedTask(taskId, deps);
+    if (restored) return restored;
+  }
+
+  throw new Error(`Task "${taskId}" not found`);
+}
+
+function restoreWorkflowForTaskUnlessDeleteAllWon(
+  taskId: string,
+  deps: HeadlessDeps,
+  action: string,
+): RestoredTaskReference | null {
+  try {
+    return restoreWorkflowForTask(taskId, deps);
+  } catch (err) {
+    if (deps.persistence.listWorkflows().length === 0) {
+      deps.logger?.info?.(
+        `headless ${action}: task "${taskId}" is already gone after delete-all; treating as no-op`,
+        { module: 'headless' },
+      );
+      return null;
+    }
+    throw err;
+  }
+}
+
+async function withRestoredTaskUnlessDeleteAllWon(
+  taskId: string,
+  deps: HeadlessDeps,
+  action: string,
+  fn: (restored: RestoredTaskReference) => Promise<void>,
+): Promise<void> {
+  const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, action);
+  if (!restored) return;
+  await fn(restored);
+}
+
 export function wireHeadlessAutoFix(
   deps: Pick<HeadlessDeps, 'logger' | 'messageBus' | 'orchestrator' | 'persistence' | 'commandService' | 'mutationTiming'>,
   taskExecutor: Pick<TaskRunner, 'executeTasks' | 'fixWithAgent' | 'resolveConflict'>,
@@ -1949,6 +2032,25 @@ async function headlessRecreateWorkflow(workflowId: string, deps: HeadlessDeps):
   const started = recreateWfResult.data;
   const runnable = started.filter(isDispatchableLaunch);
   if (runnable.length > 0) {
+    if (deps.noTrack) {
+      if (deps.deferRunnableTasks) {
+        deps.deferRunnableTasks(runnable, workflowId);
+      } else {
+        const te = createHeadlessExecutor(deps);
+        const launch = setTimeout(() => {
+          void te.executeTasks(runnable).catch((err) => {
+            deps.logger.error(
+              `background no-track workflow recreate failed for ${workflowId}: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
+              { module: 'headless' },
+            );
+          });
+        }, 25);
+        launch.unref?.();
+      }
+      process.stdout.write('[headless] --no-track enabled: recreate accepted; exiting without tracking.\n');
+      return;
+    }
+
     const te = createHeadlessExecutor(deps);
     const autoFix = wireHeadlessAutoFix(deps, te);
     remoteFetchForPool.enabled = false;
@@ -1967,11 +2069,6 @@ async function headlessRecreateWorkflow(workflowId: string, deps: HeadlessDeps):
       remoteFetchForPool.enabled = true;
     }
     if (runnable.length + topup.length === 0) {
-      autoFix.unsubscribe();
-      return;
-    }
-    if (deps.noTrack) {
-      process.stdout.write('[headless] --no-track enabled: recreate accepted; exiting without tracking.\n');
       autoFix.unsubscribe();
       return;
     }
@@ -2538,7 +2635,7 @@ export async function resolveAgentSession(
   };
 }
 
-async function headlessSession(taskId: string | undefined, deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence' | 'executionAgentRegistry'>): Promise<void> {
+async function headlessSession(taskId: string | undefined, deps: HeadlessDeps): Promise<void> {
   if (!taskId) throw new Error('Usage: --headless session <taskId>');
   taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
   const task = deps.orchestrator.getTask(taskId);
@@ -2547,8 +2644,6 @@ async function headlessSession(taskId: string | undefined, deps: Pick<HeadlessDe
   let sessionId = task.execution.agentSessionId ?? task.execution.lastAgentSessionId;
   let agentName = task.execution.agentName ?? task.execution.lastAgentName ?? 'claude';
 
-  // Fallback: if current execution dropped agentSessionId, recover the most
-  // recent session from task event payloads.
   if (!sessionId) {
     const events = deps.persistence.getEvents(taskId) ?? [];
     for (let i = events.length - 1; i >= 0; i -= 1) {
@@ -2566,7 +2661,7 @@ async function headlessSession(taskId: string | undefined, deps: Pick<HeadlessDe
           break;
         }
       } catch {
-        // Ignore malformed payload JSON
+        // Ignore malformed payload JSON.
       }
     }
   }
@@ -2626,7 +2721,7 @@ async function headlessCancel(taskId: string, deps: HeadlessDeps): Promise<void>
           return;
         }
       } catch {
-        /* API unreachable — fall back to DB-only cancel */
+        /* API unreachable: fall back to DB-only cancel. */
       }
     }
 
@@ -2723,11 +2818,9 @@ async function headlessOpenTerminal(taskId: string, deps: HeadlessDeps): Promise
 
 async function headlessDeleteWorkflow(workflowId: string, deps: HeadlessDeps): Promise<void> {
   if (!workflowId) throw new Error('Missing workflowId. Usage: --headless delete-workflow <workflowId>');
-  // Preempt running tasks (kill processes + cancel) — matches owner-mode bridge contract
   await preemptWorkflowExecution(workflowId, deps);
   const taskExecutor = createHeadlessExecutor(deps);
   await taskExecutor.closeWorkflowReview(workflowId);
-  // Serialized via CommandService: DB delete + memory clear + scheduler cleanup + removal deltas
   const envelope = makeEnvelope('delete-workflow', 'headless', 'workflow', { workflowId });
   const result = await deps.commandService.deleteWorkflow(envelope);
   if (!result.ok) throw new Error(result.error.message);
@@ -2755,36 +2848,6 @@ async function headlessDetachWorkflow(
   );
 }
 
-/**
- * Headless `set merge-mode` — **retry-class** invalidation route per
- * Step 9 of `docs/architecture/task-invalidation-roadmap.md` (chart
- * Decision Table row "Change merge mode";
- * `MUTATION_POLICIES.mergeMode` → `retryTask` / task scope, scoped
- * to the merge node). Mirrors the Step 5 `set type` headless pattern
- * (retry-class, preserves branch / workspacePath lineage) rather
- * than the Step 2/3/4 recreate-class headless paths
- * (`set command` / `set prompt` / `set agent`).
- *
- * Step 9 routes the headless surface through
- * `commandService.editTaskMergeMode` so the orchestrator's
- * cancel-first seam (`Orchestrator.editTaskMergeMode`) runs under
- * the workflow mutex; same-mode no-op detection,
- * `persistence.updateWorkflow({ mergeMode })`, and the single
- * `withBumpedExecutionGeneration` bump live in `restartTask` (today's
- * `retryTask` compatibility wire — see `MUTATION_POLICIES.mergeMode`
- * and `buildInvalidationDeps`).
- *
- * The CLI argument is still a workflow id (matches the legacy
- * `set-merge-mode <workflowId> <mode>` surface and the
- * `invoker:set-merge-mode` IPC). `mergeMode` is normalized at the
- * app boundary because that concerns UI/CLI input parsing, not the
- * chart's invalidation routing. The merge-task-id translation
- * (`workflowId → __merge__<workflowId>`) happens here because the
- * orchestrator seam speaks merge-node task ids. When the workflow
- * has no merge node (degenerate workflows that opted out of a merge
- * gate) we persist the new mode directly via the shared
- * `setWorkflowMergeMode` action — there is nothing to retry.
- */
 async function headlessSetMergeMode(
   workflowId: string,
   mergeMode: string,
@@ -2829,31 +2892,6 @@ async function headlessSetMergeMode(
   process.stdout.write(`Merge mode updated for ${workflowId}: ${wf?.mergeMode ?? '?'}\n`);
 }
 
-/**
- * Headless `set fix-prompt` / `set fix-context` — **retry-class**
- * invalidation route per Step 10 of
- * `docs/architecture/task-invalidation-roadmap.md` (chart Decision
- * Table row "Change fix prompt or fix context while
- * `fixing_with_ai`"; `MUTATION_POLICIES.fixContext` → `retryTask` /
- * task scope, scoped to the failed/fixing task).
- *
- * Step 10 routes the headless surface through
- * `commandService.editTaskFixContext` so the orchestrator's
- * cancel-first seam (`Orchestrator.editTaskFixContext`) runs under
- * the workflow mutex; same-content no-op detection,
- * `config.fixPrompt` / `config.fixContext` persistence, and the
- * single `withBumpedExecutionGeneration` bump live in `restartTask`
- * (today's `retryTask` compatibility wire — see
- * `MUTATION_POLICIES.fixContext` and `buildInvalidationDeps`).
- *
- * The CLI argument is a task id (matches the Step 2/3 `set command` /
- * `set prompt` headless surface). The `patch` discriminates between
- * `fixPrompt` and `fixContext` at the dispatcher: `set fix-prompt`
- * forwards `{ fixPrompt }`, `set fix-context` forwards
- * `{ fixContext }`. Omitted keys leave the existing config field
- * untouched per `Orchestrator.editTaskFixContext`'s same-content
- * detection contract.
- */
 async function headlessSetFixContext(
   taskId: string,
   patch: { fixPrompt?: string; fixContext?: string },
@@ -2882,7 +2920,7 @@ async function headlessSetFixContext(
     await taskExecutor.executeTasks(runnable);
   }
   const value = 'fixPrompt' in patch ? patch.fixPrompt : patch.fixContext;
-  process.stdout.write(`Updated ${which} for "${taskId}" → "${value ?? ''}"\n`);
+  process.stdout.write(`Updated ${which} for "${taskId}" -> "${value ?? ''}"\n`);
 
   if (deps.noTrack) {
     process.stdout.write(`[headless] --no-track enabled: set ${which} accepted; exiting without tracking.\n`);
@@ -2954,7 +2992,7 @@ async function headlessSetWorkflowMetadata(
     fieldPath,
     parseMetadataValue(rawValue),
   );
-  process.stdout.write(`Updated workflow "${result.id}" ${result.fieldPath} → ${JSON.stringify(result.value)}\n`);
+  process.stdout.write(`Updated workflow "${result.id}" ${result.fieldPath} -> ${JSON.stringify(result.value)}\n`);
 }
 
 async function headlessSetTaskMetadata(
@@ -2976,7 +3014,7 @@ async function headlessSetTaskMetadata(
     fieldPath,
     parseMetadataValue(rawValue),
   );
-  process.stdout.write(`Updated task "${result.id}" ${result.fieldPath} → ${JSON.stringify(result.value)}\n`);
+  process.stdout.write(`Updated task "${result.id}" ${result.fieldPath} -> ${JSON.stringify(result.value)}\n`);
 }
 
 async function headlessSlack(deps: HeadlessDeps): Promise<void> {
@@ -3013,7 +3051,6 @@ async function headlessSlack(deps: HeadlessDeps): Promise<void> {
 
   logFn('slack', 'info', 'Slack bot is running (headless, using TaskRunner). Press Ctrl+C to stop.');
 
-  // Stay alive until SIGINT/SIGTERM
   await new Promise<void>((resolve) => {
     const shutdown = async () => {
       await api.close().catch(() => {});
@@ -3025,103 +3062,3 @@ async function headlessSlack(deps: HeadlessDeps): Promise<void> {
     process.on('SIGTERM', shutdown);
   });
 }
-
-// ── Headless Helpers ─────────────────────────────────────────
-
-function restoreWorkflowForTask(
-  taskId: string,
-  deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence'>,
-): { workflowId: string; resolvedTaskId: string } {
-  const restored = tryRestoreWorkflowForTask(taskId, deps);
-  if (restored) {
-    return restored;
-  }
-  throw new Error(`Task "${taskId}" not found in any workflow`);
-}
-
-function tryRestoreWorkflowForTask(
-  taskId: string,
-  deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence'>,
-): { workflowId: string; resolvedTaskId: string } | null {
-  const { orchestrator, persistence } = deps;
-  const workflows = persistence.listWorkflows();
-  for (const wf of workflows) {
-    const tasks = persistence.loadTasks(wf.id);
-    const match = tasks.find(t => t.id === taskId || t.id.endsWith('/' + taskId));
-    if (match) {
-      // Keep lookup read-only: load graph state from DB without starting tasks.
-      orchestrator.syncFromDb(wf.id);
-      return { workflowId: wf.id, resolvedTaskId: match.id };
-    }
-  }
-  return null;
-}
-
-function restoreWorkflowForTaskUnlessDeleteAllWon(
-  taskId: string,
-  deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence'>,
-  commandLabel: string,
-): { workflowId: string; resolvedTaskId: string } | null {
-  const restored = tryRestoreWorkflowForTask(taskId, deps);
-  if (restored) {
-    return restored;
-  }
-  if (deps.persistence.listWorkflows().length === 0) {
-    process.stdout.write(`[headless] ${commandLabel} skipped: task "${taskId}" was removed by delete-all.\n`);
-    return null;
-  }
-  throw new Error(`Task "${taskId}" not found in any workflow`);
-}
-
-async function withRestoredTaskUnlessDeleteAllWon<T>(
-  taskId: string,
-  deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence'>,
-  commandLabel: string,
-  run: (restored: { workflowId: string; resolvedTaskId: string }) => Promise<T>,
-): Promise<T | undefined> {
-  const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, commandLabel);
-  if (!restored) return undefined;
-  return await run(restored);
-}
-
-async function waitForCompletion(
-  orchestrator: Orchestrator,
-  workflowId?: string,
-  waitForApproval?: boolean,
-  hasBackgroundWork?: () => boolean,
-): Promise<void> {
-  const maxWaitMs = waitForApproval ? 86_400_000 : 1_800_000; // 24 hours if waiting for approval, else 30 minutes
-  const pollIntervalMs = 100;
-  const start = Date.now();
-
-  if (waitForApproval) {
-    process.stdout.write('[headless] Waiting for PR approval (--wait-for-approval)...\n');
-  }
-
-  while (Date.now() - start < maxWaitMs) {
-    let tasks = orchestrator.getAllTasks();
-    if (workflowId) {
-      tasks = tasks.filter((t) => t.config.workflowId === workflowId);
-    }
-    let readyTasks = orchestrator.getReadyTasks();
-    if (workflowId) {
-      readyTasks = readyTasks.filter((t) => t.config.workflowId === workflowId);
-    }
-    const settledStatuses = waitForApproval
-      ? ['completed', 'failed', 'closed', 'needs_input', 'blocked', 'stale']
-      : ['completed', 'failed', 'closed', 'needs_input', 'awaiting_approval', 'review_ready', 'blocked', 'stale'];
-    const allSettled = tasks.every((t) => settledStatuses.includes(t.status));
-    if (allSettled && !hasBackgroundWork?.()) return;
-    // Also settle if nothing is running and at least one task awaits human action.
-    // Pending merge gates can't progress until their upstream is approved.
-    const noneRunning = !tasks.some(
-      (t) => t.status === 'running' || t.status === 'fixing_with_ai',
-    );
-    const hasReadyPending = readyTasks.some((t) => t.status === 'pending');
-    const hasHumanBlocked = tasks.some((t) => settledStatuses.includes(t.status) && t.status !== 'completed');
-    if (noneRunning && hasHumanBlocked && !hasBackgroundWork?.()) return;
-    if (noneRunning && !hasReadyPending && !hasBackgroundWork?.()) return;
-    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-  }
-}
-// ── Headless Delegation ──────────────────────────────────────

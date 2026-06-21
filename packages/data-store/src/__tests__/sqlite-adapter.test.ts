@@ -3990,6 +3990,36 @@ describe('SQLiteAdapter', () => {
   });
 
   describe('workflow mutation intent eviction', () => {
+    it('requeues running intents leased by another owner', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveWorkflow({
+        ...testWorkflow,
+        id: 'wf-2',
+        name: 'Second Workflow',
+      });
+
+      const staleIntent = adapter.enqueueWorkflowMutationIntent('wf-1', 'headless.exec', [{ args: ['fix', 'wf-1/root'] }], 'normal');
+      const currentOwnerIntent = adapter.enqueueWorkflowMutationIntent('wf-2', 'headless.exec', [{ args: ['retry', 'wf-2'] }], 'normal');
+
+      expect(adapter.claimNextWorkflowMutationIntent('wf-1', 'owner-old')?.id).toBe(staleIntent);
+      expect(adapter.claimWorkflowMutationLease('wf-1', 'owner-old', {
+        activeIntentId: staleIntent,
+        activeMutationKind: 'headless.exec',
+      })).toBe(true);
+      expect(adapter.claimNextWorkflowMutationIntent('wf-2', 'owner-new')?.id).toBe(currentOwnerIntent);
+      expect(adapter.claimWorkflowMutationLease('wf-2', 'owner-new', {
+        activeIntentId: currentOwnerIntent,
+        activeMutationKind: 'headless.exec',
+      })).toBe(true);
+
+      expect(adapter.requeueWorkflowMutationLeasesOwnedByOther('owner-new')).toBe(1);
+
+      expect(adapter.loadWorkflowMutationIntent(staleIntent)?.status).toBe('queued');
+      expect(adapter.loadWorkflowMutationIntent(staleIntent)?.ownerId).toBeUndefined();
+      expect(adapter.loadWorkflowMutationIntent(currentOwnerIntent)?.status).toBe('running');
+      expect(adapter.listWorkflowMutationLeases().map((lease) => lease.workflowId)).toEqual(['wf-2']);
+    });
+
     it('fails queued intents for a workflow before a fence intent id', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveWorkflow({

@@ -1367,6 +1367,16 @@ function startHeadlessMode(): void {
             { logger },
           );
         }
+        if (standaloneMode && !readOnlyMode) {
+          await recoverWorkflowMutationsOnStartup({
+            ownerMode: true,
+            persistence,
+            ownerId: workflowMutationOwnerId,
+            workflowMutationCoordinator,
+            logger,
+            maybeDelayResume: maybeDelayWorkflowResumeForTest,
+          });
+        }
 
         const buildStandaloneAutoFixQueueSnapshot = (taskId: string): Record<string, unknown> => {
           const workflowId = standaloneWorkflowIdForTaskArg(taskId);
@@ -2841,6 +2851,7 @@ function createEmbeddedTerminalBackendFromConfig(
       void recoverWorkflowMutationsOnStartup({
         ownerMode,
         persistence,
+        ownerId: workflowMutationOwnerId,
         workflowMutationCoordinator: workflowMutationCoordinator ?? undefined,
         logger,
         maybeDelayResume: maybeDelayWorkflowResumeForTest,

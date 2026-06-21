@@ -142,6 +142,40 @@ describe('headless delegation enforcement', () => {
         runHeadless(['status'], mockDeps)
       ).resolves.toBeUndefined();
     });
+
+    it('allows deprecated task-status command to hydrate and print a persisted task status', async () => {
+      mockDeps.persistence.listWorkflows = vi.fn(() => [
+        {
+          id: 'wf-1',
+          name: 'wf-1',
+          generation: 0,
+          status: 'failed' as const,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ]);
+      mockDeps.orchestrator.syncFromDb = vi.fn();
+      mockDeps.orchestrator.getTask = vi.fn((id: string) => (
+        id === 'wf-1/root'
+          ? {
+              id,
+              status: 'failed',
+              config: { workflowId: 'wf-1' },
+              dependencies: [],
+              execution: {},
+            } as any
+          : undefined
+      ));
+      const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      try {
+        await expect(
+          runHeadless(['task-status', 'wf-1/root'], mockDeps),
+        ).resolves.toBeUndefined();
+        expect(write).toHaveBeenCalledWith('failed\n');
+      } finally {
+        write.mockRestore();
+      }
+    });
   });
 
   describe('writable mode (owner or standalone)', () => {
@@ -1043,6 +1077,42 @@ describe('headless delegation enforcement', () => {
 
         expect(preemptWorkflowExecution).toHaveBeenCalledWith('wf-1');
         expect(mockDeps.commandService.recreateWorkflow).toHaveBeenCalled();
+      });
+
+      it('headless recreate with deps.noTrack=true defers runnable execution to the caller', async () => {
+        const deferRunnableTasks = vi.fn();
+        const preemptWorkflowExecution = vi.fn(async () => ({ cancelled: [], runningCancelled: [] }));
+        const runnableTask = {
+          id: 'wf-1/task-1',
+          status: 'running',
+          config: { workflowId: 'wf-1' },
+          execution: {},
+        } as any;
+        (mockDeps.commandService as any).recreateWorkflow = vi.fn(async () => ({
+          ok: true as const,
+          data: [runnableTask],
+        }));
+        mockDeps.persistence.updateWorkflow = vi.fn();
+        const executeTasksSpy = vi
+          .spyOn(TaskRunner.prototype, 'executeTasks')
+          .mockResolvedValue(undefined);
+
+        const depsWithNoTrack: HeadlessDeps = {
+          ...mockDeps,
+          noTrack: true,
+          deferRunnableTasks,
+          preemptWorkflowExecution,
+        } as HeadlessDeps;
+
+        await runHeadless(['recreate', 'wf-1'], depsWithNoTrack);
+
+        expect(preemptWorkflowExecution).toHaveBeenCalledWith('wf-1');
+        expect(mockDeps.commandService.recreateWorkflow).toHaveBeenCalled();
+        expect(deferRunnableTasks).toHaveBeenCalledTimes(1);
+        expect(deferRunnableTasks).toHaveBeenCalledWith([runnableTask], 'wf-1');
+        expect(executeTasksSpy).not.toHaveBeenCalled();
+
+        executeTasksSpy.mockRestore();
       });
 
       it('headless recreate dispatches runnable tasks before waiting for completion', async () => {

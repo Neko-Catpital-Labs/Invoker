@@ -4,7 +4,8 @@ import type { PersistedWorkflowMutationCoordinator } from './persisted-workflow-
 
 type RecoveryDeps = {
   ownerMode: boolean;
-  persistence: Pick<SQLiteAdapter, 'requeueExpiredWorkflowMutationLeases'> & Partial<Pick<SQLiteAdapter, 'requeueOrphanedWorkflowMutationIntents'>>;
+  persistence: Pick<SQLiteAdapter, 'requeueExpiredWorkflowMutationLeases'> & Partial<Pick<SQLiteAdapter, 'requeueOrphanedWorkflowMutationIntents' | 'requeueWorkflowMutationLeasesOwnedByOther'>>;
+  ownerId?: string;
   workflowMutationCoordinator?: Pick<PersistedWorkflowMutationCoordinator, 'resumePending'>;
   logger: Logger;
   maybeDelayResume?: () => Promise<void>;
@@ -13,6 +14,7 @@ type RecoveryDeps = {
 export async function recoverWorkflowMutationsOnStartup({
   ownerMode,
   persistence,
+  ownerId,
   workflowMutationCoordinator,
   logger,
   maybeDelayResume,
@@ -23,10 +25,14 @@ export async function recoverWorkflowMutationsOnStartup({
 
   try {
     const expired = persistence.requeueExpiredWorkflowMutationLeases();
+    const abandoned = ownerId
+      ? persistence.requeueWorkflowMutationLeasesOwnedByOther?.(ownerId) ?? 0
+      : 0;
     const orphaned = persistence.requeueOrphanedWorkflowMutationIntents?.() ?? 0;
     logger.info('requeued expired workflow mutation leases on startup', {
       module: 'init',
       expired,
+      abandoned,
       orphaned,
     });
   } catch (err) {

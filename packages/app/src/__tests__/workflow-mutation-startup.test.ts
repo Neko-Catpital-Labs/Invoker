@@ -13,6 +13,7 @@ describe('recoverWorkflowMutationsOnStartup', () => {
   it('requeues and resumes pending mutations for owner startup without env gating', async () => {
     const persistence = {
       requeueExpiredWorkflowMutationLeases: vi.fn(() => 0),
+      requeueWorkflowMutationLeasesOwnedByOther: vi.fn(() => 0),
       requeueOrphanedWorkflowMutationIntents: vi.fn(() => 0),
     };
     const workflowMutationCoordinator = {
@@ -24,18 +25,21 @@ describe('recoverWorkflowMutationsOnStartup', () => {
     await recoverWorkflowMutationsOnStartup({
       ownerMode: true,
       persistence,
+      ownerId: 'owner-1',
       workflowMutationCoordinator,
       logger,
       maybeDelayResume,
     });
 
     expect(persistence.requeueExpiredWorkflowMutationLeases).toHaveBeenCalledTimes(1);
+    expect(persistence.requeueWorkflowMutationLeasesOwnedByOther).toHaveBeenCalledWith('owner-1');
     expect(persistence.requeueOrphanedWorkflowMutationIntents).toHaveBeenCalledTimes(1);
     expect(maybeDelayResume).toHaveBeenCalledTimes(1);
     expect(workflowMutationCoordinator.resumePending).toHaveBeenCalledTimes(1);
     expect(logger.info).toHaveBeenCalledWith('requeued expired workflow mutation leases on startup', {
       module: 'init',
       expired: 0,
+      abandoned: 0,
       orphaned: 0,
     });
     expect(logger.info).toHaveBeenCalledWith('resuming pending workflow mutations on startup', { module: 'init' });
