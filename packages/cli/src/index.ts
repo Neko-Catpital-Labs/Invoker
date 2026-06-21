@@ -24,6 +24,7 @@ import {
   type PlanDefinition,
   type TaskState,
 } from '@invoker/workflow-core';
+import { runMcpServer } from './mcp-server.js';
 
 const VERSION = '0.0.5';
 
@@ -131,12 +132,14 @@ function usage(): string {
     'Usage:',
     '  invoker-cli run <plan.yaml> [--live|--standalone] [--db-dir <path>] [--config <path>] [--json]',
     '  invoker-cli doctor [--fix] [--json]',
+    '  invoker-cli mcp',
     '  invoker-cli --help',
     '  invoker-cli --version',
     '',
     'Commands:',
     '  run <plan.yaml>  Submit to a live Invoker UI when available, otherwise run standalone.',
     '  doctor          Check external runtime tools used by Invoker executors.',
+    '  mcp             Start the Invoker MCP stdio server.',
     '',
     'Options:',
     '  --live           Require a running Invoker UI owner and submit over IPC.',
@@ -525,6 +528,10 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
   try {
     if (argv[0] === 'doctor') {
       return runDoctor(argv.slice(1));
+    }
+    if (argv[0] === 'mcp') {
+      await runMcpServer();
+      return 0;
     }
     const parsed = parseArgs(argv);
     if (!parsed.command || parsed.command === '--help') {
