@@ -112,6 +112,26 @@ describe('headless delegation enforcement', () => {
       ).resolves.toBeUndefined();
     });
 
+    it('shows workers as explicit long-running services', async () => {
+      const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+
+      await expect(runHeadless(['worker', 'list'], mockDeps)).resolves.toBeUndefined();
+
+      expect(stdout).toHaveBeenCalledWith(expect.stringContaining('Worker kinds'));
+      expect(stdout).toHaveBeenCalledWith(expect.stringContaining('autofix'));
+      expect(stdout).toHaveBeenCalledWith(expect.stringContaining('long-running auto-fix recovery worker'));
+      stdout.mockRestore();
+    });
+
+    it('runs one autofix worker tick only from the explicit worker command', async () => {
+      const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+
+      await expect(runHeadless(['worker', 'autofix', '--count', '1'], mockDeps)).resolves.toBeUndefined();
+
+      expect(stdout).toHaveBeenCalledWith(expect.stringContaining('[worker:autofix] tick completed:'));
+      stdout.mockRestore();
+    });
+
       it('allows deprecated list command in read-only mode', async () => {
         await expect(
           runHeadless(['list'], mockDeps)

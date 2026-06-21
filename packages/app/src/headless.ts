@@ -59,7 +59,7 @@ import {
   isDispatchableLaunch,
 } from './global-topup.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
-import { createAutoFixRecoveryTick, RECOVERY_WORKER_KIND } from './workers/auto-fix-recovery.js';
+import { createRecoveryWorker, RECOVERY_WORKER_KIND } from './worker-runtime.js';
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
 import { formatHeadlessSetSubcommands } from './headless-command-registry.js';
 import { trackWorkflow } from './headless-watch.js';
@@ -1155,7 +1155,11 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       await headlessQuerySelect(args[1], deps);
       break;
     case 'worker':
+<<<<<<< HEAD
       await headlessWorker(args[1], deps);
+=======
+      await headlessWorker(args.slice(1), deps);
+>>>>>>> 6a5317e83 (Recovery Lifecycle 2e: Headless worker command)
       break;
 
     // ── Deprecated aliases → query ──
@@ -1214,10 +1218,16 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
 }
 
 /**
+<<<<<<< HEAD
  * Worker kinds exposed to the CLI.
+=======
+ * Worker kinds exposed to the CLI. Worker commands are explicit long-running
+ * service surfaces; normal workflow commands do not start them implicitly.
+>>>>>>> 6a5317e83 (Recovery Lifecycle 2e: Headless worker command)
  */
-const HEADLESS_WORKER_KINDS: ReadonlyArray<{ kind: string; available: boolean; note: string }> = [
+const HEADLESS_WORKER_KINDS: ReadonlyArray<{ kind: string; command: string; note: string }> = [
   {
+<<<<<<< HEAD
     kind: 'autofix',
     available: true,
     note: 'scans persisted failed tasks and submits normal auto-fix command intents',
@@ -1246,13 +1256,85 @@ async function headlessWorker(subCommand: string | undefined, deps: HeadlessDeps
     return;
   }
 
+=======
+    kind: RECOVERY_WORKER_KIND,
+    command: 'autofix',
+    note: 'long-running auto-fix recovery worker',
+  },
+];
+
+function parseWorkerAutofixArgs(args: string[]): { count: number | undefined; intervalMs: number | undefined } {
+  let count: number | undefined;
+  let intervalMs: number | undefined;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === '--count') {
+      const value = args[index + 1];
+      if (!value) throw new Error('Missing value for --count');
+      const parsed = Number(value);
+      if (!Number.isInteger(parsed) || parsed <= 0) {
+        throw new Error(`Invalid --count value: ${value}`);
+      }
+      count = parsed;
+      index += 1;
+    } else if (arg === '--interval-ms') {
+      const value = args[index + 1];
+      if (!value) throw new Error('Missing value for --interval-ms');
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        throw new Error(`Invalid --interval-ms value: ${value}`);
+      }
+      intervalMs = parsed;
+      index += 1;
+    } else {
+      throw new Error(`Unknown worker autofix option: ${arg}`);
+    }
+  }
+  return { count, intervalMs };
+}
+
+async function runAutofixWorker(args: string[], deps: Pick<HeadlessDeps, 'logger'>): Promise<void> {
+  const options = parseWorkerAutofixArgs(args);
+  const worker = createRecoveryWorker({
+    logger: deps.logger,
+    intervalMs: options.intervalMs,
+    tickOnStart: false,
+    installSignalHandlers: options.count === undefined,
+  });
+  if (options.count !== undefined) {
+    for (let tick = 0; tick < options.count; tick += 1) {
+      await worker.tick('manual');
+    }
+    await worker.stop();
+    process.stdout.write(options.count === 1
+      ? `[worker:autofix] tick completed: ${worker.identity.instanceId}\n`
+      : `[worker:autofix] ticks completed: ${options.count}: ${worker.identity.instanceId}\n`);
+    return;
+  }
+
+  worker.start();
+  process.stdout.write(`[worker:autofix] started: ${worker.identity.instanceId}\n`);
+  await new Promise<void>((resolveStop) => {
+    const finish = (): void => resolveStop();
+    process.once('SIGINT', finish);
+    process.once('SIGTERM', finish);
+  });
+  await worker.stop();
+}
+
+async function headlessWorker(args: string[], deps: Pick<HeadlessDeps, 'logger'>): Promise<void> {
+  const subCommand = args[0];
+  if (subCommand === 'autofix') {
+    await runAutofixWorker(args.slice(1), deps);
+    return;
+  }
+>>>>>>> 6a5317e83 (Recovery Lifecycle 2e: Headless worker command)
   if (subCommand && subCommand !== 'list' && subCommand !== 'status') {
     throw new Error(`Unknown worker sub-command: "${subCommand}". Use: autofix, list, status`);
   }
   process.stdout.write(`${BOLD}Worker kinds${RESET}\n`);
   for (const worker of HEADLESS_WORKER_KINDS) {
-    const status = worker.available ? 'available' : 'unavailable';
-    process.stdout.write(`  ${worker.kind} — ${status} (${worker.note})\n`);
+    process.stdout.write(`  ${worker.command} — ${worker.note} (kind: ${worker.kind})\n`);
   }
 }
 
@@ -1337,7 +1419,12 @@ ${BOLD}Lifecycle:${RESET}
   delete-all                                          Delete all workflows (requires INVOKER_ALLOW_DELETE_ALL=1)
   open-terminal <taskId>                              Open OS terminal for a task
   slack                                               Start Slack bot (long-running)
+<<<<<<< HEAD
   worker [autofix|list|status]                        Run/list worker kinds (autofix scans failed tasks)
+=======
+  worker autofix [--count N] [--interval-ms N]        Start auto-fix recovery worker (long-running)
+  worker [list|status]                                List worker service commands
+>>>>>>> 6a5317e83 (Recovery Lifecycle 2e: Headless worker command)
 
 ${BOLD}Deprecated${RESET} (use new names above):
   list → query workflows       status → query tasks       task-status → query task
