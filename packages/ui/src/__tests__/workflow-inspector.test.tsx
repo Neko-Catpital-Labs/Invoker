@@ -105,6 +105,56 @@ describe('WorkflowInspector', () => {
     expect(link).toHaveAttribute('href', 'https://github.com/org/repo/pull/34');
   });
 
+  it('shows and changes merge mode for a review-ready merge gate', () => {
+    const onSetMergeMode = vi.fn();
+
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'review_ready', mergeMode: 'manual' }}
+        task={makeTask({
+          id: '__merge__wf-1',
+          description: 'Review gate',
+          status: 'review_ready',
+          config: { workflowId: 'wf-1', isMergeNode: true },
+        })}
+        collapsed={false}
+        advancedExpanded={false}
+        onSetMergeMode={onSetMergeMode}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('Merge mode')).toBeInTheDocument();
+    const select = screen.getByTestId('merge-mode-select');
+    expect(select).toHaveValue('manual');
+    expect(screen.getByRole('option', { name: 'External review (GitHub)' })).toBeInTheDocument();
+
+    fireEvent.change(select, { target: { value: 'external_review' } });
+    expect(onSetMergeMode).toHaveBeenCalledWith('wf-1', 'external_review');
+  });
+
+  it('disables merge mode while a merge gate is running', () => {
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'running', mergeMode: 'manual' }}
+        task={makeTask({
+          id: '__merge__wf-1',
+          description: 'Review gate',
+          status: 'running',
+          config: { workflowId: 'wf-1', isMergeNode: true },
+        })}
+        collapsed={false}
+        advancedExpanded={false}
+        onSetMergeMode={() => Promise.resolve()}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId('merge-mode-select')).toBeDisabled();
+  });
+
   it('resolves the review-ready merge node PR URL for workflow-only selection when the workflow is review_ready', () => {
     const mergeTask = makeTask({
       id: '__merge__wf-1',
