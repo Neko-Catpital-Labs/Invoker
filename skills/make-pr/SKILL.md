@@ -37,21 +37,20 @@ Put one idea in each paragraph. If one idea leads to another, split them into se
 
 Avoid implementation jargon unless it is necessary for understanding the change.
 
-## Review Claim
+<details>
+<summary>Review metadata</summary>
 
-State the one thing the reviewer is being asked to approve.
+Review Claim: State the one thing the reviewer is being asked to approve.
 
-## Review Lane
+Review Lane: Choose exactly one: `behavior`, `refactor`, `proof`, `cleanup`, `policy`, or `docs`.
 
-Choose exactly one: `behavior`, `refactor`, `proof`, `cleanup`, `policy`, or `docs`.
+Review Unit: Choose the matching review unit, such as `tooling-policy`, `routing`, or `docs`.
 
-## Safety Invariant
+Safety Invariant: Explain why this slice is safe to review locally.
 
-Explain why this slice is safe to review locally.
+Slice Rationale: Explain why this work is split here instead of bundled elsewhere.
 
-## Slice Rationale
-
-Explain why this work is split here instead of bundled elsewhere.
+</details>
 
 ## Non-goals
 
@@ -94,7 +93,7 @@ If the change is small and has no architectural impact, omit `## Architecture` r
 
 If the change touches UI-impacting files, use `skills/visual-proof/SKILL.md` first and include its screenshot/video markdown in `## Visual Proof`. UI-impacting files include `packages/ui/**`, Electron window lifecycle files, preload, main process window wiring, and app menu changes.
 
-Do not default to a lightweight `## Summary / ## Testing / ## Notes` PR body. That shape is ad hoc drift, not the repo standard. Use `## Summary / ## Review Claim / ## Review Lane / ## Safety Invariant / ## Slice Rationale / ## Non-goals / ## Test Plan / ## Revert Plan` as the floor, add `## Visual Proof` for UI-impacting diffs, and add `## Architecture` when the change affects component interactions or data/control flow.
+Do not default to a lightweight `## Summary / ## Testing / ## Notes` PR body. That shape is ad hoc drift, not the repo standard. Use `## Summary` with a collapsed `<details><summary>Review metadata</summary>` block, then `## Non-goals / ## Test Plan / ## Revert Plan` as the floor. Add `## Visual Proof` for UI-impacting diffs, and add `## Architecture` when the change affects component interactions or data/control flow.
 
 ## Command surface
 

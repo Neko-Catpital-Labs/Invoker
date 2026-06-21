@@ -3,6 +3,7 @@
 import { readFileSync } from 'node:fs';
 import {
   formatReviewUnits,
+  getLabelSection,
   getMarkdownSection,
   normalizeReviewUnit,
   reviewUnitsForChangedFiles,
@@ -14,14 +15,23 @@ import {
 
 const REQUIRED_SECTIONS = [
   '## Summary',
+  '## Non-goals',
+  '## Test Plan',
+  '## Revert Plan',
+];
+const VISIBLE_METADATA_SECTIONS = [
   '## Review Claim',
   '## Review Lane',
   '## Review Unit',
   '## Safety Invariant',
   '## Slice Rationale',
-  '## Non-goals',
-  '## Test Plan',
-  '## Revert Plan',
+];
+const REQUIRED_METADATA_LABELS = [
+  'Review Claim',
+  'Review Lane',
+  'Review Unit',
+  'Safety Invariant',
+  'Slice Rationale',
 ];
 const DISCOURAGED_HEADINGS = ['## Testing', '## Notes'];
 const SUMMARY_WORD_LIMIT = 30;
@@ -49,6 +59,21 @@ function hasVisualProofMedia(body) {
 
 function normalizeSectionValue(sectionBody) {
   return normalizeReviewUnit(sectionBody);
+}
+
+function getReviewMetadataBlock(body) {
+  const summary = getSectionBody(body, '## Summary');
+  const match = summary.match(/<details\b([^>]*)>\s*<summary>\s*Review metadata\s*<\/summary>([\s\S]*?)<\/details>/i);
+  if (!match) return { body: '', openAttributes: '' };
+  return { body: match[2].trim(), openAttributes: match[1] };
+}
+
+function getReviewMetadataValue(metadata, label) {
+  return getLabelSection(metadata, label);
+}
+
+function stripDetailsBlocks(text) {
+  return String(text).replace(/<details\b[^>]*>[\s\S]*?<\/details>/gi, '').trim();
 }
 
 function classifyScopeKind(filePath) {
@@ -130,7 +155,8 @@ export function getPrBodyWarnings(body, options = {}) {
   const warnings = [];
   const summary = getSectionBody(body, '## Summary');
   if (summary) {
-    const paragraphs = summary.split(/\n\s*\n/).map((paragraph) => paragraph.trim()).filter(Boolean);
+    const visibleSummary = stripDetailsBlocks(summary);
+    const paragraphs = visibleSummary.split(/\n\s*\n/).map((paragraph) => paragraph.trim()).filter(Boolean);
     paragraphs.forEach((paragraph, index) => {
       const wordCount = countWords(paragraph);
       if (wordCount > SUMMARY_WORD_LIMIT) {
@@ -160,13 +186,18 @@ export function validatePrBody(body, options = {}) {
 
   if (!trimmed) {
     return [
-      'PR body is empty. Use the canonical schema: ## Summary, ## Review Claim, ## Review Lane, ## Review Unit, ## Safety Invariant, ## Slice Rationale, ## Non-goals, ## Test Plan, and ## Revert Plan.',
+      'PR body is empty. Use the canonical schema: ## Summary with a collapsed Review metadata block, ## Non-goals, ## Test Plan, and ## Revert Plan.',
     ];
   }
 
   for (const heading of REQUIRED_SECTIONS) {
     if (!trimmed.includes(heading)) {
       errors.push(`Missing required section: ${heading}`);
+    }
+  }
+  for (const heading of VISIBLE_METADATA_SECTIONS) {
+    if (trimmed.includes(heading)) {
+      errors.push(`${heading} belongs in the collapsed Review metadata block inside ## Summary, not as a visible top-level section.`);
     }
   }
 
@@ -186,12 +217,25 @@ export function validatePrBody(body, options = {}) {
     }
   }
 
-  const reviewLane = normalizeSectionValue(getSectionBody(trimmed, '## Review Lane'));
+  const reviewMetadata = getReviewMetadataBlock(trimmed);
+  if (!reviewMetadata.body) {
+    errors.push('## Summary must include a collapsed <details> block with <summary>Review metadata</summary>.');
+  } else if (/\bopen\b/i.test(reviewMetadata.openAttributes)) {
+    errors.push('Review metadata details must be collapsed by default; remove the open attribute.');
+  }
+
+  for (const label of REQUIRED_METADATA_LABELS) {
+    if (!getReviewMetadataValue(reviewMetadata.body, label)) {
+      errors.push(`Review metadata is missing required field: ${label}:`);
+    }
+  }
+
+  const reviewLane = normalizeSectionValue(getReviewMetadataValue(reviewMetadata.body, 'Review Lane'));
   if (reviewLane && !VALID_REVIEW_LANES.has(reviewLane)) {
     errors.push(`Invalid review lane: ${reviewLane}. Expected one of ${Array.from(VALID_REVIEW_LANES).join(', ')}.`);
   }
 
-  const reviewUnit = normalizeReviewUnit(getSectionBody(trimmed, '## Review Unit'));
+  const reviewUnit = normalizeReviewUnit(getReviewMetadataValue(reviewMetadata.body, 'Review Unit'));
   errors.push(...validateReviewUnitValue(reviewUnit, 'PR body'));
   errors.push(...validateReviewLaneUnitCompatibility({
     reviewLane,
@@ -199,17 +243,17 @@ export function validatePrBody(body, options = {}) {
     context: 'PR body',
   }));
 
-  const reviewClaim = getSectionBody(trimmed, '## Review Claim');
+  const reviewClaim = getReviewMetadataValue(reviewMetadata.body, 'Review Claim');
   if (reviewClaim && !reviewClaim.trim()) {
-    errors.push('## Review Claim must not be empty.');
+    errors.push('Review metadata field Review Claim must not be empty.');
   }
   errors.push(...validateReviewUnitFocus({
     declaredReviewUnit: reviewUnit,
     context: 'PR body',
     texts: [
-      getSectionBody(trimmed, '## Summary'),
+      stripDetailsBlocks(getSectionBody(trimmed, '## Summary')),
       reviewClaim,
-      getSectionBody(trimmed, '## Slice Rationale'),
+      getReviewMetadataValue(reviewMetadata.body, 'Slice Rationale'),
     ],
   }));
 
@@ -235,7 +279,7 @@ function usage() {
   console.error(`Usage: node scripts/validate-pr-body.mjs (--body-file <file> | --body <markdown>) [--require-visual-proof]
 
 Validates the canonical PR schema:
-  Required: ## Summary, ## Review Claim, ## Review Lane, ## Review Unit, ## Safety Invariant, ## Slice Rationale, ## Non-goals, ## Test Plan, ## Revert Plan
+  Required: ## Summary with a collapsed Review metadata block, ## Non-goals, ## Test Plan, ## Revert Plan
   Optional: ## Architecture (must include ### Before and ### After when present)
   UI changes: pass --require-visual-proof to require screenshot or video proof.`);
   process.exit(1);
