@@ -314,10 +314,10 @@ export interface TaskReplacementDef {
 // ── IPC Bridge API ──────────────────────────────────────────
 // InvokerAPI is derived from the IPC channel registry in @invoker/contracts.
 
-export type { InvokerAPI, ClaudeMessage, AgentSessionData } from '@invoker/contracts';
+export type { ReviewGateArtifact, ReviewGateState } from '@invoker/workflow-graph';
+export type { InvokerAPI, ClaudeMessage, AgentSessionData, ReviewGateQueryResponse } from '@invoker/contracts';
 
 import type { InvokerAPI, TerminalOutputEvent } from '@invoker/contracts';
-
 // ── Augment global Window ───────────────────────────────────
 
 declare global {
