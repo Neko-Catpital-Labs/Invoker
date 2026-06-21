@@ -151,6 +151,7 @@ export class WorkflowMutationFacade {
   }
 
   async retryTask(taskId: string): Promise<MutationResult> {
+    await this.closeReviewForTask(taskId);
     const started = await this.runViaCommandService(
       (cs) => cs.retryTask(makeEnvelope('facade.retry-task', 'surface', 'task', { taskId })),
     );
@@ -158,6 +159,7 @@ export class WorkflowMutationFacade {
   }
 
   async recreateTask(taskId: string): Promise<MutationResult> {
+    await this.closeReviewForTask(taskId);
     const started = await this.runViaCommandService(
       (cs) => cs.recreateTask(makeEnvelope('facade.recreate-task', 'surface', 'task', { taskId })),
     );
@@ -165,6 +167,7 @@ export class WorkflowMutationFacade {
   }
 
   async recreateDownstream(taskId: string): Promise<MutationResult> {
+    await this.closeReviewForTask(taskId);
     const started = await this.runViaCommandService(
       (cs) => cs.recreateDownstream(makeEnvelope('facade.recreate-downstream', 'surface', 'task', { taskId })),
     );
@@ -175,6 +178,7 @@ export class WorkflowMutationFacade {
   }
 
   async selectExperiment(taskId: string, experimentId: string): Promise<MutationResult> {
+    await this.closeReviewForTask(taskId);
     const started = sharedSelectExperiment(taskId, experimentId, {
       orchestrator: this.deps.orchestrator,
     });
@@ -182,6 +186,7 @@ export class WorkflowMutationFacade {
   }
 
   async selectExperiments(taskId: string, experimentIds: string[]): Promise<MutationResult> {
+    await this.closeReviewForTask(taskId);
     const started = await sharedSelectExperiments(taskId, experimentIds, {
       orchestrator: this.deps.orchestrator,
       taskExecutor: this.deps.taskExecutor,
@@ -190,6 +195,7 @@ export class WorkflowMutationFacade {
   }
 
   async editTaskCommand(taskId: string, newCommand: string): Promise<MutationResult> {
+    await this.closeReviewForTask(taskId);
     const started = sharedEditTaskCommand(taskId, newCommand, {
       orchestrator: this.deps.orchestrator,
     });
@@ -197,6 +203,7 @@ export class WorkflowMutationFacade {
   }
 
   async editTaskPrompt(taskId: string, newPrompt: string): Promise<MutationResult> {
+    await this.closeReviewForTask(taskId);
     const started = sharedEditTaskPrompt(taskId, newPrompt, {
       orchestrator: this.deps.orchestrator,
     });
@@ -208,6 +215,7 @@ export class WorkflowMutationFacade {
     runnerKind: string,
     poolMemberId?: string,
   ): Promise<MutationResult> {
+    await this.closeReviewForTask(taskId);
     const started = sharedEditTaskType(
       taskId,
       runnerKind,
@@ -218,6 +226,7 @@ export class WorkflowMutationFacade {
   }
 
   async editTaskAgent(taskId: string, agentName: string): Promise<MutationResult> {
+    await this.closeReviewForTask(taskId);
     const started = sharedEditTaskAgent(taskId, agentName, {
       orchestrator: this.deps.orchestrator,
     });
@@ -272,6 +281,7 @@ export class WorkflowMutationFacade {
   // ── Workflow-scoped mutations ────────────────────────────
 
   async retryWorkflow(workflowId: string): Promise<MutationResult> {
+    await this.closeReviewForWorkflow(workflowId);
     const started = await this.runViaCommandService(
       (cs) => cs.retryWorkflow(makeEnvelope('facade.retry-workflow', 'surface', 'workflow', { workflowId })),
     );
@@ -279,6 +289,7 @@ export class WorkflowMutationFacade {
   }
 
   async recreateWorkflow(workflowId: string): Promise<MutationResult> {
+    await this.closeReviewForWorkflow(workflowId);
     const started = await this.runViaCommandService(
       (cs) => cs.recreateWorkflow(makeEnvelope('facade.recreate-workflow', 'surface', 'workflow', { workflowId })),
     );
@@ -286,18 +297,21 @@ export class WorkflowMutationFacade {
   }
 
   async recreateWorkflowFromFreshBase(workflowId: string): Promise<MutationResult> {
+    await this.closeReviewForWorkflow(workflowId);
     const started = await sharedRecreateWorkflowFromFreshBase(workflowId, this.actionDeps());
     return this.finalizeWithTopup(started, 'facade.recreate-from-fresh-base', { scopedWorkflowId: workflowId });
   }
 
   async rebaseRetry(target: string): Promise<MutationResult> {
     const workflowId = resolveWorkflowIdForRebaseTarget(target, this.actionDeps());
+    await this.closeReviewForWorkflow(workflowId);
     const started = await sharedRebaseRetry(target, this.actionDeps());
     return this.finalizeWithTopup(started, 'facade.rebase-retry', { scopedWorkflowId: workflowId });
   }
 
   async rebaseRecreate(target: string): Promise<MutationResult> {
     const workflowId = resolveWorkflowIdForRebaseTarget(target, this.actionDeps());
+    await this.closeReviewForWorkflow(workflowId);
     const started = await sharedRebaseRecreate(target, this.actionDeps());
     return this.finalizeWithTopup(started, 'facade.rebase-recreate', { scopedWorkflowId: workflowId });
   }
@@ -518,5 +532,14 @@ export class WorkflowMutationFacade {
       context,
       dispatchMode: this.deps.dispatchMode,
     });
+  }
+
+  private async closeReviewForWorkflow(workflowId: string | undefined): Promise<void> {
+    if (workflowId) await this.deps.taskExecutor.closeWorkflowReview?.(workflowId);
+  }
+
+  private async closeReviewForTask(taskId: string): Promise<void> {
+    const workflowId = this.deps.orchestrator.getTask(taskId)?.config.workflowId;
+    await this.closeReviewForWorkflow(workflowId);
   }
 }

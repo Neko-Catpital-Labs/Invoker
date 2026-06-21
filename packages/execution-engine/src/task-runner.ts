@@ -2395,20 +2395,37 @@ export class TaskRunner {
   }
 
   async closeWorkflowReview(workflowId: string): Promise<void> {
-    if (!this.mergeGateProvider?.closeReview) return;
+    const closeReview = this.mergeGateProvider?.closeReview?.bind(this.mergeGateProvider);
+    if (!closeReview) return;
     const getAllTasks = this.orchestrator.getAllTasks?.bind(this.orchestrator);
     if (!getAllTasks) return;
     const mergeTask = getAllTasks().find((task) =>
       task.config.workflowId === workflowId
       && task.config.isMergeNode
-      && !!task.execution.reviewId
+      && (!!task.execution.reviewGate || !!task.execution.reviewId)
     );
-    if (!mergeTask?.execution.reviewId) return;
+    if (!mergeTask) return;
 
-    await this.mergeGateProvider.closeReview({
-      identifier: mergeTask.execution.reviewId,
-      cwd: mergeTask.execution.workspacePath ?? this.cwd,
-    });
+    const gate = mergeTask.execution.reviewGate;
+    const identifiers = gate
+      ? gate.artifacts
+          .filter((artifact) =>
+            artifact.generation === gate.activeGeneration
+            && artifact.status !== 'discarded'
+            && !!artifact.providerId,
+          )
+          .map((artifact) => artifact.providerId!)
+      : mergeTask.execution.reviewId
+        ? [mergeTask.execution.reviewId]
+        : [];
+    const cwd = mergeTask.execution.workspacePath ?? this.cwd;
+    for (const identifier of identifiers) {
+      try {
+        await closeReview({ identifier, cwd });
+      } catch (err) {
+        this.logger.error(`[merge-gate] Failed to close review ${identifier}`, { err });
+      }
+    }
   }
 
   private async handleApprovedMergeGate(
