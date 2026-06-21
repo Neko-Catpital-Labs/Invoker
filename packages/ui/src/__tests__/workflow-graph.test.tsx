@@ -117,6 +117,24 @@ describe('WorkflowGraph', () => {
     expect(node).toHaveClass('opacity-35');
   });
 
+  it('shows running task count under non-running workflow status', () => {
+    const workflows = new Map([
+      ['wf-a', wf('wf-a', 'failed', { rollup: rollup('failed', 1) })],
+    ]);
+
+    render(
+      <WorkflowGraph
+        workflows={workflows}
+        selectedWorkflowId={null}
+        statusFilters={new Set()}
+        onSelectWorkflow={() => {}}
+        onWorkflowContextMenu={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId('workflow-node-wf-a')).toHaveTextContent('failed');
+    expect(screen.getByTestId('workflow-node-wf-a-running-tasks')).toHaveTextContent('1 running task');
+  });
 
   it('renders the React Flow wrapper for non-empty workflow graphs', () => {
     const workflows = new Map([
