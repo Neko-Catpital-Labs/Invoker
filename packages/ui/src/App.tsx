@@ -377,6 +377,10 @@ export function App() {
   });
   const invoker = useInvoker();
   const queueStatus = useQueueStatus();
+  const runningTaskIds = useMemo(
+    () => new Set((queueStatus?.running ?? []).map((entry) => entry.taskId)),
+    [queueStatus],
+  );
   const fileInputRef = useRef<HTMLInputElement>(null);
   const graphSurfaceRef = useRef<HTMLDivElement>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -1904,6 +1908,7 @@ export function App() {
                           onTaskContextMenu={handleTaskContextMenu}
                           onManualViewport={handleManualViewport}
                           statusFilters={new Set()}
+                          runningTaskIds={runningTaskIds}
                         />
                       </div>
                     </FloatingGraphPanel>
