@@ -432,6 +432,114 @@ describe('Orchestrator', () => {
       expect(task.execution.reviewId).toBe('owner/repo#1');
       expect(task.execution.reviewStatus).toBe('Awaiting review');
     });
+
+
+    it('discards review gate artifacts and clears scalar review fields on retry', () => {
+      orchestrator.loadPlan({
+        name: 'Review discard retry',
+        mergeMode: 'external_review',
+        tasks: [{ id: 'task-a', description: 'task A' }],
+      });
+
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+      const mergeId = `__merge__${workflowId}`;
+      persistence.updateTask(mergeId, {
+        status: 'review_ready',
+        execution: {
+          generation: 3,
+          reviewId: 'owner/repo#1',
+          reviewUrl: 'https://github.com/owner/repo/pull/1',
+          reviewStatus: 'open',
+          reviewProviderId: 'owner/repo#1',
+          reviewGate: {
+            activeGeneration: 3,
+            completion: { required: 'all', status: 'approved' },
+            artifacts: [
+              {
+                id: 'contracts',
+                providerId: 'owner/repo#1',
+                url: 'https://github.com/owner/repo/pull/1',
+                required: true,
+                status: 'approved',
+                generation: 3,
+              },
+              {
+                id: 'runtime',
+                providerId: 'owner/repo#2',
+                url: 'https://github.com/owner/repo/pull/2',
+                required: true,
+                status: 'open',
+                generation: 3,
+                dependsOn: ['contracts'],
+              },
+            ],
+          },
+        },
+      });
+
+      orchestrator.retryTask(mergeId);
+
+      const task = orchestrator.getTask(mergeId)!;
+      expect(task.execution.reviewId).toBeUndefined();
+      expect(task.execution.reviewUrl).toBeUndefined();
+      expect(task.execution.reviewStatus).toBeUndefined();
+      expect(task.execution.reviewProviderId).toBeUndefined();
+      expect(task.execution.reviewGate?.activeGeneration).toBe(4);
+      expect(task.execution.reviewGate?.artifacts).toHaveLength(2);
+      expect(task.execution.reviewGate?.artifacts.every((artifact) => artifact.status === 'discarded')).toBe(true);
+      expect(task.execution.reviewGate?.artifacts.every((artifact) => artifact.discardReason === 'task subgraph reset to pending')).toBe(true);
+      const currentRequired = task.execution.reviewGate!.artifacts.filter((artifact) =>
+        artifact.required
+        && artifact.generation === task.execution.reviewGate!.activeGeneration
+        && artifact.status !== 'discarded'
+      );
+      expect(currentRequired).toEqual([]);
+    });
+
+    it('synthesizes a discarded artifact from scalar review fields on recreate', () => {
+      orchestrator.loadPlan({
+        name: 'Review discard recreate',
+        mergeMode: 'external_review',
+        tasks: [{ id: 'task-a', description: 'task A' }],
+      });
+
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+      const mergeId = `__merge__${workflowId}`;
+      persistence.updateTask(mergeId, {
+        status: 'review_ready',
+        execution: {
+          generation: 5,
+          reviewId: 'owner/repo#scalar',
+          reviewUrl: 'https://github.com/owner/repo/pull/9',
+          reviewStatus: 'open',
+          reviewProviderId: 'owner/repo#scalar',
+        },
+      });
+
+      orchestrator.recreateWorkflow(workflowId);
+
+      const task = orchestrator.getTask(mergeId)!;
+      expect(task.execution.reviewId).toBeUndefined();
+      expect(task.execution.reviewUrl).toBeUndefined();
+      expect(task.execution.reviewStatus).toBeUndefined();
+      expect(task.execution.reviewProviderId).toBeUndefined();
+      expect(task.execution.reviewGate).toMatchObject({
+        activeGeneration: 6,
+        completion: { required: 'all', status: 'approved' },
+        artifacts: [
+          {
+            id: 'owner/repo#scalar',
+            providerId: 'owner/repo#scalar',
+            url: 'https://github.com/owner/repo/pull/9',
+            required: true,
+            status: 'discarded',
+            generation: 5,
+            discardReason: 'workflow recreation reset',
+          },
+        ],
+      });
+      expect(task.execution.reviewGate?.artifacts[0].discardedAt).toEqual(expect.any(String));
+    });
   });
 
   describe('workflow status transitions during retry paths', () => {

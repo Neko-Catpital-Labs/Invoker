@@ -19,7 +19,7 @@ import { TaskStateMachine } from './state-machine.js';
 import { ResponseHandler } from './response-handler.js';
 import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
-import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, Attempt, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency, TaskStatus, TaskHeartbeatSource } from '@invoker/workflow-graph';
+import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, TaskExecution, Attempt, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency, TaskStatus, TaskHeartbeatSource } from '@invoker/workflow-graph';
 import type { RunnerKind } from '@invoker/workflow-graph';
 import { createTaskState, createAttempt } from '@invoker/workflow-graph';
 import type { WorkflowDerivedStatus } from '@invoker/workflow-graph';
@@ -901,7 +901,11 @@ export class Orchestrator {
           continue;
         }
 
-        const changesWithGeneration = this.withBumpedExecutionGeneration(current, resetChanges);
+        const changesWithGeneration = this.withBumpedExecutionGenerationAndDiscardedReviewGate(
+          current,
+          resetChanges,
+          'task subgraph reset to pending',
+        );
         const updated = this.writeAndSync(id, changesWithGeneration, { skipWorkflowStatusSync: true });
         const priorAttemptId = current.execution.selectedAttemptId;
         this.replaceSelectedAttempt(current, {}, { skipWorkflowStatusSync: true });
@@ -1028,6 +1032,74 @@ export class Orchestrator {
       },
     };
   }
+
+  private buildDiscardReviewGatePatch(
+    task: TaskState,
+    reason: string,
+    nextGeneration: number,
+    now: Date = new Date(),
+  ): Partial<TaskExecution> {
+    const reviewGate = task.execution.reviewGate;
+    if (!reviewGate && !task.execution.reviewId && !task.execution.reviewUrl) return {};
+
+    const discardedAt = now.toISOString();
+    const oldArtifacts = reviewGate?.artifacts ?? [{
+      id: task.execution.reviewId ?? 'review',
+      ...(task.execution.reviewId ? { providerId: task.execution.reviewId } : {}),
+      ...(task.execution.reviewUrl ? { url: task.execution.reviewUrl } : {}),
+      required: true,
+      status: 'discarded' as const,
+      generation: task.execution.generation ?? 0,
+      discardedAt,
+      discardReason: reason,
+    }];
+
+    return {
+      reviewUrl: undefined,
+      reviewId: undefined,
+      reviewStatus: undefined,
+      reviewProviderId: undefined,
+      reviewGate: {
+        activeGeneration: nextGeneration,
+        completion: { required: 'all', status: 'approved' },
+        artifacts: oldArtifacts.map((artifact) =>
+          artifact.discardedAt || artifact.status === 'discarded'
+            ? artifact
+            : {
+                ...artifact,
+                status: 'discarded',
+                discardedAt,
+                discardReason: reason,
+              },
+        ),
+      },
+    };
+  }
+
+  private withBumpedExecutionGenerationAndDiscardedReviewGate(
+    task: TaskState,
+    changes: TaskStateChanges,
+    discardReason: string,
+  ): TaskStateChanges {
+    const bumpedChanges = this.withBumpedExecutionGeneration(task, changes);
+    if (!task.config.isMergeNode) {
+      return bumpedChanges;
+    }
+
+    const discardPatch = this.buildDiscardReviewGatePatch(
+      task,
+      discardReason,
+      bumpedChanges.execution?.generation ?? this.getExecutionGeneration(task) + 1,
+    );
+    return {
+      ...bumpedChanges,
+      execution: {
+        ...bumpedChanges.execution,
+        ...discardPatch,
+      },
+    };
+  }
+
 
   private getSelectedAttempt(task: TaskState | undefined): Attempt | undefined {
     const attemptId = task?.execution.selectedAttemptId;
@@ -2318,7 +2390,11 @@ export class Orchestrator {
     for (const id of toResetIds) {
       const current = this.stateGetTask(id);
       if (!current) continue;
-      const changesWithGeneration = this.withBumpedExecutionGeneration(current, RECREATE_RESET_CHANGES);
+      const changesWithGeneration = this.withBumpedExecutionGenerationAndDiscardedReviewGate(
+        current,
+        RECREATE_RESET_CHANGES,
+        artifactReason,
+      );
       const recreateUpdated = this.writeAndSync(id, changesWithGeneration);
       const priorAttemptId = current.execution.selectedAttemptId;
       this.replaceSelectedAttempt(current);
@@ -2441,7 +2517,11 @@ export class Orchestrator {
         agentSessionId: prevSess ?? 'null',
         containerId: prevCt ?? 'null',
       });
-      const changesWithGeneration = this.withBumpedExecutionGeneration(task, resetChanges);
+      const changesWithGeneration = this.withBumpedExecutionGenerationAndDiscardedReviewGate(
+        task,
+        resetChanges,
+        'workflow recreation reset',
+      );
       const after = this.writeAndSync(task.id, changesWithGeneration);
       const priorAttemptId = task.execution.selectedAttemptId;
       this.replaceSelectedAttempt(task);
