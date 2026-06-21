@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 
 import { scopePlanTaskId } from '@invoker/workflow-core';
-import type { Orchestrator, ReviewArtifactStatus, TaskState, ExperimentVariant, RunnerKind } from '@invoker/workflow-core';
+import type { Orchestrator, TaskState, ExperimentVariant, RunnerKind } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { WorkRequest, WorkResponse, ActionType, Logger } from '@invoker/contracts';
 import { ATTEMPT_LEASE_MS } from '@invoker/contracts';
@@ -24,7 +24,7 @@ import { createExecutionBench } from './execution-bench.js';
 import { ResourceLimitError, type RepoPoolTiming } from './repo-pool.js';
 import type { ExecutorRegistry } from './registry.js';
 import type { AgentRegistry } from './agent-registry.js';
-import type { ReviewGateProvider, MergeGateApprovalStatus } from './merge-gate-provider.js';
+import type { MergeGateProvider, MergeGateApprovalStatus } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
 import { DockerExecutor } from './docker-executor.js';
 import { WorktreeExecutor } from './worktree-executor.js';
@@ -274,7 +274,7 @@ export interface TaskRunnerConfig {
   /** Default branch from config (e.g. "master"). Falls back to git heuristic if unset. */
   defaultBranch?: string;
   callbacks?: TaskRunnerCallbacks;
-  mergeGateProvider?: ReviewGateProvider;
+  mergeGateProvider?: MergeGateProvider;
   reviewProviderRegistry?: ReviewProviderRegistry;
   onReviewGateCiFailure?: (trigger: ReviewGateCiFailureTrigger) => Promise<void>;
   /**
@@ -322,7 +322,7 @@ export class TaskRunner {
   private maxWorktreesPerRepo: number;
   /** @internal */ defaultBranch: string | undefined;
   /** @internal */ callbacks: TaskRunnerCallbacks;
-  /** @internal */ mergeGateProvider?: ReviewGateProvider;
+  /** @internal */ mergeGateProvider?: MergeGateProvider;
   /** @internal */ reviewProviderRegistry?: ReviewProviderRegistry;
   private onReviewGateCiFailure?: (trigger: ReviewGateCiFailureTrigger) => Promise<void>;
   private reviewGateCiFixInFlight = new Set<string>();
@@ -2394,56 +2394,30 @@ export class TaskRunner {
     }
   }
 
-  private getReviewGateProvider(workflowId?: string): ReviewGateProvider | undefined {
-    const workflow = workflowId ? this.persistence.loadWorkflow?.(workflowId) : undefined;
-    const providerName = workflow?.reviewProvider ?? 'github';
-    return this.reviewProviderRegistry?.get(providerName) ?? this.mergeGateProvider;
-  }
-
   async closeWorkflowReview(workflowId: string): Promise<void> {
-    const provider = this.getReviewGateProvider(workflowId);
-    if (!provider?.closeArtifact) return;
+    if (!this.mergeGateProvider?.closeReview) return;
     const getAllTasks = this.orchestrator.getAllTasks?.bind(this.orchestrator);
     if (!getAllTasks) return;
     const mergeTask = getAllTasks().find((task) =>
       task.config.workflowId === workflowId
       && task.config.isMergeNode
+      && !!task.execution.reviewId
     );
-    const reviewGate = mergeTask?.execution.reviewGate;
-    if (!mergeTask || !reviewGate?.sealed) return;
+    if (!mergeTask?.execution.reviewId) return;
 
-    const artifacts = reviewGate.artifacts.map((artifact) => ({ ...artifact }));
-    let changed = false;
-    for (const artifact of artifacts) {
-      if (artifact.status === 'merged' || artifact.status === 'closed') continue;
-      await provider.closeArtifact({
-        identifier: artifact.identifier,
-        cwd: mergeTask.execution.workspacePath ?? this.cwd,
-      });
-      artifact.status = 'closed';
-      artifact.statusText = 'Closed';
-      changed = true;
-    }
-    if (changed) {
-      this.persistence.updateTask(mergeTask.id, {
-        execution: {
-          reviewGate: {
-            ...reviewGate,
-            artifacts,
-            statusText: 'Review artifacts closed',
-          },
-        },
-      });
-    }
+    await this.mergeGateProvider.closeReview({
+      identifier: mergeTask.execution.reviewId,
+      cwd: mergeTask.execution.workspacePath ?? this.cwd,
+    });
   }
 
   private async handleApprovedMergeGate(
     taskId: string,
-    completionLabel: string,
+    reviewId: string,
     source?: 'refresh' | 'manual check',
   ): Promise<void> {
     const sourceSuffix = source ? ` (${source})` : '';
-    this.logger.info(`[merge-gate] ${completionLabel} complete${sourceSuffix}, completing merge gate`);
+    this.logger.info(`[merge-gate] PR ${reviewId} approved${sourceSuffix}, completing merge gate`);
     const newlyStarted = await this.orchestrator.approve(taskId);
     if (newlyStarted.length > 0) {
       await this.executeTasks(newlyStarted);
@@ -2452,111 +2426,104 @@ export class TaskRunner {
 
   private handleClosedMergeGate(
     taskId: string,
-    completionLabel: string,
+    reviewId: string,
     statusText: string,
     source?: 'refresh' | 'manual check',
   ): void {
     const sourceSuffix = source ? ` (${source})` : '';
-    this.logger.info(`[merge-gate] ${completionLabel} closed${sourceSuffix}: ${statusText}`);
+    this.logger.info(`[merge-gate] PR ${reviewId} closed${sourceSuffix}: ${statusText}`);
     this.persistence.updateTask(taskId, {
       status: 'closed',
       execution: { reviewStatus: statusText },
     });
   }
 
-  private async refreshReviewGateArtifacts(
-    task: TaskState,
-    source: 'refresh' | 'manual check',
-  ): Promise<void> {
-    const reviewGate = task.execution.reviewGate;
-    if (!reviewGate?.sealed || reviewGate.artifacts.length === 0) return;
-    const provider = this.getReviewGateProvider(task.config?.workflowId);
-    if (!provider) return;
-
-    const gateCwd = task.execution.workspacePath ?? this.cwd;
-    const artifacts = await Promise.all(reviewGate.artifacts.map(async (artifact) => {
-      if (artifact.status === 'merged' || artifact.status === 'closed') return artifact;
-      const status = await provider.checkArtifact({
-        identifier: artifact.identifier,
-        cwd: gateCwd,
-      });
-      await this.maybeTriggerReviewGateCiFix(task, status, artifact);
-      const nextStatus: ReviewArtifactStatus = status.approved
-        ? 'merged'
-        : status.closed
-          ? 'closed'
-          : status.rejected
-            ? 'rejected'
-            : (artifact.status ?? 'open');
-      return {
-        ...artifact,
-        status: nextStatus,
-        statusText: status.statusText,
-        headSha: status.headSha ?? artifact.headSha,
-        headRef: status.headRef ?? artifact.headRef,
-      };
-    }));
-
-    const closedArtifact = artifacts.find((artifact) => artifact.status === 'closed');
-    const statusText = closedArtifact
-      ? `Review artifact closed: ${closedArtifact.identifier}`
-      : artifacts.every((artifact) => artifact.status === 'merged')
-        ? 'All review artifacts merged'
-        : artifacts.find((artifact) => artifact.status === 'rejected')?.statusText
-          ?? artifacts.find((artifact) => artifact.statusText)?.statusText
-          ?? reviewGate.statusText
-          ?? 'Awaiting review';
-    const nextGate = { ...reviewGate, artifacts, statusText };
-    this.persistence.updateTask(task.id, { execution: { reviewGate: nextGate } });
-
-    if (closedArtifact) {
-      this.handleClosedMergeGate(task.id, 'review artifact', statusText, source);
-      return;
-    }
-    if (artifacts.every((artifact) => artifact.status === 'merged')) {
-      await this.handleApprovedMergeGate(task.id, 'all review artifacts', source);
-    }
-  }
-
   async checkMergeGateStatuses(): Promise<void> {
+    if (!this.mergeGateProvider) return;
     for (const task of this.orchestrator.getAllTasks()) {
       if (
         task.config.isMergeNode &&
         (task.status === 'review_ready' || task.status === 'awaiting_approval') &&
-        task.execution.reviewGate?.sealed === true
+        task.execution.reviewId
       ) {
         try {
-          await this.refreshReviewGateArtifacts(task, 'refresh');
+          const gateCwd = task.execution.workspacePath ?? this.cwd;
+          const status = await this.mergeGateProvider.checkApproval({
+            identifier: task.execution.reviewId,
+            cwd: gateCwd,
+          });
+          if (status.closed) {
+            this.handleClosedMergeGate(task.id, task.execution.reviewId, status.statusText, 'refresh');
+          } else if (status.approved) {
+            this.persistence.updateTask(task.id, {
+              execution: { reviewStatus: status.statusText },
+            });
+            await this.handleApprovedMergeGate(task.id, task.execution.reviewId, 'refresh');
+          } else if (status.rejected) {
+            this.persistence.updateTask(task.id, {
+              execution: { reviewStatus: status.statusText },
+            });
+            this.logger.info(`[merge-gate] PR ${task.execution.reviewId} rejected (refresh): ${status.statusText}`);
+          } else {
+            this.persistence.updateTask(task.id, {
+              execution: { reviewStatus: status.statusText },
+            });
+            await this.maybeTriggerReviewGateCiFix(task, status);
+          }
         } catch (err) {
-          this.logger.error(`[merge-gate] Review artifact status check error for ${task.id}`, { err });
+          this.logger.error(`[merge-gate] PR status check error for ${task.id}`, { err });
         }
       }
     }
   }
 
   async checkPrApprovalNow(taskId: string): Promise<void> {
+    if (!this.mergeGateProvider) return;
+
     const task = this.orchestrator.getTask(taskId);
-    if (!task) return;
+    const reviewId = task?.execution.reviewId;
+    if (!task || !reviewId) return;
+
     try {
-      await this.refreshReviewGateArtifacts(task, 'manual check');
+      const manualCwd = task.execution.workspacePath ?? this.cwd;
+      const status = await this.mergeGateProvider.checkApproval({
+        identifier: reviewId,
+        cwd: manualCwd,
+      });
+
+      if (status.closed) {
+        this.handleClosedMergeGate(taskId, reviewId, status.statusText, 'manual check');
+      } else if (status.approved) {
+        this.persistence.updateTask(taskId, {
+          execution: { reviewStatus: status.statusText },
+        });
+        await this.handleApprovedMergeGate(taskId, reviewId, 'manual check');
+      } else if (status.rejected) {
+        this.persistence.updateTask(taskId, {
+          execution: { reviewStatus: status.statusText },
+        });
+        this.logger.info(`[merge-gate] PR ${reviewId} rejected (manual check): ${status.statusText}`);
+      } else {
+        this.persistence.updateTask(taskId, {
+          execution: { reviewStatus: status.statusText },
+        });
+        await this.maybeTriggerReviewGateCiFix(task, status);
+      }
     } catch (err) {
-      this.logger.error(`[merge-gate] Manual review gate check error for ${taskId}`, { err });
+      this.logger.error(`[merge-gate] Manual PR check error for ${taskId}`, { err });
     }
   }
 
   private async maybeTriggerReviewGateCiFix(
     task: TaskState,
     status: MergeGateApprovalStatus,
-    artifact?: { identifier: string; url: string; headSha?: string; headRef?: string },
   ): Promise<void> {
     if (!this.onReviewGateCiFailure) return;
-    const reviewId = artifact?.identifier ?? task.execution.reviewId;
-    if (!task.config?.workflowId || !reviewId) return;
+    if (!task.config.workflowId || !task.execution.reviewId) return;
     if (status.checks?.state !== 'failure' || status.checks.failed.length === 0) return;
 
     const key = [
       task.id,
-      reviewId,
       task.execution.selectedAttemptId ?? 'no-attempt',
       task.execution.generation ?? 0,
       status.headSha ?? 'no-head-sha',
@@ -2568,11 +2535,12 @@ export class TaskRunner {
       await this.onReviewGateCiFailure({
         taskId: task.id,
         workflowId: task.config.workflowId,
-        reviewId,
-        reviewUrl: artifact?.url ?? status.url,
-        headSha: status.headSha ?? artifact?.headSha,
-        headRef: status.headRef ?? artifact?.headRef,
-        branch: artifact?.headRef ?? task.execution.branch,
+        reviewId: task.execution.reviewId,
+        reviewUrl: status.url,
+        headSha: status.headSha,
+        headRef: status.headRef,
+        branch: task.execution.branch,
+        selectedAttemptId: task.execution.selectedAttemptId,
         generation: task.execution.generation ?? 0,
         failedChecks: status.checks.failed,
         statusText: status.statusText,

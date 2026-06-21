@@ -13,43 +13,6 @@ import { EventEmitter } from 'events';
 import { buildCanonicalPrBody, validateCanonicalPrBody } from '../pr-authoring.js';
 import type { PrAuthoringContext } from '../pr-authoring.js';
 
-function reviewGateResult(url: string, identifier: string) {
-  return {
-    sealed: true,
-    relationship: { kind: 'stacked_diffs' as const, managedBy: 'external' as const },
-    artifacts: [{
-      id: `github:pull_request:${identifier}`,
-      provider: 'github',
-      type: 'pull_request' as const,
-      url,
-      identifier,
-      status: 'open' as const,
-      statusText: 'Awaiting review',
-    }],
-  };
-}
-
-
-function reviewGateExecution(identifier: string, status: 'open' | 'merged' | 'closed' | 'rejected' | 'unknown' = 'open') {
-  const number = identifier.match(/(\d+)$/)?.[1] ?? identifier;
-  return {
-    sealed: true,
-    completion: { required: 'all' as const, state: 'merged' as const },
-    relationship: { kind: 'stacked_diffs' as const, managedBy: 'external' as const },
-    artifacts: [{
-      id: `github:pull_request:${identifier}`,
-      provider: 'github',
-      type: 'pull_request' as const,
-      url: `https://github.com/owner/repo/pull/${number}`,
-      identifier,
-      status,
-      statusText: status === 'merged' ? 'Merged' : 'Awaiting review',
-    }],
-    statusText: status === 'merged' ? 'Merged' : 'Awaiting review',
-  };
-}
-
-
 /**
  * Creates a mock executor that auto-completes on start().
  * For merge nodes (no command/prompt), this simulates the executor's
@@ -3159,7 +3122,10 @@ describe('TaskRunner', () => {
         updateTask: vi.fn(),
       };
       const mergeGateProvider = {
-        publishReviewGate: vi.fn().mockResolvedValue(reviewGateResult('https://github.com/owner/repo/pull/42', 'owner/repo#42')),
+        createReview: vi.fn().mockResolvedValue({
+          url: 'https://github.com/owner/repo/pull/42',
+          identifier: 'owner/repo#42',
+        }),
       };
       const onComplete = vi.fn();
       const executor = new TaskRunner({
@@ -3218,7 +3184,7 @@ describe('TaskRunner', () => {
       }));
 
       // Should create a PR via mergeGateProvider with authored body
-      expect(mergeGateProvider.publishReviewGate).toHaveBeenCalledWith(
+      expect(mergeGateProvider.createReview).toHaveBeenCalledWith(
         expect.objectContaining({
           baseBranch: 'master',
           featureBranch: 'plan/feature',
@@ -3233,7 +3199,9 @@ describe('TaskRunner', () => {
         config: expect.objectContaining({ runnerKind: 'worktree' }),
         execution: expect.objectContaining({
           branch: 'plan/feature',
-          reviewGate: expect.objectContaining({ artifacts: [expect.objectContaining({ identifier: 'owner/repo#42', url: 'https://github.com/owner/repo/pull/42' })] }),
+          reviewUrl: 'https://github.com/owner/repo/pull/42',
+          reviewId: 'owner/repo#42',
+          reviewStatus: 'Awaiting review',
         }),
       }));
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
@@ -3267,7 +3235,10 @@ describe('TaskRunner', () => {
         updateTask: vi.fn(),
       };
       const mergeGateProvider = {
-        publishReviewGate: vi.fn().mockResolvedValue(reviewGateResult('https://github.com/owner/repo/pull/42', 'owner/repo#42')),
+        createReview: vi.fn().mockResolvedValue({
+          url: 'https://github.com/owner/repo/pull/42',
+          identifier: 'owner/repo#42',
+        }),
       };
       const executor = new TaskRunner({
         orchestrator: orchestrator as any,
@@ -3421,7 +3392,10 @@ console.log(JSON.stringify(out));
         updateTask: vi.fn(),
       };
       const mergeGateProvider = {
-        publishReviewGate: vi.fn().mockResolvedValue(reviewGateResult('https://github.com/invoker/invoker/pull/276', 'invoker/invoker#276')),
+        createReview: vi.fn().mockResolvedValue({
+          url: 'https://github.com/invoker/invoker/pull/276',
+          identifier: 'invoker/invoker#276',
+        }),
       };
       const executor = new TaskRunner({
         orchestrator: orchestrator as any,
@@ -3457,8 +3431,8 @@ console.log(JSON.stringify(out));
       await (executor as any).executeMergeNode(mergeTask);
 
       expect(gitCalls.some(c => c[0] === 'push')).toBe(true);
-      expect(mergeGateProvider.publishReviewGate).toHaveBeenCalledTimes(1);
-      const providerBody = mergeGateProvider.publishReviewGate.mock.calls[0][0].body;
+      expect(mergeGateProvider.createReview).toHaveBeenCalledTimes(1);
+      const providerBody = mergeGateProvider.createReview.mock.calls[0][0].body;
       expect(providerBody).toContain('## Visual Proof');
       expect(providerBody).toContain('merge-gate-no-inline-approve.png');
       expect(providerBody).toContain('![before](https://img.example.test/before--merge-gate-no-inline-approve.png)');
@@ -3577,7 +3551,10 @@ console.log(JSON.stringify(out));
         updateTask: vi.fn(),
       };
       const mergeGateProvider = {
-        publishReviewGate: vi.fn().mockResolvedValue(reviewGateResult('https://github.com/owner/repo/pull/55', 'owner/repo#55')),
+        createReview: vi.fn().mockResolvedValue({
+          url: 'https://github.com/owner/repo/pull/55',
+          identifier: 'owner/repo#55',
+        }),
       };
       const onComplete = vi.fn();
       const executor = new TaskRunner({
@@ -3618,7 +3595,7 @@ console.log(JSON.stringify(out));
       expect((executor as any).authorPrBodyWithSkill).toHaveBeenCalled();
 
       // Should create a PR via mergeGateProvider
-      expect(mergeGateProvider.publishReviewGate).toHaveBeenCalledWith(
+      expect(mergeGateProvider.createReview).toHaveBeenCalledWith(
         expect.objectContaining({
           baseBranch: 'master',
           featureBranch: 'plan/feature',
@@ -3631,7 +3608,9 @@ console.log(JSON.stringify(out));
         config: expect.objectContaining({ runnerKind: 'worktree' }),
         execution: expect.objectContaining({
           branch: 'plan/feature',
-          reviewGate: expect.objectContaining({ artifacts: [expect.objectContaining({ identifier: 'owner/repo#55', url: 'https://github.com/owner/repo/pull/55' })] }),
+          reviewUrl: 'https://github.com/owner/repo/pull/55',
+          reviewId: 'owner/repo#55',
+          reviewStatus: 'Awaiting review',
         }),
       }));
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
@@ -3661,7 +3640,10 @@ console.log(JSON.stringify(out));
         updateTask: vi.fn(),
       };
       const mergeGateProvider = {
-        publishReviewGate: vi.fn().mockResolvedValue(reviewGateResult('https://github.com/owner/repo/pull/55', 'owner/repo#55')),
+        createReview: vi.fn().mockResolvedValue({
+          url: 'https://github.com/owner/repo/pull/55',
+          identifier: 'owner/repo#55',
+        }),
       };
       const executor = new TaskRunner({
         orchestrator: orchestrator as any,
@@ -3725,7 +3707,10 @@ console.log(JSON.stringify(out));
         updateTask: vi.fn(),
       };
       const mergeGateProvider = {
-        publishReviewGate: vi.fn().mockResolvedValue(reviewGateResult('https://github.com/owner/repo/pull/55', 'owner/repo#55')),
+        createReview: vi.fn().mockResolvedValue({
+          url: 'https://github.com/owner/repo/pull/55',
+          identifier: 'owner/repo#55',
+        }),
       };
       const onComplete = vi.fn();
       const executor = new TaskRunner({
@@ -3762,7 +3747,7 @@ console.log(JSON.stringify(out));
 
       await (executor as any).executeMergeNode(mergeTask);
 
-      expect(mergeGateProvider.publishReviewGate).toHaveBeenCalled();
+      expect(mergeGateProvider.createReview).toHaveBeenCalled();
       expect(orchestrator.setTaskReviewReady).toHaveBeenCalled();
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
     });
@@ -3902,7 +3887,10 @@ console.log(JSON.stringify(out));
         updateTask: vi.fn(),
       };
       const mergeGateProvider = {
-        publishReviewGate: vi.fn().mockResolvedValue(reviewGateResult('https://github.com/owner/repo/pull/99', '99')),
+        createReview: vi.fn().mockResolvedValue({
+          url: 'https://github.com/owner/repo/pull/99',
+          identifier: '99',
+        }),
       };
       const executor = new TaskRunner({
         orchestrator: orchestrator as any,
@@ -3940,7 +3928,7 @@ console.log(JSON.stringify(out));
       await (executor as any).executeMergeNode(mergeTask);
 
       expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Created review artifacts: 99'),
+        expect.stringContaining('https://github.com/owner/repo/pull/99'),
       );
 
       logSpy.mockRestore();
@@ -3970,7 +3958,10 @@ console.log(JSON.stringify(out));
         updateTask: vi.fn(),
       };
       const mergeGateProvider = {
-        publishReviewGate: vi.fn().mockResolvedValue(reviewGateResult('https://github.com/owner/repo/pull/42', '42')),
+        createReview: vi.fn().mockResolvedValue({
+          url: 'https://github.com/owner/repo/pull/42',
+          identifier: '42',
+        }),
       };
       const executor = new TaskRunner({
         orchestrator: orchestrator as any,
@@ -4161,7 +4152,7 @@ console.log(JSON.stringify(out));
       );
     });
 
-    it('executeMergeNode passes authored body to publishReviewGate in external_review mode', async () => {
+    it('executeMergeNode passes authored body to createReview in external_review mode', async () => {
       const allTasks = [
         makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
       ];
@@ -4185,7 +4176,10 @@ console.log(JSON.stringify(out));
         updateTask: vi.fn(),
       };
       const mergeGateProvider = {
-        publishReviewGate: vi.fn().mockResolvedValue(reviewGateResult('https://github.com/owner/repo/pull/42', '42')),
+        createReview: vi.fn().mockResolvedValue({
+          url: 'https://github.com/owner/repo/pull/42',
+          identifier: '42',
+        }),
       };
       const executor = new TaskRunner({
         orchestrator: orchestrator as any,
@@ -4229,8 +4223,8 @@ console.log(JSON.stringify(out));
         }),
       );
 
-      // publishReviewGate receives the authored body, not the raw summary
-      expect(mergeGateProvider.publishReviewGate).toHaveBeenCalledWith(
+      // createReview receives the authored body, not the raw summary
+      expect(mergeGateProvider.createReview).toHaveBeenCalledWith(
         expect.objectContaining({ body: '## Summary\n\nAuthored PR body from summary' }),
       );
       expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith(
@@ -4364,7 +4358,7 @@ console.log(JSON.stringify(out));
         getTask: vi.fn((id: string) => ({
           id,
           status: 'awaiting_approval',
-          execution: { reviewGate: reviewGateExecution('owner/repo#42') },
+          execution: { reviewId: 'owner/repo#42' },
         })),
         approve: vi.fn(),
       };
@@ -4372,7 +4366,7 @@ console.log(JSON.stringify(out));
         updateTask: vi.fn(),
       };
       const mergeGateProvider = {
-        checkArtifact: vi.fn().mockResolvedValue({
+        checkApproval: vi.fn().mockResolvedValue({
           approved: false,
           rejected: false,
           statusText: 'Awaiting review',
@@ -4391,12 +4385,12 @@ console.log(JSON.stringify(out));
       await executor.checkPrApprovalNow('task-1');
 
       expect(orchestrator.getTask).toHaveBeenCalledWith('task-1');
-      expect(mergeGateProvider.checkArtifact).toHaveBeenCalledWith({
+      expect(mergeGateProvider.checkApproval).toHaveBeenCalledWith({
         identifier: 'owner/repo#42',
         cwd: '/tmp',
       });
       expect(persistence.updateTask).toHaveBeenCalledWith('task-1', {
-        execution: { reviewGate: expect.objectContaining({ statusText: 'Awaiting review' }) },
+        execution: { reviewStatus: 'Awaiting review' },
       });
       expect(orchestrator.approve).not.toHaveBeenCalled();
     });
@@ -4410,7 +4404,7 @@ console.log(JSON.stringify(out));
         getTask: vi.fn((id: string) => ({
           id,
           status: 'review_ready',
-          execution: { reviewGate: reviewGateExecution('owner/repo#42') },
+          execution: { reviewId: 'owner/repo#42' },
         })),
         approve: vi.fn().mockResolvedValue([downstream]),
       };
@@ -4418,7 +4412,7 @@ console.log(JSON.stringify(out));
         updateTask: vi.fn(),
       };
       const mergeGateProvider = {
-        checkArtifact: vi.fn().mockResolvedValue({
+        checkApproval: vi.fn().mockResolvedValue({
           approved: true,
           rejected: false,
           statusText: 'Merged',
@@ -4438,7 +4432,7 @@ console.log(JSON.stringify(out));
       await executor.checkPrApprovalNow('task-1');
 
       expect(persistence.updateTask).toHaveBeenCalledWith('task-1', {
-        execution: { reviewGate: expect.objectContaining({ statusText: 'All review artifacts merged' }) },
+        execution: { reviewStatus: 'Merged' },
       });
       expect(orchestrator.approve).toHaveBeenCalledWith('task-1');
       expect(executeTasks).toHaveBeenCalledWith([downstream]);
@@ -4449,7 +4443,7 @@ console.log(JSON.stringify(out));
         getTask: vi.fn((id: string) => ({
           id,
           status: 'review_ready',
-          execution: { reviewGate: reviewGateExecution('owner/repo#42') },
+          execution: { reviewId: 'owner/repo#42' },
         })),
         approve: vi.fn(),
       };
@@ -4457,7 +4451,7 @@ console.log(JSON.stringify(out));
         updateTask: vi.fn(),
       };
       const mergeGateProvider = {
-        checkArtifact: vi.fn().mockResolvedValue({
+        checkApproval: vi.fn().mockResolvedValue({
           approved: false,
           rejected: false,
           statusText: 'Approved, awaiting merge',
@@ -4476,7 +4470,7 @@ console.log(JSON.stringify(out));
       await executor.checkPrApprovalNow('task-1');
 
       expect(persistence.updateTask).toHaveBeenCalledWith('task-1', {
-        execution: { reviewGate: expect.objectContaining({ statusText: 'Approved, awaiting merge' }) },
+        execution: { reviewStatus: 'Approved, awaiting merge' },
       });
       expect(orchestrator.approve).not.toHaveBeenCalled();
     });
@@ -4486,7 +4480,7 @@ console.log(JSON.stringify(out));
         getTask: vi.fn((id: string) => ({
           id,
           status: 'review_ready',
-          execution: { reviewGate: reviewGateExecution('owner/repo#42') },
+          execution: { reviewId: 'owner/repo#42' },
         })),
         approve: vi.fn(),
       };
@@ -4494,7 +4488,7 @@ console.log(JSON.stringify(out));
         updateTask: vi.fn(),
       };
       const mergeGateProvider = {
-        checkArtifact: vi.fn().mockResolvedValue({
+        checkApproval: vi.fn().mockResolvedValue({
           approved: false,
           rejected: true,
           statusText: 'Changes requested',
@@ -4514,7 +4508,7 @@ console.log(JSON.stringify(out));
       await executor.checkPrApprovalNow('task-1');
 
       expect(persistence.updateTask).toHaveBeenCalledWith('task-1', {
-        execution: { reviewGate: expect.objectContaining({ statusText: 'Changes requested' }) },
+        execution: { reviewStatus: 'Changes requested' },
       });
       expect(orchestrator.approve).not.toHaveBeenCalled();
       expect(executeTasks).not.toHaveBeenCalled();
@@ -4525,7 +4519,7 @@ console.log(JSON.stringify(out));
         getTask: vi.fn((id: string) => ({
           id,
           status: 'review_ready',
-          execution: { reviewGate: reviewGateExecution('owner/repo#43') },
+          execution: { reviewId: 'owner/repo#43' },
         })),
         approve: vi.fn(),
       };
@@ -4533,7 +4527,7 @@ console.log(JSON.stringify(out));
         updateTask: vi.fn(),
       };
       const mergeGateProvider = {
-        checkArtifact: vi.fn().mockResolvedValue({
+        checkApproval: vi.fn().mockResolvedValue({
           approved: false,
           rejected: false,
           closed: true,
@@ -4555,7 +4549,7 @@ console.log(JSON.stringify(out));
 
       expect(persistence.updateTask).toHaveBeenCalledWith('task-closed', {
         status: 'closed',
-        execution: { reviewStatus: expect.stringContaining('Review artifact closed:') },
+        execution: { reviewStatus: 'Closed' },
       });
       expect(orchestrator.approve).not.toHaveBeenCalled();
       expect(executeTasks).not.toHaveBeenCalled();
@@ -4570,7 +4564,7 @@ console.log(JSON.stringify(out));
         getTask: vi.fn((id: string) => ({
           id,
           status: 'review_ready',
-          execution: { reviewGate: reviewGateExecution('owner/repo#42') },
+          execution: { reviewId: 'owner/repo#42' },
         })),
         approve: vi.fn().mockResolvedValue([downstream]),
       };
@@ -4578,7 +4572,7 @@ console.log(JSON.stringify(out));
         updateTask: vi.fn(),
       };
       const mergeGateProvider = {
-        checkArtifact: vi.fn().mockResolvedValue({
+        checkApproval: vi.fn().mockResolvedValue({
           approved: true,
           rejected: false,
           statusText: 'Merged',
@@ -4599,7 +4593,7 @@ console.log(JSON.stringify(out));
       // No active poller is registered — simulates a fresh process after restart
       await executor.checkPrApprovalNow('task-with-no-poller');
 
-      expect(mergeGateProvider.checkArtifact).toHaveBeenCalledWith({
+      expect(mergeGateProvider.checkApproval).toHaveBeenCalledWith({
         identifier: 'owner/repo#42',
         cwd: '/tmp',
       });
@@ -4620,7 +4614,7 @@ console.log(JSON.stringify(out));
         updateTask: vi.fn(),
       };
       const mergeGateProvider = {
-        checkArtifact: vi.fn(),
+        checkApproval: vi.fn(),
       };
 
       const executor = new TaskRunner({
@@ -4633,7 +4627,7 @@ console.log(JSON.stringify(out));
 
       await executor.checkPrApprovalNow('task-without-review-id');
 
-      expect(mergeGateProvider.checkArtifact).not.toHaveBeenCalled();
+      expect(mergeGateProvider.checkApproval).not.toHaveBeenCalled();
       expect(persistence.updateTask).not.toHaveBeenCalled();
       expect(orchestrator.approve).not.toHaveBeenCalled();
     });
@@ -4656,14 +4650,14 @@ console.log(JSON.stringify(out));
 
       await executor.checkPrApprovalNow('task-1');
 
-      expect(orchestrator.getTask).toHaveBeenCalledWith('task-1');
+      expect(orchestrator.getTask).not.toHaveBeenCalled();
       expect(persistence.updateTask).not.toHaveBeenCalled();
     });
   });
 
-  // ── merge-gate checkArtifact cwd resolution ────────────
+  // ── merge-gate checkApproval cwd resolution ────────────
 
-  describe('merge-gate checkArtifact uses workspacePath as cwd', () => {
+  describe('merge-gate checkApproval uses workspacePath as cwd', () => {
     describe('checkPrApprovalNow', () => {
       it('uses task workspacePath as cwd when present', async () => {
         const orchestrator = {
@@ -4671,7 +4665,7 @@ console.log(JSON.stringify(out));
             id,
             status: 'review_ready',
             execution: {
-              reviewGate: reviewGateExecution('owner/repo#99'),
+              reviewId: 'owner/repo#99',
               workspacePath: '/workspace/merge-worktree',
             },
           })),
@@ -4679,7 +4673,7 @@ console.log(JSON.stringify(out));
         };
         const persistence = { updateTask: vi.fn() };
         const mergeGateProvider = {
-          checkArtifact: vi.fn().mockResolvedValue({
+          checkApproval: vi.fn().mockResolvedValue({
             approved: false,
             rejected: false,
             statusText: 'Pending',
@@ -4697,7 +4691,7 @@ console.log(JSON.stringify(out));
 
         await executor.checkPrApprovalNow('task-ws');
 
-        expect(mergeGateProvider.checkArtifact).toHaveBeenCalledWith({
+        expect(mergeGateProvider.checkApproval).toHaveBeenCalledWith({
           identifier: 'owner/repo#99',
           cwd: '/workspace/merge-worktree',
         });
@@ -4708,13 +4702,13 @@ console.log(JSON.stringify(out));
           getTask: vi.fn((id: string) => ({
             id,
             status: 'review_ready',
-            execution: { reviewGate: reviewGateExecution('owner/repo#100') },
+            execution: { reviewId: 'owner/repo#100' },
           })),
           approve: vi.fn(),
         };
         const persistence = { updateTask: vi.fn() };
         const mergeGateProvider = {
-          checkArtifact: vi.fn().mockResolvedValue({
+          checkApproval: vi.fn().mockResolvedValue({
             approved: false,
             rejected: false,
             statusText: 'Pending',
@@ -4732,7 +4726,7 @@ console.log(JSON.stringify(out));
 
         await executor.checkPrApprovalNow('task-no-ws');
 
-        expect(mergeGateProvider.checkArtifact).toHaveBeenCalledWith({
+        expect(mergeGateProvider.checkApproval).toHaveBeenCalledWith({
           identifier: 'owner/repo#100',
           cwd: '/runner-base-cwd',
         });
@@ -4748,7 +4742,7 @@ console.log(JSON.stringify(out));
             id,
             status: 'review_ready',
             execution: {
-              reviewGate: reviewGateExecution('owner/repo#101'),
+              reviewId: 'owner/repo#101',
               workspacePath: '/workspace/approved-worktree',
             },
           })),
@@ -4756,7 +4750,7 @@ console.log(JSON.stringify(out));
         };
         const persistence = { updateTask: vi.fn() };
         const mergeGateProvider = {
-          checkArtifact: vi.fn().mockResolvedValue({
+          checkApproval: vi.fn().mockResolvedValue({
             approved: true,
             rejected: false,
             statusText: 'Merged',
@@ -4775,12 +4769,12 @@ console.log(JSON.stringify(out));
 
         await executor.checkPrApprovalNow('task-approved');
 
-        expect(mergeGateProvider.checkArtifact).toHaveBeenCalledWith({
+        expect(mergeGateProvider.checkApproval).toHaveBeenCalledWith({
           identifier: 'owner/repo#101',
           cwd: '/workspace/approved-worktree',
         });
         expect(persistence.updateTask).toHaveBeenCalledWith('task-approved', {
-          execution: { reviewGate: expect.objectContaining({ statusText: 'All review artifacts merged' }) },
+          execution: { reviewStatus: 'Merged' },
         });
         expect(orchestrator.approve).toHaveBeenCalledWith('task-approved');
         expect(executeTasks).toHaveBeenCalledWith([downstream]);
@@ -4795,7 +4789,7 @@ console.log(JSON.stringify(out));
             status: 'review_ready',
             config: { workflowId: 'wf-close', isMergeNode: true },
             execution: {
-              reviewGate: reviewGateExecution('205'),
+              reviewId: '205',
               workspacePath: '/workspace/close-gate',
             },
           }),
@@ -4804,7 +4798,7 @@ console.log(JSON.stringify(out));
           getAllTasks: () => allTasks,
         };
         const mergeGateProvider = {
-          closeArtifact: vi.fn().mockResolvedValue(undefined),
+          closeReview: vi.fn().mockResolvedValue(undefined),
         };
 
         const executor = new TaskRunner({
@@ -4817,7 +4811,7 @@ console.log(JSON.stringify(out));
 
         await executor.closeWorkflowReview('wf-close');
 
-        expect(mergeGateProvider.closeArtifact).toHaveBeenCalledWith({
+        expect(mergeGateProvider.closeReview).toHaveBeenCalledWith({
           identifier: '205',
           cwd: '/workspace/close-gate',
         });
@@ -4830,7 +4824,7 @@ console.log(JSON.stringify(out));
             status: 'review_ready',
             config: { isMergeNode: true },
             execution: {
-              reviewGate: reviewGateExecution('owner/repo#200'),
+              reviewId: 'owner/repo#200',
               workspacePath: '/workspace/gate-worktree',
             },
           }),
@@ -4842,7 +4836,7 @@ console.log(JSON.stringify(out));
         };
         const persistence = { updateTask: vi.fn() };
         const mergeGateProvider = {
-          checkArtifact: vi.fn().mockResolvedValue({
+          checkApproval: vi.fn().mockResolvedValue({
             approved: false,
             rejected: false,
             statusText: 'Pending',
@@ -4859,7 +4853,7 @@ console.log(JSON.stringify(out));
 
         await executor.checkMergeGateStatuses();
 
-        expect(mergeGateProvider.checkArtifact).toHaveBeenCalledWith({
+        expect(mergeGateProvider.checkApproval).toHaveBeenCalledWith({
           identifier: 'owner/repo#200',
           cwd: '/workspace/gate-worktree',
         });
@@ -4871,7 +4865,7 @@ console.log(JSON.stringify(out));
             id: 'merge-no-ws',
             status: 'awaiting_approval',
             config: { isMergeNode: true },
-            execution: { reviewGate: reviewGateExecution('owner/repo#201') },
+            execution: { reviewId: 'owner/repo#201' },
           }),
         ];
         const orchestrator = {
@@ -4881,7 +4875,7 @@ console.log(JSON.stringify(out));
         };
         const persistence = { updateTask: vi.fn() };
         const mergeGateProvider = {
-          checkArtifact: vi.fn().mockResolvedValue({
+          checkApproval: vi.fn().mockResolvedValue({
             approved: false,
             rejected: false,
             statusText: 'Pending',
@@ -4898,7 +4892,7 @@ console.log(JSON.stringify(out));
 
         await executor.checkMergeGateStatuses();
 
-        expect(mergeGateProvider.checkArtifact).toHaveBeenCalledWith({
+        expect(mergeGateProvider.checkApproval).toHaveBeenCalledWith({
           identifier: 'owner/repo#201',
           cwd: '/runner-base-cwd',
         });
@@ -4915,7 +4909,7 @@ console.log(JSON.stringify(out));
             status: 'review_ready',
             config: { isMergeNode: true },
             execution: {
-              reviewGate: reviewGateExecution('owner/repo#202'),
+              reviewId: 'owner/repo#202',
               workspacePath: '/workspace/approved-gate',
             },
           }),
@@ -4927,7 +4921,7 @@ console.log(JSON.stringify(out));
         };
         const persistence = { updateTask: vi.fn() };
         const mergeGateProvider = {
-          checkArtifact: vi.fn().mockResolvedValue({
+          checkApproval: vi.fn().mockResolvedValue({
             approved: true,
             rejected: false,
             statusText: 'Merged',
@@ -4945,12 +4939,12 @@ console.log(JSON.stringify(out));
 
         await executor.checkMergeGateStatuses();
 
-        expect(mergeGateProvider.checkArtifact).toHaveBeenCalledWith({
+        expect(mergeGateProvider.checkApproval).toHaveBeenCalledWith({
           identifier: 'owner/repo#202',
           cwd: '/workspace/approved-gate',
         });
         expect(persistence.updateTask).toHaveBeenCalledWith('merge-approved', {
-          execution: { reviewGate: expect.objectContaining({ statusText: 'All review artifacts merged' }) },
+          execution: { reviewStatus: 'Merged' },
         });
         expect(orchestrator.approve).toHaveBeenCalledWith('merge-approved');
         expect(executeTasks).toHaveBeenCalledWith([downstream]);
@@ -4963,7 +4957,7 @@ console.log(JSON.stringify(out));
             status: 'review_ready',
             config: { isMergeNode: true },
             execution: {
-              reviewGate: reviewGateExecution('owner/repo#203'),
+              reviewId: 'owner/repo#203',
               workspacePath: '/workspace/open-approved-gate',
             },
           }),
@@ -4975,7 +4969,7 @@ console.log(JSON.stringify(out));
         };
         const persistence = { updateTask: vi.fn() };
         const mergeGateProvider = {
-          checkArtifact: vi.fn().mockResolvedValue({
+          checkApproval: vi.fn().mockResolvedValue({
             approved: false,
             rejected: false,
             statusText: 'Approved, awaiting merge',
@@ -4992,12 +4986,12 @@ console.log(JSON.stringify(out));
 
         await executor.checkMergeGateStatuses();
 
-        expect(mergeGateProvider.checkArtifact).toHaveBeenCalledWith({
+        expect(mergeGateProvider.checkApproval).toHaveBeenCalledWith({
           identifier: 'owner/repo#203',
           cwd: '/workspace/open-approved-gate',
         });
         expect(persistence.updateTask).toHaveBeenCalledWith('merge-open-approved', {
-          execution: { reviewGate: expect.objectContaining({ statusText: 'Approved, awaiting merge' }) },
+          execution: { reviewStatus: 'Approved, awaiting merge' },
         });
         expect(orchestrator.approve).not.toHaveBeenCalled();
       });
@@ -5009,7 +5003,7 @@ console.log(JSON.stringify(out));
             status: 'review_ready',
             config: { isMergeNode: true },
             execution: {
-              reviewGate: reviewGateExecution('owner/repo#204'),
+              reviewId: 'owner/repo#204',
               workspacePath: '/workspace/rejected-gate',
             },
           }),
@@ -5021,7 +5015,7 @@ console.log(JSON.stringify(out));
         };
         const persistence = { updateTask: vi.fn() };
         const mergeGateProvider = {
-          checkArtifact: vi.fn().mockResolvedValue({
+          checkApproval: vi.fn().mockResolvedValue({
             approved: false,
             rejected: true,
             statusText: 'Changes requested',
@@ -5039,12 +5033,12 @@ console.log(JSON.stringify(out));
 
         await executor.checkMergeGateStatuses();
 
-        expect(mergeGateProvider.checkArtifact).toHaveBeenCalledWith({
+        expect(mergeGateProvider.checkApproval).toHaveBeenCalledWith({
           identifier: 'owner/repo#204',
           cwd: '/workspace/rejected-gate',
         });
         expect(persistence.updateTask).toHaveBeenCalledWith('merge-rejected', {
-          execution: { reviewGate: expect.objectContaining({ statusText: 'Changes requested' }) },
+          execution: { reviewStatus: 'Changes requested' },
         });
         expect(orchestrator.approve).not.toHaveBeenCalled();
         expect(executeTasks).not.toHaveBeenCalled();
@@ -5057,7 +5051,7 @@ console.log(JSON.stringify(out));
             status: 'review_ready',
             config: { isMergeNode: true },
             execution: {
-              reviewGate: reviewGateExecution('owner/repo#205'),
+              reviewId: 'owner/repo#205',
               workspacePath: '/workspace/closed-gate',
             },
           }),
@@ -5069,7 +5063,7 @@ console.log(JSON.stringify(out));
         };
         const persistence = { updateTask: vi.fn() };
         const mergeGateProvider = {
-          checkArtifact: vi.fn().mockResolvedValue({
+          checkApproval: vi.fn().mockResolvedValue({
             approved: false,
             rejected: false,
             closed: true,
@@ -5088,13 +5082,13 @@ console.log(JSON.stringify(out));
 
         await executor.checkMergeGateStatuses();
 
-        expect(mergeGateProvider.checkArtifact).toHaveBeenCalledWith({
+        expect(mergeGateProvider.checkApproval).toHaveBeenCalledWith({
           identifier: 'owner/repo#205',
           cwd: '/workspace/closed-gate',
         });
         expect(persistence.updateTask).toHaveBeenCalledWith('merge-closed', {
           status: 'closed',
-          execution: { reviewStatus: expect.stringContaining('Review artifact closed:') },
+          execution: { reviewStatus: 'Closed' },
         });
         expect(orchestrator.approve).not.toHaveBeenCalled();
         expect(executeTasks).not.toHaveBeenCalled();
@@ -5106,7 +5100,7 @@ console.log(JSON.stringify(out));
           status: 'awaiting_approval',
           config: { isMergeNode: true },
           execution: {
-            reviewGate: reviewGateExecution('owner/repo#206'),
+            reviewId: 'owner/repo#206',
             workspacePath: '/workspace/awaiting-closed-gate',
           },
         });
@@ -5117,7 +5111,7 @@ console.log(JSON.stringify(out));
         };
         const persistence = { updateTask: vi.fn() };
         const mergeGateProvider = {
-          checkArtifact: vi.fn().mockResolvedValue({
+          checkApproval: vi.fn().mockResolvedValue({
             approved: false,
             rejected: false,
             closed: true,
@@ -5138,7 +5132,7 @@ console.log(JSON.stringify(out));
 
         expect(persistence.updateTask).toHaveBeenCalledWith('merge-awaiting-closed', {
           status: 'closed',
-          execution: { reviewStatus: expect.stringContaining('Review artifact closed:') },
+          execution: { reviewStatus: 'Closed' },
         });
         expect(orchestrator.approve).not.toHaveBeenCalled();
         expect(executeTasks).not.toHaveBeenCalled();
@@ -5150,7 +5144,7 @@ console.log(JSON.stringify(out));
           status: 'review_ready',
           config: { isMergeNode: true },
           execution: {
-            reviewGate: reviewGateExecution('owner/repo#207'),
+            reviewId: 'owner/repo#207',
             workspacePath: '/workspace/closed-stop-poll',
           },
         });
@@ -5167,7 +5161,7 @@ console.log(JSON.stringify(out));
           }),
         };
         const mergeGateProvider = {
-          checkArtifact: vi.fn().mockResolvedValue({
+          checkApproval: vi.fn().mockResolvedValue({
             approved: false,
             rejected: false,
             closed: true,
@@ -5185,13 +5179,13 @@ console.log(JSON.stringify(out));
         vi.spyOn(executor, 'executeTasks').mockResolvedValue(undefined);
 
         await executor.checkMergeGateStatuses();
-        expect(mergeGateProvider.checkArtifact).toHaveBeenCalledTimes(1);
+        expect(mergeGateProvider.checkApproval).toHaveBeenCalledTimes(1);
         expect(task.status).toBe('closed');
 
         await executor.checkMergeGateStatuses();
         // Closed status falls outside the (review_ready || awaiting_approval) polling filter,
         // so no additional provider call should happen on the second refresh pass.
-        expect(mergeGateProvider.checkArtifact).toHaveBeenCalledTimes(1);
+        expect(mergeGateProvider.checkApproval).toHaveBeenCalledTimes(1);
       });
     });
   });

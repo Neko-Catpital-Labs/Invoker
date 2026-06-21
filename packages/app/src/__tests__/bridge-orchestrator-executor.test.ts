@@ -9,7 +9,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createTestHarness, type TestHarness, InMemoryBus, InMemoryPersistence, MockGit } from '@invoker/test-kit';
 import { Orchestrator, type PlanDefinition, type TaskState } from '@invoker/workflow-core';
-import { TaskRunner, ExecutorRegistry, type ReviewGateProvider } from '@invoker/execution-engine';
+import { TaskRunner, ExecutorRegistry, type MergeGateProvider } from '@invoker/execution-engine';
 import { setWorkflowMergeMode } from '../workflow-actions.js';
 import { executeGlobalTopup } from '../global-topup.js';
 
@@ -1157,20 +1157,13 @@ const MANUAL_MERGE_ONFINISH_NONE_PLAN: PlanDefinition = {
 // ── Flow 9c: UI external_review merge mode ───────────────────
 
 describe('Flow 9c: set-merge-mode external_review', () => {
-  const mockMergeGate: ReviewGateProvider = {
+  const mockMergeGate: MergeGateProvider = {
     name: 'mock',
-    publishReviewGate: async () => ({
-      sealed: true,
-      relationship: { kind: 'unknown', managedBy: 'external' },
-      artifacts: [{
-        id: 'github:pull_request:99',
-        provider: 'github',
-        type: 'pull_request',
-        url: 'https://github.com/owner/repo/pull/99',
-        identifier: 'owner/repo#99',
-      }],
+    createReview: async () => ({
+      url: 'https://github.com/owner/repo/pull/99',
+      identifier: 'owner/repo#99',
     }),
-    checkArtifact: async () => ({
+    checkApproval: async () => ({
       approved: false,
       rejected: false,
       statusText: 'Open',
@@ -1196,7 +1189,7 @@ describe('Flow 9c: set-merge-mode external_review', () => {
 
     expect(h.persistence.loadWorkflow(wfId)!.mergeMode).toBe('external_review');
     expect(h.getTask(mergeId)!.status).toBe('review_ready');
-    expect(h.getTask(mergeId)!.execution.reviewGate?.artifacts[0]?.url).toBe('https://github.com/owner/repo/pull/99');
+    expect(h.getTask(mergeId)!.execution.reviewUrl).toBe('https://github.com/owner/repo/pull/99');
   });
 });
 
