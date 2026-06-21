@@ -1,7 +1,7 @@
 name: "Invalid refactor lane with new fields"
 description: "Implementation workflow that incorrectly combines refactor extraction with field additions."
 onFinish: pull_request
-mergeMode: github
+mergeMode: external_review
 repoUrl: git@github.com:example-org/acme-repo.git
 tasks:
   - id: extract-refresh-helper
