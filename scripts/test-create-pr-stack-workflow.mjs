@@ -14,25 +14,30 @@ const VALID_BODY = `## Summary
 
 This branch updates the PR workflow.
 
-## Review Claim
+<details>
+<summary>Review metadata</summary>
+
+Review Claim:
 
 Keep stack publication on the supported path.
 
-## Review Lane
+Review Lane:
 
 - policy
 
-## Review Unit
+Review Unit:
 
 - tooling-policy
 
-## Safety Invariant
+Safety Invariant:
 
 Only PR workflow tooling changes.
 
-## Slice Rationale
+Slice Rationale:
 
 Stack publishing stays separate from unrelated cleanup.
+
+</details>
 
 ## Non-goals
 
