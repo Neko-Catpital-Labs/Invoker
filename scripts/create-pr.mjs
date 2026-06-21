@@ -28,9 +28,9 @@
  *
  * PR body validation:
  *   Enforces the canonical PR schema:
- *   ## Summary, ## Review Claim, ## Review Lane, ## Safety Invariant,
- *   ## Slice Rationale, ## Non-goals, ## Test Plan, ## Revert Plan,
- *   plus optional ## Architecture and required ## Visual Proof for UI changes.
+ *   ## Summary with collapsed Review metadata, ## Non-goals,
+ *   ## Test Plan, ## Revert Plan, plus optional ## Architecture
+ *   and required ## Visual Proof for UI changes.
  */
 
 import { readFileSync, existsSync } from 'node:fs';
@@ -151,7 +151,7 @@ Stack flow:
   3. Run \`node scripts/create-pr.mjs --title "[Graph Blanking](1) <slice title>" --base <branch> --body-file <file> --update-existing\`
 
 PR body schema:
-  Required: ## Summary, ## Review Claim, ## Review Lane, ## Safety Invariant, ## Slice Rationale, ## Non-goals, ## Test Plan, ## Revert Plan
+  Required: ## Summary with collapsed Review metadata, ## Non-goals, ## Test Plan, ## Revert Plan
   Optional: ## Architecture (must include ### Before and ### After when present)
   UI-impacting diffs require ## Visual Proof with screenshot or video proof.
   Template: scripts/pr-body-template.md`);

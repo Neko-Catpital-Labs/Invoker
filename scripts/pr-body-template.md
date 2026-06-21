@@ -6,21 +6,20 @@ Write paragraphs, not bullets. Keep each paragraph under 30 words.
 
 Put one idea in each paragraph. If one idea leads to another, split them into separate short paragraphs.
 
-## Review Claim
+<details>
+<summary>Review metadata</summary>
 
-State the one thing the reviewer is being asked to approve.
+Review Claim: State the one thing the reviewer is being asked to approve.
 
-## Review Lane
+Review Lane: Choose exactly one: `behavior`, `refactor`, `proof`, `cleanup`, `policy`, or `docs`.
 
-Choose exactly one: `behavior`, `refactor`, `proof`, `cleanup`, `policy`, or `docs`.
+Review Unit: Choose the matching review unit, such as `tooling-policy`, `routing`, or `docs`.
 
-## Safety Invariant
+Safety Invariant: Explain why this slice is safe to review locally.
 
-Explain why this slice is safe to review locally.
+Slice Rationale: Explain why this work is split here instead of bundled elsewhere.
 
-## Slice Rationale
-
-Explain why this work is split here instead of bundled elsewhere.
+</details>
 
 ## Non-goals
 
