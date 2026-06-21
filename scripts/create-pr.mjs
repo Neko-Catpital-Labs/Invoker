@@ -140,10 +140,15 @@ Options:
   --dry-run            Print actions without executing
   --help               Show this help
 
+Stack PR title schema:
+  Stacked PRs must start with a shared idea and one slice index, for example:
+  [Graph Blanking](1) Preserve selected graph while loading
+  [Graph Blanking](2) Follow-up slice
+
 Stack flow:
   1. Publish stack branches with \`mergify stack push\`
   2. Switch to the created stack branch if needed
-  3. Run \`node scripts/create-pr.mjs --title "..." --base <branch> --body-file <file> --update-existing\`
+  3. Run \`node scripts/create-pr.mjs --title "[Graph Blanking](1) <slice title>" --base <branch> --body-file <file> --update-existing\`
 
 PR body schema:
   Required: ## Summary, ## Review Claim, ## Review Lane, ## Safety Invariant, ## Slice Rationale, ## Non-goals, ## Test Plan, ## Revert Plan
@@ -191,6 +196,25 @@ function parseArgs() {
   }
 
   return parsed;
+}
+
+const TRUNK_BRANCHES = new Set(['main', 'master', 'develop']);
+const STACK_PR_TITLE_PATTERN = /^\[[^\[\]\r\n]{3,80}\]\([1-9]\d*\)(?:\s+\S.*)?$/;
+
+function isStackedPrContext(baseBranch, mergifyState) {
+  return mergifyState.managed || !TRUNK_BRANCHES.has(baseBranch);
+}
+
+function assertValidStackPrTitle(title) {
+  if (STACK_PR_TITLE_PATTERN.test(title.trim())) return;
+
+  throw new Error(
+    [
+      'Stack PR titles must start with a shared idea and exactly one slice index.',
+      'Use: [Graph Blanking](1) Preserve selected graph while loading',
+      'Use the next slice number for the next PR: [Graph Blanking](2) Follow-up slice',
+    ].join('\n'),
+  );
 }
 
 function assertValidPrBody(body, options = {}) {
@@ -659,6 +683,10 @@ async function main() {
 
   if (mergifyState.managed && requestedUpdatePath) {
     assertPublishedMergifyBranch(currentBranch, mergifyState.trackedBaseRef);
+  }
+
+  if (isStackedPrContext(args.base, mergifyState)) {
+    assertValidStackPrTitle(args.title);
   }
 
   const nwo = args.dryRun ? 'OWNER/REPO' : getRepoNwo();

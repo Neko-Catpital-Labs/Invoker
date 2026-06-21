@@ -268,6 +268,7 @@ export function classifyReviewUnitsForPath(filePath) {
   if (path.startsWith('scripts/repro/')) return ['proof'];
   if (path === 'scripts/test-create-pr-visual-proof.mjs') return ['tooling-policy'];
   if (/(benchmark|performance|visual-proof)/.test(lowerPath)) return ['proof'];
+  if (path === 'skills/make-pr/SKILL.md') return ['tooling-policy'];
   if (path.startsWith('docs/') || path.startsWith('skills/') || path.endsWith('.md')) return ['docs'];
   if (path.startsWith('.github/')) return ['tooling-policy'];
   if (
