@@ -366,6 +366,12 @@ export function hasMergeConflictExecution(task: TaskState | undefined): boolean 
   }
 }
 
+type SelectedWorkflowGraphSnapshot = {
+  workflowId: string;
+  workflow: WorkflowMeta;
+  tasks: Map<string, TaskState>;
+};
+
 export function App() {
   const [graphRefreshSequence, setGraphRefreshSequence] = useState(0);
   const handleTaskGraphSnapshotApplied = useCallback(() => {
@@ -377,6 +383,7 @@ export function App() {
   const invoker = useInvoker();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const graphSurfaceRef = useRef<HTMLDivElement>(null);
+  const lastGoodSelectedWorkflowGraphRef = useRef<SelectedWorkflowGraphSnapshot | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
   const [stickySelectedWorkflow, setStickySelectedWorkflow] = useState<WorkflowMeta | null>(null);
@@ -581,14 +588,59 @@ export function App() {
     }
     return next;
   }, [selectedWorkflow, selectedWorkflowId, tasks]);
+  useEffect(() => {
+    if (selectedWorkflow && miniDagTasks.size > 0) {
+      lastGoodSelectedWorkflowGraphRef.current = {
+        workflowId: selectedWorkflow.id,
+        workflow: selectedWorkflow,
+        tasks: miniDagTasks,
+      };
+      return;
+    }
+
+    if (!selectedWorkflowId || workflowSelectionDismissed || tasks.size === 0) {
+      lastGoodSelectedWorkflowGraphRef.current = null;
+    }
+  }, [miniDagTasks, selectedWorkflow, selectedWorkflowId, tasks.size, workflowSelectionDismissed]);
+
+  const displayedSelectedWorkflowGraph = useMemo<SelectedWorkflowGraphSnapshot | null>(() => {
+    if (selectedWorkflow && miniDagTasks.size > 0) {
+      return {
+        workflowId: selectedWorkflow.id,
+        workflow: selectedWorkflow,
+        tasks: miniDagTasks,
+      };
+    }
+
+    const snapshot = lastGoodSelectedWorkflowGraphRef.current;
+    const selectedTaskWorkflowId = selectedTask?.config.workflowId ?? null;
+    const selectedTaskForcesDifferentWorkflow = selectedTaskWorkflowId !== null
+      && snapshot !== null
+      && selectedTaskWorkflowId !== snapshot.workflowId;
+    if (
+      snapshot
+      && selectedWorkflowId === snapshot.workflowId
+      && snapshot.tasks.size > 0
+      && !workflowSelectionDismissed
+      && !selectedTaskForcesDifferentWorkflow
+      && tasks.size > 0
+    ) {
+      return snapshot;
+    }
+
+    return null;
+  }, [miniDagTasks, selectedTask, selectedWorkflow, selectedWorkflowId, tasks.size, workflowSelectionDismissed]);
+  const isSelectedWorkflowGraphRefreshing = displayedSelectedWorkflowGraph !== null
+    && !(selectedWorkflow && miniDagTasks.size > 0);
   const selectedTaskDagWorkflows = useMemo(() => {
-    if (!selectedWorkflow || workflows.has(selectedWorkflow.id)) {
+    const workflowForDag = displayedSelectedWorkflowGraph?.workflow ?? selectedWorkflow;
+    if (!workflowForDag || workflows.has(workflowForDag.id)) {
       return workflows;
     }
     const next = new Map(workflows);
-    next.set(selectedWorkflow.id, selectedWorkflow);
+    next.set(workflowForDag.id, workflowForDag);
     return next;
-  }, [selectedWorkflow, workflows]);
+  }, [displayedSelectedWorkflowGraph, selectedWorkflow, workflows]);
 
   useEffect(() => {
     if (!selectedWorkflowId) {
@@ -1867,12 +1919,12 @@ export function App() {
                     onWorkflowContextMenu={handleWorkflowContextMenu}
                     onManualViewport={handleManualViewport}
                   />
-                  {selectedWorkflow && miniDagTasks.size > 0 && (
+                  {displayedSelectedWorkflowGraph !== null && (
                     <FloatingGraphPanel
-                      key={selectedWorkflow.id}
+                      key={displayedSelectedWorkflowGraph.workflow.id}
                       testId="selected-workflow-mini-dag"
                       dragHandleTestId="selected-workflow-mini-dag-drag-handle"
-                      title={`${selectedWorkflow.name} task DAG`}
+                      title={`${displayedSelectedWorkflowGraph.workflow.name} task DAG`}
                       boundsRef={graphSurfaceRef}
                       contentClassName="h-[250px]"
                     >
@@ -1882,8 +1934,13 @@ export function App() {
                         data-keyboard-active={keyboardRegion === 'taskGraph' ? 'true' : 'false'}
                         className={`h-full outline-none ${keyboardRegion === 'taskGraph' ? 'ring-2 ring-inset ring-blue-300/60' : ''}`}
                       >
+                        {isSelectedWorkflowGraphRefreshing && (
+                          <div data-testid="selected-workflow-mini-dag-refreshing" className="px-2 py-1 text-xs text-amber-200">
+                            Refreshing graph…
+                          </div>
+                        )}
                         <TaskDAG
-                          tasks={miniDagTasks}
+                          tasks={displayedSelectedWorkflowGraph.tasks}
                           workflows={selectedTaskDagWorkflows}
                           selectedTaskId={selectedTaskId}
                           cameraCommand={cameraCommand}
@@ -1937,9 +1994,9 @@ export function App() {
             className={`${inspectorCollapsed ? 'w-16' : 'w-96'} transition-all duration-150 outline-none ${keyboardRegion === 'inspector' ? 'ring-2 ring-inset ring-blue-400/50' : ''}`}
           >
             <WorkflowInspector
-              workflow={selectedWorkflow}
+              workflow={displayedSelectedWorkflowGraph?.workflow ?? selectedWorkflow}
               task={selectedTask}
-              workflowTasks={miniDagTasks}
+              workflowTasks={displayedSelectedWorkflowGraph?.tasks ?? miniDagTasks}
               remoteTargets={remoteTargets}
               executionPools={executionPools}
               executionAgents={executionAgents}
