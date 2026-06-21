@@ -55,6 +55,12 @@ function extractWorkspaceSetupFailures(events: readonly TaskAuditEvent[]): strin
   return failures;
 }
 
+function chooseReviewArtifact(task?: TaskState) {
+  const artifacts = task?.execution.reviewGate?.artifacts;
+  if (!artifacts || artifacts.length === 0) return undefined;
+  return [...artifacts].reverse().find((artifact) => artifact.status !== 'closed') ?? artifacts[artifacts.length - 1];
+}
+
 function formatElapsed(dateVal: Date | string | undefined): string {
   if (!dateVal) return '--';
   const d = dateVal instanceof Date ? dateVal : new Date(dateVal);
@@ -450,8 +456,30 @@ export function TaskPanel({
         </div>
       )}
 
-      {/* Review link (merge gates only) */}
-      {task.config.isMergeNode && task.execution?.reviewUrl && (
+      {task.config.isMergeNode && task.execution?.reviewGate && task.execution.reviewGate.artifacts.length > 0 && (
+        <div className="space-y-1">
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-gray-400">Review artifacts</span>
+            <span className="text-xs text-gray-300">PRs: {task.execution.reviewGate.artifacts.length}</span>
+          </div>
+          {task.execution.reviewGate.artifacts.map((artifact) => (
+            <div key={artifact.id} className="flex items-center justify-between gap-2">
+              <a
+                href={artifact.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs font-mono text-blue-400 hover:text-blue-300 underline break-all whitespace-normal max-w-[220px]"
+                title={artifact.url}
+                data-testid="pr-url-link"
+              >
+                {artifact.provider} PR #{artifact.identifier}
+              </a>
+              <span className="text-xs text-gray-300">{artifact.statusText ?? artifact.status ?? 'unknown'}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {task.config.isMergeNode && !task.execution?.reviewGate && task.execution?.reviewUrl && (
         <div className="flex items-center justify-between">
           <span className="text-sm text-gray-400">Review link</span>
           <a
@@ -475,8 +503,7 @@ export function TaskPanel({
         </div>
       )}
 
-      {/* PR target repo (pending merge gates without a review URL yet) */}
-      {task.config.isMergeNode && task.status === 'pending' && !task.execution?.reviewUrl && workflowRepoUrl && (
+      {task.config.isMergeNode && task.status === 'pending' && !task.execution?.reviewUrl && !task.execution?.reviewGate && workflowRepoUrl && (
         <div className="flex items-center justify-between" data-testid="pr-target-repo">
           <span className="text-sm text-gray-400">PR target repo</span>
           <span className="text-xs font-mono text-gray-200 break-all whitespace-normal text-right max-w-[260px]" title={workflowRepoUrl}>
@@ -836,13 +863,18 @@ export function TaskPanel({
                   const status = resolveExternalDepStatus(dep, allTasks);
                   const normalizedTaskId = normalizeExternalDepTaskId(dep);
                   const isMergeGate = normalizedTaskId === '__merge__';
-
-                  // Detect mixed policy
                   const group = workflowGroups.get(dep.workflowId) ?? [];
-                  const policies = new Set(group.map(d => d.gatePolicy ?? 'review_ready'));
+                  const policies = new Set(group.map((candidate) => candidate.gatePolicy ?? 'review_ready'));
                   const hasMixedPolicy = policies.size > 1;
+                  let reviewUrl = '';
+                  let reviewCount = 0;
+                  if (isMergeGate && allTasks) {
+                    const mergeNode = allTasks.get(`__merge__${dep.workflowId}`);
+                    const artifact = chooseReviewArtifact(mergeNode);
+                    reviewUrl = artifact?.url ?? mergeNode?.execution?.reviewUrl ?? '';
+                    reviewCount = mergeNode?.execution?.reviewGate?.artifacts.length ?? (reviewUrl ? 1 : 0);
+                  }
 
-                  // Compute impact
                   const steps = status !== 'missing' && !hasMixedPolicy
                     ? computeSteps(status as TaskStatus, draftPolicy as TaskStatus)
                     : Infinity;
@@ -863,13 +895,6 @@ export function TaskPanel({
                     }
                   }
 
-                  // Get reviewUrl from merge node if it's a merge gate
-                  let reviewUrl = '';
-                  if (isMergeGate && allTasks) {
-                    const mergeNode = allTasks.get(`__merge__${dep.workflowId}`);
-                    reviewUrl = mergeNode?.execution?.reviewUrl ?? '';
-                  }
-
                   const dotColor = status !== 'missing' ? getStatusColor(status as TaskStatus).dot : 'bg-slate-500';
 
                   return (
@@ -886,7 +911,7 @@ export function TaskPanel({
                                 rel="noopener noreferrer"
                                 className="ml-2 text-blue-400 hover:text-blue-300"
                               >
-                                PR #{reviewUrl.split('/').pop()} ↗
+                                PRs: {reviewCount || 1} ↗
                               </a>
                             )}
                           </div>
@@ -941,7 +966,6 @@ export function TaskPanel({
               </div>
             )}
 
-            {/* Satisfied gates disclosure */}
             {satisfied.length > 0 && (
               <div className="space-y-1">
                 <button
@@ -961,13 +985,14 @@ export function TaskPanel({
                       const status = resolveExternalDepStatus(dep, allTasks);
                       const normalizedTaskId = normalizeExternalDepTaskId(dep);
                       const isMergeGate = normalizedTaskId === '__merge__';
-
                       let reviewUrl = '';
+                      let reviewCount = 0;
                       if (isMergeGate && allTasks) {
                         const mergeNode = allTasks.get(`__merge__${dep.workflowId}`);
-                        reviewUrl = mergeNode?.execution?.reviewUrl ?? '';
+                        const artifact = chooseReviewArtifact(mergeNode);
+                        reviewUrl = artifact?.url ?? mergeNode?.execution?.reviewUrl ?? '';
+                        reviewCount = mergeNode?.execution?.reviewGate?.artifacts.length ?? (reviewUrl ? 1 : 0);
                       }
-
                       const dotColor = status !== 'missing' ? getStatusColor(status as TaskStatus).dot : 'bg-slate-500';
 
                       return (
@@ -994,7 +1019,7 @@ export function TaskPanel({
                                   rel="noopener noreferrer"
                                   className="ml-1 text-blue-400 hover:text-blue-300"
                                 >
-                                  PR#{reviewUrl.split('/').pop()} ↗
+                                  PRs: {reviewCount || 1} ↗
                                 </a>
                               )}
                             </>
@@ -1011,7 +1036,7 @@ export function TaskPanel({
                                   rel="noopener noreferrer"
                                   className="ml-1 text-blue-400 hover:text-blue-300"
                                 >
-                                  PR#{reviewUrl.split('/').pop()}
+                                  PRs: {reviewCount || 1}
                                 </a>
                               )}
                             </>

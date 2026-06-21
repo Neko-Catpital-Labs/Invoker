@@ -38,12 +38,13 @@ function getReviewReadyMergeNodeReviewUrl(
 ): string | undefined {
   if (!tasks) return undefined;
   for (const candidate of tasks.values()) {
-    if (
-      candidate.config.isMergeNode &&
-      candidate.status === 'review_ready' &&
-      candidate.execution.reviewUrl
-    ) {
-      return candidate.execution.reviewUrl;
+    if (candidate.config.isMergeNode && candidate.status === 'review_ready') {
+      const artifacts = candidate.execution.reviewGate?.artifacts;
+      if (artifacts && artifacts.length > 0) {
+        const artifact = [...artifacts].reverse().find((entry) => entry.status !== 'closed') ?? artifacts[artifacts.length - 1];
+        if (artifact?.url) return artifact.url;
+      }
+      if (candidate.execution.reviewUrl) return candidate.execution.reviewUrl;
     }
   }
   return undefined;
@@ -91,7 +92,7 @@ export function WorkflowInspector({
     workflow?.status === 'review_ready'
       ? task
         ? task.config.isMergeNode && task.status === 'review_ready'
-          ? task.execution.reviewUrl
+          ? getReviewReadyMergeNodeReviewUrl(new Map([[task.id, task]]))
           : undefined
         : getReviewReadyMergeNodeReviewUrl(workflowTasks)
       : undefined;

@@ -651,13 +651,23 @@ export function App() {
     return STATUS_KEY_ORDER.filter((key) => key === 'completed' || key === 'running' || key === 'failed' || key === 'pending' || (counts.get(key) ?? 0) > 0);
   }, [tasks]);
 
+  const getWorkflowReviewUrl = useCallback((workflowId: string) => {
+    const workflowTasks = [...tasks.values()].filter((task) => task.config.workflowId === workflowId);
+    const mergeTask = workflowTasks.find((task) => task.config.isMergeNode);
+    const artifacts = mergeTask?.execution.reviewGate?.artifacts;
+    if (artifacts && artifacts.length > 0) {
+      const artifact = [...artifacts].reverse().find((candidate) => candidate.status !== 'closed') ?? artifacts[artifacts.length - 1];
+      return artifact?.url;
+    }
+    return workflowTasks.find((task) => task.execution.reviewUrl)?.execution.reviewUrl;
+  }, [tasks]);
+
   const searchResults = useMemo<SearchResult[]>(() => {
     const query = normalizedSearchText(searchQuery.trim());
     if (!query) return [];
     const results: SearchResult[] = [];
     for (const workflow of workflows.values()) {
-      const workflowTasks = [...tasks.values()].filter((task) => task.config.workflowId === workflow.id);
-      const reviewUrl = workflowTasks.find((task) => task.execution.reviewUrl)?.execution.reviewUrl;
+      const reviewUrl = getWorkflowReviewUrl(workflow.id);
       const haystack = [
         workflow.id,
         workflow.name,
@@ -698,7 +708,7 @@ export function App() {
       }
     }
     return results.slice(0, 12);
-  }, [searchQuery, tasks, workflows]);
+  }, [getWorkflowReviewUrl, searchQuery, tasks, workflows]);
 
   useEffect(() => {
     setSearchActiveIndex(0);
@@ -1345,13 +1355,12 @@ export function App() {
   }, []);
 
   const handleOpenWorkflowPr = useCallback((workflowId: string) => {
-    const workflowTasks = [...tasks.values()].filter((task) => task.config.workflowId === workflowId);
-    const reviewUrl = workflowTasks.find((task) => task.execution.reviewUrl)?.execution.reviewUrl;
+    const reviewUrl = getWorkflowReviewUrl(workflowId);
     if (reviewUrl) {
       window.open(reviewUrl, '_blank', 'noopener,noreferrer');
     }
     setWorkflowContextMenu(null);
-  }, [tasks]);
+  }, [getWorkflowReviewUrl]);
 
   const handleCopyWorkflowId = useCallback((workflowId: string) => {
     navigator.clipboard?.writeText(workflowId).catch(() => {});

@@ -100,6 +100,34 @@ export interface TaskConfig {
 
 // ── Task Execution (runtime fields) ────────────────────────
 
+export type ReviewArtifactType = 'pull_request';
+export type ReviewArtifactStatus = 'open' | 'merged' | 'closed' | 'rejected' | 'unknown';
+export type ReviewGateRelationshipKind = 'stacked_diffs' | 'independent' | 'unknown';
+
+export interface ReviewGateArtifact {
+  readonly id: string;
+  readonly provider: string;
+  readonly type: ReviewArtifactType;
+  readonly url: string;
+  readonly identifier: string;
+  readonly title?: string;
+  readonly baseBranch?: string;
+  readonly headBranch?: string;
+  readonly status?: ReviewArtifactStatus;
+  readonly statusText?: string;
+  readonly headSha?: string;
+  readonly headRef?: string;
+  readonly replacedById?: string;
+}
+
+export interface ReviewGateExecution {
+  readonly sealed: boolean;
+  readonly completion: { readonly required: 'all'; readonly state: 'merged' };
+  readonly relationship: { readonly kind: ReviewGateRelationshipKind; readonly managedBy: 'external' };
+  readonly artifacts: readonly ReviewGateArtifact[];
+  readonly statusText?: string;
+}
+
 export interface TaskExecution {
   readonly phase?: 'launching' | 'executing';
   readonly generation?: number;
@@ -131,6 +159,7 @@ export interface TaskExecution {
   readonly reviewId?: string;
   readonly reviewStatus?: string;
   readonly reviewProviderId?: string;
+  readonly reviewGate?: ReviewGateExecution;
   readonly mergeConflict?: {
     readonly failedBranch: string;
     readonly conflictFiles: readonly string[];
