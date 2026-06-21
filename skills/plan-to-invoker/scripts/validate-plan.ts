@@ -383,7 +383,7 @@ function validatePlan(yamlContent: string): ValidationError[] {
         errorType: 'banned_pattern',
         field: 'command',
         taskId,
-        message: `Task "${taskId}" uses 'npx vitest run' which may not resolve correctly. Use 'pnpm test' instead.`,
+        message: `Task "${taskId}" uses 'npx vitest run' which may not resolve correctly. Use a repo-supported script or explicit package-local command instead.`,
         value: task.command,
       });
     }
