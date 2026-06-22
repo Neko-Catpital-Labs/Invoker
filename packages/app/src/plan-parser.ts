@@ -297,6 +297,9 @@ export function parsePlan(yamlContent: string): PlanDefinition {
 
   const seenTaskIds = new Set<string>();
   const tasks = raw.tasks.map((task, index) => {
+    if (!task || typeof task !== 'object' || Array.isArray(task)) {
+      throw new PlanParseError(`Task at index ${index} must be an object with an "id" field`);
+    }
     if (!task.id || typeof task.id !== 'string') {
       throw new PlanParseError(`Task at index ${index} must have an "id" field`);
     }
