@@ -2,6 +2,7 @@ import type { IpcMain } from 'electron';
 import { TransportError, TransportErrorCode } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
 import type { TaskState } from '@invoker/workflow-core';
+import type { WorkflowMutationAcceptedResult } from '@invoker/contracts';
 import type { WorkflowMutationPriority } from '../workflow-mutation-coordinator.js';
 
 export interface GuiMutationPayload {
@@ -79,13 +80,12 @@ export function registerGuiMutationHandler<TResult = unknown>(
 
 export interface WorkflowScopedGuiMutationRegistrationContext extends GuiMutationRegistrationContext {
   workflowMutationDispatcher: Map<string, (...args: unknown[]) => Promise<unknown>>;
-  runWorkflowMutation: <T>(
+  submitWorkflowMutation: (
     workflowId: string | undefined,
     priority: WorkflowMutationPriority,
     channel: string,
     args: unknown[],
-    op: () => Promise<T>,
-  ) => Promise<T>;
+  ) => WorkflowMutationAcceptedResult;
 }
 
 export function registerWorkflowScopedGuiMutationHandler<TResult = unknown>(
@@ -98,7 +98,7 @@ export function registerWorkflowScopedGuiMutationHandler<TResult = unknown>(
   context.workflowMutationDispatcher.set(channel, (...args: unknown[]) => handler(...args));
   registerGuiMutationHandler(context, channel, async (...args: unknown[]) => {
     const workflowId = resolveWorkflowId(...args);
-    return context.runWorkflowMutation(workflowId, priority, channel, args, () => handler(...args));
+    return context.submitWorkflowMutation(workflowId, priority, channel, args);
   });
 }
 

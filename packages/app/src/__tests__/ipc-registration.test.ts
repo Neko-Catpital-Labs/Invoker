@@ -133,54 +133,46 @@ describe('ipc-registration', () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
-  it('registers workflow-scoped handlers with the same dispatcher and enqueue shape', async () => {
+  it('registers workflow-scoped handlers with the same dispatcher and accepted intent result', async () => {
     const { ipcMain, handleHandlers } = createFakeIpcMain();
     const workflowMutationDispatcher = new Map<string, (...args: unknown[]) => Promise<unknown>>();
-    const calls: Array<{
-      workflowId: string | undefined;
-      priority: WorkflowMutationPriority;
-      channel: string;
-      args: unknown[];
-    }> = [];
+    const accepted = { ok: true as const, accepted: true as const, intentId: 123, workflowId: 'wf-1', channel: 'invoker:rebase-recreate' };
+    const submitWorkflowMutation = vi.fn(() => accepted);
     const context: WorkflowScopedGuiMutationRegistrationContext = {
       ipcMain,
       getOwnerMode: () => true,
       getMessageBus: () => ({ request: vi.fn() }),
       translateGuiMutationToHeadless: vi.fn(),
       workflowMutationDispatcher,
-      runWorkflowMutation: async (workflowId, priority, channel, args, op) => {
-        calls.push({ workflowId, priority, channel, args });
-        return op();
-      },
+      submitWorkflowMutation,
     };
     const handler = vi.fn(async (taskId: unknown) => `done:${String(taskId)}`);
 
     registerWorkflowScopedGuiMutationHandler(
       context,
-      'invoker:restart-task',
-      (taskId) => `workflow-for-${String(taskId)}`,
+      'invoker:rebase-recreate',
+      () => 'wf-1',
       'high',
       handler,
     );
 
-    await expect(handleHandlers.get('invoker:restart-task')?.({}, 'task-1')).resolves.toBe('done:task-1');
-    expect(workflowMutationDispatcher.has('invoker:restart-task')).toBe(true);
-    await expect(workflowMutationDispatcher.get('invoker:restart-task')?.('task-2')).resolves.toBe('done:task-2');
-    expect(calls).toEqual([
-      {
-        workflowId: 'workflow-for-task-1',
-        priority: 'high',
-        channel: 'invoker:restart-task',
-        args: ['task-1'],
-      },
-    ]);
+    await expect(handleHandlers.get('invoker:rebase-recreate')?.({}, 'wf-1')).resolves.toBe(accepted);
+    expect(handler).not.toHaveBeenCalled();
+    expect(workflowMutationDispatcher.has('invoker:rebase-recreate')).toBe(true);
+    await expect(workflowMutationDispatcher.get('invoker:rebase-recreate')?.('task-2')).resolves.toBe('done:task-2');
+    expect(submitWorkflowMutation).toHaveBeenCalledWith(
+      'wf-1',
+      'high',
+      'invoker:rebase-recreate',
+      ['wf-1'],
+    );
   });
 
   it('creates typed registrars that preserve channel registration outputs', async () => {
     const { ipcMain, handleHandlers } = createFakeIpcMain();
     const guiMutationHandlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
     const workflowMutationDispatcher = new Map<string, (...args: unknown[]) => Promise<unknown>>();
-    const runWorkflowMutation = vi.fn(async (_workflowId, _priority, _channel, _args, op) => op());
+    const submitWorkflowMutation = vi.fn(() => ({ ok: true as const, accepted: true as const, intentId: 456, workflowId: 'wf:task-1', channel: 'invoker:scoped' }));
     const guiContext: GuiMutationRegistrationContext = {
       ipcMain,
       getOwnerMode: () => true,
@@ -191,7 +183,7 @@ describe('ipc-registration', () => {
     const workflowContext: WorkflowScopedGuiMutationRegistrationContext = {
       ...guiContext,
       workflowMutationDispatcher,
-      runWorkflowMutation,
+      submitWorkflowMutation,
     };
 
     const {
@@ -208,15 +200,14 @@ describe('ipc-registration', () => {
     );
 
     await expect(handleHandlers.get('invoker:plain')?.({}, 'a')).resolves.toBe('plain:a');
-    await expect(handleHandlers.get('invoker:scoped')?.({}, 'task-1')).resolves.toBe('scoped:task-1');
+    await expect(handleHandlers.get('invoker:scoped')?.({}, 'task-1')).resolves.toEqual({ ok: true, accepted: true, intentId: 456, workflowId: 'wf:task-1', channel: 'invoker:scoped' });
     expect([...guiMutationHandlers.keys()]).toEqual(['invoker:plain', 'invoker:scoped']);
     expect([...workflowMutationDispatcher.keys()]).toEqual(['invoker:scoped']);
-    expect(runWorkflowMutation).toHaveBeenCalledWith(
+    expect(submitWorkflowMutation).toHaveBeenCalledWith(
       'wf:task-1',
       'normal',
       'invoker:scoped',
       ['task-1'],
-      expect.any(Function),
     );
   });
 
