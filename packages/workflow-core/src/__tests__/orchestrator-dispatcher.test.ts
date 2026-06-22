@@ -8,7 +8,7 @@ import type {
   OrchestratorPersistence,
   PlanDefinition,
 } from '../orchestrator.js';
-import type { TaskState, TaskStateChanges } from '../task-types.js';
+import { computeWorkflowRollup, type TaskState, type TaskStateChanges } from '../task-types.js';
 import type { WorkResponse } from '@invoker/contracts';
 
 interface LoggedEvent {
@@ -44,15 +44,12 @@ class InMemoryPersistence implements OrchestratorPersistence {
   private attempts = new Map<string, Attempt[]>();
   private nextDispatchId = 1;
 
-  saveWorkflow(workflow: { id: string; name: string; status: string }): void {
+  saveWorkflow(workflow: { id: string; name: string }): void {
     const now = new Date().toISOString();
-    this.workflows.set(workflow.id, { ...workflow, createdAt: now, updatedAt: now });
+    this.workflows.set(workflow.id, { ...workflow, status: 'pending', createdAt: now, updatedAt: now });
   }
 
-  updateWorkflow(workflowId: string, changes: { status?: string }): void {
-    const existing = this.workflows.get(workflowId);
-    if (existing && changes.status !== undefined) existing.status = changes.status;
-  }
+  updateWorkflow(_workflowId: string, _changes: { updatedAt?: string }): void {}
 
   saveTask(workflowId: string, task: TaskState): void {
     this.tasks.set(task.id, { workflowId, task });
@@ -71,7 +68,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
   }
 
   listWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string }> {
-    return Array.from(this.workflows.values());
+    return Array.from(this.workflows.values()).map((workflow) => ({ ...workflow, status: computeWorkflowRollup(this.loadTasks(workflow.id)).status }));
   }
 
   loadTasks(workflowId: string): TaskState[] {

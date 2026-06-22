@@ -7,7 +7,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { TaskGraphEvent, TaskState, WorkflowMeta } from '../types.js';
+import type { TaskGraphEvent, TaskState, WorkflowMeta, WorkflowRollupPatch } from '../types.js';
 import { applyDelta } from '../lib/delta.js';
 import { normalizeWorkflowStatus } from '../lib/workflow-status.js';
 import {
@@ -24,6 +24,56 @@ export interface UseTasksResult {
 export interface UseTasksOptions {
   onTaskGraphSnapshotApplied?: () => void;
 }
+function normalizeWorkflowMeta(workflow: WorkflowMeta): WorkflowMeta {
+  return {
+    ...workflow,
+    status: normalizeWorkflowStatus((workflow as { status?: string }).status),
+  };
+}
+
+function replaceWorkflowMapPreservingTaskBackedEntries(
+  previous: Map<string, WorkflowMeta>,
+  incoming: readonly WorkflowMeta[],
+  tasks: Map<string, TaskState>,
+): Map<string, WorkflowMeta> {
+  const next = new Map<string, WorkflowMeta>();
+  for (const workflow of incoming) {
+    next.set(workflow.id, normalizeWorkflowMeta(workflow));
+  }
+  const referencedWorkflowIds = new Set<string>();
+  for (const task of tasks.values()) {
+    const workflowId = task.config.workflowId;
+    if (workflowId) {
+      referencedWorkflowIds.add(workflowId);
+    }
+  }
+  for (const [workflowId, workflow] of previous) {
+    if (!next.has(workflowId) && referencedWorkflowIds.has(workflowId)) {
+      next.set(workflowId, workflow);
+    }
+  }
+  return next;
+}
+
+function applyWorkflowRollupPatches(
+  previous: Map<string, WorkflowMeta>,
+  patches: readonly WorkflowRollupPatch[],
+): Map<string, WorkflowMeta> {
+  if (patches.length === 0) {
+    return previous;
+  }
+  const next = new Map(previous);
+  for (const patch of patches) {
+    const existing = next.get(patch.workflowId);
+    next.set(patch.workflowId, {
+      ...(existing ?? { id: patch.workflowId, name: patch.workflowId }),
+      status: normalizeWorkflowStatus(patch.status),
+      rollup: patch.rollup,
+    });
+  }
+  return next;
+}
+
 
 
 export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): UseTasksResult {
@@ -50,10 +100,7 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
     const startedAt = performance.now();
     const next = new Map<string, WorkflowMeta>();
     for (const workflow of bootstrapState?.workflows ?? []) {
-      next.set(workflow.id, {
-        ...workflow,
-        status: normalizeWorkflowStatus((workflow as { status?: string }).status),
-      });
+      next.set(workflow.id, normalizeWorkflowMeta(workflow));
     }
     if (typeof window !== 'undefined' && window.invoker) {
       void window.invoker.reportUiPerf?.('useTasks_bootstrap_workflow_map', {
@@ -63,6 +110,8 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
     }
     return next;
   });
+  const tasksRef = useRef(tasks);
+  tasksRef.current = tasks;
   const workflowsRef = useRef(workflows);
   workflowsRef.current = workflows;
   const graphEventPipelineRef = useRef<TaskGraphEventPipeline | null>(null);
@@ -95,20 +144,14 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
       const wfList = result.workflows ?? [];
       const replaceStartedAt = performance.now();
       // Always replace from server snapshot — empty lists mean "no tasks/workflows" (e.g. after delete).
-      setTasks(() => {
-        const next = new Map<string, TaskState>();
-        for (const t of taskList) next.set(t.id, t);
-        return next;
-      });
-      setWorkflows(() => {
-        const wfMap = new Map<string, WorkflowMeta>();
-        for (const wf of wfList) {
-          wfMap.set(wf.id, {
-            ...wf,
-            status: normalizeWorkflowStatus((wf as { status?: string }).status),
-          });
-        }
-        return wfMap;
+      const nextTasks = new Map<string, TaskState>();
+      for (const t of taskList) nextTasks.set(t.id, t);
+      tasksRef.current = nextTasks;
+      setTasks(nextTasks);
+      setWorkflows((previous) => {
+        const nextWorkflows = replaceWorkflowMapPreservingTaskBackedEntries(previous, wfList, nextTasks);
+        workflowsRef.current = nextWorkflows;
+        return nextWorkflows;
       });
       if (typeof result.streamSequence === 'number') {
         uiTaskGraphStreamWatermarkRef.current = result.streamSequence;
@@ -141,15 +184,14 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
     if (typeof window === 'undefined' || !window.invoker) return Promise.resolve();
     const requestedAt = performance.now();
     const request = window.invoker.listWorkflows().then((wfList) => {
-      setWorkflows(() => {
-        const wfMap = new Map<string, WorkflowMeta>();
-        for (const wf of wfList) {
-          wfMap.set(wf.id, {
-            ...wf,
-            status: normalizeWorkflowStatus((wf as { status?: string }).status),
-          });
-        }
-        return wfMap;
+      setWorkflows((previous) => {
+        const nextWorkflows = replaceWorkflowMapPreservingTaskBackedEntries(
+          previous,
+          wfList,
+          tasksRef.current,
+        );
+        workflowsRef.current = nextWorkflows;
+        return nextWorkflows;
       });
       void window.invoker.reportUiPerf?.('useTasks_workflow_metadata_refresh', {
         workflowCount: wfList.length,
@@ -223,25 +265,20 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
         const firstEvent = effectiveBatch[0];
         const deltaEvents = firstEvent?.type === 'snapshot' ? effectiveBatch.slice(1) : effectiveBatch;
         let shouldRefreshWorkflows = false;
+        let nextTasks = tasksRef.current;
+        let nextWorkflows = workflowsRef.current;
+        const replaceStartedAt = performance.now();
+        const t0 = performance.now();
 
         if (firstEvent?.type === 'snapshot') {
-          setTasks(() => {
-            const next = new Map<string, TaskState>();
-            for (const task of firstEvent.tasks) next.set(task.id, task);
-            return next;
-          });
-          const replaceStartedAt = performance.now();
-          setWorkflows(() => {
-            const wfMap = new Map<string, WorkflowMeta>();
-            for (const wf of firstEvent.workflows) {
-              wfMap.set(wf.id, {
-                ...wf,
-                status: normalizeWorkflowStatus((wf as { status?: string }).status),
-              });
-            }
-            return wfMap;
-          });
-          uiTaskGraphStreamWatermarkRef.current = firstEvent.streamSequence;
+          nextTasks = new Map<string, TaskState>();
+          for (const task of firstEvent.tasks) nextTasks.set(task.id, task);
+          nextWorkflows = replaceWorkflowMapPreservingTaskBackedEntries(
+            nextWorkflows,
+            firstEvent.workflows,
+            nextTasks,
+          );
+          uiTaskGraphStreamWatermarkRef.current = Math.max(uiTaskGraphStreamWatermarkRef.current, firstEvent.streamSequence);
           isResyncInFlightRef.current = false;
           onTaskGraphSnapshotApplied?.();
           void window.invoker.reportUiPerf?.('useTasks_snapshot_replace', {
@@ -254,36 +291,35 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
           });
         }
 
-        setTasks((prev) => {
-          const t0 = performance.now();
-          let next = prev;
-
-          for (const event of deltaEvents) {
-            if (event.type !== 'delta') continue;
-            const delta = event.delta;
-            if (delta.type === 'updated' && !next.has(delta.taskId)) {
-              if (traceTaskDeltas) {
-                console.warn(
-                  `[useTasks:task-delta] updated for taskId=${delta.taskId} not in local map before merge (stale snapshot?)`,
-                );
-              }
-            }
-            next = applyDelta(next, delta);
-            if (
-              delta.type === 'created' &&
-              delta.task?.config.workflowId &&
-              !workflowsRef.current.has(delta.task.config.workflowId)
-            ) {
-              shouldRefreshWorkflows = true;
+        for (const event of deltaEvents) {
+          if (event.type !== 'delta') continue;
+          const delta = event.delta;
+          if (delta.type === 'updated' && !nextTasks.has(delta.taskId)) {
+            if (traceTaskDeltas) {
+              console.warn(
+                `[useTasks:task-delta] updated for taskId=${delta.taskId} not in local map before merge (stale snapshot?)`,
+              );
             }
           }
+          if (
+            delta.type === 'created' &&
+            delta.task?.config.workflowId &&
+            !nextWorkflows.has(delta.task.config.workflowId)
+          ) {
+            shouldRefreshWorkflows = true;
+          }
+          nextTasks = applyDelta(nextTasks, delta);
+          nextWorkflows = applyWorkflowRollupPatches(nextWorkflows, event.workflowRollups);
+        }
 
-          const dt = performance.now() - t0;
-          deltaPerfRef.current.applyCount += effectiveBatch.length;
-          deltaPerfRef.current.applyTotalMs += dt;
-          deltaPerfRef.current.applyMaxMs = Math.max(deltaPerfRef.current.applyMaxMs, dt);
-          return next;
-        });
+        const dt = performance.now() - t0;
+        deltaPerfRef.current.applyCount += effectiveBatch.length;
+        deltaPerfRef.current.applyTotalMs += dt;
+        deltaPerfRef.current.applyMaxMs = Math.max(deltaPerfRef.current.applyMaxMs, dt);
+        tasksRef.current = nextTasks;
+        workflowsRef.current = nextWorkflows;
+        setTasks(nextTasks);
+        setWorkflows(nextWorkflows);
         if (shouldRefreshWorkflows) {
           void refreshWorkflowMetadata();
         }
@@ -294,6 +330,16 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
       invalidateStartupSnapshot();
       deltaPerfRef.current.received += 1;
       if (event.type === 'snapshot') {
+        const snapshotStreamSequence = event.streamSequence;
+        const currentStreamSequence = uiTaskGraphStreamWatermarkRef.current;
+        if (snapshotStreamSequence < currentStreamSequence) {
+          window.invoker.reportUiPerf?.('ui_task_graph_stale_snapshot_ignored', {
+            current: currentStreamSequence,
+            snapshot: snapshotStreamSequence,
+            reason: event.reason,
+          });
+          return;
+        }
         graphEventPipelineRef.current?.push(event);
         return;
       }
@@ -343,15 +389,14 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
     const unsubWf = window.invoker.onWorkflowsChanged?.((wfList: any[]) => {
       invalidateStartupSnapshot();
       if (Array.isArray(wfList)) {
-        setWorkflows(() => {
-          const wfMap = new Map<string, WorkflowMeta>();
-          for (const wf of wfList) {
-            wfMap.set(wf.id, {
-              ...wf,
-              status: normalizeWorkflowStatus((wf as { status?: string }).status),
-            });
-          }
-          return wfMap;
+        setWorkflows((previous) => {
+          const nextWorkflows = replaceWorkflowMapPreservingTaskBackedEntries(
+            previous,
+            wfList,
+            tasksRef.current,
+          );
+          workflowsRef.current = nextWorkflows;
+          return nextWorkflows;
         });
       }
     });

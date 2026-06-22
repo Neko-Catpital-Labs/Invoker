@@ -131,6 +131,9 @@ const ALLOWED_CHANGE_OPERATIONS = new Set([
 
 const PATH_LIKE = /^(?:packages|scripts|skills|docs|plans|\.github|[A-Za-z0-9_.-]+\/)[^:]+/;
 const APP_SRC_PREFIX = 'packages/app/src/';
+const REVIEW_GATE_PUBLICATION_PATH = 'packages/execution-engine/src/merge-runner.ts';
+const REVIEW_GATE_POLLING_PATH = 'packages/execution-engine/src/task-runner.ts';
+
 
 export function firstMeaningfulLine(value = '') {
   return String(value)
@@ -303,6 +306,7 @@ export function classifyReviewUnitsForPath(filePath) {
     || /^packages\/app\/src\/headless-[^/]+\.ts$/.test(path)
     || path === 'packages/app/src/api-server.ts'
     || path === 'packages/app/src/workflow-actions.ts'
+    || path === 'packages/app/src/workflow-mutation-facade.ts'
     || path.startsWith('packages/app/src/ipc/')
   ) {
     return ['activation-surface'];
@@ -351,6 +355,22 @@ export function validateReviewUnitChangedFiles({ declaredReviewUnit, changedFile
 
   return [
     `${context} Review Unit "${declaredReviewUnit}" cannot ship with ${formatReviewUnits(forbidden)} files in the same PR. Split this into one Review Unit per PR.`,
+  ];
+}
+
+export function validateKnownReviewBoundaries({ reviewLane = '', changedFiles = [], context }) {
+  if (!['behavior', 'refactor'].includes(reviewLane) || changedFiles.length === 0) return [];
+
+  const changedFileSet = new Set(changedFiles);
+  if (
+    !changedFileSet.has(REVIEW_GATE_PUBLICATION_PATH)
+    || !changedFileSet.has(REVIEW_GATE_POLLING_PATH)
+  ) {
+    return [];
+  }
+
+  return [
+    `${context} Publication and poll/approval runtime behavior must be split into separate PRs. Do not change ${REVIEW_GATE_PUBLICATION_PATH} and ${REVIEW_GATE_POLLING_PATH} in the same PR.`,
   ];
 }
 

@@ -24,6 +24,7 @@ import {
   type PlanDefinition,
   type TaskState,
 } from '@invoker/workflow-core';
+import { runMcpServer } from './mcp-server.js';
 
 const VERSION = '0.0.5';
 
@@ -55,6 +56,7 @@ type LiveSubmissionResult = {
 
 type CliDeps = {
   createMessageBus?: () => Promise<MessageBus> | MessageBus;
+  runMcpServer?: () => Promise<void>;
 };
 
 type DoctorCheck = {
@@ -131,19 +133,21 @@ function usage(): string {
     'Usage:',
     '  invoker-cli run <plan.yaml> [--live|--standalone] [--db-dir <path>] [--config <path>] [--json]',
     '  invoker-cli doctor [--fix] [--json]',
+    '  invoker-cli mcp',
     '  invoker-cli --help',
     '  invoker-cli --version',
     '',
     'Commands:',
     '  run <plan.yaml>  Submit to a live Invoker UI when available, otherwise run standalone.',
     '  doctor          Check external runtime tools used by Invoker executors.',
+    '  mcp             Start the Invoker MCP stdio server.',
     '',
     'Options:',
     '  --live           Require a running Invoker UI owner and submit over IPC.',
     '  --standalone     Skip IPC and run with an isolated CLI database.',
     '  --db-dir <path>  Runtime database directory. Defaults to ~/.invoker-cli',
     '  --config <path>  Optional config path reserved for CLI runtime configuration.',
-    '  --json           Emit a machine-readable result summary.',
+    '  --json           Emit only a machine-readable result summary on stdout.',
     '  --fix            Best-effort install of missing doctor tools.',
     '  --help           Show this help text.',
     '  --version        Show the CLI version.',
@@ -435,6 +439,11 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
     ownerCapability: true,
     outputDir: join(dbDir, 'outputs'),
   });
+  const stdoutWrite = process.stdout.write;
+  if (options.json) {
+    process.stdout.write = (() => true) as typeof process.stdout.write;
+  }
+
 
   try {
     const executionAgentRegistry = registerBuiltinAgents();
@@ -470,7 +479,7 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
       executionAgentRegistry,
       callbacks: {
         onOutput: (taskId, data) => {
-          process.stdout.write(data);
+          if (!options.json) process.stdout.write(data);
           try {
             persistence.appendTaskOutput(taskId, data);
           } catch {
@@ -497,6 +506,9 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
       mode: 'standalone',
     };
   } finally {
+    if (options.json) {
+      process.stdout.write = stdoutWrite;
+    }
     if (previousInvokerDbDir === undefined) {
       delete process.env.INVOKER_DB_DIR;
     } else {
@@ -525,6 +537,10 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
   try {
     if (argv[0] === 'doctor') {
       return runDoctor(argv.slice(1));
+    }
+    if (argv[0] === 'mcp') {
+      await (deps.runMcpServer ?? runMcpServer)();
+      return 0;
     }
     const parsed = parseArgs(argv);
     if (!parsed.command || parsed.command === '--help') {

@@ -57,7 +57,7 @@ describe('owner boundary enforcement', () => {
       const reader = await SQLiteAdapter.create(dbPath, { readOnly: true });
 
       // Verify mutations are blocked
-      expect(() => reader.saveWorkflow({ ...testWorkflow, status: 'completed' }))
+      expect(() => reader.saveWorkflow(testWorkflow))
         .toThrow(/read-only/i);
       expect(() => reader.updateWorkflow('wf-boundary-test', { generation: 1 }))
         .toThrow(/read-only/i);
@@ -190,20 +190,12 @@ describe('owner boundary enforcement', () => {
       const writerA = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
       const writerB = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
 
-      writerA.saveWorkflow({
-        id: 'wf-a',
-        name: 'Workflow A',
-        status: 'running',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-      writerB.saveWorkflow({
-        id: 'wf-b',
-        name: 'Workflow B',
-        status: 'running',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
+      writerA.saveWorkflow({ id: 'wf-a',
+      name: 'Workflow A', createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(), });
+      writerB.saveWorkflow({ id: 'wf-b',
+      name: 'Workflow B', createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(), });
 
       writerB.close();
       writerA.close();

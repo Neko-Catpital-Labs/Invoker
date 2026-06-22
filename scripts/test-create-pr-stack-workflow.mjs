@@ -55,6 +55,51 @@ Stack publishing stays separate from unrelated cleanup.
 - Data migration? No
 `;
 
+const ROUTING_BODY = `## Summary
+
+This branch only changes invalidation routing.
+
+<details>
+<summary>Review metadata</summary>
+
+Review Claim:
+
+Keep invalidation routing local.
+
+Review Lane:
+
+- behavior
+
+Review Unit:
+
+- routing
+
+Safety Invariant:
+
+Only invalidation routing changes.
+
+Slice Rationale:
+
+Keep app exposure separate from core runtime behavior.
+
+</details>
+
+## Non-goals
+
+- Do not add docs or proof changes in this slice.
+
+## Test Plan
+
+- [ ] \`node scripts/test-create-pr-stack-workflow.mjs\`
+
+## Revert Plan
+
+- Safe to revert? Yes
+- Revert command: \`git revert <sha>\`
+- Post-revert steps: None
+- Data migration? No
+`;
+
 function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
@@ -199,6 +244,7 @@ function createRepo(harness) {
 }
 
 function commitFile(work, fileName, content, message) {
+  mkdirSync(dirname(join(work, fileName)), { recursive: true });
   writeFileSync(join(work, fileName), content);
   git(work, 'add', fileName);
   gitQuiet(work, 'commit', '-m', message);
@@ -240,8 +286,8 @@ function baseArgs() {
   return ['--title', 'test title', '--base', 'master', '--body-file', 'pr-body.md'];
 }
 
-function stackTitleArgs(base = 'master') {
-  return ['--title', '[Graph Blanking](1) Preserve graph blanking', '--base', base, '--body-file', 'pr-body.md'];
+function stackTitleArgs(base = 'master', title = '[Graph Blanking](1) Preserve graph blanking') {
+  return ['--title', title, '--base', base, '--body-file', 'pr-body.md'];
 }
 
 function expectNoPush(harness, label) {
@@ -322,6 +368,49 @@ function testMergifyManagedUpdateSkipsPush() {
     assert(Boolean(patchCall), 'managed update should patch the existing PR');
     assert(patchCall.stdin.includes('"title":"[Graph Blanking](1) Preserve graph blanking"'), 'managed update patch should include title');
     assert(patchCall.stdin.includes('## Summary'), 'managed update patch should include PR body');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+function testMergifyManagedUpdateAcceptsLetteredTitle() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    const branch = 'stack/test-lettered-update';
+    createTrackedBranch(work, branch);
+    commitFile(work, 'stack.txt', 'stack\n', 'stack update\n\nChange-Id: Iletter0001');
+    gitQuiet(work, 'push', '-u', 'origin', branch);
+    setManagedBranchConfig(work, branch);
+
+    const result = runCreatePr(work, harness, [
+      ...stackTitleArgs('master', '[Graph Blanking](3a) Split follow-up slice'),
+      '--update-existing',
+    ], {
+      GH_API_PULLS_JSON: JSON.stringify([
+        {
+          number: 43,
+          html_url: 'https://example.com/pull/43',
+          head: { ref: branch, repo: { full_name: 'owner/repo' } },
+        },
+      ]),
+      GH_PATCH_RESPONSE: JSON.stringify({ html_url: 'https://example.com/pull/43' }),
+    });
+
+    const ghLog = existsSync(harness.ghLog) ? readFileSync(harness.ghLog, 'utf-8') : '';
+    assert(
+      result.status === 0,
+      `managed stack update should accept a lettered title\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}\ngh log:\n${ghLog}`,
+    );
+    assert(
+      result.stdout.trim() === 'https://example.com/pull/43',
+      `managed stack update should print updated PR URL for lettered titles\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}\ngh log:\n${ghLog}`,
+    );
+    expectNoPush(harness, 'managed lettered update skip push');
+
+    const ghCalls = readGhCalls(harness.ghLog);
+    const patchCall = ghCalls.find((call) => call.route.endsWith('/pulls/43'));
+    assert(Boolean(patchCall), 'managed lettered update should patch the existing PR');
+    assert(patchCall.stdin.includes('"title":"[Graph Blanking](3a) Split follow-up slice"'), 'managed lettered update patch should include lettered title');
   } finally {
     rmSync(harness.root, { recursive: true, force: true });
   }
@@ -421,6 +510,40 @@ function testCurrentBranchPrLookupFailure() {
   }
 }
 
+{
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    createTrackedBranch(work, 'stack/example/3-routing');
+    setManagedBranchConfig(work, 'stack/example/3-routing');
+    writeFileSync(join(work, 'pr-body-routing.md'), ROUTING_BODY);
+    commitFile(work, 'packages/workflow-core/src/orchestrator.ts', 'export const orchestrator = true;\n', 'routing core');
+    commitFile(work, 'packages/execution-engine/src/task-runner.ts', 'export const runner = true;\n', 'routing engine');
+    commitFile(work, 'packages/app/src/workflow-mutation-facade.ts', 'export const facade = true;\n', 'activation surface');
+
+    const result = runCreatePr(work, harness, [
+      '--title', '[Example](3) Routing slice',
+      '--base', 'master',
+      '--body-file', 'pr-body-routing.md',
+      '--update-existing',
+    ], {
+      GH_API_PULLS_JSON: JSON.stringify([
+        {
+          number: 42,
+          title: '[Example](3) Routing slice',
+          headRefName: 'stack/example/3-routing',
+          baseRefName: 'stack/example/2-previous',
+        },
+      ]),
+    });
+
+    assert(result.status === 1, 'managed stack update should reject mixed routing and activation-surface slice');
+    assert(result.stderr.includes('Review Unit "routing" cannot ship with activation-surface files'), 'stack update should explain mixed review units');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
 function testStackedDiffTitleRequiredForNonTrunkBase() {
   const harness = createHarness();
   try {
@@ -457,6 +580,7 @@ const tests = [
   testStaleBaseDetection,
   testMergifyManagedCreateRefusal,
   testMergifyManagedUpdateSkipsPush,
+  testMergifyManagedUpdateAcceptsLetteredTitle,
   testMergifyManagedUpdateRejectsPlainTitle,
   testMergifyManagedUpdateRejectsNestedTitle,
   testUnpublishedStackCommitsBlockUpdate,

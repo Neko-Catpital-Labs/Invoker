@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -6,6 +6,7 @@ import { LocalBus } from '@invoker/transport';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { main } from '../index.js';
+import { submitPlanForMcp, validatePlanForMcp, type McpCliRunner } from '../mcp-server.js';
 
 const repoRoot = resolve(__dirname, '../../../..');
 const cliPath = resolve(repoRoot, 'packages/cli/dist/index.js');
@@ -17,10 +18,26 @@ function writeStandalonePlan(dir: string, body: string): string {
   return planPath;
 }
 
-function runCli(args: string[]) {
-  return spawnSync(process.execPath, [cliPath, ...args], {
-    cwd: repoRoot,
-    encoding: 'utf8',
+function runCli(args: string[]): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolveRun, reject) => {
+    const child = spawn(process.execPath, [cliPath, ...args], {
+      cwd: repoRoot,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk;
+    });
+    child.once('error', reject);
+    child.once('close', (status) => {
+      resolveRun({ status, stdout, stderr });
+    });
   });
 }
 
@@ -50,33 +67,50 @@ describe('invoker-cli', () => {
     vi.restoreAllMocks();
   });
 
-  it('--help exits 0', () => {
-    const result = runCli(['--help']);
+  it('--help exits 0', async () => {
+    const result = await runCli(['--help']);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('invoker-cli run <plan.yaml>');
   });
 
-  it('runs the hello-world fixture with an isolated db dir', () => {
+  it('--help lists the MCP server command and JSON-only output contract', async () => {
+    const result = await runCli(['--help']);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('invoker-cli mcp');
+    expect(result.stdout).toContain('Emit only a machine-readable result summary on stdout.');
+  });
+
+  it('mcp command starts the MCP server runner', async () => {
+    const runMcpServer = vi.fn(async () => {});
+
+    const code = await main(['mcp'], { runMcpServer });
+
+    expect(code).toBe(0);
+    expect(runMcpServer).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs the hello-world fixture with an isolated db dir', async () => {
     const dbDir = mkdtempSync(join(tmpdir(), 'invoker-cli-test-db-'));
-    const result = runCli(['run', fixturePlan, '--standalone', '--db-dir', dbDir]);
+    const result = await runCli(['run', fixturePlan, '--standalone', '--db-dir', dbDir]);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('hello-from-invoker-cli');
-  });
+  }, 60_000);
 
-  it('--json emits a successful workflow result object', () => {
+  it('--json emits only a workflow result object on stdout', async () => {
     const dbDir = mkdtempSync(join(tmpdir(), 'invoker-cli-json-db-'));
-    const result = runCli(['run', fixturePlan, '--standalone', '--db-dir', dbDir, '--json']);
+    const result = await runCli(['run', fixturePlan, '--standalone', '--db-dir', dbDir, '--json']);
     expect(result.status).toBe(0);
-    const lines = result.stdout.trim().split('\n');
-    const json = JSON.parse(lines[lines.length - 1]);
+    const json = JSON.parse(result.stdout);
     expect(json.workflow.status).toBe('success');
-  });
+    expect(result.stdout).not.toContain('hello-from-invoker-cli');
+    expect(result.stderr).toBe('');
+  }, 60_000);
 
-  it('invalid YAML exits non-zero with a validation error', () => {
+  it('invalid YAML exits non-zero with a validation error', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'invoker-cli-invalid-'));
     const invalidPlan = join(dir, 'invalid.yaml');
     writeFileSync(invalidPlan, 'name: [broken\n', 'utf8');
-    const result = runCli(['run', invalidPlan, '--standalone', '--db-dir', join(dir, 'db')]);
+    const result = await runCli(['run', invalidPlan, '--standalone', '--db-dir', join(dir, 'db')]);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('Invalid YAML');
   });
@@ -138,7 +172,7 @@ tasks:
     expect(createMessageBus).not.toHaveBeenCalled();
     expect(output.stdout).toContain('hello-from-invoker-cli');
     output.restore();
-  });
+  }, 60_000);
 
   it('auto mode delegates when a GUI owner exists', async () => {
     const output = captureProcessOutput();
@@ -179,7 +213,7 @@ tasks:
     output.restore();
   }, 60_000);
 
-  it('standalone prompt-only plans route through the execution engine', () => {
+  it('standalone prompt-only plans route through the execution engine', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'invoker-cli-prompt-'));
     const planPath = writeStandalonePlan(dir, `name: Prompt-only standalone
 repoUrl: __REPO_ROOT__
@@ -191,13 +225,107 @@ tasks:
     executionAgent: missing-agent
 `);
 
-    const result = runCli(['run', planPath, '--standalone', '--db-dir', join(dir, 'db'), '--json']);
+    const result = await runCli(['run', planPath, '--standalone', '--db-dir', join(dir, 'db'), '--json']);
 
     expect(result.status).not.toBe(0);
+    const json = JSON.parse(result.stdout);
+    expect(json.workflow.status).toBe('failed');
+    expect(json.result.failedTasks).toBe(1);
     expect(`${result.stdout}\n${result.stderr}`).not.toContain('Standalone CLI v1 supports command tasks only');
-    expect(`${result.stdout}\n${result.stderr}`).toContain('No execution agent registered with name "missing-agent"');
+  }, 60_000);
+
+
+  it('validates an Invoker plan for MCP without submitting it', async () => {
+    const result = await validatePlanForMcp(fixturePlan);
+
+    expect(result).toEqual({ ok: true, name: 'Hello World CLI', taskCount: 1 });
   });
 
+  it('returns MCP validation errors for broken YAML', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'invoker-cli-mcp-invalid-'));
+    const invalidPlan = join(dir, 'invalid.yaml');
+    writeFileSync(invalidPlan, 'name: [broken\n', 'utf8');
+
+    const result = await validatePlanForMcp(invalidPlan);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain('Invalid YAML');
+  });
+
+  it('submits MCP plans in live mode by default', async () => {
+    const calls: string[][] = [];
+    const runner: McpCliRunner = {
+      async run(args) {
+        calls.push(args);
+        return { exitCode: 0, stdout: '{"workflow":{"id":"wf-live"}}\n', stderr: '' };
+      },
+    };
+
+    const result = await submitPlanForMcp(fixturePlan, undefined, runner);
+
+    expect(result).toEqual({ ok: true, workflowId: 'wf-live', stdout: '{"workflow":{"id":"wf-live"}}\n' });
+    expect(calls).toEqual([['run', fixturePlan, '--live', '--json']]);
+  });
+  it('rejects MCP submit output that is not one JSON result', async () => {
+    const runner: McpCliRunner = {
+      async run() {
+        return { exitCode: 0, stdout: 'task log\n{"workflow":{"id":"wf-live"}}\n', stderr: '' };
+      },
+    };
+
+    const result = await submitPlanForMcp(fixturePlan, undefined, runner);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain('Invalid invoker-cli run --json output');
+  });
+
+  it('returns MCP submit process failures with stdout and stderr', async () => {
+    const runner: McpCliRunner = {
+      async run() {
+        return { exitCode: 42, stdout: '{"partial":true}\n', stderr: 'boom\n' };
+      },
+    };
+
+    const result = await submitPlanForMcp(fixturePlan, undefined, runner);
+
+    expect(result).toEqual({
+      ok: false,
+      exitCode: 42,
+      stdout: '{"partial":true}\n',
+      stderr: 'boom\n',
+    });
+  });
+
+
+  it('submits MCP plans in auto mode without live or standalone flags', async () => {
+    const calls: string[][] = [];
+    const runner: McpCliRunner = {
+      async run(args) {
+        calls.push(args);
+        return { exitCode: 0, stdout: '{"workflow":{"id":"wf-auto"}}\n', stderr: '' };
+      },
+    };
+
+    const result = await submitPlanForMcp(fixturePlan, 'auto', runner);
+
+    expect(result.ok).toBe(true);
+    expect(calls).toEqual([['run', fixturePlan, '--json']]);
+  });
+
+  it('submits MCP plans in standalone mode with standalone JSON args', async () => {
+    const calls: string[][] = [];
+    const runner: McpCliRunner = {
+      async run(args) {
+        calls.push(args);
+        return { exitCode: 0, stdout: '{"workflow":{"id":"wf-standalone"}}\n', stderr: '' };
+      },
+    };
+
+    const result = await submitPlanForMcp(fixturePlan, 'standalone', runner);
+
+    expect(result.ok).toBe(true);
+    expect(calls).toEqual([['run', fixturePlan, '--standalone', '--json']]);
+  });
   it('rejects --db-dir with --live', async () => {
     const output = captureProcessOutput();
     const dbDir = mkdtempSync(join(tmpdir(), 'invoker-cli-live-db-'));

@@ -60,13 +60,9 @@ describe('LaunchDispatcher', () => {
 
   describe('complete / fail transitions', () => {
     function seedWorkflowAndTask(selectedAttemptId?: string): void {
-      adapter.saveWorkflow({
-        id: 'wf-1',
-        name: 'wf-1',
-        status: 'running',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
+      adapter.saveWorkflow({ id: 'wf-1',
+      name: 'wf-1', createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(), });
       adapter.saveTask('wf-1', {
         id: 'wf-1/t1',
         description: 'one',
@@ -242,13 +238,9 @@ describe('LaunchDispatcher', () => {
 
   describe('reapers', () => {
     function seed(): void {
-      adapter.saveWorkflow({
-        id: 'wf-r',
-        name: 'wf-r',
-        status: 'running',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
+      adapter.saveWorkflow({ id: 'wf-r',
+      name: 'wf-r', createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(), });
       adapter.saveTask('wf-r', {
         id: 'wf-r/t1',
         description: 't1',
@@ -515,13 +507,9 @@ describe('LaunchDispatcher', () => {
       workflowId = 'wf-a',
       execution: Record<string, unknown> = {},
     ) {
-      adapter.saveWorkflow({
-        id: workflowId,
-        name: workflowId,
-        status: 'running',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
+      adapter.saveWorkflow({ id: workflowId,
+      name: workflowId, createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(), });
       const task = {
         id: taskId,
         description: taskId,

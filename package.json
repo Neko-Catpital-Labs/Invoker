@@ -57,6 +57,8 @@
     "aws4": "^1.13.2",
     "dependency-cruiser": "^17.3.10",
     "electron-builder": "^26.0.12",
+    "jsdom": "^25.0.0",
+    "mermaid": "^11.15.0",
     "postject": "1.0.0-alpha.6",
     "tsup": "^8.5.1",
     "typescript": "~5.9.3",

@@ -211,13 +211,13 @@ export function createMockInvoker(
 
       // Fire created graph events for each task after subscribers attach.
       for (const task of tasks) {
-        graphEventCallback?.({ type: 'delta', delta: { type: 'created', task } });
+        graphEventCallback?.({ type: 'delta', delta: { type: 'created', task }, workflowRollups: [] });
       }
     });
   }
 
   function fireDelta(delta: TaskDelta) {
-    graphEventCallback?.({ type: 'delta', delta });
+    graphEventCallback?.({ type: 'delta', delta, workflowRollups: [] });
   }
   function fireGraphEvent(event: TaskGraphEvent) {
     graphEventCallback?.(event);

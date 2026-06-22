@@ -188,10 +188,18 @@ export interface WorkflowMeta {
   createdAt?: string;
   updatedAt?: string;
 }
+export interface WorkflowRollupPatch {
+  readonly workflowId: string;
+  readonly status: WorkflowStatus;
+  readonly rollup: WorkflowRollup;
+}
+
+
 export type TaskGraphEvent =
   | {
       readonly type: 'delta';
       readonly delta: TaskDelta;
+      readonly workflowRollups: readonly WorkflowRollupPatch[];
     }
   | {
       readonly type: 'snapshot';

@@ -1125,6 +1125,21 @@ describe('SQLiteAdapter', () => {
         'failed-newest',
       ]);
     });
+
+    it('keeps a recent cancelled attempt next to the active replacement', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+      const attempts = [
+        attemptAt('old-cancelled', 'superseded', '2026-01-01T00:00:00.000Z'),
+        attemptAt('pending-current', 'pending', '2026-01-01T00:01:00.000Z'),
+      ];
+      for (const attempt of attempts) adapter.saveAttempt(attempt);
+
+      expect(adapter.loadActionGraphAttempts('t1').map((attempt) => attempt.id)).toEqual([
+        'old-cancelled',
+        'pending-current',
+      ]);
+    });
   });
 
   describe('saveWorkflow + loadWorkflow', () => {
@@ -1138,7 +1153,7 @@ describe('SQLiteAdapter', () => {
     });
 
     it('derives workflow status and rollup details from task rows', () => {
-      adapter.saveWorkflow({ ...testWorkflow, status: 'completed' });
+      adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('t1', {
         status: 'failed',
         execution: { error: 'first failure', exitCode: 10 },
@@ -1161,7 +1176,7 @@ describe('SQLiteAdapter', () => {
     });
 
     it('derives stale workflow states from task rows', () => {
-      adapter.saveWorkflow({ ...testWorkflow, status: 'running' });
+      adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('t1', { status: 'stale' }));
       adapter.saveTask('wf-1', makeTask('t2', { status: 'stale' }));
 
@@ -1178,7 +1193,7 @@ describe('SQLiteAdapter', () => {
     });
 
     it('recomputes workflow status on every read after task state changes', () => {
-      adapter.saveWorkflow({ ...testWorkflow, status: 'completed' });
+      adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('t1', { status: 'pending' }));
       expect(adapter.loadWorkflow('wf-1')!.status).toBe('pending');
 
@@ -1194,7 +1209,7 @@ describe('SQLiteAdapter', () => {
     });
 
     it('derives failed when pending work is blocked by failed dependencies', () => {
-      adapter.saveWorkflow({ ...testWorkflow, status: 'running' });
+      adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('alpha', { status: 'failed' }));
       adapter.saveTask('wf-1', makeTask('beta', { status: 'pending', dependencies: ['alpha'] }));
       adapter.saveTask('wf-1', makeTask('merge', { status: 'pending', dependencies: ['beta'] }));
@@ -1208,7 +1223,7 @@ describe('SQLiteAdapter', () => {
     });
 
     it('derives failed when failed tasks do not block all pending work', () => {
-      adapter.saveWorkflow({ ...testWorkflow, status: 'running' });
+      adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('alpha', { status: 'failed' }));
       adapter.saveTask('wf-1', makeTask('independent', { status: 'pending' }));
 
@@ -1216,12 +1231,11 @@ describe('SQLiteAdapter', () => {
     });
 
     it('derives listWorkflows with one aggregate rollup per workflow', () => {
-      adapter.saveWorkflow({ ...testWorkflow, status: 'running' });
+      adapter.saveWorkflow(testWorkflow);
       adapter.saveWorkflow({
         ...testWorkflow,
         id: 'wf-2',
         name: 'Second Workflow',
-        status: 'running',
       });
       adapter.saveTask('wf-1', makeTask('wf1-a', { status: 'pending' }));
       adapter.saveTask('wf-1', makeTask('wf1-b', { status: 'pending' }));
@@ -1884,20 +1898,12 @@ describe('SQLiteAdapter', () => {
 
   describe('deleteAllWorkflows', () => {
     it('deletes all workflows, tasks, and events', () => {
-      adapter.saveWorkflow({
-        id: 'wf-1',
-        name: 'First',
-        status: 'running',
-        createdAt: '2024-01-01T00:00:00Z',
-        updatedAt: '2024-01-01T00:00:00Z',
-      });
-      adapter.saveWorkflow({
-        id: 'wf-2',
-        name: 'Second',
-        status: 'running',
-        createdAt: '2024-01-02T00:00:00Z',
-        updatedAt: '2024-01-02T00:00:00Z',
-      });
+      adapter.saveWorkflow({ id: 'wf-1',
+      name: 'First', createdAt: '2024-01-01T00:00:00Z',
+      updatedAt: '2024-01-01T00:00:00Z', });
+      adapter.saveWorkflow({ id: 'wf-2',
+      name: 'Second', createdAt: '2024-01-02T00:00:00Z',
+      updatedAt: '2024-01-02T00:00:00Z', });
 
       adapter.saveTask('wf-1', makeTask('t1'));
       adapter.saveTask('wf-2', makeTask('t2'));
@@ -1917,20 +1923,12 @@ describe('SQLiteAdapter', () => {
     });
 
     it('clears output spool rows and in-memory tails for all tasks', () => {
-      adapter.saveWorkflow({
-        id: 'wf-del-all-1',
-        name: 'First',
-        status: 'running',
-        createdAt: '2024-01-01T00:00:00Z',
-        updatedAt: '2024-01-01T00:00:00Z',
-      });
-      adapter.saveWorkflow({
-        id: 'wf-del-all-2',
-        name: 'Second',
-        status: 'running',
-        createdAt: '2024-01-02T00:00:00Z',
-        updatedAt: '2024-01-02T00:00:00Z',
-      });
+      adapter.saveWorkflow({ id: 'wf-del-all-1',
+      name: 'First', createdAt: '2024-01-01T00:00:00Z',
+      updatedAt: '2024-01-01T00:00:00Z', });
+      adapter.saveWorkflow({ id: 'wf-del-all-2',
+      name: 'Second', createdAt: '2024-01-02T00:00:00Z',
+      updatedAt: '2024-01-02T00:00:00Z', });
       adapter.saveTask('wf-del-all-1', makeTask('t-del-all-1'));
       adapter.saveTask('wf-del-all-2', makeTask('t-del-all-2'));
 
@@ -1951,20 +1949,12 @@ describe('SQLiteAdapter', () => {
   describe('deleteWorkflow', () => {
     it('deletes a single workflow and its tasks/events but keeps other workflows', () => {
       // Create two workflows with tasks and events
-      adapter.saveWorkflow({
-        id: 'wf-1',
-        name: 'First',
-        status: 'running',
-        createdAt: '2024-01-01T00:00:00Z',
-        updatedAt: '2024-01-01T00:00:00Z',
-      });
-      adapter.saveWorkflow({
-        id: 'wf-2',
-        name: 'Second',
-        status: 'running',
-        createdAt: '2024-01-02T00:00:00Z',
-        updatedAt: '2024-01-02T00:00:00Z',
-      });
+      adapter.saveWorkflow({ id: 'wf-1',
+      name: 'First', createdAt: '2024-01-01T00:00:00Z',
+      updatedAt: '2024-01-01T00:00:00Z', });
+      adapter.saveWorkflow({ id: 'wf-2',
+      name: 'Second', createdAt: '2024-01-02T00:00:00Z',
+      updatedAt: '2024-01-02T00:00:00Z', });
 
       adapter.saveTask('wf-1', makeTask('t1'));
       adapter.saveTask('wf-1', makeTask('t2'));
@@ -2001,13 +1991,9 @@ describe('SQLiteAdapter', () => {
     });
 
     it('works when workflow has no tasks', () => {
-      adapter.saveWorkflow({
-        id: 'wf-empty',
-        name: 'Empty Workflow',
-        status: 'running',
-        createdAt: '2024-01-01T00:00:00Z',
-        updatedAt: '2024-01-01T00:00:00Z',
-      });
+      adapter.saveWorkflow({ id: 'wf-empty',
+      name: 'Empty Workflow', createdAt: '2024-01-01T00:00:00Z',
+      updatedAt: '2024-01-01T00:00:00Z', });
 
       adapter.deleteWorkflow('wf-empty');
 
@@ -2031,13 +2017,9 @@ describe('SQLiteAdapter', () => {
     });
 
     it('is a no-op for non-existent workflow', () => {
-      adapter.saveWorkflow({
-        id: 'wf-exists',
-        name: 'Existing',
-        status: 'running',
-        createdAt: '2024-01-01T00:00:00Z',
-        updatedAt: '2024-01-01T00:00:00Z',
-      });
+      adapter.saveWorkflow({ id: 'wf-exists',
+      name: 'Existing', createdAt: '2024-01-01T00:00:00Z',
+      updatedAt: '2024-01-01T00:00:00Z', });
       adapter.saveTask('wf-exists', makeTask('t1'));
 
       // Call deleteWorkflow on a non-existent workflow
@@ -2080,20 +2062,12 @@ describe('SQLiteAdapter', () => {
     });
 
     it('removes output spool rows and tail cache only for deleted workflow tasks', () => {
-      adapter.saveWorkflow({
-        id: 'wf-delete-target',
-        name: 'Delete Target',
-        status: 'running',
-        createdAt: '2024-01-01T00:00:00Z',
-        updatedAt: '2024-01-01T00:00:00Z',
-      });
-      adapter.saveWorkflow({
-        id: 'wf-keep',
-        name: 'Keep',
-        status: 'running',
-        createdAt: '2024-01-02T00:00:00Z',
-        updatedAt: '2024-01-02T00:00:00Z',
-      });
+      adapter.saveWorkflow({ id: 'wf-delete-target',
+      name: 'Delete Target', createdAt: '2024-01-01T00:00:00Z',
+      updatedAt: '2024-01-01T00:00:00Z', });
+      adapter.saveWorkflow({ id: 'wf-keep',
+      name: 'Keep', createdAt: '2024-01-02T00:00:00Z',
+      updatedAt: '2024-01-02T00:00:00Z', });
 
       adapter.saveTask('wf-delete-target', makeTask('t-delete-spool'));
       adapter.saveTask('wf-keep', makeTask('t-keep-spool'));
@@ -2529,8 +2503,8 @@ describe('SQLiteAdapter', () => {
 
   describe('loadAllCompletedTasks', () => {
     it('returns completed tasks across multiple workflows with workflowName', () => {
-      adapter.saveWorkflow({ id: 'wf-1', name: 'First Plan', status: 'completed', createdAt: '2024-01-01T00:00:00Z', updatedAt: '2024-01-01T00:00:00Z' });
-      adapter.saveWorkflow({ id: 'wf-2', name: 'Second Plan', status: 'completed', createdAt: '2024-01-02T00:00:00Z', updatedAt: '2024-01-02T00:00:00Z' });
+      adapter.saveWorkflow({ id: 'wf-1', name: 'First Plan', createdAt: '2024-01-01T00:00:00Z', updatedAt: '2024-01-01T00:00:00Z' });
+      adapter.saveWorkflow({ id: 'wf-2', name: 'Second Plan', createdAt: '2024-01-02T00:00:00Z', updatedAt: '2024-01-02T00:00:00Z' });
 
       adapter.saveTask('wf-1', makeTask('t1', { status: 'completed', execution: { completedAt: new Date('2024-01-02') } }));
       adapter.saveTask('wf-2', makeTask('t2', { status: 'completed', execution: { completedAt: new Date('2024-01-03') } }));
@@ -2545,7 +2519,7 @@ describe('SQLiteAdapter', () => {
     });
 
     it('excludes non-completed tasks', () => {
-      adapter.saveWorkflow({ id: 'wf-1', name: 'Test', status: 'running', createdAt: '2024-01-01T00:00:00Z', updatedAt: '2024-01-01T00:00:00Z' });
+      adapter.saveWorkflow({ id: 'wf-1', name: 'Test', createdAt: '2024-01-01T00:00:00Z', updatedAt: '2024-01-01T00:00:00Z' });
       adapter.saveTask('wf-1', makeTask('t1', { status: 'pending' }));
       adapter.saveTask('wf-1', makeTask('t2', { status: 'running' }));
       adapter.saveTask('wf-1', makeTask('t3', { status: 'failed' }));
