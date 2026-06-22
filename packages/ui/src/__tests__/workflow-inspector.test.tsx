@@ -404,4 +404,30 @@ describe('WorkflowInspector', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reject Fix' }));
     expect(onReject).toHaveBeenCalledWith(task);
   });
+  it('shows selected action graph node details', () => {
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={null}
+        actionNode={{
+          id: 'intent:77',
+          type: 'mutation-intent',
+          label: 'invoker:rebase-recreate',
+          status: 'running',
+          workflowId: 'wf-1',
+          intentId: 77,
+          durations: { runningMs: 12000 },
+        }}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId('workflow-inspector-action-node')).toHaveTextContent('invoker:rebase-recreate');
+    expect(screen.getByTestId('workflow-inspector-action-node-status')).toHaveTextContent('RUNNING');
+    expect(screen.getByTestId('workflow-inspector-action-node')).toHaveTextContent('runningMs');
+    expect(screen.getByTestId('workflow-inspector-action-node')).toHaveTextContent('12000');
+  });
 });
