@@ -1,5 +1,5 @@
 import type { BrowserWindow } from 'electron';
-import type { TaskGraphEvent, WorkflowMeta } from '@invoker/contracts';
+import type { TaskGraphEvent, WorkflowMeta, WorkflowRollupPatch } from '@invoker/contracts';
 import type { TaskDelta, TaskState } from '@invoker/workflow-core';
 
 const UI_TASK_GRAPH_FLUSH_DELAY_MS = 25;
@@ -9,7 +9,7 @@ const UI_TASK_GRAPH_LARGE_BATCH_THRESHOLD = 200;
 type SnapshotTaskStates = Extract<TaskGraphEvent, { type: 'snapshot' }>['tasks'];
 
 export interface TaskGraphEventPublisher {
-  publishDelta(delta: TaskDelta): void;
+  publishDelta(delta: TaskDelta, workflowRollups: readonly WorkflowRollupPatch[]): void;
   publishSnapshot(reason: string, tasks: TaskState[], workflows: WorkflowMeta[]): void;
 }
 
@@ -68,11 +68,11 @@ export function createTaskGraphEventPublisher(
   };
 
   return {
-    publishDelta(delta: TaskDelta): void {
+    publishDelta(delta: TaskDelta, workflowRollups: readonly WorkflowRollupPatch[]): void {
       publishEvent({
         type: 'delta',
         delta: options.stampDelta(delta),
-        workflowRollups: [],
+        workflowRollups: [...workflowRollups],
       });
     },
     publishSnapshot(reason: string, tasks: TaskState[], workflows: WorkflowMeta[]): void {
