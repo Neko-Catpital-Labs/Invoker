@@ -1,4 +1,7 @@
 # Mergify merge queue for the default branch.
+# Add the `merge-hold` label when a PR is approved in spirit but must not be
+# queued yet. This lets reviewers leave approval-adjacent comments without
+# Mergify landing the PR before small follow-ups are pushed.
 # GitHub rulesets already require PRs, squash merges, and one approval on master.
 # Keep repo-local conditions minimal and let Mergify respect the protected-branch
 # requirements instead of duplicating the full CI matrix here.
@@ -10,6 +13,7 @@ queue_rules:
       - base=master
       - -draft
       - "#approved-reviews-by >= 1"
+      - -label=merge-hold
     merge_conditions:
       - check-success = build-artifacts
       - check-success = quality / Dependency Cruise
@@ -34,6 +38,7 @@ queue_rules:
       - base=master
       - -draft
       - label=admin-bypass
+      - -label=merge-hold
     merge_conditions:
       - check-success = build-artifacts
       - check-success = quality / Dependency Cruise
@@ -59,6 +64,7 @@ pull_request_rules:
       - -draft
       - "#approved-reviews-by >= 1"
       - -label=admin-bypass
+      - -label=merge-hold
     actions:
       queue:
         name: default
@@ -68,6 +74,7 @@ pull_request_rules:
       - base=master
       - -draft
       - label=admin-bypass
+      - -label=merge-hold
     actions:
       queue:
         name: admin-bypass
