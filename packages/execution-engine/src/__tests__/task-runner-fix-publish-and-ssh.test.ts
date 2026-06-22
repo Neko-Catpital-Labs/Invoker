@@ -2221,7 +2221,7 @@ describe('TaskRunner', () => {
       expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-pub', expect.objectContaining({
         config: expect.objectContaining({ runnerKind: 'worktree' }),
         execution: expect.objectContaining({ workspacePath: '/tmp/gate-clone' }),
-      }));
+      }), expect.objectContaining({ generation: 0 }));
 
       // No git merge operations should have been attempted
       const mergeOps = gitCalls.filter((c) => c.args[0] === 'merge');
