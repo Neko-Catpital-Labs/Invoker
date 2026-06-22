@@ -49,6 +49,163 @@ export function validateWorkRequest(req: unknown): ValidationResult {
   return { valid: true };
 }
 
+const validReviewGateArtifactStatuses = [
+  'pending',
+  'open',
+  'approved',
+  'changes_requested',
+  'merged',
+  'closed',
+  'discarded',
+  'unknown',
+] as const;
+
+function checkForCycle(dependencies: ReadonlyMap<string, readonly string[]>, ids: Iterable<string>): string | undefined {
+  const visitState = new Map<string, 'visiting' | 'visited'>();
+
+  const visit = (id: string): string | undefined => {
+    const state = visitState.get(id);
+    if (state === 'visiting') {
+      return id;
+    }
+    if (state === 'visited') {
+      return undefined;
+    }
+
+    visitState.set(id, 'visiting');
+    for (const dependency of dependencies.get(id) ?? []) {
+      const cycleAt = visit(dependency);
+      if (cycleAt) {
+        return cycleAt;
+      }
+    }
+    visitState.set(id, 'visited');
+    return undefined;
+  };
+
+  for (const id of ids) {
+    const cycleAt = visit(id);
+    if (cycleAt) {
+      return cycleAt;
+    }
+  }
+
+  return undefined;
+}
+
+type ReviewGateArtifactsValidationResult =
+  | ValidationResult & { valid: false }
+  | {
+      valid: true;
+      ids: Set<string>;
+      artifactRecords: Array<Record<string, unknown>>;
+    };
+
+function validateReviewGateArtifacts(args: {
+  artifacts: readonly unknown[];
+  prefix: string;
+}): ReviewGateArtifactsValidationResult {
+  const ids = new Set<string>();
+  const artifactRecords: Array<Record<string, unknown>> = [];
+
+  for (let i = 0; i < args.artifacts.length; i += 1) {
+    const artifact = args.artifacts[i];
+    const artifactPrefix = `${args.prefix}.artifacts[${i}]`;
+    if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) {
+      return { valid: false, error: `${artifactPrefix} must be an object` };
+    }
+
+    const record = artifact as Record<string, unknown>;
+    artifactRecords.push(record);
+    if (typeof record.id !== 'string' || record.id.length === 0) {
+      return { valid: false, error: `${artifactPrefix}.id must be a non-empty string` };
+    }
+    if (ids.has(record.id)) {
+      return { valid: false, error: `${artifactPrefix}.id duplicates artifact "${record.id}"` };
+    }
+    ids.add(record.id);
+
+    if (typeof record.required !== 'boolean') {
+      return { valid: false, error: `${artifactPrefix}.required must be a boolean` };
+    }
+    if (!validReviewGateArtifactStatuses.includes(record.status as (typeof validReviewGateArtifactStatuses)[number])) {
+      return { valid: false, error: `${artifactPrefix}.status must be one of: ${validReviewGateArtifactStatuses.join(', ')}` };
+    }
+    if (!Number.isInteger(record.generation) || (record.generation as number) < 0) {
+      return { valid: false, error: `${artifactPrefix}.generation must be a non-negative integer` };
+    }
+    if (record.dependsOn !== undefined && !Array.isArray(record.dependsOn)) {
+      return { valid: false, error: `${artifactPrefix}.dependsOn must be an array` };
+    }
+  }
+
+  return { valid: true, ids, artifactRecords };
+}
+
+
+
+function validateReviewGate(reviewGate: unknown): ValidationResult {
+  const prefix = 'outputs.reviewGate';
+  if (!reviewGate || typeof reviewGate !== 'object' || Array.isArray(reviewGate)) {
+    return { valid: false, error: `${prefix} must be an object` };
+  }
+
+  const gate = reviewGate as Record<string, unknown>;
+  if (!Number.isInteger(gate.activeGeneration) || (gate.activeGeneration as number) < 0) {
+    return { valid: false, error: `${prefix}.activeGeneration must be a non-negative integer` };
+  }
+
+  if (!gate.completion || typeof gate.completion !== 'object' || Array.isArray(gate.completion)) {
+    return { valid: false, error: `${prefix}.completion must be an object` };
+  }
+  const completion = gate.completion as Record<string, unknown>;
+  if (completion.required !== 'all') {
+    return { valid: false, error: `${prefix}.completion.required must be "all"` };
+  }
+  if (completion.status !== 'approved') {
+    return { valid: false, error: `${prefix}.completion.status must be "approved"` };
+  }
+
+  if (!Array.isArray(gate.artifacts)) {
+    return { valid: false, error: `${prefix}.artifacts must be an array` };
+  }
+
+  const validatedArtifacts = validateReviewGateArtifacts({ artifacts: gate.artifacts, prefix });
+  if (!validatedArtifacts.valid) {
+    return validatedArtifacts;
+  }
+  const { ids, artifactRecords } = validatedArtifacts;
+
+  const dependencies = new Map<string, string[]>();
+  for (let i = 0; i < artifactRecords.length; i += 1) {
+    const record = artifactRecords[i];
+    const artifactPrefix = `${prefix}.artifacts[${i}]`;
+    const id = record.id as string;
+    const dependsOn = (record.dependsOn ?? []) as unknown[];
+    const artifactDependencies: string[] = [];
+    for (const dependency of dependsOn) {
+      if (typeof dependency !== 'string' || dependency.length === 0) {
+        return { valid: false, error: `${artifactPrefix}.dependsOn must contain non-empty artifact ids` };
+      }
+      if (!ids.has(dependency)) {
+        return { valid: false, error: `${artifactPrefix}.dependsOn references unknown artifact "${dependency}"` };
+      }
+      if (dependency === id) {
+        return { valid: false, error: `${artifactPrefix}.dependsOn must not reference itself` };
+      }
+      artifactDependencies.push(dependency);
+    }
+    dependencies.set(id, artifactDependencies);
+  }
+
+  const cycleAt = checkForCycle(dependencies, ids);
+  if (cycleAt) {
+    return { valid: false, error: `${prefix}.artifacts dependency graph has a cycle involving "${cycleAt}"` };
+  }
+
+  return { valid: true };
+}
+
 export function validateWorkResponse(res: unknown): ValidationResult {
   if (!res || typeof res !== 'object' || Array.isArray(res)) {
     return { valid: false, error: 'WorkResponse must be an object' };
@@ -94,6 +251,14 @@ export function validateWorkResponse(res: unknown): ValidationResult {
     const dm = r.dagMutation as Record<string, unknown> | undefined;
     if (!dm?.selectExperiment) {
       return { valid: false, error: 'select_experiment status requires dagMutation.selectExperiment' };
+    }
+  }
+
+  const outputs = r.outputs as Record<string, unknown>;
+  if (outputs.reviewGate !== undefined) {
+    const reviewGateValidation = validateReviewGate(outputs.reviewGate);
+    if (!reviewGateValidation.valid) {
+      return reviewGateValidation;
     }
   }
 
