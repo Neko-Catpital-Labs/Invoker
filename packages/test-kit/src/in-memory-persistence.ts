@@ -9,7 +9,7 @@ export class InMemoryPersistence implements OrchestratorPersistence {
   workflows = new Map<string, {
     id: string; name: string; status: string;
     createdAt: string; updatedAt: string;
-    onFinish?: string; baseBranch?: string; featureBranch?: string;
+    onFinish?: 'none' | 'merge' | 'pull_request'; baseBranch?: string; featureBranch?: string;
     mergeMode?: 'manual' | 'automatic' | 'external_review';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
@@ -19,9 +19,9 @@ export class InMemoryPersistence implements OrchestratorPersistence {
   private attempts = new Map<string, Attempt[]>();
 
   saveWorkflow(workflow: {
-    id: string; name: string; status: string;
-    createdAt?: string; updatedAt?: string;
-    onFinish?: string; baseBranch?: string; featureBranch?: string;
+    id: string; name: string;
+    createdAt: string; updatedAt: string;
+    onFinish?: 'none' | 'merge' | 'pull_request'; baseBranch?: string; featureBranch?: string;
     mergeMode?: 'manual' | 'automatic' | 'external_review';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
@@ -30,6 +30,7 @@ export class InMemoryPersistence implements OrchestratorPersistence {
     const now = new Date().toISOString();
     this.workflows.set(workflow.id, {
       ...workflow,
+      status: 'pending',
       createdAt: workflow.createdAt ?? now,
       updatedAt: workflow.updatedAt ?? now,
     });
@@ -111,7 +112,7 @@ export class InMemoryPersistence implements OrchestratorPersistence {
     return workflow ? this.withDerivedStatus(workflow) as any : undefined;
   }
 
-  private withDerivedStatus<T extends { id: string; status: string }>(workflow: T): T {
+  private withDerivedStatus<T extends { id: string }>(workflow: T): T & { status: string } {
     const tasks = this.loadTasks(workflow.id);
     const rollup = computeWorkflowRollup(tasks);
     return { ...workflow, status: rollup.status, rollup };
