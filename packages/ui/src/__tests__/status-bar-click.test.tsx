@@ -178,6 +178,45 @@ describe('StatusBar click behavior', () => {
       expect(mockOnStatusClick).toHaveBeenCalledWith('blocked', expect.any(Object));
     });
   });
+  describe('queue assigning counts', () => {
+    it('uses queue-running semantics for assigning counts and keeps the assigning pill clickable', () => {
+      const task: TaskState = {
+        id: 'wf-1/assigning-task',
+        description: 'Assigning task',
+        status: 'pending',
+        dependencies: [],
+        createdAt: new Date(),
+        config: {},
+        execution: {
+          phase: 'launching',
+          selectedAttemptId: 'wf-1/assigning-task-a1',
+        },
+      } as TaskState;
+      const tasks = new Map<string, TaskState>([[task.id, task]]);
+
+      render(
+        <StatusBar
+          tasks={tasks}
+          queueStatus={{
+            maxConcurrency: 6,
+            runningCount: 1,
+            running: [{ taskId: task.id, description: task.description }],
+            queued: [],
+          }}
+          onStatusClick={mockOnStatusClick}
+        />,
+      );
+
+      expect(screen.getByTestId('status-bar-pill-running')).toHaveTextContent('Running: 0');
+      expect(screen.getByTestId('status-bar-pill-assigning')).toHaveTextContent('Assigning: 1');
+      expect(screen.getByTestId('status-bar-pill-pending')).toHaveTextContent('Pending: 0');
+      expect(screen.getByText('Queue capacity includes assigning and AI-fix work.')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId('status-bar-pill-assigning'));
+      expect(mockOnStatusClick).toHaveBeenCalledWith('assigning', expect.any(Object));
+    });
+  });
+
 
   describe('Edge cases', () => {
     it('does not crash when onStatusClick is undefined', () => {

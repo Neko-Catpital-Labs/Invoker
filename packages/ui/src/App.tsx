@@ -14,6 +14,7 @@ import yaml from 'js-yaml';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
 import type { ActionGraphNode, TerminalSessionDescriptor } from '@invoker/contracts';
 import { useTasks } from './hooks/useTasks.js';
+import { useQueueStatus } from './hooks/useQueueStatus.js';
 import { useInvoker } from './hooks/useInvoker.js';
 import { TaskDAG } from './components/TaskDAG.js';
 import { HistoryView } from './components/HistoryView.js';
@@ -381,6 +382,11 @@ export function App() {
     onTaskGraphSnapshotApplied: handleTaskGraphSnapshotApplied,
   });
   const invoker = useInvoker();
+  const queueStatus = useQueueStatus();
+  const runningTaskIds = useMemo(
+    () => new Set((queueStatus?.running ?? []).map((entry) => entry.taskId)),
+    [queueStatus],
+  );
   const fileInputRef = useRef<HTMLInputElement>(null);
   const graphSurfaceRef = useRef<HTMLDivElement>(null);
   const lastGoodSelectedWorkflowGraphRef = useRef<SelectedWorkflowGraphSnapshot | null>(null);
@@ -1903,6 +1909,7 @@ export function App() {
               {viewMode === 'queue' ? (
                 <QueueView
                   tasks={tasks}
+                  queueStatus={queueStatus}
                   onTaskClick={handleTaskClick}
                   onCancel={handleCancelTask}
                   selectedTaskId={selectedTaskId}
@@ -1962,6 +1969,7 @@ export function App() {
                           onTaskContextMenu={handleTaskContextMenu}
                           onManualViewport={handleManualViewport}
                           statusFilters={new Set()}
+                          runningTaskIds={runningTaskIds}
                         />
                       </div>
                     </FloatingGraphPanel>
@@ -1979,6 +1987,7 @@ export function App() {
               >
                 <StatusBar
                   tasks={tasks}
+                  queueStatus={queueStatus}
                   activeFilters={statusFilters}
                   keyboardActiveKey={keyboardRegion === 'bottomBar' ? visibleStatusKeys[bottomStatusIndex] ?? null : null}
                   onStatusClick={(filterKey, event) => handleStatusClick(filterKey as WorkflowStatus, event)}
