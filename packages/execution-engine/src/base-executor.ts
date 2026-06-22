@@ -853,6 +853,12 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     branchRepoUrlOverride?: string,
   ): Promise<string | undefined> {
     try {
+      let sourceRef = branch;
+      try {
+        await this.execGitSimple(['rev-parse', '--verify', `refs/heads/${branch}`], cwd);
+      } catch {
+        sourceRef = 'HEAD';
+      }
       const requestBranchRepoUrl = branchRepoUrlOverride ?? (executionId
         ? this.entries.get(executionId)?.request.inputs.branchRepoUrl
         : undefined);
@@ -865,11 +871,11 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
           context: { caller: `${this.type}.pushBranchToRemote`, detail: branch },
         });
         await this.execGitSimpleWithNetworkTimeout(
-          ['push', '--force-with-lease', BaseExecutor.BRANCH_REMOTE_NAME, `${branch}:refs/heads/${branch}`],
+          ['push', '--force-with-lease', BaseExecutor.BRANCH_REMOTE_NAME, `${sourceRef}:refs/heads/${branch}`],
           cwd,
         );
       } else {
-        await this.execGitSimpleWithNetworkTimeout(['push', '--force-with-lease', 'origin', `${branch}:refs/heads/${branch}`], cwd);
+        await this.execGitSimpleWithNetworkTimeout(['push', '--force-with-lease', 'origin', `${sourceRef}:refs/heads/${branch}`], cwd);
       }
       return undefined;
     } catch (err) {

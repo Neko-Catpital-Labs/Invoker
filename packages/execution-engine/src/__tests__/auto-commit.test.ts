@@ -2091,10 +2091,13 @@ describe('BaseExecutor.pushBranchToRemote', () => {
     expect(remoteBranches).toContain('invoker/task-push');
   });
 
-  it('returns an error message when branch does not exist on remote', async () => {
-    const err = await executor.testPushBranchToRemote(cloneDir, 'nonexistent-branch');
-    expect(err).toBeDefined();
-    expect(typeof err).toBe('string');
+  it('pushes current HEAD when the requested local branch ref is missing', async () => {
+    const err = await executor.testPushBranchToRemote(cloneDir, 'invoker/head-fallback');
+    expect(err).toBeUndefined();
+
+    const remoteHead = execSync('git rev-parse invoker/head-fallback', { cwd: originDir }).toString().trim();
+    const localHead = execSync('git rev-parse HEAD', { cwd: cloneDir }).toString().trim();
+    expect(remoteHead).toBe(localHead);
   });
 
   it('returns an error message when remote is unreachable', async () => {
