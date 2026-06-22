@@ -8,6 +8,7 @@ import {
   getMarkdownSection,
   normalizeReviewUnit,
   reviewUnitsForChangedFiles,
+  validateKnownReviewBoundaries,
   validateReviewLaneUnitCompatibility,
   validateReviewUnitChangedFiles,
   validateReviewUnitFocus,
@@ -355,6 +356,11 @@ export async function validatePrBody(body, options = {}) {
     errors.push(...validatePrScope({ changedFiles: options.changedFiles, reviewLane, body: trimmed }));
     errors.push(...validateReviewUnitChangedFiles({
       declaredReviewUnit: reviewUnit,
+      changedFiles: options.changedFiles,
+      context: 'PR body',
+    }));
+    errors.push(...validateKnownReviewBoundaries({
+      reviewLane,
       changedFiles: options.changedFiles,
       context: 'PR body',
     }));

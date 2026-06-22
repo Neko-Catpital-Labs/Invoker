@@ -286,8 +286,8 @@ function baseArgs() {
   return ['--title', 'test title', '--base', 'master', '--body-file', 'pr-body.md'];
 }
 
-function stackTitleArgs(base = 'master') {
-  return ['--title', '[Graph Blanking](1) Preserve graph blanking', '--base', base, '--body-file', 'pr-body.md'];
+function stackTitleArgs(base = 'master', title = '[Graph Blanking](1) Preserve graph blanking') {
+  return ['--title', title, '--base', base, '--body-file', 'pr-body.md'];
 }
 
 function expectNoPush(harness, label) {
@@ -368,6 +368,49 @@ function testMergifyManagedUpdateSkipsPush() {
     assert(Boolean(patchCall), 'managed update should patch the existing PR');
     assert(patchCall.stdin.includes('"title":"[Graph Blanking](1) Preserve graph blanking"'), 'managed update patch should include title');
     assert(patchCall.stdin.includes('## Summary'), 'managed update patch should include PR body');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+function testMergifyManagedUpdateAcceptsLetteredTitle() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    const branch = 'stack/test-lettered-update';
+    createTrackedBranch(work, branch);
+    commitFile(work, 'stack.txt', 'stack\n', 'stack update\n\nChange-Id: Iletter0001');
+    gitQuiet(work, 'push', '-u', 'origin', branch);
+    setManagedBranchConfig(work, branch);
+
+    const result = runCreatePr(work, harness, [
+      ...stackTitleArgs('master', '[Graph Blanking](3a) Split follow-up slice'),
+      '--update-existing',
+    ], {
+      GH_API_PULLS_JSON: JSON.stringify([
+        {
+          number: 43,
+          html_url: 'https://example.com/pull/43',
+          head: { ref: branch, repo: { full_name: 'owner/repo' } },
+        },
+      ]),
+      GH_PATCH_RESPONSE: JSON.stringify({ html_url: 'https://example.com/pull/43' }),
+    });
+
+    const ghLog = existsSync(harness.ghLog) ? readFileSync(harness.ghLog, 'utf-8') : '';
+    assert(
+      result.status === 0,
+      `managed stack update should accept a lettered title\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}\ngh log:\n${ghLog}`,
+    );
+    assert(
+      result.stdout.trim() === 'https://example.com/pull/43',
+      `managed stack update should print updated PR URL for lettered titles\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}\ngh log:\n${ghLog}`,
+    );
+    expectNoPush(harness, 'managed lettered update skip push');
+
+    const ghCalls = readGhCalls(harness.ghLog);
+    const patchCall = ghCalls.find((call) => call.route.endsWith('/pulls/43'));
+    assert(Boolean(patchCall), 'managed lettered update should patch the existing PR');
+    assert(patchCall.stdin.includes('"title":"[Graph Blanking](3a) Split follow-up slice"'), 'managed lettered update patch should include lettered title');
   } finally {
     rmSync(harness.root, { recursive: true, force: true });
   }
@@ -537,6 +580,7 @@ const tests = [
   testStaleBaseDetection,
   testMergifyManagedCreateRefusal,
   testMergifyManagedUpdateSkipsPush,
+  testMergifyManagedUpdateAcceptsLetteredTitle,
   testMergifyManagedUpdateRejectsPlainTitle,
   testMergifyManagedUpdateRejectsNestedTitle,
   testUnpublishedStackCommitsBlockUpdate,
