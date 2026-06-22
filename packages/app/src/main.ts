@@ -38,8 +38,12 @@ import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import {
   configureEarlyElectronApp,
+  formatGuiOwnerBootstrapFallbackMessage,
+  guiOwnerBootstrapTimeoutMs,
   registerGuiLifecycleHandlers,
+  resolveGuiOwnerPreference,
   runElectronReadyBootstrap,
+  shouldRefreshGuiOwnerRoute,
   startGuiModeBootstrap,
   startMainProcessBootstrap,
 } from './bootstrap/app-bootstrap.js';
@@ -333,6 +337,7 @@ let commandService: CommandService;
 // constructed in initServices before TaskRunner exists, so the deps
 // resolve via this getter at cancel-in-flight time.
 let latestTaskExecutor: TaskRunner | null = null;
+let guiUsingDaemonOwner = false;
 
 function buildCommandServiceInvalidationDeps() {
   return buildWorkflowInvalidationDeps({
@@ -401,27 +406,6 @@ interface HeadlessResumeMutationPayload {
 }
 
 type HeadlessOwnerMode = 'standalone' | 'gui';
-type GuiOwnerPreference = 'auto' | 'daemon' | 'gui';
-
-function resolveGuiOwnerPreference(): GuiOwnerPreference {
-  const raw = (process.env.INVOKER_GUI_OWNER_MODE ?? '').trim().toLowerCase();
-  if (raw === 'daemon' || raw === 'client' || raw === 'follower') return 'daemon';
-  if (raw === 'auto') return 'auto';
-  if (raw === 'gui' || raw === 'owner' || raw === 'local') return 'gui';
-  if (process.env.INVOKER_GUI_DAEMON_OWNER === '1') return 'daemon';
-  return 'daemon';
-}
-
-function guiOwnerBootstrapTimeoutMs(): number {
-  const parsed = Number.parseInt(
-    process.env.INVOKER_GUI_OWNER_BOOTSTRAP_TIMEOUT_MS
-      ?? process.env.INVOKER_HEADLESS_OWNER_BOOTSTRAP_TIMEOUT_MS
-      ?? '60000',
-    10,
-  );
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 60000;
-}
-
 function headlessExecLogFields(
   payload: HeadlessExecMutationPayload,
   mode: HeadlessOwnerMode,
@@ -552,10 +536,15 @@ async function ensureStandaloneOwnerForGui(): Promise<void> {
 let guiOwnerRouteRefreshPromise: Promise<void> | null = null;
 
 async function refreshGuiMutationOwnerRoute(): Promise<void> {
-  if (resolveGuiOwnerPreference() !== 'daemon') return;
+  const ownerPreference = resolveGuiOwnerPreference();
+  if (!shouldRefreshGuiOwnerRoute(ownerPreference, guiUsingDaemonOwner)) return;
   if (!guiOwnerRouteRefreshPromise) {
     guiOwnerRouteRefreshPromise = (async () => {
-      await ensureStandaloneOwnerForGui();
+      if (ownerPreference === 'daemon') {
+        await ensureStandaloneOwnerForGui();
+      } else if (!await discoverStandaloneOwnerForGui(2_000)) {
+        throw new Error('No mutation owner is available');
+      }
       const previousMessageBus = typeof messageBus === 'undefined' ? null : messageBus;
       const refreshedMessageBus = new IpcBus(undefined, { allowServe: false });
       await refreshedMessageBus.ready();
@@ -908,6 +897,7 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
 const RESET = '\x1b[0m';
 const BOLD = '\x1b[1m';
 const RED = '\x1b[31m';
+const YELLOW = '\x1b[33m';
 
 // ══════════════════════════════════════════════════════════════
 // HEADLESS MODE
@@ -3011,6 +3001,10 @@ function createEmbeddedTerminalBackendFromConfig(
 
   const runGuiReadyBootstrap = async (): Promise<void> => {
     recordStartupMark('app.whenReady');
+    // GUI owner modes:
+    // - daemon: GUI is a client; a background daemon owns workflow writes, and startup failure is serious.
+    // - gui/local: GUI owns workflow writes directly with no daemon.
+    // - auto: GUI uses an existing daemon when one is available, otherwise it runs locally as owner.
     const guiOwnerPreference = resolveGuiOwnerPreference();
     let daemonGuiOwner = false;
     if (guiOwnerPreference === 'daemon') {
@@ -3021,9 +3015,10 @@ function createEmbeddedTerminalBackendFromConfig(
         daemonGuiOwner = true;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        process.stderr.write(`${RED}Error:${RESET} ${message}\n`);
-        app.quit();
-        return;
+        const fallbackMessage = formatGuiOwnerBootstrapFallbackMessage(message);
+        logger.warn(fallbackMessage, { module: 'init' });
+        process.stderr.write(`${YELLOW}Warning:${RESET} ${fallbackMessage}\n`);
+        daemonGuiOwner = false;
       }
     } else if (guiOwnerPreference === 'auto') {
       recordStartupMark('daemonOwner.discover.start');
@@ -3039,6 +3034,7 @@ function createEmbeddedTerminalBackendFromConfig(
 
     if (daemonGuiOwner) {
       ownerMode = false;
+      guiUsingDaemonOwner = true;
       try {
         recordStartupMark('initServices.readOnly.start');
         await initServices({ readOnly: true, executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
@@ -3051,6 +3047,7 @@ function createEmbeddedTerminalBackendFromConfig(
       }
     } else {
       ownerMode = true;
+      guiUsingDaemonOwner = false;
       try {
         recordStartupMark('initServices.start');
         await initServices({ executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
@@ -3065,6 +3062,7 @@ function createEmbeddedTerminalBackendFromConfig(
         recordStartupMark('initServices.readOnly.start');
         await initServices({ readOnly: true, executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
         ownerMode = false;
+        guiUsingDaemonOwner = false;
         recordStartupMark('initServices.readOnly.end', { ownerMode: false });
       }
     }
