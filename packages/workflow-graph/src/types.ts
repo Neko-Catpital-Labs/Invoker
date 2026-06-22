@@ -129,6 +129,44 @@ export interface DetachedExternalDependency {
 export type TaskRunPhase = 'launching' | 'executing';
 export type TaskHeartbeatSource = 'executor' | 'remote_workload';
 
+export type ReviewGateArtifactStatus =
+  | 'pending'
+  | 'open'
+  | 'approved'
+  | 'changes_requested'
+  | 'merged'
+  | 'closed'
+  | 'discarded'
+  | 'unknown';
+
+export interface ReviewGateArtifact {
+  readonly id: string;
+  readonly title?: string;
+  readonly url?: string;
+  readonly providerId?: string;
+  readonly provider?: string;
+  readonly branch?: string;
+  readonly baseBranch?: string;
+  readonly required: boolean;
+  readonly status: ReviewGateArtifactStatus;
+  readonly rawStatus?: string;
+  readonly dependsOn?: readonly string[];
+  readonly generation: number;
+  readonly createdAt?: string;
+  readonly updatedAt?: string;
+  readonly discardedAt?: string;
+  readonly discardReason?: string;
+}
+
+export interface ReviewGateState {
+  readonly activeGeneration: number;
+  readonly completion: {
+    readonly required: 'all';
+    readonly status: 'approved';
+  };
+  readonly artifacts: readonly ReviewGateArtifact[];
+}
+
 export interface TaskExecution {
   readonly generation?: number;
   readonly blockedBy?: string;
@@ -164,6 +202,7 @@ export interface TaskExecution {
   readonly reviewId?: string;
   readonly reviewStatus?: string;
   readonly reviewProviderId?: string;
+  readonly reviewGate?: ReviewGateState;
   readonly phase?: TaskRunPhase;
   readonly launchStartedAt?: Date;
   readonly launchCompletedAt?: Date;
