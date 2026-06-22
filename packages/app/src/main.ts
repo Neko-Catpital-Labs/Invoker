@@ -76,7 +76,7 @@ import {
   resolveInvokerIpcSocketPath,
   resolveRepoRoot,
 } from '@invoker/contracts';
-import type { ActionGraphResponse, WorkflowMeta, WorkResponse } from '@invoker/contracts';
+import type { WorkflowMeta, WorkResponse } from '@invoker/contracts';
 import { SQLiteAdapter, ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
 import { IpcBus, Channels } from '@invoker/transport';
 import {
@@ -200,10 +200,7 @@ import {
   parseFixWithAgentMutationArgs,
 } from './auto-fix-intents.js';
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
-import {
-  buildActionGraphDiagnostics,
-  resolveActionDiagnosticsStallThresholdMs,
-} from './action-graph-diagnostics.js';
+import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
 import { registerReadOnlyIpcHandlers } from './ipc-read-handlers.js';
 import { createTaskGraphEventPublisher } from './task-graph-event-publisher.js';
 import {
@@ -240,31 +237,6 @@ import {
 import { tryAcquireGuiInstanceLock, type GuiInstanceLock } from './gui-instance-lock.js';
 import { logProcessError } from './process-error-handling.js';
 
-function buildCurrentActionGraphSnapshot(args: {
-  orchestrator: Orchestrator;
-  persistence: SQLiteAdapter;
-  invokerConfig: InvokerConfig;
-}): ActionGraphResponse {
-  args.orchestrator.syncAllFromDb();
-  const tasks = args.orchestrator.getAllTasks();
-  const workflows = args.persistence.listWorkflows();
-
-  return buildActionGraphDiagnostics({
-    workflows,
-    tasks,
-    attemptsByTaskId: new Map(tasks.map((task) => [
-      task.id,
-      args.persistence.loadActionGraphAttempts(task.id, task.execution.selectedAttemptId),
-    ])),
-    queueStatus: args.orchestrator.getQueueStatus(),
-    mutationIntents: args.persistence.listWorkflowMutationIntents(undefined, ['queued', 'running', 'failed']),
-    mutationLeases: args.persistence.listWorkflowMutationLeases(),
-    eventsByTaskId: new Map(tasks.map((task) => [task.id, args.persistence.getEvents(task.id, 'desc', 20)])),
-    activityLogs: args.persistence.getActivityLogs(0, 200),
-    stallThresholdMs: resolveActionDiagnosticsStallThresholdMs(args.invokerConfig),
-    launchDispatches: args.persistence.listLaunchDispatchesByState(['enqueued', 'leased']),
-  });
-}
 
 function isTaskInFlightForForcedStop(task: TaskState): boolean {
   return task.status === 'running'
