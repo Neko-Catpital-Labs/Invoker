@@ -28,9 +28,14 @@ export function SystemSetupModal({
   const helperTargets = bundledSkills
     ? [...bundledSkills.targets, ...bundledSkills.commandTargets, ...bundledSkills.mcpTargets]
     : [];
-  const installActionLabel = helperTargets.some((target) => target.installed && !target.upToDate)
-    ? 'Update Helpers'
+  const installActionMode = helperTargets.some((target) => target.installed && !target.upToDate)
+    ? 'update'
     : helperTargets.some((target) => target.installed)
+      ? 'reinstall'
+      : 'install';
+  const installActionLabel = installActionMode === 'update'
+    ? 'Update Helpers'
+    : installActionMode === 'reinstall'
       ? 'Reinstall Helpers'
       : 'Install Helpers';
 
@@ -176,7 +181,7 @@ export function SystemSetupModal({
               {canInstallBundledSkills && (
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={() => onInstallBundledSkills?.(helperTargets.some((target) => target.installed) ? 'update' : 'install')}
+                    onClick={() => onInstallBundledSkills?.(installActionMode)}
                     disabled={installPending}
                     className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-900 disabled:text-indigo-200 text-white rounded text-sm font-medium transition-colors"
                   >
