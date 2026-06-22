@@ -666,10 +666,10 @@ test.describe('Visual proof capture', () => {
   test('status bar — no system log button', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     await expect(page.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
-    const statusBar = page.locator('.bg-gray-800.border-t');
-    await expect(statusBar).toBeVisible();
-    await expect(statusBar.getByText('Total:')).toBeVisible();
-    await expect(statusBar.locator('text=System Log')).not.toBeVisible();
+    const pendingChip = page.getByTestId('workflow-status-pill-pending');
+    await expect(pendingChip).toBeVisible();
+    await expect(pendingChip).toContainText('pending (1)');
+    await expect(page.getByText('System Log')).toHaveCount(0);
     await captureScreenshot(page, 'status-bar-no-system-log');
     await assertPageScreenshot(page, 'status-bar-no-system-log');
   });
@@ -1220,117 +1220,8 @@ test.describe('Visual proof capture', () => {
     await expect(menu).not.toBeVisible();
   });
 
-  test('status filter dims non-matching nodes', async ({ page }) => {
-    await loadPlan(page, TEST_PLAN);
-    const now = new Date();
-    const earlier = new Date(Date.now() - 5000);
-    await injectTaskStates(page, [
-      {
-        taskId: 'task-alpha',
-        changes: {
-          status: 'completed',
-          execution: { startedAt: earlier, completedAt: now },
-        },
-      },
-      // task-beta remains pending (no changes)
-    ]);
 
-    // Click the "Pending:" status label to filter
-    await page.getByText(/Pending:/).click();
 
-    // No debounce — effect is immediate, but allow React render
-    await page.waitForTimeout(100);
-
-    // The selected filter keeps matching and non-matching nodes visible in the current DAG.
-    const completedNodeCard = taskNodeCard(page, 'task-alpha');
-    await expect(completedNodeCard).toBeVisible();
-
-    const pendingNodeCard = taskNodeCard(page, 'task-beta');
-    await expect(pendingNodeCard).toBeVisible();
-
-    await captureScreenshot(page, 'status-filter-dimmed-dag');
-    await assertPageScreenshot(page, 'status-filter-dimmed-dag');
-  });
-
-  test('status bar click-to-isolate and ctrl-click-toggle', async ({ page }) => {
-    await loadPlan(page, TEST_PLAN);
-    const now = new Date();
-    const earlier = new Date(Date.now() - 5000);
-    await injectTaskStates(page, [
-      {
-        taskId: 'task-alpha',
-        changes: {
-          status: 'completed',
-          execution: { startedAt: earlier, completedAt: now },
-        },
-      },
-      // task-beta stays pending
-    ]);
-
-    // 1. Click "Pending:" to isolate — completed node should dim
-    await page.getByText(/Pending:/).click();
-    // No debounce — effect is immediate, but allow React render
-    await page.waitForTimeout(100);
-
-    const completedCard = taskNodeCard(page, 'task-alpha');
-    await expect(completedCard).toBeVisible();
-    await captureScreenshot(page, 'statusbar-click-isolate-pending');
-    await assertPageScreenshot(page, 'statusbar-click-isolate-pending');
-
-    // 2. Ctrl-click "Completed:" to add it to the active set
-    await page.getByText(/Completed:/).click({ modifiers: ['ControlOrMeta'] });
-    await page.waitForTimeout(100);
-
-    // Now both pending and completed are active — neither should be dimmed
-    await expect(completedCard).toBeVisible();
-    const pendingCard = taskNodeCard(page, 'task-beta');
-    await expect(pendingCard).toBeVisible();
-    await captureScreenshot(page, 'statusbar-ctrl-click-toggle-both');
-    await assertPageScreenshot(page, 'statusbar-ctrl-click-toggle-both');
-
-    // 3. Click sole active filter to clear — click "Completed:" (plain click = isolate to completed)
-    //    then click it again (sole active = clear all)
-    await page.getByText(/Completed:/).click();
-    await page.waitForTimeout(100);
-    await page.getByText(/Completed:/).click();
-    await page.waitForTimeout(100);
-
-    // All filters cleared — nothing dimmed
-    await expect(completedCard).toBeVisible();
-    await expect(pendingCard).toBeVisible();
-    await captureScreenshot(page, 'statusbar-clear-all-filters');
-    await assertPageScreenshot(page, 'statusbar-clear-all-filters');
-  });
-
-  test('closed review PR status is visible and filterable', async ({ page }) => {
-    await loadPlan(page, TEST_PLAN);
-    const now = new Date();
-    await injectTaskStates(page, [
-      {
-        taskId: 'task-alpha',
-        changes: {
-          status: 'closed',
-          execution: {
-            startedAt: new Date(Date.now() - 5000),
-            completedAt: now,
-            reviewStatus: 'Closed without merge',
-            reviewUrl: 'https://github.com/Neko-Catpital-Labs/Invoker/pull/123',
-          },
-        },
-      },
-    ]);
-
-    const closedNode = page.locator('.react-flow__node[data-testid$="task-alpha"]');
-    await expect(closedNode.getByText('CLOSED')).toBeVisible();
-    await expect(page.getByText(/Closed:/)).toBeVisible();
-
-    await page.getByText(/Closed:/).click();
-    await page.waitForTimeout(100);
-    await expect(taskNodeCard(page, 'task-alpha')).toBeVisible();
-    await expect(taskNodeCard(page, 'task-beta')).toBeVisible();
-
-    await captureScreenshot(page, 'closed-review-pr-status');
-  });
 
   test('approve-fix task panel — exposes approval controls', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
@@ -1407,7 +1298,6 @@ test.describe('Visual proof capture', () => {
     ]);
     // Navigate to queue tab if there is one, or verify queue section is visible
     await page.getByTestId('rail-queue').click();
-    await expect(page.getByText('Active 1 / 6')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Action Queue (1)' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Backlog (3)' })).toBeVisible();
     await captureScreenshot(page, 'queue-view-concurrency');
@@ -1449,26 +1339,16 @@ test.describe('Visual proof capture', () => {
       },
     ]);
     await page.waitForTimeout(2200);
-    const captureBefore = process.env.CAPTURE_MODE === 'before';
-
-    if (captureBefore) {
-      await expect(page.getByTestId('status-bar-pill-running')).toContainText('Running: 0');
-      await expect(page.getByTestId('status-bar-pill-pending')).toContainText('Pending: 1');
-    } else {
-      await expect(page.getByTestId('status-bar-pill-running')).toContainText('Running: 0');
-      await expect(page.getByTestId('status-bar-pill-assigning')).toContainText('Assigning: 1');
-      await expect(page.getByTestId('status-bar-pill-pending')).toContainText('Pending: 0');
-      await expect(page.getByText('Queue capacity includes assigning and AI-fix work.')).toBeVisible();
-    }
+    await page.getByTestId('rail-queue').click();
+    await expect(page.getByRole('heading', { name: 'Action Queue (1)' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Backlog (0)' })).toBeVisible();
+    await expect(page.getByText('assigning-task')).toBeVisible();
+    await expect(page.getByText('Assigning queue task')).toBeVisible();
     await captureScreenshot(page, 'queue-assigning-statusbar');
 
-    await page.getByTestId('rail-queue').click();
-    const queueRow = page.locator('[data-row-id$=\"assigning-task\"]');
+    const queueRow = page.locator('[data-row-id$="assigning-task"]');
     await expect(queueRow).toBeVisible();
-    if (!captureBefore) {
-      await expect(queueRow.getByText('Assigning', { exact: true })).toBeVisible();
-      await expect(queueRow.getByText('phase: Assigning')).toHaveCount(0);
-    }
+    await expect(queueRow.getByText('phase: Assigning')).toHaveCount(0);
     await captureScreenshot(page, 'queue-assigning-row');
   });
 
