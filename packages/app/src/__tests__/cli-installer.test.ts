@@ -4,12 +4,12 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  findInstalledCli,
   maybeAutoInstallCli,
   resolveCliInstallerStatus,
   updateInvokerCli,
   type CliInstallerContext,
 } from '../cli-installer.js';
-
 const APP_VERSION = '0.0.3';
 
 function writeFakeCli(filePath: string, version: string): void {
@@ -79,6 +79,26 @@ describe('cli-installer', () => {
     expect(result.installedTo).toBe(existing);
     expect(readFileSync(existing, 'utf8')).toContain(APP_VERSION);
     expect(result.status.upToDate).toBe(true);
+  });
+
+  it('checks candidate install dirs before PATH when both contain a CLI', () => {
+    const candidateDir = path.join(scratchDir, 'candidate-bin');
+    const pathDir = path.join(scratchDir, 'on-path-bin');
+    mkdirSync(candidateDir);
+    mkdirSync(pathDir);
+    const candidateCli = path.join(candidateDir, 'invoker-cli');
+    const pathCli = path.join(pathDir, 'invoker-cli');
+    writeFakeCli(candidateCli, '0.0.2');
+    writeFakeCli(pathCli, APP_VERSION);
+    const context = makeContext({
+      env: { PATH: `${pathDir}:/usr/bin:/bin` },
+      candidateInstallDirs: [candidateDir],
+    });
+
+    const installed = findInstalledCli(context);
+
+    expect(installed?.path).toBe(candidateCli);
+    expect(installed?.version).toBe('0.0.2');
   });
 
   it('is a no-op when the installed version matches the app version', () => {
