@@ -11,6 +11,8 @@ TASK_PATTERNS="$SKILL_DIR/references/task-patterns.md"
 CANONICAL_COMMAND_DIR="$SKILL_DIR/commands"
 CANONICAL_COMMAND="$CANONICAL_COMMAND_DIR/invoker-plan-to-invoker.md"
 CLAUDE_MD="$REPO_ROOT/CLAUDE.md"
+README="$REPO_ROOT/README.md"
+TUTORIAL="$REPO_ROOT/docs/tutorial-first-agent-workflow.md"
 CODEX_INSTALLED="$HOME/.codex/skills/invoker-plan-to-invoker"
 CLAUDE_INSTALLED="$HOME/.claude/skills/invoker-plan-to-invoker"
 
@@ -28,6 +30,14 @@ must_contain() {
   fi
 }
 
+must_not_exist() {
+  local path="$1"
+  local hint="$2"
+  if [[ -e "$path" ]]; then
+    fail "$hint — unexpected file exists: $path"
+  fi
+}
+
 
 must_output_contain() {
   local output="$1"
@@ -38,11 +48,23 @@ must_output_contain() {
   fi
 }
 [[ -f "$CANONICAL_COMMAND" ]] || fail "expected canonical command source"
+must_not_exist "$REPO_ROOT/.claude/commands/plan-to-invoker.md" "legacy Claude handoff command copy must not drift from canonical source"
+must_not_exist "$REPO_ROOT/.cursor/commands/plan-to-invoker.md" "legacy Cursor handoff command copy must not drift from canonical source"
+[[ -f "$README" ]] || fail "expected $README"
+[[ -f "$TUTORIAL" ]] || fail "expected $TUTORIAL"
 must_contain "$CANONICAL_COMMAND" "invoker_submit_plan" "Invoker handoff command must submit through MCP"
 must_contain "$CANONICAL_COMMAND" "plans/invoker-handoff.md" "Invoker handoff command must write Markdown plan"
 must_contain "$CANONICAL_COMMAND" "plans/invoker-handoff.yaml" "Invoker handoff command must write YAML plan"
 must_contain "$CANONICAL_COMMAND" "skill://make-pr/SKILL.md" "Invoker handoff command must trigger the PR skill for PR work"
 must_contain "$CANONICAL_COMMAND" "skill://review-compression/SKILL.md" "Invoker handoff command must trigger review compression for stack work"
+must_contain "$README" '/invoker-plan-to-invoker "help me plan <change>"' "README must document the installed handoff command"
+must_contain "$README" "plans/invoker-handoff.md" "README must document the handoff Markdown plan path"
+must_contain "$README" "invoker-cli run --live" "README must document the CLI handoff submit path"
+must_contain "$README" "Invoker MCP tool" "README must document the MCP handoff submit path"
+must_contain "$TUTORIAL" '/invoker-plan-to-invoker "help me plan <change>"' "Tutorial must document the installed handoff command"
+must_contain "$TUTORIAL" "plans/invoker-handoff.md" "Tutorial must document the handoff Markdown plan path"
+must_contain "$TUTORIAL" "invoker-cli run --live" "Tutorial must document the CLI handoff submit path"
+must_contain "$TUTORIAL" "Invoker MCP tool" "Tutorial must document the MCP handoff submit path"
 
 [[ -f "$PLAYBOOK" ]] || fail "expected $PLAYBOOK"
 [[ -f "$TASK_PATTERNS" ]] || fail "expected $TASK_PATTERNS"
@@ -80,8 +102,12 @@ must_contain "$SKILL_MD" "\"/invoker-plan-to-invoker\"" "SKILL frontmatter must 
 must_contain "$SKILL_MD" "## Harness handoff mode" "SKILL must document harness handoff mode"
 must_contain "$SKILL_MD" "Use this mode when invoked by the installed command or MCP prompt." "SKILL must define when handoff mode applies"
 must_contain "$SKILL_MD" "First produce a Markdown planning artifact at \`plans/invoker-handoff.md\`." "SKILL handoff mode must require a Markdown plan"
+must_contain "$SKILL_MD" "In an Invoker source checkout, still run \`bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>\` before submission." "SKILL handoff mode must keep checkout-local skill-doctor validation"
+must_contain "$SKILL_MD" "Outside an Invoker source checkout, \`invoker_validate_plan\` is the deterministic validation gate." "SKILL handoff mode must keep outside-checkout MCP validation"
 must_contain "$SKILL_MD" "Convert the approved Markdown plan to \`plans/invoker-handoff.yaml\`." "SKILL handoff mode must require YAML conversion"
 must_contain "$SKILL_MD" "Prefer the MCP tools \`invoker_validate_plan\` and \`invoker_submit_plan\` when available." "SKILL handoff mode must prefer MCP validation and submit"
+must_contain "$SKILL_MD" "skills/make-pr/SKILL.md" "SKILL handoff mode must trigger the PR skill for PR work"
+must_contain "$SKILL_MD" "skills/review-compression/SKILL.md" "SKILL handoff mode must trigger review compression for stack work"
 must_contain "$SKILL_MD" "never version or metadata wrappers" "SKILL frontmatter must reject legacy benchmark YAML wrappers"
 must_contain "$SKILL_MD" "## Benchmark/direct-output mode" "SKILL must document benchmark/direct-output mode"
 must_contain "$SKILL_MD" "Treat the literal absolute output path" "SKILL must require literal output path handling"
