@@ -282,8 +282,8 @@ export interface BundledSkillsStatus {
   lastInstallAt?: string;
   lastInstallError?: string;
   targets: BundledSkillTargetStatus[];
-  commandTargets?: HarnessConfigState[];
-  mcpTargets?: HarnessMcpConfigState[];
+  commandTargets: HarnessConfigState[];
+  mcpTargets: HarnessMcpConfigState[];
 }
 
 export type BundledSkillsInstallMode = 'install' | 'update' | 'reinstall';
