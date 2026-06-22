@@ -6,6 +6,34 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { useTasks } from '../hooks/useTasks.js';
 import { makeUITask } from './helpers/mock-invoker.js';
+import type { WorkflowMeta } from '../types.js';
+
+function makeWorkflowRollup(
+  status: NonNullable<WorkflowMeta['rollup']>['status'],
+  counts: Partial<NonNullable<WorkflowMeta['rollup']>['countsByStatus']> = {},
+): NonNullable<WorkflowMeta['rollup']> {
+  return {
+    status,
+    countsByStatus: {
+      pending: 0,
+      running: 0,
+      fixing_with_ai: 0,
+      completed: 0,
+      failed: 0,
+      closed: 0,
+      needs_input: 0,
+      blocked: 0,
+      review_ready: 0,
+      awaiting_approval: 0,
+      stale: 0,
+      ...counts,
+    },
+    failedTasks: [],
+    fixingTasks: [],
+    waitingTasks: [],
+  };
+}
+
 
 describe('useTasks', () => {
   let workflowsChangedHandler: ((wfList: unknown[]) => void) | undefined;
@@ -105,6 +133,7 @@ describe('useTasks', () => {
           taskStateVersion: 2,
           previousTaskStateVersion: 1,
         },
+        workflowRollups: [],
       });
       await new Promise((resolve) => setTimeout(resolve, 110));
     });
@@ -356,6 +385,7 @@ describe('useTasks', () => {
           type: 'created',
           task: makeUITask({ id: 'wf-2/task-1', workflowId: 'wf-2', status: 'pending' }),
         },
+        workflowRollups: [],
       });
       await new Promise((resolve) => setTimeout(resolve, 130));
     });
@@ -367,17 +397,17 @@ describe('useTasks', () => {
     });
   });
 
-  it('keeps backend-sent workflow status until workflows-changed refreshes metadata', async () => {
-    const taskA = makeUITask({ id: 'wf-1/task-a', workflowId: 'wf-1', status: 'failed' });
-    const taskB = makeUITask({ id: 'wf-1/task-b', workflowId: 'wf-1', status: 'completed' });
+  it('applies backend rollup patches from task graph deltas', async () => {
+    const task = makeUITask({ id: 'wf-1/task-a', workflowId: 'wf-1', status: 'failed' });
+    const runningRollup = makeWorkflowRollup('running', { running: 1 });
     (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
-      tasks: [taskA, taskB],
-      workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'failed' }],
+      tasks: [task],
+      workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'failed', rollup: makeWorkflowRollup('failed', { failed: 1 }) }],
     };
     (window as unknown as { invoker: Record<string, unknown> }).invoker = {
       getTasks: vi.fn().mockResolvedValue({
-        tasks: [taskA, taskB],
-        workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'failed' }],
+        tasks: [task],
+        workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'failed', rollup: makeWorkflowRollup('failed', { failed: 1 }) }],
       }),
       onTaskGraphEvent: vi.fn((cb: (event: unknown) => void) => {
         taskGraphEventHandler = cb;
@@ -398,62 +428,90 @@ describe('useTasks', () => {
         delta: {
           type: 'updated',
           taskId: 'wf-1/task-a',
-          changes: { status: 'pending' },
+          changes: { status: 'running' },
           taskStateVersion: 2,
           previousTaskStateVersion: 1,
         },
-      });
-      taskGraphEventHandler!({
-        type: 'delta',
-        delta: {
-          type: 'updated',
-          taskId: 'wf-1/task-b',
-          changes: { status: 'pending' },
-          taskStateVersion: 2,
-          previousTaskStateVersion: 1,
-        },
+        workflowRollups: [{ workflowId: 'wf-1', status: 'running', rollup: runningRollup }],
       });
       await new Promise((resolve) => setTimeout(resolve, 110));
     });
 
     await waitFor(() => {
-      expect(result.current.tasks.get('wf-1/task-a')?.status).toBe('pending');
-      expect(result.current.tasks.get('wf-1/task-b')?.status).toBe('pending');
+      expect(result.current.tasks.get('wf-1/task-a')?.status).toBe('running');
+      expect(result.current.workflows.get('wf-1')?.status).toBe('running');
+    });
+    expect(result.current.workflows.get('wf-1')?.rollup?.countsByStatus.running).toBe(1);
+    expect(workflowsChangedHandler).toBeDefined();
+  });
+
+  it('does not locally recompute workflow status when rollup patches are empty', async () => {
+    const task = makeUITask({ id: 'wf-1/task-a', workflowId: 'wf-1', status: 'failed' });
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
+      tasks: [task],
+      workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'failed', rollup: makeWorkflowRollup('failed', { failed: 1 }) }],
+    };
+    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
+      getTasks: vi.fn().mockResolvedValue({
+        tasks: [task],
+        workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'failed', rollup: makeWorkflowRollup('failed', { failed: 1 }) }],
+      }),
+      onTaskGraphEvent: vi.fn((cb: (event: unknown) => void) => {
+        taskGraphEventHandler = cb;
+        return () => {};
+      }),
+      onWorkflowsChanged: vi.fn((cb: (wfList: unknown[]) => void) => {
+        workflowsChangedHandler = cb;
+        return () => {};
+      }),
+    };
+
+    const { result } = renderHook(() => useTasks());
+
+    await act(async () => {
+      taskGraphEventHandler!({
+        type: 'delta',
+        delta: {
+          type: 'updated',
+          taskId: 'wf-1/task-a',
+          changes: { status: 'running' },
+          taskStateVersion: 2,
+          previousTaskStateVersion: 1,
+        },
+        workflowRollups: [],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 110));
+    });
+
+    await waitFor(() => {
+      expect(result.current.tasks.get('wf-1/task-a')?.status).toBe('running');
     });
     expect(result.current.workflows.get('wf-1')?.status).toBe('failed');
+  });
 
-    act(() => {
-      workflowsChangedHandler!([
-        {
-          id: 'wf-1',
-          name: 'Workflow 1',
-          status: 'pending',
-          rollup: {
-            status: 'pending',
-            countsByStatus: {
-              pending: 2,
-              running: 0,
-              fixing_with_ai: 0,
-              completed: 0,
-              failed: 0,
-              closed: 0,
-              needs_input: 0,
-              blocked: 0,
-              review_ready: 0,
-              awaiting_approval: 0,
-              stale: 0,
-            },
-            failedTasks: [],
-            fixingTasks: [],
-            waitingTasks: [],
-          },
-        },
-      ]);
+  it('preserves task-backed workflow metadata during workflows-changed gaps', async () => {
+    const task = makeUITask({ id: 'wf-1/task-a', workflowId: 'wf-1', status: 'running' });
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
+      tasks: [task],
+      workflows: [
+        { id: 'wf-1', name: 'Workflow 1', status: 'running' },
+        { id: 'wf-2', name: 'Workflow 2', status: 'pending' },
+      ],
+    };
+
+    const { result } = renderHook(() => useTasks());
+
+    await waitFor(() => {
+      expect(workflowsChangedHandler).toBeDefined();
     });
 
-    expect(result.current.workflows.get('wf-1')?.status).toBe('pending');
-    expect(result.current.workflows.get('wf-1')?.rollup?.countsByStatus.pending).toBe(2);
+    act(() => {
+      workflowsChangedHandler!([{ id: 'wf-2', name: 'Workflow 2', status: 'pending' }]);
+    });
+
     expect(result.current.workflows.get('wf-1')?.name).toBe('Workflow 1');
+    expect(result.current.workflows.get('wf-1')?.status).toBe('running');
+    expect(result.current.workflows.get('wf-2')?.name).toBe('Workflow 2');
   });
 
   it('does not locally recompute failed dependency paths from task deltas', async () => {
@@ -507,6 +565,7 @@ describe('useTasks', () => {
           taskStateVersion: 2,
           previousTaskStateVersion: 1,
         },
+        workflowRollups: [],
       });
       await new Promise((resolve) => setTimeout(resolve, 110));
     });
