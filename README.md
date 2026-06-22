@@ -112,13 +112,21 @@ Tagged releases are configured to publish:
 - desktop `.dmg`, `.zip`, `.deb`, and `.AppImage`
 - `SHA256SUMS` covering release assets
 
-Packaged installs bundle the first-party Invoker skills inside the app. On first GUI launch, Invoker prompts you to install those skills into the supported global skill directories for Codex, Claude, and Cursor using `invoker-`-prefixed names so they do not overwrite existing skills. Npm launcher users can install the same bundled skills explicitly with:
+Packaged installs bundle the first-party Invoker AI helpers inside the app. Install helpers from System Setup or:
 
 ```bash
 invoker-ui --install-skills
 ```
 
-Source checkouts can install the repo skills with `bash scripts/setup-agent-skills.sh`.
+Then, in Codex, Claude, Cursor, or OMP, run:
+
+```text
+/invoker-plan-to-invoker "help me plan <change>"
+```
+
+The command plans first, writes `plans/invoker-handoff.md`, converts it to YAML, validates, and submits with `invoker-cli run --live` or the Invoker MCP tool.
+
+Source checkouts can install the repo helpers with `bash scripts/setup-agent-skills.sh`.
 
 ## First tutorial
 
@@ -259,9 +267,9 @@ tasks:
     dependencies: [api, ui]
 ```
 
-If you need to turn a product or implementation plan into an Invoker workflow, use the `invoker-plan-to-invoker` skill. If you need to operate existing workflows or tasks, use the `invoker-ops` skill.
+If you need to turn a product or implementation plan into an Invoker workflow, install helpers from System Setup or `invoker-ui --install-skills`, then run `/invoker-plan-to-invoker "help me plan <change>"` in Codex, Claude, Cursor, or OMP. The command plans first, writes `plans/invoker-handoff.md`, converts it to YAML, validates, and submits with `invoker-cli run --live` or the Invoker MCP tool.
 
-Source checkouts can install prefixed skill copies with `bash scripts/setup-agent-skills.sh`. Packaged installs can install bundled skills from the first-run System Setup prompt or, for npm launcher installs, with `invoker-ui --install-skills`.
+If you need to operate existing workflows or tasks, use the `invoker-ops` skill.
 
 Use `--output text|label|json|jsonl` on headless `query` commands. Use `./run.sh --headless retry-tasks --status pending|failed --parallel 8` for bulk safe retries. Only **one** process should **write** the workflow database at a time; see [docs/persistence-architecture-single-writer.md](docs/persistence-architecture-single-writer.md).
 
