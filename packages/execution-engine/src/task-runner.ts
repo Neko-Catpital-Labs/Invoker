@@ -32,6 +32,7 @@ import { MergeGateExecutor } from './merge-gate-executor.js';
 import { isInvokerManagedPoolBranch } from './plan-base-remote.js';
 import { formatLifecycleTag, extractAttemptSuffix } from './branch-utils.js';
 import { SshExecutor } from './ssh-executor.js';
+
 import {
   executeMergeNodeImpl,
   approveMergeImpl,
@@ -2426,6 +2427,7 @@ export class TaskRunner {
       && !artifact.discardedAt;
   }
 
+
   private getCurrentReviewArtifacts(task: TaskState): ReviewGateArtifact[] {
     const gate = task.execution.reviewGate;
     if (!gate) {
@@ -2466,6 +2468,9 @@ export class TaskRunner {
     providerId: string,
   ): boolean {
     if (!current) return false;
+    // Stale-write guard: a late poll must not write after the task already left
+    // the approval state (e.g. completed/closed/retried by another poll).
+    if (current.status !== 'review_ready' && current.status !== 'awaiting_approval') return false;
     if (current.execution.selectedAttemptId !== before.execution.selectedAttemptId) return false;
     if ((current.execution.generation ?? 0) !== (before.execution.generation ?? 0)) return false;
 
@@ -2536,18 +2541,61 @@ export class TaskRunner {
     }
   }
 
-  private handleClosedMergeGate(
-    taskId: string,
-    reviewId: string,
-    statusText: string,
-    source?: 'refresh' | 'manual check',
-  ): void {
-    const sourceSuffix = source ? ` (${source})` : '';
-    this.logger.info(`[merge-gate] PR ${reviewId} closed${sourceSuffix}: ${statusText}`);
-    this.persistence.updateTask(taskId, {
-      status: 'closed',
-      execution: { reviewStatus: statusText },
-    });
+  private async pollMergeGateTask(
+    task: TaskState,
+    source: 'refresh' | 'manual check',
+  ): Promise<void> {
+    const artifacts = this.getCurrentRequiredReviewArtifacts(task);
+    if (artifacts.length === 0) return;
+
+    let latestGate = task.execution.reviewGate;
+    let approvedGate = false;
+    for (const artifact of artifacts) {
+      const providerId = artifact.providerId;
+      if (!providerId) continue;
+      const gateCwd = task.execution.workspacePath ?? this.cwd;
+      const status = await this.mergeGateProvider!.checkApproval({
+        identifier: providerId,
+        cwd: gateCwd,
+      });
+
+      const current = this.orchestrator.getTask(task.id);
+      if (!this.reviewPollStillMatches(task, current, providerId)) {
+        continue;
+      }
+
+      // Rebase each provider update on the freshest persisted gate so concurrent
+      // polls don't clobber each other's artifact statuses with a stale snapshot.
+      const currentGate = current!.execution.reviewGate ?? latestGate;
+      if (currentGate) {
+        latestGate = this.updateReviewGateArtifact(currentGate, providerId, status);
+        this.persistence.updateTask(task.id, {
+          execution: { reviewGate: latestGate, reviewStatus: status.statusText },
+        });
+        if (!approvedGate && this.reviewGateIsApproved(latestGate)) {
+          approvedGate = true;
+          await this.handleApprovedMergeGate(task.id, providerId, source);
+        } else if (status.rejected) {
+          this.logger.info(`[merge-gate] PR ${providerId} rejected (${source}): ${status.statusText}`);
+        } else if (!status.closed && !status.approved) {
+          await this.maybeTriggerReviewGateCiFix(current!, status, providerId);
+        }
+        continue;
+      }
+
+      this.persistence.updateTask(task.id, {
+        ...(status.closed ? { status: 'closed' as const } : {}),
+        execution: { reviewStatus: status.statusText },
+      });
+      if (!approvedGate && status.approved) {
+        approvedGate = true;
+        await this.handleApprovedMergeGate(task.id, providerId, source);
+      } else if (status.rejected) {
+        this.logger.info(`[merge-gate] PR ${providerId} rejected (${source}): ${status.statusText}`);
+      } else if (!status.closed) {
+        await this.maybeTriggerReviewGateCiFix(current!, status, providerId);
+      }
+    }
   }
 
   async checkMergeGateStatuses(): Promise<void> {
@@ -2556,32 +2604,10 @@ export class TaskRunner {
       if (
         task.config.isMergeNode &&
         (task.status === 'review_ready' || task.status === 'awaiting_approval') &&
-        task.execution.reviewId
+        this.getCurrentRequiredReviewArtifacts(task).length > 0
       ) {
         try {
-          const gateCwd = task.execution.workspacePath ?? this.cwd;
-          const status = await this.mergeGateProvider.checkApproval({
-            identifier: task.execution.reviewId,
-            cwd: gateCwd,
-          });
-          if (status.closed) {
-            this.handleClosedMergeGate(task.id, task.execution.reviewId, status.statusText, 'refresh');
-          } else if (status.approved) {
-            this.persistence.updateTask(task.id, {
-              execution: { reviewStatus: status.statusText },
-            });
-            await this.handleApprovedMergeGate(task.id, task.execution.reviewId, 'refresh');
-          } else if (status.rejected) {
-            this.persistence.updateTask(task.id, {
-              execution: { reviewStatus: status.statusText },
-            });
-            this.logger.info(`[merge-gate] PR ${task.execution.reviewId} rejected (refresh): ${status.statusText}`);
-          } else {
-            this.persistence.updateTask(task.id, {
-              execution: { reviewStatus: status.statusText },
-            });
-            await this.maybeTriggerReviewGateCiFix(task, status);
-          }
+          await this.pollMergeGateTask(task, 'refresh');
         } catch (err) {
           this.logger.error(`[merge-gate] PR status check error for ${task.id}`, { err });
         }
@@ -2593,34 +2619,10 @@ export class TaskRunner {
     if (!this.mergeGateProvider) return;
 
     const task = this.orchestrator.getTask(taskId);
-    const reviewId = task?.execution.reviewId;
-    if (!task || !reviewId) return;
+    if (!task) return;
 
     try {
-      const manualCwd = task.execution.workspacePath ?? this.cwd;
-      const status = await this.mergeGateProvider.checkApproval({
-        identifier: reviewId,
-        cwd: manualCwd,
-      });
-
-      if (status.closed) {
-        this.handleClosedMergeGate(taskId, reviewId, status.statusText, 'manual check');
-      } else if (status.approved) {
-        this.persistence.updateTask(taskId, {
-          execution: { reviewStatus: status.statusText },
-        });
-        await this.handleApprovedMergeGate(taskId, reviewId, 'manual check');
-      } else if (status.rejected) {
-        this.persistence.updateTask(taskId, {
-          execution: { reviewStatus: status.statusText },
-        });
-        this.logger.info(`[merge-gate] PR ${reviewId} rejected (manual check): ${status.statusText}`);
-      } else {
-        this.persistence.updateTask(taskId, {
-          execution: { reviewStatus: status.statusText },
-        });
-        await this.maybeTriggerReviewGateCiFix(task, status);
-      }
+      await this.pollMergeGateTask(task, 'manual check');
     } catch (err) {
       this.logger.error(`[merge-gate] Manual PR check error for ${taskId}`, { err });
     }
@@ -2629,9 +2631,10 @@ export class TaskRunner {
   private async maybeTriggerReviewGateCiFix(
     task: TaskState,
     status: MergeGateApprovalStatus,
+    reviewId: string = task.execution.reviewId ?? '',
   ): Promise<void> {
     if (!this.onReviewGateCiFailure) return;
-    if (!task.config.workflowId || !task.execution.reviewId) return;
+    if (!task.config.workflowId || !reviewId) return;
     if (status.checks?.state !== 'failure' || status.checks.failed.length === 0) return;
 
     const key = [
@@ -2647,7 +2650,7 @@ export class TaskRunner {
       await this.onReviewGateCiFailure({
         taskId: task.id,
         workflowId: task.config.workflowId,
-        reviewId: task.execution.reviewId,
+        reviewId,
         reviewUrl: status.url,
         headSha: status.headSha,
         headRef: status.headRef,
