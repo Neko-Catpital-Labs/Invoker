@@ -3,7 +3,7 @@ import type { TaskStatus, WorkflowStatus } from '../types.js';
 export type StatusVisualKey =
   | TaskStatus
   | WorkflowStatus
-  | 'running_launching'
+  | 'assigning'
   | 'running_executing'
   | 'fix_approval';
 
@@ -45,7 +45,7 @@ export const STATUS_VISUALS: Record<StatusVisualKey, StatusVisual> = {
     active: true,
     pulse: true,
   },
-  running_launching: {
+  assigning: {
     bg: 'bg-slate-800/95',
     border: 'border-amber-400/30',
     text: 'text-amber-300',
