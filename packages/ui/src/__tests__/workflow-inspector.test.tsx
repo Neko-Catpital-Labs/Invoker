@@ -157,6 +157,28 @@ describe('WorkflowInspector', () => {
     expect(link).toHaveAttribute('href', 'https://github.com/org/repo/pull/34');
   });
 
+  it('hides the PR link for a completed merge gate without a review URL', () => {
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'completed' }}
+        task={makeTask({
+          id: '__merge__wf-1',
+          description: 'Merge gate',
+          status: 'completed',
+          config: { workflowId: 'wf-1', isMergeNode: true },
+          execution: {},
+        })}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.queryByText('Pull Request')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('inspector-pr-link')).not.toBeInTheDocument();
+  });
+
   it('disables merge mode while a merge gate is running', () => {
     render(
       <WorkflowInspector
