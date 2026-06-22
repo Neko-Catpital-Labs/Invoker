@@ -1369,7 +1369,7 @@ test.describe('Visual proof capture', () => {
     ]);
     // Navigate to queue tab if there is one, or verify queue section is visible
     await page.getByTestId('rail-queue').click();
-    await expect(page.getByText('Running 1 / 6')).toBeVisible();
+    await expect(page.getByText('Active 1 / 6')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Action Queue (1)' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Backlog (3)' })).toBeVisible();
     await captureScreenshot(page, 'queue-view-concurrency');
@@ -1411,13 +1411,26 @@ test.describe('Visual proof capture', () => {
       },
     ]);
     await page.waitForTimeout(2200);
-    await expect(page.getByTestId('status-bar-pill-running')).toContainText('Running: 0');
-    await expect(page.getByTestId('status-bar-pill-pending')).toContainText('Pending: 1');
+    const captureBefore = process.env.CAPTURE_MODE === 'before';
+
+    if (captureBefore) {
+      await expect(page.getByTestId('status-bar-pill-running')).toContainText('Running: 0');
+      await expect(page.getByTestId('status-bar-pill-pending')).toContainText('Pending: 1');
+    } else {
+      await expect(page.getByTestId('status-bar-pill-running')).toContainText('Running: 0');
+      await expect(page.getByTestId('status-bar-pill-assigning')).toContainText('Assigning: 1');
+      await expect(page.getByTestId('status-bar-pill-pending')).toContainText('Pending: 0');
+      await expect(page.getByText('Queue capacity includes assigning and AI-fix work.')).toBeVisible();
+    }
     await captureScreenshot(page, 'queue-assigning-statusbar');
 
     await page.getByTestId('rail-queue').click();
     const queueRow = page.locator('[data-row-id$=\"assigning-task\"]');
     await expect(queueRow).toBeVisible();
+    if (!captureBefore) {
+      await expect(queueRow.getByText('Assigning', { exact: true })).toBeVisible();
+      await expect(queueRow.getByText('phase: Assigning')).toHaveCount(0);
+    }
     await captureScreenshot(page, 'queue-assigning-row');
   });
 
