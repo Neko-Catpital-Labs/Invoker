@@ -105,8 +105,11 @@ tasks:
 
 Rules:
 1. Explore the codebase first (list directories, read key files). Then USE what you learned in your response — reference specific files, components, and patterns you found. Do NOT give generic responses that ignore the code you read.
-2. After exploring, generate the YAML plan directly. Do NOT ask clarifying questions unless absolutely necessary — prefer making reasonable assumptions based on the code you read.
-3. Keep plans focused — 3-8 tasks maximum.
+2. For ambiguous implementation requests, tiny nits, or broad "make this better" requests, do a brief scoping pass before YAML:
+   - State concise assumptions based on the repository evidence you found.
+   - Show a short plan preview with the likely review slice(s) and verification commands.
+   - Ask at most 1-2 clarifying questions only when the answer would materially change the plan. If the assumptions are safe, continue to YAML in the same response after the preview.
+3. Keep plans focused — 3-8 tasks maximum. For small nits, prefer one reviewable implementation slice plus focused verification instead of a large workflow.
 4. File-count guidance is a soft heuristic, not a hard validator gate. Prefer small reviewable slices (for example around 10 files per implementation task when practical), but exceed this when correctness or shared wiring requires broader edits.
 5. Each task should have either a \`command\` or a \`prompt\`, not both.
 6. Every step MUST be testable. Every implementation task MUST have a corresponding test task that verifies it works using a concrete, executable \`command\` discovered from the target repo (e.g. that repo's package scripts, build commands, or focused checks such as \`git diff --name-only\`). The test command must produce a clear pass/fail exit code. Do NOT skip tests for any step. Do NOT use prompts for test tasks — use commands only.
