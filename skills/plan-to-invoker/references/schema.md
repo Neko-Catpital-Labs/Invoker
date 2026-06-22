@@ -51,14 +51,14 @@ Source of truth: `packages/app/src/plan-parser.ts` (interfaces + validation, lin
 
 ## Implementation plans (convention)
 
-`plan-parser.ts` does not require a special field for this, but **standalone implementation** YAML (not one-off verify-only plans) must reserve the **last** task for the terminal regression gate: a `command` task that runs the target repo's discovered final gate. For Invoker plans, use `pnpm run test:all`. For external repos, inspect manifests/docs and include `Verification command discovery:` in the final task description when the discovered command differs. In authored stacks, reserve that terminal gate for the highest-order workflow in the stack manifest; non-terminal stack workflows should end with focused package/headless repro verification. The final regression task must depend on every earlier task so it runs last. See `references/task-patterns.md` and `playbooks/verify-then-build.md` Phase 2.
+`plan-parser.ts` does not require a special field for implementation verification. Implementation YAML should include command tasks that prove changed behavior with the smallest deterministic command. A full-suite gate such as `pnpm run test:all` is optional, not required; when present, it should depend on every task whose output it verifies. See `references/task-patterns.md` and `playbooks/verify-then-build.md` Phase 2.
 
 ## Banned Patterns
 
 These will cause validation failures:
 
-- **`npx vitest run`** — parser rejects it (ABI mismatch). Use `cd packages/<pkg> && pnpm test`.
-- **`pnpm test <path>` from repo root** — runs `pnpm -r test` across all packages. Always `cd` into the package first.
+- **`npx vitest run`** — parser rejects it (ABI mismatch). Use a repo-supported script or explicit package-local command.
+- **`pnpm test <path>` from repo root** — runs `pnpm -r test` across all packages. If you choose package tests, run them from that package directory.
 - **Invented test filenames** — verify they exist before referencing them in commands.
 - **`command` + `prompt` on same task** — pick one. Shell logic → `command`. Reasoning → `prompt`.
 - **`runnerKind`** — obsolete routing field. Omit it for default worktree execution, use `poolId` for configured pools, or use `dockerImage` for Docker tasks.

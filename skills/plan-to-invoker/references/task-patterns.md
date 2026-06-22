@@ -6,9 +6,9 @@ Source of truth: `packages/surfaces/src/slack/plan-conversation.ts:100-116`
 
 | What you see in the plan | Task type | Template |
 |--------------------------|-----------|----------|
-| "Run tests" / "verify" / "check" | `command` | `cd packages/<pkg> && pnpm test` |
-| "Run specific test file" | `command` | `cd packages/<pkg> && pnpm test -- src/__tests__/file.test.ts` |
-| "Run final regression suite" | `command` | discovered final gate (`pnpm run test:all` for Invoker; target repo's documented command for external repos) |
+| "Run tests" / "verify" / "check" | `command` | Smallest deterministic command that proves the behavior |
+| "Run specific test file" | `command` | Package-local command only when that test is the smallest proof |
+| "Run final regression suite" | `command` | Optional full-suite command only when explicitly requested or risk-justified |
 | "Refactor X" / "Add feature Y" | `prompt` | Detailed instructions with file paths, line numbers, acceptance criteria |
 | "Build/compile" | `command` | `pnpm --filter @invoker/<pkg> build` |
 | "Build all" / "verify compilation" | `command` | `pnpm build` |
@@ -17,7 +17,7 @@ Source of truth: `packages/surfaces/src/slack/plan-conversation.ts:100-116`
 | "Lint / type-check" | `command` | `pnpm --filter @invoker/<pkg> lint` or `pnpm --filter @invoker/<pkg> typecheck` |
 | "Check file exists" | `command` | `test -f <path>` |
 | "Check pattern in file" | `command` | `grep -q '<pattern>' <path>` |
-| **Post-fix / regression** (standalone or terminal stack gate) | `command` | discovered final gate — use `pnpm run test:all` for Invoker plans; for external repos, inspect manifests/docs and record `Verification command discovery:` in the final task description |
+| **Post-fix / regression** | `command` | Focused repro or proof command tied to the changed behavior; full-suite gates are optional |
 | "Modify UI component" / "Fix layout" / "Change Electron window UI" | `prompt` + `visualProof: true` | Set `visualProof: true` at plan level; include `description` |
 | **Add visual proof E2E test case** | `prompt` | Add a test to `packages/app/e2e/visual-proof.spec.ts` that sets up the exact UI state being changed and calls `captureScreenshot(page, '<plan-slug>-<state>')`. See `skills/visual-proof/SKILL.md`. |
 | **Capture visual proof (after)** | `command` | `pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && bash scripts/ui-visual-proof.sh --label after` — depends on **all** implementation tasks |
@@ -48,16 +48,16 @@ not split.
 
 ### Must be sequential (add dependency)
 - **Same file modified by two tasks** → one depends on the other. Order by logical sequence.
-- **Test task** → depends on the implementation task it verifies.
+- **Verification task** → depends on the implementation task it verifies.
 - **Build/compile check** → depends on all implementation tasks that change source.
-- **Integration test** → depends on all unit-level tasks it integrates.
-- **Final regression task** → for standalone plans and terminal stack workflows, depends on **every earlier task** and runs **last** using the discovered final gate. Use `pnpm run test:all` for Invoker; for external repos, document `Verification command discovery:` in the final task description. Non-terminal stack workflows end with focused verification instead.
+- **Integration check** → depends on all lower-level tasks it integrates.
+- **Terminal verification task** → depends on every task whose output it verifies; use the smallest honest command by default.
 - **Visual proof capture task** → depends on **all** implementation tasks and the E2E test case task (it must run after code changes AND the new Playwright test exist).
 
 ### Can be parallel (no dependency needed)
 - **Independent packages** → tasks touching different packages with no cross-package imports.
 - **Independent files** → tasks creating/modifying unrelated files.
-- **All verification tasks** → file-existence and grep checks are read-only, run them all in parallel — **except** the final regression task, which must depend on every earlier task (see above).
+- **Independent verification tasks** → file-existence and grep checks are read-only; run them in parallel when they do not verify a prior implementation task.
 
 ## Layered decomposition contract (hard requirement for implementation plans)
 
@@ -227,7 +227,7 @@ See `SKILL.md` (bugfix repro blurb) and this repo’s `scripts/repro-*.sh` examp
 
 When writing `command` fields:
 
-1. **Package tests must `cd` first**: `cd packages/<pkg> && pnpm test`; reserve root-level full-suite commands for standalone plans or the final workflow in an authored stack, and only use commands documented by the target repo.
+1. **Use focused proof by default**: choose the smallest deterministic command that proves the behavior; package tests and full-suite gates are optional, not required.
 2. **Use `&&` for sequential steps**: ensures early failure stops execution
 3. **Exit codes matter**: the command succeeds (exit 0) or fails (non-zero). Design accordingly.
 4. **No interactive commands**: everything must run non-interactively
@@ -268,25 +268,17 @@ tasks:
     description: "Fix modal CSS"
     prompt: "..."
     dependencies: []
-  - id: run-unit-tests
-    description: "Run UI unit tests"
-    command: "cd packages/ui && pnpm test"
-    dependencies: [fix-layout]
   - id: capture-visual-proof
     description: "Build and capture after-state screenshots"
     command: "pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && bash scripts/ui-visual-proof.sh --label after"
     dependencies: [fix-layout, add-visual-proof-test]
-  - id: regression
-    description: "Final regression — run the full repository test suite"
-    command: "pnpm run test:all"
-    dependencies: [add-visual-proof-test, fix-layout, run-unit-tests, capture-visual-proof]
 ```
 
 ## Anti-Patterns
 
 - **God task**: one `prompt` task that says "implement the whole feature" — split it up.
-- **Test-free plan**: every implementation task needs a corresponding verification. No exceptions.
-- **No final regression task**: standalone implementation plans and terminal stack workflows must end with a **command** task that runs the discovered final gate. Use `pnpm run test:all` for Invoker; for external repos, document `Verification command discovery:` in the final task description. Non-terminal stack workflows must be validated with a stack manifest and focused verification.
+- **Test-free plan**: every implementation task needs a corresponding verification command or proof lane. No exceptions.
+- **Default full-suite gate**: do not add one unless the user asks or it is risk-justified; prefer focused proof tied to the changed behavior.
 - **Circular dependencies**: task A depends on B, B depends on A — validator catches this but don't generate it.
 - **Phantom files**: referencing files that don't exist without a task to create them first.
 - **UI plan without visual proof tasks**: `visualProof: true` without the E2E test case task and capture task means no plan-specific screenshots are captured.

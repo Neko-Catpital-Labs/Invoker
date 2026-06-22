@@ -20,7 +20,6 @@ pass_count=0
 DOCTOR_NEGATIVE_FIXTURES=(
   "anti-pattern-g-monolithic-prompt-edit-bridge.yaml"
   "anti-pattern-h-layer-order-violation.yaml"
-  "anti-pattern-i-final-regression-not-test-all.yaml"
   "anti-pattern-j-zero-context-missing-metadata.yaml"
   "anti-pattern-k-missing-review-compression.yaml"
   "anti-pattern-l-behavior-plus-proof.yaml"
@@ -294,17 +293,17 @@ test_runner_kind_is_unsupported() {
   return 0
 }
 
-test_lint_valid_final_test_all() {
+test_lint_allows_focused_verification_without_test_all() {
   local temp_plan
   temp_plan=$(mktemp)
   trap "rm -f $temp_plan" RETURN
 
   cat > "$temp_plan" <<'EOF'
-name: "Valid final test-all gate"
+name: "Valid focused verification gate"
 description: |
-  Implementation plan with proper final full-suite regression.
+  Implementation plan with focused terminal verification.
   Standalone workflow waiver:
-  - This fixture intentionally keeps one behavior prompt and one proof prompt in a single workflow so the final test:all gate can be validated in one place.
+  - This fixture intentionally keeps one behavior prompt and one proof prompt in a single workflow so focused verification can be validated in one place.
 onFinish: pull_request
 mergeMode: external_review
 repoUrl: git@github.com:example-org/acme-repo.git
@@ -383,8 +382,8 @@ tasks:
       Motivation:
       - Ensure behavior is preserved after wiring changes.
       Alternative considerations:
-      - Option A (chosen): focused package regression tests.
-      - Option B: only full-suite verification.
+      - Option A (chosen): focused deterministic proof.
+      - Option B: full-suite verification.
       Implementation details:
       - Add focused deterministic regression coverage.
       Non-goals:
@@ -413,8 +412,8 @@ tasks:
       Motivation:
       - Prevent silent behavior regressions after wiring changes.
       Alternative considerations:
-      - Option A (chosen): focused package regression tests.
-      - Option B: rely on full-suite tests only.
+      - Option A (chosen): focused deterministic proof.
+      - Option B: full-suite tests.
       Implementation details:
       - Modify packages/foo/src/__tests__/surface.test.ts to cover the new path.
       Non-goals:
@@ -423,32 +422,32 @@ tasks:
       - Verify the regression reproduces the new behavior deterministically.
       Assume no prior context. Modify packages/foo/src/__tests__/surface.test.ts only. Pass condition: exits 0 after the focused regression passes.
     dependencies: [implement-surface]
-  - id: final-regression
+  - id: verify-surface
     description: |
       Review claim:
-      - Run the terminal full-suite regression gate.
+      - Run focused verification for the changed surface.
       Review lane:
       - proof
       Safety invariant:
       - This command changes no production code and only validates earlier slices.
       Slice rationale:
-      - Keep the terminal full-suite gate separate from implementation and focused proof.
+      - Keep terminal proof focused on the changed surface.
       Architectural effect:
       - No architecture change.
       Goal:
-      - Run final full-suite regression gate.
+      - Run focused verification for the changed surface.
       Motivation:
-      - Ensure all slices are validated together.
+      - Prove the behavior without a package-wide or full-suite gate.
       Alternative considerations:
-      - Option A (chosen): full repository regression.
-      - Option B: package-only checks.
+      - Option A (chosen): focused file-level verification.
+      - Option B: full repository regression.
       Implementation details:
-      - Execute root-level test gate after all earlier tasks complete.
+      - Execute a deterministic proof command after earlier tasks complete.
       Non-goals:
       - Do not modify source files.
       Layer: e2e_regression
       Feature state: active
-    command: "pnpm run test:all"
+    command: "test -f packages/foo/src/surface.ts"
     dependencies: [implement-surface, add-regression-tests]
 EOF
 
@@ -553,233 +552,6 @@ EOF
   fi
 }
 
-test_lint_rejects_non_test_all_final_gate() {
-  local temp_plan
-  temp_plan=$(mktemp)
-  trap "rm -f $temp_plan" RETURN
-
-  cat > "$temp_plan" <<'EOF'
-name: "Invalid final gate command"
-description: "Implementation plan with old package-scoped final regression"
-onFinish: pull_request
-mergeMode: github
-repoUrl: git@github.com:example-org/acme-repo.git
-tasks:
-  - id: implement-surface
-    description: |
-      Implement the contact surface wiring.
-      Goal:
-      - Add contact-surface wiring for new behavior.
-      Motivation:
-      - Keep contact contract explicit and reviewable.
-      Alternative considerations:
-      - Option A (chosen): direct contact-surface wiring.
-      - Option B: defer via adapter layer.
-      Implementation details:
-      - Update contact surface and preserve existing contracts.
-      Layer: contact_surface
-      Feature state: active
-    prompt: |
-      Goal:
-      - Implement contact-surface wiring updates in a typed and deterministic way.
-      Motivation:
-      - Keep task execution intent explicit for delegated AI execution.
-      Alternative considerations:
-      - Option A (chosen): direct contact-surface wiring.
-      - Option B: defer via adapter layer.
-      Implementation details:
-      - Modify packages/foo/src/surface.ts and preserve existing contract imports.
-      Acceptance criteria:
-      - Ensure the new surface compiles and keeps existing imports intact.
-    dependencies: []
-  - id: final-regression
-    description: |
-      Goal:
-      - Run final regression for the implementation plan.
-      Motivation:
-      - Keep terminal verification explicit.
-      Alternative considerations:
-      - Option A (chosen): full repository regression.
-      - Option B: package-only checks.
-      Implementation details:
-      - Execute final gate as command task.
-      Re-run package tests only.
-      Layer: e2e_regression
-      Feature state: active
-    command: "cd packages/foo && pnpm test"
-    dependencies: [implement-surface]
-EOF
-
-  local output
-  set +e
-  output=$(bash "$LINT_SCRIPT" "$temp_plan" 2>&1)
-  local exit_code=$?
-  set -e
-
-  if [[ $exit_code -eq 0 ]]; then
-    echo "Expected lint to reject non-test:all final gate" >&2
-    return 1
-  fi
-
-  if ! grep -q 'must run "pnpm run test:all" for Invoker plans or include "Verification command discovery:"' <<<"$output"; then
-    echo "Expected final gate command error, got: $output" >&2
-    return 1
-  fi
-}
-
-write_discovered_external_final_gate_plan() {
-  local temp_plan="$1"
-  local discovery_details="$2"
-  local final_command="$3"
-
-  cat > "$temp_plan" <<EOF
-name: "External repo final gate"
-description: "Standalone workflow waiver: single review slice for an external repo with a discovered final gate."
-onFinish: pull_request
-mergeMode: github
-repoUrl: git@github.com:example-org/acme-repo.git
-tasks:
-  - id: implement-lint-gate
-    description: |
-      Review claim:
-      - Adds one lint-gate behavior change.
-      Review lane:
-      - behavior
-      Safety invariant:
-      - Existing lint behavior remains unchanged except warning severity.
-      Slice rationale:
-      - Keep the hook behavior in one reviewable unit.
-      Architectural effect:
-      - No new runtime boundary.
-      Non-goals:
-      - Do not alter package manager setup.
-      Goal:
-      - Turn lint warnings into pre-commit errors.
-      Motivation:
-      - Keep local checks aligned with repository policy.
-      Alternative considerations:
-      - Option A (chosen): update the existing hook command.
-      - Option B: add a separate hook.
-      Implementation details:
-      - Modify packages/foo/src/lint-hook.ts and preserve current package scripts.
-      Files:
-      - packages/foo/src/lint-hook.ts
-      Change types:
-      - Behavior
-      Acceptance criteria:
-      - The hook exits non-zero on lint warnings.
-      Layer: contact_surface
-      Feature state: active
-    prompt: |
-      Goal:
-      - Turn lint warnings into pre-commit errors in packages/foo/src/lint-hook.ts.
-      Review lane:
-      - behavior
-      Motivation:
-      - The existing hook should fail deterministically when warnings are reported.
-      Alternative considerations:
-      - Option A (chosen): update the existing hook command.
-      - Option B: add a new hook command.
-      Implementation details:
-      - Assume no prior context. Update packages/foo/src/lint-hook.ts only and keep package manager behavior unchanged.
-      Non-goals:
-      - Do not add new package dependencies or change unrelated scripts.
-      Acceptance criteria:
-      - Expected pass condition: the focused package test exits 0 after the warning-to-error behavior is covered.
-    dependencies: []
-  - id: final-regression
-    description: |
-      Review claim:
-      - Runs the target repo's discovered final regression gate.
-      Review lane:
-      - proof
-      Safety invariant:
-      - Verification uses only commands documented by the target repo.
-      Slice rationale:
-      - Keep proof separate from implementation.
-      Architectural effect:
-      - No product code changes.
-      Non-goals:
-      - Do not impose Invoker-specific scripts.
-      Goal:
-      - Run the external repo's documented final gate.
-      Motivation:
-      - Avoid requiring Invoker's pnpm run test:all script in external repositories.
-      Alternative considerations:
-      - Option A (chosen): use the discovered package test command.
-      - Option B: invent a root full-suite command.
-      Implementation details:
-      - Verification command discovery: ${discovery_details}
-      Layer: e2e_regression
-      Feature state: active
-    command: "${final_command}"
-    dependencies: [implement-lint-gate]
-EOF
-}
-
-test_lint_allows_discovered_external_final_gate() {
-  local temp_plan
-  temp_plan=$(mktemp)
-  trap "rm -f $temp_plan" RETURN
-
-  write_discovered_external_final_gate_plan \
-    "$temp_plan" \
-    'package.json documents "test": "vitest run", so pnpm test is the final gate; no test:all script exists.' \
-    "pnpm test"
-
-  bash "$LINT_SCRIPT" "$temp_plan" >/dev/null
-}
-
-test_lint_rejects_trivial_discovered_final_gate() {
-  local temp_plan
-  temp_plan=$(mktemp)
-  trap "rm -f $temp_plan" RETURN
-
-  write_discovered_external_final_gate_plan "$temp_plan" "true is documented in the target repo." "true"
-
-  local output
-  set +e
-  output=$(bash "$LINT_SCRIPT" "$temp_plan" 2>&1)
-  local exit_code=$?
-  set -e
-
-  if [[ $exit_code -eq 0 ]]; then
-    echo "Expected lint to reject trivial discovered final gate" >&2
-    return 1
-  fi
-
-  if ! grep -q 'final discovered regression gate must be non-trivial; got "true"' <<<"$output"; then
-    echo "Expected non-trivial final gate error, got: $output" >&2
-    return 1
-  fi
-}
-
-test_lint_rejects_unreferenced_discovered_final_gate() {
-  local temp_plan
-  temp_plan=$(mktemp)
-  trap "rm -f $temp_plan" RETURN
-
-  write_discovered_external_final_gate_plan \
-    "$temp_plan" \
-    'package.json documents "test": "vitest run"; no test:all script exists.' \
-    "pnpm test"
-
-  local output
-  set +e
-  output=$(bash "$LINT_SCRIPT" "$temp_plan" 2>&1)
-  local exit_code=$?
-  set -e
-
-  if [[ $exit_code -eq 0 ]]; then
-    echo "Expected lint to reject unreferenced discovered final gate" >&2
-    return 1
-  fi
-
-  if ! grep -q 'Verification command discovery must reference the final command "pnpm test"' <<<"$output"; then
-    echo "Expected final gate discovery reference error, got: $output" >&2
-    return 1
-  fi
-}
 
 test_lint_allows_nonterminal_stack_workflow_without_test_all() {
   local temp_dir first_plan second_plan stack_manifest
@@ -790,8 +562,8 @@ test_lint_allows_nonterminal_stack_workflow_without_test_all() {
   stack_manifest="$temp_dir/stack-manifest.json"
 
   cat > "$first_plan" <<'EOF'
-name: "Stack step 1 without full-suite gate"
-description: "First implementation workflow in a stack with focused verification only."
+name: "Stack step 1 with focused verification"
+description: "First implementation workflow in a stack with focused verification."
 onFinish: pull_request
 mergeMode: github
 repoUrl: git@github.com:example-org/acme-repo.git
@@ -814,8 +586,8 @@ tasks:
       Motivation:
       - Keep non-terminal stack workflows fast while preserving focused verification.
       Alternative considerations:
-      - Option A (chosen): focused package verification before the PR gate.
-      - Option B: repeat full-suite verification in every stack layer.
+      - Option A (chosen): focused verification before the PR gate.
+      - Option B: broad suite verification in every stack layer.
       Implementation details:
       - Update packages/foo/src/surface.ts with the stack step one behavior.
       Non-goals:
@@ -844,14 +616,14 @@ tasks:
       Motivation:
       - Keep non-terminal stack workflows fast while preserving focused verification.
       Alternative considerations:
-      - Option A (chosen): focused package verification before the PR gate.
-      - Option B: repeat full-suite verification in every stack layer.
+      - Option A (chosen): focused verification before the PR gate.
+      - Option B: broad suite verification in every stack layer.
       Implementation details:
       - Assume no prior context. Update packages/foo/src/surface.ts with the stack step one behavior.
       Non-goals:
       - Do not add proof-only changes in this slice.
       Acceptance criteria:
-      - Pass condition: focused package tests exit code 0 after this change.
+      - Pass condition: focused verification exits 0 after this change.
     dependencies: []
   - id: verify-surface
     description: |
@@ -862,29 +634,29 @@ tasks:
       Safety invariant:
       - This command changes no production code.
       Slice rationale:
-      - Catch local regressions without paying for the stack-level full suite.
+      - Catch local regressions with focused proof.
       Architectural effect:
       - No architecture change.
       Goal:
       - Run focused verification for the first stacked workflow.
       Motivation:
-      - Catch local regressions without paying for the stack-level full suite.
+      - Catch local regressions with focused proof.
       Alternative considerations:
-      - Option A (chosen): package-scoped test command.
-      - Option B: root full-suite test in every stack layer.
+      - Option A (chosen): file-level verification command.
+      - Option B: broad suite verification in every stack layer.
       Implementation details:
-      - Execute the package test lane for packages/foo.
+      - Execute a deterministic proof command for packages/foo.
       Non-goals:
       - Do not modify source files.
       Layer: app_regression
       Feature state: active
-    command: "cd packages/foo && pnpm test"
+    command: "test -f packages/foo/src/surface.ts"
     dependencies: [implement-surface]
 EOF
 
   cat > "$second_plan" <<'EOF'
-name: "Stack step 2 terminal full-suite gate"
-description: "Terminal implementation workflow in a stack with the full regression gate."
+name: "Stack step 2 focused verification"
+description: "Terminal implementation workflow in a stack with focused verification."
 onFinish: pull_request
 mergeMode: github
 repoUrl: git@github.com:example-org/acme-repo.git
@@ -913,8 +685,8 @@ tasks:
       Motivation:
       - Validate the integrated stack at the final workflow only.
       Alternative considerations:
-      - Option A (chosen): one full-suite gate at stack end.
-      - Option B: repeat full-suite verification in every stack layer.
+      - Option A (chosen): focused proof at stack end.
+      - Option B: broad suite verification in every stack layer.
       Implementation details:
       - Update packages/foo/src/terminal-surface.ts with the stack terminal behavior.
       Non-goals:
@@ -926,7 +698,7 @@ tasks:
       Change types:
       - packages/foo/src/terminal-surface.ts: modify
       Acceptance criteria:
-      - The terminal full-suite gate passes.
+      - The terminal focused verification passes.
     prompt: |
       Review claim:
       - Implement the terminal stacked workflow surface change.
@@ -943,41 +715,41 @@ tasks:
       Motivation:
       - Validate the integrated stack at the final workflow only.
       Alternative considerations:
-      - Option A (chosen): one full-suite gate at stack end.
-      - Option B: repeat full-suite verification in every stack layer.
+      - Option A (chosen): focused proof at stack end.
+      - Option B: broad suite verification in every stack layer.
       Implementation details:
       - Assume no prior context. Update packages/foo/src/terminal-surface.ts with the stack terminal behavior.
       Non-goals:
       - Do not add proof-only changes in this slice.
       Acceptance criteria:
-      - Pass condition: the final full-suite gate exits 0.
+      - Pass condition: the focused verification exits 0.
     dependencies: []
-  - id: final-regression
+  - id: verify-terminal-surface
     description: |
       Review claim:
-      - Run final full-suite regression gate for the stack.
+      - Run focused verification for the stack.
       Review lane:
       - proof
       Safety invariant:
       - This command changes no production code.
       Slice rationale:
-      - Validate all stack layers together before publication.
+      - Validate the terminal slice with focused proof.
       Architectural effect:
       - No architecture change.
       Goal:
-      - Run final full-suite regression gate for the stack.
+      - Run focused verification for the stack.
       Motivation:
-      - Validate all stack layers together before publication.
+      - Validate the terminal slice with focused proof.
       Alternative considerations:
-      - Option A (chosen): root full-suite test only at stack end.
-      - Option B: root full-suite test in every stack layer.
+      - Option A (chosen): file-level verification command.
+      - Option B: broad suite verification.
       Implementation details:
-      - Execute root-level test gate after all earlier terminal-workflow tasks complete.
+      - Execute a deterministic proof command after all earlier terminal-workflow tasks complete.
       Non-goals:
       - Do not modify source files.
       Layer: e2e_regression
       Feature state: active
-    command: "pnpm run test:all"
+    command: "test -f packages/foo/src/terminal-surface.ts"
     dependencies: [implement-terminal-surface]
 EOF
 
@@ -994,106 +766,6 @@ EOF
   bash "$LINT_SCRIPT" --stack-manifest "$stack_manifest" "$second_plan" >/dev/null
 }
 
-test_lint_rejects_final_gate_missing_dependencies() {
-  local temp_plan
-  temp_plan=$(mktemp)
-  trap "rm -f $temp_plan" RETURN
-
-  cat > "$temp_plan" <<'EOF'
-name: "Invalid final gate dependencies"
-description: "Implementation plan whose final regression does not depend on every earlier task"
-onFinish: pull_request
-mergeMode: github
-repoUrl: git@github.com:example-org/acme-repo.git
-tasks:
-  - id: implement-surface
-    description: |
-      Implement the contact surface wiring.
-      Goal:
-      - Add contact-surface wiring for new behavior.
-      Motivation:
-      - Keep contact contract explicit and reviewable.
-      Alternative considerations:
-      - Option A (chosen): direct contact-surface wiring.
-      - Option B: defer via adapter layer.
-      Implementation details:
-      - Update contact surface and preserve existing contracts.
-      Layer: contact_surface
-      Feature state: active
-    prompt: |
-      Goal:
-      - Implement contact-surface wiring updates in a typed and deterministic way.
-      Motivation:
-      - Keep task execution intent explicit for delegated AI execution.
-      Alternative considerations:
-      - Option A (chosen): direct contact-surface wiring.
-      - Option B: defer via adapter layer.
-      Implementation details:
-      - Modify packages/foo/src/surface.ts and preserve existing contract imports.
-      Acceptance criteria:
-      - Ensure the new surface compiles and keeps existing imports intact.
-    dependencies: []
-  - id: add-regression-tests
-    description: |
-      Add regression coverage for the new surface.
-      Goal:
-      - Add regression proof for the surface change.
-      Motivation:
-      - Ensure behavior is preserved after wiring changes.
-      Alternative considerations:
-      - Option A (chosen): focused package regression tests.
-      - Option B: only full-suite verification.
-      Implementation details:
-      - Add focused deterministic regression coverage.
-      Layer: app_regression
-      Feature state: active
-    prompt: |
-      Goal:
-      - Add deterministic regression coverage for the new contact-surface path.
-      Motivation:
-      - Prevent silent behavior regressions after wiring changes.
-      Alternative considerations:
-      - Option A (chosen): focused package regression tests.
-      - Option B: rely on full-suite tests only.
-      Implementation details:
-      - Modify packages/foo/src/__tests__/surface.test.ts to cover the new path.
-      Acceptance criteria:
-      - Verify the regression reproduces the new behavior deterministically.
-    dependencies: [implement-surface]
-  - id: final-regression
-    description: |
-      Goal:
-      - Run final full-suite regression gate.
-      Motivation:
-      - Ensure all slices are validated together.
-      Alternative considerations:
-      - Option A (chosen): full repository regression.
-      - Option B: package-only checks.
-      Implementation details:
-      - Execute root-level test gate after all earlier tasks complete.
-      Run the repository test suite as the terminal regression gate.
-      Layer: e2e_regression
-      Feature state: active
-    command: "pnpm run test:all"
-    dependencies: [add-regression-tests]
-EOF
-
-  local output
-  set +e
-  output=$(bash "$LINT_SCRIPT" "$temp_plan" 2>&1)
-  local exit_code=$?
-  set -e
-
-  if [[ $exit_code -eq 0 ]]; then
-    echo "Expected lint to reject missing final regression dependencies" >&2
-    return 1
-  fi
-
-  if ! grep -q 'must depend on every earlier task; missing dependency on "implement-surface"' <<<"$output"; then
-    echo "Expected missing dependency error, got: $output" >&2
-    return 1
-  fi
-}
 
 test_lint_requires_design_sections_for_prompt_tasks() {
   local temp_plan
@@ -1736,14 +1408,9 @@ run_test "Edge: invalid_dependency_reference" test_edge_invalid_dependency
 run_test "Edge: unrendered_template_placeholder" test_unrendered_template_placeholder
 run_test "Edge: stacked_basebranch_default" test_stacked_basebranch_master
 run_test "Edge: unsupported runnerKind field" test_runner_kind_is_unsupported
-run_test "Lint: valid final pnpm run test:all gate" test_lint_valid_final_test_all
+run_test "Lint: allow focused verification without test:all" test_lint_allows_focused_verification_without_test_all
 run_test "Lint: reject multi-prompt standalone without waiver" test_lint_rejects_multi_prompt_standalone_without_waiver
-run_test "Lint: reject non-test:all final gate" test_lint_rejects_non_test_all_final_gate
-run_test "Lint: allow discovered external final gate" test_lint_allows_discovered_external_final_gate
-run_test "Lint: reject trivial discovered final gate" test_lint_rejects_trivial_discovered_final_gate
-run_test "Lint: reject unreferenced discovered final gate" test_lint_rejects_unreferenced_discovered_final_gate
-run_test "Lint: allow non-terminal stack workflow without test:all" test_lint_allows_nonterminal_stack_workflow_without_test_all
-run_test "Lint: reject final gate missing dependencies" test_lint_rejects_final_gate_missing_dependencies
+run_test "Lint: allow stack workflows with focused verification" test_lint_allows_nonterminal_stack_workflow_without_test_all
 run_test "Lint: reject missing design sections for prompt tasks" test_lint_requires_design_sections_for_prompt_tasks
 run_test "Lint: reject missing review-compression sections" test_lint_requires_review_compression_sections
 run_test "Lint: reject missing review lane" test_lint_requires_review_lane

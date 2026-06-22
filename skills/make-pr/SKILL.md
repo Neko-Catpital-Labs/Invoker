@@ -11,6 +11,8 @@ description: >
 
 Use this skill when the work is already done and the user wants a PR created, updated, or rewritten.
 
+For stacked PRs, apply `skills/review-compression/SKILL.md` before you write titles or PR bodies. If one branch mixes more than one local review claim, split the stack first.
+
 ## What this skill covers
 
 - PR title/body authoring for Invoker
@@ -61,16 +63,18 @@ List what this slice explicitly does not change.
 
 Only include this section when the change modifies component interactions, control flow, state flow, or data flow.
 
-### Before
+Quote Mermaid labels when they contain prose, punctuation, or code-ish text. Safe:
 
 ```mermaid
-...
+graph TD
+    A["reviewGate.artifacts[] is pending"]
 ```
 
-### After
+Unsafe:
 
 ```mermaid
-...
+graph TD
+    A[reviewGate.artifacts[] is pending]
 ```
 
 ## Test Plan
@@ -123,6 +127,8 @@ Update an existing PR with:
 node scripts/create-pr.mjs --title "<title>" --base master --body-file /tmp/my-pr.md --update <pr-number>
 ```
 
+For Mergify-managed stack PRs, this update path is REQUIRED after `mergify stack push`. Do not use `gh pr edit` for stack PR body/title updates, because it bypasses the changed-file scope checks in `create-pr.mjs`.
+
 This script handles local image path upload/injection when configured. It also rejects UI-impacting diffs unless the body includes visual proof media.
 
 ## Upstream-first workflow
@@ -154,16 +160,16 @@ Do not generalize this to unrelated repos.
 
 ## Validation
 
-Before creating a PR:
-
 - ensure the branch is pushed
 - ensure the body sections are present and concrete
 - ensure test commands are real commands that were actually run when possible
 - ensure revert guidance is honest
 - validate the body with `node scripts/validate-pr-body.mjs --body-file <file>`
+- for stacked PRs, update title/body through `node scripts/create-pr.mjs --update-existing ...`, not `gh pr edit`
 - for UI-impacting diffs, include `## Visual Proof` with screenshot or video proof before `node scripts/create-pr.mjs`
 
 If you include `## Architecture`, keep the diagrams renderable by GitHub Mermaid.
+Always quote labels that contain prose, punctuation, or code-ish text such as `reviewGate.artifacts[]`.
 Reference:
 
 - `scripts/test-pr-diagrams.sh`

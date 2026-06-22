@@ -57,7 +57,7 @@ For implementation benchmark plans, switch `onFinish` and `mergeMode` only when 
 
 1. Discuss scope/risk with the user.
 2. Phase 1a static analysis.
-3. Runtime verification (Phase 1b): run targeted `pnpm test`, plus Invoker headless when applicable.
+3. Runtime verification (Phase 1b): run the cheapest deterministic command that exercises the behavior, plus Invoker headless when applicable.
 4. Generate implementation YAML from verified facts.
 5. Validate with deterministic scripts.
 6. Present plan and submit on confirmation.
@@ -137,7 +137,7 @@ If `skill-doctor.sh` fails, run individual checks to isolate the problem:
    `bash skills/plan-to-invoker/scripts/validate-plan.sh <plan-file>`
 4. `step-lint-atomicity`
    `bash skills/plan-to-invoker/scripts/lint-task-atomicity.sh <plan-file>`  
-  Optional: append `--warn-delegation` to print additional advisory hints. For authored stacks, append `--stack-manifest <file>` so non-terminal workflows may end with focused verification while the highest-order workflow still requires a discovered final regression gate. Atomicity lint always runs `--strict-delegation` inside `skill-doctor` and, for implementation plans (`onFinish != none`), hard-fails missing/invalid `Layer:` and `Feature state:` metadata, missing required review-compression/rationale headings in `description` on any task (`Review claim`, `Review lane`, `Safety invariant`, `Slice rationale`, `Architectural effect`, `Goal`, `Motivation`, `Alternative considerations`/`Alternatives`, `Implementation details`/`Implementation`), missing required rationale headings in `prompt` for prompt tasks, prompt tasks without `Files:`/`Change types:`/`Acceptance criteria:` description blocks, prompts missing zero-context execution framing, prompts missing deterministic pass/fail expectations, invalid cross-layer dependency direction without `Layer exception: allowed`, missing one-conceptual-unit enforcement, and missing experiment-artifact handoff/cleanup contract when experiment tasks are present.
+  Optional: append `--warn-delegation` to print additional advisory hints. For authored stacks, append `--stack-manifest <file>` so stack slices are validated with stack context. Atomicity lint always runs `--strict-delegation` inside `skill-doctor` and, for implementation plans (`onFinish != none`), hard-fails missing/invalid `Layer:` and `Feature state:` metadata, missing required review-compression/rationale headings in `description` on any task (`Review claim`, `Review lane`, `Safety invariant`, `Slice rationale`, `Architectural effect`, `Goal`, `Motivation`, `Alternative considerations`/`Alternatives`, `Implementation details`/`Implementation`), missing required rationale headings directly in prompt text, and cross-layer dependency-direction violations.
 5. `step-parse-verify-results`
    `bash skills/plan-to-invoker/scripts/parse-results.sh < /tmp/invoker-verify.txt`
 
@@ -170,12 +170,12 @@ If `skill-doctor.sh` fails, run individual checks to isolate the problem:
 
 ## Runtime verification (Phase 1b)
 
-- Unit/package lane: `cd packages/<pkg> && pnpm test`
+- Focused command lane: run the smallest deterministic command that proves the behavior or assumption. Prefer direct scripts, parser checks, focused builds, or repo-specific repro commands over package-wide test suites.
 - Invoker headless lane: run `./submit-plan.sh plans/verify-<slug>.yaml` when flow involves orchestrator/executor/persistence/headless behavior
 - Visual proof lane when UI changes apply
-- Implementation-plan final gate: standalone implementation plans and terminal stack workflows must end with a discovered final regression command and depend on every earlier task. For Invoker-on-Invoker work this is `pnpm run test:all` from the repo root. For external repos, inspect manifests/docs first and include `Verification command discovery:` in the final task description when the command is not `pnpm run test:all`. Non-terminal stack workflows should end with focused verification; validate them with `skill-doctor --stack-manifest <file>` so the stack position is explicit.
+- Implementation-plan verification: include focused proof tasks that exercise the changed behavior. Do not require a terminal `pnpm run test:all` gate unless the user explicitly asks for a full-suite gate or the risk calls for it.
 
-When Invoker config enables heavyweight command routing, keep `pnpm ...` commands in the plan as normal command tasks unless a specific remote target must be declared explicitly. Runtime config may auto-route those commands to SSH.
+When Invoker config enables heavyweight command routing, keep commands in the plan as normal command tasks unless a specific remote target must be declared explicitly. Runtime config may auto-route those commands to SSH.
 
 Authoring YAML is not verification; execution is verification.
 

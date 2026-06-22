@@ -266,8 +266,12 @@ export function classifyReviewUnitsForPath(filePath) {
   const basename = path.split('/').pop() ?? '';
 
   if (path.startsWith('scripts/repro/')) return ['proof'];
-  if (path === 'scripts/test-create-pr-visual-proof.mjs') return ['tooling-policy'];
+  if (
+    path === 'scripts/pr-body-template.md'
+    || path === 'scripts/test-create-pr-visual-proof.mjs'
+  ) return ['tooling-policy'];
   if (/(benchmark|performance|visual-proof)/.test(lowerPath)) return ['proof'];
+  if (path === 'skills/make-pr/SKILL.md') return ['tooling-policy'];
   if (path.startsWith('docs/') || path.startsWith('skills/') || path.endsWith('.md')) return ['docs'];
   if (path.startsWith('.github/')) return ['tooling-policy'];
   if (
@@ -299,6 +303,7 @@ export function classifyReviewUnitsForPath(filePath) {
     || /^packages\/app\/src\/headless-[^/]+\.ts$/.test(path)
     || path === 'packages/app/src/api-server.ts'
     || path === 'packages/app/src/workflow-actions.ts'
+    || path === 'packages/app/src/workflow-mutation-facade.ts'
     || path.startsWith('packages/app/src/ipc/')
   ) {
     return ['activation-surface'];
