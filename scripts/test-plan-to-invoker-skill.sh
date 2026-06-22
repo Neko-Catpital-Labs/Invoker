@@ -8,7 +8,8 @@ SKILL_DIR="$REPO_ROOT/skills/plan-to-invoker"
 SKILL_MD="$SKILL_DIR/SKILL.md"
 PLAYBOOK="$SKILL_DIR/playbooks/verify-then-build.md"
 TASK_PATTERNS="$SKILL_DIR/references/task-patterns.md"
-CLAUDE_COMMAND="$REPO_ROOT/.claude/commands/plan-to-invoker.md"
+CANONICAL_COMMAND_DIR="$SKILL_DIR/commands"
+CANONICAL_COMMAND="$CANONICAL_COMMAND_DIR/invoker-plan-to-invoker.md"
 CLAUDE_MD="$REPO_ROOT/CLAUDE.md"
 CODEX_INSTALLED="$HOME/.codex/skills/invoker-plan-to-invoker"
 CLAUDE_INSTALLED="$HOME/.claude/skills/invoker-plan-to-invoker"
@@ -27,6 +28,7 @@ must_contain() {
   fi
 }
 
+
 must_output_contain() {
   local output="$1"
   local needle="$2"
@@ -35,11 +37,15 @@ must_output_contain() {
     fail "$hint — missing in command output: $needle"
   fi
 }
+[[ -f "$CANONICAL_COMMAND" ]] || fail "expected canonical command source"
+must_contain "$CANONICAL_COMMAND" "invoker_submit_plan" "Invoker handoff command must submit through MCP"
+must_contain "$CANONICAL_COMMAND" "plans/invoker-handoff.md" "Invoker handoff command must write Markdown plan"
+must_contain "$CANONICAL_COMMAND" "plans/invoker-handoff.yaml" "Invoker handoff command must write YAML plan"
+must_contain "$CANONICAL_COMMAND" "skill://make-pr/SKILL.md" "Invoker handoff command must trigger the PR skill for PR work"
+must_contain "$CANONICAL_COMMAND" "skill://review-compression/SKILL.md" "Invoker handoff command must trigger review compression for stack work"
 
-[[ -f "$SKILL_MD" ]] || fail "expected $SKILL_MD"
 [[ -f "$PLAYBOOK" ]] || fail "expected $PLAYBOOK"
 [[ -f "$TASK_PATTERNS" ]] || fail "expected $TASK_PATTERNS"
-[[ -f "$CLAUDE_COMMAND" ]] || fail "expected $CLAUDE_COMMAND"
 [[ -f "$CLAUDE_MD" ]] || fail "expected $CLAUDE_MD"
 
 # Installed agent skills use managed invoker-* copies, not legacy unprefixed symlinks.
@@ -69,6 +75,13 @@ must_contain "$SKILL_MD" "Review lane:" "SKILL must require review lane metadata
 must_contain "$SKILL_MD" "Non-goals:" "SKILL must require non-goals metadata"
 must_contain "$SKILL_MD" "Safety invariant:" "SKILL must require safety invariant metadata"
 must_contain "$SKILL_MD" "For benchmark/direct-output prompts with" "SKILL frontmatter must expose benchmark mode before body loading"
+must_contain "$SKILL_MD" "\"invoker-plan-to-invoker\"" "SKILL frontmatter must trigger on the installed handoff command"
+must_contain "$SKILL_MD" "\"/invoker-plan-to-invoker\"" "SKILL frontmatter must trigger on the slash handoff command"
+must_contain "$SKILL_MD" "## Harness handoff mode" "SKILL must document harness handoff mode"
+must_contain "$SKILL_MD" "Use this mode when invoked by the installed command or MCP prompt." "SKILL must define when handoff mode applies"
+must_contain "$SKILL_MD" "First produce a Markdown planning artifact at \`plans/invoker-handoff.md\`." "SKILL handoff mode must require a Markdown plan"
+must_contain "$SKILL_MD" "Convert the approved Markdown plan to \`plans/invoker-handoff.yaml\`." "SKILL handoff mode must require YAML conversion"
+must_contain "$SKILL_MD" "Prefer the MCP tools \`invoker_validate_plan\` and \`invoker_submit_plan\` when available." "SKILL handoff mode must prefer MCP validation and submit"
 must_contain "$SKILL_MD" "never version or metadata wrappers" "SKILL frontmatter must reject legacy benchmark YAML wrappers"
 must_contain "$SKILL_MD" "## Benchmark/direct-output mode" "SKILL must document benchmark/direct-output mode"
 must_contain "$SKILL_MD" "Treat the literal absolute output path" "SKILL must require literal output path handling"
@@ -87,11 +100,6 @@ must_contain "$SKILL_MD" "Do not generate prompt tasks, nested \`steps:\`, or im
 must_contain "$SKILL_MD" "deterministic local smoke commands" "SKILL must require local benchmark commands"
 must_contain "$SKILL_MD" "https://github.com/Neko-Catpital-Labs/Invoker.git" "SKILL must provide a non-probing Invoker repoUrl fallback"
 
-# Claude slash command — must load the skill before acting and preserve direct-output contract.
-must_contain "$CLAUDE_COMMAND" "Read \`skills/plan-to-invoker/SKILL.md\` before doing anything else." "Claude command must force skill loading before execution"
-must_contain "$CLAUDE_COMMAND" "benchmark/direct-output signals" "Claude command must route benchmark prompts to direct-output mode"
-must_contain "$CLAUDE_COMMAND" "The file must start with top-level \`name:\`" "Claude command must preserve benchmark YAML top-level name contract"
-must_contain "$CLAUDE_COMMAND" "do not write \`version:\` or \`metadata:\` wrappers." "Claude command must reject legacy benchmark YAML wrappers"
 
 # Claude initial repo context — must block first-turn benchmark probes before skill listing is loaded.
 must_contain "$CLAUDE_MD" "Benchmark direct output" "CLAUDE.md must document benchmark direct-output behavior"
