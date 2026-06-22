@@ -50,6 +50,10 @@ describe('bundled-skills', () => {
       expect(status.promptRecommended).toBe(true);
       expect(status.bundledSkillNames).toEqual(['make-pr', 'plan-to-invoker']);
       expect(status.targets[0]?.installed).toBe(false);
+      expect(status.targets[0]?.missingSkillNames).toEqual(['invoker-make-pr', 'invoker-plan-to-invoker']);
+      expect(status.targets[0]?.staleReason).toBe('not-installed');
+      expect(status.targets[0]?.diagnostic).toContain('prefix "invoker-"');
+      expect(status.targets[0]?.diagnostic).toContain('invoker-plan-to-invoker');
     } finally {
       if (originalHome === undefined) {
         delete process.env.HOME;
@@ -103,6 +107,46 @@ describe('bundled-skills', () => {
       });
       expect(status.targets.every((target) => target.upToDate)).toBe(true);
       expect(status.promptRecommended).toBe(false);
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+    }
+  });
+
+  it('reports stale installed skills when the bundled source hash changes', () => {
+    const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
+    const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
+    const repoRoot = makeTempRoot('invoker-bundled-repo-');
+    const codexHome = makeTempRoot('invoker-codex-home-');
+    const originalHome = process.env.HOME;
+    process.env.HOME = codexHome;
+
+    try {
+      writeSkill(resourcesRoot, 'plan-to-invoker');
+      installBundledSkills({
+        isPackaged: true,
+        repoRoot,
+        resourcesPath: resourcesRoot,
+        invokerHomeRoot,
+      });
+
+      writeFileSync(join(resourcesRoot, 'skills', 'plan-to-invoker', 'SKILL.md'), '# plan-to-invoker\n\nUpdated bundled content.\n');
+
+      const status = resolveBundledSkillsStatus({
+        isPackaged: true,
+        repoRoot,
+        resourcesPath: resourcesRoot,
+        invokerHomeRoot,
+      });
+
+      expect(status.targets.every((target) => target.installed)).toBe(true);
+      expect(status.targets.every((target) => !target.upToDate)).toBe(true);
+      expect(status.targets[0]?.staleReason).toBe('bundle-updated');
+      expect(status.targets[0]?.diagnostic).toContain('bundled source changed');
+      expect(status.targets[0]?.diagnostic).toContain('prefix "invoker-"');
     } finally {
       if (originalHome === undefined) {
         delete process.env.HOME;
