@@ -208,7 +208,6 @@ export interface OrchestratorPersistence {
     name: string;
     description?: string;
     visualProof?: boolean;
-    status: WorkflowDerivedStatus;
     createdAt: string;
     updatedAt: string;
     repoUrl?: string;
@@ -1412,7 +1411,6 @@ export class Orchestrator {
       name: plan.name,
       description: plan.description,
       visualProof: plan.visualProof,
-      status: 'pending',
       repoUrl: plan.repoUrl,
       intermediateRepoUrl: plan.intermediateRepoUrl,
       onFinish: plan.onFinish,
@@ -3312,7 +3310,6 @@ export class Orchestrator {
       name: sourceMeta && (sourceMeta as { name?: string }).name
         ? `${(sourceMeta as { name: string }).name} (fork of ${workflowId})`
         : `Fork of ${workflowId}`,
-      status: 'running',
       createdAt,
       updatedAt: createdAt,
     };

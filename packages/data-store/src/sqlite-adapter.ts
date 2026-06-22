@@ -44,6 +44,7 @@ import type {
   LaunchDispatchInvalidationRow,
   PersistenceAdapter,
   Workflow,
+  WorkflowSaveInput,
   WorkflowTaskSnapshot,
   TaskEvent,
   ActivityLogEntry,
@@ -1283,7 +1284,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   // ── Workflows ─────────────────────────────────────────
 
-  saveWorkflow(workflow: Workflow): void {
+  saveWorkflow(workflow: WorkflowSaveInput): void {
     this.execRun(`
       INSERT OR REPLACE INTO workflows (id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url, branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode, review_provider, external_dependencies, external_dependency_changes, detached_external_dependencies, generation, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
