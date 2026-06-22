@@ -2993,6 +2993,10 @@ function createEmbeddedTerminalBackendFromConfig(
 
   const runGuiReadyBootstrap = async (): Promise<void> => {
     recordStartupMark('app.whenReady');
+    // GUI owner modes:
+    // - daemon: GUI is a client; a background daemon owns workflow writes, and startup failure is serious.
+    // - gui/local: GUI owns workflow writes directly with no daemon.
+    // - auto: GUI uses an existing daemon when one is available, otherwise it runs locally as owner.
     const guiOwnerPreference = resolveGuiOwnerPreference();
     let daemonGuiOwner = false;
     if (guiOwnerPreference === 'daemon') {
