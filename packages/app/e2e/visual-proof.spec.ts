@@ -352,6 +352,22 @@ async function openContextMenu(page: Page, locator: Locator) {
   return menu;
 }
 
+async function selectWorkflowNode(page: Page, workflowId: string): Promise<void> {
+  const node = workflowNode(page, workflowId);
+  await node.waitFor({ state: 'attached', timeout: 15000 });
+  await node.scrollIntoViewIfNeeded();
+  try {
+    await node.click({ force: true });
+  } catch {
+    await node.dispatchEvent('click', { bubbles: true });
+  }
+  const miniDag = page.getByTestId('selected-workflow-mini-dag');
+  if (!(await miniDag.isVisible({ timeout: 1500 }).catch(() => false))) {
+    await node.dispatchEvent('click', { bubbles: true });
+  }
+  await expect(miniDag).toBeVisible({ timeout: 10000 });
+}
+
 async function loadPlanAndSelectWorkflow(page: Page, plan: unknown): Promise<string> {
   const beforeIds = await page.evaluate(async () => {
     const workflows = await window.invoker.listWorkflows();
@@ -364,10 +380,7 @@ async function loadPlanAndSelectWorkflow(page: Page, plan: unknown): Promise<str
     return created?.id ?? workflows[workflows.length - 1]?.id ?? null;
   }, beforeIds);
   expect(workflowId).toBeTruthy();
-  const node = workflowNode(page, workflowId!);
-  await node.waitFor({ state: 'attached', timeout: 15000 });
-  await node.dispatchEvent('click', { bubbles: true });
-  await expect(page.getByTestId('selected-workflow-mini-dag')).toBeVisible({ timeout: 10000 });
+  await selectWorkflowNode(page, workflowId!);
   return workflowId!;
 }
 async function seedActiveLaunchAttempt(dbPath: string, taskId: string, attemptId: string, now: Date): Promise<void> {
@@ -764,7 +777,7 @@ test.describe('Visual proof capture', () => {
 
     const reviewUrl = 'https://github.com/Neko-Catpital-Labs/Invoker/pull/626';
 
-    await workflowNode(page, workflowId).dispatchEvent('click', { bubbles: true });
+    await selectWorkflowNode(page, workflowId);
     await expect(page.getByTestId('workflow-inspector-title')).toHaveText('Review ready workflow PR proof');
     await expect(page.getByText('Inspector', { exact: true })).toHaveCount(0);
     await expect(page.getByTestId('workflow-inspector-status-label')).not.toContainText('review ready');
@@ -787,8 +800,10 @@ test.describe('Visual proof capture', () => {
         },
       },
     ]);
+    await page.getByRole('button', { name: 'Refresh' }).click();
+    await page.waitForTimeout(300);
 
-    await workflowNode(page, workflowId).dispatchEvent('click', { bubbles: true });
+    await selectWorkflowNode(page, workflowId);
     await expect(page.getByTestId('workflow-inspector-title')).toHaveText('Review ready workflow PR proof');
     await expect(page.getByText('Inspector', { exact: true })).toHaveCount(0);
     await expect(page.getByTestId('workflow-inspector-status-label')).toContainText('review ready');
@@ -818,8 +833,10 @@ test.describe('Visual proof capture', () => {
         },
       },
     ]);
+    await page.getByRole('button', { name: 'Refresh' }).click();
+    await page.waitForTimeout(300);
 
-    await workflowNode(page, workflowId).dispatchEvent('click', { bubbles: true });
+    await selectWorkflowNode(page, workflowId);
     await expect(page.getByTestId('inspector-pr-link')).toHaveAttribute('href', reviewUrl);
 
     await page.keyboard.press('Tab');
@@ -907,6 +924,8 @@ test.describe('Visual proof capture', () => {
         },
       },
     ]);
+    await page.getByRole('button', { name: 'Refresh' }).click();
+    await page.waitForTimeout(300);
 
     const workflowId = await page.evaluate(async () => {
       const workflows = await window.invoker.listWorkflows();
@@ -915,7 +934,7 @@ test.describe('Visual proof capture', () => {
     expect(workflowId).toBeTruthy();
 
     // Re-select the workflow so the inspector reflects the derived workflow status.
-    await workflowNode(page, workflowId!).dispatchEvent('click', { bubbles: true });
+    await selectWorkflowNode(page, workflowId!);
 
     // Workflow-level surface: sidebar workflow node displays the workflow-status hue.
     await expect(workflowNode(page, workflowId!).getByText('review ready')).toBeVisible();
@@ -1024,6 +1043,8 @@ test.describe('Visual proof capture', () => {
         })),
       ],
     );
+    await page.getByRole('button', { name: 'Refresh' }).click();
+    await page.waitForTimeout(300);
 
     await hideSelectedWorkflowMiniDagIfVisible(page);
     await minimizeInspectorIfVisible(page);
