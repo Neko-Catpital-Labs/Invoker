@@ -64,6 +64,9 @@ Use this mode when invoked by the installed command or MCP prompt.
 - In an Invoker source checkout, still run `bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` before submission.
 - Outside an Invoker source checkout, `invoker_validate_plan` is the deterministic validation gate.
 
+- If the request involves creating, updating, publishing, or splitting pull requests or PR stacks, first read and follow `skills/make-pr/SKILL.md` (or `skill://make-pr/SKILL.md` when available) before PR authoring or publication.
+- If the request involves multiple review slices, first read and follow `skills/review-compression/SKILL.md` (or `skill://review-compression/SKILL.md` when available) before writing workflow YAML.
+
 ## Intended flow (do not skip steps)
 
 1. Discuss scope/risk with the user.
