@@ -222,7 +222,7 @@ const SSH_TERMINAL_RESUME_PLAN = {
 };
 
 function workflowNode(page: Page, workflowId: string) {
-  return page.getByTestId(`workflow-node-${workflowId}`);
+  return page.getByTestId(`rf__node-${workflowId}`).first();
 }
 
 function taskNodeCard(page: Page, taskIdSuffix: string) {
@@ -354,17 +354,31 @@ async function openContextMenu(page: Page, locator: Locator) {
 
 async function selectWorkflowNode(page: Page, workflowId: string): Promise<void> {
   const node = workflowNode(page, workflowId);
-  await node.waitFor({ state: 'attached', timeout: 15000 });
-  await node.scrollIntoViewIfNeeded();
-  try {
-    await node.click({ force: true });
-  } catch {
-    await node.dispatchEvent('click', { bubbles: true });
-  }
   const miniDag = page.getByTestId('selected-workflow-mini-dag');
-  if (!(await miniDag.isVisible({ timeout: 1500 }).catch(() => false))) {
-    await node.dispatchEvent('click', { bubbles: true });
+
+  if (await miniDag.isVisible({ timeout: 500 }).catch(() => false)) {
+    await page.getByTestId('workflow-graph-react-flow').click({ position: { x: 8, y: 8 } });
+    await expect(miniDag).not.toBeVisible({ timeout: 5000 });
   }
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await node.waitFor({ state: 'attached', timeout: 15000 });
+    await node.scrollIntoViewIfNeeded();
+    try {
+      await node.click({ force: true });
+    } catch {
+      await node.dispatchEvent('click', { bubbles: true });
+    }
+    if (!(await miniDag.isVisible({ timeout: 1500 }).catch(() => false))) {
+      await node.dispatchEvent('click', { bubbles: true });
+    }
+    if (await miniDag.isVisible({ timeout: 1500 }).catch(() => false)) {
+      return;
+    }
+    await page.getByRole('button', { name: 'Refresh' }).click();
+    await page.waitForTimeout(300);
+  }
+
   await expect(miniDag).toBeVisible({ timeout: 10000 });
 }
 
@@ -374,14 +388,17 @@ async function loadPlanAndSelectWorkflow(page: Page, plan: unknown): Promise<str
     return workflows.map((workflow: { id: string }) => workflow.id);
   });
   await page.evaluate((yaml) => window.invoker.loadPlan(yaml), yamlStringify(plan));
-  const workflowId = await page.evaluate(async (knownIds) => {
+  const workflow = await page.evaluate(async (knownIds) => {
     const workflows = await window.invoker.listWorkflows();
-    const created = workflows.find((workflow: { id: string }) => !knownIds.includes(workflow.id));
-    return created?.id ?? workflows[workflows.length - 1]?.id ?? null;
+    return workflows.find((candidate: { id: string }) => !knownIds.includes(candidate.id))
+      ?? workflows[workflows.length - 1]
+      ?? null;
   }, beforeIds);
-  expect(workflowId).toBeTruthy();
-  await selectWorkflowNode(page, workflowId!);
-  return workflowId!;
+  expect(workflow?.id).toBeTruthy();
+  await page.getByRole('button', { name: 'Refresh' }).click();
+  await page.waitForTimeout(300);
+  await selectWorkflowNode(page, workflow!.id);
+  return workflow!.id;
 }
 async function seedActiveLaunchAttempt(dbPath: string, taskId: string, attemptId: string, now: Date): Promise<void> {
   const adapter = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
