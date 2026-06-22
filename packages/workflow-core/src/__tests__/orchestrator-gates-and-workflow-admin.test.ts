@@ -13,7 +13,6 @@ class InMemoryPersistence implements OrchestratorPersistence {
   workflows = new Map<string, {
     id: string;
     name: string;
-    status: string;
     createdAt: string;
     updatedAt: string;
     repoUrl?: string;
@@ -32,7 +31,6 @@ class InMemoryPersistence implements OrchestratorPersistence {
   saveWorkflow(workflow: {
     id: string;
     name: string;
-    status: string;
     repoUrl?: string;
     baseBranch?: string;
     featureBranch?: string;
@@ -58,7 +56,6 @@ class InMemoryPersistence implements OrchestratorPersistence {
   updateWorkflow(
     workflowId: string,
     changes: {
-      status?: string;
       updatedAt?: string;
       baseBranch?: string;
       mergeMode?: 'manual' | 'automatic' | 'external_review';
@@ -69,9 +66,6 @@ class InMemoryPersistence implements OrchestratorPersistence {
   ): void {
     const wf = this.workflows.get(workflowId);
     this.updateWorkflowCalls.set(workflowId, (this.updateWorkflowCalls.get(workflowId) ?? 0) + 1);
-    if (wf && changes.status) {
-      wf.status = changes.status;
-    }
     if (wf && changes.updatedAt) {
       wf.updatedAt = changes.updatedAt;
     }
@@ -174,12 +168,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
       workflowTasks.push(task);
       tasksByWorkflowId.set(workflowId, workflowTasks);
     }
-    const workflows = Array.from(this.workflows.values()).map((workflow) => {
-      const tasks = tasksByWorkflowId.get(workflow.id) ?? [];
-      if (tasks.length === 0) return workflow;
-      const rollup = computeWorkflowRollup(tasks);
-      return { ...workflow, status: rollup.status, rollup };
-    });
+    const workflows = Array.from(this.workflows.values()).map((workflow) => this.withDerivedStatus(workflow, tasksByWorkflowId.get(workflow.id) ?? []));
     return {
       workflows,
       tasks: Array.from(this.tasks.values()).map((entry) => entry.task),
@@ -187,9 +176,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
     };
   }
 
-  private withDerivedStatus<T extends { id: string; status: string }>(workflow: T): T {
-    const tasks = this.loadTasks(workflow.id);
-    if (tasks.length === 0) return workflow;
+  private withDerivedStatus<T extends { id: string }>(workflow: T, tasks = this.loadTasks(workflow.id)): T & { status: string } {
     const rollup = computeWorkflowRollup(tasks);
     return { ...workflow, status: rollup.status, rollup };
   }

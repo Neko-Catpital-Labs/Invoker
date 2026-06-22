@@ -8,10 +8,7 @@ describe('Attempt persistence', () => {
   beforeEach(async () => {
     adapter = await SQLiteAdapter.create(':memory:');
     // Create a workflow and task so FK constraints pass
-    adapter.saveWorkflow({
-      id: 'wf-1', name: 'Test', status: 'running',
-      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1', name: 'Test', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), });
     const task = createTaskState('taskA', 'Task A', [], { workflowId: 'wf-1' });
     adapter.saveTask('wf-1', task);
   });
