@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent } from 'react';
-import type { TaskState, WorkflowMeta, WorkflowStatus } from '../types.js';
+import type { WorkflowMeta, WorkflowStatus } from '../types.js';
 import type { GraphCameraCommand } from '../lib/graph-camera.js';
 import { deriveWorkflowGraph, layoutWorkflowGraph, type WorkflowGraphEdge } from '../lib/workflow-graph.js';
 import { WorkflowNode } from './WorkflowNode.js';
@@ -20,7 +20,6 @@ import {
 import '@xyflow/react/dist/style.css';
 
 interface WorkflowGraphProps {
-  tasks: Map<string, TaskState>;
   workflows: Map<string, WorkflowMeta>;
   selectedWorkflowId: string | null;
   /**
@@ -104,7 +103,6 @@ function WorkflowFlowNode({ data }: NodeProps<Node<WorkflowNodeData>>): JSX.Elem
 }
 
 function WorkflowGraphInner({
-  tasks,
   workflows,
   selectedWorkflowId,
   cameraCommand,
@@ -124,10 +122,10 @@ function WorkflowGraphInner({
   const graphMetricsRef = useRef({ deriveMs: 0, layoutMs: 0, objectsMs: 0 });
   const graph = useMemo(() => {
     const startedAt = performance.now();
-    const nextGraph = deriveWorkflowGraph(workflows, tasks);
+    const nextGraph = deriveWorkflowGraph(workflows);
     graphMetricsRef.current.deriveMs = performance.now() - startedAt;
     return nextGraph;
-  }, [workflows, tasks]);
+  }, [workflows]);
   const positions = useMemo(() => {
     const startedAt = performance.now();
     const nextPositions = layoutWorkflowGraph(graph);
