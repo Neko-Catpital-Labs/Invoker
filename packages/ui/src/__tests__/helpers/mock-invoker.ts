@@ -16,7 +16,7 @@ import type {
   TaskConfig,
   TaskExecution,
 } from '../../types.js';
-import type { TerminalOutputEvent } from '@invoker/contracts';
+import type { TerminalOutputEvent, WorkflowMutationAcceptedResult, WorkflowMutationStatusEntry } from '@invoker/contracts';
 
 export interface MockInvoker {
   /** The mock InvokerAPI object installed on window.invoker. */
@@ -31,6 +31,8 @@ export interface MockInvoker {
   fireWorkflowsChanged: (workflows: WorkflowMeta[]) => void;
   /** Fire an embedded terminal output event to subscribers. */
   fireTerminalOutput: (event: TerminalOutputEvent) => void;
+  /** Replace the workflow mutation status snapshot. */
+  setWorkflowMutationStatuses: (rows: WorkflowMutationStatusEntry[]) => void;
   /** Install the mock on window.invoker. */
   install: () => void;
   /** Remove window.invoker. */
@@ -43,9 +45,30 @@ export function createMockInvoker(
 ): MockInvoker {
   let taskSnapshot = initialTasks;
   let workflowSnapshot = initialWorkflows;
+  let mutationStatusSnapshot: WorkflowMutationStatusEntry[] = [];
   let graphEventCallback: ((event: TaskGraphEvent) => void) | undefined;
   let workflowsCallback: ((workflows: unknown[]) => void) | undefined;
   const terminalOutputCallbacks = new Set<(event: TerminalOutputEvent) => void>();
+
+  const workflowIdForTask = (taskId: string): string => (
+    taskSnapshot.find((task) => task.id === taskId)?.config.workflowId
+    ?? workflowSnapshot[0]?.id
+    ?? 'wf-1'
+  );
+  const acceptedResult = (
+    channel: string,
+    label: string,
+    workflowId: string,
+  ): WorkflowMutationAcceptedResult => ({
+    ok: true,
+    accepted: true,
+    queued: true,
+    intentId: mutationStatusSnapshot.length + 1,
+    workflowId,
+    channel,
+    label,
+    status: 'queued',
+  });
 
   const api: InvokerAPI = {
     // Defer resolution one microtask so the startup snapshot is read after synchronous setTasks()
@@ -92,15 +115,18 @@ export function createMockInvoker(
     stop: vi.fn(async () => {}),
     clear: vi.fn(async () => {}),
     getStatus: vi.fn(async () => ({ total: 0, completed: 0, failed: 0, closed: 0, running: 0, pending: 0 })),
-    provideInput: vi.fn(async () => {}),
-    approve: vi.fn(async () => {}),
-    reject: vi.fn(async () => {}),
-    selectExperiment: vi.fn(async () => {}),
-    restartTask: vi.fn(async () => {}),
-    editTaskCommand: vi.fn(async () => {}),
-    editTaskPool: vi.fn(async () => {}),
-    editTaskAgent: vi.fn(async () => {}),
-    setTaskExternalGatePolicies: vi.fn(async () => {}),
+    getWorkflowMutationStatuses: vi.fn(async () => mutationStatusSnapshot),
+    provideInput: vi.fn(async (taskId: string) => acceptedResult('invoker:provide-input', 'Provide input', workflowIdForTask(taskId))),
+    approve: vi.fn(async (taskId: string) => acceptedResult('invoker:approve', 'Approve task', workflowIdForTask(taskId))),
+    reject: vi.fn(async (taskId: string) => acceptedResult('invoker:reject', 'Reject task', workflowIdForTask(taskId))),
+    selectExperiment: vi.fn(async (taskId: string) => acceptedResult('invoker:select-experiment', 'Select experiment', workflowIdForTask(taskId))),
+    restartTask: vi.fn(async (taskId: string) => acceptedResult('invoker:restart-task', 'Retry task', workflowIdForTask(taskId))),
+    editTaskPrompt: vi.fn(async (taskId: string) => acceptedResult('invoker:edit-task-prompt', 'Edit task prompt', workflowIdForTask(taskId))),
+    editTaskType: vi.fn(async (taskId: string) => acceptedResult('invoker:edit-task-type', 'Edit task executor', workflowIdForTask(taskId))),
+    editTaskCommand: vi.fn(async (taskId: string) => acceptedResult('invoker:edit-task-command', 'Edit task command', workflowIdForTask(taskId))),
+    editTaskPool: vi.fn(async (taskId: string) => acceptedResult('invoker:edit-task-pool', 'Edit task pool', workflowIdForTask(taskId))),
+    editTaskAgent: vi.fn(async (taskId: string) => acceptedResult('invoker:edit-task-agent', 'Edit task agent', workflowIdForTask(taskId))),
+    setTaskExternalGatePolicies: vi.fn(async (taskId: string) => acceptedResult('invoker:set-task-external-gate-policies', 'Set gate policy', workflowIdForTask(taskId))),
     getRemoteTargets: vi.fn(async () => []),
     getExecutionPools: vi.fn(async () => ['mixed-local-ssh', 'pnpm-ssh']),
     getExecutionAgents: vi.fn(async () => ['claude', 'codex']),
@@ -144,7 +170,7 @@ export function createMockInvoker(
         { id: 'cursor', name: 'Cursor', path: '/tmp/.cursor/skills-cursor', available: true, installed: false, upToDate: false, installedSkillNames: [] },
       ],
     })),
-    replaceTask: vi.fn(async () => []),
+    replaceTask: vi.fn(async (taskId: string) => acceptedResult('invoker:replace-task', 'Replace task', workflowIdForTask(taskId))),
     getActivityLogs: vi.fn(async () => []),
     getEvents: vi.fn(async () => []),
     openTerminal: vi.fn(async (taskId: string) => ({
@@ -172,22 +198,23 @@ export function createMockInvoker(
     loadWorkflow: vi.fn(async () => ({ workflow: {}, tasks: [] })),
     deleteAllWorkflows: vi.fn(async () => {}),
     deleteAllWorkflowsBulk: vi.fn(async () => {}),
-    deleteWorkflow: vi.fn(async () => {}),
+    deleteWorkflow: vi.fn(async (workflowId: string) => acceptedResult('invoker:delete-workflow', 'Delete workflow', workflowId)),
+    detachWorkflow: vi.fn(async (workflowId: string) => acceptedResult('invoker:detach-workflow', 'Detach workflow', workflowId)),
     cleanupWorktrees: vi.fn(async () => ({ removed: [], errors: [] })),
-    recreateWorkflow: vi.fn(async () => {}),
-    recreateTask: vi.fn(async () => {}),
-    recreateDownstream: vi.fn(async () => {}),
-    retryWorkflow: vi.fn(async () => {}),
-    rebaseRetry: vi.fn(async () => ({ success: true, rebasedBranches: [], errors: [] })),
-    rebaseRecreate: vi.fn(async () => ({ success: true, rebasedBranches: [], errors: [] })),
-    setMergeBranch: vi.fn(async () => {}),
-    approveMerge: vi.fn(async () => {}),
-    resolveConflict: vi.fn(async () => {}),
-    fixWithAgent: vi.fn(async () => {}),
-    setMergeMode: vi.fn(async () => {}),
+    recreateWorkflow: vi.fn(async (workflowId: string) => acceptedResult('invoker:recreate-workflow', 'Recreate workflow', workflowId)),
+    recreateTask: vi.fn(async (taskId: string) => acceptedResult('invoker:recreate-task', 'Recreate task', workflowIdForTask(taskId))),
+    recreateDownstream: vi.fn(async (taskId: string) => acceptedResult('invoker:recreate-downstream', 'Recreate downstream', workflowIdForTask(taskId))),
+    retryWorkflow: vi.fn(async (workflowId: string) => acceptedResult('invoker:retry-workflow', 'Retry workflow', workflowId)),
+    rebaseRetry: vi.fn(async (workflowId: string) => acceptedResult('invoker:rebase-retry', 'Rebase and Retry', workflowId)),
+    rebaseRecreate: vi.fn(async (workflowId: string) => acceptedResult('invoker:rebase-recreate', 'Rebase and Recreate', workflowId)),
+    setMergeBranch: vi.fn(async (workflowId: string) => acceptedResult('invoker:set-merge-branch', 'Set merge branch', workflowId)),
+    approveMerge: vi.fn(async (workflowId: string) => acceptedResult('invoker:approve-merge', 'Approve merge', workflowId)),
+    resolveConflict: vi.fn(async (taskId: string) => acceptedResult('invoker:resolve-conflict', 'Resolve conflict', workflowIdForTask(taskId))),
+    fixWithAgent: vi.fn(async (taskId: string) => acceptedResult('invoker:fix-with-agent', 'Fix with agent', workflowIdForTask(taskId))),
+    setMergeMode: vi.fn(async (workflowId: string) => acceptedResult('invoker:set-merge-mode', 'Set merge mode', workflowId)),
     checkPrStatuses: vi.fn(async () => {}),
-    cancelTask: vi.fn(async () => ({ cancelled: [], runningCancelled: [] })),
-    cancelWorkflow: vi.fn(async () => ({ cancelled: [], runningCancelled: [] })),
+    cancelTask: vi.fn(async (taskId: string) => acceptedResult('invoker:cancel-task', 'Cancel task', workflowIdForTask(taskId))),
+    cancelWorkflow: vi.fn(async (workflowId: string) => acceptedResult('invoker:cancel-workflow', 'Cancel workflow', workflowId)),
     getQueueStatus: vi.fn(async () => ({
       maxConcurrency: 0,
       runningCount: 0,
@@ -214,6 +241,10 @@ export function createMockInvoker(
         graphEventCallback?.({ type: 'delta', delta: { type: 'created', task }, workflowRollups: [] });
       }
     });
+  }
+
+  function setWorkflowMutationStatuses(rows: WorkflowMutationStatusEntry[]) {
+    mutationStatusSnapshot = rows;
   }
 
   function fireDelta(delta: TaskDelta) {
@@ -249,7 +280,7 @@ export function createMockInvoker(
     delete (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__;
   }
 
-  return { api, setTasks, fireDelta, fireGraphEvent, fireWorkflowsChanged, fireTerminalOutput, install, cleanup };
+  return { api, setTasks, setWorkflowMutationStatuses, fireDelta, fireGraphEvent, fireWorkflowsChanged, fireTerminalOutput, install, cleanup };
 }
 
 /** Create a minimal TaskState for testing. */

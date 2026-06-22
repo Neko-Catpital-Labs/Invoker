@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent } from 'react';
+import type { WorkflowMutationStatusEntry } from '@invoker/contracts';
 import type { WorkflowMeta, WorkflowStatus } from '../types.js';
 import type { GraphCameraCommand } from '../lib/graph-camera.js';
 import { deriveWorkflowGraph, layoutWorkflowGraph, type WorkflowGraphEdge } from '../lib/workflow-graph.js';
@@ -29,6 +30,7 @@ interface WorkflowGraphProps {
    */
   cameraCommand?: GraphCameraCommand | null;
   statusFilters: Set<WorkflowStatus>;
+  openMutationsByWorkflow?: Map<string, WorkflowMutationStatusEntry | undefined>;
   onSelectWorkflow: (workflowId: string) => void;
   onWorkflowContextMenu: (event: MouseEvent, workflowId: string) => void;
   /** Fired when the user manually pans or zooms the viewport. */
@@ -39,6 +41,7 @@ interface WorkflowNodeData extends Record<string, unknown> {
   workflow: WorkflowMeta;
   selected: boolean;
   dimmed: boolean;
+  openMutation?: WorkflowMutationStatusEntry;
 }
 
 const nodeTypes = {
@@ -91,6 +94,7 @@ function WorkflowFlowNode({ data }: NodeProps<Node<WorkflowNodeData>>): JSX.Elem
         dimmed={data.dimmed}
         onClick={() => {}}
         onContextMenu={() => {}}
+        openMutation={data.openMutation}
       />
       <Handle
         type="source"
@@ -106,6 +110,7 @@ function WorkflowGraphInner({
   workflows,
   selectedWorkflowId,
   cameraCommand,
+  openMutationsByWorkflow,
   statusFilters,
   onSelectWorkflow,
   onWorkflowContextMenu,
@@ -149,12 +154,13 @@ function WorkflowGraphInner({
           workflow: node.workflow,
           selected: selectedWorkflowId === node.id,
           dimmed,
+          openMutation: openMutationsByWorkflow?.get(node.id),
         },
       };
     });
     graphMetricsRef.current.objectsMs = performance.now() - startedAt;
     return nextNodes;
-  }, [graph.nodes, positions, selectedWorkflowId, statusFilters]);
+  }, [graph.nodes, openMutationsByWorkflow, positions, selectedWorkflowId, statusFilters]);
 
   const edges = useMemo<Edge[]>(() => graph.edges.map((edge) => {
     const visual = workflowEdgeVisual(edge.kind);
