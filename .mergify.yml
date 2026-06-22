@@ -3,8 +3,9 @@
 # queued yet. This lets reviewers leave approval-adjacent comments without
 # Mergify landing the PR before small follow-ups are pushed.
 # GitHub rulesets already require PRs, squash merges, and one approval on master.
-# Keep repo-local conditions minimal and let Mergify respect the protected-branch
-# requirements instead of duplicating the full CI matrix here.
+# Require every GitHub review thread to be resolved before queueing or merging.
+# This makes CodeRabbit and human review comments explicit blockers instead of
+# letting an approval send unresolved feedback to Mergify.
 
 queue_rules:
   - name: default
@@ -14,6 +15,7 @@ queue_rules:
       - -draft
       - "#approved-reviews-by >= 1"
       - -label=merge-hold
+      - "#review-threads-unresolved = 0"
     merge_conditions:
       - check-success = build-artifacts
       - check-success = quality / Dependency Cruise
@@ -31,6 +33,7 @@ queue_rules:
       - check-success = ssh / shard-31
       - check-success = optional / Worktree Provisioning
       - check-success = optional / Visual Proof Validate
+      - "#review-threads-unresolved = 0"
 
   - name: admin-bypass
     merge_method: squash
@@ -39,6 +42,7 @@ queue_rules:
       - -draft
       - label=admin-bypass
       - -label=merge-hold
+      - "#review-threads-unresolved = 0"
     merge_conditions:
       - check-success = build-artifacts
       - check-success = quality / Dependency Cruise
@@ -56,6 +60,7 @@ queue_rules:
       - check-success = ssh / shard-31
       - check-success = optional / Worktree Provisioning
       - check-success = optional / Visual Proof Validate
+      - "#review-threads-unresolved = 0"
 
 pull_request_rules:
   - name: autoqueue ready approved PRs to master
@@ -66,6 +71,7 @@ pull_request_rules:
       - label=ready-to-merge
       - -label=admin-bypass
       - -label=merge-hold
+      - "#review-threads-unresolved = 0"
     actions:
       queue:
         name: default
@@ -76,6 +82,7 @@ pull_request_rules:
       - -draft
       - label=admin-bypass
       - -label=merge-hold
+      - "#review-threads-unresolved = 0"
     actions:
       queue:
         name: admin-bypass
