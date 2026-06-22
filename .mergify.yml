@@ -53,11 +53,12 @@ queue_rules:
       - check-success = optional / Visual Proof Validate
 
 pull_request_rules:
-  - name: autoqueue approved PRs to master
+  - name: autoqueue ready approved PRs to master
     conditions:
       - base=master
       - -draft
       - "#approved-reviews-by >= 1"
+      - label=ready-to-merge
       - -label=admin-bypass
     actions:
       queue:
