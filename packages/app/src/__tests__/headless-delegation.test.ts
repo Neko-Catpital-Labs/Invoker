@@ -1784,4 +1784,23 @@ describe('headless delegation enforcement', () => {
       expect(callOrder).toEqual(['preempt', 'delete']);
     });
   });
+
+  describe('detach-workflow lifecycle bridge', () => {
+    it('headless detach-workflow remains available and prints topology feedback', async () => {
+      const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      mockDeps.commandService.detachWorkflow = vi.fn(async () => ({ ok: true as const, data: undefined })) as any;
+
+      try {
+        await runHeadless(['detach-workflow', 'wf-down', 'wf-up'], mockDeps);
+        expect(mockDeps.commandService.detachWorkflow).toHaveBeenCalledTimes(1);
+        const envelope = (mockDeps.commandService.detachWorkflow as any).mock.calls[0][0];
+        expect(envelope.payload).toEqual({ workflowId: 'wf-down', upstreamWorkflowId: 'wf-up' });
+        expect(stdout).toHaveBeenCalledWith(
+          'Topology updated: downstream workflow wf-down no longer depends on upstream workflow wf-up.\n',
+        );
+      } finally {
+        stdout.mockRestore();
+      }
+    });
+  });
 });

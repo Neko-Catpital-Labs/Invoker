@@ -46,6 +46,17 @@ const workflows: WorkflowMeta[] = [
   { id: 'wf-1', name: 'Test Workflow', status: 'running', baseBranch: 'master' },
 ];
 
+const stackedWorkflows: WorkflowMeta[] = [
+  { id: 'wf-0', name: 'Upstream Workflow', status: 'completed', baseBranch: 'master' },
+  {
+    id: 'wf-1',
+    name: 'Downstream Workflow',
+    status: 'blocked',
+    baseBranch: 'master',
+    externalDependencies: [{ workflowId: 'wf-0', requiredStatus: 'completed' }],
+  },
+];
+
 describe('Context menu (component)', () => {
   let mock: MockInvoker;
 
@@ -276,6 +287,36 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('More'));
     fireEvent.click(await screen.findByText('Delete Workflow'));
     await waitFor(() => expect(mock.api.deleteWorkflow).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('workflow detach asks for confirmation, detaches once, and shows feedback', async () => {
+    await setup([alpha, beta, merge], stackedWorkflows);
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+
+    const detachButton = await screen.findByTestId('detach-workflow-wf-1-wf-0');
+    fireEvent.click(detachButton);
+
+    await waitFor(() => expect(mock.api.detachWorkflow).toHaveBeenCalledTimes(1));
+    expect(mock.api.detachWorkflow).toHaveBeenCalledWith('wf-1', 'wf-0');
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('Downstream Workflow (wf-1)'));
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('Upstream Workflow (wf-0)'));
+    expect(await screen.findByTestId('workflow-detach-feedback')).toHaveTextContent(
+      'Detached Downstream Workflow (wf-1) from Upstream Workflow (wf-0).',
+    );
+  });
+
+  it('cancelled workflow detach does not call IPC', async () => {
+    vi.mocked(window.confirm).mockReturnValueOnce(false);
+    await setup([alpha, beta, merge], stackedWorkflows);
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+
+    fireEvent.click(await screen.findByTestId('detach-workflow-wf-1-wf-0'));
+
+    await waitFor(() => expect(window.confirm).toHaveBeenCalled());
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('Downstream Workflow (wf-1)'));
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('Upstream Workflow (wf-0)'));
+    expect(mock.api.detachWorkflow).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('workflow-detach-feedback')).not.toBeInTheDocument();
   });
 
   it('workflow context menu copies workflow id', async () => {

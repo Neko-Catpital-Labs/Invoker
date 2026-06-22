@@ -61,6 +61,12 @@ type GraphKeyboardRegion = Extract<KeyboardRegion, 'workflowGraph' | 'taskGraph'
 type ContextMenuCloseOptions = { restoreFocus?: boolean };
 type ContextMenuState = { x: number; y: number; taskId: string; returnFocusRegion?: GraphKeyboardRegion };
 type WorkflowContextMenuState = { x: number; y: number; workflowId: string; returnFocusRegion?: GraphKeyboardRegion };
+type WorkflowDetachFeedback = {
+  workflowId: string;
+  upstreamWorkflowId: string;
+  message: string;
+  kind: 'success' | 'error';
+};
 type SearchResult =
   | { kind: 'workflow'; id: string; title: string; subtitle: string }
   | { kind: 'task'; id: string; workflowId: string | null; title: string; subtitle: string };
@@ -111,6 +117,12 @@ function isEditableKeyboardTarget(target: EventTarget | null): boolean {
 
 function normalizedSearchText(value: string | undefined): string {
   return (value ?? '').toLowerCase();
+}
+
+function workflowIdentity(workflow: WorkflowMeta | undefined, workflowId: string): string {
+  if (!workflow) return workflowId;
+  const name = workflow.name || workflow.id;
+  return name === workflow.id ? workflow.id : `${name} (${workflow.id})`;
 }
 
 interface WorkflowContextMenuProps {
@@ -419,6 +431,7 @@ export function App() {
   const [terminalSessions, setTerminalSessions] = useState<TerminalSessionDescriptor[]>([]);
   const [activeTerminalSessionId, setActiveTerminalSessionId] = useState<string | null>(null);
   const [workflowContextMenu, setWorkflowContextMenu] = useState<WorkflowContextMenuState | null>(null);
+  const [workflowDetachFeedback, setWorkflowDetachFeedback] = useState<WorkflowDetachFeedback | null>(null);
   const [keyboardRegion, setKeyboardRegion] = useState<KeyboardRegion>('workflowGraph');
   const [previousGraphRegion, setPreviousGraphRegion] = useState<KeyboardRegion>('workflowGraph');
   // Typed graph camera state. The graph viewport is user-owned after the
@@ -1350,6 +1363,39 @@ export function App() {
     }
   }, [refreshTaskGraph, selectedWorkflowId]);
 
+  const handleDetachWorkflow = useCallback(async (workflowId: string, upstreamWorkflowId: string) => {
+    setContextMenu(null);
+    setWorkflowContextMenu(null);
+    const downstreamIdentity = workflowIdentity(workflows.get(workflowId), workflowId);
+    const upstreamIdentity = workflowIdentity(workflows.get(upstreamWorkflowId), upstreamWorkflowId);
+    const confirmed = window.confirm(
+      `Detach downstream workflow "${downstreamIdentity}" from upstream workflow "${upstreamIdentity}"?\n\n` +
+      'This removes the active workflow dependency and may return the downstream workflow to pending.',
+    );
+    if (!confirmed) return;
+
+    try {
+      await window.invoker?.detachWorkflow(workflowId, upstreamWorkflowId);
+      setWorkflowSelectionDismissed(false);
+      setSelectedWorkflowId(workflowId);
+      setWorkflowDetachFeedback({
+        workflowId,
+        upstreamWorkflowId,
+        kind: 'success',
+        message: `Detached ${downstreamIdentity} from ${upstreamIdentity}.`,
+      });
+      await refreshTaskGraph();
+    } catch (err) {
+      console.error('Detach Workflow failed:', err);
+      setWorkflowDetachFeedback({
+        workflowId,
+        upstreamWorkflowId,
+        kind: 'error',
+        message: `Failed to detach ${downstreamIdentity} from ${upstreamIdentity}.`,
+      });
+    }
+  }, [refreshTaskGraph, workflows]);
+
   const handleFix = useCallback(async (taskId: string, agentName: string) => {
     setContextMenu(null);
     const task = tasks.get(taskId);
@@ -2031,6 +2077,9 @@ export function App() {
               onReject={openRejectModal}
               onSetMergeBranch={handleSetMergeBranch}
               onSetMergeMode={handleSetMergeMode}
+              onDetachWorkflow={handleDetachWorkflow}
+              workflows={workflows}
+              detachFeedback={workflowDetachFeedback}
               onToggleCollapsed={() => setInspectorCollapsed((prev) => !prev)}
               onToggleAdvanced={() => setAdvancedMetadataExpanded((prev) => !prev)}
             />
