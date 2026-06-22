@@ -158,6 +158,20 @@ mergify stack push
 
 Do not generalize this to unrelated repos.
 
+## Stack repair after review
+
+If review says one published stack slice is still too broad:
+
+1. Re-run `skills/review-compression/SKILL.md`.
+2. If one published slice must split, keep the shared idea and create lettered replacement titles such as `(4a)` and `(4b)`.
+3. Run `mergify stack push`.
+4. Switch to each generated stack branch.
+5. Get the real base branch with `gh pr view --json baseRefName --jq .baseRefName`.
+6. Update each PR with `node scripts/create-pr.mjs --title "..." --base <actual-base-branch> --body-file <file> --update-existing`.
+
+Manual `gh pr edit` is a last-resort escape hatch only when `create-pr` itself is broken. The normal path is `create-pr --update-existing`.
+
+
 ## Validation
 
 - ensure the branch is pushed

@@ -141,14 +141,15 @@ Options:
   --help               Show this help
 
 Stack PR title schema:
-  Stacked PRs must start with a shared idea and one slice index, for example:
+  Stacked PRs must start with a shared idea and one slice index.
+  Replacement slices may add one trailing lowercase letter:
   [Graph Blanking](1) Preserve selected graph while loading
-  [Graph Blanking](2) Follow-up slice
+  [Graph Blanking](3a) Split follow-up slice
 
 Stack flow:
   1. Publish stack branches with \`mergify stack push\`
   2. Switch to the created stack branch if needed
-  3. Run \`node scripts/create-pr.mjs --title "[Graph Blanking](1) <slice title>" --base <branch> --body-file <file> --update-existing\`
+  3. Run \`node scripts/create-pr.mjs --title "[Graph Blanking](3a) <slice title>" --base <branch> --body-file <file> --update-existing\`
 
 PR body schema:
   Required: ## Summary with collapsed Review metadata, ## Non-goals, ## Test Plan, ## Revert Plan
@@ -199,7 +200,7 @@ function parseArgs() {
 }
 
 const TRUNK_BRANCHES = new Set(['main', 'master', 'develop']);
-const STACK_PR_TITLE_PATTERN = /^\[[^\[\]\r\n]{3,80}\]\([1-9]\d*\)(?:\s+\S.*)?$/;
+const STACK_PR_TITLE_PATTERN = /^\[[^\[\]\r\n]{3,80}\]\([1-9]\d*[a-z]?\)(?:\s+\S.*)?$/;
 
 function isStackedPrContext(baseBranch, mergifyState) {
   return mergifyState.managed || !TRUNK_BRANCHES.has(baseBranch);
@@ -212,7 +213,7 @@ function assertValidStackPrTitle(title) {
     [
       'Stack PR titles must start with a shared idea and exactly one slice index.',
       'Use: [Graph Blanking](1) Preserve selected graph while loading',
-      'Use the next slice number for the next PR: [Graph Blanking](2) Follow-up slice',
+      'Use lettered replacements when one published slice must split: [Graph Blanking](3a) Split follow-up slice',
     ].join('\n'),
   );
 }
@@ -236,8 +237,8 @@ async function assertValidPrBody(body, options = {}) {
   );
 }
 
-function printPrBodyWarnings(body) {
-  const warnings = getPrBodyWarnings(body);
+function printPrBodyWarnings(body, changedFiles = []) {
+  const warnings = getPrBodyWarnings(body, { changedFiles });
   if (warnings.length === 0) return;
 
   console.error('PR body validation warnings:');
@@ -664,7 +665,7 @@ async function main() {
   }
 
   await assertValidPrBody(body, { requiresVisualProof: uiImpactingFiles.length > 0, changedFiles });
-  printPrBodyWarnings(body);
+  printPrBodyWarnings(body, changedFiles);
   body = await injectImages(body, args.dryRun);
 
   const currentBranch = getCurrentBranch();
