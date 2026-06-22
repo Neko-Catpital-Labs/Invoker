@@ -12,6 +12,8 @@ export interface McpCliRunner {
   run(args: string[], options?: { cwd?: string }): Promise<{ exitCode: number; stdout: string; stderr: string }>;
 }
 
+export const HANDOFF_PROMPT_DESCRIPTION = 'Plan a requested change, trigger PR skills for PR/stack work, convert it to Invoker YAML, validate it, and submit it live.';
+
 type SubmitSuccess = { ok: true; workflowId: string; stdout: string };
 type SubmitFailure = { ok: false; exitCode: number; stdout: string; stderr: string; error?: string };
 
@@ -180,7 +182,7 @@ export async function runMcpServer(options: { runner?: McpCliRunner; cliPath?: s
   server.registerPrompt(
     'invoker-plan-to-invoker',
     {
-      description: 'Plan a requested change, trigger PR skills for PR/stack work, convert it to Invoker YAML, validate it, and submit it live.',
+      description: HANDOFF_PROMPT_DESCRIPTION,
       argsSchema: { request: z.string() },
     },
     ({ request }) => ({
