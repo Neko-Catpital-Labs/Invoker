@@ -78,7 +78,7 @@ function attemptStatusToActionStatus(status: Attempt['status']): ActionGraphNode
     case 'pending':
       return status;
     case 'claimed':
-      return 'queued';
+      return 'pending';
     case 'needs_input':
       return 'waiting';
     case 'superseded':
