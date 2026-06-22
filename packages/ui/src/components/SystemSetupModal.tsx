@@ -25,11 +25,19 @@ export function SystemSetupModal({
   const bundledSkills = diagnostics?.bundledSkills;
   const cliInstaller = diagnostics?.cliInstaller;
   const canInstallBundledSkills = Boolean(bundledSkills?.available && onInstallBundledSkills);
-  const installActionLabel = bundledSkills?.targets.some((target) => target.installed && !target.upToDate)
-    ? 'Update Skills'
-    : bundledSkills?.targets.some((target) => target.installed)
-      ? 'Reinstall Skills'
-      : 'Install Skills';
+  const helperTargets = bundledSkills
+    ? [...bundledSkills.targets, ...bundledSkills.commandTargets, ...bundledSkills.mcpTargets]
+    : [];
+  const installActionMode = helperTargets.some((target) => target.installed && !target.upToDate)
+    ? 'update'
+    : helperTargets.some((target) => target.installed)
+      ? 'reinstall'
+      : 'install';
+  const installActionLabel = installActionMode === 'update'
+    ? 'Update Helpers'
+    : installActionMode === 'reinstall'
+      ? 'Reinstall Helpers'
+      : 'Install Helpers';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
@@ -53,11 +61,14 @@ export function SystemSetupModal({
           {bundledSkills?.available && (
             <div className="rounded border border-indigo-700/60 bg-indigo-950/30 px-4 py-4 space-y-3">
               <div>
-                <div className="text-sm font-medium text-indigo-100">Bundled Invoker Skills</div>
+                <div className="text-sm font-medium text-indigo-100">Invoker AI helpers</div>
                 <div className="text-sm text-indigo-200/80 mt-1">
-                  Packaged installs can copy first-party Invoker skills into your Codex skill directory using the
-                  `invoker-` prefix so they do not overwrite existing skills.
+                  Install first-party skills, slash commands, and the OMP MCP entry. Then use /invoker-plan-to-invoker in your harness to plan first, generate Invoker YAML, and submit it to the running Invoker app.
                 </div>
+              </div>
+
+              <div className="rounded bg-gray-950/60 border border-gray-700 px-3 py-2 text-sm text-gray-100 font-mono">
+                <code>/invoker-plan-to-invoker &quot;help me plan &lt;change&gt;&quot;</code>
               </div>
 
               <div className="text-sm text-gray-300">
@@ -67,32 +78,94 @@ export function SystemSetupModal({
               </div>
 
               {bundledSkills.targets.length > 0 && (
-                <div className="rounded border border-gray-700 overflow-hidden">
-                  <table className="w-full text-sm">
-                    <thead className="bg-gray-900 text-gray-300">
-                      <tr>
-                        <th className="text-left px-4 py-2 font-medium">Target</th>
-                        <th className="text-left px-4 py-2 font-medium">Path</th>
-                        <th className="text-left px-4 py-2 font-medium">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {bundledSkills.targets.map((target) => (
-                        <tr key={target.id} className="border-t border-gray-700">
-                          <td className="px-4 py-3 text-gray-100">{target.name}</td>
-                          <td className="px-4 py-3 text-gray-400 font-mono text-xs break-all">{target.path}</td>
-                          <td className="px-4 py-3">
-                            <span className={target.upToDate ? 'text-green-400' : target.installed ? 'text-yellow-300' : 'text-amber-300'}>
-                              {target.upToDate ? 'Installed and up to date' : target.installed ? 'Installed, update available' : 'Not installed'}
-                            </span>
-                          </td>
+                <div className="space-y-2">
+                  <div className="text-xs uppercase tracking-wide text-gray-400">Skills</div>
+                  <div className="rounded border border-gray-700 overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-900 text-gray-300">
+                        <tr>
+                          <th className="text-left px-4 py-2 font-medium">Target</th>
+                          <th className="text-left px-4 py-2 font-medium">Path</th>
+                          <th className="text-left px-4 py-2 font-medium">Status</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {bundledSkills.targets.map((target) => (
+                          <tr key={target.id} className="border-t border-gray-700">
+                            <td className="px-4 py-3 text-gray-100">{target.name}</td>
+                            <td className="px-4 py-3 text-gray-400 font-mono text-xs break-all">{target.path}</td>
+                            <td className="px-4 py-3">
+                              <span className={target.upToDate ? 'text-green-400' : target.installed ? 'text-yellow-300' : 'text-amber-300'}>
+                                {target.upToDate ? 'Installed and up to date' : target.installed ? 'Installed, update available' : 'Not installed'}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               )}
 
+              {bundledSkills.commandTargets.length > 0 && (
+                <div className="space-y-2">
+                  <div className="text-xs uppercase tracking-wide text-gray-400">Commands</div>
+                  <div className="rounded border border-gray-700 overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-900 text-gray-300">
+                        <tr>
+                          <th className="text-left px-4 py-2 font-medium">Target</th>
+                          <th className="text-left px-4 py-2 font-medium">Path</th>
+                          <th className="text-left px-4 py-2 font-medium">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {bundledSkills.commandTargets.map((target) => (
+                          <tr key={target.id} className="border-t border-gray-700">
+                            <td className="px-4 py-3 text-gray-100">{target.name}</td>
+                            <td className="px-4 py-3 text-gray-400 font-mono text-xs break-all">{target.path}</td>
+                            <td className="px-4 py-3">
+                              <span className={target.upToDate ? 'text-green-400' : target.installed ? 'text-yellow-300' : 'text-amber-300'}>
+                                {target.upToDate ? 'Installed and up to date' : target.installed ? 'Installed, update available' : 'Not installed'}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {bundledSkills.mcpTargets.length > 0 && (
+                <div className="space-y-2">
+                  <div className="text-xs uppercase tracking-wide text-gray-400">MCP</div>
+                  <div className="rounded border border-gray-700 overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-900 text-gray-300">
+                        <tr>
+                          <th className="text-left px-4 py-2 font-medium">Target</th>
+                          <th className="text-left px-4 py-2 font-medium">Path</th>
+                          <th className="text-left px-4 py-2 font-medium">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {bundledSkills.mcpTargets.map((target) => (
+                          <tr key={target.id} className="border-t border-gray-700">
+                            <td className="px-4 py-3 text-gray-100">{target.name}</td>
+                            <td className="px-4 py-3 text-gray-400 font-mono text-xs break-all">{target.path}</td>
+                            <td className="px-4 py-3">
+                              <span className={target.upToDate ? 'text-green-400' : target.installed ? 'text-yellow-300' : 'text-amber-300'}>
+                                {target.upToDate ? 'Installed and up to date' : target.installed ? 'Installed, update available' : 'Not installed'}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
               {bundledSkills.lastInstallError && (
                 <div className="rounded border border-red-700/50 bg-red-950/30 px-3 py-2 text-sm text-red-200">
                   Last install error: {bundledSkills.lastInstallError}
@@ -108,19 +181,19 @@ export function SystemSetupModal({
               {canInstallBundledSkills && (
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={() => onInstallBundledSkills?.(bundledSkills.targets.some((target) => target.installed) ? 'update' : 'install')}
+                    onClick={() => onInstallBundledSkills?.(installActionMode)}
                     disabled={installPending}
                     className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-900 disabled:text-indigo-200 text-white rounded text-sm font-medium transition-colors"
                   >
                     {installPending ? 'Installing…' : installActionLabel}
                   </button>
-                  {bundledSkills.targets.some((target) => target.installed) && (
+                  {helperTargets.some((target) => target.installed) && (
                     <button
                       onClick={() => onInstallBundledSkills?.('reinstall')}
                       disabled={installPending}
                       className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 text-white rounded text-sm font-medium transition-colors"
                     >
-                      Reinstall Skills
+                      Reinstall Helpers
                     </button>
                   )}
                 </div>
