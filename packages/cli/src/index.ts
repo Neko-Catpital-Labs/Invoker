@@ -71,6 +71,7 @@ type DoctorCheck = {
 type CliRuntimeConfig = {
   defaultBranch?: string;
   maxConcurrency?: number;
+  provisionCommand?: string;
   docker?: {
     imageName?: string;
     secretsFile?: string;
@@ -443,6 +444,7 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
       worktreeBaseDir: join(dbDir, 'worktrees'),
       cacheDir: join(dbDir, 'repos'),
       maxWorktrees: maxConcurrency,
+      provisionCommand: runtimeConfig.provisionCommand,
       agentRegistry: executionAgentRegistry,
     }));
     const orchestrator = new Orchestrator({
