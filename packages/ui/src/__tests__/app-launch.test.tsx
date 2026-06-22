@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { vi } from 'vitest';
 import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
 
@@ -28,6 +28,7 @@ describe('App launch (component)', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     mock.cleanup();
   });
 
@@ -58,5 +59,128 @@ describe('App launch (component)', () => {
     render(<App />);
     fireEvent.click(screen.getByTestId('rail-settings'));
     expect(await screen.findByText('System Setup')).toBeInTheDocument();
+  });
+
+  it('delays the automatic bundled helper setup prompt', async () => {
+    vi.useFakeTimers();
+    mock.api.getSystemDiagnostics = vi.fn(async () => ({
+      platform: 'darwin',
+      arch: 'arm64',
+      appVersion: '0.0.5',
+      isPackaged: true,
+      tools: [
+        { id: 'codex', name: 'Codex', required: false, installed: true, installHint: 'Installed' },
+      ],
+      bundledSkills: {
+        available: true,
+        promptRecommended: true,
+        managedPrefix: 'invoker-',
+        bundledSkillNames: ['plan-to-invoker'],
+        targets: [],
+        commandTargets: [
+          { id: 'omp', name: 'OMP', path: '/tmp/.omp/agent/commands', available: true, installed: false, upToDate: false, installedCommandNames: [] },
+        ],
+        mcpTargets: [
+          { id: 'omp', name: 'OMP', path: '/tmp/.omp/agent/mcp.json', available: true, installed: false, upToDate: false, serverName: 'invoker' },
+        ],
+      },
+    }));
+
+    render(<App />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText(/Invoker AI helpers are ready/)).toBeInTheDocument();
+    expect(screen.queryByText('System Setup')).not.toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1199);
+    });
+    expect(screen.queryByText('System Setup')).not.toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(screen.getByText('System Setup')).toBeInTheDocument();
+  });
+
+  it('cancels the automatic bundled helper setup prompt when dismissed', async () => {
+    vi.useFakeTimers();
+    mock.api.getSystemDiagnostics = vi.fn(async () => ({
+      platform: 'darwin',
+      arch: 'arm64',
+      appVersion: '0.0.5',
+      isPackaged: true,
+      tools: [
+        { id: 'codex', name: 'Codex', required: false, installed: true, installHint: 'Installed' },
+      ],
+      bundledSkills: {
+        available: true,
+        promptRecommended: true,
+        managedPrefix: 'invoker-',
+        bundledSkillNames: ['plan-to-invoker'],
+        targets: [],
+        commandTargets: [
+          { id: 'omp', name: 'OMP', path: '/tmp/.omp/agent/commands', available: true, installed: false, upToDate: false, installedCommandNames: [] },
+        ],
+        mcpTargets: [
+          { id: 'omp', name: 'OMP', path: '/tmp/.omp/agent/mcp.json', available: true, installed: false, upToDate: false, serverName: 'invoker' },
+        ],
+      },
+    }));
+
+    render(<App />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1200);
+    });
+
+    expect(screen.queryByText('System Setup')).not.toBeInTheDocument();
+  });
+
+  it('cancels the automatic bundled helper setup prompt after manual setup close', async () => {
+    vi.useFakeTimers();
+    mock.api.getSystemDiagnostics = vi.fn(async () => ({
+      platform: 'darwin',
+      arch: 'arm64',
+      appVersion: '0.0.5',
+      isPackaged: true,
+      tools: [
+        { id: 'codex', name: 'Codex', required: false, installed: true, installHint: 'Installed' },
+      ],
+      bundledSkills: {
+        available: true,
+        promptRecommended: true,
+        managedPrefix: 'invoker-',
+        bundledSkillNames: ['plan-to-invoker'],
+        targets: [],
+        commandTargets: [
+          { id: 'omp', name: 'OMP', path: '/tmp/.omp/agent/commands', available: true, installed: false, upToDate: false, installedCommandNames: [] },
+        ],
+        mcpTargets: [
+          { id: 'omp', name: 'OMP', path: '/tmp/.omp/agent/mcp.json', available: true, installed: false, upToDate: false, serverName: 'invoker' },
+        ],
+      },
+    }));
+
+    render(<App />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Setup' }));
+    expect(screen.getByText('System Setup')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1200);
+    });
+
+    expect(screen.queryByText('System Setup')).not.toBeInTheDocument();
   });
 });
