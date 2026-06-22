@@ -72,6 +72,7 @@ export function createTaskGraphEventPublisher(
       publishEvent({
         type: 'delta',
         delta: options.stampDelta(delta),
+        workflowRollups: [],
       });
     },
     publishSnapshot(reason: string, tasks: TaskState[], workflows: WorkflowMeta[]): void {
