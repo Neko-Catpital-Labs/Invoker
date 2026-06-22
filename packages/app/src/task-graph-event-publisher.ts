@@ -72,12 +72,7 @@ export function createTaskGraphEventPublisher(
       publishEvent({
         type: 'delta',
         delta: options.stampDelta(delta),
-<<<<<<< HEAD
-        workflowRollups: [],
-||||||| parent of d4890c1ac (Publish live workflow rollups from the owner)
-=======
         workflowRollups: [...workflowRollups],
->>>>>>> d4890c1ac (Publish live workflow rollups from the owner)
       });
     },
     publishSnapshot(reason: string, tasks: TaskState[], workflows: WorkflowMeta[]): void {
