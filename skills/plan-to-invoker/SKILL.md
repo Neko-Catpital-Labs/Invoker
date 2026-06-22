@@ -2,10 +2,11 @@
 name: plan-to-invoker
 description: >
   Convert a plan into an Invoker YAML plan file. Trigger: "convert to invoker",
-  "submit to invoker", "create invoker plan", "/plan-to-invoker", or turning
-  a plan file into Invoker tasks. For benchmark/direct-output prompts with
-  "Required output path", write a complete YAML document directly to that
-  literal path; it must start with top-level name, onFinish, mergeMode,
+  "submit to invoker", "create invoker plan", "invoker-plan-to-invoker",
+  "/invoker-plan-to-invoker", "/plan-to-invoker", or turning a plan file into
+  Invoker tasks. For benchmark/direct-output prompts with "Required output path",
+  write a complete YAML document directly to that literal path; it must start
+  with top-level name, onFinish, mergeMode,
   repoUrl, and tasks, never version or metadata wrappers, and must not scan,
   validate, submit, or discover env vars.
 ---
@@ -52,6 +53,16 @@ tasks:
 ```
 
 For implementation benchmark plans, switch `onFinish` and `mergeMode` only when the prompt clearly requires a PR/submission workflow, and include task metadata from the prompt itself rather than discovering local references.
+
+## Harness handoff mode
+
+Use this mode when invoked by the installed command or MCP prompt.
+
+- First produce a Markdown planning artifact at `plans/invoker-handoff.md`.
+- Convert the approved Markdown plan to `plans/invoker-handoff.yaml`.
+- Prefer the MCP tools `invoker_validate_plan` and `invoker_submit_plan` when available.
+- In an Invoker source checkout, still run `bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` before submission.
+- Outside an Invoker source checkout, `invoker_validate_plan` is the deterministic validation gate.
 
 ## Intended flow (do not skip steps)
 
