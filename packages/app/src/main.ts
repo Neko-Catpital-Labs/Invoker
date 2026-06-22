@@ -174,10 +174,8 @@ import { buildAppMenuTemplate } from './app-menu.js';
 import { createRequire } from 'node:module';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
 import { applyDelta, recoverQuarantinedTask, TaskSnapshotCache } from './delta-merge.js';
-import {
-  CoalescedWorkflowMetadataPublisher,
-  WorkflowMetadataInvalidator,
-} from './workflow-metadata-invalidation.js';
+import { CoalescedWorkflowMetadataPublisher } from './workflow-metadata-invalidation.js';
+import { WorkflowRollupProjection } from './workflow-rollup-projection.js';
 import { shouldSkipAutoFixForError } from './auto-fix-gating.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
@@ -1831,6 +1829,7 @@ function createEmbeddedTerminalBackendFromConfig(
   let activityPollInterval: ReturnType<typeof setInterval> | null = null;
   let uiPerfLogInterval: ReturnType<typeof setInterval> | null = null;
   const lastKnownTaskStates = new TaskSnapshotCache();
+  const workflowRollupProjection = new WorkflowRollupProjection();
   const deferredWorkflowLaunches = new Map<string, {
     timer: ReturnType<typeof setTimeout>;
     taskIds: string[];
@@ -1848,7 +1847,6 @@ function createEmbeddedTerminalBackendFromConfig(
   };
   const pendingOutputBuffers = new Map<string, string[]>();
   const outputFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  let workflowMetadataInvalidator: WorkflowMetadataInvalidator | null = null;
   let workflowMetadataPublisher: CoalescedWorkflowMetadataPublisher | null = null;
   let lastKnownWorkflowCount = 0;
   let lastActivityLogId = 0;
@@ -1990,9 +1988,6 @@ function createEmbeddedTerminalBackendFromConfig(
   const taskDeltaStream = createTaskDeltaStreamSequence();
   const getTaskDeltaStreamSequence = (): number => taskDeltaStream.current();
 
-  const markWorkflowMetadataFromTaskDelta = (delta: TaskDelta): void => {
-    workflowMetadataInvalidator?.markFromTaskDelta(delta);
-  };
 
   const taskGraphEventPublisher = createTaskGraphEventPublisher({
     getMainWindow: () => mainWindow,
@@ -2008,9 +2003,9 @@ function createEmbeddedTerminalBackendFromConfig(
     },
   });
 
-  const sendTaskDeltaToRenderer = (delta: TaskDelta): void => {
-    markWorkflowMetadataFromTaskDelta(delta);
-    taskGraphEventPublisher.publishDelta(delta);
+  const publishTaskDeltaToRenderer = (delta: TaskDelta): void => {
+    const workflowRollups = workflowRollupProjection.applyDelta(delta);
+    taskGraphEventPublisher.publishDelta(delta, workflowRollups);
   };
 
   const applyTaskDeltaToOwnerCacheOrRecover = (delta: TaskDelta): TaskDelta[] => {
@@ -2689,8 +2684,10 @@ function createEmbeddedTerminalBackendFromConfig(
 
   function seedUiSnapshotCache(): void {
     lastKnownWorkflowCount = persistence.listWorkflows().length;
+    const tasks = orchestrator.getAllTasks();
     lastKnownTaskStates.clear();
-    for (const task of orchestrator.getAllTasks()) {
+    workflowRollupProjection.replaceAll(tasks);
+    for (const task of tasks) {
       lastKnownTaskStates.set(task.id, JSON.stringify(task));
     }
   }
@@ -2716,12 +2713,6 @@ function createEmbeddedTerminalBackendFromConfig(
       }
       mainWindow.webContents.send('invoker:workflows-changed', workflows);
     },
-  });
-  workflowMetadataInvalidator = new WorkflowMetadataInvalidator({
-    getCachedTaskSnapshot: (taskId) => lastKnownTaskStates.get(taskId),
-    loadTask: loadTaskByIdFromPersistence,
-    listWorkflows: () => [],
-    publish: () => requestWorkflowMetadataPublish('task-delta'),
   });
 
   function listWorkflowsByStartupRecency() {
@@ -2797,18 +2788,19 @@ function createEmbeddedTerminalBackendFromConfig(
     const tasks = orchestrator.getAllTasks();
     const previousTaskIds = new Set(lastKnownTaskStates.keys());
     lastKnownTaskStates.clear();
+    workflowRollupProjection.replaceAll(tasks);
     for (const task of tasks) {
       const snapshot = JSON.stringify(task);
       previousTaskIds.delete(task.id);
       lastKnownTaskStates.set(task.id, snapshot);
       if (mainWindow && !mainWindow.isDestroyed()) {
-        sendTaskDeltaToRenderer({ type: 'created', task });
+        publishTaskDeltaToRenderer({ type: 'created', task });
       }
     }
     lastKnownWorkflowCount = workflows.length;
     if (mainWindow && !mainWindow.isDestroyed()) {
       for (const removedTaskId of previousTaskIds) {
-        sendTaskDeltaToRenderer({ type: 'removed', taskId: removedTaskId, previousTaskStateVersion: 0 });
+        publishTaskDeltaToRenderer({ type: 'removed', taskId: removedTaskId, previousTaskStateVersion: 0 });
       }
       requestWorkflowMetadataPublish('orchestrator-snapshot');
     }
@@ -2965,7 +2957,7 @@ function createEmbeddedTerminalBackendFromConfig(
                   }
                   lastKnownTaskStates.set(task.id, snapshot);
                   uiPerfStats.dbPollCreated += 1;
-                  sendTaskDeltaToRenderer({ type: 'created', task });
+                  publishTaskDeltaToRenderer({ type: 'created', task });
                 } else if (prev !== snapshot) {
                   if (traceDbPollPerTask) {
                     const msg = `Task updated: ${task.id} (${task.status})`;
@@ -2974,7 +2966,7 @@ function createEmbeddedTerminalBackendFromConfig(
                   }
                   lastKnownTaskStates.set(task.id, snapshot);
                   uiPerfStats.dbPollUpdatedAsCreated += 1;
-                  sendTaskDeltaToRenderer({ type: 'created', task });
+                  publishTaskDeltaToRenderer({ type: 'created', task });
                 }
               }
             }
@@ -3273,7 +3265,6 @@ function createEmbeddedTerminalBackendFromConfig(
       if (traceUiDeltaFlow) {
         logger.debug(`delta→ui: ${JSON.stringify(delta)}`, { module: 'ui' });
       }
-      markWorkflowMetadataFromTaskDelta(d);
 
       const deltaTaskId = d.type === 'updated' || d.type === 'removed'
         ? d.taskId
@@ -3292,7 +3283,7 @@ function createEmbeddedTerminalBackendFromConfig(
       }
 
       for (const rendererDelta of applyTaskDeltaToOwnerCacheOrRecover(d)) {
-        taskGraphEventPublisher.publishDelta(rendererDelta);
+        publishTaskDeltaToRenderer(rendererDelta);
       }
     });
 
@@ -3357,9 +3348,6 @@ function createEmbeddedTerminalBackendFromConfig(
           } satisfies TaskDelta);
         }
         orchestrator.syncAllFromDb();
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          requestWorkflowMetadataPublish('gap-detect');
-        }
       };
       ipcMain.handle(
         'invoker:inject-task-states',
@@ -3398,10 +3386,11 @@ function createEmbeddedTerminalBackendFromConfig(
 
       const allStarted = orchestrator.startExecution();
       const tasks = orchestrator.getAllTasks();
+      workflowRollupProjection.replaceAll(tasks);
       for (const task of tasks) {
         lastKnownTaskStates.set(task.id, JSON.stringify(task));
         if (mainWindow && !mainWindow.isDestroyed()) {
-          sendTaskDeltaToRenderer({ type: 'created', task });
+          publishTaskDeltaToRenderer({ type: 'created', task });
         }
       }
       logger.info(`resume-workflow: ${tasks.length} tasks loaded across ${workflows.length} workflows, ${allStarted.length} started`, { module: 'ipc' });
@@ -3468,6 +3457,7 @@ function createEmbeddedTerminalBackendFromConfig(
       rebuildTaskRunner();
       taskHandles.clear();
       lastKnownTaskStates.clear();
+      workflowRollupProjection.clear();
       lastKnownWorkflowCount = 0;
       requestWorkflowMetadataPublish('clear');
     });
@@ -3515,6 +3505,7 @@ function createEmbeddedTerminalBackendFromConfig(
       await sharedDeleteAllWorkflows({ logger, orchestrator, taskExecutor: taskExecutor ?? undefined });
       taskHandles.clear();
       lastKnownTaskStates.clear();
+      workflowRollupProjection.clear();
       lastKnownWorkflowCount = 0;
       requestWorkflowMetadataPublish('delete-all-workflows');
     });
@@ -3525,6 +3516,7 @@ function createEmbeddedTerminalBackendFromConfig(
       await sharedDeleteAllWorkflowsBulk({ logger, orchestrator, taskExecutor: taskExecutor ?? undefined });
       taskHandles.clear();
       lastKnownTaskStates.clear();
+      workflowRollupProjection.clear();
       lastKnownWorkflowCount = 0;
       requestWorkflowMetadataPublish('delete-all-workflows-bulk');
     });
