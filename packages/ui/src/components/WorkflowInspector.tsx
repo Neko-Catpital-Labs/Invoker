@@ -24,6 +24,9 @@ interface WorkflowInspectorProps {
   onReject?: (task: TaskState) => void;
   onSetMergeBranch?: (workflowId: string, baseBranch: string) => Promise<void>;
   onSetMergeMode?: (workflowId: string, mergeMode: MergeMode) => Promise<void>;
+  onDetachWorkflow?: (workflowId: string, upstreamWorkflowId: string) => Promise<void>;
+  workflows?: Map<string, WorkflowMeta>;
+  detachFeedback?: { workflowId: string; upstreamWorkflowId: string; message: string; kind: 'success' | 'error' } | null;
   onToggleCollapsed: () => void;
   onToggleAdvanced: () => void;
 }
@@ -72,6 +75,9 @@ export function WorkflowInspector({
   onReject,
   onSetMergeBranch,
   onSetMergeMode,
+  onDetachWorkflow,
+  workflows,
+  detachFeedback,
   onToggleCollapsed,
   onToggleAdvanced,
 }: WorkflowInspectorProps): JSX.Element {
@@ -135,6 +141,9 @@ export function WorkflowInspector({
     && onReject,
   );
   const statusHeading = task ? 'Task Status' : 'Status';
+  const activeExternalDependencies = workflow?.externalDependencies ?? [];
+  const showExternalDependencies = Boolean(workflow && !task && activeExternalDependencies.length > 0);
+  const visibleDetachFeedback = detachFeedback?.workflowId === workflow?.id ? detachFeedback : null;
 
   const savePrompt = () => {
     if (task && onEditPrompt && editPromptValue !== (task.config.prompt ?? '')) {
@@ -422,6 +431,62 @@ export function WorkflowInspector({
             >
               {reviewUrl}
             </a>
+          </section>
+        )}
+
+        {(showExternalDependencies || visibleDetachFeedback) && (
+          <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
+            <div className="text-[11px] uppercase tracking-wide text-gray-400">Upstream dependencies</div>
+            {visibleDetachFeedback && (
+              <div
+                role="status"
+                data-testid="workflow-detach-feedback"
+                className={`mt-2 rounded border px-2 py-1.5 text-xs ${
+                  visibleDetachFeedback.kind === 'success'
+                    ? 'border-green-700 bg-green-900/30 text-green-200'
+                    : 'border-red-700 bg-red-900/30 text-red-200'
+                }`}
+              >
+                {visibleDetachFeedback.message}
+              </div>
+            )}
+            {showExternalDependencies && (
+              <div className="mt-2 space-y-2">
+                {activeExternalDependencies.map((dependency) => {
+                  const upstream = workflows?.get(dependency.workflowId);
+                  const upstreamLabel = upstream
+                    ? `${upstream.name || upstream.id} (${upstream.id})`
+                    : dependency.workflowId;
+                  return (
+                    <div
+                      key={`${dependency.workflowId}:${dependency.taskId ?? ''}`}
+                      className="rounded border border-gray-700 bg-gray-900/60 p-2"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="truncate text-xs text-gray-100">{upstreamLabel}</div>
+                          <div className="mt-0.5 text-[11px] text-gray-400">
+                            Requires {dependency.gatePolicy ?? dependency.requiredStatus}
+                          </div>
+                        </div>
+                        {onDetachWorkflow && (
+                          <button
+                            type="button"
+                            data-testid={`detach-workflow-${workflow.id}-${dependency.workflowId}`}
+                            data-sidebar-nav-item
+                            data-sidebar-nav-order="35"
+                            onClick={() => void onDetachWorkflow(workflow.id, dependency.workflowId)}
+                            className="shrink-0 rounded border border-red-700 px-2 py-1 text-[11px] font-medium text-red-200 hover:bg-red-900/40"
+                          >
+                            Detach
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </section>
         )}
 
