@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { TaskState, WorkflowMeta } from '../types.js';
+import type { WorkflowMutationStatusEntry } from '@invoker/contracts';
 import { getEffectiveVisualStatus, getStatusColor } from '../lib/colors.js';
 import { workflowStatusVisual } from '../lib/workflow-status.js';
 
@@ -9,6 +10,7 @@ interface WorkflowInspectorProps {
   workflow: WorkflowMeta | null;
   task: TaskState | null;
   workflowTasks?: Map<string, TaskState>;
+  workflowMutations?: WorkflowMutationStatusEntry[];
   remoteTargets?: string[];
   executionPools?: string[];
   executionAgents?: string[];
@@ -60,6 +62,7 @@ export function WorkflowInspector({
   workflow,
   task,
   workflowTasks,
+  workflowMutations,
   executionPools,
   executionAgents,
   collapsed,
@@ -249,6 +252,39 @@ export function WorkflowInspector({
             </div>
           )}
         </section>
+        {workflow && !task && workflowMutations && workflowMutations.length > 0 && (
+          <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
+            <h3 className="text-[11px] uppercase tracking-wide text-gray-400">Action history</h3>
+            <div className="mt-2 space-y-2">
+              {workflowMutations.slice(0, 5).map((mutation) => (
+                <div
+                  key={mutation.intentId}
+                  data-testid={`workflow-mutation-row-${mutation.intentId}`}
+                  className="rounded border border-gray-700 bg-gray-900/60 p-2"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 text-xs text-gray-100">{mutation.label}</div>
+                    <div
+                      data-testid={`workflow-mutation-status-${mutation.intentId}`}
+                      className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-gray-300"
+                    >
+                      {mutation.status.toUpperCase()}
+                    </div>
+                  </div>
+                  {mutation.status === 'failed' && mutation.error && (
+                    <div className="mt-1 text-xs text-red-300 break-words">{mutation.error}</div>
+                  )}
+                  {mutation.status === 'queued' && (
+                    <div className="mt-1 text-[11px] text-amber-200">Accepted by backend; waiting for command runner.</div>
+                  )}
+                  {mutation.status === 'running' && (
+                    <div className="mt-1 text-[11px] text-blue-200">Command runner is processing this action.</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
         {task && !task.config.isMergeNode && onEditPool && (
           <section className="rounded border border-gray-700 bg-gray-800/70 p-3">

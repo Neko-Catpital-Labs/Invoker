@@ -61,6 +61,7 @@ describe('Context menu (component)', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
     mock.cleanup();
   });
 
@@ -259,6 +260,90 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Rebase and Recreate'));
     await waitFor(() => expect(mock.api.rebaseRecreate).toHaveBeenCalledWith('wf-1'));
     expectOnlyWorkflowApiCalled('rebaseRecreate');
+  });
+
+  it('workflow context menu shows backend accepted queued mutation', async () => {
+    await setup();
+    vi.mocked(mock.api.rebaseRecreate).mockResolvedValueOnce({
+      intentId: 77,
+      workflowId: 'wf-1',
+      channel: 'invoker:rebase-recreate',
+      label: 'Rebase and Recreate',
+      status: 'queued',
+      accepted: true,
+      queued: true,
+      ok: true,
+    });
+
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    fireEvent.click(await screen.findByText('More'));
+    fireEvent.click(await screen.findByText('Rebase and Recreate'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-wf-1-mutation')).toHaveTextContent('Queued: Rebase and Recreate');
+    });
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    expect(await screen.findByTestId('workflow-mutation-row-77')).toHaveTextContent('Rebase and Recreate');
+    expect(screen.getByTestId('workflow-mutation-status-77')).toHaveTextContent('QUEUED');
+  });
+
+  it('workflow mutation status poll updates queued to running and failed', async () => {
+    await setup();
+    vi.mocked(mock.api.rebaseRecreate).mockResolvedValueOnce({
+      intentId: 77,
+      workflowId: 'wf-1',
+      channel: 'invoker:rebase-recreate',
+      label: 'Rebase and Recreate',
+      status: 'queued',
+      accepted: true,
+      queued: true,
+      ok: true,
+    });
+
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    fireEvent.click(await screen.findByText('More'));
+    fireEvent.click(await screen.findByText('Rebase and Recreate'));
+    await screen.findByTestId('workflow-mutation-row-77');
+
+    mock.setWorkflowMutationStatuses([{
+      intentId: 77,
+      workflowId: 'wf-1',
+      channel: 'invoker:rebase-recreate',
+      label: 'Rebase and Recreate',
+      status: 'running',
+      priority: 'high',
+      createdAt: '2026-06-22T00:00:00.000Z',
+      startedAt: '2026-06-22T00:00:01.000Z',
+      args: ['wf-1'],
+    }]);
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 2100));
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-wf-1-mutation')).toHaveTextContent('Running: Rebase and Recreate');
+    });
+
+    mock.setWorkflowMutationStatuses([{
+      intentId: 77,
+      workflowId: 'wf-1',
+      channel: 'invoker:rebase-recreate',
+      label: 'Rebase and Recreate',
+      status: 'failed',
+      priority: 'high',
+      error: 'boom',
+      createdAt: '2026-06-22T00:00:00.000Z',
+      startedAt: '2026-06-22T00:00:01.000Z',
+      completedAt: '2026-06-22T00:00:02.000Z',
+      args: ['wf-1'],
+    }]);
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 2100));
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId('workflow-node-wf-1-mutation')).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId('workflow-mutation-status-77')).toHaveTextContent('FAILED');
+    expect(screen.getByTestId('workflow-mutation-row-77')).toHaveTextContent('boom');
   });
 
   it('workflow context menu cancels workflow', async () => {

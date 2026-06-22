@@ -1,5 +1,6 @@
 import type { KeyboardEvent, MouseEvent } from 'react';
 import type { WorkflowMeta, WorkflowStatus } from '../types.js';
+import type { WorkflowMutationStatusEntry } from '@invoker/contracts';
 import { isWorkflowStatusActive, workflowStatusVisual } from '../lib/workflow-status.js';
 
 interface WorkflowNodeProps {
@@ -8,6 +9,7 @@ interface WorkflowNodeProps {
   dimmed: boolean;
   onClick: () => void;
   onContextMenu: (event: MouseEvent<HTMLDivElement>) => void;
+  openMutation?: WorkflowMutationStatusEntry;
 }
 
 function statusLabel(status: WorkflowStatus): string {
@@ -24,12 +26,13 @@ export function WorkflowNode({
   dimmed,
   onClick,
   onContextMenu,
+  openMutation,
 }: WorkflowNodeProps): JSX.Element {
   const visual = workflowStatusVisual(workflow.status);
   const detachedDependencyCount = workflow.detachedExternalDependencies?.length ?? 0;
   const runningCount = workflow.rollup?.countsByStatus.running ?? 0;
   const showRunningTaskLine = workflow.status !== 'running' && runningCount > 0;
-
+  const showOpenMutation = openMutation?.status === 'queued' || openMutation?.status === 'running';
   return (
     <div
       data-testid={`workflow-node-${workflow.id}`}
@@ -70,6 +73,22 @@ export function WorkflowNode({
       </div>
       <div className="mt-1 text-[11px] text-gray-400 truncate">{workflow.id}</div>
       <div className={`mt-2 text-[10px] uppercase tracking-wide ${visual.textClass}`}>{statusLabel(workflow.status)}</div>
+      {showOpenMutation && (
+        <div
+          data-testid={`workflow-node-${workflow.id}-mutation`}
+          className={[
+            'mt-2 inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium',
+            openMutation.status === 'running'
+              ? 'border-blue-400/50 bg-blue-950/30 text-blue-200'
+              : 'border-amber-400/50 bg-amber-950/30 text-amber-200',
+          ].join(' ')}
+        >
+          {openMutation.status === 'running' && <span className="h-1.5 w-1.5 rounded-full bg-blue-300 animate-pulse" />}
+          <span className="truncate">
+            {openMutation.status === 'running' ? 'Running' : 'Queued'}: {openMutation.label}
+          </span>
+        </div>
+      )}
       {showRunningTaskLine && (
         <div
           data-testid={`workflow-node-${workflow.id}-running-tasks`}
