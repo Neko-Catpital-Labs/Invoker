@@ -15,6 +15,7 @@ import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowM
 import type { ActionGraphNode, TerminalSessionDescriptor } from '@invoker/contracts';
 import { useTasks } from './hooks/useTasks.js';
 import { useQueueStatus } from './hooks/useQueueStatus.js';
+import { useActionGraphSnapshot } from './hooks/useActionGraphSnapshot.js';
 import { useInvoker } from './hooks/useInvoker.js';
 import { TaskDAG } from './components/TaskDAG.js';
 import { HistoryView } from './components/HistoryView.js';
@@ -29,6 +30,7 @@ import { SystemSetupModal } from './components/SystemSetupModal.js';
 import { WorkflowGraph } from './components/WorkflowGraph.js';
 import { FloatingGraphPanel } from './components/FloatingGraphPanel.js';
 import { WorkflowInspector } from './components/WorkflowInspector.js';
+import { groupWorkflowCoreActivity } from './lib/workflow-core-activity.js';
 import { ActionGraphView } from './components/ActionGraphView.js';
 import { WorkflowStatusChips } from './components/WorkflowStatusChips.js';
 import { TerminalDrawer, type TerminalDrawerState } from './components/TerminalDrawer.js';
@@ -381,6 +383,21 @@ export function App() {
   const { tasks, workflows, clearTasks, refreshTaskGraph } = useTasks({
     onTaskGraphSnapshotApplied: handleTaskGraphSnapshotApplied,
   });
+  const {
+    graph: actionGraph,
+    error: actionGraphError,
+    refreshActionGraph,
+  } = useActionGraphSnapshot();
+  const trackAcceptedMutation = useCallback((result: unknown) => {
+    if (result && typeof result === 'object' && (result as { accepted?: unknown }).accepted === true) {
+      void refreshActionGraph();
+      void refreshTaskGraph();
+    }
+  }, [refreshActionGraph, refreshTaskGraph]);
+  const coreActivityByWorkflow = useMemo(
+    () => groupWorkflowCoreActivity(actionGraph?.nodes ?? []),
+    [actionGraph],
+  );
   const invoker = useInvoker();
   const queueStatus = useQueueStatus();
   const runningTaskIds = useMemo(
@@ -398,9 +415,12 @@ export function App() {
   const [hasLoadedPlan, setHasLoadedPlan] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
   const [planName, setPlanName] = useState<string | null>(null);
-  const [onFinish, setOnFinish] = useState<'none' | 'merge' | 'pull_request'>('merge');
+  const [selectedActionNodeId, setSelectedActionNodeId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'dag' | 'history' | 'timeline' | 'queue' | 'actionGraph'>('dag');
-  const [selectedActionNode, setSelectedActionNode] = useState<ActionGraphNode | null>(null);
+  const selectedActionNode = useMemo(
+    () => actionGraph?.nodes.find((node) => node.id === selectedActionNodeId) ?? null,
+    [actionGraph, selectedActionNodeId],
+  );
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [remoteTargets, setRemoteTargets] = useState<string[]>([]);
   const [executionPools, setExecutionPools] = useState<string[]>([]);
@@ -1222,11 +1242,12 @@ export function App() {
     if (!invoker) return;
     setContextMenu(null);
     try {
-      await invoker.restartTask(taskId);
+      const result = await invoker.restartTask(taskId);
+      trackAcceptedMutation(result);
     } catch (err) {
       console.error('Failed to restart task:', err);
     }
-  }, [invoker]);
+  }, [invoker, trackAcceptedMutation]);
 
   const handleOpenTerminal = useCallback(
     (taskId: string) => {
@@ -1266,71 +1287,72 @@ export function App() {
 
   const handleReplaceSubmit = useCallback(async (taskId: string, replacements: TaskReplacementDef[]) => {
     try {
-      await window.invoker?.replaceTask(taskId, replacements);
+      const result = await window.invoker?.replaceTask(taskId, replacements);
+      trackAcceptedMutation(result);
     } catch (err) {
       console.error('Failed to replace task:', err);
     }
-  }, []);
+  }, [trackAcceptedMutation]);
 
   const handleRebaseRetry = useCallback(async (workflowId: string) => {
     setContextMenu(null);
     try {
       const result = await window.invoker?.rebaseRetry(workflowId);
-      if (result && !result.success) {
-        console.error('Rebase and Retry failed for some branches:', result.errors);
-      }
+      trackAcceptedMutation(result);
     } catch (err) {
       console.error('Rebase and Retry failed:', err);
     }
-  }, []);
+  }, [trackAcceptedMutation]);
 
   const handleRebaseRecreate = useCallback(async (workflowId: string) => {
     setContextMenu(null);
     try {
       const result = await window.invoker?.rebaseRecreate(workflowId);
-      if (result && !result.success) {
-        console.error('Rebase and Recreate failed for some branches:', result.errors);
-      }
+      trackAcceptedMutation(result);
     } catch (err) {
       console.error('Rebase and Recreate failed:', err);
     }
-  }, []);
+  }, [trackAcceptedMutation]);
 
   const handleRetryWorkflow = useCallback(async (workflowId: string) => {
     setContextMenu(null);
     try {
-      await window.invoker?.retryWorkflow(workflowId);
+      const result = await window.invoker?.retryWorkflow(workflowId);
+      trackAcceptedMutation(result);
     } catch (err) {
       console.error('Retry Workflow failed:', err);
     }
-  }, []);
+  }, [trackAcceptedMutation]);
 
   const handleRecreateWorkflow = useCallback(async (workflowId: string) => {
     setContextMenu(null);
     try {
-      await window.invoker?.recreateWorkflow(workflowId);
+      const result = await window.invoker?.recreateWorkflow(workflowId);
+      trackAcceptedMutation(result);
     } catch (err) {
       console.error('Recreate Workflow failed:', err);
     }
-  }, []);
+  }, [trackAcceptedMutation]);
 
   const handleRecreateTask = useCallback(async (taskId: string) => {
     setContextMenu(null);
     try {
-      await window.invoker?.recreateTask(taskId);
+      const result = await window.invoker?.recreateTask(taskId);
+      trackAcceptedMutation(result);
     } catch (err) {
       console.error('Recreate from Task failed:', err);
     }
-  }, []);
+  }, [trackAcceptedMutation]);
 
   const handleRecreateDownstream = useCallback(async (taskId: string) => {
     setContextMenu(null);
     try {
-      await window.invoker?.recreateDownstream(taskId);
+      const result = await window.invoker?.recreateDownstream(taskId);
+      trackAcceptedMutation(result);
     } catch (err) {
       console.error('Recreate Downstream failed:', err);
     }
-  }, []);
+  }, [trackAcceptedMutation]);
 
   const handleDeleteWorkflow = useCallback(async (workflowId: string) => {
     setContextMenu(null);
@@ -1339,7 +1361,8 @@ export function App() {
     );
     if (!confirmed) return;
     try {
-      await window.invoker?.deleteWorkflow(workflowId);
+      const result = await window.invoker?.deleteWorkflow(workflowId);
+      trackAcceptedMutation(result);
       setSelectedTaskId(null);
       if (selectedWorkflowId === workflowId) {
         setSelectedWorkflowId(null);
@@ -1348,7 +1371,7 @@ export function App() {
     } catch (err) {
       console.error('Delete Workflow failed:', err);
     }
-  }, [refreshTaskGraph, selectedWorkflowId]);
+  }, [refreshTaskGraph, selectedWorkflowId, trackAcceptedMutation]);
 
   const handleFix = useCallback(async (taskId: string, agentName: string) => {
     setContextMenu(null);
@@ -1364,16 +1387,15 @@ export function App() {
     }
     try {
       const hasMergeConflict = hasMergeConflictExecution(task);
-      if (hasMergeConflict) {
-        await window.invoker?.resolveConflict(taskId, agentName);
-      } else {
-        await window.invoker?.fixWithAgent(taskId, agentName);
-      }
+      const result = hasMergeConflict
+        ? await window.invoker?.resolveConflict(taskId, agentName)
+        : await window.invoker?.fixWithAgent(taskId, agentName);
+      trackAcceptedMutation(result);
       refreshTaskGraph();
     } catch (err) {
       console.error('Fix failed:', err);
     }
-  }, [tasks, refreshTaskGraph]);
+  }, [tasks, trackAcceptedMutation]);
 
   const handleCancelTask = useCallback(async (taskId: string) => {
     setContextMenu(null);
@@ -1382,11 +1404,12 @@ export function App() {
     );
     if (!confirmed) return;
     try {
-      await window.invoker?.cancelTask(taskId);
+      const result = await window.invoker?.cancelTask(taskId);
+      trackAcceptedMutation(result);
     } catch (err) {
       console.error('Failed to cancel task:', err);
     }
-  }, []);
+  }, [trackAcceptedMutation]);
 
   const handleCancelWorkflow = useCallback(async (workflowId: string) => {
     setContextMenu(null);
@@ -1395,11 +1418,12 @@ export function App() {
     );
     if (!confirmed) return;
     try {
-      await window.invoker?.cancelWorkflow(workflowId);
+      const result = await window.invoker?.cancelWorkflow(workflowId);
+      trackAcceptedMutation(result);
     } catch (err) {
       console.error('Failed to cancel workflow:', err);
     }
-  }, []);
+  }, [trackAcceptedMutation]);
 
   const handleOpenWorkflowPr = useCallback((workflowId: string) => {
     const workflowTasks = [...tasks.values()].filter((task) => task.config.workflowId === workflowId);
@@ -1548,33 +1572,37 @@ export function App() {
   const handleProvideInput = useCallback(
     async (taskId: string, input: string) => {
       if (!invoker) return;
-      await invoker.provideInput(taskId, input);
+      const result = await invoker.provideInput(taskId, input);
+      trackAcceptedMutation(result);
     },
-    [invoker],
+    [invoker, trackAcceptedMutation],
   );
 
   const handleApprove = useCallback(
     async (taskId: string) => {
       if (!invoker) return;
-      await invoker.approve(taskId);
+      const result = await invoker.approve(taskId);
+      trackAcceptedMutation(result);
     },
-    [invoker],
+    [invoker, trackAcceptedMutation],
   );
 
   const handleReject = useCallback(
     async (taskId: string, reason?: string) => {
       if (!invoker) return;
-      await invoker.reject(taskId, reason);
+      const result = await invoker.reject(taskId, reason);
+      trackAcceptedMutation(result);
     },
-    [invoker],
+    [invoker, trackAcceptedMutation],
   );
 
   const handleSelectExperiment = useCallback(
     async (taskId: string, experimentIds: string[]) => {
       if (!invoker) return;
-      await invoker.selectExperiment(taskId, experimentIds.length === 1 ? experimentIds[0] : experimentIds);
+      const result = await invoker.selectExperiment(taskId, experimentIds.length === 1 ? experimentIds[0] : experimentIds);
+      trackAcceptedMutation(result);
     },
-    [invoker],
+    [invoker, trackAcceptedMutation],
   );
 
   // ── Edit task command ──────────────────────────────────────
@@ -1582,12 +1610,13 @@ export function App() {
     async (taskId: string, newCommand: string) => {
       if (!invoker) return;
       try {
-        await invoker.editTaskCommand(taskId, newCommand);
+        const result = await invoker.editTaskCommand(taskId, newCommand);
+        trackAcceptedMutation(result);
       } catch (err) {
         console.error('Failed to edit task command:', err);
       }
     },
-    [invoker],
+    [invoker, trackAcceptedMutation],
   );
 
   // ── Edit task prompt ───────────────────────────────────────
@@ -1595,12 +1624,13 @@ export function App() {
     async (taskId: string, newPrompt: string) => {
       if (!invoker) return;
       try {
-        await invoker.editTaskPrompt(taskId, newPrompt);
+        const result = await invoker.editTaskPrompt(taskId, newPrompt);
+        trackAcceptedMutation(result);
       } catch (err) {
         console.error('Failed to edit task prompt:', err);
       }
     },
-    [invoker],
+    [invoker, trackAcceptedMutation],
   );
 
   // ── Edit task executor type ───────────────────────────────
@@ -1608,12 +1638,13 @@ export function App() {
     async (taskId: string, runnerKind: string, poolMemberId?: string) => {
       if (!invoker) return;
       try {
-        await invoker.editTaskType(taskId, runnerKind, poolMemberId);
+        const result = await invoker.editTaskType(taskId, runnerKind, poolMemberId);
+        trackAcceptedMutation(result);
       } catch (err) {
         console.error('Failed to edit task type:', err);
       }
     },
-    [invoker],
+    [invoker, trackAcceptedMutation],
   );
 
   // ── Edit task execution pool ─────────────────────────────
@@ -1621,12 +1652,13 @@ export function App() {
     async (taskId: string, poolId: string) => {
       if (!invoker) return;
       try {
-        await invoker.editTaskPool(taskId, poolId);
+        const result = await invoker.editTaskPool(taskId, poolId);
+        trackAcceptedMutation(result);
       } catch (err) {
         console.error('Failed to edit task pool:', err);
       }
     },
-    [invoker],
+    [invoker, trackAcceptedMutation],
   );
 
   // ── Edit task execution agent ────────────────────────────
@@ -1634,50 +1666,52 @@ export function App() {
     async (taskId: string, agentName: string) => {
       if (!invoker) return;
       try {
-        await invoker.editTaskAgent(taskId, agentName);
+        const result = await invoker.editTaskAgent(taskId, agentName);
+        trackAcceptedMutation(result);
       } catch (err) {
         console.error('Failed to edit task agent:', err);
       }
     },
-    [invoker],
+    [invoker, trackAcceptedMutation],
   );
 
   const handleSetExternalGatePolicies = useCallback(
     async (taskId: string, updates: ExternalGatePolicyUpdate[]) => {
       if (!invoker) return;
       try {
-        await invoker.setTaskExternalGatePolicies(taskId, updates);
+        const result = await invoker.setTaskExternalGatePolicies(taskId, updates);
+        trackAcceptedMutation(result);
       } catch (err) {
         console.error('Failed to set external gate policies:', err);
       }
     },
-    [invoker],
+    [invoker, trackAcceptedMutation],
   );
 
   const handleSetMergeBranch = useCallback(
     async (workflowId: string, baseBranch: string) => {
       if (!invoker) return;
       try {
-        await invoker.setMergeBranch(workflowId, baseBranch);
-        refreshTaskGraph();
+        const result = await invoker.setMergeBranch(workflowId, baseBranch);
+        trackAcceptedMutation(result);
       } catch (err) {
         console.error('Failed to set merge branch:', err);
       }
     },
-    [invoker, refreshTaskGraph],
+    [invoker, trackAcceptedMutation],
   );
 
   const handleSetMergeMode = useCallback(
     async (workflowId: string, mergeMode: 'manual' | 'automatic' | 'external_review') => {
       if (!invoker) return;
       try {
-        await invoker.setMergeMode(workflowId, mergeMode);
-        refreshTaskGraph();
+        const result = await invoker.setMergeMode(workflowId, mergeMode);
+        trackAcceptedMutation(result);
       } catch (err) {
         console.error('Failed to set merge mode:', err);
       }
     },
-    [invoker, refreshTaskGraph],
+    [invoker, trackAcceptedMutation],
   );
 
   // ── Modal triggers ────────────────────────────────────────
@@ -1919,9 +1953,11 @@ export function App() {
                 <TimelineView tasks={tasks} onTaskClick={handleTaskClick} selectedTaskId={selectedTaskId} />
               ) : viewMode === 'actionGraph' ? (
                 <ActionGraphView
-                  selectedNodeId={selectedActionNode?.id ?? null}
+                  graph={actionGraph}
+                  error={actionGraphError}
+                  selectedNodeId={selectedActionNodeId}
                   onSelectNode={(node) => {
-                    setSelectedActionNode(node);
+                    setSelectedActionNodeId(node?.id ?? null);
                     if (node?.taskId) setSelectedTaskId(node.taskId);
                     if (node?.workflowId) setSelectedWorkflowId(node.workflowId);
                   }}
@@ -1933,6 +1969,7 @@ export function App() {
                     selectedWorkflowId={selectedWorkflow?.id ?? null}
                     cameraCommand={cameraCommand}
                     statusFilters={statusFilters}
+                    coreActivityByWorkflow={coreActivityByWorkflow}
                     onSelectWorkflow={handleWorkflowClick}
                     onWorkflowContextMenu={handleWorkflowContextMenu}
                     onManualViewport={handleManualViewport}
@@ -2009,7 +2046,6 @@ export function App() {
           <div
             data-keyboard-region="inspector"
             tabIndex={0}
-            data-keyboard-active={keyboardRegion === 'inspector' ? 'true' : 'false'}
             className={`${inspectorCollapsed ? 'w-16' : 'w-96'} transition-all duration-150 outline-none ${keyboardRegion === 'inspector' ? 'ring-2 ring-inset ring-blue-400/50' : ''}`}
           >
             <WorkflowInspector

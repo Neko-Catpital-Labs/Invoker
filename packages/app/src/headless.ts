@@ -9,9 +9,8 @@
  * This file handles CLI parsing, TaskRunner lifecycle, and output formatting.
  */
 
-import type { BundledSkillsInstallMode, BundledSkillsStatus, Logger } from '@invoker/contracts';
+import type { AgentSessionData, BundledSkillsInstallMode, BundledSkillsStatus, Logger, NormalizedCostEvent } from '@invoker/contracts';
 import { makeEnvelope } from '@invoker/contracts';
-import type { AgentSessionData } from '@invoker/contracts';
 import { OrchestratorErrorCode } from '@invoker/workflow-core';
 import type { Attempt, Orchestrator, CommandService, TaskDelta, TaskState } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
@@ -64,6 +63,7 @@ import { resolveHeadlessTargetWorkflowId } from './headless-command-classificati
 import { formatHeadlessSetSubcommands } from './headless-command-registry.js';
 import { trackWorkflow } from './headless-watch.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
+import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import type { RuntimeServices } from '@invoker/runtime-service';
 
@@ -469,7 +469,7 @@ export function parseQueryFlags(args: string[]): QueryFlags {
 async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> {
   const subCommand = args[0];
   if (!subCommand) {
-    throw new Error('Missing query sub-command. Usage: --headless query <workflows|tasks|task|queue|audit|session|cost|cost-events|costs|ui-perf|stats>');
+    throw new Error('Missing query sub-command. Usage: --headless query <workflows|tasks|task|queue|action-graph|audit|session|cost|cost-events|costs|ui-perf|stats>');
   }
   const flags = parseQueryFlags(args.slice(1));
 
@@ -529,7 +529,7 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
         throw new Error(`Workflow "${workflowFilter}" not found.`);
       }
 
-      let allTasks: import('@invoker/workflow-core').TaskState[] = [];
+      let allTasks: TaskState[] = [];
       for (const wf of targetWorkflows) {
         // Query must stay read-only: sync graph from DB without starting/restarting tasks.
         orchestrator.syncFromDb(wf.id);
@@ -593,6 +593,31 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
           break;
         }
         default: process.stdout.write(formatQueueStatus(status) + '\n'); break;
+      }
+      break;
+    }
+    case 'action-graph': {
+      const graph = buildCurrentActionGraphSnapshot({
+        orchestrator: deps.orchestrator,
+        persistence: deps.persistence,
+        invokerConfig: deps.invokerConfig,
+      });
+      switch (flags.output) {
+        case 'label':
+          process.stdout.write(graph.nodes.map((node) => node.id).join('\n') + '\n');
+          break;
+        case 'jsonl':
+          for (const node of graph.nodes) {
+            process.stdout.write(JSON.stringify({ kind: 'node', ...node }) + '\n');
+          }
+          for (const edge of graph.edges) {
+            process.stdout.write(JSON.stringify({ kind: 'edge', ...edge }) + '\n');
+          }
+          break;
+        case 'json':
+        default:
+          process.stdout.write(formatAsJson(graph) + '\n');
+          break;
       }
       break;
     }
@@ -714,7 +739,7 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
       break;
     }
     default:
-      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, tasks, task, queue, audit, session, cost, cost-events, costs, ui-perf, stats`);
+      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, tasks, task, queue, action-graph, audit, session, cost, cost-events, costs, ui-perf, stats`);
   }
 }
 
@@ -795,7 +820,7 @@ function resolveCostAttributionAttempt(
 async function collectCostEvents(
   flags: QueryFlags,
   deps: CostQueryDeps,
-): Promise<import('@invoker/contracts').NormalizedCostEvent[]> {
+): Promise<NormalizedCostEvent[]> {
   const { attributeSessionUsage, buildAttributionContext } = await import('./cost-rollup.js');
 
   const workflowFilter = flags.workflow ?? flags.positional[0];
@@ -810,7 +835,7 @@ async function collectCostEvents(
     throw new Error(`Workflow "${workflowFilter}" not found.`);
   }
 
-  const allEvents: import('@invoker/contracts').NormalizedCostEvent[] = [];
+  const allEvents: NormalizedCostEvent[] = [];
 
   for (const wf of targetWorkflows) {
     deps.orchestrator.syncFromDb(wf.id);
@@ -1282,6 +1307,7 @@ ${BOLD}Query${RESET} (read-only, all support --output text|label|json|jsonl):
     [--no-merge] [--output F]
   query task <taskId> [--output F]                    Print single task status
   query queue [--output F]                            Show queue status
+  query action-graph [--output F]                     Print action graph source-of-truth snapshot
   query audit <taskId> [--output F]                   Print event history
   query session <taskId>                              Print agent session messages
   query ui-perf [--output F] [--reset]               Print live UI perf stats
@@ -2492,7 +2518,7 @@ export async function resolveAgentSession(
   sessionId: string,
   agentName: string,
   registry?: AgentRegistry,
-  allTasks?: import('@invoker/workflow-core').TaskState[],
+  allTasks?: TaskState[],
 ): Promise<AgentSessionData | null> {
   const driver = registry?.getSessionDriver(agentName);
   if (!driver) {
