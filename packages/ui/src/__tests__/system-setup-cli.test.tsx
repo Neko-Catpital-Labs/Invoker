@@ -144,6 +144,32 @@ describe('SystemSetupModal — Invoker CLI section', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Update Helpers' }));
     expect(onInstallBundledSkills).toHaveBeenCalledWith('update');
   });
+
+  it('reinstalls helpers when installed helper targets are already up to date', () => {
+    const onInstallBundledSkills = vi.fn();
+    render(
+      <SystemSetupModal
+        diagnostics={makeDiagnostics(undefined, {
+          available: true,
+          promptRecommended: false,
+          managedPrefix: 'invoker-',
+          bundledSkillNames: ['plan-to-invoker'],
+          targets: [
+            { id: 'codex', name: 'Codex', path: '/tmp/.codex/skills', available: true, installed: true, upToDate: true, installedSkillNames: ['invoker-plan-to-invoker'] },
+          ],
+          commandTargets: [],
+          mcpTargets: [],
+        })}
+        onInstallBundledSkills={onInstallBundledSkills}
+        onClose={() => {}}
+      />,
+    );
+
+    const buttons = screen.getAllByRole('button', { name: 'Reinstall Helpers' });
+    expect(buttons).toHaveLength(2);
+    fireEvent.click(buttons[0]);
+    expect(onInstallBundledSkills).toHaveBeenCalledWith('reinstall');
+  });
   it('hides the section entirely when unsupported (dev mode)', () => {
     render(
       <SystemSetupModal
