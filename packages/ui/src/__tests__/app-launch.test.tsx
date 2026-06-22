@@ -12,11 +12,12 @@ import { vi } from 'vitest';
 import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
 
 vi.mock('@xyflow/react', async () => {
+  // Dynamic import is required because Vitest hoists mock factories before test imports.
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
   return createReactFlowMock();
 });
 
-// Lazy import App after mocking @xyflow/react
+// Dynamic import is required so App sees the hoisted @xyflow/react mock.
 const { App } = await import('../App.js');
 
 describe('App launch (component)', () => {
@@ -53,6 +54,32 @@ describe('App launch (component)', () => {
     render(<App />);
     expect(screen.getByTestId('workflow-status-pill-running')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Partial terminal drawer' })).toBeInTheDocument();
+  });
+
+  it('warns when no Claude or Codex CLI is installed', async () => {
+    mock.api.getSystemDiagnostics = vi.fn(async () => ({
+      platform: 'darwin',
+      arch: 'arm64',
+      appVersion: '0.0.5',
+      isPackaged: true,
+      tools: [
+        { id: 'claude', name: 'Claude', required: false, installed: false, installHint: 'Install Claude CLI' },
+        { id: 'codex', name: 'Codex', required: false, installed: false, installHint: 'Install Codex CLI' },
+      ],
+      bundledSkills: {
+        available: true,
+        promptRecommended: false,
+        managedPrefix: 'invoker-',
+        bundledSkillNames: ['plan-to-invoker'],
+        targets: [],
+        commandTargets: [],
+        mcpTargets: [],
+      },
+    }));
+
+    render(<App />);
+
+    expect(await screen.findByText('No Claude or Codex CLI detected yet. Install one before running agent-backed execution tasks.')).toBeInTheDocument();
   });
 
   it('opens system setup from left rail settings', async () => {
