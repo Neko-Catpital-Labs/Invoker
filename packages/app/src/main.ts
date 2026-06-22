@@ -2766,7 +2766,7 @@ function createEmbeddedTerminalBackendFromConfig(
   const workflowScopedGuiMutationRegistrationContext: WorkflowScopedGuiMutationRegistrationContext = {
     ...guiMutationRegistrationContext,
     workflowMutationDispatcher,
-    runWorkflowMutation,
+    submitWorkflowMutation,
   };
 
   const {
