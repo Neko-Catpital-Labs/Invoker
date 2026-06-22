@@ -47,24 +47,28 @@ export function getStatusInlineColors(status: string): {
 export function getEffectiveVisualStatus(
   status: string,
   execution?: { isFixingWithAI?: boolean; pendingFixError?: string; phase?: string },
+  opts?: { runningLike?: boolean },
 ): string {
   if (status === 'fixing_with_ai') return 'fixing_with_ai';
   if (status === 'running' && execution?.isFixingWithAI) return 'fixing_with_ai';
-  if (status === 'running' && execution?.phase === 'launching') return 'running_launching';
-  if (status === 'running' && execution?.phase === 'executing') return 'running_executing';
+  if (opts?.runningLike === true && execution?.phase === 'launching') return 'assigning';
+  if (opts?.runningLike === true && execution?.phase === 'executing') return 'running_executing';
+  if (opts?.runningLike === true) return 'running';
   if (status === 'awaiting_approval' && execution?.pendingFixError) return 'fix_approval';
+  if (status === 'running' && execution?.phase === 'launching') return 'assigning';
+  if (status === 'running' && execution?.phase === 'executing') return 'running_executing';
   return status;
 }
 
 /**
- * Status-bar filters use coarse keys like "running" and "awaiting_approval".
+ * Status-bar filters use keys like "running", "assigning", and "awaiting_approval".
  * Graph nodes may render with finer-grained visual states such as
- * "running_launching", "running_executing", or "fix_approval".
+ * "assigning", "running_executing", or "fix_approval".
  */
 export function matchesStatusFilter(filterKey: string, visualStatus: string): boolean {
   if (filterKey === visualStatus) return true;
   if (filterKey === 'running') {
-    return visualStatus === 'running' || visualStatus === 'running_launching' || visualStatus === 'running_executing';
+    return visualStatus === 'running' || visualStatus === 'running_executing';
   }
   if (filterKey === 'awaiting_approval') {
     return visualStatus === 'awaiting_approval' || visualStatus === 'fix_approval';
@@ -76,7 +80,7 @@ export function matchesStatusFilter(filterKey: string, visualStatus: string): bo
 }
 
 export function getRunningPhaseLabel(phase?: string): string | null {
-  if (phase === 'launching') return 'Launching';
+  if (phase === 'launching') return 'Assigning';
   if (phase === 'executing') return 'Executing';
   return null;
 }

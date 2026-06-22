@@ -16,11 +16,11 @@ Verification-only plan with command tasks. Uses `onFinish: none` (nothing to mer
 
 ## 2. Feature Implementation
 
-Standard pattern: **implement → test → verify**. Uses `onFinish: merge` to auto-merge after completion.
+Standard pattern: **implement → focused proof → verify**. Uses `onFinish: merge` to auto-merge after completion.
 
 **See**: `fixtures/positive/02-feature-implementation.yaml`
 
-**Pattern**: Every prompt task MUST have a corresponding command task to verify. Standalone implementation plans and terminal stack workflows end with a final `pnpm run test:all` gate; non-terminal stack workflows end with focused verification.
+**Pattern**: Every prompt task MUST have a corresponding command task to verify the changed behavior. Use focused proof by default; do not add a full-suite gate unless it is the smallest honest proof.
 
 ---
 
@@ -47,15 +47,14 @@ Complex plan with diamond dependencies. Uses `onFinish: pull_request` for manual
 ## 5. Common Anti-Patterns
 
 **See negative fixtures** for invalid plans caught by validation:
-- `fixtures/negative/anti-pattern-a-npx-vitest.yaml` — Use `pnpm test` not `npx vitest run`
-- `fixtures/negative/anti-pattern-b-tests-from-root.yaml` — cd into package before running tests
+- `fixtures/negative/anti-pattern-a-npx-vitest.yaml` — Avoid `npx vitest run`; use repo-supported scripts or explicit package-local commands
+- `fixtures/negative/anti-pattern-b-tests-from-root.yaml` — Do not run package-scoped tests from the repo root
 - `fixtures/negative/anti-pattern-c-both-command-and-prompt.yaml` — Task must have command OR prompt, not both
 - `fixtures/negative/anti-pattern-d-missing-dependencies.yaml` — Dependencies field is required
 - `fixtures/negative/anti-pattern-e-no-verification.yaml` — Implementation tasks need verification
 - `fixtures/negative/anti-pattern-f-dangerous-commands.yaml` — Avoid destructive commands (`rm -rf`, force push)
 - `fixtures/negative/anti-pattern-g-monolithic-prompt-edit-bridge.yaml` — Monolithic `wf-1777929074509-8`-style workflow missing dependency-first layered decomposition metadata
 - `fixtures/negative/anti-pattern-h-layer-order-violation.yaml` — Lower layer depends on higher layer without `Layer exception: allowed`
-- `fixtures/negative/anti-pattern-i-final-regression-not-test-all.yaml` — Standalone implementation plan ends without a terminal `pnpm run test:all` gate
 - `fixtures/negative/anti-pattern-j-zero-context-missing-metadata.yaml` — Prompt task omits strict zero-context handoff metadata required for implementation plans
 - `fixtures/negative/anti-pattern-k-missing-review-compression.yaml` — Implementation task omits review claim, safety invariant, slice rationale, and architectural effect metadata
 
@@ -71,7 +70,7 @@ All anti-patterns are validated by `scripts/test-fixtures.sh` with deterministic
 description: |
   Implement foo. Files: packages/foo/src/bar.ts (may add tests). Change types:
   - packages/foo/src/bar.ts — modify
-  Acceptance criteria: cd packages/foo && pnpm test exits 0.
+  Acceptance criteria: focused verification command exits 0.
 ```
 
 `Files:`, `Change types:`, and `Acceptance criteria:` are strict gates for implementation-plan prompt tasks under `skill-doctor`. Verify-only plans (`onFinish: none`) keep these headings advisory.
@@ -135,7 +134,7 @@ Use this pattern when a change is too large for a single reviewable workflow. Fo
 
 **Positive patterns**:
 - Verification-only → `onFinish: none`, command tasks
-- Feature implementation → implement → test → verify, `onFinish: merge`
+- Feature implementation → implement → focused proof → verify, `onFinish: merge`
 - Multi-step refactors → omit routing fields for default worktree execution, chained dependencies
 - Large refactors → `onFinish: pull_request`, diamond DAGs
 - Invoker-on-Invoker PR publication → keep `mergeMode: github`, then use `mergify stack push` as the repo-specific publication step
@@ -143,9 +142,9 @@ Use this pattern when a change is too large for a single reviewable workflow. Fo
 - Dependency-first layered decomposition → enforce `Layer:` + `Feature state:` metadata, preserve dependency direction, allow explicit dormant tasks
 
 **Validation enforces**:
-- Every prompt task must have verification command task
-- Standalone implementation plans and terminal stack workflows must end with `pnpm run test:all` as the final regression gate
-- Use `pnpm test`, never `npx vitest run`
+- Every prompt task must have a verification command task or proof lane
+- Focused proof is the default; full-suite gates are optional and risk-based
+- Avoid `npx vitest run`; use repo-supported scripts or explicit package-local commands
 - Dependencies field required (even if empty)
 - No dangerous commands without manual approval
 - For implementation plans: `Layer:` + `Feature state:` headings, allowed values, and layer-consistent dependency direction

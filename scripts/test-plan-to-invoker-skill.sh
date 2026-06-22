@@ -51,12 +51,12 @@ for installed in "$CODEX_INSTALLED" "$CLAUDE_INSTALLED"; do
   fi
 done
 
-# SKILL.md — runtime verification + Invoker headless as complementary lane
+# SKILL.md — focused runtime verification + Invoker headless as complementary lane
 must_contain "$SKILL_MD" "## Intended flow (do not skip steps)" "SKILL must document the full flow"
 must_contain "$SKILL_MD" "Runtime verification (Phase 1b)" "SKILL must require runtime behavioral verification"
 must_contain "$SKILL_MD" "Invoker headless" "SKILL must mention Invoker headless as a verification lane"
-must_contain "$SKILL_MD" "pnpm test" "SKILL must mention pnpm test for behavioral proof"
-must_contain "$SKILL_MD" "terminal stack workflows must end with" "SKILL must require the final full-suite regression gate for standalone plans and terminal stack workflows"
+must_contain "$SKILL_MD" "cheapest deterministic command" "SKILL must prefer focused behavioral proof"
+must_contain "$SKILL_MD" "Do not require a terminal" "SKILL must not require a final full-suite regression gate"
 must_contain "$SKILL_MD" "Grep-only checks" "SKILL must separate grep from behavioral verification"
 must_contain "$SKILL_MD" "see playbook" "SKILL Execution must reference the playbook"
 must_contain "$SKILL_MD" "Phase 1b" "SKILL must reference Phase 1b"
@@ -118,12 +118,12 @@ must_output_contain "$DOCTOR_HELP" "  1 = one or more checks failed" "skill-doct
 must_output_contain "$DOCTOR_HELP" "  2 = usage/argument error" "skill-doctor --help must expose usage-error exit code"
 must_output_contain "$DOCTOR_HELP" "Output: JSON summary of all checks with pass/fail status" "skill-doctor --help must expose JSON output contract"
 
-# Playbook — Phase 1a / 1b (three lanes) and anti-patterns
+# Playbook — Phase 1a / 1b focused lanes and anti-patterns
 must_contain "$PLAYBOOK" "### Phase 1a — Static analysis" "Playbook must define Phase 1a"
 must_contain "$PLAYBOOK" "### Phase 1b — Runtime verification" "Playbook must define runtime behavioral verification"
 must_contain "$PLAYBOOK" "Phase 1b-invoker" "Playbook must define Invoker headless verification lane"
-must_contain "$PLAYBOOK" "pnpm test" "Playbook must document pnpm test for behavioral verification"
-must_contain "$PLAYBOOK" "pnpm run test:all" "Playbook must document the final full-suite regression gate"
+must_contain "$PLAYBOOK" "Avoid mandatory" "Playbook must reject mandatory pnpm test gates"
+must_contain "$PLAYBOOK" "Do **not** add a mandatory terminal" "Playbook must reject mandatory final full-suite gates"
 must_contain "$PLAYBOOK" "Invoker is mandatory" "Playbook must warn when Invoker verification is mandatory"
 must_contain "$PLAYBOOK" "coverageItems" "Playbook must document row-level coverage for policy-matrix sources"
 must_contain "$PLAYBOOK" "assume no prior context" "Playbook must require zero-context prompt framing for implementation tasks"
