@@ -124,7 +124,7 @@ Then, in Codex, Claude, Cursor, or OMP, run:
 /invoker-plan-to-invoker "help me plan <change>"
 ```
 
-The command plans first, writes `plans/invoker-handoff.md`, converts it to YAML, validates, and submits with `invoker-cli run --live` or the Invoker MCP tool.
+The command plans first, writes `plans/invoker-handoff.md`, converts it to `plans/invoker-handoff.yaml`, validates, and submits with `invoker-cli run --live` or the Invoker MCP tool.
 
 Source checkouts can install the repo helpers with `bash scripts/setup-agent-skills.sh`.
 
@@ -267,7 +267,7 @@ tasks:
     dependencies: [api, ui]
 ```
 
-If you need to turn a product or implementation plan into an Invoker workflow, install helpers from System Setup or `invoker-ui --install-skills`, then run `/invoker-plan-to-invoker "help me plan <change>"` in Codex, Claude, Cursor, or OMP. The command plans first, writes `plans/invoker-handoff.md`, converts it to YAML, validates, and submits with `invoker-cli run --live` or the Invoker MCP tool.
+If you need to turn a product or implementation plan into an Invoker workflow, install helpers from System Setup or `invoker-ui --install-skills`, then run `/invoker-plan-to-invoker "help me plan <change>"` in Codex, Claude, Cursor, or OMP. The command plans first, writes `plans/invoker-handoff.md`, converts it to `plans/invoker-handoff.yaml`, validates, and submits with `invoker-cli run --live` or the Invoker MCP tool.
 
 If you need to operate existing workflows or tasks, use the `invoker-ops` skill.
 
