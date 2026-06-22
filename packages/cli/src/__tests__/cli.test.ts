@@ -63,13 +63,14 @@ describe('invoker-cli', () => {
     expect(result.stdout).toContain('hello-from-invoker-cli');
   });
 
-  it('--json emits a successful workflow result object', () => {
+  it('--json emits only a workflow result object on stdout', () => {
     const dbDir = mkdtempSync(join(tmpdir(), 'invoker-cli-json-db-'));
     const result = runCli(['run', fixturePlan, '--standalone', '--db-dir', dbDir, '--json']);
     expect(result.status).toBe(0);
-    const lines = result.stdout.trim().split('\n');
-    const json = JSON.parse(lines[lines.length - 1]);
+    const json = JSON.parse(result.stdout);
     expect(json.workflow.status).toBe('success');
+    expect(result.stdout).not.toContain('hello-from-invoker-cli');
+    expect(result.stderr).toBe('');
   });
 
   it('invalid YAML exits non-zero with a validation error', () => {
@@ -194,8 +195,10 @@ tasks:
     const result = runCli(['run', planPath, '--standalone', '--db-dir', join(dir, 'db'), '--json']);
 
     expect(result.status).not.toBe(0);
+    const json = JSON.parse(result.stdout);
+    expect(json.workflow.status).toBe('failed');
+    expect(json.result.failedTasks).toBe(1);
     expect(`${result.stdout}\n${result.stderr}`).not.toContain('Standalone CLI v1 supports command tasks only');
-    expect(`${result.stdout}\n${result.stderr}`).toContain('No execution agent registered with name "missing-agent"');
   });
 
   it('rejects --db-dir with --live', async () => {
