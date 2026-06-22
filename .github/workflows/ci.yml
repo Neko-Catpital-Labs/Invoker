@@ -242,7 +242,14 @@ jobs:
       - name: Install Playwright system dependencies
         run: pnpm --filter @invoker/app exec playwright install-deps chromium
 
+      - name: Run suite group with Mergify Insights
+        if: matrix.name == 'Vitest Workspace'
+        run: ${{ matrix.command }}
+        env:
+          MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}
+          MERGIFY_TEST_JOB_NAME: required-fast / Vitest Workspace
       - name: Run suite group
+        if: matrix.name != 'Vitest Workspace'
         run: ${{ matrix.command }}
 
   scheduled-repros:
