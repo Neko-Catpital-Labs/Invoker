@@ -224,6 +224,14 @@ export interface RebaseAndRetryResult {
   errors: string[];
 }
 
+export interface WorkflowMutationAcceptedResult {
+  ok: true;
+  accepted: true;
+  intentId: number;
+  workflowId: string;
+  channel: string;
+}
+
 export interface CancelResult {
   cancelled: string[];
   runningCancelled: string[];
@@ -400,11 +408,11 @@ export const IpcChannels = {
   },
   'invoker:delete-workflow': {} as {
     request: [workflowId: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:detach-workflow': {} as {
     request: [workflowId: string, upstreamWorkflowId: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:load-workflow': {} as {
     request: [workflowId: string];
@@ -444,19 +452,19 @@ export const IpcChannels = {
   // Task Actions
   'invoker:provide-input': {} as {
     request: [taskId: string, input: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:approve': {} as {
     request: [taskId: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:reject': {} as {
     request: [taskId: string, reason?: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:select-experiment': {} as {
     request: [taskId: string, experimentId: string | string[]];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   /**
    * @deprecated Step 13 (`docs/architecture/task-invalidation-roadmap.md`):
@@ -473,41 +481,45 @@ export const IpcChannels = {
    */
   'invoker:restart-task': {} as {
     request: [taskId: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:cancel-task': {} as {
     request: [taskId: string];
-    response: CancelResult;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:cancel-workflow': {} as {
     request: [workflowId: string];
-    response: CancelResult;
+    response: WorkflowMutationAcceptedResult;
   },
 
   // Task Editing
   'invoker:edit-task-command': {} as {
     request: [taskId: string, newCommand: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:edit-task-pool': {} as {
     request: [taskId: string, poolId: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
+  },
+  'invoker:edit-task-type': {} as {
+    request: [taskId: string, runnerKind: string, poolMemberId?: string];
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:edit-task-agent': {} as {
     request: [taskId: string, agentName: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:edit-task-prompt': {} as {
     request: [taskId: string, newPrompt: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:set-task-external-gate-policies': {} as {
     request: [taskId: string, updates: ExternalGatePolicyUpdate[]];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:replace-task': {} as {
     request: [taskId: string, replacementTasks: TaskReplacementDef[]];
-    response: TaskState[];
+    response: WorkflowMutationAcceptedResult;
   },
 
   // Session & Agent Access
@@ -523,39 +535,39 @@ export const IpcChannels = {
   // Workflow Mutation & Merge
   'invoker:recreate-workflow': {} as {
     request: [workflowId: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:recreate-task': {} as {
     request: [taskId: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:recreate-downstream': {} as {
     request: [taskId: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:retry-workflow': {} as {
     request: [workflowId: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:rebase-retry': {} as {
     request: [target: string];
-    response: RebaseAndRetryResult;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:rebase-recreate': {} as {
     request: [target: string];
-    response: RebaseAndRetryResult;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:set-merge-branch': {} as {
     request: [workflowId: string, baseBranch: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:set-merge-mode': {} as {
     request: [workflowId: string, mergeMode: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:approve-merge': {} as {
     request: [workflowId: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
 
   // PR & Conflict Resolution
@@ -569,11 +581,11 @@ export const IpcChannels = {
   },
   'invoker:resolve-conflict': {} as {
     request: [taskId: string, agentName?: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:fix-with-agent': {} as {
     request: [taskId: string, agentName?: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
 
   // Queue & Configuration
