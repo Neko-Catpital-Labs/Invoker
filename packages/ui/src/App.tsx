@@ -64,6 +64,11 @@ type WorkflowContextMenuState = { x: number; y: number; workflowId: string; retu
 type SearchResult =
   | { kind: 'workflow'; id: string; title: string; subtitle: string }
   | { kind: 'task'; id: string; workflowId: string | null; title: string; subtitle: string };
+type WorkflowActionNotice = {
+  id: number;
+  workflowId: string;
+  label: string;
+};
 
 const KEYBOARD_REGION_ORDER: readonly KeyboardRegion[] = ['workflowGraph', 'taskGraph', 'inspector', 'bottomBar'];
 const SIDEBAR_NAV_ITEM_SELECTOR = '[data-sidebar-nav-item]';
@@ -419,6 +424,8 @@ export function App() {
   const [terminalSessions, setTerminalSessions] = useState<TerminalSessionDescriptor[]>([]);
   const [activeTerminalSessionId, setActiveTerminalSessionId] = useState<string | null>(null);
   const [workflowContextMenu, setWorkflowContextMenu] = useState<WorkflowContextMenuState | null>(null);
+  const workflowActionNoticeIdRef = useRef(0);
+  const [workflowActionNotice, setWorkflowActionNotice] = useState<WorkflowActionNotice | null>(null);
   const [keyboardRegion, setKeyboardRegion] = useState<KeyboardRegion>('workflowGraph');
   const [previousGraphRegion, setPreviousGraphRegion] = useState<KeyboardRegion>('workflowGraph');
   // Typed graph camera state. The graph viewport is user-owned after the
@@ -583,6 +590,11 @@ export function App() {
     }
     return null;
   }, [selectedWorkflowId, selectedTask, workflows, stickySelectedWorkflow, selectedWorkflowTaskCount]);
+  const workflowActionNoticeTarget = useMemo(() => {
+    if (!workflowActionNotice) return null;
+    const workflow = workflows.get(workflowActionNotice.workflowId);
+    return workflow?.name || workflowActionNotice.workflowId;
+  }, [workflowActionNotice, workflows]);
   const miniDagTasks = useMemo(() => {
     const activeWorkflowId = selectedWorkflow?.id ?? selectedWorkflowId;
     if (!activeWorkflowId) return new Map<string, TaskState>();
@@ -1272,8 +1284,20 @@ export function App() {
     }
   }, []);
 
+  const beginWorkflowActionNotice = useCallback((workflowId: string, label: string) => {
+    const id = workflowActionNoticeIdRef.current + 1;
+    workflowActionNoticeIdRef.current = id;
+    setWorkflowActionNotice({ id, workflowId, label });
+    return id;
+  }, []);
+
+  const clearWorkflowActionNotice = useCallback((id: number) => {
+    setWorkflowActionNotice((current) => (current?.id === id ? null : current));
+  }, []);
+
   const handleRebaseRetry = useCallback(async (workflowId: string) => {
     setContextMenu(null);
+    const noticeId = beginWorkflowActionNotice(workflowId, 'Rebase and Retry');
     try {
       const result = await window.invoker?.rebaseRetry(workflowId);
       if (result && !result.success) {
@@ -1281,11 +1305,14 @@ export function App() {
       }
     } catch (err) {
       console.error('Rebase and Retry failed:', err);
+    } finally {
+      clearWorkflowActionNotice(noticeId);
     }
-  }, []);
+  }, [beginWorkflowActionNotice, clearWorkflowActionNotice]);
 
   const handleRebaseRecreate = useCallback(async (workflowId: string) => {
     setContextMenu(null);
+    const noticeId = beginWorkflowActionNotice(workflowId, 'Rebase and Recreate');
     try {
       const result = await window.invoker?.rebaseRecreate(workflowId);
       if (result && !result.success) {
@@ -1293,8 +1320,10 @@ export function App() {
       }
     } catch (err) {
       console.error('Rebase and Recreate failed:', err);
+    } finally {
+      clearWorkflowActionNotice(noticeId);
     }
-  }, []);
+  }, [beginWorkflowActionNotice, clearWorkflowActionNotice]);
 
   const handleRetryWorkflow = useCallback(async (workflowId: string) => {
     setContextMenu(null);
@@ -1973,6 +2002,18 @@ export function App() {
                     </FloatingGraphPanel>
                   )}
                 </>
+              )}
+              {workflowActionNotice && workflowActionNoticeTarget && (
+                <div
+                  data-testid="workflow-action-notice"
+                  role="status"
+                  className="pointer-events-none absolute right-4 top-4 z-20 max-w-md rounded border border-blue-400/40 bg-blue-950/90 px-3 py-2 text-xs text-blue-100 shadow-lg"
+                >
+                  <div className="font-medium">{workflowActionNotice.label} started</div>
+                  <div className="mt-1 text-blue-200">
+                    {workflowActionNoticeTarget} will update when this finishes.
+                  </div>
+                </div>
               )}
             </div>
 

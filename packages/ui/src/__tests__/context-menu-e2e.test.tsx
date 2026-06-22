@@ -261,6 +261,29 @@ describe('Context menu (component)', () => {
     expectOnlyWorkflowApiCalled('rebaseRecreate');
   });
 
+  it('shows immediate feedback while rebase recreate is still running', async () => {
+    let finishRebase!: (value: { success: true; rebasedBranches: string[]; errors: string[] }) => void;
+    const pendingRebase = new Promise<{ success: true; rebasedBranches: string[]; errors: string[] }>((resolve) => {
+      finishRebase = resolve;
+    });
+    vi.mocked(mock.api.rebaseRecreate).mockImplementation(() => pendingRebase);
+
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    fireEvent.click(await screen.findByText('More'));
+    fireEvent.click(await screen.findByText('Rebase and Recreate'));
+
+    expect(await screen.findByTestId('workflow-action-notice')).toHaveTextContent('Rebase and Recreate started');
+    expect(screen.getByTestId('workflow-action-notice')).toHaveTextContent('Test Workflow will update when this finishes.');
+    expect(mock.api.rebaseRecreate).toHaveBeenCalledWith('wf-1');
+
+    await act(async () => {
+      finishRebase({ success: true, rebasedBranches: [], errors: [] });
+      await pendingRebase;
+    });
+    await waitFor(() => expect(screen.queryByTestId('workflow-action-notice')).not.toBeInTheDocument());
+  });
+
   it('workflow context menu cancels workflow', async () => {
     await setup();
     fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
