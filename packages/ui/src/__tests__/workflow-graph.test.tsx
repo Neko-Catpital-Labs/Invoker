@@ -136,6 +136,35 @@ describe('WorkflowGraph', () => {
     expect(screen.getByTestId('workflow-node-wf-a-running-tasks')).toHaveTextContent('1 running task');
   });
 
+  it('renders core activity without mutation command labels', () => {
+    const workflows = new Map([
+      ['wf-1', wf('wf-1', 'running')],
+    ]);
+
+    render(
+      <WorkflowGraph
+        workflows={workflows}
+        selectedWorkflowId={null}
+        statusFilters={new Set()}
+        coreActivityByWorkflow={new Map([
+          ['wf-1', {
+            workflowId: 'wf-1',
+            status: 'pending',
+            label: 'Pending: queued for launch',
+            nodeId: 'launch-dispatch:1',
+            nodeType: 'launch-dispatch',
+          }],
+        ])}
+        onSelectWorkflow={() => {}}
+        onWorkflowContextMenu={() => {}}
+      />,
+    );
+
+    const activity = screen.getByTestId('workflow-node-wf-1-core-activity');
+    expect(activity).toHaveTextContent('Pending: queued for launch');
+    expect(screen.getByTestId('workflow-node-wf-1')).not.toHaveTextContent(/rebase|invoker:rebase-recreate/i);
+  });
+
   it('renders the React Flow wrapper for non-empty workflow graphs', () => {
     const workflows = new Map([
       ['wf-a', wf('wf-a', 'running')],
