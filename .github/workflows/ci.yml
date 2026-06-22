@@ -58,7 +58,7 @@ jobs:
           path: app-build-dist.tgz
           if-no-files-found: error
 
-  quality-checks:
+  quality-required:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -67,12 +67,47 @@ jobs:
         include:
           - name: Dependency Cruise
             command: pnpm run check:deps
+          - name: TypeScript Types
+            command: pnpm run check:types
+
+    name: quality / ${{ matrix.name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run quality check
+        run: ${{ matrix.command }}
+
+  quality-extra:
+    if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
           - name: Required Package Builds
             command: pnpm run check:required-builds
           - name: Large File Guardrail
             command: pnpm run check:large-files
-          - name: TypeScript Types
-            command: pnpm run check:types
           - name: Release Version Sync
             command: pnpm run check:versions
 
@@ -103,6 +138,7 @@ jobs:
         run: ${{ matrix.command }}
 
   inv117-proof:
+    if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
     runs-on: ubuntu-latest
     container:
@@ -186,6 +222,64 @@ jobs:
             command: bash scripts/test-suites/required/10-vitest-workspace.sh
           - name: Submit Workflow Chain
             command: bash scripts/test-suites/required/15-submit-workflow-chain.sh
+
+    name: required-fast / ${{ matrix.name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: app-build-dist
+          path: /tmp/invoker-build-artifacts
+
+      - name: Extract build artifacts
+        run: tar -xzf /tmp/invoker-build-artifacts/app-build-dist.tgz -C .
+
+      - name: Configure git identity and HTTPS auth
+        run: |
+          git config --global user.name "CI Bot"
+          git config --global user.email "ci@invoker.dev"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "git@github.com:"
+          git config --global --add url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
+          git update-ref refs/heads/main refs/remotes/origin/master || true
+          git update-ref refs/remotes/origin/main refs/remotes/origin/master || true
+
+      - name: Install Playwright system dependencies
+        run: pnpm --filter @invoker/app exec playwright install-deps chromium
+
+      - name: Run suite group
+        run: ${{ matrix.command }}
+
+  required-fast-extra:
+    if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}
+    needs: build-artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
           - name: Branch Carry Forward
             command: bash scripts/test-suites/required/16-branch-carry-forward.sh
           - name: Merge Gate Concurrency Repro
@@ -566,6 +660,7 @@ jobs:
         run: ${{ matrix.command }}
 
   docker:
+    if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
     runs-on: ubuntu-latest
     timeout-minutes: 60
