@@ -429,6 +429,17 @@ describe('PlanConversation', () => {
     expect(prompt).toContain('Use the package manager and test runner the target repo already uses');
   });
 
+  it('instructs ambiguous implementation requests to include assumptions before YAML', async () => {
+    mockCursorResponse('Hi');
+    await conversation.sendMessage('quick nit: turn lint warnings into pre-commit errors');
+    const prompt = mockSpawn.mock.calls[0][1][1] as string;
+
+    expect(prompt).toContain('For ambiguous implementation requests, tiny nits');
+    expect(prompt).toContain('State concise assumptions');
+    expect(prompt).toContain('Show a short plan preview');
+    expect(prompt).not.toContain('generate the YAML plan directly');
+  });
+
   it('submittedPlanText is null before confirmation', async () => {
     expect(conversation.submittedPlanText).toBeNull();
     mockCursorResponse(VALID_YAML_PLAN);
@@ -576,6 +587,16 @@ describe('PlanConversation prompt construction', () => {
     (conv as any).messages.push({ role: 'user', content: 'Hello' });
     const prompt = conv.buildCursorPrompt();
     expect(prompt).toContain('repoUrl: "git@github.com:user/repo.git"');
+  });
+
+  it('system prompt requires discovered verification commands for target repos', () => {
+    const conv = new PlanConversation({});
+    (conv as any).messages.push({ role: 'user', content: 'Add a small pre-commit lint gate' });
+    const prompt = conv.buildCursorPrompt();
+
+    expect(prompt).toContain('Inspect repo manifests and existing docs/scripts before choosing commands');
+    expect(prompt).toContain('do not impose Invoker-specific commands on external repos');
+    expect(prompt).toContain('reserve broad/full-suite commands for the final gate only when the target repo documents such a command');
   });
 });
 
