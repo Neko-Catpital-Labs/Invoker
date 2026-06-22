@@ -53,6 +53,13 @@ describe('bundled-skills', () => {
         invokerHomeRoot,
       });
 
+      expect(status.commandTargets).toHaveLength(4);
+      expect(status.commandTargets.every((target) => !target.installed)).toBe(true);
+      expect(status.commandTargets.every((target) => !target.upToDate)).toBe(true);
+      expect(status.mcpTargets).toHaveLength(1);
+      expect(status.mcpTargets[0]?.installed).toBe(false);
+      expect(status.mcpTargets[0]?.upToDate).toBe(false);
+
       expect(status.available).toBe(true);
       expect(status.promptRecommended).toBe(true);
       expect(status.bundledSkillNames).toEqual(['make-pr', 'plan-to-invoker']);
@@ -63,6 +70,7 @@ describe('bundled-skills', () => {
       } else {
         process.env.HOME = originalHome;
       }
+
     }
   });
 
@@ -112,6 +120,7 @@ describe('bundled-skills', () => {
       }
 
       const mcpConfig = JSON.parse(readFileSync(join(codexHome, '.omp', 'agent', 'mcp.json'), 'utf-8'));
+      expect(mcpConfig.$schema).toBe('https://raw.githubusercontent.com/can1357/oh-my-pi/main/packages/coding-agent/src/config/mcp-schema.json');
       expect(mcpConfig.mcpServers.invoker).toEqual({ type: 'stdio', command: 'invoker-cli', args: ['mcp'] });
 
       expect(installed.targets).toHaveLength(3);
@@ -200,6 +209,37 @@ describe('bundled-skills', () => {
         invokerHomeRoot,
       })).toThrow(`Invalid OMP MCP config at ${mcpPath}: expected a JSON object`);
       expect(readFileSync(mcpPath, 'utf-8')).toBe('[]');
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+    }
+  });
+
+  it('rejects malformed OMP MCP JSON without rewriting it', () => {
+    const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
+    const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
+    const repoRoot = makeTempRoot('invoker-bundled-repo-');
+    const fakeHome = makeTempRoot('invoker-omp-malformed-home-');
+    const originalHome = process.env.HOME;
+    process.env.HOME = fakeHome;
+
+    try {
+      writeSkill(resourcesRoot, 'plan-to-invoker');
+      writePlanToInvokerCommands(resourcesRoot);
+      const mcpPath = join(fakeHome, '.omp', 'agent', 'mcp.json');
+      mkdirSync(join(fakeHome, '.omp', 'agent'), { recursive: true });
+      writeFileSync(mcpPath, '{"mcpServers":');
+
+      expect(() => installBundledSkills({
+        isPackaged: true,
+        repoRoot,
+        resourcesPath: resourcesRoot,
+        invokerHomeRoot,
+      })).toThrow(`Invalid OMP MCP config at ${mcpPath}: expected a JSON object`);
+      expect(readFileSync(mcpPath, 'utf-8')).toBe('{"mcpServers":');
     } finally {
       if (originalHome === undefined) {
         delete process.env.HOME;

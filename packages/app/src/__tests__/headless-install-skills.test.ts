@@ -42,4 +42,20 @@ describe('headless install-skills', () => {
     expect(output).toContain('- invoker-plan-to-invoker');
     expect(output).toContain('- invoker-make-pr');
   });
+
+  it('throws a clear error when helper installation is unavailable', async () => {
+    await expect(runHeadless(['install-skills'], {} as HeadlessDeps)).rejects.toThrow(
+      'Bundled AI helper installation is not available in this runtime.',
+    );
+  });
+
+  it('documents helper installation and OMP agent selection in help output', async () => {
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+
+    await runHeadless(['--help'], {} as HeadlessDeps);
+
+    const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join('');
+    expect(output).toContain('install-skills [install|update|reinstall]          Install bundled Invoker AI helpers');
+    expect(output).toContain('set agent <taskId> <agent>                          Change execution agent (claude|codex|omp)');
+  });
 });
