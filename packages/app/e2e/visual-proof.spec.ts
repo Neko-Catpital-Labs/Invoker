@@ -666,10 +666,10 @@ test.describe('Visual proof capture', () => {
   test('status bar — no system log button', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     await expect(page.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
-    const statusBar = page.locator('.bg-gray-800.border-t');
-    await expect(statusBar).toBeVisible();
-    await expect(statusBar.getByText('Total:')).toBeVisible();
-    await expect(statusBar.locator('text=System Log')).not.toBeVisible();
+    const pendingChip = page.getByTestId('workflow-status-pill-pending');
+    await expect(pendingChip).toBeVisible();
+    await expect(pendingChip).toContainText('pending (1)');
+    await expect(page.getByText('System Log')).toHaveCount(0);
     await captureScreenshot(page, 'status-bar-no-system-log');
     await assertPageScreenshot(page, 'status-bar-no-system-log');
   });
