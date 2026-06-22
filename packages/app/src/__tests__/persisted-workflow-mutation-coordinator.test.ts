@@ -29,13 +29,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('high-priority queued work runs before queued normal work for the same workflow', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const order: string[] = [];
     const gate = deferred();
@@ -66,13 +62,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('releases a workflow lease after fire-and-forget task launch acceptance', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const startedTask = {
       id: 'task-a',
@@ -118,13 +110,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('evicts older queued workflow intents when a delegated recreate fence starts', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -172,13 +160,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('invalidates an older running workflow intent when recreate is enqueued', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -236,13 +220,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('invalidates an older running workflow intent when internal recreate-task is enqueued', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -287,13 +267,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('invalidates an older running workflow intent when headless recreate-task is enqueued', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -340,13 +316,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('evicts older queued workflow intents when internal recreate-task fence starts', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -383,13 +355,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('evicts older queued workflow intents when rebase-recreate fence starts', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -426,13 +394,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('invalidates an older running workflow intent when rebase-recreate is enqueued', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -478,13 +442,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('treats headless rebase-recreate as a recreate fence', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -527,13 +487,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('evicts older queued workflow intents when retry-workflow fence starts', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -572,20 +528,12 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('coalesces duplicate fire-and-forget headless workflow retries while queued or running', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
-    adapter.saveWorkflow({
-      id: 'wf-2',
-      name: 'wf-2',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
+    adapter.saveWorkflow({ id: 'wf-2',
+    name: 'wf-2', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const runningGate = deferred();
     const order: string[] = [];
@@ -651,13 +599,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('requeues interrupted running workflow mutations on restart and drains persisted queued work', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const firstGate = deferred();
     const owner1Order: string[] = [];
@@ -696,13 +640,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('requeues interrupted fix-with-agent workflow mutations on restart', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const firstGate = deferred();
     const owner1Order: string[] = [];
@@ -739,13 +679,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('does not let another owner steal a live workflow lease', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const owner1Order: string[] = [];
@@ -789,13 +725,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('submit returns immediately while persisted work drains in the background', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -823,13 +755,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
     for (let index = 1; index <= 4; index += 1) {
-      adapter.saveWorkflow({
-        id: `wf-${index}`,
-        name: `wf-${index}`,
-        status: 'running',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
+      adapter.saveWorkflow({ id: `wf-${index}`,
+      name: `wf-${index}`, createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(), });
       adapter.enqueueWorkflowMutationIntent(`wf-${index}`, 'mut', [`job-${index}`], 'normal');
     }
 
@@ -869,13 +797,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('does not run two intents for the same workflow concurrently', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const firstGate = deferred();
     const order: string[] = [];
@@ -913,13 +837,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('invalidates an older running workflow intent when internal delete-workflow is enqueued', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -965,13 +885,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('evicts older queued workflow intents when internal delete-workflow fence starts', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -1008,13 +924,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('invalidates an older running workflow intent when delegated headless delete is enqueued', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -1062,13 +974,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('evicts older queued workflow intents when delegated headless delete fence starts', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -1116,13 +1024,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('invalidates an older running workflow intent when internal delete-all-workflows is enqueued', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -1168,13 +1072,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('evicts older queued workflow intents when internal delete-all-workflows fence starts', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -1211,13 +1111,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('invalidates an older running workflow intent when delegated headless delete-all is enqueued', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -1265,13 +1161,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('evicts older queued workflow intents when delegated headless delete-all fence starts', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -1321,13 +1213,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('invalidates an older running workflow intent when internal bulk delete-all-workflows is enqueued', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -1373,13 +1261,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('evicts older queued workflow intents when internal bulk delete-all-workflows fence starts', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -1418,13 +1302,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('aborts the dispatch AbortSignal when recreate-task preempts a running fix mutation', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     let capturedContext: WorkflowMutationContext | undefined;
@@ -1468,13 +1348,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('aborts the dispatch AbortSignal when delete-workflow preempts a running fix mutation', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     let capturedContext: WorkflowMutationContext | undefined;
@@ -1515,13 +1391,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('aborts the dispatch AbortSignal when rebase-recreate preempts a running fix mutation', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     let capturedContext: WorkflowMutationContext | undefined;
@@ -1562,13 +1434,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('does not abort the dispatch AbortSignal for non-preempted mutations that complete normally', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     let signalAbortedDuringDispatch = false;
     const coordinator = new PersistedWorkflowMutationCoordinator(
@@ -1594,13 +1462,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('abort signal reason is a WorkflowMutationInvalidatedError when preempted', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     let capturedContext: WorkflowMutationContext | undefined;
@@ -1641,13 +1505,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('dispatch handler can observe abort during long-running work and stop early', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     let iterationsBeforeAbort = 0;
     const gate = deferred();

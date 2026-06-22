@@ -10,7 +10,7 @@
  * inside orchestrator.ts.
  */
 
-import type { TaskState, TaskStateChanges, Attempt, WorkflowDerivedStatus, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency } from '@invoker/workflow-graph';
+import type { TaskState, TaskStateChanges, Attempt, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency } from '@invoker/workflow-graph';
 
 // ── Workflow value types (inline in OrchestratorPersistence today) ────
 
@@ -19,11 +19,11 @@ export interface WorkflowRecord {
   name: string;
   description?: string;
   visualProof?: boolean;
-  status: WorkflowDerivedStatus;
   createdAt: string;
   updatedAt: string;
   repoUrl?: string;
-  onFinish?: string;
+  intermediateRepoUrl?: string;
+  onFinish?: 'none' | 'merge' | 'pull_request';
   baseBranch?: string;
   featureBranch?: string;
   mergeMode?: 'manual' | 'automatic' | 'external_review';
