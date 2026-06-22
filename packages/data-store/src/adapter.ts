@@ -55,6 +55,8 @@ export interface Workflow {
   createdAt: string;
   updatedAt: string;
 }
+export type WorkflowSaveInput = Omit<Workflow, 'status' | 'rollup'>;
+
 
 export interface TaskEvent {
   id: number;
@@ -96,7 +98,7 @@ export interface ExecutionResourceLeaseReleaseRow {
 
 export interface PersistenceAdapter {
   // Workflows
-  saveWorkflow(workflow: Workflow): void;
+  saveWorkflow(workflow: WorkflowSaveInput): void;
   updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'name' | 'description' | 'visualProof' | 'planFile' | 'repoUrl' | 'intermediateRepoUrl' | 'branch' | 'onFinish' | 'baseBranch' | 'featureBranch' | 'mergeMode' | 'reviewProvider' | 'externalDependencies' | 'externalDependencyChanges' | 'detachedExternalDependencies' | 'generation' | 'updatedAt'>>): void;
   loadWorkflow(workflowId: string): Workflow | undefined;
   listWorkflows(): Workflow[];

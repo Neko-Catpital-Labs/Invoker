@@ -25,9 +25,7 @@ export class SqliteTaskRepository implements TaskRepository {
   // ── Workflow writes ──
 
   saveWorkflow(workflow: WorkflowRecord): void {
-    // Port uses broader types (string) than adapter (literal unions).
-    // Safe at runtime because callers always pass valid literals.
-    this.adapter.saveWorkflow(workflow as any);
+    this.adapter.saveWorkflow(workflow);
   }
 
   updateWorkflow(workflowId: string, changes: WorkflowChanges): void {
