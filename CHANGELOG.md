@@ -6,6 +6,7 @@ All notable changes to Invoker will be documented in this file.
 
 - Make `plan-to-invoker` use focused verification by default instead of mandatory `pnpm test` or `pnpm run test:all` gates.
 - Bound Action Graph diagnostics to indexed current task data so large databases return quickly.
+- Split queue assigning work from running work in the UI pills, queue rows, and task graph.
 
 ## 0.0.4
 
