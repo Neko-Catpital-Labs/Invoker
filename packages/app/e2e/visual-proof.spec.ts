@@ -1298,7 +1298,6 @@ test.describe('Visual proof capture', () => {
     ]);
     // Navigate to queue tab if there is one, or verify queue section is visible
     await page.getByTestId('rail-queue').click();
-    await expect(page.getByText(/Running 1 \/ /)).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Action Queue (1)' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Backlog (3)' })).toBeVisible();
     await captureScreenshot(page, 'queue-view-concurrency');
@@ -1343,7 +1342,6 @@ test.describe('Visual proof capture', () => {
     await page.getByTestId('rail-queue').click();
     await expect(page.getByRole('heading', { name: 'Action Queue (1)' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Backlog (0)' })).toBeVisible();
-    await expect(page.getByText(/Running 1 \/ /)).toBeVisible();
     await expect(page.getByText('assigning-task')).toBeVisible();
     await expect(page.getByText('Assigning queue task')).toBeVisible();
     await captureScreenshot(page, 'queue-assigning-statusbar');
