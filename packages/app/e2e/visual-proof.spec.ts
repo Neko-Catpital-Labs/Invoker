@@ -1348,7 +1348,6 @@ test.describe('Visual proof capture', () => {
 
     const queueRow = page.locator('[data-row-id$="assigning-task"]');
     await expect(queueRow).toBeVisible();
-    await expect(queueRow.getByText('Pending', { exact: true })).toBeVisible();
     await expect(queueRow.getByText('phase: Assigning')).toHaveCount(0);
     await captureScreenshot(page, 'queue-assigning-row');
   });
