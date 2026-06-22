@@ -253,6 +253,26 @@ export interface BundledSkillTargetStatus {
   installedSkillNames: string[];
 }
 
+export interface HarnessConfigState {
+  id: string;
+  name: string;
+  path: string;
+  available: boolean;
+  installed: boolean;
+  upToDate: boolean;
+  installedCommandNames: string[];
+}
+
+export interface HarnessMcpConfigState {
+  id: string;
+  name: string;
+  path: string;
+  available: boolean;
+  installed: boolean;
+  upToDate: boolean;
+  serverName: string;
+}
+
 export interface BundledSkillsStatus {
   available: boolean;
   promptRecommended: boolean;
@@ -262,6 +282,8 @@ export interface BundledSkillsStatus {
   lastInstallAt?: string;
   lastInstallError?: string;
   targets: BundledSkillTargetStatus[];
+  commandTargets?: HarnessConfigState[];
+  mcpTargets?: HarnessMcpConfigState[];
 }
 
 export type BundledSkillsInstallMode = 'install' | 'update' | 'reinstall';
