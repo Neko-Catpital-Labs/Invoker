@@ -12,6 +12,8 @@ export interface McpCliRunner {
   run(args: string[], options?: { cwd?: string }): Promise<{ exitCode: number; stdout: string; stderr: string }>;
 }
 
+export const HANDOFF_PROMPT_DESCRIPTION = 'Plan a requested change, trigger PR skills for PR/stack work, convert it to Invoker YAML, validate it, and submit it live.';
+
 type SubmitSuccess = { ok: true; workflowId: string; stdout: string };
 type SubmitFailure = { ok: false; exitCode: number; stdout: string; stderr: string; error?: string };
 
@@ -104,11 +106,13 @@ function formatSubmitFailure(result: SubmitFailure): string {
     .join('\n');
 }
 
-function handoffPrompt(request: string): string {
+export function handoffPrompt(request: string): string {
   return [
     `User request: ${request}`,
     '',
     `Use this host's native planning mode when the host supports entering it from this command. If the host cannot be switched by this command, do a read-only planning pass and do not edit product code before the plan is approved.`,
+    'If the request involves creating, updating, publishing, or splitting pull requests or PR stacks, first read and follow skill://make-pr/SKILL.md before PR authoring or publication.',
+    'If the request involves multiple review slices, first read and follow skill://review-compression/SKILL.md before writing workflow YAML.',
     'Write the planning artifact to plans/invoker-handoff.md.',
     'Convert the approved Markdown plan to plans/invoker-handoff.yaml.',
     'Validate with invoker_validate_plan before submitting.',
@@ -178,7 +182,7 @@ export async function runMcpServer(options: { runner?: McpCliRunner; cliPath?: s
   server.registerPrompt(
     'invoker-plan-to-invoker',
     {
-      description: 'Plan a requested change, convert it to Invoker YAML, validate it, and submit it live.',
+      description: HANDOFF_PROMPT_DESCRIPTION,
       argsSchema: { request: z.string() },
     },
     ({ request }) => ({
