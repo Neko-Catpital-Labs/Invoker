@@ -1,12 +1,12 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { LocalBus } from '@invoker/transport';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { main } from '../index.js';
-import { submitPlanForMcp, validatePlanForMcp, type McpCliRunner } from '../mcp-server.js';
+import { HANDOFF_PROMPT_DESCRIPTION, handoffPrompt, submitPlanForMcp, validatePlanForMcp, type McpCliRunner } from '../mcp-server.js';
 
 const repoRoot = resolve(__dirname, '../../../..');
 const cliPath = resolve(repoRoot, 'packages/cli/dist/index.js');
@@ -49,6 +49,21 @@ function captureProcessOutput() {
 describe('invoker-cli', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('declares MCP runtime dependencies in the CLI manifest and lockfile', () => {
+    const manifest = JSON.parse(readFileSync(resolve(repoRoot, 'packages/cli/package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>;
+    };
+    const lockfile = readFileSync(resolve(repoRoot, 'pnpm-lock.yaml'), 'utf8');
+
+    expect(manifest.dependencies?.['@modelcontextprotocol/sdk']).toBe('^1.29.0');
+    expect(manifest.dependencies?.zod).toBe('^4.4.3');
+    expect(lockfile).toContain('  packages/cli:\n');
+    expect(lockfile).toContain("      '@modelcontextprotocol/sdk':\n        specifier: ^1.29.0\n");
+    expect(lockfile).toContain('      zod:\n        specifier: ^4.4.3\n');
+    expect(lockfile).toContain("'@modelcontextprotocol/sdk@1.29.0(zod@4.4.3)':");
+    expect(lockfile).toContain('  zod@4.4.3:');
   });
 
   it('--help exits 0', () => {
@@ -219,6 +234,21 @@ tasks:
   });
 
 
+
+  it('tells MCP handoff users to trigger PR skills before publication work', () => {
+    const prompt = handoffPrompt('publish this as a PR stack');
+
+    expect(prompt).toContain('creating, updating, publishing, or splitting pull requests or PR stacks');
+    expect(prompt).toContain('skill://make-pr/SKILL.md');
+    expect(prompt).toContain('before PR authoring or publication');
+    expect(prompt).toContain('multiple review slices');
+    expect(prompt).toContain('skill://review-compression/SKILL.md');
+    expect(prompt).toContain('before writing workflow YAML');
+  });
+
+  it('describes PR skill triggers in the MCP prompt metadata', () => {
+    expect(HANDOFF_PROMPT_DESCRIPTION).toContain('trigger PR skills for PR/stack work');
+  });
   it('validates an Invoker plan for MCP without submitting it', async () => {
     const result = await validatePlanForMcp(fixturePlan);
 
