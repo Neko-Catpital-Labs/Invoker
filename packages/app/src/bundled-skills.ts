@@ -36,6 +36,7 @@ interface BundledSkillsContext {
 }
 
 type JsonRecord = Record<string, unknown>;
+type BundledSkillStaleReason = NonNullable<BundledSkillTargetStatus['staleReason']>;
 
 function resolveBundledSkillsSourceRoot(context: BundledSkillsContext): string | null {
   if (context.isPackaged) {
@@ -193,6 +194,59 @@ function writeManifest(invokerHomeRoot: string, manifest: BundledSkillsManifest)
   writeFileSync(resolveManifestPath(invokerHomeRoot), JSON.stringify(manifest, null, 2));
 }
 
+function resolveStaleReason(
+  target: BundledSkillTargetStatus,
+  installed: boolean,
+  upToDate: boolean,
+  manifest: BundledSkillsManifest | null,
+  bundledHash: string,
+): BundledSkillStaleReason | undefined {
+  if (!installed) return 'not-installed';
+  if (upToDate) return undefined;
+  if (!manifest) return 'manifest-missing';
+  const manifestTarget = manifest.targets[target.id];
+  if (!manifestTarget) return 'manifest-target-missing';
+  if (manifestTarget.path !== target.path) return 'target-path-changed';
+  if (manifest.bundledHash !== bundledHash) return 'bundle-updated';
+  return 'manifest-skill-list-changed';
+}
+
+function staleDiagnostic(
+  staleReason: BundledSkillStaleReason,
+  target: BundledSkillTargetStatus,
+  missingSkillNames: string[],
+  manifestTarget: BundledSkillsManifest['targets'][string] | undefined,
+): string {
+  switch (staleReason) {
+    case 'not-installed':
+      return missingSkillNames.length > 0
+        ? `Missing managed skills with prefix "${MANAGED_PREFIX}": ${missingSkillNames.join(', ')}`
+        : `Managed skills with prefix "${MANAGED_PREFIX}" are not installed.`;
+    case 'manifest-missing':
+      return `Installed managed skills with prefix "${MANAGED_PREFIX}" exist, but Invoker has no install manifest. Reinstall to verify the bundle version.`;
+    case 'manifest-target-missing':
+      return `Installed managed skills with prefix "${MANAGED_PREFIX}" exist, but the install manifest has no ${target.name} target entry. Reinstall to refresh diagnostics.`;
+    case 'target-path-changed':
+      return `Installed managed skills with prefix "${MANAGED_PREFIX}" are recorded for ${manifestTarget?.path}, not ${target.path}. Reinstall to update this target.`;
+    case 'bundle-updated':
+      return `Installed managed skills with prefix "${MANAGED_PREFIX}" are stale because the bundled source changed. Update skills to refresh them.`;
+    case 'manifest-skill-list-changed':
+      return `Installed managed skills with prefix "${MANAGED_PREFIX}" differ from the bundled skill manifest. Reinstall to restore the managed set.`;
+  }
+}
+
+function buildTargetDiagnostic(
+  staleReason: BundledSkillStaleReason | undefined,
+  target: BundledSkillTargetStatus,
+  missingSkillNames: string[],
+  manifestTarget: BundledSkillsManifest['targets'][string] | undefined,
+): string {
+  if (!staleReason) {
+    return `Installed managed skills with prefix "${MANAGED_PREFIX}" are up to date.`;
+  }
+  return staleDiagnostic(staleReason, target, missingSkillNames, manifestTarget);
+}
+
 function buildTargetStatus(
   target: BundledSkillTargetStatus,
   expectedInstalledNames: string[],
@@ -207,32 +261,8 @@ function buildTargetStatus(
     && manifest?.bundledHash === bundledHash
     && manifestTarget?.path === target.path
     && expectedInstalledNames.every((name) => manifestTarget.installedSkillNames.includes(name));
-  let staleReason: BundledSkillTargetStatus['staleReason'] | undefined;
-  let diagnostic: string;
-
-  if (!installed) {
-    staleReason = 'not-installed';
-    diagnostic = missingSkillNames.length > 0
-      ? `Missing managed skills with prefix "${MANAGED_PREFIX}": ${missingSkillNames.join(', ')}`
-      : `Managed skills with prefix "${MANAGED_PREFIX}" are not installed.`;
-  } else if (upToDate) {
-    diagnostic = `Installed managed skills with prefix "${MANAGED_PREFIX}" are up to date.`;
-  } else if (!manifest) {
-    staleReason = 'manifest-missing';
-    diagnostic = `Installed managed skills with prefix "${MANAGED_PREFIX}" exist, but Invoker has no install manifest. Reinstall to verify the bundle version.`;
-  } else if (!manifestTarget) {
-    staleReason = 'manifest-target-missing';
-    diagnostic = `Installed managed skills with prefix "${MANAGED_PREFIX}" exist, but the install manifest has no ${target.name} target entry. Reinstall to refresh diagnostics.`;
-  } else if (manifestTarget.path !== target.path) {
-    staleReason = 'target-path-changed';
-    diagnostic = `Installed managed skills with prefix "${MANAGED_PREFIX}" are recorded for ${manifestTarget.path}, not ${target.path}. Reinstall to update this target.`;
-  } else if (manifest.bundledHash !== bundledHash) {
-    staleReason = 'bundle-updated';
-    diagnostic = `Installed managed skills with prefix "${MANAGED_PREFIX}" are stale because the bundled source changed. Update skills to refresh them.`;
-  } else {
-    staleReason = 'manifest-skill-list-changed';
-    diagnostic = `Installed managed skills with prefix "${MANAGED_PREFIX}" differ from the bundled skill manifest. Reinstall to restore the managed set.`;
-  }
+  const staleReason = resolveStaleReason(target, installed, upToDate, manifest, bundledHash);
+  const diagnostic = buildTargetDiagnostic(staleReason, target, missingSkillNames, manifestTarget);
 
   return {
     ...target,
