@@ -656,6 +656,60 @@ assert(
   'routing review unit should reject mixed activation-surface stack slices like old #1755',
 );
 
+const old1756MixedRuntimeBody = `## Summary
+
+Publish review gate artifacts and approve merge tasks from review polling.
+
+<details>
+<summary>Review metadata</summary>
+
+Review Claim:
+
+External review publication and approval polling both use the same review gate state.
+
+Review Lane:
+
+- behavior
+
+Review Unit:
+
+- routing
+
+Safety Invariant:
+
+The merge task still waits for required review gates.
+
+Slice Rationale:
+
+Publication and polling landed together around the same review gate contract.
+
+</details>
+
+## Non-goals
+
+- Do not add docs or policy updates in this slice.
+
+## Test Plan
+
+- [ ] \`pnpm test\`
+
+## Revert Plan
+
+- Safe to revert? Yes
+- Revert command: \`git revert <sha>\`
+- Post-revert steps: None
+- Data migration? No
+`;
+const old1756BoundaryErrors = await validatePrBody(old1756MixedRuntimeBody, {
+  changedFiles: [
+    'packages/execution-engine/src/merge-runner.ts',
+    'packages/execution-engine/src/task-runner.ts',
+  ],
+});
+assert(
+  old1756BoundaryErrors.some((error) => error.includes('Publication and poll/approval runtime behavior must be split into separate PRs')),
+  'old #1756 mixed runtime slice should fail the publication vs poll/approval boundary guard',
+);
 const validationPolicyBody = `## Summary
 
 Validate stale recovery candidates.
