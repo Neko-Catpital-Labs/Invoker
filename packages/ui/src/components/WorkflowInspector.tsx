@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { TaskState, WorkflowMeta } from '../types.js';
 import { getEffectiveVisualStatus, getStatusColor } from '../lib/colors.js';
 import { workflowStatusVisual } from '../lib/workflow-status.js';
+import type { ActionGraphNode } from '@invoker/contracts';
 
 type MergeMode = 'manual' | 'automatic' | 'external_review';
 
@@ -12,7 +13,7 @@ interface WorkflowInspectorProps {
   remoteTargets?: string[];
   executionPools?: string[];
   executionAgents?: string[];
-  actionNode?: unknown;
+  actionNode?: ActionGraphNode | null;
   collapsed: boolean;
   advancedExpanded: boolean;
   onEditType?: (taskId: string, runnerKind: string, poolMemberId?: string) => void;
@@ -62,6 +63,7 @@ export function WorkflowInspector({
   workflowTasks,
   executionPools,
   executionAgents,
+  actionNode,
   collapsed,
   advancedExpanded,
   onEditPool,
@@ -249,6 +251,57 @@ export function WorkflowInspector({
             </div>
           )}
         </section>
+
+        {actionNode && (
+          <section data-testid="workflow-inspector-action-node" className="rounded border border-blue-500/40 bg-blue-950/20 p-3">
+            <h3 className="text-[11px] uppercase tracking-wide text-blue-200">Action Graph Detail</h3>
+            <div className="mt-1 text-sm font-medium text-gray-100 break-words">{actionNode.label}</div>
+            <div data-testid="workflow-inspector-action-node-status" className="mt-2 inline-flex rounded border border-blue-300/40 px-2 py-1 text-[10px] font-semibold uppercase text-blue-100">
+              {actionNode.status.toUpperCase()}
+            </div>
+            <dl className="mt-3 space-y-1 text-xs">
+              {[
+                ['type', actionNode.type],
+                ['status', actionNode.status],
+                ['taskId', actionNode.taskId],
+                ['attemptId', actionNode.attemptId],
+                ['intentId', actionNode.intentId],
+                ['ownerId', actionNode.ownerId],
+                ['createdAt', actionNode.createdAt],
+                ['startedAt', actionNode.startedAt],
+                ['completedAt', actionNode.completedAt],
+                ['heartbeatAt', actionNode.heartbeatAt],
+                ['leaseExpiresAt', actionNode.leaseExpiresAt],
+              ].filter(([, value]) => value !== undefined && value !== '').map(([key, value]) => (
+                <div key={String(key)} className="flex justify-between gap-3">
+                  <dt className="shrink-0 text-gray-500">{key}</dt>
+                  <dd className="min-w-0 break-all text-right text-gray-200">{String(value)}</dd>
+                </div>
+              ))}
+              {actionNode.durations && Object.entries(actionNode.durations).map(([key, value]) => (
+                <div key={`duration-${key}`} className="flex justify-between gap-3">
+                  <dt className="shrink-0 text-gray-500">{key}</dt>
+                  <dd className="min-w-0 break-all text-right text-gray-200">{String(value)}</dd>
+                </div>
+              ))}
+            </dl>
+            {actionNode.latestError && (
+              <div className="mt-3 text-xs text-red-300 break-words">{actionNode.latestError}</div>
+            )}
+            {actionNode.suggestedNextAction && (
+              <div className="mt-3 text-xs text-blue-100 break-words">{actionNode.suggestedNextAction}</div>
+            )}
+            {actionNode.history && actionNode.history.length > 0 && (
+              <div className="mt-3 space-y-1 border-t border-blue-400/20 pt-2">
+                {[...actionNode.history].reverse().map((entry) => (
+                  <div key={entry.id} className="text-[11px] text-gray-300">
+                    <span className="text-gray-500">{entry.timestamp}</span> {entry.source}: {entry.message}
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
 
         {task && !task.config.isMergeNode && onEditPool && (
           <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
