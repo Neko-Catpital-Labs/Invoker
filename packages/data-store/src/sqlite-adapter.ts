@@ -3010,6 +3010,33 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return rows.map((row) => this.rowToWorkflowMutationIntent(row));
   }
 
+  listWorkflowMutationStatusIntents(
+    workflowId?: string,
+    terminalLimit = 50,
+  ): WorkflowMutationIntent[] {
+    const workflowWhere = workflowId ? 'AND workflow_id = ?' : '';
+    const workflowParams = workflowId ? [workflowId] : [];
+    const openRows = this.queryAll(
+      `SELECT * FROM workflow_mutation_intents
+       WHERE status IN ('queued', 'running') ${workflowWhere}
+       ORDER BY CASE priority WHEN 'high' THEN 0 ELSE 1 END ASC, id ASC`,
+      workflowParams,
+    );
+    const limit = Math.max(0, Math.floor(terminalLimit));
+    const terminalRows = limit === 0
+      ? []
+      : this.queryAll(
+        `SELECT * FROM workflow_mutation_intents
+         WHERE status IN ('failed', 'completed') ${workflowWhere}
+         ORDER BY id DESC
+         LIMIT ?`,
+        [...workflowParams, limit],
+      );
+    return [...openRows, ...terminalRows]
+      .map((row) => this.rowToWorkflowMutationIntent(row))
+      .sort((a, b) => b.id - a.id);
+  }
+
   requeueRunningWorkflowMutationIntents(): number {
     const running = this.queryOne(
       `SELECT COUNT(*) AS count FROM workflow_mutation_intents WHERE status = 'running'`,

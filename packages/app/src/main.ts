@@ -67,13 +67,15 @@ import type {
   TaskStateChanges,
 } from '@invoker/workflow-core';
 import {
+  IpcChannels,
   makeEnvelope,
   CommandError,
   resolveInvokerIpcSocketPath,
   resolveRepoRoot,
 } from '@invoker/contracts';
-import type { ActionGraphResponse, WorkflowMeta, WorkResponse } from '@invoker/contracts';
+import type { ActionGraphResponse, WorkflowMeta, WorkResponse, WorkflowMutationAcceptedResult, WorkflowMutationStatusEntry } from '@invoker/contracts';
 import { SQLiteAdapter, ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
+import type { WorkflowMutationIntent } from '@invoker/data-store';
 import { IpcBus, Channels } from '@invoker/transport';
 import {
   WorkspaceProbeAdapter,
@@ -445,12 +447,69 @@ function logHeadlessExecReceived(payload: HeadlessExecMutationPayload, mode: Hea
   );
 }
 
+function toWorkflowMutationStatusEntry(intent: WorkflowMutationIntent): WorkflowMutationStatusEntry {
+  return {
+    intentId: intent.id,
+    workflowId: intent.workflowId,
+    channel: intent.channel,
+    label: workflowMutationLabel(intent.channel, intent.args),
+    status: intent.status,
+    priority: intent.priority,
+    ownerId: intent.ownerId,
+    error: intent.error,
+    createdAt: intent.createdAt,
+    startedAt: intent.startedAt,
+    completedAt: intent.completedAt,
+    args: intent.args,
+  };
+}
+function workflowMutationLabel(channel: string, args: unknown[]): string {
+  const labels: Record<string, string> = {
+    'invoker:delete-workflow': 'Delete workflow',
+    'invoker:detach-workflow': 'Detach workflow',
+    'invoker:provide-input': 'Provide input',
+    'invoker:approve': 'Approve task',
+    'invoker:reject': 'Reject task',
+    'invoker:select-experiment': 'Select experiment',
+    'invoker:restart-task': 'Retry task',
+    'invoker:cancel-task': 'Cancel task',
+    'invoker:cancel-workflow': 'Cancel workflow',
+    'invoker:edit-task-command': 'Edit task command',
+    'invoker:edit-task-prompt': 'Edit task prompt',
+    'invoker:edit-task-type': 'Edit task executor',
+    'invoker:edit-task-pool': 'Edit task pool',
+    'invoker:edit-task-agent': 'Edit task agent',
+    'invoker:set-task-external-gate-policies': 'Set gate policy',
+    'invoker:replace-task': 'Replace task',
+    'invoker:recreate-workflow': 'Recreate workflow',
+    'invoker:recreate-task': 'Recreate task',
+    'invoker:recreate-downstream': 'Recreate downstream',
+    'invoker:retry-workflow': 'Retry workflow',
+    'invoker:rebase-retry': 'Rebase and Retry',
+    'invoker:rebase-recreate': 'Rebase and Recreate',
+    'invoker:set-merge-branch': 'Set merge branch',
+    'invoker:set-merge-mode': 'Set merge mode',
+    'invoker:approve-merge': 'Approve merge',
+    'invoker:resolve-conflict': 'Resolve conflict',
+    'invoker:fix-with-agent': 'Fix with agent',
+    'headless.exec': 'CLI command',
+  };
+
+  if (channel === 'headless.exec') {
+    const payload = args[0] as { args?: unknown } | undefined;
+    const cliArgs = Array.isArray(payload?.args) ? payload.args.filter((arg): arg is string => typeof arg === 'string') : [];
+    if (cliArgs.length > 0) return `CLI: ${cliArgs.join(' ')}`;
+  }
+
+  return labels[channel] ?? channel;
+}
+
 function acknowledgeNoTrackHeadlessExec(
   payload: HeadlessExecMutationPayload,
   workflowId: string | undefined,
   priority: WorkflowMutationPriority,
   mode: HeadlessOwnerMode,
-): { ok: true; intentId: number } | undefined {
+): WorkflowMutationAcceptedResult | undefined {
   logger.info(
     `headless.exec decision ${headlessExecLogFields(payload, mode, { workflow: `"${workflowId ?? '<none>'}"`, priority })}`,
     { module: 'ipc-delegate' },
@@ -466,7 +525,7 @@ function acknowledgeNoTrackHeadlessExec(
       `headless.exec accepted ${headlessExecLogFields(payload, mode, { workflow: `"${workflowId}"`, intent: intentId, priority })}`,
       { module: 'ipc-delegate' },
     );
-    return { ok: true, intentId };
+    return { ok: true, accepted: true, queued: true, intentId, workflowId, channel: 'headless.exec', label: workflowMutationLabel('headless.exec', [payload]), status: 'queued' };
   }
 
   const reason = !workflowId ? 'workflow-not-resolved' : 'coordinator-unavailable';
@@ -1098,6 +1157,29 @@ function startHeadlessMode(): void {
         return { workflowId, tasks };
       };
 
+      const submitStandaloneGuiMutation = (
+        workflowId: string | undefined,
+        priority: WorkflowMutationPriority,
+        channel: string,
+        args: unknown[],
+        handler: (...handlerArgs: unknown[]) => Promise<unknown>,
+      ): WorkflowMutationAcceptedResult => {
+        if (!workflowId) throw new Error(`Could not resolve workflow for ${channel}`);
+        if (!workflowMutationCoordinator) throw new Error('Workflow mutation coordinator is unavailable');
+        workflowMutationDispatcher.set(channel, handler);
+        const intentId = workflowMutationCoordinator.submit(workflowId, priority, channel, args);
+        return {
+          ok: true,
+          accepted: true,
+          queued: true,
+          intentId,
+          workflowId,
+          channel,
+          label: workflowMutationLabel(channel, args),
+          status: 'queued',
+        };
+      };
+
       const executeStandaloneGuiMutation = async (payload: GuiMutationPayload): Promise<unknown> => {
         switch (payload.channel) {
           case 'invoker:clear': {
@@ -1168,33 +1250,40 @@ function startHeadlessMode(): void {
           }
           case 'invoker:set-merge-branch': {
             const workflowId = String(payload.args[0]);
-            const baseBranch = String(payload.args[1]);
-            persistence.updateWorkflow(workflowId, { baseBranch });
-            const tasks = persistence.loadTasks(workflowId);
-            const mergeTask = tasks.find((task) => task.config.isMergeNode);
-            if (!mergeTask) return undefined;
-            const executor = createStandaloneTaskExecutor();
-            const envelope = makeEnvelope('set-merge-branch', 'ui', 'task', { taskId: mergeTask.id });
-            const result = await commandService.retryTask(envelope);
-            if (!result.ok) throw new Error(result.error.message);
-            const started = result.data;
-            await dispatchStartedTasksWithGlobalTopup({
-              orchestrator,
-              taskExecutor: executor,
-              logger,
-              context: 'standalone.set-merge-branch',
-              started,
-              scopedTaskIds: [mergeTask.id],
+            return submitStandaloneGuiMutation(workflowId, 'normal', payload.channel, payload.args, async (workflowIdArg: unknown, baseBranchArg: unknown) => {
+              const queuedWorkflowId = String(workflowIdArg);
+              const baseBranch = String(baseBranchArg);
+              persistence.updateWorkflow(queuedWorkflowId, { baseBranch });
+              const tasks = persistence.loadTasks(queuedWorkflowId);
+              const mergeTask = tasks.find((task) => task.config.isMergeNode);
+              if (!mergeTask) return undefined;
+              const executor = createStandaloneTaskExecutor();
+              const envelope = makeEnvelope('set-merge-branch', 'ui', 'task', { taskId: mergeTask.id });
+              const result = await commandService.retryTask(envelope);
+              if (!result.ok) throw new Error(result.error.message);
+              const started = result.data;
+              await dispatchStartedTasksWithGlobalTopup({
+                orchestrator,
+                taskExecutor: executor,
+                logger,
+                context: 'standalone.set-merge-branch',
+                started,
+                scopedTaskIds: [mergeTask.id],
+              });
+              return undefined;
             });
-            return undefined;
           }
           case 'invoker:replace-task': {
             const taskId = String(payload.args[0]);
-            const replacementTasks = payload.args[1] as TaskReplacementDef[];
-            const envelope = makeEnvelope('replace-task', 'ui', 'task', { taskId, replacementTasks });
-            const result = await commandService.replaceTask(envelope);
-            if (!result.ok) throw new Error(result.error.message);
-            return result.data;
+            const workflowId = resolveHeadlessTargetWorkflowId(taskId, persistence);
+            return submitStandaloneGuiMutation(workflowId, 'high', payload.channel, payload.args, async (taskIdArg: unknown, replacementTasksArg: unknown) => {
+              const queuedTaskId = String(taskIdArg);
+              const replacementTasks = replacementTasksArg as TaskReplacementDef[];
+              const envelope = makeEnvelope('replace-task', 'ui', 'task', { taskId: queuedTaskId, replacementTasks });
+              const result = await commandService.replaceTask(envelope);
+              if (!result.ok) throw new Error(result.error.message);
+              return result.data;
+            });
           }
           case 'invoker:check-pr-statuses': {
             const executor = createStandaloneTaskExecutor();
@@ -1212,25 +1301,33 @@ function startHeadlessMode(): void {
           }
           case 'invoker:select-experiment': {
             const taskId = String(payload.args[0]);
-            const experimentId = payload.args[1] as string | string[];
-            const ids = Array.isArray(experimentId) ? experimentId : [experimentId];
-            const executor = createStandaloneTaskExecutor();
-            if (ids.length === 1) {
-              const envelope = makeEnvelope('select-experiment', 'ui', 'task', { taskId, experimentId: ids[0] });
-              const result = await commandService.selectExperiment(envelope);
-              if (!result.ok) throw new Error(result.error.message);
+            const workflowId = resolveHeadlessTargetWorkflowId(taskId, persistence);
+            return submitStandaloneGuiMutation(workflowId, 'normal', payload.channel, payload.args, async (taskIdArg: unknown, experimentIdArg: unknown) => {
+              const queuedTaskId = String(taskIdArg);
+              const experimentId = experimentIdArg as string | string[];
+              const ids = Array.isArray(experimentId) ? experimentId : [experimentId];
+              const executor = createStandaloneTaskExecutor();
+              if (ids.length === 1) {
+                const envelope = makeEnvelope('select-experiment', 'ui', 'task', { taskId: queuedTaskId, experimentId: ids[0] });
+                const result = await commandService.selectExperiment(envelope);
+                if (!result.ok) throw new Error(result.error.message);
+                return undefined;
+              }
+              await sharedSelectExperiments(queuedTaskId, ids, { orchestrator, taskExecutor: executor });
               return undefined;
-            }
-            await sharedSelectExperiments(taskId, ids, { orchestrator, taskExecutor: executor });
-            return undefined;
+            });
           }
           case 'invoker:set-task-external-gate-policies': {
             const taskId = String(payload.args[0]);
-            const updates = payload.args[1] as Array<{ workflowId: string; taskId?: string; gatePolicy: 'completed' | 'review_ready' }>;
-            const envelope = makeEnvelope('set-gate-policies', 'ui', 'task', { taskId, updates });
-            const result = await commandService.setTaskExternalGatePolicies(envelope);
-            if (!result.ok) throw new Error(result.error.message);
-            return undefined;
+            const workflowId = resolveHeadlessTargetWorkflowId(taskId, persistence);
+            return submitStandaloneGuiMutation(workflowId, 'normal', payload.channel, payload.args, async (taskIdArg: unknown, updatesArg: unknown) => {
+              const queuedTaskId = String(taskIdArg);
+              const updates = updatesArg as Array<{ workflowId: string; taskId?: string; gatePolicy: 'completed' | 'review_ready' }>;
+              const envelope = makeEnvelope('set-gate-policies', 'ui', 'task', { taskId: queuedTaskId, updates });
+              const result = await commandService.setTaskExternalGatePolicies(envelope);
+              if (!result.ok) throw new Error(result.error.message);
+              return undefined;
+            });
           }
           default:
             throw new Error(`Unsupported internal mutation for standalone owner: ${payload.channel}`);
@@ -1597,7 +1694,7 @@ function startHeadlessMode(): void {
             `headless.run received trace=${traceId ?? '<none>'} planPath="${planPath}" ownerId=${workflowMutationOwnerId} mode=standalone`,
             { module: 'ipc-delegate' },
           );
-          const result = await executeStandaloneHeadlessRun({ planPath });
+          const result = await executeStandaloneHeadlessRun({ planPath, traceId });
           logger.info(
             `headless.run accepted trace=${traceId ?? '<none>'} workflow="${result.workflowId}" tasks=${result.tasks.length} mode=standalone`,
             { module: 'ipc-delegate' },
@@ -1614,7 +1711,7 @@ function startHeadlessMode(): void {
         });
         messageBus.onRequest('headless.query', async (req: unknown) => {
           noteStandaloneOwnerActivity();
-          const { kind, reset } = req as { kind?: string; reset?: boolean };
+          const { kind, reset, workflowId } = req as { kind?: string; reset?: boolean; workflowId?: string };
           if (kind === 'ui-perf') {
             if (reset) {
               headlessDeps.resetUiPerfStats?.();
@@ -1626,6 +1723,10 @@ function startHeadlessMode(): void {
           }
           if (kind === 'queue') {
             return orchestrator.getQueueStatus() as unknown as Record<string, unknown>;
+          }
+          if (kind === 'workflow-mutation-statuses') {
+            const scopedWorkflowId = typeof workflowId === 'string' && workflowId.length > 0 ? workflowId : undefined;
+            return persistence.listWorkflowMutationStatusIntents(scopedWorkflowId).map(toWorkflowMutationStatusEntry);
           }
           if (kind === 'workflow-status') {
             return orchestrator.getWorkflowStatus();
@@ -2511,6 +2612,30 @@ function createEmbeddedTerminalBackendFromConfig(
     return workflowMutationCoordinator.enqueue<T>(workflowId, priority, channel, args);
   }
 
+  function submitWorkflowMutation(
+    workflowId: string | undefined,
+    priority: WorkflowMutationPriority,
+    channel: string,
+    args: unknown[],
+  ): WorkflowMutationAcceptedResult {
+    if (!workflowId) throw new Error(`Could not resolve workflow for ${channel}`);
+    if (!workflowMutationCoordinator) throw new Error('Workflow mutation coordinator is unavailable');
+    if (!workflowMutationDispatcher.has(channel)) {
+      throw new Error(`No workflow mutation dispatcher registered for ${channel}`);
+    }
+    const intentId = workflowMutationCoordinator.submit(workflowId, priority, channel, args);
+    return {
+      ok: true,
+      accepted: true,
+      queued: true,
+      intentId,
+      workflowId,
+      channel,
+      label: workflowMutationLabel(channel, args),
+      status: 'queued',
+    };
+  }
+
   function translateGuiMutationToHeadless(payload: GuiMutationPayload):
     | { channel: 'headless.gui-mutation'; request: GuiMutationPayload }
     | { channel: 'headless.run'; request: HeadlessRunMutationPayload }
@@ -2657,7 +2782,7 @@ function createEmbeddedTerminalBackendFromConfig(
   const workflowScopedGuiMutationRegistrationContext: WorkflowScopedGuiMutationRegistrationContext = {
     ...guiMutationRegistrationContext,
     workflowMutationDispatcher,
-    runWorkflowMutation,
+    submitWorkflowMutation,
   };
 
   const {
@@ -2667,6 +2792,18 @@ function createEmbeddedTerminalBackendFromConfig(
     guiMutationRegistrationContext,
     workflowScopedGuiMutationRegistrationContext,
   );
+
+  function registerTaskScopedGuiMutationHandler<TResult = unknown>(
+    channel: keyof typeof IpcChannels & string,
+    resolveWorkflowId: (...args: unknown[]) => string | undefined,
+    priority: WorkflowMutationPriority,
+    handler: (...args: unknown[]) => Promise<TResult>,
+  ): void {
+    workflowMutationDispatcher.set(channel, (...args: unknown[]) => handler(...args));
+    registerGuiMutationHandler(channel, async (...args: unknown[]) => (
+      submitWorkflowMutation(resolveWorkflowId(...args), priority, channel, args)
+    ));
+  }
 
   function createWindow(): void {
     createMainWindow({
@@ -3121,7 +3258,7 @@ function createEmbeddedTerminalBackendFromConfig(
         mode: 'gui',
       }));
       messageBus.onRequest('headless.query', async (req: unknown) => {
-        const { kind, reset } = req as { kind?: string; reset?: boolean };
+        const { kind, reset, workflowId } = req as { kind?: string; reset?: boolean; workflowId?: string };
         if (kind === 'ui-perf') {
           if (reset) {
             resetUiPerfStats();
@@ -3133,6 +3270,10 @@ function createEmbeddedTerminalBackendFromConfig(
         }
         if (kind === 'queue') {
           return orchestrator.getQueueStatus() as unknown as Record<string, unknown>;
+        }
+        if (kind === 'workflow-mutation-statuses') {
+          const scopedWorkflowId = typeof workflowId === 'string' && workflowId.length > 0 ? workflowId : undefined;
+          return persistence.listWorkflowMutationStatusIntents(scopedWorkflowId).map(toWorkflowMutationStatusEntry);
         }
         if (kind === 'workflow-status') {
           return orchestrator.getWorkflowStatus();
@@ -3561,7 +3702,7 @@ function createEmbeddedTerminalBackendFromConfig(
       },
     );
 
-    registerGuiMutationHandler('invoker:provide-input', async (taskIdArg: unknown, inputArg: unknown) => {
+    registerTaskScopedGuiMutationHandler('invoker:provide-input', (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg), 'normal', async (taskIdArg: unknown, inputArg: unknown) => {
       const taskId = String(taskIdArg);
       const input = String(inputArg);
       const envelope = makeEnvelope('provide-input', 'ui', 'task', { taskId, input });
@@ -3590,7 +3731,7 @@ function createEmbeddedTerminalBackendFromConfig(
       },
     );
 
-    registerGuiMutationHandler('invoker:reject', async (taskIdArg: unknown, reasonArg?: unknown) => {
+    registerTaskScopedGuiMutationHandler('invoker:reject', (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg), 'normal', async (taskIdArg: unknown, reasonArg?: unknown) => {
       const taskId = String(taskIdArg);
       const reason = reasonArg === undefined ? undefined : String(reasonArg);
       const envelope = makeEnvelope('reject', 'ui', 'task', { taskId, reason });
@@ -3598,7 +3739,7 @@ function createEmbeddedTerminalBackendFromConfig(
       if (!result.ok) throw new Error(result.error.message);
     });
 
-    registerGuiMutationHandler('invoker:select-experiment', async (taskIdArg: unknown, experimentIdArg: unknown) => {
+    registerTaskScopedGuiMutationHandler('invoker:select-experiment', (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg), 'normal', async (taskIdArg: unknown, experimentIdArg: unknown) => {
       const taskId = String(taskIdArg);
       const experimentId = experimentIdArg as string | string[];
       const ids = Array.isArray(experimentId) ? experimentId : [experimentId];
@@ -3735,6 +3876,23 @@ function createEmbeddedTerminalBackendFromConfig(
         }
       }
       return buildCurrentActionGraphSnapshot({ orchestrator, persistence, invokerConfig });
+    });
+
+    ipcMain.handle('invoker:get-workflow-mutation-statuses', async (_event, workflowIdArg?: unknown) => {
+      const workflowId = typeof workflowIdArg === 'string' && workflowIdArg.length > 0 ? workflowIdArg : undefined;
+      if (!ownerMode) {
+        try {
+          return await messageBus.request('headless.query', { kind: 'workflow-mutation-statuses', workflowId });
+        } catch (err) {
+          logger.warn(
+            `get-workflow-mutation-statuses owner delegation failed; falling back to local read-only snapshot: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+            { module: 'ipc' },
+          );
+        }
+      }
+      return persistence.listWorkflowMutationStatusIntents(workflowId).map(toWorkflowMutationStatusEntry);
     });
 
     ipcMain.handle('invoker:report-ui-perf', (_event, metric: string, data?: Record<string, unknown>) => {
@@ -4056,7 +4214,7 @@ function createEmbeddedTerminalBackendFromConfig(
       },
     );
 
-    registerGuiMutationHandler('invoker:set-merge-branch', async (workflowIdArg: unknown, baseBranchArg: unknown) => {
+    registerTaskScopedGuiMutationHandler('invoker:set-merge-branch', (workflowIdArg: unknown) => String(workflowIdArg), 'normal', async (workflowIdArg: unknown, baseBranchArg: unknown) => {
       const workflowId = String(workflowIdArg);
       const baseBranch = String(baseBranchArg);
       logger.info(`set-merge-branch: workflow="${workflowId}" → "${baseBranch}"`, { module: 'ipc' });
@@ -4085,7 +4243,7 @@ function createEmbeddedTerminalBackendFromConfig(
       }
     });
 
-    registerGuiMutationHandler('invoker:set-merge-mode', async (workflowIdArg: unknown, mergeModeArg: unknown) => {
+    registerTaskScopedGuiMutationHandler('invoker:set-merge-mode', (workflowIdArg: unknown) => String(workflowIdArg), 'normal', async (workflowIdArg: unknown, mergeModeArg: unknown) => {
       const workflowId = String(workflowIdArg);
       const mergeMode = String(mergeModeArg);
       logger.info(`set-merge-mode: workflow="${workflowId}" → "${mergeMode}"`, { module: 'ipc' });
@@ -4227,7 +4385,7 @@ function createEmbeddedTerminalBackendFromConfig(
       },
     );
 
-    registerGuiMutationHandler('invoker:edit-task-command', async (taskIdArg: unknown, newCommandArg: unknown) => {
+    registerTaskScopedGuiMutationHandler('invoker:edit-task-command', (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg), 'normal', async (taskIdArg: unknown, newCommandArg: unknown) => {
       const taskId = String(taskIdArg);
       const newCommand = String(newCommandArg);
       logger.info(`edit-task-command: "${taskId}" → "${newCommand}"`, { module: 'ipc' });
@@ -4249,7 +4407,7 @@ function createEmbeddedTerminalBackendFromConfig(
       }
     });
 
-    registerGuiMutationHandler('invoker:edit-task-prompt', async (taskIdArg: unknown, newPromptArg: unknown) => {
+    registerTaskScopedGuiMutationHandler('invoker:edit-task-prompt', (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg), 'normal', async (taskIdArg: unknown, newPromptArg: unknown) => {
       const taskId = String(taskIdArg);
       const newPrompt = String(newPromptArg);
       logger.info(`edit-task-prompt: "${taskId}" → "${newPrompt}"`, { module: 'ipc' });
@@ -4271,7 +4429,7 @@ function createEmbeddedTerminalBackendFromConfig(
       }
     });
 
-    registerGuiMutationHandler('invoker:edit-task-type', async (taskIdArg: unknown, runnerKindArg: unknown, poolMemberIdArg?: unknown) => {
+    registerTaskScopedGuiMutationHandler('invoker:edit-task-type', (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg), 'normal', async (taskIdArg: unknown, runnerKindArg: unknown, poolMemberIdArg?: unknown) => {
       const taskId = String(taskIdArg);
       const runnerKind = String(runnerKindArg);
       const poolMemberId = poolMemberIdArg === undefined ? undefined : String(poolMemberIdArg);
@@ -4294,7 +4452,7 @@ function createEmbeddedTerminalBackendFromConfig(
       }
     });
 
-    registerGuiMutationHandler('invoker:edit-task-pool', async (taskIdArg: unknown, poolIdArg: unknown) => {
+    registerTaskScopedGuiMutationHandler('invoker:edit-task-pool', (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg), 'normal', async (taskIdArg: unknown, poolIdArg: unknown) => {
       const taskId = String(taskIdArg);
       const poolId = String(poolIdArg);
       logger.info(`edit-task-pool: "${taskId}" → "${poolId}"`, { module: 'ipc' });
@@ -4316,7 +4474,7 @@ function createEmbeddedTerminalBackendFromConfig(
       }
     });
 
-    registerGuiMutationHandler('invoker:edit-task-agent', async (taskIdArg: unknown, agentNameArg: unknown) => {
+    registerTaskScopedGuiMutationHandler('invoker:edit-task-agent', (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg), 'normal', async (taskIdArg: unknown, agentNameArg: unknown) => {
       const taskId = String(taskIdArg);
       const agentName = String(agentNameArg);
       logger.info(`edit-task-agent: "${taskId}" → "${agentName}"`, { module: 'ipc' });
@@ -4338,8 +4496,10 @@ function createEmbeddedTerminalBackendFromConfig(
       }
     });
 
-    registerGuiMutationHandler(
+    registerTaskScopedGuiMutationHandler(
       'invoker:set-task-external-gate-policies',
+      (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
+      'normal',
       async (taskIdArg: unknown, updatesArg: unknown) => {
         const taskId = String(taskIdArg);
         const updates = updatesArg as Array<{ workflowId: string; taskId?: string; gatePolicy: 'completed' | 'review_ready' }>;
@@ -4394,7 +4554,7 @@ function createEmbeddedTerminalBackendFromConfig(
       return updateInvokerCli(buildCliInstallerContext());
     });
 
-    registerGuiMutationHandler('invoker:replace-task', async (taskIdArg: unknown, replacementTasksArg: unknown) => {
+    registerTaskScopedGuiMutationHandler('invoker:replace-task', (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg), 'high', async (taskIdArg: unknown, replacementTasksArg: unknown) => {
       const taskId = String(taskIdArg);
       const replacementTasks = replacementTasksArg as unknown[];
       logger.info(`replace-task: "${taskId}" with ${replacementTasks.length} replacement(s)`, { module: 'ipc' });

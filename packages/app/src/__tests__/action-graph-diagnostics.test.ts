@@ -71,6 +71,67 @@ describe('buildActionGraphDiagnostics', () => {
     expect(graph.edges).toContainEqual(expect.objectContaining({ source: 'action:wf-1', target: 'intent:7' }));
   });
 
+  it('creates running mutation action nodes with running duration', () => {
+    const graph = buildActionGraphDiagnostics({
+      workflows: [workflow],
+      tasks: [],
+      attemptsByTaskId: new Map(),
+      queueStatus: { maxConcurrency: 1, runningCount: 0, running: [], queued: [] },
+      mutationIntents: [{
+        id: 8,
+        workflowId: 'wf-1',
+        channel: 'invoker:rebase-recreate',
+        args: ['wf-1'],
+        priority: 'high',
+        status: 'running',
+        createdAt: '2026-05-14T11:54:00.000Z',
+        startedAt: '2026-05-14T11:58:00.000Z',
+      }],
+      mutationLeases: [],
+      eventsByTaskId: new Map(),
+      activityLogs: [],
+      stallThresholdMs: 60_000,
+      now,
+    });
+
+    const intent = graph.nodes.find((node) => node.id === 'intent:8');
+    expect(intent?.type).toBe('mutation-intent');
+    expect(intent?.status).toBe('running');
+    expect(intent?.durations?.runningMs).toBe(2 * 60_000);
+  });
+
+  it('creates failed mutation action nodes with backend error and suggested action', () => {
+    const graph = buildActionGraphDiagnostics({
+      workflows: [workflow],
+      tasks: [],
+      attemptsByTaskId: new Map(),
+      queueStatus: { maxConcurrency: 1, runningCount: 0, running: [], queued: [] },
+      mutationIntents: [{
+        id: 9,
+        workflowId: 'wf-1',
+        channel: 'invoker:rebase-recreate',
+        args: ['wf-1'],
+        priority: 'high',
+        status: 'failed',
+        createdAt: '2026-05-14T11:54:00.000Z',
+        startedAt: '2026-05-14T11:55:00.000Z',
+        completedAt: '2026-05-14T11:56:00.000Z',
+        error: 'boom',
+      }],
+      mutationLeases: [],
+      eventsByTaskId: new Map(),
+      activityLogs: [],
+      stallThresholdMs: 60_000,
+      now,
+    });
+
+    const intent = graph.nodes.find((node) => node.id === 'intent:9');
+    expect(intent?.type).toBe('mutation-intent');
+    expect(intent?.status).toBe('failed');
+    expect(intent?.latestError).toBe('boom');
+    expect(intent?.suggestedNextAction).toBe('Open the history expander and inspect the failed mutation error.');
+  });
+
   it('marks expired mutation leases as stalled with heartbeat age', () => {
     const graph = buildActionGraphDiagnostics({
       workflows: [workflow],
