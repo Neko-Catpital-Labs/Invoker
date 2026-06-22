@@ -1510,9 +1510,15 @@ export class Orchestrator {
           });
           return [];
         }
+        // Lineage check: a response is fresh only when every identity field it
+        // carries still matches the live task. The attempt-id match above and
+        // this generation match are independent — older producers may omit one
+        // field (skip that field's check for back-compat), but when both are
+        // present both must match. Previously this only ran when attemptId was
+        // absent, letting a response with a current attempt id but a stale
+        // executionGeneration slip through.
         const activeGeneration = this.getExecutionGeneration(earlyTask);
         if (
-          !response.attemptId &&
           response.executionGeneration !== undefined &&
           response.executionGeneration !== activeGeneration
         ) {

@@ -387,6 +387,70 @@ describe('Orchestrator launch claims', () => {
     expect(orchestrator.getTask(taskId)?.status).toBe('pending');
   });
 
+  it('rejects a response carrying the current attempt id but a stale executionGeneration', () => {
+    const { orchestrator, persistence } = makeOrchestrator({ deferRunningUntilLaunch: true });
+    orchestrator.loadPlan({
+      name: 'stale-generation-current-attempt',
+      onFinish: 'none',
+      tasks: [{ id: 't1', description: 'one', command: 'echo one' }],
+    });
+
+    const taskId = taskIdBySuffix(orchestrator, 't1');
+    const [claim] = orchestrator.startExecution();
+    const attemptId = claim!.execution.selectedAttemptId!;
+    expect(orchestrator.markTaskRunningAfterLaunch(taskId, attemptId)).toBe(true);
+
+    const staleGeneration = orchestrator.getTask(taskId)?.execution.generation ?? 0;
+
+    // The live task advances its execution generation while keeping the same
+    // selected attempt row, then records lineage we must not let a stale
+    // response clobber. A real reset replaces the attempt too, but the guard
+    // must reject on generation alone whenever both identity fields are present.
+    persistence.updateTask(taskId, {
+      execution: {
+        generation: staleGeneration + 1,
+        branch: 'feat/live-branch',
+        workspacePath: '/work/live',
+      },
+    });
+
+    const staleResult = orchestrator.handleWorkerResponse({
+      ...makeResponse(taskId, 'completed', staleGeneration),
+      attemptId,
+    });
+
+    expect(staleResult).toEqual([]);
+    const after = orchestrator.getTask(taskId);
+    expect(after?.status).toBe('running');
+    expect(after?.execution.selectedAttemptId).toBe(attemptId);
+    expect(after?.execution.branch).toBe('feat/live-branch');
+    expect(after?.execution.workspacePath).toBe('/work/live');
+  });
+
+  it('accepts a response when both the attempt id and executionGeneration still match', () => {
+    const { orchestrator } = makeOrchestrator({ deferRunningUntilLaunch: true });
+    orchestrator.loadPlan({
+      name: 'fresh-generation-current-attempt',
+      onFinish: 'none',
+      tasks: [{ id: 't1', description: 'one', command: 'echo one' }],
+    });
+
+    const taskId = taskIdBySuffix(orchestrator, 't1');
+    const [claim] = orchestrator.startExecution();
+    const attemptId = claim!.execution.selectedAttemptId!;
+    expect(orchestrator.markTaskRunningAfterLaunch(taskId, attemptId)).toBe(true);
+
+    const generation = orchestrator.getTask(taskId)?.execution.generation ?? 0;
+
+    const result = orchestrator.handleWorkerResponse({
+      ...makeResponse(taskId, 'completed', generation),
+      attemptId,
+    });
+
+    expect(result.length).toBeGreaterThan(0);
+    expect(orchestrator.getTask(taskId)?.status).toBe('completed');
+  });
+
   it('clears stale launch metadata from dependency-blocked tasks during recreateWorkflow reset', () => {
     const { orchestrator, persistence } = makeOrchestrator();
     orchestrator.loadPlan({
