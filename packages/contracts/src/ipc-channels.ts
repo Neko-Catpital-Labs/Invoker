@@ -244,6 +244,9 @@ export interface BundledSkillTargetStatus {
   installed: boolean;
   upToDate: boolean;
   installedSkillNames: string[];
+  missingSkillNames?: string[];
+  staleReason?: 'not-installed' | 'manifest-missing' | 'manifest-target-missing' | 'target-path-changed' | 'bundle-updated' | 'manifest-skill-list-changed';
+  diagnostic?: string;
 }
 
 export interface BundledSkillsStatus {
