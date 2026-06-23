@@ -2,7 +2,9 @@ import { describe, it, expect, vi } from 'vitest';
 import type { TaskState } from '@invoker/workflow-core';
 import {
   persistShutdownDiagnostic,
+  persistStartupFailureDiagnostic,
   SHUTDOWN_DIAGNOSTIC_TAIL_CHARS,
+  STARTUP_FAILURE_DIAGNOSTIC_LABEL,
   type ShutdownDiagnosticDb,
 } from '../shutdown-diagnostic.js';
 
@@ -214,5 +216,55 @@ describe('persistShutdownDiagnostic', () => {
     const output = db.appended[0];
     expect(output).not.toContain('forcedStopReason=');
     expect(output).toContain('error=real error');
+  });
+
+  it('records failureDetail as a detail line', () => {
+    const task = makeTask({ status: 'running', execution: {} });
+    const db = makeDb(['startup stderr tail\n']);
+
+    persistShutdownDiagnostic(task, db, {
+      failureDetail: 'Executor startup failed (worktree): missing repoUrl',
+    });
+
+    const output = db.appended[0];
+    expect(output).toContain('detail=Executor startup failed (worktree): missing repoUrl');
+    expect(output).toContain('startup stderr tail');
+  });
+
+  it('omits the detail line when failureDetail is not provided', () => {
+    const task = makeTask({ execution: { error: 'real error' } });
+    const db = makeDb();
+
+    persistShutdownDiagnostic(task, db);
+
+    const output = db.appended[0];
+    expect(output).not.toContain('detail=');
+  });
+});
+
+describe('persistStartupFailureDiagnostic', () => {
+  it('labels the block as a startup failure and keeps the concrete detail and tail', () => {
+    const task = makeTask({ status: 'running', execution: {} });
+    const db = makeDb(['FAIL src/startup.test.ts\n']);
+
+    persistStartupFailureDiagnostic(task, db, {
+      forcedStopReason: 'Executor startup failed (worktree)',
+      failureDetail: 'Executor startup failed (worktree): boom',
+    });
+
+    const output = db.appended[0];
+    expect(output).toContain(`[${STARTUP_FAILURE_DIAGNOSTIC_LABEL}]`);
+    expect(output).toContain('forcedStopReason=Executor startup failed (worktree)');
+    expect(output).toContain('detail=Executor startup failed (worktree): boom');
+    expect(output).toContain('FAIL src/startup.test.ts');
+  });
+
+  it('lets an explicit label override the startup default', () => {
+    const task = makeTask();
+    const db = makeDb();
+
+    persistStartupFailureDiagnostic(task, db, { label: 'Custom Label' });
+
+    expect(db.appended[0]).toContain('[Custom Label]');
   });
 });
