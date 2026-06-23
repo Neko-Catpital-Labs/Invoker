@@ -1,5 +1,6 @@
 import type { Orchestrator, TaskState } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
+import type { MessageBus } from '@invoker/transport';
 import {
   GitHubMergeGateProvider,
   ReviewProviderRegistry,
@@ -11,13 +12,14 @@ import {
 } from '@invoker/execution-engine';
 import type { Logger } from '@invoker/contracts';
 import { loadConfig, resolveSecretsFilePath, type InvokerConfig } from '../config.js';
-import { autoFixOnReviewGateFailure } from '../workflow-actions.js';
+import { publishReviewGateCiFailedLifecycleEvent } from '../lifecycle-event-bridge.js';
 
 export type TaskHandleMap = Map<string, { handle: ExecutorHandle; executor: Executor }>;
 
 export interface TaskRunnerWiringDeps {
   orchestrator: Orchestrator;
   persistence: SQLiteAdapter;
+  messageBus: MessageBus;
   executorRegistry: ExecutorRegistry;
   executionAgentRegistry?: AgentRegistry;
   repoRoot: string;
@@ -88,21 +90,12 @@ export function rebuildTaskRunner(deps: TaskRunnerWiringDeps): TaskRunner {
     },
     remoteTargetsProvider: () => loadConfig().remoteTargets ?? {},
     executionPoolsProvider: () => loadConfig().executionPools ?? {},
-    onReviewGateCiFailure: deps.invokerConfig.autoFixCi
-      ? async (trigger) => {
-          const currentTaskExecutor = deps.getTaskRunner();
-          if (!currentTaskExecutor) {
-            throw new Error('Task executor is not initialized for review-gate CI auto-fix');
-          }
-          await autoFixOnReviewGateFailure(trigger, {
-            orchestrator: deps.orchestrator,
-            persistence: deps.persistence,
-            taskExecutor: currentTaskExecutor,
-            getAutoFixAgent: () => loadConfig().autoFixAgent,
-            getAutoApproveAIFixes: () => loadConfig().autoApproveAIFixes,
-          });
-        }
-      : undefined,
+    onReviewGateCiFailure: async (trigger) => {
+      publishReviewGateCiFailedLifecycleEvent(trigger, {
+        messageBus: deps.messageBus,
+        getTask: (taskId) => deps.orchestrator.getTask(taskId),
+      });
+    },
     mergeGateProvider: new GitHubMergeGateProvider(),
     reviewProviderRegistry: (() => {
       const registry = new ReviewProviderRegistry();
