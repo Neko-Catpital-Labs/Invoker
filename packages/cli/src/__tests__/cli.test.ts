@@ -59,27 +59,29 @@ describe('invoker-cli', () => {
 
   it('lists worker service commands', async () => {
     const output = captureProcessOutput();
-
-    const code = await main(['worker', 'list']);
-
-    expect(code).toBe(0);
-    expect(output.stdout).toContain('autofix');
-    expect(output.stdout).toContain('Long-running auto-fix recovery worker');
-    output.restore();
+    try {
+      const code = await main(['worker', 'list']);
+      expect(code).toBe(0);
+      expect(output.stdout).toContain('autofix');
+      expect(output.stdout).toContain('Long-running auto-fix recovery worker');
+    } finally {
+      output.restore();
+    }
   });
 
   it('routes worker autofix through the explicit worker bridge', async () => {
     const output = captureProcessOutput();
     const runWorkerAutofix = vi.fn(async () => 0);
-
-    const code = await main(['worker', 'autofix', '--count', '2', '--interval-ms', '1000'], { runWorkerAutofix });
-
-    expect(code).toBe(0);
-    expect(runWorkerAutofix).toHaveBeenCalledWith(['--count', '2', '--interval-ms', '1000'], expect.objectContaining({
-      mode: 'auto',
-    }));
-    expect(output.stderr).toBe('');
-    output.restore();
+    try {
+      const code = await main(['worker', 'autofix', '--count', '2', '--interval-ms', '1000'], { runWorkerAutofix });
+      expect(code).toBe(0);
+      expect(runWorkerAutofix).toHaveBeenCalledWith(['--count', '2', '--interval-ms', '1000'], expect.objectContaining({
+        mode: 'auto',
+      }));
+      expect(output.stderr).toBe('');
+    } finally {
+      output.restore();
+    }
   });
 
   it('runs the hello-world fixture with an isolated db dir', () => {
