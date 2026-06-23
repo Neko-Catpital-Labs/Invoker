@@ -103,6 +103,28 @@ export interface CrabboxRemoteTargetConfig extends BaseRemoteTargetConfig {
  */
 export type RemoteTargetConfig = StaticRemoteTargetConfig | CrabboxRemoteTargetConfig;
 
+/** True when a remote target is a fixed SSH host (no `type`, or `type: 'static'`). */
+export function isStaticRemoteTarget(
+  target: RemoteTargetConfig,
+): target is StaticRemoteTargetConfig {
+  return target.type === undefined || target.type === 'static';
+}
+
+/**
+ * Narrow configured remote targets to the static SSH hosts the runtime can
+ * execute on today. Crabbox targets are leased on demand and are not yet a
+ * runtime executor shape, so they are excluded here until that path lands.
+ */
+export function staticRemoteTargets(
+  config: InvokerConfig,
+): Record<string, StaticRemoteTargetConfig> {
+  const result: Record<string, StaticRemoteTargetConfig> = {};
+  for (const [id, target] of Object.entries(config.remoteTargets ?? {})) {
+    if (isStaticRemoteTarget(target)) result[id] = target;
+  }
+  return result;
+}
+
 export interface InvokerConfig {
   defaultBranch?: string;
   /**

@@ -992,6 +992,77 @@ describe('SQLiteAdapter', () => {
     });
   });
 
+  describe('remote lease metadata persistence', () => {
+    const crabboxLease = {
+      provider: 'crabbox',
+      leaseId: 'lease-abc123',
+      slug: 'happy-otter',
+      targetId: 'crab1',
+      sshHost: '10.0.0.42',
+      sshUser: 'invoker',
+      sshPort: 2222,
+      sshKeyPath: '/tmp/crabbox-key',
+      expiresAt: '2026-06-22T12:00:00.000Z',
+      stopAfter: 'completed',
+      keepOnFailure: true,
+    } as const;
+
+    it('round-trips remoteLeaseMetadata through task save and load', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t-lease', {
+        config: { runnerKind: 'ssh' },
+        execution: { remoteLeaseMetadata: crabboxLease },
+      }));
+
+      const loaded = adapter.loadTask('t-lease');
+      expect(loaded?.execution.remoteLeaseMetadata).toEqual(crabboxLease);
+    });
+
+    it('persists remoteLeaseMetadata via updateTask and clears it on undefined', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t-lease-update'));
+
+      adapter.updateTask('t-lease-update', { execution: { remoteLeaseMetadata: crabboxLease } });
+      expect(adapter.loadTask('t-lease-update')?.execution.remoteLeaseMetadata).toEqual(crabboxLease);
+
+      adapter.updateTask('t-lease-update', { execution: { remoteLeaseMetadata: undefined } });
+      const stored = (adapter as any).db.exec(
+        "SELECT remote_lease_metadata FROM tasks WHERE id = 't-lease-update'",
+      ) as Array<{ values: unknown[][] }>;
+      expect(adapter.loadTask('t-lease-update')?.execution.remoteLeaseMetadata).toBeUndefined();
+      expect(stored[0]?.values[0]?.[0]).toBeNull();
+    });
+
+    it('round-trips remoteLeaseMetadata through attempt save and load', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t-lease-attempt'));
+      const attempt = createAttempt('t-lease-attempt', {
+        status: 'running',
+        remoteLeaseMetadata: crabboxLease,
+      });
+      adapter.saveAttempt(attempt);
+
+      expect(adapter.loadAttempt(attempt.id)?.remoteLeaseMetadata).toEqual(crabboxLease);
+    });
+
+    it('persists remoteLeaseMetadata via updateAttempt and leaves it intact on unrelated updates', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t-lease-attempt-update'));
+      const attempt = createAttempt('t-lease-attempt-update', { status: 'running' });
+      adapter.saveAttempt(attempt);
+
+      adapter.updateAttempt(attempt.id, { remoteLeaseMetadata: crabboxLease });
+      expect(adapter.loadAttempt(attempt.id)?.remoteLeaseMetadata).toEqual(crabboxLease);
+
+      // updateAttempt treats an omitted field as "no change", so a later
+      // unrelated update must not drop the lease metadata.
+      adapter.updateAttempt(attempt.id, { status: 'completed' });
+      const reloaded = adapter.loadAttempt(attempt.id);
+      expect(reloaded?.status).toBe('completed');
+      expect(reloaded?.remoteLeaseMetadata).toEqual(crabboxLease);
+    });
+  });
+
   describe('task-state version persistence', () => {
     it('saves task-state version 1 for new tasks and round-trips it', () => {
       adapter.saveWorkflow(testWorkflow);

@@ -17,7 +17,7 @@ import {
   type PersistedTaskMeta,
   type TerminalSpec,
 } from '@invoker/execution-engine';
-import { loadConfig } from './config.js';
+import { loadConfig, staticRemoteTargets } from './config.js';
 import {
   buildLinuxXTerminalBashScript,
   buildMacOSOsascriptArgs,
@@ -198,7 +198,7 @@ export function resolveTaskTerminalSpec(
 
   if (repairedMeta.runnerKind === 'ssh') {
     const targetId = persistence.getPoolMemberId?.(taskId)?.trim();
-    const target = targetId ? loadConfig().remoteTargets?.[targetId] : undefined;
+    const target = targetId ? staticRemoteTargets(loadConfig())[targetId] : undefined;
     if (!targetId) {
       return {
         ok: false,
