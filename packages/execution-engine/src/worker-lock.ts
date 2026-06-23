@@ -75,6 +75,11 @@ export interface AcquireWorkerLockOptions {
   logger?: Logger;
 }
 
+/** Resolve the on-disk lock path for a worker kind. */
+export function resolveWorkerLockPath(homeRoot: string, kind: string): string {
+  return join(homeRoot, 'locks', `worker-${kind}.lock`);
+}
+
 /** Is `pid` a live process this user can observe? */
 function isProcessAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -115,7 +120,7 @@ export function acquireWorkerLock(options: AcquireWorkerLockOptions = {}): Worke
   const homeRoot = options.homeRoot ?? resolveInvokerHomeRoot();
   const pid = options.pid ?? process.pid;
   const locksDir = join(homeRoot, 'locks');
-  const lockPath = join(locksDir, `worker-${kind}.lock`);
+  const lockPath = resolveWorkerLockPath(homeRoot, kind);
   const logFields = { module: 'worker-lock', kind, lockPath };
 
   mkdirSync(locksDir, { recursive: true });
