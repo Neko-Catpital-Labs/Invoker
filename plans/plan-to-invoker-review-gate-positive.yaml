@@ -1,0 +1,27 @@
+name: Review gate artifact intent positive
+onFinish: none
+mergeMode: manual
+repoUrl: git@github.com:EdbertChan/Invoker.git
+baseBranch: master
+featureBranch: plan/review-gate-artifact-intent-positive
+description: |
+  Positive fixture for linear review-gate artifact metadata.
+
+tasks:
+  - id: verify-review-gate-artifact-intent
+    description: Verify review gate artifact metadata accepts a linear stack
+    command: printf 'review-gate-artifact-intent\n'
+    dependencies: []
+reviewGate:
+  artifacts:
+    - id: contracts
+      title: Define contracts
+      required: true
+    - id: runtime
+      title: Wire runtime
+      required: true
+      dependsOn: [contracts]
+    - id: ui
+      title: Update UI
+      required: true
+      dependsOn: [runtime]

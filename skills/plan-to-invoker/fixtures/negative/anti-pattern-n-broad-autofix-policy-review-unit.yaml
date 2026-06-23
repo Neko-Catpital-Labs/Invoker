@@ -6,7 +6,7 @@ description: |
   Standalone workflow waiver:
   - This fixture intentionally models the oversized #1574-style slice as one workflow so review-unit lint can reject it.
 onFinish: pull_request
-mergeMode: github
+mergeMode: external_review
 repoUrl: git@github.com:Neko-Catpital-Labs/Invoker.git
 tasks:
   - id: implement-broad-autofix-recovery-policy
