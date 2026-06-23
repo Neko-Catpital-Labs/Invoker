@@ -59,6 +59,7 @@ import {
   resolveSkillPathViaAgent,
   spawnAgentPrAuthorViaRegistry,
   validateCanonicalPrBody,
+  validateReviewStackPrBody,
   type PrAuthoringContext,
 } from './pr-authoring.js';
 import { assertNotGitConfigMutation, ensureRemoteUrl } from './git-config-mutation.js';
@@ -2732,14 +2733,23 @@ export class TaskRunner {
       });
 
       try {
+        this.logger.info(
+          `[pr-authoring] body authoring starting agent=${agent.name} `
+            + `workflow=${args.workflowId ?? 'unknown'} skill=invoker-make-pr`,
+        );
         const result = await spawnAgentPrAuthorViaRegistry(prompt, args.cwd, agent, driver);
         const validationErrors = validateCanonicalPrBody(result.body);
         if (validationErrors.length > 0) {
+          this.logger.warn(
+            `[pr-authoring] body validation failed agent=${agent.name} `
+              + `errors=${validationErrors.join('; ')}`,
+          );
           errors.push(
             `${agent.name}: invalid PR body — ${validationErrors.join('; ')}`,
           );
           continue;
         }
+        this.logger.info(`[pr-authoring] body authored agent=${agent.name} validated`);
         return { body: result.body, sessionId: result.sessionId, agentName: agent.name };
       } catch (err) {
         errors.push(
@@ -2798,11 +2808,54 @@ export class TaskRunner {
       });
 
       try {
+        this.logger.info(
+          `[pr-authoring] review-stack publish starting agent=${agent.name} `
+            + `workflow=${args.workflowId ?? 'unknown'} skill=invoker-make-pr cwd=${args.cwd}`,
+        );
         const result = await spawnAgentPrAuthorViaRegistry(prompt, args.cwd, agent, driver);
         const parsedArtifacts = parseMakePrStackPublishResult(result.body);
+
+        // Enforce the make-pr review-stack schema on every published body. Prefer
+        // the body actually published on the provider: a lazy agent could report a
+        // compliant body in JSON while letting Mergify default the real PR to the
+        // commit message — the exact PR #2170 failure. Fall back to the
+        // agent-reported body only when the live body cannot be read.
+        const bodyErrors: string[] = [];
+        for (let index = 0; index < parsedArtifacts.length; index += 1) {
+          const artifact = parsedArtifacts[index];
+          let bodyToCheck = artifact.body ?? '';
+          let bodySource = 'agent-reported';
+          if (this.mergeGateProvider?.getReviewBody && artifact.providerId) {
+            try {
+              bodyToCheck = await this.mergeGateProvider.getReviewBody({
+                identifier: artifact.providerId,
+                cwd: args.cwd,
+              });
+              bodySource = 'published';
+            } catch (fetchErr) {
+              this.logger.warn(
+                `[pr-authoring] could not read published body for PR ${artifact.providerId}; `
+                  + `validating agent-reported body instead: `
+                  + `${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}`,
+              );
+            }
+          }
+          for (const error of validateReviewStackPrBody(bodyToCheck)) {
+            bodyErrors.push(`artifact[${index}] (${artifact.url}) [${bodySource}]: ${error}`);
+          }
+        }
+        if (bodyErrors.length > 0) {
+          this.logger.warn(
+            `[pr-authoring] review-stack body validation failed agent=${agent.name} `
+              + `errors=${bodyErrors.join('; ')}`,
+          );
+          errors.push(`${agent.name}: invalid PR body — ${bodyErrors.join('; ')}`);
+          continue;
+        }
+
         const nowIso = new Date().toISOString();
         const generation = args.reviewGate?.activeGeneration ?? 0;
-        const artifacts: ReviewGateArtifact[] = parsedArtifacts.map((artifact) => ({
+        const artifacts: ReviewGateArtifact[] = parsedArtifacts.map(({ body: _body, ...artifact }) => ({
           ...artifact,
           provider: 'github',
           baseBranch: artifact.baseBranch ?? args.baseBranch,
@@ -2811,6 +2864,10 @@ export class TaskRunner {
           generation,
           createdAt: nowIso,
         }));
+        this.logger.info(
+          `[pr-authoring] review-stack published agent=${agent.name} artifacts=${artifacts.length} `
+            + 'bodies validated against make-pr schema',
+        );
         return { artifacts, sessionId: result.sessionId, agentName: agent.name };
       } catch (err) {
         errors.push(`${agent.name}: ${err instanceof Error ? err.message : String(err)}`);

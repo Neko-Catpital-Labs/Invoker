@@ -1237,7 +1237,7 @@ describe('TaskRunner', () => {
             attempts.push('codex');
             return {
               cmd: 'node',
-              args: ['-e', 'process.stdout.write(JSON.stringify({artifacts:[{id:"contracts",title:"Contracts",url:"https://example.test/pr/1",providerId:"1",branch:"stack/contracts",baseBranch:"master"},{id:"runtime",title:"Runtime",url:"https://example.test/pr/2",providerId:"2",branch:"stack/runtime",baseBranch:"stack/contracts",dependsOn:["contracts"]}]}))'],
+              args: ['-e', 'var b=["## Summary","","Slice prose.","","<details>","<summary>Review metadata</summary>","","Review Claim: c","Review Lane: cleanup","Review Unit: scalar","Safety Invariant: s","Slice Rationale: r","","</details>","","## Non-goals","- none","","## Test Plan","- [x] pnpm test","","## Revert Plan","- Safe to revert? Yes"].join("\\n");process.stdout.write(JSON.stringify({artifacts:[{id:"contracts",title:"Contracts",url:"https://example.test/pr/1",providerId:"1",branch:"stack/contracts",baseBranch:"master",body:b},{id:"runtime",title:"Runtime",url:"https://example.test/pr/2",providerId:"2",branch:"stack/runtime",baseBranch:"stack/contracts",dependsOn:["contracts"],body:b}]}))'],
               sessionId: 'sess-codex',
             };
           },
@@ -1340,6 +1340,94 @@ describe('TaskRunner', () => {
         workflowSummary: 'summary',
         cwd: '/tmp',
       })).rejects.toThrow('make-pr skill is required to publish Invoker review stacks');
+    });
+
+    it('publishReviewStackWithMakePrSkill rejects a commit-message body lacking review-compression sections (PR #2170 regression)', async () => {
+      // Valid artifact JSON + valid linear stack, but the body is a bare
+      // commit-message body (## Summary / ## Test Plan / ## Revert Plan only,
+      // no review-compression sections) — exactly what PR #2170 shipped.
+      const commitMsgBodyAgent = {
+        name: 'claude',
+        stdinMode: 'ignore' as const,
+        bundledSkills: ['make-pr'],
+        buildCommand: () => ({
+          cmd: 'node',
+          args: ['-e', 'var b="## Summary x ## Test Plan y ## Revert Plan z";process.stdout.write(JSON.stringify({artifacts:[{id:"only",title:"Only",url:"https://example.test/pr/1",providerId:"1",branch:"stack/only",baseBranch:"master",body:b}]}))'],
+          sessionId: 'commit-msg',
+        }),
+        buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+      };
+      // A bare commit-message body: no ## Non-goals, no collapsed Review metadata block.
+      const executor = new TaskRunner({
+        orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        executionAgentRegistry: {
+          get: vi.fn().mockReturnValue(commitMsgBodyAgent),
+          getOrThrow: vi.fn(),
+          getSessionDriver: vi.fn().mockReturnValue(undefined),
+          listWithCapability: vi.fn().mockReturnValue([commitMsgBodyAgent]),
+        } as any,
+        cwd: '/tmp',
+      });
+
+      await expect((executor as any).publishReviewStackWithMakePrSkill({
+        workflowId: 'wf-1',
+        title: 'Stack',
+        baseBranch: 'master',
+        featureBranch: 'plan/feature',
+        workflowSummary: 'summary',
+        cwd: '/tmp',
+      })).rejects.toThrow(/invalid PR body — .*Non-goals/);
+    });
+
+    it('publishReviewStackWithMakePrSkill validates the published body, not just the agent-reported one', async () => {
+      // Agent reports a fully compliant body in JSON...
+      const goodBody = [
+        '## Summary', '', 'x', '', '<details>', '<summary>Review metadata</summary>', '',
+        'Review Claim: c', 'Review Lane: cleanup', 'Review Unit: scalar',
+        'Safety Invariant: s', 'Slice Rationale: r', '', '</details>', '',
+        '## Non-goals', '- none', '', '## Test Plan', '- [x] t', '', '## Revert Plan', '- yes',
+      ].join('\n');
+      const agent = {
+        name: 'claude',
+        stdinMode: 'ignore' as const,
+        bundledSkills: ['make-pr'],
+        buildCommand: () => ({
+          cmd: 'node',
+          args: ['-e', `var b=${JSON.stringify(goodBody)};process.stdout.write(JSON.stringify({artifacts:[{id:"only",title:"Only",url:"https://example.test/pr/1",providerId:"1",branch:"stack/only",baseBranch:"master",body:b}]}))`],
+          sessionId: 'good',
+        }),
+        buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+      };
+      const executor = new TaskRunner({
+        orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        executionAgentRegistry: {
+          get: vi.fn().mockReturnValue(agent),
+          getOrThrow: vi.fn(),
+          getSessionDriver: vi.fn().mockReturnValue(undefined),
+          listWithCapability: vi.fn().mockReturnValue([agent]),
+        } as any,
+        // ...but the body actually published on GitHub is a bare commit message.
+        mergeGateProvider: {
+          name: 'github',
+          createReview: vi.fn(),
+          checkApproval: vi.fn(),
+          getReviewBody: vi.fn().mockResolvedValue('Just a commit message subject\n\nsome body line'),
+        } as any,
+        cwd: '/tmp',
+      });
+
+      await expect((executor as any).publishReviewStackWithMakePrSkill({
+        workflowId: 'wf-1',
+        title: 'Stack',
+        baseBranch: 'master',
+        featureBranch: 'plan/feature',
+        workflowSummary: 'summary',
+        cwd: '/tmp',
+      })).rejects.toThrow(/invalid PR body — .*\[published\]/);
     });
 
     it('authorPrBodyWithSkill falls back to canonical body when authored body is invalid and no other agents available', async () => {

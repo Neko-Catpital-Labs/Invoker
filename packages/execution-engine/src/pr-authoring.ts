@@ -6,7 +6,7 @@ import { homedir, tmpdir } from 'node:os';
 
 import type { ExecutionAgent } from './agent.js';
 import type { SessionDriver } from './session-driver.js';
-import { cleanElectronEnv, resolveExecutableOnCurrentPath } from './process-utils.js';
+import { cleanElectronEnv, killProcessGroup, resolveExecutableOnCurrentPath, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 
 export interface MakePrStackArtifactOutput {
   readonly id: string;
@@ -16,6 +16,8 @@ export interface MakePrStackArtifactOutput {
   readonly branch?: string;
   readonly baseBranch?: string;
   readonly dependsOn?: readonly string[];
+  /** Published PR body. Validated against the make-pr review-stack schema. */
+  readonly body?: string;
 }
 
 // ── Structured PR-authoring context ──────────────────────
@@ -49,8 +51,34 @@ export interface PrAuthoringContext {
 }
 
 const REQUIRED_SECTIONS = ['## Summary', '## Test Plan', '## Revert Plan'] as const;
+// Canonical review-stack schema, mirrored structurally from
+// scripts/validate-pr-body.mjs — the authoritative validator the make-pr skill
+// runs. The review-compression fields live INSIDE a collapsed
+// <details>Review metadata</details> block in ## Summary, not as visible
+// top-level sections, so a bare commit-message body (e.g. PR #2170) is rejected.
+const REVIEW_STACK_REQUIRED_SECTIONS = [
+  '## Summary',
+  '## Non-goals',
+  '## Test Plan',
+  '## Revert Plan',
+] as const;
+const REVIEW_STACK_VISIBLE_METADATA_SECTIONS = [
+  '## Review Claim',
+  '## Review Lane',
+  '## Review Unit',
+  '## Safety Invariant',
+  '## Slice Rationale',
+] as const;
+const REVIEW_STACK_METADATA_LABELS = [
+  'Review Claim',
+  'Review Lane',
+  'Review Unit',
+  'Safety Invariant',
+  'Slice Rationale',
+] as const;
 const DISCOURAGED_HEADINGS = ['## Testing', '## Notes'] as const;
 const DEFAULT_MAX_INLINE_PROMPT_BYTES = 64 * 1024;
+const DEFAULT_PR_AUTHORING_TIMEOUT_MS = 20 * 60 * 1000;
 const MAX_INLINE_PROMPT_BYTES = (() => {
   const raw = process.env.INVOKER_MAX_INLINE_AGENT_PROMPT_BYTES;
   if (!raw) return DEFAULT_MAX_INLINE_PROMPT_BYTES;
@@ -58,34 +86,155 @@ const MAX_INLINE_PROMPT_BYTES = (() => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_INLINE_PROMPT_BYTES;
 })();
 
-export function validateCanonicalPrBody(body: string): string[] {
+function getPrAuthoringTimeoutMs(): number {
+  const raw = process.env.INVOKER_PR_AUTHORING_TIMEOUT_MS?.trim();
+  if (raw === '0') return 0;
+  if (!raw) return DEFAULT_PR_AUTHORING_TIMEOUT_MS;
+  // Validate the whole string: Number.parseInt would silently accept a numeric
+  // prefix, turning "20m" into 20ms and failing authoring almost immediately.
+  if (!/^(0|[1-9]\d*)$/.test(raw)) return DEFAULT_PR_AUTHORING_TIMEOUT_MS;
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) return DEFAULT_PR_AUTHORING_TIMEOUT_MS;
+  return parsed;
+}
+
+/** True when `heading` appears as a real Markdown heading line, not as prose/code text. */
+function hasMarkdownHeading(body: string, heading: string): boolean {
+  const expected = heading.trim().toLowerCase();
+  return body.split(/\r?\n/).some((line) => line.trim().toLowerCase() === expected);
+}
+
+function validateBodyAgainstSections(
+  body: string,
+  requiredSections: readonly string[],
+  emptyMessage: string,
+): string[] {
   const errors: string[] = [];
   const trimmed = body.trim();
 
   if (!trimmed) {
-    return [
-      'PR body is empty. Use the canonical schema: ## Summary, ## Test Plan, ## Revert Plan, plus optional ## Architecture.',
-    ];
+    return [emptyMessage];
   }
 
-  for (const heading of REQUIRED_SECTIONS) {
-    if (!trimmed.includes(heading)) {
+  for (const heading of requiredSections) {
+    if (!hasMarkdownHeading(trimmed, heading)) {
       errors.push(`Missing required section: ${heading}`);
     }
   }
 
   for (const heading of DISCOURAGED_HEADINGS) {
-    if (trimmed.includes(heading)) {
+    if (hasMarkdownHeading(trimmed, heading)) {
       errors.push(
         `Unsupported section: ${heading}. Do not use the lightweight PR format; use ## Test Plan and ## Revert Plan instead.`,
       );
     }
   }
 
-  if (trimmed.includes('## Architecture')) {
+  if (hasMarkdownHeading(trimmed, '## Architecture')) {
     for (const subsection of ['### Before', '### After']) {
-      if (!trimmed.includes(subsection)) {
+      if (!hasMarkdownHeading(trimmed, subsection)) {
         errors.push(`Architecture section is missing required subsection: ${subsection}`);
+      }
+    }
+  }
+
+  return errors;
+}
+
+export function validateCanonicalPrBody(body: string): string[] {
+  return validateBodyAgainstSections(
+    body,
+    REQUIRED_SECTIONS,
+    'PR body is empty. Use the canonical schema: ## Summary, ## Test Plan, ## Revert Plan, plus optional ## Architecture.',
+  );
+}
+
+/** Collect the lines under a `## Heading` until the next `## ` heading. */
+function getMarkdownSection(body: string, heading: string): string {
+  const lines = body.split(/\r?\n/);
+  const start = lines.findIndex((line) => line.trim().toLowerCase() === heading.toLowerCase());
+  if (start === -1) return '';
+  const out: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    if (/^##\s+/.test(line.trim())) break;
+    out.push(line);
+  }
+  return out.join('\n').trim();
+}
+
+/** Extract the collapsed `<details><summary>Review metadata</summary>` block from ## Summary. */
+function getReviewMetadataBlock(body: string): { body: string; openAttributes: string } | null {
+  const summary = getMarkdownSection(body, '## Summary');
+  const match = summary.match(
+    /<details\b([^>]*)>\s*<summary>\s*Review metadata\s*<\/summary>([\s\S]*?)<\/details>/i,
+  );
+  if (!match) return null;
+  return { body: match[2].trim(), openAttributes: match[1] };
+}
+
+/** True when the metadata block carries a non-empty `Label:` field. */
+function hasMetadataLabel(metadata: string, label: string): boolean {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|\\n)\\s*${escaped}:\\s*\\S`, 'i').test(metadata);
+}
+
+/**
+ * Validate a published Invoker review-stack PR body. This mirrors the structural
+ * checks in scripts/validate-pr-body.mjs (the authoritative validator the make-pr
+ * skill is told to run): required top-level sections, no visible metadata
+ * sections, and a collapsed Review metadata block carrying every required field.
+ * A mergify-default commit-message body cannot pass. The deeper review-unit and
+ * mermaid rules stay in validate-pr-body.mjs; this is the in-process backstop.
+ */
+export function validateReviewStackPrBody(body: string): string[] {
+  const trimmed = body.trim();
+  if (!trimmed) {
+    return [
+      'PR body is empty. Use the canonical review-stack schema: ## Summary with a collapsed '
+        + 'Review metadata block, ## Non-goals, ## Test Plan, and ## Revert Plan.',
+    ];
+  }
+
+  const errors: string[] = [];
+  for (const heading of REVIEW_STACK_REQUIRED_SECTIONS) {
+    if (!hasMarkdownHeading(trimmed, heading)) {
+      errors.push(`Missing required section: ${heading}`);
+    }
+  }
+  for (const heading of REVIEW_STACK_VISIBLE_METADATA_SECTIONS) {
+    if (hasMarkdownHeading(trimmed, heading)) {
+      errors.push(
+        `${heading} belongs in the collapsed Review metadata block inside ## Summary, `
+          + 'not as a visible top-level section.',
+      );
+    }
+  }
+  for (const heading of DISCOURAGED_HEADINGS) {
+    if (hasMarkdownHeading(trimmed, heading)) {
+      errors.push(
+        `Unsupported section: ${heading}. Do not use the lightweight PR format; `
+          + 'use the canonical review-compression schema instead.',
+      );
+    }
+  }
+  if (hasMarkdownHeading(trimmed, '## Architecture')) {
+    for (const subsection of ['### Before', '### After']) {
+      if (!hasMarkdownHeading(trimmed, subsection)) {
+        errors.push(`Architecture section is missing required subsection: ${subsection}`);
+      }
+    }
+  }
+
+  const metadata = getReviewMetadataBlock(trimmed);
+  if (!metadata) {
+    errors.push('## Summary must include a collapsed <details> block with <summary>Review metadata</summary>.');
+  } else {
+    if (/\bopen\b/i.test(metadata.openAttributes)) {
+      errors.push('Review metadata details must be collapsed by default; remove the open attribute.');
+    }
+    for (const label of REVIEW_STACK_METADATA_LABELS) {
+      if (!hasMetadataLabel(metadata.body, label)) {
+        errors.push(`Review metadata is missing required field: ${label}:`);
       }
     }
   }
@@ -197,13 +346,20 @@ export function buildMakePrStackPublishPrompt(args: {
     '- Use the repo-local PR workflow and validation tools from the skill.',
     '- Output only JSON. Do not include markdown, commentary, explanations, or code fences.',
     '- The JSON shape must be exactly:',
-    '{"artifacts":[{"id":"string","title":"string","url":"string","providerId":"string","branch":"string","baseBranch":"string","dependsOn":["string"]}]}',
+    '{"artifacts":[{"id":"string","title":"string","url":"string","providerId":"string","branch":"string","baseBranch":"string","dependsOn":["string"],"body":"string"}]}',
     '- artifacts are already listed in stack order.',
     '- artifacts[0].dependsOn must be omitted or [].',
     '- For every i > 0, artifacts[i].dependsOn must be exactly [artifacts[i - 1].id].',
     '- Do not emit branches, merges, skipped predecessors, or multiple dependencies.',
     '- Do not add fixed PR-count fields.',
     '- Do not add Mergify-specific fields to the JSON.',
+    '- Each artifact.body MUST be the exact PR body you published for that PR.',
+    '- Each body MUST follow the canonical review-stack schema and pass '
+      + '`node scripts/validate-pr-body.mjs`. Required: ## Summary containing a collapsed '
+      + '<details><summary>Review metadata</summary> block with Review Claim, Review Lane, '
+      + 'Review Unit, Safety Invariant, and Slice Rationale fields; plus top-level ## Non-goals, '
+      + '## Test Plan, and ## Revert Plan. Do not use visible ## Review Claim / ## Review Lane sections.',
+    '- Do NOT let Mergify default the PR body to the commit message; author the body explicitly.',
     '',
     'Workflow summary:',
     '```md',
@@ -275,6 +431,7 @@ export function parseMakePrStackPublishResult(raw: string): MakePrStackArtifactO
       branch: typeof record.branch === 'string' ? record.branch : undefined,
       baseBranch: typeof record.baseBranch === 'string' ? record.baseBranch : undefined,
       dependsOn: normalizedDependsOn,
+      body: typeof record.body === 'string' ? record.body : undefined,
     });
   }
 
@@ -438,28 +595,72 @@ export function spawnAgentPrAuthorViaRegistry(
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: cleanElectronEnv(),
+      detached: process.platform !== 'win32',
     });
 
     let stdout = '';
     let stderr = '';
+    let settled = false;
+    let timedOut = false;
+    let timeoutError: Error | undefined;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let forceKillTimeout: ReturnType<typeof setTimeout> | undefined;
+    const timeoutMs = getPrAuthoringTimeoutMs();
+
+    const finish = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      if (timeout) clearTimeout(timeout);
+      if (forceKillTimeout) clearTimeout(forceKillTimeout);
+      promptTransport.cleanup();
+      fn();
+    };
+
+    if (timeoutMs > 0) {
+      timeout = setTimeout(() => {
+        if (settled || timedOut) return;
+        timedOut = true;
+        timeoutError = new Error(
+          `${agent.name} PR authoring exceeded timeout (${timeoutMs}ms) in ${cwd}. ` +
+          'Set INVOKER_PR_AUTHORING_TIMEOUT_MS to adjust (0 = unbounded).',
+        );
+        if (timeout) clearTimeout(timeout);
+        killProcessGroup(child, 'SIGTERM');
+        // Reject only after the process is forcibly killed, so the caller cannot
+        // launch the next make-pr agent while this one may still be mutating PRs.
+        forceKillTimeout = setTimeout(() => {
+          killProcessGroup(child, 'SIGKILL');
+          finish(() => reject(timeoutError!));
+        }, SIGKILL_TIMEOUT_MS);
+        forceKillTimeout.unref?.();
+      }, timeoutMs);
+      timeout.unref?.();
+    }
+
     child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
     child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
     child.on('close', (code) => {
-      const realId = driver?.extractSessionId?.(stdout);
-      const effectiveSessionId = realId ?? sessionId;
-      const displayStdout = driver ? driver.processOutput(effectiveSessionId, stdout) : stdout;
-      if (code === 0) {
-        const body = extractAssistantBody(driver, effectiveSessionId, displayStdout);
-        promptTransport.cleanup();
-        resolve({ body, stdout: displayStdout, sessionId: effectiveSessionId });
+      if (settled) return;
+      // The timed-out process exited on SIGTERM before the SIGKILL timer fired;
+      // it is already gone, so settle with the timeout error now.
+      if (timedOut) {
+        finish(() => reject(timeoutError!));
         return;
       }
-      promptTransport.cleanup();
-      reject(new Error(`${agent.name} PR authoring exited with code ${code}: ${stderr.trim()}`));
+      finish(() => {
+        const realId = driver?.extractSessionId?.(stdout);
+        const effectiveSessionId = realId ?? sessionId;
+        const displayStdout = driver ? driver.processOutput(effectiveSessionId, stdout) : stdout;
+        if (code === 0) {
+          const body = extractAssistantBody(driver, effectiveSessionId, displayStdout);
+          resolve({ body, stdout: displayStdout, sessionId: effectiveSessionId });
+          return;
+        }
+        reject(new Error(`${agent.name} PR authoring exited with code ${code}: ${stderr.trim()}`));
+      });
     });
     child.on('error', (err) => {
-      promptTransport.cleanup();
-      reject(err);
+      finish(() => reject(err));
     });
   });
 }
