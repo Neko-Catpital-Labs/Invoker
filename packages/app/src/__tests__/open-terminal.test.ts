@@ -28,8 +28,10 @@ import {
   DockerExecutor, WorktreeExecutor, ExecutorRegistry, SshExecutor,
   MergeGateExecutor,
   BaseExecutor,
+  CrabboxTargetResolver,
   getEffectivePath,
   type ExecutorHandle, type TerminalSpec, type PersistedTaskMeta,
+  type CrabboxCommandResult,
 } from '@invoker/execution-engine';
 import type { WorkResponse, WorkRequest } from '@invoker/contracts';
 vi.mock('../terminal-external-launch.js', async (importOriginal) => {
@@ -1028,6 +1030,230 @@ describe('SshExecutor getRestoredTerminalSpec', () => {
   });
 });
 
+// ── Crabbox-backed SSH terminal restore ───────────────────────
+// After restart, an SSH task whose remoteLeaseMetadata.provider is 'crabbox'
+// must rebuild its SshExecutor by refreshing the persisted lease (status call),
+// not from a stale static target. Static SSH restore must be unchanged when no
+// lease metadata is present.
+
+describe('Crabbox SSH terminal restore', () => {
+  /** A single scripted Crabbox status result, replayed for the refresh call. */
+  function scriptedResolver(result: CrabboxCommandResult): {
+    resolver: CrabboxTargetResolver;
+    calls: Array<{ command: string; args: readonly string[] }>;
+  } {
+    const calls: Array<{ command: string; args: readonly string[] }> = [];
+    const resolver = new CrabboxTargetResolver(async (command, args) => {
+      calls.push({ command, args });
+      return result;
+    });
+    return { resolver, calls };
+  }
+
+  const CRABBOX_TARGET_CONFIG = {
+    'crab-1': {
+      type: 'crabbox' as const,
+      crabboxCommand: '/usr/local/bin/crabbox',
+      provider: 'fly',
+      class: 'performance-4x',
+      ttl: '30m',
+      idleTimeout: '10m',
+      network: 'invoker-net',
+      target: 'us-east',
+      stopAfter: 'success',
+      keepOnFailure: true,
+      statusArgs: ['--region', 'iad'],
+    },
+  };
+
+  const leaseMetadata = {
+    provider: 'crabbox' as const,
+    leaseId: 'lease-abc',
+    slug: 'happy-crab',
+    targetId: 'crab-1',
+    // Stale coordinates persisted at task time — refresh must override these.
+    sshHost: '10.0.0.1',
+    sshUser: 'invoker',
+    sshPort: 2222,
+    sshKeyPath: '/home/me/.ssh/old',
+    expiresAt: '2026-01-01T00:30:00.000Z',
+    stopAfter: 'success',
+    keepOnFailure: true,
+  };
+
+  function crabboxPersistence(overrides: Record<string, unknown> = {}) {
+    return {
+      getTaskStatus: vi.fn(() => 'completed'),
+      getRunnerKind: vi.fn(() => 'ssh'),
+      getAgentSessionId: vi.fn(() => null),
+      getContainerId: vi.fn(() => null),
+      getWorkspacePath: vi.fn(() => '~/.invoker/worktrees/abc/experiment-crab-task'),
+      getBranch: vi.fn(() => 'experiment/crab-task'),
+      getPoolMemberId: vi.fn(() => null),
+      getExecutionAgent: vi.fn(() => 'claude'),
+      getRemoteLeaseMetadata: vi.fn(() => leaseMetadata),
+      ...overrides,
+    };
+  }
+
+  afterEach(() => {
+    vi.mocked(existsSync).mockReset();
+  });
+
+  it('static SSH restore is unchanged and never refreshes a lease when metadata is absent', async () => {
+    const mockSpawnDetached = vi.fn(async () => ({ opened: true } as const));
+    const terminalLaunch = await import('../terminal-external-launch.js');
+    vi.spyOn(terminalLaunch, 'spawnDetachedTerminal').mockImplementation(mockSpawnDetached as any);
+    const loadConfigSpy = vi.spyOn(configModule, 'loadConfig').mockReturnValue({
+      remoteTargets: {
+        'static-1': { host: 'static.example', user: 'ubuntu', sshKeyPath: '/k', port: 22 },
+      },
+    } as any);
+
+    // Resolver runner throws if touched — static restore must not refresh a lease.
+    const resolver = new CrabboxTargetResolver(async () => {
+      throw new Error('crabbox refresh must not run for static SSH restore');
+    });
+
+    const persistence = {
+      getTaskStatus: vi.fn(() => 'completed'),
+      getRunnerKind: vi.fn(() => 'ssh'),
+      getAgentSessionId: vi.fn(() => null),
+      getContainerId: vi.fn(() => null),
+      getWorkspacePath: vi.fn(() => '~/.invoker/worktrees/abc/experiment-static'),
+      getBranch: vi.fn(() => 'experiment/static'),
+      getPoolMemberId: vi.fn(() => 'static-1'),
+      getExecutionAgent: vi.fn(() => 'claude'),
+      getRemoteLeaseMetadata: vi.fn(() => null),
+    };
+
+    const result = await openExternalTerminalForTask({
+      taskId: 'static-ssh-task',
+      persistence: persistence as any,
+      executorRegistry: new ExecutorRegistry(),
+      repoRoot: '/repo',
+      crabboxResolver: resolver,
+    });
+
+    expect(result.opened).toBe(true);
+    const spawned = mockSpawnDetached.mock.calls[0];
+    expect(JSON.stringify(spawned?.[1])).toContain('static.example');
+    expect(JSON.stringify(spawned?.[1])).toContain('experiment/static');
+
+    loadConfigSpy.mockRestore();
+    vi.mocked(terminalLaunch.spawnDetachedTerminal).mockReset();
+    vi.mocked(terminalLaunch.spawnDetachedTerminal).mockImplementation(
+      async () => ({ opened: true } as const),
+    );
+  });
+
+  it('refreshes the lease and opens a terminal to the refreshed Crabbox SSH host', async () => {
+    const mockSpawnDetached = vi.fn(async () => ({ opened: true } as const));
+    const terminalLaunch = await import('../terminal-external-launch.js');
+    vi.spyOn(terminalLaunch, 'spawnDetachedTerminal').mockImplementation(mockSpawnDetached as any);
+    const loadConfigSpy = vi.spyOn(configModule, 'loadConfig').mockReturnValue({
+      remoteTargets: CRABBOX_TARGET_CONFIG,
+    } as any);
+
+    // Refreshed status reports NEW coordinates that must override the persisted ones.
+    const { resolver, calls } = scriptedResolver({
+      stdout: JSON.stringify({
+        id: 'lease-abc',
+        slug: 'happy-crab',
+        status: 'ready',
+        expiresAt: '2026-12-01T00:00:00.000Z',
+        sshHost: '203.0.113.9',
+        sshUser: 'runner',
+        sshPort: 2200,
+        sshKey: '/home/me/.ssh/fresh',
+      }),
+      stderr: '',
+      exitCode: 0,
+    });
+
+    const result = await openExternalTerminalForTask({
+      taskId: 'crab-ssh-task',
+      persistence: crabboxPersistence() as any,
+      executorRegistry: new ExecutorRegistry(),
+      repoRoot: '/repo',
+      crabboxResolver: resolver,
+    });
+
+    expect(result.opened).toBe(true);
+
+    // Status call ran against the persisted lease id, without --wait.
+    expect(calls).toHaveLength(1);
+    expect(calls[0].command).toBe('/usr/local/bin/crabbox');
+    expect(calls[0].args).toEqual([
+      'status', '--id', 'lease-abc', '--json', '--region', 'iad',
+    ]);
+
+    const spawned = mockSpawnDetached.mock.calls[0];
+    const argsJson = JSON.stringify(spawned?.[1]);
+    expect(argsJson).toContain('203.0.113.9');
+    expect(argsJson).toContain('runner@203.0.113.9');
+    expect(argsJson).toContain('experiment/crab-task');
+    // Stale persisted host must not leak through.
+    expect(argsJson).not.toContain('10.0.0.1');
+
+    loadConfigSpy.mockRestore();
+    vi.mocked(terminalLaunch.spawnDetachedTerminal).mockReset();
+    vi.mocked(terminalLaunch.spawnDetachedTerminal).mockImplementation(
+      async () => ({ opened: true } as const),
+    );
+  });
+
+  it('refuses with a clear reason when the lease has expired', async () => {
+    const loadConfigSpy = vi.spyOn(configModule, 'loadConfig').mockReturnValue({
+      remoteTargets: CRABBOX_TARGET_CONFIG,
+    } as any);
+
+    const { resolver } = scriptedResolver({
+      stdout: JSON.stringify({ id: 'lease-abc', slug: 'happy-crab', status: 'expired' }),
+      stderr: '',
+      exitCode: 0,
+    });
+
+    const result = await openExternalTerminalForTask({
+      taskId: 'crab-expired-task',
+      persistence: crabboxPersistence() as any,
+      executorRegistry: new ExecutorRegistry(),
+      repoRoot: '/repo',
+      crabboxResolver: resolver,
+    });
+
+    expect(result.opened).toBe(false);
+    expect(result.reason).toContain('Crabbox SSH task "crab-expired-task"');
+    expect(result.reason).toMatch(/expired or been stopped/);
+    loadConfigSpy.mockRestore();
+  });
+
+  it('refuses with a clear reason when the lease is missing (status exits non-zero)', async () => {
+    const loadConfigSpy = vi.spyOn(configModule, 'loadConfig').mockReturnValue({
+      remoteTargets: CRABBOX_TARGET_CONFIG,
+    } as any);
+
+    const { resolver } = scriptedResolver({
+      stdout: '',
+      stderr: 'lease not found',
+      exitCode: 4,
+    });
+
+    const result = await openExternalTerminalForTask({
+      taskId: 'crab-missing-task',
+      persistence: crabboxPersistence() as any,
+      executorRegistry: new ExecutorRegistry(),
+      repoRoot: '/repo',
+      crabboxResolver: resolver,
+    });
+
+    expect(result.opened).toBe(false);
+    expect(result.reason).toMatch(/missing or unreachable/);
+    expect(result.reason).toContain('lease not found');
+    loadConfigSpy.mockRestore();
+  });
+});
+
 // ── Codex vs Claude session resume ───────────────────────────
 // Proves that getRestoredTerminalSpec with agentRegistry and
 // executionAgent='codex' opens a codex session, not claude.
@@ -1396,7 +1622,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
       loadAttempts: () => [],
     };
 
-    const resolved = resolveTaskTerminalSpec({
+    const resolved = await resolveTaskTerminalSpec({
       taskId: 'wf-1778431089965-37/experiment-inv-130',
       persistence,
       executorRegistry,

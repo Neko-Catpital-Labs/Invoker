@@ -494,7 +494,7 @@ describe('EmbeddedTerminalManager', () => {
 // ── Deterministic GUI route: resolveTaskTerminalSpec + EmbeddedTerminalManager ──
 
 describe('GUI open-terminal embedded route', () => {
-  it('returns an opened embedded session descriptor for an existing task', () => {
+  it('returns an opened embedded session descriptor for an existing task', async () => {
     const wtBase = join(tmpdir(), `embedded-wt-${randomUUID()}`);
     const workspacePath = join(wtBase, 'task-workspace');
     mkdirSync(workspacePath, { recursive: true });
@@ -515,7 +515,7 @@ describe('GUI open-terminal embedded route', () => {
         getBranch: vi.fn(() => null),
       };
 
-      const resolved = resolveTaskTerminalSpec({
+      const resolved = await resolveTaskTerminalSpec({
         taskId: 'task-X',
         persistence: persistence as never,
         executorRegistry: registry,
@@ -552,7 +552,7 @@ describe('GUI open-terminal embedded route', () => {
     }
   });
 
-  it('propagates the resolved reason when workspace metadata is missing', () => {
+  it('propagates the resolved reason when workspace metadata is missing', async () => {
     const registry = new ExecutorRegistry();
     registry.register('worktree', new WorktreeExecutor({
       cacheDir: join(tmpdir(), `cache-${randomUUID()}`),
@@ -567,7 +567,7 @@ describe('GUI open-terminal embedded route', () => {
       getBranch: vi.fn(() => null),
     };
 
-    const resolved = resolveTaskTerminalSpec({
+    const resolved = await resolveTaskTerminalSpec({
       taskId: 'task-no-workspace',
       persistence: persistence as never,
       executorRegistry: registry,
@@ -579,7 +579,7 @@ describe('GUI open-terminal embedded route', () => {
     expect(resolved.reason).toContain('workspace metadata is missing');
   });
 
-  it('allows running tasks when allowRunning=true (attach path)', () => {
+  it('allows running tasks when allowRunning=true (attach path)', async () => {
     const wtBase = join(tmpdir(), `embedded-wt-${randomUUID()}`);
     const workspacePath = join(wtBase, 'task-workspace');
     mkdirSync(workspacePath, { recursive: true });
@@ -598,7 +598,7 @@ describe('GUI open-terminal embedded route', () => {
         getBranch: vi.fn(() => null),
       };
 
-      const refused = resolveTaskTerminalSpec({
+      const refused = await resolveTaskTerminalSpec({
         taskId: 'task-running',
         persistence: persistence as never,
         executorRegistry: registry,
@@ -606,7 +606,7 @@ describe('GUI open-terminal embedded route', () => {
       });
       expect(refused.ok).toBe(false);
 
-      const allowed = resolveTaskTerminalSpec({
+      const allowed = await resolveTaskTerminalSpec({
         taskId: 'task-running',
         persistence: persistence as never,
         executorRegistry: registry,
