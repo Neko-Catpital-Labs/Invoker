@@ -1,4 +1,6 @@
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { runHeadless } from '../headless.js';
@@ -42,7 +44,7 @@ describe('headless auto-fix cutover', () => {
 });
 
 describe('headless worker autofix', () => {
-  it('runs a one-shot scan and enqueues the normal fix command intent', async () => {
+  it('runs a one-shot scan under the single-instance lock and enqueues the normal fix command intent', async () => {
     const task = makeTask();
     const enqueueWorkflowMutationIntent = vi.fn((
       _workflowId: string,
@@ -51,6 +53,11 @@ describe('headless worker autofix', () => {
       _priority: WorkflowMutationPriority,
     ) => 1);
     const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    // Point the worker lock at a throwaway home so the scan never touches the
+    // real Invoker home (the door acquires/releases the cross-process lock).
+    const homeRoot = mkdtempSync(join(tmpdir(), 'invoker-headless-autofix-'));
+    const previousDbDir = process.env.INVOKER_DB_DIR;
+    process.env.INVOKER_DB_DIR = homeRoot;
 
     try {
       await runHeadless(['worker', 'autofix'], {
@@ -67,6 +74,9 @@ describe('headless worker autofix', () => {
       } as any);
     } finally {
       write.mockRestore();
+      if (previousDbDir === undefined) delete process.env.INVOKER_DB_DIR;
+      else process.env.INVOKER_DB_DIR = previousDbDir;
+      rmSync(homeRoot, { recursive: true, force: true });
     }
 
     expect(enqueueWorkflowMutationIntent).toHaveBeenCalledWith(

@@ -10,6 +10,8 @@ import {
   TaskRunner,
   WorktreeExecutor,
   createRecoveryWorker,
+  acquireRecoveryWorkerLock,
+  WorkerLockHeldError,
   registerBuiltinAgents,
 } from '@invoker/execution-engine';
 import {
@@ -566,6 +568,21 @@ async function runAutoFixWorker(bus: MessageBus): Promise<number> {
   const owner = await discoverLiveOwner(bus);
   const homeRoot = resolveInvokerHomeRoot();
   const { autoFixRetries, autoFixAgent } = readAutoFixWorkerConfig(homeRoot);
+
+  // Single-instance guard: refuse if another auto-fix worker (this door or the
+  // dev `--headless worker autofix` door) already holds the cross-process lock,
+  // rather than spawning a second recovery loop that competes over the same
+  // failed tasks.
+  let lock;
+  try {
+    lock = acquireRecoveryWorkerLock({ homeRoot, logger: silentLogger });
+  } catch (err) {
+    if (err instanceof WorkerLockHeldError) {
+      process.stderr.write(`${err.message}\n`);
+      return 1;
+    }
+    throw err;
+  }
   const persistence = await SQLiteAdapter.create(join(homeRoot, 'invoker.db'), {
     outputDir: join(homeRoot, 'outputs'),
   });
@@ -600,6 +617,9 @@ async function runAutoFixWorker(bus: MessageBus): Promise<number> {
     });
     await worker.stop();
   } finally {
+    // Release deterministically so a clean shutdown never leaves a stale lock
+    // that blocks the next legitimate start.
+    lock.release();
     persistence.close();
   }
   process.stdout.write('Auto-fix worker stopped.\n');
