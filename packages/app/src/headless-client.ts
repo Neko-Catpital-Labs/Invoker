@@ -305,6 +305,12 @@ function parseArgs(argv: string[]): { args: string[]; waitForApproval?: boolean;
 /**
  * Resolve a writable owner endpoint using the resolver, then delegate.
  *
+ * This is the core of the INV-86 single-writer-owner design
+ * (docs/context/inv-86/experiment-brief.md): every mutating command reaches
+ * exactly one owner that holds the DB writer lock, so concurrent CLI calls can
+ * never each open a writable handle. When no owner exists, phase 4 bootstraps a
+ * standalone owner on demand rather than mutating the DB directly.
+ *
  * This function encapsulates the discover → fallback → bootstrap → delegate
  * policy. Each phase consumes the typed DelegationOutcome to decide its
  * branch behavior:
