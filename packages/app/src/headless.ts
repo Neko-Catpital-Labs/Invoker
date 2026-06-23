@@ -2777,8 +2777,11 @@ async function headlessDetachWorkflow(
   });
   const result = await deps.commandService.detachWorkflow(envelope);
   if (!result.ok) throw new Error(result.error.message);
+  // Spell out the outcome so automation logs can correlate this mutation with
+  // the detached-lineage provenance recorded on the workflow.
   process.stdout.write(
-    `Detached workflow ${workflowId} from upstream workflow ${upstreamWorkflowId}\n`,
+    `Detached workflow ${workflowId} from upstream workflow ${upstreamWorkflowId}. ` +
+      `Active dependency removed; detached lineage remains visible.\n`,
   );
 }
 
