@@ -216,6 +216,11 @@ import { createTaskDeltaStreamSequence } from './task-delta-stream-sequence.js';
 import { startLifecycleEventBridge, type LifecycleEventBridge } from './lifecycle-event-bridge.js';
 import { startReviewGateStatusWorker, type ReviewGateStatusWorker } from './review-gate-status-worker.js';
 import {
+  buildRecoveryWorkerAuditPayload,
+  classifyAutoFixRecoveryPhase,
+  recoveryWorkerEventType,
+} from './recovery-worker-observability.js';
+import {
   executeNoTrackHeadlessBatch,
   type HeadlessBatchExecRequest,
   type HeadlessExecMutationPayload,
@@ -1389,6 +1394,14 @@ function startHeadlessMode(): void {
             ...details,
           };
           persistence.logEvent?.(taskId, 'debug.auto-fix', payload);
+          const recoveryAction = classifyAutoFixRecoveryPhase(phase, payload);
+          if (recoveryAction) {
+            persistence.logEvent?.(
+              taskId,
+              recoveryWorkerEventType(recoveryAction),
+              buildRecoveryWorkerAuditPayload(recoveryAction, phase, payload),
+            );
+          }
           logger.info(
             `[auto-fix-debug][standalone] task="${taskId}" phase=${phase} payload=${JSON.stringify(payload)}`,
             { module: 'auto-fix' },
@@ -1467,6 +1480,11 @@ function startHeadlessMode(): void {
             scheduleStandaloneAutoFix(task.id);
             return true;
           }
+          logStandaloneAutoFixDebug(task.id, `${trigger}-skip`, {
+            reason: cancellationError ? 'cancellation-error' : 'shouldAutoFix-false',
+            shouldSkipForCancellation: cancellationError,
+            shouldAutoFixFromOrchestrator,
+          });
           return false;
         };
 
@@ -2046,6 +2064,14 @@ function createEmbeddedTerminalBackendFromConfig(
       ...details,
     };
     persistence.logEvent?.(taskId, 'debug.auto-fix', payload);
+    const recoveryAction = classifyAutoFixRecoveryPhase(phase, payload);
+    if (recoveryAction) {
+      persistence.logEvent?.(
+        taskId,
+        recoveryWorkerEventType(recoveryAction),
+        buildRecoveryWorkerAuditPayload(recoveryAction, phase, payload),
+      );
+    }
     logger.info(
       `[auto-fix-debug] task="${taskId}" phase=${phase} payload=${JSON.stringify(payload)}`,
       { module: 'auto-fix' },
@@ -3255,6 +3281,12 @@ function createEmbeddedTerminalBackendFromConfig(
         if (!cancellationError && shouldAutoFixFromOrchestrator && deltaTaskId) {
           logAutoFixDebug(deltaTaskId, 'delta-trigger-schedule');
           scheduleAutoFix(deltaTaskId);
+        } else if (deltaTaskId) {
+          logAutoFixDebug(deltaTaskId, 'delta-skip', {
+            reason: cancellationError ? 'cancellation-error' : 'shouldAutoFix-false',
+            shouldSkipForCancellation: cancellationError,
+            shouldAutoFixFromOrchestrator,
+          });
         }
       }
 

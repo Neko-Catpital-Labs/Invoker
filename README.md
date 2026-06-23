@@ -263,7 +263,7 @@ If you need to turn a product or implementation plan into an Invoker workflow, u
 
 Source checkouts can install prefixed skill copies with `bash scripts/setup-agent-skills.sh`. Packaged installs can install bundled skills from the first-run System Setup prompt or, for npm launcher installs, with `invoker-ui --install-skills`.
 
-Use `--output text|label|json|jsonl` on headless `query` commands. Use `./run.sh --headless retry-tasks --status pending|failed --parallel 8` for bulk safe retries. Only **one** process should **write** the workflow database at a time; see [docs/persistence-architecture-single-writer.md](docs/persistence-architecture-single-writer.md).
+Use `--output text|label|json|jsonl` on headless `query` commands. Use `./run.sh --headless retry-tasks --status pending|failed --parallel 8` for bulk safe retries. Inspect recovery ownership and decisions with `./run.sh --headless worker status --output text|json|jsonl`. Normal `run`, `resume`, and retry commands do not start recovery loops; recovery is owned by the explicit recovery worker path. Only **one** process should **write** the workflow database at a time; see [docs/persistence-architecture-single-writer.md](docs/persistence-architecture-single-writer.md).
 
 ## Architecture (at a glance)
 
