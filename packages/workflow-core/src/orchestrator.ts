@@ -200,7 +200,7 @@ export interface ExecutionResourceLeaseReleaseRow {
 export type TaskLaunchReadiness =
   | { ready: true; task: TaskState }
   | { ready: false; reason: string; task?: TaskState };
-type LaunchReadinessOptions = { bypassLocalDependencyReadiness?: boolean };
+export type LaunchReadinessOptions = { bypassLocalDependencyReadiness?: boolean };
 
 export interface OrchestratorPersistence {
   saveWorkflow(workflow: {
