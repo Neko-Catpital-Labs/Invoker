@@ -54,6 +54,7 @@
     ]
   },
   "devDependencies": {
+    "@mergifyio/vitest": "^0.3.0",
     "aws4": "^1.13.2",
     "dependency-cruiser": "^17.3.10",
     "electron-builder": "^26.0.12",
