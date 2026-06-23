@@ -6,7 +6,7 @@ description: |
   Demonstrates a dependency direction violation where a foundational layer task
   depends on a higher integration layer task without an explicit exception.
 onFinish: pull_request
-mergeMode: github
+mergeMode: external_review
 repoUrl: https://github.com/EdbertChan/Invoker
 baseBranch: master
 featureBranch: plan/anti-pattern-layer-order-violation

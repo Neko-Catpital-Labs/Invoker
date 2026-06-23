@@ -1,0 +1,22 @@
+name: Review gate artifact intent negative
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: git@github.com:EdbertChan/Invoker.git
+baseBranch: master
+featureBranch: plan/review-gate-artifact-intent-negative
+description: |
+  Negative fixture for review-gate artifact dependency metadata.
+
+tasks:
+  - id: define-contracts
+    description: |
+      Define review gate contracts.
+    command: printf 'contracts\n'
+    dependencies: []
+
+reviewGate:
+  artifacts:
+    - id: contracts
+      title: Define contracts
+      required: true
+      dependsOn: [missing-runtime]
