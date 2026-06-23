@@ -1688,10 +1688,7 @@ function startHeadlessMode(): void {
           logger,
         });
 
-        // Start launch-dispatch polling only after the owner discovery (headless.owner-ping)
-        // and exec handlers above are registered. Otherwise the owner can own the IPC socket
-        // and begin dispatching while owner-ping still returns NO_HANDLER, so peer clients
-        // connect but cannot resolve a standalone owner and mutating commands fail closed (INV-192).
+        // Owner discovery and exec handlers must exist before dispatch polling starts.
         if (!readOnlyMode) {
           standaloneLaunchDispatcherController = startStandaloneLaunchDispatcher({
             headlessDeps,

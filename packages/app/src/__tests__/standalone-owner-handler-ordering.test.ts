@@ -4,13 +4,6 @@ import * as path from 'node:path';
 
 const MAIN = path.resolve(__dirname, '..', 'main.ts');
 
-/**
- * Regression guard for INV-192: a standalone owner must register its owner
- * discovery (headless.owner-ping) and exec handlers before it starts
- * launch-dispatch polling. If polling starts first, the owner can own the IPC
- * socket while owner-ping still returns NO_HANDLER, so peer clients connect but
- * cannot resolve a standalone owner and mutating commands fail closed.
- */
 describe('standalone owner handler ordering', () => {
   it('registers owner discovery and exec handlers before starting launch-dispatch polling', () => {
     const source = readFileSync(MAIN, 'utf8');
