@@ -6,6 +6,7 @@ import type { AgentRegistry } from '@invoker/execution-engine';
 import type { Orchestrator, TaskState } from '@invoker/workflow-core';
 import type { MessageBus } from '@invoker/transport';
 import { loadConfig } from './config.js';
+import { buildReviewGateQueryResponse } from './review-gate-query.js';
 
 export interface RegisterReadOnlyIpcHandlersContext {
   ipcMain: IpcMain;
@@ -88,6 +89,13 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
     const workflow = persistence.loadWorkflow(workflowId);
     logger.info(`load-workflow: found ${tasks.length} tasks for "${workflow?.name ?? workflowId}"`, { module: 'ipc' });
     return { workflow, tasks };
+  });
+
+  ipcMain.handle('invoker:get-review-gate', (_event, workflowId: string) => {
+    const workflow = persistence.loadWorkflow(workflowId);
+    if (!workflow) return null;
+    const tasks = persistence.loadTasks(workflowId);
+    return buildReviewGateQueryResponse({ workflowId, workflow, tasks });
   });
 
   ipcMain.handle('invoker:get-tasks', async () => {

@@ -60,6 +60,7 @@ import type {
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { parseMetadataPatchBody, type MetadataSetResult } from './metadata-setter.js';
+import { buildReviewGateQueryResponse } from './review-gate-query.js';
 
 export interface ApiMutationFacade {
   cancelTask(taskId: string): Promise<CancelMutationResult>;
@@ -381,6 +382,20 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
       }
 
       // GET /api/workflows
+      // GET /api/workflows/:id/review-gate
+      const reviewGateMatch = path.match(/^\/api\/workflows\/([^/]+)\/review-gate$/);
+      if (method === 'GET' && reviewGateMatch) {
+        const workflowId = decodeURIComponent(reviewGateMatch[1]);
+        const workflow = persistence.loadWorkflow(workflowId);
+        if (!workflow) {
+          json(res, 404, { error: 'Workflow not found' });
+          return;
+        }
+        const tasks = persistence.loadTasks(workflowId);
+        json(res, 200, buildReviewGateQueryResponse({ workflowId, workflow, tasks }));
+        return;
+      }
+
       if (method === 'GET' && path === '/api/workflows') {
         const workflows = persistence.listWorkflows();
         json(res, 200, workflows);
