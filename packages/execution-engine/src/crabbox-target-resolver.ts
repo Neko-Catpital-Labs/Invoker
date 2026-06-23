@@ -64,6 +64,90 @@ export interface CrabboxResolverTargetConfig {
   readonly warmupArgs?: readonly string[];
   /** Optional extra args appended to the status subcommand. */
   readonly statusArgs?: readonly string[];
+  /** Optional extra args appended to the stop subcommand. */
+  readonly stopArgs?: readonly string[];
+}
+
+/**
+ * Inputs needed to stop (clean up) a Crabbox lease. A subset of
+ * {@link CrabboxResolverTargetConfig}: stopping only needs the CLI entrypoint,
+ * the target id (for error messages), and any configured stop args.
+ */
+export interface CrabboxStopConfig {
+  /** Config key of the remote target. Named in errors. */
+  readonly id: string;
+  /** CLI entrypoint that stops Crabbox leases. */
+  readonly crabboxCommand: string;
+  /** Optional extra args appended to the stop subcommand. */
+  readonly stopArgs?: readonly string[];
+}
+
+/** When to stop a Crabbox lease relative to the task's final status. */
+export type CrabboxStopAfter = 'success' | 'failure' | 'always' | 'never';
+
+/** Crabbox should not leak machines by default: stop on success. */
+export const DEFAULT_CRABBOX_STOP_AFTER: CrabboxStopAfter = 'success';
+/** Failed tasks keep their machine by default so they can be debugged. */
+export const DEFAULT_CRABBOX_KEEP_ON_FAILURE = true;
+
+/** Normalized cleanup policy for a Crabbox lease. */
+export interface CrabboxCleanupPolicy {
+  readonly stopAfter: CrabboxStopAfter;
+  readonly keepOnFailure: boolean;
+}
+
+/**
+ * Apply default Crabbox cleanup policy to raw (possibly missing/legacy) config.
+ *
+ * Defaults: `stopAfter` → 'success' (don't leak machines), `keepOnFailure` →
+ * true (preserve failed machines for debugging). The legacy `'completed'`
+ * value is treated as `'success'`.
+ */
+export function resolveCrabboxCleanupPolicy(
+  stopAfter: string | undefined,
+  keepOnFailure: boolean | undefined,
+): CrabboxCleanupPolicy {
+  return {
+    stopAfter: normalizeStopAfter(stopAfter),
+    keepOnFailure: keepOnFailure ?? DEFAULT_CRABBOX_KEEP_ON_FAILURE,
+  };
+}
+
+function normalizeStopAfter(value: string | undefined): CrabboxStopAfter {
+  switch (value) {
+    case 'success':
+    case 'failure':
+    case 'always':
+    case 'never':
+      return value;
+    case 'completed':
+      // Legacy alias from earlier config: stop once the task completes ok.
+      return 'success';
+    default:
+      return DEFAULT_CRABBOX_STOP_AFTER;
+  }
+}
+
+/**
+ * Decide whether to stop a Crabbox lease given its policy and the task's
+ * outcome. `keepOnFailure` wins on failure (debug-preserving), so a failed
+ * task with `keepOnFailure` is never stopped regardless of `stopAfter`.
+ */
+export function shouldStopCrabboxLease(
+  policy: CrabboxCleanupPolicy,
+  succeeded: boolean,
+): boolean {
+  if (!succeeded && policy.keepOnFailure) return false;
+  switch (policy.stopAfter) {
+    case 'always':
+      return true;
+    case 'never':
+      return false;
+    case 'success':
+      return succeeded;
+    case 'failure':
+      return !succeeded;
+  }
 }
 
 /** A fixed SSH host the SSH executor can connect to directly. */
@@ -165,6 +249,17 @@ export function buildCrabboxStatusArgs(
   ];
 }
 
+/**
+ * Build the stop args that tear down a lease: `stop <leaseId>` plus any
+ * caller-supplied stopArgs.
+ */
+export function buildCrabboxStopArgs(
+  config: CrabboxStopConfig,
+  leaseId: string,
+): string[] {
+  return ['stop', leaseId, ...(config.stopArgs ?? [])];
+}
+
 function asNonEmptyString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
@@ -206,6 +301,24 @@ export class CrabboxTargetResolver {
       );
     }
     return this.buildResolvedTarget(config, status, leaseRef);
+  }
+
+  /**
+   * Stop (release) a Crabbox lease via `crabbox stop <leaseId>`. Throws an
+   * actionable error when the stop command exits non-zero so callers can log
+   * a cleanup failure without re-deriving the lease.
+   */
+  async stop(config: CrabboxStopConfig, leaseId: string): Promise<void> {
+    const result = await this.run(
+      config.crabboxCommand,
+      buildCrabboxStopArgs(config, leaseId),
+    );
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `Crabbox stop failed for lease "${leaseId}" on remote target "${config.id}" ` +
+          `(exit ${result.exitCode}): ${result.stderr.trim() || result.stdout.trim()}`,
+      );
+    }
   }
 
   /** Read the lease id (or slug) that warmup printed for the status call. */
