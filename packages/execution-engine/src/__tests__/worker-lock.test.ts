@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import {
   acquireRecoveryWorkerLock,
   acquireWorkerLock,
+  resolveWorkerLockPath,
   WorkerLockHeldError,
 } from '../worker-lock.js';
 import { RECOVERY_WORKER_KIND } from '../worker-runtime.js';
@@ -20,23 +21,25 @@ describe('worker single-instance lock', () => {
     rmSync(homeRoot, { recursive: true, force: true });
   });
 
-  it('refuses a second start while a worker holds the lock, then allows start after release', () => {
-    // First start acquires the lock.
-    const first = acquireRecoveryWorkerLock({ homeRoot });
-    expect(existsSync(first.path)).toBe(true);
+  it('allows different kinds to run together but refuses a second start of the same kind', () => {
+    const recovery = acquireWorkerLock({ homeRoot, kind: RECOVERY_WORKER_KIND });
+    const otherKind = 'other-kind';
+    const other = acquireWorkerLock({ homeRoot, kind: otherKind });
 
-    // A second start (same kind, same Invoker home) must refuse — no second
-    // concurrent loop — because a live process already holds the lock.
-    expect(() => acquireRecoveryWorkerLock({ homeRoot })).toThrow(WorkerLockHeldError);
+    expect(recovery.path).toBe(resolveWorkerLockPath(homeRoot, RECOVERY_WORKER_KIND));
+    expect(other.path).toBe(resolveWorkerLockPath(homeRoot, otherKind));
+    expect(recovery.path).not.toBe(other.path);
+    expect(existsSync(recovery.path)).toBe(true);
+    expect(existsSync(other.path)).toBe(true);
 
-    // stop() releases the lock...
-    first.release();
-    expect(existsSync(first.path)).toBe(false);
+    expect(() => acquireWorkerLock({ homeRoot, kind: RECOVERY_WORKER_KIND })).toThrow(WorkerLockHeldError);
 
-    // ...so a subsequent legitimate start succeeds.
-    const second = acquireRecoveryWorkerLock({ homeRoot });
-    expect(existsSync(second.path)).toBe(true);
-    second.release();
+    recovery.release();
+    other.release();
+
+    const restarted = acquireWorkerLock({ homeRoot, kind: RECOVERY_WORKER_KIND });
+    expect(existsSync(restarted.path)).toBe(true);
+    restarted.release();
   });
 
   it('release is idempotent and only removes a lock this process owns', () => {
@@ -48,7 +51,7 @@ describe('worker single-instance lock', () => {
   });
 
   it('reclaims a stale lock left by a dead process', () => {
-    const lockPath = join(homeRoot, 'locks', `worker-${RECOVERY_WORKER_KIND}.lock`);
+    const lockPath = resolveWorkerLockPath(homeRoot, RECOVERY_WORKER_KIND);
     rmSync(join(homeRoot, 'locks'), { recursive: true, force: true });
     // Simulate a crash: a lock file naming a pid that no longer exists.
     mkdirSync(join(homeRoot, 'locks'), { recursive: true });

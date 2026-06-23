@@ -25,9 +25,10 @@ import {
   registerBuiltinAgents,
   assertPlanExecutionAgentsRegistered,
   createAutoFixRecoveryWorker,
-  acquireRecoveryWorkerLock,
+  acquireWorkerLock,
   resolveInvokerHomeRoot,
   WorkerLockHeldError,
+  RECOVERY_WORKER_KIND,
   type AgentRegistry,
   type TaskHeartbeatEvent,
 } from '@invoker/execution-engine';
@@ -1152,7 +1153,11 @@ const HEADLESS_WORKER_KINDS: ReadonlyArray<{ kind: string; available: boolean; n
 async function headlessWorkerAutofix(deps: Pick<HeadlessDeps, 'logger'>): Promise<void> {
   let lock;
   try {
-    lock = acquireRecoveryWorkerLock({ homeRoot: resolveInvokerHomeRoot(), logger: deps.logger });
+    lock = acquireWorkerLock({
+      homeRoot: resolveInvokerHomeRoot(),
+      kind: RECOVERY_WORKER_KIND,
+      logger: deps.logger,
+    });
   } catch (err) {
     if (err instanceof WorkerLockHeldError) {
       // Refuse explicitly per the app's throw-based error convention.
