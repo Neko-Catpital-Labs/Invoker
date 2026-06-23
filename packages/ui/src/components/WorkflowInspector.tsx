@@ -41,14 +41,18 @@ function mergeModeValue(value: string | undefined): MergeMode {
   return value === 'automatic' || value === 'external_review' ? value : 'manual';
 }
 
-function getReviewReadyMergeNodeReviewUrl(
+function hasReviewUrlStatus(status: string | undefined): boolean {
+  return status === 'review_ready' || status === 'completed';
+}
+
+function getMergeNodeReviewUrl(
   tasks: Map<string, TaskState> | undefined,
 ): string | undefined {
   if (!tasks) return undefined;
   for (const candidate of tasks.values()) {
     if (
       candidate.config.isMergeNode &&
-      candidate.status === 'review_ready' &&
+      hasReviewUrlStatus(candidate.status) &&
       candidate.execution.reviewUrl
     ) {
       return candidate.execution.reviewUrl;
@@ -148,12 +152,12 @@ export function WorkflowInspector({
   const taskColors = taskVisualStatus ? getStatusColor(taskVisualStatus) : null;
   const workflowVisual = workflow ? workflowStatusVisual(workflow.status) : null;
   const reviewUrl =
-    workflow?.status === 'review_ready'
+    hasReviewUrlStatus(workflow?.status)
       ? task
-        ? task.config.isMergeNode && task.status === 'review_ready'
+        ? task.config.isMergeNode && hasReviewUrlStatus(task.status)
           ? task.execution.reviewUrl
           : undefined
-        : getReviewReadyMergeNodeReviewUrl(workflowTasks)
+        : getMergeNodeReviewUrl(workflowTasks)
       : undefined;
   const workflowTitle = workflow ? workflow.name || workflow.id : null;
   const nodeTitle = task?.description ?? workflowTitle ?? 'No node selected';
