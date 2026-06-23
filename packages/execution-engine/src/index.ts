@@ -31,3 +31,4 @@ export * from './codex-session.js';
 export * from './session-driver.js';
 export * from './codex-session-driver.js';
 export * from './claude-session-driver.js';
+export * from './omp-session-driver.js';

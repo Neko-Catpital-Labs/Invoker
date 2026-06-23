@@ -265,6 +265,16 @@ export class CommandService {
     );
   }
 
+  async editTaskModel(
+    envelope: CommandEnvelope<{ taskId: string; executionModel: string | null }>,
+  ): Promise<CommandResult<TaskState[]>> {
+    return this.executeCommand<TaskState[]>(
+      'EDIT_TASK_MODEL_FAILED',
+      () => this.orchestrator.editTaskModel(envelope.payload.taskId, envelope.payload.executionModel),
+      this.workflowIdForTask(envelope.payload.taskId),
+    );
+  }
+
   /**
    * Edit the merge mode of a workflow's merge node — **retry-class**
    * invalidation route per Step 9 of the task-invalidation roadmap

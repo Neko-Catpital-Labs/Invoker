@@ -369,6 +369,7 @@ export interface PlanDefinition {
     dockerImage?: string;
     poolId?: string;
     executionAgent?: string;
+    executionModel?: string;
   }>;
 }
 
@@ -480,6 +481,7 @@ export interface TaskReplacementDef {
   dependencies?: string[];
   runnerKind?: RunnerKind;
   executionAgent?: string;
+  executionModel?: string;
 }
 
 export interface ExternalGatePolicyUpdate {
@@ -1426,6 +1428,7 @@ export class Orchestrator {
         requiresManualApproval: taskDef.requiresManualApproval,
         featureBranch: taskDef.featureBranch,
         executionAgent: taskDef.executionAgent,
+        executionModel: taskDef.executionModel,
         poolId: effectivePoolId,
       } as const;
       let taskConfig: TaskConfig;
@@ -2967,7 +2970,29 @@ export class Orchestrator {
     return this.dispatchPostMutation(MUTATION_POLICIES.poolMemberId.action, taskId);
   }
 
-    editTaskAgent(taskId: string, agentName: string): TaskState[] {
+    editTaskModel(taskId: string, executionModel: string | null): TaskState[] {
+    this.refreshFromDb();
+    const task = this.stateGetTask(taskId);
+    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
+    if (task.config.isMergeNode) throw new Error(`Cannot change execution model of merge node ${taskId}`);
+
+    if (isActiveForInvalidation(task.status)) {
+      this.cancelTask(taskId);
+    }
+
+    const modelChanges: TaskStateChanges = {
+      config: { executionModel: executionModel?.trim() || undefined },
+    };
+    const modelBefore = this.stateGetTask(taskId)!;
+    const modelUpdated = this.writeAndSync(taskId, modelChanges);
+    const modelDelta: TaskDelta = this.buildUpdateDelta(modelBefore, modelUpdated, modelChanges);
+    this.persistence.logEvent?.(taskId, 'task.updated', modelChanges);
+    this.messageBus.publish(TASK_DELTA_CHANNEL, modelDelta);
+
+    return this.dispatchPostMutation(MUTATION_POLICIES.executionModel.action, taskId);
+  }
+
+  editTaskAgent(taskId: string, agentName: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
@@ -3594,6 +3619,7 @@ export class Orchestrator {
         command: rt.command,
         prompt: rt.prompt,
         executionAgent: rt.executionAgent ?? task.config.executionAgent,
+        executionModel: rt.executionModel ?? task.config.executionModel,
         poolId: task.config.poolId,
       } as const;
       // Replacement tasks inherit executor config from the parent task.
