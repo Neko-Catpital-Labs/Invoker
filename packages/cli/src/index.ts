@@ -9,12 +9,13 @@ import {
   ExecutorRegistry,
   TaskRunner,
   WorktreeExecutor,
-  createAutoFixRecoveryWorker,
   acquireWorkerLock,
   resolveInvokerHomeRoot,
   WorkerLockHeldError,
-  RECOVERY_WORKER_KIND,
   registerBuiltinAgents,
+  createWorkerRegistry,
+  AUTO_FIX_WORKER_KIND,
+  type WorkerFactoryDependencies,
 } from '@invoker/execution-engine';
 import {
   IpcBus,
@@ -134,16 +135,16 @@ const noopBus: OrchestratorMessageBus = {
 function usage(): string {
   return [
     'Usage:',
-    '  invoker-cli run <plan.yaml> [--live|--standalone] [--db-dir <path>] [--config <path>] [--json]',
-    '  invoker-cli doctor [--fix] [--json]',
-    '  invoker-cli worker autofix',
+  '  invoker-cli run <plan.yaml> [--live|--standalone] [--db-dir <path>] [--config <path>] [--json]',
+  '  invoker-cli doctor [--fix] [--json]',
+  '  invoker-cli worker [kind]',
     '  invoker-cli --help',
     '  invoker-cli --version',
     '',
-    'Commands:',
-    '  run <plan.yaml>  Submit to a live Invoker UI when available, otherwise run standalone.',
-    '  doctor          Check external runtime tools used by Invoker executors.',
-    '  worker autofix  Run the shared auto-fix recovery worker in the foreground.',
+  'Commands:',
+  '  run <plan.yaml>  Submit to a live Invoker UI when available, otherwise run standalone.',
+  '  doctor          Check external runtime tools used by Invoker executors.',
+  '  worker [kind]   Run a registered worker in the foreground.',
     '',
     'Options:',
     '  --live           Require a running Invoker UI owner and submit over IPC.',
@@ -527,27 +528,50 @@ async function createDefaultMessageBus(): Promise<MessageBus> {
   return bus;
 }
 
-/**
- * Run the auto-fix recovery worker in the foreground. There is exactly one
- * auto-fix engine: this builds the shared `createAutoFixRecoveryWorker` from
- * `@invoker/execution-engine` (the same engine the app door uses) instead of a
- * private poll loop, so the two doors can never run competing scans. The shared
- * engine owns the scan and cadence; the CLI owns only the foreground lifetime —
- * owner discovery, connect message, SIGINT/SIGTERM block, and a deterministic
- * stop with the stopped message.
- */
-async function runAutoFixWorker(bus: MessageBus): Promise<number> {
-  const owner = await discoverLiveOwner(bus);
+function createWorkerFactoryDependencies(logger: Logger): WorkerFactoryDependencies {
+  return {
+    state: {
+      loadTask: () => undefined,
+    },
+    actionOutput: {
+      append: () => {},
+    },
+    logger,
+    autoFix: {
+      defaultAttemptBudget: 0,
+      chosenAgent: 'codex',
+      tickOnStart: false,
+      installSignalHandlers: false,
+    },
+  };
+}
 
-  // Single-instance guard: refuse if another auto-fix worker (this door or the
-  // dev `--headless worker autofix` door) already holds the cross-process lock,
-  // rather than spawning a second recovery loop that competes over the same
-  // failed tasks.
+function resolveWorkerDefinitionOrThrow(kind: string) {
+  const registry = createWorkerRegistry();
+  const definition = registry.getByKind(kind);
+  if (!definition) {
+    const availableKinds = registry.getAll().map((worker) => worker.kind).join(', ') || '(none)';
+    throw new Error(`Unknown worker kind: "${kind}". Available kinds: ${availableKinds}`);
+  }
+  return definition;
+}
+
+/**
+ * Run a registered worker in the foreground. For the built-in autofix worker,
+ * this preserves the current door behavior: the shared recovery engine runs
+ * under the per-kind lock, and the CLI owns the foreground signal handlers.
+ */
+async function runWorkerKind(kind: string, bus: MessageBus): Promise<number> {
+  const owner = await discoverLiveOwner(bus);
+  const definition = resolveWorkerDefinitionOrThrow(kind);
+
+  // Single-instance guard: refuse if another worker of the same kind already
+  // holds the cross-process lock, rather than spawning a competing loop.
   let lock;
   try {
     lock = acquireWorkerLock({
       homeRoot: resolveInvokerHomeRoot(),
-      kind: RECOVERY_WORKER_KIND,
+      kind: definition.kind,
       logger: silentLogger,
     });
   } catch (err) {
@@ -558,17 +582,19 @@ async function runAutoFixWorker(bus: MessageBus): Promise<number> {
     throw err;
   }
 
-  // CLI owns the foreground signals so shutdown ordering is deterministic
-  // (signal -> unblock -> engine.stop() -> stopped message); the engine does
-  // not also install its own handlers.
-  const worker = createAutoFixRecoveryWorker({
-    logger: silentLogger,
-    installSignalHandlers: false,
+  const workerDeps = createWorkerFactoryDependencies(silentLogger);
+  const worker = definition.createRuntime({
+    ...workerDeps,
+    autoFix: {
+      ...workerDeps.autoFix,
+      instanceId: lock.record.instanceId,
+    },
   });
 
   worker.start();
   const ownerSuffix = owner?.ownerId ? ` to owner ${owner.ownerId}` : '';
-  process.stdout.write(`Auto-fix worker connected${ownerSuffix}.\n`);
+  const isAutoFix = definition.kind === AUTO_FIX_WORKER_KIND;
+  process.stdout.write(`${isAutoFix ? 'Auto-fix' : definition.kind} worker connected${ownerSuffix}.\n`);
 
   try {
     await new Promise<void>((resolveShutdown) => {
@@ -583,7 +609,7 @@ async function runAutoFixWorker(bus: MessageBus): Promise<number> {
     // that blocks the next legitimate start.
     lock.release();
   }
-  process.stdout.write('Auto-fix worker stopped.\n');
+  process.stdout.write(`${isAutoFix ? 'Auto-fix' : definition.kind} worker stopped.\n`);
   return 0;
 }
 
@@ -595,11 +621,11 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
     }
     if (argv[0] === 'worker') {
       const subcommand = argv[1];
-      if (subcommand !== 'autofix') {
-        throw new Error(`Unknown worker subcommand: ${subcommand ?? '(none)'}. Usage: invoker-cli worker autofix`);
+      if (!subcommand) {
+        throw new Error('Missing worker kind. Usage: invoker-cli worker <kind>');
       }
       bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
-      return await runAutoFixWorker(bus);
+      return await runWorkerKind(subcommand, bus);
     }
     const parsed = parseArgs(argv);
     if (!parsed.command || parsed.command === '--help') {

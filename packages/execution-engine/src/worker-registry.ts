@@ -19,6 +19,7 @@ export interface AutoFixWorkerRuntimeConfig {
   intervalMs?: number;
   instanceId?: string;
   tickOnStart?: boolean;
+  installSignalHandlers?: boolean;
 }
 
 export interface WorkerFactoryDependencies {
@@ -58,6 +59,7 @@ export function createAutoFixWorkerDefinition(): WorkerDefinition {
       logger: deps.logger,
       instanceId: deps.autoFix.instanceId,
       intervalMs: deps.autoFix.intervalMs,
+      installSignalHandlers: deps.autoFix.installSignalHandlers,
       tickOnStart: deps.autoFix.tickOnStart,
     }),
   };

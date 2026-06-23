@@ -24,12 +24,12 @@ import {
   remoteFetchForPool,
   registerBuiltinAgents,
   assertPlanExecutionAgentsRegistered,
-  createAutoFixRecoveryWorker,
   acquireWorkerLock,
   resolveInvokerHomeRoot,
   WorkerLockHeldError,
-  RECOVERY_WORKER_KIND,
+  createWorkerRegistry,
   type AgentRegistry,
+  type WorkerFactoryDependencies,
   type TaskHeartbeatEvent,
 } from '@invoker/execution-engine';
 import { loadConfig, resolveSecretsFilePath, type InvokerConfig } from './config.js';
@@ -64,7 +64,6 @@ import {
   isDispatchableLaunch,
 } from './global-topup.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
-import { RECOVERY_WORKER_KIND } from './worker-runtime.js';
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
 import { trackWorkflow } from './headless-watch.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
@@ -1135,27 +1134,46 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
   }
 }
 
-const HEADLESS_WORKER_KINDS: ReadonlyArray<{ kind: string; available: boolean; note: string }> = [
-  {
-    kind: RECOVERY_WORKER_KIND,
-    available: true,
-    note: 'auto-fix recovery owner with audit-backed status',
-  },
-];
+function createHeadlessWorkerRegistry(): ReturnType<typeof createWorkerRegistry> {
+  return createWorkerRegistry();
+}
+
+function createWorkerFactoryDependencies(logger: HeadlessDeps['logger']): WorkerFactoryDependencies {
+  return {
+    state: {
+      loadTask: () => undefined,
+    },
+    actionOutput: {
+      append: () => {},
+    },
+    logger,
+    autoFix: {
+      defaultAttemptBudget: 0,
+      chosenAgent: 'codex',
+      tickOnStart: false,
+      installSignalHandlers: false,
+    },
+  };
+}
 
 /**
- * Dev door for the auto-fix recovery worker (`--headless worker autofix`). Runs
- * the same shared engine as the production `invoker-cli worker autofix` door,
- * guarded by the cross-process single-instance lock so the two doors can never
- * run competing recovery loops. The app owns the foreground signals; the engine
- * does not install its own handlers.
+ * Dev door for long-running headless workers. Resolves the requested kind from
+ * the shared worker registry and runs that worker under the per-kind lock so
+ * the door stays worker-agnostic.
  */
-async function headlessWorkerAutofix(deps: Pick<HeadlessDeps, 'logger'>): Promise<void> {
+async function headlessWorkerKind(kind: string, deps: Pick<HeadlessDeps, 'logger'>): Promise<void> {
+  const registry = createHeadlessWorkerRegistry();
+  const definition = registry.getByKind(kind);
+  if (!definition) {
+    const availableKinds = registry.getAll().map((worker) => worker.kind).join(', ') || '(none)';
+    throw new Error(`Unknown worker kind: "${kind}". Available kinds: ${availableKinds}`);
+  }
+
   let lock;
   try {
     lock = acquireWorkerLock({
       homeRoot: resolveInvokerHomeRoot(),
-      kind: RECOVERY_WORKER_KIND,
+      kind: definition.kind,
       logger: deps.logger,
     });
   } catch (err) {
@@ -1166,9 +1184,16 @@ async function headlessWorkerAutofix(deps: Pick<HeadlessDeps, 'logger'>): Promis
     throw err;
   }
 
-  const worker = createAutoFixRecoveryWorker({ logger: deps.logger, installSignalHandlers: false });
+  const workerDeps = createWorkerFactoryDependencies(deps.logger);
+  const worker = definition.createRuntime({
+    ...workerDeps,
+    autoFix: {
+      ...workerDeps.autoFix,
+      instanceId: lock.record.instanceId,
+    },
+  });
   worker.start();
-  process.stdout.write('[headless] auto-fix worker connected.\n');
+  process.stdout.write(`[headless] ${definition.kind} worker connected.\n`);
 
   try {
     await new Promise<void>((resolveShutdown) => {
@@ -1181,26 +1206,28 @@ async function headlessWorkerAutofix(deps: Pick<HeadlessDeps, 'logger'>): Promis
     // Release deterministically so a clean shutdown never wedges the next start.
     lock.release();
   }
-  process.stdout.write('[headless] auto-fix worker stopped.\n');
+  process.stdout.write(`[headless] ${definition.kind} worker stopped.\n`);
 }
 
 async function headlessWorker(args: string[], deps: Pick<HeadlessDeps, 'persistence' | 'logger'>): Promise<void> {
   const subCommand = args[0] ?? 'list';
-  if (subCommand !== 'list' && subCommand !== 'status' && subCommand !== 'autofix') {
-    throw new Error(`Unknown worker sub-command: "${subCommand}". Use: list, status, autofix`);
-  }
-
-  if (subCommand === 'autofix') {
-    await headlessWorkerAutofix(deps);
-    return;
-  }
+  const registry = createHeadlessWorkerRegistry();
 
   if (subCommand === 'list') {
     process.stdout.write(`${BOLD}Worker kinds${RESET}\n`);
-    for (const worker of HEADLESS_WORKER_KINDS) {
-      const status = worker.available ? 'available' : 'unavailable';
-      process.stdout.write(`  ${worker.kind} — ${status} (${worker.note})\n`);
+    for (const worker of registry.getAll()) {
+      process.stdout.write(`  ${worker.kind} — available (${worker.operatorNote})\n`);
     }
+    return;
+  }
+
+  if (subCommand !== 'status') {
+    const definition = registry.getByKind(subCommand);
+    if (!definition) {
+      const availableKinds = registry.getAll().map((worker) => worker.kind).join(', ') || '(none)';
+      throw new Error(`Unknown worker kind: "${subCommand}". Available kinds: ${availableKinds}`);
+    }
+    await headlessWorkerKind(definition.kind, deps);
     return;
   }
 
@@ -1328,8 +1355,8 @@ ${BOLD}Lifecycle:${RESET}
   delete-all                                          Delete all workflows (requires INVOKER_ALLOW_DELETE_ALL=1)
   open-terminal <taskId>                              Open OS terminal for a task
   slack                                               Start Slack bot (long-running)
-  worker [list|status] [--output F]                  Show recovery-worker ownership and audit status
-  worker autofix                                      Run the shared auto-fix recovery worker in the foreground
+  worker [list|status|<kind>] [--output F]            Show recovery-worker ownership and audit status
+  worker <kind>                                       Run a registered worker in the foreground
 
 ${BOLD}Deprecated${RESET} (use new names above):
   list → query workflows       status → query tasks       task-status → query task
