@@ -665,7 +665,7 @@ describe('LaunchDispatcher', () => {
       expect(adapter.loadLaunchDispatchById(1)?.lastError).toBeUndefined();
     });
 
-    it('abandons a dispatch row when the selected attempt changed after lease', () => {
+    it('abandons a dispatch row when both the selected attempt and generation changed after lease', () => {
       const task = seedWorkflowAndTask('wf-a/t-stale', 'wf-a', {
         selectedAttemptId: 'attempt-old',
         generation: 0,
@@ -700,9 +700,119 @@ describe('LaunchDispatcher', () => {
       expect(executeTask).not.toHaveBeenCalled();
       const after = adapter.loadLaunchDispatchById(enq.id);
       expect(after?.state).toBe('abandoned');
-      expect(after?.lastError).toMatch(/selected attempt or generation changed/);
+      expect(after?.lastError).toMatch(/selected attempt and execution generation changed/);
       const events = adapter.getEvents(task.id);
-      expect(events.some((event) => event.eventType === 'task.launch_dispatch_invalidated')).toBe(true);
+      const invalidated = events.find((event) => event.eventType === 'task.launch_dispatch_invalidated');
+      expect(invalidated).toBeDefined();
+      expect(JSON.parse(invalidated!.payload!)).toMatchObject({
+        dispatchId: enq.id,
+        reason: 'selected_attempt_and_generation_changed',
+        mismatchedFields: ['attemptId', 'generation'],
+        dispatchAttemptId: 'attempt-old',
+        dispatchGeneration: 0,
+        selectedAttemptId: 'attempt-current',
+        selectedGeneration: 1,
+      });
+    });
+
+    it('does not hand a dispatch row to the TaskRunner when only the generation differs', () => {
+      const task = seedWorkflowAndTask('wf-a/t-gen', 'wf-a', {
+        selectedAttemptId: 'attempt-gen',
+        generation: 0,
+      });
+      const enq = adapter.enqueueLaunchDispatch({
+        taskId: task.id,
+        attemptId: 'attempt-gen',
+        workflowId: 'wf-a',
+        generation: 0,
+      });
+      // Same selected attempt, but the task advanced to a newer execution
+      // generation after the row was enqueued.
+      const currentTask = {
+        ...task,
+        execution: {
+          ...task.execution,
+          selectedAttemptId: 'attempt-gen',
+          generation: 2,
+        },
+      };
+      const executeTask = vi.fn().mockResolvedValue(undefined);
+      const dispatcher = new LaunchDispatcher({
+        persistence: adapter,
+        ownerId: 'owner-a',
+        orchestrator: {
+          prepareTaskForNewAttempt: vi.fn(),
+          getTask: vi.fn().mockReturnValue(currentTask as any),
+        },
+        taskRunnerProvider: () => ({ executeTask }),
+      });
+
+      dispatcher.poll();
+
+      expect(executeTask).not.toHaveBeenCalled();
+      const after = adapter.loadLaunchDispatchById(enq.id);
+      expect(after?.state).toBe('abandoned');
+      expect(after?.lastError).toMatch(/execution generation changed/);
+      const events = adapter.getEvents(task.id);
+      const invalidated = events.find((event) => event.eventType === 'task.launch_dispatch_invalidated');
+      expect(invalidated).toBeDefined();
+      expect(JSON.parse(invalidated!.payload!)).toMatchObject({
+        dispatchId: enq.id,
+        reason: 'execution_generation_changed',
+        mismatchedFields: ['generation'],
+        dispatchGeneration: 0,
+        selectedGeneration: 2,
+      });
+    });
+
+    it('does not hand a dispatch row to the TaskRunner when only the selected attempt differs', () => {
+      const task = seedWorkflowAndTask('wf-a/t-attempt', 'wf-a', {
+        selectedAttemptId: 'attempt-original',
+        generation: 3,
+      });
+      const enq = adapter.enqueueLaunchDispatch({
+        taskId: task.id,
+        attemptId: 'attempt-original',
+        workflowId: 'wf-a',
+        generation: 3,
+      });
+      // Same generation, but a different attempt was selected (e.g. the
+      // user picked a different attempt) after the row was enqueued.
+      const currentTask = {
+        ...task,
+        execution: {
+          ...task.execution,
+          selectedAttemptId: 'attempt-reselected',
+          generation: 3,
+        },
+      };
+      const executeTask = vi.fn().mockResolvedValue(undefined);
+      const dispatcher = new LaunchDispatcher({
+        persistence: adapter,
+        ownerId: 'owner-a',
+        orchestrator: {
+          prepareTaskForNewAttempt: vi.fn(),
+          getTask: vi.fn().mockReturnValue(currentTask as any),
+        },
+        taskRunnerProvider: () => ({ executeTask }),
+      });
+
+      dispatcher.poll();
+
+      expect(executeTask).not.toHaveBeenCalled();
+      const after = adapter.loadLaunchDispatchById(enq.id);
+      expect(after?.state).toBe('abandoned');
+      expect(after?.lastError).toMatch(/selected attempt changed/);
+      const events = adapter.getEvents(task.id);
+      const invalidated = events.find((event) => event.eventType === 'task.launch_dispatch_invalidated');
+      expect(invalidated).toBeDefined();
+      expect(JSON.parse(invalidated!.payload!)).toMatchObject({
+        dispatchId: enq.id,
+        reason: 'selected_attempt_changed',
+        mismatchedFields: ['attemptId'],
+        dispatchAttemptId: 'attempt-original',
+        selectedAttemptId: 'attempt-reselected',
+      });
     });
 
     it('abandons the dispatch when readiness is blocked', () => {
