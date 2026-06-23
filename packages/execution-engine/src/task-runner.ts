@@ -568,6 +568,31 @@ export class TaskRunner {
     return false;
   }
 
+  /**
+   * Narrow post-start lineage check: returns `true` only when the live
+   * task's `generation` has advanced past the launch-time generation.
+   *
+   * Unlike {@link isLaunchStale} this deliberately does NOT reject on a
+   * `selectedAttemptId` mismatch — the post-start promotion already routes
+   * attempt-id mismatches through `markTaskRunningAfterLaunch`, and
+   * legitimate concurrent attempts of the same task must still register as
+   * active executions so they can be killed later. This guard is the missing
+   * piece: `markTaskRunningAfterLaunch` ignores the launch-time generation,
+   * so a launch accepted at generation N could otherwise persist metadata
+   * after the task advanced to N+1 with the same attempt id.
+   */
+  private hasGenerationAdvancedSinceLaunch(
+    taskId: string,
+    startGeneration: number,
+  ): boolean {
+    const current = this.orchestrator.getTask(taskId);
+    // If the task is no longer visible we cannot confirm the generation
+    // advanced — defer to the normal promotion path rather than dropping
+    // the launch here.
+    if (!current) return false;
+    return (current.execution.generation ?? 0) !== startGeneration;
+  }
+
   async executeTask(task: TaskState, dispatchOpts?: LaunchDispatchOptions): Promise<void> {
     traceExecution(
       `${RESTART_TO_BRANCH_TRACE} TaskRunner.executeTask BEGIN taskId=${task.id} isMergeNode=${Boolean(task.config.isMergeNode)} status=${task.status}`,
@@ -1067,12 +1092,42 @@ export class TaskRunner {
       hasWorkspacePath: Boolean(handle.workspacePath),
       hasAgentSessionId: Boolean(handle.agentSessionId),
     });
-    const launchAccepted =
-      this.orchestrator.markTaskRunningAfterLaunch?.(task.id, attemptId) ?? true;
+    // Post-start lineage guard. `executor.start()` can take minutes (SSH
+    // provisioning), and the live task may advance to a new generation while
+    // it is in flight — e.g. a restart that reuses the same attempt id but
+    // bumps the generation. `markTaskRunningAfterLaunch` only rejects a
+    // mismatched selectedAttemptId; it does NOT compare the launch-time
+    // generation (it even stamps the *current* generation when promoting
+    // pending→running). So a launch accepted at generation N could otherwise
+    // persist workspacePath/branch/agentSessionId/containerId/heartbeat
+    // metadata and register an active execution after the task moved to N+1.
+    // Detect that here and route through the same kill/cleanup path as the
+    // stale-attempt rejection, before any post-start metadata is written.
+    // The check is narrow on purpose: only a *generation* advance is caught
+    // here. Attempt-id mismatches stay the responsibility of
+    // markTaskRunningAfterLaunch, so legitimate concurrent same-task attempts
+    // still register as active executions.
+    const launchStaleAfterStart = this.hasGenerationAdvancedSinceLaunch(task.id, startGeneration);
+    const launchAccepted = launchStaleAfterStart
+      ? false
+      : (this.orchestrator.markTaskRunningAfterLaunch?.(task.id, attemptId) ?? true);
     if (!launchAccepted) {
       this.logger.warn(
-        `[TaskRunner] launch rejected as stale/non-executable for task=${task.id} attemptId=${attemptId}; killing spawned process`,
+        `[TaskRunner] launch rejected as stale/non-executable for task=${task.id} attemptId=${attemptId} ` +
+          `(staleGeneration=${launchStaleAfterStart} startGeneration=${startGeneration}); killing spawned process`,
       );
+      if (launchStaleAfterStart) {
+        this.persistence.logEvent?.(task.id, 'task.executor.stale_post_start_launch', {
+          attemptId,
+          executorType: executor.type,
+          startGeneration,
+          currentGeneration: this.orchestrator.getTask(task.id)?.execution.generation ?? null,
+          workspacePath: handle.workspacePath,
+          branch: handle.branch,
+          hasAgentSessionId: Boolean(handle.agentSessionId),
+          hasContainerId: Boolean(handle.containerId),
+        });
+      }
       try {
         await executor.kill(handle);
       } catch (killErr) {
@@ -1087,7 +1142,7 @@ export class TaskRunner {
           new Error('Launch rejected as stale or non-executable after executor start'),
         );
       }
-      bench('markTaskRunningAfterLaunch.rejected');
+      bench(launchStaleAfterStart ? 'postStartLineageGuard.rejected' : 'markTaskRunningAfterLaunch.rejected');
       return;
     }
     bench('markTaskRunningAfterLaunch.accepted');
