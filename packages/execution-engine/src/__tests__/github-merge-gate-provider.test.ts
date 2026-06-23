@@ -477,7 +477,7 @@ describe('GitHubMergeGateProvider', () => {
 
       const result = await provider.checkApproval({ identifier: '1', cwd: '/tmp/repo' });
 
-      expect(result.approved).toBe(true);
+      expect(result.lifecycle).toBe('merged');
       expect(result.rejected).toBe(false);
       expect(result.statusText).toBe('Merged');
     });
@@ -500,7 +500,7 @@ describe('GitHubMergeGateProvider', () => {
 
       const result = await provider.checkApproval({ identifier: '2', cwd: '/tmp/repo' });
 
-      expect(result.approved).toBe(false);
+      expect(result.lifecycle).toBe('open');
       expect(result.rejected).toBe(false);
       expect(result.statusText).toBe('Approved, awaiting merge');
     });
@@ -523,9 +523,8 @@ describe('GitHubMergeGateProvider', () => {
 
       const result = await provider.checkApproval({ identifier: '3', cwd: '/tmp/repo' });
 
-      expect(result.approved).toBe(false);
+      expect(result.lifecycle).toBe('closed');
       expect(result.rejected).toBe(false);
-      expect(result.closed).toBe(true);
       expect(result.statusText).toBe('Closed');
     });
 
