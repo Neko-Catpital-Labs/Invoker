@@ -522,6 +522,64 @@ EOF
   return 0
 }
 
+# Test: Branched review-gate artifacts should fail validation
+test_branched_review_gate_rejected() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: branched-review-gate
+onFinish: none
+mergeMode: manual
+repoUrl: git@github.com:user/repo.git
+tasks:
+  - id: verify-review-gate
+    description: Verify review gate metadata
+    command: printf 'ok\n'
+    dependencies: []
+reviewGate:
+  artifacts:
+    - id: contracts
+      title: Contracts
+      required: true
+    - id: runtime
+      title: Runtime
+      required: true
+      dependsOn: [contracts]
+    - id: ui
+      title: UI
+      required: true
+      dependsOn: [contracts]
+EOF
+
+  local output
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected non-zero exit code for branched review-gate artifacts" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if ! echo "$output" | jq -e '
+    length == 1 and (
+      .[0].errorType == "invalid_dependency_reference" and
+      .[0].field == "reviewGate.artifacts[2].dependsOn" and
+      .[0].message == "reviewGate.artifacts[2].dependsOn must be [\"runtime\"] to keep the review-gate stack linear"
+    )
+  ' &>/dev/null; then
+    echo "Expected linear review-gate dependency error for reviewGate.artifacts[2].dependsOn" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
 # Test: Verify error has required fields with correct types
 test_error_field_structure() {
   local output
@@ -548,24 +606,24 @@ test_error_field_structure() {
 
   return 0
 }
-
+ 
 # Check dependencies
 if ! command -v jq &>/dev/null; then
   fail "jq is required for JSON parsing tests"
 fi
-
+ 
 if [[ ! -f "$VALIDATE_SCRIPT" ]]; then
   fail "Validator script not found: $VALIDATE_SCRIPT"
 fi
-
+ 
 if [[ ! -f "$POSITIVE_FIXTURE" ]]; then
   fail "Positive fixture not found: $POSITIVE_FIXTURE"
 fi
-
+ 
 if [[ ! -f "$NEGATIVE_FIXTURE" ]]; then
   fail "Negative fixture not found: $NEGATIVE_FIXTURE"
 fi
-
+ 
 # Run all tests
 run_test "Positive fixture should pass validation" test_positive_fixture
 run_test "Negative fixture should fail with non-zero exit" test_negative_fixture_fails
@@ -582,6 +640,7 @@ run_test "Direct shell variable command should validate" test_direct_shell_varia
 run_test "Pipefail without bash should be rejected" test_pipefail_without_bash_fails
 run_test "Pipefail with bash should validate" test_pipefail_with_bash_validates
 run_test "Experiment variant nested shell variable expansion should be rejected" test_experiment_variant_nested_shell_variable_expansion_fails
+run_test "Branched review gate artifacts should be rejected" test_branched_review_gate_rejected
 run_test "Error objects should have correct field structure" test_error_field_structure
 
 echo ""
@@ -595,3 +654,4 @@ if [[ $pass_count -eq $test_count ]]; then
 else
   fail "Some validator tests failed"
 fi
+
