@@ -371,6 +371,110 @@ describe('GET /api/workflows', () => {
   });
 });
 
+describe('GET /api/workflows/:id/review-gate', () => {
+  it('returns 404 when workflow is missing', async () => {
+    mocks.persistence.loadWorkflow.mockReturnValue(undefined);
+    const res = await request(port, 'GET', '/api/workflows/missing/review-gate');
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'Workflow not found' });
+  });
+
+  it('returns an empty response when no merge node exists', async () => {
+    mocks.persistence.loadTasks.mockReturnValue([makeTask({ id: 'task-1' })]);
+    const res = await request(port, 'GET', '/api/workflows/wf-1/review-gate');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      workflowId: 'wf-1',
+      mergeTaskId: null,
+      status: null,
+      ready: false,
+      artifacts: [],
+      discardedArtifacts: [],
+      edges: [],
+    });
+  });
+
+  it('returns current artifacts, linear stack links, and discarded artifacts separately', async () => {
+    mocks.persistence.loadTasks.mockReturnValue([
+      makeTask({
+        id: '__merge__wf-1',
+        status: 'review_ready',
+        config: { workflowId: 'wf-1', isMergeNode: true },
+        execution: {
+          reviewGate: {
+            activeGeneration: 2,
+            completion: { required: 'all', status: 'approved' },
+            artifacts: [
+              { id: 'contracts', required: true, status: 'approved', generation: 2 },
+              { id: 'runtime', required: true, status: 'open', generation: 2, dependsOn: ['contracts'] },
+              { id: 'ui', required: true, status: 'open', generation: 2, dependsOn: ['contracts'] },
+              { id: 'old', required: true, status: 'discarded', generation: 1, discardedAt: '2024-01-01T00:00:00Z' },
+            ],
+          },
+        },
+      }),
+    ]);
+
+    const res = await request(port, 'GET', '/api/workflows/wf-1/review-gate');
+    expect(res.status).toBe(200);
+    expect(res.body.artifacts.map((artifact: { id: string }) => artifact.id)).toEqual(['contracts', 'runtime', 'ui']);
+    expect(res.body.discardedArtifacts.map((artifact: { id: string }) => artifact.id)).toEqual(['old']);
+    expect(res.body.edges).toEqual([
+      { from: 'contracts', to: 'runtime' },
+      { from: 'runtime', to: 'ui' },
+    ]);
+    expect(res.body.ready).toBe(false);
+  });
+
+  it('returns ready only when all required current artifacts are approved', async () => {
+    mocks.persistence.loadTasks.mockReturnValue([
+      makeTask({
+        id: '__merge__wf-1',
+        status: 'review_ready',
+        config: { workflowId: 'wf-1', isMergeNode: true },
+        execution: {
+          reviewGate: {
+            activeGeneration: 0,
+            completion: { required: 'all', status: 'approved' },
+            artifacts: [
+              { id: 'contracts', required: true, status: 'approved', generation: 0 },
+              { id: 'runtime', required: true, status: 'approved', generation: 0 },
+            ],
+          },
+        },
+      }),
+    ]);
+
+    const res = await request(port, 'GET', '/api/workflows/wf-1/review-gate');
+    expect(res.status).toBe(200);
+    expect(res.body.ready).toBe(true);
+  });
+
+  it('synthesizes a scalar fallback artifact', async () => {
+    mocks.persistence.loadTasks.mockReturnValue([
+      makeTask({
+        id: '__merge__wf-1',
+        status: 'review_ready',
+        config: { workflowId: 'wf-1', isMergeNode: true, summary: 'Review PR' },
+        execution: {
+          reviewId: '42',
+          reviewUrl: 'https://example.test/pr/42',
+          reviewStatus: 'Awaiting review',
+          reviewProviderId: '42',
+          generation: 3,
+        },
+      }),
+    ]);
+
+    const res = await request(port, 'GET', '/api/workflows/wf-1/review-gate');
+    expect(res.status).toBe(200);
+    expect(res.body.activeGeneration).toBe(3);
+    expect(res.body.artifacts).toEqual([
+      expect.objectContaining({ id: '42', url: 'https://example.test/pr/42', providerId: '42' }),
+    ]);
+  });
+});
+
 describe('GET /api/queue', () => {
   it('returns queue status', async () => {
     const res = await request(port, 'GET', '/api/queue');

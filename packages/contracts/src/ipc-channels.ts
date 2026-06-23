@@ -18,6 +18,7 @@ import type {
 } from '@invoker/workflow-graph';
 
 export type { WorkflowDerivedStatus, WorkflowRollup } from '@invoker/workflow-graph';
+import type { ReviewGateQueryResponse } from './types.js';
 
 // ── Types used by IPC channels ──────────────────────────────
 // These were previously in packages/app/src/types.ts.
@@ -578,6 +579,11 @@ export const IpcChannels = {
   'invoker:approve-merge': {} as {
     request: [workflowId: string];
     response: void;
+  },
+
+  'invoker:get-review-gate': {} as {
+    request: [workflowId: string];
+    response: ReviewGateQueryResponse | null;
   },
 
   // PR & Conflict Resolution
