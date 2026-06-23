@@ -1067,12 +1067,41 @@ export class TaskRunner {
       hasWorkspacePath: Boolean(handle.workspacePath),
       hasAgentSessionId: Boolean(handle.agentSessionId),
     });
-    const launchAccepted =
-      this.orchestrator.markTaskRunningAfterLaunch?.(task.id, attemptId) ?? true;
+    // Generation lineage guard for the post-start window. `markTaskRunningAfterLaunch`
+    // rejects a mismatched `selectedAttemptId` (and missing/discarded attempts and
+    // non-executable status), but it does NOT validate the launch-time generation
+    // captured by TaskRunner — so a launch accepted at generation N whose
+    // `executor.start()` resolves only after the live task has advanced to
+    // generation N+1 (same attempt id) would otherwise persist stale
+    // `workspacePath`/`branch`/`agentSessionId`/`containerId`, register an active
+    // execution, and wire heartbeats onto the newer generation's row.
+    //
+    // Check generation FIRST and short-circuit `markTaskRunningAfterLaunch` so a
+    // superseded launch can never flip the live task back to running on behalf of
+    // the old generation. Attempt/status/discard staleness stays delegated to
+    // `markTaskRunningAfterLaunch` — this guard adds only the generation dimension.
+    const liveTask = this.orchestrator.getTask(task.id);
+    const currentGeneration = liveTask?.execution.generation ?? startGeneration;
+    const generationAdvanced = liveTask !== undefined && currentGeneration !== startGeneration;
+    const launchAccepted = !generationAdvanced
+      && (this.orchestrator.markTaskRunningAfterLaunch?.(task.id, attemptId) ?? true);
     if (!launchAccepted) {
       this.logger.warn(
-        `[TaskRunner] launch rejected as stale/non-executable for task=${task.id} attemptId=${attemptId}; killing spawned process`,
+        `[TaskRunner] launch rejected post-start for task=${task.id} attemptId=${attemptId} ` +
+          `reason=${generationAdvanced ? `generation-advanced-${startGeneration}->${currentGeneration}` : 'stale-or-non-executable'}; ` +
+          'killing spawned process',
       );
+      if (generationAdvanced) {
+        this.persistence.logEvent?.(task.id, 'task.executor.stale_post_start', {
+          attemptId,
+          executorType: executor.type,
+          launchGeneration: startGeneration,
+          currentGeneration,
+          hasWorkspacePath: Boolean(handle.workspacePath),
+          hasAgentSessionId: Boolean(handle.agentSessionId),
+          hasContainerId: Boolean(handle.containerId),
+        });
+      }
       try {
         await executor.kill(handle);
       } catch (killErr) {
@@ -1084,10 +1113,12 @@ export class TaskRunner {
       if (dispatchOpts) {
         dispatchOpts.launchOutbox.failDispatch(
           dispatchOpts.dispatchId,
-          new Error('Launch rejected as stale or non-executable after executor start'),
+          new Error(generationAdvanced
+            ? 'Launch superseded by newer generation after executor start'
+            : 'Launch rejected as stale or non-executable after executor start'),
         );
       }
-      bench('markTaskRunningAfterLaunch.rejected');
+      bench('markTaskRunningAfterLaunch.rejected', { generationAdvanced });
       return;
     }
     bench('markTaskRunningAfterLaunch.accepted');
