@@ -40,8 +40,10 @@ export interface BaseTaskConfig {
   readonly approach?: string;
   readonly testPlan?: string;
   readonly reproCommand?: string;
-  /** Name of the execution agent to use (e.g. 'claude', 'codex'). Defaults to 'claude'. */
+  /** Name of the execution agent to use (e.g. 'claude', 'codex', 'omp'). Defaults to 'claude'. */
   readonly executionAgent?: string;
+  /** Agent-specific model selector passed through without central validation. */
+  readonly executionModel?: string;
   /** Cross-workflow prerequisites for this task. */
   readonly externalDependencies?: readonly ExternalDependency[];
   /** Execution pool identifier for shared queue/drain scheduling across substrates. */
