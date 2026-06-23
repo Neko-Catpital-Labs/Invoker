@@ -2458,8 +2458,8 @@ export class TaskRunner {
   }
 
   private mapReviewGateArtifactStatus(status: MergeGateApprovalStatus): ReviewGateArtifactStatus {
-    if (status.closed) return 'closed';
-    if (status.approved) return 'approved';
+    if (status.lifecycle === 'closed') return 'closed';
+    if (status.lifecycle === 'merged') return 'approved';
     if (status.rejected) return 'changes_requested';
     return 'open';
   }
@@ -2572,6 +2572,7 @@ export class TaskRunner {
       if (currentGate) {
         latestGate = this.updateReviewGateArtifact(currentGate, providerId, status);
         this.persistence.updateTask(task.id, {
+          ...(status.lifecycle === 'closed' ? { status: 'closed' as const } : {}),
           execution: { reviewGate: latestGate, reviewStatus: status.statusText },
         });
         if (!approvedGate && this.reviewGateIsApproved(latestGate)) {
@@ -2579,22 +2580,22 @@ export class TaskRunner {
           await this.handleApprovedMergeGate(task.id, providerId, source);
         } else if (status.rejected) {
           this.logger.info(`[merge-gate] PR ${providerId} rejected (${source}): ${status.statusText}`);
-        } else if (!status.closed && !status.approved) {
+        } else if (status.lifecycle === 'open') {
           await this.maybeTriggerReviewGateCiFix(current!, status, providerId);
         }
         continue;
       }
 
       this.persistence.updateTask(task.id, {
-        ...(status.closed ? { status: 'closed' as const } : {}),
+        ...(status.lifecycle === 'closed' ? { status: 'closed' as const } : {}),
         execution: { reviewStatus: status.statusText },
       });
-      if (!approvedGate && status.approved && !status.closed) {
+      if (!approvedGate && status.lifecycle === 'merged') {
         approvedGate = true;
         await this.handleApprovedMergeGate(task.id, providerId, source);
       } else if (status.rejected) {
         this.logger.info(`[merge-gate] PR ${providerId} rejected (${source}): ${status.statusText}`);
-      } else if (!status.closed) {
+      } else if (status.lifecycle === 'open') {
         await this.maybeTriggerReviewGateCiFix(current!, status, providerId);
       }
     }
