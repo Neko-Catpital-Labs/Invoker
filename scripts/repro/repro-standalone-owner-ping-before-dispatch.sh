@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/invoker-owner-ping-before-dispatch.XXXXXX")"
+TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/inv-ping.XXXXXX")"
 
 cleanup() {
   rm -rf "$TMP_ROOT"
