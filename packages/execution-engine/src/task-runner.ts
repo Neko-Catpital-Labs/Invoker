@@ -160,6 +160,10 @@ export interface ReviewGateCiFailureTrigger {
   statusText: string;
 }
 
+export interface ReviewGateCiFailureLifecyclePublisher {
+  publish(trigger: ReviewGateCiFailureTrigger): void | Promise<void>;
+}
+
 function nextLeaseExpiry(from: Date): Date {
   return new Date(from.getTime() + ATTEMPT_LEASE_MS);
 }
@@ -283,7 +287,7 @@ export interface TaskRunnerConfig {
   callbacks?: TaskRunnerCallbacks;
   mergeGateProvider?: MergeGateProvider;
   reviewProviderRegistry?: ReviewProviderRegistry;
-  onReviewGateCiFailure?: (trigger: ReviewGateCiFailureTrigger) => Promise<void>;
+  reviewGateCiFailurePublisher?: ReviewGateCiFailureLifecyclePublisher;
   /**
    * Provider that returns remote SSH targets keyed by target ID.
    * Called at task-execution time so config file changes take effect on retry.
@@ -331,8 +335,8 @@ export class TaskRunner {
   /** @internal */ callbacks: TaskRunnerCallbacks;
   /** @internal */ mergeGateProvider?: MergeGateProvider;
   /** @internal */ reviewProviderRegistry?: ReviewProviderRegistry;
-  private onReviewGateCiFailure?: (trigger: ReviewGateCiFailureTrigger) => Promise<void>;
-  private reviewGateCiFixInFlight = new Set<string>();
+  private reviewGateCiFailurePublisher?: ReviewGateCiFailureLifecyclePublisher;
+  private reviewGateCiFailureInFlight = new Set<string>();
   private getRemoteTargets: () => Record<string, RemoteTargetDisplay>;
   private getExecutionPools: () => Record<string, ExecutionPoolConfig>;
   private dockerConfig: { imageName?: string; secretsFile?: string };
@@ -435,7 +439,7 @@ export class TaskRunner {
     this.callbacks = config.callbacks ?? {};
     this.mergeGateProvider = config.mergeGateProvider;
     this.reviewProviderRegistry = config.reviewProviderRegistry;
-    this.onReviewGateCiFailure = config.onReviewGateCiFailure;
+    this.reviewGateCiFailurePublisher = config.reviewGateCiFailurePublisher;
     this.getRemoteTargets = config.remoteTargetsProvider ?? (() => ({}));
     this.getExecutionPools = config.executionPoolsProvider ?? (() => ({}));
     this.dockerConfig = config.dockerConfig ?? {};
@@ -2581,7 +2585,7 @@ export class TaskRunner {
         } else if (status.rejected) {
           this.logger.info(`[merge-gate] PR ${providerId} rejected (${source}): ${status.statusText}`);
         } else if (status.lifecycle === 'open') {
-          await this.maybeTriggerReviewGateCiFix(current!, status, providerId);
+          await this.maybePublishReviewGateCiFailure(current!, status, providerId);
         }
         continue;
       }
@@ -2596,7 +2600,7 @@ export class TaskRunner {
       } else if (status.rejected) {
         this.logger.info(`[merge-gate] PR ${providerId} rejected (${source}): ${status.statusText}`);
       } else if (status.lifecycle === 'open') {
-        await this.maybeTriggerReviewGateCiFix(current!, status, providerId);
+        await this.maybePublishReviewGateCiFailure(current!, status, providerId);
       }
     }
   }
@@ -2631,12 +2635,12 @@ export class TaskRunner {
     }
   }
 
-  private async maybeTriggerReviewGateCiFix(
+  private async maybePublishReviewGateCiFailure(
     task: TaskState,
     status: MergeGateApprovalStatus,
     reviewId: string = task.execution.reviewId ?? '',
   ): Promise<void> {
-    if (!this.onReviewGateCiFailure) return;
+    if (!this.reviewGateCiFailurePublisher) return;
     if (!task.config.workflowId || !reviewId) return;
     if (status.checks?.state !== 'failure' || status.checks.failed.length === 0) return;
 
@@ -2646,11 +2650,11 @@ export class TaskRunner {
       task.execution.generation ?? 0,
       status.headSha ?? 'no-head-sha',
     ].join(':');
-    if (this.reviewGateCiFixInFlight.has(key)) return;
+    if (this.reviewGateCiFailureInFlight.has(key)) return;
 
-    this.reviewGateCiFixInFlight.add(key);
+    this.reviewGateCiFailureInFlight.add(key);
     try {
-      await this.onReviewGateCiFailure({
+      await this.reviewGateCiFailurePublisher.publish({
         taskId: task.id,
         workflowId: task.config.workflowId,
         reviewId,
@@ -2664,7 +2668,7 @@ export class TaskRunner {
         statusText: status.statusText,
       });
     } finally {
-      this.reviewGateCiFixInFlight.delete(key);
+      this.reviewGateCiFailureInFlight.delete(key);
     }
   }
 
