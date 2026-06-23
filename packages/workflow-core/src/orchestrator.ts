@@ -370,6 +370,7 @@ export interface PlanDefinition {
     dockerImage?: string;
     poolId?: string;
     executionAgent?: string;
+    executionModel?: string;
   }>;
 }
 
@@ -1355,6 +1356,7 @@ export class Orchestrator {
         requiresManualApproval: taskDef.requiresManualApproval,
         featureBranch: taskDef.featureBranch,
         executionAgent: taskDef.executionAgent,
+        executionModel: taskDef.executionModel,
         poolId: effectivePoolId,
       } as const;
       let taskConfig: TaskConfig;

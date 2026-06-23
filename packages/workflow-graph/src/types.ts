@@ -42,6 +42,8 @@ export interface BaseTaskConfig {
   readonly reproCommand?: string;
   /** Name of the execution agent to use (e.g. 'claude', 'codex'). Defaults to 'claude'. */
   readonly executionAgent?: string;
+  /** Name of the execution model to use (e.g. a model id). Optional; defaults to the agent's own default. */
+  readonly executionModel?: string;
   /** Cross-workflow prerequisites for this task. */
   readonly externalDependencies?: readonly ExternalDependency[];
   /** Execution pool identifier for shared queue/drain scheduling across substrates. */
