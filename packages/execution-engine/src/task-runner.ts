@@ -2589,7 +2589,7 @@ export class TaskRunner {
         ...(status.closed ? { status: 'closed' as const } : {}),
         execution: { reviewStatus: status.statusText },
       });
-      if (!approvedGate && status.approved) {
+      if (!approvedGate && status.approved && !status.closed) {
         approvedGate = true;
         await this.handleApprovedMergeGate(task.id, providerId, source);
       } else if (status.rejected) {
