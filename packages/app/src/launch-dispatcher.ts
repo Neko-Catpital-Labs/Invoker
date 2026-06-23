@@ -156,12 +156,14 @@ export class LaunchDispatcher {
         }
         task = readiness.task;
       }
-      if (!this.dispatchMatchesTask(leased, task)) {
+      const lineage = this.classifyLineageMismatch(leased, task);
+      if (lineage) {
         this.abandonInvalidDispatch(
           leased,
-          `Launch dispatch ${leased.id} is stale: selected attempt or generation changed`,
-          'selected_attempt_changed',
+          `Launch dispatch ${leased.id} is stale: ${lineage.summary}`,
+          lineage.reason,
           {
+            mismatchedFields: lineage.mismatchedFields,
             selectedAttemptId: task.execution.selectedAttemptId,
             selectedGeneration: task.execution.generation ?? 0,
           },
@@ -207,9 +209,41 @@ export class LaunchDispatcher {
     return this.orchestrator?.getTask?.(dispatch.taskId);
   }
 
-  private dispatchMatchesTask(dispatch: TaskLaunchDispatch, task: TaskState): boolean {
-    return task.execution.selectedAttemptId === dispatch.attemptId
-      && (task.execution.generation ?? 0) === (dispatch.generation ?? 0);
+  /**
+   * Compare a leased dispatch row against the task's live lineage. A row
+   * carries the `attemptId` and `generation` that were current when
+   * `drainScheduler` enqueued it; if the task has since selected a
+   * different attempt or bumped its execution generation, launching this
+   * row would start a stale attempt. Returns `null` when the row still
+   * matches (safe to launch), otherwise a descriptor naming exactly which
+   * lineage dimension(s) drifted so the abandon path can emit a precise,
+   * inspectable audit reason rather than collapsing both into one label.
+   */
+  private classifyLineageMismatch(
+    dispatch: TaskLaunchDispatch,
+    task: TaskState,
+  ): { reason: string; summary: string; mismatchedFields: string[] } | null {
+    const attemptChanged = task.execution.selectedAttemptId !== dispatch.attemptId;
+    const generationChanged = (task.execution.generation ?? 0) !== (dispatch.generation ?? 0);
+    if (!attemptChanged && !generationChanged) return null;
+
+    const mismatchedFields: string[] = [];
+    if (attemptChanged) mismatchedFields.push('attemptId');
+    if (generationChanged) mismatchedFields.push('generation');
+
+    let reason: string;
+    let summary: string;
+    if (attemptChanged && generationChanged) {
+      reason = 'selected_attempt_and_generation_changed';
+      summary = 'selected attempt and execution generation changed';
+    } else if (attemptChanged) {
+      reason = 'selected_attempt_changed';
+      summary = 'selected attempt changed';
+    } else {
+      reason = 'execution_generation_changed';
+      summary = 'execution generation changed';
+    }
+    return { reason, summary, mismatchedFields };
   }
 
   private abandonInvalidDispatch(
