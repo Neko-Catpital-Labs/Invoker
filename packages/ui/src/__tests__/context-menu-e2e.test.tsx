@@ -278,6 +278,92 @@ describe('Context menu (component)', () => {
     await waitFor(() => expect(mock.api.deleteWorkflow).toHaveBeenCalledWith('wf-1'));
   });
 
+  describe('workflow detach', () => {
+    const upTask = makeUITask({
+      id: 'task-up',
+      description: 'Upstream task',
+      status: 'completed',
+      command: 'echo up',
+      workflowId: 'wf-up',
+    });
+    const downTask = makeUITask({
+      id: 'task-down',
+      description: 'Downstream task',
+      status: 'pending',
+      command: 'echo down',
+      workflowId: 'wf-down',
+    });
+    const stackWorkflows: WorkflowMeta[] = [
+      { id: 'wf-up', name: 'Upstream Workflow', status: 'running', baseBranch: 'master' },
+      {
+        id: 'wf-down',
+        name: 'Downstream Workflow',
+        status: 'running',
+        baseBranch: 'master',
+        externalDependencies: [{ workflowId: 'wf-up', requiredStatus: 'completed' }],
+      },
+    ];
+
+    async function setupStack() {
+      render(<App />);
+      act(() => mock.setTasks([upTask, downTask], stackWorkflows));
+      await waitFor(() => {
+        expect(screen.getByTestId('workflow-node-wf-down')).toBeInTheDocument();
+      });
+    }
+
+    it('offers detach for a workflow with a single upstream dependency', async () => {
+      await setupStack();
+
+      fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-down'));
+      fireEvent.click(await screen.findByText('More'));
+      expect(await screen.findByText('Detach Upstream Workflow')).toBeInTheDocument();
+    });
+
+    it('hides detach for a workflow with no upstream dependency', async () => {
+      await setupStack();
+
+      fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-up'));
+      fireEvent.click(await screen.findByText('More'));
+      expect(screen.queryByText('Detach Upstream Workflow')).not.toBeInTheDocument();
+    });
+
+    it('confirms naming both workflows, then detaches once and shows feedback', async () => {
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      await setupStack();
+
+      fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-down'));
+      fireEvent.click(await screen.findByText('More'));
+      fireEvent.click(await screen.findByText('Detach Upstream Workflow'));
+
+      await waitFor(() =>
+        expect(mock.api.detachWorkflow).toHaveBeenCalledWith('wf-down', 'wf-up'),
+      );
+      expect(mock.api.detachWorkflow).toHaveBeenCalledTimes(1);
+
+      const confirmMessage = confirmSpy.mock.calls.at(-1)?.[0] as string;
+      expect(confirmMessage).toContain('Downstream Workflow');
+      expect(confirmMessage).toContain('Upstream Workflow');
+
+      const feedback = await screen.findByTestId('detach-feedback');
+      expect(feedback).toHaveTextContent('Downstream Workflow');
+      expect(feedback).toHaveTextContent('Upstream Workflow');
+    });
+
+    it('does not detach when the confirmation is cancelled', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(false);
+      await setupStack();
+
+      fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-down'));
+      fireEvent.click(await screen.findByText('More'));
+      fireEvent.click(await screen.findByText('Detach Upstream Workflow'));
+
+      await waitFor(() => expect(window.confirm).toHaveBeenCalled());
+      expect(mock.api.detachWorkflow).not.toHaveBeenCalled();
+      expect(screen.queryByTestId('detach-feedback')).not.toBeInTheDocument();
+    });
+  });
+
   it('workflow context menu copies workflow id', async () => {
     await setup();
     fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
