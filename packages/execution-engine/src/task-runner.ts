@@ -63,6 +63,10 @@ import { killProcessGroup, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 import { retryTransientGitHubCli } from './git-utils.js';
 
 export type { TaskHeartbeatEvent, TaskRunnerCallbacks } from './task-runner-callbacks.js';
+type ReviewGateState = NonNullable<TaskState['execution']['reviewGate']>;
+type ReviewGateArtifact = ReviewGateState['artifacts'][number];
+type ReviewGateArtifactStatus = ReviewGateArtifact['status'];
+
 
 /** Keeps launch metadata fresh while `executor.start()` is awaited (SSH remote setup/provision can take minutes). */
 const PRE_START_HEARTBEAT_INTERVAL_MS = 30_000;
@@ -2395,21 +2399,129 @@ export class TaskRunner {
   }
 
   async closeWorkflowReview(workflowId: string): Promise<void> {
-    if (!this.mergeGateProvider?.closeReview) return;
+    const closeReview = this.mergeGateProvider?.closeReview?.bind(this.mergeGateProvider);
+    if (!closeReview) return;
     const getAllTasks = this.orchestrator.getAllTasks?.bind(this.orchestrator);
     if (!getAllTasks) return;
     const mergeTask = getAllTasks().find((task) =>
       task.config.workflowId === workflowId
       && task.config.isMergeNode
-      && !!task.execution.reviewId
+      && (!!task.execution.reviewGate || !!task.execution.reviewId)
     );
-    if (!mergeTask?.execution.reviewId) return;
+    if (!mergeTask) return;
 
-    await this.mergeGateProvider.closeReview({
-      identifier: mergeTask.execution.reviewId,
-      cwd: mergeTask.execution.workspacePath ?? this.cwd,
-    });
+    const identifiers = this.getCurrentClosableReviewIdentifiers(mergeTask);
+    const cwd = mergeTask.execution.workspacePath ?? this.cwd;
+    for (const identifier of identifiers) {
+      try {
+        await closeReview({ identifier, cwd });
+      } catch (err) {
+        this.logger.error(`[merge-gate] Failed to close review ${identifier}`, { err });
+      }
+    }
   }
+  private isCurrentReviewGateArtifact(gate: ReviewGateState, artifact: ReviewGateArtifact): boolean {
+    return artifact.generation === gate.activeGeneration
+      && artifact.status !== 'discarded'
+      && !artifact.discardedAt;
+  }
+
+  private getCurrentReviewArtifacts(task: TaskState): ReviewGateArtifact[] {
+    const gate = task.execution.reviewGate;
+    if (!gate) {
+      if (!task.execution.reviewId) {
+        return [];
+      }
+      return [{
+        id: task.execution.reviewId,
+        providerId: task.execution.reviewId,
+        required: true,
+        status: 'open',
+        generation: task.execution.generation ?? 0,
+      }];
+    }
+
+    return gate.artifacts.filter((artifact) => this.isCurrentReviewGateArtifact(gate, artifact));
+  }
+
+  private getCurrentRequiredReviewArtifacts(task: TaskState): ReviewGateArtifact[] {
+    return this.getCurrentReviewArtifacts(task).filter((artifact) => artifact.required && !!artifact.providerId);
+  }
+
+  private getCurrentClosableReviewIdentifiers(task: TaskState): string[] {
+    return this.getCurrentReviewArtifacts(task)
+      .flatMap((artifact) => (artifact.providerId ? [artifact.providerId] : []));
+  }
+
+  private mapReviewGateArtifactStatus(status: MergeGateApprovalStatus): ReviewGateArtifactStatus {
+    if (status.approved) return 'approved';
+    if (status.rejected) return 'changes_requested';
+    if (status.closed) return 'closed';
+    return 'open';
+  }
+
+  private reviewPollStillMatches(
+    before: TaskState,
+    current: TaskState | undefined,
+    providerId: string,
+  ): boolean {
+    if (!current) return false;
+    if (current.execution.selectedAttemptId !== before.execution.selectedAttemptId) return false;
+    if ((current.execution.generation ?? 0) !== (before.execution.generation ?? 0)) return false;
+
+    const beforeGate = before.execution.reviewGate;
+    if (!beforeGate) {
+      return !current.execution.reviewGate && current.execution.reviewId === providerId;
+    }
+
+    const currentGate = current.execution.reviewGate;
+    if (!currentGate || currentGate.activeGeneration !== beforeGate.activeGeneration) {
+      return false;
+    }
+    return currentGate.artifacts.some((artifact) =>
+      this.isCurrentReviewGateArtifact(currentGate, artifact)
+      && artifact.required
+      && artifact.providerId === providerId,
+    );
+  }
+
+  private updateReviewGateArtifact(
+    gate: ReviewGateState,
+    providerId: string,
+    status: MergeGateApprovalStatus,
+  ): ReviewGateState {
+    const mappedStatus = this.mapReviewGateArtifactStatus(status);
+    return {
+      ...gate,
+      artifacts: gate.artifacts.map((artifact) => {
+        if (
+          !this.isCurrentReviewGateArtifact(gate, artifact)
+          || artifact.providerId !== providerId
+        ) {
+          return artifact;
+        }
+        const next: ReviewGateArtifact = {
+          ...artifact,
+          status: mappedStatus,
+          updatedAt: new Date().toISOString(),
+        };
+        if (mappedStatus === 'open') {
+          return { ...next, rawStatus: status.statusText };
+        }
+        return next;
+      }),
+    };
+  }
+
+  private reviewGateIsApproved(gate: ReviewGateState): boolean {
+    const currentRequired = gate.artifacts.filter((artifact) =>
+      this.isCurrentReviewGateArtifact(gate, artifact) && artifact.required,
+    );
+    return currentRequired.length > 0
+      && currentRequired.every((artifact) => artifact.status === 'approved');
+  }
+
+
 
   private async handleApprovedMergeGate(
     taskId: string,
