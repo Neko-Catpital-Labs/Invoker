@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { AgentRegistry } from '../agent-registry.js';
+import { registerBuiltinAgents } from '../agents/index.js';
 import type { ExecutionAgent } from '../agent.js';
 
 function makeExecutionAgent(name: string, opts?: {
@@ -16,6 +17,13 @@ function makeExecutionAgent(name: string, opts?: {
     ...(opts?.bundledSkills !== undefined && { bundledSkills: opts.bundledSkills }),
   };
 }
+
+describe('registerBuiltinAgents', () => {
+  it('registers claude, codex, and omp execution agents', () => {
+    const names = registerBuiltinAgents().listExecution().map((agent) => agent.name);
+    expect(names).toEqual(expect.arrayContaining(['claude', 'codex', 'omp']));
+  });
+});
 
 describe('AgentRegistry', () => {
   let registry: AgentRegistry;
