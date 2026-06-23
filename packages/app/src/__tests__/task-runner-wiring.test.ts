@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TaskState } from '@invoker/workflow-core';
-import { autoFixOnReviewGateFailure } from '../workflow-actions.js';
+import { publishReviewGateCiFailedLifecycleEvent } from '../lifecycle-event-bridge.js';
 import { loadConfig, resolveSecretsFilePath } from '../config.js';
 import {
   killRunningTaskExecution,
@@ -43,8 +43,8 @@ vi.mock('@invoker/execution-engine', () => {
   };
 });
 
-vi.mock('../workflow-actions.js', () => ({
-  autoFixOnReviewGateFailure: vi.fn(async () => undefined),
+vi.mock('../lifecycle-event-bridge.js', () => ({
+  publishReviewGateCiFailedLifecycleEvent: vi.fn(() => undefined),
 }));
 
 vi.mock('../config.js', () => ({
@@ -92,6 +92,7 @@ describe('task-runner-wiring', () => {
       orchestrator: orchestrator as any,
       persistence: persistence as any,
       executorRegistry: {} as any,
+      messageBus: {} as any,
       executionAgentRegistry: {} as any,
       repoRoot: '/repo',
       invokerConfig: {
@@ -146,10 +147,14 @@ describe('task-runner-wiring', () => {
     });
   });
 
-  it('keeps review-gate auto-fix and approve hook routed through the current TaskRunner', async () => {
+  it('publishes review-gate CI failure wakeups and keeps approve hook routed through the current TaskRunner', async () => {
     let currentRunner: any = null;
+    const mergeTask = {
+      config: { isMergeNode: true, workflowId: 'wf-1' },
+      execution: {},
+    } as TaskState;
     const orchestrator = {
-      getTask: vi.fn(),
+      getTask: vi.fn(() => mergeTask),
       recordTaskHeartbeat: vi.fn(),
       setBeforeApproveHook: vi.fn(),
     };
@@ -162,6 +167,7 @@ describe('task-runner-wiring', () => {
       orchestrator: orchestrator as any,
       persistence: persistence as any,
       executorRegistry: {} as any,
+      messageBus: {} as any,
       repoRoot: '/repo',
       invokerConfig: { autoFixCi: true },
       logger: createLogger() as any,
@@ -176,16 +182,14 @@ describe('task-runner-wiring', () => {
 
     const config = taskRunnerConstructor.mock.calls[0]?.[0] as any;
     await config.onReviewGateCiFailure({ taskId: 'merge-task' });
-    expect(autoFixOnReviewGateFailure).toHaveBeenCalledWith(
+    expect(publishReviewGateCiFailedLifecycleEvent).toHaveBeenCalledWith(
       { taskId: 'merge-task' },
-      expect.objectContaining({ taskExecutor: currentRunner }),
+      expect.objectContaining({ messageBus: {} }),
     );
+    const getTask = (publishReviewGateCiFailedLifecycleEvent as any).mock.calls[0][1].getTask;
+    expect(getTask('merge-task')).toBe(mergeTask);
 
     const approveHook = orchestrator.setBeforeApproveHook.mock.calls[0]?.[0];
-    const mergeTask = {
-      config: { isMergeNode: true, workflowId: 'wf-1' },
-      execution: {},
-    } as TaskState;
     await approveHook(mergeTask);
     expect(currentRunner.approveMerge).toHaveBeenCalledWith('wf-1');
 
@@ -273,6 +277,7 @@ describe('task-runner-wiring', () => {
       orchestrator: orchestrator as any,
       persistence: { updateTask: vi.fn(), loadWorkflow: vi.fn() } as any,
       executorRegistry: {} as any,
+      messageBus: {} as any,
       repoRoot: '/repo',
       invokerConfig: {},
       logger: createLogger() as any,

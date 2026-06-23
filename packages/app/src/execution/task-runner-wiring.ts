@@ -10,8 +10,9 @@ import {
   type ExecutorRegistry,
 } from '@invoker/execution-engine';
 import type { Logger } from '@invoker/contracts';
+import type { MessageBus } from '@invoker/transport';
 import { loadConfig, resolveSecretsFilePath, type InvokerConfig } from '../config.js';
-import { autoFixOnReviewGateFailure } from '../workflow-actions.js';
+import { publishReviewGateCiFailedLifecycleEvent } from '../lifecycle-event-bridge.js';
 
 export type TaskHandleMap = Map<string, { handle: ExecutorHandle; executor: Executor }>;
 
@@ -19,6 +20,7 @@ export interface TaskRunnerWiringDeps {
   orchestrator: Orchestrator;
   persistence: SQLiteAdapter;
   executorRegistry: ExecutorRegistry;
+  messageBus: MessageBus;
   executionAgentRegistry?: AgentRegistry;
   repoRoot: string;
   invokerConfig: InvokerConfig;
@@ -90,16 +92,9 @@ export function rebuildTaskRunner(deps: TaskRunnerWiringDeps): TaskRunner {
     executionPoolsProvider: () => loadConfig().executionPools ?? {},
     onReviewGateCiFailure: deps.invokerConfig.autoFixCi
       ? async (trigger) => {
-          const currentTaskExecutor = deps.getTaskRunner();
-          if (!currentTaskExecutor) {
-            throw new Error('Task executor is not initialized for review-gate CI auto-fix');
-          }
-          await autoFixOnReviewGateFailure(trigger, {
-            orchestrator: deps.orchestrator,
-            persistence: deps.persistence,
-            taskExecutor: currentTaskExecutor,
-            getAutoFixAgent: () => loadConfig().autoFixAgent,
-            getAutoApproveAIFixes: () => loadConfig().autoApproveAIFixes,
+          publishReviewGateCiFailedLifecycleEvent(trigger, {
+            messageBus: deps.messageBus,
+            getTask: (taskId) => deps.orchestrator.getTask(taskId),
           });
         }
       : undefined,
