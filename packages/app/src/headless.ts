@@ -24,6 +24,10 @@ import {
   remoteFetchForPool,
   registerBuiltinAgents,
   assertPlanExecutionAgentsRegistered,
+  createAutoFixRecoveryWorker,
+  acquireRecoveryWorkerLock,
+  resolveInvokerHomeRoot,
+  WorkerLockHeldError,
   type AgentRegistry,
   type TaskHeartbeatEvent,
 } from '@invoker/execution-engine';
@@ -1138,10 +1142,52 @@ const HEADLESS_WORKER_KINDS: ReadonlyArray<{ kind: string; available: boolean; n
   },
 ];
 
-async function headlessWorker(args: string[], deps: Pick<HeadlessDeps, 'persistence'>): Promise<void> {
+/**
+ * Dev door for the auto-fix recovery worker (`--headless worker autofix`). Runs
+ * the same shared engine as the production `invoker-cli worker autofix` door,
+ * guarded by the cross-process single-instance lock so the two doors can never
+ * run competing recovery loops. The app owns the foreground signals; the engine
+ * does not install its own handlers.
+ */
+async function headlessWorkerAutofix(deps: Pick<HeadlessDeps, 'logger'>): Promise<void> {
+  let lock;
+  try {
+    lock = acquireRecoveryWorkerLock({ homeRoot: resolveInvokerHomeRoot(), logger: deps.logger });
+  } catch (err) {
+    if (err instanceof WorkerLockHeldError) {
+      // Refuse explicitly per the app's throw-based error convention.
+      throw new Error(err.message);
+    }
+    throw err;
+  }
+
+  const worker = createAutoFixRecoveryWorker({ logger: deps.logger, installSignalHandlers: false });
+  worker.start();
+  process.stdout.write('[headless] auto-fix worker connected.\n');
+
+  try {
+    await new Promise<void>((resolveShutdown) => {
+      const shutdown = (): void => resolveShutdown();
+      process.once('SIGINT', shutdown);
+      process.once('SIGTERM', shutdown);
+    });
+    await worker.stop();
+  } finally {
+    // Release deterministically so a clean shutdown never wedges the next start.
+    lock.release();
+  }
+  process.stdout.write('[headless] auto-fix worker stopped.\n');
+}
+
+async function headlessWorker(args: string[], deps: Pick<HeadlessDeps, 'persistence' | 'logger'>): Promise<void> {
   const subCommand = args[0] ?? 'list';
-  if (subCommand !== 'list' && subCommand !== 'status') {
-    throw new Error(`Unknown worker sub-command: "${subCommand}". Use: list, status`);
+  if (subCommand !== 'list' && subCommand !== 'status' && subCommand !== 'autofix') {
+    throw new Error(`Unknown worker sub-command: "${subCommand}". Use: list, status, autofix`);
+  }
+
+  if (subCommand === 'autofix') {
+    await headlessWorkerAutofix(deps);
+    return;
   }
 
   if (subCommand === 'list') {
@@ -1278,6 +1324,7 @@ ${BOLD}Lifecycle:${RESET}
   open-terminal <taskId>                              Open OS terminal for a task
   slack                                               Start Slack bot (long-running)
   worker [list|status] [--output F]                  Show recovery-worker ownership and audit status
+  worker autofix                                      Run the shared auto-fix recovery worker in the foreground
 
 ${BOLD}Deprecated${RESET} (use new names above):
   list → query workflows       status → query tasks       task-status → query task
