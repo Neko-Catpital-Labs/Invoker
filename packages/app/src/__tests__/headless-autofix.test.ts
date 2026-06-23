@@ -1,8 +1,7 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import { LocalBus } from '@invoker/transport';
-import { Channels } from '@invoker/transport';
-import type { MessageBus } from '@invoker/transport';
-import { runHeadless, wireHeadlessAutoFix } from '../headless.js';
+import { runHeadless } from '../headless.js';
 import { buildFixWithAgentMutationArgs } from '../auto-fix-intents.js';
 import type { TaskState } from '@invoker/workflow-core';
 import type { WorkflowMutationPriority } from '@invoker/data-store';
@@ -28,43 +27,17 @@ function makeTask(overrides: Partial<TaskState> = {}): TaskState {
   };
 }
 
-describe('wireHeadlessAutoFix', () => {
-  it('subscribes auto-fix for failed deltas in generic headless execution paths', async () => {
-    const messageBus = new LocalBus() as MessageBus;
-    const shouldAutoFix = vi.fn((taskId: string) => taskId === 'wf-1/task-1');
-    const invokeAutoFix = vi.fn(async () => {});
-    const onError = vi.fn();
+describe('headless auto-fix cutover', () => {
+  it('does not keep hidden auto-fix wiring in normal headless command paths', () => {
+    const sources = [
+      '../headless.ts',
+      '../execution/task-runner-wiring.ts',
+    ].map((path) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8'));
 
-    wireHeadlessAutoFix(
-      {
-        messageBus,
-        orchestrator: { shouldAutoFix } as any,
-        persistence: {} as any,
-      },
-      {} as any,
-      invokeAutoFix,
-      onError,
-    );
-
-    messageBus.publish(Channels.TASK_DELTA, {
-      type: 'updated',
-      taskId: 'wf-1/task-1',
-      changes: { status: 'failed' },
-    });
-    messageBus.publish(Channels.TASK_DELTA, {
-      type: 'updated',
-      taskId: 'wf-1/task-2',
-      changes: { status: 'failed' },
-    });
-
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(shouldAutoFix).toHaveBeenCalledWith('wf-1/task-1');
-    expect(shouldAutoFix).toHaveBeenCalledWith('wf-1/task-2');
-    expect(invokeAutoFix).toHaveBeenCalledTimes(1);
-    expect(invokeAutoFix).toHaveBeenCalledWith('wf-1/task-1');
-    expect(onError).not.toHaveBeenCalled();
+    for (const source of sources) {
+      expect(source).not.toContain('wireHeadlessAutoFix');
+      expect(source).not.toContain('onReviewGateCiFailure');
+    }
   });
 });
 

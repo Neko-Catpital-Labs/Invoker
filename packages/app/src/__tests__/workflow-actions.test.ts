@@ -23,7 +23,6 @@ import {
   fixWithAgentAction,
   finalizeAppliedFix,
   autoFixOnFailure,
-  autoFixOnReviewGateFailure,
   selectFailureRecoveryRoute,
   deleteAllWorkflows,
   resolveConflictAction,
@@ -2264,107 +2263,6 @@ describe('autoFixOnFailure lineage guard', () => {
 
     expect(orchestrator.setFixAwaitingApproval).not.toHaveBeenCalled();
     expect(orchestrator.retryTask).not.toHaveBeenCalled();
-  });
-});
-
-describe('autoFixOnReviewGateFailure', () => {
-  const trigger = {
-    taskId: 'merge-a',
-    workflowId: 'wf-1',
-    reviewId: '123',
-    reviewUrl: 'https://github.com/owner/repo/pull/123',
-    headSha: 'abc123',
-    headRef: 'feature/ci-red',
-    branch: 'feature/ci-red',
-    selectedAttemptId: 'att-1',
-    generation: 7,
-    statusText: 'CI failed',
-    failedChecks: [
-      { name: 'test-all', conclusion: 'FAILURE', detailsUrl: 'https://github.com/owner/repo/actions/runs/1' },
-    ],
-  };
-
-  it('starts a review-gate fix session and passes CI context to the fix agent', async () => {
-    const task = makeTask({
-      id: 'merge-a',
-      status: 'review_ready',
-      config: { workflowId: 'wf-1', isMergeNode: true },
-      execution: {
-        autoFixAttempts: 0,
-        workspacePath: '/tmp/merge-a',
-        branch: 'feature/ci-red',
-        reviewId: '123',
-        selectedAttemptId: 'att-1',
-        generation: 7,
-      },
-    });
-    const orchestrator = {
-      getTask: vi.fn(() => task),
-      getAutoFixRetryBudget: vi.fn(() => 3),
-      beginAutoFixSession: vi.fn(() => ({ savedError: 'Review-gate CI failed' })),
-      setFixAwaitingApproval: vi.fn(),
-      revertConflictResolution: vi.fn(),
-    };
-    const persistence = {
-      updateTask: vi.fn(),
-      getTaskOutput: vi.fn(() => 'prior task output'),
-      appendTaskOutput: vi.fn(),
-      logEvent: vi.fn(),
-    };
-    const taskExecutor = {
-      fixWithAgent: vi.fn().mockResolvedValue(undefined),
-      execGitIn: vi.fn().mockResolvedValue('fixed-sha\n'),
-    };
-
-    await autoFixOnReviewGateFailure(trigger, {
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-      taskExecutor: taskExecutor as unknown as TaskRunner,
-      getAutoFixAgent: () => 'codex',
-      getAutoApproveAIFixes: () => false,
-    });
-
-    expect(orchestrator.beginAutoFixSession).toHaveBeenCalledWith(
-      'merge-a',
-      expect.objectContaining({ savedError: expect.stringContaining('Review-gate CI failed') }),
-    );
-    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith(
-      'merge-a',
-      'prior task output',
-      'codex',
-      'Review-gate CI failed',
-      expect.stringContaining('This auto-fix was triggered by failed CI'),
-    );
-    expect(taskExecutor.fixWithAgent.mock.calls[0]?.[4]).toContain('test-all');
-    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('merge-a', 'Review-gate CI failed');
-  });
-
-  it('does not start when review-gate lineage is stale', async () => {
-    const staleTask = makeTask({
-      id: 'merge-a',
-      status: 'review_ready',
-      config: { workflowId: 'wf-1', isMergeNode: true },
-      execution: {
-        branch: 'feature/ci-red',
-        reviewId: '123',
-        selectedAttemptId: 'att-2',
-        generation: 8,
-      },
-    });
-    const orchestrator = {
-      getTask: vi.fn(() => staleTask),
-      getAutoFixRetryBudget: vi.fn(() => 3),
-      beginAutoFixSession: vi.fn(),
-      setFixAwaitingApproval: vi.fn(),
-    };
-
-    await expect(autoFixOnReviewGateFailure(trigger, {
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: { updateTask: vi.fn() } as unknown as SQLiteAdapter,
-      taskExecutor: { fixWithAgent: vi.fn() } as unknown as TaskRunner,
-    })).rejects.toThrow(StaleLineageError);
-
-    expect(orchestrator.beginAutoFixSession).not.toHaveBeenCalled();
   });
 });
 
