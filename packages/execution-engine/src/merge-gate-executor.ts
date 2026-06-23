@@ -4,7 +4,7 @@ import type { TaskState } from '@invoker/workflow-core';
 import { BaseExecutor, type BaseEntry } from './base-executor.js';
 import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from './executor.js';
 import type { MergeRunnerHost } from './merge-runner.js';
-import { runMergeGateActionImpl } from './merge-runner.js';
+import { applyMergeGateMetadataIfCurrent, runMergeGateActionImpl } from './merge-runner.js';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 
 interface MergeGateEntry extends BaseEntry {
@@ -125,9 +125,20 @@ export class MergeGateExecutor extends BaseExecutor<MergeGateEntry> {
       this.emitOutput(handle.executionId, `[merge] Starting merge gate action: ${task.id}\n`);
       const result = await runMergeGateActionImpl(this.host, task, { gateWorkspacePath });
       if (result.taskChanges.execution) {
-        this.host.persistence.updateTask(task.id, {
-          execution: result.taskChanges.execution,
-        });
+        // Route this direct execution-metadata write through the lineage guard so a
+        // stale merge-gate run (the task advanced to a newer selectedAttemptId or
+        // executionGeneration while this gate ran) cannot stamp branch/workspacePath/
+        // review metadata over the live task. The stale worker response emitted below
+        // is still rejected independently by handleWorkerResponse.
+        applyMergeGateMetadataIfCurrent(
+          this.host,
+          task.id,
+          { execution: result.taskChanges.execution },
+          {
+            selectedAttemptId: entry.request.attemptId,
+            generation: entry.request.executionGeneration,
+          },
+        );
       }
       this.emitOutput(handle.executionId, `[merge] Merge gate action finished: ${task.id} status=${result.response.status}\n`);
       this.emitComplete(handle.executionId, this.withAttempt(entry.request, result.response));
