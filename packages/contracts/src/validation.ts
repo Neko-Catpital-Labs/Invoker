@@ -117,7 +117,7 @@ function validateReviewGateArtifacts(args: {
 
     const record = artifact as Record<string, unknown>;
     artifactRecords.push(record);
-    if (typeof record.id !== 'string' || record.id.length === 0) {
+    if (typeof record.id !== 'string' || record.id.trim().length === 0) {
       return { valid: false, error: `${artifactPrefix}.id must be a non-empty string` };
     }
     if (ids.has(record.id)) {
@@ -184,7 +184,7 @@ function validateReviewGate(reviewGate: unknown): ValidationResult {
     const dependsOn = (record.dependsOn ?? []) as unknown[];
     const artifactDependencies: string[] = [];
     for (const dependency of dependsOn) {
-      if (typeof dependency !== 'string' || dependency.length === 0) {
+      if (typeof dependency !== 'string' || dependency.trim().length === 0) {
         return { valid: false, error: `${artifactPrefix}.dependsOn must contain non-empty artifact ids` };
       }
       if (!ids.has(dependency)) {
