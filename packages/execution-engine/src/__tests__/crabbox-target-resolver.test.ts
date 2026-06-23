@@ -3,6 +3,7 @@ import {
   CrabboxTargetResolver,
   buildCrabboxWarmupArgs,
   buildCrabboxStatusArgs,
+  buildCrabboxStopArgs,
   type CrabboxCommandResult,
   type CrabboxCommandRunner,
   type CrabboxResolverTargetConfig,
@@ -87,6 +88,51 @@ describe('buildCrabboxStatusArgs', () => {
       '--region',
       'iad',
     ]);
+  });
+});
+
+describe('buildCrabboxStopArgs', () => {
+  it('stops the lease by id and appends explicit stopArgs', () => {
+    expect(buildCrabboxStopArgs('lease-123', ['--force'])).toEqual([
+      'stop',
+      'lease-123',
+      '--force',
+    ]);
+  });
+
+  it('omits stopArgs when none are configured', () => {
+    expect(buildCrabboxStopArgs('lease-123')).toEqual(['stop', 'lease-123']);
+  });
+});
+
+describe('CrabboxTargetResolver.stop', () => {
+  it('runs `crabbox stop <leaseId>` plus stopArgs and returns the result', async () => {
+    const { runner, calls } = scriptRunner([ok('stopped')]);
+
+    const result = await new CrabboxTargetResolver(runner).stop({
+      crabboxCommand: '/usr/local/bin/crabbox',
+      leaseId: 'lease-123',
+      stopArgs: ['--force'],
+    });
+
+    expect(calls[0]).toEqual({
+      command: '/usr/local/bin/crabbox',
+      args: ['stop', 'lease-123', '--force'],
+    });
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('throws an actionable error when stop exits non-zero', async () => {
+    const { runner } = scriptRunner([
+      { stdout: '', stderr: 'lease not found', exitCode: 1 },
+    ]);
+
+    await expect(
+      new CrabboxTargetResolver(runner).stop({
+        crabboxCommand: 'crabbox',
+        leaseId: 'lease-123',
+      }),
+    ).rejects.toThrow(/Crabbox stop failed for lease "lease-123".*lease not found/s);
   });
 });
 

@@ -64,6 +64,18 @@ export interface CrabboxResolverTargetConfig {
   readonly warmupArgs?: readonly string[];
   /** Optional extra args appended to the status subcommand. */
   readonly statusArgs?: readonly string[];
+  /** Optional extra args appended to the stop subcommand during cleanup. */
+  readonly stopArgs?: readonly string[];
+}
+
+/** Inputs for stopping (cleaning up) a leased Crabbox machine. */
+export interface CrabboxStopConfig {
+  /** CLI entrypoint that stops Crabbox leases. */
+  readonly crabboxCommand: string;
+  /** Crabbox lease identifier to stop. */
+  readonly leaseId: string;
+  /** Optional extra args appended to the stop subcommand. */
+  readonly stopArgs?: readonly string[];
 }
 
 /** A fixed SSH host the SSH executor can connect to directly. */
@@ -165,6 +177,17 @@ export function buildCrabboxStatusArgs(
   ];
 }
 
+/**
+ * Build the stop args that release a leased machine. `crabbox stop <leaseId>`
+ * plus any caller-supplied stopArgs (e.g. `--force`).
+ */
+export function buildCrabboxStopArgs(
+  leaseId: string,
+  stopArgs?: readonly string[],
+): string[] {
+  return ['stop', leaseId, ...(stopArgs ?? [])];
+}
+
 function asNonEmptyString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
@@ -206,6 +229,26 @@ export class CrabboxTargetResolver {
       );
     }
     return this.buildResolvedTarget(config, status, leaseRef);
+  }
+
+  /**
+   * Stop (release) a leased machine via `crabbox stop <leaseId>`.
+   *
+   * Used by the cleanup policy after an SSH task settles. Throws an actionable
+   * error when the stop command exits non-zero so the caller can record a
+   * cleanup failure without rewriting the task's own exit status.
+   */
+  async stop(config: CrabboxStopConfig): Promise<CrabboxCommandResult> {
+    const result = await this.run(
+      config.crabboxCommand,
+      buildCrabboxStopArgs(config.leaseId, config.stopArgs),
+    );
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `Crabbox stop failed for lease "${config.leaseId}" (exit ${result.exitCode}): ${result.stderr.trim() || result.stdout.trim()}`,
+      );
+    }
+    return result;
   }
 
   /** Read the lease id (or slug) that warmup printed for the status call. */

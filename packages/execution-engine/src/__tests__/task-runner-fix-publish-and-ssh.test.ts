@@ -2330,6 +2330,256 @@ describe('TaskRunner', () => {
     });
   });
 
+  describe('crabbox cleanup policy', () => {
+    const crabboxTarget = {
+      type: 'crabbox' as const,
+      crabboxCommand: 'crabbox',
+      provider: 'do',
+      class: 'medium',
+      ttl: '30m',
+      idleTimeout: '10m',
+      network: 'default',
+      target: 'ubuntu-22',
+    };
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    function makeStopResolver(opts: {
+      stopAfter?: string;
+      keepOnFailure?: boolean;
+      stopImpl?: (config: any) => Promise<any>;
+    }) {
+      const resolve = vi.fn(async (config: any) => ({
+        sshTarget: { host: 'lease-host', user: 'crab', sshKeyPath: '/leased/key', port: 2222 },
+        remoteLeaseMetadata: {
+          provider: 'crabbox' as const,
+          leaseId: 'lease-xyz',
+          slug: 'sleepy-crab',
+          targetId: config.id,
+          sshHost: 'lease-host',
+          sshUser: 'crab',
+          sshPort: 2222,
+          sshKeyPath: '/leased/key',
+          expiresAt: '2099-01-01T00:00:00Z',
+          stopAfter: config.stopAfter,
+          keepOnFailure: config.keepOnFailure,
+        },
+      }));
+      const stop = vi.fn(
+        opts.stopImpl ?? (async () => ({ stdout: '', stderr: '', exitCode: 0 })),
+      );
+      return { resolve, stop };
+    }
+
+    function spySshExecutor() {
+      const completeByTask = new Map<string, (response: WorkResponse) => void>();
+      vi.spyOn(SshExecutor.prototype, 'start').mockImplementation(async function (this: any, request: any) {
+        return {
+          executionId: `exec-${request.actionId}`,
+          taskId: request.actionId,
+          workspacePath: `/remote/${request.actionId}`,
+          branch: `branch-${request.actionId}`,
+        };
+      });
+      vi.spyOn(SshExecutor.prototype, 'onComplete').mockImplementation((handle: any, cb: any) => {
+        completeByTask.set(handle.taskId, cb);
+      });
+      vi.spyOn(SshExecutor.prototype, 'onOutput').mockImplementation(() => {});
+      vi.spyOn(SshExecutor.prototype, 'onHeartbeat').mockImplementation(() => {});
+      vi.spyOn(SshExecutor.prototype, 'kill').mockImplementation(async () => {});
+      return completeByTask;
+    }
+
+    async function runCrabboxTask(opts: {
+      stopAfter?: string;
+      keepOnFailure?: boolean;
+      status: 'completed' | 'failed';
+      exitCode: number;
+      stopImpl?: (config: any) => Promise<any>;
+    }) {
+      const completeByTask = spySshExecutor();
+      const resolver = makeStopResolver(opts);
+      const task = makeTask({
+        id: 'wf/crab-task',
+        config: { runnerKind: 'ssh', poolMemberId: 'crab-target' },
+        execution: { selectedAttemptId: 'crab-task-attempt', generation: 0 },
+      });
+      const logEvent = vi.fn();
+      const onOutput = vi.fn();
+      const appendTaskOutput = vi.fn();
+      const runner = new TaskRunner({
+        orchestrator: {
+          getTask: (id: string) => (id === task.id ? task : null),
+          getAllTasks: () => [task],
+          markTaskRunningAfterLaunch: () => true,
+          handleWorkerResponse: () => [],
+          deferTask: vi.fn(),
+        } as any,
+        persistence: {
+          updateTask: vi.fn(),
+          updateAttempt: vi.fn(),
+          appendTaskOutput,
+          logEvent,
+          loadAttempts: () => [],
+        } as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [], register: vi.fn() } as any,
+        cwd: '/tmp',
+        remoteTargetsProvider: () => ({
+          'crab-target': {
+            ...crabboxTarget,
+            ...(opts.stopAfter !== undefined ? { stopAfter: opts.stopAfter } : {}),
+            ...(opts.keepOnFailure !== undefined ? { keepOnFailure: opts.keepOnFailure } : {}),
+          },
+        }),
+        crabboxResolver: resolver,
+        callbacks: { onOutput },
+      });
+
+      const run = runner.executeTask(task);
+      await vi.waitFor(() => expect(completeByTask.has(task.id)).toBe(true));
+      completeByTask.get(task.id)?.({
+        requestId: 'r',
+        actionId: task.id,
+        attemptId: 'crab-task-attempt',
+        status: opts.status,
+        outputs: { exitCode: opts.exitCode },
+      } as WorkResponse);
+      await run;
+      return { resolver, logEvent, onOutput, appendTaskOutput };
+    }
+
+    function eventPayload(logEvent: ReturnType<typeof vi.fn>, eventType: string) {
+      return logEvent.mock.calls.find(([, event]: [string, string]) => event === eventType)?.[2];
+    }
+
+    it('defaults stopAfter to success and keepOnFailure to true when unset', async () => {
+      const { resolver } = await runCrabboxTask({ status: 'completed', exitCode: 0 });
+      expect(resolver.resolve.mock.calls[0][0]).toMatchObject({
+        stopAfter: 'success',
+        keepOnFailure: true,
+      });
+    });
+
+    it('success: stops the lease via crabbox stop', async () => {
+      const { resolver, logEvent } = await runCrabboxTask({
+        stopAfter: 'success',
+        keepOnFailure: true,
+        status: 'completed',
+        exitCode: 0,
+      });
+      expect(resolver.stop).toHaveBeenCalledTimes(1);
+      expect(resolver.stop.mock.calls[0][0]).toMatchObject({
+        crabboxCommand: 'crabbox',
+        leaseId: 'lease-xyz',
+      });
+      expect(eventPayload(logEvent, 'task.executor.crabbox-stopped')).toMatchObject({
+        leaseId: 'lease-xyz',
+      });
+    });
+
+    it('failure with keepOnFailure: keeps the lease and appends debug commands', async () => {
+      const { resolver, logEvent, onOutput, appendTaskOutput } = await runCrabboxTask({
+        stopAfter: 'success',
+        keepOnFailure: true,
+        status: 'failed',
+        exitCode: 1,
+      });
+      expect(resolver.stop).not.toHaveBeenCalled();
+      const message = onOutput.mock.calls.map(([, text]: [string, string]) => text).join('');
+      expect(message).toContain('crabbox ssh --id lease-xyz');
+      expect(message).toContain('crabbox stop lease-xyz');
+      expect(appendTaskOutput).toHaveBeenCalledWith(
+        'wf/crab-task',
+        expect.stringContaining('crabbox stop lease-xyz'),
+      );
+      expect(eventPayload(logEvent, 'task.executor.crabbox-lease-kept')).toMatchObject({
+        leaseId: 'lease-xyz',
+        sshCommand: 'crabbox ssh --id lease-xyz',
+        stopCommand: 'crabbox stop lease-xyz',
+      });
+    });
+
+    it('always: stops the lease even on failure', async () => {
+      const { resolver } = await runCrabboxTask({
+        stopAfter: 'always',
+        keepOnFailure: false,
+        status: 'failed',
+        exitCode: 1,
+      });
+      expect(resolver.stop).toHaveBeenCalledTimes(1);
+    });
+
+    it('never: leaves the lease running on success', async () => {
+      const { resolver, logEvent } = await runCrabboxTask({
+        stopAfter: 'never',
+        keepOnFailure: false,
+        status: 'completed',
+        exitCode: 0,
+      });
+      expect(resolver.stop).not.toHaveBeenCalled();
+      expect(eventPayload(logEvent, 'task.executor.crabbox-stopped')).toBeUndefined();
+    });
+
+    it('cleanup failure: logs crabbox-cleanup-failed without changing the exit status', async () => {
+      const handleWorkerResponse = vi.fn(() => [] as any[]);
+      const completeByTask = spySshExecutor();
+      const resolver = makeStopResolver({
+        stopAfter: 'success',
+        keepOnFailure: true,
+        stopImpl: async () => {
+          throw new Error('crabbox daemon unreachable');
+        },
+      });
+      const task = makeTask({
+        id: 'wf/crab-task',
+        config: { runnerKind: 'ssh', poolMemberId: 'crab-target' },
+        execution: { selectedAttemptId: 'crab-task-attempt', generation: 0 },
+      });
+      const logEvent = vi.fn();
+      const runner = new TaskRunner({
+        orchestrator: {
+          getTask: (id: string) => (id === task.id ? task : null),
+          getAllTasks: () => [task],
+          markTaskRunningAfterLaunch: () => true,
+          handleWorkerResponse,
+          deferTask: vi.fn(),
+        } as any,
+        persistence: {
+          updateTask: vi.fn(),
+          updateAttempt: vi.fn(),
+          appendTaskOutput: vi.fn(),
+          logEvent,
+          loadAttempts: () => [],
+        } as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [], register: vi.fn() } as any,
+        cwd: '/tmp',
+        remoteTargetsProvider: () => ({ 'crab-target': { ...crabboxTarget, stopAfter: 'success', keepOnFailure: true } }),
+        crabboxResolver: resolver,
+      });
+
+      const run = runner.executeTask(task);
+      await vi.waitFor(() => expect(completeByTask.has(task.id)).toBe(true));
+      completeByTask.get(task.id)?.({
+        requestId: 'r',
+        actionId: task.id,
+        attemptId: 'crab-task-attempt',
+        status: 'completed',
+        outputs: { exitCode: 0 },
+      } as WorkResponse);
+      await run;
+
+      // The original (successful) response reached the orchestrator unchanged.
+      expect(handleWorkerResponse).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      const failed = eventPayload(logEvent, 'task.executor.crabbox-cleanup-failed');
+      expect(failed).toMatchObject({ leaseId: 'lease-xyz' });
+      expect(String(failed.error)).toContain('crabbox daemon unreachable');
+    });
+  });
+
   describe('publishAfterFix', () => {
     function setupPublishAfterFix(opts: {
       mergeMode?: string;
