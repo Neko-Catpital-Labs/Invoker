@@ -1038,6 +1038,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE attempts ADD COLUMN claimed_at TEXT',
       'ALTER TABLE attempts ADD COLUMN lease_expires_at TEXT',
       'ALTER TABLE tasks ADD COLUMN task_state_version INTEGER NOT NULL DEFAULT 1',
+      'ALTER TABLE tasks ADD COLUMN execution_model TEXT',
     ];
     for (const sql of migrations) {
       try {
@@ -1535,6 +1536,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         pool_member_id,
         docker_image,
         execution_agent,
+        execution_model,
         agent_name,
         task_state_version
       ) VALUES (
@@ -1552,6 +1554,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?, ?, ?,
         ?, ?,
         ?, ?, ?, ?, ?,
+        ?,
         ?,
         ?,
         ?,
@@ -1613,6 +1616,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       (cfg as { poolMemberId?: string }).poolMemberId ?? null,
       cfg.dockerImage ?? null,
       cfg.executionAgent ?? null,
+      cfg.executionModel ?? null,
       exec.agentName ?? null,
       task.taskStateVersion ?? 1,
     ]);
@@ -1653,6 +1657,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         poolMemberId: 'pool_member_id',
         dockerImage: 'docker_image',
         executionAgent: 'execution_agent',
+        executionModel: 'execution_model',
         fixPrompt: 'fix_prompt',
         fixContext: 'fix_context',
       };
@@ -2786,6 +2791,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         fixPrompt: row.fix_prompt ?? undefined,
         fixContext: row.fix_context ?? undefined,
         executionAgent: row.execution_agent ?? undefined,
+        executionModel: row.execution_model ?? undefined,
       },
       execution: {
         blockedBy: row.blocked_by ?? undefined,
