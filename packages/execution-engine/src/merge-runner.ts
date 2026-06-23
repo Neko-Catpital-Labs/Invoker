@@ -251,6 +251,58 @@ export interface MergeRunnerHost {
   ): Promise<string | undefined>;
 }
 
+/**
+ * Lineage-guarded write for merge-gate execution side effects.
+ *
+ * Merge-gate actions run asynchronously against a launch-time snapshot of the
+ * task. By the time the action finishes (or even mid-run, after the gate
+ * worktree is created), the merge task may have advanced to a newer
+ * `selectedAttemptId` or `executionGeneration` — e.g. a re-run, an invalidation,
+ * or a fix cycle. The worker-response path (`handleWorkerResponse` /
+ * `setMergeGateReviewReady`) already rejects stale responses via the lineage
+ * guard, but the direct `persistence.updateTask` calls that persist
+ * `branch` / `workspacePath` / review metadata / fixed-integration fields run
+ * *before* that guard and would otherwise stamp stale data over the live task.
+ *
+ * This re-reads the live task and writes only when its lineage still matches
+ * `expected`, mirroring `handleWorkerResponse`: a field is enforced only when the
+ * producer actually supplied it (an undefined `selectedAttemptId` is not
+ * compared, generation is always a number on the request side). Returns true
+ * when the write was applied, false when it was rejected as stale.
+ */
+export function applyMergeGateMetadataIfCurrent(
+  host: Pick<MergeRunnerHost, 'orchestrator' | 'persistence'>,
+  taskId: string,
+  changes: TaskStateChanges,
+  expected: TaskLineageExpectation,
+): boolean {
+  const live = host.orchestrator.getTask(taskId);
+  if (!live) {
+    mergeTrace('MERGE_GATE_METADATA_SKIPPED_NO_TASK', { taskId });
+    return false;
+  }
+  const liveAttemptId = live.execution.selectedAttemptId;
+  const liveGeneration = live.execution.generation ?? 0;
+  const attemptStale =
+    expected.selectedAttemptId !== undefined &&
+    expected.selectedAttemptId !== liveAttemptId;
+  const generationStale =
+    expected.generation !== undefined &&
+    expected.generation !== liveGeneration;
+  if (attemptStale || generationStale) {
+    mergeTrace('MERGE_GATE_METADATA_STALE_REJECTED', {
+      taskId,
+      expectedAttemptId: expected.selectedAttemptId ?? null,
+      liveAttemptId: liveAttemptId ?? null,
+      expectedGeneration: expected.generation ?? null,
+      liveGeneration,
+    });
+    return false;
+  }
+  host.persistence.updateTask(taskId, changes);
+  return true;
+}
+
 async function authorPrBodyForMerge(
   host: MergeRunnerHost,
   args: {
@@ -495,12 +547,18 @@ export async function runMergeGateActionImpl(
       `mergeMode=${mergeMode} onFinish=${onFinish} dbWorkspacePath=${safeGetWorkspacePath(host.persistence, task.id) ?? 'NULL'}`,
   );
 
-  host.persistence.updateTask(task.id, {
+  // Clear stale review metadata from a prior run — but only if this gate run
+  // still owns the live task. A superseded run must not wipe the review fields
+  // a newer attempt/generation has already written.
+  applyMergeGateMetadataIfCurrent(host, task.id, {
     execution: {
       reviewUrl: undefined,
       reviewId: undefined,
       reviewStatus: undefined,
     },
+  }, {
+    selectedAttemptId: task.execution.selectedAttemptId,
+    generation: task.execution.generation ?? 0,
   });
 
   // Create a persistent gate worktree so workspacePath is never the main repo.
@@ -1281,9 +1339,12 @@ export async function publishAfterFixImpl(
       });
       const reviewUrl = await host.execPr(baseBranch, featureBranch, workflow?.name ?? 'Workflow', prBody, consolidateDir);
       console.log(`[merge] Post-fix: created pull request ${reviewUrl}`);
-      host.persistence.updateTask(task.id, {
+      applyMergeGateMetadataIfCurrent(host, task.id, {
         config: { summary },
         execution: { reviewUrl },
+      }, {
+        selectedAttemptId: task.execution.selectedAttemptId,
+        generation: task.execution.generation ?? 0,
       });
     }
 
