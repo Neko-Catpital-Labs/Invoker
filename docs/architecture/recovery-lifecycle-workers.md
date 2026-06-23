@@ -6,19 +6,25 @@ State transitions publish lifecycle events. Recovery behavior is owned by subscr
 
 The producer of a persisted workflow or task state change is responsible for publishing a lifecycle wakeup after the durable state change is recorded. The producer must not directly auto-fix, recreate, or launch external recovery scripts as part of handling a failed delta. Auto-fix and external recovery are worker responsibilities, and workers must act through the same normal command routes used by operators.
 
-This is a docs-only architecture note. It describes the target contract and does not change runtime behavior.
+This is a docs-only architecture note. It describes the achieved contract and does not change runtime behavior.
 
-## Current Overlap
+## Resolved Overlap (Single Engine)
 
-Auto-fix and external recovery both respond to failed deltas today, but they do so as separate direct handlers. That makes failed-delta recovery ownership ambiguous:
+Earlier, auto-fix ran from more than one place: a producer could schedule auto-fix directly from failure handling, and a separate worker loop could also act on the same failed state. Two engines could observe the same failure and compete over what recovery meant.
 
-1. Auto-fix can be scheduled directly from failure handling.
-2. External recovery can be launched directly from failure handling.
-3. Both paths can observe the same failed state and compete to decide what recovery means.
+That overlap is now resolved. There is exactly **one** shared auto-fix worker engine, and it lives in `@invoker/execution-engine`. Both entry points drive that same single engine instead of running their own loops:
 
-The overlap is not only duplication. It hides recovery policy inside producers that should be responsible for state transition and publication, not for choosing a recovery implementation.
+1. The production door: `invoker-cli worker autofix`.
+2. The dev door: `./run.sh --headless worker autofix`.
 
-## Target Model
+Two properties keep the single engine truly single:
+
+- **Foreground lifetime.** The worker lives and dies with its process. There is no detached or background recovery service; stopping the process stops the engine.
+- **Single-instance lock.** A cross-door lock refuses a second concurrent start. If one door already runs the engine, the other door refuses to start a second loop rather than spawning one.
+
+A **sweep-and-assert guard** test fails the build if auto-fix is triggered from any code path outside the shared worker engine (with an allowlist for the engine itself and the sanctioned operator fix command). This locks the single-engine invariant in against future drift, so a new direct auto-fix call cannot reintroduce a second recovery path.
+
+## Achieved Model
 
 Lifecycle events are ephemeral wakeups, not durable truth. Persisted workflow and task state remains authoritative.
 
@@ -32,7 +38,7 @@ flowchart LR
   Command --> PersistedChange
 ```
 
-The target model separates responsibilities:
+The achieved model separates responsibilities:
 
 | Responsibility | Owner | Contract |
 | --- | --- | --- |
@@ -73,16 +79,21 @@ Workers may subscribe to the same lifecycle event stream. Contention is controll
 
 ## Auto-Fix Worker
 
-The auto-fix worker owns automatic fix attempts for states that qualify for agent-driven repair. It subscribes to lifecycle wakeups, scans persisted state, and decides whether an auto-fix command should be submitted.
+Automatic fix attempts are owned by a **single** shared auto-fix worker engine in `@invoker/execution-engine`. Both doors — `invoker-cli worker autofix` (production) and `./run.sh --headless worker autofix` (dev) — drive that one engine. The engine subscribes to lifecycle wakeups, scans persisted state, and decides whether an auto-fix command should be submitted.
 
-The worker should only act when persisted state shows that:
+Lifetime and concurrency are constrained so the single engine stays single:
+
+- The worker is **foreground**: it lives and dies with its process, with no detached background service.
+- A **single-instance lock** refuses a second concurrent start across both doors, so at most one recovery loop runs process-wide.
+
+The engine should only act when persisted state shows that:
 
 1. The workflow or task is in a state eligible for auto-fix.
 2. No newer generation has superseded the failed state.
 3. Auto-fix policy allows another attempt.
 4. No incompatible recovery action is already in progress.
 
-When those checks pass, the auto-fix worker submits the normal fix command. It must not be invoked directly by the producer that recorded the failed transition.
+When those checks pass, the auto-fix worker submits the normal fix command. It must not be invoked directly by the producer that recorded the failed transition. A sweep-and-assert guard test fails the build if any auto-fix is triggered outside this shared worker engine.
 
 ## Operator Status
 
