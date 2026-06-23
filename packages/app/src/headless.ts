@@ -238,11 +238,13 @@ export function createHeadlessExecutor(
     },
     remoteTargetsProvider: () => loadConfig().remoteTargets ?? {},
     executionPoolsProvider: () => deps.invokerConfig.executionPools ?? {},
-    onReviewGateCiFailure: async (trigger) => {
-      publishReviewGateCiFailedLifecycleEvent(trigger, {
-        messageBus: deps.messageBus,
-        getTask: (taskId) => deps.orchestrator.getTask(taskId),
-      });
+    reviewGateCiFailurePublisher: {
+      publish: (trigger) => {
+        publishReviewGateCiFailedLifecycleEvent(trigger, {
+          messageBus: deps.messageBus,
+          getTask: (taskId) => deps.orchestrator.getTask(taskId),
+        });
+      },
     },
     mergeGateProvider: new GitHubMergeGateProvider(),
     reviewProviderRegistry: (() => {

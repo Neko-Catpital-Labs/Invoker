@@ -183,7 +183,7 @@ describe('task-runner-wiring', () => {
     });
 
     const config = taskRunnerConstructor.mock.calls[0]?.[0] as any;
-    await config.onReviewGateCiFailure({ taskId: 'merge-task' });
+    await config.reviewGateCiFailurePublisher.publish({ taskId: 'merge-task' });
     expect(publishReviewGateCiFailedLifecycleEvent).toHaveBeenCalledWith(
       { taskId: 'merge-task' },
       expect.objectContaining({ messageBus: expect.any(Object), getTask: expect.any(Function) }),

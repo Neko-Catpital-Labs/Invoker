@@ -90,11 +90,13 @@ export function rebuildTaskRunner(deps: TaskRunnerWiringDeps): TaskRunner {
     },
     remoteTargetsProvider: () => loadConfig().remoteTargets ?? {},
     executionPoolsProvider: () => loadConfig().executionPools ?? {},
-    onReviewGateCiFailure: async (trigger) => {
-      publishReviewGateCiFailedLifecycleEvent(trigger, {
-        messageBus: deps.messageBus,
-        getTask: (taskId) => deps.orchestrator.getTask(taskId),
-      });
+    reviewGateCiFailurePublisher: {
+      publish: (trigger) => {
+        publishReviewGateCiFailedLifecycleEvent(trigger, {
+          messageBus: deps.messageBus,
+          getTask: (taskId) => deps.orchestrator.getTask(taskId),
+        });
+      },
     },
     mergeGateProvider: new GitHubMergeGateProvider(),
     reviewProviderRegistry: (() => {
