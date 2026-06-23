@@ -177,7 +177,7 @@ describe('publishAfterFixImpl integration (real git)', () => {
     // orchestrator.setTaskReviewReady should have been called
     expect(host.orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-int', expect.objectContaining({
       execution: expect.objectContaining({ branch: 'plan/feature' }),
-    }));
+    }), expect.objectContaining({ generation: 0 }));
   }, REAL_GIT_TIMEOUT_MS);
 
   it('retries feature branch push after a remote ref lock already-exists race', async () => {
@@ -291,6 +291,7 @@ describe('publishAfterFixImpl integration (real git)', () => {
           fixedIntegrationSource: undefined,
         }),
       }),
+      expect.objectContaining({ generation: 0 }),
     );
   }, REAL_GIT_TIMEOUT_MS);
 
@@ -438,6 +439,7 @@ describe('publishAfterFixImpl integration (real git)', () => {
       expect.objectContaining({
         execution: expect.objectContaining({ branch: 'plan/feature' }),
       }),
+      expect.objectContaining({ generation: 0 }),
     );
   }, REAL_GIT_TIMEOUT_MS);
 

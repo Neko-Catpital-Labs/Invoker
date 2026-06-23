@@ -527,6 +527,7 @@ describe('TaskRunner', () => {
               workspacePath: '/tmp/mock-merge-wt',
             }),
           }),
+          expect.objectContaining({ selectedAttemptId: 'merge-attempt-1', generation: 7 }),
         );
         expect(autoStartExternallyUnblockedReadyTasksMock).toHaveBeenCalled();
       } finally {
@@ -2174,7 +2175,7 @@ describe('TaskRunner', () => {
           reviewId: 'owner/repo#99',
           reviewStatus: 'Awaiting review',
         }),
-      }));
+      }), expect.objectContaining({ generation: 0 }));
 
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
     });
@@ -2221,7 +2222,7 @@ describe('TaskRunner', () => {
       expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-pub', expect.objectContaining({
         config: expect.objectContaining({ runnerKind: 'worktree' }),
         execution: expect.objectContaining({ workspacePath: '/tmp/gate-clone' }),
-      }));
+      }), expect.objectContaining({ generation: 0 }));
 
       // No git merge operations should have been attempted
       const mergeOps = gitCalls.filter((c) => c.args[0] === 'merge');
