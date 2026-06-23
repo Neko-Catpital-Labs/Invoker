@@ -6,13 +6,17 @@ import type { TaskState } from '@invoker/workflow-core';
 /**
  * Mock config module so resolveAgentSession can import loadConfig().
  */
-vi.mock('../config.js', () => ({
-  loadConfig: () => ({
-    remoteTargets: {
-      remote_do_1: { host: '1.2.3.4', user: 'invoker', sshKeyPath: '/tmp/key' },
-    },
-  }),
-}));
+vi.mock('../config.js', async (importActual) => {
+  const actual = await importActual<typeof import('../config.js')>();
+  return {
+    ...actual,
+    loadConfig: () => ({
+      remoteTargets: {
+        remote_do_1: { host: '1.2.3.4', user: 'invoker', sshKeyPath: '/tmp/key' },
+      },
+    }),
+  };
+});
 
 function makeSshTask(overrides: Partial<TaskState['config']> = {}): TaskState {
   return {

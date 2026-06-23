@@ -1,4 +1,5 @@
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
+import type { RemoteLeaseMetadata } from '@invoker/workflow-core';
 
 export type Unsubscribe = () => void;
 
@@ -31,6 +32,8 @@ export interface PersistedTaskMeta {
   containerId?: string;
   workspacePath?: string;
   branch?: string;
+  /** Durable remote lease details, used to restore a terminal to a leased host. */
+  remoteLeaseMetadata?: RemoteLeaseMetadata;
 }
 
 export interface Executor {

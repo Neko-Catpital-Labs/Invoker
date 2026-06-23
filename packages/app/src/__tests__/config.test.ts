@@ -181,6 +181,70 @@ describe('loadConfig', () => {
     expect(config.remoteTargets?.ci1?.maxConcurrentTasks).toBe(2);
   });
 
+  it('reads a static remote target (no type) from user config', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({
+        remoteTargets: {
+          ci1: {
+            host: '10.0.0.1',
+            user: 'invoker',
+            sshKeyPath: '/tmp/key',
+            port: 2222,
+            managedWorkspaces: true,
+            remoteInvokerHome: '/home/invoker/.invoker',
+            provisionCommand: 'pnpm install --frozen-lockfile',
+            use_api_key: true,
+            secretsFile: '/tmp/secrets.env',
+            remoteHeartbeatIntervalSeconds: 45,
+          },
+        },
+      }),
+    );
+    const config = loadConfig();
+    const target = config.remoteTargets?.ci1;
+    expect(target).toMatchObject({
+      host: '10.0.0.1',
+      user: 'invoker',
+      sshKeyPath: '/tmp/key',
+      port: 2222,
+      managedWorkspaces: true,
+      remoteInvokerHome: '/home/invoker/.invoker',
+      provisionCommand: 'pnpm install --frozen-lockfile',
+      use_api_key: true,
+      secretsFile: '/tmp/secrets.env',
+      remoteHeartbeatIntervalSeconds: 45,
+    });
+    // No type means static SSH.
+    expect((target as { type?: string }).type).toBeUndefined();
+  });
+
+  it('reads a crabbox remote target from user config', () => {
+    const crabbox = {
+      type: 'crabbox',
+      crabboxCommand: '/usr/local/bin/crabbox',
+      provider: 'fly',
+      class: 'performance-4x',
+      ttl: '30m',
+      idleTimeout: '10m',
+      network: 'invoker-net',
+      target: 'us-east',
+      stopAfter: 'completed',
+      keepOnFailure: true,
+      managedWorkspaces: true,
+      remoteHeartbeatIntervalSeconds: 30,
+      warmupArgs: ['--warm'],
+      statusArgs: ['--json'],
+      stopArgs: ['--force'],
+    };
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ remoteTargets: { crab1: crabbox } }),
+    );
+    const config = loadConfig();
+    expect(config.remoteTargets?.crab1).toEqual(crabbox);
+  });
+
   it('reads executionPools from user config', () => {
     writeFileSync(
       join(fakeHome, '.invoker', 'config.json'),
