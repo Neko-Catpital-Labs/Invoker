@@ -4431,7 +4431,7 @@ function createEmbeddedTerminalBackendFromConfig(
     ipcMain.handle('invoker:open-terminal', async (_event, taskId: string) => {
       logger.info(`invoked for task="${taskId}"`, { module: 'open-terminal' });
       const liveHandle = taskHandles.get(taskId);
-      const resolved = resolveTaskTerminalSpec({
+      const resolved = await resolveTaskTerminalSpec({
         taskId,
         persistence,
         executorRegistry,

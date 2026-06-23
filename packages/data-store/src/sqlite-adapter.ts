@@ -31,6 +31,7 @@ import type {
   ExternalDependency,
   ExternalDependencyChange,
   DetachedExternalDependency,
+  RemoteLeaseMetadata,
 } from '@invoker/workflow-core';
 import { DISPATCH_LEASE_MS } from '@invoker/contracts';
 import type { SearchResultItem, SearchOptions } from '@invoker/contracts';
@@ -2206,6 +2207,15 @@ export class SQLiteAdapter implements PersistenceAdapter {
       [taskId],
     );
     return (row?.pool_member_id as string) ?? null;
+  }
+
+  getRemoteLeaseMetadata(taskId: string): RemoteLeaseMetadata | null {
+    const row = this.queryOne(
+      'SELECT remote_lease_metadata FROM tasks WHERE id = ?',
+      [taskId],
+    );
+    const raw = (row?.remote_lease_metadata as string) ?? null;
+    return raw ? (JSON.parse(raw) as RemoteLeaseMetadata) : null;
   }
 
   // ── Conversations ───────────────────────────────────────
