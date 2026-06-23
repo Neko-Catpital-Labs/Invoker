@@ -22,6 +22,14 @@ export interface PersistShutdownDiagnosticOptions {
    * Use to distinguish e.g. user-stop vs application-quit if needed.
    */
   label?: string;
+  /**
+   * Concrete failure detail recorded as a `detail=` line. Used when the
+   * task record's coarse `execution.error` does not yet hold the real
+   * cause — e.g. an executor startup failure captured before the task
+   * transitions to a terminal state, where the concrete stderr/message
+   * lives on the thrown error rather than on the task record.
+   */
+  failureDetail?: string;
 }
 
 /**
@@ -57,6 +65,9 @@ export function persistShutdownDiagnostic(
     if (task.execution.error) {
       parts.push(`error=${task.execution.error}`);
     }
+    if (opts?.failureDetail) {
+      parts.push(`detail=${opts.failureDetail}`);
+    }
     if (task.execution.exitCode !== undefined && task.execution.exitCode !== null) {
       parts.push(`exitCode=${task.execution.exitCode}`);
     }
@@ -68,4 +79,25 @@ export function persistShutdownDiagnostic(
   } catch {
     // Best-effort: don't let diagnostic persistence block shutdown.
   }
+}
+
+/** Header label used for executor startup-failure diagnostic blocks. */
+export const STARTUP_FAILURE_DIAGNOSTIC_LABEL = 'Startup Failure Diagnostic';
+
+/**
+ * Persist a compact startup-failure diagnostic block into durable task
+ * output. Reuses {@link persistShutdownDiagnostic} so executor launch
+ * failures land in the same durable output path with the same shape as
+ * forced-stop diagnostics — concrete cause plus the recent output tail —
+ * instead of leaving only a coarse terminal error behind.
+ */
+export function persistStartupFailureDiagnostic(
+  task: TaskState,
+  db: ShutdownDiagnosticDb,
+  opts?: PersistShutdownDiagnosticOptions,
+): void {
+  persistShutdownDiagnostic(task, db, {
+    label: STARTUP_FAILURE_DIAGNOSTIC_LABEL,
+    ...opts,
+  });
 }
