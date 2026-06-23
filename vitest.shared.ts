@@ -1,8 +1,23 @@
+import { createRequire } from 'node:module';
 import { defineConfig } from 'vitest/config';
-import MergifyReporter from '@mergifyio/vitest';
 
 const maxWorkers = process.env.INVOKER_VITEST_MAX_WORKERS
   ?? (process.env.INVOKER_VITEST_HIGH_RESOURCE === '1' ? undefined : 2);
+const require = createRequire(import.meta.url);
+
+function loadReporters() {
+  const reporters = ['default'];
+
+  try {
+    const { default: MergifyReporter } = require(`${process.cwd()}/node_modules/@mergifyio/vitest`);
+    reporters.push(new MergifyReporter());
+  } catch {
+    // Keep workspace tests runnable even when package-level config resolution
+    // cannot see the reporter package from a nested package directory.
+  }
+
+  return reporters;
+}
 
 export default defineConfig({
   test: {
@@ -17,6 +32,6 @@ export default defineConfig({
         maxMemoryLimitBeforeRecycle: 512 * 1024 * 1024, // 512MB — restart fork to shed leaked memory
       },
     },
-    reporters: ['default', new MergifyReporter()],
+    reporters: loadReporters(),
   },
 });

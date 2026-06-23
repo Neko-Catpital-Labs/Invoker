@@ -1,11 +1,27 @@
+import { createRequire } from 'node:module';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import MergifyReporter from '@mergifyio/vitest';
 
 // Match a node_modules path segment for a given package name (handles both
 // flat `node_modules/<pkg>` and pnpm's `node_modules/.pnpm/<pkg>@.../node_modules/<pkg>`).
 function isFromPackage(id: string, pkg: string): boolean {
   return id.includes(`/node_modules/${pkg}/`);
+}
+
+const require = createRequire(import.meta.url);
+
+function loadReporters() {
+  const reporters = ['default'];
+
+  try {
+    const { default: MergifyReporter } = require(`${process.cwd()}/node_modules/@mergifyio/vitest`);
+    reporters.push(new MergifyReporter());
+  } catch {
+    // Keep local package test runs working when the reporter is not visible
+    // from this package's own node_modules resolution context.
+  }
+
+  return reporters;
 }
 
 export default defineConfig({
@@ -62,6 +78,6 @@ export default defineConfig({
     globals: true,
     environment: 'jsdom',
     setupFiles: ['./src/test-setup.ts'],
-    reporters: ['default', new MergifyReporter()],
+    reporters: loadReporters(),
   },
 });
