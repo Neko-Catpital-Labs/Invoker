@@ -15,7 +15,7 @@ description: |
 
   Uses the configured default executor for task isolation.
 onFinish: merge
-mergeMode: github
+mergeMode: external_review
 repoUrl: git@github.com:example-org/acme-repo.git
 baseBranch: master
 featureBranch: refactor/config-validation
