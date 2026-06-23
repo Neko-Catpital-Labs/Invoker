@@ -5,7 +5,7 @@
  * Orchestrator writes a WorkRequest; executor runs the action;
  * executor returns a WorkResponse (via callback or IPC).
  */
-import type { ReviewGateState } from '@invoker/workflow-graph';
+import type { ReviewGateArtifact, ReviewGateState, TaskStatus } from '@invoker/workflow-graph';
 
 // ── Action Types ────────────────────────────────────────────
 
@@ -121,6 +121,18 @@ export interface WorkResponseOutputs {
   reviewStatus?: string;
   /** Typed review-gate artifact state produced by merge-gate style actions. */
   reviewGate?: ReviewGateState;
+}
+
+export interface ReviewGateQueryResponse {
+  workflowId: string;
+  mergeTaskId: string | null;
+  status: TaskStatus | null;
+  activeGeneration: number | null;
+  completion: { required: 'all'; status: 'approved' };
+  ready: boolean;
+  artifacts: ReviewGateArtifact[];
+  discardedArtifacts: ReviewGateArtifact[];
+  edges: Array<{ from: string; to: string }>;
 }
 
 export interface SpawnExperimentsRequest {

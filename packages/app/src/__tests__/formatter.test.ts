@@ -257,6 +257,12 @@ describe('serializeTask', () => {
         branch: 'feature/test',
         commit: 'abc123',
         exitCode: 0,
+        reviewProviderId: '42',
+        reviewGate: {
+          activeGeneration: 0,
+          completion: { required: 'all', status: 'approved' },
+          artifacts: [{ id: 'contracts', required: true, status: 'open', generation: 0 }],
+        },
         error: undefined,
       } as TaskState['execution'],
     });
@@ -265,6 +271,12 @@ describe('serializeTask', () => {
     expect(execution.branch).toBe('feature/test');
     expect(execution.commit).toBe('abc123');
     expect(execution.exitCode).toBe(0);
+    expect(execution.reviewProviderId).toBe('42');
+    expect(execution.reviewGate).toEqual({
+      activeGeneration: 0,
+      completion: { required: 'all', status: 'approved' },
+      artifacts: [{ id: 'contracts', required: true, status: 'open', generation: 0 }],
+    });
     expect(execution).not.toHaveProperty('error');
   });
 
