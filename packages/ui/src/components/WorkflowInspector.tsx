@@ -57,6 +57,25 @@ function getReviewReadyMergeNodeReviewUrl(
   return undefined;
 }
 
+/**
+ * Find the workflow's merge gate task — the selected task when it is the merge
+ * node, otherwise the merge node within the workflow's task set. Lets the
+ * inspector show merge-gate controls at the workflow level without the user
+ * having to select the hidden `__merge__…` task.
+ */
+function getMergeGateTask(
+  task: TaskState | null,
+  tasks: Map<string, TaskState> | undefined,
+): TaskState | null {
+  if (task?.config.isMergeNode) return task;
+  if (tasks) {
+    for (const candidate of tasks.values()) {
+      if (candidate.config.isMergeNode) return candidate;
+    }
+  }
+  return null;
+}
+
 
 function artifactLabel(artifact: ReviewGateArtifact): string {
   return artifact.title || artifact.url || (artifact.providerId ? `#${artifact.providerId}` : artifact.id);
@@ -157,8 +176,20 @@ export function WorkflowInspector({
       : undefined;
   const workflowTitle = workflow ? workflow.name || workflow.id : null;
   const nodeTitle = task?.description ?? workflowTitle ?? 'No node selected';
-  const showsWorkflowMergeDetails = Boolean(!task && workflow?.id && workflow.onFinish === 'pull_request');
+  const mergeGateTask = getMergeGateTask(task, workflowTasks);
+  const showsWorkflowMergeDetails = Boolean(
+    !task
+    && workflow?.id
+    && (workflow.onFinish === 'pull_request' || workflow.mergeMode || mergeGateTask),
+  );
   const isMergeNode = Boolean((task?.config.isMergeNode || showsWorkflowMergeDetails) && workflow?.id);
+  const canConvertToExternalReview = Boolean(
+    workflow?.id
+    && mergeModeValue(workflow.mergeMode) !== 'external_review'
+    && mergeGateTask
+    && (mergeGateTask.status === 'pending' || mergeGateTask.status === 'review_ready')
+    && !mergeGateTask.execution.reviewUrl,
+  );
   const currentAgent = task?.config.executionAgent ?? task?.execution.agentName ?? 'claude';
   const agentOptions = useMemo(() => {
     const names = new Set(executionAgents ?? []);
@@ -380,6 +411,19 @@ export function WorkflowInspector({
                   <option value="external_review">External review (GitHub)</option>
                 </select>
               </label>
+            )}
+            {onSetMergeMode && workflow?.id && canConvertToExternalReview && (
+              <button
+                type="button"
+                onClick={() => void onSetMergeMode(workflow.id, 'external_review')}
+                disabled={isTaskBusy}
+                data-testid="convert-to-external-review-button"
+                title="Convert this merge gate to an External review (GitHub) gate"
+                className="flex w-full items-center justify-center gap-1.5 rounded border border-blue-500/60 bg-blue-600/20 px-2 py-1 text-xs text-blue-200 hover:bg-blue-600/30 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <span aria-hidden="true">⛙</span>
+                Convert to External review (GitHub)
+              </button>
             )}
             {workflow?.repoUrl && (
               <div className="flex items-start justify-between gap-3">
