@@ -11,12 +11,14 @@ import {
   getEffectivePath,
   WorktreeExecutor,
   SshExecutor,
+  CrabboxTargetResolver,
   type Executor,
   type ExecutorRegistry,
   type AgentRegistry,
   type PersistedTaskMeta,
   type TerminalSpec,
 } from '@invoker/execution-engine';
+import type { RemoteLeaseMetadata } from '@invoker/workflow-core';
 import { loadConfig, staticRemoteTargets } from './config.js';
 import {
   buildLinuxXTerminalBashScript,
@@ -37,6 +39,8 @@ export interface OpenTerminalPersistence {
   getWorkspacePath(taskId: string): string | null;
   getBranch(taskId: string): string | null;
   getPoolMemberId?(taskId: string): string | null;
+  /** Durable remote lease details persisted for on-demand (e.g. Crabbox) SSH targets. */
+  getRemoteLeaseMetadata?(taskId: string): RemoteLeaseMetadata | null;
   loadAttempts?(taskId: string): Array<{ id: string; agentSessionId?: string }>;
   updateTask?(taskId: string, changes: { execution?: { agentSessionId?: string; lastAgentSessionId?: string } }): void;
   updateAttempt?(attemptId: string, changes: { agentSessionId?: string }): void;
@@ -50,6 +54,8 @@ export interface OpenExternalTerminalForTaskOptions {
   repoRoot: string;
   /** Shown when task status is `running`. */
   runningTaskReason?: string;
+  /** Resolver used to refresh Crabbox leases for SSH terminal restore. Injectable for tests. */
+  crabboxResolver?: CrabboxTargetResolver;
   logger?: Logger;
 }
 
@@ -152,7 +158,72 @@ export interface ResolveTaskTerminalSpecOptions {
   runningTaskReason?: string;
   /** When true, allow resolution even if the task status is `running` / `fixing_with_ai` — used by the embedded manager which can attach to a live executor handle. */
   allowRunning?: boolean;
+  /** Resolver used to refresh Crabbox leases for SSH terminal restore. Injectable for tests. */
+  crabboxResolver?: CrabboxTargetResolver;
   logger?: Logger;
+}
+
+type CrabboxSshExecutorResult =
+  | { ok: true; executor: Executor }
+  | { ok: false; reason: string };
+
+/**
+ * Rebuild an {@link SshExecutor} for a Crabbox-leased task after restart.
+ *
+ * The lease's in-memory target resolution is gone, so we re-inspect the lease
+ * by its persisted id/slug (no warmup) and rebuild the SSH endpoint from the
+ * refreshed coordinates. Refuses with a clear reason — never silently falling
+ * back to the host repo — when the target is no longer configured or the lease
+ * is missing, expired, not ready, or lacks SSH fields.
+ */
+async function resolveCrabboxSshExecutor(
+  taskId: string,
+  lease: RemoteLeaseMetadata,
+  opts: ResolveTaskTerminalSpecOptions,
+): Promise<CrabboxSshExecutorResult> {
+  const leaseRef = (lease.leaseId || lease.slug || '').trim();
+  if (!leaseRef) {
+    return {
+      ok: false,
+      reason: `Cannot open terminal for Crabbox SSH task "${taskId}": persisted lease is missing a lease id.`,
+    };
+  }
+
+  const target = loadConfig().remoteTargets?.[lease.targetId];
+  if (!target || target.type !== 'crabbox') {
+    return {
+      ok: false,
+      reason: `Cannot open terminal for Crabbox SSH task "${taskId}": remote target "${lease.targetId}" is no longer configured as a Crabbox target.`,
+    };
+  }
+
+  const resolver = opts.crabboxResolver ?? new CrabboxTargetResolver();
+  try {
+    const sshTarget = await resolver.refreshLease(
+      {
+        id: lease.targetId,
+        crabboxCommand: target.crabboxCommand,
+        statusArgs: target.statusArgs,
+        port: lease.sshPort ?? target.port,
+      },
+      leaseRef,
+    );
+    const executor = new SshExecutor({
+      host: sshTarget.host,
+      user: sshTarget.user,
+      sshKeyPath: sshTarget.sshKeyPath,
+      port: sshTarget.port,
+      agentRegistry: opts.executionAgentRegistry,
+    });
+    return { ok: true, executor };
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    opts.logger?.info(`crabbox lease refresh failed for task=${taskId}: ${reason}`);
+    return {
+      ok: false,
+      reason: `Cannot open terminal for Crabbox SSH task "${taskId}": ${reason}`,
+    };
+  }
 }
 
 /**
@@ -160,9 +231,9 @@ export interface ResolveTaskTerminalSpecOptions {
  * without launching anything. Shared between the external launcher and the embedded
  * terminal manager so workspace metadata and session-repair checks stay in one place.
  */
-export function resolveTaskTerminalSpec(
+export async function resolveTaskTerminalSpec(
   opts: ResolveTaskTerminalSpecOptions,
-): ResolveTaskTerminalSpecResult {
+): Promise<ResolveTaskTerminalSpecResult> {
   const { taskId, persistence, executorRegistry, repoRoot, runningTaskReason, allowRunning, logger: termLogger } = opts;
 
   const taskStatus = persistence.getTaskStatus(taskId);
@@ -187,6 +258,7 @@ export function resolveTaskTerminalSpec(
     containerId: persistence.getContainerId(taskId) ?? undefined,
     workspacePath: persistence.getWorkspacePath(taskId) ?? undefined,
     branch: persistence.getBranch(taskId) ?? undefined,
+    remoteLeaseMetadata: persistence.getRemoteLeaseMetadata?.(taskId) ?? undefined,
   };
   const repairedMeta = repairCodexResumeSessionMeta(meta, persistence, opts.executionAgentRegistry);
   termLogger?.info(
@@ -196,7 +268,11 @@ export function resolveTaskTerminalSpec(
   let executor = repairedMeta.runnerKind === 'ssh' ? undefined : executorRegistry.get(repairedMeta.runnerKind);
   termLogger?.info(`executorRegistry.get("${repairedMeta.runnerKind}") → ${executor ? executor.type : 'null (will lazy-create)'}`);
 
-  if (repairedMeta.runnerKind === 'ssh') {
+  if (repairedMeta.runnerKind === 'ssh' && repairedMeta.remoteLeaseMetadata?.provider === 'crabbox') {
+    const crabboxResult = await resolveCrabboxSshExecutor(taskId, repairedMeta.remoteLeaseMetadata, opts);
+    if (!crabboxResult.ok) return crabboxResult;
+    executor = crabboxResult.executor;
+  } else if (repairedMeta.runnerKind === 'ssh') {
     const targetId = persistence.getPoolMemberId?.(taskId)?.trim();
     const target = targetId ? staticRemoteTargets(loadConfig())[targetId] : undefined;
     if (!targetId) {
@@ -292,13 +368,14 @@ export async function openExternalTerminalForTask(
 ): Promise<OpenTerminalResult> {
   const { repoRoot, logger: termLogger } = opts;
 
-  const resolved = resolveTaskTerminalSpec({
+  const resolved = await resolveTaskTerminalSpec({
     taskId: opts.taskId,
     persistence: opts.persistence,
     executorRegistry: opts.executorRegistry,
     executionAgentRegistry: opts.executionAgentRegistry,
     repoRoot: opts.repoRoot,
     runningTaskReason: opts.runningTaskReason,
+    crabboxResolver: opts.crabboxResolver,
     logger: opts.logger,
   });
   if (!resolved.ok) {
