@@ -32,6 +32,11 @@ import { MergeGateExecutor } from './merge-gate-executor.js';
 import { isInvokerManagedPoolBranch } from './plan-base-remote.js';
 import { formatLifecycleTag, extractAttemptSuffix } from './branch-utils.js';
 import { SshExecutor } from './ssh-executor.js';
+import {
+  CrabboxTargetResolver,
+  type CrabboxResolverTargetConfig,
+  type ResolvedCrabboxTarget,
+} from './crabbox-target-resolver.js';
 
 import {
   executeMergeNodeImpl,
@@ -134,9 +139,14 @@ type FreshBaseCommit = {
 };
 
 type RemoteTargetDisplay = {
-  host: string;
-  user: string;
-  sshKeyPath: string;
+  /** Target shape. Omit (or 'static') for a fixed SSH host; 'crabbox' for an on-demand lease. */
+  type?: 'static' | 'crabbox';
+  /** Present for static targets; resolved from the lease for crabbox targets. */
+  host?: string;
+  /** Present for static targets; resolved from the lease for crabbox targets. */
+  user?: string;
+  /** Present for static targets; resolved from the lease for crabbox targets. */
+  sshKeyPath?: string;
   port?: number;
   managedWorkspaces?: boolean;
   remoteInvokerHome?: string;
@@ -144,7 +154,44 @@ type RemoteTargetDisplay = {
   use_api_key?: boolean;
   secretsFile?: string;
   remoteHeartbeatIntervalSeconds?: number;
+  // ── Crabbox lease inputs (only present when type === 'crabbox') ──
+  crabboxCommand?: string;
+  provider?: string;
+  class?: string;
+  ttl?: string;
+  idleTimeout?: string;
+  network?: string;
+  target?: string;
+  stopAfter?: string;
+  keepOnFailure?: boolean;
+  warmupArgs?: readonly string[];
+  statusArgs?: readonly string[];
 };
+
+/**
+ * Injectable dependency that turns a Crabbox remote target into a ready SSH
+ * endpoint plus durable lease metadata. Defaults to {@link CrabboxTargetResolver}.
+ */
+export interface CrabboxResolver {
+  resolve(config: CrabboxResolverTargetConfig): Promise<ResolvedCrabboxTarget>;
+}
+
+/**
+ * Thrown by {@link TaskRunner.selectExecutor} when a `type: 'crabbox'` target
+ * has not been resolved yet. `executeTaskInner` catches it, runs the async
+ * resolver once, caches the result, and builds the SSH executor from the
+ * resolved endpoint — keeping `selectExecutor` synchronous (and static SSH
+ * behavior byte-for-byte equivalent) while still leasing on demand.
+ */
+class CrabboxResolutionRequiredError extends Error {
+  constructor(
+    readonly targetId: string,
+    readonly resolverConfig: CrabboxResolverTargetConfig,
+  ) {
+    super(`Crabbox remote target "${targetId}" must be resolved before use`);
+    this.name = 'CrabboxResolutionRequiredError';
+  }
+}
 
 export interface ReviewGateCiFailureTrigger {
   taskId: string;
@@ -289,9 +336,11 @@ export interface TaskRunnerConfig {
    * Called at task-execution time so config file changes take effect on retry.
    */
   remoteTargetsProvider?: () => Record<string, {
-    host: string;
-    user: string;
-    sshKeyPath: string;
+    /** Target shape. Omit (or 'static') for a fixed SSH host; 'crabbox' for an on-demand lease. */
+    type?: 'static' | 'crabbox';
+    host?: string;
+    user?: string;
+    sshKeyPath?: string;
     port?: number;
     managedWorkspaces?: boolean;
     remoteInvokerHome?: string;
@@ -299,7 +348,24 @@ export interface TaskRunnerConfig {
     use_api_key?: boolean;
     secretsFile?: string;
     remoteHeartbeatIntervalSeconds?: number;
+    // Crabbox lease inputs (only present when type === 'crabbox').
+    crabboxCommand?: string;
+    provider?: string;
+    class?: string;
+    ttl?: string;
+    idleTimeout?: string;
+    network?: string;
+    target?: string;
+    stopAfter?: string;
+    keepOnFailure?: boolean;
+    warmupArgs?: readonly string[];
+    statusArgs?: readonly string[];
   }>;
+  /**
+   * Resolves `type: 'crabbox'` remote targets into ready SSH endpoints.
+   * Defaults to a real {@link CrabboxTargetResolver}; tests inject a fake.
+   */
+  crabboxResolver?: CrabboxResolver;
   executionPoolsProvider?: () => Record<string, {
     members: Array<
       | { type: 'ssh'; id: string; maxConcurrentTasks?: number }
@@ -341,6 +407,10 @@ export class TaskRunner {
   private readonly runnerInstanceId = randomUUID();
   /** Cache for SSH executors, keyed by poolMemberId. One instance per target for correct git locking. */
   private sshExecutorCache = new Map<string, SshExecutor>();
+  /** Resolves crabbox targets into SSH endpoints. */
+  private crabboxResolver: CrabboxResolver;
+  /** Resolved crabbox leases, keyed by remote target id. One lease per target until cleared. */
+  private resolvedCrabboxTargets = new Map<string, ResolvedCrabboxTarget>();
   private poolRoundRobinCursor = new Map<string, number>();
   private pendingPoolSelections = new Map<string, PoolSelection>();
   private freshBaseCommits = new Map<string, FreshBaseCommit>();
@@ -437,6 +507,7 @@ export class TaskRunner {
     this.reviewProviderRegistry = config.reviewProviderRegistry;
     this.onReviewGateCiFailure = config.onReviewGateCiFailure;
     this.getRemoteTargets = config.remoteTargetsProvider ?? (() => ({}));
+    this.crabboxResolver = config.crabboxResolver ?? new CrabboxTargetResolver();
     this.getExecutionPools = config.executionPoolsProvider ?? (() => ({}));
     this.dockerConfig = config.dockerConfig ?? {};
     this.executionAgentRegistry = config.executionAgentRegistry;
@@ -901,7 +972,32 @@ export class TaskRunner {
     let handle!: ExecutorHandle;
     while (true) {
       bench('selectExecutor.start');
-      executor = this.selectExecutor(task, attemptedPoolMemberKeys);
+      try {
+        executor = this.selectExecutor(task, attemptedPoolMemberKeys);
+      } catch (err) {
+        if (!(err instanceof CrabboxResolutionRequiredError)) throw err;
+        // The pool member was already selected (pendingPoolSelections is set);
+        // lease the machine once, cache it, then build the executor from the
+        // resolved endpoint WITHOUT re-running selection (which would advance
+        // round-robin / re-pick a different member).
+        bench('crabbox.resolve.start', { targetId: err.targetId });
+        const resolved = await this.crabboxResolver.resolve(err.resolverConfig);
+        this.resolvedCrabboxTargets.set(err.targetId, resolved);
+        bench('crabbox.resolve.end', {
+          targetId: err.targetId,
+          host: resolved.sshTarget.host,
+          leaseId: resolved.remoteLeaseMetadata.leaseId,
+        });
+        this.persistence.logEvent?.(task.id, 'task.executor.crabbox_resolved', {
+          targetId: err.targetId,
+          leaseId: resolved.remoteLeaseMetadata.leaseId,
+          slug: resolved.remoteLeaseMetadata.slug,
+          sshHost: resolved.sshTarget.host,
+          sshPort: resolved.sshTarget.port,
+        });
+        const target = this.getRemoteTargets()[err.targetId];
+        executor = this.buildSshExecutorForTarget(task.id, err.targetId, target, resolved);
+      }
       const poolSelectionForStart = this.pendingPoolSelections.get(task.id);
       if (!this.acquirePoolSelectionLease(task, attemptId, poolSelectionForStart)) {
         if (poolSelectionForStart) {
@@ -1115,6 +1211,11 @@ export class TaskRunner {
       const selectedSshTargetId = executor.type === 'ssh'
         ? this.selectedRemoteTargetId(task, poolSelection)
         : undefined;
+      // Crabbox-backed SSH tasks carry durable lease metadata so cleanup and
+      // terminal restore can find the leased host after a restart.
+      const remoteLeaseMetadata = selectedSshTargetId
+        ? this.resolvedCrabboxTargets.get(selectedSshTargetId)?.remoteLeaseMetadata
+        : undefined;
       const changes = {
         config: {
           runnerKind: executor.type as RunnerKind,
@@ -1128,6 +1229,7 @@ export class TaskRunner {
           agentName: actionType === 'ai_task' ? executionAgent : undefined,
           lastAgentName: actionType === 'ai_task' ? executionAgent : undefined,
           containerId: handle.containerId ?? undefined,
+          remoteLeaseMetadata: remoteLeaseMetadata ?? undefined,
         },
       };
       this.persistence.updateTask(task.id, changes);
@@ -1139,6 +1241,7 @@ export class TaskRunner {
         this.persistence.updateAttempt?.(attemptId, {
           branch: handle.branch ?? undefined,
           workspacePath: handle.workspacePath,
+          remoteLeaseMetadata: remoteLeaseMetadata ?? undefined,
         } as any);
       } catch (err) {
         traceExecution(
@@ -1426,7 +1529,20 @@ export class TaskRunner {
     if (!selection || selection.member.type !== 'ssh') return true;
     const target = this.getRemoteTargets()[selection.member.id];
     if (!target) return true;
-    const resourceKey = this.sshResourceKey(target);
+    // For crabbox targets the resource key must reflect the resolved (leased)
+    // SSH endpoint, not the empty config host/user, so two tasks on the same
+    // leased machine contend on the same lease. The pool member id is still
+    // used as the holder/poolMemberId below.
+    const resolved = this.resolvedCrabboxTargets.get(selection.member.id);
+    const resourceKey = this.sshResourceKey(
+      resolved
+        ? {
+          host: resolved.sshTarget.host,
+          user: resolved.sshTarget.user,
+          port: resolved.sshTarget.port,
+        }
+        : target,
+    );
     const holderId = this.leaseHolderId(task.id, attemptId);
     const acquired = this.persistence.claimExecutionResourceLease?.({
       resourceKey,
@@ -1483,12 +1599,21 @@ export class TaskRunner {
 
     if (executor.type === 'ssh') {
       const targetId = this.selectedRemoteTargetId(task, poolSelection);
-      const target = targetId ? this.getRemoteTargets()[targetId] : undefined;
       if (targetId) payload.poolMemberId = targetId;
-      if (target) {
-        payload.remoteHost = target.host;
-        payload.remoteUser = target.user;
-        payload.port = target.port;
+      const resolved = targetId ? this.resolvedCrabboxTargets.get(targetId) : undefined;
+      if (resolved) {
+        // Crabbox: report the resolved (leased) endpoint plus durable lease metadata.
+        payload.remoteHost = resolved.sshTarget.host;
+        payload.remoteUser = resolved.sshTarget.user;
+        payload.port = resolved.sshTarget.port;
+        payload.remoteLeaseMetadata = resolved.remoteLeaseMetadata;
+      } else {
+        const target = targetId ? this.getRemoteTargets()[targetId] : undefined;
+        if (target) {
+          payload.remoteHost = target.host;
+          payload.remoteUser = target.user;
+          payload.port = target.port;
+        }
       }
     }
 
@@ -1654,58 +1779,135 @@ export class TaskRunner {
           );
         }
 
-        // Build a config fingerprint so cache invalidates when target config changes.
-        const configFingerprint = JSON.stringify({
-          host: target.host,
-          user: target.user,
-          sshKeyPath: target.sshKeyPath,
-          port: target.port,
-          managedWorkspaces: target.managedWorkspaces,
-          remoteInvokerHome: target.remoteInvokerHome,
-          provisionCommand: target.provisionCommand,
-          use_api_key: target.use_api_key === true,
-          secretsFile: target.secretsFile ?? this.dockerConfig.secretsFile,
-          remoteHeartbeatIntervalSeconds: target.remoteHeartbeatIntervalSeconds,
-        });
-        const cacheKey = `${targetId}|${configFingerprint}`;
-
-        // Return cached executor if it exists for this target+config combo
-        const cached = this.sshExecutorCache.get(cacheKey);
-        if (cached) {
-          traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=ssh remoteTarget=${targetId} → ssh (cached)`);
-          return cached;
-        }
-
-        // Drop any stale entries for this targetId so we don't accumulate dead caches.
-        for (const key of this.sshExecutorCache.keys()) {
-          if (key.startsWith(`${targetId}|`)) {
-            this.sshExecutorCache.delete(key);
+        // Crabbox targets supply a machine on demand: resolve the lease into a
+        // ready SSH endpoint before building the fingerprint/executor. Resolution
+        // is async, so if it hasn't run yet we signal executeTaskInner to run the
+        // resolver once and retry the build with the cached endpoint. Static SSH
+        // targets skip all of this and behave exactly as before.
+        let resolvedCrabbox: ResolvedCrabboxTarget | undefined;
+        if (target.type === 'crabbox') {
+          resolvedCrabbox = this.resolvedCrabboxTargets.get(targetId);
+          if (!resolvedCrabbox) {
+            throw new CrabboxResolutionRequiredError(
+              targetId,
+              this.buildCrabboxResolverConfig(targetId, target),
+            );
           }
         }
 
-        const ssh = new SshExecutor({
-          host: target.host,
-          user: target.user,
-          sshKeyPath: target.sshKeyPath,
-          port: target.port,
-          agentRegistry: this.executionAgentRegistry,
-          managedWorkspaces: target.managedWorkspaces,
-          remoteInvokerHome: target.remoteInvokerHome,
-          provisionCommand: target.provisionCommand,
-          useApiKey: target.use_api_key === true,
-          secretsFile: target.secretsFile ?? this.dockerConfig.secretsFile,
-          remoteHeartbeatIntervalSeconds: target.remoteHeartbeatIntervalSeconds,
-        });
-
-        this.sshExecutorCache.set(cacheKey, ssh);
-        traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=ssh remoteTarget=${targetId} → ssh (new, cached)`);
-        return ssh;
+        return this.buildSshExecutorForTarget(task.id, targetId, target, resolvedCrabbox);
       }
     }
 
     const defaultExecutor = this.executorRegistry.getDefault();
     traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=${effectiveType ?? 'none'} → ${defaultExecutor.type} (default)`);
     return defaultExecutor;
+  }
+
+  /**
+   * Build (and cache) the SSH executor for a remote target. For static targets
+   * the endpoint is the target's own host/user/key; for resolved crabbox leases
+   * it is the leased machine's SSH coordinates. The fingerprint includes the
+   * effective endpoint, so a new lease (different host/key) replaces the cached
+   * executor. Shared by the cache-hit path inside selectExecutor and the
+   * post-resolution path in executeTaskInner.
+   */
+  private buildSshExecutorForTarget(
+    taskId: string,
+    targetId: string,
+    target: RemoteTargetDisplay,
+    resolved: ResolvedCrabboxTarget | undefined,
+  ): SshExecutor {
+    const host = resolved?.sshTarget.host ?? target.host;
+    const user = resolved?.sshTarget.user ?? target.user;
+    const sshKeyPath = resolved?.sshTarget.sshKeyPath ?? target.sshKeyPath;
+    const port = resolved?.sshTarget.port ?? target.port;
+    if (!host || !user || !sshKeyPath) {
+      throw new Error(
+        `Task ${taskId} references remote target "${targetId}" but it has no usable ` +
+        `SSH endpoint (host/user/sshKeyPath missing).`,
+      );
+    }
+
+    // Build a config fingerprint so cache invalidates when target config changes.
+    const configFingerprint = JSON.stringify({
+      host,
+      user,
+      sshKeyPath,
+      port,
+      managedWorkspaces: target.managedWorkspaces,
+      remoteInvokerHome: target.remoteInvokerHome,
+      provisionCommand: target.provisionCommand,
+      use_api_key: target.use_api_key === true,
+      secretsFile: target.secretsFile ?? this.dockerConfig.secretsFile,
+      remoteHeartbeatIntervalSeconds: target.remoteHeartbeatIntervalSeconds,
+    });
+    const cacheKey = `${targetId}|${configFingerprint}`;
+
+    // Return cached executor if it exists for this target+config combo
+    const cached = this.sshExecutorCache.get(cacheKey);
+    if (cached) {
+      traceExecution(`[trace] TaskRunner.selectExecutor: task=${taskId} effectiveType=ssh remoteTarget=${targetId} → ssh (cached)`);
+      return cached;
+    }
+
+    // Drop any stale entries for this targetId so we don't accumulate dead caches.
+    for (const key of this.sshExecutorCache.keys()) {
+      if (key.startsWith(`${targetId}|`)) {
+        this.sshExecutorCache.delete(key);
+      }
+    }
+
+    const ssh = new SshExecutor({
+      host,
+      user,
+      sshKeyPath,
+      port,
+      agentRegistry: this.executionAgentRegistry,
+      managedWorkspaces: target.managedWorkspaces,
+      remoteInvokerHome: target.remoteInvokerHome,
+      provisionCommand: target.provisionCommand,
+      useApiKey: target.use_api_key === true,
+      secretsFile: target.secretsFile ?? this.dockerConfig.secretsFile,
+      remoteHeartbeatIntervalSeconds: target.remoteHeartbeatIntervalSeconds,
+    });
+
+    this.sshExecutorCache.set(cacheKey, ssh);
+    traceExecution(`[trace] TaskRunner.selectExecutor: task=${taskId} effectiveType=ssh remoteTarget=${targetId} → ssh (new, cached)`);
+    return ssh;
+  }
+
+  /** Map a configured crabbox remote target into the resolver's input config. */
+  private buildCrabboxResolverConfig(
+    targetId: string,
+    target: RemoteTargetDisplay,
+  ): CrabboxResolverTargetConfig {
+    const missing: string[] = [];
+    const require = (value: string | undefined, name: string): string => {
+      if (!value) missing.push(name);
+      return value ?? '';
+    };
+    const config: CrabboxResolverTargetConfig = {
+      id: targetId,
+      crabboxCommand: require(target.crabboxCommand, 'crabboxCommand'),
+      provider: require(target.provider, 'provider'),
+      class: require(target.class, 'class'),
+      ttl: require(target.ttl, 'ttl'),
+      idleTimeout: require(target.idleTimeout, 'idleTimeout'),
+      network: require(target.network, 'network'),
+      target: require(target.target, 'target'),
+      stopAfter: require(target.stopAfter, 'stopAfter'),
+      keepOnFailure: target.keepOnFailure === true,
+      port: target.port,
+      warmupArgs: target.warmupArgs,
+      statusArgs: target.statusArgs,
+    };
+    if (missing.length > 0) {
+      throw new Error(
+        `Crabbox remote target "${targetId}" is missing required field(s): ${missing.join(', ')}.`,
+      );
+    }
+    return config;
   }
 
   /**
@@ -2901,8 +3103,20 @@ export class TaskRunner {
   } | undefined {
     const target = this.getRemoteTargets()[targetId];
     if (!target) return undefined;
+    // Overlay the resolved crabbox endpoint so post-execution flows (publish,
+    // conflict resolution, terminal restore) reach the leased machine, not the
+    // empty config host. Static targets pass through unchanged.
+    const resolved = this.resolvedCrabboxTargets.get(targetId);
+    const host = resolved?.sshTarget.host ?? target.host;
+    const user = resolved?.sshTarget.user ?? target.user;
+    const sshKeyPath = resolved?.sshTarget.sshKeyPath ?? target.sshKeyPath;
+    if (!host || !user || !sshKeyPath) return undefined;
     return {
       ...target,
+      host,
+      user,
+      sshKeyPath,
+      port: resolved?.sshTarget.port ?? target.port,
       secretsFile: target.secretsFile ?? this.dockerConfig.secretsFile,
     };
   }
