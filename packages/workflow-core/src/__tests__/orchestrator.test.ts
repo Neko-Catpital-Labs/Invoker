@@ -6998,6 +6998,50 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask(taskId)?.status).toBe('running');
     });
 
+    it('rejects a response carrying the current attempt id but a stale executionGeneration', () => {
+      orchestrator.loadPlan({
+        name: 'stale-generation-with-current-attempt',
+        tasks: [{ id: 't1', description: 'Task 1' }],
+      });
+      orchestrator.startExecution();
+
+      const taskId = sid(orchestrator, 0, 't1');
+      const liveTask = orchestrator.getTask(taskId)!;
+      const activeAttemptId = liveTask.execution.selectedAttemptId!;
+      const staleGeneration = liveTask.execution.generation ?? 0;
+
+      // The execution generation moves on while the selected attempt id is
+      // unchanged: an in-flight worker launched at the old generation can
+      // still report the live attempt id. Seed live branch/workspacePath so
+      // we can prove a stale completion does not overwrite them.
+      orchestrator.refreshFromDb();
+      persistence.updateTask(taskId, {
+        execution: {
+          generation: staleGeneration + 1,
+          branch: 'live/feature',
+          workspacePath: '/live/ws',
+        },
+      });
+
+      const staleResult = orchestrator.handleWorkerResponse(
+        makeResponse({
+          actionId: taskId,
+          attemptId: activeAttemptId,
+          executionGeneration: staleGeneration,
+          status: 'completed',
+          outputs: { exitCode: 0, branch: 'stale/feature' },
+        }),
+      );
+
+      expect(staleResult).toEqual([]);
+      const after = orchestrator.getTask(taskId)!;
+      expect(after.status).toBe('running');
+      expect(after.execution.selectedAttemptId).toBe(activeAttemptId);
+      expect(after.execution.branch).toBe('live/feature');
+      expect(after.execution.workspacePath).toBe('/live/ws');
+      expect(persistence.loadAttempt(activeAttemptId)?.status).toBe('running');
+    });
+
     it('recreateWorkflow selects a fresh persisted attempt for recreated tasks', () => {
       orchestrator.loadPlan({
         name: 'recreate-attempt-refresh',
