@@ -42,6 +42,41 @@ function safeGetWorkspacePath(persistence: SQLiteAdapter, taskId: string): strin
     : undefined;
 }
 
+/**
+ * Persist merge-gate execution side effects (branch, workspacePath, review
+ * metadata, fixed-integration fields) through the orchestrator's lineage guard.
+ *
+ * These fields would otherwise be written straight to persistence *before*
+ * `emitComplete` / `handleWorkerResponse` run the normal worker-response lineage
+ * guard, so a gate run that started against a now-superseded attempt/generation
+ * could clobber a task that has since advanced. Routing through
+ * `applyMergeGateExecutionMetadata` applies the same check those direct writes
+ * skip and drops the write when stale.
+ *
+ * Falls back to a direct persistence write only for partial test-double hosts
+ * whose orchestrator does not implement the guard; the production orchestrator
+ * always does. Returns true when the write was applied.
+ */
+export function persistMergeGateMetadata(
+  host: MergeRunnerHost,
+  taskId: string,
+  changes: TaskStateChanges,
+  expected: { attemptId?: string; executionGeneration?: number },
+): boolean {
+  const orchestrator = host.orchestrator as {
+    applyMergeGateExecutionMetadata?: (
+      taskId: string,
+      changes: TaskStateChanges,
+      expected: { attemptId?: string; executionGeneration?: number },
+    ) => boolean;
+  };
+  if (typeof orchestrator.applyMergeGateExecutionMetadata === 'function') {
+    return orchestrator.applyMergeGateExecutionMetadata(taskId, changes, expected);
+  }
+  host.persistence.updateTask(taskId, changes);
+  return true;
+}
+
 function canonicalMergeMode(mode: string | undefined): 'manual' | 'automatic' | 'external_review' {
   const m = mode ?? 'manual';
   if (m === 'external_review') return 'external_review';
@@ -495,13 +530,23 @@ export async function runMergeGateActionImpl(
       `mergeMode=${mergeMode} onFinish=${onFinish} dbWorkspacePath=${safeGetWorkspacePath(host.persistence, task.id) ?? 'NULL'}`,
   );
 
-  host.persistence.updateTask(task.id, {
-    execution: {
-      reviewUrl: undefined,
-      reviewId: undefined,
-      reviewStatus: undefined,
+  // Lineage-guarded so a stale gate run cannot clear a fresher attempt's review
+  // metadata. Uses the task snapshot captured when this action started.
+  persistMergeGateMetadata(
+    host,
+    task.id,
+    {
+      execution: {
+        reviewUrl: undefined,
+        reviewId: undefined,
+        reviewStatus: undefined,
+      },
     },
-  });
+    {
+      attemptId: task.execution.selectedAttemptId,
+      executionGeneration: task.execution.generation ?? 0,
+    },
+  );
 
   // Create a persistent gate worktree so workspacePath is never the main repo.
   // Use baseBranch as the ref because featureBranch may not exist yet
@@ -1281,10 +1326,20 @@ export async function publishAfterFixImpl(
       });
       const reviewUrl = await host.execPr(baseBranch, featureBranch, workflow?.name ?? 'Workflow', prBody, consolidateDir);
       console.log(`[merge] Post-fix: created pull request ${reviewUrl}`);
-      host.persistence.updateTask(task.id, {
-        config: { summary },
-        execution: { reviewUrl },
-      });
+      // Lineage-guarded: the post-fix run may have been superseded while the PR
+      // was being authored/created, so don't clobber a fresher attempt.
+      persistMergeGateMetadata(
+        host,
+        task.id,
+        {
+          config: { summary },
+          execution: { reviewUrl },
+        },
+        {
+          attemptId: task.execution.selectedAttemptId,
+          executionGeneration: task.execution.generation ?? 0,
+        },
+      );
     }
 
     setMergeGateReviewReady(host, task.id, {

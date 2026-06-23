@@ -582,6 +582,149 @@ describe('Orchestrator', () => {
     });
   });
 
+  describe('applyMergeGateExecutionMetadata lineage guard', () => {
+    it('rejects a stale merge-gate metadata write after the task advanced a generation', () => {
+      orchestrator.loadPlan({
+        name: 'Stale gate metadata generation',
+        tasks: [{ id: 'task-a', description: 'task A' }],
+      });
+
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+      const mergeId = `__merge__${workflowId}`;
+      // The merge task has advanced to generation 2 (e.g. a retry happened
+      // while the gate was running).
+      persistence.updateTask(mergeId, {
+        status: 'running',
+        execution: { generation: 2, selectedAttemptId: 'attempt-current' },
+      });
+
+      // A gate run that started against generation 1 tries to write its
+      // branch/workspace/review metadata.
+      const applied = orchestrator.applyMergeGateExecutionMetadata(
+        mergeId,
+        {
+          execution: {
+            branch: 'feature/stale',
+            workspacePath: '/tmp/stale-gate',
+            reviewUrl: 'https://example.test/stale',
+            reviewId: 'owner/repo#stale',
+            reviewStatus: 'Awaiting review',
+          },
+        },
+        { attemptId: 'attempt-current', executionGeneration: 1 },
+      );
+
+      expect(applied).toBe(false);
+      const task = orchestrator.getTask(mergeId)!;
+      expect(task.execution.branch).toBeUndefined();
+      expect(task.execution.workspacePath).toBeUndefined();
+      expect(task.execution.reviewUrl).toBeUndefined();
+      expect(task.execution.reviewId).toBeUndefined();
+    });
+
+    it('rejects a stale merge-gate metadata write after the selected attempt changed', () => {
+      orchestrator.loadPlan({
+        name: 'Stale gate metadata attempt',
+        tasks: [{ id: 'task-a', description: 'task A' }],
+      });
+
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+      const mergeId = `__merge__${workflowId}`;
+      persistence.updateTask(mergeId, {
+        status: 'running',
+        execution: { generation: 0, selectedAttemptId: 'attempt-new' },
+      });
+
+      const applied = orchestrator.applyMergeGateExecutionMetadata(
+        mergeId,
+        { execution: { fixedIntegrationSha: 'deadbeef', branch: 'feature/old' } },
+        { attemptId: 'attempt-old', executionGeneration: 0 },
+      );
+
+      expect(applied).toBe(false);
+      const task = orchestrator.getTask(mergeId)!;
+      expect(task.execution.fixedIntegrationSha).toBeUndefined();
+      expect(task.execution.branch).toBeUndefined();
+    });
+
+    it('still rejects the eventual stale worker response for the superseded gate run', () => {
+      orchestrator.loadPlan({
+        name: 'Stale gate worker response',
+        tasks: [{ id: 'task-a', description: 'task A' }],
+      });
+
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+      const mergeId = `__merge__${workflowId}`;
+      persistence.updateTask(mergeId, {
+        status: 'running',
+        execution: { generation: 2, selectedAttemptId: 'attempt-current' },
+      });
+
+      // The direct metadata write is dropped...
+      const applied = orchestrator.applyMergeGateExecutionMetadata(
+        mergeId,
+        { execution: { branch: 'feature/stale', reviewUrl: 'https://example.test/stale' } },
+        { attemptId: 'attempt-current', executionGeneration: 1 },
+      );
+      expect(applied).toBe(false);
+
+      // ...and the worker response that lands afterwards is rejected too.
+      const newlyStarted = orchestrator.handleWorkerResponse(makeResponse({
+        actionId: mergeId,
+        attemptId: 'attempt-current',
+        executionGeneration: 1,
+        status: 'review_ready',
+        outputs: {
+          exitCode: 0,
+          branch: 'feature/stale',
+          reviewUrl: 'https://example.test/stale',
+        },
+      }));
+
+      expect(newlyStarted).toEqual([]);
+      const task = orchestrator.getTask(mergeId)!;
+      expect(task.status).toBe('running');
+      expect(task.execution.branch).toBeUndefined();
+      expect(task.execution.reviewUrl).toBeUndefined();
+    });
+
+    it('persists valid merge-gate review-ready metadata when lineage matches', () => {
+      orchestrator.loadPlan({
+        name: 'Valid gate metadata',
+        tasks: [{ id: 'task-a', description: 'task A' }],
+      });
+
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+      const mergeId = `__merge__${workflowId}`;
+      persistence.updateTask(mergeId, {
+        status: 'running',
+        execution: { generation: 3, selectedAttemptId: 'attempt-current' },
+      });
+
+      const applied = orchestrator.applyMergeGateExecutionMetadata(
+        mergeId,
+        {
+          execution: {
+            branch: 'feature/ready',
+            workspacePath: '/tmp/gate-ready',
+            reviewUrl: 'https://github.com/owner/repo/pull/7',
+            reviewId: 'owner/repo#7',
+            reviewStatus: 'Awaiting review',
+          },
+        },
+        { attemptId: 'attempt-current', executionGeneration: 3 },
+      );
+
+      expect(applied).toBe(true);
+      const task = orchestrator.getTask(mergeId)!;
+      expect(task.execution.branch).toBe('feature/ready');
+      expect(task.execution.workspacePath).toBe('/tmp/gate-ready');
+      expect(task.execution.reviewUrl).toBe('https://github.com/owner/repo/pull/7');
+      expect(task.execution.reviewId).toBe('owner/repo#7');
+      expect(task.execution.reviewStatus).toBe('Awaiting review');
+    });
+  });
+
   describe('workflow status transitions during retry paths', () => {
     it('stores a newly loaded workflow as pending while all tasks are pending', () => {
       orchestrator.loadPlan({
