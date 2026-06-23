@@ -25,6 +25,9 @@ import {
   remoteFetchForPool,
   registerBuiltinAgents,
   assertPlanExecutionAgentsRegistered,
+  acquireRecoveryWorkerLock,
+  resolveInvokerHomeRoot,
+  WorkerLockHeldError,
   type AgentRegistry,
   type TaskHeartbeatEvent,
 } from '@invoker/execution-engine';
@@ -1150,22 +1153,41 @@ const HEADLESS_WORKER_KINDS: ReadonlyArray<{ kind: string; available: boolean; n
 async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void> {
   const subCommand = args[0] ?? 'list';
   if (subCommand === 'autofix') {
-    const tick = createAutoFixRecoveryTick({
-      store: deps.persistence,
-      submitter: {
-        submit: (workflowId, priority, channel, mutationArgs) => (
-          deps.persistence.enqueueWorkflowMutationIntent(workflowId, channel, mutationArgs, priority)
-        ),
-      },
-      logger: deps.logger,
-      defaultAutoFixRetries: deps.invokerConfig.autoFixRetries,
-      getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
-    });
-    await tick({
-      identity: { kind: RECOVERY_WORKER_KIND, instanceId: 'headless-worker-autofix' },
-      reason: 'manual',
-      tickNumber: 1,
-    });
+    // Single-instance guard across both doors (this dev door and the production
+    // `invoker-cli worker autofix`): refuse rather than run a recovery scan that
+    // competes with a worker already holding the cross-process lock.
+    let lock;
+    try {
+      lock = acquireRecoveryWorkerLock({ homeRoot: resolveInvokerHomeRoot(), logger: deps.logger });
+    } catch (err) {
+      if (err instanceof WorkerLockHeldError) {
+        // Surface via the app's throw-based error convention.
+        throw new Error(err.message);
+      }
+      throw err;
+    }
+    try {
+      const tick = createAutoFixRecoveryTick({
+        store: deps.persistence,
+        submitter: {
+          submit: (workflowId, priority, channel, mutationArgs) => (
+            deps.persistence.enqueueWorkflowMutationIntent(workflowId, channel, mutationArgs, priority)
+          ),
+        },
+        logger: deps.logger,
+        defaultAutoFixRetries: deps.invokerConfig.autoFixRetries,
+        getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
+      });
+      await tick({
+        identity: { kind: RECOVERY_WORKER_KIND, instanceId: 'headless-worker-autofix' },
+        reason: 'manual',
+        tickNumber: 1,
+      });
+    } finally {
+      // Release deterministically so a clean run never leaves a stale lock that
+      // blocks the next legitimate start.
+      lock.release();
+    }
     process.stdout.write('Auto-fix worker scan completed.\n');
     return;
   }
