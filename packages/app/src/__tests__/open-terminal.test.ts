@@ -1203,6 +1203,54 @@ describe('Crabbox SSH terminal restore', () => {
     );
   });
 
+  it('rebuilds the SSH endpoint with all four refreshed coordinates (host, user, port, key)', async () => {
+    const mockSpawnDetached = vi.fn(async () => ({ opened: true } as const));
+    const terminalLaunch = await import('../terminal-external-launch.js');
+    vi.spyOn(terminalLaunch, 'spawnDetachedTerminal').mockImplementation(mockSpawnDetached as any);
+    const loadConfigSpy = vi.spyOn(configModule, 'loadConfig').mockReturnValue({
+      remoteTargets: CRABBOX_TARGET_CONFIG,
+    } as any);
+
+    const { resolver } = scriptedResolver({
+      stdout: JSON.stringify({
+        id: 'lease-abc',
+        slug: 'happy-crab',
+        status: 'ready',
+        expiresAt: '2026-12-01T00:00:00.000Z',
+        sshHost: '203.0.113.9',
+        sshUser: 'runner',
+        sshPort: 2200,
+        sshKey: '/home/me/.ssh/fresh',
+      }),
+      stderr: '',
+      exitCode: 0,
+    });
+
+    const result = await openExternalTerminalForTask({
+      taskId: 'crab-ssh-task',
+      persistence: crabboxPersistence() as any,
+      executorRegistry: new ExecutorRegistry(),
+      repoRoot: '/repo',
+      crabboxResolver: resolver,
+    });
+
+    expect(result.opened).toBe(true);
+    // The rebuilt SshExecutor must connect with every refreshed coordinate:
+    // -i <key>, -p <port>, -t <user>@<host>. None may be the stale persisted ones.
+    const argsJson = JSON.stringify(mockSpawnDetached.mock.calls[0]?.[1]);
+    expect(argsJson).toContain('/home/me/.ssh/fresh');
+    expect(argsJson).toContain('2200');
+    expect(argsJson).toContain('runner@203.0.113.9');
+    expect(argsJson).not.toContain('/home/me/.ssh/old');
+    expect(argsJson).not.toContain('2222');
+
+    loadConfigSpy.mockRestore();
+    vi.mocked(terminalLaunch.spawnDetachedTerminal).mockReset();
+    vi.mocked(terminalLaunch.spawnDetachedTerminal).mockImplementation(
+      async () => ({ opened: true } as const),
+    );
+  });
+
   it('refuses with a clear reason when the lease has expired', async () => {
     const loadConfigSpy = vi.spyOn(configModule, 'loadConfig').mockReturnValue({
       remoteTargets: CRABBOX_TARGET_CONFIG,
