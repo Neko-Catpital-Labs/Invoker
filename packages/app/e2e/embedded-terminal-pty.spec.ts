@@ -38,6 +38,20 @@ const CLAUDE_RESUME_PLAN = {
   ],
 };
 
+const SCROLLBACK_PLAN = {
+  name: 'Embedded PTY Scrollback',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'none' as const,
+  tasks: [
+    {
+      id: 'scrollback-task',
+      description: 'Completed task with scrollback output',
+      command: 'echo unused',
+      dependencies: [],
+    },
+  ],
+};
+
 test.describe('Embedded terminal PTY', () => {
   test('completed Codex resume terminal gets a real TTY in the drawer', async ({ page, testDir }) => {
     await loadPlan(page, CODEX_RESUME_PLAN);
@@ -161,5 +175,62 @@ test.describe('Embedded terminal PTY', () => {
     await expect(terminalPane.getByText(`TTY OK: claude resume ${agentSessionId}`)).toBeVisible({ timeout: 10000 });
     await expect(page.getByText('stdin is not a terminal')).toHaveCount(0);
     await expect(page.getByText('No deferred tool marker found')).toHaveCount(0);
+  });
+
+  test('maximized drawer can scroll back through terminal history', async ({ page, testDir }) => {
+    await loadPlan(page, SCROLLBACK_PLAN);
+    const workspacePath = path.join(testDir, 'scrollback-workspace');
+    mkdirSync(workspacePath, { recursive: true });
+
+    await injectTaskStates(page, [
+      {
+        taskId: 'scrollback-task',
+        changes: {
+          status: 'completed',
+          execution: {
+            workspacePath,
+            completedAt: new Date('2025-01-01T00:00:00.000Z'),
+          },
+        },
+      },
+    ]);
+
+    const tasksResult = await page.evaluate(() => window.invoker.getTasks());
+    const tasks = Array.isArray(tasksResult) ? tasksResult : tasksResult.tasks;
+    const task = tasks.find((candidate) => candidate.id.endsWith('/scrollback-task'));
+    const fullTaskId = task?.id;
+    expect(fullTaskId).toBeTruthy();
+
+    const taskNode = page
+      .getByTestId('selected-workflow-mini-dag')
+      .locator('.react-flow__node[data-testid$="scrollback-task"]')
+      .first();
+    const box = await taskNode.boundingBox();
+    if (!box) throw new Error('Scrollback task node has no bounding box');
+    await taskNode.locator('> div').dispatchEvent('dblclick', {
+      bubbles: true,
+      cancelable: true,
+      clientX: box.x + box.width / 2,
+      clientY: box.y + box.height / 2,
+    });
+
+    await expect(page.getByTestId('terminal-drawer-body')).toBeVisible({ timeout: 10000 });
+    const terminalPane = page.getByTestId(`terminal-pane-${fullTaskId}`);
+    await expect(terminalPane).toBeVisible();
+    await terminalPane.click();
+
+    await page.keyboard.type('for i in $(seq 1 160); do printf "inv196-line-%03d\\n" "$i"; done');
+    await page.keyboard.press('Enter');
+    await expect(terminalPane.getByText('inv196-line-160')).toBeVisible({ timeout: 10000 });
+
+    await page.getByRole('button', { name: 'Maximize terminal drawer' }).click();
+    await expect(page.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'maximized');
+    await expect(page.getByTestId('terminal-drawer')).toHaveClass(/min-h-0/);
+    await expect(page.getByTestId('terminal-drawer-body')).toHaveClass(/overflow-hidden/);
+    await expect(terminalPane).toHaveClass(/overflow-hidden/);
+
+    await terminalPane.hover();
+    await page.mouse.wheel(0, -5000);
+    await expect(terminalPane.getByText('inv196-line-001')).toBeVisible({ timeout: 10000 });
   });
 });
