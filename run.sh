@@ -9,18 +9,31 @@ cd "$REPO_ROOT"
 # from this launcher even if the caller's environment opts into it.
 export INVOKER_ENABLE_WORKSPACE_CLEANUP=0
 
+BOOTSTRAP_STAMP="$REPO_ROOT/node_modules/.invoker-bootstrap-stamp"
+
 has_bootstrap_artifacts() {
   [ -f "$REPO_ROOT/node_modules/.modules.yaml" ] \
     && [ -x "$REPO_ROOT/packages/app/node_modules/.bin/electron" ]
 }
 
+# An existing install goes stale when the lockfile changes (e.g. a git pull
+# adds a dependency) but node_modules is left untouched. The artifacts check
+# above only proves *some* install exists, so without this check run.sh would
+# skip the reinstall and then fail the build on the now-missing package. Treat
+# the install as stale when we have no record of it, or when pnpm-lock.yaml is
+# newer than the stamp written after the last successful install.
+workspace_install_is_stale() {
+  [ ! -f "$BOOTSTRAP_STAMP" ] || [ "$REPO_ROOT/pnpm-lock.yaml" -nt "$BOOTSTRAP_STAMP" ]
+}
+
 ensure_workspace_bootstrapped() {
-  if has_bootstrap_artifacts && [ "${INVOKER_FORCE_BOOTSTRAP:-0}" != "1" ]; then
+  if has_bootstrap_artifacts && ! workspace_install_is_stale && [ "${INVOKER_FORCE_BOOTSTRAP:-0}" != "1" ]; then
     return 0
   fi
 
   echo "Bootstrapping workspace dependencies..." >&2
   pnpm install --frozen-lockfile >&2
+  touch "$BOOTSTRAP_STAMP"
 }
 
 expand_home_path() {
