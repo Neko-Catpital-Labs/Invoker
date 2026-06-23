@@ -8,6 +8,16 @@ import type { ExecutionAgent } from './agent.js';
 import type { SessionDriver } from './session-driver.js';
 import { cleanElectronEnv, resolveExecutableOnCurrentPath } from './process-utils.js';
 
+export interface MakePrStackArtifactOutput {
+  readonly id: string;
+  readonly title?: string;
+  readonly url: string;
+  readonly providerId?: string;
+  readonly branch?: string;
+  readonly baseBranch?: string;
+  readonly dependsOn?: readonly string[];
+}
+
 // ── Structured PR-authoring context ──────────────────────
 
 /** Per-task evidence carried through PR authoring. */
@@ -150,6 +160,148 @@ export function resolveSkillPathViaAgent(agent: ExecutionAgent, skillName: strin
     if (existsSync(join(skillDir, 'SKILL.md'))) return skillDir;
   }
   return resolveInstalledSkillPathForAgent(agent.name, skillName);
+}
+
+const INVOKER_REPO_OWNER_RE = /^(neko-catpital-labs|edbertchan)$/i;
+
+export function isInvokerRepoUrl(repoUrl: string | undefined): boolean {
+  if (!repoUrl) return false;
+  const trimmed = repoUrl.trim();
+  const httpsMatch = /^https:\/\/github\.com\/([^/]+)\/([^/.]+)(?:\.git)?\/?$/i.exec(trimmed);
+  const sshMatch = /^(?:git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+)\/([^/.]+)(?:\.git)?\/?$/i.exec(trimmed);
+  const match = httpsMatch ?? sshMatch;
+  if (!match) return false;
+  const [, owner, repo] = match;
+  return INVOKER_REPO_OWNER_RE.test(owner) && repo.toLowerCase() === 'invoker';
+}
+
+export function buildMakePrStackPublishPrompt(args: {
+  skillPath: string;
+  title: string;
+  baseBranch: string;
+  featureBranch: string;
+  workflowSummary: string;
+  cwd: string;
+  reviewGate?: unknown;
+}): string {
+  const lines = [
+    `Publish the Invoker-on-Invoker review PR stack for branch "${args.featureBranch}" targeting "${args.baseBranch}".`,
+    '',
+    `Use the installed skill "invoker-make-pr" at: ${args.skillPath}`,
+    'Read invoker-make-pr/SKILL.md first and follow the repo-local PR workflow exactly.',
+    'Use Mergify stack publication for this Invoker stack.',
+    '',
+    'Requirements:',
+    `- PR title prefix/base title: "${args.title}"`,
+    `- Repository working directory: ${args.cwd}`,
+    '- Use the repo-local PR workflow and validation tools from the skill.',
+    '- Output only JSON. Do not include markdown, commentary, explanations, or code fences.',
+    '- The JSON shape must be exactly:',
+    '{"artifacts":[{"id":"string","title":"string","url":"string","providerId":"string","branch":"string","baseBranch":"string","dependsOn":["string"]}]}',
+    '- artifacts are already listed in stack order.',
+    '- artifacts[0].dependsOn must be omitted or [].',
+    '- For every i > 0, artifacts[i].dependsOn must be exactly [artifacts[i - 1].id].',
+    '- Do not emit branches, merges, skipped predecessors, or multiple dependencies.',
+    '- Do not add fixed PR-count fields.',
+    '- Do not add Mergify-specific fields to the JSON.',
+    '',
+    'Workflow summary:',
+    '```md',
+    args.workflowSummary.trim(),
+    '```',
+  ];
+  if (args.reviewGate) {
+    lines.push('', 'Existing review-gate intent:', '```json', JSON.stringify(args.reviewGate, null, 2), '```');
+  }
+  return lines.join('\n');
+}
+
+export function parseMakePrStackPublishResult(raw: string): MakePrStackArtifactOutput[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw.trim());
+  } catch {
+    throw new Error('make-pr stack publisher must output JSON');
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('make-pr stack publisher output must be a JSON object');
+  }
+  const artifacts = (parsed as { artifacts?: unknown }).artifacts;
+  if (!Array.isArray(artifacts)) {
+    throw new Error('make-pr stack publisher output must include artifacts array');
+  }
+
+  if (artifacts.length === 0) {
+    throw new Error('make-pr stack publisher output must include at least one artifact');
+  }
+  const ids = new Set<string>();
+  const records: MakePrStackArtifactOutput[] = [];
+  for (let i = 0; i < artifacts.length; i += 1) {
+    const artifact = artifacts[i];
+    if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) {
+      throw new Error(`artifacts[${i}] must be an object`);
+    }
+    const record = artifact as Record<string, unknown>;
+    if (typeof record.id !== 'string' || record.id.trim().length === 0) {
+      throw new Error(`artifacts[${i}].id must be a non-empty string`);
+    }
+    const id = record.id.trim();
+    if (ids.has(id)) {
+      throw new Error(`artifacts[${i}].id duplicates artifact "${id}"`);
+    }
+    if (typeof record.url !== 'string' || record.url.trim().length === 0) {
+      throw new Error(`artifacts[${i}].url must be a non-empty string`);
+    }
+    const url = record.url.trim();
+    const dependsOn = record.dependsOn === undefined ? undefined : record.dependsOn;
+    if (dependsOn !== undefined && !Array.isArray(dependsOn)) {
+      throw new Error(`artifacts[${i}].dependsOn must be an array`);
+    }
+    const normalizedDependsOn = dependsOn === undefined
+      ? undefined
+      : dependsOn.map((dependency) => {
+        if (typeof dependency !== 'string' || dependency.trim().length === 0) {
+          throw new Error(`artifacts[${i}].dependsOn must contain non-empty artifact ids`);
+        }
+        return dependency.trim();
+      });
+    ids.add(id);
+    records.push({
+      id,
+      title: typeof record.title === 'string' ? record.title : undefined,
+      url,
+      providerId: typeof record.providerId === 'string' ? record.providerId : undefined,
+      branch: typeof record.branch === 'string' ? record.branch : undefined,
+      baseBranch: typeof record.baseBranch === 'string' ? record.baseBranch : undefined,
+      dependsOn: normalizedDependsOn,
+    });
+  }
+
+  for (let i = 0; i < records.length; i += 1) {
+    const artifact = records[i];
+    for (const dependency of artifact.dependsOn ?? []) {
+      if (!ids.has(dependency)) {
+        throw new Error(`artifacts[${i}].dependsOn references unknown artifact "${dependency}"`);
+      }
+      if (dependency === artifact.id) {
+        throw new Error(`artifacts[${i}].dependsOn must not reference itself`);
+      }
+    }
+  }
+
+  if ((records[0]?.dependsOn?.length ?? 0) > 0) {
+    throw new Error('artifacts[0].dependsOn must be omitted or [] to start the review stack');
+  }
+  for (let i = 1; i < records.length; i += 1) {
+    const expectedDependency = records[i - 1]?.id;
+    const dependencies = records[i]?.dependsOn;
+    if (dependencies?.length !== 1 || dependencies[0] !== expectedDependency) {
+      throw new Error(`artifacts[${i}].dependsOn must be ["${expectedDependency}"] to keep the review stack linear`);
+    }
+  }
+
+  return records;
 }
 
 /**
