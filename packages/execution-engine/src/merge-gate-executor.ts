@@ -4,7 +4,7 @@ import type { TaskState } from '@invoker/workflow-core';
 import { BaseExecutor, type BaseEntry } from './base-executor.js';
 import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from './executor.js';
 import type { MergeRunnerHost } from './merge-runner.js';
-import { runMergeGateActionImpl } from './merge-runner.js';
+import { runMergeGateActionImpl, persistMergeGateMetadata } from './merge-runner.js';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 
 interface MergeGateEntry extends BaseEntry {
@@ -125,9 +125,27 @@ export class MergeGateExecutor extends BaseExecutor<MergeGateEntry> {
       this.emitOutput(handle.executionId, `[merge] Starting merge gate action: ${task.id}\n`);
       const result = await runMergeGateActionImpl(this.host, task, { gateWorkspacePath });
       if (result.taskChanges.execution) {
-        this.host.persistence.updateTask(task.id, {
-          execution: result.taskChanges.execution,
-        });
+        // Route through the orchestrator's lineage guard rather than writing
+        // straight to persistence. emitComplete below re-checks lineage when the
+        // worker response lands, but the direct metadata write happens first —
+        // so a gate that started against a now-superseded attempt/generation
+        // could otherwise clobber the task's branch/workspacePath/review fields
+        // before that guard ever runs.
+        const applied = persistMergeGateMetadata(
+          this.host,
+          task.id,
+          { execution: result.taskChanges.execution },
+          {
+            attemptId: entry.request.attemptId,
+            executionGeneration: entry.request.executionGeneration,
+          },
+        );
+        if (!applied) {
+          this.emitOutput(
+            handle.executionId,
+            `[merge] Skipped stale merge-gate metadata write for ${task.id} (superseded attempt/generation)\n`,
+          );
+        }
       }
       this.emitOutput(handle.executionId, `[merge] Merge gate action finished: ${task.id} status=${result.response.status}\n`);
       this.emitComplete(handle.executionId, this.withAttempt(entry.request, result.response));

@@ -1795,6 +1795,76 @@ export class Orchestrator {
     this.setTaskApprovalStatus(taskId, 'review_ready', 'task.review_ready', additionalChanges, expectedLineage);
   }
 
+  /**
+   * Lineage-guarded write for merge-gate execution side effects (branch,
+   * workspacePath, review metadata, fixed-integration fields).
+   *
+   * The merge-gate executor and merge runner persist these fields directly,
+   * *before* `emitComplete` / `handleWorkerResponse` run the normal
+   * worker-response lineage guard. A merge gate that started against an older
+   * attempt or generation could therefore clobber a task that has since
+   * advanced to a newer `selectedAttemptId` or `executionGeneration` (e.g. via
+   * retry or workflow recreation). This applies the same lineage check those
+   * direct writes skip — comparing the caller's captured attempt/generation
+   * against the live task — and drops the write when stale.
+   *
+   * Returns true when the write was applied, false when rejected as stale.
+   */
+  applyMergeGateExecutionMetadata(
+    taskId: string,
+    changes: TaskStateChanges,
+    expected: { attemptId?: string; executionGeneration?: number },
+  ): boolean {
+    this.refreshFromDb();
+    const task = this.stateGetTask(taskId);
+    if (!task) {
+      this.logger.warn('[merge-gate] STALE_METADATA_WRITE_REJECTED', {
+        taskId,
+        reason: 'task_missing',
+      });
+      return false;
+    }
+
+    const activeAttemptId = task.execution.selectedAttemptId;
+    if (
+      expected.attemptId !== undefined &&
+      (activeAttemptId === undefined || expected.attemptId !== activeAttemptId)
+    ) {
+      this.logger.warn('[merge-gate] STALE_METADATA_WRITE_REJECTED', {
+        taskId: task.id,
+        reason: 'attempt',
+        expectedAttemptId: expected.attemptId,
+        activeAttemptId: activeAttemptId ?? 'none',
+      });
+      return false;
+    }
+
+    const activeGeneration = this.getExecutionGeneration(task);
+    if (
+      expected.executionGeneration !== undefined &&
+      expected.executionGeneration !== activeGeneration
+    ) {
+      this.logger.warn('[merge-gate] STALE_METADATA_WRITE_REJECTED', {
+        taskId: task.id,
+        reason: 'generation',
+        expectedGeneration: expected.executionGeneration,
+        activeGeneration,
+      });
+      return false;
+    }
+
+    if (task.config.isMergeNode) {
+      mergeTrace('GATE_WS_APPLY_EXECUTION_METADATA', {
+        taskId: task.id,
+        workspacePath: changes.execution?.workspacePath ?? null,
+        branch: changes.execution?.branch ?? null,
+      });
+    }
+    this.persistence.updateTask(task.id, changes);
+    this.refreshFromDb();
+    return true;
+  }
+
   setFixAwaitingApproval(
     taskId: string,
     originalError: string,
