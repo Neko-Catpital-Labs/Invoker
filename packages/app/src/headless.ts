@@ -66,6 +66,10 @@ import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './work
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import type { RuntimeServices } from '@invoker/runtime-service';
 import { publishReviewGateCiFailedLifecycleEvent } from './lifecycle-event-bridge.js';
+import {
+  collectRecoveryWorkerStatus,
+  type RecoveryWorkerStatus,
+} from './recovery-worker-observability.js';
 
 export {
   DEFAULT_DELEGATION_TIMEOUT_MS,
@@ -1074,7 +1078,7 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       await headlessQuerySelect(args[1], deps);
       break;
     case 'worker':
-      await headlessWorker(args[1], deps);
+      await headlessWorker(args.slice(1), deps);
       break;
 
     // ── Deprecated aliases → query ──
@@ -1143,13 +1147,14 @@ const HEADLESS_WORKER_KINDS: ReadonlyArray<{ kind: string; available: boolean; n
   },
 ];
 
-async function headlessWorker(subCommand: string | undefined, deps: HeadlessDeps): Promise<void> {
+async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void> {
+  const subCommand = args[0] ?? 'list';
   if (subCommand === 'autofix') {
     const tick = createAutoFixRecoveryTick({
       store: deps.persistence,
       submitter: {
-        submit: (workflowId, priority, channel, args) => (
-          deps.persistence.enqueueWorkflowMutationIntent(workflowId, channel, args, priority)
+        submit: (workflowId, priority, channel, mutationArgs) => (
+          deps.persistence.enqueueWorkflowMutationIntent(workflowId, channel, mutationArgs, priority)
         ),
       },
       logger: deps.logger,
@@ -1165,14 +1170,60 @@ async function headlessWorker(subCommand: string | undefined, deps: HeadlessDeps
     return;
   }
 
-  if (subCommand && subCommand !== 'list' && subCommand !== 'status') {
+  if (subCommand !== 'list' && subCommand !== 'status') {
     throw new Error(`Unknown worker sub-command: "${subCommand}". Use: autofix, list, status`);
   }
-  process.stdout.write(`${BOLD}Worker kinds${RESET}\n`);
-  for (const worker of HEADLESS_WORKER_KINDS) {
-    const status = worker.available ? 'available' : 'unavailable';
-    process.stdout.write(`  ${worker.kind} — ${status} (${worker.note})\n`);
+
+  if (subCommand === 'list') {
+    process.stdout.write(`${BOLD}Worker kinds${RESET}\n`);
+    for (const worker of HEADLESS_WORKER_KINDS) {
+      const status = worker.available ? 'available' : 'unavailable';
+      process.stdout.write(`  ${worker.kind} — ${status} (${worker.note})\n`);
+    }
+    return;
   }
+
+  const flags = parseQueryFlags(args.slice(1));
+  const status = collectRecoveryWorkerStatus(deps.persistence);
+  const { formatAsJson, formatAsJsonl } = await import('./formatter.js');
+  switch (flags.output) {
+    case 'label':
+      process.stdout.write(`${status.workerId}\n`);
+      break;
+    case 'json':
+      process.stdout.write(formatAsJson(status) + '\n');
+      break;
+    case 'jsonl':
+      process.stdout.write(formatAsJsonl([status]) + '\n');
+      break;
+    default:
+      process.stdout.write(formatRecoveryWorkerStatus(status) + '\n');
+      break;
+  }
+}
+
+function formatRecoveryWorkerStatus(status: RecoveryWorkerStatus): string {
+  const lines = [
+    `${BOLD}Recovery worker${RESET}`,
+    `  kind: ${status.kind}`,
+    `  workerId: ${status.workerId}`,
+    `  owner: ${status.owner}`,
+    `  lastWakeupAt: ${status.lastWakeupAt ?? 'never'}`,
+    `  lastScanAt: ${status.lastScanAt ?? 'never'}`,
+    `  lastSubmitAt: ${status.lastSubmitAt ?? 'never'}`,
+    `  lastSkip: ${status.lastSkipAt ?? 'never'}${status.lastSkipReason ? ` (${status.lastSkipReason} task=${status.lastSkipTaskId})` : ''}`,
+    `  counts: wakeups=${status.wakeups} scans=${status.scans} submissions=${status.submissions} skips=${status.skips}`,
+  ];
+  if (status.recent.length > 0) {
+    lines.push('');
+    lines.push(`${BOLD}Recent recovery decisions${RESET}`);
+    for (const event of status.recent) {
+      const reason = event.reason ? ` reason=${event.reason}` : '';
+      const phase = event.phase ? ` phase=${event.phase}` : '';
+      lines.push(`  ${event.at} ${event.taskId} ${event.action}${phase}${reason}`);
+    }
+  }
+  return lines.join('\n');
 }
 
 async function headlessOwnerServe(deps: Pick<HeadlessDeps, 'isStandaloneOwnerIdle'>): Promise<void> {
