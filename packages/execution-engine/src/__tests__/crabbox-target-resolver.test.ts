@@ -239,6 +239,92 @@ describe('CrabboxTargetResolver.resolve', () => {
   });
 });
 
+describe('CrabboxTargetResolver.refreshLease', () => {
+  // Terminal restore re-inspects an already-leased machine by its persisted
+  // lease id (no warmup, no --wait) and rebuilds the SSH endpoint. This is the
+  // cross-surface read path that pairs with resolve()'s persisted metadata.
+
+  const refreshConfig = {
+    id: 'crab1',
+    crabboxCommand: '/usr/local/bin/crabbox',
+    statusArgs: ['--region', 'iad'],
+    port: 2200,
+  };
+
+  it('runs a no-wait status call and returns the refreshed SSH endpoint', async () => {
+    const { runner, calls } = scriptRunner([
+      ok(
+        JSON.stringify({
+          id: 'lease-abc',
+          slug: 'happy-crab',
+          status: 'ready',
+          sshHost: '198.51.100.7',
+          sshUser: 'fresh-runner',
+          sshPort: 2299,
+          sshKey: '/leased/fresh-key',
+        }),
+      ),
+    ]);
+
+    const target = await new CrabboxTargetResolver(runner).refreshLease(
+      refreshConfig,
+      'lease-abc',
+    );
+
+    // Status call omits --wait so a dead/not-ready lease reports immediately.
+    expect(calls[0]).toEqual({
+      command: '/usr/local/bin/crabbox',
+      args: ['status', '--id', 'lease-abc', '--json', '--region', 'iad'],
+    });
+    expect(target).toEqual({
+      host: '198.51.100.7',
+      user: 'fresh-runner',
+      sshKeyPath: '/leased/fresh-key',
+      port: 2299,
+    });
+  });
+
+  it('falls back to the configured port when status omits sshPort', async () => {
+    const { runner } = scriptRunner([
+      ok(
+        JSON.stringify({
+          status: 'ready',
+          sshHost: '198.51.100.7',
+          sshUser: 'fresh-runner',
+          sshKey: '/leased/fresh-key',
+        }),
+      ),
+    ]);
+
+    const target = await new CrabboxTargetResolver(runner).refreshLease(
+      refreshConfig,
+      'lease-abc',
+    );
+
+    expect(target.port).toBe(2200);
+  });
+
+  it('rejects an expired/stopped lease with an actionable error', async () => {
+    const { runner } = scriptRunner([
+      ok(JSON.stringify({ id: 'lease-abc', status: 'expired' })),
+    ]);
+
+    await expect(
+      new CrabboxTargetResolver(runner).refreshLease(refreshConfig, 'lease-abc'),
+    ).rejects.toThrow(/expired or been stopped/);
+  });
+
+  it('rejects when the status call exits non-zero (lease missing/unreachable)', async () => {
+    const { runner } = scriptRunner([
+      { stdout: '', stderr: 'lease not found', exitCode: 4 },
+    ]);
+
+    await expect(
+      new CrabboxTargetResolver(runner).refreshLease(refreshConfig, 'lease-abc'),
+    ).rejects.toThrow(/missing or unreachable.*lease not found/s);
+  });
+});
+
 describe('buildCrabboxStopArgs', () => {
   it('builds `stop <leaseId>` plus configured stopArgs', () => {
     expect(
