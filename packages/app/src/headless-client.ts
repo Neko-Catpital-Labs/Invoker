@@ -322,7 +322,7 @@ function parseAutofixWorkerOptions(args: string[]): { count: number | undefined;
   return { count, intervalMs };
 }
 
-async function resolveOwnerForAutofixWorker(deps: HeadlessClientDeps): Promise<ResolvedOwner> {
+async function resolveOwnerForAutofixWorker(deps: HeadlessClientDeps): Promise<ResolvedOwner | null> {
   const resolver = createOwnerResolver(
     {
       messageBus: deps.messageBus,
@@ -337,18 +337,31 @@ async function resolveOwnerForAutofixWorker(deps: HeadlessClientDeps): Promise<R
       maxBootstrapAttempts: POST_BOOTSTRAP_OWNER_RESTART_ATTEMPTS,
     },
   );
-  return resolver.resolve(true);
+  try {
+    return await resolver.resolve(true);
+  } catch (err) {
+    if (err instanceof Error && /Could not resolve a standalone-capable owner/.test(err.message)) {
+      return null;
+    }
+    throw err;
+  }
 }
 
 async function runAutofixWorkerCommand(args: string[], deps: HeadlessClientDeps): Promise<number> {
   const options = parseAutofixWorkerOptions(args);
   const resolved = await resolveOwnerForAutofixWorker(deps);
+  if (resolved === null) {
+    process.stderr.write(
+      `${RED}Error:${RESET} Autofix worker could not reach a standalone shared owner after bootstrap.\n`,
+    );
+    return 1;
+  }
   process.stdout.write(`[worker:autofix] owner ready: ${resolved.owner.ownerId}\n`);
 
   const worker = createRecoveryWorker({
     logger: workerLogger,
     intervalMs: options.intervalMs,
-    installSignalHandlers: options.count === undefined,
+    installSignalHandlers: false,
     tickOnStart: false,
   });
 
