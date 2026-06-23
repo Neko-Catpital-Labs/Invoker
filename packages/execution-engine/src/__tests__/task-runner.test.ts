@@ -113,6 +113,74 @@ afterEach(() => {
 });
 
 describe('TaskRunner', () => {
+  it('closes every current review gate artifact and continues after one close failure', async () => {
+    const logger = createMockLogger();
+    const closeReview = vi.fn()
+      .mockRejectedValueOnce(new Error('first close failed'))
+      .mockResolvedValue(undefined);
+    const tasks = [
+      makeTask({
+        id: '__merge__wf-1',
+        status: 'review_ready',
+        config: { workflowId: 'wf-1', isMergeNode: true },
+        execution: {
+          workspacePath: '/tmp/review-workspace',
+          reviewGate: {
+            activeGeneration: 4,
+            completion: { required: 'all', status: 'approved' },
+            artifacts: [
+              { id: 'contracts', providerId: 'pr-1', required: true, status: 'open', generation: 4 },
+              { id: 'runtime', providerId: 'pr-2', required: true, status: 'approved', generation: 4 },
+              { id: 'old', providerId: 'pr-old', required: true, status: 'open', generation: 3 },
+              { id: 'discarded', providerId: 'pr-discarded', required: true, status: 'discarded', generation: 4 },
+              { id: 'local', required: true, status: 'open', generation: 4 },
+            ],
+          },
+        },
+      }),
+    ];
+    const runner = new TaskRunner({
+      orchestrator: { getAllTasks: () => tasks } as any,
+      persistence: {} as any,
+      executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+      mergeGateProvider: { closeReview } as any,
+      logger,
+      cwd: '/tmp/fallback',
+    });
+
+    await runner.closeWorkflowReview('wf-1');
+
+    expect(closeReview).toHaveBeenCalledTimes(2);
+    expect(closeReview).toHaveBeenNthCalledWith(1, { identifier: 'pr-1', cwd: '/tmp/review-workspace' });
+    expect(closeReview).toHaveBeenNthCalledWith(2, { identifier: 'pr-2', cwd: '/tmp/review-workspace' });
+    expect(logger.error).toHaveBeenCalledWith('[merge-gate] Failed to close review pr-1', { err: expect.any(Error) });
+  });
+
+  it('falls back to scalar review id when no review gate exists', async () => {
+    const closeReview = vi.fn().mockResolvedValue(undefined);
+    const tasks = [
+      makeTask({
+        id: '__merge__wf-1',
+        status: 'review_ready',
+        config: { workflowId: 'wf-1', isMergeNode: true },
+        execution: {
+          reviewId: 'scalar-pr',
+          workspacePath: '/tmp/review-workspace',
+        },
+      }),
+    ];
+    const runner = new TaskRunner({
+      orchestrator: { getAllTasks: () => tasks } as any,
+      persistence: {} as any,
+      executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+      mergeGateProvider: { closeReview } as any,
+      cwd: '/tmp/fallback',
+    });
+
+    await runner.closeWorkflowReview('wf-1');
+
+    expect(closeReview).toHaveBeenCalledWith({ identifier: 'scalar-pr', cwd: '/tmp/review-workspace' });
+  });
   it('sends attemptId and executionGeneration in work requests and preserves them in responses', async () => {
     const handleWorkerResponse = vi.fn();
     let seenRequest: any;
