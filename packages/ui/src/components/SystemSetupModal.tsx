@@ -95,9 +95,14 @@ export function SystemSetupModal({
                             <td className="px-4 py-3 text-gray-100">{target.name}</td>
                             <td className="px-4 py-3 text-gray-400 font-mono text-xs break-all">{target.path}</td>
                             <td className="px-4 py-3">
-                              <span className={target.upToDate ? 'text-green-400' : target.installed ? 'text-yellow-300' : 'text-amber-300'}>
+                              <div className={target.upToDate ? 'text-green-400' : target.installed ? 'text-yellow-300' : 'text-amber-300'}>
                                 {target.upToDate ? 'Installed and up to date' : target.installed ? 'Installed, update available' : 'Not installed'}
-                              </span>
+                              </div>
+                              {target.diagnostic && (
+                                <div className="mt-1 text-xs text-gray-400">
+                                  {target.diagnostic}
+                                </div>
+                              )}
                             </td>
                           </tr>
                         ))}
