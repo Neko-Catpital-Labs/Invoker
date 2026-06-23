@@ -229,8 +229,14 @@ test.describe('Embedded terminal PTY', () => {
     await expect(page.getByTestId('terminal-drawer-body')).toHaveClass(/overflow-hidden/);
     await expect(terminalPane).toHaveClass(/overflow-hidden/);
 
+    const firstLine = terminalPane.getByText('inv196-line-001');
+    await expect(firstLine).not.toBeVisible();
+
     await terminalPane.hover();
-    await page.mouse.wheel(0, -5000);
-    await expect(terminalPane.getByText('inv196-line-001')).toBeVisible({ timeout: 10000 });
+    for (let i = 0; i < 12; i += 1) {
+      await page.mouse.wheel(0, -800);
+      if (await firstLine.isVisible()) break;
+    }
+    await expect(firstLine).toBeVisible({ timeout: 10000 });
   });
 });
