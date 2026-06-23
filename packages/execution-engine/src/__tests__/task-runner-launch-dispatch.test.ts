@@ -354,3 +354,91 @@ describe('TaskRunner launch-dispatch wiring', () => {
     expect(env.executor.start).not.toHaveBeenCalled();
   });
 });
+
+describe('TaskRunner post-start lineage guard', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function workspaceWrites(updateTask: ReturnType<typeof vi.fn>): unknown[] {
+    return updateTask.mock.calls
+      .map(([, changes]: any) => changes?.execution?.workspacePath)
+      .filter((ws: unknown) => ws !== undefined);
+  }
+
+  it('drops stale post-start metadata when generation advances while attempt id is unchanged', async () => {
+    // Launch is accepted at generation 1; executor.start resolves only after
+    // the live task has advanced to generation 2 (same selectedAttemptId, as a
+    // same-attempt restart would produce). markTaskRunningAfterLaunch would
+    // accept this (attempt id matches), so the lineage guard must catch it.
+    let env!: RunnerEnv;
+    const task = makeTask(); // generation 1, selectedAttemptId 'attempt-1'
+    const advanced = makeTask({
+      execution: { selectedAttemptId: 'attempt-1', generation: 2, phase: 'executing' },
+    });
+    env = buildRunnerEnv(task, {
+      startImpl: async (request) => {
+        // Generation advances while executor.start() is in flight.
+        env.orchestrator.getTask.mockReturnValue(advanced);
+        return {
+          executionId: `exec-${request.actionId}`,
+          taskId: request.actionId,
+          workspacePath: '/tmp/stale-ws',
+          branch: `experiment/${request.actionId}-stale`,
+          agentSessionId: 'sess-stale',
+          containerId: 'container-stale',
+        };
+      },
+    });
+    const launchOutbox = makeLaunchOutbox();
+
+    await env.runner.executeTask(task, { dispatchId: 77, launchOutbox });
+
+    // executor.start resolved, but the launch is recognized as superseded.
+    expect(env.executor.start).toHaveBeenCalledTimes(1);
+    // The generation gap is caught before promoting the launch to running.
+    expect(env.orchestrator.markTaskRunningAfterLaunch).not.toHaveBeenCalled();
+    // No stale workspace/branch/session/container metadata reaches the task row.
+    expect(workspaceWrites(env.persistence.updateTask)).toHaveLength(0);
+    // The spawned handle is killed, consistent with the stale-attempt path.
+    expect(env.executor.kill).toHaveBeenCalledTimes(1);
+    // No active execution is registered for the superseded launch.
+    expect((env.runner as any).activeExecutions.size).toBe(0);
+    // The dispatch row is failed the same way a stale-attempt rejection fails it.
+    expect(launchOutbox.completeCalls).toHaveLength(0);
+    expect(launchOutbox.failCalls).toHaveLength(1);
+    expect(launchOutbox.failCalls[0][0]).toBe(77);
+    expect((launchOutbox.failCalls[0][1] as Error).message).toMatch(/Launch rejected/);
+    // Observability: the guard records why the launch was dropped.
+    expect(env.persistence.logEvent).toHaveBeenCalledWith(
+      task.id,
+      'task.executor.stale_post_start_launch',
+      expect.objectContaining({
+        attemptId: 'attempt-1',
+        startGeneration: 1,
+        currentGeneration: 2,
+      }),
+    );
+  });
+
+  it('persists start metadata and registers the execution for a current (non-stale) launch', async () => {
+    const task = makeTask(); // generation stays 1 throughout
+    const env = buildRunnerEnv(task);
+    const launchOutbox = makeLaunchOutbox();
+
+    const run = env.runner.executeTask(task, { dispatchId: 88, launchOutbox });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    // The valid launch is promoted to running and persists its metadata.
+    expect(env.orchestrator.markTaskRunningAfterLaunch).toHaveBeenCalledWith(task.id, 'attempt-1');
+    expect(workspaceWrites(env.persistence.updateTask)).toContain('/tmp/mock-ws');
+    expect(env.executor.kill).not.toHaveBeenCalled();
+    expect((env.runner as any).activeExecutions.size).toBe(1);
+
+    env.triggerComplete();
+    await run;
+
+    expect(launchOutbox.completeCalls).toEqual([88]);
+    expect(launchOutbox.failCalls).toHaveLength(0);
+  });
+});
