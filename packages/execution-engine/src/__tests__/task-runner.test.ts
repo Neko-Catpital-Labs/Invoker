@@ -2705,7 +2705,7 @@ describe('TaskRunner', () => {
       expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
         config: expect.objectContaining({ runnerKind: 'worktree' }),
         execution: expect.objectContaining({ branch: 'plan/feature', workspacePath: '/tmp/mock-wt' }),
-      }));
+      }), expect.objectContaining({ generation: 0 }));
     });
   });
 
@@ -3081,7 +3081,7 @@ describe('TaskRunner', () => {
       expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
         config: expect.objectContaining({ runnerKind: 'worktree' }),
         execution: expect.objectContaining({ branch: 'plan/feature', workspacePath: '/tmp/mock-wt' }),
-      }));
+      }), expect.objectContaining({ generation: 0 }));
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
       expect(onComplete).toHaveBeenCalledWith(
         '__merge__wf-1',
@@ -3270,8 +3270,23 @@ describe('TaskRunner', () => {
           reviewUrl: 'https://github.com/owner/repo/pull/42',
           reviewId: 'owner/repo#42',
           reviewStatus: 'Awaiting review',
+          reviewGate: expect.objectContaining({
+            activeGeneration: 0,
+            completion: { required: 'all', status: 'approved' },
+            artifacts: [expect.objectContaining({
+              id: 'owner/repo#42',
+              title: 'Test Workflow',
+              url: 'https://github.com/owner/repo/pull/42',
+              providerId: 'owner/repo#42',
+              branch: 'plan/feature',
+              baseBranch: 'master',
+              required: true,
+              status: 'open',
+              generation: 0,
+            })],
+          }),
         }),
-      }));
+      }), expect.objectContaining({ generation: 0 }));
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
       expect(onComplete).toHaveBeenCalledWith(
         '__merge__wf-1',
@@ -3384,7 +3399,7 @@ describe('TaskRunner', () => {
           workspacePath: gateWorkspace,
           branch: 'plan/example',
         }),
-      }));
+      }), expect.objectContaining({ generation: 0 }));
     });
 
     it('reproduces wf-1778431030512-12 visual-proof markdown in the merge-gate PR body', async () => {
@@ -3548,7 +3563,7 @@ console.log(JSON.stringify(out));
       expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
         config: expect.objectContaining({ runnerKind: 'worktree' }),
         execution: expect.objectContaining({ workspacePath: undefined }),
-      }));
+      }), expect.objectContaining({ generation: 0 }));
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
     });
 
@@ -3679,8 +3694,23 @@ console.log(JSON.stringify(out));
           reviewUrl: 'https://github.com/owner/repo/pull/55',
           reviewId: 'owner/repo#55',
           reviewStatus: 'Awaiting review',
+          reviewGate: expect.objectContaining({
+            activeGeneration: 0,
+            completion: { required: 'all', status: 'approved' },
+            artifacts: [expect.objectContaining({
+              id: 'owner/repo#55',
+              title: 'Test Workflow',
+              url: 'https://github.com/owner/repo/pull/55',
+              providerId: 'owner/repo#55',
+              branch: 'plan/feature',
+              baseBranch: 'master',
+              required: true,
+              status: 'open',
+              generation: 0,
+            })],
+          }),
         }),
-      }));
+      }), expect.objectContaining({ generation: 0 }));
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
     });
 
@@ -3861,7 +3891,7 @@ console.log(JSON.stringify(out));
       expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
         config: expect.objectContaining({ runnerKind: 'worktree' }),
         execution: expect.objectContaining({ workspacePath: undefined }),
-      }));
+      }), expect.objectContaining({ generation: 0 }));
     });
 
     it('approveMerge performs the final merge step', async () => {
@@ -4300,6 +4330,7 @@ console.log(JSON.stringify(out));
         expect.objectContaining({
           config: expect.objectContaining({ summary: '## Summary\nTest summary' }),
         }),
+        expect.objectContaining({ generation: 0 }),
       );
     });
 
@@ -4360,6 +4391,7 @@ console.log(JSON.stringify(out));
         expect.objectContaining({
           config: expect.objectContaining({ summary: '## Summary\nManual summary' }),
         }),
+        expect.objectContaining({ generation: 0 }),
       );
     });
 
@@ -4936,6 +4968,7 @@ console.log(JSON.stringify(out));
             execution: { reviewId: 'owner/repo#201' },
           }),
         ];
+
         const orchestrator = {
           getTask: (id: string) => allTasks.find(t => t.id === id),
           getAllTasks: () => allTasks,
@@ -4965,6 +4998,7 @@ console.log(JSON.stringify(out));
           cwd: '/runner-base-cwd',
         });
       });
+
 
       it('merged status with workspacePath triggers orchestrator.approve', async () => {
         const downstream = makeTask({
