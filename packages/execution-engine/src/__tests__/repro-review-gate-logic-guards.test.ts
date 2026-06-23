@@ -8,7 +8,7 @@ import type { TaskState } from '@invoker/workflow-core';
 // Multi PR Review Gate stack, plus the sibling sites they also occur in.
 //
 //  #1757  isInvokerRepoUrl / parseMakePrStackPublishResult (pr-authoring)
-//  #1811  mapReviewGateArtifactStatus closed-vs-approved precedence (task-runner)
+//  #1811  mapReviewGateArtifactStatus lifecycle/review-decision collapse (task-runner)
 //  #1865  reviewPollStillMatches stale-write guard (task-runner)
 //  #1811 sibling: pollMergeGateTask scalar (legacy single-PR) path completing a closed PR
 
@@ -30,9 +30,8 @@ function makeRunner(overrides: Partial<TaskRunnerConfig> = {}): TaskRunner {
 }
 
 interface ApprovalStatusInput {
-  approved?: boolean;
+  lifecycle?: 'open' | 'closed' | 'merged';
   rejected?: boolean;
-  closed?: boolean;
   statusText?: string;
 }
 
@@ -100,18 +99,19 @@ describe('repro #1757: parseMakePrStackPublishResult normalizes/validates identi
 
 // ── #1811: mapReviewGateArtifactStatus ───────────────────
 
-describe('repro #1811: mapReviewGateArtifactStatus gives closed precedence over approved', () => {
-  it('maps a closed-but-approved PR to "closed" (so it cannot complete the gate)', () => {
+describe('repro #1811: mapReviewGateArtifactStatus collapses lifecycle + review decision', () => {
+  it('maps a closed PR to "closed" even when changes were requested (lifecycle wins)', () => {
     const p = probe(makeRunner());
-    expect(p.mapReviewGateArtifactStatus({ approved: true, rejected: false, closed: true })).toBe('closed');
+    // closed+merged is now unrepresentable; closed+rejected is the real overlap.
+    expect(p.mapReviewGateArtifactStatus({ lifecycle: 'closed', rejected: true })).toBe('closed');
   });
 
   it('preserves the other mappings', () => {
     const p = probe(makeRunner());
-    expect(p.mapReviewGateArtifactStatus({ approved: true })).toBe('approved');
-    expect(p.mapReviewGateArtifactStatus({ rejected: true })).toBe('changes_requested');
-    expect(p.mapReviewGateArtifactStatus({ closed: true })).toBe('closed');
-    expect(p.mapReviewGateArtifactStatus({})).toBe('open');
+    expect(p.mapReviewGateArtifactStatus({ lifecycle: 'merged', rejected: false })).toBe('approved');
+    expect(p.mapReviewGateArtifactStatus({ lifecycle: 'open', rejected: true })).toBe('changes_requested');
+    expect(p.mapReviewGateArtifactStatus({ lifecycle: 'closed', rejected: false })).toBe('closed');
+    expect(p.mapReviewGateArtifactStatus({ lifecycle: 'open', rejected: false })).toBe('open');
   });
 });
 
@@ -144,7 +144,7 @@ describe('repro #1865: reviewPollStillMatches blocks writes after the task left 
 // ── #1811 sibling: scalar (legacy single-PR) poll path ───
 
 describe('repro #1811 sibling: a closed PR must not complete a scalar merge gate', () => {
-  it('does not approve when checkApproval reports approved AND closed', async () => {
+  it('does not complete the gate when the PR is closed', async () => {
     const task = {
       id: '__merge__wf-1',
       description: 'merge gate',
@@ -167,7 +167,7 @@ describe('repro #1811 sibling: a closed PR must not complete a scalar merge gate
       updateTask: (id: string, changes: unknown) => { updateCalls.push({ id, changes }); return tasks.get(id); },
     };
     const mergeGateProvider = {
-      checkApproval: async () => ({ approved: true, closed: true, rejected: false, statusText: 'Closed (approved)' }),
+      checkApproval: async () => ({ lifecycle: 'closed', rejected: false, statusText: 'Closed' }),
     };
 
     const runner = makeRunner({
