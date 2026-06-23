@@ -1038,6 +1038,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE attempts ADD COLUMN claimed_at TEXT',
       'ALTER TABLE attempts ADD COLUMN lease_expires_at TEXT',
       'ALTER TABLE tasks ADD COLUMN task_state_version INTEGER NOT NULL DEFAULT 1',
+      // remote_lease_metadata: durable on-demand remote lease details for cleanup/terminal restore
+      'ALTER TABLE tasks ADD COLUMN remote_lease_metadata TEXT',
+      'ALTER TABLE attempts ADD COLUMN remote_lease_metadata TEXT',
     ];
     for (const sql of migrations) {
       try {
@@ -1536,6 +1539,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         docker_image,
         execution_agent,
         agent_name,
+        remote_lease_metadata,
         task_state_version
       ) VALUES (
         ?, ?, ?, ?, ?, ?,
@@ -1552,6 +1556,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?, ?, ?,
         ?, ?,
         ?, ?, ?, ?, ?,
+        ?,
         ?,
         ?,
         ?,
@@ -1614,6 +1619,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       cfg.dockerImage ?? null,
       cfg.executionAgent ?? null,
       exec.agentName ?? null,
+      exec.remoteLeaseMetadata ? JSON.stringify(exec.remoteLeaseMetadata) : null,
       task.taskStateVersion ?? 1,
     ]);
   }
@@ -1728,6 +1734,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         selectedExperiments: 'selected_experiments',
         experimentResults: 'experiment_results',
         reviewGate: 'review_gate',
+        remoteLeaseMetadata: 'remote_lease_metadata',
       };
 
       for (const [key, col] of Object.entries(execMap)) {
@@ -2477,14 +2484,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
         command_override, prompt_override,
         claimed_at, started_at, completed_at, exit_code, error, last_heartbeat_at, lease_expires_at,
         branch, commit_hash, summary, workspace_path, agent_session_id, container_id,
-        supersedes_attempt_id, created_at, merge_conflict
+        supersedes_attempt_id, created_at, merge_conflict, remote_lease_metadata
       ) VALUES (
         ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?,
         ?, ?,
         ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?,
-        ?, ?, ?
+        ?, ?, ?, ?
       )
     `, [
       attempt.id, attempt.nodeId, 0, attempt.queuePriority, attempt.status,
@@ -2503,6 +2510,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       attempt.supersedesAttemptId ?? null,
       attempt.createdAt.toISOString(),
       attempt.mergeConflict ? JSON.stringify(attempt.mergeConflict) : null,
+      attempt.remoteLeaseMetadata ? JSON.stringify(attempt.remoteLeaseMetadata) : null,
     ]);
   }
 
@@ -2548,7 +2556,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return this.rowToAttempt(row);
   }
 
-  updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'branch' | 'commit' | 'summary' | 'queuePriority' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void {
+  updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'branch' | 'commit' | 'summary' | 'queuePriority' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict' | 'remoteLeaseMetadata'>>): void {
     const setClauses: string[] = [];
     const values: any[] = [];
 
@@ -2568,6 +2576,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     if (changes.agentSessionId !== undefined) { setClauses.push('agent_session_id = ?'); values.push(changes.agentSessionId); }
     if (changes.containerId !== undefined) { setClauses.push('container_id = ?'); values.push(changes.containerId); }
     if (changes.mergeConflict !== undefined) { setClauses.push('merge_conflict = ?'); values.push(changes.mergeConflict ? JSON.stringify(changes.mergeConflict) : null); }
+    if (changes.remoteLeaseMetadata !== undefined) { setClauses.push('remote_lease_metadata = ?'); values.push(changes.remoteLeaseMetadata ? JSON.stringify(changes.remoteLeaseMetadata) : null); }
 
     if (setClauses.length === 0) return;
     values.push(attemptId);
@@ -2825,6 +2834,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         generation: row.execution_generation ?? 0,
         selectedAttemptId: row.selected_attempt_id ?? undefined,
         autoFixAttempts: row.auto_fix_attempts ?? undefined,
+        remoteLeaseMetadata: row.remote_lease_metadata ? JSON.parse(row.remote_lease_metadata) : undefined,
       },
       taskStateVersion: row.task_state_version ?? 1,
     };
@@ -2932,6 +2942,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       supersedesAttemptId: row.supersedes_attempt_id ?? undefined,
       createdAt: new Date(row.created_at),
       mergeConflict: row.merge_conflict ? JSON.parse(row.merge_conflict) : undefined,
+      remoteLeaseMetadata: row.remote_lease_metadata ? JSON.parse(row.remote_lease_metadata) : undefined,
     };
   }
 

@@ -47,15 +47,19 @@ vi.mock('../workflow-actions.js', () => ({
   autoFixOnReviewGateFailure: vi.fn(async () => undefined),
 }));
 
-vi.mock('../config.js', () => ({
-  loadConfig: vi.fn(() => ({
-    remoteTargets: { remote: { host: 'host' } },
-    executionPools: { pool: { members: [] } },
-    autoFixAgent: 'codex',
-    autoApproveAIFixes: true,
-  })),
-  resolveSecretsFilePath: vi.fn(() => '/tmp/secrets.env'),
-}));
+vi.mock('../config.js', async (importActual) => {
+  const actual = await importActual<typeof import('../config.js')>();
+  return {
+    ...actual,
+    loadConfig: vi.fn(() => ({
+      remoteTargets: { remote: { host: 'host' } },
+      executionPools: { pool: { members: [] } },
+      autoFixAgent: 'codex',
+      autoApproveAIFixes: true,
+    })),
+    resolveSecretsFilePath: vi.fn(() => '/tmp/secrets.env'),
+  };
+});
 
 function createLogger() {
   return {
