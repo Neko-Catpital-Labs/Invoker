@@ -133,3 +133,13 @@ proven by Commands A and B above. The competing **direct in-process dispatch** d
 explicitly rejected: its failure mode is exactly what these tests catch (a populated
 `workspacePath` / non-empty `topup` at mutation time). Re-running the two commands is the
 deterministic, reviewable evidence for any change that touches the launch path.
+
+## 8. Implementation outcome
+
+**Status:** consumed — the shipped code already matches this brief.
+
+The Durable Launch Outbox described in Section 1 is the design that currently lives in
+the codebase. This note closes the loop between the written decision and what shipped, so
+a later reader can trust that the brief is a record of the landed behavior, not just a
+proposal. Commands A and B in Section 4 remain the deterministic evidence; re-running them
+re-confirms that the implementation still honors the documented handoff invariant.
