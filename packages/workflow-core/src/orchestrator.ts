@@ -1584,9 +1584,15 @@ export class Orchestrator {
           });
           return [];
         }
+        // Lineage check on executionGeneration. Validate it whenever the
+        // response carries one — not only when attemptId is absent. A
+        // response can reuse a still-current selectedAttemptId while the
+        // execution generation has moved on; such a response is stale and
+        // must be rejected. Backwards compatible: producers that omit the
+        // field (undefined) are not subject to this check, but when both
+        // attemptId and executionGeneration are present, both must match.
         const activeGeneration = this.getExecutionGeneration(earlyTask);
         if (
-          !response.attemptId &&
           response.executionGeneration !== undefined &&
           response.executionGeneration !== activeGeneration
         ) {
