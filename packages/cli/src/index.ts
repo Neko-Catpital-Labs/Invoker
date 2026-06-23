@@ -9,6 +9,7 @@ import {
   ExecutorRegistry,
   TaskRunner,
   WorktreeExecutor,
+  createAutoFixRecoveryWorker,
   registerBuiltinAgents,
 } from '@invoker/execution-engine';
 import {
@@ -131,12 +132,14 @@ function usage(): string {
     'Usage:',
     '  invoker-cli run <plan.yaml> [--live|--standalone] [--db-dir <path>] [--config <path>] [--json]',
     '  invoker-cli doctor [--fix] [--json]',
+    '  invoker-cli worker autofix',
     '  invoker-cli --help',
     '  invoker-cli --version',
     '',
     'Commands:',
     '  run <plan.yaml>  Submit to a live Invoker UI when available, otherwise run standalone.',
     '  doctor          Check external runtime tools used by Invoker executors.',
+    '  worker autofix  Run the shared auto-fix recovery worker in the foreground.',
     '',
     'Options:',
     '  --live           Require a running Invoker UI owner and submit over IPC.',
@@ -520,11 +523,53 @@ async function createDefaultMessageBus(): Promise<MessageBus> {
   return bus;
 }
 
+/**
+ * Run the auto-fix recovery worker in the foreground. There is exactly one
+ * auto-fix engine: this builds the shared `createAutoFixRecoveryWorker` from
+ * `@invoker/execution-engine` (the same engine the app door uses) instead of a
+ * private poll loop, so the two doors can never run competing scans. The shared
+ * engine owns the scan and cadence; the CLI owns only the foreground lifetime —
+ * owner discovery, connect message, SIGINT/SIGTERM block, and a deterministic
+ * stop with the stopped message.
+ */
+async function runAutoFixWorker(bus: MessageBus): Promise<number> {
+  const owner = await discoverLiveOwner(bus);
+  // CLI owns the foreground signals so shutdown ordering is deterministic
+  // (signal -> unblock -> engine.stop() -> stopped message); the engine does
+  // not also install its own handlers.
+  const worker = createAutoFixRecoveryWorker({
+    logger: silentLogger,
+    installSignalHandlers: false,
+  });
+
+  worker.start();
+  const ownerSuffix = owner?.ownerId ? ` to owner ${owner.ownerId}` : '';
+  process.stdout.write(`Auto-fix worker connected${ownerSuffix}.\n`);
+
+  await new Promise<void>((resolveShutdown) => {
+    const shutdown = (): void => resolveShutdown();
+    process.once('SIGINT', shutdown);
+    process.once('SIGTERM', shutdown);
+  });
+
+  await worker.stop();
+  process.stdout.write('Auto-fix worker stopped.\n');
+  return 0;
+}
+
 export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps = {}): Promise<number> {
   let bus: MessageBus | undefined;
   try {
     if (argv[0] === 'doctor') {
       return runDoctor(argv.slice(1));
+    }
+    if (argv[0] === 'worker') {
+      const subcommand = argv[1];
+      if (subcommand !== 'autofix') {
+        throw new Error(`Unknown worker subcommand: ${subcommand ?? '(none)'}. Usage: invoker-cli worker autofix`);
+      }
+      bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
+      return await runAutoFixWorker(bus);
     }
     const parsed = parseArgs(argv);
     if (!parsed.command || parsed.command === '--help') {
