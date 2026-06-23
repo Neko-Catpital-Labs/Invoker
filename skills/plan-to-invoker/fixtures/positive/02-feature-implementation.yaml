@@ -14,7 +14,7 @@ description: |
 
   Includes comprehensive unit tests and build verification to ensure no breakage.
 onFinish: merge
-mergeMode: github
+mergeMode: external_review
 repoUrl: git@github.com:example-org/acme-repo.git
 baseBranch: master
 featureBranch: feature/add-date-formatter
