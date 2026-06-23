@@ -1702,10 +1702,17 @@ export class Orchestrator {
     status: 'awaiting_approval' | 'review_ready',
     eventName: 'task.awaiting_approval' | 'task.review_ready',
     additionalChanges?: TaskStateChanges,
+    expectedLineage?: TaskLineageExpectation,
   ): void {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) return;
+    if (!this.taskMatchesLineageExpectation(task, expectedLineage)) return;
+    // Stale-write guard: lineage (id/attempt/generation) is preserved across a
+    // same-attempt cancellation, so a late approval transition could resurrect a
+    // cancelled/failed task. Only apply the transition while the task is still
+    // executable.
+    if (!this.isExecutableResponseTask(task)) return;
     const id = task.id;
 
     const additionalExecution = additionalChanges?.execution;
@@ -1774,8 +1781,12 @@ export class Orchestrator {
    * Transition a running merge gate directly to review_ready.
    * Used by merge-gate execution when output is ready for human review.
    */
-  setTaskReviewReady(taskId: string, additionalChanges?: TaskStateChanges): void {
-    this.setTaskApprovalStatus(taskId, 'review_ready', 'task.review_ready', additionalChanges);
+  setTaskReviewReady(
+    taskId: string,
+    additionalChanges?: TaskStateChanges,
+    expectedLineage?: TaskLineageExpectation,
+  ): void {
+    this.setTaskApprovalStatus(taskId, 'review_ready', 'task.review_ready', additionalChanges, expectedLineage);
   }
 
   setFixAwaitingApproval(
@@ -4444,6 +4455,7 @@ export class Orchestrator {
         reviewUrl: parsed.reviewUrl,
         reviewId: parsed.reviewId,
         reviewStatus: parsed.reviewStatus,
+        reviewGate: parsed.reviewGate,
       },
     };
     this.setTaskApprovalStatus(taskId, 'review_ready', 'task.review_ready', changes);
