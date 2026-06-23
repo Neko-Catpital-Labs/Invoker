@@ -131,6 +131,45 @@ export interface DetachedExternalDependency {
 export type TaskRunPhase = 'launching' | 'executing';
 export type TaskHeartbeatSource = 'executor' | 'remote_workload';
 
+// ── Remote lease metadata ───────────────────────────────────
+// Durable record of an on-demand remote target lease so cleanup and
+// terminal restore can find the host after a restart. Provider-tagged so
+// new lease providers can be added without changing existing readers.
+
+/**
+ * Lease details for a Crabbox-provisioned ephemeral SSH target.
+ *
+ * Persisted on the task/attempt that owns the lease so that, after an
+ * Invoker restart, we can re-open a terminal to the leased host and stop
+ * the lease during cleanup without re-deriving it from the executor.
+ */
+export interface CrabboxRemoteLeaseMetadata {
+  readonly provider: 'crabbox';
+  /** Crabbox lease identifier used for status/stop calls. */
+  readonly leaseId: string;
+  /** Human-readable lease slug (e.g. for logs/terminals). */
+  readonly slug: string;
+  /** Config key of the remote target that created this lease. */
+  readonly targetId: string;
+  /** Reachable SSH host for the leased machine. */
+  readonly sshHost: string;
+  /** SSH user for the leased machine. */
+  readonly sshUser: string;
+  /** SSH port for the leased machine. */
+  readonly sshPort: number;
+  /** Path to the SSH identity file used to reach the leased machine. */
+  readonly sshKeyPath: string;
+  /** ISO timestamp when the lease expires. */
+  readonly expiresAt: string;
+  /** When to stop the lease after the task settles (e.g. 'completed', 'never'). */
+  readonly stopAfter: string;
+  /** Keep the lease alive on failure for debugging instead of stopping it. */
+  readonly keepOnFailure: boolean;
+}
+
+/** Provider-tagged durable lease metadata for a remote target. */
+export type RemoteLeaseMetadata = CrabboxRemoteLeaseMetadata;
+
 export type ReviewGateArtifactStatus =
   | 'pending'
   | 'open'
@@ -214,6 +253,12 @@ export interface TaskExecution {
   };
   readonly selectedAttemptId?: string;
   readonly autoFixAttempts?: number;
+  /**
+   * Durable lease metadata for an on-demand remote target (e.g. Crabbox),
+   * kept so cleanup and terminal restore can find the leased host after a
+   * restart. Absent for static SSH and local executors.
+   */
+  readonly remoteLeaseMetadata?: RemoteLeaseMetadata;
 }
 
 // ── Task State ──────────────────────────────────────────────
@@ -335,6 +380,8 @@ export interface Attempt {
   readonly workspacePath?: string;
   readonly agentSessionId?: string;
   readonly containerId?: string;
+  /** Durable lease metadata for an on-demand remote target (e.g. Crabbox). */
+  readonly remoteLeaseMetadata?: RemoteLeaseMetadata;
 
   // ── Lineage ──
   readonly supersedesAttemptId?: string;
