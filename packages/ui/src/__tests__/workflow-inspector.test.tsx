@@ -189,7 +189,37 @@ describe('WorkflowInspector', () => {
     expect(onSetMergeMode).toHaveBeenCalledWith('wf-1', 'external_review');
   });
 
-  it('hides the conversion affordance once the merge gate already has a reviewUrl', () => {
+  it('exposes the workflow-level merge-mode select for a workflow-only selection and converts to external_review', () => {
+    const onSetMergeMode = vi.fn();
+    const mergeTask = makeTask({
+      id: '__merge__wf-1',
+      description: 'Review gate',
+      status: 'pending',
+      config: { workflowId: 'wf-1', isMergeNode: true },
+      execution: {},
+    });
+
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'running', mergeMode: 'manual' }}
+        task={null}
+        workflowTasks={new Map([[mergeTask.id, mergeTask]])}
+        collapsed={false}
+        advancedExpanded={false}
+        onSetMergeMode={onSetMergeMode}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    const select = screen.getByTestId('merge-mode-select');
+    expect(select).toHaveValue('manual');
+
+    fireEvent.change(select, { target: { value: 'external_review' } });
+    expect(onSetMergeMode).toHaveBeenCalledWith('wf-1', 'external_review');
+  });
+
+  it('hides the conversion affordance once the merge gate already has a reviewUrl but keeps the merge-mode select visible', () => {
     render(
       <WorkflowInspector
         workflow={{ ...workflow, status: 'review_ready', mergeMode: 'manual' }}
@@ -209,6 +239,8 @@ describe('WorkflowInspector', () => {
     );
 
     expect(screen.queryByTestId('convert-to-external-review-button')).not.toBeInTheDocument();
+    // Mode visibility is preserved even though the one-click conversion is gone.
+    expect(screen.getByTestId('merge-mode-select')).toHaveValue('manual');
   });
 
   it('hides the conversion affordance when the workflow is already external_review', () => {
