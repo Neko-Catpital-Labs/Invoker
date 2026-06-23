@@ -11,8 +11,8 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect } from 'react';
 import yaml from 'js-yaml';
+import type { ActionGraphNode, ReviewGateQueryResponse, TerminalSessionDescriptor } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
-import type { ActionGraphNode, TerminalSessionDescriptor } from '@invoker/contracts';
 import { useTasks } from './hooks/useTasks.js';
 import { useQueueStatus } from './hooks/useQueueStatus.js';
 import { useInvoker } from './hooks/useInvoker.js';
@@ -393,6 +393,7 @@ export function App() {
   const lastGoodSelectedWorkflowGraphRef = useRef<SelectedWorkflowGraphSnapshot | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
+  const [reviewGateByWorkflowId, setReviewGateByWorkflowId] = useState<Record<string, ReviewGateQueryResponse | null>>({});
   const [stickySelectedWorkflow, setStickySelectedWorkflow] = useState<WorkflowMeta | null>(null);
   const [workflowSelectionDismissed, setWorkflowSelectionDismissed] = useState(false);
   const [modal, setModal] = useState<ModalState>({ type: 'none' });
@@ -669,6 +670,29 @@ export function App() {
     next.set(workflowForDag.id, workflowForDag);
     return next;
   }, [displayedSelectedWorkflowGraph, selectedWorkflow, workflows]);
+
+  useEffect(() => {
+    const workflowId = selectedWorkflow?.id;
+    if (!workflowId) return;
+    const getReviewGate = window.invoker?.getReviewGate;
+    if (!getReviewGate) {
+      setReviewGateByWorkflowId((prev) => ({ ...prev, [workflowId]: null }));
+      return;
+    }
+    let cancelled = false;
+    void getReviewGate(workflowId)
+      .then((reviewGate) => {
+        if (cancelled) return;
+        setReviewGateByWorkflowId((prev) => ({ ...prev, [workflowId]: reviewGate }));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setReviewGateByWorkflowId((prev) => ({ ...prev, [workflowId]: null }));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedWorkflow?.id, tasks]);
 
   useEffect(() => {
     if (!selectedWorkflowId) {
@@ -2038,6 +2062,7 @@ export function App() {
               workflow={displayedSelectedWorkflowGraph?.workflow ?? selectedWorkflow}
               task={selectedTask}
               workflowTasks={displayedSelectedWorkflowGraph?.tasks ?? miniDagTasks}
+              reviewGate={selectedWorkflow ? reviewGateByWorkflowId[selectedWorkflow.id] ?? null : null}
               remoteTargets={remoteTargets}
               executionPools={executionPools}
               executionAgents={executionAgents}
