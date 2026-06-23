@@ -500,6 +500,9 @@ importers:
         specifier: ^0.8.0
         version: 0.8.0(xterm@5.3.0)
     devDependencies:
+      '@mergifyio/vitest':
+        specifier: ^0.3.0
+        version: 0.3.0(vitest@3.2.4(@types/debug@4.1.13)(@types/node@25.3.3)(jiti@1.21.7)(jsdom@25.0.1)(yaml@2.8.2))
       '@testing-library/jest-dom':
         specifier: ^6.9.1
         version: 6.9.1
@@ -4986,6 +4989,13 @@ snapshots:
       '@opentelemetry/exporter-trace-otlp-proto': 0.218.0(@opentelemetry/api@1.9.1)
       '@opentelemetry/resources': 2.8.0(@opentelemetry/api@1.9.1)
       '@opentelemetry/sdk-trace-base': 2.8.0(@opentelemetry/api@1.9.1)
+
+  '@mergifyio/vitest@0.3.0(vitest@3.2.4(@types/debug@4.1.13)(@types/node@25.3.3)(jiti@1.21.7)(jsdom@25.0.1)(yaml@2.8.2))':
+    dependencies:
+      '@mergifyio/ci-core': 0.3.0
+      '@opentelemetry/api': 1.9.1
+      '@opentelemetry/core': 2.8.0(@opentelemetry/api@1.9.1)
+      vitest: 3.2.4(@types/debug@4.1.13)(@types/node@25.3.3)(jiti@1.21.7)(jsdom@25.0.1)(yaml@2.8.2)
 
   '@mergifyio/vitest@0.3.0(vitest@3.2.4(@types/debug@4.1.13)(@types/node@25.3.3)(jiti@2.6.1)(jsdom@25.0.1)(yaml@2.8.2))':
     dependencies:
