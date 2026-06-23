@@ -28,7 +28,7 @@ import {
   type AgentRegistry,
   type TaskHeartbeatEvent,
 } from '@invoker/execution-engine';
-import { loadConfig, resolveSecretsFilePath, type InvokerConfig } from './config.js';
+import { loadConfig, resolveSecretsFilePath, staticRemoteTargets, type InvokerConfig } from './config.js';
 import { backupPlan } from './plan-backup.js';
 import { startApiServer } from './api-server.js';
 import { WorkflowMutationFacade } from './workflow-mutation-facade.js';
@@ -235,7 +235,7 @@ export function createHeadlessExecutor(
       imageName: deps.invokerConfig.docker?.imageName,
       secretsFile: resolveSecretsFilePath(deps.invokerConfig),
     },
-    remoteTargetsProvider: () => loadConfig().remoteTargets ?? {},
+    remoteTargetsProvider: () => staticRemoteTargets(loadConfig()),
     executionPoolsProvider: () => deps.invokerConfig.executionPools ?? {},
     onReviewGateCiFailure: deps.invokerConfig.autoFixCi
       ? async (trigger) => {
@@ -2533,8 +2533,8 @@ export async function resolveAgentSession(
         && t.config.runnerKind === 'ssh',
     );
     if (sshTask) {
-      const { loadConfig } = await import('./config.js');
-      const targets = loadConfig().remoteTargets ?? {};
+      const { loadConfig, staticRemoteTargets } = await import('./config.js');
+      const targets = staticRemoteTargets(loadConfig());
       const targetId = (sshTask.config as { poolMemberId?: string }).poolMemberId;
       const target = targetId
         ? targets[targetId]

@@ -10,7 +10,7 @@ import {
   type ExecutorRegistry,
 } from '@invoker/execution-engine';
 import type { Logger } from '@invoker/contracts';
-import { loadConfig, resolveSecretsFilePath, type InvokerConfig } from '../config.js';
+import { loadConfig, resolveSecretsFilePath, staticRemoteTargets, type InvokerConfig } from '../config.js';
 import { autoFixOnReviewGateFailure } from '../workflow-actions.js';
 
 export type TaskHandleMap = Map<string, { handle: ExecutorHandle; executor: Executor }>;
@@ -86,7 +86,7 @@ export function rebuildTaskRunner(deps: TaskRunnerWiringDeps): TaskRunner {
       imageName: deps.invokerConfig.docker?.imageName,
       secretsFile: resolveSecretsFilePath(deps.invokerConfig),
     },
-    remoteTargetsProvider: () => loadConfig().remoteTargets ?? {},
+    remoteTargetsProvider: () => staticRemoteTargets(loadConfig()),
     executionPoolsProvider: () => loadConfig().executionPools ?? {},
     onReviewGateCiFailure: deps.invokerConfig.autoFixCi
       ? async (trigger) => {
