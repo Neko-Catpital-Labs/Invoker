@@ -15,6 +15,10 @@ export interface AgentCommandSpec {
   fullPrompt?: string;
 }
 
+export interface AgentCommandBuildOptions {
+  executionModel?: string;
+}
+
 export const DEFAULT_EXECUTION_AGENT = 'claude';
 
 export interface ExecutionAgent {
@@ -37,10 +41,10 @@ export interface ExecutionAgent {
    */
   readonly bundledSkills?: readonly string[];
 
-  buildCommand(fullPrompt: string): AgentCommandSpec;
+  buildCommand(fullPrompt: string, options?: AgentCommandBuildOptions): AgentCommandSpec;
   buildResumeArgs(sessionId: string): { cmd: string; args: string[] };
   /** Build a command spec for a fix/conflict-resolution prompt. */
-  buildFixCommand?(prompt: string): AgentCommandSpec;
+  buildFixCommand?(prompt: string, options?: AgentCommandBuildOptions): AgentCommandSpec;
   getContainerRequirements?(): {
     mounts: Array<{ hostPath: string; containerPath: string; readonly?: boolean }>;
     env: Record<string, string>;
