@@ -522,8 +522,13 @@ export async function runMergeGateActionImpl(
     mergeTrace('GATE_WS_GATE_CLONE_CREATED', { taskId: task.id, gateWorkspacePath });
     console.log(`[merge-gate-workspace] gate clone created task=${task.id} path=${gateWorkspacePath}`);
   } else {
-    mergeTrace('GATE_WS_GATE_CLONE_SKIPPED', { taskId: task.id, reason: 'no_feature_branch' });
-    console.log(`[merge-gate-workspace] gate clone skipped task=${task.id} (no featureBranch on workflow)`);
+    // Distinguish the two skip reasons: a caller-provided gate workspace vs a
+    // workflow with no feature branch. The label was previously hardcoded to
+    // "no_feature_branch", which misdiagnosed runs that simply reused an
+    // already-provided workspace (e.g. PR #2170's gate).
+    const skipReason = gateWorkspacePath ? 'workspace_already_provided' : 'no_feature_branch';
+    mergeTrace('GATE_WS_GATE_CLONE_SKIPPED', { taskId: task.id, reason: skipReason });
+    console.log(`[merge-gate-workspace] gate clone skipped task=${task.id} (${skipReason})`);
   }
 
   if (featureBranch && (onFinish !== 'none' || mergeMode === 'external_review')) {

@@ -1,11 +1,12 @@
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { resolve } from 'node:path';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
 import type { TaskState } from '@invoker/workflow-core';
 import { BaseExecutor, type BaseEntry } from './base-executor.js';
 import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from './executor.js';
 import type { MergeRunnerHost } from './merge-runner.js';
 import { runMergeGateActionImpl } from './merge-runner.js';
-import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 
 interface MergeGateEntry extends BaseEntry {
   killed?: boolean;
@@ -23,16 +24,10 @@ export class MergeGateExecutor extends BaseExecutor<MergeGateEntry> {
     const workflow = task.config.workflowId
       ? this.host.persistence.loadWorkflow(task.config.workflowId)
       : undefined;
-    const baseBranch = workflow?.baseBranch ?? this.host.defaultBranch ?? await this.host.detectDefaultBranch();
-    const baseCheckoutRef = normalizeBranchForGithubCli(baseBranch);
-    const workspacePath = await this.host.createMergeWorktree(
-      baseCheckoutRef,
-      'gate-' + task.id.replace(/[^a-zA-Z0-9_-]/g, '-'),
-      workflow?.repoUrl,
-    );
+    const launchWorkspacePath = this.createLaunchWorkspace(task.id);
 
     const handle = this.createHandle(request);
-    handle.workspacePath = workspacePath;
+    handle.workspacePath = launchWorkspacePath;
     handle.branch = workflow?.featureBranch ?? undefined;
 
     const entry: MergeGateEntry = {
@@ -56,7 +51,7 @@ export class MergeGateExecutor extends BaseExecutor<MergeGateEntry> {
     }, this.heartbeatIntervalMs);
 
     setImmediate(() => {
-      void this.run(handle, task, workspacePath);
+      void this.run(handle, task, launchWorkspacePath);
     });
 
     return handle;
@@ -105,6 +100,21 @@ export class MergeGateExecutor extends BaseExecutor<MergeGateEntry> {
   async destroyAll(): Promise<void> {
     for (const [executionId, entry] of this.entries) {
       if (entry.heartbeatTimer) clearInterval(entry.heartbeatTimer);
+      entry.heartbeatTimer = undefined;
+      if (!entry.completed) {
+        entry.killed = true;
+        this.emitComplete(executionId, {
+          requestId: entry.request.requestId,
+          actionId: entry.request.actionId,
+          attemptId: entry.request.attemptId,
+          executionGeneration: entry.request.executionGeneration,
+          status: 'failed',
+          outputs: {
+            exitCode: 1,
+            error: 'Merge gate execution was stopped before completion',
+          },
+        });
+      }
       this.entries.delete(executionId);
     }
   }
@@ -117,18 +127,62 @@ export class MergeGateExecutor extends BaseExecutor<MergeGateEntry> {
     return task;
   }
 
-  private async run(handle: ExecutorHandle, task: TaskState, gateWorkspacePath: string): Promise<void> {
+  private createLaunchWorkspace(taskId: string): string {
+    const invokerHomeRoot = process.env.INVOKER_DB_DIR
+      ? resolve(process.env.INVOKER_DB_DIR)
+      : resolve(homedir(), '.invoker');
+    const launchRoot = resolve(invokerHomeRoot, 'merge-launches');
+    mkdirSync(launchRoot, { recursive: true });
+    return mkdtempSync(resolve(launchRoot, `launch-${taskId.replace(/[^a-zA-Z0-9_-]/g, '-')}-`));
+  }
+
+  private cleanupLaunchWorkspace(launchWorkspacePath: string, realWorkspacePath: string | undefined): void {
+    if (!realWorkspacePath || realWorkspacePath === launchWorkspacePath) return;
+    try {
+      rmSync(launchWorkspacePath, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup. The real gate clone has already replaced this path.
+    }
+  }
+
+  private async run(handle: ExecutorHandle, task: TaskState, launchWorkspacePath: string): Promise<void> {
     const entry = this.getEntry(handle);
     if (!entry || entry.completed || entry.killed) return;
 
     try {
       this.emitOutput(handle.executionId, `[merge] Starting merge gate action: ${task.id}\n`);
-      const result = await runMergeGateActionImpl(this.host, task, { gateWorkspacePath });
-      if (result.taskChanges.execution) {
+      const result = await runMergeGateActionImpl(this.host, task);
+      const executionChanges = result.taskChanges.execution
+        ? {
+          ...result.taskChanges.execution,
+          workspacePath: result.taskChanges.execution.workspacePath ?? launchWorkspacePath,
+        }
+        : undefined;
+
+      // The merge action may have taken minutes; destroyAll() can have killed or
+      // deleted this entry meanwhile and already emitted a terminal failure. Do
+      // not persist late execution state or complete again over that.
+      const liveEntry = this.getEntry(handle);
+      if (!liveEntry || liveEntry.completed || liveEntry.killed || entry.killed) {
+        this.cleanupLaunchWorkspace(launchWorkspacePath, executionChanges?.workspacePath);
+        return;
+      }
+
+      // Point the handle at the real gate clone before cleanup removes the launch
+      // workspace, so restored terminals (getTerminalSpec) never target a deleted
+      // directory.
+      if (executionChanges?.workspacePath) {
+        handle.workspacePath = executionChanges.workspacePath;
+      }
+      if (executionChanges?.branch) {
+        handle.branch = executionChanges.branch;
+      }
+      if (executionChanges) {
         this.host.persistence.updateTask(task.id, {
-          execution: result.taskChanges.execution,
+          execution: executionChanges,
         });
       }
+      this.cleanupLaunchWorkspace(launchWorkspacePath, executionChanges?.workspacePath);
       this.emitOutput(handle.executionId, `[merge] Merge gate action finished: ${task.id} status=${result.response.status}\n`);
       this.emitComplete(handle.executionId, this.withAttempt(entry.request, result.response));
     } catch (err) {
