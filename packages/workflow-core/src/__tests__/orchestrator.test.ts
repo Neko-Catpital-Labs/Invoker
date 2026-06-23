@@ -421,6 +421,59 @@ describe('Orchestrator', () => {
     });
 
 
+    it('ignores setTaskReviewReady for a stale execution generation', () => {
+      orchestrator.loadPlan({
+        name: 'Review ready lineage',
+        tasks: [{ id: 'task-a', description: 'task A' }],
+      });
+
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+      const mergeId = `__merge__${workflowId}`;
+      persistence.updateTask(mergeId, {
+        status: 'running',
+        execution: { generation: 2, selectedAttemptId: 'attempt-current' },
+      });
+
+      orchestrator.setTaskReviewReady(
+        mergeId,
+        { execution: { reviewId: 'owner/repo#stale', reviewUrl: 'https://example.test/stale' } },
+        { taskId: mergeId, selectedAttemptId: 'attempt-current', generation: 1 },
+      );
+
+      const task = orchestrator.getTask(mergeId)!;
+      expect(task.status).toBe('running');
+      expect(task.execution.reviewId).toBeUndefined();
+      expect(task.execution.reviewUrl).toBeUndefined();
+    });
+
+    it('ignores setTaskReviewReady for a non-executable task with matching lineage', () => {
+      orchestrator.loadPlan({
+        name: 'Review ready non-executable',
+        tasks: [{ id: 'task-a', description: 'task A' }],
+      });
+
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+      const mergeId = `__merge__${workflowId}`;
+      // Task failed on the same attempt: lineage (attempt + generation) is
+      // preserved, so the lineage guard alone would let a late review-ready
+      // write resurrect it.
+      persistence.updateTask(mergeId, {
+        status: 'failed',
+        execution: { generation: 1, selectedAttemptId: 'attempt-current' },
+      });
+
+      orchestrator.setTaskReviewReady(
+        mergeId,
+        { execution: { reviewId: 'owner/repo#late', reviewUrl: 'https://example.test/late' } },
+        { taskId: mergeId, selectedAttemptId: 'attempt-current', generation: 1 },
+      );
+
+      const task = orchestrator.getTask(mergeId)!;
+      expect(task.status).toBe('failed');
+      expect(task.execution.reviewId).toBeUndefined();
+      expect(task.execution.reviewUrl).toBeUndefined();
+    });
+
     it('discards review gate artifacts and clears scalar review fields on retry', () => {
       orchestrator.loadPlan({
         name: 'Review discard retry',
