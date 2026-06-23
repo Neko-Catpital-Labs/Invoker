@@ -568,6 +568,31 @@ export class TaskRunner {
     return false;
   }
 
+  /**
+   * Narrow post-start lineage check: returns `true` only when the live
+   * task's `generation` has advanced past the launch-time generation.
+   *
+   * Unlike {@link isLaunchStale} this deliberately does NOT reject on a
+   * `selectedAttemptId` mismatch — the post-start promotion already routes
+   * attempt-id mismatches through `markTaskRunningAfterLaunch`, and
+   * legitimate concurrent attempts of the same task must still register as
+   * active executions so they can be killed later. This guard is the missing
+   * piece: `markTaskRunningAfterLaunch` ignores the launch-time generation,
+   * so a launch accepted at generation N could otherwise persist metadata
+   * after the task advanced to N+1 with the same attempt id.
+   */
+  private hasGenerationAdvancedSinceLaunch(
+    taskId: string,
+    startGeneration: number,
+  ): boolean {
+    const current = this.orchestrator.getTask(taskId);
+    // If the task is no longer visible we cannot confirm the generation
+    // advanced — defer to the normal promotion path rather than dropping
+    // the launch here.
+    if (!current) return false;
+    return (current.execution.generation ?? 0) !== startGeneration;
+  }
+
   async executeTask(task: TaskState, dispatchOpts?: LaunchDispatchOptions): Promise<void> {
     traceExecution(
       `${RESTART_TO_BRANCH_TRACE} TaskRunner.executeTask BEGIN taskId=${task.id} isMergeNode=${Boolean(task.config.isMergeNode)} status=${task.status}`,
@@ -1078,7 +1103,11 @@ export class TaskRunner {
     // metadata and register an active execution after the task moved to N+1.
     // Detect that here and route through the same kill/cleanup path as the
     // stale-attempt rejection, before any post-start metadata is written.
-    const launchStaleAfterStart = this.isLaunchStale(task.id, attemptId, startGeneration);
+    // The check is narrow on purpose: only a *generation* advance is caught
+    // here. Attempt-id mismatches stay the responsibility of
+    // markTaskRunningAfterLaunch, so legitimate concurrent same-task attempts
+    // still register as active executions.
+    const launchStaleAfterStart = this.hasGenerationAdvancedSinceLaunch(task.id, startGeneration);
     const launchAccepted = launchStaleAfterStart
       ? false
       : (this.orchestrator.markTaskRunningAfterLaunch?.(task.id, attemptId) ?? true);
