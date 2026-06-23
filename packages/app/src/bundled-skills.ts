@@ -25,6 +25,12 @@ interface BundledSkillsContext {
   invokerHomeRoot?: string;
 }
 
+/**
+ * INV-86 skill-source resolution (docs/context/inv-86/experiment-brief.md):
+ * the owner resolves skills from `resourcesPath/skills` in a packaged build and
+ * from the repo `skills/` directory otherwise. Resolving the wrong root would
+ * make a packaged owner install from the wrong source.
+ */
 function resolveBundledSkillsSourceRoot(context: BundledSkillsContext): string | null {
   if (context.isPackaged) {
     const resourceRoot = context.resourcesPath ?? process.resourcesPath;

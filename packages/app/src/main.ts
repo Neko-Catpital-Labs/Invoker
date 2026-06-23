@@ -30,6 +30,13 @@
  *   electron dist/main.js --install-skills
  *
  * Using the same Electron binary for both modes provides a consistent runtime.
+ *
+ * Headless architecture (INV-86, see docs/context/inv-86/experiment-brief.md):
+ * single-writer owner with delegation. Mutating commands are delegated over IPC
+ * to one owner process that holds the DB writer lock (acquireDbWriterLock);
+ * read-only commands run in-process. The competing direct-multi-writer design is
+ * rejected because concurrent CLI calls would each open a writable DB handle and
+ * race the single-writer invariant.
  */
 
 import { app, BrowserWindow, ipcMain, nativeImage, shell } from 'electron';
@@ -436,6 +443,10 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
   const readOnly = options?.readOnly === true;
   const dbPath = path.join(invokerHomeRoot, 'invoker.db');
   if (!readOnly) {
+    // INV-86 single-writer invariant: only the writable owner takes this lock.
+    // Read-only commands skip it and never open a writable handle, which is what
+    // lets mutating commands safely delegate to one owner instead of opening
+    // their own writable DB (see docs/context/inv-86/experiment-brief.md).
     writerLock = acquireDbWriterLock(dbPath, `main:initServices pid=${process.pid}`);
   }
   persistence = await SQLiteAdapter.create(dbPath, {
@@ -731,8 +742,11 @@ if (isHeadless) {
       process.stdout.write(`running=${runningCount}/${maxConcurrency} queued=${queued.length}\n`);
     };
 
-    // Try delegation for mutating commands first (owner mode).
-    // In standalone mode we skip delegation and run locally.
+    // INV-86 routing decision (docs/context/inv-86/experiment-brief.md):
+    // command classification (isHeadlessMutatingCommand) is the gate that keeps
+    // the single-writer invariant. Only mutating commands delegate to the owner;
+    // a mutation that ran locally would reintroduce the rejected multi-writer
+    // path. In standalone mode we skip delegation and run locally.
     if (mutatingMode && !standaloneMode) {
       // Delegating headless commands must never become the IPC server.
       // Otherwise a transient submitter can steal the transport socket away
