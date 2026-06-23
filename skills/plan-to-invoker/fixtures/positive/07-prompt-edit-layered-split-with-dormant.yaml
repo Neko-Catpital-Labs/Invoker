@@ -7,7 +7,7 @@ description: |
   Demonstrates review-oriented decomposition for a large prompt-edit change by
   enforcing dependency-first layering and explicit dormant feature scaffolding.
 onFinish: pull_request
-mergeMode: github
+mergeMode: external_review
 repoUrl: https://github.com/EdbertChan/Invoker
 baseBranch: master
 featureBranch: plan/prompt-edit-layered-split-with-dormant
