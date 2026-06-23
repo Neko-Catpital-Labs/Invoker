@@ -436,9 +436,9 @@ function flush_task(    wc, and_count, valid_id, d, desc_lower, idx) {
 
 BEGIN {
   in_task = 0
+  in_tasks_block = 0
   in_dep_block = 0
   in_description_block = 0
-  in_prompt_block = 0
   errn = 0
   warnn = 0
   taskn = 0
@@ -463,6 +463,12 @@ BEGIN {
     on_finish = trim(strip_quotes(on_finish))
     enforce_layering = (tolower(on_finish) != "none")
     next
+  }
+
+  if (line ~ /^[A-Za-z_][A-Za-z0-9_-]*:[[:space:]]*/) {
+    top_key = tolower(line)
+    sub(/:.*/, "", top_key)
+    in_tasks_block = (top_key == "tasks")
   }
 
   if (line ~ /^[[:space:]]*externalDependencies:[[:space:]]*$/) {
@@ -493,7 +499,7 @@ BEGIN {
     in_dep_block = 0
   }
 
-  if (line ~ /^[[:space:]]*-[[:space:]]+id:[[:space:]]*/) {
+  if (in_tasks_block && line ~ /^[[:space:]]*-[[:space:]]+id:[[:space:]]*/) {
     flush_task()
     in_task = 1
     in_dep_block = 0
