@@ -63,12 +63,6 @@ function loadNativeSqlite(): Promise<NativeSqlite> {
 }
 const ACTION_GRAPH_RECENT_ATTEMPT_LIMIT = 3;
 
-/**
- * Max characters of the durable diagnostic file (full/*.log) folded into a
- * tail read. Bounds the memory footprint of getOutputTail when a task has a
- * large diagnostic file while still surfacing concrete startup/shutdown
- * failure details to live-tail and post-mortem snapshots.
- */
 const OUTPUT_DIAGNOSTIC_TAIL_CHARS = 8_000;
 
 
@@ -2449,16 +2443,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
   getOutputTail(taskId: string): OutputChunk[] {
     const spoolTail = this.getSpoolOutputTail(taskId);
 
-    // Fold in the durable diagnostic file (full/*.log). Executor startup
-    // failures append their concrete startup stderr/message there via
-    // appendTaskOutput, and that content never reaches the output spool. A
-    // tail read for a synthetic owner-shutdown or startup-stall failure would
-    // otherwise snapshot an empty tail and lose the concrete startup context.
-    // Append it as a single trailing chunk so both the live tail and
-    // post-mortem diagnostic snapshots surface it. Read fresh each call
-    // (never cached) so it stays current as diagnostics are appended at
-    // terminal time, and bound the read so a large diagnostic file can't blow
-    // up the tail's memory footprint.
     const diagnostic = this.readDiagnosticTail(taskId, OUTPUT_DIAGNOSTIC_TAIL_CHARS);
     if (!diagnostic) return spoolTail;
     const lastOffset = spoolTail.length > 0
@@ -2467,12 +2451,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return [...spoolTail, { offset: lastOffset, data: diagnostic }];
   }
 
-  /**
-   * Read at most `maxChars` from the end of the durable diagnostic file
-   * (full/*.log). Returns '' when the file is missing or empty. A leading
-   * marker is added when the file is truncated so readers know earlier
-   * diagnostic content exists.
-   */
   private readDiagnosticTail(taskId: string, maxChars: number): string {
     const file = this.taskOutputFile(taskId);
     if (!existsSync(file)) return '';
