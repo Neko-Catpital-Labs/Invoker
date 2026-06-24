@@ -202,8 +202,11 @@ set -e
 
 if [[ "$STATUS" -eq 0 ]]; then
   OBSERVED="fixed"
-else
+elif [[ "$STATUS" -eq 1 ]]; then
   OBSERVED="bug"
+else
+  echo "repro: vitest exited $STATUS (runner/setup failure, not a test result)" >&2
+  exit 2
 fi
 
 echo "slow_start_stale_generation_exit     : $STATUS"
