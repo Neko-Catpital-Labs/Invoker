@@ -126,7 +126,10 @@ interface WorkflowContextMenuProps {
   onRecreateWorkflow: (workflowId: string) => void;
   onCancelWorkflow: (workflowId: string) => void;
   onDeleteWorkflow: (workflowId: string) => void;
+  onDetachWorkflow: (workflowId: string) => void;
   onCopyWorkflowId: (workflowId: string) => void;
+  /** True when this workflow has exactly one upstream dependency that can be detached from the UI. */
+  canDetach: boolean;
   onClose: (options?: ContextMenuCloseOptions) => void;
   autoFocus?: boolean;
 }
@@ -161,7 +164,9 @@ function WorkflowContextMenu({
   onRecreateWorkflow,
   onCancelWorkflow,
   onDeleteWorkflow,
+  onDetachWorkflow,
   onCopyWorkflowId,
+  canDetach,
   onClose,
   autoFocus = false,
 }: WorkflowContextMenuProps): JSX.Element {
@@ -246,6 +251,9 @@ function WorkflowContextMenu({
           { id: 'rebase-recreate', label: 'Rebase and Recreate', className: dangerButtonClass, action: () => runAction(onRebaseRecreate) },
           { id: 'recreate-workflow', label: 'Recreate Workflow', className: dangerButtonClass, action: () => runAction(onRecreateWorkflow) },
           { id: 'cancel-workflow', label: 'Cancel Workflow', className: dangerButtonClass, action: () => runAction(onCancelWorkflow) },
+          ...(canDetach
+            ? [{ id: 'detach-workflow', label: 'Detach Upstream Workflow', className: dangerButtonClass, action: () => runAction(onDetachWorkflow) }]
+            : []),
           { id: 'delete-workflow', label: 'Delete Workflow', className: dangerButtonClass, action: () => runAction(onDeleteWorkflow) },
         ]),
   ];
@@ -421,6 +429,8 @@ export function App() {
   const [terminalSessions, setTerminalSessions] = useState<TerminalSessionDescriptor[]>([]);
   const [activeTerminalSessionId, setActiveTerminalSessionId] = useState<string | null>(null);
   const [workflowContextMenu, setWorkflowContextMenu] = useState<WorkflowContextMenuState | null>(null);
+  // Transient, user-visible outcome line for a confirmed workflow detach.
+  const [detachNotice, setDetachNotice] = useState<string | null>(null);
   const [keyboardRegion, setKeyboardRegion] = useState<KeyboardRegion>('workflowGraph');
   const [previousGraphRegion, setPreviousGraphRegion] = useState<KeyboardRegion>('workflowGraph');
   // Typed graph camera state. The graph viewport is user-owned after the
@@ -1396,6 +1406,39 @@ export function App() {
     }
   }, [refreshTaskGraph, selectedWorkflowId]);
 
+  const handleDetachWorkflow = useCallback(async (workflowId: string) => {
+    setWorkflowContextMenu(null);
+    const workflow = workflows.get(workflowId);
+    const deps = workflow?.externalDependencies ?? [];
+    // UI detach targets a single upstream edge so the confirmation can name
+    // both endpoints. Multi-upstream detach stays on the headless/API surface.
+    if (deps.length !== 1) return;
+    const upstreamWorkflowId = deps[0].workflowId;
+    const downstreamName = workflow?.name ?? workflowId;
+    const upstreamName = workflows.get(upstreamWorkflowId)?.name ?? upstreamWorkflowId;
+    const confirmed = window.confirm(
+      `Detach "${downstreamName}" from upstream "${upstreamName}"?\n\n` +
+      `This removes the active dependency so "${downstreamName}" no longer waits on "${upstreamName}". ` +
+      `The detached lineage stays visible in the graph. Neither workflow is deleted.`,
+    );
+    if (!confirmed) return;
+    try {
+      await window.invoker?.detachWorkflow(workflowId, upstreamWorkflowId);
+      setDetachNotice(
+        `Detached "${downstreamName}" from upstream "${upstreamName}". The active dependency was removed; detached lineage remains visible.`,
+      );
+      refreshTaskGraph();
+    } catch (err) {
+      console.error('Detach Workflow failed:', err);
+    }
+  }, [workflows, refreshTaskGraph]);
+
+  useEffect(() => {
+    if (!detachNotice) return;
+    const timer = setTimeout(() => setDetachNotice(null), 6000);
+    return () => clearTimeout(timer);
+  }, [detachNotice]);
+
   const handleFix = useCallback(async (taskId: string, agentName: string) => {
     setContextMenu(null);
     const task = tasks.get(taskId);
@@ -2199,10 +2242,23 @@ export function App() {
           onRecreateWorkflow={(workflowId) => void handleRecreateWorkflow(workflowId)}
           onCancelWorkflow={(workflowId) => void handleCancelWorkflow(workflowId)}
           onDeleteWorkflow={(workflowId) => void handleDeleteWorkflow(workflowId)}
+          onDetachWorkflow={(workflowId) => void handleDetachWorkflow(workflowId)}
+          canDetach={(workflows.get(workflowContextMenu.workflowId)?.externalDependencies?.length ?? 0) === 1}
           onCopyWorkflowId={handleCopyWorkflowId}
           onClose={closeContextMenu}
           autoFocus={Boolean(workflowContextMenu.returnFocusRegion)}
         />
+      )}
+
+      {detachNotice && (
+        <div
+          role="status"
+          aria-live="polite"
+          data-testid="detach-feedback"
+          className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-md border border-gray-600 bg-gray-800 px-4 py-2 text-sm text-gray-100 shadow-xl"
+        >
+          {detachNotice}
+        </div>
       )}
 
       {contextMenu && contextMenuTask && (
