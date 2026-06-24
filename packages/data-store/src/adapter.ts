@@ -29,6 +29,19 @@ export interface ConversationMessage {
   createdAt: string;
 }
 
+// ── Workflow Channel Types (Slack workflow↔channel mapping) ─
+
+export interface WorkflowChannel {
+  workflowId: string;
+  channelId: string;
+  requestedBy?: string;
+  lobbyChannelId?: string;
+  lobbyThreadTs?: string;
+  harnessPreset?: string;
+  repoUrl?: string;
+  createdAt: string;
+}
+
 // ── Workflow Types ──────────────────────────────────────────
 
 export interface Workflow {
@@ -135,6 +148,13 @@ export interface PersistenceAdapter {
   // Conversation messages
   appendMessage(threadTs: string, role: 'user' | 'assistant', content: string): void;
   loadMessages(threadTs: string): ConversationMessage[];
+
+  // Workflow channels (Slack workflow↔channel mapping)
+  saveWorkflowChannel(rec: WorkflowChannel): void;
+  loadWorkflowChannelByWorkflowId(workflowId: string): WorkflowChannel | undefined;
+  loadWorkflowChannelByChannelId(channelId: string): WorkflowChannel | undefined;
+  listWorkflowChannels(): WorkflowChannel[];
+  deleteWorkflowChannel(workflowId: string): void;
 
   // Task output (stdout/stderr persistence)
   appendTaskOutput(taskId: string, data: string): void;
