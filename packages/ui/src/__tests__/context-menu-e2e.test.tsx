@@ -261,6 +261,47 @@ describe('Context menu (component)', () => {
     expectOnlyWorkflowApiCalled('rebaseRecreate');
   });
 
+  it('workflow context menu shows core pending launch status', async () => {
+    mock.setActionGraph({
+      generatedAt: '2026-06-22T10:00:12.000Z',
+      stallThresholdMs: 60_000,
+      nodes: [
+        {
+          id: 'intent:77',
+          type: 'mutation-intent',
+          label: 'invoker:rebase-recreate',
+          status: 'running',
+          workflowId: 'wf-1',
+          intentId: 77,
+          durations: { runningMs: 12000 },
+        },
+        {
+          id: 'launch-dispatch:1',
+          type: 'launch-dispatch',
+          label: 'Launch task-alpha',
+          status: 'queued',
+          workflowId: 'wf-1',
+          taskId: 'task-alpha',
+          attemptId: 'task-alpha-attempt-1',
+          durations: { queuedMs: 5000 },
+        },
+      ],
+      edges: [],
+    });
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    fireEvent.click(await screen.findByText('More'));
+    fireEvent.click(await screen.findByText('Rebase and Recreate'));
+
+    const workflowNode = screen.getByTestId('workflow-node-wf-1');
+    await waitFor(() => expect(screen.getByTestId('workflow-node-wf-1-core-activity')).toHaveTextContent('Pending: queued for launch'));
+    expect(workflowNode).not.toHaveTextContent(/Rebase|Recreate|invoker:rebase-recreate/);
+
+    fireEvent.click(screen.getByText('Action Graph'));
+    fireEvent.click(await screen.findByTestId('rf__node-intent:77'));
+    expect(await screen.findByTestId('workflow-inspector-action-node')).toHaveTextContent('invoker:rebase-recreate');
+  });
+
   it('workflow context menu cancels workflow', async () => {
     await setup();
     fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
