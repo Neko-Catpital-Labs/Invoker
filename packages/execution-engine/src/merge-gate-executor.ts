@@ -21,11 +21,14 @@ export class MergeGateExecutor extends BaseExecutor<MergeGateEntry> {
 
   async start(request: WorkRequest): Promise<ExecutorHandle> {
     const task = this.resolveTask(request);
+    const workflow = task.config.workflowId
+      ? this.host.persistence.loadWorkflow(task.config.workflowId)
+      : undefined;
     const launchWorkspacePath = this.createLaunchWorkspace(task.id);
 
     const handle = this.createHandle(request);
     handle.workspacePath = launchWorkspacePath;
-    handle.branch = undefined;
+    handle.branch = workflow?.featureBranch ?? undefined;
 
     const entry: MergeGateEntry = {
       request,
@@ -165,6 +168,15 @@ export class MergeGateExecutor extends BaseExecutor<MergeGateEntry> {
         return;
       }
 
+      // Point the handle at the real gate clone before cleanup removes the launch
+      // workspace, so restored terminals (getTerminalSpec) never target a deleted
+      // directory.
+      if (executionChanges?.workspacePath) {
+        handle.workspacePath = executionChanges.workspacePath;
+      }
+      if (executionChanges?.branch) {
+        handle.branch = executionChanges.branch;
+      }
       if (executionChanges) {
         this.host.persistence.updateTask(task.id, {
           execution: executionChanges,
