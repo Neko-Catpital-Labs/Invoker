@@ -63,4 +63,14 @@ describe('worker single-instance lock', () => {
     expect(handle.record.pid).toBe(process.pid);
     handle.release();
   });
+
+  it('rejects a kind that is not a safe filename component', () => {
+    // Path separators, dot-dot, and other unsafe characters must be refused at
+    // the API boundary so the lock can never escape `locks/`.
+    for (const kind of ['../escape', 'a/b', '..', '.', 'has space', 'na\0me', '']) {
+      expect(() => acquireWorkerLock({ homeRoot, kind })).toThrow(/Invalid worker kind/);
+    }
+    // No stray lock files were created by the rejected attempts.
+    expect(existsSync(join(homeRoot, 'locks'))).toBe(false);
+  });
 });
