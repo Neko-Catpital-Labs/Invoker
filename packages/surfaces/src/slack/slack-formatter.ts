@@ -244,6 +244,8 @@ export function formatSurfaceEvent(event: SurfaceEvent): SlackMessage | null {
     }
     case 'workflow_status':
       return formatWorkflowStatus(event.status);
+    case 'workflow_created':
+      return null;
     case 'error':
       return formatError(event.message);
   }
