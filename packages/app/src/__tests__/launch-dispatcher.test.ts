@@ -705,6 +705,157 @@ describe('LaunchDispatcher', () => {
       expect(events.some((event) => event.eventType === 'task.launch_dispatch_invalidated')).toBe(true);
     });
 
+    // Lineage guard, generation dimension in isolation: the selected
+    // attempt id is unchanged, only the execution generation advanced.
+    // This proves the generation clause of dispatchMatchesTask is load
+    // bearing on its own — a regression that dropped the generation
+    // check (leaving only the attempt-id check) would still pass the
+    // combined stale test above but must fail here.
+    it('does not hand a dispatch row to the runner when only the generation changed', () => {
+      const task = seedWorkflowAndTask('wf-a/t-gen', 'wf-a', {
+        selectedAttemptId: 'attempt-gen',
+        generation: 0,
+      });
+      const enq = adapter.enqueueLaunchDispatch({
+        taskId: task.id,
+        attemptId: 'attempt-gen',
+        workflowId: 'wf-a',
+        generation: 0,
+      });
+      // Same selected attempt id, but the task has been re-generated.
+      const currentTask = {
+        ...task,
+        execution: {
+          ...task.execution,
+          selectedAttemptId: 'attempt-gen',
+          generation: 1,
+        },
+      };
+      const executeTask = vi.fn().mockResolvedValue(undefined);
+      const dispatcher = new LaunchDispatcher({
+        persistence: adapter,
+        ownerId: 'owner-a',
+        orchestrator: {
+          prepareTaskForNewAttempt: vi.fn(),
+          getTask: vi.fn().mockReturnValue(currentTask as any),
+        },
+        taskRunnerProvider: () => ({ executeTask }),
+      });
+
+      dispatcher.poll();
+
+      expect(executeTask).not.toHaveBeenCalled();
+      const after = adapter.loadLaunchDispatchById(enq.id);
+      expect(after?.state).toBe('abandoned');
+      expect(after?.lastError).toMatch(/selected attempt or generation changed/);
+      const invalidated = adapter
+        .getEvents(task.id)
+        .find((event) => event.eventType === 'task.launch_dispatch_invalidated');
+      expect(JSON.parse(invalidated!.payload!)).toMatchObject({
+        dispatchId: enq.id,
+        reason: 'selected_attempt_changed',
+        dispatchAttemptId: 'attempt-gen',
+        dispatchGeneration: 0,
+        selectedAttemptId: 'attempt-gen',
+        selectedGeneration: 1,
+        accepted: true,
+      });
+    });
+
+    // Lineage guard, attempt-id dimension in isolation: the generation
+    // is unchanged (and non-zero, so a default-0 comparison bug would
+    // not mask it), only the selected attempt id moved on.
+    it('does not hand a dispatch row to the runner when only the selected attempt id changed', () => {
+      const task = seedWorkflowAndTask('wf-a/t-attempt', 'wf-a', {
+        selectedAttemptId: 'attempt-a',
+        generation: 2,
+      });
+      const enq = adapter.enqueueLaunchDispatch({
+        taskId: task.id,
+        attemptId: 'attempt-a',
+        workflowId: 'wf-a',
+        generation: 2,
+      });
+      // Same generation, but a different attempt is now selected.
+      const currentTask = {
+        ...task,
+        execution: {
+          ...task.execution,
+          selectedAttemptId: 'attempt-b',
+          generation: 2,
+        },
+      };
+      const executeTask = vi.fn().mockResolvedValue(undefined);
+      const dispatcher = new LaunchDispatcher({
+        persistence: adapter,
+        ownerId: 'owner-a',
+        orchestrator: {
+          prepareTaskForNewAttempt: vi.fn(),
+          getTask: vi.fn().mockReturnValue(currentTask as any),
+        },
+        taskRunnerProvider: () => ({ executeTask }),
+      });
+
+      dispatcher.poll();
+
+      expect(executeTask).not.toHaveBeenCalled();
+      const after = adapter.loadLaunchDispatchById(enq.id);
+      expect(after?.state).toBe('abandoned');
+      expect(after?.lastError).toMatch(/selected attempt or generation changed/);
+      const invalidated = adapter
+        .getEvents(task.id)
+        .find((event) => event.eventType === 'task.launch_dispatch_invalidated');
+      expect(JSON.parse(invalidated!.payload!)).toMatchObject({
+        dispatchId: enq.id,
+        reason: 'selected_attempt_changed',
+        dispatchAttemptId: 'attempt-a',
+        dispatchGeneration: 2,
+        selectedAttemptId: 'attempt-b',
+        selectedGeneration: 2,
+        accepted: true,
+      });
+    });
+
+    // The guard must not over-reject: a row whose attempt id AND
+    // non-zero generation both still match the live task launches
+    // normally and leaves no invalidation trail.
+    it('launches a valid dispatch row whose attempt id and non-zero generation both still match', () => {
+      const task = seedWorkflowAndTask('wf-a/t-valid-gen', 'wf-a', {
+        selectedAttemptId: 'attempt-valid',
+        generation: 3,
+      });
+      const enq = adapter.enqueueLaunchDispatch({
+        taskId: task.id,
+        attemptId: 'attempt-valid',
+        workflowId: 'wf-a',
+        generation: 3,
+      });
+      const executeTask = vi.fn().mockResolvedValue(undefined);
+      const dispatcher = new LaunchDispatcher({
+        persistence: adapter,
+        ownerId: 'owner-a',
+        orchestrator: {
+          prepareTaskForNewAttempt: vi.fn(),
+          getTask: vi.fn().mockReturnValue({
+            ...task,
+            execution: { selectedAttemptId: 'attempt-valid', generation: 3 },
+          } as any),
+        },
+        taskRunnerProvider: () => ({ executeTask }),
+      });
+
+      dispatcher.poll();
+
+      expect(executeTask).toHaveBeenCalledTimes(1);
+      expect(executeTask.mock.calls[0]![1].dispatchId).toBe(enq.id);
+      const after = adapter.loadLaunchDispatchById(enq.id);
+      expect(after?.state).toBe('leased');
+      const invalidated = adapter
+        .getEvents(task.id)
+        .filter((event) => event.eventType === 'task.launch_dispatch_invalidated');
+      expect(invalidated).toHaveLength(0);
+    });
+
     it('abandons the dispatch when readiness is blocked', () => {
       const task = seedWorkflowAndTask('wf-a/t-blocked', 'wf-a', {
         selectedAttemptId: 'attempt-blocked',
