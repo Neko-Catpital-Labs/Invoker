@@ -6,7 +6,7 @@ import { homedir, tmpdir } from 'node:os';
 
 import type { ExecutionAgent } from './agent.js';
 import type { SessionDriver } from './session-driver.js';
-import { cleanElectronEnv, resolveExecutableOnCurrentPath } from './process-utils.js';
+import { cleanElectronEnv, killProcessGroup, resolveExecutableOnCurrentPath, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 
 export interface MakePrStackArtifactOutput {
   readonly id: string;
@@ -51,12 +51,68 @@ export interface PrAuthoringContext {
 const REQUIRED_SECTIONS = ['## Summary', '## Test Plan', '## Revert Plan'] as const;
 const DISCOURAGED_HEADINGS = ['## Testing', '## Notes'] as const;
 const DEFAULT_MAX_INLINE_PROMPT_BYTES = 64 * 1024;
+const DEFAULT_PR_AUTHORING_TIMEOUT_MS = 20 * 60 * 1000;
 const MAX_INLINE_PROMPT_BYTES = (() => {
   const raw = process.env.INVOKER_MAX_INLINE_AGENT_PROMPT_BYTES;
   if (!raw) return DEFAULT_MAX_INLINE_PROMPT_BYTES;
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_INLINE_PROMPT_BYTES;
 })();
+
+function getPrAuthoringTimeoutMs(): number {
+  const raw = process.env.INVOKER_PR_AUTHORING_TIMEOUT_MS?.trim();
+  if (raw === '0') return 0;
+  if (!raw) return DEFAULT_PR_AUTHORING_TIMEOUT_MS;
+  // Validate the whole string: Number.parseInt would silently accept a numeric
+  // prefix, turning "20m" into 20ms and failing authoring almost immediately.
+  if (!/^(0|[1-9]\d*)$/.test(raw)) return DEFAULT_PR_AUTHORING_TIMEOUT_MS;
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) return DEFAULT_PR_AUTHORING_TIMEOUT_MS;
+  return parsed;
+}
+
+/** True when `heading` appears as a real Markdown heading line, not as prose/code text. */
+function hasMarkdownHeading(body: string, heading: string): boolean {
+  const expected = heading.trim().toLowerCase();
+  return body.split(/\r?\n/).some((line) => line.trim().toLowerCase() === expected);
+}
+
+function validateBodyAgainstSections(
+  body: string,
+  requiredSections: readonly string[],
+  emptyMessage: string,
+): string[] {
+  const errors: string[] = [];
+  const trimmed = body.trim();
+
+  if (!trimmed) {
+    return [emptyMessage];
+  }
+
+  for (const heading of requiredSections) {
+    if (!hasMarkdownHeading(trimmed, heading)) {
+      errors.push(`Missing required section: ${heading}`);
+    }
+  }
+
+  for (const heading of DISCOURAGED_HEADINGS) {
+    if (hasMarkdownHeading(trimmed, heading)) {
+      errors.push(
+        `Unsupported section: ${heading}. Do not use the lightweight PR format; use ## Test Plan and ## Revert Plan instead.`,
+      );
+    }
+  }
+
+  if (hasMarkdownHeading(trimmed, '## Architecture')) {
+    for (const subsection of ['### Before', '### After']) {
+      if (!hasMarkdownHeading(trimmed, subsection)) {
+        errors.push(`Architecture section is missing required subsection: ${subsection}`);
+      }
+    }
+  }
+
+  return errors;
+}
 
 export function validateCanonicalPrBody(body: string): string[] {
   const errors: string[] = [];
@@ -438,28 +494,76 @@ export function spawnAgentPrAuthorViaRegistry(
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: cleanElectronEnv(),
+      detached: process.platform !== 'win32',
     });
 
     let stdout = '';
     let stderr = '';
+    let settled = false;
+    let timedOut = false;
+    let timeoutError: Error | undefined;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let forceKillTimeout: ReturnType<typeof setTimeout> | undefined;
+    const timeoutMs = getPrAuthoringTimeoutMs();
+
+    const finish = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      if (timeout) clearTimeout(timeout);
+      if (forceKillTimeout) clearTimeout(forceKillTimeout);
+      promptTransport.cleanup();
+      fn();
+    };
+
+    if (timeoutMs > 0) {
+      timeout = setTimeout(() => {
+        if (settled || timedOut) return;
+        timedOut = true;
+        timeoutError = new Error(
+          `${agent.name} PR authoring exceeded timeout (${timeoutMs}ms) in ${cwd}. ` +
+          'Set INVOKER_PR_AUTHORING_TIMEOUT_MS to adjust (0 = unbounded).',
+        );
+        if (timeout) clearTimeout(timeout);
+        killProcessGroup(child, 'SIGTERM');
+        // Escalate to SIGKILL only; the 'close' handler settles the promise once
+        // the process has actually exited, so the caller never launches the next
+        // make-pr agent while this one may still be alive and mutating PRs.
+        forceKillTimeout = setTimeout(() => {
+          killProcessGroup(child, 'SIGKILL');
+        }, SIGKILL_TIMEOUT_MS);
+        forceKillTimeout.unref?.();
+      }, timeoutMs);
+      timeout.unref?.();
+    }
+
     child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
     child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
     child.on('close', (code) => {
-      const realId = driver?.extractSessionId?.(stdout);
-      const effectiveSessionId = realId ?? sessionId;
-      const displayStdout = driver ? driver.processOutput(effectiveSessionId, stdout) : stdout;
-      if (code === 0) {
-        const body = extractAssistantBody(driver, effectiveSessionId, displayStdout);
-        promptTransport.cleanup();
-        resolve({ body, stdout: displayStdout, sessionId: effectiveSessionId });
+      if (settled) return;
+      // A timed-out process has now actually exited (via SIGTERM or the SIGKILL
+      // escalation); settle with the timeout error only now that it is gone.
+      if (timedOut) {
+        finish(() => reject(timeoutError!));
         return;
       }
-      promptTransport.cleanup();
-      reject(new Error(`${agent.name} PR authoring exited with code ${code}: ${stderr.trim()}`));
+      finish(() => {
+        try {
+          const realId = driver?.extractSessionId?.(stdout);
+          const effectiveSessionId = realId ?? sessionId;
+          const displayStdout = driver ? driver.processOutput(effectiveSessionId, stdout) : stdout;
+          if (code === 0) {
+            const body = extractAssistantBody(driver, effectiveSessionId, displayStdout);
+            resolve({ body, stdout: displayStdout, sessionId: effectiveSessionId });
+            return;
+          }
+          reject(new Error(`${agent.name} PR authoring exited with code ${code}: ${stderr.trim()}`));
+        } catch (err) {
+          reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      });
     });
     child.on('error', (err) => {
-      promptTransport.cleanup();
-      reject(err);
+      finish(() => reject(err));
     });
   });
 }
