@@ -568,6 +568,25 @@ export class TaskRunner {
     return false;
   }
 
+  /**
+   * Narrow lineage check for the post-start path: has the live task advanced
+   * past the *generation* captured by this runner at launch time?
+   *
+   * This deliberately ignores `selectedAttemptId` — attempt-mismatch rejection
+   * is owned by {@link Orchestrator.markTaskRunningAfterLaunch}. `markTask…`
+   * only validates the attempt, so a same-attempt generation bump (e.g. a
+   * restart-in-place from N to N+1 that keeps the attempt id) would otherwise
+   * slip through and let a superseded launch persist start metadata or register
+   * an active execution. Returns `false` when the task is no longer visible so
+   * we fall through to the normal launch path rather than silently dropping it.
+   */
+  private hasLaunchGenerationAdvanced(taskId: string, startGeneration: number): boolean {
+    const current = this.orchestrator.getTask(taskId);
+    if (!current) return false;
+    const currentGeneration = current.execution.generation ?? 0;
+    return currentGeneration !== startGeneration;
+  }
+
   async executeTask(task: TaskState, dispatchOpts?: LaunchDispatchOptions): Promise<void> {
     traceExecution(
       `${RESTART_TO_BRANCH_TRACE} TaskRunner.executeTask BEGIN taskId=${task.id} isMergeNode=${Boolean(task.config.isMergeNode)} status=${task.status}`,
@@ -1067,12 +1086,37 @@ export class TaskRunner {
       hasWorkspacePath: Boolean(handle.workspacePath),
       hasAgentSessionId: Boolean(handle.agentSessionId),
     });
+    // Lineage guard for the post-start path. `markTaskRunningAfterLaunch`
+    // only rejects a mismatched `selectedAttemptId`; it has no knowledge of
+    // the generation captured by *this* runner at launch time. So a launch
+    // accepted at generation N whose attempt id is unchanged (e.g. a
+    // restart-in-place that bumps generation to N+1) would still be accepted
+    // and would persist stale workspace/branch/session metadata onto the live
+    // task row and register an active execution for a superseded launch.
+    // Check the launch-time generation first — when it has advanced, skip
+    // `markTaskRunningAfterLaunch` entirely so we never transition the live
+    // attempt, and fall through to the shared stale-launch rejection (kill
+    // handle + release lease + fail dispatch) used by the attempt path.
+    const generationAdvanced = this.hasLaunchGenerationAdvanced(task.id, startGeneration);
     const launchAccepted =
-      this.orchestrator.markTaskRunningAfterLaunch?.(task.id, attemptId) ?? true;
+      !generationAdvanced && (this.orchestrator.markTaskRunningAfterLaunch?.(task.id, attemptId) ?? true);
     if (!launchAccepted) {
+      const rejectReason = generationAdvanced ? 'generation-advanced' : 'attempt-superseded';
       this.logger.warn(
-        `[TaskRunner] launch rejected as stale/non-executable for task=${task.id} attemptId=${attemptId}; killing spawned process`,
+        `[TaskRunner] launch rejected as stale/non-executable for task=${task.id} attemptId=${attemptId} ` +
+          `generation=${startGeneration} reason=${rejectReason}; killing spawned process`,
       );
+      if (generationAdvanced) {
+        this.persistence.logEvent?.(task.id, 'task.executor.stale_post_start_launch', {
+          attemptId,
+          executorType: executor.type,
+          launchGeneration: startGeneration,
+          currentGeneration: this.orchestrator.getTask(task.id)?.execution.generation ?? null,
+          hasWorkspacePath: Boolean(handle.workspacePath),
+          hasAgentSessionId: Boolean(handle.agentSessionId),
+          hasContainerId: Boolean(handle.containerId),
+        });
+      }
       try {
         await executor.kill(handle);
       } catch (killErr) {
@@ -1087,7 +1131,7 @@ export class TaskRunner {
           new Error('Launch rejected as stale or non-executable after executor start'),
         );
       }
-      bench('markTaskRunningAfterLaunch.rejected');
+      bench('markTaskRunningAfterLaunch.rejected', { generationAdvanced });
       return;
     }
     bench('markTaskRunningAfterLaunch.accepted');

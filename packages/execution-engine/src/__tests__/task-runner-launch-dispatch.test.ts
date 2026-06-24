@@ -316,6 +316,81 @@ describe('TaskRunner launch-dispatch wiring', () => {
     expect((launchOutbox.failCalls[0][1] as Error).message).toMatch(/Duplicate launch suppressed/);
   });
 
+  it('rejects a post-start launch whose generation advanced while attempt id is unchanged', async () => {
+    // executor.start resolves AFTER the live task advances from generation 1
+    // to 2 (e.g. a restart-in-place that keeps the same selectedAttemptId).
+    // markTaskRunningAfterLaunch would still accept this attempt, so the
+    // generation lineage guard must reject it instead.
+    const task = makeTask();
+    const env = buildRunnerEnv(task, {
+      startImpl: async (request) => {
+        // Advance the live generation mid-start; getTask returns this same
+        // object, so isLaunchStale observes the new generation.
+        task.execution = { ...task.execution, generation: 2 };
+        return {
+          executionId: `exec-${request.actionId}`,
+          taskId: request.actionId,
+          workspacePath: '/tmp/stale-ws',
+          branch: `experiment/${request.actionId}-stale`,
+          agentSessionId: 'stale-session',
+          containerId: 'stale-container',
+        };
+      },
+    });
+    const launchOutbox = makeLaunchOutbox();
+
+    await env.runner.executeTask(task, { dispatchId: 77, launchOutbox });
+
+    // Same-attempt generation bump must not be accepted by the orchestrator
+    // marker; the guard short-circuits before markTaskRunningAfterLaunch.
+    expect(env.orchestrator.markTaskRunningAfterLaunch).not.toHaveBeenCalled();
+    // Spawned handle is killed, consistent with the stale-attempt path.
+    expect(env.executor.kill).toHaveBeenCalledTimes(1);
+    // No stale post-start metadata is written to the task row.
+    const wroteStartMetadata = env.persistence.updateTask.mock.calls.some(
+      ([, changes]: [string, any]) => changes?.execution?.workspacePath !== undefined,
+    );
+    expect(wroteStartMetadata).toBe(false);
+    // No active execution is registered for the superseded launch.
+    expect((env.runner as any).activeExecutions.size).toBe(0);
+    // The dispatch row is failed, not completed.
+    expect(launchOutbox.completeCalls).toHaveLength(0);
+    expect(launchOutbox.failCalls).toHaveLength(1);
+    expect(launchOutbox.failCalls[0][0]).toBe(77);
+    expect((launchOutbox.failCalls[0][1] as Error).message).toMatch(/Launch rejected/);
+    // Observability: a stale post-start event is logged.
+    expect(env.persistence.logEvent).toHaveBeenCalledWith(
+      task.id,
+      'task.executor.stale_post_start_launch',
+      expect.objectContaining({ attemptId: 'attempt-1', launchGeneration: 1 }),
+    );
+  });
+
+  it('persists start metadata and registers the execution for a current launch', async () => {
+    // Generation does not advance during start — the valid path must still
+    // mark the task running, persist metadata, and register the execution.
+    const task = makeTask();
+    const env = buildRunnerEnv(task);
+    const launchOutbox = makeLaunchOutbox();
+
+    const run = env.runner.executeTask(task, { dispatchId: 88, launchOutbox });
+    await vi.waitFor(() => expect(env.executor.onComplete).toHaveBeenCalled());
+
+    expect(env.orchestrator.markTaskRunningAfterLaunch).toHaveBeenCalledWith(task.id, 'attempt-1');
+    expect(env.executor.kill).not.toHaveBeenCalled();
+    const startMetadataCall = env.persistence.updateTask.mock.calls.find(
+      ([, changes]: [string, any]) => changes?.execution?.workspacePath !== undefined,
+    );
+    expect(startMetadataCall).toBeDefined();
+    expect(startMetadataCall?.[1].execution.workspacePath).toBe('/tmp/mock-ws');
+    expect((env.runner as any).activeExecutions.size).toBe(1);
+
+    env.triggerComplete();
+    await run;
+    expect(launchOutbox.completeCalls).toEqual([88]);
+    expect(launchOutbox.failCalls).toHaveLength(0);
+  });
+
   it('CD.1: pivot tasks terminate the dispatch row via completeDispatch', async () => {
     // Issue 13: pivot/spawn-experiments returns from executeTaskInner
     // BEFORE the normal markTaskRunningAfterLaunch completeDispatch
