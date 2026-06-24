@@ -59,6 +59,7 @@ import {
   resolveSkillPathViaAgent,
   spawnAgentPrAuthorViaRegistry,
   validateCanonicalPrBody,
+  validateReviewStackPrBody,
   type PrAuthoringContext,
 } from './pr-authoring.js';
 import { assertNotGitConfigMutation, ensureRemoteUrl } from './git-config-mutation.js';
@@ -158,10 +159,6 @@ export interface ReviewGateCiFailureTrigger {
   generation: number;
   failedChecks: NonNullable<MergeGateApprovalStatus['checks']>['failed'];
   statusText: string;
-}
-
-export interface ReviewGateCiFailureLifecyclePublisher {
-  publish(trigger: ReviewGateCiFailureTrigger): void | Promise<void>;
 }
 
 function nextLeaseExpiry(from: Date): Date {
@@ -287,7 +284,7 @@ export interface TaskRunnerConfig {
   callbacks?: TaskRunnerCallbacks;
   mergeGateProvider?: MergeGateProvider;
   reviewProviderRegistry?: ReviewProviderRegistry;
-  reviewGateCiFailurePublisher?: ReviewGateCiFailureLifecyclePublisher;
+  onReviewGateCiFailure?: (trigger: ReviewGateCiFailureTrigger) => Promise<void>;
   /**
    * Provider that returns remote SSH targets keyed by target ID.
    * Called at task-execution time so config file changes take effect on retry.
@@ -335,8 +332,8 @@ export class TaskRunner {
   /** @internal */ callbacks: TaskRunnerCallbacks;
   /** @internal */ mergeGateProvider?: MergeGateProvider;
   /** @internal */ reviewProviderRegistry?: ReviewProviderRegistry;
-  private reviewGateCiFailurePublisher?: ReviewGateCiFailureLifecyclePublisher;
-  private reviewGateCiFailureInFlight = new Set<string>();
+  private onReviewGateCiFailure?: (trigger: ReviewGateCiFailureTrigger) => Promise<void>;
+  private reviewGateCiFixInFlight = new Set<string>();
   private getRemoteTargets: () => Record<string, RemoteTargetDisplay>;
   private getExecutionPools: () => Record<string, ExecutionPoolConfig>;
   private dockerConfig: { imageName?: string; secretsFile?: string };
@@ -439,7 +436,7 @@ export class TaskRunner {
     this.callbacks = config.callbacks ?? {};
     this.mergeGateProvider = config.mergeGateProvider;
     this.reviewProviderRegistry = config.reviewProviderRegistry;
-    this.reviewGateCiFailurePublisher = config.reviewGateCiFailurePublisher;
+    this.onReviewGateCiFailure = config.onReviewGateCiFailure;
     this.getRemoteTargets = config.remoteTargetsProvider ?? (() => ({}));
     this.getExecutionPools = config.executionPoolsProvider ?? (() => ({}));
     this.dockerConfig = config.dockerConfig ?? {};
@@ -2462,8 +2459,8 @@ export class TaskRunner {
   }
 
   private mapReviewGateArtifactStatus(status: MergeGateApprovalStatus): ReviewGateArtifactStatus {
-    if (status.lifecycle === 'closed') return 'closed';
-    if (status.lifecycle === 'merged') return 'approved';
+    if (status.closed) return 'closed';
+    if (status.approved) return 'approved';
     if (status.rejected) return 'changes_requested';
     return 'open';
   }
@@ -2576,7 +2573,6 @@ export class TaskRunner {
       if (currentGate) {
         latestGate = this.updateReviewGateArtifact(currentGate, providerId, status);
         this.persistence.updateTask(task.id, {
-          ...(status.lifecycle === 'closed' ? { status: 'closed' as const } : {}),
           execution: { reviewGate: latestGate, reviewStatus: status.statusText },
         });
         if (!approvedGate && this.reviewGateIsApproved(latestGate)) {
@@ -2584,23 +2580,23 @@ export class TaskRunner {
           await this.handleApprovedMergeGate(task.id, providerId, source);
         } else if (status.rejected) {
           this.logger.info(`[merge-gate] PR ${providerId} rejected (${source}): ${status.statusText}`);
-        } else if (status.lifecycle === 'open') {
-          await this.maybePublishReviewGateCiFailure(current!, status, providerId);
+        } else if (!status.closed && !status.approved) {
+          await this.maybeTriggerReviewGateCiFix(current!, status, providerId);
         }
         continue;
       }
 
       this.persistence.updateTask(task.id, {
-        ...(status.lifecycle === 'closed' ? { status: 'closed' as const } : {}),
+        ...(status.closed ? { status: 'closed' as const } : {}),
         execution: { reviewStatus: status.statusText },
       });
-      if (!approvedGate && status.lifecycle === 'merged') {
+      if (!approvedGate && status.approved) {
         approvedGate = true;
         await this.handleApprovedMergeGate(task.id, providerId, source);
       } else if (status.rejected) {
         this.logger.info(`[merge-gate] PR ${providerId} rejected (${source}): ${status.statusText}`);
-      } else if (status.lifecycle === 'open') {
-        await this.maybePublishReviewGateCiFailure(current!, status, providerId);
+      } else if (!status.closed) {
+        await this.maybeTriggerReviewGateCiFix(current!, status, providerId);
       }
     }
   }
@@ -2635,12 +2631,12 @@ export class TaskRunner {
     }
   }
 
-  private async maybePublishReviewGateCiFailure(
+  private async maybeTriggerReviewGateCiFix(
     task: TaskState,
     status: MergeGateApprovalStatus,
     reviewId: string = task.execution.reviewId ?? '',
   ): Promise<void> {
-    if (!this.reviewGateCiFailurePublisher) return;
+    if (!this.onReviewGateCiFailure) return;
     if (!task.config.workflowId || !reviewId) return;
     if (status.checks?.state !== 'failure' || status.checks.failed.length === 0) return;
 
@@ -2650,11 +2646,11 @@ export class TaskRunner {
       task.execution.generation ?? 0,
       status.headSha ?? 'no-head-sha',
     ].join(':');
-    if (this.reviewGateCiFailureInFlight.has(key)) return;
+    if (this.reviewGateCiFixInFlight.has(key)) return;
 
-    this.reviewGateCiFailureInFlight.add(key);
+    this.reviewGateCiFixInFlight.add(key);
     try {
-      await this.reviewGateCiFailurePublisher.publish({
+      await this.onReviewGateCiFailure({
         taskId: task.id,
         workflowId: task.config.workflowId,
         reviewId,
@@ -2668,7 +2664,7 @@ export class TaskRunner {
         statusText: status.statusText,
       });
     } finally {
-      this.reviewGateCiFailureInFlight.delete(key);
+      this.reviewGateCiFixInFlight.delete(key);
     }
   }
 
@@ -2736,14 +2732,23 @@ export class TaskRunner {
       });
 
       try {
+        this.logger.info(
+          `[pr-authoring] body authoring starting agent=${agent.name} `
+            + `workflow=${args.workflowId ?? 'unknown'} skill=invoker-make-pr`,
+        );
         const result = await spawnAgentPrAuthorViaRegistry(prompt, args.cwd, agent, driver);
         const validationErrors = validateCanonicalPrBody(result.body);
         if (validationErrors.length > 0) {
+          this.logger.warn(
+            `[pr-authoring] body validation failed agent=${agent.name} `
+              + `errors=${validationErrors.join('; ')}`,
+          );
           errors.push(
             `${agent.name}: invalid PR body — ${validationErrors.join('; ')}`,
           );
           continue;
         }
+        this.logger.info(`[pr-authoring] body authored agent=${agent.name} validated`);
         return { body: result.body, sessionId: result.sessionId, agentName: agent.name };
       } catch (err) {
         errors.push(
@@ -2802,11 +2807,33 @@ export class TaskRunner {
       });
 
       try {
+        this.logger.info(
+          `[pr-authoring] review-stack publish starting agent=${agent.name} `
+            + `workflow=${args.workflowId ?? 'unknown'} skill=invoker-make-pr cwd=${args.cwd}`,
+        );
         const result = await spawnAgentPrAuthorViaRegistry(prompt, args.cwd, agent, driver);
         const parsedArtifacts = parseMakePrStackPublishResult(result.body);
+
+        // Enforce the make-pr review-stack schema on every published body.
+        // A mergify-default commit-message body (e.g. PR #2170) fails here and
+        // falls through to the next agent instead of shipping unreviewable.
+        const bodyErrors = parsedArtifacts.flatMap((artifact, index) =>
+          validateReviewStackPrBody(artifact.body ?? '').map(
+            (error) => `artifact[${index}] (${artifact.url}): ${error}`,
+          ),
+        );
+        if (bodyErrors.length > 0) {
+          this.logger.warn(
+            `[pr-authoring] review-stack body validation failed agent=${agent.name} `
+              + `errors=${bodyErrors.join('; ')}`,
+          );
+          errors.push(`${agent.name}: invalid PR body — ${bodyErrors.join('; ')}`);
+          continue;
+        }
+
         const nowIso = new Date().toISOString();
         const generation = args.reviewGate?.activeGeneration ?? 0;
-        const artifacts: ReviewGateArtifact[] = parsedArtifacts.map((artifact) => ({
+        const artifacts: ReviewGateArtifact[] = parsedArtifacts.map(({ body: _body, ...artifact }) => ({
           ...artifact,
           provider: 'github',
           baseBranch: artifact.baseBranch ?? args.baseBranch,
@@ -2815,6 +2842,10 @@ export class TaskRunner {
           generation,
           createdAt: nowIso,
         }));
+        this.logger.info(
+          `[pr-authoring] review-stack published agent=${agent.name} artifacts=${artifacts.length} `
+            + 'bodies validated against make-pr schema',
+        );
         return { artifacts, sessionId: result.sessionId, agentName: agent.name };
       } catch (err) {
         errors.push(`${agent.name}: ${err instanceof Error ? err.message : String(err)}`);
