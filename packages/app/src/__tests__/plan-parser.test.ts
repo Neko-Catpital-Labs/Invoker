@@ -567,6 +567,34 @@ tasks:
     expect(plan.tasks[1].executionAgent).toBeUndefined();
   });
 
+  it('parses executionModel from task definitions', () => {
+    const yaml = `
+name: Model Test
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: model-task
+    description: "Task pinning a model"
+    command: "npm test"
+    executionModel: claude
+  - id: padded-task
+    description: "Padded model"
+    command: "echo hi"
+    executionModel: "  claude  "
+  - id: empty-task
+    description: "Empty model"
+    command: "echo hi"
+    executionModel: ""
+  - id: absent-task
+    description: "No model specified"
+    command: "echo hi"
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.tasks[0].executionModel).toBe('claude');
+    expect(plan.tasks[1].executionModel).toBe('claude');
+    expect(plan.tasks[2].executionModel).toBeUndefined();
+    expect(plan.tasks[3].executionModel).toBeUndefined();
+  });
+
   describe('onFinish parsing', () => {
     it('parses plan with onFinish: merge', () => {
       const yaml = `

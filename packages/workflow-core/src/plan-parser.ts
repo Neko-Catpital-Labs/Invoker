@@ -35,6 +35,7 @@ export interface RawPlanTask {
   dockerImage?: string;
   poolId?: string;
   executionAgent?: string;
+  executionModel?: string;
 }
 
 export interface RawPlan {
@@ -255,6 +256,7 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       dockerImage: task.dockerImage,
       poolId: task.poolId,
       executionAgent: task.executionAgent?.trim() || undefined,
+      executionModel: task.executionModel?.trim() || undefined,
     };
   });
 
