@@ -919,12 +919,32 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
         break;
       }
       case 'select_experiment': {
-        const started = orchestrator.selectExperiment(command.taskId, command.experimentId);
+        const taskId = command.taskId as string;
+        const experimentId = command.experimentId as string;
+        const result = await commandService.selectExperiment(
+          makeEnvelope('select-experiment', 'surface', 'task', { taskId, experimentId }),
+        );
+        if (!result.ok) throw new Error(result.error.message);
+        await dispatchStartedTasksWithGlobalTopup({
+          orchestrator,
+          taskExecutor: deps.executor,
+          logger,
+          context: 'surface.select-experiment',
+          started: result.data,
+          scopedTaskIds: [taskId],
+        });
         break;
       }
-      case 'provide_input':
-        orchestrator.provideInput(command.taskId, command.input);
+      case 'provide_input': {
+        const result = await commandService.provideInput(
+          makeEnvelope('provide-input', 'surface', 'task', {
+            taskId: command.taskId as string,
+            input: command.input as string,
+          }),
+        );
+        if (!result.ok) throw new Error(result.error.message);
         break;
+      }
       case 'retry': {
         const taskId = command.taskId as string;
         const result = await commandService.retryTask(
