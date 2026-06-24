@@ -50,6 +50,7 @@ import type {
   ActivityLogEntry,
   Conversation,
   ConversationMessage,
+  WorkflowChannel,
 } from './adapter.js';
 
 type NativeSqlite = typeof import('node:sqlite');
@@ -812,6 +813,20 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
       CREATE INDEX IF NOT EXISTS idx_conv_messages_thread
         ON conversation_messages(thread_ts, seq);
+
+      CREATE TABLE IF NOT EXISTS workflow_channels (
+        workflow_id TEXT PRIMARY KEY,
+        channel_id TEXT NOT NULL,
+        requested_by TEXT,
+        lobby_channel_id TEXT,
+        lobby_thread_ts TEXT,
+        harness_preset TEXT,
+        repo_url TEXT,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_workflow_channels_channel
+        ON workflow_channels(channel_id);
 
       CREATE TABLE IF NOT EXISTS task_output (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2319,6 +2334,57 @@ export class SQLiteAdapter implements PersistenceAdapter {
       content: row.content,
       createdAt: row.created_at,
     }));
+  }
+
+  // ── Workflow Channels (Slack workflow↔channel mapping) ──
+
+  saveWorkflowChannel(rec: WorkflowChannel): void {
+    this.execRun(`
+      INSERT OR REPLACE INTO workflow_channels
+        (workflow_id, channel_id, requested_by, lobby_channel_id, lobby_thread_ts, harness_preset, repo_url, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      rec.workflowId,
+      rec.channelId,
+      rec.requestedBy ?? null,
+      rec.lobbyChannelId ?? null,
+      rec.lobbyThreadTs ?? null,
+      rec.harnessPreset ?? null,
+      rec.repoUrl ?? null,
+      rec.createdAt,
+    ]);
+  }
+
+  private mapWorkflowChannelRow(row: any): WorkflowChannel {
+    return {
+      workflowId: row.workflow_id as string,
+      channelId: row.channel_id as string,
+      requestedBy: (row.requested_by as string) ?? undefined,
+      lobbyChannelId: (row.lobby_channel_id as string) ?? undefined,
+      lobbyThreadTs: (row.lobby_thread_ts as string) ?? undefined,
+      harnessPreset: (row.harness_preset as string) ?? undefined,
+      repoUrl: (row.repo_url as string) ?? undefined,
+      createdAt: row.created_at as string,
+    };
+  }
+
+  loadWorkflowChannelByWorkflowId(workflowId: string): WorkflowChannel | undefined {
+    const row = this.queryOne('SELECT * FROM workflow_channels WHERE workflow_id = ?', [workflowId]);
+    return row ? this.mapWorkflowChannelRow(row) : undefined;
+  }
+
+  loadWorkflowChannelByChannelId(channelId: string): WorkflowChannel | undefined {
+    const row = this.queryOne('SELECT * FROM workflow_channels WHERE channel_id = ?', [channelId]);
+    return row ? this.mapWorkflowChannelRow(row) : undefined;
+  }
+
+  listWorkflowChannels(): WorkflowChannel[] {
+    const rows = this.queryAll('SELECT * FROM workflow_channels ORDER BY created_at DESC');
+    return rows.map((row: any) => this.mapWorkflowChannelRow(row));
+  }
+
+  deleteWorkflowChannel(workflowId: string): void {
+    this.execRun('DELETE FROM workflow_channels WHERE workflow_id = ?', [workflowId]);
   }
 
   // ── Task Output ─────────────────────────────────────
