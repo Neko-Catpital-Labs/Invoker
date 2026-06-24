@@ -15,6 +15,13 @@
   2. **Debug and report** -- Investigate and report: (a) the root cause — why the code is in the buggy state, and (b) the test gap — how the bug escaped existing tests (missing coverage, wrong assumptions, untested edge case, etc.).
   3. **Plan the fix** -- Only after completing steps 1 and 2, create the implementation plan. The plan must include a verification step that re-runs the reproduction case to confirm the fix.
 
+## Landing PR Stacks
+
+- When asked to **land / merge / ship / queue** a PR or PR stack, follow `skills/land-stack/SKILL.md`.
+- **Never identify the PR to land by branch name** (`gh pr list --head <branch>`). Two PRs can share a branch name (a raw workflow branch PR vs the intended `stack/...` PR). Land by **explicit PR number** only.
+- Verify before any write: `node scripts/land-stack.mjs <pr> [<pr> ...]` must exit 0 (checks head SHA is in the local clone, head branch is a real `stack/` branch, the PRs form a proper stack, all OPEN). Land via `node scripts/land-stack.mjs <pr> ... --execute`. Do not hand-add `admin-bypass` or `gh pr merge` to bypass the guard.
+- See `.cursor/rules/land-stack-precedence.mdc` for the always-on summary.
+
 ## SQLite Command Policy
 
 - If you are considering direct SQLite commands, use the corresponding headless command instead.
