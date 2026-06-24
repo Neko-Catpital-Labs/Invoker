@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { WorkRequest } from '@invoker/contracts';
+import type { WorkRequest, WorkResponse } from '@invoker/contracts';
 import type { TaskState } from '@invoker/workflow-core';
 import { MergeGateExecutor } from '../merge-gate-executor.js';
 
@@ -123,5 +123,63 @@ describe('MergeGateExecutor', () => {
     } finally {
       await executor.destroyAll();
     }
+  });
+
+  it('emits a terminal failure when destroyed while a merge action is in flight', async () => {
+    const invokerHome = mkdtempSync(join(tmpdir(), 'invoker-merge-destroy-test-'));
+    const gateWorkspace = mkdtempSync(join(tmpdir(), 'invoker-merge-gate-test-'));
+    tempDirs.push(invokerHome, gateWorkspace);
+    process.env.INVOKER_DB_DIR = invokerHome;
+
+    const task = makeMergeTask();
+    const blockedSummary = createDeferred<string>();
+    const responses: WorkResponse[] = [];
+    const executor = new MergeGateExecutor({
+      cwd: '/tmp/host-repo',
+      defaultBranch: 'master',
+      persistence: {
+        loadWorkflow: vi.fn(() => ({
+          id: 'wf-1782192502908-14',
+          baseBranch: 'master',
+          featureBranch: 'plan/crabbox-ssh-step-2-resolver',
+          onFinish: 'none',
+          mergeMode: 'manual',
+        })),
+        updateTask: vi.fn(),
+      },
+      orchestrator: {
+        getTask: vi.fn(() => task),
+        getAllTasks: vi.fn(() => [task]),
+      },
+      createMergeWorktree: vi.fn(async () => gateWorkspace),
+      detectDefaultBranch: vi.fn(async () => 'master'),
+      buildMergeSummary: vi.fn(() => blockedSummary.promise),
+      callbacks: {},
+    } as any);
+
+    const handle = await executor.start(makeRequest(task));
+    executor.onComplete(handle, (response) => {
+      responses.push(response);
+    });
+
+    await vi.waitFor(() => {
+      expect((executor as any).host.buildMergeSummary).toHaveBeenCalled();
+    });
+    await executor.destroyAll();
+
+    expect(responses).toHaveLength(1);
+    expect(responses[0]).toMatchObject({
+      actionId: task.id,
+      attemptId: task.execution.selectedAttemptId,
+      status: 'failed',
+      outputs: {
+        exitCode: 1,
+        error: 'Merge gate execution was stopped before completion',
+      },
+    });
+
+    blockedSummary.resolve('summary after destroy');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(responses).toHaveLength(1);
   });
 });
