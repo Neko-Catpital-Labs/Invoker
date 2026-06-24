@@ -62,6 +62,14 @@ export interface InvokerConfig {
   planningTimeoutSeconds?: number;
   /** Interval for heartbeat messages posted to Slack during planning in seconds. Default: 120 (2 minutes). Set to 0 to disable. */
   planningHeartbeatIntervalSeconds?: number;
+  /** Named Slack planning harness presets: preset key → {tool, model}; built-ins apply when omitted. */
+  slackHarnessPresets?: Record<string, { tool: 'cursor' | 'omp' | 'codex'; model?: string }>;
+  /** Default harness preset key when the message carries no `[preset]` tag. Default: 'cursor+claude'. */
+  defaultSlackHarnessPreset?: string;
+  /** Slack repo aliases: alias → git URL, resolved from a `[repo:<alias>]` tag. */
+  slackRepos?: Record<string, string>;
+  /** Repo URL used for Slack planning when the message carries no `[repo:]` tag. */
+  defaultRepoUrl?: string;
   /** Maximum number of tasks that can run concurrently. Default: 6. */
   maxConcurrency?: number;
   /** Browser executable for opening external URLs (e.g. "firefox"). Default: Chrome. */
