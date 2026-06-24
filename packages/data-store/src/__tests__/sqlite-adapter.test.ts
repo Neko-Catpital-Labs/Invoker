@@ -2350,6 +2350,55 @@ describe('SQLiteAdapter', () => {
         rmSync(dir, { recursive: true, force: true });
       }
     });
+
+    it('folds durable diagnostic content into the output tail', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-tail-diag-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db.saveWorkflow(testWorkflow);
+        db.saveTask('wf-1', makeTask('t-tail-diag'));
+
+        db.appendOutputChunk('t-tail-diag', 'streaming line\n');
+        db.appendTaskOutput(
+          't-tail-diag',
+          'Executor startup failed (worktree): posix_spawnp ENOENT\n',
+        );
+
+        const tail = db.getOutputTail('t-tail-diag');
+        const joined = tail.map((c) => c.data).join('');
+        expect(joined).toContain('streaming line');
+        expect(joined).toContain('Executor startup failed (worktree): posix_spawnp ENOENT');
+
+        db.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('returns a startup diagnostic tail even with no spool output', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-tail-diag-only-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db.saveWorkflow(testWorkflow);
+        db.saveTask('wf-1', makeTask('t-tail-diag-only'));
+
+        db.appendTaskOutput(
+          't-tail-diag-only',
+          'Executor startup failed (docker): image pull timed out\n',
+        );
+
+        const tail = db.getOutputTail('t-tail-diag-only');
+        expect(tail.map((c) => c.data).join('')).toContain('image pull timed out');
+
+        db.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('pruneDuplicateTaskOutputRows', () => {
@@ -3833,7 +3882,9 @@ describe('SQLiteAdapter', () => {
         expect(sqliteScalar(db, 'SELECT COUNT(*) FROM task_output')).toBe(0);
         expect(sqliteScalar(db, 'SELECT COUNT(*) FROM output_spool')).toBe(0);
         expect(db.listWorkflows()).toHaveLength(1);
-        expect(db.getOutputTail('t-large-output')).toHaveLength(5);
+        const tail = db.getOutputTail('t-large-output');
+        expect(tail).toHaveLength(6);
+        expect(tail[tail.length - 1].data.length).toBeLessThan(64 * 1024);
 
         db.close();
       } finally {
