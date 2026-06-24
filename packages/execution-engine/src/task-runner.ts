@@ -15,7 +15,6 @@ import { scopePlanTaskId } from '@invoker/workflow-core';
 import type { Orchestrator, TaskState, ExperimentVariant, RunnerKind } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { WorkRequest, WorkResponse, ActionType, Logger } from '@invoker/contracts';
-import { ATTEMPT_LEASE_MS } from '@invoker/contracts';
 import type { Executor, ExecutorHandle } from './executor.js';
 import type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
 import { BaseExecutor } from './base-executor.js';
@@ -64,6 +63,7 @@ import {
 import { assertNotGitConfigMutation, ensureRemoteUrl } from './git-config-mutation.js';
 import { killProcessGroup, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 import { retryTransientGitHubCli } from './git-utils.js';
+import { PRE_START_HEARTBEAT_INTERVAL_MS, getExecutorStartTimeoutMs, isRetryableSshStartupTransportError, nextLeaseExpiry, type StartupFailureMetadata } from './task-runner-launch-support.js';
 
 export type { TaskHeartbeatEvent, TaskRunnerCallbacks } from './task-runner-callbacks.js';
 type ReviewGateState = NonNullable<TaskState['execution']['reviewGate']>;
@@ -71,18 +71,8 @@ type ReviewGateArtifact = ReviewGateState['artifacts'][number];
 type ReviewGateArtifactStatus = ReviewGateArtifact['status'];
 
 
-/** Keeps launch metadata fresh while `executor.start()` is awaited (SSH remote setup/provision can take minutes). */
-const PRE_START_HEARTBEAT_INTERVAL_MS = 30_000;
-const DEFAULT_EXECUTOR_START_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_GIT_OPERATION_TIMEOUT_MS = 15 * 60 * 1000;
 const GITHUB_TARGET_REPO_ENV = 'INVOKER_GITHUB_TARGET_REPO';
-
-type StartupFailureMetadata = {
-  workspacePath?: string;
-  branch?: string;
-  agentSessionId?: string;
-  containerId?: string;
-};
 
 type ActiveExecutionHandle = ExecutorHandle & { attemptId?: string };
 type ActiveExecutionEntry = {
@@ -114,20 +104,6 @@ type PoolSelection = {
   leaseHolderId?: string;
 };
 
-function isRetryableSshStartupTransportError(err: unknown): boolean {
-  const message = err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err);
-  const lower = message.toLowerCase();
-  return lower.includes('exit=255')
-    || lower.includes('ssh transport failed')
-    || lower.includes('connection timed out')
-    || lower.includes('operation timed out')
-    || lower.includes('connection reset')
-    || lower.includes('broken pipe')
-    || lower.includes('banner exchange')
-    || lower.includes('kex_exchange_identification')
-    || lower.includes('remote session terminated unexpectedly');
-}
-
 type FreshBaseCommit = {
   branch: string;
   commit: string;
@@ -158,18 +134,6 @@ export interface ReviewGateCiFailureTrigger {
   generation: number;
   failedChecks: NonNullable<MergeGateApprovalStatus['checks']>['failed'];
   statusText: string;
-}
-
-function nextLeaseExpiry(from: Date): Date {
-  return new Date(from.getTime() + ATTEMPT_LEASE_MS);
-}
-
-function getExecutorStartTimeoutMs(): number {
-  const raw = process.env.INVOKER_EXECUTOR_START_TIMEOUT_MS?.trim();
-  if (!raw) return DEFAULT_EXECUTOR_START_TIMEOUT_MS;
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_EXECUTOR_START_TIMEOUT_MS;
-  return parsed;
 }
 
 function getGitOperationTimeoutMs(): number {
