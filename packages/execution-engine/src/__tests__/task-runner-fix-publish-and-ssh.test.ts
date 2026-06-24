@@ -1352,7 +1352,7 @@ describe('TaskRunner', () => {
         bundledSkills: ['make-pr'],
         buildCommand: () => ({
           cmd: 'node',
-          args: ['-e', 'var b="## Summary x ## Test Plan y ## Revert Plan z";process.stdout.write(JSON.stringify({artifacts:[{id:"only",title:"Only",url:"https://example.test/pr/1",providerId:"1",branch:"stack/only",baseBranch:"master",body:b}]}))'],
+          args: ['-e', 'var b=["## Summary","","Cut over recovery.","","## Test Plan","- [x] x","","## Revert Plan","- yes"].join("\\n");process.stdout.write(JSON.stringify({artifacts:[{id:"only",title:"Only",url:"https://example.test/pr/1",providerId:"1",branch:"stack/only",baseBranch:"master",body:b}]}))'],
           sessionId: 'commit-msg',
         }),
         buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),

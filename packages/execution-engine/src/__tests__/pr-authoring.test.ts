@@ -235,6 +235,42 @@ describe('validateReviewStackPrBody', () => {
     expect(errors).toContain('Missing required section: ## Non-goals');
   });
 
+  it('does not count a four-space-indented heading (Markdown code) as a real section', () => {
+    const indented = COMPLIANT_REVIEW_STACK_BODY.replace('## Non-goals\n', '    ## Non-goals\n');
+    const errors = validateReviewStackPrBody(indented);
+    expect(errors).toContain('Missing required section: ## Non-goals');
+  });
+
+  it('does not accept a Review metadata block that only appears inside a code fence', () => {
+    const fencedMeta = [
+      '## Summary',
+      '',
+      'Prose.',
+      '',
+      '```md',
+      '<details>',
+      '<summary>Review metadata</summary>',
+      'Review Claim: c',
+      'Review Lane: cleanup',
+      'Review Unit: scalar',
+      'Safety Invariant: s',
+      'Slice Rationale: r',
+      '</details>',
+      '```',
+      '',
+      '## Non-goals',
+      '- none',
+      '',
+      '## Test Plan',
+      '- [x] x',
+      '',
+      '## Revert Plan',
+      '- yes',
+    ].join('\n');
+    const errors = validateReviewStackPrBody(fencedMeta);
+    expect(errors).toContain('## Summary must include a collapsed <details> block with <summary>Review metadata</summary>.');
+  });
+
   it('requires real Markdown headings, not section names mentioned inline', () => {
     // Mentions "## Non-goals" only inside prose, not as a heading line.
     const inlineOnly = COMPLIANT_REVIEW_STACK_BODY.replace(
