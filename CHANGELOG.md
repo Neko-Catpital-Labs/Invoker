@@ -10,6 +10,7 @@ All notable changes to Invoker will be documented in this file.
 - Review gates can now track PR stacks with optional dependency order, expose that stack through query surfaces and the side panel, and discard or close stale PRs when the gate is invalidated.
 - Model merge-gate PR status as a single `open`/`closed`/`merged` lifecycle so a PR can never be treated as merged and closed at the same time.
 - Add Slack-native coding workflows: plan from a lobby `@Invoker` mention against a checked-out repo with a selectable planning harness (`[preset]`/`[repo:]` tags), spin the plan up as a workflow in a private `workflow-<id>` channel, and drive or question that workflow in-channel using only its own planning conversation and task transcripts.
+- Cap the `activity_log` table to its most recent 100000 rows, pruned as new entries are written, so `~/.invoker/invoker.db` can no longer grow without bound and trigger SIGBUS crashes.
 ## 0.0.4
 
 - Publish complete CLI and desktop release assets for npm launcher packages.
