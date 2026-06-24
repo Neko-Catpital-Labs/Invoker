@@ -1584,9 +1584,14 @@ export class Orchestrator {
           });
           return [];
         }
+        // Validate execution generation independently of attempt id. A retry
+        // can preserve the attempt id while bumping the generation, so a
+        // response carrying the live attempt id but a stale generation must
+        // still be rejected. Both fields are validated when present; an older
+        // producer that omits one field is still accepted on the field it does
+        // send (backwards compatibility).
         const activeGeneration = this.getExecutionGeneration(earlyTask);
         if (
-          !response.attemptId &&
           response.executionGeneration !== undefined &&
           response.executionGeneration !== activeGeneration
         ) {
