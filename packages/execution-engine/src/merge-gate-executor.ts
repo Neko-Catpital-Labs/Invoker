@@ -21,11 +21,14 @@ export class MergeGateExecutor extends BaseExecutor<MergeGateEntry> {
 
   async start(request: WorkRequest): Promise<ExecutorHandle> {
     const task = this.resolveTask(request);
+    const workflow = task.config.workflowId
+      ? this.host.persistence.loadWorkflow(task.config.workflowId)
+      : undefined;
     const launchWorkspacePath = this.createLaunchWorkspace(task.id);
 
     const handle = this.createHandle(request);
     handle.workspacePath = launchWorkspacePath;
-    handle.branch = undefined;
+    handle.branch = workflow?.featureBranch ?? undefined;
 
     const entry: MergeGateEntry = {
       request,
@@ -97,6 +100,21 @@ export class MergeGateExecutor extends BaseExecutor<MergeGateEntry> {
   async destroyAll(): Promise<void> {
     for (const [executionId, entry] of this.entries) {
       if (entry.heartbeatTimer) clearInterval(entry.heartbeatTimer);
+      entry.heartbeatTimer = undefined;
+      if (!entry.completed) {
+        entry.killed = true;
+        this.emitComplete(executionId, {
+          requestId: entry.request.requestId,
+          actionId: entry.request.actionId,
+          attemptId: entry.request.attemptId,
+          executionGeneration: entry.request.executionGeneration,
+          status: 'failed',
+          outputs: {
+            exitCode: 1,
+            error: 'Merge gate execution was stopped before completion',
+          },
+        });
+      }
       this.entries.delete(executionId);
     }
   }
@@ -140,6 +158,22 @@ export class MergeGateExecutor extends BaseExecutor<MergeGateEntry> {
           workspacePath: result.taskChanges.execution.workspacePath ?? launchWorkspacePath,
         }
         : undefined;
+
+      // The merge action may have taken minutes; destroyAll() can have killed or
+      // deleted this entry meanwhile and already emitted a terminal failure. Do
+      // not persist late execution state or complete again over that.
+      const liveEntry = this.getEntry(handle);
+      if (!liveEntry || liveEntry.completed || liveEntry.killed || entry.killed) {
+        this.cleanupLaunchWorkspace(launchWorkspacePath, executionChanges?.workspacePath);
+        return;
+      }
+
+      if (executionChanges?.workspacePath) {
+        handle.workspacePath = executionChanges.workspacePath;
+      }
+      if (executionChanges?.branch) {
+        handle.branch = executionChanges.branch;
+      }
       if (executionChanges) {
         this.host.persistence.updateTask(task.id, {
           execution: executionChanges,
