@@ -71,4 +71,31 @@ describe('worker single-instance lock', () => {
     recovery.release();
     other.release();
   });
+
+  it('keys the lock by worker kind: two kinds run at once, a held kind refuses a second start, and a stop frees only that kind', () => {
+    // Two different kinds acquire their own per-kind locks at the same time —
+    // distinct files, both held, neither blocks the other.
+    const alpha = acquireWorkerLock({ homeRoot, kind: 'alpha' });
+    const beta = acquireWorkerLock({ homeRoot, kind: 'beta' });
+    expect(alpha.path).not.toBe(beta.path);
+    expect(existsSync(alpha.path)).toBe(true);
+    expect(existsSync(beta.path)).toBe(true);
+
+    // A second start of an already-held kind is refused while its holder is
+    // live; the other kind is untouched by that contention.
+    expect(() => acquireWorkerLock({ homeRoot, kind: 'alpha' })).toThrow(WorkerLockHeldError);
+    expect(existsSync(beta.path)).toBe(true);
+
+    // Stopping the alpha worker releases only alpha's lock; beta keeps running.
+    alpha.release();
+    expect(existsSync(alpha.path)).toBe(false);
+    expect(existsSync(beta.path)).toBe(true);
+
+    // A later start of the same kind now succeeds because its lock was freed.
+    const alphaAgain = acquireWorkerLock({ homeRoot, kind: 'alpha' });
+    expect(existsSync(alphaAgain.path)).toBe(true);
+
+    alphaAgain.release();
+    beta.release();
+  });
 });
