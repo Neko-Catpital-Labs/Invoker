@@ -26,7 +26,6 @@ import type { WorkflowDerivedStatus } from '@invoker/workflow-graph';
 import type { Logger, WorkResponse } from '@invoker/contracts';
 import { ATTEMPT_LEASE_MS } from '@invoker/contracts';
 import { normalizeRunnerKind } from '@invoker/workflow-graph';
-import { parseMergeConflictError } from './merge-conflict-error.js';
 import {
   buildExecutorRoutedPayload,
   buildHeavyweightRoutingRules,
@@ -103,6 +102,19 @@ import {
   checkWorkflowCompletionImpl,
 } from './orchestrator/transitions.js';
 import type { TransitionHost } from './orchestrator/transitions.js';
+import {
+  buildTaskUpdateDelta,
+  buildTaskRemoveDelta,
+} from './orchestrator/events.js';
+import {
+  recreateWorkflowFromFreshBaseImpl,
+  getKnownFreshBaseCommitImpl,
+  beginConflictResolutionImpl,
+  beginAutoFixSessionImpl,
+  revertConflictResolutionImpl,
+  getMergeNodeImpl,
+} from './orchestrator/merge.js';
+import type { MergeHost } from './orchestrator/merge.js';
 import { buildPlanLocalToScopedIdMap, scopePlanTaskId } from './task-id-scope.js';
 import type { TaskRepository } from './task-repository.js';
 import {
@@ -170,7 +182,6 @@ const RECREATE_RESET_CHANGES: TaskStateChanges = {
   },
 };
 
-const FIX_FAILURE_PREFIX_RE = /^\[Fix with (?:Claude|Agent) failed\] [^\n]*\n\n/;
 const TRACE_PERSIST_SYNC = process.env.INVOKER_TRACE_PERSIST_SYNC === '1';
 const TRACE_WORKER_RESPONSE = process.env.INVOKER_TRACE_WORKER_RESPONSE === '1';
 const noopLogger: Logger = {
@@ -180,10 +191,6 @@ const noopLogger: Logger = {
   error() {},
   child() { return noopLogger; },
 };
-
-function stripFixFailureWrapper(errorText: string): string {
-  return errorText.replace(FIX_FAILURE_PREFIX_RE, '');
-}
 
 function nextLeaseExpiry(from: Date): Date {
   return new Date(from.getTime() + ATTEMPT_LEASE_MS);
@@ -779,24 +786,14 @@ export class Orchestrator {
    * returned by writeAndSync.
    */
   private buildUpdateDelta(before: TaskState, after: TaskState, changes: TaskStateChanges): TaskDelta {
-    return {
-      type: 'updated',
-      taskId: after.id,
-      changes,
-      taskStateVersion: after.taskStateVersion,
-      previousTaskStateVersion: before.taskStateVersion,
-    };
+    return buildTaskUpdateDelta(before, after, changes);
   }
 
   /**
    * Build a 'removed' TaskDelta with the task's last known task-state version.
    */
   private buildRemoveDelta(task: TaskState): TaskDelta {
-    return {
-      type: 'removed',
-      taskId: task.id,
-      previousTaskStateVersion: task.taskStateVersion,
-    };
+    return buildTaskRemoveDelta(task);
   }
 
   private touchWorkflow(workflowId: string): void {
@@ -2648,26 +2645,7 @@ export class Orchestrator {
       ) => Promise<{ commit?: string; branch?: string } | undefined | void>;
     },
   ): Promise<TaskState[]> {
-    if (options?.refreshBase) {
-      const fresh = await options.refreshBase(workflowId);
-      if (fresh && typeof fresh === 'object') {
-        if (typeof fresh.commit === 'string' && fresh.commit.length > 0) {
-          this.knownFreshBaseCommits.set(workflowId, fresh.commit);
-          this.logger.info('[orchestrator] recreateWorkflowFromFreshBase fresh base commit', {
-            workflowId,
-            freshBaseCommit: fresh.commit.slice(0, 12),
-          });
-        }
-        if (typeof fresh.branch === 'string' && fresh.branch.length > 0 && this.persistence.updateWorkflow) {
-          this.persistence.updateWorkflow(workflowId, { baseBranch: fresh.branch });
-          this.logger.info('[orchestrator] recreateWorkflowFromFreshBase fresh base branch', {
-            workflowId,
-            freshBaseBranch: fresh.branch,
-          });
-        }
-      }
-    }
-    return this.recreateWorkflow(workflowId);
+    return recreateWorkflowFromFreshBaseImpl(this as unknown as MergeHost, workflowId, options);
   }
 
   /**
@@ -2683,7 +2661,7 @@ export class Orchestrator {
    * prove the fresh-base step actually advanced.
    */
   getKnownFreshBaseCommit(workflowId: string): string | undefined {
-    return this.knownFreshBaseCommits.get(workflowId);
+    return getKnownFreshBaseCommitImpl(this as unknown as MergeHost, workflowId);
   }
 
   /**
@@ -2692,51 +2670,7 @@ export class Orchestrator {
    * Returns the saved error string so the caller can revert on failure.
    */
   beginConflictResolution(taskId: string, expectedLineage?: TaskLineageExpectation): { savedError: string } {
-    this.refreshFromDb();
-    const task = this.stateGetTask(taskId);
-    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
-    if (!this.taskMatchesLineageExpectation(task, expectedLineage)) {
-      throw new Error(`Task ${taskId} lineage is stale for conflict resolution start`);
-    }
-    if (task.status !== 'failed') throw new Error(`Task ${taskId} is not failed (status: ${task.status})`);
-
-    const savedError = task.execution.error ?? '';
-    const startedAt = new Date();
-
-    const id = task.id;
-    const changes: TaskStateChanges = {
-      status: 'fixing_with_ai',
-      execution: {
-        error: undefined,
-        exitCode: undefined,
-        completedAt: undefined,
-        mergeConflict: undefined,
-        isFixingWithAI: false,
-        startedAt,
-        lastHeartbeatAt: startedAt,
-      },
-    };
-    const changesWithGeneration = this.withBumpedExecutionGeneration(task, changes);
-    const conflictUpdated = this.writeAndSync(taskId, changesWithGeneration);
-    const attemptId = this.replaceSelectedAttempt(task);
-    this.taskRepository.updateAttempt(attemptId, {
-      status: 'running',
-      startedAt,
-      lastHeartbeatAt: startedAt,
-      branch: task.execution.branch,
-      commit: task.execution.commit,
-      workspacePath: task.execution.workspacePath,
-      agentSessionId: task.execution.agentSessionId,
-      containerId: task.execution.containerId,
-      mergeConflict: undefined,
-      error: undefined,
-      exitCode: undefined,
-    });
-    const delta: TaskDelta = this.buildUpdateDelta(task, conflictUpdated, changesWithGeneration);
-    this.persistence.logEvent?.(id, 'task.fixing_with_ai', changesWithGeneration);
-    this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
-
-    return { savedError };
+    return beginConflictResolutionImpl(this as unknown as MergeHost, taskId, expectedLineage);
   }
 
   /**
@@ -2748,55 +2682,7 @@ export class Orchestrator {
     taskId: string,
     opts: { savedError?: string; expectedLineage?: TaskLineageExpectation } = {},
   ): { savedError: string } {
-    this.refreshFromDb();
-    const task = this.stateGetTask(taskId);
-    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
-    if (!this.taskMatchesLineageExpectation(task, opts.expectedLineage)) {
-      throw new Error(`Task ${taskId} lineage is stale for auto-fix start`);
-    }
-    if (
-      task.status !== 'failed' &&
-      task.status !== 'review_ready' &&
-      task.status !== 'awaiting_approval'
-    ) {
-      throw new Error(`Task ${taskId} is not in an auto-fixable state (status: ${task.status})`);
-    }
-
-    const savedError = opts.savedError ?? task.execution.error ?? '';
-    const startedAt = new Date();
-    const id = task.id;
-    const changes: TaskStateChanges = {
-      status: 'fixing_with_ai',
-      execution: {
-        error: undefined,
-        exitCode: undefined,
-        completedAt: undefined,
-        mergeConflict: undefined,
-        isFixingWithAI: false,
-        startedAt,
-        lastHeartbeatAt: startedAt,
-      },
-    };
-    const changesWithGeneration = this.withBumpedExecutionGeneration(task, changes);
-    const updated = this.writeAndSync(id, changesWithGeneration);
-    const attemptId = this.replaceSelectedAttempt(task);
-    this.taskRepository.updateAttempt(attemptId, {
-      status: 'running',
-      startedAt,
-      lastHeartbeatAt: startedAt,
-      branch: task.execution.branch,
-      commit: task.execution.commit,
-      workspacePath: task.execution.workspacePath,
-      agentSessionId: task.execution.agentSessionId,
-      containerId: task.execution.containerId,
-      mergeConflict: undefined,
-      error: undefined,
-      exitCode: undefined,
-    });
-    const delta: TaskDelta = this.buildUpdateDelta(task, updated, changesWithGeneration);
-    this.persistence.logEvent?.(id, 'task.fixing_with_ai', changesWithGeneration);
-    this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
-    return { savedError };
+    return beginAutoFixSessionImpl(this as unknown as MergeHost, taskId, opts);
   }
 
   /**
@@ -2809,40 +2695,7 @@ export class Orchestrator {
     fixError?: string,
     expectedLineage?: TaskLineageExpectation,
   ): void {
-    this.refreshFromDb();
-    const task = this.stateGetTask(taskId);
-    if (!task) {
-      throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
-    }
-    if (!this.taskMatchesLineageExpectation(task, expectedLineage)) return;
-    const id = task.id;
-
-    const normalizedSavedError = stripFixFailureWrapper(savedError);
-    const mergeConflict = parseMergeConflictError(normalizedSavedError);
-
-    const displayError = fixError
-      ? `[Fix with Agent failed] ${fixError}\n\n${normalizedSavedError}`
-      : savedError;
-    const completedAt = new Date();
-    const changes: TaskStateChanges = {
-      status: 'failed',
-      execution: {
-        error: displayError,
-        mergeConflict,
-        isFixingWithAI: false,
-        completedAt,
-      },
-    };
-    const revertUpdated = this.writeAndSync(taskId, changes);
-    this.updateSelectedAttempt(taskId, {
-      status: 'failed',
-      error: displayError,
-      mergeConflict,
-      completedAt,
-    });
-    const delta: TaskDelta = this.buildUpdateDelta(task, revertUpdated, changes);
-    this.persistence.logEvent?.(id, 'task.failed', changes);
-    this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+    revertConflictResolutionImpl(this as unknown as MergeHost, taskId, savedError, fixError, expectedLineage);
   }
 
   /**
@@ -4009,9 +3862,7 @@ export class Orchestrator {
    * Find the terminal merge node for a given workflow.
    */
   getMergeNode(workflowId: string): TaskState | undefined {
-    return this.stateMachine.getAllTasks().find(
-      (t) => t.config.workflowId === workflowId && t.config.isMergeNode,
-    );
+    return getMergeNodeImpl(this as unknown as MergeHost, workflowId);
   }
 
   getWorkflowStatus(workflowId?: string): {
