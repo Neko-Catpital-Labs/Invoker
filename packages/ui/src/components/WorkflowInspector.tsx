@@ -61,6 +61,19 @@ function getMergeNodeReviewUrl(
   return undefined;
 }
 
+/** The merge gate task for the selected workflow, whether or not it is the selected node. */
+function getMergeGateTask(
+  task: TaskState | null,
+  tasks: Map<string, TaskState> | undefined,
+): TaskState | null {
+  if (task?.config.isMergeNode) return task;
+  if (!tasks) return null;
+  for (const candidate of tasks.values()) {
+    if (candidate.config.isMergeNode) return candidate;
+  }
+  return null;
+}
+
 
 function artifactLabel(artifact: ReviewGateArtifact): string {
   return artifact.title || artifact.url || (artifact.providerId ? `#${artifact.providerId}` : artifact.id);
@@ -163,6 +176,15 @@ export function WorkflowInspector({
   const nodeTitle = task?.description ?? workflowTitle ?? 'No node selected';
   const showsWorkflowMergeDetails = Boolean(!task && workflow?.id && workflow.onFinish === 'pull_request');
   const isMergeNode = Boolean((task?.config.isMergeNode || showsWorkflowMergeDetails) && workflow?.id);
+  const mergeGateTask = getMergeGateTask(task, workflowTasks);
+  const canConvertToExternalReview = Boolean(
+    workflow?.id
+    && onSetMergeMode
+    && mergeModeValue(workflow.mergeMode) !== 'external_review'
+    && mergeGateTask
+    && (mergeGateTask.status === 'pending' || mergeGateTask.status === 'review_ready')
+    && !mergeGateTask.execution.reviewUrl,
+  );
   const currentAgent = task?.config.executionAgent ?? task?.execution.agentName ?? 'claude';
   const agentOptions = useMemo(() => {
     const names = new Set(executionAgents ?? []);
@@ -384,6 +406,19 @@ export function WorkflowInspector({
                   <option value="external_review">External review (GitHub)</option>
                 </select>
               </label>
+            )}
+            {canConvertToExternalReview && onSetMergeMode && workflow?.id && (
+              <button
+                type="button"
+                onClick={() => void onSetMergeMode(workflow.id, 'external_review')}
+                disabled={isTaskBusy}
+                data-testid="convert-to-external-review-button"
+                data-sidebar-nav-item
+                data-sidebar-nav-order="17"
+                className="w-full rounded border border-blue-500/50 bg-blue-600/20 px-2 py-1 text-xs font-medium text-blue-200 hover:bg-blue-600/30 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Convert to GitHub review
+              </button>
             )}
             {workflow?.repoUrl && (
               <div className="flex items-start justify-between gap-3">

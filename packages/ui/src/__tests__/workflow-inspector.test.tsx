@@ -608,4 +608,129 @@ describe('WorkflowInspector', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reject Fix' }));
     expect(onReject).toHaveBeenCalledWith(task);
   });
+
+  it('converts a review-ready merge gate to external review from the workflow-level button', () => {
+    const onSetMergeMode = vi.fn();
+
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'review_ready', mergeMode: 'manual' }}
+        task={makeTask({
+          id: '__merge__wf-1',
+          description: 'Review gate',
+          status: 'review_ready',
+          config: { workflowId: 'wf-1', isMergeNode: true },
+          execution: {},
+        })}
+        collapsed={false}
+        advancedExpanded={false}
+        onSetMergeMode={onSetMergeMode}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    const button = screen.getByTestId('convert-to-external-review-button');
+    expect(button).toBeInTheDocument();
+    fireEvent.click(button);
+    expect(onSetMergeMode).toHaveBeenCalledWith('wf-1', 'external_review');
+  });
+
+  it('shows the conversion button for a workflow-only selection whose merge gate is pending without a review URL', () => {
+    const mergeTask = makeTask({
+      id: '__merge__wf-1',
+      description: 'Merge gate',
+      status: 'pending',
+      config: { workflowId: 'wf-1', isMergeNode: true },
+      execution: {},
+    });
+
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'running', onFinish: 'pull_request', mergeMode: 'manual' }}
+        task={null}
+        workflowTasks={new Map([[mergeTask.id, mergeTask]])}
+        collapsed={false}
+        advancedExpanded={false}
+        onSetMergeMode={() => Promise.resolve()}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId('convert-to-external-review-button')).toBeInTheDocument();
+  });
+
+  it('hides the conversion button once the workflow is already in external review mode', () => {
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'review_ready', mergeMode: 'external_review' }}
+        task={makeTask({
+          id: '__merge__wf-1',
+          description: 'Review gate',
+          status: 'review_ready',
+          config: { workflowId: 'wf-1', isMergeNode: true },
+          execution: {},
+        })}
+        collapsed={false}
+        advancedExpanded={false}
+        onSetMergeMode={() => Promise.resolve()}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.queryByTestId('convert-to-external-review-button')).not.toBeInTheDocument();
+  });
+
+  it('hides the conversion button when the merge gate already has a review URL', () => {
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'review_ready', mergeMode: 'manual' }}
+        task={makeTask({
+          id: '__merge__wf-1',
+          description: 'Review gate',
+          status: 'review_ready',
+          config: { workflowId: 'wf-1', isMergeNode: true },
+          execution: { reviewUrl: 'https://github.com/org/repo/pull/34' },
+        })}
+        collapsed={false}
+        advancedExpanded={false}
+        onSetMergeMode={() => Promise.resolve()}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.queryByTestId('convert-to-external-review-button')).not.toBeInTheDocument();
+  });
+
+  it('keeps the merge mode control visible for a gate with a review URL even though conversion is hidden', () => {
+    const onSetMergeMode = vi.fn();
+
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'review_ready', mergeMode: 'manual' }}
+        task={makeTask({
+          id: '__merge__wf-1',
+          description: 'Review gate',
+          status: 'review_ready',
+          config: { workflowId: 'wf-1', isMergeNode: true },
+          execution: { reviewUrl: 'https://github.com/org/repo/pull/34' },
+        })}
+        collapsed={false}
+        advancedExpanded={false}
+        onSetMergeMode={onSetMergeMode}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.queryByTestId('convert-to-external-review-button')).not.toBeInTheDocument();
+
+    const select = screen.getByTestId('merge-mode-select');
+    expect(select).toHaveValue('manual');
+    fireEvent.change(select, { target: { value: 'external_review' } });
+    expect(onSetMergeMode).toHaveBeenCalledWith('wf-1', 'external_review');
+  });
 });
