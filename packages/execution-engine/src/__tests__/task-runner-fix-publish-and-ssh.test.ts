@@ -1381,6 +1381,54 @@ describe('TaskRunner', () => {
       })).rejects.toThrow(/invalid PR body — .*Non-goals/);
     });
 
+    it('publishReviewStackWithMakePrSkill validates the published body, not just the agent-reported one', async () => {
+      // Agent reports a fully compliant body in JSON...
+      const goodBody = [
+        '## Summary', '', 'x', '', '<details>', '<summary>Review metadata</summary>', '',
+        'Review Claim: c', 'Review Lane: cleanup', 'Review Unit: scalar',
+        'Safety Invariant: s', 'Slice Rationale: r', '', '</details>', '',
+        '## Non-goals', '- none', '', '## Test Plan', '- [x] t', '', '## Revert Plan', '- yes',
+      ].join('\n');
+      const agent = {
+        name: 'claude',
+        stdinMode: 'ignore' as const,
+        bundledSkills: ['make-pr'],
+        buildCommand: () => ({
+          cmd: 'node',
+          args: ['-e', `var b=${JSON.stringify(goodBody)};process.stdout.write(JSON.stringify({artifacts:[{id:"only",title:"Only",url:"https://example.test/pr/1",providerId:"1",branch:"stack/only",baseBranch:"master",body:b}]}))`],
+          sessionId: 'good',
+        }),
+        buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+      };
+      const executor = new TaskRunner({
+        orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        executionAgentRegistry: {
+          get: vi.fn().mockReturnValue(agent),
+          getOrThrow: vi.fn(),
+          getSessionDriver: vi.fn().mockReturnValue(undefined),
+          listWithCapability: vi.fn().mockReturnValue([agent]),
+        } as any,
+        // ...but the body actually published on GitHub is a bare commit message.
+        mergeGateProvider: {
+          name: 'github',
+          createReview: vi.fn(),
+          checkApproval: vi.fn(),
+          getReviewBody: vi.fn().mockResolvedValue('Just a commit message subject\n\nsome body line'),
+        } as any,
+        cwd: '/tmp',
+      });
+
+      await expect((executor as any).publishReviewStackWithMakePrSkill({
+        workflowId: 'wf-1',
+        title: 'Stack',
+        baseBranch: 'master',
+        featureBranch: 'plan/feature',
+        workflowSummary: 'summary',
+        cwd: '/tmp',
+      })).rejects.toThrow(/invalid PR body — .*\[published\]/);
+    });
 
     it('authorPrBodyWithSkill falls back to canonical body when authored body is invalid and no other agents available', async () => {
       const tempHome = createTempWorkspace();
