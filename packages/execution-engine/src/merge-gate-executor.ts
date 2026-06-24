@@ -151,10 +151,8 @@ export class MergeGateExecutor extends BaseExecutor<MergeGateEntry> {
 
     try {
       this.emitOutput(handle.executionId, `[merge] Starting merge gate action: ${task.id}\n`);
-      // Launch lineage from the dispatched request. If the merge task is
-      // relaunched while this long-running action is in flight, the direct
-      // metadata write below must be suppressed so stale work cannot overwrite
-      // the newer launch's branch/workspacePath/review fields.
+      // Capture launch lineage so a stale (relaunched) run's direct metadata
+      // write is suppressed.
       const lineage: MergeGateLineage = {
         selectedAttemptId: entry.request.attemptId,
         generation: entry.request.executionGeneration ?? 0,

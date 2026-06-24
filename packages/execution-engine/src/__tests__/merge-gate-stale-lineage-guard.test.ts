@@ -1,18 +1,7 @@
-/**
- * Regression coverage for the merge-gate direct-write lineage guard.
- *
- * The MergeGateExecutor writes execution metadata (branch, workspacePath,
- * review fields) straight to persistence after `runMergeGateActionImpl`
- * returns — a path that bypasses the worker-response lineage guard in
- * `Orchestrator.handleWorkerResponse`. A merge-gate run can take a long time,
- * so if the merge task is relaunched meanwhile (newer selectedAttemptId or
- * executionGeneration) the stale run must NOT clobber the fresh launch's state.
- *
- * These tests prove:
- *   1. a stale merge-gate run cannot write direct execution metadata;
- *   2. the eventual stale worker response is still rejected by the orchestrator;
- *   3. a valid (current) merge-gate run still persists review-ready metadata.
- */
+// Regression coverage for the merge-gate direct-write lineage guard: a stale
+// (relaunched) merge-gate run must not clobber the fresh launch's metadata,
+// the eventual stale worker response is still rejected, and a current run
+// still persists review-ready metadata.
 
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import type { Logger, WorkRequest, WorkResponse } from '@invoker/contracts';
@@ -44,11 +33,8 @@ function makeMergeTask(execution: Partial<TaskState['execution']>): TaskState {
   } as TaskState;
 }
 
-/**
- * Minimal MergeRunnerHost that drives a real MergeGateExecutor without touching
- * git: with onFinish='none' and mergeMode='manual', runMergeGateActionImpl
- * takes the no-consolidation review_ready branch and never shells out.
- */
+// Minimal host: with onFinish='none' and mergeMode='manual' the run takes the
+// no-consolidation review_ready branch and never shells out to git.
 function makeHost(opts: {
   liveTask: TaskState;
   updateTask: ReturnType<typeof vi.fn>;
@@ -176,8 +162,7 @@ describe('merge-gate stale-lineage direct-write guard', () => {
   });
 
   it('does not write direct execution metadata when the merge task advanced to a newer attempt', async () => {
-    // Launch lineage: attempt-1 / gen 0. By the time the run finishes, the
-    // live merge task has been relaunched as attempt-2 / gen 1.
+    // Launch is attempt-1/gen 0; the live task has relaunched to attempt-2/gen 1.
     const liveTask = makeMergeTask({ selectedAttemptId: 'attempt-2', generation: 1 });
     const updateTask = vi.fn();
     const host = makeHost({ liveTask, updateTask });
@@ -185,20 +170,15 @@ describe('merge-gate stale-lineage direct-write guard', () => {
 
     const response = await runToCompletion(executor, makeRequest('attempt-1', 0));
 
-    // The stale run must not have written branch / workspacePath / review
-    // metadata directly to persistence — neither the up-front review clear nor
-    // the post-run handoff.
     expect(updateTask).not.toHaveBeenCalled();
-
-    // The run still emits a completion, and it carries the STALE launch lineage
-    // so the worker-response guard (asserted below) will reject it.
+    // Completion carries the stale lineage so the worker-response guard rejects it.
     expect(response.status).toBe('review_ready');
     expect(response.attemptId).toBe('attempt-1');
     expect(response.executionGeneration).toBe(0);
   });
 
   it('does not write direct execution metadata when the merge task advanced to a newer generation', async () => {
-    // Same attempt id, but the live generation has moved past the launch one.
+    // Same attempt id, but the live generation moved past the launch one.
     const liveTask = makeMergeTask({ selectedAttemptId: 'attempt-1', generation: 2 });
     const updateTask = vi.fn();
     const host = makeHost({ liveTask, updateTask });
@@ -212,7 +192,7 @@ describe('merge-gate stale-lineage direct-write guard', () => {
   });
 
   it('persists review-ready metadata when the launch lineage is still current', async () => {
-    // Live merge task matches the launch lineage (attempt-1 / gen 0).
+    // Live task matches the launch lineage (attempt-1/gen 0).
     const liveTask = makeMergeTask({ selectedAttemptId: 'attempt-1', generation: 0 });
     const updateTask = vi.fn();
     const host = makeHost({ liveTask, updateTask });
