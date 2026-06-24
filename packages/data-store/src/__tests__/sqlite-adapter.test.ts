@@ -2352,12 +2352,6 @@ describe('SQLiteAdapter', () => {
     });
 
     it('folds durable diagnostic content into the output tail', async () => {
-      // Executor startup failures append concrete startup stderr via
-      // appendTaskOutput, which lands only in the diagnostic file (never the
-      // spool). getOutputTail — the source persistShutdownDiagnostic snapshots
-      // and the live-tail IPC reads — must surface it so a synthetic
-      // owner-shutdown / startup-stall failure retains the concrete context
-      // instead of a coarse terminal error alone.
       const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-tail-diag-'));
       const dbPath = join(dir, 'invoker.db');
 
@@ -2384,8 +2378,6 @@ describe('SQLiteAdapter', () => {
     });
 
     it('returns a startup diagnostic tail even with no spool output', async () => {
-      // An executor that dies before streaming anything leaves only the
-      // diagnostic file; the tail must still surface its concrete message.
       const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-tail-diag-only-'));
       const dbPath = join(dir, 'invoker.db');
 
@@ -3890,11 +3882,8 @@ describe('SQLiteAdapter', () => {
         expect(sqliteScalar(db, 'SELECT COUNT(*) FROM task_output')).toBe(0);
         expect(sqliteScalar(db, 'SELECT COUNT(*) FROM output_spool')).toBe(0);
         expect(db.listWorkflows()).toHaveLength(1);
-        // 5 spool chunks (bounded by outputTailLimit) plus a single bounded
-        // diagnostic chunk folded in from the large full/*.log file.
         const tail = db.getOutputTail('t-large-output');
         expect(tail).toHaveLength(6);
-        // The diagnostic chunk must be bounded, not the multi-MB raw file.
         expect(tail[tail.length - 1].data.length).toBeLessThan(64 * 1024);
 
         db.close();
