@@ -1234,14 +1234,6 @@ function startHeadlessMode(): void {
 
       // In standalone owner mode, serve delegated requests from peer headless processes.
       if (standaloneMode && messageBus) {
-        if (!readOnlyMode) {
-          standaloneLaunchDispatcherController = startStandaloneLaunchDispatcher({
-            headlessDeps,
-            ownerId: workflowMutationOwnerId,
-            createTaskExecutor: createStandaloneTaskExecutor,
-            setLatestTaskExecutor: (executor) => { latestTaskExecutor = executor; },
-          });
-        }
         const standaloneOwnerIdleTimeoutMs = Number.parseInt(
           process.env.INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS ?? '0',
           10,
@@ -1713,6 +1705,16 @@ function startHeadlessMode(): void {
           getTaskExecutor: createStandaloneTaskExecutor,
           logger,
         });
+
+        // Owner discovery and exec handlers must exist before dispatch polling starts.
+        if (!readOnlyMode) {
+          standaloneLaunchDispatcherController = startStandaloneLaunchDispatcher({
+            headlessDeps,
+            ownerId: workflowMutationOwnerId,
+            createTaskExecutor: createStandaloneTaskExecutor,
+            setLatestTaskExecutor: (executor) => { latestTaskExecutor = executor; },
+          });
+        }
       }
 
       await runHeadless(cliArgs, headlessDeps);
