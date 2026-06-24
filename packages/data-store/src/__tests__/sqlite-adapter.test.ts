@@ -3247,6 +3247,30 @@ describe('SQLiteAdapter', () => {
     });
   });
 
+  describe('execution_model — round-trips through save and load', () => {
+    it('persists executionModel and loads it back', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const task = makeTask('t-model-1', {
+        config: { workflowId: 'wf-1', executionModel: 'claude' },
+      });
+      adapter.saveTask('wf-1', task);
+
+      const loaded = adapter.loadTasks('wf-1').find((t) => t.id === 't-model-1');
+      expect(loaded?.config.executionModel).toBe('claude');
+    });
+
+    it('loads executionModel as undefined when it is not set', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const task = makeTask('t-model-2', {
+        config: { workflowId: 'wf-1' },
+      });
+      adapter.saveTask('wf-1', task);
+
+      const loaded = adapter.loadTasks('wf-1').find((t) => t.id === 't-model-2');
+      expect(loaded?.config.executionModel).toBeUndefined();
+    });
+  });
+
   describe('end-to-end: fix-with-codex → open-terminal reads codex', () => {
     it('simulates headless fix codex flow and verifies getExecutionAgent returns codex', () => {
       adapter.saveWorkflow(testWorkflow);
