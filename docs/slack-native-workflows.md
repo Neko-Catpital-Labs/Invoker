@@ -47,6 +47,10 @@ Override them in `~/.invoker/config.json`:
 }
 ```
 
+`slackHarnessPresets` replaces the built-in preset map when set, so
+`defaultSlackHarnessPreset` must name one of the configured keys. `slackRepos`
+maps short `[repo:<alias>]` tags to Git URLs.
+
 Model strings are passed verbatim to the CLI's `--model`; set exact ids your CLI accepts. Plain `codex` ignores the model (uses the CLI default). The generated workflow's per-task `executionAgent` is whatever the `plan-to-invoker` skill writes, defaulting to the chosen preset's tool when the skill leaves it unset.
 
 ## Environment
@@ -80,5 +84,6 @@ Without `groups:write`, channel creation fails; without `groups:history`, the in
 ## Scope notes
 
 - Runs on the existing bring-your-own-machine / DigitalOcean SSH single-owner model. No hosted AWS env is required.
+- This guide describes the current embedded owner / bring-your-own-machine path; hosted or sandboxed Slack-worker deployment is a separate architecture slice.
 - Workflow creation uses `orchestrator.loadPlan` (the same path headless `run` uses); there is no separate HTTP/facade create route today.
 - One owner process serves all workflows; "spinning up a planning bot" is a per-thread planning conversation in a per-repo checkout plus a per-workflow channel, all under that one process.

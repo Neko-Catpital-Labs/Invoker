@@ -78,14 +78,12 @@
   ],
 
   "slackHarnessPresets": {
-    "comment": "Slack planning harness presets: preset key -> CLI tool + optional model. Selected via a leading [preset] tag in the lobby @Invoker message. Omit to use built-ins (cursor+claude / cursor+codex / omp / omp+claude / codex).",
     "omp+claude": { "tool": "omp", "model": "anthropic/claude-opus-4" },
     "cursor+codex": { "tool": "cursor", "model": "gpt-5-codex" },
     "codex": { "tool": "codex" }
   },
-  "defaultSlackHarnessPreset": "cursor+claude",
+  "defaultSlackHarnessPreset": "omp+claude",
   "slackRepos": {
-    "comment": "Slack repo aliases: alias -> git URL, resolved from a [repo:<alias>] tag",
     "web": "git@github.com:acme/web.git",
     "api": "git@github.com:acme/api.git"
   },
