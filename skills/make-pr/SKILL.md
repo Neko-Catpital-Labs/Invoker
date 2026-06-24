@@ -12,6 +12,7 @@ description: >
 Use this skill when the work is already done and the user wants a PR created, updated, or rewritten.
 
 For stacked PRs, apply `skills/review-compression/SKILL.md` before you write titles or PR bodies. If one branch mixes more than one local review claim, split the stack first.
+For decomposition or extraction refactors (splitting a large file into modules), one PR moves one cohesive unit: create the target file, move ONE function/class/phase, re-point references, keep the public surface stable. The next unit is the next PR. Bundling several extractions into one branch ("extract prepare + dispatch + finalize") is the default mistake this rule prevents — see the **Decomposition & Extraction Refactors** section of `skills/review-compression/SKILL.md`.
 
 ## Stack ordering
 
