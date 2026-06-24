@@ -2814,14 +2814,35 @@ export class TaskRunner {
         const result = await spawnAgentPrAuthorViaRegistry(prompt, args.cwd, agent, driver);
         const parsedArtifacts = parseMakePrStackPublishResult(result.body);
 
-        // Enforce the make-pr review-stack schema on every published body.
-        // A mergify-default commit-message body (e.g. PR #2170) fails here and
-        // falls through to the next agent instead of shipping unreviewable.
-        const bodyErrors = parsedArtifacts.flatMap((artifact, index) =>
-          validateReviewStackPrBody(artifact.body ?? '').map(
-            (error) => `artifact[${index}] (${artifact.url}): ${error}`,
-          ),
-        );
+        // Enforce the make-pr review-stack schema on every published body. Prefer
+        // the body actually published on the provider: a lazy agent could report a
+        // compliant body in JSON while letting Mergify default the real PR to the
+        // commit message — the exact PR #2170 failure. Fall back to the
+        // agent-reported body only when the live body cannot be read.
+        const bodyErrors: string[] = [];
+        for (let index = 0; index < parsedArtifacts.length; index += 1) {
+          const artifact = parsedArtifacts[index];
+          let bodyToCheck = artifact.body ?? '';
+          let bodySource = 'agent-reported';
+          if (this.mergeGateProvider?.getReviewBody && artifact.providerId) {
+            try {
+              bodyToCheck = await this.mergeGateProvider.getReviewBody({
+                identifier: artifact.providerId,
+                cwd: args.cwd,
+              });
+              bodySource = 'published';
+            } catch (fetchErr) {
+              this.logger.warn(
+                `[pr-authoring] could not read published body for PR ${artifact.providerId}; `
+                  + `validating agent-reported body instead: `
+                  + `${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}`,
+              );
+            }
+          }
+          for (const error of validateReviewStackPrBody(bodyToCheck)) {
+            bodyErrors.push(`artifact[${index}] (${artifact.url}) [${bodySource}]: ${error}`);
+          }
+        }
         if (bodyErrors.length > 0) {
           this.logger.warn(
             `[pr-authoring] review-stack body validation failed agent=${agent.name} `
