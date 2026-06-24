@@ -1,0 +1,312 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { EventEmitter } from 'node:events';
+import * as child_process from 'node:child_process';
+import { SlackSurface, parsePlanningRequest } from '../slack/slack-surface.js';
+import { SQLiteAdapter, ConversationRepository, WorkflowChannelRepository } from '@invoker/data-store';
+import type { SurfaceCommand } from '../surface.js';
+import type { WorkflowContext } from '../slack/workflow-assistant.js';
+
+// ── Mocks ────────────────────────────────────────────────────
+
+interface MockHandler {
+  pattern: string | RegExp;
+  handler: Function;
+}
+
+vi.mock('@slack/bolt', () => {
+  class MockApp {
+    _eventHandlers: MockHandler[] = [];
+    _actionHandlers: MockHandler[] = [];
+    _commandHandlers: MockHandler[] = [];
+    command = vi.fn((name: string, handler: Function) => { this._commandHandlers.push({ pattern: name, handler }); });
+    action = vi.fn((pattern: string | RegExp, handler: Function) => { this._actionHandlers.push({ pattern, handler }); });
+    event = vi.fn((name: string, handler: Function) => { this._eventHandlers.push({ pattern: name, handler }); });
+    start = vi.fn().mockResolvedValue(undefined);
+    stop = vi.fn().mockResolvedValue(undefined);
+    client = {
+      chat: {
+        postMessage: vi.fn().mockResolvedValue({ ts: '1.1' }),
+        update: vi.fn().mockResolvedValue({}),
+        delete: vi.fn().mockResolvedValue({}),
+      },
+      auth: { test: vi.fn().mockResolvedValue({ user_id: 'U_BOT' }) },
+      reactions: { add: vi.fn().mockResolvedValue({}), remove: vi.fn().mockResolvedValue({}) },
+      conversations: {
+        create: vi.fn().mockResolvedValue({ channel: { id: 'C_NEW' } }),
+        invite: vi.fn().mockResolvedValue({}),
+        list: vi.fn().mockResolvedValue({ channels: [] }),
+      },
+    };
+  }
+  return { App: MockApp };
+});
+
+const planConversationConfigs: any[] = [];
+vi.mock('../slack/plan-conversation.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../slack/plan-conversation.js')>();
+  return {
+    ...actual,
+    PlanConversation: vi.fn((config: unknown) => {
+      planConversationConfigs.push(config);
+      return {
+        sendMessage: vi.fn().mockResolvedValue('planner reply'),
+        submittedPlanText: null,
+        planSubmitted: false,
+        init: vi.fn().mockResolvedValue(undefined),
+      };
+    }),
+  };
+});
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof child_process>();
+  return { ...actual, spawn: vi.fn() };
+});
+const mockSpawn = vi.mocked(child_process.spawn);
+
+function mockProcess(stdout: string, exitCode = 0): any {
+  const proc = new EventEmitter() as any;
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  proc.kill = vi.fn();
+  // Defer the emit to the next microtask so the close listener is attached first.
+  queueMicrotask(() => {
+    proc.stdout.emit('data', Buffer.from(stdout));
+    proc.emit('close', exitCode);
+  });
+  return proc;
+}
+
+const silentLog = () => {};
+
+function baseConfig() {
+  return {
+    botToken: 'xoxb', appToken: 'xapp', signingSecret: 's', channelId: 'CLOBBY', log: silentLog,
+  };
+}
+
+function mentionHandler(surface: SlackSurface): Function {
+  const app = surface.getApp() as any;
+  return app._eventHandlers.find((h: MockHandler) => h.pattern === 'app_mention')!.handler;
+}
+
+// ── parsePlanningRequest ─────────────────────────────────────
+
+describe('parsePlanningRequest', () => {
+  const keys = ['cursor+claude', 'cursor+codex', 'omp', 'omp+claude', 'codex'];
+
+  it('parses preset + repo tags and request text', () => {
+    expect(parsePlanningRequest('<@BOT> [omp+claude] [repo:web] do X', keys, 'cursor+claude')).toEqual({
+      presetKey: 'omp+claude',
+      repo: 'web',
+      text: 'do X',
+    });
+  });
+
+  it('defaults the preset and leaves repo undefined when no tags', () => {
+    expect(parsePlanningRequest('<@BOT> do X', keys, 'cursor+claude')).toEqual({
+      presetKey: 'cursor+claude',
+      repo: undefined,
+      text: 'do X',
+    });
+  });
+
+  it('normalizes a "plain <tool>" tag and stops at unknown tags', () => {
+    expect(parsePlanningRequest('[plain codex] go', keys, 'cursor+claude')).toEqual({
+      presetKey: 'codex',
+      repo: undefined,
+      text: 'go',
+    });
+    expect(parsePlanningRequest('[unknown] go', keys, 'cursor+claude')).toEqual({
+      presetKey: 'cursor+claude',
+      repo: undefined,
+      text: '[unknown] go',
+    });
+  });
+
+  it('resolves a bare omp preset', () => {
+    expect(parsePlanningRequest('[omp] add a /health endpoint', keys, 'cursor+claude')).toEqual({
+      presetKey: 'omp',
+      repo: undefined,
+      text: 'add a /health endpoint',
+    });
+  });
+
+  it('flags a tool-shaped tag that matches no preset', () => {
+    expect(parsePlanningRequest('[cursor] go', keys, 'cursor+claude')).toEqual({
+      presetKey: 'cursor+claude',
+      repo: undefined,
+      text: 'go',
+      unknownPreset: 'cursor',
+    });
+    expect(parsePlanningRequest('[omp+gpt5] go', keys, 'cursor+claude')).toEqual({
+      presetKey: 'cursor+claude',
+      repo: undefined,
+      text: 'go',
+      unknownPreset: 'omp+gpt5',
+    });
+  });
+});
+
+// ── Harness routing ──────────────────────────────────────────
+
+describe('harness routing', () => {
+  beforeEach(() => { planConversationConfigs.length = 0; });
+
+  it('constructs the planning conversation with the preset tool/model and injected builder', async () => {
+    const builder = vi.fn(() => ({ command: 'cursor', args: [] }));
+    const surface = new SlackSurface({ ...baseConfig(), planningCommandBuilder: builder });
+    await surface.start(async () => {});
+
+    await mentionHandler(surface)({
+      event: { text: '<@BOT> [cursor+codex] add a /health endpoint', ts: 't1', user: 'U1' },
+      say: vi.fn().mockResolvedValue({ ts: 'ack' }),
+    });
+
+    const cfg = planConversationConfigs.at(-1);
+    expect(cfg.tool).toBe('cursor');
+    expect(cfg.model).toBe('codex');
+    expect(cfg.planningCommandBuilder).toBe(builder);
+  });
+});
+
+// ── Channel creation ─────────────────────────────────────────
+
+describe('workflow channel creation', () => {
+  let adapter: SQLiteAdapter;
+  let repo: WorkflowChannelRepository;
+
+  beforeEach(async () => {
+    adapter = await SQLiteAdapter.create(':memory:');
+    repo = new WorkflowChannelRepository(adapter);
+  });
+
+  it('creates a private channel, invites the requester, persists, and posts both places', async () => {
+    const surface = new SlackSurface({ ...baseConfig(), workflowChannelRepo: repo });
+    const client = (surface.getApp() as any).client;
+
+    await surface.handleEvent({
+      type: 'workflow_created', workflowId: 'wf-1-2', requestedBy: 'U1',
+      lobbyChannel: 'CLOBBY', lobbyThreadTs: 't1', harnessPreset: 'omp+claude', repoUrl: 'r',
+    });
+
+    expect(client.conversations.create).toHaveBeenCalledWith({ name: 'workflow-1-2', is_private: true });
+    expect(client.conversations.invite).toHaveBeenCalledWith({ channel: 'C_NEW', users: 'U1' });
+    expect(repo.getByWorkflowId('wf-1-2')?.channelId).toBe('C_NEW');
+    const postChannels = client.chat.postMessage.mock.calls.map((c: any[]) => c[0].channel);
+    expect(postChannels).toContain('C_NEW');
+    expect(postChannels).toContain('CLOBBY');
+  });
+
+  it('reuses an existing channel id on name_taken', async () => {
+    const surface = new SlackSurface({ ...baseConfig(), workflowChannelRepo: repo });
+    const client = (surface.getApp() as any).client;
+    client.conversations.create.mockRejectedValueOnce({ data: { error: 'name_taken' } });
+    client.conversations.list.mockResolvedValueOnce({ channels: [{ name: 'workflow-1-2', id: 'C_EXIST' }] });
+
+    await surface.handleEvent({ type: 'workflow_created', workflowId: 'wf-1-2', requestedBy: 'U1' });
+
+    expect(repo.getByWorkflowId('wf-1-2')?.channelId).toBe('C_EXIST');
+  });
+});
+
+// ── Outbound routing ─────────────────────────────────────────
+
+describe('outbound routing', () => {
+  let adapter: SQLiteAdapter;
+  let repo: WorkflowChannelRepository;
+
+  beforeEach(async () => {
+    adapter = await SQLiteAdapter.create(':memory:');
+    repo = new WorkflowChannelRepository(adapter);
+    repo.save({ workflowId: 'wf-1-2', channelId: 'C123', createdAt: new Date().toISOString() });
+  });
+
+  it('posts a mapped workflow delta to its channel', async () => {
+    const surface = new SlackSurface({ ...baseConfig(), workflowChannelRepo: repo });
+    const client = (surface.getApp() as any).client;
+    await surface.handleEvent({
+      type: 'task_delta',
+      delta: { type: 'updated', taskId: 'wf-1-2/api', changes: { status: 'running' }, taskStateVersion: 1, previousTaskStateVersion: 0 },
+    });
+    expect(client.chat.postMessage).toHaveBeenCalledWith(expect.objectContaining({ channel: 'C123' }));
+  });
+
+  it('falls back to the lobby channel for an unmapped workflow', async () => {
+    const surface = new SlackSurface({ ...baseConfig(), workflowChannelRepo: repo });
+    const client = (surface.getApp() as any).client;
+    await surface.handleEvent({
+      type: 'task_delta',
+      delta: { type: 'updated', taskId: 'wf-9/api', changes: { status: 'running' }, taskStateVersion: 1, previousTaskStateVersion: 0 },
+    });
+    expect(client.chat.postMessage).toHaveBeenCalledWith(expect.objectContaining({ channel: 'CLOBBY' }));
+  });
+});
+
+// ── In-channel assistant ─────────────────────────────────────
+
+describe('in-channel workflow assistant', () => {
+  let adapter: SQLiteAdapter;
+  let repo: WorkflowChannelRepository;
+  let convoRepo: ConversationRepository;
+  let received: SurfaceCommand[];
+
+  beforeEach(async () => {
+    adapter = await SQLiteAdapter.create(':memory:');
+    repo = new WorkflowChannelRepository(adapter);
+    convoRepo = new ConversationRepository(adapter, { info: silentLog, warn: silentLog, error: silentLog });
+    repo.save({ workflowId: 'wf-1-2', channelId: 'C123', harnessPreset: 'omp+claude', createdAt: new Date().toISOString() });
+    received = [];
+    mockSpawn.mockReset();
+  });
+
+  function assistantSurface(gather?: (id: string) => Promise<WorkflowContext>) {
+    const surface = new SlackSurface({
+      ...baseConfig(),
+      conversationRepo: convoRepo,
+      workflowChannelRepo: repo,
+      planningCommandBuilder: () => ({ command: 'cursor', args: ['--print', 'x'] }),
+      gatherWorkflowContext: gather,
+    });
+    return surface;
+  }
+
+  it('routes a status verb to get_status scoped to the workflow', async () => {
+    const surface = assistantSurface();
+    await surface.start(async (cmd) => { received.push(cmd); });
+    await mentionHandler(surface)({
+      event: { text: '<@BOT> status', ts: 't1', user: 'U1', channel: 'C123' },
+      say: vi.fn().mockResolvedValue({ ts: 'a' }),
+    });
+    expect(received).toContainEqual({ type: 'get_status', workflowId: 'wf-1-2' });
+  });
+
+  it('scopes an approve verb to the workflow task id', async () => {
+    const surface = assistantSurface();
+    await surface.start(async (cmd) => { received.push(cmd); });
+    await mentionHandler(surface)({
+      event: { text: '<@BOT> approve api', ts: 't1', user: 'U1', channel: 'C123' },
+      say: vi.fn().mockResolvedValue({ ts: 'a' }),
+    });
+    expect(received).toContainEqual({ type: 'approve', taskId: 'wf-1-2/api' });
+  });
+
+  it('answers a free-form question only from the gathered workflow context', async () => {
+    const gather = vi.fn(async (): Promise<WorkflowContext> => ({
+      workflowId: 'wf-1-2',
+      planning: [{ role: 'user', content: 'add health endpoint' }],
+      tasks: [{ id: 'wf-1-2/api', status: 'completed', agentName: 'omp', transcript: [], output: 'added /health' }],
+    }));
+    mockSpawn.mockImplementationOnce(() => mockProcess('the api task added /health'));
+    const surface = assistantSurface(gather);
+    await surface.start(async (cmd) => { received.push(cmd); });
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+    await mentionHandler(surface)({
+      event: { text: '<@BOT> what did the api task change?', ts: 't1', user: 'U1', channel: 'C123' },
+      say,
+    });
+    expect(gather).toHaveBeenCalledWith('wf-1-2');
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('/health') }));
+    expect(received).toHaveLength(0);
+  });
+});
