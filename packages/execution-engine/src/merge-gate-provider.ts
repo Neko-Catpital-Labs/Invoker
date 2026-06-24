@@ -67,4 +67,7 @@ export interface MergeGateProvider {
   checkApproval(opts: MergeGateCheckApprovalOptions): Promise<MergeGateApprovalStatus>;
 
   closeReview?(opts: MergeGateCloseReviewOptions): Promise<void>;
+
+  /** Read the live PR body as published on the provider (e.g. GitHub). */
+  getReviewBody?(opts: { identifier: string; cwd: string }): Promise<string>;
 }
