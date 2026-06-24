@@ -704,4 +704,33 @@ describe('WorkflowInspector', () => {
 
     expect(screen.queryByTestId('convert-to-external-review-button')).not.toBeInTheDocument();
   });
+
+  it('keeps the merge mode control visible for a gate with a review URL even though conversion is hidden', () => {
+    const onSetMergeMode = vi.fn();
+
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'review_ready', mergeMode: 'manual' }}
+        task={makeTask({
+          id: '__merge__wf-1',
+          description: 'Review gate',
+          status: 'review_ready',
+          config: { workflowId: 'wf-1', isMergeNode: true },
+          execution: { reviewUrl: 'https://github.com/org/repo/pull/34' },
+        })}
+        collapsed={false}
+        advancedExpanded={false}
+        onSetMergeMode={onSetMergeMode}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.queryByTestId('convert-to-external-review-button')).not.toBeInTheDocument();
+
+    const select = screen.getByTestId('merge-mode-select');
+    expect(select).toHaveValue('manual');
+    fireEvent.change(select, { target: { value: 'external_review' } });
+    expect(onSetMergeMode).toHaveBeenCalledWith('wf-1', 'external_review');
+  });
 });
