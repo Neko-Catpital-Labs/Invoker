@@ -7,17 +7,12 @@
 
 import {
   appendFileSync,
-  closeSync,
   existsSync,
   mkdirSync,
-  openSync,
   readFileSync,
-  readSync,
   renameSync,
   rmSync,
-  statSync,
 } from 'node:fs';
-import { createHash } from 'node:crypto';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
@@ -64,6 +59,13 @@ import {
   mapRowToWorkflowMutationIntent,
   mapRowToWorkflowMutationLease,
 } from './sqlite-row-mappers.js';
+import {
+  taskOutputFilePath,
+  taskSpoolFilePath,
+  encodeSpoolLine,
+  readSpoolLinesFromFile,
+  readLastSpoolLinesFromFile,
+} from './sqlite-output-spool.js';
 
 type NativeSqlite = typeof import('node:sqlite');
 
@@ -1451,16 +1453,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
     }
   }
 
-  private taskOutputKey(taskId: string): string {
-    return createHash('sha256').update(taskId).digest('hex');
-  }
-
   private taskOutputFile(taskId: string): string {
-    return join(this.outputDir, 'full', `${this.taskOutputKey(taskId)}.log`);
+    return taskOutputFilePath(this.outputDir, taskId);
   }
 
   private taskSpoolFile(taskId: string): string {
-    return join(this.outputDir, 'spool', `${this.taskOutputKey(taskId)}.jsonl`);
+    return taskSpoolFilePath(this.outputDir, taskId);
   }
 
   private ensureOutputSubdir(kind: 'full' | 'spool'): void {
@@ -1481,67 +1479,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return readFileSync(file, 'utf8');
   }
 
-  private encodeSpoolLine(chunk: OutputChunk): string {
-    const data = Buffer.from(chunk.data, 'utf8').toString('base64');
-    return `${chunk.offset}\t${data}\n`;
-  }
-
-  private decodeSpoolLine(line: string): OutputChunk | null {
-    if (!line) return null;
-    const separator = line.indexOf('\t');
-    if (separator <= 0) return null;
-    const offset = Number.parseInt(line.slice(0, separator), 10);
-    if (!Number.isFinite(offset)) return null;
-    return {
-      offset,
-      data: Buffer.from(line.slice(separator + 1), 'base64').toString('utf8'),
-    };
-  }
-
   private readSpoolLines(taskId: string): OutputChunk[] {
-    const file = this.taskSpoolFile(taskId);
-    if (!existsSync(file)) return [];
-    return readFileSync(file, 'utf8')
-      .split('\n')
-      .map((line) => this.decodeSpoolLine(line))
-      .filter((chunk): chunk is OutputChunk => chunk !== null);
+    return readSpoolLinesFromFile(this.taskSpoolFile(taskId));
   }
 
   private readLastSpoolLines(taskId: string, limit: number): OutputChunk[] {
-    if (limit <= 0) return [];
-    const file = this.taskSpoolFile(taskId);
-    if (!existsSync(file)) return [];
-
-    const fd = openSync(file, 'r');
-    try {
-      const size = statSync(file).size;
-      const chunkSize = 64 * 1024;
-      let position = size;
-      let suffix = '';
-      let lines: string[] = [];
-
-      while (position > 0 && lines.length <= limit) {
-        const readSize = Math.min(chunkSize, position);
-        position -= readSize;
-        const buffer = Buffer.allocUnsafe(readSize);
-        readSync(fd, buffer, 0, readSize, position);
-        const text = buffer.toString('utf8') + suffix;
-        const parts = text.split('\n');
-        suffix = parts.shift() ?? '';
-        lines = parts.concat(lines);
-      }
-      if (position === 0 && suffix) {
-        lines.unshift(suffix);
-      }
-
-      return lines
-        .filter(Boolean)
-        .slice(-limit)
-        .map((line) => this.decodeSpoolLine(line))
-        .filter((chunk): chunk is OutputChunk => chunk !== null);
-    } finally {
-      closeSync(fd);
-    }
+    return readLastSpoolLinesFromFile(this.taskSpoolFile(taskId), limit);
   }
 
   private readLastSpoolChunk(taskId: string): OutputChunk | null {
@@ -2026,7 +1969,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.ensureWritable();
     const nextOffset = this.getNextSpoolOffset(taskId);
     this.ensureOutputSubdir('spool');
-    appendFileSync(this.taskSpoolFile(taskId), this.encodeSpoolLine({ offset: nextOffset, data }), 'utf8');
+    appendFileSync(this.taskSpoolFile(taskId), encodeSpoolLine({ offset: nextOffset, data }), 'utf8');
     this.spoolNextOffsetCache.set(taskId, nextOffset + Buffer.byteLength(data, 'utf8'));
 
     // Update in-memory tail cache
