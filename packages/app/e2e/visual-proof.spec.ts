@@ -140,6 +140,23 @@ const REVIEW_READY_WORKFLOW_PR_PLAN = {
   ],
 };
 
+/** Pull-request workflow kept in manual merge mode with no PR yet, so the
+ * workflow inspector surfaces the External review (GitHub) conversion control. */
+const WORKFLOW_GITHUB_REVIEW_GATE_PLAN = {
+  name: 'Workflow GitHub review gate control proof',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'pull_request' as const,
+  mergeMode: 'manual',
+  tasks: [
+    {
+      id: 'wg-work',
+      description: 'Work before a convertible merge gate',
+      command: 'echo ok',
+      dependencies: [] as string[],
+    },
+  ],
+};
+
 const TASK_STATUS_PROOF_SPECS = [
   { status: 'pending', taskId: 'proof-task-pending', description: 'Pending', label: 'PENDING' },
   { status: 'running', taskId: 'proof-task-running', description: 'Running', label: 'RUNNING' },
@@ -875,6 +892,28 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByRole('link', { name: reviewUrl })).toHaveAttribute('href', reviewUrl);
 
     await captureScreenshot(page, 'review-ready-workflow-pr-sidebar');
+  });
+
+  test('workflow-github-review-gate-control — workflow inspector exposes External review (GitHub) conversion', async ({ page }) => {
+    const workflowId = await loadPlanAndSelectWorkflow(page, WORKFLOW_GITHUB_REVIEW_GATE_PLAN);
+    await page.locator('.react-flow__node[data-testid$="wg-work"]').first().waitFor({ state: 'visible', timeout: 15000 });
+
+    // Select the workflow node (no task) so the workflow-level merge-mode control renders.
+    await selectWorkflowNode(page, workflowId);
+    await expect(page.getByTestId('workflow-inspector-title')).toHaveText('Workflow GitHub review gate control proof');
+
+    // The gate lacks a GitHub review URL: no PR link is shown.
+    await expect(page.getByTestId('inspector-pr-link')).toHaveCount(0);
+
+    // Workflow-level External review (GitHub) affordances are both visible without selecting the merge node.
+    const mergeModeSelect = page.getByTestId('merge-mode-select');
+    await expect(mergeModeSelect).toBeVisible();
+    await expect(mergeModeSelect.getByRole('option', { name: 'External review (GitHub)' })).toHaveCount(1);
+    const convertButton = page.getByTestId('convert-to-external-review-button');
+    await expect(convertButton).toBeVisible();
+    await expect(convertButton).toHaveText('Convert to GitHub review');
+
+    await captureScreenshot(page, 'workflow-github-review-gate-control');
   });
 
   test('sidebar keyboard navigation focuses the first inspector item, not the container', async ({ page }) => {
