@@ -55,5 +55,8 @@ export interface ExecutionAgent {
 
 export interface PlanningAgent {
   readonly name: string;
-  buildPlanningCommand(prompt: string): { command: string; args: string[] };
+  buildPlanningCommand(
+    prompt: string,
+    options?: { model?: string },
+  ): { command: string; args: string[] };
 }
