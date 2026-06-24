@@ -70,6 +70,13 @@ export interface InvokerConfig {
   slackRepos?: Record<string, string>;
   /** Repo URL used for Slack planning when the message carries no `[repo:]` tag. */
   defaultRepoUrl?: string;
+  /**
+   * Cap on retained ~/.invoker activity_log rows. The table is pruned on write
+   * down to its most recent N entries, bounding DB file growth (unbounded
+   * logging previously grew the DB to ~1GB and caused SIGBUS crashes).
+   * Default: 100000. Set to 0 to disable retention.
+   */
+  activityLogMaxRows?: number;
   /** Maximum number of tasks that can run concurrently. Default: 6. */
   maxConcurrency?: number;
   /** Browser executable for opening external URLs (e.g. "firefox"). Default: Chrome. */

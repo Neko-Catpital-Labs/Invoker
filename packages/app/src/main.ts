@@ -665,6 +665,7 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
   persistence = await SQLiteAdapter.create(dbPath, {
     readOnly,
     ownerCapability: !readOnly, // writable mode requires owner capability
+    activityLogMaxRows: invokerConfig.activityLogMaxRows,
   });
   // Upgrade root logger with DB persistence now that SQLiteAdapter is ready.
   logger = new FileAndDbLogger({ module: 'main' }, { persistence });

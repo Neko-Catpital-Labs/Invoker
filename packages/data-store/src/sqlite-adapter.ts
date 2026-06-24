@@ -64,6 +64,19 @@ function loadNativeSqlite(): Promise<NativeSqlite> {
 }
 const ACTION_GRAPH_RECENT_ATTEMPT_LIMIT = 3;
 
+/**
+ * Default cap on retained `activity_log` rows. Bounds DB growth so the
+ * memory-mapped SQLite file cannot bloat into multi-hundred-MB territory —
+ * unbounded activity logging grew the file to ~1GB and triggered SIGBUS
+ * crashes during write-heavy operations. Set to 0 to disable pruning.
+ */
+const DEFAULT_ACTIVITY_LOG_MAX_ROWS = 100_000;
+/**
+ * Enforce the cap at most once every N activity_log writes. Keeps steady-state
+ * write cost negligible while bounding the table to roughly maxRows + this.
+ */
+const ACTIVITY_LOG_PRUNE_INTERVAL = 1_000;
+
 const OUTPUT_DIAGNOSTIC_TAIL_CHARS = 8_000;
 
 
@@ -95,6 +108,8 @@ interface SQLiteAdapterOptions {
   ownerCapability?: boolean;
   outputTailLimit?: number;
   outputDir?: string;
+  /** Cap on retained activity_log rows. Defaults to DEFAULT_ACTIVITY_LOG_MAX_ROWS; 0 disables retention. */
+  activityLogMaxRows?: number;
 }
 
 export type WorkflowMutationPriority = 'high' | 'normal';
@@ -276,6 +291,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
   private spoolNextOffsetCache = new Map<string, number>();
   private writeTransactionDepth = 0;
   private lastWorkflowTaskSnapshotStats: Record<string, unknown> | null = null;
+  private readonly activityLogMaxRows: number;
+  private activityLogWritesSincePrune = 0;
 
   /** Use SQLiteAdapter.create() instead. */
   private constructor(db: DatabaseSync, dbPath: string | null, options?: SQLiteAdapterOptions) {
@@ -285,6 +302,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.readOnly = options?.readOnly === true;
     this.outputTailLimit = options?.outputTailLimit ?? 100;
     this.outputDir = options?.outputDir ?? this.resolveOutputDir(dbPath);
+    this.activityLogMaxRows = options?.activityLogMaxRows ?? DEFAULT_ACTIVITY_LOG_MAX_ROWS;
     this.configureConnection(dbPath !== null);
     if (!this.readOnly) {
       this.initSchema();
@@ -2738,6 +2756,40 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'INSERT INTO activity_log (source, level, message) VALUES (?, ?, ?)',
       [source, level, message],
     );
+    this.activityLogWritesSincePrune += 1;
+    if (this.activityLogWritesSincePrune >= ACTIVITY_LOG_PRUNE_INTERVAL) {
+      this.activityLogWritesSincePrune = 0;
+      try {
+        this.pruneActivityLog();
+      } catch {
+        /* Retention is best-effort; never let pruning break a log write. */
+      }
+    }
+  }
+
+  /**
+   * Bound `activity_log` to its most recent `maxRows` entries, deleting older
+   * rows. Returns the number of rows deleted. No-op when read-only or when the
+   * cap is disabled (<= 0). Enforced automatically on write (throttled to once
+   * per ACTIVITY_LOG_PRUNE_INTERVAL writes) and callable directly to compact an
+   * already-bloated table in one shot.
+   */
+  pruneActivityLog(maxRows: number = this.activityLogMaxRows): number {
+    if (this.readOnly || !Number.isFinite(maxRows) || maxRows <= 0) return 0;
+    const total = this.queryOne('SELECT COUNT(*) AS c FROM activity_log') as
+      | { c: number }
+      | undefined;
+    const count = total?.c ?? 0;
+    if (count <= maxRows) return 0;
+    // Keep the newest `maxRows` rows; the row at OFFSET maxRows (and every older
+    // row) is deleted. ids are monotonic so this is gap-safe.
+    const boundary = this.queryOne(
+      'SELECT id FROM activity_log ORDER BY id DESC LIMIT 1 OFFSET ?',
+      [maxRows],
+    ) as { id: number } | undefined;
+    if (!boundary) return 0;
+    this.execRun('DELETE FROM activity_log WHERE id <= ?', [boundary.id]);
+    return count - maxRows;
   }
 
   getActivityLogs(sinceId = 0, limit = 200): ActivityLogEntry[] {
