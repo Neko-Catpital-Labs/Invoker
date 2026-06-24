@@ -63,6 +63,8 @@ function loadNativeSqlite(): Promise<NativeSqlite> {
 }
 const ACTION_GRAPH_RECENT_ATTEMPT_LIMIT = 3;
 
+const OUTPUT_DIAGNOSTIC_TAIL_CHARS = 8_000;
+
 
 /**
  * Rewrite `pnpm test packages/<pkg>/...` (incorrect root-level invocation)
@@ -2439,6 +2441,33 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   getOutputTail(taskId: string): OutputChunk[] {
+    const spoolTail = this.getSpoolOutputTail(taskId);
+
+    const diagnostic = this.readDiagnosticTail(taskId, OUTPUT_DIAGNOSTIC_TAIL_CHARS);
+    if (!diagnostic) return spoolTail;
+    const lastOffset = spoolTail.length > 0
+      ? spoolTail[spoolTail.length - 1].offset + 1
+      : 0;
+    return [...spoolTail, { offset: lastOffset, data: diagnostic }];
+  }
+
+  private readDiagnosticTail(taskId: string, maxChars: number): string {
+    const file = this.taskOutputFile(taskId);
+    if (!existsSync(file)) return '';
+    const size = statSync(file).size;
+    if (size === 0) return '';
+    if (size <= maxChars) return readFileSync(file, 'utf8');
+    const fd = openSync(file, 'r');
+    try {
+      const buffer = Buffer.allocUnsafe(maxChars);
+      readSync(fd, buffer, 0, maxChars, size - maxChars);
+      return '...' + buffer.toString('utf8');
+    } finally {
+      closeSync(fd);
+    }
+  }
+
+  private getSpoolOutputTail(taskId: string): OutputChunk[] {
     // Return from cache if available
     const cached = this.outputTailCache.get(taskId);
     if (cached && cached.length > 0) {
