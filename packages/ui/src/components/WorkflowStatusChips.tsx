@@ -34,8 +34,10 @@ export function WorkflowStatusChips({
     counts.set(workflow.status, (counts.get(workflow.status) ?? 0) + 1);
   }
 
+  const hasFilters = activeFilters.size > 0;
+
   return (
-    <div className="flex items-center gap-2 px-3 py-2 border-t border-gray-800 bg-gray-900/95">
+    <div className="flex items-center gap-6 px-4 py-2 bg-gray-800 border-t border-gray-700 text-sm">
       {DISPLAY_ORDER.map((status) => {
         const visual = workflowStatusVisual(status);
         const active = activeFilters.has(status);
@@ -46,10 +48,9 @@ export function WorkflowStatusChips({
             data-testid={`workflow-status-pill-${status}`}
             onClick={(event) => onStatusClick(status, event)}
             className={[
-              'rounded border px-2 py-1 text-[11px] uppercase tracking-wide transition-colors',
-              visual.borderClass,
+              'px-2 py-0.5 text-xs rounded-full cursor-pointer select-none transition-opacity duration-75',
               visual.textClass,
-              active ? 'bg-gray-800' : 'bg-gray-900/70 hover:bg-gray-800/80',
+              active ? 'ring-1 ring-current' : hasFilters ? 'opacity-60' : 'hover:brightness-125',
               keyboardActiveKey === status ? 'ring-2 ring-blue-300/90 ring-offset-1 ring-offset-gray-800' : '',
             ].join(' ')}
           >
