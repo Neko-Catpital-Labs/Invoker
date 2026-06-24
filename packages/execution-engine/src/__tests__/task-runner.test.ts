@@ -4467,7 +4467,7 @@ console.log(JSON.stringify(out));
       };
       const mergeGateProvider = {
         checkApproval: vi.fn().mockResolvedValue({
-          approved: false,
+          lifecycle: 'open',
           rejected: false,
           statusText: 'Awaiting review',
           url: 'https://github.com/owner/repo/pull/42',
@@ -4513,7 +4513,7 @@ console.log(JSON.stringify(out));
       };
       const mergeGateProvider = {
         checkApproval: vi.fn().mockResolvedValue({
-          approved: true,
+          lifecycle: 'merged',
           rejected: false,
           statusText: 'Merged',
           url: 'https://github.com/owner/repo/pull/42',
@@ -4552,7 +4552,7 @@ console.log(JSON.stringify(out));
       };
       const mergeGateProvider = {
         checkApproval: vi.fn().mockResolvedValue({
-          approved: false,
+          lifecycle: 'open',
           rejected: false,
           statusText: 'Approved, awaiting merge',
           url: 'https://github.com/owner/repo/pull/42',
@@ -4589,7 +4589,7 @@ console.log(JSON.stringify(out));
       };
       const mergeGateProvider = {
         checkApproval: vi.fn().mockResolvedValue({
-          approved: false,
+          lifecycle: 'open',
           rejected: true,
           statusText: 'Changes requested',
           url: 'https://github.com/owner/repo/pull/42',
@@ -4628,9 +4628,8 @@ console.log(JSON.stringify(out));
       };
       const mergeGateProvider = {
         checkApproval: vi.fn().mockResolvedValue({
-          approved: false,
+          lifecycle: 'closed',
           rejected: false,
-          closed: true,
           statusText: 'Closed',
           url: 'https://github.com/owner/repo/pull/43',
         }),
@@ -4673,7 +4672,7 @@ console.log(JSON.stringify(out));
       };
       const mergeGateProvider = {
         checkApproval: vi.fn().mockResolvedValue({
-          approved: true,
+          lifecycle: 'merged',
           rejected: false,
           statusText: 'Merged',
           url: 'https://github.com/owner/repo/pull/42',
@@ -4774,7 +4773,7 @@ console.log(JSON.stringify(out));
         const persistence = { updateTask: vi.fn() };
         const mergeGateProvider = {
           checkApproval: vi.fn().mockResolvedValue({
-            approved: false,
+            lifecycle: 'open',
             rejected: false,
             statusText: 'Pending',
             url: 'https://github.com/owner/repo/pull/99',
@@ -4809,7 +4808,7 @@ console.log(JSON.stringify(out));
         const persistence = { updateTask: vi.fn() };
         const mergeGateProvider = {
           checkApproval: vi.fn().mockResolvedValue({
-            approved: false,
+            lifecycle: 'open',
             rejected: false,
             statusText: 'Pending',
             url: 'https://github.com/owner/repo/pull/100',
@@ -4851,7 +4850,7 @@ console.log(JSON.stringify(out));
         const persistence = { updateTask: vi.fn() };
         const mergeGateProvider = {
           checkApproval: vi.fn().mockResolvedValue({
-            approved: true,
+            lifecycle: 'merged',
             rejected: false,
             statusText: 'Merged',
             url: 'https://github.com/owner/repo/pull/101',
@@ -4937,7 +4936,7 @@ console.log(JSON.stringify(out));
         const persistence = { updateTask: vi.fn() };
         const mergeGateProvider = {
           checkApproval: vi.fn().mockResolvedValue({
-            approved: false,
+            lifecycle: 'open',
             rejected: false,
             statusText: 'Pending',
           }),
@@ -4977,7 +4976,7 @@ console.log(JSON.stringify(out));
         const persistence = { updateTask: vi.fn() };
         const mergeGateProvider = {
           checkApproval: vi.fn().mockResolvedValue({
-            approved: false,
+            lifecycle: 'open',
             rejected: false,
             statusText: 'Pending',
           }),
@@ -5033,10 +5032,10 @@ console.log(JSON.stringify(out));
         };
         const mergeGateProvider = {
           checkApproval: vi.fn()
-            .mockResolvedValueOnce({ approved: true, rejected: false, statusText: 'Approved one' })
-            .mockResolvedValueOnce({ approved: false, rejected: false, statusText: 'Pending second' })
-            .mockResolvedValueOnce({ approved: true, rejected: false, statusText: 'Still approved' })
-            .mockResolvedValueOnce({ approved: true, rejected: false, statusText: 'Approved both' }),
+            .mockResolvedValueOnce({ lifecycle: 'merged', rejected: false, statusText: 'Approved one' })
+            .mockResolvedValueOnce({ lifecycle: 'open', rejected: false, statusText: 'Pending second' })
+            .mockResolvedValueOnce({ lifecycle: 'merged', rejected: false, statusText: 'Still approved' })
+            .mockResolvedValueOnce({ lifecycle: 'merged', rejected: false, statusText: 'Approved both' })
         };
 
         const executor = new TaskRunner({
@@ -5073,6 +5072,61 @@ console.log(JSON.stringify(out));
           expect.objectContaining({ id: 'contracts', status: 'approved' }),
           expect.objectContaining({ id: 'runtime', status: 'approved' }),
         ]);
+      });
+
+      it('marks a structured reviewGate task closed when a required artifact PR is closed', async () => {
+        const reviewGate = {
+          activeGeneration: 4,
+          completion: { required: 'all' as const, status: 'approved' as const },
+          artifacts: [
+            { id: 'contracts', providerId: 'pr-1', required: true, status: 'open' as const, generation: 4 },
+          ],
+        };
+        const task = makeTask({
+          id: 'merge-stack-closed',
+          status: 'review_ready',
+          config: { isMergeNode: true },
+          execution: {
+            generation: 4,
+            selectedAttemptId: 'attempt-1',
+            reviewGate,
+            workspacePath: '/workspace/stack-closed',
+          },
+        });
+        const orchestrator = {
+          getTask: (id: string) => (id === task.id ? task : undefined),
+          getAllTasks: () => [task],
+          approve: vi.fn(),
+        };
+        const persistence = {
+          updateTask: vi.fn((id: string, changes: any) => {
+            if (id === task.id) {
+              (task as any).status = changes.status ?? task.status;
+              if (changes.execution) {
+                (task as any).execution = { ...task.execution, ...changes.execution };
+              }
+            }
+          }),
+        };
+        const mergeGateProvider = {
+          checkApproval: vi.fn().mockResolvedValue({ lifecycle: 'closed', rejected: false, statusText: 'Closed' }),
+        };
+
+        const executor = new TaskRunner({
+          orchestrator: orchestrator as any,
+          persistence: persistence as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          cwd: '/runner-base-cwd',
+          mergeGateProvider: mergeGateProvider as any,
+        });
+        vi.spyOn(executor, 'executeTasks').mockResolvedValue(undefined);
+
+        await executor.checkMergeGateStatuses();
+
+        expect(persistence.updateTask).toHaveBeenCalledWith('merge-stack-closed', expect.objectContaining({
+          status: 'closed',
+        }));
+        expect(orchestrator.approve).not.toHaveBeenCalled();
       });
 
       it('skips stale reviewGate poll results when the task generation changes before applying them', async () => {
@@ -5116,7 +5170,7 @@ console.log(JSON.stringify(out));
         const persistence = { updateTask: vi.fn() };
         const mergeGateProvider = {
           checkApproval: vi.fn().mockResolvedValue({
-            approved: true,
+            lifecycle: 'merged',
             rejected: false,
             statusText: 'Approved stale',
           }),
@@ -5165,7 +5219,7 @@ console.log(JSON.stringify(out));
         const persistence = { updateTask: vi.fn() };
         const mergeGateProvider = {
           checkApproval: vi.fn().mockResolvedValue({
-            approved: true,
+            lifecycle: 'merged',
             rejected: false,
             statusText: 'Merged',
           }),
@@ -5213,7 +5267,7 @@ console.log(JSON.stringify(out));
         const persistence = { updateTask: vi.fn() };
         const mergeGateProvider = {
           checkApproval: vi.fn().mockResolvedValue({
-            approved: false,
+            lifecycle: 'open',
             rejected: false,
             statusText: 'Approved, awaiting merge',
           }),
@@ -5259,7 +5313,7 @@ console.log(JSON.stringify(out));
         const persistence = { updateTask: vi.fn() };
         const mergeGateProvider = {
           checkApproval: vi.fn().mockResolvedValue({
-            approved: false,
+            lifecycle: 'open',
             rejected: true,
             statusText: 'Changes requested',
           }),
@@ -5307,9 +5361,8 @@ console.log(JSON.stringify(out));
         const persistence = { updateTask: vi.fn() };
         const mergeGateProvider = {
           checkApproval: vi.fn().mockResolvedValue({
-            approved: false,
+            lifecycle: 'closed',
             rejected: false,
-            closed: true,
             statusText: 'Closed',
           }),
         };
@@ -5355,9 +5408,8 @@ console.log(JSON.stringify(out));
         const persistence = { updateTask: vi.fn() };
         const mergeGateProvider = {
           checkApproval: vi.fn().mockResolvedValue({
-            approved: false,
+            lifecycle: 'closed',
             rejected: false,
-            closed: true,
             statusText: 'Closed',
           }),
         };
@@ -5405,9 +5457,8 @@ console.log(JSON.stringify(out));
         };
         const mergeGateProvider = {
           checkApproval: vi.fn().mockResolvedValue({
-            approved: false,
+            lifecycle: 'closed',
             rejected: false,
-            closed: true,
             statusText: 'Closed',
           }),
         };
