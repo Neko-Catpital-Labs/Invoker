@@ -102,6 +102,9 @@ import type { Logger } from '@invoker/contracts';
 import { FileAndDbLogger } from './logger.js';
 import type { TaskOutputData } from './types.js';
 import {
+  checkSlackSetup,
+  DEFAULT_SLACK_HARNESS_PRESETS,
+  formatSlackSetupPreflight,
   loadConfig,
   resolveEmbeddedTerminalBackendConfig,
   type EmbeddedTerminalBackendConfig,
@@ -781,14 +784,6 @@ function loadSurfaces(): any {
 
 // ── Shared Slack Bot Wiring ──────────────────────────────────
 
-const DEFAULT_SLACK_HARNESS_PRESETS: Record<string, { tool: 'cursor' | 'omp' | 'codex'; model?: string }> = {
-  'cursor+claude': { tool: 'cursor', model: 'claude' },
-  'cursor+codex': { tool: 'cursor', model: 'codex' },
-  'omp+claude': { tool: 'omp', model: 'claude' },
-  omp: { tool: 'omp' },
-  codex: { tool: 'codex' },
-};
-
 interface SlackBotDeps {
   executor: TaskRunner;
   logFn: (source: string, level: string, message: string) => void;
@@ -806,9 +801,9 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
     // dotenv not installed — rely on environment variables
   }
 
-  const requiredVars = ['SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN', 'SLACK_SIGNING_SECRET', 'SLACK_CHANNEL_ID'];
-  for (const v of requiredVars) {
-    if (!process.env[v]) throw new Error(`Missing env var: ${v}. Set it in .env or environment.`);
+  const setup = checkSlackSetup(invokerConfig, process.env);
+  if (setup.missingEnv.length > 0 || setup.errors.length > 0) {
+    throw new Error(formatSlackSetupPreflight(setup));
   }
 
   const surfaces = loadSurfaces();
@@ -2984,10 +2979,9 @@ function createEmbeddedTerminalBackendFromConfig(
       // the ESM loader gets stuck behind other startup work (e.g. the docker
       // CLI hang we observed). startSlackBot would throw on missing env vars
       // immediately after dotenv anyway.
-      const slackEnvVars = ['SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN', 'SLACK_SIGNING_SECRET', 'SLACK_CHANNEL_ID'];
-      const slackEnvMissing = slackEnvVars.filter((v) => !process.env[v]);
-      if (slackEnvMissing.length > 0) {
-        logger.info(`Slack bot not started (missing env: ${slackEnvMissing.join(', ')})`, { module: 'slack' });
+      const slackSetup = checkSlackSetup(invokerConfig, process.env);
+      if (slackSetup.missingEnv.length > 0 || slackSetup.errors.length > 0) {
+        logger.info(formatSlackSetupPreflight(slackSetup), { module: 'slack' });
       } else {
         startSlackBot(requireTaskExecutor(), taskHandles).catch((err) => {
           logger.info(`Not started: ${err instanceof Error ? err.message : String(err)}`, { module: 'slack' });

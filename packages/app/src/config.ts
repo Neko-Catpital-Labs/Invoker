@@ -216,6 +216,123 @@ export interface InvokerConfig {
   }>;
 }
 
+type SlackHarnessPresetMap = NonNullable<InvokerConfig['slackHarnessPresets']>;
+
+export const REQUIRED_SLACK_ENV_VARS = [
+  'SLACK_BOT_TOKEN',
+  'SLACK_APP_TOKEN',
+  'SLACK_SIGNING_SECRET',
+  'SLACK_CHANNEL_ID',
+] as const;
+
+export const DEFAULT_SLACK_HARNESS_PRESETS: SlackHarnessPresetMap = {
+  'cursor+claude': { tool: 'cursor', model: 'claude' },
+  'cursor+codex': { tool: 'cursor', model: 'codex' },
+  'omp+claude': { tool: 'omp', model: 'claude' },
+  omp: { tool: 'omp' },
+  codex: { tool: 'codex' },
+};
+
+export const DEFAULT_SLACK_HARNESS_PRESET = 'cursor+claude';
+
+export interface SlackSetupPreflightResult {
+  missingEnv: string[];
+  errors: string[];
+  harnessPresets: SlackHarnessPresetMap;
+  defaultHarnessPreset: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isSlackHarnessTool(value: unknown): value is 'cursor' | 'omp' | 'codex' {
+  return value === 'cursor' || value === 'omp' || value === 'codex';
+}
+
+export function checkSlackSetup(
+  config: InvokerConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): SlackSetupPreflightResult {
+  const missingEnv = REQUIRED_SLACK_ENV_VARS.filter((name) => !env[name]);
+  const errors: string[] = [];
+
+  const configuredPresets = config.slackHarnessPresets as unknown;
+  const usesCustomPresets = configuredPresets !== undefined;
+  const harnessPresets: SlackHarnessPresetMap = usesCustomPresets && isRecord(configuredPresets)
+    ? configuredPresets as SlackHarnessPresetMap
+    : DEFAULT_SLACK_HARNESS_PRESETS;
+  const defaultHarnessPreset = config.defaultSlackHarnessPreset ?? DEFAULT_SLACK_HARNESS_PRESET;
+
+  if (usesCustomPresets) {
+    if (!isRecord(configuredPresets)) {
+      errors.push('slackHarnessPresets must be an object mapping preset names to { tool, model? }.');
+    } else if (Object.keys(configuredPresets).length === 0) {
+      errors.push('slackHarnessPresets must define at least one preset when set.');
+    }
+  }
+
+  if (typeof defaultHarnessPreset !== 'string' || defaultHarnessPreset.trim() === '') {
+    errors.push('defaultSlackHarnessPreset must be a non-empty preset key.');
+  } else if (!harnessPresets[defaultHarnessPreset]) {
+    errors.push(
+      `defaultSlackHarnessPreset "${defaultHarnessPreset}" is not defined in slackHarnessPresets. ` +
+      `Configured presets: ${Object.keys(harnessPresets).join(', ') || '(none)'}.`,
+    );
+  }
+
+  for (const [key, preset] of Object.entries(harnessPresets)) {
+    if (!key.trim()) {
+      errors.push('slackHarnessPresets contains an empty preset key.');
+      continue;
+    }
+    if (!isRecord(preset)) {
+      errors.push(`slackHarnessPresets.${key} must be an object with a supported tool.`);
+      continue;
+    }
+    if (!isSlackHarnessTool(preset.tool)) {
+      errors.push(`slackHarnessPresets.${key}.tool must be one of: cursor, omp, codex.`);
+    }
+    if (preset.model !== undefined && typeof preset.model !== 'string') {
+      errors.push(`slackHarnessPresets.${key}.model must be a string when set.`);
+    }
+  }
+
+  const slackRepos = config.slackRepos as unknown;
+  if (slackRepos !== undefined) {
+    if (!isRecord(slackRepos)) {
+      errors.push('slackRepos must be an object mapping repo aliases to git URLs.');
+    } else {
+      for (const [alias, url] of Object.entries(slackRepos)) {
+        if (!alias.trim()) errors.push('slackRepos contains an empty alias.');
+        if (typeof url !== 'string' || url.trim() === '') {
+          errors.push(`slackRepos.${alias || '(empty)'} must be a non-empty git URL.`);
+        }
+      }
+    }
+  }
+
+  if (config.defaultRepoUrl !== undefined && (
+    typeof config.defaultRepoUrl !== 'string' || config.defaultRepoUrl.trim() === ''
+  )) {
+    errors.push('defaultRepoUrl must be a non-empty git URL when set.');
+  }
+
+  return { missingEnv, errors, harnessPresets, defaultHarnessPreset };
+}
+
+export function formatSlackSetupPreflight(result: SlackSetupPreflightResult): string {
+  const lines = ['Slack bot not started: setup preflight failed.'];
+  if (result.missingEnv.length > 0) {
+    lines.push(`Missing env vars: ${result.missingEnv.join(', ')}.`);
+  }
+  for (const error of result.errors) {
+    lines.push(`Config error: ${error}`);
+  }
+  lines.push('Fix ~/.invoker/config.json or the Slack environment, then restart Invoker.');
+  return lines.join(' ');
+}
+
 function readJsonSafe(path: string): InvokerConfig {
   if (!existsSync(path)) {
     return {};

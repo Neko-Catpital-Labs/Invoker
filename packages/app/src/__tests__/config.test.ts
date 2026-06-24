@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
+  checkSlackSetup,
+  DEFAULT_SLACK_HARNESS_PRESETS,
+  formatSlackSetupPreflight,
   loadConfig,
   resolveEmbeddedTerminalBackendConfig,
 } from '../config.js';
@@ -221,6 +224,59 @@ describe('loadConfig', () => {
 
 });
 
+describe('checkSlackSetup', () => {
+  const slackEnv = {
+    SLACK_BOT_TOKEN: 'xoxb-token',
+    SLACK_APP_TOKEN: 'xapp-token',
+    SLACK_SIGNING_SECRET: 'secret',
+    SLACK_CHANNEL_ID: 'C123',
+  };
+
+  it('accepts the built-in Slack harness defaults when Slack env is present', () => {
+    const result = checkSlackSetup({}, slackEnv);
+    expect(result.missingEnv).toEqual([]);
+    expect(result.errors).toEqual([]);
+    expect(result.defaultHarnessPreset).toBe('cursor+claude');
+    expect(result.harnessPresets).toEqual(DEFAULT_SLACK_HARNESS_PRESETS);
+  });
+
+  it('reports all missing Slack env vars before startup', () => {
+    const result = checkSlackSetup({}, { SLACK_BOT_TOKEN: 'xoxb-token' });
+    expect(result.missingEnv).toEqual([
+      'SLACK_APP_TOKEN',
+      'SLACK_SIGNING_SECRET',
+      'SLACK_CHANNEL_ID',
+    ]);
+
+    expect(formatSlackSetupPreflight(result)).toContain(
+      'Missing env vars: SLACK_APP_TOKEN, SLACK_SIGNING_SECRET, SLACK_CHANNEL_ID.',
+    );
+  });
+
+  it('rejects a default Slack preset missing from a custom preset override', () => {
+    const result = checkSlackSetup({
+      slackHarnessPresets: {
+        'omp+claude': { tool: 'omp', model: 'anthropic/claude-opus-4' },
+      },
+      defaultSlackHarnessPreset: 'cursor+claude',
+    }, slackEnv);
+
+    expect(result.errors).toContain(
+      'defaultSlackHarnessPreset "cursor+claude" is not defined in slackHarnessPresets. Configured presets: omp+claude.',
+    );
+  });
+
+  it('rejects malformed Slack repo aliases with actionable errors', () => {
+    const result = checkSlackSetup({
+      slackRepos: {
+        web: '',
+      },
+    }, slackEnv);
+
+    expect(result.errors).toContain('slackRepos.web must be a non-empty git URL.');
+  });
+});
+
 describe('resolveEmbeddedTerminalBackendConfig', () => {
   it('defaults GUI embedded terminals to the PTY backend', () => {
     expect(resolveEmbeddedTerminalBackendConfig({}, {})).toBe('pty');
@@ -253,4 +309,3 @@ describe('resolveEmbeddedTerminalBackendConfig', () => {
     )).toThrow(/Invalid embedded terminal backend/);
   });
 });
-
