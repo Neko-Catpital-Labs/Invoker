@@ -1071,12 +1071,31 @@ export class TaskRunner {
       hasWorkspacePath: Boolean(handle.workspacePath),
       hasAgentSessionId: Boolean(handle.agentSessionId),
     });
+    // markTaskRunningAfterLaunch already rejects a mismatched attempt; also
+    // reject a stale launch-time generation (a slow start can resolve after a
+    // recreate advanced the live task on the same attempt).
+    const live = this.orchestrator.getTask(task.id);
+    const staleGeneration =
+      live !== undefined && (live.execution.generation ?? 0) !== startGeneration;
     const launchAccepted =
-      this.orchestrator.markTaskRunningAfterLaunch?.(task.id, attemptId) ?? true;
+      !staleGeneration && (this.orchestrator.markTaskRunningAfterLaunch?.(task.id, attemptId) ?? true);
     if (!launchAccepted) {
       this.logger.warn(
-        `[TaskRunner] launch rejected as stale/non-executable for task=${task.id} attemptId=${attemptId}; killing spawned process`,
+        `[TaskRunner] launch rejected as stale/non-executable for task=${task.id} attemptId=${attemptId} ` +
+          `startGeneration=${startGeneration} staleGeneration=${staleGeneration}; killing spawned process`,
       );
+      if (staleGeneration) {
+        this.persistence.logEvent?.(task.id, 'task.executor.stale_post_start', {
+          attemptId,
+          executorType: executor.type,
+          startGeneration,
+          currentGeneration: this.orchestrator.getTask(task.id)?.execution.generation ?? null,
+          workspacePath: handle.workspacePath,
+          branch: handle.branch,
+          hasAgentSessionId: Boolean(handle.agentSessionId),
+          hasContainerId: Boolean(handle.containerId),
+        });
+      }
       try {
         await executor.kill(handle);
       } catch (killErr) {
@@ -1091,7 +1110,7 @@ export class TaskRunner {
           new Error('Launch rejected as stale or non-executable after executor start'),
         );
       }
-      bench('markTaskRunningAfterLaunch.rejected');
+      bench('markTaskRunningAfterLaunch.rejected', { staleGeneration });
       return;
     }
     bench('markTaskRunningAfterLaunch.accepted');
