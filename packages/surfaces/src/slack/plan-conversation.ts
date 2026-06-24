@@ -22,11 +22,31 @@ export interface ConversationMessage {
   content: string;
 }
 
+export type PlanningCommandBuilder = (opts: {
+  tool: string;
+  model?: string;
+  prompt: string;
+}) => { command: string; args: string[] };
+
+export function defaultPlanningCommand(
+  cursorCommand: string,
+  opts: { model?: string; prompt: string },
+): { command: string; args: string[] } {
+  const args = ['--print'];
+  if (opts.model) args.push('--model', opts.model);
+  args.push(opts.prompt);
+  return { command: cursorCommand, args };
+}
+
 export interface PlanConversationConfig {
   /** Command to invoke the agent CLI. Default: 'agent'. */
   cursorCommand?: string;
+  /** Planning tool name (e.g. 'cursor', 'omp', 'codex') passed to the builder. */
+  tool?: string;
   /** Model to use (e.g. 'auto', 'sonnet-4'). Omit to use the CLI default. */
   model?: string;
+  /** Injected builder that maps {tool, model, prompt} → CLI command + args. */
+  planningCommandBuilder?: PlanningCommandBuilder;
   /** Root directory for codebase exploration. */
   workingDir?: string;
   /** Subprocess timeout in milliseconds. Default: 300000 (5 minutes). */
@@ -160,7 +180,9 @@ const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 export class PlanConversation {
   private cursorCommand: string;
+  private tool?: string;
   private model?: string;
+  private planningCommandBuilder?: PlanningCommandBuilder;
   private messages: ConversationMessage[] = [];
   private _submittedPlanText: string | null = null;
   private _planSubmitted = false;
@@ -175,7 +197,9 @@ export class PlanConversation {
 
   constructor(config: PlanConversationConfig) {
     this.cursorCommand = config.cursorCommand ?? 'agent';
+    this.tool = config.tool;
     this.model = config.model;
+    this.planningCommandBuilder = config.planningCommandBuilder;
     this.workingDir = config.workingDir;
     this.timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.threadTs = config.threadTs;
@@ -266,7 +290,7 @@ export class PlanConversation {
     const tPrompt = Date.now();
     this.log('plan-conversation', 'info', `[CONV] Turn ${turn}: promptLen=${prompt.length}, historyMsgs=${this.messages.length - 1}, promptPreview="${prompt.slice(0, 500).replace(/\n/g, '\\n')}"`);
 
-    const response = await this.spawnCursor(prompt);
+    const response = await this.spawnPlanner(prompt);
     const tCursor = Date.now();
     this.log('plan-conversation', 'info', `[CONV] Turn ${turn}: responseLen=${response.length}, responsePreview="${response.slice(0, 500).replace(/\n/g, '\\n')}"`);
 
@@ -331,15 +355,15 @@ export class PlanConversation {
     return parts.join('\n');
   }
 
-  // ── Cursor CLI Subprocess ─────────────────────────────
+  // ── Planner CLI Subprocess ─────────────────────────────
 
-  spawnCursor(prompt: string): Promise<string> {
+  spawnPlanner(prompt: string): Promise<string> {
     const spawnStart = Date.now();
+    const { command, args } = this.planningCommandBuilder
+      ? this.planningCommandBuilder({ tool: this.tool ?? 'cursor', model: this.model, prompt })
+      : defaultPlanningCommand(this.cursorCommand, { model: this.model, prompt });
     return new Promise((resolve, reject) => {
-      const args = ['--print'];
-      if (this.model) args.push('--model', this.model);
-      args.push(prompt);
-      const child = spawn(this.cursorCommand, args, {
+      const child = spawn(command, args, {
         cwd: this.workingDir ?? process.cwd(),
         stdio: ['ignore', 'pipe', 'pipe'],
         env: { ...process.env },
@@ -350,7 +374,7 @@ export class PlanConversation {
       let stdoutChunks = 0;
       let stderrChunks = 0;
 
-      this.log('plan-conversation', 'info', `[PERF] cursor_spawn: pid=${child.pid ?? 'none'}, cmd="${this.cursorCommand} ${args.slice(0, -1).join(' ')} <prompt>", promptLen=${prompt.length}, cwd=${this.workingDir ?? process.cwd()}`);
+      this.log('plan-conversation', 'info', `[PERF] cursor_spawn: pid=${child.pid ?? 'none'}, cmd="${command} ${args.slice(0, -1).join(' ')} <prompt>", promptLen=${prompt.length}, cwd=${this.workingDir ?? process.cwd()}`);
 
       child.stdout?.on('data', (chunk: Buffer) => {
         const chunkStr = chunk.toString();
