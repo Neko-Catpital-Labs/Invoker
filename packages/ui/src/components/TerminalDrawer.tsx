@@ -200,7 +200,7 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
       ref={containerRef}
       data-testid={`terminal-pane-${session.taskId}`}
       data-session-id={session.sessionId}
-      className={hasHeader ? 'absolute bottom-0 left-0 right-0 top-9' : 'absolute inset-0'}
+      className={hasHeader ? 'absolute bottom-0 left-0 right-0 top-9 overflow-hidden' : 'absolute inset-0 overflow-hidden'}
       style={{ display: isActive ? 'block' : 'none' }}
     />
   );
@@ -229,7 +229,7 @@ export function TerminalDrawer({
       data-state={state}
       className={
         isMaximized
-          ? 'fixed inset-0 z-40 flex flex-col border-t border-gray-800 bg-gray-950'
+          ? 'fixed inset-0 z-40 flex min-h-0 flex-col overflow-hidden border-t border-gray-800 bg-gray-950'
           : 'border-t border-gray-800 bg-gray-950'
       }
     >
@@ -296,7 +296,7 @@ export function TerminalDrawer({
       {showBody && (
         <div
           data-testid="terminal-drawer-body"
-          className={isMaximized ? 'relative flex-1 bg-black' : 'relative bg-black'}
+          className={isMaximized ? 'relative min-h-0 flex-1 overflow-hidden bg-black' : 'relative overflow-hidden bg-black'}
           style={isMaximized ? undefined : { height: DRAWER_BODY_HEIGHT_PX }}
         >
           {sessions.length === 0 && (
