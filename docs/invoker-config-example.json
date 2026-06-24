@@ -94,6 +94,8 @@
   "autoFixRetries": 3,
   "autoApproveAIFixes": true,
   "autoFixCi": false,
+  "activityLogMaxRows": 100000,
+  "activityLogMaxRows_comment": "Cap on retained ~/.invoker activity_log rows. Pruned on write to the most recent N entries so the DB cannot bloat. Default: 100000. Set to 0 to disable retention.",
 
   "notes": {
     "fetch_behavior": "Git fetch failures always abort the task. Fix the underlying network/auth issue and rerun.",
