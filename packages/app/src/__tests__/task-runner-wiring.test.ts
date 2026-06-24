@@ -153,6 +153,95 @@ describe('task-runner-wiring', () => {
     });
   });
 
+  it('persists a durable startup-failure diagnostic when launch fails before spawn', () => {
+    let currentRunner: any = null;
+    const task = {
+      id: 'task-1',
+      status: 'running',
+      execution: { generation: 1 },
+    };
+    const orchestrator = {
+      getTask: vi.fn(() => task),
+      recordTaskHeartbeat: vi.fn(),
+      setBeforeApproveHook: vi.fn(),
+    };
+    const appended: string[] = [];
+    const persistence = {
+      updateTask: vi.fn(),
+      loadWorkflow: vi.fn(),
+      getOutputTail: vi.fn(() => [{ data: 'FAIL src/startup.test.ts\n', offset: 0 }]),
+      appendTaskOutput: vi.fn((_id: string, data: string) => { appended.push(data); }),
+    };
+    const flushTaskOutput = vi.fn();
+
+    rebuildTaskRunner({
+      orchestrator: orchestrator as any,
+      persistence: persistence as any,
+      executorRegistry: {} as any,
+      repoRoot: '/repo',
+      invokerConfig: {},
+      logger: createLogger() as any,
+      taskHandles: new Map(),
+      enqueueTaskOutput: vi.fn(),
+      flushTaskOutput,
+      assertFatalExecutionCapacity: vi.fn(),
+      getTaskRunner: () => currentRunner,
+      setTaskRunner: (value) => { currentRunner = value; },
+      setLatestTaskExecutor: vi.fn(),
+    });
+
+    const config = taskRunnerConstructor.mock.calls[0]?.[0] as any;
+    config.callbacks.onLaunchFailed(
+      'task-1',
+      new Error('Executor startup failed (worktree): missing repoUrl'),
+      { type: 'worktree' },
+    );
+
+    expect(flushTaskOutput).toHaveBeenCalledWith('task-1');
+    expect(appended).toHaveLength(1);
+    const block = appended[0];
+    expect(block).toContain('[Startup Failure Diagnostic]');
+    expect(block).toContain('forcedStopReason=Executor startup failed (worktree)');
+    expect(block).toContain('detail=Executor startup failed (worktree): missing repoUrl');
+    expect(block).toContain('FAIL src/startup.test.ts');
+  });
+
+  it('does not persist a startup diagnostic when the task is already gone', () => {
+    let currentRunner: any = null;
+    const orchestrator = {
+      getTask: vi.fn(() => undefined),
+      recordTaskHeartbeat: vi.fn(),
+      setBeforeApproveHook: vi.fn(),
+    };
+    const persistence = {
+      updateTask: vi.fn(),
+      loadWorkflow: vi.fn(),
+      getOutputTail: vi.fn(() => []),
+      appendTaskOutput: vi.fn(),
+    };
+
+    rebuildTaskRunner({
+      orchestrator: orchestrator as any,
+      persistence: persistence as any,
+      executorRegistry: {} as any,
+      repoRoot: '/repo',
+      invokerConfig: {},
+      logger: createLogger() as any,
+      taskHandles: new Map(),
+      enqueueTaskOutput: vi.fn(),
+      flushTaskOutput: vi.fn(),
+      assertFatalExecutionCapacity: vi.fn(),
+      getTaskRunner: () => currentRunner,
+      setTaskRunner: (value) => { currentRunner = value; },
+      setLatestTaskExecutor: vi.fn(),
+    });
+
+    const config = taskRunnerConstructor.mock.calls[0]?.[0] as any;
+    config.callbacks.onLaunchFailed('gone', new Error('boom'), { type: 'worktree' });
+
+    expect(persistence.appendTaskOutput).not.toHaveBeenCalled();
+  });
+
   it('publishes review-gate failure lifecycle events and keeps approve hook routed through the current TaskRunner', async () => {
     let currentRunner: any = null;
     const orchestrator = {
