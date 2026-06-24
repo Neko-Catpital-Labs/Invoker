@@ -325,6 +325,7 @@ Layer rules: [ARCHITECTURE.md](ARCHITECTURE.md). Agent/repo conventions: [CLAUDE
 | [docs/invoker-config-example.json](docs/invoker-config-example.json) | Example `config.json` with local and remote executor settings |
 | [docs/remote-ssh-targets.md](docs/remote-ssh-targets.md) | SSH executor setup, target fields, and plan examples |
 | [docs/docker-executor.md](docs/docker-executor.md) | Docker executor configuration and runtime notes |
+| [docs/slack-native-workflows.md](docs/slack-native-workflows.md) | Plan & drive workflows from Slack: lobby mentions, harness presets, per-workflow channels |
 
 ## Troubleshooting
 
