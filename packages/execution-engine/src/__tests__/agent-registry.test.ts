@@ -23,6 +23,21 @@ describe('registerBuiltinAgents', () => {
     const names = registerBuiltinAgents().listExecution().map((agent) => agent.name);
     expect(names).toEqual(expect.arrayContaining(['claude', 'codex', 'omp']));
   });
+
+  it('registers cursor, omp, and codex planning agents', () => {
+    const registry = registerBuiltinAgents();
+    expect(registry.getPlanningOrThrow('cursor').name).toBe('cursor');
+    expect(registry.getPlanningOrThrow('omp').name).toBe('omp');
+    expect(registry.getPlanningOrThrow('codex').name).toBe('codex');
+  });
+
+  it('threads the planning model into the cursor command', () => {
+    const cursor = registerBuiltinAgents().getPlanningOrThrow('cursor');
+    expect(cursor.buildPlanningCommand('p', { model: 'codex' })).toEqual({
+      command: 'cursor',
+      args: ['agent', '--print', '--trust', '--model', 'codex', 'p'],
+    });
+  });
 });
 
 describe('AgentRegistry', () => {
