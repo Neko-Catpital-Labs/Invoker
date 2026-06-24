@@ -5,6 +5,7 @@
  * Orchestrator writes a WorkRequest; executor runs the action;
  * executor returns a WorkResponse (via callback or IPC).
  */
+import type { ReviewGateArtifact, ReviewGateState, TaskStatus } from '@invoker/workflow-graph';
 
 // ── Action Types ────────────────────────────────────────────
 
@@ -52,8 +53,10 @@ export interface WorkRequestInputs {
   baseBranch?: string;
   /** Already-resolved base commit for baseBranch, used to skip redundant base ref resolution. */
   baseCommit?: string;
-  /** Name of the execution agent to use (e.g. 'claude', 'codex'). Defaults to 'claude'. */
+  /** Name of the execution agent to use (e.g. 'claude', 'codex', 'omp'). Defaults to 'claude'. */
   executionAgent?: string;
+  /** Agent-specific model selector. The selected CLI owns validation. */
+  executionModel?: string;
   /** When true, executors must not reuse existing task worktrees for this run. */
   freshWorkspace?: boolean;
   /**
@@ -118,6 +121,20 @@ export interface WorkResponseOutputs {
   reviewId?: string;
   /** Human-readable review state produced by merge-gate style actions. */
   reviewStatus?: string;
+  /** Typed review-gate artifact state produced by merge-gate style actions. */
+  reviewGate?: ReviewGateState;
+}
+
+export interface ReviewGateQueryResponse {
+  workflowId: string;
+  mergeTaskId: string | null;
+  status: TaskStatus | null;
+  activeGeneration: number | null;
+  completion: { required: 'all'; status: 'approved' };
+  ready: boolean;
+  artifacts: ReviewGateArtifact[];
+  discardedArtifacts: ReviewGateArtifact[];
+  edges: Array<{ from: string; to: string }>;
 }
 
 export interface SpawnExperimentsRequest {

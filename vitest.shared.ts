@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import MergifyReporter from '@mergifyio/vitest';
 
 const maxWorkers = process.env.INVOKER_VITEST_MAX_WORKERS
   ?? (process.env.INVOKER_VITEST_HIGH_RESOURCE === '1' ? undefined : 2);
@@ -16,5 +17,6 @@ export default defineConfig({
         maxMemoryLimitBeforeRecycle: 512 * 1024 * 1024, // 512MB — restart fork to shed leaked memory
       },
     },
+    reporters: ['default', new MergifyReporter()],
   },
 });

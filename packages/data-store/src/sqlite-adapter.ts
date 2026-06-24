@@ -30,6 +30,7 @@ import type {
   WorkflowRollupTaskSummary,
   ExternalDependency,
   ExternalDependencyChange,
+  DetachedExternalDependency,
 } from '@invoker/workflow-core';
 import { DISPATCH_LEASE_MS } from '@invoker/contracts';
 import type { SearchResultItem, SearchOptions } from '@invoker/contracts';
@@ -43,6 +44,7 @@ import type {
   LaunchDispatchInvalidationRow,
   PersistenceAdapter,
   Workflow,
+  WorkflowSaveInput,
   WorkflowTaskSnapshot,
   TaskEvent,
   ActivityLogEntry,
@@ -59,6 +61,8 @@ function loadNativeSqlite(): Promise<NativeSqlite> {
   nativeSqlite ??= import(nativeSqliteSpecifier) as Promise<NativeSqlite>;
   return nativeSqlite;
 }
+const ACTION_GRAPH_RECENT_ATTEMPT_LIMIT = 3;
+
 
 /**
  * Rewrite `pnpm test packages/<pkg>/...` (incorrect root-level invocation)
@@ -695,6 +699,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         review_provider TEXT,
         external_dependencies TEXT,
         external_dependency_changes TEXT,
+        detached_external_dependencies TEXT,
         generation INTEGER DEFAULT 0,
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
@@ -773,6 +778,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
         created_at TEXT DEFAULT (datetime('now')),
         FOREIGN KEY (task_id) REFERENCES tasks(id)
       );
+
+      CREATE INDEX IF NOT EXISTS idx_events_task_id_id
+        ON events(task_id, id);
 
       CREATE TABLE IF NOT EXISTS activity_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -991,6 +999,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN review_id TEXT',
       'ALTER TABLE tasks ADD COLUMN review_status TEXT',
       'ALTER TABLE tasks ADD COLUMN review_provider_id TEXT',
+      'ALTER TABLE tasks ADD COLUMN review_gate TEXT',
       'ALTER TABLE tasks ADD COLUMN is_fixing_with_ai INTEGER DEFAULT 0',
       'ALTER TABLE tasks ADD COLUMN execution_generation INTEGER DEFAULT 0',
       'ALTER TABLE tasks ADD COLUMN docker_image TEXT',
@@ -1005,6 +1014,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE workflows ADD COLUMN review_provider TEXT',
       'ALTER TABLE workflows ADD COLUMN external_dependencies TEXT',
       'ALTER TABLE workflows ADD COLUMN external_dependency_changes TEXT',
+      // detached_external_dependencies: read-only provenance for deps removed by detachWorkflow
+      'ALTER TABLE workflows ADD COLUMN detached_external_dependencies TEXT',
       // execution_agent / agent_name: interchangeable agent support
       'ALTER TABLE tasks ADD COLUMN execution_agent TEXT',
       'ALTER TABLE tasks ADD COLUMN agent_name TEXT',
@@ -1043,6 +1054,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     // Replace old attempt_number index with created_at index
     this.db.run('DROP INDEX IF EXISTS idx_attempts_node');
     this.db.run('CREATE INDEX IF NOT EXISTS idx_attempts_node_created ON attempts(node_id, created_at)');
+    this.db.run('CREATE INDEX IF NOT EXISTS idx_events_task_id_id ON events(task_id, id)');
     this.db.run('CREATE INDEX IF NOT EXISTS idx_tasks_workflow_id ON tasks(workflow_id)');
     this.db.run('DROP INDEX IF EXISTS idx_task_launch_dispatch_active_attempt');
     this.db.run(`
@@ -1273,10 +1285,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   // ── Workflows ─────────────────────────────────────────
 
-  saveWorkflow(workflow: Workflow): void {
+  saveWorkflow(workflow: WorkflowSaveInput): void {
     this.execRun(`
-      INSERT OR REPLACE INTO workflows (id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url, branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode, review_provider, external_dependencies, external_dependency_changes, generation, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO workflows (id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url, branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode, review_provider, external_dependencies, external_dependency_changes, detached_external_dependencies, generation, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       workflow.id, workflow.name,
       workflow.description ?? null,
@@ -1287,12 +1299,13 @@ export class SQLiteAdapter implements PersistenceAdapter {
       workflow.reviewProvider ?? null,
       workflow.externalDependencies ? JSON.stringify(workflow.externalDependencies) : null,
       workflow.externalDependencyChanges ? JSON.stringify(workflow.externalDependencyChanges) : null,
+      workflow.detachedExternalDependencies ? JSON.stringify(workflow.detachedExternalDependencies) : null,
       workflow.generation ?? 0,
       workflow.createdAt, workflow.updatedAt,
     ]);
   }
 
-  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'name' | 'description' | 'visualProof' | 'planFile' | 'repoUrl' | 'intermediateRepoUrl' | 'branch' | 'onFinish' | 'baseBranch' | 'featureBranch' | 'mergeMode' | 'reviewProvider' | 'externalDependencies' | 'externalDependencyChanges' | 'generation' | 'updatedAt'>>): void {
+  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'name' | 'description' | 'visualProof' | 'planFile' | 'repoUrl' | 'intermediateRepoUrl' | 'branch' | 'onFinish' | 'baseBranch' | 'featureBranch' | 'mergeMode' | 'reviewProvider' | 'externalDependencies' | 'externalDependencyChanges' | 'detachedExternalDependencies' | 'generation' | 'updatedAt'>>): void {
     const setClauses: string[] = [];
     const values: unknown[] = [];
     const columnMap: Record<string, string> = {
@@ -1340,6 +1353,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
     if ('externalDependencyChanges' in changes) {
       setClauses.push('external_dependency_changes = ?');
       values.push(changes.externalDependencyChanges ? JSON.stringify(changes.externalDependencyChanges) : null);
+    }
+    if ('detachedExternalDependencies' in changes) {
+      setClauses.push('detached_external_dependencies = ?');
+      values.push(changes.detachedExternalDependencies ? JSON.stringify(changes.detachedExternalDependencies) : null);
     }
     setClauses.push('updated_at = ?');
     values.push(changes.updatedAt ?? new Date().toISOString());
@@ -1512,7 +1529,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         action_request_id, experiments,
         created_at, launch_phase, launch_started_at, launch_completed_at, started_at, completed_at, last_heartbeat_at,
         utilization, pending_fix_error,
-        review_url, review_id, review_status, review_provider_id,
+        review_url, review_id, review_status, review_provider_id, review_gate,
         is_fixing_with_ai,
         execution_generation,
         pool_member_id,
@@ -1534,7 +1551,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?,
         ?, ?, ?, ?,
         ?, ?,
-        ?, ?, ?, ?,
+        ?, ?, ?, ?, ?,
         ?,
         ?,
         ?,
@@ -1590,6 +1607,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       exec.reviewId ?? null,
       exec.reviewStatus ?? null,
       exec.reviewProviderId ?? null,
+      exec.reviewGate ? JSON.stringify(exec.reviewGate) : null,
       exec.isFixingWithAI ? 1 : 0,
       exec.generation ?? 0,
       (cfg as { poolMemberId?: string }).poolMemberId ?? null,
@@ -1709,6 +1727,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         experiments: 'experiments',
         selectedExperiments: 'selected_experiments',
         experimentResults: 'experiment_results',
+        reviewGate: 'review_gate',
       };
 
       for (const [key, col] of Object.entries(execMap)) {
@@ -2062,11 +2081,21 @@ export class SQLiteAdapter implements PersistenceAdapter {
     `, [taskId, eventType, payload ? JSON.stringify(payload) : null]);
   }
 
-  getEvents(taskId: string): TaskEvent[] {
-    const rows = this.queryAll(
-      'SELECT * FROM events WHERE task_id = ? ORDER BY id ASC',
-      [taskId],
-    );
+  getEvents(taskId: string): TaskEvent[];
+  getEvents(taskId: string, sortBy: 'asc' | 'desc', limit: number): TaskEvent[];
+  getEvents(taskId: string, sortBy: 'asc' | 'desc' = 'asc', limit?: number): TaskEvent[] {
+    const orderBy = sortBy === 'desc' ? 'DESC' : 'ASC';
+    const rows = limit === undefined
+      ? this.queryAll(
+        `SELECT * FROM events WHERE task_id = ? ORDER BY id ${orderBy}`,
+        [taskId],
+      )
+      : limit <= 0
+        ? []
+        : this.queryAll(
+          `SELECT * FROM events WHERE task_id = ? ORDER BY id ${orderBy} LIMIT ?`,
+          [taskId, Math.floor(limit)],
+        );
     return rows.map((row: any) => ({
       id: row.id,
       taskId: row.task_id,
@@ -2153,8 +2182,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
       `
       SELECT
         CASE
-          WHEN prompt IS NOT NULL AND TRIM(prompt) != '' THEN COALESCE(execution_agent, agent_name)
-          ELSE COALESCE(agent_name, execution_agent)
+          WHEN prompt IS NOT NULL AND TRIM(prompt) != '' THEN COALESCE(execution_agent, agent_name, last_agent_name)
+          ELSE COALESCE(agent_name, last_agent_name, execution_agent)
         END AS agent
       FROM tasks
       WHERE id = ?
@@ -2485,6 +2514,31 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return rows.map(this.rowToAttempt);
   }
 
+  loadActionGraphAttempts(
+    nodeId: string,
+    selectedAttemptId?: string,
+    recentAttemptLimit = ACTION_GRAPH_RECENT_ATTEMPT_LIMIT,
+  ): Attempt[] {
+    const limit = Math.max(0, Math.trunc(recentAttemptLimit));
+    const rows = this.queryAll(
+      `SELECT * FROM attempts
+      WHERE node_id = ?
+        AND (
+          status IN ('pending', 'claimed', 'running', 'needs_input')
+          OR id = ?
+          OR id IN (
+            SELECT id FROM attempts
+            WHERE node_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+          )
+        )
+      ORDER BY created_at ASC`,
+      [nodeId, selectedAttemptId ?? null, nodeId, limit],
+    );
+    return rows.map(this.rowToAttempt);
+  }
+
   loadAttempt(attemptId: string): Attempt | undefined {
     const row = this.queryOne(
       'SELECT * FROM attempts WHERE id = ?',
@@ -2692,6 +2746,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       reviewProvider: row.review_provider ?? undefined,
       externalDependencies: row.external_dependencies ? JSON.parse(row.external_dependencies) : undefined,
       externalDependencyChanges: row.external_dependency_changes ? JSON.parse(row.external_dependency_changes) as ExternalDependencyChange[] : undefined,
+      detachedExternalDependencies: row.detached_external_dependencies ? JSON.parse(row.detached_external_dependencies) as DetachedExternalDependency[] : undefined,
       generation: row.generation ?? 0,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -2763,6 +2818,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         reviewId: row.review_id ?? undefined,
         reviewStatus: row.review_status ?? undefined,
         reviewProviderId: row.review_provider_id ?? undefined,
+        reviewGate: row.review_gate ? JSON.parse(row.review_gate) : undefined,
         phase: row.launch_phase ?? undefined,
         launchStartedAt: row.launch_started_at ? new Date(row.launch_started_at) : undefined,
         launchCompletedAt: row.launch_completed_at ? new Date(row.launch_completed_at) : undefined,
@@ -2968,6 +3024,34 @@ export class SQLiteAdapter implements PersistenceAdapter {
        WHERE status = 'running'`,
     );
     return Number(running?.count ?? 0);
+  }
+
+  requeueOrphanedWorkflowMutationIntents(now: Date = new Date()): number {
+    const rows = this.queryAll(
+      `SELECT i.id
+         FROM workflow_mutation_intents i
+         LEFT JOIN workflow_mutation_leases l
+           ON l.workflow_id = i.workflow_id
+          AND l.active_intent_id = i.id
+          AND l.lease_expires_at >= ?
+        WHERE i.status = 'running'
+          AND l.workflow_id IS NULL`,
+      [now.toISOString()],
+    );
+    const ids = rows
+      .map((row) => Number(row.id))
+      .filter((id) => Number.isFinite(id));
+    if (ids.length === 0) {
+      return 0;
+    }
+    this.execRun(
+      `UPDATE workflow_mutation_intents
+         SET status = 'queued', owner_id = NULL, started_at = NULL, completed_at = NULL, error = NULL
+       WHERE status = 'running'
+         AND id IN (${ids.map(() => '?').join(', ')})`,
+      ids,
+    );
+    return ids.length;
   }
 
   claimNextWorkflowMutationIntent(

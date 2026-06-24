@@ -7,17 +7,18 @@
  */
 
 import type { Logger } from '@invoker/contracts';
-import type { Orchestrator, ExternalGatePolicyUpdate } from '@invoker/workflow-core';
 import type {
-  CancelInFlightFn,
-  InvalidationDeps,
-  InvalidationScope,
+  CommandService,
+  Orchestrator,
+  ExternalGatePolicyUpdate,
+  InvalidationAction,
   TaskState,
 } from '@invoker/workflow-core';
 import {
   OrchestratorError,
   OrchestratorErrorCode,
-  buildCancelInFlight as buildCoreCancelInFlight,
+  applyInvalidation,
+  buildWorkflowInvalidationDeps,
   parseMergeConflictError,
 } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
@@ -33,6 +34,7 @@ import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import { isDispatchableLaunch } from './global-topup.js';
 
 type LoadedWorkflow = NonNullable<ReturnType<SQLiteAdapter['loadWorkflow']>>;
+type FreshBaseState = { branch: string; commit: string };
 
 // ── Lineage guard ─────────────────────────────────────────────
 
@@ -126,6 +128,10 @@ export interface ActionDeps {
   autoApproveAIFixes?: boolean;
 }
 
+export interface CommandActionDeps extends ActionDeps {
+  commandService: CommandService;
+}
+
 export interface ApproveTaskResult {
   approvedTask?: TaskState;
   started: TaskState[];
@@ -134,18 +140,18 @@ export interface ApproveTaskResult {
 
 // ── Actions ──────────────────────────────────────────────────
 
-export function bumpGenerationAndRecreate(
+function requireWorkflowRecord(
   workflowId: string,
-  deps: Pick<ActionDeps, 'logger' | 'persistence' | 'orchestrator'>,
-): TaskState[] {
-  const { persistence, orchestrator } = deps;
+  persistence: Pick<ActionDeps, 'persistence'>['persistence'],
+): LoadedWorkflow {
   const workflow = persistence.loadWorkflow(workflowId);
-  if (!workflow) throw new OrchestratorError(OrchestratorErrorCode.WORKFLOW_NOT_FOUND, `Workflow ${workflowId} not found`);
-  const nextGen = (workflow.generation ?? 0) + 1;
-  persistence.updateWorkflow(workflowId, { generation: nextGen });
-  deps.logger?.info(`bumped generation to ${nextGen} for ${workflowId}`, { module: 'workflow' });
-  deps.logger?.info(`bumpGenerationAndRecreate: calling recreateWorkflow(${workflowId})`, { module: 'agent-session-trace' });
-  return orchestrator.recreateWorkflow(workflowId);
+  if (!workflow) {
+    throw new OrchestratorError(
+      OrchestratorErrorCode.WORKFLOW_NOT_FOUND,
+      `Workflow ${workflowId} not found`,
+    );
+  }
+  return workflow;
 }
 
 export async function approveTask(
@@ -208,32 +214,76 @@ export function provideInput(
   deps.orchestrator.provideInput(taskId, text);
 }
 
-export function retryTask(
-  taskId: string,
-  deps: Pick<ActionDeps, 'orchestrator'>,
-): TaskState[] {
-  return deps.orchestrator.retryTask(taskId);
+function commandResultError(error: { code: string; message: string }): Error {
+  const known = (Object.values(OrchestratorErrorCode) as string[]).includes(error.code);
+  return known
+    ? new OrchestratorError(error.code as OrchestratorErrorCode, error.message)
+    : new Error(error.message);
 }
 
-export function restartTask(
-  taskId: string,
-  deps: Pick<ActionDeps, 'orchestrator'>,
-): TaskState[] {
-  return deps.orchestrator.recreateTask(taskId);
-}
-
-export function retryWorkflow(
+async function runWorkflowInvalidationThroughCommandService(
   workflowId: string,
-  deps: Pick<ActionDeps, 'orchestrator'>,
-): TaskState[] {
-  return deps.orchestrator.retryWorkflow(workflowId);
+  action: Extract<InvalidationAction, 'retryWorkflow' | 'recreateWorkflow' | 'recreateWorkflowFromFreshBase'>,
+  deps: CommandActionDeps,
+  options: {
+    timingLabel: string;
+    beforeApply?: () => Promise<void>;
+  },
+): Promise<TaskState[]> {
+  const result = await deps.commandService.runSerializedForWorkflow(
+    workflowId,
+    async () => {
+      if (options.beforeApply) await options.beforeApply();
+      const run = () => applyInvalidation(
+        'workflow',
+        action,
+        workflowId,
+        createInvalidationDeps({
+          logger: deps.logger,
+          orchestrator: deps.orchestrator,
+          persistence: deps.persistence,
+          taskExecutor: deps.taskExecutor,
+          mutationTiming: deps.mutationTiming,
+        }),
+      );
+      return deps.mutationTiming
+        ? deps.mutationTiming.span(options.timingLabel, undefined, run)
+        : run();
+    },
+  );
+  if (!result.ok) throw commandResultError(result.error);
+  return result.data;
 }
 
-export function recreateWorkflow(
-  workflowId: string,
-  deps: Pick<ActionDeps, 'logger' | 'persistence' | 'orchestrator'>,
-): TaskState[] {
-  return bumpGenerationAndRecreate(workflowId, deps);
+async function runTaskInvalidationThroughCommandService(
+  taskId: string,
+  action: Extract<InvalidationAction, 'retryTask' | 'recreateTask'>,
+  deps: CommandActionDeps,
+  timingLabel: string,
+): Promise<TaskState[]> {
+  const workflowId = deps.orchestrator.getTask(taskId)?.config.workflowId;
+  const result = await deps.commandService.runSerializedForWorkflow(
+    workflowId,
+    async () => {
+      const run = () => applyInvalidation(
+        'task',
+        action,
+        taskId,
+        createInvalidationDeps({
+          logger: deps.logger,
+          orchestrator: deps.orchestrator,
+          persistence: deps.persistence,
+          taskExecutor: deps.taskExecutor,
+          mutationTiming: deps.mutationTiming,
+        }),
+      );
+      return deps.mutationTiming
+        ? deps.mutationTiming.span(timingLabel, undefined, run)
+        : run();
+    },
+  );
+  if (!result.ok) throw commandResultError(result.error);
+  return result.data;
 }
 
 function workflowIdFromMergeTaskId(target: string): string | undefined {
@@ -269,19 +319,6 @@ export function resolveWorkflowIdForRebaseTarget(
   );
 }
 
-export function recreateTask(
-  taskId: string,
-  deps: Pick<ActionDeps, 'persistence' | 'orchestrator'>,
-): TaskState[] {
-  return deps.orchestrator.recreateTask(taskId);
-}
-
-export function recreateDownstream(
-  taskId: string,
-  deps: Pick<ActionDeps, 'orchestrator'>,
-): TaskState[] {
-  return deps.orchestrator.recreateDownstream(taskId);
-}
 
 export function cancelWorkflow(
   workflowId: string,
@@ -393,110 +430,128 @@ export async function deleteAllWorkflowsBulk(
  * `docs/architecture/task-invalidation-roadmap.md` "Out of scope":
  * the composite implementation is preserved semantically — replacing
  * it with a single primitive is a follow-up):
- *
- *   1. Bump the workflow's generation counter (matches
- *      `bumpGenerationAndRecreate` so any downstream observers that
- *      key off `workflow.generation` notice the new round).
+ *   1. Bump the workflow's generation counter so downstream observers
+ *      that key off `workflow.generation` notice the new round.
  *   2. Delegate to `Orchestrator.recreateWorkflowFromFreshBase` with
  *      a `refreshBase` callback that runs
- *      `taskExecutor.preparePoolForRebaseRetry` when both
- *      `taskExecutor` and `workflow.repoUrl` are available. The
- *      orchestrator method is the seam that records the fresh-base
- *      effect (`knownFreshBaseCommits`) and then runs the same reset
- *      as `recreateWorkflow`. Cancel-first is supplied by
- *      `applyInvalidation`'s `cancelInFlight` dep
- *      (`buildCancelInFlight` → `Orchestrator.cancelWorkflow` +
- *      `taskExecutor.killActiveExecution`) when invoked through that
- *      route — this wrapper does not add a parallel cancel call.
+ *      `preparePoolForRebaseRetry(workflowId, repoUrl, baseBranch, …)`
+ *      first when both `taskExecutor` and `workflow.repoUrl` are
+ *      available.
+ *   3. Rely on `applyInvalidation`'s `cancelInFlight` dep for the
+ *      cancel-first invariant. This wrapper does not add a parallel
+ *      cancel call.
  *
  * `preparePoolForRebaseRetry` resolves the fresh upstream HEAD once.
  * The explicit fresh-base lifecycle entrypoint can pass that commit
  * through to the orchestrator callback when available.
  */
+async function prepareFreshBaseWithWorkflow(
+  workflowId: string,
+  workflow: LoadedWorkflow,
+  deps: ActionDeps,
+): Promise<FreshBaseState | undefined> {
+  if (!deps.taskExecutor || !workflow.repoUrl) return undefined;
+  const prepare = () => deps.mutationTiming
+    ? deps.taskExecutor!.preparePoolForRebaseRetry(
+      workflowId,
+      workflow.repoUrl,
+      workflow.baseBranch,
+      deps.mutationTiming,
+    )
+    : deps.taskExecutor!.preparePoolForRebaseRetry(
+      workflowId,
+      workflow.repoUrl,
+      workflow.baseBranch,
+    );
+  if (deps.mutationTiming) {
+    return deps.mutationTiming.span(
+      'workflow-actions.prepareWorkflowFreshBase.preparePoolForRebaseRetry',
+      { repoUrl: workflow.repoUrl, baseBranch: workflow.baseBranch },
+      prepare,
+    );
+  }
+  return prepare();
+}
+
 async function prepareWorkflowFreshBase(
   workflowId: string,
   deps: ActionDeps,
-): Promise<{ workflow: LoadedWorkflow; freshBase?: { branch: string; commit: string } }> {
-  const workflow = deps.persistence.loadWorkflow(workflowId);
-  if (!workflow) throw new OrchestratorError(OrchestratorErrorCode.WORKFLOW_NOT_FOUND, `Workflow ${workflowId} not found`);
-
-  let freshBase: { branch: string; commit: string } | undefined;
-  if (deps.taskExecutor && workflow.repoUrl) {
-    const prepare = () => deps.mutationTiming
-      ? deps.taskExecutor!.preparePoolForRebaseRetry(
-        workflowId,
-        workflow.repoUrl,
-        workflow.baseBranch,
-        deps.mutationTiming,
-      )
-      : deps.taskExecutor!.preparePoolForRebaseRetry(
-        workflowId,
-        workflow.repoUrl,
-        workflow.baseBranch,
-      );
-    if (deps.mutationTiming) {
-      freshBase = await deps.mutationTiming.span(
-        'workflow-actions.prepareWorkflowFreshBase.preparePoolForRebaseRetry',
-        { repoUrl: workflow.repoUrl, baseBranch: workflow.baseBranch },
-        prepare,
-      );
-    } else {
-      freshBase = await prepare();
-    }
-  }
-
+): Promise<{ workflow: LoadedWorkflow; freshBase?: FreshBaseState }> {
+  const workflow = requireWorkflowRecord(workflowId, deps.persistence);
+  const freshBase = await prepareFreshBaseWithWorkflow(workflowId, workflow, deps);
   return { workflow, freshBase };
+}
+
+function createInvalidationDeps(
+  deps: Pick<ActionDeps, 'orchestrator' | 'persistence' | 'mutationTiming'> & {
+    logger?: Logger;
+    taskExecutor?: TaskExecutorRef;
+  },
+) {
+  return buildWorkflowInvalidationDeps({
+    orchestrator: deps.orchestrator,
+    requireWorkflow: (workflowId) => requireWorkflowRecord(workflowId, deps.persistence),
+    setWorkflowGeneration: (workflowId, generation) => {
+      deps.persistence.updateWorkflow(workflowId, { generation });
+    },
+    killActiveExecution: async (taskId) => {
+      const taskExecutor = resolveTaskExecutor(deps.taskExecutor);
+      if (!taskExecutor) return;
+      await taskExecutor.killActiveExecution(taskId);
+    },
+    prepareFreshBase: (workflowId, workflow) =>
+      prepareFreshBaseWithWorkflow(workflowId, workflow as LoadedWorkflow, {
+        logger: deps.logger,
+        orchestrator: deps.orchestrator,
+        persistence: deps.persistence,
+        taskExecutor: resolveTaskExecutor(deps.taskExecutor),
+        mutationTiming: deps.mutationTiming,
+      }),
+    fixApprove: async (taskId) => {
+      const result = await approveTask(taskId, {
+        orchestrator: deps.orchestrator,
+        taskExecutor: resolveTaskExecutor(deps.taskExecutor),
+      });
+      return result.started;
+    },
+    fixReject: (taskId) => {
+      rejectTask(taskId, { orchestrator: deps.orchestrator });
+      return [];
+    },
+  });
 }
 
 export async function recreateWorkflowFromFreshBase(
   workflowId: string,
-  deps: ActionDeps,
+  deps: CommandActionDeps,
 ): Promise<TaskState[]> {
-  const { workflow, freshBase } = await prepareWorkflowFreshBase(workflowId, deps);
-  const nextGen = (workflow.generation ?? 0) + 1;
-  deps.mutationTiming?.mark('workflow-actions.recreateWorkflowFromFreshBase.bumpGeneration', 'started', {
-    nextGeneration: nextGen,
-  });
-  deps.persistence.updateWorkflow(workflowId, { generation: nextGen });
-  deps.mutationTiming?.mark('workflow-actions.recreateWorkflowFromFreshBase.bumpGeneration', 'completed', {
-    nextGeneration: nextGen,
-  });
-  deps.logger?.info(
-    `recreateWorkflowFromFreshBase: workflowId=${workflowId} bumped generation to ${nextGen}`,
-    { module: 'workflow' },
+  return runWorkflowInvalidationThroughCommandService(
+    workflowId,
+    'recreateWorkflowFromFreshBase',
+    deps,
+    { timingLabel: 'workflow-actions.recreateWorkflowFromFreshBase.applyInvalidation' },
   );
-  deps.logger?.info(
-    `recreateWorkflowFromFreshBase: workflowId=${workflowId} → orchestrator.recreateWorkflowFromFreshBase`,
-    { module: 'agent-session-trace' },
-  );
-
-  const recreate = () => deps.orchestrator.recreateWorkflowFromFreshBase(workflowId, {
-    refreshBase: async () => {
-      // Pool preparation already ran above. The callback is kept so the
-      // orchestrator still sees the fresh-base lifecycle entrypoint.
-      return freshBase;
-    },
-  });
-  return deps.mutationTiming
-    ? deps.mutationTiming.span('workflow-actions.recreateWorkflowFromFreshBase.orchestrator', undefined, recreate)
-    : recreate();
 }
 
 export async function rebaseRetry(
   target: string,
-  deps: ActionDeps,
+  deps: CommandActionDeps,
 ): Promise<TaskState[]> {
   const workflowId = resolveWorkflowIdForRebaseTarget(target, deps);
   deps.mutationTiming?.mark('workflow-actions.rebaseRetry', 'started', { target, workflowId });
   deps.logger?.info(
-    `rebaseRetry: target=${target} workflowId=${workflowId} → prepare fresh base + retryWorkflow`,
+    `rebaseRetry: target=${target} workflowId=${workflowId} → CommandService/applyInvalidation retryWorkflow`,
     { module: 'agent-session-trace' },
   );
-  await prepareWorkflowFreshBase(workflowId, deps);
-  const retry = async (): Promise<TaskState[]> => Promise.resolve(deps.orchestrator.retryWorkflow(workflowId));
-  const started = deps.mutationTiming
-    ? await deps.mutationTiming.span('workflow-actions.rebaseRetry.orchestrator', undefined, retry)
-    : await retry();
+  const started = await runWorkflowInvalidationThroughCommandService(
+    workflowId,
+    'retryWorkflow',
+    deps,
+    {
+      timingLabel: 'workflow-actions.rebaseRetry.applyInvalidation',
+      beforeApply: () => prepareWorkflowFreshBase(workflowId, deps).then(() => undefined),
+    },
+  );
   deps.mutationTiming?.mark('workflow-actions.rebaseRetry', 'completed', {
     target,
     workflowId,
@@ -507,19 +562,20 @@ export async function rebaseRetry(
 
 export async function rebaseRecreate(
   target: string,
-  deps: ActionDeps,
+  deps: CommandActionDeps,
 ): Promise<TaskState[]> {
   const workflowId = resolveWorkflowIdForRebaseTarget(target, deps);
   deps.mutationTiming?.mark('workflow-actions.rebaseRecreate', 'started', { target, workflowId });
   deps.logger?.info(
-    `rebaseRecreate: target=${target} workflowId=${workflowId} → prepare fresh base + recreateWorkflow`,
+    `rebaseRecreate: target=${target} workflowId=${workflowId} → CommandService/applyInvalidation recreateWorkflowFromFreshBase`,
     { module: 'agent-session-trace' },
   );
-  await prepareWorkflowFreshBase(workflowId, deps);
-  const recreate = async (): Promise<TaskState[]> => Promise.resolve(bumpGenerationAndRecreate(workflowId, deps));
-  const started = deps.mutationTiming
-    ? await deps.mutationTiming.span('workflow-actions.rebaseRecreate.orchestrator', undefined, recreate)
-    : await recreate();
+  const started = await runWorkflowInvalidationThroughCommandService(
+    workflowId,
+    'recreateWorkflowFromFreshBase',
+    deps,
+    { timingLabel: 'workflow-actions.rebaseRecreate.applyInvalidation' },
+  );
   deps.mutationTiming?.mark('workflow-actions.rebaseRecreate', 'completed', {
     target,
     workflowId,
@@ -542,88 +598,6 @@ function resolveTaskExecutor(ref: TaskExecutorRef | undefined): TaskRunner | und
   return ref;
 }
 
-export interface BuildCancelInFlightDeps {
-  orchestrator: Orchestrator;
-  taskExecutor?: TaskExecutorRef;
-}
-
-export function buildCancelInFlight(deps: BuildCancelInFlightDeps): CancelInFlightFn {
-  return buildCoreCancelInFlight({
-    orchestrator: deps.orchestrator,
-    killActiveExecution: async (id) => {
-      const taskExecutor = resolveTaskExecutor(deps.taskExecutor);
-      if (!taskExecutor) return;
-      await taskExecutor.killActiveExecution(id);
-    },
-  });
-}
-
-export type BuildInvalidationDepsArgs = Omit<
-  Pick<ActionDeps, 'logger' | 'orchestrator' | 'persistence' | 'mutationTiming'>,
-  'taskExecutor'
-> & { taskExecutor?: TaskExecutorRef };
-
-export function buildInvalidationDeps(deps: BuildInvalidationDepsArgs): InvalidationDeps {
-  const cancelInFlight = buildCancelInFlight({
-    orchestrator: deps.orchestrator,
-    taskExecutor: deps.taskExecutor,
-  });
-  return {
-    cancelInFlight,
-    retryTask: (taskId: string) => deps.orchestrator.retryTask(taskId),
-    recreateTask: (taskId: string) => deps.orchestrator.recreateTask(taskId),
-    recreateDownstream: (taskId: string) => deps.orchestrator.recreateDownstream(taskId),
-    retryWorkflow: (workflowId: string) => deps.orchestrator.retryWorkflow(workflowId),
-    recreateWorkflow: (workflowId: string) =>
-      bumpGenerationAndRecreate(workflowId, {
-        logger: deps.logger,
-        orchestrator: deps.orchestrator,
-        persistence: deps.persistence,
-      }),
-    recreateWorkflowFromFreshBase: (workflowId: string) =>
-      recreateWorkflowFromFreshBase(workflowId, {
-        logger: deps.logger,
-        orchestrator: deps.orchestrator,
-        persistence: deps.persistence,
-        taskExecutor: resolveTaskExecutor(deps.taskExecutor),
-        mutationTiming: deps.mutationTiming,
-      }),
-    workflowFork: (workflowId: string) => {
-      const result = deps.orchestrator.forkWorkflow(workflowId);
-      deps.logger?.info(
-        `workflowFork: source=${workflowId} fork=${result.forkedWorkflowId} started=${result.started.length}`,
-        { module: 'workflow' },
-      );
-      return result.started;
-    },
-    // `scheduleOnly` is invoked by applyInvalidation WITHOUT a
-    // preceding cancelInFlight; the underlying primitive is
-    // workflow-agnostic and ignores the taskId argument.
-    scheduleOnly: (_taskId: string) =>
-      deps.orchestrator.autoStartExternallyUnblockedReadyTasks(),
-    fixApprove: async (taskId: string) => {
-      const result = await approveTask(taskId, {
-        orchestrator: deps.orchestrator,
-        taskExecutor: resolveTaskExecutor(deps.taskExecutor),
-      });
-      return result.started;
-    },
-    fixReject: (taskId: string) => {
-      rejectTask(taskId, { orchestrator: deps.orchestrator });
-      return [];
-    },
-    // For task scope, resolve the owning workflow first; if the task
-    // is gone (detached), the cascade is a no-op.
-    cascadeDownstream: (scope, id) => {
-      const workflowId =
-        scope === 'workflow'
-          ? id
-          : deps.orchestrator.getTask(id)?.config.workflowId;
-      if (!workflowId) return [];
-      return deps.orchestrator.cascadeInvalidationToDownstream(workflowId);
-    },
-  };
-}
 
 export function forkWorkflow(
   workflowId: string,
@@ -661,6 +635,7 @@ export function editTaskType(
 ): TaskState[] {
   return deps.orchestrator.editTaskType(taskId, runnerKind, poolMemberId);
 }
+
 
 export function editTaskAgent(
   taskId: string,
@@ -719,14 +694,10 @@ export async function selectExperiments(
  * (`MUTATION_POLICIES.mergeMode` → `retryTask` / task scope, scoped
  * to the merge node).
  *
- * Step 9 migrates this surface from an app-layer-only special case
- * to a proper orchestrator policy seam. Prior to Step 9 this wrapper
- * persisted the new mergeMode unconditionally and only restarted the
- * merge node when its status was `completed` / `awaiting_approval` /
- * `review_ready` — the chart's "Merge-mode inconsistency" section
- * explicitly flagged that as the bug ("only at the app layer, and
- * only when the merge node is already terminal or waiting … no
- * general active invalidation rule for an in-flight merge node").
+ * Step 9 moved this surface out of the old app-layer special case and
+ * into the shared invalidation pipeline. The merge node now restarts
+ * through the same cancel-first rule as the rest of the lifecycle
+ * matrix, including when it was already terminal or waiting.
  *
  * The substantive routing — same-mode no-op detection, cancel-first
  * interruption when the merge node is actively executing or waiting
@@ -785,28 +756,14 @@ export async function setWorkflowMergeMode(
  * Decision Table row "Change fix prompt or fix context while
  * `fixing_with_ai`" in
  * `docs/architecture/task-invalidation-chart.md`
- * (`MUTATION_POLICIES.fixContext` → `retryTask` / task scope).
- *
- * Step 10 introduces this wrapper as a thin async delegate around
- * `Orchestrator.editTaskFixContext` (mirrors the Step 2–9 wrapper
- * pattern). Prior to Step 10 the fix-session mutation surface had
- * **no general policy** at all — the chart's "Fix-session
- * inconsistency" section flagged the bespoke
- * `beginConflictResolution` / `revertConflictResolution` rollback
- * as "one special active invalidation mechanism, not a general
- * one". The substantive routing — same-content no-op detection,
- * cancel-first interruption when the task is in an active fix
- * session (`fixing_with_ai`), `fixPrompt` / `fixContext`
- * persistence on the task config, and the retry-class reset via
- * `restartTask` (today's `retryTask` compatibility wire — see
- * `MUTATION_POLICIES.fixContext` and `buildInvalidationDeps`) —
- * lives in `Orchestrator.editTaskFixContext`. That method is the
- * synchronous orchestrator-internal seam of `applyInvalidation`'s
- * Hard Invariant (cancel BEFORE authoritative reset) and reuses
- * `restartTask`'s reset shape so the task's `agentSessionId` /
- * `containerId` / `error` / `exitCode` / timing fields are cleared
- * while branch / workspacePath lineage survives — the chart's
- * retry-class semantics for fix-context mutations.
+ * Step 10 routes this through the shared invalidation pipeline instead
+ * of a one-off app-layer path. `Orchestrator.editTaskFixContext`
+ * remains the synchronous orchestrator seam reused by that pipeline.
+ * That seam owns same-content no-op detection, cancel-first behavior
+ * while the task is `fixing_with_ai`, config persistence, and the
+ * retry-class reset. It reuses `restartTask`'s reset shape so
+ * `agentSessionId`, `containerId`, `error`, `exitCode`, and timing
+ * fields are cleared while branch / workspacePath lineage survives.
  *
  * Cancel-first is enforced inside the orchestrator method — this
  * wrapper MUST NOT add a parallel cancel call.
@@ -857,7 +814,7 @@ export type FixWithAgentActionResult =
 
 export async function fixWithAgentAction(
   taskId: string,
-  deps: Pick<ActionDeps, 'orchestrator' | 'persistence' | 'autoApproveAIFixes'> & { taskExecutor: TaskRunner },
+  deps: Pick<CommandActionDeps, 'logger' | 'orchestrator' | 'persistence' | 'autoApproveAIFixes' | 'commandService' | 'mutationTiming'> & { taskExecutor: TaskRunner },
   options: {
     agentName?: string;
     recoveryRoute?: FailureRecoveryRoute;
@@ -1100,9 +1057,12 @@ async function recordFixedIntegrationAnchor(
 export async function autoFixOnFailure(
   taskId: string,
   deps: {
+    logger?: Logger;
     orchestrator: Orchestrator;
     persistence: SQLiteAdapter;
+    commandService: CommandService;
     taskExecutor: TaskRunner;
+    mutationTiming?: WorkflowMutationTiming;
     getAutoFixAgent?: () => string | undefined;
     getAutoApproveAIFixes?: () => boolean | undefined;
     signal?: AbortSignal;
@@ -1171,9 +1131,12 @@ export async function autoFixOnFailure(
         `\n[Auto-fix] Startup merge conflict detected; recreating workflow ${recoveryRoute.workflowId} from a fresh base.`,
       );
       const started = await recreateWorkflowFromFreshBase(recoveryRoute.workflowId, {
+        logger: deps.logger,
         orchestrator,
         persistence,
+        commandService: deps.commandService,
         taskExecutor,
+        mutationTiming: deps.mutationTiming,
       });
       const runnable = started.filter(isDispatchableLaunch);
       persistence.logEvent?.(taskId, 'debug.auto-fix', {
@@ -1254,7 +1217,19 @@ export async function autoFixOnFailure(
       return;
     }
     assertLineageCurrent(lineage, orchestrator, deps.signal);
-    const started = orchestrator.retryTask(taskId);
+    const started = await runTaskInvalidationThroughCommandService(
+      taskId,
+      'retryTask',
+      {
+        logger: deps.logger,
+        orchestrator,
+        persistence,
+        commandService: deps.commandService,
+        taskExecutor,
+        mutationTiming: deps.mutationTiming,
+      },
+      'workflow-actions.autoFixOnFailure.retryTask.applyInvalidation',
+    );
     const runnable = started.filter(isDispatchableLaunch);
     persistence.logEvent?.(taskId, 'debug.auto-fix', {
       phase: 'auto-fix-post-route-restart',

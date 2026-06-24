@@ -88,47 +88,66 @@ function httpRequest(
 }
 
 function makeFacadeDeps(overrides: Partial<WorkflowMutationFacadeDeps> = {}): WorkflowMutationFacadeDeps {
+  const orchestrator = {
+    retryTask: vi.fn(() => [makeTask()]),
+    recreateTask: vi.fn(() => [makeTask()]),
+    recreateDownstream: vi.fn(() => [makeTask()]),
+    retryWorkflow: vi.fn(() => [makeTask()]),
+    recreateWorkflow: vi.fn(() => [makeTask()]),
+    recreateWorkflowFromFreshBase: vi.fn(async () => [makeTask()]),
+    cascadeInvalidationToDownstream: vi.fn(() => []),
+    cancelTask: vi.fn(() => ({ cancelled: ['task-1'], runningCancelled: ['task-1'] })),
+    cancelWorkflow: vi.fn(() => ({ cancelled: ['task-1'], runningCancelled: ['task-1'] })),
+    deleteWorkflow: vi.fn(),
+    detachWorkflow: vi.fn(),
+    forkWorkflow: vi.fn(() => ({
+      forkedWorkflowId: 'wf-fork',
+      sourceWorkflowId: 'wf-1',
+      started: [makeTask({ id: 'fork-t1' })],
+    })),
+    editTaskCommand: vi.fn(() => [makeTask()]),
+    editTaskPrompt: vi.fn(() => [makeTask()]),
+    editTaskAgent: vi.fn(() => [makeTask()]),
+    setTaskExternalGatePolicies: vi.fn(() => []),
+    selectExperiment: vi.fn(() => [makeTask()]),
+    approve: vi.fn(async () => [makeTask()]),
+    reject: vi.fn(),
+    provideInput: vi.fn(),
+    getTask: vi.fn(() => makeTask()),
+    getAllTasks: vi.fn(() => []),
+    startExecution: vi.fn(() => []),
+  };
+  const persistence = {
+    loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 1 })),
+    updateWorkflow: vi.fn(),
+    loadTasks: vi.fn(() => []),
+  };
+  const taskExecutor = {
+    executeTasks: vi.fn().mockResolvedValue(undefined),
+    publishAfterFix: vi.fn().mockResolvedValue(undefined),
+    resolveConflict: vi.fn().mockResolvedValue(undefined),
+    fixWithAgent: vi.fn().mockResolvedValue(undefined),
+    commitApprovedFix: vi.fn().mockResolvedValue(undefined),
+    killActiveExecution: vi.fn().mockResolvedValue(undefined),
+    preparePoolForRebaseRetry: vi.fn().mockResolvedValue(undefined),
+  };
+  const commandService = {
+    retryTask: vi.fn(async (envelope: { payload: { taskId: string } }) => ({ ok: true as const, data: orchestrator.retryTask(envelope.payload.taskId) })),
+    recreateTask: vi.fn(async (envelope: { payload: { taskId: string } }) => ({ ok: true as const, data: orchestrator.recreateTask(envelope.payload.taskId) })),
+    recreateDownstream: vi.fn(async (envelope: { payload: { taskId: string } }) => ({ ok: true as const, data: orchestrator.recreateDownstream(envelope.payload.taskId) })),
+    retryWorkflow: vi.fn(async (envelope: { payload: { workflowId: string } }) => ({ ok: true as const, data: orchestrator.retryWorkflow(envelope.payload.workflowId) })),
+    recreateWorkflow: vi.fn(async (envelope: { payload: { workflowId: string } }) => {
+      const workflow = persistence.loadWorkflow(envelope.payload.workflowId);
+      persistence.updateWorkflow(envelope.payload.workflowId, { generation: (workflow.generation ?? 0) + 1 });
+      return { ok: true as const, data: orchestrator.recreateWorkflow(envelope.payload.workflowId) };
+    }),
+    runSerializedForWorkflow: vi.fn(async (_workflowId: string | undefined, fn: () => Promise<any> | any) => ({ ok: true as const, data: await fn() })),
+  };
   return {
-    orchestrator: {
-      retryTask: vi.fn(() => [makeTask()]),
-      recreateTask: vi.fn(() => [makeTask()]),
-      retryWorkflow: vi.fn(() => [makeTask()]),
-      recreateWorkflow: vi.fn(() => [makeTask()]),
-      cancelTask: vi.fn(() => ({ cancelled: ['task-1'], runningCancelled: ['task-1'] })),
-      cancelWorkflow: vi.fn(() => ({ cancelled: ['task-1'], runningCancelled: ['task-1'] })),
-      deleteWorkflow: vi.fn(),
-      detachWorkflow: vi.fn(),
-      forkWorkflow: vi.fn(() => ({
-        forkedWorkflowId: 'wf-fork',
-        sourceWorkflowId: 'wf-1',
-        started: [makeTask({ id: 'fork-t1' })],
-      })),
-      editTaskCommand: vi.fn(() => [makeTask()]),
-      editTaskPrompt: vi.fn(() => [makeTask()]),
-      editTaskType: vi.fn(() => [makeTask()]),
-      editTaskAgent: vi.fn(() => [makeTask()]),
-      setTaskExternalGatePolicies: vi.fn(() => []),
-      selectExperiment: vi.fn(() => [makeTask()]),
-      approve: vi.fn(async () => [makeTask()]),
-      reject: vi.fn(),
-      provideInput: vi.fn(),
-      getTask: vi.fn(() => makeTask()),
-      getAllTasks: vi.fn(() => []),
-      startExecution: vi.fn(() => []),
-    } as any,
-    persistence: {
-      loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 1 })),
-      updateWorkflow: vi.fn(),
-      loadTasks: vi.fn(() => []),
-    } as any,
-    taskExecutor: {
-      executeTasks: vi.fn().mockResolvedValue(undefined),
-      publishAfterFix: vi.fn().mockResolvedValue(undefined),
-      resolveConflict: vi.fn().mockResolvedValue(undefined),
-      fixWithAgent: vi.fn().mockResolvedValue(undefined),
-      commitApprovedFix: vi.fn().mockResolvedValue(undefined),
-      killActiveExecution: vi.fn().mockResolvedValue(undefined),
-    } as any,
+    orchestrator: orchestrator as any,
+    persistence: persistence as any,
+    commandService: commandService as any,
+    taskExecutor: taskExecutor as any,
     killRunningTask: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
@@ -158,7 +177,6 @@ describe('Parity: facade dispatch+topup lifecycle', () => {
     { name: 'recreateTask', invoke: (f) => f.recreateTask('task-1'), orchestratorMethod: 'recreateTask' },
     { name: 'editTaskCommand', invoke: (f) => f.editTaskCommand('task-1', 'echo ok'), orchestratorMethod: 'editTaskCommand' },
     { name: 'editTaskPrompt', invoke: (f) => f.editTaskPrompt('task-1', 'do it'), orchestratorMethod: 'editTaskPrompt' },
-    { name: 'editTaskType', invoke: (f) => f.editTaskType('task-1', 'docker'), orchestratorMethod: 'editTaskType' },
     { name: 'editTaskAgent', invoke: (f) => f.editTaskAgent('task-1', 'codex'), orchestratorMethod: 'editTaskAgent' },
     { name: 'selectExperiment', invoke: (f) => f.selectExperiment('task-1', 'exp-1'), orchestratorMethod: 'selectExperiment' },
     { name: 'retryWorkflow', invoke: (f) => f.retryWorkflow('wf-1'), orchestratorMethod: 'retryWorkflow' },
@@ -299,9 +317,12 @@ describe('Parity: API endpoints wire to facade methods', () => {
         setFixAwaitingApproval: vi.fn(),
         retryTask: vi.fn(() => [makeTask()]),
         recreateTask: vi.fn(() => [makeTask()]),
+        recreateDownstream: vi.fn(() => [makeTask()]),
+        retryWorkflow: vi.fn(() => [makeTask()]),
+        recreateWorkflowFromFreshBase: vi.fn(async () => [makeTask()]),
+        cascadeInvalidationToDownstream: vi.fn(() => []),
         editTaskCommand: vi.fn(() => [makeTask()]),
         editTaskPrompt: vi.fn(() => [makeTask()]),
-        editTaskType: vi.fn(() => [makeTask()]),
         editTaskAgent: vi.fn(() => [makeTask()]),
         setTaskExternalGatePolicies: vi.fn(() => [makeTask()]),
         cancelTask: vi.fn(() => ({ cancelled: ['task-1'], runningCancelled: ['task-1'] })),
@@ -334,6 +355,8 @@ describe('Parity: API endpoints wire to facade methods', () => {
         resolveConflict: vi.fn().mockResolvedValue(undefined),
         fixWithAgent: vi.fn().mockResolvedValue(undefined),
         commitApprovedFix: vi.fn().mockResolvedValue(undefined),
+        killActiveExecution: vi.fn().mockResolvedValue(undefined),
+        preparePoolForRebaseRetry: vi.fn().mockResolvedValue(undefined),
       },
       killRunningTask: vi.fn().mockResolvedValue(undefined),
       deleteWorkflow: vi.fn().mockResolvedValue(undefined),
@@ -344,9 +367,21 @@ describe('Parity: API endpoints wire to facade methods', () => {
 
   beforeAll(async () => {
     mocks = createApiMocks();
+    const commandService = {
+      retryTask: vi.fn(async (envelope: { payload: { taskId: string } }) => ({ ok: true as const, data: mocks.orchestrator.retryTask(envelope.payload.taskId) })),
+      recreateTask: vi.fn(async (envelope: { payload: { taskId: string } }) => ({ ok: true as const, data: mocks.orchestrator.recreateTask(envelope.payload.taskId) })),
+      retryWorkflow: vi.fn(async (envelope: { payload: { workflowId: string } }) => ({ ok: true as const, data: mocks.orchestrator.retryWorkflow(envelope.payload.workflowId) })),
+      recreateWorkflow: vi.fn(async (envelope: { payload: { workflowId: string } }) => {
+        const workflow = mocks.persistence.loadWorkflow(envelope.payload.workflowId);
+        mocks.persistence.updateWorkflow(envelope.payload.workflowId, { generation: (workflow.generation ?? 0) + 1 });
+        return { ok: true as const, data: mocks.orchestrator.recreateWorkflow(envelope.payload.workflowId) };
+      }),
+      runSerializedForWorkflow: vi.fn(async (_workflowId: string | undefined, fn: () => Promise<any> | any) => ({ ok: true as const, data: await fn() })),
+    };
     const facade = new WorkflowMutationFacade({
       orchestrator: mocks.orchestrator as any,
       persistence: mocks.persistence as any,
+      commandService: commandService as any,
       taskExecutor: mocks.taskExecutor as any,
       killRunningTask: mocks.killRunningTask,
     });
@@ -386,7 +421,6 @@ describe('Parity: API endpoints wire to facade methods', () => {
     mocks.orchestrator.retryTask.mockReturnValue([makeTask()]);
     mocks.orchestrator.editTaskCommand.mockReturnValue([makeTask()]);
     mocks.orchestrator.editTaskPrompt.mockReturnValue([makeTask()]);
-    mocks.orchestrator.editTaskType.mockReturnValue([makeTask()]);
     mocks.orchestrator.editTaskAgent.mockReturnValue([makeTask()]);
     mocks.orchestrator.setTaskExternalGatePolicies.mockReturnValue([makeTask()]);
     mocks.orchestrator.approve.mockResolvedValue([]);
@@ -425,7 +459,6 @@ describe('Parity: API endpoints wire to facade methods', () => {
     { name: 'POST /api/tasks/:id/restart', method: 'POST', path: '/api/tasks/task-1/restart', orchestratorMethod: 'retryTask', expectTopup: true },
     { name: 'POST /api/tasks/:id/edit', method: 'POST', path: '/api/tasks/task-1/edit', body: { command: 'echo ok' }, orchestratorMethod: 'editTaskCommand', expectTopup: true },
     { name: 'POST /api/tasks/:id/edit-prompt', method: 'POST', path: '/api/tasks/task-1/edit-prompt', body: { prompt: 'do it' }, orchestratorMethod: 'editTaskPrompt', expectTopup: true },
-    { name: 'POST /api/tasks/:id/edit-type', method: 'POST', path: '/api/tasks/task-1/edit-type', body: { runnerKind: 'docker' }, orchestratorMethod: 'editTaskType', expectTopup: true },
     { name: 'POST /api/tasks/:id/edit-agent', method: 'POST', path: '/api/tasks/task-1/edit-agent', body: { agent: 'codex' }, orchestratorMethod: 'editTaskAgent', expectTopup: true },
     { name: 'POST /api/tasks/:id/cancel', method: 'POST', path: '/api/tasks/task-1/cancel', orchestratorMethod: 'cancelTask', expectTopup: true },
     { name: 'POST /api/workflows/:id/cancel', method: 'POST', path: '/api/workflows/wf-1/cancel', orchestratorMethod: 'cancelWorkflow', expectTopup: true },
@@ -500,7 +533,6 @@ describe('Parity: CommandService routes to correct orchestrator primitives', () 
       detachWorkflow: vi.fn(),
       editTaskCommand: vi.fn(() => [makeTask()]),
       editTaskPrompt: vi.fn(() => [makeTask()]),
-      editTaskType: vi.fn(() => [makeTask()]),
       editTaskAgent: vi.fn(() => [makeTask()]),
       editTaskMergeMode: vi.fn(() => [makeTask()]),
       editTaskFixContext: vi.fn(() => [makeTask()]),
@@ -542,7 +574,6 @@ describe('Parity: CommandService routes to correct orchestrator primitives', () 
     { name: 'detachWorkflow', invoke: (cs) => cs.detachWorkflow(envelope({ workflowId: 'wf-1', upstreamWorkflowId: 'wf-0' })), orchestratorMethod: 'detachWorkflow' },
     { name: 'editTaskCommand', invoke: (cs) => cs.editTaskCommand(envelope({ taskId: 'task-1', newCommand: 'echo ok' })), orchestratorMethod: 'editTaskCommand' },
     { name: 'editTaskPrompt', invoke: (cs) => cs.editTaskPrompt(envelope({ taskId: 'task-1', newPrompt: 'do it' })), orchestratorMethod: 'editTaskPrompt' },
-    { name: 'editTaskType', invoke: (cs) => cs.editTaskType(envelope({ taskId: 'task-1', runnerKind: 'docker' })), orchestratorMethod: 'editTaskType' },
     { name: 'editTaskAgent', invoke: (cs) => cs.editTaskAgent(envelope({ taskId: 'task-1', agentName: 'codex' })), orchestratorMethod: 'editTaskAgent' },
     { name: 'editTaskMergeMode', invoke: (cs) => cs.editTaskMergeMode(envelope({ taskId: 'task-1', mergeMode: 'automatic' as const })), orchestratorMethod: 'editTaskMergeMode' },
     { name: 'selectExperiment', invoke: (cs) => cs.selectExperiment(envelope({ taskId: 'task-1', experimentId: 'exp-1' })), orchestratorMethod: 'selectExperiment' },
@@ -661,7 +692,6 @@ describe('Parity: cross-surface mutation isolation', () => {
     expect(deps.orchestrator.editTaskCommand).toHaveBeenCalled();
     expect(deps.orchestrator.editTaskPrompt).not.toHaveBeenCalled();
     expect(deps.orchestrator.editTaskAgent).not.toHaveBeenCalled();
-    expect(deps.orchestrator.editTaskType).not.toHaveBeenCalled();
   });
 
   it('editTaskPrompt does not trigger editTaskCommand or editTaskAgent', async () => {

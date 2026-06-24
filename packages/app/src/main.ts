@@ -38,8 +38,12 @@ import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import {
   configureEarlyElectronApp,
+  formatGuiOwnerBootstrapFallbackMessage,
+  guiOwnerBootstrapTimeoutMs,
   registerGuiLifecycleHandlers,
+  resolveGuiOwnerPreference,
   runElectronReadyBootstrap,
+  shouldRefreshGuiOwnerRoute,
   startGuiModeBootstrap,
   startMainProcessBootstrap,
 } from './bootstrap/app-bootstrap.js';
@@ -58,7 +62,7 @@ if (process.env.INVOKER_USER_DATA_DIR) {
   app.setPath('userData', process.env.INVOKER_USER_DATA_DIR);
 }
 
-import { Orchestrator, CommandService, OrchestratorErrorCode } from '@invoker/workflow-core';
+import { Orchestrator, CommandService, OrchestratorError, OrchestratorErrorCode, buildWorkflowInvalidationDeps } from '@invoker/workflow-core';
 import type {
   PlanDefinition,
   TaskDelta,
@@ -72,7 +76,7 @@ import {
   resolveInvokerIpcSocketPath,
   resolveRepoRoot,
 } from '@invoker/contracts';
-import type { WorkflowMeta, WorkResponse } from '@invoker/contracts';
+import type { ActionGraphResponse, WorkflowMeta, WorkResponse } from '@invoker/contracts';
 import { SQLiteAdapter, ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
 import { IpcBus, Channels } from '@invoker/transport';
 import {
@@ -134,20 +138,19 @@ import {
   wireHeadlessApproveHook,
   type HeadlessDeps,
 } from './headless.js';
+import { resolveRefreshTaskGraphSnapshot } from './refresh-task-graph.js';
 import {
   startStandaloneLaunchDispatcher,
   type StandaloneLaunchDispatcherController,
 } from './headless-standalone-launch-dispatcher.js';
 import {
   approveTask as sharedApproveTask,
-  buildInvalidationDeps,
   deleteAllWorkflows as sharedDeleteAllWorkflows,
   deleteAllWorkflowsBulk as sharedDeleteAllWorkflowsBulk,
   fixWithAgentAction,
   rebaseRetry,
   rebaseRecreate,
-  recreateWorkflow as sharedRecreateWorkflow,
-  recreateTask as sharedRecreateTask,
+  rejectTask as sharedRejectTask,
   resolveConflictAction,
   selectFailureRecoveryRoute,
   selectExperiments as sharedSelectExperiments,
@@ -175,10 +178,8 @@ import { buildAppMenuTemplate } from './app-menu.js';
 import { createRequire } from 'node:module';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
 import { applyDelta, recoverQuarantinedTask, TaskSnapshotCache } from './delta-merge.js';
-import {
-  CoalescedWorkflowMetadataPublisher,
-  WorkflowMetadataInvalidator,
-} from './workflow-metadata-invalidation.js';
+import { CoalescedWorkflowMetadataPublisher } from './workflow-metadata-invalidation.js';
+import { WorkflowRollupProjection } from './workflow-rollup-projection.js';
 import { shouldSkipAutoFixForError } from './auto-fix-gating.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
@@ -236,6 +237,34 @@ import {
   registerMainWindowActivateHandler,
   registerMainWindowSecondInstanceHandler,
 } from './window/window-lifecycle.js';
+import { tryAcquireGuiInstanceLock, type GuiInstanceLock } from './gui-instance-lock.js';
+import { logProcessError } from './process-error-handling.js';
+
+function buildCurrentActionGraphSnapshot(args: {
+  orchestrator: Orchestrator;
+  persistence: SQLiteAdapter;
+  invokerConfig: InvokerConfig;
+}): ActionGraphResponse {
+  args.orchestrator.syncAllFromDb();
+  const tasks = args.orchestrator.getAllTasks();
+  const workflows = args.persistence.listWorkflows();
+
+  return buildActionGraphDiagnostics({
+    workflows,
+    tasks,
+    attemptsByTaskId: new Map(tasks.map((task) => [
+      task.id,
+      args.persistence.loadActionGraphAttempts(task.id, task.execution.selectedAttemptId),
+    ])),
+    queueStatus: args.orchestrator.getQueueStatus(),
+    mutationIntents: args.persistence.listWorkflowMutationIntents(undefined, ['queued', 'running', 'failed']),
+    mutationLeases: args.persistence.listWorkflowMutationLeases(),
+    eventsByTaskId: new Map(tasks.map((task) => [task.id, args.persistence.getEvents(task.id, 'desc', 20)])),
+    activityLogs: args.persistence.getActivityLogs(0, 200),
+    stallThresholdMs: resolveActionDiagnosticsStallThresholdMs(args.invokerConfig),
+    launchDispatches: args.persistence.listLaunchDispatchesByState(['enqueued', 'leased']),
+  });
+}
 
 function isTaskInFlightForForcedStop(task: TaskState): boolean {
   return task.status === 'running'
@@ -306,6 +335,48 @@ let commandService: CommandService;
 // constructed in initServices before TaskRunner exists, so the deps
 // resolve via this getter at cancel-in-flight time.
 let latestTaskExecutor: TaskRunner | null = null;
+let guiUsingDaemonOwner = false;
+
+function buildCommandServiceInvalidationDeps() {
+  return buildWorkflowInvalidationDeps({
+    orchestrator,
+    requireWorkflow: (workflowId) => {
+      const workflow = persistence.loadWorkflow(workflowId);
+      if (!workflow) {
+        throw new OrchestratorError(
+          OrchestratorErrorCode.WORKFLOW_NOT_FOUND,
+          `Workflow ${workflowId} not found`,
+        );
+      }
+      return workflow;
+    },
+    setWorkflowGeneration: (workflowId, generation) => {
+      persistence.updateWorkflow(workflowId, { generation });
+    },
+    killActiveExecution: async (taskId) => {
+      await latestTaskExecutor?.killActiveExecution(taskId);
+    },
+    prepareFreshBase: async (workflowId, workflow) => {
+      if (!latestTaskExecutor || !workflow.repoUrl) return undefined;
+      return latestTaskExecutor.preparePoolForRebaseRetry(
+        workflowId,
+        workflow.repoUrl,
+        workflow.baseBranch,
+      );
+    },
+    fixApprove: async (taskId) => {
+      const result = await sharedApproveTask(taskId, {
+        orchestrator,
+        taskExecutor: latestTaskExecutor ?? undefined,
+      });
+      return result.started;
+    },
+    fixReject: (taskId) => {
+      sharedRejectTask(taskId, { orchestrator });
+      return [];
+    },
+  });
+}
 let runtimeServices: RuntimeServices;
 let workflowMutationCoordinator: PersistedWorkflowMutationCoordinator | null = null;
 let launchDispatcher: LaunchDispatcher | null = null;
@@ -333,27 +404,6 @@ interface HeadlessResumeMutationPayload {
 }
 
 type HeadlessOwnerMode = 'standalone' | 'gui';
-type GuiOwnerPreference = 'auto' | 'daemon' | 'gui';
-
-function resolveGuiOwnerPreference(): GuiOwnerPreference {
-  const raw = (process.env.INVOKER_GUI_OWNER_MODE ?? '').trim().toLowerCase();
-  if (raw === 'daemon' || raw === 'client' || raw === 'follower') return 'daemon';
-  if (raw === 'auto') return 'auto';
-  if (raw === 'gui' || raw === 'owner' || raw === 'local') return 'gui';
-  if (process.env.INVOKER_GUI_DAEMON_OWNER === '1') return 'daemon';
-  return 'daemon';
-}
-
-function guiOwnerBootstrapTimeoutMs(): number {
-  const parsed = Number.parseInt(
-    process.env.INVOKER_GUI_OWNER_BOOTSTRAP_TIMEOUT_MS
-      ?? process.env.INVOKER_HEADLESS_OWNER_BOOTSTRAP_TIMEOUT_MS
-      ?? '60000',
-    10,
-  );
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 60000;
-}
-
 function headlessExecLogFields(
   payload: HeadlessExecMutationPayload,
   mode: HeadlessOwnerMode,
@@ -414,24 +464,17 @@ function acknowledgeNoTrackHeadlessExec(
 // Root logger: created early in initServices() once persistence is available.
 // Before initServices(), use the pre-init logger (file-only, no DB).
 let logger: Logger = new FileAndDbLogger({ module: 'main' });
+let guiInstanceLock: GuiInstanceLock | null = null;
 const buildSha = typeof __BUILD_SHA__ !== 'undefined' ? __BUILD_SHA__ : 'dev';
 const buildVersion = typeof __BUILD_VERSION__ !== 'undefined' ? __BUILD_VERSION__ : 'dev';
 logger.info(`Invoker ${buildVersion} (${buildSha})`, { module: 'startup' });
 
 process.on('uncaughtException', (err) => {
-  try {
-    logger.error(`uncaughtException: ${err instanceof Error ? err.stack ?? err.message : String(err)}`, { module: 'process' });
-  } catch {
-    console.error('[process] uncaughtException:', err);
-  }
+  logProcessError('uncaughtException', err, { logger, fallbackConsole: console });
 });
 
 process.on('unhandledRejection', (reason) => {
-  try {
-    logger.error(`unhandledRejection: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}`, { module: 'process' });
-  } catch {
-    console.error('[process] unhandledRejection:', reason);
-  }
+  logProcessError('unhandledRejection', reason, { logger, fallbackConsole: console });
 });
 
 const repoRoot = resolveRepoRoot(__dirname, { fallback: process.resourcesPath });
@@ -491,10 +534,15 @@ async function ensureStandaloneOwnerForGui(): Promise<void> {
 let guiOwnerRouteRefreshPromise: Promise<void> | null = null;
 
 async function refreshGuiMutationOwnerRoute(): Promise<void> {
-  if (resolveGuiOwnerPreference() !== 'daemon') return;
+  const ownerPreference = resolveGuiOwnerPreference();
+  if (!shouldRefreshGuiOwnerRoute(ownerPreference, guiUsingDaemonOwner)) return;
   if (!guiOwnerRouteRefreshPromise) {
     guiOwnerRouteRefreshPromise = (async () => {
-      await ensureStandaloneOwnerForGui();
+      if (ownerPreference === 'daemon') {
+        await ensureStandaloneOwnerForGui();
+      } else if (!await discoverStandaloneOwnerForGui(2_000)) {
+        throw new Error('No mutation owner is available');
+      }
       const previousMessageBus = typeof messageBus === 'undefined' ? null : messageBus;
       const refreshedMessageBus = new IpcBus(undefined, { allowServe: false });
       await refreshedMessageBus.ready();
@@ -685,12 +733,7 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
   });
   commandService = new CommandService(
     orchestrator,
-    buildInvalidationDeps({
-      logger,
-      orchestrator,
-      persistence,
-      taskExecutor: () => latestTaskExecutor,
-    }),
+    buildCommandServiceInvalidationDeps(),
   );
 
   const startupSyncMode = options?.startupSyncMode ?? 'all';
@@ -852,6 +895,7 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
 const RESET = '\x1b[0m';
 const BOLD = '\x1b[1m';
 const RED = '\x1b[31m';
+const YELLOW = '\x1b[33m';
 
 // ══════════════════════════════════════════════════════════════
 // HEADLESS MODE
@@ -1063,12 +1107,7 @@ function startHeadlessMode(): void {
             });
             commandService = new CommandService(
               orchestrator,
-              buildInvalidationDeps({
-                logger,
-                orchestrator,
-                persistence,
-                taskExecutor: () => latestTaskExecutor,
-              }),
+              buildCommandServiceInvalidationDeps(),
             );
             return undefined;
           }
@@ -1125,7 +1164,10 @@ function startHeadlessMode(): void {
             const mergeTask = tasks.find((task) => task.config.isMergeNode);
             if (!mergeTask) return undefined;
             const executor = createStandaloneTaskExecutor();
-            const started = orchestrator.retryTask(mergeTask.id);
+            const envelope = makeEnvelope('set-merge-branch', 'ui', 'task', { taskId: mergeTask.id });
+            const result = await commandService.retryTask(envelope);
+            if (!result.ok) throw new Error(result.error.message);
+            const started = result.data;
             await dispatchStartedTasksWithGlobalTopup({
               orchestrator,
               taskExecutor: executor,
@@ -1590,21 +1632,7 @@ function startHeadlessMode(): void {
             };
           }
           if (kind === 'action-graph') {
-            orchestrator.syncAllFromDb();
-            const tasks = orchestrator.getAllTasks();
-            const workflows = persistence.listWorkflows();
-            return buildActionGraphDiagnostics({
-              workflows,
-              tasks,
-              attemptsByTaskId: new Map(tasks.map((task) => [task.id, persistence.loadAttempts(task.id)])),
-              queueStatus: orchestrator.getQueueStatus(),
-              mutationIntents: persistence.listWorkflowMutationIntents(),
-              mutationLeases: persistence.listWorkflowMutationLeases(),
-              eventsByTaskId: new Map(tasks.map((task) => [task.id, persistence.getEvents(task.id)])),
-              activityLogs: persistence.getActivityLogs(0, 200),
-              stallThresholdMs: resolveActionDiagnosticsStallThresholdMs(invokerConfig),
-              launchDispatches: persistence.listLaunchDispatchesByState(['enqueued', 'leased', 'abandoned']),
-            });
+            return buildCurrentActionGraphSnapshot({ orchestrator, persistence, invokerConfig });
           }
           throw new Error(`Unsupported headless query: ${String(kind)}`);
         });
@@ -1723,6 +1751,16 @@ startMainProcessBootstrap({
   startGuiMode: () => startGuiModeBootstrap({
     app,
     isTest: process.env.NODE_ENV === 'test',
+    acquireGuiLock: () => {
+      guiInstanceLock = tryAcquireGuiInstanceLock(resolveInvokerHomeRoot());
+      return guiInstanceLock;
+    },
+    notifyGuiAlreadyRunning: () => {
+      dialog.showErrorBox(
+        'Invoker is already running',
+        'Only one Invoker GUI can run for this Invoker home. Use the existing window, or close it before opening another one.',
+      );
+    },
     setupGuiMode,
   }),
 });
@@ -1781,6 +1819,7 @@ function createEmbeddedTerminalBackendFromConfig(
   let activityPollInterval: ReturnType<typeof setInterval> | null = null;
   let uiPerfLogInterval: ReturnType<typeof setInterval> | null = null;
   const lastKnownTaskStates = new TaskSnapshotCache();
+  const workflowRollupProjection = new WorkflowRollupProjection();
   const deferredWorkflowLaunches = new Map<string, {
     timer: ReturnType<typeof setTimeout>;
     taskIds: string[];
@@ -1798,7 +1837,6 @@ function createEmbeddedTerminalBackendFromConfig(
   };
   const pendingOutputBuffers = new Map<string, string[]>();
   const outputFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  let workflowMetadataInvalidator: WorkflowMetadataInvalidator | null = null;
   let workflowMetadataPublisher: CoalescedWorkflowMetadataPublisher | null = null;
   let lastKnownWorkflowCount = 0;
   let lastActivityLogId = 0;
@@ -1940,9 +1978,6 @@ function createEmbeddedTerminalBackendFromConfig(
   const taskDeltaStream = createTaskDeltaStreamSequence();
   const getTaskDeltaStreamSequence = (): number => taskDeltaStream.current();
 
-  const markWorkflowMetadataFromTaskDelta = (delta: TaskDelta): void => {
-    workflowMetadataInvalidator?.markFromTaskDelta(delta);
-  };
 
   const taskGraphEventPublisher = createTaskGraphEventPublisher({
     getMainWindow: () => mainWindow,
@@ -1958,15 +1993,15 @@ function createEmbeddedTerminalBackendFromConfig(
     },
   });
 
-  const sendTaskDeltaToRenderer = (delta: TaskDelta): void => {
-    markWorkflowMetadataFromTaskDelta(delta);
-    taskGraphEventPublisher.publishDelta(delta);
+  const publishTaskDeltaToRenderer = (delta: TaskDelta): void => {
+    const workflowRollups = workflowRollupProjection.applyDelta(delta);
+    taskGraphEventPublisher.publishDelta(delta, workflowRollups);
   };
 
   const applyTaskDeltaToOwnerCacheOrRecover = (delta: TaskDelta): TaskDelta[] => {
-    const { quarantined } = applyDelta(delta, lastKnownTaskStates);
+    const { quarantined, accepted } = applyDelta(delta, lastKnownTaskStates);
     if (quarantined.length === 0) {
-      return [delta];
+      return accepted ? [delta] : [];
     }
 
     const rendererDeltas: TaskDelta[] = [];
@@ -2076,9 +2111,12 @@ function createEmbeddedTerminalBackendFromConfig(
     const result = await fixWithAgentAction(
       taskId,
       {
+        logger,
         orchestrator,
         persistence,
+        commandService,
         taskExecutor: requireTaskExecutor(),
+        mutationTiming: activeMutationContext?.mutationTiming,
         autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
       },
       {
@@ -2636,8 +2674,10 @@ function createEmbeddedTerminalBackendFromConfig(
 
   function seedUiSnapshotCache(): void {
     lastKnownWorkflowCount = persistence.listWorkflows().length;
+    const tasks = orchestrator.getAllTasks();
     lastKnownTaskStates.clear();
-    for (const task of orchestrator.getAllTasks()) {
+    workflowRollupProjection.replaceAll(tasks);
+    for (const task of tasks) {
       lastKnownTaskStates.set(task.id, JSON.stringify(task));
     }
   }
@@ -2663,12 +2703,6 @@ function createEmbeddedTerminalBackendFromConfig(
       }
       mainWindow.webContents.send('invoker:workflows-changed', workflows);
     },
-  });
-  workflowMetadataInvalidator = new WorkflowMetadataInvalidator({
-    getCachedTaskSnapshot: (taskId) => lastKnownTaskStates.get(taskId),
-    loadTask: loadTaskByIdFromPersistence,
-    listWorkflows: () => [],
-    publish: () => requestWorkflowMetadataPublish('task-delta'),
   });
 
   function listWorkflowsByStartupRecency() {
@@ -2744,18 +2778,19 @@ function createEmbeddedTerminalBackendFromConfig(
     const tasks = orchestrator.getAllTasks();
     const previousTaskIds = new Set(lastKnownTaskStates.keys());
     lastKnownTaskStates.clear();
+    workflowRollupProjection.replaceAll(tasks);
     for (const task of tasks) {
       const snapshot = JSON.stringify(task);
       previousTaskIds.delete(task.id);
       lastKnownTaskStates.set(task.id, snapshot);
       if (mainWindow && !mainWindow.isDestroyed()) {
-        sendTaskDeltaToRenderer({ type: 'created', task });
+        publishTaskDeltaToRenderer({ type: 'created', task });
       }
     }
     lastKnownWorkflowCount = workflows.length;
     if (mainWindow && !mainWindow.isDestroyed()) {
       for (const removedTaskId of previousTaskIds) {
-        sendTaskDeltaToRenderer({ type: 'removed', taskId: removedTaskId, previousTaskStateVersion: 0 });
+        publishTaskDeltaToRenderer({ type: 'removed', taskId: removedTaskId, previousTaskStateVersion: 0 });
       }
       requestWorkflowMetadataPublish('orchestrator-snapshot');
     }
@@ -2921,7 +2956,7 @@ function createEmbeddedTerminalBackendFromConfig(
                   }
                   lastKnownTaskStates.set(task.id, snapshot);
                   uiPerfStats.dbPollCreated += 1;
-                  sendTaskDeltaToRenderer({ type: 'created', task });
+                  publishTaskDeltaToRenderer({ type: 'created', task });
                 } else if (prev !== snapshot) {
                   if (traceDbPollPerTask) {
                     const msg = `Task updated: ${task.id} (${task.status})`;
@@ -2930,7 +2965,7 @@ function createEmbeddedTerminalBackendFromConfig(
                   }
                   lastKnownTaskStates.set(task.id, snapshot);
                   uiPerfStats.dbPollUpdatedAsCreated += 1;
-                  sendTaskDeltaToRenderer({ type: 'created', task });
+                  publishTaskDeltaToRenderer({ type: 'created', task });
                 }
               }
             }
@@ -2967,6 +3002,10 @@ function createEmbeddedTerminalBackendFromConfig(
 
   const runGuiReadyBootstrap = async (): Promise<void> => {
     recordStartupMark('app.whenReady');
+    // GUI owner modes:
+    // - daemon: GUI is a client; a background daemon owns workflow writes, and startup failure is serious.
+    // - gui/local: GUI owns workflow writes directly with no daemon.
+    // - auto: GUI uses an existing daemon when one is available, otherwise it runs locally as owner.
     const guiOwnerPreference = resolveGuiOwnerPreference();
     let daemonGuiOwner = false;
     if (guiOwnerPreference === 'daemon') {
@@ -2977,9 +3016,10 @@ function createEmbeddedTerminalBackendFromConfig(
         daemonGuiOwner = true;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        process.stderr.write(`${RED}Error:${RESET} ${message}\n`);
-        app.quit();
-        return;
+        const fallbackMessage = formatGuiOwnerBootstrapFallbackMessage(message);
+        logger.warn(fallbackMessage, { module: 'init' });
+        process.stderr.write(`${YELLOW}Warning:${RESET} ${fallbackMessage}\n`);
+        daemonGuiOwner = false;
       }
     } else if (guiOwnerPreference === 'auto') {
       recordStartupMark('daemonOwner.discover.start');
@@ -2995,6 +3035,7 @@ function createEmbeddedTerminalBackendFromConfig(
 
     if (daemonGuiOwner) {
       ownerMode = false;
+      guiUsingDaemonOwner = true;
       try {
         recordStartupMark('initServices.readOnly.start');
         await initServices({ readOnly: true, executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
@@ -3007,6 +3048,7 @@ function createEmbeddedTerminalBackendFromConfig(
       }
     } else {
       ownerMode = true;
+      guiUsingDaemonOwner = false;
       try {
         recordStartupMark('initServices.start');
         await initServices({ executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
@@ -3021,6 +3063,7 @@ function createEmbeddedTerminalBackendFromConfig(
         recordStartupMark('initServices.readOnly.start');
         await initServices({ readOnly: true, executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
         ownerMode = false;
+        guiUsingDaemonOwner = false;
         recordStartupMark('initServices.readOnly.end', { ownerMode: false });
       }
     }
@@ -3113,21 +3156,7 @@ function createEmbeddedTerminalBackendFromConfig(
           };
         }
         if (kind === 'action-graph') {
-          orchestrator.syncAllFromDb();
-          const tasks = orchestrator.getAllTasks();
-          const workflows = persistence.listWorkflows();
-          return buildActionGraphDiagnostics({
-            workflows,
-            tasks,
-            attemptsByTaskId: new Map(tasks.map((task) => [task.id, persistence.loadAttempts(task.id)])),
-            queueStatus: orchestrator.getQueueStatus(),
-            mutationIntents: persistence.listWorkflowMutationIntents(),
-            mutationLeases: persistence.listWorkflowMutationLeases(),
-            eventsByTaskId: new Map(tasks.map((task) => [task.id, persistence.getEvents(task.id)])),
-            activityLogs: persistence.getActivityLogs(0, 200),
-            stallThresholdMs: resolveActionDiagnosticsStallThresholdMs(invokerConfig),
-            launchDispatches: persistence.listLaunchDispatchesByState(['enqueued', 'leased', 'abandoned']),
-          });
+          return buildCurrentActionGraphSnapshot({ orchestrator, persistence, invokerConfig });
         }
         throw new Error(`Unsupported headless query: ${String(kind)}`);
       });
@@ -3243,7 +3272,6 @@ function createEmbeddedTerminalBackendFromConfig(
       if (traceUiDeltaFlow) {
         logger.debug(`delta→ui: ${JSON.stringify(delta)}`, { module: 'ui' });
       }
-      markWorkflowMetadataFromTaskDelta(d);
 
       const deltaTaskId = d.type === 'updated' || d.type === 'removed'
         ? d.taskId
@@ -3262,7 +3290,7 @@ function createEmbeddedTerminalBackendFromConfig(
       }
 
       for (const rendererDelta of applyTaskDeltaToOwnerCacheOrRecover(d)) {
-        taskGraphEventPublisher.publishDelta(rendererDelta);
+        publishTaskDeltaToRenderer(rendererDelta);
       }
     });
 
@@ -3327,9 +3355,6 @@ function createEmbeddedTerminalBackendFromConfig(
           } satisfies TaskDelta);
         }
         orchestrator.syncAllFromDb();
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          requestWorkflowMetadataPublish('gap-detect');
-        }
       };
       ipcMain.handle(
         'invoker:inject-task-states',
@@ -3368,10 +3393,11 @@ function createEmbeddedTerminalBackendFromConfig(
 
       const allStarted = orchestrator.startExecution();
       const tasks = orchestrator.getAllTasks();
+      workflowRollupProjection.replaceAll(tasks);
       for (const task of tasks) {
         lastKnownTaskStates.set(task.id, JSON.stringify(task));
         if (mainWindow && !mainWindow.isDestroyed()) {
-          sendTaskDeltaToRenderer({ type: 'created', task });
+          publishTaskDeltaToRenderer({ type: 'created', task });
         }
       }
       logger.info(`resume-workflow: ${tasks.length} tasks loaded across ${workflows.length} workflows, ${allStarted.length} started`, { module: 'ipc' });
@@ -3433,16 +3459,12 @@ function createEmbeddedTerminalBackendFromConfig(
       });
       commandService = new CommandService(
         orchestrator,
-        buildInvalidationDeps({
-          logger,
-          orchestrator,
-          persistence,
-          taskExecutor: () => latestTaskExecutor,
-        }),
+        buildCommandServiceInvalidationDeps(),
       );
       rebuildTaskRunner();
       taskHandles.clear();
       lastKnownTaskStates.clear();
+      workflowRollupProjection.clear();
       lastKnownWorkflowCount = 0;
       requestWorkflowMetadataPublish('clear');
     });
@@ -3450,46 +3472,23 @@ function createEmbeddedTerminalBackendFromConfig(
 
     ipcMain.handle('invoker:refresh-task-graph', async () => {
       const startedAtMs = Date.now();
-      let tasks: TaskState[];
-      let workflows: WorkflowMeta[];
-
-      if (!ownerMode) {
-        const delegated = await messageBus.request('headless.query', {
-          kind: 'task-graph-refresh',
-        }) as unknown;
-        if (!delegated || typeof delegated !== 'object') {
-          throw new Error('refresh-task-graph owner delegation returned no snapshot');
-        }
-        const snapshot = delegated as {
-          tasks?: unknown[];
-          workflows?: unknown[];
-          invokerHomeRoot?: string;
-        };
-        if (!Array.isArray(snapshot.tasks) || !Array.isArray(snapshot.workflows)) {
-          throw new Error('refresh-task-graph owner delegation returned an invalid snapshot');
-        }
-        const localInvokerHomeRoot = resolveInvokerHomeRoot();
-        if (snapshot.invokerHomeRoot && snapshot.invokerHomeRoot !== localInvokerHomeRoot) {
-          throw new Error(
-            `refresh-task-graph owner home mismatch: owner=${snapshot.invokerHomeRoot} local=${localInvokerHomeRoot}`,
-          );
-        }
-        tasks = snapshot.tasks as TaskState[];
-        workflows = snapshot.workflows as WorkflowMeta[];
-      } else {
-        orchestrator.syncAllFromDb();
-        tasks = orchestrator.getAllTasks();
-        workflows = persistence.listWorkflows() as WorkflowMeta[];
-      }
+      const snapshot = await resolveRefreshTaskGraphSnapshot({
+        ownerMode,
+        messageBus,
+        resolveInvokerHomeRoot,
+        orchestrator,
+        persistence,
+        logger,
+      });
 
       taskGraphEventPublisher.publishSnapshot(
         ownerMode ? 'refresh-task-graph' : 'refresh-task-graph-delegated',
-        tasks,
-        workflows,
+        snapshot.tasks,
+        snapshot.workflows,
       );
       recordStartupDuration('refresh-task-graph.return', startedAtMs, {
-        taskCount: tasks.length,
-        workflowCount: workflows.length,
+        taskCount: snapshot.tasks.length,
+        workflowCount: snapshot.workflows.length,
         streamSequence: getTaskDeltaStreamSequence(),
       });
     });
@@ -3513,6 +3512,7 @@ function createEmbeddedTerminalBackendFromConfig(
       await sharedDeleteAllWorkflows({ logger, orchestrator, taskExecutor: taskExecutor ?? undefined });
       taskHandles.clear();
       lastKnownTaskStates.clear();
+      workflowRollupProjection.clear();
       lastKnownWorkflowCount = 0;
       requestWorkflowMetadataPublish('delete-all-workflows');
     });
@@ -3523,6 +3523,7 @@ function createEmbeddedTerminalBackendFromConfig(
       await sharedDeleteAllWorkflowsBulk({ logger, orchestrator, taskExecutor: taskExecutor ?? undefined });
       taskHandles.clear();
       lastKnownTaskStates.clear();
+      workflowRollupProjection.clear();
       lastKnownWorkflowCount = 0;
       requestWorkflowMetadataPublish('delete-all-workflows-bulk');
     });
@@ -3740,21 +3741,7 @@ function createEmbeddedTerminalBackendFromConfig(
           );
         }
       }
-      orchestrator.syncAllFromDb();
-      const tasks = orchestrator.getAllTasks();
-      const workflows = persistence.listWorkflows();
-      return buildActionGraphDiagnostics({
-        workflows,
-        tasks,
-        attemptsByTaskId: new Map(tasks.map((task) => [task.id, persistence.loadAttempts(task.id)])),
-        queueStatus: orchestrator.getQueueStatus(),
-        mutationIntents: persistence.listWorkflowMutationIntents(),
-        mutationLeases: persistence.listWorkflowMutationLeases(),
-        eventsByTaskId: new Map(tasks.map((task) => [task.id, persistence.getEvents(task.id)])),
-        activityLogs: persistence.getActivityLogs(0, 200),
-        stallThresholdMs: resolveActionDiagnosticsStallThresholdMs(invokerConfig),
-        launchDispatches: persistence.listLaunchDispatchesByState(['enqueued', 'leased', 'abandoned']),
-      });
+      return buildCurrentActionGraphSnapshot({ orchestrator, persistence, invokerConfig });
     });
 
     ipcMain.handle('invoker:report-ui-perf', (_event, metric: string, data?: Record<string, unknown>) => {
@@ -4008,8 +3995,10 @@ function createEmbeddedTerminalBackendFromConfig(
           mutationTiming: activeMutationContext?.mutationTiming,
         });
         const started = await rebaseRetry(target, {
+          logger,
           orchestrator,
           persistence,
+          commandService,
           repoRoot,
           taskExecutor: requireTaskExecutor(),
           mutationTiming: activeMutationContext?.mutationTiming,
@@ -4050,8 +4039,10 @@ function createEmbeddedTerminalBackendFromConfig(
           mutationTiming: activeMutationContext?.mutationTiming,
         });
         const started = await rebaseRecreate(target, {
+          logger,
           orchestrator,
           persistence,
+          commandService,
           repoRoot,
           taskExecutor: requireTaskExecutor(),
           mutationTiming: activeMutationContext?.mutationTiming,
@@ -4082,7 +4073,10 @@ function createEmbeddedTerminalBackendFromConfig(
         const tasks = persistence.loadTasks(workflowId);
         const mergeTask = tasks.find(t => t.config.isMergeNode);
         if (mergeTask) {
-          const started = orchestrator.retryTask(mergeTask.id);
+          const envelope = makeEnvelope('set-merge-branch', 'ui', 'task', { taskId: mergeTask.id });
+          const result = await commandService.retryTask(envelope);
+          if (!result.ok) throw new Error(result.error.message);
+          const started = result.data;
           await dispatchStartedTasksWithGlobalTopup({
             orchestrator,
             taskExecutor: requireTaskExecutor(),
@@ -4594,6 +4588,8 @@ function createEmbeddedTerminalBackendFromConfig(
           persistence.requeueRunningWorkflowMutationIntents();
           persistence.close();
         }
+        guiInstanceLock?.release();
+        guiInstanceLock = null;
         if (writerLock) writerLock.release();
         if (messageBus) messageBus.disconnect();
       } finally {

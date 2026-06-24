@@ -31,6 +31,7 @@ export type MutationKey =
   | 'command'
   | 'prompt'
   | 'executionAgent'
+  | 'executionModel'
   | 'runnerKind'
   | 'poolMemberId'
   | 'selectedExperiment'
@@ -47,6 +48,7 @@ export const MUTATION_POLICIES: Readonly<Record<MutationKey, TaskMutationPolicy>
   command:               { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const },
   prompt:                { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const },
   executionAgent:        { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const },
+  executionModel:        { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const },
   runnerKind:          { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'retryTask' as const },
   poolMemberId:        { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const },
   selectedExperiment:    { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const },
@@ -365,8 +367,8 @@ async function invokePrimitive(
       if (!deps.scheduleOnly) {
         throw new Error(
           "applyInvalidation: 'scheduleOnly' dep is missing. " +
-            'Production callers wire this via buildInvalidationDeps in ' +
-            '@invoker/app/workflow-actions; tests must supply ' +
+            'Production callers wire this via buildWorkflowInvalidationDeps in ' +
+            '@invoker/workflow-core; tests must supply ' +
             'deps.scheduleOnly to use this action.',
         );
       }
@@ -378,8 +380,8 @@ async function invokePrimitive(
       if (!dep) {
         throw new Error(
           `applyInvalidation: '${ctx.action}' dep is missing. ` +
-            'Production callers wire this via buildInvalidationDeps in ' +
-            '@invoker/app/workflow-actions; tests must supply the dep to use this action.',
+            'Production callers wire this via buildWorkflowInvalidationDeps in ' +
+            '@invoker/workflow-core; tests must supply the dep to use this action.',
         );
       }
       return await dep(ctx.id);
@@ -392,8 +394,8 @@ async function invokePrimitive(
       if (!deps.recreateDownstream) {
         throw new Error(
           "applyInvalidation: 'recreateDownstream' dep is missing. " +
-            'Production callers wire this via buildInvalidationDeps in ' +
-            '@invoker/app/workflow-actions; tests must supply ' +
+            'Production callers wire this via buildWorkflowInvalidationDeps in ' +
+            '@invoker/workflow-core; tests must supply ' +
             'deps.recreateDownstream to use this action.',
         );
       }
@@ -416,8 +418,8 @@ async function invokePrimitive(
       if (!deps.workflowFork) {
         throw new Error(
           "applyInvalidation: 'workflowFork' dep is missing. " +
-            'Production callers wire this via buildInvalidationDeps in ' +
-            '@invoker/app/workflow-actions; tests must supply ' +
+            'Production callers wire this via buildWorkflowInvalidationDeps in ' +
+            '@invoker/workflow-core; tests must supply ' +
             'deps.workflowFork to use this action.',
         );
       }
@@ -450,7 +452,9 @@ export interface InvalidationDepsOrchestrator {
   recreateDownstream(taskId: string): TaskState[];
   retryWorkflow(workflowId: string): TaskState[];
   recreateWorkflow(workflowId: string): TaskState[];
-  recreateWorkflowFromFreshBase(workflowId: string): Promise<TaskState[]>;
+  recreateWorkflowFromFreshBase(workflowId: string, options?: {
+    refreshBase?: () => Promise<{ branch: string; commit: string } | undefined>;
+  }): Promise<TaskState[]>;
   forkWorkflow(workflowId: string): { started: TaskState[] };
   autoStartExternallyUnblockedReadyTasks(): TaskState[];
   approve(taskId: string): Promise<TaskState[]>;
@@ -476,9 +480,91 @@ export interface BuildCancelInFlightDeps {
   killActiveExecution?: (taskId: string) => void | Promise<void>;
 }
 
+export interface InvalidationWorkflowRecord {
+  generation?: number;
+  repoUrl?: string;
+  baseBranch?: string;
+}
+
+export interface BuildWorkflowInvalidationDepsArgs {
+  orchestrator: InvalidationDepsOrchestrator;
+  requireWorkflow: (workflowId: string) => InvalidationWorkflowRecord;
+  setWorkflowGeneration: (workflowId: string, generation: number) => void;
+  killActiveExecution?: (taskId: string) => void | Promise<void>;
+  prepareFreshBase?: (
+    workflowId: string,
+    workflow: InvalidationWorkflowRecord,
+  ) => Promise<{ branch: string; commit: string } | undefined>;
+  workflowFork?: (workflowId: string) => TaskState[] | Promise<TaskState[]>;
+  scheduleOnly?: (taskId: string) => TaskState[] | Promise<TaskState[]>;
+  fixApprove?: (taskId: string) => TaskState[] | Promise<TaskState[]>;
+  fixReject?: (taskId: string) => TaskState[] | Promise<TaskState[]>;
+  cascadeDownstream?: (
+    scope: InvalidationScope,
+    id: string,
+  ) => TaskState[] | Promise<TaskState[]>;
+}
+
+function bumpWorkflowGeneration(
+  workflowId: string,
+  deps: Pick<BuildWorkflowInvalidationDepsArgs, 'requireWorkflow' | 'setWorkflowGeneration'>,
+): InvalidationWorkflowRecord {
+  const workflow = deps.requireWorkflow(workflowId);
+  deps.setWorkflowGeneration(workflowId, (workflow.generation ?? 0) + 1);
+  return workflow;
+}
+
+function defaultCascadeDownstream(
+  orchestrator: InvalidationDepsOrchestrator,
+  scope: InvalidationScope,
+  id: string,
+): TaskState[] {
+  const workflowId =
+    scope === 'workflow'
+      ? id
+      : orchestrator.getTask(id)?.config?.workflowId;
+  if (!workflowId) return [];
+  return orchestrator.cascadeInvalidationToDownstream(workflowId);
+}
+
+export function buildWorkflowInvalidationDeps(
+  deps: BuildWorkflowInvalidationDepsArgs,
+): InvalidationDeps {
+  return {
+    cancelInFlight: buildCancelInFlight({
+      orchestrator: deps.orchestrator,
+      killActiveExecution: deps.killActiveExecution,
+    }),
+    retryTask: (taskId) => deps.orchestrator.retryTask(taskId),
+    recreateTask: (taskId) => deps.orchestrator.recreateTask(taskId),
+    recreateDownstream: (taskId) => deps.orchestrator.recreateDownstream(taskId),
+    retryWorkflow: (workflowId) => deps.orchestrator.retryWorkflow(workflowId),
+    recreateWorkflow: (workflowId) => {
+      bumpWorkflowGeneration(workflowId, deps);
+      return deps.orchestrator.recreateWorkflow(workflowId);
+    },
+    recreateWorkflowFromFreshBase: async (workflowId) => {
+      const workflow = bumpWorkflowGeneration(workflowId, deps);
+      const freshBase = await deps.prepareFreshBase?.(workflowId, workflow);
+      return deps.orchestrator.recreateWorkflowFromFreshBase(workflowId, {
+        refreshBase: async () => freshBase,
+      });
+    },
+    workflowFork: deps.workflowFork ?? ((workflowId) => deps.orchestrator.forkWorkflow(workflowId).started),
+    scheduleOnly: deps.scheduleOnly ?? (() => deps.orchestrator.autoStartExternallyUnblockedReadyTasks()),
+    fixApprove: deps.fixApprove ?? ((taskId) => deps.orchestrator.approve(taskId)),
+    fixReject: deps.fixReject ?? ((taskId) => {
+      deps.orchestrator.reject(taskId);
+      return [];
+    }),
+    cascadeDownstream: deps.cascadeDownstream ?? ((scope, id) =>
+      defaultCascadeDownstream(deps.orchestrator, scope, id)),
+  };
+}
+
 /**
  * Single cancel-in-flight implementation shared by the orchestrator-only
- * fallback and the production `buildInvalidationDeps`. Tolerates
+ * fallback and the production invalidation-deps builders. Tolerates
  * already-terminal targets (the rest of the pipeline still runs) and
  * fans out the optional executor-kill hook for every running task that
  * was cancelled.
@@ -506,29 +592,9 @@ export function buildCancelInFlight(deps: BuildCancelInFlightDeps): CancelInFlig
 export function buildOrchestratorOnlyInvalidationDeps(
   orchestrator: InvalidationDepsOrchestrator,
 ): InvalidationDeps {
-  return {
-    cancelInFlight: buildCancelInFlight({ orchestrator }),
-    retryTask: (taskId) => orchestrator.retryTask(taskId),
-    recreateTask: (taskId) => orchestrator.recreateTask(taskId),
-    recreateDownstream: (taskId) => orchestrator.recreateDownstream(taskId),
-    retryWorkflow: (workflowId) => orchestrator.retryWorkflow(workflowId),
-    recreateWorkflow: (workflowId) => orchestrator.recreateWorkflow(workflowId),
-    recreateWorkflowFromFreshBase: (workflowId) =>
-      orchestrator.recreateWorkflowFromFreshBase(workflowId),
-    workflowFork: (workflowId) => orchestrator.forkWorkflow(workflowId).started,
-    scheduleOnly: () => orchestrator.autoStartExternallyUnblockedReadyTasks(),
-    fixApprove: (taskId) => orchestrator.approve(taskId),
-    fixReject: (taskId) => {
-      orchestrator.reject(taskId);
-      return [];
-    },
-    cascadeDownstream: (scope, id) => {
-      const workflowId =
-        scope === 'workflow'
-          ? id
-          : orchestrator.getTask(id)?.config?.workflowId;
-      if (!workflowId) return [];
-      return orchestrator.cascadeInvalidationToDownstream(workflowId);
-    },
-  };
+  return buildWorkflowInvalidationDeps({
+    orchestrator,
+    requireWorkflow: () => ({}),
+    setWorkflowGeneration: () => {},
+  });
 }

@@ -32,7 +32,27 @@ export interface WorkflowLifecycleEventBase {
   readonly generation: number;
   readonly attemptId?: string;
   readonly createdAt: string;
+  readonly recoveryWakeup: RecoveryWorkerWakeupHint;
 }
+
+export interface RecoveryWorkerWakeupHint {
+  readonly eventKey: string;
+  readonly eventKind: WorkflowLifecycleEventKind;
+  readonly workflowId: string;
+  readonly taskId?: string;
+  readonly taskStateVersion?: number;
+  readonly generation: number;
+  readonly attemptId?: string;
+  readonly createdAt: string;
+  readonly reason: RecoveryWorkerWakeupReason;
+  readonly authoritative: false;
+}
+
+export type RecoveryWorkerWakeupReason =
+  | 'task_lifecycle'
+  | 'task_failure'
+  | 'review_gate_failure'
+  | 'workflow_reconcile';
 
 export interface TaskLifecycleEvent extends WorkflowLifecycleEventBase {
   readonly kind:
@@ -89,7 +109,7 @@ export interface LifecycleBuildOptions {
   readonly previousStatus?: TaskStatus;
   readonly generation?: number;
   readonly attemptId?: string;
-  readonly createdAt?: string | Date;
+  readonly createdAt?: Date;
 }
 
 export interface TaskUpdatedLifecycleEventInput extends LifecycleBuildOptions {
@@ -125,7 +145,7 @@ export interface WorkflowWakeupLifecycleEventInput {
   readonly status?: WorkflowDerivedStatus;
   readonly generation?: number;
   readonly reason: WorkflowWakeupReason;
-  readonly createdAt?: string | Date;
+  readonly createdAt?: Date;
 }
 
 const STATUS_VALUES: readonly WorkflowLifecycleStatus[] = [
@@ -232,12 +252,14 @@ export function buildTaskRemovedLifecycleEvent(input: TaskRemovedLifecycleEventI
 export function buildReviewGateCiFailedLifecycleEvent(
   input: ReviewGateCiFailedLifecycleEventInput,
 ): ReviewGateCiFailedLifecycleEvent {
+  const generation = input.generation ?? 0;
+  const createdAt = lifecycleCreatedAt(input.createdAt);
   const eventKey = buildLifecycleEventKey({
     kind: 'review_gate.ci_failed',
     workflowId: input.workflowId,
     taskId: input.taskId,
     taskStateVersion: input.taskStateVersion,
-    generation: input.generation,
+    generation,
     attemptId: input.attemptId,
     discriminator: `review:${input.reviewId}:${input.headSha ?? 'no-head-sha'}`,
   });
@@ -249,10 +271,21 @@ export function buildReviewGateCiFailedLifecycleEvent(
     taskId: input.taskId,
     status: input.status,
     taskStateVersion: input.taskStateVersion,
-    generation: input.generation ?? 0,
+    generation,
     ...(input.previousStatus ? { previousStatus: input.previousStatus } : {}),
     ...(input.attemptId ? { attemptId: input.attemptId } : {}),
-    createdAt: normalizeCreatedAt(input.createdAt),
+    createdAt,
+    recoveryWakeup: buildRecoveryWorkerWakeupHint({
+      eventKey,
+      eventKind: 'review_gate.ci_failed',
+      workflowId: input.workflowId,
+      taskId: input.taskId,
+      taskStateVersion: input.taskStateVersion,
+      generation,
+      attemptId: input.attemptId,
+      createdAt,
+      reason: 'review_gate_failure',
+    }),
     reviewId: input.reviewId,
     reviewUrl: input.reviewUrl,
     ...(input.headSha ? { headSha: input.headSha } : {}),
@@ -267,18 +300,28 @@ export function buildWorkflowWakeupLifecycleEvent(
   input: WorkflowWakeupLifecycleEventInput,
 ): WorkflowWakeupLifecycleEvent {
   const generation = input.generation ?? 0;
+  const createdAt = lifecycleCreatedAt(input.createdAt);
+  const eventKey = buildLifecycleEventKey({
+    kind: 'workflow.wakeup',
+    workflowId: input.workflowId,
+    generation,
+    discriminator: `reason:${input.reason}`,
+  });
   return {
-    eventKey: buildLifecycleEventKey({
-      kind: 'workflow.wakeup',
-      workflowId: input.workflowId,
-      generation,
-      discriminator: `reason:${input.reason}`,
-    }),
+    eventKey,
     kind: 'workflow.wakeup',
     workflowId: input.workflowId,
     ...(input.status ? { status: input.status } : {}),
     generation,
-    createdAt: normalizeCreatedAt(input.createdAt),
+    createdAt,
+    recoveryWakeup: buildRecoveryWorkerWakeupHint({
+      eventKey,
+      eventKind: 'workflow.wakeup',
+      workflowId: input.workflowId,
+      generation,
+      createdAt,
+      reason: 'workflow_reconcile',
+    }),
     reason: input.reason,
   };
 }
@@ -327,12 +370,14 @@ export function isWorkflowLifecycleEvent(value: unknown): value is WorkflowLifec
   if (!isWorkflowLifecycleEventKind(value.kind)) return false;
   if (typeof value.workflowId !== 'string') return false;
   if (typeof value.createdAt !== 'string') return false;
+  if (!isCanonicalUtcIsoTimestamp(value.createdAt)) return false;
   if (typeof value.generation !== 'number') return false;
   if (value.taskId != null && typeof value.taskId !== 'string') return false;
   if (value.status != null && !isWorkflowLifecycleStatus(value.status)) return false;
   if (value.previousStatus != null && !isTaskStatus(value.previousStatus)) return false;
   if (value.taskStateVersion != null && typeof value.taskStateVersion !== 'number') return false;
   if (value.attemptId != null && typeof value.attemptId !== 'string') return false;
+  if (!isRecoveryWorkerWakeupHint(value.recoveryWakeup, value)) return false;
 
   switch (value.kind) {
     case 'task.created':
@@ -363,6 +408,19 @@ export function isTaskLifecycleEvent(value: unknown): value is TaskLifecycleEven
   return isWorkflowLifecycleEvent(value) && value.kind.startsWith('task.');
 }
 
+export function lifecycleEventMatchesPersistedTask(
+  event: WorkflowLifecycleEvent,
+  task: TaskState | undefined,
+): boolean {
+  if (!event.taskId || !task) return false;
+  if (event.workflowId !== task.config.workflowId) return false;
+  if (event.taskId !== task.id) return false;
+  if (event.taskStateVersion !== task.taskStateVersion) return false;
+  if (event.generation !== (task.execution.generation ?? 0)) return false;
+  if (event.attemptId !== task.execution.selectedAttemptId) return false;
+  return true;
+}
+
 function buildTaskLifecycleEvent(input: {
   readonly kind: TaskLifecycleEvent['kind'];
   readonly workflowId: string;
@@ -372,10 +430,12 @@ function buildTaskLifecycleEvent(input: {
   readonly taskStateVersion: number;
   readonly generation: number;
   readonly attemptId?: string;
-  readonly createdAt?: string | Date;
+  readonly createdAt?: Date;
 }): TaskLifecycleEvent {
+  const createdAt = lifecycleCreatedAt(input.createdAt);
+  const eventKey = buildLifecycleEventKey(input);
   return {
-    eventKey: buildLifecycleEventKey(input),
+    eventKey,
     kind: input.kind,
     workflowId: input.workflowId,
     taskId: input.taskId,
@@ -384,13 +444,61 @@ function buildTaskLifecycleEvent(input: {
     taskStateVersion: input.taskStateVersion,
     generation: input.generation,
     ...(input.attemptId ? { attemptId: input.attemptId } : {}),
-    createdAt: normalizeCreatedAt(input.createdAt),
+    createdAt,
+    recoveryWakeup: buildRecoveryWorkerWakeupHint({
+      eventKey,
+      eventKind: input.kind,
+      workflowId: input.workflowId,
+      taskId: input.taskId,
+      taskStateVersion: input.taskStateVersion,
+      generation: input.generation,
+      attemptId: input.attemptId,
+      createdAt,
+      reason: input.kind === 'task.failed' ? 'task_failure' : 'task_lifecycle',
+    }),
   };
 }
 
-function normalizeCreatedAt(createdAt: string | Date | undefined): string {
-  if (createdAt instanceof Date) return createdAt.toISOString();
-  return createdAt ?? new Date().toISOString();
+function buildRecoveryWorkerWakeupHint(input: {
+  readonly eventKey: string;
+  readonly eventKind: WorkflowLifecycleEventKind;
+  readonly workflowId: string;
+  readonly taskId?: string;
+  readonly taskStateVersion?: number;
+  readonly generation: number;
+  readonly attemptId?: string;
+  readonly createdAt: string;
+  readonly reason: RecoveryWorkerWakeupReason;
+}): RecoveryWorkerWakeupHint {
+  return {
+    eventKey: input.eventKey,
+    eventKind: input.eventKind,
+    workflowId: input.workflowId,
+    ...(input.taskId ? { taskId: input.taskId } : {}),
+    ...(input.taskStateVersion != null ? { taskStateVersion: input.taskStateVersion } : {}),
+    generation: input.generation,
+    ...(input.attemptId ? { attemptId: input.attemptId } : {}),
+    createdAt: input.createdAt,
+    reason: input.reason,
+    authoritative: false,
+  };
+}
+
+function lifecycleCreatedAt(createdAt: unknown): string {
+  const value = createdAt ?? new Date();
+  if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
+    throw new Error('createdAt must be a valid Date');
+  }
+  return value.toISOString();
+}
+
+function isCanonicalUtcIsoTimestamp(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) {
+    return false;
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return false;
+  return parsed.toISOString() === value;
 }
 
 function requireWorkflowId(workflowId: string | undefined, taskId: string): string {
@@ -409,6 +517,35 @@ function isWorkflowLifecycleStatus(value: unknown): value is WorkflowLifecycleSt
 
 function isTaskStatus(value: unknown): value is TaskStatus {
   return isWorkflowLifecycleStatus(value);
+}
+
+function isRecoveryWorkerWakeupHint(
+  value: unknown,
+  event: {
+    readonly eventKey?: unknown;
+    readonly kind?: unknown;
+    readonly workflowId?: unknown;
+    readonly taskId?: unknown;
+    readonly taskStateVersion?: unknown;
+    readonly generation?: unknown;
+    readonly attemptId?: unknown;
+    readonly createdAt?: unknown;
+  },
+): value is RecoveryWorkerWakeupHint {
+  if (!isRecord(value)) return false;
+  if (value.eventKey !== event.eventKey) return false;
+  if (value.eventKind !== event.kind) return false;
+  if (value.workflowId !== event.workflowId) return false;
+  if (value.taskId !== event.taskId) return false;
+  if (value.taskStateVersion !== event.taskStateVersion) return false;
+  if (value.generation !== event.generation) return false;
+  if (value.attemptId !== event.attemptId) return false;
+  if (value.createdAt !== event.createdAt) return false;
+  if (value.authoritative !== false) return false;
+  return value.reason === 'task_lifecycle'
+    || value.reason === 'task_failure'
+    || value.reason === 'review_gate_failure'
+    || value.reason === 'workflow_reconcile';
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

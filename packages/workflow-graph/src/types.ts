@@ -40,8 +40,10 @@ export interface BaseTaskConfig {
   readonly approach?: string;
   readonly testPlan?: string;
   readonly reproCommand?: string;
-  /** Name of the execution agent to use (e.g. 'claude', 'codex'). Defaults to 'claude'. */
+  /** Name of the execution agent to use (e.g. 'claude', 'codex', 'omp'). Defaults to 'claude'. */
   readonly executionAgent?: string;
+  /** Agent-specific model selector passed through without central validation. */
+  readonly executionModel?: string;
   /** Cross-workflow prerequisites for this task. */
   readonly externalDependencies?: readonly ExternalDependency[];
   /** Execution pool identifier for shared queue/drain scheduling across substrates. */
@@ -103,11 +105,69 @@ export interface ExternalDependencyChange {
   readonly changedBy?: string;
 }
 
+/**
+ * Read-only provenance for an external dependency that `detachWorkflow`
+ * removed from a workflow's active {@link ExternalDependency} list.
+ *
+ * The active dependency is removed so scheduling no longer waits on the
+ * upstream workflow, but the lineage is preserved here so the UI can tell
+ * a genuinely-independent workflow apart from one explicitly detached from
+ * an upstream stack edge. Never re-read by the scheduler.
+ */
+export interface DetachedExternalDependency {
+  /** Upstream workflow the dependency pointed at. */
+  readonly workflowId: string;
+  /** Optional task selector within the upstream workflow, if the removed dependency had one. */
+  readonly taskId?: string;
+  readonly requiredStatus: 'completed';
+  readonly gatePolicy?: 'completed' | 'review_ready';
+  /** When the detach removed this dependency. */
+  readonly detachedAt: string;
+}
+
 // ── Task Execution (runtime state) ─────────────────────────
 // Never copied when cloning. Reset on restart.
 
 export type TaskRunPhase = 'launching' | 'executing';
 export type TaskHeartbeatSource = 'executor' | 'remote_workload';
+
+export type ReviewGateArtifactStatus =
+  | 'pending'
+  | 'open'
+  | 'approved'
+  | 'changes_requested'
+  | 'merged'
+  | 'closed'
+  | 'discarded'
+  | 'unknown';
+
+export interface ReviewGateArtifact {
+  readonly id: string;
+  readonly title?: string;
+  readonly url?: string;
+  readonly providerId?: string;
+  readonly provider?: string;
+  readonly branch?: string;
+  readonly baseBranch?: string;
+  readonly required: boolean;
+  readonly status: ReviewGateArtifactStatus;
+  readonly rawStatus?: string;
+  readonly dependsOn?: readonly string[];
+  readonly generation: number;
+  readonly createdAt?: string;
+  readonly updatedAt?: string;
+  readonly discardedAt?: string;
+  readonly discardReason?: string;
+}
+
+export interface ReviewGateState {
+  readonly activeGeneration: number;
+  readonly completion: {
+    readonly required: 'all';
+    readonly status: 'approved';
+  };
+  readonly artifacts: readonly ReviewGateArtifact[];
+}
 
 export interface TaskExecution {
   readonly generation?: number;
@@ -144,6 +204,7 @@ export interface TaskExecution {
   readonly reviewId?: string;
   readonly reviewStatus?: string;
   readonly reviewProviderId?: string;
+  readonly reviewGate?: ReviewGateState;
   readonly phase?: TaskRunPhase;
   readonly launchStartedAt?: Date;
   readonly launchCompletedAt?: Date;

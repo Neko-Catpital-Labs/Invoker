@@ -327,11 +327,19 @@ if [[ "$SKIP_ATOMICITY" == "false" ]]; then
   fi
 fi
 
+# Check 4a: Review unit linting (if atomicity checks are not skipped)
+if [[ "$SKIP_ATOMICITY" == "false" ]]; then
+  run_check \
+    "lint-review-units" \
+    "Lint one-review-unit-per-task enforcement" \
+    node "$SCRIPT_DIR/lint-review-units.mjs" "$PLAN_FILE"
+fi
+
 # Check 5: Validate parse-results.sh with mock execution output
 MOCK_RESULTS=$(cat <<'MOCK_EOF'
 [verify-file-test] completed
 task "verify-pattern-foo" completed
-PASS verify-tests-pkg
+PASS verify-package-pkg
 MOCK_EOF
 )
 run_check \

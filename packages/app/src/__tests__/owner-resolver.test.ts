@@ -37,12 +37,12 @@ describe('owner-resolver', () => {
       expect(result.resolved).toBe(false);
     });
 
-    it('returns not-resolved for a non-standalone owner', async () => {
+    it('returns not-resolved for an owner that cannot serve delegated mutations', async () => {
       const bus = new LocalBus();
       bus.onRequest('headless.owner-ping', async () => ({
         ok: true,
-        ownerId: 'owner-gui',
-        mode: 'gui',
+        ownerId: 'owner-observer',
+        mode: 'observer',
       }));
 
       const resolver = createOwnerResolver({
@@ -56,12 +56,12 @@ describe('owner-resolver', () => {
   });
 
   describe('discoverAny', () => {
-    it('returns a non-standalone owner as resolved', async () => {
+    it('returns a reachable non-mutation owner as resolved', async () => {
       const bus = new LocalBus();
       bus.onRequest('headless.owner-ping', async () => ({
         ok: true,
-        ownerId: 'owner-gui',
-        mode: 'gui',
+        ownerId: 'owner-observer',
+        mode: 'observer',
       }));
 
       const resolver = createOwnerResolver({
@@ -72,7 +72,7 @@ describe('owner-resolver', () => {
       const result = await resolver.discoverAny();
       expect(result.resolved).toBe(true);
       if (result.resolved) {
-        expect(result.owner.ownerId).toBe('owner-gui');
+        expect(result.owner.ownerId).toBe('owner-observer');
         expect(result.owner.canAcceptStandaloneMutations).toBe(false);
       }
     });
@@ -188,7 +188,7 @@ describe('owner-resolver', () => {
   });
 
   describe('waitForStandalone', () => {
-    it('skips non-standalone owners and waits for a standalone-capable one', async () => {
+    it('skips owners that cannot serve delegated mutations and waits for a capable one', async () => {
       const bus = new LocalBus();
       let pingCount = 0;
       bus.onRequest('headless.owner-ping', async () => {
@@ -196,7 +196,7 @@ describe('owner-resolver', () => {
         if (pingCount >= 3) {
           return { ok: true, ownerId: 'owner-standalone', mode: 'standalone' };
         }
-        return { ok: true, ownerId: 'owner-gui', mode: 'gui' };
+        return { ok: true, ownerId: 'owner-observer', mode: 'observer' };
       });
 
       const resolver = createOwnerResolver({
@@ -211,12 +211,12 @@ describe('owner-resolver', () => {
       }
     });
 
-    it('returns not-resolved after timeout when only non-standalone owners available', async () => {
+    it('returns not-resolved after timeout when only non-mutation owners are available', async () => {
       const bus = new LocalBus();
       bus.onRequest('headless.owner-ping', async () => ({
         ok: true,
-        ownerId: 'owner-gui',
-        mode: 'gui',
+        ownerId: 'owner-observer',
+        mode: 'observer',
       }));
 
       const resolver = createOwnerResolver({
@@ -418,8 +418,8 @@ describe('owner-resolver', () => {
       const bus = new LocalBus();
       bus.onRequest('headless.owner-ping', async () => ({
         ok: true,
-        ownerId: 'owner-gui',
-        mode: 'gui',
+        ownerId: 'owner-observer',
+        mode: 'observer',
       }));
 
       const ensureStandaloneOwner = vi.fn();
@@ -429,7 +429,7 @@ describe('owner-resolver', () => {
       });
 
       const result = await resolver.resolve(false);
-      expect(result.owner.ownerId).toBe('owner-gui');
+      expect(result.owner.ownerId).toBe('owner-observer');
       expect(result.owner.canAcceptStandaloneMutations).toBe(false);
       expect(ensureStandaloneOwner).not.toHaveBeenCalled();
     });

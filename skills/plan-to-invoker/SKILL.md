@@ -2,10 +2,11 @@
 name: plan-to-invoker
 description: >
   Convert a plan into an Invoker YAML plan file. Trigger: "convert to invoker",
-  "submit to invoker", "create invoker plan", "/plan-to-invoker", or turning
-  a plan file into Invoker tasks. For benchmark/direct-output prompts with
-  "Required output path", write a complete YAML document directly to that
-  literal path; it must start with top-level name, onFinish, mergeMode,
+  "submit to invoker", "create invoker plan", "invoker-plan-to-invoker",
+  "/invoker-plan-to-invoker", "/plan-to-invoker", or turning a plan file into
+  Invoker tasks. For benchmark/direct-output prompts with "Required output path",
+  write a complete YAML document directly to that literal path; it must start
+  with top-level name, onFinish, mergeMode,
   repoUrl, and tasks, never version or metadata wrappers, and must not scan,
   validate, submit, or discover env vars.
 ---
@@ -53,11 +54,24 @@ tasks:
 
 For implementation benchmark plans, switch `onFinish` and `mergeMode` only when the prompt clearly requires a PR/submission workflow, and include task metadata from the prompt itself rather than discovering local references.
 
+## Harness handoff mode
+
+Use this mode when invoked by the installed command or MCP prompt.
+
+- First produce a Markdown planning artifact at `plans/invoker-handoff.md`.
+- Convert the approved Markdown plan to `plans/invoker-handoff.yaml`.
+- Prefer the MCP tools `invoker_validate_plan` and `invoker_submit_plan` when available.
+- In an Invoker source checkout, still run `bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` before submission.
+- Outside an Invoker source checkout, `invoker_validate_plan` is the deterministic validation gate.
+
+- If the request involves creating, updating, publishing, or splitting pull requests or PR stacks, first read and follow `skills/make-pr/SKILL.md` (or `skill://make-pr/SKILL.md` when available) before PR authoring or publication.
+- If the request involves multiple review slices, first read and follow `skills/review-compression/SKILL.md` (or `skill://review-compression/SKILL.md` when available) before writing workflow YAML.
+
 ## Intended flow (do not skip steps)
 
 1. Discuss scope/risk with the user.
 2. Phase 1a static analysis.
-3. Runtime verification (Phase 1b): run targeted `pnpm test`, plus Invoker headless when applicable.
+3. Runtime verification (Phase 1b): run the cheapest deterministic command that exercises the behavior, plus Invoker headless when applicable.
 4. Generate implementation YAML from verified facts.
 5. Validate with deterministic scripts.
 6. Present plan and submit on confirmation.
@@ -66,11 +80,11 @@ Grep-only checks are Phase 1a only; behavioral claims require executed Phase 1b 
 
 **Deterministic validation gate:** Use `skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` as the primary deterministic proof surface, backed by `bash scripts/test-plan-to-invoker-skill.sh` for regression coverage. Schema-only validation or ad hoc individual script checks are not sufficient as the review gate, because they can miss strict atomicity, zero-context prompt, policy coverage, and final-gate failures. Individual validator scripts remain fallback diagnostics only; they are not submission proof unless `skill-doctor.sh` has already passed or a waiver is explicitly recorded.
 
-**Review compression (required for implementation plans):** Before authoring any plan with `onFinish != none`, apply `skills/review-compression/SKILL.md`. Split by reviewer cognition, not file count: one local review claim, one safety invariant, one slice rationale, and one architectural effect per implementation task. This applies to Invoker and non-Invoker target repos.
+**Review compression (required for implementation plans):** Before authoring any plan with `onFinish != none`, apply `skills/review-compression/SKILL.md`. Split by reviewer cognition, not file count: one local review claim, one review lane, one conceptual unit, one safety invariant, one slice rationale, and one architectural effect per implementation task. This applies to Invoker and non-Invoker target repos.
 
-**Stack-first authoring (default for implementation plans):** For any plan with `onFinish != none`, default to an authored Invoker workflow stack, not one YAML with many implementation tasks. In Invoker, one YAML file is one workflow; `tasks:` are only tasks inside that workflow. If the implementation has more than one review slice, layer, implementation prompt task, package boundary, UI+non-UI boundary, or PR-worthy commit, write multiple `step-N` YAML files and submit them with `scripts/submit-workflow-chain.sh`. Later workflow templates must depend on the previous workflow's merge gate with `externalDependencies` using `workflowId: "__UPSTREAM_WORKFLOW_ID__"`, `taskId: "__merge__"`, `requiredStatus: completed`, and `gatePolicy: review_ready` unless the user explicitly requests a different gate.
+**Stack-first authoring (default for implementation plans):** For any plan with `onFinish != none`, default to an authored Invoker workflow stack, not one YAML with many implementation tasks. In Invoker, one YAML file is one workflow; `tasks:` are only tasks inside that workflow. If the implementation has more than one review slice, review lane, conceptual unit, layer, implementation prompt task, package boundary, UI+non-UI boundary, or PR-worthy commit, write multiple `step-N` YAML files and submit them with `scripts/submit-workflow-chain.sh`. Later workflow templates must depend on the previous workflow's merge gate with `externalDependencies` using `workflowId: "__UPSTREAM_WORKFLOW_ID__"`, `taskId: "__merge__"`, `requiredStatus: completed`, and `gatePolicy: review_ready` unless the user explicitly asked for another gate policy.
 
-**Standalone workflow waiver (exception, not default):** A single implementation workflow is allowed only when the whole change is one review claim that fits in one implementation prompt task plus verification, or when the user explicitly asks for a single workflow. Any standalone implementation YAML with multiple prompt tasks must include a top-level `description` section headed `Standalone workflow waiver:` explaining why it is not split. Without that waiver, `lint-task-atomicity.sh` rejects multi-prompt standalone implementation workflows.
+**Standalone workflow waiver (exception, not default):** A single implementation workflow is allowed only when the whole change is one review claim in one review lane that fits in one implementation prompt task plus verification, or when the user explicitly asks for a single workflow. Any standalone implementation YAML with multiple prompt tasks must include a top-level `description` section headed `Standalone workflow waiver:` explaining why it is not split. Without that waiver, `lint-task-atomicity.sh` rejects multi-prompt standalone implementation workflows.
 
 **Policy-matrix documents:** When the source is an architecture or policy document with a decision table, exception rules, or cross-cutting invariants, you must preserve row-level coverage before authoring workflows. Do not stop at files/functions/packages; every required policy row must map to a workflow step or an explicit waiver.
 
@@ -80,7 +94,7 @@ Grep-only checks are Phase 1a only; behavioral claims require executed Phase 1b 
 
 **Dependency-first layered decomposition (required for implementation plans):** For plans whose `onFinish` is not `none`, every implementation task must include `Layer:` and `Feature state:` headings in `description`. Use normalized layer names (`persistence`, `domain`, `transport`, `api`, `contact_surface`, `app_bridge`, `owner_delegation`, `ui_activation`, `app_regression`, `e2e_regression`, `ui`, `docs`) and feature state values (`active` or `dormant`). `dormant` tasks must still include `Acceptance criteria:` in `description`. Verify-only plans (`onFinish: none`) are exempt from this hard requirement.
 
-**Implementation-rationale headings (required for all implementation tasks):** For plans whose `onFinish` is not `none`, every task (prompt or command) must include `Review claim:`, `Safety invariant:`, `Slice rationale:`, `Architectural effect:`, `Goal:`, `Motivation:`, `Alternative considerations:` (or `Alternatives:`), and `Implementation details:` (or `Implementation:`) in the task `description`. In addition, prompt tasks must include the same rationale headings directly in `prompt` so execution instructions contain explicit intent (not only metadata). This is a hard requirement enforced by `lint-task-atomicity.sh` so implementation intent is explicit and reviewable in authored workflow YAML.
+**Implementation-rationale headings (required for all implementation tasks):** For plans whose `onFinish` is not `none`, every task (prompt or command) must include `Review claim:`, `Review lane:`, `Safety invariant:`, `Slice rationale:`, `Architectural effect:`, `Goal:`, `Motivation:`, `Alternative considerations:` (or `Alternatives:`), `Implementation details:` (or `Implementation:`), and `Non-goals:` in the task `description`. In addition, prompt tasks must include the same rationale headings directly in `prompt` so execution instructions contain explicit intent (not only metadata). This is a hard requirement enforced by `lint-task-atomicity.sh` and `lint-review-units.mjs` so implementation intent is explicit and reviewable in authored workflow YAML.
 
 **Cross-layer dependency direction (required):** Dependency DAGs must flow from lower/foundational layers toward higher/integration layers. If a lower-layer task depends on a higher-layer task, mark an explicit exception in the task description with `Layer exception: allowed` and a rationale.
 
@@ -88,7 +102,9 @@ Grep-only checks are Phase 1a only; behavioral claims require executed Phase 1b 
 
 **Bugfix repro:** For bug/regression plans, a shared `bash scripts/repro-<slug>.sh` (or the same `command:` before and after) is **strongly recommended**; **`skill-doctor` does not require it.** If the fix invalidates the original repro, use another explicit verification task. See `references/task-patterns.md` § *Bugfix repro*.
 
-**Invoker dogfooding rule:** When the target repo is Invoker itself (`EdbertChan/Invoker` or the upstream `Neko-Catpital-Labs/Invoker`), be explicit that GitHub PR publishing should use **Mergify Stacks** after the work is ready: keep `onFinish: pull_request` + `mergeMode: github`, then publish/update the resulting commit stack with `mergify stack push`. Do **not** generalize this to unrelated target repos; for example, `EdbertChan/test-playground` should keep normal PR flow unless that repo independently adopts Mergify Stacks. For the actual PR authoring/publication step after implementation work is ready, use the `make-pr` skill.
+**Invoker dogfooding rule:** When the target repo is Invoker itself (`EdbertChan/Invoker` or the upstream `Neko-Catpital-Labs/Invoker`), be explicit that GitHub PR publishing should use **Mergify Stacks** after the work is ready: keep `onFinish: pull_request` + `mergeMode: external_review`, then publish/update the resulting commit stack with `mergify stack push`. Do **not** generalize this to unrelated target repos; for example, `EdbertChan/test-playground` should keep normal PR flow unless that repo independently adopts Mergify Stacks.
+
+**Review-gate artifact intent:** Plans may include optional top-level `reviewGate.artifacts` metadata to describe an ordered review PR stack. Each artifact needs a unique `id`; `required` defaults to `true` when omitted; the first artifact has no dependency; every later artifact must depend on exactly the immediately previous artifact. Do not use fixed PR-count fields or Mergify-specific fields in the plan YAML. This metadata does not affect scheduler readiness, task dependencies, or workflow `externalDependencies`.
 
 ## Deterministic step map (plan-to-invoker)
 
@@ -137,7 +153,7 @@ If `skill-doctor.sh` fails, run individual checks to isolate the problem:
    `bash skills/plan-to-invoker/scripts/validate-plan.sh <plan-file>`
 4. `step-lint-atomicity`
    `bash skills/plan-to-invoker/scripts/lint-task-atomicity.sh <plan-file>`  
-  Optional: append `--warn-delegation` to print additional advisory hints. For authored stacks, append `--stack-manifest <file>` so non-terminal workflows may end with focused verification while the highest-order workflow still requires `pnpm run test:all`. Atomicity lint always runs `--strict-delegation` inside `skill-doctor` and, for implementation plans (`onFinish != none`), hard-fails missing/invalid `Layer:` and `Feature state:` metadata, missing required review-compression/rationale headings in `description` on any task (`Review claim`, `Safety invariant`, `Slice rationale`, `Architectural effect`, `Goal`, `Motivation`, `Alternative considerations`/`Alternatives`, `Implementation details`/`Implementation`), missing required rationale headings in `prompt` for prompt tasks, prompt tasks without `Files:`/`Change types:`/`Acceptance criteria:` description blocks, prompts missing zero-context execution framing, prompts missing deterministic pass/fail expectations, invalid cross-layer dependency direction without `Layer exception: allowed`, and missing experiment-artifact handoff/cleanup contract when experiment tasks are present.
+  Optional: append `--warn-delegation` to print additional advisory hints. For authored stacks, append `--stack-manifest <file>` so stack slices are validated with stack context. Atomicity lint always runs `--strict-delegation` inside `skill-doctor` and, for implementation plans (`onFinish != none`), hard-fails missing/invalid `Layer:` and `Feature state:` metadata, missing required review-compression/rationale headings in `description` on any task (`Review claim`, `Review lane`, `Safety invariant`, `Slice rationale`, `Architectural effect`, `Goal`, `Motivation`, `Alternative considerations`/`Alternatives`, `Implementation details`/`Implementation`), missing required rationale headings directly in prompt text, and cross-layer dependency-direction violations.
 5. `step-parse-verify-results`
    `bash skills/plan-to-invoker/scripts/parse-results.sh < /tmp/invoker-verify.txt`
 
@@ -170,12 +186,12 @@ If `skill-doctor.sh` fails, run individual checks to isolate the problem:
 
 ## Runtime verification (Phase 1b)
 
-- Unit/package lane: `cd packages/<pkg> && pnpm test`
+- Focused command lane: run the smallest deterministic command that proves the behavior or assumption. Prefer direct scripts, parser checks, focused builds, or repo-specific repro commands over package-wide test suites.
 - Invoker headless lane: run `./submit-plan.sh plans/verify-<slug>.yaml` when flow involves orchestrator/executor/persistence/headless behavior
 - Visual proof lane when UI changes apply
-- Implementation-plan full-suite gate: standalone implementation plans and terminal stack workflows must end with `pnpm run test:all` from the repo root and depend on every earlier task. Non-terminal stack workflows should end with focused verification; validate them with `skill-doctor --stack-manifest <file>` so the stack position is explicit.
+- Implementation-plan verification: include focused proof tasks that exercise the changed behavior. Do not require a terminal `pnpm run test:all` gate unless the user explicitly asks for a full-suite gate or the risk calls for it.
 
-When Invoker config enables heavyweight command routing, keep `pnpm ...` commands in the plan as normal command tasks unless a specific remote target must be declared explicitly. Runtime config may auto-route those commands to SSH.
+When Invoker config enables heavyweight command routing, keep commands in the plan as normal command tasks unless a specific remote target must be declared explicitly. Runtime config may auto-route those commands to SSH.
 
 Authoring YAML is not verification; execution is verification.
 

@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent } from 'react';
-import type { TaskState, WorkflowMeta, WorkflowStatus } from '../types.js';
+import type { WorkflowMeta, WorkflowStatus } from '../types.js';
 import type { GraphCameraCommand } from '../lib/graph-camera.js';
-import { deriveWorkflowGraph, layoutWorkflowGraph } from '../lib/workflow-graph.js';
+import { deriveWorkflowGraph, layoutWorkflowGraph, type WorkflowGraphEdge } from '../lib/workflow-graph.js';
 import { WorkflowNode } from './WorkflowNode.js';
 import {
   Background,
@@ -20,7 +20,6 @@ import {
 import '@xyflow/react/dist/style.css';
 
 interface WorkflowGraphProps {
-  tasks: Map<string, TaskState>;
   workflows: Map<string, WorkflowMeta>;
   selectedWorkflowId: string | null;
   /**
@@ -45,6 +44,37 @@ interface WorkflowNodeData extends Record<string, unknown> {
 const nodeTypes = {
   workflowNode: WorkflowFlowNode,
 };
+const WATCHDOG_RECOVERY_MISS_COUNT = 3;
+
+
+function workflowEdgeVisual(kind: WorkflowGraphEdge['kind']): {
+  stroke: string;
+  strokeWidth: number;
+  strokeDasharray?: string;
+  ariaLabel: string;
+} {
+  if (kind === 'detached') {
+    return {
+      stroke: 'rgba(217,119,6,0.58)',
+      strokeWidth: 1.5,
+      strokeDasharray: '5 6',
+      ariaLabel: 'Detached workflow lineage',
+    };
+  }
+  if (kind === 'historical') {
+    return {
+      stroke: 'rgba(245,158,11,0.5)',
+      strokeWidth: 1.5,
+      strokeDasharray: '6 6',
+      ariaLabel: 'Historical workflow dependency',
+    };
+  }
+  return {
+    stroke: 'rgba(148,163,184,0.55)',
+    strokeWidth: 2,
+    ariaLabel: 'Active workflow dependency',
+  };
+}
 
 function WorkflowFlowNode({ data }: NodeProps<Node<WorkflowNodeData>>): JSX.Element {
   return (
@@ -73,7 +103,6 @@ function WorkflowFlowNode({ data }: NodeProps<Node<WorkflowNodeData>>): JSX.Elem
 }
 
 function WorkflowGraphInner({
-  tasks,
   workflows,
   selectedWorkflowId,
   cameraCommand,
@@ -83,16 +112,20 @@ function WorkflowGraphInner({
   onManualViewport,
 }: WorkflowGraphProps): JSX.Element {
   const { fitView, setCenter, getZoom } = useReactFlow();
+  const graphRootRef = useRef<HTMLDivElement>(null);
   const reportedVisibleRef = useRef(false);
   const lastHandledCameraSeqRef = useRef(0);
   const initFitFrameRef = useRef(0);
+  const watchdogMissCountRef = useRef(0);
+  const watchdogRecoveryAttemptedRef = useRef(false);
+  const [flowInstanceKey, setFlowInstanceKey] = useState(0);
   const graphMetricsRef = useRef({ deriveMs: 0, layoutMs: 0, objectsMs: 0 });
   const graph = useMemo(() => {
     const startedAt = performance.now();
-    const nextGraph = deriveWorkflowGraph(workflows, tasks);
+    const nextGraph = deriveWorkflowGraph(workflows);
     graphMetricsRef.current.deriveMs = performance.now() - startedAt;
     return nextGraph;
-  }, [workflows, tasks]);
+  }, [workflows]);
   const positions = useMemo(() => {
     const startedAt = performance.now();
     const nextPositions = layoutWorkflowGraph(graph);
@@ -123,27 +156,30 @@ function WorkflowGraphInner({
     return nextNodes;
   }, [graph.nodes, positions, selectedWorkflowId, statusFilters]);
 
-  const edges = useMemo<Edge[]>(() => graph.edges.map((edge) => ({
-    id: `workflow:${edge.kind}:${edge.source}->${edge.target}`,
-    source: edge.source,
-    target: edge.target,
-    type: 'smoothstep',
-    animated: false,
-    style: {
-      stroke: edge.kind === 'historical' ? 'rgba(245,158,11,0.5)' : 'rgba(148,163,184,0.55)',
-      strokeWidth: edge.kind === 'historical' ? 1.5 : 2,
-      strokeDasharray: edge.kind === 'historical' ? '6 6' : undefined,
-    },
-    data: { kind: edge.kind },
-    ariaLabel: edge.kind === 'historical' ? 'Historical workflow dependency' : 'Active workflow dependency',
-    zIndex: 0,
-    markerEnd: {
-      type: MarkerType.ArrowClosed,
-      color: edge.kind === 'historical' ? 'rgba(245,158,11,0.5)' : 'rgba(148,163,184,0.55)',
-      width: 16,
-      height: 16,
-    },
-  })), [graph.edges]);
+  const edges = useMemo<Edge[]>(() => graph.edges.map((edge) => {
+    const visual = workflowEdgeVisual(edge.kind);
+    return {
+      id: `workflow:${edge.kind}:${edge.source}->${edge.target}`,
+      source: edge.source,
+      target: edge.target,
+      type: 'smoothstep',
+      animated: false,
+      style: {
+        stroke: visual.stroke,
+        strokeWidth: visual.strokeWidth,
+        strokeDasharray: visual.strokeDasharray,
+      },
+      data: { kind: edge.kind },
+      ariaLabel: visual.ariaLabel,
+      zIndex: 0,
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        color: visual.stroke,
+        width: 16,
+        height: 16,
+      },
+    };
+  }), [graph.edges]);
 
   // First non-empty render fits the whole graph once. React Flow only mounts
   // when there is at least one node (the empty state short-circuits below), so
@@ -156,6 +192,13 @@ function WorkflowGraphInner({
   // Cancel a pending first-fit frame on unmount so it never fires against a
   // torn-down graph after the component has gone away.
   useEffect(() => () => cancelAnimationFrame(initFitFrameRef.current), []);
+  useEffect(() => {
+    if (nodes.length > 0) {
+      watchdogMissCountRef.current = 0;
+      watchdogRecoveryAttemptedRef.current = false;
+    }
+  }, [nodes.length]);
+
 
   // Manual pan/zoom from the user. React Flow passes a non-null DOM event for
   // user-driven moves and null for programmatic setCenter/fitView, so this only
@@ -232,15 +275,27 @@ function WorkflowGraphInner({
   useEffect(() => {
     if (nodes.length === 0) return;
     const interval = setInterval(() => {
-      const domNodes = document.querySelectorAll('[data-testid^="workflow-node-"]');
-      const hiddenNodes = document.querySelectorAll(
+      const root = graphRootRef.current;
+      if (!root) return;
+      const renderedNodeElements = root.querySelectorAll('[data-testid^="workflow-node-"]');
+      const missingRenderedNodes = root.querySelectorAll(
         '.react-flow__node[style*="visibility: hidden"] [data-testid^="workflow-node-"]',
       );
       if (
-        (domNodes.length === 0 && nodes.length > 0) ||
-        (hiddenNodes.length > 0 && hiddenNodes.length === domNodes.length)
+        (renderedNodeElements.length === 0 && nodes.length > 0) ||
+        (missingRenderedNodes.length > 0 && missingRenderedNodes.length === renderedNodeElements.length)
       ) {
+        watchdogMissCountRef.current += 1;
+        const shouldRecover =
+          watchdogMissCountRef.current >= WATCHDOG_RECOVERY_MISS_COUNT &&
+          !watchdogRecoveryAttemptedRef.current;
         fitView({ padding: 0.2 });
+        if (shouldRecover) {
+          watchdogRecoveryAttemptedRef.current = true;
+          setFlowInstanceKey((key) => key + 1);
+        }
+      } else {
+        watchdogMissCountRef.current = 0;
       }
     }, 2000);
     return () => clearInterval(interval);
@@ -260,8 +315,9 @@ function WorkflowGraphInner({
       className="h-full w-full overflow-hidden"
       style={{ minHeight: '300px' }}
     >
-      <div data-testid="workflow-graph-react-flow" className="h-full w-full">
+      <div ref={graphRootRef} data-testid="workflow-graph-react-flow" className="h-full w-full">
         <ReactFlow
+          key={flowInstanceKey}
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}

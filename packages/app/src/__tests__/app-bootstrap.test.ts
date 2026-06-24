@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   configureEarlyElectronApp,
+  formatGuiOwnerBootstrapFallbackMessage,
+  guiOwnerBootstrapTimeoutMs,
   registerGuiLifecycleHandlers,
+  resolveGuiOwnerPreference,
   runElectronReadyBootstrap,
+  shouldRefreshGuiOwnerRoute,
   startGuiModeBootstrap,
   startMainProcessBootstrap,
 } from '../bootstrap/app-bootstrap.js';
@@ -149,6 +153,27 @@ describe('app-bootstrap', () => {
     expect(order).toEqual(['lock', 'setup']);
   });
 
+  it('shows a message and quits before setup when the Invoker-home GUI lock is already held', () => {
+    const setupGuiMode = vi.fn();
+    const quit = vi.fn();
+    const notifyGuiAlreadyRunning = vi.fn();
+
+    startGuiModeBootstrap({
+      app: {
+        requestSingleInstanceLock: vi.fn(() => true),
+        quit,
+      },
+      isTest: false,
+      acquireGuiLock: () => null,
+      notifyGuiAlreadyRunning,
+      setupGuiMode,
+    });
+
+    expect(notifyGuiAlreadyRunning).toHaveBeenCalledTimes(1);
+    expect(quit).toHaveBeenCalledTimes(1);
+    expect(setupGuiMode).not.toHaveBeenCalled();
+  });
+
   it('skips the single-instance lock in tests', () => {
     const requestSingleInstanceLock = vi.fn(() => true);
     const setupGuiMode = vi.fn();
@@ -190,6 +215,58 @@ describe('app-bootstrap', () => {
     });
 
     expect(order).toEqual(['headless', 'gui']);
+  });
+
+  it('defaults GUI owner startup to auto discovery instead of daemon bootstrap', () => {
+    expect(resolveGuiOwnerPreference({})).toBe('auto');
+    expect(resolveGuiOwnerPreference({ INVOKER_GUI_OWNER_MODE: 'daemon' })).toBe('daemon');
+    expect(resolveGuiOwnerPreference({ INVOKER_GUI_OWNER_MODE: 'local' })).toBe('gui');
+    expect(resolveGuiOwnerPreference({ INVOKER_GUI_DAEMON_OWNER: '1' })).toBe('daemon');
+  });
+
+  it('refreshes GUI owner routing for daemon-backed GUI clients only', () => {
+    expect(shouldRefreshGuiOwnerRoute('daemon', false)).toBe(true);
+    expect(shouldRefreshGuiOwnerRoute('auto', true)).toBe(true);
+    expect(shouldRefreshGuiOwnerRoute('auto', false)).toBe(false);
+    expect(shouldRefreshGuiOwnerRoute('gui', true)).toBe(false);
+  });
+
+  it('uses a bounded daemon bootstrap timeout and ignores invalid overrides', () => {
+    expect(guiOwnerBootstrapTimeoutMs({ INVOKER_GUI_OWNER_BOOTSTRAP_TIMEOUT_MS: '2500' })).toBe(2500);
+    expect(guiOwnerBootstrapTimeoutMs({ INVOKER_GUI_OWNER_BOOTSTRAP_TIMEOUT_MS: '-1' })).toBe(60000);
+    expect(guiOwnerBootstrapTimeoutMs({ INVOKER_HEADLESS_OWNER_BOOTSTRAP_TIMEOUT_MS: '1200' })).toBe(1200);
+  });
+
+  it('formats daemon bootstrap failures with a local owner recovery path', () => {
+    const message = formatGuiOwnerBootstrapFallbackMessage('Timed out after 60000ms waiting for daemon owner');
+
+    expect(message).toContain('Daemon owner startup failed');
+    expect(message).toContain('Falling back to local GUI owner mode');
+    expect(message).toContain('INVOKER_GUI_OWNER_MODE=gui');
+  });
+
+  it('does not acquire a GUI lock or start GUI setup in headless mode', () => {
+    const acquireGuiLock = vi.fn();
+    const setupGuiMode = vi.fn();
+    const startHeadlessMode = vi.fn();
+
+    startMainProcessBootstrap({
+      isHeadless: true,
+      startHeadlessMode,
+      startGuiMode: () => startGuiModeBootstrap({
+        app: {
+          requestSingleInstanceLock: vi.fn(() => true),
+          quit: vi.fn(),
+        },
+        isTest: false,
+        acquireGuiLock,
+        setupGuiMode,
+      }),
+    });
+
+    expect(startHeadlessMode).toHaveBeenCalledTimes(1);
+    expect(acquireGuiLock).not.toHaveBeenCalled();
+    expect(setupGuiMode).not.toHaveBeenCalled();
   });
 
   it('registers lifecycle handlers without changing event names', () => {

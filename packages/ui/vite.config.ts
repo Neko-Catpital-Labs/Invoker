@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import MergifyReporter from '@mergifyio/vitest';
 
 // Match a node_modules path segment for a given package name (handles both
 // flat `node_modules/<pkg>` and pnpm's `node_modules/.pnpm/<pkg>@.../node_modules/<pkg>`).
@@ -61,5 +62,6 @@ export default defineConfig({
     globals: true,
     environment: 'jsdom',
     setupFiles: ['./src/test-setup.ts'],
+    reporters: ['default', new MergifyReporter()],
   },
 });

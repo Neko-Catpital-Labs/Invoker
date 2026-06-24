@@ -270,6 +270,7 @@ export function serializeWorkflow(wf: Workflow): Record<string, unknown> {
     ...(wf.reviewProvider != null && { reviewProvider: wf.reviewProvider }),
     ...(wf.externalDependencies != null && { externalDependencies: wf.externalDependencies }),
     ...(wf.externalDependencyChanges != null && { externalDependencyChanges: wf.externalDependencyChanges }),
+    ...(wf.detachedExternalDependencies != null && { detachedExternalDependencies: wf.detachedExternalDependencies }),
     ...(wf.generation != null && { generation: wf.generation }),
   };
 }
@@ -298,6 +299,8 @@ export function serializeTask(task: TaskState): Record<string, unknown> {
   if (task.execution.reviewUrl != null) execution.reviewUrl = task.execution.reviewUrl;
   if (task.execution.reviewId != null) execution.reviewId = task.execution.reviewId;
   if (task.execution.reviewStatus != null) execution.reviewStatus = task.execution.reviewStatus;
+  if (task.execution.reviewProviderId != null) execution.reviewProviderId = task.execution.reviewProviderId;
+  if (task.execution.reviewGate != null) execution.reviewGate = task.execution.reviewGate;
   if (task.execution.autoFixAttempts != null) execution.autoFixAttempts = task.execution.autoFixAttempts;
   if (task.execution.agentSessionId != null) execution.agentSessionId = task.execution.agentSessionId;
   if (task.execution.lastAgentSessionId != null) execution.lastAgentSessionId = task.execution.lastAgentSessionId;

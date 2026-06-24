@@ -98,7 +98,6 @@ export function createMockInvoker(
     selectExperiment: vi.fn(async () => {}),
     restartTask: vi.fn(async () => {}),
     editTaskCommand: vi.fn(async () => {}),
-    editTaskType: vi.fn(async () => {}),
     editTaskPool: vi.fn(async () => {}),
     editTaskAgent: vi.fn(async () => {}),
     setTaskExternalGatePolicies: vi.fn(async () => {}),
@@ -121,6 +120,8 @@ export function createMockInvoker(
           { id: 'claude', name: 'Claude', path: '/tmp/.claude/skills', available: true, installed: false, upToDate: false, installedSkillNames: [] },
           { id: 'cursor', name: 'Cursor', path: '/tmp/.cursor/skills-cursor', available: true, installed: false, upToDate: false, installedSkillNames: [] },
         ],
+        commandTargets: [],
+        mcpTargets: [],
       },
     })),
     getBundledSkillsStatus: vi.fn(async () => ({
@@ -133,6 +134,8 @@ export function createMockInvoker(
         { id: 'claude', name: 'Claude', path: '/tmp/.claude/skills', available: true, installed: false, upToDate: false, installedSkillNames: [] },
         { id: 'cursor', name: 'Cursor', path: '/tmp/.cursor/skills-cursor', available: true, installed: false, upToDate: false, installedSkillNames: [] },
       ],
+      commandTargets: [],
+      mcpTargets: [],
     })),
     installBundledSkills: vi.fn(async () => ({
       available: false,
@@ -144,6 +147,8 @@ export function createMockInvoker(
         { id: 'claude', name: 'Claude', path: '/tmp/.claude/skills', available: true, installed: false, upToDate: false, installedSkillNames: [] },
         { id: 'cursor', name: 'Cursor', path: '/tmp/.cursor/skills-cursor', available: true, installed: false, upToDate: false, installedSkillNames: [] },
       ],
+      commandTargets: [],
+      mcpTargets: [],
     })),
     replaceTask: vi.fn(async () => []),
     getActivityLogs: vi.fn(async () => []),
@@ -171,6 +176,7 @@ export function createMockInvoker(
     resumeWorkflow: vi.fn(async () => null),
     listWorkflows: vi.fn(async () => workflowSnapshot),
     loadWorkflow: vi.fn(async () => ({ workflow: {}, tasks: [] })),
+    getReviewGate: vi.fn(async () => null),
     deleteAllWorkflows: vi.fn(async () => {}),
     deleteAllWorkflowsBulk: vi.fn(async () => {}),
     deleteWorkflow: vi.fn(async () => {}),
@@ -212,13 +218,13 @@ export function createMockInvoker(
 
       // Fire created graph events for each task after subscribers attach.
       for (const task of tasks) {
-        graphEventCallback?.({ type: 'delta', delta: { type: 'created', task } });
+        graphEventCallback?.({ type: 'delta', delta: { type: 'created', task }, workflowRollups: [] });
       }
     });
   }
 
   function fireDelta(delta: TaskDelta) {
-    graphEventCallback?.({ type: 'delta', delta });
+    graphEventCallback?.({ type: 'delta', delta, workflowRollups: [] });
   }
   function fireGraphEvent(event: TaskGraphEvent) {
     graphEventCallback?.(event);

@@ -527,6 +527,7 @@ describe('TaskRunner', () => {
               workspacePath: '/tmp/mock-merge-wt',
             }),
           }),
+          expect.objectContaining({ selectedAttemptId: 'merge-attempt-1', generation: 7 }),
         );
         expect(autoStartExternallyUnblockedReadyTasksMock).toHaveBeenCalled();
       } finally {
@@ -1203,6 +1204,142 @@ describe('TaskRunner', () => {
         if (originalHome === undefined) delete process.env.HOME;
         else process.env.HOME = originalHome;
       }
+    });
+
+    it('publishReviewStackWithMakePrSkill uses preferred agent then falls back to another make-pr agent', async () => {
+      const tempHome = createTempWorkspace();
+      const originalHome = process.env.HOME;
+      process.env.HOME = tempHome;
+      mkdirSync(join(tempHome, '.claude', 'skills', 'invoker-make-pr'), { recursive: true });
+      writeFileSync(join(tempHome, '.claude', 'skills', 'invoker-make-pr', 'SKILL.md'), '# make-pr\n');
+      mkdirSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr'), { recursive: true });
+      writeFileSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr', 'SKILL.md'), '# make-pr\n');
+
+      try {
+        const attempts: string[] = [];
+        const claudeAgent = {
+          name: 'claude',
+          stdinMode: 'ignore',
+          bundledSkillRoot: join(tempHome, '.claude', 'skills'),
+          bundledSkills: ['make-pr'],
+          buildCommand: () => {
+            attempts.push('claude');
+            return { cmd: 'node', args: ['-e', 'process.stdout.write("not json")'], sessionId: 'sess-claude' };
+          },
+          buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+        };
+        const codexAgent = {
+          name: 'codex',
+          stdinMode: 'ignore',
+          bundledSkillRoot: join(tempHome, '.codex', 'skills'),
+          bundledSkills: ['make-pr'],
+          buildCommand: () => {
+            attempts.push('codex');
+            return {
+              cmd: 'node',
+              args: ['-e', 'process.stdout.write(JSON.stringify({artifacts:[{id:"contracts",title:"Contracts",url:"https://example.test/pr/1",providerId:"1",branch:"stack/contracts",baseBranch:"master"},{id:"runtime",title:"Runtime",url:"https://example.test/pr/2",providerId:"2",branch:"stack/runtime",baseBranch:"stack/contracts",dependsOn:["contracts"]}]}))'],
+              sessionId: 'sess-codex',
+            };
+          },
+          buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+        };
+        const executor = new TaskRunner({
+          orchestrator: {
+            getTask: () => null,
+            getAllTasks: () => [makeTask({ id: 't1', config: { workflowId: 'wf-1', executionAgent: 'claude' } })],
+          } as any,
+          persistence: {} as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          executionAgentRegistry: {
+            get: (name: string) => (name === 'claude' ? claudeAgent : name === 'codex' ? codexAgent : undefined),
+            getOrThrow: vi.fn(),
+            getSessionDriver: vi.fn().mockReturnValue(undefined),
+            listWithCapability: vi.fn().mockReturnValue([claudeAgent, codexAgent]),
+          } as any,
+          cwd: '/tmp',
+        });
+
+        const result = await (executor as any).publishReviewStackWithMakePrSkill({
+          workflowId: 'wf-1',
+          title: 'Stack',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          workflowSummary: 'summary',
+          cwd: '/tmp',
+        });
+
+        expect(attempts).toEqual(['claude', 'codex']);
+        expect(result.agentName).toBe('codex');
+        expect(result.artifacts[1].dependsOn).toEqual(['contracts']);
+      } finally {
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+      }
+    });
+
+    it('publishReviewStackWithMakePrSkill throws when make-pr agents cannot publish valid JSON', async () => {
+      const badAgent = {
+        name: 'claude',
+        stdinMode: 'ignore' as const,
+        bundledSkills: ['make-pr'],
+        buildCommand: () => ({ cmd: 'node', args: ['-e', 'process.stdout.write("not json")'], sessionId: 'bad' }),
+        buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+      };
+      const executor = new TaskRunner({
+        orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        executionAgentRegistry: {
+          get: vi.fn().mockReturnValue(badAgent),
+          getOrThrow: vi.fn(),
+          getSessionDriver: vi.fn().mockReturnValue(undefined),
+          listWithCapability: vi.fn().mockReturnValue([badAgent]),
+        } as any,
+        cwd: '/tmp',
+      });
+
+      await expect((executor as any).publishReviewStackWithMakePrSkill({
+        workflowId: 'wf-1',
+        title: 'Stack',
+        baseBranch: 'master',
+        featureBranch: 'plan/feature',
+        workflowSummary: 'summary',
+        cwd: '/tmp',
+      })).rejects.toThrow('make-pr skill is required to publish Invoker review stacks');
+    });
+    it('publishReviewStackWithMakePrSkill throws when make-pr agents publish a branched review stack', async () => {
+      const branchedAgent = {
+        name: 'claude',
+        stdinMode: 'ignore' as const,
+        bundledSkills: ['make-pr'],
+        buildCommand: () => ({
+          cmd: 'node',
+          args: ['-e', 'process.stdout.write(JSON.stringify({artifacts:[{id:"contracts",title:"Contracts",url:"https://example.test/pr/1",providerId:"1",branch:"stack/contracts",baseBranch:"master"},{id:"runtime",title:"Runtime",url:"https://example.test/pr/2",providerId:"2",branch:"stack/runtime",baseBranch:"stack/contracts",dependsOn:["contracts"]},{id:"ui",title:"UI",url:"https://example.test/pr/3",providerId:"3",branch:"stack/ui",baseBranch:"stack/runtime",dependsOn:["contracts"]}]}))'],
+          sessionId: 'branched',
+        }),
+        buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+      };
+      const executor = new TaskRunner({
+        orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        executionAgentRegistry: {
+          get: vi.fn().mockReturnValue(branchedAgent),
+          getOrThrow: vi.fn(),
+          getSessionDriver: vi.fn().mockReturnValue(undefined),
+          listWithCapability: vi.fn().mockReturnValue([branchedAgent]),
+        } as any,
+        cwd: '/tmp',
+      });
+
+      await expect((executor as any).publishReviewStackWithMakePrSkill({
+        workflowId: 'wf-1',
+        title: 'Stack',
+        baseBranch: 'master',
+        featureBranch: 'plan/feature',
+        workflowSummary: 'summary',
+        cwd: '/tmp',
+      })).rejects.toThrow('make-pr skill is required to publish Invoker review stacks');
     });
 
     it('authorPrBodyWithSkill falls back to canonical body when authored body is invalid and no other agents available', async () => {
@@ -2025,6 +2162,7 @@ describe('TaskRunner', () => {
       featureBranch?: string;
       gateWorkspacePath?: string | null;
       taskBranches?: TaskState[];
+      repoUrl?: string;
     }) {
       const mergeTaskId = '__merge__wf-pub';
       const workflowId = 'wf-pub';
@@ -2056,6 +2194,7 @@ describe('TaskRunner', () => {
           baseBranch: 'master',
           featureBranch: opts.featureBranch,
           name: 'Test Workflow',
+          repoUrl: opts.repoUrl,
         }),
         updateTask: vi.fn(),
         getWorkspacePath: () => opts.gateWorkspacePath ?? null,
@@ -2102,6 +2241,84 @@ describe('TaskRunner', () => {
       return { executor, mergeTask, orchestrator, persistence, mergeGateProvider, gitCalls };
     }
 
+
+    it('external_review on Invoker publishes a make-pr review stack instead of direct provider PR', async () => {
+      const contractsTask = makeTask({
+        id: 'contracts',
+        status: 'completed',
+        config: { workflowId: 'wf-pub' },
+        execution: { branch: 'invoker/contracts' },
+        description: 'Contracts',
+      });
+      const runtimeTask = makeTask({
+        id: 'runtime',
+        status: 'completed',
+        config: { workflowId: 'wf-pub' },
+        execution: { branch: 'invoker/runtime' },
+        description: 'Runtime',
+      });
+
+      const { executor, mergeTask, orchestrator, mergeGateProvider } = setupPublishAfterFix({
+        mergeMode: 'external_review',
+        featureBranch: 'plan/feature',
+        gateWorkspacePath: '/tmp/gate-clone',
+        taskBranches: [contractsTask, runtimeTask],
+        repoUrl: 'https://github.com/Neko-Catpital-Labs/Invoker.git',
+      });
+
+      (executor as any).publishReviewStackWithMakePrSkill = vi.fn().mockResolvedValue({
+        artifacts: [
+          {
+            id: 'contracts',
+            title: 'Define contracts',
+            url: 'https://github.com/Neko-Catpital-Labs/Invoker/pull/1',
+            providerId: '1',
+            branch: 'stack/contracts',
+            baseBranch: 'master',
+            required: true,
+            status: 'open',
+            generation: 0,
+          },
+          {
+            id: 'runtime',
+            title: 'Wire runtime',
+            url: 'https://github.com/Neko-Catpital-Labs/Invoker/pull/2',
+            providerId: '2',
+            branch: 'stack/runtime',
+            baseBranch: 'stack/contracts',
+            dependsOn: ['contracts'],
+            required: true,
+            status: 'open',
+            generation: 0,
+          },
+        ],
+        sessionId: 'sess-stack',
+        agentName: 'codex',
+      });
+
+      await executor.publishAfterFix(mergeTask);
+
+      expect((executor as any).publishReviewStackWithMakePrSkill).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'Test Workflow',
+        baseBranch: 'master',
+        featureBranch: 'plan/feature',
+        cwd: '/tmp/gate-clone',
+      }));
+      expect(mergeGateProvider.createReview).not.toHaveBeenCalled();
+      expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-pub', expect.objectContaining({
+        execution: expect.objectContaining({
+          reviewUrl: 'https://github.com/Neko-Catpital-Labs/Invoker/pull/1',
+          reviewId: '1',
+          reviewGate: expect.objectContaining({
+            activeGeneration: 0,
+            artifacts: [
+              expect.objectContaining({ id: 'contracts', generation: 0 }),
+              expect.objectContaining({ id: 'runtime', dependsOn: ['contracts'], generation: 0 }),
+            ],
+          }),
+        }),
+      }), expect.objectContaining({ generation: 0 }));
+    });
     it('external_review mode: detaches HEAD, fetches, consolidates, creates PR', async () => {
       const completedTask = makeTask({
         id: 't1',
@@ -2174,7 +2391,7 @@ describe('TaskRunner', () => {
           reviewId: 'owner/repo#99',
           reviewStatus: 'Awaiting review',
         }),
-      }));
+      }), expect.objectContaining({ generation: 0 }));
 
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
     });
@@ -2221,7 +2438,7 @@ describe('TaskRunner', () => {
       expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-pub', expect.objectContaining({
         config: expect.objectContaining({ runnerKind: 'worktree' }),
         execution: expect.objectContaining({ workspacePath: '/tmp/gate-clone' }),
-      }));
+      }), expect.objectContaining({ generation: 0 }));
 
       // No git merge operations should have been attempted
       const mergeOps = gitCalls.filter((c) => c.args[0] === 'merge');
@@ -3731,6 +3948,75 @@ describe('TaskRunner', () => {
       expect(onCompleteCb).toHaveBeenCalledWith('task-err-2', expect.objectContaining({ status: 'completed' }));
       // handleWorkerResponse called 3 times: 1st (throws), 2nd (catch re-submit for task-1), 3rd (task-2 normal)
       expect(handleWorkerResponse).toHaveBeenCalledTimes(3);
+    });
+
+    it('does not submit fallback failure when completion becomes stale after handler error', async () => {
+      let currentTask = makeTask({
+        id: 'task-stale-completion',
+        status: 'running',
+        config: { command: 'echo hi' },
+        execution: { selectedAttemptId: 'attempt-old', generation: 1 },
+      });
+      const handleWorkerResponse = vi.fn(() => {
+        currentTask = makeTask({
+          id: 'task-stale-completion',
+          status: 'running',
+          config: { command: 'echo hi' },
+          execution: { selectedAttemptId: 'attempt-new', generation: 2 },
+        });
+        throw new Error('stale handler failure');
+      });
+      const onCompleteCb = vi.fn();
+
+      const completeCallbacks = new Map<string, (response: WorkResponse) => void>();
+      const manualExecutor = {
+        type: 'worktree',
+        start: vi.fn(async (request: any) => ({
+          executionId: `exec-${request.actionId}`,
+          taskId: request.actionId,
+          workspacePath: '/tmp/mock-worktree',
+          branch: `invoker/${request.actionId}`,
+        })),
+        onComplete: vi.fn((handle: any, cb: any) => {
+          completeCallbacks.set(handle.taskId, cb);
+        }),
+        onOutput: vi.fn(),
+        onHeartbeat: vi.fn(),
+        kill: vi.fn(),
+      };
+
+      const runner = new TaskRunner({
+        orchestrator: {
+          getTask: () => currentTask,
+          handleWorkerResponse,
+          getAllTasks: () => [currentTask],
+        } as any,
+        persistence: { updateTask: vi.fn() } as any,
+        executorRegistry: {
+          getDefault: () => manualExecutor,
+          get: () => manualExecutor,
+          getAll: () => [manualExecutor],
+        } as any,
+        cwd: '/tmp',
+        callbacks: { onComplete: onCompleteCb },
+      });
+
+      const done = runner.executeTask(currentTask);
+      await flush();
+
+      completeCallbacks.get('task-stale-completion')!({
+        requestId: 'r1',
+        actionId: 'task-stale-completion',
+        attemptId: 'attempt-old',
+        executionGeneration: 1,
+        status: 'completed',
+        outputs: { exitCode: 0 },
+      });
+
+      await done;
+
+      expect(handleWorkerResponse).toHaveBeenCalledTimes(1);
+      expect(onCompleteCb).not.toHaveBeenCalled();
     });
   });
 

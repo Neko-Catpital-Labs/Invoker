@@ -9,6 +9,7 @@ export interface HeadlessCommandDefinition {
 export const HEADLESS_SET_SUBCOMMANDS = [
   'command',
   'prompt',
+  'pool',
   'executor',
   'agent',
   'merge-mode',
@@ -18,6 +19,10 @@ export const HEADLESS_SET_SUBCOMMANDS = [
   'workflow',
   'task',
 ] as const;
+
+export function formatHeadlessSetSubcommands(separator: string): string {
+  return HEADLESS_SET_SUBCOMMANDS.join(separator);
+}
 
 export const HEADLESS_COMMANDS = [
   { name: 'owner-serve', kind: 'special' },
@@ -51,6 +56,7 @@ export const HEADLESS_COMMANDS = [
   { name: 'open-terminal', kind: 'read' },
   { name: 'slack', kind: 'read' },
   { name: 'query-select', kind: 'read' },
+  { name: 'worker', kind: 'read' },
   { name: 'list', kind: 'read' },
   { name: 'status', kind: 'read' },
   { name: 'task-status', kind: 'read' },

@@ -13,7 +13,6 @@ class InMemoryPersistence implements OrchestratorPersistence {
   workflows = new Map<string, {
     id: string;
     name: string;
-    status: string;
     createdAt: string;
     updatedAt: string;
     repoUrl?: string;
@@ -31,7 +30,6 @@ class InMemoryPersistence implements OrchestratorPersistence {
   saveWorkflow(workflow: {
     id: string;
     name: string;
-    status: string;
     repoUrl?: string;
     baseBranch?: string;
     featureBranch?: string;
@@ -42,9 +40,8 @@ class InMemoryPersistence implements OrchestratorPersistence {
     const now = new Date().toISOString();
     this.workflows.set(workflow.id, {
       ...workflow,
-      // Synthesize a placeholder repoUrl so SSH-validation tests
-      // (Step 5 `editTaskType` → ssh) keep passing without each
-      // plan having to spell out a remote URL.
+      // Synthesize a placeholder repoUrl so tests with SSH-routed
+      // plans do not need to spell out a remote URL.
       repoUrl: workflow.repoUrl ?? 'memory://test-repo',
       baseBranch: workflow.baseBranch,
       featureBranch: workflow.featureBranch,
@@ -56,7 +53,6 @@ class InMemoryPersistence implements OrchestratorPersistence {
   updateWorkflow(
     workflowId: string,
     changes: {
-      status?: string;
       updatedAt?: string;
       baseBranch?: string;
       mergeMode?: 'manual' | 'automatic' | 'external_review';
@@ -66,9 +62,6 @@ class InMemoryPersistence implements OrchestratorPersistence {
   ): void {
     const wf = this.workflows.get(workflowId);
     this.updateWorkflowCalls.set(workflowId, (this.updateWorkflowCalls.get(workflowId) ?? 0) + 1);
-    if (wf && changes.status) {
-      wf.status = changes.status;
-    }
     if (wf && changes.updatedAt) {
       wf.updatedAt = changes.updatedAt;
     }
@@ -168,12 +161,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
       workflowTasks.push(task);
       tasksByWorkflowId.set(workflowId, workflowTasks);
     }
-    const workflows = Array.from(this.workflows.values()).map((workflow) => {
-      const tasks = tasksByWorkflowId.get(workflow.id) ?? [];
-      if (tasks.length === 0) return workflow;
-      const rollup = computeWorkflowRollup(tasks);
-      return { ...workflow, status: rollup.status, rollup };
-    });
+    const workflows = Array.from(this.workflows.values()).map((workflow) => this.withDerivedStatus(workflow, tasksByWorkflowId.get(workflow.id) ?? []));
     return {
       workflows,
       tasks: Array.from(this.tasks.values()).map((entry) => entry.task),
@@ -181,9 +169,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
     };
   }
 
-  private withDerivedStatus<T extends { id: string; status: string }>(workflow: T): T {
-    const tasks = this.loadTasks(workflow.id);
-    if (tasks.length === 0) return workflow;
+  private withDerivedStatus<T extends { id: string }>(workflow: T, tasks = this.loadTasks(workflow.id)): T & { status: string } {
     const rollup = computeWorkflowRollup(tasks);
     return { ...workflow, status: rollup.status, rollup };
   }
@@ -433,6 +419,167 @@ describe('Orchestrator', () => {
       expect(task.execution.reviewId).toBe('owner/repo#1');
       expect(task.execution.reviewStatus).toBe('Awaiting review');
     });
+
+
+    it('ignores setTaskReviewReady for a stale execution generation', () => {
+      orchestrator.loadPlan({
+        name: 'Review ready lineage',
+        tasks: [{ id: 'task-a', description: 'task A' }],
+      });
+
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+      const mergeId = `__merge__${workflowId}`;
+      persistence.updateTask(mergeId, {
+        status: 'running',
+        execution: { generation: 2, selectedAttemptId: 'attempt-current' },
+      });
+
+      orchestrator.setTaskReviewReady(
+        mergeId,
+        { execution: { reviewId: 'owner/repo#stale', reviewUrl: 'https://example.test/stale' } },
+        { taskId: mergeId, selectedAttemptId: 'attempt-current', generation: 1 },
+      );
+
+      const task = orchestrator.getTask(mergeId)!;
+      expect(task.status).toBe('running');
+      expect(task.execution.reviewId).toBeUndefined();
+      expect(task.execution.reviewUrl).toBeUndefined();
+    });
+
+    it('ignores setTaskReviewReady for a non-executable task with matching lineage', () => {
+      orchestrator.loadPlan({
+        name: 'Review ready non-executable',
+        tasks: [{ id: 'task-a', description: 'task A' }],
+      });
+
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+      const mergeId = `__merge__${workflowId}`;
+      // Task failed on the same attempt: lineage (attempt + generation) is
+      // preserved, so the lineage guard alone would let a late review-ready
+      // write resurrect it.
+      persistence.updateTask(mergeId, {
+        status: 'failed',
+        execution: { generation: 1, selectedAttemptId: 'attempt-current' },
+      });
+
+      orchestrator.setTaskReviewReady(
+        mergeId,
+        { execution: { reviewId: 'owner/repo#late', reviewUrl: 'https://example.test/late' } },
+        { taskId: mergeId, selectedAttemptId: 'attempt-current', generation: 1 },
+      );
+
+      const task = orchestrator.getTask(mergeId)!;
+      expect(task.status).toBe('failed');
+      expect(task.execution.reviewId).toBeUndefined();
+      expect(task.execution.reviewUrl).toBeUndefined();
+    });
+
+    it('discards review gate artifacts and clears scalar review fields on retry', () => {
+      orchestrator.loadPlan({
+        name: 'Review discard retry',
+        mergeMode: 'external_review',
+        tasks: [{ id: 'task-a', description: 'task A' }],
+      });
+
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+      const mergeId = `__merge__${workflowId}`;
+      persistence.updateTask(mergeId, {
+        status: 'review_ready',
+        execution: {
+          generation: 3,
+          reviewId: 'owner/repo#1',
+          reviewUrl: 'https://github.com/owner/repo/pull/1',
+          reviewStatus: 'open',
+          reviewProviderId: 'owner/repo#1',
+          reviewGate: {
+            activeGeneration: 3,
+            completion: { required: 'all', status: 'approved' },
+            artifacts: [
+              {
+                id: 'contracts',
+                providerId: 'owner/repo#1',
+                url: 'https://github.com/owner/repo/pull/1',
+                required: true,
+                status: 'approved',
+                generation: 3,
+              },
+              {
+                id: 'runtime',
+                providerId: 'owner/repo#2',
+                url: 'https://github.com/owner/repo/pull/2',
+                required: true,
+                status: 'open',
+                generation: 3,
+                dependsOn: ['contracts'],
+              },
+            ],
+          },
+        },
+      });
+
+      orchestrator.retryTask(mergeId);
+
+      const task = orchestrator.getTask(mergeId)!;
+      expect(task.execution.reviewId).toBeUndefined();
+      expect(task.execution.reviewUrl).toBeUndefined();
+      expect(task.execution.reviewStatus).toBeUndefined();
+      expect(task.execution.reviewProviderId).toBeUndefined();
+      expect(task.execution.reviewGate?.activeGeneration).toBe(4);
+      expect(task.execution.reviewGate?.artifacts).toHaveLength(2);
+      expect(task.execution.reviewGate?.artifacts.every((artifact) => artifact.status === 'discarded')).toBe(true);
+      expect(task.execution.reviewGate?.artifacts.every((artifact) => artifact.discardReason === 'task subgraph reset to pending')).toBe(true);
+      const currentRequired = task.execution.reviewGate!.artifacts.filter((artifact) =>
+        artifact.required
+        && artifact.generation === task.execution.reviewGate!.activeGeneration
+        && artifact.status !== 'discarded'
+      );
+      expect(currentRequired).toEqual([]);
+    });
+
+    it('synthesizes a discarded artifact from scalar review fields on recreate', () => {
+      orchestrator.loadPlan({
+        name: 'Review discard recreate',
+        mergeMode: 'external_review',
+        tasks: [{ id: 'task-a', description: 'task A' }],
+      });
+
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+      const mergeId = `__merge__${workflowId}`;
+      persistence.updateTask(mergeId, {
+        status: 'review_ready',
+        execution: {
+          generation: 5,
+          reviewId: 'owner/repo#scalar',
+          reviewUrl: 'https://github.com/owner/repo/pull/9',
+          reviewStatus: 'open',
+          reviewProviderId: 'owner/repo#scalar',
+        },
+      });
+
+      orchestrator.recreateWorkflow(workflowId);
+
+      const task = orchestrator.getTask(mergeId)!;
+      expect(task.execution.reviewId).toBeUndefined();
+      expect(task.execution.reviewUrl).toBeUndefined();
+      expect(task.execution.reviewStatus).toBeUndefined();
+      expect(task.execution.reviewProviderId).toBeUndefined();
+      expect(task.execution.reviewGate).toMatchObject({
+        activeGeneration: 6,
+        completion: { required: 'all', status: 'approved' },
+        artifacts: [
+          {
+            id: 'owner/repo#scalar',
+            providerId: 'owner/repo#scalar',
+            url: 'https://github.com/owner/repo/pull/9',
+            required: true,
+            status: 'discarded',
+            generation: 5,
+            discardReason: 'workflow recreation reset',
+          },
+        ],
+      });
+      expect(task.execution.reviewGate?.artifacts[0].discardedAt).toEqual(expect.any(String));
+    });
   });
 
   describe('workflow status transitions during retry paths', () => {
@@ -487,7 +634,6 @@ describe('Orchestrator', () => {
         makeResponse({ actionId: taskId, status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
       );
 
-      persistence.workflows.get(workflowId)!.status = 'failed';
 
       const restarted = orchestrator.retryTask(taskId);
 
@@ -515,7 +661,6 @@ describe('Orchestrator', () => {
         makeResponse({ actionId: taskId, status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
       );
 
-      persistence.workflows.get(workflowId)!.status = 'failed';
 
       const restarted = orchestrator.recreateWorkflow(workflowId);
 
@@ -702,6 +847,62 @@ describe('Orchestrator', () => {
             taskId,
             responseAttemptId: oldAttemptId,
             activeAttemptId: currentAttemptId,
+            workerResponseStatus: 'completed',
+          }),
+        );
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('rejects a completion signal when the current attemptId carries a stale executionGeneration', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        orchestrator.loadPlan({
+          name: 'reject-stale-generation-with-current-attempt',
+          onFinish: 'none',
+          tasks: [
+            { id: 'A', description: 'Root', command: 'echo A' },
+          ],
+        });
+        orchestrator.startExecution();
+        const taskId = orchestrator.getAllTasks().find((task) => task.id === 'A' || task.id.endsWith('/A'))?.id ?? 'A';
+
+        // recreateWorkflow bumps the live generation to 1 and selects a fresh
+        // attempt. The stale worker still carries the *current* attempt id but
+        // the *previous* generation (0).
+        const workflowId = orchestrator.getWorkflowIds()[0]!;
+        orchestrator.recreateWorkflow(workflowId);
+
+        const before = orchestrator.getTask(taskId)!;
+        const currentAttemptId = before.execution.selectedAttemptId;
+        expect(currentAttemptId).toBeTruthy();
+        expect(before.execution.generation).toBe(1);
+        expect(before.status).toBe('running');
+        const beforeBranch = before.execution.branch;
+        const beforeWorkspacePath = before.execution.workspacePath;
+
+        orchestrator.handleWorkerResponse(
+          makeResponse({
+            actionId: taskId,
+            attemptId: currentAttemptId,
+            executionGeneration: 0,
+            status: 'completed',
+            outputs: { exitCode: 0, branch: 'stale-branch' },
+          }),
+        );
+
+        const after = orchestrator.getTask(taskId)!;
+        expect(after.status).toBe('running');
+        expect(after.execution.selectedAttemptId).toBe(currentAttemptId);
+        expect(after.execution.branch).toBe(beforeBranch);
+        expect(after.execution.workspacePath).toBe(beforeWorkspacePath);
+        expect(warnSpy).toHaveBeenCalledWith(
+          '[worker-response] STALE_GENERATION_REJECTED',
+          expect.objectContaining({
+            taskId,
+            responseGeneration: 0,
+            activeGeneration: 1,
             workerResponseStatus: 'completed',
           }),
         );
@@ -3891,224 +4092,7 @@ describe('Orchestrator', () => {
     });
   });
 
-  describe('editTaskType', () => {
-    it('changes runnerKind and restarts the task', () => {
-      orchestrator.loadPlan({
-        name: 'edit-type-test',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello' , dockerImage: 'node:20' }],
-      });
-      orchestrator.startExecution();
-
-      orchestrator.handleWorkerResponse(
-        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
-      );
-      expect(orchestrator.getTask('t1')?.config.runnerKind).toBe('docker');
-
-      const started = orchestrator.editTaskType('t1', 'worktree');
-      const task = orchestrator.getTask('t1');
-      expect(task?.config.runnerKind).toBe('worktree');
-      expect(task?.status).toBe('running');
-      expect(started).toHaveLength(1);
-    });
-
-    it('does not fork dirty subtree and invalidates downstream dependents', () => {
-      orchestrator.loadPlan({
-        name: 'edit-type-no-fork',
-        tasks: [
-          { id: 'parent', description: 'Parent', command: 'echo parent' , dockerImage: 'node:20' },
-          { id: 'child', description: 'Child', command: 'echo child', dependencies: ['parent'] },
-        ],
-      });
-      orchestrator.startExecution();
-
-      orchestrator.handleWorkerResponse(
-        makeResponse({ actionId: 'parent', status: 'completed', outputs: { exitCode: 0 } }),
-      );
-      orchestrator.handleWorkerResponse(
-        makeResponse({ actionId: 'child', status: 'completed', outputs: { exitCode: 0 } }),
-      );
-
-      const taskCountBefore = orchestrator.getAllTasks().length;
-      orchestrator.editTaskType('parent', 'worktree');
-      const taskCountAfter = orchestrator.getAllTasks().length;
-
-      expect(taskCountAfter).toBe(taskCountBefore);
-      expect(orchestrator.getTask('child')?.status).toBe('pending');
-    });
-
-    it('editing an ACTIVE (running) task does NOT throw and cancels first, then restarts (retry-class)', () => {
-      orchestrator.loadPlan({
-        name: 'edit-type-running',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100' , dockerImage: 'node:20' }],
-      });
-      orchestrator.startExecution();
-      const taskId = sid(orchestrator, 0, 't1');
-      expect(orchestrator.getTask(taskId)?.status).toBe('running');
-
-      const cancelSpy = vi.spyOn(orchestrator, 'cancelTask');
-      const retrySpy = vi.spyOn(orchestrator, 'retryTask');
-      const recreateSpy = vi.spyOn(orchestrator, 'recreateTask');
-
-      const started = orchestrator.editTaskType(taskId, 'worktree');
-
-      expect(cancelSpy).toHaveBeenCalledWith(taskId);
-      expect(retrySpy).toHaveBeenCalledWith(taskId);
-      expect(cancelSpy.mock.invocationCallOrder[0]).toBeLessThan(
-        retrySpy.mock.invocationCallOrder[0],
-      );
-      expect(recreateSpy).not.toHaveBeenCalled();
-
-      const task = orchestrator.getTask(taskId);
-      expect(task?.config.runnerKind).toBe('worktree');
-      // Single-task plan with no deps → restart auto-starts the task.
-      expect(task?.status).toBe('running');
-      expect(started).toHaveLength(1);
-      expect(started[0].id).toBe(taskId);
-
-      cancelSpy.mockRestore();
-      retrySpy.mockRestore();
-      recreateSpy.mockRestore();
-    });
-
-    it('editing an INACTIVE (failed) task skips cancel but still routes through retryTask', () => {
-      orchestrator.loadPlan({
-        name: 'edit-type-inactive-test',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo old' , dockerImage: 'node:20' }],
-      });
-      orchestrator.startExecution();
-      orchestrator.handleWorkerResponse(
-        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
-      );
-      const taskId = sid(orchestrator, 0, 't1');
-      expect(orchestrator.getTask(taskId)?.status).toBe('failed');
-
-      const cancelSpy = vi.spyOn(orchestrator, 'cancelTask');
-      const retrySpy = vi.spyOn(orchestrator, 'retryTask');
-
-      orchestrator.editTaskType(taskId, 'worktree');
-
-      // Inactive → no cancel needed; retryTask still resets volatile
-      // attempt state and bumps generation.
-      expect(cancelSpy).not.toHaveBeenCalled();
-      expect(retrySpy).toHaveBeenCalledWith(taskId);
-
-      cancelSpy.mockRestore();
-      retrySpy.mockRestore();
-    });
-
-    it('preserves valid lineage (branch / workspacePath) — retry-class does NOT discard substrate lineage', () => {
-      orchestrator.loadPlan({
-        name: 'edit-type-lineage-test',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo old' , dockerImage: 'node:20' }],
-      });
-      orchestrator.startExecution();
-      const taskId = sid(orchestrator, 0, 't1');
-
-      persistence.updateTask(taskId, {
-        execution: {
-          branch: 'experiment/preserved-branch',
-          commit: 'cafef00d',
-          workspacePath: '/tmp/preserved-workspace',
-          agentSessionId: 'sess-stale',
-          containerId: 'container-stale',
-          error: 'previous error',
-          exitCode: 1,
-          completedAt: new Date(),
-          startedAt: new Date(),
-        },
-      });
-      orchestrator.syncFromDb(taskId.split('/')[0]!);
-
-      orchestrator.editTaskType(taskId, 'worktree');
-
-      const task = orchestrator.getTask(taskId)!;
-      // ── Preserved (chart says substrate-only change keeps these) ──
-      expect(task.execution.branch).toBe('experiment/preserved-branch');
-      expect(task.execution.workspacePath).toBe('/tmp/preserved-workspace');
-      // ── Cleared (volatile attempt state per retryTask reset shape) ──
-      expect(task.execution.agentSessionId).toBeUndefined();
-      expect(task.execution.containerId).toBeUndefined();
-      expect(task.execution.error).toBeUndefined();
-      expect(task.execution.exitCode).toBeUndefined();
-    });
-
-    it('bumps execution generation by exactly one per runner-kind edit', () => {
-      orchestrator.loadPlan({
-        name: 'edit-type-gen-test',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo old' , dockerImage: 'node:20' }],
-      });
-      orchestrator.startExecution();
-      orchestrator.handleWorkerResponse(
-        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'x' } }),
-      );
-      const taskId = sid(orchestrator, 0, 't1');
-
-      const before = orchestrator.getTask(taskId)!.execution.generation ?? 0;
-
-      orchestrator.editTaskType(taskId, 'worktree');
-
-      const after = orchestrator.getTask(taskId)!.execution.generation ?? 0;
-      expect(after).toBe(before + 1);
-    });
-
-    it('persists the updated runnerKind', () => {
-      orchestrator.loadPlan({
-        name: 'edit-type-persist',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo old' , dockerImage: 'node:20' }],
-      });
-      orchestrator.startExecution();
-
-      orchestrator.handleWorkerResponse(
-        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'oops' } }),
-      );
-
-      orchestrator.editTaskType('t1', 'worktree');
-
-      const persisted = persistence.getTaskEntry('t1');
-      expect(persisted).toBeDefined();
-      expect(persisted?.task.config.runnerKind).toBe('worktree');
-    });
-
-    it('persists poolMemberId when switching to ssh', () => {
-      orchestrator.loadPlan({
-        name: 'edit-type-ssh',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello' }],
-      });
-      orchestrator.startExecution();
-
-      orchestrator.handleWorkerResponse(
-        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
-      );
-
-      orchestrator.editTaskType('t1', 'ssh', 'remote_digital_ocean');
-
-      const task = orchestrator.getTask('t1');
-      expect(task?.config.runnerKind).toBe('ssh');
-      expect(task?.config.poolMemberId).toBe('remote_digital_ocean');
-
-      const persisted = persistence.getTaskEntry('t1');
-      expect(persisted?.task.config.runnerKind).toBe('ssh');
-      expect(persisted?.task.config.poolMemberId).toBe('remote_digital_ocean');
-    });
-
-    it('clears poolMemberId when switching away from ssh', () => {
-      orchestrator.loadPlan({
-        name: 'edit-type-clear-remote',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', poolId: 'ssh-light' }],
-      });
-      orchestrator.startExecution();
-
-      orchestrator.handleWorkerResponse(
-        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
-      );
-
-      orchestrator.editTaskType('t1', 'worktree');
-
-      const task = orchestrator.getTask('t1');
-      expect(task?.config.runnerKind).toBe('worktree');
-      expect(task?.config.poolMemberId).toBeUndefined();
-    });
-
+  describe('editTaskPool', () => {
     it('edits poolId and clears legacy runner placement fields', () => {
       orchestrator = new Orchestrator({
         persistence,
@@ -4169,7 +4153,7 @@ describe('Orchestrator', () => {
       expect(() => orchestrator.editTaskPool(mergeTask.id, 'mixed-local-ssh')).toThrow('Cannot change executor pool');
     });
 
-    it('cancels active work before recreating for a pool edit', () => {
+    it('cancels active work before retrying for a pool edit', () => {
       orchestrator = new Orchestrator({
         persistence,
         messageBus: bus,
@@ -4190,225 +4174,6 @@ describe('Orchestrator', () => {
       expect(task.status).toBe('running');
       expect(task.config.poolId).toBe('mixed-local-ssh');
       expect(task.execution.generation).toBeGreaterThan(before);
-    });
-
-    it('switching worktree → ssh (host change) is RECREATE-class — clears branch/commit/workspacePath', () => {
-      orchestrator.loadPlan({
-        name: 'edit-type-step6-worktree-to-ssh',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello' }],
-      });
-      orchestrator.startExecution();
-      const taskId = sid(orchestrator, 0, 't1');
-
-      persistence.updateTask(taskId, {
-        execution: {
-          branch: 'experiment/preserved-branch',
-          commit: 'cafef00d',
-          workspacePath: '/tmp/preserved-workspace',
-          agentSessionId: 'sess-stale',
-          containerId: 'container-stale',
-          error: 'previous error',
-          exitCode: 1,
-          completedAt: new Date(),
-          startedAt: new Date(),
-        },
-      });
-      orchestrator.syncFromDb(taskId.split('/')[0]!);
-
-      orchestrator.editTaskType(taskId, 'ssh', 'remote_digital_ocean');
-
-      const task = orchestrator.getTask(taskId)!;
-      expect(task.config.runnerKind).toBe('ssh');
-      expect(task.config.poolMemberId).toBe('remote_digital_ocean');
-      // ── Recreate-class clears workspace lineage (chart Step 6) ──
-      expect(task.execution.branch).toBeUndefined();
-      expect(task.execution.commit).toBeUndefined();
-      expect(task.execution.workspacePath).toBeUndefined();
-      expect(task.execution.agentSessionId).toBeUndefined();
-      expect(task.execution.containerId).toBeUndefined();
-    });
-
-    it('switching ssh:A → ssh:B (different remote host) is RECREATE-class — clears branch/workspacePath', () => {
-      orchestrator.loadPlan({
-        name: 'edit-type-step6-ssh-to-ssh',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', poolId: 'ssh-light' }],
-      });
-      orchestrator.startExecution();
-      const taskId = sid(orchestrator, 0, 't1');
-
-      persistence.updateTask(taskId, {
-        execution: {
-          branch: 'experiment/preserved-branch',
-          commit: 'deadbeef',
-          workspacePath: '/remote/preserved-workspace',
-          agentSessionId: 'sess-stale',
-          containerId: 'container-stale',
-          startedAt: new Date(),
-        },
-      });
-      orchestrator.syncFromDb(taskId.split('/')[0]!);
-
-      orchestrator.editTaskType(taskId, 'ssh', 'remote_b');
-
-      const task = orchestrator.getTask(taskId)!;
-      expect(task.config.runnerKind).toBe('ssh');
-      expect(task.config.poolMemberId).toBe('remote_b');
-      // ssh:A → ssh:B is a host change — workspace lineage cleared.
-      expect(task.execution.branch).toBeUndefined();
-      expect(task.execution.commit).toBeUndefined();
-      expect(task.execution.workspacePath).toBeUndefined();
-      expect(task.execution.agentSessionId).toBeUndefined();
-      expect(task.execution.containerId).toBeUndefined();
-    });
-
-    it('switching ssh → worktree (host change) is RECREATE-class — clears workspace lineage', () => {
-      orchestrator.loadPlan({
-        name: 'edit-type-step6-ssh-to-worktree',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', poolId: 'ssh-light' }],
-      });
-      orchestrator.startExecution();
-      const taskId = sid(orchestrator, 0, 't1');
-
-      persistence.updateTask(taskId, {
-        execution: {
-          branch: 'experiment/preserved-branch',
-          workspacePath: '/remote/preserved-workspace',
-          startedAt: new Date(),
-        },
-      });
-      orchestrator.syncFromDb(taskId.split('/')[0]!);
-
-      orchestrator.editTaskType(taskId, 'worktree');
-
-      const task = orchestrator.getTask(taskId)!;
-      expect(task.config.runnerKind).toBe('worktree');
-      expect(task.config.poolMemberId).toBeUndefined();
-      expect(task.execution.branch).toBeUndefined();
-      expect(task.execution.workspacePath).toBeUndefined();
-    });
-
-    it('same-host ssh:A → ssh:A is RETRY-class — preserves branch/workspacePath (regression of Step 5)', () => {
-      orchestrator.loadPlan({
-        name: 'edit-type-step6-same-ssh',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', poolId: 'ssh-light' }],
-      });
-      orchestrator.startExecution();
-      const taskId = sid(orchestrator, 0, 't1');
-      // Seed the current host assignment through the API (plan YAML is pool-only).
-      orchestrator.editTaskType(taskId, 'ssh', 'remote_a');
-      // Persisted state must reflect the current ssh member before asserting
-      // same-host retry semantics on the next editTaskType call.
-      persistence.updateTask(taskId, {
-        config: { poolMemberId: 'remote_a' } as any,
-      });
-
-      persistence.updateTask(taskId, {
-        execution: {
-          branch: 'experiment/preserved-branch',
-          commit: 'cafef00d',
-          workspacePath: '/remote/preserved-workspace',
-          agentSessionId: 'sess-stale',
-          containerId: 'container-stale',
-          startedAt: new Date(),
-        },
-      });
-      orchestrator.syncFromDb(taskId.split('/')[0]!);
-
-      orchestrator.editTaskType(taskId, 'ssh', 'remote_a');
-
-      const task = orchestrator.getTask(taskId)!;
-      expect(task.config.runnerKind).toBe('ssh');
-      expect(task.config.poolMemberId).toBe('remote_a');
-      // Same host (ssh:A → ssh:A) — substrate-only retry-class
-      // preserves workspace lineage even though the call exercised the
-      // SSH path.
-      expect(task.execution.branch).toBe('experiment/preserved-branch');
-      expect(task.execution.workspacePath).toBe('/remote/preserved-workspace');
-      // ── Volatile attempt state still cleared by the retry reset ──
-      expect(task.execution.agentSessionId).toBeUndefined();
-      expect(task.execution.containerId).toBeUndefined();
-    });
-
-    it('routes through recreateTask with cancel-first ordering on a host change of an ACTIVE task', () => {
-      orchestrator.loadPlan({
-        name: 'edit-type-step6-active-host-change',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100' }],
-      });
-      orchestrator.startExecution();
-      const taskId = sid(orchestrator, 0, 't1');
-      expect(orchestrator.getTask(taskId)?.status).toBe('running');
-
-      const cancelSpy = vi.spyOn(orchestrator, 'cancelTask');
-      const recreateSpy = vi.spyOn(orchestrator, 'recreateTask');
-      const restartSpy = vi.spyOn(orchestrator, 'restartTask');
-
-      orchestrator.editTaskType(taskId, 'ssh', 'remote_digital_ocean');
-
-      expect(cancelSpy).toHaveBeenCalledWith(taskId);
-      expect(recreateSpy).toHaveBeenCalledWith(taskId);
-      expect(restartSpy).not.toHaveBeenCalled();
-      expect(cancelSpy.mock.invocationCallOrder[0]).toBeLessThan(
-        recreateSpy.mock.invocationCallOrder[0],
-      );
-
-      cancelSpy.mockRestore();
-      recreateSpy.mockRestore();
-      restartSpy.mockRestore();
-    });
-
-    it('editing remote-target on an ACTIVE task does NOT throw', () => {
-      orchestrator.loadPlan({
-        name: 'edit-type-step6-active-no-throw',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100', poolId: 'ssh-light' }],
-      });
-      orchestrator.startExecution();
-      const taskId = sid(orchestrator, 0, 't1');
-      expect(orchestrator.getTask(taskId)?.status).toBe('running');
-
-      expect(() =>
-        orchestrator.editTaskType(taskId, 'ssh', 'remote_b'),
-      ).not.toThrow();
-
-      const task = orchestrator.getTask(taskId);
-      expect(task?.config.poolMemberId).toBe('remote_b');
-    });
-
-    it('bumps execution generation by exactly one on a host-change recreate', () => {
-      orchestrator.loadPlan({
-        name: 'edit-type-step6-gen-recreate',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', poolId: 'ssh-light' }],
-      });
-      orchestrator.startExecution();
-      orchestrator.handleWorkerResponse(
-        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'x' } }),
-      );
-      const taskId = sid(orchestrator, 0, 't1');
-
-      const before = orchestrator.getTask(taskId)!.execution.generation ?? 0;
-
-      orchestrator.editTaskType(taskId, 'ssh', 'remote_b');
-
-      const after = orchestrator.getTask(taskId)!.execution.generation ?? 0;
-      expect(after).toBe(before + 1);
-    });
-
-    it('bumps execution generation by exactly one on a substrate-only retry (regression of Step 5)', () => {
-      orchestrator.loadPlan({
-        name: 'edit-type-step6-gen-retry',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello' , dockerImage: 'node:20' }],
-      });
-      orchestrator.startExecution();
-      orchestrator.handleWorkerResponse(
-        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'x' } }),
-      );
-      const taskId = sid(orchestrator, 0, 't1');
-
-      const before = orchestrator.getTask(taskId)!.execution.generation ?? 0;
-
-      orchestrator.editTaskType(taskId, 'worktree');
-
-      const after = orchestrator.getTask(taskId)!.execution.generation ?? 0;
-      expect(after).toBe(before + 1);
     });
   });
 
@@ -6520,7 +6285,7 @@ describe('Orchestrator', () => {
       const b = new InMemoryBus();
       const wfId = 'wf-retry-status-batch';
 
-      p.saveWorkflow({ id: wfId, name: wfId, status: 'failed' });
+      p.saveWorkflow({ id: wfId, name: wfId });
       p.saveTask(wfId, {
         id: 'root',
         description: 'root',
@@ -6945,7 +6710,6 @@ describe('Orchestrator', () => {
         p.saveWorkflow({
           id: wfId,
           name: 'wf',
-          status: 'running',
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         } as any);
@@ -8221,9 +7985,9 @@ describe('Orchestrator', () => {
   // no-op detection, cancel-first interruption when the task is
   // actively running an AI fix (`fixing_with_ai`), the
   // `config.fixPrompt` / `config.fixContext` write, and the
-  // retry-class reset (via `restartTask`), in parity with Step 5/6
-  // (`editTaskType`), Step 7/8 (`selectExperiment` /
-  // `selectExperiments`), and Step 9 (`editTaskMergeMode`).
+  // retry-class reset (via `restartTask`), in parity with
+  // Step 7/8 (`selectExperiment` / `selectExperiments`) and Step 9
+  // (`editTaskMergeMode`).
   //
   // The hard invariants pinned below are:
   //   - same-content edits are no-ops (no cancel, no generation

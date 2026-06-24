@@ -11,6 +11,8 @@ description: >
 
 Use this skill when the work is already done and the user wants a PR created, updated, or rewritten.
 
+For stacked PRs, apply `skills/review-compression/SKILL.md` before you write titles or PR bodies. If one branch mixes more than one local review claim, split the stack first.
+
 ## What this skill covers
 
 - PR title/body authoring for Invoker
@@ -37,26 +39,52 @@ Put one idea in each paragraph. If one idea leads to another, split them into se
 
 Avoid implementation jargon unless it is necessary for understanding the change.
 
+## Review Claim
+
+State the one thing the reviewer is being asked to approve.
+
+## Review Lane
+
+Choose exactly one: `behavior`, `refactor`, `proof`, `cleanup`, `policy`, or `docs`.
+
+## Safety Invariant
+
+Explain why this slice is safe to review locally.
+
+## Slice Rationale
+
+Explain why this work is split here instead of bundled elsewhere.
+
+## Non-goals
+
+List what this slice explicitly does not change.
+
 ## Architecture
 
 Only include this section when the change modifies component interactions, control flow, state flow, or data flow.
 
-### Before
+Quote Mermaid labels when they contain prose, punctuation, or code-ish text. Safe:
 
 ```mermaid
-...
+graph TD
+    A["reviewGate.artifacts[] is pending"]
 ```
 
-### After
+Unsafe:
 
 ```mermaid
-...
+graph TD
+    A[reviewGate.artifacts[] is pending]
 ```
 
 ## Test Plan
 
 - [ ] exact command
 - [ ] exact command
+
+## Visual Proof
+
+Required when the diff changes UI-impacting files. Include before/after screenshots or a video link.
 
 ## Revert Plan
 
@@ -68,7 +96,9 @@ Only include this section when the change modifies component interactions, contr
 
 If the change is small and has no architectural impact, omit `## Architecture` rather than forcing filler.
 
-Do not default to a lightweight `## Summary / ## Testing / ## Notes` PR body. That shape is ad hoc drift, not the repo standard. Use `## Summary / ## Test Plan / ## Revert Plan` as the floor, and add `## Architecture` when the change affects component interactions or data/control flow.
+If the change touches UI-impacting files, use `skills/visual-proof/SKILL.md` first and include its screenshot/video markdown in `## Visual Proof`. UI-impacting files include `packages/ui/**`, Electron window lifecycle files, preload, main process window wiring, and app menu changes.
+
+Do not default to a lightweight `## Summary / ## Testing / ## Notes` PR body. That shape is ad hoc drift, not the repo standard. Use `## Summary / ## Review Claim / ## Review Lane / ## Safety Invariant / ## Slice Rationale / ## Non-goals / ## Test Plan / ## Revert Plan` as the floor, add `## Visual Proof` for UI-impacting diffs, and add `## Architecture` when the change affects component interactions or data/control flow.
 
 ## Command surface
 
@@ -97,7 +127,9 @@ Update an existing PR with:
 node scripts/create-pr.mjs --title "<title>" --base master --body-file /tmp/my-pr.md --update <pr-number>
 ```
 
-This script handles local image path upload/injection when configured.
+For Mergify-managed stack PRs, this update path is REQUIRED after `mergify stack push`. Do not use `gh pr edit` for stack PR body/title updates, because it bypasses the changed-file scope checks in `create-pr.mjs`.
+
+This script handles local image path upload/injection when configured. It also rejects UI-impacting diffs unless the body includes visual proof media.
 
 ## Upstream-first workflow
 
@@ -118,7 +150,7 @@ If the target repo is Invoker itself (`EdbertChan/Invoker` or `Neko-Catpital-Lab
 
 - use the preferred PR schema above
 - keep stack publication explicit
-- when the branch stack is ready, publish or update it with:
+- Invoker-on-Invoker review stacks should publish through the repo-local make-pr workflow, then use:
 
 ```bash
 mergify stack push
@@ -126,17 +158,32 @@ mergify stack push
 
 Do not generalize this to unrelated repos.
 
-## Validation
+## Stack repair after review
 
-Before creating a PR:
+If review says one published stack slice is still too broad:
+
+1. Re-run `skills/review-compression/SKILL.md`.
+2. If one published slice must split, keep the shared idea and create lettered replacement titles such as `(4a)` and `(4b)`.
+3. Run `mergify stack push`.
+4. Switch to each generated stack branch.
+5. Get the real base branch with `gh pr view --json baseRefName --jq .baseRefName`.
+6. Update each PR with `node scripts/create-pr.mjs --title "..." --base <actual-base-branch> --body-file <file> --update-existing`.
+
+Manual `gh pr edit` is a last-resort escape hatch only when `create-pr` itself is broken. The normal path is `create-pr --update-existing`.
+
+
+## Validation
 
 - ensure the branch is pushed
 - ensure the body sections are present and concrete
 - ensure test commands are real commands that were actually run when possible
 - ensure revert guidance is honest
 - validate the body with `node scripts/validate-pr-body.mjs --body-file <file>`
+- for stacked PRs, update title/body through `node scripts/create-pr.mjs --update-existing ...`, not `gh pr edit`
+- for UI-impacting diffs, include `## Visual Proof` with screenshot or video proof before `node scripts/create-pr.mjs`
 
 If you include `## Architecture`, keep the diagrams renderable by GitHub Mermaid.
+Always quote labels that contain prose, punctuation, or code-ish text such as `reviewGate.artifacts[]`.
 Reference:
 
 - `scripts/test-pr-diagrams.sh`

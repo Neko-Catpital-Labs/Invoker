@@ -1,5 +1,41 @@
 import type { App } from 'electron';
 
+export type GuiOwnerPreference = 'auto' | 'daemon' | 'gui';
+
+export function resolveGuiOwnerPreference(env: NodeJS.ProcessEnv = process.env): GuiOwnerPreference {
+  const raw = (env.INVOKER_GUI_OWNER_MODE ?? '').trim().toLowerCase();
+  if (raw === 'daemon' || raw === 'client' || raw === 'follower') return 'daemon';
+  if (raw === 'auto') return 'auto';
+  if (raw === 'gui' || raw === 'owner' || raw === 'local') return 'gui';
+  if (env.INVOKER_GUI_DAEMON_OWNER === '1') return 'daemon';
+  return 'auto';
+}
+
+export function shouldRefreshGuiOwnerRoute(
+  preference: GuiOwnerPreference,
+  isUsingDaemonOwner: boolean,
+): boolean {
+  return preference === 'daemon' || (preference === 'auto' && isUsingDaemonOwner);
+}
+
+export function guiOwnerBootstrapTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const parsed = Number.parseInt(
+    env.INVOKER_GUI_OWNER_BOOTSTRAP_TIMEOUT_MS
+      ?? env.INVOKER_HEADLESS_OWNER_BOOTSTRAP_TIMEOUT_MS
+      ?? '60000',
+    10,
+  );
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 60000;
+}
+
+export function formatGuiOwnerBootstrapFallbackMessage(message: string): string {
+  return [
+    `Daemon owner startup failed: ${message}`,
+    'Falling back to local GUI owner mode.',
+    'Set INVOKER_GUI_OWNER_MODE=daemon to retry daemon/client mode, or INVOKER_GUI_OWNER_MODE=gui to force local ownership.',
+  ].join('\n');
+}
+
 export interface EarlyElectronAppOptions {
   app: Pick<App, 'disableHardwareAcceleration' | 'commandLine' | 'name'> & Partial<Pick<App, 'setActivationPolicy' | 'dock'>>;
   platform?: NodeJS.Platform;
@@ -47,10 +83,16 @@ export function runElectronReadyBootstrap(options: ElectronReadyBootstrapOptions
   options.app.whenReady().then(options.run).catch(options.onError);
 }
 
+export interface GuiModeLock {
+  release: () => void;
+}
+
 export interface GuiModeBootstrapOptions {
   app: Pick<App, 'requestSingleInstanceLock' | 'quit'>;
   isTest: boolean;
   setupGuiMode: () => void;
+  acquireGuiLock?: () => GuiModeLock | null;
+  notifyGuiAlreadyRunning?: () => void;
 }
 
 export function startGuiModeBootstrap(options: GuiModeBootstrapOptions): void {
@@ -61,11 +103,23 @@ export function startGuiModeBootstrap(options: GuiModeBootstrapOptions): void {
 
   const gotTheLock = options.app.requestSingleInstanceLock();
   if (!gotTheLock) {
+    options.notifyGuiAlreadyRunning?.();
+    options.app.quit();
+    return;
+  }
+  const guiLock = options.acquireGuiLock?.();
+  if (guiLock === null) {
+    options.notifyGuiAlreadyRunning?.();
     options.app.quit();
     return;
   }
 
-  options.setupGuiMode();
+  try {
+    options.setupGuiMode();
+  } catch (err) {
+    guiLock?.release();
+    throw err;
+  }
 }
 
 export interface MainProcessBootstrapOptions {

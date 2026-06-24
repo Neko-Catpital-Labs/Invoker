@@ -18,6 +18,7 @@ import type {
 } from '@invoker/workflow-graph';
 
 export type { WorkflowDerivedStatus, WorkflowRollup } from '@invoker/workflow-graph';
+import type { ReviewGateQueryResponse } from './types.js';
 
 // ── Types used by IPC channels ──────────────────────────────
 // These were previously in packages/app/src/types.ts.
@@ -47,10 +48,17 @@ export interface WorkflowMeta {
   createdAt?: string;
   updatedAt?: string;
 }
+export interface WorkflowRollupPatch {
+  workflowId: string;
+  status: WorkflowDerivedStatus;
+  rollup: WorkflowRollup;
+}
+
 export type TaskGraphEvent =
   | {
       type: 'delta';
       delta: TaskDelta;
+      workflowRollups: WorkflowRollupPatch[];
     }
   | {
       type: 'snapshot';
@@ -246,6 +254,26 @@ export interface BundledSkillTargetStatus {
   installedSkillNames: string[];
 }
 
+export interface HarnessConfigState {
+  id: string;
+  name: string;
+  path: string;
+  available: boolean;
+  installed: boolean;
+  upToDate: boolean;
+  installedCommandNames: string[];
+}
+
+export interface HarnessMcpConfigState {
+  id: string;
+  name: string;
+  path: string;
+  available: boolean;
+  installed: boolean;
+  upToDate: boolean;
+  serverName: string;
+}
+
 export interface BundledSkillsStatus {
   available: boolean;
   promptRecommended: boolean;
@@ -255,6 +283,8 @@ export interface BundledSkillsStatus {
   lastInstallAt?: string;
   lastInstallError?: string;
   targets: BundledSkillTargetStatus[];
+  commandTargets: HarnessConfigState[];
+  mcpTargets: HarnessMcpConfigState[];
 }
 
 export type BundledSkillsInstallMode = 'install' | 'update' | 'reinstall';
@@ -395,6 +425,10 @@ export const IpcChannels = {
     request: [workflowId: string];
     response: void;
   },
+  'invoker:detach-workflow': {} as {
+    request: [workflowId: string, upstreamWorkflowId: string];
+    response: void;
+  },
   'invoker:load-workflow': {} as {
     request: [workflowId: string];
     response: { workflow: unknown; tasks: unknown[] };
@@ -478,10 +512,6 @@ export const IpcChannels = {
     request: [taskId: string, newCommand: string];
     response: void;
   },
-  'invoker:edit-task-type': {} as {
-    request: [taskId: string, runnerKind: string, poolMemberId?: string];
-    response: void;
-  },
   'invoker:edit-task-pool': {} as {
     request: [taskId: string, poolId: string];
     response: void;
@@ -549,6 +579,11 @@ export const IpcChannels = {
   'invoker:approve-merge': {} as {
     request: [workflowId: string];
     response: void;
+  },
+
+  'invoker:get-review-gate': {} as {
+    request: [workflowId: string];
+    response: ReviewGateQueryResponse | null;
   },
 
   // PR & Conflict Resolution

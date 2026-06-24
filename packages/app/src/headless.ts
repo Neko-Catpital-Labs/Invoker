@@ -45,8 +45,6 @@ import {
   rebaseRetry,
   rebaseRecreate,
   resolveConflictAction,
-  recreateWorkflow as sharedRecreateWorkflow,
-  recreateTask as sharedRecreateTask,
   forkWorkflow as sharedForkWorkflow,
   setWorkflowMergeMode,
 } from './workflow-actions.js';
@@ -61,13 +59,14 @@ import {
   isDispatchableLaunch,
 } from './global-topup.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
+import { createAutoFixRecoveryTick, RECOVERY_WORKER_KIND } from './workers/auto-fix-recovery.js';
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
+import { formatHeadlessSetSubcommands } from './headless-command-registry.js';
 import { trackWorkflow } from './headless-watch.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import type { RuntimeServices } from '@invoker/runtime-service';
 
-export { bumpGenerationAndRecreate } from './workflow-actions.js';
 export {
   DEFAULT_DELEGATION_TIMEOUT_MS,
   WORKFLOW_DELEGATION_TIMEOUT_MS,
@@ -314,14 +313,17 @@ async function dispatchHeadlessRunnableTasks(
 }
 
 export function wireHeadlessAutoFix(
-  deps: Pick<HeadlessDeps, 'messageBus' | 'orchestrator' | 'persistence'>,
+  deps: Pick<HeadlessDeps, 'logger' | 'messageBus' | 'orchestrator' | 'persistence' | 'commandService' | 'mutationTiming'>,
   taskExecutor: Pick<TaskRunner, 'executeTasks' | 'fixWithAgent' | 'resolveConflict'>,
   invokeAutoFix: (taskId: string) => Promise<void> = async (taskId) => {
     const { autoFixOnFailure } = await import('./workflow-actions.js');
     await autoFixOnFailure(taskId, {
+      logger: deps.logger,
       orchestrator: deps.orchestrator,
       persistence: deps.persistence,
+      commandService: deps.commandService,
       taskExecutor: taskExecutor as TaskRunner,
+      mutationTiming: deps.mutationTiming,
       getAutoFixAgent: () => loadConfig().autoFixAgent,
       getAutoApproveAIFixes: () => loadConfig().autoApproveAIFixes,
     });
@@ -956,7 +958,7 @@ async function headlessCostEvents(
 async function headlessSet(args: string[], deps: HeadlessDeps): Promise<void> {
   const subCommand = args[0];
   if (!subCommand) {
-    throw new Error('Missing set sub-command. Usage: --headless set <command|executor|agent|merge-mode|gate-policy|workflow|task>');
+    throw new Error(`Missing set sub-command. Usage: --headless set <${formatHeadlessSetSubcommands('|')}>`);
   }
 
   switch (subCommand) {
@@ -966,6 +968,7 @@ async function headlessSet(args: string[], deps: HeadlessDeps): Promise<void> {
     case 'prompt':
       await headlessEditPrompt(args[1], args.slice(2).join(' '), deps);
       break;
+    case 'pool':
     case 'executor':
       await headlessEditExecutor(args[1], args[2], args[3], deps);
       break;
@@ -991,7 +994,7 @@ async function headlessSet(args: string[], deps: HeadlessDeps): Promise<void> {
       await headlessSetTaskMetadata(args[1], args[2], args.slice(3).join(' '), deps);
       break;
     default:
-      throw new Error(`Unknown set sub-command: "${subCommand}". Use: command, prompt, executor, agent, merge-mode, fix-prompt, fix-context, gate-policy, workflow, task`);
+      throw new Error(`Unknown set sub-command: "${subCommand}". Use: ${formatHeadlessSetSubcommands(', ')}`);
   }
 }
 
@@ -1009,12 +1012,18 @@ async function headlessInstallSkills(
   deps: Pick<HeadlessDeps, 'installBundledSkills'>,
 ): Promise<void> {
   if (!deps.installBundledSkills) {
-    throw new Error('Bundled skill installation is not available in this runtime.');
+    throw new Error('Bundled AI helper installation is not available in this runtime.');
   }
   const status = deps.installBundledSkills(mode ?? 'install');
-  process.stdout.write(`Installed ${status.bundledSkillNames.length} bundled skills with prefix "${status.managedPrefix}".\n`);
+  process.stdout.write(`Installed ${status.bundledSkillNames.length} bundled AI helpers with prefix "${status.managedPrefix}".\n`);
   for (const target of status.targets) {
-    process.stdout.write(`Target (${target.name}): ${target.path}\n`);
+    process.stdout.write(`Skill target (${target.name}): ${target.path}\n`);
+  }
+  for (const target of status.commandTargets) {
+    process.stdout.write(`Command target (${target.name}): ${target.path}\n`);
+  }
+  for (const target of status.mcpTargets) {
+    process.stdout.write(`MCP target (${target.name}): ${target.path}\n`);
   }
   for (const skillName of status.bundledSkillNames) {
     process.stdout.write(`- ${status.managedPrefix}${skillName}\n`);
@@ -1145,6 +1154,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'query-select':
       await headlessQuerySelect(args[1], deps);
       break;
+    case 'worker':
+      await headlessWorker(args[1], deps);
+      break;
 
     // ── Deprecated aliases → query ──
     case 'list':
@@ -1179,8 +1191,8 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       break;
     case 'edit-executor':
     case 'edit-type':
-      warnDeprecated(command, 'set executor');
-      await headlessSet(['executor', ...args.slice(1)], deps);
+      warnDeprecated(command, 'set pool');
+      await headlessSet(['pool', ...args.slice(1)], deps);
       break;
     case 'edit-agent':
       warnDeprecated('edit-agent', 'set agent');
@@ -1198,6 +1210,49 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       break;
     default:
       throw new Error(`Unknown command: ${command}. Run with --help for usage.`);
+  }
+}
+
+/**
+ * Worker kinds exposed to the CLI.
+ */
+const HEADLESS_WORKER_KINDS: ReadonlyArray<{ kind: string; available: boolean; note: string }> = [
+  {
+    kind: 'autofix',
+    available: true,
+    note: 'scans persisted failed tasks and submits normal auto-fix command intents',
+  },
+];
+
+async function headlessWorker(subCommand: string | undefined, deps: HeadlessDeps): Promise<void> {
+  if (subCommand === 'autofix') {
+    const tick = createAutoFixRecoveryTick({
+      store: deps.persistence,
+      submitter: {
+        submit: (workflowId, priority, channel, args) => (
+          deps.persistence.enqueueWorkflowMutationIntent(workflowId, channel, args, priority)
+        ),
+      },
+      logger: deps.logger,
+      defaultAutoFixRetries: deps.invokerConfig.autoFixRetries,
+      getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
+    });
+    await tick({
+      identity: { kind: RECOVERY_WORKER_KIND, instanceId: 'headless-worker-autofix' },
+      reason: 'manual',
+      tickNumber: 1,
+    });
+    process.stdout.write('Auto-fix worker scan completed.\n');
+    return;
+  }
+
+  if (subCommand && subCommand !== 'list' && subCommand !== 'status') {
+    throw new Error(`Unknown worker sub-command: "${subCommand}". Use: autofix, list, status`);
+  }
+  process.stdout.write(`${BOLD}Worker kinds${RESET}\n`);
+  for (const worker of HEADLESS_WORKER_KINDS) {
+    const status = worker.available ? 'available' : 'unavailable';
+    process.stdout.write(`  ${worker.kind} — ${status} (${worker.note})\n`);
   }
 }
 
@@ -1261,11 +1316,11 @@ ${BOLD}Respond:${RESET}
   select <taskId> <experimentId>                      Select winning experiment
 
 ${BOLD}Configure:${RESET}
-  install-skills [install|update|reinstall]          Install bundled Invoker skills into Codex
+  install-skills [install|update|reinstall]          Install bundled Invoker AI helpers
   set command <taskId> <cmd>                          Edit task command and re-run
   set prompt <taskId> <text>                          Edit task prompt and re-run
-  set executor <taskId> <type> [poolMemberId]       Change executor type (worktree|docker|ssh)
-  set agent <taskId> <agent>                          Change execution agent (claude|codex)
+  set pool <taskId> <type> [poolMemberId]           Change execution pool (worktree|docker|ssh)
+  set agent <taskId> <agent>                          Change execution agent (claude|codex|omp)
   set merge-mode <workflowId> <mode>                  manual | automatic | external_review
   set fix-prompt <taskId> <text>                      Update fix-session prompt and retry
   set fix-context <taskId> <text>                     Update fix-session context and retry
@@ -1282,11 +1337,12 @@ ${BOLD}Lifecycle:${RESET}
   delete-all                                          Delete all workflows (requires INVOKER_ALLOW_DELETE_ALL=1)
   open-terminal <taskId>                              Open OS terminal for a task
   slack                                               Start Slack bot (long-running)
+  worker [autofix|list|status]                        Run/list worker kinds (autofix scans failed tasks)
 
 ${BOLD}Deprecated${RESET} (use new names above):
   list → query workflows       status → query tasks       task-status → query task
   queue → query queue           audit → query audit         session → query session
-  edit → set command            edit-executor → set executor
+  edit → set command            edit-executor → set pool
   edit-agent → set agent        set-merge-mode → set merge-mode
   delete-workflow → delete
 
@@ -1530,6 +1586,15 @@ async function headlessApprove(taskId: string, deps: HeadlessDeps): Promise<void
       .filter((task) => task.config.workflowId === restored.workflowId);
     const readyTasks = (deps.orchestrator.getReadyTasks?.() ?? [])
       .filter((task) => task.config.workflowId === restored.workflowId && task.status === 'pending');
+    if (readyTasks.length > 0) {
+      await executeGlobalTopup({
+        orchestrator: deps.orchestrator,
+        taskExecutor: te,
+        logger: deps.logger,
+        context: 'headless.approve.ready-tasks',
+        mutationTiming: deps.mutationTiming,
+      });
+    }
     const hasRunningWork = workflowTasks.some(
       (task) => task.status === 'running' || task.status === 'fixing_with_ai',
     );
@@ -1697,9 +1762,12 @@ async function headlessFix(rawArgs: string[], deps: HeadlessDeps): Promise<void>
   const agent = (parsed.agentName ?? 'claude').toLowerCase();
   try {
     const result = await fixWithAgentAction(taskId, {
+      logger: deps.logger,
       orchestrator: deps.orchestrator,
       persistence: deps.persistence,
+      commandService: deps.commandService,
       taskExecutor: te,
+      mutationTiming: deps.mutationTiming,
       autoApproveAIFixes: deps.invokerConfig.autoApproveAIFixes,
     }, {
       agentName: agent,
@@ -1796,10 +1864,15 @@ async function headlessRebaseRetry(target: string, deps: HeadlessDeps): Promise<
     context: 'headless.rebase-retry',
     mutationTiming: deps.mutationTiming,
   });
-
   const te = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, te);
-  const started = await rebaseRetry(target, { ...deps, taskExecutor: te, mutationTiming: deps.mutationTiming });
+  const started = await rebaseRetry(target, {
+    ...deps,
+    logger: deps.logger,
+    commandService: deps.commandService,
+    taskExecutor: te,
+    mutationTiming: deps.mutationTiming,
+  });
   const runnable = started.filter(isDispatchableLaunch);
   const { topup } = await dispatchStartedTasksWithGlobalTopup({
     orchestrator: deps.orchestrator,
@@ -1840,10 +1913,15 @@ async function headlessRebaseRecreate(workflowTarget: string, deps: HeadlessDeps
     context: 'headless.rebase-recreate',
     mutationTiming: deps.mutationTiming,
   });
-
   const te = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, te);
-  const started = await rebaseRecreate(workflowTarget, { ...deps, taskExecutor: te, mutationTiming: deps.mutationTiming });
+  const started = await rebaseRecreate(workflowTarget, {
+    ...deps,
+    logger: deps.logger,
+    commandService: deps.commandService,
+    taskExecutor: te,
+    mutationTiming: deps.mutationTiming,
+  });
   const runnable = started.filter(isDispatchableLaunch);
   const { topup } = await dispatchStartedTasksWithGlobalTopup({
     orchestrator: deps.orchestrator,
@@ -2331,10 +2409,10 @@ async function headlessEditExecutor(
 ): Promise<void> {
   if (!taskId || !runnerKind) {
     throw new Error(
-      'Missing arguments. Usage: --headless edit-executor <taskId> <runnerKind> [poolMemberId]',
+      'Missing arguments. Usage: --headless set pool <taskId> <runnerKind> [poolMemberId]',
     );
   }
-  const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'set executor');
+  const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'set pool');
   if (!restored) return;
   taskId = restored.resolvedTaskId;
   const taskExecutor = createHeadlessExecutor(deps);
@@ -2351,7 +2429,7 @@ async function headlessEditExecutor(
   );
 
   if (deps.noTrack) {
-    process.stdout.write('[headless] --no-track enabled: set executor accepted; exiting without tracking.\n');
+    process.stdout.write('[headless] --no-track enabled: set pool accepted; exiting without tracking.\n');
     autoFix.unsubscribe();
     return;
   }
@@ -2368,8 +2446,9 @@ async function headlessEditExecutor(
   autoFix.unsubscribe();
 }
 
+
 async function headlessEditAgent(taskId: string, agentName: string, deps: HeadlessDeps): Promise<void> {
-  if (!taskId || !agentName) throw new Error('Missing arguments. Usage: --headless edit-agent <taskId> <claude|codex>');
+  if (!taskId || !agentName) throw new Error('Missing arguments. Usage: --headless set agent <taskId> <claude|codex|omp>');
   const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'set agent');
   if (!restored) return;
   taskId = restored.resolvedTaskId;

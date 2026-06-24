@@ -19,7 +19,7 @@ import { TaskStateMachine } from './state-machine.js';
 import { ResponseHandler } from './response-handler.js';
 import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
-import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, Attempt, ExternalDependency, ExternalDependencyChange, TaskStatus, TaskHeartbeatSource } from '@invoker/workflow-graph';
+import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, TaskExecution, Attempt, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency, TaskStatus, TaskHeartbeatSource } from '@invoker/workflow-graph';
 import type { RunnerKind } from '@invoker/workflow-graph';
 import { createTaskState, createAttempt } from '@invoker/workflow-graph';
 import type { WorkflowDerivedStatus } from '@invoker/workflow-graph';
@@ -208,7 +208,6 @@ export interface OrchestratorPersistence {
     name: string;
     description?: string;
     visualProof?: boolean;
-    status: WorkflowDerivedStatus;
     createdAt: string;
     updatedAt: string;
     repoUrl?: string;
@@ -219,8 +218,9 @@ export interface OrchestratorPersistence {
     mergeMode?: 'manual' | 'automatic' | 'external_review';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
+    detachedExternalDependencies?: DetachedExternalDependency[];
   }): void;
-  updateWorkflow?(workflowId: string, changes: { updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review'; externalDependencies?: ExternalDependency[]; externalDependencyChanges?: ExternalDependencyChange[] }): void;
+  updateWorkflow?(workflowId: string, changes: { updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review'; externalDependencies?: ExternalDependency[]; externalDependencyChanges?: ExternalDependencyChange[]; detachedExternalDependencies?: DetachedExternalDependency[] }): void;
   saveTask(workflowId: string, task: TaskState): void;
   updateTask(taskId: string, changes: TaskStateChanges): void;
   logEvent?(taskId: string, eventType: string, payload?: unknown): void;
@@ -235,6 +235,7 @@ export interface OrchestratorPersistence {
     mergeMode?: 'manual' | 'automatic' | 'external_review';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
+    detachedExternalDependencies?: DetachedExternalDependency[];
     generation?: number;
   }>;
   loadTasks(workflowId: string): TaskState[];
@@ -250,6 +251,7 @@ export interface OrchestratorPersistence {
       mergeMode?: 'manual' | 'automatic' | 'external_review';
       externalDependencies?: ExternalDependency[];
       externalDependencyChanges?: ExternalDependencyChange[];
+      detachedExternalDependencies?: DetachedExternalDependency[];
       generation?: number;
     }>;
     tasks: TaskState[];
@@ -280,6 +282,7 @@ export interface OrchestratorPersistence {
     mergeMode?: 'manual' | 'automatic' | 'external_review';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
+    detachedExternalDependencies?: DetachedExternalDependency[];
   } | undefined;
   /** Delete a single workflow and its tasks from the DB. */
   deleteWorkflow?(workflowId: string): void;
@@ -366,6 +369,7 @@ export interface PlanDefinition {
     dockerImage?: string;
     poolId?: string;
     executionAgent?: string;
+    executionModel?: string;
   }>;
 }
 
@@ -477,6 +481,7 @@ export interface TaskReplacementDef {
   dependencies?: string[];
   runnerKind?: RunnerKind;
   executionAgent?: string;
+  executionModel?: string;
 }
 
 export interface ExternalGatePolicyUpdate {
@@ -897,7 +902,11 @@ export class Orchestrator {
           continue;
         }
 
-        const changesWithGeneration = this.withBumpedExecutionGeneration(current, resetChanges);
+        const changesWithGeneration = this.withBumpedExecutionGenerationAndDiscardedReviewGate(
+          current,
+          resetChanges,
+          'task subgraph reset to pending',
+        );
         const updated = this.writeAndSync(id, changesWithGeneration, { skipWorkflowStatusSync: true });
         const priorAttemptId = current.execution.selectedAttemptId;
         this.replaceSelectedAttempt(current, {}, { skipWorkflowStatusSync: true });
@@ -1024,6 +1033,74 @@ export class Orchestrator {
       },
     };
   }
+
+  private buildDiscardReviewGatePatch(
+    task: TaskState,
+    reason: string,
+    nextGeneration: number,
+    now: Date = new Date(),
+  ): Partial<TaskExecution> {
+    const reviewGate = task.execution.reviewGate;
+    if (!reviewGate && !task.execution.reviewId && !task.execution.reviewUrl) return {};
+
+    const discardedAt = now.toISOString();
+    const oldArtifacts = reviewGate?.artifacts ?? [{
+      id: task.execution.reviewId ?? 'review',
+      ...(task.execution.reviewId ? { providerId: task.execution.reviewId } : {}),
+      ...(task.execution.reviewUrl ? { url: task.execution.reviewUrl } : {}),
+      required: true,
+      status: 'discarded' as const,
+      generation: task.execution.generation ?? 0,
+      discardedAt,
+      discardReason: reason,
+    }];
+
+    return {
+      reviewUrl: undefined,
+      reviewId: undefined,
+      reviewStatus: undefined,
+      reviewProviderId: undefined,
+      reviewGate: {
+        activeGeneration: nextGeneration,
+        completion: { required: 'all', status: 'approved' },
+        artifacts: oldArtifacts.map((artifact) =>
+          artifact.discardedAt || artifact.status === 'discarded'
+            ? artifact
+            : {
+                ...artifact,
+                status: 'discarded',
+                discardedAt,
+                discardReason: reason,
+              },
+        ),
+      },
+    };
+  }
+
+  private withBumpedExecutionGenerationAndDiscardedReviewGate(
+    task: TaskState,
+    changes: TaskStateChanges,
+    discardReason: string,
+  ): TaskStateChanges {
+    const bumpedChanges = this.withBumpedExecutionGeneration(task, changes);
+    if (!task.config.isMergeNode) {
+      return bumpedChanges;
+    }
+
+    const discardPatch = this.buildDiscardReviewGatePatch(
+      task,
+      discardReason,
+      bumpedChanges.execution?.generation ?? this.getExecutionGeneration(task) + 1,
+    );
+    return {
+      ...bumpedChanges,
+      execution: {
+        ...bumpedChanges.execution,
+        ...discardPatch,
+      },
+    };
+  }
+
 
   private getSelectedAttempt(task: TaskState | undefined): Attempt | undefined {
     const attemptId = task?.execution.selectedAttemptId;
@@ -1351,6 +1428,7 @@ export class Orchestrator {
         requiresManualApproval: taskDef.requiresManualApproval,
         featureBranch: taskDef.featureBranch,
         executionAgent: taskDef.executionAgent,
+        executionModel: taskDef.executionModel,
         poolId: effectivePoolId,
       } as const;
       let taskConfig: TaskConfig;
@@ -1408,7 +1486,6 @@ export class Orchestrator {
       name: plan.name,
       description: plan.description,
       visualProof: plan.visualProof,
-      status: 'pending',
       repoUrl: plan.repoUrl,
       intermediateRepoUrl: plan.intermediateRepoUrl,
       onFinish: plan.onFinish,
@@ -1509,7 +1586,6 @@ export class Orchestrator {
         }
         const activeGeneration = this.getExecutionGeneration(earlyTask);
         if (
-          !response.attemptId &&
           response.executionGeneration !== undefined &&
           response.executionGeneration !== activeGeneration
         ) {
@@ -1625,10 +1701,17 @@ export class Orchestrator {
     status: 'awaiting_approval' | 'review_ready',
     eventName: 'task.awaiting_approval' | 'task.review_ready',
     additionalChanges?: TaskStateChanges,
+    expectedLineage?: TaskLineageExpectation,
   ): void {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) return;
+    if (!this.taskMatchesLineageExpectation(task, expectedLineage)) return;
+    // Stale-write guard: lineage (id/attempt/generation) is preserved across a
+    // same-attempt cancellation, so a late approval transition could resurrect a
+    // cancelled/failed task. Only apply the transition while the task is still
+    // executable.
+    if (!this.isExecutableResponseTask(task)) return;
     const id = task.id;
 
     const additionalExecution = additionalChanges?.execution;
@@ -1697,8 +1780,12 @@ export class Orchestrator {
    * Transition a running merge gate directly to review_ready.
    * Used by merge-gate execution when output is ready for human review.
    */
-  setTaskReviewReady(taskId: string, additionalChanges?: TaskStateChanges): void {
-    this.setTaskApprovalStatus(taskId, 'review_ready', 'task.review_ready', additionalChanges);
+  setTaskReviewReady(
+    taskId: string,
+    additionalChanges?: TaskStateChanges,
+    expectedLineage?: TaskLineageExpectation,
+  ): void {
+    this.setTaskApprovalStatus(taskId, 'review_ready', 'task.review_ready', additionalChanges, expectedLineage);
   }
 
   setFixAwaitingApproval(
@@ -2314,7 +2401,11 @@ export class Orchestrator {
     for (const id of toResetIds) {
       const current = this.stateGetTask(id);
       if (!current) continue;
-      const changesWithGeneration = this.withBumpedExecutionGeneration(current, RECREATE_RESET_CHANGES);
+      const changesWithGeneration = this.withBumpedExecutionGenerationAndDiscardedReviewGate(
+        current,
+        RECREATE_RESET_CHANGES,
+        artifactReason,
+      );
       const recreateUpdated = this.writeAndSync(id, changesWithGeneration);
       const priorAttemptId = current.execution.selectedAttemptId;
       this.replaceSelectedAttempt(current);
@@ -2437,7 +2528,11 @@ export class Orchestrator {
         agentSessionId: prevSess ?? 'null',
         containerId: prevCt ?? 'null',
       });
-      const changesWithGeneration = this.withBumpedExecutionGeneration(task, resetChanges);
+      const changesWithGeneration = this.withBumpedExecutionGenerationAndDiscardedReviewGate(
+        task,
+        resetChanges,
+        'workflow recreation reset',
+      );
       const after = this.writeAndSync(task.id, changesWithGeneration);
       const priorAttemptId = task.execution.selectedAttemptId;
       this.replaceSelectedAttempt(task);
@@ -2885,7 +2980,29 @@ export class Orchestrator {
     return this.dispatchPostMutation(MUTATION_POLICIES.poolMemberId.action, taskId);
   }
 
-    editTaskAgent(taskId: string, agentName: string): TaskState[] {
+    editTaskModel(taskId: string, executionModel: string | null): TaskState[] {
+    this.refreshFromDb();
+    const task = this.stateGetTask(taskId);
+    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
+    if (task.config.isMergeNode) throw new Error(`Cannot change execution model of merge node ${taskId}`);
+
+    if (isActiveForInvalidation(task.status)) {
+      this.cancelTask(taskId);
+    }
+
+    const modelChanges: TaskStateChanges = {
+      config: { executionModel: executionModel?.trim() || undefined },
+    };
+    const modelBefore = this.stateGetTask(taskId)!;
+    const modelUpdated = this.writeAndSync(taskId, modelChanges);
+    const modelDelta: TaskDelta = this.buildUpdateDelta(modelBefore, modelUpdated, modelChanges);
+    this.persistence.logEvent?.(taskId, 'task.updated', modelChanges);
+    this.messageBus.publish(TASK_DELTA_CHANNEL, modelDelta);
+
+    return this.dispatchPostMutation(MUTATION_POLICIES.executionModel.action, taskId);
+  }
+
+  editTaskAgent(taskId: string, agentName: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
@@ -3308,7 +3425,6 @@ export class Orchestrator {
       name: sourceMeta && (sourceMeta as { name?: string }).name
         ? `${(sourceMeta as { name: string }).name} (fork of ${workflowId})`
         : `Fork of ${workflowId}`,
-      status: 'running',
       createdAt,
       updatedAt: createdAt,
     };
@@ -3513,6 +3629,7 @@ export class Orchestrator {
         command: rt.command,
         prompt: rt.prompt,
         executionAgent: rt.executionAgent ?? task.config.executionAgent,
+        executionModel: rt.executionModel ?? task.config.executionModel,
         poolId: task.config.poolId,
       } as const;
       // Replacement tasks inherit executor config from the parent task.
@@ -4337,6 +4454,7 @@ export class Orchestrator {
         reviewUrl: parsed.reviewUrl,
         reviewId: parsed.reviewId,
         reviewStatus: parsed.reviewStatus,
+        reviewGate: parsed.reviewGate,
       },
     };
     this.setTaskApprovalStatus(taskId, 'review_ready', 'task.review_ready', changes);
@@ -4933,9 +5051,37 @@ export class Orchestrator {
         changedAt: now,
       });
     }
+
+    // Preserve read-only provenance for the dependencies this detach removes.
+    // Active `externalDependencies` are dropped above so scheduling no longer
+    // waits on the upstream, but the lineage is recorded here so the UI can
+    // distinguish a detached edge from a genuinely-independent workflow.
+    // Dedup by upstream identity (workflowId + taskId + requiredStatus +
+    // gatePolicy) so repeated detach attempts or sync/reload cycles never
+    // append the same provenance entry twice.
+    const existingProvenance = targetWorkflow?.detachedExternalDependencies ?? [];
+    const provenanceKey = (dep: { workflowId: string; taskId?: string; requiredStatus: 'completed'; gatePolicy?: 'completed' | 'review_ready' }) =>
+      `${dep.workflowId} ${dep.taskId?.trim() ?? ''} ${dep.requiredStatus} ${dep.gatePolicy ?? ''}`;
+    const seenProvenance = new Set(existingProvenance.map(provenanceKey));
+    const detachedProvenance: DetachedExternalDependency[] = [...existingProvenance];
+    for (const dep of removedDeps) {
+      const key = provenanceKey(dep);
+      if (seenProvenance.has(key)) continue;
+      seenProvenance.add(key);
+      const entry: DetachedExternalDependency = {
+        workflowId: dep.workflowId,
+        ...(dep.taskId?.trim() ? { taskId: dep.taskId.trim() } : {}),
+        requiredStatus: dep.requiredStatus,
+        ...(dep.gatePolicy ? { gatePolicy: dep.gatePolicy } : {}),
+        detachedAt: now,
+      };
+      detachedProvenance.push(entry);
+    }
+
     this.taskRepository.updateWorkflow(workflowId, {
       externalDependencies: nextDeps.length > 0 ? nextDeps : undefined,
       externalDependencyChanges: dependencyChanges,
+      detachedExternalDependencies: detachedProvenance.length > 0 ? detachedProvenance : undefined,
     });
 
     const eventTask = this.getMergeNode(workflowId) ?? targetTasks[0];

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
 import type { Workflow, Conversation } from '../adapter.js';
 import { createAttempt } from '@invoker/workflow-core';
-import type { TaskState, TaskStateChanges } from '@invoker/workflow-core';
+import type { Attempt, TaskState, TaskStateChanges } from '@invoker/workflow-core';
 
 describe('SQLiteAdapter', () => {
   let adapter: SQLiteAdapter;
@@ -169,6 +169,12 @@ describe('SQLiteAdapter', () => {
       const result = (adapter as any).db.exec('PRAGMA index_list(tasks)') as Array<{ values: unknown[][] }>;
       const indexNames = (result[0]?.values ?? []).map((row) => String(row[1]));
       expect(indexNames).toContain('idx_tasks_workflow_id');
+    });
+
+    it('creates an index for task event lookups', () => {
+      const result = (adapter as any).db.exec('PRAGMA index_list(events)') as Array<{ values: unknown[][] }>;
+      const indexNames = (result[0]?.values ?? []).map((row) => String(row[1]));
+      expect(indexNames).toContain('idx_events_task_id_id');
     });
   });
 
@@ -903,6 +909,87 @@ describe('SQLiteAdapter', () => {
       loaded = adapter.loadTasks('wf-1');
       expect(loaded[0].execution.generation).toBe(5);
     });
+
+    it('round-trips reviewGate through save and load', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const reviewGate = {
+        activeGeneration: 2,
+        completion: { required: 'all', status: 'approved' },
+        artifacts: [
+          {
+            id: 'contracts',
+            title: 'Contracts',
+            providerId: '101',
+            required: true,
+            status: 'approved',
+            generation: 2,
+          },
+          {
+            id: 'runtime',
+            title: 'Runtime',
+            providerId: '102',
+            required: true,
+            status: 'open',
+            dependsOn: ['contracts'],
+            generation: 2,
+          },
+        ],
+      } as const;
+
+      adapter.saveTask('wf-1', makeTask('t-review-gate', { execution: { reviewGate } }));
+
+      const loaded = adapter.loadTask('t-review-gate');
+      expect(loaded?.execution.reviewGate).toEqual(reviewGate);
+    });
+
+    it('clears reviewGate when updateTask receives undefined', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t-review-gate-clear', {
+        execution: {
+          reviewGate: {
+            activeGeneration: 1,
+            completion: { required: 'all', status: 'approved' },
+            artifacts: [
+              { id: 'contracts', required: true, status: 'open', generation: 1 },
+            ],
+          },
+        },
+      }));
+
+      adapter.updateTask('t-review-gate-clear', { execution: { reviewGate: undefined } });
+
+      const loaded = adapter.loadTask('t-review-gate-clear');
+      const stored = (adapter as any).db.exec(
+        "SELECT review_gate FROM tasks WHERE id = 't-review-gate-clear'",
+      ) as Array<{ values: unknown[][] }>;
+      expect(loaded?.execution.reviewGate).toBeUndefined();
+      expect(stored[0]?.values[0]?.[0]).toBeNull();
+    });
+
+    it('keeps reviewGate unchanged when updating another execution field', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const reviewGate = {
+        activeGeneration: 3,
+        completion: { required: 'all', status: 'approved' },
+        artifacts: [
+          { id: 'contracts', required: true, status: 'approved', generation: 3 },
+          {
+            id: 'runtime',
+            required: true,
+            status: 'open',
+            dependsOn: ['contracts'],
+            generation: 3,
+          },
+        ],
+      } as const;
+      adapter.saveTask('wf-1', makeTask('t-review-gate-keep', { execution: { reviewGate } }));
+
+      adapter.updateTask('t-review-gate-keep', { execution: { reviewStatus: 'approved' } });
+
+      const loaded = adapter.loadTask('t-review-gate-keep');
+      expect(loaded?.execution.reviewStatus).toBe('approved');
+      expect(loaded?.execution.reviewGate).toEqual(reviewGate);
+    });
   });
 
   describe('task-state version persistence', () => {
@@ -1064,6 +1151,78 @@ describe('SQLiteAdapter', () => {
     });
   });
 
+  describe('loadActionGraphAttempts', () => {
+    function attemptAt(id: string, status: Attempt['status'], createdAt: string, nodeId = 't1'): Attempt {
+      return {
+        ...createAttempt(nodeId, { status }),
+        id,
+        createdAt: new Date(createdAt),
+      };
+    }
+
+    it('returns active attempts plus the selected terminal attempt', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const selected = attemptAt('selected-superseded', 'superseded', '2026-01-01T00:05:00.000Z');
+      adapter.saveTask('wf-1', makeTask('t1', {
+        execution: { selectedAttemptId: selected.id },
+      }));
+      adapter.saveTask('wf-1', makeTask('t2'));
+      const attempts = [
+        attemptAt('old-superseded', 'superseded', '2026-01-01T00:00:00.000Z'),
+        attemptAt('completed', 'completed', '2026-01-01T00:01:00.000Z'),
+        attemptAt('failed', 'failed', '2026-01-01T00:02:00.000Z'),
+        attemptAt('pending', 'pending', '2026-01-01T00:03:00.000Z'),
+        attemptAt('claimed', 'claimed', '2026-01-01T00:04:00.000Z'),
+        selected,
+        attemptAt('running', 'running', '2026-01-01T00:06:00.000Z'),
+        attemptAt('needs-input', 'needs_input', '2026-01-01T00:07:00.000Z'),
+        attemptAt('unrelated-running', 'running', '2026-01-01T00:08:00.000Z', 't2'),
+      ];
+      for (const attempt of attempts) adapter.saveAttempt(attempt);
+
+      expect(adapter.loadActionGraphAttempts('t1', selected.id).map((attempt) => attempt.id)).toEqual([
+        'pending',
+        'claimed',
+        'selected-superseded',
+        'running',
+        'needs-input',
+      ]);
+    });
+
+    it('returns active attempts plus the newest attempt when no selected attempt is present', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+      const attempts = [
+        attemptAt('completed-old', 'completed', '2026-01-01T00:00:00.000Z'),
+        attemptAt('pending-current', 'pending', '2026-01-01T00:01:00.000Z'),
+        attemptAt('running-current', 'running', '2026-01-01T00:02:00.000Z'),
+        attemptAt('failed-newest', 'failed', '2026-01-01T00:03:00.000Z'),
+      ];
+      for (const attempt of attempts) adapter.saveAttempt(attempt);
+
+      expect(adapter.loadActionGraphAttempts('t1').map((attempt) => attempt.id)).toEqual([
+        'pending-current',
+        'running-current',
+        'failed-newest',
+      ]);
+    });
+
+    it('keeps a recent cancelled attempt next to the active replacement', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+      const attempts = [
+        attemptAt('old-cancelled', 'superseded', '2026-01-01T00:00:00.000Z'),
+        attemptAt('pending-current', 'pending', '2026-01-01T00:01:00.000Z'),
+      ];
+      for (const attempt of attempts) adapter.saveAttempt(attempt);
+
+      expect(adapter.loadActionGraphAttempts('t1').map((attempt) => attempt.id)).toEqual([
+        'old-cancelled',
+        'pending-current',
+      ]);
+    });
+  });
+
   describe('saveWorkflow + loadWorkflow', () => {
     it('round-trips a workflow', () => {
       adapter.saveWorkflow(testWorkflow);
@@ -1075,7 +1234,7 @@ describe('SQLiteAdapter', () => {
     });
 
     it('derives workflow status and rollup details from task rows', () => {
-      adapter.saveWorkflow({ ...testWorkflow, status: 'completed' });
+      adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('t1', {
         status: 'failed',
         execution: { error: 'first failure', exitCode: 10 },
@@ -1098,7 +1257,7 @@ describe('SQLiteAdapter', () => {
     });
 
     it('derives stale workflow states from task rows', () => {
-      adapter.saveWorkflow({ ...testWorkflow, status: 'running' });
+      adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('t1', { status: 'stale' }));
       adapter.saveTask('wf-1', makeTask('t2', { status: 'stale' }));
 
@@ -1115,7 +1274,7 @@ describe('SQLiteAdapter', () => {
     });
 
     it('recomputes workflow status on every read after task state changes', () => {
-      adapter.saveWorkflow({ ...testWorkflow, status: 'completed' });
+      adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('t1', { status: 'pending' }));
       expect(adapter.loadWorkflow('wf-1')!.status).toBe('pending');
 
@@ -1131,7 +1290,7 @@ describe('SQLiteAdapter', () => {
     });
 
     it('derives failed when pending work is blocked by failed dependencies', () => {
-      adapter.saveWorkflow({ ...testWorkflow, status: 'running' });
+      adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('alpha', { status: 'failed' }));
       adapter.saveTask('wf-1', makeTask('beta', { status: 'pending', dependencies: ['alpha'] }));
       adapter.saveTask('wf-1', makeTask('merge', { status: 'pending', dependencies: ['beta'] }));
@@ -1145,7 +1304,7 @@ describe('SQLiteAdapter', () => {
     });
 
     it('derives failed when failed tasks do not block all pending work', () => {
-      adapter.saveWorkflow({ ...testWorkflow, status: 'running' });
+      adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('alpha', { status: 'failed' }));
       adapter.saveTask('wf-1', makeTask('independent', { status: 'pending' }));
 
@@ -1153,12 +1312,11 @@ describe('SQLiteAdapter', () => {
     });
 
     it('derives listWorkflows with one aggregate rollup per workflow', () => {
-      adapter.saveWorkflow({ ...testWorkflow, status: 'running' });
+      adapter.saveWorkflow(testWorkflow);
       adapter.saveWorkflow({
         ...testWorkflow,
         id: 'wf-2',
         name: 'Second Workflow',
-        status: 'running',
       });
       adapter.saveTask('wf-1', makeTask('wf1-a', { status: 'pending' }));
       adapter.saveTask('wf-1', makeTask('wf1-b', { status: 'pending' }));
@@ -1313,6 +1471,68 @@ describe('SQLiteAdapter', () => {
 
       expect(adapter.loadWorkflow('wf-1')!.externalDependencyChanges).toEqual(changes);
     });
+
+    it('round-trips detachedExternalDependencies provenance through save and load', () => {
+      const provenance = [
+        {
+          workflowId: 'wf-upstream',
+          taskId: '__merge__',
+          requiredStatus: 'completed' as const,
+          gatePolicy: 'review_ready' as const,
+          detachedAt: '2026-06-12T00:00:00.000Z',
+        },
+      ];
+      adapter.saveWorkflow({ ...testWorkflow, detachedExternalDependencies: provenance });
+
+      expect(adapter.loadWorkflow('wf-1')!.detachedExternalDependencies).toEqual(provenance);
+    });
+
+    it('persists detachedExternalDependencies set via updateWorkflow', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const provenance = [
+        {
+          workflowId: 'wf-upstream',
+          requiredStatus: 'completed' as const,
+          detachedAt: '2026-06-13T00:00:00.000Z',
+        },
+      ];
+
+      adapter.updateWorkflow('wf-1', { detachedExternalDependencies: provenance });
+
+      expect(adapter.loadWorkflow('wf-1')!.detachedExternalDependencies).toEqual(provenance);
+    });
+
+    it('clears detachedExternalDependencies when the key is present with undefined', () => {
+      adapter.saveWorkflow({
+        ...testWorkflow,
+        detachedExternalDependencies: [
+          {
+            workflowId: 'wf-upstream',
+            requiredStatus: 'completed',
+            detachedAt: '2026-06-13T00:00:00.000Z',
+          },
+        ],
+      });
+
+      adapter.updateWorkflow('wf-1', { detachedExternalDependencies: undefined });
+
+      expect(adapter.loadWorkflow('wf-1')!.detachedExternalDependencies).toBeUndefined();
+    });
+
+    it('leaves detachedExternalDependencies untouched when the key is absent', () => {
+      const provenance = [
+        {
+          workflowId: 'wf-upstream',
+          requiredStatus: 'completed' as const,
+          detachedAt: '2026-06-13T00:00:00.000Z',
+        },
+      ];
+      adapter.saveWorkflow({ ...testWorkflow, detachedExternalDependencies: provenance });
+
+      adapter.updateWorkflow('wf-1', { generation: 2 });
+
+      expect(adapter.loadWorkflow('wf-1')!.detachedExternalDependencies).toEqual(provenance);
+    });
   });
 
   describe('logEvent + getEvents', () => {
@@ -1328,6 +1548,37 @@ describe('SQLiteAdapter', () => {
       expect(events[0].eventType).toBe('started');
       expect(events[1].eventType).toBe('completed');
       expect(JSON.parse(events[0].payload!)).toEqual({ attempt: 1 });
+    });
+
+    it('uses the task event lookup index for ordered event reads', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+
+      const planRows = (adapter as any).db
+        .prepare('EXPLAIN QUERY PLAN SELECT * FROM events WHERE task_id = ? ORDER BY id ASC')
+        .all('t1') as Array<{ detail: string }>;
+      const detail = planRows.map((row) => row.detail).join('\n');
+
+      expect(detail).toContain('SEARCH events');
+      expect(detail).toContain('idx_events_task_id_id');
+      expect(detail).not.toContain('SCAN events');
+      expect(detail).not.toContain('USE TEMP B-TREE');
+    });
+
+    it('returns limited task events in the requested order', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+      for (let index = 0; index < 30; index += 1) {
+        adapter.logEvent('t1', `event-${index}`, { index });
+      }
+
+      const events = adapter.getEvents('t1', 'desc', 20);
+
+      expect(events).toHaveLength(20);
+      expect(events.map((event) => event.eventType)).toEqual(
+        Array.from({ length: 20 }, (_value, index) => `event-${29 - index}`),
+      );
+      expect(adapter.getEvents('t1', 'desc', 0)).toEqual([]);
     });
   });
 
@@ -1728,20 +1979,12 @@ describe('SQLiteAdapter', () => {
 
   describe('deleteAllWorkflows', () => {
     it('deletes all workflows, tasks, and events', () => {
-      adapter.saveWorkflow({
-        id: 'wf-1',
-        name: 'First',
-        status: 'running',
-        createdAt: '2024-01-01T00:00:00Z',
-        updatedAt: '2024-01-01T00:00:00Z',
-      });
-      adapter.saveWorkflow({
-        id: 'wf-2',
-        name: 'Second',
-        status: 'running',
-        createdAt: '2024-01-02T00:00:00Z',
-        updatedAt: '2024-01-02T00:00:00Z',
-      });
+      adapter.saveWorkflow({ id: 'wf-1',
+      name: 'First', createdAt: '2024-01-01T00:00:00Z',
+      updatedAt: '2024-01-01T00:00:00Z', });
+      adapter.saveWorkflow({ id: 'wf-2',
+      name: 'Second', createdAt: '2024-01-02T00:00:00Z',
+      updatedAt: '2024-01-02T00:00:00Z', });
 
       adapter.saveTask('wf-1', makeTask('t1'));
       adapter.saveTask('wf-2', makeTask('t2'));
@@ -1761,20 +2004,12 @@ describe('SQLiteAdapter', () => {
     });
 
     it('clears output spool rows and in-memory tails for all tasks', () => {
-      adapter.saveWorkflow({
-        id: 'wf-del-all-1',
-        name: 'First',
-        status: 'running',
-        createdAt: '2024-01-01T00:00:00Z',
-        updatedAt: '2024-01-01T00:00:00Z',
-      });
-      adapter.saveWorkflow({
-        id: 'wf-del-all-2',
-        name: 'Second',
-        status: 'running',
-        createdAt: '2024-01-02T00:00:00Z',
-        updatedAt: '2024-01-02T00:00:00Z',
-      });
+      adapter.saveWorkflow({ id: 'wf-del-all-1',
+      name: 'First', createdAt: '2024-01-01T00:00:00Z',
+      updatedAt: '2024-01-01T00:00:00Z', });
+      adapter.saveWorkflow({ id: 'wf-del-all-2',
+      name: 'Second', createdAt: '2024-01-02T00:00:00Z',
+      updatedAt: '2024-01-02T00:00:00Z', });
       adapter.saveTask('wf-del-all-1', makeTask('t-del-all-1'));
       adapter.saveTask('wf-del-all-2', makeTask('t-del-all-2'));
 
@@ -1795,20 +2030,12 @@ describe('SQLiteAdapter', () => {
   describe('deleteWorkflow', () => {
     it('deletes a single workflow and its tasks/events but keeps other workflows', () => {
       // Create two workflows with tasks and events
-      adapter.saveWorkflow({
-        id: 'wf-1',
-        name: 'First',
-        status: 'running',
-        createdAt: '2024-01-01T00:00:00Z',
-        updatedAt: '2024-01-01T00:00:00Z',
-      });
-      adapter.saveWorkflow({
-        id: 'wf-2',
-        name: 'Second',
-        status: 'running',
-        createdAt: '2024-01-02T00:00:00Z',
-        updatedAt: '2024-01-02T00:00:00Z',
-      });
+      adapter.saveWorkflow({ id: 'wf-1',
+      name: 'First', createdAt: '2024-01-01T00:00:00Z',
+      updatedAt: '2024-01-01T00:00:00Z', });
+      adapter.saveWorkflow({ id: 'wf-2',
+      name: 'Second', createdAt: '2024-01-02T00:00:00Z',
+      updatedAt: '2024-01-02T00:00:00Z', });
 
       adapter.saveTask('wf-1', makeTask('t1'));
       adapter.saveTask('wf-1', makeTask('t2'));
@@ -1845,13 +2072,9 @@ describe('SQLiteAdapter', () => {
     });
 
     it('works when workflow has no tasks', () => {
-      adapter.saveWorkflow({
-        id: 'wf-empty',
-        name: 'Empty Workflow',
-        status: 'running',
-        createdAt: '2024-01-01T00:00:00Z',
-        updatedAt: '2024-01-01T00:00:00Z',
-      });
+      adapter.saveWorkflow({ id: 'wf-empty',
+      name: 'Empty Workflow', createdAt: '2024-01-01T00:00:00Z',
+      updatedAt: '2024-01-01T00:00:00Z', });
 
       adapter.deleteWorkflow('wf-empty');
 
@@ -1875,13 +2098,9 @@ describe('SQLiteAdapter', () => {
     });
 
     it('is a no-op for non-existent workflow', () => {
-      adapter.saveWorkflow({
-        id: 'wf-exists',
-        name: 'Existing',
-        status: 'running',
-        createdAt: '2024-01-01T00:00:00Z',
-        updatedAt: '2024-01-01T00:00:00Z',
-      });
+      adapter.saveWorkflow({ id: 'wf-exists',
+      name: 'Existing', createdAt: '2024-01-01T00:00:00Z',
+      updatedAt: '2024-01-01T00:00:00Z', });
       adapter.saveTask('wf-exists', makeTask('t1'));
 
       // Call deleteWorkflow on a non-existent workflow
@@ -1924,20 +2143,12 @@ describe('SQLiteAdapter', () => {
     });
 
     it('removes output spool rows and tail cache only for deleted workflow tasks', () => {
-      adapter.saveWorkflow({
-        id: 'wf-delete-target',
-        name: 'Delete Target',
-        status: 'running',
-        createdAt: '2024-01-01T00:00:00Z',
-        updatedAt: '2024-01-01T00:00:00Z',
-      });
-      adapter.saveWorkflow({
-        id: 'wf-keep',
-        name: 'Keep',
-        status: 'running',
-        createdAt: '2024-01-02T00:00:00Z',
-        updatedAt: '2024-01-02T00:00:00Z',
-      });
+      adapter.saveWorkflow({ id: 'wf-delete-target',
+      name: 'Delete Target', createdAt: '2024-01-01T00:00:00Z',
+      updatedAt: '2024-01-01T00:00:00Z', });
+      adapter.saveWorkflow({ id: 'wf-keep',
+      name: 'Keep', createdAt: '2024-01-02T00:00:00Z',
+      updatedAt: '2024-01-02T00:00:00Z', });
 
       adapter.saveTask('wf-delete-target', makeTask('t-delete-spool'));
       adapter.saveTask('wf-keep', makeTask('t-keep-spool'));
@@ -2402,8 +2613,8 @@ describe('SQLiteAdapter', () => {
 
   describe('loadAllCompletedTasks', () => {
     it('returns completed tasks across multiple workflows with workflowName', () => {
-      adapter.saveWorkflow({ id: 'wf-1', name: 'First Plan', status: 'completed', createdAt: '2024-01-01T00:00:00Z', updatedAt: '2024-01-01T00:00:00Z' });
-      adapter.saveWorkflow({ id: 'wf-2', name: 'Second Plan', status: 'completed', createdAt: '2024-01-02T00:00:00Z', updatedAt: '2024-01-02T00:00:00Z' });
+      adapter.saveWorkflow({ id: 'wf-1', name: 'First Plan', createdAt: '2024-01-01T00:00:00Z', updatedAt: '2024-01-01T00:00:00Z' });
+      adapter.saveWorkflow({ id: 'wf-2', name: 'Second Plan', createdAt: '2024-01-02T00:00:00Z', updatedAt: '2024-01-02T00:00:00Z' });
 
       adapter.saveTask('wf-1', makeTask('t1', { status: 'completed', execution: { completedAt: new Date('2024-01-02') } }));
       adapter.saveTask('wf-2', makeTask('t2', { status: 'completed', execution: { completedAt: new Date('2024-01-03') } }));
@@ -2418,7 +2629,7 @@ describe('SQLiteAdapter', () => {
     });
 
     it('excludes non-completed tasks', () => {
-      adapter.saveWorkflow({ id: 'wf-1', name: 'Test', status: 'running', createdAt: '2024-01-01T00:00:00Z', updatedAt: '2024-01-01T00:00:00Z' });
+      adapter.saveWorkflow({ id: 'wf-1', name: 'Test', createdAt: '2024-01-01T00:00:00Z', updatedAt: '2024-01-01T00:00:00Z' });
       adapter.saveTask('wf-1', makeTask('t1', { status: 'pending' }));
       adapter.saveTask('wf-1', makeTask('t2', { status: 'running' }));
       adapter.saveTask('wf-1', makeTask('t3', { status: 'failed' }));
@@ -2986,6 +3197,23 @@ describe('SQLiteAdapter', () => {
       });
 
       expect(adapter.getExecutionAgent('t-agent-3')).toBe('codex');
+    });
+
+    it('falls back to lastAgentName when a completed command task keeps only the last session', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const task = makeTask('t-agent-last-only', {
+        status: 'completed',
+        config: { workflowId: 'wf-1', command: 'pnpm test' },
+        execution: {
+          lastAgentSessionId: 'sess-codex-last',
+          lastAgentName: 'codex',
+          workspacePath: '/tmp/worktree-last',
+        },
+      });
+      adapter.saveTask('wf-1', task);
+
+      expect(adapter.getAgentSessionId('t-agent-last-only')).toBe('sess-codex-last');
+      expect(adapter.getExecutionAgent('t-agent-last-only')).toBe('codex');
     });
 
     it('returns null when neither agent_name nor execution_agent is set', () => {

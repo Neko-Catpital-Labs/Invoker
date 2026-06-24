@@ -27,19 +27,25 @@ Every implementation slice should carry these fields in task descriptions and
 PR bodies:
 
 - `Review claim:` one sentence the reviewer is being asked to approve.
+- `Review lane:` exactly one of `behavior`, `refactor`, `proof`, `cleanup`,
+  `policy`, or `docs`.
 - `Safety invariant:` why this slice is safe to review locally.
 - `Slice rationale:` why this work is split here instead of bundled elsewhere.
 - `Architectural effect:` what changed in control flow, data flow, ownership,
   dependency direction, or public surface.
 - `Alternative considerations:` rejected designs or split shapes.
+- `Non-goals:` what this slice explicitly does not change.
 
 For mechanical slices, these can be terse. For cross-boundary changes, explain
-the before/after architecture and why the split is acceptable.
+the before/after architecture and why the split is acceptable. Each slice must
+still contain one conceptual unit; validators infer mixed units from the claim,
+rationale, implementation details, and change-type entries.
 
 ## Ordering Rules
 
 - Evidence before change: add repros, benchmarks, or instrumentation before the
   fix when they prove the problem.
+- Refactor before behavior when the extraction is reusable and behavior-neutral.
 - Foundation before behavior: add schemas, types, helpers, migrations, flags,
   and dormant code before behavior changes.
 - Compatibility before exposure: include adapters with a lower-level change
@@ -85,6 +91,9 @@ Split changes when they introduce a different claim:
 - stale unrelated screenshots
 - behavior fix plus rename
 - default flip plus dead-path removal
+- refactor/extraction plus new fields or other behavior changes
+- benchmark/repro/proof harness plus the fix it is meant to justify
+- product code plus planning/policy/docs updates
 - broad mechanical moves too large to inspect comfortably
 
 ## PR Body Guidance
@@ -96,4 +105,3 @@ Do not summarize the patch file-by-file. Compress the human judgment:
 - describe architectural effect in plain English
 - call out why this slice exists
 - include alternatives for non-obvious or cross-boundary choices
-

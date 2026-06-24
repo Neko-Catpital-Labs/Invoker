@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { TaskState, WorkflowMeta } from '../types.js';
+import type { ReviewGateArtifact, ReviewGateQueryResponse, TaskState, WorkflowMeta } from '../types.js';
 import { getEffectiveVisualStatus, getStatusColor } from '../lib/colors.js';
 import { workflowStatusVisual } from '../lib/workflow-status.js';
+
+type MergeMode = 'manual' | 'automatic' | 'external_review';
 
 interface WorkflowInspectorProps {
   workflow: WorkflowMeta | null;
   task: TaskState | null;
   workflowTasks?: Map<string, TaskState>;
+  reviewGate?: ReviewGateQueryResponse | null;
   remoteTargets?: string[];
   executionPools?: string[];
   executionAgents?: string[];
@@ -21,6 +24,7 @@ interface WorkflowInspectorProps {
   onApprove?: (task: TaskState) => void;
   onReject?: (task: TaskState) => void;
   onSetMergeBranch?: (workflowId: string, baseBranch: string) => Promise<void>;
+  onSetMergeMode?: (workflowId: string, mergeMode: MergeMode) => Promise<void>;
   onToggleCollapsed: () => void;
   onToggleAdvanced: () => void;
 }
@@ -31,6 +35,10 @@ function formatStatus(value: string | undefined): string {
 
 function capitalize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function mergeModeValue(value: string | undefined): MergeMode {
+  return value === 'automatic' || value === 'external_review' ? value : 'manual';
 }
 
 function getReviewReadyMergeNodeReviewUrl(
@@ -49,10 +57,61 @@ function getReviewReadyMergeNodeReviewUrl(
   return undefined;
 }
 
+
+function artifactLabel(artifact: ReviewGateArtifact): string {
+  return artifact.title || artifact.url || (artifact.providerId ? `#${artifact.providerId}` : artifact.id);
+}
+
+function ReviewGateStackSection({ reviewGate }: { reviewGate: ReviewGateQueryResponse }): JSX.Element {
+  const artifacts = reviewGate.artifacts;
+  const hasConnectors = artifacts.length > 1;
+  return (
+    <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
+      <div className="text-[11px] uppercase tracking-wide text-gray-400">Pull Request Stack</div>
+      {artifacts.length === 0 ? (
+        <div className="mt-2 text-xs text-gray-500">No pull requests yet</div>
+      ) : (
+        <ol className="mt-2 space-y-2">
+          {artifacts.map((artifact, index) => (
+            <li key={artifact.id} className="relative pl-5 text-xs">
+              {hasConnectors && (
+                <span
+                  aria-hidden="true"
+                  data-testid="review-gate-connector"
+                  className="absolute left-1 top-0 h-full border-l border-gray-600 before:absolute before:left-0 before:top-3 before:w-3 before:border-t before:border-gray-600"
+                />
+              )}
+              <div className="rounded border border-gray-700 bg-gray-950/80 px-2 py-1">
+                {artifact.url ? (
+                  <a
+                    href={artifact.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    data-testid="inspector-pr-link"
+                    data-sidebar-nav-item
+                    data-sidebar-nav-order={String(30 + index)}
+                    className="text-blue-300 underline break-words"
+                  >
+                    {artifactLabel(artifact)}
+                  </a>
+                ) : (
+                  <div className="text-gray-200">{artifactLabel(artifact)}</div>
+                )}
+                <div className="mt-1 text-[11px] text-gray-400">{formatStatus(artifact.status)}</div>
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  );
+}
+
 export function WorkflowInspector({
   workflow,
   task,
   workflowTasks,
+  reviewGate,
   executionPools,
   executionAgents,
   collapsed,
@@ -64,6 +123,7 @@ export function WorkflowInspector({
   onApprove,
   onReject,
   onSetMergeBranch,
+  onSetMergeMode,
   onToggleCollapsed,
   onToggleAdvanced,
 }: WorkflowInspectorProps): JSX.Element {
@@ -283,26 +343,44 @@ export function WorkflowInspector({
           </section>
         )}
 
-        {isMergeNode && onSetMergeBranch && (
+        {isMergeNode && (onSetMergeBranch || onSetMergeMode) && (
           <section className="rounded border border-gray-700 bg-gray-800/70 p-3 space-y-3">
-            <label className="flex items-center justify-between gap-3">
-              <span className="text-xs uppercase tracking-wide text-gray-400">Target Branch</span>
-              <input
-                data-testid="target-branch-input"
-                value={branchValue}
-                onChange={(event) => setBranchValue(event.target.value)}
-                onBlur={saveBranch}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    (event.target as HTMLInputElement).blur();
-                  }
-                  if (event.key === 'Escape') {
-                    setBranchValue(workflow?.baseBranch ?? '');
-                  }
-                }}
-                className="min-w-0 max-w-[190px] rounded border border-gray-600 bg-gray-700 px-2 py-1 text-right font-mono text-xs text-gray-100 focus:border-blue-500 focus:outline-none"
-              />
-            </label>
+            {onSetMergeBranch && (
+              <label className="flex items-center justify-between gap-3">
+                <span className="text-xs uppercase tracking-wide text-gray-400">Target Branch</span>
+                <input
+                  data-testid="target-branch-input"
+                  value={branchValue}
+                  onChange={(event) => setBranchValue(event.target.value)}
+                  onBlur={saveBranch}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      (event.target as HTMLInputElement).blur();
+                    }
+                    if (event.key === 'Escape') {
+                      setBranchValue(workflow?.baseBranch ?? '');
+                    }
+                  }}
+                  className="min-w-0 max-w-[190px] rounded border border-gray-600 bg-gray-700 px-2 py-1 text-right font-mono text-xs text-gray-100 focus:border-blue-500 focus:outline-none"
+                />
+              </label>
+            )}
+            {onSetMergeMode && workflow?.id && (
+              <label className="flex items-center justify-between gap-3">
+                <span className="text-xs uppercase tracking-wide text-gray-400">Merge mode</span>
+                <select
+                  value={mergeModeValue(workflow.mergeMode)}
+                  onChange={(event) => void onSetMergeMode(workflow.id, event.target.value as MergeMode)}
+                  disabled={isTaskBusy}
+                  className="min-w-0 max-w-[190px] rounded border border-gray-600 bg-gray-700 px-2 py-1 text-xs text-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  data-testid="merge-mode-select"
+                >
+                  <option value="manual">Manual</option>
+                  <option value="automatic">Automatic</option>
+                  <option value="external_review">External review (GitHub)</option>
+                </select>
+              </label>
+            )}
             {workflow?.repoUrl && (
               <div className="flex items-start justify-between gap-3">
                 <span className="text-xs uppercase tracking-wide text-gray-400">PR target repo</span>
@@ -382,7 +460,9 @@ export function WorkflowInspector({
           </section>
         )}
 
-        {reviewUrl && (
+        {reviewGate ? (
+          <ReviewGateStackSection reviewGate={reviewGate} />
+        ) : reviewUrl && (
           <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
             <div className="text-[11px] uppercase tracking-wide text-gray-400">Pull Request</div>
             <a

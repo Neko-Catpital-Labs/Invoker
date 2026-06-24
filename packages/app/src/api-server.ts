@@ -60,6 +60,7 @@ import type {
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { parseMetadataPatchBody, type MetadataSetResult } from './metadata-setter.js';
+import { buildReviewGateQueryResponse } from './review-gate-query.js';
 
 export interface ApiMutationFacade {
   cancelTask(taskId: string): Promise<CancelMutationResult>;
@@ -381,6 +382,20 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
       }
 
       // GET /api/workflows
+      // GET /api/workflows/:id/review-gate
+      const reviewGateMatch = path.match(/^\/api\/workflows\/([^/]+)\/review-gate$/);
+      if (method === 'GET' && reviewGateMatch) {
+        const workflowId = decodeURIComponent(reviewGateMatch[1]);
+        const workflow = persistence.loadWorkflow(workflowId);
+        if (!workflow) {
+          json(res, 404, { error: 'Workflow not found' });
+          return;
+        }
+        const tasks = persistence.loadTasks(workflowId);
+        json(res, 200, buildReviewGateQueryResponse({ workflowId, workflow, tasks }));
+        return;
+      }
+
       if (method === 'GET' && path === '/api/workflows') {
         const workflows = persistence.listWorkflows();
         json(res, 200, workflows);
@@ -608,19 +623,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
       // POST /api/tasks/:id/edit-type
       const editTypeMatch = path.match(/^\/api\/tasks\/([^/]+)\/edit-type$/);
       if (method === 'POST' && editTypeMatch) {
-        const taskId = decodeURIComponent(editTypeMatch[1]);
-        try {
-          const body = await readBody(req);
-          const { runnerKind, poolMemberId } = JSON.parse(body);
-          if (!runnerKind) {
-            json(res, 400, { error: 'Missing "runnerKind" in request body' });
-            return;
-          }
-          const result = await mutations.editTaskType(taskId, runnerKind, poolMemberId);
-          json(res, 200, { ok: true, taskId, action: 'type_edited', tasksStarted: result.runnable.length });
-        } catch (err) {
-          json(res, httpStatusForError(err), { error: errorMessage(err) });
-        }
+        json(res, 410, { error: 'Executor selection is internal; use the headless set pool command instead.' });
         return;
       }
 

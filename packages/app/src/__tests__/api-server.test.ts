@@ -101,9 +101,10 @@ function createMocks() {
       recreateDownstream: vi.fn(() => [makeTask()]),
       retryWorkflow: vi.fn(() => [makeTask()]),
       recreateWorkflow: vi.fn(() => [makeTask()]),
+      recreateWorkflowFromFreshBase: vi.fn(async () => [makeTask()]),
+      cascadeInvalidationToDownstream: vi.fn(() => []),
       editTaskCommand: vi.fn(() => [makeTask()]),
       editTaskPrompt: vi.fn(() => [makeTask()]),
-      editTaskType: vi.fn(() => [makeTask()]),
       editTaskAgent: vi.fn(() => [makeTask()]),
       setTaskExternalGatePolicies: vi.fn(() => [makeTask()]),
       cancelTask: vi.fn(() => ({ cancelled: ['task-1'], runningCancelled: ['task-1'] })),
@@ -138,10 +139,10 @@ function createMocks() {
     },
     executorRegistry: {},
     commandService: {
-      runSerializedForWorkflow: vi.fn(async (_workflowId: string, fn: () => unknown) => {
-        await fn();
-        return { ok: true, data: undefined };
-      }),
+      runSerializedForWorkflow: vi.fn(async (_workflowId: string, fn: () => Promise<unknown> | unknown) => ({
+        ok: true,
+        data: await fn(),
+      })),
       // Production CommandService routes through applyInvalidation which
       // ultimately invokes orchestrator.{retry,recreate}{Task,Workflow}
       // and (for recreateWorkflow) bumpGenerationAndRecreate which calls
@@ -200,6 +201,8 @@ function createMocks() {
       resolveConflict: vi.fn().mockResolvedValue(undefined),
       fixWithAgent: vi.fn().mockResolvedValue(undefined),
       commitApprovedFix: vi.fn().mockResolvedValue(undefined),
+      killActiveExecution: vi.fn().mockResolvedValue(undefined),
+      preparePoolForRebaseRetry: vi.fn().mockResolvedValue(undefined),
     },
     killRunningTask: vi.fn().mockResolvedValue(undefined),
     deleteWorkflow: vi.fn().mockResolvedValue(undefined),
@@ -278,7 +281,6 @@ beforeEach(() => {
   mocks.orchestrator.beginConflictResolution.mockReturnValue({ savedError: 'saved-error' });
   mocks.orchestrator.editTaskCommand.mockReturnValue([makeTask()]);
   mocks.orchestrator.editTaskPrompt.mockReturnValue([makeTask()]);
-  mocks.orchestrator.editTaskType.mockReturnValue([makeTask()]);
   mocks.orchestrator.setTaskExternalGatePolicies.mockReturnValue([makeTask()]);
   mocks.orchestrator.cancelTask.mockReturnValue({ cancelled: ['task-1'], runningCancelled: ['task-1'] });
   mocks.orchestrator.cancelWorkflow.mockReturnValue({ cancelled: ['task-1'], runningCancelled: ['task-1'] });
@@ -291,8 +293,7 @@ beforeEach(() => {
   mocks.persistence.loadTask.mockImplementation((id: string) => (id === 'task-1' ? makeTask() : undefined));
   mocks.persistence.loadTasks.mockReturnValue([makeTask()]);
   mocks.commandService.runSerializedForWorkflow.mockImplementation(async (_workflowId: string, fn: () => unknown) => {
-    await fn();
-    return { ok: true, data: undefined };
+    return { ok: true, data: await fn() };
   });
   mocks.persistence.getEvents.mockReturnValue([{ taskId: 'task-1', eventType: 'started', timestamp: '2024-01-01' }]);
   mocks.persistence.getTaskOutput.mockReturnValue('hello world output');
@@ -367,6 +368,110 @@ describe('GET /api/workflows', () => {
     expect(res.body).toHaveLength(1);
     expect(res.body[0].id).toBe('wf-1');
     expect(mocks.persistence.listWorkflows).toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/workflows/:id/review-gate', () => {
+  it('returns 404 when workflow is missing', async () => {
+    mocks.persistence.loadWorkflow.mockReturnValue(undefined);
+    const res = await request(port, 'GET', '/api/workflows/missing/review-gate');
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'Workflow not found' });
+  });
+
+  it('returns an empty response when no merge node exists', async () => {
+    mocks.persistence.loadTasks.mockReturnValue([makeTask({ id: 'task-1' })]);
+    const res = await request(port, 'GET', '/api/workflows/wf-1/review-gate');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      workflowId: 'wf-1',
+      mergeTaskId: null,
+      status: null,
+      ready: false,
+      artifacts: [],
+      discardedArtifacts: [],
+      edges: [],
+    });
+  });
+
+  it('returns current artifacts, linear stack links, and discarded artifacts separately', async () => {
+    mocks.persistence.loadTasks.mockReturnValue([
+      makeTask({
+        id: '__merge__wf-1',
+        status: 'review_ready',
+        config: { workflowId: 'wf-1', isMergeNode: true },
+        execution: {
+          reviewGate: {
+            activeGeneration: 2,
+            completion: { required: 'all', status: 'approved' },
+            artifacts: [
+              { id: 'contracts', required: true, status: 'approved', generation: 2 },
+              { id: 'runtime', required: true, status: 'open', generation: 2, dependsOn: ['contracts'] },
+              { id: 'ui', required: true, status: 'open', generation: 2, dependsOn: ['contracts'] },
+              { id: 'old', required: true, status: 'discarded', generation: 1, discardedAt: '2024-01-01T00:00:00Z' },
+            ],
+          },
+        },
+      }),
+    ]);
+
+    const res = await request(port, 'GET', '/api/workflows/wf-1/review-gate');
+    expect(res.status).toBe(200);
+    expect(res.body.artifacts.map((artifact: { id: string }) => artifact.id)).toEqual(['contracts', 'runtime', 'ui']);
+    expect(res.body.discardedArtifacts.map((artifact: { id: string }) => artifact.id)).toEqual(['old']);
+    expect(res.body.edges).toEqual([
+      { from: 'contracts', to: 'runtime' },
+      { from: 'runtime', to: 'ui' },
+    ]);
+    expect(res.body.ready).toBe(false);
+  });
+
+  it('returns ready only when all required current artifacts are approved', async () => {
+    mocks.persistence.loadTasks.mockReturnValue([
+      makeTask({
+        id: '__merge__wf-1',
+        status: 'review_ready',
+        config: { workflowId: 'wf-1', isMergeNode: true },
+        execution: {
+          reviewGate: {
+            activeGeneration: 0,
+            completion: { required: 'all', status: 'approved' },
+            artifacts: [
+              { id: 'contracts', required: true, status: 'approved', generation: 0 },
+              { id: 'runtime', required: true, status: 'approved', generation: 0 },
+            ],
+          },
+        },
+      }),
+    ]);
+
+    const res = await request(port, 'GET', '/api/workflows/wf-1/review-gate');
+    expect(res.status).toBe(200);
+    expect(res.body.ready).toBe(true);
+  });
+
+  it('synthesizes a scalar fallback artifact', async () => {
+    mocks.persistence.loadTasks.mockReturnValue([
+      makeTask({
+        id: '__merge__wf-1',
+        status: 'review_ready',
+        config: { workflowId: 'wf-1', isMergeNode: true, summary: 'Review PR' },
+        execution: {
+          reviewId: '42',
+          reviewUrl: 'https://example.test/pr/42',
+          reviewStatus: 'Awaiting review',
+          reviewProviderId: '42',
+          generation: 3,
+        },
+      }),
+    ]);
+
+    const res = await request(port, 'GET', '/api/workflows/wf-1/review-gate');
+    expect(res.status).toBe(200);
+    expect(res.body.activeGeneration).toBe(3);
+    expect(res.body.artifacts).toEqual([
+      expect.objectContaining({ id: '42', url: 'https://example.test/pr/42', providerId: '42' }),
+    ]);
   });
 });
 
@@ -806,39 +911,10 @@ describe('POST /api/tasks/:id/edit-prompt', () => {
 });
 
 describe('POST /api/tasks/:id/edit-type', () => {
-  it('edits task type', async () => {
+  it('rejects direct executor changes', async () => {
     const res = await request(port, 'POST', '/api/tasks/task-1/edit-type', { runnerKind: 'docker' });
-    expect(res.status).toBe(200);
-    expect(res.body.ok).toBe(true);
-    expect(res.body.action).toBe('type_edited');
-    expect(mocks.orchestrator.editTaskType).toHaveBeenCalledWith('task-1', 'docker', undefined);
-  });
-
-  it('passes poolMemberId when provided', async () => {
-    const res = await request(port, 'POST', '/api/tasks/task-1/edit-type', {
-      runnerKind: 'ssh',
-      poolMemberId: 'remote-1',
-    });
-    expect(res.status).toBe(200);
-    expect(mocks.orchestrator.editTaskType).toHaveBeenCalledWith('task-1', 'ssh', 'remote-1');
-  });
-
-  it('returns 400 when runnerKind is missing', async () => {
-    const res = await request(port, 'POST', '/api/tasks/task-1/edit-type', {});
-    expect(res.status).toBe(400);
-    expect(res.body.error).toContain('Missing "runnerKind"');
-  });
-
-  it('forwards a poolMemberId-only change (host change)', async () => {
-    const res = await request(port, 'POST', '/api/tasks/task-1/edit-type', {
-      runnerKind: 'ssh',
-      poolMemberId: 'remote-b',
-    });
-    expect(res.status).toBe(200);
-    expect(res.body.ok).toBe(true);
-    expect(res.body.action).toBe('type_edited');
-    expect(mocks.orchestrator.editTaskType).toHaveBeenCalledWith('task-1', 'ssh', 'remote-b');
-    expect(mocks.taskExecutor.executeTasks).not.toHaveBeenCalled();
+    expect(res.status).toBe(410);
+    expect(res.body.error).toContain('Executor selection is internal');
   });
 });
 
@@ -1046,14 +1122,14 @@ describe('POST /api/workflows/:id/rebase-recreate', () => {
   });
 
   it('recreates workflow from fresh base', async () => {
-    mocks.orchestrator.recreateWorkflow = vi.fn(() => [makeTask()]);
+    mocks.orchestrator.recreateWorkflowFromFreshBase = vi.fn(async () => [makeTask({ id: 'wf-1/task-a' })]);
     const res = await request(port, 'POST', '/api/workflows/wf-1/rebase-recreate');
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.action).toBe('rebase_recreated');
     expect(res.body.tasksStarted).toBe(1);
     expect(res.body.deprecated).toBeUndefined();
-    expect(mocks.orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
+    expect(mocks.orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-1', expect.any(Object));
   });
 
   it('keeps cross-workflow started tasks out of the scoped rebase-recreate runnable result', async () => {
@@ -1067,7 +1143,7 @@ describe('POST /api/workflows/:id/rebase-recreate', () => {
       config: { workflowId: 'wf-2' },
       execution: { selectedAttemptId: 'attempt-b' },
     });
-    mocks.orchestrator.recreateWorkflow = vi.fn(() => [scoped, crossWorkflow]);
+    mocks.orchestrator.recreateWorkflowFromFreshBase = vi.fn(async () => [scoped, crossWorkflow]);
     mocks.orchestrator.startExecution.mockReturnValue([]);
 
     const res = await request(port, 'POST', '/api/workflows/wf-1/rebase-recreate');

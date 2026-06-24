@@ -50,6 +50,19 @@ export interface ExternalDependencyChange {
   readonly changedBy?: string;
 }
 
+/**
+ * Read-only provenance for an external dependency removed by `detachWorkflow`.
+ * Lets the UI distinguish a genuinely-independent workflow from one explicitly
+ * detached from an upstream stack edge. Not used for scheduling.
+ */
+export interface DetachedExternalDependency {
+  readonly workflowId: string;
+  readonly taskId?: string;
+  readonly requiredStatus: 'completed';
+  readonly gatePolicy?: 'completed' | 'review_ready';
+  readonly detachedAt: string;
+}
+
 export interface ExternalGatePolicyUpdate {
   workflowId: string;
   taskId?: string;
@@ -171,13 +184,22 @@ export interface WorkflowMeta {
   reviewProvider?: string;
   externalDependencies?: readonly ExternalDependency[];
   externalDependencyChanges?: readonly ExternalDependencyChange[];
+  detachedExternalDependencies?: readonly DetachedExternalDependency[];
   createdAt?: string;
   updatedAt?: string;
 }
+export interface WorkflowRollupPatch {
+  readonly workflowId: string;
+  readonly status: WorkflowStatus;
+  readonly rollup: WorkflowRollup;
+}
+
+
 export type TaskGraphEvent =
   | {
       readonly type: 'delta';
       readonly delta: TaskDelta;
+      readonly workflowRollups: readonly WorkflowRollupPatch[];
     }
   | {
       readonly type: 'snapshot';
@@ -292,10 +314,10 @@ export interface TaskReplacementDef {
 // ── IPC Bridge API ──────────────────────────────────────────
 // InvokerAPI is derived from the IPC channel registry in @invoker/contracts.
 
-export type { InvokerAPI, ClaudeMessage, AgentSessionData } from '@invoker/contracts';
+export type { ReviewGateArtifact, ReviewGateState } from '@invoker/workflow-graph';
+export type { InvokerAPI, ClaudeMessage, AgentSessionData, ReviewGateQueryResponse } from '@invoker/contracts';
 
 import type { InvokerAPI, TerminalOutputEvent } from '@invoker/contracts';
-
 // ── Augment global Window ───────────────────────────────────
 
 declare global {
