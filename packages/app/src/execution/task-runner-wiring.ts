@@ -13,6 +13,7 @@ import {
 import type { Logger } from '@invoker/contracts';
 import { loadConfig, resolveSecretsFilePath, type InvokerConfig } from '../config.js';
 import { publishReviewGateCiFailedLifecycleEvent } from '../lifecycle-event-bridge.js';
+import { persistStartupFailureDiagnostic } from '../shutdown-diagnostic.js';
 
 export type TaskHandleMap = Map<string, { handle: ExecutorHandle; executor: Executor }>;
 
@@ -114,6 +115,17 @@ export function rebuildTaskRunner(deps: TaskRunnerWiringDeps): TaskRunner {
           `Task "${taskId}" launch failed before spawn (executor: ${executor.type}): ${error.message}`,
           { module: 'exec' },
         );
+        // Preserve the concrete startup failure in durable task output so
+        // post-mortem retrieval keeps the real cause and recent output tail
+        // instead of collapsing to a coarse terminal error.
+        const task = deps.orchestrator.getTask(taskId);
+        if (task) {
+          persistStartupFailureDiagnostic(task, deps.persistence, {
+            flushPendingOutput: deps.flushTaskOutput,
+            forcedStopReason: `Executor startup failed (${executor.type})`,
+            failureDetail: error.message,
+          });
+        }
       },
       onSpawned: (taskId, handle, executor) => {
         deps.flushTaskOutput(taskId);
