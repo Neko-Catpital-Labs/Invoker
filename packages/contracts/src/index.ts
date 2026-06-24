@@ -9,3 +9,4 @@ export * from './repo-root.ts';
 export * from './cost-types.ts';
 export * from './launch-timeouts.ts';
 export * from './invoker-home.ts';
+export * from './prerequisites.ts';
