@@ -350,4 +350,39 @@ tasks:
     expect(output.stderr).toContain('--db-dir cannot be used with --live');
     output.restore();
   });
+
+  it('exits non-zero for an unknown worker kind without opening IPC', async () => {
+    const output = captureProcessOutput();
+    const createMessageBus = vi.fn(() => {
+      throw new Error('unexpected IPC');
+    });
+
+    const code = await main(['worker', 'frobnicate'], { createMessageBus });
+    output.restore();
+
+    // An unrecognized kind is rejected by the registry before any IPC bus is
+    // created.
+    expect(code).toBe(1);
+    expect(createMessageBus).not.toHaveBeenCalled();
+    expect(output.stderr).toContain('Unknown worker kind: frobnicate');
+  });
+
+  it('selects the autofix worker by kind from the registry', async () => {
+    const output = captureProcessOutput();
+    // A registered kind passes registry selection and proceeds to bus setup;
+    // throwing there proves the autofix branch is reached via the registry
+    // (not a hard-coded branch) without running the long-lived foreground
+    // worker.
+    const createMessageBus = vi.fn(() => {
+      throw new Error('bus-setup-reached');
+    });
+
+    const code = await main(['worker', 'autofix'], { createMessageBus });
+    output.restore();
+
+    expect(createMessageBus).toHaveBeenCalledTimes(1);
+    expect(code).toBe(1);
+    expect(output.stderr).toContain('bus-setup-reached');
+    expect(output.stderr).not.toContain('Unknown worker kind');
+  });
 });
