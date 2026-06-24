@@ -1071,16 +1071,6 @@ export class TaskRunner {
       hasWorkspacePath: Boolean(handle.workspacePath),
       hasAgentSessionId: Boolean(handle.agentSessionId),
     });
-    // Post-start lineage guard. `executor.start()` can resolve minutes after
-    // launch (SSH provisioning is slow); by the time it returns, recreate-task
-    // may have advanced the live task to a newer generation while keeping the
-    // same `selectedAttemptId`. `markTaskRunningAfterLaunch` rejects a
-    // mismatched attempt but does NOT validate the launch-time generation
-    // captured here, so a launch accepted at generation N could still persist
-    // workspacePath/branch/agentSessionId/containerId/heartbeat metadata and
-    // register an active execution over the live attempt now at N+1. Validate
-    // the captured `startGeneration` first, and short-circuit
-    // `markTaskRunningAfterLaunch` so a stale generation is never marked running.
     const launchStale = this.isLaunchStale(task.id, attemptId, startGeneration);
     const launchAccepted =
       !launchStale && (this.orchestrator.markTaskRunningAfterLaunch?.(task.id, attemptId) ?? true);
