@@ -112,6 +112,34 @@ describe('headless delegation enforcement', () => {
       ).resolves.toBeUndefined();
     });
 
+    it('prints direct action graph query JSON in read-only mode', async () => {
+      const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      mockDeps.orchestrator.syncAllFromDb = vi.fn();
+      mockDeps.orchestrator.getAllTasks = vi.fn(() => []);
+      mockDeps.orchestrator.getQueueStatus = vi.fn(() => ({
+        maxConcurrency: 1,
+        runningCount: 0,
+        running: [],
+        queued: [],
+      }));
+      mockDeps.persistence.listWorkflows = vi.fn(() => []);
+      mockDeps.persistence.listWorkflowMutationIntents = vi.fn(() => []);
+      mockDeps.persistence.listWorkflowMutationLeases = vi.fn(() => []);
+      mockDeps.persistence.getActivityLogs = vi.fn(() => []);
+      mockDeps.persistence.listLaunchDispatchesByState = vi.fn(() => []);
+
+      await expect(
+        runHeadless(['query', 'action-graph', '--output', 'json'], mockDeps),
+      ).resolves.toBeUndefined();
+
+      const parsed = JSON.parse(stdout.mock.calls[0][0] as string);
+      expect(parsed).toEqual(expect.objectContaining({
+        nodes: [],
+        edges: [],
+      }));
+      stdout.mockRestore();
+    });
+
       it('allows deprecated list command in read-only mode', async () => {
         await expect(
           runHeadless(['list'], mockDeps)
