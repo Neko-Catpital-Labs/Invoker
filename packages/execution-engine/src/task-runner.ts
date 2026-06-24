@@ -1071,12 +1071,36 @@ export class TaskRunner {
       hasWorkspacePath: Boolean(handle.workspacePath),
       hasAgentSessionId: Boolean(handle.agentSessionId),
     });
+    // Post-start lineage guard. `executor.start()` can resolve minutes after
+    // launch (SSH provisioning is slow); by the time it returns, recreate-task
+    // may have advanced the live task to a newer generation while keeping the
+    // same `selectedAttemptId`. `markTaskRunningAfterLaunch` rejects a
+    // mismatched attempt but does NOT validate the launch-time generation
+    // captured here, so a launch accepted at generation N could still persist
+    // workspacePath/branch/agentSessionId/containerId/heartbeat metadata and
+    // register an active execution over the live attempt now at N+1. Validate
+    // the captured `startGeneration` first, and short-circuit
+    // `markTaskRunningAfterLaunch` so a stale generation is never marked running.
+    const launchStale = this.isLaunchStale(task.id, attemptId, startGeneration);
     const launchAccepted =
-      this.orchestrator.markTaskRunningAfterLaunch?.(task.id, attemptId) ?? true;
+      !launchStale && (this.orchestrator.markTaskRunningAfterLaunch?.(task.id, attemptId) ?? true);
     if (!launchAccepted) {
       this.logger.warn(
-        `[TaskRunner] launch rejected as stale/non-executable for task=${task.id} attemptId=${attemptId}; killing spawned process`,
+        `[TaskRunner] launch rejected as stale/non-executable for task=${task.id} attemptId=${attemptId} ` +
+          `startGeneration=${startGeneration} staleLineage=${launchStale}; killing spawned process`,
       );
+      if (launchStale) {
+        this.persistence.logEvent?.(task.id, 'task.executor.stale_post_start', {
+          attemptId,
+          executorType: executor.type,
+          startGeneration,
+          currentGeneration: this.orchestrator.getTask(task.id)?.execution.generation ?? null,
+          workspacePath: handle.workspacePath,
+          branch: handle.branch,
+          hasAgentSessionId: Boolean(handle.agentSessionId),
+          hasContainerId: Boolean(handle.containerId),
+        });
+      }
       try {
         await executor.kill(handle);
       } catch (killErr) {
@@ -1091,7 +1115,7 @@ export class TaskRunner {
           new Error('Launch rejected as stale or non-executable after executor start'),
         );
       }
-      bench('markTaskRunningAfterLaunch.rejected');
+      bench('markTaskRunningAfterLaunch.rejected', { staleLineage: launchStale });
       return;
     }
     bench('markTaskRunningAfterLaunch.accepted');
