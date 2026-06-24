@@ -65,6 +65,7 @@ import { retryTransientGitHubCli } from './git-utils.js';
 import { PRE_START_HEARTBEAT_INTERVAL_MS, nextLeaseExpiry } from './task-runner-launch-support.js';
 import { buildWorkRequest } from './task-runner-prepare.js';
 import { dispatchExecutor } from './task-runner-dispatch.js';
+import { wireCompletion } from './task-runner-finalize.js';
 
 export type { TaskHeartbeatEvent, TaskRunnerCallbacks } from './task-runner-callbacks.js';
 type ReviewGateState = NonNullable<TaskState['execution']['reviewGate']>;
@@ -737,101 +738,13 @@ export class TaskRunner {
     // Launch was rejected as stale/non-executable after executor start;
     // dispatch already cleaned up and acked the dispatch row.
     if (!dispatched) return;
-    const { executor, handle } = dispatched;
-
-    // Wait for completion and feed response to orchestrator.
-    // The callback is serialized through completionChain so that concurrent
-    // onComplete firings never overlap inside orchestrator mutations.
-    const completionPromise = new Promise<void>((resolvePromise) => {
-      executor.onComplete(handle, async (response: WorkResponse) => {
-        const work = async () => {
-          const normalizedResponse = response.attemptId ? response : { ...response, attemptId };
-          const activeExecution = this.activeExecutions.get(normalizedResponse.attemptId ?? attemptId);
-          if (activeExecution?.leaseResourceKey && activeExecution.leaseHolderId) {
-            this.persistence.releaseExecutionResourceLease?.(activeExecution.leaseResourceKey, activeExecution.leaseHolderId);
-          }
-          this.activeExecutions.delete(normalizedResponse.attemptId ?? attemptId);
-          this.logger.info(
-            `[TaskRunner] completion callback task=${task.id} attempt=${normalizedResponse.attemptId ?? attemptId} ` +
-              `status=${normalizedResponse.status} exitCode=${normalizedResponse.outputs.exitCode ?? 'none'} ` +
-              `executionId=${handle.executionId} activeExecutions=${this.activeExecutions.size}`,
-          );
-          let newlyStarted: TaskState[] = [];
-          try {
-            try {
-              traceExecution(
-                `[task-runner] onComplete taskId=${task.id} responseStatus=${response.status} ` +
-                  `responseAttemptId=${normalizedResponse.attemptId ?? attemptId} responseGeneration=${response.executionGeneration} executionId=${handle.executionId}`,
-              );
-              traceExecution(
-                `${RESTART_TO_BRANCH_TRACE} resolvePromise | task.config.isMergeNode = ${task.config.isMergeNode}`,
-              );
-              if (this.isLaunchStale(task.id, attemptId, task.execution.generation ?? 0)) {
-                this.logger.warn(
-                  `[TaskRunner] suppressing stale completion response for task=${task.id} attemptId=${attemptId}`,
-                );
-                return;
-              }
-              newlyStarted = this.orchestrator.handleWorkerResponse(normalizedResponse) ?? [];
-            } catch (err) {
-              this.logger.error(`[TaskRunner] worker response handling failed for task=${task.id}`, { err });
-              if (this.isLaunchStale(task.id, attemptId, task.execution.generation ?? 0)) {
-                this.logger.warn(
-                  `[TaskRunner] suppressing fallback failure response for stale completion task=${task.id} attemptId=${attemptId}`,
-                );
-                return;
-              }
-              const errResponse: WorkResponse = {
-                requestId: response.requestId,
-                actionId: task.id,
-                attemptId,
-                executionGeneration: task.execution.generation ?? 0,
-                status: 'failed',
-                outputs: {
-                  exitCode: 1,
-                  error: err instanceof Error ? (err.stack ?? err.message) : String(err),
-                },
-              };
-              try {
-                this.orchestrator.handleWorkerResponse(errResponse);
-              } catch (fallbackErr) {
-                this.logger.error(`[TaskRunner] fallback failure response handling failed for task=${task.id}`, { err: fallbackErr });
-              }
-              try {
-                this.callbacks.onComplete?.(task.id, errResponse);
-              } catch (callbackErr) {
-                this.logger.error(`[TaskRunner] completion callback observer failed for task=${task.id}`, { err: callbackErr });
-              }
-              return;
-            }
-
-            try {
-              this.callbacks.onComplete?.(task.id, normalizedResponse);
-            } catch (err) {
-              this.logger.error(`[TaskRunner] completion callback observer failed for task=${task.id}`, { err });
-            }
-
-            this.executeNewlyStartedTasks(newlyStarted, dispatchOpts);
-          } finally {
-            // Clean up per-task Docker executor to avoid resource leaks
-            try {
-              await this.cleanupPerTaskDockerExecutor(task);
-            } catch (cleanupErr) {
-              this.logger.warn(`[TaskRunner] completion cleanup failed for task=${task.id}`, { err: cleanupErr });
-            }
-          }
-        };
-
-        const prev = this.completionChain;
-        this.completionChain = prev.then(work, work);
-        await this.completionChain;
-        resolvePromise();
-      });
+    return wireCompletion(this, {
+      task,
+      attemptId,
+      executor: dispatched.executor,
+      handle: dispatched.handle,
+      dispatchOpts,
     });
-    if (dispatchOpts) {
-      dispatchOpts.launchOutbox.completeDispatch(dispatchOpts.dispatchId);
-    }
-    return completionPromise;
   }
 
   /**
