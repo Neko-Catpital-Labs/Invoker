@@ -221,6 +221,9 @@ importers:
       '@invoker/data-store':
         specifier: workspace:*
         version: link:../data-store
+      '@invoker/transport':
+        specifier: workspace:*
+        version: link:../transport
       '@invoker/workflow-core':
         specifier: workspace:*
         version: link:../workflow-core
