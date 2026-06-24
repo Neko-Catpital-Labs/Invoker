@@ -855,6 +855,60 @@ describe('Orchestrator', () => {
       }
     });
 
+    it('rejects a completion signal when attemptId matches but executionGeneration is stale', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        orchestrator.loadPlan({
+          name: 'reject-stale-generation-with-current-attempt',
+          onFinish: 'none',
+          tasks: [
+            { id: 'A', description: 'Root', command: 'echo A' },
+          ],
+        });
+        orchestrator.startExecution();
+        const taskId = orchestrator.getAllTasks().find((task) => task.id === 'A' || task.id.endsWith('/A'))?.id ?? 'A';
+
+        const activeAttemptId = orchestrator.getTask(taskId)?.execution.selectedAttemptId;
+        expect(activeAttemptId).toBeTruthy();
+        const staleGeneration = orchestrator.getTask(taskId)?.execution.generation ?? 0;
+
+        // Advance the live execution generation while keeping the SAME selected
+        // attempt, so the response below carries the current attempt id but an
+        // older generation — the exact stale-lineage shape the guard must reject.
+        persistence.updateTask(taskId, {
+          execution: { generation: staleGeneration + 1, branch: 'live-branch', workspacePath: '/live/ws' },
+        });
+
+        orchestrator.handleWorkerResponse(
+          makeResponse({
+            actionId: taskId,
+            attemptId: activeAttemptId,
+            executionGeneration: staleGeneration,
+            status: 'completed',
+            outputs: { exitCode: 0, branch: 'stale-branch' },
+          }),
+        );
+
+        const after = orchestrator.getTask(taskId);
+        expect(after?.status).toBe('running');
+        expect(after?.execution.selectedAttemptId).toBe(activeAttemptId);
+        expect(after?.execution.branch).toBe('live-branch');
+        expect(after?.execution.workspacePath).toBe('/live/ws');
+        expect(persistence.events.some((event) => event.taskId === taskId && event.eventType === 'task.completed')).toBe(false);
+        expect(warnSpy).toHaveBeenCalledWith(
+          '[worker-response] STALE_GENERATION_REJECTED',
+          expect.objectContaining({
+            taskId,
+            responseGeneration: staleGeneration,
+            activeGeneration: staleGeneration + 1,
+            workerResponseStatus: 'completed',
+          }),
+        );
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
     it('ignores a stale completed response after restartTask resets descendants', () => {
       const reproPersistence = new InMemoryPersistence();
       const reproBus = new InMemoryBus();
