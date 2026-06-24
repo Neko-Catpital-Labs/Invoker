@@ -2959,6 +2959,15 @@ function createEmbeddedTerminalBackendFromConfig(
                       },
                     };
                     logger.error(`[executing-stall] forcing failure for "${task.id}": ${executingError}`, { module: 'db-poll' });
+                    if (persistence) {
+                      persistShutdownDiagnostic(task, persistence, {
+                        flushPendingOutput: flushTaskOutput,
+                        forcedStopReason: executingError,
+                        label: task.execution.phase === 'launching'
+                          ? 'Startup Failure Diagnostic'
+                          : 'Shutdown Diagnostic',
+                      });
+                    }
                     orchestrator.handleWorkerResponse(failedResponse);
                     continue;
                   }
