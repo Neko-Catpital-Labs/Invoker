@@ -452,6 +452,85 @@ export function collectDirectNonMergeTaskIds(
   return out;
 }
 
+// ── Stale-lineage guard for direct execution-metadata writes ──────────────
+
+/**
+ * Lineage of a merge task captured when a merge-gate run begins.
+ *
+ * Direct `persistence.updateTask` writes of execution metadata (branch,
+ * workspacePath, review fields, fixed-integration fields) bypass the
+ * worker-response lineage guard in {@link Orchestrator.handleWorkerResponse}.
+ * A merge-gate run can take a long time (consolidation, PR creation); if the
+ * merge task is relaunched meanwhile (a newer `selectedAttemptId` or
+ * `executionGeneration` now owns it), the stale run must not clobber the fresh
+ * launch's state. Capture the launch lineage up front and gate every such
+ * direct write on it.
+ */
+export interface MergeGateLineage {
+  selectedAttemptId: string | undefined;
+  generation: number;
+}
+
+export function captureMergeGateLineage(task: TaskState): MergeGateLineage {
+  return {
+    selectedAttemptId: task.execution.selectedAttemptId,
+    generation: task.execution.generation ?? 0,
+  };
+}
+
+/**
+ * True when the live merge task still matches the captured launch lineage.
+ * Mirrors {@link Orchestrator.taskMatchesLineageExpectation} /
+ * `TaskRunner.isLaunchStale` so the direct-write guard and the worker-response
+ * guard agree on what "stale" means.
+ */
+export function mergeGateLineageIsCurrent(
+  host: MergeRunnerHost,
+  taskId: string,
+  expected: MergeGateLineage,
+): boolean {
+  const current = host.orchestrator.getTask(taskId);
+  // If the task is no longer in the graph we cannot positively confirm the
+  // lineage advanced, so do not suppress the write (matches the not-stale
+  // fall-through in `TaskRunner.isLaunchStale`). The guard only blocks a write
+  // when a newer attempt/generation is actually observed.
+  if (!current) return true;
+  const currentAttempt = current.execution.selectedAttemptId;
+  if (currentAttempt !== undefined && currentAttempt !== expected.selectedAttemptId) {
+    return false;
+  }
+  if ((current.execution.generation ?? 0) !== expected.generation) return false;
+  return true;
+}
+
+/**
+ * Lineage-guarded direct write of merge-gate execution metadata. Skips (and
+ * traces) the write when the merge task has advanced past `expected`, so stale
+ * merge-gate work cannot overwrite branch / workspacePath / review /
+ * fixed-integration fields belonging to a newer launch. Returns true when the
+ * write was applied.
+ */
+export function updateMergeGateMetadataIfCurrent(
+  host: MergeRunnerHost,
+  taskId: string,
+  changes: TaskStateChanges,
+  expected: MergeGateLineage,
+): boolean {
+  if (!mergeGateLineageIsCurrent(host, taskId, expected)) {
+    const current = host.orchestrator.getTask(taskId);
+    mergeTrace('DIRECT_WRITE_STALE_LINEAGE_SKIPPED', {
+      taskId,
+      expectedSelectedAttemptId: expected.selectedAttemptId ?? null,
+      expectedGeneration: expected.generation,
+      currentSelectedAttemptId: current?.execution.selectedAttemptId ?? null,
+      currentGeneration: current ? current.execution.generation ?? 0 : null,
+    });
+    return false;
+  }
+  host.persistence.updateTask(taskId, changes);
+  return true;
+}
+
 // ── Extracted functions ──────────────────────────────────
 
 export interface MergeGateActionResult {
@@ -462,8 +541,12 @@ export interface MergeGateActionResult {
 export async function runMergeGateActionImpl(
   host: MergeRunnerHost,
   task: TaskState,
-  opts: { gateWorkspacePath?: string } = {},
+  opts: { gateWorkspacePath?: string; lineage?: MergeGateLineage } = {},
 ): Promise<MergeGateActionResult> {
+  // Launch lineage for gating direct execution-metadata writes. The executor
+  // passes the dispatched request's lineage; legacy callers fall back to the
+  // task snapshot they were handed.
+  const launchLineage = opts.lineage ?? captureMergeGateLineage(task);
   const workflowId = task.config.workflowId;
   const workflow = workflowId
     ? host.persistence.loadWorkflow(workflowId)
@@ -495,13 +578,13 @@ export async function runMergeGateActionImpl(
       `mergeMode=${mergeMode} onFinish=${onFinish} dbWorkspacePath=${safeGetWorkspacePath(host.persistence, task.id) ?? 'NULL'}`,
   );
 
-  host.persistence.updateTask(task.id, {
+  updateMergeGateMetadataIfCurrent(host, task.id, {
     execution: {
       reviewUrl: undefined,
       reviewId: undefined,
       reviewStatus: undefined,
     },
-  });
+  }, launchLineage);
 
   // Create a persistent gate worktree so workspacePath is never the main repo.
   // Use baseBranch as the ref because featureBranch may not exist yet
@@ -801,7 +884,7 @@ export async function executeMergeNodeImpl(
     config: legacyConfig,
   };
 
-  host.persistence.updateTask(task.id, legacyChanges);
+  updateMergeGateMetadataIfCurrent(host, task.id, legacyChanges, captureMergeGateLineage(task));
 
   if (response.status === 'review_ready') {
     setMergeGateReviewReady(host, task.id, legacyChanges, {
@@ -1281,10 +1364,10 @@ export async function publishAfterFixImpl(
       });
       const reviewUrl = await host.execPr(baseBranch, featureBranch, workflow?.name ?? 'Workflow', prBody, consolidateDir);
       console.log(`[merge] Post-fix: created pull request ${reviewUrl}`);
-      host.persistence.updateTask(task.id, {
+      updateMergeGateMetadataIfCurrent(host, task.id, {
         config: { summary },
         execution: { reviewUrl },
-      });
+      }, captureMergeGateLineage(task));
     }
 
     setMergeGateReviewReady(host, task.id, {
