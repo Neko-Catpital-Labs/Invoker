@@ -420,6 +420,35 @@ describe('PlanConversation', () => {
     expect(mockSpawn).toHaveBeenCalledWith('/usr/local/bin/cursor', expect.any(Array), expect.any(Object));
   });
 
+  it('routes spawn through an injected planningCommandBuilder', async () => {
+    const builder = vi.fn((o: { tool: string; model?: string; prompt: string }) => ({
+      command: 'omp',
+      args: ['--no-title', '--auto-approve', '--model', 'claude', '-p', o.prompt],
+    }));
+    const conv = new PlanConversation({ tool: 'omp', model: 'claude', planningCommandBuilder: builder });
+    mockCursorResponse('Hi');
+    await conv.sendMessage('Hello');
+    expect(builder).toHaveBeenCalledWith(
+      expect.objectContaining({ tool: 'omp', model: 'claude', prompt: expect.any(String) }),
+    );
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'omp',
+      ['--no-title', '--auto-approve', '--model', 'claude', '-p', expect.any(String)],
+      expect.objectContaining({ stdio: ['ignore', 'pipe', 'pipe'] }),
+    );
+  });
+
+  it('falls back to cursor --print shape when no builder is injected', async () => {
+    const conv = new PlanConversation({ cursorCommand: 'agent', model: 'sonnet' });
+    mockCursorResponse('Hi');
+    await conv.sendMessage('Hello');
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'agent',
+      ['--print', '--model', 'sonnet', expect.any(String)],
+      expect.any(Object),
+    );
+  });
+
   it('includes system prompt in cursor prompt', async () => {
     mockCursorResponse('Hi');
     await conversation.sendMessage('Hello');
