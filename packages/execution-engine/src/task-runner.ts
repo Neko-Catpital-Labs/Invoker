@@ -1071,11 +1071,38 @@ export class TaskRunner {
       hasWorkspacePath: Boolean(handle.workspacePath),
       hasAgentSessionId: Boolean(handle.agentSessionId),
     });
+    // Lineage guard: executor.start() can resolve minutes after launch (SSH
+    // provisioning/setup is slow). If the live task advanced to a newer
+    // generation in the meantime — e.g. recreate-task bumped the generation
+    // while leaving selectedAttemptId unchanged — markTaskRunningAfterLaunch
+    // (which only validates selectedAttemptId) would still accept this
+    // superseded launch, letting it persist workspace/branch/session/container
+    // metadata, write heartbeat metadata, and register an active execution
+    // over the live attempt. Check the launch-time generation captured by
+    // TaskRunner before marking running so a stale launch is rejected here,
+    // exactly like a stale attempt id, instead of clobbering the live row.
+    const launchStaleAfterStart = this.isLaunchStale(task.id, attemptId, startGeneration);
+    if (launchStaleAfterStart) {
+      this.persistence.logEvent?.(task.id, 'task.executor.stale_post_start', {
+        attemptId,
+        executorType: executor.type,
+        launchGeneration: startGeneration,
+        currentGeneration: this.orchestrator.getTask(task.id)?.execution.generation ?? null,
+        workspacePath: handle.workspacePath,
+        branch: handle.branch,
+        hasAgentSessionId: Boolean(handle.agentSessionId),
+        hasContainerId: Boolean(handle.containerId),
+      });
+    }
+    // Short-circuit so a generation-stale launch never marks the live task
+    // running, then falls through to the shared stale/non-executable cleanup.
     const launchAccepted =
-      this.orchestrator.markTaskRunningAfterLaunch?.(task.id, attemptId) ?? true;
+      !launchStaleAfterStart
+      && (this.orchestrator.markTaskRunningAfterLaunch?.(task.id, attemptId) ?? true);
     if (!launchAccepted) {
       this.logger.warn(
-        `[TaskRunner] launch rejected as stale/non-executable for task=${task.id} attemptId=${attemptId}; killing spawned process`,
+        `[TaskRunner] launch rejected as stale/non-executable for task=${task.id} attemptId=${attemptId} ` +
+          `launchGeneration=${startGeneration} stalePostStart=${launchStaleAfterStart}; killing spawned process`,
       );
       try {
         await executor.kill(handle);

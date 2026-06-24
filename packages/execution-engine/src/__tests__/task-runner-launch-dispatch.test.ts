@@ -353,4 +353,90 @@ describe('TaskRunner launch-dispatch wiring', () => {
     // The executor must NOT have been called — pivot short-circuits.
     expect(env.executor.start).not.toHaveBeenCalled();
   });
+
+  it('rejects post-start metadata when generation advances during executor.start (attempt id unchanged)', async () => {
+    // Lineage race: executor.start() resolves only after the live task has
+    // advanced to generation N+1, while selectedAttemptId is unchanged.
+    // markTaskRunningAfterLaunch (attempt-id only) would accept it; the
+    // generation guard must reject it before any metadata is persisted.
+    const task = makeTask(); // generation 1, attempt-1
+    const liveTask = makeTask(); // mutable live orchestrator view
+    let resolveStart: (() => void) | undefined;
+    const env = buildRunnerEnv(task, {
+      startImpl: (request) => new Promise((resolve) => {
+        resolveStart = () => resolve({
+          executionId: `exec-${request.actionId}`,
+          taskId: request.actionId,
+          workspacePath: '/tmp/stale-ws',
+          branch: `experiment/${request.actionId}-stale`,
+          agentSessionId: 'sess-stale',
+          containerId: 'container-stale',
+        });
+      }),
+    });
+    env.orchestrator.getTask.mockImplementation(() => liveTask);
+    const launchOutbox = makeLaunchOutbox();
+
+    const run = env.runner.executeTask(task, { dispatchId: 55, launchOutbox });
+    await vi.waitFor(() => expect(env.executor.start).toHaveBeenCalledTimes(1));
+    // Live task advances a generation while start is still pending; attempt
+    // id stays 'attempt-1' so the attempt-only guard would not catch it.
+    (liveTask.execution as any).generation = 2;
+    resolveStart?.();
+    await run;
+
+    // Generation guard fires before the attempt-only check.
+    expect(env.orchestrator.markTaskRunningAfterLaunch).not.toHaveBeenCalled();
+    // Spawned handle is killed, consistent with the stale-attempt path.
+    expect(env.executor.kill).toHaveBeenCalledTimes(1);
+    // No stale start metadata reached the task row.
+    const stalePersist = env.persistence.updateTask.mock.calls.find(
+      ([, changes]: [string, any]) =>
+        changes?.execution?.workspacePath === '/tmp/stale-ws'
+        || changes?.execution?.agentSessionId === 'sess-stale'
+        || changes?.execution?.containerId === 'container-stale',
+    );
+    expect(stalePersist).toBeUndefined();
+    // No active execution registered for the superseded launch.
+    expect((env.runner as any).activeExecutions.size).toBe(0);
+    // A diagnostic event records the rejection.
+    expect(env.persistence.logEvent).toHaveBeenCalledWith(
+      task.id,
+      'task.executor.stale_post_start',
+      expect.objectContaining({ attemptId: 'attempt-1', launchGeneration: 1, currentGeneration: 2 }),
+    );
+    // Dispatch row is failed, not completed.
+    expect(launchOutbox.completeCalls).toHaveLength(0);
+    expect(launchOutbox.failCalls).toHaveLength(1);
+    expect(launchOutbox.failCalls[0][0]).toBe(55);
+  });
+
+  it('persists start metadata and registers the execution for the current valid launch', async () => {
+    // Control: generation is unchanged across executor.start(), so the launch
+    // is still current and the post-start metadata write must proceed.
+    const task = makeTask();
+    const env = buildRunnerEnv(task); // start resolves immediately, generation stays 1
+    const launchOutbox = makeLaunchOutbox();
+
+    const run = env.runner.executeTask(task, { dispatchId: 77, launchOutbox });
+    await vi.waitFor(() => expect(env.executor.onComplete).toHaveBeenCalled());
+
+    expect(env.orchestrator.markTaskRunningAfterLaunch).toHaveBeenCalledWith(task.id, 'attempt-1');
+    expect(env.executor.kill).not.toHaveBeenCalled();
+    const metaPersist = env.persistence.updateTask.mock.calls.find(
+      ([, changes]: [string, any]) => changes?.execution?.workspacePath === '/tmp/mock-ws',
+    );
+    expect(metaPersist).toBeDefined();
+    expect((env.runner as any).activeExecutions.size).toBe(1);
+    expect(env.persistence.logEvent).not.toHaveBeenCalledWith(
+      task.id,
+      'task.executor.stale_post_start',
+      expect.anything(),
+    );
+
+    env.triggerComplete();
+    await run;
+    expect(launchOutbox.completeCalls).toEqual([77]);
+    expect(launchOutbox.failCalls).toHaveLength(0);
+  });
 });
