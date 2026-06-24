@@ -101,6 +101,13 @@ requires them. Split optional cleanup, special cases, behavior-plus-rename,
 default-flip-plus-deletion, benchmark-before-fix proof, refactor-before-fields,
 and product-code-plus-policy/docs follow-ups.
 
+Decomposition refactors split one move per workflow: create one module, move
+ONE cohesive unit (function/class/phase/command family), re-point references,
+keep the public surface stable; the next unit is the next workflow. A file that
+yields six helper modules is six chained workflows, not one "extract phases"
+task. See the **Decomposition & Extraction Refactors** section of
+`../review-compression/SKILL.md`.
+
 ### Cross-layer direction
 
 - Dependencies should flow from lower/foundational layers to higher/integration layers.

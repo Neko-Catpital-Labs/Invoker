@@ -95,6 +95,48 @@ Split changes when they introduce a different claim:
 - benchmark/repro/proof harness plus the fix it is meant to justify
 - product code plus planning/policy/docs updates
 - broad mechanical moves too large to inspect comfortably
+- multiple distinct extractions from one file (one move per slice)
+
+## Decomposition & Extraction Refactors
+
+When you split a large file by extracting cohesive units (functions, classes,
+phases, command families) into new modules, treat each extraction as its own
+slice: create the target file, move ONE cohesive unit, re-point its references,
+and keep the public surface (facade, exports, dispatcher) stable. Do not batch
+several distinct extractions into one diff.
+
+Each move is a separate review claim. Every extraction has its own seam and its
+own "is behavior preserved?" question, so the reviewer checks one move at a
+time. "Extract prepare + dispatch + finalize" is three moves, three claims,
+three slices — not one.
+
+This does NOT contradict grouping the "exact same mechanical migration across
+many files." That rule is one transformation applied to N call sites (one
+claim). Decomposition is N distinct transformations (N claims): different code,
+different seams, different risk.
+
+Slice shape for one move:
+
+- `Review claim:` "Move <unit> out of <file> into <new module>, behavior
+  unchanged."
+- create the new module and move exactly one cohesive unit into it
+- update imports/facade so the public surface is byte-for-byte identical to
+  callers
+- keep directly affected tests with the move; they prove behavior is preserved
+- no behavior change in a move slice (Fowler's "two hats": never refactor and
+  change behavior in the same diff)
+
+Sequence the decomposition stack as:
+
+1. one slice per extracted unit (create-and-move), foundational unit first
+2. re-point remaining callers once a unit is extracted
+3. delete now-dead original code in its own slice, as soon as it is unused
+
+Grounding: Fowler, *Refactoring* — "Move Function" applied as small
+behavior-preserving steps (compile-test-commit each); Beck, *Tidy First?* —
+keep structural changes isolated from behavioral ones, each in its own
+PR/commit; industry guidance (Graphite, Artsy) — one module/class per PR keeps
+diffs near the 50–200 line review sweet spot.
 
 ## PR Body Guidance
 
