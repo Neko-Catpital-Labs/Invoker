@@ -103,12 +103,28 @@ function isFenceLine(line: string): boolean {
   return /^\s{0,3}(```|~~~)/.test(line);
 }
 
+/** Drop fenced code blocks so sample Markdown inside them is never treated as real content. */
+function removeFencedBlocks(text: string): string {
+  const out: string[] = [];
+  let inFence = false;
+  for (const line of text.split(/\r?\n/)) {
+    if (isFenceLine(line)) { inFence = !inFence; continue; }
+    if (!inFence) out.push(line);
+  }
+  return out.join('\n');
+}
+
+/** A real heading line: outside fences, with at most 3 spaces of indent (4+ is a code block). */
+function isHeadingLine(line: string, expected: string): boolean {
+  return /^ {0,3}#/.test(line) && line.trim().toLowerCase() === expected;
+}
+
 function hasMarkdownHeading(body: string, heading: string): boolean {
   const expected = heading.trim().toLowerCase();
   let inFence = false;
   for (const line of body.split(/\r?\n/)) {
     if (isFenceLine(line)) { inFence = !inFence; continue; }
-    if (!inFence && line.trim().toLowerCase() === expected) return true;
+    if (!inFence && isHeadingLine(line, expected)) return true;
   }
   return false;
 }
@@ -166,14 +182,14 @@ function getMarkdownSection(body: string, heading: string): string {
   let start = -1;
   for (let i = 0; i < lines.length; i += 1) {
     if (isFenceLine(lines[i])) { inFence = !inFence; continue; }
-    if (!inFence && lines[i].trim().toLowerCase() === expected) { start = i; break; }
+    if (!inFence && isHeadingLine(lines[i], expected)) { start = i; break; }
   }
   if (start === -1) return '';
   const out: string[] = [];
   inFence = false;
   for (const line of lines.slice(start + 1)) {
     if (isFenceLine(line)) { inFence = !inFence; out.push(line); continue; }
-    if (!inFence && /^##\s+/.test(line.trim())) break;
+    if (!inFence && /^ {0,3}##\s+/.test(line)) break;
     out.push(line);
   }
   return out.join('\n').trim();
@@ -181,7 +197,9 @@ function getMarkdownSection(body: string, heading: string): string {
 
 /** Extract the collapsed `<details><summary>Review metadata</summary>` block from ## Summary. */
 function getReviewMetadataBlock(body: string): { body: string; openAttributes: string } | null {
-  const summary = getMarkdownSection(body, '## Summary');
+  // Strip fenced blocks so a sample <details>Review metadata</details> inside a
+  // ```code``` fence cannot satisfy the required-metadata checks.
+  const summary = removeFencedBlocks(getMarkdownSection(body, '## Summary'));
   const match = summary.match(
     /<details\b([^>]*)>\s*<summary>\s*Review metadata\s*<\/summary>([\s\S]*?)<\/details>/i,
   );
