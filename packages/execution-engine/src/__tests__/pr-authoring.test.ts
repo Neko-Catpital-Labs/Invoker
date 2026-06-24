@@ -7,6 +7,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import {
   buildCanonicalPrBody,
   resolveSkillPathViaAgent,
+  spawnAgentPrAuthorViaRegistry,
   validateCanonicalPrBody,
 } from '../pr-authoring.js';
 import type { ExecutionAgent } from '../agent.js';
@@ -164,5 +165,38 @@ describe('resolveSkillPathViaAgent', () => {
     const agent = makeAgent('claude', { bundledSkillRoot: tmpDir });
     const result = resolveSkillPathViaAgent(agent, 'make-pr');
     expect(result).toBe(skillDir);
+  });
+});
+
+// ── spawnAgentPrAuthorViaRegistry ───────────────────────
+
+describe('spawnAgentPrAuthorViaRegistry', () => {
+  it('times out and rejects when the PR-authoring agent never exits', async () => {
+    const tmpDir = createTempDir();
+    const previousTimeout = process.env.INVOKER_PR_AUTHORING_TIMEOUT_MS;
+    process.env.INVOKER_PR_AUTHORING_TIMEOUT_MS = '25';
+
+    const agent: ExecutionAgent = {
+      name: 'codex',
+      stdinMode: 'ignore',
+      buildCommand: () => ({
+        cmd: process.execPath,
+        args: ['-e', 'setInterval(() => {}, 1000)'],
+        sessionId: 'hung-pr-author',
+      }),
+      buildResumeArgs: () => ({ cmd: process.execPath, args: ['-e', ''] }),
+    };
+
+    try {
+      await expect(
+        spawnAgentPrAuthorViaRegistry('publish stack', tmpDir, agent),
+      ).rejects.toThrow(/codex PR authoring exceeded timeout \(25ms\)/);
+    } finally {
+      if (previousTimeout === undefined) {
+        delete process.env.INVOKER_PR_AUTHORING_TIMEOUT_MS;
+      } else {
+        process.env.INVOKER_PR_AUTHORING_TIMEOUT_MS = previousTimeout;
+      }
+    }
   });
 });
