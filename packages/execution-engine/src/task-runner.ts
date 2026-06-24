@@ -59,6 +59,7 @@ import {
   resolveSkillPathViaAgent,
   spawnAgentPrAuthorViaRegistry,
   validateCanonicalPrBody,
+  validateReviewStackPrBody,
   type PrAuthoringContext,
 } from './pr-authoring.js';
 import { assertNotGitConfigMutation, ensureRemoteUrl } from './git-config-mutation.js';
@@ -2755,14 +2756,23 @@ export class TaskRunner {
       });
 
       try {
+        this.logger.info(
+          `[pr-authoring] body authoring starting agent=${agent.name} `
+            + `workflow=${args.workflowId ?? 'unknown'} skill=invoker-make-pr`,
+        );
         const result = await spawnAgentPrAuthorViaRegistry(prompt, args.cwd, agent, driver);
         const validationErrors = validateCanonicalPrBody(result.body);
         if (validationErrors.length > 0) {
+          this.logger.warn(
+            `[pr-authoring] body validation failed agent=${agent.name} `
+              + `errors=${validationErrors.join('; ')}`,
+          );
           errors.push(
             `${agent.name}: invalid PR body — ${validationErrors.join('; ')}`,
           );
           continue;
         }
+        this.logger.info(`[pr-authoring] body authored agent=${agent.name} validated`);
         return { body: result.body, sessionId: result.sessionId, agentName: agent.name };
       } catch (err) {
         errors.push(
@@ -2821,11 +2831,33 @@ export class TaskRunner {
       });
 
       try {
+        this.logger.info(
+          `[pr-authoring] review-stack publish starting agent=${agent.name} `
+            + `workflow=${args.workflowId ?? 'unknown'} skill=invoker-make-pr cwd=${args.cwd}`,
+        );
         const result = await spawnAgentPrAuthorViaRegistry(prompt, args.cwd, agent, driver);
         const parsedArtifacts = parseMakePrStackPublishResult(result.body);
+
+        // Enforce the make-pr review-stack schema on every published body.
+        // A mergify-default commit-message body (e.g. PR #2170) fails here and
+        // falls through to the next agent instead of shipping unreviewable.
+        const bodyErrors = parsedArtifacts.flatMap((artifact, index) =>
+          validateReviewStackPrBody(artifact.body ?? '').map(
+            (error) => `artifact[${index}] (${artifact.url}): ${error}`,
+          ),
+        );
+        if (bodyErrors.length > 0) {
+          this.logger.warn(
+            `[pr-authoring] review-stack body validation failed agent=${agent.name} `
+              + `errors=${bodyErrors.join('; ')}`,
+          );
+          errors.push(`${agent.name}: invalid PR body — ${bodyErrors.join('; ')}`);
+          continue;
+        }
+
         const nowIso = new Date().toISOString();
         const generation = args.reviewGate?.activeGeneration ?? 0;
-        const artifacts: ReviewGateArtifact[] = parsedArtifacts.map((artifact) => ({
+        const artifacts: ReviewGateArtifact[] = parsedArtifacts.map(({ body: _body, ...artifact }) => ({
           ...artifact,
           provider: 'github',
           baseBranch: artifact.baseBranch ?? args.baseBranch,
@@ -2834,6 +2866,10 @@ export class TaskRunner {
           generation,
           createdAt: nowIso,
         }));
+        this.logger.info(
+          `[pr-authoring] review-stack published agent=${agent.name} artifacts=${artifacts.length} `
+            + 'bodies validated against make-pr schema',
+        );
         return { artifacts, sessionId: result.sessionId, agentName: agent.name };
       } catch (err) {
         errors.push(`${agent.name}: ${err instanceof Error ? err.message : String(err)}`);
