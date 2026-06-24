@@ -1585,8 +1585,13 @@ export class Orchestrator {
           return [];
         }
         const activeGeneration = this.getExecutionGeneration(earlyTask);
+        // Lineage guard: a response is in-lineage only when every identity field it
+        // carries still matches the live task. The attempt-id check above already
+        // rejects a mismatched attemptId; here we independently reject a mismatched
+        // executionGeneration. Older producers may omit one field (attemptId is
+        // optional, executionGeneration may be absent), so each check runs only when
+        // its field is present — but when both are present, both must match.
         if (
-          !response.attemptId &&
           response.executionGeneration !== undefined &&
           response.executionGeneration !== activeGeneration
         ) {
