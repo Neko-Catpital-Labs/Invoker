@@ -28,7 +28,10 @@ describe('cli-installer', () => {
       bundledCliPath,
       appVersion: APP_VERSION,
       platform: 'darwin',
-      env: { PATH: '/usr/bin:/bin' },
+      // Empty PATH by default so the suite stays hermetic on machines that
+      // happen to have a real invoker-cli on /usr/bin or /bin. Tests that
+      // exercise PATH-aware behavior set env explicitly.
+      env: { PATH: '' },
       homeDir: path.join(scratchDir, 'home'),
       ...overrides,
     };
