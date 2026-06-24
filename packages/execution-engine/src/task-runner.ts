@@ -1071,15 +1071,20 @@ export class TaskRunner {
       hasWorkspacePath: Boolean(handle.workspacePath),
       hasAgentSessionId: Boolean(handle.agentSessionId),
     });
-    const launchStale = this.isLaunchStale(task.id, attemptId, startGeneration);
+    // markTaskRunningAfterLaunch already rejects a mismatched attempt; also
+    // reject a stale launch-time generation (a slow start can resolve after a
+    // recreate advanced the live task on the same attempt).
+    const live = this.orchestrator.getTask(task.id);
+    const staleGeneration =
+      live !== undefined && (live.execution.generation ?? 0) !== startGeneration;
     const launchAccepted =
-      !launchStale && (this.orchestrator.markTaskRunningAfterLaunch?.(task.id, attemptId) ?? true);
+      !staleGeneration && (this.orchestrator.markTaskRunningAfterLaunch?.(task.id, attemptId) ?? true);
     if (!launchAccepted) {
       this.logger.warn(
         `[TaskRunner] launch rejected as stale/non-executable for task=${task.id} attemptId=${attemptId} ` +
-          `startGeneration=${startGeneration} staleLineage=${launchStale}; killing spawned process`,
+          `startGeneration=${startGeneration} staleGeneration=${staleGeneration}; killing spawned process`,
       );
-      if (launchStale) {
+      if (staleGeneration) {
         this.persistence.logEvent?.(task.id, 'task.executor.stale_post_start', {
           attemptId,
           executorType: executor.type,
@@ -1105,7 +1110,7 @@ export class TaskRunner {
           new Error('Launch rejected as stale or non-executable after executor start'),
         );
       }
-      bench('markTaskRunningAfterLaunch.rejected', { staleLineage: launchStale });
+      bench('markTaskRunningAfterLaunch.rejected', { staleGeneration });
       return;
     }
     bench('markTaskRunningAfterLaunch.accepted');
