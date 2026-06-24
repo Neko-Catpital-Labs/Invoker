@@ -289,6 +289,7 @@ export function serializeTask(task: TaskState): Record<string, unknown> {
   if (task.config.poolMemberId != null) config.poolMemberId = task.config.poolMemberId;
   if (task.config.isMergeNode != null) config.isMergeNode = task.config.isMergeNode;
   if (task.config.executionAgent != null) config.executionAgent = task.config.executionAgent;
+  if (task.config.executionModel != null) config.executionModel = task.config.executionModel;
   if (task.config.featureBranch != null) config.featureBranch = task.config.featureBranch;
 
   const execution: Record<string, unknown> = {};
