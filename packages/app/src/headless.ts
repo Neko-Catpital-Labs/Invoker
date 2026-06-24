@@ -28,6 +28,8 @@ import {
   acquireWorkerLock,
   resolveInvokerHomeRoot,
   WorkerLockHeldError,
+  createWorkerRegistry,
+  registerAutoFixWorker,
   type AgentRegistry,
   type TaskHeartbeatEvent,
 } from '@invoker/execution-engine';
@@ -61,7 +63,6 @@ import {
   isDispatchableLaunch,
 } from './global-topup.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
-import { createAutoFixRecoveryTick, RECOVERY_WORKER_KIND } from './workers/auto-fix-recovery.js';
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
 import { formatHeadlessSetSubcommands } from './headless-command-registry.js';
 import { trackWorkflow } from './headless-watch.js';
@@ -1140,88 +1141,94 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
 }
 
 /**
- * Worker kinds exposed to the CLI.
+ * Run a worker selected from the registry. Both worker doors resolve the kind
+ * from the shared worker registry instead of a hard-coded auto-fix branch; for
+ * the dev door that means a single foreground scan under the single-instance
+ * lock keyed by the worker's own runtime kind.
  */
-const HEADLESS_WORKER_KINDS: ReadonlyArray<{ kind: string; available: boolean; note: string }> = [
-  {
-    kind: 'autofix',
-    available: true,
-    note: 'scans persisted failed tasks and submits normal auto-fix command intents',
-  },
-];
-
 async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void> {
+  const registry = registerAutoFixWorker(createWorkerRegistry());
   const subCommand = args[0] ?? 'list';
-  if (subCommand === 'autofix') {
-    // Single-instance guard across both doors (this dev door and the production
-    // `invoker-cli worker autofix`): refuse rather than run a recovery scan that
-    // competes with a worker already holding the cross-process lock.
-    let lock;
-    try {
-      lock = acquireWorkerLock({ kind: RECOVERY_WORKER_KIND, homeRoot: resolveInvokerHomeRoot(), logger: deps.logger });
-    } catch (err) {
-      if (err instanceof WorkerLockHeldError) {
-        // Surface via the app's throw-based error convention.
-        throw new Error(err.message);
-      }
-      throw err;
-    }
-    try {
-      const tick = createAutoFixRecoveryTick({
-        store: deps.persistence,
-        submitter: {
-          submit: (workflowId, priority, channel, mutationArgs) => (
-            deps.persistence.enqueueWorkflowMutationIntent(workflowId, channel, mutationArgs, priority)
-          ),
-        },
-        logger: deps.logger,
-        defaultAutoFixRetries: deps.invokerConfig.autoFixRetries,
-        getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
-      });
-      await tick({
-        identity: { kind: RECOVERY_WORKER_KIND, instanceId: 'headless-worker-autofix' },
-        reason: 'manual',
-        tickNumber: 1,
-      });
-    } finally {
-      // Release deterministically so a clean run never leaves a stale lock that
-      // blocks the next legitimate start.
-      lock.release();
-    }
-    process.stdout.write('Auto-fix worker scan completed.\n');
-    return;
-  }
-
-  if (subCommand !== 'list' && subCommand !== 'status') {
-    throw new Error(`Unknown worker sub-command: "${subCommand}". Use: autofix, list, status`);
-  }
 
   if (subCommand === 'list') {
     process.stdout.write(`${BOLD}Worker kinds${RESET}\n`);
-    for (const worker of HEADLESS_WORKER_KINDS) {
-      const status = worker.available ? 'available' : 'unavailable';
-      process.stdout.write(`  ${worker.kind} — ${status} (${worker.note})\n`);
+    for (const definition of registry.list()) {
+      process.stdout.write(`  ${definition.kind} — available (${definition.note})\n`);
     }
     return;
   }
 
-  const flags = parseQueryFlags(args.slice(1));
-  const status = collectRecoveryWorkerStatus(deps.persistence);
-  const { formatAsJson, formatAsJsonl } = await import('./formatter.js');
-  switch (flags.output) {
-    case 'label':
-      process.stdout.write(`${status.workerId}\n`);
-      break;
-    case 'json':
-      process.stdout.write(formatAsJson(status) + '\n');
-      break;
-    case 'jsonl':
-      process.stdout.write(formatAsJsonl([status]) + '\n');
-      break;
-    default:
-      process.stdout.write(formatRecoveryWorkerStatus(status) + '\n');
-      break;
+  if (subCommand === 'status') {
+    const flags = parseQueryFlags(args.slice(1));
+    const status = collectRecoveryWorkerStatus(deps.persistence);
+    const { formatAsJson, formatAsJsonl } = await import('./formatter.js');
+    switch (flags.output) {
+      case 'label':
+        process.stdout.write(`${status.workerId}\n`);
+        break;
+      case 'json':
+        process.stdout.write(formatAsJson(status) + '\n');
+        break;
+      case 'jsonl':
+        process.stdout.write(formatAsJsonl([status]) + '\n');
+        break;
+      default:
+        process.stdout.write(formatRecoveryWorkerStatus(status) + '\n');
+        break;
+    }
+    return;
   }
+
+  // Any remaining sub-command names a worker kind to run. Resolving it from the
+  // registry (instead of a hard-coded `autofix` branch) keeps the door
+  // worker-agnostic; an unrecognized kind ends with a clear error.
+  const definition = registry.get(subCommand);
+  if (!definition) {
+    throw new Error(
+      `Unknown worker sub-command: "${subCommand}". Use: ${registry
+        .list()
+        .map((d) => d.kind)
+        .join(', ')}, list, status`,
+    );
+  }
+
+  // Build the selected worker from the registry factory and run a single
+  // foreground scan. The factory reuses the recovery engine, so the autofix
+  // scan/submit path stays exactly what the 2h stack shipped.
+  const worker = definition.factory({
+    store: deps.persistence,
+    submitter: {
+      submit: (workflowId, priority, channel, mutationArgs) =>
+        deps.persistence.enqueueWorkflowMutationIntent(workflowId, channel, mutationArgs, priority),
+    },
+    logger: deps.logger,
+    autoFix: {
+      defaultAutoFixRetries: deps.invokerConfig.autoFixRetries,
+      getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
+    },
+  });
+
+  // Single-instance guard across both doors (this dev door and the production
+  // `invoker-cli worker autofix`): refuse rather than run a scan that competes
+  // with a worker already holding the cross-process lock.
+  let lock;
+  try {
+    lock = acquireWorkerLock({ kind: worker.identity.kind, homeRoot: resolveInvokerHomeRoot(), logger: deps.logger });
+  } catch (err) {
+    if (err instanceof WorkerLockHeldError) {
+      // Surface via the app's throw-based error convention.
+      throw new Error(err.message);
+    }
+    throw err;
+  }
+  try {
+    await worker.tick('manual');
+  } finally {
+    // Release deterministically so a clean run never leaves a stale lock that
+    // blocks the next legitimate start.
+    lock.release();
+  }
+  process.stdout.write('Auto-fix worker scan completed.\n');
 }
 
 function formatRecoveryWorkerStatus(status: RecoveryWorkerStatus): string {

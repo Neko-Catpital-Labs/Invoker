@@ -7,6 +7,7 @@ import { runHeadless } from '../headless.js';
 import { buildFixWithAgentMutationArgs } from '../auto-fix-intents.js';
 import type { TaskState } from '@invoker/workflow-core';
 import type { WorkflowMutationPriority } from '@invoker/data-store';
+import { createWorkerRegistry, registerAutoFixWorker } from '@invoker/execution-engine';
 
 function makeTask(overrides: Partial<TaskState> = {}): TaskState {
   const { config, execution, ...rest } = overrides;
@@ -85,5 +86,43 @@ describe('headless worker autofix', () => {
       buildFixWithAgentMutationArgs('wf-1/task-1', 'codex', { autoFix: true }),
       'normal',
     );
+  });
+
+  it('lists worker kinds from the shared registry', async () => {
+    const chunks: string[] = [];
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: any) => {
+      chunks.push(String(chunk));
+      return true;
+    });
+    try {
+      await runHeadless(['worker', 'list'], {
+        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), trace: vi.fn(), child: vi.fn() },
+        persistence: {} as any,
+        invokerConfig: {},
+      } as any);
+    } finally {
+      write.mockRestore();
+    }
+
+    // The overview is sourced from the registry: every registered kind and its
+    // note appears, so registering a worker surfaces it here without editing
+    // the door.
+    const output = chunks.join('');
+    const registry = registerAutoFixWorker(createWorkerRegistry());
+    expect(registry.list().length).toBeGreaterThan(0);
+    for (const definition of registry.list()) {
+      expect(output).toContain(definition.kind);
+      expect(output).toContain(definition.note);
+    }
+  });
+
+  it('rejects an unknown worker kind with a clear non-zero error', async () => {
+    await expect(
+      runHeadless(['worker', 'frobnicate'], {
+        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), trace: vi.fn(), child: vi.fn() },
+        persistence: {} as any,
+        invokerConfig: {},
+      } as any),
+    ).rejects.toThrow('Unknown worker sub-command: "frobnicate"');
   });
 });

@@ -9,11 +9,12 @@ import {
   ExecutorRegistry,
   TaskRunner,
   WorktreeExecutor,
-  createRecoveryWorker,
   acquireWorkerLock,
-  RECOVERY_WORKER_KIND,
   WorkerLockHeldError,
   registerBuiltinAgents,
+  createWorkerRegistry,
+  registerAutoFixWorker,
+  type WorkerDefinition,
 } from '@invoker/execution-engine';
 import {
   IpcBus,
@@ -557,59 +558,60 @@ function readAutoFixWorkerConfig(homeRoot: string): { autoFixRetries?: number; a
 }
 
 /**
- * Run the auto-fix recovery worker in the foreground. There is exactly one
- * auto-fix engine: this builds the shared `createRecoveryWorker` from
- * `@invoker/execution-engine` (the same engine the app door uses) instead of a
- * private poll loop, so the two doors can never run competing scans. The shared
- * engine owns the scan, cadence, and lifecycle-wakeup subscription; the CLI owns
- * only the foreground lifetime — owner discovery, connect message, the
+ * Run a worker selected from the shared registry in the foreground. There is
+ * exactly one auto-fix engine: the registry's factory builds the shared
+ * recovery worker (the same engine the app door uses) instead of a private
+ * poll loop, so the two doors can never run competing scans. The shared engine
+ * owns the scan, cadence, and lifecycle-wakeup subscription; the CLI owns only
+ * the foreground lifetime — owner discovery, connect message, the
  * SIGINT/SIGTERM block, and a deterministic stop.
  */
-async function runAutoFixWorker(bus: MessageBus): Promise<number> {
+async function runWorker(definition: WorkerDefinition, bus: MessageBus): Promise<number> {
   const owner = await discoverLiveOwner(bus);
   const homeRoot = resolveInvokerHomeRoot();
   const { autoFixRetries, autoFixAgent } = readAutoFixWorkerConfig(homeRoot);
 
-  // Single-instance guard: refuse if another auto-fix worker (this door or the
-  // dev `--headless worker autofix` door) already holds the cross-process lock,
-  // rather than spawning a second recovery loop that competes over the same
-  // failed tasks.
+  const persistence = await SQLiteAdapter.create(join(homeRoot, 'invoker.db'), {
+    outputDir: join(homeRoot, 'outputs'),
+  });
+
+  // Build the selected worker from the registry so the door stays
+  // worker-agnostic. Construction installs no timers or subscriptions until
+  // start(), so building before acquiring the lock has no side effects.
+  const worker = definition.factory({
+    logger: silentLogger,
+    messageBus: bus,
+    store: persistence,
+    submitter: {
+      submit: (workflowId, priority, channel, mutationArgs) =>
+        persistence.enqueueWorkflowMutationIntent(workflowId, channel, mutationArgs, priority),
+    },
+    autoFix: {
+      defaultAutoFixRetries: autoFixRetries,
+      getAutoFixAgent: () => autoFixAgent,
+    },
+  });
+
+  // Single-instance guard keyed by the worker's own runtime kind: refuse if
+  // another worker of the same kind (this door or the dev `--headless worker
+  // autofix` door) already holds the cross-process lock, rather than spawning a
+  // second loop that competes over the same failed tasks.
   let lock;
   try {
-    lock = acquireWorkerLock({ kind: RECOVERY_WORKER_KIND, homeRoot, logger: silentLogger });
+    lock = acquireWorkerLock({ kind: worker.identity.kind, homeRoot, logger: silentLogger });
   } catch (err) {
+    persistence.close();
     if (err instanceof WorkerLockHeldError) {
       process.stderr.write(`${err.message}\n`);
       return 1;
     }
     throw err;
   }
-  const persistence = await SQLiteAdapter.create(join(homeRoot, 'invoker.db'), {
-    outputDir: join(homeRoot, 'outputs'),
-  });
 
-  // Open the try before constructing/starting the worker so persistence is
-  // always closed even if construction or start throws (otherwise the SQLite
-  // handle leaks when control unwinds to main()'s catch).
+  // Open the try after acquiring the lock so persistence is always closed even
+  // if start throws (otherwise the SQLite handle leaks when control unwinds to
+  // main()'s catch).
   try {
-    // The CLI owns the foreground signals so shutdown ordering is deterministic
-    // (signal -> unblock -> engine.stop() -> close); the engine does not also
-    // install its own handlers.
-    const worker = createRecoveryWorker({
-      logger: silentLogger,
-      installSignalHandlers: false,
-      messageBus: bus,
-      autoFix: {
-        store: persistence,
-        submitter: {
-          submit: (workflowId, priority, channel, mutationArgs) =>
-            persistence.enqueueWorkflowMutationIntent(workflowId, channel, mutationArgs, priority),
-        },
-        defaultAutoFixRetries: autoFixRetries,
-        getAutoFixAgent: () => autoFixAgent,
-      },
-    });
-
     worker.start();
     const ownerSuffix = owner?.ownerId ? ` to owner ${owner.ownerId}` : '';
     process.stdout.write(`Auto-fix worker connected${ownerSuffix}.\n`);
@@ -641,12 +643,15 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
       return 0;
     }
     if (argv[0] === 'worker') {
-      const subcommand = argv[1];
-      if (subcommand !== 'autofix') {
-        throw new Error(`Unknown worker subcommand: ${subcommand ?? '(none)'}. Usage: invoker-cli worker autofix`);
+      const registry = registerAutoFixWorker(createWorkerRegistry());
+      const kind = argv[1];
+      const definition = kind ? registry.get(kind) : undefined;
+      if (!definition) {
+        const kinds = registry.list().map((d) => d.kind).join(', ');
+        throw new Error(`Unknown worker kind: ${kind ?? '(none)'}. Usage: invoker-cli worker <${kinds}>`);
       }
       bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
-      return await runAutoFixWorker(bus);
+      return await runWorker(definition, bus);
     }
     const parsed = parseArgs(argv);
     if (!parsed.command || parsed.command === '--help') {
