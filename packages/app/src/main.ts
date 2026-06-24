@@ -77,7 +77,7 @@ import {
   resolveRepoRoot,
 } from '@invoker/contracts';
 import type { ActionGraphResponse, WorkflowMeta, WorkResponse } from '@invoker/contracts';
-import { SQLiteAdapter, ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
+import { SQLiteAdapter, ConversationRepository, SqliteTaskRepository, WorkflowChannelRepository } from '@invoker/data-store';
 import { IpcBus, Channels } from '@invoker/transport';
 import {
   WorkspaceProbeAdapter,
@@ -95,6 +95,8 @@ import {
   RESTART_TO_BRANCH_TRACE,
   remoteFetchForPool,
   registerBuiltinAgents,
+  RepoPool,
+  DEFAULT_EXECUTION_AGENT,
 } from '@invoker/execution-engine';
 import type { Logger } from '@invoker/contracts';
 import { FileAndDbLogger } from './logger.js';
@@ -139,6 +141,7 @@ import {
   type HeadlessDeps,
 } from './headless.js';
 import { resolveRefreshTaskGraphSnapshot } from './refresh-task-graph.js';
+import { presetToExecutionAgent, gatherWorkflowContext as gatherWorkflowContextImpl } from './slack-workflow-context.js';
 import {
   startStandaloneLaunchDispatcher,
   type StandaloneLaunchDispatcherController,
@@ -778,6 +781,14 @@ function loadSurfaces(): any {
 
 // ── Shared Slack Bot Wiring ──────────────────────────────────
 
+const DEFAULT_SLACK_HARNESS_PRESETS: Record<string, { tool: 'cursor' | 'omp' | 'codex'; model?: string }> = {
+  'cursor+claude': { tool: 'cursor', model: 'claude' },
+  'cursor+codex': { tool: 'cursor', model: 'codex' },
+  'omp+claude': { tool: 'omp', model: 'claude' },
+  omp: { tool: 'omp' },
+  codex: { tool: 'codex' },
+};
+
 interface SlackBotDeps {
   executor: TaskRunner;
   logFn: (source: string, level: string, message: string) => void;
@@ -816,6 +827,37 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
     }
   }
 
+  // ── Slack-native workflow wiring ──────────────────────────
+  const planningRegistry = registerBuiltinAgents();
+  const planningCommandBuilder = (
+    opts: { tool: string; model?: string; prompt: string },
+  ): { command: string; args: string[] } =>
+    planningRegistry.getPlanningOrThrow(opts.tool).buildPlanningCommand(opts.prompt, { model: opts.model });
+
+  const planningRepoPool = new RepoPool({ cacheDir: path.join(resolveInvokerHomeRoot(), 'planning-clones') });
+  const prepareRepoCheckout = async (url: string): Promise<string> =>
+    planningRepoPool.ensureCloneThroughRepoQueue(url);
+
+  const workflowChannelRepo = new WorkflowChannelRepository(persistence);
+
+  const harnessPresets = invokerConfig.slackHarnessPresets ?? DEFAULT_SLACK_HARNESS_PRESETS;
+  const defaultHarnessPreset = invokerConfig.defaultSlackHarnessPreset ?? 'cursor+claude';
+  const registeredExecutionAgents = new Set(planningRegistry.listExecution().map((a) => a.name));
+  const resolveFallbackExecutionAgent = (presetKey?: string): string =>
+    presetToExecutionAgent(presetKey, harnessPresets, registeredExecutionAgents, DEFAULT_EXECUTION_AGENT);
+
+  const gatherWorkflowContext = (workflowId: string) =>
+    gatherWorkflowContextImpl(
+      {
+        persistence,
+        conversationRepo,
+        workflowChannelRepo,
+        agentRegistry: planningRegistry,
+        log: (level, message) => deps.logFn('slack', level, message),
+      },
+      workflowId,
+    );
+
   const slack = new surfaces.SlackSurface({
     botToken: process.env.SLACK_BOT_TOKEN!,
     appToken: process.env.SLACK_APP_TOKEN!,
@@ -830,6 +872,15 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
     log: deps.logFn,
     planningTimeoutSeconds: invokerConfig.planningTimeoutSeconds,
     planningHeartbeatIntervalSeconds: invokerConfig.planningHeartbeatIntervalSeconds,
+    lobbyChannelId: process.env.SLACK_LOBBY_CHANNEL_ID ?? process.env.SLACK_CHANNEL_ID,
+    planningCommandBuilder,
+    prepareRepoCheckout,
+    harnessPresets,
+    defaultHarnessPreset,
+    repoAliases: invokerConfig.slackRepos,
+    defaultRepoUrl: invokerConfig.defaultRepoUrl ?? repoUrl,
+    workflowChannelRepo,
+    gatherWorkflowContext,
   });
 
   await slack.start(async (command: any) => {
@@ -874,17 +925,55 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
       case 'provide_input':
         orchestrator.provideInput(command.taskId, command.input);
         break;
-      case 'get_status':
+      case 'retry': {
+        const taskId = command.taskId as string;
+        const result = await commandService.retryTask(
+          makeEnvelope('retry-task', 'surface', 'task', { taskId }),
+        );
+        if (!result.ok) throw new Error(result.error.message);
+        await dispatchStartedTasksWithGlobalTopup({
+          orchestrator,
+          taskExecutor: deps.executor,
+          logger,
+          context: 'surface.retry-task',
+          started: result.data,
+          scopedTaskIds: [taskId],
+        });
         break;
+      }
+      case 'get_status': {
+        const workflowId = command.workflowId as string | undefined;
+        const status = orchestrator.getWorkflowStatus(workflowId);
+        await slack.handleEvent({ type: 'workflow_status', status, workflowId });
+        break;
+      }
       case 'start_plan': {
         const { parsePlan } = await import('./plan-parser.js');
         const planText = command.planText as string;
         const plan = parsePlan(planText);
-        deps.logFn('trace', 'info', `slackBot: loading plan "${plan.name}" (${plan.tasks.length} tasks)`);
+        const harnessPreset = command.harnessPreset as string | undefined;
+        const fallbackAgent = resolveFallbackExecutionAgent(harnessPreset);
+        for (const task of plan.tasks) {
+          if (!task.executionAgent) task.executionAgent = fallbackAgent;
+        }
+        deps.logFn('trace', 'info', `slackBot: loading plan "${plan.name}" (${plan.tasks.length} tasks, defaultAgent=${fallbackAgent})`);
         deps.onStartPlan?.();
         deps.onPlanLoaded?.(plan);
         backupPlan(plan, undefined, logger);
+        const before = new Set(orchestrator.getWorkflowIds());
         orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+        const workflowId = orchestrator.getWorkflowIds().find((id) => !before.has(id));
+        if (workflowId) {
+          await slack.handleEvent({
+            type: 'workflow_created',
+            workflowId,
+            requestedBy: command.requestedBy as string | undefined,
+            lobbyChannel: command.lobbyChannel as string | undefined,
+            lobbyThreadTs: command.lobbyThreadTs as string | undefined,
+            harnessPreset,
+            repoUrl: command.repoUrl as string | undefined,
+          });
+        }
         const started = orchestrator.startExecution();
         deps.logFn('trace', 'info', `slackBot: startExecution returned ${started.length} tasks: [${started.map((t: any) => t.id).join(', ')}]`);
         break;
@@ -2247,12 +2336,12 @@ function createEmbeddedTerminalBackendFromConfig(
     rebuildTaskRunnerWiring({
       orchestrator,
       persistence,
-      messageBus,
       executorRegistry,
       executionAgentRegistry: agentRegistry,
       repoRoot,
       invokerConfig,
       logger,
+      messageBus,
       taskHandles,
       enqueueTaskOutput,
       flushTaskOutput,
