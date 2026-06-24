@@ -25,7 +25,7 @@ import {
   remoteFetchForPool,
   registerBuiltinAgents,
   assertPlanExecutionAgentsRegistered,
-  acquireRecoveryWorkerLock,
+  acquireWorkerLock,
   resolveInvokerHomeRoot,
   WorkerLockHeldError,
   type AgentRegistry,
@@ -1158,7 +1158,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
     // competes with a worker already holding the cross-process lock.
     let lock;
     try {
-      lock = acquireRecoveryWorkerLock({ homeRoot: resolveInvokerHomeRoot(), logger: deps.logger });
+      lock = acquireWorkerLock({ kind: RECOVERY_WORKER_KIND, homeRoot: resolveInvokerHomeRoot(), logger: deps.logger });
     } catch (err) {
       if (err instanceof WorkerLockHeldError) {
         // Surface via the app's throw-based error convention.

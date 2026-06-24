@@ -10,7 +10,8 @@ import {
   TaskRunner,
   WorktreeExecutor,
   createRecoveryWorker,
-  acquireRecoveryWorkerLock,
+  acquireWorkerLock,
+  RECOVERY_WORKER_KIND,
   WorkerLockHeldError,
   registerBuiltinAgents,
 } from '@invoker/execution-engine';
@@ -575,7 +576,7 @@ async function runAutoFixWorker(bus: MessageBus): Promise<number> {
   // failed tasks.
   let lock;
   try {
-    lock = acquireRecoveryWorkerLock({ homeRoot, logger: silentLogger });
+    lock = acquireWorkerLock({ kind: RECOVERY_WORKER_KIND, homeRoot, logger: silentLogger });
   } catch (err) {
     if (err instanceof WorkerLockHeldError) {
       process.stderr.write(`${err.message}\n`);

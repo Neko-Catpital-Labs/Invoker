@@ -22,7 +22,6 @@
 import { existsSync, mkdirSync, openSync, closeSync, readFileSync, unlinkSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import { resolveInvokerHomeRoot, type Logger } from '@invoker/contracts';
-import { RECOVERY_WORKER_KIND } from './auto-fix-recovery.js';
 
 // Re-export the canonical Invoker home resolver so both worker doors can reach
 // it from the engine. The single source of truth lives in `@invoker/contracts`
@@ -55,16 +54,16 @@ export class WorkerLockHeldError extends Error {
     readonly lockPath: string,
   ) {
     super(
-      `An auto-fix worker (kind=${kind}) is already running (pid ${holderPid}). ` +
-        `Refusing to start a second one. Lock: ${lockPath}`,
+      `A worker (kind=${kind}) is already running (pid ${holderPid}). ` +
+        `Refusing to start a second one of this kind. Lock: ${lockPath}`,
     );
     this.name = 'WorkerLockHeldError';
   }
 }
 
 export interface AcquireWorkerLockOptions {
-  /** Worker family this lock guards. Defaults to the recovery worker kind. */
-  kind?: string;
+  /** Worker family this lock guards. The lock key derives from this kind. */
+  kind: string;
   /** Invoker home root. Defaults to {@link resolveInvokerHomeRoot}. */
   homeRoot?: string;
   /** Instance id recorded for diagnostics. */
@@ -104,13 +103,28 @@ function readLockRecord(path: string): WorkerLockRecord | null {
 }
 
 /**
+ * Allowed shape for a worker `kind`. The kind becomes a filename component
+ * (`worker-<kind>.lock`), so it must not contain path separators, `..`
+ * segments, or other characters that could escape the `locks/` directory or
+ * name a platform-reserved path. Kinds are short identifiers chosen in code
+ * (e.g. `recovery`, `autofix`), so a conservative identifier pattern is safe.
+ */
+const WORKER_KIND_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/**
  * Acquire the single-instance lock for a worker kind. Throws
  * {@link WorkerLockHeldError} when a live process already holds it; reclaims a
- * stale lock left by a dead holder. The returned handle must be released on
- * shutdown so a clean stop never blocks the next start.
+ * stale lock left by a dead holder, and rejects a `kind` that is not a safe
+ * filename component. The returned handle must be released on shutdown so a
+ * clean stop never blocks the next start.
  */
-export function acquireWorkerLock(options: AcquireWorkerLockOptions = {}): WorkerLockHandle {
-  const kind = options.kind ?? RECOVERY_WORKER_KIND;
+export function acquireWorkerLock(options: AcquireWorkerLockOptions): WorkerLockHandle {
+  const kind = options.kind;
+  if (!WORKER_KIND_PATTERN.test(kind)) {
+    // Reject path separators, `..`, and reserved characters before `kind`
+    // reaches the filename, so the lock can never escape `locks/`.
+    throw new Error(`Invalid worker kind: ${JSON.stringify(kind)}`);
+  }
   const homeRoot = options.homeRoot ?? resolveInvokerHomeRoot();
   const pid = options.pid ?? process.pid;
   const locksDir = join(homeRoot, 'locks');
@@ -181,13 +195,6 @@ export function acquireWorkerLock(options: AcquireWorkerLockOptions = {}): Worke
   // Exhausted reclaim attempts: another racer keeps winning the lock.
   const holder = readLockRecord(lockPath);
   throw new WorkerLockHeldError(kind, holder?.pid ?? -1, lockPath);
-}
-
-/** Acquire the single-instance lock for the auto-fix recovery worker. */
-export function acquireRecoveryWorkerLock(
-  options: Omit<AcquireWorkerLockOptions, 'kind'> = {},
-): WorkerLockHandle {
-  return acquireWorkerLock({ ...options, kind: RECOVERY_WORKER_KIND });
 }
 
 /**
