@@ -2344,13 +2344,32 @@ export class SQLiteAdapter implements PersistenceAdapter {
     const diagnosticFile = this.readTaskOutputFile(taskId);
     const spoolChunks = this.getOutputChunks(taskId);
     if (spoolChunks.length > 0) {
-      return spoolChunks.map((chunk) => chunk.data).join('') + diagnosticFile;
+      return spoolChunks.map((chunk) => chunk.data).join('')
+        + this.readLegacyDiagnosticTaskOutputRows(taskId)
+        + diagnosticFile;
     }
     const rows = this.queryAll(
       'SELECT data FROM task_output WHERE task_id = ? ORDER BY id ASC',
       [taskId],
     ) as Array<{ data: string }>;
     return rows.map((r) => r.data).join('') + diagnosticFile;
+  }
+
+  private readLegacyDiagnosticTaskOutputRows(taskId: string): string {
+    const rows = this.queryAll(
+      'SELECT data FROM task_output WHERE task_id = ? ORDER BY id ASC',
+      [taskId],
+    ) as Array<{ data: string }>;
+    return rows
+      .map((r) => r.data)
+      .filter((data) => this.isDiagnosticTaskOutput(data))
+      .join('');
+  }
+
+  private isDiagnosticTaskOutput(data: string): boolean {
+    return data.includes('[Shutdown Diagnostic]')
+      || data.includes('[Startup Failure Diagnostic]')
+      || data.includes('Executor startup failed');
   }
 
   /**

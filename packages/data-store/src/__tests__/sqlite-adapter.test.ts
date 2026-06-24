@@ -2350,6 +2350,40 @@ describe('SQLiteAdapter', () => {
         rmSync(dir, { recursive: true, force: true });
       }
     });
+
+    it('surfaces legacy startup diagnostic rows alongside spool stream without duplicating old stream rows', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-output-legacy-diag-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db.saveWorkflow(testWorkflow);
+        db.saveTask('wf-1', makeTask('t-legacy-diag-tail'));
+
+        db.appendOutputChunk('t-legacy-diag-tail', 'test output before failure\n');
+        (db as any).db.run(
+          'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+          ['t-legacy-diag-tail', 'duplicate stream row\n'],
+        );
+        (db as any).db.run(
+          'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+          [
+            't-legacy-diag-tail',
+            '\n[Startup Failure Diagnostic]\nmessage=concrete startup stderr\n--- end startup failure diagnostic ---\n',
+          ],
+        );
+
+        const output = db.getTaskOutput('t-legacy-diag-tail');
+        expect(output).toContain('test output before failure');
+        expect(output).toContain('[Startup Failure Diagnostic]');
+        expect(output).toContain('concrete startup stderr');
+        expect(output).not.toContain('duplicate stream row');
+
+        db.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('pruneDuplicateTaskOutputRows', () => {
