@@ -521,6 +521,19 @@ describe('headless→owner delegation', () => {
       expect(outcome.kind).toBe('delegated');
     });
 
+    it('accepts an accepted-acknowledgement that carries a workflowId (no tasks)', async () => {
+      messageBus.onRequest('headless.exec', async () => ({
+        ok: true,
+        accepted: true,
+        intentId: 1,
+        workflowId: 'wf-test',
+        channel: 'headless.exec',
+      }));
+
+      const outcome = await tryDelegateExec(['retry', 'wf-test', '--no-track'], messageBus);
+      expect(outcome.kind).toBe('delegated');
+    });
+
     it('accepts valid workflow response as delegated', async () => {
       messageBus.onRequest('headless.run', async () => ({
         workflowId: 'wf-valid',
