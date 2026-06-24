@@ -79,6 +79,19 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     ], cwd));
   }
 
+  async getReviewBody(opts: {
+    identifier: string;
+    cwd: string;
+  }): Promise<string> {
+    const { identifier, cwd } = opts;
+    const targetRepo = await this.resolveTargetRepo(cwd);
+    const stdout = await retryTransientGitHubCli(() => this.exec('gh', [
+      'api', `repos/${targetRepo}/pulls/${identifier}`,
+      '--jq', '.body',
+    ], cwd));
+    return stdout.trim();
+  }
+
   async checkApproval(opts: {
     identifier: string;
     cwd: string;
