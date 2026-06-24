@@ -2959,6 +2959,21 @@ function createEmbeddedTerminalBackendFromConfig(
                       },
                     };
                     logger.error(`[executing-stall] forcing failure for "${task.id}": ${executingError}`, { module: 'db-poll' });
+                    // Snapshot the concrete failure context into durable output
+                    // before the synthetic stall failure overwrites
+                    // task.execution.error with the coarse stall reason. Tasks
+                    // stalled while still launching collapse a real executor
+                    // startup failure; preserve its recent output tail / startup
+                    // stderr so post-mortem retrieval keeps the concrete details.
+                    if (persistence) {
+                      persistShutdownDiagnostic(task, persistence, {
+                        flushPendingOutput: flushTaskOutput,
+                        forcedStopReason: executingError,
+                        label: task.execution.phase === 'launching'
+                          ? 'Startup Failure Diagnostic'
+                          : 'Shutdown Diagnostic',
+                      });
+                    }
                     orchestrator.handleWorkerResponse(failedResponse);
                     continue;
                   }
