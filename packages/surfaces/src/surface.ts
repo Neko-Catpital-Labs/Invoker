@@ -15,8 +15,17 @@ export type SurfaceCommand =
   | { type: 'reject'; taskId: string; reason?: string }
   | { type: 'select_experiment'; taskId: string; experimentId: string }
   | { type: 'provide_input'; taskId: string; input: string }
-  | { type: 'get_status' }
-  | { type: 'start_plan'; planText: string };
+  | { type: 'retry'; taskId: string }
+  | { type: 'get_status'; workflowId?: string }
+  | {
+      type: 'start_plan';
+      planText: string;
+      repoUrl?: string;
+      harnessPreset?: string;
+      requestedBy?: string;
+      lobbyChannel?: string;
+      lobbyThreadTs?: string;
+    };
 
 // ── Events (Orchestrator → Surface) ────────────────────────
 
@@ -31,7 +40,16 @@ export interface WorkflowStatus {
 
 export type SurfaceEvent =
   | { type: 'task_delta'; delta: TaskDelta }
-  | { type: 'workflow_status'; status: WorkflowStatus }
+  | { type: 'workflow_status'; status: WorkflowStatus; workflowId?: string }
+  | {
+      type: 'workflow_created';
+      workflowId: string;
+      requestedBy?: string;
+      lobbyChannel?: string;
+      lobbyThreadTs?: string;
+      harnessPreset?: string;
+      repoUrl?: string;
+    }
   | { type: 'error'; message: string };
 
 // ── Logging ──────────────────────────────────────────────
