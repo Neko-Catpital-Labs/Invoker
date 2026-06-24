@@ -14,6 +14,7 @@
  */
 
 import { PlanConversation } from './plan-conversation.js';
+import type { PlanningCommandBuilder } from './plan-conversation.js';
 import type { ConversationRepository } from '@invoker/data-store';
 import type { LogFn } from '../surface.js';
 
@@ -160,8 +161,8 @@ export interface SessionManagerConfig {
   /** Default repo URL (e.g. "git@github.com:user/repo.git"). Passed to PlanConversation. */
   repoUrl?: string;
   log?: LogFn;
-  /** Cursor CLI subprocess timeout in ms. Passed to PlanConversation. */
   timeoutMs?: number;
+  planningCommandBuilder?: PlanningCommandBuilder;
 }
 
 export interface SessionMetrics {
@@ -198,6 +199,7 @@ export class SessionManager {
   private readonly evictionIntervalMs: number;
   private readonly maxActiveSessions: number;
   private readonly timeoutMs?: number;
+  private readonly planningCommandBuilder?: PlanningCommandBuilder;
 
   constructor(config: SessionManagerConfig) {
     this.cursorCommand = config.cursorCommand ?? 'agent';
@@ -211,6 +213,7 @@ export class SessionManager {
     this.evictionIntervalMs = config.evictionIntervalMs ?? 5 * 60 * 1000; // 5 minutes
     this.maxActiveSessions = config.maxActiveSessions ?? 100;
     this.timeoutMs = config.timeoutMs;
+    this.planningCommandBuilder = config.planningCommandBuilder;
   }
 
   /**
@@ -246,6 +249,7 @@ export class SessionManager {
   async getOrCreateSession(
     id: SessionIdentifier,
     userId: string,
+    opts?: { tool?: string; model?: string; workingDir?: string },
   ): Promise<SessionHandle | null> {
     const key = id.toString();
 
@@ -288,8 +292,10 @@ export class SessionManager {
       this.log('session-manager', 'info', `[TRACE] Recovery path: creating PlanConversation + init() (threadTs=${id.threadTs})`);
       const conversation = new PlanConversation({
         cursorCommand: this.cursorCommand,
-        model: this.model,
-        workingDir: this.workingDir,
+        tool: opts?.tool,
+        model: opts?.model ?? this.model,
+        planningCommandBuilder: this.planningCommandBuilder,
+        workingDir: opts?.workingDir ?? this.workingDir,
         threadTs: id.threadTs,
         conversationRepo: this.conversationRepo,
         defaultBranch: this.defaultBranch,
@@ -315,8 +321,10 @@ export class SessionManager {
       this.log('session-manager', 'info', `[TRACE] Creation path: new PlanConversation (threadTs=${id.threadTs}, hasConversationRepo=true, skipping init)`);
       const conversation = new PlanConversation({
         cursorCommand: this.cursorCommand,
-        model: this.model,
-        workingDir: this.workingDir,
+        tool: opts?.tool,
+        model: opts?.model ?? this.model,
+        planningCommandBuilder: this.planningCommandBuilder,
+        workingDir: opts?.workingDir ?? this.workingDir,
         threadTs: id.threadTs,
         conversationRepo: this.conversationRepo,
         defaultBranch: this.defaultBranch,
