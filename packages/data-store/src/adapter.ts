@@ -70,6 +70,24 @@ export interface Workflow {
 }
 export type WorkflowSaveInput = Omit<Workflow, 'status' | 'rollup'>;
 
+/**
+ * Result of resolving a published PR back to its Invoker workflow via the merge
+ * node. The PR↔workflow link lives only on the `__merge__<workflowId>` task
+ * (`review_id` / `review_url`), so this is the single read-only lookup the PR
+ * cron jobs use to map a GitHub PR number to a local workflow.
+ */
+export interface ReviewGateLookup {
+  workflowId: string;
+  mergeTaskId: string;
+  reviewId?: string;
+  reviewUrl?: string;
+  branch?: string;
+  baseBranch?: string;
+  workflowStatus: WorkflowDerivedStatus;
+  workflowGeneration: number;
+  mergeTaskStatus?: string;
+  selectedAttemptId?: string;
+}
 
 export interface TaskEvent {
   id: number;
@@ -116,6 +134,8 @@ export interface PersistenceAdapter {
   loadWorkflow(workflowId: string): Workflow | undefined;
   listWorkflows(): Workflow[];
   searchWorkflowsAndTasks(query: string, opts?: SearchOptions): SearchResultItem[];
+  /** Resolve a GitHub PR number back to its Invoker workflow via the merge node. */
+  findReviewGateByPr(pr: string): ReviewGateLookup | undefined;
 
   // Tasks
   saveTask(workflowId: string, task: TaskState): void;

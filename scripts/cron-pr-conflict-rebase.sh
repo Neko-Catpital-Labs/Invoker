@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# Job 2 — PR merge-conflict rebase cron.
+#
+# Every 5 min: find open PRs by $PR_AUTHOR whose GitHub merge state is
+# conflicting (mergeStateStatus == DIRTY or mergeable == CONFLICTING), map each
+# back to its Invoker workflow, and `rebase-recreate` it — but only ONCE per
+# (workflow, generation), capped at $MAX_REBASE_ATTEMPTS per workflow.
+#
+# Anti-loop guards (no separate in-flight query needed):
+#   1. shared flock/mkdir lock + synchronous dispatch — one cron op at a time.
+#   2. Invoker's per-workflow CommandService mutex — serializes owner-side.
+#   3. per-(workflow, generation) ledger dedup — a successful rebase-recreate
+#      bumps generation, so the next real conflict appears under a new
+#      generation and is allowed exactly once.
+#
+# At most ONE rebase-recreate runs per tick (bounds the lock hold); remaining
+# conflicting PRs are handled on later ticks.
+#
+# Env: INVOKER_GITHUB_TARGET_REPO, INVOKER_PR_CRON_AUTHOR,
+#      INVOKER_PR_REBASE_MAX_ATTEMPTS (default 3),
+#      INVOKER_PR_REBASE_CONFIRM_TIMEOUT (default 120s),
+#      INVOKER_PR_CONFLICT_STATE_FILE (ledger path),
+#      INVOKER_PR_CRON_DRY_RUN=1 (print intended actions only).
+set -euo pipefail
+
+# shellcheck source=scripts/cron-pr-lib.sh
+source "$(dirname "$0")/cron-pr-lib.sh"
+
+MAX_REBASE_ATTEMPTS="${INVOKER_PR_REBASE_MAX_ATTEMPTS:-3}"
+CONFIRM_TIMEOUT="${INVOKER_PR_REBASE_CONFIRM_TIMEOUT:-120}"
+STATE_FILE="${INVOKER_PR_CONFLICT_STATE_FILE:-${HOME}/.invoker/pr-conflict-rebase-submissions.tsv}"
+
+cron_lock
+ledger_init "$STATE_FILE"
+
+flag_exhausted() {
+  # flag_exhausted <prNumber> <workflowId>
+  local num="$1" wf="$2"
+  ledger_marker_seen rebase-recreate-flagged "$wf" exhausted && return 0
+  local body="Invoker conflict-rebase cron gave up after ${MAX_REBASE_ATTEMPTS} rebase-recreate attempts; this PR still conflicts and needs manual attention."
+  if [ "$DRY_RUN" = "1" ]; then
+    log_line "PR #$num: would post 'exhausted' comment and flag workflow $wf"
+    return 0
+  fi
+  gh_json pr comment "$num" --repo "$TARGET_REPO" --body "$body" >/dev/null \
+    || log_line "PR #$num: exhausted-comment post failed (non-fatal)"
+  ledger_record rebase-recreate-flagged "$wf" exhausted
+}
+
+dispatch_rebase_recreate() {
+  # dispatch_rebase_recreate <prNumber> <workflowId> <generation>; exits the script.
+  local num="$1" wf="$2" gen="$3"
+  if [ "$DRY_RUN" = "1" ]; then
+    log_line "PR #$num: would rebase-recreate $wf (generation $gen)"
+    exit 0
+  fi
+
+  log_line "PR #$num: rebase-recreate $wf (generation $gen)"
+  if ! node "$IPC_HELPER" exec -- rebase-recreate "$wf"; then
+    log_line "PR #$num: rebase-recreate dispatch failed; retry next tick"
+    exit 1
+  fi
+
+  # Confirm the recreate actually landed: generation must advance past $gen.
+  local deadline newgen
+  deadline="$(( $(date +%s) + CONFIRM_TIMEOUT ))"
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    newgen="$("$RUNNER" --headless query workflow "$wf" --output json 2>/dev/null | jq -r '.generation // empty')"
+    if [ -n "$newgen" ] && [ "$newgen" -gt "$gen" ]; then
+      ledger_record rebase-recreate "$wf" "$gen"
+      log_line "PR #$num: rebase-recreate confirmed (generation $gen -> $newgen)"
+      exit 0
+    fi
+    sleep 5
+  done
+  log_line "PR #$num: rebase-recreate not confirmed within ${CONFIRM_TIMEOUT}s; not recording (retry next tick)"
+  exit 1
+}
+
+prs_json="$(gh_json pr list --repo "$TARGET_REPO" --author "$PR_AUTHOR" --state open \
+  --json number,headRefName,mergeable,mergeStateStatus --limit 100)" || {
+  log_line "could not list PRs; exiting"
+  exit 0
+}
+
+# Process substitution (not a pipe) keeps the loop in this shell so `exit`
+# after the single per-tick operation terminates the script.
+while IFS= read -r pr; do
+  [ -z "$pr" ] && continue
+  num="$(jq -r '.number' <<<"$pr")"
+
+  rec="$(resolve_workflow_for_pr "$num")"
+  wf="$(jq -r '.workflowId // empty' <<<"$rec" 2>/dev/null || true)"
+  if [ -z "$wf" ]; then
+    log_line "PR #$num: no local workflow; skip"
+    continue
+  fi
+  gen="$(jq -r '.workflowGeneration // 0' <<<"$rec")"
+
+  # (c) per-(workflow, generation) dedup.
+  if ledger_marker_seen rebase-recreate "$wf" "$gen"; then
+    log_line "PR #$num: rebase-recreate already fired for generation $gen; skip"
+    continue
+  fi
+
+  # (e) hard attempt cap + one-time GitHub flag.
+  if [ "$(ledger_count rebase-recreate "$wf")" -ge "$MAX_REBASE_ATTEMPTS" ]; then
+    log_line "PR #$num: giving up — rebase-recreate hit cap of $MAX_REBASE_ATTEMPTS for workflow $wf"
+    flag_exhausted "$num" "$wf"
+    continue
+  fi
+
+  # (f) dispatch the single operation for this tick, then exit.
+  dispatch_rebase_recreate "$num" "$wf" "$gen"
+done < <(jq -c '.[] | select(.mergeStateStatus == "DIRTY" or .mergeable == "CONFLICTING")' <<<"$prs_json")
+
+log_line "no actionable conflicting PRs this tick"

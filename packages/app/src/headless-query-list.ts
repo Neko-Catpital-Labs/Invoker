@@ -1,7 +1,8 @@
 /**
  * Headless "query" command family: the read-only `query <sub>` router
- * (workflows · tasks · task · queue · action-graph · audit · session · cost ·
- * cost-events · costs · ui-perf · stats), the cost-event collection/rollup
+ * (workflows · tasks · task · queue · review-gate · action-graph · audit ·
+ * session · cost · cost-events · costs · ui-perf · stats), the cost-event
+ * collection/rollup
  * helpers, agent session resolution, and `query-select`.
  *
  * The deprecated top-level aliases (`list`, `status`, `task-status`, `queue`,
@@ -24,7 +25,7 @@ import {
 export async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> {
   const subCommand = args[0];
   if (!subCommand) {
-    throw new Error('Missing query sub-command. Usage: --headless query <workflows|tasks|task|queue|action-graph|audit|session|cost|cost-events|costs|ui-perf|stats>');
+    throw new Error('Missing query sub-command. Usage: --headless query <workflows|tasks|task|queue|review-gate|action-graph|audit|session|cost|cost-events|costs|ui-perf|stats>');
   }
   const flags = parseQueryFlags(args.slice(1));
 
@@ -125,6 +126,20 @@ export async function headlessQuery(args: string[], deps: HeadlessDeps): Promise
         case 'json':  process.stdout.write(formatAsJson(serializeTask(task)) + '\n'); break;
         case 'jsonl': process.stdout.write(formatAsJsonl([serializeTask(task)]) + '\n'); break;
         default:      process.stdout.write(task.status + '\n'); break;
+      }
+      break;
+    }
+    case 'review-gate': {
+      const arg = flags.positional[0];
+      if (!arg) throw new Error('Usage: --headless query review-gate <prNumber|prUrl> [--output json|jsonl|label]');
+      const prNumber = parsePrNumber(arg);
+      if (!prNumber) throw new Error(`Could not parse a PR number from "${arg}".`);
+      const record = deps.persistence.findReviewGateByPr(prNumber);
+      switch (flags.output) {
+        case 'label': process.stdout.write(`${record?.workflowId ?? ''}\n`); break;
+        case 'jsonl': process.stdout.write(formatAsJsonl(record ? [record] : []) + '\n'); break;
+        case 'json':
+        default:      process.stdout.write(formatAsJson(record ?? {}) + '\n'); break;
       }
       break;
     }
@@ -294,8 +309,20 @@ export async function headlessQuery(args: string[], deps: HeadlessDeps): Promise
       break;
     }
     default:
-      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, tasks, task, queue, action-graph, audit, session, cost, cost-events, costs, ui-perf, stats`);
+      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, tasks, task, queue, review-gate, action-graph, audit, session, cost, cost-events, costs, ui-perf, stats`);
   }
+}
+
+/**
+ * Parse a PR number from either a bare number (`999`, `#999`) or a full PR URL
+ * (`https://github.com/owner/repo/pull/999`). Returns undefined when neither
+ * shape matches.
+ */
+function parsePrNumber(arg: string): string | undefined {
+  const fromUrl = arg.match(/\/pull\/(\d+)/);
+  if (fromUrl) return fromUrl[1];
+  const bare = arg.replace(/^#/, '');
+  return /^\d+$/.test(bare) ? bare : undefined;
 }
 
 async function headlessCosts(
