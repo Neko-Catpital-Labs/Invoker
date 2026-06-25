@@ -156,6 +156,38 @@ function sqlStringLiteral(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
 }
 
+/**
+ * SQLite result codes that mean the database file itself is unreadable and a
+ * fresh start is the only recovery: SQLITE_CORRUPT (11) and SQLITE_NOTADB (26).
+ * Transient/operational failures (e.g. SQLITE_BUSY=5, SQLITE_LOCKED=6,
+ * SQLITE_CANTOPEN=14) MUST NOT trigger destructive recovery: a concurrent
+ * process briefly holding a lock would otherwise rename the live database and
+ * its -wal/-shm sidecars away, losing data and (because other connections have
+ * the -shm memory-mapped) crashing them with SIGBUS.
+ */
+const SQLITE_CORRUPT = 11;
+const SQLITE_NOTADB = 26;
+// Extended result codes pack the primary code in the low 8 bits (e.g.
+// SQLITE_CORRUPT_VTAB = 267 -> 267 & 0xff = 11), so mask before comparing or
+// extended corruption variants slip through as "not corruption".
+const SQLITE_PRIMARY_RESULT_CODE_MASK = 0xff;
+
+/**
+ * True when `err` is a SQLite open failure caused by an unreadable database file
+ * (SQLITE_CORRUPT / SQLITE_NOTADB, including their extended variants) — the only
+ * class of failure for which destructive backup-and-recreate recovery is safe.
+ */
+export function isDatabaseCorruptionError(err: unknown): boolean {
+  const errcode = (err as { errcode?: unknown } | null)?.errcode;
+  if (typeof errcode === 'number') {
+    const primary = errcode & SQLITE_PRIMARY_RESULT_CODE_MASK;
+    return primary === SQLITE_CORRUPT || primary === SQLITE_NOTADB;
+  }
+  // Fallback for runtimes that do not surface a numeric errcode.
+  const message = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return message.includes('malformed') || message.includes('not a database');
+}
+
 class NativeStatementCompat {
   private boundParams: SQLiteParams = [];
   private iterator: Iterator<Record<string, unknown>> | null = null;
@@ -351,7 +383,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       const db = new DatabaseSync(dbPath, { readOnly: options?.readOnly === true });
       return new SQLiteAdapter(db, isFile ? dbPath : null, options);
     } catch (err) {
-      if (!isFile || options?.readOnly === true || !existsSync(dbPath)) {
+      if (!isFile || options?.readOnly === true || !existsSync(dbPath) || !isDatabaseCorruptionError(err)) {
         throw err;
       }
       const backupPath = `${dbPath}.corrupt-${Date.now()}`;
