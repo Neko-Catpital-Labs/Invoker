@@ -567,6 +567,58 @@ tasks:
     expect(plan.tasks[1].executionAgent).toBeUndefined();
   });
 
+  it('parses executionModel from task definitions', () => {
+    const yaml = `
+name: Model Test
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: claude-task
+    description: "Task using claude model"
+    command: "npm test"
+    executionModel: claude
+  - id: default-task
+    description: "No model specified"
+    command: "echo hi"
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.tasks[0].executionModel).toBe('claude');
+    expect(plan.tasks[1].executionModel).toBeUndefined();
+  });
+
+  it('trims whitespace from executionModel and treats empty as undefined', () => {
+    const yaml = `
+name: Model Trim Test
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: padded
+    description: "Padded model"
+    command: "echo hi"
+    executionModel: "  claude  "
+  - id: empty
+    description: "Empty model"
+    command: "echo hi"
+    executionModel: ""
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.tasks[0].executionModel).toBe('claude');
+    expect(plan.tasks[1].executionModel).toBeUndefined();
+  });
+
+  it('rejects a non-string executionModel with PlanParseError', () => {
+    const yaml = `
+name: Bad Model Test
+repoUrl: git@github.com:test/repo.git
+baseBranch: main
+tasks:
+  - id: t1
+    description: "Bad model"
+    command: "echo hi"
+    executionModel: 123
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow(/executionModel/);
+  });
+
   describe('onFinish parsing', () => {
     it('parses plan with onFinish: merge', () => {
       const yaml = `
