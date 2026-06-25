@@ -2085,9 +2085,50 @@ describe('Orchestrator', () => {
       expect(afterPrereqTask.map((t) => t.id)).not.toContain(sid(orchestrator, 1, 'leaf-a'));
 
       orchestrator.setTaskAwaitingApproval(prereqMergeId);
-      const afterMergeAwaitingApproval = orchestrator.startExecution();
-      expect(afterMergeAwaitingApproval.map((t) => t.id)).toContain(sid(orchestrator, 1, 'leaf-a'));
       expect(orchestrator.getTask(sid(orchestrator, 1, 'leaf-a'))!.status).toBe('running');
+    });
+
+    it('review_ready merge-gate transition unblocks downstream without mutating dependency metadata', () => {
+      orchestrator.loadPlan({
+        name: 'prereq-public-review',
+        tasks: [{ id: 'publish-pr', description: 'Publish public PR' }],
+      });
+      const prereqTaskId = sid(orchestrator, 0, 'publish-pr');
+      const prereqWfId = prereqTaskId.split('/')[0]!;
+      const prereqMergeId = `__merge__${prereqWfId}`;
+
+      orchestrator.loadPlan({
+        name: 'workflow-waits-on-public-pr',
+        tasks: [
+          {
+            id: 'leaf-a',
+            description: 'leaf waits for upstream public review gate',
+            externalDependencies: [{ workflowId: prereqWfId, gatePolicy: 'review_ready' }],
+          },
+        ],
+      });
+      const downstreamTaskId = sid(orchestrator, 1, 'leaf-a');
+      const downstreamWfId = downstreamTaskId.split('/')[0]!;
+      const depsBefore = (persistence.loadWorkflow(downstreamWfId)!.externalDependencies ?? [])
+        .map((dep) => ({ ...dep }));
+      const taskDepsBefore = (orchestrator.getTask(downstreamTaskId)!.config.externalDependencies ?? [])
+        .map((dep) => ({ ...dep }));
+
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(makeResponse({ actionId: prereqTaskId, status: 'completed' }));
+
+      orchestrator.setTaskReviewReady(prereqMergeId, {
+        execution: {
+          reviewId: 'owner/repo#229',
+          reviewUrl: 'https://github.com/owner/repo/pull/229',
+          reviewStatus: 'Awaiting review',
+        },
+      });
+
+      expect(orchestrator.getTask(sid(orchestrator, 1, 'leaf-a'))!.status).toBe('running');
+      expect(persistence.loadWorkflow(downstreamWfId)!.externalDependencies).toEqual(depsBefore);
+      expect(orchestrator.getTask(downstreamTaskId)!.config.externalDependencies ?? []).toEqual(taskDepsBefore);
+      expect(persistence.events.map((event) => event.eventType)).not.toContain('workflow.external_dependency_policy_updated');
     });
 
     it('approved merge-gate dependency keeps downstream pending when upstream is awaiting_approval', () => {
