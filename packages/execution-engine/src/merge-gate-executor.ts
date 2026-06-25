@@ -5,8 +5,8 @@ import type { WorkRequest, WorkResponse } from '@invoker/contracts';
 import type { TaskState } from '@invoker/workflow-core';
 import { BaseExecutor, type BaseEntry } from './base-executor.js';
 import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from './executor.js';
-import type { MergeRunnerHost, MergeGateLineage } from './merge-runner.js';
-import { runMergeGateActionImpl, updateMergeGateMetadataIfCurrent } from './merge-runner.js';
+import type { MergeRunnerHost } from './merge-runner.js';
+import { runMergeGateActionImpl } from './merge-runner.js';
 
 interface MergeGateEntry extends BaseEntry {
   killed?: boolean;
@@ -151,13 +151,14 @@ export class MergeGateExecutor extends BaseExecutor<MergeGateEntry> {
 
     try {
       this.emitOutput(handle.executionId, `[merge] Starting merge gate action: ${task.id}\n`);
-      // Capture launch lineage so a stale (relaunched) run's direct metadata
-      // write is suppressed.
-      const lineage: MergeGateLineage = {
-        selectedAttemptId: entry.request.attemptId,
-        generation: entry.request.executionGeneration ?? 0,
-      };
-      const result = await runMergeGateActionImpl(this.host, task, { lineage });
+      // Surface that the running phase begins with provisioning, not the merge
+      // itself — the gate clone can take a while on large repos, and without this
+      // the task just reads as "Executing" with no visible progress.
+      this.emitOutput(
+        handle.executionId,
+        `[merge] Preparing gate workspace (cloning/provisioning; this can take a while on large repos)…\n`,
+      );
+      const result = await runMergeGateActionImpl(this.host, task);
       const executionChanges = result.taskChanges.execution
         ? {
           ...result.taskChanges.execution,
@@ -181,18 +182,9 @@ export class MergeGateExecutor extends BaseExecutor<MergeGateEntry> {
         handle.branch = executionChanges.branch;
       }
       if (executionChanges) {
-        const applied = updateMergeGateMetadataIfCurrent(
-          this.host,
-          task.id,
-          { execution: executionChanges },
-          lineage,
-        );
-        if (!applied) {
-          this.emitOutput(
-            handle.executionId,
-            `[merge] Skipped stale merge-gate metadata write for ${task.id} (merge task advanced to a newer launch)\n`,
-          );
-        }
+        this.host.persistence.updateTask(task.id, {
+          execution: executionChanges,
+        });
       }
       this.cleanupLaunchWorkspace(launchWorkspacePath, executionChanges?.workspacePath);
       this.emitOutput(handle.executionId, `[merge] Merge gate action finished: ${task.id} status=${result.response.status}\n`);
