@@ -8,6 +8,7 @@ SKILL_DIR="$REPO_ROOT/skills/plan-to-invoker"
 SKILL_MD="$SKILL_DIR/SKILL.md"
 PLAYBOOK="$SKILL_DIR/playbooks/verify-then-build.md"
 TASK_PATTERNS="$SKILL_DIR/references/task-patterns.md"
+EXAMPLES="$SKILL_DIR/references/examples.md"
 CANONICAL_COMMAND_DIR="$SKILL_DIR/commands"
 CANONICAL_COMMAND="$CANONICAL_COMMAND_DIR/invoker-plan-to-invoker.md"
 CLAUDE_MD="$REPO_ROOT/CLAUDE.md"
@@ -176,6 +177,13 @@ must_contain "$SKILL_MD" "Schema-only validation or ad hoc individual script che
 must_contain "$SKILL_MD" "Individual validator scripts remain fallback diagnostics only" "SKILL must preserve fallback diagnostics"
 must_contain "$SKILL_MD" "lint-review-units.mjs" "SKILL must document review-unit lint enforcement"
 
+# Atomic-feature decomposition policy — SKILL.md must document the new axis and PR-splitting handoff
+must_contain "$SKILL_MD" "Atomic-feature decomposition" "SKILL must document atomic-feature decomposition policy"
+must_contain "$SKILL_MD" "every implementation task must include a \`Feature:\` heading naming exactly one atomic" "SKILL must require a Feature heading per implementation task"
+must_contain "$SKILL_MD" "Slicing an already-implemented diff into reviewable PRs is owned by \`skills/make-pr/SKILL.md\`" "SKILL must name make-pr as the PR-splitting owner"
+must_contain "$SKILL_MD" "Feature-level dependency direction (required)" "SKILL must retain a lightweight feature-level dependency-direction check"
+must_contain "$SKILL_MD" "lightweight check at the feature level only" "SKILL must describe the feature-level dependency-direction check as lightweight"
+
 DOCTOR_SCRIPT="$REPO_ROOT/skills/plan-to-invoker/scripts/skill-doctor.sh"
 DOCTOR_HELP="$(bash "$DOCTOR_SCRIPT" --help)"
 must_output_contain "$DOCTOR_HELP" "skill-doctor.sh: Deterministic orchestrator for plan validation scripts" "skill-doctor --help must expose the deterministic command contract"
@@ -203,6 +211,21 @@ must_contain "$PLAYBOOK" "assume no prior context" "Playbook must require zero-c
 must_contain "$TASK_PATTERNS" "Assume zero context" "Task patterns must define zero-context prompt requirement"
 must_contain "$TASK_PATTERNS" "deterministic pass/fail expectations" "Task patterns must require deterministic prompt outcomes"
 must_contain "$TASK_PATTERNS" "Review compression contract" "Task patterns must define review compression metadata"
+
+# Atomic-feature decomposition policy — task-patterns must document the new axis and PR-splitting handoff
+must_contain "$TASK_PATTERNS" "Atomic-feature decomposition contract" "Task patterns must document atomic-feature decomposition contract"
+must_contain "$TASK_PATTERNS" "**\`Feature:\`** a short, specific name for exactly one atomic feature" "Task patterns must require a Feature heading naming one atomic feature"
+must_contain "$TASK_PATTERNS" "Slicing an already-implemented diff into reviewable pull requests is owned by" "Task patterns must name make-pr as the PR-splitting owner"
+must_contain "$TASK_PATTERNS" "\`skills/make-pr/SKILL.md\`" "Task patterns must reference the make-pr skill path"
+must_contain "$TASK_PATTERNS" "### Feature-level dependency direction" "Task patterns must retain a lightweight feature-level dependency-direction check"
+must_contain "$TASK_PATTERNS" "lightweight check at the feature level only" "Task patterns must describe the feature-level dependency-direction check as lightweight"
+
+# Examples — atomic-feature decomposition example must document the new axis and PR-splitting handoff
+[[ -f "$EXAMPLES" ]] || fail "expected $EXAMPLES"
+must_contain "$EXAMPLES" "Atomic-feature decomposition with dormant support" "Examples must document atomic-feature decomposition with dormant support"
+must_contain "$EXAMPLES" "include a task-level \`Feature:\`" "Examples must require a task-level Feature heading"
+must_contain "$EXAMPLES" "Splitting an implemented diff into reviewable PRs" "Examples must call out implemented-diff PR splitting"
+must_contain "$EXAMPLES" "is owned by \`skills/make-pr/SKILL.md\`" "Examples must name make-pr as the PR-splitting owner"
 
 echo "OK: plan-to-invoker skill contract checks passed"
 
